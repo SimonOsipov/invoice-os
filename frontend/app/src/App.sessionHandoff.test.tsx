@@ -224,7 +224,7 @@ beforeEach(() => {
   refreshReply = ok({ access_token: T2, refresh_token: 'R1' })
   workspacesCalls = []
   refreshBodies = []
-  mineReply = null
+  mineReply = ok({ invitations: [] })
   routeFetch()
 })
 
@@ -1132,7 +1132,7 @@ describe('AUTH-05-08 adversarial', () => {
       configure()
       ensureSignInState()
       meReply = reply
-      mineReply = mine
+      if (mine) mineReply = mine
       const spies = consoleSpies()
       window.history.replaceState(null, '', `/?handoff=${CODE}`)
       const replace = vi.spyOn(window.history, 'replaceState')
@@ -1533,6 +1533,34 @@ describe('the first sign-in provisions the registered workspace', () => {
       expect(localStorage.getItem(SESSION_KEY)).toBeNull()
     })
   }
+
+  const badLists: [string, Reply][] = [
+    ['a 500', fail(500, 'boom')],
+    ['a malformed body', ok({ invitations: 'x' })],
+  ]
+  for (const [name, mine] of badLists) {
+    it(`a registered account with ${name} on the invite lookup reports failed and does not provision`, async () => {
+      mineReply = mine
+      const { hrefWrites } = registered()
+      await bootApp()
+      await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+      expect(workspacesCalls).toEqual([])
+      expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    })
+  }
+
+  it('an account without answers and a 500 on the invite lookup reports failed, not no-workspace', async () => {
+    configure()
+    ensureSignInState()
+    meReply = fail(403, 'forbidden')
+    mineReply = fail(500, 'boom')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+    expect(workspacesCalls).toEqual([])
+  })
 })
 
 // F5: each redemption call aborts after 15 s and takes the failure arm.

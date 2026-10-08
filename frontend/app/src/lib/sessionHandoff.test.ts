@@ -561,8 +561,16 @@ describe('join offers', () => {
   })
 
   it('redeemHandoff_403WithNoInvitesKeepsTheNoWorkspaceError', async () => {
+    const calls = stub({ mine: { status: 200, body: { invitations: [] } } })
+    const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({ status: 403 })
+    expect(paths(calls)).toEqual(['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine'])
+  })
+
+  // A failed lookup rejects with a non-403 error, which App maps to signin=failed.
+  it('redeemHandoff_403WithAFailedListLookupRejectsAsFailed', async () => {
     const rows: [string, Reply][] = [
-      ['empty list', { status: 200, body: { invitations: [] } }],
       ['403', FORBIDDEN],
       ['500', { status: 500 }],
       ['null list', { status: 200, body: { invitations: null } }],
@@ -571,8 +579,8 @@ describe('join offers', () => {
     for (const [name, mine] of rows) {
       const calls = stub({ mine })
       const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
-      expect(err, name).toBeInstanceOf(ApiError)
-      expect(err, name).toMatchObject({ status: 403 })
+      expect(err, name).toBeInstanceOf(Error)
+      expect(err, name).not.toBeInstanceOf(ApiError)
       expect(paths(calls), name).toEqual(['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine'])
     }
   })
@@ -584,17 +592,24 @@ describe('join offers', () => {
     expect(paths(calls)).not.toContain('/api/tenancy/v1/workspaces')
   })
 
-  it('redeemHandoff_answersWithoutInvitesProvision', async () => {
+  it('redeemHandoff_answersWithAnEmptyListProvision', async () => {
+    const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, mine: { status: 200, body: { invitations: [] } } })
+    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
+    expect(paths(calls)).toContain('/api/tenancy/v1/workspaces')
+    expect(s).toMatchObject({ handoff: true, token: RENEWED })
+  })
+
+  it('redeemHandoff_answersWithAFailedListNeverProvision', async () => {
     const rows: [string, Reply][] = [
-      ['empty', { status: 200, body: { invitations: [] } }],
       ['500', { status: 500 }],
       ['malformed', { status: 200, body: { invitations: 'x' } }],
     ]
     for (const [name, mine] of rows) {
       const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, mine })
-      const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
-      expect(paths(calls), name).toContain('/api/tenancy/v1/workspaces')
-      expect(s, name).toMatchObject({ handoff: true, token: RENEWED })
+      const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+      expect(err, name).toBeInstanceOf(Error)
+      expect(err, name).not.toBeInstanceOf(ApiError)
+      expect(paths(calls), name).not.toContain('/api/tenancy/v1/workspaces')
     }
   })
 
@@ -727,12 +742,14 @@ describe('join offers', () => {
     for (const [name, invitations] of bad) {
       stub({ mine: { status: 200, body: { invitations } } })
       const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
-      expect(err, name).toMatchObject({ status: 403 })
+      expect(err, name).not.toBeInstanceOf(ApiError)
+      expect(err, name).toBeInstanceOf(Error)
     }
     for (const body of [null, [], 'x', { invitations: {} }]) {
       stub({ mine: { status: 200, body } })
       const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
-      expect(err, JSON.stringify(body)).toMatchObject({ status: 403 })
+      expect(err, JSON.stringify(body)).not.toBeInstanceOf(ApiError)
+      expect(err, JSON.stringify(body)).toBeInstanceOf(Error)
     }
     stub({ mine: { status: 200, body: { invitations: [item('a'), item('b')] } } })
     expect(await redeemHandoff(GATEWAY, CODE, STATE, 5000), 'control: a well-formed list is an offer').toMatchObject({ kind: 'join' })
@@ -745,13 +762,14 @@ describe('join offers', () => {
     expect(paths(calls)).toEqual(['/auth/exchange', '/api/tenancy/v1/me'])
   })
 
-  it('redeemHandoff_answersWithAnUnreachableListProvision', async () => {
+  it('redeemHandoff_answersWithAnUnreachableListNeverProvision', async () => {
     const calls = stub({ exchange: { status: 200, body: { access_token: WITH_ANSWERS, refresh_token: 'R0' } }, me: [FORBIDDEN, { status: 200, body: ME }] })
     const inner = globalThis.fetch as unknown as (u: string, i: unknown) => Promise<unknown>
     vi.stubGlobal('fetch', (u: string, i: unknown) => (u.endsWith('/invitations/mine') ? Promise.reject(new TypeError('Failed to fetch')) : inner(u, i)))
-    const s = await redeemHandoff(GATEWAY, CODE, STATE, 5000)
-    expect(paths(calls)).toContain('/api/tenancy/v1/workspaces')
-    expect(s).toMatchObject({ handoff: true })
+    const err = await redeemHandoff(GATEWAY, CODE, STATE, 5000).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(ApiError)
+    expect(paths(calls)).not.toContain('/api/tenancy/v1/workspaces')
   })
 
   it('createOwnWorkspace_withoutAnswersThrowsBeforeAnyCall', async () => {

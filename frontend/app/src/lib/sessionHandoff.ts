@@ -82,6 +82,11 @@ export function isPendingInvites(body: unknown): body is { invitations: PendingI
   )
 }
 
+function isEmptyInvites(body: unknown): boolean {
+  const list = (body as { invitations?: unknown } | null | undefined)?.invitations
+  return Array.isArray(list) && list.length === 0
+}
+
 export function isJoinOffer(x: Session | JoinOffer): x is JoinOffer {
   return 'kind' in x && x.kind === 'join'
 }
@@ -105,10 +110,15 @@ export async function redeemHandoff(base: string, code: string, state: string, n
       throw err
     }
     const answers = registrationAnswers(token)
-    // A failed or malformed lookup falls through to provisioning.
-    const invites = await apiFetch<unknown>(`${base}/api/tenancy/v1/invitations/mine`, { token, signal }).catch(() => null)
+    // Only an empty list means no invites; a failed or malformed lookup ends at 'failed', never provisioning.
+    const invites = await apiFetch<unknown>(`${base}/api/tenancy/v1/invitations/mine`, { token, signal }).catch((lookupErr: unknown) => {
+      throw new Error('invitation lookup failed', { cause: lookupErr })
+    })
     if (isPendingInvites(invites)) {
       return { kind: 'join', token, refreshToken, invites: invites.invitations, answers }
+    }
+    if (!isEmptyInvites(invites)) {
+      throw new Error('malformed invitation list')
     }
     if (answers === null) {
       throw err

@@ -55,6 +55,10 @@ describe('player clock', () => {
     expect(nextClock(START, { type: 'seek', frac: 0.5 }, 3).tenths).toBe(51)
   })
 
+  it('clock_seekLeftOfFirstTickStaysInStepZero', () => {
+    expect(stepAt(seek(START, 0.2494).tenths / 10, 4)).toBe(0)
+  })
+
   it('clock_jumpMovesToTheStepAndPlays', () => {
     const c = nextClock({ tenths: 3, playing: false, ended: false }, { type: 'jump', step: 2 }, 4)
     expect(c).toEqual({ tenths: 68, playing: true, ended: false })

@@ -214,4 +214,66 @@ describe('the Join screen in the app', () => {
     await joinScreen()
     expect(screen.queryByRole('button', { name: 'Create my own workspace' })).toBeNull()
   })
+
+  it('app_signOutWithoutARefreshTokenStillLeavesAndRevokesNothing', async () => {
+    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T })
+    const hrefWrites = await boot()
+    await joinScreen()
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(hrefWrites).toEqual([LANDING]))
+    expect(posts('/auth/sign-out')).toEqual([])
+  })
+
+  it('app_createOwnFailureReportsSignInFailed', async () => {
+    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, refresh_token: 'R0' })
+    replies[`${GATEWAY}/api/tenancy/v1/workspaces`] = fail(500, 'boom')
+    const hrefWrites = await boot()
+    await joinScreen()
+    fireEvent.click(screen.getByRole('button', { name: 'Create my own workspace' }))
+    await waitFor(() => expect(hrefWrites).toHaveLength(1))
+    expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&signin=failed$`))
+    expect(posts('/accept')).toEqual([])
+    expect(ctx).toBeUndefined()
+  })
+
+  it('app_whileAJoinRunsNothingElseSendsAnything', async () => {
+    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, refresh_token: 'R0' })
+    replies[MINE] = ok({ invitations: [invite('inv-1', 'Obi Partners'), invite('inv-2', 'Zulu Books')] })
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    replies[ACCEPT('inv-2')] = async () => {
+      await gate
+      return ok({})()
+    }
+    await boot()
+    await joinScreen()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Join Zulu Books' }))
+    })
+    expect(screen.getByRole('button', { name: 'Joining…' })).toBeTruthy()
+    for (const b of screen.getAllByRole('button')) expect((b as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Join Obi Partners' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Create my own workspace' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    })
+    expect(posts('/accept').map((c) => c.url)).toEqual([ACCEPT('inv-2')])
+    expect(posts('/api/tenancy/v1/workspaces')).toEqual([])
+    expect(posts('/auth/sign-out')).toEqual([])
+    release()
+    await waitFor(() => expect(ctx?.user).toBeDefined())
+  })
+
+  it('app_createOwnThenJoinInOneTickSendsOnlyTheFirst', async () => {
+    replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, refresh_token: 'R0' })
+    await boot()
+    await joinScreen()
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create my own workspace' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Join Obi Partners' }))
+    })
+    await waitFor(() => expect(ctx?.user).toBeDefined())
+    expect(posts('/api/tenancy/v1/workspaces')).toHaveLength(1)
+    expect(posts('/accept')).toEqual([])
+  })
 })

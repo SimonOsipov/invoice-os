@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
 
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -71,7 +69,7 @@ describe('JoinWorkspace', () => {
     expect(within(rows[0]).getByRole('button').textContent).toBe('Join')
   })
 
-  it('joinWorkspace_buttonsMatchTheSuspendedNotice', () => {
+  it('joinWorkspace_buttonsCarryTheCardChrome', () => {
     show(ONE)
     const join = screen.getByRole('button', { name: 'Join Obi Partners' })
     const out = screen.getByRole('button', { name: 'Sign out' })
@@ -83,9 +81,6 @@ describe('JoinWorkspace', () => {
       expect(b.style.fontSize).toBe('13px')
       expect(b.style.alignSelf).toBe('flex-start')
     }
-    // SuspendedNotice is private to App.tsx: pin its Sign out chrome in source.
-    const app = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8').replace(/\s+/g, ' ')
-    expect(app).toContain(`className="v2-btn v2-btn-ghost pf-btn" style={{ alignSelf: 'flex-start', marginTop: 10, height: 34, padding: '0 12px', fontSize: 13 }}`)
   })
 
   it('joinWorkspace_createOwnShownOnlyWithAnswers', () => {

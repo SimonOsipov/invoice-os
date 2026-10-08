@@ -423,9 +423,10 @@ describe('library scenes', () => {
 
   it('SN-03 the player form marks fields and shows the message', () => {
     const ts = view('validate', 0, 'player')
-    expect(where(ts, (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px')).toHaveLength(5)
+    // why: a message caps the player form at four fields (LIB-06-07)
+    expect(where(ts, (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px')).toHaveLength(4)
     const fields = where(ts, (s) => s.height === '38px')
-    expect(fields).toHaveLength(5)
+    expect(fields).toHaveLength(4)
     expect(style(fields[0])).toMatchObject({
       border: '1px solid var(--status-red-border)',
       background: 'var(--status-red-bg)',
@@ -433,7 +434,7 @@ describe('library scenes', () => {
     })
     expect(markup('validate', 0, 'player')).toContain(glyph('triangle-alert'))
     const icon = where(ts, (s) => s.animation === 'libFade 300ms')
-    expect(icon.map((t) => style(t).color)).toEqual(Array(5).fill(null).map((_, i) => (i === 0 ? 'var(--status-red-text)' : 'var(--status-green-text)')))
+    expect(icon.map((t) => style(t).color)).toEqual(Array(4).fill(null).map((_, i) => (i === 0 ? 'var(--status-red-text)' : 'var(--status-green-text)')))
     const msg = ts.find((t) => t.text.startsWith('Seller TIN has 7 digits'))!
     expect(style(msg).background).toBe('var(--status-red-bg)')
 
@@ -470,6 +471,22 @@ describe('library scenes', () => {
     expect(where(ci, (s) => s['grid-template-columns'] === '1fr 1fr')).toHaveLength(1)
     expect(where(ci, (s) => s.height === '18px')).toHaveLength(4)
     expect(ci.some((x) => x.text === '12 fields checked · 0 errors')).toBe(true)
+  })
+
+  it('SN-17 the player form caps at four fields under a message', () => {
+    const labels = (ts: Tag[]) => where(ts, (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px')
+    const withMsg = view('validate', 0, 'player')
+    expect(labels(withMsg)).toHaveLength(4)
+    expect(withMsg.some((t) => t.text.startsWith('Seller TIN has 7 digits'))).toBe(true)
+    expect(labels(view('validate', 1, 'player'))).toHaveLength(5)
+    expect(where(view('read-documents', 2, 'player'), (s) => s.padding === '5px 7px')).toHaveLength(5)
+  })
+
+  it('SN-18 a thumbnail form with a doc and a message shows two fields', () => {
+    const boxes = (id: string) => where(view(id, thumbStep(feat(id)), 'thumb'), (s) => s.height === '18px')
+    expect(boxes('learns')).toHaveLength(2)
+    expect(boxes('create-invoice')).toHaveLength(4)
+    expect(boxes('read-documents')).toHaveLength(3)
   })
 
   it('SN-05 the flow marks done, active and todo nodes', () => {

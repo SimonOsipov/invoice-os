@@ -959,7 +959,7 @@ gql_body() {
 require_fork_ids() {
   local v missing=""
   for v in RAILWAY_SVC_GATEWAY_ID RAILWAY_SVC_APP_ID RAILWAY_SVC_LANDING_ID \
-           RAILWAY_SVC_OPS_CONSOLE_ID RAILWAY_SVC_SUPPORT_CONSOLE_ID RAILWAY_SVC_POSTGRES_ID; do
+           RAILWAY_SVC_OPS_CONSOLE_ID RAILWAY_SVC_SUPPORT_CONSOLE_ID RAILWAY_SVC_LIBRARY_ID RAILWAY_SVC_POSTGRES_ID; do
     if [ -z "${!v:-}" ]; then missing="$missing $v"; fi
   done
   if [ -n "$missing" ]; then
@@ -1317,7 +1317,7 @@ cmd_select_domain() {
 # --- Reconcile B: settle -----------------------------------------------------
 #
 # MEASURED: all service instances materialise IMMEDIATELY after environmentCreate, so
-# one read decides. It checks only the 6 service ids this command acts on; the
+# one read decides. It checks only the 7 service ids this command acts on; the
 # Watch-Paths assertion stays the sole authority on fleet membership.
 settle_fork() {
   local env_id="$1" present missing="" v
@@ -1326,14 +1326,14 @@ settle_fork() {
 
   present=$(echo "$GQL_RESPONSE" | jq -r '.data.environment.serviceInstances.edges[]?.node.serviceId')
   for v in "$RAILWAY_SVC_GATEWAY_ID" "$RAILWAY_SVC_APP_ID" "$RAILWAY_SVC_LANDING_ID" \
-           "$RAILWAY_SVC_OPS_CONSOLE_ID" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" "$RAILWAY_SVC_POSTGRES_ID"; do
+           "$RAILWAY_SVC_OPS_CONSOLE_ID" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" "$RAILWAY_SVC_LIBRARY_ID" "$RAILWAY_SVC_POSTGRES_ID"; do
     if ! echo "$present" | grep -qx "$v"; then missing="$missing $v"; fi
   done
   if [ -n "$missing" ]; then
     echo "::error::Environment $env_id is missing service instance(s):$missing. This is NOT evidence that the development environment drifted; the Watch-Paths assertion would misreport an unmaterialised fork as exactly that."
     exit 1
   fi
-  echo "All 6 reconciled service instances are present in $env_id."
+  echo "All 7 reconciled service instances are present in $env_id."
 }
 
 # --- Reconcile C: domains ----------------------------------------------------
@@ -1421,12 +1421,13 @@ reconcile_domain() {
 
 reconcile_domains() {
   local env_id="$1"
-  echo "Reconciling domains for the 5 public services in $env_id ..."
+  echo "Reconciling domains for the 6 public services in $env_id ..."
   reconcile_domain "$env_id" "$RAILWAY_SVC_GATEWAY_ID" gateway
   reconcile_domain "$env_id" "$RAILWAY_SVC_APP_ID" app
   reconcile_domain "$env_id" "$RAILWAY_SVC_LANDING_ID" landing
   reconcile_domain "$env_id" "$RAILWAY_SVC_OPS_CONSOLE_ID" ops-console
   reconcile_domain "$env_id" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" support-console
+  reconcile_domain "$env_id" "$RAILWAY_SVC_LIBRARY_ID" library
 }
 
 # --- Domain reachability: a record is not a route ----------------------------
@@ -1594,11 +1595,12 @@ cmd_verify_spa_domains() {
   fi
 
   local pair label
-  echo "Verifying the 4 SPA hostnames route in $env_id ..."
+  echo "Verifying the 5 SPA hostnames route in $env_id ..."
   for pair in "landing:$RAILWAY_SVC_LANDING_ID:LANDING_URL" \
               "app:$RAILWAY_SVC_APP_ID:APP_URL" \
               "ops-console:$RAILWAY_SVC_OPS_CONSOLE_ID:OPS_CONSOLE_URL" \
-              "support-console:$RAILWAY_SVC_SUPPORT_CONSOLE_ID:SUPPORT_CONSOLE_URL"; do
+              "support-console:$RAILWAY_SVC_SUPPORT_CONSOLE_ID:SUPPORT_CONSOLE_URL" \
+              "library:$RAILWAY_SVC_LIBRARY_ID:LIBRARY_URL"; do
     label="${pair%%:*}"
     verify_one_domain "$env_id" "$(echo "$pair" | cut -d: -f2)" "$label" /health \
       "$(echo "$pair" | cut -d: -f3)"
@@ -3582,7 +3584,7 @@ cmd_set_production_gateway_token() {
 # Sentry quota from every PR (TestSentryOffListsMatchTheDeployedFleet pins the lists).
 
 SENTRY_BACKENDS=(gateway tenancy portfolio invoice validation submission dashboard notifications reconciliation docling)
-SENTRY_SPAS=(landing app ops-console support-console)
+SENTRY_SPAS=(landing app ops-console support-console library)
 
 # sentry_verdict <variables-response-json> <service> <NAME>...
 # Pure. Passes only when every name is absent or exactly "". Prints no value.
@@ -3802,14 +3804,14 @@ cmd_query() {
   printf '%s' "$GQL_RESPONSE"
 }
 
-# discover-urls <environment-id>: one request reads the 5 public services' domains.
-# Prints the five <key>=https://<domain> lines only once all five resolve. A failure names the
+# discover-urls <environment-id>: one request reads the 6 public services' domains.
+# Prints the six <key>=https://<domain> lines only once all six resolve. A failure names the
 # environment (and the services whose alias errored), never Railway's message.
 cmd_discover_urls() {
   local env_id="${1:-}" i v missing="" decl="" fields="" who="" ids=() out="" sel wrapped count d ctx
-  local labels=(gateway app landing ops-console support-console)
-  local idvars=(RAILWAY_SVC_GATEWAY_ID RAILWAY_SVC_APP_ID RAILWAY_SVC_LANDING_ID RAILWAY_SVC_OPS_CONSOLE_ID RAILWAY_SVC_SUPPORT_CONSOLE_ID)
-  local keys=(gateway_url app_url landing_url ops_console_url support_console_url)
+  local labels=(gateway app landing ops-console support-console library)
+  local idvars=(RAILWAY_SVC_GATEWAY_ID RAILWAY_SVC_APP_ID RAILWAY_SVC_LANDING_ID RAILWAY_SVC_OPS_CONSOLE_ID RAILWAY_SVC_SUPPORT_CONSOLE_ID RAILWAY_SVC_LIBRARY_ID)
+  local keys=(gateway_url app_url landing_url ops_console_url support_console_url library_url)
   if [ -z "$env_id" ]; then
     echo "::error::usage: railway-env.sh discover-urls <environment-id>" >&2
     exit 2
@@ -3824,7 +3826,7 @@ cmd_discover_urls() {
   fi
   ctx="discovering the public URLs of environment $env_id"
   use_query_auth "$ctx"
-  for i in 0 1 2 3 4; do
+  for i in 0 1 2 3 4 5; do
     decl="$decl, \$s$i: String!"
     fields="$fields
   s$i: domains(projectId: \$p, environmentId: \$e, serviceId: \$s$i) { customDomains { domain targetPort } serviceDomains { domain targetPort } }"
@@ -3835,7 +3837,7 @@ cmd_discover_urls() {
     if [ "$GQL_CURL_RC" = 0 ]; then
       for i in $(gql_error_aliases); do
         i="${i#s}"
-        [[ "$i" =~ ^[0-4]$ ]] && who="$who${who:+ }${labels[$i]}"
+        [[ "$i" =~ ^[0-5]$ ]] && who="$who${who:+ }${labels[$i]}"
       done
       echo "::error::Could not read the public URLs of environment $env_id${who:+ ($who unreadable)}: Railway answered a GraphQL error." >&2
     elif [ "$GQL_REPORTED" != 1 ]; then
@@ -3843,7 +3845,7 @@ cmd_discover_urls() {
     fi
     exit 1
   fi
-  for i in 0 1 2 3 4; do
+  for i in 0 1 2 3 4 5; do
     wrapped=$(printf '%s' "$GQL_RESPONSE" | jq -c --arg k "s$i" '{data: {domains: .data[$k]?}}') || wrapped=""
     sel=$(select_domain "$wrapped") || exit 1
     count=$(printf '%s' "$sel" | jq -r '.count')

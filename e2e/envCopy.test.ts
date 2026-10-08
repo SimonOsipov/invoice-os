@@ -13,7 +13,8 @@ import { FORBIDDEN_STRINGS, RETIRED_LANDING_COPY } from './envCopyStrings'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-const SPAS = ['app', 'landing', 'ops-console', 'support-console'] as const
+// library floor sits ~3 under its 21 files, so losing a src dir trips it (8 would not).
+const SPA_FLOORS = { app: 20, landing: 20, 'ops-console': 20, 'support-console': 20, library: 18 } as const
 
 // The complete exception: a test file necessarily quotes the strings it guards. Nothing else
 // is excepted — comments and frontend/landing are both in scope (AC-6/AC-7).
@@ -104,9 +105,9 @@ describe('environment posture copy guard (DEMO-01-09, task-326)', () => {
     // Vacuity guard: a broken pathspec (e.g. `-- frontendX`) collapses this to 0 and must go
     // RED here, never pass silently through to a vacuously-empty hit list below.
     expect(scanned.length, 'total scanned files (vacuity guard)').toBeGreaterThanOrEqual(120)
-    for (const spa of SPAS) {
+    for (const [spa, floor] of Object.entries(SPA_FLOORS)) {
       const count = scanned.filter((p) => p.startsWith(`frontend/${spa}/`)).length
-      expect(count, `${spa} scanned files (vacuity guard)`).toBeGreaterThanOrEqual(20)
+      expect(count, `${spa} scanned files (vacuity guard)`).toBeGreaterThanOrEqual(floor)
     }
   })
 

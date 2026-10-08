@@ -45,7 +45,7 @@ async function buildSpa(name: string): Promise<Built> {
 }
 
 function built(name: string): Built {
-  expect(SPAS).toEqual(['app', 'landing', 'ops-console', 'support-console'])
+  expect(SPAS).toEqual(['app', 'landing', 'library', 'ops-console', 'support-console'])
   const b = builds.get(name)!
   expect(b, `${name}: no build result`).toBeDefined()
   expect(b.failure, `${name}: build failed`).toBeUndefined()

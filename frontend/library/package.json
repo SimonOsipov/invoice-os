@@ -13,10 +13,12 @@
   },
   "dependencies": {
     "@invoice-os/design-tokens": "workspace:*",
+    "@invoice-os/monitoring": "workspace:*",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@sentry/vite-plugin": "5.4.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

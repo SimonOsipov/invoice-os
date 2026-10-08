@@ -33,7 +33,7 @@ const (
 
 // The four trees the detection command walks:
 //
-//	grep -rnE '\b(14|15)\b' \
+//	grep -rnE '\b(15|16)\b' \
 //	  .github/workflows docs scripts/ci internal/tools \
 //	  | grep -iE 'service'
 //
@@ -44,14 +44,14 @@ var scanTrees = []string{".github/workflows", "docs", "scripts/ci", "internal/to
 // The two halves of that command, kept on separate lines so neither line is
 // itself a hit.
 var (
-	countRe   = regexp.MustCompile(`\b(14|15)\b`)
+	countRe   = regexp.MustCompile(`\b(15|16)\b`)
 	subjectRe = regexp.MustCompile(`(?i)service`)
 )
 
-// Population floors: the measured population (9 hits across 4 files), this gate's own source excluded.
+// Population floors: the measured population (14 hits across 7 files), this gate's own source excluded.
 const (
-	minHits  = 9
-	minFiles = 4
+	minHits  = 14
+	minFiles = 7
 )
 
 // allowEntry keys on a line substring, never a line number -- a line-keyed
@@ -316,6 +316,90 @@ func TestDevEnv_ExpectedJSONNamesEveryDeployedService(t *testing.T) {
 	if contains(spas, "auth") {
 		t.Errorf("%s: the deploy-spas matrix names `auth` -- it is a backend, not a static front end", devEnvRel)
 	}
+
+	if !contains(expected, "library") {
+		t.Errorf("%s: expected_json omits `library` -- the Feature Library can vanish from the environment and the fleet gate stays green", devEnvRel)
+	}
+	if !contains(spas, "library") {
+		t.Errorf("%s: the deploy-spas matrix omits `library` -- nothing ships the Feature Library SPA", devEnvRel)
+	}
+	if contains(ctx, "library") {
+		t.Errorf("%s: the deploy-context matrix names `library` -- it is a static front end, not a backend", devEnvRel)
+	}
+}
+
+// spaURLKey maps a deploy-spas name to its URL variable: library -> LIBRARY_URL.
+func spaURLKey(spa string) string {
+	return strings.ToUpper(strings.ReplaceAll(spa, "-", "_")) + "_URL"
+}
+
+// jobBounds returns the line range [start, end) of the job that holds line i.
+func jobBounds(lines []string, i int) (int, int) {
+	start := i
+	for start > 0 && !jobHeadRe.MatchString(lines[start]) {
+		start--
+	}
+	end := i + 1
+	for end < len(lines) && !jobHeadRe.MatchString(lines[end]) {
+		end++
+	}
+	return start, end
+}
+
+// trailingYAMLComment matches a `#` comment that follows code on a run line (no quote handling: the wait lines carry none).
+var trailingYAMLComment = regexp.MustCompile(`\s+#.*$`)
+
+func TestDevEnv_EveryDeployedSPAIsDiscoveredAndAwaited(t *testing.T) {
+	content := readFile(t, filepath.Join(repoRoot(t), devEnvRel))
+	spas := matrixList(t, content, "deploy-spas")
+	lines := strings.Split(content, "\n")
+
+	var waits []int
+	for i, l := range lines {
+		l = trailingYAMLComment.ReplaceAllString(l, "")
+		if strings.Contains(l, "wait-spa-builds.sh") && strings.Contains(l, "$EXPECTED_BUILD") {
+			waits = append(waits, i)
+			lines[i] = l
+		}
+	}
+	if len(spas) == 0 || len(waits) < 2 {
+		t.Fatalf("%s: parsed %d deploy-spas name(s) and %d wait-spa-builds.sh call(s) -- nothing to compare", devEnvRel, len(spas), len(waits))
+	}
+
+	pStart, pEnd := -1, -1
+	for i, l := range lines {
+		if strings.TrimRight(l, " \t\r") == "  prepare-env:" {
+			pStart, pEnd = jobBounds(lines, i)
+		}
+	}
+	if pStart < 0 {
+		t.Fatalf("%s: no `prepare-env:` job", devEnvRel)
+	}
+	prepare := strings.Join(lines[pStart:pEnd], "\n")
+
+	for _, spa := range spas {
+		key := spaURLKey(spa)
+		if !strings.Contains(prepare, "\n      "+strings.ToLower(key)+": ") {
+			t.Errorf("%s: prepare-env publishes no `%s` output for the `%s` SPA", devEnvRel, strings.ToLower(key), spa)
+		}
+		for _, w := range waits {
+			if !strings.Contains(lines[w], `"$`+key+`"`) {
+				t.Errorf("%s:%d: wait-spa-builds.sh is not passed \"$%s\" -- the `%s` SPA ships unawaited", devEnvRel, w+1, key, spa)
+			}
+			s, e := jobBounds(lines, w)
+			if !regexp.MustCompile(`(?m)^      ` + key + `: `).MatchString(strings.Join(lines[s:e], "\n")) {
+				t.Errorf("%s:%d: the job running this wait does not set %s in its env", devEnvRel, w+1, key)
+			}
+		}
+	}
+
+	// Control: the oldest SPA must derive and be found the same way.
+	if k := spaURLKey("landing"); k != "LANDING_URL" || !strings.Contains(prepare, "\n      landing_url: ") {
+		t.Errorf("control: `landing` derived %q and was not found in prepare-env outputs", k)
+	}
+	if spaURLKey("support-console") != "SUPPORT_CONSOLE_URL" {
+		t.Errorf("control: `support-console` did not derive SUPPORT_CONSOLE_URL")
+	}
 }
 
 // --- AC-2 ---
@@ -337,10 +421,32 @@ func TestFleetGate_EveryCountSiteAgreesWithExpectedJSON(t *testing.T) {
 	if !contains(expected, "auth") {
 		t.Errorf("%s: expected_json omits `auth`, so want=%d is the pre-IdP fleet -- agreement with it is not evidence", devEnvRel, want)
 	}
+	if !contains(expected, "library") {
+		t.Errorf("%s: expected_json omits `library`, so want=%d is the pre-library fleet -- agreement with it is not evidence", devEnvRel, want)
+	}
 
 	hits := scanRepo(t)
 	if len(hits) == 0 {
 		t.Fatalf("the scan found no fleet-count site at all -- the detection pattern or the trees have drifted, and a clean run means nothing")
+	}
+
+	// A count wrapped before its subject word ("all 16" / "services") escapes the line scan.
+	wrapped := 0
+	lines := strings.Split(content, "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		next := strings.TrimLeft(lines[i+1], " #")
+		if subjectRe.MatchString(lines[i]) || !strings.HasPrefix(strings.ToLower(next), "service") {
+			continue
+		}
+		for _, m := range countRe.FindAllString(lines[i], -1) {
+			wrapped++
+			if got, _ := strconv.Atoi(m); got != want {
+				t.Errorf("%s:%d: wrapped count got %d want %d -- %s", devEnvRel, i+1, got, want, strings.TrimSpace(lines[i]))
+			}
+		}
+	}
+	if wrapped == 0 {
+		t.Errorf("%s: no wrapped fleet count found -- the cold-build comment moved or the control is stale", devEnvRel)
 	}
 
 	checked := 0
@@ -449,10 +555,10 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	// this file carries both a count and the subject word, which would make
 	// the fixture a hit in the real scan.
 	const subject = "service"
-	write("quiet.md", "a count of 14 with no subject word\n"+
+	write("quiet.md", "a count of 15 with no subject word\n"+
 		"the subject word alone: "+subject+", no count\n")
 	write("stale.md", "nothing on this line\n"+
-		"all 14 of them, one per "+subject+"\n")
+		"all 15 of them, one per "+subject+"\n")
 
 	hits, err := scanUnder(root, []string{"docs"})
 	if err != nil {
@@ -465,8 +571,8 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	if got.File != "docs/stale.md" || got.Line != 2 {
 		t.Errorf("control needle reported at %s:%d, planted at docs/stale.md:2", got.File, got.Line)
 	}
-	if len(got.Counts) != 1 || got.Counts[0] != 14 {
-		t.Errorf("control needle read as %v, planted as [14]", got.Counts)
+	if len(got.Counts) != 1 || got.Counts[0] != 15 {
+		t.Errorf("control needle read as %v, planted as [15]", got.Counts)
 	}
 }
 
@@ -492,7 +598,7 @@ func TestFleetGate_AllowlistFaultsFireOnAPlantedTree(t *testing.T) {
 	// Spliced, as in TestFleetGate_FindsAPlantedControlNeedle, so no line of
 	// this file is itself a hit.
 	const subject = "service"
-	line := "all 14 of them, one per " + subject
+	line := "all 15 of them, one per " + subject
 	body := line + " CARVE\n" + line + " WIDE\n" + line + " WIDE\n" + line + "\n" + line + "\n" + line + "\n"
 	if err := os.WriteFile(filepath.Join(tree, "a.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)

@@ -1,0 +1,34 @@
+---
+paths:
+  - "internal/audit/**"
+  - "internal/actor/**"
+  - "migrations/*audit_log*"
+---
+# Audit log
+
+- Write audit rows only through `audit.Record`.
+- Never set `entity_id` or `invoice_id` by hand. A trigger fills `entity_id`. A generated column fills `invoice_id`.
+- Attribute an event by its event name, never by which payload key is present.
+- Order a page by `created_at DESC, id DESC`.
+- Filter on `created_at`, `event`, `actor`, `entity_id` or `invoice_id`. Each leads an index after `tenant_id`.
+- Free-text search is the one predicate no index serves. The date range is its only bound.
+- Run the page, the count, the facets and the empty probe in one transaction.
+- Read a NULL `entity_id` as workspace-level or unattributed. Never render it as unknown.
+- Classify a NULL-`entity_id` event as `workspace` only when it is in `firmWideEvents`. Add every new firm-wide event to that map.
+- Offer three company filters: all, one company and workspace-level. Never write `entity_id = $1 OR entity_id IS NULL`.
+- Resolve company names with a `LEFT JOIN`. Show a dangling `entity_id` as a deleted company.
+- The UUID grammar has several live copies: the resolver, the generated column and `actor.Resolve`. Change all live copies together.
+- Never edit an applied resolver migration. Replace the resolver in a new migration.
+- Under `FORCE ROW LEVEL SECURITY`, `->>`, `ILIKE` and `@@` use no index. Move a filtered value into a typed column.
+- Match free-text search on payload values, never on payload key names.
+- Call `actor.Resolve` once per page, after the row scan, on the caller's tenant transaction.
+- `actor.Resolve` sets no tenant. A transaction without a tenant resolves no actor and raises no error.
+- Keep `actor` raw on the wire. Add `actor_name` and `actor_kind` beside it.
+- Treat an empty display name as absent in `actor.Name`. Never merge it with the approval `holderName`.
+- Append the cursor clause as SQL text. Never guard it with `$n IS NULL OR`.
+- Test the facet statements apart from the page.
+- Send the audit row `id` as a string.
+- Record `invoice_number` in the payload of every invoice-scoped writer. `TestRLS_EveryInvoiceScopedWriterCarriesTheNumber` fails otherwise.
+- Widen the invoice-scoped event set with a new `ALTER TABLE` migration. The `invoice_id` column is stored and generated.
+- State the corpus in every plan test.
+- Run `ANALYZE` as the owner or the superuser, never as `invoice_app`.

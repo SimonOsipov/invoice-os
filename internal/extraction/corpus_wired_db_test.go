@@ -41,9 +41,6 @@ const cwReportRunFilter = "TestRLS_WiredPathScoresTheCorpus"
 // which is pinned by TestEndToEnd_TheGatedStepCarriesOnePackageAtATime, not here.
 var cwGatedStepRE = regexp.MustCompile(`(?m)^ *run: .*rls-test-gate\.sh .*\./internal/extraction(/\.\.\.)?$`)
 
-// The doc section the number is recorded under, and the fraction it must state.
-const cwDocSection = "## Wired-path decision rate"
-
 // The ranking decoy, seeded as a LEARNED rule through the real rule store.
 //
 // The two-branch alternation is load-bearing rather than cosmetic. decideField (reconcile.go)
@@ -760,35 +757,6 @@ func TestRLS_WiredPathTheCIStepsRunFilterNamesARealTest(t *testing.T) {
 	for _, name := range renders {
 		if !filter.MatchString(name) {
 			t.Errorf("the step's -run pattern %q does not match %s, which is what renders the wired report; the grep would find no marker", m[1], name)
-		}
-	}
-}
-
-// AC-12. docs/extraction-corpus.md carries the wired number. This is a WEAK oracle and is
-// recorded as one: it compares prose to a Go constant, so it fails when someone edits the doc,
-// never when the wired measurement is wrong. The measurement's real reader is the ci.yml step
-// TestRLS_WiredPathCIPrintsTheReport pins.
-func TestCorpusDoc_RecordsTheWiredPathRate(t *testing.T) {
-	section := acDocSectionText(t, acRepoFile(t, acDoc), cwDocSection)
-
-	for _, want := range []string{
-		fmt.Sprintf("%d of %d", tier1DecisionHits, tier1DecisionPairs),
-		strconv.FormatFloat(tier1DecisionRate, 'f', 4, 64),
-		fmt.Sprintf("%d of %d", cwDecoyHits, tier1DecisionPairs), // the decoy control
-		"ExtractWorker.Work",
-		"extraction_field_results",
-		cwDecoyLayout,
-	} {
-		if !strings.Contains(section, want) {
-			t.Errorf("%s's %q section does not carry %q", acDoc, cwDocSection, want)
-		}
-	}
-
-	// The limit, stated rather than implied: what the wired number does NOT prove is what a
-	// reader would otherwise assume it does.
-	for _, phrase := range []string{"DoclingReader", "no honest oracle"} {
-		if !strings.Contains(section, phrase) {
-			t.Errorf("%s's %q section never mentions %q; the doc's own coverage limit is the part a reader cannot reconstruct", acDoc, cwDocSection, phrase)
 		}
 	}
 }

@@ -14,8 +14,7 @@
 // RALPH lead wrote a DSN check that masked passwords with `[^@]*` -- which
 // matches the EMPTY string, so a password-less DSN rendered identically to a
 // healthy one and the check could not fail. A decorative guard, produced
-// while verifying the task about decorative guards. See
-// .ralph/ac3-development-dsn-readback.md:27-35. Every test here therefore
+// while verifying the task about decorative guards. Every test here therefore
 // states which named mutation it kills; a test that survives every mutation
 // is decorative and does not belong in this file.
 //
@@ -70,7 +69,7 @@ type dsnMap map[string]map[string]string
 
 // healthyMap returns the full 9-entry fleet map, every entry valid. The nine
 // DATABASE_* entries are exactly what a live read-back of the `development`
-// environment returned on 2026-07-19 (.ralph/ac3-development-dsn-readback.md).
+// environment returned on 2026-07-19.
 // The five DOCUMENT_* values below are SENTINELS, not a read-back: they are
 // the shape Railway will render once an operator sets the references.
 func healthyMap() dsnMap {

@@ -4,7 +4,7 @@ import { seedConsent } from './landingConsent'
 
 // The landing page's content contract (TEST-01-07): F-6 audience strip and F-5's
 // live-validation preview. Named for the capability they share
-// (docs/e2e-convention.md's "organize by capability, not by date"), alongside
+// (.claude/rules/e2e.md: organise specs by capability, never by date), alongside
 // landing-nav/landing-demo/landing-privacy/landing-consent.
 //
 // CI ASYMMETRY: this spec executes only on a pull request's own deploy gate
@@ -13,9 +13,8 @@ import { seedConsent } from './landingConsent'
 // does include `e2e/**`, so `pnpm -r typecheck` still compiles this file on every push; it is
 // dev-env.yml's Playwright run that push never reaches.
 //
-// TARGET SURFACE: `landing` is a static marketing surface (docs/e2e-convention.md → "Target
-// surface"), so these assertions pin what the deployed build actually SERVES, not a backend
-// contract — there is no API behind F-5 or F-6.
+// TARGET SURFACE: `landing` is a static marketing surface, so these assertions pin what the
+// deployed build actually SERVES, not a backend contract — there is no API behind F-5 or F-6.
 //
 // WHY THIS IS E2E AND NOT UNIT: F-6 carries `unit_applicable = 0` in the system map — a
 // unit test on it raises no coverage, because the unit slot is not in its denominator.
@@ -32,7 +31,7 @@ import { seedConsent } from './landingConsent'
 // are correct in their own dimension.
 //
 // FUNCTIONAL ONLY: no screenshot, no pixel diff, no geometry assertion — `visual_applicable`
-// is 0 on every feature on this screen, and docs/e2e-convention.md is functional-only anyway.
+// is 0 on every feature on this screen, and .claude/rules/e2e.md bars screenshot and pixel gates anyway.
 //
 // LOCAL GREEN IS NOT EXPECTED YET. `[data-strip]` / `[data-tally]` (TEST-01-01) exist in this
 // branch's source but are not deployed anywhere. This spec's first real green run is this

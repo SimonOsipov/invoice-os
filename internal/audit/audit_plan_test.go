@@ -771,7 +771,7 @@ func TestAudit_UnfilteredFacetsRemainIndexOnly(t *testing.T) {
 }
 
 // TestAudit_WorkspaceLevelPageIsPinnedToTheMeasuredPlan is AC #4, whose job is to pin the plan
-// that ACTUALLY OCCURS rather than the one the contract doc asserts.
+// that ACTUALLY OCCURS rather than the one a spec asserts.
 //
 // D-15 says entity_id IS NULL is a post-scan Filter, not an Index Cond. That was measured on a
 // single 200k-row tenant. On the corpus this test runs on — 20 tenants of 1,000 rows — the

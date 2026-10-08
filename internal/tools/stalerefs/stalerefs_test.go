@@ -214,12 +214,72 @@ func TestScan_CommentsAndAbsenceAssertionsAreNotStaleReferences(t *testing.T) {
 	tree := map[string][]Hit{
 		"View XML": {
 			{"e2e/topology/invoice-surfaces.spec.ts", 1902, `  await expect(page.getByTestId('ubl-modal')).not.toContainText('View XML')`},
-			{"docs/e2e-convention.md", 44, `<!-- the old 'View XML' label was retired in BUG-04 -->`},
+			{".claude/rules/e2e.md", 44, `<!-- the old 'View XML' label was retired in BUG-04 -->`},
 		},
 	}
 
 	if got := Scan(diff, fakeGrep(tree), defaultAllow()); len(got) != 0 {
 		t.Fatalf("findings = %v, want none: both survivors record the removal", literalsOf(got))
+	}
+}
+
+// A bare CamelCase identifier is not Distinctive, so the producer quotes an env-var-shaped literal.
+func TestScan_ARuleFileIsAConsumer(t *testing.T) {
+	diff := `--- a/internal/platform/db/tenant.go
++++ b/internal/platform/db/tenant.go
+@@ -10,1 +10,1 @@
+-const key = "WITHIN_REQUEST_TENANT_TX_OPTS"
++const key = "WITHIN_REQUEST_TX_OPTS"
+`
+	tree := map[string][]Hit{
+		"WITHIN_REQUEST_TENANT_TX_OPTS": {
+			{".claude/rules/tenant-seam.md", 7, "- Set `WITHIN_REQUEST_TENANT_TX_OPTS` for every read."},
+		},
+	}
+
+	f := find(t, Scan(diff, fakeGrep(tree), defaultAllow()), "WITHIN_REQUEST_TENANT_TX_OPTS")
+	if len(f.Stale) != 1 || f.Stale[0].Path != ".claude/rules/tenant-seam.md" {
+		t.Fatalf("stale = %+v, want the one rule-file hit", f.Stale)
+	}
+}
+
+// Markdown outside the consumer dirs must not read as a surviving producer.
+func TestScan_AMarkdownHitDoesNotMaskARuleFileHit(t *testing.T) {
+	diff := `--- a/internal/platform/db/tenant.go
++++ b/internal/platform/db/tenant.go
+@@ -10,1 +10,1 @@
+-const key = "WITHIN_REQUEST_TENANT_TX_OPTS"
++const key = "WITHIN_REQUEST_TX_OPTS"
+`
+	tree := map[string][]Hit{
+		"WITHIN_REQUEST_TENANT_TX_OPTS": {
+			{".claude/rules/tenant-seam.md", 7, "- Set `WITHIN_REQUEST_TENANT_TX_OPTS` for every read."},
+			{"README.md", 3, "The `WITHIN_REQUEST_TENANT_TX_OPTS` key is set per request."},
+		},
+	}
+
+	f := find(t, Scan(diff, fakeGrep(tree), defaultAllow()), "WITHIN_REQUEST_TENANT_TX_OPTS")
+	if len(f.Stale) != 1 || f.Stale[0].Path != ".claude/rules/tenant-seam.md" {
+		t.Fatalf("stale = %+v, want the one rule-file hit", f.Stale)
+	}
+}
+
+// A literal moved from Go into an .html page is still produced; the e2e quote is not stale.
+func TestScan_AHTMLProducerSurvivesTheMove(t *testing.T) {
+	diff := `--- a/internal/gateway/verify.go
++++ b/internal/gateway/verify.go
+@@ -10,1 +10,0 @@
+-const copy = "Verification link expired"
+`
+	tree := map[string][]Hit{
+		"Verification link expired": {
+			{"internal/gateway/verify_page.html", 12, `<p>Verification link expired</p>`},
+			{"e2e/smoke/verify.spec.ts", 9, `  await expect(page.getByText('Verification link expired')).toBeVisible()`},
+		},
+	}
+
+	if got := Scan(diff, fakeGrep(tree), defaultAllow()); len(got) != 0 {
+		t.Fatalf("findings = %v, want none: an html producer still emits it", literalsOf(got))
 	}
 }
 
@@ -269,7 +329,11 @@ func TestRole(t *testing.T) {
 	for path, want := range map[string]string{
 		"e2e/smoke/support-console.spec.ts":    "consumer",
 		"e2e/topology/roleFixtures.ts":         "consumer",
-		"docs/deploy-model.md":                 "consumer",
+		".claude/rules/ci-railway.md":          "consumer",
+		"notes/deploy-model.txt":               "producer",
+		"internal/gateway/verify_page.html":    "producer",
+		"scripts/seed.sh":                      "producer",
+		"README.md":                            "ignore",
 		".github/workflows/dev-env.yml":        "consumer",
 		"frontend/app/src/lib/members.ts":      "producer",
 		"internal/invoice/handlers.go":         "producer",

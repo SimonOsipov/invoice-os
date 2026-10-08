@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Interactive contract of FAQItem (jsdom). Source of truth: the DS FAQItem.jsx in .ralph/design-v2/components plus the
+// Interactive contract of FAQItem (jsdom). Source of truth: the DS FAQItem.jsx plus the
 // story's deliberate divergences (controlled open/onToggle, answer stays mounted with `hidden`, chevron-down/up glyph swap,
 // stroke 2). Glyph expectations come from GLYPHS.
 import { createElement, useState } from 'react'

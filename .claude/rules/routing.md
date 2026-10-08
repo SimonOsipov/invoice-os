@@ -1,0 +1,46 @@
+---
+paths:
+  - "frontend/app/src/lib/route.ts"
+  - "frontend/app/src/lib/deepLink.ts"
+  - "frontend/app/src/App.tsx"
+  - "frontend/app/src/App.atomAudit.data.ts"
+---
+# In-app routing
+
+- Keep `ROUTE_PATHS` total over `View`. It maps `dashboard` to the bare root `/` and `detail` to `/invoice`.
+- Tell a drill-down from its list by segment count. `parseRoute` reads two segments for `/invoices/:id`, `/extraction/:jobId` and `/workflows/:id`.
+- Let `/workflows` and `/workflows/:id` share the `workflows` view. The absent id is the list.
+- Keep `parseRoute` strict. An unknown path, a wrong case or a third segment returns null.
+- Keep `parseLocation` total. It returns a renderable state for every string and falls back to `dashboard`.
+- Emit only the params that the view owns. `invoices` owns `q`, `audit` owns `invoice`, `settings` owns its tab, `create` owns its review batch ids.
+- Never read `location.search` in a path writer. Re-serialise through `routeUrl`, because an echoed query keeps a one-shot param in history.
+- Omit a defaulted query param. Always write the settings tab, `members` included.
+- Keep bare `/settings` as an accepted alias of `/settings/members`. Canonicalise it with `replaceState`.
+- Clamp an unknown or unavailable settings tab to `members`. Clamp `clients` to `dashboard` in an in-house workspace.
+- Drop a non-UUID `invoice` param. Cap `q` with `clampFilterText`.
+- Reject a review path with a bad id or more than `REVIEW_PATH_MAX_IDS` ids. Never truncate the list.
+- Render the policy list for a `/workflows/:id` that names nothing. Leave the address bar alone.
+- Push on navigation through `navigate`. Replace on a correction.
+- Write nothing in the `popstate` handler except the identity-clamp `replaceState`.
+- Stamp every `Workspace` history write with `{ e: active.entityId }`. `guard_everyWorkspaceHistoryWriteCarriesTheStamp` counts the writes.
+- Never stamp the raw `activeEntityId` atom. It stays null until `switchClient` writes it.
+- Stamp the `id` parameter in `switchClient`. The state read has not committed.
+- Clamp a `popstate` entry whose stamp differs from the active company. Re-derive its path through `carryView` at the top of the handler.
+- Treat an entry with no stamp as unknown. Never clamp it.
+- Never rely on RLS to hide another company's data inside one tenant. Entities of one firm share a tenant, so the clamp does that job.
+- Write the `auditPrefilter` atom and the `/audit?invoice=` param together. They are one fact.
+- Clear `auditPrefilter` and its param when `navigate` leaves `audit`. Keep `invoiceQuery` and `settingsTab` durable.
+- Route every `auditPrefilter` write through a URL writer. `guard_everyAuditPrefilterWriteGoesThroughAUrlWriter` counts the call sites.
+- Gate drill-down ids and review batch ids on `bootView`, never on `seed.view`. `availableView` can overrule the path.
+- Re-emit the owned params of the boot state in the mount alignment. Drop the unowned ones.
+- Strip `?auth=` and `?handoff=` at the `App` mount, before `Workspace`. The strip keeps the path and drops the query.
+- Keep the `persona` query parameter inert. No view owns it, and no writer emits it.
+- Store the signed-out deep link only in `sessionStorage`, under `DEEP_LINK_KEY`. Never put it in a URL.
+- Re-validate a restored deep link through `parseLocation`. Treat the stored blob as user-writable.
+- Bump `DEEP_LINK_SCHEMA_VERSION` when the blob shape changes. A version mismatch reads as no destination.
+- Restore the deep link only when the live path is the bare root. A live non-root path always wins.
+- Clear the stored deep link in the mount alignment and in `signOut`.
+- Let the review-path mirror write only while `view === 'create'`. `navigate` owns every other view.
+- Give each new `Workspace` atom a row in `AUDITED_ATOMS`. `guard_everyWorkspaceAtomHasAnAuditRow` fails without it.
+- Cite audit evidence by text, never by line number. `guard_everyCitationResolvesToExactlyOneSite` checks each citation.
+- Reset history in `beforeEach` of every test that renders `<App />`, with `window.history.replaceState(null, '', '/')`. jsdom keeps history across tests in a file.

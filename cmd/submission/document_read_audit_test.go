@@ -11,11 +11,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"reflect"
-	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -34,18 +30,6 @@ const (
 	// absence proof below is worthless without it: a matcher that finds nothing anywhere
 	// reports a clean extraction package too.
 	drNeedleLiteral = "extraction-worker"
-
-	drDocPath  = "docs/read-path-suspension.md"
-	drDocRoute = "GET /v1/extractions/{id}"
-
-	// The §8 table carries 65 registrations across 59 routes at 9ed1c501, so a parse that finds
-	// fewer than 55 rows has lost the table, not found a shrinking one.
-	drMinDocRows = 55
-
-	// docs/read-path-suspension.md:320 reads "59 distinct routes, 65 registrations" before this
-	// route lands. Floors, so EXTR-11-03's second route raises them rather than breaking this.
-	drMinDocRoutes        = 60
-	drMinDocRegistrations = 66
 )
 
 // drExtractionFiles narrows eaProdFiles' walk to internal/extraction and floors it.
@@ -227,118 +211,5 @@ func TestSubmissionMain_AuditWritersAreEachAccountedFor(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, drWantAuditWriters) {
 		t.Errorf("cmd/submission/main.go audits from %v, want exactly %v -- a new writer is a new row shape nothing in this package classifies; give it its own assertions and name it here", got, drWantAuditWriters)
-	}
-}
-
-// drDocSection returns the lines of docs/read-path-suspension.md's §8 endpoint table, bounded
-// by its own heading the way internal/platform/db/seam_coverage_test.go:1034 bounds it.
-func drDocSection(t *testing.T) []string {
-	t.Helper()
-
-	raw, err := os.ReadFile(filepath.Join(wtRepoRoot(t), filepath.FromSlash(drDocPath)))
-	if err != nil {
-		t.Fatalf("read %s: %v", drDocPath, err)
-	}
-	var (
-		out []string
-		in  bool
-	)
-	for _, line := range strings.Split(string(raw), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") {
-			if in {
-				break
-			}
-			in = strings.Contains(strings.ToLower(trimmed), "the endpoint table")
-			continue
-		}
-		if in {
-			out = append(out, line)
-		}
-	}
-	if len(out) == 0 {
-		t.Fatalf("%s carries no section headed \"the endpoint table\" -- the parse below reads nothing", drDocPath)
-	}
-	return out
-}
-
-var drRowCell = regexp.MustCompile("^`([A-Z]+ /[^`]+)`$")
-
-// AC 2. TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute already errors for a registered route
-// with no row -- but only once the route is registered, so it cannot say the doc is owed until
-// the moment the fleet would ship it unclassified. This says it now.
-func TestReadPathSuspensionDoc_DeclaresTheExtractionDetailRoute(t *testing.T) {
-	lines := drDocSection(t)
-
-	declared := map[string]string{}
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "|") {
-			continue
-		}
-		cells := strings.Split(strings.Trim(trimmed, "|"), "|")
-		if len(cells) < 3 {
-			continue
-		}
-		m := drRowCell.FindStringSubmatch(strings.TrimSpace(cells[0]))
-		if m == nil {
-			continue
-		}
-		declared[m[1]] = strings.TrimSpace(cells[2])
-	}
-	if len(declared) < drMinDocRows {
-		t.Fatalf("%s's endpoint table parsed to %d row(s), want at least %d (59 at 9ed1c501) -- a parse that lost the table finds no missing row either",
-			drDocPath, len(declared), drMinDocRows)
-	}
-
-	// Control needle: the collection route this one sits beside is declared today.
-	if got, ok := declared["GET /v1/extractions"]; !ok || got != "covered" {
-		t.Fatalf("the parse read `GET /v1/extractions` as verdict %q (present=%v), want covered -- the row parser is broken", got, ok)
-	}
-
-	verdict, ok := declared[drDocRoute]
-	switch {
-	case !ok:
-		t.Errorf("%s declares no row for `%s` -- TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute goes red the moment the route is registered without it", drDocPath, drDocRoute)
-	case verdict != "covered":
-		t.Errorf("%s declares `%s` with verdict %q, want exactly covered", drDocPath, drDocRoute, verdict)
-	}
-
-	drAssertCountLine(t, lines)
-}
-
-var drCountLine = regexp.MustCompile(`(\d+) distinct routes, (\d+) registrations`)
-
-// The prose count is corrected for honesty, not for CI -- but an honest doc is the deliverable,
-// so the floor moves with the table.
-func drAssertCountLine(t *testing.T, lines []string) {
-	t.Helper()
-
-	var m []string
-	for _, line := range lines {
-		if got := drCountLine.FindStringSubmatch(line); got != nil {
-			if m != nil {
-				t.Fatalf("%s carries two route-count sentences; they can disagree", drDocPath)
-			}
-			m = got
-		}
-	}
-	if m == nil {
-		t.Fatalf("%s's endpoint section carries no \"N distinct routes, M registrations\" sentence -- the assertion below has nothing to read", drDocPath)
-	}
-
-	routes, err := strconv.Atoi(m[1])
-	if err != nil {
-		t.Fatalf("route count %q is not a number: %v", m[1], err)
-	}
-	registrations, err := strconv.Atoi(m[2])
-	if err != nil {
-		t.Fatalf("registration count %q is not a number: %v", m[2], err)
-	}
-	if routes < drMinDocRoutes {
-		t.Errorf("%s claims %d distinct routes, want at least %d -- the detail route raises it by one", drDocPath, routes, drMinDocRoutes)
-	}
-	if registrations < drMinDocRegistrations {
-		t.Errorf("%s claims %d registrations, want at least %d -- the detail route raises it by one", drDocPath, registrations, drMinDocRegistrations)
 	}
 }

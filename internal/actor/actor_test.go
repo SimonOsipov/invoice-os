@@ -129,7 +129,7 @@ func TestActorName_DoesNotSpecialCaseSystem(t *testing.T) {
 	}
 }
 
-// docs/audit-log-read-contract.md §6: the resolver's grammar accepts braces
+// .claude/rules/audit-log.md: the resolver's grammar accepts braces
 // and non-canonical hyphens. Name must not lowercase or strip either, or it
 // diverges from what the resolver (and uuid_in) accept.
 func TestActorName_SubjectIsNotNormalised(t *testing.T) {

@@ -133,12 +133,12 @@ async function serviceDomain(label: ServiceLabel, token: string, projectId: stri
   const data = await gql(token, DOMAINS_QUERY, { p: projectId, e: envId, s: serviceId }, `discovering the ${label} domain`)
   // Null customDomains is a drifted query or a failed read, not an empty list.
   if (!Array.isArray(data?.domains?.customDomains)) {
-    throw new CtlError(`the ${label} domains reply carries no customDomains list`, 'Refusing to pick the generated domain over a possible custom one. See docs/add-a-service.md step 6.', 1)
+    throw new CtlError(`the ${label} domains reply carries no customDomains list`, 'Refusing to pick the generated domain over a possible custom one.', 1)
   }
   const all: { domain: string }[] = [...data.domains.customDomains, ...(data.domains.serviceDomains ?? [])]
   const domain = all[0]?.domain
   if (!domain) {
-    throw new CtlError(`no domain found for ${label} in environment ${envId}`, 'Every public service needs a custom or Railway-generated domain. See docs/add-a-service.md step 6.', 1)
+    throw new CtlError(`no domain found for ${label} in environment ${envId}`, 'Every public service needs a custom or Railway-generated domain.', 1)
   }
   return `https://${domain}`
 }

@@ -255,9 +255,12 @@ func TestDiscoverURLs_NoDomainFailsNamingTheService(t *testing.T) {
 	requireOneDiscoverCall(t, s)
 	requireURLsRefused(t, stdout, stderr, code)
 	want := "No domain found for support-console (service svc-support-console-urls) in environment " + forkEnvID +
-		" — neither a custom domain nor a Railway-generated one. Every public service must have at least one (docs/add-a-service.md step 6)."
+		" — neither a custom domain nor a Railway-generated one. Every public service must have at least one."
 	if !strings.Contains(stderr, want) {
 		t.Errorf("stderr does not carry today's message %q; stderr = %q", want, stderr)
+	}
+	if strings.Contains(stderr, "docs/") {
+		t.Errorf("stderr points at a docs/ path; stderr = %q", stderr)
 	}
 }
 

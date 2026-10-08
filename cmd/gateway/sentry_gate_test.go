@@ -445,23 +445,3 @@ func TestSentryGateIsOneFleetGateStepWithIsPR(t *testing.T) {
 		}
 	}
 }
-
-// The docs cite the step by name; a rename leaves them pointing at nothing.
-func TestSentryGateStepNameIsTheOneAddAServiceCites(t *testing.T) {
-	var name string
-	for _, s := range jobSteps(jobBlock(devEnvCode(t), "fleet-gate")) {
-		if sentryReadRE.MatchString(runText(s)) {
-			name, _ = stepKey(s, "name")
-		}
-	}
-	if name == "" {
-		t.Fatal("the fleet-gate step reading .sentry has no name; the scan is broken")
-	}
-	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "add-a-service.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), `"`+name+`"`) {
-		t.Errorf("docs/add-a-service.md does not cite the Sentry step by its name %q", name)
-	}
-}

@@ -73,7 +73,7 @@ jobs:
             echo "Latest release: \`$latest\`."
             echo "Advisories published after the pin: ${advisories:-none}."
             echo
-            echo "Upgrade procedure: \`docs/identity-provider.md\`. Last checked by run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+            echo "Upgrade procedure: \`.claude/rules/auth.md\`. Last checked by run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
           } > "$body"
           echo "finding=true" >> "$GITHUB_OUTPUT"
           echo "::error::supabase/auth patch due: pinned $pin, latest $latest, advisories after the pin: ${advisories:-none}."

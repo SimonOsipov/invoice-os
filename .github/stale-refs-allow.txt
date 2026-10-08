@@ -1,7 +1,7 @@
 # Suppressions for the `stale-refs` CI job (internal/tools/stalerefs).
 #
 # The job fails a PR when no producer emits a string any more but a consumer
-# (e2e/, docs/, .github/) still quotes it. Two kinds of entry:
+# (e2e/, .claude/rules/, .github/) still quotes it. Two kinds of entry:
 #
 #   file:<path prefix>   hits under this path never count as stale references
 #   <the literal>        this exact string never counts
@@ -28,17 +28,6 @@ Named in 5 approval steps
 Ngozi Balogun +1
 Engagement Manager +1
 Folake Adesina +1
-
-# --- retired policy scopes ------------------------------------------------
-# Scope strings APPR-10 removed from the editor. `docs/approvals.md` section 6
-# names them BECAUSE the server permanently refuses them — same reason as the
-# registries above: the doc is doing its job. The vocabulary itself survives in
-# Go as `removedScopes` (internal/approval/policy_test.go), but stalerefs reads
-# _test.go as testish, so that does not count as a producer.
-#
-# One line and not five: the other four retired scopes still have real
-# producers, and a suppression with no finding behind it cannot be falsified.
-Credit notes & adjustments
 
 # --- absence registries ---------------------------------------------------
 # `status-history` is the invoice-detail card AUDIT-09-02 retired. The rail-order

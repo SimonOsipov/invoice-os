@@ -4,7 +4,7 @@
 // Go's compiler and the TypeScript project references already fail a build when
 // a renamed symbol leaves a caller behind. What neither can see is a *string*
 // that one file produces and another file quotes: a Playwright assertion on
-// user-visible copy, a getByTestId, a route path in a doc, an env var name in a
+// user-visible copy, a getByTestId, an env var name in a
 // CI workflow. Those references break silently and surface late — in a deploy
 // gate, or not at all.
 //
@@ -13,7 +13,7 @@
 //	no producer emits this string any more, yet a consumer still quotes it
 //
 // producer  source that emits the string     (frontend/, internal/, cmd/, db/)
-// consumer  something no compiler links back (e2e/, docs/, .github/)
+// consumer  something no compiler links back (e2e/, .claude/rules/, .github/)
 // ignored   a unit test beside its own source — type-checked, and it runs on
 //
 //	the same push, so it cannot rot unnoticed
@@ -37,9 +37,9 @@ import (
 )
 
 // consumerDirs hold references no compiler resolves back to their producer.
-var consumerDirs = []string{"e2e/", "docs/", ".github/"}
+var consumerDirs = []string{"e2e/", ".claude/rules/", ".github/"}
 
-// producerExts are the file kinds that can *emit* a string a consumer asserts on.
+// producerExts are the file kinds whose removed literals ParseDiff tracks.
 var producerExts = []string{".go", ".ts", ".tsx", ".js", ".jsx", ".sql"}
 
 var (
@@ -89,9 +89,14 @@ func Role(path string) string {
 	if testish.MatchString(path) {
 		return "ignore"
 	}
+	if strings.HasSuffix(path, ".md") {
+		return "ignore"
+	}
 	return "producer"
 }
 
+// isProducerFile limits diff parsing to source kinds; Role also lets an .html or
+// .sh file keep a moved literal alive.
 func isProducerFile(path string) bool {
 	if Role(path) != "producer" {
 		return false

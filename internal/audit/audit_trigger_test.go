@@ -113,7 +113,7 @@ func TestAudit_InsertTriggerResolvesInvoiceScopedEvents(t *testing.T) {
 }
 
 // The transmission failure is attributed from its very first row. A NULL entity_id is a
-// positive firm-wide claim (docs/audit-log-read-contract.md §3), so an unresolved row of
+// positive firm-wide claim (.claude/rules/audit-log.md), so an unresolved row of
 // this event would be false, not merely thin.
 func TestAudit_InsertTriggerResolvesSubmissionFailed(t *testing.T) {
 	f := requireFixture(t)

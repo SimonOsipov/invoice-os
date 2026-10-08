@@ -264,16 +264,16 @@ describe('the Join screen in the app', () => {
     await waitFor(() => expect(ctx?.user).toBeDefined())
   })
 
-  it('app_createOwnThenJoinInOneTickSendsOnlyTheFirst', async () => {
+  it('app_joinThenCreateOwnInOneTickSendsOnlyTheFirst', async () => {
     replies[`${GATEWAY}/auth/exchange`] = ok({ access_token: T_ANSWERS, refresh_token: 'R0' })
     await boot()
     await joinScreen()
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Create my own workspace' }))
       fireEvent.click(screen.getByRole('button', { name: 'Join Obi Partners' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Create my own workspace' }))
     })
     await waitFor(() => expect(ctx?.user).toBeDefined())
-    expect(posts('/api/tenancy/v1/workspaces')).toHaveLength(1)
-    expect(posts('/accept')).toEqual([])
+    expect(posts('/accept')).toHaveLength(1)
+    expect(posts('/api/tenancy/v1/workspaces')).toEqual([])
   })
 })

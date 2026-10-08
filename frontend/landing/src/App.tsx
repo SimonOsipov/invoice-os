@@ -20,6 +20,7 @@ import { Footer } from './components/Footer'
 import { Privacy } from './components/Privacy'
 import { CookieNotice } from './components/CookieNotice'
 import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
+import { libraryBase } from './auth'
 import { readConsent, type ConsentRecord } from './consent'
 import { applyChoice } from './consentActions'
 import { INVITE_PARAM, readInviteOutcome } from './invite'
@@ -151,7 +152,7 @@ export default function App() {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} onCreateAccount={onCreateAccount} hrefPrefix={privacy ? '/' : ''} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} onCreateAccount={onCreateAccount} hrefPrefix={privacy ? '/' : ''} libraryHref={libraryBase()} />
       {notice && (
         <VerifyNotice
           outcome={notice}

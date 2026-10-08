@@ -21,7 +21,7 @@ let mounted = false
 let onSignIn: Mock<() => void>
 let onBookDemo: Mock<() => void>
 
-const mount = (props: { hrefPrefix?: string } = {}) => {
+const mount = (props: { hrefPrefix?: string; libraryHref?: string } = {}) => {
   act(() => {
     root.render(createElement(Nav, { onSignIn, onBookDemo, ...props }))
   })
@@ -363,5 +363,24 @@ describe('HD-14b a menu left open across a resize stays coherent', () => {
     act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(menu()).toBeNull()
     expect(document.activeElement).toBe(burger())
+  })
+})
+
+describe('the menu Library link', () => {
+  it('menu_listsLibraryLastAndClosesOnClick', () => {
+    mount()
+    toggle()
+    expect(menu()!.querySelectorAll('a'), 'control: without libraryHref the menu has the five anchors').toHaveLength(NAV_LINKS.length)
+    toggle()
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    mount({ libraryHref: 'https://lib.x' })
+    toggle()
+    const links = Array.from(menu()!.querySelectorAll('a'))
+    expect(links.map((a) => a.textContent)).toEqual([...NAV_LINKS.map((l) => l.label), 'Library'])
+    expect(links.at(-1)!.getAttribute('href')).toBe('https://lib.x')
+    act(() => void links.at(-1)!.click())
+    expect(menu()).toBeNull()
   })
 })

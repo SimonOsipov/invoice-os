@@ -1,7 +1,7 @@
 // The four base resolvers: null when unset (mirrors gatewayBase()), trailing slashes trimmed.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { appBase, consoleBase, opsBase, supportBase } from './auth'
+import { appBase, consoleBase, libraryBase, opsBase, supportBase } from './auth'
 
 // Unset targets are stubbed to '' so a shell-exported VITE_* cannot leak in.
 function stubTargets(env: Partial<Record<'VITE_APP_URL' | 'VITE_OPS_URL' | 'VITE_SUPPORT_URL', string>>): void {
@@ -43,5 +43,16 @@ describe('base resolvers', () => {
     expect(consoleBase('support')).toBeNull()
     stubTargets({ VITE_APP_URL: 'https://a.x', VITE_SUPPORT_URL: 'https://support.x' })
     expect(consoleBase('ops')).toBeNull()
+  })
+})
+
+describe('libraryBase', () => {
+  it('libraryBase_trimsTheSlashAndNullsBlank', () => {
+    vi.stubEnv('VITE_LIBRARY_URL', ' https://lib.x/ ')
+    expect(libraryBase()).toBe('https://lib.x')
+    for (const blank of ['', '  ']) {
+      vi.stubEnv('VITE_LIBRARY_URL', blank)
+      expect(libraryBase(), JSON.stringify(blank)).toBeNull()
+    }
   })
 })

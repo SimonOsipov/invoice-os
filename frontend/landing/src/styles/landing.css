@@ -139,6 +139,12 @@ button {
   align-items: center;
   gap: 28px;
 }
+/* Room for the Library link before the burger edge. */
+@media (max-width: 1279px) {
+  .a-nav {
+    gap: 16px;
+  }
+}
 .a-burger {
   display: none;
   width: 44px;

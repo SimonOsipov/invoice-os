@@ -373,8 +373,8 @@ trigger, which had to be `deploymentTriggerDelete`d before the invariants workfl
 (`serviceCreate` with only `projectId` and `name`), because CI deploys it with `railway up`: a
 sourceless service gets no deployment trigger, so there was nothing to delete and a variable
 edit cannot rebuild it from `main`. `railwayConfigFile` is rejected for a new service, so
-`dockerfilePath=frontend/library/Dockerfile`, `healthcheckPath=/health`, `watchPatterns: []`
-and the region are set on the instance, with `PORT=8080`. Its custom domain is
+`dockerfilePath=frontend/library/Dockerfile`, `healthcheckPath=/health` and `watchPatterns: []`
+are set on the instance, with `PORT=8080`. The region stays at the project default, like `auth`. Its custom domain is
 `library.ascomply.com` on port 8080. See [identity-provider.md](./identity-provider.md) U1 for `auth`, the same shape.
 
 A new SPA's Sentry requirements are listed in §4 ("Sentry variables are production-only").

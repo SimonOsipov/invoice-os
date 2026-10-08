@@ -3,12 +3,15 @@ import { resolveTarget } from '../targets'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from '../topology/layout'
 import { seedConsent } from './landingConsent'
 
-// The consent notice and dark GA4 tag on the deployed Feature Library. The library host is not
-// the production allowlist, so the tag stays dark on a fork whatever the visitor answers.
+// The consent notice and GA4 tag on the deployed Feature Library. The tag loads after Accept on
+// the production library host only; on a fork it stays dark whatever the visitor answers.
 // Relationship assertions only (topology/layout.ts); consent lives in per-origin localStorage,
 // so parallel tests cannot reach each other.
 
 const LIBRARY_URL = resolveTarget('LIBRARY_URL')
+const LIBRARY_HOST = new URL(LIBRARY_URL).hostname.toLowerCase()
+const LIBRARY_PRODUCTION_HOST = 'library.ascomply.com' // retyped from LIBRARY_HOSTNAMES in frontend/landing/src/hubspot.ts
+const EXPECT_TAG = LIBRARY_HOST === LIBRARY_PRODUCTION_HOST
 const LANDING_FALLBACK_ORIGIN = 'https://www.ascomply.com'
 const CONSENT_KEY = 'asc_consent' // retyped from frontend/landing/src/consent.ts
 const GA_ID = /G-[A-Z0-9]{6,}/
@@ -89,7 +92,7 @@ test('library consent: the policy link goes to the landing privacy page', async 
   await expect(page.getByRole('heading', { level: 1, name: 'Privacy and cookies' })).toBeVisible()
 })
 
-test('library consent: the fork bakes an id and still never requests the tag', async ({ page }) => {
+test('library consent: the tag is requested after Accept on the production host only', async ({ page }) => {
   // Control: the predicate sees the tag host and refuses the font host.
   expect(isTagRequest('https://www.googletagmanager.com/gtag/js?id=x')).toBe(true)
   expect(isTagRequest('https://fonts.googleapis.com/css2?family=Manrope')).toBe(false)
@@ -99,7 +102,7 @@ test('library consent: the fork bakes an id and still never requests the tag', a
   expect(src, 'index.html has no module entry script').not.toBeNull()
   const res = await page.request.get(new URL(src!, page.url()).href)
   expect(res.status()).toBe(200)
-  expect(await res.text(), 'the fork bakes no GA4 id; the dark-tag check would be vacuous (U1)').toMatch(GA_ID)
+  expect(await res.text(), 'the fork bakes no GA4 id; the tag check would be vacuous').toMatch(GA_ID)
 
   const tagRequests: string[] = []
   page.on('request', (req) => {
@@ -113,7 +116,11 @@ test('library consent: the fork bakes an id and still never requests the tag', a
   expect(stored, 'Accept stored no consent, so the post-Accept request check would be vacuous').toContain('"analytics":true')
   await openLibrary(page, '/rules', false)
   await page.waitForLoadState('networkidle')
-  expect(tagRequests, 'the library requested the GA4 tag on a non-production host').toEqual([])
+  if (EXPECT_TAG) {
+    await expect.poll(() => tagRequests.length, 'the production library never requested the GA4 tag after Accept').toBeGreaterThan(0)
+  } else {
+    expect(tagRequests, 'the library requested the GA4 tag on a non-production host').toEqual([])
+  }
 })
 
 for (const width of WIDE_WIDTHS) {

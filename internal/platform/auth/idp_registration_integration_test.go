@@ -621,57 +621,79 @@ func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 }
 
 // Two clicks race for one token: GoTrue spends it once, and the gateway hands off once per verified answer.
+// With a state, each verified click also yields one code that exchanges for a session.
 func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
-	base := idpMailURL(t)
-	sink := newRecordingSink()
-	gw, _ := startGateway(t, base, 0, sink)
-	u := registrant(t, gw, map[string]string{"workspace_name": "IdP Race", "display_name": "Ada"})
-	action, values := confirmForm(t, confirmationLink(t, u.email))
-	values.Del("state")
+	for _, stateful := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stateful=%t", stateful), func(t *testing.T) {
+			base := idpMailURL(t)
+			sink := newRecordingSink()
+			gw, _ := startGateway(t, base, 0, sink)
+			u := registrant(t, gw, map[string]string{"workspace_name": "IdP Race", "display_name": "Ada"})
+			action, values := confirmForm(t, confirmationLink(t, u.email))
+			state := values.Get("state")
+			if !stateful {
+				values.Del("state")
+			}
 
-	type answer struct {
-		status   int
-		location string
-		err      error
-	}
-	answers := make(chan answer, 2)
-	start := make(chan struct{})
-	for range 2 {
-		go func() {
-			<-start
-			status, location, err := postForm(action, values)
-			answers <- answer{status, location, err}
-		}()
-	}
-	close(start)
+			type answer struct {
+				status   int
+				location string
+				err      error
+			}
+			answers := make(chan answer, 2)
+			start := make(chan struct{})
+			for range 2 {
+				go func() {
+					<-start
+					status, location, err := postForm(action, values)
+					answers <- answer{status, location, err}
+				}()
+			}
+			close(start)
 
-	verified := 0
-	for range 2 {
-		a := <-answers
-		if a.err != nil || a.status != http.StatusSeeOther {
-			t.Fatalf("click: status %d, err %v; want 303", a.status, a.err)
-		}
-		switch a.location {
-		case siteURL + "/?verified=1":
-			verified++
-		case siteURL + "/?verify=failed":
-		default:
-			t.Errorf("click redirected to %q, want %s/?verified=1 or %s/?verify=failed", a.location, siteURL, siteURL)
-		}
-	}
-	if verified < 1 {
-		t.Fatal("no click landed on ?verified=1")
-	}
-	if !emailConfirmed(t, u.email) {
-		t.Error("the account is not confirmed after the clicks")
-	}
-	for range verified {
-		sink.next(t)
-	}
-	// A hand-off the gateway sent late would arrive after the wait above.
-	time.Sleep(500 * time.Millisecond)
-	if n := sink.count(); n != verified {
-		t.Errorf("%d hand-offs, want %d (one per ?verified=1 answer)", n, verified)
+			verified := 0
+			var codes []string
+			for range 2 {
+				a := <-answers
+				if a.err != nil || a.status != http.StatusSeeOther {
+					t.Fatalf("click: status %d, err %v; want 303", a.status, a.err)
+				}
+				switch {
+				case a.location == siteURL+"/?verify=failed":
+				case !stateful && a.location == siteURL+"/?verified=1":
+					verified++
+				case stateful && strings.HasPrefix(a.location, siteURL+"/?verified=1&handoff="):
+					verified++
+					codes = append(codes, strings.TrimPrefix(a.location, siteURL+"/?verified=1&handoff="))
+				default:
+					t.Errorf("click redirected to %q, want a ?verified=1 or ?verify=failed answer under %s", a.location, siteURL)
+				}
+			}
+			if verified < 1 {
+				t.Fatal("no click landed on ?verified=1")
+			}
+			if stateful {
+				if len(codes) != verified {
+					t.Fatalf("%d codes for %d verified clicks, want one each", len(codes), verified)
+				}
+				for _, code := range codes {
+					if status, session := exchange(t, gw, code, state); status != http.StatusOK || session["access_token"] == "" {
+						t.Errorf("exchange of a delivered code: status %d, body %v; want 200", status, session)
+					}
+				}
+			}
+			if !emailConfirmed(t, u.email) {
+				t.Error("the account is not confirmed after the clicks")
+			}
+			for range verified {
+				sink.next(t)
+			}
+			// A hand-off the gateway sent late would arrive after the wait above.
+			time.Sleep(500 * time.Millisecond)
+			if n := sink.count(); n != verified {
+				t.Errorf("%d hand-offs, want %d (one per ?verified=1 answer)", n, verified)
+			}
+		})
 	}
 }
 

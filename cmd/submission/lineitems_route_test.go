@@ -1,8 +1,7 @@
-// lineitems_route_test.go: POST /v1/extractions/{id}/line-items -- registration, adapter and
-// the doc row it owes. Same three questions correction_route_test.go answers for the field
-// route: is it mounted on app.Mux over the real collaborators, does each domain error cross by
-// identity, and does docs/read-path-suspension.md declare it. Nothing here serves a mux or
-// opens a database.
+// lineitems_route_test.go: POST /v1/extractions/{id}/line-items -- registration and adapter.
+// Same two questions correction_route_test.go answers for the field route: is it mounted on
+// app.Mux over the real collaborators, and does each domain error cross by identity. Nothing
+// here serves a mux or opens a database.
 //
 // Helpers use an li* prefix; fc dr ea wt ds up pgi are taken.
 package main
@@ -14,7 +13,6 @@ import (
 	"go/parser"
 	"go/token"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -27,11 +25,6 @@ const (
 	liApplierFn  = "newInvoiceLineItemsApplier"
 	liHandlerFn  = "LineItemsHandler"
 	liDocumentID = "6a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
-
-	// docs/read-path-suspension.md reads "62 distinct routes, 68 registrations" before this
-	// route lands. Floors, so a later story raises them rather than breaking this.
-	liMinDocRoutes        = 63
-	liMinDocRegistrations = 69
 
 	// Population floor for the walk below: cmd/submission/main.go registers 7 string-literal
 	// patterns today. A floor, so an unrelated route may leave without breaking this; 0 (a
@@ -264,55 +257,6 @@ func TestSubmissionMain_WiresTheLineItemsRouteAndItsCollaborators(t *testing.T) 
 	}
 	if !found {
 		t.Errorf(`no app.Mux.HandleFunc(%q, extraction.%s(...)) registration found in cmd/submission/main.go`, liRoute, liHandlerFn)
-	}
-}
-
-// TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute reds the moment the route is registered
-// without a row; this says the doc owes the row now, and the corrected counts, reusing
-// correction_route_test.go's own fcDeclaredRoutes parser rather than a second copy.
-func TestReadPathSuspensionDoc_DeclaresTheLineItemsRoute(t *testing.T) {
-	lines := drDocSection(t)
-	declared := fcDeclaredRoutes(t, lines)
-
-	// Control needle: the collection route this one hangs off is declared today, so a broken
-	// parser fails here rather than reporting the line-items route missing.
-	if got, ok := declared["GET /v1/extractions"]; !ok || got != "covered" {
-		t.Fatalf("the parse read `GET /v1/extractions` as verdict %q (present=%v), want covered -- the row parser is broken", got, ok)
-	}
-
-	verdict, ok := declared[liRoute]
-	switch {
-	case !ok:
-		t.Errorf("%s declares no row for `%s`", drDocPath, liRoute)
-	case verdict != "covered":
-		t.Errorf("%s declares `%s` with verdict %q, want exactly covered", drDocPath, liRoute, verdict)
-	}
-
-	var m []string
-	for _, line := range lines {
-		if got := drCountLine.FindStringSubmatch(line); got != nil {
-			if m != nil {
-				t.Fatalf("%s carries two route-count sentences; they can disagree", drDocPath)
-			}
-			m = got
-		}
-	}
-	if m == nil {
-		t.Fatalf("%s's endpoint section carries no \"N distinct routes, M registrations\" sentence", drDocPath)
-	}
-	routes, err := strconv.Atoi(m[1])
-	if err != nil {
-		t.Fatalf("route count %q is not a number: %v", m[1], err)
-	}
-	registrations, err := strconv.Atoi(m[2])
-	if err != nil {
-		t.Fatalf("registration count %q is not a number: %v", m[2], err)
-	}
-	if routes < liMinDocRoutes {
-		t.Errorf("%s claims %d distinct routes, want at least %d -- the line-items route raises it by one", drDocPath, routes, liMinDocRoutes)
-	}
-	if registrations < liMinDocRegistrations {
-		t.Errorf("%s claims %d registrations, want at least %d -- the line-items route raises it by one", drDocPath, registrations, liMinDocRegistrations)
 	}
 }
 

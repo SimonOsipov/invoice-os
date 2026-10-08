@@ -16,8 +16,7 @@ import { isProductionHost, isSentryHost } from './sentryHost'
 // contact appears in HubSpot with the six answers") is not provable in CI at all and is
 // discharged by the story's Manual Prerequisites, not by anything here.
 //
-// Why a browser test rather than a unit test: docs/e2e-convention.md's "Target surface"
-// grants `landing` render checks PLUS client-side behaviour that has no other harness.
+// Why a browser test rather than a unit test: `landing` has client-side behaviour that has no other harness.
 // frontend/landing's vitest project defaults to `node`; a file may opt into jsdom per-file,
 // but this package carries no React testing library and jsdom has no layout engine — so a
 // submit event on a rendered modal, a focus trap, an async timing property and a rendered

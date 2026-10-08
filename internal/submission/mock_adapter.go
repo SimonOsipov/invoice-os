@@ -74,13 +74,7 @@ const (
 	// mockLatencyDefault is the in-flight baseline MockConfigFromEnv applies when
 	// mockLatencyEnv is unset or empty. It is the default AT THE ENV EDGE ONLY -- MockConfig's
 	// zero value still means "instant", which every unit test and both contract runs use.
-	//
-	// The VALUE is not a free choice: docs/mock-app-adapter.md:123 already publishes `800ms`,
-	// so a different number here is doc drift. TestMockAdapterDoc_DocumentsEveryAllocation
-	// (mock_script_test.go) is the mechanical tie between the two.
-	//
-	// Declared by M5-03-05's RED authoring pass because that doc pin cannot compile without
-	// it; the body that CONSUMES it (MockConfigFromEnv, below) is the executor's.
+	// The value, `800ms`, is published in .claude/rules/submission-mock.md.
 	mockLatencyDefault = 800 * time.Millisecond
 )
 

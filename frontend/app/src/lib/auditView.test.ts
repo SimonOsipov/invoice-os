@@ -1,6 +1,5 @@
 // RED specs (AUDIT-11-08, Stage 2.5/Mode A) -- pin AUDIT_COPY.searchHelper's replacement
-// wording before the executor edits it. .ralph/AUDIT-11-08-arch.md supersedes the story's
-// subtask spec: the drafted "cutover" sentence is FALSE (audit_log.invoice_id is a
+// wording before the executor edits it. The drafted "cutover" sentence is FALSE (audit_log.invoice_id is a
 // generated column read at ADD COLUMN time, so historical rows carry it and the number
 // arm reaches them). The real gap is DISPLAY -- an old row's own payload lacks the number.
 

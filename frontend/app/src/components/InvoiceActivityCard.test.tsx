@@ -36,7 +36,7 @@ const INVOICE_ID = 'aaaaaaaa-0000-4000-8000-000000000001'
 const OTHER_INVOICE_ID = 'bbbbbbbb-0000-4000-8000-000000000002'
 const SOURCE = join(__dirname, 'InvoiceActivityCard.tsx')
 
-// arch §3's six new ACTIVITY_COPY keys. invoiceActivity.ts is NOT this subtask's file, so
+// The six new ACTIVITY_COPY keys. invoiceActivity.ts is NOT this subtask's file, so
 // they cannot be added here -- copyOf() reads the lib the moment the key lands, which keeps
 // a user-approved copy revision (F-H) a one-place change instead of a six-spec change.
 const EXPECTED_NEW_COPY = {
@@ -336,7 +336,7 @@ describe('InvoiceActivityCard chips', () => {
   })
 
   it('invoiceActivity_chipSelectionSurvivesAParentRerender', async () => {
-    // arch §6: no `landed` buffer here, because the card holds chip/showAll/expandedId in
+    // No `landed` buffer here, because the card holds chip/showAll/expandedId in
     // its own useState and the parent's 2s poll cannot re-run its useAsync.
     const fetchMock = mockFetch(logResponse({ events: eventsOf([{ event: INVOICES_EVENT, n: 3 }, { event: APPROVALS_EVENT, n: 2 }]) }))
     const { rerender } = renderCard()
@@ -407,7 +407,7 @@ describe('InvoiceActivityCard toggle', () => {
     expect(rowCount()).toBe(activityRows(events, 'all', true).length)
 
     // (b) chip Approvals -- the argument that only this half can tell apart.
-    // showAll is STICKY across a chip change: arch §1 clears expandedId only. So the card
+    // showAll is STICKY across a chip change: only expandedId is cleared. So the card
     // lands on all 40 approval rows with a 'Show fewer' label, and the honest claim is only
     // readable once collapsed.
     fireEvent.click(screen.getByTestId('activity-chip-approvals'))
@@ -729,7 +729,7 @@ describe('InvoiceActivityCard "Open in Audit →" hand-off (AUDIT-09-05)', () =>
 
 // AUDIT-09-07: the nothing-dropped proof. Every field the retired approval trail carried is
 // either in an audit payload, in the event NAME, or on the surviving Approval card -- and
-// each claim below reaches an assertion. Contract: .ralph/AUDIT-09-07-arch.md sections 2, 6.
+// each claim below reaches an assertion.
 
 const REJECTED_EVENT = 'invoice.approval_rejected'
 const APPROVED_EVENT = APPROVALS_EVENT

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Interactive contract of SegmentedTabs (jsdom). Source of truth: the DS SegmentedTabs.jsx in .ralph/design-v2/components
+// Interactive contract of SegmentedTabs (jsdom). Source of truth: the DS SegmentedTabs.jsx
 // and the story's decisions on it (tablist of tab buttons, no panel; id and aria-controls only with idBase; keys shared with Tabs). Controlled only.
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

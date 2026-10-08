@@ -32,7 +32,7 @@ WORKDIR /src
 # NOT used: Railway's Metal builder requires every cache-mount id to embed the
 # building service's own id (`id=s/<service-id>-<target>`) and forbids env vars in
 # the id, which cannot be expressed in the ONE Dockerfile shared by every service
-# (add-a-service.md §1). Plain layers keep the build portable (Railway + local).
+# (.claude/rules/add-service.md). Plain layers keep the build portable (Railway + local).
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .

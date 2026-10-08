@@ -13,7 +13,7 @@
 //
 // NO COUNT IS ASSERTED ANYWHERE. audit_log is append-only to the app role and is truncated
 // only by db.Reset at deploy time, never between the specs of one run (smoke, api and topology
-// all run against one deployment — docs/e2e-convention.md "One browser, serial"). Every assertion below is
+// all run against one deployment — .claude/rules/e2e.md). Every assertion below is
 // containment of a row this spec itself caused, reached by ?invoice_id=, so concurrent writes
 // from other specs cannot move it either way.
 import { test, expect } from '@playwright/test'

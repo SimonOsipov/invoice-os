@@ -4,7 +4,7 @@
 # same version locally and in CI. Migrations run as the MIGRATOR role
 # (DATABASE_MIGRATION_URL); the one-time role bootstrap runs as the SUPERUSER
 # (DATABASE_SUPERUSER_URL). The app role (DATABASE_URL) is never used here.
-# Set the DATABASE_* URLs in .env (gitignored) or your environment; see docs/migrations.md §1.
+# Set the DATABASE_* URLs in .env (gitignored) or your environment; see .claude/rules/db-migrations.md.
 
 # Load local overrides from .env if present (gitignored).
 -include .env

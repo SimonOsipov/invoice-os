@@ -18,7 +18,7 @@
 -- if the roles it applies to cannot bypass it and do not own the tables (an owner
 -- bypasses RLS unless the table is FORCE'd — proven adversarially in M2-07). So the
 -- migrator (table owner) and the app (query identity) are deliberately distinct, and
--- neither is the Railway superuser. See docs/migrations.md.
+-- neither is the Railway superuser. See .claude/rules/db-migrations.md.
 --
 -- Run ONCE as the Postgres superuser. Password values come from four session GUCs
 -- the caller sets on the SAME connection before this file runs — no psql-only
@@ -136,4 +136,4 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 --    (SELECT/INSERT/…) is granted EXPLICITLY in the migration that creates that table
 --    — never blanket-granted and never via ALTER DEFAULT PRIVILEGES. The skeleton
 --    migration creates no tables; the M2-06 migration creates `tenants` and grants
---    both roles SELECT on it there. See docs/migrations.md §3.
+--    both roles SELECT on it there. See .claude/rules/db-migrations.md.

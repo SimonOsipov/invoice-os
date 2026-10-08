@@ -1,4 +1,4 @@
-// The deployed proof of the v2 entries, the landing frame's geometry and the Problem, Solution, Platform, Coverage and Intelligence sections, and the whole-page bands, Solutions, Integrations, API, FAQ and closing panel; one topology spec on purpose, a recorded deviation from docs/e2e-convention.md.
+// The deployed proof of the v2 entries, the landing frame's geometry and the Problem, Solution, Platform, Coverage and Intelligence sections, and the whole-page bands, Solutions, Integrations, API, FAQ and closing panel; one topology spec on purpose, a recorded deviation from .claude/rules/e2e.md.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { provisionStaffAccount } from '../api/client'
 import { collectErrors, signInAs } from '../personaSession'

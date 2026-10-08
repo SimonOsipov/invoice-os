@@ -142,9 +142,8 @@ func TestGatewayMainWiresEachRoleToItsOwnVarPair(t *testing.T) {
 // TestRepoHasNoStrayInvoicePrefixedVars: Test Spec #3 / AC #4. Walks every
 // git-tracked file (git ls-files) and enforces the bounded blast radius:
 // every deprecated-prefix "*PASSWORD" hit must live in cmd/gateway/main.go
-// and nowhere else (docs/migrations.md excepted, see below); every
-// deprecated-prefix "*DATABASE_URL" hit must be zero, same exception --
-// those two DSN vars are Railway-console/docs-only, no Go code reads them.
+// and nowhere else; every deprecated-prefix "*DATABASE_URL" hit must be
+// zero. Those two DSN vars are Railway-console-only, no Go code reads them.
 func TestRepoHasNoStrayInvoicePrefixedVars(t *testing.T) {
 	rootOut, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
@@ -165,9 +164,6 @@ func TestRepoHasNoStrayInvoicePrefixedVars(t *testing.T) {
 	dsnPattern := regexp.MustCompile(deprecatedPrefix + `.*DATABASE_URL`)
 
 	const wantPasswordFile = "cmd/gateway/main.go"
-	// docs/migrations.md names the deprecated vars truthfully because Railway
-	// still holds them (escalation E3 pending) -- not a stray code reference.
-	const docsExceptionFile = "docs/migrations.md"
 	var passwordHitsElsewhere []string
 	var dsnHits []string
 
@@ -182,10 +178,10 @@ func TestRepoHasNoStrayInvoicePrefixedVars(t *testing.T) {
 			continue
 		}
 		text := string(content)
-		if passwordPattern.MatchString(text) && rel != wantPasswordFile && rel != docsExceptionFile {
+		if passwordPattern.MatchString(text) && rel != wantPasswordFile {
 			passwordHitsElsewhere = append(passwordHitsElsewhere, rel)
 		}
-		if dsnPattern.MatchString(text) && rel != docsExceptionFile {
+		if dsnPattern.MatchString(text) {
 			dsnHits = append(dsnHits, rel)
 		}
 	}

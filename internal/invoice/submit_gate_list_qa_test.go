@@ -179,7 +179,7 @@ func TestListAndDetail_SubmitGateAgreeOnTheRoleRung(t *testing.T) {
 // --- the cross-tenant fold --------------------------------------------------
 
 // TestStoreRowFacts_TransmitClearFailsClosedForAnIdRLSCannotSee is the oracle
-// .ralph/bug-12-01-plan.md's T3 records as owed to BUG-12-04. It is reachable at the
+// owed to BUG-12-04. It is reachable at the
 // STORE seam, which is where C6's contract lives: RowFacts folds over every REQUESTED
 // id, and TransmitClearTx's set read carries no tenant predicate, so a foreign id
 // returns no row and is ABSENT from its map.

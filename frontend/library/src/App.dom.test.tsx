@@ -558,6 +558,17 @@ describe('App tour', () => {
     expect(window.location.pathname).toBe(path)
   })
 
+  it('tour_sidebarExitStacksAboveTheOverlay', () => {
+    allRects()
+    mount('/')
+    click(sidebarBtn())
+    const z = (el: HTMLElement) => {
+      const cs = getComputedStyle(el)
+      return cs.position === 'static' ? 0 : Number(cs.zIndex) || 0
+    }
+    expect(z(sidebarBtn())).toBeGreaterThan(z(overlay()!))
+  })
+
   it('tour_watchDemoOpensTheStopsFeatureAndEndsTheTour', () => {
     allRects()
     mount('/')

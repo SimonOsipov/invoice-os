@@ -12,7 +12,7 @@ export const CALLOUT_W = 360
 export const CALLOUT_H = 280
 
 const TOTAL = TOUR.length * 2
-// Height budget for the card branch: callout plus its 30px of margins.
+// Callout height plus its 30px of margins.
 const K = CALLOUT_H + 30
 
 export const tourStepNumber = (t: TourState): number => t.i * 2 + (t.phase === 'menu' ? 1 : 2)

@@ -89,6 +89,8 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour, t
             className="lib-tour"
             onClick={onTour}
             style={{
+              position: 'relative',
+              zIndex: 61,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',

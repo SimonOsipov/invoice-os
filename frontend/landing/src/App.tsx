@@ -39,7 +39,7 @@ const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
 ])
 
 // Params the boot reads once and removes from the address bar.
-const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM, RESET_PARAM, INVITE_PARAM]
+const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM, RESET_PARAM, INVITE_PARAM, 'register', 'demo']
 
 // Held a minute short of the 10-minute state TTL, so a posted state is still live.
 const STATE_HOLD_MS = 9 * 60 * 1000
@@ -49,6 +49,14 @@ function readSignInBoot(search: string) {
   const state = readSignInState(search)
   const outcome = new URLSearchParams(search).get('signin') ?? ''
   return { state, consoleTarget: readSignInConsole(search), bootAt: Date.now(), error: SIGN_IN_OUTCOMES.get(outcome), open: SIGN_IN_OUTCOMES.has(outcome) }
+}
+
+// Deep-link modal: a ?signin= outcome wins, then register (when open), then demo. Any value opens.
+function readDeepLink(search: string, signInOpens: boolean): 'register' | 'demo' | null {
+  if (signInOpens) return null
+  const p = new URLSearchParams(search)
+  if (p.has('register') && registrationOpen()) return 'register'
+  return p.has('register') || p.has('demo') ? 'demo' : null
 }
 
 // Tokens and utility classes (.v2-btn, .label, .mono) are global: v2 plus bridge.css.
@@ -70,8 +78,10 @@ export default function App() {
     () => readVerifyOutcome(window.location.search) ?? readResetOutcome(window.location.search) ?? readInviteOutcome(window.location.search),
   )
   const [signInView, setSignInView] = useState<'sign-in' | 'forgot'>('sign-in')
-  const [demoOpen, setDemoOpen] = useState(false)
-  const [registerOpen, setRegisterOpen] = useState(false)
+  // No trackDemoOpen: a deep link is not a CTA click.
+  const [deepLink] = useState(() => readDeepLink(window.location.search, signInBoot.open))
+  const [demoOpen, setDemoOpen] = useState(deepLink === 'demo')
+  const [registerOpen, setRegisterOpen] = useState(deepLink === 'register')
   // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.

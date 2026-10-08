@@ -210,16 +210,17 @@ test.describe('library layout at wide widths', () => {
     await visit(page, '/rules')
     for (const width of WIDE_WIDTHS) {
       // A short viewport so the page is taller than it and the scroll control can move.
-      await resize(page, width, 500)
+      await resize(page, width, 400)
+      const stepper = page.getByTestId('lib-stepper')
+      const stepperHeight = (await rectOf(stepper, 'lib-stepper')).height
       const scrolled = await main(page).evaluate((el) => {
-        el.scrollTop = 800
+        el.scrollTop = el.scrollHeight
         return el.scrollTop
       })
-      const stepper = page.getByTestId('lib-stepper')
       const s = await rectOf(stepper, 'lib-stepper')
       const m = await rectOf(main(page), '#lib-main')
-      measured.push({ width, scrolled, stepper: s, main: m })
-      expect(scrolled, `@${width}: control, #lib-main scrolled`).toBeGreaterThan(0)
+      measured.push({ width, scrolled, stepperHeight, stepper: s, main: m })
+      expect(scrolled, `@${width}: control, #lib-main scrolled past the stepper's own height`).toBeGreaterThan(stepperHeight)
       expect.soft(Math.abs(s.y - m.y), `@${width}: the stepper stays at the top of #lib-main`).toBeLessThanOrEqual(1)
     }
     await attachJson(testInfo, 'library-stepper', measured)
@@ -434,6 +435,7 @@ test.describe('library at phone widths, 768 and the tour', () => {
         const at = `${path} @${width}`
         if (width === 768) {
           expect.soft(tour, `${at}: control, the tour button shows at 768`).toBeGreaterThanOrEqual(1)
+          expect.soft(asideTour, `${at}: control, 'aside .lib-tour' finds exactly one element at 768`).toBe(1)
         } else {
           expect.soft(tour, `${at}: no tour button`).toBe(0)
           expect.soft(asideTour, `${at}: no tour button in the sidebar`).toBe(0)
@@ -496,15 +498,16 @@ test.describe('library at phone widths, 768 and the tour', () => {
   test('library phone: the stepper sticks to the viewport top after a scroll', async ({ page }, testInfo) => {
     const errors = collectErrors(page)
     await prepare(page)
-    await page.setViewportSize({ width: 375, height: 800 })
+    await page.setViewportSize({ width: 375, height: 400 })
     await visit(page, '/rules')
+    const stepperHeight = (await rectOf(page.getByTestId('lib-stepper'), 'lib-stepper')).height
     const scrollY = await page.evaluate(() => {
-      window.scrollTo(0, 900)
+      window.scrollTo(0, document.documentElement.scrollHeight)
       return window.scrollY
     })
     const s = await rectOf(page.getByTestId('lib-stepper'), 'lib-stepper')
-    await attachJson(testInfo, 'library-phone-stepper', { scrollY, stepper: s })
-    expect(scrollY, 'control: the document scrolled').toBeGreaterThan(0)
+    await attachJson(testInfo, 'library-phone-stepper', { scrollY, stepperHeight, stepper: s })
+    expect(scrollY, "control: the document scrolled past the stepper's own height").toBeGreaterThan(stepperHeight)
     expect.soft(Math.abs(s.y), 'the stepper sits at the viewport top').toBeLessThanOrEqual(1)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })

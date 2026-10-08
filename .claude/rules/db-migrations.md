@@ -1,0 +1,37 @@
+---
+paths:
+  - "migrations/**"
+  - "db/**"
+  - "internal/platform/db/**"
+  - "internal/demo*/**"
+---
+# Database and migrations
+
+- Connect services as `invoice_app`. Run goose as `invoice_migrator`.
+- Never point `DATABASE_URL` or `DATABASE_MIGRATION_URL` at the superuser DSN. A superuser bypasses RLS.
+- `invoice_app` owns no object and runs no DDL.
+- Grant to `invoice_app` in the migration that creates the object.
+- Grant the minimum verbs per object.
+- Never use `ALTER DEFAULT PRIVILEGES`.
+- Give the append-only tables `audit_log` and `idempotency_keys` SELECT and INSERT only.
+- Copy the `tenants` template for a new tenant table. Use `ENABLE` and `FORCE ROW LEVEL SECURITY` and a `tenant_isolation` policy.
+- Read the tenant as `nullif(current_setting('app.current_tenant', true), '')::uuid`. An unset tenant returns zero rows.
+- Never write `SET LOCAL app.current_tenant` by hand. Use `WithinTenantTx` or `WithinRequestTenantTx`.
+- Loop over tenants one at a time for cross-tenant work.
+- Enumerate tenants only through `invoice_tenant_reader`.
+- Install a trusted extension in a migration. Install an untrusted extension in `db/bootstrap.sql`.
+- Name a new migration with a current timestamp.
+- Check the order with `go run ./internal/tools/migrationorder -base origin/main`.
+- Write a working Down in every migration. CI resets all migrations and applies them again.
+- Never edit an applied migration.
+- Create a role that you add to `db/bootstrap.sql` by hand on production. Production runs no boot-time bootstrap.
+- Gate deploy-time provisioning with an allowlist of environment names, never a blocklist.
+- Pass the raw `ENVIRONMENT` value to `BootstrapEnabled`.
+- Gate `db.Reset` on `RAILWAY_ENVIRONMENT_NAME`, never on `ENVIRONMENT`.
+- Keep `db.DemoTenants` a Go literal. Never derive it from `db/seed.dev.sql`.
+- Add every new `tenant_id` table to `purgeTables` or `purgeExcludedTables`. `TestPurgeTableListCoversEveryTenantOwnedTable` fails otherwise.
+- Order `purgeTables` leaf-first so foreign keys stay enforced.
+- Write the tenant predicate in the same string literal as each purge `DELETE`.
+- Seed demo documents and approval policies in the invoice service (`internal/demodocs`, `internal/demopolicy`), not in `db/seed.dev.sql`.
+- Treat demo `business_entities` and `invoices` ids as unstable. Each purge and seed cycle mints new ids.
+- Key demo fixtures on a literal seeded field: invoice number, entity name or workflow role key.

@@ -5,11 +5,13 @@ import { fileURLToPath } from 'node:url'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { GROUPS } from './content'
+import { FEATURES, GROUPS } from './content'
 import { Home } from './components/Home'
 import { JourneyStepper } from './components/JourneyStepper'
+import { Player } from './components/Player'
 import { Sidebar } from './components/Sidebar'
 import { GLYPHS } from './icons'
+import { START } from './player'
 import { parseLibraryPath } from './route'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -41,6 +43,23 @@ const specificity = (sel: string): [number, number, number] => [
 ]
 const outranks = (a: [number, number, number], b: [number, number, number]) =>
   a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2]
+
+// rules() cannot read nested blocks; this maps each @keyframes name to its from/to declarations.
+const decls = (body: string) =>
+  Object.fromEntries(
+    body
+      .split(';')
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => [d.slice(0, d.indexOf(':')).trim(), d.slice(d.indexOf(':') + 1).trim()]),
+  )
+const keyframes = (css: string) =>
+  Object.fromEntries(
+    [...stripComments(css).matchAll(/@keyframes\s+([\w-]+)\s*\{\s*from\s*\{([^{}]*)\}\s*to\s*\{([^{}]*)\}\s*\}/g)].map((m) => [
+      m[1],
+      { from: decls(m[2]), to: decls(m[3]) },
+    ]),
+  )
 
 describe('library entry', () => {
   it('VE-01 the glyph set is the 21 glyphs the prototype draws', () => {
@@ -138,5 +157,27 @@ describe('library entry', () => {
       './styles/library.css',
     ])
     expect(src).toMatch(/\.render\(\s*<StrictMode>\s*<App\s*\/>\s*<\/StrictMode>/)
+  })
+
+  it('VE-08 library.css holds the scene keyframes', () => {
+    const css = read(join(HERE, 'styles/library.css'))
+    expect(stripComments(css).match(/@keyframes/g)).toHaveLength(2)
+    const kf = keyframes(css)
+    expect(Object.keys(kf).sort()).toEqual(['libFade', 'libPop'])
+    expect(kf.libPop).toEqual({ from: { opacity: '0', transform: 'translateY(6px)' }, to: { opacity: '1', transform: 'none' } })
+    expect(kf.libFade).toEqual({ from: { opacity: '0' }, to: { opacity: '1' } })
+  })
+
+  it('VE-09 the play button hover is a rule in library.css', () => {
+    const rs = rules(read(join(HERE, 'styles/library.css')))
+    expect(ruleFor(rs, '.lib-play:hover').filter).toBe('brightness(1.06)')
+    const feature = FEATURES.find((f) => f.id === 'import-files')!
+    const html = renderToStaticMarkup(createElement(Player, { feature, clock: START, onToggle: () => {}, onSeek: () => {} }))
+    const buttons = [...html.matchAll(/<button\b([^>]*)>/g)].map((m) => m[1].match(/class="([^"]*)"/)?.[1])
+    expect(buttons).toEqual(['lib-play'])
+  })
+
+  it('VE-10 the back button hover is a rule in library.css', () => {
+    expect(ruleFor(rules(read(join(HERE, 'styles/library.css'))), '.lib-back:hover').color).toBe('var(--teal) !important')
   })
 })

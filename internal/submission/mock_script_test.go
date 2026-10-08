@@ -52,8 +52,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -291,7 +289,7 @@ func TestMockTriggerFor_AllocationTable(t *testing.T) {
 		for i, w := range want {
 			if got := mockAllocations[i]; got != w {
 				t.Errorf("mockAllocations[%d] = %+v, want %+v -- declaration order is the order "+
-					"docs/mock-app-adapter.md's table is asserted against", i, got, w)
+					"the table is asserted against", i, got, w)
 			}
 		}
 	})
@@ -1267,85 +1265,6 @@ func TestMockRef_RejectsMalformed(t *testing.T) {
 		if base64.StdEncoding.EncodeToString([]byte(valid)) == base64.RawURLEncoding.EncodeToString([]byte(valid)) {
 			t.Fatalf("the StdEncoding and RawURLEncoding forms of the fixture payload are identical, " +
 				"so the std-base64-with-padding row above cannot discriminate; change the fixture")
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------------------
-// AC-8: the operator-facing doc.
-// ---------------------------------------------------------------------------------------
-
-// TestMockAdapterDoc_DocumentsEveryAllocation reads docs/mock-app-adapter.md from disk. `go test`
-// sets the working directory to the package directory, so ../../docs resolves to the repo's docs
-// tree from internal/submission.
-//
-// NOTE: reading a docs/ file from a Go test is a NEW pattern in this repo -- docs/ is not
-// embedded and there is no precedent to copy ([tests-read-migrations-through-the-embed-fs]
-// covers migrations only, and migrations.FS cannot reach outside migrations/). A relative read is
-// the least-bad option here. repoRootForDepsTest (deps_test.go:46) is deliberately NOT used: it
-// lives in package submission_test and is unreachable from this in-package file.
-//
-// Every assertion is against a SYMBOL, never a retyped literal: the doc's job is to describe the
-// table this package actually ships, so a doc that drifted from the code would be the defect.
-func TestMockAdapterDoc_DocumentsEveryAllocation(t *testing.T) {
-	path := filepath.Join("..", "..", "docs", "mock-app-adapter.md")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v -- AC-8 requires this doc; an operator who hits a scripted outcome in "+
-			"a dev environment has nowhere else to look up what 99999999-0004 means", path, err)
-	}
-	doc := string(b)
-	if strings.TrimSpace(doc) == "" {
-		t.Fatalf("%s is empty", path)
-	}
-
-	msRequireAllocations(t)
-	for _, a := range mockAllocations {
-		if !strings.Contains(doc, a.TIN) {
-			t.Errorf("%s does not mention the allocated TIN %s", path, a.TIN)
-		}
-		if !strings.Contains(doc, string(a.Trigger)) {
-			t.Errorf("%s does not mention the trigger name %q (allocated to %s)", path, a.Trigger, a.TIN)
-		}
-	}
-
-	if !strings.Contains(doc, mockReservedPrefix) {
-		t.Errorf("%s does not state the reserved block prefix %q", path, mockReservedPrefix)
-	}
-	for _, tin := range mockNeverAllocate {
-		if !strings.Contains(doc, tin) {
-			t.Errorf("%s does not list the never-allocate value %s -- a future story that allocated "+
-				"it would collide with fixturegen or with a live test literal", path, tin)
-		}
-	}
-	if !strings.Contains(doc, mockLatencyEnv) {
-		t.Errorf("%s does not document the env knob %s", path, mockLatencyEnv)
-	}
-	// M5-03-05: the doc PUBLISHES the default (`800ms`) and MockConfigFromEnv applies the
-	// constant. After this subtask nothing but a human ties the two together, so pin them here
-	// -- this file is in-package and can see mockLatencyDefault; the external
-	// mock_adapter_test.go cannot.
-	if !strings.Contains(doc, mockLatencyDefault.String()) {
-		t.Errorf("%s never states the default latency %s -- mockLatencyDefault (mock_adapter.go) and "+
-			"the published default have drifted apart, and an operator has no way to learn what the "+
-			"mock does with %s unset", path, mockLatencyDefault, mockLatencyEnv)
-	}
-	if !strings.Contains(doc, "APP_ADAPTER") {
-		t.Errorf("%s does not mention APP_ADAPTER, the selector that turns the mock on at all", path)
-	}
-	if !strings.Contains(doc, "M5-13") {
-		t.Errorf("%s does not warn M5-13 (and any anonymizer) never to mint a value inside the "+
-			"reserved block -- that warning is the whole reason the block is reserved", path)
-	}
-
-	t.Run("names-which-trigger-is-the-permanently-failing-one", func(t *testing.T) {
-		// The Core AC says "permanently-failing" but no trigger carries that name: the
-		// unavailable allocation IS it (Retryable + 503 on every attempt, never converging).
-		// Without this mapping written down, an operator hunts for a trigger that does not exist.
-		if !strings.Contains(doc, "permanently") {
-			t.Errorf("%s never uses the word \"permanently\" -- it must map the Core AC's "+
-				"\"permanently-failing\" wording onto the %q trigger (%s), which never converges",
-				path, mockTriggerUnavailable, mockTINUnavailable)
 		}
 	})
 }

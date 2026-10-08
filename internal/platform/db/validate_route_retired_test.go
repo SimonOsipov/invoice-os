@@ -274,3 +274,25 @@ func vrRead(t *testing.T, root, rel string) string {
 	}
 	return string(b)
 }
+
+func repoRootDir(t *testing.T) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --show-toplevel: %v", err)
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		t.Fatal("git reported an empty worktree root; every scan below would read nothing")
+	}
+	return root
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

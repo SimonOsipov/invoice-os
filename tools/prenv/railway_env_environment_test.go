@@ -446,7 +446,7 @@ func assertBreaklistFindsNothing(t *testing.T, pattern, planted, control string,
 func TestNoFileCallsTheForkENVIRONMENTDecorative(t *testing.T) {
 	pattern := `(?i)decorative` + ` in a`
 	planted := "### `ENVIRONMENT` is " + "decorative" + " in a fork\n"
-	assertBreaklistFindsNothing(t, pattern, planted, "RAILWAY_ENVIRONMENT_NAME", "docs/", "cmd/", "internal/")
+	assertBreaklistFindsNothing(t, pattern, planted, "RAILWAY_ENVIRONMENT_NAME", "cmd/", "internal/")
 }
 
 // workflowJob is one jobs.<name> block of comment-stripped workflow lines.

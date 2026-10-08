@@ -3,6 +3,7 @@ package jev
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -180,4 +181,17 @@ func TestRetiredRouteScan_FlagsEveryRootAndFileKind(t *testing.T) {
 	if !slices.Equal(flagged, want) {
 		t.Errorf("flagged %v, want exactly %v (hits: %q)", flagged, want, hits)
 	}
+}
+
+func jevRepoRoot(t *testing.T) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --show-toplevel: %v", err)
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		t.Fatal("git reported an empty worktree root; every scan below would read nothing")
+	}
+	return root
 }

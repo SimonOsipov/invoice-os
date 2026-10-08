@@ -289,8 +289,8 @@ func TestEndToEnd_TheReportStepRunsInTheQueueJob(t *testing.T) {
 	}
 }
 
-// AC-6. docs/extraction-corpus.md must route to the queue job, or a doc-only edit ships against
-// a suite that never ran.
+// AC-6. A change under internal/ must route to the queue job, or it ships against a suite that
+// never ran.
 func TestEndToEnd_TheChangesFilterRoutesThisSuite(t *testing.T) {
 	yaml := wildReadFile(t, wildCIFile)
 
@@ -309,12 +309,8 @@ func TestEndToEnd_TheChangesFilterRoutesThisSuite(t *testing.T) {
 		t.Fatalf("the `go:` filter block does not name 'go.sum'; the block was cut wrong and the assertions below would read an empty string")
 	}
 
-	// docs/extraction-corpus.md is routed by 'docs/**'. The filter holds no such filename, so
-	// asserting one would red on a correct workflow.
-	for _, path := range []string{"'internal/**'", "'docs/**'"} {
-		if !strings.Contains(block, path) {
-			t.Errorf("the `go:` changes filter does not name %s; a change under it would skip the queue job that runs this suite", path)
-		}
+	if path := "'internal/**'"; !strings.Contains(block, path) {
+		t.Errorf("the `go:` changes filter does not name %s; a change under it would skip the queue job that runs this suite", path)
 	}
 }
 

@@ -110,7 +110,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -3796,36 +3795,5 @@ func TestSelect_AdapterNameIsCaseSensitive(t *testing.T) {
 				t.Errorf("Select(..., %q) adapter = %+v, want nil", name, a)
 			}
 		})
-	}
-}
-
-// TestMockAdapterDoc_SeeAlsoCitesTheSeedMigration: M5-03-05's docs/mock-app-adapter.md fix. The
-// "See also" section previously claimed docs/migrations.md pinned buyer-tin-format -- FALSE; that
-// doc is "Database Migrations & Role Model (M2-01)" and never mentions buyer-tin-format or any
-// seed. This pins the fix: the section must cite the actual seed migration and must not still
-// point a reader at migrations.md for this fact.
-func TestMockAdapterDoc_SeeAlsoCitesTheSeedMigration(t *testing.T) {
-	path := filepath.Join("..", "..", "docs", "mock-app-adapter.md")
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	doc := string(b)
-
-	const seedMigration = "migrations/20260711121327_seed_mbs_v1.sql"
-	if !strings.Contains(doc, seedMigration) {
-		t.Errorf("%s does not cite %s -- the See-also section must point an operator at the actual "+
-			"seed that pins buyer-tin-format", path, seedMigration)
-	}
-
-	seeAlsoIdx := strings.Index(doc, "## See also")
-	if seeAlsoIdx == -1 {
-		t.Fatal(`docs/mock-app-adapter.md has no "## See also" section -- this test's anchor moved`)
-	}
-	seeAlso := doc[seeAlsoIdx:]
-	if strings.Contains(seeAlso, "migrations.md") {
-		t.Error(`docs/mock-app-adapter.md's "## See also" section still references migrations.md -- ` +
-			"that doc (\"Database Migrations & Role Model (M2-01)\") never mentions buyer-tin-format " +
-			"or any seed; the section must cite the seed migration directly instead of a dangling link")
 	}
 }

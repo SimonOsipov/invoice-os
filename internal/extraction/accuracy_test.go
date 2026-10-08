@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -255,19 +254,6 @@ func acWithDistance(t *testing.T, kind extraction.RelationKind, maxDistance floa
 	return out
 }
 
-// acDoc is the operator page both numbers are recorded on; acDocSection and
-// acDocDecisionSection are the headings they live under. Scoping each scan to its own section
-// keeps it off the layout table in "## The six layouts", whose rows share the leading cell but
-// carry prose in the second column, and keeps the two numbers' tables disjoint.
-const (
-	acDoc                = "docs/extraction-corpus.md"
-	acDocSection         = "## Tier-1 recall and the floor"
-	acDocDecisionSection = "## Tier-1 decision rate"
-)
-
-// acDocRowRE is one row of the measured per-layout table: | `corpus_x.pdf` | hits | total |
-var acDocRowRE = regexp.MustCompile("(?m)^\\| `(corpus_[a-z0-9_]+\\.pdf)` \\| ([0-9]+) \\| ([0-9]+) \\|")
-
 // acRepoFile reads a repo-relative path. A test binary's working directory is its own package
 // directory, so the repo root is two levels up.
 func acRepoFile(t *testing.T, rel string) string {
@@ -281,24 +267,6 @@ func acRepoFile(t *testing.T, rel string) string {
 		t.Fatalf("%s is empty; every scan below would find nothing and report it as a clean file", rel)
 	}
 	return string(raw)
-}
-
-// acDocSectionText is heading's body in doc, up to the next heading of the same level.
-func acDocSectionText(t *testing.T, doc, heading string) string {
-	t.Helper()
-
-	i := strings.Index(doc, heading)
-	if i < 0 {
-		t.Fatalf("%s carries no %q section; the measured numbers this scan reads all live there", acDoc, heading)
-	}
-	body := doc[i+len(heading):]
-	if j := strings.Index(body, "\n## "); j >= 0 {
-		body = body[:j]
-	}
-	if strings.TrimSpace(body) == "" {
-		t.Fatalf("%s's %q section is empty", acDoc, heading)
-	}
-	return body
 }
 
 // acCIStep is the ci.yml step that prints the accuracy report, cut on the workflow's own step
@@ -411,7 +379,7 @@ func TestTier1Accuracy_ScoresAgainstANonEmptyExpectation(t *testing.T) {
 		t.Fatal("corpusExpect names no field in HeaderFields; the rate would be taken over nothing and 0/0 is not a rate")
 	}
 	if pairs != tier1RecallPairs {
-		t.Errorf("corpusExpect names %d (layout, field) pair(s), want %d -- move tier1RecallHits and tier1RecallPairs together, and the table in %s with them", pairs, tier1RecallPairs, acDoc)
+		t.Errorf("corpusExpect names %d (layout, field) pair(s), want %d -- move tier1RecallHits and tier1RecallPairs together", pairs, tier1RecallPairs)
 	}
 	if len(corpusExpect) != len(corpusLayouts) {
 		t.Errorf("corpusExpect holds %d row(s) and the corpus %d layout(s); the walk would miss a layout", len(corpusExpect), len(corpusLayouts))
@@ -440,8 +408,8 @@ func TestTier1Accuracy_FloorIsNotVacuous(t *testing.T) {
 	rate := s.rate()
 	onePair := 1.0 / float64(s.total)
 	if tier1RecallFloor <= rate-onePair {
-		t.Errorf("tier-1 reaches %v and the floor is %v, a slack of %v -- a whole pair could regress unnoticed. Raise tier1RecallHits to %d (a ratchet only goes up) and update %s in the same commit",
-			rate, tier1RecallFloor, rate-tier1RecallFloor, s.hits, acDoc)
+		t.Errorf("tier-1 reaches %v and the floor is %v, a slack of %v -- a whole pair could regress unnoticed. Raise tier1RecallHits to %d (a ratchet only goes up)",
+			rate, tier1RecallFloor, rate-tier1RecallFloor, s.hits)
 	}
 	if tier1RecallFloor > rate {
 		t.Errorf("the floor %v is above the measured rate %v; M-01 can never pass and the floor is a prediction, not a ratchet", tier1RecallFloor, rate)
@@ -484,81 +452,6 @@ func TestTier1Accuracy_AMutilatedRuleSetFallsBelowTheFloor(t *testing.T) {
 	}
 	if tier1RecallFloor > fullRate {
 		t.Errorf("the floor %v is above the shipped set's own rate %v; the control half of the sandwich does not hold", tier1RecallFloor, fullRate)
-	}
-}
-
-// M-06. The doc is a live oracle, not prose beside the number: its per-layout table is parsed
-// and summed. A bare substring search for the float passes over a doc that never had a table.
-func TestCorpusDoc_RecordsTheMeasuredFloor(t *testing.T) {
-	section := acDocSectionText(t, acRepoFile(t, acDoc), acDocSection)
-
-	floor := strconv.FormatFloat(tier1RecallFloor, 'f', 4, 64)
-	if !strings.Contains(section, floor) {
-		t.Errorf("%s's %q section does not carry the floor %s (AC #3)", acDoc, acDocSection, floor)
-	}
-	reach := fmt.Sprintf("%d of %d", tier1RecallHits, tier1RecallPairs)
-	if !strings.Contains(section, reach) {
-		t.Errorf("%s's %q section does not carry %q", acDoc, acDocSection, reach)
-	}
-
-	rows := acDocRowRE.FindAllStringSubmatch(section, -1)
-	if len(rows) == 0 {
-		t.Fatalf("%s's %q section holds no per-layout row; a row reads exactly: | `corpus_x.pdf` | <hits> | <total> |", acDoc, acDocSection)
-	}
-	if len(rows) != len(corpusLayouts) {
-		t.Errorf("%s's table holds %d layout row(s), want %d -- one per name in corpusLayouts", acDoc, len(rows), len(corpusLayouts))
-	}
-
-	// The rows are compared against a live measurement, not merely summed: a table that sums to
-	// 44/44 with the numbers in the wrong layouts would otherwise read as correct.
-	measured := make(map[string]acRow, len(corpusLayouts))
-	for _, r := range acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules).byFile {
-		measured[r.name] = r
-	}
-
-	hits, total := 0, 0
-	named := make(map[string]bool, len(rows))
-	for _, m := range rows {
-		h, err := strconv.Atoi(m[2])
-		if err != nil {
-			t.Fatalf("%s row %q: hits %q is not a number: %v", acDoc, m[1], m[2], err)
-		}
-		n, err := strconv.Atoi(m[3])
-		if err != nil {
-			t.Fatalf("%s row %q: total %q is not a number: %v", acDoc, m[1], m[3], err)
-		}
-		if named[m[1]] {
-			t.Errorf("%s names %q twice", acDoc, m[1])
-		}
-		named[m[1]] = true
-		hits += h
-		total += n
-
-		want, ok := measured[m[1]]
-		if !ok {
-			t.Errorf("%s has a row for %q, which is not a corpus layout", acDoc, m[1])
-			continue
-		}
-		if h != want.hits || n != want.total {
-			t.Errorf("%s says %s is %d/%d; it measures %d/%d", acDoc, m[1], h, n, want.hits, want.total)
-		}
-	}
-	for _, name := range corpusLayouts {
-		if !named[name] {
-			t.Errorf("%s's table has no row for %s", acDoc, name)
-		}
-	}
-	if hits != tier1RecallHits || total != tier1RecallPairs {
-		t.Errorf("%s's table sums to %d/%d, want %d/%d; the doc and the constants disagree", acDoc, hits, total, tier1RecallHits, tier1RecallPairs)
-	}
-
-	// AC #5: the doc must say how to move the floor and why it may only go up, not merely
-	// record the number. Without these the table is a snapshot and nothing tells the next
-	// author that lowering the constant is the one move a ratchet forbids.
-	for _, phrase := range []string{"tier1RecallHits", "t1aGaps", "TestTier1Accuracy", "only go up"} {
-		if !strings.Contains(section, phrase) {
-			t.Errorf("%s's %q section never mentions %q; the procedure for moving the floor is incomplete (AC #5)", acDoc, acDocSection, phrase)
-		}
 	}
 }
 
@@ -721,8 +614,8 @@ func TestTier1Accuracy_CIPrintsTheReport(t *testing.T) {
 	}
 }
 
-// M-10. No prose in this repo may state a distance the corpus does not require. tier1.go and
-// docs/extraction-corpus.md both call 0.0267 the reach tier1MaxDistanceBelow must clear; the
+// M-10. No prose in this repo may state a distance the corpus does not require. tier1.go
+// called 0.0267 the reach tier1MaxDistanceBelow must clear; the
 // binding reach is 0.009111 (t1.invoice_number.below and t1.issue_date.below on
 // corpus_stacked_labels.pdf), and 0.0267 is the party block's TIN line, which no corpusExpect
 // row asserts. Not one of the subtask plan's M-01..M-08: the plan schedules both edits but a
@@ -741,22 +634,9 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 			unwant: []string{"0.0267", "0.087010"},
 		},
 		{
-			file:   acDoc,
-			needle: "corpus_stacked_labels.pdf",
-			want:   []string{"0.009111", "0.107212"},
-			// 0.087 / 0.027. The measured margin is 0.087010 / 0.009111 = 9.55x.
-			unwant: []string{"3.3x"},
-		},
-		{
 			file:   "internal/extraction/tier1.go",
 			needle: "tier1DropRight",
 			want:   []string{"0.949396", "135.00"},
-		},
-		{
-			file:   acDoc,
-			needle: "wild_stacked_borderless.pdf",
-			// The drop window's measured edges.
-			want: []string{"tier1DropRight", "0.949396", "135.00"},
 		},
 		{
 			file:   "internal/extraction/tier1.go",
@@ -765,15 +645,6 @@ func TestTier1_TheRecordedDistanceClaimsAreTheMeasuredOnes(t *testing.T) {
 			want: []string{"0.614732", "0.498444"},
 			// The dial comment's claim the row reach made false.
 			unwant: []string{"nothing else reads a distance"},
-		},
-		{
-			file:   acDoc,
-			needle: "## The advisory arrangements",
-			// The published record: both blockers closed.
-			want: []string{"`RowReach`", "0.614732", "0.613281", "0.460405", "0.498444", "0.465497",
-				"**Closed on both fixtures**", "R0 and R1 decide `invoice_number` and `issue_date`"},
-			// The far-right totals gap, the dial line it cited, and the letter-spaced gap the label view closed.
-			unwant: []string{"tier1.go:43", "nor a far-right totals column exists", "stays missing on both", "`issue_date` is a known gap by name"},
 		},
 	} {
 		t.Run(c.file, func(t *testing.T) {

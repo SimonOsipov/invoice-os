@@ -715,6 +715,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"},   // the caller has no membership yet; the seam would refuse before the closure
 	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},    // the token is the only credential and names the invite; there is no caller to gate
 	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},     // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "acceptInTenant"},       // the shared tail of AcceptInvitation and AcceptInvitationByID, same reason
 	{file: "internal/tenancy/store.go", fn: "MyPendingInvitations"}, // the caller has no membership; the email filter is the guard
 	{file: "internal/tenancy/store.go", fn: "AcceptInvitationByID"}, // the caller has no membership; the email filter is the guard
 }

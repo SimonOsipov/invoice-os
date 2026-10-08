@@ -6,11 +6,15 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { FEATURES, GROUPS } from './content'
+import { FeaturePage } from './components/FeaturePage'
+import { GroupPage } from './components/GroupPage'
 import { Home } from './components/Home'
+import { TourOverlay } from './components/TourOverlay'
 import { JourneyStepper } from './components/JourneyStepper'
 import { Player } from './components/Player'
 import { Sidebar } from './components/Sidebar'
 import { GLYPHS } from './icons'
+import { PHONE_MAX_WIDTH } from './phone'
 import { START } from './player'
 import { parseLibraryPath } from './route'
 
@@ -99,9 +103,9 @@ describe('library entry', () => {
       color: 'var(--surface-foreground)',
       border: '1px solid var(--on-dark-20)',
     })
-    expect(ruleFor(rs, '.asc-app .ds-btn--primary:hover').filter).toBe('brightness(1.18)')
-    expect(ruleFor(rs, '.asc-app .ds-btn--outline:hover').background).toBe('var(--muted)')
-    expect(ruleFor(rs, '.asc-app .ds-btn--outlineDark:hover').background).toBe('var(--on-dark-10)')
+    expect(ruleFor(rs, '.asc-app .ds-btn--primary:hover:not(:disabled)').filter).toBe('brightness(1.18)')
+    expect(ruleFor(rs, '.asc-app .ds-btn--outline:hover:not(:disabled)').background).toBe('var(--muted)')
+    expect(ruleFor(rs, '.asc-app .ds-btn--outlineDark:hover:not(:disabled)').background).toBe('var(--on-dark-10)')
   })
 
   it('VE-04 a link Button keeps its colour inside .asc-app', () => {
@@ -181,5 +185,94 @@ describe('library entry', () => {
 
   it('VE-10 the back button hover is a rule in library.css', () => {
     expect(ruleFor(rules(read(join(HERE, 'styles/library.css'))), '.lib-back:hover').color).toBe('var(--teal) !important')
+  })
+
+  it("VE-11 the library's disabled rule has the landing's declarations", () => {
+    const landing = ruleFor(rules(read(join(HERE, '../../landing/src/styles/ds.css'))), '.ds-btn:disabled')
+    expect(landing).toMatchObject({ cursor: 'not-allowed', opacity: '0.45' })
+    const lib = ruleFor(rules(read(join(HERE, 'styles/library.css'))), '.ds-btn:disabled')
+    expect(lib).toEqual(landing)
+  })
+
+  it('VE-12 the tour close hover is a rule in library.css', () => {
+    const rs = rules(read(join(HERE, 'styles/library.css')))
+    expect(ruleFor(rs, '.lib-tour-x:hover').color).toBe('var(--ink) !important')
+    const html = renderToStaticMarkup(
+      createElement(TourOverlay, { tour: { i: 0, phase: 'card' }, rect: null, win: { w: 100, h: 100 }, onBack() {}, onNext() {}, onWatch() {}, onClose() {} }),
+    )
+    expect(html.match(/<button\b[^>]*class="lib-tour-x"/g)).toHaveLength(1)
+  })
+
+  const TOKENS = join(HERE, '../../../packages/design-tokens/v2')
+  const queries = (css: string) => [...stripComments(css).matchAll(/@media\s*([^{]+)\{/g)].map((m) => m[1].trim())
+  // The phone block's rules, read out of the one @media body by brace matching.
+  const phoneRules = () => {
+    const css = stripComments(read(join(HERE, 'styles/library.css')))
+    const start = css.indexOf('{', css.indexOf('@media')) + 1
+    let depth = 1
+    let end = start
+    while (depth > 0) depth += css[end++] === '{' ? 1 : css[end - 1] === '}' ? -1 : 0
+    return rules(css.slice(start, end - 1))
+  }
+
+  it('PH-01 the one media query is the phone breakpoint', () => {
+    expect(PHONE_MAX_WIDTH).toBe(767)
+    expect(queries(read(join(HERE, 'styles/library.css')))).toEqual([`(max-width: ${PHONE_MAX_WIDTH}px)`])
+  })
+
+  it('PH-02 the design tokens flip at PHONE_MAX_WIDTH', () => {
+    for (const f of ['spacing.css', 'typography.css']) {
+      const qs = queries(read(join(TOKENS, 'tokens', f)))
+      expect(qs.length, f).toBeGreaterThan(0)
+      expect(qs.map((q) => Number(q.match(/^\(max-width:\s*(\d+)px\)$/)?.[1])), f).toContain(PHONE_MAX_WIDTH)
+    }
+    expect(read(join(HERE, 'main.tsx'))).toContain("import '@invoice-os/design-tokens/v2/styles.css'")
+  })
+
+  it('PH-03 the phone block stacks the shell', () => {
+    const rs = phoneRules()
+    expect(ruleFor(rs, '.asc-app')).toMatchObject({ 'flex-direction': 'column !important', height: 'auto !important', overflow: 'visible !important' })
+    expect(ruleFor(rs, '.asc-app > aside')).toMatchObject({ width: '100% !important', 'border-right': '0 !important' })
+    expect(ruleFor(rs, '.asc-app > aside nav')).toMatchObject({ 'flex-direction': 'row !important', 'overflow-x': 'auto !important' })
+    expect(ruleFor(rs, '.asc-app > aside nav button').width).toBe('auto !important')
+    expect(ruleFor(rs, '.lib-subnav, .lib-navlabel').display).toBe('none !important')
+    expect(ruleFor(rs, '#lib-main')['overflow-y']).toBe('visible !important')
+    expect(ruleFor(rs, '.lib-px')).toMatchObject({ 'padding-left': '20px !important', 'padding-right': '20px !important' })
+    expect(ruleFor(rs, '.lib-cols')['grid-template-columns']).toBe('minmax(0, 1fr) !important')
+  })
+
+  const noop = () => {}
+  const feature = FEATURES.find((f) => f.id === 'import-files')!
+  const markup = {
+    sidebar: renderToStaticMarkup(createElement(Sidebar, { route: parseLibraryPath('/invoices'), demoHref: null, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop })),
+    stepper: renderToStaticMarkup(createElement(JourneyStepper, { route: parseLibraryPath('/'), onGroup: noop })),
+    home: renderToStaticMarkup(createElement(Home, { demoHref: null, onGroup: noop, onTour: noop })),
+    group: renderToStaticMarkup(createElement(GroupPage, { group: GROUPS[0], openHref: null, onFeature: noop })),
+    feature: renderToStaticMarkup(
+      createElement(FeaturePage, { group: GROUPS.find((g) => g.id === feature.gid)!, feature, openHref: null, onGroup: noop, onFeature: noop }),
+    ),
+  }
+  const withClass = (html: string, cls: string) =>
+    [...html.matchAll(/<(\w+)\b([^>]*)>/g)].filter((m) => (m[2].match(/class="([^"]*)"/)?.[1] ?? '').split(' ').includes(cls)).map((m) => m[2])
+
+  it('PH-04 every hook the phone block names is rendered, and its override is live', () => {
+    expect(withClass(markup.sidebar, 'lib-subnav')).toHaveLength(1)
+    expect(withClass(markup.sidebar, 'lib-navlabel')).toHaveLength(1)
+    expect([markup.stepper, markup.home, markup.group, markup.feature].map((h) => withClass(h, 'lib-px').length)).toEqual([1, 3, 1, 1])
+    const cols = [markup.home, markup.group, markup.feature].flatMap((h) => withClass(h, 'lib-cols'))
+    expect(cols).toHaveLength(3)
+    for (const a of cols) expect(a).toMatch(/style="[^"]*grid-template-columns:/)
+    for (const a of Object.values(markup).flatMap((h) => withClass(h, 'lib-px'))) expect(a).toMatch(/style="[^"]*padding:/)
+  })
+
+  it('PH-08 the player is a stretched child of a one-column section', () => {
+    const section = markup.feature.match(/<section\b[^>]*class="lib-px"[^>]*style="([^"]*)"/)![1]
+    expect(section).toContain('display:flex')
+    expect(section).toContain('flex-direction:column')
+    expect(section).not.toContain('align-items')
+    const player = [...markup.feature.matchAll(/<div\b[^>]*style="([^"]*)"/g)].map((m) => m[1]).find((st) => st.includes('border-radius:10px'))!
+    for (const p of ['width', 'max-width', 'margin', 'align-self', 'position:absolute']) expect(player, p).not.toContain(p)
+    const header = [...markup.feature.matchAll(/<div\b[^>]*style="([^"]*)"/g)].map((m) => m[1]).find((st) => st.includes('max-width:720px'))
+    expect(header).toBeDefined()
   })
 })

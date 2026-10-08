@@ -13,7 +13,7 @@ const dot = { width: 6, height: 6, borderRadius: '50%', background: 'var(--borde
 
 export function GroupPage({ group, openHref, onFeature }: GroupPageProps) {
   return (
-    <section style={{ padding: '56px 40px 80px', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 40 }}>
+    <section className="lib-px" style={{ padding: '56px 40px 80px', maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 40 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 700 }}>
         <div className="t-eyebrow">{`Group ${group.n} of ${GROUPS.length}`}</div>
         <h2 className="t-h2" style={{ margin: 0, fontSize: 44 }}>
@@ -30,7 +30,7 @@ export function GroupPage({ group, openHref, onFeature }: GroupPageProps) {
           </div>
         )}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
+      <div className="lib-cols" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
         {group.feats.map((f) => (
           <button
             key={f.id}

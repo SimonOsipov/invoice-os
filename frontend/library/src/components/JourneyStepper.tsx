@@ -3,11 +3,12 @@ import { Icon } from '../icons'
 import type { Route } from '../route'
 import type { Group } from '../types'
 
-type JourneyStepperProps = { route: Route; onGroup: (g: Group) => void }
+type JourneyStepperProps = { route: Route; onGroup: (g: Group) => void; tourStage?: number }
 
-export function JourneyStepper({ route, onGroup }: JourneyStepperProps) {
+export function JourneyStepper({ route, onGroup, tourStage }: JourneyStepperProps) {
   return (
     <div
+      className="lib-px"
       style={{
         position: 'sticky',
         top: 0,
@@ -30,7 +31,7 @@ export function JourneyStepper({ route, onGroup }: JourneyStepperProps) {
           INVOICE JOURNEY
         </span>
         {STAGES.map(([label, gid], i) => {
-          const active = route.view !== 'home' && route.group.id === gid
+          const active = tourStage !== undefined ? i === tourStage : route.view !== 'home' && route.group.id === gid
           const group = GROUPS.find((g) => g.id === gid)
           return (
             <div key={gid} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

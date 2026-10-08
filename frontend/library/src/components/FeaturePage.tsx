@@ -36,7 +36,7 @@ export function FeaturePage({ group, feature, openHref, onGroup, onFeature }: Fe
   })
 
   return (
-    <section style={{ padding: '40px 40px 88px', maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 36 }}>
+    <section className="lib-px" style={{ padding: '40px 40px 88px', maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 36 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 720 }}>
         <button
           type="button"
@@ -65,7 +65,7 @@ export function FeaturePage({ group, feature, openHref, onGroup, onFeature }: Fe
 
       <Player feature={feature} clock={clock} onToggle={() => dispatch({ type: 'toggle' })} onSeek={(frac) => dispatch({ type: 'seek', frac })} />
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 40, alignItems: 'start' }}>
+      <div className="lib-cols" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 40, alignItems: 'start' }}>
         <div style={panel}>
           <div className="t-eyebrow">What you get</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

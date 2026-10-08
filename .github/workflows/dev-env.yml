@@ -668,7 +668,7 @@ jobs:
             want_purge=false; want_mock=absent
           fi
           if [ "$purge" != "$want_purge" ]; then
-            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}', want '$want_purge'. 'error' means PurgeDemoTenants failed and Provision swallowed it (look for 'demo-tenant purge failed'). 'none' means the gateway predates the field. On a PR, 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true on the gateway and that fork-vars-after-urls set ENVIRONMENT=development. On the persistent environment, 'true' means a purge ran against live data: its gateway ENVIRONMENT no longer reads 'production' (docs/deploy-model.md)."
+            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}', want '$want_purge'. 'error' means PurgeDemoTenants failed and Provision swallowed it (look for 'demo-tenant purge failed'). 'none' means the gateway predates the field. On a PR, 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true on the gateway and that fork-vars-after-urls set ENVIRONMENT=development. On the persistent environment, 'true' means a purge ran against live data: its gateway ENVIRONMENT no longer reads 'production'."
             exit 1
           fi
           if [ "$mock" != "$want_mock" ]; then

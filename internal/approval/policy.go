@@ -401,7 +401,7 @@ func policyStatusForErr(err error) (status int, msg string) {
 	// The message names the page rather than the remedy: the operator path is several
 	// paragraphs long, so docs/approvals.md §5 carries it.
 	case errors.Is(err, ErrSweepCapExceeded):
-		return http.StatusConflict, "validated backlog exceeds the publish sweep cap — see docs/approvals.md"
+		return http.StatusConflict, "validated backlog exceeds the publish sweep cap"
 	// The concurrent-publish loser, mapped from 23505 on
 	// approval_policy_versions_one_active. Policy wording, not statusForErr's role-domain
 	// string: the two mappers share the sentinel and nothing else.

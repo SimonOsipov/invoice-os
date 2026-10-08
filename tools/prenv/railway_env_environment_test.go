@@ -451,6 +451,24 @@ func TestNoFileCallsTheForkENVIRONMENTDecorative(t *testing.T) {
 	assertBreaklistFindsNothing(t, pattern, planted, "RAILWAY_ENVIRONMENT_NAME", "cmd/", "internal/")
 }
 
+// A rule file holding the phrase fails the guard: the whole-repo walk skips .claude/.
+func TestNoFileCallsTheForkENVIRONMENTDecorative_SeesARuleFile(t *testing.T) {
+	plant := filepath.Join(repoRoot(t), ".claude", "rules", "zz-plant-decorative.md")
+	if err := os.WriteFile(plant, []byte("### `ENVIRONMENT` is "+"decorative"+" in a fork\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(plant) })
+
+	cmd := exec.Command("go", "test", "-run", "^TestNoFileCallsTheForkENVIRONMENTDecorative$", "-count=1", ".")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("guard passed with a planted rule file:\n%s", out)
+	}
+	if !strings.Contains(string(out), "zz-plant-decorative.md:1") {
+		t.Fatalf("guard failed without naming the planted rule file:\n%s", out)
+	}
+}
+
 // workflowJob is one jobs.<name> block of comment-stripped workflow lines.
 type workflowJob struct {
 	name  string

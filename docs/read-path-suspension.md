@@ -308,7 +308,7 @@ predicates it would previously have hit inside the transaction.
 | `OPTIONS /auth/resend-verification` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
 | `POST /auth/request-password-reset` | gateway | exempt | no database; calls GoTrue |
 | `OPTIONS /auth/request-password-reset` | gateway | exempt | the CORS preflight for the line above, same absence of a caller |
-| `GET /auth/verify` | gateway | exempt | no database; renders the confirm page |
+| `GET /auth/verify` | gateway | exempt | no database; renders the confirm page, or redirects a stateless open to landing |
 | `POST /auth/verify` | gateway | exempt | no database; calls GoTrue |
 | `GET /auth/reset-password` | gateway | exempt | no database; renders the reset page |
 | `POST /auth/reset-password` | gateway | exempt | no database; calls GoTrue |

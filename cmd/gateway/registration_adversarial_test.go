@@ -282,7 +282,7 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	if rec := serveRegistration(mux, http.MethodPost, "/auth/resend-verification", `{"email":"a@corp.example"}`); rec.Code != http.StatusAccepted {
 		t.Errorf("POST /auth/resend-verification = %d, want 202", rec.Code)
 	}
-	if rec := serveRegistration(mux, http.MethodGet, "/auth/verify?token=T&type=signup", ""); rec.Code != http.StatusOK {
+	if rec := serveRegistration(mux, http.MethodGet, "/auth/verify?token=T&type=signup&state="+verifyState, ""); rec.Code != http.StatusOK {
 		t.Fatalf("GET /auth/verify = %d, want 200", rec.Code)
 	}
 	if rec := serveForm(mux, "/auth/verify", "token=T&type=signup"); rec.Code != http.StatusSeeOther {
@@ -327,6 +327,9 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	}
 }
 
+// verifyState is a well-formed 43-char base64url state (gateway.stateShape).
+const verifyState = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde"
+
 // Opening the link, by GET or HEAD, spends nothing; only the POST of the page's own form reaches GoTrue.
 func TestVerifyRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	authURL, calls := fakeAuth(t)
@@ -334,23 +337,25 @@ func TestVerifyRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	mux := verifyMux(t, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil), site)
 	const link = "http://gateway.test/auth/verify?token=T&type=signup"
 
-	var page string
 	for _, method := range []string{http.MethodGet, http.MethodGet, http.MethodHead} {
 		rec := serveRegistration(mux, method, link, "")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s %s = %d, want 200", method, link, rec.Code)
-		}
-		if method == http.MethodGet {
-			page = rec.Body.String()
+		if want := "https://site.example/?confirm=1#token=T"; rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != want {
+			t.Fatalf("%s %s = %d Location %q, want 303 %s", method, link, rec.Code, rec.Header().Get("Location"), want)
 		}
 	}
+	statedLink := link + "&state=" + verifyState
+	opened := serveRegistration(mux, http.MethodGet, statedLink, "")
+	if opened.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200", statedLink, opened.Code)
+	}
+	page := opened.Body.String()
 	if got := calls(); len(got) != 0 {
 		t.Fatalf("opening the link reached GoTrue: %v", got)
 	}
 
-	action, values := pageForm(t, link, page)
-	if values.Get("token") != "T" || values.Get("type") != "signup" {
-		t.Fatalf("form values = %v, want token=T and type=signup", values)
+	action, values := pageForm(t, statedLink, page)
+	if values.Get("token") != "T" || values.Get("type") != "signup" || values.Get("state") != verifyState {
+		t.Fatalf("form values = %v, want token=T, type=signup and state=%s", values, verifyState)
 	}
 	rec := serveForm(mux, action, values.Encode())
 

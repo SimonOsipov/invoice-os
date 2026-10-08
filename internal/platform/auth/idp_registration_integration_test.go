@@ -97,7 +97,7 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 		t.Fatal(err)
 	}
 	mux.Handle("GET /auth/verify", verifyPage)
-	mux.Handle("POST /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink))
+	mux.Handle("POST /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink, gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)))
 	confirmationMail, err := gateway.MailTemplate("confirmation")
 	if err != nil {
 		t.Fatal(err)

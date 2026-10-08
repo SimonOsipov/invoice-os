@@ -241,7 +241,7 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"POST /auth/register":    "withCORS(" + recv + ".Register)",
 		"OPTIONS /auth/register": "withCORS(" + recv + ".Register)",
 		"GET /auth/verify":       page,
-		"POST /auth/verify":      recv + ".Verify",
+		"POST /auth/verify":      hand + ".Verify",
 
 		"POST /auth/resend-verification":    "withCORS(" + recv + ".ResendVerification)",
 		"OPTIONS /auth/resend-verification": "withCORS(" + recv + ".ResendVerification)",

@@ -225,7 +225,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	if rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`); rec.Code != http.StatusBadGateway {
 		t.Errorf("Register = %d, want 502: %s", rec.Code, rec.Body.String())
 	}
-	rec := serveForm(reg.Verify, "/auth/verify", "token=T&type=signup")
+	rec := serveForm(handoffVerify(authURL, site, nil), "/auth/verify", "token=T&type=signup")
 	if loc := rec.Header().Get("Location"); loc != "https://site.example/?verify=failed" {
 		t.Errorf("Verify Location = %q, want https://site.example/?verify=failed", loc)
 	}
@@ -251,7 +251,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 }
 
 // verifyMux mounts main's two /auth/verify patterns over the real handlers.
-func verifyMux(t *testing.T, reg registration, site *url.URL) *http.ServeMux {
+func verifyMux(t *testing.T, verify http.Handler, site *url.URL) *http.ServeMux {
 	t.Helper()
 	page, err := gateway.VerifyPageHandler(site)
 	if err != nil {
@@ -259,7 +259,7 @@ func verifyMux(t *testing.T, reg registration, site *url.URL) *http.ServeMux {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /auth/verify", page)
-	mux.Handle("POST /auth/verify", reg.Verify)
+	mux.Handle("POST /auth/verify", verify)
 	return mux
 }
 
@@ -269,7 +269,7 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
-	mux := verifyMux(t, reg, site)
+	mux := verifyMux(t, handoffVerify(authURL, site, nil), site)
 	mux.Handle("POST /auth/register", reg.Register)
 	// No method in the pattern, so the handler's own method check answers.
 	mux.Handle("/auth/resend-verification", reg.ResendVerification)
@@ -334,7 +334,7 @@ const verifyState = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde"
 func TestVerifyRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	mux := verifyMux(t, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil), site)
+	mux := verifyMux(t, handoffVerify(authURL, site, nil), site)
 	const link = "http://gateway.test/auth/verify?token=T&type=signup"
 
 	for _, method := range []string{http.MethodGet, http.MethodGet, http.MethodHead} {

@@ -215,7 +215,7 @@ func holdMinimum(ctx context.Context, log *slog.Logger, msg string, start time.T
 
 // VerifyHandler answers the confirm page's form POST by calling GoTrue's /verify, then redirects to siteURL.
 // The token is read from the form body only; any bad form redirects to the failure notice with no GoTrue call.
-func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink) http.Handler {
+func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink, store *HandoffStore) http.Handler {
 	if siteURL == nil {
 		return RegistrationNotConfigured()
 	}

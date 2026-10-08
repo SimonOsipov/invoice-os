@@ -1214,7 +1214,7 @@ func TestRegistrationHandlers_WiresRegisterAndVerify(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("Register = %d, want 202: %s", rec.Code, rec.Body.String())
 	}
-	rec = serveForm(reg.Verify, "/auth/verify", "token=T&type=signup")
+	rec = serveForm(handoffVerify(authURL, site, nil), "/auth/verify", "token=T&type=signup")
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
 		t.Errorf("Verify = %d Location %q, want 303 https://site.example/?verified=1", rec.Code, rec.Header().Get("Location"))
 	}
@@ -1236,13 +1236,17 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 				reg = registrationHandlers(nil, site, 0, slog.New(slog.DiscardHandler), nil)
 			}
 
-			for name, rec := range map[string]*httptest.ResponseRecorder{
+			answers := map[string]*httptest.ResponseRecorder{
 				"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
-				"Verify":   serveForm(reg.Verify, "/auth/verify", "token=T&type=signup"),
 
 				"ResendVerification":   serveRegistration(reg.ResendVerification, http.MethodPost, "/auth/resend-verification", `{"email":"new@corp.example"}`),
 				"RequestPasswordReset": serveRegistration(reg.RequestPasswordReset, http.MethodPost, "/auth/request-password-reset", `{"email":"new@corp.example"}`),
-			} {
+			}
+			// handoffHandlers builds Verify and needs a GoTrue URL to build the rest, so only AUTH_SITE_URL unset reaches it.
+			if unset == "AUTH_SITE_URL" {
+				answers["Verify"] = serveForm(handoffVerify(authURL, nil, nil), "/auth/verify", "token=T&type=signup")
+			}
+			for name, rec := range answers {
 				if rec.Code != http.StatusServiceUnavailable {
 					t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
 					continue

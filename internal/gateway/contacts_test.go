@@ -131,7 +131,7 @@ func verifyRequest(ctx context.Context, query string) *http.Request {
 func doVerifySink(t *testing.T, authURL *url.URL, query string, sink ContactSink) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	VerifyHandler(authURL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), sink).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	VerifyHandler(authURL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), sink, testHandoffStore()).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	return rec
 }
 
@@ -398,7 +398,7 @@ func TestHandOff_BlockedSinkNeverDelays(t *testing.T) {
 		sink := newBlockingSink(t)
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
-		h := VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), sink)
+		h := VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), sink, testHandoffStore())
 
 		rec := answersWithin(t, h, verifyRequest(ctx, verifyQuery), time.Second)
 
@@ -520,7 +520,7 @@ func TestHandOff_FailingSinkIsTriedThreeTimes(t *testing.T) {
 			case "verify":
 				fake := newFakeGoTrue(t, http.StatusOK, coSession(coUser(coMetaFull)))
 				rec := httptest.NewRecorder()
-				VerifyHandler(fake.URL, siteURL(t), testClient(), log, sink).ServeHTTP(rec, verifyRequest(context.Background(), verifyQuery))
+				VerifyHandler(fake.URL, siteURL(t), testClient(), log, sink, testHandoffStore()).ServeHTTP(rec, verifyRequest(context.Background(), verifyQuery))
 				requireRedirect(t, rec, verifiedLocation)
 			default:
 				fake := newTokenFake(t, http.StatusOK, coSession(coUser(coMetaFull)))
@@ -826,7 +826,7 @@ func verifyOffline(t *testing.T, client *http.Client, query string, sink Contact
 func verifyOfflineLog(t *testing.T, client *http.Client, query string, sink ContactSink, log *slog.Logger) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	VerifyHandler(offlineAuth, siteURL(t), client, log, sink).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	VerifyHandler(offlineAuth, siteURL(t), client, log, sink, testHandoffStore()).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	synctest.Wait()
 	return rec
 }

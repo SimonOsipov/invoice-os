@@ -440,7 +440,7 @@ func TestVerify_NonPostIs405WithoutUpstreamCall(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(method, "/auth/verify?token="+verifyToken+"&type=signup", nil)
 
-			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, req)
+			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil, testHandoffStore()).ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost {
 				t.Errorf("%s = %d Allow %q, want 405 Allow POST", method, rec.Code, rec.Header().Get("Allow"))
@@ -462,7 +462,7 @@ func TestVerify_QueryTokenIsIgnored(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/verify?token="+verifyToken+"&type=signup", nil)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, req)
+	VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil, testHandoffStore()).ServeHTTP(rec, req)
 
 	requireRedirect(t, rec, failedLocation)
 	if n := len(fake.Calls()); n != 0 {
@@ -527,7 +527,7 @@ func TestVerify_BadFormIsFailureWithoutUpstreamCall(t *testing.T) {
 				req.Header.Set("Content-Type", c.contentType)
 			}
 
-			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, req)
+			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil, testHandoffStore()).ServeHTTP(rec, req)
 
 			want := failedLocation
 			if c.wantCalls == 1 {
@@ -546,7 +546,7 @@ func TestVerify_NilSiteURLIs503WithoutUpstreamCall(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtSession)
 	rec := httptest.NewRecorder()
 
-	VerifyHandler(fake.URL, nil, testClient(), slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, verifyRequest(t.Context(), verifyQuery))
+	VerifyHandler(fake.URL, nil, testClient(), slog.New(slog.DiscardHandler), nil, testHandoffStore()).ServeHTTP(rec, verifyRequest(t.Context(), verifyQuery))
 
 	if rec.Code != http.StatusServiceUnavailable || errorBody(t, rec) != "registration is not configured" {
 		t.Errorf("answer = %d %s, want 503 registration is not configured", rec.Code, rec.Body.String())
@@ -578,7 +578,7 @@ func TestVerify_FormWinsOverQuery(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, c.target, strings.NewReader(c.body))
 			req.Header.Set("Content-Type", formType)
 
-			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, req)
+			VerifyHandler(fake.URL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), nil, testHandoffStore()).ServeHTTP(rec, req)
 
 			calls := fake.Calls()
 			if c.wantToken == "" {
@@ -693,7 +693,7 @@ func TestVerify_ConcurrentClicksHandOffOncePerVerifiedAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	sink := newRecSink(nil)
-	h := VerifyHandler(authURL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), sink)
+	h := VerifyHandler(authURL, siteURL(t), testClient(), slog.New(slog.DiscardHandler), sink, testHandoffStore())
 
 	locations := make([]string, clicks)
 	var wg sync.WaitGroup

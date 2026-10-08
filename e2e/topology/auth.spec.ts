@@ -2284,8 +2284,6 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
 
 // The accept page of an invite link (frontend/landing/src/components/InvitePage.tsx).
 const INVITE_INVALID = 'This invite is no longer valid'
-// frontend/landing/src/App.tsx SIGN_IN_OUTCOMES, no-workspace.
-const NO_WORKSPACE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
 const inviteUrl = (token: string) => `${LANDING_URL}/invite#token=${token}`
 
 // A fresh admin with a workspace of `workspaceName` (default: a short one; maxNameChars, internal/tenancy/tenancy.go, is 200).
@@ -2473,7 +2471,27 @@ test('deployed journey: an invitee creates an account on the accept page, signs 
   expect(workspacesCreated, 'workspaces created on the way').toBe(0)
 })
 
-test('deployed journey: an invitee who signs in from another tab without the invite is pointed back to the invite link and joins through it', async ({ browser }) => {
+const ONE_REVIEWER = 'Invite E2E invited you as Reviewer.'
+
+// The statuses an admin's invite list holds for `email`.
+async function invitationStatuses(adminToken: string, email: string): Promise<string[]> {
+  const res = await rawFetch('/api/tenancy/v1/invitations', { headers: { Authorization: `Bearer ${adminToken}` } })
+  expect(res.status, JSON.stringify(res.body)).toBe(200)
+  return (res.body as { invitations: { email: string; status: string }[] }).invitations.filter((i) => i.email === email).map((i) => i.status)
+}
+
+// A form registrant who is not provisioned yet: the answers ride in user_metadata, so the first sign-in carries them.
+async function registerWithAnswers(prefix: string): Promise<{ email: string; password: string }> {
+  const id = crypto.randomUUID()
+  const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16) }
+  const res = await rawFetch('/auth/register', { method: 'POST', body: { ...account, workspace_name: `Join E2E ${id.slice(0, 8)}`, display_name: 'Join E2E', kind: 'firm' } })
+  expect(res.status, JSON.stringify(res.body)).toBe(202)
+  return account
+}
+
+const errorsAllowing403Me = (page: Page) => gatedErrors(page, [expectedStatusDropper(page, 403, /\/api\/tenancy\/v1\/me$/)])
+
+test('deployed journey: an invitee who registered in one browser signs in from another and joins from the Join screen', async ({ browser }) => {
   test.setTimeout(300_000)
   const workspace = await inviteWorkspace()
   const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
@@ -2491,23 +2509,80 @@ test('deployed journey: an invitee who signs in from another tab without the inv
   try {
     const page = await contextB.newPage()
     const urls = recordUrls(page)
+    const errors = errorsAllowing403Me(page)
     await seedConsent(page, false)
     await page.goto(LANDING_URL)
     await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-    const dialog = page.getByRole('dialog', { name: 'Platform login' })
-    await dialog.getByRole('button', { name: 'Continue with email', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Platform login' }).getByRole('button', { name: 'Continue with email', exact: true }).click()
     await signInInOpenWindow(page, account)
-    await expect(page.getByRole('dialog', { name: 'Platform login' })).toContainText(NO_WORKSPACE, { timeout: 30_000 })
-    expect(urls.filter((u) => u.includes('signin=no-workspace')).length, 'the landing was reached at ?signin=no-workspace').toBeGreaterThan(0)
 
-    await openInvite(page, token)
-    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-    await signInInOpenWindow(page, account)
+    await expect(page.getByRole('heading', { name: `Join ${workspace.name}`, exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByText(ONE_REVIEWER, { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: `Join ${workspace.name}`, exact: true }).click()
     const identity = await readSessionIdentity(page)
+
     expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
     expect(identity.user.role, 'the invited role').toBe('reviewer')
+    expect(urls.filter((u) => u.includes('signin=no-workspace')), 'a navigation carried signin=no-workspace').toEqual([])
+    expect(errors, `console errors on the Join screen:\n${errors.join('\n')}`).toEqual([])
   } finally {
     await contextB.close()
+  }
+})
+
+test('deployed journey: an invitee with two invites picks one from the chooser', async ({ page }) => {
+  test.setTimeout(240_000)
+  const first = await inviteWorkspace()
+  const second = await inviteWorkspace()
+  const account = await registerFresh('join-pick')
+  await inviteWithToken(first.adminToken, first.tenantId, account.email)
+  await inviteWithToken(second.adminToken, second.tenantId, account.email)
+  const errors = errorsAllowing403Me(page)
+  await seedConsent(page, false)
+
+  await passFrontDoor(page, account, '/')
+  await expect(page.getByRole('heading', { name: 'Choose a workspace to join', exact: true })).toBeVisible({ timeout: 30_000 })
+  const rows = page.getByTestId('join-invite')
+  await expect(rows).toHaveCount(2)
+  await rows.filter({ hasText: second.name }).getByRole('button', { name: `Join ${second.name}`, exact: true }).click()
+  const identity = await readSessionIdentity(page)
+
+  expect(identity.tenant.id, 'the session is bound to the second workspace').toBe(second.tenantId)
+  expect(await invitationStatuses(first.adminToken, account.email), 'the first workspace still shows the invite').toEqual(['pending'])
+  expect(errors, `console errors on the chooser:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed journey: a registrant with an invite can join it or create their own workspace', async ({ browser }) => {
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace()
+  const joiner = await registerWithAnswers('join-reg')
+  const founder = await registerWithAnswers('join-own')
+  await inviteWithToken(workspace.adminToken, workspace.tenantId, joiner.email)
+  await inviteWithToken(workspace.adminToken, workspace.tenantId, founder.email)
+
+  for (const [account, choice] of [[joiner, `Join ${workspace.name}`], [founder, 'Create my own workspace']] as const) {
+    const context = await browser.newContext()
+    try {
+      const page = await context.newPage()
+      const errors = errorsAllowing403Me(page)
+      await seedConsent(page, false)
+      await passFrontDoor(page, account, '/')
+      await expect(page.getByRole('heading', { name: `Join ${workspace.name}`, exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(page.getByRole('button', { name: `Join ${workspace.name}`, exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Create my own workspace', exact: true })).toBeVisible()
+      await page.getByRole('button', { name: choice, exact: true }).click()
+      const identity = await readSessionIdentity(page)
+
+      if (account === joiner) {
+        expect(identity.tenant.id, 'Join opens the inviting workspace').toBe(workspace.tenantId)
+      } else {
+        expect(identity.tenant.id, 'Create my own workspace opens a new workspace').not.toBe(workspace.tenantId)
+        expect(await invitationStatuses(workspace.adminToken, founder.email), 'the invite stays pending').toEqual(['pending'])
+      }
+      expect(errors, `console errors on the Join screen:\n${errors.join('\n')}`).toEqual([])
+    } finally {
+      await context.close()
+    }
   }
 })
 

@@ -1,7 +1,7 @@
 // CHECK-01-06 AUTO half: records the first automatic placement (Q12) for CHECK-01-07 to
 // measure against, by running the SHIPPED initMappingFromHeaders over every JEV_OUT layout
 // and writing auto_placements.json. Env-gated on JEV_OUT so CI, which never sets it, makes
-// no read and no write (AC-1) -- .ralph/arch/CHECK-01-06.md D-1..D-8.
+// no read and no write (AC-1).
 //
 // AUTO is computed from the layout's DECLARED header row (layout.columns), not a detected
 // one: the answer key is projected out of columns, so feeding the title line would score a

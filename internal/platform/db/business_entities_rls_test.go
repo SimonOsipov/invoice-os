@@ -7,7 +7,7 @@
 //	    text, address text, status text NOT NULL DEFAULT 'active'
 //	    CHECK (status IN ('active','archived')), created_at timestamptz NOT NULL
 //	    DEFAULT now() — FORCE RLS, policy `tenant_isolation` copied from the
-//	    `tenants` template (docs/migrations.md §6, §8), GRANT SELECT/INSERT/UPDATE/
+//	    `tenants` template (.claude/rules/db-migrations.md), GRANT SELECT/INSERT/UPDATE/
 //	    DELETE TO invoice_app.
 //
 // Each case attacks the same guarantees M2-07 (rls_test.go) proves for the

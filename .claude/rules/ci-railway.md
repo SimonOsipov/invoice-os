@@ -1,0 +1,53 @@
+---
+paths:
+  - ".github/workflows/**"
+  - "scripts/ci/**"
+  - "tools/prenv/**"
+---
+# CI and Railway deploys
+
+- Deploy to Railway only from CI, with `railway up`. Never enable a Railway deployment trigger.
+- Keep Railway PR Environments off. `railway-invariants.yml` runs on every `pull_request`, drafts included, with no paths filter.
+- Let `assert-project-settings` assert and fail. Repair runs only by `workflow_dispatch` with `disable=true`, never on `pull_request`.
+- Read the nested `project.environments[].deploymentTriggers`. The `Project.deploymentTriggers` field is deprecated.
+- Give each PR one ephemeral environment `pr-<N>`, forked from the persistent environment. Build the name only with `prenv.Name`.
+- Address the persistent environment by ID, never by name. `RAILWAY_DEV_ENVIRONMENT_ID` holds it.
+- Deploy the persistent environment on a `main` push after a green `CI` check. `workflow_dispatch` also targets it and skips that gate.
+- Run E2E only on `pull_request`. The api suite writes data, so it never runs against the persistent environment.
+- Gate every fork-only step on `github.event_name == 'pull_request'`, never on `!= 'workflow_dispatch'`. A push must never write live variables.
+- Use `RAILWAY_API_TOKEN` on `pull_request` and `push`. Use the project token `RAILWAY_API_DEV_TOKEN` on `workflow_dispatch`.
+- Pass `--project` and `--environment` on every call made with the account token. It has no implicit scope.
+- Keep every service's Watch Paths empty. `prepare-env` fails and names a service that has one.
+- Re-clear Watch Paths when you recreate a service. Railway ignores `build.watchPatterns` in `railway.json`.
+- Seal no variable outside `SEALED_ALLOWLIST` in `railway-env.sh`. Sealed variables do not fork, and `audit-sealed-variables` fails `prepare-env`.
+- Write fork variables in the two batched passes `fork-vars-before-urls` and `fork-vars-after-urls`. Write only names that differ, with `skipDeploys`.
+- Let `fork-vars-after-urls` set the fork gateway `ENVIRONMENT` to the constant `development`. Production's gateway reads `production`.
+- Set the production `ENVIRONMENT` by hand with `set-production-environment`. No workflow writes it.
+- Expect `/healthz` on the persistent gateway to report `demo_purge` false, `mock_issuer` absent and `auth_issuers` 1. A fork reports true, on and 2.
+- Blank `WAL_ARCHIVE_*` on a fork's Postgres through `reconcile-fork`. A kept `WAL_ARCHIVE_BUCKET` must differ from production's, or the step fails.
+- Create the fork's Postgres volume in CI. A Postgres without a volume reaches `SUCCESS` and never answers.
+- Never treat a TCP connect as proof that a service is healthy. Gate on the gateway `/healthz`.
+- Poll Postgres to `SUCCESS` with no early exit on `CRASHED`. It reports `CRASHED` transiently while it starts.
+- Delete an environment by name, never by id. `delete-environment` resolves the name among `isEphemeral` environments only.
+- Keep both never-delete guards in every teardown. The second refuses an id equal to `RAILWAY_DEV_ENVIRONMENT_ID`.
+- Prove a delete with a fresh query, never with the `environmentDelete` return value. Absent after the mutation counts as success.
+- Fail the teardown run when a present environment survives. Never add `continue-on-error` to it.
+- Check out the PR head SHA in teardown, never the merge ref. GitHub deletes the merge ref when the PR closes.
+- Share the group `dev-preview-<N>` between deploy and teardown. Teardown sets `queue: max` and never cancels in progress.
+- Group persistent-environment runs by `github.ref`, so pushes and dispatches serialize. Keep `cancel-in-progress: false` in `dev-env.yml`.
+- Expect a superseded commit's deploy to fail at the CI gate. `ci.yml` cancels the earlier run on the same ref.
+- Reap an environment only on proof that its PR is closed or merged, through `prenv.ShouldReap`. Never reap on age.
+- Leave an environment alone when its PR state is unreadable. Run the sweeper from a cron that is not on the hour.
+- Send every Railway GraphQL call through `graphql_try`. It retries curl exit 28 and HTTP 5xx, up to three attempts.
+- Send a non-idempotent mutation and each poll tick with `once`. Fail fast on a GraphQL `errors` array and on any 4xx but 429.
+- On HTTP 429, wait the `Retry-After` time and send once more. Cap the waits at 600 s per call and per job.
+- Give a job that calls `railway-env.sh` a `timeout-minutes` 10 above its work budget. `TestWorkflowTimeoutsCoverTheRateLimitWaits` pins it.
+- Run `railway up` through `scripts/ci/railway-up-ci.sh`. It re-runs once after a transport error before Railway prints a `Build Logs:` URL.
+- Never re-run `railway up` after a build failure, a log-stream failure, `Unauthorized` or `not found`.
+- Tolerate a lost status poll only after Railway accepted the deploy and a later check decides that service.
+- Hold at most two PR runs of `dev-env.yml` in the deploy chain. `scripts/ci/deploy-slot.sh` enforces it.
+- Let a push or dispatch run take a slot without waiting. A PR wait over 2400 s fails the job.
+- Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database reset runs only when the gateway deploys.
+- Run `spa-build-gate` on push and dispatch. Each SPA must serve `/health` and a `/build.txt` that names the commit.
+- Run "Gate on the account-mail templates" on `pull_request` and `push`, not `workflow_dispatch`. A project token cannot read variables.
+- Roll back the gateway and every guarded service together. A split rollback logs `request refused: no gateway token`.

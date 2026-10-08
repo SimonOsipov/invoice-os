@@ -1,0 +1,77 @@
+---
+paths:
+  - "internal/platform/ai/**"
+  - "internal/platform/jev/**"
+  - "internal/extraction/aireading.go"
+  - "internal/extraction/aiimage.go"
+  - "internal/extraction/ailines.go"
+  - "internal/extraction/aimerge.go"
+  - "internal/extraction/ailinesmerge.go"
+  - "internal/extraction/jevcheck.go"
+  - "internal/importer/jevcheck.go"
+  - "internal/importer/suggest.go"
+  - "internal/importer/handlers_suggest.go"
+---
+# OpenRouter clients
+
+- Keep `OPENROUTER_API_KEY` in Railway service variables on `submission` and `invoice` only. The AI client and the Jev client share it.
+- Never put the key in the repo, in `railway.json` or in an example file.
+- Keep the production key unsealed. `audit-sealed-variables` fails `prepare-env` on a sealed variable, because forks copy the source environment.
+- Run `set-ai-fake` in every PR `prepare-env`, through `fork-vars-after-urls`. It blanks the key and sets `AI_FAKE=true` and `JEV_FAKE=true` on `submission` and `invoice`.
+- Never remove `set-ai-fake` and never add `continue-on-error` to it. It refuses a persistent environment.
+- Read every `set-ai-fake` write back. Fail the job when a key survives on either service.
+- Accept an absent key or exactly `""` as a blanked key. Railway stores an empty-string variable.
+- Match the key variable name exactly. Never print its value.
+- Read the model, the endpoint and the retry budget from constants. Add no variable for any of them.
+- Treat an unset or empty key as off when fake mode is off. `Enabled()` is false on both clients.
+- Return `ai.ErrOff` from `ai.Client.Call` when off, having sent nothing. `jev.Client.Ask` returns an error that wraps `jev.ErrCheckSkipped`.
+- Never trim or validate the key. Any other value counts as set, whitespace included.
+- Parse `AI_FAKE` and `JEV_FAKE` with `strconv.ParseBool`. Never trim them. An unparseable value makes `FromEnv` return an error.
+- Let `AI_FAKE` win over a key. A set key is never used for the wire request.
+- Refuse `JEV_FAKE=true` with a key set. `jev.FromEnv` returns an error naming both variables.
+- Let `FromEnv` return errors and never exit the process. Callers treat the error as fatal at boot.
+- Call `ai.FromEnv` and `jev.FromEnv` in `cmd/submission` and `cmd/invoice`. A client error stops boot.
+- Send `json_schema` output with `strict: true` and `provider.require_parameters: true` and `temperature: 0`. Send no `usage: {include: true}`.
+- Put the text part first in a message, then the page images. Encode each PNG as `data:image/png;base64,` with padded standard base64.
+- Decode the AI answer with `json.Number`. Integer and enum comparisons stay exact.
+- Give the AI client no `Timeout`. The context passed to each attempt is the clock.
+- Cap one AI `Call` at its `budget`, not at an attempt count. Back off from 250 ms, doubling to 2 s.
+- Retry a transport error, an attempt timeout, HTTP 429 and HTTP 5xx. Retry a 2xx body that fails decode or the schema.
+- Never retry another non-2xx status or a 3xx. Return `refused` after one request.
+- Let the caller's context win over the budget. A cancelled context returns at once and never matches `ErrUnavailable`.
+- Cap one `Ask` of the Jev client at its `budget` with at most one retry after `retryWait`. Cap each attempt at `(budget − retryWait) / 2`.
+- Retry Jev once on a transport error, an attempt timeout, HTTP 408, 429 and 5xx. Never retry other statuses.
+- Write one `ai call` or `jev call` log line per call, on every path. Write it with a background context.
+- Keep prompts, text, fake hints and page bytes out of every log line and error. Do the same for answers, schema names, file names, keys and response bodies.
+- Omit `tenant_id` from the log line when the identity has none. Never log it blank.
+- Keep `FakeScope` out of the wire request and the log. It must match `^[A-Z]+$`.
+- Send `FakeScope: "LINES"` on the line-item call. Leave the header call unscoped.
+- Search an AI fake marker in `Request.Text`, then in `Request.FakeHint`. Never scan `Request.System`.
+- Match fake markers case-sensitively with no word boundary. The first match in a field wins.
+- A scoped request matches only its own `AIFAKE-<SCOPE>-` spelling. It never falls back to an unscoped marker.
+- Encode a fake answer payload with `base64.RawURLEncoding`. The payload class is `[A-Za-z0-9_-]+`.
+- End a Jev choice marker with a non-word character other than `-`. A trailing letter, digit, `_` or `-` joins the payload.
+- Search the Jev fake marker in `State` only. An `AIFAKE-` marker does not steer Jev, and a `JEVFAKE-` marker does not steer the AI client.
+- Validate a request in fake mode exactly as in real mode. An invalid request is `skipped_refused` with `attempts` `0`.
+- Write the `unreadable` `document_ai_reading` row and no engine reading when a `Call` fails. The importer then quarantines the document.
+- Skip that row and the quarantine for `ErrOff` and for a cancelled or expired caller context.
+- Make two AI calls on a text read that finds text. Ask for header fields first, then once for all line items.
+- Skip the line-item call when the header call failed. Never call the AI per line item.
+- Call the AI once on a PDF with no text and rendered pages. Send the first and last page images and the intro only.
+- Treat a blank AI answer on a text read as no change. The engine's own reading stands.
+- Never trust the model's mapping answer. Accept `header_row` only as a `json.Number` inside the window.
+- Place a field only when the answer is a non-blank string that equals a header cell exactly. Compare against the header re-decoded at the answered row.
+- Place nothing for a header string that two fields claim.
+- Drop every key outside `canonicalFields` from a mapping answer. `date_format` and `decimal_separator` are never read.
+- Fall back to row 1 and the original decode when the re-decode fails. Do the same when its header is empty.
+- Make no AI call and answer `source: "none"` when the decoded header is empty.
+- Answer `source` as `saved`, `none` or `ai`. `ai` includes a moved header row with no placements.
+- Treat every Jev error as `jev.ErrCheckSkipped` and carry on as if the check did not exist.
+- Change nothing on screen for a skipped Jev check. Never route its document to manual entry.
+- Answer `{"doubted":[]}` for a skipped mapping check so the Map step opens unchanged.
+- Ask the value questions and the `document_type` question in one Jev call. One unusable answer skips both.
+- Flag a doubted field with a reason in `applyValueCheck`. Never rewrite its value.
+- Run the live probe before you merge a Jev client change: `JEV_PROBE=1 OPENROUTER_API_KEY=<key> go test -count=1 -v -run '^TestJevLiveProbe$' ./internal/platform/jev/liveprobe`.
+- Treat the Jev model alias as moving. Record the answering release from the `model` log key.
+- Re-measure a Jev threshold on real documents before you trust it in production.
+- Leave the Jev data terms to the user. They are unresolved, and nothing enforces zero data retention per call.

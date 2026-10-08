@@ -10,7 +10,7 @@ import type { Page } from '@playwright/test'
 // The 404 is deliberate and must NOT become a 200-with-null-run: `read_model.go:77-79`
 // answers unknown, cross-tenant, malformed-uuid and no-run ids alike on purpose, and
 // splitting the no-run case out would turn that into a cross-tenant existence oracle
-// (docs/approvals.md §2.1). So the gate carries the exception, not the API.
+// (.claude/rules/approvals.md). So the gate carries the exception, not the API.
 //
 // Two signals, because neither alone is reliable. Chromium usually names the failing
 // resource in the message's own location, but PR #167's first gate run produced two 404

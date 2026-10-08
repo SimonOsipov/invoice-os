@@ -108,7 +108,7 @@ var corpusPinned = []struct {
 			// The name heads on a below read beside its label and the block's TIN is a second
 			// reading of the same field, so EXTR-22 offers it rather than hiding it.
 			{"buyer_name", rcStr("Honeywell Group"), extraction.ReasonAmbiguous, []string{"99999999-0302"}},
-			// This layout carries no currency/subtotal/vat token at all (docs/extraction-corpus.md);
+			// This layout carries no currency/subtotal/vat token at all (.claude/rules/extraction-corpus.md);
 			// missing here is the correct reading, not a defect.
 			{"currency", nil, extraction.ReasonMissing, nil},
 			{"subtotal", nil, extraction.ReasonMissing, nil},
@@ -389,7 +389,7 @@ func TestReconcileCorpus_AmbiguousDateKeepsBothReadings(t *testing.T) {
 
 // corpusMissingExpect is AC-3's own expectation table: the exact set of ReasonMissing fields
 // per layout. line_items belongs to every row (AC-7); the rest follows which fields each
-// layout's generator omits (docs/extraction-corpus.md). The pipeline itself introduces no
+// layout's generator omits (.claude/rules/extraction-corpus.md). The pipeline itself introduces no
 // omission.
 var corpusMissingExpect = map[string][]string{
 	"corpus_inline_labels.pdf":  {"line_items"},

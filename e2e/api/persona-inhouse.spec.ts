@@ -37,13 +37,13 @@
 // this tenant's token. Not because the server branches on kind (it does not), but because
 // the frontend calls the route differently.
 //
-// NAMING. Named for the SUBJECT rather than a capability: docs/e2e-convention.md:7-25
-// forbids DATED files ("no dayN.spec.ts files") and fixes the organizing AXIS, explicitly
-// leaving the file/directory layout to the implementation (:24-25). A persona-named api
+// NAMING. Named for the SUBJECT rather than a capability: .claude/rules/e2e.md
+// forbids DATED files and fixes the organizing AXIS, explicitly
+// leaving the file/directory layout to the implementation. A persona-named api
 // spec is what makes the asymmetry above visibly closed.
 //
 // ASSERTION DISCIPLINE. All three suites share one deployment with no reset between them
-// (docs/e2e-convention.md "One browser, serial"), and this tenant's counts grow as the run
+// (.claude/rules/e2e.md), and this tenant's counts grow as the run
 // proceeds (topology/persona-surfaces.spec.ts:303-309 leaves >=2 validated invoices behind,
 // and a retried test re-runs against what its first attempt already wrote).
 // So every assertion here is containment by an id/invoice_number THIS FILE created, a

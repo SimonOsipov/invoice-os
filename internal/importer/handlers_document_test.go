@@ -16,9 +16,8 @@
 //	H-08 TestImportRoutes_DocumentAndSpreadsheetDoNotCollide
 //	H-09 TestCreateDocumentHandler_EndToEndOverRealServiceWritesReadableInvoice
 //
-// Run:
-//
-//	.ralph/dbtest.sh ./internal/importer/... -run 'CreateDocumentHandler|ImportRoutes'
+// DB-backed cases: set DATABASE_URL and DATABASE_SUPERUSER_URL to the dev DB (Makefile
+// DEV_DB_APP_URL / DEV_DB_SUPERUSER_URL), then go test -p 1 -count=1 ./internal/importer/...
 package importer
 
 import (

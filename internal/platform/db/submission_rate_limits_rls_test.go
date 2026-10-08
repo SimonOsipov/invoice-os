@@ -8,7 +8,7 @@
 //	    ON DELETE CASCADE, max_per_minute int NOT NULL CHECK (max_per_minute > 0),
 //	    created_at timestamptz NOT NULL DEFAULT now();
 //	    ENABLE + FORCE ROW LEVEL SECURITY, a `tenant_isolation` policy carrying no TO
-//	    clause (applies to every role, docs/migrations.md §4's verbatim template), and
+//	    clause (applies to every role, .claude/rules/db-migrations.md's verbatim template), and
 //	    GRANT SELECT ON submission_rate_limits TO invoice_app — no INSERT/UPDATE/DELETE.
 //
 // Three things about this table differ from its M5-01 siblings and shape the cases below:

@@ -1,0 +1,43 @@
+---
+paths:
+  - "sidecar/docling/**"
+  - "internal/extraction/docling.go"
+  - "internal/extraction/docling_extractor.go"
+  - "internal/extraction/testdata/*.docling.json"
+  - "scripts/ci/docling-*.sh"
+---
+# Docling sidecar
+
+- Keep the `docling[rapidocr]` extra. Bare `docling` ships `rapidocr` without `onnxruntime`, and the first scan fails.
+- Keep `docling-core` and `docling-parse` pinned in `requirements.txt`. Both float and own word segmentation.
+- Bump a pinned docling dependency deliberately and regenerate every golden. Never let a release do it.
+- Install the CPU torch wheel from the PyTorch CPU index. Torch is unavoidable and the CPU wheel drops the CUDA payload.
+- Bake every model into the image at build time. The image runs with `--network none`.
+- Fetch the RapidOCR checkpoints with `fetch_rapidocr_models.py`, not Docling's own prefetch. It verifies SHA-256.
+- Name `DoclingParseV4DocumentBackend` explicitly in `convert.py`. The default v1 backend returns zero tokens for a scan.
+- Keep `test_backend.py` green. It locks the backend and asserts a scanned page reaches the wire with text.
+- Add no Surya or olmOCR weights.
+- Normalise every table box in `geometry.py` by its own `coord_origin` to a top-left `[0,1]` box.
+- Flip a `BOTTOMLEFT` box with `page_height - t` and `page_height - b`. Pass a `TOPLEFT` box through.
+- Raise on an unrecognised origin. Never guess it.
+- Clamp a box past the page edge and log it. Skip a zero-height page.
+- Omit a box that does not exist. Never zero it, because a zero box is a legal box.
+- Give every DOCX token no box. The DOCX path reports `width_pt` and `height_pt` of `0`.
+- Run the sidecar tests as the non-root `appuser`. Root bypasses the permission checks that `test_health.py` relies on.
+- Run them with `docker build --target test -f sidecar/docling/Dockerfile -t docling:test .`, then `docker run --rm -v "$PWD:/repo:ro" -e REPO_ROOT=/repo docling:test`.
+- Mount the repo read-only at `REPO_ROOT`. A missing `REPO_ROOT` fails `test_pins.py` and `test_fixtures.py`, never skips them.
+- Regenerate a docling golden from a fresh image. Run `docker build -f sidecar/docling/Dockerfile -t docling:canary .`, then boot it with `--network none`.
+- Then run `scripts/ci/docling-canary.sh golden dev --update`, where `dev` is the `build.txt` stamp.
+- Pass the fixture and golden paths after the stamp to regenerate any golden other than `native_invoice`.
+- Never regenerate from a stale `docling:canary` tag. The script reads `/healthz` and refuses when `build` differs.
+- Write goldens as raw UTF-8. Go's `json.MarshalIndent` writes no `\uXXXX` escape, so an escaped glyph never round-trips.
+- Run the same command without `--update` to compare. CI does this.
+- Do not accept a local `docling:canary` build as evidence of what the deployed sidecar reads.
+- Time only a document that yields tokens in `docling-bench.sh`. A zero-token read measures the failure path.
+- Leave `EXTRACTOR` unset or `mock` to select `MockExtractor`. `EXTRACTOR=docling` requires `DOCLING_URL`.
+- Keep a missing or malformed `DOCLING_URL` fatal at boot under `EXTRACTOR=docling`. Never fall back to mock.
+- Set `SENTRY_DSN` on production only. `set-sentry-off` blanks it in every fork, and empty means off.
+- Report `sentry` as `on` or `off` in `/healthz`. `fleet-gate` fails a sidecar that omits it.
+- Scrub locals, request bodies, quoted text and third-party log records in `sentryfilter.py`.
+- Make no transaction for `/healthz`, `/readyz` or `/healthz/*`.
+- Send a test event only when `SENTRY_TEST_EVENT` is exactly `true`.

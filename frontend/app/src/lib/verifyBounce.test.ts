@@ -2,6 +2,7 @@
 // Storage is a memory stub because CI's Node 22 has no sessionStorage global.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { mintSignInState } from './signInState'
 import { consumePendingVerify, gatewayVerifyUrl, holdPendingVerify, peekPendingVerify, readVerifyFragment } from './verifyBounce'
 
 const RAW_KEY = 'invoice-os.pendingVerify'
@@ -38,11 +39,13 @@ describe('gatewayVerifyUrl', () => {
 
 describe('pending verify marker', () => {
   it('pendingVerify_holdPeekConsume', () => {
+    mintSignInState(NOW)
     holdPendingVerify(NOW)
     expect(peekPendingVerify(NOW)).toBe(true)
     expect(consumePendingVerify(NOW)).toBe(true)
     expect(consumePendingVerify(NOW)).toBe(false)
 
+    mintSignInState(NOW)
     holdPendingVerify(NOW)
     expect(peekPendingVerify(NOW + TTL)).toBe(false)
     expect(consumePendingVerify(NOW + TTL)).toBe(false)
@@ -52,5 +55,12 @@ describe('pending verify marker', () => {
     expect(peekPendingVerify(NOW)).toBe(false)
     expect(consumePendingVerify(NOW)).toBe(false)
     expect(sessionStorage.getItem(RAW_KEY)).toBeNull()
+  })
+
+  it('pendingVerify_peekFalseOnceAnotherStateIsMinted', () => {
+    mintSignInState(NOW)
+    holdPendingVerify(NOW)
+    mintSignInState(NOW + 1)
+    expect(peekPendingVerify(NOW + 1)).toBe(false)
   })
 })

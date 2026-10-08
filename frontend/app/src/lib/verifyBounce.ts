@@ -1,7 +1,7 @@
 // A confirm-link token bounced from landing, and the one-shot marker that a confirm is pending.
 // Mirrors pendingInvite.ts's versioned-blob, warn-never-throw conventions. Never reads window.location.
 import { landingBase } from '../auth'
-import { SIGN_IN_STATE_TTL_MS } from './signInState'
+import { peekSignInState, SIGN_IN_STATE_TTL_MS } from './signInState'
 
 export const PENDING_VERIFY_KEY = 'invoice-os.pendingVerify'
 const PENDING_VERIFY_SCHEMA_VERSION = 1
@@ -22,18 +22,22 @@ export function landingVerifyFailedUrl(): string | null {
   return base ? `${base}/?verify=failed` : null
 }
 
+// Binds the marker to the sign-in state stored now, so a later sign-in that mints a new state orphans it.
 export function holdPendingVerify(now: number = Date.now()): void {
   try {
-    sessionStorage.setItem(PENDING_VERIFY_KEY, JSON.stringify({ v: PENDING_VERIFY_SCHEMA_VERSION, at: now }))
+    sessionStorage.setItem(
+      PENDING_VERIFY_KEY,
+      JSON.stringify({ v: PENDING_VERIFY_SCHEMA_VERSION, at: now, s: peekSignInState(now) }),
+    )
   } catch (e) {
     console.warn(`[verifyBounce] failed to store marker at "${PENDING_VERIFY_KEY}":`, e)
   }
 }
 
-// True when a live marker is held; leaves the key alone.
+// True when a live marker bound to the stored sign-in state is held; leaves the key alone.
 export function peekPendingVerify(now: number = Date.now()): boolean {
   try {
-    return liveMarker(sessionStorage.getItem(PENDING_VERIFY_KEY), now)
+    return liveMarker(sessionStorage.getItem(PENDING_VERIFY_KEY), now) && boundToStoredState(now)
   } catch (e) {
     console.warn(`[verifyBounce] failed to read marker at "${PENDING_VERIFY_KEY}":`, e)
     return false
@@ -50,6 +54,12 @@ export function consumePendingVerify(now: number = Date.now()): boolean {
     console.warn(`[verifyBounce] failed to consume marker at "${PENDING_VERIFY_KEY}":`, e)
     return false
   }
+}
+
+function boundToStoredState(now: number): boolean {
+  const p = JSON.parse(sessionStorage.getItem(PENDING_VERIFY_KEY) ?? 'null') as { s?: unknown } | null
+  const stored = peekSignInState(now)
+  return stored !== null && p?.s === stored
 }
 
 function liveMarker(raw: string | null, now: number): boolean {

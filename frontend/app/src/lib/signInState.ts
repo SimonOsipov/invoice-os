@@ -76,6 +76,16 @@ export function mintSignInState(now: number = Date.now()): string {
   return s
 }
 
+// The stored state when live; leaves the key alone.
+export function peekSignInState(now: number = Date.now()): string | null {
+  try {
+    return liveState(sessionStorage.getItem(SIGN_IN_STATE_KEY), now)
+  } catch (e) {
+    console.warn(`[signInState] failed to read state at "${SIGN_IN_STATE_KEY}":`, e)
+    return null
+  }
+}
+
 // One-shot: removes the key whatever it held, returns the state only when live.
 export function consumeSignInState(now: number = Date.now()): string | null {
   try {

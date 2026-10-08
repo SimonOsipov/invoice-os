@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, expectTypeOf, it, onTestFinish
 import { APP_PERSONAS, type Me, type Session } from './auth'
 import { captureDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
-import { ensureSignInState } from './lib/signInState'
+import { ensureSignInState, mintSignInState } from './lib/signInState'
 import { holdPendingVerify } from './lib/verifyBounce'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { SUGGESTED_RULES } from './lib/rules'
@@ -1031,6 +1031,21 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     configure()
     localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
     holdPendingVerify(Date.now() - 11 * 60 * 1000)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(toast()).toBeNull()
+  })
+
+  it('an abandoned confirm, then an unrelated hand-off over a live session, shows no notice', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    ensureSignInState()
+    holdPendingVerify()
+    mintSignInState()
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     interceptHref()
     await bootApp()

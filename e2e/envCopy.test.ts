@@ -13,7 +13,8 @@ import { FORBIDDEN_STRINGS, RETIRED_LANDING_COPY } from './envCopyStrings'
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-const SPA_FLOORS = { app: 20, landing: 20, 'ops-console': 20, 'support-console': 20, library: 8 } as const
+// library floor sits ~3 under its 21 files, so losing a src dir trips it (8 would not).
+const SPA_FLOORS = { app: 20, landing: 20, 'ops-console': 20, 'support-console': 20, library: 18 } as const
 
 // The complete exception: a test file necessarily quotes the strings it guards. Nothing else
 // is excepted — comments and frontend/landing are both in scope (AC-6/AC-7).

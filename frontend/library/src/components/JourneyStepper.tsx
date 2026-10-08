@@ -8,6 +8,7 @@ type JourneyStepperProps = { route: Route; onGroup: (g: Group) => void; tourStag
 export function JourneyStepper({ route, onGroup, tourStage }: JourneyStepperProps) {
   return (
     <div
+      data-testid="lib-stepper"
       className="lib-px"
       style={{
         position: 'sticky',

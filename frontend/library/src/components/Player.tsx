@@ -22,14 +22,14 @@ export function Player({ feature, clock, onToggle, onSeek }: {
   const total = Math.round(n * STEP_SECONDS * 10)
   const showPlay = !clock.playing && !clock.ended
   return (
-    <div style={{ borderRadius: 10, overflow: 'hidden', background: 'var(--surface)', boxShadow: 'var(--shadow-elegant)' }}>
+    <div data-testid="lib-player" style={{ borderRadius: 10, overflow: 'hidden', background: 'var(--surface)', boxShadow: 'var(--shadow-elegant)' }}>
       <div style={{ padding: '28px 28px 0' }}>
         <div style={{ background: 'var(--card)', borderRadius: 8, overflow: 'hidden', color: 'var(--ink)' }}>
           <div style={{ height: 36, display: 'flex', alignItems: 'center', gap: 14, padding: '0 14px', background: 'var(--muted)', borderBottom: '1px solid var(--border)' }}>
             <span style={{ display: 'flex', gap: 6 }}>{dot}{dot}{dot}</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--muted-foreground)', letterSpacing: '0.03em' }}>{sc.win}</span>
           </div>
-          <div style={{ position: 'relative', height: 350, padding: '20px 22px', overflow: 'hidden' }}>
+          <div data-testid="lib-scene" style={{ position: 'relative', height: 350, padding: '20px 22px', overflow: 'hidden' }}>
             <SceneView sc={sc} idx={idx} size="player" />
           </div>
         </div>

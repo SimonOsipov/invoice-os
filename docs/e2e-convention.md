@@ -50,11 +50,11 @@ or `pageerror` during a journey fails it).
 ## One browser, serial
 
 **chromium-only, `workers: 1` per unit.** No multi-browser matrix. The api suite and each
-topology unit run serial on one worker. Topology runs as four units in parallel, as listed
+topology unit run serial on one worker. Topology runs as five units in parallel, as listed
 in `e2e/topology/shards.ts`: a `serial-lane` of the specs that stay on the seeded persona
 tenants (1111 / 2222), plus one shard per big file
 (`import-wizard`, `import-wizard-2`, `invoice-surfaces`), each on its own seeded tenant pair
-(`db/seed.e2e-shards.sql`). The import-wizard tests run as two files, split for time:
+(`db/seed.e2e-shards.sql`), and a `library` unit (`library.spec.ts`) that reads the public Library and uses no tenant. The import-wizard tests run as two files, split for time:
 `import-wizard.spec.ts` (unit `import-wizard`) and `import-wizard-2.spec.ts` (unit
 `import-wizard-2`). The helpers both use live in `e2e/topology/importWizardShared.ts`.
 `playwright.topology.config.ts` builds one project per unit, and `--project=<unit>` runs one.

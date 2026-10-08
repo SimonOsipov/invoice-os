@@ -67,7 +67,7 @@ export function FeaturePage({ group, feature, openHref, onGroup, onFeature }: Fe
       <Player feature={feature} clock={clock} onToggle={() => dispatch({ type: 'toggle' })} onSeek={(frac) => dispatch({ type: 'seek', frac })} />
 
       {/* why: 260px keeps both panels side by side in the 1280 column */}
-      <div className="lib-cols" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 40, alignItems: 'start' }}>
+      <div data-testid="lib-panels" className="lib-cols" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 40, alignItems: 'start' }}>
         <div style={panel}>
           <div className="t-eyebrow">What you get</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

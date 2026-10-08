@@ -51,7 +51,7 @@ post-deploy verification steps of `.github/workflows/dev-env.yml`, on every read
 environment (M4-23) and its Postgres is bootstrapped + seeded fresh at gateway boot
 (M4-21-04), alongside the smoke and api suites. The `e2e` job runs smoke then api; the
 `topology` job then runs the topology suite as parallel units, one matrix leg each
-(`serial-lane`, `import-wizard`, `import-wizard-2`, `invoice-surfaces`, from `e2e/topology/shards.ts`). `dev-env.yml` flow:
+(`serial-lane`, `import-wizard`, `import-wizard-2`, `invoice-surfaces`, `library`, from `e2e/topology/shards.ts`). `dev-env.yml` flow:
 
 ```
 deploy-slot ──> wait until fewer than 2 other PR runs hold a Railway deploy slot (a

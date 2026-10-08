@@ -27,7 +27,8 @@ const notice = (page: Page): Locator => page.getByRole('region', { name: 'Cookie
 async function openLibrary(page: Page, path = '/', expectNotice = true): Promise<void> {
   const response = await page.goto(`${LIBRARY_URL}${path}`)
   expect(response?.ok(), `${LIBRARY_URL}${path} did not answer 2xx`).toBeTruthy()
-  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+  // Only the home route has an h1; group and feature pages open on an h2.
+  await expect(page.locator('#lib-main').getByRole('heading').first()).toBeVisible()
   if (expectNotice) await expect(notice(page)).toBeVisible()
   else await expect(notice(page)).toHaveCount(0)
   await page.evaluate(() => document.fonts.ready.then(() => true))
@@ -108,6 +109,8 @@ test('library consent: the fork bakes an id and still never requests the tag', a
   await page.waitForLoadState('networkidle')
   await notice(page).getByRole('button', { name: 'Accept' }).click()
   await expect(notice(page)).toHaveCount(0)
+  const stored = await page.evaluate((key) => window.localStorage.getItem(key), CONSENT_KEY)
+  expect(stored, 'Accept stored no consent, so the post-Accept request check would be vacuous').toContain('"analytics":true')
   await openLibrary(page, '/rules', false)
   await page.waitForLoadState('networkidle')
   expect(tagRequests, 'the library requested the GA4 tag on a non-production host').toEqual([])

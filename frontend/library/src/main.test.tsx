@@ -5,13 +5,14 @@ import { CrashBoundary } from '@invoice-os/monitoring'
 
 const h = vi.hoisted(() => {
   const render = vi.fn()
-  return { render, initMonitoring: vi.fn(), createRoot: vi.fn(() => ({ render })), initsBeforeMark: -1 }
+  return { render, boot: vi.fn(), initMonitoring: vi.fn(), createRoot: vi.fn(() => ({ render })), initsBeforeMark: -1 }
 })
 
 vi.mock('@invoice-os/monitoring', () => ({
   initMonitoring: h.initMonitoring,
   CrashBoundary: () => null,
 }))
+vi.mock('./analytics', () => ({ bootLibraryAnalytics: h.boot }))
 vi.mock('react-dom/client', () => ({ createRoot: h.createRoot }))
 // Evaluated when main.tsx's own import runs: counts inits that ran before it.
 vi.mock('@invoice-os/design-tokens/v2/assets/mark.png', () => {
@@ -31,6 +32,8 @@ describe('main', () => {
     expect(h.initMonitoring.mock.invocationCallOrder[0]).toBeLessThan(h.createRoot.mock.invocationCallOrder[0])
 
     expect(h.render).toHaveBeenCalledTimes(1)
+    expect(h.boot).toHaveBeenCalledTimes(1)
+    expect(h.render.mock.invocationCallOrder[0]).toBeLessThan(h.boot.mock.invocationCallOrder[0])
     const root = h.render.mock.calls[0][0] as ReactElement<{ children: ReactElement<{ brand: ReactElement<{ src?: unknown }> }> }>
     expect(root.type).toBe(StrictMode)
     const boundary = root.props.children

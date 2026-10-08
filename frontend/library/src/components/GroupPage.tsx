@@ -1,3 +1,4 @@
+import { trackOpenInPlatform } from '../analytics'
 import { GROUPS } from '../content'
 import type { Feature, Group } from '../types'
 import { Icon } from '../icons'
@@ -24,7 +25,7 @@ export function GroupPage({ group, openHref, onFeature }: GroupPageProps) {
         </p>
         {openHref && (
           <div style={{ marginTop: 4 }}>
-            <Button variant="outline" size="sm" arrow href={openHref}>
+            <Button variant="outline" size="sm" arrow href={openHref} onClick={() => trackOpenInPlatform({ group_id: group.id })}>
               Open in Platform
             </Button>
           </div>

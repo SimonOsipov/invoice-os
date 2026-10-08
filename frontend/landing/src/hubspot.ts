@@ -10,6 +10,9 @@ import { ApiError, reportApiFailure } from '@invoice-os/api-client'
 /** The hostnames that ARE the real production landing site. Exact match only. */
 export const PRODUCTION_HOSTNAMES: readonly string[] = ['www.ascomply.com']
 
+/** The Feature Library's host, passed to the GA4 gate by the library only. */
+export const LIBRARY_HOSTNAMES: readonly string[] = ['library.ascomply.com']
+
 export type HubSpotTarget = { portalId: string; formGuid: string }
 
 const normaliseHost = (hostname: string): string => hostname.trim().toLowerCase()

@@ -101,7 +101,7 @@ func handoffVerify(authURL, site *url.URL, sink gateway.ContactSink) http.Handle
 	return handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink).Verify
 }
 
-// One handoffHandlers call builds the verify and exchange handlers over one store (LOGFIX-04 D16).
+// One handoffHandlers call builds the verify and exchange handlers over one store.
 func TestHandoffHandlers_VerifyCodeRedeemsThroughExchange(t *testing.T) {
 	const prefix = "https://site.example/?verified=1&handoff="
 	site, _ := url.Parse("https://site.example")

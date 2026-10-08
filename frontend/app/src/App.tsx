@@ -1816,7 +1816,13 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
 export default function App() {
   const [bootSession] = useState(() => resolveBootSession())
   // A live stored hand-off session wins over `?handoff=`, unless an invite is held: the user signed in again to accept it.
-  const [liveHandoff] = useState(() => isLiveHandoffSession(bootSession) && peekPendingInvite() === null)
+  // A pending confirm also keeps a renewable session whose access token has expired.
+  const [liveHandoff] = useState(
+    () =>
+      (isLiveHandoffSession(bootSession) ||
+        (bootSession?.handoff === true && readHandoffCode(window.location.search) !== null && peekPendingVerify())) &&
+      peekPendingInvite() === null,
+  )
   // Set while a held invite's code overrides a live stored session: a refusal leaves that session stored.
   const [overridesLive] = useState(() => !liveHandoff && isLiveHandoffSession(bootSession))
   // An unconfigured gateway ignores the code (it is still stripped).
@@ -1838,7 +1844,7 @@ export default function App() {
   const [startInvite] = useState(() => (authStart ? readInviteFragment(window.location.hash) : null))
   const startBounced = useRef(false)
   // `?auth=verify#token=T`: landing forwards a confirm link. `?handoff=` wins over it.
-  const [authVerify] = useState(
+  const [authVerify, setAuthVerify] = useState(
     () => readHandoffCode(window.location.search) === null && new URLSearchParams(window.location.search).get('auth') === 'verify',
   )
   // Read before the strip effect drops the hash.
@@ -2123,12 +2129,29 @@ export default function App() {
       verifyBounced.current = true
       if (verifyToken && base) holdPendingVerify()
       window.location.href = dest
+    } else {
+      // Nowhere to bounce to: fall through to the normal front door.
+      setAuthVerify(false)
     }
   }, [authVerify, verifyToken])
 
-  // The marker only switches the notice on; a shown notice spends it.
+  // Back from the confirm page restores this page from the bfcache with the bounce already spent.
   useEffect(() => {
-    if (verifyConfirmedNotice !== null) consumePendingVerify()
+    if (!authVerify) return
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return
+      consumePendingVerify()
+      setAuthVerify(false)
+    }
+    window.addEventListener('pageshow', onPageShow)
+    return () => window.removeEventListener('pageshow', onPageShow)
+  }, [authVerify])
+
+  // A shown notice spends the marker and the sign-in state, so B's code cannot be redeemed in this tab later.
+  useEffect(() => {
+    if (verifyConfirmedNotice === null) return
+    consumePendingVerify()
+    consumeSignInState()
   }, [])
 
   // The single front door. Any sessionless visit — never signed in, signed out, session

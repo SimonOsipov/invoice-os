@@ -1092,6 +1092,37 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
   })
 
+  it('a verify code over a renewable session with an expired access token keeps A', async () => {
+    configure()
+    meReply = ok(A_ME)
+    refreshReply = ok({
+      access_token: jwt(A_ME.user.id, nowSec() + 7200, { iat: nowSec(), app_metadata: { tenant_id: A_ME.tenant.id } }),
+      refresh_token: 'R1',
+    })
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect((storedRecord()?.me as Me | undefined)?.user.id).toBe(A_ME.user.id)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
+  it('the confirm spends the sign-in state, so a later hand-off with no session cannot redeem as B', async () => {
+    const S = await bootOverLive(A_ME)
+    await settle()
+    expect(storedState()).toBeNull()
+    expect(ensureSignInState()).not.toBe(S)
+  })
+
   it('the confirmed notice renders the email as text', async () => {
     await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: '<b id="x">a</b>@corp.example' } })
     expect(toast()?.querySelector('#x')).toBeNull()

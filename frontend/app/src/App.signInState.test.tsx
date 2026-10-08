@@ -507,6 +507,27 @@ describe('?auth=verify opens the gateway confirm page (LOGFIX-04-05)', () => {
     expect(boot(`/?auth=verify#token=${T}`)).toEqual(['https://landing.example/?verify=failed'])
   })
 
+  it('auth=verify with a bad token and no landing falls through to the picker, not a blank page', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    const hrefWrites = boot('/?auth=verify')
+    expect(hrefWrites).toEqual([])
+    expect(document.body.textContent).not.toBe('')
+  })
+
+  it('a bfcache restore of the spent verify bounce leaves the blank page for the front door', () => {
+    configure()
+    const hrefWrites = boot(`/?auth=verify#token=${T}`)
+    expect(hrefWrites).toHaveLength(1)
+    act(() => {
+      const e = new Event('pageshow') as PageTransitionEvent
+      Object.defineProperty(e, 'persisted', { value: true })
+      window.dispatchEvent(e)
+    })
+    expect(hrefWrites).toHaveLength(2)
+    expect(hrefWrites[1]).toMatch(/^https:\/\/landing\.example\/\?state=/)
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+  })
+
   it('App adversarial: a URL state beside auth=verify is never adopted', () => {
     configure()
     const hrefWrites = boot(`/?auth=verify&state=${X}#token=${T}`)

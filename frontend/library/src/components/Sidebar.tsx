@@ -135,7 +135,7 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour, t
           <Icon name="layout-dashboard" size={17} />
           <span style={{ flex: 1 }}>Overview</span>
         </button>
-        <div className="t-meta" style={{ padding: '16px 10px 8px', color: 'var(--fg-4)', fontSize: 10, letterSpacing: '0.1em' }}>
+        <div className="t-meta lib-navlabel" style={{ padding: '16px 10px 8px', color: 'var(--fg-4)', fontSize: 10, letterSpacing: '0.1em' }}>
           FEATURE GROUPS
         </div>
         {GROUPS.map((g) => {
@@ -163,6 +163,7 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour, t
               </button>
               {open && (
                 <div
+                  className="lib-subnav"
                   style={{
                     display: 'flex',
                     flexDirection: 'column',

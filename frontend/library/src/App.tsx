@@ -10,11 +10,13 @@ import { demoHref, featurePlatformHref, groupPlatformHref } from './links'
 import { libraryPath, parseLibraryPath, type Route } from './route'
 import { TOUR_START, tourBack, tourButtonLabel, tourNext, tourStage, type TourState } from './tour'
 import type { Feature, Group } from './types'
+import { usePhone } from './phone'
 import { useTourSpot } from './useTourSpot'
 
 const toTop = () => {
   const main = document.getElementById('lib-main')
   if (main) main.scrollTop = 0
+  document.documentElement.scrollTop = 0
 }
 
 export function App() {
@@ -22,6 +24,8 @@ export function App() {
   // Re-clicking the open feature remounts its page, so the demo restarts.
   const [visit, setVisit] = useState(0)
   const [tour, setTour] = useState<TourState | null>(null)
+  const phone = usePhone()
+  const tourOn = tour !== null && !phone
 
   useEffect(() => {
     const onPop = () => {
@@ -69,7 +73,7 @@ export function App() {
     const feature = GROUPS.flatMap((g) => g.feats).find((f) => f.id === TOUR[t.i].f)
     if (feature) goFeature(feature)
   }
-  const { rect, win } = useTourSpot(tour, libraryPath(route))
+  const { rect, win } = useTourSpot(tourOn ? tour : null, libraryPath(route))
 
   return (
     <div
@@ -90,12 +94,12 @@ export function App() {
         onHome={goHome}
         onGroup={goGroup}
         onFeature={goFeature}
-        tourLabel={tourButtonLabel(tour)}
-        onTour={toggleTour}
+        tourLabel={tourButtonLabel(tourOn ? tour : null)}
+        onTour={phone ? null : toggleTour}
       />
       <main id="lib-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}>
-        <JourneyStepper route={route} onGroup={goGroup} tourStage={tour ? tourStage(tour) : undefined} />
-        {route.view === 'home' && <Home demoHref={demo} onGroup={goGroup} onTour={startTour} />}
+        <JourneyStepper route={route} onGroup={goGroup} tourStage={tourOn ? tourStage(tour) : undefined} />
+        {route.view === 'home' && <Home demoHref={demo} onGroup={goGroup} onTour={phone ? null : startTour} />}
         {route.view === 'group' && (
           <GroupPage
             group={route.group}
@@ -114,7 +118,7 @@ export function App() {
           />
         )}
       </main>
-      {tour && (
+      {tourOn && (
         <TourOverlay
           tour={tour}
           rect={rect}

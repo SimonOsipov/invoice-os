@@ -31,3 +31,14 @@ a:hover { color: var(--teal); }
 .lib-card:hover { border-color: var(--primary) !important; }
 .lib-play:hover { filter: brightness(1.06); }
 .lib-back:hover { color: var(--teal) !important; }
+
+@media (max-width: 767px) {
+  .asc-app { flex-direction: column !important; height: auto !important; min-height: 100vh; overflow: visible !important; }
+  .asc-app > aside { width: 100% !important; border-right: 0 !important; border-bottom: 1px solid var(--surface-panel-border); }
+  .asc-app > aside nav { flex: none !important; flex-direction: row !important; overflow-x: auto !important; overflow-y: hidden !important; }
+  .asc-app > aside nav button { width: auto !important; flex: none; white-space: nowrap; }
+  .lib-subnav, .lib-navlabel { display: none !important; }
+  #lib-main { flex: none !important; overflow-y: visible !important; }
+  .lib-px { padding-left: 20px !important; padding-right: 20px !important; }
+  .lib-cols { grid-template-columns: minmax(0, 1fr) !important; }
+}

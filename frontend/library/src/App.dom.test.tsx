@@ -3,7 +3,7 @@ import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
-import { GROUPS, TOUR } from './content'
+import { GROUPS, STAGES, TOUR } from './content'
 import { CALLOUT_H, CALLOUT_W } from './tour'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -718,5 +718,82 @@ describe('App tour', () => {
       expect(box(spotlight())[1]).toBe(192 + n * 10)
       if (n < TOUR.length - 1) click(btn('Next'))
     }
+  })
+})
+
+describe('App on a phone', () => {
+  type Stub = { matches: boolean; asked: string[]; listeners: Set<() => void> }
+  let stub: Stub
+  const install = (matches: boolean) => {
+    stub = { matches, asked: [], listeners: new Set() }
+    window.matchMedia = ((query: string) => {
+      stub.asked.push(query)
+      return {
+        get matches() {
+          return stub.matches
+        },
+        media: query,
+        addEventListener: (_: string, fn: () => void) => stub.listeners.add(fn),
+        removeEventListener: (_: string, fn: () => void) => stub.listeners.delete(fn),
+      }
+    }) as unknown as typeof window.matchMedia
+  }
+  const flip = (matches: boolean) =>
+    act(() => {
+      stub.matches = matches
+      stub.listeners.forEach((fn) => fn())
+    })
+  const tourButtons = () => [...container.querySelectorAll<HTMLElement>('button')].filter((b) => b.textContent === 'Take the tour' || b.classList.contains('lib-tour'))
+  const overlay = () => container.querySelector<HTMLElement>('.asc-app > div:last-child:not(aside):not(main)')
+  const btn = (label: string) => [...container.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent === label)!
+
+  afterEach(() => {
+    delete (window as { matchMedia?: unknown }).matchMedia
+  })
+
+  it('PH-05 a phone renders no tour button', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://example.test')
+    install(true)
+    mount('/')
+    expect(stub.asked).toContain('(max-width: 767px)')
+    expect(container.querySelector('.lib-tour')).toBeNull()
+    expect(tourButtons()).toHaveLength(0)
+    expect(container.querySelector('aside nav')).not.toBeNull()
+    expect(container.querySelectorAll('.lib-stage').length).toBeGreaterThan(0)
+    expect(links('Book the Demo').length).toBeGreaterThan(0)
+    act(() => root.unmount())
+    container.remove()
+    install(false)
+    mount('/')
+    expect(tourButtons()).toHaveLength(2)
+  })
+
+  it('PH-06 a tour in progress hides on a phone and returns at the same step', () => {
+    install(false)
+    mount('/')
+    click(container.querySelector<HTMLElement>('button.lib-tour')!)
+    click(btn('Next'))
+    const step = () => overlay()?.querySelector('.t-step')?.textContent
+    expect(step()).toBe('STEP 02 OF 14')
+    flip(true)
+    expect(overlay()).toBeNull()
+    expect(container.querySelector('.lib-tour')).toBeNull()
+    expect([...container.querySelectorAll('.lib-stage[aria-current]')].map((e) => e.textContent!.slice(2))).toEqual([STAGES.find(([, gid]) => gid === TOUR[0].g)![0]])
+    flip(false)
+    expect(step()).toBe('STEP 02 OF 14')
+    act(() => root.unmount())
+    expect(stub.listeners.size).toBe(0)
+    container = document.createElement('div')
+    root = createRoot(container)
+  })
+
+  it('PH-07 navigating resets the document scroll as well as the main', () => {
+    install(true)
+    mount('/')
+    main().scrollTop = 500
+    document.documentElement.scrollTop = 500
+    click(nav('audit'))
+    expect(main().scrollTop).toBe(0)
+    expect(document.documentElement.scrollTop).toBe(0)
   })
 })

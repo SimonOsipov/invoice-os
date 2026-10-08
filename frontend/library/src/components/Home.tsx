@@ -8,7 +8,7 @@ type HomeProps = { demoHref: string | null; onGroup: (g: Group) => void; onTour:
 export function Home({ demoHref, onGroup, onTour }: HomeProps) {
   return (
     <>
-      <section style={{ position: 'relative', padding: '72px 40px 80px', overflow: 'hidden' }}>
+      <section className="lib-px" style={{ position: 'relative', padding: '72px 40px 80px', overflow: 'hidden' }}>
         <div className="hero-grid hero-grid-fade" style={{ position: 'absolute', inset: 0, opacity: 0.7 }} />
         <div style={{ position: 'relative', maxWidth: 880, display: 'flex', flexDirection: 'column', gap: 24 }}>
           <div className="t-eyebrow">Feature library</div>
@@ -39,7 +39,7 @@ export function Home({ demoHref, onGroup, onTour }: HomeProps) {
         </div>
       </section>
 
-      <section style={{ background: 'var(--sage)', padding: '80px 40px' }}>
+      <section className="lib-px" style={{ background: 'var(--sage)', padding: '80px 40px' }}>
         <div style={{ maxWidth: 1120, display: 'flex', flexDirection: 'column', gap: 40 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 640 }}>
             <div className="t-eyebrow">The library</div>
@@ -50,7 +50,7 @@ export function Home({ demoHref, onGroup, onTour }: HomeProps) {
               Each group has two or three demos recorded on the sample companies in the platform, with the steps captioned.
             </p>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
+          <div className="lib-cols" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
             {GROUPS.map((g) => (
               <button
                 key={g.id}
@@ -110,7 +110,7 @@ export function Home({ demoHref, onGroup, onTour }: HomeProps) {
         </div>
       </section>
 
-      <section style={{ background: 'var(--peach-band)', padding: '72px 40px' }}>
+      <section className="lib-px" style={{ background: 'var(--peach-band)', padding: '72px 40px' }}>
         <div
           style={{
             maxWidth: 1120,

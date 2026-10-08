@@ -867,7 +867,7 @@ describe('library feature page', () => {
     expect(icons).toHaveLength(3)
     icons.forEach((i) => expect(attr(p[p.indexOf(i) + 1], 'width')).toBe('18'))
     rows.forEach((r) => expect(style(r).color).toBe('var(--foreground)'))
-    const grid = where(ts, (s) => s['grid-template-columns'] === 'repeat(auto-fit, minmax(280px, 1fr))')
+    const grid = where(ts, (s) => s['grid-template-columns'] === 'repeat(auto-fit, minmax(260px, 1fr))')
     expect(grid).toHaveLength(1)
     expect(style(grid[0]).gap).toBe('40px')
   })

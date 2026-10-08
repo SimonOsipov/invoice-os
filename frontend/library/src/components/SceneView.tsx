@@ -125,7 +125,8 @@ function FormView({ s, size }: { s: Of<'form'>; size: Size }) {
     f.focused ? '1.5px solid var(--accent)' : f.mark === 'low' ? '1.5px dashed var(--status-amber-text)' : '1.5px solid transparent'
 
   if (thumb) {
-    const nf = s.doc ? 3 : 4
+    // why: doc+msg thumbnail overflows its 4:3 box with 3 fields
+    const nf = s.doc ? (msg ? 2 : 3) : 4
     return (
       <div style={{ display: 'grid', gridTemplateColumns: s.doc ? '0.85fr 1.15fr' : '1fr', gap: 10, alignItems: 'start' }}>
         {s.doc && (
@@ -197,7 +198,8 @@ function FormView({ s, size }: { s: Of<'form'>; size: Size }) {
         </div>
       )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-        {s.fields.map((f) => {
+        {/* why: 5 fields plus the message overflow the player scene box */}
+        {(msg ? s.fields.slice(0, 4) : s.fields).map((f) => {
           const mk = f.mark ? MK[f.mark] : null
           return (
             <div key={f.l} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

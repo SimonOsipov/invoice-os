@@ -123,8 +123,14 @@ func TestVerify_CodeRefusesAnotherStateAndASecondUse(t *testing.T) {
 		t.Fatalf("two clicks minted the same code %q", good)
 	}
 
-	if rec := vhExchange(store, spoiled, vhOtherState); rec.Code != http.StatusBadRequest {
+	rec := vhExchange(store, spoiled, vhOtherState)
+	if rec.Code != http.StatusBadRequest {
 		t.Errorf("exchange with another state = %d, want 400", rec.Code)
+	}
+	for _, s := range []string{sessionAT, sessionRT} {
+		if strings.Contains(rec.Body.String(), s) {
+			t.Errorf("refusal body carries %q: %s", s, rec.Body.String())
+		}
 	}
 	if rec := vhExchange(store, spoiled, vhState); rec.Code != http.StatusBadRequest {
 		t.Errorf("exchange of a code spent by a wrong state = %d, want 400", rec.Code)
@@ -337,5 +343,42 @@ func TestVerify_RefusalLogsTheGoTrueErrorCode(t *testing.T) {
 	}
 	if n := storeMapEntries(store); n != 0 {
 		t.Errorf("store holds %d codes after a refusal, want 0", n)
+	}
+}
+
+// Three clicks, two states: each code redeems its own click's session, for its own state only.
+// A repeated state field binds the first value, as the token and type do.
+func TestVerify_EachCodeRedeemsItsOwnClickSession(t *testing.T) {
+	var n atomic.Int32
+	gotrue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		i := n.Add(1)
+		_, _ = w.Write([]byte(`{"access_token":"at-` + string(rune('0'+i)) + `","refresh_token":"rt-` + string(rune('0'+i)) + `","user":{}}`))
+	}))
+	t.Cleanup(gotrue.Close)
+	authURL, err := url.Parse(gotrue.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := testHandoffStore()
+	h := VerifyHandler(authURL, siteURL(t), testClient(), nopLog(), nil, store)
+
+	first := vhCode(t, vhClick(h, vhState))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, verifyRequest(context.Background(), verifyQuery+"&state="+vhOtherState+"&state="+vhState))
+	second := vhCode(t, rec)
+
+	if rec := vhExchange(store, second, vhState); rec.Code != http.StatusBadRequest {
+		t.Errorf("second code with the later repeated state = %d, want 400", rec.Code)
+	}
+	third := vhCode(t, vhClick(h, vhOtherState))
+	for _, c := range []struct{ code, state, want string }{
+		{first, vhState, `{"access_token":"at-1","refresh_token":"rt-1"}`},
+		{third, vhOtherState, `{"access_token":"at-3","refresh_token":"rt-3"}`},
+	} {
+		rec := vhExchange(store, c.code, c.state)
+		if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != c.want {
+			t.Errorf("exchange = %d %q, want 200 %s", rec.Code, rec.Body.String(), c.want)
+		}
 	}
 }

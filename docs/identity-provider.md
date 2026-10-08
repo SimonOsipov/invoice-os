@@ -327,8 +327,11 @@ scope, or `/token` with any other grant) is reachable from outside.
    than `AUTH_REGISTER_MIN_RESPONSE` after the request reached the handler, so a new address
    and a known one take the same time while GoTrue answers faster than that (see Ceilings).
 2. The link targets `GOTRUE_MAILER_URLPATHS_CONFIRMATION`, which is the gateway's
-   `GET /auth/verify`, a page with one confirm button. A relative value would resolve against `API_EXTERNAL_URL`, a private
-   host, so production sets an absolute URL.
+   `GET /auth/verify`. A relative value would resolve against `API_EXTERNAL_URL`, a private
+   host, so production sets an absolute URL. The mail link carries no `state`, so the gateway
+   answers 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>` and does not call GoTrue
+   (`TestVerifyPage_StatelessOpenBouncesToLanding`). The same request with a `state` of 43
+   base64url characters gets a page with one confirm button (`TestVerifyPage_StateRendersAsHiddenField`).
 
    The confirmation mail is the branded template (`internal/accountmail`) that GoTrue fetches
    from `GOTRUE_MAILER_TEMPLATES_CONFIRMATION`, the gateway's public
@@ -352,13 +355,13 @@ scope, or `/token` with any other grant) is reachable from outside.
 3. The registrant opens the link and clicks "Confirm my email". The button submits a form to
    `POST /auth/verify`, which posts `{"type":"signup","token_hash":<token>}` to GoTrue
    `/verify`, and redirects the browser to `AUTH_SITE_URL`. Opening the link verifies nothing.
-   No token reaches a landing URL.
+   The token reaches a landing URL only in the fragment of the stateless bounce, never in a query.
 4. When the form carries the tab's `state` and GoTrue's answer holds both tokens, the gateway
    stores the session in the hand-off store and redirects to `?verified=1&handoff=<code>`;
    the tab redeems the code at `POST /auth/exchange` with its state (see Sign-in and hand-off).
    Without a state, with a session-less answer or with a full store, the redirect is
-   `?verified=1` and the user signs in through `POST /auth/sign-in`. The first token carries no tenant: the
-   access-token hook projects a tenant only for exactly one active membership.
+   `?verified=1` and the user signs in through `POST /auth/sign-in`. The first token carries no
+   tenant: the access-token hook projects a tenant only for exactly one active membership.
 5. With that tenant-less token the client calls `POST /api/tenancy/v1/workspaces`
    `{"workspace_name","display_name","kind"?}`. The gateway lets a tenant-less token through
    on this method and path and on three more routes only: `POST /api/tenancy/v1/invitations/accept`,
@@ -508,7 +511,8 @@ The `/api/` router answers 404 for any path whose first segment after the servic
 
 | Outcome | Answer |
 |---|---|
-| a `token` of 1 to 256 bytes and `type=signup` | 200 `text/html`: one form with the token and type as hidden fields and a "Confirm my email" button; GoTrue is not called |
+| a `token` of 1 to 256 bytes, `type=signup` and a `state` of 43 base64url characters | 200 `text/html`: one form with the token, type and state as hidden fields and a "Confirm my email" button; GoTrue is not called |
+| a `token` of 1 to 256 bytes, `type=signup` and no or a malformed `state` | 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>`; no page; GoTrue is not called |
 | an empty or over-long `token`, or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; no page |
 | HEAD | as GET, without the body |
 | any method but GET, HEAD and POST | 405 from the router, `Allow: GET, HEAD, POST` |
@@ -517,22 +521,22 @@ The `/api/` router answers 404 for any path whose first segment after the servic
 The page handler holds no GoTrue client. It sets `Cache-Control: no-store`,
 `Referrer-Policy: no-referrer` and a `Content-Security-Policy` that allows one inline script by
 its hash. The script blocks a second submit of the form. The page reveals nothing beyond the
-token. `redirect_to` and every other query value are ignored and never rendered. The page shape
+token and the state. `redirect_to` and every other query value are ignored and never rendered. The page shape
 is fixed for the signup link; whether other links can reuse it is unmeasured.
 
-**`POST /auth/verify`** (the act), form `token=…&type=signup`, outside `/api/`:
+**`POST /auth/verify`** (the act), form `token=…&type=signup&state=…`, outside `/api/`:
 
 | Outcome | Answer |
 |---|---|
 | GoTrue `/verify` 200 with both tokens and a form `state` of 43 base64url characters | 303 to `<AUTH_SITE_URL>/?verified=1&handoff=<code>`; the session is stored once in the hand-off store; one contact hand-off |
-| GoTrue `/verify` 200 with no or a malformed `state`, a missing token, or a full hand-off store (WARN `verify: hand-off store full`) | 303 to `<AUTH_SITE_URL>/?verified=1`, no code; one contact hand-off |
+| GoTrue `/verify` 200 with no or a malformed `state`, no access token or no refresh token, or a full hand-off store (WARN `verify: hand-off store full`) | 303 to `<AUTH_SITE_URL>/?verified=1`, no code; one contact hand-off |
 | a form that does not parse, is over 1 KiB, is not `application/x-www-form-urlencoded`, or carries an empty or over-256-byte `token` or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; GoTrue is not called |
 | a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, logged at WARN (the upstream status and GoTrue's `error_code`, or the error) |
 | any method but GET, HEAD and POST | 405 from the router, `Allow: GET, HEAD, POST`; GoTrue is not called |
 | any method but POST, sent to the handler | 405 `{"error":"method not allowed"}`, `Allow: POST`; GoTrue is not called |
 | `AUTH_SITE_URL` unset | 503 `registration is not configured` |
 
-The handler reads the token from the form body only, never from the URL, and sets
+The handler reads the token and the state from the form body only, never from the URL, and sets
 `Cache-Control: no-store`. The route sets no CORS headers and carries no CSRF token: it uses no
 cookie, and whoever holds the token can already post it. The redirect target is always the
 gateway's own `AUTH_SITE_URL`.

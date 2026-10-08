@@ -571,6 +571,8 @@ func TestVerify_FormWinsOverQuery(t *testing.T) {
 		{"first form token wins", "/auth/verify", "token=" + verifyToken + "&token=second-token&type=signup", verifyToken},
 		{"first form type wins, signup", "/auth/verify", "token=" + verifyToken + "&type=signup&type=recovery", verifyToken},
 		{"first form type wins, recovery", "/auth/verify", "token=" + verifyToken + "&type=recovery&type=signup", ""},
+		// A state in the URL mints no code: verifiedLocation is the no-code answer.
+		{"state only in the query", "/auth/verify?state=" + vhState, "token=" + verifyToken + "&type=signup", verifyToken},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtSession)

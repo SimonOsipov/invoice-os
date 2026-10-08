@@ -814,7 +814,8 @@ describe('library feature page', () => {
     expect(renderToStaticMarkup(createElement(FeaturePage, { group: g, feature: f, openHref: null, onGroup: noop, onFeature: noop }))).toContain(
       renderToStaticMarkup(createElement(Icon, { name: 'chevron-left', size: 15 })),
     )
-    expect(ts.slice(ts.indexOf(svg)).find((t) => t.text === esc(g.name))).toBeDefined()
+    const label = ts.slice(ts.indexOf(svg)).find((t) => t.name === 'span')!
+    expect([label.name, label.text]).toEqual(['span', esc(g.name)])
     const h2 = only(ts, 'h2')
     expect(attr(h2, 'class')).toBe('t-h2')
     expect(style(h2)['font-size']).toBe('44px')
@@ -896,5 +897,21 @@ describe('library feature page', () => {
     expect(got).toEqual(want.map(([g, t]) => [esc(g), esc(t)]))
     expect(got[0]).toEqual(['Document recognition', 'Read PDFs and scans'])
     expect(named(panelOf(featurePage('roles').ts, 'Related'), 'button')).toHaveLength(2)
+  })
+
+  it('FP-06 a feature with no rel and no benefits renders empty panels, and an unknown rel id is skipped', () => {
+    const f = FEATURE('import-files')
+    const g = GROUPS.find((x) => x.id === f.gid)!
+    const render = (feature: typeof f) =>
+      parse(renderToStaticMarkup(createElement(FeaturePage, { group: g, feature, openHref: null, onGroup: noop, onFeature: noop })))
+    const bare = render({ ...f, rel: [], benefits: [] })
+    for (const label of ['What you get', 'In this demo', 'Related']) expect(eyebrow(bare, label)).toBeDefined()
+    expect(named(panelOf(bare, 'In this demo'), 'button')).toHaveLength(f.sc.steps.length)
+    expect(named(panelOf(bare, 'Related'), 'button')).toHaveLength(0)
+    expect(panelOf(bare, 'What you get').filter((t) => attr(t, 'class') === 't-body')).toHaveLength(0)
+    const skip = render({ ...f, rel: ['no-such-feature', 'roles'] })
+    const cards = named(panelOf(skip, 'Related'), 'button')
+    expect(cards).toHaveLength(1)
+    expect(panelOf(skip, 'Related').some((t) => t.text === 'Roles and permissions')).toBe(true)
   })
 })

@@ -334,4 +334,68 @@ describe('App', () => {
     expect(h2s()).toEqual(['Rules & validation'])
     expect(vi.getTimerCount()).toBe(0)
   })
+
+  it('feature_unmountingMidPlayClearsTheInterval', () => {
+    mount('/invoices/import-files')
+    advance(3400)
+    expect(vi.getTimerCount()).toBe(1)
+    act(() => root.unmount())
+    container.remove()
+    expect(vi.getTimerCount()).toBe(0)
+    advance(5000)
+    mount('/')
+  })
+
+  it('feature_relatedToComingSoonHidesOpenInPlatformAndShowsThePill', () => {
+    vi.stubEnv('VITE_APP_URL', 'https://a.example')
+    mount('/rules/validate')
+    expect(links('Open in Platform')).toHaveLength(1)
+    expect(main().textContent).not.toContain('Coming soon')
+    click(card('A rule set for every invoice'))
+    expect(window.location.pathname).toBe('/rules/rule-library')
+    expect(links('Open in Platform')).toHaveLength(0)
+    expect(main().textContent).toContain('Coming soon')
+    click(card('Plain validation messages'))
+    expect(links('Open in Platform').map((a) => a.getAttribute('href'))).toEqual(['https://a.example/invoices?via=library'])
+    expect(main().textContent).not.toContain('Coming soon')
+  })
+
+  it('feature_stepListJumpsFromTheEndedStateAndPlays', () => {
+    mount('/invoices/import-files')
+    advance(13600)
+    expect(vi.getTimerCount()).toBe(0)
+    const second = [...main().querySelectorAll('button')].find((b) => b.textContent === '02Columns are matched to invoice fields')!
+    click(second)
+    expect([pos(), clock()]).toEqual(['02 / 04', '0:03 / 0:13'])
+    expect(vi.getTimerCount()).toBe(1)
+    expect(playBtn().innerHTML).not.toContain('M21 3v5h-5')
+    advance(3400)
+    expect(pos()).toBe('03 / 04')
+  })
+
+  it('feature_backToAFeatureRestartsItWithExactlyOneTimer', async () => {
+    mount('/invoices/import-files')
+    advance(6800)
+    click(card('Read PDFs and scans'))
+    advance(3400)
+    expect(pos()).toBe('02 / 03')
+    await move(() => window.history.back())
+    expect(window.location.pathname).toBe('/invoices/import-files')
+    expect([pos(), clock()]).toEqual(['01 / 04', '0:00 / 0:13'])
+    expect(vi.getTimerCount()).toBe(1)
+    advance(3400)
+    expect(pos()).toBe('02 / 04')
+  })
+
+  it('feature_repeatedRestartsLeaveOneTimerAndNoHistory', () => {
+    mount('/invoices/import-files')
+    const len = window.history.length
+    for (let i = 0; i < 3; i++) {
+      advance(3400)
+      click(byText('aside button', 'Import from CSV or Excel'))
+    }
+    expect(pos()).toBe('01 / 04')
+    expect(vi.getTimerCount()).toBe(1)
+    expect(window.history.length).toBe(len)
+  })
 })

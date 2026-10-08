@@ -723,7 +723,8 @@ describe('LIB-07: the library origin', () => {
     for (const event of ['page_view', 'demo_open', 'tour_start', 'open_in_platform']) expect(row('C34')).toContain(event)
     expect(row('C35')).toContain('library.ascomply.com')
     expect(row('C35')).toContain('cookie_domain')
-    expect(row('C35')).toContain('owed')
+    expect(row('C35')).toContain('PRODUCTION-OBSERVED owed by U4')
+    expect(row('C35')).toContain('is **owed** (U4)')
     expect(row('C35')).not.toContain('.ascomply.com as')
     expect(row('C36')).toContain('frontend/library/src/components/Sidebar.tsx')
     expect(row('C22')).toContain('feature_id')
@@ -735,6 +736,13 @@ describe('LIB-07: the library origin', () => {
     const doc = flat(analyticsDoc)
     expect(doc).toContain('library.ascomply.com')
     expect(doc).toContain('## Feature Library')
+    const section = analyticsDoc.slice(analyticsDoc.indexOf('## Feature Library'), analyticsDoc.indexOf('## See also'))
+    const tableRows = section.split('\n').filter((l) => l.startsWith('| `'))
+    expect(tableRows.length, 'the library event table').toBe(4)
+    for (const event of ['page_view', 'demo_open', 'tour_start', 'open_in_platform']) {
+      expect(tableRows.filter((l) => l.startsWith(`| \`${event}\``)), `table row for ${event}`).toHaveLength(1)
+    }
+    expect(tableRows.find((l) => l.startsWith('| `open_in_platform`')) ?? '').toContain('`feature_id` \\| `group_id`')
     for (const needle of ['page_view', 'demo_open', 'tour_start', 'open_in_platform', 'feature_id', 'group_id', 'L1.', 'L2.', 'L3.', 'L4.']) {
       expect(doc, `missing "${needle}"`).toContain(needle)
     }
@@ -752,6 +760,8 @@ describe('LIB-07: the library origin', () => {
     for (const id of ['C1', 'C2', 'C6']) {
       const row = ledger.split('\n').find((l) => l.startsWith(`| ${id} |`)) ?? ''
       expect(row.toLowerCase(), `${id} names the library`).toContain('library')
+      if (id === 'C2') expect(row).toContain('frontend/library/src/analytics.ts')
+      if (id === 'C6') expect(row).toContain('`library.ascomply.com` only')
     }
     const doc = flat(analyticsDoc)
     expect(doc).not.toContain('our four senders')

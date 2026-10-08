@@ -185,8 +185,8 @@ func TestJoin_ListUsesTheNormalisedHeaderEmail(t *testing.T) {
 		t.Run("list as "+bad, func(t *testing.T) {
 			before := tr.count()
 			got, err := store.MyPendingInvitations(tenantless(uuid.NewString(), bad))
-			if err != nil || len(got) != 0 {
-				t.Errorf("list = %+v, err %v; want empty and no error", got, err)
+			if err != nil || len(got) != 0 || got == nil {
+				t.Errorf("list = %+v, err %v; want a non-nil empty list and no error", got, err)
 			}
 			if n := tr.count() - before; n != 0 {
 				t.Errorf("sent %d statements, want none", n)
@@ -258,8 +258,8 @@ func TestJoin_AnotherAddressInAnyTenantIsNeitherListedNorAccepted(t *testing.T) 
 			user := uuid.NewString()
 			ctx := tenantless(user, other)
 			got, err := t1.store.MyPendingInvitations(ctx)
-			if err != nil || len(got) != 0 {
-				t.Errorf("list = %+v, err %v; want empty and no error", got, err)
+			if err != nil || len(got) != 0 || got == nil {
+				t.Errorf("list = %+v, err %v; want a non-nil empty list and no error", got, err)
 			}
 			for _, id := range []string{i1.ID, i2.ID, unknown} {
 				if _, _, _, err := t1.store.AcceptInvitationByID(ctx, id); !errors.Is(err, ErrInvitationNotValid) {

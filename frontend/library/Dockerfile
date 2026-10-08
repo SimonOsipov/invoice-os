@@ -7,6 +7,11 @@ WORKDIR /repo
 RUN corepack enable
 COPY . .
 RUN pnpm install --frozen-lockfile
+# Vite bakes VITE_* at build time; Railway passes the entry-point URLs as build args.
+ARG VITE_APP_URL
+ENV VITE_APP_URL=$VITE_APP_URL
+ARG VITE_LANDING_URL
+ENV VITE_LANDING_URL=$VITE_LANDING_URL
 # Vite bakes VITE_* at build time; Railway passes service variables as build args.
 # Empty means Sentry off.
 ARG VITE_SENTRY_DSN

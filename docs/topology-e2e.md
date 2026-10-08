@@ -134,7 +134,9 @@ itself.
 `fork-vars-after-urls` pass (its `reconcile-urls` part) writes and re-reads the fork's own `gateway.CORS_ALLOWED_ORIGINS` (all
 four SPA origins), `VITE_GATEWAY_URL` on `app`, `landing` and each console, `app.VITE_LANDING_URL`,
 the landing's `VITE_APP_URL`, `VITE_OPS_URL` and `VITE_SUPPORT_URL`, each console's
-`VITE_LANDING_URL` and `landing.VITE_REGISTRATION_OPEN=true`. It refuses the persistent environment.
+`VITE_LANDING_URL`, `app.VITE_LIBRARY_URL`, `landing.VITE_LIBRARY_URL`, `library.VITE_APP_URL`,
+`library.VITE_LANDING_URL` and `landing.VITE_REGISTRATION_OPEN=true` (16 writes). The library is not
+a CORS origin. It refuses the persistent environment.
 
 **Written per fork, not inherited:** `gateway.RECONCILIATION_URL`. A fork is reused per PR, so
 it never picks up a production write made after its creation. `fork-vars-after-urls` (its `set-fork-reconciliation-url`

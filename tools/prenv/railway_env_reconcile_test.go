@@ -185,6 +185,46 @@ func TestEveryLandingViteVariableHasADockerfileArg(t *testing.T) {
 	}
 }
 
+// Sibling of TestEveryLandingViteVariableHasADockerfileArg for the library service.
+func TestEveryLibraryViteVariableHasADockerfileArg(t *testing.T) {
+	names := make(map[string]bool)
+	for _, c := range reconcileCalls(t) {
+		if c.label == "library" && strings.HasPrefix(c.name, "VITE_") {
+			names[c.name] = true
+		}
+	}
+	// APP and LANDING.
+	if len(names) < 2 {
+		t.Fatalf("found %d distinct VITE_* upserts on the library service (%v), want >= 2", len(names), names)
+	}
+
+	dockerfilePath := filepath.Join(repoRoot(t), "frontend", "library", "Dockerfile")
+	raw, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", dockerfilePath, err)
+	}
+	var lines []string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if s := strings.TrimSpace(l); s != "" && !strings.HasPrefix(s, "#") {
+			lines = append(lines, s)
+		}
+	}
+	build := slices.Index(lines, "RUN pnpm --filter @invoice-os/library build")
+	if build < 0 {
+		t.Fatalf("control: %s has no `RUN pnpm --filter @invoice-os/library build` line", dockerfilePath)
+	}
+	for name := range names {
+		for _, want := range []string{"ARG " + name, "ENV " + name + "=$" + name} {
+			i := slices.Index(lines, want)
+			if i < 0 {
+				t.Errorf("%s is upserted onto library but %s has no %q line", name, dockerfilePath, want)
+			} else if i > build {
+				t.Errorf("%s: %q comes after the library build step", dockerfilePath, want)
+			}
+		}
+	}
+}
+
 func TestLandingDependsOnAPIClient(t *testing.T) {
 	root := repoRoot(t)
 	path := filepath.Join(root, "frontend", "landing", "package.json")

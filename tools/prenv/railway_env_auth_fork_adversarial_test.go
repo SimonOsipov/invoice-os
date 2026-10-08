@@ -58,6 +58,9 @@ func TestSetForkAuthSite_MissingInstanceRefusesBeforeAnyWrite(t *testing.T) {
 		{"fork-vars-after-urls without docling", afterSub, "docling", "", urls, afterShim("docling")},
 		{"fork-vars-after-urls with two landing", afterSub, "landing", "", urls, afterShim("", dup("landing"))},
 		{"reconcile-urls without support-console", "reconcile-urls", "support-console", "", urls, afterShim("support-console")},
+		{"reconcile-urls without library", "reconcile-urls", "library", "", urls, afterShim("library")},
+		{"fork-vars-after-urls without library", afterSub, "library", "", urls, afterShim("library")},
+		{"fork-vars-after-urls with two library", afterSub, "library", "", urls, afterShim("", dup("library"))},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := c.mk(t)
@@ -183,6 +186,41 @@ func TestForkAuthRefusalsPrecedeServiceResolution(t *testing.T) {
 			}
 			if slices.Contains(ops, "settle") {
 				t.Errorf("Railway calls = %v; a non-ephemeral environment reached service resolution", ops)
+			}
+		})
+	}
+}
+
+// Both URL commands refuse a missing or empty <library-url> before any Railway call.
+func TestURLCommandsRequireTheLibraryURL(t *testing.T) {
+	seven := append([]string{authForkEnvID}, afterArgs()[1:]...)
+	for _, sub := range []string{"reconcile-urls", afterSub} {
+		for _, c := range []struct {
+			name string
+			args []string
+		}{
+			{"six arguments", seven[:6]},
+			{"empty seventh", append(slices.Clone(seven[:6]), "")},
+		} {
+			t.Run(sub+" "+c.name, func(t *testing.T) {
+				s := newAuthShim(t, forkAuthRailway(), forkAuthStores(freshJWK(t)))
+				out, code := forkAuthRun(t, s, sub, c.args...)
+				if code != 2 {
+					t.Errorf("exit %d, want 2; output = %q", code, clip(out))
+				}
+				if !strings.Contains(out, "<library-url>") {
+					t.Errorf("usage line does not name <library-url>: %q", clip(out))
+				}
+				if n := len(operations(s.calls(t))); n != 0 {
+					t.Errorf("%d Railway calls recorded before the usage refusal", n)
+				}
+			})
+		}
+		t.Run(sub+" control", func(t *testing.T) {
+			s := newAuthShim(t, forkAuthRailway(), forkAuthStores(freshJWK(t)))
+			out, code := forkAuthRun(t, s, sub, seven...)
+			if code == 2 || len(operations(s.calls(t))) == 0 {
+				t.Errorf("seven URLs did not proceed past the argument check: exit %d, output = %q", code, clip(out))
 			}
 		})
 	}

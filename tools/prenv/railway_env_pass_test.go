@@ -1137,7 +1137,7 @@ func afterShimIn(t *testing.T, skip string, extra ...string) authShim {
 }
 
 func afterArgs() []string {
-	return append([]string{forkEnvID}, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL)
+	return append([]string{forkEnvID}, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL)
 }
 
 func runAfter(t *testing.T, s authShim) (out string, code int) {
@@ -1611,6 +1611,7 @@ func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
 		"https://LANDING-pr-9.up.railway.app/",
 		"https://ops-console-pr-9.up.railway.app:8443/",
 		"https://support-console-pr-9.up.railway.app/x?y=1&z=%7E",
+		"https://Library-pr-9.up.railway.app:8444/",
 	}
 	s := newAfterShim(t, afterProdStores())
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), afterSub, append([]string{forkEnvID}, urls...)...)
@@ -1626,8 +1627,12 @@ func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
 	for _, c := range []struct{ svc, name, want string }{
 		{"auth", "GOTRUE_SITE_URL", urls[2]},
 		{"gateway", "AUTH_SITE_URL", urls[2]},
-		{"gateway", "CORS_ALLOWED_ORIGINS", strings.Join(urls[1:], ",")},
+		{"gateway", "CORS_ALLOWED_ORIGINS", strings.Join(urls[1:5], ",")},
 		{"app", "VITE_GATEWAY_URL", urls[0]},
+		{"app", "VITE_LIBRARY_URL", urls[5]},
+		{"landing", "VITE_LIBRARY_URL", urls[5]},
+		{"library", "VITE_APP_URL", urls[1]},
+		{"library", "VITE_LANDING_URL", urls[2]},
 		{"landing", "VITE_SUPPORT_URL", urls[4]},
 		{"landing", "VITE_OPS_URL", urls[3]},
 		{"ops-console", "VITE_LANDING_URL", urls[2]},

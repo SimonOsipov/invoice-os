@@ -490,7 +490,8 @@ jobs:
           LANDING_URL: ${{ steps.urls.outputs.landing_url }}
           OPS_CONSOLE_URL: ${{ steps.urls.outputs.ops_console_url }}
           SUPPORT_CONSOLE_URL: ${{ steps.urls.outputs.support_console_url }}
-        run: bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"
+          LIBRARY_URL: ${{ steps.urls.outputs.library_url }}
+        run: bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL"
 
       # The call log lives in $RUNNER_TEMP, which the runner sets for every step.
       - name: Report Railway API calls
@@ -1162,6 +1163,10 @@ jobs:
       LANDING_URL: ${{ needs.e2e.outputs.landing_url }}
       OPS_CONSOLE_URL: ${{ needs.e2e.outputs.ops_console_url }}
       SUPPORT_CONSOLE_URL: ${{ needs.e2e.outputs.support_console_url }}
+      LIBRARY_URL: ${{ needs.e2e.outputs.library_url }}
+      BAKED_APP_URL: ${{ needs.prepare-env.outputs.app_url }}
+      BAKED_LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
+      BAKED_LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
     steps:
       # "Re-run failed jobs" keeps deploy-gateway's output from an earlier attempt.
       - name: Refuse a re-run that skipped the gateway deploy
@@ -1178,7 +1183,7 @@ jobs:
         id: targets
         run: |
           rc=0
-          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL; do
+          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL LIBRARY_URL BAKED_APP_URL BAKED_LANDING_URL BAKED_LIBRARY_URL; do
             if [ -z "${!v}" ]; then
               echo "::error::$v is empty — the e2e job did not publish it."
               rc=1

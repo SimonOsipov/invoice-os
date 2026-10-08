@@ -34,16 +34,6 @@ export function holdPendingVerify(now: number = Date.now()): void {
   }
 }
 
-// True when a live marker bound to the stored sign-in state is held; leaves the key alone.
-export function peekPendingVerify(now: number = Date.now()): boolean {
-  try {
-    return liveMarker(sessionStorage.getItem(PENDING_VERIFY_KEY), now) && boundToStoredState(now)
-  } catch (e) {
-    console.warn(`[verifyBounce] failed to read marker at "${PENDING_VERIFY_KEY}":`, e)
-    return false
-  }
-}
-
 // True when a well-formed marker is bound to the state live at its own mint time, whatever its age.
 // The gateway issues the code only after GoTrue confirmed the email, so the TTL does not gate a code in hand.
 export function holdsPendingVerify(): boolean {
@@ -67,12 +57,6 @@ export function consumePendingVerify(now: number = Date.now()): boolean {
     console.warn(`[verifyBounce] failed to consume marker at "${PENDING_VERIFY_KEY}":`, e)
     return false
   }
-}
-
-function boundToStoredState(now: number): boolean {
-  const p = JSON.parse(sessionStorage.getItem(PENDING_VERIFY_KEY) ?? 'null') as { s?: unknown } | null
-  const stored = peekSignInState(now)
-  return stored !== null && p?.s === stored
 }
 
 function liveMarker(raw: string | null, now: number): boolean {

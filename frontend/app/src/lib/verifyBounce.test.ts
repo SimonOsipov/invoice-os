@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { mintSignInState } from './signInState'
-import { consumePendingVerify, gatewayVerifyUrl, holdPendingVerify, peekPendingVerify, readVerifyFragment } from './verifyBounce'
+import { consumePendingVerify, gatewayVerifyUrl, holdPendingVerify, holdsPendingVerify, readVerifyFragment } from './verifyBounce'
 
 const RAW_KEY = 'invoice-os.pendingVerify'
 const TTL = 600_000
@@ -41,31 +41,31 @@ describe('pending verify marker', () => {
   it('pendingVerify_holdPeekConsume', () => {
     mintSignInState(NOW)
     holdPendingVerify(NOW)
-    expect(peekPendingVerify(NOW)).toBe(true)
+    expect(holdsPendingVerify()).toBe(true)
     expect(consumePendingVerify(NOW)).toBe(true)
     expect(consumePendingVerify(NOW)).toBe(false)
 
     mintSignInState(NOW)
     holdPendingVerify(NOW)
-    expect(peekPendingVerify(NOW + TTL)).toBe(false)
+    expect(holdsPendingVerify()).toBe(true)
     expect(consumePendingVerify(NOW + TTL)).toBe(false)
     expect(sessionStorage.getItem(RAW_KEY)).toBeNull()
 
     sessionStorage.setItem(RAW_KEY, '{not json')
-    expect(peekPendingVerify(NOW)).toBe(false)
+    expect(holdsPendingVerify()).toBe(false)
     expect(consumePendingVerify(NOW)).toBe(false)
     expect(sessionStorage.getItem(RAW_KEY)).toBeNull()
   })
 
-  it('pendingVerify_peekFalseOnceAnotherStateIsMinted', () => {
+  it('pendingVerify_holdsFalseOnceAnotherStateIsMinted', () => {
     mintSignInState(NOW)
     holdPendingVerify(NOW)
     mintSignInState(NOW + 1)
-    expect(peekPendingVerify(NOW + 1)).toBe(false)
+    expect(holdsPendingVerify()).toBe(false)
   })
 
-  it('pendingVerify_peekFalseWithoutAStoredState', () => {
+  it('pendingVerify_holdsFalseWithoutAStoredState', () => {
     holdPendingVerify(NOW)
-    expect(peekPendingVerify(NOW)).toBe(false)
+    expect(holdsPendingVerify()).toBe(false)
   })
 })

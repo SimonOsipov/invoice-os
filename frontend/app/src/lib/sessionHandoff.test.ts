@@ -508,7 +508,7 @@ describe('redeemHandoff with a held invite (D11, D12)', () => {
   })
 })
 
-describe('join offers (D7, D10, D11)', () => {
+describe('join offers', () => {
   const ANSWERS: ProvisionBody = { workspace_name: 'Adaeze Ventures', display_name: 'Adaeze Nwankwo', kind: 'in_house' }
   const BARE = tokenWith({})
   const WITH_ANSWERS = tokenWith({ user_metadata: { registration: ANSWERS } })

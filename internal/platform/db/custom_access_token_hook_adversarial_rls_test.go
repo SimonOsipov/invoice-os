@@ -378,7 +378,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		t.Fatalf("build migration provider: %v", err)
 	}
 
-	// Counts the hook's own memberships columns: staff_members' grant (P16) and the join-by-email
+	// Counts the hook's own memberships columns: staff_members' grant and the join-by-email
 	// columns (display_name, email) belong to other migrations.
 	footprint := func() (fn, policy, privs int) {
 		t.Helper()

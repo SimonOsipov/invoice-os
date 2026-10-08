@@ -180,7 +180,7 @@ func TestIdP_UnconfirmedInviteeGetsNoTokenToJoinWith(t *testing.T) {
 	}
 }
 
-// P8: user_metadata is user-writable, so email_verified there must never open a join route.
+// user_metadata is user-writable, so email_verified there must never open a join route.
 func TestIdP_WrittenMetadataOnAnUnconfirmedAddressReachesNoJoinRoute(t *testing.T) {
 	base := idpURL(t)
 	conn := superConn(t)

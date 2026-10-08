@@ -7,7 +7,7 @@ import type { ConsentChoice } from './components/CookieNotice'
 
 export function applyChoice(
   choice: ConsentChoice,
-  opts?: { hostname?: string; store?: ConsentStore | null },
+  opts?: { hostname?: string; store?: ConsentStore | null; hosts?: readonly string[]; cookieDomain?: string },
 ): ConsentRecord {
   const accepted = choice === 'accept'
   const record = writeConsent(accepted, opts?.store)
@@ -18,8 +18,8 @@ export function applyChoice(
   setAnalyticsRevoked(!accepted)
 
   const hostname = opts?.hostname ?? window.location.hostname
-  if (accepted) ensureTag(hostname, record)
-  else clearGaCookies(hostname)
+  if (accepted) ensureTag(hostname, record, opts?.hosts, opts?.cookieDomain)
+  else clearGaCookies(hostname, undefined, opts?.cookieDomain ? [opts.cookieDomain] : undefined)
 
   return record
 }

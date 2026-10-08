@@ -19,8 +19,8 @@ export function measurementId(): string | null {
 }
 
 /** THE GATE. Production hostname AND consent AND a configured property. */
-export function shouldLoadTag(hostname: string, allowed: boolean, id: string | null): boolean {
-  return isProductionHost(hostname) && allowed && id !== null
+export function shouldLoadTag(hostname: string, allowed: boolean, id: string | null, hosts?: readonly string[]): boolean {
+  return isProductionHost(hostname, hosts) && allowed && id !== null
 }
 
 export function tagSrc(id: string): string {
@@ -28,12 +28,12 @@ export function tagSrc(id: string): string {
 }
 
 /** Idempotent. Returns whether the tag is loaded AFTER the call, not whether this call injected it. */
-export function ensureTag(hostname: string, record: ConsentRecord | null): boolean {
+export function ensureTag(hostname: string, record: ConsentRecord | null, hosts?: readonly string[], cookieDomain?: string): boolean {
   if (loaded) return true
 
   const id = measurementId()
   // `!id` is the narrowing TS cannot take from shouldLoadTag's boolean return.
-  if (!id || !shouldLoadTag(hostname, analyticsAllowed(record), id)) return false
+  if (!id || !shouldLoadTag(hostname, analyticsAllowed(record), id, hosts)) return false
 
   const w = window as GtagWindow
   w.dataLayer = w.dataLayer || []
@@ -51,14 +51,14 @@ export function ensureTag(hostname: string, record: ConsentRecord | null): boole
   // `config` sends page_view itself and GA4 derives the traffic source from the
   // referrer and utm_*; a manual page_view would double-count.
   w.gtag('js', new Date())
-  w.gtag('config', id)
+  cookieDomain ? w.gtag('config', id, { cookie_domain: cookieDomain }) : w.gtag('config', id)
 
   loaded = true
   return true
 }
 
-export function bootAnalytics(): boolean {
-  return ensureTag(window.location.hostname, readConsent())
+export function bootAnalytics(hosts?: readonly string[], cookieDomain?: string): boolean {
+  return ensureTag(window.location.hostname, readConsent(), hosts, cookieDomain)
 }
 
 export type DemoCtaSource = 'nav' | 'hero' | 'platform' | 'coverage' | 'audience' | 'integrations' | 'api' | 'faq' | 'closing' | 'footer'
@@ -143,4 +143,21 @@ export function tagIsLoaded(): boolean {
 /** Called on every choice, never only on injection — see consentActions.applyChoice. */
 export function setAnalyticsRevoked(v: boolean): void {
   revoked = v
+}
+
+// Library senders: fixed keys; values are content ids, never visitor input.
+export function trackLibraryPageView(): void {
+  send('page_view', {})
+}
+
+export function trackLibraryDemoOpen(): void {
+  send('demo_open', { cta_location: 'library' })
+}
+
+export function trackTourStart(): void {
+  send('tour_start', {})
+}
+
+export function trackOpenInPlatform(target: { feature_id: string } | { group_id: string }): void {
+  send('open_in_platform', target)
 }

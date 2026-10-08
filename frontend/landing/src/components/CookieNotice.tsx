@@ -8,10 +8,12 @@ export function CookieNotice({
   current,
   suppressed,
   onChoose,
+  privacyHref = '/privacy',
 }: {
   current: ConsentRecord | null
   suppressed: boolean
   onChoose: (choice: ConsentChoice) => void
+  privacyHref?: string
 }) {
   return (
     <>
@@ -32,7 +34,7 @@ export function CookieNotice({
           We use Google Analytics to see how people find and use this page. That is the only non-essential cookie we
           set: no advertising, no remarketing, no data sold to anyone.
         </p>
-        <a className="lnk cn-link" href="/privacy">
+        <a className="lnk cn-link" href={privacyHref}>
           Read the privacy &amp; cookie policy
         </a>
         <div className="cn-actions">

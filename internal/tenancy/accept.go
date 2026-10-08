@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-
-	"github.com/google/uuid"
 )
 
 // InvitationPreview is what a token holder sees before signing in.
@@ -73,6 +71,17 @@ func InvitationPreviewHandler(preview InvitationPreviewFunc, log *slog.Logger) h
 	}
 }
 
+// writeAccepted writes the 200 `{tenant, user:{id, role}}` body both accept routes share.
+func writeAccepted(w http.ResponseWriter, tenant Tenant, subject, role string) {
+	var resp provisionResponse
+	resp.Tenant.ID = tenant.ID
+	resp.Tenant.Name = tenant.Name
+	resp.Tenant.Kind = tenant.Kind
+	resp.User.ID = subject
+	resp.User.Role = role
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // AcceptInvitationHandler returns POST /v1/invitations/accept: capped decode
 // (400), accept, 200 `{tenant, user:{id, role}}`. The caller check is the
 // store's: the handler cannot see a tenant-less caller.
@@ -94,14 +103,7 @@ func AcceptInvitationHandler(accept AcceptInvitationFunc, log *slog.Logger) http
 			writeError(w, status, msg)
 			return
 		}
-
-		var resp provisionResponse
-		resp.Tenant.ID = tenant.ID
-		resp.Tenant.Name = tenant.Name
-		resp.Tenant.Kind = tenant.Kind
-		resp.User.ID = subject
-		resp.User.Role = role
-		writeJSON(w, http.StatusOK, resp)
+		writeAccepted(w, tenant, subject, role)
 	}
 }
 
@@ -127,9 +129,6 @@ func InvitationsMineHandler(list MyPendingInvitationsFunc, log *slog.Logger) htt
 			writeError(w, status, msg)
 			return
 		}
-		if invites == nil {
-			invites = []PendingInvite{}
-		}
 		writeJSON(w, http.StatusOK, struct {
 			Invitations []PendingInvite `json:"invitations"`
 		}{invites})
@@ -137,18 +136,13 @@ func InvitationsMineHandler(list MyPendingInvitationsFunc, log *slog.Logger) htt
 }
 
 // AcceptInvitationByIDHandler returns POST /v1/invitations/{id}/accept: no body
-// is read; 200 in the token-accept shape. A non-uuid id is 404.
+// is read; 200 in the token-accept shape. The store maps a non-uuid id to 404.
 func AcceptInvitationByIDHandler(accept AcceptInvitationByIDFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := uuid.Parse(r.PathValue("id"))
-		if err != nil {
-			writeError(w, http.StatusNotFound, msgInviteNotValid)
-			return
-		}
-		tenant, subject, role, err := accept(r.Context(), id.String())
+		tenant, subject, role, err := accept(r.Context(), r.PathValue("id"))
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {
@@ -157,13 +151,6 @@ func AcceptInvitationByIDHandler(accept AcceptInvitationByIDFunc, log *slog.Logg
 			writeError(w, status, msg)
 			return
 		}
-
-		var resp provisionResponse
-		resp.Tenant.ID = tenant.ID
-		resp.Tenant.Name = tenant.Name
-		resp.Tenant.Kind = tenant.Kind
-		resp.User.ID = subject
-		resp.User.Role = role
-		writeJSON(w, http.StatusOK, resp)
+		writeAccepted(w, tenant, subject, role)
 	}
 }

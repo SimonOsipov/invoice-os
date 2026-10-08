@@ -567,6 +567,16 @@ describe('App tour', () => {
       return cs.position === 'static' ? 0 : Number(cs.zIndex) || 0
     }
     expect(z(sidebarBtn())).toBeGreaterThan(z(overlay()!))
+    expect(z(container.querySelector<HTMLElement>('main')!)).toBeLessThan(z(overlay()!))
+    const root = container.querySelector('.asc-app')!
+    let n = 0
+    for (let a = sidebarBtn().parentElement; a && a !== root; a = a.parentElement) {
+      n++
+      const cs = getComputedStyle(a)
+      const caps = cs.position !== 'static' && cs.zIndex !== 'auto' && cs.zIndex !== ''
+      expect(caps || cs.isolation === 'isolate' || ['', 'none'].indexOf(cs.transform) < 0 || ['', 'none'].indexOf(cs.filter) < 0 || (cs.opacity !== '' && cs.opacity !== '1')).toBe(false)
+    }
+    expect(n).toBeGreaterThan(0)
   })
 
   it('tour_watchDemoOpensTheStopsFeatureAndEndsTheTour', () => {

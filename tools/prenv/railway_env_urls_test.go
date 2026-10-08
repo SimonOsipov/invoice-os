@@ -259,6 +259,9 @@ func TestDiscoverURLs_NoDomainFailsNamingTheService(t *testing.T) {
 	if !strings.Contains(stderr, want) {
 		t.Errorf("stderr does not carry today's message %q; stderr = %q", want, stderr)
 	}
+	if strings.Contains(stderr, "docs/") {
+		t.Errorf("stderr points at a docs/ path; stderr = %q", stderr)
+	}
 }
 
 func TestDiscoverURLs_GraphQLErrorEmptyStdout(t *testing.T) {

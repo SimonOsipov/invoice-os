@@ -59,7 +59,7 @@ func main() {
 	// app.Run opens the listener, so a green /healthz continues to mean "fully
 	// provisioned" (task-128). Every step is fatal on error except the purge,
 	// which logs and continues — see db.Provision's doc comment. The gateway remains the fleet's single in-network migrator
-	// (docs/migrations.md §2): migrate is unconditional regardless of the
+	// (.claude/rules/db-migrations.md): migrate is unconditional regardless of the
 	// guard below, exactly as before.
 	//
 	// The bootstrap/seed guard reads the RAW
@@ -78,9 +78,9 @@ func main() {
 		// RAILWAY_ENVIRONMENT_NAME, NOT ENVIRONMENT: the destructive reset step
 		// (db.Reset, gated by db.ResetEnabled) keys on a name no one hand-sets.
 		// ENVIRONMENT is an ordinary app variable that CI writes in every fork
-		// (docs/deploy-model.md "ENVIRONMENT in a fork is set by CI").
+		// (.claude/rules/ci-railway.md).
 		// RAILWAY_ENVIRONMENT_NAME is a Railway-injected system variable
-		// (docs/add-a-service.md; never set manually): "pr-<N>" inside a fork,
+		// (.claude/rules/add-service.md; never set manually): "pr-<N>" inside a fork,
 		// the persistent environment's real name on that environment. See
 		// db.ResetEnabled's doc comment for the full reasoning.
 		RailwayEnvironmentName: os.Getenv("RAILWAY_ENVIRONMENT_NAME"),

@@ -717,7 +717,7 @@ describe('envCommand', () => {
       fakeRailway({ ids: realIds(), ...opts })
       const e = ctlError(await rejection(envCommand(['pr-348'], {})), 1)
       expect(e.hint, what).toBe(hint)
-      expect(e.hint, what).not.toContain('docs/')
+      expect(e.hint, what).not.toContain('docs')
     }
   })
 

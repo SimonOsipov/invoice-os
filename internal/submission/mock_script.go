@@ -53,7 +53,7 @@ import (
 )
 
 // mockTrigger is a STRING type, not an int enum, so a failure message, a log line and
-// docs/mock-app-adapter.md all print the same token.
+// .claude/rules/submission-mock.md all print the same token.
 type mockTrigger string
 
 const (
@@ -98,11 +98,10 @@ type mockAllocation struct {
 }
 
 // mockAllocations is an ordered SLICE, not a map: seven entries make a linear scan free,
-// declaration order is stable for both the specs and the doc table, and a map would invite
+// declaration order is stable for the specs, and a map would invite
 // nondeterministic range order into a package whose entire point is determinism.
 //
-// The order here IS the order of the table in docs/mock-app-adapter.md. -0008 and -0009 are
-// absent on purpose; see mockNeverAllocate.
+// -0008 and -0009 are absent on purpose; see mockNeverAllocate.
 var mockAllocations = []mockAllocation{
 	{TIN: mockTINAccept, Trigger: mockTriggerAccept},
 	{TIN: mockTINReject, Trigger: mockTriggerReject},

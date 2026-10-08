@@ -128,7 +128,7 @@ func aitReadDoclingFile(t *testing.T, path string) ([]Page, []TokenPage, PageRes
 	return pages, tokens, res
 }
 
-// aitStem drops a file's extension -- out/docs/<stem>/dump.json, matching run.py's own
+// aitStem drops a file's extension -- the <stem> of the harness's dump.json path, matching run.py's own
 // os.path.splitext(basename(path)).
 func aitStem(file string) string {
 	return strings.TrimSuffix(file, filepath.Ext(file))

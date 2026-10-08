@@ -129,7 +129,7 @@ ON CONFLICT ON CONSTRAINT workflow_role_members_tenant_role_user_uq DO NOTHING;
 -- Two caveats: the purge is non-fatal, so a failed one leaves the residue in
 -- place and the boot still reaches this seed; and it deliberately spares
 -- memberships and the three approval-policy tables, whose upserts below are what
--- converge them (docs/demo-reset.md).
+-- converge them (.claude/rules/db-migrations.md).
 --
 -- Rules are GLOBAL (no tenant_id, no RLS): restores any rule a prior demo
 -- kill-switched (e.g. vat-standard-rate). Safe under the M4-17

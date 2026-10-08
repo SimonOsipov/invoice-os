@@ -8,7 +8,7 @@
 // that produced each invoice.
 //
 // The tenant allowlist is the safety boundary, not the environment. ENVIRONMENT
-// reads "development" on production and forks verbatim (docs/deploy-model.md),
+// reads "development" on production and forks verbatim (.claude/rules/ci-railway.md),
 // so gating on it would be fail-open; gating on the four fixed uuids
 // db/seed.dev.sql creates cannot reach a real tenant's data wherever it runs.
 package demodocs

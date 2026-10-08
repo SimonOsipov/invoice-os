@@ -432,7 +432,7 @@ func TestFleetGate_ScanPopulationMeetsItsFloor(t *testing.T) {
 
 func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	root := t.TempDir()
-	tree := filepath.Join(root, "docs")
+	tree := filepath.Join(root, "notes")
 	if err := os.MkdirAll(tree, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	write("stale.md", "nothing on this line\n"+
 		"all 14 of them, one per "+subject+"\n")
 
-	hits, err := scanUnder(root, []string{"docs"})
+	hits, err := scanUnder(root, []string{"notes"})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -460,8 +460,8 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 		t.Fatalf("planted 1 control needle, scanner reported %d hit(s): %+v", len(hits), hits)
 	}
 	got := hits[0]
-	if got.File != "docs/stale.md" || got.Line != 2 {
-		t.Errorf("control needle reported at %s:%d, planted at docs/stale.md:2", got.File, got.Line)
+	if got.File != "notes/stale.md" || got.Line != 2 {
+		t.Errorf("control needle reported at %s:%d, planted at notes/stale.md:2", got.File, got.Line)
 	}
 	if len(got.Counts) != 1 || got.Counts[0] != 14 {
 		t.Errorf("control needle read as %v, planted as [14]", got.Counts)
@@ -483,7 +483,7 @@ func TestFleetGate_AllowlistEntriesStillMatchSomething(t *testing.T) {
 // looping over nothing; this drives every fault branch on a planted tree.
 func TestFleetGate_AllowlistFaultsFireOnAPlantedTree(t *testing.T) {
 	root := t.TempDir()
-	tree := filepath.Join(root, "docs")
+	tree := filepath.Join(root, "notes")
 	if err := os.MkdirAll(tree, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestFleetGate_AllowlistFaultsFireOnAPlantedTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tree, "a.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	hits, err := scanUnder(root, []string{"docs"})
+	hits, err := scanUnder(root, []string{"notes"})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -503,9 +503,9 @@ func TestFleetGate_AllowlistFaultsFireOnAPlantedTree(t *testing.T) {
 		t.Fatalf("planted 6 hits, scanner reported %d: %+v", len(hits), hits)
 	}
 
-	carve := allowEntry{File: "docs/a.md", LineContains: "CARVE"}
-	wideEntry := allowEntry{File: "docs/a.md", LineContains: "WIDE"}
-	gone := allowEntry{File: "docs/a.md", LineContains: "GONE"}
+	carve := allowEntry{File: "notes/a.md", LineContains: "CARVE"}
+	wideEntry := allowEntry{File: "notes/a.md", LineContains: "WIDE"}
+	gone := allowEntry{File: "notes/a.md", LineContains: "GONE"}
 
 	if !allowed([]allowEntry{carve}, hits[0]) {
 		t.Errorf("the entry does not carve out its own line %q", hits[0].Text)

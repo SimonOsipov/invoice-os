@@ -1085,7 +1085,7 @@ func TestBoxlessFingerprint_IsVersionPrefixedAndFitsTheColumnCap(t *testing.T) {
 
 // EXTR-26-05 T-05.1. A widened shared-lexicon pattern steps both namespaces together, whether or
 // not a committed digest moved: one bump clears only its own producer's rules. Kept
-// generation-free by name ("Read a prefix as a namespace", docs/extraction-corpus.md) -- see the
+// generation-free by name ("Read a prefix as a namespace", .claude/rules/extraction-corpus.md) -- see the
 // two cases this exact rot broke in TestIsBoxlessFingerprint_ReadsThePrefixAndNotASubstring.
 func TestFingerprint_BothGenerationsAreThePinnedOnes(t *testing.T) {
 	if extraction.FingerprintVersion != "v3" {

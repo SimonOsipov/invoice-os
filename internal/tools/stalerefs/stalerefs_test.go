@@ -254,7 +254,7 @@ func TestScan_ADocsHitDoesNotMaskARuleFileHit(t *testing.T) {
 	tree := map[string][]Hit{
 		"WITHIN_REQUEST_TENANT_TX_OPTS": {
 			{".claude/rules/tenant-seam.md", 7, "- Set `WITHIN_REQUEST_TENANT_TX_OPTS` for every read."},
-			{"docs/tenancy.md", 3, "The `WITHIN_REQUEST_TENANT_TX_OPTS` key is set per request."},
+			{"README.md", 3, "The `WITHIN_REQUEST_TENANT_TX_OPTS` key is set per request."},
 		},
 	}
 
@@ -311,7 +311,7 @@ func TestRole(t *testing.T) {
 		"e2e/smoke/support-console.spec.ts":    "consumer",
 		"e2e/topology/roleFixtures.ts":         "consumer",
 		".claude/rules/ci-railway.md":          "consumer",
-		"docs/deploy-model.md":                 "ignore",
+		"notes/deploy-model.txt":               "ignore",
 		"README.md":                            "ignore",
 		".github/workflows/dev-env.yml":        "consumer",
 		"frontend/app/src/lib/members.ts":      "producer",

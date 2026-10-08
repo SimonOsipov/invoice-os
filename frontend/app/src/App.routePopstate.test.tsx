@@ -1424,7 +1424,7 @@ describe('ROUTE-07-04 AC-7: a same-company Back onto a policy entry restores the
     const ctx = requireCtx()
     expect(ctx.view, 'the restored entry must still name the workflows view').toBe('workflows')
     expect(ctx.editingPolicyId, 'a same-company Back onto /workflows/<id> must reopen that builder').toBe(POLICY_ID)
-    // R4: the unclamped popstate path writes nothing at all (docs/routing.md:87-93).
+    // R4: the unclamped popstate path writes nothing at all (.claude/rules/routing.md).
     expect(pushSpy, 'an unclamped restore must never push').not.toHaveBeenCalled()
     expect(replaceSpy.mock.calls, 'an unclamped restore must write nothing at all').toEqual([])
   })
@@ -1493,7 +1493,7 @@ describe('ROUTE-07-05 AC-5 (Core AC-7): switchClient scrubs the policy id off th
     expect(replaceSpy.mock.calls, 'the switch must scrub the leaving entry exactly once').toHaveLength(1)
     expect(replaceSpy.mock.calls[0]![2], 'the leaving entry must be scrubbed back to the bare list').toBe('/workflows')
     // The INCOMING company, by design: switchClient stamps its `id` parameter because
-    // setActiveEntityId has not committed (docs/routing.md, "The company stamp").
+    // setActiveEntityId has not committed (.claude/rules/routing.md).
     expect(replaceSpy.mock.calls[0]![0], 'the scrubbed entry is stamped with the incoming company').toEqual({
       e: ENTITY_B,
     })

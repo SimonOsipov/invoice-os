@@ -794,4 +794,4 @@ func TestPDFiumWords_TheFallbackIsDeadOnTheChromeFixtures(t *testing.T) {
 	}
 }
 
-// --- AC-3: the window recorded in docs/extraction-corpus.md ---------------------------------
+// --- AC-3: the window recorded in .claude/rules/extraction-corpus.md ---------------------------------

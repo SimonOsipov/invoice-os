@@ -7,7 +7,7 @@
 //
 // It CONVERGES rather than inserting-if-absent. db.PurgeDemoTenants empties
 // approval_runs on every gated boot, and deliberately leaves
-// the three policy tables standing (docs/demo-reset.md); db.Reset truncates the
+// the three policy tables standing (.claude/rules/db-migrations.md); db.Reset truncates the
 // same rows, but only in a pr-<N> environment. So a seeder that no-ops once its
 // policy exists arms nothing on the second deploy and every validated invoice
 // then satisfies awaiting_approval vacuously
@@ -24,7 +24,7 @@
 // runs Reset again on top -- and nothing re-runs this seeder because
 // the invoice service did not restart. The fleet stays green, /healthz stays 200,
 // and awaiting_approval silently reads counts.validated. Recovery is one operator
-// action -- restart the invoice service. Also in docs/approvals.md.
+// action -- restart the invoice service. Also in .claude/rules/approvals.md.
 //
 // RESIDUAL, accepted: an invoice armed under version N keeps version N's trail
 // after a supersede. A sealed version's steps are immutable, so only invoices

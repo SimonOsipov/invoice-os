@@ -1053,7 +1053,7 @@ func TestRLS_SubmissionJobsGrantMatrix(t *testing.T) {
 // evaluated, and the row survives untouched. The UPDATE that follows is the positive half:
 // the SAME row is reachable and writable by the SAME role, so the 42501 is specifically
 // about DELETE and not about the row being invisible. The four seeded demo tenants' rows
-// are deleted out of band by the boot-time purge, as superuser (docs/demo-reset.md).
+// are deleted out of band by the boot-time purge, as superuser (.claude/rules/db-migrations.md).
 func TestRLS_SubmissionJobsAppDeleteRefused(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()

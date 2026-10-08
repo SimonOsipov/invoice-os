@@ -1,5 +1,5 @@
 // Kill-switch suite: staff switch a rule off with an owner-role statement
-// (docs/rule-kill-switch.md). `rules` is global, so these tests mutate the
+// (.claude/rules/validation.md). `rules` is global, so these tests mutate the
 // shared seeded rows; each registers a superuser restore in t.Cleanup before
 // its first write. No t.Parallel().
 //
@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// killSwitchStatement is the statement docs/rule-kill-switch.md gives the
+// killSwitchStatement is the statement .claude/rules/validation.md gives the
 // operator: the active version's row for $2, by key.
 const killSwitchStatement = "UPDATE rules r SET enabled = $1 FROM rule_set_versions v WHERE r.rule_set_version_id = v.id AND v.is_active AND r.key = $2"
 

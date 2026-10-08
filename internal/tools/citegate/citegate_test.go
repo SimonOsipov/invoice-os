@@ -171,8 +171,8 @@ func TestScan_RuleFilesAreJudged(t *testing.T) {
 	}
 }
 
-func TestScan_DocsPathIsNoLongerExempt(t *testing.T) {
-	const path = "docs/ops.sh"
+func TestScan_ShellScriptOutsideSourceDirsIsScanned(t *testing.T) {
+	const path = "notes/ops.sh"
 	diff := "--- a/" + path + "\n+++ b/" + path + "\n@@ -0,0 +1 @@\n+# see store.go:1\n"
 	assertFlagged(t, flaggedLines(t, diff, map[string]string{path: "# see store.go:1\n"}), path+":1")
 }
@@ -214,7 +214,7 @@ func TestComments_PerLanguage(t *testing.T) {
 
 func TestCitation(t *testing.T) {
 	for _, s := range []string{"store.go:115", "dev-env.yml:189-191", "mock.go:188,193", "(../lineitems.go:127-144)",
-		"App.routePopstate.test.tsx:118", "db/seed.dev.sql:42", "docs/routing.md:87-93"} {
+		"App.routePopstate.test.tsx:118", "db/seed.dev.sql:42", ".claude/rules/routing.md:87-93"} {
 		if !citation.MatchString(s) {
 			t.Errorf("citation missed %q", s)
 		}

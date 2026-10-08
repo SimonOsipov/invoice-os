@@ -1719,7 +1719,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     // --- APPR-08-10: the always-visible surface ------------------------------
     //
     // The four detail keys, the per-row approval envelope and the awaiting_approval
-    // filter all ship by design (docs/approvals.md, "Not gated").
+    // filter all ship by design (.claude/rules/approvals.md).
 
     test('contract: the four approval flags are present and typed', async () => {
       // approveFlags() already asserts PRESENCE and the approve/reject agreement; this

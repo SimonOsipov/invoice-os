@@ -1,7 +1,7 @@
 // The M2-07 adversarial RLS harness. This file stands up the shared fixtures the
 // attack cases in rls_test.go build on; the cases themselves live there.
 //
-// Design (docs/migrations.md §6, §8):
+// Design (.claude/rules/db-migrations.md):
 //   - Reuses the SAME Postgres-service-container + Makefile-bootstrap path as the CI
 //     `migrations` job (deliberately NOT testcontainers) — no new Go
 //     dependency, one canonical role-bootstrap (db/bootstrap.sql), CI-consistent.

@@ -170,10 +170,8 @@ const (
 	// it.
 	maLatencyEnv = "APP_ADAPTER_MOCK_LATENCY" // mock_script.go:144
 	// maLatencyDefault is the value MockConfigFromEnv applies when maLatencyEnv is unset or
-	// empty. Retyped from mock_adapter.go's mockLatencyDefault, which docs/mock-app-adapter.md:123
-	// publishes as `800ms`. The in-package pin in TestMockAdapterDoc_DocumentsEveryAllocation
-	// (mock_script_test.go) ties the CONSTANT to the DOC; this literal is tied to the same doc by
-	// transcription, so the three can only drift apart through a failing test.
+	// empty. Retyped from mock_adapter.go's mockLatencyDefault; the value is published in
+	// .claude/rules/submission-mock.md.
 	maLatencyDefault = 800 * time.Millisecond
 )
 
@@ -3516,7 +3514,7 @@ func TestMockConfigFromEnv(t *testing.T) {
 		}
 		if cfg.Latency != maLatencyDefault {
 			t.Errorf("MockConfigFromEnv() with %s unset = MockConfig{Latency: %v}, want %v (the "+
-				"documented default, docs/mock-app-adapter.md:123)", maLatencyEnv, cfg.Latency, maLatencyDefault)
+				"documented default, .claude/rules/submission-mock.md)", maLatencyEnv, cfg.Latency, maLatencyDefault)
 		}
 	})
 

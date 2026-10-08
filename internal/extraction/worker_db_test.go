@@ -1674,8 +1674,8 @@ func TestRLS_ExtractWorkerRecordsEmptyLayoutWhenPageOneMatchesNoAnchor(t *testin
 // QA (EXTR-14-03): AC-3, a boundary distinct from W-04. The sink fails on page 2 of 3, not page
 // 1, so Ingest has already made one successful PUT before it aborts. Both columns must still be
 // NULL and page 3 must never be attempted -- proving the abort is not merely "fails on the very
-// first page" but genuinely stops mid-read, matching docs/page-image-storage.md's "leaves orphan
-// objects and no rows at all".
+// first page" but genuinely stops mid-read, matching .claude/rules/page-images.md: it leaves orphan
+// objects and no rows at all.
 func TestRLS_ExtractWorkerLeavesLayoutNullWhenIngestFailsPartway(t *testing.T) {
 	ctx := t.Context()
 	tenantID, documentID := wkFixture(t, ctx)

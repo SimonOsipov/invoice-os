@@ -10,7 +10,7 @@ import "context"
 // The contract matches River's *river.Client exactly (Start/Stop with these
 // signatures), so a River client — or the queue.Client wrapper around it — registers
 // with no adapter. This is the reusable lifecycle seam the M3 submission worker rides
-// on (docs/migrations.md §8): it keeps the signal handling and graceful-drain logic in
+// on (.claude/rules/db-migrations.md): it keeps the signal handling and graceful-drain logic in
 // the platform kit instead of a bespoke per-service loop.
 type BackgroundWorker interface {
 	// Start launches the worker and returns promptly; the worker runs until Stop. It

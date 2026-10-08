@@ -69,7 +69,7 @@ def test_t02_6_dockerfile_has_no_syntax_directive_or_cache_mount():
     )
     assert "--mount=type=cache" not in text, (
         f"{DOCKERFILE}: BuildKit cache mounts are banned -- Railway requires each cache-mount "
-        "id to embed the building service's own id (docs/add-a-service.md §1)"
+        "id to embed the building service's own id (.claude/rules/add-service.md)"
     )
 
 

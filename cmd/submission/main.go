@@ -2,7 +2,7 @@
 // pool (the async job spine) alongside the platform kit's /healthz + /readyz and drains
 // in-flight jobs within the shutdown window on SIGINT/SIGTERM. The worker connects as the
 // app role (invoice_app) and re-establishes tenant context per job — the worker-role
-// pattern, docs/migrations.md §8. M5-04 wires the real handlers onto that spine:
+// pattern, .claude/rules/db-migrations.md. M5-04 wires the real handlers onto that spine:
 // SubmitWorker drives the tx1 / adapter / tx2 submit flow and PollWorker follows a
 // deferred verdict the same way (internal/submission/worker.go) — both registered, with
 // ExtractWorker, on the single bundle workerBundle builds below.
@@ -52,7 +52,7 @@ func main() {
 	ctx := context.Background()
 
 	// Connect as the app role (invoice_app, NOBYPASSRLS) — never the migrator or
-	// superuser (docs/migrations.md §1). The worker uses this pool both to operate River's
+	// superuser (.claude/rules/db-migrations.md). The worker uses this pool both to operate River's
 	// queue and, per job, to open tenant-scoped transactions via db.WithinTenantTx.
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {

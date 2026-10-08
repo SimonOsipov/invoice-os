@@ -19,7 +19,7 @@ import { seedStaffSession, test } from '../staffSession'
 // WHY A BROWSER IS THE ONLY HARNESS. Every frontend vitest project runs in `node` with no
 // DOM (frontend/ops-console/vitest.config.ts:5), so there is no component-test layer in
 // which a click, a filter or a drawer could be exercised at all. Same rationale and same
-// suite as smoke/landing-nav.spec.ts and smoke.spec.ts:48-60. docs/e2e-convention.md's
+// suite as smoke/landing-nav.spec.ts and smoke.spec.ts:48-60. .claude/rules/e2e.md's
 // "Target surface" section is amended by [PERSONA-01-07] in this same PR.
 //
 // PARALLEL-SAFE. Each test seeds its own gateway session for the worker's one staff account,
@@ -37,7 +37,7 @@ import { seedStaffSession, test } from '../staffSession'
 // meter (literals), the Evidence table (static, derived once at import), the Status screen's
 // uptime copy (literals), and the billing figures and sparkline paths (already unit-tested
 // in charts.test.ts / helpers.test.ts — re-asserting them in a browser would duplicate the
-// base of the pyramid, which docs/e2e-convention.md forbids).
+// base of the pyramid, which .claude/rules/e2e.md forbids).
 
 // ASSERT THE <h1>, NOT THE CRUMB. TopBar renders CRUMB_BY_SCREEN inside <main> (TopBar.tsx)
 // and the crumb differs from BOTH the nav label and the h1 on some screens by design

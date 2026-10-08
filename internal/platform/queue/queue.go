@@ -6,7 +6,7 @@
 //
 // Because the queue lives in the same Postgres as the domain data, an "enqueue" is just
 // an INSERT in the caller's transaction — there is no second broker to dual-write to and
-// get out of sync. The worker-role pattern (docs/migrations.md §8): a client connects as
+// get out of sync. The worker-role pattern (.claude/rules/db-migrations.md): a client connects as
 // invoice_app; River's tables are cross-tenant infrastructure (no tenant_id, no RLS), and
 // each job handler re-establishes tenant context with db.WithinTenantTx keyed by the job's
 // tenant_id. M2-08 built the machinery + a happy-path smoke test; M2-09 adds the handler
@@ -52,7 +52,7 @@ type Client struct {
 }
 
 // New builds a River client bound to pool, which MUST connect as invoice_app (the
-// NOBYPASSRLS runtime role) — never the migrator or superuser (docs/migrations.md §1).
+// NOBYPASSRLS runtime role) — never the migrator or superuser (.claude/rules/db-migrations.md).
 func New(pool *pgxpool.Pool, cfg Config) (*Client, error) {
 	rc, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Queues:       cfg.Queues,
@@ -82,7 +82,7 @@ func (c *Client) River() *river.Client[pgx.Tx] { return c.river }
 
 // TenantScoped is the contract every job's args MUST satisfy to be enqueued: Tenant()
 // returns the tenant the job will run its work under (the worker re-establishes that
-// context from the payload — the worker-role pattern, docs/migrations.md §8). EnqueueTx
+// context from the payload — the worker-role pattern, .claude/rules/db-migrations.md). EnqueueTx
 // uses it to fail closed when the declared tenant diverges from the tenant the
 // idempotency key is recorded under. submission.SubmitArgs implements it; every real
 // job-args type must.

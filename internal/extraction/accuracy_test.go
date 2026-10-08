@@ -29,7 +29,7 @@ import (
 // Re-measured 2026-09-08: the shipped Tier-1 set reaches all 44 (layout, field) pairs
 // corpusExpect names across the six committed layouts. corpus_two_column.pdf / buyer_tin was
 // the last miss, and binding each party's TIN to the heading that owns it closed it.
-// A ratchet: docs/extraction-corpus.md says how to move it and why it may only go up.
+// A ratchet: .claude/rules/extraction-corpus.md says how to move it and why it may only go up.
 //
 // Written as a quotient of two pinned integers rather than a rounded decimal, so the run-time
 // float64(hits)/float64(total) M-01 compares against is bit-identical to the boundary.
@@ -304,7 +304,7 @@ func TestTier1Accuracy_MeetsTheFloor(t *testing.T) {
 	for _, p := range s.missed {
 		t.Errorf("%s: %s reached none of %v; candidates were %v", p.file, p.field, acExpectedValues(p), s.saw[p])
 	}
-	t.Errorf("tier-1 reaches %d/%d = %v, below the floor %d/%d = %v. The floor is a ratchet: fix the rules, never lower it (docs/extraction-corpus.md)",
+	t.Errorf("tier-1 reaches %d/%d = %v, below the floor %d/%d = %v. The floor is a ratchet: fix the rules, never lower it (.claude/rules/extraction-corpus.md)",
 		s.hits, s.total, rate, tier1RecallHits, tier1RecallPairs, tier1RecallFloor)
 }
 

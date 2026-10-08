@@ -1276,7 +1276,7 @@ func TestSeed_IsIdempotentAcrossBoots(t *testing.T) {
 
 // D-34, THE tripwire — the difference between converging and insert-if-absent.
 // db.PurgeDemoTenants empties approval_runs on every gated boot and deliberately
-// spares the three policy tables (docs/demo-reset.md); db.Reset truncates the same
+// spares the three policy tables (.claude/rules/db-migrations.md); db.Reset truncates the same
 // rows, but only in a pr-<N> environment. awaiting_approval's NOT EXISTS (approved
 // run) is satisfied VACUOUSLY by an invoice with zero runs. So an insert-if-absent
 // seeder finds its policy on deploy 2, no-ops, arms nothing, and awaiting_approval

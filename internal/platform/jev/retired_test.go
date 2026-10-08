@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// retiredRoots are the source roots the guard walks; docs/ and frontend/ name the retired strings on purpose.
+// retiredRoots are the source roots the guard walks; frontend/ names the retired strings on purpose.
 var retiredRoots = []string{"cmd", "internal", "scripts", "tools", ".github", "e2e"}
 
 const (

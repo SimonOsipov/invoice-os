@@ -14,7 +14,7 @@ import (
 // MigrateUp applies every pending migration in fsys to the database at dsn. It is
 // the single on-deploy migration entry point: the gateway calls it at boot,
 // before it starts serving, so the schema is fully migrated before the fleet
-// answers traffic — the gateway-as-migrator mechanism in docs/migrations.md §2.
+// answers traffic — the gateway-as-migrator mechanism in .claude/rules/db-migrations.md.
 //
 // dsn MUST be the migrator connection string (DATABASE_MIGRATION_URL). Never the
 // app role (it holds no DDL privileges) and never the superuser (BYPASSRLS would

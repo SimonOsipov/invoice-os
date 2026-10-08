@@ -126,7 +126,7 @@ const (
 	maxPolicyBodyBytes = 64 * 1024 // the maxStaffBodyBytes precedent; no step-count cap
 
 	// sweepCap ceilings the publish sweep's transaction. A literal, deliberately not
-	// raisable by env or request — see docs/approvals.md §5 for the operator path.
+	// raisable by env or request. .claude/rules/approvals.md caps the sweep.
 	sweepCap = 5000
 )
 
@@ -398,8 +398,8 @@ func policyStatusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "a condition must have at least one step in one of its two lanes"
 	case errors.Is(err, ErrPolicyNothingToPublish):
 		return http.StatusConflict, "this policy has no unpublished changes"
-	// The message names the page rather than the remedy: the operator path is several
-	// paragraphs long, so docs/approvals.md §5 carries it.
+	// The message names the cap rather than the remedy: the operator path is several
+	// paragraphs long.
 	case errors.Is(err, ErrSweepCapExceeded):
 		return http.StatusConflict, "validated backlog exceeds the publish sweep cap"
 	// The concurrent-publish loser, mapped from 23505 on

@@ -1,7 +1,7 @@
 // Package migrations embeds the SQL migration files so a Go binary can apply
 // them at deploy time without shipping the goose binary or the loose .sql files
 // alongside it. This is what lets the gateway be the in-network migrator
-// (docs/migrations.md §2): its distroless image contains only the compiled
+// (.claude/rules/db-migrations.md): its distroless image contains only the compiled
 // binary, so the migrations have to travel *inside* it.
 //
 // The on-disk files under migrations/ remain the single source of truth —

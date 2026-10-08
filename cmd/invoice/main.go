@@ -174,7 +174,7 @@ func main() {
 	// backlog, so awaiting_approval is non-zero and the Approvals badge is
 	// observable on the deploy gate. Runs on EVERY boot, not just the first: the
 	// gateway's db.PurgeDemoTenants empties approval_runs on every gated boot and
-	// leaves the policy tables standing (docs/demo-reset.md); db.Reset truncates
+	// leaves the policy tables standing (.claude/rules/db-migrations.md); db.Reset truncates
 	// the same rows, but only in a pr-<N> environment. Here rather than in the
 	// gateway, which is a different process.
 	// Non-fatal, matching demodocs above -- a crash-loop costs an environment, a

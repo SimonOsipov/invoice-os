@@ -35,9 +35,6 @@
 // msLuhnCheckDigit positive control (it exercises this file's transcription, not production
 // code) and the constant-level sanity checks that compare one symbol against another.
 //
-// AC-8's spec fails at authoring time because docs/mock-app-adapter.md does not exist yet.
-// That is correct RED: the doc is the executor's deliverable.
-//
 // Helper prefix `ms` mirrors mock_wire_test.go's `mw`, so the two in-package files in this
 // directory cannot collide. Standard library only -- no testify. No TestMain: exactly one
 // exists (failure_modes_test.go:57) and both packages here build into ONE test binary. No
@@ -261,7 +258,7 @@ func msRawURLOnly(t *testing.T, what, s string) {
 // TestMockTriggerFor_AllocationTable drives one row per allocation, and separately pins the
 // TABLE itself -- its length, its order and its contents. The two halves catch different bugs:
 // mockTriggerFor could be a correct-looking switch statement that has drifted from the table
-// docs/mock-app-adapter.md is generated against, or the table could be right while the lookup
+// the table is generated against, or the table could be right while the lookup
 // silently normalises or short-circuits.
 func TestMockTriggerFor_AllocationTable(t *testing.T) {
 	want := []mockAllocation{

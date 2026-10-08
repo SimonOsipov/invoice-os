@@ -749,9 +749,20 @@ describe('library player', () => {
     expect(inButton(done).map((t) => attr(t, 'width'))).toEqual(['16'])
     expect(renderToStaticMarkup(playerEl('import-files', ended))).toContain(renderToStaticMarkup(createElement(Icon, { name: 'rotate-cw', size: 16 })))
     expect(where(done, (s) => s.transition === 'width 100ms linear').map((t) => style(t).width)).toEqual(['100%'])
+    const over = playerView('import-files', { ...ended, tenths: 200 })
+    expect(where(over, (s) => s.transition === 'width 100ms linear').map((t) => style(t).width)).toEqual(['100%'])
 
     const three = playerView('create-invoice', START)
     expect(where(three, (s) => s.width === '2px' && s.background === 'var(--surface)')).toHaveLength(2)
+    expect(withText(three, '0:00 / 0:10')).toBeDefined()
+
+    expect(withText(done, '0:13 / 0:13')).toBeDefined()
+    expect(FEATURES.length).toBeGreaterThan(0)
+    for (const f of FEATURES) {
+      const n = f.sc.steps.length
+      const lefts = where(playerView(f.id, START), (s) => s.width === '2px' && s.background === 'var(--surface)').map((t) => style(t).left)
+      expect(lefts).toEqual(Array.from({ length: n - 1 }, (_, i) => `${((i + 1) / n) * 100}%`))
+    }
   })
 
   it('PL-04 the play button toggles and the scrub seeks to the click fraction', () => {
@@ -766,5 +777,11 @@ describe('library player', () => {
     expect(scrub).toHaveLength(1)
     ;(scrub[0].props.onClick as (e: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 100, width: 400 }) }, clientX: 300 })
     expect(sought).toBe(0.5)
+    const click = (clientX: number) => (scrub[0].props.onClick as (e: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 100, width: 400 }) }, clientX })
+    click(500)
+    expect(sought).toBe(1)
+    click(100)
+    expect(sought).toBe(0)
+    expect(toggled).toBe(1)
   })
 })

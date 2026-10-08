@@ -20,7 +20,7 @@ export function nextClock(c: Clock, a: ClockAction, steps: number): Clock {
     case 'toggle':
       return c.ended ? START : { ...c, playing: !c.playing }
     case 'seek':
-      return { ...c, tenths: Math.min(total - 1, Math.max(0, Math.round(a.frac * total))), ended: false }
+      return { ...c, tenths: Math.min(total - 1, Math.max(0, Math.floor(a.frac * total))), ended: false }
     case 'jump':
       return { tenths: a.step * STEP_TENTHS, playing: true, ended: false }
   }

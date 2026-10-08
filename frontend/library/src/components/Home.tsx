@@ -1,5 +1,6 @@
 import { GROUPS } from '../content'
 import { Icon, type GlyphName } from '../icons'
+import { trackLibraryDemoOpen } from '../analytics'
 import type { Group } from '../types'
 import { Button } from './Button'
 
@@ -130,7 +131,7 @@ export function Home({ demoHref, onGroup, onTour }: HomeProps) {
             </h2>
           </div>
           {demoHref && (
-            <Button variant="primary" size="lg" arrow href={demoHref}>
+            <Button variant="primary" size="lg" arrow href={demoHref} onClick={trackLibraryDemoOpen}>
               Book the Demo
             </Button>
           )}

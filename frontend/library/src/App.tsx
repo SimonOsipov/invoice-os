@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { GROUPS, TOUR } from './content'
 import { Home } from './components/Home'
 import { FeaturePage } from './components/FeaturePage'
@@ -6,7 +6,7 @@ import { GroupPage } from './components/GroupPage'
 import { JourneyStepper } from './components/JourneyStepper'
 import { Sidebar } from './components/Sidebar'
 import { TourOverlay } from './components/TourOverlay'
-import { chooseConsent, CookieNotice, readConsent } from './analytics'
+import { chooseConsent, CookieNotice, readConsent, trackLibraryPageView } from './analytics'
 import { demoHref, featurePlatformHref, groupPlatformHref, privacyHref } from './links'
 import { libraryPath, parseLibraryPath, type Route } from './route'
 import { TOUR_START, tourBack, tourButtonLabel, tourNext, tourStage, type TourState } from './tour'
@@ -76,7 +76,16 @@ export function App() {
     const feature = GROUPS.flatMap((g) => g.feats).find((f) => f.id === TOUR[t.i].f)
     if (feature) goFeature(feature)
   }
-  const { rect, win } = useTourSpot(tourOn ? tour : null, libraryPath(route))
+  const path = libraryPath(route)
+  const { rect, win } = useTourSpot(tourOn ? tour : null, path)
+
+  // The first path is reported by config; later changes by path only (not StrictMode, re-clicks or corrections).
+  const viewed = useRef(path)
+  useEffect(() => {
+    if (path === viewed.current) return
+    viewed.current = path
+    trackLibraryPageView()
+  }, [path])
 
   return (
     <div

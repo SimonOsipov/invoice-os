@@ -1,4 +1,5 @@
 import { GROUPS } from '../content'
+import { trackLibraryDemoOpen } from '../analytics'
 import { Icon, type GlyphName } from '../icons'
 import type { Route } from '../route'
 import type { Feature, Group } from '../types'
@@ -232,7 +233,7 @@ export function Sidebar({
       </nav>
       <div style={{ flex: 'none', padding: '14px 16px 16px', borderTop: '1px solid var(--line-1)' }}>
         {demoHref !== null && (
-          <Button variant="outlineDark" size="sm" href={demoHref} style={{ width: '100%' }}>
+          <Button variant="outlineDark" size="sm" href={demoHref} onClick={trackLibraryDemoOpen} style={{ width: '100%' }}>
             Book the Demo
           </Button>
         )}

@@ -455,7 +455,7 @@ describe('library shell primitives', () => {
 
   it('SH-17 the sidebar tour label is a prop', () => {
     const tourSpan = (props: object) => {
-      const ts = render(createElement(Sidebar, { route: home, demoHref: null, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop, ...props }))
+      const ts = render(createElement(Sidebar, { route: home, demoHref: null, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop, onCookieChoices: noop, ...props }))
       const btnTag = ts.find((t) => attr(t, 'class') === 'lib-tour')!
       const inside = ts.slice(ts.indexOf(btnTag) + 1)
       return { span: inside.find((t) => t.name === 'span')!, svgFirst: inside.findIndex((t) => t.name === 'svg') < inside.findIndex((t) => t.name === 'span') }
@@ -471,7 +471,7 @@ describe('library shell primitives', () => {
   it('SH-18 a null onTour removes the sidebar tour button and keeps its siblings', () => {
     const demoHref = 'https://l.example/?demo'
     const tourBtns = (ts: Tag[]) => ts.filter((t) => attr(t, 'class') === 'lib-tour')
-    const off = render(createElement(Sidebar, { route: home, demoHref, onHome: noop, onGroup: noop, onFeature: noop, onTour: null }))
+    const off = render(createElement(Sidebar, { route: home, demoHref, onHome: noop, onGroup: noop, onFeature: noop, onTour: null, onCookieChoices: noop }))
     expect(tourBtns(off)).toHaveLength(0)
     expect(off.some((t) => t.text === 'LIBRARY')).toBe(true)
     expect(only(off, 'nav')).toBeDefined()

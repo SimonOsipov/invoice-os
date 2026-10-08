@@ -244,7 +244,7 @@ describe('library entry', () => {
   const noop = () => {}
   const feature = FEATURES.find((f) => f.id === 'import-files')!
   const markup = {
-    sidebar: renderToStaticMarkup(createElement(Sidebar, { route: parseLibraryPath('/invoices'), demoHref: null, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop })),
+    sidebar: renderToStaticMarkup(createElement(Sidebar, { route: parseLibraryPath('/invoices'), demoHref: null, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop, onCookieChoices: noop })),
     stepper: renderToStaticMarkup(createElement(JourneyStepper, { route: parseLibraryPath('/'), onGroup: noop })),
     home: renderToStaticMarkup(createElement(Home, { demoHref: null, onGroup: noop, onTour: noop })),
     group: renderToStaticMarkup(createElement(GroupPage, { group: GROUPS[0], openHref: null, onFeature: noop })),

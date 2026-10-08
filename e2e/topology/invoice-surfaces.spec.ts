@@ -2989,6 +2989,8 @@ test('invoice detail: a 1,500-row source file renders through the window, not al
   )
   await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
   await importResp
+  // The app routes to the review a tick after the response; leaving earlier lets its URL write overwrite ours.
+  await expect(page).toHaveURL(/\/imports\/[^/]+\/review$/)
 
   await goToInvoices(page)
   // Any of the 500 will do -- they all share the one file -- and openInvoiceRow does

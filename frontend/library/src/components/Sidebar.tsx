@@ -12,7 +12,8 @@ type SidebarProps = {
   onHome: () => void
   onGroup: (g: Group) => void
   onFeature: (f: Feature) => void
-  onTour: () => void
+  onTour: (() => void) | null
+  tourLabel?: string
 }
 
 const navButton = {
@@ -28,7 +29,7 @@ const navButton = {
   fontSize: '13.5px',
 } as const
 
-export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour }: SidebarProps) {
+export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour, tourLabel = 'Take the tour' }: SidebarProps) {
   const home = route.view === 'home'
   return (
     <aside
@@ -82,29 +83,31 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour }:
             LIBRARY
           </span>
         </button>
-        <button
-          type="button"
-          className="lib-tour"
-          onClick={onTour}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 10,
-            width: '100%',
-            height: 42,
-            border: 0,
-            borderRadius: 7,
-            background: 'var(--accent)',
-            color: 'var(--accent-foreground)',
-            fontSize: 14,
-            fontWeight: 700,
-            cursor: 'pointer',
-          }}
-        >
-          <Icon name="play" size={15} />
-          <span>Take the tour</span>
-        </button>
+        {onTour !== null && (
+          <button
+            type="button"
+            className="lib-tour"
+            onClick={onTour}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
+              width: '100%',
+              height: 42,
+              border: 0,
+              borderRadius: 7,
+              background: 'var(--accent)',
+              color: 'var(--accent-foreground)',
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            <Icon name="play" size={15} />
+            <span>{tourLabel}</span>
+          </button>
+        )}
       </div>
       <nav
         style={{

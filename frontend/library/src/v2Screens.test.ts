@@ -199,6 +199,18 @@ describe('library home', () => {
     tour[0].props.onClick!()
     expect(calls.at(-1)).toBe('tour')
   })
+
+  it('SC-12 a null onTour removes the hero tour button and its row', () => {
+    const render = (onTour: (() => void) | null) => parse(renderToStaticMarkup(createElement(Home, { demoHref: null, onGroup: noop, onTour })))
+    const actionsRows = (ts: Tag[]) => ts.filter((t) => t.name === 'div' && style(t).gap === '14px' && style(t)['flex-wrap'] === 'wrap')
+    const off = render(null)
+    expect(off.filter((t) => t.name === 'button' && t.text === 'Take the tour')).toHaveLength(0)
+    expect(actionsRows(off)).toHaveLength(0)
+    expect(off.some((t) => t.text.includes('or take the tour'))).toBe(true)
+    const on = render(noop)
+    expect(on.filter((t) => t.name === 'button' && t.text === 'Take the tour')).toHaveLength(1)
+    expect(actionsRows(on)).toHaveLength(1)
+  })
 })
 
 const groupPage = (gid: string, openHref: string | null = null) => {

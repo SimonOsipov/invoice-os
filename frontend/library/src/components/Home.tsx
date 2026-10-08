@@ -3,7 +3,7 @@ import { Icon, type GlyphName } from '../icons'
 import type { Group } from '../types'
 import { Button } from './Button'
 
-type HomeProps = { demoHref: string | null; onGroup: (g: Group) => void; onTour: () => void }
+type HomeProps = { demoHref: string | null; onGroup: (g: Group) => void; onTour: (() => void) | null }
 
 export function Home({ demoHref, onGroup, onTour }: HomeProps) {
   return (
@@ -29,11 +29,13 @@ export function Home({ demoHref, onGroup, onTour }: HomeProps) {
           <p className="t-lead" style={{ margin: 0, maxWidth: 600 }}>
             Short screen recordings and plain explanations of what ASComply does to an invoice, from import to FIRS clearance. Pick a group or take the tour.
           </p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 4 }}>
-            <Button variant="primary" arrow onClick={onTour}>
-              Take the tour
-            </Button>
-          </div>
+          {onTour !== null && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 4 }}>
+              <Button variant="primary" arrow onClick={onTour}>
+                Take the tour
+              </Button>
+            </div>
+          )}
         </div>
       </section>
 

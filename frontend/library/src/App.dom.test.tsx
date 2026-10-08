@@ -3,6 +3,8 @@ import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
+import { GROUPS, TOUR } from './content'
+import { CALLOUT_H, CALLOUT_W } from './tour'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -18,12 +20,22 @@ function mount(path: string) {
   act(() => root.render(<StrictMode><App /></StrictMode>))
 }
 
+type Box = { left: number; top: number; width: number; height: number }
+const rects = new Map<string, Box>()
+const realRect = Element.prototype.getBoundingClientRect
+
 beforeEach(() => {
+  rects.clear()
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    const b = rects.get(this.id) ?? { left: 0, top: 0, width: 0, height: 0 }
+    return { ...b, x: b.left, y: b.top, right: b.left + b.width, bottom: b.top + b.height, toJSON: () => b } as DOMRect
+  }
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
   errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 
 afterEach(() => {
+  Element.prototype.getBoundingClientRect = realRect
   act(() => root.unmount())
   container.remove()
   vi.unstubAllEnvs()
@@ -397,5 +409,279 @@ describe('App', () => {
     expect(pos()).toBe('01 / 04')
     expect(vi.getTimerCount()).toBe(1)
     expect(window.history.length).toBe(len)
+  })
+})
+
+describe('App tour', () => {
+  const sidebarBtn = () => container.querySelector<HTMLElement>('button.lib-tour')!
+  const sidebarLabel = () => sidebarBtn().textContent
+  const hero = () => [...main().querySelectorAll<HTMLElement>('button')].find((b) => b.textContent === 'Take the tour')
+  const overlay = () => container.querySelector<HTMLElement>('.asc-app > div:last-child:not(aside):not(main)')
+  const step = () => overlay()?.querySelector('.t-step')?.textContent
+  const btn = (label: string) => [...container.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent === label)!
+  const spotlight = () => [...container.querySelectorAll<HTMLElement>('.asc-app > div div')].find((d) => d.style.boxShadow.includes('9999px'))!
+  const callout = () => [...container.querySelectorAll<HTMLElement>('.asc-app > div div')].find((d) => d.style.width === `${CALLOUT_W}px`)!
+  const box = (el: HTMLElement) => [el.style.left, el.style.top, el.style.width, el.style.height].map(parseFloat)
+  const encloses = (outer: HTMLElement, r: Box) => {
+    const [x, y, w, h] = box(outer)
+    return x <= r.left && y <= r.top && x + w >= r.left + r.width && y + h >= r.top + r.height
+  }
+  const stepperMarked = () => [...container.querySelectorAll<HTMLElement>('.lib-stage[aria-current]')].map((e) => e.textContent!.slice(2))
+  const allRects = () => {
+    GROUPS.forEach((g, n) => rects.set(`nav-${g.id}`, { left: 10, top: 100 + n * 40, width: 267, height: 36 }))
+    TOUR.forEach((t) => rects.set(`fc-${t.f}`, { left: 330, top: 130, width: 340, height: 300 }))
+  }
+  const NAV_INVOICES = { left: 10, top: 100, width: 267, height: 36 }
+  const CARD_IMPORT = { left: 330, top: 130, width: 340, height: 300 }
+
+  it('tour_startsFromTheSidebarAndSpotlightsTheFirstGroup', () => {
+    rects.set('nav-invoices', NAV_INVOICES)
+    mount('/')
+    click(sidebarBtn())
+    expect(sidebarLabel()).toBe('Tour 1 of 14 · exit')
+    expect(box(spotlight())).toEqual([6, 97, 275, 42])
+    expect(encloses(spotlight(), NAV_INVOICES)).toBe(true)
+    expect(step()).toBe('STEP 01 OF 14')
+    expect(container.textContent).toContain('Open Invoices')
+    expect(container.textContent).toContain('Import, create and track every invoice.')
+    expect(btn('Back').hasAttribute('disabled')).toBe(true)
+    expect(btn('Watch demo')).toBeUndefined()
+    expect(window.location.pathname).toBe('/')
+  })
+
+  it('tour_heroButtonStartsTheSameTour', () => {
+    mount('/')
+    expect(overlay()).toBeNull()
+    click(hero()!)
+    expect(step()).toBe('STEP 01 OF 14')
+    expect(sidebarLabel()).toBe('Tour 1 of 14 · exit')
+    expect(hero()!.textContent).toBe('Take the tour')
+  })
+
+  it('tour_nextOpensTheGroupPageAndSpotlightsTheCard', () => {
+    rects.set('nav-invoices', NAV_INVOICES)
+    rects.set('fc-import-files', CARD_IMPORT)
+    mount('/')
+    click(sidebarBtn())
+    const push = vi.spyOn(window.history, 'pushState')
+    click(btn('Next'))
+    expect(window.location.pathname).toBe('/invoices')
+    expect(push).toHaveBeenCalledTimes(1)
+    push.mockRestore()
+    expect(step()).toBe('STEP 02 OF 14')
+    expect(container.textContent).toContain('Start with the data you already have')
+    expect(btn('Watch demo')).toBeDefined()
+    expect(sidebarLabel()).toBe('Tour 2 of 14 · exit')
+    expect(main().scrollTop).toBe(74)
+    expect(box(spotlight())).toEqual([322, 122, 356, 316])
+    expect(encloses(spotlight(), CARD_IMPORT)).toBe(true)
+  })
+
+  it('tour_nextAfterACardSpotlightsTheNextGroupWithoutNavigating', () => {
+    allRects()
+    mount('/')
+    click(sidebarBtn())
+    click(btn('Next'))
+    click(btn('Next'))
+    expect(step()).toBe('STEP 03 OF 14')
+    expect(container.textContent).toContain('Open Document recognition')
+    expect(window.location.pathname).toBe('/invoices')
+    expect(box(spotlight())).toEqual([6, 97 + 40, 275, 42])
+    click(btn('Next'))
+    expect(window.location.pathname).toBe('/recognition')
+    expect(container.textContent).toContain('Read PDFs and scans')
+  })
+
+  it('tour_walksAllFourteenStepsAndFinishEndsIt', () => {
+    allRects()
+    mount('/')
+    click(sidebarBtn())
+    const labels = [sidebarLabel()]
+    const paths = [window.location.pathname]
+    for (let n = 0; n < 13; n++) {
+      click(btn('Next'))
+      labels.push(sidebarLabel())
+      paths.push(window.location.pathname)
+    }
+    expect(labels).toEqual(Array.from({ length: 14 }, (_, n) => `Tour ${n + 1} of 14 · exit`))
+    expect(paths).toEqual(['/', '/invoices', '/invoices', '/recognition', '/recognition', '/rules', '/rules', '/approvals', '/approvals', '/clearance', '/clearance', '/audit', '/audit', '/reports'])
+    expect(step()).toBe('STEP 14 OF 14')
+    expect(container.textContent).toContain('See readiness at a glance')
+    click(btn('Finish'))
+    expect(overlay()).toBeNull()
+    expect(sidebarLabel()).toBe('Take the tour')
+    expect(window.location.pathname).toBe('/reports')
+  })
+
+  it('tour_backStepsBackThroughTheStops', () => {
+    allRects()
+    mount('/')
+    click(sidebarBtn())
+    click(btn('Next'))
+    click(btn('Next'))
+    expect(step()).toBe('STEP 03 OF 14')
+    click(btn('Back'))
+    expect(step()).toBe('STEP 02 OF 14')
+    expect(window.location.pathname).toBe('/invoices')
+    click(btn('Back'))
+    expect(step()).toBe('STEP 01 OF 14')
+    expect(btn('Back').hasAttribute('disabled')).toBe(true)
+    click(btn('Next'))
+    click(btn('Next'))
+    click(btn('Next'))
+    expect(step()).toBe('STEP 04 OF 14')
+    const path = window.location.pathname
+    click(btn('Back'))
+    expect(step()).toBe('STEP 03 OF 14')
+    expect(container.textContent).toContain('Open Document recognition')
+    expect(window.location.pathname).toBe(path)
+  })
+
+  it('tour_closeAndExitEndTheTourAtAnyStep', () => {
+    allRects()
+    mount('/')
+    click(sidebarBtn())
+    for (let n = 0; n < 4; n++) click(btn('Next'))
+    expect(step()).toBe('STEP 05 OF 14')
+    let path = window.location.pathname
+    click(container.querySelector('[aria-label="Close tour"]')!)
+    expect(overlay()).toBeNull()
+    expect(sidebarLabel()).toBe('Take the tour')
+    expect(window.location.pathname).toBe(path)
+    click(sidebarBtn())
+    for (let n = 0; n < 5; n++) click(btn('Next'))
+    expect(step()).toBe('STEP 06 OF 14')
+    expect(sidebarLabel()).toBe('Tour 6 of 14 · exit')
+    path = window.location.pathname
+    click(sidebarBtn())
+    expect(overlay()).toBeNull()
+    expect(window.location.pathname).toBe(path)
+  })
+
+  it('tour_watchDemoOpensTheStopsFeatureAndEndsTheTour', () => {
+    allRects()
+    mount('/')
+    click(sidebarBtn())
+    click(btn('Next'))
+    click(btn('Watch demo'))
+    expect(window.location.pathname).toBe('/invoices/import-files')
+    expect(h2s()).toContain('Import from CSV or Excel')
+    expect(pos()).toBe('01 / 04')
+    expect(overlay()).toBeNull()
+  })
+
+  it('tour_stepperHighlightsTheStopStage', () => {
+    allRects()
+    mount('/')
+    click(sidebarBtn())
+    expect(stepperMarked()).toEqual(['Import'])
+    click(btn('Next'))
+    click(btn('Next'))
+    click(btn('Next'))
+    expect(step()).toBe('STEP 04 OF 14')
+    click(btn('Back'))
+    expect(step()).toBe('STEP 03 OF 14')
+    expect(window.location.pathname).toBe('/recognition')
+    expect(stepperMarked()).toEqual(['Extract'])
+    for (let n = 0; n < 11; n++) click(btn('Next'))
+    expect(step()).toBe('STEP 14 OF 14')
+    expect(stepperMarked()).toEqual([])
+    click(btn('Back'))
+    expect(step()).toBe('STEP 13 OF 14')
+    expect(stepperMarked()).toEqual([])
+  })
+
+  it('tour_stepperIgnoresThePageAndTheRouteRuleReturnsAfterClose', () => {
+    allRects()
+    mount('/audit')
+    expect(stepperMarked()).toEqual(['Archive'])
+    click(sidebarBtn())
+    expect(stepperMarked()).toEqual(['Import'])
+    click(container.querySelector('[aria-label="Close tour"]')!)
+    expect(stepperMarked()).toEqual(['Archive'])
+  })
+
+  it('tour_resizeAndScrollRemeasureTheSpotlight', () => {
+    rects.set('nav-invoices', NAV_INVOICES)
+    rects.set('fc-import-files', CARD_IMPORT)
+    mount('/')
+    click(sidebarBtn())
+    rects.set('nav-invoices', { ...NAV_INVOICES, top: 300 })
+    act(() => window.dispatchEvent(new Event('resize')))
+    expect(box(spotlight())[1]).toBe(297)
+    rects.set('nav-invoices', { ...NAV_INVOICES, top: 500 })
+    act(() => container.querySelector('aside nav')!.dispatchEvent(new Event('scroll')))
+    expect(box(spotlight())[1]).toBe(497)
+    click(btn('Next'))
+    rects.set('fc-import-files', { ...CARD_IMPORT, top: 140 })
+    const before = main().scrollTop
+    act(() => main().dispatchEvent(new Event('scroll')))
+    expect(box(spotlight())[1]).toBe(132)
+    expect(main().scrollTop).toBe(before)
+    const w = window.innerWidth
+    try {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 400 })
+      act(() => window.dispatchEvent(new Event('resize')))
+      expect(callout().style.left).toBe('24px')
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: w })
+    }
+  })
+
+  it('tour_calloutStaysInsideTheWindowAndOffTheSpotlight', () => {
+    rects.set('nav-invoices', NAV_INVOICES)
+    rects.set('fc-import-files', CARD_IMPORT)
+    mount('/')
+    click(sidebarBtn())
+    const check = () => {
+      const c = callout().style
+      const [cx, cy] = [parseFloat(c.left), parseFloat(c.top)]
+      const [sx, sy, sw, sh] = box(spotlight())
+      expect(cx >= 0 && cy >= 0 && cx + CALLOUT_W <= window.innerWidth && cy + CALLOUT_H <= window.innerHeight).toBe(true)
+      const apart = cx + CALLOUT_W <= sx || sx + sw <= cx || cy + CALLOUT_H <= sy || sy + sh <= cy
+      expect(apart).toBe(true)
+      return cy
+    }
+    check()
+    click(btn('Next'))
+    const top = check()
+    expect(top).toBe(122 + 316 + 16)
+    expect(top + CALLOUT_H).toBeLessThan(window.innerHeight)
+  })
+
+  it('tour_startedOnAFeaturePageLeavesNoPlayerRunning', () => {
+    allRects()
+    mount('/invoices/import-files')
+    expect(vi.getTimerCount()).toBe(1)
+    click(sidebarBtn())
+    expect(step()).toBe('STEP 01 OF 14')
+    expect(h2s()).toContain('Import from CSV or Excel')
+    expect(vi.getTimerCount()).toBe(1)
+    click(btn('Next'))
+    expect(window.location.pathname).toBe('/invoices')
+    expect(h2s()).not.toContain('Import from CSV or Excel')
+    expect(step()).toBe('STEP 02 OF 14')
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => root.unmount())
+    container.remove()
+    mount('/')
+    click(sidebarBtn())
+    expect(vi.getTimerCount()).toBe(0)
+    click(btn('Next'))
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('tour_otherNavigationEndsTheTour', async () => {
+    allRects()
+    mount('/')
+    click(sidebarBtn())
+    click(btn('Next'))
+    click(container.querySelector('#nav-rules')!)
+    expect(overlay()).toBeNull()
+    expect(window.location.pathname).toBe('/rules')
+    click(sidebarBtn())
+    expect(step()).toBe('STEP 01 OF 14')
+    await move(() => window.history.back())
+    expect(overlay()).toBeNull()
   })
 })

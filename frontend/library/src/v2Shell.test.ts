@@ -429,4 +429,43 @@ describe('library shell primitives', () => {
     for (const b of stages) click(b)
     expect(stageCalls).toEqual(STAGES.map(([, gid]) => gid))
   })
+
+  it('SH-17 the sidebar tour label is a prop', () => {
+    const tourSpan = (props: object) => {
+      const ts = render(createElement(Sidebar, { route: home, demoHref: null, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop, ...props }))
+      const btnTag = ts.find((t) => attr(t, 'class') === 'lib-tour')!
+      const inside = ts.slice(ts.indexOf(btnTag) + 1)
+      return { span: inside.find((t) => t.name === 'span')!, svgFirst: inside.findIndex((t) => t.name === 'svg') < inside.findIndex((t) => t.name === 'span') }
+    }
+    const dflt = tourSpan({})
+    expect(dflt.span.text).toBe('Take the tour')
+    expect(dflt.svgFirst).toBe(true)
+    const set = tourSpan({ tourLabel: 'Tour 3 of 14 · exit' })
+    expect(set.span.text).toBe('Tour 3 of 14 · exit')
+    expect(set.svgFirst).toBe(true)
+  })
+
+  it('SH-18 a null onTour removes the sidebar tour button and keeps its siblings', () => {
+    const demoHref = 'https://l.example/?demo'
+    const tourBtns = (ts: Tag[]) => ts.filter((t) => attr(t, 'class') === 'lib-tour')
+    const off = render(createElement(Sidebar, { route: home, demoHref, onHome: noop, onGroup: noop, onFeature: noop, onTour: null }))
+    expect(tourBtns(off)).toHaveLength(0)
+    expect(off.some((t) => t.text === 'LIBRARY')).toBe(true)
+    expect(only(off, 'nav')).toBeDefined()
+    expect(withText(off, 'Book the Demo')).toBeDefined()
+    expect(tourBtns(sidebar(home, demoHref))).toHaveLength(1)
+  })
+
+  it('SH-19 tourStage overrides the route in the stepper', () => {
+    const audit = parseLibraryPath('/audit')
+    const marked = (tourStage?: number) => {
+      const ts = render(createElement(JourneyStepper, { route: audit, onGroup: noop, tourStage }))
+      return buttons(ts)
+        .filter((b) => attr(b, 'aria-current') !== undefined)
+        .map((b) => after(ts, b, 'span', 2).text)
+    }
+    expect(marked()).toEqual(['Archive'])
+    expect(marked(2)).toEqual(['Validate'])
+    expect(marked(-1)).toEqual([])
+  })
 })

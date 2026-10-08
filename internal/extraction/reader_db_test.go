@@ -575,7 +575,7 @@ type rdTraceKey struct{}
 
 // rdQueryTracer records every query on its pool and can run a hook as one ends. The request
 // seam's own set_config and membership select ride a pgx.Batch, which a plain QueryTracer never
-// sees (docs/migrations.md), so only the reader's own SELECT reaches this.
+// sees (.claude/rules/tenant-seam.md), so only the reader's own SELECT reaches this.
 type rdQueryTracer struct {
 	mu    sync.Mutex
 	sqls  []string

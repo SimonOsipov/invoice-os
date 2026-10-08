@@ -1,0 +1,42 @@
+---
+paths:
+  - "internal/extraction/pagestore.go"
+  - "internal/extraction/pdfium.go"
+  - "internal/extraction/pdfium_extractor.go"
+  - "internal/extraction/pdfium_pool.go"
+  - "internal/extraction/reader.go"
+  - "internal/extraction/handlers.go"
+  - "internal/extraction/store.go"
+  - "migrations/*extraction_page_images*"
+---
+# Page images
+
+- Render every PDF page to one grayscale PNG at DPI 150. A format with no page images skips the render.
+- Let DOCX extract from its text layer alone. It has no page images and no field regions.
+- Gate the render on `RendersPageImagesForDocument`: the declared content type, or a `%PDF-` byte sniff.
+- Write objects to the document bucket. Write one `extraction_page_images` row per page, under FORCE row-level security.
+- Treat the row set as the manifest. Write no manifest object.
+- Call `PageStore.Ingest` first. It renders and PUTs every page.
+- Replace the document's whole row set in one transaction only after `Ingest` returns. `writePageImagesTx` deletes, then inserts.
+- Never write a row before its object. A committed row must name an object that exists.
+- A failed PUT leaves orphan objects and no rows. River retries it cleanly.
+- Store the renderer's own pixel dimensions on each row. Never compute `pageWidthPt * dpi / 72`, because go-pdfium rounds up.
+- Key each object `tenants/<tenant_id>/pages/<content_hash>/v1/p<NNNN>.png`. Build it with `PageKey`.
+- Derive both variable segments on the server. Take the tenant from the job args and the hash from the document bytes.
+- Never case-fold the tenant segment in `PageKey`. The `extraction_page_images_key_tenant_scoped` CHECK compares lowercase `uuid::text`.
+- Pad the page number to four digits so keys sort in page order.
+- Treat `v1` as the render profile. A change of DPI, colour model or format mints `v2` keys.
+- Never overwrite `v1` objects. Decide what happens to the rows that name them.
+- Fail a document over `maxPages` with a stated reason. Never truncate it.
+- Derive `maxPages` from the 10-minute job timeout, a 120-second reserve, 300 ms per page and a safety factor of 2.
+- Re-derive `maxPages` when a measured per-page cost exceeds 300 ms. Never raise it from the arithmetic alone.
+- Assume one render per job. Re-derive `maxPages` before you wire `PDFiumExtractor` beside `PageStore`.
+- Re-derive `maxPages` before you fill `ExtractWorker.Text` with a local reader. `selectTextReader` fills it only under docling.
+- Keep the page images as long as the source document. Set no TTL and no bucket lifecycle rule.
+- Never delete a bucket object from the app. `document.ObjectStore` has no delete method.
+- Expect orphan PNGs after a demo purge. It deletes the rows and leaves the objects.
+- Select the object key off an RLS-visible row in `Reader.PageImageKey`. Never rebuild it with `PageKey` on a request.
+- Pass no caller-supplied text to object storage. `GET /v1/extractions/{id}/pages/{n}` streams the object as `image/png`.
+- Name no `tenant_id` in the page-image reads. The `tenant_isolation` policy and `extraction_page_images_tenant_document_fk` both scope them.
+- Do not rely on a request-path test to prove the `tenant_isolation` policy. The foreign key makes the cross-tenant case unconstructible.
+- Take the AI page images for a no-text document from that job's own render. Send the first and last page only.

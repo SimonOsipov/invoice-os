@@ -4,8 +4,6 @@
 // AUDIT-09-06's RED specs, written before the component (Mode A). ApprovalStateCard.tsx is
 // a stub that throws 'not implemented', so every render-based spec below fails on that
 // throw; the two source/copy specs fail on a real assertion instead (see their comments).
-// Contract: .ralph/AUDIT-09-06-arch.md section 3 (the component), 4.5 (the guarantee
-// ledger), 6.1 (the spec table), 7 (the branch ladder).
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -730,8 +728,7 @@ describe('ApprovalStateCard', () => {
 
   it('approvalStateCard_dropsTheNotifyDisclosure', () => {
     // Retired guarantee: the third "no message is delivered" disclosure. DROPPED with the
-    // ladder (arch 4.5); docs/approvals.md's constant count must be corrected in the same
-    // commit (F-S). A notify step is rendered nowhere on the invoice page any more.
+    // ladder (arch 4.5). A notify step is rendered nowhere on the invoice page any more.
     const steps = [
       stepFixture({ ord: 0, kind: 'notify', state: 'pending', workflow_role_title: 'AP Team', notify_target: 'ap@acme.test', notify_channel: 'email' }),
       stepFixture({ ord: 1, workflow_role_title: 'Finance lead', holder: { text: 'Ada Obi', warn: false } }),

@@ -3,7 +3,8 @@
 // tests write the shared seeded rows when the grant is missing; each registers a
 // superuser restore in t.Cleanup before its first write. No t.Parallel().
 //
-//	. .ralph/dbenv.sh && go test -p 1 -count=1 ./internal/validation/...
+// Run: go test -p 1 -count=1 ./internal/validation/... with DATABASE_URL and
+// DATABASE_SUPERUSER_URL set to the dev DB (Makefile DEV_DB_APP_URL / DEV_DB_SUPERUSER_URL).
 package validation
 
 import (

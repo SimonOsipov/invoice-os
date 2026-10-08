@@ -1,5 +1,5 @@
 // fleetgate_test.go: EXTR-17-06. The fleet size is written in prose in a dozen
-// places across workflows, docs and CI scripts; each one goes stale silently
+// places across workflows and CI scripts; each one goes stale silently
 // the moment the fleet changes. This derives the size from dev-env.yml's
 // deploy topology and fails on every site that disagrees.
 //
@@ -34,12 +34,12 @@ const (
 // The four trees the detection command walks:
 //
 //	grep -rnE '\b(15|16)\b' \
-//	  .github/workflows docs scripts/ci internal/tools \
+//	  .github/workflows scripts/ci internal/tools \
 //	  | grep -iE 'service'
 //
 // Split across three lines on purpose: written as one line this comment
 // carries both halves of the pattern and becomes a hit in its own scan.
-var scanTrees = []string{".github/workflows", "docs", "scripts/ci", "internal/tools"}
+var scanTrees = []string{".github/workflows", "scripts/ci", "internal/tools"}
 
 // The two halves of that command, kept on separate lines so neither line is
 // itself a hit.
@@ -48,10 +48,10 @@ var (
 	subjectRe = regexp.MustCompile(`(?i)service`)
 )
 
-// Population floors: the measured population (14 hits across 7 files), this gate's own source excluded.
+// Population floors: the measured population (5 hits across 1 file), this gate's own source excluded.
 const (
-	minHits  = 14
-	minFiles = 7
+	minHits  = 5
+	minFiles = 1
 )
 
 // allowEntry keys on a line substring, never a line number -- a line-keyed
@@ -63,9 +63,7 @@ type allowEntry struct {
 }
 
 // TestFleetGate_AllowlistFaultsFireOnAPlantedTree drives the carve-out machinery.
-var allowlist = []allowEntry{
-	{File: "docs/docling-sidecar.md", LineContains: "since EXTR-15-04 the worker", Why: "a story ID, not a fleet size"},
-}
+var allowlist = []allowEntry{}
 
 type hit struct {
 	File   string
@@ -540,7 +538,7 @@ func TestFleetGate_ScanPopulationMeetsItsFloor(t *testing.T) {
 
 func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	root := t.TempDir()
-	tree := filepath.Join(root, "docs")
+	tree := filepath.Join(root, "notes")
 	if err := os.MkdirAll(tree, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -560,7 +558,7 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	write("stale.md", "nothing on this line\n"+
 		"all 15 of them, one per "+subject+"\n")
 
-	hits, err := scanUnder(root, []string{"docs"})
+	hits, err := scanUnder(root, []string{"notes"})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -568,8 +566,8 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 		t.Fatalf("planted 1 control needle, scanner reported %d hit(s): %+v", len(hits), hits)
 	}
 	got := hits[0]
-	if got.File != "docs/stale.md" || got.Line != 2 {
-		t.Errorf("control needle reported at %s:%d, planted at docs/stale.md:2", got.File, got.Line)
+	if got.File != "notes/stale.md" || got.Line != 2 {
+		t.Errorf("control needle reported at %s:%d, planted at notes/stale.md:2", got.File, got.Line)
 	}
 	if len(got.Counts) != 1 || got.Counts[0] != 15 {
 		t.Errorf("control needle read as %v, planted as [15]", got.Counts)
@@ -591,7 +589,7 @@ func TestFleetGate_AllowlistEntriesStillMatchSomething(t *testing.T) {
 // looping over nothing; this drives every fault branch on a planted tree.
 func TestFleetGate_AllowlistFaultsFireOnAPlantedTree(t *testing.T) {
 	root := t.TempDir()
-	tree := filepath.Join(root, "docs")
+	tree := filepath.Join(root, "notes")
 	if err := os.MkdirAll(tree, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -603,7 +601,7 @@ func TestFleetGate_AllowlistFaultsFireOnAPlantedTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tree, "a.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	hits, err := scanUnder(root, []string{"docs"})
+	hits, err := scanUnder(root, []string{"notes"})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -611,9 +609,9 @@ func TestFleetGate_AllowlistFaultsFireOnAPlantedTree(t *testing.T) {
 		t.Fatalf("planted 6 hits, scanner reported %d: %+v", len(hits), hits)
 	}
 
-	carve := allowEntry{File: "docs/a.md", LineContains: "CARVE"}
-	wideEntry := allowEntry{File: "docs/a.md", LineContains: "WIDE"}
-	gone := allowEntry{File: "docs/a.md", LineContains: "GONE"}
+	carve := allowEntry{File: "notes/a.md", LineContains: "CARVE"}
+	wideEntry := allowEntry{File: "notes/a.md", LineContains: "WIDE"}
+	gone := allowEntry{File: "notes/a.md", LineContains: "GONE"}
 
 	if !allowed([]allowEntry{carve}, hits[0]) {
 		t.Errorf("the entry does not carve out its own line %q", hits[0].Text)

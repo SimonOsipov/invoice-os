@@ -725,17 +725,17 @@ describe('envCommand', () => {
     expect((await run(['env', 'pr-348'])).code).toBe(0)
   })
 
-  it('a no-domain or null-customDomains failure points at docs/add-a-service.md step 6', async () => {
-    const cases: Record<string, FakeOpts> = {
-      'no domain': { domains: { landing: { custom: [], service: [] } } },
-      'null customDomains': { domains: { app: { custom: null, service: [{ domain: 'app.up.railway.app' }] } } },
+  it('a no-domain or null-customDomains failure states the domain rule', async () => {
+    const cases: Record<string, FakeOpts & { hint: string }> = {
+      'no domain': { domains: { landing: { custom: [], service: [] } }, hint: 'Every public service needs a custom or Railway-generated domain.' },
+      'null customDomains': { domains: { app: { custom: null, service: [{ domain: 'app.up.railway.app' }] } }, hint: 'Refusing to pick the generated domain over a possible custom one.' },
     }
     expect(Object.keys(cases)).toHaveLength(2)
-    for (const [what, opts] of Object.entries(cases)) {
+    for (const [what, { hint, ...opts }] of Object.entries(cases)) {
       fakeRailway({ ids: realIds(), ...opts })
       const e = ctlError(await rejection(envCommand(['pr-348'], {})), 1)
-      expect(e.hint, what).toContain('docs/add-a-service.md')
-      expect(e.hint, what).toMatch(/step 6/)
+      expect(e.hint, what).toBe(hint)
+      expect(e.hint, what).not.toContain('docs')
     }
   })
 

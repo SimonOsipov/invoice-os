@@ -648,7 +648,7 @@ describe('AC-5: an externally-held review link is not damaged by anything this s
   })
 })
 
-// ROUTE-06-04. [stale-review-ids-on-a-bare-create-entry] (docs/routing.md). The popstate
+// ROUTE-06-04. [stale-review-ids-on-a-bare-create-entry]. The popstate
 // arm only writes when the restored path carries ids; a restored BARE create entry left
 // reviewBatchIds/createStep armed, and the mirror above then rewrote the just-restored
 // entry back to the review path. No two-entity roster: this journey has no company

@@ -392,7 +392,7 @@ func TestPolicyHandlers_StatusCodes(t *testing.T) {
 		{"empty branches", ErrPolicyEmptyBranches, http.StatusConflict, "a condition must have at least one step in one of its two lanes"},
 		{"nothing to publish", ErrPolicyNothingToPublish, http.StatusConflict, "this policy has no unpublished changes"},
 		// AC-3 (task-484): the publish sweep's cap refusal.
-		{"sweep cap exceeded", ErrSweepCapExceeded, http.StatusConflict, "validated backlog exceeds the publish sweep cap — see docs/approvals.md"},
+		{"sweep cap exceeded", ErrSweepCapExceeded, http.StatusConflict, "validated backlog exceeds the publish sweep cap"},
 		{"conflict", ErrConflict, http.StatusConflict, "another version was published first — reload the policy and try again"},
 		{"bare error", errors.New("boom"), http.StatusInternalServerError, "internal server error"},
 	}

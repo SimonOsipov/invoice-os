@@ -717,7 +717,7 @@ func TestIdP_ProvisionedWorkspaceReachesTheNextToken(t *testing.T) {
 	}
 }
 
-// docs/identity-provider.md, "First registrant's answers": a repeat signup changes neither the password nor the answers.
+// A repeat signup changes neither the password nor the answers.
 func TestIdP_RepeatRegistrationKeepsTheFirstAnswers(t *testing.T) {
 	base := idpMailURL(t)
 	gw, _ := startGateway(t, base, 0, nil)

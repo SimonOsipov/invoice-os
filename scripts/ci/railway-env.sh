@@ -1366,7 +1366,7 @@ reconcile_domain() {
   sel=$(select_domain "$GQL_RESPONSE")
   src_count=$(echo "$sel" | jq -r '.count')
   if [ "$src_count" = "0" ]; then
-    echo "::error::$label (service $svc_id) has no domain of EITHER kind — neither a custom domain nor a Railway-generated one — in the SOURCE environment $RAILWAY_DEV_ENVIRONMENT_ID, so there is no source of truth for its targetPort. Refusing to hardcode one. Give it a domain per docs/add-a-service.md step 6."
+    echo "::error::$label (service $svc_id) has no domain of EITHER kind — neither a custom domain nor a Railway-generated one — in the SOURCE environment $RAILWAY_DEV_ENVIRONMENT_ID, so there is no source of truth for its targetPort. Refusing to hardcode one. Give it a domain."
     exit 1
   fi
   target=$(echo "$sel" | jq -r '.targetPort // empty')
@@ -1898,7 +1898,7 @@ ensure_postgres_running() {
       echo "::error::Both serviceInstanceDeployV2 and serviceInstanceRedeploy failed for postgres (service $RAILWAY_SVC_POSTGRES_ID) in environment $env_id: $GQL_ERROR"
       exit 1
     fi
-    echo "serviceInstanceRedeploy worked where serviceInstanceDeployV2 did not — worth recording in docs/deploy-model.md."
+    echo "serviceInstanceRedeploy worked where serviceInstanceDeployV2 did not."
     wait_for_postgres "$env_id" ""
     return 0
   fi
@@ -3853,7 +3853,7 @@ cmd_discover_urls() {
     sel=$(select_domain "$wrapped") || exit 1
     count=$(printf '%s' "$sel" | jq -r '.count')
     if [ "$count" = "0" ]; then
-      echo "::error::No domain found for ${labels[$i]} (service ${ids[$i]}) in environment $env_id — neither a custom domain nor a Railway-generated one. Every public service must have at least one (docs/add-a-service.md step 6)." >&2
+      echo "::error::No domain found for ${labels[$i]} (service ${ids[$i]}) in environment $env_id — neither a custom domain nor a Railway-generated one. Every public service must have at least one." >&2
       exit 1
     fi
     d=$(printf '%s' "$sel" | jq -r 'if (.domain | type) == "string" then .domain else "" end')

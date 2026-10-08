@@ -100,7 +100,7 @@ func TestJevSeam_ABlankAIDecisionEqualsReconcile(t *testing.T) {
 	}
 }
 
-// TestJevSeam_ZeroLayoutsWalkedIsAFatal is the walk's own floor (docs/extraction-corpus.md):
+// TestJevSeam_ZeroLayoutsWalkedIsAFatal is the walk's own floor (.claude/rules/extraction-corpus.md):
 // wild_scanned_no_number is image-only, so its golden is the only route to a non-zero token count.
 func TestJevSeam_ZeroLayoutsWalkedIsAFatal(t *testing.T) {
 	if len(jsLayouts) < jsWantLayouts {

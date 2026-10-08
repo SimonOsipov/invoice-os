@@ -93,7 +93,7 @@ func TestHundredthsAtLeast_IsTheSmallestSufficientHundredth(t *testing.T) {
 
 // L-round-naive is the needle that proves L-round is not vacuous: the naive
 // math.Ceil(g*100)/100 over-rounds at these exact hundredths, and undershoots a hair above
-// others -- both measured in .ralph/subtasks/extr-14-04-arch.md S:1.3.
+// others.
 func TestHundredthsAtLeast_TheNaiveCeilFormulaIsWrongAtTheseValues(t *testing.T) {
 	for _, i := range []int{7, 14, 28, 55, 56} {
 		g := float64(i) / 100

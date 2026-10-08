@@ -14,7 +14,7 @@
 // is where the one shipped instance of this defect actually lived.
 //
 // These helpers are deliberately NOT visual regression, which
-// docs/e2e-convention.md bans: nothing here compares pixels or keeps a baseline.
+// .claude/rules/e2e.md bans: nothing here compares pixels or keeps a baseline.
 // They read geometry the same way an assertion reads text.
 import { expect, type Locator, type Page } from '@playwright/test'
 

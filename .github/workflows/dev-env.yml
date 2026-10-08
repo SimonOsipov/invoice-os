@@ -16,9 +16,8 @@ name: Dev Env (deploy full fleet + verify)
 # separately-gated step invoked from inside the gateway's own boot sequence
 # (internal/platform/db.Provision, between MigrateUp and Seed — no new job in
 # this file), reachable ONLY for a genuine PR fork: it requires
-# RAILWAY_ENVIRONMENT_NAME (Railway-injected, never forked-as-a-value — see
-# docs/topology-e2e.md) to match a PR-environment name, which excludes
-# "development"/"production" unconditionally, AND a dedicated
+# RAILWAY_ENVIRONMENT_NAME (Railway-injected, never forked-as-a-value) to match a PR-environment name, which
+# excludes "development"/"production" unconditionally, AND a dedicated
 # GATEWAY_DB_RESET=true variable set on the gateway service. See
 # db.ResetEnabled's doc comment (internal/platform/db/reset.go) for the full
 # gating rationale, including why it deliberately does NOT reuse ENVIRONMENT/
@@ -55,11 +54,11 @@ name: Dev Env (deploy full fleet + verify)
 # collapsing them is an open cleanup. Account tokens carry no implicit scope, so
 # every call names --project / --environment explicitly.
 #
-# Human-applied prerequisites (see docs/topology-e2e.md):
+# Human-applied prerequisites (see .claude/rules/ci-railway.md):
 #  - Railway PR Environments are OFF and MUST STAY OFF (M4-23-02) — do NOT turn
 #    them on. They never worked here (Railway is not subscribed to this repo's PR
 #    events), and railway-invariants.yml now fails every PR if they are re-enabled
-#    or if any deployment trigger appears. See docs/deploy-model.md.
+#    or if any deployment trigger appears. See .claude/rules/ci-railway.md.
 #  - RAILWAY_API_TOKEN from Account Settings → Tokens, NOT Project Settings:
 #    a project token is pinned to one env and cannot reach a PR env.
 #  - Railway Watch Paths empty on all 16 non-Postgres services, or `railway up`
@@ -86,7 +85,6 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - 'docs/**'
       - '**.md'
   workflow_dispatch:
 
@@ -123,8 +121,7 @@ env:
   RAILWAY_SVC_OPS_CONSOLE_ID: 00df2247-ee57-4722-a663-c7d3a29e2cdd
   RAILWAY_SVC_SUPPORT_CONSOLE_ID: 33a90fdc-a812-4807-837c-9c62593d6f41
   RAILWAY_SVC_LIBRARY_ID: 0308aa95-0ec1-4616-a6fe-647f1374686b
-  # M4-21-10: the Postgres service id (recorded in docs/migrations.md's provisioning
-  # Appendix) — same stable-resource-id pattern as above. No CI job resolves
+  # M4-21-10: the Postgres service id — same stable-resource-id pattern as above. No CI job resolves
   # a DSN with it anymore (M4-22-08); railway-env.sh still uses it for the Postgres volume.
   RAILWAY_SVC_POSTGRES_ID: 98723af0-50ca-42a4-a56a-3e0438b9ce8a
 
@@ -498,8 +495,8 @@ jobs:
         if: always()
         run: bash scripts/ci/railway-env.sh report-api-calls
 
-  # 1. Deploy the gateway FIRST — it is the fleet's single migrator (docs/
-  #    migrations.md §2). `--ci` streams build logs then exits after the
+  # 1. Deploy the gateway FIRST — it is the fleet's single migrator.
+  #    `--ci` streams build logs then exits after the
   #    BUILD (health is gated separately below). Skipped for draft PRs. The
   #    GATEWAY_MOCK_ISSUER is an enable flag, not a URL, and forks fine; only
   #    a `-tags mockissuer` (PR) build honours it.
@@ -671,7 +668,7 @@ jobs:
             want_purge=false; want_mock=absent
           fi
           if [ "$purge" != "$want_purge" ]; then
-            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}', want '$want_purge'. 'error' means PurgeDemoTenants failed and Provision swallowed it (look for 'demo-tenant purge failed'). 'none' means the gateway predates the field. On a PR, 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true on the gateway and that fork-vars-after-urls set ENVIRONMENT=development. On the persistent environment, 'true' means a purge ran against live data: its gateway ENVIRONMENT no longer reads 'production' (docs/deploy-model.md)."
+            echo "::error::gateway is serving $EXPECTED_BUILD but reports demo_purge='${purge:-none}', want '$want_purge'. 'error' means PurgeDemoTenants failed and Provision swallowed it (look for 'demo-tenant purge failed'). 'none' means the gateway predates the field. On a PR, 'false' means a guard said no: check GATEWAY_DB_BOOTSTRAP=true on the gateway and that fork-vars-after-urls set ENVIRONMENT=development. On the persistent environment, 'true' means a purge ran against live data: its gateway ENVIRONMENT no longer reads 'production'."
             exit 1
           fi
           if [ "$mock" != "$want_mock" ]; then

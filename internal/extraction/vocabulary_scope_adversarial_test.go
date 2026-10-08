@@ -253,7 +253,7 @@ func TestResolve_ASuffixedBuyerHeadingRoutesTheBareTINToTheBuyer(t *testing.T) {
 // inflection "Invoicing to". Flip this test, do not delete it, if the set ever learns to elide.
 func TestAnchorLexicon_TheClosedSetMissesTheElidingInflection(t *testing.T) {
 	if loc := alSpan("Invoicing to", "buyer_name"); loc != nil {
-		t.Errorf("%q: buyer_name matches at %v; alSuffix now elides the stem's final e -- update this pin and docs/extraction-corpus.md", "Invoicing to", loc)
+		t.Errorf("%q: buyer_name matches at %v; alSuffix now elides the stem's final e -- update this pin and .claude/rules/extraction-corpus.md", "Invoicing to", loc)
 	}
 	if alSpan("Invoiceing to", "buyer_name") == nil {
 		t.Error("\"Invoiceing to\": buyer_name span = nil, want a match; the tail is a blind concatenation onto the stem")

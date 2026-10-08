@@ -39,10 +39,6 @@ export function resendContactKeys(): string[] {
   return unique([...keysOf(/"([a-z_]+)"\s*:/g, literal), ...keysOf(/body\["([a-z_]+)"\]\s*=/g, body)])
 }
 
-export function resendSubscription(): string {
-  return found(/"subscription":\s*"([a-z_]+)"/.exec(readSource('internal/notifications/resend.go'))?.[1], 'the Resend topic subscription')
-}
-
 // Tag values worker.go gives a contact, in source order.
 export function crmTags(): string[] {
   const tags = keysOf(/c\.Tags = append\(c\.Tags, "([^"]+)"\)/g, readSource('internal/notifications/worker.go'))
@@ -53,12 +49,6 @@ export function crmTags(): string[] {
 // worker.go skips Resend for anyone neither registered nor ticked.
 export function resendSkipsUntickedDemoBooker(): boolean {
   return /if !registered && !consent \{\s*return nil/.test(readSource('internal/notifications/worker.go'))
-}
-
-// The contacts columns that hold the marketing tick and its time.
-export function marketingColumns(): string[] {
-  const cols = found(/INSERT INTO contacts \(([^)]*)\)/.exec(readSource('internal/notifications/store.go'))?.[1], 'the contacts INSERT column list')
-  return cols.split(',').map((c) => c.trim()).filter((c) => c.startsWith('marketing_'))
 }
 
 // GoTrue sends the verification email through this SMTP host (sidecar/auth/Dockerfile).

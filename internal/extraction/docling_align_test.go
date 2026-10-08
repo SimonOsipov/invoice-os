@@ -134,7 +134,7 @@ func dcInkForGolden(t *testing.T, golden []byte) int {
 }
 
 // T-05-13: Docling's box for a known token lands on pdfium's own ink for that token, well past
-// prMinInk (measured ~2324 dark pixels against a floor of 20 -- see .ralph/EXTR-03-05-lead-verified.md).
+// prMinInk (measured ~2324 dark pixels against a floor of 20).
 func TestDoclingReader_KnownTokenLandsOnThePdfiumInk(t *testing.T) {
 	if inside := dcInkForGolden(t, dcReadGolden(t)); inside < prMinInk {
 		t.Fatalf("%q's Docling box covers %d dark pixel(s) of pdfium's render, want at least %d", ptTopLine, inside, prMinInk)

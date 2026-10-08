@@ -463,13 +463,13 @@ describe('library scenes', () => {
 
     const t = view('read-documents', thumbStep(feat('read-documents')), 'thumb')
     expect(where(t, (s) => s['grid-template-columns'] === '0.85fr 1.15fr')).toHaveLength(1)
-    expect(where(t, (s) => s.padding === '2px 4px')).toHaveLength(4)
+    expect(where(t, (s) => s.padding === '1px 4px')).toHaveLength(4)
     expect(where(t, (s) => s['grid-template-columns'] === '1fr')).toHaveLength(1)
-    expect(where(t, (s) => s.height === '18px')).toHaveLength(3)
+    expect(where(t, (s) => s.height === '16px')).toHaveLength(3)
 
     const ci = view('create-invoice', 2, 'thumb')
     expect(where(ci, (s) => s['grid-template-columns'] === '1fr 1fr')).toHaveLength(1)
-    expect(where(ci, (s) => s.height === '18px')).toHaveLength(4)
+    expect(where(ci, (s) => s.height === '16px')).toHaveLength(4)
     expect(ci.some((x) => x.text === '12 fields checked · 0 errors')).toBe(true)
   })
 
@@ -509,7 +509,7 @@ describe('library scenes', () => {
       expect(shown.length, c.id).toBeLessThanOrEqual(cap)
       for (const l of needed(c.st, cap)) expect(shown, c.id).toContain(esc(l))
     }
-    const boxes = (id: string) => where(view(id, thumbStep(feat(id)), 'thumb'), (s) => s.height === '18px')
+    const boxes = (id: string) => where(view(id, thumbStep(feat(id)), 'thumb'), (s) => s.height === '16px')
     expect(boxes('learns')).toHaveLength(2)
     expect(boxes('create-invoice')).toHaveLength(4)
     expect(boxes('read-documents')).toHaveLength(3)
@@ -641,13 +641,13 @@ describe('library scenes', () => {
   ]
 
   it('SN-11 the thumbnail form colours each mark, slices fields per layout and colours the message by tone', () => {
-    const boxes = (ts: Tag[]) => where(ts, (s) => s.height === '18px')
+    const boxes = (ts: Tag[]) => where(ts, (s) => s.height === '16px')
     const flat = draw(formSc(false), 0, 'thumb')
     expect(boxes(flat)).toHaveLength(4)
     boxes(flat).forEach((b, i) => expect([style(b).border, style(b).background]).toEqual([`1px solid ${MARKS[i][0]}`, MARKS[i][1]]))
     const doc = draw(formSc(true), 0, 'thumb')
     expect(boxes(doc)).toHaveLength(3)
-    expect(where(doc, (s) => s.padding === '2px 4px')).toHaveLength(4)
+    expect(where(doc, (s) => s.padding === '1px 4px')).toHaveLength(4)
     const msg = (step: number) => where(draw(formSc(false), step, 'thumb'), (s) => s['font-size'] === '9.5px')
     expect(msg(0)).toHaveLength(0)
     expect(style(msg(1)[0])).toMatchObject({ background: 'var(--status-green-bg)', color: 'var(--status-green-text)', border: '1px solid var(--status-green-border)' })
@@ -658,7 +658,7 @@ describe('library scenes', () => {
   it('SN-12 the doc panel outlines the focused field solid, a low field dashed and the rest clear, in both sizes', () => {
     const expected = ['1.5px solid var(--accent)', '1.5px solid transparent', '1.5px dashed var(--status-amber-text)', '1.5px solid transparent']
     const rows = (ts: Tag[], pad: string) => where(ts, (s) => s.padding === pad)
-    const t = rows(draw(formSc(true), 0, 'thumb'), '2px 4px')
+    const t = rows(draw(formSc(true), 0, 'thumb'), '1px 4px')
     const p = rows(draw(formSc(true), 0, 'player'), '5px 7px')
     expect(t).toHaveLength(4)
     expect(p).toHaveLength(5)

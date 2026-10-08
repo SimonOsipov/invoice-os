@@ -46,6 +46,7 @@ const flowNode = (state: 'done' | 'active' | 'todo', i: number) => ({
 
 function ListView({ s, size }: { s: Of<'list'>; size: Size }) {
   if (size === 'thumb') {
+    // why: tight rows with fixed line-heights keep a 3-row+banner thumbnail inside its box on any platform font
     const banner = s.banner
     return (
       <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -54,10 +55,10 @@ function ListView({ s, size }: { s: Of<'list'>; size: Size }) {
           return (
             <div
               key={i}
-              style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--border)' }}
+              style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--border)' }}
             >
-              <span style={{ fontSize: 10, fontWeight: 600, ...ell }}>{r.c2}</span>
-              <span style={{ padding: '1px 6px', borderRadius: 3, fontSize: 9, fontWeight: 700, background: c.bg, color: c.fg, border: `1px solid ${c.bd}` }}>
+              <span style={{ fontSize: 10, fontWeight: 600, lineHeight: '13px', ...ell }}>{r.c2}</span>
+              <span style={{ padding: '1px 6px', borderRadius: 3, fontSize: 9, fontWeight: 700, lineHeight: '11px', background: c.bg, color: c.fg, border: `1px solid ${c.bd}` }}>
                 {c.text}
               </span>
             </div>
@@ -65,7 +66,7 @@ function ListView({ s, size }: { s: Of<'list'>; size: Size }) {
         })}
         {banner && (
           <div
-            style={{ marginTop: 6, padding: '4px 8px', borderRadius: 4, fontSize: 9.5, fontWeight: 600, background: 'var(--status-red-bg)', color: 'var(--status-red-text)', border: '1px solid var(--status-red-border)', ...ell }}
+            style={{ marginTop: 4, padding: '3px 8px', borderRadius: 4, fontSize: 9.5, fontWeight: 600, lineHeight: '12px', background: 'var(--status-red-bg)', color: 'var(--status-red-text)', border: '1px solid var(--status-red-border)', ...ell }}
           >
             {banner}
           </div>
@@ -135,17 +136,17 @@ function FormView({ s, size }: { s: Of<'form'>; size: Size }) {
     f.focused ? '1.5px solid var(--accent)' : f.mark === 'low' ? '1.5px dashed var(--status-amber-text)' : '1.5px solid transparent'
 
   if (thumb) {
-    // why: doc+msg thumbnail overflows its 4:3 box with 3 fields
+    // why: doc+msg thumbnail overflows its 4:3 box with 3 fields; fixed line-heights keep the height off the platform font
     const nf = s.doc ? (msg ? 2 : 3) : 4
     return (
       <div style={{ display: 'grid', gridTemplateColumns: s.doc ? '0.85fr 1.15fr' : '1fr', gap: 10, alignItems: 'start' }}>
         {s.doc && (
-          <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 7px', display: 'flex', flexDirection: 'column', gap: 2, boxShadow: 'var(--shadow-soft)' }}>
+          <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 3, padding: '6px 7px', display: 'flex', flexDirection: 'column', gap: 2, boxShadow: 'var(--shadow-soft)', lineHeight: '10px' }}>
             <span style={{ fontSize: 8, fontWeight: 800, letterSpacing: '0.14em', marginBottom: 2 }}>INVOICE</span>
             {fieldWindow(s.fields, 4).map((f) => (
               <div
                 key={f.l}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '2px 4px', borderRadius: 2, background: docBg(f), outline: docOutline(f) }}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, padding: '1px 4px', borderRadius: 2, background: docBg(f), outline: docOutline(f) }}
               >
                 <span style={{ fontSize: 7.5, color: 'var(--muted-foreground)' }}>{f.l}</span>
                 <span className="mono" style={{ fontSize: 8.5, fontWeight: 600, ...ell }}>
@@ -156,14 +157,14 @@ function FormView({ s, size }: { s: Of<'form'>; size: Size }) {
           </div>
         )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: s.doc ? '1fr' : '1fr 1fr', gap: '5px 8px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: s.doc ? '1fr' : '1fr 1fr', gap: '3px 8px' }}>
             {fieldWindow(s.fields, nf).map((f) => {
               const mk = f.mark ? MK[f.mark] : null
               return (
                 <div key={f.l} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-                  <span style={{ fontSize: 8, letterSpacing: '0.08em', ...label, ...ell }}>{f.l}</span>
+                  <span style={{ fontSize: 8, lineHeight: '10px', letterSpacing: '0.08em', ...label, ...ell }}>{f.l}</span>
                   <span
-                    style={{ height: 18, display: 'flex', alignItems: 'center', padding: '0 7px', borderRadius: 4, border: `1px solid ${mk ? mk[2] : 'var(--input)'}`, background: mk ? mk[3] : '#fff', fontSize: 10, fontWeight: 600, ...ell }}
+                    style={{ height: 16, display: 'flex', alignItems: 'center', padding: '0 7px', borderRadius: 4, border: `1px solid ${mk ? mk[2] : 'var(--input)'}`, background: mk ? mk[3] : '#fff', fontSize: 10, fontWeight: 600, ...ell }}
                   >
                     {f.val}
                   </span>
@@ -172,7 +173,7 @@ function FormView({ s, size }: { s: Of<'form'>; size: Size }) {
             })}
           </div>
           {msg && (
-            <div style={{ padding: '4px 8px', borderRadius: 4, fontSize: 9.5, fontWeight: 600, ...ell, background: msg.bg, color: msg.fg, border: `1px solid ${msg.bd}` }}>
+            <div style={{ padding: '4px 8px', borderRadius: 4, fontSize: 9.5, fontWeight: 600, lineHeight: '12px', ...ell, background: msg.bg, color: msg.fg, border: `1px solid ${msg.bd}` }}>
               {msg.text}
             </div>
           )}
@@ -384,10 +385,11 @@ function FeedView({ s, size }: { s: Of<'feed'>; size: Size }) {
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {/* why: 9px row padding leaves slack for 5 rows in the 350px player box */}
       {s.items.map((it, i) => (
         <div
           key={i}
-          style={{ display: 'grid', gridTemplateColumns: '62px 12px 1fr', gap: 12, alignItems: 'start', padding: '12px 8px', borderTop: '1px solid var(--border)', animation: 'libPop 340ms ease-out' }}
+          style={{ display: 'grid', gridTemplateColumns: '62px 12px 1fr', gap: 12, alignItems: 'start', padding: '9px 8px', borderTop: '1px solid var(--border)', animation: 'libPop 340ms ease-out' }}
         >
           <span className="mono" style={{ fontSize: 12, color: 'var(--muted-foreground)', paddingTop: 1 }}>
             {it.time}

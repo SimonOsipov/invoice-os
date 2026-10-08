@@ -131,7 +131,7 @@ func TestRLS_SingleDocumentValidateRouteIsNotRegistered(t *testing.T) {
 
 	if off := vrOffenders(routes); len(off) > 0 {
 		for _, r := range off {
-			t.Errorf("%s:%d still registers %q — RMV-01-03 retires the single-document validate route; delete the registration (and its doc row in %s)", r.file, r.line, r.route, scDocPath)
+			t.Errorf("%s:%d still registers %q — RMV-01-03 retires the single-document validate route; delete the registration (and its entry in scRouteVerdicts)", r.file, r.line, r.route)
 		}
 	}
 }
@@ -273,4 +273,26 @@ func vrRead(t *testing.T, root, rel string) string {
 		t.Fatalf("read %s: %v", rel, err)
 	}
 	return string(b)
+}
+
+func repoRootDir(t *testing.T) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --show-toplevel: %v", err)
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		t.Fatal("git reported an empty worktree root; every scan below would read nothing")
+	}
+	return root
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

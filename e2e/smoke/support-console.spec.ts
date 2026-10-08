@@ -19,9 +19,7 @@ import { seedStaffSession, test } from '../staffSession'
 // WHY A BROWSER IS THE ONLY HARNESS. Every frontend vitest project runs in `node` with no
 // DOM (frontend/support-console/vitest.config.ts:5), so there is no component-test layer in
 // which a click, a filter or a detail pane could be exercised at all. Same rationale and
-// same suite as smoke/landing-nav.spec.ts and smoke.spec.ts:48-60. docs/e2e-convention.md's
-// "Target surface" section is amended by [PERSONA-01-07] in this same PR — note it does not
-// currently mention this console at all.
+// same suite as smoke/landing-nav.spec.ts and smoke.spec.ts.
 //
 // PARALLEL-SAFE. Each test seeds its own gateway session for the worker's one staff account,
 // and none signs it out, so smoke's `fullyParallel: true` needs no carve-out here. Every

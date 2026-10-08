@@ -6,8 +6,8 @@
 //      a cookie set with no `domain=` is a different cookie from `.host` and only a
 //      delete with no `domain=` removes it. The oracle here is the write log.
 //   2. `Privacy.tsx` publishes "the only thing our code ever writes to that list is
-//      the instruction that deletes these two", and docs/privacy-policy-claims.md E3
-//      says every write is an expiry. Nothing asserted it. Now the log does.
+//      the instruction that deletes these two", so every write must be an
+//      expiry. Nothing asserted it. Now the log does.
 import { describe, expect, it } from 'vitest'
 import { clearGaCookies, cookieDomainVariants, gaCookieNames, isGaCookieName } from './gaCookies'
 

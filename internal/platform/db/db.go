@@ -1,7 +1,7 @@
 // Package db is the tenant-aware data-access layer every ASComply service
 // shares. Its core is WithinTenantTx: it runs a function inside a transaction with
 // the app.current_tenant GUC set for the life of that transaction, which is what
-// makes Postgres Row-Level Security enforce tenant isolation (docs/migrations.md §4).
+// makes Postgres Row-Level Security enforce tenant isolation (.claude/rules/db-migrations.md).
 //
 // The tenant is passed EXPLICITLY, not read from a request context, so the exact
 // same helper serves both the HTTP path (tenant from the verified JWT) and the M5

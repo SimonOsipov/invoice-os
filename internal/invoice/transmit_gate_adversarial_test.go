@@ -261,7 +261,7 @@ func TestGate_ApprovingUnblocksBothDoors(t *testing.T) {
 // TestGate_DirectStatusUpdateIsNotDefended: a raw UPDATE past both doors SUCCEEDS, by
 // design. invoice_app holds UPDATE on invoices, status carries only its 7-value CHECK,
 // and the table has no trigger -- the schema has never been state-machine-aware, and this
-// gate did not make it so. Pinned because docs/approvals.md states that boundary in prose:
+// gate did not make it so. Pinned because .claude/rules/approvals.md states that boundary in prose:
 // if a future migration defends it, this spec reddens and the prose gets corrected with it.
 func TestGate_DirectStatusUpdateIsNotDefended(t *testing.T) {
 	super, app := dbTestPools(t)
@@ -281,7 +281,7 @@ func TestGate_DirectStatusUpdateIsNotDefended(t *testing.T) {
 		_, err := tx.Exec(g.ctx, `UPDATE invoices SET status = 'queued' WHERE id = $1`, invID)
 		return err
 	}); err != nil {
-		t.Fatalf("raw UPDATE as invoice_app: %v -- if this now FAILS the schema grew a defense and docs/approvals.md's scope statement is stale", err)
+		t.Fatalf("raw UPDATE as invoice_app: %v -- if this now FAILS the schema grew a defense and .claude/rules/approvals.md's scope statement is stale", err)
 	}
 
 	if s := statusOf(t, super, invID); s != StatusQueued {

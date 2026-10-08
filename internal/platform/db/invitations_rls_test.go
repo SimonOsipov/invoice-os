@@ -8,7 +8,7 @@
 //	    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted',
 //	    'revoked')), created_at timestamptz NOT NULL DEFAULT now() — FORCE RLS, policy
 //	    `tenant_isolation` copied from the tenants/business_entities/memberships
-//	    template (docs/migrations.md §6, §8; no tenant_enumerate policy). Partial
+//	    template (.claude/rules/db-migrations.md; no tenant_enumerate policy). Partial
 //	    UNIQUE (tenant_id, invitee_email) WHERE status = 'pending'. GRANT SELECT,
 //	    INSERT, UPDATE TO invoice_app (NO DELETE — revoked status is the removal path).
 //	    `roles` already exists (rows: admin, preparer, reviewer).

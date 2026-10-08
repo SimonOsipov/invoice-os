@@ -1470,7 +1470,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
 // unwrapped: the api run ahead of this one
 // leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
 // cleanup), and [topology-never-publishes] stays satisfied -- this restores the tenant's
-// OWN seeded policy, never a new one (docs/e2e-convention.md).
+// OWN seeded policy, never a new one (.claude/rules/e2e.md).
 test.describe('INVCR-E2E-1 governs the firm tenant before submitting', () => {
   test.beforeAll(async () => {
     const token = await login(PERSONAS.A)

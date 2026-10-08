@@ -22,7 +22,7 @@
 //	    USING (tenant_id = nullif(current_setting('app.current_tenant', true), '')::uuid);
 //	GRANT SELECT, INSERT ON idempotency_keys TO invoice_app;
 //
-// The ledger is append-only/permanent (the audit_log posture, docs/migrations.md §3):
+// The ledger is append-only/permanent (the audit_log posture, .claude/rules/db-migrations.md):
 // invoice_app holds SELECT + INSERT and nothing else, so every UPDATE/DELETE — own-row or
 // cross-tenant — is refused at the GRANT layer (SQLSTATE 42501 insufficient_privilege)
 // before the RLS policy's USING clause is ever evaluated. That is the same shape

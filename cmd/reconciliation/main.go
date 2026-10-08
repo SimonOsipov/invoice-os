@@ -28,7 +28,7 @@ func main() {
 	ctx := context.Background()
 
 	// Connect as the app role (invoice_app, NOBYPASSRLS) — never the migrator or
-	// superuser (docs/migrations.md §1). This pool runs ReArmPoll's enqueue and every
+	// superuser (.claude/rules/db-migrations.md). This pool runs ReArmPoll's enqueue and every
 	// audit write, each inside its own db.WithinTenantTx(AppPool, tenantID, ...).
 	appDSN := os.Getenv("DATABASE_URL")
 	if appDSN == "" {

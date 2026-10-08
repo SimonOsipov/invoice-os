@@ -27,7 +27,7 @@ import (
 
 const (
 	// The layout the whole chain rides is fxLearnedTwoParty, deliberately outside corpusPrefix
-	// -- see fxBuildLearnedTwoParty and docs/extraction-corpus.md, "## Learned rules". The two
+	// -- see fxBuildLearnedTwoParty and .claude/rules/extraction-corpus.md. The two
 	// corpus layouts below carry the breadth arm and the documented regression.
 	lcSplit  = "corpus_split_labels.pdf"
 	lcTwoCol = "corpus_two_column.pdf"

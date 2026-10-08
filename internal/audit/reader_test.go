@@ -155,7 +155,7 @@ func TestAuditCompanyFilter_HasExactlyThreeStates(t *testing.T) {
 // --- AC #4: ScopeOf and CompanyScope ---------------------------------------------------
 
 // readerFirmWideEvents is this test's own copy of the sixteen firm-wide names (System
-// Design §2, verbatim — not the contract doc's incomplete prose enumeration, D-23).
+// Design §2, verbatim, not a prose enumeration).
 // Deliberately a second literal, distinct from reader.go's unexported firmWideEvents:
 // the point of this test is to pin ScopeOf's behavior against the spec, not against
 // its own implementation.

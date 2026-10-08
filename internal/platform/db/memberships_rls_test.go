@@ -7,7 +7,7 @@
 //	    subject — no FK, GoTrue is not this DB), role text NOT NULL REFERENCES
 //	    roles(name), created_at timestamptz NOT NULL DEFAULT now(),
 //	    UNIQUE (tenant_id, user_id) — FORCE RLS, policy `tenant_isolation` copied
-//	    from the tenants/business_entities template (docs/migrations.md §6, §8; no
+//	    from the tenants/business_entities template (.claude/rules/db-migrations.md; no
 //	    tenant_enumerate policy). GRANT SELECT/INSERT/UPDATE/DELETE TO invoice_app.
 //	    `roles` already exists (M3-01, rows: admin, preparer, reviewer).
 //

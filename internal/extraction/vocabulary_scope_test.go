@@ -353,7 +353,7 @@ func vgScanEligible(path string) bool {
 	}
 }
 
-// EXTR-26-05 T-05.4. internal/extraction/** and docs/extraction-corpus.md must carry no
+// EXTR-26-05 T-05.4. internal/extraction/** must carry no
 // v2:/b2: literal once the generation bump lands. Reads files in Go by extension rather than
 // shelling to grep, which classifies any NUL-bearing file "data" and silently skips it --
 // structurally impossible here, though the trap does not bite the current corpus (measured:
@@ -362,12 +362,11 @@ func vgScanEligible(path string) bool {
 func TestFingerprint_NoSourceStillNamesTheOldGeneration(t *testing.T) {
 	root := rxRepoRoot(t)
 	extractionDir := filepath.Join(root, "internal", "extraction")
-	docPath := filepath.Join(root, "docs", "extraction-corpus.md")
 
-	// Planted needle: proves the scan reads CONTENT, not just filenames. Present in all three
-	// per the re-point table (fingerprint.go declares it; the other two read it back).
+	// Planted needle: proves the scan reads CONTENT, not just filenames. fingerprint.go declares
+	// it; fingerprint_test.go reads it back.
 	const needle = "BoxlessFingerprintVersion"
-	needleFiles := map[string]bool{"fingerprint.go": false, "fingerprint_test.go": false, "duedate_scope_test.go": false}
+	needleFiles := map[string]bool{"fingerprint.go": false, "fingerprint_test.go": false}
 
 	var goFiles int
 	var hits []string
@@ -410,14 +409,6 @@ func TestFingerprint_NoSourceStillNamesTheOldGeneration(t *testing.T) {
 	// clean repo. Measured well over 100 .go files under internal/extraction/.
 	if goFiles < 100 {
 		t.Fatalf("the walk read %d .go file(s) under internal/extraction/, want at least 100 -- a clean report over a broken walk means nothing", goFiles)
-	}
-
-	if _, err := os.Stat(docPath); err != nil {
-		t.Fatalf("stat %s: %v -- the doc is not in the visited set, so its absence below proves nothing", docPath, err)
-	}
-	rel, _ := filepath.Rel(root, docPath)
-	if err := scan(docPath, filepath.ToSlash(rel)); err != nil {
-		t.Fatalf("read %s: %v", docPath, err)
 	}
 
 	for base, found := range needleFiles {

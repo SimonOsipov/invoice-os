@@ -13,7 +13,6 @@ import (
 	"go/parser"
 	"go/token"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -43,11 +42,6 @@ const (
 	// The method every row here posts. Named so a later undo-specific row reads as the
 	// deliberate other half rather than as a typo.
 	fcMethodTyped = extraction.MethodTyped
-
-	// docs/read-path-suspension.md reads "61 distinct routes, 67 registrations" before this
-	// route lands. Floors, so a later story raises them rather than breaking this.
-	fcMinDocRoutes        = 62
-	fcMinDocRegistrations = 68
 )
 
 // The route must be mounted on app.Mux -- a route on a locally built mux is registered and
@@ -557,79 +551,4 @@ func fcNonNil(in invoice.UpdateInput) int {
 		}
 	}
 	return n
-}
-
-// fcDeclaredRoutes parses docs/read-path-suspension.md's endpoint table to route -> verdict.
-func fcDeclaredRoutes(t *testing.T, lines []string) map[string]string {
-	t.Helper()
-	declared := map[string]string{}
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "|") {
-			continue
-		}
-		cells := strings.Split(strings.Trim(trimmed, "|"), "|")
-		if len(cells) < 3 {
-			continue
-		}
-		m := drRowCell.FindStringSubmatch(strings.TrimSpace(cells[0]))
-		if m == nil {
-			continue
-		}
-		declared[m[1]] = strings.TrimSpace(cells[2])
-	}
-	if len(declared) < drMinDocRows {
-		t.Fatalf("%s's endpoint table parsed to %d row(s), want at least %d -- a parse that lost the table finds no missing row either",
-			drDocPath, len(declared), drMinDocRows)
-	}
-	return declared
-}
-
-// TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute errors for a registered route with no row,
-// but its floors leave the prose count free: the sentence could keep claiming 61/67 while the
-// table carried 62. Floors move with the table, so an honest doc is what ships.
-func TestReadPathSuspensionDoc_DeclaresTheCorrectionRoute(t *testing.T) {
-	lines := drDocSection(t)
-	declared := fcDeclaredRoutes(t, lines)
-
-	// Control needle: the collection route this one hangs off is declared today, so a broken
-	// parser fails here rather than reporting the correction route missing.
-	if got, ok := declared["GET /v1/extractions"]; !ok || got != "covered" {
-		t.Fatalf("the parse read `GET /v1/extractions` as verdict %q (present=%v), want covered -- the row parser is broken", got, ok)
-	}
-
-	verdict, ok := declared[fcRoute]
-	switch {
-	case !ok:
-		t.Errorf("%s declares no row for `%s`", drDocPath, fcRoute)
-	case verdict != "covered":
-		t.Errorf("%s declares `%s` with verdict %q, want exactly covered", drDocPath, fcRoute, verdict)
-	}
-
-	var m []string
-	for _, line := range lines {
-		if got := drCountLine.FindStringSubmatch(line); got != nil {
-			if m != nil {
-				t.Fatalf("%s carries two route-count sentences; they can disagree", drDocPath)
-			}
-			m = got
-		}
-	}
-	if m == nil {
-		t.Fatalf("%s's endpoint section carries no \"N distinct routes, M registrations\" sentence", drDocPath)
-	}
-	routes, err := strconv.Atoi(m[1])
-	if err != nil {
-		t.Fatalf("route count %q is not a number: %v", m[1], err)
-	}
-	registrations, err := strconv.Atoi(m[2])
-	if err != nil {
-		t.Fatalf("registration count %q is not a number: %v", m[2], err)
-	}
-	if routes < fcMinDocRoutes {
-		t.Errorf("%s claims %d distinct routes, want at least %d -- the correction route raises it by one", drDocPath, routes, fcMinDocRoutes)
-	}
-	if registrations < fcMinDocRegistrations {
-		t.Errorf("%s claims %d registrations, want at least %d -- the correction route raises it by one", drDocPath, registrations, fcMinDocRegistrations)
-	}
 }

@@ -32,19 +32,11 @@ jobs:
         id: filter
         with:
           filters: |
-            # docs/** is here for one reason: this job's `go test ./...` runs the
-            # source scanners that hold the retention and boot-rationale claims
-            # (internal/platform/db/retention_claim_gate_test.go). Without it a
-            # docs-only commit matched no filter, so those scanners were inert on
-            # exactly the edit they guard. The cost is that doc-only PRs now run
-            # the Go suite. db/** already reaches this job via the migrations
-            # filter below.
             go:
               - 'cmd/**'
               - 'internal/**'
               - 'tools/**'
               - 'migrations/**'
-              - 'docs/**'
               - 'scripts/ci/**'
               - 'packages/design-tokens/v2/assets/**'
               - 'go.mod'
@@ -487,7 +479,7 @@ jobs:
   # specs (test_pins.py, test_fixtures.py) need the repo mounted read-only at a known
   # path; see sidecar/docling/tests/conftest.py. $GITHUB_WORKSPACE is the checked-out
   # repo, matching the local `docker run -v "$PWD:/repo:ro" ...` command in the
-  # Dockerfile's test-stage comment and docs/docling-sidecar.md.
+  # Dockerfile's test-stage comment and .claude/rules/docling-sidecar.md.
   docling-test:
     name: Docling image (test suite)
     needs: changes
@@ -518,15 +510,14 @@ jobs:
   # two non-superuser roles as the superuser, apply every migration as the migrator,
   # assert nothing is left pending, then a reset→up round-trip to prove every
   # migration is reversible. The DB is empty each run (no reliance on prior state).
-  # Modeled on learn-greek-easy's gating alembic-check; see docs/migrations.md §6.
+  # Modeled on learn-greek-easy's gating alembic-check.
   migrations:
     name: Migrations (fresh Postgres)
     needs: changes
     if: needs.changes.outputs.migrations == 'true'
     runs-on: ubuntu-latest
     # Postgres MAJOR must match the Railway-provisioned major (both 18 today —
-    # Railway's postgres-ssl template provisioned PG18) — bump together. See
-    # docs/migrations.md §6 and add-a-service.md.
+    # Railway's postgres-ssl template provisioned PG18) — bump together.
     services:
       postgres:
         image: postgres:18
@@ -587,8 +578,8 @@ jobs:
       - name: Embedded-migration apply (the gateway's on-deploy path) + per-test visibility & skip gate
         # Prove the migrations embedded into the gateway binary (go:embed +
         # internal/platform/db.MigrateUp) apply from empty and leave nothing
-        # pending — the exact code path the gateway runs at boot (M2-12,
-        # docs/migrations.md §2). The filesystem round-trip above can't catch a
+        # pending — the exact code path the gateway runs at boot.
+        # The filesystem round-trip above can't catch a
         # stale/incomplete go:embed; this can. DATABASE_MIGRATION_URL is already in
         # this job's env, so the test runs here (it self-skips everywhere else).
         run: scripts/ci/rls-test-gate.sh -count=1 -run TestMigrateUpFromEmbedded ./internal/platform/db/...
@@ -637,7 +628,7 @@ jobs:
   # and migrates exactly like the `migrations` job, then runs the suite as the
   # app/migrator/reader roles. The suite SKIPS itself when these DATABASE_* URLs are
   # absent, so the `go` job above and a bare local `go test ./...` stay green without
-  # a database. See docs/migrations.md §6, §8. Deliberately not testcontainers — this
+  # a database. Deliberately not testcontainers — this
   # service-container + Makefile-bootstrap path adds no Go dependency and keeps one
   # canonical bootstrap.
   rls:
@@ -745,7 +736,7 @@ jobs:
       - name: Demo approval-policy seeder suite (convergence + allowlist + staffed seat as invoice_app) + per-test visibility & skip gate
         # Proves the boot-time seeder that arms BOTH demo tenants' validated backlogs:
         # it CONVERGES rather than inserting-if-absent (db.PurgeDemoTenants empties
-        # approval_runs but not the policy tables on every gated boot, docs/demo-reset.md;
+        # approval_runs but not the policy tables on every gated boot;
         # db.Reset truncates the same rows, but only in a pr-<N> environment) by
         # publishing, reactivating or superseding, the allowlist keeps it off every
         # non-demo tenant, and each active-version approval step names a seat with an

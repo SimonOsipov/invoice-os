@@ -1,0 +1,51 @@
+---
+paths:
+  - "cmd/*/railway.json"
+  - "cmd/*/main.go"
+  - "sidecar/**"
+  - "frontend/*/Dockerfile"
+  - "frontend/*/railway.json"
+  - "Dockerfile"
+  - "packages/monitoring/src/options.ts"
+---
+# Add a service
+
+- Create a new service once, in the persistent environment. Every PR fork inherits it.
+- Name a Go service `<svc>` identically in `cmd/<svc>`, the Railway service name and the host `<svc>.railway.internal`.
+- Build every Go service from the root `Dockerfile` with the repo root as build context. Add no per-service Dockerfile.
+- Select the binary with the build argument `SERVICE`. Set `SERVICE=<svc>` as a Railway service variable, because `railway.json` has no `buildArgs`.
+- Add no BuildKit `--mount=type=cache` to the shared Dockerfile. Railway requires each cache id to embed the building service's own id.
+- Copy `cmd/<svc>/railway.json` from an existing service. Use the `DOCKERFILE` builder, health path `/healthz` and restart policy `ON_FAILURE`.
+- Set `dockerfilePath`, `healthcheckPath` and `restartPolicyType` on the instance of a new service. Railway rejects `railwayConfigFile` for new services.
+- Use health path `/health` for an SPA and for `auth`. Use `/healthz` for every Go service and for `docling`.
+- Leave the Railway Root Directory at `/`. The build needs the root `go.mod` and shared `internal/`.
+- Set `PORT=8080` on every service and bind all interfaces (`:PORT`). Railway private networking is IPv6, so a loopback listener is unreachable.
+- Write a cross-service port as a literal. `${{<svc>.PORT}}` renders an empty port when `PORT` is unset.
+- Use reference variables for cross-service values, such as `${{Postgres.DATABASE_URL}}`. Never hardcode them.
+- Never set `RAILWAY_*` variables by hand. Railway injects them.
+- Keep secrets in Railway service variables only. Never put one in the repo, in `railway.json` or in an example file.
+- Keep every service's Watch Paths empty. Set the service instance `watchPatterns` to `[]` after you create the service.
+- Add no `build.watchPatterns` to `railway.json`. Railway ignores it.
+- Delete any deployment trigger right after `serviceCreate`, before you do anything else. Any trigger in any environment fails `railway-invariants.yml` on every PR.
+- Give a public domain only to the gateway and the SPAs. Context services, `docling`, `auth` and Postgres stay private.
+- Create a custom domain for a new public service on production. Railway-generated domains exist only on PR environments.
+- Call `app.RequireGateway(token)` before `app.Run` in each service the gateway routes to. Read the token with `mustEnv("GATEWAY_TOKEN")`.
+- Declare only peer routes as open arguments of `RequireGateway`. `TestRLS_EveryContextServiceRefusesAForgedRequest` pins the guard.
+- Add a routed service to `routedServices` in `cmd/gateway/main.go` and to `GATEWAY_TOKEN_SERVICES` in `scripts/ci/railway-env.sh`.
+- Add a routed service to `e2e/api/service-auth.spec.ts`. `TestGatewayTokenServicesMatchTheRoutedFleet` pins the script list.
+- Set `GATEWAY_TOKEN` unsealed and equal to the gateway's value. Never seal it, because sealed variables do not fork.
+- Write the first production `GATEWAY_TOKEN` with `set-production-gateway-token`, by hand. It refuses a partly set state.
+- Set `SENTRY_DSN` on production only. Never seal a Sentry variable.
+- Add a new service to the lists in `set-sentry-off`. `TestSentryOffListsMatchTheDeployedFleet` pins them.
+- Report `sentry` from a service probed through `/healthz/fleet`, or exempt it by name in the fleet gate. Only `auth` is exempt.
+- Wrap a new outbound client to another first-party service in `platform.TraceTransport`. Never wrap a third-party client.
+- Build a new Go service on `platform.New`. It gets Sentry labels, 5xx and panic capture, tracing and the `SENTRY_TEST_EVENT` trigger.
+- Call `initMonitoring` from `src/instrument.ts` in a new SPA. Add its name to the `Service` union in `packages/monitoring/src/options.ts`.
+- Declare `ARG` and `ENV` for `VITE_SENTRY_DSN`, `VITE_SENTRY_TEST_DIGEST` and `RAILWAY_GIT_COMMIT_SHA` in a new SPA Dockerfile build stage.
+- Declare `ARG SENTRY_AUTH_TOKEN` in the SPA Dockerfile with no `ENV`. `packages/monitoring/src/dockerfiles.test.ts` pins both.
+- Add `sentryVitePlugin(sourcemapUploadOptions(appDir))` and `build.sourcemap: 'hidden'` to the SPA `vite.config.ts`.
+- Serve a `.map` file as 404 from the shared `Caddyfile`. A new SPA inherits it.
+- Give a Python sidecar its own `sidecar/<svc>/Dockerfile` and `railway.json`. Declare no `ARG SERVICE` and set no `SERVICE` variable.
+- Pin a third-party sidecar image by digest in the `FROM` line. `sidecar/auth/Dockerfile` is the example.
+- Verify a new service with three reads: deployment `SUCCESS`, `/healthz` answers, and instance `watchPatterns` is `[]`.
+- Prove always-rebuild with a `dev-env.yml` run whose diff does not touch the service. The service must still build.

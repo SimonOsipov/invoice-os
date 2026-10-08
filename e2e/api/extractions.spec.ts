@@ -26,7 +26,7 @@
 // NO COUNT IS ASSERTED, and every case but EXTR12-API-02 creates no row: its document id and
 // job id are a per-run crypto.randomUUID() that matches nothing. That makes those cases
 // trivially safe in the shared run where smoke, api and topology hit ONE deployment with no
-// reset between them (docs/e2e-convention.md "One browser, serial"). EXTR-11-09 added the detail and page routes
+// reset between them (.claude/rules/e2e.md). EXTR-11-09 added the detail and page routes
 // below under that same rule: Reader.Detail raises ErrNotFound from detailTx BEFORE the audit
 // recorder runs (reader.go:164-185), so even the 404 arm writes nothing and its transaction
 // rolls back.

@@ -1,7 +1,7 @@
 # Multi-stage; build context is the repo root (needs internal/platform/buildsha.txt).
 # No BuildKit syntax-pragma line: root Dockerfile:11-14 -- it would re-arm the Docker
 # Hub egress trap on the largest image in the fleet. No BuildKit cache mounts either
-# (docs/add-a-service.md §1).
+# (.claude/rules/add-service.md).
 #
 # Python 3.12: onnxruntime==1.29.0 floors at >=3.11, docling at >=3.10. Pulled
 # through mirror.gcr.io for the same egress reason as the root Dockerfile.

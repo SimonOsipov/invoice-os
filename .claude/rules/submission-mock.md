@@ -1,0 +1,38 @@
+---
+paths:
+  - "internal/submission/mock_*.go"
+  - "internal/submission/registry.go"
+  - "internal/submission/ratelimit.go"
+  - "tools/fixturegen/**"
+---
+# Submission mock
+
+- Reserve all of `99999999-####` for scripted outcomes. `mockAllocations` lists the allocated triggers.
+- Never mint a `99999999-` buyer TIN from a random or anonymising generator. A match silently arms a scripted outcome.
+- Name a trigger TIN in a fixture only to arm its outcome on purpose. The `fixturegen` submission demo does so.
+- Keep every allocated trigger Luhn-invalid. `genBuyerTIN` appends a Luhn check digit, so it cannot mint one.
+- Give a new trigger the next free suffix from `-0010` upward. Check first that the value is Luhn-invalid.
+- Never allocate `99999999-0008` or `99999999-0009`. Both sit in `mockNeverAllocate` and behave as accept.
+- Keep every trigger in the form `^[0-9]{8}-[0-9]{4}$`. The seeded `buyer-tin-format` rule rejects other forms before submission.
+- Match the buyer TIN exactly. Never trim or case-fold it. A TIN with a trailing space takes the accept path.
+- Let an unallocated or absent buyer TIN take the accept path.
+- Use `99999999-0004` to exercise retry-and-give-up. It returns a retryable 503 on every attempt.
+- Use `99999999-0007` to exercise a failure before the wire. `ReachedWire` stays false and the connect phase waits nothing.
+- Keep `slow` and `timeout` separate. `slow` records a 200 after a long wait. `timeout` records no response and reports `ReachedWire` true.
+- Read no clock, no random source and no counter to decide an outcome or mint an identifier. The mock opens no socket.
+- Key the IRN on document identity: invoice number and issue date. Never hash the wire into it.
+- Key the CSID and the QR payload on the whole wire. Encode both with `base64.RawURLEncoding`.
+- Build `docRef` in this order: upper-case, strip to `[A-Z0-9-]`, truncate to 24 characters.
+- Fall back to `INV` plus eight uppercase hex characters of the wire digest when `docRef` is empty. Fall back to `00000000` for a bad date.
+- Never return a blank IRN.
+- Stamp the supplier's TIN into the QR payload, never the buyer's. The buyer TIN is the trigger channel.
+- Name the rejected field `customer.taxIdentifier` in the synthesized 422 body. Name it `buyer.tin` on the returned `Reason`.
+- Make the `pending` ref self-describing. It carries the polls remaining and the identifiers of the eventual accept.
+- Keep no state between `Poll` calls.
+- Persist the ref from each `Pending` into `submission_jobs.poll_ref`. A caller that re-polls the first ref never converges.
+- Reject a foreign ref with an error that wraps `ErrMockUnknownRef`. `Poll` then reports `Retryable` with `ReachedWire` false.
+- Select the mock with `APP_ADAPTER=mock`. An unset `APP_ADAPTER` is fatal in every environment.
+- Keep `productionAdapters` empty. `APP_ADAPTER=mock` with `ENVIRONMENT=production` fails with `ErrAdapterNotInProd`.
+- Read `APP_ADAPTER_MOCK_LATENCY` through `MockConfigFromEnv`. The default is `800ms`, and `0s` means instant.
+- Fail boot on a negative or unparseable latency, even when `APP_ADAPTER` is unset.
+- Read `SUBMISSION_RATE_LIMIT_PER_MINUTE` through `RateLimitConfigFromEnv`. Fail boot on a value of zero or less.

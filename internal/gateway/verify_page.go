@@ -36,7 +36,8 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 	sum := sha256.Sum256([]byte(verifyScript))
 	csp := "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'sha256-" +
 		base64.StdEncoding.EncodeToString(sum[:]) + "'; base-uri 'none'; frame-ancestors 'none'"
-	failed := strings.TrimSuffix(siteURL.String(), "/") + "/?verify=failed"
+	site := strings.TrimSuffix(siteURL.String(), "/")
+	failed := site + "/?verify=failed"
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -55,7 +56,13 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
-		page := strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.Script}}", verifyScript).Replace(verifyPageHTML)
+		// The app mints the state in the clicking tab; a stateless open goes there via landing.
+		state := q.Get("state")
+		if !stateShape.MatchString(state) {
+			http.Redirect(w, r, site+"/?confirm=1#token="+url.QueryEscape(token), http.StatusSeeOther)
+			return
+		}
+		page := strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.State}}", html.EscapeString(state), "{{.Script}}", verifyScript).Replace(verifyPageHTML)
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		h.Set("Content-Length", strconv.Itoa(len(page)))
 		w.WriteHeader(http.StatusOK)

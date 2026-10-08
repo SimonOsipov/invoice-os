@@ -105,17 +105,17 @@ func TestHandoffHandlersWiring(t *testing.T) {
 		t.Fatal("main.go declares no handoffHandlers")
 	}
 
-	// The checker is handoffHandlers' second parameter; sign-out must evict from the API's own cache.
+	// The checker is handoffHandlers' third parameter; sign-out must evict from the API's own cache.
 	var params []string
 	for _, p := range fn.Type.Params.List {
 		for _, n := range p.Names {
 			params = append(params, n.Name+" "+types.ExprString(p.Type))
 		}
 	}
-	if len(params) < 2 || !strings.HasSuffix(params[1], " *gateway.SessionChecker") {
-		t.Fatalf("handoffHandlers params = %v, want a *gateway.SessionChecker second", params)
+	if len(params) < 3 || !strings.HasSuffix(params[2], " *gateway.SessionChecker") {
+		t.Fatalf("handoffHandlers params = %v, want a *gateway.SessionChecker third", params)
 	}
-	sessions := strings.Fields(params[1])[0]
+	sessions := strings.Fields(params[2])[0]
 
 	var clients []map[string]string
 	calls := map[string][]string{}  // callee -> argument lists
@@ -172,6 +172,7 @@ func TestHandoffHandlersWiring(t *testing.T) {
 		"gateway.ExchangeHandler":   store,
 		"gateway.RefreshHandler":    "authURL, client, log",
 		"gateway.SignOutHandler":    "authURL, client, " + sessions + ", log",
+		"gateway.VerifyHandler":     "authURL, siteURL, client, log, sink, " + store,
 	} {
 		// One construction outside any closure: the store and throttle outlive a request.
 		if got := calls[callee]; len(got) != 1 || got[0] != want {
@@ -198,7 +199,7 @@ func TestHandoffHandlersWiring(t *testing.T) {
 	if mainFn == nil {
 		t.Fatal("main.go declares no main")
 	}
-	secondArg := map[string][]string{}
+	checkerArg := map[string][]string{}
 	var checker string
 	ast.Inspect(mainFn.Body, func(n ast.Node) bool {
 		switch n := n.(type) {
@@ -207,8 +208,11 @@ func TestHandoffHandlersWiring(t *testing.T) {
 				checker = types.ExprString(n.Lhs[0])
 			}
 		case *ast.CallExpr:
-			if callee := types.ExprString(n.Fun); (callee == "gatewayHandlers" || callee == "handoffHandlers") && len(n.Args) > 1 {
-				secondArg[callee] = append(secondArg[callee], types.ExprString(n.Args[1]))
+			// gatewayHandlers takes the checker second, handoffHandlers third (after authURL, siteURL).
+			if callee := types.ExprString(n.Fun); callee == "gatewayHandlers" && len(n.Args) > 1 {
+				checkerArg[callee] = append(checkerArg[callee], types.ExprString(n.Args[1]))
+			} else if callee == "handoffHandlers" && len(n.Args) > 2 {
+				checkerArg[callee] = append(checkerArg[callee], types.ExprString(n.Args[2]))
 			}
 		}
 		return true
@@ -217,8 +221,8 @@ func TestHandoffHandlersWiring(t *testing.T) {
 		t.Fatal("main binds no `x := gateway.NewSessionChecker(...)`")
 	}
 	for _, callee := range []string{"gatewayHandlers", "handoffHandlers"} {
-		if got := secondArg[callee]; len(got) != 1 || got[0] != checker {
-			t.Errorf("main calls %s with second argument %v, want exactly once with %s", callee, got, checker)
+		if got := checkerArg[callee]; len(got) != 1 || got[0] != checker {
+			t.Errorf("main calls %s with the checker argument %v, want exactly once with %s", callee, got, checker)
 		}
 	}
 }

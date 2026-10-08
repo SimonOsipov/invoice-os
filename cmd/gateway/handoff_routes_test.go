@@ -95,11 +95,49 @@ func TestHandoffRoutesRegisteredWithPreflight(t *testing.T) {
 	}
 }
 
+// handoffVerify is the POST /auth/verify handler main mounts, built the way main builds it.
+func handoffVerify(authURL, site *url.URL, sink gateway.ContactSink) http.Handler {
+	log := slog.New(slog.DiscardHandler)
+	return handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink).Verify
+}
+
+// One handoffHandlers call builds the verify and exchange handlers over one store.
+func TestHandoffHandlers_VerifyCodeRedeemsThroughExchange(t *testing.T) {
+	const prefix = "https://site.example/?verified=1&handoff="
+	site, _ := url.Parse("https://site.example")
+	authURL := goTrueAnswering(t, `{"access_token":"at-1","refresh_token":"rt-1","user":{"id":"u-1","email":"a@corp.example"}}`)
+	log := slog.New(slog.DiscardHandler)
+	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil)
+
+	rec := serveForm(h.Verify, "/auth/verify", "token=T&type=signup&state="+handoffState)
+
+	loc := rec.Header().Get("Location")
+	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, prefix) {
+		t.Fatalf("verify = %d Location %q, want 303 %s<code>", rec.Code, loc, prefix)
+	}
+	code := strings.TrimPrefix(loc, prefix)
+	exchange := func(state string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"code": code, "state": state})
+		return postJSON(h.Exchange, "/auth/exchange", handoffAllowedOrigin, string(body))
+	}
+	rec = exchange(handoffState)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exchange = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got) != 2 || got["access_token"] != "at-1" || got["refresh_token"] != "rt-1" {
+		t.Errorf("exchange body = %s, want exactly access_token at-1 and refresh_token rt-1", rec.Body.String())
+	}
+	if rec = exchange(handoffState); rec.Code != http.StatusBadRequest {
+		t.Errorf("second exchange = %d, want 400", rec.Code)
+	}
+}
+
 // handoffMux mounts handoffHandlers on the hand-off patterns the way main does.
 func handoffMux(t *testing.T, authURL *url.URL, withOptions bool) *http.ServeMux {
 	t.Helper()
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(authURL, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil)
+	h := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil)
 	withCORS := gateway.CORS([]string{handoffAllowedOrigin})
 	fields := map[string]http.Handler{"SignIn": h.SignIn, "Exchange": h.Exchange, "Refresh": h.Refresh, "SignOut": h.SignOut}
 	mux := http.NewServeMux()

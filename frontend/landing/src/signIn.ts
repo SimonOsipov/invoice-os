@@ -2,7 +2,7 @@
 import { reportApiFailure } from '@invoice-os/api-client'
 import { ApiError, apiFetch, gatewayBase } from '@invoice-os/api-client/client'
 
-import { appBase, consoleBase } from './auth'
+import { appBase, consoleBase, handoffTarget } from './auth'
 
 const STATE_RE = /^[A-Za-z0-9_-]{43}$/
 
@@ -15,7 +15,7 @@ export type ConsoleTarget = 'ops' | 'support'
 
 export function handoffUrl(code: string, target?: ConsoleTarget): string | null {
   const base = target ? consoleBase(target) : appBase()
-  return base ? `${base}?handoff=${encodeURIComponent(code)}` : null
+  return base ? handoffTarget(base, code) : null
 }
 
 export function signInConfigured(): boolean {

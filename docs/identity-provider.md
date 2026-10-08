@@ -327,8 +327,11 @@ scope, or `/token` with any other grant) is reachable from outside.
    than `AUTH_REGISTER_MIN_RESPONSE` after the request reached the handler, so a new address
    and a known one take the same time while GoTrue answers faster than that (see Ceilings).
 2. The link targets `GOTRUE_MAILER_URLPATHS_CONFIRMATION`, which is the gateway's
-   `GET /auth/verify`, a page with one confirm button. A relative value would resolve against `API_EXTERNAL_URL`, a private
-   host, so production sets an absolute URL.
+   `GET /auth/verify`. A relative value would resolve against `API_EXTERNAL_URL`, a private
+   host, so production sets an absolute URL. The mail link carries no `state`, so the gateway
+   answers 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>` and does not call GoTrue
+   (`TestVerifyPage_StatelessOpenBouncesToLanding`). The same request with a `state` of 43
+   base64url characters gets a page with one confirm button (`TestVerifyPage_StateRendersAsHiddenField`).
 
    The confirmation mail is the branded template (`internal/accountmail`) that GoTrue fetches
    from `GOTRUE_MAILER_TEMPLATES_CONFIRMATION`, the gateway's public
@@ -351,11 +354,14 @@ scope, or `/token` with any other grant) is reachable from outside.
    them.
 3. The registrant opens the link and clicks "Confirm my email". The button submits a form to
    `POST /auth/verify`, which posts `{"type":"signup","token_hash":<token>}` to GoTrue
-   `/verify`, discards the session GoTrue returns, and redirects the browser to
-   `AUTH_SITE_URL`. Opening the link verifies nothing. No token reaches a landing URL.
-4. The verified user signs in through `POST /auth/sign-in` and redeems the code at
-   `POST /auth/exchange` (see Sign-in and hand-off). The first token carries no tenant: the
-   access-token hook projects a tenant only for exactly one active membership.
+   `/verify`, and redirects the browser to `AUTH_SITE_URL`. Opening the link verifies nothing.
+   The token reaches a landing URL only in the fragment of the stateless bounce, never in a query.
+4. When the form carries the tab's `state` and GoTrue's answer holds both tokens, the gateway
+   stores the session in the hand-off store and redirects to `?verified=1&handoff=<code>`;
+   the tab redeems the code at `POST /auth/exchange` with its state (see Sign-in and hand-off).
+   Without a state, with a session-less answer or with a full store, the redirect is
+   `?verified=1` and the user signs in through `POST /auth/sign-in`. The first token carries no
+   tenant: the access-token hook projects a tenant only for exactly one active membership.
 5. With that tenant-less token the client calls `POST /api/tenancy/v1/workspaces`
    `{"workspace_name","display_name","kind"?}`. The gateway lets a tenant-less token through
    on this method and path and on three more routes only: `POST /api/tenancy/v1/invitations/accept`,
@@ -505,7 +511,8 @@ The `/api/` router answers 404 for any path whose first segment after the servic
 
 | Outcome | Answer |
 |---|---|
-| a `token` of 1 to 256 bytes and `type=signup` | 200 `text/html`: one form with the token and type as hidden fields and a "Confirm my email" button; GoTrue is not called |
+| a `token` of 1 to 256 bytes, `type=signup` and a `state` of 43 base64url characters | 200 `text/html`: one form with the token, type and state as hidden fields and a "Confirm my email" button; GoTrue is not called |
+| a `token` of 1 to 256 bytes, `type=signup` and no or a malformed `state` | 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>`; no page; GoTrue is not called |
 | an empty or over-long `token`, or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; no page |
 | HEAD | as GET, without the body |
 | any method but GET, HEAD and POST | 405 from the router, `Allow: GET, HEAD, POST` |
@@ -514,21 +521,22 @@ The `/api/` router answers 404 for any path whose first segment after the servic
 The page handler holds no GoTrue client. It sets `Cache-Control: no-store`,
 `Referrer-Policy: no-referrer` and a `Content-Security-Policy` that allows one inline script by
 its hash. The script blocks a second submit of the form. The page reveals nothing beyond the
-token. `redirect_to` and every other query value are ignored and never rendered. The page shape
+token and the state. `redirect_to` and every other query value are ignored and never rendered. The page shape
 is fixed for the signup link; whether other links can reuse it is unmeasured.
 
-**`POST /auth/verify`** (the act), form `token=…&type=signup`, outside `/api/`:
+**`POST /auth/verify`** (the act), form `token=…&type=signup&state=…`, outside `/api/`:
 
 | Outcome | Answer |
 |---|---|
-| GoTrue `/verify` 200 | 303 to `<AUTH_SITE_URL>/?verified=1`; one contact hand-off |
+| GoTrue `/verify` 200 with both tokens and a form `state` of 43 base64url characters | 303 to `<AUTH_SITE_URL>/?verified=1&handoff=<code>`; the session is stored once in the hand-off store; one contact hand-off |
+| GoTrue `/verify` 200 with no or a malformed `state`, no access token or no refresh token, or a full hand-off store (WARN `verify: hand-off store full`) | 303 to `<AUTH_SITE_URL>/?verified=1`, no code; one contact hand-off |
 | a form that does not parse, is over 1 KiB, is not `application/x-www-form-urlencoded`, or carries an empty or over-256-byte `token` or a `type` other than `signup` | 303 to `<AUTH_SITE_URL>/?verify=failed`; GoTrue is not called |
-| a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, logged at WARN (the upstream status, or the error) |
+| a GoTrue refusal, or GoTrue unreachable | 303 to `<AUTH_SITE_URL>/?verify=failed`, logged at WARN (the upstream status and GoTrue's `error_code`, or the error) |
 | any method but GET, HEAD and POST | 405 from the router, `Allow: GET, HEAD, POST`; GoTrue is not called |
 | any method but POST, sent to the handler | 405 `{"error":"method not allowed"}`, `Allow: POST`; GoTrue is not called |
 | `AUTH_SITE_URL` unset | 503 `registration is not configured` |
 
-The handler reads the token from the form body only, never from the URL, and sets
+The handler reads the token and the state from the form body only, never from the URL, and sets
 `Cache-Control: no-store`. The route sets no CORS headers and carries no CSRF token: it uses no
 cookie, and whoever holds the token can already post it. The redirect target is always the
 gateway's own `AUTH_SITE_URL`.
@@ -672,10 +680,10 @@ does not, because an admin chose the address. An expired or spent invite to such
   edge. A proxy in front makes every key the proxy's IP, and every client then shares one bucket of 10;
   resend then fails toward fewer mails for everyone, never more. `key_source=remote_addr` in the
   limit WARN shows the fallback.
-- `ceiling:` the session GoTrue issues on verify is discarded but stays live in
-  `auth.sessions` and `auth.refresh_tokens`. No route revokes it by itself; a global
-  sign-out or a staff cut-off of the account deletes it with the account's other sessions
-  (see Revocation and Cutting an account off). Its tokens never reach anyone.
+- The session GoTrue issues on verify reaches only the tab whose `state` the click carried,
+  once, through `POST /auth/exchange`. Without a code it is discarded but stays live in
+  `auth.sessions` and `auth.refresh_tokens` until a global sign-out or a staff cut-off of
+  the account deletes it (see Revocation and Cutting an account off).
 
 **Accepted risks of the emailed link:**
 - *First registrant's answers.* GoTrue does not update an unconfirmed user on a repeat signup,
@@ -728,6 +736,17 @@ hand-off is the app by default and a console when the visitor came from one (Con
    characters, exactly once). The app holds the token at `sessionStorage['invoice-os.pendingInvite']`
    (`{v:1, t, at}`, 10 minutes, `lib/pendingInvite.ts`) and strips the hash. A start with no
    invite removes a held one.
+   A confirm link that landing receives with `#token=<T>` (the mail opens landing, not the
+   gateway) goes to `<app>?auth=verify#token=<T>`. A `?handoff=` beside it wins. The app reads the
+   one `[A-Za-z0-9_-]{1,256}` token before it strips the URL and mints a fresh state, over any stored
+   session. It holds `sessionStorage['invoice-os.pendingVerify']` (`{v:1, at}`, 10 minutes,
+   `lib/verifyBounce.ts`), then goes to `<gateway>/auth/verify?token=<T>&type=signup&state=<s>`. A
+   bad or missing token, or no gateway URL, goes to `<landing>/?verify=failed`. The click returns to
+   landing, which forwards `?verified=1&handoff=<code>` to the app (step 5). With a live stored
+   session A at that point, the app wins for A: it posts no exchange, stores nothing for the
+   confirmed account, removes the marker and shows "Your email is confirmed. You are signed in as
+   <A's email>. To use the confirmed account, sign out and sign in with it." With no session, the
+   code signs in as the confirmed account (step 6) and the marker is removed.
 4. Landing posts `{"email","password","state"}` to `POST /auth/sign-in`. The gateway posts
    `{"email","password"}` to GoTrue `/token?grant_type=password`. On a 200 it keeps the access
    token and the refresh token with `sha256(state)` and answers a code.
@@ -842,7 +861,10 @@ first attempt (`SignInMaxFailures`, `SignInWindow`).
 **Precedence in the app.** A live stored hand-off session wins over `?handoff=`: the code is
 stripped and not acted on, so a URL never replaces a real session. A
 user signed in as A who signs in on landing as B arrives back in A's workspace with no
-message; B's code expires unused. Sign out first to switch accounts. With an invite held
+message; B's code expires unused. Sign out first to switch accounts. A live
+`invoice-os.pendingVerify` marker (step 3) turns the message on: the app shows the confirmed
+notice and posts nothing. Guarded by `App.sessionHandoff.test.tsx` "a verify code over a live
+session keeps A, posts nothing and shows the confirmed notice". With an invite held
 (D11) the code is redeemed over a live stored session: success replaces it, a refusal or
 any failure leaves it stored. Guarded by `App.inviteAccept.test.tsx` "a held invite redeems
 a hand-off over a live stored session". A stored hand-off
@@ -1556,9 +1578,10 @@ empty commit instead.
    answers 202 `{"status":"verification_pending"}`, after at least the minimum (`2s` by default).
 2. The mail arrives from `no-reply@ascomply.com`. Its link starts
    `https://api.ascomply.com/auth/verify?token=`.
-3. Opening the link shows the confirm page. Clicking "Confirm my email" lands on
-   `https://www.ascomply.com/?verified=1`. Opening the link again and clicking lands on
-   `?verify=failed`.
+3. Opening the link shows the confirm page (landing forwards it through `<app>?auth=verify`).
+   Clicking "Confirm my email" signs the clicking tab in at the app. With another account
+   already signed in on that tab, the app keeps it and shows the confirmed notice. Opening the
+   link again and clicking lands on `?verify=failed`.
 4. `curl -sS -X POST https://api.ascomply.com/auth/register -H 'Content-Type: application/json' -d '{"email":"someone@gmail.com","password":"<12+ characters>"}'`
    answers 400 `{"error":"a business email address is required; personal email providers are not accepted"}`.
 5. Time a real signup. A client-side `curl` time cannot separate GoTrue's time from the minimum, so read the gateway's

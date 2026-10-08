@@ -1275,20 +1275,32 @@ test('deployed app: a real sign-in names the account holder on the identity card
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('the emailed link opens a confirm page, and a bogus token\'s click lands on the failed notice', async ({ page }, testInfo) => {
+// frontend/landing/src/components/VerifyNotice.tsx COPY.failed.
+const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
+// internal/gateway/signin.go stateShape.
+const STATE_43 = /^[A-Za-z0-9_-]{43}$/
+const isConfirmPage = (u: URL) =>
+  u.origin === new URL(GATEWAY_URL).origin && u.pathname === '/auth/verify' && STATE_43.test(u.searchParams.get('state') ?? '')
+
+// The mailed link runs gateway -> landing -> app -> gateway. `commit` returns before the client redirects interrupt the load.
+async function openMailedLink(page: Page): Promise<URL> {
+  await page.goto(`${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`, { waitUntil: 'commit' })
+  await page.waitForURL(isConfirmPage, { timeout: 30_000 })
+  return new URL(page.url())
+}
+
+test('the emailed link reaches the confirm page through the app, and a bogus click lands on the failed notice', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  const posts: string[] = []
-  page.on('request', (req) => {
-    if (req.method() === 'POST' && new URL(req.url()).pathname === '/auth/verify') posts.push(req.url())
-  })
-  const url = `${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`
+  const posts = recordPosts(page, '/auth/verify')
+  const confirmUrl = await openMailedLink(page)
+  expect(confirmUrl.searchParams.get('state'), 'the confirm page state').toMatch(STATE_43)
   const button = page.getByRole('button')
 
   const readings: { width: number; fontSize: string; fontWeight: string }[] = []
   for (const width of [...WIDE_WIDTHS, 375]) {
     const height = 1080
     await page.setViewportSize({ width, height })
-    await page.goto(url)
+    await page.goto(confirmUrl.href)
     await expect(button, `one button at ${width}px`).toHaveCount(1)
     await expect(button).toHaveText('Confirm my email')
     const card = page.locator('main')
@@ -1298,9 +1310,7 @@ test('the emailed link opens a confirm page, and a bogus token\'s click lands on
     expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(cardBox)})`).toBe(true)
     expect(enclosesRect(cardBox, buttonBox, 1), `the button leaves the card at ${width}px (${JSON.stringify({ cardBox, buttonBox })})`).toBe(true)
     // The gateway page has no app shell, so layout.ts's `.pf-scroll` helper would never resolve.
-    const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
-    expect(doc.clientWidth, `the document has no width at ${width}px`).toBeGreaterThan(0)
-    expect(doc.scrollWidth - doc.clientWidth, `the confirm page scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
+    await noSidewaysScroll(page, 'the confirm page', width)
     // A dropped `font` shorthand computes the browser default (13.333px / 400).
     const reading = await button.evaluate((el) => ({ fontSize: getComputedStyle(el).fontSize, fontWeight: getComputedStyle(el).fontWeight }))
     expect(reading, `the button font at ${width}px`).toEqual({ fontSize: '14px', fontWeight: '700' })
@@ -1313,11 +1323,83 @@ test('the emailed link opens a confirm page, and a bogus token\'s click lands on
   const beforeClick = [...errors]
   expect(beforeClick, `console errors on the confirm page:\n${beforeClick.join('\n')}`).toEqual([])
 
-  await button.dblclick()
-  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
+  await Promise.all([page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }), button.dblclick()])
+  await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
   await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
   expect(posts.length, 'POST /auth/verify requests sent by the double-click').toBe(1)
+  for (const width of [...WIDE_WIDTHS, 375]) {
+    await page.setViewportSize({ width, height: 1080 })
+    await expectFailedNotice(page, width, VERIFY_FAILED, 'Sign in')
+  }
+})
+
+test('the failed verify notice\'s Sign in opens the sign-in window', async ({ page }) => {
+  await seedConsent(page, false)
+  await page.goto(`${LANDING_URL}/?verify=failed`)
+  await page.getByRole('status').filter({ hasText: VERIFY_FAILED }).getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(signInDialog(page)).toBeVisible({ timeout: 30_000 })
+})
+
+test('landing forwards a verify code to the app', async ({ page }) => {
+  const code = 'A'.repeat(43)
+  const urls = recordUrls(page)
+  await page.goto(`${LANDING_URL}/?verified=1&handoff=${code}`)
+  await expect(signInDialog(page)).toContainText(HANDOFF_FAILED, { timeout: 30_000 })
+  expect(urls.filter((u) => isHandoffNavigation(u) && new URL(u).searchParams.get('handoff') === code), 'navigations to the app with the code').not.toHaveLength(0)
+})
+
+// A confirm code over a live session: the app keeps the session, posts no exchange and shows the confirmed notice.
+// Returns the exchange POSTs and every request seen after the sign-in.
+async function confirmOverLiveSession(page: Page): Promise<{ email: string; exchanges: string[]; seen: string[] }> {
+  const { email } = await ensureMember(TENANTS.a.id, 'firm')
+  await signInAs(page, 'firm')
+  const seen: string[] = []
+  const exchanges: string[] = []
+  page.on('request', (r) => {
+    seen.push(r.url())
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/auth/exchange') exchanges.push(r.url())
+  })
+  // The bounce holds the pending-confirm marker, bound to the state it mints.
+  await page.goto(`${APP_URL}/?auth=verify#token=bogus-${crypto.randomUUID()}`, { waitUntil: 'commit' })
+  await page.waitForURL(isConfirmPage, { timeout: 30_000 })
+  await page.goto(`${LANDING_URL}/?verified=1&handoff=${'A'.repeat(43)}`, { waitUntil: 'commit' })
+  await page.waitForURL((u) => u.href.startsWith(APP_URL), { timeout: 30_000 })
+  return { email, exchanges, seen }
+}
+
+test('a confirm over a live session shows the confirmed notice naming the signed-in account', async ({ page }) => {
+  test.setTimeout(180_000)
+  const { email, exchanges, seen } = await confirmOverLiveSession(page)
+  const toast = page.getByTestId('verify-confirmed-toast')
+  await expect(toast).toBeVisible({ timeout: 30_000 })
+  // Read before the toast's 5.2 s auto-dismiss (AuditExportToast EXPORT_TOAST_MS).
+  await expect(toast).toContainText(`signed in as ${email}`)
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+  expect(seen.some(isHandoffNavigation), 'the listener saw the code reach the app').toBe(true)
+  expect(exchanges, 'POST /auth/exchange requests over the live session').toEqual([])
+})
+
+test('the confirmed notice sits clear of the sidebar at each wide width', async ({ page }) => {
+  test.setTimeout(240_000)
+  const height = 1080
+  await signInAs(page, 'firm')
+  for (const width of WIDE_WIDTHS) {
+    await page.setViewportSize({ width, height })
+    await page.goto(`${APP_URL}/?auth=verify#token=bogus-${crypto.randomUUID()}`, { waitUntil: 'commit' })
+    await page.waitForURL(isConfirmPage, { timeout: 30_000 })
+    await page.goto(`${LANDING_URL}/?verified=1&handoff=${'A'.repeat(43)}`, { waitUntil: 'commit' })
+    const toast = page.getByTestId('verify-confirmed-toast')
+    await expect(toast).toBeVisible({ timeout: 30_000 })
+    await settleAnimations(toast)
+    // The toast dismisses itself after 5.2 s, so both boxes are read at once.
+    const [toastBox, sidebarBox] = await Promise.all([
+      boxOf('the toast', toast, width),
+      boxOf('the sidebar', page.locator('aside.pf-sidebar'), width),
+    ])
+    expect(enclosesRect({ x: 0, y: 0, width, height }, toastBox, 1), `the toast leaves the viewport at ${width}px (${JSON.stringify(toastBox)})`).toBe(true)
+    expect(rectsOverlap(toastBox, sidebarBox), `the toast overlaps the sidebar at ${width}px (${JSON.stringify({ toastBox, sidebarBox })})`).toBe(false)
+  }
 })
 
 // internal/tenancy/tenancy.go maxNameChars is 200; 6 x 32 + 5 spaces = 197.
@@ -2014,15 +2096,17 @@ test('deployed journey: a stranger registers through the landing and lands in a 
     })
 
     await test.step(`${kind}: the emailed link's landing shows the failed and the verified notice`, async () => {
-      // Step 2 of the verify half is a stand-in; the failed half is real: a bogus token opens the
-      // confirm page, and its click makes the deployed gateway answer 303 to ?verify=failed.
+      // Step 2 of the verify half is a stand-in; the failed half is real: a bogus token runs landing -> app -> the
+      // gateway confirm page, and its click makes the deployed gateway answer 303 to ?verify=failed.
       // `?verified=1` below is COPY-ONLY: the test types the query itself, so it proves the notice
       // text and that no dialog opens, not that the gateway verified anything. The verified redirect
       // is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds.
-      await page.goto(`${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`)
-      await page.getByRole('button', { name: 'Confirm my email' }).click()
-      await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
+      await openMailedLink(page)
+      await Promise.all([
+        page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }),
+        page.getByRole('button', { name: 'Confirm my email' }).click(),
+      ])
+      await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
       await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
       await expectNoDialog(page)
 
@@ -2361,12 +2445,12 @@ async function expectResetPage(page: Page, width: number, height: number): Promi
   await noSidewaysScroll(page, 'the reset page', width)
 }
 
-// The notice encloses its text and both buttons, and none of the three overlaps another.
-async function expectFailedNotice(page: Page, width: number): Promise<void> {
-  const notice = page.getByRole('status').filter({ hasText: RESET_LINK_FAILED })
+// The notice encloses its text, its action and Dismiss, and none of the three overlaps another.
+async function expectFailedNotice(page: Page, width: number, text: string, action: string): Promise<void> {
+  const notice = page.getByRole('status').filter({ hasText: text })
   const parts: [string, Locator][] = [
-    ['text', notice.getByText(RESET_LINK_FAILED)],
-    ['request', notice.getByRole('button', { name: 'Request a new link', exact: true })],
+    ['text', notice.getByText(text)],
+    [action, notice.getByRole('button', { name: action, exact: true })],
     ['dismiss', notice.getByRole('button', { name: 'Dismiss', exact: true })],
   ]
   const noticeBox = await boxOf('the notice', notice, width)
@@ -2447,7 +2531,7 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
     expect(posts, 'POST /auth/reset-password requests sent by the double-click').toHaveLength(1)
     for (const width of [1280, 375]) {
       await reset.setViewportSize({ width, height })
-      await expectFailedNotice(reset, width)
+      await expectFailedNotice(reset, width, RESET_LINK_FAILED, 'Request a new link')
     }
 
     await reset.getByRole('button', { name: 'Request a new link', exact: true }).click()

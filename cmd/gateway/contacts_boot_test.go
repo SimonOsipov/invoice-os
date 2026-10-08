@@ -210,28 +210,34 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			return slices.Clone(verifyBodies)
 		}
 		link := base + "/auth/verify?token=tok&type=signup"
-		var page string
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			req, _ := http.NewRequest(method, link, nil)
 			resp, err := client.Do(req)
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("%s of the link answered %d, want 200\n%s", method, resp.StatusCode, out)
-			}
-			if method == http.MethodGet {
-				page = string(b)
+			if want := "http://site.invalid/?confirm=1#token=tok"; resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != want {
+				t.Fatalf("%s of the link answered %d Location %q, want 303 %s\n%s", method, resp.StatusCode, resp.Header.Get("Location"), want, out)
 			}
 		}
+		statedLink := link + "&state=" + strings.Repeat("A", 43)
+		resp, err := client.Get(statedLink)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET of the stated link answered %d, want 200\n%s", resp.StatusCode, out)
+		}
+		page := string(b)
 		if got := verifyCalls(); len(got) != 0 {
 			t.Fatalf("opening the link reached GoTrue /verify %d times: %v", len(got), got)
 		}
 
 		// Through main's mux: a POST with the token only in the URL fails, and other methods get 405.
-		resp, err := client.Post(link, "application/x-www-form-urlencoded", nil)
+		resp, err = client.Post(link, "application/x-www-form-urlencoded", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -260,8 +266,10 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "http://site.invalid/?verified=1" {
-			t.Fatalf("the click answered %d Location %q", resp.StatusCode, resp.Header.Get("Location"))
+		const verifiedPrefix = "http://site.invalid/?verified=1&handoff="
+		loc := resp.Header.Get("Location")
+		if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, verifiedPrefix) || len(loc)-len(verifiedPrefix) != 43 {
+			t.Fatalf("the click answered %d Location %q, want 303 %s<43-char code>", resp.StatusCode, loc, verifiedPrefix)
 		}
 		got := verifyCalls()
 		if len(got) != 1 {

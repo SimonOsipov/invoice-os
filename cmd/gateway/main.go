@@ -186,7 +186,6 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/request-password-reset", withCORS(reg.RequestPasswordReset))
 	app.Mux.Handle("GET /auth/reset-password", gateway.ResetPasswordPageHandler(siteURL))
 	app.Mux.Handle("GET /auth/verify", verifyPage)
-	app.Mux.Handle("POST /auth/verify", reg.Verify)
 	previewer := gateway.NewHTTPInvitationPreviewer(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, reg.RegisterPerIP, previewer, app.Logger)
 	app.Mux.Handle("POST /auth/invitation", withCORS(invitation))
@@ -198,7 +197,8 @@ func main() {
 
 	// Public sign-in hand-off, session renewal and sign-out, outside the verifier, in every build.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], sessions, app.Logger, sink)
+	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink)
+	app.Mux.Handle("POST /auth/verify", h.Verify)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
@@ -283,7 +283,7 @@ func gatewayHandlers(
 
 // registration holds the public registration handlers main mounts outside /api/.
 type registration struct {
-	Register, Verify, DemoRequest, ResendVerification, RequestPasswordReset http.Handler
+	Register, DemoRequest, ResendVerification, RequestPasswordReset http.Handler
 	// RegisterPerIP is the register throttle, nil when unconfigured; invitee registration shares it.
 	RegisterPerIP *gateway.SignInThrottle
 }
@@ -309,12 +309,12 @@ func newJWKSClient() *http.Client {
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
-// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification, RequestPasswordReset and Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
+// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification and RequestPasswordReset answer 503 (TestRegistrationHandlers_NotConfigured503).
 // On a PR preview the per-client limits log but do not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
-		return registration{Register: nc, Verify: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
+		return registration{Register: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
 	}
 	client := &http.Client{
 		Timeout:       10 * time.Second,
@@ -328,7 +328,6 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	return registration{
 		Register:             gateway.RegisterHandler(authURL, client, minResponse, registerPerIP, enforce, log),
 		RegisterPerIP:        registerPerIP,
-		Verify:               gateway.VerifyHandler(authURL, siteURL, client, log, sink),
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
 		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
 		DemoRequest:          gateway.DemoRequestHandler(sink, log),
@@ -346,14 +345,15 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
 type handoff struct {
-	SignIn, Exchange, Refresh, SignOut http.Handler
-	SignInThrottle                     *gateway.SignInThrottle
+	SignIn, Exchange, Refresh, SignOut, Verify http.Handler
+	SignInThrottle                             *gateway.SignInThrottle
 }
 
 // handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
 // Sign-out evicts from sessions, the API's own checker.
-// Sign-in and exchange share one code store: a code minted by sign-in is redeemable only through exchange.
-func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink) handoff {
+// Sign-in, verify and exchange share one code store: a code minted by either is redeemable only through exchange.
+// A nil siteURL makes Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
+func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	throttle := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.
@@ -366,6 +366,7 @@ func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *sl
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log),
+		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink, store),
 
 		SignInThrottle: throttle,
 	}

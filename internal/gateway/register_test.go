@@ -163,11 +163,16 @@ func doRegister(t *testing.T, authURL *url.URL, log *slog.Logger, body string) *
 
 func doVerify(t *testing.T, authURL, site *url.URL, log *slog.Logger, query string) *httptest.ResponseRecorder {
 	t.Helper()
+	return doVerifyStore(t, testHandoffStore(), authURL, site, log, query)
+}
+
+func doVerifyStore(t *testing.T, store *HandoffStore, authURL, site *url.URL, log *slog.Logger, query string) *httptest.ResponseRecorder {
+	t.Helper()
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 	rec := httptest.NewRecorder()
-	VerifyHandler(authURL, site, testClient(), log, nil).ServeHTTP(rec, verifyRequest(context.Background(), query))
+	VerifyHandler(authURL, site, testClient(), log, nil, store).ServeHTTP(rec, verifyRequest(context.Background(), query))
 	return rec
 }
 
@@ -429,26 +434,43 @@ func TestVerify_Failure303(t *testing.T) {
 		{"type=recovery", http.StatusOK, gtSession, "token=" + verifyToken + "&type=recovery", 0},
 		{"missing type", http.StatusOK, gtSession, "token=" + verifyToken, 0},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			authURL := closedURL(t)
-			var fake *fakeGoTrue
-			if c.status != 0 {
-				fake = newFakeGoTrue(t, c.status, c.body)
-				authURL = fake.URL
-			}
+		for _, withState := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, state %t", c.name, withState), func(t *testing.T) {
+				authURL := closedURL(t)
+				var fake *fakeGoTrue
+				if c.status != 0 {
+					fake = newFakeGoTrue(t, c.status, c.body)
+					authURL = fake.URL
+				}
+				query := c.query
+				if withState {
+					query += "&state=" + vhState
+				}
+				store := testHandoffStore()
 
-			rec := doVerify(t, authURL, siteURL(t), nil, c.query)
+				rec := doVerifyStore(t, store, authURL, siteURL(t), nil, query)
 
-			if rec.Code != http.StatusSeeOther {
-				t.Fatalf("status = %d, want 303: %s", rec.Code, rec.Body.String())
-			}
-			if loc := rec.Header().Get("Location"); loc != siteURLValue+"/?verify=failed" {
-				t.Errorf("Location = %q, want %q", loc, siteURLValue+"/?verify=failed")
-			}
-			if fake != nil && len(fake.Calls()) != c.wantCalls {
-				t.Errorf("GoTrue saw %d calls, want %d", len(fake.Calls()), c.wantCalls)
-			}
-		})
+				if rec.Code != http.StatusSeeOther {
+					t.Fatalf("status = %d, want 303: %s", rec.Code, rec.Body.String())
+				}
+				if loc := rec.Header().Get("Location"); loc != siteURLValue+"/?verify=failed" {
+					t.Errorf("Location = %q, want %q", loc, siteURLValue+"/?verify=failed")
+				}
+				if fake != nil && len(fake.Calls()) != c.wantCalls {
+					t.Errorf("GoTrue saw %d calls, want %d", len(fake.Calls()), c.wantCalls)
+				}
+				if n := storeMapEntries(store); n != 0 {
+					t.Errorf("store holds %d codes after a failure, want 0", n)
+				}
+			})
+		}
+	}
+	// Control: a good click on a store mints a code, so "the store stays empty" above is not vacuous.
+	store := testHandoffStore()
+	rec := doVerifyStore(t, store, newFakeGoTrue(t, http.StatusOK, gtSession).URL, siteURL(t), nil, good+"&state="+vhState)
+	vhCode(t, rec)
+	if n := storeMapEntries(store); n != 1 {
+		t.Errorf("control: store holds %d codes, want 1", n)
 	}
 }
 
@@ -483,40 +505,54 @@ func TestVerify_IgnoresRedirectTo(t *testing.T) {
 }
 
 func TestVerify_NoTokenInLocationOrLogs(t *testing.T) {
-	secrets := []string{verifyToken, sessionAT, sessionRT}
+	secrets := []string{verifyToken, sessionAT, sessionRT, vhState}
 	for _, c := range []struct {
-		name, body, want string
+		name, body, want string // want "" = a Location carrying a code
 		status           int
+		state            string
 		wantLog          int // a failure logs the upstream status
 	}{
-		{"verified with a session body", gtSession, siteURLValue + "/?verified=1", http.StatusOK, 0},
-		{"failed", gtOTPExpired, siteURLValue + "/?verify=failed", http.StatusForbidden, http.StatusForbidden},
+		{"verified with a session body", gtSession, siteURLValue + "/?verified=1", http.StatusOK, "", 0},
+		{"verified with a state", gtSession, "", http.StatusOK, vhState, 0},
+		{"failed", gtOTPExpired, siteURLValue + "/?verify=failed", http.StatusForbidden, "", http.StatusForbidden},
+		{"failed with a state", gtOTPExpired, siteURLValue + "/?verify=failed", http.StatusForbidden, vhState, http.StatusForbidden},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, c.status, c.body)
 			log, buf := captureLog()
+			query := "token=" + verifyToken + "&type=signup"
+			if c.state != "" {
+				query += "&state=" + c.state
+			}
 
-			rec := doVerify(t, fake.URL, siteURL(t), log, "token="+verifyToken+"&type=signup")
+			rec := doVerify(t, fake.URL, siteURL(t), log, query)
 
 			if rec.Code != http.StatusSeeOther {
 				t.Fatalf("status = %d, want 303", rec.Code)
 			}
 			loc := rec.Header().Get("Location")
-			if loc != c.want {
+			all := secrets
+			if c.want == "" {
+				code := vhCode(t, rec)
+				all = append(slices.Clone(secrets), code)
+			} else if loc != c.want {
 				t.Errorf("Location = %q, want %q", loc, c.want)
 			}
 			if c.wantLog != 0 && !logHasValue(buf, c.wantLog) {
 				t.Errorf("no log attribute carries the upstream status %d: %q", c.wantLog, buf.String())
 			}
-			for _, s := range secrets {
-				if strings.Contains(loc, s) {
-					t.Errorf("Location carries %q", s)
-				}
+			for _, s := range all {
 				if strings.Contains(buf.String(), s) {
 					t.Errorf("log carries %q: %s", s, buf.String())
 				}
 				if strings.Contains(rec.Body.String(), s) {
 					t.Errorf("response body carries %q", s)
+				}
+			}
+			// The success Location carries the code and nothing else secret.
+			for _, s := range secrets {
+				if strings.Contains(loc, s) {
+					t.Errorf("Location carries %q", s)
 				}
 			}
 		})

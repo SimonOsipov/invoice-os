@@ -11,3 +11,5 @@ export const opsBase = () => resolveBase(import.meta.env.VITE_OPS_URL)
 export const supportBase = () => resolveBase(import.meta.env.VITE_SUPPORT_URL)
 
 export const consoleBase = (target: 'ops' | 'support') => (target === 'ops' ? opsBase() : supportBase())
+
+export const handoffTarget = (base: string, code: string) => `${base}?handoff=${encodeURIComponent(code)}`

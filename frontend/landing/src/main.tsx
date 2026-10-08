@@ -1,3 +1,4 @@
+import { forwarding } from './verifyLink'
 import './inviteLink'
 import './instrument'
 
@@ -21,14 +22,16 @@ import { InvitePage } from './components/InvitePage'
 import { inviteToken } from './inviteLink'
 import { isInvitePath } from './route'
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <CrashBoundary brand={<BrandMark size={20} />}>
-      {isInvitePath(location.pathname) ? <InvitePage token={inviteToken()} /> : <App />}
-    </CrashBoundary>
-  </StrictMode>,
-)
+if (!forwarding) {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <CrashBoundary brand={<BrandMark size={20} />}>
+        {isInvitePath(location.pathname) ? <InvitePage token={inviteToken()} /> : <App />}
+      </CrashBoundary>
+    </StrictMode>,
+  )
 
-// Outside React and after render: StrictMode's double-invoked effects cannot reach it,
-// and nothing sits in front of first paint.
-bootAnalytics()
+  // Outside React and after render: StrictMode's double-invoked effects cannot reach it,
+  // and nothing sits in front of first paint.
+  bootAnalytics()
+}

@@ -2,13 +2,14 @@
 // The app redeems a landing hand-off code.
 
 import { StrictMode } from 'react'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from './auth'
 import { captureDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
-import { ensureSignInState } from './lib/signInState'
+import { ensureSignInState, mintSignInState } from './lib/signInState'
+import { holdPendingVerify } from './lib/verifyBounce'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { SUGGESTED_RULES } from './lib/rules'
 import type { PlatformCtx, SignedInUser } from './types'
@@ -961,6 +962,252 @@ describe('precedence (AC-9..AC-13, D9, D18)', () => {
     expect(window.location.search).toBe('')
     expect(fetchUrls).toEqual([])
     expect(hrefWrites, 'the front door runs with the unconsumed state').toEqual([`${LANDING}/?state=${S}`])
+  })
+})
+
+describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
+  const A_ME: Me = { ...OLD_ME, user: { ...OLD_ME.user, email: 'a@corp.example' } }
+  const A_TOKEN = jwt(A_ME.user.id, nowSec() + 3600)
+  const NOTICE = (who: string) => `Your email is confirmed. You are signed in ${who}. To use the confirmed account, sign out and sign in with it.`
+  const toast = () => screen.queryByTestId('verify-confirmed-toast')
+
+  async function bootOverLive(me: Me, withMarker = true) {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, me))
+    const S = ensureSignInState()
+    if (withMarker) holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    return S
+  }
+
+  it('a verify code over a live session keeps A, posts nothing and shows the confirmed notice', async () => {
+    await bootOverLive(A_ME)
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(meAuth).toHaveLength(0)
+    expect(storedRecord()?.token).toBe(A_TOKEN)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+    expect(screen.getByTestId('verify-confirmed-toast').firstChild?.textContent).toBe(NOTICE('as a@corp.example'))
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+    expect(window.location.search).toBe('')
+  })
+
+  it('a verify code with no session signs in as B', async () => {
+    configure()
+    const S = ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    await settle()
+    expect(exchangeBodies).toEqual([{ code: CODE, state: S }])
+    expect(toast()).toBeNull()
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+  })
+
+  it('a plain handoff over a live session shows no notice', async () => {
+    await bootOverLive(A_ME, false)
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(capturedCtx?.user.tenantName).toBe(OLD_ME.tenant.name)
+    expect(toast()).toBeNull()
+  })
+
+  it('the confirmed notice falls back to the display name, then to another account', async () => {
+    await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: null } })
+    expect(toast()?.textContent).toContain(NOTICE('as Adaeze Nwankwo'))
+    cleanup()
+    capturedCtx = undefined
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: null, display_name: null } })
+    expect(toast()?.textContent).toContain(NOTICE('to another account'))
+  })
+
+  it('a stale verify marker over a live session shows no notice', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    const S = ensureSignInState()
+    sessionStorage.setItem('invoice-os.pendingVerify', JSON.stringify({ v: 1, at: Date.now() - 11 * 60 * 1000, s: S }))
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(toast()).toBeNull()
+  })
+
+  it('an abandoned confirm, then an unrelated hand-off over a live session, shows no notice', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    ensureSignInState()
+    holdPendingVerify()
+    mintSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(toast()).toBeNull()
+  })
+
+  it('a confirm abandoned by Back, then a front door on the reused state and a hand-off over a live session, shows no notice', async () => {
+    configure()
+    const S = ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', '/')
+    const first = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(first.hrefWrites).toEqual([`${LANDING}/?state=${S}`]))
+    cleanup()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(toast()).toBeNull()
+  })
+
+  it('a handoff beside auth=verify over a live session neither bounces nor posts, and names A', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}&auth=verify#token=tok_1`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(hrefWrites).toEqual([])
+    expect(exchangeBodies).toHaveLength(0)
+    expect(storedRecord()?.token).toBe(A_TOKEN)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
+  it('a verify code over a renewable session with an expired access token keeps A', async () => {
+    configure()
+    meReply = ok(A_ME)
+    refreshReply = ok({
+      access_token: jwt(A_ME.user.id, nowSec() + 7200, { iat: nowSec(), app_metadata: { tenant_id: A_ME.tenant.id } }),
+      refresh_token: 'R1',
+    })
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect((storedRecord()?.me as Me | undefined)?.user.id).toBe(A_ME.user.id)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
+  it('a verify code past the marker and state TTL over a renewable session with an expired access token keeps A', async () => {
+    configure()
+    meReply = ok(A_ME)
+    refreshReply = ok({
+      access_token: jwt(A_ME.user.id, nowSec() + 7200, { iat: nowSec(), app_metadata: { tenant_id: A_ME.tenant.id } }),
+      refresh_token: 'R1',
+    })
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    const old = Date.now() - 12 * 60 * 1000
+    mintSignInState(old)
+    holdPendingVerify(old + 1000)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(hrefWrites).toEqual([])
+    expect((storedRecord()?.me as Me | undefined)?.user.id).toBe(A_ME.user.id)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
+  it('a stale marker bound to a replaced state shows no notice over a renewable session', async () => {
+    configure()
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    const old = Date.now() - 12 * 60 * 1000
+    mintSignInState(old)
+    holdPendingVerify(old + 1000)
+    mintSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(toast()).toBeNull()
+  })
+
+  it('a plain handoff over a renewable session with an expired access token, with no pending confirm, signs in as B', async () => {
+    configure()
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    const S = ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(exchangeBodies).toEqual([{ code: CODE, state: S }])
+    expect((storedRecord()?.me as Me | undefined)?.user.id).toBe(ME.user.id)
+    expect(toast()).toBeNull()
+  })
+
+  it('the confirm spends the sign-in state, so a later hand-off with no session cannot redeem as B', async () => {
+    const S = await bootOverLive(A_ME)
+    await settle()
+    expect(storedState()).toBeNull()
+    expect(ensureSignInState()).not.toBe(S)
+  })
+
+  it('the confirmed notice renders the email as text', async () => {
+    await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: '<b id="x">a</b>@corp.example' } })
+    expect(toast()?.querySelector('#x')).toBeNull()
+    expect(toast()?.textContent).toContain('<b id="x">a</b>@corp.example')
+  })
+
+  it('the confirmed notice dismisses like its sibling', async () => {
+    await bootOverLive(A_ME)
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    expect(toast()).toBeNull()
+    cleanup()
+    capturedCtx = undefined
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await bootOverLive(A_ME)
+      expect(toast()).not.toBeNull()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5200)
+      })
+      expect(toast()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

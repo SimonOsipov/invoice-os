@@ -97,7 +97,9 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 		t.Fatal(err)
 	}
 	mux.Handle("GET /auth/verify", verifyPage)
-	mux.Handle("POST /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink))
+	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
+	mux.Handle("POST /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink, store))
+	mux.Handle("POST /auth/exchange", gateway.ExchangeHandler(store))
 	confirmationMail, err := gateway.MailTemplate("confirmation")
 	if err != nil {
 		t.Fatal(err)
@@ -362,10 +364,35 @@ func open(t *testing.T, link, method string) string {
 	return string(b)
 }
 
-// confirmForm opens the link's page and returns its one form's action, resolved against the link, and its input values.
+// withState appends state to the mailed link, as the app does when it forwards the click.
+func withState(link, state string) string { return link + "&state=" + state }
+
+// openStateless opens the link as a mail scanner does (no state) and requires the 303 bounce to the landing page.
+func openStateless(t *testing.T, link, method string) {
+	t.Helper()
+	req, err := http.NewRequest(method, link, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := noRedirect.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, link, err)
+	}
+	defer resp.Body.Close()
+	if loc := resp.Header.Get("Location"); resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, siteURL+"/?confirm=1#token=") {
+		t.Fatalf("%s the mailed link without a state: status %d, Location %q; want 303 to %s/?confirm=1#token=", method, resp.StatusCode, loc, siteURL)
+	}
+}
+
+// confirmForm opens the link's page with a fresh state and returns its one form's action, resolved against the link, and its input values.
 func confirmForm(t *testing.T, link string) (string, url.Values) {
 	t.Helper()
-	doc, err := xhtml.Parse(strings.NewReader(open(t, link, http.MethodGet)))
+	return confirmFormWithState(t, link, newState(t))
+}
+
+func confirmFormWithState(t *testing.T, link, state string) (string, url.Values) {
+	t.Helper()
+	doc, err := xhtml.Parse(strings.NewReader(open(t, withState(link, state), http.MethodGet)))
 	if err != nil {
 		t.Fatalf("parse the confirm page: %v", err)
 	}
@@ -426,10 +453,12 @@ func postForm(action string, values url.Values) (int, string, error) {
 	return resp.StatusCode, resp.Header.Get("Location"), nil
 }
 
-// follow opens the mailed link's page and clicks its button, and returns the redirect target.
+// follow opens the mailed link's page and clicks its button without the state, and returns the redirect target.
+// The unchanged ?verified=1 comparisons keep testing the stateless path.
 func follow(t *testing.T, link string) string {
 	t.Helper()
 	action, values := confirmForm(t, link)
+	values.Del("state")
 	status, location, err := postForm(action, values)
 	if err != nil {
 		t.Fatalf("POST %s: %v", action, err)
@@ -438,6 +467,32 @@ func follow(t *testing.T, link string) string {
 		t.Fatalf("clicking the confirm button: status %d, want 303", status)
 	}
 	return location
+}
+
+// clickWithState clicks the link's button carrying state and returns the redirect target.
+func clickWithState(t *testing.T, link, state string) string {
+	t.Helper()
+	action, values := confirmFormWithState(t, link, state)
+	status, location, err := postForm(action, values)
+	if err != nil {
+		t.Fatalf("POST %s: %v", action, err)
+	}
+	if status != http.StatusSeeOther {
+		t.Fatalf("clicking the confirm button: status %d, want 303", status)
+	}
+	return location
+}
+
+// followSignedIn clicks the link with a fresh state, requires the hand-off redirect, and returns its code and the state.
+func followSignedIn(t *testing.T, link string) (code, state string) {
+	t.Helper()
+	state = newState(t)
+	loc := clickWithState(t, link, state)
+	u, err := url.Parse(loc)
+	if err != nil || !strings.HasPrefix(loc, siteURL+"/?verified=1&handoff=") {
+		t.Fatalf("confirm redirect = %q (%v), want %s/?verified=1&handoff=<code>", loc, err, siteURL)
+	}
+	return u.Query().Get("handoff"), state
 }
 
 func TestIdP_RegisterLeavesTheAccountUnverified(t *testing.T) {
@@ -530,7 +585,7 @@ func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 		t.Fatalf("%d registrants handed off before the link was followed, want 0", n)
 	}
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodGet} {
-		open(t, link, method)
+		openStateless(t, link, method)
 	}
 	if emailConfirmed(t, u.email) {
 		t.Fatal("opening the link confirmed the account")
@@ -566,56 +621,79 @@ func TestIdP_EmailedLinkVerifiesThenSignInSucceeds(t *testing.T) {
 }
 
 // Two clicks race for one token: GoTrue spends it once, and the gateway hands off once per verified answer.
+// With a state, each verified click also yields one code that exchanges for a session.
 func TestIdP_TwoConcurrentClicksConfirmOnce(t *testing.T) {
-	base := idpMailURL(t)
-	sink := newRecordingSink()
-	gw, _ := startGateway(t, base, 0, sink)
-	u := registrant(t, gw, map[string]string{"workspace_name": "IdP Race", "display_name": "Ada"})
-	action, values := confirmForm(t, confirmationLink(t, u.email))
+	for _, stateful := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stateful=%t", stateful), func(t *testing.T) {
+			base := idpMailURL(t)
+			sink := newRecordingSink()
+			gw, _ := startGateway(t, base, 0, sink)
+			u := registrant(t, gw, map[string]string{"workspace_name": "IdP Race", "display_name": "Ada"})
+			action, values := confirmForm(t, confirmationLink(t, u.email))
+			state := values.Get("state")
+			if !stateful {
+				values.Del("state")
+			}
 
-	type answer struct {
-		status   int
-		location string
-		err      error
-	}
-	answers := make(chan answer, 2)
-	start := make(chan struct{})
-	for range 2 {
-		go func() {
-			<-start
-			status, location, err := postForm(action, values)
-			answers <- answer{status, location, err}
-		}()
-	}
-	close(start)
+			type answer struct {
+				status   int
+				location string
+				err      error
+			}
+			answers := make(chan answer, 2)
+			start := make(chan struct{})
+			for range 2 {
+				go func() {
+					<-start
+					status, location, err := postForm(action, values)
+					answers <- answer{status, location, err}
+				}()
+			}
+			close(start)
 
-	verified := 0
-	for range 2 {
-		a := <-answers
-		if a.err != nil || a.status != http.StatusSeeOther {
-			t.Fatalf("click: status %d, err %v; want 303", a.status, a.err)
-		}
-		switch a.location {
-		case siteURL + "/?verified=1":
-			verified++
-		case siteURL + "/?verify=failed":
-		default:
-			t.Errorf("click redirected to %q, want %s/?verified=1 or %s/?verify=failed", a.location, siteURL, siteURL)
-		}
-	}
-	if verified < 1 {
-		t.Fatal("no click landed on ?verified=1")
-	}
-	if !emailConfirmed(t, u.email) {
-		t.Error("the account is not confirmed after the clicks")
-	}
-	for range verified {
-		sink.next(t)
-	}
-	// A hand-off the gateway sent late would arrive after the wait above.
-	time.Sleep(500 * time.Millisecond)
-	if n := sink.count(); n != verified {
-		t.Errorf("%d hand-offs, want %d (one per ?verified=1 answer)", n, verified)
+			verified := 0
+			var codes []string
+			for range 2 {
+				a := <-answers
+				if a.err != nil || a.status != http.StatusSeeOther {
+					t.Fatalf("click: status %d, err %v; want 303", a.status, a.err)
+				}
+				switch {
+				case a.location == siteURL+"/?verify=failed":
+				case !stateful && a.location == siteURL+"/?verified=1":
+					verified++
+				case stateful && strings.HasPrefix(a.location, siteURL+"/?verified=1&handoff="):
+					verified++
+					codes = append(codes, strings.TrimPrefix(a.location, siteURL+"/?verified=1&handoff="))
+				default:
+					t.Errorf("click redirected to %q, want a ?verified=1 or ?verify=failed answer under %s", a.location, siteURL)
+				}
+			}
+			if verified < 1 {
+				t.Fatal("no click landed on ?verified=1")
+			}
+			if stateful {
+				if len(codes) != verified {
+					t.Fatalf("%d codes for %d verified clicks, want one each", len(codes), verified)
+				}
+				for _, code := range codes {
+					if status, session := exchange(t, gw, code, state); status != http.StatusOK || session["access_token"] == "" {
+						t.Errorf("exchange of a delivered code: status %d, body %v; want 200", status, session)
+					}
+				}
+			}
+			if !emailConfirmed(t, u.email) {
+				t.Error("the account is not confirmed after the clicks")
+			}
+			for range verified {
+				sink.next(t)
+			}
+			// A hand-off the gateway sent late would arrive after the wait above.
+			time.Sleep(500 * time.Millisecond)
+			if n := sink.count(); n != verified {
+				t.Errorf("%d hand-offs, want %d (one per ?verified=1 answer)", n, verified)
+			}
+		})
 	}
 }
 

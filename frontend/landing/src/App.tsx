@@ -38,7 +38,7 @@ const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
 ])
 
 // Params the boot reads once and removes from the address bar.
-const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM, RESET_PARAM, INVITE_PARAM]
+const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM, RESET_PARAM, INVITE_PARAM, 'confirm', 'handoff']
 
 // Held a minute short of the 10-minute state TTL, so a posted state is still live.
 const STATE_HOLD_MS = 9 * 60 * 1000
@@ -178,6 +178,7 @@ export default function App() {
           outcome={notice}
           onDismiss={() => setNotice(null)}
           onRequestReset={() => openSignIn('forgot')}
+          onSignIn={onSignIn}
         />
       )}
       {privacy ? (

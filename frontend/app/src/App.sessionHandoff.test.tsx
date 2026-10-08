@@ -1030,7 +1030,8 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
   it('a stale verify marker over a live session shows no notice', async () => {
     configure()
     localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
-    holdPendingVerify(Date.now() - 11 * 60 * 1000)
+    const S = ensureSignInState()
+    sessionStorage.setItem('invoice-os.pendingVerify', JSON.stringify({ v: 1, at: Date.now() - 11 * 60 * 1000, s: S }))
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     interceptHref()
     await bootApp()

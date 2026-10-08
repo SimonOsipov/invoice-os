@@ -63,4 +63,9 @@ describe('pending verify marker', () => {
     mintSignInState(NOW + 1)
     expect(peekPendingVerify(NOW + 1)).toBe(false)
   })
+
+  it('pendingVerify_peekFalseWithoutAStoredState', () => {
+    holdPendingVerify(NOW)
+    expect(peekPendingVerify(NOW)).toBe(false)
+  })
 })

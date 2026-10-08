@@ -239,7 +239,7 @@ test('landing sign-in window: Create an account opens the registration window at
 
 const NOTICES = [
   { query: '?verified=1', text: 'Your email address is verified' },
-  { query: '?verify=failed', text: 'That link did not work' },
+  { query: '?verify=failed', text: 'This link is already used or expired' },
 ] as const
 
 for (const notice of NOTICES) {

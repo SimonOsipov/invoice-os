@@ -244,12 +244,12 @@ func TestScan_ARuleFileIsAConsumer(t *testing.T) {
 }
 
 // Markdown outside the consumer dirs must not read as a surviving producer.
-func TestScan_ADocsHitDoesNotMaskARuleFileHit(t *testing.T) {
+func TestScan_AMarkdownHitDoesNotMaskARuleFileHit(t *testing.T) {
 	diff := `--- a/internal/platform/db/tenant.go
 +++ b/internal/platform/db/tenant.go
 @@ -10,1 +10,1 @@
 -const key = "WITHIN_REQUEST_TENANT_TX_OPTS"
-++const key = "WITHIN_REQUEST_TX_OPTS"
++const key = "WITHIN_REQUEST_TX_OPTS"
 `
 	tree := map[string][]Hit{
 		"WITHIN_REQUEST_TENANT_TX_OPTS": {
@@ -261,6 +261,25 @@ func TestScan_ADocsHitDoesNotMaskARuleFileHit(t *testing.T) {
 	f := find(t, Scan(diff, fakeGrep(tree), defaultAllow()), "WITHIN_REQUEST_TENANT_TX_OPTS")
 	if len(f.Stale) != 1 || f.Stale[0].Path != ".claude/rules/tenant-seam.md" {
 		t.Fatalf("stale = %+v, want the one rule-file hit", f.Stale)
+	}
+}
+
+// A literal moved from Go into an .html page is still produced; the e2e quote is not stale.
+func TestScan_AHTMLProducerSurvivesTheMove(t *testing.T) {
+	diff := `--- a/internal/gateway/verify.go
++++ b/internal/gateway/verify.go
+@@ -10,1 +10,0 @@
+-const copy = "Verification link expired"
+`
+	tree := map[string][]Hit{
+		"Verification link expired": {
+			{"internal/gateway/verify_page.html", 12, `<p>Verification link expired</p>`},
+			{"e2e/smoke/verify.spec.ts", 9, `  await expect(page.getByText('Verification link expired')).toBeVisible()`},
+		},
+	}
+
+	if got := Scan(diff, fakeGrep(tree), defaultAllow()); len(got) != 0 {
+		t.Fatalf("findings = %v, want none: an html producer still emits it", literalsOf(got))
 	}
 }
 
@@ -311,7 +330,9 @@ func TestRole(t *testing.T) {
 		"e2e/smoke/support-console.spec.ts":    "consumer",
 		"e2e/topology/roleFixtures.ts":         "consumer",
 		".claude/rules/ci-railway.md":          "consumer",
-		"notes/deploy-model.txt":               "ignore",
+		"notes/deploy-model.txt":               "producer",
+		"internal/gateway/verify_page.html":    "producer",
+		"scripts/seed.sh":                      "producer",
 		"README.md":                            "ignore",
 		".github/workflows/dev-env.yml":        "consumer",
 		"frontend/app/src/lib/members.ts":      "producer",

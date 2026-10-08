@@ -39,7 +39,7 @@ import (
 // consumerDirs hold references no compiler resolves back to their producer.
 var consumerDirs = []string{"e2e/", ".claude/rules/", ".github/"}
 
-// producerExts are the file kinds that can *emit* a string a consumer asserts on.
+// producerExts are the file kinds whose removed literals ParseDiff tracks.
 var producerExts = []string{".go", ".ts", ".tsx", ".js", ".jsx", ".sql"}
 
 var (
@@ -89,16 +89,24 @@ func Role(path string) string {
 	if testish.MatchString(path) {
 		return "ignore"
 	}
-	for _, e := range producerExts {
-		if strings.HasSuffix(path, e) {
-			return "producer"
-		}
+	if strings.HasSuffix(path, ".md") {
+		return "ignore"
 	}
-	return "ignore"
+	return "producer"
 }
 
+// isProducerFile limits diff parsing to source kinds; Role also lets an .html or
+// .sh file keep a moved literal alive.
 func isProducerFile(path string) bool {
-	return Role(path) == "producer"
+	if Role(path) != "producer" {
+		return false
+	}
+	for _, e := range producerExts {
+		if strings.HasSuffix(path, e) {
+			return true
+		}
+	}
+	return false
 }
 
 // Literals pulls quoted strings out of one line. Written by hand rather than by

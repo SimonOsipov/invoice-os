@@ -438,7 +438,9 @@ func assertBreaklistFindsNothing(t *testing.T, pattern, planted, control string,
 			t.Fatalf("control: the whole-repo walk finds no %q under %s", control, tree)
 		}
 	}
-	if hits := breaklistHits(t, pattern); len(hits) != 0 {
+	// The whole-repo walk skips .claude/, so the rule files need their own pass.
+	hits := append(breaklistHits(t, pattern), breaklistHits(t, pattern, ".claude/rules")...)
+	if len(hits) != 0 {
 		t.Errorf("breaklist %q reports %d hit(s), want TOTAL 0:\n%s", pattern, len(hits), strings.Join(hits, "\n"))
 	}
 }

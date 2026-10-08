@@ -72,6 +72,7 @@ describe('tour', () => {
   it('tourCallout_controlsFollowTheStep', () => {
     const cs = walk().map(tourCallout)
     expect(cs.filter((c) => c.showWatch).length).toBe(7)
+    walk().forEach((t, k) => expect(cs[k].showWatch).toBe(t.phase === 'card'))
     expect(cs.filter((c) => c.backOff).length).toBe(1)
     expect(cs[0].backOff).toBe(true)
     expect(cs.filter((c) => c.nextLabel === 'Finish').length).toBe(1)
@@ -103,6 +104,9 @@ describe('tour', () => {
     expect(cardScrollDelta(400, 0, 64, 700)).toBe(320)
     expect(cardScrollDelta(123, 0, 64, 768)).toBe(0)
     expect(cardScrollDelta(125, 0, 64, 768)).toBe(5)
+    expect(cardScrollDelta(124, 0, 64, 768)).toBe(0)
+    expect(cardScrollDelta(116, 0, 64, 768)).toBe(0)
+    expect(cardScrollDelta(115, 0, 64, 768)).toBe(-5)
     for (const inner of [600, 759, 760, 900]) {
       for (const cardTop of [0, 50, 119, 120, 124, 125, 300, 1200]) {
         const delta = cardScrollDelta(cardTop, 10, 64, inner)
@@ -135,13 +139,13 @@ describe('tour', () => {
     let rows = 0
     const check = (r: Rect, phase: 'menu' | 'card', W: number, H: number) => {
       const p: CalloutPos = calloutPos(r, phase, { w: W, h: H })
-      const top = 'top' in p ? p.top : H - p.bottom - CALLOUT_H
+      const top = 'top' in p ? p.top : H - p.bottom - 280
       const left = p.left
       expect(left).toBeGreaterThanOrEqual(0)
-      expect(left + CALLOUT_W).toBeLessThanOrEqual(W)
+      expect(left + 360).toBeLessThanOrEqual(W)
       expect(top).toBeGreaterThanOrEqual(0)
-      expect(top + CALLOUT_H).toBeLessThanOrEqual(H)
-      const overlaps = left < r.x + r.w && left + CALLOUT_W > r.x && top < r.y + r.h && top + CALLOUT_H > r.y
+      expect(top + 280).toBeLessThanOrEqual(H)
+      const overlaps = left < r.x + r.w && left + 360 > r.x && top < r.y + r.h && top + 280 > r.y
       expect(overlaps).toBe(false)
       if (phase === 'menu') seen.add('menu')
       else if ('bottom' in p) seen.add('above')
@@ -156,6 +160,7 @@ describe('tour', () => {
         for (const [x, y] of [[320, 104], [700, 104], [700, 300], [700, 400]]) check({ x, y, w: 356, h: 316 }, 'card', W, H)
       }
     }
+    expect([CALLOUT_W, CALLOUT_H]).toEqual([360, 280])
     expect(rows).toBe(112)
     for (const W of [2560, 1920, 1440, 1280]) {
       for (const H of [600, 640]) {
@@ -163,5 +168,37 @@ describe('tour', () => {
       }
     }
     expect([...seen].sort()).toEqual(['above', 'below', 'left', 'menu', 'right'])
+  })
+
+  it('tourNext_menuStepOfTheLastStopMovesToItsCard', () => {
+    expect(tourNext({ i: 6, phase: 'menu' })).toEqual({ i: 6, phase: 'card' })
+    expect(tourNext({ i: 6, phase: 'card' })).toBeNull()
+  })
+
+  it('tourStops_outOfRangeIndexAndUnknownGroupThrow', () => {
+    expect(() => tourStage({ i: 7, phase: 'menu' })).toThrow()
+    expect(() => tourCallout({ i: 7, phase: 'menu' })).toThrow()
+    expect(() => tourCallout({ i: -1, phase: 'card' })).toThrow()
+    const stop = TOUR[0]
+    const g = stop.g
+    try {
+      stop.g = 'no-such-group'
+      expect(() => tourCallout({ i: 0, phase: 'menu' })).toThrow(/unknown group no-such-group/)
+    } finally { stop.g = g }
+  })
+
+  it('calloutPos_boundariesAndClamps', () => {
+    const win = { w: 1440, h: 900 }
+    expect(calloutPos({ x: 6, y: 10, w: 208, h: 42 }, 'menu', win)).toEqual({ left: 232, top: 16 })
+    expect(calloutPos(null, 'menu', win)).toEqual({ left: 540, top: 350 })
+    expect(calloutPos({ x: 320, y: 104, w: 356, h: 495 }, 'card', win)).toEqual({ left: 320, top: 615 })
+    expect(calloutPos({ x: 320, y: 104, w: 356, h: 496 }, 'card', win)).toEqual({ left: 692, top: 104 })
+    const short = { w: 1440, h: 600 }
+    expect(calloutPos({ x: 692, y: 104, w: 356, h: 316 }, 'card', short)).toEqual({ left: 1064, top: 104 })
+    expect(calloutPos({ x: 693, y: 104, w: 356, h: 316 }, 'card', short)).toEqual({ left: 317, top: 104 })
+    expect(calloutPos({ x: 320, y: 5, w: 356, h: 316 }, 'card', short)).toEqual({ left: 692, top: 16 })
+    expect(calloutPos({ x: 100, y: 5, w: 356, h: 316 }, 'card', { w: 700, h: 600 })).toEqual({ left: 16, top: 16 })
+    expect(calloutPos({ x: 320.4, y: 104.4, w: 356, h: 316.2 }, 'card', win)).toEqual({ left: 320, top: 437 })
+    expect(calloutPos({ x: 6.4, y: 97.4, w: 208.4, h: 42 }, 'menu', win)).toEqual({ left: 233, top: 85 })
   })
 })

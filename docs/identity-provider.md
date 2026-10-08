@@ -694,6 +694,8 @@ hand-off is the app by default and a console when the visitor came from one (Con
    a state from a URL.
 2. The app goes to `<landing>/?state=<s>[&signin=<outcome>]`: from the front-door redirect,
    from the start bounce (step 3) with `signin=ready`, and from a failed hand-off (step 7).
+   A sessionless visit with `?via=library` (exactly that value) goes to `<landing>/?state=<s>&register`
+   instead, which opens the create-an-account modal. Landing's `?demo` opens the book-a-demo modal.
    A console adds `console=ops` or `console=support`. Landing keeps the state and the console
    target in memory only and strips the params it read at boot.
 3. A visitor who opened landing directly has no state. The modal then shows "Continue with

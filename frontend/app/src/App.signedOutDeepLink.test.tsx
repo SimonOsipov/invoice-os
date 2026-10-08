@@ -914,3 +914,38 @@ describe('Workspace boot: a restored destination carries its drill-down id too (
     ).toBe(`/invoices/${INVOICE_ID}`)
   })
 })
+
+describe('front door: a Library registration visit (LIB-06)', () => {
+  it('frontDoor_viaLibraryKeepsTheDestinationCapture', () => {
+    const { hrefWrites } = stubLocation({ pathname: '/invoices', search: '?via=library' })
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    render(<App />)
+    expect(readDestination()).toEqual({ path: '/invoices', query: '' })
+    expect(hrefWrites).toEqual([`${stateBounce()}&register`])
+  })
+
+  async function bounceFromLibrary() {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    window.history.replaceState(null, '', '/invoices?via=library')
+    const { hrefWrites } = interceptHref()
+    vi.resetModules()
+    const { default: BouncedApp } = await import('./App')
+    render(<BouncedApp />).unmount()
+    expect(hrefWrites, 'sanity: the front door ran').toHaveLength(1)
+    expect(readDestination(), 'sanity: the destination was stored').toEqual({ path: '/invoices', query: '' })
+  }
+
+  it('frontDoor_viaLibraryRegistrationInANewTabLandsOnTheDashboard', async () => {
+    await bounceFromLibrary()
+    sessionStorage.clear()
+    await bootWorkspaceAt('/')
+    expect(requireCtx().view).toBe('dashboard')
+  })
+
+  it('frontDoor_viaLibrarySameTabSignInRestoresTheTarget', async () => {
+    await bounceFromLibrary()
+    await bootWorkspaceAt('/')
+    expect(requireCtx().view).toBe('invoices')
+    expect(window.location.search).toBe('')
+  })
+})

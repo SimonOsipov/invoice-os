@@ -1900,23 +1900,8 @@ export default function App() {
   // Blocks a second click and a repeat exit (sign-out or revoked session). Stays set when the exit leaves the page; sign-out resets it when it stays.
   const signingOut = useRef(false)
 
-  // Sign out returns the user to the marketing landing page (the real sign-in front
-  // door). Nulling React state alone would only swap in the app's own minimal
-  // persona-picker, so wipe the persisted session and navigate away.
-  // A hand-off seat revokes every session of the account first; the navigation would cancel the request.
-  const signOut = useCallback(async () => {
-    if (signingOut.current) return
-    signingOut.current = true
-    const base = gatewayBase()
-    if (seat?.handoff && seat.renewal && base) {
-      // Another tab may have rotated the seat's refresh token.
-      const stored = loadSession()
-      const refreshToken =
-        stored?.renewal && stored.persona.subject === seat.persona.subject ? stored.renewal.refreshToken : seat.renewal.refreshToken
-      if ((await revokeSessions(base, refreshToken)) === 'failed') {
-        console.warn('[session] sign-out could not reach the server; other sessions stay signed in')
-      }
-    }
+  // Shared tail of both sign-outs: drop the session and the captured destination, then leave.
+  const leaveToLanding = useCallback(() => {
     // First: a renewal settling after this must not restore the session.
     renewerRef.current?.track(null)
     // Drop the in-memory session, not just the persisted copy. clearSession() only wipes
@@ -1938,7 +1923,27 @@ export default function App() {
     const dest = landingBase()
     if (dest) window.location.href = dest
     else signingOut.current = false
-  }, [seat])
+  }, [])
+
+  // Sign out returns the user to the marketing landing page (the real sign-in front
+  // door). Nulling React state alone would only swap in the app's own minimal
+  // persona-picker, so wipe the persisted session and navigate away.
+  // A hand-off seat revokes every session of the account first; the navigation would cancel the request.
+  const signOut = useCallback(async () => {
+    if (signingOut.current) return
+    signingOut.current = true
+    const base = gatewayBase()
+    if (seat?.handoff && seat.renewal && base) {
+      // Another tab may have rotated the seat's refresh token.
+      const stored = loadSession()
+      const refreshToken =
+        stored?.renewal && stored.persona.subject === seat.persona.subject ? stored.renewal.refreshToken : seat.renewal.refreshToken
+      if ((await revokeSessions(base, refreshToken)) === 'failed') {
+        console.warn('[session] sign-out could not reach the server; other sessions stay signed in')
+      }
+    }
+    leaveToLanding()
+  }, [seat, leaveToLanding])
 
   // The 401 seam: the session is already dead, so nothing is sent. Keeps the stored record
   // only when it holds another sign-in (both tokens carry session_ids that differ).
@@ -2056,10 +2061,10 @@ export default function App() {
     const base = gatewayBase()
     if (signingOut.current || !joinOffer || !base) return
     signingOut.current = true
-    if (typeof joinOffer.refreshToken === 'string') await revokeSessions(base, joinOffer.refreshToken)
-    const dest = landingBase()
-    if (dest) window.location.href = dest
-    else signingOut.current = false
+    if (typeof joinOffer.refreshToken === 'string' && (await revokeSessions(base, joinOffer.refreshToken)) === 'failed') {
+      console.warn('[session] sign-out could not reach the server; other sessions stay signed in')
+    }
+    leaveToLanding()
   }
 
   // Bounces whatever session is stored; the ref keeps StrictMode to one navigation.

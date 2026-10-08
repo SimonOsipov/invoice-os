@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Me } from './auth'
+import { DEEP_LINK_KEY, captureDestination } from './lib/deepLink'
 import { SESSION_KEY } from './lib/session'
 import { ensureSignInState } from './lib/signInState'
 import type { PlatformCtx } from './types'
@@ -185,6 +186,30 @@ describe('the Join screen in the app', () => {
     const order = calls.map((c) => c.url)
     expect(order.indexOf(`${GATEWAY}/auth/sign-out`)).toBeGreaterThan(order.indexOf(MINE))
     expect(posts('/accept')).toEqual([])
+  })
+
+  it('app_signOutOnTheJoinScreenDropsTheDestinationAndResetsTheUrl', async () => {
+    const hrefWrites = await boot()
+    await joinScreen()
+    captureDestination('/invoices/42')
+    window.history.replaceState(null, '', '/?view=invoices')
+    expect(sessionStorage.getItem(DEEP_LINK_KEY)).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(hrefWrites).toEqual([LANDING]))
+    expect(sessionStorage.getItem(DEEP_LINK_KEY)).toBeNull()
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    expect(window.location.pathname + window.location.search).toBe('/')
+  })
+
+  it('app_signOutOnTheJoinScreenWithAFailedRevokeWarnsAndStillLeaves', async () => {
+    replies[`${GATEWAY}/auth/sign-out`] = fail(500, 'boom')
+    const hrefWrites = await boot()
+    await joinScreen()
+    captureDestination('/invoices/42')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(hrefWrites).toEqual([LANDING]))
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('sign-out could not reach the server'))
+    expect(sessionStorage.getItem(DEEP_LINK_KEY)).toBeNull()
   })
 
   it('app_doubleClickJoinSendsOneAccept', async () => {

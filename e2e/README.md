@@ -43,7 +43,7 @@ resolve lazily and throw on the first test that needs them.
 
 `playwright.config.ts` → `testDir: './smoke'`, `fullyParallel: true`.
 
-Covers the four SPAs the landing page hands off to — `landing`, `ops-console`,
+Covers four SPAs — `landing`, `ops-console`,
 `support-console` and `library`. It is no longer only a render check:
 
 - **Render** (`smoke/apps.ts`, `smoke.spec.ts`): landing and library are opened bare and each console on a

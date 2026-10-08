@@ -153,7 +153,7 @@ asserts containment or a live-read comparison rather than a literal count.
 
 ## Target surface
 
-Five frontends deploy — the `landing` front door and the four SPAs it hands off to — and
+Five frontends deploy — the `landing` front door and four more SPAs — and
 they are **not equally testable**. The line that matters is not *which SPA* a test drives
 but **what backs the assertion**:
 

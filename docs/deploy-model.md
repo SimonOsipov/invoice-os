@@ -98,7 +98,7 @@ PR opened ──> dev-env.yml:
                              Postgres (a kept BUCKET must differ from production's) ──>
                              deploy Postgres + probe ──> assert Watch Paths empty
                              (M3-16 invariant, now runtime-asserted) ──> discover the
-                             5 URLs in one request (discover-urls) ──> pass 2: URLs, auth
+                             6 URLs in one request (discover-urls) ──> pass 2: URLs, auth
                              site, AI/Jev fakes, Sentry blanks, reconciliation URL and
                              ENVIRONMENT (fork-vars-after-urls)
                 ci-watch: polls the `CI` check alongside prepare-env; e2e waits for green CI
@@ -511,7 +511,7 @@ batched calls: `tools/prenv/railway_env_pass_test.go`).
 `ENVIRONMENT`) each run one env-list read, one service-list read, one batched read of the
 unrendered values; when any name differs, one batched write of only those names (`skipDeploys`)
 and one batched re-read, otherwise neither; every verdict reads the last read. A failed alias names its service and variable names,
-never a value or Railway's message. `discover-urls` reads the 5 domains in one request and
+never a value or Railway's message. `discover-urls` reads the 6 domains in one request and
 `assert-db-dsns` reads an environment's variables in one request, after one service-list read
 (`tools/prenv/railway_env_pass_test.go`, `TestForkVarsAfterURLs_SettledForkMakesThreeCalls`;
 `tools/prenv/railway_env_dsn_test.go`, `TestAssertDBDSNs_ReadsAnEnvironmentInTwoCalls`). The per-variable subcommands (`set-fork-auth`,

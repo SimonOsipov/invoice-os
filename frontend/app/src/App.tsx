@@ -2144,6 +2144,8 @@ export default function App() {
     if (dest) {
       // The ref keeps StrictMode to one navigation.
       frontDoorBounced.current = true
+      // A confirm abandoned by Back must not turn a later hand-off on this reused state into a notice.
+      consumePendingVerify()
       // Store only the query the codec authored: parse the live location, re-serialise it,
       // keep the query half. An unowned param is discarded here, before storage is touched.
       const at = parseLocation(window.location.pathname, window.location.search)

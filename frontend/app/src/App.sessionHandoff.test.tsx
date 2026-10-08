@@ -1056,6 +1056,26 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     expect(toast()).toBeNull()
   })
 
+  it('a confirm abandoned by Back, then a front door on the reused state and a hand-off over a live session, shows no notice', async () => {
+    configure()
+    const S = ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', '/')
+    const first = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(first.hrefWrites).toEqual([`${LANDING}/?state=${S}`]))
+    cleanup()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(toast()).toBeNull()
+  })
+
   it('a handoff beside auth=verify over a live session neither bounces nor posts, and names A', async () => {
     configure()
     localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))

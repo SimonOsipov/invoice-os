@@ -187,3 +187,51 @@ describe('library events', () => {
     expect(JSON.parse(localStorage.getItem(KEY)!).analytics).toBe(false)
   })
 })
+
+describe('library tour events', () => {
+  const NOTICE = '[aria-label="Cookie notice"]'
+  const tourStarts = () => events().filter((e) => e[1] === 'tour_start')
+  const sidebarTour = () => container.querySelector<HTMLElement>('.lib-tour')!
+
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia
+  })
+  afterEach(() => {
+    delete (window as { matchMedia?: unknown }).matchMedia
+  })
+
+  it('EV-08 each start sends one tour_start', async () => {
+    localStorage.setItem(KEY, GRANT)
+    await mount('/')
+    click(button('Take the tour'))
+    expect(tourStarts()).toEqual([['event', 'tour_start', {}]])
+    click(sidebarTour())
+    click(sidebarTour())
+    expect(tourStarts()).toHaveLength(2)
+  })
+
+  it('EV-09 stopping and stepping send no tour_start', async () => {
+    localStorage.setItem(KEY, GRANT)
+    await mount('/')
+    click(button('Take the tour'))
+    for (let i = 0; i < 3; i++) click(button('Next'))
+    expect(tourStarts()).toHaveLength(1)
+    click(sidebarTour())
+    expect(container.querySelector('.lib-tour')?.textContent).toBe('Take the tour')
+    expect(tourStarts()).toHaveLength(1)
+  })
+
+  it('EV-11 a running tour makes the notice inert', async () => {
+    await mount('/')
+    expect(container.querySelector(NOTICE)!.hasAttribute('inert')).toBe(false)
+    click(button('Take the tour'))
+    expect(container.querySelector(NOTICE)!.hasAttribute('inert')).toBe(true)
+    click(sidebarTour())
+    expect(container.querySelector(NOTICE)!.hasAttribute('inert')).toBe(false)
+  })
+})

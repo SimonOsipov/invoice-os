@@ -6,7 +6,7 @@ import { GroupPage } from './components/GroupPage'
 import { JourneyStepper } from './components/JourneyStepper'
 import { Sidebar } from './components/Sidebar'
 import { TourOverlay } from './components/TourOverlay'
-import { chooseConsent, CookieNotice, readConsent, trackLibraryPageView } from './analytics'
+import { chooseConsent, CookieNotice, readConsent, trackLibraryPageView, trackTourStart } from './analytics'
 import { demoHref, featurePlatformHref, groupPlatformHref, privacyHref } from './links'
 import { libraryPath, parseLibraryPath, type Route } from './route'
 import { TOUR_START, tourBack, tourButtonLabel, tourNext, tourStage, type TourState } from './tour'
@@ -63,8 +63,12 @@ export function App() {
   }
   const demo = demoHref()
 
-  const startTour = () => setTour(TOUR_START)
-  const toggleTour = () => setTour((t) => (t ? null : TOUR_START))
+  // The sender stays out of the state updater: StrictMode runs updaters twice.
+  const startTour = () => {
+    trackTourStart()
+    setTour(TOUR_START)
+  }
+  const toggleTour = () => (tour ? setTour(null) : startTour())
   const stepTo = (next: TourState | null) => {
     setTour(next)
     if (next?.phase === 'card') {
@@ -133,7 +137,7 @@ export function App() {
         {(consent === null || reopened) && (
           <CookieNotice
             current={consent}
-            suppressed={false}
+            suppressed={tourOn}
             privacyHref={privacyHref()}
             onChoose={(c) => {
               setConsent(chooseConsent(c))

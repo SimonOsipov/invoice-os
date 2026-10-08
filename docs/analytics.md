@@ -2,8 +2,8 @@
 
 **Audience:** whoever operates GA4 property `G-E409H76XYY`, and whoever edits
 `frontend/landing/src/analytics.ts`. The event table below mirrors the senders in that file;
-change both in the same PR. Nothing here applies to the four SPAs — GA4 ships on the **public
-landing page only**.
+change both in the same PR. Nothing here applies to the signed-in SPAs — GA4 ships on the **public
+landing page and the public Feature Library only** (see "Feature Library" below).
 
 ## What ships
 
@@ -57,9 +57,9 @@ Three notes on what does **not** fire:
 | Where | Variable | Value |
 |---|---|---|
 | Railway → project `ASComply` → environment `production` → service `landing` | `VITE_GA_MEASUREMENT_ID` | `G-E409H76XYY` |
+| Railway → project `ASComply` → environment `production` → service `library` | `VITE_GA_MEASUREMENT_ID` | `G-E409H76XYY` |
 
-Set **nowhere else**. Leaving it unset in every other environment is half of what keeps previews
-dark; the hostname gate is the other half.
+Set on these two services. The hostname gate is what keeps previews dark.
 
 Vite bakes `VITE_*` at **image build time**, so changing the value needs a landing redeploy, not a
 restart. `frontend/landing/Dockerfile` carries the matching `ARG VITE_GA_MEASUREMENT_ID` +
@@ -123,7 +123,7 @@ Seven items. None of them is dischargeable by CI, and the first is load-bearing.
    interaction, site search and video events fire from `gtag.js` itself, with no call from this
    codebase. So a visitor who rejects after accepting can still generate hits until the page is
    reloaded, and each one re-creates `_ga`. **No change in this repository can stop that** — the
-   revocation flag gates our four senders and nothing else. Until an operator changes this
+   revocation flag gates our eight senders (four landing, four library) and nothing else. Until an operator changes this
    setting, W2 in `docs/privacy-policy-claims.md` is true only up to that residual, and the
    ledger says so. Leave this item open until the setting is changed and re-measured in a
    browser; do not mark it done on merge.
@@ -164,9 +164,41 @@ observing nothing; one matching too much would turn them permanently red, becaus
 `frontend/landing/index.html:11-13` requests `fonts.googleapis.com` and `fonts.gstatic.com` on
 every run.
 
+## Feature Library
+
+`library.ascomply.com` runs the same tag under the same property. Its code is
+`frontend/library/src/analytics.ts`, which binds the landing's gate and consent code to the
+library host; the senders are in `frontend/landing/src/analytics.ts`.
+
+- The library asks for consent itself. The answer is stored under `asc_consent` on its own
+  origin, so an answer given on the landing does not carry over, nor the reverse.
+- The `_ga` cookies are set for `library.ascomply.com` only (`cookie_domain`), and a library
+  Reject expires them there. The library never deletes a `.ascomply.com` `_ga`.
+- The library sends no HubSpot form and no `generate_lead`; it has no forms.
+
+| Event | Parameters | Fires when |
+|---|---|---|
+| `page_view` | *(none set by us)* | `trackLibraryPageView`: once per path change, sent by hand. GA4's history-event page views must be off (L3), or each navigation counts twice. |
+| `demo_open` (library) | `cta_location`: `library` | A visitor chooses Book the Demo. |
+| `tour_start` | *(none)* | A visitor starts the tour. |
+| `open_in_platform` | `feature_id` \| `group_id` | A visitor chooses Open in Platform; the value says which feature or group it was for. |
+
+Operator items. They sit outside the seven numbered items above and are not dischargeable by CI.
+
+- L1. Set `VITE_GA_MEASUREMENT_ID=G-E409H76XYY` on the production `library` service.
+  **DONE** 2026-10-08 (set with `--skip-deploys`); the production library bakes it on its next deploy.
+- L2. Register `feature_id` and `group_id` as GA4 event-scoped custom dimensions. **OPEN.**
+- L3. In the web stream's enhanced measurement, turn off "Page changes based on browser history
+  events". **OPEN** — a human gate with no code backstop; required before `epic/lib` reaches `main`.
+- L4. After `epic/lib` reaches `main`, on `https://library.ascomply.com`: Accept, then confirm in
+  GA4 DebugView one `page_view` per path change, `demo_open` with `cta_location=library`,
+  `tour_start` and `open_in_platform`. In the browser's storage panel, the library `_ga` cookie
+  has domain `library.ascomply.com`, and a library Reject leaves any `.ascomply.com` `_ga` in
+  place. **OPEN.**
+
 ## See also
 
-- `frontend/landing/src/analytics.ts` — the gate, the tag injection and all four senders.
+- `frontend/landing/src/analytics.ts` — the gate, the tag injection and all eight senders (four landing, four library).
 - `frontend/landing/src/consent.ts` — the versioned storage contract the gate reads.
 - `frontend/landing/src/hubspot.ts` — `PRODUCTION_HOSTNAMES` and `isProductionHost`, shared with
   the Book-a-demo submit gate.

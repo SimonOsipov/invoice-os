@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { GROUPS, TOUR } from './content'
 import { Home } from './components/Home'
 import { FeaturePage } from './components/FeaturePage'
@@ -6,7 +6,8 @@ import { GroupPage } from './components/GroupPage'
 import { JourneyStepper } from './components/JourneyStepper'
 import { Sidebar } from './components/Sidebar'
 import { TourOverlay } from './components/TourOverlay'
-import { demoHref, featurePlatformHref, groupPlatformHref } from './links'
+import { chooseConsent, CookieNotice, readConsent, trackLibraryPageView, trackTourStart } from './analytics'
+import { demoHref, featurePlatformHref, groupPlatformHref, privacyHref } from './links'
 import { libraryPath, parseLibraryPath, type Route } from './route'
 import { TOUR_START, tourBack, tourButtonLabel, tourNext, tourStage, type TourState } from './tour'
 import type { Feature, Group } from './types'
@@ -23,7 +24,15 @@ export function App() {
   const [route, setRoute] = useState<Route>(() => parseLibraryPath(window.location.pathname))
   // Re-clicking the open feature remounts its page, so the demo restarts.
   const [visit, setVisit] = useState(0)
-  const [tour, setTour] = useState<TourState | null>(null)
+  const [consent, setConsent] = useState(() => readConsent())
+  const [reopened, setReopened] = useState(false)
+  const [tour, setTourState] = useState<TourState | null>(null)
+  // Mirrors every set so a click decides from the current value, not the render's.
+  const tourRef = useRef<TourState | null>(null)
+  const setTour = useCallback((next: TourState | null) => {
+    tourRef.current = next
+    setTourState(next)
+  }, [])
   const phone = usePhone()
   const tourOn = tour !== null && !phone
 
@@ -60,8 +69,12 @@ export function App() {
   }
   const demo = demoHref()
 
-  const startTour = () => setTour(TOUR_START)
-  const toggleTour = () => setTour((t) => (t ? null : TOUR_START))
+  // The sender stays out of the state updater: StrictMode runs updaters twice.
+  const startTour = () => {
+    trackTourStart()
+    setTour(TOUR_START)
+  }
+  const toggleTour = () => (tourRef.current ? setTour(null) : startTour())
   const stepTo = (next: TourState | null) => {
     setTour(next)
     if (next?.phase === 'card') {
@@ -73,7 +86,16 @@ export function App() {
     const feature = GROUPS.flatMap((g) => g.feats).find((f) => f.id === TOUR[t.i].f)
     if (feature) goFeature(feature)
   }
-  const { rect, win } = useTourSpot(tourOn ? tour : null, libraryPath(route))
+  const path = libraryPath(route)
+  const { rect, win } = useTourSpot(tourOn ? tour : null, path)
+
+  // The first path is reported by config; later changes by path only (not StrictMode, re-clicks or corrections).
+  const viewed = useRef(path)
+  useEffect(() => {
+    if (path === viewed.current) return
+    viewed.current = path
+    trackLibraryPageView()
+  }, [path])
 
   return (
     <div
@@ -96,6 +118,7 @@ export function App() {
         onFeature={goFeature}
         tourLabel={tourButtonLabel(tourOn ? tour : null)}
         onTour={phone ? null : toggleTour}
+        onCookieChoices={() => setReopened(true)}
       />
       <main id="lib-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}>
         <JourneyStepper route={route} onGroup={goGroup} tourStage={tourOn ? tourStage(tour) : undefined} />
@@ -117,7 +140,19 @@ export function App() {
             onFeature={goFeature}
           />
         )}
+        {(consent === null || reopened) && (
+          <CookieNotice
+            current={consent}
+            suppressed={tourOn}
+            privacyHref={privacyHref()}
+            onChoose={(c) => {
+              setConsent(chooseConsent(c))
+              setReopened(false)
+            }}
+          />
+        )}
       </main>
+      <style>{__COOKIE_NOTICE_CSS__}</style>
       {tourOn && (
         <TourOverlay
           tour={tour}

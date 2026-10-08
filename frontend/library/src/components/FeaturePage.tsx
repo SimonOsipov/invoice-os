@@ -1,4 +1,5 @@
 import { useEffect, useReducer } from 'react'
+import { trackOpenInPlatform } from '../analytics'
 import { FEATURES, GROUPS } from '../content'
 import { Icon } from '../icons'
 import { nextClock, START } from '../player'
@@ -56,7 +57,7 @@ export function FeaturePage({ group, feature, openHref, onGroup, onFeature }: Fe
         </p>
         {openHref && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
-            <Button variant="primary" size="sm" arrow href={openHref}>
+            <Button variant="primary" size="sm" arrow href={openHref} onClick={() => trackOpenInPlatform({ feature_id: feature.id })}>
               Open in Platform
             </Button>
           </div>

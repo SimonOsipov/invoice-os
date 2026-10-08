@@ -12,6 +12,7 @@ import {
   createImportBatch,
   claimsOf,
   exchangeCode,
+  grantMembership,
   inviteWithToken,
   listEntities,
   me,
@@ -20,8 +21,10 @@ import {
   provisionStaffAccount,
   registerFresh,
   rawFetch,
+  registerFresh,
   signInForCode,
   signInSession,
+  subjectOf,
   PERSONAS as API_PERSONAS,
   type Me,
   type RealAccount,
@@ -1070,6 +1073,121 @@ test('deployed app: a new firm lands on Add your first client, and the import st
   await openMapStep(page, 'ADDCO-FIRM', { title: 'Add a client before you file', shown: false })
   await placeInvoiceNumberAndExpectImportEnabled(page)
 
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+// internal/portfolio/portfolio.go statusForErr(ErrNotPermitted)
+const ONLY_ADMIN_ADDS = 'only an admin can add a company'
+// frontend/app/src/components/AddCompanyTask.tsx NO_COMPANY_COPY
+const NO_COMPANY = 'No company created'
+const NO_COMPANY_MESSAGE = 'Your workspace admin adds the company. You can start when it exists.'
+const ENTITIES_URL = /\/api\/portfolio\/v1\/entities$/
+
+// A fresh workspace with no company, and a second account admitted to it as `role`.
+async function workspaceWithMember(prefix: string, kind: TenantKind, role: 'admin' | 'preparer' | 'reviewer') {
+  const owner = await provisionRealAccount(prefix, kind)
+  const ownerToken = (await signInSession(owner.email, owner.password)).access_token
+  const tenantId = (await me(ownerToken)).tenant.id
+  const member = await registerFresh(`${prefix}-member`)
+  const userId = subjectOf((await signInSession(member.email, member.password)).access_token)
+  const grant = { user_id: userId, tenant_id: tenantId, display_name: 'Role E2E', email: member.email }
+  await grantMembership({ ...grant, role })
+  return { owner, ownerToken, member: { ...member, workspaceName: owner.workspaceName }, grant }
+}
+
+async function expectWaitingOverview(page: Page): Promise<void> {
+  const waiting = page.getByTestId('company-setup-waiting')
+  await expect(waiting).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: NO_COMPANY, exact: true })).toBeVisible()
+  await expect(waiting.getByText(NO_COMPANY_MESSAGE, { exact: true })).toBeVisible()
+  await expect(waiting.getByRole('button')).toHaveCount(0)
+  await expect(page.getByTestId('add-company-task')).toHaveCount(0)
+}
+
+test('deployed app: a firm Preparer of a workspace with no company sees no add control, is refused by the server, and sees the company once it exists', async ({ page }) => {
+  test.setTimeout(240_000)
+  const { owner, ownerToken, member } = await workspaceWithMember('role-firm-prep', 'firm', 'preparer')
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, member, '/')
+  await expectWaitingOverview(page)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await expect(page.getByRole('button', { name: 'Read columns' })).toBeVisible()
+  await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add a client →' })).toHaveCount(0)
+
+  await sidebarNav(page).getByRole('button', { name: 'Clients' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Client portfolio', exact: true })).toBeVisible()
+  await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add client' })).toHaveCount(0)
+
+  const refused = await rawFetch('/api/portfolio/v1/entities', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${await browserToken(page)}` },
+    body: { name: `Role E2E ${Date.now()}`, tin: freshTin() },
+  })
+  expect([refused.status, refused.body], 'the Preparer POST').toEqual([403, { error: ONLY_ADMIN_ADDS }])
+
+  // The wrong turn last: an open tab learns of the company with no navigation.
+  await sidebarNav(page).getByRole('button', { name: 'Overview' }).click()
+  await expect(page.getByTestId('company-setup-waiting')).toBeVisible()
+  // framenavigated also fires on the SPA's pushState, so a window marker proves no document reload.
+  await page.evaluate(() => { (window as unknown as { __noReload: boolean }).__noReload = true })
+  await createEntity(ownerToken, { name: `Role E2E ${owner.workspaceName}`, tin: freshTin() })
+  // Headless Chromium fires no visibilitychange on a tab switch.
+  for (const state of ['hidden', 'visible']) {
+    await page.evaluate((value) => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => value })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }, state)
+  }
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('company-setup-waiting')).toHaveCount(0)
+  expect(await page.evaluate(() => (window as unknown as { __noReload?: boolean }).__noReload), 'the document survived: no reload').toBe(true)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: an in-house Reviewer of a workspace with no company sees no add control', async ({ page }) => {
+  test.setTimeout(240_000)
+  const { member } = await workspaceWithMember('role-inhouse-rev', 'in_house', 'reviewer')
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, member, '/')
+  await expectWaitingOverview(page)
+
+  await sidebarNav(page).getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Company', exact: true }).click()
+  await expect(page.getByText('Your company', { exact: true })).toBeVisible()
+  await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add company' })).toHaveCount(0)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await expect(page.getByRole('button', { name: 'Read columns' })).toBeVisible()
+  await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add your company →' })).toHaveCount(0)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: an admin demoted while adding the company is refused, and no company is created', async ({ page }) => {
+  test.setTimeout(240_000)
+  const { ownerToken, member, grant } = await workspaceWithMember('role-demoted', 'in_house', 'admin')
+  const errors = gatedErrors(page, [expectedStatusDropper(page, 403, ENTITIES_URL)])
+
+  await signInAtFrontDoor(page, member, '/')
+  await expectAddCompanyTask(page, 'Add your company')
+  await page.getByTestId('add-company-task').getByRole('button', { name: 'Add company' }).click()
+
+  await grantMembership({ ...grant, role: 'preparer' })
+  const dialog = page.getByRole('dialog', { name: 'Add company' })
+  await dialog.getByRole('textbox').first().fill(`Role E2E ${Date.now()}`)
+  await dialog.getByPlaceholder('########-####').fill(freshTin())
+  const answer = page.waitForResponse((r) => r.request().method() === 'POST' && ENTITIES_URL.test(r.url()))
+  await dialog.getByRole('button', { name: 'Add company' }).click()
+  expect((await answer).status(), 'the demoted admin POST').toBe(403)
+
+  await expectWaitingOverview(page)
+  expect((await listEntities(ownerToken)).entities, 'companies in the workspace').toHaveLength(0)
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 

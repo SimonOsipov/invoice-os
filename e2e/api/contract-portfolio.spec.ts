@@ -238,6 +238,29 @@ test.describe('portfolio contract (API E2E, over the deployed gateway)', () => {
     })
   })
 
+  // Seeded active non-admins (db/seed.dev.sql). The 403 text copies portfolio's statusForErr.
+  test.describe('403: a non-admin cannot add a company', () => {
+    const rows = [
+      { name: 'firm preparer', persona: PERSONAS.A, subject: 'c0000000-0000-0000-0000-000000000003' },
+      { name: 'firm reviewer', persona: PERSONAS.A, subject: 'c0000000-0000-0000-0000-000000000004' },
+      { name: 'in-house preparer', persona: PERSONAS.B, subject: 'c0000000-0000-0000-0000-000000000013' },
+      { name: 'in-house reviewer', persona: PERSONAS.B, subject: 'c0000000-0000-0000-0000-000000000008' },
+    ]
+    for (const row of rows) {
+      test(`403: ${row.name}`, async () => {
+        const nonAdminToken = await login({ ...row.persona, subject: row.subject })
+        const tin = freshTin()
+        const res = await rawFetch('/api/portfolio/v1/entities', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${nonAdminToken}` },
+          body: { name: `LOGFIX-06-01 ${row.name} ${tin}`, tin },
+        })
+        assertErrorEnvelope(res, 403, `create as ${row.name}`)
+        expect((res.body as { error: string }).error).toBe('only an admin can add a company')
+      })
+    }
+  })
+
   test.describe('pagination + empty-state', () => {
     test('normal list -> pagination envelope {limit, offset, total} with numeric fields', async () => {
       const tin = freshTin()

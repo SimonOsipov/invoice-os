@@ -9,12 +9,13 @@ type ButtonProps = {
   size?: ButtonSize
   arrow?: boolean
   href?: string
+  disabled?: boolean
   onClick?: () => void
   style?: CSSProperties
   children: ReactNode
 }
 
-export function Button({ variant = 'primary', size = 'md', arrow, href, onClick, style, children }: ButtonProps) {
+export function Button({ variant = 'primary', size = 'md', arrow, href, disabled, onClick, style, children }: ButtonProps) {
   const className = `ds-btn ds-btn--${variant} ds-btn--${size}`
   const content = (
     <>
@@ -30,7 +31,7 @@ export function Button({ variant = 'primary', size = 'md', arrow, href, onClick,
     )
   }
   return (
-    <button type="button" className={className} onClick={onClick} style={style}>
+    <button type="button" className={className} disabled={disabled} onClick={onClick} style={style}>
       {content}
     </button>
   )

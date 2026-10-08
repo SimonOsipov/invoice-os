@@ -168,6 +168,55 @@ describe('the Join screen in the app', () => {
     expect(ctx).toBeUndefined()
   })
 
+  it('app_invalidInviteAmongSeveralStaysOnTheJoinScreen', async () => {
+    replies[MINE] = ok({ invitations: [invite('inv-1', 'Obi Partners'), invite('inv-2', 'Zulu Books'), invite('inv-3', 'Alpha Ltd')] })
+    replies[ACCEPT('inv-2')] = fail(404, 'this invite is no longer valid')
+    meQueue = [fail(403, 'forbidden'), fail(403, 'forbidden'), ok(ME)]
+    const hrefWrites = await boot()
+    await joinScreen()
+    fireEvent.click(screen.getByRole('button', { name: 'Join Zulu Books' }))
+    await waitFor(() => expect(screen.getByText('That invite is no longer valid.')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: 'Join Zulu Books' })).toBeNull()
+    expect(screen.getAllByTestId('join-invite')).toHaveLength(2)
+    expect(hrefWrites).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Join Alpha Ltd' }))
+    await waitFor(() => expect(ctx?.user).toBeDefined())
+    expect(posts('/accept').map((c) => c.url)).toEqual([ACCEPT('inv-2'), ACCEPT('inv-3')])
+  })
+
+  it('app_invalidOnlyInviteGoesToTheInviteNotice', async () => {
+    replies[ACCEPT('inv-1')] = fail(404, 'this invite is no longer valid')
+    meQueue = [fail(403, 'forbidden'), fail(403, 'forbidden')]
+    const hrefWrites = await boot()
+    await joinScreen()
+    fireEvent.click(screen.getByRole('button', { name: 'Join Obi Partners' }))
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?invite=invalid`]))
+  })
+
+  it('app_invalidLastRemainingInviteGoesToTheInviteNotice', async () => {
+    replies[MINE] = ok({ invitations: [invite('inv-1', 'Obi Partners'), invite('inv-2', 'Zulu Books')] })
+    replies[ACCEPT('inv-1')] = fail(404, 'this invite is no longer valid')
+    replies[ACCEPT('inv-2')] = fail(404, 'this invite is no longer valid')
+    meQueue = [fail(403, 'forbidden'), fail(403, 'forbidden'), fail(403, 'forbidden')]
+    const hrefWrites = await boot()
+    await joinScreen()
+    fireEvent.click(screen.getByRole('button', { name: 'Join Obi Partners' }))
+    await waitFor(() => expect(screen.getByText('That invite is no longer valid.')).toBeTruthy())
+    expect(hrefWrites).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Join Zulu Books' }))
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?invite=invalid`]))
+  })
+
+  it('app_alreadyMemberAmongSeveralStillNavigates', async () => {
+    replies[MINE] = ok({ invitations: [invite('inv-1', 'Obi Partners'), invite('inv-2', 'Zulu Books')] })
+    replies[ACCEPT('inv-1')] = fail(409, 'you already belong to a workspace')
+    meQueue = [fail(403, 'forbidden'), fail(403, 'forbidden')]
+    const hrefWrites = await boot()
+    await joinScreen()
+    fireEvent.click(screen.getByRole('button', { name: 'Join Obi Partners' }))
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?invite=already-member`]))
+  })
+
   it('app_refusedJoinGoesToTheInviteNotice: a server error reports failed', async () => {
     replies[ACCEPT('inv-1')] = fail(500, 'boom')
     const hrefWrites = await boot()

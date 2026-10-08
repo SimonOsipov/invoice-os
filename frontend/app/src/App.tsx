@@ -1825,6 +1825,7 @@ export default function App() {
   const redeemStarted = useRef(false)
   const [joinOffer, setJoinOffer] = useState<JoinOffer | null>(null)
   const [joining, setJoining] = useState<string | null>(null)
+  const [joinNotice, setJoinNotice] = useState<string | null>(null)
   // Set in the click handler, before any re-render, so a second click in the same tick sends nothing.
   const joinStarted = useRef(false)
   // `?auth=start`: landing asks for a state. `?handoff=` wins over it.
@@ -2024,7 +2025,8 @@ export default function App() {
   }, [handoffCode])
 
   // Join and Create my own workspace share one outcome: the workspace mounts, or the page leaves.
-  const resolveJoin = useCallback((attempt: Promise<Session>) => {
+  // A refused invite 'invalid' with other invites left is dropped from the offer; the Join screen stays.
+  const resolveJoin = useCallback((attempt: Promise<Session>, inviteId?: string) => {
     if (joinStarted.current) return
     joinStarted.current = true
     attempt.then(
@@ -2035,6 +2037,16 @@ export default function App() {
       },
       (err: unknown) => {
         console.warn('[app] joining failed:', err)
+        if (err instanceof InviteRefusedError && err.outcome === 'invalid' && inviteId !== undefined && joinOffer) {
+          const invites = joinOffer.invites.filter((i) => i.id !== inviteId)
+          if (invites.length > 0) {
+            setJoinOffer({ ...joinOffer, invites })
+            setJoinNotice('That invite is no longer valid.')
+            joinStarted.current = false
+            setJoining(null)
+            return
+          }
+        }
         const dest = err instanceof InviteRefusedError ? landingInviteUrl(err.outcome) : landingSignInUrl(ensureSignInState(), 'failed')
         // Stays disabled while leaving; with no landing the card is usable again.
         if (dest) window.location.href = dest
@@ -2044,12 +2056,13 @@ export default function App() {
         }
       },
     )
-  }, [])
+  }, [joinOffer])
   const onJoin = (id: string) => {
     const base = gatewayBase()
     if (!joinOffer || !base || joinStarted.current) return
     setJoining(id)
-    resolveJoin(joinInvite(base, joinOffer, id))
+    setJoinNotice(null)
+    resolveJoin(joinInvite(base, joinOffer, id), id)
   }
   const onCreateOwn = () => {
     const base = gatewayBase()
@@ -2110,6 +2123,7 @@ export default function App() {
         <JoinWorkspace
           invites={joinOffer.invites}
           joining={joining}
+          notice={joinNotice}
           onJoin={onJoin}
           onSignOut={onJoinSignOut}
           onCreateOwn={joinOffer.answers ? onCreateOwn : undefined}

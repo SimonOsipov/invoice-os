@@ -13,9 +13,10 @@ const inviteLine = (i: PendingInvite) => {
   return i.inviter ? `${i.inviter} invited you as ${role}.` : `You are invited as ${role}.`
 }
 
-export function JoinWorkspace({ invites, joining, onJoin, onSignOut, onCreateOwn }: {
+export function JoinWorkspace({ invites, joining, notice, onJoin, onSignOut, onCreateOwn }: {
   invites: PendingInvite[]
   joining: string | null
+  notice?: string | null
   onJoin: (id: string) => void
   onSignOut: () => void
   onCreateOwn?: () => void
@@ -50,6 +51,11 @@ export function JoinWorkspace({ invites, joining, onJoin, onSignOut, onCreateOwn
           <div style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)', ...WRAP }}>
             {several ? `You are invited to ${invites.length} workspaces. An account can belong to only one.` : inviteLine(invites[0])}
           </div>
+          {notice && (
+            <div role="status" data-testid="join-notice" style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg-3)', ...WRAP }}>
+              {notice}
+            </div>
+          )}
           {several ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {invites.map((i) => (

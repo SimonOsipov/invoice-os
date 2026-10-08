@@ -61,6 +61,9 @@ describe('verifyForward', () => {
       expect(verifyForward(loc(s), APP), s).toEqual({ strip: '/?verified=1', target: null, failed: false })
     }
     expect(verifyForward(loc(`?verified=1&handoff=${CODE}`), null)).toEqual({ strip: '/?verified=1', target: null, failed: false })
+    for (const [s, strip] of [[`?handoff=${CODE}`, '/'], [`?verified=0&handoff=${CODE}`, '/?verified=0']]) {
+      expect(verifyForward(loc(s), APP), s).toEqual({ strip, target: null, failed: false })
+    }
   })
 
   it('leaves every other URL alone', async () => {

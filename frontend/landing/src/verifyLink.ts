@@ -1,4 +1,4 @@
-import { appBase } from './auth'
+import { appBase, handoffTarget } from './auth'
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{1,256}$/
 const CODE_RE = /^[A-Za-z0-9_-]{43}$/
@@ -27,7 +27,7 @@ export function verifyForward(loc: Loc, app: string | null): { strip: string; ta
     const ok = codes.length === 1 && CODE_RE.test(codes[0]) && params.getAll('verified').join() === '1'
     params.delete('handoff')
     const strip = loc.pathname + (params.size ? `?${params}` : '') + loc.hash
-    return { strip, target: ok && app ? `${app}?handoff=${encodeURIComponent(codes[0])}` : null, failed: false }
+    return { strip, target: ok && app ? handoffTarget(app, codes[0]) : null, failed: false }
   }
 
   return same

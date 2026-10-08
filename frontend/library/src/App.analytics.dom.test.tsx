@@ -215,6 +215,18 @@ describe('library tour events', () => {
     expect(tourStarts()).toHaveLength(2)
   })
 
+  it('two synchronous tour clicks send one tour_start and leave the tour closed', async () => {
+    localStorage.setItem(KEY, GRANT)
+    await mount('/')
+    const btn = sidebarTour()
+    act(() => {
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(tourStarts()).toHaveLength(1)
+    expect(container.querySelector('.lib-tour')?.textContent).toBe('Take the tour')
+  })
+
   it('EV-09 stopping and stepping send no tour_start', async () => {
     localStorage.setItem(KEY, GRANT)
     await mount('/')

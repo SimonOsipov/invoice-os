@@ -26,7 +26,13 @@ export function App() {
   const [visit, setVisit] = useState(0)
   const [consent, setConsent] = useState(() => readConsent())
   const [reopened, setReopened] = useState(false)
-  const [tour, setTour] = useState<TourState | null>(null)
+  const [tour, setTourState] = useState<TourState | null>(null)
+  // Mirrors every set so a click decides from the current value, not the render's.
+  const tourRef = useRef<TourState | null>(null)
+  const setTour = useCallback((next: TourState | null) => {
+    tourRef.current = next
+    setTourState(next)
+  }, [])
   const phone = usePhone()
   const tourOn = tour !== null && !phone
 
@@ -68,7 +74,7 @@ export function App() {
     trackTourStart()
     setTour(TOUR_START)
   }
-  const toggleTour = () => (tour ? setTour(null) : startTour())
+  const toggleTour = () => (tourRef.current ? setTour(null) : startTour())
   const stepTo = (next: TourState | null) => {
     setTour(next)
     if (next?.phase === 'card') {

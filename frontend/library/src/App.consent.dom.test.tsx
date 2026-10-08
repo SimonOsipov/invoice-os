@@ -87,6 +87,7 @@ describe('library consent', () => {
     expect(byText('Accept')).toBeDefined()
     expect(byText('Reject')).toBeDefined()
     expect(container.querySelector('.cn-setting')).toBeNull()
+    expect(notices()[0].querySelector<HTMLAnchorElement>('a.cn-link')?.getAttribute('href')).toBe('https://www.ascomply.com/privacy')
     unmount()
     container.remove()
 

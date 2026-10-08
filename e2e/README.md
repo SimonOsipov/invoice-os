@@ -43,10 +43,10 @@ resolve lazily and throw on the first test that needs them.
 
 `playwright.config.ts` → `testDir: './smoke'`, `fullyParallel: true`.
 
-Covers the three SPAs the landing page hands off to — `landing`, `ops-console` and
-`support-console`. It is no longer only a render check:
+Covers the four SPAs the landing page hands off to — `landing`, `ops-console`,
+`support-console` and `library`. It is no longer only a render check:
 
-- **Render** (`smoke/apps.ts`, `smoke.spec.ts`): landing is opened bare and each console on a
+- **Render** (`smoke/apps.ts`, `smoke.spec.ts`): landing and library are opened bare and each console on a
   seeded real staff session (`staffSession.ts`, which needs `GATEWAY_URL`). Each asserts a
   signature element of its main view, failing on any console error or uncaught page error.
 - **Behaviour on backend-less surfaces** (`landing-nav.spec.ts`, `ops-console.spec.ts`,
@@ -62,7 +62,7 @@ Covers the three SPAs the landing page hands off to — `landing`, `ops-console`
 
 ```bash
 pnpm --filter @invoice-os/e2e exec playwright install chromium   # first run only
-LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... APP_URL=... GATEWAY_URL=... \
+LANDING_URL=... OPS_CONSOLE_URL=... SUPPORT_CONSOLE_URL=... LIBRARY_URL=... APP_URL=... GATEWAY_URL=... \
   pnpm --filter @invoice-os/e2e test:smoke    # `test` is the same command
 ```
 

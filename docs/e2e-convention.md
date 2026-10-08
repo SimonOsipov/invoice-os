@@ -153,7 +153,7 @@ asserts containment or a live-read comparison rather than a literal count.
 
 ## Target surface
 
-Four frontends deploy — the `landing` front door and the three SPAs it hands off to — and
+Five frontends deploy — the `landing` front door and the four SPAs it hands off to — and
 they are **not equally testable**. The line that matters is not *which SPA* a test drives
 but **what backs the assertion**:
 
@@ -162,6 +162,7 @@ but **what backs the assertion**:
 | `app` SPA | gateway-wired (real API, real DB) | a **contract**: rendered state matches what the API returned |
 | `ops-console` | mock data; the gateway backs only the staff session | **fixture behaviour** — that the console's own client-side logic works. Entry is a **contract**: a real staff session opens it |
 | `support-console` | mock data; the gateway backs only the staff session | same |
+| `library` | static content, no backend | render only: the page renders its headline with no console error |
 | `landing` | marketing, plus a gateway-backed sign-in form | render and client-side navigation; the sign-in form is a **contract** — a real account signs in and lands in its workspace, or, for a staff account that came from a console, in that console |
 
 The `app` SPA, and the landing sign-in form that hands off to it or to a console, remain the

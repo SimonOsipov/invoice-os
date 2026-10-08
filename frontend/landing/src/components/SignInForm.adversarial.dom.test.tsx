@@ -313,15 +313,15 @@ describe('SignInForm adversarial: fields', () => {
 })
 
 describe('SignInForm adversarial: initial error and state', () => {
-  it('initialError shows beside the state-less Continue with email button', async () => {
+  it('initialError_showsBesideTheFields', async () => {
     configure()
     await mountForm(null, 'This account has no workspace yet.')
-    const buttons = Array.from(container.querySelectorAll('button'))
-    expect(buttons.map((b) => b.textContent?.trim())).toEqual(['Continue with email'])
     const got = alerts()
     expect(got.length).toBe(1)
     expect(got[0].textContent).toContain('This account has no workspace yet.')
-    expect(container.querySelectorAll('input').length).toBe(0)
+    expect(emailInput()).toBeDefined()
+    expect(passwordInput()).toBeDefined()
+    expect(container.textContent).not.toContain('Continue with email')
   })
 
   it('initialError shows under the fields until the next submit', async () => {
@@ -453,14 +453,14 @@ describe('SignInModal adversarial: the configured gate', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('the configured modal passes initialError and state through to the form', async () => {
+  it('modal_noHeldState_rendersTheForm', async () => {
     configure()
     const d = await mountModal(null, 'This account has no workspace yet.')
     const got = Array.from(d.querySelectorAll('[role="alert"]'))
     expect(got.length).toBe(1)
     expect(got[0].textContent).toContain('This account has no workspace yet.')
-    expect(d.textContent).toContain('Continue with email')
-    expect(d.querySelectorAll('input').length).toBe(0)
+    expect(d.textContent).not.toContain('Continue with email')
+    expect(d.querySelectorAll('input[type="password"]').length).toBe(1)
   })
 
   it('the card scrolls on a short viewport', async () => {
@@ -482,7 +482,7 @@ describe('SignInModal adversarial: the configured gate', () => {
   })
 })
 
-// Seeds useState slot 6 (submitting) by call order, as DemoLeadForm.adversarial.test.tsx does.
+// Seeds useState slot 5 (submitting) by call order, as DemoLeadForm.adversarial.test.tsx does.
 async function busySignInMarkup(): Promise<string> {
   vi.resetModules()
   vi.doMock('react', async (importOriginal) => {
@@ -492,7 +492,7 @@ async function busySignInMarkup(): Promise<string> {
       ...actual,
       useState: <T,>(initial: T) => {
         call += 1
-        return call === 6 ? actual.useState(true as T) : actual.useState(initial)
+        return call === 5 ? actual.useState(true as T) : actual.useState(initial)
       },
     }
   })
@@ -521,16 +521,13 @@ describe('SignInForm wears the v2 field, buttons and alert (FL rows)', () => {
     }
   })
 
-  it('FL-04b: both sign-in buttons are the DS md primary', async () => {
+  it('FL-04b: the sign-in button is the DS md primary', async () => {
     configure()
     const buttonNamed = (text: string) =>
       Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === text)
     await mountForm(STATE)
-    const signIn = buttonNamed('Sign in →')
-    await mountForm(null)
-    const cont = buttonNamed('Continue with email')
-    const found = [signIn, cont].filter((b): b is HTMLButtonElement => Boolean(b))
-    expect(found.length, 'floor: both buttons found').toBe(2)
+    const found = [buttonNamed('Sign in →')].filter((b): b is HTMLButtonElement => Boolean(b))
+    expect(found.length, 'floor: the button is found').toBe(1)
     for (const b of found) {
       for (const want of ['ds-btn', 'ds-btn--primary', 'ds-btn--md']) expect(b.classList.contains(want), `${b.textContent} ${want}`).toBe(true)
       expect(Array.from(b.classList).some((c) => c.startsWith('v2-btn')), b.textContent ?? '').toBe(false)
@@ -616,5 +613,88 @@ describe('SignInForm wears the v2 field, buttons and alert (FL rows)', () => {
     await mountForm(null)
     expect(container.querySelectorAll('style').length, 'control: the state-less branch renders a <style>').toBe(1)
     expect(css()).toContain('outline: 2px solid var(--ring)')
+  })
+})
+
+describe('SignInForm adversarial: the state-less bounce', () => {
+  const posts = (f: ReturnType<typeof vi.fn>) => f.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')
+
+  it('submit_preflightRejects_showsUnavailableAndStaysUsable', async () => {
+    configure()
+    const fetchMock = vi.fn().mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValue(new Response(null))
+    vi.stubGlobal('fetch', fetchMock)
+    await mountForm(null)
+    await fill('ada@okafor.ng', 'pw')
+    await submit()
+    expect(alerts().map((a) => a.textContent?.trim())).toEqual([UNAVAILABLE])
+    expect(locationStub.href).toBe(HOME)
+    expect(submitButton().disabled).toBe(false)
+    await submit()
+    expect(locationStub.href).toBe('https://app.x?auth=start')
+    expect(posts(fetchMock)).toHaveLength(0)
+  })
+
+  it('submit_noStartUrl_showsUnavailable', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.x/')
+    vi.stubEnv('VITE_APP_URL', '')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await mountForm(null)
+    await fill('ada@okafor.ng', 'pw')
+    await submit()
+    expect(alerts().map((a) => a.textContent?.trim())).toEqual([UNAVAILABLE])
+    expect(locationStub.href).toBe(HOME)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('submit_noState_secondClickDoesNotNavigateTwice', async () => {
+    configure()
+    let resolve!: (r: Response) => void
+    const fetchMock = vi.fn().mockReturnValue(new Promise<Response>((r) => (resolve = r)))
+    vi.stubGlobal('fetch', fetchMock)
+    await mountForm(null)
+    await fill('ada@okafor.ng', 'pw')
+    await submit()
+    await act(async () => {
+      container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await act(async () => resolve(new Response(null)))
+    expect(locationStub.href).toBe('https://app.x?auth=start')
+  })
+
+  it('submit_noState_bounceWritesNothingToStorage', async () => {
+    configure()
+    const writes: unknown[] = []
+    const spyStore = () => ({ getItem: () => null, setItem: (...a: unknown[]) => void writes.push(a), removeItem: () => undefined, clear: () => undefined, key: () => null, length: 0 })
+    vi.stubGlobal('localStorage', spyStore())
+    vi.stubGlobal('sessionStorage', spyStore())
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null))
+    vi.stubGlobal('fetch', fetchMock)
+    await mountForm(null)
+    await fill('ada@okafor.ng', 'hunter2')
+    await submit()
+    expect(locationStub.href).toBe('https://app.x?auth=start')
+    expect(writes).toEqual([])
+    expect(document.cookie).not.toContain('hunter2')
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('hunter2')
+  })
+
+  it('pageshowPersisted_afterBounce_submitBouncesAgain', async () => {
+    configure()
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(new Response(null))))
+    await mountForm(null)
+    await fill('ada@okafor.ng', 'pw')
+    await submit()
+    expect(locationStub.href).toBe('https://app.x?auth=start')
+    locationStub.href = HOME
+    await act(async () => {
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    })
+    expect(submitButton().disabled).toBe(false)
+    expect(passwordInput().value).toBe('')
+    await fill('ada@okafor.ng', 'pw')
+    await submit()
+    expect(locationStub.href).toBe('https://app.x?auth=start')
   })
 })

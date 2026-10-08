@@ -788,7 +788,7 @@ test('landing demo: the modal card fits and sits centred at every width', async 
   // Both scrims pad alike at 390: the demo overlay carries no phone-only override.
   const demoPadding = await dialog.evaluate((el) => getComputedStyle(el).padding)
   await page.goto(`${LANDING_URL}/?state=${'A'.repeat(43)}&signin=ready`)
-  const signIn = page.getByRole('dialog', { name: 'Platform login' })
+  const signIn = page.getByRole('dialog', { name: 'Sign in', exact: true })
   await expect(signIn).toBeVisible()
   const signInPadding = await signIn.evaluate((el) => getComputedStyle(el).padding)
   expect(signInPadding, 'the sign-in scrim has no padding').not.toBe('')

@@ -239,7 +239,7 @@ describe('the ready view', () => {
     stubFetch()
     await mount()
     await click(button('Sign in'))
-    expect(assigned, 'no href write, as SignInForm Continue with email').toEqual([])
+    expect(assigned, 'no href write').toEqual([])
   })
 
   it.each([['false'], [undefined]])('invitePage_createAccountFollowsRegistrationOpen (VITE_REGISTRATION_OPEN=%s)', async (flag) => {

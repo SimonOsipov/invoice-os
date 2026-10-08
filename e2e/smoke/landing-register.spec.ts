@@ -10,6 +10,9 @@ const LANDING_URL = resolveTarget('LANDING_URL')
 
 const PHONE = { width: 390, height: 667 } as const
 const CREATE = 'Create an account'
+// A state in the app's shape (43 base64url characters): landing only checks the format.
+const SIGN_IN_ROUTE = `?state=${'A'.repeat(43)}&signin=ready`
+const signInWindow = (page: Page) => page.getByRole('dialog', { name: 'Sign in', exact: true })
 
 function gate(page: Page): string[] {
   const errors: string[] = []
@@ -32,10 +35,10 @@ async function openLanding(page: Page, query = ''): Promise<string[]> {
 
 async function openRegister(page: Page) {
   await page.setViewportSize({ width: 1440, height: 1080 })
-  const errors = await openLanding(page)
-  const entry = page.getByRole('banner').getByRole('button', { name: CREATE })
-  await expect(entry, `the header "${CREATE}" entry is missing (is landing.VITE_REGISTRATION_OPEN on?)`).toBeVisible()
-  await entry.click()
+  const errors = await openLanding(page, SIGN_IN_ROUTE)
+  const link = signInWindow(page).getByRole('button', { name: CREATE, exact: true })
+  await expect(link, `the sign-in window has no "${CREATE}" link (is landing.VITE_REGISTRATION_OPEN on?)`).toBeVisible()
+  await link.click()
   const dialog = page.getByRole('dialog', { name: CREATE })
   await expect(dialog).toBeVisible()
   const card = dialog.locator(':scope > div')
@@ -212,14 +215,18 @@ test('landing registration window: the marketing row, its box and the notice kee
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-// The route for the 1121-1219px band, where the header entry is hidden.
-test('landing sign-in window: its Create an account link opens the registration window at 1121', async ({ page }) => {
-  await page.setViewportSize({ width: 1121, height: 900 })
+test('landing header has no Create an account at 1440', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
   const errors = await openLanding(page)
-  await expect(page.getByRole('banner').getByRole('button', { name: CREATE }), 'the header entry shows at 1121').toBeHidden()
+  await expect(page.getByRole('banner').getByRole('button', { name: 'Sign in', exact: true }), 'control: the header Sign in').toBeVisible()
+  await expect(page.getByRole('banner').getByRole('button', { name: CREATE })).toHaveCount(0)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
 
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  const signIn = page.getByRole('dialog', { name: 'Platform login' })
+test('landing sign-in window: Create an account opens the registration window at 1121', async ({ page }) => {
+  await page.setViewportSize({ width: 1121, height: 900 })
+  const errors = await openLanding(page, SIGN_IN_ROUTE)
+  const signIn = signInWindow(page)
   await expect(signIn).toBeVisible()
   const link = signIn.getByRole('button', { name: CREATE })
   await expect(link, `the sign-in window has no "${CREATE}" link (is landing.VITE_REGISTRATION_OPEN on?)`).toBeVisible()

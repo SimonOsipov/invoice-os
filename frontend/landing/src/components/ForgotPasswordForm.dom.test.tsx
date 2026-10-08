@@ -311,3 +311,37 @@ describe('useResend with a given sender', () => {
     expect(latest.note).toEqual({ ok: false })
   })
 })
+
+describe('the reset notice box', () => {
+  const noticeP = () => container.querySelector<HTMLElement>('[role="status"] p')
+
+  async function send(response: Response): Promise<void> {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+    await mountForm()
+    await fillEmail('a@corp.example')
+    await submit()
+    await flush()
+  }
+
+  it('resetNotice_isAPeachInkBox', async () => {
+    await send(jsonResponse(202, { status: 'accepted' }))
+    const p = noticeP()
+    expect(p?.textContent?.trim()).toBe(SENT)
+    expect(p!.getAttribute('style'), 'the box is peach with ink text').toMatch(/background:\s*var\(--accent\)/)
+    expect(p!.getAttribute('style')).toMatch(/color:\s*var\(--ink\)/)
+  })
+
+  it('resetNotice_absentBeforeSend', async () => {
+    await mountForm()
+    expect(statusText()).toBe('')
+    expect(noticeP()).toBeNull()
+    expect(container.innerHTML).not.toContain('--accent')
+  })
+
+  it('resetFailure_keepsTheDestructiveAlert', async () => {
+    await send(jsonResponse(500, { error: 'boom' }))
+    expect(alerts()).toEqual([RESEND_FAILED])
+    expect(noticeP()).toBeNull()
+    expect(container.innerHTML).not.toContain('--accent')
+  })
+})

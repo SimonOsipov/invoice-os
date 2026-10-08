@@ -161,38 +161,69 @@ describe('AC-1: the form sits in the modal only when configured', () => {
 })
 
 describe('AC-2: the held state', () => {
-  it('with no state the form offers Continue with email', async () => {
+  it('form_noState_rendersFieldsAndNoContinue', async () => {
     configure()
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     await mountForm(null)
-    expect(container.querySelectorAll('input').length).toBe(0)
-    const buttons = Array.from(container.querySelectorAll('button'))
-    expect(buttons.length).toBe(1)
-    expect(buttons[0].textContent?.trim()).toBe('Continue with email')
-    await act(async () => {
-      buttons[0].click()
-    })
-    expect(locationStub.href).toBe('https://app.x?auth=start')
+    expect(emailInput()).toBeDefined()
+    expect(passwordInput()).toBeDefined()
+    expect(submitButton()).toBeDefined()
+    expect(Array.from(container.querySelectorAll('button'), (b) => b.textContent?.trim())).not.toContain('Continue with email')
+    expect(container.textContent).not.toContain('Continue with email')
     expect(fetchMock).not.toHaveBeenCalled()
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('continueWithEmail_bouncesThroughTheHeldConsole', async () => {
+  it('submit_noState_bouncesToTheApp', async () => {
+    configure()
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null))
+    vi.stubGlobal('fetch', fetchMock)
+    await mountForm(null)
+    await fill('ada@okafor.ng', 'pw')
+    await submit()
+    expect(locationStub.href).toBe('https://app.x?auth=start')
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(0)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('submit_noState_bouncesThroughTheHeldConsole', async () => {
     configure()
     vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x/')
-    const fetchMock = vi.fn()
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null))
     vi.stubGlobal('fetch', fetchMock)
     await mountForm(null, undefined, 'support')
-    const buttons = Array.from(container.querySelectorAll('button'))
-    expect(buttons.length).toBe(1)
-    expect(buttons[0].textContent?.trim()).toBe('Continue with email')
-    await act(async () => {
-      buttons[0].click()
-    })
+    await fill('ada@okafor.ng', 'pw')
+    await submit()
     expect(locationStub.href).toBe('https://support.x?auth=start')
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(0)
     expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('submit_stateExpiredWhileOpen_bouncesAndPostsNothing', async () => {
+    configure()
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null))
+    vi.stubGlobal('fetch', fetchMock)
+    let live: string | null = STATE
+    await act(async () => {
+      root.render(createElement(SignInForm, { heldState: () => live }))
+    })
+    await fill('ada@okafor.ng', 'pw')
+    live = null
+    await submit()
+    expect(locationStub.href).toBe('https://app.x?auth=start')
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(0)
+  })
+
+  it('submit_noState_invalidFields_showsErrorsAndStays', async () => {
+    configure()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await mountForm(null)
+    await submit()
+    expect(alerts().map((a) => a.textContent?.trim())).toEqual([EMAIL_REQUIRED, PASSWORD_REQUIRED])
+    expect(locationStub.href).toBe(HOME)
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('the submit carries the held state', async () => {
@@ -408,6 +439,18 @@ describe('the resend control on the unverified sign-in error', () => {
     expect(got[0].compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING, 'the button follows the alert').toBeTruthy()
     expect(btn.disabled).toBe(false)
     expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('unverifiedResendNotice_isNotPeach', async () => {
+    configure()
+    routedFetch({ signIn: [refuse(403)] })
+    await mountForm(STATE)
+    await signInAs(ADA)
+    await click(resendButton())
+
+    const p = container.querySelector('[role="status"] p')
+    expect(p?.textContent?.trim(), 'control: the notice shows').toBe(sent(ADA))
+    expect(p!.getAttribute('style') ?? '').not.toContain('--accent')
   })
 
   it('no resend control before a submit or after another refusal', async () => {
@@ -710,11 +753,15 @@ describe('the Forgot password? control', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('no Forgot password? without a held state', async () => {
+  it('forgotButton_showsWithoutAHeldState', async () => {
     configure()
-    await mountForm(null, undefined, undefined, vi.fn())
-    expect(Array.from(container.querySelectorAll('button'), (b) => b.textContent?.trim()), 'control: only the bounce shows').toEqual(['Continue with email'])
-    expect(forgotButtons()).toHaveLength(0)
+    const onForgot = vi.fn()
+    await mountForm(null, undefined, undefined, onForgot)
+    expect(forgotButtons()).toHaveLength(1)
+    await act(async () => {
+      forgotButtons()[0].click()
+    })
+    expect(onForgot).toHaveBeenCalledTimes(1)
     expect(consoleError).not.toHaveBeenCalled()
   })
 

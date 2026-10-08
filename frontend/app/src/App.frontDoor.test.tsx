@@ -306,6 +306,19 @@ describe('front door: a Library visit goes to registration (LIB-06)', () => {
     expect(hrefWrites).toEqual([])
   })
 
+  it('frontDoor_aSessionWinsOverVia', async () => {
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    const { hrefWrites } = stubRecordingLocation('?via=library', '/invoices')
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    await act(async () => {
+      render(<App />)
+    })
+    await settle()
+
+    expect(workspaceIsRendered(), 'the signed-in workspace rendered').toBe(true)
+    expect(hrefWrites).toEqual([])
+  })
+
   it('frontDoor_authStartWinsOverVia', async () => {
     const { hrefWrites } = stubRecordingLocation('?auth=start&via=library')
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')

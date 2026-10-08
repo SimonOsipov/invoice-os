@@ -938,6 +938,7 @@ describe('front door: a Library registration visit (LIB-06)', () => {
   it('frontDoor_viaLibraryRegistrationInANewTabLandsOnTheDashboard', async () => {
     await bounceFromLibrary()
     sessionStorage.clear()
+    expect(readDestination(), 'control: the new tab holds no destination').toBeNull()
     await bootWorkspaceAt('/')
     expect(requireCtx().view).toBe('dashboard')
   })

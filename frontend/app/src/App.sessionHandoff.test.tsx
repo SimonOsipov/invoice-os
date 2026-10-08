@@ -1116,6 +1116,23 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
   })
 
+  it('a plain handoff over a renewable session with an expired access token, with no pending confirm, signs in as B', async () => {
+    configure()
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    const S = ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(exchangeBodies).toEqual([{ code: CODE, state: S }])
+    expect((storedRecord()?.me as Me | undefined)?.user.id).toBe(ME.user.id)
+    expect(toast()).toBeNull()
+  })
+
   it('the confirm spends the sign-in state, so a later hand-off with no session cannot redeem as B', async () => {
     const S = await bootOverLive(A_ME)
     await settle()

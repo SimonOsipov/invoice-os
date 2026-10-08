@@ -518,14 +518,21 @@ describe('?auth=verify opens the gateway confirm page (LOGFIX-04-05)', () => {
     configure()
     const hrefWrites = boot(`/?auth=verify#token=${T}`)
     expect(hrefWrites).toHaveLength(1)
-    act(() => {
-      const e = new Event('pageshow') as PageTransitionEvent
-      Object.defineProperty(e, 'persisted', { value: true })
-      window.dispatchEvent(e)
-    })
+    const pageshow = (persisted: boolean) =>
+      act(() => {
+        const e = new Event('pageshow') as PageTransitionEvent
+        Object.defineProperty(e, 'persisted', { value: persisted })
+        window.dispatchEvent(e)
+      })
+    pageshow(false)
+    expect(hrefWrites).toHaveLength(1)
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).not.toBeNull()
+    pageshow(true)
     expect(hrefWrites).toHaveLength(2)
     expect(hrefWrites[1]).toMatch(/^https:\/\/landing\.example\/\?state=/)
     expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+    pageshow(true)
+    expect(hrefWrites).toHaveLength(2)
   })
 
   it('App adversarial: a URL state beside auth=verify is never adopted', () => {

@@ -1,0 +1,30 @@
+---
+paths:
+  - "frontend/landing/src/components/Privacy*"
+  - "frontend/landing/src/components/DemoLeadForm*"
+  - "frontend/landing/src/components/demoForm*"
+  - "frontend/landing/src/analytics*"
+  - "frontend/landing/src/consent*"
+  - "frontend/landing/src/gaCookies*"
+  - "frontend/landing/src/hubspot*"
+  - "frontend/landing/index.html"
+  - "packages/monitoring/src/**"
+  - "internal/notifications/hubspot.go"
+  - "internal/notifications/resend.go"
+---
+# Privacy page
+
+- Write a factual sentence only when code, an operator confirmation or a vendor statement backs it. Without that backing, the sentence does not ship.
+- Change the page sentence in the same PR as the code it describes.
+- Quote the consent sentences, the retention months, the hostnames and the contact address from their code constants. Never retype them.
+- Never render `e.iroha@ascomply.com` on the page. It is an unmonitored demo address.
+- Never claim a vendor's data region without a vendor citation. Code proves only the host that receives a record.
+- Describe the cookie notice, its Accept and Reject buttons, the footer "Cookie choices" control and the `asc_consent` record. All four ship.
+- Promise no preference centre and no per-category toggle. Neither exists.
+- Add no "last updated" date. Nothing keeps such a date true.
+- Add no claim about first-party server logs. Nothing in the repository establishes their retention.
+- Add no cookie table and no per-category breakdown. The site sets one non-essential cookie family for one purpose.
+- Add no step-by-step tour of the cookie notice. Name the control and say what each button does.
+- Claim no compliance with a named data-protection law. The page says it is not legal advice.
+- Disclose each new browser network sender on the page. List the external hosts the landing contacts.
+- Treat an ungated flow as a page fact. Fonts and error reports load whatever the visitor chooses about analytics.

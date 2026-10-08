@@ -134,7 +134,7 @@ describe('library shell primitives', () => {
 
   const noop = () => {}
   const sidebar = (route: Route, demoHref: string | null = null) =>
-    render(createElement(Sidebar, { route, demoHref, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop }))
+    render(createElement(Sidebar, { route, demoHref, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop, onCookieChoices: noop }))
   const stepper = (route: Route) => render(createElement(JourneyStepper, { route, onGroup: noop }))
   const home: Route = { view: 'home' }
   const esc = (t: string) => t.replace(/&/g, '&amp;')
@@ -299,7 +299,27 @@ describe('library shell primitives', () => {
     const none = sidebar(home, null)
     expect(none.some((t) => t.text === 'Book the Demo')).toBe(false)
     expect(none.some((t) => t.name === 'a')).toBe(false)
-    expect(none.some((t) => style(t)['border-top'] !== undefined)).toBe(false)
+    expect(none.filter((t) => style(t)['border-top'] === '1px solid var(--line-1)')).toHaveLength(1)
+    expect(withText(none, 'Cookie choices').name).toBe('button')
+  })
+
+  it('SH-20 the footer holds Cookie choices whether or not Book the Demo shows', () => {
+    const footerOf = (ts: Tag[]) => {
+      const i = ts.findIndex((t) => style(t)['border-top'] === '1px solid var(--line-1)' && attr(t, 'class') === undefined)
+      expect(i, 'the footer block').toBeGreaterThan(-1)
+      return ts.slice(i + 1)
+    }
+    const withDemo = footerOf(sidebar(home, 'https://l.example/?demo'))
+    const kids = withDemo.filter((t) => t.name === 'a' || t.name === 'button')
+    expect(kids.map((t) => t.text)).toEqual(['Book the Demo', 'Cookie choices'])
+    const cc = kids[1]
+    expect(cc.name).toBe('button')
+    expect(attr(cc, 'class')).toBe('lib-cookie-choices')
+    expect(style(cc)).toMatchObject({ 'font-size': '13px', color: 'var(--fg-3)' })
+
+    const bare = footerOf(sidebar(home, null)).filter((t) => t.name === 'a' || t.name === 'button')
+    expect(bare.map((t) => t.text)).toEqual(['Cookie choices'])
+    expect(attr(bare[0], 'class')).toBe('lib-cookie-choices')
   })
 
   it('SH-13 the stepper shows the 6 stages with a chevron between each', () => {
@@ -392,6 +412,7 @@ describe('library shell primitives', () => {
       onGroup: (g: { id: string }) => calls.push(`group:${g.id}`),
       onFeature: (f: { id: string }) => calls.push(`feature:${f.id}`),
       onTour: () => calls.push('tour'),
+      onCookieChoices: () => calls.push('cookies'),
     }
     const bs = buttonsOf(Sidebar(props))
     const click = (b: El) => b.props.onClick!()
@@ -405,12 +426,14 @@ describe('library shell primitives', () => {
     const featBtns = bs.filter((b) => b.props.className === 'lib-nav' && !b.props.id).slice(1)
     expect(featBtns).toHaveLength(recognition.feats.length)
     for (const b of featBtns) click(b)
+    click(bs.find((b) => b.props.className === 'lib-cookie-choices')!)
     expect(calls).toEqual([
       'home',
       'tour',
       'home',
       ...GROUPS.map((g) => `group:${g.id}`),
       ...recognition.feats.map((f) => `feature:${f.id}`),
+      'cookies',
     ])
 
     const stageCalls: string[] = []

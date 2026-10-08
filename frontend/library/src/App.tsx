@@ -5,7 +5,8 @@ import { FeaturePage } from './components/FeaturePage'
 import { GroupPage } from './components/GroupPage'
 import { JourneyStepper } from './components/JourneyStepper'
 import { Sidebar } from './components/Sidebar'
-import { demoHref, featurePlatformHref, groupPlatformHref } from './links'
+import { chooseConsent, CookieNotice, readConsent } from './analytics'
+import { demoHref, featurePlatformHref, groupPlatformHref, privacyHref } from './links'
 import { libraryPath, parseLibraryPath, type Route } from './route'
 import type { Feature, Group } from './types'
 
@@ -18,6 +19,8 @@ export function App() {
   const [route, setRoute] = useState<Route>(() => parseLibraryPath(window.location.pathname))
   // Re-clicking the open feature remounts its page, so the demo restarts.
   const [visit, setVisit] = useState(0)
+  const [consent, setConsent] = useState(() => readConsent())
+  const [reopened, setReopened] = useState(false)
 
   useEffect(() => {
     const onPop = () => {
@@ -62,7 +65,15 @@ export function App() {
         overflow: 'hidden',
       }}
     >
-      <Sidebar route={route} demoHref={demo} onHome={goHome} onGroup={goGroup} onFeature={goFeature} onTour={onTour} />
+      <Sidebar
+        route={route}
+        demoHref={demo}
+        onHome={goHome}
+        onGroup={goGroup}
+        onFeature={goFeature}
+        onTour={onTour}
+        onCookieChoices={() => setReopened(true)}
+      />
       <main id="lib-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}>
         <JourneyStepper route={route} onGroup={goGroup} />
         {route.view === 'home' && <Home demoHref={demo} onGroup={goGroup} onTour={onTour} />}
@@ -83,7 +94,19 @@ export function App() {
             onFeature={goFeature}
           />
         )}
+        {(consent === null || reopened) && (
+          <CookieNotice
+            current={consent}
+            suppressed={false}
+            privacyHref={privacyHref()}
+            onChoose={(c) => {
+              setConsent(chooseConsent(c))
+              setReopened(false)
+            }}
+          />
+        )}
       </main>
+      <style>{__COOKIE_NOTICE_CSS__}</style>
     </div>
   )
 }

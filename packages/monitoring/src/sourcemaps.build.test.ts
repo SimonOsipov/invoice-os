@@ -146,4 +146,16 @@ describe('sourcemaps (real SPA builds)', () => {
       }
     }
   }, TIMEOUT)
+
+  it('bundle_theLibraryShipsNoHubSpotOrGatewayClient', () => {
+    const js = (name: string) => {
+      const b = built(name)
+      return b.dist.filter((f) => f.endsWith('.js')).map((f) => readFileSync(join(b.appDir, 'dist', f), 'utf8')).join('\n')
+    }
+    const lib = js('library')
+    expect(lib.length, 'library: no shipped JS').toBeGreaterThan(0)
+    expect(lib.includes('hsforms.com'), 'library bundle carries hsforms.com').toBe(false)
+    expect(lib.includes('/submissions/v3/integration/submit/'), 'library bundle carries the HubSpot submit path').toBe(false)
+    expect(js('landing').includes('hsforms.com'), 'control: the landing bundle carries hsforms.com').toBe(true)
+  }, TIMEOUT)
 })

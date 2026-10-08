@@ -1,3 +1,4 @@
+import { PRODUCTION_HOSTNAMES } from './analytics'
 import { APP_PATHS } from './appPaths.ts'
 import type { Feature, Group } from './types.ts'
 
@@ -25,4 +26,8 @@ export function groupPlatformHref(g: Group): string | null {
 export function demoHref(): string | null {
   const base = landingBase()
   return base === null ? null : `${base}/?demo`
+}
+
+export function privacyHref(): string {
+  return `${landingBase() ?? `https://${PRODUCTION_HOSTNAMES[0]}`}/privacy`
 }

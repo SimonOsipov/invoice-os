@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APP_PATHS } from './appPaths.ts'
 import { FEATURES, GROUPS } from './content.ts'
-import { demoHref, featurePlatformHref, groupPlatformHref, platformHref } from './links.ts'
+import { demoHref, featurePlatformHref, groupPlatformHref, platformHref, privacyHref } from './links.ts'
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -53,5 +53,16 @@ describe('links', () => {
     expect(demoHref()).toBe('https://www.example/?demo')
     vi.stubEnv('VITE_LANDING_URL', '')
     expect(demoHref()).toBeNull()
+  })
+})
+
+describe('privacyHref', () => {
+  it('LK-PH-01 privacyHref follows the landing URL', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://l.example/')
+    expect(privacyHref()).toBe('https://l.example/privacy')
+    vi.stubEnv('VITE_LANDING_URL', '')
+    expect(privacyHref()).toBe('https://www.ascomply.com/privacy')
+    vi.unstubAllEnvs()
+    expect(privacyHref()).toBe('https://www.ascomply.com/privacy')
   })
 })

@@ -29,3 +29,4 @@ a:hover { color: var(--teal); }
 .lib-card:hover { border-color: var(--primary) !important; }
 .lib-play:hover { filter: brightness(1.06); }
 .lib-back:hover { color: var(--teal) !important; }
+.lib-cookie-choices:hover { color: var(--action) !important; }

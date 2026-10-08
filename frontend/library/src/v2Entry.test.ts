@@ -127,7 +127,7 @@ describe('library entry', () => {
       [...html.matchAll(new RegExp(`<${tag}\\b([^>]*)>`, 'g'))].map((m) => m[1].match(/class="([^"]*)"/)?.[1] ?? '')
     const side = (path: string) =>
       renderToStaticMarkup(
-        createElement(Sidebar, { route: parseLibraryPath(path), demoHref: null, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop }),
+        createElement(Sidebar, { route: parseLibraryPath(path), demoHref: null, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop, onCookieChoices: noop }),
       )
     const buttons = (html: string) => classes(html, 'button')
     const homeHtml = side('/')

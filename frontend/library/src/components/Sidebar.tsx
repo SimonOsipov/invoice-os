@@ -13,6 +13,7 @@ type SidebarProps = {
   onGroup: (g: Group) => void
   onFeature: (f: Feature) => void
   onTour: () => void
+  onCookieChoices: () => void
 }
 
 const navButton = {
@@ -28,7 +29,7 @@ const navButton = {
   fontSize: '13.5px',
 } as const
 
-export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour }: SidebarProps) {
+export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour, onCookieChoices }: SidebarProps) {
   const home = route.view === 'home'
   return (
     <aside
@@ -214,13 +215,30 @@ export function Sidebar({ route, demoHref, onHome, onGroup, onFeature, onTour }:
           )
         })}
       </nav>
-      {demoHref !== null && (
-        <div style={{ flex: 'none', padding: '14px 16px 16px', borderTop: '1px solid var(--line-1)' }}>
+      <div style={{ flex: 'none', padding: '14px 16px 16px', borderTop: '1px solid var(--line-1)' }}>
+        {demoHref !== null && (
           <Button variant="outlineDark" size="sm" href={demoHref} style={{ width: '100%' }}>
             Book the Demo
           </Button>
-        </div>
-      )}
+        )}
+        <button
+          type="button"
+          className="lib-cookie-choices"
+          onClick={onCookieChoices}
+          style={{
+            display: 'block',
+            marginTop: demoHref !== null ? 12 : 0,
+            background: 'none',
+            border: 0,
+            padding: 0,
+            cursor: 'pointer',
+            fontSize: 13,
+            color: 'var(--fg-3)',
+          }}
+        >
+          Cookie choices
+        </button>
+      </div>
     </aside>
   )
 }

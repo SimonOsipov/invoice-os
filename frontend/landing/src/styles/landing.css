@@ -458,6 +458,7 @@ html:has(.cookie-note) {
     height: 44px;
   }
 }
+/* end: cookie consent notice */
 
 .btn-on-dark {
   color: var(--accent) !important;

@@ -44,4 +44,36 @@ describe('library package', () => {
     const transport = /\bfetch\s*\(|XMLHttpRequest|sendBeacon|WebSocket|EventSource|axios|@invoice-os\/api-client/
     for (const [i, s] of sources.entries()) expect(s, files[i]).not.toMatch(transport)
   })
+
+  const sources = () =>
+    readdirSync(HERE, { recursive: true, encoding: 'utf8' })
+      .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f) && !/\.d\.ts$/.test(f))
+      .map((f) => ({ f, src: stripComments(read(join(HERE, f))) }))
+  const landingImports = (src: string) => [...src.matchAll(/(?:from|import)\s+['"]([^'"]*landing\/[^'"]*)['"]/g)]
+
+  it('seam_onlyAnalyticsImportsLandingSource', () => {
+    expect(
+      sources()
+        .filter(({ src }) => landingImports(src).length > 0)
+        .map(({ f }) => f),
+    ).toEqual(['analytics.ts'])
+    const seam = sources().find(({ f }) => f === 'analytics.ts')!
+    expect(landingImports(seam.src).length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('seam_noSecondCopyOfTheConsentOrTagCode', () => {
+    const needle = /asc_consent|googletagmanager|dataLayer|\b_ga\b/
+    for (const { f, src } of sources().filter(({ f }) => f !== 'analytics.ts')) expect(src, f).not.toMatch(needle)
+    expect(stripComments(read(join(HERE, '../../landing/src/analytics.ts')))).toMatch(needle)
+  })
+
+  it('dockerfile_bakesTheGaMeasurementId', () => {
+    const d = read(join(HERE, '../Dockerfile'))
+    const stage = d.indexOf('AS build')
+    const arg = d.indexOf('ARG VITE_GA_MEASUREMENT_ID\nENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID')
+    const run = d.indexOf('RUN pnpm --filter @invoice-os/library build')
+    expect(stage).toBeGreaterThan(-1)
+    expect(arg).toBeGreaterThan(stage)
+    expect(run).toBeGreaterThan(arg)
+  })
 })

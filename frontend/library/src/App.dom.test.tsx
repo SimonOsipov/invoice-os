@@ -684,4 +684,39 @@ describe('App tour', () => {
     await move(() => window.history.back())
     expect(overlay()).toBeNull()
   })
+
+  it('tour_stepperLogoAndForwardEndTheTourToo', async () => {
+    allRects()
+    mount('/')
+    click(sidebarBtn())
+    click(btn('Next'))
+    const stages = [...container.querySelectorAll<HTMLElement>('button.lib-stage')]
+    expect(stages.length).toBeGreaterThan(0)
+    click(stages[2])
+    expect(overlay()).toBeNull()
+    expect(window.location.pathname).toBe('/rules')
+    click(sidebarBtn())
+    click(btn('Next'))
+    expect(step()).toBe('STEP 02 OF 14')
+    click(container.querySelector<HTMLElement>('aside button:not(.lib-tour)')!)
+    expect(overlay()).toBeNull()
+    expect(window.location.pathname).toBe('/')
+    await move(() => window.history.back())
+    click(sidebarBtn())
+    expect(step()).toBe('STEP 01 OF 14')
+    await move(() => window.history.forward())
+    expect(overlay()).toBeNull()
+  })
+
+  it('tour_everyCardStepSpotlightsItsOwnFeatureCard', () => {
+    allRects()
+    TOUR.forEach((t, n) => rects.set(`fc-${t.f}`, { left: 330, top: 200 + n * 10, width: 340, height: 300 }))
+    mount('/')
+    click(sidebarBtn())
+    for (let n = 0; n < TOUR.length; n++) {
+      click(btn('Next'))
+      expect(box(spotlight())[1]).toBe(192 + n * 10)
+      if (n < TOUR.length - 1) click(btn('Next'))
+    }
+  })
 })

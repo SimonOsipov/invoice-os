@@ -23,7 +23,7 @@ paths:
 - Use `Adeyemi Trading Limited` and `Honeywell Group` as party names. Neither is a live customer.
 - Emit no PDF `/Info` dictionary, file `/ID` or XMP packet from a generator.
 - Record the scrubber and the date in the generator comment. A second person confirms the reproduction identifies nobody.
-- Draw corpus TINs from `99999999-0101` upward. Never use `99999999-0001` to `99999999-0009`, which are mock adapter triggers.
+- Draw corpus TINs from `99999999-0101` upward. Never use `99999999-0001` to `99999999-0009`. The mock adapter triggers on `-0001` to `-0007`. It reserves `-0008` and `-0009` unallocated.
 - Keep `TestCorpus_UsesOnlyFreeReservedTINs` green. It reads every `corpusLayouts` file.
 - Keep `corpus_` files flat in `testdata/`. `TestFixtures_MatchTheirGenerator` counts top-level `.pdf` entries only.
 - Regenerate with `go test ./internal/extraction/ -run TestFixtures -update`.

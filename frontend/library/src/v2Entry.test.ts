@@ -152,15 +152,17 @@ describe('library entry', () => {
     expect(cards).toEqual(Array(11).fill('lib-card'))
   })
 
-  it('VE-07 main.tsx mounts App after the tokens, the layer and library.css', () => {
+  it('VE-07 main.tsx mounts App in the crash boundary after instrument, the tokens, the layer and library.css', () => {
     const src = stripComments(read(join(HERE, 'main.tsx'))).replace(/^\s*\/\/.*$/gm, '')
     const side = [...src.matchAll(/^import\s+'([^']+)'/gm)].map((m) => m[1])
     expect(side).toEqual([
+      './instrument',
       '@invoice-os/design-tokens/v2/styles.css',
       '@invoice-os/design-tokens/v2/app-layer.css',
       './styles/library.css',
     ])
-    expect(src).toMatch(/\.render\(\s*<StrictMode>\s*<App\s*\/>\s*<\/StrictMode>/)
+    expect(src).toMatch(/\.render\(\s*<StrictMode>\s*<CrashBoundary\b[^>]*>[\s\S]*?<\/CrashBoundary>\s*<\/StrictMode>/)
+    expect(src).toMatch(/<CrashBoundary\b[\s\S]*?>\s*<App\s*\/>\s*<\/CrashBoundary>/)
   })
 
   it('VE-08 library.css holds the scene keyframes', () => {

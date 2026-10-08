@@ -32,7 +32,7 @@ first compute consumer. If M2-12 has to deviate, update this doc in the same PR.
 
 A backend service is usually one Go binary under `cmd/<svc>/`, and this recipe is written
 for that case. Two other shapes exist and follow different rules — the static SPAs
-(`frontend/<app>/Dockerfile`, four of them) and, since EXTR-03, the Python sidecar
+(`frontend/<app>/Dockerfile`, five of them) and, since EXTR-03, the Python sidecar
 (`sidecar/<svc>/Dockerfile`). See the appendix table at the end of this document before
 assuming a new service is a Go binary.
 
@@ -201,7 +201,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/invoice_os?sslmode=disa
   don't list them in `.env.example`.
 - **Secrets live only in Railway service variables.** Never in the repo, never in
   `railway.json`, never as a real value in `.env.example`.
-- **Public exposure:** only the four SPAs and the gateway get a public domain
+- **Public exposure:** only the five SPAs and the gateway get a public domain
   (runbook step 6). Context services, opsconsole, and Postgres are private-network
   only. Private networking is the first control; the gateway token is the second: a
   context service that did get a public domain still refuses any request without
@@ -256,7 +256,8 @@ re-verified live on 2026-07-05; every mutation name exists in the current schema
 `$PROJECT` / `$ENV` are the IDs from the top of this doc; `$SVC` is the service ID
 returned by step 1.
 
-1. **Create the service** attached to the repo:
+1. **Create the service** attached to the repo (for a service CI deploys with `railway up`, create it
+   sourceless instead: `serviceCreate` with only `projectId` and `name`; it gets no trigger):
    ```graphql
    mutation { serviceCreate(input: {
      projectId: "$PROJECT", name: "<svc>",
@@ -359,14 +360,22 @@ same runbook, different config block. Differences:
 | Dockerfile | shared root `Dockerfile` + `SERVICE` arg | per-app `frontend/<app>/Dockerfile` (pnpm build → Caddy) |
 | Health | `/healthz` (in the binary) | `/health` (shared root `Caddyfile`) |
 | Watch patterns | empty (§3) | empty (§3) — same invariant, no per-service-type difference |
-| Public domain | gateway only | yes (all four) |
+| Public domain | gateway only | yes (all five) |
 
-Live services: `landing`, `app`, `ops-console`, `support-console` — see
+Live services: `landing`, `app`, `ops-console`, `support-console`, `library` — see
 `frontend/*/railway.json` and the root `Caddyfile` for the exact serving setup.
 
 `support-console` (added 2026-07-27) is the most recent walk-through of this recipe, and
 confirmed step 1's warning is still live: `serviceCreate` **did** attach a `main` deployment
 trigger, which had to be `deploymentTriggerDelete`d before the invariants workflow would pass.
+
+`library` (added 2026-10-08) is the most recent walk-through. It was created sourceless
+(`serviceCreate` with only `projectId` and `name`), because CI deploys it with `railway up`: a
+sourceless service gets no deployment trigger, so there was nothing to delete and a variable
+edit cannot rebuild it from `main`. `railwayConfigFile` is rejected for a new service, so
+`dockerfilePath=frontend/library/Dockerfile`, `healthcheckPath=/health` and `watchPatterns: []`
+are set on the instance, with `PORT=8080`. The region stays at the project default, like `auth`. Its custom domain is
+`library.ascomply.com` on port 8080. See [identity-provider.md](./identity-provider.md) U1 for `auth`, the same shape.
 
 A new SPA's Sentry requirements are listed in §4 ("Sentry variables are production-only").
 

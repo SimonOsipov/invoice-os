@@ -58,14 +58,14 @@ deploy-slot ──> wait until fewer than 2 other PR runs hold a Railway deploy 
                 push or dispatch run passes at once)
 prepare-env ──> create-or-reuse this PR's `pr-<N>` fork of `development` (on
                 workflow_dispatch: target `development` itself) ──> assert Watch Paths
-                empty (M3-16 invariant) ──> discover the 5 public URLs fresh
+                empty (M3-16 invariant) ──> discover the 6 public URLs fresh
 gateway     ──> gate on /healthz (schema migrated at boot; a PR fork's DB is also
                 seeded, including the shard tenants of the topology units
                 (`db/seed.e2e-shards.sql`), and its demo-tenant purge is NON-fatal, so the gate asserts
                 /healthz's `demo_purge` field separately: `true` on a PR fork, `false`
                 on `development` — DEMO-04)
-            ──> deploy 8 context services + docling + auth + 4 SPAs (all four are
-                gateway-wired: prepare-env's `fork-vars-after-urls` writes VITE_GATEWAY_URL on
+            ──> deploy 8 context services + docling + auth + 5 SPAs (all but `library`
+                are gateway-wired: prepare-env's `fork-vars-after-urls` writes VITE_GATEWAY_URL on
                 each per run)
             ──> verify: `e2e` job: smoke (landing + consoles) + api (typed contract suite)
             ──> `topology` job, one parallel leg per unit (browser login, isolation)
@@ -262,7 +262,7 @@ of a PR environment.
 The topology suite (and the smoke suite alongside it) only runs once `fleet-gate` and
 `deploy-spas` are both green — so it depends on every service in the fleet actually coming
 up on `dev-env.yml`'s `railway up` step, including services a given PR doesn't touch. Every
-environment is now a **fresh, cold, from-scratch 15-service build** (a new PR fork,
+environment is now a **fresh, cold, from-scratch 16-service build** (a new PR fork,
 or a `workflow_dispatch` run against `development`), so this is the norm on every run, not
 an edge case: each Railway service has a service-level **Watch Paths** filter that makes
 `railway up` skip (no deployment created) when the diff misses the service's watched
@@ -284,7 +284,7 @@ experiments falsified scale-to-0 and diff-driven alternatives).
 
 The gateway `health-gate` window was widened again under M4-21 (360s → 900s) — and
 `fleet-gate` / the SPA `/health` wait in `scripts/ci/wait-spa-builds.sh` (200s → 600s) — since every environment is now a
-cold 15-service build, not the exception a warm redeploy used to be (Decision
+cold 16-service build, not the exception a warm redeploy used to be (Decision
 `[gate-windows-provisional]`).
 
 ## Related

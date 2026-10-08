@@ -2,7 +2,7 @@
 
 **Audience:** whoever operates GA4 property `G-E409H76XYY`, and whoever edits
 `frontend/landing/src/analytics.ts`. The event table below mirrors the senders in that file;
-change both in the same PR. Nothing here applies to the three SPAs — GA4 ships on the **public
+change both in the same PR. Nothing here applies to the four SPAs — GA4 ships on the **public
 landing page only**.
 
 ## What ships
@@ -107,6 +107,7 @@ Seven items. None of them is dischargeable by CI, and the first is load-bearing.
      OPS_CONSOLE_URL=https://ops.example \
      APP_URL=https://app.example \
      SUPPORT_CONSOLE_URL=https://support.example \
+     LIBRARY_URL=https://library.example \
      npx playwright test -g "reading the whole page requests gtag.js only on the live host"
    ```
 
@@ -138,13 +139,14 @@ cd e2e && LANDING_URL=https://www.ascomply.com \
   OPS_CONSOLE_URL=https://ops.example \
   APP_URL=https://app.example \
   SUPPORT_CONSOLE_URL=https://support.example \
+  LIBRARY_URL=https://library.example \
   npx playwright test -g "the analytics-host classifier accepts GA hosts and nothing else"
 ```
 
-All four variables are required, not just `LANDING_URL`: Playwright imports every `*.spec.ts` in
+All five variables are required, not just `LANDING_URL`: Playwright imports every `*.spec.ts` in
 `testDir` before applying `-g`, and `smoke/apps.ts:41,52` resolves `OPS_CONSOLE_URL`,
-`SUPPORT_CONSOLE_URL` and `APP_URL` at module scope. With only `LANDING_URL` set, the run throws
-`OPS_CONSOLE_URL is not set` before collecting a single test. The three placeholder hosts are
+`SUPPORT_CONSOLE_URL`, `LIBRARY_URL` and `APP_URL` at module scope. With only `LANDING_URL` set, the run throws
+`OPS_CONSOLE_URL is not set` before collecting a single test. The four placeholder hosts are
 never contacted; only `LANDING_URL` is parsed, and only for its hostname.
 
 Verified 2026-08-16 against three mutations of `isGoogleAnalyticsHost`, restoring the source after

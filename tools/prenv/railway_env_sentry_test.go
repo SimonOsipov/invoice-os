@@ -24,7 +24,7 @@ const (
 
 var (
 	sentryBackends = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications", "reconciliation", "docling"}
-	sentrySPAs     = []string{"landing", "app", "ops-console", "support-console"}
+	sentrySPAs     = []string{"landing", "app", "ops-console", "support-console", "library"}
 	sentrySPANames = []string{"VITE_SENTRY_DSN", "SENTRY_AUTH_TOKEN"}
 
 	// SENTRY_DSN not as the tail of VITE_SENTRY_DSN.
@@ -224,7 +224,7 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 			refusesAsSet(t, out, "landing.SENTRY_AUTH_TOKEN")
 			ids, _ := reReads(s.calls(t))
 			// Every verdict runs on the one re-read: the services before landing and the SPAs after it.
-			for _, svc := range slices.Concat(sentryBackends, []string{"app", "ops-console", "support-console"}) {
+			for _, svc := range slices.Concat(sentryBackends, []string{"app", "ops-console", "support-console", "library"}) {
 				if !slices.Contains(ids, sentrySvcID(svc)) {
 					t.Errorf("%s was never re-read; re-reads = %v", svc, ids)
 				}
@@ -250,6 +250,12 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 		{name: "write_transport_failure", files: map[string]string{"upsert-SENTRY_DSN.fail": "curl: (22) The requested URL returned error: 400"}, code: 1, check: noReRead},
 		{name: "vite_dsn_survives_on_support_console", bend: map[string]string{"support-console": `.VITE_SENTRY_DSN = "` + sentryDSNSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) {
 			refusesAsSet(t, out, "support-console.VITE_SENTRY_DSN")
+			if sentryConfirmed(out) {
+				t.Errorf("a refused re-read printed the confirmation line; output = %q", out)
+			}
+		}},
+		{name: "vite_dsn_survives_on_library", bend: map[string]string{"library": `.VITE_SENTRY_DSN = "` + sentryDSNSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) {
+			refusesAsSet(t, out, "library.VITE_SENTRY_DSN")
 			if sentryConfirmed(out) {
 				t.Errorf("a refused re-read printed the confirmation line; output = %q", out)
 			}
@@ -378,7 +384,7 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 	}
 	slices.Sort(reread)
 	slices.Sort(all)
-	if len(all) != 14 || !slices.Equal(reread, all) {
+	if len(all) != 15 || !slices.Equal(reread, all) {
 		t.Errorf("re-reads = %v, want one per service %v", reread, all)
 	}
 

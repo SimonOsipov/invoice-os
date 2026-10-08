@@ -1057,7 +1057,7 @@ var afterConfirmations = []string{
 	"gateway ENVIRONMENT=development confirmed",
 }
 
-// afterFleet is the 15 services fork-vars-after-urls reads: auth and the 14 Sentry services.
+// afterFleet is the 16 services fork-vars-after-urls reads: auth and the 15 Sentry services.
 func afterFleet() []string { return slices.Concat([]string{"auth"}, sentryBackends, sentrySPAs) }
 
 func afterIDs() []string {
@@ -1099,6 +1099,9 @@ func afterIntended() map[string]map[string]string {
 		stores[sentrySvcID(n)]["SENTRY_DSN"] = ""
 	}
 	for _, n := range sentrySPAs {
+		if stores[sentrySvcID(n)] == nil {
+			stores[sentrySvcID(n)] = map[string]string{}
+		}
 		stores[sentrySvcID(n)]["VITE_SENTRY_DSN"], stores[sentrySvcID(n)]["SENTRY_AUTH_TOKEN"] = "", ""
 	}
 	return stores
@@ -1166,8 +1169,8 @@ func TestForkVarsAfterURLs_FreshForkMakesFiveCalls(t *testing.T) {
 
 func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {
 	intended := afterIntended()
-	if len(intended) != 15 {
-		t.Fatalf("control: the settled fork has %d services, want 15", len(intended))
+	if len(intended) != 16 {
+		t.Fatalf("control: the settled fork has %d services, want 16", len(intended))
 	}
 	s := newAfterShim(t, intended)
 	out, code := runAfter(t, s)
@@ -1178,8 +1181,8 @@ func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {
 		t.Errorf("Railway calls = %v, want %v: nothing differs, so no write and no re-read", got, want)
 	}
 	held := heldLines(out)
-	if len(held) != 15 {
-		t.Errorf("%d held lines, want 15 (one per service); held = %v", len(held), held)
+	if len(held) != 16 {
+		t.Errorf("%d held lines, want 16 (one per service); held = %v", len(held), held)
 	}
 	for _, n := range afterFleet() {
 		want := strconv.Itoa(len(intended[sentrySvcID(n)]))
@@ -1194,7 +1197,7 @@ func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {
 	}
 }
 
-func TestForkVarsAfterURLs_ReadCoversTheFifteenServicesOnce(t *testing.T) {
+func TestForkVarsAfterURLs_ReadCoversEveryServiceOnce(t *testing.T) {
 	s := newAfterShim(t, afterProdStores())
 	if out, code := runAfter(t, s); code != 0 {
 		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
@@ -1204,12 +1207,12 @@ func TestForkVarsAfterURLs_ReadCoversTheFifteenServicesOnce(t *testing.T) {
 		t.Fatalf("%d varsRead calls, want 2: the read and the re-read", len(reads))
 	}
 	want := afterIDs()
-	if len(want) != 15 {
-		t.Fatalf("control: the expected service set has %d ids, want 15", len(want))
+	if len(want) != 16 {
+		t.Fatalf("control: the expected service set has %d ids, want 16", len(want))
 	}
 	for i, c := range reads {
 		got := readServices(c)
-		if len(got) != 15 || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+		if len(got) != 16 || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
 			t.Errorf("varsRead %d asks for %v, want each of %v exactly once (gateway once)", i+1, got, want)
 		}
 		if !regexp.MustCompile(`unrendered:\s*true`).MatchString(c.Query) {
@@ -1559,7 +1562,7 @@ func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
 			row{sp, "VITE_SENTRY_DSN", afterBadVal, sentryLine, "is SET"},
 			row{sp, "SENTRY_AUTH_TOKEN", afterBadVal, sentryLine, "is SET"})
 	}
-	if len(rows) != 16+6+10+8 {
+	if len(rows) != 16+6+10+10 {
 		t.Fatalf("control: %d rows, want one per verdict", len(rows))
 	}
 	for _, r := range rows {
@@ -1655,8 +1658,8 @@ func TestForkVarsAfterURLs_FatalRateLimitNamesItsWait(t *testing.T) {
 		}
 		requireWaitNamed(t, out, `429`, `\b601\b`, `\b600\b`)
 		ws := passWrites(t, s)
-		if len(ws) < 15 {
-			t.Fatalf("control: the write carries %d service(s), want 15", len(ws))
+		if len(ws) < 16 {
+			t.Fatalf("control: the write carries %d service(s), want 16", len(ws))
 		}
 		line := requireNamedIn(t, errorLines(out), "The batched variable write", "failed for")
 		for _, w := range ws {

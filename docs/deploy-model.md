@@ -1,7 +1,7 @@
 # Dev Deploy Model — per-PR ephemeral environments (M2-14, reworked M4-21, M4-23)
 
-How the full fleet — the gateway, the 8 context services, the `docling` and `auth` sidecars, and the four frontend SPAs
-(`landing`, `app`, `ops-console`, `support-console`) — is deployed to Railway. Adopted in M2-14 (one unified
+How the full fleet — the gateway, the 8 context services, the `docling` and `auth` sidecars, and the five frontend SPAs
+(`landing`, `app`, `ops-console`, `support-console`, `library`) — is deployed to Railway. Adopted in M2-14 (one unified
 fleet deploy, superseding the M1-08 split model); reworked in M4-21 to end the shared-
 `development` model, and completed in **M4-23**, which is when per-PR environments started
 actually existing: CI now creates, tears down and sweeps them itself.
@@ -81,10 +81,10 @@ dispatch. The api suite is not read-only, so running it against the persistent e
 mutate live data. No coverage is lost by merging: that suite already ran against the PR's own
 environment, on the same commit, as the gate for merging it.
 
-Each PR's ephemeral environment and its four public URLs (gateway, app, landing,
-ops-console) are **discovered fresh at deploy time** — a Railway-generated domain's suffix
+Each PR's ephemeral environment and its six public URLs (gateway, app, landing,
+ops-console, support-console, library) are **discovered fresh at deploy time** — a Railway-generated domain's suffix
 is opaque/random and cannot be constructed (F7) — never hardcoded, and never assumed stable
-across PRs the way `development`'s own four URLs (still constant, still hardcoded as
+across PRs the way `development`'s own six URLs (still constant, still hardcoded as
 `RAILWAY_SVC_*_ID` **service ids**, never as domain strings) are.
 
 ```
@@ -98,7 +98,7 @@ PR opened ──> dev-env.yml:
                              Postgres (a kept BUCKET must differ from production's) ──>
                              deploy Postgres + probe ──> assert Watch Paths empty
                              (M3-16 invariant, now runtime-asserted) ──> discover the
-                             5 URLs in one request (discover-urls) ──> pass 2: URLs, auth
+                             6 URLs in one request (discover-urls) ──> pass 2: URLs, auth
                              site, AI/Jev fakes, Sentry blanks, reconciliation URL and
                              ENVIRONMENT (fork-vars-after-urls)
                 ci-watch: polls the `CI` check alongside prepare-env; e2e waits for green CI
@@ -107,7 +107,7 @@ PR opened ──> dev-env.yml:
                 NON-fatal, so /healthz carries a `demo_purge` field the gate
                 asserts == "true" separately — DEMO-04; mock_issuer == "on";
                 auth_issuers == "2": the mock plus the fork's own GoTrue)
-                ──> 8 context services + docling + auth + 4 SPAs (all four are gateway-wired)
+                ──> 8 context services + docling + auth + 5 SPAs (all but `library` are gateway-wired)
                 ──> `fleet-gate` job: fleet /healthz/fleet gate + its Sentry
                     state check: every Go service and docling report sentry "off"
                     + notifications reports `contacts: fake`
@@ -135,7 +135,7 @@ merge to main ──> dev-env.yml (push): await green CI on the merge commit
                   ──> gateway ──> /healthz gate (demo_purge == "false", mock_issuer ==
                       "absent", auth_issuers == "1", then GET /.well-known/jwks.json and
                       POST /auth/login must answer 404) ──> 8 context + docling + auth +
-                      4 SPAs ──> fleet gate + Sentry state check (every Go service and
+                      5 SPAs ──> fleet gate + Sentry state check (every Go service and
                       docling reports sentry "on" or "off", never absent; notifications
                       reports `contacts` "real" or "off", never "fake")
                   ──> `deploy-slot-release` job (backstop; the slot frees when the chain ends)
@@ -280,8 +280,8 @@ environment, and `railway-invariants.yml` re-asserts that on every PR — any tr
 reappearing fails the build. The procedure below is retained for the case where a service
 is recreated and arrives with a trigger attached.
 
-For each of the 15 services (gateway, the 8 context services, the `docling` sidecar, `auth`, and
-`landing`, `app`, `ops-console`, `support-console`) **on the `development` environment**:
+For each of the 16 services (gateway, the 8 context services, the `docling` sidecar, `auth`, and
+`landing`, `app`, `ops-console`, `support-console`, `library`) **on the `development` environment**:
 
 1. Railway dashboard → the service → **Settings**.
 2. Under the GitHub trigger, click **Disable** ("stop deploying automatically on
@@ -319,7 +319,7 @@ setting (a monorepo build filter, configured in the dashboard) that suppresses
 watched paths — printing `no changes detected in watch paths, build will
 skip` and creating no deployment. Since every environment (a fresh PR fork, or a
 `workflow_dispatch` run against `development`) is now potentially a cold, from-scratch
-15-service build, a service whose Watch Paths aren't empty would silently skip and never
+16-service build, a service whose Watch Paths aren't empty would silently skip and never
 come up — and since `dev-env.yml` gates on the gateway's `/healthz` before deploying the
 rest of the fleet, one such skip fails the whole run. This is distinct from
 `railway.json`'s `build.watchPatterns` field, which Railway silently **ignores** — it never
@@ -424,7 +424,7 @@ contradict what the docs imply.
 | Service instances | Yes — all of them, immediately, `watchPatterns: []` on every one | No settle race. The M3-16 invariant holds in a fork. Each variable pass reads the service list once and requires `gateway` and `auth` from that read. |
 | Public domains | Railway-**generated** ones only, auto-renamed `<svc>-pr-<N>.up.railway.app`; a custom domain never forks | Once the source environment holds only custom domains, a fork starts with none, so domain reconcile **creates** one per service: a query, a `serviceDomainCreate`, and a confirming re-query. Not a no-op. |
 | `targetPort` on those domains | Only the **gateway's** generated domain is `null`; the four SPA generated domains and all five custom domains report `8080` (re-measured 2026-08-02, all five services) | CI **reads** it off whichever domain it selected in the source environment — never a literal, so the gateway now gets a real `8080` from its custom domain. A `null` is still valid (Railway magic-port detection) and is replicated by **omitting** the field, not by substituting a port. |
-| Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 8 contexts + docling + auth + 4 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
+| Postgres deployment | **No** — `latestDeployment == NONE` | Real gap: nothing in this repo ever deployed Postgres (the `railway up` matrices are gateway + 8 contexts + docling + auth + 5 SPAs; Postgres is excluded above). `prepare-env` now deploys it explicitly via `serviceInstanceDeployV2`, then waits. |
 | Postgres volume | **No** — `volumeInstances == []`, while `development` has 5000MB | **CI must CREATE it.** Without a volume Postgres deploys to `SUCCESS` but **never accepts a connection** (corrected 2026-07-19 — see below). `prepare-env` creates it with `volumeCreate`, copying the `mountPath` and `region` from `development`, confirms by re-query, and redeploys Postgres if a deployment already existed. The database is still **ephemeral by design** and born empty — the gateway bootstraps, migrates, purges the demo tenants and seeds at boot. |
 | TCP proxy + `DATABASE_PUBLIC_URL` | Yes, with its own distinct port; `DATABASE_URL` resolves too | Since M4-22-08, `prepare-env` no longer probes or observes the proxy at all. `health-gate`'s `/healthz` 200 is now the sole Postgres liveness proof (`docs/migrations.md` §2) — strictly stronger. The proxy resource itself is scheduled for deletion via Escalation E2; until then it may still exist, unused. |
 | Sealed variables | **No** — they never fork | `prepare-env` fails loudly if `development` holds any, since they would otherwise go silently missing in every PR environment. Only exceptions: `GOTRUE_JWT_KEYS`, `GOTRUE_JWT_SECRET` and `GOTRUE_SMTP_PASS` on `auth`, which `fork-vars-before-urls` writes per fork, and `RESEND_SENDING_KEY` on `tenancy`, which a fork lacks and runs without. |
@@ -511,7 +511,7 @@ batched calls: `tools/prenv/railway_env_pass_test.go`).
 `ENVIRONMENT`) each run one env-list read, one service-list read, one batched read of the
 unrendered values; when any name differs, one batched write of only those names (`skipDeploys`)
 and one batched re-read, otherwise neither; every verdict reads the last read. A failed alias names its service and variable names,
-never a value or Railway's message. `discover-urls` reads the 5 domains in one request and
+never a value or Railway's message. `discover-urls` reads the 6 domains in one request and
 `assert-db-dsns` reads an environment's variables in one request, after one service-list read
 (`tools/prenv/railway_env_pass_test.go`, `TestForkVarsAfterURLs_SettledForkMakesThreeCalls`;
 `tools/prenv/railway_env_dsn_test.go`, `TestAssertDBDSNs_ReadsAnEnvironmentInTwoCalls`). The per-variable subcommands (`set-fork-auth`,
@@ -542,7 +542,7 @@ exits 0. A later check decides that service. A build that Railway reported as fa
 | `gateway` | `health-gate` |
 | 8 context services, `docling` | `fleet-gate` |
 | `auth` | `fleet-gate`'s "Wait for the auth deployment" step (`wait-deployment`) |
-| `landing`, `app`, `ops-console`, `support-console` | `e2e` on a PR; `spa-build-gate` on push and dispatch |
+| `landing`, `app`, `ops-console`, `support-console`, `library` | `e2e` on a PR; `spa-build-gate` on push and dispatch |
 
 A service outside the table has no later check, so a lost poll fails the step.
 
@@ -565,7 +565,7 @@ after a push deploy. See [identity-provider.md](./identity-provider.md) "Brandin
 mails in production".
 
 **`spa-build-gate`.** On push and dispatch `e2e` does not run, so this job runs
-`scripts/ci/wait-spa-builds.sh` against the four SPA URLs. Each must serve `/health` and a
+`scripts/ci/wait-spa-builds.sh` against the five SPA URLs. Each must serve `/health` and a
 `/build.txt` that names the commit under test. It only sends GET requests and repairs no
 domain; domain repair stays in `e2e`. On a PR the same script runs inside `e2e`.
 

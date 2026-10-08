@@ -3,7 +3,7 @@ import { browserTracingIntegration, getClient, startBrowserTracingNavigationSpan
 import type { BrowserOptions } from '@sentry/react'
 import { dropEvent, keepBreadcrumb, scrubApiError, scrubEvent, scrubSpan, scrubTransaction } from './scrub'
 
-export type Service = 'app' | 'ops-console' | 'support-console' | 'landing'
+export type Service = 'app' | 'ops-console' | 'support-console' | 'landing' | 'library'
 
 export interface MonitoringConfig {
   service: Service

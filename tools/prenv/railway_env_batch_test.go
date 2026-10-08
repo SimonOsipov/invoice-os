@@ -35,7 +35,7 @@ const (
 var (
 	forkAuthSecrets    = map[string][]string{"auth": {"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET"}, "gateway": {"AUTH_ADMIN_PASSWORD"}}
 	sentrySecretNames  = []string{"SENTRY_DSN", "VITE_SENTRY_DSN", "SENTRY_AUTH_TOKEN"}
-	batchSvcIDExports  = map[string]string{"RAILWAY_SVC_GATEWAY_ID": "gateway", "RAILWAY_SVC_APP_ID": "app", "RAILWAY_SVC_LANDING_ID": "landing", "RAILWAY_SVC_OPS_CONSOLE_ID": "ops-console", "RAILWAY_SVC_SUPPORT_CONSOLE_ID": "support-console", "RAILWAY_SVC_POSTGRES_ID": "Postgres"}
+	batchSvcIDExports  = map[string]string{"RAILWAY_SVC_GATEWAY_ID": "gateway", "RAILWAY_SVC_APP_ID": "app", "RAILWAY_SVC_LANDING_ID": "landing", "RAILWAY_SVC_OPS_CONSOLE_ID": "ops-console", "RAILWAY_SVC_SUPPORT_CONSOLE_ID": "support-console", "RAILWAY_SVC_LIBRARY_ID": "library", "RAILWAY_SVC_POSTGRES_ID": "Postgres"}
 	reconcileURLLabels = []string{"gateway", "app", "landing", "ops-console", "support-console"}
 )
 
@@ -293,7 +293,7 @@ func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
 	}
 	slices.Sort(read)
 	slices.Sort(all)
-	if len(all) != 14 || !slices.Equal(read, all) {
+	if len(all) != 15 || !slices.Equal(read, all) {
 		t.Errorf("variable reads = %v, want exactly one per service %v", read, all)
 	}
 	if e := upsertEcho.FindAllString(out, -1); len(e) != 0 {
@@ -326,7 +326,7 @@ func TestReconcileURLs_SteadyStateMakesThreeCalls(t *testing.T) {
 	}
 	calls := s.calls(t)
 	if want := []string{"envList", "settle", "varsRead"}; !slices.Equal(operations(calls), want) {
-		t.Errorf("Railway calls = %v, want %v: one read of the five services", operations(calls), want)
+		t.Errorf("Railway calls = %v, want %v: one read of the services", operations(calls), want)
 	}
 	var read, want []string
 	for _, c := range calls {
@@ -459,8 +459,8 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 		t.Fatalf("exit %d, want 0; output = %q", code, out)
 	}
 	ws := collectionWrites(t, s)
-	if len(ws) != 14 {
-		t.Errorf("%d write input(s) %v, want 14: one per Sentry service", len(ws), writeNames(ws))
+	if len(ws) != 15 {
+		t.Errorf("%d write input(s) %v, want 15: one per Sentry service", len(ws), writeNames(ws))
 	}
 	if n := opCount(t, s, "varsWrite"); n != 1 {
 		t.Errorf("%d varsWrite call(s), want 1: every Sentry service in one request", n)

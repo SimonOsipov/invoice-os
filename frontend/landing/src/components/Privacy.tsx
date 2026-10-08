@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { CONSENT_TEXT } from './demoForm'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
-import { PRODUCTION_HOSTNAMES } from '../hubspot'
+import { LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES } from '../hubspot'
 
 export const GA_RETENTION_MONTHS = 14
 export const PROSE_MAX_WIDTH = 720
@@ -54,14 +54,14 @@ export function Privacy() {
 
           <h2 style={H2}>Google Analytics</h2>
           <p style={P}>
-            We use Google Analytics 4 to measure how people use this marketing site — which pages get read, what
+            We use Google Analytics 4 to measure how people use this marketing site and our Feature Library — which pages get read, what
             visitors do next, and where the site is confusing. It runs only if you have allowed analytics.
           </p>
           <p style={P}>
-            It runs on this public site only. There is no analytics code anywhere inside the signed-in ASComply product.
+            It runs on this public site and on our public Feature Library only. There is no analytics code anywhere inside the signed-in ASComply product.
           </p>
           <p style={P}>
-            It is active on {PRODUCTION_HOSTNAMES[0]} and nowhere else. Our preview and test builds run the same code,
+            It is active on {PRODUCTION_HOSTNAMES[0]} and on our Feature Library at {LIBRARY_HOSTNAMES[0]}, and nowhere else. Our preview and test builds run the same code,
             but that code only measures on the live address, so those builds send Google nothing.
           </p>
 
@@ -79,8 +79,8 @@ export function Privacy() {
           <h2 style={H2}>What Google never receives</h2>
           <p style={P}>
             We never send Google your name, your email address, your company, or any answer you typed or chose in the
-            demo form. The only details we attach ourselves are which button you used, which form it was, and how far
-            down you scrolled — the rest of the list above is collected by Google's own code.
+            demo form. The only details we attach ourselves are which button you used, which form it was, how far
+            down you scrolled, and on the Library which feature or group you opened — the rest of the list above is collected by Google's own code.
           </p>
 
           <h2 style={H2}>Cookies on your device</h2>
@@ -123,6 +123,24 @@ export function Privacy() {
             We have Google Signals turned off, so none of this is joined to Google advertising profiles or used to
             follow you between your devices. We run no advertising network on this site, and nothing here sets an
             advertising cookie.
+          </p>
+
+          <h2 style={H2}>The Feature Library</h2>
+          <p style={P}>
+            Our Feature Library at {LIBRARY_HOSTNAMES[0]} follows this policy too. It asks for your analytics choice
+            itself: your browser keeps the answer for each address apart, so an answer given on one does not carry to
+            the other. Cookie choices, at the foot of the Library's sidebar, brings its notice back.
+          </p>
+          <p style={P}>
+            If you allow analytics there, Google Analytics measures the Library in the same way and under the same
+            property. Google also receives each Library page you view, when you choose Book the Demo, when you start
+            the tour, and when you choose Open in Platform, with the feature or group it was for. On the Library,
+            Google's _ga cookies are set for {LIBRARY_HOSTNAMES[0]} only, and choosing Reject there deletes them.
+          </p>
+          <p style={P}>
+            The Library has no forms, so it sends HubSpot nothing. It is typeset in the same Google fonts. When a
+            Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry
+            how long its pages take to load.
           </p>
 
           <h2 style={H2}>Google Fonts</h2>

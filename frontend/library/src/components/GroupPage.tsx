@@ -1,9 +1,11 @@
 import { GROUPS } from '../content'
 import type { Feature, Group } from '../types'
 import { Icon } from '../icons'
+import { thumbStep } from '../scene'
 import { formatSeconds, STEP_SECONDS } from '../timing'
 import { Button } from './Button'
 import { ComingSoonPill } from './ComingSoonPill'
+import { SceneView } from './SceneView'
 
 type GroupPageProps = { group: Group; openHref: string | null; onFeature: (f: Feature) => void }
 
@@ -94,7 +96,6 @@ export function GroupPage({ group, openHref, onFeature }: GroupPageProps) {
                     {f.sc.win}
                   </span>
                 </div>
-                {/* LIB-03 renders the scene here. */}
                 <div
                   style={{
                     flex: '1 1 0',
@@ -105,7 +106,9 @@ export function GroupPage({ group, openHref, onFeature }: GroupPageProps) {
                     flexDirection: 'column',
                     justifyContent: 'center',
                   }}
-                />
+                >
+                  <SceneView sc={f.sc} idx={thumbStep(f)} size="thumb" />
+                </div>
               </div>
               <span
                 style={{

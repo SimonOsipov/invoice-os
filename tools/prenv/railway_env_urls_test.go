@@ -5,6 +5,8 @@ package main
 import (
 	"encoding/json"
 	"maps"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -864,4 +866,61 @@ func jobEnv(j workflowJob) map[string]string {
 		}
 	}
 	return out
+}
+
+// The topology job takes the library URL and the baked-URL oracles, and its guard step refuses each empty.
+func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
+	var job *workflowJob
+	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
+		if j.name == "topology" {
+			job = &j
+		}
+	}
+	if job == nil {
+		t.Fatal("control: no topology job in dev-env.yml")
+	}
+	env := jobEnv(*job)
+	for k, want := range map[string]string{
+		"LIBRARY_URL":       "${{ needs.e2e.outputs.library_url }}",
+		"BAKED_APP_URL":     "${{ needs.prepare-env.outputs.app_url }}",
+		"BAKED_LANDING_URL": "${{ needs.prepare-env.outputs.landing_url }}",
+		"BAKED_LIBRARY_URL": "${{ needs.prepare-env.outputs.library_url }}",
+		"APP_URL":           "${{ needs.e2e.outputs.app_url }}", // control
+	} {
+		if env[k] != want {
+			t.Errorf("topology env %s = %q, want %q", k, env[k], want)
+		}
+	}
+	var run string
+	for _, s := range job.steps() {
+		if s.keys["id"] == "targets" {
+			run = s.keys["run"]
+		}
+	}
+	if run == "" {
+		t.Fatal("control: topology has no step with id targets")
+	}
+	vars := []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BAKED_APP_URL", "BAKED_LANDING_URL", "BAKED_LIBRARY_URL"}
+	guard := func(empty string) (string, error) {
+		cmd := exec.Command("bash", "-c", run)
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+		for _, v := range vars {
+			if v != empty {
+				cmd.Env = append(cmd.Env, v+"=https://x.example")
+			} else {
+				cmd.Env = append(cmd.Env, v+"=")
+			}
+		}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := guard(""); err != nil {
+		t.Errorf("all nine set: guard failed: %v %q", err, out)
+	}
+	for _, v := range vars {
+		out, err := guard(v)
+		if err == nil || !strings.Contains(out, "::error::"+v+" is empty") {
+			t.Errorf("empty %s: err=%v output=%q, want a refusal naming it", v, err, out)
+		}
+	}
 }

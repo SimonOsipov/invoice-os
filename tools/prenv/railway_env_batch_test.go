@@ -865,22 +865,30 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 			t.Errorf("a failed re-read printed the confirmation line; output = %q", out)
 		}
 	})
-	// Each console's gateway URL is verified by its own auth_check.
-	for _, svc := range []string{"ops-console", "support-console"} {
-		t.Run("reconcile-urls "+svc, func(t *testing.T) {
+	// Each console's gateway URL is verified by its own auth_check; the library URLs by the pass's re-read.
+	for _, c := range []struct{ svc, name string }{
+		{"ops-console", "VITE_GATEWAY_URL"},
+		{"support-console", "VITE_GATEWAY_URL"},
+		{"library", "VITE_LANDING_URL"},
+		{"library", "VITE_APP_URL"},
+		{"app", "VITE_LIBRARY_URL"},
+		{"landing", "VITE_LIBRARY_URL"},
+	} {
+		svc, name := c.svc, c.name
+		t.Run("reconcile-urls "+svc+"."+name, func(t *testing.T) {
 			id := sentrySvcID(svc)
 			s := fleetShim(t, reconcileStale())
-			s.bendRead(t, id, `.VITE_GATEWAY_URL = "`+batchProdLandingURL+`"`)
+			s.bendRead(t, id, `.`+name+` = "`+batchProdLandingURL+`"`)
 			stdout, stderr, code := runReconcileURLs(t, s)
 			out := stdout + stderr
 			if code != 1 {
 				t.Errorf("exit %d, want 1; output = %q", code, out)
 			}
-			if !strings.Contains(errorLines(out), svc+".VITE_GATEWAY_URL") {
-				t.Errorf("no ::error:: line names %s.VITE_GATEWAY_URL; error lines = %q", svc, errorLines(out))
+			if !strings.Contains(errorLines(out), svc+"."+name) {
+				t.Errorf("no ::error:: line names %s.%s; error lines = %q", svc, name, errorLines(out))
 			}
-			if len(upsertsOf(s.upserts(t), id, "VITE_GATEWAY_URL")) == 0 {
-				t.Errorf("%s.VITE_GATEWAY_URL was never written, so the failure is not a re-read failure", svc)
+			if len(upsertsOf(s.upserts(t), id, name)) == 0 {
+				t.Errorf("%s.%s was never written, so the failure is not a re-read failure", svc, name)
 			}
 			if strings.Contains(out, batchAllConfirmed) {
 				t.Errorf("a failed re-read printed the confirmation line; output = %q", out)

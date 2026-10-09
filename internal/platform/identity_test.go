@@ -373,3 +373,90 @@ func TestIdentityMiddleware_VerifierSubjectFormsBuildIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestIdentityMiddleware_ReadsTheStaffHeaders(t *testing.T) {
+	cases := []struct {
+		name                 string
+		staff, rules         string // "" = header absent
+		wantStaff, wantRules bool
+	}{
+		{"both true", "true", "true", true, true},
+		{"staff only", "true", "", true, false},
+		{"rules only", "", "true", false, false},
+		{"upper case and one", "TRUE", "1", false, false},
+		{"rules upper case", "true", "TRUE", true, false},
+		{"neither", "", "", false, false},
+	}
+	for _, tc := range cases {
+		for _, tenant := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/tenant=%v", tc.name, tenant), func(t *testing.T) {
+				rig := newStaffRig(t, true)
+				w := who{tenant: tenant, role: "authenticated", staff: tc.staff, rulesRole: tc.rules}
+				if rec := rig.serve(w.request(http.MethodGet, "/v1/ping")); rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200", rec.Code)
+				}
+				c := rig.other
+				got, ok := c.id, c.hasID
+				if !tenant {
+					got, ok = c.caller, c.hasCaller
+				}
+				if !ok || got.Subject != testSubject {
+					t.Fatalf("caller = %+v (ok %v), want Subject %q", got, ok, testSubject)
+				}
+				if got.Staff != tc.wantStaff || got.RulesRole != tc.wantRules {
+					t.Errorf("(Staff, RulesRole) = (%v, %v), want (%v, %v)", got.Staff, got.RulesRole, tc.wantStaff, tc.wantRules)
+				}
+			})
+		}
+	}
+}
+
+func TestIdentityMiddleware_TenantlessCallerCarriesStaff(t *testing.T) {
+	rig := newStaffRig(t, true)
+	rec := rig.serve(tenantlessSR.request(http.MethodGet, "/v1/staff/probe"))
+	if rec.Code != http.StatusOK || rig.staff.count() != 1 {
+		t.Fatalf("status %d, handler ran %d times, want 200 and 1 (body %q)", rec.Code, rig.staff.count(), rec.Body.String())
+	}
+	got := rig.staff.staff
+	if !rig.staff.hasStaff || got.Subject != testSubject || got.TenantID != "" || !got.Staff || !got.RulesRole {
+		t.Errorf("StaffFromContext = %+v (ok %v), want the tenant-less staff caller %q with Staff and RulesRole", got, rig.staff.hasStaff, testSubject)
+	}
+	if rig.staff.hasID {
+		t.Errorf("IdentityFromContext = %+v, want none for a tenant-less caller", rig.staff.id)
+	}
+}
+
+func TestIdentityMiddleware_NoGatewayTokenNoStaff(t *testing.T) {
+	for _, w := range []who{staffRules, tenantlessSR} {
+		t.Run(fmt.Sprintf("tenant=%v", w.tenant), func(t *testing.T) {
+			rig := newStaffRig(t, false)
+			if rec := rig.serve(w.request(http.MethodGet, "/v1/ping")); rec.Code != http.StatusOK {
+				t.Fatalf("ping status = %d, want 200", rec.Code)
+			}
+			c := rig.other
+			if !c.hasID && !c.hasCaller {
+				t.Fatal("no caller was built from X-User-ID, so the Staff checks below prove nothing")
+			}
+			for name, id := range map[string]auth.Identity{"identity": c.id, "tenant-less caller": c.caller} {
+				if id.Staff || id.RulesRole {
+					t.Errorf("%s = %+v, want no Staff and no RulesRole without RequireGateway", name, id)
+				}
+			}
+
+			rec := rig.serve(w.request(http.MethodGet, "/v1/staff/probe"))
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("staff path status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
+			}
+			assertBody(t, rec, "staff path", forbiddenBody)
+			if n := rig.staff.count(); n != 0 {
+				t.Errorf("staff handler ran %d times, want 0", n)
+			}
+		})
+	}
+
+	// Control: the same request on an App that called RequireGateway reaches the handler.
+	rig := newStaffRig(t, true)
+	if rec := rig.serve(staffRules.request(http.MethodGet, "/v1/staff/probe")); rec.Code != http.StatusOK || rig.staff.count() != 1 {
+		t.Errorf("control: status %d, handler ran %d times, want 200 and 1", rec.Code, rig.staff.count())
+	}
+}

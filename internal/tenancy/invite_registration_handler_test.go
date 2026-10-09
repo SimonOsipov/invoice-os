@@ -63,10 +63,24 @@ func TestInvitationPendingHandler_Contract(t *testing.T) {
 		}
 	})
 
+	t.Run("unknown fields are ignored", func(t *testing.T) {
+		var got []string
+		fn := func(_ context.Context, email string) (bool, error) { got = append(got, email); return true, nil }
+		rec := apiDo(InvitationPendingHandler(fn, nil), context.Background(), http.MethodPost, path, `{"email":"a@x.test","password":"hunter2","extra":{"n":1}}`)
+		if rec.Code != http.StatusOK || !slices.Equal(got, []string{"a@x.test"}) {
+			t.Errorf("status = %d, lookups = %v, want 200 and one lookup of a@x.test: %s", rec.Code, got, rec.Body)
+		}
+	})
+
 	for _, c := range []struct{ name, body string }{
 		{"empty object", `{}`},
 		{"blank address", `{"email":"  "}`},
 		{"not json", `not json`},
+		{"empty body", ``},
+		{"truncated object", `{"email":"a@x.test"`},
+		{"email of the wrong type", `{"email":5}`},
+		{"array body", `["a@x.test"]`},
+		{"null body", `null`},
 		{"over 1 KiB", emailBodyOf(1025)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -126,6 +140,18 @@ func TestInvitationRegisterClaimHandler_Contract(t *testing.T) {
 		}
 	})
 
+	t.Run("unknown fields are ignored", func(t *testing.T) {
+		var got []string
+		fn := func(_ context.Context, tok string) (string, bool, error) {
+			got = append(got, tok)
+			return "a@x.test", true, nil
+		}
+		rec := apiDo(InvitationRegisterClaimHandler(fn, nil), context.Background(), http.MethodPost, path, `{"token":"`+regToken43+`","password":"hunter2"}`)
+		if rec.Code != http.StatusOK || !slices.Equal(got, []string{regToken43}) {
+			t.Errorf("status = %d, claims = %v, want 200 and one claim of the token: %s", rec.Code, got, rec.Body)
+		}
+	})
+
 	for _, c := range []struct {
 		name, body string
 		err        error
@@ -137,6 +163,8 @@ func TestInvitationRegisterClaimHandler_Contract(t *testing.T) {
 		{"not valid, wrapped", okBody, fmt.Errorf("claim: %w", ErrInvitationNotValid), http.StatusNotFound, "this invite is no longer valid", 1},
 		{"malformed JSON", `{`, nil, http.StatusBadRequest, "invalid request body", 0},
 		{"empty body", ``, nil, http.StatusBadRequest, "invalid request body", 0},
+		{"token of the wrong type", `{"token":5}`, nil, http.StatusBadRequest, "invalid request body", 0},
+		{"array body", `["x"]`, nil, http.StatusBadRequest, "invalid request body", 0},
 		{"over 1 KiB", bodyOf(1025), nil, http.StatusBadRequest, "invalid request body", 0},
 		{"other error", okBody, errors.New("boom"), http.StatusInternalServerError, "internal server error", 1},
 	} {
@@ -207,6 +235,8 @@ func TestInvitationRegisterReleaseHandler_Contract(t *testing.T) {
 		{"not valid, wrapped", okBody, fmt.Errorf("release: %w", ErrInvitationNotValid), http.StatusNotFound, "this invite is no longer valid", 1},
 		{"malformed JSON", `{`, nil, http.StatusBadRequest, "invalid request body", 0},
 		{"empty body", ``, nil, http.StatusBadRequest, "invalid request body", 0},
+		{"token of the wrong type", `{"token":5}`, nil, http.StatusBadRequest, "invalid request body", 0},
+		{"array body", `["x"]`, nil, http.StatusBadRequest, "invalid request body", 0},
 		{"over 1 KiB", bodyOf(1025), nil, http.StatusBadRequest, "invalid request body", 0},
 		{"other error", okBody, errors.New("boom"), http.StatusInternalServerError, "internal server error", 1},
 	} {
@@ -257,6 +287,71 @@ func TestInviteRegistrationHandlers_LogsCarryNoAddressOrToken(t *testing.T) {
 					if strings.Contains(logs.String(), secret) {
 						t.Errorf("the log carries %q:\n%s", secret, logs.String())
 					}
+				}
+			})
+		}
+	}
+}
+
+// The gateway keys on the exact 404 body, so these run the three handlers over the real store.
+func TestInvitationRegistrationHandlers_OverTheStore(t *testing.T) {
+	r := newRegInviter(t)
+	addr := uniqueAddr("wire")
+	_, token := r.invite(t, addr)
+	accID, accepted := r.invite(t, uniqueAddr("wire-acc"))
+	r.setState(t, accID, `status = 'accepted'`)
+	unknown, _, err := mintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := InvitationPendingHandler(r.store.InvitationPendingForEmail, nil)
+	register := InvitationRegisterClaimHandler(r.store.ClaimInvitationRegistration, nil)
+	release := InvitationRegisterReleaseHandler(r.store.ReleaseInvitationRegistration, nil)
+	post := func(h http.HandlerFunc, path, body string) *httptest.ResponseRecorder {
+		return apiDo(h, context.Background(), http.MethodPost, path, body)
+	}
+	tokBody := func(tok string) string { return `{"token":"` + tok + `"}` }
+	wantClaim := func(first bool) {
+		t.Helper()
+		rec := post(register, "/internal/invitations/register", tokBody(token))
+		m := decodeObject(t, rec)
+		if rec.Code != http.StatusOK || !slices.Equal(keysOf(m), []string{"email", "first"}) || m["email"] != addr || m["first"] != first {
+			t.Errorf("register = %d %s, want 200 {email:%q, first:%v}", rec.Code, rec.Body, addr, first)
+		}
+	}
+
+	if rec := post(pending, "/internal/invitations/pending", `{"email":"`+strings.ToUpper(addr)+`"}`); rec.Code != http.StatusOK || decodeObject(t, rec)["pending"] != true {
+		t.Errorf("pending of the invited address = %d %s, want 200 {pending:true}", rec.Code, rec.Body)
+	}
+	if rec := post(pending, "/internal/invitations/pending", `{"email":"`+uniqueAddr("nobody")+`"}`); rec.Code != http.StatusOK || decodeObject(t, rec)["pending"] != false {
+		t.Errorf("pending of an uninvited address = %d %s, want 200 {pending:false}", rec.Code, rec.Body)
+	}
+
+	wantClaim(true)
+	wantClaim(false)
+	rec := post(release, "/internal/invitations/release", tokBody(token))
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Errorf("release = %d %q, want 204 and an empty body", rec.Code, rec.Body)
+	}
+	wantClaim(true)
+
+	for _, c := range []struct{ name, body string }{
+		{"unknown token", tokBody(unknown)},
+		{"accepted token", tokBody(accepted)},
+		{"42 characters", tokBody(unknown[:42])},
+		{"empty token", tokBody("")},
+		{"no token key", `{}`},
+		{"null body", `null`},
+	} {
+		for _, route := range []struct {
+			name string
+			h    http.HandlerFunc
+		}{{"register", register}, {"release", release}} {
+			t.Run(route.name+"/"+c.name, func(t *testing.T) {
+				rec := post(route.h, "/internal/invitations/"+route.name, c.body)
+				assertErrorBody(t, rec, http.StatusNotFound, "this invite is no longer valid")
+				if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+					t.Errorf("Content-Type = %q, want application/json", ct)
 				}
 			})
 		}

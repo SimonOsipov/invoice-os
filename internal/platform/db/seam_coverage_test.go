@@ -665,7 +665,7 @@ func TestRLS_NoDirectPoolUseOutsideTheSeam(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scan 2 — the identity-free core is worker, CLI and four exemptions only
+// Scan 2 — the identity-free core is worker, CLI and exemptions only
 // ---------------------------------------------------------------------------
 
 // scCoreExemption is one exemption from the ungated core. Exactly one of pkg,

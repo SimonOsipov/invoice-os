@@ -15,9 +15,6 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// maxInviteRegBodyBytes bounds the {"email"} body of the pending route.
-const maxInviteRegBodyBytes = maxInviteTokenBodyBytes
-
 // InvitationPendingForEmail reports whether the address has a live invite in any tenant.
 // The nil-uuid GUC scopes every table but the SECURITY DEFINER lookup to none.
 func (s *Store) InvitationPendingForEmail(ctx context.Context, email string) (bool, error) {
@@ -103,7 +100,7 @@ func InvitationPendingHandler(pending func(ctx context.Context, email string) (b
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, maxInviteRegBodyBytes)
+		r.Body = http.MaxBytesReader(w, r.Body, maxInviteTokenBodyBytes)
 		var req struct {
 			Email string `json:"email"`
 		}

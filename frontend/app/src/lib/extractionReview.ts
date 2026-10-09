@@ -51,6 +51,12 @@ export interface ExtractionCorrected {
   where: string | null
 }
 
+// internal/extraction/reader.go, ExtractionRuleBreak: one validation rule a reading violates.
+export interface ExtractionRuleBreak {
+  key: string
+  message: string
+}
+
 // internal/extraction/reader.go, ExtractionFieldState. region is null when the extractor
 // pointed at nothing. reason, alternatives and corrected are always present — Go has no
 // omitempty here, so no key is optional; corrected is null on a field no human has touched.
@@ -61,6 +67,7 @@ export interface ExtractionFieldState {
   reason: ExtractionReason
   alternatives: ExtractionCandidate[]
   corrected: ExtractionCorrected | null
+  rules: ExtractionRuleBreak[]
 }
 
 // internal/extraction/reader.go, ExtractionDocument. stored_at is RFC3339 text, not a time.

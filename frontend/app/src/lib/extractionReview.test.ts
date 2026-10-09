@@ -913,6 +913,7 @@ function mkField(o: Partial<ExtractionFieldState> = {}): ExtractionFieldState {
     reason: '',
     alternatives: [],
     corrected: null,
+    rules: [],
     ...o,
   }
 }

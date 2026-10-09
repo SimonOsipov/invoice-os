@@ -153,6 +153,16 @@ const WIRE_MIRRORS = [
     floor: 3,
   },
   {
+    ts: 'ExtractionRuleBreak',
+    go: 'ExtractionRuleBreak',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func detailRuleBreaksTx(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function fieldNote(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 2,
+  },
+  {
     ts: 'ExtractionFieldState',
     go: 'ExtractionFieldState',
     goPath: 'internal/extraction/reader.go',
@@ -160,7 +170,7 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/extractionReview.ts',
     spaAnchor: 'export function scrollRegionIntoView(',
     e2eAnchor: 'export function getExtractionDetail(',
-    floor: 6,
+    floor: 7,
   },
   {
     ts: 'ExtractionRegion',
@@ -444,6 +454,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'ExtractionJob',
       'ExtractionDocument',
       'ExtractionPage',
+      'ExtractionRuleBreak',
       'ExtractionFieldState',
       'ExtractionRegion',
       'CorrectionRequest',

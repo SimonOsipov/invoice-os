@@ -59,8 +59,8 @@ type Region struct {
 type Reason string
 
 // The non-empty values are the reason_code CHECK set: ('unreadable', 'ambiguous',
-// 'inconsistent', 'missing', 'rule_break'). ReasonNone is the empty string rather than a sentinel word: no
-// doubt means a NULL reason_code.
+// 'inconsistent', 'missing', 'rule_break'). ReasonNone is the empty string rather than a sentinel
+// word: no doubt means a NULL reason_code.
 const (
 	ReasonNone         Reason = ""
 	ReasonUnreadable   Reason = "unreadable"

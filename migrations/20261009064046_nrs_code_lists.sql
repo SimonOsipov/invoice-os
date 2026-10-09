@@ -1,5 +1,5 @@
 -- +goose Up
--- Global NRS code lists, synced by the validation service (ENGI-03). No tenant, no RLS.
+-- Global NRS code lists, synced by the validation service. No tenant, no RLS.
 CREATE TABLE nrs_codes (
     list    text  NOT NULL CHECK (list <> ''),
     code    text  NOT NULL CHECK (code <> ''),
@@ -19,7 +19,7 @@ CREATE TABLE nrs_code_list_syncs (
 );
 
 GRANT SELECT, INSERT, DELETE, UPDATE (entries) ON nrs_codes TO invoice_app;
-GRANT SELECT, INSERT ON nrs_code_list_syncs TO invoice_app;
+GRANT INSERT ON nrs_code_list_syncs TO invoice_app;
 
 -- +goose Down
 DROP TABLE nrs_code_list_syncs;

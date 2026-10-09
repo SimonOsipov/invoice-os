@@ -188,24 +188,20 @@ func TestSchema_SyncLogIsInsertOnlyForApp(t *testing.T) {
 	ctx := context.Background()
 	list := newListName(t, super)
 
-	var id string
-	if err := app.QueryRow(ctx,
-		`INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed)
-		 VALUES ($1, 3, '{A,B}', '{}', '{}') RETURNING id::text`, list).Scan(&id); err != nil {
+	const id = "00000000-0000-4000-8000-0000000000e3"
+	t.Cleanup(func() { _, _ = super.Exec(ctx, `DELETE FROM nrs_code_list_syncs WHERE id = $1::uuid`, id) })
+	if _, err := app.Exec(ctx,
+		`INSERT INTO nrs_code_list_syncs (id, list, entry_count, added, removed, changed)
+		 VALUES ($1::uuid, $2, 3, '{A,B}', '{}', '{}')`, id, list); err != nil {
 		t.Fatalf("app INSERT sync row: %v", err)
 	}
 	var n int
-	if err := app.QueryRow(ctx,
-		`SELECT entry_count FROM nrs_code_list_syncs WHERE id = $1::uuid`, id).Scan(&n); err != nil {
-		t.Fatalf("app SELECT sync row: %v", err)
-	}
-	if n != 3 {
-		t.Fatalf("entry_count = %d, want 3", n)
-	}
 	_, err := app.Exec(ctx,
 		`INSERT INTO nrs_code_list_syncs (id, list, entry_count, added, removed, changed)
 		 VALUES ($1::uuid, $2, 1, '{}', '{}', '{}')`, id, list)
 	wantState(t, "app INSERT duplicate sync id", err, "23505")
+	_, err = app.Exec(ctx, `SELECT entry_count FROM nrs_code_list_syncs WHERE id = $1::uuid`, id)
+	wantState(t, "app SELECT sync row", err, "42501")
 	_, err = app.Exec(ctx, `UPDATE nrs_code_list_syncs SET entry_count = 4 WHERE id = $1::uuid`, id)
 	wantState(t, "app UPDATE sync row", err, "42501")
 	_, err = app.Exec(ctx, `DELETE FROM nrs_code_list_syncs WHERE id = $1::uuid`, id)

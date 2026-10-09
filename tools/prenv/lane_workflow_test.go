@@ -58,11 +58,9 @@ func TestCIChangesPublishesThePRLane(t *testing.T) {
 
 func TestCILibraryJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 	fe := ciJob(t, "frontend")
-	feIf, _ := jobKey(fe, "if")
-	for _, want := range []string{"needs.changes.outputs.frontend == 'true'", "needs.changes.outputs.lane != 'library'"} {
-		if !strings.Contains(feIf, want) {
-			t.Errorf("frontend if = %q, want it to hold %q", feIf, want)
-		}
+	const feWant = "needs.changes.outputs.frontend == 'true' && needs.changes.outputs.lane != 'library'"
+	if feIf, _ := jobKey(fe, "if"); feIf != feWant {
+		t.Errorf("frontend if = %q, want %q", feIf, feWant)
 	}
 	lib := ciJob(t, "library")
 	if v, _ := jobKey(lib, "name"); v != "Library" {
@@ -78,7 +76,16 @@ func TestCILibraryJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 		t.Errorf("library if = %q", v)
 	}
 	var runs []string
-	for _, s := range lib.steps() {
+	libSteps := lib.steps()
+	if len(libSteps) == 0 {
+		t.Fatal("library job has no steps")
+	}
+	for _, s := range libSteps {
+		for _, k := range []string{"if", "continue-on-error"} {
+			if v, ok := s.keys[k]; ok {
+				t.Errorf("library step %v has %s: %q, want none", s.keys, k, v)
+			}
+		}
 		if r := s.keys["run"]; r != "" {
 			runs = append(runs, r)
 		}
@@ -104,10 +111,10 @@ func TestCIRollupRequiresTheLibraryJob(t *testing.T) {
 	for _, s := range ci.steps() {
 		run += s.keys["run"] + "\n"
 	}
-	for _, res := range []string{"failure", "cancelled"} {
-		if !strings.Contains(run, `"${{ needs.library.result }}" = "`+res+`"`) {
-			t.Errorf("ci run does not fail on needs.library.result = %s", res)
-		}
+	const guard = `if [ "${{ needs.library.result }}" = "failure" ] || [ "${{ needs.library.result }}" = "cancelled" ]; then` +
+		"\n" + `echo "::error::Library job failed"; exit 1` + "\n" + "fi"
+	if !strings.Contains(run, guard) {
+		t.Errorf("ci run lacks the failure-or-cancelled exit for needs.library.result:\n%s", run)
 	}
 }
 

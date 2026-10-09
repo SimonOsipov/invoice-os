@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,11 @@ const (
 	msgInviteeFieldsRequired = "token and password are required"
 	msgAccountExists         = "account_exists"
 	msgAccountUnconfirmed    = "account_unconfirmed"
+	msgAccountMissing        = "account_missing"
+	msgInviteTokenRequired   = "token is required"
+	msgResendUnavailable     = "invitation resend is unavailable"
+	// GoTrue's 60 s per-address mail cooldown; its instance-wide mail cap uses the same error_code with other wording.
+	msgResendCooldownPrefix = "For security purposes, you can only request this after "
 )
 
 // NewHTTPInvitationPreviewer asks tenancy's internal preview route, with the gateway token and no identity.
@@ -166,5 +172,86 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		}
 		exists := func() { writeError(w, http.StatusConflict, msgAccountExists) }
 		signUp(w, r, client, signup, map[string]any{"email": p.Email, "password": in.Password}, start, minResponse, perIP, enforce, log, exists)
+	})
+}
+
+// InvitationResendHandler answers POST /auth/invitation/resend. Unlike the anonymous resend it says whether GoTrue
+// mailed (sent), held on its cooldown (held) or could not tell (maybe); a GoTrue 4xx mails nothing, so its budget is refunded.
+func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger, preview InvitationPreviewer) http.Handler {
+	endpoint := authURL.JoinPath("resend").String()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !postOnly(w, r) {
+			return
+		}
+		var in struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxExchangeBodyBytes)).Decode(&in); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if in.Token == "" {
+			writeError(w, http.StatusBadRequest, msgInviteTokenRequired)
+			return
+		}
+		p, ok := previewToken(w, r, preview, log, in.Token)
+		if !ok {
+			return
+		}
+		switch p.Account {
+		case "confirmed":
+			writeError(w, http.StatusConflict, msgAccountExists)
+			return
+		case "none":
+			writeError(w, http.StatusConflict, msgAccountMissing)
+			return
+		}
+
+		// IP first: a request refused for its IP spends no address count.
+		key, source := clientKey(r)
+		ipHeld := perIP.Reserve(key)
+		addrHeld := false
+		limited := func(limit string) {
+			log.WarnContext(r.Context(), "invitation-resend: limit reached",
+				slog.String("limit", limit), slog.String("key_source", source), slog.Bool("enforced", enforce))
+		}
+		if !ipHeld {
+			limited("ip")
+		} else if addrHeld = perAddress.Reserve(p.Email); !addrHeld {
+			limited("address")
+		}
+		if (!ipHeld || !addrHeld) && enforce {
+			writeError(w, http.StatusTooManyRequests, "too many requests")
+			return
+		}
+
+		status, gt, err := postGoTrue(r, client, endpoint, map[string]string{"type": "signup", "email": p.Email}, nil)
+		if err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+			if ipHeld {
+				perIP.Refund(key)
+			}
+			if addrHeld {
+				perAddress.Refund(p.Email)
+			}
+		}
+		switch {
+		case err != nil:
+			log.WarnContext(r.Context(), "invitation-resend: gotrue unreachable", slog.String("error", err.Error()))
+		case status == http.StatusOK && p.Account == "unconfirmed":
+			writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+			return
+		case status == http.StatusOK:
+			writeJSON(w, http.StatusOK, map[string]string{"status": "maybe"})
+			return
+		case status == http.StatusTooManyRequests && gt.ErrorCode == "over_email_send_rate_limit" && strings.HasPrefix(gt.Msg, msgResendCooldownPrefix):
+			writeJSON(w, http.StatusOK, map[string]string{"status": "held"})
+			return
+		case gt.ErrorCode == "over_email_send_rate_limit":
+			log.WarnContext(r.Context(), "invitation-resend: gotrue email send rate limit", slog.Int("upstream_status", status))
+		default:
+			log.WarnContext(r.Context(), "invitation-resend: gotrue resend failed",
+				slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
+		}
+		writeError(w, http.StatusBadGateway, msgResendUnavailable)
 	})
 }

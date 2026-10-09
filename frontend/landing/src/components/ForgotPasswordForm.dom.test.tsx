@@ -310,6 +310,20 @@ describe('useResend with a given sender', () => {
     expect(send).toHaveBeenLastCalledWith('b@corp.example')
     expect(latest.note).toEqual({ ok: false })
   })
+
+  it('useResend_voidSenderNeverSetsAnOutcome', async () => {
+    let latest!: ReturnType<typeof useResend>
+    await act(async () => {
+      root.render(createElement(Probe, { send: async () => {}, grab: (r) => (latest = r) }))
+    })
+
+    await act(async () => {
+      await latest.resend('a@corp.example')
+    })
+
+    expect(latest.note).toEqual({ ok: true })
+    expect(latest.note?.outcome).toBeUndefined()
+  })
 })
 
 describe('the reset notice box', () => {

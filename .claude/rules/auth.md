@@ -63,7 +63,7 @@ paths:
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
 - Reserve a sign-in throttle attempt before the GoTrue call.
-- Accept a tenant-less token only on `POST /api/tenancy/v1/workspaces` and `POST /api/tenancy/v1/invitations/accept`.
+- Accept a tenant-less token on `POST /api/tenancy/v1/workspaces` and `POST /api/tenancy/v1/invitations/accept`.
 - Match the tenant-less routes on the escaped path.
 - Accept a tenant-less staff token also on an exact `/api/<service>/v1/staff/` route.
 - Admit that exemption only when `app_metadata.staff` is true.

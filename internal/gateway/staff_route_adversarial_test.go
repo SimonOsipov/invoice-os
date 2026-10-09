@@ -202,6 +202,10 @@ func TestStaffRoute_PathVariantsNeverReachAStaffHandler(t *testing.T) {
 						if status != http.StatusForbidden && status != http.StatusNotFound {
 							t.Errorf("%s %s answered %d, want 403 or 404", method, target, status)
 						}
+						// CONNECT is not cleaned by the upstream mux, so the gateway's own refusal is the only guard.
+						if n := rig.total(func(c *upstreamCount) int32 { return c.any.Load() }); method == http.MethodConnect && (status != http.StatusForbidden || n != 0) {
+							t.Errorf("%s %s answered %d with %d upstream hits, want the gateway's 403 and 0", method, target, status, n)
+						}
 						if n := rig.total(func(c *upstreamCount) int32 { return c.staff.Load() }); n != 0 {
 							t.Errorf("%s %s reached a staff handler %d times, want 0", method, target, n)
 						}

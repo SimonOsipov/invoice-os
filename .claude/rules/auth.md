@@ -19,6 +19,9 @@ paths:
   - "internal/gateway/mock*.go"
   - "cmd/gateway/mockissuer.go"
   - "packages/console-session/**"
+  - "frontend/app/src/App.tsx"
+  - "frontend/app/src/lib/signInState.ts"
+  - "frontend/landing/src/App.tsx"
 ---
 # Identity provider
 

@@ -6,6 +6,8 @@ paths:
   - "frontend/landing/src/hubspot*"
   - "frontend/landing/Dockerfile"
   - "e2e/smoke/landing-*.spec.ts"
+  - "frontend/library/**"
+  - "e2e/smoke/library-consent.spec.ts"
 ---
 # Landing analytics
 
@@ -29,8 +31,8 @@ paths:
 - Seed a granted consent record in `openLanding()` before the landing e2e navigates. A denied default makes the production-host assertion false.
 - Gate the library tag on `LIBRARY_HOSTNAMES` in `hubspot.ts`. A fork of either host sends nothing.
 - Keep the library senders in `frontend/landing/src/analytics.ts`. `frontend/library/src/analytics.ts` binds them to the library host.
-- Ask for consent on the library itself. `asc_consent` lives in `localStorage`, which a browser keeps per origin.
-- Set the library `_ga` cookies for the library host only, with `cookie_domain`. A library Reject expires them there and deletes no parent-domain `_ga`.
+- Store the consent choice in the `asc_consent` cookie on `SHARED_COOKIE_DOMAIN` on a production host. Keep it in `localStorage` on any other host. Move an older `localStorage` record into the cookie. Keep the record with the later `ts`.
+- Leave `cookie_domain` out of the `gtag('config')` call. GA4's default then shares `_ga` on `SHARED_COOKIE_DOMAIN` across both sites. A Reject on either site expires `_ga` on every parent domain of its host.
 - Send the library `page_view` by hand through `trackLibraryPageView`, once per later path change. The first view comes from `gtag('config')`.
 - Keep GA4 history-event page views off in the web stream, or each navigation counts twice.
 - Send `demo_open` from the library with `cta_location` `library`. Send `tour_start` with no parameter.

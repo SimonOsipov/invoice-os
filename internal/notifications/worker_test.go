@@ -104,10 +104,34 @@ func qaRequireNoLeak(t *testing.T, err error, sinks []*qaLogSink, needles ...str
 	}
 }
 
+type qaDealCall struct {
+	C    Contact
+	Name string
+}
+
 type qaRecHubSpot struct {
-	mu    sync.Mutex
-	calls []Contact
-	fn    func(n int, c Contact) error
+	mu     sync.Mutex
+	calls  []Contact
+	fn     func(n int, c Contact) error
+	deals  []qaDealCall
+	dealFn func(n int, c Contact, name string) error
+}
+
+func (r *qaRecHubSpot) OpenDemoDeal(_ context.Context, c Contact, name string) error {
+	r.mu.Lock()
+	r.deals = append(r.deals, qaDealCall{C: c, Name: name})
+	n, fn := len(r.deals), r.dealFn
+	r.mu.Unlock()
+	if fn != nil {
+		return fn(n, c, name)
+	}
+	return nil
+}
+
+func (r *qaRecHubSpot) dealCalls() []qaDealCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.deals)
 }
 
 func (r *qaRecHubSpot) Upsert(_ context.Context, c Contact) error {

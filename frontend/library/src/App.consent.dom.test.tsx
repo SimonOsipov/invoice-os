@@ -258,7 +258,7 @@ describe('library consent', () => {
     expect(exp.filter((w) => w.includes('domain=')).map((w) => w.split('domain=')[1]).sort()).toEqual(
       ['.ascomply.com', '.library.ascomply.com', 'ascomply.com', 'library.ascomply.com'],
     )
-    m.analytics.trackLibraryDemoOpen('hero')
+    m.analytics.trackLibraryDemoOpen()
     expect(entries().filter((e) => e[0] === 'event')).toEqual([])
     expect(readConsentCookie(document)!.analytics).toBe(false)
   })

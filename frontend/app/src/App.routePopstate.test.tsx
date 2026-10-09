@@ -409,6 +409,34 @@ describe('AC-5: Back onto /invoices/<id> from elsewhere restores detail and the 
   })
 })
 
+describe('ENGI-16-04: the line target is one-shot', () => {
+  it('popstate_backToADetailEntryCarriesNoLine', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID, { line: 2, field: null })
+    })
+    expect(requireCtx().importedInvoiceLine).toEqual({ line: 2, field: null })
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await popTo(`/invoices/${INVOICE_ID}`)
+    const ctx = requireCtx()
+    expect(ctx.view).toBe('detail')
+    expect(ctx.importedInvoiceLine).toBeNull()
+  })
+
+  it('switchClient_clearsTheLineTarget', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID, { line: 2, field: null })
+    })
+    await act(async () => {
+      capturedCtx!.switchClient('other-entity-555')
+    })
+    expect(requireCtx().importedInvoiceLine).toBeNull()
+  })
+})
+
 describe('Adversarial: Back onto a view that takes no id clears whichever id was live', () => {
   it('popstate_backOntoAnIdlessViewClearsALiveExtractionJob', async () => {
     await bootAt(`/extraction/${JOB_A}`)

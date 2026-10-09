@@ -132,6 +132,28 @@ describe('verdictPill (AC-5)', () => {
   })
 })
 
+describe('verdictPill: RULES FAILED counts distinct rule keys (PILL-L1, PILL-L2)', () => {
+  const lineErrors: Violation[] = [
+    { rule_key: 'line-cost', severity: 'error', message: 'e', path: 'line_items[1]' },
+    { rule_key: 'line-cost', severity: 'error', message: 'e', path: 'line_items[3]' },
+    { rule_key: 'currency-allowed', severity: 'error', message: 'e' },
+  ]
+
+  it('PILL-L1: one rule failing on two lines counts once', () => {
+    const badge = verdictPill({ status: 'validated', violations: lineErrors }).badges[0]
+    expect(badge.kind).toBe('rules-failed')
+    expect(badge.count).toBe(2)
+    expect(badge.label).toBe('2 RULES FAILED')
+  })
+
+  it('PILL-L2: the kept count still counts blocking violations', () => {
+    const badge = verdictPill({ status: 'draft', violations: lineErrors, kept_as_is_at: '2026-07-30T00:00:00Z' }).badges[0]
+    expect(badge.kind).toBe('kept-invalid')
+    expect(badge.count).toBe(3)
+    expect(badge.label).toBe('KEPT · INVALID')
+  })
+})
+
 describe('verdictPill: queued is QUEUED, never APPROVED (PILL-3)', () => {
   it('PILL-3a: a queued invoice renders QUEUED', () => {
     const input: VerdictInput = { status: 'queued', violations: [] }
@@ -995,14 +1017,14 @@ describe('unreadableCsvAll: no longer carries duplicate rows (AIMP-10, AC-6)', (
   })
 })
 
-describe('reviewBatch.ts source: the already-imported classifier is the SOLE reader of RowError.rule_key beyond railPills/fixCard (AIMP-11, AC-1 — GAP-2 correction: a comment-immune `.rule_key` property-access scan pinned at 4, not a bare `rule_key` string pinned at 1, which already occurs 5x in comments/railPills/fixCard and could never go green)', () => {
-  it('AIMP-11 (guard): `.rule_key` occurs exactly 4 times in the source — railPills x2, fixCard x1, and one inside the already-imported classifier', () => {
+describe('reviewBatch.ts source: the already-imported classifier is the SOLE reader of RowError.rule_key beyond railPills/fixCard (AIMP-11, AC-1 — GAP-2 correction: a comment-immune `.rule_key` property-access scan pinned at 5, not a bare `rule_key` string pinned at 1, which already occurs 5x in comments/railPills/fixCard and could never go green)', () => {
+  it('AIMP-11 (guard): `.rule_key` occurs exactly 5 times in the source — railPills x2, fixCard x1, the verdictPill distinct-rule count x1, and one inside the already-imported classifier', () => {
     const srcPath = fileURLToPath(new URL('./reviewBatch.ts', import.meta.url))
     const source = readFileSync(srcPath, 'utf8')
 
     const matches = source.match(/\.rule_key\b/g) ?? []
 
-    expect(matches).toHaveLength(4)
+    expect(matches).toHaveLength(5)
   })
 })
 
@@ -1935,6 +1957,18 @@ function mkViolation(overrides: Partial<Violation> = {}): Violation {
 }
 
 describe('fixCard: field targeting is mbsPathToEditField alone — no rule-key map (AC-2, FIX-1..4)', () => {
+  it('FIX-L1: a line path carries its line target', () => {
+    const card = fixCard({ rule_key: 'line-cost', severity: 'error', message: 'm', path: 'line_items[2].unit_price' })
+    expect(card.line).toEqual({ line: 2, field: 'unit_price' })
+    expect(card.field).toBeNull()
+  })
+
+  it('FIX-L2: a non-line path has no line target', () => {
+    for (const path of ['line_items', 'subtotal', undefined]) {
+      expect(fixCard({ rule_key: 'r', severity: 'error', message: 'm', path }).line, String(path)).toBeNull()
+    }
+  })
+
   it("FIX-1: vat-standard-rate (path 'vat', expected '84375') resolves to the vat field and carries the expectation", () => {
     const v = mkViolation({
       rule_key: 'vat-standard-rate',

@@ -166,6 +166,28 @@ describe('AC-1: every setView( call site routes through navigate() and pushes', 
     expect(ctx.importedInvoiceId, 'the selection atom must name the id it was handed').toBe(INVOICE_ID)
   })
 
+  it('openImportedInvoice_withALineExposesTheTarget', async () => {
+    await bootAt('/')
+    const lengthBefore = window.history.length
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID, { line: 2, field: null })
+    })
+    expect(window.location.pathname).toBe(`/invoices/${INVOICE_ID}`)
+    expect(window.history.length).toBe(lengthBefore + 1)
+    expect(requireCtx().importedInvoiceLine).toEqual({ line: 2, field: null })
+  })
+
+  it('openImportedInvoice_withoutALineClearsTheTarget', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID, { line: 2, field: null })
+    })
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(OTHER_INVOICE_ID)
+    })
+    expect(requireCtx().importedInvoiceLine).toBeNull()
+  })
+
   // N-3: the same one-handler invariant openAuditForInvoice/openExtraction already pin
   // below, restated for the id navigate() now carries -- the FIRST render with
   // view === 'detail' must already have importedInvoiceId, not a render later.

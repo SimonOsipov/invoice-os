@@ -29,6 +29,7 @@ import type { Role } from './lib/roles'
 // type-imports `View`/`SettingsTab` from this file, so the loop is erased at compile.
 import type { RouteParams } from './lib/route'
 import type { Policy } from './lib/workflows'
+import type { LineTarget } from './lib/validationApi'
 
 export type SectorKey = 'logistics' | 'foods' | 'oilfield' | 'trading' | 'manufacturing' | 'textile'
 
@@ -424,6 +425,8 @@ export type PlatformCtx = {
   // invoice. Non-null makes InvoiceDetail render its honest placeholder instead of
   // resolving a mock invoice; M4-09 swaps that for a real fetch.
   importedInvoiceId: string | null
+  // One-shot: the line the detail editor opens at; null unless openImportedInvoice passed one.
+  importedInvoiceLine: LineTarget | null
   // This atom and the `invoice` param of the current /audit URL are the same fact: every
   // writer moves both, and navigating off Audit clears both.
   auditPrefilter: AuditPrefilter | null
@@ -500,7 +503,7 @@ export type PlatformCtx = {
   // navigation to the real invoice detail. There is deliberately no companion
   // "approve"/"back to results" pair, because there is no step to go back from.
   fileDraft: () => void
-  openImportedInvoice: (id: string) => void
+  openImportedInvoice: (id: string, line?: LineTarget) => void
   // Sets auditPrefilter and navigates to Audit in ONE handler, so no committed render can carry
   // one without the other.
   openAuditForInvoice: (invoiceId: string, invoiceNumber: string | null) => void

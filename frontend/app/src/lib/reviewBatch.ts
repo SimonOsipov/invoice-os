@@ -46,7 +46,7 @@ import {
 } from './invoices'
 import { classifyPickedFile } from './importFlow'
 import { labelOf } from './invoiceFields'
-import { severityStyle, type Severity, type Violation } from './validationApi'
+import { severityStyle, violationLine, type LineTarget, type Severity, type Violation } from './validationApi'
 import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from './importApi'
 import { reportSummary } from './importReport'
 import { fmtDateTime } from './format'
@@ -103,6 +103,8 @@ function tone(sev: Severity): BadgeTone {
 export function verdictPill(input: VerdictInput): VerdictPill {
   const status = invoiceStatusStyle(input.status)
   const errorCount = input.violations.filter((v) => v.severity === 'error').length
+  // Distinct rule keys: one rule failing on several lines is one failed rule (PILL-L1).
+  const failedRuleCount = new Set(input.violations.filter((v) => v.severity === 'error').map((v) => v.rule_key)).size
   const advisoryCount = input.violations.length - errorCount
 
   // The mark means "kept as-is" only on a draft; on a failed invoice it means resolved outside.
@@ -114,7 +116,7 @@ export function verdictPill(input: VerdictInput): VerdictPill {
   if (errorCount > 0) {
     return {
       status,
-      badges: [{ kind: 'rules-failed', count: errorCount, label: `${errorCount} RULES FAILED`, tone: tone('error') }],
+      badges: [{ kind: 'rules-failed', count: failedRuleCount, label: `${failedRuleCount} RULES FAILED`, tone: tone('error') }],
     }
   }
   if (advisoryCount > 0) {
@@ -1155,6 +1157,8 @@ export function bulkOutcome(
 // `invoice_number`, any APP-only vocabulary) resolves to `null`; the card's own
 // `message` still carries the server's reason in full regardless -- `null` means "no
 // field to flag", never "drop the reason".
+// A `line_items[N]...` path also carries `line` (violationLine): the card links to the
+// invoice editor at that line instead of editing inline.
 
 // `hint` composes expected/actual (D9) as opaque strings, NEVER parsed or reformatted:
 // both are decimal STRINGS end-to-end ([D13]), and re-running them through a numeric
@@ -1167,6 +1171,8 @@ export interface FixCard {
   message: string
   blocking: boolean
   field: EditFieldKey | null
+  // Set for a `line_items[N]...` path; the card offers Open line N instead of an inline editor.
+  line: LineTarget | null
   hint: string | null
 }
 
@@ -1186,6 +1192,7 @@ export function fixCard(v: Violation): FixCard {
     message: v.message,
     blocking: v.severity === 'error',
     field: mbsPathToEditField(v.path),
+    line: violationLine(v.path),
     hint: fixHint(v),
   }
 }
@@ -1222,6 +1229,7 @@ export const ROW_EXPANSION_COPY = {
   // INVCR-01-15 (D6, task-291): the Keep as-is action, alongside Re-validate --
   // [bulk-copy-lives-in-the-lib] applies to this section exactly as it does to the
   // rest of ROW_EXPANSION_COPY above.
+  openLineUnsaved: 'Save or discard your changes before opening the line.',
   keepLabel: 'Keep as-is',
   keeping: 'Keeping…',
   keepReasonPlaceholder: 'Why are you keeping this despite the failure? (required)',

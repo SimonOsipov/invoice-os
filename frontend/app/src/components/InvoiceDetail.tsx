@@ -309,6 +309,17 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // `seq` makes a repeat click on the same line a new focus request.
   const [lineFocus, setLineFocus] = useState<{ seq: number; target: LineTarget } | null>(null)
 
+  // Read once at mount: the review screen's Open line target, applied when the record first loads.
+  const pendingLine = useRef(ctx.importedInvoiceLine ?? null)
+  useEffect(() => {
+    const target = pendingLine.current
+    if (target == null || inv == null) return
+    pendingLine.current = null
+    if (!inv.can_edit) return
+    setEditing(true)
+    setLineFocus({ seq: 1, target })
+  }, [inv])
+
   let content: ReactNode
 
   // invoicesViewState (lib/invoices.ts) is pinned to AsyncState<InvoiceRecord[]> (the

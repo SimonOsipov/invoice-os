@@ -6553,3 +6553,49 @@ describe('InvoiceDetail line links (ENGI-16-03)', () => {
     expect(screen.queryByTestId('edit-invoice')).toBeNull()
   })
 })
+
+describe('InvoiceDetail opens at the line the review screen handed over (ENGI-16-04)', () => {
+  const ID = 'inv-line-target-1'
+  const lines = [1, 2].map((n) => ({
+    id: `l${n}`,
+    line_no: n,
+    description: `Item ${n}`,
+    quantity: '1',
+    unit_price: '10.00',
+    line_total: '10.00',
+    line_tax: '0.75',
+  }))
+  const base = { id: ID, status: 'validated' as InvoiceStatus, can_edit: true, can_revalidate: true, line_items: lines, rule_set_version: 3 }
+  const lineRow = (n: number) => screen.getAllByTestId('line-row')[n - 1]
+  const ctxWithLine = () =>
+    ({ ...detailCtx(ID), importedInvoiceLine: { line: 2, field: 'unit_price' } }) as unknown as PlatformCtx
+
+  it('invoiceDetail_mountWithLineTargetOpensEditor', async () => {
+    mockDetailFetch(detailRecord(base))
+    render(<InvoiceDetail ctx={ctxWithLine()} />)
+
+    await screen.findByTestId('edit-invoice')
+    expect(document.activeElement).toBe(lineRow(2).querySelector('[data-line-field="unit_price"]'))
+  })
+
+  it('invoiceDetail_mountWithLineTargetNotEditable', async () => {
+    mockDetailFetch(detailRecord({ ...base, can_edit: false }))
+    render(<InvoiceDetail ctx={ctxWithLine()} />)
+
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+  })
+
+  it('invoiceDetail_lineTargetAppliesOnce', async () => {
+    mockDetailFetch(detailRecord(base))
+    render(<InvoiceDetail ctx={ctxWithLine()} />)
+    await screen.findByTestId('edit-invoice')
+    fireEvent.click(screen.getByTestId('edit-cancel'))
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('revalidate'))
+    await waitFor(() => expect((screen.getByTestId('revalidate') as HTMLButtonElement).textContent).not.toMatch(/Revalidating/))
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+  })
+})

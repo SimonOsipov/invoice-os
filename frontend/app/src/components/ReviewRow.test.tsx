@@ -1286,3 +1286,66 @@ describe('ReviewRow: the review prototype look (RESKIN2-04-04)', () => {
     }
   })
 })
+
+describe('ReviewRow row-expansion: Open line N (ENGI-16-04)', () => {
+  const LINE_VIOLATION = { rule_key: 'line-cost', severity: 'error' as const, message: 'line total off', path: 'line_items[2].unit_price' }
+  const VAT_VIOLATION = { rule_key: 'vat-standard-rate', severity: 'error' as const, message: 'bad rate', path: 'vat', expected: '84375' }
+
+  function renderExpanded(detail: InvoiceDetailRecord) {
+    mockGetInvoice(detail)
+    const openImportedInvoice = vi.fn()
+    const ctx = { ...(rowCtx() as object), openImportedInvoice } as unknown as PlatformCtx
+    render(
+      <Row
+        r={listRow({ status: 'draft' })}
+        batches={[]}
+        checked={false}
+        expanded
+        onToggleExpand={() => {}}
+        onToggle={() => {}}
+        ctx={ctx}
+        base="https://gw"
+        onChanged={() => {}}
+      />,
+    )
+    return openImportedInvoice
+  }
+
+  it('reviewRow_lineCardOpensTheInvoiceAtTheLine', async () => {
+    const spy = renderExpanded(detailFixture({ status: 'draft', can_edit: true, violations: [LINE_VIOLATION] }))
+    const btn = await screen.findByTestId('review-fix-open-line')
+    expect(btn.textContent).toBe('Open line 2')
+    fireEvent.click(btn)
+    expect(spy).toHaveBeenCalledWith('inv-1', { line: 2, field: 'unit_price' })
+  })
+
+  it('reviewRow_lineCardDisabledWhenNotEditable', async () => {
+    const spy = renderExpanded(detailFixture({ status: 'draft', can_edit: false, violations: [LINE_VIOLATION] }))
+    const btn = (await screen.findByTestId('review-fix-open-line')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.style.opacity).toBe('0.45')
+    expect(btn.style.cursor).toBe('not-allowed')
+    fireEvent.click(btn)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('reviewRow_lineCardDisabledWhileUnsaved', async () => {
+    const spy = renderExpanded(detailFixture({ status: 'draft', can_edit: true, vat: '75.00', violations: [LINE_VIOLATION, VAT_VIOLATION] }))
+    const btn = (await screen.findByTestId('review-fix-open-line')) as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+    fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '999' } })
+    expect(btn.disabled).toBe(true)
+    expect(btn.title).toBe(ROW_EXPANSION_COPY.openLineUnsaved)
+    fireEvent.click(btn)
+    expect(spy).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '75.00' } })
+    expect(btn.disabled, 'reverting the edit re-enables it').toBe(false)
+  })
+
+  it('reviewRow_unmappableCardHasNoOpenLine', async () => {
+    renderExpanded(detailFixture({ status: 'draft', can_edit: true, violations: [{ rule_key: 'line-required', severity: 'error', message: 'needs a line', path: 'line_items' }] }))
+    await screen.findByTestId('review-fix-card')
+    expect(screen.queryByTestId('review-fix-open-line')).toBeNull()
+    expect(screen.getByTestId('review-fix-card').textContent).toContain('needs a line')
+  })
+})

@@ -569,27 +569,40 @@ func TestInvitationRegister_ExistingAccountWaitsTheFloor(t *testing.T) {
 func TestInvitationRegister_RefundsTheSlotOnlyForAnExistingAccount(t *testing.T) {
 	cases := []struct {
 		name       string
+		public     bool
 		status     int
 		body       string
 		wantCalls  int
 		wantStatus int
 	}{
-		{"200 empty identities", http.StatusOK, gtSanitizedUser, 2, http.StatusConflict},
-		{"user_already_exists", http.StatusUnprocessableEntity, gtUserAlreadyExists, 2, http.StatusConflict},
-		{"email_exists", http.StatusUnprocessableEntity, gtEmailExists, 2, http.StatusConflict},
-		{"real signup spends the slot", http.StatusOK, gtNewUser, 1, http.StatusAccepted},
+		{"200 empty identities", false, http.StatusOK, gtSanitizedUser, 2, http.StatusConflict},
+		{"user_already_exists", false, http.StatusUnprocessableEntity, gtUserAlreadyExists, 2, http.StatusConflict},
+		{"email_exists", false, http.StatusUnprocessableEntity, gtEmailExists, 2, http.StatusConflict},
+		{"real signup spends the slot", false, http.StatusOK, gtNewUser, 1, http.StatusAccepted},
+		{"public route: 200 empty identities still spends the slot", true, http.StatusOK, gtSanitizedUser, 1, http.StatusAccepted},
+		{"public route: user_already_exists is refunded by the 4xx rule", true, http.StatusUnprocessableEntity, gtUserAlreadyExists, 2, http.StatusAccepted},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			perIP := NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
 			fake := newFakeGoTrue(t, c.status, c.body)
-			h := inviteeHandler(fake.URL, 0, perIP, previewing(liveInvite, nil))
+			post := func() *httptest.ResponseRecorder {
+				if c.public {
+					log, _ := captureLog()
+					rec := httptest.NewRecorder()
+					RegisterHandler(fake.URL, testClient(), 0, perIP, true, log).ServeHTTP(rec,
+						httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))))
+					return rec
+				}
+				rec, _ := postInvitee(inviteeHandler(fake.URL, 0, perIP, previewing(liveInvite, nil)), inviteeBody(inviteToken, "pw-123456", nil))
+				return rec
+			}
 
-			first, _ := postInvitee(h, inviteeBody(inviteToken, "pw-123456", nil))
+			first := post()
 			if first.Code != c.wantStatus {
 				t.Fatalf("first answer = %d %s, want %d", first.Code, first.Body.String(), c.wantStatus)
 			}
-			postInvitee(h, inviteeBody(inviteToken, "pw-123456", nil))
+			post()
 
 			if n := len(fake.Calls()); n != c.wantCalls {
 				t.Errorf("GoTrue saw %d calls after two posts on a budget of 1, want %d", n, c.wantCalls)

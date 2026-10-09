@@ -5,6 +5,7 @@ package db_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"slices"
@@ -105,15 +106,22 @@ func requireNRSColumns(t *testing.T, ctx context.Context) {
 	}
 }
 
+// nrsQuerier is satisfied by a pool and by a tx, so one assertion runs on the live schema
+// and on the schema a Down-then-Up leaves inside a rolled-back tx.
+type nrsQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 type colShape struct {
 	dataType, nullable string
 	def                *string
 	precision, scale   *int
 }
 
-func nrsShapes(t *testing.T, ctx context.Context, table string) map[string]colShape {
+func nrsShapes(t *testing.T, ctx context.Context, q nrsQuerier, table string) map[string]colShape {
 	t.Helper()
-	rows, err := h.super.Query(ctx,
+	rows, err := q.Query(ctx,
 		`SELECT column_name, data_type, is_nullable, column_default, numeric_precision, numeric_scale
 		   FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`, table)
 	if err != nil {
@@ -135,9 +143,9 @@ func nrsShapes(t *testing.T, ctx context.Context, table string) map[string]colSh
 	return out
 }
 
-func assertNRSShapes(t *testing.T, ctx context.Context, table string, cols []nrsCol) {
+func assertNRSShapes(t *testing.T, ctx context.Context, q nrsQuerier, table string, cols []nrsCol) {
 	t.Helper()
-	shapes := nrsShapes(t, ctx, table)
+	shapes := nrsShapes(t, ctx, q, table)
 	if len(shapes) < 10 {
 		t.Fatalf("%s reports only %d column(s); the walk is broken", table, len(shapes))
 	}
@@ -178,7 +186,7 @@ func TestRLS_InvoicesNRSFields_InvoiceColumnsHaveTheirTypes(t *testing.T) {
 	if len(nrsInvoiceCols) != 22 {
 		t.Fatalf("spec lists %d invoice columns, want 22", len(nrsInvoiceCols))
 	}
-	assertNRSShapes(t, ctx, "invoices", nrsInvoiceCols)
+	assertNRSShapes(t, ctx, h.super, "invoices", nrsInvoiceCols)
 }
 
 func TestRLS_InvoicesNRSFields_LineColumnsHaveTheirTypes(t *testing.T) {
@@ -188,14 +196,18 @@ func TestRLS_InvoicesNRSFields_LineColumnsHaveTheirTypes(t *testing.T) {
 	if len(nrsLineCols) != 9 {
 		t.Fatalf("spec lists %d line columns, want 9", len(nrsLineCols))
 	}
-	assertNRSShapes(t, ctx, "line_items", nrsLineCols)
+	assertNRSShapes(t, ctx, h.super, "line_items", nrsLineCols)
 }
 
 func TestRLS_InvoicesNRSFields_AddNoCheckAndNoColumnGrant(t *testing.T) {
 	requireHarness(t)
 	ctx := t.Context()
 	requireNRSColumns(t, ctx)
+	assertNoNRSCheckOrColumnACL(t, ctx, h.super)
+}
 
+func assertNoNRSCheckOrColumnACL(t *testing.T, ctx context.Context, q nrsQuerier) {
+	t.Helper()
 	for _, tbl := range []struct {
 		name string
 		cols []nrsCol
@@ -204,14 +216,14 @@ func TestRLS_InvoicesNRSFields_AddNoCheckAndNoColumnGrant(t *testing.T) {
 		// result for the new columns is not an artefact of the query.
 		if tbl.name == "invoices" {
 			var n int
-			if err := h.super.QueryRow(ctx,
+			if err := q.QueryRow(ctx,
 				`SELECT count(*) FROM pg_constraint c JOIN pg_attribute a
 				   ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
 				  WHERE c.conrelid = 'public.invoices'::regclass AND c.contype = 'c' AND a.attname = 'status'`).Scan(&n); err != nil || n == 0 {
 				t.Fatalf("control: invoices.status CHECK not seen by the query (n=%d, err=%v)", n, err)
 			}
 		}
-		rows, err := h.super.Query(ctx,
+		rows, err := q.Query(ctx,
 			`SELECT a.attname, c.conname FROM pg_constraint c JOIN pg_attribute a
 			   ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
 			  WHERE c.conrelid = $1::regclass AND c.contype = 'c' AND a.attname = ANY($2)`,
@@ -228,7 +240,7 @@ func TestRLS_InvoicesNRSFields_AddNoCheckAndNoColumnGrant(t *testing.T) {
 		}
 		rows.Close()
 
-		acl, err := h.super.Query(ctx,
+		acl, err := q.Query(ctx,
 			`SELECT attname, attacl IS NULL FROM pg_attribute
 			  WHERE attrelid = $1::regclass AND attnum > 0 AND NOT attisdropped AND attname = ANY($2)`,
 			"public."+tbl.name, nrsNames(tbl.cols))
@@ -520,6 +532,130 @@ func TestRLS_InvoicesNRSFields_DownDropsExactlyTheAddedColumns(t *testing.T) {
 		got := slices.Sorted(slices.Values(nrsColumnList(t, ctx, tx, tc.table)))
 		if want := slices.Sorted(slices.Values(tc.before)); !slices.Equal(got, want) {
 			t.Errorf("%s columns after Down then Up = %v, want %v", tc.table, got, want)
+		}
+	}
+
+	// The Up section, not the already-migrated DB, is what these see: types, nullable,
+	// no default, no CHECK, no column ACL.
+	assertNRSShapes(t, ctx, tx, "invoices", nrsInvoiceCols)
+	assertNRSShapes(t, ctx, tx, "line_items", nrsLineCols)
+	assertNoNRSCheckOrColumnACL(t, ctx, tx)
+}
+
+func TestRLS_InvoicesNRSFields_OtherTenantCannotReadOrWriteNewColumns(t *testing.T) {
+	h := requireHarness(t)
+	ctx := t.Context()
+	requireNRSColumns(t, ctx)
+
+	entity, cleanupEntity := seedBusinessEntity(t, h.tenantA, "ENGI-02-01 Read Corp")
+	defer cleanupEntity()
+	invID, cleanupInv := seedInvoice(t, h.tenantA, entity, "ENGI-02-01-R")
+	defer cleanupInv()
+	lineID, cleanupLine := seedLineItem(t, h.tenantA, invID, 1)
+	defer cleanupLine()
+	if _, err := h.super.Exec(ctx, `UPDATE invoices SET buyer_email = 'a@example.test', due_date = '2026-10-01' WHERE id = $1`, invID); err != nil {
+		t.Fatalf("seed invoice NRS values: %v", err)
+	}
+	if _, err := h.super.Exec(ctx, `UPDATE line_items SET tax_percent = 7.5, hsn_code = '8471' WHERE id = $1`, lineID); err != nil {
+		t.Fatalf("seed line NRS values: %v", err)
+	}
+
+	const (
+		readInv  = `SELECT count(*) FROM invoices WHERE id = $1 AND buyer_email IS NOT NULL AND due_date IS NOT NULL`
+		readLine = `SELECT count(*) FROM line_items WHERE id = $1 AND tax_percent IS NOT NULL AND hsn_code IS NOT NULL`
+	)
+	count := func(tx pgx.Tx, q, id string) int {
+		var n int
+		if err := tx.QueryRow(ctx, q, id).Scan(&n); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		return n
+	}
+
+	// Control: the owning tenant sees both rows, so the zeros below are RLS.
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		if n := count(tx, readInv, invID); n != 1 {
+			t.Errorf("tenant A reads %d invoice(s) by new column, want 1", n)
+		}
+		if n := count(tx, readLine, lineID); n != 1 {
+			t.Errorf("tenant A reads %d line(s) by new column, want 1", n)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("tenant A tx: %v", err)
+	}
+
+	err = db.WithinTenantTx(ctx, h.app, h.tenantB, func(tx pgx.Tx) error {
+		if n := count(tx, readInv, invID); n != 0 {
+			t.Errorf("tenant B reads %d of tenant A's invoice by a new column, want 0", n)
+		}
+		if n := count(tx, readLine, lineID); n != 0 {
+			t.Errorf("tenant B reads %d of tenant A's line by a new column, want 0", n)
+		}
+		tag, err := tx.Exec(ctx, `UPDATE line_items SET tax_percent = 99.99 WHERE id = $1`, lineID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 0 {
+			t.Errorf("tenant B's UPDATE of line_items.tax_percent changed %d rows, want 0", tag.RowsAffected())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("tenant B tx: %v", err)
+	}
+	var pct string
+	if err := h.super.QueryRow(ctx, `SELECT tax_percent::text FROM line_items WHERE id = $1`, lineID).Scan(&pct); err != nil || pct != "7.50" {
+		t.Errorf("tax_percent = %q (err %v) after tenant B's UPDATE, want 7.50", pct, err)
+	}
+}
+
+// The numeric columns round to their declared scale and refuse a value past their precision.
+func TestRLS_InvoicesNRSFields_NumericColumnsRoundAtScaleAndRefuseOverflow(t *testing.T) {
+	h := requireHarness(t)
+	ctx := t.Context()
+	requireNRSColumns(t, ctx)
+
+	entity, cleanupEntity := seedBusinessEntity(t, h.tenantA, "ENGI-02-01 Numeric Corp")
+	defer cleanupEntity()
+	invID, cleanupInv := seedInvoice(t, h.tenantA, entity, "ENGI-02-01-N")
+	defer cleanupInv()
+
+	errRollback := errors.New("rollback")
+	cases := []struct {
+		col, in, want, wantCode string
+	}{
+		{"tax_percent", "7.555", "7.56", ""},
+		{"tax_percent", "999999999999.99", "999999999999.99", ""},
+		{"tax_percent", "1000000000000.00", "", "22003"},
+		{"base_quantity", "1.2345", "1.235", ""},
+		{"base_quantity", "99999999999.999", "99999999999.999", ""},
+		{"base_quantity", "100000000000.000", "", "22003"},
+	}
+	for _, tc := range cases {
+		var got string
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			id := uuid.NewString()
+			if _, err := tx.Exec(ctx, fmt.Sprintf(`INSERT INTO line_items (id, tenant_id, invoice_id, line_no, %s) VALUES ($1, $2, $3, 1, $4::text::numeric)`, tc.col),
+				id, h.tenantA, invID, tc.in); err != nil {
+				return err
+			}
+			if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT %s::text FROM line_items WHERE id = $1`, tc.col), id).Scan(&got); err != nil {
+				return err
+			}
+			return errRollback
+		})
+		if tc.wantCode != "" {
+			if code := pgCode(err); code != tc.wantCode {
+				t.Errorf("%s = %s: SQLSTATE %q (err %v), want %s", tc.col, tc.in, code, err, tc.wantCode)
+			}
+			continue
+		}
+		if !errors.Is(err, errRollback) {
+			t.Errorf("%s = %s: %v", tc.col, tc.in, err)
+		} else if got != tc.want {
+			t.Errorf("%s = %s reads back %q, want %q", tc.col, tc.in, got, tc.want)
 		}
 	}
 }

@@ -1,11 +1,14 @@
-// duedate_scope_test.go: EXTR-25-04 AC-4.8 and AC-4.11 -- due_date must reach no non-test
-// source outside anchor.go, and the doc it falsifies must gain the qualifier that says so.
+// duedate_scope_test.go: EXTR-25-04 AC-4.8 -- due_date must reach no non-test source
+// under ddScanRoots outside anchor.go.
 package extraction_test
 
 import (
+	"go/scanner"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +18,39 @@ const (
 	ddNeedle        = "due_date"
 	ddControlNeedle = "issue_date" // known present in non-test source; proves the scan finds hits at all
 )
+
+// ddNeedleRe matches the needle in any letter case and with or without the underscore.
+var ddNeedleRe = regexp.MustCompile(`(?i)due_?date`)
+
+var (
+	ddBlockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+	ddSlashComment = regexp.MustCompile(`//[^\n]*`)
+	ddDashComment  = regexp.MustCompile(`--[^\n]*`)
+)
+
+// ddCode returns the source with comments removed, so a comment that names the needle is not a hit.
+func ddCode(path string, src []byte) string {
+	ext := filepath.Ext(path)
+	if ext == ".go" {
+		fset := token.NewFileSet()
+		var sc scanner.Scanner
+		sc.Init(fset.AddFile(path, fset.Base(), len(src)), src, nil, 0)
+		var b strings.Builder
+		for {
+			_, tok, lit := sc.Scan()
+			if tok == token.EOF {
+				return b.String()
+			}
+			b.WriteString(lit)
+			b.WriteByte('\n')
+		}
+	}
+	text := ddBlockComment.ReplaceAllString(string(src), "")
+	if ext == ".sql" {
+		return ddDashComment.ReplaceAllString(text, "")
+	}
+	return ddSlashComment.ReplaceAllString(text, "")
+}
 
 var ddScanExts = []string{".go", ".sql", ".ts", ".tsx"}
 
@@ -65,11 +101,11 @@ func TestExtraction_NoDueDateFieldExists(t *testing.T) {
 			return rerr
 		}
 		scanned++
-		text := string(b)
+		text := ddCode(path, b)
 		if strings.Contains(text, ddControlNeedle) {
 			sawControl = true
 		}
-		if strings.Contains(text, ddNeedle) {
+		if ddNeedleRe.MatchString(text) {
 			rel, _ := filepath.Rel(root, path)
 			hits = append(hits, filepath.ToSlash(rel))
 		}

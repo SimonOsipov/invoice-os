@@ -447,7 +447,7 @@ html:has(.cookie-note) {
 
 @media (max-width: 640px) {
   :root {
-    --cn-band: 282px;
+    --cn-band: 294px;
   }
   .cookie-note {
     left: 12px;
@@ -455,7 +455,7 @@ html:has(.cookie-note) {
     bottom: 12px;
     width: auto;
     padding: 16px;
-    gap: 12px;
+    gap: 10px;
   }
   .cn-actions {
     flex-direction: column;

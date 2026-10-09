@@ -170,3 +170,20 @@ for (const width of WIDE_WIDTHS) {
     expect(rectsOverlap(c, n), 'the reopened notice covers Cookie choices').toBe(false)
   })
 }
+
+// The phone card sits 12px above the viewport bottom; the band must reserve card plus inset.
+const PHONE_INSET_PX = 12
+for (const width of [390, 375]) {
+  test(`library consent: on a phone the spacer reserves the notice band (${width})`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 })
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+    await openLibrary(page)
+    const box = await rectOf(notice(page), 'the cookie notice')
+    expect(enclosesRect({ x: 0, y: 0, width, height: 844 }, box, SLACK_PX), `the notice leaves the ${width}x844 viewport`).toBe(true)
+    const spacer = await rectOf(page.locator('.cn-spacer'), 'the scroll spacer')
+    expect(
+      spacer.height,
+      `the spacer reserves ${spacer.height}px but the notice covers ${box.height + PHONE_INSET_PX}px`,
+    ).toBeGreaterThanOrEqual(box.height + PHONE_INSET_PX)
+  })
+}

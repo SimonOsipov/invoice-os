@@ -18,7 +18,7 @@ describe('sliceCookieNoticeCss', () => {
       '.cn-spacer',
       'html:has(.cookie-note)',
       '@media (max-width: 640px)',
-      '--cn-band: 282px',
+      '--cn-band: 294px',
     ]) {
       expect(slice, want).toContain(want)
     }

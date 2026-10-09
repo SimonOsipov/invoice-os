@@ -889,6 +889,28 @@ test('landing consent: the closing CTA scrolls clear of the notice at 390px', as
   expectNoConsoleErrors(errors)
 })
 
+// LC-375 — the band holds at the narrowest tested phone width.
+test('landing consent: at 375px the spacer reserves the reopened card', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 844 })
+  const { errors, card } = await openLanding(page)
+  await card.locator('[data-consent="reject"]').click()
+  await expect(card).toHaveCount(0)
+  await page.reload()
+  await expect(card, 'the notice came back on its own after Reject').toHaveCount(0)
+  await page.evaluate(() => document.fonts.ready.then(() => true))
+  await page.getByRole('contentinfo').getByRole('button', { name: 'Cookie choices' }).click()
+  await expect(card).toBeVisible()
+  await expect(card.locator('.cn-setting')).toHaveText('Analytics cookies are off.')
+  await scrollToDocumentEnd(page)
+  const reopened = await rectOf(card, 'the reopened cookie notice', 'at the document end')
+  const spacer = await rectOf(page.locator('.cn-spacer'), 'the scroll spacer', 'at the document end')
+  expect(
+    spacer.height,
+    `the spacer reserves ${spacer.height}px but the notice covers ${reopened.height + MOBILE_INSET_PX}px`,
+  ).toBeGreaterThanOrEqual(reopened.height + MOBILE_INSET_PX)
+  expectNoConsoleErrors(errors)
+})
+
 // C11 — the reopen round trip shows the answer on record, for both answers.
 test('landing consent: the footer control reopens the notice with the current setting', async ({ page }) => {
   const { errors, card } = await openLanding(page)

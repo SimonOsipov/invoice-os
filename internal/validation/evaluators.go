@@ -77,6 +77,15 @@ func violation(r Rule, opts ...violationOption) *Violation {
 	return v
 }
 
+// linePath builds a line violation path: <list>[N], or <list>[N].<field>.
+func linePath(list string, n int, field string) string {
+	p := fmt.Sprintf("%s[%d]", list, n)
+	if field != "" {
+		p += "." + field
+	}
+	return p
+}
+
 // decodeParams unmarshals a rule's type-specific Params into dst. An empty
 // Params is treated as an empty object so callers can decode optional-only
 // param shapes without a nil-guard; a genuinely malformed body surfaces as a

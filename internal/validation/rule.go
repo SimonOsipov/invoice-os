@@ -108,7 +108,7 @@ type Violation struct {
 	RuleKey  string   `json:"rule_key"`
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
-	Path     string   `json:"path,omitempty"` // resolved target
+	Path     string   `json:"path,omitempty"` // target, or <list>[N] for a line
 	Expected *string  `json:"expected,omitempty"`
 	Actual   *string  `json:"actual,omitempty"`
 }
@@ -133,6 +133,12 @@ type Payload = map[string]any
 // (Decision N15: fail loud on a broken rule, don't silently pass).
 type Evaluator interface {
 	Eval(p Payload, r Rule) (*Violation, error)
+}
+
+// lineEvaluator is an optional Evaluator extension: evalLines returns one
+// violation per failing line. The engine prefers it over Eval.
+type lineEvaluator interface {
+	evalLines(p Payload, r Rule) ([]Violation, error)
 }
 
 // GuardFunc evaluates a rule's optional `when` CEL guard at the select

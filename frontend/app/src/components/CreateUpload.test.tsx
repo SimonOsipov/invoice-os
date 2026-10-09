@@ -18,6 +18,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { stripComments } from '@invoice-os/api-client/strip-comments'
+
 import type { PickedFile } from '../lib/importRun'
 import type { PlatformCtx } from '../types'
 import { capRefusal } from '../lib/importRun'
@@ -612,7 +614,7 @@ describe('CreateUpload — only CreateUpload reads the AI disclosure (ENGI-10-02
       .filter((e) => e.isFile() && /\.(ts|tsx)$/.test(e.name) && !/\.test\./.test(e.name))
       .map((e) => {
         const full = join(e.parentPath, e.name)
-        return { path: full, content: readFileSync(full, 'utf8') }
+        return { path: full, content: stripComments(readFileSync(full, 'utf8')) }
       })
   }
 

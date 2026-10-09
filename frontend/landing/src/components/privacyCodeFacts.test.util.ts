@@ -82,3 +82,15 @@ export function deliveryIsQueued(): boolean {
 export function registrantCompanyIsWorkspaceName(): boolean {
   return /company:\s*strings\.TrimSpace\(in\.WorkspaceName\)/.test(readSource('internal/notifications/store.go'))
 }
+
+const AI_CLIENTS = ['internal/platform/ai/client.go', 'internal/platform/jev/client.go']
+
+// The host of each OpenRouter `endpoint` constant, de-duplicated.
+export function aiProviderHosts(): string[] {
+  return unique(AI_CLIENTS.map((f) => found(/\bendpoint\s*=\s*"https:\/\/([^\/"]+)/.exec(readSource(f))?.[1], `endpoint in ${f}`)))
+}
+
+// The vendor prefix of each client's `Model` constant (`~` dropped), in client order.
+export function aiModelVendors(): string[] {
+  return AI_CLIENTS.map((f) => found(/\bModel\s*=\s*"~?([^\/"]+)\//.exec(readSource(f))?.[1], `Model in ${f}`))
+}

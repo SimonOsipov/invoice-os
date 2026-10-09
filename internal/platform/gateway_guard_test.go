@@ -233,6 +233,34 @@ func TestRequireGateway_OpenRouteAdmitsWithoutIdentity(t *testing.T) {
 	}
 }
 
+func TestRequireGateway_OpenRouteStripsTheStaffHeaders(t *testing.T) {
+	app, calls := guardedApp(t, "POST /v1/peer")
+	r := httptest.NewRequest(http.MethodPost, "/v1/peer", nil)
+	newForged().apply(r)
+	r.Header.Set("X-User-Staff", "true")
+	r.Header.Set("X-User-Rules-Role", "true")
+
+	if rec := serve(app, r); rec.Code != http.StatusOK || calls.count() != 1 {
+		t.Fatalf("status %d, handler ran %d times, want 200 and 1", rec.Code, calls.count())
+	}
+	for _, h := range []string{"X-User-Staff", "X-User-Rules-Role"} {
+		if v := calls.header.Values(h); len(v) != 0 {
+			t.Errorf("handler still sees %s = %q, want it deleted", h, v)
+		}
+	}
+
+	// Control: with the gateway token the same headers reach the handler, so the recorder can see them.
+	app, calls = guardedApp(t, "POST /v1/peer")
+	r = httptest.NewRequest(http.MethodPost, "/v1/peer", nil)
+	r.Header.Set(HeaderGatewayToken, guardToken)
+	r.Header.Set("X-User-Staff", "true")
+	r.Header.Set("X-User-Rules-Role", "true")
+	serve(app, r)
+	if calls.header.Get("X-User-Staff") != "true" || calls.header.Get("X-User-Rules-Role") != "true" {
+		t.Errorf("control: with the token the handler saw %v, want both staff headers", calls.header)
+	}
+}
+
 func TestRequireGateway_OpenPatternIsMethodExact(t *testing.T) {
 	app, calls := guardedApp(t, "POST /v1/peer")
 

@@ -56,6 +56,8 @@ export const AMBER_COPY = {
   footnote: 'Manual entry has the same requirement — an invoice is filed for a registered company too.',
 }
 
+export const AI_DISCLOSURE = 'Files you upload are processed by an AI provider to read them.'
+
 // The per-file verdict the list renders, '' for an acceptable file. Two refusals, in
 // order: a type the picker does not accept at all, then a type that contradicts the run's
 // own kind (one pick can carry both — addFiles keeps them listed, BULK-03-8).
@@ -208,6 +210,12 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', letterSpacing: '0.06em' }}>
             ACCEPTED · CSV · XLSX · PDF · DOCX
           </span>
+
+          {/* After the ACCEPTED span, outside the label: .pf-file:focus-visible + label needs the label adjacent. */}
+          {/* ceiling: swept at 1280px and wider only, add a narrow width to EXTR09-E2E-04 if the app supports one */}
+          <p data-testid="ai-disclosure" style={{ fontSize: 12, color: 'var(--fg-3)', margin: 0, lineHeight: 1.5 }}>
+            {AI_DISCLOSURE}
+          </p>
 
           {/* The chosen-files list, per-file remove control and the two per-file refusal
               notes — bad extension (BULK-01-03) and over the size cap (EXTR-09-05). Both

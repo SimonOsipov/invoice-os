@@ -9,6 +9,7 @@ paths:
 
 - Reach tenant data in a request through `WithinRequestTenantTx` or `WithinRequestTenantTxOpts`.
 - Acquire no database handle outside the seam. A bypass needs an `scPoolAllowlist` entry with a reason.
+- Reach global staff data in a request through `WithinStaffTx`.
 - Call `WithinTenantTx` only from a worker, a boot-time seeder, an operator CLI or an exempt method. Each needs an `scCoreAllowlist` entry with a reason.
 - These `tenancy.Store` methods skip the gate: `Me`, `ProvisionWorkspace`, `AcceptInvitation` and `PreviewInvitation`.
 - Scope an exemption to one func, never to a file that holds gated methods.

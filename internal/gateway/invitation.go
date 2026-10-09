@@ -276,12 +276,7 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 			return
 		}
 		pw := make([]byte, 32)
-		if _, err := rand.Read(pw); err != nil {
-			log.ErrorContext(r.Context(), "invitation: password generation failed")
-			writeError(w, http.StatusInternalServerError, "registration is unavailable")
-			_ = registrations.Release(context.WithoutCancel(r.Context()), in.Token)
-			return
-		}
+		rand.Read(pw) // never fails on Go 1.24+
 		body := map[string]any{
 			"email":    email,
 			"password": base64.RawURLEncoding.EncodeToString(pw),

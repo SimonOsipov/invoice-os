@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -268,6 +269,25 @@ func TestHTTPInvitationPreviewer_Wire(t *testing.T) {
 			t.Errorf("tenancy saw %d requests, want 1", stub.count())
 		}
 	})
+}
+
+// postTenancy decodes a 404 body too; the preview must still read it as "not valid", never as the invite it names.
+func TestHTTPInvitationPreviewer_404BodyIsNeverAnInvite(t *testing.T) {
+	for _, body := range []string{
+		`{"workspace":"` + inviteWorkspace + `","role":"` + inviteRole + `","email":"` + inviteAddress + `"}`,
+		`404 page not found`,
+		``,
+	} {
+		t.Run(body, func(t *testing.T) {
+			stub := newTenancyStub(t, http.StatusNotFound, body)
+
+			got, err := NewHTTPInvitationPreviewer(stub.URL, &http.Client{}, inviteGatewayToken)(t.Context(), inviteToken)
+
+			if !errors.Is(err, ErrInvitationNotValid) || got != (InvitationPreview{}) {
+				t.Errorf("preview = (%+v, %v), want (zero, ErrInvitationNotValid)", got, err)
+			}
+		})
+	}
 }
 
 func TestHTTPInvitationPreviewer_ErrorsCarryNoSecret(t *testing.T) {
@@ -648,13 +668,17 @@ func TestInvitationRegister_TokenIsTheOnlyRequiredField(t *testing.T) {
 		name, body string
 		status     int
 		claims     int
+		msg        string // the 400 text; "" means "token is required"
 	}{
-		{"empty object", `{}`, 400, 0},
-		{"empty token", `{"token":""}`, 400, 0},
-		{"password without a token", `{"password":"body-pw"}`, 400, 0},
-		{"token only", tokenBody(inviteToken), 202, 1},
-		{"empty password", `{"token":"` + inviteToken + `","password":""}`, 202, 1},
-		{"unknown keys", `{"token":"` + inviteToken + `","email":"` + inviteeEmailFromBody + `","extra":{"a":[1]}}`, 202, 1},
+		{"empty object", `{}`, 400, 0, ""},
+		{"empty token", `{"token":""}`, 400, 0, ""},
+		{"null body", `null`, 400, 0, ""},
+		{"password without a token", `{"password":"body-pw"}`, 400, 0, ""},
+		{"token that is not a string", `{"token":123}`, 400, 0, "invalid request body"},
+		{"body past the size cap", `{"token":"` + inviteToken + `","pad":"` + strings.Repeat("a", 2*maxRegisterBodyBytes) + `"}`, 400, 0, "invalid request body"},
+		{"token only", tokenBody(inviteToken), 202, 1, ""},
+		{"empty password", `{"token":"` + inviteToken + `","password":""}`, 202, 1, ""},
+		{"unknown keys", `{"token":"` + inviteToken + `","email":"` + inviteeEmailFromBody + `","extra":{"a":[1]}}`, 202, 1, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -667,8 +691,9 @@ func TestInvitationRegister_TokenIsTheOnlyRequiredField(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, c.status, rec.Body.String())
 			}
 			if c.status == 400 {
-				if got := errorBody(t, rec); got != "token is required" {
-					t.Errorf("error = %q, want %q", got, "token is required")
+				want := cmp.Or(c.msg, "token is required")
+				if got := errorBody(t, rec); got != want {
+					t.Errorf("error = %q, want %q", got, want)
 				}
 			} else if sent := signupBody(t, fake); sent["email"] != "e@x.test" {
 				t.Errorf("signup email = %v, want the claimed address", sent["email"])
@@ -784,6 +809,49 @@ func TestInvitationRegister_RefusesBeforeGoTrue(t *testing.T) {
 			}
 		})
 	}
+}
+
+// invitationHandlers guards the same in main; the handler must not panic when built directly with half a pair.
+func TestInvitationRegister_NilClaimOrReleaseIsNotConfigured(t *testing.T) {
+	for name, strip := range map[string]func(*InvitationRegistrations){
+		"Claim nil":   func(r *InvitationRegistrations) { r.Claim = nil },
+		"Release nil": func(r *InvitationRegistrations) { r.Release = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			r := claiming("e@x.test", true, nil)
+			regs := r.registrations()
+			strip(&regs)
+			log, _ := captureLog()
+
+			rec, _ := postInvitee(InvitationRegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, log, regs), tokenBody(inviteToken))
+
+			if rec.Code != http.StatusServiceUnavailable || errorBody(t, rec) != "registration is not configured" {
+				t.Errorf("answer = %d %s, want 503 registration is not configured", rec.Code, rec.Body.String())
+			}
+			if n := len(fake.Calls()) + len(r.claims()) + len(r.releases()); n != 0 {
+				t.Errorf("GoTrue, claim and release saw %d calls, want 0", n)
+			}
+		})
+	}
+}
+
+func TestInvitationRegister_OnlyPostClaims(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	r := claiming("e@x.test", true, nil)
+	h := inviteeHandler(fake.URL, 0, freshRegisterLimit(), r)
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken))))
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s = %d, want 405", method, rec.Code)
+		}
+	}
+	if n := len(fake.Calls()) + len(r.claims()); n != 0 {
+		t.Errorf("GoTrue and claim saw %d calls, want 0", n)
+	}
+	rec, _ := postInvitee(h, tokenBody(inviteToken))
+	requirePending202(t, rec)
 }
 
 func TestInvitationRegister_SharesTheRegisterBudget(t *testing.T) {
@@ -1014,6 +1082,9 @@ func TestInvitationRegister_ReleasesTheClaimWhenNoAccountWasCreated(t *testing.T
 		{"500 with another SQLSTATE", func(t *testing.T) *fakeGoTrue {
 			return newFakeGoTrue(t, http.StatusInternalServerError, gtOtherSQLState)
 		}, 502},
+		{"422 carrying SQLSTATE 23505", func(t *testing.T) *fakeGoTrue {
+			return newFakeGoTrue(t, http.StatusUnprocessableEntity, gtDuplicateKey)
+		}, 502},
 		{"502 from GoTrue", func(t *testing.T) *fakeGoTrue { return newFakeGoTrue(t, http.StatusBadGateway, ``) }, 502},
 		{"unreachable", func(t *testing.T) *fakeGoTrue { return &fakeGoTrue{URL: closedURL(t)} }, 502},
 		{"connection dropped", newDroppingGoTrue, 502},
@@ -1060,6 +1131,7 @@ func TestInvitationRegister_KeepsTheClaimWhenAnAccountMayExist(t *testing.T) {
 		{"user_already_exists", http.StatusUnprocessableEntity, gtUserAlreadyExists},
 		{"email_exists", http.StatusUnprocessableEntity, gtEmailExists},
 		{"500 SQLSTATE 23505", http.StatusInternalServerError, gtDuplicateKey},
+		{"500 carrying user_already_exists", http.StatusInternalServerError, gtUserAlreadyExists},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1368,6 +1440,12 @@ func TestHTTPInvitationRegistrations_Wire(t *testing.T) {
 		{"404 with another JSON error", `{"error":"invalid request body"}`},
 		{"404 with an empty body", ``},
 		{"404 with the message outside an error key", `{"message":"` + wantInviteNotValid + `"}`},
+		{"404 with the message and a trailing space", `{"error":"` + wantInviteNotValid + ` "}`},
+		{"404 with the message in an array", `{"error":["` + wantInviteNotValid + `"]}`},
+		{"404 with the message as a bare string", `"` + wantInviteNotValid + `"`},
+		{"404 with a null body", `null`},
+		{"404 with the message cut off", `{"error":"` + wantInviteNotValid + `"`},
+		{"404 whose body overruns the read limit after the message", `{"error":"` + wantInviteNotValid + `","pad":"` + strings.Repeat("a", 2*maxPreviewResponseBytes) + `"}`},
 	} {
 		t.Run("claim "+c.name+" is an error, not an invalid invite", func(t *testing.T) {
 			stub := newTenancyStub(t, http.StatusNotFound, c.body)

@@ -73,7 +73,7 @@ func TestIdP_SignUpForAnInvitedAddressCreatesNoAccount(t *testing.T) {
 	}
 }
 
-// Route 2 (D1): the link makes the account with a password nobody keeps; only the one chosen from the mail signs in.
+// Route 2: the link makes the account with a password nobody keeps; only the one chosen from the mail signs in.
 func TestIdP_InviteLinkCreatesTheAccountWithoutAUsablePassword(t *testing.T) {
 	w := newInviteWorldAt(t, "resend2-01r2-", "example.com")
 	u := idpUser{email: w.email}

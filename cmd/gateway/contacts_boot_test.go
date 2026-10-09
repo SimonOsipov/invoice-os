@@ -98,6 +98,8 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			_, _ = io.WriteString(w, session(registerID))
 		case "/internal/invitations/pending":
 			_, _ = io.WriteString(w, `{"pending":false}`)
+		case "/internal/invitations/register":
+			_, _ = io.WriteString(w, `{"email":"invitee@corp.example","first":true}`)
 		default:
 			_, _ = io.WriteString(w, `{}`)
 		}
@@ -203,6 +205,21 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusAccepted {
 			t.Fatalf("register answered %d, want 202\n%s", resp.StatusCode, out)
+		}
+	})
+	// Only the booted binary shows main hands the HTTP claim and release to the invitee route: a nil pair answers 503.
+	t.Run("invitee registration claims through tenancy then signs up", func(t *testing.T) {
+		before := len(goTrueCalls())
+		resp, err := client.Post(base+"/auth/invitation/register", "application/json", strings.NewReader(`{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("invitee registration answered %d, want 202\n%s", resp.StatusCode, out)
+		}
+		if got, want := goTrueCalls()[before:], []string{"POST /internal/invitations/register", "POST /signup"}; !slices.Equal(got, want) {
+			t.Errorf("tenancy and GoTrue saw %v, want %v", got, want)
 		}
 	})
 	t.Run("verify", func(t *testing.T) {

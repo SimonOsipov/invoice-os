@@ -458,7 +458,7 @@ func triggerNames(states map[string]string) []string {
 // This is the shallow-safe form, and it is the idiom requireStoryMigration above already uses.
 const (
 	auditNumberMigrationCount  = 75
-	auditNumberNewestMigration = "20261009111745_staff_audit_log.sql"
+	auditNumberNewestMigration = "20261009180547_invoices_nrs_fields.sql"
 )
 
 // auditReaderFiles is internal/audit's whole non-test surface. AUDIT-11 touches exactly one of

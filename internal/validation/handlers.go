@@ -146,7 +146,7 @@ func BatchValidateHandler(loadRuleSet func(ctx context.Context) (RuleSet, error)
 		rs, err := loadRuleSet(r.Context())
 		if err != nil {
 			status, msg := statusForErr(err)
-			if status == http.StatusInternalServerError {
+			if status == http.StatusInternalServerError || errors.Is(err, ErrCodeListMissing) {
 				log.ErrorContext(r.Context(), "validation: batch validate: load rule-set", slog.Any("err", err))
 			}
 			writeError(w, status, msg)

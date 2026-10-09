@@ -260,3 +260,33 @@ func TestCEL_AttributionLeavesPayloadUntouched(t *testing.T) {
 		t.Fatalf("payload mutated: %s", after)
 	}
 }
+
+func TestCEL_NearMissShapesStayBare(t *testing.T) {
+	p := Payload{"invoice": map[string]any{"min": 0.0, "other": 1.0, "line_items": []any{price(-1.0), price(5.0)}}}
+	for name, expr := range map[string]string{
+		"guard names another list": "!has(invoice.other) || invoice.line_items.all(x, x.unit_price >= 0.0)",
+		"exists instead of all":    "invoice.line_items.exists(x, x.unit_price >= 100.0)",
+		"body reads invoice":       "invoice.line_items.all(x, x.unit_price >= invoice.min)",
+		"extra conjunct":           "invoice.line_items.all(x, x.unit_price >= 0.0) && invoice.min > 5.0",
+	} {
+		t.Run(name, func(t *testing.T) {
+			wantPaths(t, mustLines(t, p, celRule("k", "line_items", expr)), "line_items")
+		})
+	}
+}
+
+func TestCEL_OtherListAndShadowedVariable(t *testing.T) {
+	p := Payload{"invoice": map[string]any{
+		"tax_subtotals": []any{map[string]any{"amount": 1.0}, map[string]any{"amount": -1.0}},
+		"line_items":    []any{price(-1.0), price(2.0)},
+	}}
+	wantPaths(t, mustLines(t, p, celRule("k", "tax_subtotals", "invoice.tax_subtotals.all(s, s.amount >= 0.0)")), "tax_subtotals[2]")
+	wantPaths(t, mustLines(t, p, celRule("k", "line_items", "invoice.line_items.all(invoice, invoice.unit_price >= 0.0)")), "line_items[1]")
+}
+
+func TestCEL_EvalReturnsFirstLineViolation(t *testing.T) {
+	v, err := celEvaluator{}.Eval(linesPayload(price(1.0), price(-1.0), price(-2.0)), celRule("k", "line_items", lineCostExpr))
+	if err != nil || v == nil || v.Path != "line_items[2]" {
+		t.Fatalf("got %+v, %v", v, err)
+	}
+}

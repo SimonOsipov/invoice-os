@@ -61,7 +61,6 @@
 // which touches schema_test.go/store_test.go directly -- explicitly out of
 // scope for this Mode A RED file, per M3-05-01's Implementation Plan step 3):
 //   - seedVersion(t,super,true)'s deactivate/restore-by-id LIFO fix.
-//   - TestStore_LoadNoActiveErrors's deactivate/restore-by-id fix.
 //   - TestSchema_NoRuleContentShipped's narrowing to exclude the seeded
 //     versions (by their notes marker, not by version number).
 //

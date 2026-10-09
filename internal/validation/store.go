@@ -38,7 +38,7 @@ var (
 	// errors.Is(err, ErrEmptyRuleSet) still discriminates the cause.
 	//
 	// This is a fail-LOUD guard against a silent fail-OPEN (M4-04-03 Stage-1
-	// addendum G3). An active version with zero rules is never legitimate --
+	// addendum G3). A version in force with zero rules is never legitimate --
 	// a published version always ships with its rules -- so zero rows means
 	// the rules are UNREADABLE, not that compliance is trivially satisfied.
 	// Without the guard the loader returns rs.Rules=[] with err=nil, Evaluate

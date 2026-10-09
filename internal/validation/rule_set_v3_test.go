@@ -95,7 +95,7 @@ func ruleRowsByKey(t *testing.T, app *pgxpool.Pool, version int) map[string]rule
 }
 
 // loadRuleSetByVersion loads a RuleSet by its published version number directly (raw
-// SQL, mirroring store.go's loadActiveRuleSetTx shape) rather than via Store's
+// SQL, mirroring store.go's loadRuleSetByIDTx shape) rather than via Store's
 // active-only LoadActiveRuleSet -- both v2 and v3 are sealed, so their content is stable
 // regardless of which one is currently active. This lets TestV3PathIsTheOnlyDelta
 // evaluate the SAME golden corpus under both without needing to flip which one is

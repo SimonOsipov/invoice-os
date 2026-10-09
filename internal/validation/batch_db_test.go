@@ -133,7 +133,7 @@ func TestBatch_EmptyInvoiceFiresEveryRequired(t *testing.T) {
 // Captured by QUERY (not hardcoded) -- rule_set_versions.id is DB-generated
 // (gen_random_uuid()), so a literal uuid would only be correct against
 // today's local dev DB, not CI or any other environment (same discipline
-// as store_test.go's TestStore_LoadNoActiveErrors / seedVersion doc
+// as store_test.go's seedVersion doc
 // comments: "restoring by CAPTURED ID rather than by naming a version
 // number is the point").
 func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {

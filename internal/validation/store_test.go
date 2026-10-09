@@ -5,17 +5,8 @@
 // reused here, plus this file's own seedFullRule for fixtures that need
 // non-default field values).
 //
-// Isolation of the "at most one active rule_set_versions row" partial unique
-// index across tests: this package never calls t.Parallel() (grep confirms no
-// test file in internal/validation or internal/portfolio does either), so `go
-// test` runs every test in this binary strictly sequentially. seedVersion's
-// t.Cleanup DELETEs the version row (not just deactivates it) at the end of
-// each test that seeds one, and t.Cleanup always runs — pass or fail — before
-// the next test function starts. So by the time any later test's seedVersion
-// call runs, no earlier test's active-version fixture can still exist. See
-// TestStore_LoadNoActiveErrors below for the defensive check that makes this
-// invariant loud (rather than assumed) at the one test that depends on
-// "no active version" being literally true.
+// Fixtures are dated in year 3001+ (sealAndDate) so they never collide with the
+// real versions; t.Cleanup deletes each fixture and no test runs in parallel.
 //
 // Run: `make dev-db` once, then with the per-role DSNs set directly (see
 // dbTestPools in schema_test.go):
@@ -240,7 +231,8 @@ func TestStore_TodayIsV4AtHead(t *testing.T) {
 
 func TestStore_LoadActiveRuleSetGlobalIsTheVersionInForceToday(t *testing.T) {
 	super, app := dbTestPools(t)
-	id, _ := dateFixture(t, super, todayUTC(), "t-today")
+	today := time.Now().UTC().Format(time.DateOnly) // not todayUTC(): the oracle must not share the code under test
+	id, _ := dateFixture(t, super, today, "t-today")
 
 	rs, err := NewStore(app).LoadActiveRuleSetGlobal(context.Background())
 	if err != nil {
@@ -541,5 +533,70 @@ func TestStore_LoadActiveRuleSetPopulatesID(t *testing.T) {
 	if rs.ID != wantID {
 		t.Errorf("rs.ID = %q, want %q -- LoadActiveRuleSet already scans versionID (store.go:72-76), it must "+
 			"now ALSO assign it to rs.ID [uuid-stamp]", rs.ID, wantID)
+	}
+}
+
+func TestStore_LoadForDatesStartDateIsInclusiveAndDuplicatesCollapse(t *testing.T) {
+	super, app := dbTestPools(t)
+	aID, _ := dateFixture(t, super, "3001-01-01", "t-a")
+
+	got, err := NewStore(app).LoadForDates(context.Background(),
+		[]string{"3001-01-01", "3001-01-01", "3000-12-31"})
+	if err != nil {
+		t.Fatalf("LoadForDates: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(result) = %d, want 2 distinct dates", len(got))
+	}
+	if got["3001-01-01"].ID != aID {
+		t.Errorf("start day resolved to %s, want fixture %s (inclusive)", got["3001-01-01"].ID, aID)
+	}
+	if got["3000-12-31"].ID == aID || got["3000-12-31"].Version != 4 {
+		t.Errorf("day before start = %s v%d, want v4", got["3000-12-31"].ID, got["3000-12-31"].Version)
+	}
+}
+
+func TestStore_LoadForDatesDateBeforeEveryStartGetsTheEarliestVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	aID, _ := dateFixture(t, super, "3001-01-01", "t-a")
+
+	got, err := NewStore(app).LoadForDates(context.Background(), []string{"2000-01-01"})
+	if err != nil {
+		t.Fatalf("LoadForDates: %v", err)
+	}
+	rs, ok := got["2000-01-01"]
+	if !ok {
+		t.Fatal("no entry for 2000-01-01")
+	}
+	if rs.ID == aID || rs.Version != 4 {
+		t.Errorf("2000-01-01 = %s v%d, want the earliest dated version v4", rs.ID, rs.Version)
+	}
+}
+
+func TestStore_LoadForDatesEmptyAndMalformedInput(t *testing.T) {
+	_, app := dbTestPools(t)
+	store := NewStore(app)
+	ctx := context.Background()
+
+	got, err := store.LoadForDates(ctx, []string{})
+	if err != nil || got == nil || len(got) != 0 {
+		t.Errorf("empty input = (%v, %v), want empty non-nil map and nil error", got, err)
+	}
+	if _, err := store.LoadForDates(ctx, []string{"not-a-date"}); err == nil || errors.Is(err, ErrNoActiveRuleSet) {
+		t.Errorf("malformed date err = %v, want a non-ErrNoActiveRuleSet error", err)
+	}
+}
+
+func TestStore_TenantLoaderIgnoresAScheduledVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format(time.DateOnly)
+	id, _ := dateFixture(t, super, tomorrow, "t-tomorrow")
+
+	rs, err := NewStore(app).LoadActiveRuleSet(newTestIdentity())
+	if err != nil {
+		t.Fatalf("LoadActiveRuleSet: %v", err)
+	}
+	if rs.ID == id || rs.Version != 4 {
+		t.Errorf("tenant loader = %s v%d, want v4 (not the version scheduled for %s)", rs.ID, rs.Version, tomorrow)
 	}
 }

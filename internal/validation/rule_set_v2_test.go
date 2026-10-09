@@ -21,7 +21,7 @@
 // schema_test.go/store_test.go restore-by-id fixes) is the Stage-3
 // executor's job. Where a spec's only meaningful test is "does an EXISTING
 // fixture, invoked for real, behave correctly", this file invokes that real
-// fixture (seedVersion, TestStore_LoadNoActiveErrors,
+// fixture (seedVersion,
 // TestSeed_ReversibilityRollback) as a nested t.Run subtest rather than a
 // re-implementation, so THIS suite's own greenness tracks the real,
 // evolving fixture code.

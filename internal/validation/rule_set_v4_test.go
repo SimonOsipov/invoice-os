@@ -411,6 +411,14 @@ func TestV4_DownRestoresV3Active(t *testing.T) {
 		t.Fatalf("v4 is_active=%t sealed=%t before running the simulated Down, want both true [AC-6 precondition]", v4Active, v4Sealed)
 	}
 
+	var v4From *string
+	if err := tx.QueryRow(ctx, `SELECT effective_from::text FROM rule_set_versions WHERE version = 4`).Scan(&v4From); err != nil {
+		t.Fatalf("read v4 effective_from: %v [AC-6 precondition]", err)
+	}
+	if v4From == nil || *v4From != "2026-08-06" {
+		t.Fatalf("v4 effective_from = %v before the simulated Down, want 2026-08-06 [AC-6 precondition]", v4From)
+	}
+
 	// db/seed.dev.sql seeds demo invoices that stamp the active version via
 	// rule_set_version_id, whose FK carries no ON DELETE clause -- clear them so the
 	// Down's DELETE below doesn't 23503 (harmless: this tx is always rolled back).
@@ -428,13 +436,14 @@ func TestV4_DownRestoresV3Active(t *testing.T) {
 	}
 
 	// The migration's own Down, reproduced verbatim (migrations/20260806131239_rule_set_v4.sql).
+	// The unseal also nulls effective_from: a CHECK is not a trigger, so dated-is-sealed still binds.
 	if _, err := tx.Exec(ctx, `ALTER TABLE rules DISABLE TRIGGER rules_content_lock`); err != nil {
 		t.Fatalf("Down step: disable rules_content_lock: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `ALTER TABLE rule_set_versions DISABLE TRIGGER rule_set_versions_seal_guard`); err != nil {
 		t.Fatalf("Down step: disable rule_set_versions_seal_guard: %v", err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false, sealed = false WHERE version = 4`); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false, sealed = false, effective_from = NULL WHERE version = 4`); err != nil {
 		t.Fatalf("Down step: unseal+deactivate v4: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 3`); err != nil {

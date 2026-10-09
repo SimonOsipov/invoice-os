@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 )
 
 const (
@@ -22,9 +24,8 @@ const (
 	mappingRowFmt          = "Row %d: %s"                                                  // csvrun.py's user_text: row join
 )
 
-// mappingFields is csvrun.py's FIELDS, in order. Same eleven, same order, as canonicalFields.
-var mappingFields = []string{"invoice_number", "issue_date", "buyer_tin", "buyer_name",
-	"currency", "subtotal", "vat", "total", "line_description", "line_quantity", "line_unit_price"}
+// mappingFields is the import keys of internal/invoicefields, in csvrun.py's FIELDS order.
+var mappingFields = invoicefields.ImportKeys()
 
 // mappingSystem is csvrun.py's SYSTEM (:19-40), byte for byte
 // (TestMappingPrompt_MatchesTheMeasuredHarness).

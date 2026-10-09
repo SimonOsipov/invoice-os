@@ -11,6 +11,8 @@ const ALREADY_MEMBER = 'you already belong to a workspace'
 const WRONG_ADDRESS = 'this invite was sent to a different email address'
 // internal/gateway/register.go's verification_pending answer, served by POST /auth/invitation/register too.
 const PENDING = { status: 'verification_pending' }
+// internal/gateway/invitation.go msgAccountExists.
+const ACCOUNT_EXISTS = 'account_exists'
 
 function auth(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}` }
@@ -18,6 +20,18 @@ function auth(token: string): Record<string, string> {
 
 const preview = (token: string) => rawFetch('/auth/invitation', { method: 'POST', body: { token } })
 const accept = (session: string, token: string) => rawFetch('/api/tenancy/v1/invitations/accept', { method: 'POST', headers: auth(session), body: { token } })
+
+// The preview's account state is read from the auth store, which a fork fills asynchronously (D19: poll, never sleep).
+async function awaitAccountState(token: string, want: 'none' | 'unconfirmed' | 'confirmed'): Promise<{ status: number; body: unknown }> {
+  let last: { status: number; body: unknown } = { status: 0, body: null }
+  await expect
+    .poll(async () => {
+      last = await preview(token)
+      return (last.body as { account?: string } | null)?.account
+    }, { message: `the preview never reported account ${want}`, timeout: 120_000 })
+    .toBe(want)
+  return last
+}
 
 function tenantClaim(token: string): unknown {
   return (claimsOf(token).app_metadata as { tenant_id?: unknown } | undefined)?.tenant_id
@@ -46,7 +60,7 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     const email = inviteAddress('accept-preview')
     const token = await inviteWithToken(adminToken, tenantId, email)
 
-    const live = await preview(token)
+    const live = await awaitAccountState(token, 'none')
     expect(live.status, JSON.stringify(live.body)).toBe(200)
     expect(Object.keys(live.body as object).sort()).toEqual(['account', 'email', 'role', 'workspace'])
     expect(live.body).toEqual({ workspace: (await me(adminToken)).tenant.name, role: 'reviewer', email, account: 'none' })
@@ -54,6 +68,28 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     const bogus = await preview(mintSignInState())
     assertErrorEnvelope(bogus, 404, 'a token no invite holds')
     expect((bogus.body as { error: string }).error).toBe(NOT_VALID)
+  })
+
+  test('invitation accept: an address that already has an account is told so on the invite routes only', async () => {
+    const email = inviteAddress('accept-exists')
+    const token = await inviteWithToken(adminToken, tenantId, email)
+    const password = crypto.randomUUID().slice(0, 16)
+
+    const registered = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password } })
+    expect([registered.status, registered.body]).toEqual([202, PENDING])
+    const known = await awaitAccountState(token, 'confirmed')
+    expect((known.body as { account: string }).account).toBe('confirmed')
+
+    const again = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password } })
+    assertErrorEnvelope(again, 409, 'a second invitee registration')
+    expect((again.body as { error: string }).error).toBe(ACCOUNT_EXISTS)
+
+    // The open route keeps its enumeration-safe answer.
+    const open = await rawFetch('/auth/register', {
+      method: 'POST',
+      body: { email, password, workspace_name: `Exists E2E ${crypto.randomUUID().slice(0, 8)}`, display_name: 'Exists E2E', kind: 'firm' },
+    })
+    expect([open.status, open.body]).toEqual([202, PENDING])
   })
 
   test('invitation accept: a fresh invitee registers with the token, signs in tenant-less, accepts and the next token carries the workspace', async () => {

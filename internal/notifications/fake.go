@@ -7,6 +7,8 @@ type FakeHubSpot struct{}
 
 func (FakeHubSpot) Upsert(context.Context, Contact) error { return nil }
 
+func (FakeHubSpot) OpenDemoDeal(context.Context, Contact, string) error { return nil }
+
 type FakeResend struct{}
 
 func (FakeResend) Sync(context.Context, Contact, bool) error { return nil }

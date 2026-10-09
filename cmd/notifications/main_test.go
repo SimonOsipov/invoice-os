@@ -466,7 +466,7 @@ func TestNotificationsMain_WorkerRunsOnlyWhenDelivering(t *testing.T) {
 			email := fmt.Sprintf("main-%s-%s@worker.example", tc.mode, uuid.NewString()[:8])
 			t.Cleanup(func() {
 				ctx := context.Background()
-				_, _ = admin.Exec(ctx, `DELETE FROM river_job WHERE kind = 'contact_deliver' AND args->>'email' = $1`, email)
+				_, _ = admin.Exec(ctx, `DELETE FROM river_job WHERE kind IN ('contact_deliver', 'demo_deal') AND args->>'email' = $1`, email)
 				_, _ = admin.Exec(ctx, `DELETE FROM contacts WHERE email = $1`, email)
 			})
 			vars := map[string]string{"DATABASE_URL": appURL}
@@ -628,7 +628,7 @@ func qaCleanupContact(t *testing.T, admin *pgxpool.Pool, email string) {
 	t.Helper()
 	t.Cleanup(func() {
 		ctx := context.Background()
-		_, _ = admin.Exec(ctx, `DELETE FROM river_job WHERE kind = 'contact_deliver' AND args->>'email' = $1`, email)
+		_, _ = admin.Exec(ctx, `DELETE FROM river_job WHERE kind IN ('contact_deliver', 'demo_deal') AND args->>'email' = $1`, email)
 		_, _ = admin.Exec(ctx, `DELETE FROM contacts WHERE email = $1`, email)
 	})
 }
@@ -825,5 +825,51 @@ func TestNotificationsMain_RefusesToBootWithoutADatabase(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "DATABASE_URL") {
 		t.Errorf("output does not name DATABASE_URL\n%s", &out)
+	}
+}
+
+// A demo request queues a deal job: fake mode completes it with no network call, off mode leaves it queued.
+func TestNotificationsMain_FakeModeCompletesADemoDealJob(t *testing.T) {
+	admin, appURL := qaAdminPool(t)
+	bin := qaBuildNotifications(t)
+
+	for _, tc := range []struct {
+		mode string
+		vars map[string]string
+	}{
+		{"fake", map[string]string{"CONTACTS_FAKE": "true"}},
+		{"off", nil},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			email := fmt.Sprintf("deal-%s-%s@worker.example", tc.mode, uuid.NewString()[:8])
+			qaCleanupContact(t, admin, email)
+			p := qaStart(t, bin, qaMerge(tc.vars, map[string]string{"DATABASE_URL": appURL}))
+			p.waitFor(t, "/readyz")
+
+			body := fmt.Sprintf(`{"email":%q,"name":"Grace Hopper","company":"Navy"}`, email)
+			if code, out := p.call(t, http.MethodPost, "/internal/contacts/demo-requests", body, qaViaGateway); code != http.StatusAccepted {
+				t.Fatalf("POST demo-requests status %d (%s), want 202\n%s", code, out, p.out)
+			}
+			state := func() string {
+				var s string
+				if err := admin.QueryRow(t.Context(), `SELECT state::text FROM river_job WHERE kind = 'demo_deal' AND args->>'email' = $1`, email).Scan(&s); err != nil {
+					t.Fatalf("read the demo_deal job: %v", err)
+				}
+				return s
+			}
+			if tc.mode == "off" {
+				for deadline := time.Now().Add(4 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+					if s := state(); s != "available" {
+						t.Fatalf("demo_deal state %q in off mode, want available", s)
+					}
+				}
+				return
+			}
+			for deadline := time.Now().Add(30 * time.Second); state() != "completed"; time.Sleep(50 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatalf("the demo_deal job never completed in fake mode\n%s", p.out)
+				}
+			}
+		})
 	}
 }

@@ -48,8 +48,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -299,11 +297,10 @@ func TestServiceImport_StoreDuplicateNeverReachesGateEvaluation(t *testing.T) {
 
 	fg := &fakeGate{
 		validateBatchResult: invoice.BatchOutcome{
-			RuleSetVersion:   2,
-			RuleSetVersionID: uuid.NewString(),
-			Clean:            1,
-			WithViolations:   0,
-			ByID:             map[string][]invoice.Violation{},
+			RuleSetVersion: 2,
+			Clean:          1,
+			WithViolations: 0,
+			ByID:           map[string][]invoice.Violation{},
 		},
 	}
 	svc := newTestServiceWithGate(app, fg)

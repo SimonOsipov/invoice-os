@@ -89,9 +89,9 @@ func TestGate_EvaluateEmptyBatchNoHTTPCallZeroValueResult(t *testing.T) {
 	if len(res.ByRef) != 0 {
 		t.Errorf("ByRef = %v, want empty", res.ByRef)
 	}
-	if res.RuleSetVersion != 0 || res.RuleSetVersionID != "" {
-		t.Errorf("RuleSetVersion=%d RuleSetVersionID=%q, want the zero value -- nothing was evaluated, so there is "+
-			"no real version to report", res.RuleSetVersion, res.RuleSetVersionID)
+	if res.RuleSetVersion != 0 || len(res.StampByRef) != 0 {
+		t.Errorf("RuleSetVersion=%d StampByRef=%v, want the zero value -- nothing was evaluated, so there is "+
+			"no real version to report", res.RuleSetVersion, res.StampByRef)
 	}
 }
 
@@ -130,12 +130,12 @@ func TestGate_ValidateBatchEmptyInvoicesNoHTTPNoStoreCallZeroValueOutcome(t *tes
 	if len(out.ByID) != 0 {
 		t.Errorf("ByID = %v, want empty -- no invoice id may carry the short-circuit's zero-value verdict", out.ByID)
 	}
-	if out.RuleSetVersion != 0 || out.RuleSetVersionID != "" {
-		t.Errorf("RuleSetVersion=%d RuleSetVersionID=%q, want the zero value at the BATCH level -- this is only "+
+	if out.RuleSetVersion != 0 {
+		t.Errorf("RuleSetVersion=%d, want the zero value at the BATCH level -- this is only "+
 			"safe because it never reaches ByID/an invoice; a future caller (task-114) that reports THIS field "+
 			"verbatim as the import report's rule_set_version MUST special-case 0/\"\" as null, per "+
 			"[import-report-shape] (\"rule_set_version is null when nothing was evaluated\") -- reporting the raw "+
-			"zero value would be a false version stamp", out.RuleSetVersion, out.RuleSetVersionID)
+			"zero value would be a false version stamp", out.RuleSetVersion)
 	}
 }
 
@@ -200,7 +200,10 @@ func TestGate_ValidateBatchCallsValidatorExactlyOnceForMultipleInvoices(t *testi
 
 		results := make([]validateBatchItemResult, len(req.Invoices))
 		for i, it := range req.Invoices {
-			results[i] = validateBatchItemResult{Ref: it.Ref, Violations: []Violation{}}
+			results[i] = validateBatchItemResult{
+				Ref: it.Ref, Violations: []Violation{},
+				RuleSetVersion: cannedRuleSetVersion, RuleSetVersionID: ruleSetVersionID,
+			}
 		}
 		resp := validateBatchResponse{
 			RuleSetVersion:   cannedRuleSetVersion,
@@ -269,7 +272,7 @@ func TestGate_ValidateBatchWarningOnlyInvoicePromotesAndCountsAsCleanNotWithViol
 			Results: []validateBatchItemResult{
 				{Ref: inv.ID, Violations: []Violation{
 					{RuleKey: "supplier-tin-format", Severity: "warning", Message: "TIN format looks unusual"},
-				}},
+				}, RuleSetVersion: cannedRuleSetVersion, RuleSetVersionID: ruleSetVersionID},
 			},
 		}
 		b, err := json.Marshal(resp)

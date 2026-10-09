@@ -67,19 +67,19 @@ type EvalItem struct {
 	Invoice Invoice
 }
 
-// EvalResult is Evaluate's outcome: the single rule-set the WHOLE batch was
-// evaluated against (one load means one version -- stamped once, not per item),
-// plus every sent ref's violations.
+// EvalResult is Evaluate's outcome: every sent ref's violations and the
+// rule-set version that judged it (StampByRef), plus the lowest version in the
+// batch (RuleSetVersion).
 //
-// ByRef is TOTAL over the sent refs, inherited from Validator.Validate's own
-// totality guarantee: it refuses any response that does not cover them. That
-// matters because an absent map key returns nil, which reads to a caller as "no
-// violations" -- i.e. as a clean verdict on an invoice 04 never actually
-// judged.
+// ByRef and StampByRef are TOTAL over the sent refs, inherited from
+// Validator.Validate's own totality guarantee: it refuses any response that
+// does not cover them. That matters because an absent map key returns nil,
+// which reads to a caller as "no violations" -- i.e. as a clean verdict on an
+// invoice 04 never actually judged.
 type EvalResult struct {
-	RuleSetVersion   int
-	RuleSetVersionID string
-	ByRef            map[string][]Violation
+	RuleSetVersion int
+	StampByRef     map[string]Stamp
+	ByRef          map[string][]Violation
 }
 
 // Evaluate maps every item through MBSPayload and submits them to 04 in
@@ -98,12 +98,12 @@ type EvalResult struct {
 // without this guard a caller with nothing to evaluate would get an OUTAGE
 // error. That is reachable: an import whose every row is quarantined creates
 // zero invoices and would hand ValidateBatch an empty slice. NOTE for callers:
-// the short-circuit returns a zero-value RuleSetVersion/RuleSetVersionID --
+// the short-circuit returns a zero-value RuleSetVersion and no stamps --
 // nothing was evaluated, so there is no version to report. Do not stamp a run
 // with version 0.
 func (g *Gate) Evaluate(ctx context.Context, items []EvalItem) (EvalResult, error) {
 	if len(items) == 0 {
-		return EvalResult{ByRef: map[string][]Violation{}}, nil
+		return EvalResult{ByRef: map[string][]Violation{}, StampByRef: map[string]Stamp{}}, nil
 	}
 
 	vitems := make([]ValidateItem, len(items))
@@ -121,9 +121,9 @@ func (g *Gate) Evaluate(ctx context.Context, items []EvalItem) (EvalResult, erro
 	}
 
 	return EvalResult{
-		RuleSetVersion:   res.RuleSetVersion,
-		RuleSetVersionID: res.RuleSetVersionID,
-		ByRef:            res.ByRef,
+		RuleSetVersion: res.RuleSetVersion,
+		StampByRef:     res.StampByRef,
+		ByRef:          res.ByRef,
 	}, nil
 }
 
@@ -145,11 +145,8 @@ func (g *Gate) Evaluate(ctx context.Context, items []EvalItem) (EvalResult, erro
 // 04 round trip on an invoice the write would refuse anyway (GAPI-11), and it
 // is inherently racy -- the invoice can change status between here and there.
 // That is fine precisely because it is not the check anything relies on.
-// The int return is the evaluated rule-set version (task-161/M4-22-02):
-// EvalResult.RuleSetVersion, handed back to the caller so ValidateHandler can
-// put it on the wire as rule_set_version, alongside the existing
-// RuleSetVersionID stamp. 0 means "nothing was evaluated" (Evaluate's own
-// zero-value convention, this file's header) -- never a real version.
+// The int return is the version that judged this invoice (its own stamp),
+// handed back so ValidateHandler can put it on the wire as rule_set_version.
 func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 	// Get, not List: this is the ONLY call that hydrates line items. See the
 	// file header.
@@ -180,19 +177,16 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 	// ByRef is total over the sent refs (Validator.Validate enforces it), so
 	// this key is present by construction -- a nil here would be an absent
 	// verdict masquerading as a clean one.
-	outInv, err := g.store.ApplyValidation(ctx, inv.ID, res.ByRef[inv.ID], res.RuleSetVersionID, fingerprint)
+	stamp := res.StampByRef[inv.ID]
+	outInv, err := g.store.ApplyValidation(ctx, inv.ID, res.ByRef[inv.ID], stamp.ID, fingerprint)
 
-	// res.RuleSetVersion is the real evaluated version -- Evaluate already
-	// computed it above -- threaded straight through so ValidateHandler can
-	// put it on the wire as rule_set_version (task-161/M4-22-02). On an
-	// ApplyValidation error outInv is the zero Invoice, but res.RuleSetVersion
-	// still reports the version 04 actually evaluated against rather than
-	// papering over it with a stub 0.
-	return outInv, res.RuleSetVersion, err
+	// On an ApplyValidation error outInv is the zero Invoice, but the version
+	// 04 judged this invoice by is still reported.
+	return outInv, stamp.Version, err
 }
 
-// BatchOutcome is ValidateBatch's report: the one rule-set the whole batch was
-// evaluated against, the clean/blocked split, and every invoice's violations
+// BatchOutcome is ValidateBatch's report: the lowest rule-set version in the
+// batch (each invoice is stamped with its own), the clean/blocked split, and every invoice's violations
 // keyed by id.
 //
 // Clean and WithViolations are computed HERE, by the same hasBlockingViolation
@@ -203,11 +197,10 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 // still promotes. Counting here is what keeps "clean" and "promoted to
 // validated" the same set by construction.
 type BatchOutcome struct {
-	RuleSetVersion   int
-	RuleSetVersionID string
-	Clean            int
-	WithViolations   int
-	ByID             map[string][]Violation
+	RuleSetVersion int
+	Clean          int
+	WithViolations int
+	ByID           map[string][]Violation
 }
 
 // ValidateBatch runs the gate over a batch of already-created invoices in ONE
@@ -243,13 +236,12 @@ func (g *Gate) ValidateBatch(ctx context.Context, invs []Invoice) (BatchOutcome,
 	}
 
 	out := BatchOutcome{
-		RuleSetVersion:   res.RuleSetVersion,
-		RuleSetVersionID: res.RuleSetVersionID,
-		ByID:             make(map[string][]Violation, len(invs)),
+		RuleSetVersion: res.RuleSetVersion,
+		ByID:           make(map[string][]Violation, len(invs)),
 	}
 	for _, inv := range invs {
 		vs := res.ByRef[inv.ID]
-		if _, err := g.store.ApplyValidation(ctx, inv.ID, vs, res.RuleSetVersionID, fingerprints[inv.ID]); err != nil {
+		if _, err := g.store.ApplyValidation(ctx, inv.ID, vs, res.StampByRef[inv.ID].ID, fingerprints[inv.ID]); err != nil {
 			return BatchOutcome{}, fmt.Errorf("apply validation to invoice %s: %w", inv.ID, err)
 		}
 		out.ByID[inv.ID] = vs

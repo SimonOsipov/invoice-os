@@ -183,7 +183,7 @@ func RevalidateActive(
 				res.Demoted++
 				continue
 			}
-			demoted, err := demoteRevalidated(ctx, pool, store, tenantID, it.Ref, vs, out.RuleSetVersionID)
+			demoted, err := demoteRevalidated(ctx, pool, store, tenantID, it.Ref, vs, out.StampByRef[it.Ref].ID)
 			if err != nil {
 				return RevalidateResult{}, fmt.Errorf("invoice: revalidate: demote invoice %s: %w", it.Ref, err)
 			}

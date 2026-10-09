@@ -473,6 +473,11 @@ func newOutageValidatorServer(t *testing.T) *httptest.Server {
 // JSON string literal (RS-V2-14 / F7 pin-detector scope note, gate_test.go).
 func writeValidateResponse(t *testing.T, w http.ResponseWriter, ruleSetVersionID string, results []validateBatchItemResult) {
 	t.Helper()
+	for i := range results {
+		if results[i].RuleSetVersionID == "" {
+			results[i].RuleSetVersion, results[i].RuleSetVersionID = cannedRuleSetVersion, ruleSetVersionID
+		}
+	}
 	b, err := json.Marshal(validateBatchResponse{RuleSetVersion: cannedRuleSetVersion, RuleSetVersionID: ruleSetVersionID, Results: results})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -1435,5 +1440,51 @@ func TestRevalidate_CancelsThenRearms(t *testing.T) {
 	}
 	if n := mustCount(t, super, `SELECT count(*) FROM approval_runs WHERE invoice_id = $1`, inv.ID); n != 2 {
 		t.Errorf("approval_runs rows for invoice = %d, want exactly 2 (one cancelled, one open)", n)
+	}
+}
+
+func TestRevalidateActive_DemoteStampsTheItemsOwnVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "OWN-STAMP tenant")
+	entityID := seedEntity(t, super, tenantID, "OWN-STAMP entity")
+	inv1 := seedInvoiceWithViolations(t, super, tenantID, entityID, "OWN-STAMP-1", "validated", "[]")
+	inv2 := seedInvoiceWithViolations(t, super, tenantID, entityID, "OWN-STAMP-2", "validated", "[]")
+	idX, idY := seedRuleSetVersionID(t, super), seedRuleSetVersionID(t, super)
+	stampFor := map[string]string{inv1: idX, inv2: idY}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req validateBatchRequest
+		_ = json.Unmarshal(body, &req)
+		results := make([]validateBatchItemResult, len(req.Invoices))
+		for i, it := range req.Invoices {
+			results[i] = validateBatchItemResult{
+				Ref: it.Ref, Violations: tinOnlyViolations(it.Invoice),
+				RuleSetVersion: cannedRuleSetVersion, RuleSetVersionID: stampFor[it.Ref],
+			}
+		}
+		writeValidateResponse(t, w, idX, results)
+	}))
+	t.Cleanup(srv.Close)
+	gate := NewGate(store, NewValidator(srv.URL, revalidateS2SToken, nil))
+
+	res, err := RevalidateActive(ctx, app, store, gate, tenantID, false)
+	if err != nil {
+		t.Fatalf("RevalidateActive: %v", err)
+	}
+	if res.Demoted != 2 {
+		t.Fatalf("Demoted = %d, want 2", res.Demoted)
+	}
+	for id, want := range stampFor {
+		var got string
+		if err := super.QueryRow(ctx, `SELECT rule_set_version_id FROM invoices WHERE id = $1`, id).Scan(&got); err != nil {
+			t.Fatalf("read stamp: %v", err)
+		}
+		if got != want {
+			t.Errorf("invoice %s stamped %s, want its own version %s", id, got, want)
+		}
 	}
 }

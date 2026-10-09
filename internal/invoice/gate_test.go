@@ -119,7 +119,10 @@ func TestGate_EvaluateCallsValidatorExactlyOnceWithAllItems(t *testing.T) {
 
 		results := make([]validateBatchItemResult, len(req.Invoices))
 		for i, it := range req.Invoices {
-			results[i] = validateBatchItemResult{Ref: it.Ref, Violations: []Violation{}}
+			results[i] = validateBatchItemResult{
+				Ref: it.Ref, Violations: []Violation{},
+				RuleSetVersion: cannedRuleSetVersion, RuleSetVersionID: "00000000-0000-0000-0000-000000000000",
+			}
 		}
 		resp := validateBatchResponse{
 			RuleSetVersion:   cannedRuleSetVersion,
@@ -469,5 +472,133 @@ func TestGateValidate_PropagatesEvaluatedVersion(t *testing.T) {
 	if version != stampedVersion {
 		t.Errorf("Gate.Validate returned version %d, but the stamped rule_set_version_id resolves to version %d "+
 			"-- the two must describe the SAME rule set", version, stampedVersion)
+	}
+}
+
+// seedDatedRuleSetVersion inserts a sealed version dated from, with one
+// disabled rule so it passes every invoice. Call it BEFORE seedTenant: LIFO
+// cleanup must delete the invoices that stamp it first.
+func seedDatedRuleSetVersion(t *testing.T, super *pgxpool.Pool, from string) (id string, version int) {
+	t.Helper()
+	ctx := context.Background()
+	if err := super.QueryRow(ctx,
+		`INSERT INTO rule_set_versions (version, is_active, sealed, notes)
+		 SELECT GREATEST(COALESCE(MAX(version), 0), 950000) + 1, false, false, 'qa-fixture:internal/invoice/gate_test.go'
+		 FROM rule_set_versions RETURNING id, version`,
+	).Scan(&id, &version); err != nil {
+		t.Fatalf("seed rule_set_versions: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO rules (rule_set_version_id, key, type, target, params, severity, message, scope, enabled)
+		 VALUES ($1, 'passes', 'required', 'invoice.invoice_number', '{}'::jsonb, 'error', 'fixture', 'document', false)`, id,
+	); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE rule_set_versions SET sealed = true, effective_from = $2::date WHERE id = $1`, id, from,
+	); err != nil {
+		t.Fatalf("seal and date version: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		tx, err := super.Begin(ctx)
+		if err != nil {
+			t.Errorf("fixture cleanup: begin: %v", err)
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		for _, q := range []string{
+			`ALTER TABLE rule_set_versions DISABLE TRIGGER USER`,
+			`ALTER TABLE rules DISABLE TRIGGER USER`,
+			`DELETE FROM rule_set_versions WHERE id = '` + id + `'`,
+			`ALTER TABLE rules ENABLE TRIGGER USER`,
+			`ALTER TABLE rule_set_versions ENABLE TRIGGER USER`,
+		} {
+			if _, err := tx.Exec(ctx, q); err != nil {
+				t.Errorf("fixture cleanup: %s: %v", q, err)
+				return
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Errorf("fixture cleanup: commit: %v", err)
+		}
+	})
+	return id, version
+}
+
+func createDatedDraft(t *testing.T, c context.Context, store *Store, entityID, number string, date time.Time) Invoice {
+	t.Helper()
+	in := gapiValidInvoiceInput(entityID, number)
+	in.IssueDate = &date
+	inv, err := store.Create(c, in)
+	if err != nil {
+		t.Fatalf("Create %s: %v", number, err)
+	}
+	return inv
+}
+
+func stampedVersionID(t *testing.T, super *pgxpool.Pool, invoiceID string) string {
+	t.Helper()
+	var id string
+	if err := super.QueryRow(context.Background(),
+		`SELECT rule_set_version_id FROM invoices WHERE id = $1`, invoiceID).Scan(&id); err != nil {
+		t.Fatalf("read stamp of %s: %v", invoiceID, err)
+	}
+	return id
+}
+
+func TestGate_ValidateStampsTheVersionForTheIssueDate(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	bID, bVersion := seedDatedRuleSetVersion(t, super, "3001-06-01")
+	tenantID := seedTenant(t, super, "STAMP-DATE tenant")
+	entityID := seedEntity(t, super, tenantID, "STAMP-DATE entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	store := NewStore(app)
+	gate := NewGate(store, NewValidator(startInProcess04(t, app).URL, gapiS2SToken, nil))
+
+	future := createDatedDraft(t, c, store, entityID, "STAMP-FUT", time.Date(3001, 7, 1, 0, 0, 0, 0, time.UTC))
+	if _, version, err := gate.Validate(c, future.ID); err != nil || version != bVersion {
+		t.Errorf("future-dated: version = %d, err = %v; want %d (fixture B)", version, err, bVersion)
+	}
+	if got := stampedVersionID(t, super, future.ID); got != bID {
+		t.Errorf("future-dated stamp = %s, want fixture B %s", got, bID)
+	}
+
+	now := createDatedDraft(t, c, store, entityID, "STAMP-NOW", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	_, version, err := gate.Validate(c, now.ID)
+	if err != nil || version != 4 {
+		t.Errorf("2026-dated: version = %d, err = %v; want 4", version, err)
+	}
+	if got := stampedVersionID(t, super, now.ID); got == bID {
+		t.Errorf("2026-dated invoice stamped with fixture B %s, want v4's id", got)
+	}
+}
+
+func TestGate_ValidateBatchStampsEachInvoiceByItsOwnVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	bID, _ := seedDatedRuleSetVersion(t, super, "3001-06-01")
+	tenantID := seedTenant(t, super, "STAMP-BATCH tenant")
+	entityID := seedEntity(t, super, tenantID, "STAMP-BATCH entity")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	store := NewStore(app)
+	gate := NewGate(store, NewValidator(startInProcess04(t, app).URL, gapiS2SToken, nil))
+
+	now := createDatedDraft(t, c, store, entityID, "BATCH-NOW", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	future := createDatedDraft(t, c, store, entityID, "BATCH-FUT", time.Date(3001, 7, 1, 0, 0, 0, 0, time.UTC))
+
+	out, err := gate.ValidateBatch(c, []Invoice{now, future})
+	if err != nil {
+		t.Fatalf("ValidateBatch: %v", err)
+	}
+	if out.RuleSetVersion != 4 {
+		t.Errorf("BatchOutcome.RuleSetVersion = %d, want 4 (the lowest)", out.RuleSetVersion)
+	}
+	if got := stampedVersionID(t, super, future.ID); got != bID {
+		t.Errorf("future-dated stamp = %s, want fixture B %s", got, bID)
+	}
+	if got := stampedVersionID(t, super, now.ID); got == bID || got == "" {
+		t.Errorf("2026-dated stamp = %q, want v4's id", got)
 	}
 }

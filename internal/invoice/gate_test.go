@@ -25,7 +25,7 @@
 // GAPI-12/13/14.
 //
 // GAPI-12/13/14 stand up a REAL in-process 04 (internal/validation's
-// Store.LoadActiveRuleSetGlobal + NewDefaultEngine + BatchValidateHandler,
+// Store.LoadForDates + NewDefaultEngine + BatchValidateHandler,
 // behind S2SMiddleware, on an httptest.Server) against the SAME shared
 // dev DB the invoice_app pool already points at -- both packages' own
 // dbTestPools helpers read DATABASE_URL/DATABASE_SUPERUSER_URL for the

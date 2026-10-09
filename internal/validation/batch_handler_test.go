@@ -332,9 +332,18 @@ func TestBatch_MalformedIssueDateFallsBackToToday(t *testing.T) {
 	rec := doBatchAt(t, load, NewDefaultEngine(), fixedNow("2027-03-01T10:00:00Z"), `{"invoices":[
 		{"ref":"a","invoice":{"issue_date":"15/01/2027"}},
 		{"ref":"b","invoice":{"issue_date":20270115}},
-		{"ref":"c","invoice":{"issue_date":""}}]}`)
+		{"ref":"c","invoice":{"issue_date":""}},
+		{"ref":"d","invoice":{"issue_date":null}},
+		{"ref":"e","invoice":{"issue_date":"2027-1-5"}},
+		{"ref":"f","invoice":{"issue_date":"2027-02-30"}},
+		{"ref":"g","invoice":{"issue_date":" 2027-01-15"}},
+		{"ref":"h","invoice":{"issue_date":"2027-01-15T00:00:00Z"}},
+		{"ref":"i","invoice":{"issue_date":{"y":2027}}}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if n := len(decodeBatch(t, rec).Results); n != 9 {
+		t.Fatalf("results = %d, want 9", n)
 	}
 	if len(calls) != 1 || len(calls[0]) != 1 || calls[0][0] != "2027-03-01" {
 		t.Errorf("loader calls = %v, want one call with only today", calls)

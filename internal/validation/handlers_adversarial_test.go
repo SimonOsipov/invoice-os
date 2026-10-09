@@ -8,7 +8,7 @@
 // handler's own error branch) accidentally swallows ErrEmptyRuleSet back
 // into a 200:
 //
-//   - BatchValidateHandler + Store.LoadActiveRuleSetGlobal: the tenant-free
+//   - BatchValidateHandler + Store.LoadForDates: the tenant-free
 //     batch path -- the disaster case named directly in the story: a
 //     silently-empty rule-set masquerading as "every invoice is compliant"
 //     for an entire batch at once, not just one invoice.
@@ -24,7 +24,7 @@ import (
 
 // TestBatchValidate_ActiveVersionZeroRules503NotCleanPass (G3, batch
 // surface): the same scenario through BatchValidateHandler +
-// Store.LoadActiveRuleSetGlobal -- a batch of otherwise-invalid invoices
+// Store.LoadForDates -- a batch of otherwise-invalid invoices
 // (empty {} bodies, which would fire every `required` rule against the
 // real v2 rule-set, per VB-13) must still answer 503 for the WHOLE batch,
 // never a 200 reporting every item's violations: [] (an entire batch

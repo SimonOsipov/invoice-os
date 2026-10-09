@@ -1,7 +1,6 @@
 // M4-04-03 (task-109, Test-first: yes) -- Mode A RED DB-backed specs for
 // BatchValidateHandler driven end-to-end against the REAL Store
-// (LoadActiveRuleSetGlobal, currently the QA scaffold in
-// store_qa_scaffold.go) and the REAL validation.Engine (NewDefaultEngine)
+// (LoadForDates) and the REAL validation.Engine (NewDefaultEngine)
 // over the live migrated DB (v4 active, 20 rules). No identity is ever placed
 // in the request context here -- that is the whole point of the tenant-free
 // batch endpoint ([s2s-identity]).

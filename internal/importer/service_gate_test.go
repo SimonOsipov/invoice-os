@@ -29,7 +29,7 @@
 //	IMPV-16 TestServiceImport_AllQuarantinedBatchNullVersionNeverCallsGate
 //
 // IMPV-01..07/12/13/16 are DB-backed (dbTestPools). IMPV-01..07/12 stand up
-// a REAL in-process 04 (internal/validation's Store.LoadActiveRuleSetGlobal
+// a REAL in-process 04 (internal/validation's Store.LoadForDates
 // + NewDefaultEngine + BatchValidateHandler behind S2SMiddleware, on an
 // httptest.Server) against the live v2 rule set on the shared dev DB --
 // mirroring internal/invoice/gate_test.go's startInProcess04 exactly

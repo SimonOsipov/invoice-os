@@ -563,7 +563,7 @@ func TestIdP_InvitationsListStateIsAdminOnly(t *testing.T) {
 			w.tenant, id, role, status, role+" "+status, id+"@members.test")
 		return id
 	}
-	// A suspended or absent member is refused earlier, as db.ErrNotActiveMember (TestInvitations_CreateRefusals).
+	// A suspended or absent member is refused earlier, as db.ErrNotActiveMember (TestInvitations_NonAdminIsRefused).
 	callers := []struct {
 		name, id string
 		want     error

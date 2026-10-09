@@ -119,7 +119,7 @@ func TestGatewayMainWiresAuthSiteURLIntoRegistration(t *testing.T) {
 					siteVar, parseAt = types.ExprString(as.Lhs[0]), i
 				}
 			}
-			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 5 {
+			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 {
 				wiredArg = types.ExprString(call.Args[1])
 			}
 		}
@@ -220,7 +220,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	t.Cleanup(srv.Close)
 	authURL, _ := url.Parse(srv.URL)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 
 	if rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`); rec.Code != http.StatusBadGateway {
 		t.Errorf("Register = %d, want 502: %s", rec.Code, rec.Body.String())
@@ -268,7 +268,7 @@ func verifyMux(t *testing.T, reg registration, site *url.URL) *http.ServeMux {
 func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 	mux := verifyMux(t, reg, site)
 	mux.Handle("POST /auth/register", reg.Register)
 	// No method in the pattern, so the handler's own method check answers.
@@ -331,7 +331,7 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 func TestVerifyRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	mux := verifyMux(t, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil), site)
+	mux := verifyMux(t, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite), site)
 	const link = "http://gateway.test/auth/verify?token=T&type=signup"
 
 	var page string
@@ -397,7 +397,7 @@ func TestResetPasswordRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	authURL, _ := url.Parse(srv.URL)
 	site, _ := url.Parse("https://site.example")
 	mux := http.NewServeMux()
-	mountResetRoutes(t, mux, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil), authURL, site)
+	mountResetRoutes(t, mux, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite), authURL, site)
 	const link = "http://gateway.test/auth/reset-password?token=T&type=recovery"
 
 	var page string
@@ -438,7 +438,7 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 	var previewerCall *ast.CallExpr
 	for i, st := range body.List {
 		if as, ok := st.(*ast.AssignStmt); ok && len(as.Rhs) == 1 {
-			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 5 && len(as.Lhs) == 1 {
+			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 && len(as.Lhs) == 1 {
 				regVar, regAt = types.ExprString(as.Lhs[0]), i
 			}
 			if call, ok := isCallTo(as.Rhs[0], "gateway", "NewHTTPInvitationPreviewer"); ok && len(as.Lhs) == 1 {
@@ -456,7 +456,7 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 		})
 	}
 	if regVar == "" {
-		t.Fatal("main has no top-level `x := registrationHandlers(...)` with 5 arguments")
+		t.Fatal("main has no top-level `x := registrationHandlers(...)` with 6 arguments")
 	}
 	if len(invCalls) != 1 {
 		t.Fatalf("main calls invitationHandlers %d times, want exactly once", len(invCalls))
@@ -553,5 +553,58 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	}
 	if got := calls(); len(got) != 0 {
 		t.Errorf("a preflight or preview reached GoTrue: %v", got)
+	}
+}
+
+// noPendingInvite is the lookup of a tenancy with no invites.
+func noPendingInvite(context.Context, string) (bool, error) { return false, nil }
+
+// Register asks tenancy about the address: main must hand registrationHandlers the HTTP lookup.
+func TestGatewayMainWiresThePendingInviteLookupIntoRegistration(t *testing.T) {
+	_, body := parseMain(t)
+
+	lookupVar, regArg := "", ""
+	var lookupCall *ast.CallExpr
+	for _, st := range body.List {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			continue
+		}
+		if call, ok := isCallTo(as.Rhs[0], "gateway", "NewHTTPPendingInviteLookup"); ok {
+			lookupVar, lookupCall = types.ExprString(as.Lhs[0]), call
+		}
+		if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 {
+			regArg = types.ExprString(call.Args[5])
+		}
+	}
+	if lookupCall == nil {
+		t.Fatal("main has no top-level `x := gateway.NewHTTPPendingInviteLookup(...)`")
+	}
+	if len(lookupCall.Args) != 3 || types.ExprString(lookupCall.Args[0]) != `routed["tenancy"]` || types.ExprString(lookupCall.Args[2]) != "gatewayToken" {
+		t.Errorf("NewHTTPPendingInviteLookup args = %v, want routed[\"tenancy\"], a client and gatewayToken", lookupCall.Args)
+	}
+	if regArg == "" {
+		t.Fatal("main has no top-level `x := registrationHandlers(...)` with 6 arguments")
+	}
+	if regArg != lookupVar {
+		t.Errorf("registrationHandlers sixth argument = %q, want %q", regArg, lookupVar)
+	}
+}
+
+// Fail closed: with no lookup, Register must not reach GoTrue for a possibly invited address.
+func TestRegistrationHandlers_NilPendingLookupIsNotConfigured(t *testing.T) {
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, nil)
+
+	rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Register = %d, want 503: %s", rec.Code, rec.Body.String())
+	}
+	if want := `{"error":"registration is not configured"}`; strings.TrimSpace(rec.Body.String()) != want {
+		t.Errorf("body = %s, want %s", rec.Body.String(), want)
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("GoTrue saw %v, want no calls", got)
 	}
 }

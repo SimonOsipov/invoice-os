@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -149,6 +150,53 @@ func freshRegisterLimit() *SignInThrottle {
 	return NewSignInThrottle("register", RegisterPerIP, RegisterMaxKeys, RegisterWindow, time.Now)
 }
 
+// pendingAnswer is one result of a pendingProbe.
+type pendingAnswer struct {
+	pending bool
+	err     error
+}
+
+// pendingProbe answers its answers in order, then repeats the last, and records each address asked.
+type pendingProbe struct {
+	mu      sync.Mutex
+	answers []pendingAnswer
+	asked   []string
+}
+
+func probing(answers ...pendingAnswer) *pendingProbe { return &pendingProbe{answers: answers} }
+
+func (p *pendingProbe) lookup(_ context.Context, email string) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	a := p.answers[min(len(p.asked), len(p.answers)-1)]
+	p.asked = append(p.asked, email)
+	return a.pending, a.err
+}
+
+func (p *pendingProbe) calls() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.asked)
+}
+
+// noPendingInvite is the lookup of a tenancy with no invites.
+func noPendingInvite(context.Context, string) (bool, error) { return false, nil }
+
+var (
+	invited   = pendingAnswer{pending: true}
+	uninvited = pendingAnswer{}
+	lookupErr = pendingAnswer{err: errors.New("pending invite lookup: tenancy answered 500")}
+)
+
+// registerWith serves one register request through a handler whose lookup is p.
+func registerWith(t *testing.T, authURL *url.URL, p *pendingProbe, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+	RegisterHandler(authURL, testClient(), 0, freshRegisterLimit(), true, slog.New(slog.DiscardHandler), p.lookup).ServeHTTP(rec, req)
+	return rec
+}
+
 func doRegister(t *testing.T, authURL *url.URL, log *slog.Logger, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	if log == nil {
@@ -157,7 +205,7 @@ func doRegister(t *testing.T, authURL *url.URL, log *slog.Logger, body string) *
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	RegisterHandler(authURL, testClient(), 0, freshRegisterLimit(), true, log).ServeHTTP(rec, req)
+	RegisterHandler(authURL, testClient(), 0, freshRegisterLimit(), true, log, noPendingInvite).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -987,7 +1035,7 @@ func TestRegister_PerIPLimit(t *testing.T) {
 	const floor, ip = 300 * time.Millisecond, "203.0.113.7"
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	log, buf := captureLog()
-	h := RegisterHandler(fake.URL, testClient(), floor, freshRegisterLimit(), true, log)
+	h := RegisterHandler(fake.URL, testClient(), floor, freshRegisterLimit(), true, log, noPendingInvite)
 
 	recs := make([]*httptest.ResponseRecorder, registerPerIPLimit)
 	var wg sync.WaitGroup
@@ -1029,8 +1077,8 @@ func TestRegister_ValidationRefusalsDoNotCount(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	log, buf := captureLog()
 	limit := freshRegisterLimit()
-	slow := RegisterHandler(fake.URL, testClient(), time.Hour, limit, true, log)
-	fast := RegisterHandler(fake.URL, testClient(), 0, limit, true, log)
+	slow := RegisterHandler(fake.URL, testClient(), time.Hour, limit, true, log, noPendingInvite)
+	fast := RegisterHandler(fake.URL, testClient(), 0, limit, true, log, noPendingInvite)
 
 	withAnswers := func(workspace string) string {
 		return registerBodyWithAnswers(regEmail, map[string]any{"password": regPassword, "workspace_name": workspace, "display_name": "Ada"})
@@ -1075,7 +1123,7 @@ func TestRegister_CooldownRefusalIsRefunded(t *testing.T) {
 		t.Helper()
 		fake := sequenceGoTrue(t, answers...)
 		log, buf := captureLog()
-		h := RegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, log)
+		h := RegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, log, noPendingInvite)
 		for i := range n {
 			rec, _ := serveRegisterFrom(t.Context(), h, registerBody(businessAddress(i), regPassword), ip)
 			requirePending202(t, rec)
@@ -1102,7 +1150,7 @@ func TestRegister_CooldownRefusalIsRefunded(t *testing.T) {
 func TestRegister_UnenforcedLimitOnlyLogs(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	log, buf := captureLog()
-	h := RegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), false, log)
+	h := RegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), false, log, noPendingInvite)
 	for i := range registerPerIPLimit + 1 {
 		rec, _ := serveRegisterFrom(t.Context(), h, registerBody(businessAddress(i), regPassword), "203.0.113.7")
 		requirePending202(t, rec)
@@ -1117,7 +1165,7 @@ func TestRegister_UnenforcedLimitOnlyLogs(t *testing.T) {
 		answers := slices.Repeat([]gtAnswer{ok}, registerPerIPLimit)
 		fake := sequenceGoTrue(t, append(answers, cooldown, ok)...)
 		log, buf := captureLog()
-		h := RegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), false, log)
+		h := RegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), false, log, noPendingInvite)
 		for i := range registerPerIPLimit + 2 {
 			rec, _ := serveRegisterFrom(t.Context(), h, registerBody(businessAddress(i), regPassword), "203.0.113.7")
 			requirePending202(t, rec)
@@ -1158,7 +1206,7 @@ func TestRegister_OnlyA4xxAnswerIsRefunded(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			auth, client := c.build(t)
 			log, buf := captureLog()
-			h := RegisterHandler(auth, client, 0, NewSignInThrottle("register", 2, RegisterMaxKeys, RegisterWindow, time.Now), true, log)
+			h := RegisterHandler(auth, client, 0, NewSignInThrottle("register", 2, RegisterMaxKeys, RegisterWindow, time.Now), true, log, noPendingInvite)
 
 			for i := range 3 {
 				serveRegisterFrom(t.Context(), h, registerBody(businessAddress(i), regPassword), ip)
@@ -1166,6 +1214,186 @@ func TestRegister_OnlyA4xxAnswerIsRefunded(t *testing.T) {
 
 			if n := len(recordsNamed(t, buf, registerLimitMsg)); n != c.wantLimit {
 				t.Errorf("%d limit lines after 3 registers against a cap of 2, want %d: %s", n, c.wantLimit, buf.String())
+			}
+		})
+	}
+}
+
+// An invited address answers what a GoTrue 200 answers, byte for byte, and creates nothing.
+func TestRegister_InvitedAddressCreatesNothing(t *testing.T) {
+	control := registerWith(t, newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, probing(uninvited), registerBody(regEmail, regPassword))
+	requirePending202(t, control)
+
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	p := probing(invited)
+	rec := registerWith(t, fake.URL, p, registerBody(regEmail, regPassword))
+
+	if asked := p.calls(); len(asked) != 1 || !strings.EqualFold(asked[0], regEmail) {
+		t.Fatalf("lookup asked about %v, want exactly [%s]", asked, regEmail)
+	}
+	requirePending202(t, rec)
+	requireSameAnswer(t, "invited address", rec, control)
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0: %+v", n, fake.Calls())
+	}
+}
+
+// The control: an address with no invite still signs up, and the lookup was asked.
+func TestRegister_UninvitedAddressStillSignsUp(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	p := probing(uninvited)
+
+	rec := registerWith(t, fake.URL, p, registerBody(regEmail, regPassword))
+
+	if n := len(p.calls()); n != 1 {
+		t.Fatalf("lookup asked %d times, want 1", n)
+	}
+	requirePending202(t, rec)
+	calls := fake.Calls()
+	if len(calls) != 1 || calls[0].Path != "/signup" {
+		t.Fatalf("GoTrue saw %+v, want exactly one /signup call", calls)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal(calls[0].Body, &sent); err != nil || !maps.Equal(sent, map[string]any{"email": regEmail, "password": regPassword}) {
+		t.Errorf("signup body = %s (decode err %v), want exactly the email and password", calls[0].Body, err)
+	}
+}
+
+// Every 400 answers before the lookup; the last request proves the lookup is wired.
+func TestRegister_LookupRunsAfterTheBadRequestChecks(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	p := probing(uninvited)
+	for _, c := range []struct{ name, body, want string }{
+		{"empty object", `{}`, "email and password are required"},
+		{"free-mail address", registerBody("x@gmail.com", regPassword), "a business email address is required; personal email providers are not accepted"},
+		{"empty workspace name", registerBodyWithAnswers(regEmail, map[string]any{"workspace_name": "", "display_name": "Ada"}), "workspace_name must be 1 to 200 characters"},
+		{"501-character consent", registerBodyWithAnswers(regEmail, map[string]any{"marketing_consent_text": strings.Repeat("a", 501)}), "marketing_consent_text must be 1 to 500 characters"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := registerWith(t, fake.URL, p, c.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+			if got := errorBody(t, rec); got != c.want {
+				t.Errorf("error = %q, want %q", got, c.want)
+			}
+		})
+	}
+	if asked := p.calls(); len(asked) != 0 {
+		t.Fatalf("lookup asked %v for 400 requests, want no call", asked)
+	}
+
+	requirePending202(t, registerWith(t, fake.URL, p, registerBody(regEmail, regPassword)))
+	if n := len(p.calls()); n != 1 {
+		t.Errorf("lookup asked %d times for the valid request, want 1", n)
+	}
+}
+
+// A failed lookup refuses before GoTrue and gives the slot back: with a budget of one, the next request gets through.
+func TestRegister_LookupFailureIsUnavailableWithoutGoTrue(t *testing.T) {
+	const ip = "203.0.113.7"
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	p := probing(lookupErr, uninvited)
+	h := RegisterHandler(fake.URL, testClient(), 0, NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now), true, slog.New(slog.DiscardHandler), p.lookup)
+
+	rec, _ := serveRegisterFrom(t.Context(), h, registerBody(regEmail, regPassword), ip)
+
+	if len(p.calls()) != 1 {
+		t.Fatalf("lookup asked %d times, want 1", len(p.calls()))
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502: %s", rec.Code, rec.Body.String())
+	}
+	if got := errorBody(t, rec); got != "registration is unavailable" {
+		t.Errorf("error = %q, want %q", got, "registration is unavailable")
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Fatalf("GoTrue saw %d calls after a failed lookup, want 0", n)
+	}
+
+	next, _ := serveRegisterFrom(t.Context(), h, registerBody(regEmail, regPassword), ip)
+	requirePending202(t, next)
+	if n := signupCalls(fake); n != 1 {
+		t.Errorf("GoTrue /signup saw %d calls from the same IP after the failure, want 1 (the slot was refunded)", n)
+	}
+}
+
+// An invited address spends the slot a sent mail would: after the budget, even an uninvited address gets no sign-up.
+func TestRegister_InvitedAddressSpendsTheIPBudget(t *testing.T) {
+	const ip = "203.0.113.7"
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	answers := append(slices.Repeat([]pendingAnswer{invited}, registerPerIPLimit), uninvited)
+	p := probing(answers...)
+	h := RegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, slog.New(slog.DiscardHandler), p.lookup)
+
+	for i := range registerPerIPLimit {
+		rec, _ := serveRegisterFrom(t.Context(), h, registerBody(businessAddress(i), regPassword), ip)
+		requirePending202(t, rec)
+	}
+	if n := len(p.calls()); n != registerPerIPLimit {
+		t.Fatalf("lookup asked %d times for %d invited posts, want %d", n, registerPerIPLimit, registerPerIPLimit)
+	}
+
+	rec, _ := serveRegisterFrom(t.Context(), h, registerBody(businessAddress(registerPerIPLimit), regPassword), ip)
+	requirePending202(t, rec)
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0: the invited posts spent the budget", n)
+	}
+}
+
+func TestRegister_NilPendingLookupIsNotConfigured(t *testing.T) {
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+
+	RegisterHandler(fake.URL, testClient(), 0, freshRegisterLimit(), true, slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503: %s", rec.Code, rec.Body.String())
+	}
+	if got := errorBody(t, rec); got != "registration is not configured" {
+		t.Errorf("error = %q, want %q", got, "registration is not configured")
+	}
+	if n := len(fake.Calls()); n != 0 {
+		t.Errorf("GoTrue saw %d calls, want 0", n)
+	}
+}
+
+// Neither the address nor the password reaches a log line on the invited or the failed-lookup path.
+func TestRegister_InvitedPathLogsCarryNoAddress(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		answer pendingAnswer
+		status int
+		warn   bool
+	}{
+		{"invited", invited, http.StatusAccepted, false},
+		{"lookup failed", lookupErr, http.StatusBadGateway, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			log, buf := captureLog()
+			p := probing(c.answer)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
+
+			RegisterHandler(newFakeGoTrue(t, http.StatusOK, gtNewUser).URL, testClient(), 10*time.Millisecond, freshRegisterLimit(), true, log, p.lookup).ServeHTTP(rec, req)
+
+			if n := len(p.calls()); n != 1 {
+				t.Fatalf("lookup asked %d times, want 1", n)
+			}
+			if rec.Code != c.status {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, c.status, rec.Body.String())
+			}
+			if buf.Len() == 0 {
+				t.Fatal("the path logged nothing, so the secret check proves nothing")
+			}
+			if c.warn && warnCount(t, buf) == 0 {
+				t.Errorf("a failed lookup logged no WARN: %s", buf.String())
+			}
+			for _, secret := range []string{regEmail, "corp.example", regPassword} {
+				if strings.Contains(buf.String(), secret) {
+					t.Errorf("log holds %q: %s", secret, buf.String())
+				}
 			}
 		})
 	}

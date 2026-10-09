@@ -179,6 +179,7 @@ type tenancyStub struct {
 	mu       sync.Mutex
 	requests []*http.Request
 	bodies   []string
+	location string // sent as Location when set
 }
 
 func newTenancyStub(t *testing.T, status int, body string) *tenancyStub {
@@ -189,8 +190,12 @@ func newTenancyStub(t *testing.T, status int, body string) *tenancyStub {
 		s.mu.Lock()
 		s.requests = append(s.requests, r)
 		s.bodies = append(s.bodies, string(b))
+		location := s.location
 		s.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if location != "" {
+			w.Header().Set("Location", location)
+		}
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
 	}))
@@ -449,7 +454,7 @@ func TestInvitationRegister_MapsGoTrueLikeRegister(t *testing.T) {
 			log, _ := captureLog()
 			reg := httptest.NewRecorder()
 			regReq := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
-			RegisterHandler(authURL, testClient(), 0, freshRegisterLimit(), true, log).ServeHTTP(reg, regReq)
+			RegisterHandler(authURL, testClient(), 0, freshRegisterLimit(), true, log, noPendingInvite).ServeHTTP(reg, regReq)
 
 			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: regEmail}, nil)
 			inv, _ := postInvitee(inviteeHandler(authURL, 0, freshRegisterLimit(), p), inviteeBody(inviteToken, regPassword, nil))
@@ -519,7 +524,7 @@ func TestInvitationRegister_SharesTheRegisterBudget(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	log, _ := captureLog()
 	reg := httptest.NewRecorder()
-	RegisterHandler(fake.URL, testClient(), 0, perIP, true, log).ServeHTTP(reg,
+	RegisterHandler(fake.URL, testClient(), 0, perIP, true, log, noPendingInvite).ServeHTTP(reg,
 		httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword))))
 	requirePending202(t, reg)
 	if n := len(fake.Calls()); n != 1 {
@@ -693,5 +698,145 @@ func TestInvitation_MalformedTokenMakesNoTenancyCall(t *testing.T) {
 				t.Errorf("GoTrue saw %d calls, want 0", n)
 			}
 		})
+	}
+}
+
+func TestHTTPPendingInviteLookup_Wire(t *testing.T) {
+	asks := func(t *testing.T, stub *tenancyStub) (bool, error) {
+		t.Helper()
+		// A default client follows redirects: the lookup itself must refuse to.
+		return NewHTTPPendingInviteLookup(stub.URL, &http.Client{}, inviteGatewayToken)(t.Context(), inviteAddress)
+	}
+	requireOneAsk := func(t *testing.T, stub *tenancyStub) {
+		t.Helper()
+		if stub.count() != 1 {
+			t.Fatalf("tenancy saw %d requests, want 1", stub.count())
+		}
+		r := stub.requests[0]
+		if r.Method != http.MethodPost || r.URL.Path != "/internal/invitations/pending" {
+			t.Errorf("request = %s %s, want POST /internal/invitations/pending", r.Method, r.URL.Path)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", got)
+		}
+		if got := r.Header.Get("X-Gateway-Token"); got != inviteGatewayToken {
+			t.Errorf("X-Gateway-Token = %q, want the gateway token", got)
+		}
+		var sent map[string]string
+		if err := json.Unmarshal([]byte(stub.bodies[0]), &sent); err != nil || !maps.Equal(sent, map[string]string{"email": inviteAddress}) {
+			t.Errorf("body = %s (decode err %v), want exactly {\"email\":<address>}", stub.bodies[0], err)
+		}
+	}
+
+	t.Run("pending true", func(t *testing.T) {
+		stub := newTenancyStub(t, http.StatusOK, `{"pending":true}`)
+		got, err := asks(t, stub)
+		requireOneAsk(t, stub)
+		if err != nil || !got {
+			t.Errorf("lookup = (%v, %v), want (true, nil)", got, err)
+		}
+	})
+	t.Run("pending false", func(t *testing.T) {
+		stub := newTenancyStub(t, http.StatusOK, `{"pending":false}`)
+		got, err := asks(t, stub)
+		requireOneAsk(t, stub)
+		if err != nil || got {
+			t.Errorf("lookup = (%v, %v), want (false, nil)", got, err)
+		}
+	})
+	t.Run("302 is an error and is not followed", func(t *testing.T) {
+		second := newTenancyStub(t, http.StatusOK, `{"pending":false}`)
+		first := newTenancyStub(t, http.StatusFound, ``)
+		first.mu.Lock()
+		first.location = second.URL.String() + "/elsewhere"
+		first.mu.Unlock()
+		got, err := asks(t, first)
+		requireOneAsk(t, first)
+		if err == nil || got {
+			t.Errorf("lookup = (%v, %v), want (false, an error)", got, err)
+		}
+		if n := second.count(); n != 0 {
+			t.Errorf("the redirect target saw %d request(s), want 0", n)
+		}
+	})
+}
+
+func TestHTTPPendingInviteLookup_ErrorsCarryNoSecret(t *testing.T) {
+	cases := []struct {
+		name       string
+		base       *url.URL
+		wantStatus string
+	}{
+		{"500", newTenancyStub(t, http.StatusInternalServerError, `{"error":"boom"}`).URL, "500"},
+		{"unreachable", closedURL(t), ""},
+		{"200 with an unreadable body", newTenancyStub(t, http.StatusOK, `<html>not json`).URL, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := NewHTTPPendingInviteLookup(c.base, &http.Client{}, inviteGatewayToken)(t.Context(), inviteAddress)
+
+			if err == nil {
+				t.Fatalf("lookup = (%v, nil), want an error", got)
+			}
+			if got {
+				t.Errorf("lookup = (true, %v), want false with an error", err)
+			}
+			var urlErr *url.Error
+			if errors.As(err, &urlErr) {
+				t.Errorf("err wraps a *url.Error, which carries the URL: %v", err)
+			}
+			for _, secret := range []string{inviteAddress, inviteGatewayToken, c.base.Host, c.base.String(), "/internal/invitations/pending"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("error text %q holds %q", err.Error(), secret)
+				}
+			}
+			if c.wantStatus != "" && !strings.Contains(err.Error(), c.wantStatus) {
+				t.Errorf("error text %q does not name the status %s", err.Error(), c.wantStatus)
+			}
+		})
+	}
+}
+
+func TestHTTPPendingInviteLookup_GivesUpAfterTheDeadline(t *testing.T) {
+	old := invitationPreviewTimeout
+	invitationPreviewTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { invitationPreviewTimeout = old })
+
+	release := make(chan struct{})
+	var started atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started.Add(1)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	base, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	// No client timeout: only the lookup's own bound can end the call.
+	lookup := NewHTTPPendingInviteLookup(base, &http.Client{}, inviteGatewayToken)
+
+	// The outer bound only makes a missing lookup deadline fail fast instead of hanging.
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err = lookup(ctx, inviteAddress)
+	elapsed := time.Since(start)
+
+	if started.Load() != 1 {
+		t.Fatalf("the stub saw %d requests, want 1: the call never reached it, so the deadline proves nothing", started.Load())
+	}
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v, want a \"timed out\" error", err)
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("gave up after %v, want near the %v bound", elapsed, invitationPreviewTimeout)
+	}
+	if strings.Contains(err.Error(), inviteAddress) || strings.Contains(err.Error(), base.Host) {
+		t.Errorf("error text %q holds the address or the URL", err.Error())
 	}
 }

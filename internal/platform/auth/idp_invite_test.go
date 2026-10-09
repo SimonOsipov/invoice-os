@@ -81,9 +81,15 @@ type inviteWorld struct {
 	resend                         *resendStandIn
 }
 
-// newInviteWorld seeds "IdP Invite Co" with an active admin, has the admin invite a fresh gmail.com address
-// as reviewer through the real Inviter, and reads the token from the mail the Resend stand-in recorded.
+// newInviteWorld is newInviteWorldAt on gmail.com.
 func newInviteWorld(t *testing.T, prefix string) inviteWorld {
+	t.Helper()
+	return newInviteWorldAt(t, prefix, "gmail.com")
+}
+
+// newInviteWorldAt seeds "IdP Invite Co" with an active admin, has the admin invite a fresh address on domain
+// as reviewer through the real Inviter, and reads the token from the mail the Resend stand-in recorded.
+func newInviteWorldAt(t *testing.T, prefix, domain string) inviteWorld {
 	t.Helper()
 	ctx := context.Background()
 	base := idpMailURL(t)
@@ -96,7 +102,7 @@ func newInviteWorld(t *testing.T, prefix string) inviteWorld {
 	t.Cleanup(pool.Close)
 	store := tenancy.NewStore(pool)
 
-	w := inviteWorld{base: base, store: store, resend: newResendStandIn(t), tenant: uuid.NewString(), email: prefix + uuid.NewString() + "@gmail.com"}
+	w := inviteWorld{base: base, store: store, resend: newResendStandIn(t), tenant: uuid.NewString(), email: prefix + uuid.NewString() + "@" + domain}
 	admin := uuid.NewString()
 	exec(t, conn, `INSERT INTO tenants (id, name) VALUES ($1, 'IdP Invite Co')`, w.tenant)
 	exec(t, conn, `INSERT INTO memberships (tenant_id, user_id, role, status, display_name, email) VALUES ($1, $2, 'admin', 'active', 'Ada Admin', $3)`,

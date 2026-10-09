@@ -1200,7 +1200,7 @@ func TestRegistrationHandlers_WiresRegisterAndVerify(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	const floor = 100 * time.Millisecond
-	reg := registrationHandlers(authURL, site, floor, slog.New(slog.DiscardHandler), nil)
+	reg := registrationHandlers(authURL, site, floor, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 
 	start := time.Now()
 	rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)
@@ -1227,9 +1227,9 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			var reg registration
 			if unset == "AUTH_SITE_URL" {
-				reg = registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil)
+				reg = registrationHandlers(authURL, nil, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 			} else {
-				reg = registrationHandlers(nil, site, 0, slog.New(slog.DiscardHandler), nil)
+				reg = registrationHandlers(nil, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 			}
 
 			for name, rec := range map[string]*httptest.ResponseRecorder{
@@ -1352,7 +1352,7 @@ func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			site, _ := url.Parse("https://site.example")
 			log := slog.New(slog.DiscardHandler)
-			reg := registrationHandlers(authURL, site, 0, log, nil)
+			reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
 			preview, _ := invitationPreviewerStub("tunde@obi.test")
 			_, register := invitationHandlers(authURL, site, 0, reg.RegisterPerIP, preview, log)
 
@@ -1379,7 +1379,7 @@ func TestRegistrationHandlers_ExposesTheRegisterThrottle(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
 
-	reg := registrationHandlers(authURL, site, 0, log, nil)
+	reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
 	if reg.RegisterPerIP == nil {
 		t.Fatal("RegisterPerIP is nil with AUTH_URL and AUTH_SITE_URL configured")
 	}
@@ -1395,10 +1395,10 @@ func TestRegistrationHandlers_ExposesTheRegisterThrottle(t *testing.T) {
 		t.Errorf("RegisterPerIP still has budget for a client that spent all %d register attempts: it is not the throttle Register uses", gateway.RegisterPerIP)
 	}
 
-	if got := registrationHandlers(nil, site, 0, log, nil).RegisterPerIP; got != nil {
+	if got := registrationHandlers(nil, site, 0, log, nil, noPendingInvite).RegisterPerIP; got != nil {
 		t.Error("RegisterPerIP is non-nil with AUTH_URL unset")
 	}
-	if got := registrationHandlers(authURL, nil, 0, log, nil).RegisterPerIP; got != nil {
+	if got := registrationHandlers(authURL, nil, 0, log, nil, noPendingInvite).RegisterPerIP; got != nil {
 		t.Error("RegisterPerIP is non-nil with AUTH_SITE_URL unset")
 	}
 }
@@ -1484,7 +1484,7 @@ func TestRegistrationHandlers_ResetSharesTheResendLimits(t *testing.T) {
 	t.Run("per address", func(t *testing.T) {
 		authURL, calls := fakeAuth(t)
 		site, _ := url.Parse("https://site.example")
-		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 		for range 2 {
 			resendFrom(reg.ResendVerification, "ada@corp.example", remote)
 			resetFrom(reg.RequestPasswordReset, "ada@corp.example", remote)
@@ -1496,7 +1496,7 @@ func TestRegistrationHandlers_ResetSharesTheResendLimits(t *testing.T) {
 	t.Run("per client", func(t *testing.T) {
 		authURL, calls := fakeAuth(t)
 		site, _ := url.Parse("https://site.example")
-		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+		reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 		for i, email := range distinctAddresses(11) {
 			if i%2 == 0 {
 				resendFrom(reg.ResendVerification, email, remote)
@@ -1522,7 +1522,7 @@ func TestRegistrationHandlers_ResetPreviewOnlyLogsPerAddress(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			site, _ := url.Parse("https://site.example")
 			var logs bytes.Buffer
-			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+			reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite)
 
 			for range 4 {
 				resetFrom(reg.RequestPasswordReset, "ada@corp.example", "203.0.113.7:4000")
@@ -1564,7 +1564,7 @@ func TestRegistrationHandlers_ResendWaitsAndLimits(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			site, _ := url.Parse("https://site.example")
-			reg := registrationHandlers(authURL, site, c.floor, slog.New(slog.DiscardHandler), nil)
+			reg := registrationHandlers(authURL, site, c.floor, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 
 			start := time.Now()
 			for _, email := range c.addresses {
@@ -1596,7 +1596,7 @@ func TestRegistrationHandlers_RegisterHasItsOwnLimit(t *testing.T) {
 	const remote = "203.0.113.7:4000"
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 
 	for _, email := range distinctAddresses(11) {
 		if rec := registerFrom(reg.Register, email, remote); rec.Code != http.StatusAccepted {
@@ -1646,7 +1646,7 @@ func TestRegistrationHandlers_PreviewOnlyLogs(t *testing.T) {
 				authURL, calls := fakeAuth(t)
 				site, _ := url.Parse("https://site.example")
 				var logs bytes.Buffer
-				reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil)
+				reg := registrationHandlers(authURL, site, 0, slog.New(slog.NewJSONHandler(&logs, nil)), nil, noPendingInvite)
 
 				for _, email := range distinctAddresses(11) {
 					rt.send(rt.handler(reg), email, "203.0.113.7:4000")
@@ -1682,7 +1682,7 @@ func TestRegistrationHandlers_FullMapWarningNamesTheMap(t *testing.T) {
 
 	authURL, _ := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 
 	remote := func(i int) string { return fmt.Sprintf("10.%d.%d.%d:4000", i>>16&255, i>>8&255, i&255) }
 	for i := range gateway.RegisterMaxKeys {

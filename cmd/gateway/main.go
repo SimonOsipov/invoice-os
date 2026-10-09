@@ -177,7 +177,7 @@ func main() {
 
 	// Public registration, outside /api/ and the verifier, in every build. Register is
 	// CORS-wrapped for the landing page; the OPTIONS route stops the POST route 405ing the preflight.
-	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink)
+	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink, nil)
 	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("POST /auth/resend-verification", withCORS(reg.ResendVerification))
@@ -311,7 +311,7 @@ func newJWKSClient() *http.Client {
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
 // A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification, RequestPasswordReset and Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
 // On a PR preview the per-client limits log but do not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
-func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
+func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink, pending gateway.PendingInviteLookup) registration {
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
 		return registration{Register: nc, Verify: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
@@ -326,7 +326,7 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	registerPerIP := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
 	return registration{
-		Register:             gateway.RegisterHandler(authURL, client, minResponse, registerPerIP, enforce, log),
+		Register:             gateway.RegisterHandler(authURL, client, minResponse, registerPerIP, enforce, log, pending),
 		RegisterPerIP:        registerPerIP,
 		Verify:               gateway.VerifyHandler(authURL, siteURL, client, log, sink),
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),

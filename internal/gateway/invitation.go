@@ -81,6 +81,14 @@ func NewHTTPInvitationPreviewer(base *url.URL, client *http.Client, gatewayToken
 	}
 }
 
+// PendingInviteLookup reports whether email has a pending, unexpired invite in any tenant.
+type PendingInviteLookup func(ctx context.Context, email string) (bool, error)
+
+// NewHTTPPendingInviteLookup is a stub until the executor writes the tenancy call.
+func NewHTTPPendingInviteLookup(base *url.URL, client *http.Client, gatewayToken string) PendingInviteLookup {
+	return func(context.Context, string) (bool, error) { return false, nil }
+}
+
 // previewToken looks up token, answering 404 or 502 itself and reporting false when it did.
 // A token that is not 43 base64url characters is refused without a lookup.
 func previewToken(w http.ResponseWriter, r *http.Request, preview InvitationPreviewer, log *slog.Logger, token string) (InvitationPreview, bool) {

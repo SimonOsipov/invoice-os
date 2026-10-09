@@ -14,6 +14,9 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
 
+// noPendingInvite is the lookup of a database with no invites.
+func noPendingInvite(context.Context, string) (bool, error) { return false, nil }
+
 // idp-es256 runs the fork's mail posture (autoconfirm on, SMTP blank), so this is the fork's
 // registration then sign-in, and the repeat that e2e/api/registration.spec.ts asserts.
 func TestIdP_AutoconfirmedRegistrationSignsInAndARepeatAnswers202(t *testing.T) {
@@ -29,7 +32,7 @@ func TestIdP_AutoconfirmedRegistrationSignsInAndARepeatAnswers202(t *testing.T) 
 	}
 	register := gateway.RegisterHandler(authURL, idpHTTP, 0,
 		gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now), true,
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
+		slog.New(slog.NewTextHandler(io.Discard, nil)), noPendingInvite)
 	creds := map[string]string{"email": u.email, "password": u.password}
 
 	if status, body := serveJSON(t, register, "/auth/register", creds); status != http.StatusAccepted {

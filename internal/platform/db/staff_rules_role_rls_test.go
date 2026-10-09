@@ -377,7 +377,7 @@ func TestRLS_CustomAccessTokenHookRulesRoleOverNonObjectAppMetadata(t *testing.T
 	}
 }
 
-// AC-5. The ACL is read directly; a refusal alone could be RLS's own 42501.
+// AC-5.
 func TestRLS_StaffRulesRoleRefusesEveryNonOwnerWrite(t *testing.T) {
 	h := requireHarness(t)
 	reapplyStaffMigration(t)

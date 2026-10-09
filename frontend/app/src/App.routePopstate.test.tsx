@@ -425,6 +425,26 @@ describe('ENGI-16-04: the line target is one-shot', () => {
     expect(ctx.importedInvoiceLine).toBeNull()
   })
 
+  it('consumedLine_leavingAndReturningToDetailCarriesNoLine', async () => {
+    await bootAt('/')
+    await act(async () => {
+      capturedCtx!.openImportedInvoice(INVOICE_ID, { line: 2, field: null })
+    })
+    await act(async () => {
+      capturedCtx!.consumeImportedInvoiceLine()
+    })
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      capturedCtx!.nav('detail')
+    })
+    const ctx = requireCtx()
+    expect(ctx.view).toBe('detail')
+    expect(ctx.importedInvoiceId).toBe(INVOICE_ID)
+    expect(ctx.importedInvoiceLine).toBeNull()
+  })
+
   it('switchClient_clearsTheLineTarget', async () => {
     await bootAt('/')
     await act(async () => {

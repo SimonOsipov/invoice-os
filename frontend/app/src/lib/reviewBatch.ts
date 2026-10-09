@@ -1229,7 +1229,7 @@ export const ROW_EXPANSION_COPY = {
   // INVCR-01-15 (D6, task-291): the Keep as-is action, alongside Re-validate --
   // [bulk-copy-lives-in-the-lib] applies to this section exactly as it does to the
   // rest of ROW_EXPANSION_COPY above.
-  openLineUnsaved: 'Save or discard your changes before opening the line.',
+  openLineUnsaved: 'Save your changes first — opening the line leaves this page.',
   keepLabel: 'Keep as-is',
   keeping: 'Keeping…',
   keepReasonPlaceholder: 'Why are you keeping this despite the failure? (required)',

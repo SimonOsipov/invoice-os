@@ -315,6 +315,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     const target = pendingLine.current
     if (target == null || inv == null) return
     pendingLine.current = null
+    ctx.consumeImportedInvoiceLine() // one-shot: a later visit must not replay it
     if (!inv.can_edit) return
     setEditing(true)
     setLineFocus({ seq: 1, target })

@@ -427,6 +427,7 @@ export type PlatformCtx = {
   importedInvoiceId: string | null
   // One-shot: the line the detail editor opens at; null unless openImportedInvoice passed one.
   importedInvoiceLine: LineTarget | null
+  consumeImportedInvoiceLine: () => void
   // This atom and the `invoice` param of the current /audit URL are the same fact: every
   // writer moves both, and navigating off Audit clears both.
   auditPrefilter: AuditPrefilter | null

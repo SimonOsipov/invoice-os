@@ -6567,8 +6567,9 @@ describe('InvoiceDetail opens at the line the review screen handed over (ENGI-16
   }))
   const base = { id: ID, status: 'validated' as InvoiceStatus, can_edit: true, can_revalidate: true, line_items: lines, rule_set_version: 3 }
   const lineRow = (n: number) => screen.getAllByTestId('line-row')[n - 1]
+  const consume = vi.fn()
   const ctxWithLine = () =>
-    ({ ...detailCtx(ID), importedInvoiceLine: { line: 2, field: 'unit_price' } }) as unknown as PlatformCtx
+    ({ ...detailCtx(ID), importedInvoiceLine: { line: 2, field: 'unit_price' }, consumeImportedInvoiceLine: consume }) as unknown as PlatformCtx
 
   it('invoiceDetail_mountWithLineTargetOpensEditor', async () => {
     mockDetailFetch(detailRecord(base))
@@ -6576,6 +6577,14 @@ describe('InvoiceDetail opens at the line the review screen handed over (ENGI-16
 
     await screen.findByTestId('edit-invoice')
     expect(document.activeElement).toBe(lineRow(2).querySelector('[data-line-field="unit_price"]'))
+  })
+
+  it('invoiceDetail_lineTargetIsConsumedFromTheApp', async () => {
+    consume.mockClear()
+    mockDetailFetch(detailRecord(base))
+    render(<InvoiceDetail ctx={ctxWithLine()} />)
+    await screen.findByTestId('edit-invoice')
+    expect(consume).toHaveBeenCalledTimes(1)
   })
 
   it('invoiceDetail_mountWithLineTargetNotEditable', async () => {

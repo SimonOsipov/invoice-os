@@ -1712,6 +1712,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     adoptBatchClient,
     importedInvoiceId: detailInvoiceId,
     importedInvoiceLine: detailLine,
+    consumeImportedInvoiceLine: () => setDetailLine(null),
     auditPrefilter,
     extractionJobId,
     nav,

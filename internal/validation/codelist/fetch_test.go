@@ -59,7 +59,19 @@ func TestFetch_EveryListExtractsItsCodes(t *testing.T) {
 		_, _ = w.Write(b)
 	}))
 	defer srv.Close()
-	first := map[string]string{"countries": "AF", "hs-codes": "0101.21", "lgas": "NG-AB-ANO"}
+	wantCodes := map[string][]string{
+		"countries":              {"AF", "AX", "AL"},
+		"currencies":             {"USD", "CAD", "EUR"},
+		"hs-codes":               {"0101.21", "0101.29", "0101.30"},
+		"invoice-quantity-codes": {"10", "11", "13"},
+		"invoice-types":          {"380", "381", "384"},
+		"lgas":                   {"NG-AB-ANO", "NG-AB-ASO", "NG-AB-ARO"},
+		"payment-means":          {"10", "20", "30"},
+		"services-codes":         {"0111", "0112", "0113"},
+		"states":                 {"NG-AB", "NG-AD", "NG-AK"},
+		"tax-categories":         {"STANDARD_GST", "REDUCED_GST", "ZERO_GST"},
+		"vat-exemptions":         {"2915.3100", "2916.3900", "0204.3000", "8708.3900 "},
+	}
 	for _, l := range Lists {
 		var fx struct {
 			Data []map[string]any `json:"data"`
@@ -83,7 +95,10 @@ func TestFetch_EveryListExtractsItsCodes(t *testing.T) {
 				t.Errorf("%s: missing code %q", l.Name, c)
 			}
 		}
-		if c, ok := first[l.Name]; ok {
+		if len(wantCodes[l.Name]) != len(got) {
+			t.Errorf("%s: %d codes, want %d", l.Name, len(got), len(wantCodes[l.Name]))
+		}
+		for _, c := range wantCodes[l.Name] {
 			if _, ok := got[c]; !ok {
 				t.Errorf("%s: want code %q", l.Name, c)
 			}
@@ -163,7 +178,7 @@ func TestFetch_MalformedEntryFails(t *testing.T) {
 	for _, body := range bodies {
 		srv := serve(t, 200, []byte(body))
 		_, _, err := fetch(context.Background(), nil, srv.URL, listByName(t, "states"))
-		if err == nil || !strings.Contains(err.Error(), "states") {
+		if err == nil || !strings.Contains(err.Error(), "states") || errors.Is(err, ErrEmptyList) {
 			t.Errorf("%s: err = %v", body, err)
 		}
 	}
@@ -218,6 +233,9 @@ func TestFetch_RedirectIsNotFollowed(t *testing.T) {
 }
 
 func TestFetch_OversizedBodyFails(t *testing.T) {
+	if maxBody != 16<<20 {
+		t.Fatalf("maxBody = %d, want 16 MiB", maxBody)
+	}
 	base := fixture(t, "states")
 	exact := append(append([]byte{}, base...), bytes.Repeat([]byte(" "), maxBody-len(base))...)
 	srv := serve(t, 200, exact)

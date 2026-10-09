@@ -137,3 +137,28 @@ func TestRuleBreaks_CollapsesADuplicate(t *testing.T) {
 		t.Errorf("one key on two fields = %v, want %v", keys(twoFields), want)
 	}
 }
+
+func TestRuleBreaks_EmptyInputsAndEverySeverity(t *testing.T) {
+	ex := rbReading("vat", "buyer_tin")
+	one := []invoice.Violation{rbViolation("vat", "vat-standard-rate")}
+	if got := ruleBreaks(ex, one); len(got) != 1 {
+		t.Fatalf("control: ruleBreaks = %+v, want one", got)
+	}
+	if got := ruleBreaks(ex, nil); len(got) != 0 {
+		t.Errorf("nil violations: ruleBreaks = %+v, want none", got)
+	}
+	if got := ruleBreaks(ex, []invoice.Violation{}); len(got) != 0 {
+		t.Errorf("empty violations: ruleBreaks = %+v, want none", got)
+	}
+	if got := ruleBreaks(SettledExtraction{JobID: "job-1"}, one); len(got) != 0 {
+		t.Errorf("reading with no fields: ruleBreaks = %+v, want none", got)
+	}
+
+	for _, sev := range []string{"error", "warning", "info", ""} {
+		v := rbViolation("vat", "vat-"+sev)
+		v.Severity = sev
+		if got := ruleBreaks(ex, []invoice.Violation{v}); len(got) != 1 || got[0].RuleKey != "vat-"+sev {
+			t.Errorf("severity %q: ruleBreaks = %+v, want the violation recorded (every severity flags)", sev, got)
+		}
+	}
+}

@@ -405,7 +405,7 @@ func TestServiceImportDocument_RuleSetVersionMarshalsToNullNotZeroDefault(t *tes
 		t.Fatalf("res.Status = %q, want completed (the clean-path precondition for this spec)", res.Status)
 	}
 	if res.RuleSetVersion != nil {
-		t.Errorf("RuleSetVersion = %v, want nil -- ImportDocument runs no gate (AC #6)", *res.RuleSetVersion)
+		t.Errorf("RuleSetVersion = %v, want nil (AC #6)", *res.RuleSetVersion)
 	}
 	if res.InvoicesClean != 0 || res.InvoicesWithViolations != 0 {
 		t.Errorf("InvoicesClean=%d InvoicesWithViolations=%d, want 0/0 (AC #6)", res.InvoicesClean, res.InvoicesWithViolations)

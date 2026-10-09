@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // ENGI-18-02: the importer records which rules a document reading breaks. Real-gate tests run
@@ -574,6 +576,13 @@ func TestRLS_RecordRuleBreaksTwiceKeepsOneRow(t *testing.T) {
 	if err := store.RecordRuleBreaks(callCtx, jobID, "not-a-uuid", nil); err != nil {
 		t.Fatalf("RecordRuleBreaks(empty): %v, want a no-op that never reaches the bad version id", err)
 	}
+	// a no-op opens no transaction: with no identity, an empty list is nil and a real list is refused
+	if err := store.RecordRuleBreaks(ctx, jobID, versionID, nil); err != nil {
+		t.Errorf("RecordRuleBreaks(empty, no identity): %v, want nil: no transaction opens", err)
+	}
+	if err := store.RecordRuleBreaks(ctx, jobID, versionID, breaks); err == nil {
+		t.Fatal("RecordRuleBreaks(rows, no identity) = nil, want an error: the control for the empty-list no-op above")
+	}
 	if err := store.RecordRuleBreaks(callCtx, jobID, versionID, breaks); err != nil {
 		t.Fatalf("RecordRuleBreaks #1: %v", err)
 	}
@@ -626,5 +635,126 @@ func TestRLS_RecordRuleBreaksRefusesAnotherTenantsJob(t *testing.T) {
 	}
 	if rows := rbRows(t, super, jobA); len(rows) != 1 || rows[0].tenantID != tenantA {
 		t.Errorf("rows = %+v, want one row stamped with tenant A", rows)
+	}
+
+	// the row tenant A wrote is visible to A and invisible to B through the app role
+	seenBy := func(tenantID string) (n int) {
+		err := db.WithinRequestTenantTx(sxIdentity(ctx, tenantID), app, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT count(*) FROM extraction_rule_breaks`).Scan(&n)
+		})
+		if err != nil {
+			t.Fatalf("read extraction_rule_breaks as tenant %s: %v", tenantID, err)
+		}
+		return n
+	}
+	if got := seenBy(tenantA); got != 1 {
+		t.Errorf("tenant A sees %d rows, want 1", got)
+	}
+	if got := seenBy(tenantB); got != 0 {
+		t.Errorf("tenant B sees %d rows, want 0", got)
+	}
+}
+
+func TestRLS_AnotherTenantsImportOfMyDocumentRecordsNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantA, entityA := rbTenant(t, super, "RB-IMP-A")
+	tenantB, entityB := rbTenant(t, super, "RB-IMP-B")
+	documentA, jobA := rbSeed(t, super, tenantA, rbBadTIN(docCleanValues("RB-IMP-INV")))
+	g := &rbGate{violations: []invoice.Violation{rbBuyerTINViolation}, versionID: rbActiveVersionID(t, super)}
+
+	if _, err := newTestServiceWithGate(app, g).ImportDocument(sxIdentity(ctx, tenantB), entityB, documentA); err == nil {
+		t.Fatal("tenant B imported tenant A's document without error, want ErrNotFound")
+	}
+	if g.evaluateCalls != 0 {
+		t.Errorf("Evaluate calls = %d, want 0: the refused import never reached the gate", g.evaluateCalls)
+	}
+	if n := rbCountTenants(t, super, tenantA, tenantB); n != 0 {
+		t.Errorf("extraction_rule_breaks rows in either tenant = %d, want 0", n)
+	}
+
+	// control: tenant A's own import of the same document records the break
+	if res, err := newTestServiceWithGate(app, g).ImportDocument(sxIdentity(ctx, tenantA), entityA, documentA); err != nil || res.ReadyInvoices != 1 {
+		t.Fatalf("control import: res=%+v err=%v", res, err)
+	}
+	if rows := rbRows(t, super, jobA); len(rows) != 1 {
+		t.Errorf("control: rows = %+v, want one", rows)
+	}
+}
+
+func TestRLS_AReimportAfterTheDraftIsDeletedAddsOnlyTheNewBreaks(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID, entityID := rbTenant(t, super, "RB-REIMP")
+	documentID, jobID := rbSeed(t, super, tenantID, rbBadTIN(docCleanValues("RB-REIMP-INV")))
+	callCtx := sxIdentity(ctx, tenantID)
+	vatBreak := invoice.Violation{RuleKey: "vat-standard-rate", Severity: "error", Message: "VAT is not 7.5%.", Path: "vat"}
+	g := &rbGate{violations: []invoice.Violation{rbBuyerTINViolation}, versionID: rbActiveVersionID(t, super)}
+	svc := newTestServiceWithGate(app, g)
+
+	if _, err := svc.ImportDocument(callCtx, entityID, documentID); err != nil {
+		t.Fatalf("first ImportDocument: %v", err)
+	}
+	if rows := rbRows(t, super, jobID); len(rows) != 1 {
+		t.Fatalf("rows after the first import = %+v, want one", rows)
+	}
+	if _, err := super.Exec(ctx, `DELETE FROM invoices WHERE entity_id = $1 AND invoice_number = $2`, entityID, "RB-REIMP-INV"); err != nil {
+		t.Fatalf("delete the filed draft: %v", err)
+	}
+
+	// the repeat buyer_tin row must not sink the new vat row written in the same transaction
+	g.violations = []invoice.Violation{rbBuyerTINViolation, vatBreak}
+	res, err := svc.ImportDocument(callCtx, entityID, documentID)
+	if err != nil || res.ReadyInvoices != 1 {
+		t.Fatalf("second ImportDocument: res=%+v err=%v, want the draft re-filed", res, err)
+	}
+	rows := rbRows(t, super, jobID)
+	if len(rows) != 2 || rows[0].field != "buyer_tin" || rows[1].field != "vat" {
+		t.Errorf("rows after the re-import = %+v, want buyer_tin once and the new vat row", rows)
+	}
+}
+
+func TestRLS_AViolationFiledUnderAnotherRefIsNotRecorded(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID, entityID := rbTenant(t, super, "RB-REF")
+	documentID, jobID := rbSeed(t, super, tenantID, rbBadTIN(docCleanValues("RB-REF-INV")))
+	g := &fakeGate{evaluateResult: invoice.EvalResult{
+		RuleSetVersionID: rbActiveVersionID(t, super),
+		ByRef:            map[string][]invoice.Violation{"some-other-invoice": {rbBuyerTINViolation}},
+	}}
+
+	res, err := newTestServiceWithGate(app, g).ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+	if err != nil || res.ReadyInvoices != 1 {
+		t.Fatalf("ImportDocument: res=%+v err=%v", res, err)
+	}
+	if g.evaluateCalls != 1 {
+		t.Fatalf("Evaluate calls = %d, want 1", g.evaluateCalls)
+	}
+	if rows := rbRows(t, super, jobID); len(rows) != 0 {
+		t.Errorf("rows = %+v, want none: the new invoice has no violation of its own", rows)
+	}
+}
+
+func TestRLS_EveryViolationOfOneImportIsRecordedInOneWrite(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID, entityID := rbTenant(t, super, "RB-MANY")
+	values := docCleanValues("RB-MANY-INV")
+	values["buyer_tin"] = sxPtr("BAD-TIN")
+	documentID, jobID := rbSeed(t, super, tenantID, values)
+	warn := invoice.Violation{RuleKey: "vat-standard-rate", Severity: "warning", Message: "VAT looks off.", Path: "vat"}
+	g := &rbGate{violations: []invoice.Violation{
+		rbBuyerTINViolation, warn, rbNumberViolation,
+		{RuleKey: "supplier-tin-required", Severity: "error", Message: "Supplier TIN is required.", Path: "supplier.tin"},
+		{RuleKey: "line-items-required", Severity: "error", Message: "Add a line.", Path: "line_items"},
+	}, versionID: rbActiveVersionID(t, super)}
+
+	if _, err := newTestServiceWithGate(app, g).ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	rows := rbRows(t, super, jobID)
+	if len(rows) != 2 || rows[0].field != "buyer_tin" || rows[1].field != "vat" || rows[1].ruleKey != "vat-standard-rate" {
+		t.Errorf("rows = %+v, want exactly buyer_tin and the warning-severity vat row (locked, supplier and line paths flag nothing)", rows)
 	}
 }

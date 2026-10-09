@@ -117,6 +117,7 @@ import type { Violation } from './validationApi'
 import type { StatusStyle } from '../types'
 import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
 import { toDateInputValue } from './format'
+import { INVOICE_FIELDS, type EditFieldKey, type LineEditKey } from './invoiceFields'
 
 export type InvoiceStatus =
   | 'draft'
@@ -408,16 +409,7 @@ export interface LineItemEditInput {
 export type InvoiceEditInput = Partial<
   Pick<
     InvoiceRecord,
-    | 'issue_date'
-    | 'supplier_tin'
-    | 'supplier_name'
-    | 'buyer_tin'
-    | 'buyer_name'
-    | 'currency'
-    | 'subtotal'
-    | 'vat'
-    | 'total'
-    | 'invoice_number'
+    EditFieldKey | 'invoice_number'
   >
 > & {
   line_items?: LineItemEditInput[]
@@ -461,24 +453,13 @@ export interface InvoiceCreateInput {
   source_document_id?: string
 }
 
-// The 9 editable header fields (editReq's header keys, [D9]; the invoice number is edited
-// apart from these, InvoiceEditInput) -- moved here from
-// InvoiceDetail.tsx (M5-09-03, task-253, addendum A2) so mbsPathToEditField and the
-// component share one definition; EditFieldKey travels with the const it's derived
-// from, not alone.
-export const EDIT_FIELD_KEYS = [
-  'issue_date',
-  'supplier_tin',
-  'supplier_name',
-  'buyer_tin',
-  'buyer_name',
-  'currency',
-  'subtotal',
-  'vat',
-  'total',
-] as const
+// The 9 editable header fields, from the shared field list; the invoice number is edited
+// apart from these (InvoiceEditInput).
+export const EDIT_FIELD_KEYS: readonly EditFieldKey[] = INVOICE_FIELDS.filter((f) => !f.line && f.edit).map(
+  (f) => f.key as EditFieldKey,
+)
 
-export type EditFieldKey = (typeof EDIT_FIELD_KEYS)[number]
+export type { EditFieldKey }
 
 // One BatchSubmit result item (batch_submit.go:85-91, BatchSubmitResultItem). `status`
 // is a bare string, NOT InvoiceStatus -- batch_submit.go:206-211 hard-codes a
@@ -889,7 +870,7 @@ export function reasonFieldFlags(reasons: RejectionReason[]): Map<EditFieldKey, 
 
 // The five MBS content fields of a line, the ONLY thing diffLineItems compares. `id` and
 // `line_no` are deliberately outside this Pick ([fingerprint-excludes-line-ids]).
-type LineContent = Pick<InvoiceLineItem, 'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax'>
+type LineContent = Pick<InvoiceLineItem, LineEditKey>
 
 // The line half of editInvoice's PATCH body: `undefined` when `edited` is
 // content-identical to `original`, so an untouched line editor sends no `line_items` key
@@ -907,7 +888,9 @@ type LineContent = Pick<InvoiceLineItem, 'description' | 'quantity' | 'unit_pric
 // emits '' into a numeric column, where `$N::text::numeric` raises 22P02 -> ErrValidation
 // -> a 400 on a no-op save.
 //
-const LINE_EDIT_FIELDS = ['description', 'quantity', 'unit_price', 'line_total', 'line_tax'] as const
+const LINE_EDIT_FIELDS: readonly LineEditKey[] = INVOICE_FIELDS.filter((f) => f.line && f.edit).map(
+  (f) => f.key as LineEditKey,
+)
 
 // '' and null are the SAME absent value on BOTH sides. No trimming: the backend does not
 // trim either, and silently rewriting an operator's content is not this helper's job.

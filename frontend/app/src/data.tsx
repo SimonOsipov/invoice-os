@@ -8,6 +8,7 @@
 // none is read anywhere else in the render output. They are intentionally omitted here;
 // dropping them changes nothing about what's rendered.
 
+import { INVOICE_FIELDS } from './lib/invoiceFields'
 import type { CanonField, ClientCfg, FieldMapRow, SectorDef, SectorKey, SettingsTab } from './types'
 
 export const SECTORS: Record<SectorKey, SectorDef> = {
@@ -162,20 +163,10 @@ export const ENTER_STEPS: [string, string][] = [
   ['1', 'Enter'],
 ]
 
-// Canonical invoice fields the Map step targets (Platform.dc.html ~L1115).
-export const CANON: CanonField[] = [
-  { key: 'invoice_number', required: true },
-  { key: 'issue_date' },
-  { key: 'buyer_tin' },
-  { key: 'buyer_name' },
-  { key: 'currency' },
-  { key: 'subtotal' },
-  { key: 'vat' },
-  { key: 'total' },
-  { key: 'line_description' },
-  { key: 'line_quantity' },
-  { key: 'line_unit_price' },
-]
+// Canonical invoice fields the Map step targets: the import fields of the shared list.
+export const CANON: CanonField[] = INVOICE_FIELDS.flatMap((f) =>
+  f.importKey ? [f.required ? { key: f.importKey, required: true } : { key: f.importKey }] : [],
+)
 
 // NO consumers — the Workflows builder's doc-type condition was the last one, and the
 // create form's picker went before it. Retained deliberately: this is the doc-type

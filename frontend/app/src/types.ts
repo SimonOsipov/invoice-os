@@ -9,6 +9,7 @@ import type { CarriedReading, ImportPreview } from './lib/importApi'
 import type { DocumentRowState } from './lib/documentRun'
 import type { ImportRun, PickedFile } from './lib/importRun'
 import type { PickedKind } from './lib/importFlow'
+import type { FormField, ImportKey } from './lib/invoiceFields'
 // Type-only, mirroring the PickedFile edge above — lib/mappingGroups.ts type-imports
 // `Mapping` from THIS file, so this is a benign type-only cycle (erased at compile,
 // TS1484), same shape as the pre-existing PickedFile/Member edges.
@@ -82,14 +83,7 @@ export type Validatable = {
 // `buyerAddress`/`wht`/`docType` left with it — `invoices` has no address, WHT or doc-type
 // column and `createRequest` no such field, so each was a value the form collected and
 // silently discarded. `Invoice` (the mock dashboard's row shape) keeps all three.
-export type Draft = {
-  number: string
-  buyer: string
-  buyerTin: string
-  date: string
-  currency: string
-  items: LineItem[]
-}
+export type Draft = { [F in FormField as F['formKey']]: string } & { items: LineItem[] }
 
 // Static per-company seed config (mirrors `this.CFG` entries). The prototype's raw
 // CFG literal also carries `vd`/`vatd`/`fd`/`pd`/`validated`/`dist`/`docs`/`health`/
@@ -192,7 +186,7 @@ export type CreateStep = 'upload' | 'mapping' | 'form' | 'review' | 'documents'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
 // `required` marks the fiscal identifier — alias recognition never guesses it; a suggestion or a restore is the only automatic route.
-export type CanonField = { key: string; required?: boolean }
+export type CanonField = { key: ImportKey; required?: boolean }
 
 // canonical field key -> source column header, or null while unplaced
 //

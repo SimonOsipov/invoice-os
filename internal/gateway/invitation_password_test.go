@@ -1,15 +1,21 @@
 package gateway
 
 import (
+	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 )
 
 const (
@@ -150,6 +156,7 @@ func TestInvitationPassword_RefusedLinkOrPasswordIsTheFailedNotice(t *testing.T)
 	}{
 		{"verify 403 otp_expired", answer(http.StatusForbidden, rpOTPExpired), nil, true},
 		{"verify 200 without access_token", answer(http.StatusOK, `{"user":{"id":"`+subjectS1+`","email":"`+rpEmail+`"}}`), nil, true},
+		{"verify 202 with a complete session", answer(http.StatusAccepted, `{"access_token":"`+rpAccess+`","user":{"id":"`+subjectS1+`","email":"`+rpEmail+`"}}`), nil, true},
 		{"PUT 422 weak_password", nil, answer(http.StatusUnprocessableEntity, rpWeakPassword), false},
 	}
 	for _, c := range rows {
@@ -265,6 +272,7 @@ func TestInvitationPassword_LogsCarryNoTokenPasswordOrAddress(t *testing.T) {
 		{name: "verify unreachable", verify: dropped, want: ipFailed, warn: true},
 		{name: "verify incomplete", verify: answer(200, `{"access_token":"","user":{"id":"u1","email":"`+mail+`"}}`), want: ipFailed, warn: true},
 		{name: "verify 302", verify: redirectTo("/user"), want: ipFailed, warn: true},
+		{name: "verify 200 not JSON", verify: answer(200, "<html>"+mail+" "+pass+" "+token+"</html>"), want: ipFailed, warn: true},
 		{name: "PUT 422 weak_password", user: echo(422, "weak_password"), want: ipFailed, warn: true},
 		{name: "PUT 500", user: echo(500, "unexpected_failure"), want: ipFailed, warn: true},
 		{name: "PUT unreachable", user: dropped, want: ipFailed, warn: true},
@@ -293,6 +301,179 @@ func TestInvitationPassword_LogsCarryNoTokenPasswordOrAddress(t *testing.T) {
 				if strings.Contains(buf.String(), secret) {
 					t.Errorf("the log holds %q: %s", secret, buf.String())
 				}
+			}
+		})
+	}
+}
+
+// ipOffline answers GoTrue's three routes without a network; an override with status 0 is a refused connection.
+func ipOffline(override map[string]ipAnswer) *http.Client {
+	routes := map[string]ipAnswer{
+		"verify": {200, `{"access_token":"` + rpAccess + `","user":{"id":"` + subjectS1 + `","email":"` + rpEmail + `"}}`},
+		"user":   {200, `{}`},
+		"logout": {204, ""},
+	}
+	maps.Copy(routes, override)
+	return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		a := routes[path.Base(r.URL.Path)]
+		if a.status == 0 {
+			return nil, errors.New("connection refused")
+		}
+		return &http.Response{StatusCode: a.status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(a.body)), Request: r}, nil
+	})}
+}
+
+type ipAnswer struct {
+	status int
+	body   string
+}
+
+// ipOfflineHandler is the invitee handler over an in-process GoTrue, safe inside a synctest bubble.
+func ipOfflineHandler(t *testing.T, client *http.Client, sink ContactSink, log *slog.Logger) http.Handler {
+	t.Helper()
+	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
+	sessions := NewSessionChecker(offlineAuth, offlineClient(http.StatusOK, `{}`), time.Now, log)
+	return InvitationPasswordHandler(offlineAuth, siteURL(t), client, sessions, th, sink, log)
+}
+
+func TestInvitationPassword_OnlyAConfirmedPasswordedUserReachesTheContactSink(t *testing.T) {
+	weak := ipAnswer{http.StatusUnprocessableEntity, rpWeakPassword}
+	rows := []struct {
+		name     string
+		override map[string]ipAnswer
+		wantPut  bool
+	}{
+		{"verify 403 otp_expired", map[string]ipAnswer{"verify": {http.StatusForbidden, rpOTPExpired}}, false},
+		{"verify unreachable", map[string]ipAnswer{"verify": {}}, false},
+		{"verify without access_token", map[string]ipAnswer{"verify": {200, `{"user":{"id":"` + subjectS1 + `","email":"` + rpEmail + `"}}`}}, false},
+		{"verify without user id", map[string]ipAnswer{"verify": {200, `{"access_token":"` + rpAccess + `","user":{"email":"` + rpEmail + `"}}`}}, false},
+		{"verify without email", map[string]ipAnswer{"verify": {200, `{"access_token":"` + rpAccess + `","user":{"id":"` + subjectS1 + `"}}`}}, false},
+		{"PUT 422 weak_password", map[string]ipAnswer{"user": weak}, true},
+		{"PUT unreachable", map[string]ipAnswer{"user": {}}, true},
+		{"same_password with a failed sign-out", map[string]ipAnswer{"user": {http.StatusUnprocessableEntity, rpSamePassword}, "logout": {http.StatusInternalServerError, "{}"}}, true},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sink := newRecSink(nil)
+				puts := 0
+				client := ipOffline(c.override)
+				base := client.Transport
+				client.Transport = rtFunc(func(r *http.Request) (*http.Response, error) {
+					if r.Method == http.MethodPut {
+						puts++
+					}
+					return base.RoundTrip(r)
+				})
+
+				rec := ipPost(t, ipOfflineHandler(t, client, sink, slog.New(slog.DiscardHandler)), rpValues(rpToken, "signup", rpPass))
+				synctest.Wait()
+				time.Sleep(time.Minute)
+				synctest.Wait()
+
+				rpRequireRedirect(t, rec, ipFailed)
+				if (puts == 1) != c.wantPut {
+					t.Fatalf("PUT /user calls = %d, want a call: %v; the row does not reach the stage it names", puts, c.wantPut)
+				}
+				if got := sink.got(); len(got) != 0 {
+					t.Errorf("the contact sink saw %+v, want no call for a link or password GoTrue refused", got)
+				}
+			})
+		})
+	}
+	t.Run("control: a confirmed user with a set password is handed off once", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			sink := newRecSink(nil)
+
+			rec := ipPost(t, ipOfflineHandler(t, ipOffline(nil), sink, slog.New(slog.DiscardHandler)), rpValues(rpToken, "signup", rpPass))
+			synctest.Wait()
+
+			rpRequireRedirect(t, rec, ipOK)
+			if got := sink.got(); len(got) != 1 || got[0].UserID != subjectS1 || got[0].Email != rpEmail {
+				t.Errorf("sink calls = %+v, want one for %s", got, subjectS1)
+			}
+		})
+	})
+}
+
+func TestInvitationPassword_HandOffFailureLogsNoTokenPasswordOrAddress(t *testing.T) {
+	const (
+		token = "leak-token-9f3a7c"
+		pass  = "leak-pass-7c1d4e"
+		mail  = "leak-probe@corp.example"
+	)
+	synctest.Test(t, func(t *testing.T) {
+		down := func(context.Context, int, RegistrantContact) error {
+			return errors.New("notifications refused " + mail + " " + pass + " " + token)
+		}
+		sink := newRecSink(down)
+		client := ipOffline(map[string]ipAnswer{"verify": {200, `{"access_token":"` + rpAccess + `","user":{"id":"` + subjectS1 + `","email":"` + mail + `"}}`}})
+		log, buf := captureLog()
+
+		rec := ipPost(t, ipOfflineHandler(t, client, sink, log), rpValues(token, "signup", pass))
+		synctest.Wait()
+		time.Sleep(time.Minute)
+		synctest.Wait()
+
+		rpRequireRedirect(t, rec, ipOK)
+		if n := len(sink.got()); n != len(handOffDelays)+1 {
+			t.Fatalf("sink calls = %d, want %d attempts, so the failure WARN is reached", n, len(handOffDelays)+1)
+		}
+		if warnCount(t, buf) != 1 {
+			t.Fatalf("WARN lines = %d, want the one hand-off failure: %s", warnCount(t, buf), buf.String())
+		}
+		for _, secret := range []string{token, pass, mail} {
+			if strings.Contains(buf.String(), secret) {
+				t.Errorf("the log holds %q: %s", secret, buf.String())
+			}
+		}
+	})
+}
+
+func TestInvitationPassword_OnlyTheFirstOfADuplicatedFieldIsUsed(t *testing.T) {
+	t.Run("two tokens verify the first only", func(t *testing.T) {
+		f := newResetGoTrue(t)
+		body := url.Values{"token": {rpToken, "other-token"}, "type": {"signup"}, "password": {rpPass}}.Encode()
+
+		rpRequireRedirect(t, rpPostRaw(t.Context(), newInviteHandler(t, f, nil, nil), ipPath, rpFormType, body), ipOK)
+
+		if f.count(http.MethodPost, "/verify") != 1 {
+			t.Fatalf("GoTrue calls = %v, want one POST /verify", f.names())
+		}
+		if got := rpJSON(t, f.Calls()[0].Body)["token_hash"]; got != rpToken {
+			t.Errorf("verified token = %v, want the first %q", got, rpToken)
+		}
+	})
+	t.Run("a recovery type ahead of signup is refused without a call", func(t *testing.T) {
+		f := newResetGoTrue(t)
+		body := url.Values{"token": {rpToken}, "type": {"recovery", "signup"}, "password": {rpPass}}.Encode()
+
+		rpRequireRedirect(t, rpPostRaw(t.Context(), newInviteHandler(t, f, nil, nil), ipPath, rpFormType, body), ipFailed)
+
+		if got := f.names(); len(got) != 0 {
+			t.Errorf("GoTrue calls = %v, want none", got)
+		}
+	})
+}
+
+func TestInvitationPassword_EveryMethodButPostIs405WithoutACall(t *testing.T) {
+	for _, m := range []string{http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodOptions} {
+		t.Run(m, func(t *testing.T) {
+			f := newResetGoTrue(t)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(m, ipPath, strings.NewReader(rpValues(rpToken, "signup", rpPass).Encode()))
+			req.Header.Set("Content-Type", rpFormType)
+
+			newInviteHandler(t, f, nil, nil).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "POST" {
+				t.Errorf("status %d Allow %q, want 405 POST", rec.Code, rec.Header().Get("Allow"))
+			}
+			if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+				t.Errorf("the route answered a CORS grant: %v", rec.Header())
+			}
+			if got := f.names(); len(got) != 0 {
+				t.Errorf("GoTrue calls = %v, want none", got)
 			}
 		})
 	}

@@ -28,7 +28,7 @@ addEventListener('pageshow', function () { delete f.dataset.sent })`
 //go:embed verify_page.html
 var verifyPageHTML string
 
-// VerifyPageHandler serves the confirm page; it holds no GoTrue client, so opening the link spends nothing.
+// VerifyPageHandler serves the confirm page, or the set-password page for an invite link; it holds no GoTrue client, so opening the link spends nothing.
 func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 	if siteURL == nil {
 		return RegistrationNotConfigured(), nil

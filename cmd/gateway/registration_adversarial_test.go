@@ -554,6 +554,32 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	if got := calls(); len(got) != 0 {
 		t.Errorf("a preflight or preview reached GoTrue: %v", got)
 	}
+
+	// The set-password route is a same-origin form POST: no OPTIONS route, no grant of its own.
+	if s := sitesFor(sites, "OPTIONS /auth/invitation/password"); len(s) != 0 {
+		t.Errorf("main answers a preflight for /auth/invitation/password: %+v", s)
+	}
+	pw := http.NewServeMux()
+	pw.Handle("POST /auth/invitation/password", invitationPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, slog.New(slog.DiscardHandler)), perIP, nil, slog.New(slog.DiscardHandler)))
+	for _, method := range []string{http.MethodOptions, http.MethodPost} {
+		req := httptest.NewRequest(method, "/auth/invitation/password", strings.NewReader("type=signup"))
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Access-Control-Request-Method", "POST")
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		pw.ServeHTTP(rec, req)
+		if method == http.MethodOptions && rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("cross-origin OPTIONS /auth/invitation/password = %d, want 405", rec.Code)
+		}
+		if method == http.MethodPost && rec.Code != http.StatusSeeOther {
+			t.Errorf("cross-origin POST /auth/invitation/password = %d, want the handler's 303", rec.Code)
+		}
+		for h := range rec.Header() {
+			if strings.HasPrefix(h, "Access-Control-") {
+				t.Errorf("%s /auth/invitation/password answered %s: %q", method, h, rec.Header().Get(h))
+			}
+		}
+	}
 }
 
 // noPendingInvite is the lookup of a tenancy with no invites.

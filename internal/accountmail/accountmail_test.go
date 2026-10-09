@@ -533,6 +533,7 @@ func TestConfirmation_InviteeBranchLinksToTheSetPasswordPage(t *testing.T) {
 
 	got := text(out)
 	for _, phrase := range []string{
+		"Invitation", "Confirm your email address and choose a password to join your team on ASComply.",
 		"Your account is ready.", "Choose a password to continue.",
 		"An ASComply account was created for " + adaEmail + " from your invite. Confirm the address and choose your password.",
 		"This link expires in 24 hours.",
@@ -546,7 +547,7 @@ func TestConfirmation_InviteeBranchLinksToTheSetPasswordPage(t *testing.T) {
 	if _, v := mustRow(t, out, "Email"); v != adaEmail {
 		t.Errorf("Email = %q, want %s", v, adaEmail)
 	}
-	for _, absent := range []string{"Role", "What happens next", "Organisation", "Confirm email address", "You are registered."} {
+	for _, absent := range []string{"Role", "What happens next", "Organisation", "Confirm email address", "You are registered.", "Registration"} {
 		if strings.Contains(got, absent) {
 			t.Errorf("invitee mail still holds %q", absent)
 		}

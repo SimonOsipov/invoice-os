@@ -255,6 +255,7 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"OPTIONS /auth/request-password-reset": "withCORS(" + recv + ".RequestPasswordReset)",
 		"GET /auth/reset-password":             "gateway.ResetPasswordPageHandler(siteURL)",
 		"POST /auth/reset-password":            `resetPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, app.Logger)`,
+		"POST /auth/invitation/password":       `invitationPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, sink, app.Logger)`,
 
 		// Browser-called from the landing accept page, like register: CORS-wrapped with a preflight.
 		"POST /auth/invitation":             "withCORS(" + invPreview + ")",

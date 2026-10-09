@@ -301,6 +301,20 @@ func TestDevEnvDeployLibraryDeploysOnlyTheLibrary(t *testing.T) {
 	if len(ups) != 1 || ups[0] != "sh scripts/ci/railway-up-ci.sh library" {
 		t.Errorf("deploy-library railway-up-ci.sh calls = %v, want exactly one with library", ups)
 	}
+	for _, dep := range []string{"changes", "await-ci"} {
+		if !slices.Contains(jobList(j, "needs"), dep) {
+			t.Errorf("deploy-library needs = %v, want %s", jobList(j, "needs"), dep)
+		}
+	}
+	var upEnv map[string]string
+	for _, s := range j.steps() {
+		if strings.Contains(s.keys["run"], "railway-up-ci.sh") {
+			upEnv = s.env
+		}
+	}
+	if upEnv["RAILWAY_API_TOKEN"] != "${{ secrets.RAILWAY_API_TOKEN }}" || upEnv["RAILWAY_ENVIRONMENT"] != "${{ needs.prepare-env.outputs.environment }}" {
+		t.Errorf("deploy-library railway up env = %v", upEnv)
+	}
 }
 
 func TestDevEnvLibraryBuildGateChecksTheLibraryBuild(t *testing.T) {
@@ -316,6 +330,9 @@ func TestDevEnvLibraryBuildGateChecksTheLibraryBuild(t *testing.T) {
 	}
 	if len(waits) != 1 || waits[0] != `bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LIBRARY_URL"` {
 		t.Errorf("library-build-gate waits = %v", waits)
+	}
+	if cond, _ := jobKey(j, "if"); cond != "needs.deploy-library.result == 'success'" {
+		t.Errorf("library-build-gate if: %q, want it to run only after a successful deploy-library", cond)
 	}
 	env := jobEnv(j)
 	if env["EXPECTED_BUILD"] != "${{ github.sha }}" || env["LIBRARY_URL"] != "${{ needs.prepare-env.outputs.library_url }}" {

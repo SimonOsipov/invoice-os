@@ -1079,6 +1079,9 @@ func TestInvitations_ListShowsThisTenantsPendingInvites(t *testing.T) {
 			g.InvitedBy != w.admin || g.Delivery != wr.SendStatus || (g.Account != "none" && g.Account != "unknown") {
 			t.Errorf("row %d = %+v, want id %s email %s role %s delivery %s invited_by %s account none or unknown", i, g, wr.ID, wr.Email, wr.Role, wr.SendStatus, w.admin)
 		}
+		if (g.Account == "unknown") != (g.accountErr != nil) {
+			t.Errorf("row %d account %q with accountErr %v: the handler logs only a kept error", i, g.Account, g.accountErr)
+		}
 		near(t, fmt.Sprintf("row %d expires_at", i), g.ExpiresAt, wr.Expires, time.Second)
 		if g.CreatedAt.IsZero() {
 			t.Errorf("row %d created_at is zero", i)
@@ -1258,7 +1261,7 @@ func TestInvitations_NoQueryReadsAccountsByInviteeAddress(t *testing.T) {
 	if len(tr.stmts) < 10 {
 		t.Fatalf("traced %d statements, want at least 10 (the pool is not being observed)", len(tr.stmts))
 	}
-	sawAddress := 0
+	sawAddress, sawState := 0, 0
 	for _, st := range tr.stmts {
 		low := strings.ToLower(st.sql)
 		if strings.Contains(low, "auth.") {
@@ -1274,7 +1277,11 @@ func TestInvitations_NoQueryReadsAccountsByInviteeAddress(t *testing.T) {
 			continue
 		}
 		sawAddress++
-		if strings.Contains(low, "public.invitee_account_state(") { // the list's own state read
+		if strings.Contains(low, "public.invitee_account_state(") {
+			sawState++
+			if strings.Join(strings.Fields(low), " ") != "select public.invitee_account_state($1)" {
+				t.Errorf("the state read is more than the bare function call: %s", st.sql)
+			}
 			continue
 		}
 		if strings.Contains(low, "memberships") || !strings.Contains(low, "invitations") {
@@ -1283,6 +1290,9 @@ func TestInvitations_NoQueryReadsAccountsByInviteeAddress(t *testing.T) {
 	}
 	if sawAddress < len(emails) {
 		t.Errorf("statements carrying an invitee address = %d, want at least %d (the insert per address)", sawAddress, len(emails))
+	}
+	if sawState < len(emails) {
+		t.Errorf("state reads = %d, want at least %d (the list reads each row)", sawState, len(emails))
 	}
 }
 

@@ -893,7 +893,7 @@ describe('the account-exists views', () => {
 
   it('invitePage_aFailedPressAfterAHoldClearsTheHeldNotice', async () => {
     const answers: Route[] = [() => json(200, { status: 'held' }), () => json(502, { error: 'invitation resend is unavailable' })]
-    await toView('unconfirmed', { resend: () => answers.shift()!() })
+    await toView('unconfirmed', { resend: (init) => answers.shift()!(init) })
 
     await click(button('Send it again'))
     await settle()

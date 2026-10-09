@@ -494,7 +494,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(untagged).not.toMatch(/`json:"[^"]+"`/)
   })
 
-  // T4 — internal/invoice.LineItemInput is a DIFFERENT, five-field type (adds LineTax) with NO
+  // T4 — internal/invoice.LineItemInput is a DIFFERENT, fifteen-field type (ID, the five legacy fields, nine NRS fields) with NO
   // json tags at all -- it is Go-to-Go (Store.Create's input), never marshaled. goStructKeys
   // counts only `json:"…"` matches, so reading it yields 0, not 5. That is the point: a goPath
   // typo pointing this row at invoice.go would not silently agree, it would fail the floor of 4
@@ -506,7 +506,27 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
 
     const invoiceSrc = repoFile('internal/invoice/invoice.go')
     expect(invoiceSrc, 'internal/invoice.LineItemInput must still exist, untagged').toContain(
-      'type LineItemInput struct {\n\tDescription *string\n\tQuantity    *string\n\tUnitPrice   *string\n\tLineTotal   *string\n\tLineTax     *string\n}',
+      [
+        'type LineItemInput struct {',
+        '\t// ID is the stored line this entry continues (D23); nil for a new line.',
+        '\tID          *string',
+        '\tDescription *string',
+        '\tQuantity    *string',
+        '\tUnitPrice   *string',
+        '\tLineTotal   *string',
+        '\tLineTax     *string',
+        '',
+        '\tTaxCategory               *string',
+        '\tHSNCode                   *string',
+        '\tISICCode                  *string',
+        '\tProductCategory           *string',
+        '\tServiceCategory           *string',
+        '\tSellersItemIdentification *string',
+        '\tPriceUnit                 *string',
+        '\tTaxPercent                *string',
+        '\tBaseQuantity              *string',
+        '}',
+      ].join('\n'),
     )
     const invoiceKeys = goStructKeys(invoiceSrc, 'LineItemInput')
     expect(invoiceKeys.length, 'untagged fields must not be readable as wire keys').toBe(0)

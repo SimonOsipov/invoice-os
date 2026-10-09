@@ -632,18 +632,24 @@ describe('LOGFIX-05-03: the invitee account state on the pending row', () => {
   })
 
   it('MembersTable: the pending menu shows the state above its items', () => {
-    withState({ account: 'confirmed' })
-    const menu = openMenuOf(screen.getByTestId('invite-row'))
-    const note = within(menu).getByTestId('member-menu-state')
-    expect(note.textContent).toBe('Confirmed, not joined')
-    expect(note.compareDocumentPosition(within(menu).getByRole('button', { name: 'Resend invite' })) & FOLLOWS).toBeTruthy()
+    for (const [account, label] of [
+      ['unconfirmed', 'Account created, email not confirmed'],
+      ['confirmed', 'Confirmed, not joined'],
+    ] as const) {
+      cleanup()
+      withState({ account })
+      const menu = openMenuOf(screen.getByTestId('invite-row'))
+      const note = within(menu).getByTestId('member-menu-state')
+      expect(note.textContent).toBe(label)
+      expect(note.compareDocumentPosition(within(menu).getByRole('button', { name: 'Resend invite' })) & FOLLOWS).toBeTruthy()
+    }
   })
 
   it('MembersTable: no state note for none, unknown or a member row', () => {
-    for (const account of ['none', 'unknown'] as const) {
+    for (const account of ['none', 'unknown', undefined] as const) {
       cleanup()
       withState({ account })
-      expect(within(openMenuOf(screen.getByTestId('invite-row'))).queryByTestId('member-menu-state'), account).toBeNull()
+      expect(within(openMenuOf(screen.getByTestId('invite-row'))).queryByTestId('member-menu-state'), String(account)).toBeNull()
     }
     cleanup()
     renderPending({ extra: [member({ id: 'u2', name: 'Ada Person' })] })

@@ -49,10 +49,9 @@ const TABLE_MIN_WIDTH = 716
 // would spawn a vertical scrollbar, on any row without room below it. The scroller simply
 // makes room for whichever menu is open.
 //
-// Sized for the tallest reachable menu, the pending row's (Resend plus two reason notes). 216 was
-// measured on the old invited menu of the same shape; roles.spec.ts › "firm Settings: an admin
-// invites from the Members screen, sees the pending row, and resends" (L2) gates it.
-// ceiling: fits today's menu copy; re-measure if an item or reason is added.
+// 216 was measured on the old invited menu; roles.spec.ts › "firm Settings: an admin invites from
+// the Members screen, sees the pending row, and resends" (L2) gates it.
+// ceiling: re-measure if an item, reason or note is added.
 const MENU_CLEARANCE = 216
 
 // The INVED-01 regression class. A grid cell only ellipsises if it is allowed to be

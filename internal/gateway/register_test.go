@@ -1233,6 +1233,12 @@ func TestRegister_InvitedAddressCreatesNothing(t *testing.T) {
 	}
 	requirePending202(t, rec)
 	requireSameAnswer(t, "invited address", rec, control)
+	if len(control.Header()) == 0 {
+		t.Fatal("the control answered with no headers, so the header comparison proves nothing")
+	}
+	if !maps.EqualFunc(rec.Header(), control.Header(), slices.Equal) {
+		t.Errorf("invited headers %v differ from the control's %v", rec.Header(), control.Header())
+	}
 	if n := len(fake.Calls()); n != 0 {
 		t.Errorf("GoTrue saw %d calls, want 0: %+v", n, fake.Calls())
 	}
@@ -1264,7 +1270,10 @@ func TestRegister_LookupRunsAfterTheBadRequestChecks(t *testing.T) {
 	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 	p := probing(uninvited)
 	for _, c := range []struct{ name, body, want string }{
+		{"not JSON", `not json`, "invalid request body"},
+		{"body over the 4 KiB cap", registerBody(regEmail, strings.Repeat("p", 5<<10)), "invalid request body"},
 		{"empty object", `{}`, "email and password are required"},
+		{"no password", `{"email":"new@corp.example"}`, "email and password are required"},
 		{"free-mail address", registerBody("x@gmail.com", regPassword), "a business email address is required; personal email providers are not accepted"},
 		{"empty workspace name", registerBodyWithAnswers(regEmail, map[string]any{"workspace_name": "", "display_name": "Ada"}), "workspace_name must be 1 to 200 characters"},
 		{"501-character consent", registerBodyWithAnswers(regEmail, map[string]any{"marketing_consent_text": strings.Repeat("a", 501)}), "marketing_consent_text must be 1 to 500 characters"},
@@ -1394,6 +1403,110 @@ func TestRegister_InvitedPathLogsCarryNoAddress(t *testing.T) {
 				if strings.Contains(buf.String(), secret) {
 					t.Errorf("log holds %q: %s", secret, buf.String())
 				}
+			}
+		})
+	}
+}
+
+// Tenancy folds case and trims the address (D7); the gateway must hand it the address as sent.
+func TestRegister_LookupGetsTheAddressAsSubmitted(t *testing.T) {
+	const invitedAddress = "pat@corp.example"
+	for _, sent := range []string{"Pat@Corp.Example", "PAT@CORP.EXAMPLE", "  pat@corp.example ", "\tPat@corp.example\n"} {
+		fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+		p := probing(invited)
+
+		rec := registerWith(t, fake.URL, p, registerBody(sent, regPassword))
+
+		asked := p.calls()
+		if len(asked) != 1 {
+			t.Fatalf("%q: lookup asked %d times, want 1", sent, len(asked))
+		}
+		if got := strings.ToLower(strings.TrimSpace(asked[0])); got != invitedAddress {
+			t.Errorf("%q: lookup got %q, which folds to %q, want %q", sent, asked[0], got, invitedAddress)
+		}
+		requirePending202(t, rec)
+		if n := len(fake.Calls()); n != 0 {
+			t.Errorf("%q: GoTrue saw %d calls, want 0", sent, n)
+		}
+	}
+}
+
+// Through the real HTTP lookup, every tenancy answer that is not a clean yes or no refuses the sign-up:
+// 502, no GoTrue call, the slot refunded, and no address, token or host in the log.
+func TestRegister_UnusableTenancyAnswerRefusesSignUp(t *testing.T) {
+	old := invitationPreviewTimeout
+	invitationPreviewTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { invitationPreviewTimeout = old })
+	const ip = "203.0.113.9"
+
+	elsewhere := newTenancyStub(t, http.StatusOK, `{"pending":false}`)
+	reply := func(status int, body string, header ...string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			for i := 0; i+1 < len(header); i += 2 {
+				w.Header().Set(header[i], header[i+1])
+			}
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, body)
+		}
+	}
+	hang := func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body) // the server notices a gone client only after the body is read
+		<-r.Context().Done()
+	}
+	cases := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{"404 from a tenancy without the route", reply(http.StatusNotFound, "404 page not found")},
+		{"401", reply(http.StatusUnauthorized, `{"error":"unauthorized"}`)},
+		{"403", reply(http.StatusForbidden, `{"error":"forbidden"}`)},
+		{"500", reply(http.StatusInternalServerError, `{"error":"boom"}`)},
+		{"502", reply(http.StatusBadGateway, ``)},
+		{"204", reply(http.StatusNoContent, ``)},
+		{"302 to a tenancy that would say no", reply(http.StatusFound, ``, "Location", elsewhere.URL.String()+"/x")},
+		{"200 unreadable", reply(http.StatusOK, `<html>`)},
+		{"200 truncated", reply(http.StatusOK, `{"pending":tr`)},
+		{"200 with a non-boolean verdict", reply(http.StatusOK, `{"pending":"no"}`)},
+		{"no answer before the deadline", hang},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(c.handler)
+			t.Cleanup(srv.Close)
+			tenancyURL, _ := url.Parse(srv.URL)
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			log, buf := captureLog()
+			limit := NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
+			broken := RegisterHandler(fake.URL, testClient(), 0, limit, true, log, NewHTTPPendingInviteLookup(tenancyURL, &http.Client{}, inviteGatewayToken))
+
+			rec, _ := serveRegisterFrom(t.Context(), broken, registerBody(regEmail, regPassword), ip)
+
+			if rec.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d, want 502: %s", rec.Code, rec.Body.String())
+			}
+			if got := errorBody(t, rec); got != "registration is unavailable" {
+				t.Errorf("error = %q, want %q", got, "registration is unavailable")
+			}
+			if n := len(fake.Calls()); n != 0 {
+				t.Errorf("GoTrue saw %d calls, want 0", n)
+			}
+			if n := elsewhere.count(); n != 0 {
+				t.Errorf("the redirect target saw %d requests, want 0", n)
+			}
+			if buf.Len() == 0 || warnCount(t, buf) != 1 {
+				t.Fatalf("want exactly one WARN, so the secret check has a line to read: %s", buf.String())
+			}
+			for _, secret := range []string{regEmail, "corp.example", regPassword, inviteGatewayToken, tenancyURL.Host, tenancyURL.Hostname()} {
+				if strings.Contains(buf.String(), secret) {
+					t.Errorf("log holds %q: %s", secret, buf.String())
+				}
+			}
+
+			working := RegisterHandler(fake.URL, testClient(), 0, limit, true, log, probing(uninvited).lookup)
+			next, _ := serveRegisterFrom(t.Context(), working, registerBody(regEmail, regPassword), ip)
+			requirePending202(t, next)
+			if n := signupCalls(fake); n != 1 {
+				t.Errorf("GoTrue /signup saw %d calls from the same IP after the failure, want 1: the slot was not refunded", n)
 			}
 		})
 	}

@@ -31,7 +31,7 @@ const (
 	RegisterMaxKeys = 10_000
 )
 
-// RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL.
+// RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL, except for an invited address (TestRegister_InvitedAddressCreatesNothing).
 // Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
 func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, pending PendingInviteLookup) http.Handler {
 	signup := authURL.JoinPath("signup").String()

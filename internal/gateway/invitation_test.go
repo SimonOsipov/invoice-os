@@ -768,8 +768,18 @@ func TestHTTPPendingInviteLookup_ErrorsCarryNoSecret(t *testing.T) {
 		wantStatus string
 	}{
 		{"500", newTenancyStub(t, http.StatusInternalServerError, `{"error":"boom"}`).URL, "500"},
+		{"404: a tenancy without the route is not 'no invite'", newTenancyStub(t, http.StatusNotFound, `404 page not found`).URL, "404"},
+		{"404 with the pending body", newTenancyStub(t, http.StatusNotFound, `{"pending":false}`).URL, "404"},
+		{"400", newTenancyStub(t, http.StatusBadRequest, `{"error":"invalid request body"}`).URL, "400"},
+		{"401", newTenancyStub(t, http.StatusUnauthorized, `{"pending":false}`).URL, "401"},
+		{"403", newTenancyStub(t, http.StatusForbidden, `{"pending":false}`).URL, "403"},
+		{"202 with the pending body", newTenancyStub(t, http.StatusAccepted, `{"pending":false}`).URL, "202"},
+		{"204", newTenancyStub(t, http.StatusNoContent, ``).URL, "204"},
 		{"unreachable", closedURL(t), ""},
 		{"200 with an unreadable body", newTenancyStub(t, http.StatusOK, `<html>not json`).URL, ""},
+		{"200 with an empty body", newTenancyStub(t, http.StatusOK, ``).URL, ""},
+		{"200 with a truncated body", newTenancyStub(t, http.StatusOK, `{"pending":tr`).URL, ""},
+		{"200 with a non-boolean verdict", newTenancyStub(t, http.StatusOK, `{"pending":"yes"}`).URL, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -792,6 +802,24 @@ func TestHTTPPendingInviteLookup_ErrorsCarryNoSecret(t *testing.T) {
 			}
 			if c.wantStatus != "" && !strings.Contains(err.Error(), c.wantStatus) {
 				t.Errorf("error text %q does not name the status %s", err.Error(), c.wantStatus)
+			}
+		})
+	}
+}
+
+// A 200 that names no verdict is not "no invite": reading it as false would let register sign up an invited address (D6, D26).
+func TestHTTPPendingInviteLookup_AnswerWithoutAVerdictIsAnError(t *testing.T) {
+	for _, body := range []string{`{}`, `null`, `{"pending":null}`, `{"status":"ok"}`} {
+		t.Run(body, func(t *testing.T) {
+			stub := newTenancyStub(t, http.StatusOK, body)
+
+			got, err := NewHTTPPendingInviteLookup(stub.URL, &http.Client{}, inviteGatewayToken)(t.Context(), inviteAddress)
+
+			if stub.count() != 1 {
+				t.Fatalf("tenancy saw %d requests, want 1", stub.count())
+			}
+			if err == nil || got {
+				t.Errorf("lookup = (%v, %v), want (false, an error)", got, err)
 			}
 		})
 	}

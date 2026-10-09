@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -24,6 +25,14 @@ func TestIdP_SignUpForAnInvitedAddressCreatesNoAccount(t *testing.T) {
 	}
 	if invitedBody != controlBody {
 		t.Errorf("invited body %s differs from the control's %s", invitedBody, controlBody)
+	}
+
+	// GoTrue folds case on sign-up, so an upper-cased or padded form of the invited address must be refused too.
+	for _, form := range []string{strings.ToUpper(w.email), "  " + w.email + " ", strings.ToUpper(w.email[:1]) + w.email[1:]} {
+		status, body := postGW(t, w.gw+"/auth/register", map[string]string{"email": form, "password": password})
+		if status != http.StatusAccepted || body != controlBody {
+			t.Errorf("register %q: status %d, body %s; want 202 %s", form, status, body, controlBody)
+		}
 	}
 
 	if n := mailCount(t, control); n != 1 {

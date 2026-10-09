@@ -3109,6 +3109,19 @@ func TestStatusForErr_NumberSentences(t *testing.T) {
 	}
 }
 
+// An unknown line id is a 400 with one sentence, whether wrapped or bare, and distinct from ErrValidation's own text.
+func TestStatusForErr_UnknownLineIDIs400WithItsOwnSentence(t *testing.T) {
+	const want = "line_items id must name a line of this invoice"
+	for _, err := range []error{ErrUnknownLineID, fmt.Errorf("edit: %w", ErrUnknownLineID)} {
+		if status, msg := statusForErr(err); status != http.StatusBadRequest || msg != want {
+			t.Errorf("statusForErr(%v) = (%d, %q), want (400, %q)", err, status, msg, want)
+		}
+	}
+	if _, msg := statusForErr(ErrValidation); msg == want {
+		t.Errorf("ErrValidation shares the unknown-line-id sentence %q", want)
+	}
+}
+
 // TestEditHandler_NumberIsTrimmedAndBlankIs400: a number blank after trimming is a 400 and edit
 // never runs; a padded number reaches EditInput trimmed.
 func TestEditHandler_NumberIsTrimmedAndBlankIs400(t *testing.T) {

@@ -218,8 +218,7 @@ func putNumber(m map[string]any, key string, v *string) {
 // replaceLinesTx can report []LineItem{} where hydrateLinesTx reports nil for
 // the same lineless invoice; the two must agree on "no lines").
 //
-// The field set is mbsLine's minus `id`, so a reader can diff the two and see
-// the id exclusion is the ONLY difference. Sorting is by line_no -- the only
+// Sorting is by line_no -- the only
 // stable content ordinal (line_items_invoice_line_no_uq makes it a total
 // order within an invoice) -- and NEVER by id: replace-all mints fresh uuids
 // on every save, so id order is non-deterministic across a content-identical

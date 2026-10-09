@@ -517,8 +517,7 @@ func DemoteApprovalRejectedTx(ctx context.Context, tx pgx.Tx, id, tenantID, subj
 // 22P02 (invalid_text_representation) maps to ErrValidation so a malformed line
 // numeric behaves exactly like a malformed HEADER numeric (updateContentTx) --
 // 400, not a raw 500. Every other SQLSTATE propagates raw so Store.Edit's
-// atomicity specs can still assert on it. Store.Create's raw propagation is
-// Create's own contract and is deliberately left alone.
+// atomicity specs can still assert on it.
 //
 // Known residual, documented rather than defended (D8 / LI-RLS-12): a
 // line_items row whose tenant_id disagrees with its invoice's tenant is
@@ -1054,8 +1053,7 @@ func strPtrEqual(a, b *string) bool {
 // updateContentTx is the tx-scoped CONTENT write shared by Store.Update and
 // Store.Edit (M4-05-02 extraction from Store.Update): it builds the dynamic
 // SET clause over in's non-nil fields, runs the UPDATE ... RETURNING, and
-// maps the same errors Update always has (pgx.ErrNoRows -> ErrNotFound,
-// 22P02 -> ErrValidation). It does NO audit write and NO all-nil guard --
+// maps its errors. It does NO audit write and NO all-nil guard --
 // both callers enforce the guard themselves before opening a tx, and each
 // writes its own audit row under its own conditions (Update always; Edit
 // only when the DB-authoritative fingerprint says something really changed).

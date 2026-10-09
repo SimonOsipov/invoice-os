@@ -337,7 +337,7 @@ type UpdateInput struct {
 	BuyerLGA           *string
 }
 
-// EditInput is the Store.Edit argument (INVED-01-04): the 9 optional header
+// EditInput is the Store.Edit argument (INVED-01-04): the optional header
 // fields of an embedded UpdateInput, plus the invoice's line items. Edit takes
 // this rather than a widened UpdateInput because updateContentTx is SHARED with
 // Store.Update, which must keep taking a header-only UpdateInput byte-identical

@@ -505,29 +505,25 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(row?.goPath).toBe('internal/extraction/handlers_lineitems.go')
 
     const invoiceSrc = repoFile('internal/invoice/invoice.go')
-    expect(invoiceSrc, 'internal/invoice.LineItemInput must still exist, untagged').toContain(
-      [
-        'type LineItemInput struct {',
-        '\t// ID is the stored line this entry continues (D23); nil for a new line.',
-        '\tID          *string',
-        '\tDescription *string',
-        '\tQuantity    *string',
-        '\tUnitPrice   *string',
-        '\tLineTotal   *string',
-        '\tLineTax     *string',
-        '',
-        '\tTaxCategory               *string',
-        '\tHSNCode                   *string',
-        '\tISICCode                  *string',
-        '\tProductCategory           *string',
-        '\tServiceCategory           *string',
-        '\tSellersItemIdentification *string',
-        '\tPriceUnit                 *string',
-        '\tTaxPercent                *string',
-        '\tBaseQuantity              *string',
-        '}',
-      ].join('\n'),
-    )
+    const body = /type\s+LineItemInput\s+struct\s*\{([^{}]*)\}/.exec(stripComments(invoiceSrc))?.[1] ?? ''
+    const fields = [...body.matchAll(/^\s*([A-Za-z]\w*)\s+\*string\s*$/gm)].map((m) => m[1])
+    expect(fields, 'internal/invoice.LineItemInput must still exist, untagged, with these fields').toEqual([
+      'ID',
+      'Description',
+      'Quantity',
+      'UnitPrice',
+      'LineTotal',
+      'LineTax',
+      'TaxCategory',
+      'HSNCode',
+      'ISICCode',
+      'ProductCategory',
+      'ServiceCategory',
+      'SellersItemIdentification',
+      'PriceUnit',
+      'TaxPercent',
+      'BaseQuantity',
+    ])
     const invoiceKeys = goStructKeys(invoiceSrc, 'LineItemInput')
     expect(invoiceKeys.length, 'untagged fields must not be readable as wire keys').toBe(0)
   })

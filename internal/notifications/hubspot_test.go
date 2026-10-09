@@ -979,3 +979,73 @@ func TestHubSpotOpenDemoDeal_ErrorsNeverCarryTheEmail(t *testing.T) {
 		}
 	}
 }
+
+func TestHubSpotOpenDemoDeal_ContactCreateFailureStops(t *testing.T) {
+	for _, status := range []int{500, 429, 400, 403, hangStatus} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			v, err := runDeal(t, dealPlan{contactGet: 404, contactPost: status})
+			var de *DeliveryError
+			want := status
+			if status == hangStatus {
+				want = 0
+			}
+			if !errors.As(err, &de) || de.Status != want {
+				t.Fatalf("err = %v, want *DeliveryError{%d}", err, want)
+			}
+			if got := len(v.calls()); got != 2 {
+				t.Errorf("requests = %v, want GET and POST contact only", v.labels())
+			}
+		})
+	}
+}
+
+func TestHubSpotOpenDemoDeal_ContactCreate409ThenReadFailureIsA409(t *testing.T) {
+	var gets int
+	v := newVendor(t, func(s seenReq) (int, string) {
+		if s.Method == http.MethodGet && strings.HasPrefix(s.path(), hsCreatePath+"/") {
+			gets++
+			if gets == 1 {
+				return 404, `{}`
+			}
+			return 500, `{}`
+		}
+		return dealPlan{contactPost: 409}.respond(s)
+	})
+	err := hubspotAt(v, nil).OpenDemoDeal(t.Context(), fullContact("ada@corp.example"), "n")
+	var de *DeliveryError
+	if !errors.As(err, &de) || de.Status != 409 || len(dealPosts(v)) != 0 {
+		t.Errorf("err = %v, requests = %v, want *DeliveryError{409} and no deal POST", err, v.labels())
+	}
+}
+
+func TestHubSpotOpenDemoDeal_BatchReadAsksForEveryAssociatedDeal(t *testing.T) {
+	v, err := runDeal(t, dealPlan{assocBody: assocOf("9007199254740993", "12", "13"), batchBody: batchOf(dealRes(`"true"`))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var batch seenReq
+	for _, c := range v.calls() {
+		if c.label() == batchLabel {
+			batch = c
+		}
+	}
+	var body struct {
+		Properties []string            `json:"properties"`
+		Inputs     []map[string]string `json:"inputs"`
+	}
+	if err := json.Unmarshal(batch.Body, &body); err != nil {
+		t.Fatalf("batch body %q: %v", batch.Body, err)
+	}
+	wantIn := []map[string]string{{"id": "9007199254740993"}, {"id": "12"}, {"id": "13"}}
+	if !reflect.DeepEqual(body.Inputs, wantIn) || !reflect.DeepEqual(body.Properties, []string{"hs_is_closed"}) {
+		t.Errorf("batch body = %s, want inputs %v and properties [hs_is_closed]", batch.Body, wantIn)
+	}
+}
+
+func TestHubSpotOpenDemoDeal_UndecodableBatchBodyIsTransient(t *testing.T) {
+	v, err := runDeal(t, dealPlan{assocBody: assocOf("1"), batchBody: "not json"})
+	var de *DeliveryError
+	if !errors.As(err, &de) || de.Status != 0 || len(dealPosts(v)) != 0 {
+		t.Errorf("err = %v, requests = %v, want *DeliveryError{0} and no deal POST", err, v.labels())
+	}
+}

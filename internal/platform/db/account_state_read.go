@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/url"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -49,7 +51,21 @@ END $$`,
 }
 
 // AuthAdminDSN swaps the credentials of migrationDSN for supabase_auth_admin and password.
-// Stub: LOGFIX-02-02 implements it.
+// Its errors hold neither the DSN nor the password.
 func AuthAdminDSN(migrationDSN, password string) (string, error) {
-	return "", nil
+	if password == "" {
+		return "", errors.New("db: auth admin dsn: empty password")
+	}
+	if migrationDSN == "" {
+		return "", errors.New("db: auth admin dsn: empty migration dsn")
+	}
+	u, err := url.Parse(migrationDSN)
+	if err != nil {
+		return "", errors.New("db: auth admin dsn: unparseable migration dsn")
+	}
+	if u.Host == "" {
+		return "", errors.New("db: auth admin dsn: migration dsn has no host")
+	}
+	u.User = url.UserPassword("supabase_auth_admin", password)
+	return u.String(), nil
 }

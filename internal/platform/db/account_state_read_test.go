@@ -72,6 +72,7 @@ func TestAuthAdminDSN_SwapsOnlyTheCredentials(t *testing.T) {
 func TestAuthAdminDSN_RefusesEmptyOrBadInput(t *testing.T) {
 	const secret = "s3cret-xyz"
 	cases := map[string]struct{ dsn, password string }{
+		"empty_migration_dsn":         {"", secret},
 		"empty_password":              {"postgresql://invoice_migrator:m@h:5432/railway", ""},
 		"unparseable_dsn":             {badDSN, secret},
 		"bad_port_dsn_holds_password": {"postgres://invoice_migrator:" + secret + "@h:notaport/railway", secret},
@@ -88,7 +89,7 @@ func TestAuthAdminDSN_RefusesEmptyOrBadInput(t *testing.T) {
 			if c.password != "" && strings.Contains(err.Error(), c.password) {
 				t.Errorf("error holds the password: %v", err)
 			}
-			if strings.Contains(err.Error(), c.dsn) {
+			if c.dsn != "" && strings.Contains(err.Error(), c.dsn) {
 				t.Errorf("error holds the DSN: %v", err)
 			}
 		})

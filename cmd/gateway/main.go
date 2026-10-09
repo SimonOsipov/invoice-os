@@ -108,6 +108,10 @@ func main() {
 		platform.Fatal(app.Logger, "gateway: provision: %v", err)
 	}
 
+	startAccountStateGrant(os.Getenv("RAILWAY_ENVIRONMENT_NAME"), provisionCfg.MigrationDSN, provisionCfg.Passwords.AuthAdmin, app.Logger, func(dsn string) {
+		go grantAccountStateRead(context.Background(), dsn, db.GrantAccountStateRead, 10*time.Second, 60, app.Logger)
+	})
+
 	// Publish what the sequence above actually did, off the same predicate it
 	// branched on, before app.Run opens the listener — so the first /healthz any
 	// caller can reach already carries it. Both of the reset's inputs are

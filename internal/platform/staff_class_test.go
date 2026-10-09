@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"context"
 	"bytes"
 	"encoding/json"
 	"log/slog"
@@ -300,3 +301,5 @@ func TestStaffClass_PanicIsRecovered(t *testing.T) {
 		t.Errorf("log holds %d panic recovered record(s), want 1:\n%s", n, rig.log.String())
 	}
 }
+
+func staffCaller(ctx context.Context) (auth.Identity, bool) { return auth.StaffFromContext(ctx) }

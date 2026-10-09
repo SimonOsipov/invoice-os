@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"bufio"
 	"fmt"
 	"io"
@@ -570,3 +571,5 @@ func TestStaffRoute_GatewayAndServiceTogether(t *testing.T) {
 		})
 	}
 }
+
+func staffCaller(ctx context.Context) (auth.Identity, bool) { return auth.StaffFromContext(ctx) }

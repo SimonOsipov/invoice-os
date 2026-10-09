@@ -26,6 +26,7 @@ type ctxKey int
 const (
 	ctxKeyIdentity ctxKey = iota
 	ctxKeyTenantlessCaller
+	ctxKeyStaff
 )
 
 // WithIdentity returns a context carrying the verified identity. The middleware

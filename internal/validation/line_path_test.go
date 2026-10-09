@@ -168,6 +168,8 @@ func TestCEL_ParityRuleStaysBare(t *testing.T) {
 
 func TestCEL_TargetMismatchStaysBare(t *testing.T) {
 	wantPaths(t, mustLines(t, linesPayload(price(-1.0)), celRule("k", "subtotal", lineCostExpr)), "subtotal")
+	p := Payload{"invoice": map[string]any{"line_items": []any{price(-1.0)}, "tax_subtotals": []any{price(-1.0)}}}
+	wantPaths(t, mustLines(t, p, celRule("k", "tax_subtotals", lineCostExpr)), "tax_subtotals")
 }
 
 func TestCEL_EmptyTargetStaysBare(t *testing.T) {
@@ -264,10 +266,11 @@ func TestCEL_AttributionLeavesPayloadUntouched(t *testing.T) {
 func TestCEL_NearMissShapesStayBare(t *testing.T) {
 	p := Payload{"invoice": map[string]any{"min": 0.0, "other": 1.0, "line_items": []any{price(-1.0), price(5.0)}}}
 	for name, expr := range map[string]string{
-		"guard names another list": "!has(invoice.other) || invoice.line_items.all(x, x.unit_price >= 0.0)",
-		"exists instead of all":    "invoice.line_items.exists(x, x.unit_price >= 100.0)",
-		"body reads invoice":       "invoice.line_items.all(x, x.unit_price >= invoice.min)",
-		"extra conjunct":           "invoice.line_items.all(x, x.unit_price >= 0.0) && invoice.min > 5.0",
+		"guard names another list":  "!has(invoice.other) || invoice.line_items.all(x, x.unit_price >= 0.0)",
+		"exists instead of all":     "invoice.line_items.exists(x, x.unit_price >= 100.0)",
+		"body reads invoice":        "invoice.line_items.all(x, x.unit_price >= invoice.min)",
+		"extra conjunct":            "invoice.line_items.all(x, x.unit_price >= 0.0) && invoice.min > 5.0",
+		"body reads invoice lazily": "invoice.line_items.all(x, x.unit_price >= 0.0 && invoice.min >= 0.0)",
 	} {
 		t.Run(name, func(t *testing.T) {
 			wantPaths(t, mustLines(t, p, celRule("k", "line_items", expr)), "line_items")

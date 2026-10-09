@@ -66,7 +66,14 @@ type Rule struct {
 	Message  string   `json:"message"`
 	Scope    string   `json:"scope"` // "document" only in v1 (Decision N10)
 	Enabled  bool     `json:"enabled"`
+
+	// Codes is the NRS code list a list-variant enum rule checks against, filled
+	// by the loader. Never on the wire.
+	Codes CodeSet `json:"-"`
 }
+
+// CodeSet is the set of codes of one NRS code list.
+type CodeSet map[string]struct{}
 
 // RuleSet is the engine's evaluation input: the active published version's
 // number plus its rules, as returned by the (M3-04-06) Store's

@@ -120,6 +120,10 @@ func loadActiveRuleSetTx(ctx context.Context, tx pgx.Tx) (RuleSet, error) {
 		return RuleSet{}, fmt.Errorf("%w (version %d, id %s)", ErrEmptyRuleSet, version, versionID)
 	}
 
+	if err := attachCodeLists(ctx, tx, rules); err != nil {
+		return RuleSet{}, err
+	}
+
 	return RuleSet{ID: versionID, Version: version, Rules: rules}, nil
 }
 

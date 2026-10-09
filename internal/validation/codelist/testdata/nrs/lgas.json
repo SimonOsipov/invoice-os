@@ -1,0 +1,20 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "name": "Aba North",
+      "code": "NG-AB-ANO",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Aba South",
+      "code": "NG-AB-ASO",
+      "state_code": "NG-AB"
+    },
+    {
+      "name": "Arochukwu",
+      "code": "NG-AB-ARO",
+      "state_code": "NG-AB"
+    }
+  ]
+}

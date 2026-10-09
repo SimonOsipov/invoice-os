@@ -1,0 +1,17 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "hscode": "0101.21",
+      "description": "Horses; live, pure-bred breeding animals"
+    },
+    {
+      "hscode": "0101.29",
+      "description": "Horses; live, other than pure-bred breeding animals"
+    },
+    {
+      "hscode": "0101.30",
+      "description": "Asses; live"
+    }
+  ]
+}

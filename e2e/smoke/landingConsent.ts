@@ -1,9 +1,13 @@
 // The cookie answer a landing spec arrives with. Shared because more than one spec needs it
 // and the record has to be written before the first navigation.
 //
-// Imports nothing but Playwright's types on purpose: test:unit runs with no deploy URLs, so
+// Imports only Playwright's types and ./sentryHost on purpose: test:unit runs with no deploy URLs, so
 // pulling in a module that resolves a target at import time would break it (e2e/README.md).
-import type { Page } from '@playwright/test'
+import type { BrowserContext, Page, Route } from '@playwright/test'
+import { isProductionHost, isSentryHost } from './sentryHost'
+
+const CONSENT_KEY = 'asc_consent' // retyped from frontend/landing/src/consent.ts
+export const STUB_HEADER = 'x-asc-stub'
 
 /**
  * Seeds a cookie answer before the first navigation, so the notice never renders.
@@ -26,4 +30,67 @@ export async function seedConsent(page: Page, analytics: boolean): Promise<void>
       // landed cannot pass silently — the biconditional goes red on the production target.
     }
   }, analytics)
+}
+
+/** Attach before navigating; returns the sink to assert on. */
+export function consoleGate(page: Page): string[] {
+  const errors: string[] = []
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => {
+    errors.push(`pageerror: ${err.message}`)
+  })
+  return errors
+}
+
+/** The hosts the routed tests must never reach: the GA tag, GA collection and Sentry. */
+export function isStubbedHost(rawUrl: string): boolean {
+  let host: string
+  try {
+    host = new URL(rawUrl).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  return host === 'www.googletagmanager.com' || host.endsWith('google-analytics.com') || isSentryHost(rawUrl)
+}
+
+/**
+ * Serves the production hostnames from the fork, so Chromium applies real cookie rules to the
+ * deployed bundles, and answers every GA and Sentry request with an empty 200. Needs no
+ * local server; on a production target the forward is the identity.
+ */
+export async function routeProductionHosts(
+  context: BrowserContext,
+  targets: { landing: string; library: string },
+): Promise<void> {
+  const forward = (origin: string) => async (route: Route) => {
+    const { pathname, search } = new URL(route.request().url())
+    await route.fulfill({ response: await route.fetch({ url: origin + pathname + search }) })
+  }
+  await context.route('https://www.ascomply.com/**', forward(targets.landing))
+  await context.route('https://library.ascomply.com/**', forward(targets.library))
+  // CORS headers: a cross-origin Sentry POST answered without them logs a console error.
+  await context.route((url) => isStubbedHost(url.href), (route) =>
+    route.fulfill({
+      status: 200,
+      body: '',
+      contentType: 'application/javascript',
+      headers: {
+        [STUB_HEADER]: '1',
+        'access-control-allow-origin': '*',
+        'access-control-allow-headers': '*',
+        'access-control-allow-methods': '*',
+      },
+    }),
+  )
+}
+
+/** The stored consent record as JSON text: the cookie on a production host, `localStorage` elsewhere. */
+export async function consentRecordOf(page: Page): Promise<string | null> {
+  if (isProductionHost(page.url())) {
+    const cookie = (await page.context().cookies(page.url())).find((c) => c.name === CONSENT_KEY)
+    return cookie ? decodeURIComponent(cookie.value) : null
+  }
+  return page.evaluate((key) => window.localStorage.getItem(key), CONSENT_KEY)
 }

@@ -38,9 +38,10 @@ paths:
 - Add the field to the per-field `CreateInput` assignment in `internal/importer/service.go`.
 - Add the field to `documentCreateInput` in `internal/importer/document.go`.
 - Add the field to `invoiceEditFor` in `cmd/submission/main.go`.
-- Add a spec for an extracted field to `tier1Specs` in `internal/extraction/tier1.go`. Extraction drops a field without a spec.
-- Add the field to `lockedFields` in `internal/extraction/handlers_correction.go`.
-- Add the field to `doubtfulFields` in `internal/extraction/reconcile.go`.
+- Add a spec for an extracted header field to `tier1Specs` in `internal/extraction/tier1.go`. Give it a label id from `anchorLexicon` in `internal/extraction/anchor.go`.
+- Without a spec, the Tier-1 rules and the learning path skip the field. The AI path still reads it.
+- Add the field to `lockedFields` in `internal/extraction/handlers_correction.go` only when a correction needs the extractor's doubt flag.
+- Add the field to `doubtfulFields` in `internal/extraction/reconcile.go` only when the reconcile pass must present its adjacent generic reads as doubtful.
 - Add the field to the mock readings in `internal/extraction/mock.go`.
 - Add the field to the wire interfaces in `frontend/app/src/lib/invoices.ts`. Add its rows to `frontend/app/src/lib/wireMirrors.test.ts`.
 - Add the field to `MBS_PATH_TO_EDIT_FIELD` in `frontend/app/src/lib/invoices.ts`.
@@ -57,7 +58,13 @@ paths:
 - Change `SYSTEM` and `FIELDS` in `tools/aimodeltest/run.py` with it.
 - Turning on `Extract` for a line field changes the line schema and `LineRoles`. Change `aiLinesSystem` in `internal/extraction/ailines.go` in the same story.
 - Change `LINE_SYSTEM` and `LINE_ROLES` in `tools/aimodeltest/run.py` with it. `TestAliRunPy_LineRolesIsExactlyExtractionLineRoles` asserts they match.
-- Move the characterization pins of each path you change.
+- Update the characterization pins of each path you change.
+- Import pins: `TestImportKeys_AreTheElevenImportFieldsInOrder` and `TestCanonicalFields_AreTheElevenImportKeys`. The vitest pin is `CANON is the eleven import fields, invoice_number alone required` in `frontend/app/src/lib/invoiceFields.test.ts`.
+- Header extract pins: `TestExtractHeaderKeys_AreTheTenInOrder` and `TestHeaderFields_AreTheTenInOrder`. The vitest pin is `HEADER_FIELDS is the ten extraction header fields in order`.
+- Line extract pins: `TestExtractLineKeys_AreTheFiveInOrder` and `TestLineRoles_AreTheFiveRoleConstantsInEmitOrder`.
+- Edit pin: `EDIT_FIELD_KEYS is the nine editable header fields in order` in `frontend/app/src/lib/invoiceFields.test.ts`.
+- Form pin: `Draft is the five form keys plus items` in `frontend/app/src/lib/invoiceFields.test.ts`.
+- The Go pins live in `internal/invoicefields/fields_test.go`, `internal/importer/fields_test.go` and `internal/extraction/vocabulary_list_test.go`.
 
 ## Limits
 

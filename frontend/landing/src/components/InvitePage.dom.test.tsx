@@ -16,6 +16,7 @@ const PASSWORD = 'correct-horse-battery'
 const PREVIEW_URL = 'https://gw.x/auth/invitation'
 const REGISTER_URL = 'https://gw.x/auth/invitation/register'
 const RESEND_URL = 'https://gw.x/auth/resend-verification'
+const RESET_URL = 'https://gw.x/auth/request-password-reset'
 const SIGN_IN_HREF = `https://app.x?auth=start#invite=${T}`
 
 // D16 copy, pinned here and not imported: a wording change is a deliberate edit.
@@ -24,8 +25,12 @@ const INVALID_TEXT = 'Ask your workspace admin for a new one.'
 const UNAVAILABLE = 'We could not load this invite. Reload the page to try again.'
 const READY_TEXT = `${ADDRESS} is invited to join ${WORKSPACE} on ASComply as Reviewer.`
 const READY_PROMPT = 'New to ASComply? Create an account with this address. Already have one? Sign in.'
-const SENT_TEXT = `If this address can be registered, a confirmation link is on its way to ${ADDRESS}. Open it and confirm your email, then come back to this page and choose Sign in. Already have an account? Sign in now.`
+const SENT_TEXT = `A confirmation link is on its way to ${ADDRESS}. Open it and confirm your email, then come back to this page and choose Sign in. Already have an account? Sign in now.`
 const PRODUCT_EMAIL_NOTICE = 'We will email you about your account and the service. This is part of using ASComply Africa.'
+const EXISTS_TEXT = `${ADDRESS} already has an ASComply account. Sign in to join ${WORKSPACE} as Reviewer.`
+const UNCONFIRMED_TEXT = `A confirmation email was already sent to ${ADDRESS}. Open it, then sign in with the password you chose first.`
+const RESET_SENT = 'If this address has an account, a reset link is on its way.'
+const RESEND_FAILED = 'The link could not be sent right now. Try again shortly.'
 const RESEND_SENT = `If ${ADDRESS} still needs verifying, a new link is on its way. Use the newest one.`
 // register.ts copy, as registerOutcome maps the gateway's statuses.
 const THROTTLED = 'Too many attempts. Try again in a minute.'
@@ -92,14 +97,15 @@ function json(status: number, body: unknown): Response {
 }
 
 type Route = (init: RequestInit) => Response | Promise<Response>
-const previewOk = (over: Partial<Record<'workspace' | 'role' | 'email', string>> = {}): Route => () =>
+const previewOk = (over: Partial<Record<'workspace' | 'role' | 'email' | 'account', string>> = {}): Route => () =>
   json(200, { workspace: WORKSPACE, role: 'reviewer', email: ADDRESS, account: 'none', ...over })
 
-function stubFetch(routes: { preview?: Route; register?: Route; resend?: Route } = {}) {
+function stubFetch(routes: { preview?: Route; register?: Route; resend?: Route; reset?: Route } = {}) {
   const table: Record<string, Route | undefined> = {
     [PREVIEW_URL]: routes.preview ?? previewOk(),
     [REGISTER_URL]: routes.register,
     [RESEND_URL]: routes.resend,
+    [RESET_URL]: routes.reset,
   }
   const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
     const route = table[url]
@@ -510,6 +516,164 @@ describe('the sent view', () => {
   })
 })
 
+const peachNotice = () => Array.from(container.querySelectorAll<HTMLElement>('[role="status"] p')).find((p) => p.style.background === 'var(--accent)')
+
+describe('the account-exists views', () => {
+  const toView = (account: string, routes: Parameters<typeof stubFetch>[0] = {}) => {
+    const fetchMock = stubFetch({ preview: previewOk({ account }), ...routes })
+    return mount().then(() => fetchMock)
+  }
+
+  it('invitePage_aConfirmedAccountIsOfferedOnlySignIn', async () => {
+    await toView('confirmed')
+
+    expect(text()).toContain(EXISTS_TEXT)
+    expect(buttonTexts()).toEqual(['Sign in'])
+    expect(container.querySelector('form')).toBeNull()
+    expect(headings()).toEqual([])
+    expect(text()).not.toContain('Create account')
+  })
+
+  it('invitePage_existsViewSignInCarriesTheInviteToTheApp', async () => {
+    await toView('confirmed')
+    expect(assigned).toEqual([])
+
+    await click(button('Sign in'))
+
+    expect(assigned).toEqual([SIGN_IN_HREF])
+  })
+
+  it('invitePage_anUnconfirmedAccountIsToldToOpenTheFirstMail', async () => {
+    await toView('unconfirmed')
+
+    expect(container.querySelector('p')!.textContent).toBe(UNCONFIRMED_TEXT)
+    expect(buttonTexts()).toEqual(['Send it again', 'Forgot password?', 'Sign in'])
+    expect(container.querySelector('form')).toBeNull()
+    expect(headings()).toEqual([])
+  })
+
+  it.each([['none'], ['unknown'], [undefined]])('invitePage_unknownOrMissingStateKeepsTheReadyView: account %s', async (account) => {
+    stubFetch({ preview: () => json(200, { workspace: WORKSPACE, role: 'reviewer', email: ADDRESS, ...(account ? { account } : {}) }) })
+    await mount()
+
+    expect(headings()).toEqual([`Join ${WORKSPACE}`])
+    expect(text()).toContain(READY_TEXT)
+    expect(buttonTexts()).toEqual(['Create account', 'Sign in'])
+  })
+
+  it('invitePage_unconfirmedSendItAgainResendsToTheInvitedAddress', async () => {
+    let finish!: () => void
+    const pending = new Promise<Response>((res) => {
+      finish = () => res(json(202, {}))
+    })
+    const fetchMock = await toView('unconfirmed', { resend: () => pending })
+
+    const again = button('Send it again')
+    await click(again)
+    await click(again)
+
+    const posts = callsTo(fetchMock, RESEND_URL)
+    expect(posts, 'one POST for two clicks').toHaveLength(1)
+    expect(bodyOf(posts[0] as [string, RequestInit])).toStrictEqual({ email: ADDRESS })
+    expect(again.disabled).toBe(true)
+    expect(again.textContent?.trim()).toBe('Sending…')
+    expect(button('Forgot password?').disabled, 'the reset control is not tied to the resend').toBe(false)
+
+    await act(async () => finish())
+    await settle()
+    expect(text()).toContain(RESEND_SENT)
+    expect(again.disabled).toBe(false)
+    expect(again.textContent?.trim()).toBe('Send it again')
+  })
+
+  it('invitePage_unconfirmedForgotPasswordSendsTheResetLink', async () => {
+    let finish!: () => void
+    const pending = new Promise<Response>((res) => {
+      finish = () => res(json(202, {}))
+    })
+    const fetchMock = await toView('unconfirmed', { reset: () => pending })
+
+    const forgot = button('Forgot password?')
+    await click(forgot)
+    await click(forgot)
+
+    const posts = callsTo(fetchMock, RESET_URL)
+    expect(posts, 'one POST for two clicks').toHaveLength(1)
+    expect(bodyOf(posts[0] as [string, RequestInit])).toStrictEqual({ email: ADDRESS })
+    expect(forgot.disabled).toBe(true)
+    expect(button('Send it again').disabled, 'the resend is not tied to the reset').toBe(false)
+
+    await act(async () => finish())
+    await settle()
+    expect(forgot.disabled).toBe(false)
+    const notice = peachNotice()
+    expect(notice?.textContent, 'the reset notice is the peach one').toBe(RESET_SENT)
+  })
+
+  it('invitePage_unconfirmedForgotPasswordFailureShowsTheAlert', async () => {
+    await toView('unconfirmed', { reset: () => json(500, { error: 'boom' }) })
+
+    await click(button('Forgot password?'))
+    await settle()
+
+    expect(alerts()).toEqual([RESEND_FAILED])
+    expect(peachNotice()).toBeUndefined()
+  })
+
+  it('invitePage_unconfirmedControlsMatchTheirSiblings', async () => {
+    await toView('unconfirmed')
+
+    // Sent view: ds-btn ds-btn--outline ds-btn--md, full width, marginTop 18. SignInForm: Button variant text, fontSize 13.
+    const again = button('Send it again')
+    expect(again.className).toBe('ds-btn ds-btn--outline ds-btn--md')
+    expect(again.style.width).toBe('100%')
+    expect(again.style.marginTop).toBe('18px')
+    const forgot = button('Forgot password?')
+    expect(forgot.style.fontSize).toBe('13px')
+    expect(forgot.type).toBe('button')
+    expect(forgot.parentElement!.style.marginTop).toBe('8px')
+    const signIn = button('Sign in')
+    expect(signIn.className).toBe('ds-btn ds-btn--outline ds-btn--md')
+    expect(signIn.style.width).toBe('100%')
+    expect(signIn.style.marginTop).toBe('10px')
+    // The ready view's Sign in is the same node shape.
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    stubFetch()
+    await mount()
+    const ready = button('Sign in')
+    expect(ready.className).toBe(signIn.className)
+    expect(ready.getAttribute('style')).toBe(signIn.getAttribute('style'))
+  })
+
+  const sentFrom = [
+    ['account_exists', EXISTS_TEXT],
+    ['account_unconfirmed', UNCONFIRMED_TEXT],
+  ]
+  it.each(sentFrom)('invitePage_aRefusedSubmitMovesToTheMatchingView: 409 %s', async (error, expected) => {
+    stubFetch({ register: () => json(409, { error }) })
+    await mount()
+    await toRegisterView()
+
+    await submit(PASSWORD)
+
+    expect(container.querySelector('p')!.textContent).toBe(expected)
+    expect(container.querySelectorAll('input').length, 'no password field is rendered').toBe(0)
+    expect(alerts()).toEqual([])
+  })
+
+  it('invitePage_aRefusedSubmitMovesToTheMatchingView: another 409 keeps the register view', async () => {
+    stubFetch({ register: () => json(409, { error: 'other' }) })
+    await mount()
+    await toRegisterView()
+
+    await submit(PASSWORD)
+
+    expect(headings()).toEqual(['Create your account'])
+    expect(alerts()).toEqual([REGISTER_UNAVAILABLE])
+  })
+})
+
 describe('the unusable invite', () => {
   type Case = [string, string | null, Route | null, number, 'invalid' | 'unavailable']
   const cases: Case[] = [
@@ -615,5 +779,15 @@ describe('long values', () => {
     await submit(PASSWORD)
     expect(headings()).toEqual(['Check your email'])
     for (const e of textElementsHolding(LONG_ADDRESS)) expect(e.style.overflowWrap, `sent view ${e.tagName}`).toBe('anywhere')
+  })
+
+  it.each(['confirmed', 'unconfirmed'])('invitePage_longValuesWrap: the %s view', async (account) => {
+    stubFetch({ preview: previewOk({ workspace: LONG_WORKSPACE, email: LONG_ADDRESS, account }) })
+    await mount()
+
+    expect(headings()).toEqual([])
+    const holding = textElementsHolding(LONG_ADDRESS)
+    if (account === 'confirmed') for (const e of textElementsHolding(LONG_WORKSPACE)) holding.push(e)
+    for (const e of holding) expect(e.style.overflowWrap, e.tagName).toBe('anywhere')
   })
 })

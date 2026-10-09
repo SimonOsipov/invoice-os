@@ -202,9 +202,10 @@ func TestSchema_SyncLogIsInsertOnlyForApp(t *testing.T) {
 	wantState(t, "app INSERT duplicate sync id", err, "23505")
 	_, err = app.Exec(ctx, `SELECT entry_count FROM nrs_code_list_syncs WHERE id = $1::uuid`, id)
 	wantState(t, "app SELECT sync row", err, "42501")
-	_, err = app.Exec(ctx, `UPDATE nrs_code_list_syncs SET entry_count = 4 WHERE id = $1::uuid`, id)
+	// WHERE false names no column, so only the UPDATE or DELETE privilege is checked, not SELECT.
+	_, err = app.Exec(ctx, `UPDATE nrs_code_list_syncs SET entry_count = 4 WHERE false`)
 	wantState(t, "app UPDATE sync row", err, "42501")
-	_, err = app.Exec(ctx, `DELETE FROM nrs_code_list_syncs WHERE id = $1::uuid`, id)
+	_, err = app.Exec(ctx, `DELETE FROM nrs_code_list_syncs WHERE false`)
 	wantState(t, "app DELETE sync row", err, "42501")
 
 	if err := super.QueryRow(ctx,

@@ -94,3 +94,28 @@ func queryCodes(ctx context.Context, tx pgx.Tx, sql string, args ...any) ([]stri
 	}
 	return out, err
 }
+
+// LoadTx reads the named lists over the caller's tx in one query. A list with
+// no rows is absent from the result.
+func LoadTx(ctx context.Context, tx pgx.Tx, names []string) (map[string]map[string]struct{}, error) {
+	rows, err := tx.Query(ctx, `SELECT list, code FROM nrs_codes WHERE list = ANY($1::text[])`, names)
+	if err != nil {
+		return nil, fmt.Errorf("codelist: load: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]struct{}{}
+	for rows.Next() {
+		var list, code string
+		if err := rows.Scan(&list, &code); err != nil {
+			return nil, fmt.Errorf("codelist: load: %w", err)
+		}
+		if out[list] == nil {
+			out[list] = map[string]struct{}{}
+		}
+		out[list][code] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("codelist: load: %w", err)
+	}
+	return out, nil
+}

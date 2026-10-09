@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -180,7 +182,12 @@ func TestEditHandler_OnlyAnNRSKeyReachesTheStore(t *testing.T) {
 }
 
 func TestCreateAndEditHandler_RefuseAMalformedIssueTime(t *testing.T) {
-	for _, bad := range []string{"25:61", "14:30", "2:30 PM", "9:05:03", "14:30:00.5", "24:00:00", ""} {
+	bads := []string{
+		"25:61", "14:30", "2:30 PM", "9:05:03", "14:30:00.5", "24:00:00", "",
+		" 14:30:00", "14:30:00 ", "14:30:00\n", "١٤:٣٠:٠٠", "23:59:60", "14:60:00", "99:00:00",
+		"14:30:00Z", "T14:30:00", "14-30-00", "20:00", "\x00invoice.clear",
+	}
+	for _, bad := range bads {
 		t.Run(bad, func(t *testing.T) {
 			called := false
 			create := func(context.Context, CreateInput) (Invoice, error) { called = true; return Invoice{}, nil }
@@ -209,7 +216,7 @@ func TestCreateAndEditHandler_RefuseAMalformedIssueTime(t *testing.T) {
 func firstRec(rec *httptest.ResponseRecorder, _ invoiceBody) *httptest.ResponseRecorder { return rec }
 
 func TestCreateHandler_AcceptsAWellFormedIssueTime(t *testing.T) {
-	for _, ok := range []string{"23:59:59", "00:00:00"} {
+	for _, ok := range []string{"23:59:59", "00:00:00", "19:59:59", "20:00:00", "09:05:03", "12:00:00"} {
 		t.Run(ok, func(t *testing.T) {
 			var got CreateInput
 			create := func(_ context.Context, in CreateInput) (Invoice, error) { got = in; return Invoice{ID: "x"}, nil }
@@ -220,6 +227,20 @@ func TestCreateHandler_AcceptsAWellFormedIssueTime(t *testing.T) {
 			}
 			if got.IssueTime == nil || *got.IssueTime != ok {
 				t.Errorf("IssueTime = %v, want %q", got.IssueTime, ok)
+			}
+
+			// The PATCH leg of the same boundary.
+			var edited EditInput
+			edit := func(_ context.Context, _ string, in EditInput) (Invoice, error) {
+				edited = in
+				return Invoice{ID: "x"}, nil
+			}
+			rec, _ = doInvoiceEdit(t, edit, &nrsIdentity, uuid.NewString(), mustJSON(t, map[string]any{"issue_time": ok}))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("edit status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if edited.IssueTime == nil || edited.IssueTime == ClearText || *edited.IssueTime != ok {
+				t.Errorf("edit IssueTime = %v, want %q", edited.IssueTime, ok)
 			}
 		})
 	}
@@ -250,6 +271,38 @@ func TestEditHandler_NullClearsANewKeyButNotAnOldOne(t *testing.T) {
 	}
 	if got.BuyerState != nil {
 		t.Errorf("BuyerState = %v, want nil for an absent key", got.BuyerState)
+	}
+
+	// Each of the 22 keys alone: that field is the sentinel, and every other member stays nil.
+	for i, key := range nrsHeaderKeys {
+		t.Run(key, func(t *testing.T) {
+			var one EditInput
+			edit := func(_ context.Context, _ string, in EditInput) (Invoice, error) {
+				one = in
+				return Invoice{ID: "x"}, nil
+			}
+			rec, _ := doInvoiceEdit(t, edit, &nrsIdentity, uuid.NewString(), `{"`+key+`":null}`)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			v := reflect.ValueOf(one.UpdateInput)
+			for j := 0; j < v.NumField(); j++ {
+				f, name := v.Field(j), v.Type().Field(j).Name
+				if name != nrsHeaderGoNames[i] {
+					if !f.IsNil() {
+						t.Errorf("%s = %v, want nil", name, f.Interface())
+					}
+					continue
+				}
+				want := reflect.ValueOf(ClearText)
+				if f.Type() == reflect.TypeOf((*time.Time)(nil)) {
+					want = reflect.ValueOf(ClearDate)
+				}
+				if f.IsNil() || f.Pointer() != want.Pointer() {
+					t.Errorf("%s = %v, want the clear sentinel", name, f.Interface())
+				}
+			}
+		})
 	}
 }
 
@@ -376,5 +429,171 @@ func TestCreateHandler_LineIDIsIgnored(t *testing.T) {
 	}
 	if got.LineItems[0].ID != nil {
 		t.Errorf("CreateInput.LineItems[0].ID = %v, want nil", got.LineItems[0].ID)
+	}
+}
+
+// A wrongly typed value on a new key is a 400, never a silent clear and never a 500.
+func TestCreateAndEditHandler_WrongJSONTypeOnANewKeyIs400(t *testing.T) {
+	values := map[string][]string{
+		"text": {`5`, `true`, `{}`, `{"a":1}`, `[]`, `["a"]`},
+		"date": {`5`, `true`, `{}`, `[]`, `""`, `"2026-03-01"`, `"yesterday"`},
+	}
+	called := false
+	create := func(context.Context, CreateInput) (Invoice, error) { called = true; return Invoice{}, nil }
+	edit := func(context.Context, string, EditInput) (Invoice, error) { called = true; return Invoice{}, nil }
+	var n int
+	for i, key := range nrsHeaderKeys {
+		kind := "text"
+		if nrsHeaderGoNames[i] == "DueDate" || nrsHeaderGoNames[i] == "TaxPointDate" {
+			kind = "date"
+		}
+		for _, v := range values[kind] {
+			n++
+			cb := `{"entity_id":"` + uuid.NewString() + `","invoice_number":"N","` + key + `":` + v + `}`
+			if rec, _ := doInvoiceCreate(t, create, &nrsIdentity, cb); rec.Code != http.StatusBadRequest {
+				t.Errorf("create %s=%s: status = %d, want 400 (body=%s)", key, v, rec.Code, rec.Body.String())
+			}
+			if rec, _ := doInvoiceEdit(t, edit, &nrsIdentity, uuid.NewString(), `{"`+key+`":`+v+`}`); rec.Code != http.StatusBadRequest {
+				t.Errorf("edit %s=%s: status = %d, want 400 (body=%s)", key, v, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	if n < 100 {
+		t.Fatalf("cases = %d, want at least 100", n)
+	}
+	if called {
+		t.Error("store called, want it never reached")
+	}
+}
+
+// D23/D24: null on a line field is "omitted" (the line's stored value carries); only the
+// header keys clear. A wrongly typed line key or id is a 400, and a malformed id is the store's to refuse.
+func TestEditHandler_LineNRSKeysNullAreOmittedAndIDStaysAsSent(t *testing.T) {
+	var got EditInput
+	edit := func(_ context.Context, _ string, in EditInput) (Invoice, error) {
+		got = in
+		return Invoice{ID: "x"}, nil
+	}
+
+	allNull := map[string]any{"id": uuid.NewString(), "description": "d"}
+	for _, k := range nrsLineKeys {
+		allNull[k] = nil
+	}
+	body := mustJSON(t, map[string]any{"line_items": []any{allNull, map[string]any{"id": nil, "description": "e"}, map[string]any{"id": "not-a-uuid"}}})
+	rec, _ := doInvoiceEdit(t, edit, &nrsIdentity, uuid.NewString(), body)
+	if rec.Code != http.StatusOK || got.LineItems == nil || len(*got.LineItems) != 3 {
+		t.Fatalf("status = %d lines = %v, want 200 and 3 lines (body=%s)", rec.Code, got.LineItems, rec.Body.String())
+	}
+	lines := *got.LineItems
+	for i, li := range lines {
+		for _, p := range []*string{li.TaxCategory, li.HSNCode, li.ISICCode, li.ProductCategory, li.ServiceCategory,
+			li.SellersItemIdentification, li.PriceUnit, li.TaxPercent, li.BaseQuantity} {
+			if p != nil {
+				t.Errorf("line %d carries %q, want every null NRS line key to stay nil", i, *p)
+			}
+		}
+	}
+	if lines[0].ID == nil || *lines[0].ID != allNull["id"] {
+		t.Errorf("line 0 ID = %v, want the sent id", lines[0].ID)
+	}
+	if lines[1].ID != nil {
+		t.Errorf("line 1 ID = %v, want nil for an explicit null id", lines[1].ID)
+	}
+	if lines[2].ID == nil || *lines[2].ID != "not-a-uuid" {
+		t.Errorf("line 2 ID = %v, want the malformed id passed to the store untouched", lines[2].ID)
+	}
+
+	for _, bad := range []string{`{"id":5}`, `{"id":{}}`, `{"tax_percent":7.5}`, `{"base_quantity":1}`, `{"tax_category":["a"]}`} {
+		rec, _ := doInvoiceEdit(t, edit, &nrsIdentity, uuid.NewString(), `{"line_items":[`+bad+`]}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("line %s: status = %d, want 400 (body=%s)", bad, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// A key added to Invoice or LineItem but not to the request bodies, or typed wrongly there, fails here.
+func TestRequestStructs_CarryEveryContentKeyAndOnlyTheNewEditKeysAreNullable(t *testing.T) {
+	tagsOf := func(typ reflect.Type) map[string]reflect.Type {
+		m := map[string]reflect.Type{}
+		for i := 0; i < typ.NumField(); i++ {
+			tag, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")
+			m[tag] = typ.Field(i).Type
+		}
+		return m
+	}
+	_, invTags := contentFields(reflect.TypeOf(Invoice{}))
+	_, lineTags := contentFields(reflect.TypeOf(LineItem{}))
+	if len(invTags) != 32 || len(lineTags) != 15 {
+		t.Fatalf("content tags = %d header, %d line; want 32 and 15", len(invTags), len(lineTags))
+	}
+
+	create, edit, line := tagsOf(reflect.TypeOf(createRequest{})), tagsOf(reflect.TypeOf(editReq{})), tagsOf(reflect.TypeOf(lineItemReq{}))
+	for _, k := range invTags {
+		if _, ok := create[k]; !ok {
+			t.Errorf("createRequest lacks %q", k)
+		}
+		ft, ok := edit[k]
+		if !ok {
+			t.Errorf("editReq lacks %q", k)
+			continue
+		}
+		isNew := false
+		for _, n := range nrsHeaderKeys {
+			isNew = isNew || n == k
+		}
+		if nullableType := strings.HasPrefix(ft.Name(), "nullable["); nullableType != isNew {
+			t.Errorf("editReq %q nullable = %v, want %v (null clears only the 22 new keys)", k, nullableType, isNew)
+		}
+	}
+	for _, k := range lineTags {
+		if _, ok := line[k]; !ok && k != "line_no" {
+			t.Errorf("lineItemReq lacks %q", k)
+		}
+	}
+	if _, ok := line["id"]; !ok {
+		t.Error("lineItemReq lacks id")
+	}
+	if _, ok := line["line_no"]; ok {
+		t.Error("lineItemReq carries line_no, which a client never sends")
+	}
+}
+
+// Nothing else ties the field list's keys to the wire: a typo there regenerates its SPA copy and passes.
+func TestInvoiceFieldsList_NamesTheWireContentKeys(t *testing.T) {
+	_, invTags := contentFields(reflect.TypeOf(Invoice{}))
+	_, lineTags := contentFields(reflect.TypeOf(LineItem{}))
+	var header, line []string
+	for _, f := range invoicefields.All {
+		if f.Line {
+			line = append(line, f.Key)
+		} else {
+			header = append(header, f.Key)
+		}
+	}
+	sortedCopy := func(in []string) []string {
+		out := append([]string(nil), in...)
+		sort.Strings(out)
+		return out
+	}
+	var wantLine []string
+	for _, k := range lineTags {
+		if k != "line_no" {
+			wantLine = append(wantLine, k)
+		}
+	}
+	if !reflect.DeepEqual(sortedCopy(header), sortedCopy(invTags)) {
+		t.Errorf("header field keys = %v, want the Invoice content tags %v", sortedCopy(header), sortedCopy(invTags))
+	}
+	if !reflect.DeepEqual(sortedCopy(line), sortedCopy(wantLine)) {
+		t.Errorf("line field keys = %v, want the LineItem content tags %v", sortedCopy(line), sortedCopy(wantLine))
+	}
+	got := map[string]bool{}
+	for _, f := range invoicefields.All {
+		got[f.Key] = true
+	}
+	for _, k := range append(append([]string(nil), nrsHeaderKeys...), nrsLineKeys...) {
+		if !got[k] {
+			t.Errorf("the field list lacks the NRS key %q", k)
+		}
 	}
 }

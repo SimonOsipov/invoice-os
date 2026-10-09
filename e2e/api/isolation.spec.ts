@@ -262,7 +262,7 @@ test.describe('cross-tenant invoice writes (API E2E)', () => {
   })
 
   // One test, so a retry re-arranges a fresh invoice and the after-read shares the writes' retry unit.
-  test("B's edit, validate, transition, submit and approve of A's invoice each answer a random id's 404 and change nothing", async () => {
+  test("B's edit, line edit, validate, transition, submit and approve of A's invoice each answer a random id's 404 and change nothing", async () => {
     test.setTimeout(120_000)
 
     const tin = freshTin()
@@ -274,6 +274,9 @@ test.describe('cross-tenant invoice writes (API E2E)', () => {
     const ownRead = await rawFetch(`/api/invoice/v1/invoices/${created.id}`, { headers: { Authorization: `Bearer ${tokenA}` } })
     expect(ownRead.status, "positive control: A's own GET of its invoice").toBe(200)
 
+    const ownLineId = (await getInvoice(tokenA, created.id)).line_items?.[0]?.id
+    expect(ownLineId, "A's own line id, which B's line edit presents").toBeTruthy()
+
     const before = await snapshotInvoice(tokenA, created.id)
     expect(before.approval.state, 'validate must arm an open run, so approve has a real target').toBe('open')
     expect(before.approval.steps.length, 'the open run must carry steps, or its deep-equal is vacuous').toBeGreaterThan(0)
@@ -282,7 +285,18 @@ test.describe('cross-tenant invoice writes (API E2E)', () => {
     // Well-formed bodies, so tenancy is the only reason left to refuse.
     const headers = { Authorization: `Bearer ${tokenB}` }
     const verbs: Record<string, (id: string) => ReturnType<typeof rawFetch>> = {
-      edit: (id) => rawFetch(`/api/invoice/v1/invoices/${id}`, { method: 'PATCH', headers, body: { buyer_name: 'cross-tenant write' } }),
+      edit: (id) =>
+        rawFetch(`/api/invoice/v1/invoices/${id}`, {
+          method: 'PATCH',
+          headers,
+          body: { buyer_name: 'cross-tenant write', buyer_state: 'NG-LA', issue_time: '10:00:00' },
+        }),
+      editLine: (id) =>
+        rawFetch(`/api/invoice/v1/invoices/${id}`, {
+          method: 'PATCH',
+          headers,
+          body: { line_items: [{ id: ownLineId, description: 'cross-tenant write', tax_category: 'EXEMPTED' }] },
+        }),
       validate: (id) => rawFetch(`/api/invoice/v1/invoices/${id}/validate`, { method: 'POST', headers }),
       transition: (id) => rawFetch(`/api/invoice/v1/invoices/${id}/transitions`, { method: 'POST', headers, body: { target: 'queued' } }),
       submit: (id) =>
@@ -303,8 +317,8 @@ test.describe('cross-tenant invoice writes (API E2E)', () => {
     }
 
     const after = await snapshotInvoice(tokenA, created.id)
-    expect(after.invoice, "A's invoice (Invoice keys) after B's five writes").toEqual(before.invoice)
-    expect(after.history, "A's status history after B's five writes").toEqual(before.history)
-    expect(after.approval, "A's approval run after B's five writes").toEqual(before.approval)
+    expect(after.invoice, "A's invoice (Invoice keys) after B's six writes").toEqual(before.invoice)
+    expect(after.history, "A's status history after B's six writes").toEqual(before.history)
+    expect(after.approval, "A's approval run after B's six writes").toEqual(before.approval)
   })
 })

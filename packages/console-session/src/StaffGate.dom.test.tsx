@@ -16,6 +16,7 @@ const resolve = vi.mocked(resolveConsoleBoot)
 const never = () => new Promise<never>(() => undefined)
 const realLocation = window.location
 let hrefWrites: string[]
+let replaceWrites: string[]
 let store: ReturnType<typeof installStorage>
 
 function gate(o: { landing?: string | null; gateway?: string | null } = {}) {
@@ -28,6 +29,7 @@ function gate(o: { landing?: string | null; gateway?: string | null } = {}) {
 
 beforeEach(() => {
   hrefWrites = []
+  replaceWrites = []
   vi.spyOn(console, 'warn').mockImplementation(() => undefined)
   spyTimeouts()
   // jsdom cannot navigate: capture href writes, and read search and pathname from the real location.
@@ -43,6 +45,9 @@ beforeEach(() => {
     },
     set href(v: string) {
       hrefWrites.push(v)
+    },
+    replace(v: string) {
+      replaceWrites.push(v)
     },
   })
   window.history.replaceState(null, '', '/')
@@ -76,6 +81,7 @@ describe('StaffGate (AC-11)', () => {
     resolve.mockImplementationOnce(async () => ({ kind: 'leave', url }))
     const leave = render(gate())
     await waitFor(() => expect(hrefWrites).toEqual([url]))
+    expect(replaceWrites).toEqual([])
     expect(screen.queryByText('console')).toBeNull()
     expect(leave.container.innerHTML).toBe('')
   })
@@ -120,6 +126,7 @@ describe('StaffGate (AC-11)', () => {
     await waitFor(() => expect(hrefWrites).toEqual([url]))
     await new Promise((r) => setTimeout(r, 20))
     expect(hrefWrites).toEqual([url])
+    expect(replaceWrites).toEqual([])
     expect(resolve).toHaveBeenCalledTimes(1)
   })
 
@@ -137,12 +144,13 @@ describe('StaffGate (AC-11)', () => {
     expect(hrefWrites).toEqual([])
   })
 
-  it('StaffGate_authStartLeavesForTheLandingReady', async () => {
+  it('StaffGate_authStart_replacesTheEntry', async () => {
     window.history.replaceState(null, '', '/?auth=start')
     const net = installFetch(() => new Error('unexpected request'))
     render(gate())
-    await waitFor(() => expect(hrefWrites).toHaveLength(1))
-    expect(hrefWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=ops&signin=ready$`))
+    await waitFor(() => expect(replaceWrites).toHaveLength(1))
+    expect(hrefWrites).toEqual([])
+    expect(replaceWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=ops&signin=ready$`))
     expect(realLocation.search).toBe('')
     expect(net.calls).toHaveLength(0)
     expect(screen.queryByText('console')).toBeNull()

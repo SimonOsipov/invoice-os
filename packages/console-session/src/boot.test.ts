@@ -116,6 +116,25 @@ describe('?auth=start (AC-5)', () => {
     expect(heldBlob()).toEqual({ v: 1, s: state, at: NOW })
     expect(calls).toHaveLength(0)
   })
+
+  it('boot_authStartLeaves_withReplace', async () => {
+    const { boot } = await run({ search: '?auth=start' })
+    expect(boot).toMatchObject({ kind: 'leave', replace: true })
+    expect(withOutcome('ready').test(leaveUrl(boot))).toBe(true)
+  })
+
+  it('boot_otherLeaves_haveNoReplace', async () => {
+    const scenarios: Record<string, Setup> = {
+      'no session': {},
+      'failed hand-off': { search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), answer: () => reply(503) },
+      'not staff': { search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), answer: () => pair(customerToken('x'), 'R-x') },
+    }
+    for (const [name, setup] of Object.entries(scenarios)) {
+      const { boot } = await run(setup)
+      expect(boot.kind, name).toBe('leave')
+      expect(boot.kind === 'leave' ? boot.replace : 'not-leave', name).toBeUndefined()
+    }
+  })
 })
 
 describe('hand-off redemption (AC-6, AC-7)', () => {

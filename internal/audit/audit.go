@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -56,6 +57,26 @@ func Record(ctx context.Context, tx pgx.Tx, actor, event string, payload any) er
 		`INSERT INTO audit_log (actor, event, payload) VALUES ($1, $2, $3)`,
 		actor, event, string(body)); err != nil {
 		return fmt.Errorf("audit: record event %q: %w", event, err)
+	}
+	return nil
+}
+
+// RecordStaff appends one staff action to the global staff_audit_log on tx, the caller's
+// transaction, so the row commits or rolls back with the change it records. A nil payload is
+// stored as {}.
+func RecordStaff(ctx context.Context, tx pgx.Tx, actor, ruleSetVersionID uuid.UUID, event string, payload any) error {
+	body := []byte("{}")
+	if payload != nil {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("audit: marshal payload: %w", err)
+		}
+		body = b
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO public.staff_audit_log (actor, event, rule_set_version_id, payload) VALUES ($1, $2, $3, $4)`,
+		actor, event, ruleSetVersionID, string(body)); err != nil {
+		return fmt.Errorf("audit: record staff event %q: %w", event, err)
 	}
 	return nil
 }

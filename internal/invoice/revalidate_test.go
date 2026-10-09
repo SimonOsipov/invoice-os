@@ -1452,7 +1452,11 @@ func TestRevalidateActive_DemoteStampsTheItemsOwnVersion(t *testing.T) {
 	entityID := seedEntity(t, super, tenantID, "OWN-STAMP entity")
 	inv1 := seedInvoiceWithViolations(t, super, tenantID, entityID, "OWN-STAMP-1", "validated", "[]")
 	inv2 := seedInvoiceWithViolations(t, super, tenantID, entityID, "OWN-STAMP-2", "validated", "[]")
-	idX, idY := seedRuleSetVersionID(t, super), seedRuleSetVersionID(t, super)
+	var idX, idY string
+	if err := super.QueryRow(ctx, `SELECT (SELECT id FROM rule_set_versions ORDER BY version LIMIT 1),
+		(SELECT id FROM rule_set_versions ORDER BY version LIMIT 1 OFFSET 1)`).Scan(&idX, &idY); err != nil || idX == "" || idY == "" || idX == idY {
+		t.Fatalf("need two distinct rule_set_versions ids, got %q %q: %v", idX, idY, err)
+	}
 	stampFor := map[string]string{inv1: idX, inv2: idY}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

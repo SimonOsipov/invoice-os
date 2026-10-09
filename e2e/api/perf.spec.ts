@@ -241,8 +241,8 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     expect(cleanInvoice.status).toBe('validated')
     expect(cleanInvoice.violations).toEqual([])
 
-    // PERF-03/04: rule_set_version is the ONE shared stamp the whole
-    // 500-invoice batch was evaluated against ([batch-of-one]) -- already
+    // PERF-03/04: rule_set_version is the lowest version in the 500-invoice
+    // batch (all rows share one issue date here, so one version) -- already
     // parsed into `body` and already asserted === ACTIVE_RULE_SET_VERSION by
     // PERF-02 above, so no fresh call is needed here to reuse it. A fresh
     // POST .../validate is not an option for PERF-03 either way: cleanInvoice

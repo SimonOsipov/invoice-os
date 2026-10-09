@@ -186,8 +186,8 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 }
 
 // BatchOutcome is ValidateBatch's report: the lowest rule-set version in the
-// batch (each invoice is stamped with its own), the clean/blocked split, and every invoice's violations
-// keyed by id.
+// batch (each invoice is stamped with its own), the clean/blocked split, and
+// every invoice's violations keyed by id.
 //
 // Clean and WithViolations are computed HERE, by the same hasBlockingViolation
 // predicate that decided the promotions, rather than left for the caller to

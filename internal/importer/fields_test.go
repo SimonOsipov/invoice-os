@@ -58,3 +58,24 @@ func TestMapperLists_AreTheExtractionProjections(t *testing.T) {
 		t.Errorf("mapperLineRoles = %v, want %v", mapperLineRoles, wantRoles)
 	}
 }
+
+func TestNumericOrder_IsTheCommaDecimalScanOrder(t *testing.T) {
+	want := []string{"subtotal", "vat", "total", "line_quantity", "line_unit_price"}
+	if !slices.Equal(numericOrder, want) {
+		t.Errorf("numericOrder = %v, want %v", numericOrder, want)
+	}
+}
+
+func TestHeaderNumericOrder_IsTheHeaderOnlySubset(t *testing.T) {
+	want := []string{"subtotal", "vat", "total"}
+	if !slices.Equal(headerNumericOrder, want) {
+		t.Errorf("headerNumericOrder = %v, want %v", headerNumericOrder, want)
+	}
+}
+
+func TestLineNumericOrder_IsTheLineOnlySubset(t *testing.T) {
+	want := []string{"line_quantity", "line_unit_price"}
+	if !slices.Equal(lineNumericOrder, want) {
+		t.Errorf("lineNumericOrder = %v, want %v", lineNumericOrder, want)
+	}
+}

@@ -110,14 +110,31 @@ func NewService(batch *Store, inv *invoice.Store, g gate) *Service {
 	return &Service{batch: batch, inv: inv, gate: g}
 }
 
+// numericImportKeys lists the money and quantity import keys in field-list order
+// that pass keep.
+func numericImportKeys(keep func(invoicefields.Field) bool) []string {
+	var keys []string
+	for _, f := range invoicefields.All {
+		if f.Import && (f.Type == invoicefields.Money || f.Type == invoicefields.Quantity) && keep(f) {
+			keys = append(keys, f.ImportKey())
+		}
+	}
+	return keys
+}
+
+// Scan orders of commaDecimalField (all) and bestEffortBadNumericField (header, then line).
+var (
+	numericOrder       = numericImportKeys(func(invoicefields.Field) bool { return true })
+	headerNumericOrder = numericImportKeys(func(f invoicefields.Field) bool { return !f.Line })
+	lineNumericOrder   = numericImportKeys(func(f invoicefields.Field) bool { return f.Line })
+)
+
 // numericFields are the import fields that get [numeric-normalization] (ASCII grouping commas
 // + surrounding whitespace stripped) before becoming a CreateInput string.
 var numericFields = func() map[string]bool {
 	m := map[string]bool{}
-	for _, f := range invoicefields.All {
-		if f.Import && (f.Type == invoicefields.Money || f.Type == invoicefields.Quantity) {
-			m[f.ImportKey()] = true
-		}
+	for _, k := range numericOrder {
+		m[k] = true
 	}
 	return m
 }()
@@ -343,7 +360,7 @@ func cellAt(row []string, idx int, field string) string {
 // RowError.Field a best guess. Returns "" if no numeric field is clearly bad.
 func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs []int) string {
 	first := rows[rowIdxs[0]]
-	for _, field := range []string{"subtotal", "vat", "total"} {
+	for _, field := range headerNumericOrder {
 		idx, ok := colIndex[field]
 		if !ok {
 			continue
@@ -353,7 +370,7 @@ func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs
 			return field
 		}
 	}
-	for _, field := range []string{"line_quantity", "line_unit_price"} {
+	for _, field := range lineNumericOrder {
 		idx, ok := colIndex[field]
 		if !ok {
 			continue
@@ -402,7 +419,7 @@ func isCommaDecimal(raw string) bool {
 // on any row of the group, or "". It reads raw cells: normalizeNumeric would
 // turn "12,50" into "1250" and hide it.
 func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) string {
-	for _, field := range []string{"subtotal", "vat", "total", "line_quantity", "line_unit_price"} {
+	for _, field := range numericOrder {
 		idx, ok := colIndex[field]
 		if !ok {
 			continue

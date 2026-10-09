@@ -1464,6 +1464,29 @@ func TestDemoRequest_SinkFailureSpendsBudget(t *testing.T) {
 	}
 }
 
+func TestDemoRequest_Sink4xxRefundsBudget(t *testing.T) {
+	sink := &demoSink{err: sinkStatusError(http.StatusBadRequest)}
+	h := newDemoHandler(sink)
+	for i := range DemoRequestPerIP + 3 {
+		if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusBadGateway {
+			t.Fatalf("request %d = %d, want 502 (budget refunded)", i+1, rec.Code)
+		}
+	}
+}
+
+func TestDemoRequest_Sink5xxSpendsBudget(t *testing.T) {
+	sink := &demoSink{err: sinkStatusError(http.StatusServiceUnavailable)}
+	h := newDemoHandler(sink)
+	for i := range DemoRequestPerIP {
+		if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusBadGateway {
+			t.Fatalf("request %d = %d, want 502", i+1, rec.Code)
+		}
+	}
+	if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("sixth = %d, want 429", rec.Code)
+	}
+}
+
 func TestDemoRequest_UnenforcedLogsAndLetsThrough(t *testing.T) {
 	sink := &demoSink{}
 	log, store := newCaptureLog()

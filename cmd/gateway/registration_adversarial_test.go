@@ -433,9 +433,9 @@ func TestResetPasswordRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 	_, body := parseMain(t)
 
-	regVar, previewerVar, regAt, invAt := "", "", -1, -1
+	regVar, previewerVar, registrationsVar, regAt, invAt := "", "", "", -1, -1
 	var invCalls []*ast.CallExpr
-	var previewerCall *ast.CallExpr
+	var previewerCall, registrationsCall *ast.CallExpr
 	for i, st := range body.List {
 		if as, ok := st.(*ast.AssignStmt); ok && len(as.Rhs) == 1 {
 			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 && len(as.Lhs) == 1 {
@@ -443,6 +443,9 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 			}
 			if call, ok := isCallTo(as.Rhs[0], "gateway", "NewHTTPInvitationPreviewer"); ok && len(as.Lhs) == 1 {
 				previewerVar, previewerCall = types.ExprString(as.Lhs[0]), call
+			}
+			if call, ok := isCallTo(as.Rhs[0], "gateway", "NewHTTPInvitationRegistrations"); ok && len(as.Lhs) == 1 {
+				registrationsVar, registrationsCall = types.ExprString(as.Lhs[0]), call
 			}
 		}
 		ast.Inspect(st, func(n ast.Node) bool {
@@ -462,8 +465,8 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 		t.Fatalf("main calls invitationHandlers %d times, want exactly once", len(invCalls))
 	}
 	call := invCalls[0]
-	if len(call.Args) != 6 {
-		t.Fatalf("invitationHandlers call has %d arguments, want 6", len(call.Args))
+	if len(call.Args) != 7 {
+		t.Fatalf("invitationHandlers call has %d arguments, want 7", len(call.Args))
 	}
 	if invAt <= regAt {
 		t.Errorf("invitationHandlers is statement %d, registrationHandlers %d; the throttle is read before it exists", invAt, regAt)
@@ -473,7 +476,7 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 		1: "siteURL",
 		2: "registerMinResponse",
 		3: regVar + ".RegisterPerIP",
-		5: "app.Logger",
+		6: "app.Logger",
 	} {
 		if got := types.ExprString(call.Args[i]); got != want {
 			t.Errorf("invitationHandlers argument %d = %s, want %s", i+1, got, want)
@@ -487,6 +490,32 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 	}
 	if len(previewerCall.Args) != 3 || types.ExprString(previewerCall.Args[0]) != `routed["tenancy"]` || types.ExprString(previewerCall.Args[2]) != "gatewayToken" {
 		t.Errorf("NewHTTPInvitationPreviewer args = %v, want routed[\"tenancy\"], a client and gatewayToken", previewerCall.Args)
+	}
+	if registrationsCall == nil {
+		t.Fatal("main has no top-level `x := gateway.NewHTTPInvitationRegistrations(...)`")
+	}
+	if got := types.ExprString(call.Args[5]); got != registrationsVar {
+		t.Errorf("invitationHandlers registrations argument = %s, want %s", got, registrationsVar)
+	}
+	if len(registrationsCall.Args) != 3 || types.ExprString(registrationsCall.Args[0]) != `routed["tenancy"]` || types.ExprString(registrationsCall.Args[2]) != "gatewayToken" {
+		t.Errorf("NewHTTPInvitationRegistrations args = %v, want routed[\"tenancy\"], a client and gatewayToken", registrationsCall.Args)
+	}
+	if len(registrationsCall.Args) == 3 {
+		traced := false
+		ast.Inspect(registrationsCall.Args[1], func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if _, ok := isCallTo(c, "platform", "TraceTransport"); ok {
+					traced = true
+				}
+			}
+			return true
+		})
+		if !traced {
+			t.Error("NewHTTPInvitationRegistrations client is not wrapped in platform.TraceTransport")
+		}
+	}
+	if registrationsVar == previewerVar {
+		t.Errorf("registrations and previewer are one variable %s", registrationsVar)
 	}
 }
 
@@ -514,7 +543,8 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	preview := func(context.Context, string) (gateway.InvitationPreview, error) {
 		return gateway.InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: "tunde@obi.test"}, nil
 	}
-	invitation, register := invitationHandlers(authURL, site, 0, perIP, preview, slog.New(slog.DiscardHandler))
+	regs, _ := invitationRegistrationsStub("tunde@obi.test")
+	invitation, register := invitationHandlers(authURL, site, 0, perIP, preview, regs, slog.New(slog.DiscardHandler))
 	withCORS := gateway.CORS([]string{origin})
 	mux := http.NewServeMux()
 	for _, p := range patterns {

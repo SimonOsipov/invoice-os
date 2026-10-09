@@ -1271,6 +1271,30 @@ func invitationPreviewerStub(address string) (gateway.InvitationPreviewer, func(
 		}
 }
 
+// invitationRegistrationsStub claims every token as a first registration for address and counts claims and releases.
+func invitationRegistrationsStub(address string) (gateway.InvitationRegistrations, func() (claims, releases int)) {
+	var mu sync.Mutex
+	var claims, releases int
+	return gateway.InvitationRegistrations{
+			Claim: func(context.Context, string) (string, bool, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				claims++
+				return address, true, nil
+			},
+			Release: func(context.Context, string) error {
+				mu.Lock()
+				defer mu.Unlock()
+				releases++
+				return nil
+			},
+		}, func() (int, int) {
+			mu.Lock()
+			defer mu.Unlock()
+			return claims, releases
+		}
+}
+
 // AUTH_URL, AUTH_SITE_URL or the register throttle missing: invitee registration refuses, and the preview still answers.
 func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
@@ -1282,16 +1306,17 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 	// Control: configured, the same call signs the invited address up, so the 503s below are the unset input.
 	t.Run("configured", func(t *testing.T) {
 		authURL, calls := fakeAuth(t)
-		preview, previewed := invitationPreviewerStub("tunde@obi.test")
-		_, register := invitationHandlers(authURL, site, 0, perIP(), preview, slog.New(slog.DiscardHandler))
+		preview, _ := invitationPreviewerStub("tunde@obi.test")
+		regs, registered := invitationRegistrationsStub("tunde@obi.test")
+		_, register := invitationHandlers(authURL, site, 0, perIP(), preview, regs, slog.New(slog.DiscardHandler))
 
 		rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
 
 		if rec.Code != http.StatusAccepted {
 			t.Fatalf("register = %d, want 202: %s", rec.Code, rec.Body.String())
 		}
-		if got := calls(); !slices.Equal(got, []string{"POST /signup"}) || previewed() != 1 {
-			t.Errorf("GoTrue saw %v and the previewer %d call(s), want one signup and one preview", got, previewed())
+		if claims, _ := registered(); !slices.Equal(calls(), []string{"POST /signup"}) || claims != 1 {
+			t.Errorf("GoTrue saw %v and %d claim(s), want one signup and one claim", calls(), claims)
 		}
 	})
 
@@ -1299,15 +1324,16 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 		t.Run(unset, func(t *testing.T) {
 			authURL, calls := fakeAuth(t)
 			preview, previewed := invitationPreviewerStub("tunde@obi.test")
+			regs, registered := invitationRegistrationsStub("tunde@obi.test")
 			log := slog.New(slog.DiscardHandler)
 			var invitation, register http.Handler
 			switch unset {
 			case "AUTH_URL":
-				invitation, register = invitationHandlers(nil, site, 0, perIP(), preview, log)
+				invitation, register = invitationHandlers(nil, site, 0, perIP(), preview, regs, log)
 			case "AUTH_SITE_URL":
-				invitation, register = invitationHandlers(authURL, nil, 0, perIP(), preview, log)
+				invitation, register = invitationHandlers(authURL, nil, 0, perIP(), preview, regs, log)
 			default:
-				invitation, register = invitationHandlers(authURL, site, 0, nil, preview, log)
+				invitation, register = invitationHandlers(authURL, site, 0, nil, preview, regs, log)
 			}
 
 			rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
@@ -1319,8 +1345,8 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
 				t.Errorf("register body = %s, want {\"error\":\"registration is not configured\"}", rec.Body.String())
 			}
-			if got := calls(); len(got) != 0 || previewed() != 0 {
-				t.Errorf("GoTrue saw %v and the previewer %d call(s), want none", got, previewed())
+			if claims, _ := registered(); len(calls()) != 0 || previewed() != 0 || claims != 0 {
+				t.Errorf("GoTrue saw %v, the previewer %d call(s) and %d claim(s), want none", calls(), previewed(), claims)
 			}
 
 			rec = serveRegistration(invitation, http.MethodPost, "/auth/invitation", `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`)
@@ -1330,6 +1356,59 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 			var preview200 map[string]string
 			if err := json.Unmarshal(rec.Body.Bytes(), &preview200); err != nil || preview200["email"] != "tunde@obi.test" {
 				t.Errorf("preview body = %s, want the invite's workspace, role and email", rec.Body.String())
+			}
+		})
+	}
+}
+
+// A claim without a release would strand the invitee, so a missing half refuses before any claim.
+func TestInvitationHandlers_NilRegistrationsIsNotConfigured(t *testing.T) {
+	site, _ := url.Parse("https://site.example")
+	perIP := func() *gateway.SignInThrottle {
+		return gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
+	}
+	const registerBody = `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`
+	preview, previewed := invitationPreviewerStub("tunde@obi.test")
+
+	cases := []struct {
+		name       string
+		strip      func(*gateway.InvitationRegistrations)
+		wantStatus int
+	}{
+		{"both set", func(*gateway.InvitationRegistrations) {}, http.StatusAccepted},
+		{"nothing set", func(r *gateway.InvitationRegistrations) { *r = gateway.InvitationRegistrations{} }, http.StatusServiceUnavailable},
+		{"Release nil", func(r *gateway.InvitationRegistrations) { r.Release = nil }, http.StatusServiceUnavailable},
+		{"Claim nil", func(r *gateway.InvitationRegistrations) { r.Claim = nil }, http.StatusServiceUnavailable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			regs, registered := invitationRegistrationsStub("tunde@obi.test")
+			c.strip(&regs)
+			invitation, register := invitationHandlers(authURL, site, 0, perIP(), preview, regs, slog.New(slog.DiscardHandler))
+
+			rec := serveRegistration(register, http.MethodPost, "/auth/invitation/register", registerBody)
+
+			if rec.Code != c.wantStatus {
+				t.Fatalf("register = %d, want %d: %s", rec.Code, c.wantStatus, rec.Body.String())
+			}
+			claims, releases := registered()
+			if c.wantStatus == http.StatusServiceUnavailable {
+				var body map[string]string
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body) != 1 || body["error"] != "registration is not configured" {
+					t.Errorf("register body = %s, want {\"error\":\"registration is not configured\"}", rec.Body.String())
+				}
+				if got := calls(); len(got) != 0 || claims != 0 || releases != 0 {
+					t.Errorf("GoTrue saw %v, %d claim(s) and %d release(s), want none", got, claims, releases)
+				}
+			} else if got := calls(); !slices.Equal(got, []string{"POST /signup"}) || claims != 1 {
+				t.Errorf("GoTrue saw %v and %d claim(s), want one signup and one claim", got, claims)
+			}
+
+			before := previewed()
+			rec = serveRegistration(invitation, http.MethodPost, "/auth/invitation", `{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`)
+			if rec.Code != http.StatusOK || previewed() != before+1 {
+				t.Errorf("preview = %d with %d new previewer call(s), want 200 and 1: %s", rec.Code, previewed()-before, rec.Body.String())
 			}
 		})
 	}
@@ -1354,7 +1433,8 @@ func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 			log := slog.New(slog.DiscardHandler)
 			reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
 			preview, _ := invitationPreviewerStub("tunde@obi.test")
-			_, register := invitationHandlers(authURL, site, 0, reg.RegisterPerIP, preview, log)
+			regs, _ := invitationRegistrationsStub("tunde@obi.test")
+			_, register := invitationHandlers(authURL, site, 0, reg.RegisterPerIP, preview, regs, log)
 
 			for range 11 {
 				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(`{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T","password":"Corr3ct-Horse"}`))

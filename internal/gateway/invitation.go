@@ -167,32 +167,24 @@ func InvitationHandler(preview InvitationPreviewer, log *slog.Logger) http.Handl
 	})
 }
 
-// InvitationRegisterHandler answers POST /auth/invitation/register: it signs the invited address up with GoTrue.
-// The address comes from the invite, never from the body. Refusals before the signup answer at once;
-// every other answer follows RegisterHandler's floor and its shared per-IP budget.
-func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, preview InvitationPreviewer) http.Handler {
-	signup := authURL.JoinPath("signup").String()
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !postOnly(w, r) {
-			return
-		}
-		start := time.Now()
-		var in struct {
-			Token    string `json:"token"`
-			Password string `json:"password"`
-		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)).Decode(&in); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid request body")
-			return
-		}
-		if in.Token == "" || in.Password == "" {
-			writeError(w, http.StatusBadRequest, msgInviteeFieldsRequired)
-			return
-		}
-		p, ok := previewToken(w, r, preview, log, in.Token)
-		if !ok {
-			return
-		}
-		signUp(w, r, client, signup, map[string]any{"email": p.Email, "password": in.Password}, start, minResponse, perIP, enforce, log, nil)
+// InvitationRegistrations spends and returns the one registration an invite token backs.
+type InvitationRegistrations struct {
+	Claim   func(ctx context.Context, token string) (email string, first bool, err error)
+	Release func(ctx context.Context, token string) error
+}
+
+// NewHTTPInvitationRegistrations is a stub until the executor writes the tenancy calls.
+func NewHTTPInvitationRegistrations(base *url.URL, client *http.Client, gatewayToken string) InvitationRegistrations {
+	errStub := errors.New("invitation registrations: not implemented")
+	return InvitationRegistrations{
+		Claim:   func(context.Context, string) (string, bool, error) { return "", false, errStub },
+		Release: func(context.Context, string) error { return errStub },
+	}
+}
+
+// InvitationRegisterHandler is a stub until the executor writes it.
+func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, registrations InvitationRegistrations) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotImplemented)
 	})
 }

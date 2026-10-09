@@ -77,19 +77,23 @@ func reapplyMigration(t *testing.T, glob string) {
 	}
 }
 
-// resetStaffMigration drops the table, forgets the ledger row and applies the Up again. It does not
-// run the Down, so a Down or Up left broken by an earlier run cannot block it.
+// resetStaffMigration drops the table, forgets the staff and rules-role ledger rows and applies both
+// Ups again, leaving head. It does not run a Down, so a Down or Up left broken by an earlier run
+// cannot block it.
 func resetStaffMigration(t *testing.T, provider *goose.Provider, version int64) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := h.super.Exec(ctx, `DROP TABLE IF EXISTS public.staff_members`); err != nil {
 		t.Fatalf("drop staff_members: %v", err)
 	}
-	if _, err := h.super.Exec(ctx, `DELETE FROM goose_db_version WHERE version_id = $1`, version); err != nil {
-		t.Fatalf("forget the staff migration: %v", err)
+	rules := rulesRoleMigrationVersion(t)
+	if _, err := h.super.Exec(ctx, `DELETE FROM goose_db_version WHERE version_id IN ($1, $2)`, version, rules); err != nil {
+		t.Fatalf("forget the staff migrations: %v", err)
 	}
-	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
-		t.Fatalf("apply the staff migration: %v", err)
+	for _, v := range []int64{version, rules} {
+		if _, err := provider.ApplyVersion(ctx, v, true); err != nil {
+			t.Fatalf("apply migration %d: %v", v, err)
+		}
 	}
 }
 

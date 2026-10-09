@@ -33,4 +33,5 @@ paths:
 - Retry a delivery with River's default policy. Any non-nil worker error retries.
 - Log a vendor 4xx other than 408 and 429 as ERROR. Log every other failure as WARN.
 - Reject a present `marketing_consent_text` that is blank or over 500 characters, on register and on the demo route.
-- `ceiling:` the demo route has no rate limit. Add a per-IP limit and a double opt-in step before you send marketing email to its contacts.
+- Limit the demo route to `DemoRequestPerIP` requests per client IP per hour. Answer 429 over the limit and log no IP.
+- `ceiling:` the demo route has no double opt-in step. Add one before you send marketing email to its contacts.

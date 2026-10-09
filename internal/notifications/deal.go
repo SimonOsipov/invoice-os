@@ -12,7 +12,7 @@ import (
 
 const destHubSpotDeal = "hubspot_deal"
 
-// DemoDealArgs carries the request's own values; the merged contact row keeps the first company.
+// DemoDealArgs carries the request's own values, not the merged row's.
 type DemoDealArgs struct {
 	Email   string `json:"email"`
 	Name    string `json:"name"`

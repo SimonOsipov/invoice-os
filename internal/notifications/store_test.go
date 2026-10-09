@@ -141,7 +141,6 @@ func jobsFor(t *testing.T, e env, email string) []job {
 	return out
 }
 
-// jobKeys renders jobs as sorted "destination@version", asserting the queue on the way.
 // dealJobsFor lists the demo_deal jobs queued for email, oldest first.
 func dealJobsFor(t *testing.T, e env, email string) []DemoDealArgs {
 	t.Helper()
@@ -169,6 +168,7 @@ func dealJobsFor(t *testing.T, e env, email string) []DemoDealArgs {
 	return out
 }
 
+// jobKeys renders jobs as sorted "destination@version", asserting the queue on the way.
 func jobKeys(t *testing.T, jobs []job) []string {
 	t.Helper()
 	keys := make([]string, 0, len(jobs))
@@ -1132,5 +1132,49 @@ func TestStore_RegistrantAfterDemoQueuesNoSecondDealJob(t *testing.T) {
 	}
 	if got := dealJobsFor(t, e, email); len(got) != 1 {
 		t.Errorf("demo_deal jobs = %d, want exactly 1", len(got))
+	}
+}
+
+func TestStore_DemoDealJobArgsAreTheNormalisedRequest(t *testing.T) {
+	e := newEnv(t)
+	email := uniqueEmail(t, e, "dealnorm")
+	if err := e.store.DemoRequest(context.Background(), DemoIntake{Email: "  " + strings.ToUpper(email) + " ", Name: "  Grace Hopper  ", Company: "  Navy  "}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	want := []DemoDealArgs{{Email: email, Name: "Grace Hopper", Company: "Navy"}}
+	if got := dealJobsFor(t, e, email); !slices.Equal(got, want) {
+		t.Errorf("demo_deal jobs = %+v, want %+v", got, want)
+	}
+}
+
+func TestStore_DemoRequestCommitFailureLeavesNoDealJob(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "dealcommit")
+	fn := "fail_commit_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	if _, err := e.admin.Exec(ctx, fmt.Sprintf(`
+		CREATE FUNCTION %[1]s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.email = '%[2]s' THEN RAISE EXCEPTION 'test: refuse at commit'; END IF;
+			RETURN NULL;
+		END $$`, fn, email)); err != nil {
+		t.Fatalf("create trigger function: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.admin.Exec(context.Background(), `DROP TRIGGER IF EXISTS `+fn+` ON contacts`)
+		_, _ = e.admin.Exec(context.Background(), `DROP FUNCTION IF EXISTS `+fn+`()`)
+	})
+	if _, err := e.admin.Exec(ctx, `CREATE CONSTRAINT TRIGGER `+fn+` AFTER INSERT ON contacts DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION `+fn+`()`); err != nil {
+		t.Fatalf("create deferred trigger: %v", err)
+	}
+
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: email, Name: "Grace Hopper", Company: "Navy"}); err == nil {
+		t.Fatal("DemoRequest with a failing commit returned nil")
+	}
+	if n := rowCount(t, e, email); n != 0 {
+		t.Errorf("rows after a failed commit = %d, want 0", n)
+	}
+	if got := dealJobsFor(t, e, email); len(got) != 0 {
+		t.Errorf("demo_deal jobs after a failed commit = %+v, want none (the insert must share the intake's transaction)", got)
 	}
 }

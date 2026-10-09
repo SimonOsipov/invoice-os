@@ -1365,3 +1365,19 @@ func TestDemoDeal_DealJobAndHubSpotContactJobShareTheLock(t *testing.T) {
 	h := qaAwaitAttempt(t, hub)
 	qaRequireCompleted(t, h.res, h.err, "hubspot contact job after release")
 }
+
+func TestDemoDeal_NamelessRequestStillOpensADealNamedDemoRequest(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "dealanon")
+	qaDemo(t, r.e, email, "", "", "")
+
+	res, err := r.dealWork(t, r.dealRow(t, email))
+	qaRequireCompleted(t, res, err, "nameless deal job")
+	calls := r.hs.dealCalls()
+	if len(calls) != 1 {
+		t.Fatalf("OpenDemoDeal called %d times, want 1", len(calls))
+	}
+	if calls[0].Name != "Demo request" || calls[0].C.Email != email || calls[0].C.FirstName != "" || calls[0].C.LastName != "" || calls[0].C.Company != "" {
+		t.Errorf("OpenDemoDeal(%+v, %q), want email only and name %q", calls[0].C, calls[0].Name, "Demo request")
+	}
+}

@@ -146,6 +146,18 @@ describe('verdictPill: RULES FAILED counts distinct rule keys (PILL-L1, PILL-L2)
     expect(badge.label).toBe('2 RULES FAILED')
   })
 
+  it('PILL-L3: one rule on three lines plus another rule counts 2, and warnings do not add a rule', () => {
+    const violations: Violation[] = [
+      ...[1, 2, 3].map((n) => ({ rule_key: 'line-cost', severity: 'error' as const, message: 'e', path: `line_items[${n}]` })),
+      { rule_key: 'currency-allowed', severity: 'error', message: 'e' },
+      { rule_key: 'tin-format', severity: 'warning', message: 'w' },
+    ]
+    const badge = verdictPill({ status: 'validated', violations }).badges[0]
+    expect(badge.kind).toBe('rules-failed')
+    expect(badge.count).toBe(2)
+    expect(badge.label).toBe('2 RULES FAILED')
+  })
+
   it('PILL-L2: the kept count still counts blocking violations', () => {
     const badge = verdictPill({ status: 'draft', violations: lineErrors, kept_as_is_at: '2026-07-30T00:00:00Z' }).badges[0]
     expect(badge.kind).toBe('kept-invalid')

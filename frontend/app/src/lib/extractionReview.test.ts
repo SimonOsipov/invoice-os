@@ -805,6 +805,7 @@ describe('reasonPill', () => {
     expect(pillFor('unreadable', 5)).toBe("COULDN'T READ THIS CLEARLY")
     expect(pillFor('inconsistent', 0)).toBe("DOESN'T ADD UP")
     expect(pillFor('missing', 3)).toBe('NOT FOUND')
+    expect(pillFor('rule_break', 4)).toBe('BREAKS A RULE')
 
     // A clean field has nothing to say, and the cell's one pill slot then falls back to the
     // shipped NO REGION cue.

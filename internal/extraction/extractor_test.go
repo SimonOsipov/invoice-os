@@ -20,13 +20,15 @@ import (
 // reason_code appears three times on one line of the migration; only the IN form
 // is the CHECK, so anchoring on the whole group skips the column declaration.
 var (
-	reasonCheckRE = regexp.MustCompile(`reason_code\s+IN\s*\(([^)]*)\)`)
+	reasonCheckRE = regexp.MustCompile(`(?i)reason_code\s+IN\s*\(([^)]*)\)`)
 	sqlLiteralRE  = regexp.MustCompile(`'([^']*)'`)
+
+	sqlLineCommentRE = regexp.MustCompile(`--[^\n]*`)
 )
 
 // reasonConstants reads the declared Reason constants out of the package source.
-// Go cannot enumerate constants at runtime, so a hardcoded list of four could not
-// notice a fifth being added.
+// Go cannot enumerate constants at runtime, so a hardcoded list could not notice
+// a new one being added.
 func reasonConstants(t *testing.T) map[string]string {
 	t.Helper()
 
@@ -82,7 +84,7 @@ func reasonConstants(t *testing.T) map[string]string {
 }
 
 // reasonCheckMigrations lists, oldest first, the migrations whose Up section writes the
-// reason_code CHECK set. The Down section is cut off: it restores the previous set.
+// reason_code CHECK set. The Down section and SQL comments are cut off before matching.
 func reasonCheckMigrations(t *testing.T) (names []string, bodies []string) {
 	t.Helper()
 	all, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.sql"))
@@ -99,6 +101,7 @@ func reasonCheckMigrations(t *testing.T) (names []string, bodies []string) {
 			t.Fatalf("read %s: %v", p, err)
 		}
 		up, _, _ := strings.Cut(string(body), "-- +goose Down")
+		up = sqlLineCommentRE.ReplaceAllString(up, "")
 		if reasonCheckRE.MatchString(up) {
 			names = append(names, filepath.Base(p))
 			bodies = append(bodies, up)

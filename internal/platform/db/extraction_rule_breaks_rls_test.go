@@ -5,13 +5,18 @@ package db_test
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 const (
@@ -482,5 +487,269 @@ func TestRLS_ExtractionRuleBreaksAppendOnly(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatalf("WithinTenantTx: %v", err)
+	}
+}
+
+// ERB-11 (AC-1, AC-3): constraint names and rules a caller can trip. Omitting a NOT NULL
+// column names it; an unknown rule-set version trips its own FK; id and created_at default.
+func TestRLS_ExtractionRuleBreaksReferencesAndRequiredColumns(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	jobA := jobFor(t, h.tenantA, "ERB-11/a.pdf")
+	version := activeRuleSetVersion(t)
+	t.Cleanup(func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM extraction_rule_breaks WHERE extraction_job_id = $1`, jobA)
+	})
+
+	var id string
+	var fresh bool
+	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`INSERT INTO extraction_rule_breaks (tenant_id, extraction_job_id, field_name, rule_set_version_id, rule_key, message)
+			 VALUES ($1, $2, $3, $4, $5, $6)
+			 RETURNING id::text, created_at > now() - interval '1 minute' AND created_at <= now()`,
+			h.tenantA, jobA, erbField, version, erbRuleKey, erbMessage).Scan(&id, &fresh)
+	})
+	if failIfUndefinedRuleBreaks(t, "insert without id and created_at", err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("insert relying on the id and created_at defaults: want success, got: %v", err)
+	}
+	if _, perr := uuid.Parse(id); perr != nil || !fresh {
+		t.Errorf("defaults: id = %q (parse err %v), created_at within the last minute = %v; want a uuid and true", id, perr, fresh)
+	}
+
+	err = db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+		return insertRuleBreak(ctx, tx, uuid.NewString(), h.tenantA, jobA, "subtotal", uuid.NewString(), erbRuleKey, erbMessage)
+	})
+	if err == nil {
+		t.Fatal("insert naming a rule_set_versions id that does not exist succeeded, want FK violation (23503)")
+	}
+	if code, name := pgCode(err), pgConstraint(err); code != "23503" || name != "extraction_rule_breaks_rule_set_version_id_fkey" {
+		t.Errorf("unknown rule-set version: SQLSTATE %q on %q, want 23503 on extraction_rule_breaks_rule_set_version_id_fkey: %v", code, name, err)
+	}
+
+	for _, col := range []string{"extraction_job_id", "field_name", "rule_set_version_id", "rule_key", "message"} {
+		args := map[string]any{
+			"extraction_job_id": jobA, "field_name": "total", "rule_set_version_id": version,
+			"rule_key": "required-" + col, "message": erbMessage,
+		}
+		delete(args, col)
+		cols, ph, vals := []string{"tenant_id"}, []string{"$1"}, []any{h.tenantA}
+		for _, c := range []string{"extraction_job_id", "field_name", "rule_set_version_id", "rule_key", "message"} {
+			if v, ok := args[c]; ok {
+				cols, ph, vals = append(cols, c), append(ph, "$"+string(rune('1'+len(vals)))), append(vals, v)
+			}
+		}
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, "INSERT INTO extraction_rule_breaks ("+strings.Join(cols, ", ")+") VALUES ("+strings.Join(ph, ", ")+")", vals...)
+			return e
+		})
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23502" || pgErr.ColumnName != col {
+			t.Errorf("insert without %s: got %v, want SQLSTATE 23502 naming column %s", col, err, col)
+		}
+	}
+}
+
+func erbMigrationSection(t *testing.T, section string) string {
+	t.Helper()
+	matches, err := fs.Glob(migrations.FS, "*_extraction_rule_breaks.sql")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("migrations.FS files matching *_extraction_rule_breaks.sql = %v (err %v), want exactly 1", matches, err)
+	}
+	b, err := fs.ReadFile(migrations.FS, matches[0])
+	if err != nil {
+		t.Fatalf("read %s: %v", matches[0], err)
+	}
+	raw := string(b)
+	up, ok := auditEntityUpOf(raw)
+	if !ok {
+		t.Fatalf("%s: want %q before %q", matches[0], gooseUp, gooseDown)
+	}
+	if section == "Up" {
+		return up
+	}
+	return raw[strings.Index(raw, gooseDown)+len(gooseDown):]
+}
+
+func erbExecSection(t *testing.T, ctx context.Context, tx pgx.Tx, section string) {
+	t.Helper()
+	if _, err := tx.Exec(ctx, erbMigrationSection(t, section)); err != nil {
+		t.Fatalf("migration %s section failed: %v", section, err)
+	}
+}
+
+func erbStrings(t *testing.T, ctx context.Context, tx pgx.Tx, sql string) []string {
+	t.Helper()
+	rows, err := tx.Query(ctx, sql)
+	if err != nil {
+		t.Fatalf("query %q: %v", sql, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate %q: %v", sql, err)
+	}
+	return out
+}
+
+func erbReasonCheckDef(t *testing.T, ctx context.Context, tx pgx.Tx) string {
+	t.Helper()
+	var def string
+	if err := tx.QueryRow(ctx,
+		`SELECT pg_get_constraintdef(oid) FROM pg_constraint
+		  WHERE conrelid = 'public.extraction_field_results'::regclass AND conname = $1`,
+		efrReasonCodeCheck).Scan(&def); err != nil {
+		t.Fatalf("read %s: %v", efrReasonCodeCheck, err)
+	}
+	return def
+}
+
+// ERB-12 (AC-3, AC-4): the shipped Down, executed for real in a rolled-back owner transaction,
+// drops the table and puts the four-code CHECK back under the same name.
+func TestRLS_ExtractionRuleBreaksMigrationDownDropsTheTableAndRestoresFourCodes(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	tx := migratorTx(t, ctx)
+
+	var present bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('public.extraction_rule_breaks') IS NOT NULL`).Scan(&present); err != nil || !present {
+		t.Fatalf("extraction_rule_breaks present before the Down = %v (err %v); the case would pass vacuously", present, err)
+	}
+	if got := erbReasonCheckDef(t, ctx, tx); got != efrFiveCodeReasonCheck {
+		t.Fatalf("reason CHECK before the Down:\n got: %s\nwant: %s", got, efrFiveCodeReasonCheck)
+	}
+
+	erbExecSection(t, ctx, tx, "Down")
+
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('public.extraction_rule_breaks') IS NOT NULL`).Scan(&present); err != nil || present {
+		t.Errorf("extraction_rule_breaks present after the Down = %v (err %v), want false", present, err)
+	}
+	if got := erbReasonCheckDef(t, ctx, tx); got != efrFourCodeReasonCheck {
+		t.Errorf("reason CHECK after the Down:\n got: %s\nwant: %s", got, efrFourCodeReasonCheck)
+	}
+}
+
+// ERB-13 (AC-1, AC-2, AC-3, AC-4): the shipped Down then Up recreates the whole contract.
+// The live-DB cases above see a schema migrated before the run and cannot notice an edit to
+// the migration file; this one executes the file.
+func TestRLS_ExtractionRuleBreaksReplayedMigrationHoldsTheContract(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	// Registered before the transaction so the tx rolls back first (cleanups run last-in-first).
+	jobA := jobFor(t, h.tenantA, "ERB-13/a.pdf")
+	version := activeRuleSetVersion(t)
+	tx := migratorTx(t, ctx)
+
+	erbExecSection(t, ctx, tx, "Down")
+	erbExecSection(t, ctx, tx, "Up")
+
+	wantColumns := []string{
+		"id uuid NOT NULL DEFAULT gen_random_uuid()",
+		"tenant_id uuid NOT NULL",
+		"extraction_job_id uuid NOT NULL",
+		"field_name text NOT NULL",
+		"rule_set_version_id uuid NOT NULL",
+		"rule_key text NOT NULL",
+		"message text NOT NULL",
+		"created_at timestamp with time zone NOT NULL DEFAULT now()",
+	}
+	gotColumns := erbStrings(t, ctx, tx,
+		`SELECT a.attname||' '||format_type(a.atttypid, a.atttypmod)||CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END
+		        ||COALESCE(' DEFAULT '||pg_get_expr(d.adbin, d.adrelid), '')
+		   FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+		  WHERE a.attrelid = 'public.extraction_rule_breaks'::regclass AND a.attnum > 0 AND NOT a.attisdropped
+		  ORDER BY a.attnum`)
+	if !slices.Equal(gotColumns, wantColumns) {
+		t.Errorf("columns after Down/Up:\n got: %q\nwant: %q", gotColumns, wantColumns)
+	}
+
+	wantConstraints := []string{
+		"extraction_rule_breaks_field_name_check CHECK (((char_length(field_name) > 0) AND (char_length(field_name) <= 128)))",
+		"extraction_rule_breaks_message_check CHECK ((char_length(message) > 0))",
+		"extraction_rule_breaks_one_per_rule UNIQUE (tenant_id, extraction_job_id, field_name, rule_key)",
+		"extraction_rule_breaks_pkey PRIMARY KEY (id)",
+		"extraction_rule_breaks_rule_key_check CHECK ((char_length(rule_key) > 0))",
+		"extraction_rule_breaks_rule_set_version_id_fkey FOREIGN KEY (rule_set_version_id) REFERENCES rule_set_versions(id)",
+		"extraction_rule_breaks_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE",
+		"extraction_rule_breaks_tenant_job_fk FOREIGN KEY (tenant_id, extraction_job_id) REFERENCES extraction_jobs(tenant_id, id) ON DELETE CASCADE",
+	}
+	gotConstraints := erbStrings(t, ctx, tx,
+		`SELECT conname||' '||pg_get_constraintdef(oid) FROM pg_constraint
+		  WHERE conrelid = 'public.extraction_rule_breaks'::regclass AND contype IN ('c', 'u', 'p', 'f')
+		  ORDER BY conname`)
+	if !slices.Equal(gotConstraints, wantConstraints) {
+		t.Errorf("constraints after Down/Up:\n got: %q\nwant: %q", gotConstraints, wantConstraints)
+	}
+
+	var enabled, forced bool
+	if err := tx.QueryRow(ctx,
+		`SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE oid = 'public.extraction_rule_breaks'::regclass`).Scan(&enabled, &forced); err != nil {
+		t.Fatalf("read pg_class: %v", err)
+	}
+	if !enabled || !forced {
+		t.Errorf("relrowsecurity/relforcerowsecurity after Down/Up = %v/%v, want true/true", enabled, forced)
+	}
+	policies := erbStrings(t, ctx, tx,
+		`SELECT policyname||'|'||cmd||'|'||qual FROM pg_policies WHERE tablename = 'extraction_rule_breaks'`)
+	if len(policies) != 1 || !strings.HasPrefix(policies[0], "tenant_isolation|ALL|(tenant_id = (NULLIF(current_setting('app.current_tenant'::text, true), ''::text))::uuid") {
+		t.Errorf("policies after Down/Up = %q, want exactly tenant_isolation on ALL comparing tenant_id with the nullif tenant GUC", policies)
+	}
+
+	for _, c := range []struct {
+		role, priv string
+		want       bool
+	}{
+		{"invoice_app", "SELECT", true}, {"invoice_app", "INSERT", true},
+		{"invoice_app", "UPDATE", false}, {"invoice_app", "DELETE", false},
+		{"invoice_app", "TRUNCATE", false}, {"invoice_app", "REFERENCES", false}, {"invoice_app", "TRIGGER", false},
+		{"invoice_tenant_reader", "SELECT", false}, {"invoice_tenant_reader", "INSERT", false},
+	} {
+		var got bool
+		if err := tx.QueryRow(ctx,
+			`SELECT has_table_privilege($1, 'public.extraction_rule_breaks', $2)`, c.role, c.priv).Scan(&got); err != nil {
+			t.Fatalf("has_table_privilege(%s, %s): %v", c.role, c.priv, err)
+		}
+		if got != c.want {
+			t.Errorf("%s %s on extraction_rule_breaks after Down/Up = %v, want %v", c.role, c.priv, got, c.want)
+		}
+	}
+
+	if got := erbReasonCheckDef(t, ctx, tx); got != efrFiveCodeReasonCheck {
+		t.Errorf("reason CHECK after Down/Up:\n got: %s\nwant: %s", got, efrFiveCodeReasonCheck)
+	}
+
+	// Behaviour of the replayed policy, as the owner under FORCE. Last: the duplicate aborts the tx.
+	setTenant := func(id string) {
+		t.Helper()
+		if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, id); err != nil {
+			t.Fatalf("set tenant: %v", err)
+		}
+	}
+	setTenant(h.tenantA)
+	if err := insertRuleBreak(ctx, tx, uuid.NewString(), h.tenantA, jobA, erbField, version, erbRuleKey, erbMessage); err != nil {
+		t.Fatalf("insert into the replayed table: %v", err)
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM extraction_rule_breaks`); n != 1 {
+		t.Errorf("rows visible to tenant A after Down/Up = %d, want 1", n)
+	}
+	setTenant(h.tenantB)
+	if n := mustCount(t, tx, `SELECT count(*) FROM extraction_rule_breaks`); n != 0 {
+		t.Errorf("rows visible to tenant B after Down/Up = %d, want 0", n)
+	}
+	setTenant(h.tenantA)
+	err := insertRuleBreak(ctx, tx, uuid.NewString(), h.tenantA, jobA, erbField, version, erbRuleKey, erbMessage)
+	if code, name := pgCode(err), pgConstraint(err); code != "23505" || name != erbOnePerRule {
+		t.Errorf("duplicate on the replayed table: SQLSTATE %q on %q, want 23505 on %s", code, name, erbOnePerRule)
 	}
 }

@@ -4080,11 +4080,11 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
   ])
 
   // The code itself is machine vocabulary and never reaches the screen. `Object.keys(REASON_PILL)`
-  // lost `ambiguous` when the table dropped its fixed key, so all four codes are named
+  // lost `ambiguous` when the table dropped its fixed key, so every code is named
   // explicitly -- the retype must not silently stop checking one of them.
   const paneText = await page.getByTestId('extraction-fields').innerText()
   expect(paneText.length, 'the fields pane rendered no text -- the absences below are vacuous').toBeGreaterThan(0)
-  for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing'] as const) {
+  for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing', 'rule_break'] as const) {
     expect(paneText, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
   }
 

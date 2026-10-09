@@ -1432,6 +1432,14 @@ const (
 	efrTenantJobIdx    = "extraction_field_results_tenant_job_idx"
 )
 
+// The rendered reason_code CHECK before and after the rule_break migration.
+const (
+	efrFourCodeReasonCheck = `CHECK (((reason_code IS NULL) OR (reason_code = ANY ` +
+		`(ARRAY['unreadable'::text, 'ambiguous'::text, 'inconsistent'::text, 'missing'::text]))))`
+	efrFiveCodeReasonCheck = `CHECK (((reason_code IS NULL) OR (reason_code = ANY ` +
+		`(ARRAY['unreadable'::text, 'ambiguous'::text, 'inconsistent'::text, 'missing'::text, 'rule_break'::text]))))`
+)
+
 // The field_name/value pair supplied whenever neither column is the subject.
 const (
 	efrField = "total_amount"
@@ -1908,10 +1916,8 @@ func TestRLS_ExtractionFieldResultsReasonCodeIsExactlyFiveValues(t *testing.T) {
 
 	// The rendered text, exactly. Hand-sampling values cannot see a sixth code added
 	// alongside the five; this can.
-	const want = `CHECK (((reason_code IS NULL) OR (reason_code = ANY ` +
-		`(ARRAY['unreadable'::text, 'ambiguous'::text, 'inconsistent'::text, 'missing'::text, 'rule_break'::text]))))`
-	if def != want {
-		t.Errorf("reason_code CHECK definition:\n got: %s\nwant: %s", def, want)
+	if def != efrFiveCodeReasonCheck {
+		t.Errorf("reason_code CHECK definition:\n got: %s\nwant: %s", def, efrFiveCodeReasonCheck)
 	}
 }
 

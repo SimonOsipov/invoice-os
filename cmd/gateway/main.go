@@ -196,6 +196,9 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("POST /auth/invitation/register", withCORS(inviteeRegister))
 	app.Mux.Handle("OPTIONS /auth/invitation/register", withCORS(inviteeRegister))
+	inviteResend := invitationResendHandler(probed["auth"], siteURL, reg.ResendByAddress, reg.ResendByIP, previewer, app.Logger)
+	app.Mux.Handle("POST /auth/invitation/resend", withCORS(inviteResend))
+	app.Mux.Handle("OPTIONS /auth/invitation/resend", withCORS(inviteResend))
 	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
 	app.Mux.Handle("OPTIONS /contacts/demo-request", withCORS(reg.DemoRequest))
 
@@ -309,9 +312,18 @@ func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, pe
 	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, perIP, enforce, log, preview)
 }
 
-// invitationResendHandler builds POST /auth/invitation/resend. Stub: LOGFIX-09-01 implements it.
+// invitationResendHandler builds POST /auth/invitation/resend on the resend budgets that ResendVerification shares.
+// It answers 503 while any of authURL, siteURL or the throttles is nil.
 func invitationResendHandler(authURL, siteURL *url.URL, perAddress, perIP *gateway.SignInThrottle, preview gateway.InvitationPreviewer, log *slog.Logger) http.Handler {
-	return gateway.InvitationResendHandler(authURL, &http.Client{}, perAddress, perIP, true, log, preview)
+	if authURL == nil || siteURL == nil || perAddress == nil || perIP == nil {
+		return gateway.RegistrationNotConfigured()
+	}
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	return gateway.InvitationResendHandler(authURL, client, perAddress, perIP, enforce, log, preview)
 }
 
 // newJWKSClient builds the JWKS fetch client.
@@ -339,6 +351,8 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	return registration{
 		Register:             gateway.RegisterHandler(authURL, client, minResponse, registerPerIP, enforce, log),
 		RegisterPerIP:        registerPerIP,
+		ResendByAddress:      perAddress,
+		ResendByIP:           perIP,
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
 		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
 		DemoRequest:          gateway.DemoRequestHandler(sink, log),
@@ -387,7 +401,7 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 // an absolute http(s) URL, or carries user info, a query or a fragment, stops boot.
 func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 	if raw == "" {
-		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, /auth/resend-verification, /auth/request-password-reset, GET and POST /auth/verify and /auth/reset-password answer 503")
+		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, /auth/resend-verification, /auth/request-password-reset, /auth/invitation/resend, GET and POST /auth/verify and /auth/reset-password answer 503")
 		return nil
 	}
 	u, err := url.Parse(raw)

@@ -177,9 +177,8 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     assertErrorEnvelope(res, 403, 'a tenant-less token on the membership list')
   })
 
-
   const passwordPageUrl = (token: string) => `${apiBase()}/auth/verify?token=${token}&type=signup&invite=1`
-  const landingFailed = `${resolveTarget('LANDING_URL')}/${VERIFY_FAILED}`
+  const landingFailed = () => `${resolveTarget('LANDING_URL')}/${VERIFY_FAILED}`
   const postPassword = (fields: Record<string, string>) =>
     fetch(`${apiBase()}/auth/invitation/password`, {
       method: 'POST',
@@ -203,13 +202,13 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     const res = await fetch(passwordPageUrl(''), { redirect: 'manual' })
     expect(res.status).toBe(303)
     // Exact, so a lookalike host cannot pass a prefix match.
-    expect(res.headers.get('location'), 'the Location header').toBe(landingFailed)
+    expect(res.headers.get('location'), 'the Location header').toBe(landingFailed())
   })
 
   test('invitation accept: a bogus set-password form post redirects 303 to the landing failure notice', async () => {
     const res = await postPassword({ token: `bogus-${crypto.randomUUID()}`, password: crypto.randomUUID() })
     expect(res.status).toBe(303)
-    expect(res.headers.get('location'), 'the Location header').toBe(landingFailed)
+    expect(res.headers.get('location'), 'the Location header').toBe(landingFailed())
   })
 
   test('invitation accept: a too-short set-password re-renders the page with 400', async () => {

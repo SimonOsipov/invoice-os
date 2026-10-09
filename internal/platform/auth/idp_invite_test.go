@@ -87,6 +87,7 @@ func newInviteWorld(t *testing.T, prefix string) inviteWorld {
 	t.Helper()
 	ctx := context.Background()
 	base := idpMailURL(t)
+	grantAccountStateRead(t)
 	conn := superConn(t)
 
 	pool, err := db.NewPool(ctx, mailEnv(t, "DATABASE_URL"))

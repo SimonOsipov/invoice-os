@@ -39,7 +39,7 @@ paths:
 - Add the field to `documentCreateInput` in `internal/importer/document.go`.
 - Add the field to `invoiceEditFor` in `cmd/submission/main.go`.
 - Add a spec for an extracted header field to `tier1Specs` in `internal/extraction/tier1.go`. Give it a label id from `anchorLexicon` in `internal/extraction/anchor.go`.
-- Without a spec, the Tier-1 rules and the learning path skip the field. The AI path still reads it.
+- Without a spec, the Tier-1 rules and the learning path skip the field.
 - Add the field to `lockedFields` in `internal/extraction/handlers_correction.go` only when a correction needs the extractor's doubt flag.
 - Add the field to `doubtfulFields` in `internal/extraction/reconcile.go` only when the reconcile pass must present its adjacent generic reads as doubtful.
 - Add the field to the mock readings in `internal/extraction/mock.go`.

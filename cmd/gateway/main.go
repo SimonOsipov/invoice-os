@@ -346,6 +346,11 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
 }
 
+// invitationPasswordHandler is a stub until RESEND2-01-04 lands.
+func invitationPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, sink gateway.ContactSink, log *slog.Logger) http.Handler {
+	return gateway.InvitationPasswordHandler(authURL, siteURL, nil, sessions, signIn, sink, log)
+}
+
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
 type handoff struct {
 	SignIn, Exchange, Refresh, SignOut http.Handler

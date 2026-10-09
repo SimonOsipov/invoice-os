@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"html"
 	"html/template"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -493,5 +494,93 @@ func TestTemplate_ReturnsACopyAndAWholeDocument(t *testing.T) {
 	}
 	if !strings.HasSuffix(strings.TrimSpace(out), "</html>") {
 		t.Error("output does not end with </html>")
+	}
+}
+
+// registrantCases are the confirmation renders that existed before the invitee branch; each has a golden taken from HEAD.
+var registrantCases = []struct {
+	name, golden string
+	data         map[string]any
+}{
+	{"registration answers", "registration", gotrueData(adaEmail, reg("display_name", "Ada Obi", "workspace_name", "Obi Partners"), true)},
+	{"nil Data map", "nil-data", gotrueData(adaEmail, nil, true)},
+	{"empty Data", "empty-data", gotrueData(adaEmail, jsonMap{}, true)},
+	{"no Data key", "no-data-key", gotrueData(adaEmail, nil, false)},
+}
+
+func TestConfirmation_InviteeBranchLinksToTheSetPasswordPage(t *testing.T) {
+	out := renderConfirmation(t, adaEmail, jsonMap{"invited": true})
+	want := confirmURL + "&invite=1"
+
+	var button, fallback []anchor
+	for _, a := range anchors(out) {
+		switch a.text {
+		case "Choose your password":
+			button = append(button, a)
+		case want:
+			fallback = append(fallback, a)
+		}
+	}
+	if len(button) != 1 || button[0].href != want {
+		t.Errorf("button anchors = %+v, want one reading %q with href %s", button, "Choose your password", want)
+	}
+	if len(fallback) != 1 || fallback[0].href != want {
+		t.Errorf("fallback anchors = %+v, want one whose href and text are %s", fallback, want)
+	}
+	if n := len(anchors(out)); n != 3 {
+		t.Errorf("anchors = %d, want 3 (button, fallback, Privacy): one action link only", n)
+	}
+
+	got := text(out)
+	for _, phrase := range []string{
+		"Your account is ready.", "Choose a password to continue.",
+		"An ASComply account was created for " + adaEmail + " from your invite. Confirm the address and choose your password.",
+		"This link expires in 24 hours.",
+		"If you did not expect an invite to ASComply, ignore this email.",
+		"You received this email because an ASComply invite to this address was used to create an account.",
+	} {
+		if !strings.Contains(got, phrase) {
+			t.Errorf("invitee mail lacks %q", phrase)
+		}
+	}
+	if _, v := mustRow(t, out, "Email"); v != adaEmail {
+		t.Errorf("Email = %q, want %s", v, adaEmail)
+	}
+	for _, absent := range []string{"Role", "What happens next", "Organisation", "Confirm email address", "You are registered."} {
+		if strings.Contains(got, absent) {
+			t.Errorf("invitee mail still holds %q", absent)
+		}
+	}
+}
+
+func TestConfirmation_RegistrantBranchIsUnchanged(t *testing.T) {
+	if len(registrantCases) == 0 {
+		t.Fatal("no registrant cases")
+	}
+	for _, c := range registrantCases {
+		t.Run(c.name, func(t *testing.T) {
+			golden, err := os.ReadFile("testdata/confirmation_" + c.golden + ".golden")
+			if err != nil {
+				t.Fatalf("read golden: %v", err)
+			}
+			if len(golden) == 0 {
+				t.Fatal("golden is empty")
+			}
+			out := renderSrc(t, confirmationSrc(t), c.data)
+			if out != string(golden) {
+				t.Errorf("registrant render differs from the pre-change golden (%d bytes, golden %d)", len(out), len(golden))
+			}
+			if strings.Contains(out, "invite=1") {
+				t.Error("registrant link carries invite=1")
+			}
+		})
+	}
+	// Positive pair: the invitee render is not the registrant render, so the golden compares a real branch.
+	golden, err := os.ReadFile("testdata/confirmation_empty-data.golden")
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if invited := renderConfirmation(t, adaEmail, jsonMap{"invited": true}); invited == string(golden) {
+		t.Error("an invited account renders the registrant mail")
 	}
 }

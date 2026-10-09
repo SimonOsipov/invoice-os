@@ -1016,6 +1016,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/workflow-roles/{key}":                      {verdict: scCovered},
 	"POST /auth/exchange":                                 {verdict: scExempt, reason: "no database; in-process code store"},
 	"POST /auth/invitation":                               {verdict: scExempt, reason: "no database; asks tenancy"},
+	"POST /auth/invitation/password":                      {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/invitation/register":                      {verdict: scExempt, reason: "no database; asks tenancy, calls GoTrue"},
 	"POST /auth/login":                                    {verdict: scExempt, reason: "unauthenticated by definition; there is no caller yet to hold a membership"},
 	"POST /auth/mock/invitation-token":                    {verdict: scExempt, reason: "mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity"},

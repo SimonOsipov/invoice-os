@@ -149,7 +149,7 @@ func TestRegistrationClientTimeoutAndNoFollow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	for _, name := range []string{"registrationHandlers", "resetPasswordHandler"} {
+	for _, name := range []string{"registrationHandlers", "resetPasswordHandler", "invitationHandlers", "invitationPasswordHandler"} {
 		var fn *ast.FuncDecl
 		for _, d := range f.Decls {
 			if d, ok := d.(*ast.FuncDecl); ok && d.Name.Name == name {

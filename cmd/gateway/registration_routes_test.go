@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
@@ -355,6 +356,49 @@ func TestAccountMailRoutesRegisteredUnconditionally(t *testing.T) {
 	}
 	if n != 3 {
 		t.Errorf("main registers %d routes under /emails, want exactly the 3 account-mail routes", n)
+	}
+}
+
+// The invitee set-password POST is mounted at the top level of main, in every build, over its own builder.
+func TestRegistrationRoutes_InvitationPasswordIsMounted(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if buildConstrained(src) {
+		t.Fatal("main.go carries a build constraint; its routes are not in every build")
+	}
+	sites, _ := mainRoutes(t, src)
+	if len(sites) < 4 {
+		t.Fatalf("found %d literal-pattern routes in main, want at least 4; the scan went blind: %+v", len(sites), sites)
+	}
+	if s := sitesFor(sites, "POST /auth/invitation/password"); len(s) != 1 {
+		t.Errorf("POST /auth/invitation/password is registered %d times, want exactly once", len(s))
+	} else {
+		if !s[0].topLevel {
+			t.Error("POST /auth/invitation/password is registered under a condition; it must be a top-level statement of main")
+		}
+		if !strings.HasPrefix(s[0].handler, `invitationPasswordHandler(probed["auth"], siteURL, `) {
+			t.Errorf("POST /auth/invitation/password handler = %s, want invitationPasswordHandler(probed[\"auth\"], siteURL, ...) with no CORS wrap", s[0].handler)
+		}
+	}
+
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	log := slog.New(slog.DiscardHandler)
+	signIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	mux := http.NewServeMux()
+	mux.Handle("POST /auth/invitation/password", invitationPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), signIn, nil, log))
+
+	rec := serveForm(mux, "/auth/invitation/password", "type=signup&password=new-password-1")
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verify=failed" {
+		t.Errorf("POST with a bad form = %d Location %q, want 303 https://site.example/?verify=failed", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := serveRegistration(mux, http.MethodGet, "/auth/invitation/password", ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /auth/invitation/password = %d, want 405", rec.Code)
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("a bad form or a wrong method reached GoTrue: %v", got)
 	}
 }
 

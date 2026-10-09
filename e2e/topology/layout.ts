@@ -14,7 +14,7 @@
 // is where the one shipped instance of this defect actually lived.
 //
 // These helpers are deliberately NOT visual regression, which
-// docs/e2e-convention.md bans: nothing here compares pixels or keeps a baseline.
+// .claude/rules/e2e.md bans: nothing here compares pixels or keeps a baseline.
 // They read geometry the same way an assertion reads text.
 import { expect, type Locator, type Page } from '@playwright/test'
 
@@ -37,6 +37,9 @@ export async function settleAnimations(...targets: Locator[]): Promise<void> {
 
 /** Widest first — see the file header for why the order is load-bearing. */
 export const WIDE_WIDTHS = [2560, 1920, 1440, 1280] as const
+
+/** Phone widths; 767 is the library's PHONE_MAX_WIDTH. */
+export const PHONE_WIDTHS = [375, 414, 767] as const
 
 /** The horizontal extent of a rendered element. Playwright's boundingBox() shape. */
 export type Box = { x: number; width: number }

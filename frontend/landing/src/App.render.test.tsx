@@ -6,7 +6,7 @@
 // the real App tree (SSR, no jsdom) at both paths to close that gap.
 import { readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import App from './App'
@@ -166,6 +166,8 @@ describe('RESKIN-01-03 (AC 5): the former --gradient-hero sites render the v2 fl
 // vacuous pass is visible.
 const primaryNav = (html: string) => /<nav\b[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? ''
 const navHashes = (html: string) => [...primaryNav(html).matchAll(/href="(#[^"]+)"/g)].map((m) => m[1])
+const LIB = 'https://lib.x'
+afterEach(() => void vi.unstubAllEnvs())
 const navHrefs = (html: string) => [...primaryNav(html).matchAll(/href="([^"]*)"/g)].map((m) => m[1])
 
 /** The hashes that do not resolve to exactly one `<section id>` in `html`. */
@@ -192,6 +194,14 @@ describe('AN-01 every nav in-page link resolves to one section', () => {
     expect(navHashes(html).length, 'expected in-page links in the Primary nav').toBeGreaterThanOrEqual(1)
     expect(unresolvedNavLinks(html)).toEqual([])
   })
+
+  it('AN-01 holds with the Library link rendered', () => {
+    vi.stubEnv('VITE_LIBRARY_URL', LIB)
+    const html = renderAppAt('/')
+    expect(navHrefs(html), 'control: the Library link rendered').toContain(LIB)
+    expect(navHashes(html)).toHaveLength(5)
+    expect(unresolvedNavLinks(html)).toEqual([])
+  })
 })
 
 describe('AN-02 on /privacy every nav link carries the prefix', () => {
@@ -200,6 +210,17 @@ describe('AN-02 on /privacy every nav link carries the prefix', () => {
     expect(hrefs.length, 'expected links in the Primary nav').toBeGreaterThanOrEqual(1)
     expect(hrefs.filter((h) => !h.startsWith('/#'))).toEqual([])
     expect(hrefs.filter((h) => h.startsWith('//'))).toEqual([])
+  })
+
+  it('AN-02 names the one external link', () => {
+    vi.stubEnv('VITE_LIBRARY_URL', LIB)
+    const hrefs = navHrefs(renderAppAt('/privacy'))
+    expect(hrefs.filter((h) => h === LIB)).toHaveLength(1)
+    const others = hrefs.filter((h) => h !== LIB)
+    expect(others.filter((h) => !h.startsWith('/#'))).toEqual([])
+    expect(others.filter((h) => h.startsWith('//'))).toEqual([])
+    vi.stubEnv('VITE_LIBRARY_URL', '')
+    expect(navHrefs(renderAppAt('/privacy')), 'control: no stub, no Library link').not.toContain(LIB)
   })
 })
 

@@ -5,8 +5,7 @@ import { resolveTarget } from '../targets'
 // sticky header, and the scroll-spy's active-link indicator (LAND-01).
 //
 // These are behaviour tests, not render checks, and they live in the smoke suite
-// on purpose. docs/e2e-convention.md gives `landing` "smoke only" because there is
-// no backend to exercise — but jsdom has no layout engine and this package carries no
+// on purpose. `landing` has no backend to exercise — and jsdom has no layout engine and this package carries no
 // React testing library, so a browser check is the only place a scroll-spy can be
 // exercised at all. That is the same rationale carried by
 // the ops-console org-switcher test in smoke.spec.ts. "Keep the browser layer thin"
@@ -246,7 +245,7 @@ test('landing nav: no link is marked current outside the nav sections', async ({
 
   // A count of 0 is trivially true on a page that never rendered, so prove the nav
   // is really there first. Without this, E8 would survive the nav disappearing.
-  await expect(nav.getByRole('link')).toHaveCount(NAV_HREFS.length)
+  await expect(nav.locator('a[href^="#"]')).toHaveCount(NAV_HREFS.length)
 
   // At the top of the page the last-crossed section is the hero, which has no link.
   await expect(nav.locator('[aria-current]')).toHaveCount(0)

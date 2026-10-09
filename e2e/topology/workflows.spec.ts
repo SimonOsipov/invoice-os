@@ -14,7 +14,7 @@
 // persona tenants (plus an in-house-only draft); the FIRM tenant this file drives is itself
 // governed. Nothing in this file signs in as in-house.
 //
-// THIS SPEC CREATES ITS OWN POLICY, THROUGH THE UI. docs/e2e-convention.md "One browser, serial" decides
+// THIS SPEC CREATES ITS OWN POLICY, THROUGH THE UI. .claude/rules/e2e.md decides
 // that: every spec creates per-run-unique data, acts on rows it created, and asserts
 // containment or a live-read comparison rather than a literal count. The approval-policy
 // tables are also named there among the ones EXCLUDED from the per-deploy reset, so a

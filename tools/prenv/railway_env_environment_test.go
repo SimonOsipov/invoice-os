@@ -23,7 +23,7 @@ const (
 	forkEnvSecretSibling = `"DATABASE_URL":"sentinel-secret-dsn"`
 	prOnlyCondition      = "github.event_name == 'pull_request'"
 	forkVarsBeforeRunCmd = `bash scripts/ci/railway-env.sh fork-vars-before-urls "$ENV_ID"`
-	forkVarsAfterRunCmd  = `bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"`
+	forkVarsAfterRunCmd  = `bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL"`
 	forkSelfTestRunCmd   = "bash scripts/ci/railway-env.sh set-fork-environment --self-test"
 )
 
@@ -438,7 +438,9 @@ func assertBreaklistFindsNothing(t *testing.T, pattern, planted, control string,
 			t.Fatalf("control: the whole-repo walk finds no %q under %s", control, tree)
 		}
 	}
-	if hits := breaklistHits(t, pattern); len(hits) != 0 {
+	// The whole-repo walk skips .claude/, so the rule files need their own pass.
+	hits := append(breaklistHits(t, pattern), breaklistHits(t, pattern, ".claude/rules")...)
+	if len(hits) != 0 {
 		t.Errorf("breaklist %q reports %d hit(s), want TOTAL 0:\n%s", pattern, len(hits), strings.Join(hits, "\n"))
 	}
 }
@@ -446,7 +448,25 @@ func assertBreaklistFindsNothing(t *testing.T, pattern, planted, control string,
 func TestNoFileCallsTheForkENVIRONMENTDecorative(t *testing.T) {
 	pattern := `(?i)decorative` + ` in a`
 	planted := "### `ENVIRONMENT` is " + "decorative" + " in a fork\n"
-	assertBreaklistFindsNothing(t, pattern, planted, "RAILWAY_ENVIRONMENT_NAME", "docs/", "cmd/", "internal/")
+	assertBreaklistFindsNothing(t, pattern, planted, "RAILWAY_ENVIRONMENT_NAME", "cmd/", "internal/")
+}
+
+// A rule file holding the phrase fails the guard: the whole-repo walk skips .claude/.
+func TestNoFileCallsTheForkENVIRONMENTDecorative_SeesARuleFile(t *testing.T) {
+	plant := filepath.Join(repoRoot(t), ".claude", "rules", "zz-plant-decorative.md")
+	if err := os.WriteFile(plant, []byte("### `ENVIRONMENT` is "+"decorative"+" in a fork\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(plant) })
+
+	cmd := exec.Command("go", "test", "-run", "^TestNoFileCallsTheForkENVIRONMENTDecorative$", "-count=1", ".")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("guard passed with a planted rule file:\n%s", out)
+	}
+	if !strings.Contains(string(out), "zz-plant-decorative.md:1") {
+		t.Fatalf("guard failed without naming the planted rule file:\n%s", out)
+	}
 }
 
 // workflowJob is one jobs.<name> block of comment-stripped workflow lines.

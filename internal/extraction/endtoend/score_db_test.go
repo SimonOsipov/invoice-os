@@ -634,17 +634,17 @@ func TestRLS_EndToEndMeetsTheFloor(t *testing.T) {
 
 	rate := float64(s.hits) / float64(s.total)
 	if rate < eeCorpusFloor {
-		t.Errorf("the corpus reaches %d / %d = %v, below the floor %v. The floor is a ratchet: fix the extraction, never lower it (docs/extraction-corpus.md)\n%s",
+		t.Errorf("the corpus reaches %d / %d = %v, below the floor %v. The floor is a ratchet: fix the extraction, never lower it (.claude/rules/extraction-corpus.md)\n%s",
 			s.hits, s.total, rate, eeCorpusFloor, report)
 	}
 
 	// Not below the measurement by a whole cell: an improvement must be recorded, not absorbed.
 	if eeCorpusHits < s.hits {
-		t.Errorf("the corpus reaches %d / %d and the floor is pinned at %d. Raise eeCorpusHits to %d (a ratchet only goes up) and update docs/extraction-corpus.md in the same commit\n%s",
+		t.Errorf("the corpus reaches %d / %d and the floor is pinned at %d. Raise eeCorpusHits to %d (a ratchet only goes up)\n%s",
 			s.hits, s.total, eeCorpusHits, s.hits, report)
 	}
 	if oneCell := 1.0 / float64(s.total); eeCorpusFloor <= rate-oneCell {
-		t.Errorf("the corpus reaches %v and the floor is %v, a slack of %v -- a whole cell could regress unnoticed. Raise eeCorpusHits to %d (a ratchet only goes up) and update docs/extraction-corpus.md in the same commit",
+		t.Errorf("the corpus reaches %v and the floor is %v, a slack of %v -- a whole cell could regress unnoticed. Raise eeCorpusHits to %d (a ratchet only goes up)",
 			rate, eeCorpusFloor, rate-eeCorpusFloor, s.hits)
 	}
 

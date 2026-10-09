@@ -17,31 +17,11 @@ import (
 
 // --- harness ----------------------------------------------------------------
 
-// aaFieldRowRE is one row of the doc's per-field table: | `field` | hits | total |. Disjoint
-// from acDocRowRE by construction: a layout name carries a dot, which [a-z_]+ cannot match.
-var aaFieldRowRE = regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\| ([0-9]+) \\| ([0-9]+) \\|")
-
-// aaDecisionRowRE is one row of the decision section's false-decision table:
-// | `corpus_x.pdf` | `field` | `value` |. Disjoint from acDocRowRE, whose second cell is a
-// number, and read from a different section anyway.
-var aaDecisionRowRE = regexp.MustCompile("(?m)^\\| `(corpus_[a-z0-9_]+\\.pdf)` \\| `([a-z_]+)` \\| `([^`]+)` \\|")
-
 // aaRunFilterRE reads the -run pattern out of the ci.yml reporting step.
 var aaRunFilterRE = regexp.MustCompile(`-run '([^']+)'`)
 
 // aaTestFuncRE is a top-level test declaration in this package.
 var aaTestFuncRE = regexp.MustCompile(`(?m)^func (Test\w+)\(t \*testing\.T\) \{`)
-
-// aaByField is the live per-field measurement, keyed by field name.
-func aaByField(t *testing.T) map[string]acRow {
-	t.Helper()
-
-	out := make(map[string]acRow, len(extraction.HeaderFields))
-	for _, r := range acScoreRules(t, "the shipped Tier-1 set", extraction.Tier1Rules).byField {
-		out[r.name] = r
-	}
-	return out
-}
 
 // aaTokenBox is the box of the token whose text is exactly text. Fatal on a miss or on a
 // duplicate: either would silently measure some other token's edge.
@@ -114,123 +94,6 @@ func aaRequiredReach(t *testing.T, suffix string) (float64, string) {
 }
 
 // --- the specs --------------------------------------------------------------
-
-// The doc's per-field table is prose to TestCorpusDoc_RecordsTheMeasuredFloor: acDocRowRE reads
-// only the per-LAYOUT rows. "Moving the floor" step 3 tells the next author that both tables
-// are enforced, so leaving one unread makes the doc wrong about its own oracle.
-func TestCorpusDoc_ThePerFieldTableMatchesTheMeasurement(t *testing.T) {
-	section := acDocSectionText(t, acRepoFile(t, acDoc), acDocSection)
-
-	rows := aaFieldRowRE.FindAllStringSubmatch(section, -1)
-	if len(rows) == 0 {
-		t.Fatalf("%s's %q section holds no per-field row; a row reads exactly: | `field` | <hits> | <total> |", acDoc, acDocSection)
-	}
-	// Control: the two scans must read different tables, or one table satisfies both oracles.
-	if n := len(acDocRowRE.FindAllStringSubmatch(section, -1)); n != len(corpusLayouts) {
-		t.Fatalf("the per-layout scan reads %d row(s), want %d; this test is measuring the wrong table", n, len(corpusLayouts))
-	}
-
-	measured := aaByField(t)
-	hits, total := 0, 0
-	named := make(map[string]bool, len(rows))
-	for _, m := range rows {
-		if strings.Contains(m[1], "corpus_") {
-			t.Errorf("the per-field scan matched the layout row %q; the two tables are not disjoint", m[1])
-			continue
-		}
-		h, err := strconv.Atoi(m[2])
-		if err != nil {
-			t.Fatalf("%s row %q: hits %q is not a number: %v", acDoc, m[1], m[2], err)
-		}
-		n, err := strconv.Atoi(m[3])
-		if err != nil {
-			t.Fatalf("%s row %q: total %q is not a number: %v", acDoc, m[1], m[3], err)
-		}
-		if named[m[1]] {
-			t.Errorf("%s's per-field table names %q twice", acDoc, m[1])
-		}
-		named[m[1]] = true
-		hits += h
-		total += n
-
-		want, ok := measured[m[1]]
-		if !ok {
-			t.Errorf("%s has a per-field row for %q, which is not in HeaderFields", acDoc, m[1])
-			continue
-		}
-		if h != want.hits || n != want.total {
-			t.Errorf("%s says %s is %d/%d; it measures %d/%d", acDoc, m[1], h, n, want.hits, want.total)
-		}
-	}
-	for _, field := range extraction.HeaderFields {
-		if !named[field] {
-			t.Errorf("%s's per-field table has no row for %s; a field missing from the table reads as untested", acDoc, field)
-		}
-	}
-	if hits != tier1RecallHits || total != tier1RecallPairs {
-		t.Errorf("%s's per-field table sums to %d/%d, want %d/%d", acDoc, hits, total, tier1RecallHits, tier1RecallPairs)
-	}
-}
-
-// The recall rate cannot see a false decision at all: corpusExpect names no such pair, so
-// nothing scores it. The doc is where an operator meets both numbers, and prose beside a pinned
-// var is how the two drift apart.
-func TestCorpusDoc_RecordsTheDecisionRate(t *testing.T) {
-	section := acDocSectionText(t, acRepoFile(t, acDoc), acDocDecisionSection)
-
-	for _, want := range []string{
-		fmt.Sprintf("%d of %d", tier1DecisionHits, tier1DecisionPairs),
-		strconv.FormatFloat(tier1DecisionRate, 'f', 4, 64),
-		fmt.Sprintf("False decisions: %d", len(acFalseDecided)),
-	} {
-		if !strings.Contains(section, want) {
-			t.Errorf("%s's %q section does not carry %q", acDoc, acDocDecisionSection, want)
-		}
-	}
-
-	rows := aaDecisionRowRE.FindAllStringSubmatch(section, -1)
-
-	// Zero pins has its own oracle: the doc's table must be gone too. Guarded by a probe row,
-	// because a scan that stopped matching also finds nothing and would read as a clean doc.
-	if len(acFalseDecided) == 0 {
-		const probe = "| `corpus_probe.pdf` | `supplier_name` | `X` |"
-		if !aaDecisionRowRE.MatchString(probe) {
-			t.Fatalf("aaDecisionRowRE no longer matches a well-formed row (%s); the absence below is a broken scan, not a clean doc", probe)
-		}
-		if len(rows) != 0 {
-			t.Errorf("%s's %q section records %d false-decision row(s) while acFalseDecided pins none", acDoc, acDocDecisionSection, len(rows))
-		}
-		return
-	}
-
-	// Control needle: a scan that stopped matching finds no row, which reads exactly like a doc
-	// with no fabrication left to record.
-	if len(rows) == 0 {
-		t.Fatalf("%s's %q section holds no false-decision row for the %d acFalseDecided pins; a row reads exactly: | `corpus_x.pdf` | `field` | `value` |", acDoc, acDocDecisionSection, len(acFalseDecided))
-	}
-
-	// By identity in both directions, as TestTier1Accuracy_DecisionRateOverTheCorpus compares
-	// the live set: a count alone passes when one fabrication is replaced by another.
-	pinned := make(map[acPair]string, len(acFalseDecided))
-	for _, f := range acFalseDecided {
-		pinned[acPair{file: f.file, field: f.field}] = f.value
-	}
-	for _, m := range rows {
-		p := acPair{file: m[1], field: m[2]}
-		want, ok := pinned[p]
-		if !ok {
-			t.Errorf("%s records a false decision for %s / %s, which acFalseDecided does not pin", acDoc, p.file, p.field)
-			continue
-		}
-		if want != m[3] {
-			t.Errorf("%s says %s / %s decides %q; acFalseDecided pins %q", acDoc, p.file, p.field, m[3], want)
-		}
-		delete(pinned, p)
-	}
-	for p, v := range pinned {
-		t.Errorf("%s's table has no row for the pinned false decision %s / %s = %q", acDoc, p.file, p.field, v)
-	}
-}
 
 // TestTier1Accuracy_CIPrintsTheReport finds the step by the substring TestTier1Accuracy, so a
 // filter of TestTier1AccuracyXX still cuts the right step and carries every needle. CI would

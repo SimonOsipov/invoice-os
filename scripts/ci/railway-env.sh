@@ -6,7 +6,7 @@
 #                            reconcile-fork <environment-id>|
 #                            verify-spa-domains <environment-id|--self-test>|
 #                            verify-gateway-domain <environment-id>|
-#                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|
+#                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops> <support> <library>|
 #                            set-ai-fake <environment-id|--self-test>|
 #                            set-fork-environment <environment-id|--self-test>|
 #                            set-production-environment <environment-id>|
@@ -15,7 +15,7 @@
 #                            set-production-auth <--pre-merge|--post-merge> <environment-id>|
 #                            set-fork-gateway-token <environment-id>|
 #                            fork-vars-before-urls <environment-id>|
-#                            fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>|
+#                            fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>|
 #                            set-production-gateway-token <environment-id>|
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
@@ -1366,7 +1366,7 @@ reconcile_domain() {
   sel=$(select_domain "$GQL_RESPONSE")
   src_count=$(echo "$sel" | jq -r '.count')
   if [ "$src_count" = "0" ]; then
-    echo "::error::$label (service $svc_id) has no domain of EITHER kind — neither a custom domain nor a Railway-generated one — in the SOURCE environment $RAILWAY_DEV_ENVIRONMENT_ID, so there is no source of truth for its targetPort. Refusing to hardcode one. Give it a domain per docs/add-a-service.md step 6."
+    echo "::error::$label (service $svc_id) has no domain of EITHER kind — neither a custom domain nor a Railway-generated one — in the SOURCE environment $RAILWAY_DEV_ENVIRONMENT_ID, so there is no source of truth for its targetPort. Refusing to hardcode one. Give it a domain."
     exit 1
   fi
   target=$(echo "$sel" | jq -r '.targetPort // empty')
@@ -1674,10 +1674,11 @@ reconcile_url_variables_check() {
   PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}URL_VARIABLES"
 }
 
-# Reads PASS_GATEWAY_URL, PASS_APP_URL, PASS_LANDING_URL, PASS_OPS_URL and PASS_SUPPORT_URL.
+# Reads PASS_GATEWAY_URL, PASS_APP_URL, PASS_LANDING_URL, PASS_OPS_URL, PASS_SUPPORT_URL and PASS_LIBRARY_URL.
 reconcile_url_variables() {
   local env_id="$1" gateway_url="$PASS_GATEWAY_URL" app_url="$PASS_APP_URL" landing_url="$PASS_LANDING_URL"
-  local ops_url="$PASS_OPS_URL" support_url="$PASS_SUPPORT_URL" gw_id app_id landing_id ops_id support_id
+  local ops_url="$PASS_OPS_URL" support_url="$PASS_SUPPORT_URL" library_url="$PASS_LIBRARY_URL"
+  local gw_id app_id landing_id ops_id support_id library_id
   # Every browser origin that calls the gateway. Omitting one does not fail loudly — the
   # SPA renders and its fetches are refused by CORS at runtime — so a new SPA MUST be
   # added here in the same change that creates it.
@@ -1693,26 +1694,28 @@ reconcile_url_variables() {
   landing_id=$(service_id_by_name "$PASS_SETTLE" landing "environment $env_id" URL_VARIABLES) || exit 1
   ops_id=$(service_id_by_name "$PASS_SETTLE" ops-console "environment $env_id" URL_VARIABLES) || exit 1
   support_id=$(service_id_by_name "$PASS_SETTLE" support-console "environment $env_id" URL_VARIABLES) || exit 1
+  library_id=$(service_id_by_name "$PASS_SETTLE" library "environment $env_id" URL_VARIABLES) || exit 1
 
   pass_plan_add "$gw_id" gateway "" "CORS_ALLOWED_ORIGINS=$origins"
-  pass_plan_add "$app_id" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
-  pass_plan_add "$landing_id" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url" VITE_REGISTRATION_OPEN=true
+  pass_plan_add "$app_id" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_LIBRARY_URL=$library_url"
+  pass_plan_add "$landing_id" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url" "VITE_LIBRARY_URL=$library_url" VITE_REGISTRATION_OPEN=true
   pass_plan_add "$ops_id" ops-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
   pass_plan_add "$support_id" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
+  pass_plan_add "$library_id" library "" "VITE_APP_URL=$app_url" "VITE_LANDING_URL=$landing_url"
 }
 
 reconcile_url_variables_verdict() {
   pass_owned_verdict reconcile_url_variables || return 1
-  echo "All 12 environment variables confirmed by independent re-query."
+  echo "All 16 environment variables confirmed by independent re-query."
 }
 
-# cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>
+# cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>
 cmd_reconcile_urls() {
-  if [ "$#" -ne 6 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ]; then
-    echo "::error::usage: railway-env.sh reconcile-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>"
+  if [ "$#" -ne 7 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ] || [ -z "$7" ]; then
+    echo "::error::usage: railway-env.sh reconcile-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>"
     exit 2
   fi
-  PASS_GATEWAY_URL="$2" PASS_APP_URL="$3" PASS_LANDING_URL="$4" PASS_OPS_URL="$5" PASS_SUPPORT_URL="$6"
+  PASS_GATEWAY_URL="$2" PASS_APP_URL="$3" PASS_LANDING_URL="$4" PASS_OPS_URL="$5" PASS_SUPPORT_URL="$6" PASS_LIBRARY_URL="$7"
   fork_pass "$1" reconcile_url_variables
 }
 
@@ -1895,7 +1898,7 @@ ensure_postgres_running() {
       echo "::error::Both serviceInstanceDeployV2 and serviceInstanceRedeploy failed for postgres (service $RAILWAY_SVC_POSTGRES_ID) in environment $env_id: $GQL_ERROR"
       exit 1
     fi
-    echo "serviceInstanceRedeploy worked where serviceInstanceDeployV2 did not — worth recording in docs/deploy-model.md."
+    echo "serviceInstanceRedeploy worked where serviceInstanceDeployV2 did not."
     wait_for_postgres "$env_id" ""
     return 0
   fi
@@ -3763,13 +3766,13 @@ cmd_set_fork_reconciliation_url() {
   fork_pass "$env_id" reconciliation_url
 }
 
-# cmd_fork_vars_after_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>
+# cmd_fork_vars_after_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>
 cmd_fork_vars_after_urls() {
-  if [ "$#" -ne 6 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ]; then
-    echo "::error::usage: railway-env.sh fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>"
+  if [ "$#" -ne 7 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ] || [ -z "$7" ]; then
+    echo "::error::usage: railway-env.sh fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>"
     exit 2
   fi
-  PASS_GATEWAY_URL="$2" PASS_APP_URL="$3" PASS_LANDING_URL="$4" PASS_OPS_URL="$5" PASS_SUPPORT_URL="$6"
+  PASS_GATEWAY_URL="$2" PASS_APP_URL="$3" PASS_LANDING_URL="$4" PASS_OPS_URL="$5" PASS_SUPPORT_URL="$6" PASS_LIBRARY_URL="$7"
   fork_pass "$1" auth_site reconcile_url_variables ai_fake sentry_off reconciliation_url fork_environment
 }
 
@@ -3850,7 +3853,7 @@ cmd_discover_urls() {
     sel=$(select_domain "$wrapped") || exit 1
     count=$(printf '%s' "$sel" | jq -r '.count')
     if [ "$count" = "0" ]; then
-      echo "::error::No domain found for ${labels[$i]} (service ${ids[$i]}) in environment $env_id — neither a custom domain nor a Railway-generated one. Every public service must have at least one (docs/add-a-service.md step 6)." >&2
+      echo "::error::No domain found for ${labels[$i]} (service ${ids[$i]}) in environment $env_id — neither a custom domain nor a Railway-generated one. Every public service must have at least one." >&2
       exit 1
     fi
     d=$(printf '%s' "$sel" | jq -r 'if (.domain | type) == "string" then .domain else "" end')
@@ -4027,7 +4030,7 @@ case "${1:-}" in
   check-mail-templates)      cmd_check_mail_templates "${2:-}" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|fork-vars-before-urls <environment-id>|fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|discover-urls <environment-id>|query <context>|wait-deployment <label> <deployment-id>|check-mail-templates <environment-id>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops> <support> <library>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|fork-vars-before-urls <environment-id>|fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|discover-urls <environment-id>|query <context>|wait-deployment <label> <deployment-id>|check-mail-templates <environment-id>|report-api-calls>"
     exit 2
     ;;
 esac

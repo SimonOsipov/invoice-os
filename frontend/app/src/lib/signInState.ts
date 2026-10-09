@@ -94,6 +94,11 @@ export function landingSignInUrl(state: string, outcome?: SignInOutcome): string
   return `${base}/?state=${state}${outcome ? `&signin=${outcome}` : ''}`
 }
 
+export function landingRegisterUrl(state: string): string | null {
+  const base = landingBase()
+  return base ? `${base}/?state=${state}&register` : null
+}
+
 export function landingInviteUrl(outcome: InviteOutcome): string | null {
   const base = landingBase()
   return base ? `${base}/?invite=${outcome}` : null

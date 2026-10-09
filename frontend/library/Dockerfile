@@ -8,7 +8,11 @@ RUN corepack enable
 COPY . .
 RUN pnpm install --frozen-lockfile
 # Vite bakes VITE_* at build time; Railway passes service variables as build args.
-# Empty means Sentry off.
+ARG VITE_APP_URL
+ENV VITE_APP_URL=$VITE_APP_URL
+ARG VITE_LANDING_URL
+ENV VITE_LANDING_URL=$VITE_LANDING_URL
+# Empty Sentry DSN means Sentry off.
 ARG VITE_SENTRY_DSN
 ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 ARG VITE_SENTRY_TEST_DIGEST

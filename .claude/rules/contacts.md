@@ -1,0 +1,34 @@
+---
+paths:
+  - "internal/notifications/**"
+  - "cmd/notifications/**"
+  - "internal/gateway/contacts*.go"
+  - "migrations/*contacts*"
+---
+# Contact sync
+
+- Never put an email address or a name in a log line or an error.
+- Never wait on a vendor in signup, sign-in or the demo route. Hand off in the background.
+- Hand a registrant off after `POST /auth/verify` and after a sign-in whose user has `user_metadata.registration`.
+- Send the demo route's call once, with no retry. Answer 502 when the sink fails.
+- Store a contact with no `tenant_id` and no RLS. Write no tenant predicate.
+- Merge a contact with `COALESCE`. A set fact never changes. A trigger refuses any update of it.
+- Never remove a recorded consent tick with a later unticked form.
+- Bump `version` whenever a NULL fact becomes set. A newer version has its own delivery job.
+- Skip the vendor call when a job's `version` differs from the row's `version`.
+- Record a delivery with `WHERE version = <version read>`. A miss is not an error.
+- Send product and service email to segment "Registered".
+- Send marketing email to topic "Marketing" only. The segment holds every registrant and is not consent.
+- Set the topic to `opt_in` once, for a ticked person. Record it in `resend_opt_in_sent_at`.
+- Never send Resend `unsubscribed`, `opt_out` or a second `opt_in`.
+- Queue no Resend job for a demo booker who did not tick.
+- Pick the mode from the vendor keys and `CONTACTS_FAKE`: `real`, `fake` or `off`. The worker does not start in `off`.
+- Refuse to boot when `CONTACTS_FAKE` is true and any key is set, or when only some keys are set.
+- Name variables in a boot error, never their values.
+- Run a preview environment in `fake` mode and discard its vendor keys.
+- Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.
+- Answer 404 at the gateway for any `/api/<service>/internal/...` path, raw and cleaned.
+- Retry a delivery with River's default policy. Any non-nil worker error retries.
+- Log a vendor 4xx other than 408 and 429 as ERROR. Log every other failure as WARN.
+- Reject a present `marketing_consent_text` that is blank or over 500 characters, on register and on the demo route.
+- `ceiling:` the demo route has no rate limit. Add a per-IP limit and a double opt-in step before you send marketing email to its contacts.

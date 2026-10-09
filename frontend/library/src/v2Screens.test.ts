@@ -423,9 +423,10 @@ describe('library scenes', () => {
 
   it('SN-03 the player form marks fields and shows the message', () => {
     const ts = view('validate', 0, 'player')
-    expect(where(ts, (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px')).toHaveLength(5)
+    // why: a message caps the player form at four fields
+    expect(where(ts, (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px')).toHaveLength(4)
     const fields = where(ts, (s) => s.height === '38px')
-    expect(fields).toHaveLength(5)
+    expect(fields).toHaveLength(4)
     expect(style(fields[0])).toMatchObject({
       border: '1px solid var(--status-red-border)',
       background: 'var(--status-red-bg)',
@@ -433,7 +434,7 @@ describe('library scenes', () => {
     })
     expect(markup('validate', 0, 'player')).toContain(glyph('triangle-alert'))
     const icon = where(ts, (s) => s.animation === 'libFade 300ms')
-    expect(icon.map((t) => style(t).color)).toEqual(Array(5).fill(null).map((_, i) => (i === 0 ? 'var(--status-red-text)' : 'var(--status-green-text)')))
+    expect(icon.map((t) => style(t).color)).toEqual(Array(4).fill(null).map((_, i) => (i === 0 ? 'var(--status-red-text)' : 'var(--status-green-text)')))
     const msg = ts.find((t) => t.text.startsWith('Seller TIN has 7 digits'))!
     expect(style(msg).background).toBe('var(--status-red-bg)')
 
@@ -462,14 +463,56 @@ describe('library scenes', () => {
 
     const t = view('read-documents', thumbStep(feat('read-documents')), 'thumb')
     expect(where(t, (s) => s['grid-template-columns'] === '0.85fr 1.15fr')).toHaveLength(1)
-    expect(where(t, (s) => s.padding === '2px 4px')).toHaveLength(4)
+    expect(where(t, (s) => s.padding === '1px 4px')).toHaveLength(4)
     expect(where(t, (s) => s['grid-template-columns'] === '1fr')).toHaveLength(1)
-    expect(where(t, (s) => s.height === '18px')).toHaveLength(3)
+    expect(where(t, (s) => s.height === '16px')).toHaveLength(3)
 
     const ci = view('create-invoice', 2, 'thumb')
     expect(where(ci, (s) => s['grid-template-columns'] === '1fr 1fr')).toHaveLength(1)
-    expect(where(ci, (s) => s.height === '18px')).toHaveLength(4)
+    expect(where(ci, (s) => s.height === '16px')).toHaveLength(4)
     expect(ci.some((x) => x.text === '12 fields checked · 0 errors')).toBe(true)
+  })
+
+  const formCases = FEATURES.flatMap((f) => {
+    const sc = f.sc
+    if (sc.kind !== 'form') return []
+    return sc.steps.map((_, idx) => ({ id: f.id, idx, doc: !!sc.doc, st: sceneState(sc, idx) as Extract<ReturnType<typeof sceneState>, { kind: 'form' }> }))
+  })
+  // the focused field always; every marked field whenever they fit in cap fields
+  const needed = (st: { fields: { l: string; mark: unknown; focused: boolean }[] }, cap: number) => {
+    const idx = st.fields.flatMap((x, i) => (x.focused || x.mark ? [i] : []))
+    const fits = idx.length > 0 && Math.max(...idx) - Math.min(...idx) < cap
+    return st.fields.filter((x) => x.focused || (fits && x.mark)).map((x) => x.l)
+  }
+  const fitting = (st: Parameters<typeof needed>[0], cap: number) => needed(st, cap).length > 0
+
+  it('SN-17 the player form caps at four fields under a message and keeps the focused and marked ones', () => {
+    const cases = formCases.filter((c) => c.st.msg)
+    expect(cases.filter((c) => fitting(c.st, 4)).length).toBeGreaterThan(0)
+    for (const c of cases) {
+      const shown = where(view(c.id, c.idx, 'player'), (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px').map((t) => t.text)
+      expect(shown.length, `${c.id} step ${c.idx}`).toBeLessThanOrEqual(4)
+      for (const l of needed(c.st, 4)) expect(shown, `${c.id} step ${c.idx}`).toContain(esc(l))
+    }
+    expect(where(view('validate', 1, 'player'), (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '10px')).toHaveLength(5)
+    expect(where(view('read-documents', 2, 'player'), (s) => s.padding === '5px 7px')).toHaveLength(5)
+  })
+
+  it('SN-18 a thumbnail form shows at most its cap and keeps the focused and marked fields', () => {
+    const cases = formCases.map((c) => ({ ...c, st: sceneState(feat(c.id).sc, thumbStep(feat(c.id))) as typeof c.st })).filter((c, i, all) => all.findIndex((x) => x.id === c.id) === i)
+    expect(cases.length).toBeGreaterThan(0)
+    expect(cases.some((c) => c.doc && c.st.msg)).toBe(true)
+    for (const c of cases) {
+      const cap = c.doc ? (c.st.msg ? 2 : 3) : 4
+      const ts = view(c.id, thumbStep(feat(c.id)), 'thumb')
+      const shown = where(ts, (s) => s['text-transform'] === 'uppercase' && s['font-size'] === '8px').map((t) => t.text)
+      expect(shown.length, c.id).toBeLessThanOrEqual(cap)
+      for (const l of needed(c.st, cap)) expect(shown, c.id).toContain(esc(l))
+    }
+    const boxes = (id: string) => where(view(id, thumbStep(feat(id)), 'thumb'), (s) => s.height === '16px')
+    expect(boxes('learns')).toHaveLength(2)
+    expect(boxes('create-invoice')).toHaveLength(4)
+    expect(boxes('read-documents')).toHaveLength(3)
   })
 
   it('SN-05 the flow marks done, active and todo nodes', () => {
@@ -598,13 +641,13 @@ describe('library scenes', () => {
   ]
 
   it('SN-11 the thumbnail form colours each mark, slices fields per layout and colours the message by tone', () => {
-    const boxes = (ts: Tag[]) => where(ts, (s) => s.height === '18px')
+    const boxes = (ts: Tag[]) => where(ts, (s) => s.height === '16px')
     const flat = draw(formSc(false), 0, 'thumb')
     expect(boxes(flat)).toHaveLength(4)
     boxes(flat).forEach((b, i) => expect([style(b).border, style(b).background]).toEqual([`1px solid ${MARKS[i][0]}`, MARKS[i][1]]))
     const doc = draw(formSc(true), 0, 'thumb')
     expect(boxes(doc)).toHaveLength(3)
-    expect(where(doc, (s) => s.padding === '2px 4px')).toHaveLength(4)
+    expect(where(doc, (s) => s.padding === '1px 4px')).toHaveLength(4)
     const msg = (step: number) => where(draw(formSc(false), step, 'thumb'), (s) => s['font-size'] === '9.5px')
     expect(msg(0)).toHaveLength(0)
     expect(style(msg(1)[0])).toMatchObject({ background: 'var(--status-green-bg)', color: 'var(--status-green-text)', border: '1px solid var(--status-green-border)' })
@@ -615,7 +658,7 @@ describe('library scenes', () => {
   it('SN-12 the doc panel outlines the focused field solid, a low field dashed and the rest clear, in both sizes', () => {
     const expected = ['1.5px solid var(--accent)', '1.5px solid transparent', '1.5px dashed var(--status-amber-text)', '1.5px solid transparent']
     const rows = (ts: Tag[], pad: string) => where(ts, (s) => s.padding === pad)
-    const t = rows(draw(formSc(true), 0, 'thumb'), '2px 4px')
+    const t = rows(draw(formSc(true), 0, 'thumb'), '1px 4px')
     const p = rows(draw(formSc(true), 0, 'player'), '5px 7px')
     expect(t).toHaveLength(4)
     expect(p).toHaveLength(5)
@@ -867,7 +910,7 @@ describe('library feature page', () => {
     expect(icons).toHaveLength(3)
     icons.forEach((i) => expect(attr(p[p.indexOf(i) + 1], 'width')).toBe('18'))
     rows.forEach((r) => expect(style(r).color).toBe('var(--foreground)'))
-    const grid = where(ts, (s) => s['grid-template-columns'] === 'repeat(auto-fit, minmax(280px, 1fr))')
+    const grid = where(ts, (s) => s['grid-template-columns'] === 'repeat(auto-fit, minmax(260px, 1fr))')
     expect(grid).toHaveLength(1)
     expect(style(grid[0]).gap).toBe('40px')
   })

@@ -12,11 +12,13 @@
 
 import { Fragment } from 'react'
 import { gatewayBase, useAsync } from '@invoice-os/api-client'
+import { libraryBase } from '../auth'
 import { BrandMark, Icon } from '../icons'
 import { entityHealth, getRollup, scopedBucket, type Rollup } from '../lib/dashboard'
 import { visibleEntityIds } from '../lib/portfolio'
 import {
   chevDownGlyph,
+  libraryGlyph,
   NAV_APPROVALS,
   NAV_AUDIT,
   NAV_CLIENTS,
@@ -46,6 +48,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // must not block the sidebar chrome — `bucket` below just stays null (both badges off)
   // until 'ready', the same neutral posture as ClientsView's HealthCell.
   const base = gatewayBase()
+  const libraryUrl = libraryBase()
   const rollup = useAsync<Rollup>(
     () => (base ? getRollup(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },
@@ -270,6 +273,21 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
           </Fragment>
         ))}
       </nav>
+
+      {libraryUrl && (
+        <div style={{ flex: '0 0 auto', padding: '0 10px 8px' }}>
+          <a
+            href={libraryUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="pf-nav"
+            style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', border: 0, cursor: 'pointer', borderRadius: 'var(--radius-sm)', padding: '9px 10px', textAlign: 'left', fontFamily: 'var(--font-sans)', fontSize: 14, fontWeight: 500, background: 'transparent', color: 'var(--fg-2)', position: 'relative', textDecoration: 'none' }}
+          >
+            <span style={{ ...navIconColStyle, color: 'var(--fg-3)' }}>{libraryGlyph}</span>
+            <span style={{ flex: 1 }}>Feature library</span>
+          </a>
+        </div>
+      )}
 
       {/* `flex: 0 0 auto` — the user card is the one thing that must stay pinned when the
           nav above it scrolls. */}

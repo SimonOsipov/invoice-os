@@ -46,8 +46,8 @@ import (
 //  2. It would be actively WRONG even ignoring (1): `provisionableEnvironment`'s
 //     "development" branch is what makes Bootstrap/Seed fire inside a REAL PR
 //     fork today, because ENVIRONMENT reads the literal string "development"
-//     inside every PR environment (docs/deploy-model.md "ENVIRONMENT in a fork
-//     is set by CI"; CI's fork-vars-after-urls sets it to `development` in every
+//     inside every PR environment (.claude/rules/ci-railway.md;
+//     CI's fork-vars-after-urls sets it to `development` in every
 //     fork, Decision [env-name-is-convention]).
 //     If Reset's gate accepted that same "development" branch, it would fire
 //     on every PR fork under the SAME string that also matches the persistent
@@ -75,10 +75,8 @@ func resettableEnvironment(environment string) bool {
 // ResetEnabled).
 //
 // callers MUST pass os.Getenv("RAILWAY_ENVIRONMENT_NAME") — the Railway-injected
-// system variable that reflects the CURRENT environment's real name (docs/
-// add-a-service.md: "Railway injects RAILWAY_* variables automatically...
-// never set these manually") — NOT os.Getenv("ENVIRONMENT") /
-// app.Config.Environment. ENVIRONMENT is an ordinary app variable that CI or a
+// system variable that reflects the CURRENT environment's real name
+// (.claude/rules/add-service.md) — NOT os.Getenv("ENVIRONMENT") / app.Config.Environment. ENVIRONMENT is an ordinary app variable that CI or a
 // human writes: CI's fork-vars-after-urls sets `development` in every fork, and
 // production's gateway reads `production`. RAILWAY_ENVIRONMENT_NAME is exactly
 // "pr-<N>" inside a fork and exactly whatever the persistent environment is

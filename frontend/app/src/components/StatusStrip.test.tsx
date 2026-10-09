@@ -1,15 +1,12 @@
 // @vitest-environment jsdom
 // Per-file opt-in: vitest.config.ts stays `environment: 'node'` for every other suite.
 //
-// Mode A (AUDIT-09-02): written RED against a throwing StatusStrip stub. The contract is
-// .ralph/AUDIT-09-02-arch.md -- §3 for the JSX, the testids and the tone map, §7E for the
-// no-interactive-element rule -- plus .ralph/AUDIT-09-01-arch.md §12 C-5/C-6, which
-// corrected the mapper's contract after §3 was written.
+// Mode A (AUDIT-09-02): written RED against a throwing StatusStrip stub.
 //
 // jsdom HAS NO LAYOUT ENGINE. Every flex / min-width / white-space assertion below reads
 // an inline style PROP, never a measured box. The geometry claims -- above the fold, no
 // caption ellipsised, the rail absorbing the slack -- are provable only in
-// a browser and belong to the sweep in e2e/topology/invoice-surfaces.spec.ts (arch §7 A-D).
+// a browser and belong to the sweep in e2e/topology/invoice-surfaces.spec.ts.
 //
 // One spec renders nothing and is GREEN in the red commit by design -- the
 // interactive-selector control needle. It exists to stop the specs above it passing vacuously.
@@ -103,7 +100,7 @@ const UNNAMEABLE_ACTOR = stripNodes(
   null,
   'validated',
 )
-// arch §12 C-6: approvalRunStateView('') returns its argument, so node 3's caption is ''.
+// approvalRunStateView('') returns its argument, so node 3's caption is ''.
 const EMPTY_RUN_STATE = stripNodes(HISTORY_TO_QUEUED, mkRun(''), 'validated')
 
 const SCENARIOS: Array<[string, StripNode[]]> = [
@@ -218,7 +215,7 @@ describe('StatusStrip: the five nodes', () => {
   })
 
   it('strip-actor renders on all five nodes in every scenario -- the count never varies with state', () => {
-    // arch §3: a caption count that shrinks on unreached nodes makes the browser
+    // A caption count that shrinks on unreached nodes makes the browser
     // ellipsis sweep skip them silently, so the element is unconditional.
     for (const [name, nodes] of SCENARIOS) {
       cleanup()
@@ -273,7 +270,7 @@ describe('StatusStrip: the rail and the step blocks (inline style props, not geo
   it('step blocks are flex:none + min-width:max-content; connectors are flex:1', () => {
     // jsdom has NO layout engine: this reads the inline style prop, so it proves the
     // component asked for the right flex behaviour, not that the browser delivered it.
-    // The real proof is arch §7C's 2560-vs-1280 sweep in e2e/topology.
+    // The real proof is the 2560-vs-1280 sweep in e2e/topology.
     const strip = renderStrip(ACCEPTED)
     const children = Array.from(strip.children) as HTMLElement[]
     expect(children, 'five blocks interleaved with four connectors').toHaveLength(9)
@@ -299,7 +296,7 @@ describe('StatusStrip: the rail and the step blocks (inline style props, not geo
 
   it('labels and captions never wrap -- the container scrolls instead', () => {
     // The inverse of the retired card overflowWrap:'anywhere'. Style prop only; the
-    // no-ellipsis proof is arch §7B.
+    // no-ellipsis proof is the e2e/topology sweep.
     const strip = renderStrip(UNNAMEABLE_ACTOR)
     for (const actor of actorsOf(strip)) expect(actor.style.whiteSpace).toBe('nowrap')
     for (const node of nodesOf(strip)) expect(labelOf(node).style.whiteSpace).toBe('nowrap')
@@ -460,7 +457,7 @@ describe('StatusStrip: attribution', () => {
     expect(named.className.split(' ')).not.toContain('mono')
   })
 
-  it('a time with no actor renders as the time (arch §12 C-5, the dominant production case)', () => {
+  it('a time with no actor renders as the time (the dominant production case)', () => {
     // A run approved by a human gives node 3 `at` with a null `actor` -- resolving
     // closed_by would re-open the cross-tenant leak S-10 guards. A renderer that draws
     // the attribution only when `actor` is set blanks node 3 on the commonest path.
@@ -482,10 +479,10 @@ describe('StatusStrip: attribution', () => {
   })
 
   it('no node ever renders a visually empty caption', () => {
-    // Was RED against the arch §12 C-6 hole: an empty run.state captioned node 3 with ''
+    // Was RED against a hole: an empty run.state captioned node 3 with ''
     // and the strip drew a blank cell. Closed in invoiceStrip.ts's default branch, pinned
     // there by S-33; the guard below keeps this fixture on that branch.
-    expect(EMPTY_RUN_STATE[2].caption, 'fixture guard: the C-6 fallback, not a blank cell').toBe('Waiting')
+    expect(EMPTY_RUN_STATE[2].caption, 'fixture guard: the fallback caption, not a blank cell').toBe('Waiting')
     for (const [name, nodes] of SCENARIOS) {
       cleanup()
       for (const actor of actorsOf(renderStrip(nodes))) {
@@ -495,7 +492,7 @@ describe('StatusStrip: attribution', () => {
   })
 })
 
-describe('StatusStrip: read-only (AC-9 / arch §7E)', () => {
+describe('StatusStrip: read-only (AC-9)', () => {
   it('contains no interactive element, while staying keyboard-reachable', () => {
     for (const [name, nodes] of SCENARIOS) {
       cleanup()

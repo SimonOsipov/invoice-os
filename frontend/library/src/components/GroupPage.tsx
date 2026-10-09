@@ -54,6 +54,7 @@ export function GroupPage({ group, openHref, onFeature }: GroupPageProps) {
           >
             <div style={{ position: 'relative', height: 192, background: 'var(--surface)', overflow: 'hidden' }}>
               <div
+                data-testid="lib-thumb-window"
                 style={{
                   position: 'absolute',
                   left: 20,
@@ -98,6 +99,7 @@ export function GroupPage({ group, openHref, onFeature }: GroupPageProps) {
                   </span>
                 </div>
                 <div
+                  data-testid="lib-thumb-scene"
                   style={{
                     flex: '1 1 0',
                     minHeight: 0,
@@ -112,6 +114,7 @@ export function GroupPage({ group, openHref, onFeature }: GroupPageProps) {
                 </div>
               </div>
               <span
+                data-testid="lib-play-disc"
                 style={{
                   position: 'absolute',
                   left: 20,

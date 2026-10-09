@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Interactive contract of Tabs (jsdom). Source of truth: the DS Tabs.jsx in .ralph/design-v2/components and the
+// Interactive contract of Tabs (jsdom). Source of truth: the DS Tabs.jsx and the
 // story's § Design Tabs row (WAI-ARIA tabs, automatic activation, wrap, ids from useId). Controlled only: value + onChange.
 import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

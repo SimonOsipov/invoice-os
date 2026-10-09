@@ -62,7 +62,7 @@ const PERSONAS: { A: Persona; B: Persona } = {
 // Who the browser acts as: the e2e member. The strip first-names a resolved person (invoiceStrip.ts display()).
 const DRIVER = e2eMember(SHARD.a.id).displayName.split(' ')[0]
 
-// [topology-never-publishes] scoped to policy IDENTITY (docs/e2e-convention.md): this
+// [topology-never-publishes] scoped to policy IDENTITY (.claude/rules/e2e.md): this
 // self-heal restores the tenant's OWN seeded policy, never a new one. Unwrapped -- the shard seed leaves the firm tenant's
 // policy an unpublished draft (db/seed.e2e-shards.sql), so every approval below would
 // otherwise 404 against an invoice that armed no run. A genuine convergence failure must
@@ -823,20 +823,18 @@ test('register geometry: a blocked row costs no extra line and stands the same h
 
 // Core AC-2 and AC-3. Neither claim can be made in vitest -- jsdom has no layout engine, so
 // "nothing above the rows moved" and "the rows never emptied for a round trip" are
-// browser-only (docs/e2e-convention.md, "Target surface").
+// browser-only.
 //
 // Measured from the VIEWPORT, not from inside the list container: `.pf-list-head` is that
 // container's first child (InvoicesList.tsx:565-566), so an in-container offset is 0 in both
 // filter states and the assertion would be vacuous. The defect moved the container itself.
 //
-// Two open story findings shape this fixture, which avoids both by construction:
-//   .ralph/STORY-FINDING-AC2.md -- a live selection mounts `batch-submit-summary` above the
-//   list (InvoicesList.tsx:491-495), and the toggle's own setSelected([]) unmounts it,
-//   moving the table by more than the offset under test. This fixture never clicks a
-//   checkbox and never calls select-all, so that bar is absent from both measurements.
-//   .ralph/STORY-FINDING-SEARCH.md -- the header search box's `q` rides the SAME request as
-//   `needs_attention`. This fixture never types in it, so the row set differs between the
-//   two states because of the filter alone.
+// Two hazards shape this fixture, which avoids both by construction:
+//   - a live selection mounts `batch-submit-summary` above the list (InvoicesList), and the
+//     toggle's own setSelected([]) unmounts it, moving the table by more than the offset under
+//     test. This fixture never clicks a checkbox or select-all.
+//   - the header search box's `q` rides the SAME request as `needs_attention`. This fixture
+//     never types in it, so the row set differs between the two states because of the filter alone.
 test('register geometry: toggling needs-attention moves nothing above the rows and never empties them', async ({ page }, testInfo) => {
   // Two create+validate round trips, a sign-in, an entity switch, three toggle round trips
   // and two four-width sweeps whose per-width settle poll is bounded at 10s each.
@@ -947,7 +945,7 @@ test('register geometry: toggling needs-attention moves nothing above the rows a
 // register, so it had never been observed on a deployed build. This entity holds ONLY clean
 // validated invoices, so needs_attention returns a genuine zero-total set.
 //
-// No search term is typed (.ralph/STORY-FINDING-SEARCH.md): `q` rides the same request as
+// No search term is typed: `q` rides the same request as
 // `needs_attention`, so a search matching nothing would reach this SAME branch by a path
 // whose copy is false -- and this test would pass on the wrong path.
 test('register empty state: a filter that matches nothing says so, and offers the way back', async ({ page }) => {
@@ -1269,7 +1267,7 @@ interface MixedImportResponse {
 }
 
 // M4-14-02 (task-209): the Day-60 moment-of-value, folded into this capability flow
-// instead of a new dated demo ([capability-not-date], docs/e2e-convention.md) -- import a
+// instead of a new dated demo ([capability-not-date], .claude/rules/e2e.md) -- import a
 // batch, open one of THOSE failing invoices, fix it inline, re-validate to green, and see
 // the dashboard rollup update. Reuses signInAs and this file's own collectErrors and
 // import-wizard.spec.ts's proven mixed-CSV upload recipe (buildMixedCsv/E2E-04) rather
@@ -1336,6 +1334,8 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
   await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
   const resp = await importResp
   const body = (await resp.json()) as MixedImportResponse
+  // The app routes to the review a tick after the response; leaving earlier lets its URL write overwrite ours.
+  await expect(page).toHaveURL(/\/imports\/[^/]+\/review$/)
 
   // 2. The real invoice_id of INV-UI-MIX-VIOLATE, which fires ONLY vat-standard-rate
   // (buildMixedCsv's doc comment; re-verified live at import-wizard.spec.ts:286).
@@ -1435,7 +1435,7 @@ test('Day-60 moment of value: import-batch -> open-failing-invoice -> fix-VAT-in
 
 // M5-09-08 (task-256): the M5 milestone gate itself -- both demonstrations Core AC #5
 // requires, entirely from the browser, extending this capability flow rather than adding
-// a dated spec ([capability-not-date], docs/e2e-convention.md; Stage-1 correction C12).
+// a dated spec ([capability-not-date], .claude/rules/e2e.md; Stage-1 correction C12).
 // Both submits below still route through the list's batch-select-and-submit path
 // (invoice-select + batch-submit, M5-09-06), reused for BOTH the first submit and the
 // resubmit leg -- these two tests exercise the register's own path specifically, not
@@ -2102,7 +2102,7 @@ test('resolve/unresolve loop: marking a failed invoice resolved drops it from ne
 // move together instead of drifting apart. The other two kinds (payload_not_built,
 // never_acknowledged) and the legacy-NULL case are proven by the Go/SPA unit suites plus the
 // seed + the Phase 3.5 deploy-gate checklist -- not a second/third/fourth copy of this test,
-// which docs/e2e-convention.md names as the failure mode to avoid.
+// which the thin browser layer (.claude/rules/e2e.md) rules out.
 test('submission surface: a failed invoice with a recorded kind explains itself', async ({ page }) => {
   const errors = collectErrors(page)
 
@@ -2870,6 +2870,8 @@ test("invoice detail: the source-document card states the real range, and the mo
   )
   await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
   await importResp
+  // The app routes to the review a tick after the response; leaving earlier lets its URL write overwrite ours.
+  await expect(page).toHaveURL(/\/imports\/[^/]+\/review$/)
 
   await goToInvoices(page)
   await openInvoiceRow(page, 'INV-UI-MIX-VIOLATE')
@@ -2991,6 +2993,8 @@ test('invoice detail: a 1,500-row source file renders through the window, not al
   )
   await page.getByRole('button', { name: /^Import \d+ rows$/ }).click()
   await importResp
+  // The app routes to the review a tick after the response; leaving earlier lets its URL write overwrite ours.
+  await expect(page).toHaveURL(/\/imports\/[^/]+\/review$/)
 
   await goToInvoices(page)
   // Any of the 500 will do -- they all share the one file -- and openInvoiceRow does
@@ -3140,7 +3144,7 @@ test('buyer-tin: register and detail agree on missing, malformed, and well-forme
 
 // BUG-04-07 (task-403): the UBL surface's two browser flows. Appended to this capability
 // flow rather than split into a ubl.spec.ts -- invoice detail IS this file's capability
-// (docs/e2e-convention.md). The endpoint's own headers, its 409/404 envelopes and its
+// (.claude/rules/e2e.md). The endpoint's own headers, its 409/404 envelopes and its
 // cross-tenant parity are invisible from a browser and live in e2e/api/contract-ubl.spec.ts,
 // which is what keeps this layer thin.
 //
@@ -3520,7 +3524,7 @@ test('detail surface: the armed decision block and approval card, plus their lay
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// arch §7 A-D: the four claims the state strip makes that jsdom cannot see. StatusStrip.test.tsx
+// The four claims the state strip makes that jsdom cannot see. StatusStrip.test.tsx
 // reads inline style PROPS -- it can prove the component ASKED for flex:none/max-content/nowrap,
 // never that a browser delivered them. These four are the only oracle for the delivered layout.
 //
@@ -3877,9 +3881,8 @@ test.describe.serial("detail surface: the activity card's geometry", () => {
 })
 
 // BUG-13-03: the only layer that can observe this defect (jsdom performs no layout). Ten
-// assertions -- D1,D2,D3,D4a,D4b,D5,D7,D9,D10a,D10b -- from .ralph/bug-13-arch.md's
-// `## Layout assertion`; D6/D8 are deliberately absent (measured unreachable in Chromium
-// under table-layout:auto).
+// assertions -- D1,D2,D3,D4a,D4b,D5,D7,D9,D10a,D10b; D6/D8 are deliberately absent (measured
+// unreachable in Chromium under table-layout:auto).
 //
 // R (real) = badInvoiceFields fires vat-standard-rate through createInvoice, a genuine,
 // short, natively-breaking violation -- see the fixture's own comment above. S (stubbed) =
@@ -4008,7 +4011,7 @@ test.describe.serial("detail surface: the compliance card's geometry", () => {
     const fits = await assertFillsColumn(page, card, column, 'compliance-card vs main column', 1)
     expect(fits.map((f) => f.width), 'assertFillsColumn measured fewer widths than it swept').toEqual([...WIDE_WIDTHS])
 
-    // The hole assertFillsColumn leaves (bug-13-03-arch-validation.md #2): it bounds
+    // The hole assertFillsColumn leaves: it bounds
     // max(left,right) <= slackPx, which a card overflowing its column on BOTH sides
     // satisfies too, because both gaps go negative. This floor is the single-sided bound's
     // blind spot.
@@ -4243,7 +4246,7 @@ test.describe.serial("detail surface: the compliance card's geometry", () => {
 
 // BUG-14-04 (task-901): the action cluster's own geometry, claiming R1-R6 of the story's
 // ## System Design. Alongside the strip / activity / compliance blocks above rather than in
-// a file of its own -- invoice detail IS this file's capability (docs/e2e-convention.md).
+// a file of its own -- invoice detail IS this file's capability (.claude/rules/e2e.md).
 //
 // SCOPE: the firm ADMIN seat, at two statuses. The ROLE axis (AC-3: a caller who can do
 // nothing sees five disabled controls, never a shorter cluster) is out of

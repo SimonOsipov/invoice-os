@@ -173,3 +173,23 @@ describe('HD-03b the Primary nav renders every entry in list order', () => {
     }
   })
 })
+
+describe('the Library link', () => {
+  const LIB = 'https://lib.x'
+  const withLib = () =>
+    renderToStaticMarkup(createElement(Nav, { onSignIn: noop, onBookDemo: noop, libraryHref: LIB }))
+
+  it('Nav_endsTheNavWithLibraryWhenSet', () => {
+    const html = withLib()
+    const nav = /<nav\b[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/.exec(html)![1]
+    const anchors = [...nav.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)]
+    expect(anchors.map((m) => attrsOf(m[1]).href)).toEqual([...V2_NAV.map((l) => l.href), LIB])
+    const last = anchors.at(-1)!
+    const attrs = attrsOf(last[1])
+    expect(last[2]).toBe('Library')
+    expect(attrs.class).toBe('ios-nav-link')
+    expect(attrs['aria-current']).toBeUndefined()
+    expect(attrs.style).toContain('color:var(--ink)')
+    expect(attrs.style).toContain('border-bottom:2px solid transparent')
+  })
+})

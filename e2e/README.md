@@ -15,9 +15,9 @@ deployed URL.
 
 **This file is how to run these suites and what each one needs.** What may be asserted and
 why — organize by capability, keep the browser layer thin, functional only, one browser
-serial, the two persona coverage grades — lives in **`docs/e2e-convention.md`**, which is
+serial, the two persona coverage grades — lives in **`.claude/rules/e2e.md`**, which is
 canonical. Read that one before adding a spec; read this one before running the suites.
-When the two disagree, the convention doc wins and this file is the one to correct.
+When the two disagree, the rule file wins and this file is the one to correct.
 
 ## Target URLs
 
@@ -52,7 +52,7 @@ Covers four SPAs — `landing`, `ops-console`,
 - **Behaviour on backend-less surfaces** (`landing-nav.spec.ts`, `ops-console.spec.ts`,
   `support-console.spec.ts`): the landing nav's scroll-spy, and functional navigation over
   what each console is *for*. Both consoles' data is mock with no backend, so these
-  assertions pin fixture behaviour rather than a contract — `docs/e2e-convention.md` says
+  assertions pin fixture behaviour rather than a contract — `.claude/rules/e2e.md` says
   when that is allowed.
 - **Boundary matrix** (`persona-boundaries.spec.ts`): every destination visited with
   a `persona` query parameter and no session must bounce the visitor back to the landing page. This drives **all
@@ -88,7 +88,7 @@ GATEWAY_URL=... pnpm --filter @invoice-os/e2e test:api
 
 `playwright.topology.config.ts` → `testDir: './topology'`, `fullyParallel: false`,
 `workers: 1`, one Playwright project per unit in `topology/shards.ts`: `serial-lane`,
-`import-wizard`, `import-wizard-2` and `invoice-surfaces`. CI runs each unit on its own runner in parallel;
+`import-wizard`, `import-wizard-2`, `invoice-surfaces` and `library`. CI runs each unit on its own runner in parallel;
 `--project=<unit>` runs one. A spec file not assigned to exactly one unit fails the run at
 config load.
 
@@ -117,7 +117,7 @@ package is `api/perf.spec.ts`'s PERF-06: `GET /healthz/fleet` returns 200 with
 `status: "ok"` and every entry in `services` reporting `up`. It iterates whatever the
 roll-up returns and deliberately asserts **no service count**, so it cannot rot as the
 fleet grows. Gating the *deploy* on the backends being green is `dev-env.yml`'s own
-`fleet-gate` job, which runs before any suite. See `docs/topology-e2e.md`.
+`fleet-gate` job, which runs before any suite. See `.claude/rules/e2e.md`.
 
 ## Unit tests
 

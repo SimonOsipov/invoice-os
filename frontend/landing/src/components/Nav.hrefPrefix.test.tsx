@@ -58,3 +58,26 @@ describe('Nav hrefPrefix contract', () => {
     expect(NAV_LINKS.length).toBeGreaterThanOrEqual(1)
   })
 })
+
+describe('Nav libraryHref', () => {
+  const LIB = 'https://lib.x'
+  const hrefsOf = (props: Record<string, unknown>) =>
+    Array.from(
+      renderToStaticMarkup(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {}, ...props })).matchAll(ANCHOR_HREF),
+    ).map((m) => m[1])
+
+  it('Nav_rendersNoLibraryWhenUnset', () => {
+    for (const props of [{ libraryHref: null }, {}]) {
+      expect(hrefsOf(props)).toEqual(['#top', ...NAV_ONLY_TARGETS])
+    }
+    const html = renderToStaticMarkup(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {}, libraryHref: null }))
+    expect(html).not.toContain('Library')
+  })
+
+  it('Nav_theLibraryHrefIgnoresHrefPrefix', () => {
+    const hrefs = hrefsOf({ hrefPrefix: '/', libraryHref: LIB })
+    expect(hrefs.filter((h) => h === LIB), 'control: the library href renders once').toHaveLength(1)
+    expect(hrefs.filter((h) => h !== LIB).every((h) => h.startsWith('/#'))).toBe(true)
+    expect(hrefs.some((h) => h.startsWith('//'))).toBe(false)
+  })
+})

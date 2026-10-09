@@ -57,7 +57,7 @@ type DSNRequirement struct {
 
 // DSNRequirements is the severity table: the codified invariant this whole
 // story exists to state. Verified against cmd/*/main.go and corroborated by a
-// live read-back of `development` (.ralph/ac3-development-dsn-readback.md).
+// live read-back of `development`.
 //
 // This is the ONLY copy. scripts/ci/railway-env.sh deliberately does not know
 // it -- it ships the whole environment here and lets this table decide.

@@ -21,6 +21,7 @@ export function TourOverlay({ tour, rect, win, onBack, onNext, onWatch, onClose 
     <div style={{ position: 'absolute', inset: 0, zIndex: 60 }}>
       <div style={{ position: 'absolute', inset: 0 }} />
       <div
+        data-testid="lib-tour-spot"
         style={{
           position: 'absolute',
           left: spot.x,
@@ -34,6 +35,7 @@ export function TourOverlay({ tour, rect, win, onBack, onNext, onWatch, onClose 
         }}
       />
       <div
+        data-testid="lib-tour-callout"
         style={{
           position: 'absolute',
           ...calloutPos(rect, tour.phase, win),

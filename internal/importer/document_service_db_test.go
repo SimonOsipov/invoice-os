@@ -574,8 +574,7 @@ func TestServiceImportDocument_TwoDocumentsInOneEntityEachGetOwnBatchAndSourceDo
 // --- DOC-12 ----------------------------------------------------------------
 
 // DOC-12: the architecture's flagged gap is step 5 (ExistingNumbers) failing operationally
-// AFTER the batch is already minted -- .ralph/EXTR-06-finalized.md's Implementation Notes,
-// "GAP: design specifies no error branch here". That EXACT condition cannot be honestly
+// AFTER the batch is already minted; the design specifies no error branch there. That EXACT condition cannot be honestly
 // induced through the real ImportDocument(ctx, entityID, documentID) entrypoint in this
 // codebase: entityID is bound identically into BOTH CreateBatch's INSERT (entity_id, FK to
 // business_entities) and ExistingNumbers's SELECT (WHERE entity_id = $1), so any entityID

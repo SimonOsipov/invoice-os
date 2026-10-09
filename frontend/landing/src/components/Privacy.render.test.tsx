@@ -625,11 +625,7 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
 
 describe('LIB-07: the library origin', () => {
   const html = renderToStaticMarkup(createElement(Privacy))
-  const DOCS = join(SRC_DIR, '..', '..', '..', '..', 'docs')
   const LANDING_ANALYTICS = readFileSync(join(SRC_DIR, '..', 'analytics.ts'), 'utf8')
-  const ledger = readFileSync(join(DOCS, 'privacy-policy-claims.md'), 'utf8')
-  const analyticsDoc = readFileSync(join(DOCS, 'analytics.md'), 'utf8')
-  const flat = (t: string) => t.replace(/\s+/g, ' ')
 
   const text = (markup: string) =>
     markup
@@ -715,58 +711,11 @@ describe('LIB-07: the library origin', () => {
     expect(section).not.toContain('either address')
   })
 
-  it('PL-06 the ledger carries C33–C36', () => {
-    expect(ledger).toContain('(C1–C36)')
-    const row = (id: string) => flat(ledger.split('\n').find((l) => l.startsWith(`| ${id} |`)) ?? '')
-    for (const id of ['C33', 'C34', 'C35', 'C36']) expect(row(id), `${id} row`).not.toBe('')
-    expect(row('C33')).toContain('LIBRARY_HOSTNAMES')
-    for (const event of ['page_view', 'demo_open', 'tour_start', 'open_in_platform']) expect(row('C34')).toContain(event)
-    expect(row('C35')).toContain('library.ascomply.com')
-    expect(row('C35')).toContain('cookie_domain')
-    expect(row('C35')).toContain('PRODUCTION-OBSERVED owed by U4')
-    expect(row('C35')).toContain('is **owed** (U4)')
-    expect(row('C35')).not.toContain('.ascomply.com as')
-    expect(row('C36')).toContain('frontend/library/src/components/Sidebar.tsx')
-    expect(row('C22')).toContain('feature_id')
-    expect(row('C22')).toContain('group_id')
-    expect(flat(ledger)).toContain('Closed at LIB-07')
-  })
-
-  it('PL-07 the analytics doc covers the library', () => {
-    const doc = flat(analyticsDoc)
-    expect(doc).toContain('library.ascomply.com')
-    expect(doc).toContain('## Feature Library')
-    const section = analyticsDoc.slice(analyticsDoc.indexOf('## Feature Library'), analyticsDoc.indexOf('## See also'))
-    const tableRows = section.split('\n').filter((l) => l.startsWith('| `'))
-    expect(tableRows.length, 'the library event table').toBe(4)
-    for (const event of ['page_view', 'demo_open', 'tour_start', 'open_in_platform']) {
-      expect(tableRows.filter((l) => l.startsWith(`| \`${event}\``)), `table row for ${event}`).toHaveLength(1)
-    }
-    expect(tableRows.find((l) => l.startsWith('| `open_in_platform`')) ?? '').toContain('`feature_id` \\| `group_id`')
-    for (const needle of ['page_view', 'demo_open', 'tour_start', 'open_in_platform', 'feature_id', 'group_id', 'L1.', 'L2.', 'L3.', 'L4.']) {
-      expect(doc, `missing "${needle}"`).toContain(needle)
-    }
-    expect(doc).not.toContain('GA4 ships on the **public landing page only**')
-    expect(doc).not.toContain('Set **nowhere else**')
-    expect(doc).toContain('Seven items.')
-  })
-
   it('PL-08 no sentence still scopes analytics to the landing alone', () => {
     expect(text(html)).not.toContain('It runs on this public site only.')
     const cookies = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
       .map((m) => text(m[1]))
       .find((t) => t.includes('Our own code sets no cookies at all'))
     expect(cookies).toContain('until then your cookie list for this site holds neither of them')
-    for (const id of ['C1', 'C2', 'C6']) {
-      const row = ledger.split('\n').find((l) => l.startsWith(`| ${id} |`)) ?? ''
-      expect(row.toLowerCase(), `${id} names the library`).toContain('library')
-      if (id === 'C2') expect(row).toContain('frontend/library/src/analytics.ts')
-      if (id === 'C6') expect(row).toContain('`library.ascomply.com` only')
-    }
-    const doc = flat(analyticsDoc)
-    expect(doc).not.toContain('our four senders')
-    expect(doc).not.toContain('all four senders')
-    const e2e = readFileSync(join(DOCS, 'e2e-convention.md'), 'utf8')
-    expect(e2e.split('\n').find((l) => l.startsWith('| `library`')) ?? '').toContain('library-consent.spec.ts')
   })
 })

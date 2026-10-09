@@ -436,63 +436,13 @@ describe('CTA components untouched (AC-3), gap-fill', () => {
   })
 })
 
-// N3 (AC #7, NEW-BEHAVIOUR): had no oracle before this plan. Protects
-// [analytics-line-count-frozen] -- the four send() lines docs cite by number
-// must hold their position.
-describe('DEMO_CTA_SOURCES and the four cited sends (AC #7, gap)', () => {
-  it('N3: the ten sources in page order, no pricing or demo_cta, and analytics.ts keeps its four send() lines in place', () => {
+// N3 (AC #7, NEW-BEHAVIOUR): had no oracle before this plan.
+describe('DEMO_CTA_SOURCES (AC #7, gap)', () => {
+  it('N3: the ten sources in page order, no pricing or demo_cta', () => {
     expect(DEMO_CTA_SOURCES.length).toBe(10)
     expect([...DEMO_CTA_SOURCES], 'DEMO_CTA_SOURCES, in page order').toEqual(['nav', 'hero', 'platform', 'coverage', 'audience', 'integrations', 'api', 'faq', 'closing', 'footer'])
     expect(DEMO_CTA_SOURCES).not.toContain('pricing')
     expect(ANALYTICS_SRC, 'Pricing left analytics.ts').not.toMatch(/pricing/i)
     expect(DEMO_CTA_SOURCES).not.toContain('demo_cta')
-
-    const lines = ANALYTICS_SRC.split('\n')
-    expect(lines.length).toBeGreaterThan(129)
-    expect(lines[78]).toContain("send('demo_open'")
-    expect(lines[82]).toContain('generate_lead')
-    expect(lines[86]).toContain('demo_submit_failed')
-    expect(lines[129]).toContain('scroll_depth')
-  })
-})
-
-// AC #8 gap-fill. docs/analytics.md's three count-bearing sites are hand-maintained and
-// were guarded by nothing -- stalerefs tracks only multi-word quoted literals. Derived
-// from DEMO_CTA_SOURCES so a retired source cannot survive in the page.
-describe('docs/analytics.md tracks DEMO_CTA_SOURCES (AC #8, gap)', () => {
-  const ANALYTICS_DOC = readFileSync(join(HERE, '..', '..', '..', 'docs', 'analytics.md'), 'utf8')
-  const WORD = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven']
-
-  it('N4: the demo_open row lists exactly the shipped cta_location values, in order', () => {
-    expect(ANALYTICS_DOC.length, 'population floor: the doc must actually resolve').toBeGreaterThan(2000)
-    const row = ANALYTICS_DOC.split('\n').find((l) => l.startsWith('| `demo_open`'))
-    expect(row, 'expected the demo_open event row').toBeDefined()
-    // Every backticked all-lowercase token on the row is a value; the row's other
-    // backticks (`App.tsx`, `book(source)`) cannot match the class.
-    const listed = Array.from((row ?? '').matchAll(/`([a-z_]+)`/g))
-      .map((m) => m[1])
-      .filter((v) => v !== 'demo_open' && v !== 'cta_location')
-    expect(listed).toEqual([...DEMO_CTA_SOURCES])
-  })
-
-  it('N5: every cta_location count word in the doc matches DEMO_CTA_SOURCES.length', () => {
-    const n = WORD[DEMO_CTA_SOURCES.length]
-    const capitalised = n[0].toUpperCase() + n.slice(1)
-    expect(ANALYTICS_DOC).toContain(`${capitalised} \`cta_location\` values cover`)
-    expect(ANALYTICS_DOC).toContain(`**all ${n}** \`cta_location\` values appear`)
-    expect(ANALYTICS_DOC, 'Pricing left the doc').not.toMatch(/pricing/i)
-    for (const source of DEMO_CTA_SOURCES) expect(ANALYTICS_DOC).toContain(`\`${source}\``)
-    // The operator checklist lists the values itself; the loop above is satisfied by the table row alone.
-    const checklist = ANALYTICS_DOC.replace(/\s+/g, ' ').match(/values appear: ((?:`[a-z_]+`,? ?)+)/)
-    expect(checklist, 'expected the checklist list after "values appear:"').not.toBeNull()
-    expect(Array.from(checklist![1].matchAll(/`([a-z_]+)`/g), (m) => m[1])).toEqual([...DEMO_CTA_SOURCES])
-    expect(ANALYTICS_DOC, 'a retired source must not survive anywhere in the page').not.toContain('demo_cta')
-  })
-
-  it('N6: the button total the doc quotes is the one F3-f measures', () => {
-    // The rendered-button total itself is measured by App.demoCtas.dom.test.tsx's F3-f
-    // (ROSTER.length + NON_CTA_COUNT); this pins the doc's copy of it.
-    expect(ANALYTICS_DOC).toContain('values cover **thirteen** buttons')
-    expect(ANALYTICS_DOC.replace(/\s+/g, ' '), "line 50 names Coverage's button").toContain("Coverage's Discuss your country reports `coverage`")
   })
 })

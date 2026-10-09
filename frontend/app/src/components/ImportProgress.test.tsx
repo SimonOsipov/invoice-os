@@ -3,11 +3,9 @@
 // document-run rows before ImportProgress.tsx is touched: the row source picked on
 // ctx.runKind, the four in-flight kinds through one IN_FLIGHT_LABEL table, RETRYING in
 // --status-amber-text, and the two new testids (import-progress / import-progress-row).
-// CARD-1..8 exactly as .ralph/story-append.md / task-786's Test Specs table. Rows are
-// selected ONLY via the not-yet-existing testid, so every spec here reads zero rows
+// Rows are selected ONLY via the not-yet-existing testid, so every spec here reads zero rows
 // against today's component -- a genuine behavioural RED, not a resolution error. Second
-// test file for this component; ctx cast follows CreateFlow.test.tsx:60
-// (`as unknown as PlatformCtx`).
+// test file for this component; the ctx cast (`as unknown as PlatformCtx`) follows CreateFlow.test.tsx.
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 

@@ -18,8 +18,7 @@ const (
 	wireStaff     = "X-User-Staff"
 	wireRulesRole = "X-User-Rules-Role"
 
-	forbiddenBody    = `{"error":"forbidden"}`
-	unauthorizedBody = `{"error":"unauthorized"}`
+	forbiddenBody = `{"error":"forbidden"}`
 )
 
 // staffCalls records what a registered handler saw.
@@ -192,14 +191,29 @@ func TestStaffClass_PlainRouteIsChecked(t *testing.T) {
 	}
 }
 
-func TestStaffClass_NoCallerIsUnauthorized(t *testing.T) {
+// A 401 signs the SPA user out (.claude/rules/tenant-seam.md), so a staff request with no caller is a 403.
+func TestStaffClass_NoCallerIsForbidden(t *testing.T) {
 	rig := newStaffRig(t, true)
 	anon := who{anonymous: true}
 	rec := rig.serve(anon.request(http.MethodGet, "/v1/staff/x"))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401 (body %q)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
 	}
-	assertBody(t, rec, "no caller", unauthorizedBody)
+	assertBody(t, rec, "no caller", forbiddenBody)
+	if n := rig.staff.count(); n != 0 {
+		t.Errorf("handler ran %d times, want 0", n)
+	}
+}
+
+func TestStaffClass_MalformedUserIDIsForbiddenNot401(t *testing.T) {
+	rig := newStaffRig(t, true)
+	r := staffRules.request(http.MethodGet, "/v1/staff/x")
+	r.Header.Set(headerUserID, "not-a-uuid")
+	rec := rig.serve(r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
+	}
+	assertBody(t, rec, "malformed X-User-ID", forbiddenBody)
 	if n := rig.staff.count(); n != 0 {
 		t.Errorf("handler ran %d times, want 0", n)
 	}
@@ -251,8 +265,8 @@ func TestStaffClass_OpenRouteSpoofIsNotAStaffCaller(t *testing.T) {
 	spoof.noGatewayTk = true
 
 	rec := rig.serve(spoof.request(http.MethodGet, "/v1/staff/x"))
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401 (body %q)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
 	}
 	if n := rig.staff.count(); n != 0 {
 		t.Errorf("handler ran %d times for a forged staff caller on an open route, want 0", n)

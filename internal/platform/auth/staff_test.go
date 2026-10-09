@@ -36,11 +36,11 @@ func callerContexts(id Identity) map[string]context.Context {
 
 func TestRequireRulesRole_RefusesWithoutACaller(t *testing.T) {
 	rec, ran, _ := serveRulesRole(context.Background())
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
 	}
-	if got := strings.TrimSpace(rec.Body.String()); got != `{"error":"unauthorized"}` {
-		t.Errorf("body = %q, want {\"error\":\"unauthorized\"}", got)
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"error":"forbidden"}` {
+		t.Errorf("body = %q, want {\"error\":\"forbidden\"}", got)
 	}
 	if ran != 0 {
 		t.Errorf("handler ran %d times, want 0", ran)

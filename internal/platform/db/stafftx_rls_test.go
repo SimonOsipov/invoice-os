@@ -14,8 +14,12 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-func staffIdentity(tenant bool) auth.Identity {
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", Staff: true, RulesRole: true}
+func staffIdentity(t *testing.T, tenant bool) auth.Identity {
+	t.Helper()
+	subject := uuid.NewString()
+	_, cleanup := seedMembership(t, h.tenantA, subject, "admin")
+	t.Cleanup(cleanup)
+	id := auth.Identity{Subject: subject, Role: "authenticated", Staff: true, RulesRole: true}
 	if tenant {
 		id.TenantID = h.tenantA
 	}
@@ -40,7 +44,7 @@ func unreachablePool(t *testing.T) *pgxpool.Pool {
 
 func TestRLS_WithinStaffTxRefusesWithoutAStaffCaller(t *testing.T) {
 	requireHarness(t)
-	staff := staffIdentity(false)
+	staff := staffIdentity(t, false)
 	ctxs := map[string]context.Context{
 		"plain context":                     context.Background(),
 		"identity set, no rules-role check": auth.WithIdentity(context.Background(), staff),
@@ -81,7 +85,7 @@ func TestRLS_WithinStaffTxSetsNoTenant(t *testing.T) {
 	}
 
 	for _, tenant := range []bool{true, false} {
-		ctx := db.StaffCtxForTest(t, staffIdentity(tenant))
+		ctx := db.StaffCtxForTest(t, staffIdentity(t, tenant))
 		ran := 0
 		err := db.WithinStaffTx(ctx, h.app, func(tx pgx.Tx) error {
 			ran++
@@ -98,7 +102,7 @@ func TestRLS_WithinStaffTxSetsNoTenant(t *testing.T) {
 
 func TestRLS_WithinStaffTxCommitsAndRollsBack(t *testing.T) {
 	requireHarness(t)
-	id := staffIdentity(false)
+	id := staffIdentity(t, false)
 	actor := uuid.MustParse(id.Subject)
 	ctx := db.StaffCtxForTest(t, id)
 	committed, rolledBack := "engi11.05.commit."+actor.String(), "engi11.05.rollback."+actor.String()

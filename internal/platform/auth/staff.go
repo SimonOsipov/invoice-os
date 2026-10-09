@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-// RequireRulesRole admits only a caller with Staff and RulesRole, tenant or not: 401 with no caller, 403 otherwise.
+// RequireRulesRole admits only a caller with Staff and RulesRole, tenant or not: 403 with no caller or another caller (a 401 signs the SPA user out).
 // It stores the checked caller where only StaffFromContext reads it.
 func RequireRulesRole(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -15,7 +15,7 @@ func RequireRulesRole(next http.Handler) http.Handler {
 			id, ok = TenantlessCallerFromContext(r.Context())
 		}
 		if !ok {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
+			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
 		if !id.Staff || !id.RulesRole {

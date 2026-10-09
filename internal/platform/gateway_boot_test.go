@@ -453,8 +453,8 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 						t.Errorf("GET %s, staff without the rules role = %d %q, want 403 forbidden", target, code, body)
 					}
 				}
-				if code, body := p.do(t, "GET", "/v1/staff/x", "", map[string]string{"X-Gateway-Token": gwToken}); code != http.StatusUnauthorized || body != gwUnauthorizedBody {
-					t.Errorf("GET /v1/staff/x, token and no caller = %d %q, want 401 %q", code, body, gwUnauthorizedBody)
+				if code, body := p.do(t, "GET", "/v1/staff/x", "", map[string]string{"X-Gateway-Token": gwToken}); code != http.StatusForbidden || body != "{\"error\":\"forbidden\"}\n" {
+					t.Errorf("GET /v1/staff/x, token and no caller = %d %q, want 403 forbidden", code, body)
 				}
 				// Control: with the rules role the check admits the request, so the 403s above are the check's.
 				if code, body := p.do(t, "GET", "/v1/staff/x", "", staff(gwForged(), true)); code == http.StatusForbidden || code == http.StatusUnauthorized {

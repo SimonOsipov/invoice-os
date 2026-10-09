@@ -429,9 +429,11 @@ const aiSectionHtml = (): string => {
 }
 
 describe('ENGI-10: the upload section discloses AI processing', () => {
-  const section = aiSectionHtml()
-  const paragraphs = Array.from(section.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plainText(m[1]))
-  const text = plainText(section)
+  const upload = () => {
+    const section = aiSectionHtml()
+    const paragraphs = Array.from(section.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plainText(m[1]))
+    return { section, paragraphs, text: plainText(section) }
+  }
 
   it('the upload section sits between account and monitoring', () => {
     const at = (h: string) => html.indexOf(`>${h}</h2>`)
@@ -442,10 +444,12 @@ describe('ENGI-10: the upload section discloses AI processing', () => {
   })
 
   it('the approved section wording is pinned as a literal', () => {
+    const { paragraphs } = upload()
     expect(paragraphs).toEqual(APPROVED_AI_SECTION)
   })
 
   it('the section is scoped apart from analytics', () => {
+    const { text } = upload()
     expect(text).toContain('separate from the analytics and the demo form above')
     expect(text).toContain('not Google Analytics')
     const needle = html.indexOf('We never send Google your name')
@@ -454,31 +458,38 @@ describe('ENGI-10: the upload section discloses AI processing', () => {
   })
 
   it('the section is two paragraphs', () => {
+    const { section } = upload()
+    expect(section.trimStart().startsWith('<p')).toBe(true)
     expect(section.match(/<p[\s>]/g) ?? []).toHaveLength(2)
     expect(section).not.toMatch(/<(?:ul|ol|li)[\s>]/)
   })
 
   it('the section says the server sends the document to an AI provider', () => {
+    const { text } = upload()
     expect(text).toContain('our server sends its content to an AI provider')
     expect(text).toContain('invoice document')
   })
 
   it('the section names the three recipients', () => {
+    const { text } = upload()
     for (const name of ['OpenRouter', 'Google', 'TypeSafe']) expect(text).toContain(name)
   })
 
   it('the host is quoted from AI_PROVIDER_HOST, which equals both Go endpoints', () => {
+    const { text } = upload()
     expect(aiProviderHosts()).toEqual([AI_PROVIDER_HOST])
     expect(text).toContain(AI_PROVIDER_HOST)
     expect(readFileSync(PRIVACY_TSX, 'utf8').match(/openrouter\.ai/g) ?? []).toHaveLength(1)
   })
 
   it('the named model vendors are the models in use', () => {
+    const { text } = upload()
     expect(aiModelVendors()).toEqual(['google', 'typesafe'])
     for (const v of aiModelVendors()) expect(text.toLowerCase()).toContain(v)
   })
 
   it('the browser is not the sender', () => {
+    const { text } = upload()
     expect(text).toContain('Your browser sends the document to our server only')
   })
 })

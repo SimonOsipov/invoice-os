@@ -587,7 +587,7 @@ func TestValidate_OldServerTopLevelStampAppliesToEveryItem(t *testing.T) {
 func TestValidate_SomeItemsWithoutStampIsErrUpstream(t *testing.T) {
 	for name, second := range map[string]string{
 		"missing":      `{"ref":"r2","violations":[]}`,
-		"zero version": `{"ref":"r2","violations":[],"rule_set_version":0,"rule_set_version_id":"id-b"}`,
+		"zero version": fmt.Sprintf(`{"ref":"r2","violations":[],"rule_set_version":%d,"rule_set_version_id":"id-b"}`, 0),
 		"empty id":     fmt.Sprintf(`{"ref":"r2","violations":[],"rule_set_version":%d,"rule_set_version_id":""}`, cannedRuleSetVersion),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -602,8 +602,8 @@ func TestValidate_SomeItemsWithoutStampIsErrUpstream(t *testing.T) {
 }
 
 func TestValidate_NoStampAnywhereIsErrUpstream(t *testing.T) {
-	v := stampServer(t, `{"rule_set_version":0,"rule_set_version_id":"","results":[
-		{"ref":"r1","violations":[]},{"ref":"r2","violations":[]}]}`)
+	v := stampServer(t, fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"","results":[
+		{"ref":"r1","violations":[]},{"ref":"r2","violations":[]}]}`, 0))
 	if _, err := v.Validate(context.Background(), twoRefs); !errors.Is(err, ErrUpstream) {
 		t.Errorf("err = %v, want ErrUpstream", err)
 	}

@@ -281,3 +281,21 @@ func doBatchWithLog(t *testing.T, load func(context.Context) (RuleSet, error), l
 	BatchValidateHandler(load, NewDefaultEngine(), log).ServeHTTP(rec, r)
 	return rec
 }
+
+func TestEnumList_MixedObjectAndNonObjectLines(t *testing.T) {
+	res := mustEvalList(t, lineRule(), map[string]any{"line_items": []any{
+		"0101.21", map[string]any{"hsn_code": "9999.99"}, map[string]any{"hsn_code": "0101.21"}, 7.0,
+	}})
+	wantPaths(t, res.Violations, "line_items[1]", "line_items[2].hsn_code", "line_items[4]")
+}
+
+func TestEnumList_EvalReturnsFirstOfEvalLines(t *testing.T) {
+	p := Payload{"invoice": lines("9999.98", "9999.99")}
+	v, err := enumEval{}.Eval(p, lineRule())
+	if err != nil || v == nil {
+		t.Fatalf("Eval = %v, %v; want first violation", v, err)
+	}
+	if v.Path != "line_items[1].hsn_code" {
+		t.Errorf("Eval path = %q, want line_items[1].hsn_code", v.Path)
+	}
+}

@@ -349,3 +349,28 @@ func TestLineSum_AbsentExpectedKeepsSubtotal(t *testing.T) {
 	}
 	wantPaths(t, vs, "subtotal")
 }
+
+func TestLineSum_MalformedLineSuppressesSumMismatch(t *testing.T) {
+	vs := mustLineSumLines(t, lineSumPayload(-5,
+		map[string]any{"unit_price": 1000.0},
+		map[string]any{"quantity": 2.0},
+	))
+	wantPaths(t, vs, "line_items[2].unit_price")
+}
+
+func TestLineSum_EvalReturnsFirstOfEvalLines(t *testing.T) {
+	p := lineSumPayload(1000,
+		map[string]any{"unit_price": 1.0},
+		map[string]any{"quantity": 1.0},
+		map[string]any{"unit_price": "x"},
+	)
+	all := mustLineSumLines(t, p)
+	wantPaths(t, all, "line_items[2].unit_price", "line_items[3].unit_price")
+	v, err := lineSumEval{}.Eval(p, lineSumRule())
+	if err != nil || v == nil {
+		t.Fatalf("Eval = %v, %v; want first violation", v, err)
+	}
+	if v.Path != "line_items[2].unit_price" {
+		t.Errorf("Eval path = %q, want line_items[2].unit_price", v.Path)
+	}
+}

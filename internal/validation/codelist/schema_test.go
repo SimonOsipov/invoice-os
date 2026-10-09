@@ -202,7 +202,11 @@ func TestSchema_SyncLogIsInsertOnlyForApp(t *testing.T) {
 	if n != 3 {
 		t.Fatalf("entry_count = %d, want 3", n)
 	}
-	_, err := app.Exec(ctx, `UPDATE nrs_code_list_syncs SET entry_count = 4 WHERE id = $1::uuid`, id)
+	_, err := app.Exec(ctx,
+		`INSERT INTO nrs_code_list_syncs (id, list, entry_count, added, removed, changed)
+		 VALUES ($1::uuid, $2, 1, '{}', '{}', '{}')`, id, list)
+	wantState(t, "app INSERT duplicate sync id", err, "23505")
+	_, err = app.Exec(ctx, `UPDATE nrs_code_list_syncs SET entry_count = 4 WHERE id = $1::uuid`, id)
 	wantState(t, "app UPDATE sync row", err, "42501")
 	_, err = app.Exec(ctx, `DELETE FROM nrs_code_list_syncs WHERE id = $1::uuid`, id)
 	wantState(t, "app DELETE sync row", err, "42501")
@@ -236,6 +240,7 @@ func TestSchema_RefusesBlankAndMalformedRows(t *testing.T) {
 		{"entries object", list, "C", `{}`, "23514"},
 		{"entries empty array", list, "D", `[]`, "23514"},
 		{"duplicate list and code", list, "A", `[{"a":2}]`, "23505"},
+		{"entries json null", list, "E", `null`, "23514"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -243,15 +248,34 @@ func TestSchema_RefusesBlankAndMalformedRows(t *testing.T) {
 			wantState(t, c.name, err, c.want)
 		})
 	}
+	t.Run("entries SQL null", func(t *testing.T) {
+		_, err := app.Exec(ctx, insert, list, "F", nil)
+		wantState(t, "entries NULL", err, "23502")
+	})
 
-	t.Run("sync entry_count zero", func(t *testing.T) {
-		const sync = `INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed)
-			VALUES ($1, $2, '{}', '{}', '{}')`
-		if _, err := app.Exec(ctx, sync, list, 1); err != nil {
-			t.Fatalf("valid sync INSERT: %v", err)
-		}
-		_, err := app.Exec(ctx, sync, list, 0)
-		wantState(t, "entry_count 0", err, "23514")
+	const sync = `INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed)
+		VALUES ($1, $2, '{}', '{}', '{}')`
+	if _, err := app.Exec(ctx, sync, list, 1); err != nil {
+		t.Fatalf("valid sync INSERT: %v", err)
+	}
+	for _, c := range []struct {
+		name  string
+		list  string
+		count int
+	}{
+		{"sync entry_count zero", list, 0},
+		{"sync entry_count negative", list, -1},
+		{"sync blank list", "", 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := app.Exec(ctx, sync, c.list, c.count)
+			wantState(t, c.name, err, "23514")
+		})
+	}
+	t.Run("sync NULL changed", func(t *testing.T) {
+		_, err := app.Exec(ctx, `INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed)
+			VALUES ($1, 1, '{}', '{}', NULL)`, list)
+		wantState(t, "changed NULL", err, "23502")
 	})
 
 	var n int
@@ -260,5 +284,25 @@ func TestSchema_RefusesBlankAndMalformedRows(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("nrs_codes rows for list = %d, want 1 (only the valid row)", n)
+	}
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM nrs_code_list_syncs WHERE list = $1`, list).Scan(&n); err != nil {
+		t.Fatalf("count syncs: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("nrs_code_list_syncs rows for list = %d, want 1 (only the valid row)", n)
+	}
+}
+
+// The key is (list, code): a code repeats across lists, and a list holds many codes.
+func TestSchema_KeyIsListAndCode(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	listA, listB := newListName(t, super), newListName(t, super)
+
+	const insert = `INSERT INTO nrs_codes (list, code, entries) VALUES ($1, $2, '[{"a":1}]')`
+	for _, r := range [][2]string{{listA, "A"}, {listA, "B"}, {listB, "A"}} {
+		if _, err := app.Exec(ctx, insert, r[0], r[1]); err != nil {
+			t.Fatalf("INSERT (%s, %s): %v", r[0], r[1], err)
+		}
 	}
 }

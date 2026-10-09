@@ -471,28 +471,27 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 				}
 			})
 
-			t.Run("answers the internal invitation routes to POST only, with the exact bodies the gateway keys on", func(t *testing.T) {
-				if svc != "tenancy" {
-					t.Skip("tenancy routes")
-				}
-				withToken := map[string]string{"X-Gateway-Token": gwToken}
-				for _, c := range []struct {
-					path   string
-					status int
-					body   string
-				}{
-					{"/internal/invitations/pending", http.StatusBadRequest, "{\"error\":\"invalid request body\"}\n"},
-					{"/internal/invitations/register", http.StatusNotFound, "{\"error\":\"this invite is no longer valid\"}\n"},
-					{"/internal/invitations/release", http.StatusNotFound, "{\"error\":\"this invite is no longer valid\"}\n"},
-				} {
-					if code, _ := p.do(t, "GET", c.path, "", withToken); code != http.StatusMethodNotAllowed {
-						t.Errorf("GET %s with the token = %d, want 405", c.path, code)
+			if svc == "tenancy" {
+				t.Run("answers the internal invitation routes to POST only, with the exact bodies the gateway keys on", func(t *testing.T) {
+					withToken := map[string]string{"X-Gateway-Token": gwToken}
+					for _, c := range []struct {
+						path   string
+						status int
+						body   string
+					}{
+						{"/internal/invitations/pending", http.StatusBadRequest, "{\"error\":\"invalid request body\"}\n"},
+						{"/internal/invitations/register", http.StatusNotFound, "{\"error\":\"this invite is no longer valid\"}\n"},
+						{"/internal/invitations/release", http.StatusNotFound, "{\"error\":\"this invite is no longer valid\"}\n"},
+					} {
+						if code, _ := p.do(t, "GET", c.path, "", withToken); code != http.StatusMethodNotAllowed {
+							t.Errorf("GET %s with the token = %d, want 405", c.path, code)
+						}
+						if code, got := p.do(t, "POST", c.path, "{}", withToken); code != c.status || got != c.body {
+							t.Errorf("POST %s {} with the token = %d %q, want %d %q", c.path, code, got, c.status, c.body)
+						}
 					}
-					if code, got := p.do(t, "POST", c.path, "{}", withToken); code != c.status || got != c.body {
-						t.Errorf("POST %s {} with the token = %d %q, want %d %q", c.path, code, got, c.status, c.body)
-					}
-				}
-			})
+				})
+			}
 
 			t.Run("a refused boot contacts no database", func(t *testing.T) {
 				if svc != "notifications" {

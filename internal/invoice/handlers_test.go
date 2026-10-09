@@ -2465,6 +2465,11 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 		// BUG-06-04 (task-386): +1 -- failure_kind joins Invoice as a direct
 		// top-level sibling too, same no-omitempty shape.
 		"failure_kind",
+		// ENGI-02: the 22 NRS header and party fields.
+		"invoice_kind", "tax_currency_code", "due_date", "issue_time", "tax_point_date", "payment_status",
+		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
+		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
 	}
 	for _, k := range wantKeys {
 		if _, ok := raw[k]; !ok {
@@ -4114,6 +4119,11 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 		// BUG-06-04 (task-386): failure_kind joins Invoice the same way.
 		"failure_kind",
+		// ENGI-02: the 22 NRS header and party fields join Invoice the same way.
+		"invoice_kind", "tax_currency_code", "due_date", "issue_time", "tax_point_date", "payment_status",
+		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
+		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
 		"rule_set_version", "qr_png_base64",
 	}
 	// BUG-04-03 (task-399): can_view_ubl/ubl_blocked_reason join the same
@@ -4270,6 +4280,11 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// BUG-06-04 (task-386): failure_kind is declared right after
 		// KeptAsIsReason and before LineItems, so it lands here too.
 		"failure_kind",
+		// ENGI-02: the 22 NRS header and party fields, declared before LineItems.
+		"invoice_kind", "tax_currency_code", "due_date", "issue_time", "tax_point_date", "payment_status",
+		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
+		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
 		"line_items",
 		// getResponse's own fields, in declaration order -- the action-flag
 		// keys MUST be last (AC #5's additive/position clause): can_submit

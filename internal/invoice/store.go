@@ -50,7 +50,8 @@ const invoiceColumns = `id, entity_id, import_batch_id, invoice_number, status, 
 	`currency, subtotal::text, vat::text, total::text, ` +
 	`violations, rule_set_version_id, created_at, ` +
 	`irn, csid, qr_payload, rejection_reasons, ` +
-	`kept_as_is_at, kept_as_is_by, kept_as_is_reason, failure_kind`
+	`kept_as_is_at, kept_as_is_by, kept_as_is_reason, failure_kind, ` +
+	`invoice_kind, tax_currency_code, due_date, issue_time::text, tax_point_date, payment_status, supplier_email, supplier_telephone, supplier_street, supplier_city, supplier_postal_zone, supplier_country, supplier_state, supplier_lga, buyer_email, buyer_telephone, buyer_street, buyer_city, buyer_postal_zone, buyer_country, buyer_state, buyer_lga`
 
 func scanInvoice(row scanner, inv *Invoice) error {
 	return row.Scan(
@@ -60,18 +61,50 @@ func scanInvoice(row scanner, inv *Invoice) error {
 		&inv.Violations, &inv.RuleSetVersionID, &inv.CreatedAt,
 		&inv.IRN, &inv.CSID, &inv.QRPayload, &inv.RejectionReasons,
 		&inv.KeptAsIsAt, &inv.KeptAsIsBy, &inv.KeptAsIsReason, &inv.FailureKind,
+		&inv.InvoiceKind,
+		&inv.TaxCurrencyCode,
+		&inv.DueDate,
+		&inv.IssueTime,
+		&inv.TaxPointDate,
+		&inv.PaymentStatus,
+		&inv.SupplierEmail,
+		&inv.SupplierTelephone,
+		&inv.SupplierStreet,
+		&inv.SupplierCity,
+		&inv.SupplierPostalZone,
+		&inv.SupplierCountry,
+		&inv.SupplierState,
+		&inv.SupplierLGA,
+		&inv.BuyerEmail,
+		&inv.BuyerTelephone,
+		&inv.BuyerStreet,
+		&inv.BuyerCity,
+		&inv.BuyerPostalZone,
+		&inv.BuyerCountry,
+		&inv.BuyerState,
+		&inv.BuyerLGA,
 	)
 }
 
 // lineItemColumns is the line_items projection scanned by scanLineItem; the
 // numeric columns are read via ::text ([D13]), same rationale as invoiceColumns.
 const lineItemColumns = `id, line_no, description, ` +
-	`quantity::text, unit_price::text, line_total::text, line_tax::text`
+	`quantity::text, unit_price::text, line_total::text, line_tax::text, ` +
+	`tax_category, hsn_code, isic_code, product_category, service_category, sellers_item_identification, price_unit, tax_percent::text, base_quantity::text`
 
 func scanLineItem(row scanner, li *LineItem) error {
 	return row.Scan(
 		&li.ID, &li.LineNo, &li.Description,
 		&li.Quantity, &li.UnitPrice, &li.LineTotal, &li.LineTax,
+		&li.TaxCategory,
+		&li.HSNCode,
+		&li.ISICCode,
+		&li.ProductCategory,
+		&li.ServiceCategory,
+		&li.SellersItemIdentification,
+		&li.PriceUnit,
+		&li.TaxPercent,
+		&li.BaseQuantity,
 	)
 }
 
@@ -206,18 +239,21 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			`INSERT INTO invoices
 			   (tenant_id, entity_id, invoice_number,
 			    issue_date, supplier_tin, supplier_name, buyer_tin, buyer_name,
-			    currency, subtotal, vat, total, import_batch_id, source_document_id, source_rows)
+			    currency, subtotal, vat, total, import_batch_id, source_document_id, source_rows,
+			    invoice_kind, tax_currency_code, due_date, issue_time, tax_point_date, payment_status, supplier_email, supplier_telephone, supplier_street, supplier_city, supplier_postal_zone, supplier_country, supplier_state, supplier_lga, buyer_email, buyer_telephone, buyer_street, buyer_city, buyer_postal_zone, buyer_country, buyer_state, buyer_lga)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-			         $10::text::numeric, $11::text::numeric, $12::text::numeric, $13, $14, $15)
+			         $10::text::numeric, $11::text::numeric, $12::text::numeric, $13, $14, $15,
+			         $16, $17, $18, $19::text::time, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
 			 RETURNING `+invoiceColumns,
 			id.TenantID, in.EntityID, in.InvoiceNumber,
 			in.IssueDate, in.SupplierTIN, in.SupplierName, in.BuyerTIN, in.BuyerName,
 			in.Currency, in.Subtotal, in.VAT, in.Total, in.ImportBatchID, in.SourceDocumentID, in.SourceRows,
+			in.InvoiceKind, in.TaxCurrencyCode, in.DueDate, in.IssueTime, in.TaxPointDate, in.PaymentStatus, in.SupplierEmail, in.SupplierTelephone, in.SupplierStreet, in.SupplierCity, in.SupplierPostalZone, in.SupplierCountry, in.SupplierState, in.SupplierLGA, in.BuyerEmail, in.BuyerTelephone, in.BuyerStreet, in.BuyerCity, in.BuyerPostalZone, in.BuyerCountry, in.BuyerState, in.BuyerLGA,
 		), &inv); err != nil {
 			switch pgCode(err) {
 			case "23505":
 				return ErrDuplicateNumber
-			case "23503", "22P02":
+			case "23503", "22P02", "22007", "22008":
 				return ErrValidation
 			}
 			return err
@@ -228,14 +264,17 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			if err := scanLineItem(tx.QueryRow(ctx,
 				`INSERT INTO line_items
 				   (tenant_id, invoice_id, line_no, description,
-				    quantity, unit_price, line_total, line_tax)
+				    quantity, unit_price, line_total, line_tax,
+				    tax_category, hsn_code, isic_code, product_category, service_category, sellers_item_identification, price_unit, tax_percent, base_quantity)
 				 VALUES ($1, $2, $3, $4,
-				         $5::text::numeric, $6::text::numeric, $7::text::numeric, $8::text::numeric)
+				         $5::text::numeric, $6::text::numeric, $7::text::numeric, $8::text::numeric,
+				         $9, $10, $11, $12, $13, $14, $15, $16::text::numeric, $17::text::numeric)
 				 RETURNING `+lineItemColumns,
 				id.TenantID, inv.ID, i+1, li.Description,
 				li.Quantity, li.UnitPrice, li.LineTotal, li.LineTax,
+				li.TaxCategory, li.HSNCode, li.ISICCode, li.ProductCategory, li.ServiceCategory, li.SellersItemIdentification, li.PriceUnit, li.TaxPercent, li.BaseQuantity,
 			), &item); err != nil {
-				if pgCode(err) == "22003" {
+				if code := pgCode(err); code == "22003" || code == "22P02" {
 					return ErrValidation
 				}
 				return err
@@ -487,7 +526,11 @@ func DemoteApprovalRejectedTx(ctx context.Context, tx pgx.Tx, id, tenantID, subj
 // that line_no raises 23505 (the unique index is not RLS-filtered), surfacing
 // as a raw 500. Unreachable through the app -- both line writers bind the
 // caller's own tenant_id, so only a direct DB write can plant one.
-func replaceLinesTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string, in []LineItemInput) ([]LineItem, error) {
+func replaceLinesTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string, in []LineItemInput, beforeLines []LineItem) ([]LineItem, error) {
+	in, err := carryNRSLines(in, beforeLines)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM line_items WHERE invoice_id = $1`, invoiceID); err != nil {
 		return nil, err
 	}
@@ -498,12 +541,15 @@ func replaceLinesTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string, 
 		if err := scanLineItem(tx.QueryRow(ctx,
 			`INSERT INTO line_items
 			   (tenant_id, invoice_id, line_no, description,
-			    quantity, unit_price, line_total, line_tax)
+			    quantity, unit_price, line_total, line_tax,
+			    tax_category, hsn_code, isic_code, product_category, service_category, sellers_item_identification, price_unit, tax_percent, base_quantity)
 			 VALUES ($1, $2, $3, $4,
-			         $5::text::numeric, $6::text::numeric, $7::text::numeric, $8::text::numeric)
+			         $5::text::numeric, $6::text::numeric, $7::text::numeric, $8::text::numeric,
+			         $9, $10, $11, $12, $13, $14, $15, $16::text::numeric, $17::text::numeric)
 			 RETURNING `+lineItemColumns,
 			tenantID, invoiceID, i+1, li.Description,
 			li.Quantity, li.UnitPrice, li.LineTotal, li.LineTax,
+			li.TaxCategory, li.HSNCode, li.ISICCode, li.ProductCategory, li.ServiceCategory, li.SellersItemIdentification, li.PriceUnit, li.TaxPercent, li.BaseQuantity,
 		), &item); err != nil {
 			if code := pgCode(err); code == "22P02" || code == "22003" {
 				return nil, ErrValidation
@@ -936,7 +982,15 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 	// sync if UpdateInput ever gains a field.
 	if in.IssueDate == nil && in.SupplierTIN == nil && in.SupplierName == nil &&
 		in.BuyerTIN == nil && in.BuyerName == nil && in.Currency == nil &&
-		in.Subtotal == nil && in.VAT == nil && in.Total == nil {
+		in.Subtotal == nil && in.VAT == nil && in.Total == nil &&
+		in.InvoiceKind == nil && in.TaxCurrencyCode == nil && in.DueDate == nil &&
+		in.IssueTime == nil && in.TaxPointDate == nil && in.PaymentStatus == nil &&
+		in.SupplierEmail == nil && in.SupplierTelephone == nil && in.SupplierStreet == nil &&
+		in.SupplierCity == nil && in.SupplierPostalZone == nil && in.SupplierCountry == nil &&
+		in.SupplierState == nil && in.SupplierLGA == nil && in.BuyerEmail == nil &&
+		in.BuyerTelephone == nil && in.BuyerStreet == nil && in.BuyerCity == nil &&
+		in.BuyerPostalZone == nil && in.BuyerCountry == nil && in.BuyerState == nil &&
+		in.BuyerLGA == nil {
 		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
 
@@ -964,8 +1018,8 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 }
 
 // headerFieldsPresent reports whether in carries at least one header field --
-// the exact negation of Store.Update's inline all-nil guard, over the same 9
-// UpdateInput fields. Extracted by INVED-01-04 because Store.Edit now needs the
+// the exact negation of Store.Update's inline all-nil guard, over every
+// UpdateInput field. Extracted by INVED-01-04 because Store.Edit now needs the
 // answer TWICE: once in its widened pre-tx guard (a lines-only edit is legal, so
 // "no header fields" alone is no longer a rejection) and once to decide whether
 // to call updateContentTx at all -- that function assumes >= 1 non-nil field and
@@ -973,7 +1027,15 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 func headerFieldsPresent(in UpdateInput) bool {
 	return in.IssueDate != nil || in.SupplierTIN != nil || in.SupplierName != nil ||
 		in.BuyerTIN != nil || in.BuyerName != nil || in.Currency != nil ||
-		in.Subtotal != nil || in.VAT != nil || in.Total != nil
+		in.Subtotal != nil || in.VAT != nil || in.Total != nil ||
+		in.InvoiceKind != nil || in.TaxCurrencyCode != nil || in.DueDate != nil ||
+		in.IssueTime != nil || in.TaxPointDate != nil || in.PaymentStatus != nil ||
+		in.SupplierEmail != nil || in.SupplierTelephone != nil || in.SupplierStreet != nil ||
+		in.SupplierCity != nil || in.SupplierPostalZone != nil || in.SupplierCountry != nil ||
+		in.SupplierState != nil || in.SupplierLGA != nil || in.BuyerEmail != nil ||
+		in.BuyerTelephone != nil || in.BuyerStreet != nil || in.BuyerCity != nil ||
+		in.BuyerPostalZone != nil || in.BuyerCountry != nil || in.BuyerState != nil ||
+		in.BuyerLGA != nil
 }
 
 // strPtrEqual reports whether two possibly-nil *string values represent the
@@ -1173,12 +1235,46 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 		changedFields = append(changedFields, "supplier_name")
 	}
 
+	putDate := func(col string, p *time.Time) {
+		switch {
+		case p == nil:
+		case p == ClearDate:
+			set(col, text, (*time.Time)(nil))
+		case p.Equal(clearDate):
+			copiedSentinel = col
+		default:
+			set(col, text, *p)
+		}
+	}
+
 	put("buyer_tin", text, in.BuyerTIN)
 	put("buyer_name", text, in.BuyerName)
 	put("currency", text, in.Currency)
 	put("subtotal", numeric, in.Subtotal)
 	put("vat", numeric, in.VAT)
 	put("total", numeric, in.Total)
+	put("invoice_kind", text, in.InvoiceKind)
+	put("tax_currency_code", text, in.TaxCurrencyCode)
+	putDate("due_date", in.DueDate)
+	put("issue_time", "%s = $%d::text::time", in.IssueTime)
+	putDate("tax_point_date", in.TaxPointDate)
+	put("payment_status", text, in.PaymentStatus)
+	put("supplier_email", text, in.SupplierEmail)
+	put("supplier_telephone", text, in.SupplierTelephone)
+	put("supplier_street", text, in.SupplierStreet)
+	put("supplier_city", text, in.SupplierCity)
+	put("supplier_postal_zone", text, in.SupplierPostalZone)
+	put("supplier_country", text, in.SupplierCountry)
+	put("supplier_state", text, in.SupplierState)
+	put("supplier_lga", text, in.SupplierLGA)
+	put("buyer_email", text, in.BuyerEmail)
+	put("buyer_telephone", text, in.BuyerTelephone)
+	put("buyer_street", text, in.BuyerStreet)
+	put("buyer_city", text, in.BuyerCity)
+	put("buyer_postal_zone", text, in.BuyerPostalZone)
+	put("buyer_country", text, in.BuyerCountry)
+	put("buyer_state", text, in.BuyerState)
+	put("buyer_lga", text, in.BuyerLGA)
 
 	if copiedSentinel != "" {
 		return Invoice{}, nil, fmt.Errorf(
@@ -1196,7 +1292,7 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Invoice{}, nil, ErrNotFound
 		}
-		if pgCode(err) == "22P02" {
+		if code := pgCode(err); code == "22P02" || code == "22007" || code == "22008" {
 			return Invoice{}, nil, ErrValidation
 		}
 		return Invoice{}, nil, err
@@ -1388,7 +1484,7 @@ func editTx(ctx context.Context, tx pgx.Tx, id string, in EditInput) (Invoice, e
 	// beforeLines, which is then post-write by definition.
 	afterLines := beforeLines
 	if in.LineItems != nil {
-		if afterLines, err = replaceLinesTx(ctx, tx, callerID.TenantID, id, *in.LineItems); err != nil {
+		if afterLines, err = replaceLinesTx(ctx, tx, callerID.TenantID, id, *in.LineItems, beforeLines); err != nil {
 			return Invoice{}, err
 		}
 	}

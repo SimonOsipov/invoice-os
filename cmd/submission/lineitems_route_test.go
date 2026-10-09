@@ -319,7 +319,7 @@ func TestSubmissionMain_RegistersTheLineItemsRouteExactlyOnce(t *testing.T) {
 	}
 }
 
-// Both types now carry the same five fields in the same order -- pinned so
+// extraction.LineItemInput carries five fields; invoice.LineItemInput adds ID and the nine NRS line fields -- pinned so
 // CopiesEveryCellByPosition cannot go green over a field the adapter silently drops. If either
 // type grows a SIXTH field with no mapping decision taken, this reds again rather than the
 // adapter defaulting the new cell to nil.
@@ -330,7 +330,8 @@ func TestLineItemInputTypes_CarryTheFieldsTheAdapterWasWrittenFor(t *testing.T) 
 		want []string
 	}{
 		{"extraction.LineItemInput", reflect.TypeOf(extraction.LineItemInput{}), []string{"Description", "Quantity", "UnitPrice", "LineTotal", "LineTax"}},
-		{"invoice.LineItemInput", reflect.TypeOf(invoice.LineItemInput{}), []string{"Description", "Quantity", "UnitPrice", "LineTotal", "LineTax"}},
+		{"invoice.LineItemInput", reflect.TypeOf(invoice.LineItemInput{}), []string{"ID", "Description", "Quantity", "UnitPrice", "LineTotal", "LineTax",
+			"TaxCategory", "HSNCode", "ISICCode", "ProductCategory", "ServiceCategory", "SellersItemIdentification", "PriceUnit", "TaxPercent", "BaseQuantity"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if len(tc.want) == 0 {

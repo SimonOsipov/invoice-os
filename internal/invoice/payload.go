@@ -259,6 +259,22 @@ func contentFingerprint(inv Invoice, lines []LineItem) string {
 	writeFingerprintField(h, inv.VAT)
 	writeFingerprintField(h, inv.Total)
 
+	// NRS header fields (D9): hashed only when set, tagged by index, so a legacy invoice keeps its digest.
+	var dueDate, taxPointDate *string
+	if inv.DueDate != nil {
+		v := inv.DueDate.Format(mbsDateLayout)
+		dueDate = &v
+	}
+	if inv.TaxPointDate != nil {
+		v := inv.TaxPointDate.Format(mbsDateLayout)
+		taxPointDate = &v
+	}
+	writeNRSFingerprint(h, inv.InvoiceKind, inv.TaxCurrencyCode, dueDate, inv.IssueTime, taxPointDate, inv.PaymentStatus,
+		inv.SupplierEmail, inv.SupplierTelephone, inv.SupplierStreet, inv.SupplierCity,
+		inv.SupplierPostalZone, inv.SupplierCountry, inv.SupplierState, inv.SupplierLGA,
+		inv.BuyerEmail, inv.BuyerTelephone, inv.BuyerStreet, inv.BuyerCity,
+		inv.BuyerPostalZone, inv.BuyerCountry, inv.BuyerState, inv.BuyerLGA)
+
 	count := strconv.Itoa(len(lines))
 	writeFingerprintField(h, &count)
 
@@ -276,6 +292,8 @@ func contentFingerprint(inv Invoice, lines []LineItem) string {
 		writeFingerprintField(h, li.UnitPrice)
 		writeFingerprintField(h, li.LineTotal)
 		writeFingerprintField(h, li.LineTax)
+		writeNRSFingerprint(h, li.TaxCategory, li.HSNCode, li.ISICCode, li.ProductCategory, li.ServiceCategory,
+			li.SellersItemIdentification, li.PriceUnit, li.TaxPercent, li.BaseQuantity)
 	}
 
 	return hex.EncodeToString(h.Sum(nil))
@@ -288,4 +306,15 @@ func writeFingerprintField(h io.Writer, v *string) {
 		return
 	}
 	fmt.Fprintf(h, "S%d:%s;", len(*v), *v)
+}
+
+// writeNRSFingerprint writes each non-nil value as "X<index>;" plus the length-prefixed field.
+// The X tag differs from the N and S markers, so the encoding stays prefix-free.
+func writeNRSFingerprint(h io.Writer, vals ...*string) {
+	for i, v := range vals {
+		if v != nil {
+			fmt.Fprintf(h, "X%d;", i)
+			writeFingerprintField(h, v)
+		}
+	}
 }

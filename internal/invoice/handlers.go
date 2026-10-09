@@ -1553,6 +1553,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, ErrUnknownLineID):
+		return http.StatusBadRequest, "line_items id must name a line of this invoice"
 	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound, "not found"
 	case errors.Is(err, ErrDuplicateNumber):

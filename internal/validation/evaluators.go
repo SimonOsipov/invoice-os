@@ -190,21 +190,40 @@ func (formatEval) Eval(p Payload, r Rule) (*Violation, error) {
 	return violation(r, withExpected(*params.Pattern)), nil
 }
 
-// enumEval implements the `enum` rule type: params `{values:[...]}`.
-// Passes when the present target value is a member of values; violates
-// when it is not. Absent/null target => pass. Missing/non-array values is a
-// config fault => error.
+// enumEval implements the `enum` rule type: params `{values:[...]}` or
+// `{list:"<nrs list>", items?:"<array path>"}`. Passes when the present
+// target value is a member of values (or of the loaded list); violates when
+// it is not. Absent/null target => pass. Missing/non-array values, and every
+// list config fault, are config faults => error, before the target resolves.
 type enumEval struct{}
 
-func (enumEval) Eval(p Payload, r Rule) (*Violation, error) {
+func (e enumEval) Eval(p Payload, r Rule) (*Violation, error) {
 	var params struct {
-		Values *[]any `json:"values"`
+		Values *[]any  `json:"values"`
+		List   *string `json:"list"`
+		Items  *string `json:"items"`
 	}
 	if err := decodeParams(r.Params, &params); err != nil {
 		return nil, fmt.Errorf("validation: enum rule %q params: %w", r.Key, err)
 	}
-	if params.Values == nil {
+	switch {
+	case params.Values != nil && params.List != nil:
+		return nil, fmt.Errorf("validation: enum rule %q has both values and list", r.Key)
+	case params.List != nil:
+		if *params.List == "" {
+			return nil, fmt.Errorf("validation: enum rule %q has a blank list", r.Key)
+		}
+		if params.Items != nil && *params.Items == "" {
+			return nil, fmt.Errorf("validation: enum rule %q has blank items", r.Key)
+		}
+		if len(r.Codes) == 0 {
+			return nil, fmt.Errorf("validation: enum rule %q: code list %q not loaded", r.Key, *params.List)
+		}
+		return e.evalList(p, r, *params.List, params.Items)
+	case params.Values == nil:
 		return nil, fmt.Errorf("validation: enum rule %q missing values", r.Key)
+	case params.Items != nil:
+		return nil, fmt.Errorf("validation: enum rule %q has items without list", r.Key)
 	}
 
 	val, present := resolvePath(p, r.Target)
@@ -224,6 +243,51 @@ func (enumEval) Eval(p Payload, r Rule) (*Violation, error) {
 		labels[i] = stringify(w)
 	}
 	return violation(r, withExpected(strings.Join(labels, " · ")), withActual(stringify(val))), nil
+}
+
+// evalList checks the target (inside each element of items, when set) against
+// r.Codes. The match is exact. It reports the first offender only.
+func (enumEval) evalList(p Payload, r Rule, list string, items *string) (*Violation, error) {
+	expected := "NRS list: " + list
+	bad := func(v any) *Violation {
+		return violation(r, withExpected(expected), withActual(stringify(v)))
+	}
+	inList := func(v any) bool {
+		s, ok := v.(string)
+		if !ok {
+			return false
+		}
+		_, ok = r.Codes[s]
+		return ok
+	}
+
+	if items == nil {
+		val, present := resolvePath(p, r.Target)
+		if !present || val == nil || inList(val) {
+			return nil, nil
+		}
+		return bad(val), nil
+	}
+
+	raw, present := resolvePath(p, *items)
+	if !present {
+		return nil, nil
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil, nil
+	}
+	for _, el := range arr {
+		if _, isObj := el.(map[string]any); !isObj {
+			return bad(el), nil
+		}
+		val, present := resolvePath(Payload{"invoice": el}, r.Target)
+		if !present || val == nil || inList(val) {
+			continue
+		}
+		return bad(val), nil
+	}
+	return nil, nil
 }
 
 // rangeEval implements the `range` rule type: params

@@ -821,25 +821,97 @@ function countMainFrameNavigations(page: Page): () => number {
   return () => n
 }
 
+// URLs of main-frame navigation requests to the app, from the call on.
+function recordAppNavigations(page: Page): () => string[] {
+  const urls: string[] = []
+  page.on('request', (r) => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame() && r.url().startsWith(APP_URL)) urls.push(r.url())
+  })
+  return () => urls
+}
+
+const historyLength = (page: Page) => page.evaluate(() => history.length)
+
+// ceiling: fixed wait, an absence has no event to await; raise if a late bounce is ever seen
+const BOUNCE_SETTLE_MS = 3_000
+
 test('deployed landing: Back after the Sign in bounce leaves a working Sign in', async ({ page }) => {
   await seedConsent(page, false)
+  await page.goto(`${LANDING_URL}/privacy`)
   await page.goto(LANDING_URL)
+  const base = await historyLength(page)
+  const appNavigations = recordAppNavigations(page)
+  const form = signInDialog(page).getByLabel('Work email', { exact: true })
+  const expectPlainLanding = async (when: string) => {
+    expect(page.url().startsWith(LANDING_URL), `${when}: left the landing: ${page.url()}`).toBe(true)
+    const u = new URL(page.url())
+    expect(u.pathname, `${when}: path`).not.toBe('/privacy')
+    expect(u.searchParams.has('signin'), `${when}: signin survived: ${page.url()}`).toBe(false)
+    expect(u.searchParams.has('state'), `${when}: state survived: ${page.url()}`).toBe(false)
+    await expect(headerSignIn(page)).toBeVisible()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    expect(appNavigations(), `${when}: a request went to the app`).toHaveLength(1)
+  }
+
   await headerSignIn(page).click()
-  // Control: an absence check after Back passes vacuously if the bounce never showed the form.
-  await page.waitForURL((u) => u.href.startsWith(LANDING_URL) && new URL(u).searchParams.get('signin') === 'ready', { timeout: 20_000 })
-  await expect(signInDialog(page).getByLabel('Work email', { exact: true })).toBeVisible()
+  await expect(form).toBeVisible({ timeout: 20_000 })
+  expect(appNavigations()).toHaveLength(1)
+  expect(new URL(appNavigations()[0]).searchParams.get('auth')).toBe('start')
+  expect(await historyLength(page), 'the click added one entry').toBe(base + 1)
 
   await page.goBack()
   await page.waitForLoadState('load')
-  await expect(headerSignIn(page)).toBeVisible()
-  expect(page.url().startsWith(LANDING_URL), `Back left the landing: ${page.url()}`).toBe(true)
-  expect(new URL(page.url()).searchParams.has('signin'), `signin survived Back: ${page.url()}`).toBe(false)
-  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await page.waitForTimeout(BOUNCE_SETTLE_MS)
+  await expectPlainLanding('first Back')
+  expect(await historyLength(page)).toBe(base + 1)
 
-  const navigations = countMainFrameNavigations(page)
+  await page.goBack()
+  await page.waitForLoadState('load')
+  await page.waitForTimeout(BOUNCE_SETTLE_MS)
+  expect(new URL(page.url()).pathname, 'second Back reaches the page before the landing').toBe('/privacy')
+  expect(appNavigations()).toHaveLength(1)
+
+  await page.goForward()
+  await page.waitForLoadState('load')
+  await page.goForward()
+  await page.waitForLoadState('load')
+  await page.waitForTimeout(BOUNCE_SETTLE_MS)
+  await expectPlainLanding('Forward x2')
+
+  await page.reload()
+  await page.waitForLoadState('load')
+  await page.waitForTimeout(BOUNCE_SETTLE_MS)
+  await expectPlainLanding('reload')
+
   await headerSignIn(page).click()
-  await expect(signInDialog(page).getByLabel('Work email', { exact: true })).toBeVisible()
-  expect(navigations(), 'Sign in after Back navigated instead of opening the form').toBe(0)
+  await expect(form).toBeVisible({ timeout: 20_000 })
+  expect(appNavigations()).toHaveLength(2)
+  expect(new URL(appNavigations()[1]).searchParams.get('auth')).toBe('start')
+  expect(await historyLength(page), 'the second click added one entry').toBe(base + 2)
+})
+
+test('deployed landing: a Sign in click after Back adds one entry and signs in for real', async ({ page }) => {
+  test.setTimeout(180_000)
+  const account = await provisionRealAccount('handoff-back')
+  await seedConsent(page, false)
+  await page.goto(`${LANDING_URL}/privacy`)
+  await page.goto(LANDING_URL)
+  const base = await historyLength(page)
+  const form = signInDialog(page).getByLabel('Work email', { exact: true })
+
+  await headerSignIn(page).click()
+  await expect(form).toBeVisible({ timeout: 20_000 })
+  await page.goBack()
+  await page.waitForLoadState('load')
+  await headerSignIn(page).click()
+  await expect(form).toBeVisible({ timeout: 20_000 })
+  expect(await historyLength(page), 'the second click drops the first entry and adds its own').toBe(base + 1)
+
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
+    submitSignIn(page, account.email, account.password),
+  ])
+  await expectInWorkspace(page, account)
 })
 
 test('deployed landing: a blocked app shows Sign in unavailable and does not navigate', async ({ page }) => {

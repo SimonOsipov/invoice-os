@@ -4137,6 +4137,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
 		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
 		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+		"tax_subtotals",
 		"rule_set_version", "qr_png_base64",
 	}
 	// BUG-04-03 (task-399): can_view_ubl/ubl_blocked_reason join the same
@@ -4299,6 +4300,8 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
 		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
 		"line_items",
+		// getResponse's tax_subtotals sits directly after the Invoice keys.
+		"tax_subtotals",
 		// getResponse's own fields, in declaration order -- the action-flag
 		// keys MUST be last (AC #5's additive/position clause): can_submit
 		// appended after revalidate_blocked_reason, submit_blocked_reason

@@ -225,8 +225,8 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function postLineItems(',
     floor: 4,
   },
-  // EXTR-15-06 AC-7 — the create wire, which had no row at all. floor 13 is the shipped 12
-  // plus source_document_id: the three-way equality is set-based and so blind to a key added
+  // EXTR-15-06 AC-7 — the create wire, which had no row at all. floor 35 is the shipped 12,
+  // source_document_id and the 22 NRS keys: the three-way equality is set-based and so blind to a key added
   // to all three legs at once, and the floor is what bites.
   {
     ts: 'InvoiceCreateInput',
@@ -236,7 +236,7 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/invoices.ts',
     spaAnchor: 'export async function createInvoice(',
     e2eAnchor: 'export function createInvoice(',
-    floor: 13,
+    floor: 35,
   },
   // The carried reading and its supply (internal/importer/handlers_document.go).
   {
@@ -568,6 +568,40 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       expect(keys, `${leg}: extractor read nothing`).toContain('failure_kind')
       expect(keys, `${leg}: ExtractionDetail lacks document_type`).toContain('document_type')
     }
+  })
+})
+
+// lineItemReq has no WIRE_MIRRORS row (a row carries ONE `ts` name and the
+// e2e leg is named InvoiceCreateLineItem), so its three legs are compared here.
+describe('wire mirror: lineItemReq <-> LineItemCreateInput <-> InvoiceCreateLineItem', () => {
+  const GO = 'internal/invoice/handlers.go'
+  const SPA = 'frontend/app/src/lib/invoices.ts'
+  const legs = () => ({
+    go: goStructKeys(repoFile(GO), 'lineItemReq'),
+    spa: tsInterfaceKeys(repoFile(SPA), 'LineItemCreateInput'),
+    e2e: tsInterfaceKeys(repoFile(E2E_CLIENT), 'InvoiceCreateLineItem'),
+  })
+
+  it('wire mirror: lineItemReq <-> LineItemCreateInput <-> InvoiceCreateLineItem', () => {
+    expect(repoFile(GO), `lost anchor on ${GO}`).toContain('type lineItemReq struct')
+    expect(repoFile(SPA), `lost anchor on ${SPA}`).toContain('export interface LineItemCreateInput')
+    expect(repoFile(E2E_CLIENT), `lost anchor on ${E2E_CLIENT}`).toContain('export interface InvoiceCreateLineItem')
+
+    const { go, spa, e2e } = legs()
+    // id + the 5 legacy keys + the 9 NRS line keys.
+    for (const keys of [go, spa, e2e]) expect(keys.length).toBeGreaterThanOrEqual(15)
+    expect(keySetDiff(go, spa), 'Go lineItemReq vs the SPA').toEqual([])
+    expect(keySetDiff(go, e2e), 'Go lineItemReq vs e2e').toEqual([])
+    expect(keySetDiff(spa, e2e), 'the SPA vs e2e').toEqual([])
+    expect(go).toContain('id')
+  })
+
+  it('wire mirror: the line comparator can report a real mismatch', () => {
+    const goFixture = 'type lineItemReq struct {\n\tID *string `json:"id"`\n\tTaxPercent *string `json:"tax_percent"`\n}'
+    const tsMissing = 'export interface LineItemCreateInput {\n  id?: string\n}'
+    expect(keySetDiff(goStructKeys(goFixture, 'lineItemReq'), tsInterfaceKeys(tsMissing, 'LineItemCreateInput'))).toEqual([
+      'tax_percent',
+    ])
   })
 })
 

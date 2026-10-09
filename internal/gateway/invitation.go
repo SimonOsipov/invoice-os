@@ -104,12 +104,13 @@ type PendingInviteLookup func(ctx context.Context, email string) (bool, error)
 
 // NewHTTPPendingInviteLookup asks tenancy's internal pending route. Any answer but 200 is an error,
 // a 404 included: a tenancy without the route must not read as "no pending invite".
+// A 200 without a boolean `pending` is an error too.
 func NewHTTPPendingInviteLookup(base *url.URL, client *http.Client, gatewayToken string) PendingInviteLookup {
 	c := noRedirect(client)
 	target := base.JoinPath(pendingPath).String()
 	return func(ctx context.Context, email string) (bool, error) {
 		var out struct {
-			Pending bool `json:"pending"`
+			Pending *bool `json:"pending"`
 		}
 		status, err := postTenancy(ctx, c, target, gatewayToken, "pending invite lookup", map[string]string{"email": email}, &out)
 		if err != nil {
@@ -118,7 +119,10 @@ func NewHTTPPendingInviteLookup(base *url.URL, client *http.Client, gatewayToken
 		if status != http.StatusOK {
 			return false, fmt.Errorf("pending invite lookup: tenancy answered %d", status)
 		}
-		return out.Pending, nil
+		if out.Pending == nil {
+			return false, errors.New("pending invite lookup: tenancy answered without a verdict")
+		}
+		return *out.Pending, nil
 	}
 }
 

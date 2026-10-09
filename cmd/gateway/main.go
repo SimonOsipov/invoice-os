@@ -311,7 +311,7 @@ func newJWKSClient() *http.Client {
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
-// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification, RequestPasswordReset and Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
+// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification, RequestPasswordReset and Verify answer 503 (TestRegistrationHandlers_NotConfigured503); so does a nil pending lookup.
 // On a PR preview the per-client limits log but do not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink, pending gateway.PendingInviteLookup) registration {
 	if authURL == nil || siteURL == nil {

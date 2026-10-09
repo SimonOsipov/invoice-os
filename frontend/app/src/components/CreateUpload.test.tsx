@@ -13,13 +13,16 @@
 // addPickedFiles unfiltered), so the dropped path is exercised too, not only the picked
 // one — that is where a stale predicate would survive unnoticed.
 import { cleanup, fireEvent, render } from '@testing-library/react'
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PickedFile } from '../lib/importRun'
 import type { PlatformCtx } from '../types'
 import { capRefusal } from '../lib/importRun'
 import { MAX_UPLOAD_BYTES } from '../lib/importFlow'
-import { AMBER_COPY, CreateUpload } from './CreateUpload'
+import { AI_DISCLOSURE, AMBER_COPY, CreateUpload } from './CreateUpload'
 
 const UNSUPPORTED_NOTE = /Unsupported file type/i
 
@@ -253,8 +256,12 @@ function amberPanel(container: HTMLElement): HTMLElement {
 // The footnote is the last <p> on the step; it renders only alongside the panel.
 function amberFootnote(container: HTMLElement): string {
   const ps = container.querySelectorAll('p')
-  expect(ps.length, 'the footnote did not render').toBeGreaterThan(1)
-  return ps[ps.length - 1].textContent ?? ''
+  const last = ps[ps.length - 1]
+  expect(last, 'the footnote did not render').toBeTruthy()
+  // A deleted footnote leaves the panel body or the disclosure last, so both are excluded.
+  expect(last.closest('[data-testid="ai-disclosure"]'), 'the disclosure is the last paragraph, not the footnote').toBeNull()
+  expect(amberPanel(container).contains(last), 'the panel body is the last paragraph, not the footnote').toBe(false)
+  return last.textContent ?? ''
 }
 
 // Literal on purpose: a copy constant alone would let drift pass (6 [c']).
@@ -483,5 +490,142 @@ describe('CreateUpload — the v2 card, accepted line and primary (RESKIN2-04-01
       expect(b.style.cursor).toBe('not-allowed')
       expect(b.style.filter).toBe('none')
     }
+  })
+})
+
+// ENGI-10-02: the one-line AI-processing disclosure. Inline styles are the oracle here.
+describe('CreateUpload — the AI disclosure (ENGI-10-02)', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gateway.test')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    cleanup()
+  })
+
+  // Literal on purpose (Decision 22): change only with a new approval (Q31).
+  const SENTENCE = 'Files you upload are processed by an AI provider to read them.'
+
+  function disclosures(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>('[data-testid="ai-disclosure"]'))
+  }
+
+  function disclosure(container: HTMLElement): HTMLElement {
+    const found = disclosures(container)
+    expect(found, 'exactly one disclosure must render').toHaveLength(1)
+    return found[0]
+  }
+
+  it('ENGI-10: the disclosure renders on an empty picker', () => {
+    const { container } = render(<CreateUpload ctx={uploadCtx([])} />)
+    expect(disclosure(container).textContent).toBe(AI_DISCLOSURE)
+  })
+
+  it('ENGI-10: the disclosure renders for a document run, a spreadsheet run and a refused file', () => {
+    for (const files of [
+      [picked('scan.pdf', 'application/pdf')],
+      [picked('ledger.csv', 'text/csv')],
+      [picked('scan.pdf', 'application/pdf'), picked('archive.zip', 'application/zip')],
+    ]) {
+      const { container, unmount } = render(<CreateUpload ctx={uploadCtx(files)} />)
+      expect(container.textContent, 'the files must be on screen').toContain(files[0].file.name)
+      expect(disclosure(container).textContent).toBe(AI_DISCLOSURE)
+      unmount()
+    }
+  })
+
+  it.each(['inhouse', 'firm'] as const)('ENGI-10: the disclosure renders with the no-entity panel (%s)', (mode) => {
+    const { container } = render(<CreateUpload ctx={noEntityCtx(mode, vi.fn(), vi.fn())} />)
+    expect(disclosure(container).textContent).toBe(AI_DISCLOSURE)
+    expect(amberPanel(container).firstElementChild?.textContent).toBe(AMBER_COPY.title[mode])
+    expect(amberFootnote(container)).toBe(FOOTNOTE)
+  })
+
+  it('ENGI-10: the disclosure renders with an import error', () => {
+    const ctx = { ...uploadCtx([picked('scan.pdf', 'application/pdf')]), importError: { message: 'x' } } as unknown as PlatformCtx
+    const { container } = render(<CreateUpload ctx={ctx} />)
+    const errors = Array.from(container.querySelectorAll('p')).filter((p) => p.textContent === 'x')
+    expect(errors, 'the error paragraph must render').toHaveLength(1)
+    expect(disclosure(container).textContent).toBe(AI_DISCLOSURE)
+  })
+
+  it('ENGI-10: the disclosure renders with no gateway base', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    const { container } = render(<CreateUpload ctx={uploadCtx([picked('scan.pdf', 'application/pdf')])} />)
+    expect((container.querySelector('button.v2-btn-primary') as HTMLButtonElement).disabled).toBe(true)
+    expect(disclosure(container).textContent).toBe(AI_DISCLOSURE)
+  })
+
+  it('ENGI-10: the approved sentence is pinned as a literal', () => {
+    expect(AI_DISCLOSURE).toBe(SENTENCE)
+    const { container } = render(<CreateUpload ctx={uploadCtx([])} />)
+    expect(disclosure(container).textContent).toBe(SENTENCE)
+  })
+
+  it('ENGI-10: the disclosure sets no width and no nowrap', () => {
+    const { container } = render(<CreateUpload ctx={uploadCtx([])} />)
+    const el = disclosure(container)
+    expect(el.style.width).toBe('')
+    expect(el.style.whiteSpace).not.toBe('nowrap')
+  })
+
+  it('ENGI-10: the disclosure wears the footnote recipe', () => {
+    const { container } = render(<CreateUpload ctx={noEntityCtx('firm', vi.fn(), vi.fn())} />)
+    const ps = container.querySelectorAll<HTMLElement>('p')
+    const footnote = ps[ps.length - 1]
+    expect(footnote.textContent, 'the sibling must be the footnote').toBe(FOOTNOTE)
+    const el = disclosure(container)
+    expect(el.style.fontSize).toBe('12px')
+    for (const prop of ['fontSize', 'color', 'margin', 'lineHeight'] as const) {
+      expect(el.style[prop], prop).toBe(footnote.style[prop])
+    }
+  })
+
+  it('ENGI-10: the disclosure sits after the ACCEPTED span, outside the label', () => {
+    const { container } = render(<CreateUpload ctx={uploadCtx([])} />)
+    const el = disclosure(container)
+    const accepted = Array.from(container.querySelectorAll<HTMLElement>('span')).filter(
+      (s) => (s.textContent ?? '').trim() === 'ACCEPTED · CSV · XLSX · PDF · DOCX',
+    )
+    expect(accepted).toHaveLength(1)
+    expect(accepted[0].compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(accepted[0].parentElement, 'the disclosure shares the ACCEPTED span parent').toBe(el.parentElement)
+    const label = container.querySelector('label[for="pf-import-file"]') as HTMLElement
+    expect(label.contains(el)).toBe(false)
+    expect(container.querySelector('input.pf-file')?.nextElementSibling).toBe(label)
+  })
+
+  it('ENGI-10: the no-entity footnote stays the last paragraph', () => {
+    const { container } = render(<CreateUpload ctx={noEntityCtx('firm', vi.fn(), vi.fn())} />)
+    const ps = Array.from(container.querySelectorAll('p'))
+    expect(ps[ps.length - 1].textContent).toBe(AMBER_COPY.footnote)
+    expect(ps[ps.length - 1]).not.toBe(disclosure(container))
+  })
+})
+
+describe('CreateUpload — only CreateUpload reads the AI disclosure (ENGI-10-02)', () => {
+  const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const SENTENCE = 'Files you upload are processed by an AI provider to read them.'
+
+  function walkSrc(): Array<{ path: string; content: string }> {
+    return readdirSync(SRC_DIR, { recursive: true, withFileTypes: true })
+      .filter((e) => e.isFile() && /\.(ts|tsx)$/.test(e.name) && !/\.test\./.test(e.name))
+      .map((e) => {
+        const full = join(e.parentPath, e.name)
+        return { path: full, content: readFileSync(full, 'utf8') }
+      })
+  }
+
+  it('ENGI-10: control: the source walk reads files', () => {
+    const files = walkSrc()
+    expect(files.length).toBeGreaterThanOrEqual(20)
+    expect(files.some((f) => f.path.endsWith('CreateUpload.tsx'))).toBe(true)
+  })
+
+  it('ENGI-10: only CreateUpload reads the disclosure', () => {
+    const hits = walkSrc()
+      .filter((f) => f.content.includes('AI_DISCLOSURE') || f.content.includes(SENTENCE))
+      .map((f) => f.path.slice(SRC_DIR.length + 1))
+    expect(hits).toEqual(['components/CreateUpload.tsx'])
   })
 })

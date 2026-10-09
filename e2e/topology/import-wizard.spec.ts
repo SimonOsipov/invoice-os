@@ -2338,6 +2338,9 @@ async function dropFiles(page: Page, specs: { name: string; type: string; bytes?
 // The accepted-types line verbatim — the four types EXTR-15-03 narrowed it to.
 const ACCEPTED_LINE = 'ACCEPTED · CSV · XLSX · PDF · DOCX'
 
+// A fragment of AI_DISCLOSURE in CreateUpload.tsx; the full sentence is pinned in CreateUpload.test.tsx.
+const AI_DISCLOSURE_FRAGMENT = 'AI provider'
+
 // kindRefusal() verbatim (lib/importRun.ts owns the copy), both directions — a run's kind
 // is whichever file landed first.
 const REFUSE_DOCUMENT_IN_SPREADSHEET_RUN =
@@ -2661,6 +2664,9 @@ test('EXTR09-E2E-04 (AC-4): the picker card fits and stays centred at every widt
 
   const acceptedLine = page.getByText(ACCEPTED_LINE, { exact: true })
   await expect(acceptedLine, 'the accepted-types line states every accepted type').toBeVisible()
+  const disclosure = page.getByTestId('ai-disclosure')
+  await expect(disclosure, 'the AI disclosure shows whenever the picker does').toBeVisible()
+  await expect(disclosure).toContainText(AI_DISCLOSURE_FRAGMENT)
 
   // The ancestor chain, self-checked: the accepted line's parent is the card's padded
   // content div, whose parent is the card, whose grandparent is the wizard column
@@ -2685,11 +2691,12 @@ test('EXTR09-E2E-04 (AC-4): the picker card fits and stays centred at every widt
   await expect(twoNoteRow, 'beside the first — the kind mismatch').toContainText(/a spreadsheet cannot be imported beside it/)
 
   const read = async () => {
-    const [cardBox, columnBox, content, accepted, rowEdges] = await Promise.all([
+    const [cardBox, columnBox, content, accepted, disclosureEdges, rowEdges] = await Promise.all([
       card.boundingBox(),
       wizardColumn.boundingBox(),
       cardBody.evaluate(edgesOf),
       acceptedLine.evaluate(edgesOf),
+      disclosure.evaluate(edgesOf),
       rows.evaluateAll((els) =>
         els.map((el) => {
           const r = el.getBoundingClientRect()
@@ -2697,7 +2704,7 @@ test('EXTR09-E2E-04 (AC-4): the picker card fits and stays centred at every widt
         }),
       ),
     ])
-    return { cardBox, columnBox, content, accepted, rowEdges }
+    return { cardBox, columnBox, content, accepted, disclosureEdges, rowEdges }
   }
 
   const measured: { width: number; gapLeft: number; gapRight: number; acceptedOverhang: number; worstRowOverhang: number }[] = []
@@ -2717,6 +2724,11 @@ test('EXTR09-E2E-04 (AC-4): the picker card fits and stays centred at every widt
       expect(m.accepted.outerLeft, `the accepted-types line must start inside the card at ${width}px`).toBeGreaterThanOrEqual(m.content.left - 0.5)
       expect(m.accepted.outerRight, `the accepted-types line must end inside the card at ${width}px`).toBeLessThanOrEqual(m.content.right + 0.5)
       expect(m.accepted.scrollWidth, `the accepted-types line's text must fit its own box at ${width}px`).toBeLessThanOrEqual(m.accepted.clientWidth + 1)
+
+      // 1b. The AI disclosure, the same three facts.
+      expect(m.disclosureEdges.outerLeft, `the AI disclosure must start inside the card at ${width}px`).toBeGreaterThanOrEqual(m.content.left - 0.5)
+      expect(m.disclosureEdges.outerRight, `the AI disclosure must end inside the card at ${width}px`).toBeLessThanOrEqual(m.content.right + 0.5)
+      expect(m.disclosureEdges.scrollWidth, `the AI disclosure's text must fit its own box at ${width}px`).toBeLessThanOrEqual(m.disclosureEdges.clientWidth + 1)
 
       // 2. Every chosen-file row, the same two facts.
       for (const [i, row] of m.rowEdges.entries()) {

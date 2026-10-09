@@ -1287,7 +1287,7 @@ func e1InvoiceState(t *testing.T, super *pgxpool.Pool, documentID string) (numbe
 	return number, status, ruleSetVersionID
 }
 
-// T20 (E1-AC1, E1-AC2): a flagged number files a draft with no gate call, and the chip's
+// T20 (E1-AC1, E1-AC2): a flagged number files a draft with one read-only Evaluate and no ValidateBatch, and the chip's
 // rename path renames it while it stays a draft.
 func TestRLS_AFlaggedInvoiceNumberImportStaysADraftThatTheChipCanRename(t *testing.T) {
 	super, app := dbTestPools(t)
@@ -1314,8 +1314,8 @@ func TestRLS_AFlaggedInvoiceNumberImportStaysADraftThatTheChipCanRename(t *testi
 	if res.RuleSetVersion != nil {
 		t.Errorf("RuleSetVersion = %v, want nil", *res.RuleSetVersion)
 	}
-	if g.validateBatchCalls != 0 || g.evaluateCalls != 0 {
-		t.Errorf("gate calls ValidateBatch/Evaluate = %d/%d, want 0/0", g.validateBatchCalls, g.evaluateCalls)
+	if g.validateBatchCalls != 0 || g.evaluateCalls != 1 {
+		t.Errorf("gate calls ValidateBatch/Evaluate = %d/%d, want 0/1", g.validateBatchCalls, g.evaluateCalls)
 	}
 	number, status, rsv := e1InvoiceState(t, super, documentID)
 	if number != "INV-E1-01" || status != string(invoice.StatusDraft) || rsv != nil {
@@ -1390,8 +1390,8 @@ func TestRLS_ADocumentImportHoldsEveryDraftWhateverTheReason(t *testing.T) {
 			if res.ReadyInvoices != 1 || res.RuleSetVersion != nil {
 				t.Errorf("ReadyInvoices = %d, RuleSetVersion = %v, want 1 and nil", res.ReadyInvoices, res.RuleSetVersion)
 			}
-			if g.validateBatchCalls != 0 || g.evaluateCalls != 0 {
-				t.Errorf("gate calls ValidateBatch/Evaluate = %d/%d, want 0/0", g.validateBatchCalls, g.evaluateCalls)
+			if g.validateBatchCalls != 0 || g.evaluateCalls != 1 {
+				t.Errorf("gate calls ValidateBatch/Evaluate = %d/%d, want 0/1", g.validateBatchCalls, g.evaluateCalls)
 			}
 			number, status, rsv := e1InvoiceState(t, super, documentID)
 			if number != want || status != string(invoice.StatusDraft) || rsv != nil {

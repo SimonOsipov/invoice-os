@@ -391,18 +391,18 @@ func eeAwaitSucceeded(t *testing.T, ctx context.Context, w eeWorld, layout strin
 	}
 }
 
-// eeGate stands in for the validate gate. ImportDocument never consults it, so a call is a
-// regression this harness should surface rather than absorb.
+// eeGate stands in for the validate gate. ImportDocument may Evaluate (read-only, finds nothing)
+// but must never ValidateBatch, so a validate call is a regression this harness surfaces.
 type eeGate struct{}
 
-var eeErrGateCalled = errors.New("ImportDocument must not consult the gate")
+var eeErrValidateCalled = errors.New("ImportDocument must not validate")
 
 func (eeGate) Evaluate(context.Context, []invoice.EvalItem) (invoice.EvalResult, error) {
-	return invoice.EvalResult{}, eeErrGateCalled
+	return invoice.EvalResult{ByRef: map[string][]invoice.Violation{}}, nil
 }
 
 func (eeGate) ValidateBatch(context.Context, []invoice.Invoice) (invoice.BatchOutcome, error) {
-	return invoice.BatchOutcome{}, eeErrGateCalled
+	return invoice.BatchOutcome{}, eeErrValidateCalled
 }
 
 // eeImport drives stage 2: the missing hop, run as the seeded member in the request-tenant

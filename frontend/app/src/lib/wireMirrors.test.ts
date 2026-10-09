@@ -669,9 +669,9 @@ describe('wire mirror: aireading.go’s aiUnavailableField <-> AI_UNAVAILABLE_FI
 // EXTR-12-02 — the reason VOCABULARY mirror.
 //
 // WIRE_MIRRORS compares key sets, so it is blind to a type alias: both copies of
-// `ExtractionReason` could name a different five strings and every row above stays green. The
+// `ExtractionReason` could name a different six strings and every row above stays green. The
 // Go const block is the source and tracks extraction_field_results_reason_code_check, so a
-// fifth code would otherwise reach a TypeScript union that silently rejects it.
+// further code would otherwise reach a TypeScript union that silently rejects it.
 
 const REASON_GO_PATH = 'internal/extraction/extractor.go'
 const REASON_SPA_PATH = 'frontend/app/src/lib/extractionReview.ts'
@@ -691,9 +691,9 @@ function tsUnionMembers(source: string, name: string): string[] {
 describe('wire mirror: extraction Reason <-> both ExtractionReason unions (EXTR-12-02)', () => {
   it('reasonMirror_extractionIsNonVacuousBeforeAnythingIsCompared', () => {
     // Zero hits must never read as agreement: [] equals [] on the row below.
-    expect(goReasonValues(repoFile(REASON_GO_PATH)), `no Reason const in ${REASON_GO_PATH}`).toHaveLength(5)
+    expect(goReasonValues(repoFile(REASON_GO_PATH)), `no Reason const in ${REASON_GO_PATH}`).toHaveLength(6)
     for (const path of [REASON_SPA_PATH, E2E_CLIENT]) {
-      expect(tsUnionMembers(repoFile(path), REASON_TS_NAME), `no ${REASON_TS_NAME} in ${path}`).toHaveLength(5)
+      expect(tsUnionMembers(repoFile(path), REASON_TS_NAME), `no ${REASON_TS_NAME} in ${path}`).toHaveLength(6)
     }
   })
 

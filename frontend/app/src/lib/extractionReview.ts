@@ -31,9 +31,9 @@ export interface ExtractionPage {
   height_px: number
 }
 
-// The four reason_code values extraction_field_results' CHECK admits, plus '' for a clean
-// field. A union, not string: the wire cannot carry a fifth code.
-export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing'
+// The reason_code values extraction_field_results' CHECK admits, plus '' for a clean
+// field. A union, not string: the wire cannot carry a code outside the CHECK.
+export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing' | 'rule_break'
 
 // internal/extraction/reader.go, ExtractionCandidate. One alternative reading; it carries no
 // name, no reason and no alternatives of its own.
@@ -128,6 +128,7 @@ const REASON_PILLS: Record<Exclude<ExtractionReason, '' | 'ambiguous'>, string> 
   unreadable: "COULDN'T READ THIS CLEARLY",
   inconsistent: "DOESN'T ADD UP",
   missing: 'NOT FOUND',
+  rule_break: 'BREAKS A RULE',
 }
 
 // Words keep the design's "TWO"; resolve.go:47 caps a field at 8 candidates, so the numeral is unreachable from a real read.

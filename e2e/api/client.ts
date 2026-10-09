@@ -1392,7 +1392,7 @@ export interface ExtractionPage {
   height_px: number
 }
 
-export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing'
+export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing' | 'rule_break'
 
 export interface ExtractionCandidate {
   value: string | null

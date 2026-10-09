@@ -1196,6 +1196,68 @@ describe('the per-field note', () => {
   })
 })
 
+describe('a rule break (ENGI-18-04)', () => {
+  // extraction.ReasonRuleBreak
+  const PILL_RULE = 'BREAKS A RULE'
+  const MSG = 'Total must equal subtotal plus VAT.'
+  const ruleField = (o: Partial<ExtractionFieldState> = {}) =>
+    mkField({ name: 'vat', value: '271,950.00', reason: 'rule_break', rules: [{ key: 'vat_sum', message: MSG }], ...o })
+  const pillsOf = (name: string) => Array.from(row(name).querySelectorAll<HTMLElement>('span.mono'))
+
+  it('renders a rule break like its inconsistent sibling', () => {
+    render(fieldsPane({ fields: [ruleField(), mkField({ name: 'total', value: '4,005,450.00', reason: 'inconsistent' })] }))
+
+    const vatPills = pillsOf('vat')
+    const totalPills = pillsOf('total')
+    expect(vatPills, 'the rule break renders one pill').toHaveLength(1)
+    expect(totalPills).toHaveLength(1)
+    expect(vatPills[0].textContent).toBe(PILL_RULE)
+    expect(vatPills[0].getAttribute('style'), 'the rule-break pill is styled apart from its sibling').toBe(
+      totalPills[0].getAttribute('style'),
+    )
+    expect(within(row('vat')).queryByText(MSG), 'the rule message is not the note').toBeTruthy()
+    expect(within(row('total')).queryByText(NOTE_GENERIC)).toBeTruthy()
+    for (const name of ['vat', 'total']) {
+      expect(inputOf(name), `${name} lost its editable input`).toBeTruthy()
+      expect(inputOf(name)!.readOnly).toBe(false)
+      expect(screen.queryByTestId(`extraction-point-${name}`)).toBeNull()
+      expect(screen.queryByTestId(`extraction-chip-${name}-0`)).toBeNull()
+    }
+  })
+
+  it('a corrected rule break stops shouting', () => {
+    render(
+      fieldsPane({
+        fields: [ruleField({ reason: '', rules: [], corrected: { method: 'typed', was: '271,950.01', where: null } })],
+      }),
+    )
+
+    expect(valueOf('vat')).toBe('271,950.00')
+    expect(within(row('vat')).queryByText(PILL_RULE)).toBeNull()
+    expect(within(row('vat')).queryByText(MSG)).toBeNull()
+    expect(screen.queryByTestId('extraction-marker-vat')).toBeTruthy()
+    expect(screen.queryByTestId('extraction-undo-vat')).toBeTruthy()
+  })
+
+  it('never renders the raw rule_break code', () => {
+    render(fieldsPane({ fields: [ruleField()] }))
+
+    expect(valueOf('vat')).toBe('271,950.00')
+    expect(pane().textContent).not.toContain('rule_break')
+  })
+
+  it('a long rule message wraps in its cell', () => {
+    const long = Array.from({ length: 43 }, (_, i) => `word${i}`).join(' ').padEnd(300, 'x')
+    expect(long).toHaveLength(300)
+    render(fieldsPane({ fields: [ruleField({ rules: [{ key: 'vat_sum', message: long }] })] }))
+
+    const note = within(row('vat')).getByText(long)
+    expect(note.style.whiteSpace, 'the note was forced onto one line').not.toBe('nowrap')
+    expect(note.style.display).toBe('block')
+    expect(note.style.fontSize).toBe('11.5px')
+  })
+})
+
 describe('a corrected field', () => {
   it('renders the marker, its label and its was-line — and drops the pill and the note', () => {
     // DELIBERATELY IMPOSSIBLE FIXTURE. The server empties `reason` on a corrected field, so a

@@ -815,10 +815,10 @@ describe('reasonPill', () => {
 
 describe('fieldNote', () => {
   it('splits the one inconsistent code three ways', () => {
-    const sum = fieldNote('inconsistent', 'subtotal')
-    const tin = fieldNote('inconsistent', 'supplier_tin')
-    const name = fieldNote('inconsistent', 'supplier_name')
-    const other = fieldNote('inconsistent', 'total')
+    const sum = fieldNote('inconsistent', 'subtotal', [])
+    const tin = fieldNote('inconsistent', 'supplier_tin', [])
+    const name = fieldNote('inconsistent', 'supplier_name', [])
+    const other = fieldNote('inconsistent', 'total', [])
 
     expect(sum).toBe('The line items we read do not add up to this subtotal.')
     expect(tin).toBe(
@@ -837,11 +837,11 @@ describe('fieldNote', () => {
     // The pane-level client-record sentence carries the same guard, for the same reason: the
     // entity match compares supplier_tin and supplier_name, and a third supplier_* field is
     // not the pair it explains. `startsWith('supplier')` passes every other row in this file.
-    expect(fieldNote('inconsistent', 'supplier_address')).toBe(
+    expect(fieldNote('inconsistent', 'supplier_address', [])).toBe(
       'This value disagrees with the other numbers on the document.',
     )
-    expect(fieldNote('inconsistent', 'supplier_address'), 'a prefix match claimed the entity sentence').not.toBe(
-      fieldNote('inconsistent', 'supplier_tin'),
+    expect(fieldNote('inconsistent', 'supplier_address', []), 'a prefix match claimed the entity sentence').not.toBe(
+      fieldNote('inconsistent', 'supplier_tin', []),
     )
   })
 
@@ -849,8 +849,28 @@ describe('fieldNote', () => {
     // Keyed on the reason FIRST. A note keyed on the NAME alone renders the subtotal sentence
     // on a clean subtotal, and passes the row above.
     for (const reason of ['', 'unreadable', 'ambiguous', 'missing'] as const) {
-      expect(fieldNote(reason, 'subtotal'), `a "${reason}" subtotal carried a note`).toBeNull()
+      expect(fieldNote(reason, 'subtotal', []), `a "${reason}" subtotal carried a note`).toBeNull()
     }
+  })
+})
+
+describe('fieldNote and rule breaks', () => {
+  const a = { key: 'a', message: 'Total must equal subtotal plus VAT.' }
+  const b = { key: 'b', message: 'VAT must be 16 percent of subtotal.' }
+
+  it('reasonPill names a rule break', () => {
+    expect(reasonPill('rule_break', 0)).toBe('BREAKS A RULE')
+  })
+
+  it('fieldNote states the rule a value breaks', () => {
+    expect(fieldNote('rule_break', 'vat', [a])).toBe(a.message)
+    expect(fieldNote('rule_break', 'vat', [a, b])).toBe(`${a.message} ${b.message}`)
+    expect(fieldNote('rule_break', 'vat', [])).toBeNull()
+  })
+
+  it('fieldNote ignores rules for every other reason', () => {
+    expect(fieldNote('inconsistent', 'subtotal', [a])).toBe('The line items we read do not add up to this subtotal.')
+    expect(fieldNote('', 'vat', [a])).toBeNull()
   })
 })
 

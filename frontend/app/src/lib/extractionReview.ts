@@ -179,7 +179,8 @@ export function reasonPill(reason: ExtractionReason, candidateCount: number): st
 }
 
 /** Keyed on the reason first: a clean subtotal carries no note. */
-export function fieldNote(reason: ExtractionReason, name: string): string | null {
+export function fieldNote(reason: ExtractionReason, name: string, rules: ExtractionRuleBreak[]): string | null {
+  if (reason === 'rule_break') return rules.length === 0 ? null : rules.map((r) => r.message).join(' ')
   if (reason !== 'inconsistent') return null
   if (name === 'subtotal') return NOTE_SUBTOTAL
   return SUPPLIER_MISMATCH_FIELDS.includes(name) ? NOTE_SUPPLIER : NOTE_GENERIC

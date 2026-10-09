@@ -76,7 +76,7 @@ func goTrueAnswering(t *testing.T, body string) *url.URL {
 func TestRegistrationHandlers_VerifyHandsOffToTheSink(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	sink := newChanSink()
-	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, slog.New(slog.DiscardHandler), sink)
+	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, slog.New(slog.DiscardHandler), sink, noPendingInvite)
 
 	rec := serveForm(reg.Verify, "/auth/verify", "token=tok&type=signup")
 
@@ -214,7 +214,7 @@ func TestDemoRequest_ForwardedBodyPassesNotificationsIntake(t *testing.T) {
 	base, _ := url.Parse(srv.URL)
 	sink := gateway.NewHTTPContactSink(base, &http.Client{Timeout: 5 * time.Second}, token)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, log, sink)
+	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, log, sink, noPendingInvite)
 
 	const extras = `"user_id":"` + cwUserID + `","marketing_consent":{"text":"forged","at":"2026-01-01T00:00:00Z"},"demo_requested_at":"2026-01-01T00:00:00Z","tags":["registered"],"version":9`
 	for _, tc := range []struct {
@@ -280,7 +280,7 @@ func TestDemoRequest_ForwardedBodyPassesNotificationsIntake(t *testing.T) {
 // The demo route needs neither GoTrue nor the site URL, so an unconfigured registration does not close it.
 func TestRegistrationHandlers_DemoRequestWorksWithoutAuthConfig(t *testing.T) {
 	sink := &demoRecSink{}
-	reg := registrationHandlers(nil, nil, 0, slog.New(slog.DiscardHandler), sink)
+	reg := registrationHandlers(nil, nil, 0, slog.New(slog.DiscardHandler), sink, noPendingInvite)
 
 	ctl := httptest.NewRecorder()
 	reg.Register.ServeHTTP(ctl, httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(`{}`)))

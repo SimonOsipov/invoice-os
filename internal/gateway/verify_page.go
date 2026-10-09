@@ -28,7 +28,7 @@ addEventListener('pageshow', function () { delete f.dataset.sent })`
 //go:embed verify_page.html
 var verifyPageHTML string
 
-// VerifyPageHandler serves the confirm page; it holds no GoTrue client, so opening the link spends nothing.
+// VerifyPageHandler serves the confirm page, or the set-password page for an invite link; it holds no GoTrue client, so opening the link spends nothing.
 func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 	if siteURL == nil {
 		return RegistrationNotConfigured(), nil
@@ -36,7 +36,7 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 	sum := sha256.Sum256([]byte(verifyScript))
 	csp := "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'sha256-" +
 		base64.StdEncoding.EncodeToString(sum[:]) + "'; base-uri 'none'; frame-ancestors 'none'"
-	failed := strings.TrimSuffix(siteURL.String(), "/") + "/?verify=failed"
+	failed := verifyFailedURL(siteURL)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -46,6 +46,10 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			h.Set("Allow", "GET, HEAD")
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if inv := r.URL.Query()["invite"]; len(inv) == 1 && inv[0] == "1" {
+			serveInvitationPasswordPage(w, r, failed)
 			return
 		}
 		// redirect_to and every other query value are ignored, never rendered.

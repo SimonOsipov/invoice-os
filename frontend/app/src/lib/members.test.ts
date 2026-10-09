@@ -33,6 +33,7 @@ import {
   INVITE_ERROR,
   invitedMember,
   inviteSentNotice,
+  inviteAccountLine,
   inviteStatusLine,
   isFiltering,
   isProtectedAdmin,
@@ -1601,6 +1602,29 @@ describe('RESEND-07-02 — the pending-invite projection and reducers', () => {
     ).toEqual({ id: 'i-8', email: 'y@x.ng', role: 'admin', expiresAt: '', delivery: 'failed' })
   })
 
+  it('toPendingInvite maps the account state', () => {
+    const w = (account?: string) =>
+      toPendingInvite({ id: 'i-9', email: 'z@x.ng', role: 'reviewer', status: 'pending', expires_at: '', delivery: 'sent', ...(account === undefined ? {} : { account }) })
+    expect(['none', 'unconfirmed', 'confirmed', 'bogus', ''].map((a) => w(a).account)).toEqual(['none', 'unconfirmed', 'confirmed', 'unknown', 'unknown'])
+    expect(w().account).toBeUndefined()
+    expect('account' in w()).toBe(false)
+  })
+
+  it('inviteAccountLine names the two account states', () => {
+    expect(inviteAccountLine(invite({ account: 'unconfirmed' }))).toBe('Account created, email not confirmed')
+    expect(inviteAccountLine(invite({ account: 'confirmed' }))).toBe('Confirmed, not joined')
+    for (const account of ['none', 'unknown', undefined] as const) expect(inviteAccountLine(invite({ account }))).toBeNull()
+  })
+
+  it('upsertInvites keeps a listed state across a resend', () => {
+    const listed = invite({ id: 'i1', account: 'confirmed', expiresAt: 'A' })
+    expect(upsertInvites([listed], [invite({ id: 'i1', expiresAt: 'B' })])).toEqual([invite({ id: 'i1', account: 'confirmed', expiresAt: 'B' })])
+    expect(upsertInvites([listed], [invite({ id: 'i1', account: 'unconfirmed' })])[0].account).toBe('unconfirmed')
+    const appended = upsertInvites([listed], [invite({ id: 'i2' })])[1]
+    expect(appended.id).toBe('i2')
+    expect('account' in appended).toBe(false)
+  })
+
   it('upsertInvites replaces by id and appends new ids', () => {
     const A = invite({ id: 'A', email: 'a@x.ng' })
     const B = invite({ id: 'B', email: 'b@x.ng' })
@@ -1848,24 +1872,30 @@ describe('RESEND-07-02 — inviteStatusLine (D7)', () => {
   const at = (offsetMs: number, over: Partial<PendingInvite> = {}) =>
     invite({ expiresAt: new Date(NOW + offsetMs).toISOString(), ...over })
 
-  it('inviteStatusLine counts whole days with an hour of slack', () => {
+  const SLACK = 30 * 60 * SEC
+
+  it('inviteStatusLine reads a new invite as 7 days', () => {
+    expect(inviteStatusLine(at(7 * DAY), NOW)).toBe('Expires in 7 days')
     expect(inviteStatusLine(at(7 * DAY - SEC), NOW)).toBe('Expires in 7 days')
-    expect(inviteStatusLine(at(DAY), NOW)).toBe('Expires in 1 day')
-    expect(inviteStatusLine(at(30 * 60 * SEC), NOW)).toBe('Expires in 1 day')
+    expect(inviteStatusLine(at(7 * DAY - SLACK), NOW)).toBe('Expires in 7 days')
+  })
+
+  it('inviteStatusLine reads 6 days 23 hours as 6 days', () => {
+    expect(inviteStatusLine(at(6 * DAY + 23 * HOUR), NOW)).toBe('Expires in 6 days')
+    expect(inviteStatusLine(at(7 * DAY - SLACK - 1), NOW)).toBe('Expires in 6 days')
   })
 
   it('inviteStatusLine absorbs a browser clock behind the server', () => {
-    expect(inviteStatusLine(at(7 * DAY + 30 * SEC), NOW)).toBe('Expires in 7 days')
-    expect(inviteStatusLine(at(7 * DAY + 59 * 60 * SEC), NOW)).toBe('Expires in 7 days')
     expect(inviteStatusLine(at(7 * DAY + HOUR), NOW)).toBe('Expires in 7 days')
-    expect(inviteStatusLine(at(7 * DAY + HOUR + 60 * SEC), NOW)).toBe('Expires in 8 days')
+    expect(inviteStatusLine(at(8 * DAY - SLACK - 1), NOW)).toBe('Expires in 7 days')
+    expect(inviteStatusLine(at(8 * DAY - SLACK), NOW)).toBe('Expires in 8 days')
   })
 
-  it('inviteStatusLine steps one day at each hour-of-slack boundary', () => {
-    expect(inviteStatusLine(at(DAY + HOUR), NOW)).toBe('Expires in 1 day')
-    expect(inviteStatusLine(at(DAY + HOUR + 1), NOW)).toBe('Expires in 2 days')
-    expect(inviteStatusLine(at(3 * DAY + 5 * HOUR), NOW)).toBe('Expires in 4 days')
-    expect(inviteStatusLine(at(30 * DAY), NOW)).toBe('Expires in 30 days')
+  it('inviteStatusLine never reads below 1 day', () => {
+    for (const remaining of [1, SLACK, DAY, 2 * DAY - SLACK - 1]) {
+      expect(inviteStatusLine(at(remaining), NOW), `${remaining} ms left`).toBe('Expires in 1 day')
+    }
+    expect(inviteStatusLine(at(2 * DAY - SLACK), NOW)).toBe('Expires in 2 days')
   })
 
   it("inviteStatusLine reads the server's RFC 3339 timestamps", () => {
@@ -1874,8 +1904,7 @@ describe('RESEND-07-02 — inviteStatusLine (D7)', () => {
 
     expect(inviteStatusLine(expiresAt('2026-10-13T10:00:00.123456789Z'), now)).toBe('Expires in 7 days')
     expect(inviteStatusLine(expiresAt('2026-10-13T11:00:00+01:00'), now)).toBe('Expires in 7 days')
-    expect(inviteStatusLine(expiresAt('2026-10-06T10:59:59.999999Z'), now)).toBe('Expires in 1 day')
-    expect(inviteStatusLine(expiresAt('2026-10-06T10:00:00.001Z'), now)).toBe('Expires in 1 day')
+    expect(inviteStatusLine(expiresAt('2026-10-13T09:00:00Z'), now)).toBe('Expires in 6 days')
   })
 
   it('inviteStatusLine reads Expired at and after the instant', () => {

@@ -79,6 +79,7 @@ type inviteWorld struct {
 	gw, base, email, token, tenant string
 	store                          *tenancy.Store
 	resend                         *resendStandIn
+	adminCtx                       context.Context
 }
 
 // newInviteWorld seeds "IdP Invite Co" with an active admin, has the admin invite a fresh gmail.com address
@@ -109,6 +110,7 @@ func newInviteWorld(t *testing.T, prefix string) inviteWorld {
 
 	inviter := &tenancy.Inviter{Store: store, Sender: accountmail.NewResend(w.resend.URL, "k_test", nil), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	adminCtx := auth.WithIdentity(ctx, auth.Identity{Subject: admin, Role: "authenticated", TenantID: w.tenant})
+	w.adminCtx = adminCtx
 	if res, err := inviter.Invite(adminCtx, []string{w.email}, "reviewer"); err != nil || len(res) != 1 || res[0].Delivery != "sent" {
 		t.Fatalf("invite %s: %+v, err %v; want one sent", w.email, res, err)
 	}

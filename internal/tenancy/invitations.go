@@ -21,14 +21,16 @@ const maxInviteMailsPerDay = 20
 
 // Invitation is one pending-invite row of GET /v1/invitations.
 type Invitation struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Role      string    `json:"role"`
-	Status    string    `json:"status"`
-	ExpiresAt time.Time `json:"expires_at"`
-	CreatedAt time.Time `json:"created_at"`
-	InvitedBy string    `json:"invited_by"`
-	Delivery  string    `json:"delivery"`
+	ID         string    `json:"id"`
+	Email      string    `json:"email"`
+	Role       string    `json:"role"`
+	Status     string    `json:"status"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	CreatedAt  time.Time `json:"created_at"`
+	InvitedBy  string    `json:"invited_by"`
+	Delivery   string    `json:"delivery"`
+	Account    string    `json:"account"` // none, unconfirmed, confirmed or unknown
+	accountErr error
 }
 
 // IssuedInvite is one freshly minted invite. Token exists only here, for the mail.

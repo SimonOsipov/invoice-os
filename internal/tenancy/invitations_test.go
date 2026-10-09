@@ -1076,8 +1076,8 @@ func TestInvitations_ListShowsThisTenantsPendingInvites(t *testing.T) {
 	for i, wr := range want {
 		g := got[i]
 		if g.ID != wr.ID || g.Email != wr.Email || g.Role != wr.Role || g.Status != "pending" ||
-			g.InvitedBy != w.admin || g.Delivery != wr.SendStatus {
-			t.Errorf("row %d = %+v, want id %s email %s role %s delivery %s invited_by %s", i, g, wr.ID, wr.Email, wr.Role, wr.SendStatus, w.admin)
+			g.InvitedBy != w.admin || g.Delivery != wr.SendStatus || (g.Account != "none" && g.Account != "unknown") {
+			t.Errorf("row %d = %+v, want id %s email %s role %s delivery %s invited_by %s account none or unknown", i, g, wr.ID, wr.Email, wr.Role, wr.SendStatus, w.admin)
 		}
 		near(t, fmt.Sprintf("row %d expires_at", i), g.ExpiresAt, wr.Expires, time.Second)
 		if g.CreatedAt.IsZero() {

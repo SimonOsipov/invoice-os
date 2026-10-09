@@ -1,12 +1,15 @@
 package tenancy
 
 import (
+	"go/ast"
+	"go/parser"
 	"go/scanner"
 	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -80,6 +83,56 @@ func TestInviteeAccountStateCalledOnlyByTheStore(t *testing.T) {
 	t.Run("control needle", func(t *testing.T) {
 		if sites[stateCaller] != 1 {
 			t.Errorf("%d invitee_account_state( calls in %s, want exactly 1", sites[stateCaller], stateCaller)
+		}
+	})
+	t.Run("only PreviewInvitation and ListInvitations call accountState", func(t *testing.T) {
+		files, err := filepath.Glob("*.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parsed int
+		var sawStore bool
+		calls := map[string]int{} // enclosing func -> calls of accountState
+		for _, f := range files {
+			if strings.HasSuffix(f, "_test.go") {
+				continue
+			}
+			parsed++
+			sawStore = sawStore || f == "store.go"
+			file, err := parser.ParseFile(token.NewFileSet(), f, nil, 0) // mode 0: comments dropped
+			if err != nil {
+				t.Fatalf("parse %s: %v", f, err)
+			}
+			for _, decl := range file.Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok {
+					continue
+				}
+				ast.Inspect(fd, func(n ast.Node) bool {
+					if c, ok := n.(*ast.CallExpr); ok {
+						if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "accountState" {
+							calls[f+":"+fd.Name.Name]++
+						}
+					}
+					return true
+				})
+			}
+		}
+		if parsed == 0 || !sawStore {
+			t.Fatalf("parsed %d non-test files, store.go seen %v; the glob misses the package", parsed, sawStore)
+		}
+		var total int
+		var sites []string
+		for site, n := range calls {
+			total += n
+			sites = append(sites, site)
+			if fn := site[strings.LastIndex(site, ":")+1:]; fn != "PreviewInvitation" && fn != "ListInvitations" {
+				t.Errorf("%s calls accountState %d time(s); only PreviewInvitation and ListInvitations may", site, n)
+			}
+		}
+		sort.Strings(sites)
+		if total != 2 || len(sites) != 2 {
+			t.Errorf("accountState is called %d time(s) from %v, want exactly 2 (PreviewInvitation, ListInvitations)", total, sites)
 		}
 	})
 }

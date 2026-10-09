@@ -191,6 +191,9 @@ func TestVerify_CaseVariantClaimKeysAreIgnored(t *testing.T) {
 		{`{"staff":true,"RULES_ROLE":true}`, true, false, "", "rules_role variant beside an exact staff"},
 		{`{"Tenant_ID":"t-x"}`, false, false, "", "tenant_id variant"},
 		{`{"TENANT_ID":"t-x","staff":true}`, true, false, "", "tenant_id variant beside an exact staff"},
+		{"{\"\u017ftaff\":true,\"rule\u017f_role\":true}", false, false, "", "long-s folds of staff and rules_role"},
+		{`{"staff ":true,"rules_role ":true,"tenant_id ":"t-x"}`, false, false, "", "trailing-space keys"},
+		{`{" staff":true,"tenant_id":"t-1"}`, false, false, "t-1", "leading-space staff beside an exact tenant_id"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -239,6 +242,62 @@ func TestVerify_ExactKeyWinsBesideACaseVariant(t *testing.T) {
 		if staff, _ := flagsOf(t, id); staff != c.wantStaff {
 			t.Errorf("%s: Staff = %v, want %v", c.appMeta, staff, c.wantStaff)
 		}
+	}
+}
+
+func TestVerify_NonStringTenantIDIsRefused(t *testing.T) {
+	if id, err := verifyAppMeta(t, `{"tenant_id":"t-1"}`); err != nil || id.TenantID != "t-1" {
+		t.Fatalf("control: string tenant_id = %+v, %v", id, err)
+	}
+	for _, appMeta := range []string{`{"tenant_id":1}`, `{"tenant_id":true}`, `{"tenant_id":{}}`, `{"tenant_id":["t-1"]}`} {
+		t.Run(appMeta, func(t *testing.T) {
+			id, err := verifyAppMeta(t, appMeta)
+			if err == nil {
+				t.Fatalf("Verify accepted %s as %+v, want an error", appMeta, id)
+			}
+			if !errors.Is(err, ErrUnauthorized) {
+				t.Errorf("error %v does not wrap ErrUnauthorized", err)
+			}
+		})
+	}
+}
+
+// app_metadata shapes as at head: absent and null verify tenantless; a non-object is refused.
+func TestVerify_AppMetadataShapesBehaveAsBefore(t *testing.T) {
+	iss := mustIssuer(t)
+	v, _ := jwksServer(t, iss)
+	exp := time.Now().Add(time.Hour).Unix()
+	head := fmt.Sprintf(`"iss":%q,"sub":%q,"aud":"authenticated","exp":%d,"role":"authenticated"`, testIssuer, testSubject, exp)
+	for _, c := range []struct {
+		name, payload string
+		ok            bool
+	}{
+		{"absent", `{` + head + `}`, true},
+		{"null", `{` + head + `,"app_metadata":null}`, true},
+		{"empty object", `{` + head + `,"app_metadata":{}}`, true},
+		{"string", `{` + head + `,"app_metadata":"staff"}`, false},
+		{"array", `{` + head + `,"app_metadata":[{"staff":true}]}`, false},
+		{"number", `{` + head + `,"app_metadata":1}`, false},
+		{"true", `{` + head + `,"app_metadata":true}`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			id, err := v.Verify(context.Background(), signRawPayload(t, iss, c.payload))
+			if c.ok {
+				if err != nil {
+					t.Fatalf("Verify: %v", err)
+				}
+				if want := (Identity{Subject: testSubject, Role: "authenticated"}); id != want {
+					t.Errorf("identity = %+v, want %+v", id, want)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Verify accepted app_metadata shape as %+v, want an error", id)
+			}
+			if !errors.Is(err, ErrUnauthorized) {
+				t.Errorf("error %v does not wrap ErrUnauthorized", err)
+			}
+		})
 	}
 }
 

@@ -514,6 +514,18 @@ describe('the resend control on the unverified sign-in error', () => {
     expect(callsTo(fetchMock, '/auth/sign-in'), 'the resend is not a sign-in').toHaveLength(1)
   })
 
+  it('the resend shows the hedged notice whatever the answer body says', async () => {
+    configure()
+    const fetchMock = routedFetch({ signIn: [refuse(403)], resend: [() => jsonResponse(200, { status: 'held' })] })
+    await mountForm(STATE)
+    await signInAs(ADA)
+
+    await click(resendButton())
+
+    expect(callsTo(fetchMock, '/auth/resend-verification')).toHaveLength(1)
+    expect(statusNotes()).toEqual([sent(ADA)])
+  })
+
   it('the resend button is disabled while sending', async () => {
     configure()
     let release!: (r: Response) => void

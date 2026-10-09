@@ -39,6 +39,18 @@ export async function registerInvitee(token: string, password: string): Promise<
   await apiFetch<unknown>(`${base()}/auth/invitation/register`, { method: 'POST', body: { token, password } })
 }
 
+export type ResendOutcome = 'sent' | 'held' | 'maybe'
+
+// internal/gateway/invitation.go: the InvitationResendHandler 200 statuses.
+export async function resendInvitee(token: string): Promise<ResendOutcome> {
+  const res = await apiFetch<{ status?: unknown }>(`${base()}/auth/invitation/resend`, { method: 'POST', body: { token } })
+  if (res?.status === 'sent' || res?.status === 'held' || res?.status === 'maybe') return res.status
+  throw new ApiError('malformed', 'unexpected resend answer')
+}
+
+export const inviteResendSent = (email: string) => `A new link is on its way to ${email}. Use the newest one.`
+export const inviteResendHeld = (email: string) => `We just sent a link to ${email}. Check your inbox, or try again in a minute.`
+
 export function inviteSignInUrl(token: string | null): string | null {
   const app = appBase()
   return app && token ? `${app}?auth=start#invite=${token}` : null

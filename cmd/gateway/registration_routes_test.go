@@ -160,7 +160,7 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 
 	// The seam: reg := registrationHandlers(probed["auth"], ...) and withCORS := gateway.CORS(...), both top-level.
 	recv, hand, corsLocal := "", "", false
-	invPreview, invRegister := "", ""
+	invPreview, invRegister, invResend := "", "", ""
 	for _, s := range stmts {
 		as, ok := s.(*ast.AssignStmt)
 		if !ok || len(as.Rhs) != 1 {
@@ -187,6 +187,8 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 			recv = types.ExprString(as.Lhs[0])
 		case "handoffHandlers":
 			hand = types.ExprString(as.Lhs[0])
+		case "invitationResendHandler":
+			invResend = types.ExprString(as.Lhs[0])
 		}
 	}
 	if hand == "" {
@@ -197,6 +199,9 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 	}
 	if !corsLocal {
 		t.Fatal("main has no top-level `withCORS := gateway.CORS(...)`; the register wrap names nothing")
+	}
+	if invResend == "" {
+		t.Fatal("main has no top-level `x := invitationResendHandler(...)`; the resend routes name nothing")
 	}
 	if invPreview == "" || invRegister == "" {
 		t.Fatal("main has no top-level `preview, register := invitationHandlers(...)`; the invitation routes name nothing")
@@ -260,6 +265,8 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"OPTIONS /auth/invitation":          "withCORS(" + invPreview + ")",
 		"POST /auth/invitation/register":    "withCORS(" + invRegister + ")",
 		"OPTIONS /auth/invitation/register": "withCORS(" + invRegister + ")",
+		"POST /auth/invitation/resend":      "withCORS(" + invResend + ")",
+		"OPTIONS /auth/invitation/resend":   "withCORS(" + invResend + ")",
 	} {
 		s := sitesFor(sites, pattern)
 		if len(s) != 1 {
@@ -271,6 +278,55 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		}
 		if s[0].handler != want {
 			t.Errorf("%s handler = %s, want %s", pattern, s[0].handler, want)
+		}
+	}
+}
+
+// The resend route is built once from the shared resend budgets and the invite previewer, and both its methods share that handler.
+func TestInvitationResendRoutesAreMountedOnce(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	sites, stmts := mainRoutes(t, src)
+
+	regVar, previewerVar, resendVar := "", "", ""
+	var resendCalls []*ast.CallExpr
+	for _, s := range stmts {
+		as, ok := s.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 || len(as.Lhs) != 1 {
+			continue
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		switch types.ExprString(call.Fun) {
+		case "registrationHandlers":
+			regVar = types.ExprString(as.Lhs[0])
+		case "gateway.NewHTTPInvitationPreviewer":
+			previewerVar = types.ExprString(as.Lhs[0])
+		case "invitationResendHandler":
+			resendVar = types.ExprString(as.Lhs[0])
+			resendCalls = append(resendCalls, call)
+		}
+	}
+	if len(resendCalls) != 1 || regVar == "" || previewerVar == "" {
+		t.Fatalf("main has %d top-level `x := invitationResendHandler(...)` calls (want 1), registrationHandlers var %q, previewer var %q", len(resendCalls), regVar, previewerVar)
+	}
+	want := []string{`probed["auth"]`, "siteURL", regVar + ".ResendByAddress", regVar + ".ResendByIP", previewerVar, "app.Logger"}
+	var got []string
+	for _, a := range resendCalls[0].Args {
+		got = append(got, types.ExprString(a))
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("invitationResendHandler args = %v, want %v", got, want)
+	}
+
+	for _, pattern := range []string{"POST /auth/invitation/resend", "OPTIONS /auth/invitation/resend"} {
+		s := sitesFor(sites, pattern)
+		if len(s) != 1 || !s[0].topLevel || s[0].handler != "withCORS("+resendVar+")" {
+			t.Errorf("%s = %+v, want one top-level registration of withCORS(%s)", pattern, s, resendVar)
 		}
 	}
 }

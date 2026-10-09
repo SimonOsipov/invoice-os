@@ -29,7 +29,7 @@ const inviteNotValid = "this invite is no longer valid"
 
 var inviteTokenRe = regexp.MustCompile(`https://www\.ascomply\.com/invite#token=([A-Za-z0-9_-]+)`)
 
-// startInviteGateway serves startGateway's routes plus the invite preview and invitee registration.
+// startInviteGateway serves startGateway's routes plus the invite preview, invitee registration and token resend.
 func startInviteGateway(t *testing.T, authBase string, preview gateway.InvitationPreviewer) string {
 	t.Helper()
 	authURL, err := url.Parse(authBase)
@@ -41,6 +41,9 @@ func startInviteGateway(t *testing.T, authBase string, preview gateway.Invitatio
 	limit := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
 	mux.Handle("POST /auth/invitation", gateway.InvitationHandler(preview, log))
 	mux.Handle("POST /auth/invitation/register", gateway.InvitationRegisterHandler(authURL, noRedirect, 0, limit, true, log, preview))
+	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	mux.Handle("POST /auth/invitation/resend", gateway.InvitationResendHandler(authURL, noRedirect, perAddress, perIP, true, log, preview))
 	return serveGateway(t, mux)
 }
 

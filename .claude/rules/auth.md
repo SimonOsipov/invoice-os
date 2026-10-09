@@ -57,8 +57,14 @@ paths:
 - Answer `POST /auth/invitation` with `account` set to `none`, `unconfirmed`, `confirmed` or `unknown`. Map any other tenancy value to `unknown`.
 - Answer `/auth/invitation/register` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_unconfirmed` when it reads `unconfirmed`. Send both at once, before the GoTrue call.
 - Map GoTrue's 200 with empty `identities`, 422 `user_already_exists` and 422 `email_exists` to 409 `account_exists` on `/auth/invitation/register` only.
-- Answer a resend or reset request with the same 202 for every outcome after the 400 checks.
-- Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks.
+- Answer a resend or reset request with the same 202 for every outcome after the 400 checks. `/auth/invitation/resend` is the exception (next rule).
+- Answer `POST /auth/invitation/resend` for a live token with 200 `sent` when GoTrue mailed.
+- Answer it with 200 `held` on GoTrue's 60 s cooldown 429.
+- Answer it with 200 `maybe` when the account state is `unknown`.
+- Answer 502 `invitation resend is unavailable` for any other GoTrue failure.
+- Answer `/auth/invitation/resend` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_missing` when it reads `none`. Send both before the GoTrue call.
+- Spend the resend per-address and per-IP budgets on `/auth/invitation/resend` and refund a GoTrue 4xx.
+- Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks. `/auth/invitation/resend` does not wait.
 - Spend one shared budget on resend and password-reset requests.
 - Log no email address, password, token, code or client IP.
 - Read the confirm token and the `state` from the POST form body only. The GET page makes no GoTrue call.

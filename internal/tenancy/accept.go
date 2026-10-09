@@ -20,6 +20,19 @@ type InvitationPreview struct {
 	accountErr error // set with Account "unknown"; the handler logs its SQLSTATE
 }
 
+// logAccountStateErr warns with the SQLSTATE of a failed state read, never the address.
+func logAccountStateErr(ctx context.Context, log *slog.Logger, err error) {
+	if err == nil {
+		return
+	}
+	state := "unknown"
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		state = pgErr.Code
+	}
+	log.WarnContext(ctx, "tenancy: invitee account state unavailable", slog.String("sqlstate", state))
+}
+
 // InvitationPreviewFunc looks up a live invite by token.
 type InvitationPreviewFunc func(ctx context.Context, token string) (InvitationPreview, error)
 
@@ -73,14 +86,7 @@ func InvitationPreviewHandler(preview InvitationPreviewFunc, log *slog.Logger) h
 			writeError(w, status, msg)
 			return
 		}
-		if p.accountErr != nil {
-			state := "unknown"
-			var pgErr *pgconn.PgError
-			if errors.As(p.accountErr, &pgErr) {
-				state = pgErr.Code
-			}
-			log.WarnContext(r.Context(), "tenancy: invitee account state unavailable", slog.String("sqlstate", state))
-		}
+		logAccountStateErr(r.Context(), log, p.accountErr)
 		writeJSON(w, http.StatusOK, p)
 	}
 }

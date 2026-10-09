@@ -30,7 +30,7 @@ type Invitation struct {
 	InvitedBy  string    `json:"invited_by"`
 	Delivery   string    `json:"delivery"`
 	Account    string    `json:"account"` // none, unconfirmed, confirmed or unknown
-	accountErr error
+	accountErr error     // set with Account "unknown"; the handler logs its SQLSTATE
 }
 
 // IssuedInvite is one freshly minted invite. Token exists only here, for the mail.
@@ -251,7 +251,14 @@ func (s *Store) ListInvitations(ctx context.Context) ([]Invitation, error) {
 			}
 			out = append(out, i)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close() // the connection is busy until the rows are closed
+		for i := range out {
+			out[i].Account, out[i].accountErr = accountState(ctx, tx, out[i].Email)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

@@ -33,7 +33,7 @@ paths:
 - Treat an ungated flow as a page fact. Fonts and error reports load whatever the visitor chooses about analytics.
 - Scope each analytics sentence to the landing and the Feature Library, never to the landing alone.
 - Say that the Library asks for the analytics choice itself and keeps its answer apart from the landing's.
-- Describe the Library's `asc_consent` as the same record on its own origin. No other code reads it.
+- Name `asc_consent` in one paragraph only, the cookie-notice paragraph. Leave it out of the Library paragraph.
 - List what the Library sends Google: each page viewed, Book the Demo, the tour start and Open in Platform.
 - Say that Open in Platform carries the feature or group. It is a content id, never visitor input.
 - Say that Reject on the Library deletes its own `_ga` cookies only. Google's script can re-create them until reload.

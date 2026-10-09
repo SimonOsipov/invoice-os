@@ -26,7 +26,7 @@ paths:
 - Expect specs to leave rows in `auth.users`, `staff_members`, `tenants` and `memberships`. Every run registers a fresh address, so this is harmless.
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
 - Treat the `app` SPA and the landing sign-in form as the only places a browser test proves the stack. The consoles hold mock data.
-- Test the `library` SPA for render only. It is static content with no backend.
+- Test the `library` SPA for render and consent only. It is static content with no backend.
 - Cover the library consent notice, the stored answer, the privacy link and the production-host-only tag in `e2e/smoke/library-consent.spec.ts`.
 - Never publish a policy in a topology spec. A topology spec may restore the tenant's own seeded policy through `ensureFirmPolicyActive`.
 - Put the UI-driven approve and reject journey in `e2e/api/contract-invoice.spec.ts`, not in a topology spec.

@@ -3,20 +3,21 @@
 // grid decides without a DOM lives here, so it has an oracle without one.
 
 import type { ExtractionCandidate, ExtractionFieldState, ExtractionRegion, ExtractionReason } from './extractionReview'
+import { INVOICE_FIELDS, type LineWireRole } from './invoiceFields'
 import { addScaled, mulScaled, parseScaled, renderScaled, type Scaled } from './invoices'
 
-export type LineRole = 'description' | 'quantity' | 'unit_price' | 'line_total'
+export type { LineWireRole }
 
-// The fifth wire role, per-line VAT: read and carried, never rendered as a grid column
-// ([vat-carried-not-rendered]) -- 'vat' is taken by the invoice-level header field.
-export type LineWireRole = LineRole | 'line_tax'
+// line_tax is read and carried, never a grid column ([vat-carried-not-rendered]).
+export type LineRole = Exclude<LineWireRole, 'line_tax'>
 
-// The rendered grid columns: extraction.LineRoles' first four, in its order. A prefix of the
-// wire set below, not a mirror of it.
+// The grid's columns: a literal, since the column choice is the grid's, not the field list's.
 export const LINE_ROLES: readonly LineRole[] = ['description', 'quantity', 'unit_price', 'line_total']
 
-// Mirrors extraction.LineRoles order (lineitems.go): every wire role, line_tax last.
-export const LINE_WIRE_ROLES: readonly LineWireRole[] = ['description', 'quantity', 'unit_price', 'line_total', 'line_tax']
+// Every extracted line role, from the shared field list.
+export const LINE_WIRE_ROLES: readonly LineWireRole[] = INVOICE_FIELDS.filter((f) => f.line && f.extract).map(
+  (f) => f.key as LineWireRole,
+)
 
 // reconcile.go's reconcileTolerance, pinned to the Go literal by a source-reading spec.
 export const LINE_TOLERANCE = '0.01'

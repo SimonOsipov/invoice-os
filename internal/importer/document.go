@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
+	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -98,20 +99,12 @@ func (s *Store) SettledExtraction(ctx context.Context, documentID string) (Settl
 	return ex, nil
 }
 
-// mapperFieldNames is internal/importer's own copy of extraction.HeaderFields, in the same
-// order -- internal/importer cannot import internal/extraction (document_deps_test.go /
-// SX-09), so nothing compiler-links the two lists; TestDocumentCreateInput_
-// MapperFieldNamesMatchesHeaderFieldsInOrder (MAP-11) is the drift guard.
-var mapperFieldNames = []string{
-	"invoice_number", "issue_date", "supplier_tin", "supplier_name",
-	"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
-}
+// mapperFieldNames is the extraction header keys of internal/invoicefields (importer cannot
+// import internal/extraction).
+var mapperFieldNames = invoicefields.ExtractHeaderKeys()
 
-// mapperLineRoles is internal/importer's own copy of extraction.LineRoles, in the same order --
-// internal/importer cannot import internal/extraction (document_deps_test.go / SX-09), so
-// nothing compiler-links the two lists; TestImporterLineRoles_MatchesExtractionLineRoles is the
-// drift guard.
-var mapperLineRoles = []string{"description", "quantity", "unit_price", "line_total", "line_tax"}
+// mapperLineRoles is the extraction line keys of internal/invoicefields.
+var mapperLineRoles = invoicefields.ExtractLineKeys()
 
 // lineFieldPrefix is line_items[N].<role>'s opening.
 const lineFieldPrefix = "line_items["

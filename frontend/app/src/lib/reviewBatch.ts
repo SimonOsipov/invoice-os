@@ -30,6 +30,7 @@
 // type-level half of cashing 06's un-cashed review-route safety argument (constructing a
 // review request without a batch id is a compile error).
 import {
+  EDIT_FIELD_KEYS,
   invoiceStatusStyle,
   mbsPathToEditField,
   pruneSelection,
@@ -44,6 +45,7 @@ import {
   type RuleCount,
 } from './invoices'
 import { classifyPickedFile } from './importFlow'
+import { labelOf } from './invoiceFields'
 import { severityStyle, type Severity, type Violation } from './validationApi'
 import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from './importApi'
 import { reportSummary } from './importReport'
@@ -1193,17 +1195,9 @@ export function fixCard(v: Violation): FixCard {
 // whichever of the 19 rules happens to flag that field and is not the client rule-key map
 // D8 forbids. Kept here rather than duplicated per-card inline, per this file's own
 // [bulk-copy-lives-in-the-lib] convention (see the INVCR-01-11 section header above).
-export const EDIT_FIELD_LABELS: Record<EditFieldKey, string> = {
-  issue_date: 'Issue date',
-  supplier_tin: 'Supplier TIN',
-  supplier_name: 'Supplier name',
-  buyer_tin: 'Buyer TIN',
-  buyer_name: 'Buyer name',
-  currency: 'Currency',
-  subtotal: 'Subtotal',
-  vat: 'VAT',
-  total: 'Total',
-}
+export const EDIT_FIELD_LABELS = Object.fromEntries(
+  EDIT_FIELD_KEYS.map((k) => [k, labelOf(k)]),
+) as Record<EditFieldKey, string>
 
 // §7.3's exact provenance/scope copy (AC-7), verbatim.
 export const ROW_EXPANSION_NOTE = 'Re-validating touches this invoice only — the rest of the import stays as it is.'

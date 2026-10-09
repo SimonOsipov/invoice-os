@@ -4054,6 +4054,23 @@ describe('diffLineItems (INVED-01-06)', () => {
     expect(diffLineItems(original, edited)).toBeUndefined()
   })
 
+  it('INV-06-T7e: a change in any one of the five line fields is a change', () => {
+    const original: LineFields[] = [lineFields(), lineFields({ description: 'Gadget' })]
+    const changes: Record<keyof LineFields, string> = {
+      description: 'Other',
+      quantity: '9',
+      unit_price: '9.00',
+      line_total: '9.00',
+      line_tax: '9.00',
+    }
+    for (const field of Object.keys(changes) as (keyof LineFields)[]) {
+      const edited = original.map((l, i) => (i === 1 ? { ...l, [field]: changes[field] } : { ...l }))
+      expect(diffLineItems(original, edited), field).toBeDefined()
+    }
+    const idOnly = original.map((l) => ({ ...l, id: 'x', line_no: 7 }))
+    expect(diffLineItems(original, idOnly)).toBeUndefined()
+  })
+
   it('INV-06-T7c: diffLineItems never mutates either input array, and still returns the correct diff', () => {
     const original: LineFields[] = [lineFields()]
     const edited: LineFields[] = [lineFields({ description: 'Changed' })]

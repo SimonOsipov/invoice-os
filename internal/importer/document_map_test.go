@@ -1,6 +1,6 @@
 // document_map_test.go: specs for documentCreateInput (EXTR-06-02, task-762). Pure Go, no DB.
 // Authored RED in Mode A against a stub, now green against the real mapper (commit a93a9518);
-// QA added adversarial coverage below the MAP-11 spec section (task-762 Mode B).
+// QA added adversarial coverage below the MAP-10 spec section (task-762 Mode B).
 //
 // Spec-to-test map (Test Specs table, EXTR-06-02 / task-762):
 //
@@ -14,7 +14,6 @@
 //	MAP-08 TestDocumentCreateInput_MoneyFieldsPassThroughVerbatim
 //	MAP-09 TestDocumentCreateInput_AmbiguousInvoiceNumberWithDecidedValueStillWritten
 //	MAP-10 TestDocumentCreateInput_LineItemsComeOnlyFromParsedLineNames
-//	MAP-11 TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder
 //
 // Line-item grouping (retiring D-13):
 //
@@ -23,7 +22,6 @@
 //	TestDocumentCreateInput_NoLineRowsLeavesLineItemsNil
 //	TestDocumentCreateInput_AHoleInTheIndicesClosesInOrdinalTerms
 //	TestDocumentCreateInput_MockDefaultNowProducesFourLines
-//	TestImporterLineRoles_MatchesExtractionLineRoles
 //
 // Every spec below carries at least one POSITIVE expected-value assertion (not just an
 // absent-field check a zero-value stub would satisfy vacuously) -- mutation-confirmed
@@ -535,31 +533,6 @@ func mpValuesIndexKeysFromSource(t *testing.T, src string) []string {
 	return nil
 }
 
-// --- MAP-11: the vocabulary drift guard ---------------------------------------------------
-
-// TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder guards against
-// internal/importer growing its own copy of extraction.HeaderFields (required because
-// document_deps_test.go / SX-09 forbids importing internal/extraction, so nothing compiler-
-// links the two lists) that silently drifts from the real vocabulary.
-func TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder(t *testing.T) {
-	root := sxDepsRepoRoot(t)
-
-	mapperNames := mpStringSliceVar(t, filepath.Join(root, "internal/importer/document.go"), "mapperFieldNames")
-	extractionNames := mpStringSliceVar(t, filepath.Join(root, "internal/extraction/vocabulary.go"), "HeaderFields")
-
-	// Floor + control needle: an absence scan that silently found zero names on BOTH sides
-	// would report "equal" for the wrong reason. Prove each side actually parsed something.
-	if len(extractionNames) == 0 {
-		t.Fatal("parsed 0 names from internal/extraction/vocabulary.go's HeaderFields -- the parser side of this guard is broken, so the comparison below would be vacuous")
-	}
-	if len(mapperNames) == 0 {
-		t.Fatal("parsed 0 names from internal/importer/document.go's mapperFieldNames -- the mapper's own copy of the vocabulary does not exist yet (expected RED for task-762 Mode A)")
-	}
-	if !slices.Equal(mapperNames, extractionNames) {
-		t.Errorf("mapperFieldNames = %v, want %v (element-for-element, in order, matching extraction.HeaderFields)", mapperNames, extractionNames)
-	}
-}
-
 // --- readingCreateInput: the mapper without the number ----------------------------------
 
 // TestReadingCreateInput_IsTheMapperWithoutTheNumber pins the split: readingCreateInput must
@@ -825,94 +798,6 @@ func TestDocumentCreateInput_AHoleInTheIndicesClosesInOrdinalTerms(t *testing.T)
 	}
 }
 
-// AC-9: internal/importer cannot import internal/extraction (document_deps_test.go), so its
-// line-role list is a local copy -- this reads both sides' Go source and compares them
-// element-for-element, matching MAP-11's vocabulary guard for the header fields.
-func TestImporterLineRoles_MatchesExtractionLineRoles(t *testing.T) {
-	root := sxDepsRepoRoot(t)
-
-	extractionRoles := mpResolvedIdentStringSliceVar(t, filepath.Join(root, "internal/extraction/lineitems.go"), "LineRoles")
-	if len(extractionRoles) != 5 {
-		t.Fatalf("resolved %d name(s) from extraction.LineRoles, want exactly 5 -- the resolver side of this guard is broken, so the comparison below would be vacuous", len(extractionRoles))
-	}
-
-	importerRoles := mpStringSliceVar(t, filepath.Join(root, "internal/importer/document.go"), "mapperLineRoles")
-	if len(importerRoles) == 0 {
-		t.Fatal("parsed 0 names from internal/importer/document.go's mapperLineRoles -- the importer's own local copy of the role list does not exist yet (expected RED in Mode A)")
-	}
-	if !slices.Equal(importerRoles, extractionRoles) {
-		t.Errorf("mapperLineRoles = %v, want %v (element-for-element, in order, matching extraction.LineRoles)", importerRoles, extractionRoles)
-	}
-}
-
-// mpResolvedIdentStringSliceVar is mpStringSliceVar's Ident-resolving sibling: it parses path
-// and returns the elements of the top-level `var name = []string{...}` declaration, resolving
-// each Ident element (e.g. extraction.LineRoles, whose elements are consts, not string
-// literals) to its own top-level `const <Ident> = "<literal>"` declaration in the SAME file.
-// mpStringSliceVar only reads BasicLits and returns nil on a slice of Idents.
-func mpResolvedIdentStringSliceVar(t *testing.T, path, name string) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-
-	consts := make(map[string]string)
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
-				continue
-			}
-			lit, ok := vs.Values[0].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				continue
-			}
-			s, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				continue
-			}
-			consts[vs.Names[0].Name] = s
-		}
-	}
-
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != name || len(vs.Values) != 1 {
-				continue
-			}
-			cl, ok := vs.Values[0].(*ast.CompositeLit)
-			if !ok {
-				continue
-			}
-			var out []string
-			for _, elt := range cl.Elts {
-				id, ok := elt.(*ast.Ident)
-				if !ok {
-					continue
-				}
-				lit, ok := consts[id.Name]
-				if !ok {
-					continue
-				}
-				out = append(out, lit)
-			}
-			return out
-		}
-	}
-	return nil
-}
-
 // --- Adversarial coverage (QA, task-762 Mode B) ------------------------------------------
 
 // TestDocumentCreateInput_DuplicateFieldNameLastWriteWins: two rank-0 rows for the same
@@ -1013,54 +898,13 @@ func TestDocumentCreateInput_SourceDocumentIDIsDocumentIDNotJobID(t *testing.T) 
 	}
 }
 
-// mpStringSliceVar parses path and returns the string-literal elements of the top-level
-// `var name = []string{...}` declaration, or nil when no such var exists.
-func mpStringSliceVar(t *testing.T, path, name string) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != name || len(vs.Values) != 1 {
-				continue
-			}
-			cl, ok := vs.Values[0].(*ast.CompositeLit)
-			if !ok {
-				continue
-			}
-			var out []string
-			for _, elt := range cl.Elts {
-				lit, ok := elt.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				s, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					t.Fatalf("unquote %s literal %s: %v", name, lit.Value, err)
-				}
-				out = append(out, s)
-			}
-			return out
-		}
-	}
-	return nil
-}
-
 // --- EXTR-12-01: the mock's default result, mapped ---------------------------------------
 
 // AC-6/AC-8, and CONFIRMATORY, not red-first: document_deps_test.go fences this package off from
 // internal/extraction, so the field set below is hand-copied and asserting it would pass whatever
 // the mock actually emits. The oracle for the rename is
-// internal/extraction's TestMockExtractor_DefaultResultNamesAreOnTheVocabulary; MAP-11 links
-// HeaderFields to mapperFieldNames, closing the chain to the columns asserted here.
+// internal/extraction's TestMockExtractor_DefaultResultNamesAreOnTheVocabulary; mapperFieldNames
+// derives from the same internal/invoicefields list as HeaderFields.
 //
 // What this adds over MAP-01: the mock's PARTIAL field set, where three readings are flagged and
 // two carry no value at all, still maps every decided value and leaves the absent ones NULL.

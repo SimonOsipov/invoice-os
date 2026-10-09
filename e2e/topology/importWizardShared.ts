@@ -178,8 +178,8 @@ export const REASON_PILL: Record<Exclude<ExtractionReason, '' | 'ambiguous'>, st
   missing: 'NOT FOUND',
 }
 
-// internal/extraction/vocabulary.go HeaderFields, in Save order; transcribed, not imported.
-// wireMirrors.test.ts's headerFields guard compares it to the Go slice.
+// The extract header fields of internal/invoicefields, in Save order; transcribed, not imported.
+// import-wizard-2.spec.ts asserts the deployed pane renders one cell per entry.
 export const VOCABULARY = [
   'invoice_number',
   'issue_date',

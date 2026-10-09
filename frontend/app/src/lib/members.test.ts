@@ -1608,6 +1608,7 @@ describe('RESEND-07-02 — the pending-invite projection and reducers', () => {
     expect(['none', 'unconfirmed', 'confirmed', 'bogus', ''].map((a) => w(a).account)).toEqual(['none', 'unconfirmed', 'confirmed', 'unknown', 'unknown'])
     expect(w().account).toBeUndefined()
     expect('account' in w()).toBe(false)
+    expect(['Confirmed', 'NONE', 'unknown', ' confirmed'].map((a) => w(a).account)).toEqual(['unknown', 'unknown', 'unknown', 'unknown'])
   })
 
   it('inviteAccountLine names the two account states', () => {
@@ -1623,6 +1624,9 @@ describe('RESEND-07-02 — the pending-invite projection and reducers', () => {
     const appended = upsertInvites([listed], [invite({ id: 'i2' })])[1]
     expect(appended.id).toBe('i2')
     expect('account' in appended).toBe(false)
+    expect(upsertInvites([listed], [invite({ id: 'i1', account: 'none' })])[0].account).toBe('none')
+    expect(upsertInvites([invite({ id: 'i1' })], [invite({ id: 'i1', account: 'confirmed' })])[0].account).toBe('confirmed')
+    expect('account' in upsertInvites([invite({ id: 'i1' })], [invite({ id: 'i1', expiresAt: 'B' })])[0]).toBe(false)
   })
 
   it('upsertInvites replaces by id and appends new ids', () => {

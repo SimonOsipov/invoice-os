@@ -47,3 +47,9 @@ END $$`,
 	}
 	return true, nil
 }
+
+// AuthAdminDSN swaps the credentials of migrationDSN for supabase_auth_admin and password.
+// Stub: LOGFIX-02-02 implements it.
+func AuthAdminDSN(migrationDSN, password string) (string, error) {
+	return "", nil
+}

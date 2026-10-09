@@ -1800,3 +1800,115 @@ func TestApiMountPreflightGrantsTraceHeaders(t *testing.T) {
 		t.Errorf("disallowed-origin preflight Access-Control-Allow-Headers = %q, want none", got)
 	}
 }
+
+// TestGatewayMainStartsTheAccountStateGrantAfterProvision pins main's wiring of the boot-grant gate:
+// main needs Postgres, so it is scanned, not run. The gate itself is tested in account_state_grant_test.go.
+func TestGatewayMainStartsTheAccountStateGrantAfterProvision(t *testing.T) {
+	f, body := parseMain(t)
+
+	selector := func(e ast.Expr) string {
+		var parts []string
+		for {
+			switch x := e.(type) {
+			case *ast.SelectorExpr:
+				parts = append([]string{x.Sel.Name}, parts...)
+				e = x.X
+			case *ast.Ident:
+				return strings.Join(append([]string{x.Name}, parts...), ".")
+			default:
+				return ""
+			}
+		}
+	}
+	stmtHolding := func(match func(*ast.CallExpr) bool) (idx, n int) {
+		idx = -1
+		for i, s := range body.List {
+			ast.Inspect(s, func(nd ast.Node) bool {
+				if c, ok := nd.(*ast.CallExpr); ok && match(c) {
+					idx = i
+					n++
+				}
+				return true
+			})
+		}
+		return idx, n
+	}
+
+	starts := 0
+	ast.Inspect(f, func(nd ast.Node) bool {
+		if c, ok := nd.(*ast.CallExpr); ok {
+			if _, is := isCallTo(c, "", "startAccountStateGrant"); is {
+				starts++
+			}
+		}
+		return true
+	})
+	if starts != 1 {
+		t.Fatalf("main.go calls startAccountStateGrant %d times, want exactly 1", starts)
+	}
+
+	var start *ast.CallExpr
+	startIdx := -1
+	for i, s := range body.List {
+		if es, ok := s.(*ast.ExprStmt); ok {
+			if c, is := isCallTo(es.X, "", "startAccountStateGrant"); is {
+				start, startIdx = c, i
+			}
+		}
+	}
+	if start == nil {
+		t.Fatal("startAccountStateGrant is not a statement of its own directly in func main (not inside an if, go or func literal)")
+	}
+
+	provIdx, provN := stmtHolding(func(c *ast.CallExpr) bool { _, is := isCallTo(c, "db", "Provision"); return is })
+	runIdx, runN := stmtHolding(func(c *ast.CallExpr) bool { _, is := isCallTo(c, "app", "Run"); return is })
+	if provN != 1 || runN != 1 {
+		t.Fatalf("main calls db.Provision %d times and app.Run %d times, want 1 each", provN, runN)
+	}
+	if !(provIdx < startIdx && startIdx < runIdx) {
+		t.Errorf("statement order: db.Provision at %d, startAccountStateGrant at %d, app.Run at %d; want Provision < start < Run", provIdx, startIdx, runIdx)
+	}
+
+	if len(start.Args) != 5 {
+		t.Fatalf("startAccountStateGrant has %d arguments, want 5", len(start.Args))
+	}
+	if c, is := isCallTo(start.Args[0], "os", "Getenv"); !is || len(c.Args) != 1 || !isStringLit(c.Args[0], "RAILWAY_ENVIRONMENT_NAME") {
+		t.Errorf("argument 1 is not os.Getenv(\"RAILWAY_ENVIRONMENT_NAME\")")
+	}
+	if got := selector(start.Args[1]); got != "provisionCfg.MigrationDSN" {
+		t.Errorf("argument 2 = %q, want provisionCfg.MigrationDSN", got)
+	}
+	if got := selector(start.Args[2]); got != "provisionCfg.Passwords.AuthAdmin" {
+		t.Errorf("argument 3 = %q, want provisionCfg.Passwords.AuthAdmin", got)
+	}
+	if got := selector(start.Args[3]); got != "app.Logger" {
+		t.Errorf("argument 4 = %q, want app.Logger", got)
+	}
+	lit, ok := start.Args[4].(*ast.FuncLit)
+	if !ok || len(lit.Body.List) != 1 {
+		t.Fatalf("argument 5 is not a func literal holding exactly one statement")
+	}
+	gs, ok := lit.Body.List[0].(*ast.GoStmt)
+	if !ok {
+		t.Fatalf("argument 5's statement is %T, want a go statement", lit.Body.List[0])
+	}
+	if _, is := isCallTo(gs.Call, "", "grantAccountStateRead"); !is || len(gs.Call.Args) < 3 {
+		t.Fatalf("argument 5's go statement does not call grantAccountStateRead with at least 3 arguments")
+	}
+	if got := selector(gs.Call.Args[2]); got != "db.GrantAccountStateRead" {
+		t.Errorf("grantAccountStateRead's third argument = %q, want db.GrantAccountStateRead", got)
+	}
+
+	reads := 0
+	ast.Inspect(f, func(nd ast.Node) bool {
+		if c, ok := nd.(*ast.CallExpr); ok {
+			if _, is := isCallTo(c, "os", "Getenv"); is && len(c.Args) == 1 && isStringLit(c.Args[0], "AUTH_ADMIN_PASSWORD") {
+				reads++
+			}
+		}
+		return true
+	})
+	if reads != 1 {
+		t.Errorf("main.go reads os.Getenv(\"AUTH_ADMIN_PASSWORD\") %d times, want 1 (the grant takes provisionCfg.Passwords.AuthAdmin)", reads)
+	}
+}

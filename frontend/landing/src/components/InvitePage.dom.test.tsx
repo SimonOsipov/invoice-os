@@ -12,7 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const T = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 const ADDRESS = 'tunde@obi.test'
 const WORKSPACE = 'Obi Partners'
-const PASSWORD = 'correct-horse-battery'
 const PREVIEW_URL = 'https://gw.x/auth/invitation'
 const REGISTER_URL = 'https://gw.x/auth/invitation/register'
 const RESEND_URL = 'https://gw.x/auth/resend-verification'
@@ -24,7 +23,8 @@ const INVALID_TEXT = 'Ask your workspace admin for a new one.'
 const UNAVAILABLE = 'We could not load this invite. Reload the page to try again.'
 const READY_TEXT = `${ADDRESS} is invited to join ${WORKSPACE} on ASComply as Reviewer.`
 const READY_PROMPT = 'New to ASComply? Create an account with this address. Already have one? Sign in.'
-const SENT_TEXT = `If this address can be registered, a confirmation link is on its way to ${ADDRESS}. Open it and confirm your email, then come back to this page and choose Sign in. Already have an account? Sign in now.`
+const REGISTER_TEXT = `We will email ${ADDRESS} a link to confirm the address and choose your password.`
+const SENT_TEXT = `If this address can be registered, a link to confirm it and choose your password is on its way to ${ADDRESS}. Open it and choose your password, then come back to this page and choose Sign in. Already have an account? Sign in now.`
 const PRODUCT_EMAIL_NOTICE = 'We will email you about your account and the service. This is part of using ASComply Africa.'
 const RESEND_SENT = `If ${ADDRESS} still needs verifying, a new link is on its way. Use the newest one.`
 // register.ts copy, as registerOutcome maps the gateway's statuses.
@@ -34,7 +34,7 @@ const REGISTER_UNAVAILABLE = 'Registration is unavailable right now. Try again s
 // Gateway texts, internal/gateway/invitation.go: msgInviteNotValid, msgInviteLookupDown, msgInviteeFieldsRequired.
 const WIRE_NOT_VALID = 'this invite is no longer valid'
 const WIRE_LOOKUP_DOWN = 'invitation lookup is unavailable'
-const WIRE_FIELDS_REQUIRED = 'token and password are required'
+const WIRE_FIELDS_REQUIRED = 'token is required'
 
 let container: HTMLDivElement
 let root: Root
@@ -147,8 +147,6 @@ async function click(el: HTMLElement): Promise<void> {
   await act(async () => el.click())
 }
 
-const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
-
 function labelled(label: string): HTMLInputElement {
   const l = Array.from(container.querySelectorAll('label')).find((x) => x.textContent?.trim() === label)
   expect(l, `expected a label "${label}"`).toBeDefined()
@@ -157,20 +155,12 @@ function labelled(label: string): HTMLInputElement {
   return input as HTMLInputElement
 }
 
-async function type(input: HTMLInputElement, value: string): Promise<void> {
-  await act(async () => {
-    setValue.call(input, value)
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-}
-
 async function toRegisterView(): Promise<void> {
   await click(button('Create account'))
   expect(headings(), 'control: the register view opened').toEqual(['Create your account'])
 }
 
-async function submit(password?: string): Promise<void> {
-  if (password !== undefined) await type(labelled('Password'), password)
+async function submit(): Promise<void> {
   const submitBtn = container.querySelector<HTMLButtonElement>('button[type="submit"]')
   expect(submitBtn, 'expected the submit button').not.toBeNull()
   await click(submitBtn!)
@@ -260,22 +250,34 @@ describe('the ready view', () => {
 })
 
 describe('the register view', () => {
-  it('invitePage_createAccountRegistersTheInvitedAddress', async () => {
+  it('invitePage_registerViewHasNoPasswordField', async () => {
+    stubFetch()
+    await mount()
+    await toRegisterView()
+
+    expect(container.querySelectorAll('input[type="password"]')).toHaveLength(0)
+    const inputs = Array.from(container.querySelectorAll('input'))
+    expect(inputs, 'one field').toHaveLength(1)
+    const email = labelled('Work email')
+    expect(inputs[0]).toBe(email)
+    expect(email.value).toBe(ADDRESS)
+    expect(email.readOnly).toBe(true)
+    expect(email.type).toBe('email')
+    expect(text()).toContain(REGISTER_TEXT)
+    expect(text()).not.toContain('Choose a password.')
+  })
+
+  it('invitePage_registerPostsTheTokenOnly', async () => {
     const fetchMock = stubFetch({ register: () => json(200, {}) })
     await mount()
     await toRegisterView()
 
-    const email = labelled('Work email')
-    expect(email.value).toBe(ADDRESS)
-    expect(email.readOnly).toBe(true)
-    expect(email.type).toBe('email')
-
-    await submit(PASSWORD)
+    await submit()
 
     const posts = callsTo(fetchMock, REGISTER_URL)
     expect(posts).toHaveLength(1)
     expect(posts[0][1].method).toBe('POST')
-    expect(bodyOf(posts[0] as [string, RequestInit])).toStrictEqual({ token: T, password: PASSWORD })
+    expect(bodyOf(posts[0] as [string, RequestInit])).toStrictEqual({ token: T })
     expect(fetchMock, 'one preview and one register').toHaveBeenCalledTimes(2)
 
     expect(headings()).toEqual(['Check your email'])
@@ -291,19 +293,13 @@ describe('the register view', () => {
 
     // RegisterModal.tsx field(): label.label above input.dm-input, aria-required, autoComplete.
     const email = labelled('Work email')
-    const password = labelled('Password')
-    for (const [input, label] of [[email, 'Work email'], [password, 'Password']] as const) {
-      const l = container.querySelector<HTMLLabelElement>(`label[for="${input.id}"]`)!
-      expect(l.className, label).toBe('label')
-      expect(l.style.display, label).toBe('block')
-      expect(input.classList.contains('dm-input'), label).toBe(true)
-    }
+    const l = container.querySelector<HTMLLabelElement>(`label[for="${email.id}"]`)!
+    expect(l.className).toBe('label')
+    expect(l.style.display).toBe('block')
+    expect(email.classList.contains('dm-input')).toBe(true)
     expect(email.autocomplete).toBe('email')
     expect(email.disabled, 'read-only, not disabled: the value stays selectable').toBe(false)
-    expect(password.type).toBe('password')
-    expect(password.autocomplete).toBe('new-password')
-    expect(password.getAttribute('aria-required')).toBe('true')
-    expect(password.value).toBe('')
+    expect(email.getAttribute('aria-required')).toBe('true')
 
     const submitBtn = container.querySelector<HTMLButtonElement>('button[type="submit"]')!
     expect(submitBtn.textContent?.trim()).toBe('Create account →')
@@ -327,42 +323,11 @@ describe('the register view', () => {
     expect(fetchMock, 'the preview is not repeated').toHaveBeenCalledTimes(1)
   })
 
-  it('invitePage_registerBackClearsThePasswordAndItsError: a typed password is gone after Back', async () => {
-    stubFetch()
-    await mount()
-    await toRegisterView()
-    await type(labelled('Password'), PASSWORD)
-    expect(labelled('Password').value, 'control: the password was typed').toBe(PASSWORD)
-
-    await click(button('Back'))
-    await click(button('Create account'))
-
-    expect(headings(), 'the register view reopened').toEqual(['Create your account'])
-    expect(labelled('Password').value).toBe('')
-  })
-
-  it('invitePage_registerBackClearsThePasswordAndItsError: the empty-password error is gone after Back', async () => {
-    stubFetch()
-    await mount()
-    await toRegisterView()
-    await submit()
-    expect(alerts(), 'control: the error is showing before Back').toEqual(['Choose a password.'])
-
-    await click(button('Back'))
-    await click(button('Create account'))
-
-    expect(headings(), 'the register view reopened').toEqual(['Create your account'])
-    expect(alerts()).toEqual([])
-    const password = labelled('Password')
-    expect(password.getAttribute('aria-invalid')).toBe('false')
-    expect(password.classList.contains('dm-err')).toBe(false)
-  })
-
   it('invitePage_registerBackClearsThePasswordAndItsError: a refused submit leaves no error behind after Back', async () => {
     stubFetch({ register: () => json(400, { error: 'Password should be at least 6 characters.' }) })
     await mount()
     await toRegisterView()
-    await submit(PASSWORD)
+    await submit()
     expect(alerts(), 'control: the refusal is showing before Back').toEqual(['Password should be at least 6 characters.'])
 
     await click(button('Back'))
@@ -370,7 +335,6 @@ describe('the register view', () => {
 
     expect(headings(), 'the register view reopened').toEqual(['Create your account'])
     expect(alerts(), 'a stale server error must not greet the reopened form').toEqual([])
-    expect(labelled('Password').value).toBe('')
   })
 
   it('invitePage_registerSubmitDisablesWhilePending', async () => {
@@ -381,7 +345,6 @@ describe('the register view', () => {
     const fetchMock = stubFetch({ register: () => pending })
     await mount()
     await toRegisterView()
-    await type(labelled('Password'), PASSWORD)
     const submitBtn = container.querySelector<HTMLButtonElement>('button[type="submit"]')!
 
     await click(submitBtn)
@@ -394,7 +357,7 @@ describe('the register view', () => {
     expect(callsTo(fetchMock, REGISTER_URL), 'one POST for two clicks and a direct submit').toHaveLength(1)
     expect(submitBtn.disabled).toBe(true)
     expect(submitBtn.textContent?.trim()).toBe('Creating…')
-    expect(labelled('Password').disabled, 'RegisterModal disables its fields while submitting').toBe(true)
+    expect(labelled('Work email').disabled, 'RegisterModal disables its fields while submitting').toBe(true)
 
     await act(async () => finish())
     await settle()
@@ -415,7 +378,7 @@ describe('the register view', () => {
     await mount()
     await toRegisterView()
 
-    await submit(PASSWORD)
+    await submit()
 
     expect(callsTo(fetchMock, REGISTER_URL), 'control: the register request was made').toHaveLength(1)
     expect(alerts()).toEqual([expected])
@@ -424,37 +387,41 @@ describe('the register view', () => {
     expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')!.textContent?.trim()).toBe('Create account →')
   })
 
-  it('invitePage_registerRefusals: an empty password shows Choose a password. and posts nothing', async () => {
-    const fetchMock = stubFetch({ register: () => json(200, {}) })
-    await mount()
-    await toRegisterView()
-
-    await submit()
-
-    expect(callsTo(fetchMock, REGISTER_URL)).toHaveLength(0)
-    expect(fetchMock, 'only the preview ran').toHaveBeenCalledTimes(1)
-    expect(alerts()).toEqual(['Choose a password.'])
-    // RegisterModal.tsx field(): invalid state on the input, described by its alert.
-    const password = labelled('Password')
-    expect(password.getAttribute('aria-invalid')).toBe('true')
-    expect(password.classList.contains('dm-err')).toBe(true)
-    const alert = container.querySelector('[role="alert"]')!
-    expect(alert.id).not.toBe('')
-    expect(password.getAttribute('aria-describedby')).toBe(alert.id)
-
-    await type(password, 'x')
-    expect(alerts(), 'typing clears the field error').toEqual([])
-  })
-
   it('invitePage_registerRefusals: a 404 shows the invalid view', async () => {
     const fetchMock = stubFetch({ register: () => json(404, { error: WIRE_NOT_VALID }) })
     await mount()
     await toRegisterView()
 
-    await submit(PASSWORD)
+    await submit()
 
     expect(callsTo(fetchMock, REGISTER_URL), 'control: the register request was made').toHaveLength(1)
     expectInvalidView()
+  })
+})
+
+describe('the register errors', () => {
+  it('invitePage_registerErrorsMapAsBefore', async () => {
+    stubFetch({ register: () => json(404, { error: WIRE_NOT_VALID }) })
+    await mount()
+    await toRegisterView()
+    await submit()
+    expectInvalidView()
+
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    stubFetch({ register: () => json(400, { error: 'token is required' }) })
+    await mount()
+    await toRegisterView()
+    await submit()
+    expect(alerts()).toEqual(['token is required'])
+
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    stubFetch({ register: () => json(503, { error: 'registration is closed' }) })
+    await mount()
+    await toRegisterView()
+    await submit()
+    expect(alerts()).toEqual([CLOSED])
   })
 })
 
@@ -463,7 +430,7 @@ describe('the sent view', () => {
     const fetchMock = stubFetch({ register, resend })
     await mount()
     await toRegisterView()
-    await submit(PASSWORD)
+    await submit()
     expect(headings(), 'control: the sent view opened').toEqual(['Check your email'])
     return fetchMock
   }
@@ -498,6 +465,12 @@ describe('the sent view', () => {
     expect(container.querySelector('[role="status"]'), 'the same node receives the text').toBe(region)
     expect(region!.textContent?.trim()).toBe(RESEND_SENT)
     expect(resend.disabled).toBe(false)
+  })
+
+  it('invitePage_sentViewSaysToChooseThePasswordFromTheMail', async () => {
+    await toSentView()
+    expect(text()).toContain(`a link to confirm it and choose your password is on its way to ${ADDRESS}`)
+    expect(text()).not.toContain('confirmation link')
   })
 
   it('invitePage_sentViewSignInCarriesTheInviteToTheApp', async () => {
@@ -564,7 +537,7 @@ describe('the loading view', () => {
 })
 
 describe('the token stays out of everything but the two bodies', () => {
-  it('invitePage_tokenAndPasswordStayOutOfUrlsHeadersLogsAndPage', async () => {
+  it('invitePage_tokenStaysOutOfUrlsHeadersLogsAndPage', async () => {
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => undefined))
     const fetchMock = stubFetch({
       register: () => json(400, { error: 'Password should be at least 6 characters.' }),
@@ -573,9 +546,9 @@ describe('the token stays out of everything but the two bodies', () => {
     await mount()
     expect(text(), 'the ready view does not print the token').not.toContain(T)
     await toRegisterView()
-    await submit(PASSWORD)
+    await submit()
     expect(alerts(), 'control: the refusal ran').toEqual(['Password should be at least 6 characters.'])
-    await submit(PASSWORD)
+    await submit()
 
     expect(fetchMock.mock.calls.length, 'control: preview and two register posts').toBe(3)
     for (const [url, init] of fetchMock.mock.calls) {
@@ -585,9 +558,8 @@ describe('the token stays out of everything but the two bodies', () => {
     }
     expect(bodyOf(fetchMock.mock.calls[0] as [string, RequestInit])).toStrictEqual({ token: T })
     expect(text()).not.toContain(T)
-    expect(text()).not.toContain(PASSWORD)
     expect(JSON.stringify(Array.from(container.querySelectorAll('[value], [href], [title]'), (e) => [e.getAttribute('href'), e.getAttribute('title')]))).not.toContain(T)
-    for (const spy of spies) for (const args of spy.mock.calls) expect(args.map(String).join(' ')).not.toMatch(new RegExp(`${T}|${PASSWORD}`))
+    for (const spy of spies) for (const args of spy.mock.calls) expect(args.map(String).join(' ')).not.toMatch(new RegExp(`${T}`))
   })
 })
 
@@ -612,7 +584,7 @@ describe('long values', () => {
     }
 
     await toRegisterView()
-    await submit(PASSWORD)
+    await submit()
     expect(headings()).toEqual(['Check your email'])
     for (const e of textElementsHolding(LONG_ADDRESS)) expect(e.style.overflowWrap, `sent view ${e.tagName}`).toBe('anywhere')
   })

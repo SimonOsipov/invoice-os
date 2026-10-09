@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
@@ -200,5 +201,86 @@ func TestCodeLists_MalformedListParamDoesNotFailLoad(t *testing.T) {
 	}
 	if _, err := NewDefaultEngine().Evaluate(Payload{"invoice": map[string]any{}}, RuleSet{Version: rs.Version, Rules: []Rule{ruleByKey(t, rs, "zz-list")}}); err == nil {
 		t.Error("Evaluate succeeded, want a config error")
+	}
+}
+
+type queryCounter struct {
+	pgx.Tx
+	n int
+}
+
+func (c *queryCounter) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	c.n++
+	return c.Tx.Query(ctx, sql, args...)
+}
+
+func countingTx(t *testing.T, app *pgxpool.Pool) *queryCounter {
+	t.Helper()
+	tx, err := app.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	return &queryCounter{Tx: tx}
+}
+
+func listParams(list string) []byte { return []byte(`{"list":"` + list + `"}`) }
+
+func TestCodeLists_AttachRunsOneQueryForAllLists(t *testing.T) {
+	super, app := dbTestPools(t)
+	a, b := seedCodes(t, super), seedCodes(t, super)
+	enum := func(key, list string) Rule {
+		return Rule{Key: key, Type: TypeEnum, Scope: "document", Enabled: true, Params: listParams(list)}
+	}
+	rules := []Rule{enum("a1", a), enum("a2", a), enum("b1", b),
+		{Key: "inline", Type: TypeEnum, Scope: "document", Enabled: true, Params: []byte(`{"values":["A"]}`)}}
+	tx := countingTx(t, app)
+	if err := attachCodeLists(context.Background(), tx, rules); err != nil {
+		t.Fatal(err)
+	}
+	if tx.n != 1 {
+		t.Errorf("queries = %d, want 1 for 2 distinct lists", tx.n)
+	}
+	for _, i := range []int{0, 1, 2} {
+		if len(rules[i].Codes) != len(testCodes) {
+			t.Errorf("rule %s Codes = %v, want %d codes", rules[i].Key, rules[i].Codes, len(testCodes))
+		}
+	}
+}
+
+func TestCodeLists_AttachSkipsRulesTheEngineSkips(t *testing.T) {
+	_, app := dbTestPools(t)
+	missing := "t-" + uuid.NewString()
+	rules := []Rule{
+		{Key: "off", Type: TypeEnum, Scope: "document", Enabled: false, Params: listParams(missing)},
+		{Key: "line-scope", Type: TypeEnum, Scope: "line", Enabled: true, Params: listParams(missing)},
+		{Key: "not-enum", Type: TypeFormat, Scope: "document", Enabled: true, Params: listParams(missing)},
+		{Key: "blank", Type: TypeEnum, Scope: "document", Enabled: true, Params: listParams("")},
+		{Key: "null", Type: TypeEnum, Scope: "document", Enabled: true, Params: []byte(`{"list":null}`)},
+		{Key: "bad", Type: TypeEnum, Scope: "document", Enabled: true, Params: []byte(`{"list":5}`)},
+		{Key: "notobj", Type: TypeEnum, Scope: "document", Enabled: true, Params: []byte(`5`)},
+	}
+	tx := countingTx(t, app)
+	if err := attachCodeLists(context.Background(), tx, rules); err != nil {
+		t.Fatal(err)
+	}
+	if tx.n != 0 {
+		t.Errorf("queries = %d, want 0 when no selected rule names a list", tx.n)
+	}
+	for _, r := range rules {
+		if r.Codes != nil {
+			t.Errorf("rule %s Codes = %v, want nil", r.Key, r.Codes)
+		}
+	}
+}
+
+func TestCodeLists_BlankAndNullListDoNotFailLoad(t *testing.T) {
+	super, app := dbTestPools(t)
+	activateRules(t, super,
+		ruleSeed{"zz-blank", `{"list":""}`, true},
+		ruleSeed{"zz-null", `{"list":null}`, true},
+		ruleSeed{"zz-notobj", `5`, true})
+	if _, err := NewStore(app).LoadActiveRuleSetGlobal(context.Background()); err != nil {
+		t.Fatalf("load failed: %v", err)
 	}
 }

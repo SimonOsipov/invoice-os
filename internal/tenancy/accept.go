@@ -3,8 +3,11 @@ package tenancy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // InvitationPreview is what a token holder sees before signing in.
@@ -12,6 +15,9 @@ type InvitationPreview struct {
 	Workspace string `json:"workspace"`
 	Role      string `json:"role"`
 	Email     string `json:"email"`
+	Account   string `json:"account"` // none, unconfirmed, confirmed or unknown
+
+	accountErr error // set with Account "unknown"; the handler logs its SQLSTATE
 }
 
 // InvitationPreviewFunc looks up a live invite by token.
@@ -47,7 +53,7 @@ func readInviteToken(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 // InvitationPreviewHandler returns POST /internal/invitations/preview: capped
-// decode (400), preview, 200 `{workspace, role, email}`. The token is the only
+// decode (400), preview, 200 `{workspace, role, email, account}`. The token is the only
 // credential; the handler reads no identity.
 func InvitationPreviewHandler(preview InvitationPreviewFunc, log *slog.Logger) http.HandlerFunc {
 	if log == nil {
@@ -66,6 +72,14 @@ func InvitationPreviewHandler(preview InvitationPreviewFunc, log *slog.Logger) h
 			}
 			writeError(w, status, msg)
 			return
+		}
+		if p.accountErr != nil {
+			state := "unknown"
+			var pgErr *pgconn.PgError
+			if errors.As(p.accountErr, &pgErr) {
+				state = pgErr.Code
+			}
+			log.WarnContext(r.Context(), "tenancy: invitee account state unavailable", slog.String("sqlstate", state))
 		}
 		writeJSON(w, http.StatusOK, p)
 	}

@@ -369,3 +369,46 @@ func TestIdP_InviteeAccountStateWithoutTheGrantFailsClosed(t *testing.T) {
 		t.Fatalf("call without the grant = %q, err %v (SQLSTATE %q); want an error 42501 and no row", state, err, sqlState(err))
 	}
 }
+
+func TestIdP_PreviewCarriesTheAccountState(t *testing.T) {
+	w := newInviteWorld(t, "state-")
+	ctx := context.Background()
+	check := func(want string) {
+		t.Helper()
+		p, err := w.store.PreviewInvitation(ctx, w.token)
+		if err != nil {
+			t.Fatalf("PreviewInvitation: %v", err)
+		}
+		if p.Workspace != "IdP Invite Co" || p.Role != "reviewer" || p.Email != w.email || p.Account != want {
+			t.Fatalf("preview = %+v, want IdP Invite Co / reviewer / %s / account %q", p, w.email, want)
+		}
+	}
+	check("none")
+
+	password := "pw-" + uuid.NewString()
+	status, body := postJSON(t, w.gw+"/auth/invitation/register", map[string]string{"token": w.token, "password": password})
+	if status != http.StatusAccepted {
+		t.Fatalf("register through the gateway: status %d, body %v; want 202", status, body)
+	}
+	check("unconfirmed")
+	confirmByLink(t, idpUser{email: w.email, password: password})
+	check("confirmed")
+}
+
+func TestIdP_PreviewDegradesToUnknownWithoutTheGrant(t *testing.T) {
+	w := newInviteWorld(t, "nogrant-")
+	exec(t, superConn(t), `REVOKE USAGE ON SCHEMA auth FROM auth_hook_reader`)
+	t.Cleanup(func() {
+		if _, err := db.GrantAccountStateRead(context.Background(), mailEnv(t, "DATABASE_AUTH_ADMIN_URL")); err != nil {
+			t.Errorf("re-run the grant: %v", err)
+		}
+	})
+
+	p, err := w.store.PreviewInvitation(context.Background(), w.token)
+	if err != nil {
+		t.Fatalf("PreviewInvitation without the grant: %v", err)
+	}
+	if p.Workspace != "IdP Invite Co" || p.Role != "reviewer" || p.Email != w.email || p.Account != "unknown" {
+		t.Fatalf("preview = %+v, want the three fields intact and account unknown", p)
+	}
+}

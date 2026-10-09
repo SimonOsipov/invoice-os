@@ -142,8 +142,11 @@ func TestAccept_PreviewNamesWorkspaceRoleAndAddress(t *testing.T) {
 			if err != nil {
 				t.Fatalf("PreviewInvitation: %v", err)
 			}
-			if got != want {
+			if got.Workspace != want.Workspace || got.Role != want.Role || got.Email != want.Email {
 				t.Errorf("preview = %+v, want %+v", got, want)
+			}
+			if got.Account != "none" && got.Account != "unknown" {
+				t.Errorf("account = %q, want none or unknown", got.Account)
 			}
 		})
 	}

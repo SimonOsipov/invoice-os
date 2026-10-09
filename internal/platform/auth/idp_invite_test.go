@@ -133,7 +133,7 @@ func newInviteWorld(t *testing.T, prefix string) inviteWorld {
 		if err == tenancy.ErrInvitationNotValid {
 			return gateway.InvitationPreview{}, gateway.ErrInvitationNotValid
 		}
-		return gateway.InvitationPreview{Workspace: p.Workspace, Role: p.Role, Email: p.Email}, err
+		return gateway.InvitationPreview{Workspace: p.Workspace, Role: p.Role, Email: p.Email, Account: p.Account}, err
 	}
 	w.gw = startInviteGateway(t, base, preview)
 	return w

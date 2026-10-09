@@ -14,7 +14,7 @@ import (
 )
 
 // InvitationPreview is what a token holder sees before signing in.
-type InvitationPreview struct{ Workspace, Role, Email string }
+type InvitationPreview struct{ Workspace, Role, Email, Account string }
 
 // ErrInvitationNotValid means the token names no live invite.
 var ErrInvitationNotValid = errors.New("gateway: invitation is not valid")

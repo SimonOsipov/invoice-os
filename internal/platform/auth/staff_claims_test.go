@@ -284,3 +284,10 @@ func TestMint_StaffKeysOnlyWhenSet(t *testing.T) {
 		t.Error("rules-only token carries staff, want it absent")
 	}
 }
+
+func flagsOf(_ *testing.T, id Identity) (bool, bool) { return id.Staff, id.RulesRole }
+
+func staffOpts(_ *testing.T, o MintOptions, staff, rules bool) MintOptions {
+	o.Staff, o.RulesRole = staff, rules
+	return o
+}

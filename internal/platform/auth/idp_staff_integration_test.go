@@ -337,3 +337,5 @@ func TestIdP_RulesRoleGrantOnANonStaffAccountChangesNothing(t *testing.T) {
 		t.Errorf("rules-role grant on a staff account: %q, want UPDATE 1", tag)
 	}
 }
+
+func flagsOf(_ *testing.T, id auth.Identity) (bool, bool) { return id.Staff, id.RulesRole }

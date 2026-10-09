@@ -231,7 +231,7 @@ func TestLane_AnyOtherPathGivesTheFullLane(t *testing.T) {
 }
 
 func TestLane_PrefixMatchesOnAPathBoundary(t *testing.T) {
-	for _, p := range []string{"frontend/libraryx/a.ts", "frontend/library", "x/frontend/library/a.ts"} {
+	for _, p := range []string{"frontend/libraryx/a.ts", "frontend/library", "x/frontend/library/a.ts", "frontend/library-foo/a.ts", "frontend/Library/a.ts"} {
 		t.Run(p, func(t *testing.T) {
 			if got := laneClassify(t, p); got != "full" {
 				t.Fatalf("classify %s = %q, want full", p, got)
@@ -427,6 +427,7 @@ func TestLanePush_ALibraryOnlyDeployNeverCounts(t *testing.T) {
 	gh.serve(t,
 		lanePushRun(20, p.L, []laneJob{
 			{"Deploy gateway → ${{ needs.prepare-env.outputs.environment }}", "skipped"},
+			{laneFleetJob, "skipped"}, {laneSPAJob, "skipped"},
 			{"Deploy library (small lane) → persistent env", "success"},
 		}),
 		lanePushRun(10, p.F, laneFullChain()),
@@ -453,6 +454,7 @@ func TestLanePush_AFailedOrCancelledGatewayNeverCounts(t *testing.T) {
 func TestLanePush_AGatewayWithAFailedGateIsNotABase(t *testing.T) {
 	for _, c := range []struct{ prefix, conclusion string }{
 		{"Fleet /healthz gate", "failure"}, {"SPA build gate", "failure"}, {"SPA build gate", "cancelled"},
+		{"Fleet /healthz gate", "skipped"}, {"SPA build gate", "skipped"},
 	} {
 		t.Run(c.prefix+" "+c.conclusion, func(t *testing.T) {
 			p := newPushRepo(t, true, true)
@@ -529,6 +531,9 @@ func TestLanePush_NoFullDeployGivesFull(t *testing.T) {
 	gh.serve(t, lanePushRun(10, p.F, []laneJob{{laneGatewayJob, "success"}}))
 	out, code, ghOut := p.push(t, gh, p.S)
 	wantScope(t, out, code, ghOut, "full")
+	if !strings.Contains(out, "no push run") {
+		t.Fatalf("reason does not say no run qualified: %s", out)
+	}
 }
 
 func TestLanePush_BaseNotAnAncestorGivesFull(t *testing.T) {
@@ -570,7 +575,7 @@ func TestLanePush_ReadsOnlyMainPushRuns(t *testing.T) {
 			runsCall = l
 		}
 	}
-	for _, want := range []string{"event=push", "branch=main"} {
+	for _, want := range []string{"event=push", "branch=main", "per_page=50"} {
 		if !strings.Contains(runsCall, want) {
 			t.Fatalf("runs call %q lacks %s", runsCall, want)
 		}
@@ -619,6 +624,106 @@ func TestLane_UsageErrors(t *testing.T) {
 			if code != 2 || !strings.Contains(out, "::error::usage") {
 				t.Fatalf("exit %d, output %q; want exit 2 and ::error::usage", code, out)
 			}
+		})
+	}
+}
+
+func TestLanePR_DeletesAndRenamesAreJudgedByEveryPath(t *testing.T) {
+	cases := []struct{ name, from, to, want string }{
+		{"delete inside the library", "frontend/library/a.ts", "", "library"},
+		{"rename inside the library", "frontend/library/a.ts", "frontend/library/z.ts", "library"},
+		{"rename out of the library", "frontend/library/a.ts", "frontend/app/a.ts", "full"},
+		{"delete outside the library", "frontend/app/b.ts", "", "full"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLaneRepo(t)
+			r.commit(t, "base", "README.md", "frontend/app/b.ts", "frontend/library/a.ts")
+			r.git(t, "checkout", "-q", "-b", "feature")
+			if c.to == "" {
+				r.git(t, "rm", "-q", c.from)
+			} else {
+				if err := os.MkdirAll(filepath.Join(r.dir, filepath.Dir(c.to)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				r.git(t, "mv", c.from, c.to)
+			}
+			r.git(t, "commit", "-q", "-m", "change")
+			r.git(t, "checkout", "-q", "main")
+			r.git(t, "merge", "-q", "--no-ff", "-m", "merge", "feature")
+			out, code, ghOut := runLane(t, r.dir, nil, "", "pr")
+			if code != 0 {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+			requireLine(t, ghOut, "lane="+c.want)
+		})
+	}
+}
+
+func TestLanePush_AnIncompleteChainIsNotABase(t *testing.T) {
+	gw, fl, spa := laneJob{laneGatewayJob, "success"}, laneJob{laneFleetJob, "success"}, laneJob{laneSPAJob, "success"}
+	cases := map[string][]laneJob{
+		"gateway absent":             {fl, spa},
+		"fleet gate absent":          {gw, spa},
+		"spa gate absent":            {gw, fl},
+		"name only contains match":   {{"Re-Deploy gateway → x", "success"}, fl, spa},
+		"one of two spa jobs failed": {gw, fl, spa, {"SPA build gate (second)", "failure"}},
+		"conclusion null":            {gw, fl, spa, {"SPA build gate (pending)", ""}},
+	}
+	for name, jobs := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := newPushRepo(t, true, true)
+			gh := newLaneGH(t)
+			gh.serve(t, lanePushRun(20, p.L, jobs), lanePushRun(10, p.F, laneFullChain()))
+			out, code, ghOut := p.push(t, gh, p.S)
+			wantScope(t, out, code, ghOut, "full")
+			if !strings.Contains(out, "from run 10") {
+				t.Fatalf("base is not run 10: %s", out)
+			}
+		})
+	}
+}
+
+func TestLanePush_TheNewestQualifyingRunIsTheBase(t *testing.T) {
+	p := newPushRepo(t, true, true)
+	gh := newLaneGH(t)
+	gh.serve(t,
+		lanePushRun(30, p.S, laneChainWith("SPA build gate", "failure")),
+		lanePushRun(20, p.L, laneFullChain()),
+		lanePushRun(10, p.F, laneFullChain()),
+	)
+	out, code, ghOut := p.push(t, gh, p.S)
+	wantScope(t, out, code, ghOut, "library")
+	if !strings.Contains(out, "from run 20") {
+		t.Fatalf("base is not run 20: %s", out)
+	}
+}
+
+func TestLanePush_DeletesAndRenamesSinceTheBase(t *testing.T) {
+	for name, tc := range map[string]struct{ from, to, want string }{
+		"delete in the library":     {"frontend/library/a.ts", "", "library"},
+		"rename out of the library": {"frontend/library/a.ts", "frontend/app/a.ts", "full"},
+		"rename into the library":   {"frontend/app/b.ts", "frontend/library/b.ts", "full"},
+		"rename inside the library": {"frontend/library/a.ts", "frontend/library/z.ts", "library"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newLaneRepo(t)
+			f := r.commit(t, "full", "README.md", "frontend/library/a.ts", "frontend/app/b.ts")
+			if tc.to == "" {
+				r.git(t, "rm", "-q", tc.from)
+			} else {
+				if err := os.MkdirAll(filepath.Join(r.dir, filepath.Dir(tc.to)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				r.git(t, "mv", tc.from, tc.to)
+			}
+			r.git(t, "commit", "-q", "-m", "change")
+			s := r.git(t, "rev-parse", "HEAD")
+			gh := newLaneGH(t)
+			gh.serve(t, lanePushRun(10, f, laneFullChain()))
+			p := pushRepo{laneRepo: r, F: f, S: s}
+			out, code, ghOut := p.push(t, gh, s)
+			wantScope(t, out, code, ghOut, tc.want)
 		})
 	}
 }

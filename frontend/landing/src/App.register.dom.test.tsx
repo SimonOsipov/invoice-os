@@ -1117,7 +1117,7 @@ describe('the resend control on the check-your-email view', () => {
   })
 
   it('every 202 shows the same sent notice', async () => {
-    // The invite signal's bodies never reach the public view (LOGFIX-09 AC-4).
+    // The invite signal's bodies never reach the public view.
     const answers = [() => json(202, { status: 'accepted' }), () => json(202, {}), () => json(200, { status: 'held' }), () => json(200, { status: 'sent' })]
     let n = 0
     routedFetch(() => answers[n++]())

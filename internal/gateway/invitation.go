@@ -175,10 +175,8 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 	})
 }
 
-// InvitationResendHandler answers POST /auth/invitation/resend: it asks GoTrue to mail the invite's address again
-// and, unlike the anonymous resend, says whether it did. The address comes from the invite, never from the body.
-// It spends the anonymous route's per-address and per-IP budgets; a GoTrue 4xx, which mails nothing, is refunded.
-// 200 "sent" mailed; "held" is GoTrue's 60 s cooldown; "maybe" is a 200 for an account whose state is unknown.
+// InvitationResendHandler answers POST /auth/invitation/resend. Unlike the anonymous resend it says whether GoTrue
+// mailed (sent), held on its cooldown (held) or could not tell (maybe); a GoTrue 4xx mails nothing, so its budget is refunded.
 func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger, preview InvitationPreviewer) http.Handler {
 	endpoint := authURL.JoinPath("resend").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

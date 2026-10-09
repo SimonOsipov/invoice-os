@@ -32,7 +32,7 @@ export function InvitePage({ token }: { token: string | null }) {
   const [passwordError, setPasswordError] = useState<string>()
   const [formError, setFormError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
-  // A refusal moves the page to the view that has a way forward, then rethrows so the hook records no answer.
+  // A refusal moves the page to the view that has a way forward; the view effect below drops the failed note the rethrow leaves.
   const sendInvite = async (): Promise<{ outcome: ResendOutcome }> => {
     try {
       return { outcome: await resendInvitee(token!) }
@@ -44,8 +44,9 @@ export function InvitePage({ token }: { token: string | null }) {
       throw err
     }
   }
-  const { resending, note, resend } = useResend(view === 'sent' || view === 'unconfirmed' ? invite?.email : undefined, sendInvite)
+  const { resending, note, resend, reset } = useResend(view === 'sent' || view === 'unconfirmed' ? invite?.email : undefined, sendInvite)
   const { resending: resetting, note: resetNote, resend: sendReset } = useResend(view === 'unconfirmed' ? invite?.email : undefined, requestPasswordReset)
+  useEffect(() => reset(), [view, reset])
   // StrictMode runs the effect twice; the ref keeps it to one request.
   const asked = useRef(false)
 

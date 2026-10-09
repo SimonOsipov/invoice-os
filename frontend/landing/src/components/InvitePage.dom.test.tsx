@@ -841,6 +841,19 @@ describe('the account-exists views', () => {
     expect(alerts()).toEqual([])
   })
 
+  it('invitePage_aRefusedResendLeavesNoNoteOnTheSentViewReachedLater', async () => {
+    await toView('unconfirmed', { resend: () => json(409, { error: WIRE_ACCOUNT_MISSING }), register: () => json(200, {}) })
+
+    await click(button('Send it again'))
+    await settle()
+    await toRegisterView()
+    await submit(PASSWORD)
+
+    expect(headings(), 'control: the sent view opened').toEqual(['Check your email'])
+    expect(alerts()).toEqual([])
+    expect(resendStatus(), 'the status region is empty').toBe('')
+  })
+
   it('invitePage_resendOnAnAccountThatNowExistsOffersSignIn', async () => {
     await toView('unconfirmed', { resend: () => json(409, { error: WIRE_ACCOUNT_EXISTS }) })
 

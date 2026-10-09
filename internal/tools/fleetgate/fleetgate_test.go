@@ -352,16 +352,42 @@ func TestDevEnv_EveryDeployedSPAIsDiscoveredAndAwaited(t *testing.T) {
 	spas := matrixList(t, content, "deploy-spas")
 	lines := strings.Split(content, "\n")
 
-	var waits []int
+	// The small lane's library-build-gate awaits only the library, so it is exempt from the every-SPA rule.
+	var waits, libraryWaits []int
 	for i, l := range lines {
 		l = trailingYAMLComment.ReplaceAllString(l, "")
 		if strings.Contains(l, "wait-spa-builds.sh") && strings.Contains(l, "$EXPECTED_BUILD") {
-			waits = append(waits, i)
 			lines[i] = l
+			if s, _ := jobBounds(lines, i); strings.TrimRight(lines[s], " \t\r") == "  library-build-gate:" {
+				libraryWaits = append(libraryWaits, i)
+			} else {
+				waits = append(waits, i)
+			}
 		}
 	}
 	if len(spas) == 0 || len(waits) < 2 {
 		t.Fatalf("%s: parsed %d deploy-spas name(s) and %d wait-spa-builds.sh call(s) -- nothing to compare", devEnvRel, len(spas), len(waits))
+	}
+	for _, job := range []string{"  spa-build-gate:", "  e2e:"} {
+		found := false
+		for _, w := range waits {
+			if s, _ := jobBounds(lines, w); strings.TrimRight(lines[s], " \t\r") == job {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: no checked wait-spa-builds.sh call in `%s` -- the every-SPA rule skipped it", devEnvRel, strings.TrimSpace(job))
+		}
+	}
+	if len(libraryWaits) != 1 {
+		t.Fatalf("%s: %d wait-spa-builds.sh call(s) in library-build-gate, want exactly 1", devEnvRel, len(libraryWaits))
+	}
+	lw := libraryWaits[0]
+	if !strings.Contains(lines[lw], `"$LIBRARY_URL"`) {
+		t.Errorf("%s:%d: the library-build-gate wait is not passed \"$LIBRARY_URL\"", devEnvRel, lw+1)
+	}
+	if ls, le := jobBounds(lines, lw); !regexp.MustCompile(`(?m)^      LIBRARY_URL: `).MatchString(strings.Join(lines[ls:le], "\n")) {
+		t.Errorf("%s:%d: library-build-gate does not set LIBRARY_URL in its env", devEnvRel, lw+1)
 	}
 
 	pStart, pEnd := -1, -1

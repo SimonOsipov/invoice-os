@@ -1,7 +1,10 @@
-// lane_workflow_test.go pins the small-lane wiring of .github/workflows/ci.yml.
+// lane_workflow_test.go pins the small-lane wiring of .github/workflows/ci.yml and dev-env.yml.
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -126,5 +129,226 @@ func TestCIStaticChecksStayUnconditional(t *testing.T) {
 	}
 	if _, ok := jobKey(ciJob(t, "frontend"), "if"); !ok {
 		t.Error("control: frontend has no if:, so the scan cannot tell a conditional job")
+	}
+}
+
+// rawSteps splits a job's steps into their trimmed lines.
+func rawSteps(j workflowJob) [][]string {
+	var out [][]string
+	in := false
+	for _, l := range stripHashComments(j.lines) {
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		if !in {
+			in = l == "    steps:"
+			continue
+		}
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(l, "      - ") {
+			out = append(out, nil)
+			t = strings.TrimPrefix(t, "- ")
+		}
+		if len(out) > 0 {
+			out[len(out)-1] = append(out[len(out)-1], t)
+		}
+	}
+	return out
+}
+
+// checkoutsWhen returns the checkout steps of j whose if: equals cond.
+func checkoutsWhen(j workflowJob, cond string) [][]string {
+	var out [][]string
+	for _, s := range rawSteps(j) {
+		if strings.HasPrefix(s[0], "uses: actions/checkout@") && slices.Contains(s, "if: "+cond) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func TestDevEnvLibraryPRSkipsE2E(t *testing.T) {
+	j := devEnvJob(t, "changes")
+	if !slices.Contains(blockLines(j.lines, 4, "outputs"), "e2e: ${{ github.event_name != 'pull_request' && 'true' || steps.lane.outputs.e2e }}") {
+		t.Errorf("changes outputs lack the e2e expression from steps.lane: %v", blockLines(j.lines, 4, "outputs"))
+	}
+	laneSteps := 0
+	for _, s := range j.steps() {
+		if !strings.Contains(s.keys["run"], "scripts/ci/lane.sh") || s.keys["id"] != "lane" {
+			continue
+		}
+		laneSteps++
+		if s.keys["run"] != "bash scripts/ci/lane.sh pr-e2e" {
+			t.Errorf("lane step run = %q, want bash scripts/ci/lane.sh pr-e2e", s.keys["run"])
+		}
+		if s.keys["if"] != "github.event_name == 'pull_request'" {
+			t.Errorf("lane step if = %q, want the pull_request gate", s.keys["if"])
+		}
+		if got := s.env["FILTER_E2E"]; got != "${{ steps.filter.outputs.e2e }}" {
+			t.Errorf("lane step FILTER_E2E = %q", got)
+		}
+	}
+	if laneSteps != 1 {
+		t.Fatalf("changes has %d lane steps, want 1", laneSteps)
+	}
+	prCheckouts := checkoutsWhen(j, "github.event_name == 'pull_request'")
+	if len(prCheckouts) != 1 || !slices.Contains(prCheckouts[0], "fetch-depth: 2") {
+		t.Errorf("want one pull_request checkout with fetch-depth: 2, got %v", prCheckouts)
+	}
+}
+
+func TestDevEnvE2EFilterKeepsEveryFrontendPackage(t *testing.T) {
+	var filter []string
+	for _, s := range rawSteps(devEnvJob(t, "changes")) {
+		if strings.HasPrefix(s[0], "uses: dorny/paths-filter@") {
+			filter = s
+		}
+	}
+	if filter == nil {
+		t.Fatal("changes has no paths-filter step")
+	}
+	for _, want := range []string{"- 'frontend/**'", "- 'internal/**'"} {
+		if !slices.Contains(filter, want) {
+			t.Errorf("e2e filter lacks %s", want)
+		}
+	}
+}
+
+func TestDevEnvPushPublishesTheScope(t *testing.T) {
+	j := devEnvJob(t, "changes")
+	if !slices.Contains(blockLines(j.lines, 4, "outputs"), "scope: ${{ github.event_name == 'push' && steps.scope.outputs.scope || 'full' }}") {
+		t.Errorf("changes outputs lack the scope expression: %v", blockLines(j.lines, 4, "outputs"))
+	}
+	if !slices.Contains(blockLines(j.lines, 4, "permissions"), "actions: read") {
+		t.Errorf("changes permissions = %v, want actions: read", blockLines(j.lines, 4, "permissions"))
+	}
+	scopeSteps := 0
+	for _, s := range j.steps() {
+		if s.keys["id"] != "scope" {
+			continue
+		}
+		scopeSteps++
+		if s.keys["run"] != `bash scripts/ci/lane.sh push "$SHA"` {
+			t.Errorf("scope step run = %q", s.keys["run"])
+		}
+		if s.keys["if"] != "github.event_name == 'push'" || s.keys["continue-on-error"] != "true" {
+			t.Errorf("scope step if = %q, continue-on-error = %q", s.keys["if"], s.keys["continue-on-error"])
+		}
+		for k, want := range map[string]string{
+			"REPO": "${{ github.repository }}", "RUN_ID": "${{ github.run_id }}",
+			"GH_TOKEN": "${{ github.token }}", "SHA": "${{ github.sha }}",
+		} {
+			if s.env[k] != want {
+				t.Errorf("scope step env %s = %q, want %q", k, s.env[k], want)
+			}
+		}
+	}
+	if scopeSteps != 1 {
+		t.Fatalf("changes has %d scope steps, want 1", scopeSteps)
+	}
+	pushCheckouts := checkoutsWhen(j, "github.event_name == 'push'")
+	if len(pushCheckouts) != 1 {
+		t.Fatalf("want one push checkout, got %v", pushCheckouts)
+	}
+	for _, want := range []string{"fetch-depth: 0", "continue-on-error: true"} {
+		if !slices.Contains(pushCheckouts[0], want) {
+			t.Errorf("push checkout lacks %q: %v", want, pushCheckouts[0])
+		}
+	}
+}
+
+func TestDevEnvLibraryScopeSkipsTheFleetChain(t *testing.T) {
+	gw := devEnvJob(t, "deploy-gateway")
+	if !slices.Contains(jobList(gw, "needs"), "changes") {
+		t.Errorf("deploy-gateway needs = %v, want changes in it", jobList(gw, "needs"))
+	}
+	if cond, _ := jobKey(gw, "if"); !strings.Contains(cond, "needs.changes.outputs.scope != 'library'") {
+		t.Errorf("deploy-gateway if: %q lacks the library-scope skip", cond)
+	}
+	for job, dep := range map[string]string{
+		"health-gate": "deploy-gateway", "deploy-context": "health-gate", "deploy-spas": "health-gate",
+		"fleet-gate": "deploy-context", "spa-build-gate": "deploy-spas",
+	} {
+		if !slices.Contains(jobList(devEnvJob(t, job), "needs"), dep) {
+			t.Errorf("%s needs = %v, want %s: the library scope would not skip it", job, jobList(devEnvJob(t, job), "needs"), dep)
+		}
+	}
+}
+
+func TestDevEnvDeployLibraryDeploysOnlyTheLibrary(t *testing.T) {
+	j := devEnvJob(t, "deploy-library")
+	cond, _ := jobKey(j, "if")
+	for _, want := range []string{
+		"github.event_name == 'push'", "needs.changes.outputs.scope == 'library'",
+		"needs.await-ci.result == 'success'", "needs.prepare-env.result == 'success'",
+	} {
+		if !strings.Contains(cond, want) {
+			t.Errorf("deploy-library if: %q lacks %q", cond, want)
+		}
+	}
+	if !slices.Contains(jobList(j, "needs"), "prepare-env") {
+		t.Errorf("deploy-library needs = %v, want prepare-env", jobList(j, "needs"))
+	}
+	if name, _ := jobKey(j, "name"); !strings.HasPrefix(name, "Deploy ") || !strings.Contains(name, " → ") {
+		t.Errorf("deploy-library name = %q, want \"Deploy <x> → <env>\"", name)
+	}
+	var ups []string
+	for _, s := range j.steps() {
+		if strings.Contains(s.keys["run"], "railway-up-ci.sh") {
+			ups = append(ups, s.keys["run"])
+		}
+	}
+	if len(ups) != 1 || ups[0] != "sh scripts/ci/railway-up-ci.sh library" {
+		t.Errorf("deploy-library railway-up-ci.sh calls = %v, want exactly one with library", ups)
+	}
+}
+
+func TestDevEnvLibraryBuildGateChecksTheLibraryBuild(t *testing.T) {
+	j := devEnvJob(t, "library-build-gate")
+	if !slices.Contains(jobList(j, "needs"), "deploy-library") {
+		t.Errorf("library-build-gate needs = %v, want deploy-library", jobList(j, "needs"))
+	}
+	var waits []string
+	for _, s := range j.steps() {
+		if strings.Contains(s.keys["run"], "wait-spa-builds.sh") {
+			waits = append(waits, s.keys["run"])
+		}
+	}
+	if len(waits) != 1 || waits[0] != `bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LIBRARY_URL"` {
+		t.Errorf("library-build-gate waits = %v", waits)
+	}
+	env := jobEnv(j)
+	if env["EXPECTED_BUILD"] != "${{ github.sha }}" || env["LIBRARY_URL"] != "${{ needs.prepare-env.outputs.library_url }}" {
+		t.Errorf("library-build-gate env = %v", env)
+	}
+}
+
+// laneConst reads a single-quoted shell constant from scripts/ci/lane.sh.
+func laneConst(t *testing.T, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "ci", "lane.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^` + name + `='([^']*)'$`).FindStringSubmatch(string(raw))
+	if m == nil || m[1] == "" {
+		t.Fatalf("lane.sh has no non-empty %s", name)
+	}
+	return m[1]
+}
+
+func TestDevEnvBaseJobNamesMatchTheLaneLookup(t *testing.T) {
+	want := map[string]string{
+		"deploy-gateway": laneConst(t, "GATEWAY_JOB_PREFIX"),
+		"fleet-gate":     laneConst(t, "FLEET_GATE_JOB_PREFIX"),
+		"spa-build-gate": laneConst(t, "SPA_GATE_JOB_PREFIX"),
+	}
+	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
+		name, _ := jobKey(j, "name")
+		for id, prefix := range want {
+			if got := strings.HasPrefix(name, prefix); got != (j.name == id) {
+				t.Errorf("job %s name %q: starts with %q = %v, want %v", j.name, name, prefix, got, j.name == id)
+			}
+		}
 	}
 }

@@ -845,7 +845,7 @@ describe('fieldNote', () => {
     )
   })
 
-  it('returns null for every reason that is not inconsistent', () => {
+  it('returns null for a clean, unreadable, ambiguous or missing field', () => {
     // Keyed on the reason FIRST. A note keyed on the NAME alone renders the subtotal sentence
     // on a clean subtotal, and passes the row above.
     for (const reason of ['', 'unreadable', 'ambiguous', 'missing'] as const) {
@@ -857,10 +857,6 @@ describe('fieldNote', () => {
 describe('fieldNote and rule breaks', () => {
   const a = { key: 'a', message: 'Total must equal subtotal plus VAT.' }
   const b = { key: 'b', message: 'VAT must be 16 percent of subtotal.' }
-
-  it('reasonPill names a rule break', () => {
-    expect(reasonPill('rule_break', 0)).toBe('BREAKS A RULE')
-  })
 
   it('fieldNote states the rule a value breaks', () => {
     expect(fieldNote('rule_break', 'vat', [a])).toBe(a.message)

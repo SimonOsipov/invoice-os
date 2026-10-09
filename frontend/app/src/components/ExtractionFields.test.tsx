@@ -1256,6 +1256,79 @@ describe('a rule break (ENGI-18-04)', () => {
     expect(note.style.display).toBe('block')
     expect(note.style.fontSize).toBe('11.5px')
   })
+
+  it('a corrected rule break that still carries its reason stays quiet', () => {
+    // Impossible on the wire (the server empties reason); the contradiction proves the settled gate.
+    render(fieldsPane({ fields: [ruleField({ corrected: { method: 'typed', was: '1.00', where: null } })] }))
+
+    expect(screen.queryByTestId('extraction-marker-vat')).toBeTruthy()
+    expect(within(row('vat')).queryByText(PILL_RULE)).toBeNull()
+    expect(within(row('vat')).queryByText(MSG)).toBeNull()
+  })
+
+  it('a rule break offers no chips even when it carries alternatives', () => {
+    render(fieldsPane({ fields: [ruleField({ alternatives: [{ value: '1.00', region: null }] })] }))
+
+    expect(inputOf('vat'), 'the rule break lost its input').toBeTruthy()
+    expect(screen.queryByTestId('extraction-chip-vat-0')).toBeNull()
+  })
+
+  it('a rule break on a locked field stays read-only like its inconsistent sibling', () => {
+    render(
+      fieldsPane({
+        fields: [
+          ruleField({ name: 'supplier_tin', value: '12345678-0001' }),
+          mkField({ name: 'supplier_name', value: 'Acme', reason: 'inconsistent' }),
+        ],
+      }),
+    )
+
+    for (const name of ['supplier_tin', 'supplier_name']) {
+      expect(inputOf(name), `${name} rendered no input`).toBeTruthy()
+      expect(inputOf(name)!.readOnly, `${name} is editable`).toBe(true)
+      expect(inputOf(name)!.getAttribute('aria-readonly')).toBe('true')
+    }
+    expect(inputOf('supplier_tin')!.getAttribute('style')).toBe(inputOf('supplier_name')!.getAttribute('style'))
+    expect(within(row('supplier_tin')).queryByText(PILL_RULE)).toBeTruthy()
+    expect(within(row('supplier_tin')).queryByText(MSG), 'the rule note is missing beside the lock').toBeTruthy()
+  })
+
+  it('an empty rule list keeps the pill and draws no note', () => {
+    render(fieldsPane({ fields: [ruleField({ rules: [] }), mkField({ name: 'total', reason: '' })] }))
+
+    expect(within(row('vat')).queryByText(PILL_RULE)).toBeTruthy()
+    const spans = (name: string) => Array.from(row(name).querySelectorAll('span')).map((s) => s.textContent)
+    expect(spans('vat').filter((t) => t === MSG)).toHaveLength(0)
+    // same span count as a clean cell plus its one pill: nothing else was drawn
+    expect(row('vat').querySelectorAll('span').length).toBe(row('total').querySelectorAll('span').length + 1)
+  })
+
+  it('several rules read as one note, joined in order by one space', () => {
+    const rules = ['one.', 'two.', 'three.'].map((message, i) => ({ key: `k${i}`, message }))
+    render(fieldsPane({ fields: [ruleField({ rules })] }))
+
+    expect(within(row('vat')).queryByText('one. two. three.')).toBeTruthy()
+  })
+
+  it('rule messages render as text, never as markup', () => {
+    const message = '<b>bold</b> & "quoted" <img src=x onerror=alert(1)>'
+    render(fieldsPane({ fields: [ruleField({ rules: [{ key: 'm', message }] })] }))
+
+    expect(within(row('vat')).getByText(message)).toBeTruthy()
+    expect(row('vat').querySelector('b, img')).toBeNull()
+  })
+
+  it('undoing a correction brings the pill and the note back', () => {
+    const settled = ruleField({ reason: '', rules: [], corrected: { method: 'typed', was: '1.00', where: null } })
+    const view = render(fieldsPane({ fields: [settled] }))
+    expect(within(row('vat')).queryByText(PILL_RULE)).toBeNull()
+
+    view.rerender(fieldsPane({ fields: [ruleField()] }))
+    expect(within(row('vat')).queryByText(PILL_RULE)).toBeTruthy()
+    expect(within(row('vat')).queryByText(MSG)).toBeTruthy()
+    expect(screen.queryByTestId('extraction-marker-vat')).toBeNull()
+    expect(screen.queryByTestId('extraction-undo-vat')).toBeNull()
+  })
 })
 
 describe('a corrected field', () => {

@@ -6530,6 +6530,19 @@ describe('InvoiceDetail line links (ENGI-16-03)', () => {
     expect(lineRow(2).contains(document.activeElement)).toBe(false)
   })
 
+  it('invoiceDetail_editToggleAfterSaveDoesNotReplayTheLineFocus', async () => {
+    mockDetailFetch(detailRecord({ ...base, violations: [viol('line_items[2].unit_price')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('violation-open-line'))
+    fireEvent.change(await screen.findByDisplayValue('Beta Ltd'), { target: { value: 'Beta Ltd 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(screen.queryByTestId('edit-invoice')).toBeNull())
+
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    await screen.findByTestId('edit-invoice')
+    expect(lineRow(2).contains(document.activeElement)).toBe(false)
+  })
+
   it('invoiceDetail_lineLinkDisabledWhenNotEditable', async () => {
     mockDetailFetch(detailRecord({ ...base, can_edit: false, violations: [viol('line_items[1]')] }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)

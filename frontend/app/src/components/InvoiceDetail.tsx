@@ -908,6 +908,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   invoiceId={invoiceId}
                   inv={inv}
                   focus={lineFocus}
+                  onFocusApplied={() => setLineFocus(null)}
                   onSaved={handleSaved}
                   onCancel={() => setEditing(false)}
                 />
@@ -1221,6 +1222,7 @@ function InvoiceEditBody({
   invoiceId,
   inv,
   focus,
+  onFocusApplied,
   onSaved,
   onCancel,
 }: {
@@ -1229,6 +1231,7 @@ function InvoiceEditBody({
   invoiceId: string
   inv: InvoiceDetailRecord
   focus: { seq: number; target: LineTarget } | null
+  onFocusApplied: () => void
   onSaved: (renamed: boolean) => void
   onCancel: () => void
 }) {
@@ -1245,6 +1248,7 @@ function InvoiceEditBody({
   useEffect(() => {
     if (!focus) return
     const row = linesRef.current?.querySelectorAll('[data-testid="line-row"]')[focus.target.line - 1]
+    onFocusApplied() // consume once, so a later Edit open does not replay it
     if (!row) return
     const inputs = Array.from(row.querySelectorAll<HTMLInputElement>('[data-line-field]'))
     const hit = inputs.find((el) => el.dataset.lineField === focus.target.field) ?? inputs[0]

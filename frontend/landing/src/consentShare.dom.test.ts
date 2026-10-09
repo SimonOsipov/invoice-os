@@ -276,4 +276,63 @@ describe('shared consent cookie', () => {
     expect(readConsentCookie(document)!.analytics).toBe(true)
     expect(map.has(KEY)).toBe(false)
   })
+
+  it('QA-01 a non-production host ignores a cookie it can see and never migrates into it', () => {
+    const { cookieJar } = setup()
+    const forkUrl = 'https://pr-12-library.up.railway.app/'
+    const forkDoc = win(forkUrl, cookieJar)
+    forkDoc.cookie = `${KEY}=${enc(rec(false, '2026-05-01T00:00:00.000Z'))}; Path=/; Secure`
+    expect(jarCookies(cookieJar, forkUrl)).toHaveLength(1)
+    const store = memStore()
+    const local = rec(true, '2026-01-01T00:00:00.000Z')
+    seed(store, local)
+    const before = forkDoc.cookie
+
+    expect(readConsent(store, forkDoc, 'pr-12-library.up.railway.app')).toEqual(local)
+    expect(store.map.has(KEY)).toBe(true)
+    expect(forkDoc.cookie).toBe(before)
+  })
+
+  it('QA-02 a wrong-shape or old-version cookie is no record', () => {
+    const bad = ['{"analytics":"yes","v":1}', '{"analytics":true,"v":0}', '{"analytics":true}', 'null', '[]', '1', '""', '{}']
+    for (const raw of bad) {
+      const { wwwDoc, storeW } = setup()
+      wwwDoc.cookie = `${KEY}=${encodeURIComponent(raw)}; Domain=ascomply.com; Path=/; Secure`
+      expect(wwwDoc.cookie).toContain(KEY)
+      expect(readConsentCookie(wwwDoc)).toBeNull()
+      expect(readConsent(storeW, wwwDoc, WWW)).toBeNull()
+    }
+  })
+
+  it('QA-03 only the exact asc_consent name is read', () => {
+    const { wwwDoc } = setup()
+    const r = rec(true, '2026-01-01T00:00:00.000Z')
+    wwwDoc.cookie = `xasc_consent=${enc(rec(false, '2026-09-01T00:00:00.000Z'))}; Domain=ascomply.com; Path=/; Secure`
+    wwwDoc.cookie = `asc_consent_x=${enc(rec(false, '2026-09-01T00:00:00.000Z'))}; Domain=ascomply.com; Path=/; Secure`
+    expect(readConsentCookie(wwwDoc)).toBeNull()
+    wwwDoc.cookie = `${KEY}=${enc(r)}; Domain=ascomply.com; Path=/; Secure`
+    expect(readConsentCookie(wwwDoc)).toEqual(r)
+  })
+
+  it('QA-04 a cookie record with no ts loses to a dated local record', () => {
+    const { wwwDoc, storeW } = setup()
+    wwwDoc.cookie = `${KEY}=${enc({ analytics: false, v: CONSENT_VERSION })}; Domain=ascomply.com; Path=/; Secure`
+    const local = rec(true, '2026-01-01T00:00:00.000Z')
+    seed(storeW, local)
+    expect(readConsent(storeW, wwwDoc, WWW)).toEqual(local)
+    expect(readConsentCookie(wwwDoc)).toEqual(local)
+    expect(storeW.map.has(KEY)).toBe(false)
+  })
+
+  it('QA-05 applyChoice with a non-production hostname keeps the record in the store', () => {
+    const map = new Map<string, string>()
+    const store = {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => void map.set(k, v),
+      removeItem: (k: string) => void map.delete(k),
+    }
+    applyChoice('accept', { hostname: 'localhost', store })
+    expect(map.has(KEY)).toBe(true)
+    expect(readConsentCookie(document)).toBeNull()
+  })
 })

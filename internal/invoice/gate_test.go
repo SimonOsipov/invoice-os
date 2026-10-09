@@ -88,7 +88,7 @@ func startInProcess04(t *testing.T, app *pgxpool.Pool) *httptest.Server {
 	t.Helper()
 	vstore := validation.NewStore(app)
 	eng := validation.NewDefaultEngine()
-	handler := validation.S2SMiddleware(gapiS2SToken)(validation.BatchValidateHandler(vstore.LoadActiveRuleSetGlobal, eng, nil))
+	handler := validation.S2SMiddleware(gapiS2SToken)(validation.BatchValidateHandler(vstore.LoadForDates, eng, nil, nil))
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv

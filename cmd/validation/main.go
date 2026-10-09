@@ -63,7 +63,7 @@ func main() {
 	// authenticated as a fleet PEER via the shared S2S_TOKEN ([s2s-peer-auth]) and reads no tenant, because
 	// rule evaluation is a pure function of (payload, active global rule-set)
 	// and there is no tenant-scoped data behind it ([s2s-identity]). Hence
-	// LoadActiveRuleSetGlobal rather than LoadActiveRuleSet: the tenant-wrapped
+	// LoadForDates rather than LoadActiveRuleSet: the tenant-wrapped
 	// loader returns db.ErrNoTenant with no identity in context, so an
 	// identity-less peer call structurally cannot use it.
 	//
@@ -73,7 +73,7 @@ func main() {
 	// The stateless engine is reused; the rule-set is loaded once per batch,
 	// inside the handler.
 	app.Mux.Handle("POST /v1/validate/batch", validation.S2SMiddleware(mustEnv("S2S_TOKEN"))(
-		validation.BatchValidateHandler(store.LoadActiveRuleSetGlobal, engine, app.Logger)))
+		validation.BatchValidateHandler(store.LoadForDates, engine, nil, app.Logger)))
 
 	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval,
 		codelist.NewSyncer(pool, codelist.DefaultBaseURL, nil, app.Logger).SyncAll))

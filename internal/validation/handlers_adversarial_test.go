@@ -42,7 +42,7 @@ func TestBatchValidate_ActiveVersionZeroRules503NotCleanPass(t *testing.T) {
 	reqBody := `{"invoices":[{"ref":"a","invoice":{}},{"ref":"b","invoice":{}}]}`
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(reqBody))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForDates, eng, nil, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		var raw map[string]json.RawMessage

@@ -83,7 +83,7 @@ func startInProcess04ForImporter(t *testing.T, app *pgxpool.Pool) *httptest.Serv
 	t.Helper()
 	vstore := validation.NewStore(app)
 	eng := validation.NewDefaultEngine()
-	handler := validation.S2SMiddleware(impvS2SToken)(validation.BatchValidateHandler(vstore.LoadActiveRuleSetGlobal, eng, nil))
+	handler := validation.S2SMiddleware(impvS2SToken)(validation.BatchValidateHandler(vstore.LoadForDates, eng, nil, nil))
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv

@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // batchResponseBody decodes BatchValidateHandler's success body
@@ -37,8 +38,10 @@ type batchResponseBody struct {
 	RuleSetVersion   int    `json:"rule_set_version"`
 	RuleSetVersionID string `json:"rule_set_version_id"`
 	Results          []struct {
-		Ref        string      `json:"ref"`
-		Violations []Violation `json:"violations"`
+		Ref              string      `json:"ref"`
+		Violations       []Violation `json:"violations"`
+		RuleSetVersion   int         `json:"rule_set_version"`
+		RuleSetVersionID string      `json:"rule_set_version_id"`
 	} `json:"results"`
 	Error string `json:"error"`
 }
@@ -48,9 +51,29 @@ type batchResponseBody struct {
 // file header). Shared with batch_db_test.go.
 func doBatch(t *testing.T, loadRuleSet func(ctx context.Context) (RuleSet, error), eng *Engine, rawBody string) *httptest.ResponseRecorder {
 	t.Helper()
+	return doBatchAt(t, allDates(loadRuleSet), eng, nil, rawBody)
+}
+
+// allDates serves the one rule-set the load func returns for every requested date.
+func allDates(load func(ctx context.Context) (RuleSet, error)) func(ctx context.Context, dates []string) (map[string]RuleSet, error) {
+	return func(ctx context.Context, dates []string) (map[string]RuleSet, error) {
+		rs, err := load(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out := make(map[string]RuleSet, len(dates))
+		for _, d := range dates {
+			out[d] = rs
+		}
+		return out, nil
+	}
+}
+
+func doBatchAt(t *testing.T, load func(ctx context.Context, dates []string) (map[string]RuleSet, error), eng *Engine, now func() time.Time, rawBody string) *httptest.ResponseRecorder {
+	t.Helper()
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(rawBody))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(loadRuleSet, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(load, eng, now, nil).ServeHTTP(rec, r)
 	return rec
 }
 
@@ -216,5 +239,171 @@ func TestBatch_ConfigFault500NoPartialResults(t *testing.T) {
 	if _, ok := raw["results"]; ok {
 		t.Error(`500 response carries a "results" key -- a config fault must fail the WHOLE batch, ` +
 			`no partial results [batch-fault-semantics]`)
+	}
+}
+
+// datesLoader serves sets by date, records each call's dates, and fails on a
+// date it has no set for.
+func datesLoader(calls *[][]string, sets map[string]RuleSet) func(context.Context, []string) (map[string]RuleSet, error) {
+	return func(_ context.Context, dates []string) (map[string]RuleSet, error) {
+		*calls = append(*calls, append([]string(nil), dates...))
+		out := map[string]RuleSet{}
+		for _, d := range dates {
+			rs, ok := sets[d]
+			if !ok {
+				return nil, fmt.Errorf("no set for %s", d)
+			}
+			out[d] = rs
+		}
+		return out, nil
+	}
+}
+
+func fixedNow(s string) func() time.Time {
+	return func() time.Time {
+		ts, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			panic(err)
+		}
+		return ts
+	}
+}
+
+func decodeBatch(t *testing.T, rec *httptest.ResponseRecorder) batchResponseBody {
+	t.Helper()
+	var body batchResponseBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response %q: %v", rec.Body.String(), err)
+	}
+	return body
+}
+
+func buyerRequired() Rule {
+	return Rule{
+		Key: "buyer-required", Type: TypeRequired, Target: "buyer.name",
+		Params: json.RawMessage(`{}`), Severity: "error", Message: "buyer.name is required",
+		Scope: "document", Enabled: true,
+	}
+}
+
+func TestBatch_EachItemJudgedByTheVersionForItsIssueDate(t *testing.T) {
+	var calls [][]string
+	load := datesLoader(&calls, map[string]RuleSet{
+		"3001-02-01": {ID: "id-a", Version: 5, Rules: []Rule{buyerRequired()}},
+		"3001-07-01": {ID: "id-b", Version: 6, Rules: []Rule{{
+			Key: "total-required", Type: TypeRequired, Target: "total",
+			Params: json.RawMessage(`{}`), Severity: "error", Message: "x", Scope: "document", Enabled: true,
+		}}},
+	})
+	rec := doBatchAt(t, load, NewDefaultEngine(), nil, `{"invoices":[
+		{"ref":"one","invoice":{"total":1,"issue_date":"3001-02-01"}},
+		{"ref":"two","invoice":{"total":1,"issue_date":"3001-07-01"}}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeBatch(t, rec)
+	r1, r2 := body.Results[0], body.Results[1]
+	if len(r1.Violations) != 1 || r1.Violations[0].RuleKey != "buyer-required" || r1.RuleSetVersion != 5 || r1.RuleSetVersionID != "id-a" {
+		t.Errorf("item 1 = %+v, want set A's violation and stamp v5/id-a", r1)
+	}
+	if len(r2.Violations) != 0 || r2.RuleSetVersion != 6 || r2.RuleSetVersionID != "id-b" {
+		t.Errorf("item 2 = %+v, want no violations and set B's stamp v6/id-b", r2)
+	}
+}
+
+func TestBatch_UndatedInvoiceIsJudgedByTheVersionInForceToday(t *testing.T) {
+	var calls [][]string
+	load := datesLoader(&calls, map[string]RuleSet{"2027-02-01": {ID: "id-t", Version: 9}})
+	rec := doBatchAt(t, load, NewDefaultEngine(), fixedNow("2027-02-01T10:00:00Z"), `{"invoices":[{"ref":"a","invoice":{}}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 1 || len(calls[0]) != 1 || calls[0][0] != "2027-02-01" {
+		t.Errorf("loader calls = %v, want one call with [2027-02-01]", calls)
+	}
+	if got := decodeBatch(t, rec).Results[0]; got.RuleSetVersion != 9 || got.RuleSetVersionID != "id-t" {
+		t.Errorf("item stamp = v%d %q, want v9 id-t", got.RuleSetVersion, got.RuleSetVersionID)
+	}
+}
+
+func TestBatch_MalformedIssueDateFallsBackToToday(t *testing.T) {
+	var calls [][]string
+	load := datesLoader(&calls, map[string]RuleSet{"2027-03-01": {ID: "id-t", Version: 9}})
+	rec := doBatchAt(t, load, NewDefaultEngine(), fixedNow("2027-03-01T10:00:00Z"), `{"invoices":[
+		{"ref":"a","invoice":{"issue_date":"15/01/2027"}},
+		{"ref":"b","invoice":{"issue_date":20270115}},
+		{"ref":"c","invoice":{"issue_date":""}}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 1 || len(calls[0]) != 1 || calls[0][0] != "2027-03-01" {
+		t.Errorf("loader calls = %v, want one call with only today", calls)
+	}
+}
+
+func TestBatch_TodayIsTheUTCDate(t *testing.T) {
+	var calls [][]string
+	load := datesLoader(&calls, map[string]RuleSet{"2026-12-31": {ID: "id-t", Version: 9}})
+	rec := doBatchAt(t, load, NewDefaultEngine(), fixedNow("2027-01-01T00:30:00+01:00"), `{"invoices":[{"ref":"a","invoice":{}}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 1 || calls[0][0] != "2026-12-31" {
+		t.Errorf("loader calls = %v, want [2026-12-31]", calls)
+	}
+}
+
+func TestBatch_OneLoaderCallPerBatch(t *testing.T) {
+	var calls [][]string
+	load := datesLoader(&calls, map[string]RuleSet{
+		"3001-01-01": {ID: "a", Version: 1}, "3001-02-01": {ID: "b", Version: 2}, "2027-05-05": {ID: "t", Version: 3},
+	})
+	rec := doBatchAt(t, load, NewDefaultEngine(), fixedNow("2027-05-05T01:00:00Z"), `{"invoices":[
+		{"ref":"1","invoice":{"issue_date":"3001-01-01"}},
+		{"ref":"2","invoice":{"issue_date":"3001-02-01"}},
+		{"ref":"3","invoice":{"issue_date":"3001-01-01"}},
+		{"ref":"4","invoice":{}},
+		{"ref":"5","invoice":{"issue_date":"3001-02-01"}}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 1 {
+		t.Fatalf("loader called %d times, want 1", len(calls))
+	}
+	got := map[string]bool{}
+	for _, d := range calls[0] {
+		got[d] = true
+	}
+	if len(calls[0]) != 3 || !got["3001-01-01"] || !got["3001-02-01"] || !got["2027-05-05"] {
+		t.Errorf("dates = %v, want exactly the 3 distinct dates", calls[0])
+	}
+}
+
+func TestBatch_LoaderOmittingADateIs500(t *testing.T) {
+	load := func(_ context.Context, dates []string) (map[string]RuleSet, error) {
+		return map[string]RuleSet{dates[0]: {ID: "a", Version: 1}}, nil
+	}
+	rec := doBatchAt(t, load, NewDefaultEngine(), nil, `{"invoices":[
+		{"ref":"1","invoice":{"issue_date":"3001-01-01"}},{"ref":"2","invoice":{"issue_date":"3001-02-01"}}]}`)
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "internal server error") {
+		t.Fatalf("got %d %s, want 500 internal server error", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "results") {
+		t.Errorf("body %s carries results, want no partial results", rec.Body.String())
+	}
+}
+
+func TestBatch_TopLevelStampIsTheLowestVersion(t *testing.T) {
+	var calls [][]string
+	load := datesLoader(&calls, map[string]RuleSet{
+		"3001-01-01": {ID: "id-7", Version: 7}, "3001-02-01": {ID: "id-5", Version: 5}, "3001-03-01": {ID: "id-9", Version: 9},
+	})
+	rec := doBatchAt(t, load, NewDefaultEngine(), nil, `{"invoices":[
+		{"ref":"1","invoice":{"issue_date":"3001-01-01"}},
+		{"ref":"2","invoice":{"issue_date":"3001-02-01"}},
+		{"ref":"3","invoice":{"issue_date":"3001-03-01"}}]}`)
+	body := decodeBatch(t, rec)
+	if body.RuleSetVersion != 5 || body.RuleSetVersionID != "id-5" {
+		t.Errorf("top-level stamp = v%d %q, want v5 id-5", body.RuleSetVersion, body.RuleSetVersionID)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBatch_FullyValidInvoiceZeroViolations (VB-12, [batch-payload-rooting]'s
@@ -54,7 +55,7 @@ func TestBatch_FullyValidInvoiceZeroViolations(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForDates, eng, nil, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -96,7 +97,7 @@ func TestBatch_EmptyInvoiceFiresEveryRequired(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForDates, eng, nil, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -158,7 +159,7 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForDates, eng, nil, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -173,5 +174,43 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 	}
 	if body.RuleSetVersion != wantVersion {
 		t.Errorf("response rule_set_version = %d, want %d", body.RuleSetVersion, wantVersion)
+	}
+}
+
+func TestBatch_DB_TwoVersionsInOneBatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	aID, _ := dateFixture(t, super, "3001-01-01", "t-a")
+	bID, _ := dateFixture(t, super, "3001-06-01", "t-b")
+
+	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[
+		{"ref":"a","invoice":{"issue_date":"3001-02-01"}},
+		{"ref":"b","invoice":{"issue_date":"3001-07-01"}}]}`))
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForDates, NewDefaultEngine(), nil, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeBatch(t, rec)
+	if body.Results[0].RuleSetVersionID != aID || body.Results[1].RuleSetVersionID != bID {
+		t.Errorf("item stamps = %s, %s; want %s, %s",
+			body.Results[0].RuleSetVersionID, body.Results[1].RuleSetVersionID, aID, bID)
+	}
+}
+
+func TestBatch_DB_UndatedInvoiceIgnoresAScheduledVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format(time.DateOnly)
+	fixtureID, _ := dateFixture(t, super, tomorrow, "t-tomorrow")
+
+	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[{"ref":"a","invoice":{}}]}`))
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForDates, NewDefaultEngine(), nil, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	got := decodeBatch(t, rec).Results[0]
+	if got.RuleSetVersion != 4 || got.RuleSetVersionID == fixtureID {
+		t.Errorf("undated item stamp = v%d %s, want v4 and not the scheduled fixture %s",
+			got.RuleSetVersion, got.RuleSetVersionID, fixtureID)
 	}
 }

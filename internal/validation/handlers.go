@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -64,16 +65,18 @@ type batchRequest struct {
 }
 
 // batchItemResult is one item's outcome: its echoed ref + every collected
-// violation (collect-ALL, same as the single-invoice Result).
+// violation (collect-ALL, same as the single-invoice Result), stamped with the
+// rule-set version it was judged by.
 type batchItemResult struct {
-	Ref        string      `json:"ref"`
-	Violations []Violation `json:"violations"`
+	Ref              string      `json:"ref"`
+	Violations       []Violation `json:"violations"`
+	RuleSetVersion   int         `json:"rule_set_version"`
+	RuleSetVersionID string      `json:"rule_set_version_id"`
 }
 
-// batchResponse is the POST /v1/validate/batch success body. The rule-set
-// version + its uuid are stamped ONCE for the whole batch, not per item --
-// one load means one version, so a per-item stamp could only ever repeat
-// itself ([uuid-stamp]).
+// batchResponse is the POST /v1/validate/batch success body. The top-level
+// rule-set version + uuid are the LOWEST version used in the batch (D10); each
+// item carries its own stamp.
 type batchResponse struct {
 	RuleSetVersion   int               `json:"rule_set_version"`
 	RuleSetVersionID string            `json:"rule_set_version_id"`
@@ -82,34 +85,32 @@ type batchResponse struct {
 
 // BatchValidateHandler returns POST /v1/validate/batch: 03 submits many
 // invoices in one request and gets each one's violations back, stamped with
-// the single rule-set version they were all evaluated against ([batch-wire]).
+// the rule-set version in force on that invoice's issue date.
 //
 // It reads NO tenant. It never touches X-Tenant-ID and never calls
 // auth.IdentityFromContext ([s2s-identity]) -- contrast ToggleHandler's
-// identity-first-401 above. Evaluation is a pure function of (payload, active
-// global rule-set): there is no tenant to assert and no tenant-scoped data
-// behind this endpoint to leak, so the trust boundary does not widen. Peer
-// authentication is S2SMiddleware's job, upstream of here; all tenant-scoped
-// work stays in 03.
+// identity-first-401 above. Peer authentication is S2SMiddleware's job,
+// upstream of here; all tenant-scoped work stays in 03.
 //
-// loadRuleSet is injected (rather than reaching for a Store) so the single-
-// load-per-batch property is provable with a counting fake, and so this file
-// keeps its no-DB-import shape. main.go binds it to Store.LoadActiveRuleSetGlobal.
+// load is injected so the one-call-per-batch property is provable with a
+// counting fake; main.go binds it to Store.LoadForDates. An item's date is its
+// invoice.issue_date when that parses as time.DateOnly, else today in UTC, so
+// an undated item never meets a scheduled version. now nil means time.Now.
 // eng is the shipped, stateless *Engine, reused across every item.
 //
 // Order of operations is load-bearing:
 //  1. cap the body (MaxBytesReader) -- but only after S2SMiddleware's 401.
-//  2. decode; an oversized body is a 413, checked BEFORE the generic 400
-//     (Stage-1 addendum G1: statusForErr has no 413 branch and cannot grow
-//     one usefully, since only the decode site knows the body was capped --
-//     house pattern, internal/importer/handlers.go:112-120).
+//  2. decode; an oversized body is a 413, checked BEFORE the generic 400.
 //  3. bound the item count (400 on empty or over-cap) BEFORE loading, so a
 //     junk request never costs a query.
-//  4. load the rule-set EXACTLY ONCE for the whole batch -- the entire point
-//     of this endpoint, and what makes the <60s gate reachable.
-//  5. evaluate every item against that one rule-set, results in REQUEST
+//  4. load once with the distinct dates; a requested date missing from the
+//     result is a 500 with no partial results.
+//  5. evaluate every item against its date's rule-set, results in REQUEST
 //     order.
-func BatchValidateHandler(loadRuleSet func(ctx context.Context) (RuleSet, error), eng *Engine, log *slog.Logger) http.HandlerFunc {
+func BatchValidateHandler(load func(ctx context.Context, dates []string) (map[string]RuleSet, error), eng *Engine, now func() time.Time, log *slog.Logger) http.HandlerFunc {
+	if now == nil {
+		now = time.Now
+	}
 	if log == nil {
 		log = slog.Default()
 	}
@@ -139,11 +140,28 @@ func BatchValidateHandler(loadRuleSet func(ctx context.Context) (RuleSet, error)
 			return
 		}
 
-		// ONE load for the whole batch, however many invoices it carries.
+		today := now().UTC().Format(time.DateOnly)
+		dates := make([]string, len(req.Invoices))
+		var distinct []string
+		seen := map[string]bool{}
+		for i, it := range req.Invoices {
+			d := today
+			if v, ok := it.Invoice["issue_date"].(string); ok {
+				if _, err := time.Parse(time.DateOnly, v); err == nil {
+					d = v
+				}
+			}
+			dates[i] = d
+			if !seen[d] {
+				seen[d] = true
+				distinct = append(distinct, d)
+			}
+		}
+
 		// ErrNoActiveRuleSet (and ErrEmptyRuleSet, which wraps it) -> 503 via
 		// statusForErr: the gate cannot evaluate, so it refuses -- it never
 		// answers a clean 200 it cannot stand behind.
-		rs, err := loadRuleSet(r.Context())
+		sets, err := load(r.Context(), distinct)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError || errors.Is(err, ErrCodeListMissing) {
@@ -152,9 +170,17 @@ func BatchValidateHandler(loadRuleSet func(ctx context.Context) (RuleSet, error)
 			writeError(w, status, msg)
 			return
 		}
+		for _, d := range distinct {
+			if _, ok := sets[d]; !ok {
+				log.ErrorContext(r.Context(), "validation: batch validate: loader omitted a requested date", slog.String("date", d))
+				writeError(w, http.StatusInternalServerError, "internal server error")
+				return
+			}
+		}
 
 		results := make([]batchItemResult, 0, len(req.Invoices))
-		for _, it := range req.Invoices {
+		for i, it := range req.Invoices {
+			rs := sets[dates[i]]
 			// RE-ROOT: the engine's resolvePath roots at p["invoice"]
 			// (Decision N19), so each item's invoice object must be wrapped
 			// back into a Payload before evaluation. Passing it.Invoice
@@ -177,12 +203,21 @@ func BatchValidateHandler(loadRuleSet func(ctx context.Context) (RuleSet, error)
 				writeError(w, http.StatusInternalServerError, "internal server error")
 				return
 			}
-			results = append(results, batchItemResult{Ref: it.Ref, Violations: result.Violations})
+			results = append(results, batchItemResult{
+				Ref: it.Ref, Violations: result.Violations,
+				RuleSetVersion: rs.Version, RuleSetVersionID: rs.ID,
+			})
 		}
 
+		lowest := sets[distinct[0]]
+		for _, d := range distinct[1:] {
+			if sets[d].Version < lowest.Version {
+				lowest = sets[d]
+			}
+		}
 		writeJSON(w, http.StatusOK, batchResponse{
-			RuleSetVersion:   rs.Version,
-			RuleSetVersionID: rs.ID,
+			RuleSetVersion:   lowest.Version,
+			RuleSetVersionID: lowest.ID,
 			Results:          results,
 		})
 	}

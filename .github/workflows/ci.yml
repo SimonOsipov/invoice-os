@@ -26,8 +26,16 @@ jobs:
       sidecar: ${{ steps.filter.outputs.sidecar }}
       idp: ${{ steps.filter.outputs.idp }}
       hooks: ${{ steps.filter.outputs.hooks }}
+      lane: ${{ steps.lane.outputs.lane }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      # PR-only: a push has no PR diff to classify.
+      - name: Decide the lane
+        id: lane
+        if: github.event_name == 'pull_request'
+        run: bash scripts/ci/lane.sh pr
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -978,7 +986,7 @@ jobs:
   frontend:
     name: Frontend
     needs: changes
-    if: needs.changes.outputs.frontend == 'true'
+    if: needs.changes.outputs.frontend == 'true' && needs.changes.outputs.lane != 'library'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1017,6 +1025,30 @@ jobs:
       # test:api/topology/smoke/demo jobs never ran them — they had no runner at all
       # until this line. Cheap and deployment-free: they assert local seam logic
       # (requireDbInCI, resolveTarget), not anything about a live environment.
+      - name: Unit tests (e2e seams)
+        run: pnpm --filter @invoice-os/e2e test:unit
+
+  # Small lane: a library-only PR runs this in place of Frontend.
+  library:
+    name: Library
+    needs: changes
+    if: needs.changes.outputs.lane == 'library'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Unit tests (library)
+        run: pnpm --filter @invoice-os/library test
+      - name: Build (library)
+        run: pnpm --filter @invoice-os/library build
+      - name: Unit tests (monitoring)
+        run: pnpm --filter @invoice-os/monitoring test
       - name: Unit tests (e2e seams)
         run: pnpm --filter @invoice-os/e2e test:unit
 
@@ -1219,7 +1251,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite]
+    needs: [changes, go, frontend, library, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1236,6 +1268,7 @@ jobs:
           echo "queue:         ${{ needs.queue.result }}"
           echo "audit:         ${{ needs.audit.result }}"
           echo "frontend:      ${{ needs.frontend.result }}"
+          echo "library:       ${{ needs.library.result }}"
           echo "clean-clone:   ${{ needs.clean-clone.result }}"
           echo "stale-refs:    ${{ needs.stale-refs.result }}"
           echo "migration-order: ${{ needs.migration-order.result }}"
@@ -1273,6 +1306,9 @@ jobs:
           fi
           if [ "${{ needs.frontend.result }}" = "failure" ] || [ "${{ needs.frontend.result }}" = "cancelled" ]; then
             echo "::error::Frontend job failed"; exit 1
+          fi
+          if [ "${{ needs.library.result }}" = "failure" ] || [ "${{ needs.library.result }}" = "cancelled" ]; then
+            echo "::error::Library job failed"; exit 1
           fi
           # clean-clone is unconditional (no path filter) — it must actually pass,
           # never merely skip.

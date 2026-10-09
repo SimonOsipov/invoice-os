@@ -223,7 +223,7 @@ func ResetEnabled(environment, flag string) bool {
 //	                          (EXTR-12). Same composite FK to extraction_jobs as
 //	                          extraction_field_results above, so the same 0A000
 //	                          rule applies.
-//	extraction_rule_breaks    the append-only rule violations of a read (ENGI-18).
+//	extraction_rule_breaks    the append-only rule violations of a read.
 //	                          Same composite FK to extraction_jobs, so the same
 //	                          0A000 rule applies.
 //	extraction_page_images    the rendered-page inventory of a document (EXTR-02).

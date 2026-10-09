@@ -14,21 +14,27 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// ENGI-18-02: the importer records which rules a document reading breaks. Real-gate tests run
+// The importer records which rules a document reading breaks. Real-gate tests run
 // against the active rule set on the dev DB (v4: buyer-tin-format, vat-standard-rate).
 
 // rbGate reports one fixed violation list for the invoice it is handed. hang makes Evaluate block
-// until its ctx is done and sends that ctx's error on ctxErr.
+// until its ctx is done and sends that ctx's error on ctxErr. cancel, when set, cancels the
+// caller's request ctx as Evaluate starts.
 type rbGate struct {
 	fakeGate
 	violations []invoice.Violation
 	versionID  string
 	hang       bool
 	ctxErr     chan error
+	cancel     context.CancelFunc
 }
 
 func (g *rbGate) Evaluate(ctx context.Context, items []invoice.EvalItem) (invoice.EvalResult, error) {
 	_, _ = g.fakeGate.Evaluate(ctx, items)
+	if g.cancel != nil {
+		g.cancel()
+		return invoice.EvalResult{}, ctx.Err()
+	}
 	if g.hang {
 		<-ctx.Done()
 		g.ctxErr <- ctx.Err()
@@ -392,6 +398,29 @@ func TestRLS_AHungEvaluateIsCutOffAndRecordsNothing(t *testing.T) {
 	}
 	if got := countInvoicesByNumber(t, super, entityID, "RB-HANG-INV"); got != 1 {
 		t.Errorf("invoices RB-HANG-INV = %d, want 1", got)
+	}
+	if rows := rbRows(t, super, jobID); len(rows) != 0 {
+		t.Errorf("extraction_rule_breaks rows = %+v, want none", rows)
+	}
+}
+
+func TestRLS_ARequestCancelledDuringEvaluateStillCompletesTheBatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID, entityID := rbTenant(t, super, "RB-CANCEL")
+	documentID, jobID := rbSeed(t, super, tenantID, rbBadTIN(docCleanValues("RB-CANCEL-INV")))
+	callCtx, cancel := context.WithCancel(sxIdentity(context.Background(), tenantID))
+	defer cancel()
+	g := &rbGate{cancel: cancel}
+
+	res, err := newTestServiceWithGate(app, g).ImportDocument(callCtx, entityID, documentID)
+	if err != nil {
+		t.Fatalf("ImportDocument: %v, want nil: the rule check runs after the batch is finalized", err)
+	}
+	if res.Status != "completed" || res.ReadyInvoices != 1 {
+		t.Errorf("Status/ReadyInvoices = %q/%d, want completed/1", res.Status, res.ReadyInvoices)
+	}
+	if _, status, _, _, _ := docBatchRowByEntity(t, super, entityID); status != "completed" {
+		t.Errorf("import_batches.status = %q, want completed", status)
 	}
 	if rows := rbRows(t, super, jobID); len(rows) != 0 {
 		t.Errorf("extraction_rule_breaks rows = %+v, want none", rows)

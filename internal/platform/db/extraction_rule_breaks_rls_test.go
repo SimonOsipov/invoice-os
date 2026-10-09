@@ -1,6 +1,5 @@
-// RLS, grant and constraint suite for `extraction_rule_breaks` (ENGI-18-01). Red until the
-// migration lands: the catalog test asserts the table exists, and every other case degrades to
-// a 42P01 message through failIfUndefinedRuleBreaks.
+// RLS, grant and constraint suite for `extraction_rule_breaks`. The catalog test asserts the
+// table exists; every other case degrades to a 42P01 message through failIfUndefinedRuleBreaks.
 package db_test
 
 import (
@@ -100,7 +99,7 @@ func TestRLS_ExtractionRuleBreaksTableIsTenantIsolatedAndAppendOnlyByGrant(t *te
 		t.Fatalf("to_regclass(extraction_rule_breaks): %v", err)
 	}
 	if !exists {
-		t.Fatal("extraction_rule_breaks does not exist — the ENGI-18-01 migration is not applied")
+		t.Fatal("extraction_rule_breaks does not exist — the extraction_rule_breaks migration is not applied")
 	}
 
 	var enabled, forced bool

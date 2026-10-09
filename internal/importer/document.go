@@ -403,11 +403,11 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		}, nil
 	}
 
-	s.recordImportRuleBreaks(ctx, ex, created)
-
 	if err := s.batch.Finalize(ctx, batchID, 1, 1, 0, []RowError{}, "completed"); err != nil {
 		return BatchResult{}, err
 	}
+	// After Finalize: the gate call is a network hop and must not strand the batch in processing.
+	s.recordImportRuleBreaks(ctx, ex, created)
 	return BatchResult{
 		ID:                batchID,
 		Status:            "completed",

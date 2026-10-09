@@ -4,6 +4,7 @@ paths:
   - "internal/tools/idppin/**"
   - "internal/platform/auth/**"
   - ".github/workflows/idp-release-watch.yml"
+  - "internal/gateway/gateway.go"
   - "internal/gateway/register*.go"
   - "internal/gateway/resend_verification*.go"
   - "internal/gateway/password_reset*.go"
@@ -62,12 +63,24 @@ paths:
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
 - Reserve a sign-in throttle attempt before the GoTrue call.
-- Accept a tenant-less token only on `POST /api/tenancy/v1/workspaces` and `POST /api/tenancy/v1/invitations/accept`.
+- Accept a tenant-less token on `POST /api/tenancy/v1/workspaces` and `POST /api/tenancy/v1/invitations/accept`.
 - Match the tenant-less routes on the escaped path.
+- Accept a tenant-less staff token also on an exact `/api/<service>/v1/staff/` route.
+- Admit that exemption only when `app_metadata.staff` is true.
+- Match the staff exemption on the escaped path, with no dot segment and no `%`.
+- Never admit the bare `/v1/staff` path as a tenant-less route.
+- Treat a `/v1/staff` path as the staff route class. Match it decoded and cleaned.
+- Answer 403 on the staff route class for a token without `staff`.
+- Send `X-User-Staff` and `X-User-Rules-Role` as `true`, or omit them.
+- Read those two headers only on an `App` that called `RequireGateway`.
+- Check the rules role in the platform on every `/v1/staff` path. The service handler checks nothing.
 - Check every session with GoTrue `GET /user` before a request reaches a service.
 - Answer 503 when the session check cannot reach GoTrue. Never treat that failure as a revoked session.
 - Evict the subject's session-check cache on sign-out.
 - Mint the staff claim from `public.staff_members` in the access-token hook. Never read `user_metadata` for it.
+- Mint `app_metadata.rules_role` from `staff_members.rules_role` in the same hook. Strip an incoming one.
+- Decode `tenant_id`, `staff` and `rules_role` by exact key. A key in another case counts for nothing.
+- Reject a token whose `staff` or `rules_role` is not a boolean.
 - Accept an invite only for the account whose verified email equals the invited address.
 
 - Ship mock-issuer code only behind the `mockissuer` build tag. `TestProductionGatewayBinaryCannotMint` must stay green.

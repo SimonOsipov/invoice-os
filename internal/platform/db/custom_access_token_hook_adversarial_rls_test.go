@@ -24,12 +24,12 @@ func staffMigrationVersion(t *testing.T) int64 {
 	return migrationVersion(t, "*_staff_members.sql")
 }
 
-// reapplyHookMigrationOnCleanup rolls the staff and hook migrations back and forward after the test.
+// reapplyHookMigrationOnCleanup rolls the rules-role, staff and hook migrations back and forward after the test.
 // A memberships Down/Up round-trip drops status, which strips auth_hook_reader's column grant.
-// Staff Down runs first: it restores the tenant-only body over the function the hook Down drops.
+// Rules-role then staff Down run first: each restores the earlier body over the function the hook Down drops.
 func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 	t.Helper()
-	staff, hook := staffMigrationVersion(t), hookMigrationVersion(t)
+	rules, staff, hook := rulesRoleMigrationVersion(t), staffMigrationVersion(t), hookMigrationVersion(t)
 	t.Cleanup(func() {
 		ctx := context.Background()
 		for _, step := range []struct {
@@ -37,10 +37,12 @@ func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 			version int64
 			up      bool
 		}{
+			{"roll back the rules-role migration", rules, false},
 			{"roll back the staff migration", staff, false},
 			{"roll back the hook migration", hook, false},
 			{"re-apply the hook migration", hook, true},
 			{"re-apply the staff migration", staff, true},
+			{"re-apply the rules-role migration", rules, true},
 		} {
 			if _, err := provider.ApplyVersion(ctx, step.version, step.up); err != nil {
 				t.Errorf("%s: %v", step.what, err)
@@ -322,7 +324,7 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate column privileges: %v", err)
 	}
-	if want := map[string]int{"memberships": 3, "staff_members": 1, "invitations": 7, "tenants": 2}; !reflect.DeepEqual(cols, want) {
+	if want := map[string]int{"memberships": 3, "staff_members": 2, "invitations": 7, "tenants": 2}; !reflect.DeepEqual(cols, want) {
 		t.Errorf("auth_hook_reader column privileges per table = %v, want %v", cols, want)
 	}
 
@@ -342,7 +344,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	requireHarness(t)
 	reapplyStaffMigration(t)
 	ctx := context.Background()
-	hook, staff := hookMigrationVersion(t), staffMigrationVersion(t)
+	hook, staff, rules := hookMigrationVersion(t), staffMigrationVersion(t), rulesRoleMigrationVersion(t)
 
 	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
 	if err != nil {
@@ -374,7 +376,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		t.Fatalf("before Down: function=%d policy=%d privileges=%d, want 1 1 3", fn, policy, privs)
 	}
 
-	staffApplied, hookApplied := true, true
+	rulesApplied, staffApplied, hookApplied := true, true, true
 	t.Cleanup(func() {
 		ctx := context.Background()
 		if !hookApplied {
@@ -386,6 +388,12 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		if !staffApplied {
 			if _, err := provider.ApplyVersion(ctx, staff, true); err != nil {
 				t.Errorf("restore the staff migration: %v", err)
+				return
+			}
+		}
+		if !rulesApplied {
+			if _, err := provider.ApplyVersion(ctx, rules, true); err != nil {
+				t.Errorf("restore the rules-role migration: %v", err)
 			}
 		}
 	})
@@ -396,6 +404,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		up      bool
 		applied *bool
 	}{
+		{"roll back the rules-role migration", rules, false, &rulesApplied},
 		{"roll back the staff migration", staff, false, &staffApplied},
 		{"roll back the hook migration", hook, false, &hookApplied},
 	} {
@@ -415,6 +424,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	}{
 		{"re-apply the hook migration", hook, &hookApplied},
 		{"re-apply the staff migration", staff, &staffApplied},
+		{"re-apply the rules-role migration", rules, &rulesApplied},
 	} {
 		if _, err := provider.ApplyVersion(ctx, step.version, true); err != nil {
 			t.Fatalf("%s: %v", step.what, err)

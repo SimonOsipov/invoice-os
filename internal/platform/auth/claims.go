@@ -25,10 +25,40 @@ type gotrueClaims struct {
 	SessionID   string      `json:"session_id,omitempty"`
 }
 
-// appMetadata is GoTrue's app_metadata object. Only tenant_id is bound; other
-// keys real GoTrue includes (provider, providers, ...) are ignored on verify.
+// appMetadata is GoTrue's app_metadata object. Only tenant_id, staff and
+// rules_role are bound; other keys (provider, providers, ...) are ignored.
 type appMetadata struct {
-	TenantID string `json:"tenant_id"`
+	TenantID  string `json:"tenant_id"`
+	Staff     bool   `json:"staff,omitempty"`
+	RulesRole bool   `json:"rules_role,omitempty"`
+}
+
+// UnmarshalJSON matches the three keys exactly. encoding/json folds case, which
+// would let a planted "Staff" or "Tenant_ID" count. A non-boolean staff or
+// rules_role, or a non-string tenant_id, is an error; null reads as unset.
+func (a *appMetadata) UnmarshalJSON(b []byte) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	var out appMetadata
+	if raw, ok := m["tenant_id"]; ok {
+		if err := json.Unmarshal(raw, &out.TenantID); err != nil {
+			return fmt.Errorf("auth: invalid tenant_id claim: %w", err)
+		}
+	}
+	if raw, ok := m["staff"]; ok {
+		if err := json.Unmarshal(raw, &out.Staff); err != nil {
+			return fmt.Errorf("auth: invalid staff claim: %w", err)
+		}
+	}
+	if raw, ok := m["rules_role"]; ok {
+		if err := json.Unmarshal(raw, &out.RulesRole); err != nil {
+			return fmt.Errorf("auth: invalid rules_role claim: %w", err)
+		}
+	}
+	*a = out
+	return nil
 }
 
 // audience models GoTrue's "aud", which is a single string ("authenticated").

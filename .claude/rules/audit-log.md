@@ -6,7 +6,8 @@ paths:
 ---
 # Audit log
 
-- Write audit rows only through `audit.Record`.
+- Write `audit_log` rows only through `audit.Record`.
+- Write a staff action only through `audit.RecordStaff`. Never write a staff action to `audit_log`.
 - Never set `entity_id` or `invoice_id` by hand. A trigger fills `entity_id`. A generated column fills `invoice_id`.
 - Attribute an event by its event name, never by which payload key is present.
 - Order a page by `created_at DESC, id DESC`.

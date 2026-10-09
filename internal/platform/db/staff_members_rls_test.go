@@ -77,19 +77,23 @@ func reapplyMigration(t *testing.T, glob string) {
 	}
 }
 
-// resetStaffMigration drops the table, forgets the ledger row and applies the Up again. It does not
-// run the Down, so a Down or Up left broken by an earlier run cannot block it.
+// resetStaffMigration drops the table, forgets the staff and rules-role ledger rows and applies both
+// Ups again, leaving head. It does not run a Down, so a Down or Up left broken by an earlier run
+// cannot block it.
 func resetStaffMigration(t *testing.T, provider *goose.Provider, version int64) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := h.super.Exec(ctx, `DROP TABLE IF EXISTS public.staff_members`); err != nil {
 		t.Fatalf("drop staff_members: %v", err)
 	}
-	if _, err := h.super.Exec(ctx, `DELETE FROM goose_db_version WHERE version_id = $1`, version); err != nil {
-		t.Fatalf("forget the staff migration: %v", err)
+	rules := rulesRoleMigrationVersion(t)
+	if _, err := h.super.Exec(ctx, `DELETE FROM goose_db_version WHERE version_id IN ($1, $2)`, version, rules); err != nil {
+		t.Fatalf("forget the staff migrations: %v", err)
 	}
-	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
-		t.Fatalf("apply the staff migration: %v", err)
+	for _, v := range []int64{version, rules} {
+		if _, err := provider.ApplyVersion(ctx, v, true); err != nil {
+			t.Fatalf("apply migration %d: %v", v, err)
+		}
 	}
 }
 
@@ -439,7 +443,7 @@ func staffFootprint(t *testing.T) (tables, policies, grants int) {
 	return
 }
 
-// AC-9. Drives the shipped Down and Up through goose for the staff version.
+// AC-9. Drives the shipped Downs and Ups through goose, rules-role first on the way down.
 func TestRLS_StaffMembersDownRestoresTheTenantOnlyHook(t *testing.T) {
 	h := requireHarness(t)
 	reapplyStaffMigration(t)
@@ -462,27 +466,33 @@ func TestRLS_StaffMembersDownRestoresTheTenantOnlyHook(t *testing.T) {
 			t.Errorf("%s: app_metadata.staff = %v, want present=%v", stage, md["staff"], wantStaff)
 		}
 	}
-	checkFootprint := func(stage string, want int) {
+	// The head state grants auth_hook_reader two columns (user_id, rules_role); the staff Up alone grants one.
+	checkFootprint := func(stage string, wantTable, wantGrants int) {
 		t.Helper()
-		if tables, policies, grants := staffFootprint(t); tables != want || policies != want || grants != want {
-			t.Errorf("%s: table=%d policy=%d column grants=%d, want %d each", stage, tables, policies, grants, want)
+		if tables, policies, grants := staffFootprint(t); tables != wantTable || policies != wantTable || grants != wantGrants {
+			t.Errorf("%s: table=%d policy=%d column grants=%d, want %d %d %d", stage, tables, policies, grants, wantTable, wantTable, wantGrants)
 		}
 	}
 
-	checkFootprint("before Down", 1)
+	checkFootprint("before Down", 1, 2)
 	checkProjection("before Down", true)
 
+	rulesVersion := rulesRoleMigrationVersion(t)
+	restoreRulesRoleOnCleanup(t, provider, rulesVersion)
 	staffApplied := true
 	t.Cleanup(func() {
 		if !staffApplied {
 			resetStaffMigration(t, provider, version)
 		}
 	})
+	if _, err := provider.ApplyVersion(ctx, rulesVersion, false); err != nil {
+		t.Fatalf("roll back the rules-role migration: %v", err)
+	}
 	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
 		t.Fatalf("roll back the staff migration: %v", err)
 	}
 	staffApplied = false
-	checkFootprint("after Down", 0)
+	checkFootprint("after Down", 0, 0)
 	checkProjection("after Down", false)
 
 	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
@@ -490,7 +500,11 @@ func TestRLS_StaffMembersDownRestoresTheTenantOnlyHook(t *testing.T) {
 	}
 	staffApplied = true
 	seedStaff(t, userID)
-	checkFootprint("after Up", 1)
+	checkFootprint("after staff Up", 1, 1)
+	if _, err := provider.ApplyVersion(ctx, rulesVersion, true); err != nil {
+		t.Fatalf("re-apply the rules-role migration: %v", err)
+	}
+	checkFootprint("after Up", 1, 2)
 	checkProjection("after Up", true)
 }
 
@@ -629,7 +643,7 @@ func TestRLS_StaffMembersGrantsReachOnlyTheOwnerAndTheHookReader(t *testing.T) {
 	                    WHERE table_schema = 'public' AND table_name = 'staff_members' AND grantee <> $1 ORDER BY 1`); len(got) != 0 {
 		t.Errorf("table-level privileges beyond the owner: %v", got)
 	}
-	want := []string{"auth_hook_reader:user_id:SELECT"}
+	want := []string{"auth_hook_reader:rules_role:SELECT", "auth_hook_reader:user_id:SELECT"}
 	if got := collect(`SELECT grantee || ':' || column_name || ':' || privilege_type FROM information_schema.column_privileges
 	                    WHERE table_schema = 'public' AND table_name = 'staff_members' AND grantee <> $1 ORDER BY 1`); !reflect.DeepEqual(got, want) {
 		t.Errorf("column privileges beyond the owner = %v, want %v", got, want)

@@ -860,6 +860,101 @@ describe('the account-exists views', () => {
 
     expect(resendStatus()).toBe(RESEND_MAYBE)
   })
+
+  const malformed: [string, Route][] = [
+    ['a null body', () => new Response('null', { status: 200, headers: { 'Content-Type': 'application/json' } })],
+    ['an array body', () => json(200, ['sent'])],
+    ['a non-string status', () => json(200, { status: 1 })],
+    ['a wrong-case status', () => json(200, { status: 'Held' })],
+    ['an empty-string status', () => json(200, { status: '' })],
+  ]
+  it.each(malformed)('invitePage_resendMalformedAnswerIsAFailureNotANotice: %s', async (_name, resend) => {
+    await toView('unconfirmed', { resend })
+
+    await click(button('Send it again'))
+    await settle()
+
+    expect(alerts()).toEqual([RESEND_FAILED])
+    expect(resendStatus()).toBe('')
+  })
+
+  it('invitePage_aFailedPressAfterAHoldClearsTheHeldNotice', async () => {
+    const answers: Route[] = [() => json(200, { status: 'held' }), () => json(502, { error: 'invitation resend is unavailable' })]
+    await toView('unconfirmed', { resend: () => answers.shift()!() })
+
+    await click(button('Send it again'))
+    await settle()
+    expect(resendStatus()).toBe(RESEND_HELD)
+
+    await click(button('Send it again'))
+    await settle()
+    expect(alerts()).toEqual([RESEND_FAILED])
+    expect(resendStatus()).toBe('')
+    expect(text()).not.toContain('try again in a minute')
+  })
+
+  it('invitePage_aHoldThenAMaybeShowsTheHedgedNoticeNotTheHeldOne', async () => {
+    const answers = ['held', 'maybe']
+    await toView('unconfirmed', { resend: () => json(200, { status: answers.shift() }) })
+
+    await click(button('Send it again'))
+    await settle()
+    expect(resendStatus()).toBe(RESEND_HELD)
+    await click(button('Send it again'))
+    await settle()
+
+    expect(resendStatus()).toBe(RESEND_MAYBE)
+    expect(text()).not.toContain('Check your inbox')
+  })
+
+  it.each([
+    ['409 account_exists', 409, WIRE_ACCOUNT_EXISTS],
+    ['404', 404, WIRE_NOT_VALID],
+  ])('invitePage_sentViewResendRefusalsLeaveTheSentView: %s sends the page to its next view', async (_n, status, error) => {
+    await (async () => {
+      stubFetch({ register: () => json(200, {}), resend: () => json(status, { error }) })
+      await mount()
+      await toRegisterView()
+      await submit(PASSWORD)
+    })()
+    expect(headings()).toEqual(['Check your email'])
+
+    await click(button('Send the link again'))
+    await settle()
+
+    expect(headings()).not.toContain('Check your email')
+    expect(alerts()).toEqual([])
+    if (status === 409) expect(text()).toContain(EXISTS_TEXT)
+    else expectInvalidView()
+  })
+
+  it('invitePage_sentViewResendFailureShowsTheShippedAlert', async () => {
+    stubFetch({ register: () => json(200, {}), resend: () => json(502, { error: 'invitation resend is unavailable' }) })
+    await mount()
+    await toRegisterView()
+    await submit(PASSWORD)
+
+    await click(button('Send the link again'))
+    await settle()
+
+    expect(alerts()).toEqual([RESEND_FAILED])
+    expect(resendStatus()).toBe('')
+    expect(button('Send the link again').disabled).toBe(false)
+  })
+
+  it.each(['held', 'sent'])('invitePage_longAddressWrapsInTheResendNotice: %s', async (status) => {
+    const long = `${'x'.repeat(111)}@obi.test`
+    stubFetch({ preview: previewOk({ email: long, account: 'unconfirmed' }), resend: () => json(200, { status }) })
+    await mount()
+
+    await click(button('Send it again'))
+    await settle()
+
+    const notice = container.querySelector<HTMLElement>('[role="status"] p')
+    expect(notice, 'the notice renders').not.toBeNull()
+    expect(notice!.textContent).toContain(long)
+    expect(notice!.style.overflowWrap).toBe('anywhere')
+  })
 })
 
 describe('the unusable invite', () => {

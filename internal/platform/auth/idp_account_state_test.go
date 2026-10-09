@@ -443,7 +443,9 @@ func TestIdP_ConfirmedInviteeRegisteringAgainIsToldToSignIn(t *testing.T) {
 
 	// The public route still answers a confirmed address with the 202 of a new one.
 	known := idpUser{email: "public-" + uuid.NewString() + "@corp.example", password: "pw-" + uuid.NewString()}
-	t.Cleanup(func() { _, _ = superConn(t).Exec(context.Background(), `DELETE FROM auth.users WHERE email = $1`, known.email) })
+	t.Cleanup(func() {
+		_, _ = superConn(t).Exec(context.Background(), `DELETE FROM auth.users WHERE email = $1`, known.email)
+	})
 	known.register(t, w.base)
 	confirmByLink(t, known)
 	status, body = postGW(t, w.gw+"/auth/register", map[string]string{"email": known.email, "password": "pw-" + uuid.NewString()})

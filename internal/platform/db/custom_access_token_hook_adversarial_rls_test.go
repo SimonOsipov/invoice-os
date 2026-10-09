@@ -322,7 +322,7 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate column privileges: %v", err)
 	}
-	if want := map[string]int{"memberships": 3, "staff_members": 1, "invitations": 7, "tenants": 2}; !reflect.DeepEqual(cols, want) {
+	if want := map[string]int{"memberships": 3, "staff_members": 2, "invitations": 7, "tenants": 2}; !reflect.DeepEqual(cols, want) {
 		t.Errorf("auth_hook_reader column privileges per table = %v, want %v", cols, want)
 	}
 

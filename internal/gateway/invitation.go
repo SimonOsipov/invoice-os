@@ -265,14 +265,7 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		}
 		if !first {
 			// A repeat takes the same budget and floor, and mails nobody.
-			key, source := clientKey(r)
-			if !perIP.Reserve(key) {
-				log.WarnContext(r.Context(), "registration: limit reached",
-					slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
-			}
-			if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
-				writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
-			}
+			signUp(w, r, client, signup, nil, start, minResponse, perIP, enforce, log, func(context.Context) (bool, error) { return true, nil })
 			return
 		}
 		pw := make([]byte, 32)

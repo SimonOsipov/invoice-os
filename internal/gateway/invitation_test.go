@@ -1736,7 +1736,7 @@ func TestHTTPPendingInviteLookup_ErrorsCarryNoSecret(t *testing.T) {
 	}
 }
 
-// A 200 that names no verdict is not "no invite": reading it as false would let register sign up an invited address (D6, D26).
+// A 200 that names no verdict is not "no invite": reading it as false would let register sign up an invited address.
 func TestHTTPPendingInviteLookup_AnswerWithoutAVerdictIsAnError(t *testing.T) {
 	for _, body := range []string{`{}`, `null`, `{"pending":null}`, `{"status":"ok"}`} {
 		t.Run(body, func(t *testing.T) {

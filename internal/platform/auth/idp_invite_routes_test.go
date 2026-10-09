@@ -22,7 +22,7 @@ func tenantlessCaller(t *testing.T, w inviteWorld, u idpUser) auth.Identity {
 	return id
 }
 
-// Route 1 (D6): /auth/register for an invited address answers like any other and creates nothing.
+// Route 1: /auth/register for an invited address answers like any other and creates nothing.
 func TestIdP_SignUpForAnInvitedAddressCreatesNoAccount(t *testing.T) {
 	w := newInviteWorldAt(t, "resend2-01r1-", "example.com")
 	conn := superConn(t)

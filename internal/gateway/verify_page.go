@@ -36,7 +36,7 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 	sum := sha256.Sum256([]byte(verifyScript))
 	csp := "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'sha256-" +
 		base64.StdEncoding.EncodeToString(sum[:]) + "'; base-uri 'none'; frame-ancestors 'none'"
-	failed := strings.TrimSuffix(siteURL.String(), "/") + "/?verify=failed"
+	failed := verifyFailedURL(siteURL)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()

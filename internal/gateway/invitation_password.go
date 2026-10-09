@@ -34,7 +34,7 @@ func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, s
 	site := strings.TrimSuffix(siteURL.String(), "/")
 	return passwordLinkHandler(authURL, client, sessions, signIn, log, passwordLinkFlow{
 		verifyType: "signup", label: "invitation-password", page: invitationPageHTML,
-		done: site + "/?verified=1", failed: site + "/?verify=failed",
+		done: site + "/?verified=1", failed: verifyFailedURL(siteURL),
 		onConfirmed: func(ctx context.Context, user gotrueUser) {
 			handOffRegistrant(ctx, log, "invitation-password", sink, user.contact())
 		},

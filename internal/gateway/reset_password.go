@@ -58,6 +58,10 @@ func resetFailedURL(siteURL *url.URL) string {
 	return strings.TrimSuffix(siteURL.String(), "/") + "/?reset=failed"
 }
 
+func verifyFailedURL(siteURL *url.URL) string {
+	return strings.TrimSuffix(siteURL.String(), "/") + "/?verify=failed"
+}
+
 // ResetPasswordPageHandler serves the set-new-password page; it holds no GoTrue client, so opening the link spends nothing.
 func ResetPasswordPageHandler(siteURL *url.URL) http.Handler {
 	if siteURL == nil {
@@ -100,7 +104,7 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 	site := strings.TrimSuffix(siteURL.String(), "/")
 	return passwordLinkHandler(authURL, client, sessions, signIn, log, passwordLinkFlow{
 		verifyType: "recovery", label: "reset-password", page: resetPageHTML,
-		done: site + "/?reset=1", failed: site + "/?reset=failed",
+		done: site + "/?reset=1", failed: resetFailedURL(siteURL),
 	})
 }
 

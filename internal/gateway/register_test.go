@@ -1408,7 +1408,7 @@ func TestRegister_InvitedPathLogsCarryNoAddress(t *testing.T) {
 	}
 }
 
-// Tenancy folds case and trims the address (D7); the gateway must hand it the address as sent.
+// Tenancy folds case and trims the address; the gateway must hand it the address as sent.
 func TestRegister_LookupGetsTheAddressAsSubmitted(t *testing.T) {
 	const invitedAddress = "pat@corp.example"
 	for _, sent := range []string{"Pat@Corp.Example", "PAT@CORP.EXAMPLE", "  pat@corp.example ", "\tPat@corp.example\n"} {

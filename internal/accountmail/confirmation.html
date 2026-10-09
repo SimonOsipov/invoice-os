@@ -1,4 +1,4 @@
-{{- define "title"}}{{if and .Data (index .Data "invited")}}Confirm your ASComply account{{else}}Confirm your ASComply account{{end}}{{end}}
+{{- define "title"}}Confirm your ASComply account{{end}}
 {{- define "preheader"}}{{if and .Data (index .Data "invited")}}Confirm your email address and choose a password to join your team on ASComply.{{else}}Confirm your email address to finish setting up your ASComply workspace.{{end}}{{end}}
 {{- define "eyebrow"}}{{if and .Data (index .Data "invited")}}Invitation{{else}}Registration{{end}}{{end}}
 {{- define "heading"}}{{if and .Data (index .Data "invited")}}Your account is ready.{{else}}You are registered.{{end}}{{end}}
@@ -6,7 +6,7 @@
 {{- define "intro"}}{{if and .Data (index .Data "invited")}}An ASComply account was created for {{.Email}} from your invite. Confirm the address and choose your password.{{else}}Hi{{with .Data}}{{with .registration}}{{with .display_name}} {{.}}{{end}}{{end}}{{end}}, your ASComply account{{with .Data}}{{with .registration}}{{with .workspace_name}} for {{.}}{{end}}{{end}}{{end}} has been created. Confirm {{.Email}} to open your workspace.{{end}}{{end}}
 {{- define "action_url"}}{{if and .Data (index .Data "invited")}}{{ .ConfirmationURL }}&amp;invite=1{{else}}{{ .ConfirmationURL }}{{end}}{{end}}
 {{- define "action_label"}}{{if and .Data (index .Data "invited")}}Choose your password{{else}}Confirm email address{{end}}{{end}}
-{{- define "expiry"}}{{if and .Data (index .Data "invited")}}This link expires in 24 hours.{{else}}This link expires in 24 hours.{{end}}{{end}}
+{{- define "expiry"}}This link expires in 24 hours.{{end}}
 {{- define "details"}}{{if and .Data (index .Data "invited")}}<tr><td width="120" style="{{template "row_label_style_last"}}">Email</td><td style="{{template "row_value_style_last"}}">{{$.Email}}</td></tr>{{else}}{{with .Data}}{{with .registration}}{{with .workspace_name}}<tr><td width="120" style="{{template "row_label_style"}}">Organisation</td><td style="{{template "row_value_style"}}">{{.}}</td></tr>{{end}}{{end}}{{end}}<tr><td width="120" style="{{template "row_label_style"}}">Email</td><td style="{{template "row_value_style"}}">{{$.Email}}</td></tr><tr><td width="120" style="{{template "row_label_style_last"}}">Role</td><td style="{{template "row_value_style_last"}}">Admin</td></tr>{{end}}{{end}}
 {{- define "ignore_note"}}{{if and .Data (index .Data "invited")}}If you did not expect an invite to ASComply, ignore this email.{{else}}If you did not register, ignore this email. No account is activated until the address is confirmed.{{end}}{{end}}
 {{- define "reason"}}{{if and .Data (index .Data "invited")}}You received this email because an ASComply invite to this address was used to create an account.{{else}}You received this email because an account was created with this address.{{end}}{{end}}

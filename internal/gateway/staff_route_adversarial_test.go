@@ -356,6 +356,26 @@ func TestStaffRoute_TenantlessStaffIsRefusedElsewhere(t *testing.T) {
 	}
 }
 
+// D28: the mux redirects an unclean path for every method but CONNECT, so the uncleaned request never reaches the upstream.
+func TestStaffRoute_UncleanStaffPathIsRedirectedBeforeTheUpstream(t *testing.T) {
+	rig := newInternalRig(t)
+	tok := rig.mintOpts(t, auth.MintOptions{Staff: true})
+	for _, p := range []string{"/api/validation/v1/staff/./rules", "/api/validation/v1/staff//rules", "/api/validation/v1/x/../staff/rules"} {
+		for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+			t.Run(method+" "+p, func(t *testing.T) {
+				rig.resetAll()
+				status, _, redirects := rig.rawBody(t, method, p, tok)
+				if redirects == 0 {
+					t.Errorf("answered %d with no redirect, want the mux to clean the path first", status)
+				}
+				if n := rig.counts["validation"].staff.Load(); n != 1 {
+					t.Errorf("the staff handler ran %d times, want 1 (the cleaned request only)", n)
+				}
+			})
+		}
+	}
+}
+
 func TestStaffRoute_TenantlessStaffKeepsTheTwoPostExemptions(t *testing.T) {
 	for _, path := range []string{provisioningPath, "/api/tenancy/v1/invitations/accept"} {
 		t.Run(path, func(t *testing.T) {

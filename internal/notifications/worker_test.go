@@ -1128,3 +1128,240 @@ func TestDeliver_UntypedClientErrorWarnsAndRetries(t *testing.T) {
 	}
 	qaRequireNoLeak(t, nil, r.sinks(), email, "Zelda", "Quuxington", "Zeta Holdings")
 }
+
+func (r *qaRig) dealRow(t *testing.T, email string) *rivertype.JobRow {
+	t.Helper()
+	var id int64
+	err := r.e.app.QueryRow(context.Background(), `
+		SELECT id FROM river_job WHERE kind = 'demo_deal' AND args->>'email' = $1 ORDER BY id DESC LIMIT 1`, email).Scan(&id)
+	if err != nil {
+		t.Fatalf("find the demo_deal job for %s: %v", email, err)
+	}
+	row, err := r.e.store.river.JobGet(context.Background(), id)
+	if err != nil {
+		t.Fatalf("get job %d: %v", id, err)
+	}
+	return row
+}
+
+// dealWorkHeld is workHeld for the deal worker.
+func (r *qaRig) dealWorkHeld(t *testing.T, row *rivertype.JobRow) (*rivertest.WorkResult, error, func()) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := r.e.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	w := &DemoDealWorker{Pool: r.e.app, HubSpot: r.hs, Logger: r.worker.logger()}
+	res, werr := rivertest.NewWorker(t, riverpgxv5.New(nil), &river.Config{Logger: r.river.logger()}, w).WorkJob(ctx, t, tx, row)
+	return res, werr, func() {
+		if err := tx.Commit(ctx); err != nil {
+			t.Errorf("commit: %v", err)
+		}
+	}
+}
+
+func (r *qaRig) dealWork(t *testing.T, row *rivertype.JobRow) (*rivertest.WorkResult, error) {
+	t.Helper()
+	res, err, commit := r.dealWorkHeld(t, row)
+	commit()
+	return res, err
+}
+
+func (r *qaRig) dealWorkAsync(t *testing.T, row *rivertype.JobRow) <-chan qaAttempt {
+	t.Helper()
+	out := make(chan qaAttempt, 1)
+	r.async.Add(1)
+	go func() {
+		defer r.async.Done()
+		res, err, commit := r.dealWorkHeld(t, row)
+		commit()
+		out <- qaAttempt{res, err}
+	}()
+	return out
+}
+
+func qaDemo(t *testing.T, e env, email, name, company, consent string) {
+	t.Helper()
+	if err := e.store.DemoRequest(context.Background(), DemoIntake{Email: email, Name: name, Company: company, ConsentText: consent}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+}
+
+// qaRequireNoAttempt fails when the attempt finishes within qaNotDoneFor.
+func qaRequireNoAttempt(t *testing.T, ch <-chan qaAttempt, what string) {
+	t.Helper()
+	select {
+	case a := <-ch:
+		t.Fatalf("%s finished (err = %v) while the deal job held the lock", what, a.err)
+	case <-time.After(qaNotDoneFor):
+	}
+}
+
+func TestDemoDealName(t *testing.T) {
+	long := strings.Repeat("é", 200)
+	for _, c := range []struct{ company, name, want string }{
+		{"Navy", "Grace Hopper", "Navy — demo request"},
+		{"", "Grace Hopper", "Grace Hopper — demo request"},
+		{"", "", "Demo request"},
+		{"  Navy  ", "", "Navy — demo request"},
+		{long, "", long + " — demo request"},
+	} {
+		if got := demoDealName(c.company, c.name); got != c.want {
+			t.Errorf("demoDealName(%q, %q) = %q, want %q", c.company, c.name, got, c.want)
+		}
+	}
+}
+
+func TestDemoDeal_WorkerOpensTheDealForTheRequest(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "dealok")
+	qaDemo(t, r.e, email, "Grace Hopper", "Navy", "")
+
+	res, err := r.dealWork(t, r.dealRow(t, email))
+	qaRequireCompleted(t, res, err, "deal job")
+	calls := r.hs.dealCalls()
+	if len(calls) != 1 {
+		t.Fatalf("OpenDemoDeal called %d times, want 1", len(calls))
+	}
+	want := Contact{Email: email, FirstName: "Grace", LastName: "Hopper", Company: "Navy"}
+	if calls[0].C.Email != want.Email || calls[0].C.FirstName != want.FirstName || calls[0].C.LastName != want.LastName ||
+		calls[0].C.Company != want.Company || calls[0].Name != "Navy — demo request" {
+		t.Errorf("OpenDemoDeal(%+v, %q), want contact %+v and name %q", calls[0].C, calls[0].Name, want, "Navy — demo request")
+	}
+	if n := len(r.hs.got()); n != 0 {
+		t.Errorf("Upsert called %d times by a deal job, want 0", n)
+	}
+}
+
+func TestDemoDeal_OutageRetriesThenArrives(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "dealout")
+	qaDemo(t, r.e, email, "Grace Hopper", "Navy", "")
+	r.hs.dealFn = func(n int, _ Contact, _ string) error {
+		if n < 3 {
+			return &DeliveryError{Status: 500}
+		}
+		return nil
+	}
+	row := r.dealRow(t, email)
+	for n := 1; n <= 2; n++ {
+		res, err := r.dealWork(t, row)
+		qaRequireRetryable(t, res, err, fmt.Sprintf("deal attempt %d", n))
+		row = res.Job
+	}
+	res, err := r.dealWork(t, row)
+	qaRequireCompleted(t, res, err, "deal attempt 3")
+	if res.Job.Attempt != 3 || len(r.hs.dealCalls()) != 3 {
+		t.Errorf("attempt = %d, client calls = %d, want 3 and 3", res.Job.Attempt, len(r.hs.dealCalls()))
+	}
+}
+
+func TestDemoDeal_PermanentRejectionLogsError(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "dealrej")
+	qaDemo(t, r.e, email, "Grace Hopper", "Navy", "")
+	r.hs.dealFn = func(int, Contact, string) error { return &DeliveryError{Status: 403} }
+
+	res, err := r.dealWork(t, r.dealRow(t, email))
+	qaRequireRetryable(t, res, err, "rejected deal job")
+	errs := r.worker.at(slog.LevelError)
+	if len(errs) != 1 || !strings.Contains(errs[0].Text, "contacts: hubspot_deal rejected the delivery") ||
+		!strings.Contains(errs[0].Text, "status=403") || !strings.Contains(errs[0].Text, "destination=hubspot_deal") {
+		t.Errorf("ERROR lines = %+v, want one rejected-delivery line for hubspot_deal with status=403", errs)
+	}
+}
+
+func TestDemoDeal_TransientFailureLogsWarn(t *testing.T) {
+	for _, status := range []int{500, 429, 408, 0} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			r := qaNewRig(t, ModeReal)
+			email := uniqueEmail(t, r.e, "dealwarn")
+			qaDemo(t, r.e, email, "Grace Hopper", "Navy", "")
+			r.hs.dealFn = func(int, Contact, string) error { return &DeliveryError{Status: status} }
+
+			res, err := r.dealWork(t, r.dealRow(t, email))
+			qaRequireRetryable(t, res, err, "transient deal failure")
+			warns := r.worker.at(slog.LevelWarn)
+			if len(warns) != 1 || !strings.Contains(warns[0].Text, "hubspot_deal") || !strings.Contains(warns[0].Text, fmt.Sprintf("status=%d", status)) {
+				t.Errorf("WARN lines = %+v, want one naming hubspot_deal and status=%d", warns, status)
+			}
+			if errs := r.worker.at(slog.LevelError); len(errs) != 0 {
+				t.Errorf("a transient %d logged at ERROR: %+v", status, errs)
+			}
+		})
+	}
+}
+
+func TestDemoDeal_LogsAndErrorsNeverCarryPersonalData(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "dealleak")
+	qaDemo(t, r.e, email, "Zelda Quuxington", "Zeta Holdings", "")
+	r.hs.dealFn = func(int, Contact, string) error { return &DeliveryError{Status: 503} }
+
+	res, err := r.dealWork(t, r.dealRow(t, email))
+	qaRequireRetryable(t, res, err, "failing deal job")
+	qaRequireNoLeak(t, err, r.sinks(), email, "Zelda", "Quuxington", "Zeta Holdings")
+}
+
+func TestDemoDeal_TheLockIsPerContact(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	ada := uniqueEmail(t, r.e, "dlockada")
+	bob := uniqueEmail(t, r.e, "dlockbob")
+	qaDemo(t, r.e, ada, "Ada Lovelace", "Engines", "")
+	rowA := r.dealRow(t, ada)
+	qaDemo(t, r.e, ada, "Ada Lovelace", "Engines", "") // a second request: a second deal job
+	rowA2 := r.dealRow(t, ada)
+	qaDemo(t, r.e, bob, "Bob Babbage", "Diffs", "")
+	rowB := r.dealRow(t, bob)
+	if rowA.ID == rowA2.ID {
+		t.Fatal("the second request queued no second deal job")
+	}
+	gate := qaNewBlockOnce(t, r, 1)
+	r.hs.dealFn = func(n int, _ Contact, _ string) error { return gate.wait(n) }
+
+	parked := r.dealWorkAsync(t, rowA)
+	gate.awaitEntered(t)
+	same := r.dealWorkAsync(t, rowA2)
+	other := r.dealWorkAsync(t, rowB)
+
+	b := qaAwaitAttempt(t, other)
+	qaRequireCompleted(t, b.res, b.err, "deal job of another contact")
+	qaRequireNoAttempt(t, same, "second deal job of the same contact")
+	if n := len(r.hs.dealCalls()); n != 2 {
+		t.Fatalf("OpenDemoDeal calls = %d while the first is parked, want 2 (parked + other contact)", n)
+	}
+
+	gate.open()
+	a := qaAwaitAttempt(t, parked)
+	qaRequireCompleted(t, a.res, a.err, "parked deal job")
+	c := qaAwaitAttempt(t, same)
+	qaRequireCompleted(t, c.res, c.err, "second deal job after release")
+}
+
+func TestDemoDeal_DealJobAndHubSpotContactJobShareTheLock(t *testing.T) {
+	r := qaNewRig(t, ModeReal)
+	email := uniqueEmail(t, r.e, "dlockshare")
+	qaDemo(t, r.e, email, "Ada Lovelace", "Engines", consentText)
+	gate := qaNewBlockOnce(t, r, 1)
+	r.hs.dealFn = func(n int, _ Contact, _ string) error { return gate.wait(n) }
+
+	parked := r.dealWorkAsync(t, r.dealRow(t, email))
+	gate.awaitEntered(t)
+	hub := r.workAsync(t, r.jobRow(t, email, "hubspot", 1))
+	resend := r.workAsync(t, r.jobRow(t, email, "resend", 1))
+
+	rs := qaAwaitAttempt(t, resend)
+	qaRequireCompleted(t, rs.res, rs.err, "resend contact job")
+	qaRequireNoAttempt(t, hub, "hubspot contact job")
+	if n := len(r.hs.got()); n != 0 {
+		t.Fatalf("Upsert calls = %d while the deal job is parked, want 0", n)
+	}
+
+	gate.open()
+	a := qaAwaitAttempt(t, parked)
+	qaRequireCompleted(t, a.res, a.err, "parked deal job")
+	h := qaAwaitAttempt(t, hub)
+	qaRequireCompleted(t, h.res, h.err, "hubspot contact job after release")
+}

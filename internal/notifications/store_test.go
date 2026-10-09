@@ -65,7 +65,7 @@ func uniqueEmail(t *testing.T, e env, prefix string) string {
 	email := fmt.Sprintf("%s-%s@corp.example", prefix, uuid.NewString()[:8])
 	t.Cleanup(func() {
 		ctx := context.Background()
-		if _, err := e.admin.Exec(ctx, `DELETE FROM river_job WHERE kind = 'contact_deliver' AND args->>'email' = $1`, email); err != nil {
+		if _, err := e.admin.Exec(ctx, `DELETE FROM river_job WHERE kind IN ('contact_deliver', 'demo_deal') AND args->>'email' = $1`, email); err != nil {
 			t.Errorf("cleanup river_job: %v", err)
 		}
 		if _, err := e.admin.Exec(ctx, `DELETE FROM contacts WHERE email = $1`, email); err != nil {
@@ -142,6 +142,33 @@ func jobsFor(t *testing.T, e env, email string) []job {
 }
 
 // jobKeys renders jobs as sorted "destination@version", asserting the queue on the way.
+// dealJobsFor lists the demo_deal jobs queued for email, oldest first.
+func dealJobsFor(t *testing.T, e env, email string) []DemoDealArgs {
+	t.Helper()
+	rows, err := e.app.Query(context.Background(), `
+		SELECT args FROM river_job WHERE kind = 'demo_deal' AND args->>'email' = $1 ORDER BY id`, email)
+	if err != nil {
+		t.Fatalf("query demo_deal jobs: %v", err)
+	}
+	defer rows.Close()
+	var out []DemoDealArgs
+	for rows.Next() {
+		var raw []byte
+		var a DemoDealArgs
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatalf("scan demo_deal job: %v", err)
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			t.Fatalf("decode demo_deal args %s: %v", raw, err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read demo_deal jobs: %v", err)
+	}
+	return out
+}
+
 func jobKeys(t *testing.T, jobs []job) []string {
 	t.Helper()
 	keys := make([]string, 0, len(jobs))
@@ -987,5 +1014,123 @@ func TestSplitName(t *testing.T) {
 		if first, last := splitName(tc.in); first != tc.first || last != tc.last {
 			t.Errorf("splitName(%q) = %q, %q; want %q, %q", tc.in, first, last, tc.first, tc.last)
 		}
+	}
+}
+
+func TestStore_DemoRequestQueuesADealJob(t *testing.T) {
+	e := newEnv(t)
+	email := uniqueEmail(t, e, "deal")
+	if err := e.store.DemoRequest(context.Background(), DemoIntake{Email: email, Name: "Grace Hopper", Company: "Navy"}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	var queue string
+	if err := e.app.QueryRow(context.Background(), `SELECT queue FROM river_job WHERE kind = 'demo_deal' AND args->>'email' = $1`, email).Scan(&queue); err != nil {
+		t.Fatalf("read the demo_deal job: %v", err)
+	}
+	if queue != QueueContacts {
+		t.Errorf("demo_deal queue = %q, want %q", queue, QueueContacts)
+	}
+	want := []DemoDealArgs{{Email: email, Name: "Grace Hopper", Company: "Navy"}}
+	if got := dealJobsFor(t, e, email); !slices.Equal(got, want) {
+		t.Errorf("demo_deal jobs = %+v, want %+v", got, want)
+	}
+	requireJobs(t, e, email, "hubspot@1")
+}
+
+func TestStore_RepeatDemoRequestQueuesAnotherDealJob(t *testing.T) {
+	e := newEnv(t)
+	email := uniqueEmail(t, e, "dealrep")
+	ctx := context.Background()
+	if _, err := e.app.Exec(ctx, `
+		INSERT INTO contacts (email, first_name, last_name, company, demo_requested_at, hubspot_delivered_at)
+		VALUES ($1, 'Grace', 'Hopper', 'Navy', now(), now())`, email); err != nil {
+		t.Fatalf("seed delivered row: %v", err)
+	}
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: email, Name: "Grace Hopper", Company: "Navy"}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	requireJobs(t, e, email) // no new fact: no contact job
+	if got := dealJobsFor(t, e, email); len(got) != 1 {
+		t.Fatalf("demo_deal jobs after one repeat = %d, want 1", len(got))
+	}
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: email, Name: "Grace Hopper", Company: "Navy"}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	if got := dealJobsFor(t, e, email); len(got) != 2 {
+		t.Fatalf("demo_deal jobs after two repeats = %d, want 2", len(got))
+	}
+}
+
+func TestStore_DemoRequestsOfOneContactKeepEachRequestsOwnValues(t *testing.T) {
+	e := newEnv(t)
+	email := uniqueEmail(t, e, "dealown")
+	ctx := context.Background()
+	for _, c := range []string{"A", "B"} {
+		if err := e.store.DemoRequest(ctx, DemoIntake{Email: email, Name: "Grace Hopper", Company: c}); err != nil {
+			t.Fatalf("DemoRequest %s: %v", c, err)
+		}
+	}
+	got := dealJobsFor(t, e, email)
+	if len(got) != 2 || got[0].Company != "A" || got[1].Company != "B" {
+		t.Errorf("demo_deal jobs = %+v, want companies A then B", got)
+	}
+	if c := deref(readRow(t, e, email).Company); c != "B" {
+		t.Errorf("merged company = %q, want B (a later non-empty company overwrites)", c)
+	}
+}
+
+func TestStore_DemoDealInsertFailureRollsBackTheIntake(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	email := uniqueEmail(t, e, "dealfail")
+	fn := "fail_demo_deal_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	if _, err := e.admin.Exec(ctx, fmt.Sprintf(`
+		CREATE FUNCTION %[1]s() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.kind = 'demo_deal' AND NEW.args->>'email' = '%[2]s' THEN RAISE EXCEPTION 'test: refuse demo_deal'; END IF;
+			RETURN NEW;
+		END $$`, fn, email)); err != nil {
+		t.Fatalf("create trigger function: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.admin.Exec(context.Background(), `DROP TRIGGER IF EXISTS `+fn+` ON river_job`)
+		_, _ = e.admin.Exec(context.Background(), `DROP FUNCTION IF EXISTS `+fn+`()`)
+	})
+	if _, err := e.admin.Exec(ctx, `CREATE TRIGGER `+fn+` BEFORE INSERT ON river_job FOR EACH ROW EXECUTE FUNCTION `+fn+`()`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: email, Name: "Grace Hopper", Company: "Navy"}); err == nil {
+		t.Fatal("DemoRequest with a failing deal insert returned nil")
+	}
+	if n := rowCount(t, e, email); n != 0 {
+		t.Errorf("rows after a failed intake = %d, want 0", n)
+	}
+	requireJobs(t, e, email)
+}
+
+func TestStore_RegistrantQueuesNoDealJob(t *testing.T) {
+	e := newEnv(t)
+	email := uniqueEmail(t, e, "regnodeal")
+	if err := e.store.Registrant(context.Background(), RegistrantIntake{UserID: uuid.NewString(), Email: email, DisplayName: "Ada Lovelace"}); err != nil {
+		t.Fatalf("Registrant: %v", err)
+	}
+	if got := dealJobsFor(t, e, email); len(got) != 0 {
+		t.Errorf("demo_deal jobs after a registration = %+v, want none", got)
+	}
+}
+
+func TestStore_RegistrantAfterDemoQueuesNoSecondDealJob(t *testing.T) {
+	e := newEnv(t)
+	email := uniqueEmail(t, e, "demothenreg")
+	ctx := context.Background()
+	if err := e.store.DemoRequest(ctx, DemoIntake{Email: email, Name: "Grace Hopper", Company: "Navy"}); err != nil {
+		t.Fatalf("DemoRequest: %v", err)
+	}
+	if err := e.store.Registrant(ctx, RegistrantIntake{UserID: uuid.NewString(), Email: email, DisplayName: "Grace Hopper"}); err != nil {
+		t.Fatalf("Registrant: %v", err)
+	}
+	if got := dealJobsFor(t, e, email); len(got) != 1 {
+		t.Errorf("demo_deal jobs = %d, want exactly 1", len(got))
 	}
 }

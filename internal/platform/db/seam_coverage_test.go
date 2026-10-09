@@ -204,6 +204,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"}, // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
 	{file: "internal/notifications/store.go"},                                    // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
 	{file: "internal/notifications/worker.go"},                                   // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
+	{file: "internal/notifications/deal.go"},                                     // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,

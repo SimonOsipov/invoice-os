@@ -13,11 +13,12 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { sentryOptions } from '@invoice-os/monitoring'
+import { aiModelVendors, aiProviderHosts } from './privacyCodeFacts.test.util'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
 const PRIVACY_TSX = join(SRC_DIR, 'Privacy.tsx')
@@ -408,5 +409,106 @@ describe('AUTH-17-09: no Resend region claim without a vendor citation', () => {
     expect(pageResend.length, 'the page does not name Resend, so there is nothing to check').toBeGreaterThan(0)
     expect(pageResend.filter(claimsRegion), 'the page claims a Resend region').toEqual([])
 
+  })
+})
+
+// pm-approved copy: change only with a new approval.
+const APPROVED_AI_SECTION = [
+  'This section is separate from the analytics and the demo form above. It is about documents you choose to upload to the signed-in ASComply product. When you upload an invoice document, our server sends its content to an AI provider so that the invoice can be read. That content is the text of the document, or page images when a scanned PDF has no text. For a spreadsheet, it is the column headings and the first few rows.',
+  `The provider is OpenRouter (${AI_PROVIDER_HOST}). It passes each request to an AI model made by Google (the Gemini model, not Google Analytics) or by TypeSafe. Your browser sends the document to our server only; our server makes the call to OpenRouter. What OpenRouter, Google and TypeSafe do with what they receive is set by their own terms.`,
+]
+
+const AI_H2 = 'If you upload invoice documents'
+const aiSectionHtml = (): string => {
+  const afterH2 = html.slice(html.indexOf(`>${AI_H2}</h2>`) + AI_H2.length + 5)
+  return afterH2.slice(0, afterH2.indexOf('<h2'))
+}
+
+describe('ENGI-10: the upload section discloses AI processing', () => {
+  const section = aiSectionHtml()
+  const paragraphs = Array.from(section.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g), (m) => plainText(m[1]))
+  const text = plainText(section)
+
+  it('the upload section sits between account and monitoring', () => {
+    const at = (h: string) => html.indexOf(`>${h}</h2>`)
+    expect(html.match(/If you upload invoice documents<\/h2>/g) ?? []).toHaveLength(1)
+    expect(at('If you create an account')).toBeGreaterThan(-1)
+    expect(at('If you create an account')).toBeLessThan(at(AI_H2))
+    expect(at(AI_H2)).toBeLessThan(at('Error and performance monitoring'))
+  })
+
+  it('the approved section wording is pinned as a literal', () => {
+    expect(paragraphs).toEqual(APPROVED_AI_SECTION)
+  })
+
+  it('the section is scoped apart from analytics', () => {
+    expect(text).toContain('separate from the analytics and the demo form above')
+    expect(text).toContain('not Google Analytics')
+    const needle = html.indexOf('We never send Google your name')
+    expect(needle).toBeGreaterThan(-1)
+    expect(needle).toBeLessThan(html.indexOf(`>${AI_H2}</h2>`))
+  })
+
+  it('the section is two paragraphs', () => {
+    expect(section.match(/<p[\s>]/g) ?? []).toHaveLength(2)
+    expect(section).not.toMatch(/<(?:ul|ol|li)[\s>]/)
+  })
+
+  it('the section says the server sends the document to an AI provider', () => {
+    expect(text).toContain('our server sends its content to an AI provider')
+    expect(text).toContain('invoice document')
+  })
+
+  it('the section names the three recipients', () => {
+    for (const name of ['OpenRouter', 'Google', 'TypeSafe']) expect(text).toContain(name)
+  })
+
+  it('the host is quoted from AI_PROVIDER_HOST, which equals both Go endpoints', () => {
+    expect(aiProviderHosts()).toEqual([AI_PROVIDER_HOST])
+    expect(text).toContain(AI_PROVIDER_HOST)
+    expect(readFileSync(PRIVACY_TSX, 'utf8').match(/openrouter\.ai/g) ?? []).toHaveLength(1)
+  })
+
+  it('the named model vendors are the models in use', () => {
+    expect(aiModelVendors()).toEqual(['google', 'typesafe'])
+    for (const v of aiModelVendors()) expect(text.toLowerCase()).toContain(v)
+  })
+
+  it('the browser is not the sender', () => {
+    expect(text).toContain('Your browser sends the document to our server only')
+  })
+
+  it('a moved Go constant fails the spec instead of emptying it', () => {
+    expect(aiProviderHosts().length).toBeGreaterThan(0)
+    expect(aiModelVendors().length).toBeGreaterThan(0)
+  })
+})
+
+describe('ENGI-10: no training, retention, region, deletion or law claim in the upload section', () => {
+  const CLAIM = /train|retain|retention|kept|stored|storage|delete|region|located|hosted|EU\b|EEA|United States|\bUS\b|NDPA|GDPR|complian/
+  const sentencesOf = (text: string): string[] => text.split(/(?<=[.!?])\s+/)
+
+  it('control: the claim detector fires on planted sentences', () => {
+    for (const planted of [
+      'OpenRouter does not use your documents for training',
+      'stored in the EU',
+      'kept for 30 days',
+      'deleted after use',
+      'complies with the NDPA',
+    ])
+      expect(CLAIM.test(planted), planted).toBe(true)
+    for (const shipped of APPROVED_AI_SECTION.flatMap(sentencesOf)) expect(CLAIM.test(shipped), shipped).toBe(false)
+  })
+
+  it('the section makes no training, retention, region, deletion or compliance claim', () => {
+    const sentences = sentencesOf(plainText(aiSectionHtml()))
+    expect(sentences.length).toBeGreaterThan(1)
+    expect(sentences.filter((s) => CLAIM.test(s))).toEqual([])
+  })
+
+  it('the page names no data-protection law as satisfied', () => {
+    const page = plainText(html)
+    for (const law of ['NDPA', 'GDPR', 'Data Protection Act']) expect(page).not.toContain(law)
+    expect(page).toContain('we do not claim here that it satisfies any particular data-protection law')
   })
 })

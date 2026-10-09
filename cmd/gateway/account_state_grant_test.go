@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
@@ -224,6 +226,40 @@ func TestGrantAccountStateRead_LogsCarryNoSecret(t *testing.T) {
 	}
 	if strings.Contains(out, dsn) {
 		t.Errorf("log carries the DSN: %s", out)
+	}
+}
+
+func TestGrantAccountStateRead_FinalWarnCarriesTheFailureClass(t *testing.T) {
+	dsn := "postgresql://supabase_auth_admin:" + grantSecret + "@h:5432/railway"
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"sqlstate":    {fmt.Errorf("connect %s: %w", dsn, &pgconn.PgError{Code: "28P01", Message: grantSecret}), "28P01"},
+		"unknown":     {fmt.Errorf("connect %s: refused", dsn), "unknown"},
+		"auth absent": {nil, "not_ready"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			log := newCapturedLog()
+			grant := func(context.Context, string) (bool, error) { return false, tc.err }
+			grantAccountStateRead(context.Background(), dsn, grant, time.Millisecond, 3, log.Logger)
+			found := false
+			for _, r := range log.records(t) {
+				if r.msg == msgNotGranted {
+					found = true
+					if r.attrs["class"] != tc.want {
+						t.Errorf("WARN class = %v, want %q", r.attrs["class"], tc.want)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("no WARN %q; log: %s", msgNotGranted, log.buf)
+			}
+			out := log.buf.String()
+			if strings.Contains(out, grantSecret) || strings.Contains(out, dsn) {
+				t.Errorf("log carries the DSN or password: %s", out)
+			}
+		})
 	}
 }
 

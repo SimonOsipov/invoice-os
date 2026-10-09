@@ -1457,14 +1457,15 @@ func TestRegistrationHandlers_ResendBudgetsAreSharedWithTheInviteResend(t *testi
 // Invitee registration enforces its per-client limit exactly where /auth/register does: not on a PR preview.
 func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 	for _, c := range []struct {
-		name, env string
-		wantCalls int
+		name, env  string
+		wantCalls  int
+		wantResend int
 	}{
-		{"pr-7", "pr-7", 11},
-		{"production", "production", gateway.RegisterPerIP},
-		{"development", "development", gateway.RegisterPerIP},
-		{"empty", "", gateway.RegisterPerIP},
-		{"upper-case PR-7", "PR-7", gateway.RegisterPerIP},
+		{"pr-7", "pr-7", 11, 11},
+		{"production", "production", gateway.RegisterPerIP, gateway.ResendPerAddress},
+		{"development", "development", gateway.RegisterPerIP, gateway.ResendPerAddress},
+		{"empty", "", gateway.RegisterPerIP, gateway.ResendPerAddress},
+		{"upper-case PR-7", "PR-7", gateway.RegisterPerIP, gateway.ResendPerAddress},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
@@ -1486,6 +1487,19 @@ func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 			}
 			if got := countCalls(calls(), "POST /signup"); got != c.wantCalls {
 				t.Errorf("GoTrue /signup calls = %d, want %d", got, c.wantCalls)
+			}
+
+			// The token resend route follows the same posture: its address budget refuses off a PR preview only.
+			resend := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, func(context.Context, string) (gateway.InvitationPreview, error) {
+				return gateway.InvitationPreview{Email: "tunde@obi.test", Account: "unconfirmed"}, nil
+			}, log)
+			for range 11 {
+				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/resend", strings.NewReader(`{"token":"`+resendToken+`"}`))
+				req.RemoteAddr = "203.0.113.7:4000"
+				resend.ServeHTTP(httptest.NewRecorder(), req)
+			}
+			if got := countCalls(calls(), "POST /resend"); got != c.wantResend {
+				t.Errorf("GoTrue /resend calls = %d, want %d", got, c.wantResend)
 			}
 		})
 	}

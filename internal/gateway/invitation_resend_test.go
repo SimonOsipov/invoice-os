@@ -21,6 +21,7 @@ const (
 	invResendLimitMsg     = "invitation-resend: limit reached"
 	invResendCapMsg       = "invitation-resend: gotrue email send rate limit"
 	invResendIP           = "203.0.113.9"
+	otherInviteToken      = "Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8R"
 	gtInstanceMailCap     = `{"code":429,"error_code":"over_email_send_rate_limit","msg":"email rate limit exceeded"}`
 	resendSent            = `{"status":"sent"}`
 	resendHeld            = `{"status":"held"}`
@@ -130,6 +131,8 @@ func TestInvitationResend_OnlyTheCooldownIsHeld(t *testing.T) {
 		{"429 instance mail cap", http.StatusTooManyRequests, gtInstanceMailCap, false, invResendCapMsg},
 		{"429 over_request_rate_limit", http.StatusTooManyRequests, gtOverRequestRateLimit, false, "invitation-resend: gotrue resend failed"},
 		{"429 with an empty msg", http.StatusTooManyRequests, `{"code":429,"error_code":"over_email_send_rate_limit","msg":""}`, false, ""},
+		{"429 cooldown wording under another error_code", http.StatusTooManyRequests, `{"code":429,"error_code":"over_request_rate_limit","msg":"For security purposes, you can only request this after 42 seconds."}`, false, "invitation-resend: gotrue resend failed"},
+		{"302", http.StatusFound, `{}`, false, "invitation-resend: gotrue resend failed"},
 		{"400", http.StatusBadRequest, `{"code":400,"error_code":"email_address_not_authorized","msg":"Email address is not authorized"}`, false, "invitation-resend: gotrue resend failed"},
 		{"403", http.StatusForbidden, `{"code":403,"error_code":"not_admin","msg":"forbidden"}`, false, "invitation-resend: gotrue resend failed"},
 		{"500", http.StatusInternalServerError, gtInternal, false, "invitation-resend: gotrue resend failed"},
@@ -172,6 +175,8 @@ func TestInvitationResend_BadTokenNeverReachesGoTrue(t *testing.T) {
 	}{
 		{"empty token", tokenBody(""), nil, http.StatusBadRequest, wantTokenRequired, 0},
 		{"malformed JSON", `{`, nil, http.StatusBadRequest, msgInvalidBody, 0},
+		{"oversized body", `{"token":"` + strings.Repeat("A", 2048) + `"}`, nil, http.StatusBadRequest, msgInvalidBody, 0},
+		{"token of the wrong type", `{"token":12345}`, nil, http.StatusBadRequest, msgInvalidBody, 0},
 		{"shapeless token", tokenBody("short"), nil, http.StatusNotFound, wantInviteNotValid, 0},
 		{"well-formed unknown token", tokenBody(inviteToken), func(string) (InvitationPreview, error) { return InvitationPreview{}, ErrInvitationNotValid }, http.StatusNotFound, wantInviteNotValid, 1},
 		{"lookup fails", tokenBody(inviteToken), func(string) (InvitationPreview, error) {
@@ -387,5 +392,118 @@ func TestInvitationResend_LogsCarryNoAddressTokenOrIP(t *testing.T) {
 		if strings.Contains(buf.String(), secret) {
 			t.Errorf("logs carry %q: %s", secret, buf.String())
 		}
+	}
+}
+
+// A request that holds no live, unconfirmed invite spends neither budget: 3x the per-IP limit of them leave a real press untouched.
+func TestInvitationResend_RefusedRequestsSpendNoBudget(t *testing.T) {
+	rows := []struct {
+		name, body, account string
+		wantStatus          int
+	}{
+		{"shapeless token", tokenBody("short"), "unconfirmed", http.StatusNotFound},
+		{"empty token", tokenBody(""), "unconfirmed", http.StatusBadRequest},
+		{"confirmed account", tokenBody(inviteToken), "confirmed", http.StatusConflict},
+		{"missing account", tokenBody(inviteToken), "none", http.StatusConflict},
+	}
+	for _, c := range rows {
+		t.Run(c.name, func(t *testing.T) {
+			fake := sequenceGoTrue(t, gtAnswer{200, `{}`})
+			perAddress, perIP := resendThrottles(time.Now)
+			refused := InvitationResendHandler(fake.URL, testClient(), perAddress, perIP, true, slog.New(slog.DiscardHandler), invitePreviewing(c.account).preview)
+			for i := 0; i < 3*ResendPerIP; i++ {
+				if rec := serveInviteResend(refused, http.MethodPost, c.body, invResendIP); rec.Code != c.wantStatus {
+					t.Fatalf("refused press %d = %d %s, want %d", i, rec.Code, rec.Body.String(), c.wantStatus)
+				}
+			}
+			live := InvitationResendHandler(fake.URL, testClient(), perAddress, perIP, true, slog.New(slog.DiscardHandler), invitePreviewing("unconfirmed").preview)
+
+			rec := serveInviteResend(live, http.MethodPost, tokenBody(inviteToken), invResendIP)
+
+			requireInviteAnswer(t, rec, http.StatusOK, resendSent, "a live press after the refused ones")
+			if n := len(fake.Calls()); n != 1 {
+				t.Errorf("GoTrue saw %d calls, want 1", n)
+			}
+		})
+	}
+}
+
+// GoTrue mailed nothing on a 4xx, so it is refunded from both budgets; a 5xx or a transport error may have mailed, so it is not.
+func TestInvitationResend_RefundsOnlyA4xx(t *testing.T) {
+	const presses = 3 * ResendPerIP
+	t.Run("400 is refunded", func(t *testing.T) {
+		fake := sequenceGoTrue(t, gtAnswer{400, `{"code":400,"error_code":"email_address_not_authorized","msg":"no"}`})
+		h := newInviteResend(fake.URL, invitePreviewing("unconfirmed"), nil)
+		for i := 1; i <= presses; i++ {
+			requireInviteAnswer(t, serveInviteResend(h, http.MethodPost, tokenBody(inviteToken), invResendIP), http.StatusBadGateway, jsonError(wantResendUnavailable), fmt.Sprintf("press %d", i))
+		}
+		if n := len(fake.Calls()); n != presses {
+			t.Errorf("GoTrue saw %d calls, want %d: a 4xx kept its reservation", n, presses)
+		}
+	})
+	t.Run("cooldown holds are refunded from the IP budget too", func(t *testing.T) {
+		fake := sequenceGoTrue(t, gtAnswer{429, gtOverEmailSendRateLimit})
+		h := newInviteResend(fake.URL, invitePreviewing("unconfirmed"), nil)
+		for i := 1; i <= presses; i++ {
+			requireInviteAnswer(t, serveInviteResend(h, http.MethodPost, tokenBody(inviteToken), invResendIP), http.StatusOK, resendHeld, fmt.Sprintf("press %d", i))
+		}
+	})
+	for _, c := range []struct {
+		name      string
+		answer    gtAnswer
+		transport bool
+	}{
+		{"500 keeps its reservation", gtAnswer{500, gtInternal}, false},
+		{"a transport error keeps its reservation", gtAnswer{}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			authURL := closedURL(t)
+			var fake *fakeGoTrue
+			if !c.transport {
+				fake = sequenceGoTrue(t, c.answer)
+				authURL = fake.URL
+			}
+			h := newInviteResend(authURL, invitePreviewing("unconfirmed"), nil)
+			for i := 1; i <= ResendPerAddress; i++ {
+				requireInviteAnswer(t, serveInviteResend(h, http.MethodPost, tokenBody(inviteToken), invResendIP), http.StatusBadGateway, jsonError(wantResendUnavailable), fmt.Sprintf("press %d", i))
+			}
+
+			rec := serveInviteResend(h, http.MethodPost, tokenBody(inviteToken), invResendIP)
+
+			requireInviteAnswer(t, rec, http.StatusTooManyRequests, jsonError("too many requests"), "press after the budget")
+			if fake != nil && len(fake.Calls()) != ResendPerAddress {
+				t.Errorf("GoTrue saw %d calls, want %d", len(fake.Calls()), ResendPerAddress)
+			}
+		})
+	}
+}
+
+// A press refused for its IP spends no address count, and the address budget is keyed by the invite's address, not the client.
+func TestInvitationResend_IPRefusalSpendsNoAddressAndBudgetsArePerAddress(t *testing.T) {
+	const other = "198.51.100.4"
+	fake := sequenceGoTrue(t, gtAnswer{200, `{}`})
+	perAddress := NewSignInThrottle("resend-address", ResendPerAddress, ResendMaxKeys, ResendWindow, time.Now)
+	perIP := NewSignInThrottle("resend-ip", 2, ResendMaxKeys, ResendWindow, time.Now)
+	p := &recordingPreviewer{result: func(token string) (InvitationPreview, error) {
+		inv := unconfirmedInvite()
+		if token == otherInviteToken {
+			inv.Email = "ada@obi.test"
+		}
+		return inv, nil
+	}}
+	h := InvitationResendHandler(fake.URL, testClient(), perAddress, perIP, true, slog.New(slog.DiscardHandler), p.preview)
+	press := func(token, ip string) *httptest.ResponseRecorder {
+		return serveInviteResend(h, http.MethodPost, tokenBody(token), ip)
+	}
+
+	requireInviteAnswer(t, press(inviteToken, invResendIP), http.StatusOK, resendSent, "press 1")
+	requireInviteAnswer(t, press(inviteToken, invResendIP), http.StatusOK, resendSent, "press 2")
+	requireInviteAnswer(t, press(inviteToken, invResendIP), http.StatusTooManyRequests, jsonError("too many requests"), "press 3: IP refused")
+	// Address count is 2 if the refusal spent none; a third send from another client is the last one allowed.
+	requireInviteAnswer(t, press(inviteToken, other), http.StatusOK, resendSent, "press 4: another client, address count 3")
+	requireInviteAnswer(t, press(inviteToken, other), http.StatusTooManyRequests, jsonError("too many requests"), "press 5: address spent")
+	requireInviteAnswer(t, press(otherInviteToken, "198.51.100.5"), http.StatusOK, resendSent, "press 6: a different address has its own budget")
+	if n := len(fake.Calls()); n != 4 {
+		t.Errorf("GoTrue saw %d calls, want 4", n)
 	}
 }

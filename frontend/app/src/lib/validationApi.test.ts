@@ -1,8 +1,11 @@
 // Pins severityStyle's error->red / warning->amber / info->muted mapping and its
 // out-of-enum fallback; the pill colours are asserted nowhere else.
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
-import { severityStyle, type Severity } from './validationApi'
+import { severityStyle, violationLine, type Severity } from './validationApi'
 
 describe('severityStyle', () => {
   const cases: Array<[Severity, string]> = [
@@ -48,5 +51,27 @@ describe('severityStyle', () => {
     expect(style.border).toBe('var(--status-muted-border)')
     expect(style.text).toBe('var(--status-muted-text)')
     expect(style.label).toBeTruthy()
+  })
+})
+
+describe('violationLine', () => {
+  it('violationLine_parsesLinePaths', () => {
+    expect(violationLine('line_items[2]')).toEqual({ line: 2, field: null })
+    expect(violationLine('line_items[2].unit_price')).toEqual({ line: 2, field: 'unit_price' })
+    expect(violationLine('line_items[12].hsn_code')).toEqual({ line: 12, field: 'hsn_code' })
+  })
+
+  it('violationLine_rejectsEverythingElse', () => {
+    const bad = ['line_items', '', undefined, 'subtotal', 'line_items[0]', 'line_items[01]', 'line_items[1].', ' line_items[1]', 'tax_subtotals[1].x', 'Line_items[1]']
+    for (const p of bad) expect(violationLine(p), String(p)).toBeNull()
+  })
+
+  it('violationLine_parsesTheEngineFixture', () => {
+    const rows = JSON.parse(
+      readFileSync(fileURLToPath(new URL('../../../../internal/validation/testdata/line_paths.json', import.meta.url)), 'utf8'),
+    ) as Array<{ list: string; n: number; field: string; path: string }>
+    const lineRows = rows.filter((r) => r.list === 'line_items')
+    expect(lineRows.length).toBeGreaterThan(0)
+    for (const r of lineRows) expect(violationLine(r.path), r.path).toEqual({ line: r.n, field: r.field || null })
   })
 })

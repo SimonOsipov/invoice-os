@@ -10,8 +10,8 @@
 // DeclaresOverflowXAuto ([narrow-band]'s failsafe pin) and violationsTable_cleanPass-
 // BlockIsUnchanged (an Out of Scope guard). The other five fail on their assertions.
 
-import { cleanup, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { Violation } from '../lib/validationApi'
 import { ViolationsTable } from './ViolationsTable'
@@ -249,5 +249,52 @@ describe('ViolationsTable', () => {
       const key = cells[2].firstElementChild as HTMLElement
       expect.soft(key.style.color, `${label} rule key colour`).toBe('var(--fg-2)')
     }
+  })
+})
+
+describe('ViolationsTable line links (ENGI-16-03)', () => {
+  const linePath = { path: 'line_items[2].unit_price' }
+
+  it('violationsTable_linePathRendersAButton', () => {
+    const onOpenLine = vi.fn()
+    render(<ViolationsTable violations={[violation(linePath)]} ruleSetVersion={3} onOpenLine={onOpenLine} />)
+
+    const btn = screen.getByTestId('violation-open-line')
+    expect(btn.textContent).toBe('Line 2')
+    fireEvent.click(btn)
+    expect(onOpenLine).toHaveBeenCalledWith({ line: 2, field: 'unit_price' })
+  })
+
+  it('violationsTable_disabledLineButton', () => {
+    const onOpenLine = vi.fn()
+    render(<ViolationsTable violations={[violation(linePath)]} ruleSetVersion={3} onOpenLine={onOpenLine} lineDisabled />)
+
+    const btn = screen.getByTestId('violation-open-line') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.style.opacity).toBe('0.45')
+    expect(btn.style.cursor).toBe('not-allowed')
+    fireEvent.click(btn)
+    expect(onOpenLine).not.toHaveBeenCalled()
+  })
+
+  it('violationsTable_nonLinePathsStayText', () => {
+    render(
+      <ViolationsTable
+        violations={[violation({ path: 'line_items' }), violation({ path: 'subtotal' }), violation({ path: undefined })]}
+        ruleSetVersion={3}
+        onOpenLine={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByTestId('violation-open-line')).toBeNull()
+    const cells = screen.getAllByRole('row').slice(1).map((r) => within(r).getAllByRole('cell')[3].textContent)
+    expect(cells).toEqual(['line_items', 'subtotal', '—'])
+  })
+
+  it('violationsTable_noHandlerKeepsText', () => {
+    render(<ViolationsTable violations={[violation({ path: 'line_items[2]' })]} ruleSetVersion={3} />)
+
+    expect(screen.queryByTestId('violation-open-line')).toBeNull()
+    expect(within(screen.getAllByRole('row')[1]).getAllByRole('cell')[3].textContent).toBe('line_items[2]')
   })
 })

@@ -36,3 +36,17 @@ const SEVERITY_STYLE: Partial<Record<Severity, StatusStyle>> = {
 export function severityStyle(sev: Severity): StatusStyle {
   return SEVERITY_STYLE[sev] ?? MUTED_STYLE
 }
+
+export interface LineTarget {
+  line: number
+  field: string | null
+}
+
+// Path grammar `line_items[N]` / `line_items[N].<field>`, N 1-based = line_no. Pinned to
+// internal/validation/testdata/line_paths.json by violationLine_parsesTheEngineFixture.
+const LINE_PATH = /^line_items\[([1-9]\d*)\](?:\.(\w+))?$/
+
+export function violationLine(path: string | undefined): LineTarget | null {
+  const m = path === undefined ? null : LINE_PATH.exec(path)
+  return m ? { line: Number(m[1]), field: m[2] ?? null } : null
+}

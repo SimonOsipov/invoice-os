@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
+	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 )
 
 // BatchResult is Import's return shape, whether dry-run or real. For a
@@ -109,25 +110,47 @@ func NewService(batch *Store, inv *invoice.Store, g gate) *Service {
 	return &Service{batch: batch, inv: inv, gate: g}
 }
 
-// numericFields are the 5 canonical fields that get [numeric-normalization]
-// (ASCII grouping commas + surrounding whitespace stripped) before becoming a
-// CreateInput string. Every other canonical field is passed through verbatim.
-var numericFields = map[string]bool{
-	"subtotal":        true,
-	"vat":             true,
-	"total":           true,
-	"line_quantity":   true,
-	"line_unit_price": true,
+// numericImportKeys lists the money and quantity import keys in field-list order
+// that pass keep.
+func numericImportKeys(keep func(invoicefields.Field) bool) []string {
+	var keys []string
+	for _, f := range invoicefields.All {
+		if f.Import && (f.Type == invoicefields.Money || f.Type == invoicefields.Quantity) && keep(f) {
+			keys = append(keys, f.ImportKey())
+		}
+	}
+	return keys
 }
 
-// headerFieldOrder is the set of canonical fields that must agree across
-// every row of one invoice_number group ([dedup]) — repeated per-invoice
-// header content, as opposed to per-line content. The order here is the
-// order in-file conflicts are detected in (first disagreeing field wins),
-// matching the Implementation Plan's own field listing.
-var headerFieldOrder = []string{
-	"issue_date", "buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
-}
+// Scan orders of commaDecimalField (all) and bestEffortBadNumericField (header, then line).
+var (
+	numericOrder       = numericImportKeys(func(invoicefields.Field) bool { return true })
+	headerNumericOrder = numericImportKeys(func(f invoicefields.Field) bool { return !f.Line })
+	lineNumericOrder   = numericImportKeys(func(f invoicefields.Field) bool { return f.Line })
+)
+
+// numericFields are the import fields that get [numeric-normalization] (ASCII grouping commas
+// + surrounding whitespace stripped) before becoming a CreateInput string.
+var numericFields = func() map[string]bool {
+	m := map[string]bool{}
+	for _, k := range numericOrder {
+		m[k] = true
+	}
+	return m
+}()
+
+// headerFieldOrder is the import header keys that must agree across every row of one
+// invoice_number group ([dedup]), in the order in-file conflicts are detected (first
+// disagreeing field wins).
+var headerFieldOrder = func() []string {
+	var keys []string
+	for _, f := range invoicefields.All {
+		if f.Import && !f.Line && f.Key != "invoice_number" {
+			keys = append(keys, f.Key)
+		}
+	}
+	return keys
+}()
 
 // decimalNumberRe is a best-effort "does this look like a plain decimal
 // number" check.
@@ -149,19 +172,13 @@ type invoiceGroup struct {
 // which requires rejecting an unrecognized KEY just as firmly as it rejects
 // a mapped HEADER string that doesn't exist -- silently ignoring an unknown
 // key would import that canonical field as NULL with no error at all.
-var canonicalFields = map[string]bool{
-	"invoice_number":   true,
-	"issue_date":       true,
-	"buyer_tin":        true,
-	"buyer_name":       true,
-	"currency":         true,
-	"subtotal":         true,
-	"vat":              true,
-	"total":            true,
-	"line_description": true,
-	"line_quantity":    true,
-	"line_unit_price":  true,
-}
+var canonicalFields = func() map[string]bool {
+	m := make(map[string]bool, len(mappingFields))
+	for _, k := range mappingFields {
+		m[k] = true
+	}
+	return m
+}()
 
 // resolveMapping resolves mapping (canonical field -> header string) into
 // canonical field -> column index against header (first match). An
@@ -343,7 +360,7 @@ func cellAt(row []string, idx int, field string) string {
 // RowError.Field a best guess. Returns "" if no numeric field is clearly bad.
 func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs []int) string {
 	first := rows[rowIdxs[0]]
-	for _, field := range []string{"subtotal", "vat", "total"} {
+	for _, field := range headerNumericOrder {
 		idx, ok := colIndex[field]
 		if !ok {
 			continue
@@ -353,7 +370,7 @@ func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs
 			return field
 		}
 	}
-	for _, field := range []string{"line_quantity", "line_unit_price"} {
+	for _, field := range lineNumericOrder {
 		idx, ok := colIndex[field]
 		if !ok {
 			continue
@@ -402,7 +419,7 @@ func isCommaDecimal(raw string) bool {
 // on any row of the group, or "". It reads raw cells: normalizeNumeric would
 // turn "12,50" into "1250" and hide it.
 func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) string {
-	for _, field := range []string{"subtotal", "vat", "total", "line_quantity", "line_unit_price"} {
+	for _, field := range numericOrder {
 		idx, ok := colIndex[field]
 		if !ok {
 			continue

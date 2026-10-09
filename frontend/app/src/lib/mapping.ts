@@ -3,11 +3,12 @@
 
 import { CANON } from '../data'
 import type { Mapping } from '../types'
+import type { ImportKey } from './invoiceFields'
 
 // Header aliases that auto-place a column. `invoice_number` is deliberately
 // absent: this table never name-matches it; a suggestion or a restore is the only automatic route.
 // A plausible wrong default invites rubber-stamping, and this data is submitted under the firm's TIN.
-const ALIAS: Record<string, string[]> = {
+const ALIAS: Partial<Record<ImportKey, string[]>> = {
   issue_date: ['issuedate', 'date'],
   buyer_tin: ['buyertin'],
   currency: ['currency', 'ccy'],

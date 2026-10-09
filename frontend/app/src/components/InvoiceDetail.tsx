@@ -26,6 +26,7 @@ import {
 } from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { getExtractions, type ExtractionJobsResponse } from '../lib/importApi'
+import type { LineEditKey } from '../lib/invoiceFields'
 import { stripNodes } from '../lib/invoiceStrip'
 import {
   BUYER_TIN_MISSING,
@@ -111,7 +112,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 // `id` and no `line_no`: line_no is system-assigned 1..N by array POSITION
 // ([line-no-by-position], lib/invoices.ts:234-245), so this array's order IS the wire's
 // line ordering, and diffLineItems compares by position over the five content fields only.
-type LineRowState = Record<'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax', string>
+type LineRowState = Record<LineEditKey, string>
 
 // description / qty / unit / amount / tax / remove, declared once so header and rows cannot drift.
 // Tracks are the prototype's, with a 120px Description floor; the box scrolls sideways only when the floor no longer fits.

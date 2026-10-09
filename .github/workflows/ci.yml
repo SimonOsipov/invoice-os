@@ -39,6 +39,7 @@ jobs:
               - 'migrations/**'
               - 'scripts/ci/**'
               - 'packages/design-tokens/v2/assets/**'
+              - 'frontend/app/src/lib/invoiceFields.gen.ts'
               - 'go.mod'
               - 'go.sum'
               - 'Dockerfile'

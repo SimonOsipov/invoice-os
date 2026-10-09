@@ -17,9 +17,6 @@ const (
 	LineRoleLineTax     = "line_tax" // per-line VAT; distinct from the invoice-level "vat" header field
 )
 
-// LineRoles is one line's cells in emit order: reading order, left to right.
-var LineRoles = []string{LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal, LineRoleLineTax}
-
 // DocLine is one data row of a reader table, projected onto the invoice's line-item shape.
 type DocLine struct {
 	Index       int // 1-based, continuous across pages and tables in reader order

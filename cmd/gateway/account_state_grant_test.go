@@ -189,6 +189,23 @@ func TestGrantAccountStateRead_StopsWhenTheContextEnds(t *testing.T) {
 	if n := log.count(t, "WARN", msgNotGranted); n != 0 {
 		t.Errorf("WARN %q count = %d, want 0 on cancellation", msgNotGranted, n)
 	}
+
+	t.Run("cancel_during_the_last_attempt_logs_nothing", func(t *testing.T) {
+		log := newCapturedLog()
+		ctx, cancel := context.WithCancel(context.Background())
+		calls := 0
+		grantAccountStateRead(ctx, grantAuthDSN, func(context.Context, string) (bool, error) {
+			calls++
+			cancel()
+			return false, nil
+		}, time.Millisecond, 1, log.Logger)
+		if calls != 1 {
+			t.Fatalf("grant calls = %d, want 1", calls)
+		}
+		if got := log.records(t); len(got) != 0 {
+			t.Errorf("log lines after a cancelled last attempt = %v, want none", got)
+		}
+	})
 }
 
 func TestGrantAccountStateRead_LogsCarryNoSecret(t *testing.T) {
@@ -231,20 +248,28 @@ func TestStartAccountStateGrant_AnEmptyPasswordStartsNothing(t *testing.T) {
 }
 
 func TestStartAccountStateGrant_ABadDSNStartsNothing(t *testing.T) {
-	log := newCapturedLog()
-	var p startProbe
-	if got := startAccountStateGrant("pr-12", grantBadDSN, grantSecret, log.Logger, p.start); got {
-		t.Error("startAccountStateGrant = true, want false")
-	}
-	if len(p.dsns) != 0 {
-		t.Errorf("start called %d times, want 0", len(p.dsns))
-	}
-	if n := log.count(t, "WARN", msgNotStarted); n != 1 {
-		t.Fatalf("WARN %q count = %d, want 1; log: %s", msgNotStarted, n, log.buf)
-	}
-	out := log.buf.String()
-	if strings.Contains(out, grantSecret) || strings.Contains(out, grantBadDSN) {
-		t.Errorf("log carries the password or the DSN: %s", out)
+	for name, dsn := range map[string]string{
+		"unparseable": grantBadDSN,
+		"bad_port":    "postgres://invoice_migrator:" + grantSecret + "@h:notaport/railway",
+		"no_host":     "postgres:///railway",
+	} {
+		t.Run(name, func(t *testing.T) {
+			log := newCapturedLog()
+			var p startProbe
+			if got := startAccountStateGrant("pr-12", dsn, grantSecret, log.Logger, p.start); got {
+				t.Error("startAccountStateGrant = true, want false")
+			}
+			if len(p.dsns) != 0 {
+				t.Errorf("start called %d times, want 0", len(p.dsns))
+			}
+			if n := log.count(t, "WARN", msgNotStarted); n != 1 {
+				t.Fatalf("WARN %q count = %d, want 1; log: %s", msgNotStarted, n, log.buf)
+			}
+			out := log.buf.String()
+			if strings.Contains(out, grantSecret) || strings.Contains(out, dsn) {
+				t.Errorf("log carries the password or the DSN: %s", out)
+			}
+		})
 	}
 }
 
@@ -268,7 +293,7 @@ func TestStartAccountStateGrant_StartsOnceWithTheOwnersDSN(t *testing.T) {
 // Names are RAILWAY_ENVIRONMENT_NAME values; the posture each maps to comes from
 // platform.Posture (PostureHosted for all of them, PostureLocal for "", PosturePreview for a PR name).
 func TestStartAccountStateGrant_AHostedEnvironmentStartsNothing(t *testing.T) {
-	for _, name := range []string{"production", "Production", "development", "staging", "pr-12 ", "pr-"} {
+	for _, name := range []string{"production", "Production", "development", "staging", "pr-12 ", "pr-", "PR-12", " pr-12", "pr-12\n", "pr-12-b", "invoice-os-PR-12"} {
 		if got := platform.Posture(name); got != platform.PostureHosted {
 			t.Fatalf("control: platform.Posture(%q) = %q, want %q; the case does not test the hosted gate", name, got, platform.PostureHosted)
 		}

@@ -73,6 +73,8 @@ func TestAuthAdminDSN_RefusesEmptyOrBadInput(t *testing.T) {
 	const secret = "s3cret-xyz"
 	cases := map[string]struct{ dsn, password string }{
 		"empty_migration_dsn":         {"", secret},
+		"no_host_dsn":                 {"postgres:///railway", secret},
+		"keyword_value_dsn":           {"host=h user=invoice_migrator password=m dbname=railway", secret},
 		"empty_password":              {"postgresql://invoice_migrator:m@h:5432/railway", ""},
 		"unparseable_dsn":             {badDSN, secret},
 		"bad_port_dsn_holds_password": {"postgres://invoice_migrator:" + secret + "@h:notaport/railway", secret},

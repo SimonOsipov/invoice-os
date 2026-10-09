@@ -10,7 +10,7 @@ import (
 )
 
 // grantAccountStateRead retries grant until it reports true. Forks need the retry: the gateway
-// boots before GoTrue creates auth.users. It logs the error class only, never the error text.
+// boots before GoTrue creates auth.users. It never logs a grant error: the text can hold the DSN.
 func grantAccountStateRead(ctx context.Context, dsn string, grant func(context.Context, string) (bool, error), every time.Duration, attempts int, log *slog.Logger) {
 	for i := 1; i <= attempts; i++ {
 		ok, err := grant(ctx, dsn)

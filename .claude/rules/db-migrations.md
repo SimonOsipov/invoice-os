@@ -21,7 +21,7 @@ paths:
 - Enumerate tenants only through `invoice_tenant_reader`.
 - Install a trusted extension in a migration. Install an untrusted extension in `db/bootstrap.sql`.
 - Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.accept_invitation_by_id` and `public.invitee_account_state` to `invoice_app` only.
-- Grant `auth_hook_reader` SELECT on the `auth.users` columns `email`, `email_confirmed_at` and `is_sso_user` only, with `db.GrantAccountStateRead`.
+- Grant `auth_hook_reader` SELECT on the `auth.users` columns `email`, `email_confirmed_at` and `is_sso_user` only.
 - Never grant `auth_hook_reader` a table-level privilege on `auth.users`.
 - Treat `invitee_account_state` as callable by every `invoice_app` service for any address.
 - Treat `invoice_migrator` as able to read `email`, `email_confirmed_at` and `is_sso_user` of every `auth.users` row through `SET ROLE auth_hook_reader`.

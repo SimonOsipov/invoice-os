@@ -359,6 +359,68 @@ describe('open-tab sync', () => {
     delete (document as { cookie?: string }).cookie
   })
 
+  function spyJar(): string[] {
+    const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')!
+    const writes: string[] = []
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => desc.get!.call(document),
+      set: (v: string) => {
+        writes.push(v)
+        desc.set!.call(document, v)
+      },
+    })
+    return writes
+  }
+  const layer = () => ((window as TestWindow).dataLayer ?? []).map((a) => Array.from(a))
+
+  it.each([
+    [LIB, [LIB, `.${LIB}`, 'ascomply.com', '.ascomply.com']],
+    [WWW, [WWW, `.${WWW}`, 'ascomply.com', '.ascomply.com']],
+  ])('SY-04 a synced Reject on %s expires every _ga name on host-only and each domain form', async (host, domains) => {
+    const { syncConsent } = await import('./consentActions')
+    const { ensureTag } = await import('./analytics')
+    setCookie(true)
+    expect(ensureTag(host, readConsentCookie(document), [host])).toBe(true)
+    document.cookie = '_ga=x'
+    document.cookie = '_ga_ABC=y'
+    const writes = spyJar()
+
+    setCookie(false)
+    syncConsent({ hostname: host, hosts: [host] })
+
+    for (const name of ['_ga', '_ga_ABC']) {
+      const exp = writes.filter((w) => w.startsWith(`${name}=; Max-Age=0`))
+      expect(exp.filter((w) => !w.includes('domain=')), name).toHaveLength(1)
+      expect(exp.filter((w) => w.includes('domain=')).map((w) => w.split('domain=')[1]).sort(), name).toEqual([...domains].sort())
+    }
+    expect(writes.filter((w) => w.startsWith(`${KEY}=;`))).toEqual([])
+  })
+
+  it('SY-05 a sync that finds the choice unchanged loads nothing twice and writes nothing', async () => {
+    const { syncConsent } = await import('./consentActions')
+    setCookie(true)
+    syncConsent()
+    expect(document.querySelectorAll(SYNC_TAG)).toHaveLength(1)
+    const writes = spyJar()
+    for (let i = 0; i < 3; i += 1) expect(syncConsent()?.analytics).toBe(true)
+    expect(document.querySelectorAll(SYNC_TAG)).toHaveLength(1)
+    expect(layer().filter((e) => e[0] === 'config')).toHaveLength(1)
+    expect(writes).toEqual([])
+  })
+
+  it('SY-06 a synced Reject with no tag loaded expires nothing and stays revoked', async () => {
+    const { syncConsent } = await import('./consentActions')
+    const { trackDemoOpen } = await import('./analytics')
+    document.cookie = '_ga=x'
+    const writes = spyJar()
+    setCookie(false)
+    expect(syncConsent()?.analytics).toBe(false)
+    expect(writes.filter((w) => w.startsWith('_ga'))).toEqual([])
+    trackDemoOpen('hero')
+    expect(layer().filter((e) => e[0] === 'event')).toEqual([])
+  })
+
   it('SY-01 a Reject from another tab stops this tab', async () => {
     const { syncConsent } = await import('./consentActions')
     const { ensureTag, trackDemoOpen } = await import('./analytics')

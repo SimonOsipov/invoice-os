@@ -219,4 +219,32 @@ describe('a choice made in another tab', () => {
     await becomeVisible()
     expect(document.querySelectorAll(NOTICE)).toHaveLength(0)
   })
+
+  it('SY-03 Cookie choices alone re-reads the shared choice, with no visibility event', async () => {
+    cookie(true)
+    await mountApp()
+    cookie(false)
+    await clickByText('Cookie choices')
+    expect(document.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are off.')
+  })
+
+  it('SY-03 a hidden tab does not follow until it is visible', async () => {
+    await mountApp()
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(1)
+
+    cookie(true)
+    const state = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(1)
+    expect(document.querySelectorAll(GTAG_SCRIPT)).toHaveLength(0)
+
+    state.mockReturnValue('visible')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(0)
+    expect(document.querySelectorAll(GTAG_SCRIPT)).toHaveLength(1)
+  })
 })

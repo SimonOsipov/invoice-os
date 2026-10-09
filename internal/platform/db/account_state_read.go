@@ -56,9 +56,6 @@ func AuthAdminDSN(migrationDSN, password string) (string, error) {
 	if password == "" {
 		return "", errors.New("db: auth admin dsn: empty password")
 	}
-	if migrationDSN == "" {
-		return "", errors.New("db: auth admin dsn: empty migration dsn")
-	}
 	u, err := url.Parse(migrationDSN)
 	if err != nil {
 		return "", errors.New("db: auth admin dsn: unparseable migration dsn")

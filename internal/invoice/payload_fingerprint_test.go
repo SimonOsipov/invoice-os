@@ -26,6 +26,7 @@ package invoice
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -632,5 +633,83 @@ func TestContentFingerprint_DuplicateLineNoIsOrderDependent(t *testing.T) {
 			"these to DIFFER: sort.SliceStable preserves caller order for tied keys, so a duplicate line_no "+
 			"is order-dependent by construction. If this now fails, the sort or its comparator changed and "+
 			"this documented behaviour needs re-verifying, not silently accepting", fpAB)
+	}
+}
+
+// Every content field found by reflection moves the digest (D26); a field added later with no hashing fails here.
+func TestContentFingerprint_EveryContentFieldIsSignificant(t *testing.T) {
+	base := fullFingerprintFixture()
+	baseFP := contentFingerprint(base, base.LineItems)
+	walked := 0
+
+	idx, tags := contentFields(reflect.TypeOf(Invoice{}))
+	for n, i := range idx {
+		walked++
+		t.Run("invoice."+tags[n], func(t *testing.T) {
+			inv := fullFingerprintFixture()
+			setSample(t, reflect.ValueOf(&inv).Elem().Field(i), tags[n])
+			if contentFingerprint(inv, inv.LineItems) == baseFP {
+				t.Errorf("digest unchanged after setting Invoice field %s", tags[n])
+			}
+		})
+	}
+	invoiceFields := walked
+
+	lidx, ltags := contentFields(reflect.TypeOf(LineItem{}))
+	for n, i := range lidx {
+		walked++
+		t.Run("line."+ltags[n], func(t *testing.T) {
+			inv := fullFingerprintFixture()
+			setSample(t, reflect.ValueOf(&inv.LineItems[0]).Elem().Field(i), ltags[n])
+			if contentFingerprint(inv, inv.LineItems) == baseFP {
+				t.Errorf("digest unchanged after setting LineItem field %s", ltags[n])
+			}
+		})
+	}
+	if invoiceFields != 32 || walked-invoiceFields != 15 {
+		t.Fatalf("walked %d Invoice and %d LineItem content fields, want 32 and 15", invoiceFields, walked-invoiceFields)
+	}
+}
+
+// The index tag, not the value, tells two NRS fields apart; NULL differs from "".
+func TestContentFingerprint_NRSFieldIndexIsHashed(t *testing.T) {
+	city, state := fullFingerprintFixture(), fullFingerprintFixture()
+	city.BuyerCity, state.BuyerState = strPtr("X"), strPtr("X")
+	if contentFingerprint(city, city.LineItems) == contentFingerprint(state, state.LineItems) {
+		t.Error("BuyerCity=X and BuyerState=X hash the same")
+	}
+
+	nilCity, emptyCity := fullFingerprintFixture(), fullFingerprintFixture()
+	emptyCity.BuyerCity = strPtr("")
+	if contentFingerprint(nilCity, nilCity.LineItems) == contentFingerprint(emptyCity, emptyCity.LineItems) {
+		t.Error("BuyerCity nil and \"\" hash the same")
+	}
+
+	lineNil, lineEmpty := fullFingerprintFixture(), fullFingerprintFixture()
+	lineEmpty.LineItems[0].HSNCode = strPtr("")
+	if contentFingerprint(lineNil, lineNil.LineItems) == contentFingerprint(lineEmpty, lineEmpty.LineItems) {
+		t.Error("line HSNCode nil and \"\" hash the same")
+	}
+}
+
+// A header NRS tag followed by its value cannot be forged by line text.
+func TestContentFingerprint_NRSTagCannotCollideWithALine(t *testing.T) {
+	header := fullFingerprintFixture()
+	header.LineItems = nil
+	header.TaxCurrencyCode = strPtr("NGN")
+	want := contentFingerprint(header, nil)
+
+	forged := []string{"X1;", "X1;S3:NGN;", "X1;S3:NGN;S1:0;", "S3:NGN;"}
+	for _, text := range forged {
+		other := fullFingerprintFixture()
+		other.LineItems = []LineItem{{LineNo: 1, Description: strPtr(text)}}
+		if contentFingerprint(other, other.LineItems) == want {
+			t.Errorf("line description %q collides with the TaxCurrencyCode header tag", text)
+		}
+		numbered := fullFingerprintFixture()
+		numbered.LineItems = []LineItem{{LineNo: 1, SellersItemIdentification: strPtr(text)}}
+		if contentFingerprint(numbered, numbered.LineItems) == want {
+			t.Errorf("line item identification %q collides with the TaxCurrencyCode header tag", text)
+		}
 	}
 }

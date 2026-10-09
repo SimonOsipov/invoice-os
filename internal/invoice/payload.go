@@ -26,6 +26,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"time"
 )
 
 // mbsDateLayout is dateEval's default layout (internal/validation/
@@ -97,16 +98,27 @@ func MBSPayload(inv Invoice) map[string]any {
 	putNumber(p, "vat", inv.VAT)
 	putNumber(p, "total", inv.Total)
 
+	putString(p, "invoice_kind", inv.InvoiceKind)
+	putString(p, "tax_currency_code", inv.TaxCurrencyCode)
+	putDate(p, "due_date", inv.DueDate)
+	putString(p, "issue_time", inv.IssueTime)
+	putDate(p, "tax_point_date", inv.TaxPointDate)
+	putString(p, "payment_status", inv.PaymentStatus)
+
 	// The flat supplier_*/buyer_* columns nest under "supplier"/"buyer" --
 	// v2's supplier-tin-required/supplier-name-required/supplier-tin-format/
 	// buyer-tin-format all resolve dotted paths ("supplier.tin"). An all-NULL
 	// party is omitted wholesale; resolvePath walks a missing intermediate
 	// segment to present=false, so `required` still fires exactly as it would
 	// on an emitted-but-empty object.
-	if supplier := party(inv.SupplierTIN, inv.SupplierName); len(supplier) > 0 {
+	if supplier := party(inv.SupplierTIN, inv.SupplierName, inv.SupplierEmail, inv.SupplierTelephone,
+		inv.SupplierStreet, inv.SupplierCity, inv.SupplierPostalZone, inv.SupplierCountry,
+		inv.SupplierState, inv.SupplierLGA); len(supplier) > 0 {
 		p["supplier"] = supplier
 	}
-	if buyer := party(inv.BuyerTIN, inv.BuyerName); len(buyer) > 0 {
+	if buyer := party(inv.BuyerTIN, inv.BuyerName, inv.BuyerEmail, inv.BuyerTelephone,
+		inv.BuyerStreet, inv.BuyerCity, inv.BuyerPostalZone, inv.BuyerCountry,
+		inv.BuyerState, inv.BuyerLGA); len(buyer) > 0 {
 		p["buyer"] = buyer
 	}
 
@@ -120,6 +132,18 @@ func MBSPayload(inv Invoice) map[string]any {
 			lines[i] = mbsLine(li)
 		}
 		p["line_items"] = lines
+	}
+
+	if subs := taxSubtotals(inv.LineItems); len(subs) > 0 {
+		out := make([]any, len(subs))
+		for i, sub := range subs {
+			m := map[string]any{"tax_category": sub.TaxCategory}
+			putNumber(m, "tax_percent", sub.TaxPercent)
+			putNumber(m, "taxable_amount", sub.TaxableAmount)
+			putNumber(m, "tax_amount", sub.TaxAmount)
+			out[i] = m
+		}
+		p["tax_subtotals"] = out
 	}
 
 	return p
@@ -147,15 +171,40 @@ func mbsLine(li LineItem) map[string]any {
 	putNumber(m, "unit_price", li.UnitPrice)
 	putNumber(m, "line_total", li.LineTotal)
 	putNumber(m, "line_tax", li.LineTax)
+
+	putString(m, "tax_category", li.TaxCategory)
+	putString(m, "hsn_code", li.HSNCode)
+	putString(m, "isic_code", li.ISICCode)
+	putString(m, "product_category", li.ProductCategory)
+	putString(m, "service_category", li.ServiceCategory)
+	putString(m, "sellers_item_identification", li.SellersItemIdentification)
+	putString(m, "price_unit", li.PriceUnit)
+	putNumber(m, "tax_percent", li.TaxPercent)
+	putNumber(m, "base_quantity", li.BaseQuantity)
 	return m
 }
 
-// party builds a nested {tin, name} object, omitting the NULL members.
-func party(tin, name *string) map[string]any {
-	m := make(map[string]any, 2)
+// party builds a nested supplier/buyer object, omitting the NULL members.
+func party(tin, name, email, telephone, street, city, postalZone, country, state, lga *string) map[string]any {
+	m := make(map[string]any, 10)
 	putString(m, "tin", tin)
 	putString(m, "name", name)
+	putString(m, "email", email)
+	putString(m, "telephone", telephone)
+	putString(m, "street", street)
+	putString(m, "city", city)
+	putString(m, "postal_zone", postalZone)
+	putString(m, "country", country)
+	putString(m, "state", state)
+	putString(m, "lga", lga)
 	return m
+}
+
+// putDate sets key to the YYYY-MM-DD form of *v, or omits it when v is nil.
+func putDate(m map[string]any, key string, v *time.Time) {
+	if v != nil {
+		m[key] = v.Format(mbsDateLayout)
+	}
 }
 
 // putString sets key to *v, or omits it entirely when v is nil. A NULL
@@ -181,7 +230,13 @@ func putNumber(m map[string]any, key string, v *string) {
 // contentFingerprint is a sha256 over an invoice's MBS CONTENT: the ten
 // content columns of the invoices row -- invoice_number, issue_date,
 // supplier_tin, supplier_name, buyer_tin, buyer_name, currency, subtotal,
-// vat, total -- and the invoice's line items. It deliberately excludes
+// vat, total -- the 22 NRS header and party columns (invoice_kind,
+// tax_currency_code, due_date, issue_time, tax_point_date, payment_status,
+// then the eight supplier_* and eight buyer_* address and contact columns),
+// and the invoice's line items with their 9 NRS fields (tax_category,
+// hsn_code, isic_code, product_category, service_category,
+// sellers_item_identification, price_unit, tax_percent, base_quantity).
+// It deliberately excludes
 // everything that is not MBS content (id, tenant_id, entity_id,
 // import_batch_id, status, violations, rule_set_version_id, created_at) and,
 // among the lines, the line `id` ([fingerprint-excludes-line-ids]).
@@ -204,6 +259,10 @@ func putNumber(m map[string]any, key string, v *string) {
 // length-prefixed and NULL-marked, so the encoding is injective -- no pair of
 // distinct column tuples can collide by concatenation (("ab","c") and
 // ("a","bc") hash differently, and a NULL is distinct from "").
+//
+// NRS fields are hashed only when non-nil, as "X<index>;" plus the same
+// length-prefixed value, after Total (header) and after LineTax (line). A
+// legacy invoice therefore keeps its pre-NRS digest.
 //
 // The LINE canonicalization (INVED-01-02) is, after the ten header fields:
 //

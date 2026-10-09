@@ -509,8 +509,8 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 			patterns = append(patterns, s.pattern)
 		}
 	}
-	if len(patterns) != 4 {
-		t.Fatalf("main registers %d invitation routes %v, want 4 (POST and OPTIONS of /auth/invitation and /auth/invitation/register)", len(patterns), patterns)
+	if len(patterns) != 6 {
+		t.Fatalf("main registers %d invitation routes %v, want 6 (POST and OPTIONS of /auth/invitation, /auth/invitation/register and /auth/invitation/resend)", len(patterns), patterns)
 	}
 
 	authURL, calls := fakeAuth(t)
@@ -520,17 +520,21 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 		return gateway.InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: "tunde@obi.test"}, nil
 	}
 	invitation, register := invitationHandlers(authURL, site, 0, perIP, preview, slog.New(slog.DiscardHandler))
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	resend := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, preview, slog.New(slog.DiscardHandler))
 	withCORS := gateway.CORS([]string{origin})
 	mux := http.NewServeMux()
 	for _, p := range patterns {
 		if strings.HasSuffix(p, "/register") {
 			mux.Handle(p, withCORS(register))
+		} else if strings.HasSuffix(p, "/resend") {
+			mux.Handle(p, withCORS(resend))
 		} else {
 			mux.Handle(p, withCORS(invitation))
 		}
 	}
 
-	for _, path := range []string{"/auth/invitation", "/auth/invitation/register"} {
+	for _, path := range []string{"/auth/invitation", "/auth/invitation/register", "/auth/invitation/resend"} {
 		req := httptest.NewRequest(http.MethodOptions, path, nil)
 		req.Header.Set("Origin", origin)
 		req.Header.Set("Access-Control-Request-Method", "POST")

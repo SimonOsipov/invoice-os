@@ -168,3 +168,10 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		signUp(w, r, client, signup, map[string]any{"email": p.Email, "password": in.Password}, start, minResponse, perIP, enforce, log, exists)
 	})
 }
+
+// InvitationResendHandler answers POST /auth/invitation/resend. Stub: LOGFIX-09-01 implements it.
+func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger, preview InvitationPreviewer) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
+	})
+}

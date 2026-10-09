@@ -290,6 +290,8 @@ type registration struct {
 	Register, DemoRequest, ResendVerification, RequestPasswordReset http.Handler
 	// RegisterPerIP is the register throttle, nil when unconfigured; invitee registration shares it.
 	RegisterPerIP *gateway.SignInThrottle
+	// ResendByAddress and ResendByIP are the resend budgets that ResendVerification and RequestPasswordReset share; nil when unconfigured.
+	ResendByAddress, ResendByIP *gateway.SignInThrottle
 }
 
 // invitationHandlers builds the accept-page preview handler and the invitee-registration handler.
@@ -305,6 +307,11 @@ func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, pe
 	}
 	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
 	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, perIP, enforce, log, preview)
+}
+
+// invitationResendHandler builds POST /auth/invitation/resend. Stub: LOGFIX-09-01 implements it.
+func invitationResendHandler(authURL, siteURL *url.URL, perAddress, perIP *gateway.SignInThrottle, preview gateway.InvitationPreviewer, log *slog.Logger) http.Handler {
+	return gateway.InvitationResendHandler(authURL, &http.Client{}, perAddress, perIP, true, log, preview)
 }
 
 // newJWKSClient builds the JWKS fetch client.

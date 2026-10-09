@@ -61,6 +61,9 @@ paths:
 - Read the confirm token from the POST form body only. The GET page makes no GoTrue call.
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
+- Send a sessionless app visit with exactly `?via=library` to `<landing>/?state=<s>&register`. Any other value takes the sign-in path.
+- Expect `?register` to open the create-an-account modal, or "Book a demo" when `registrationOpen()` is false.
+- Expect landing's `?demo` to open the book-a-demo modal.
 - Reserve a sign-in throttle attempt before the GoTrue call.
 - Accept a tenant-less token only on `POST /api/tenancy/v1/workspaces` and `POST /api/tenancy/v1/invitations/accept`.
 - Match the tenant-less routes on the escaped path.

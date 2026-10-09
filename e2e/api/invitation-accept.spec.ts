@@ -21,7 +21,7 @@ function auth(token: string): Record<string, string> {
 const preview = (token: string) => rawFetch('/auth/invitation', { method: 'POST', body: { token } })
 const accept = (session: string, token: string) => rawFetch('/api/tenancy/v1/invitations/accept', { method: 'POST', headers: auth(session), body: { token } })
 
-// The preview's account state is read from the auth store, which a fork fills asynchronously (D19: poll, never sleep).
+// The preview's account state is read from the auth store, which a fork fills asynchronously; poll, never sleep.
 async function awaitAccountState(token: string, want: 'none' | 'unconfirmed' | 'confirmed'): Promise<{ status: number; body: unknown }> {
   let last: { status: number; body: unknown } = { status: 0, body: null }
   await expect

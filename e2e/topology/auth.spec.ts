@@ -2732,7 +2732,7 @@ test('deployed journey: an invitee creates an account on the accept page, signs 
   expect(workspacesCreated, 'workspaces created on the way').toBe(0)
 })
 
-// The preview's account state is read from the auth store, which a fork fills asynchronously (D19: poll, never sleep).
+// The preview's account state is read from the auth store, which a fork fills asynchronously; poll, never sleep.
 async function awaitAccountState(token: string, want: 'none' | 'unconfirmed' | 'confirmed'): Promise<void> {
   await expect
     .poll(async () => ((await rawFetch('/auth/invitation', { method: 'POST', body: { token } })).body as { account?: string } | null)?.account, {

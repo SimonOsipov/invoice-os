@@ -119,7 +119,7 @@ export interface CorrectedMarker {
   was: string | null
 }
 
-// Anything else -- document_text_layer, a reconciled line row -- renders its wire name.
+// FIELD_LABELS maps each header field key to its label; any other key renders its wire name.
 const FIELD_LABELS: Record<string, string> = Object.fromEntries(
   INVOICE_FIELDS.filter((f) => !f.line).map((f) => [f.key, f.label]),
 )

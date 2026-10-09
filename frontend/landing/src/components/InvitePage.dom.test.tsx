@@ -255,7 +255,7 @@ describe('the register view', () => {
     await mount()
     await toRegisterView()
 
-    expect(container.querySelectorAll('input[type="password"]')).toHaveLength(0)
+    expect(container.querySelectorAll('input[type="password"], [autocomplete="new-password"]')).toHaveLength(0)
     const inputs = Array.from(container.querySelectorAll('input'))
     expect(inputs, 'one field').toHaveLength(1)
     const email = labelled('Work email')
@@ -265,6 +265,37 @@ describe('the register view', () => {
     expect(email.type).toBe('email')
     expect(text()).toContain(REGISTER_TEXT)
     expect(text()).not.toContain('Choose a password.')
+    expect(container.querySelector('label[for="inv-password"], #inv-password')).toBeNull()
+  })
+
+  it('invitePage_registerViewStacksHeadingTextFormWithTheViewsSpacing', async () => {
+    stubFetch()
+    await mount()
+    await toRegisterView()
+
+    const h = container.querySelector<HTMLElement>('h3')!
+    const p = Array.from(container.querySelectorAll<HTMLElement>('p')).find((x) => x.textContent === REGISTER_TEXT)!
+    expect(p, 'the D16 text line').toBeDefined()
+    expect(p.className).toBe('t-body-sm')
+    expect(h.style.marginBottom, 'heading to text, as every other view').toBe('10px')
+    expect(p.style.margin).toBe('0px 0px 16px')
+    expect(h.compareDocumentPosition(p) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(p.compareDocumentPosition(container.querySelector('form')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('invitePage_registerEnterSubmitPostsTheTokenOnly: a form submit without the button posts once', async () => {
+    const fetchMock = stubFetch({ register: () => json(200, {}) })
+    await mount()
+    await toRegisterView()
+
+    // jsdom has no implicit submission; requestSubmit is what Enter in the field runs.
+    await act(async () => container.querySelector('form')!.requestSubmit())
+    await settle()
+
+    const posts = callsTo(fetchMock, REGISTER_URL)
+    expect(posts).toHaveLength(1)
+    expect(bodyOf(posts[0] as [string, RequestInit])).toStrictEqual({ token: T })
+    expect(headings()).toEqual(['Check your email'])
   })
 
   it('invitePage_registerPostsTheTokenOnly', async () => {
@@ -471,6 +502,7 @@ describe('the sent view', () => {
     await toSentView()
     expect(text()).toContain(`a link to confirm it and choose your password is on its way to ${ADDRESS}`)
     expect(text()).not.toContain('confirmation link')
+    expect(container.querySelectorAll('input'), 'the sent view holds no field').toHaveLength(0)
   })
 
   it('invitePage_sentViewSignInCarriesTheInviteToTheApp', async () => {

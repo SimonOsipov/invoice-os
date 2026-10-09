@@ -2,6 +2,7 @@ package auth_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -411,4 +412,64 @@ func TestIdP_PreviewDegradesToUnknownWithoutTheGrant(t *testing.T) {
 	if p.Workspace != "IdP Invite Co" || p.Role != "reviewer" || p.Email != w.email || p.Account != "unknown" {
 		t.Fatalf("preview = %+v, want the three fields intact and account unknown", p)
 	}
+}
+
+// registerInvitee posts the invite registration and returns the status and body.
+func (w inviteWorld) registerInvitee(t *testing.T, password string) (int, string) {
+	t.Helper()
+	return postGW(t, w.gw+"/auth/invitation/register", map[string]string{"token": w.token, "password": password})
+}
+
+func requireAccountExists(t *testing.T, status int, body string) {
+	t.Helper()
+	if status != http.StatusConflict || strings.TrimSpace(body) != `{"error":"account_exists"}` {
+		t.Fatalf("invitee registration: status %d, body %q; want 409 account_exists", status, body)
+	}
+}
+
+func TestIdP_ConfirmedInviteeRegisteringAgainIsToldToSignIn(t *testing.T) {
+	w := newInviteWorld(t, "again-")
+	password := "pw-" + uuid.NewString()
+	w.register(t, password)
+	confirmByLink(t, idpUser{email: w.email, password: password})
+
+	status, body := w.previewStatus(t)
+	var pv struct{ Account string }
+	if err := json.Unmarshal([]byte(body), &pv); status != http.StatusOK || err != nil || pv.Account != "confirmed" {
+		t.Fatalf("preview: status %d, body %s; want 200 with account confirmed", status, body)
+	}
+	status, body = w.registerInvitee(t, "pw-"+uuid.NewString())
+	requireAccountExists(t, status, body)
+
+	// The public route still answers a confirmed address with the 202 of a new one.
+	known := idpUser{email: "public-" + uuid.NewString() + "@corp.example", password: "pw-" + uuid.NewString()}
+	t.Cleanup(func() { _, _ = superConn(t).Exec(context.Background(), `DELETE FROM auth.users WHERE email = $1`, known.email) })
+	known.register(t, w.base)
+	confirmByLink(t, known)
+	status, body = postGW(t, w.gw+"/auth/register", map[string]string{"email": known.email, "password": "pw-" + uuid.NewString()})
+	if status != http.StatusAccepted {
+		t.Fatalf("/auth/register for a confirmed address: status %d, body %s; want 202", status, body)
+	}
+}
+
+func TestIdP_UnknownStateStillMeetsGoTruesEmptyIdentities(t *testing.T) {
+	w := newInviteWorld(t, "unknown-")
+	password := "pw-" + uuid.NewString()
+	w.register(t, password)
+	confirmByLink(t, idpUser{email: w.email, password: password})
+
+	exec(t, superConn(t), `REVOKE USAGE ON SCHEMA auth FROM auth_hook_reader`)
+	t.Cleanup(func() {
+		if _, err := db.GrantAccountStateRead(context.Background(), mailEnv(t, "DATABASE_AUTH_ADMIN_URL")); err != nil {
+			t.Errorf("re-run the grant: %v", err)
+		}
+	})
+	status, body := w.previewStatus(t)
+	var pv struct{ Account string }
+	if err := json.Unmarshal([]byte(body), &pv); status != http.StatusOK || err != nil || pv.Account != "unknown" {
+		t.Fatalf("preview: status %d, body %s; want 200 with account unknown", status, body)
+	}
+
+	status, body = w.registerInvitee(t, "pw-"+uuid.NewString())
+	requireAccountExists(t, status, body)
 }

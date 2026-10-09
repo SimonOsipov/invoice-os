@@ -48,8 +48,8 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
 
     const live = await preview(token)
     expect(live.status, JSON.stringify(live.body)).toBe(200)
-    expect(Object.keys(live.body as object).sort()).toEqual(['email', 'role', 'workspace'])
-    expect(live.body).toEqual({ workspace: (await me(adminToken)).tenant.name, role: 'reviewer', email })
+    expect(Object.keys(live.body as object).sort()).toEqual(['account', 'email', 'role', 'workspace'])
+    expect(live.body).toEqual({ workspace: (await me(adminToken)).tenant.name, role: 'reviewer', email, account: 'none' })
 
     const bogus = await preview(mintSignInState())
     assertErrorEnvelope(bogus, 404, 'a token no invite holds')

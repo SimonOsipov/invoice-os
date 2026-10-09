@@ -87,13 +87,14 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			body["data"] = data
 		}
 
-		signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log)
+		signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log, nil)
 	})
 }
 
 // signUp spends the per-IP budget, posts body to GoTrue's /signup and answers with the floor held.
 // RegisterHandler and InvitationRegisterHandler share it, so both map GoTrue's answers alike.
-func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger) {
+// A non-nil existing is sent instead of the 202 when GoTrue reports an address that already has an account.
+func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, existing func()) {
 	key, source := clientKey(r)
 	held := perIP.Reserve(key)
 	refused := false
@@ -110,7 +111,14 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		return
 	}
 
-	status, gt, err := postGoTrue(r, client, signup, body, nil)
+	var created any
+	var sanitized struct {
+		Identities *[]json.RawMessage `json:"identities"`
+	}
+	if existing != nil {
+		created = &sanitized
+	}
+	status, gt, err := postGoTrue(r, client, signup, body, created)
 	upstream := time.Since(start)
 	// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
 	if held && err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
@@ -126,6 +134,9 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 	// A repeat or confirmed address answers exactly like a new one.
 	switch {
 	case err != nil:
+	case existing != nil && (status == http.StatusOK && sanitized.Identities != nil && len(*sanitized.Identities) == 0 ||
+		gt.ErrorCode == "user_already_exists" || gt.ErrorCode == "email_exists"):
+		send = existing
 	case status == http.StatusOK,
 		gt.ErrorCode == "user_already_exists",
 		gt.ErrorCode == "email_exists":

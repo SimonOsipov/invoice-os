@@ -31,7 +31,7 @@ const (
 	inviteAddress      = "tunde@obi.test"
 )
 
-var liveInvite = InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress}
+var liveInvite = InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: "none"}
 
 // recordingPreviewer answers every token with one fixed result and records the tokens it saw.
 type recordingPreviewer struct {
@@ -85,7 +85,7 @@ func TestInvitationHandler_Contract(t *testing.T) {
 	if len(over1KiB) != 1025 || len(exactly1KiB) != 1024 {
 		t.Fatalf("fixtures are %d and %d bytes, want 1025 and 1024", len(over1KiB), len(exactly1KiB))
 	}
-	live := map[string]string{"workspace": inviteWorkspace, "role": inviteRole, "email": inviteAddress}
+	live := map[string]string{"workspace": inviteWorkspace, "role": inviteRole, "email": inviteAddress, "account": "none"}
 	cases := []struct {
 		name, method, body string
 		result             func(string) (InvitationPreview, error)
@@ -210,8 +210,8 @@ func (s *tenancyStub) count() int {
 }
 
 func TestHTTPInvitationPreviewer_Wire(t *testing.T) {
-	// Copied from internal/tenancy/accept.go's 200 body: {workspace, role, email}.
-	const liveBody = `{"workspace":"` + inviteWorkspace + `","role":"` + inviteRole + `","email":"` + inviteAddress + `"}`
+	// Copied from internal/tenancy/accept.go's 200 body: {workspace, role, email, account}.
+	const liveBody = `{"workspace":"` + inviteWorkspace + `","role":"` + inviteRole + `","email":"` + inviteAddress + `","account":"none"}`
 
 	t.Run("200 names the invite", func(t *testing.T) {
 		stub := newTenancyStub(t, http.StatusOK, liveBody)
@@ -242,6 +242,24 @@ func TestHTTPInvitationPreviewer_Wire(t *testing.T) {
 		var sent map[string]string
 		if err := json.Unmarshal([]byte(stub.bodies[0]), &sent); err != nil || !maps.Equal(sent, map[string]string{"token": inviteToken}) {
 			t.Errorf("body = %s (decode err %v), want exactly {\"token\":<token>}", stub.bodies[0], err)
+		}
+	})
+
+	t.Run("account", func(t *testing.T) {
+		for _, c := range []struct{ name, field, want string }{
+			{"confirmed", `,"account":"confirmed"`, "confirmed"},
+			{"unconfirmed", `,"account":"unconfirmed"`, "unconfirmed"},
+			{"none", `,"account":"none"`, "none"},
+			{"unrecognised value", `,"account":"bogus"`, "unknown"},
+			{"missing", ``, "unknown"},
+		} {
+			stub := newTenancyStub(t, http.StatusOK, `{"workspace":"`+inviteWorkspace+`","role":"`+inviteRole+`","email":"`+inviteAddress+`"`+c.field+`}`)
+
+			got, err := NewHTTPInvitationPreviewer(stub.URL, &http.Client{}, inviteGatewayToken)(t.Context(), inviteToken)
+
+			if err != nil || got.Account != c.want {
+				t.Errorf("%s: Account = %q (err %v), want %q", c.name, got.Account, err, c.want)
+			}
 		}
 	})
 
@@ -424,21 +442,22 @@ func TestInvitationRegister_MapsGoTrueLikeRegister(t *testing.T) {
 		body        string
 		unreachable bool
 		want        int
+		inviteWant  int // 0 means the same as want
 	}{
-		{"200 new account", http.StatusOK, gtNewUser, false, 202},
-		{"200 confirmed address", http.StatusOK, gtSanitizedUser, false, 202},
-		{"user_already_exists", http.StatusUnprocessableEntity, gtUserAlreadyExists, false, 202},
-		{"email_exists", http.StatusUnprocessableEntity, gtEmailExists, false, 202},
-		{"over_email_send_rate_limit", http.StatusTooManyRequests, gtOverEmailSendRateLimit, false, 202},
-		{"500 SQLSTATE 23505", http.StatusInternalServerError, gtDuplicateKey, false, 202},
-		{"weak_password", http.StatusUnprocessableEntity, gtWeakPassword, false, 400},
-		{"validation_failed", http.StatusBadRequest, gtValidationFailed, false, 400},
-		{"email_address_invalid", http.StatusBadRequest, gtEmailAddressInvalid, false, 400},
-		{"signup_disabled", http.StatusUnprocessableEntity, gtSignupDisabled, false, 503},
-		{"over_request_rate_limit", http.StatusTooManyRequests, gtOverRequestRateLimit, false, 429},
-		{"500 unexpected_failure", http.StatusInternalServerError, gtInternal, false, 502},
-		{"502 from GoTrue", http.StatusBadGateway, ``, false, 502},
-		{"unreachable", 0, ``, true, 502},
+		{"200 new account", http.StatusOK, gtNewUser, false, 202, 0},
+		{"200 confirmed address", http.StatusOK, gtSanitizedUser, false, 202, 409},
+		{"user_already_exists", http.StatusUnprocessableEntity, gtUserAlreadyExists, false, 202, 409},
+		{"email_exists", http.StatusUnprocessableEntity, gtEmailExists, false, 202, 409},
+		{"over_email_send_rate_limit", http.StatusTooManyRequests, gtOverEmailSendRateLimit, false, 202, 0},
+		{"500 SQLSTATE 23505", http.StatusInternalServerError, gtDuplicateKey, false, 202, 0},
+		{"weak_password", http.StatusUnprocessableEntity, gtWeakPassword, false, 400, 0},
+		{"validation_failed", http.StatusBadRequest, gtValidationFailed, false, 400, 0},
+		{"email_address_invalid", http.StatusBadRequest, gtEmailAddressInvalid, false, 400, 0},
+		{"signup_disabled", http.StatusUnprocessableEntity, gtSignupDisabled, false, 503, 0},
+		{"over_request_rate_limit", http.StatusTooManyRequests, gtOverRequestRateLimit, false, 429, 0},
+		{"500 unexpected_failure", http.StatusInternalServerError, gtInternal, false, 502, 0},
+		{"502 from GoTrue", http.StatusBadGateway, ``, false, 502, 0},
+		{"unreachable", 0, ``, true, 502, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -451,18 +470,88 @@ func TestInvitationRegister_MapsGoTrueLikeRegister(t *testing.T) {
 			regReq := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(registerBody(regEmail, regPassword)))
 			RegisterHandler(authURL, testClient(), 0, freshRegisterLimit(), true, log).ServeHTTP(reg, regReq)
 
-			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: regEmail}, nil)
+			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: regEmail, Account: "none"}, nil)
 			inv, _ := postInvitee(inviteeHandler(authURL, 0, freshRegisterLimit(), p), inviteeBody(inviteToken, regPassword, nil))
 
 			if reg.Code != c.want {
 				t.Fatalf("control: /auth/register = %d, want %d: %s", reg.Code, c.want, reg.Body.String())
 			}
-			if inv.Code != reg.Code || inv.Body.String() != reg.Body.String() {
+			if c.inviteWant != 0 {
+				if inv.Code != c.inviteWant || errorBody(t, inv) != msgAccountExists {
+					t.Errorf("invitee = %d %s, want %d %s", inv.Code, inv.Body.String(), c.inviteWant, msgAccountExists)
+				}
+			} else if inv.Code != reg.Code || inv.Body.String() != reg.Body.String() {
 				t.Errorf("invitee = %d %s, want what /auth/register gives: %d %s", inv.Code, inv.Body.String(), reg.Code, reg.Body.String())
 			}
 			if got, want := inv.Header().Get("Content-Type"), reg.Header().Get("Content-Type"); got != want {
 				t.Errorf("Content-Type = %q, want %q", got, want)
 			}
+		})
+	}
+}
+
+func TestInvitationRegister_AnExistingAccountIsRefusedBeforeGoTrue(t *testing.T) {
+	const floor = 2 * time.Second
+	for _, c := range []struct{ account, want string }{
+		{"confirmed", msgAccountExists},
+		{"unconfirmed", msgAccountUnconfirmed},
+	} {
+		t.Run(c.account, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			perIP := freshRegisterLimit()
+			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: c.account}, nil)
+
+			for range 2 {
+				rec, elapsed := postInvitee(inviteeHandler(fake.URL, floor, perIP, p), inviteeBody(inviteToken, "pw-123456", nil))
+				if rec.Code != http.StatusConflict || errorBody(t, rec) != c.want {
+					t.Fatalf("answer = %d %s, want 409 %s", rec.Code, rec.Body.String(), c.want)
+				}
+				if elapsed > time.Second {
+					t.Errorf("answered after %v, want at once (floor %v)", elapsed, floor)
+				}
+			}
+			if n := len(fake.Calls()); n != 0 {
+				t.Errorf("GoTrue saw %d calls, want 0", n)
+			}
+
+			fresh := previewing(liveInvite, nil)
+			for i := range RegisterPerIP {
+				rec, _ := postInvitee(inviteeHandler(fake.URL, 0, perIP, fresh), inviteeBody(inviteToken, "pw-123456", nil))
+				if rec.Code != http.StatusAccepted {
+					t.Fatalf("request %d after the refusals = %d, want 202 from the full per-IP budget", i+1, rec.Code)
+				}
+			}
+			if n := len(fake.Calls()); n != RegisterPerIP {
+				t.Errorf("GoTrue saw %d calls, want %d", n, RegisterPerIP)
+			}
+		})
+	}
+}
+
+func TestInvitationRegister_ExistingAccountWaitsTheFloor(t *testing.T) {
+	const floor = 150 * time.Millisecond
+	fake := newFakeGoTrue(t, http.StatusOK, gtSanitizedUser)
+	p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: "unknown"}, nil)
+
+	rec, elapsed := postInvitee(inviteeHandler(fake.URL, floor, freshRegisterLimit(), p), inviteeBody(inviteToken, "pw-123456", nil))
+
+	if rec.Code != http.StatusConflict || errorBody(t, rec) != msgAccountExists {
+		t.Fatalf("answer = %d %s, want 409 %s", rec.Code, rec.Body.String(), msgAccountExists)
+	}
+	if elapsed < floor {
+		t.Errorf("answered after %v, want no earlier than the %v floor", elapsed, floor)
+	}
+}
+
+func TestInvitationRegister_NewAccountShapesStay202(t *testing.T) {
+	const autoconfirm = `{"access_token":"a.b.c","token_type":"bearer","expires_in":3600,"refresh_token":"r","user":{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f","identities":[]}}`
+	for name, body := range map[string]string{"new user": gtNewUser, "autoconfirm token body": autoconfirm} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, body)
+
+			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil)), inviteeBody(inviteToken, "pw-123456", nil))
+
+			requirePending202(t, rec)
 		})
 	}
 }

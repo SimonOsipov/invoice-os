@@ -93,7 +93,7 @@ function json(status: number, body: unknown): Response {
 
 type Route = (init: RequestInit) => Response | Promise<Response>
 const previewOk = (over: Partial<Record<'workspace' | 'role' | 'email', string>> = {}): Route => () =>
-  json(200, { workspace: WORKSPACE, role: 'reviewer', email: ADDRESS, ...over })
+  json(200, { workspace: WORKSPACE, role: 'reviewer', email: ADDRESS, account: 'none', ...over })
 
 function stubFetch(routes: { preview?: Route; register?: Route; resend?: Route } = {}) {
   const table: Record<string, Route | undefined> = {
@@ -543,7 +543,7 @@ describe('the loading view', () => {
   it('invitePage_loadingViewIsOneStatusLineWithNoControls', async () => {
     let finish!: () => void
     const pending = new Promise<Response>((res) => {
-      finish = () => res(json(200, { workspace: WORKSPACE, role: 'reviewer', email: ADDRESS }))
+      finish = () => res(json(200, { workspace: WORKSPACE, role: 'reviewer', email: ADDRESS, account: 'none' }))
     })
     const fetchMock = stubFetch({ preview: () => pending })
     await mount()

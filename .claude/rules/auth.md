@@ -53,7 +53,10 @@ paths:
 - Validate a composed `GOTRUE_JWT_KEYS` offline before you paste it. A malformed value logs the private key at boot.
 
 - Keep GoTrue private. The gateway calls fixed GoTrue paths and forwards no client path or query.
-- Answer a new, a repeat and a confirmed address on register with the same 202.
+- Answer a new, a repeat and a confirmed address on `/auth/register` with the same 202.
+- Answer `POST /auth/invitation` with `account` set to `none`, `unconfirmed`, `confirmed` or `unknown`. Map any other tenancy value to `unknown`.
+- Answer `/auth/invitation/register` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_unconfirmed` when it reads `unconfirmed`. Send both at once, before the GoTrue call.
+- Map GoTrue's 200 with empty `identities`, 422 `user_already_exists` and 422 `email_exists` to 409 `account_exists` on `/auth/invitation/register` only.
 - Answer a resend or reset request with the same 202 for every outcome after the 400 checks.
 - Wait `AUTH_REGISTER_MIN_RESPONSE` before each register, resend or reset answer that passes the 400 checks.
 - Spend one shared budget on resend and password-reset requests.

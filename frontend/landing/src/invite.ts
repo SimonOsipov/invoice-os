@@ -17,7 +17,8 @@ export const INVITE_NOTICES: Record<InviteOutcome, string> = {
 
 export const ROLE_LABELS: Record<string, string> = { admin: 'Admin', preparer: 'Preparer', reviewer: 'Reviewer' }
 
-export type InvitationPreview = { workspace: string; role: string; email: string }
+// account mirrors internal/gateway/invitation.go's four values.
+export type InvitationPreview = { workspace: string; role: string; email: string; account: 'none' | 'unconfirmed' | 'confirmed' | 'unknown' }
 
 // Exactly one recognised value reads as an outcome; anything else, repeats included, is none.
 export function readInviteOutcome(search: string): InviteOutcome | null {

@@ -714,6 +714,8 @@ describe('the Library shares the landing\'s choice', () => {
 
   it('PS-01 no sentence keeps the old separation or the old storage claims', () => {
     const page = text(html)
+    expect(page.length, 'the page rendered no text').toBeGreaterThan(5000)
+    expect(page, 'control: a shipped sentence is found by the same scan').toContain('Google Analytics sets two cookies on your device')
     for (const old of [
       'asks for your analytics choice itself',
       'keeps the answer for each address apart',

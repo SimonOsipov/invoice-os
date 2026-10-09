@@ -1437,3 +1437,16 @@ func TestRevalidate_CancelsThenRearms(t *testing.T) {
 		t.Errorf("approval_runs rows for invoice = %d, want exactly 2 (one cancelled, one open)", n)
 	}
 }
+
+func TestBlockingRuleKeys_NamesEachRuleOnce(t *testing.T) {
+	vs := []Violation{
+		{RuleKey: "line-cost-non-negative", Severity: "error", Path: "line_items[1]"},
+		{RuleKey: "currency-allowed", Severity: "error", Path: "currency"},
+		{RuleKey: "line-cost-non-negative", Severity: "error", Path: "line_items[3]"},
+		{RuleKey: "some-warning", Severity: "warning"},
+	}
+	want := []string{"line-cost-non-negative", "currency-allowed"}
+	if got := blockingRuleKeys(vs); !reflect.DeepEqual(got, want) {
+		t.Errorf("blockingRuleKeys = %q, want %q", got, want)
+	}
+}

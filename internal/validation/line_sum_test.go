@@ -278,3 +278,74 @@ func TestLineSum_BadParamsError(t *testing.T) {
 		})
 	}
 }
+
+func mustLineSumLines(t *testing.T, p Payload) []Violation {
+	t.Helper()
+	vs, err := lineSumEval{}.evalLines(p, lineSumRule())
+	if err != nil {
+		t.Fatalf("evalLines: %v", err)
+	}
+	return vs
+}
+
+func TestLineSum_MalformedLineNamesTheAmount(t *testing.T) {
+	vs := mustLineSumLines(t, lineSumPayload(1000,
+		map[string]any{"unit_price": 1000.0},
+		map[string]any{"quantity": 2.0},
+	))
+	wantPaths(t, vs, "line_items[2].unit_price")
+	if vs[0].Expected != nil || vs[0].Actual != nil {
+		t.Errorf("Expected/Actual = %v/%v, want nil", vs[0].Expected, vs[0].Actual)
+	}
+}
+
+func TestLineSum_TwoMalformedLinesTwoViolations(t *testing.T) {
+	vs := mustLineSumLines(t, lineSumPayload(1000,
+		map[string]any{"quantity": 1.0},
+		map[string]any{"unit_price": "abc"},
+		map[string]any{"unit_price": 10.0},
+	))
+	wantPaths(t, vs, "line_items[1].unit_price", "line_items[2].unit_price")
+}
+
+func TestLineSum_NonNumericQuantityNamesQuantity(t *testing.T) {
+	vs := mustLineSumLines(t, lineSumPayload(1000, map[string]any{"unit_price": 100.0, "quantity": "ten"}))
+	wantPaths(t, vs, "line_items[1].quantity")
+}
+
+func TestLineSum_NonObjectLineNamesTheLine(t *testing.T) {
+	p := Payload{"invoice": map[string]any{"subtotal": 1.0, "line_items": []any{"x", map[string]any{"unit_price": 1.0}}}}
+	wantPaths(t, mustLineSumLines(t, p), "line_items[1]")
+}
+
+func TestLineSum_FirstFaultOfALineOnly(t *testing.T) {
+	vs := mustLineSumLines(t, lineSumPayload(1000, map[string]any{"quantity": "ten"}))
+	wantPaths(t, vs, "line_items[1].unit_price")
+}
+
+func TestLineSum_MismatchKeepsSubtotal(t *testing.T) {
+	r := lineSumRule()
+	r.Target = "subtotal"
+	vs, err := lineSumEval{}.evalLines(lineSumPayload(-5,
+		map[string]any{"unit_price": 1000.0},
+		map[string]any{"unit_price": 5.0},
+	), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPaths(t, vs, "subtotal")
+	if vs[0].Expected == nil || *vs[0].Expected != "1005" || vs[0].Actual == nil || *vs[0].Actual != "-5" {
+		t.Errorf("Expected/Actual = %v/%v, want 1005/-5", vs[0].Expected, vs[0].Actual)
+	}
+}
+
+func TestLineSum_AbsentExpectedKeepsSubtotal(t *testing.T) {
+	r := lineSumRule()
+	r.Target = "subtotal"
+	p := Payload{"invoice": map[string]any{"line_items": []any{map[string]any{"unit_price": 1.0}}}}
+	vs, err := lineSumEval{}.evalLines(p, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPaths(t, vs, "subtotal")
+}

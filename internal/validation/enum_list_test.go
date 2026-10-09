@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http/httptest"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -166,13 +168,37 @@ func TestEnumList_LineCodesInListPass(t *testing.T) {
 func TestEnumList_OneBadLineViolatesOnce(t *testing.T) {
 	res := mustEvalList(t, lineRule(), lines("0101.21", "9999.99"))
 	wantOneViolation(t, res, "NRS list: hs-codes", "9999.99")
-	if res.Violations[0].Path != "hsn_code" {
-		t.Errorf("Path = %q, want hsn_code", res.Violations[0].Path)
+	wantPaths(t, res.Violations, "line_items[2].hsn_code")
+}
+
+func TestEnumList_EveryBadLineIsReported(t *testing.T) {
+	res := mustEvalList(t, lineRule(), lines("9999.98", "0101.21", "9999.99"))
+	wantPaths(t, res.Violations, "line_items[1].hsn_code", "line_items[3].hsn_code")
+	for i, want := range []string{"9999.98", "9999.99"} {
+		if a := res.Violations[i].Actual; a == nil || *a != want {
+			t.Errorf("violation %d actual = %v, want %q", i, a, want)
+		}
 	}
 }
 
-func TestEnumList_FirstBadLineIsReported(t *testing.T) {
-	wantOneViolation(t, mustEvalList(t, lineRule(), lines("9999.98", "0101.21", "9999.99")), "NRS list: hs-codes", "9999.98")
+func TestEnumList_EveryOffenderIsReported(t *testing.T) {
+	codes := make([]any, 150)
+	for i := range codes {
+		codes[i] = "9999.99"
+	}
+	res := mustEvalList(t, lineRule(), lines(codes...))
+	if len(res.Violations) != 150 {
+		t.Fatalf("violations = %d, want 150 (no per-rule cap)", len(res.Violations))
+	}
+	got := linePaths(res.Violations)
+	want := make([]string, 150)
+	for i := range want {
+		want[i] = fmt.Sprintf("line_items[%d].hsn_code", i+1)
+	}
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("paths = %q, want string order %q", got, want)
+	}
 }
 
 func TestEnumList_NoLinesPasses(t *testing.T) {
@@ -195,7 +221,9 @@ func TestEnumList_LineWithoutFieldPasses(t *testing.T) {
 }
 
 func TestEnumList_NonObjectLineViolates(t *testing.T) {
-	wantOneViolation(t, mustEvalList(t, lineRule(), map[string]any{"line_items": []any{"0101.21"}}), "NRS list: hs-codes", "0101.21")
+	res := mustEvalList(t, lineRule(), map[string]any{"line_items": []any{"0101.21"}})
+	wantOneViolation(t, res, "NRS list: hs-codes", "0101.21")
+	wantPaths(t, res.Violations, "line_items[1]")
 }
 
 func TestEnumList_ItemsReachTaxSubtotals(t *testing.T) {
@@ -210,7 +238,9 @@ func TestEnumList_ItemsReachTaxSubtotals(t *testing.T) {
 	if res := mustEvalList(t, r, subtotals("STANDARD_VAT", "ZERO_VAT")); len(res.Violations) != 0 {
 		t.Errorf("violations = %+v, want none", res.Violations)
 	}
-	wantOneViolation(t, mustEvalList(t, r, subtotals("STANDARD_VAT", "BOGUS")), "NRS list: tax-categories", "BOGUS")
+	res := mustEvalList(t, r, subtotals("STANDARD_VAT", "BOGUS"))
+	wantOneViolation(t, res, "NRS list: tax-categories", "BOGUS")
+	wantPaths(t, res.Violations, "tax_subtotals[2].tax_category")
 }
 
 func TestEnumList_InlineValuesUnchanged(t *testing.T) {

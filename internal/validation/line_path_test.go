@@ -170,6 +170,7 @@ func TestCEL_TargetMismatchStaysBare(t *testing.T) {
 	wantPaths(t, mustLines(t, linesPayload(price(-1.0)), celRule("k", "subtotal", lineCostExpr)), "subtotal")
 	p := Payload{"invoice": map[string]any{"line_items": []any{price(-1.0)}, "tax_subtotals": []any{price(-1.0)}}}
 	wantPaths(t, mustLines(t, p, celRule("k", "tax_subtotals", lineCostExpr)), "tax_subtotals")
+	wantPaths(t, mustLines(t, p, celRule("k", "tax_subtotals", "invoice.line_items.all(x, x.unit_price >= 0.0)")), "tax_subtotals")
 }
 
 func TestCEL_EmptyTargetStaysBare(t *testing.T) {

@@ -1072,3 +1072,19 @@ describe('CreateFlow — the manual form follows the v2 prototype (RESKIN2-04-02
     }
   })
 })
+
+describe('CreateFlow — the AI disclosure follows the picker (ENGI-10-02)', () => {
+  afterEach(cleanup)
+
+  it('ENGI-10: the disclosure shows on the upload step and is gone while a run is importing', () => {
+    const idle = render(<CreateFlow ctx={createFlowCtx('upload')} />)
+    expect(idle.container.querySelectorAll('[data-testid="ai-disclosure"]')).toHaveLength(1)
+    idle.unmount()
+
+    const running = render(
+      <CreateFlow ctx={createFlowCtx('upload', 'document', { run: { files: [], cursor: 0, status: 'running' } })} />,
+    )
+    expect(running.container.textContent, 'the importing card must render').not.toBe('')
+    expect(running.container.querySelectorAll('[data-testid="ai-disclosure"]')).toHaveLength(0)
+  })
+})

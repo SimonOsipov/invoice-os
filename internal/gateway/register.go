@@ -120,8 +120,10 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 	}
 	status, gt, err := postGoTrue(r, client, signup, body, created)
 	upstream := time.Since(start)
-	// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
-	if held && err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+	// Sent only on the invite route: the public route cannot tell an existing address from a new one.
+	existingAccount := existing != nil && status == http.StatusOK && sanitized.Identities != nil && len(*sanitized.Identities) == 0
+	// GoTrue mails nothing when it answers 4xx or reports an existing account with 200 and no identities; other 2xx, 5xx and transport errors may have mailed.
+	if held && err == nil && (existingAccount || status >= http.StatusBadRequest && status < http.StatusInternalServerError) {
 		perIP.Refund(key)
 	}
 	pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
@@ -134,8 +136,7 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 	// Without existing, a repeat or confirmed address answers exactly like a new one.
 	switch {
 	case err != nil:
-	case existing != nil && (status == http.StatusOK && sanitized.Identities != nil && len(*sanitized.Identities) == 0 ||
-		gt.ErrorCode == "user_already_exists" || gt.ErrorCode == "email_exists"):
+	case existing != nil && (existingAccount || gt.ErrorCode == "user_already_exists" || gt.ErrorCode == "email_exists"):
 		send = existing
 	case status == http.StatusOK,
 		gt.ErrorCode == "user_already_exists",

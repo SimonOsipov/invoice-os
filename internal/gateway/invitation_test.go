@@ -566,6 +566,38 @@ func TestInvitationRegister_ExistingAccountWaitsTheFloor(t *testing.T) {
 	}
 }
 
+func TestInvitationRegister_RefundsTheSlotOnlyForAnExistingAccount(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		wantCalls  int
+		wantStatus int
+	}{
+		{"200 empty identities", http.StatusOK, gtSanitizedUser, 2, http.StatusConflict},
+		{"user_already_exists", http.StatusUnprocessableEntity, gtUserAlreadyExists, 2, http.StatusConflict},
+		{"email_exists", http.StatusUnprocessableEntity, gtEmailExists, 2, http.StatusConflict},
+		{"real signup spends the slot", http.StatusOK, gtNewUser, 1, http.StatusAccepted},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			perIP := NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
+			fake := newFakeGoTrue(t, c.status, c.body)
+			h := inviteeHandler(fake.URL, 0, perIP, previewing(liveInvite, nil))
+
+			first, _ := postInvitee(h, inviteeBody(inviteToken, "pw-123456", nil))
+			if first.Code != c.wantStatus {
+				t.Fatalf("first answer = %d %s, want %d", first.Code, first.Body.String(), c.wantStatus)
+			}
+			postInvitee(h, inviteeBody(inviteToken, "pw-123456", nil))
+
+			if n := len(fake.Calls()); n != c.wantCalls {
+				t.Errorf("GoTrue saw %d calls after two posts on a budget of 1, want %d", n, c.wantCalls)
+			}
+		})
+	}
+}
+
 func TestInvitationRegister_NewAccountShapesStay202(t *testing.T) {
 	const autoconfirm = `{"access_token":"a.b.c","token_type":"bearer","expires_in":3600,"refresh_token":"r","user":{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f","identities":[]}}`
 	noIdentities := `{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f"}`

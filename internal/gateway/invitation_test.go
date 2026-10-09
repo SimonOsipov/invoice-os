@@ -251,6 +251,8 @@ func TestHTTPInvitationPreviewer_Wire(t *testing.T) {
 			{"unconfirmed", `,"account":"unconfirmed"`, "unconfirmed"},
 			{"none", `,"account":"none"`, "none"},
 			{"unrecognised value", `,"account":"bogus"`, "unknown"},
+			{"other case", `,"account":"Confirmed"`, "unknown"},
+			{"null", `,"account":null`, "unknown"},
 			{"missing", ``, "unknown"},
 		} {
 			stub := newTenancyStub(t, http.StatusOK, `{"workspace":"`+inviteWorkspace+`","role":"`+inviteRole+`","email":"`+inviteAddress+`"`+c.field+`}`)
@@ -506,6 +508,9 @@ func TestInvitationRegister_AnExistingAccountIsRefusedBeforeGoTrue(t *testing.T)
 				if rec.Code != http.StatusConflict || errorBody(t, rec) != c.want {
 					t.Fatalf("answer = %d %s, want 409 %s", rec.Code, rec.Body.String(), c.want)
 				}
+				if strings.Contains(rec.Body.String(), inviteAddress) {
+					t.Errorf("409 body carries the address: %s", rec.Body.String())
+				}
 				if elapsed > time.Second {
 					t.Errorf("answered after %v, want at once (floor %v)", elapsed, floor)
 				}
@@ -530,22 +535,42 @@ func TestInvitationRegister_AnExistingAccountIsRefusedBeforeGoTrue(t *testing.T)
 
 func TestInvitationRegister_ExistingAccountWaitsTheFloor(t *testing.T) {
 	const floor = 150 * time.Millisecond
-	fake := newFakeGoTrue(t, http.StatusOK, gtSanitizedUser)
-	p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: "unknown"}, nil)
-
-	rec, elapsed := postInvitee(inviteeHandler(fake.URL, floor, freshRegisterLimit(), p), inviteeBody(inviteToken, "pw-123456", nil))
-
-	if rec.Code != http.StatusConflict || errorBody(t, rec) != msgAccountExists {
-		t.Fatalf("answer = %d %s, want 409 %s", rec.Code, rec.Body.String(), msgAccountExists)
+	shapes := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"200 empty identities", http.StatusOK, gtSanitizedUser},
+		{"user_already_exists", http.StatusUnprocessableEntity, gtUserAlreadyExists},
+		{"email_exists", http.StatusUnprocessableEntity, gtEmailExists},
 	}
-	if elapsed < floor {
-		t.Errorf("answered after %v, want no earlier than the %v floor", elapsed, floor)
+	for _, account := range []string{"unknown", "none"} {
+		for _, c := range shapes {
+			t.Run(account+"/"+c.name, func(t *testing.T) {
+				fake := newFakeGoTrue(t, c.status, c.body)
+				p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: account}, nil)
+
+				rec, elapsed := postInvitee(inviteeHandler(fake.URL, floor, freshRegisterLimit(), p), inviteeBody(inviteToken, "pw-123456", nil))
+
+				if rec.Code != http.StatusConflict || strings.TrimSpace(rec.Body.String()) != `{"error":"`+msgAccountExists+`"}` {
+					t.Fatalf("answer = %d %s, want 409 %s", rec.Code, rec.Body.String(), msgAccountExists)
+				}
+				if elapsed < floor {
+					t.Errorf("answered after %v, want no earlier than the %v floor", elapsed, floor)
+				}
+				if n := len(fake.Calls()); n != 1 {
+					t.Errorf("GoTrue saw %d calls, want 1", n)
+				}
+			})
+		}
 	}
 }
 
 func TestInvitationRegister_NewAccountShapesStay202(t *testing.T) {
 	const autoconfirm = `{"access_token":"a.b.c","token_type":"bearer","expires_in":3600,"refresh_token":"r","user":{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f","identities":[]}}`
-	for name, body := range map[string]string{"new user": gtNewUser, "autoconfirm token body": autoconfirm} {
+	noIdentities := `{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f"}`
+	nullIdentities := `{"id":"7f3c2a1e-0b7d-4f51-9a0e-5d1c2b3a4e5f","identities":null}`
+	for name, body := range map[string]string{"new user": gtNewUser, "autoconfirm token body": autoconfirm, "no identities key": noIdentities, "null identities": nullIdentities} {
 		t.Run(name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, body)
 

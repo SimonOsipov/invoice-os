@@ -92,7 +92,7 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 }
 
 // signUp spends the per-IP budget, posts body to GoTrue's /signup and answers with the floor held.
-// RegisterHandler and InvitationRegisterHandler share it, so both map GoTrue's answers alike.
+// RegisterHandler and InvitationRegisterHandler share it.
 // A non-nil existing is sent instead of the 202 when GoTrue reports an address that already has an account.
 func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, existing func()) {
 	key, source := clientKey(r)
@@ -131,7 +131,7 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
 	}
 
-	// A repeat or confirmed address answers exactly like a new one.
+	// Without existing, a repeat or confirmed address answers exactly like a new one.
 	switch {
 	case err != nil:
 	case existing != nil && (status == http.StatusOK && sanitized.Identities != nil && len(*sanitized.Identities) == 0 ||

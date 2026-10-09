@@ -1360,14 +1360,14 @@ func postDemoFrom(h http.Handler, remoteAddr, realIP string) *httptest.ResponseR
 func TestDemoRequest_SixthFromOneIPIsRefused(t *testing.T) {
 	sink := &demoSink{}
 	h := newDemoHandler(sink)
-	for i := 1; i <= DemoRequestPerIP; i++ {
+	for i := 1; i <= 5; i++ {
 		if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusAccepted {
 			t.Fatalf("request %d = %d, want 202", i, rec.Code)
 		}
 	}
 	requireDemoAnswer(t, postDemoFrom(h, "203.0.113.7:4000", ""), http.StatusTooManyRequests, demoTooMany)
-	if n := len(sink.got()); n != DemoRequestPerIP {
-		t.Errorf("sink saw %d, want %d", n, DemoRequestPerIP)
+	if n := len(sink.got()); n != 5 {
+		t.Errorf("sink saw %d, want 5", n)
 	}
 }
 

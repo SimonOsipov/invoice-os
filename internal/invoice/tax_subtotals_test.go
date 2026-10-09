@@ -1,6 +1,7 @@
 package invoice
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -119,8 +120,8 @@ func TestTaxSubtotals_OrderFollowsLineNoNotSliceOrder(t *testing.T) {
 // group comes first in the slice.
 func TestTaxSubtotals_GroupOrderUsesTheGroupsFirstLineNo(t *testing.T) {
 	lines := []LineItem{
-		tsLine(5, tsPtr("A_CAT"), tsPtr("1.00"), tsPtr("5.00"), tsPtr("0.05")),
 		tsLine(2, tsPtr("B_CAT"), tsPtr("1.00"), tsPtr("2.00"), tsPtr("0.02")),
+		tsLine(5, tsPtr("A_CAT"), tsPtr("1.00"), tsPtr("5.00"), tsPtr("0.05")),
 		tsLine(1, tsPtr("A_CAT"), tsPtr("1.00"), tsPtr("1.00"), tsPtr("0.01")),
 	}
 	tsAssert(t, taxSubtotals(lines), []tsWant{
@@ -301,5 +302,150 @@ func TestTaxSubtotals_RepeatedCallsAgree(t *testing.T) {
 	second := taxSubtotals(lines)
 	if len(first) != 1 || !reflect.DeepEqual(first, second) {
 		t.Errorf("two calls differ or are empty: %+v vs %+v", first, second)
+	}
+}
+
+// Parser edge cases: anything shopspring/decimal rejects leaves the amount absent,
+// while a valid sibling amount on the same lines still sums.
+func TestTaxSubtotals_UnparseableTextMakesTheAmountAbsent(t *testing.T) {
+	for _, bad := range []string{"NaN", "nan", "Inf", "-Inf", "Infinity", "", " ", " 1.00", "1.00 ", "1_000", "0x10", "1,50", "1.2.3", "--1", "1e", "e1"} {
+		t.Run(bad, func(t *testing.T) {
+			lines := []LineItem{
+				tsLine(1, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr("1.00"), tsPtr("0.10")),
+				tsLine(2, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr(bad), tsPtr("0.20")),
+			}
+			tsAssert(t, taxSubtotals(lines), []tsWant{{"STANDARD_VAT", "7.50", "", "0.30"}})
+		})
+	}
+}
+
+func TestTaxSubtotals_ShortFormDecimalsParse(t *testing.T) {
+	lines := []LineItem{
+		tsLine(1, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr(".5"), tsPtr("+1")),
+		tsLine(2, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr("5."), tsPtr("-0")),
+	}
+	tsAssert(t, taxSubtotals(lines), []tsWant{{"STANDARD_VAT", "7.50", "5.50", "1.00"}})
+}
+
+// A bad first member keeps the amount absent through later valid members, and
+// the other amount keeps summing across every line.
+func TestTaxSubtotals_ABadFirstMemberStaysAbsentAndSpareAmountSums(t *testing.T) {
+	lines := []LineItem{
+		tsLine(1, tsPtr("STANDARD_VAT"), tsPtr("7.50"), nil, tsPtr("0.10")),
+		tsLine(2, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr("5.00"), tsPtr("0.20")),
+		tsLine(3, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr("6.00"), tsPtr("0.30")),
+	}
+	tsAssert(t, taxSubtotals(lines), []tsWant{{"STANDARD_VAT", "7.50", "", "0.60"}})
+}
+
+func TestTaxSubtotals_AGroupOfOnlyInvalidValuesHasBothAmountsAbsent(t *testing.T) {
+	lines := []LineItem{
+		tsLine(1, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr("NaN"), nil),
+		tsLine(2, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr("abc"), nil),
+	}
+	got := taxSubtotals(lines)
+	if len(got) != 1 {
+		t.Fatalf("got %d subtotals, want the group to stay listed", len(got))
+	}
+	tsAssert(t, got, []tsWant{{"STANDARD_VAT", "7.50", "", ""}})
+}
+
+// "" and NULL are different percents, and "" is a stored value that prints back as "".
+func TestTaxSubtotals_EmptyPercentIsNotNullAndNotZero(t *testing.T) {
+	lines := []LineItem{
+		tsLine(1, tsPtr("EXEMPTED"), nil, tsPtr("1.00"), tsPtr("0.00")),
+		tsLine(2, tsPtr("EXEMPTED"), tsPtr(""), tsPtr("2.00"), tsPtr("0.00")),
+		tsLine(3, tsPtr("EXEMPTED"), tsPtr("0"), tsPtr("4.00"), tsPtr("0.00")),
+		tsLine(4, tsPtr("EXEMPTED"), tsPtr(""), tsPtr("8.00"), tsPtr("0.00")),
+	}
+	got := taxSubtotals(lines)
+	if len(got) != 3 {
+		t.Fatalf("got %d subtotals %+v, want 3 (NULL, \"\", \"0\")", len(got), got)
+	}
+	if got[0].TaxPercent != nil || tsStr(got[0].TaxableAmount) != "1.00" {
+		t.Errorf("group 0 = %s %s, want NULL percent, 1.00", tsStr(got[0].TaxPercent), tsStr(got[0].TaxableAmount))
+	}
+	if got[1].TaxPercent == nil || *got[1].TaxPercent != "" || tsStr(got[1].TaxableAmount) != "10.00" {
+		t.Errorf("group 1 = %s %s, want empty-string percent, 10.00", tsStr(got[1].TaxPercent), tsStr(got[1].TaxableAmount))
+	}
+	if tsStr(got[2].TaxPercent) != "0" || tsStr(got[2].TaxableAmount) != "4.00" {
+		t.Errorf("group 2 = %s %s, want 0, 4.00", tsStr(got[2].TaxPercent), tsStr(got[2].TaxableAmount))
+	}
+}
+
+// An empty or padded category is a non-NULL value: it forms its own group.
+func TestTaxSubtotals_EmptyAndPaddedCategoriesAreDistinctGroups(t *testing.T) {
+	lines := []LineItem{
+		tsLine(1, tsPtr(""), tsPtr("7.50"), tsPtr("1.00"), tsPtr("0.10")),
+		tsLine(2, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr("2.00"), tsPtr("0.20")),
+		tsLine(3, tsPtr("STANDARD_VAT "), tsPtr("7.50"), tsPtr("4.00"), tsPtr("0.40")),
+	}
+	tsAssert(t, taxSubtotals(lines), []tsWant{
+		{"", "7.50", "1.00", "0.10"},
+		{"STANDARD_VAT", "7.50", "2.00", "0.20"},
+		{"STANDARD_VAT ", "7.50", "4.00", "0.40"},
+	})
+}
+
+// Equal line_no values keep slice order (stable sort). Lines alternate between
+// two line_no values so an unstable sort has to move equal keys past each other.
+func TestTaxSubtotals_DuplicateLineNoKeepsSliceOrder(t *testing.T) {
+	var lines []LineItem
+	var ones, twos []tsWant
+	for i := 0; i < 60; i++ {
+		cat := string(rune('A'+i/10)) + string(rune('a'+i%10))
+		no := 2 - i%2
+		lines = append(lines, tsLine(no, tsPtr(cat), tsPtr("1.00"), tsPtr("1.00"), tsPtr("0.01")))
+		w := tsWant{cat, "1.00", "1.00", "0.01"}
+		if no == 1 {
+			ones = append(ones, w)
+		} else {
+			twos = append(twos, w)
+		}
+	}
+	tsAssert(t, taxSubtotals(lines), append(ones, twos...))
+}
+
+// A categorised line between uncategorised ones neither splits nor drops a group.
+func TestTaxSubtotals_UncategorisedLinesBetweenMembersDoNotSplitAGroup(t *testing.T) {
+	lines := []LineItem{
+		tsLine(1, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr("1.00"), tsPtr("0.10")),
+		tsLine(2, nil, tsPtr("7.50"), tsPtr("100.00"), tsPtr("10.00")),
+		tsLine(3, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr("2.00"), tsPtr("0.20")),
+	}
+	tsAssert(t, taxSubtotals(lines), []tsWant{{"STANDARD_VAT", "7.50", "3.00", "0.30"}})
+}
+
+// Changing the lines after the call must not change an earlier result.
+func TestTaxSubtotals_LaterEditsToTheLinesDoNotChangeTheResult(t *testing.T) {
+	pct, total, tax := tsPtr("7.50"), tsPtr("100.00"), tsPtr("7.50")
+	got := taxSubtotals([]LineItem{tsLine(1, tsPtr("STANDARD_VAT"), pct, total, tax)})
+	if len(got) != 1 || got[0].TaxPercent == nil {
+		t.Fatalf("got %+v, want one subtotal with a percent", got)
+	}
+	*pct, *total, *tax = "X", "X", "X"
+	tsAssert(t, got, []tsWant{{"STANDARD_VAT", "7.50", "100.00", "7.50"}})
+}
+
+// A sum that rounds to zero from below prints 0.00, never -0.00.
+func TestTaxSubtotals_NegativeSumRoundingToZeroPrintsPlainZero(t *testing.T) {
+	lines := []LineItem{tsLine(1, tsPtr("STANDARD_VAT"), tsPtr("7.50"), tsPtr("-0.001"), tsPtr("-0.004"))}
+	tsAssert(t, taxSubtotals(lines), []tsWant{{"STANDARD_VAT", "7.50", "0.00", "0.00"}})
+}
+
+// ENGI-02 D6: the JSON keys are tax_category, tax_percent, taxable_amount, tax_amount;
+// an absent value is null.
+func TestTaxSubtotals_JSONKeysAndNullForAbsent(t *testing.T) {
+	got := taxSubtotals([]LineItem{tsLine(1, tsPtr("EXEMPTED"), nil, nil, tsPtr("0.00"))})
+	if len(got) != 1 {
+		t.Fatalf("got %d subtotals, want 1", len(got))
+	}
+	b, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"tax_category":"EXEMPTED","tax_percent":null,"taxable_amount":null,"tax_amount":"0.00"}`
+	if string(b) != want {
+		t.Errorf("json = %s, want %s", b, want)
 	}
 }

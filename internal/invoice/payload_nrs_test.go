@@ -231,3 +231,95 @@ func TestMBSPayload_LegacyInvoiceIsByteIdenticalToHead(t *testing.T) {
 		t.Errorf("payload drifted from 10b2e701:\n got %s\nwant %s", b, legacyHeadPayload)
 	}
 }
+
+// An empty string is a value, not NULL: the key is present with "" (header, party and line text fields).
+func TestMBSPayload_EmptyNRSStringIsPresentNotAbsent(t *testing.T) {
+	empty := ""
+	hIdx, hTags := contentFields(reflect.TypeOf(Invoice{}))
+	checked := 0
+	for n, i := range hIdx {
+		tag := hTags[n]
+		if reflect.TypeOf(Invoice{}).Field(i).Type != reflect.TypeOf((*string)(nil)) || legacyHeaderTags[tag] {
+			continue
+		}
+		var inv Invoice
+		reflect.ValueOf(&inv).Elem().Field(i).Set(reflect.ValueOf(&empty))
+		p := MBSPayload(inv)
+		if party, key, ok := isPartyTag(tag); ok {
+			nested, _ := p[party].(map[string]any)
+			if v, found := nested[key]; !found || v != "" {
+				t.Errorf("%s = %q (present %v), want present empty string", tag, v, found)
+			}
+		} else if v, found := p[tag]; !found || v != "" {
+			t.Errorf("%s = %q (present %v), want present empty string", tag, v, found)
+		}
+		checked++
+	}
+	if checked != 24 {
+		t.Fatalf("checked %d header and party text fields, want 24 (4 header + 20 party)", checked)
+	}
+
+	li := LineItem{LineNo: 1, TaxCategory: &empty, HSNCode: &empty, ISICCode: &empty, ProductCategory: &empty,
+		ServiceCategory: &empty, SellersItemIdentification: &empty, PriceUnit: &empty}
+	raw := marshalLine(t, li)
+	for _, key := range []string{"tax_category", "hsn_code", "isic_code", "product_category", "service_category", "sellers_item_identification", "price_unit"} {
+		if string(raw[key]) != `""` {
+			t.Errorf("line[%q] = %s, want an empty string", key, raw[key])
+		}
+	}
+}
+
+// Subtotal entries leave out an absent percent or amount, keep non-number text as a string, and keep an empty category.
+func TestMBSPayload_TaxSubtotalsEdgeEntries(t *testing.T) {
+	inv := Invoice{LineItems: []LineItem{
+		{LineNo: 1, TaxCategory: strPtr("A"), TaxPercent: strPtr("7.50"), LineTotal: strPtr("100.00"), LineTax: strPtr("7.50")},
+		{LineNo: 2, TaxCategory: strPtr("B"), LineTotal: strPtr("x"), LineTax: strPtr("1.00")},
+		{LineNo: 3, TaxCategory: strPtr(""), TaxPercent: strPtr("5"), LineTotal: strPtr("10"), LineTax: nil},
+		{LineNo: 4, TaxCategory: strPtr("C"), TaxPercent: strPtr("x"), LineTotal: strPtr("1"), LineTax: strPtr("1")},
+	}}
+	b, err := json.Marshal(MBSPayload(inv)["tax_subtotals"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"tax_amount":7.50,"tax_category":"A","tax_percent":7.50,"taxable_amount":100.00},` +
+		`{"tax_amount":1.00,"tax_category":"B"},` +
+		`{"tax_category":"","tax_percent":5,"taxable_amount":10.00},` +
+		`{"tax_amount":1.00,"tax_category":"C","tax_percent":"x","taxable_amount":1.00}]`
+	if string(b) != want {
+		t.Errorf("tax_subtotals =\n%s\nwant\n%s", b, want)
+	}
+}
+
+// Legacy shapes marshal as at 10b2e701 (literals captured there): no NRS key, no tax_subtotals, nesting unchanged.
+func TestMBSPayload_LegacyShapesAreByteIdenticalToHead(t *testing.T) {
+	d := time.Date(2026, 7, 1, 23, 30, 0, 0, time.FixedZone("x", 3600))
+	shapes := map[string]struct {
+		inv  Invoice
+		want string
+	}{
+		"empty": {Invoice{InvoiceNumber: "E-1"}, `{"invoice_number":"E-1"}`},
+		"party tin only": {Invoice{InvoiceNumber: "P-1", SupplierTIN: strPtr("12345678-0001"), BuyerName: strPtr("Beta")},
+			`{"buyer":{"name":"Beta"},"invoice_number":"P-1","supplier":{"tin":"12345678-0001"}}`},
+		"empty strings": {Invoice{InvoiceNumber: "S-1", SupplierTIN: strPtr(""), SupplierName: strPtr(""), BuyerTIN: strPtr(""), BuyerName: strPtr(""),
+			Currency: strPtr(""), Subtotal: strPtr(""), VAT: strPtr(""), Total: strPtr(""),
+			LineItems: []LineItem{{LineNo: 1, Description: strPtr(""), Quantity: strPtr(""), UnitPrice: strPtr(""), LineTotal: strPtr(""), LineTax: strPtr("")}}},
+			`{"buyer":{"name":"","tin":""},"currency":"","invoice_number":"S-1","line_items":[{"description":"","line_no":1,"line_tax":"","line_total":"","quantity":"","unit_price":""}],"subtotal":"","supplier":{"name":"","tin":""},"total":"","vat":""}`},
+		"non numeric": {Invoice{InvoiceNumber: "N-1", Subtotal: strPtr("abc"), VAT: strPtr("NaN"), Total: strPtr("1e5"),
+			LineItems: []LineItem{{LineNo: 1, Quantity: strPtr("-0"), UnitPrice: strPtr("1e5"), LineTotal: strPtr("0x10"), LineTax: strPtr(".5")}}},
+			`{"invoice_number":"N-1","line_items":[{"line_no":1,"line_tax":".5","line_total":"0x10","quantity":-0,"unit_price":1e5}],"subtotal":"abc","total":1e5,"vat":"NaN"}`},
+		"gappy line numbers": {Invoice{InvoiceNumber: "G-1", IssueDate: &d, Currency: strPtr("USD"),
+			LineItems: []LineItem{{ID: "b", LineNo: 3, Description: strPtr("c")}, {LineNo: 1}, {LineNo: 7, LineTax: strPtr("1.00")}}},
+			`{"currency":"USD","invoice_number":"G-1","issue_date":"2026-07-01","line_items":[{"description":"c","id":"b","line_no":3},{"line_no":1},{"line_no":7,"line_tax":1.00}]}`},
+	}
+	for name, s := range shapes {
+		t.Run(name, func(t *testing.T) {
+			b, err := json.Marshal(MBSPayload(s.inv))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(b) != s.want {
+				t.Errorf("payload drifted from 10b2e701:\n got %s\nwant %s", b, s.want)
+			}
+		})
+	}
+}

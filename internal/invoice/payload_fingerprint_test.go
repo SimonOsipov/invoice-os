@@ -25,8 +25,10 @@
 package invoice
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -711,5 +713,277 @@ func TestContentFingerprint_NRSTagCannotCollideWithALine(t *testing.T) {
 		if contentFingerprint(numbered, numbered.LineItems) == want {
 			t.Errorf("line item identification %q collides with the TaxCurrencyCode header tag", text)
 		}
+	}
+}
+
+// variantOf sets f to variant v of its type: distinct for v=1 and v=2, never nil.
+func variantOf(t *testing.T, f reflect.Value, v int) {
+	t.Helper()
+	switch f.Type() {
+	case reflect.TypeOf((*string)(nil)):
+		s := fmt.Sprintf("val-%d", v)
+		f.Set(reflect.ValueOf(&s))
+	case reflect.TypeOf((*time.Time)(nil)):
+		d := time.Date(2031, 5, 5+v, 0, 0, 0, 0, time.UTC)
+		f.Set(reflect.ValueOf(&d))
+	case reflect.TypeOf(""):
+		f.SetString(fmt.Sprintf("val-%d", v))
+	case reflect.TypeOf(0):
+		f.SetInt(int64(10 + v))
+	default:
+		t.Fatalf("unhandled type %s", f.Type())
+	}
+}
+
+// A field's VALUE is hashed, not just its presence: val-1 and val-2 digest differently; nil differs from "".
+func TestContentFingerprint_EveryContentFieldValueAndEmptyStringAreHashed(t *testing.T) {
+	walk := func(name string, typ reflect.Type, target func(*Invoice) reflect.Value) {
+		idx, tags := contentFields(typ)
+		for n, i := range idx {
+			t.Run(name+"."+tags[n], func(t *testing.T) {
+				one, two := fullFingerprintFixture(), fullFingerprintFixture()
+				variantOf(t, target(&one).Field(i), 1)
+				variantOf(t, target(&two).Field(i), 2)
+				if contentFingerprint(one, one.LineItems) == contentFingerprint(two, two.LineItems) {
+					t.Errorf("%s %s: two different values hash the same", name, tags[n])
+				}
+				if target(&one).Field(i).Type() != reflect.TypeOf((*string)(nil)) {
+					return
+				}
+				nilV, empty := fullFingerprintFixture(), fullFingerprintFixture()
+				target(&nilV).Field(i).Set(reflect.Zero(reflect.TypeOf((*string)(nil))))
+				e := ""
+				target(&empty).Field(i).Set(reflect.ValueOf(&e))
+				if contentFingerprint(nilV, nilV.LineItems) == contentFingerprint(empty, empty.LineItems) {
+					t.Errorf("%s %s: nil and \"\" hash the same", name, tags[n])
+				}
+			})
+		}
+	}
+	walk("invoice", reflect.TypeOf(Invoice{}), func(inv *Invoice) reflect.Value { return reflect.ValueOf(inv).Elem() })
+	walk("line", reflect.TypeOf(LineItem{}), func(inv *Invoice) reflect.Value { return reflect.ValueOf(&inv.LineItems[0]).Elem() })
+}
+
+// Every Invoice and LineItem field outside the content set is named in nonContentTags and leaves the digest alone.
+func TestContentFingerprint_EveryNonContentFieldIsNamedAndIgnored(t *testing.T) {
+	base := fullFingerprintFixture()
+	baseFP := contentFingerprint(base, base.LineItems)
+
+	setAny := func(f reflect.Value) bool {
+		switch f.Type() {
+		case reflect.TypeOf((*string)(nil)):
+			s := "zz"
+			f.Set(reflect.ValueOf(&s))
+		case reflect.TypeOf((*time.Time)(nil)):
+			d := time.Date(2040, 1, 1, 0, 0, 0, 0, time.UTC)
+			f.Set(reflect.ValueOf(&d))
+		case reflect.TypeOf((*int)(nil)):
+			n := 77
+			f.Set(reflect.ValueOf(&n))
+		case reflect.TypeOf(time.Time{}):
+			f.Set(reflect.ValueOf(time.Date(2040, 1, 1, 0, 0, 0, 0, time.UTC)))
+		case reflect.TypeOf(json.RawMessage(nil)):
+			f.SetBytes([]byte(`[{"zz":1}]`))
+		case reflect.TypeOf(Status("")):
+			f.SetString("zz")
+		case reflect.TypeOf(""):
+			f.SetString("zz")
+		case reflect.TypeOf(false):
+			f.SetBool(true)
+		default:
+			return false
+		}
+		return true
+	}
+
+	walked := 0
+	for _, typ := range []reflect.Type{reflect.TypeOf(Invoice{}), reflect.TypeOf(LineItem{})} {
+		contentIdx, _ := contentFields(typ)
+		isContent := map[int]bool{}
+		for _, i := range contentIdx {
+			isContent[i] = true
+		}
+		for i := 0; i < typ.NumField(); i++ {
+			if isContent[i] {
+				continue
+			}
+			sf := typ.Field(i)
+			tag, _, _ := strings.Cut(sf.Tag.Get("json"), ",")
+			if tag == "line_items" {
+				continue
+			}
+			if !nonContentTags[tag] {
+				t.Errorf("%s.%s has json tag %q: neither content nor named non-content", typ.Name(), sf.Name, tag)
+				continue
+			}
+			walked++
+			t.Run(typ.Name()+"."+sf.Name, func(t *testing.T) {
+				inv := fullFingerprintFixture()
+				target := reflect.ValueOf(&inv).Elem()
+				if typ == reflect.TypeOf(LineItem{}) {
+					target = reflect.ValueOf(&inv.LineItems[0]).Elem()
+				}
+				if !setAny(target.Field(i)) {
+					t.Fatalf("no sample for type %s", sf.Type)
+				}
+				if got := contentFingerprint(inv, inv.LineItems); got != baseFP {
+					t.Errorf("non-content field %s.%s moved the digest", typ.Name(), sf.Name)
+				}
+			})
+		}
+	}
+	if walked < 15 {
+		t.Fatalf("walked %d non-content fields, want at least 15", walked)
+	}
+}
+
+// Dates hash as YYYY-MM-DD: clock and zone are representation, the calendar day is content.
+func TestContentFingerprint_NRSDatesHashByCalendarDay(t *testing.T) {
+	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	sameDay := time.Date(2026, 8, 1, 23, 59, 59, 0, time.FixedZone("x", 3600))
+	nextDay := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	for name, set := range map[string]func(*Invoice, *time.Time){
+		"due_date":       func(i *Invoice, d *time.Time) { i.DueDate = d },
+		"tax_point_date": func(i *Invoice, d *time.Time) { i.TaxPointDate = d },
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, b, c := fullFingerprintFixture(), fullFingerprintFixture(), fullFingerprintFixture()
+			set(&a, &day)
+			set(&b, &sameDay)
+			set(&c, &nextDay)
+			fa, fb, fc := contentFingerprint(a, a.LineItems), contentFingerprint(b, b.LineItems), contentFingerprint(c, c.LineItems)
+			if fa != fb {
+				t.Error("same calendar day at another clock time or zone changes the digest")
+			}
+			if fa == fc {
+				t.Error("a different calendar day leaves the digest unchanged")
+			}
+		})
+	}
+	due, point := fullFingerprintFixture(), fullFingerprintFixture()
+	due.DueDate, point.TaxPointDate = &day, &day
+	if contentFingerprint(due, due.LineItems) == contentFingerprint(point, point.LineItems) {
+		t.Error("due_date and tax_point_date with the same day hash the same")
+	}
+}
+
+// Legacy shapes (no NRS field) hash as at 10b2e701; the literals were captured there.
+func TestContentFingerprint_LegacyShapesKeepTheirHeadDigest(t *testing.T) {
+	d := time.Date(2026, 7, 1, 23, 30, 0, 0, time.FixedZone("x", 3600))
+	shapes := map[string]struct {
+		inv  Invoice
+		want string
+	}{
+		"empty": {Invoice{InvoiceNumber: "E-1"}, "bf553b985d9663e84d196c8284fd882b647f037eec3422210ca57674d6d86fcd"},
+		"party tin only": {Invoice{InvoiceNumber: "P-1", SupplierTIN: strPtr("12345678-0001"), BuyerName: strPtr("Beta")},
+			"d0f4df6a294d32669e2bcfe3bf6d89a777057e2758408b3ccb5ce6f4d473866f"},
+		"empty strings": {Invoice{InvoiceNumber: "S-1", SupplierTIN: strPtr(""), SupplierName: strPtr(""), BuyerTIN: strPtr(""), BuyerName: strPtr(""),
+			Currency: strPtr(""), Subtotal: strPtr(""), VAT: strPtr(""), Total: strPtr(""),
+			LineItems: []LineItem{{LineNo: 1, Description: strPtr(""), Quantity: strPtr(""), UnitPrice: strPtr(""), LineTotal: strPtr(""), LineTax: strPtr("")}}},
+			"182a8e24e63311f2086d75cedbbf61c7aa91d832c695248b8f9356ab4ec87f5c"},
+		"non numeric": {Invoice{InvoiceNumber: "N-1", Subtotal: strPtr("abc"), VAT: strPtr("NaN"), Total: strPtr("1e5"),
+			LineItems: []LineItem{{LineNo: 1, Quantity: strPtr("-0"), UnitPrice: strPtr("1e5"), LineTotal: strPtr("0x10"), LineTax: strPtr(".5")}}},
+			"2069b904a1792afeedd7cc70518203c995153dcf5237340c4a9a540274fc508f"},
+		"gappy line numbers": {Invoice{InvoiceNumber: "G-1", IssueDate: &d, Currency: strPtr("USD"),
+			LineItems: []LineItem{{ID: "b", LineNo: 3, Description: strPtr("c")}, {LineNo: 1}, {LineNo: 7, LineTax: strPtr("1.00")}}},
+			"b904ccb09760683e8ec6647f9c3d6d42e3aa116128b79ed58998353cbc1c7427"},
+		"delimiter text": {Invoice{InvoiceNumber: "D-1", SupplierName: strPtr("S1:0;N;X1;"), BuyerName: strPtr("X0;S3:NGN;"),
+			LineItems: []LineItem{{LineNo: 1, Description: strPtr("S1:0;N;X1;S3:NGN;"), Quantity: strPtr("X0;")}}},
+			"e626860885d55fb42f848b011d6e630a8c0b26b29bf26a9d8438852aaa56fa15"},
+	}
+	for name, s := range shapes {
+		t.Run(name, func(t *testing.T) {
+			if got := contentFingerprint(s.inv, s.inv.LineItems); got != s.want {
+				t.Errorf("digest = %s, want the 10b2e701 digest %s", got, s.want)
+			}
+		})
+	}
+}
+
+// Distinct NRS tuples never share a digest, whatever the values contain (D9 injectivity).
+// Singles and pairs of fields are set from a pool of delimiter-like values, over 0, 1 and 2 lines.
+func TestContentFingerprint_DistinctNRSTuplesNeverCollide(t *testing.T) {
+	type slot struct {
+		name  string
+		line  int
+		field int
+	}
+	pool := []string{"", "k", "X1;", "S1:0;", "N;", "k;X1;k"}
+	setSlot := func(inv *Invoice, s slot, v int) {
+		f := reflect.ValueOf(inv).Elem().Field(s.field)
+		if s.line >= 0 {
+			f = reflect.ValueOf(&inv.LineItems[s.line]).Elem().Field(s.field)
+		}
+		if f.Type() == reflect.TypeOf((*time.Time)(nil)) {
+			d := time.Date(2026, 1, 1+v%2, 0, 0, 0, 0, time.UTC)
+			f.Set(reflect.ValueOf(&d))
+			return
+		}
+		f.Set(reflect.ValueOf(&pool[v]))
+	}
+	valuesFor := func(inv Invoice, s slot) int {
+		f := reflect.ValueOf(inv).Field(s.field)
+		if s.line >= 0 {
+			f = reflect.ValueOf(inv.LineItems[s.line]).Field(s.field)
+		}
+		if f.Type() == reflect.TypeOf((*time.Time)(nil)) {
+			return 2
+		}
+		return len(pool)
+	}
+
+	total := 0
+	for lines := 0; lines <= 2; lines++ {
+		fresh := func() Invoice {
+			inv := Invoice{InvoiceNumber: "I-1"}
+			for l := 0; l < lines; l++ {
+				inv.LineItems = append(inv.LineItems, LineItem{LineNo: l + 1})
+			}
+			return inv
+		}
+		var slots []slot
+		hIdx, hTags := contentFields(reflect.TypeOf(Invoice{}))
+		for n, i := range hIdx {
+			if hTags[n] != "invoice_number" {
+				slots = append(slots, slot{"inv." + hTags[n], -1, i})
+			}
+		}
+		lIdx, lTags := contentFields(reflect.TypeOf(LineItem{}))
+		for l := 0; l < lines; l++ {
+			for n, i := range lIdx {
+				if lTags[n] != "line_no" {
+					slots = append(slots, slot{fmt.Sprintf("line%d.%s", l, lTags[n]), l, i})
+				}
+			}
+		}
+
+		seen := map[string]string{}
+		record := func(key string, inv Invoice) {
+			total++
+			fp := contentFingerprint(inv, inv.LineItems)
+			if prev, dup := seen[fp]; dup && prev != key {
+				t.Fatalf("%d lines: %s and %s share digest %s", lines, prev, key, fp)
+			}
+			seen[fp] = key
+		}
+		record("base", fresh())
+		for a, sa := range slots {
+			for va := 0; va < valuesFor(fresh(), sa); va++ {
+				inv := fresh()
+				setSlot(&inv, sa, va)
+				record(fmt.Sprintf("%s=%d", sa.name, va), inv)
+				for _, sb := range slots[a+1:] {
+					for vb := 0; vb < valuesFor(fresh(), sb); vb++ {
+						inv2 := fresh()
+						setSlot(&inv2, sa, va)
+						setSlot(&inv2, sb, vb)
+						record(fmt.Sprintf("%s=%d,%s=%d", sa.name, va, sb.name, vb), inv2)
+					}
+				}
+			}
+		}
+	}
+	if total < 100000 {
+		t.Fatalf("enumerated only %d tuples", total)
 	}
 }

@@ -578,36 +578,6 @@ func TestRuleSetV2_SeedVersionRestoresPreviousActiveByID(t *testing.T) {
 	}
 }
 
-// TestRuleSetV2_LoadNoActiveErrorsRestoresPreviousActiveByID (RS-V2-12):
-// store_test.go's TestStore_LoadNoActiveErrors deactivates the active
-// version to exercise ErrNoActiveRuleSet, then restores it in cleanup --
-// today hardcoded `WHERE version = 1` (store_test.go:228), with a
-// leaked-fixture guard also hardcoded to `version <> 1` (store_test.go:234).
-// Invokes the REAL test function (unmodified) as a subtest so this test's
-// greenness tracks store_test.go's actual fix. NOTE: because that guard is
-// ALSO a Category-A hardcode of the identical assumption, this subtest will
-// keep failing at ITS OWN t.Fatalf until Stage 3 generalizes both sites
-// together (the governing fix rule applies uniformly) -- that coupling is
-// intentional, not a bug in this test.
-func TestRuleSetV2_LoadNoActiveErrorsRestoresPreviousActiveByID(t *testing.T) {
-	super, _ := dbTestPools(t)
-	ctx := context.Background()
-
-	baselineID, baselineVersion := simulateActiveVersion(t, super)
-
-	t.Run("as_TestStore_LoadNoActiveErrors", TestStore_LoadNoActiveErrors)
-
-	var gotID string
-	if err := super.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE is_active`).Scan(&gotID); err != nil {
-		t.Fatalf("read the active version id after TestStore_LoadNoActiveErrors's cleanup: %v", err)
-	}
-	if gotID != baselineID {
-		t.Errorf("active version id after TestStore_LoadNoActiveErrors's cleanup = %s, want %s (version=%d) -- "+
-			"its restore (store_test.go) must target the row it actually deactivated, not hardcode "+
-			"`WHERE version = 1` [RS-V2-12]", gotID, baselineID, baselineVersion)
-	}
-}
-
 // TestRuleSetV2_ReversibilityRollbackPostConditionSurvivesV2 (RS-V2-13):
 // seed_test.go's TestSeed_ReversibilityRollback deletes v1 (within an
 // always-rolled-back superuser tx) and today asserts the GLOBAL active

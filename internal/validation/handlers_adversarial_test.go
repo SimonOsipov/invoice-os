@@ -1,7 +1,7 @@
 // M4-04-03 (task-109) -- Stage 4 (QA Verify, Mode B) adversarial coverage,
 // added on top of the executor's green suite without modifying any existing
 // test. store_adversarial_test.go proves the G3 guard holds at the STORE
-// layer (loadActiveRuleSetTx / LoadActiveRuleSet / LoadActiveRuleSetGlobal).
+// layer (loadRuleSetByIDTx / LoadActiveRuleSet / LoadActiveRuleSetGlobal).
 // This file proves it survives end-to-end through the REAL HTTP handler,
 // wired to the REAL Store and REAL Engine over the live DB -- i.e. that
 // nothing between the store and the wire response (statusForErr, the
@@ -33,7 +33,8 @@ import (
 func TestBatchValidate_ActiveVersionZeroRules503NotCleanPass(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	seedVersion(t, super, true) // zero rules
+	zeroID, _ := seedVersion(t, super, false) // zero rules
+	sealAndDate(t, super, zeroID, todayUTC())
 
 	store := NewStore(app)
 	eng := NewDefaultEngine()

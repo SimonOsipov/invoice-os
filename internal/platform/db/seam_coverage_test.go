@@ -195,7 +195,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/platform/db/migrate.go"},                                    // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
 	{file: "internal/platform/db/bootstrap.go"},                                  // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
 	{file: "internal/platform/db/provision.go"},                                  // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
-	{file: "internal/validation/store.go", fn: "LoadActiveRuleSetGlobal"},        // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
+	{file: "internal/validation/store.go", fn: "LoadForDates"},                   // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
 	{file: "internal/importer/backfill.go"},                                      // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
 	{file: "internal/invoice/revalidate.go"},                                     // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
 	{file: "internal/reconciliation/sweep.go"},                                   // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express

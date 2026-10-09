@@ -298,6 +298,46 @@ func sealAndActivate(t *testing.T, super *pgxpool.Pool, versionID string) {
 	}
 }
 
+// sealAndDate seals a fixture version and gives it a start date in one UPDATE, so it is
+// in force from `from` (YYYY-MM-DD). Insert all its rules first (Guard A). Cleanup
+// deletes it with user triggers disabled, as sealAndActivate does. Dates in year 3001+
+// keep real versions out of the way; use todayUTC() to make the fixture today's version.
+func sealAndDate(t *testing.T, super *pgxpool.Pool, versionID, from string) {
+	t.Helper()
+	ctx := context.Background()
+
+	t.Cleanup(func() {
+		ctx := context.Background()
+		tx, err := super.Begin(ctx)
+		if err != nil {
+			t.Errorf("sealAndDate cleanup(versionID=%s): begin delete tx: %v", versionID, err)
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		for _, q := range []string{
+			`ALTER TABLE rule_set_versions DISABLE TRIGGER USER`,
+			`ALTER TABLE rules DISABLE TRIGGER USER`,
+			`DELETE FROM rule_set_versions WHERE id = '` + versionID + `'`,
+			`ALTER TABLE rules ENABLE TRIGGER USER`,
+			`ALTER TABLE rule_set_versions ENABLE TRIGGER USER`,
+		} {
+			if _, err := tx.Exec(ctx, q); err != nil {
+				t.Errorf("sealAndDate cleanup(versionID=%s): %s: %v", versionID, q, err)
+				return
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Errorf("sealAndDate cleanup(versionID=%s): commit: %v", versionID, err)
+		}
+	})
+
+	if _, err := super.Exec(ctx,
+		`UPDATE rule_set_versions SET sealed = true, effective_from = $2::date WHERE id = $1`, versionID, from,
+	); err != nil {
+		t.Fatalf("sealAndDate(versionID=%s, from=%s): %v", versionID, from, err)
+	}
+}
+
 // seedRule inserts one rules row under versionID as the superuser, with otherwise-valid
 // placeholder content (type/severity/message satisfy the NOT NULL + CHECK constraints).
 // No cleanup of its own is registered: it is always reachable from a seedVersion call,

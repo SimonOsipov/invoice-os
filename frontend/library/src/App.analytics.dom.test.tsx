@@ -2,6 +2,7 @@
 // @vitest-environment-options { "url": "https://library.ascomply.com/" }
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import './testStorage'
+import { readConsentCookie } from '../../landing/src/consent'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -180,11 +181,12 @@ describe('library events', () => {
     click(button('Cookie choices'))
     click(button('Reject'))
     expect(writes.some((w) => w.startsWith('_ga=; ') && w.includes('Max-Age=0') && w.includes('domain=library.ascomply.com'))).toBe(true)
-    expect(writes.filter((w) => /domain=\.?ascomply\.com/.test(w))).toEqual([])
+    expect(writes.filter((w) => w.startsWith('_ga') && /domain=\.?ascomply\.com/.test(w))).toEqual([])
     click(card('validate'))
     click(link('Book the Demo')[0])
     expect(events()).toHaveLength(1)
-    expect(JSON.parse(localStorage.getItem(KEY)!).analytics).toBe(false)
+    expect(readConsentCookie(document)!.analytics).toBe(false)
+    expect(localStorage.getItem(KEY)).toBeNull()
   })
 })
 

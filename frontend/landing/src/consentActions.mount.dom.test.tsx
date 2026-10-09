@@ -10,7 +10,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { CONSENT_STORAGE_KEY, CONSENT_VERSION, type ConsentStore } from './consent'
+import { CONSENT_STORAGE_KEY, CONSENT_VERSION, readConsentCookie, type ConsentStore } from './consent'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -105,7 +105,8 @@ describe('a choice made while a modal is open', () => {
 
     expect(document.querySelectorAll(NOTICE).length, 'the notice survived a choice').toBe(0)
     expect(document.querySelectorAll('[role="dialog"]').length, 'the choice closed the modal').toBe(1)
-    expect(JSON.parse(store.getItem(CONSENT_STORAGE_KEY)!).analytics).toBe(true)
+    expect(readConsentCookie(document)!.analytics).toBe(true)
+    expect(store.getItem(CONSENT_STORAGE_KEY)).toBeNull()
     expect(document.querySelectorAll(GTAG_SCRIPT).length).toBe(1)
     expect(consoleError).not.toHaveBeenCalled()
   })
@@ -126,7 +127,8 @@ describe('a double click on Accept', () => {
       accept.click()
     })
 
-    const record = JSON.parse(store.getItem(CONSENT_STORAGE_KEY)!) as Record<string, unknown>
+    const record = readConsentCookie(document) as unknown as Record<string, unknown>
+    expect(store.getItem(CONSENT_STORAGE_KEY)).toBeNull()
     expect(record.analytics).toBe(true)
     expect(record.v).toBe(CONSENT_VERSION)
     expect(Number.isFinite(Date.parse(record.ts as string))).toBe(true)

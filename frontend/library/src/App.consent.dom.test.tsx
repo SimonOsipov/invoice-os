@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readConsentCookie } from '../../landing/src/consent'
 import { sliceCookieNoticeCss } from './cookieNoticeCss'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -25,6 +26,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   value: {
     getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
     setItem: (k: string, v: string) => void store.set(k, String(v)),
+    removeItem: (k: string) => void store.delete(k),
     clear: () => store.clear(),
   },
 })
@@ -74,7 +76,10 @@ const notices = () => container.querySelectorAll('[role="region"][aria-label="Co
 const byText = (text: string) =>
   [...container.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent?.trim() === text)!
 const click = (el: Element) => act(() => void el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-const record = () => JSON.parse(localStorage.getItem(KEY)!)
+const record = () => {
+  expect(localStorage.getItem(KEY)).toBeNull()
+  return readConsentCookie(document)!
+}
 const entries = () => ((window as TestWindow).dataLayer ?? []).map((a) => Array.from(a))
 
 describe('library consent', () => {
@@ -96,7 +101,7 @@ describe('library consent', () => {
     expect(notices()).toHaveLength(0)
   })
 
-  it('CO-02 a choice is stored on this origin and closes the notice', async () => {
+  it('CO-02 a choice is stored and closes the notice', async () => {
     await mount()
     click(byText('Accept'))
     expect(record()).toMatchObject({ analytics: true, v: 1 })
@@ -105,6 +110,7 @@ describe('library consent', () => {
     container.remove()
 
     localStorage.clear()
+    document.cookie = `${KEY}=; Max-Age=0; Path=/; Domain=ascomply.com`
     await mount()
     click(byText('Reject'))
     expect(record()).toMatchObject({ analytics: false, v: 1 })
@@ -127,6 +133,7 @@ describe('library consent', () => {
 
     document.head.innerHTML = ''
     localStorage.clear()
+    document.cookie = `${KEY}=; Max-Age=0; Path=/; Domain=ascomply.com`
     const none = await mount()
     expect(none.analytics.bootLibraryAnalytics()).toBe(false)
     expect(document.querySelectorAll('script[src^="https://www.googletagmanager.com/"]')).toHaveLength(0)
@@ -163,7 +170,18 @@ describe('library consent', () => {
     click(byText('Cookie choices'))
     click(byText('Reject'))
     expect(writes.some((w) => w.includes('domain=library.ascomply.com'))).toBe(true)
-    expect(writes.filter((w) => /domain=\.?ascomply\.com/.test(w))).toEqual([])
+    expect(writes.filter((w) => w.startsWith('_ga') && /domain=\.?ascomply\.com/.test(w))).toEqual([])
+  })
+
+  it('CO-07 a choice stored by the landing shows no notice on the Library', async () => {
+    const grant = encodeURIComponent('{"analytics":true,"ts":"2026-01-01T00:00:00.000Z","v":1}')
+    document.cookie = `${KEY}=${grant}; Domain=ascomply.com; Path=/; Secure`
+    await mount()
+    expect(notices()).toHaveLength(0)
+    click(byText('Cookie choices'))
+    expect(container.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are on.')
+    click(byText('Reject'))
+    expect(record().analytics).toBe(false)
   })
 
   it('CSS-03 the app renders the slice', async () => {

@@ -10,14 +10,14 @@ export function applyChoice(
   opts?: { hostname?: string; store?: ConsentStore | null; hosts?: readonly string[]; cookieDomain?: string },
 ): ConsentRecord {
   const accepted = choice === 'accept'
-  const record = writeConsent(accepted, opts?.store)
+  const hostname = opts?.hostname ?? window.location.hostname
+  const record = writeConsent(accepted, opts?.store, undefined, undefined, hostname)
 
   // On EVERY choice, not inside ensureTag's injection branch: a second Accept in one
   // page load returns early from ensureTag, which would leave the tag resident but
   // muted and the visitor's consent silently ignored. Pinned by T3-14.
   setAnalyticsRevoked(!accepted)
 
-  const hostname = opts?.hostname ?? window.location.hostname
   if (accepted) ensureTag(hostname, record, opts?.hosts, opts?.cookieDomain)
   else clearGaCookies(hostname, undefined, opts?.cookieDomain ? [opts.cookieDomain] : undefined)
 

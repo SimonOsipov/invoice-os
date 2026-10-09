@@ -3,7 +3,7 @@
 // The landing's gate, consent seam and senders, driven on the library host.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { CONSENT_STORAGE_KEY, CONSENT_VERSION, type ConsentRecord } from './consent'
+import { CONSENT_STORAGE_KEY, CONSENT_VERSION, readConsentCookie, type ConsentRecord } from './consent'
 
 type TestWindow = Window & { dataLayer?: IArguments[]; gtag?: (...args: unknown[]) => void }
 
@@ -103,8 +103,8 @@ describe('boot and Accept on the library host', () => {
     const { LIBRARY_HOSTNAMES } = await import('./hubspot')
 
     applyChoice('accept', { hosts: LIBRARY_HOSTNAMES })
-    const stored = JSON.parse(localStorage.getItem(CONSENT_STORAGE_KEY)!)
-    expect(stored).toMatchObject({ analytics: true, v: CONSENT_VERSION })
+    expect(readConsentCookie(document)).toMatchObject({ analytics: true, v: CONSENT_VERSION })
+    expect(localStorage.getItem(CONSENT_STORAGE_KEY)).toBeNull()
     expect(document.querySelectorAll(TAG).length).toBe(1)
     expect(entries().map((e) => e[0])).toEqual(['js', 'config'])
     expect(entries()[1]).toEqual(['config', ID])
@@ -120,7 +120,7 @@ describe('boot and Accept on the library host', () => {
   it('LS-05 Accept with no hosts writes the record and loads nothing', async () => {
     const { applyChoice } = await import('./consentActions')
     applyChoice('accept')
-    expect(JSON.parse(localStorage.getItem(CONSENT_STORAGE_KEY)!).analytics).toBe(true)
+    expect(readConsentCookie(document)!.analytics).toBe(true)
     expect(document.querySelectorAll(ANY_TAG).length).toBe(0)
   })
 })
@@ -139,11 +139,14 @@ describe('Reject on the library host', () => {
   it('LS-06 Reject with a cookie domain expires _ga on that domain only', async () => {
     const { applyChoice } = await import('./consentActions')
     const { LIBRARY_HOSTNAMES } = await import('./hubspot')
-    const writes = spyOnCookieWrites()
+    const all = spyOnCookieWrites()
 
     applyChoice('reject', { hosts: LIBRARY_HOSTNAMES, cookieDomain: LIB })
 
-    expect(JSON.parse(localStorage.getItem(CONSENT_STORAGE_KEY)!).analytics).toBe(false)
+    const consent = all.filter((w) => w.startsWith(`${CONSENT_STORAGE_KEY}=`))
+    expect(consent).toHaveLength(1)
+    expect(JSON.parse(decodeURIComponent(consent[0].split(';')[0].slice(CONSENT_STORAGE_KEY.length + 1))).analytics).toBe(false)
+    const writes = all.filter((w) => w.startsWith('_ga'))
     expect(document.querySelectorAll(ANY_TAG).length).toBe(0)
     expect(writes.length).toBe(2)
     expect(writes.filter((w) => !w.includes('domain='))).toHaveLength(1)

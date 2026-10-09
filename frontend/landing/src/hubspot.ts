@@ -13,6 +13,9 @@ export const PRODUCTION_HOSTNAMES: readonly string[] = ['www.ascomply.com']
 /** The Feature Library's host, passed to the GA4 gate by the library only. */
 export const LIBRARY_HOSTNAMES: readonly string[] = ['library.ascomply.com']
 
+/** The parent domain the production landing and Library share. */
+export const SHARED_COOKIE_DOMAIN = 'ascomply.com'
+
 export type HubSpotTarget = { portalId: string; formGuid: string }
 
 const normaliseHost = (hostname: string): string => hostname.trim().toLowerCase()

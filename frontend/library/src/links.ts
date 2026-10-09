@@ -1,6 +1,7 @@
 import { PRODUCTION_HOSTNAMES } from './analytics'
 import { APP_PATHS } from './appPaths.ts'
 import type { Feature, Group } from './types.ts'
+// LIB-08 AC-7 proof: throwaway comment
 
 const resolveBase = (v: string | undefined): string | null => {
   const t = (v ?? '').trim().replace(/\/+$/, '')

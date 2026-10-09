@@ -291,6 +291,9 @@ func TestStaffAudit_ChecksRefuseNilAndBlank(t *testing.T) {
 				return audit.RecordStaff(ctx, tx, actor, version, tc.event, nil)
 			})
 			assertCheckViolation(t, err, tc.constraint)
+			if err != nil && !strings.Contains(err.Error(), "audit: record staff event") {
+				t.Errorf("error %q does not carry the %q wrap", err, "audit: record staff event")
+			}
 			if !tc.nilActor {
 				if n := len(staffRows(t, f, actor)); n != 0 {
 					t.Errorf("staff rows after the refusal = %d, want 0", n)

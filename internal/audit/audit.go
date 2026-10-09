@@ -1,6 +1,6 @@
 // Package audit is the 08 Audit context: an in-process module (explicitly NOT a
 // network service — locked call 1, 2026-07-03) that every ASComply service calls
-// to leave an immutable trail. Record is the only WRITER: it writes one audit_log row
+// to leave an immutable trail. Record writes one audit_log row
 // inside the CALLER'S transaction, so an audit row commits or rolls back atomically with
 // the domain change it records — there is no second store to get out of sync with (the
 // same in-tx-outbox idea as internal/platform/queue.EnqueueTx). AUDIT-04 added the read

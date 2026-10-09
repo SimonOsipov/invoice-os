@@ -2,12 +2,16 @@ package db_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const staffAuditFunction = "staff_audit_log_append_only"
@@ -110,18 +114,77 @@ func TestRLS_StaffAuditLogDownAndUp(t *testing.T) {
 		t.Fatalf("after the Up: table=%d function=%d, want 1 and 1", table, fn)
 	}
 	requireStaffAuditGrantsInsertOnly(t)
+	requireStaffAuditUpBehaviour(t)
+}
 
+// requireStaffAuditUpBehaviour reads the table the shipped Up just built: the app roles reach it
+// by INSERT only, the owner is held by the trigger, and the CHECKs refuse nil and blank values.
+func requireStaffAuditUpBehaviour(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
 	actor := uuid.NewString()
 	if _, err := h.app.Exec(ctx,
 		`INSERT INTO public.staff_audit_log (actor, event, rule_set_version_id) VALUES ($1, 'rules.test', $2)`, actor, uuid.NewString()); err != nil {
 		t.Fatalf("invoice_app INSERT after the Up: %v", err)
 	}
-	_, err := h.mig.Exec(ctx, `UPDATE public.staff_audit_log SET event = 'tampered' WHERE actor = $1`, actor)
-	if code := pgCode(err); code != "23001" {
-		t.Errorf("owner UPDATE after the Up: SQLSTATE %q, want 23001 (the Up restores the trigger): %v", code, err)
+	if n := mustCount(t, h.super, `SELECT count(*) FROM public.staff_audit_log WHERE actor = $1`, actor); n != 1 {
+		t.Fatalf("seeded staff rows = %d, want 1", n)
 	}
-	_, err = h.mig.Exec(ctx, `TRUNCATE public.staff_audit_log`)
-	if code := pgCode(err); code != "23001" {
-		t.Errorf("owner TRUNCATE after the Up: SQLSTATE %q, want 23001: %v", code, err)
+
+	for _, role := range []struct {
+		name string
+		pool *pgxpool.Pool
+	}{{"invoice_app", h.app}, {"invoice_tenant_reader", h.reader}} {
+		for _, verb := range []string{"SELECT", "UPDATE", "DELETE", "TRUNCATE"} {
+			stmt := map[string]string{
+				"SELECT":   `SELECT id FROM public.staff_audit_log`,
+				"UPDATE":   `UPDATE public.staff_audit_log SET event = 'tampered'`,
+				"DELETE":   `DELETE FROM public.staff_audit_log`,
+				"TRUNCATE": `TRUNCATE public.staff_audit_log`,
+			}[verb]
+			if _, err := role.pool.Exec(ctx, stmt); pgCode(err) != "42501" {
+				t.Errorf("%s %s after the Up: SQLSTATE %q, want 42501: %v", role.name, verb, pgCode(err), err)
+			}
+		}
+	}
+	if _, err := h.reader.Exec(ctx,
+		`INSERT INTO public.staff_audit_log (actor, event, rule_set_version_id) VALUES ($1, 'rules.test', $2)`, actor, uuid.NewString()); pgCode(err) != "42501" {
+		t.Errorf("invoice_tenant_reader INSERT after the Up: SQLSTATE %q, want 42501: %v", pgCode(err), err)
+	}
+
+	for _, verb := range []string{"UPDATE", "DELETE", "TRUNCATE"} {
+		stmt := map[string]string{
+			"UPDATE":   `UPDATE public.staff_audit_log SET event = 'tampered' WHERE actor = '` + actor + `'`,
+			"DELETE":   `DELETE FROM public.staff_audit_log WHERE actor = '` + actor + `'`,
+			"TRUNCATE": `TRUNCATE public.staff_audit_log`,
+		}[verb]
+		if _, err := h.mig.Exec(ctx, stmt); pgCode(err) != "23001" {
+			t.Errorf("owner %s after the Up: SQLSTATE %q, want 23001: %v", verb, pgCode(err), err)
+		}
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM public.staff_audit_log WHERE actor = $1 AND event = 'rules.test'`, actor); n != 1 {
+		t.Errorf("seeded row after the refused owner statements: %d matches, want 1 unchanged", n)
+	}
+
+	nilID := uuid.Nil.String()
+	for _, tc := range []struct{ name, actor, version, event, constraint string }{
+		{"nil_actor", nilID, uuid.NewString(), "rules.test", "staff_audit_actor_set"},
+		{"nil_version", uuid.NewString(), nilID, "rules.test", "staff_audit_version_set"},
+		{"empty_event", uuid.NewString(), uuid.NewString(), "", "staff_audit_event_length"},
+		{"event_128_chars", uuid.NewString(), uuid.NewString(), strings.Repeat("e", 128), "staff_audit_event_length"},
+	} {
+		_, err := h.app.Exec(ctx,
+			`INSERT INTO public.staff_audit_log (actor, event, rule_set_version_id) VALUES ($1, $2, $3)`, tc.actor, tc.event, tc.version)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != tc.constraint {
+			t.Errorf("%s after the Up: error %v, want 23514 on %s", tc.name, err, tc.constraint)
+		}
+	}
+	for _, event := range []string{strings.Repeat("e", 127), strings.Repeat("é", 127)} {
+		if _, err := h.app.Exec(ctx,
+			`INSERT INTO public.staff_audit_log (actor, event, rule_set_version_id) VALUES ($1, $2, $3)`,
+			uuid.NewString(), event, uuid.NewString()); err != nil {
+			t.Errorf("127-character event %q after the Up: %v, want accepted", event[:3], err)
+		}
 	}
 }

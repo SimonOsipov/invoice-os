@@ -156,6 +156,26 @@ func TestPreviewHandler_AStateFailureStillAnswersAndLogsTheSQLStateOnly(t *testi
 			t.Errorf("log leaks %q:\n%s", leak, out)
 		}
 	}
+
+	var plain syncBuf
+	other := func(context.Context, string) (InvitationPreview, error) {
+		return InvitationPreview{Account: "unknown", accountErr: errors.New("connection reset for tunde@obi.test")}, nil
+	}
+	apiDo(InvitationPreviewHandler(other, slog.New(slog.NewTextHandler(&plain, nil))), context.Background(),
+		http.MethodPost, "/internal/invitations/preview", `{"token":"`+token+`"}`)
+	if o := plain.String(); !strings.Contains(o, "sqlstate=unknown") || strings.Contains(o, "tunde@obi.test") {
+		t.Errorf("a non-SQL error must log sqlstate=unknown and no address:\n%s", o)
+	}
+
+	var quiet syncBuf
+	ok := func(context.Context, string) (InvitationPreview, error) {
+		return InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: "tunde@obi.test", Account: "none"}, nil
+	}
+	apiDo(InvitationPreviewHandler(ok, slog.New(slog.NewTextHandler(&quiet, nil))), context.Background(),
+		http.MethodPost, "/internal/invitations/preview", `{"token":"`+token+`"}`)
+	if strings.Contains(quiet.String(), "level=WARN") {
+		t.Errorf("a read that succeeded logged a WARN:\n%s", quiet.String())
+	}
 }
 
 func TestPreviewHandler_Contract(t *testing.T) {

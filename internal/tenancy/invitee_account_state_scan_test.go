@@ -6,25 +6,26 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
 // stateCaller is the one non-test file allowed to name the account-state function.
-const (
-	stateCaller = "internal/tenancy/store.go"
-	stateNeedle = "invitee_account_state("
-)
+const stateCaller = "internal/tenancy/store.go"
+
+// SQL is case-blind and ignores a space before the parenthesis; the scan matches both.
+var stateCall = regexp.MustCompile(`(?i)invitee_account_state\s*\(`)
 
 // TestInviteeAccountStateCalledOnlyByTheStore scans every non-test .go file's
-// tokens (comments dropped) for `invitee_account_state(`; the parenthesis keeps the policy name out.
+// string tokens (comments dropped) for `invitee_account_state(`; the parenthesis keeps the policy name out.
 func TestInviteeAccountStateCalledOnlyByTheStore(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var scanned int
-	sites := map[string]int{} // repo-relative file -> tokens naming the function
+	sites := map[string]int{} // repo-relative file -> calls named
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -56,8 +57,8 @@ func TestInviteeAccountStateCalledOnlyByTheStore(t *testing.T) {
 			if tok == token.EOF {
 				break
 			}
-			if strings.Contains(lit, stateNeedle) {
-				sites[rel]++
+			if n := len(stateCall.FindAllString(lit, -1)); n > 0 {
+				sites[rel] += n
 			}
 		}
 		return nil
@@ -78,7 +79,7 @@ func TestInviteeAccountStateCalledOnlyByTheStore(t *testing.T) {
 	})
 	t.Run("control needle", func(t *testing.T) {
 		if sites[stateCaller] != 1 {
-			t.Errorf("%d invitee_account_state( tokens in %s, want exactly 1", sites[stateCaller], stateCaller)
+			t.Errorf("%d invitee_account_state( calls in %s, want exactly 1", sites[stateCaller], stateCaller)
 		}
 	})
 }

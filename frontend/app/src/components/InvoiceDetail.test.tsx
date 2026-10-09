@@ -6476,6 +6476,7 @@ describe('InvoiceDetail line links (ENGI-16-03)', () => {
     fireEvent.click(await screen.findByTestId('edit-toggle'))
 
     await screen.findByTestId('edit-invoice')
+    expect(LINE_EDIT_FIELDS.length).toBeGreaterThan(0)
     for (const key of LINE_EDIT_FIELDS) {
       expect(lineRow(1).querySelectorAll(`input[data-line-field="${key}"]`), key).toHaveLength(1)
     }
@@ -6499,6 +6500,34 @@ describe('InvoiceDetail line links (ENGI-16-03)', () => {
     fireEvent.click(await screen.findByTestId('violation-open-line'))
 
     expect(await screen.findByTestId('edit-invoice')).toBeTruthy()
+    expect(screen.getAllByTestId('line-row')).toHaveLength(2)
+  })
+
+  it('invoiceDetail_sameLineLinkRefocusesAfterFocusLeaves', async () => {
+    mockDetailFetch(detailRecord({ ...base, violations: [viol('line_items[2].unit_price')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('violation-open-line'))
+    await screen.findByTestId('edit-invoice')
+    const target = lineRow(2).querySelector('[data-line-field="unit_price"]')
+    expect(document.activeElement).toBe(target)
+
+    ;(lineRow(1).querySelector('input') as HTMLInputElement).focus()
+    expect(document.activeElement).not.toBe(target)
+    fireEvent.click(screen.getByTestId('violation-open-line'))
+    expect(document.activeElement).toBe(target)
+  })
+
+  it('invoiceDetail_editToggleAfterCancelDoesNotReplayTheLineFocus', async () => {
+    mockDetailFetch(detailRecord({ ...base, violations: [viol('line_items[2].unit_price')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('violation-open-line'))
+    await screen.findByTestId('edit-invoice')
+    fireEvent.click(screen.getByTestId('edit-cancel'))
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+    await screen.findByTestId('edit-invoice')
+    expect(lineRow(2).contains(document.activeElement)).toBe(false)
   })
 
   it('invoiceDetail_lineLinkDisabledWhenNotEditable', async () => {

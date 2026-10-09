@@ -62,7 +62,7 @@ describe('violationLine', () => {
   })
 
   it('violationLine_rejectsEverythingElse', () => {
-    const bad = ['line_items', '', undefined, 'subtotal', 'line_items[0]', 'line_items[01]', 'line_items[1].', ' line_items[1]', 'tax_subtotals[1].x', 'Line_items[1]']
+    const bad = ['line_items', '', undefined, 'subtotal', 'line_items[0]', 'line_items[01]', 'line_items[1].', ' line_items[1]', 'tax_subtotals[1].x', 'Line_items[1]', 'line_items[-1]', 'line_items[1.5]', 'line_items[abc]', 'line_items[1][2]', 'line_items[1]x', 'line_items[1].a.b', 'line_items[1].a-b', 'line_items[1] ']
     for (const p of bad) expect(violationLine(p), String(p)).toBeNull()
   })
 

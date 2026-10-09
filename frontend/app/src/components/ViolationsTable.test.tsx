@@ -280,7 +280,7 @@ describe('ViolationsTable line links (ENGI-16-03)', () => {
   it('violationsTable_nonLinePathsStayText', () => {
     render(
       <ViolationsTable
-        violations={[violation({ path: 'line_items' }), violation({ path: 'subtotal' }), violation({ path: undefined })]}
+        violations={[violation({ path: 'line_items' }), violation({ path: 'subtotal' }), violation({ path: undefined }), violation({ path: 'line_items[0]' }), violation({ path: 'line_items[01]' }), violation({ path: 'line_items[x]' }), violation({ path: 'tax_subtotals[1].tax_category' })]}
         ruleSetVersion={3}
         onOpenLine={vi.fn()}
       />,
@@ -288,7 +288,7 @@ describe('ViolationsTable line links (ENGI-16-03)', () => {
 
     expect(screen.queryByTestId('violation-open-line')).toBeNull()
     const cells = screen.getAllByRole('row').slice(1).map((r) => within(r).getAllByRole('cell')[3].textContent)
-    expect(cells).toEqual(['line_items', 'subtotal', '—'])
+    expect(cells).toEqual(['line_items', 'subtotal', '—', 'line_items[0]', 'line_items[01]', 'line_items[x]', 'tax_subtotals[1].tax_category'])
   })
 
   it('violationsTable_noHandlerKeepsText', () => {

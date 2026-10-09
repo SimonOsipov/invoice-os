@@ -379,7 +379,7 @@ describe('the room reserved under an open menu', () => {
 
     const reserved = parseFloat(scroller().style.paddingBottom)
     expect(reserved).toBeGreaterThanOrEqual(205)
-    expect(reserved, 'over-reserving leaves a visible gap under the card').toBeLessThanOrEqual(220)
+    expect(reserved, 'over-reserving leaves a visible gap under the card').toBeLessThanOrEqual(260)
 
     fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
     expect(scroller().style.paddingBottom).toBe('0px')

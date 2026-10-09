@@ -49,10 +49,10 @@ const TABLE_MIN_WIDTH = 716
 // would spawn a vertical scrollbar, on any row without room below it. The scroller simply
 // makes room for whichever menu is open.
 //
-// 216 was measured on the old invited menu; roles.spec.ts › "firm Settings: an admin invites from
-// the Members screen, sees the pending row, and resends" (L2) gates it.
+// 256 fits the invited menu plus its account-state note; roles.spec.ts › "firm Settings: an admin
+// invites from the Members screen, sees the pending row, and resends" (L2, L2b) gates it.
 // ceiling: re-measure if an item, reason or note is added.
-const MENU_CLEARANCE = 216
+const MENU_CLEARANCE = 256
 
 // The INVED-01 regression class. A grid cell only ellipsises if it is allowed to be
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.

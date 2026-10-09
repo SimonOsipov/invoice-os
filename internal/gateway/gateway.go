@@ -30,7 +30,10 @@ const (
 	headerUserID    = "X-User-ID"
 	headerUserRole  = "X-User-Role"
 	headerUserEmail = "X-User-Email"
-	headerRequestID = "X-Request-ID"
+	// headerUserStaff and headerUserRulesRole are "true" or absent, from the token's Identity.
+	headerUserStaff     = "X-User-Staff"
+	headerUserRulesRole = "X-User-Rules-Role"
+	headerRequestID     = "X-Request-ID"
 	// headerS2SToken is 04's service-to-service peer credential
 	// (internal/validation/s2s.go). The gateway never mints it and never
 	// forwards a client-supplied one -- see injectIdentity.
@@ -101,7 +104,7 @@ func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-// A token with no tenant may reach these two POST routes only: provisioning creates a tenant, accept joins one.
+// Tenant-less POST routes: provisioning creates a tenant, accept joins one.
 const (
 	tenantlessPath       = "/api/tenancy/v1/workspaces"
 	tenantlessAcceptPath = "/api/tenancy/v1/invitations/accept"
@@ -109,14 +112,36 @@ const (
 
 // authorize returns 0 when the identity may use the service, otherwise the HTTP
 // status to answer. P1 rule: every context service is tenant-scoped, so a valid
-// token carrying no tenant is forbidden, except POST /api/tenancy/v1/workspaces and
-// POST /api/tenancy/v1/invitations/accept.
+// token carrying no tenant is forbidden, except POST /api/tenancy/v1/workspaces,
+// POST /api/tenancy/v1/invitations/accept and an exact staff route for a staff token.
+// A /v1/staff class path (decoded or cleaned) needs a staff token.
 // The M7 ops console adds its operator-role rule here, keyed on service.
 func authorize(r *http.Request, service string, id auth.Identity) int {
-	if id.TenantID == "" && !isTenantlessRoute(r) {
+	if isStaffClass(r, service) && !id.Staff {
+		return http.StatusForbidden
+	}
+	if id.TenantID == "" && !isTenantlessRoute(r) && !(id.Staff && isExactStaffRoute(r, service)) {
 		return http.StatusForbidden
 	}
 	return 0
+}
+
+// isStaffClass is the broad match: the decoded or the cleaned path under the service starts with the v1/staff segments.
+func isStaffClass(r *http.Request, service string) bool {
+	rest := strings.TrimPrefix(r.URL.Path, routePrefix+service)
+	return underStaff(rest) || underStaff(path.Clean("/"+rest))
+}
+
+func underStaff(p string) bool {
+	p = strings.TrimPrefix(p, "/")
+	return p == "v1/staff" || strings.HasPrefix(p, "v1/staff/")
+}
+
+// isExactStaffRoute is the narrow match: a clean escaped path without "%" under /api/<service>/v1/staff/.
+func isExactStaffRoute(r *http.Request, service string) bool {
+	p := r.URL.EscapedPath()
+	return strings.HasPrefix(p, routePrefix+service+"/v1/staff/") && !strings.Contains(p, "%") &&
+		path.Clean(p) == strings.TrimSuffix(p, "/")
 }
 
 // isTenantlessRoute matches the escaped path, so an encoded variant (v1%2Fworkspaces) is not exempt.
@@ -176,12 +201,22 @@ func injectIdentity(pr *httputil.ProxyRequest, gatewayToken string) {
 	pr.Out.Header.Set(headerUserID, id.Subject)
 	pr.Out.Header.Set(headerUserRole, id.Role)
 	pr.Out.Header.Set(headerUserEmail, id.Email)
+	setFlag(pr.Out.Header, headerUserStaff, id.Staff)
+	setFlag(pr.Out.Header, headerUserRulesRole, id.RulesRole)
 	pr.Out.Header.Del(headerS2SToken)
 	pr.Out.Header.Set(platform.HeaderGatewayToken, gatewayToken)
 	if rid := platform.RequestIDFromContext(pr.In.Context()); rid != "" {
 		pr.Out.Header.Set(headerRequestID, rid)
 	} else {
 		pr.Out.Header.Del(headerRequestID)
+	}
+}
+
+func setFlag(h http.Header, name string, on bool) {
+	if on {
+		h.Set(name, "true")
+	} else {
+		h.Del(name)
 	}
 }
 

@@ -220,6 +220,15 @@ describe('T1 one cell per parsed row', () => {
       }
     }
   })
+
+  it('the column selectors carry the four role labels', () => {
+    const rows = [mkRow(1)]
+    render(itemGrid({ rows, wireRows: rows }))
+
+    for (const label of ['Description column', 'Quantity column', 'Unit price column', 'Line total column']) {
+      expect(screen.getAllByLabelText(label), label).toHaveLength(1)
+    }
+  })
 })
 
 describe('T2 the row flag', () => {

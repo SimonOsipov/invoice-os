@@ -59,9 +59,10 @@ func requireStaffAuditGrantsInsertOnly(t *testing.T) {
 		`SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.staff_audit_log'::regclass AND attnum > 0 AND attacl IS NOT NULL`); n != 0 {
 		t.Errorf("columns with their own ACL = %d, want 0", n)
 	}
-	if got, want := collectStrings(t, `SELECT grantee || ':' || privilege_type FROM information_schema.usage_privileges
-	                                    WHERE object_schema = 'public' AND object_name = 'staff_audit_log_id_seq' AND object_type = 'SEQUENCE'
-	                                      AND grantee <> $1 ORDER BY 1`, owner),
+	// information_schema lists only USAGE for a sequence, so read the ACL: SELECT or UPDATE would hide there.
+	if got, want := collectStrings(t, `SELECT grantee::regrole::text || ':' || privilege_type
+	                                    FROM aclexplode((SELECT relacl FROM pg_class WHERE oid = 'public.staff_audit_log_id_seq'::regclass))
+	                                    WHERE grantee <> $1::regrole ORDER BY 1`, owner),
 		[]string{"invoice_app:USAGE"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("sequence privileges beyond the owner = %v, want %v", got, want)
 	}

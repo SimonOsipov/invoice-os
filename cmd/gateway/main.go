@@ -190,7 +190,8 @@ func main() {
 	app.Mux.Handle("GET /auth/verify", verifyPage)
 	app.Mux.Handle("POST /auth/verify", reg.Verify)
 	previewer := gateway.NewHTTPInvitationPreviewer(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
-	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, reg.RegisterPerIP, previewer, gateway.InvitationRegistrations{}, app.Logger)
+	registrations := gateway.NewHTTPInvitationRegistrations(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
+	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, reg.RegisterPerIP, previewer, registrations, app.Logger)
 	app.Mux.Handle("POST /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("OPTIONS /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("POST /auth/invitation/register", withCORS(inviteeRegister))
@@ -292,10 +293,10 @@ type registration struct {
 }
 
 // invitationHandlers builds the accept-page preview handler and the invitee-registration handler.
-// Registration shares perIP with /auth/register and answers 503 while any of authURL, siteURL or perIP is nil; the preview needs none of them.
+// Registration shares perIP with /auth/register and answers 503 while any of authURL, siteURL, perIP, registrations.Claim or registrations.Release is nil; the preview needs none of them.
 func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, perIP *gateway.SignInThrottle, preview gateway.InvitationPreviewer, registrations gateway.InvitationRegistrations, log *slog.Logger) (invitation, register http.Handler) {
 	invitation = gateway.InvitationHandler(preview, log)
-	if authURL == nil || siteURL == nil || perIP == nil {
+	if authURL == nil || siteURL == nil || perIP == nil || registrations.Claim == nil || registrations.Release == nil {
 		return invitation, gateway.RegistrationNotConfigured()
 	}
 	client := &http.Client{

@@ -3,6 +3,8 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,11 +33,13 @@ const (
 	maxPreviewResponseBytes  = 4 << 10
 	previewPath              = "internal/invitations/preview"
 	pendingPath              = "internal/invitations/pending"
-	msgInviteeFieldsRequired = "token and password are required"
+	msgInviteeFieldsRequired = "token is required"
+	claimRoute               = "internal/invitations/register"
+	releaseRoute             = "internal/invitations/release"
 )
 
 // postTenancy posts payload to an internal tenancy route with the gateway token and no redirect.
-// On a 200 it decodes the body into out and fails if it cannot. It returns the status; its errors
+// On a 200 it decodes the body into out and fails if it cannot; on a 404 it decodes best-effort. It returns the status; its errors
 // carry the label and the status only: never the token, the address, or a *url.Error, which holds the URL.
 func postTenancy(ctx context.Context, c *http.Client, target, gatewayToken, label string, payload, out any) (int, error) {
 	ctx, cancel := context.WithTimeout(ctx, invitationPreviewTimeout)
@@ -60,9 +64,14 @@ func postTenancy(ctx context.Context, c *http.Client, target, gatewayToken, labe
 	defer resp.Body.Close()
 	lr := io.LimitReader(resp.Body, maxPreviewResponseBytes)
 	defer func() { _, _ = io.Copy(io.Discard, lr) }()
-	if resp.StatusCode == http.StatusOK {
+	switch resp.StatusCode {
+	case http.StatusOK:
 		if err := json.NewDecoder(lr).Decode(out); err != nil {
 			return resp.StatusCode, errors.New(label + ": tenancy answered 200 with an unreadable body")
+		}
+	case http.StatusNotFound:
+		if out != nil {
+			_ = json.NewDecoder(lr).Decode(out)
 		}
 	}
 	return resp.StatusCode, nil
@@ -173,18 +182,115 @@ type InvitationRegistrations struct {
 	Release func(ctx context.Context, token string) error
 }
 
-// NewHTTPInvitationRegistrations is a stub until the executor writes the tenancy calls.
+// NewHTTPInvitationRegistrations asks tenancy's internal register and release routes, with the gateway token and no identity.
+// Claim reads a 404 as an invalid token only when tenancy's JSON error says so: a tenancy without the route answers a bare 404.
+// Release accepts only a 204.
 func NewHTTPInvitationRegistrations(base *url.URL, client *http.Client, gatewayToken string) InvitationRegistrations {
-	errStub := errors.New("invitation registrations: not implemented")
+	c := noRedirect(client)
+	register := base.JoinPath(claimRoute).String()
+	release := base.JoinPath(releaseRoute).String()
 	return InvitationRegistrations{
-		Claim:   func(context.Context, string) (string, bool, error) { return "", false, errStub },
-		Release: func(context.Context, string) error { return errStub },
+		Claim: func(ctx context.Context, token string) (string, bool, error) {
+			var out struct {
+				Email string `json:"email"`
+				First *bool  `json:"first"`
+				Error string `json:"error"`
+			}
+			status, err := postTenancy(ctx, c, register, gatewayToken, "invitation claim", map[string]string{"token": token}, &out)
+			switch {
+			case err != nil:
+				return "", false, err
+			case status == http.StatusOK && out.Email != "" && out.First != nil:
+				return out.Email, *out.First, nil
+			case status == http.StatusOK:
+				return "", false, errors.New("invitation claim: tenancy answered without an address or verdict")
+			case status == http.StatusNotFound && out.Error == msgInviteNotValid:
+				return "", false, ErrInvitationNotValid
+			default:
+				return "", false, fmt.Errorf("invitation claim: tenancy answered %d", status)
+			}
+		},
+		Release: func(ctx context.Context, token string) error {
+			status, err := postTenancy(ctx, c, release, gatewayToken, "invitation release", map[string]string{"token": token}, nil)
+			if err != nil {
+				return err
+			}
+			if status != http.StatusNoContent {
+				return fmt.Errorf("invitation release: tenancy answered %d", status)
+			}
+			return nil
+		},
 	}
 }
 
-// InvitationRegisterHandler is a stub until the executor writes it.
+// InvitationRegisterHandler answers POST /auth/invitation/register: it signs the invited address up with GoTrue
+// under a password nobody keeps; the invitee chooses theirs from the confirmation mail.
+// The address comes from the claim, never from the body. A token backs one sign-up: a repeat answers 202 with no GoTrue call.
+// A first claim whose sign-up left no account is released after the answer.
 func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, registrations InvitationRegistrations) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotImplemented)
+	signup := authURL.JoinPath("signup").String()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !postOnly(w, r) {
+			return
+		}
+		if registrations.Claim == nil || registrations.Release == nil {
+			writeError(w, http.StatusServiceUnavailable, "registration is not configured")
+			return
+		}
+		start := time.Now()
+		var in struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)).Decode(&in); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if in.Token == "" {
+			writeError(w, http.StatusBadRequest, msgInviteeFieldsRequired)
+			return
+		}
+		if !stateShape.MatchString(in.Token) {
+			writeError(w, http.StatusNotFound, msgInviteNotValid)
+			return
+		}
+		email, first, err := registrations.Claim(r.Context(), in.Token)
+		switch {
+		case errors.Is(err, ErrInvitationNotValid):
+			writeError(w, http.StatusNotFound, msgInviteNotValid)
+			return
+		case err != nil:
+			log.WarnContext(r.Context(), "invitation: lookup failed", slog.String("error", err.Error()))
+			writeError(w, http.StatusBadGateway, msgInviteLookupDown)
+			return
+		}
+		if !first {
+			// A repeat takes the same budget and floor, and mails nobody.
+			key, source := clientKey(r)
+			if !perIP.Reserve(key) {
+				log.WarnContext(r.Context(), "registration: limit reached",
+					slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
+			}
+			if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
+				writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+			}
+			return
+		}
+		pw := make([]byte, 32)
+		if _, err := rand.Read(pw); err != nil {
+			log.ErrorContext(r.Context(), "invitation: password generation failed")
+			writeError(w, http.StatusInternalServerError, "registration is unavailable")
+			_ = registrations.Release(context.WithoutCancel(r.Context()), in.Token)
+			return
+		}
+		body := map[string]any{
+			"email":    email,
+			"password": base64.RawURLEncoding.EncodeToString(pw),
+			"data":     map[string]any{"invited": true},
+		}
+		if mayExist := signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log, nil); !mayExist {
+			if err := registrations.Release(context.WithoutCancel(r.Context()), in.Token); err != nil {
+				log.WarnContext(r.Context(), "invitation: release failed", slog.String("error", err.Error()))
+			}
+		}
 	})
 }

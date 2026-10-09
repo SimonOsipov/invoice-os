@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -421,6 +422,42 @@ func TestRLS_ARequestCancelledDuringEvaluateStillCompletesTheBatch(t *testing.T)
 	}
 	if _, status, _, _, _ := docBatchRowByEntity(t, super, entityID); status != "completed" {
 		t.Errorf("import_batches.status = %q, want completed", status)
+	}
+	if rows := rbRows(t, super, jobID); len(rows) != 0 {
+		t.Errorf("extraction_rule_breaks rows = %+v, want none", rows)
+	}
+}
+
+func TestRLS_AFinalizeFailureRecordsNoRuleBreaksAndCallsNoGate(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID, entityID := rbTenant(t, super, "RB-FINFAIL")
+	documentID, jobID := rbSeed(t, super, tenantID, rbBadTIN(docCleanValues("RB-FINFAIL-INV")))
+	g := &rbGate{violations: []invoice.Violation{rbBuyerTINViolation}, versionID: rbActiveVersionID(t, super)}
+
+	// Scoped to this entity, so no other test's Finalize meets it.
+	if _, err := super.Exec(ctx, `CREATE OR REPLACE FUNCTION rb_finfail() RETURNS trigger LANGUAGE plpgsql AS
+		$$ BEGIN RAISE EXCEPTION 'rb_finfail'; END $$`); err != nil {
+		t.Fatalf("create trigger function: %v", err)
+	}
+	if _, err := super.Exec(ctx, `CREATE TRIGGER rb_finfail BEFORE UPDATE ON import_batches FOR EACH ROW
+		WHEN (NEW.entity_id = '`+entityID+`' AND NEW.status = 'completed') EXECUTE FUNCTION rb_finfail()`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(ctx, `DROP TRIGGER IF EXISTS rb_finfail ON import_batches`)
+		_, _ = super.Exec(ctx, `DROP FUNCTION IF EXISTS rb_finfail()`)
+	})
+
+	_, err := newTestServiceWithGate(app, g).ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)
+	if err == nil || !strings.Contains(err.Error(), "rb_finfail") {
+		t.Fatalf("ImportDocument err = %v, want the Finalize failure", err)
+	}
+	if got := countInvoicesByNumber(t, super, entityID, "RB-FINFAIL-INV"); got != 1 {
+		t.Fatalf("invoices RB-FINFAIL-INV = %d, want 1: the failure must come after the invoice is filed", got)
+	}
+	if g.evaluateCalls != 0 {
+		t.Errorf("Evaluate calls = %d, want 0: a batch that failed to finalize is not rule-checked", g.evaluateCalls)
 	}
 	if rows := rbRows(t, super, jobID); len(rows) != 0 {
 		t.Errorf("extraction_rule_breaks rows = %+v, want none", rows)

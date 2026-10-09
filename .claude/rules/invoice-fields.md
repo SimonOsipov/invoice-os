@@ -32,8 +32,13 @@ paths:
 - Add the migration for the column. Follow `.claude/rules/db-migrations.md`.
 - Add the column to `invoiceColumns`, `scanInvoice` and the update set clauses in `internal/invoice/store.go`.
 - Add the field to the `Invoice`, `LineItem`, `CreateInput`, `LineItemInput` and `UpdateInput` structs in `internal/invoice/invoice.go`.
+- Add the column to `lineItemColumns`, `scanLineItem` and both `INSERT INTO line_items` statements in `internal/invoice/store.go`.
+- Add the column to the `INSERT INTO invoices` statement in `Store.Create` in `internal/invoice/store.go`.
+- Add the field to `headerFieldsPresent` and to the inline guard of `Store.Update` in `internal/invoice/store.go`.
 - Add the field to the request structs in `internal/invoice/handlers.go`.
-- Add the field to `MBSPayload` in `internal/invoice/payload.go`.
+- Copy the field from the request into `CreateInput`, `EditInput` and `LineItemInput` in `internal/invoice/handlers.go`.
+- Add the field to `MBSPayload` in `internal/invoice/payload.go`. Add a line field to `mbsLine` there.
+- Add the field to `contentFingerprint` in `internal/invoice/payload.go`. An unhashed field does not demote a validated invoice.
 - Add the field to `invoicesCSVHeader` in `internal/archive/invoices.go`.
 - Add the field to the per-field `CreateInput` assignment in `internal/importer/service.go`.
 - Add the field to `documentCreateInput` in `internal/importer/document.go`.

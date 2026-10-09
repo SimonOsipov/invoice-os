@@ -1379,7 +1379,7 @@ func TestRLS_ExtractionJobsDownDropsTableAndFunction(t *testing.T) {
 	// goose unwinds newest-first, so every dependent table's own Down has already run by
 	// the time this one does. Reproduce that order rather than dropping the children by
 	// hand — a later child migration only has to be listed here.
-	for _, child := range []string{"*_extraction_field_results.sql", "*_extraction_field_corrections.sql"} {
+	for _, child := range []string{"*_extraction_rule_breaks.sql", "*_extraction_field_results.sql", "*_extraction_field_corrections.sql"} {
 		for _, s := range shippedDownStatements(t, child) {
 			if _, err := tx.Exec(ctx, s); err != nil {
 				t.Fatalf("execute the shipped Down statement %q from %s: %v", s, child, err)
@@ -1800,9 +1800,9 @@ func TestRLS_ExtractionFieldResultsCrossTenantJobRefRejected(t *testing.T) {
 	}
 }
 
-// EFR-07: the reason vocabulary. All four codes AND NULL insert and read back, so a CHECK
+// EFR-07: the reason vocabulary. All five codes AND NULL insert and read back, so a CHECK
 // that silently coerced would not pass. "low_confidence" is the pointed negative: it is the
-// obvious fifth code an extractor would invent, and the review screen has no string for it.
+// obvious sixth code an extractor would invent, and the review screen has no string for it.
 func TestRLS_ExtractionFieldResultsReasonCodeCheck(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
@@ -1818,7 +1818,8 @@ func TestRLS_ExtractionFieldResultsReasonCodeCheck(t *testing.T) {
 	}()
 
 	for _, code := range []*string{
-		efrPtr("unreadable"), efrPtr("ambiguous"), efrPtr("inconsistent"), efrPtr("missing"), nil,
+		efrPtr("unreadable"), efrPtr("ambiguous"), efrPtr("inconsistent"), efrPtr("missing"),
+		efrPtr("rule_break"), nil,
 	} {
 		id := uuid.NewString()
 		probes = append(probes, id)
@@ -1834,7 +1835,7 @@ func TestRLS_ExtractionFieldResultsReasonCodeCheck(t *testing.T) {
 			return
 		}
 		if err != nil {
-			t.Errorf("INSERT with reason_code %v: want success (NULL and the four codes are legal), got: %v", code, err)
+			t.Errorf("INSERT with reason_code %v: want success (NULL and the five codes are legal), got: %v", code, err)
 			continue
 		}
 		switch {
@@ -1845,7 +1846,7 @@ func TestRLS_ExtractionFieldResultsReasonCodeCheck(t *testing.T) {
 		}
 	}
 
-	// The near miss, its own tx: a fifth code costs a migration by design.
+	// The near miss, its own tx: a sixth code costs a migration by design.
 	bogusID := uuid.NewString()
 	probes = append(probes, bogusID)
 	err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
@@ -1863,9 +1864,9 @@ func TestRLS_ExtractionFieldResultsReasonCodeCheck(t *testing.T) {
 	}
 }
 
-// EFR-08: the reason CHECK admits EXACTLY the four values, read off the catalog. EFR-07
-// probes one near miss by hand, so it cannot see a FIFTH code added alongside the four.
-func TestRLS_ExtractionFieldResultsReasonCodeIsExactlyFourValues(t *testing.T) {
+// EFR-08: the reason CHECK admits EXACTLY the five values, read off the catalog. EFR-07
+// probes one near miss by hand, so it cannot see a SIXTH code added alongside the five.
+func TestRLS_ExtractionFieldResultsReasonCodeIsExactlyFiveValues(t *testing.T) {
 	h := requireHarness(t)
 	ctx := context.Background()
 
@@ -1905,10 +1906,10 @@ func TestRLS_ExtractionFieldResultsReasonCodeIsExactlyFourValues(t *testing.T) {
 			"assertion below is keyed on it", got, efrReasonCodeCheck)
 	}
 
-	// The rendered text, exactly. Hand-sampling values cannot see a fifth code added
-	// alongside the four; this can.
+	// The rendered text, exactly. Hand-sampling values cannot see a sixth code added
+	// alongside the five; this can.
 	const want = `CHECK (((reason_code IS NULL) OR (reason_code = ANY ` +
-		`(ARRAY['unreadable'::text, 'ambiguous'::text, 'inconsistent'::text, 'missing'::text]))))`
+		`(ARRAY['unreadable'::text, 'ambiguous'::text, 'inconsistent'::text, 'missing'::text, 'rule_break'::text]))))`
 	if def != want {
 		t.Errorf("reason_code CHECK definition:\n got: %s\nwant: %s", def, want)
 	}

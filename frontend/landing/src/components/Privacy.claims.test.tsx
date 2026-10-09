@@ -485,7 +485,7 @@ describe('ENGI-10: the upload section discloses AI processing', () => {
 })
 
 describe('ENGI-10: no training, retention, region, deletion or law claim in the upload section', () => {
-  const CLAIM = /train|retain|retention|kept|stored|storage|delete|region|located|hosted|EU\b|EEA|United States|\bUS\b|NDPA|GDPR|complian/
+  const CLAIM = /train|retain|retention|kept|stored|storage|delete|region|located|hosted|EU\b|EEA|United States|\bUS\b|NDPA|GDPR|complian|keep|\bdays?\b|\bmonths?\b|\byears?\b|erase|remov|purge|discard/
   const sentencesOf = (text: string): string[] => text.split(/(?<=[.!?])\s+/)
 
   it('control: the claim detector fires on planted sentences', () => {
@@ -495,6 +495,8 @@ describe('ENGI-10: no training, retention, region, deletion or law claim in the 
       'kept for 30 days',
       'deleted after use',
       'complies with the NDPA',
+      'They keep it for a while',
+      'removed within a month',
     ])
       expect(CLAIM.test(planted), planted).toBe(true)
     for (const shipped of APPROVED_AI_SECTION.flatMap(sentencesOf)) expect(CLAIM.test(shipped), shipped).toBe(false)

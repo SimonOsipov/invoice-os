@@ -126,6 +126,13 @@ func TestIdP_InviteeAccountStateMatchesCaseAndSpace(t *testing.T) {
 	requireState(t, app, "  "+strings.ToUpper(u.email)+" ", "confirmed")
 	requireState(t, app, nil, "none")
 	requireState(t, app, "", "none")
+	requireState(t, app, "   ", "none")
+
+	// Equality, not a pattern or a prefix: a wildcard or a cut address names no account.
+	local, domain, _ := strings.Cut(u.email, "@")
+	for _, probe := range []string{"%", "_", local + "@%", "%@" + domain, u.email[:len(u.email)-1], u.email + "x"} {
+		requireState(t, app, probe, "none")
+	}
 }
 
 func TestIdP_InviteeAccountStateIgnoresSSORows(t *testing.T) {
@@ -155,6 +162,22 @@ func TestIdP_AppCannotReadAuthUsersDirectly(t *testing.T) {
 		t.Fatalf("invoice_app SELECT email FROM auth.users: err %v, SQLSTATE %q; want 42501", err, sqlState(err))
 	}
 	requireState(t, appConn(t), "never-"+uuid.NewString()+"@example.test", "none")
+
+	su := superConn(t)
+	for _, role := range []string{"invoice_tenant_reader", "invoice_migrator"} {
+		tx, err := su.Begin(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(context.Background(), `SET LOCAL ROLE `+role); err != nil {
+			t.Fatalf("SET LOCAL ROLE %s: %v", role, err)
+		}
+		err = tx.QueryRow(context.Background(), `SELECT email FROM auth.users LIMIT 1`).Scan(&email)
+		_ = tx.Rollback(context.Background())
+		if sqlState(err) != "42501" {
+			t.Errorf("%s SELECT email FROM auth.users: err %v, SQLSTATE %q; want 42501", role, err, sqlState(err))
+		}
+	}
 }
 
 type grantShape struct {
@@ -220,6 +243,20 @@ func TestIdP_AccountStateReadGrantIsExactAndRepeatable(t *testing.T) {
 	su := superConn(t)
 	ctx := context.Background()
 
+	// Start from nothing so each statement of the grant has to do its own work.
+	for _, stmt := range []string{
+		`REVOKE ALL ON auth.users FROM auth_hook_reader`,
+		`REVOKE ALL ON SCHEMA auth FROM auth_hook_reader`,
+		`DROP POLICY IF EXISTS invitee_account_state_read ON auth.users`,
+	} {
+		exec(t, su, stmt)
+	}
+	t.Cleanup(func() {
+		if _, err := db.GrantAccountStateRead(context.Background(), dsn); err != nil {
+			t.Errorf("re-run the grant: %v", err)
+		}
+	})
+
 	if granted, err := db.GrantAccountStateRead(ctx, dsn); err != nil || !granted {
 		t.Fatalf("first GrantAccountStateRead = (%v, %v); want (true, nil)", granted, err)
 	}
@@ -245,7 +282,7 @@ func TestIdP_AccountStateReadGrantIsExactAndRepeatable(t *testing.T) {
 		t.Errorf("auth_hook_reader on schema auth: USAGE %v CREATE %v; want true false", first.usage, first.create)
 	}
 
-	readAsHookReader := func(cols string) error {
+	asHookReader := func(sql string) error {
 		tx, err := su.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -254,14 +291,25 @@ func TestIdP_AccountStateReadGrantIsExactAndRepeatable(t *testing.T) {
 		if _, err := tx.Exec(ctx, `SET LOCAL ROLE auth_hook_reader`); err != nil {
 			t.Fatalf("SET LOCAL ROLE auth_hook_reader: %v", err)
 		}
-		var n int
-		return tx.QueryRow(ctx, `SELECT count(`+cols+`) FROM auth.users`).Scan(&n)
+		_, err = tx.Exec(ctx, sql)
+		return err
 	}
-	if err := readAsHookReader("email"); err != nil {
-		t.Errorf("control: auth_hook_reader reading email: %v", err)
+	for _, col := range []string{"email", "email_confirmed_at", "is_sso_user"} {
+		if err := asHookReader(`SELECT count(` + col + `) FROM auth.users`); err != nil {
+			t.Errorf("control: auth_hook_reader reading %s: %v", col, err)
+		}
 	}
-	if err := readAsHookReader("encrypted_password"); sqlState(err) != "42501" {
-		t.Errorf("auth_hook_reader reading encrypted_password: err %v, SQLSTATE %q; want 42501", err, sqlState(err))
+	for _, refused := range []string{
+		`SELECT count(encrypted_password) FROM auth.users`,
+		`SELECT count(id) FROM auth.users`,
+		`SELECT count(raw_user_meta_data) FROM auth.users`,
+		`SELECT * FROM auth.users`,
+		`UPDATE auth.users SET email = email`,
+		`DELETE FROM auth.users`,
+	} {
+		if err := asHookReader(refused); sqlState(err) != "42501" {
+			t.Errorf("auth_hook_reader %q: err %v, SQLSTATE %q; want 42501", refused, err, sqlState(err))
+		}
 	}
 }
 

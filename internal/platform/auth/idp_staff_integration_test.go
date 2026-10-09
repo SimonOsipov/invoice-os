@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -16,6 +17,10 @@ import (
 const (
 	grantStaffSQL  = `INSERT INTO public.staff_members (user_id) SELECT id FROM auth.users WHERE email = lower('<address>');`
 	removeStaffSQL = `DELETE FROM public.staff_members WHERE user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));`
+
+	// The D18 rules-role statements.
+	grantRulesRoleSQL  = `UPDATE public.staff_members SET rules_role = true WHERE user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));`
+	removeRulesRoleSQL = `UPDATE public.staff_members SET rules_role = false WHERE user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));`
 )
 
 // runbookFor runs a D13 statement verbatim for an address as the superuser.
@@ -192,4 +197,143 @@ func TestIdP_StaffClaimSurvivesRenewalPastTheTTL(t *testing.T) {
 	a1, _ := h.renewOK(t, "R0 after expiry", r0)
 	requireVerifies(t, base, "renewed staff token", a1)
 	requireStaff(t, "refresh past the TTL", a1)
+}
+
+// appMetadataOf returns the token's app_metadata object.
+func appMetadataOf(t *testing.T, tok string) map[string]any {
+	t.Helper()
+	am, _ := jwtPart(t, tok, 1)["app_metadata"].(map[string]any)
+	if am == nil {
+		t.Fatal("token has no app_metadata object")
+	}
+	return am
+}
+
+// requireIdentity verifies tok against the real provider and asserts (Staff, RulesRole).
+func requireIdentity(t *testing.T, base, label, tok string, wantStaff, wantRules bool) auth.Identity {
+	t.Helper()
+	id, err := idpVerifier(t, base).Verify(context.Background(), tok)
+	if err != nil {
+		t.Fatalf("Verify %s: %v", label, err)
+	}
+	if staff, rules := flagsOf(t, id); staff != wantStaff || rules != wantRules {
+		t.Errorf("%s: (Staff, RulesRole) = (%v, %v), want (%v, %v)", label, staff, rules, wantStaff, wantRules)
+	}
+	return id
+}
+
+func TestIdP_RulesRoleGrantReachesTheNextToken(t *testing.T) {
+	base := idpURL(t)
+	conn := superConn(t)
+	u, other := workspaceUser(t, base), workspaceUser(t, base)
+	h := newRenewal(t, base)
+	// The other account is staff without the rules role: a grant that touched every row would show.
+	grantStaff(t, conn, u)
+	grantStaff(t, conn, other)
+	a0, r0 := h.session(t, u)
+	requireIdentity(t, base, "before the rules grant", a0, true, false)
+	_, otherR0 := h.session(t, other)
+
+	runbook(t, conn, grantRulesRoleSQL, u)
+
+	a1, _ := h.renewOK(t, "after the rules grant", r0)
+	requireIdentity(t, base, "refresh after the rules grant", a1, true, true)
+	a2, _ := h.session(t, u)
+	requireIdentity(t, base, "sign-in after the rules grant", a2, true, true)
+
+	o1, _ := h.renewOK(t, "other account after the rules grant", otherR0)
+	requireIdentity(t, base, "other account refresh", o1, true, false)
+	o2, _ := h.session(t, other)
+	requireIdentity(t, base, "other account sign-in", o2, true, false)
+}
+
+func TestIdP_RulesRoleRemovalReachesTheNextToken(t *testing.T) {
+	base := idpURL(t)
+	conn := superConn(t)
+	u, keep := workspaceUser(t, base), workspaceUser(t, base)
+	h := newRenewal(t, base)
+	for _, x := range []idpUser{u, keep} {
+		grantStaff(t, conn, x)
+		runbook(t, conn, grantRulesRoleSQL, x)
+	}
+	a0, r0 := h.session(t, u)
+	requireIdentity(t, base, "before the rules removal", a0, true, true)
+	_, keepR0 := h.session(t, keep)
+
+	runbook(t, conn, removeRulesRoleSQL, u)
+
+	a1, _ := h.renewOK(t, "after the rules removal", r0)
+	requireIdentity(t, base, "refresh after the rules removal", a1, true, false)
+	a2, _ := h.session(t, u)
+	requireIdentity(t, base, "sign-in after the rules removal", a2, true, false)
+
+	k1, _ := h.renewOK(t, "other account after the rules removal", keepR0)
+	requireIdentity(t, base, "other account refresh", k1, true, true)
+}
+
+func TestIdP_CustomerAdminCannotPlantStaffOrRulesRole(t *testing.T) {
+	base := idpURL(t)
+	conn := superConn(t)
+	u := workspaceUser(t, base) // a workspace admin: the customer, not staff
+	h := newRenewal(t, base)
+
+	exec(t, conn, `UPDATE auth.users SET raw_app_meta_data = raw_app_meta_data || '{"staff": true, "rules_role": true}'::jsonb WHERE id = $1`, u.id)
+	a1, _ := h.session(t, u)
+	am := appMetadataOf(t, a1)
+	for _, k := range []string{"staff", "rules_role"} {
+		if v, ok := am[k]; ok {
+			t.Errorf("planted exact key %q reached the token as %v, want stripped", k, v)
+		}
+	}
+	if am["tenant_id"] == nil {
+		t.Error("control: workspace token lost tenant_id")
+	}
+	id := requireIdentity(t, base, "planted exact keys", a1, false, false)
+	if id.TenantID == "" {
+		t.Error("control: verified identity has no tenant")
+	}
+
+	// The hook strips exact keys only; the verifier must ignore these.
+	exec(t, conn, `UPDATE auth.users SET raw_app_meta_data = (raw_app_meta_data - 'staff' - 'rules_role') || '{"Staff": true, "RULES_ROLE": true}'::jsonb WHERE id = $1`, u.id)
+	a2, _ := h.session(t, u)
+	am = appMetadataOf(t, a2)
+	if am["Staff"] != true || am["RULES_ROLE"] != true {
+		t.Fatalf("control: case-variant keys did not survive the hook: Staff=%v RULES_ROLE=%v", am["Staff"], am["RULES_ROLE"])
+	}
+	for _, k := range []string{"staff", "rules_role"} {
+		if v, ok := am[k]; ok {
+			t.Errorf("exact key %q appeared beside the variants as %v", k, v)
+		}
+	}
+	id = requireIdentity(t, base, "planted case-variant keys", a2, false, false)
+	if id.TenantID == "" {
+		t.Error("control: verified identity has no tenant")
+	}
+}
+
+func TestIdP_RulesRoleGrantOnANonStaffAccountChangesNothing(t *testing.T) {
+	base := idpURL(t)
+	conn := superConn(t)
+	u := workspaceUser(t, base)
+
+	if tag := runbookFor(t, conn, grantRulesRoleSQL, u.email); tag.String() != "UPDATE 0" {
+		t.Fatalf("rules-role grant on a non-staff account: %q, want UPDATE 0", tag)
+	}
+	var rows int
+	if err := conn.QueryRow(context.Background(), `SELECT count(*) FROM public.staff_members WHERE user_id = $1`, u.id).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("staff_members rows for the account = %d (err %v), want 0", rows, err)
+	}
+
+	a, _ := newRenewal(t, base).session(t, u)
+	if v, ok := appMetadataOf(t, a)["rules_role"]; ok {
+		t.Errorf("non-staff token carries rules_role = %v, want absent", v)
+	}
+	requireIdentity(t, base, "non-staff account after the grant", a, false, false)
+
+	// Control: the same statement on a staff account answers UPDATE 1.
+	s := workspaceUser(t, base)
+	grantStaff(t, conn, s)
+	if tag := runbookFor(t, conn, grantRulesRoleSQL, s.email); tag.String() != "UPDATE 1" {
+		t.Errorf("rules-role grant on a staff account: %q, want UPDATE 1", tag)
+	}
 }

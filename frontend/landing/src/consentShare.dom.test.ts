@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.ascomply.com/" }
 import { JSDOM, CookieJar } from 'jsdom'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   CONSENT_STORAGE_KEY,
@@ -334,5 +334,67 @@ describe('shared consent cookie', () => {
     applyChoice('accept', { hostname: 'localhost', store })
     expect(map.has(KEY)).toBe(true)
     expect(readConsentCookie(document)).toBeNull()
+  })
+})
+
+describe('open-tab sync', () => {
+  const SYNC_ID = 'G-E409H76XYY'
+  const SYNC_TAG = 'script[src^="https://www.googletagmanager.com/"]'
+  type TestWindow = Window & { dataLayer?: IArguments[]; gtag?: (...args: unknown[]) => void }
+  const setCookie = (analytics: boolean) =>
+    (document.cookie = `${KEY}=${enc(rec(analytics, '2026-03-01T00:00:00.000Z'))}; Domain=ascomply.com; Path=/; Secure`)
+
+  beforeEach(() => {
+    document.head.innerHTML = ''
+    const w = window as TestWindow
+    delete w.dataLayer
+    delete w.gtag
+    vi.resetModules()
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', SYNC_ID)
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+    delete (document as { cookie?: string }).cookie
+  })
+
+  it('SY-01 a Reject from another tab stops this tab', async () => {
+    const { syncConsent } = await import('./consentActions')
+    const { ensureTag, trackDemoOpen } = await import('./analytics')
+    setCookie(true)
+    expect(ensureTag(WWW, readConsentCookie(document))).toBe(true)
+    document.cookie = '_ga=x'
+    const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')!
+    const writes: string[] = []
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => desc.get!.call(document),
+      set: (v: string) => {
+        writes.push(v)
+        desc.set!.call(document, v)
+      },
+    })
+
+    setCookie(false)
+    expect(syncConsent()?.analytics).toBe(false)
+
+    const layer = () => ((window as TestWindow).dataLayer ?? []).map((a) => Array.from(a))
+    trackDemoOpen('hero')
+    expect(layer().filter((e) => e[0] === 'event')).toEqual([])
+    expect(writes.some((w) => w.startsWith('_ga=; Max-Age=0') && w.endsWith('domain=.ascomply.com'))).toBe(true)
+  })
+
+  it("SY-02 an Accept from another tab loads this tab's tag", async () => {
+    const { syncConsent } = await import('./consentActions')
+    setCookie(false)
+    expect(syncConsent()?.analytics).toBe(false)
+    expect(document.querySelectorAll(SYNC_TAG)).toHaveLength(0)
+
+    setCookie(true)
+    syncConsent()
+    expect(document.querySelectorAll(SYNC_TAG)).toHaveLength(1)
+    syncConsent()
+    expect(document.querySelectorAll(SYNC_TAG)).toHaveLength(1)
   })
 })

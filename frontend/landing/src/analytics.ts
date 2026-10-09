@@ -28,7 +28,7 @@ export function tagSrc(id: string): string {
 }
 
 /** Idempotent. Returns whether the tag is loaded AFTER the call, not whether this call injected it. */
-export function ensureTag(hostname: string, record: ConsentRecord | null, hosts?: readonly string[], cookieDomain?: string): boolean {
+export function ensureTag(hostname: string, record: ConsentRecord | null, hosts?: readonly string[]): boolean {
   if (loaded) return true
 
   const id = measurementId()
@@ -51,14 +51,14 @@ export function ensureTag(hostname: string, record: ConsentRecord | null, hosts?
   // `config` sends page_view itself and GA4 derives the traffic source from the
   // referrer and utm_*; a manual page_view would double-count.
   w.gtag('js', new Date())
-  cookieDomain ? w.gtag('config', id, { cookie_domain: cookieDomain }) : w.gtag('config', id)
+  w.gtag('config', id)
 
   loaded = true
   return true
 }
 
-export function bootAnalytics(hosts?: readonly string[], cookieDomain?: string): boolean {
-  return ensureTag(window.location.hostname, readConsent(), hosts, cookieDomain)
+export function bootAnalytics(hosts?: readonly string[]): boolean {
+  return ensureTag(window.location.hostname, readConsent(), hosts)
 }
 
 export type DemoCtaSource = 'nav' | 'hero' | 'platform' | 'coverage' | 'audience' | 'integrations' | 'api' | 'faq' | 'closing' | 'footer'

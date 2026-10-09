@@ -185,3 +185,38 @@ describe('a stored record this build does not understand', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
+
+describe('a choice made in another tab', () => {
+  const cookie = (analytics: boolean) =>
+    (document.cookie = `${CONSENT_STORAGE_KEY}=${encodeURIComponent(JSON.stringify({ analytics, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }))}; Domain=ascomply.com; Path=/; Secure`)
+  const becomeVisible = async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+  }
+
+  afterEach(() => {
+    document.cookie = `${CONSENT_STORAGE_KEY}=; Max-Age=0; Path=/; Domain=ascomply.com`
+  })
+
+  it('SY-03 the landing follows another tab on visibility and on reopen', async () => {
+    cookie(true)
+    await mountApp()
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(0)
+
+    cookie(false)
+    await becomeVisible()
+    await clickByText('Cookie choices')
+    expect(document.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are off.')
+  })
+
+  it('SY-03 an open notice closes when another tab has answered', async () => {
+    await mountApp()
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(1)
+
+    cookie(true)
+    await becomeVisible()
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(0)
+  })
+})

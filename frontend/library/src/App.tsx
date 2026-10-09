@@ -6,7 +6,7 @@ import { GroupPage } from './components/GroupPage'
 import { JourneyStepper } from './components/JourneyStepper'
 import { Sidebar } from './components/Sidebar'
 import { TourOverlay } from './components/TourOverlay'
-import { chooseConsent, CookieNotice, readConsent, trackLibraryPageView, trackTourStart } from './analytics'
+import { chooseConsent, CookieNotice, readConsent, syncLibraryConsent, trackLibraryPageView, trackTourStart } from './analytics'
 import { demoHref, featurePlatformHref, groupPlatformHref, privacyHref } from './links'
 import { libraryPath, parseLibraryPath, type Route } from './route'
 import { TOUR_START, tourBack, tourButtonLabel, tourNext, tourStage, type TourState } from './tour'
@@ -35,6 +35,14 @@ export function App() {
   }, [])
   const phone = usePhone()
   const tourOn = tour !== null && !phone
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') setConsent(syncLibraryConsent())
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
 
   useEffect(() => {
     const onPop = () => {
@@ -118,7 +126,10 @@ export function App() {
         onFeature={goFeature}
         tourLabel={tourButtonLabel(tourOn ? tour : null)}
         onTour={phone ? null : toggleTour}
-        onCookieChoices={() => setReopened(true)}
+        onCookieChoices={() => {
+          setConsent(syncLibraryConsent())
+          setReopened(true)
+        }}
       />
       <main id="lib-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}>
         <JourneyStepper route={route} onGroup={goGroup} tourStage={tourOn ? tourStage(tour) : undefined} />

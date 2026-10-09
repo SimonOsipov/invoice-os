@@ -22,7 +22,7 @@ import { CookieNotice } from './components/CookieNotice'
 import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
 import { libraryBase } from './auth'
 import { readConsent, type ConsentRecord } from './consent'
-import { applyChoice } from './consentActions'
+import { applyChoice, syncConsent } from './consentActions'
 import { INVITE_PARAM, readInviteOutcome } from './invite'
 import { isPrivacyPath } from './route'
 import { readResetOutcome, RESET_PARAM } from './passwordReset'
@@ -107,6 +107,14 @@ export default function App() {
   const privacy = isPrivacyPath(window.location.pathname)
 
   useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') setConsent(syncConsent())
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
+
+  useEffect(() => {
     const onShow = (e: PageTransitionEvent) => {
       if (e.persisted) setStateDropped(true)
     }
@@ -188,7 +196,10 @@ export default function App() {
           <ClosingCta onBookDemo={book('closing')} />
         </>
       )}
-      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />
+      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => {
+        setConsent(syncConsent())
+        setReopened(true)
+      }} />
       {/* Pinned by "the notice mounts after Footer and before the modals": last in flow puts the
           spacer's scroll room at the document end and the tab order after the footer. */}
       {(consent === null || reopened) && (

@@ -110,11 +110,18 @@ describe('boot and Accept on the library host', () => {
     expect(entries()[1]).toEqual(['config', ID])
   })
 
-  it('LS-05 a cookie domain lands in the config call', async () => {
+  it('LS-05 the library config call carries no cookie domain', async () => {
     const { applyChoice } = await import('./consentActions')
     const { LIBRARY_HOSTNAMES } = await import('./hubspot')
-    applyChoice('accept', { hosts: LIBRARY_HOSTNAMES, cookieDomain: LIB })
-    expect(entries()[1]).toEqual(['config', ID, { cookie_domain: LIB }])
+    applyChoice('accept', { hosts: LIBRARY_HOSTNAMES })
+    expect(document.querySelectorAll(TAG).length).toBe(1)
+    expect(entries().filter((e) => e[0] === 'config')).toEqual([['config', ID]])
+  })
+
+  it('GA-01 the landing config call is the same two-argument call', async () => {
+    const { ensureTag } = await import('./analytics')
+    expect(ensureTag('www.ascomply.com', GRANTED)).toBe(true)
+    expect(entries().filter((e) => e[0] === 'config')).toEqual([['config', ID]])
   })
 
   it('LS-05 Accept with no hosts writes the record and loads nothing', async () => {
@@ -126,42 +133,71 @@ describe('boot and Accept on the library host', () => {
 })
 
 describe('Reject on the library host', () => {
-  function spyOnCookieWrites(): string[] {
+  function spyOnCookieWrites(jar = '_ga=x; _ga_ABC=y'): string[] {
     const writes: string[] = []
     Object.defineProperty(document, 'cookie', {
       configurable: true,
-      get: () => '_ga=x',
+      get: () => jar,
       set: (v: string) => void writes.push(v),
     })
     return writes
   }
 
-  it('LS-06 Reject with a cookie domain expires _ga on that domain only', async () => {
+  function gaWrites(all: string[], name: string) {
+    return all.filter((w) => w.startsWith(`${name}=; Max-Age=0`))
+  }
+
+  function expectReach(all: string[], domains: string[]) {
+    for (const name of ['_ga', '_ga_ABC']) {
+      const writes = gaWrites(all, name)
+      expect(writes.filter((w) => !w.includes('domain=')), name).toHaveLength(1)
+      expect(writes.filter((w) => w.includes('domain=')).map((w) => w.split('domain=')[1]).sort(), name).toEqual([...domains].sort())
+    }
+  }
+
+  it('LS-06 Reject on the library host reaches the parent domain', async () => {
     const { applyChoice } = await import('./consentActions')
     const { LIBRARY_HOSTNAMES } = await import('./hubspot')
     const all = spyOnCookieWrites()
 
-    applyChoice('reject', { hosts: LIBRARY_HOSTNAMES, cookieDomain: LIB })
+    applyChoice('reject', { hosts: LIBRARY_HOSTNAMES })
 
     const consent = all.filter((w) => w.startsWith(`${CONSENT_STORAGE_KEY}=`))
     expect(consent).toHaveLength(1)
     expect(JSON.parse(decodeURIComponent(consent[0].split(';')[0].slice(CONSENT_STORAGE_KEY.length + 1))).analytics).toBe(false)
-    const writes = all.filter((w) => w.startsWith('_ga'))
     expect(document.querySelectorAll(ANY_TAG).length).toBe(0)
-    expect(writes.length).toBe(2)
-    expect(writes.filter((w) => !w.includes('domain='))).toHaveLength(1)
-    expect(writes.filter((w) => w.endsWith(`; domain=${LIB}`))).toHaveLength(1)
-    for (const w of writes) {
-      expect(w).not.toContain('domain=ascomply.com')
-      expect(w).not.toContain('domain=.ascomply.com')
-    }
+    expectReach(all, [LIB, `.${LIB}`, 'ascomply.com', '.ascomply.com'])
   })
 
-  it('LS-06 control: with no cookie domain the sweep still reaches .ascomply.com', async () => {
+  it('LS-06b Reject on www reaches the parent domain', async () => {
     const { applyChoice } = await import('./consentActions')
-    const writes = spyOnCookieWrites()
-    applyChoice('reject')
-    expect(writes.some((w) => w.includes('domain=.ascomply.com'))).toBe(true)
+    const all = spyOnCookieWrites()
+    applyChoice('reject', { hostname: 'www.ascomply.com' })
+    expect(document.querySelectorAll(ANY_TAG).length).toBe(0)
+    expectReach(all, ['www.ascomply.com', '.www.ascomply.com', 'ascomply.com', '.ascomply.com'])
+  })
+
+  it('GA-02 Reject never expires the consent cookie', async () => {
+    const { applyChoice } = await import('./consentActions')
+    const { LIBRARY_HOSTNAMES } = await import('./hubspot')
+    const grant = encodeURIComponent(JSON.stringify(GRANTED))
+    document.cookie = `${CONSENT_STORAGE_KEY}=${grant}; Domain=ascomply.com; Path=/; Secure`
+    document.cookie = '_ga=x'
+    const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')!
+    const writes: string[] = []
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => desc.get!.call(document),
+      set: (v: string) => {
+        writes.push(v)
+        desc.set!.call(document, v)
+      },
+    })
+
+    applyChoice('reject', { hosts: LIBRARY_HOSTNAMES })
+
+    expect(writes.filter((w) => w.startsWith(`${CONSENT_STORAGE_KEY}=;`))).toEqual([])
+    expect(readConsentCookie(document)!.analytics).toBe(false)
   })
 })
 

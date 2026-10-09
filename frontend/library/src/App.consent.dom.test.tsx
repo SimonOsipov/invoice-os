@@ -80,6 +80,19 @@ const record = () => {
   expect(localStorage.getItem(KEY)).toBeNull()
   return readConsentCookie(document)!
 }
+function spyWrites(): string[] {
+  const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')!
+  const writes: string[] = []
+  Object.defineProperty(document, 'cookie', {
+    configurable: true,
+    get: () => desc.get!.call(document),
+    set: (v: string) => {
+      writes.push(v)
+      desc.set!.call(document, v)
+    },
+  })
+  return writes
+}
 const entries = () => ((window as TestWindow).dataLayer ?? []).map((a) => Array.from(a))
 
 describe('library consent', () => {
@@ -151,7 +164,7 @@ describe('library consent', () => {
     expect(record().analytics).toBe(false)
   })
 
-  it('CO-06 the library keeps its _ga on its own host', async () => {
+  it('CO-06 the library shares _ga with the landing', async () => {
     const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')!
     document.cookie = '_ga=x'
     const writes: string[] = []
@@ -165,12 +178,12 @@ describe('library consent', () => {
     })
     await mount()
     click(byText('Accept'))
-    expect(entries().find((e) => e[0] === 'config')).toEqual(['config', ID, { cookie_domain: 'library.ascomply.com' }])
+    expect(entries().find((e) => e[0] === 'config')).toEqual(['config', ID])
 
     click(byText('Cookie choices'))
     click(byText('Reject'))
-    expect(writes.some((w) => w.includes('domain=library.ascomply.com'))).toBe(true)
-    expect(writes.filter((w) => w.startsWith('_ga') && /domain=\.?ascomply\.com/.test(w))).toEqual([])
+    expect(writes.some((w) => w.startsWith('_ga') && w.endsWith('domain=.ascomply.com'))).toBe(true)
+    expect(writes.some((w) => w.startsWith('_ga') && w.endsWith('domain=library.ascomply.com'))).toBe(true)
   })
 
   it('CO-07 a choice stored by the landing shows no notice on the Library', async () => {
@@ -182,6 +195,54 @@ describe('library consent', () => {
     expect(container.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are on.')
     click(byText('Reject'))
     expect(record().analytics).toBe(false)
+  })
+
+  it('BL-01 a Library boot with a stored Reject expires the leftover _ga', async () => {
+    document.cookie = `${KEY}=${encodeURIComponent(DENY)}; Domain=ascomply.com; Path=/; Secure`
+    document.cookie = '_ga=x'
+    const writes = spyWrites()
+    const m = await mount()
+    expect(m.analytics.bootLibraryAnalytics()).toBe(false)
+    expect(document.querySelectorAll('script[src^="https://www.googletagmanager.com/"]')).toHaveLength(0)
+    const gaExpiries = writes.filter((w) => w.startsWith('_ga=; Max-Age=0'))
+    expect(gaExpiries.some((w) => !w.includes('domain='))).toBe(true)
+    for (const d of ['library.ascomply.com', '.library.ascomply.com', '.ascomply.com']) {
+      expect(gaExpiries.some((w) => w.endsWith(`domain=${d}`)), d).toBe(true)
+    }
+    expect(readConsentCookie(document)!.analytics).toBe(false)
+  })
+
+  it('BL-02 a Library boot with a stored Accept or no choice expires nothing', async () => {
+    document.cookie = '_ga=x'
+    const writes = spyWrites()
+    const expiries = () => writes.filter((w) => w.startsWith('_ga=') && w.includes('Max-Age=0'))
+
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    const granted = await mount()
+    expect(granted.analytics.bootLibraryAnalytics()).toBe(true)
+    expect(document.querySelectorAll(TAG)).toHaveLength(1)
+    expect(expiries()).toEqual([])
+    unmount()
+    container.remove()
+
+    document.head.innerHTML = ''
+    document.cookie = `${KEY}=; Max-Age=0; Path=/; Domain=ascomply.com`
+    writes.length = 0
+    const none = await mount()
+    expect(none.analytics.bootLibraryAnalytics()).toBe(false)
+    expect(document.querySelectorAll('script[src^="https://www.googletagmanager.com/"]')).toHaveLength(0)
+    expect(expiries()).toEqual([])
+  })
+
+  it('CO-08 the Library follows another tab', async () => {
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    await mount()
+    document.cookie = `${KEY}=${encodeURIComponent(DENY)}; Domain=ascomply.com; Path=/; Secure`
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    click(byText('Cookie choices'))
+    expect(container.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are off.')
+    click(container.querySelector<HTMLElement>('#nav-rules')!)
+    expect(entries().filter((e) => e[1] === 'page_view')).toHaveLength(0)
   })
 
   it('CSS-03 the app renders the slice', async () => {

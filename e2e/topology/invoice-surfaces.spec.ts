@@ -6136,3 +6136,58 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
 })
+
+// Line 2 of 3 carries the negative price, so `Line 2` must land on line-row 2, not the first or last row.
+test('ENGI-16 detail: Line 2 opens the editor on line 2', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ENGI-16 line ${Date.now()}`, tin: freshTin() })
+  const inv = await createInvoice(token, {
+    entity_id: entity.id,
+    ...cleanInvoiceFields(`INV-ENGI16-${Date.now()}`),
+    subtotal: '100',
+    vat: '7.50',
+    total: '107.50',
+    line_items: [
+      { description: 'Widget A', quantity: '1', unit_price: '105.00', line_total: '105.00' },
+      { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '-5.00' },
+    ],
+  })
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${inv.id}` })
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await page.getByTestId('revalidate').click()
+
+  // 'line-cost-non-negative' is the rule key in internal/validation (migrations/20260715120000_line_rules.sql).
+  const violations = page.getByTestId('violations-table')
+  await expect(violations).toContainText('line-cost-non-negative')
+  const open = violations.getByTestId('violation-open-line')
+  await expect(open).toHaveText('Line 2')
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 900 })
+      const cell = open.locator('xpath=ancestor::td[1]')
+      await settleAnimations(cell, open)
+      await expect
+        .poll(async () => enclosesRect((await cell.boundingBox())!, (await open.boundingBox())!, 1), {
+          message: `violation-open-line sits inside its table cell at ${width}px`,
+        })
+        .toBe(true)
+      await assertPageDoesNotScrollSideways(page, `detail at ${width}px`)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  await open.click()
+  await expect(page.getByTestId('edit-invoice')).toBeVisible()
+  const price = page.getByTestId('line-row').nth(1).locator('[data-line-field="unit_price"]')
+  await expect(price, 'line-row 2 unit price takes focus').toBeFocused()
+  await expect(price, 'line-row 2 unit price is in the viewport').toBeInViewport()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})

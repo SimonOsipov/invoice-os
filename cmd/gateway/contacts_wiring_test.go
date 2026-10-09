@@ -300,3 +300,132 @@ func TestRegistrationHandlers_DemoRequestWorksWithoutAuthConfig(t *testing.T) {
 		t.Errorf("sink saw %+v, want one call", got)
 	}
 }
+
+// demoPost posts a valid demo body straight to the handler from remoteAddr.
+func demoPost(h http.Handler, remoteAddr string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/contacts/demo-request", strings.NewReader(`{"email":"ada@corp.example","name":"Ada","company":"Analytical Engines"}`))
+	req.RemoteAddr = remoteAddr
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestRegistrationHandlers_DemoRequestIsLimitedPerIP(t *testing.T) {
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	site, _ := url.Parse("https://site.example")
+	sink := &demoRecSink{}
+	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, slog.New(slog.DiscardHandler), sink, noPendingInvite)
+	for i := range gateway.DemoRequestPerIP {
+		if rec := demoPost(reg.DemoRequest, "203.0.113.7:4000"); rec.Code != http.StatusAccepted {
+			t.Fatalf("request %d = %d, want 202", i+1, rec.Code)
+		}
+	}
+	if rec := demoPost(reg.DemoRequest, "203.0.113.7:4000"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("sixth = %d, want 429", rec.Code)
+	}
+	if n := len(sink.calls()); n != gateway.DemoRequestPerIP {
+		t.Errorf("sink saw %d, want %d", n, gateway.DemoRequestPerIP)
+	}
+	if rec := demoPost(reg.DemoRequest, "198.51.100.9:4000"); rec.Code != http.StatusAccepted {
+		t.Errorf("other IP = %d, want 202", rec.Code)
+	}
+}
+
+func TestRegistrationHandlers_DemoRequestIsLimitedWithoutAuthConfig(t *testing.T) {
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	sink := &demoRecSink{}
+	reg := registrationHandlers(nil, nil, 0, slog.New(slog.DiscardHandler), sink, noPendingInvite)
+	for range gateway.DemoRequestPerIP {
+		demoPost(reg.DemoRequest, "203.0.113.7:4000")
+	}
+	if rec := demoPost(reg.DemoRequest, "203.0.113.7:4000"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("sixth = %d, want 429", rec.Code)
+	}
+	if n := len(sink.calls()); n != gateway.DemoRequestPerIP {
+		t.Errorf("sink saw %d, want %d", n, gateway.DemoRequestPerIP)
+	}
+}
+
+// warnRecorder keeps the enforced attribute of each limit WARN.
+type warnRecorder struct {
+	mu       *sync.Mutex
+	enforced *[]string
+}
+
+func (h warnRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (h warnRecorder) WithAttrs([]slog.Attr) slog.Handler       { return h }
+func (h warnRecorder) WithGroup(string) slog.Handler            { return h }
+func (h warnRecorder) Handle(_ context.Context, r slog.Record) error {
+	if r.Message != "demo-request: limit reached" {
+		return nil
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "enforced" {
+			h.mu.Lock()
+			*h.enforced = append(*h.enforced, a.Value.String())
+			h.mu.Unlock()
+		}
+		return true
+	})
+	return nil
+}
+
+func TestRegistrationHandlers_DemoRequestPostureTable(t *testing.T) {
+	for _, c := range []struct {
+		env     string
+		refused bool
+	}{
+		{"pr-7", false},
+		{"production", true},
+		{"development", true},
+		{"", true},
+		{"pr-", true},
+		{"PR-7", true},
+	} {
+		t.Run("env="+c.env, func(t *testing.T) {
+			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
+			var mu sync.Mutex
+			var enforced []string
+			sink := &demoRecSink{}
+			reg := registrationHandlers(nil, nil, 0, slog.New(warnRecorder{&mu, &enforced}), sink, noPendingInvite)
+			for range gateway.DemoRequestPerIP {
+				demoPost(reg.DemoRequest, "203.0.113.7:4000")
+			}
+			rec := demoPost(reg.DemoRequest, "203.0.113.7:4000")
+			wantCode, wantSink, wantEnforced := http.StatusAccepted, gateway.DemoRequestPerIP+1, "false"
+			if c.refused {
+				wantCode, wantSink, wantEnforced = http.StatusTooManyRequests, gateway.DemoRequestPerIP, "true"
+			}
+			if rec.Code != wantCode {
+				t.Errorf("sixth = %d, want %d", rec.Code, wantCode)
+			}
+			if n := len(sink.calls()); n != wantSink {
+				t.Errorf("sink saw %d, want %d", n, wantSink)
+			}
+			if !reflect.DeepEqual(enforced, []string{wantEnforced}) {
+				t.Errorf("limit WARN enforced = %v, want [%s]", enforced, wantEnforced)
+			}
+		})
+	}
+}
+
+func TestRegistrationHandlers_DemoRequestHasItsOwnBucket(t *testing.T) {
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, slog.New(slog.DiscardHandler), &demoRecSink{}, noPendingInvite)
+	for range gateway.RegisterPerIP {
+		reg.RegisterPerIP.Reserve("203.0.113.7")
+	}
+	if reg.RegisterPerIP.Reserve("203.0.113.7") {
+		t.Fatal("register budget not spent")
+	}
+	if rec := demoPost(reg.DemoRequest, "203.0.113.7:4000"); rec.Code != http.StatusAccepted {
+		t.Errorf("demo after register spent = %d, want 202", rec.Code)
+	}
+	for range gateway.DemoRequestPerIP + 1 {
+		demoPost(reg.DemoRequest, "198.51.100.9:4000")
+	}
+	if !reg.RegisterPerIP.Reserve("198.51.100.9") {
+		t.Error("spending the demo bucket limited register")
+	}
+}

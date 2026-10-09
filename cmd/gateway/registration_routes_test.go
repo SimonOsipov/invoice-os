@@ -877,3 +877,24 @@ func TestDemoRequest_OptionsWithoutOriginIsNotADemoRequest(t *testing.T) {
 		t.Errorf("sink saw %+v after one POST, want one call", got)
 	}
 }
+
+func TestDemoRequest_LimitAnswerIsReadableFromTheLandingOrigin(t *testing.T) {
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	mux, _ := demoMux(t)
+	const good = `{"email":"ada@corp.example","name":"Ada Lovelace","company":"Analytical Engines Ltd"}`
+	for i := range gateway.DemoRequestPerIP {
+		if rec := postJSON(mux, "/contacts/demo-request", registerAllowedOrigin, good); rec.Code != http.StatusAccepted {
+			t.Fatalf("request %d = %d, want 202", i+1, rec.Code)
+		}
+	}
+	rec := postJSON(mux, "/contacts/demo-request", registerAllowedOrigin, good)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("sixth = %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != registerAllowedOrigin {
+		t.Errorf("429 Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"error":"too many requests"}` {
+		t.Errorf("429 body = %q", got)
+	}
+}

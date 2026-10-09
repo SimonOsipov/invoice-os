@@ -763,6 +763,11 @@ describe('fieldLabel', () => {
     expect(fieldLabel('line_items[0].line_total')).toBe('line_items[0].line_total')
   })
 
+  it('leaves a bare line role unlabelled', () => {
+    expect(fieldLabel('description')).toBe('description')
+    expect(fieldLabel('line_tax')).toBe('line_tax')
+  })
+
   it('does not humanise an unmapped name', () => {
     // AuditRow.tsx:52 is a second, private fieldLabel that snake-cases a key into prose. It
     // is the rejected convention: this row is where the two disagree by construction, and the

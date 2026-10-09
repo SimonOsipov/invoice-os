@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { CANON } from '../data'
 import type { Draft } from '../types'
+import { HEADER_FIELDS } from './extractionReview'
+import { EDIT_FIELD_KEYS, type InvoiceEditInput } from './invoices'
 import { labelOf, type ImportKey } from './invoiceFields'
 
 describe('invoiceFields', () => {
@@ -45,5 +47,42 @@ describe('invoiceFields', () => {
     // @ts-expect-error supplier_tin is not a Draft key
     const extra: Draft = { number: '', buyer: '', buyerTin: '', date: '', currency: '', items: [], supplier_tin: '' }
     expect([ok, missing, extra]).toHaveLength(3)
+  })
+
+  it('EDIT_FIELD_KEYS is the nine editable header fields in order', () => {
+    expect(EDIT_FIELD_KEYS).toStrictEqual([
+      'issue_date',
+      'supplier_tin',
+      'supplier_name',
+      'buyer_tin',
+      'buyer_name',
+      'currency',
+      'subtotal',
+      'vat',
+      'total',
+    ])
+    expect(EDIT_FIELD_KEYS).not.toContain('invoice_number')
+  })
+
+  it('InvoiceEditInput takes the edit keys and the number, not a line key', () => {
+    const ok: InvoiceEditInput = { invoice_number: 'X', supplier_tin: null }
+    // @ts-expect-error line_total is a line key, not an invoice edit key
+    const bad: InvoiceEditInput = { line_total: '1' }
+    expect([ok, bad]).toHaveLength(2)
+  })
+
+  it('HEADER_FIELDS is the ten extraction header fields in order', () => {
+    expect(HEADER_FIELDS).toStrictEqual([
+      'invoice_number',
+      'issue_date',
+      'supplier_tin',
+      'supplier_name',
+      'buyer_tin',
+      'buyer_name',
+      'currency',
+      'subtotal',
+      'vat',
+      'total',
+    ])
   })
 })

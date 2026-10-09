@@ -10,7 +10,7 @@ import { isPromiseLike } from './authedFetch'
 import { fmtTimeWAT } from './format'
 import type { LineItemInput } from './lineItems'
 import type { AuthedFetch } from './portfolio'
-import { EDIT_FIELD_LABELS } from './reviewBatch'
+import { INVOICE_FIELDS } from './invoiceFields'
 import { formatBytes, type DocumentBytes } from './sourceDocument'
 
 // internal/extraction/reader.go, ExtractionRegion. Normalised [0,1], TOP-LEFT origin, page
@@ -122,7 +122,9 @@ export interface CorrectedMarker {
 // The extraction vocabulary is ten names wide, the edit form's nine: EDIT_FIELD_KEYS refuses
 // invoice_number ([D9]), so the nine strings stay where they are and this overlay adds the
 // tenth. Anything else -- document_text_layer, a reconciled line row -- renders its wire name.
-const FIELD_LABELS: Record<string, string> = { ...EDIT_FIELD_LABELS, invoice_number: 'Invoice number' }
+const FIELD_LABELS: Record<string, string> = Object.fromEntries(
+  INVOICE_FIELDS.filter((f) => !f.line).map((f) => [f.key, f.label]),
+)
 
 const REASON_PILLS: Record<Exclude<ExtractionReason, '' | 'ambiguous'>, string> = {
   unreadable: "COULDN'T READ THIS CLEARLY",
@@ -238,20 +240,8 @@ export interface DraftEntry {
 
 export type DraftEntries = Record<string, DraftEntry>
 
-// internal/extraction/vocabulary.go, HeaderFields -- the order one Save writes in, so the
-// append-only table's seq follows the order the person reads.
-export const HEADER_FIELDS: readonly string[] = [
-  'invoice_number',
-  'issue_date',
-  'supplier_tin',
-  'supplier_name',
-  'buyer_tin',
-  'buyer_name',
-  'currency',
-  'subtotal',
-  'vat',
-  'total',
-]
+// The order one Save writes in, so the append-only table's seq follows the order the person reads.
+export const HEADER_FIELDS: readonly string[] = INVOICE_FIELDS.filter((f) => !f.line && f.extract).map((f) => f.key)
 
 /**
  * The pane's own view of the wire: the shared draft laid over it. A drafted field claims NO

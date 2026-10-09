@@ -500,7 +500,7 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	sites, _ := mainRoutes(t, src)
 	var patterns []string
 	for _, s := range sites {
-		if strings.Contains(s.pattern, " /auth/invitation") {
+		if strings.Contains(s.pattern, " /auth/invitation") && !strings.HasSuffix(s.pattern, "/password") {
 			patterns = append(patterns, s.pattern)
 		}
 	}

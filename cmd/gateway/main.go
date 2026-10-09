@@ -210,6 +210,7 @@ func main() {
 	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("OPTIONS /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("POST /auth/reset-password", resetPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, app.Logger))
+	app.Mux.Handle("POST /auth/invitation/password", invitationPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, sink, app.Logger))
 
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
 	platform.MockIssuer = "absent"
@@ -346,9 +347,13 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
 }
 
-// invitationPasswordHandler is a stub until RESEND2-01-04 lands.
+// invitationPasswordHandler builds the invitee set-password handler; a nil authURL or siteURL makes it answer 503.
 func invitationPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, sink gateway.ContactSink, log *slog.Logger) http.Handler {
-	return gateway.InvitationPasswordHandler(authURL, siteURL, nil, sessions, signIn, sink, log)
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, signIn, sink, log)
 }
 
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.

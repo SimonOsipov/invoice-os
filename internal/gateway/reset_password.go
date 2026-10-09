@@ -38,10 +38,14 @@ var resetCSP = func() string {
 }()
 
 func renderResetPage(token, alert string) string {
+	return renderPasswordPage(resetPageHTML, token, alert)
+}
+
+func renderPasswordPage(page, token, alert string) string {
 	if alert != "" {
 		alert = `<p class="alert" role="alert">` + html.EscapeString(alert) + `</p>`
 	}
-	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.Alert}}", alert, "{{.Script}}", resetScript).Replace(resetPageHTML)
+	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.Alert}}", alert, "{{.Script}}", resetScript).Replace(page)
 }
 
 func setResetPageHeaders(h http.Header) {
@@ -93,13 +97,27 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 	if authURL == nil || siteURL == nil {
 		return RegistrationNotConfigured()
 	}
+	site := strings.TrimSuffix(siteURL.String(), "/")
+	return passwordLinkHandler(authURL, client, sessions, signIn, log, passwordLinkFlow{
+		verifyType: "recovery", label: "reset-password", page: resetPageHTML,
+		done: site + "/?reset=1", failed: site + "/?reset=failed",
+	})
+}
+
+// passwordLinkFlow is what differs between the reset and the invitee set-password POST.
+type passwordLinkFlow struct {
+	verifyType, label, page, done, failed string
+	onConfirmed                           func(ctx context.Context, user gotrueUser)
+}
+
+// passwordLinkHandler verifies the link, sets the password with that session, ends every session and clears the sign-in failures.
+func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, log *slog.Logger, flow passwordLinkFlow) http.Handler {
 	verify := authURL.JoinPath("verify").String()
 	user := authURL.JoinPath("user").String()
 	logoutURL := authURL.JoinPath("logout")
 	logoutURL.RawQuery = "scope=global"
 	logout := logoutURL.String()
-	site := strings.TrimSuffix(siteURL.String(), "/")
-	failed, done := site+"/?reset=failed", site+"/?reset=1"
+	failed, done, label := flow.failed, flow.done, flow.label
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
@@ -111,13 +129,13 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 			return
 		}
 		token, password := r.PostForm.Get("token"), r.PostForm.Get("password")
-		if token == "" || len(token) > maxVerifyTokenBytes || r.PostForm.Get("type") != "recovery" {
+		if token == "" || len(token) > maxVerifyTokenBytes || r.PostForm.Get("type") != flow.verifyType {
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
 		if len(password) < resetPasswordMin || len(password) > resetPasswordMax {
 			setResetPageHeaders(w.Header())
-			writeResetPage(w, r.Method, http.StatusBadRequest, renderResetPage(token, resetPasswordHint))
+			writeResetPage(w, r.Method, http.StatusBadRequest, renderPasswordPage(flow.page, token, resetPasswordHint))
 			return
 		}
 
@@ -125,24 +143,21 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 		ctx := context.WithoutCancel(r.Context())
 		rr := r.WithContext(ctx)
 		var confirmed struct {
-			AccessToken string `json:"access_token"`
-			User        struct {
-				ID    string `json:"id"`
-				Email string `json:"email"`
-			} `json:"user"`
+			AccessToken string     `json:"access_token"`
+			User        gotrueUser `json:"user"`
 		}
-		status, _, err := postGoTrue(rr, client, verify, map[string]string{"type": "recovery", "token_hash": token}, &confirmed)
+		status, _, err := postGoTrue(rr, client, verify, map[string]string{"type": flow.verifyType, "token_hash": token}, &confirmed)
 		switch {
 		case err != nil:
-			log.WarnContext(ctx, "reset-password: gotrue unreachable", slog.String("error", err.Error()))
+			log.WarnContext(ctx, label+": gotrue unreachable", slog.String("error", err.Error()))
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		case status != http.StatusOK:
-			log.WarnContext(ctx, "reset-password: gotrue refused the link", slog.Int("upstream_status", status))
+			log.WarnContext(ctx, label+": gotrue refused the link", slog.Int("upstream_status", status))
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		case confirmed.AccessToken == "" || confirmed.User.ID == "" || confirmed.User.Email == "":
-			log.WarnContext(ctx, "reset-password: gotrue verify answer incomplete")
+			log.WarnContext(ctx, label+": gotrue verify answer incomplete")
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
@@ -154,7 +169,7 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 			if err != nil {
 				attrs = []any{slog.String("error", err.Error())}
 			}
-			log.WarnContext(ctx, "reset-password: gotrue refused the password", attrs...)
+			log.WarnContext(ctx, label+": gotrue refused the password", attrs...)
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
@@ -166,7 +181,7 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 			if err != nil {
 				attrs = []any{slog.String("error", err.Error())}
 			}
-			log.WarnContext(ctx, "reset-password: global sign-out failed", attrs...)
+			log.WarnContext(ctx, label+": global sign-out failed", attrs...)
 		}
 		sessions.EvictSubject(confirmed.User.ID)
 		// After same_password GoTrue ended no session, so only a completed sign-out may claim success.
@@ -175,6 +190,9 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 			return
 		}
 		signIn.Reset(confirmed.User.Email)
+		if flow.onConfirmed != nil {
+			flow.onConfirmed(ctx, confirmed.User)
+		}
 		http.Redirect(w, r, done, http.StatusSeeOther)
 	})
 }

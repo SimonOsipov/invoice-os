@@ -8,6 +8,7 @@ paths:
   - "internal/gateway/resend_verification*.go"
   - "internal/gateway/password_reset*.go"
   - "internal/gateway/reset_password*"
+  - "internal/gateway/invitation_password*"
   - "internal/gateway/verify_page*"
   - "internal/gateway/signin*.go"
   - "internal/gateway/signout*.go"

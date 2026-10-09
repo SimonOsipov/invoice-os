@@ -48,6 +48,10 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		if inv := r.URL.Query()["invite"]; len(inv) == 1 && inv[0] == "1" {
+			serveInvitationPasswordPage(w, r, failed)
+			return
+		}
 		// redirect_to and every other query value are ignored, never rendered.
 		q := r.URL.Query()
 		token := q.Get("token")

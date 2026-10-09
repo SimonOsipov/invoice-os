@@ -72,22 +72,25 @@ function createMemoryStorage() {
 // Real jsdom location (replaceState strips stay observable); href writes are recorded only.
 function interceptHref() {
   const hrefWrites: string[] = []
+  const replaceWrites: string[] = []
   const real = window.location
-  const proxy = new Proxy(real, {
-    set(target, prop, value) {
+  // Plain target: jsdom's location.replace is non-configurable, so a get trap on the real location cannot override it.
+  const proxy = new Proxy({} as Location, {
+    set(_t, prop, value) {
       if (prop === 'href') {
         hrefWrites.push(value)
         return true
       }
-      return Reflect.set(target, prop, value)
+      return Reflect.set(real, prop, value)
     },
-    get(target, prop) {
-      const v = (target as unknown as Record<PropertyKey, unknown>)[prop]
-      return typeof v === 'function' ? v.bind(target) : v
+    get(_t, prop) {
+      if (prop === 'replace') return (url: string) => void replaceWrites.push(url)
+      const v = (real as unknown as Record<PropertyKey, unknown>)[prop]
+      return typeof v === 'function' ? v.bind(real) : v
     },
   })
   Object.defineProperty(window, 'location', { configurable: true, value: proxy })
-  return { hrefWrites }
+  return { hrefWrites, replaceWrites }
 }
 
 function storedState(): string | null {
@@ -288,12 +291,13 @@ describe('a hand-off boot redeems the code (AC-1, D9, D25)', () => {
     configure()
     ensureSignInState()
     window.history.replaceState(null, '', `/?handoff=${CODE}&auth=start`)
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     await bootApp()
     await waitFor(() => expect(exchangeBodies).toHaveLength(1))
     await waitForVerifiedWorkspace()
     expect(hrefWrites.filter((h) => h.includes('signin=ready'))).toEqual([])
     expect(hrefWrites).toEqual([])
+    expect(replaceWrites).toEqual([])
     expect(window.location.search).toBe('')
   })
 })
@@ -1611,9 +1615,10 @@ describe('AUTH-05-08 adversarial', () => {
     configure()
     localStorage.setItem(SESSION_KEY, handoffRecord(OLD_T, OLD_ME))
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     await bootApp()
-    expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=ready`])
+    expect(replaceWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=ready`])
+    expect(hrefWrites).toEqual([])
     expect(storedRecord()?.token).toBe(OLD_T)
     expect(storedRecord()?.handoff).toBe(true)
     expect(exchangeBodies).toHaveLength(0)

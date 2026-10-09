@@ -367,8 +367,8 @@ describe('the status-error strip', () => {
 })
 
 describe('the room reserved under an open menu', () => {
-  // 205px is the tallest menu's overhang below the card, measured in Chromium; layout is not
-  // observable in jsdom, so the reserved padding is the only handle.
+  // 205px is the invited menu's overhang below the card, measured in Chromium; the account note adds
+  // about 35px (LOGFIX-05 D9). Layout is not observable in jsdom, so the reserved padding is the handle.
   const scroller = () => screen.getByTestId('members-table').parentElement as HTMLElement
 
   it('reserves the measured overhang plus a small margin while a menu is open, and nothing when closed', () => {
@@ -378,7 +378,7 @@ describe('the room reserved under an open menu', () => {
     fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
 
     const reserved = parseFloat(scroller().style.paddingBottom)
-    expect(reserved).toBeGreaterThanOrEqual(205)
+    expect(reserved, 'less than the menu with its note needs').toBeGreaterThanOrEqual(240)
     expect(reserved, 'over-reserving leaves a visible gap under the card').toBeLessThanOrEqual(260)
 
     fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))

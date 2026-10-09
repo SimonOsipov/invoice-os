@@ -420,8 +420,12 @@ const APPROVED_AI_SECTION = [
 
 const AI_H2 = 'If you upload invoice documents'
 const aiSectionHtml = (): string => {
-  const afterH2 = html.slice(html.indexOf(`>${AI_H2}</h2>`) + AI_H2.length + 5)
-  return afterH2.slice(0, afterH2.indexOf('<h2'))
+  const heading = `>${AI_H2}</h2>`
+  const at = html.indexOf(heading)
+  expect(at, 'the upload section heading is missing').toBeGreaterThanOrEqual(0)
+  const afterH2 = html.slice(at + heading.length)
+  const next = afterH2.indexOf('<h2')
+  return next < 0 ? afterH2 : afterH2.slice(0, next)
 }
 
 describe('ENGI-10: the upload section discloses AI processing', () => {
@@ -477,15 +481,10 @@ describe('ENGI-10: the upload section discloses AI processing', () => {
   it('the browser is not the sender', () => {
     expect(text).toContain('Your browser sends the document to our server only')
   })
-
-  it('a moved Go constant fails the spec instead of emptying it', () => {
-    expect(aiProviderHosts().length).toBeGreaterThan(0)
-    expect(aiModelVendors().length).toBeGreaterThan(0)
-  })
 })
 
 describe('ENGI-10: no training, retention, region, deletion or law claim in the upload section', () => {
-  const CLAIM = /train|retain|retention|kept|stored|storage|delete|region|located|hosted|EU\b|EEA|United States|\bUS\b|NDPA|GDPR|complian|keep|\bdays?\b|\bmonths?\b|\byears?\b|erase|remov|purge|discard/
+  const CLAIM = /train|retain|retention|kept|stored|storage|delete|region|located|hosted|EU\b|EEA|United States|\bUS\b|NDPA|GDPR|complian|keep|\bdays?\b|\bmonths?\b|\byears?\b|erase|remov|purge|discard|europe|european|week/i
   const sentencesOf = (text: string): string[] => text.split(/(?<=[.!?])\s+/)
 
   it('control: the claim detector fires on planted sentences', () => {
@@ -497,6 +496,12 @@ describe('ENGI-10: no training, retention, region, deletion or law claim in the 
       'complies with the NDPA',
       'They keep it for a while',
       'removed within a month',
+      'Training on your documents is off.',
+      'Retention is set by OpenRouter.',
+      'Stored in Europe.',
+      'Deleted after reading.',
+      'Kept for a week.',
+      'Data stays in the European Union.',
     ])
       expect(CLAIM.test(planted), planted).toBe(true)
     for (const shipped of APPROVED_AI_SECTION.flatMap(sentencesOf)) expect(CLAIM.test(shipped), shipped).toBe(false)

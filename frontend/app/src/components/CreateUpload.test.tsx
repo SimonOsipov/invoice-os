@@ -495,7 +495,10 @@ describe('CreateUpload — the v2 card, accepted line and primary (RESKIN2-04-01
   })
 })
 
-// ENGI-10-02: the one-line AI-processing disclosure. Inline styles are the oracle here.
+// Literal on purpose: change only with a new approval.
+const SENTENCE = 'Files you upload are processed by an AI provider to read them.'
+
+// The one-line AI-processing disclosure. Inline styles are the oracle here.
 describe('CreateUpload — the AI disclosure (ENGI-10-02)', () => {
   beforeEach(() => {
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gateway.test')
@@ -505,8 +508,6 @@ describe('CreateUpload — the AI disclosure (ENGI-10-02)', () => {
     cleanup()
   })
 
-  // Literal on purpose (Decision 22): change only with a new approval (Q31).
-  const SENTENCE = 'Files you upload are processed by an AI provider to read them.'
 
   function disclosures(container: HTMLElement): HTMLElement[] {
     return Array.from(container.querySelectorAll<HTMLElement>('[data-testid="ai-disclosure"]'))
@@ -607,7 +608,6 @@ describe('CreateUpload — the AI disclosure (ENGI-10-02)', () => {
 
 describe('CreateUpload — only CreateUpload reads the AI disclosure (ENGI-10-02)', () => {
   const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
-  const SENTENCE = 'Files you upload are processed by an AI provider to read them.'
 
   function walkSrc(): Array<{ path: string; content: string }> {
     return readdirSync(SRC_DIR, { recursive: true, withFileTypes: true })

@@ -16,6 +16,12 @@ paths:
   - "internal/notifications/store.go"
   - "internal/platform/ai/**"
   - "internal/platform/jev/**"
+  - "internal/extraction/aiimage.go"
+  - "internal/extraction/aireading.go"
+  - "internal/extraction/ailines.go"
+  - "internal/extraction/jevcheck.go"
+  - "internal/importer/suggest.go"
+  - "internal/importer/jevcheck.go"
   - "frontend/app/src/components/CreateUpload.tsx"
 ---
 # Privacy page
@@ -41,15 +47,17 @@ paths:
 - Keep the `Model` prefixes of the AI clients and the vendors named on the page in step. `Privacy.claims.test.tsx` enforces it.
 - Change the page section and `AI_DISCLOSURE` in the same PR as any change to the AI clients.
 - Make no training, retention, region or deletion claim about OpenRouter, Google or TypeSafe. Wait until one vendor statement backs every provider behind a request.
-- The request pins no routing. `provider.data_collection` and `zdr` are unset, so OpenRouter may route to any endpoint of the model.
+- The request sets only `provider.require_parameters`. `data_collection` and `zdr` are unset, so OpenRouter may route to any endpoint of the model.
 - Keep the check date in this file only. The page carries no date.
 - Leave the Jev terms to the user (`openrouter-clients.md`).
 
 ## AI provider terms, checked 2026-10-09
 
-| Provider | URL | What it says | Plan |
+Each row holds the URL, one finding and the plan. The PR body holds the full vendor quotes.
+
+| Provider | URL | Finding | Plan |
 |---|---|---|---|
-| OpenRouter | https://openrouter.ai/privacy (last updated Aug 31, 2026) | "OpenRouter does not use your Inputs or Outputs for model training" for Enterprise and API users. "we transmit your Inputs to the Model Provider(s) you select". Providers "may, depending on their own terms and data practices, retain and use your Inputs and Outputs for their own purposes". No retention period for prompts. "Some Model Providers may use your Inputs and Outputs for model training or improvement." | No claim. Its own no-training line does not cover the providers behind it. |
-| OpenRouter routing | https://openrouter.ai/docs/guides/routing/provider-selection ; https://openrouter.ai/docs/features/zdr | `data_collection` defaults to `allow` ("providers which store user data non-transiently and may train on it"). `zdr` has no effect unless `true`. Unclear policy: OpenRouter "assume[s] that the endpoint both retains and trains on data". Our request sets neither. | No claim. Routing is not pinned. |
-| Google, Gemini 3.5 Flash Lite | https://openrouter.ai/api/v1/models/google/gemini-3.5-flash-lite/endpoints ; https://ai.google.dev/gemini-api/terms (modified 2026-04-28) ; https://docs.cloud.google.com/vertex-ai/generative-ai/docs/data-governance (updated 2026-10-07) | The model has Google (Vertex global/eu/us) and Google AI Studio endpoints. AI Studio unpaid terms: Google "uses the content you submit ... to provide, improve, and develop"; paid terms: no product training, prompts logged "for a limited period of time". Vertex: "won't use your data to train or fine-tune any AI/ML models without your prior permission". The AI Studio endpoints are absent from OpenRouter's ZDR list (`/api/v1/endpoints/zdr`); Vertex ones are present. | No claim. We do not know which endpoint serves a call or OpenRouter's tier with Google. |
-| TypeSafe, Jev | https://typesafe.ai/legal/privacy-policy (last updated Nov 19, 2025) ; https://docs.typesafe.ai (no data-handling page) | Policy: "will not train or fine tune any artificial intelligence or machine learning models on Input"; no Input retention period; "hosted in the United States". It does not name Jev. OpenRouter lists one TypeSafe endpoint, and it is on the ZDR list. | No claim. The user decides whether to add a TypeSafe sentence. |
+| OpenRouter | https://openrouter.ai/privacy | Its no-training line covers its own use. Model providers may retain and train. | No claim. |
+| OpenRouter routing | https://openrouter.ai/docs/guides/routing/provider-selection | `data_collection` defaults to `allow`. Our request leaves it unset. | No claim. Only `require_parameters` is set. |
+| Google, Gemini 3.5 Flash Lite | https://ai.google.dev/gemini-api/terms | AI Studio unpaid terms permit product training. Vertex terms do not. | No claim. The serving endpoint is unknown. |
+| TypeSafe, Jev | https://typesafe.ai/legal/privacy-policy | The policy forbids training on Input. It does not name Jev. | No claim. The user decides. |

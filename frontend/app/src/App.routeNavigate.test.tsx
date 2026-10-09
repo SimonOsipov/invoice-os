@@ -1240,8 +1240,8 @@ describe('QA adversarial (route-02-06): two switchClient calls in a row each scr
 
 // ROUTE-06-02 AC-7. A source scan, not a behavioural one: an unstamped Workspace writer
 // mints an entry naming no company, and an entry naming no company can never be clamped.
-// Nine sites, counted after the fix: the seven that ship today plus the boot-entry stamp
-// backfill and the popstate clamp's own replaceState. Both new writers live inside
+// Ten sites: the seven that ship today plus the boot-entry stamp backfill, the popstate
+// clamp's own replaceState and the cold-load client adoption. All live inside
 // Workspace, so they are inside this slice by construction.
 // Out of the slice on purpose: signOut and the one-shot strip both live in App.
 describe('ROUTE-06-02 AC-7: every Workspace history write carries the company stamp', () => {
@@ -1257,7 +1257,7 @@ describe('ROUTE-06-02 AC-7: every Workspace history write carries the company st
     const slice = src.slice(startIdx, endIdx)
 
     const sites = slice.match(/window\.history\.(?:push|replace)State\(/g) ?? []
-    expect(sites, 'nine Workspace history writes are expected -- fewer means a mis-anchored slice or a lost writer').toHaveLength(9)
+    expect(sites, 'ten Workspace history writes are expected -- fewer means a mis-anchored slice or a lost writer').toHaveLength(10)
     const unstamped = slice.match(/window\.history\.(?:push|replace)State\(\s*null\s*,/g) ?? []
     expect(unstamped, 'zero Workspace history writes may still pass a literal null first argument').toEqual([])
   })

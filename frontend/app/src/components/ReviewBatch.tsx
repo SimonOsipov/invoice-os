@@ -27,8 +27,7 @@
 // NO `entity_id` and NO `gateByActiveEntity`, unlike InvoicesList. The batch id already
 // narrows to one entity and RLS bounds the tenant; narrowing AGAIN by the workspace
 // switcher would render a partially-empty batch — the filter-after-narrow lie
-// [entity-id-cut] names. Recorded consequence: deep-linking a sibling entity's batch
-// renders it without switching the workspace.
+// [entity-id-cut] names.
 //
 // NO StrictMode/mount-fetch guard. useAsync already bumps `runId` in its effect cleanup,
 // so the first of StrictMode's two runs resolves into a discarded dispatch; App's
@@ -187,6 +186,13 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
     if (shell.data != null) lastShell.current = shell.data
     else if (shell.error != null) lastShell.current = null
   }, [shell.data, shell.error])
+
+  // A cold load has no client picked: adopt the batch's. Reruns as the portfolio lands.
+  const firstEntityId = shell.data?.batches[0]?.entity_id
+  const adopt = ctx.adoptBatchClient
+  useEffect(() => {
+    if (firstEntityId != null) adopt(firstEntityId)
+  }, [firstEntityId, adopt])
 
   // An ERROR, not an empty review surface -- defensive, unreachable from any URL: every
   // route that sets createStep === 'review' couples it to a non-empty batch. Pinned by

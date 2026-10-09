@@ -18,6 +18,7 @@ import { Fragment, useCallback, useState } from 'react'
 import {
   accessRoleLabel,
   emailLabel,
+  inviteAccountLine,
   inviteStatusLine,
   isProtectedAdmin,
   MEMBER_UNBACKED,
@@ -242,6 +243,15 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
 
                 <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                   <MemberStatusPill status={m.status} />
+                  {invite && inviteAccountLine(invite) && (
+                    // Wraps instead of ellipsising: the label is longer than the 120px column.
+                    <span
+                      data-testid="invite-account-state"
+                      style={{ marginTop: 3, maxWidth: '100%', minWidth: 0, fontSize: 11, lineHeight: 1.35, color: 'var(--fg-3)', whiteSpace: 'normal', overflowWrap: 'anywhere' }}
+                    >
+                      {inviteAccountLine(invite)}
+                    </span>
+                  )}
                   {invite && (
                     <span style={{ marginTop: 3, maxWidth: '100%', ...ELLIPSIS, fontSize: 11, color: 'var(--fg-3)' }}>
                       {inviteStatusLine(invite, Date.now())}
@@ -255,6 +265,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                   onClose={closeMenu}
                   label={m.name}
                   items={menuItems(m, protectedAdmin)}
+                  note={invite ? inviteAccountLine(invite) ?? undefined : undefined}
                 />
               </div>
 

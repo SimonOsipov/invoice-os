@@ -449,7 +449,7 @@ const INVITE: PendingInvite = {
 }
 
 function renderPending(over: { invites?: PendingInvite[]; onResend?: (id: string) => void; resending?: ReadonlySet<string>; onOpen?: (id: string) => void; extra?: Member[] } = {}) {
-  const pending = invitedMember(INVITE)
+  const pending = invitedMember(over.invites?.[0] ?? INVITE)
   const rows = [...(over.extra ?? []), pending]
   render(
     <MembersTable
@@ -579,5 +579,83 @@ describe('RESEND-07-04: the pending row menu', () => {
       menu = openMenuOf(row)
     }).not.toThrow()
     expect(within(menu).getByRole('button', { name: 'Resend invite' })).toBeTruthy()
+  })
+})
+
+describe('LOGFIX-05-03: the invitee account state on the pending row', () => {
+  const withState = (over: Partial<PendingInvite>) => renderPending({ invites: [{ ...INVITE, ...over }] })
+  const stateOf = () => screen.getByTestId('invite-account-state')
+  const FOLLOWS = Node.DOCUMENT_POSITION_FOLLOWING
+
+  it('MembersTable: the status cell names an unconfirmed and a confirmed invitee', () => {
+    for (const [account, label] of [
+      ['unconfirmed', 'Account created, email not confirmed'],
+      ['confirmed', 'Confirmed, not joined'],
+    ] as const) {
+      cleanup()
+      withState({ account })
+      const state = stateOf()
+      expect(state.textContent).toBe(label)
+      expect(within(screen.getByTestId('invite-row')).getByText('INVITED').compareDocumentPosition(state) & FOLLOWS, 'pill precedes').toBeTruthy()
+      expect(state.compareDocumentPosition(screen.getByText(/^Expires in/)) & FOLLOWS, 'expiry line follows').toBeTruthy()
+    }
+  })
+
+  it('MembersTable: none, unknown and absent keep today\'s cell', () => {
+    for (const account of ['none', 'unknown', undefined] as const) {
+      cleanup()
+      withState({ account })
+      expect(screen.queryByTestId('invite-account-state'), String(account)).toBeNull()
+      expect(screen.getByText('INVITED')).toBeTruthy()
+      expect(screen.getByText(/^Expires in/)).toBeTruthy()
+    }
+  })
+
+  it('MembersTable: an expired or unsent invite still names the state', () => {
+    withState({ account: 'confirmed', expiresAt: new Date(Date.now() - 86_400_000).toISOString() })
+    expect(stateOf().textContent).toBe('Confirmed, not joined')
+    expect(stateOf().compareDocumentPosition(screen.getByText('Expired')) & FOLLOWS, 'state line first').toBeTruthy()
+
+    cleanup()
+    withState({ account: 'unconfirmed', delivery: 'failed' })
+    expect(stateOf().textContent).toBe('Account created, email not confirmed')
+    expect(stateOf().compareDocumentPosition(screen.getByText('Email not sent')) & FOLLOWS, 'state line first').toBeTruthy()
+  })
+
+  it("MembersTable: the state line matches the expiry line's type", () => {
+    withState({ account: 'unconfirmed' })
+    const state = getComputedStyle(stateOf())
+    const expiry = getComputedStyle(screen.getByText(/^Expires in/))
+    expect(state.fontSize).toBe(expiry.fontSize)
+    expect(state.color).toBe(expiry.color)
+    expect(state.fontSize, 'control: the size is set, not empty').toBe('11px')
+  })
+
+  it('MembersTable: the pending menu shows the state above its items', () => {
+    withState({ account: 'confirmed' })
+    const menu = openMenuOf(screen.getByTestId('invite-row'))
+    const note = within(menu).getByTestId('member-menu-state')
+    expect(note.textContent).toBe('Confirmed, not joined')
+    expect(note.compareDocumentPosition(within(menu).getByRole('button', { name: 'Resend invite' })) & FOLLOWS).toBeTruthy()
+  })
+
+  it('MembersTable: no state note for none, unknown or a member row', () => {
+    for (const account of ['none', 'unknown'] as const) {
+      cleanup()
+      withState({ account })
+      expect(within(openMenuOf(screen.getByTestId('invite-row'))).queryByTestId('member-menu-state'), account).toBeNull()
+    }
+    cleanup()
+    renderPending({ extra: [member({ id: 'u2', name: 'Ada Person' })] })
+    expect(within(openMenuOf(screen.getByTestId('member-row'))).queryByTestId('member-menu-state')).toBeNull()
+  })
+
+  it("MembersTable: a pending row's menu offers Resend and two disabled items with their reasons (confirmed row)", () => {
+    withState({ account: 'confirmed' })
+    const menu = openMenuOf(screen.getByTestId('invite-row'))
+    const items = within(menu).getAllByRole('button') as HTMLButtonElement[]
+    expect(items.map((i) => i.textContent)).toEqual(['Resend invite', 'Copy invite link', 'Revoke invite'])
+    expect(items.map((i) => i.disabled)).toEqual([false, true, true])
+    expect(within(menu).getAllByTestId('member-menu-reason')).toHaveLength(2)
   })
 })

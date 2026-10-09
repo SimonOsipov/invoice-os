@@ -119,9 +119,7 @@ export interface CorrectedMarker {
   was: string | null
 }
 
-// The extraction vocabulary is ten names wide, the edit form's nine: EDIT_FIELD_KEYS refuses
-// invoice_number ([D9]), so the nine strings stay where they are and this overlay adds the
-// tenth. Anything else -- document_text_layer, a reconciled line row -- renders its wire name.
+// Anything else -- document_text_layer, a reconciled line row -- renders its wire name.
 const FIELD_LABELS: Record<string, string> = Object.fromEntries(
   INVOICE_FIELDS.filter((f) => !f.line).map((f) => [f.key, f.label]),
 )

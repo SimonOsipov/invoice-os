@@ -742,8 +742,6 @@ describe('the SourceDocumentStates import closes no cycle', () => {
 
 describe('fieldLabel', () => {
   it('maps the ten header names and falls back to the wire name', () => {
-    // The nine editable ones come from EDIT_FIELD_LABELS (reviewBatch.ts); invoice_number is
-    // not editable (EDIT_FIELD_KEYS is nine wide by [D9]), so this module carries the tenth.
     expect(fieldLabel('invoice_number')).toBe('Invoice number')
     expect(fieldLabel('issue_date')).toBe('Issue date')
     expect(fieldLabel('supplier_tin')).toBe('Supplier TIN')

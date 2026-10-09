@@ -110,6 +110,7 @@ func TestStaffRoute_EveryNonStaffTokenIsRefusedOnEveryService(t *testing.T) {
 	tokens := map[string]string{
 		"tenant-bearing customer":  rig.mintOpts(t, auth.MintOptions{TenantID: testTenant}),
 		"tenant-less customer":     rig.mintOpts(t, auth.MintOptions{}),
+		"customer admin":           rig.mintOpts(t, auth.MintOptions{Role: "admin", TenantID: testTenant}),
 		"rules_role only":          rig.mintOpts(t, auth.MintOptions{TenantID: testTenant, RulesRole: true}),
 		"tenant-less rules_role":   rig.mintOpts(t, auth.MintOptions{RulesRole: true}),
 		"service_role":             rig.mintOpts(t, auth.MintOptions{Role: "service_role", TenantID: testTenant}),
@@ -178,6 +179,8 @@ func TestStaffRoute_PathVariantsNeverReachAStaffHandler(t *testing.T) {
 		{"double slash", "/api/{svc}/v1//staff/x"},
 		{"dot-dot", "/api/{svc}/x/../v1/staff/x"},
 		{"encoded dot-dot", "/api/{svc}/x/%2e%2e/v1/staff/x"},
+		{"dot-dot out of staff", "/api/{svc}/v1/staff/../invoices"},
+		{"encoded dot-dot out of staff", "/api/{svc}/v1/staff/%2e%2e/invoices"},
 	}
 
 	// Control: a staff handler counts when the staff token reaches it, on the same service.
@@ -206,6 +209,25 @@ func TestStaffRoute_PathVariantsNeverReachAStaffHandler(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// staffing shares the "staff" prefix but not the segment: customers reach the upstream, nobody gets the staff class.
+func TestStaffRoute_StaffingIsNotTheStaffClass(t *testing.T) {
+	rig := newInternalRig(t)
+	cust := rig.mintOpts(t, auth.MintOptions{TenantID: testTenant})
+	rig.resetAll()
+	if status, _, _ := rig.rawBody(t, http.MethodGet, "/api/validation/v1/staff/x", cust); status != http.StatusForbidden {
+		t.Fatalf("control: customer on /v1/staff/x answered %d, want 403", status)
+	}
+	for _, p := range []string{"/api/validation/v1/staffing", "/api/validation/v1/staffing/x", "/api/validation/v1/staff-x"} {
+		t.Run(p, func(t *testing.T) {
+			rig.resetAll()
+			status, _, _ := rig.rawBody(t, http.MethodGet, p, cust)
+			if status != http.StatusNotFound || rig.counts["validation"].any.Load() != 1 {
+				t.Errorf("answered %d with %d upstream hits, want the upstream's 404 and 1 hit (not the gateway's 403)", status, rig.counts["validation"].any.Load())
+			}
+		})
 	}
 }
 
@@ -307,6 +329,12 @@ func TestStaffRoute_TenantlessStaffIsRefusedElsewhere(t *testing.T) {
 		{"encoded v1", "/api/validation/%761/staff/rules", []string{http.MethodGet, http.MethodConnect}},
 		{"dot-dot into staff", "/api/validation/x/../v1/staff/rules", []string{http.MethodConnect}},
 		{"case", "/api/validation/v1/Staff/rules", []string{http.MethodGet}},
+		{"bare staff segment (D28)", "/api/validation/v1/staff", []string{http.MethodGet, http.MethodPost, http.MethodConnect}},
+		{"staffing is no staff route", "/api/validation/v1/staffing", []string{http.MethodGet}},
+		{"dot after staff", "/api/validation/v1/staff/./rules", []string{http.MethodConnect}},
+		{"double slash after staff", "/api/validation/v1/staff//rules", []string{http.MethodConnect}},
+		{"encoded dot-dot after staff", "/api/validation/v1/staff/%2e%2e/invoices", []string{http.MethodGet, http.MethodConnect}},
+		{"encoded slash after staff", "/api/validation/v1/staff/a%2Fb", []string{http.MethodGet, http.MethodConnect}},
 	}
 	for _, tc := range cases {
 		for _, method := range tc.methods {

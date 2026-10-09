@@ -123,6 +123,12 @@ describe('?auth=start (AC-5)', () => {
     expect(withOutcome('ready').test(leaveUrl(boot))).toBe(true)
   })
 
+  it('boot_authStartLeaves_withReplace_supportTarget', async () => {
+    const { boot } = await run({ search: '?auth=start', target: 'support', local: OLD_RECORD })
+    expect(boot).toMatchObject({ kind: 'leave', replace: true })
+    expect(leaveUrl(boot)).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=support&signin=ready$`))
+  })
+
   it('boot_otherLeaves_haveNoReplace', async () => {
     const scenarios: Record<string, Setup> = {
       'no session': {},

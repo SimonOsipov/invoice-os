@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resolveConsoleBoot } from './boot'
 import { StaffGate } from './StaffGate'
-import { CODE, GW, installFetch, installStorage, LANDING, OPS_KEY, recordRaw, reply, spyTimeouts, staffToken, STATE_A, STATE_KEY, stateRaw } from './testkit'
+import { CODE, GW, installFetch, installStorage, LANDING, OPS_KEY, recordRaw, reply, spyTimeouts, SUPPORT_KEY, staffToken, STATE_A, STATE_KEY, stateRaw } from './testkit'
 
 vi.mock('./boot', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./boot')>()
@@ -154,5 +154,17 @@ describe('StaffGate (AC-11)', () => {
     expect(realLocation.search).toBe('')
     expect(net.calls).toHaveLength(0)
     expect(screen.queryByText('console')).toBeNull()
+  })
+
+  it('StaffGate_authStart_replacesTheEntry_supportTarget', async () => {
+    window.history.replaceState(null, '', '/?auth=start')
+    render(
+      <StaffGate storageKey={SUPPORT_KEY} target="support" gateway={GW} landing={LANDING}>
+        <div>console</div>
+      </StaffGate>,
+    )
+    await waitFor(() => expect(replaceWrites).toHaveLength(1))
+    expect(hrefWrites).toEqual([])
+    expect(replaceWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=support&signin=ready$`))
   })
 })

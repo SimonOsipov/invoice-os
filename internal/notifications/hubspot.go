@@ -35,8 +35,10 @@ func NewHubSpot(baseURL string, k Keys, hc *http.Client) *HubSpot {
 // NewHTTPClient is the vendor client: 10 s timeout, and a 3xx is the response, never followed.
 // A nil rt means http.DefaultTransport.
 func NewHTTPClient(rt http.RoundTripper) *http.Client {
-	return &http.Client{Transport: rt, Timeout: 10 * time.Second, CheckRedirect: noRedirect}
+	return &http.Client{Transport: rt, Timeout: vendorTimeout, CheckRedirect: noRedirect}
 }
+
+const vendorTimeout = 10 * time.Second
 
 // noRedirect surfaces a 3xx as the response; following it would turn a write into a GET.
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -89,12 +91,13 @@ func (h *HubSpot) Upsert(ctx context.Context, c Contact) error {
 // doJSON returns the response status. A transport failure becomes a *DeliveryError{0}: the
 // *url.Error is dropped because its text carries the request URL.
 func doJSON(ctx context.Context, hc *http.Client, method, u, token string, body any) (int, error) {
-	status, _, err := doJSONBody(ctx, hc, method, u, token, body)
+	status, _, err := doJSONBody(ctx, hc, method, u, token, body, false)
 	return status, err
 }
 
-// doJSONBody also returns the response body, capped at maxVendorBody. A nil body sends none.
-func doJSONBody(ctx context.Context, hc *http.Client, method, u, token string, body any) (int, []byte, error) {
+// doJSONBody also returns the response body, capped at maxVendorBody, when readBody is set.
+// A nil body sends none.
+func doJSONBody(ctx context.Context, hc *http.Client, method, u, token string, body any, readBody bool) (int, []byte, error) {
 	var rd io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -109,20 +112,26 @@ func doJSONBody(ctx context.Context, hc *http.Client, method, u, token string, b
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	return sendBody(hc, req)
+	return sendBody(hc, req, readBody)
 }
 
 func send(hc *http.Client, req *http.Request) (int, error) {
-	status, _, err := sendBody(hc, req)
+	status, _, err := sendBody(hc, req, false)
 	return status, err
 }
 
-func sendBody(hc *http.Client, req *http.Request) (int, []byte, error) {
+// sendBody without readBody drains the body and ignores a drain error: a 2xx whose body fails
+// still delivered, and a retry would repeat the write.
+func sendBody(hc *http.Client, req *http.Request, readBody bool) (int, []byte, error) {
 	resp, err := hc.Do(req)
 	if err != nil {
 		return 0, nil, &DeliveryError{}
 	}
 	defer resp.Body.Close()
+	if !readBody {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode, nil, nil
+	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxVendorBody))
 	if err != nil {
 		return 0, nil, &DeliveryError{}
@@ -162,10 +171,10 @@ func (h *HubSpot) OpenDemoDeal(ctx context.Context, c Contact, dealName string) 
 	return statusError(status)
 }
 
-// getJSON reads a body only on want; any other status is a *DeliveryError and a 2xx body that
-// does not decode is a status-0 one.
+// getJSON returns (status, nil) for a status not in want and decodes the body only on want.
+// A transport failure, or a wanted-status body that does not decode, is a status-0 *DeliveryError.
 func (h *HubSpot) getJSON(ctx context.Context, method, u string, in, out any, want ...int) (int, error) {
-	status, b, err := doJSONBody(ctx, h.hc, method, u, h.token, in)
+	status, b, err := doJSONBody(ctx, h.hc, method, u, h.token, in, true)
 	if err != nil {
 		return 0, err
 	}

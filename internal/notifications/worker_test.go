@@ -1381,3 +1381,13 @@ func TestDemoDeal_NamelessRequestStillOpensADealNamedDemoRequest(t *testing.T) {
 		t.Errorf("OpenDemoDeal(%+v, %q), want email only and name %q", calls[0].C, calls[0].Name, "Demo request")
 	}
 }
+
+func TestDemoDealWorker_TimeoutCoversSixVendorCalls(t *testing.T) {
+	got := (&DemoDealWorker{}).Timeout(nil)
+	if min := 6 * vendorTimeout; got < min {
+		t.Errorf("Timeout = %v, want at least six vendor calls (%v)", got, min)
+	}
+	if got <= river.JobTimeoutDefault {
+		t.Errorf("Timeout = %v, want above River's default %v", got, river.JobTimeoutDefault)
+	}
+}

@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 )
 
 const destHubSpotDeal = "hubspot_deal"
+
+// demoDealTimeout is six vendor calls plus a 20 s lock wait behind a HubSpot contact job.
+const demoDealTimeout = 6*vendorTimeout + 20*time.Second
 
 // DemoDealArgs carries the request's own values, not the merged row's.
 type DemoDealArgs struct {
@@ -41,9 +45,12 @@ type DemoDealWorker struct {
 	Logger  *slog.Logger
 }
 
+// Timeout covers the worst chain: the lock wait plus six vendor calls. River's 60 s default cancels it mid-chain.
+func (w *DemoDealWorker) Timeout(*river.Job[DemoDealArgs]) time.Duration { return demoDealTimeout }
+
 // Work holds the HubSpot contact job's advisory lock so the two jobs of one person never run together.
 func (w *DemoDealWorker) Work(ctx context.Context, job *river.Job[DemoDealArgs]) error {
-	// ceiling: the lock and its connection are held across up to four 10 s vendor calls on the shared contacts queue (MaxWorkers 2); revisit if MaxWorkers rises past the pool size or contact jobs run late behind deal jobs.
+	// ceiling: the lock and its connection are held across up to six 10 s vendor calls on the shared contacts queue (MaxWorkers 2); revisit if MaxWorkers rises past the pool size or contact jobs run late behind deal jobs.
 	tx, err := w.Pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("notifications: begin demo deal: %w", err)

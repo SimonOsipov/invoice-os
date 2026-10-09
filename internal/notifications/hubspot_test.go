@@ -1049,3 +1049,42 @@ func TestHubSpotOpenDemoDeal_UndecodableBatchBodyIsTransient(t *testing.T) {
 		t.Errorf("err = %v, requests = %v, want *DeliveryError{0} and no deal POST", err, v.labels())
 	}
 }
+
+// truncatedBody answers 200 with a Content-Length it does not fill, so the client's body read fails.
+func truncatedBody(t *testing.T) (*httptest.Server, *int) {
+	t.Helper()
+	var n int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		n++
+		mu.Unlock()
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("{"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &n
+}
+
+func TestClients_NoBodyCallDeliversDespiteAFailedBodyRead(t *testing.T) {
+	keys := Keys{HubSpotToken: "t", ResendAPIKey: "k", ResendSegmentID: "s", ResendTopicID: "tp"}
+	t.Run("HubSpot Upsert", func(t *testing.T) {
+		srv, n := truncatedBody(t)
+		if err := NewHubSpot(srv.URL, keys, nil).Upsert(t.Context(), fullContact(adaEmail)); err != nil {
+			t.Errorf("Upsert err = %v, want nil", err)
+		}
+		if *n != 1 {
+			t.Errorf("requests = %d, want 1", *n)
+		}
+	})
+	t.Run("Resend Sync opt_in", func(t *testing.T) {
+		srv, n := truncatedBody(t)
+		if err := NewResend(srv.URL, keys, nil).Sync(t.Context(), demoContact(adaEmail), true); err != nil {
+			t.Errorf("Sync err = %v, want nil", err)
+		}
+		if *n != 2 {
+			t.Errorf("requests = %d, want the GET and one opt_in PATCH", *n)
+		}
+	})
+}

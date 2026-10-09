@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -303,4 +304,84 @@ func TestSync_ConcurrentSyncsSerialise(t *testing.T) {
 	if withAdded := len(syncs[0].added) > 0 != (len(syncs[1].added) > 0); !withAdded {
 		t.Errorf("added = %v / %v, want exactly one non-empty", syncs[0].added, syncs[1].added)
 	}
+}
+
+// A sync of a list whose advisory lock is held waits for it. The test holds the
+// lock itself, so no timing decides the outcome.
+func TestSync_WaitsForTheListAdvisoryLock(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	l := testList(newListName(t, super))
+	s := newSyncer(t, app, newFlipServer(t, abcBody).URL)
+
+	holder, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	const key = `hashtext('nrs_codes:' || $1)`
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(`+key+`)`, l.Name); err != nil {
+		t.Fatal(err)
+	}
+	// The holder's committed result: A with other entries. The waiter must read it after the lock.
+	if _, err := holder.Exec(ctx, `INSERT INTO nrs_codes (list, code, entries) VALUES ($1, 'A', '[{"code":"A","description":"held"}]')`, l.Name); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { _, err := s.SyncList(ctx, l); done <- err }()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for waiting := false; !waiting; {
+		select {
+		case err := <-done:
+			t.Fatalf("SyncList returned (%v) while another transaction held the list lock", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("SyncList never waited on the list lock")
+		}
+		if err := super.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND objid = `+key+`)`, l.Name).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := len(syncRows(t, super, l.Name)); n != 0 {
+		t.Fatalf("%d sync rows written while the lock was held", n)
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	syncs := syncRows(t, super, l.Name)
+	if len(syncs) != 1 {
+		t.Fatalf("%d sync rows after release, want 1", len(syncs))
+	}
+	wantStrings(t, "added", syncs[0].added, "B", "C")
+	wantStrings(t, "changed", syncs[0].change, "A")
+}
+
+func TestSync_ChangeListsAreSorted(t *testing.T) {
+	super, app := dbTestPools(t)
+	l := testList(newListName(t, super))
+	srv := newFlipServer(t, envelope(entry("c1", "x"), entry("c2", "x"), entry("c3", "x"), entry("c4", "x"), entry("c5", "x")))
+	s := newSyncer(t, app, srv.URL)
+	if _, err := s.SyncList(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	srv.set(200, envelope(entry("c1", "y"), entry("c2", "y"), entry("c3", "y"), entry("d1", "x"), entry("d2", "x"), entry("d3", "x")))
+	ch, err := s.SyncList(context.Background(), l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStrings(t, "Added", ch.Added, "d1", "d2", "d3")
+	wantStrings(t, "Removed", ch.Removed, "c4", "c5")
+	wantStrings(t, "Changed", ch.Changed, "c1", "c2", "c3")
+	row := syncRows(t, super, l.Name)[1]
+	wantStrings(t, "row added", row.added, "d1", "d2", "d3")
+	wantStrings(t, "row removed", row.removed, "c4", "c5")
+	wantStrings(t, "row changed", row.change, "c1", "c2", "c3")
 }

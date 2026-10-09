@@ -175,9 +175,11 @@ func main() {
 	// One sink for both hand-off paths; the sink bounds each call and never follows a redirect.
 	sink := gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 
+	pending := gateway.NewHTTPPendingInviteLookup(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
+
 	// Public registration, outside /api/ and the verifier, in every build. Register is
 	// CORS-wrapped for the landing page; the OPTIONS route stops the POST route 405ing the preflight.
-	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink, nil)
+	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink, pending)
 	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("POST /auth/resend-verification", withCORS(reg.ResendVerification))

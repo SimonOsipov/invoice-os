@@ -42,6 +42,10 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		if pending == nil {
+			writeError(w, http.StatusServiceUnavailable, "registration is not configured")
+			return
+		}
 		start := time.Now()
 		var in struct {
 			Email         string  `json:"email"`
@@ -86,13 +90,15 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			body["data"] = data
 		}
 
-		signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log)
+		invited := func(ctx context.Context) (bool, error) { return pending(ctx, in.Email) }
+		signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log, invited)
 	})
 }
 
 // signUp spends the per-IP budget, posts body to GoTrue's /signup and answers with the floor held.
 // RegisterHandler and InvitationRegisterHandler share it, so both map GoTrue's answers alike.
-func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger) {
+// A non-nil invited runs after the reservation: true answers as a new address without calling GoTrue.
+func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, invited func(context.Context) (bool, error)) {
 	key, source := clientKey(r)
 	held := perIP.Reserve(key)
 	refused := false
@@ -107,6 +113,24 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
 		}
 		return
+	}
+
+	if invited != nil {
+		yes, lerr := invited(r.Context())
+		if lerr != nil || yes {
+			send := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
+			if lerr != nil {
+				if held {
+					perIP.Refund(key)
+				}
+				log.WarnContext(r.Context(), "registration: pending invite lookup failed", slog.String("error", lerr.Error()))
+				send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
+			}
+			if holdMinimum(r.Context(), log, "registration: signup timing", start, time.Since(start), minResponse) {
+				send()
+			}
+			return
+		}
 	}
 
 	status, gt, err := postGoTrue(r, client, signup, body, nil)

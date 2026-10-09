@@ -30,53 +30,71 @@ const (
 	msgInviteLookupDown      = "invitation lookup is unavailable"
 	maxPreviewResponseBytes  = 4 << 10
 	previewPath              = "internal/invitations/preview"
+	pendingPath              = "internal/invitations/pending"
 	msgInviteeFieldsRequired = "token and password are required"
 )
 
-// NewHTTPInvitationPreviewer asks tenancy's internal preview route, with the gateway token and no identity.
-// Its errors carry the status only: never the token, and no *url.Error, which holds the URL.
-func NewHTTPInvitationPreviewer(base *url.URL, client *http.Client, gatewayToken string) InvitationPreviewer {
+// postTenancy posts payload to an internal tenancy route with the gateway token and no redirect.
+// On a 200 it decodes the body into out and fails if it cannot. It returns the status; its errors
+// carry the label and the status only: never the token, the address, or a *url.Error, which holds the URL.
+func postTenancy(ctx context.Context, c *http.Client, target, gatewayToken, label string, payload, out any) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, invitationPreviewTimeout)
+	defer cancel()
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return 0, errors.New(label + ": encode request")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(b))
+	if err != nil {
+		return 0, errors.New(label + ": build request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Gateway-Token", gatewayToken)
+	resp, err := c.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return 0, errors.New(label + ": tenancy timed out")
+		}
+		return 0, errors.New(label + ": tenancy unreachable")
+	}
+	defer resp.Body.Close()
+	lr := io.LimitReader(resp.Body, maxPreviewResponseBytes)
+	defer func() { _, _ = io.Copy(io.Discard, lr) }()
+	if resp.StatusCode == http.StatusOK {
+		if err := json.NewDecoder(lr).Decode(out); err != nil {
+			return resp.StatusCode, errors.New(label + ": tenancy answered 200 with an unreadable body")
+		}
+	}
+	return resp.StatusCode, nil
+}
+
+// noRedirect returns a copy of client that hands a redirect back instead of following it.
+func noRedirect(client *http.Client) *http.Client {
 	c := *client
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &c
+}
+
+// NewHTTPInvitationPreviewer asks tenancy's internal preview route, with the gateway token and no identity.
+func NewHTTPInvitationPreviewer(base *url.URL, client *http.Client, gatewayToken string) InvitationPreviewer {
+	c := noRedirect(client)
 	target := base.JoinPath(previewPath).String()
 	return func(ctx context.Context, token string) (InvitationPreview, error) {
-		ctx, cancel := context.WithTimeout(ctx, invitationPreviewTimeout)
-		defer cancel()
-		b, err := json.Marshal(map[string]string{"token": token})
-		if err != nil {
-			return InvitationPreview{}, errors.New("invitation preview: encode request")
+		var out struct {
+			Workspace string `json:"workspace"`
+			Role      string `json:"role"`
+			Email     string `json:"email"`
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(b))
-		if err != nil {
-			return InvitationPreview{}, errors.New("invitation preview: build request")
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Gateway-Token", gatewayToken)
-		resp, err := c.Do(req)
-		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return InvitationPreview{}, errors.New("invitation preview: tenancy timed out")
-			}
-			return InvitationPreview{}, errors.New("invitation preview: tenancy unreachable")
-		}
-		defer resp.Body.Close()
-		lr := io.LimitReader(resp.Body, maxPreviewResponseBytes)
-		defer func() { _, _ = io.Copy(io.Discard, lr) }()
-		switch resp.StatusCode {
-		case http.StatusOK:
-			var out struct {
-				Workspace string `json:"workspace"`
-				Role      string `json:"role"`
-				Email     string `json:"email"`
-			}
-			if err := json.NewDecoder(lr).Decode(&out); err != nil {
-				return InvitationPreview{}, errors.New("invitation preview: tenancy answered 200 with an unreadable body")
-			}
+		status, err := postTenancy(ctx, c, target, gatewayToken, "invitation preview", map[string]string{"token": token}, &out)
+		switch {
+		case err != nil:
+			return InvitationPreview{}, err
+		case status == http.StatusOK:
 			return InvitationPreview{Workspace: out.Workspace, Role: out.Role, Email: out.Email}, nil
-		case http.StatusNotFound:
+		case status == http.StatusNotFound:
 			return InvitationPreview{}, ErrInvitationNotValid
 		default:
-			return InvitationPreview{}, fmt.Errorf("invitation preview: tenancy answered %d", resp.StatusCode)
+			return InvitationPreview{}, fmt.Errorf("invitation preview: tenancy answered %d", status)
 		}
 	}
 }
@@ -84,9 +102,24 @@ func NewHTTPInvitationPreviewer(base *url.URL, client *http.Client, gatewayToken
 // PendingInviteLookup reports whether email has a pending, unexpired invite in any tenant.
 type PendingInviteLookup func(ctx context.Context, email string) (bool, error)
 
-// NewHTTPPendingInviteLookup is a stub until the executor writes the tenancy call.
+// NewHTTPPendingInviteLookup asks tenancy's internal pending route. Any answer but 200 is an error,
+// a 404 included: a tenancy without the route must not read as "no pending invite".
 func NewHTTPPendingInviteLookup(base *url.URL, client *http.Client, gatewayToken string) PendingInviteLookup {
-	return func(context.Context, string) (bool, error) { return false, nil }
+	c := noRedirect(client)
+	target := base.JoinPath(pendingPath).String()
+	return func(ctx context.Context, email string) (bool, error) {
+		var out struct {
+			Pending bool `json:"pending"`
+		}
+		status, err := postTenancy(ctx, c, target, gatewayToken, "pending invite lookup", map[string]string{"email": email}, &out)
+		if err != nil {
+			return false, err
+		}
+		if status != http.StatusOK {
+			return false, fmt.Errorf("pending invite lookup: tenancy answered %d", status)
+		}
+		return out.Pending, nil
+	}
 }
 
 // previewToken looks up token, answering 404 or 502 itself and reporting false when it did.
@@ -156,6 +189,6 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		if !ok {
 			return
 		}
-		signUp(w, r, client, signup, map[string]any{"email": p.Email, "password": in.Password}, start, minResponse, perIP, enforce, log)
+		signUp(w, r, client, signup, map[string]any{"email": p.Email, "password": in.Password}, start, minResponse, perIP, enforce, log, nil)
 	})
 }

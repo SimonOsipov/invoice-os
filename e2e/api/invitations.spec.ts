@@ -78,7 +78,7 @@ test.describe.serial('invitations (API E2E, over the deployed gateway)', () => {
   })
 
   test("invitations: the pending list names each invitee's account state", async () => {
-    // Values are Invitation.Account in internal/tenancy/invitations.go. The fork's grant is asynchronous (LOGFIX-02 D19).
+    // Values are Invitation.Account in internal/tenancy/invitations.go. The fork's grant is asynchronous.
     await expect
       .poll(async () => (await listInvitations(adminToken)).find((i) => i.email === registeredEmail)?.account, {
         message: `${registeredEmail} never read confirmed`,

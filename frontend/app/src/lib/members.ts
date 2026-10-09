@@ -603,7 +603,7 @@ export const MEMBER_UNBACKED: Record<
 // The invitations wire and the invite rules
 // ---------------------------------------------------------------------------
 
-/** One item of the invitations endpoints (internal/tenancy `InviteResult`; the list adds fields this module ignores). */
+/** One item of the invitations endpoints (internal/tenancy `InviteResult`). */
 export type InvitationWire = { id: string; email: string; role: string; status: string; expires_at: string; delivery: string; account?: string }
 export type InviteAccount = 'none' | 'unconfirmed' | 'confirmed' | 'unknown'
 export type PendingInvite = { id: string; email: string; role: AccessRole; expiresAt: string; delivery: string; account?: InviteAccount }

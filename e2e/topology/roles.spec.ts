@@ -1342,7 +1342,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   await testInfo.attach('members-top-bar-fit.json', { body: JSON.stringify(l4, null, 2), contentType: 'application/json' })
 
   // --- the invitee's account state: a confirmed invitee, then a faked `unconfirmed` row ------
-  // A registered address reads `confirmed` once the fork's grant lands (LOGFIX-02 D19). Account values: Invitation.Account, internal/tenancy/invitations.go.
+  // A registered address reads `confirmed` once the fork's grant lands. Account values: Invitation.Account, internal/tenancy/invitations.go.
   const registered = (await registerFresh('invite-ui-account')).email
   const registeredInvite = await rawFetch('/api/tenancy/v1/invitations', {
     method: 'POST',
@@ -1367,7 +1367,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   await accountRow.getByTestId('member-menu-trigger').click()
   await expect(menu).toBeHidden()
 
-  // Fixture check (D13): the fork cannot make an `unconfirmed` account, so the list response is faked
+  // Fixture check: the fork cannot make an `unconfirmed` account, so the list response is faked
   // for GET only. This proves the layout of the longest label, not the server's `unconfirmed`.
   const fakeUnconfirmed = '**/api/tenancy/v1/invitations'
   await page.route(fakeUnconfirmed, async (route) => {
@@ -1402,7 +1402,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
       expect(line.y + line.height, `the state line must end above the expiry line at ${width}px`).toBeLessThanOrEqual(expiry.y + 1)
       expect(rectsOverlap(line, trigger), `the state line must not overlap the trigger at ${width}px`).toBe(false)
       expect(enclosesRect(rowBox, line, 1), `the invite row must hold the state line at ${width}px`).toBe(true)
-      // Recorded, not asserted (D7): the wrap is the design.
+      // Recorded, not asserted: the wrap is the design.
       return { width, stateLineHeight: line.height, stateLineLines: Math.round(line.height / clip.lineHeight), status, pill, line, expiry, trigger }
     })
     expect(l5.map((m) => m.width)).toEqual([...WIDE_WIDTHS])

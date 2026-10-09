@@ -1889,7 +1889,7 @@ describe('RESEND-07-02 — inviteStatusLine (D7)', () => {
     expect(inviteStatusLine(at(7 * DAY - SLACK - 1), NOW)).toBe('Expires in 6 days')
   })
 
-  it('inviteStatusLine absorbs a browser clock ahead of the server', () => {
+  it('inviteStatusLine absorbs a browser clock behind the server', () => {
     expect(inviteStatusLine(at(7 * DAY + HOUR), NOW)).toBe('Expires in 7 days')
     expect(inviteStatusLine(at(8 * DAY - SLACK - 1), NOW)).toBe('Expires in 7 days')
     expect(inviteStatusLine(at(8 * DAY - SLACK), NOW)).toBe('Expires in 8 days')

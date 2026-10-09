@@ -255,6 +255,7 @@ func (s *Store) ListInvitations(ctx context.Context) ([]Invitation, error) {
 			return err
 		}
 		rows.Close() // the connection is busy until the rows are closed
+		// ceiling: one savepoint round trip per pending row; batch the read above ~500 rows
 		for i := range out {
 			out[i].Account, out[i].accountErr = accountState(ctx, tx, out[i].Email)
 		}

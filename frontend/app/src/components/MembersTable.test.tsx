@@ -367,22 +367,43 @@ describe('the status-error strip', () => {
 })
 
 describe('the room reserved under an open menu', () => {
-  // 205px is the invited menu's overhang below the card, measured in Chromium; the account note adds
-  // about 35px (LOGFIX-05 D9). Layout is not observable in jsdom, so the reserved padding is the handle.
+  // Layout is not observable in jsdom, so the reserved padding is the handle. The plain menu
+  // overhangs the card by 205px (Chromium); the account note adds about 35px.
   const scroller = () => screen.getByTestId('members-table').parentElement as HTMLElement
-
-  it('reserves the measured overhang plus a small margin while a menu is open, and nothing when closed', () => {
-    renderRows(ROSTER())
+  const reservedAfterOpening = (row: HTMLElement) => {
     expect(scroller().style.paddingBottom).toBe('0px')
-
-    fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
-
+    fireEvent.click(within(row).getByTestId('member-menu-trigger'))
     const reserved = parseFloat(scroller().style.paddingBottom)
-    expect(reserved, 'less than the menu with its note needs').toBeGreaterThanOrEqual(240)
-    expect(reserved, 'over-reserving leaves a visible gap under the card').toBeLessThanOrEqual(260)
-
-    fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
+    fireEvent.click(within(row).getByTestId('member-menu-trigger'))
     expect(scroller().style.paddingBottom).toBe('0px')
+    return reserved
+  }
+
+  it('reserves the plain overhang plus a small margin for a menu without a note', () => {
+    renderRows(ROSTER())
+    for (const name of ['Bo Active', 'Cy Invited']) {
+      const reserved = reservedAfterOpening(screen.getByText(name).closest('[data-testid="member-row"], [data-testid="invite-row"]') as HTMLElement)
+      expect(reserved, `${name}: less than the menu needs`).toBeGreaterThanOrEqual(205)
+      expect(reserved, `${name}: over-reserving leaves a visible gap under the card`).toBeLessThanOrEqual(225)
+    }
+  })
+
+  it('reserves the noted menu\'s overhang while a menu with an account note is open', () => {
+    for (const account of ['unconfirmed', 'confirmed'] as const) {
+      cleanup()
+      renderPending({ invites: [{ ...INVITE, account }] })
+      const reserved = reservedAfterOpening(screen.getByTestId('invite-row'))
+      expect(reserved, `${account}: less than the menu with its note needs`).toBeGreaterThanOrEqual(240)
+      expect(reserved, `${account}: over-reserving leaves a visible gap under the card`).toBeLessThanOrEqual(260)
+    }
+  })
+
+  it('reserves the plain overhang for a pending row whose account state adds no note', () => {
+    for (const account of ['none', 'unknown', undefined] as const) {
+      cleanup()
+      renderPending({ invites: [{ ...INVITE, account }] })
+      expect(reservedAfterOpening(screen.getByTestId('invite-row')), String(account)).toBeLessThanOrEqual(225)
+    }
   })
 
   it('releases the room when a filter removes the row whose menu was open', () => {

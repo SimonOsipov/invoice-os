@@ -268,8 +268,7 @@ func ResetEnabled(environment, flag string) bool {
 //	                          every OTHER table that FKs to tenants in this
 //	                          same statement.
 //	rule_set_versions, rules  migration-owned and SEALED (M4-17
-//	                          rules_content_lock / M4-18
-//	                          active-implies-sealed): these rows are
+//	                          rules_content_lock): these rows are
 //	                          schema-adjacent data a migration created, not
 //	                          E2E residue, and rules also carries its own
 //	                          BEFORE TRUNCATE trigger (migrations/

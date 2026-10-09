@@ -17,9 +17,7 @@
 //
 // IMPORTANT: unlike schema_test.go/store_test.go's fixtures, this suite does
 // NOT seed its own rule_set_versions row -- it asserts the MIGRATED ACTIVE
-// version directly (v2 since M4-04-01; see activeSeedVersion), so it never
-// contends for the partial-unique "one active version" slot other tests'
-// seedVersion(...,true) fixtures occupy transiently. Only TestSeed_KillSwitch mutates shared state (one rule's
+// version directly (v2 since M4-04-01; see activeSeedVersion). Only TestSeed_KillSwitch mutates shared state (one rule's
 // `enabled` column) and restores it in t.Cleanup; every other test in this file is read-only.
 //
 // Coverage (story M3-05 Test Specs):
@@ -60,7 +58,6 @@
 // NOT covered here (belongs to the Execution-stage test reconciliation,
 // which touches schema_test.go/store_test.go directly -- explicitly out of
 // scope for this Mode A RED file, per M3-05-01's Implementation Plan step 3):
-//   - seedVersion(t,super,true)'s deactivate/restore-by-id LIFO fix.
 //   - TestSchema_NoRuleContentShipped's narrowing to exclude the seeded
 //     versions (by their notes marker, not by version number).
 //
@@ -211,22 +208,21 @@ func invoiceOf(p Payload) map[string]any {
 
 // TestSeed_ActiveVersionLoads (Core AC 1 / Test Spec "503 -> live flip" +
 // "Active set loads"): after the seed migration applies, exactly one
-// rule_set_versions row is active and it is version 1; LoadActiveRuleSet
+// rule_set_versions row is in force today and it is version 1; LoadActiveRuleSet
 // materializes it into a RuleSet carrying all 17 seeded rule keys (the
 // pinned rule table in the story's System Design section).
 func TestSeed_ActiveVersionLoads(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
 
-	var activeCount int
+	var inForce int
 	if err := app.QueryRow(ctx,
-		`SELECT count(*) FROM rule_set_versions WHERE is_active`,
-	).Scan(&activeCount); err != nil {
-		t.Fatalf("count active rule_set_versions rows: %v", err)
+		`SELECT version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
+	).Scan(&inForce); err != nil {
+		t.Fatalf("read the rule_set_versions row in force today: %v", err)
 	}
-	if activeCount != 1 {
-		t.Fatalf("count(rule_set_versions WHERE is_active) = %d, want exactly 1 -- "+
-			"expected the migration-seeded active rule-set", activeCount)
+	if inForce != activeSeedVersion {
+		t.Fatalf("version in force today = %d, want %d -- expected the migration-seeded rule-set", inForce, activeSeedVersion)
 	}
 
 	rs := loadActive(t, app)
@@ -586,13 +582,13 @@ func TestSeed_DuplicateLineItemsCEL(t *testing.T) {
 func TestSeed_KillSwitch(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	// Restore on the active version, the row the kill switch writes
-	// (TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion).
+	// Restore on the version in force today, the row the kill switch writes
+	// (TestRuleSetV2_KillSwitchCleanupTargetsVersionInForce).
 	t.Cleanup(func() {
 		if _, err := super.Exec(context.Background(),
 			`UPDATE rules r SET enabled = true
 			   FROM rule_set_versions v
-			  WHERE r.rule_set_version_id = v.id AND v.is_active AND r.key = 'vat-standard-rate'`,
+			  WHERE r.rule_set_version_id = v.id AND v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = 'vat-standard-rate'`,
 		); err != nil {
 			t.Errorf("cleanup: restore vat-standard-rate enabled=true: %v", err)
 		}

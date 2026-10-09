@@ -144,9 +144,9 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 	var wantID string
 	var wantVersion int
 	if err := super.QueryRow(context.Background(),
-		`SELECT id, version FROM rule_set_versions WHERE is_active LIMIT 1`,
+		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
 	).Scan(&wantID, &wantVersion); err != nil {
-		t.Fatalf("read the active rule_set_versions row: %v", err)
+		t.Fatalf("read the rule_set_versions row in force today: %v", err)
 	}
 
 	reqBody, err := json.Marshal(map[string]any{

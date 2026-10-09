@@ -482,8 +482,8 @@ func seedDatedRuleSetVersion(t *testing.T, super *pgxpool.Pool, from string) (id
 	t.Helper()
 	ctx := context.Background()
 	if err := super.QueryRow(ctx,
-		`INSERT INTO rule_set_versions (version, is_active, sealed, notes)
-		 SELECT GREATEST(COALESCE(MAX(version), 0), 950000) + 1, false, false, 'qa-fixture:internal/invoice/gate_test.go'
+		`INSERT INTO rule_set_versions (version, sealed, notes)
+		 SELECT GREATEST(COALESCE(MAX(version), 0), 950000) + 1, false, 'qa-fixture:internal/invoice/gate_test.go'
 		 FROM rule_set_versions RETURNING id, version`,
 	).Scan(&id, &version); err != nil {
 		t.Fatalf("seed rule_set_versions: %v", err)

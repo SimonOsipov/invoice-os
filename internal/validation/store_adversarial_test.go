@@ -16,8 +16,8 @@
 // guarded too, or the identity-carrying loader still fails open even after this
 // subtask ships.
 //
-// Fixture: seedVersion(t, super, true) (schema_test.go) with NO seedRule
-// call -- a real, live rule_set_versions row, is_active=true, holding zero
+// Fixture: seedVersion + sealAndDate (schema_test.go) with NO seedRule
+// call -- a real, live rule_set_versions row, in force today, holding zero
 // rules underneath it. This is exactly the state the Stage-1 addendum
 // verified reachable live (RLS added to `rules` alone, or -- more mundanely
 // today -- any operational mistake that leaves a published version's rules
@@ -47,7 +47,7 @@ func TestStore_LoadActiveRuleSetGlobal_ZeroRulesFailsClosed(t *testing.T) {
 	ctx := context.Background()
 
 	// Zero rules is the point: no seedRule call follows.
-	versionID, version := seedVersion(t, super, false)
+	versionID, version := seedVersion(t, super)
 	sealAndDate(t, super, versionID, todayUTC())
 
 	store := NewStore(app)
@@ -85,7 +85,7 @@ func TestStore_LoadActiveRuleSet_ZeroRulesFailsClosed(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, version := seedVersion(t, super, false) // zero rules
+	versionID, version := seedVersion(t, super) // zero rules
 	sealAndDate(t, super, versionID, todayUTC())
 
 	store := NewStore(app)

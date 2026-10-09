@@ -90,7 +90,7 @@ func TestStore_LoadActiveRuleSet(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, version := seedVersion(t, super, false)
+	versionID, version := seedVersion(t, super)
 	seedFullRule(t, super, versionID, ruleFixture{
 		Key: "rule-a", Type: "range", Target: "invoice.total", Params: `{"min":0,"max":100}`,
 		Severity: "warning", Message: "total out of range", Scope: "document", Enabled: true,
@@ -157,7 +157,7 @@ func dateRule(t *testing.T, super *pgxpool.Pool, versionID, key string) {
 
 func dateFixture(t *testing.T, super *pgxpool.Pool, from, ruleKey string) (id string, version int) {
 	t.Helper()
-	id, version = seedVersion(t, super, false)
+	id, version = seedVersion(t, super)
 	dateRule(t, super, id, ruleKey)
 	sealAndDate(t, super, id, from)
 	return id, version
@@ -287,7 +287,7 @@ func TestStore_NoDatedVersionIsErrNoActiveRuleSet(t *testing.T) {
 
 func TestStore_DatedVersionWithoutRulesIsErrEmptyRuleSet(t *testing.T) {
 	super, app := dbTestPools(t)
-	id, _ := seedVersion(t, super, false)
+	id, _ := seedVersion(t, super)
 	sealAndDate(t, super, id, "3001-01-01")
 
 	_, err := NewStore(app).LoadForDates(context.Background(), []string{"3001-01-01"})
@@ -302,10 +302,8 @@ func TestStore_KillSwitchLiveReload(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, false)
+	versionID, _ := seedVersion(t, super)
 	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
-	// The kill switch still targets is_active, so the fixture is both active and in force today.
-	sealAndActivate(t, super, versionID)
 	sealAndDate(t, super, versionID, todayUTC())
 
 	store := NewStore(app)
@@ -341,7 +339,7 @@ func TestStore_LoadNoIdentityErrors(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background() // deliberately no auth.WithIdentity
 
-	versionID, _ := seedVersion(t, super, false)
+	versionID, _ := seedVersion(t, super)
 	seedFullRule(t, super, versionID, ruleFixture{Key: "R", Enabled: true})
 	sealAndDate(t, super, versionID, todayUTC())
 
@@ -361,7 +359,7 @@ func TestStore_LoadOrdersAndRoundTripsFields(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, false)
+	versionID, _ := seedVersion(t, super)
 	whenExpr := "invoice.total > 0"
 	paramsJSON := `{"expr":"invoice.total > 0 && invoice.total < 1000000"}`
 	// Seeded out of key order (zulu, alpha, mike) to prove LoadActiveRuleSet's
@@ -471,7 +469,7 @@ func TestStore_LoadActiveRuleSetGlobalNoIdentity(t *testing.T) {
 	var wantVersion int
 	var wantRuleCount int
 	if err := super.QueryRow(ctx,
-		`SELECT id, version FROM rule_set_versions WHERE is_active LIMIT 1`,
+		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
 	).Scan(&wantID, &wantVersion); err != nil {
 		t.Fatalf("read the active rule_set_versions row: %v", err)
 	}
@@ -517,7 +515,7 @@ func TestStore_LoadActiveRuleSetPopulatesID(t *testing.T) {
 
 	var wantID string
 	if err := super.QueryRow(ctx,
-		`SELECT id FROM rule_set_versions WHERE is_active LIMIT 1`,
+		`SELECT id FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
 	).Scan(&wantID); err != nil {
 		t.Fatalf("read the active rule_set_versions row: %v", err)
 	}

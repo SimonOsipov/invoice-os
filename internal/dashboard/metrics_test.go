@@ -18,15 +18,14 @@ import (
 
 // --- fixture helpers local to this file -------------------------------
 
-// activeRuleSetVersionID looks up the one row rule_set_versions_one_active
-// guarantees exists.
+// activeRuleSetVersionID looks up the rule_set_versions row in force today.
 func activeRuleSetVersionID(t *testing.T, super *pgxpool.Pool) string {
 	t.Helper()
 	var id string
 	if err := super.QueryRow(context.Background(),
-		`SELECT id FROM rule_set_versions WHERE is_active`,
+		`SELECT id FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
 	).Scan(&id); err != nil {
-		t.Fatalf("look up active rule_set_version_id: %v", err)
+		t.Fatalf("look up in-force rule_set_version_id: %v", err)
 	}
 	return id
 }

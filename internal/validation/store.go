@@ -56,7 +56,7 @@ var (
 	// Note the rules SELECT deliberately does NOT filter on `enabled`, so an
 	// all-rules-disabled version (the M3-06 kill-switch taken to its limit)
 	// still loads every row and does NOT trip this guard.
-	ErrEmptyRuleSet = fmt.Errorf("%w: active version carries no readable rules", ErrNoActiveRuleSet)
+	ErrEmptyRuleSet = fmt.Errorf("%w: version in force carries no readable rules", ErrNoActiveRuleSet)
 	// ErrValidation is returned for caller-input faults that are rejected
 	// before any DB round-trip.
 	ErrValidation = errors.New("validation: validation")

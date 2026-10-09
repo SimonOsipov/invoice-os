@@ -46,7 +46,7 @@ type ruleSeed struct {
 // activateRules makes a throwaway version carrying the given enum rules the one in force today.
 func activateRules(t *testing.T, super *pgxpool.Pool, rules ...ruleSeed) {
 	t.Helper()
-	id, _ := seedVersion(t, super, false)
+	id, _ := seedVersion(t, super)
 	for _, r := range rules {
 		if _, err := super.Exec(context.Background(),
 			`INSERT INTO rules (rule_set_version_id, key, type, target, params, severity, message, enabled)
@@ -299,7 +299,7 @@ func (c *queryCounter) count(substr string) (n int) {
 // listRuleVersion makes a version dated `from` with one enabled enum rule naming list.
 func listRuleVersion(t *testing.T, super *pgxpool.Pool, from, key, list string) {
 	t.Helper()
-	id, _ := seedVersion(t, super, false)
+	id, _ := seedVersion(t, super)
 	if _, err := super.Exec(context.Background(),
 		`INSERT INTO rules (rule_set_version_id, key, type, target, params, severity, message, enabled)
 		 VALUES ($1, $2, 'enum', 'supplier.postal_address.lga', $3::jsonb, 'error', 'bad code', true)`,
@@ -311,10 +311,10 @@ func listRuleVersion(t *testing.T, super *pgxpool.Pool, from, key, list string) 
 
 func TestStore_LoadForDatesLoadsEachVersionOnce(t *testing.T) {
 	super, app := dbTestPools(t)
-	a, _ := seedVersion(t, super, false)
+	a, _ := seedVersion(t, super)
 	seedFullRule(t, super, a, ruleFixture{Key: "t-a", Enabled: true})
 	sealAndDate(t, super, a, "3001-01-01")
-	b, _ := seedVersion(t, super, false)
+	b, _ := seedVersion(t, super)
 	seedFullRule(t, super, b, ruleFixture{Key: "t-b", Enabled: true})
 	sealAndDate(t, super, b, "3001-06-01")
 

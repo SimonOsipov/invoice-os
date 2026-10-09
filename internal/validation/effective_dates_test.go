@@ -46,8 +46,8 @@ func edFixture(t *testing.T, ctx context.Context, tx pgx.Tx, version int, sealed
 	}
 	var id string
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO rule_set_versions (version, is_active, sealed, effective_from, notes)
-		 VALUES ($1, false, $2, $3::date, $4) RETURNING id`,
+		`INSERT INTO rule_set_versions (version, sealed, effective_from, notes)
+		 VALUES ($1, $2, $3::date, $4) RETURNING id`,
 		version, sealed, fromArg, fixtureNotes,
 	).Scan(&id); err != nil {
 		t.Fatalf("insert fixture version=%d sealed=%t from=%q: %v", version, sealed, from, err)
@@ -490,14 +490,6 @@ func TestEffectiveDates_DownRestoresThePreviousSchema(t *testing.T) {
 	}
 	if strings.Contains(def, "effective_from") {
 		t.Error("Guard C definition still mentions effective_from after the Down")
-	}
-
-	var v4Active bool
-	if err := tx.QueryRow(ctx, `SELECT is_active FROM rule_set_versions WHERE version = 4`).Scan(&v4Active); err != nil {
-		t.Fatalf("v4.is_active must survive the Down (D9): %v", err)
-	}
-	if !v4Active {
-		t.Error("v4.is_active = false after the Down, want true")
 	}
 }
 

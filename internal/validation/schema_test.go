@@ -10,7 +10,6 @@
 //  2. TestSchema_AppCannotToggleEnabled      — app cannot UPDATE the enabled column (42501).
 //  3. TestSchema_AppCannotInsertVersionOrRule — app has no INSERT grant on either table (42501).
 //  4. TestSchema_AppCannotDeleteRule         — app has no DELETE grant on either table (42501).
-//  5. TestSchema_OneActiveVersionEnforced    — the partial unique index allows <=1 active version (23505).
 //  6. TestSchema_NoRuleContentShipped        — the migration itself ships tables only, no seed rows.
 //
 // Run: `make dev-db` once, then with the per-role DSNs set directly (see dbTestPools):
@@ -55,9 +54,9 @@ func nextVersion() int {
 }
 
 // TestMain (M4-18, §2.6): a package-wide pre-flight self-heal for the shared, persistent
-// 5432 DB. sealAndActivate's throwaway cleanup (below) necessarily seals its fixture row
+// 5432 DB. sealAndDate's throwaway cleanup (below) necessarily seals its fixture row
 // BEFORE deleting it -- a hard abort in that window (a `go test -timeout` kill, a panic in
-// another goroutine, SIGKILL) can leave a SEALED, possibly ACTIVE orphan that a plain
+// another goroutine, SIGKILL) can leave a SEALED, possibly dated orphan that a plain
 // DELETE can no longer remove (M4-17's Guard C). Env-gated on DATABASE_SUPERUSER_URL --
 // this package also has many non-DB unit tests (cel/engine/evaluators/...) that must keep
 // running when no DSN is set.
@@ -69,15 +68,15 @@ func TestMain(m *testing.M) {
 }
 
 // sweepOrphanFixtures removes throwaway rule_set_versions rows a hard-aborted prior run
-// left behind. Sealed orphans (M4-18) resist a plain DELETE (Guard C), so it brackets the
-// delete in DISABLE/ENABLE TRIGGER USER, then restores v2 as the sole active row. Targets
+// left behind. Sealed orphans resist a plain DELETE (Guard C), so it brackets the
+// delete in DISABLE/ENABLE TRIGGER USER. Targets
 // ONLY fixtureNotes-tagged rows (never the v1/v2 seeds) -- fixtureNotes is already a
 // fixed, greppable const (this file) shared across runs, so no marker redefinition is
 // needed. Triple-guarded: the fixtureNotes match, the explicit `version NOT IN (1,2)`
 // (belt-and-suspenders), and the fact every fixture row uses nextVersion() values >=
 // 900001 (above), which can never collide with v1/v2. Best-effort: a connection or query
 // failure here just means the sweep no-ops -- it is a safety net for ABNORMAL aborts, not
-// the primary teardown (sealAndActivate's per-fixture committed delete is).
+// the primary teardown (sealAndDate's per-fixture committed delete is).
 func sweepOrphanFixtures(superURL string) {
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, superURL)
@@ -112,22 +111,6 @@ func sweepOrphanFixtures(superURL string) {
 	record("enable rules triggers", err)
 	_, err = tx.Exec(ctx, `ALTER TABLE rule_set_versions ENABLE TRIGGER USER`)
 	record("enable rule_set_versions triggers", err)
-	// The DELETE above may have cleared an active orphan (freeing the one-active slot);
-	// self-heal by reactivating the newest SEALED (i.e. real, permanently-published, never
-	// an orphan fixture -- those are never sealed+left behind uncleaned by design) version --
-	// NOT a hardcoded `version = 2` literal, which would silently reactivate a SUPERSEDED
-	// version once a newer one (v3, INVCR-01-13; v4 and beyond) is published
-	// ([active-version-pinning-is-the-bug], the identical bug class rule_set_v2_test.go's
-	// RS-V2-10/12/13 fixtures were reworked to avoid). The `NOT EXISTS` guard is
-	// deliberately the sweep's ONLY trigger condition: this must self-heal an EMPTY active
-	// slot only, never override whatever real state genuinely is active (even a state this
-	// sweep wouldn't itself have chosen) -- ordered delete-then-activate so the
-	// non-deferrable partial unique index never sees two active rows at once.
-	_, err = tx.Exec(ctx,
-		`UPDATE rule_set_versions SET is_active = true
-		  WHERE sealed AND version = (SELECT max(version) FROM rule_set_versions WHERE sealed)
-		    AND NOT EXISTS (SELECT 1 FROM rule_set_versions WHERE is_active)`)
-	record("reactivate the newest sealed version", err)
 	if err := tx.Commit(ctx); err != nil {
 		record("commit", err)
 	}
@@ -170,29 +153,17 @@ func dbTestPools(t *testing.T) (super, app *pgxpool.Pool) {
 	return s, a
 }
 
-// seedVersion inserts one rule_set_versions row as the superuser (BYPASSRLS; these
-// tables have no RLS anyway, but seeding via the migrator-adjacent superuser role keeps
-// fixture setup outside the grant contract under test) and registers its own cheap
-// cleanup. Every fixture row is tagged with fixtureNotes (see that const's doc comment).
-//
-// M4-18 rework: ALWAYS inserts is_active=false, sealed=false -- satisfies the
-// active⟹sealed CHECK and keeps the parent unsealed so rules can still be inserted
-// under it (Guard A, M4-17) before any seal+activate happens. Signature UNCHANGED
-// ((t, super, isActive) (id, version)): only if isActive does this delegate to the new
-// sealAndActivate helper, which performs the real publish order (seal -> deactivate
-// previous -> activate) and owns the throwaway's teardown. Cleanup here deletes the
-// version row only — rules.rule_set_version_id is ON DELETE CASCADE, so any rule seeded
-// under this version (via seedRule/seedFullRule or directly by a test) is cleaned up
-// transitively (or, for a sealed+activated throwaway, by sealAndActivate's own
-// disable-trigger delete, which runs first under LIFO -- see that function's doc
-// comment).
-func seedVersion(t *testing.T, super *pgxpool.Pool, isActive bool) (id string, version int) {
+// seedVersion inserts one unsealed, undated rule_set_versions row as the superuser and
+// registers its cleanup. Every fixture row is tagged with fixtureNotes. Rules seeded under
+// it go with it (rules.rule_set_version_id is ON DELETE CASCADE); sealAndDate takes over
+// the teardown once the row is sealed.
+func seedVersion(t *testing.T, super *pgxpool.Pool) (id string, version int) {
 	t.Helper()
 	ctx := context.Background()
 	version = nextVersion()
 
 	if err := super.QueryRow(ctx,
-		`INSERT INTO rule_set_versions (version, is_active, sealed, notes) VALUES ($1, false, false, $2) RETURNING id`,
+		`INSERT INTO rule_set_versions (version, sealed, notes) VALUES ($1, false, $2) RETURNING id`,
 		version, fixtureNotes,
 	).Scan(&id); err != nil {
 		t.Fatalf("seed rule_set_versions(version=%d): %v", version, err)
@@ -201,106 +172,12 @@ func seedVersion(t *testing.T, super *pgxpool.Pool, isActive bool) (id string, v
 		_, _ = super.Exec(context.Background(), `DELETE FROM rule_set_versions WHERE id = $1`, id)
 	})
 
-	if isActive {
-		sealAndActivate(t, super, id)
-	}
-
 	return id, version
-}
-
-// sealAndActivate (M4-18, §2.1) performs the seal->activate half of the real publish
-// flow for a version (versionID) that already carries whatever rules it needs, and owns
-// the teardown. The active⟹sealed CHECK forbids activating an unsealed row, so this
-// MUST seal before activating; Guard A (M4-17) forbids inserting rules into an
-// already-sealed parent, so callers must insert all of versionID's rules BEFORE calling
-// this.
-func sealAndActivate(t *testing.T, super *pgxpool.Pool, versionID string) {
-	t.Helper()
-	ctx := context.Background()
-
-	// Capture the row that is sanctioned-active RIGHT NOW -- the real active v2, or
-	// whatever a nesting fixture made active. Capture-BY-ID (not by naming a version
-	// number) is what makes arbitrarily-deep nesting compose correctly back to the
-	// original active version (traced in the M4-18 story §2.4 against
-	// rule_set_v2_qa_test.go's two-level nested restore).
-	var prevActiveID string
-	if err := super.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE is_active`).Scan(&prevActiveID); err != nil {
-		t.Fatalf("sealAndActivate(versionID=%s): capture the currently active version id: %v", versionID, err)
-	}
-
-	// Register the restore-cleanup NOW, before any fallible mutation below -- the
-	// cleanup-order fix (M4-18 §2.4): a failed seal/deactivate/activate can never leave
-	// the real active version permanently dark, because the restore is already queued
-	// via t.Cleanup before it could fail.
-	t.Cleanup(func() {
-		ctx := context.Background()
-
-		// Deactivate whatever is active (robust to partial states -- it may be
-		// versionID if the activate below succeeded, or still prevActiveID if this
-		// helper never got that far), then reactivate prevActiveID.
-		if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
-			t.Errorf("sealAndActivate cleanup(versionID=%s): deactivate whatever is active: %v", versionID, err)
-		}
-		if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE id = $1`, prevActiveID); err != nil {
-			t.Errorf("sealAndActivate cleanup(versionID=%s): restore the previously-active version (id=%s): %v",
-				versionID, prevActiveID, err)
-		}
-
-		// The throwaway may now be sealed, so Guard C (M4-17) can block a plain
-		// DELETE. Remove it inside a COMMITTED tx bracketed by DISABLE/ENABLE TRIGGER
-		// USER -- the exact teardown shape M4-17 established for the reversibility
-		// fixtures (rule_set_v2_test.go:337, seed_test.go:665), adapted from
-		// rolled-back to committed because the row must actually be removed (the
-		// shared 5432 DB persists across runs). Best-effort: logged, not fatal, so
-		// one cleanup failure never masks the rest of this test's cleanups.
-		tx, err := super.Begin(ctx)
-		if err != nil {
-			t.Errorf("sealAndActivate cleanup(versionID=%s): begin delete tx: %v", versionID, err)
-			return
-		}
-		defer func() { _ = tx.Rollback(ctx) }()
-		if _, err := tx.Exec(ctx, `ALTER TABLE rule_set_versions DISABLE TRIGGER USER`); err != nil {
-			t.Errorf("sealAndActivate cleanup(versionID=%s): disable triggers on rule_set_versions: %v", versionID, err)
-			return
-		}
-		if _, err := tx.Exec(ctx, `ALTER TABLE rules DISABLE TRIGGER USER`); err != nil {
-			t.Errorf("sealAndActivate cleanup(versionID=%s): disable triggers on rules: %v", versionID, err)
-			return
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM rule_set_versions WHERE id = $1`, versionID); err != nil {
-			t.Errorf("sealAndActivate cleanup(versionID=%s): delete throwaway: %v", versionID, err)
-			return
-		}
-		if _, err := tx.Exec(ctx, `ALTER TABLE rules ENABLE TRIGGER USER`); err != nil {
-			t.Errorf("sealAndActivate cleanup(versionID=%s): re-enable triggers on rules: %v", versionID, err)
-			return
-		}
-		if _, err := tx.Exec(ctx, `ALTER TABLE rule_set_versions ENABLE TRIGGER USER`); err != nil {
-			t.Errorf("sealAndActivate cleanup(versionID=%s): re-enable triggers on rule_set_versions: %v", versionID, err)
-			return
-		}
-		if err := tx.Commit(ctx); err != nil {
-			t.Errorf("sealAndActivate cleanup(versionID=%s): commit throwaway delete: %v", versionID, err)
-		}
-	})
-
-	// The real publish order: seal first (Guard C allows false->true), THEN clear the
-	// active slot, THEN activate -- now sealed=true, so the CHECK is satisfied and the
-	// one-active partial-unique index is free.
-	if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET sealed = true WHERE id = $1`, versionID); err != nil {
-		t.Fatalf("sealAndActivate(versionID=%s): seal (false->true): %v", versionID, err)
-	}
-	if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE id = $1`, prevActiveID); err != nil {
-		t.Fatalf("sealAndActivate(versionID=%s): deactivate previously-active (id=%s): %v", versionID, prevActiveID, err)
-	}
-	if _, err := super.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE id = $1`, versionID); err != nil {
-		t.Fatalf("sealAndActivate(versionID=%s): activate: %v", versionID, err)
-	}
 }
 
 // sealAndDate seals a fixture version and gives it a start date in one UPDATE, so it is
 // in force from `from` (YYYY-MM-DD). Insert all its rules first (Guard A). Cleanup
-// deletes it with user triggers disabled, as sealAndActivate does. Dates in year 3001+
+// deletes it with user triggers disabled. Dates in year 3001+
 // keep real versions out of the way; use todayUTC() to make the fixture today's version.
 func sealAndDate(t *testing.T, super *pgxpool.Pool, versionID, from string) {
 	t.Helper()
@@ -391,7 +268,7 @@ func TestSchema_AppCannotMutateContent(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, false)
+	versionID, _ := seedVersion(t, super)
 	ruleID := seedRule(t, super, versionID, "content-immutable-probe")
 
 	cases := []struct {
@@ -418,7 +295,7 @@ func TestSchema_AppCannotToggleEnabled(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, false)
+	versionID, _ := seedVersion(t, super)
 	ruleID := seedRule(t, super, versionID, "enabled-toggle-probe")
 
 	_, err := app.Exec(ctx, `UPDATE rules SET enabled = false WHERE id = $1`, ruleID)
@@ -598,7 +475,7 @@ func TestSchema_AppCannotInsertVersionOrRule(t *testing.T) {
 		// Seed a valid FK target as superuser first, so a successful insert (a bug) is
 		// never masked by an unrelated foreign_key_violation -- the assertion under test
 		// is the grant, not referential integrity.
-		versionID, _ := seedVersion(t, super, false)
+		versionID, _ := seedVersion(t, super)
 		_, err := app.Exec(ctx,
 			`INSERT INTO rules (rule_set_version_id, key, type, severity, message)
 			 VALUES ($1, 'app-insert-probe', 'required', 'error', 'should be rejected')`,
@@ -619,7 +496,7 @@ func TestSchema_AppCannotDeleteRule(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("rules", func(t *testing.T) {
-		versionID, _ := seedVersion(t, super, false)
+		versionID, _ := seedVersion(t, super)
 		ruleID := seedRule(t, super, versionID, "delete-rule-probe")
 		_, err := app.Exec(ctx, `DELETE FROM rules WHERE id = $1`, ruleID)
 		if err == nil {
@@ -629,46 +506,13 @@ func TestSchema_AppCannotDeleteRule(t *testing.T) {
 	})
 
 	t.Run("rule_set_versions", func(t *testing.T) {
-		versionID, _ := seedVersion(t, super, false)
+		versionID, _ := seedVersion(t, super)
 		_, err := app.Exec(ctx, `DELETE FROM rule_set_versions WHERE id = $1`, versionID)
 		if err == nil {
 			t.Fatal("DELETE FROM rule_set_versions: want SQLSTATE 42501 (insufficient_privilege), got no error")
 		}
 		assertSQLState(t, err, "42501")
 	})
-}
-
-// TestSchema_OneActiveVersionEnforced (Test Spec #5): the partial unique index
-// (`CREATE UNIQUE INDEX rule_set_versions_one_active ON rule_set_versions ((is_active))
-// WHERE is_active`) allows at most one is_active=true row at a time. Seeding a first
-// active version then inserting a second must fail with unique_violation (23505). Run as
-// superuser: this is a schema-level constraint, not a grant, so it must hold for every
-// role, and using super here isolates the assertion from the (separately tested)
-// INSERT grant.
-func TestSchema_OneActiveVersionEnforced(t *testing.T) {
-	super, _ := dbTestPools(t)
-	ctx := context.Background()
-
-	seedVersion(t, super, true) // version A: is_active = true
-
-	secondVersion := nextVersion()
-	// M4-18: sealed=true so this insert passes the active⟹sealed CHECK and genuinely
-	// collides on the one-active partial-unique index (23505) instead of tripping the
-	// CHECK (23514) first -- preserving this test's original intent (proving the
-	// partial unique index), not retargeting it.
-	_, err := super.Exec(ctx,
-		`INSERT INTO rule_set_versions (version, is_active, sealed, notes) VALUES ($1, true, true, $2)`,
-		secondVersion, fixtureNotes,
-	)
-	if err == nil {
-		// Only reachable if the partial unique index is missing/wrong (a bug this test
-		// exists to catch) -- clean up the row that should never have been created.
-		t.Cleanup(func() {
-			_, _ = super.Exec(context.Background(), `DELETE FROM rule_set_versions WHERE version = $1`, secondVersion)
-		})
-		t.Fatal("INSERT second is_active=true rule_set_versions row: want SQLSTATE 23505 (unique_violation on rule_set_versions_one_active), got no error")
-	}
-	assertSQLState(t, err, "23505")
 }
 
 // TestSchema_NoRuleContentShipped (Test Spec #6): the M3-04-01 migration must ship the
@@ -736,11 +580,6 @@ func TestSchema_NoRuleContentShipped(t *testing.T) {
 //  7. TestSchema_AppCannotMutateRemainingContentColumns — completeness for #1: every
 //     OTHER content column (target, params, message, scope, "when",
 //     rule_set_version_id), not just key/severity/type.
-//  8. TestSchema_MultipleInactiveVersionsAllowed — the mirror image of #5: proves the
-//     unique index is PARTIAL (WHERE is_active), not total, so it must not fire for
-//     is_active=false rows. Guards the M3-05 seeding path (which will insert an
-//     inactive version before flipping it active) against a regression to a total
-//     unique index on `version` conflated with `is_active`.
 //  9. TestSchema_RulesCascadeOnVersionDelete — the FK's ON DELETE CASCADE, asserted
 //     directly rather than relying on seedVersion's own (error-swallowing) Cleanup.
 // 10. TestSchema_CheckConstraintsRejectInvalidEnums — the three CHECK constraints
@@ -754,9 +593,9 @@ func TestSchema_AppCannotMutateRemainingContentColumns(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, false)
+	versionID, _ := seedVersion(t, super)
 	ruleID := seedRule(t, super, versionID, "content-immutable-remaining-probe")
-	otherVersionID, _ := seedVersion(t, super, false)
+	otherVersionID, _ := seedVersion(t, super)
 
 	cases := []struct {
 		col  string
@@ -781,21 +620,6 @@ func TestSchema_AppCannotMutateRemainingContentColumns(t *testing.T) {
 	}
 }
 
-// TestSchema_MultipleInactiveVersionsAllowed (QA addition): the mirror image of
-// TestSchema_OneActiveVersionEnforced above. That test proves the partial unique index
-// fires for is_active=true; this one proves it does NOT fire for is_active=false --
-// i.e. it is genuinely partial (`WHERE is_active`), not a total unique index on some
-// constant expression that would incorrectly cap the table at one row overall. Seeding
-// several is_active=false rows must all succeed (seedVersion itself calls t.Fatalf on
-// any insert error, so reaching the end of this test IS the assertion).
-func TestSchema_MultipleInactiveVersionsAllowed(t *testing.T) {
-	super, _ := dbTestPools(t)
-
-	seedVersion(t, super, false)
-	seedVersion(t, super, false)
-	seedVersion(t, super, false)
-}
-
 // TestSchema_RulesCascadeOnVersionDelete (QA addition): rules.rule_set_version_id is
 // `REFERENCES rule_set_versions(id) ON DELETE CASCADE` -- deleting a version must
 // delete every rule under it too. Asserted directly here (not inferred from
@@ -806,7 +630,7 @@ func TestSchema_RulesCascadeOnVersionDelete(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, _ := seedVersion(t, super, false)
+	versionID, _ := seedVersion(t, super)
 	ruleID := seedRule(t, super, versionID, "cascade-probe")
 
 	if _, err := super.Exec(ctx, `DELETE FROM rule_set_versions WHERE id = $1`, versionID); err != nil {
@@ -828,11 +652,11 @@ func TestSchema_RulesCascadeOnVersionDelete(t *testing.T) {
 // rules.type, rules.severity, and rules.scope must reject out-of-list values with
 // check_violation (23514). Run as superuser (BYPASSRLS, full grants) so a rejection can
 // only be the CHECK firing -- not a grant denial masquerading as one (same isolation
-// rationale as TestSchema_OneActiveVersionEnforced's doc comment).
+// rationale as the other superuser-run tests in this file).
 func TestSchema_CheckConstraintsRejectInvalidEnums(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
-	versionID, _ := seedVersion(t, super, false)
+	versionID, _ := seedVersion(t, super)
 
 	cases := []struct {
 		name, sql string

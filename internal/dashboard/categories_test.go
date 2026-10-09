@@ -8,12 +8,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// fetchActiveRuleKeys is the guard's own oracle: the active rule set read
+// fetchActiveRuleKeys is the guard's own oracle: the rule set in force today read
 // straight from the DB, never a hardcoded list.
 func fetchActiveRuleKeys(t *testing.T, app *pgxpool.Pool) []string {
 	t.Helper()
 	rows, err := app.Query(context.Background(),
-		`SELECT r.key FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id WHERE v.is_active`)
+		`SELECT r.key FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`)
 	if err != nil {
 		t.Fatalf("fetch active rule keys: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestCategories_GuardSurvivesEnabledFlip(t *testing.T) {
 	if err := app.QueryRow(context.Background(),
 		`SELECT r.id, r.enabled FROM rules r
 		   JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		  WHERE v.is_active AND r.key = $1`, target).Scan(&ruleID, &prevEnabled); err != nil {
+		  WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $1`, target).Scan(&ruleID, &prevEnabled); err != nil {
 		t.Fatalf("locate active rule %q: %v", target, err)
 	}
 

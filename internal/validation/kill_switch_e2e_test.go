@@ -242,7 +242,7 @@ func TestKillSwitch_TouchesOnlyTheVersionInForceToday(t *testing.T) {
 			t.Fatalf("restore (%s, true) rows = %d, want 1", key, n)
 		}
 		others := ruleRowsOfVersions(t, super, key, 1, 2, 3, 4)
-		versionID, _ := seedVersion(t, super, false)
+		versionID, _ := seedVersion(t, super)
 		fixtureRule := seedRule(t, super, versionID, key)
 		sealAndDate(t, super, versionID, todayUTC())
 
@@ -268,7 +268,7 @@ func TestKillSwitch_LeavesAScheduledVersionAlone(t *testing.T) {
 
 	restoreRulesOnCleanup(t, super)
 
-	versionID, _ := seedVersion(t, super, false)
+	versionID, _ := seedVersion(t, super)
 	scheduledRule := seedRule(t, super, versionID, key)
 	sealAndDate(t, super, versionID, "3001-01-01")
 
@@ -297,7 +297,7 @@ func TestKillSwitch_UnknownKeyUpdatesNothing(t *testing.T) {
 	restoreRulesOnCleanup(t, super)
 
 	const nonActiveOnly = "ks-not-in-force-only"
-	versionID, _ := seedVersion(t, super, false)
+	versionID, _ := seedVersion(t, super)
 	seedRule(t, super, versionID, nonActiveOnly)
 
 	for _, key := range []string{"no-such-rule", nonActiveOnly} {

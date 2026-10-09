@@ -33,7 +33,7 @@ import (
 func TestBatchValidate_ActiveVersionZeroRules503NotCleanPass(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	zeroID, _ := seedVersion(t, super, false) // zero rules
+	zeroID, _ := seedVersion(t, super) // zero rules
 	sealAndDate(t, super, zeroID, todayUTC())
 
 	store := NewStore(app)

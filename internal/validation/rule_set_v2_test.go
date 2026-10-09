@@ -68,25 +68,24 @@ import (
 // RS-V2-01..02 -- v1 narrowed to its 17 base rules and deactivated.
 // ---------------------------------------------------------------------
 
-// TestRuleSetV2_V1HasSeventeenRulesAndIsInactive (RS-V2-01, RS-V2-02): after
+// TestRuleSetV2_V1HasSeventeenRulesAndIsNotInForce (RS-V2-01, RS-V2-02): after
 // the v2 migration, v1 carries exactly the M3-05 base 17 rule keys (no
-// line-cost-non-negative, no line-items-sum-subtotal) and is_active=false --
-// M3-04's immutability guarantee restored (Core AC #1 / task-111 AC#1).
-func TestRuleSetV2_V1HasSeventeenRulesAndIsInactive(t *testing.T) {
+// line-cost-non-negative, no line-items-sum-subtotal) and is not the version in
+// force today -- M3-04's immutability guarantee restored (Core AC #1 / task-111 AC#1).
+func TestRuleSetV2_V1HasSeventeenRulesAndIsNotInForce(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
 
 	var versionID string
-	var isActive bool
+	var inForce bool
 	if err := app.QueryRow(ctx,
-		`SELECT id, is_active FROM rule_set_versions WHERE version = 1`,
-	).Scan(&versionID, &isActive); err != nil {
+		`SELECT id, id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) FROM rule_set_versions WHERE version = 1`,
+	).Scan(&versionID, &inForce); err != nil {
 		t.Fatalf("read rule_set_versions WHERE version=1: %v", err)
 	}
 
-	if isActive {
-		t.Errorf("rule_set_versions.is_active for version=1 = true, want false -- " +
-			"v1 must be deactivated by the v2 migration [RS-V2-02]")
+	if inForce {
+		t.Errorf("version 1 is the version in force today, want a later one [RS-V2-02]")
 	}
 
 	gotKeys := ruleKeysUnder(t, app, versionID)
@@ -134,7 +133,7 @@ func TestRuleSetV2_V1HasSeventeenRulesAndIsInactive(t *testing.T) {
 // only until INVCR-01-13 (task-289) published v3 and superseded it -- that
 // "which version is active now" fact is a moving target every future publish
 // changes, and is asserted going forward by rule_set_v3_test.go's
-// TestRuleSetV3_ActiveAndSealed, not re-litigated here. What NEVER changes,
+// TestRuleSetV3_SealedAndV2NotInForce, not re-litigated here. What NEVER changes,
 // because v2 is sealed, is v2's OWN rule content -- so this test now resolves
 // v2 by its permanent version number (versionIDByVersion, shared with
 // rule_immutability_test.go) instead of by "whichever version happens to be
@@ -327,7 +326,7 @@ func TestRuleSetV2_LineItemRuleParamsMatchLineRulesMigration(t *testing.T) {
 
 // ---------------------------------------------------------------------
 // RS-V2-09 -- the v2 migration's Down restores the exact pre-migration
-// state (v1 active w/ 19 rules, v2 absent).
+// state (v1 w/ 19 rules, v2 absent).
 // ---------------------------------------------------------------------
 
 // TestRuleSetV2_DownRestoresV1 (RS-V2-09): mirrors seed_test.go's
@@ -335,11 +334,7 @@ func TestRuleSetV2_LineItemRuleParamsMatchLineRulesMigration(t *testing.T) {
 // inside a superuser tx that is ALWAYS rolled back, so it never permanently
 // mutates the shared DB other tests in this package depend on. Guards
 // against a vacuous pass exactly like that test does: first ESTABLISHES then
-// asserts an active version=2 row (with 19 rules) actually exists -- v2 is
-// no longer the real active version since INVCR-01-13 (task-289) published
-// v3, so this simulation activates v2 itself, inside the same rolled-back
-// tx, before reading it back (mirrors TestRIL10_IsActiveFlipAllowedOnSealed's
-// identical fix, rule_immutability_test.go).
+// asserts a version=2 row (with 19 rules) actually exists.
 func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
@@ -369,22 +364,9 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 		t.Fatalf("disable USER triggers on rules: %v", err)
 	}
 
-	// This test simulates the v2 migration's OWN Down, whose Setup precondition is "v2
-	// active" -- true only until INVCR-01-13 (task-289) published v3 and superseded it.
-	// Establish that precondition inside this always-rolled-back tx (the same class of
-	// fix TestRIL10_IsActiveFlipAllowedOnSealed needed for the identical reason): clear
-	// whichever version is really active, then activate v2 -- safe, since nothing here
-	// escapes the transaction.
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
-		t.Fatalf("clear the active slot (simulated RS-V2-09 precondition): %v", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 2`); err != nil {
-		t.Fatalf("activate v2 (simulated RS-V2-09 precondition): %v", err)
-	}
-
 	var v2ID string
-	if err := tx.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE version = 2 AND is_active`).Scan(&v2ID); err != nil {
-		t.Fatalf("read the active version=2 row: %v -- expected the v2 migration's active row, got none "+
+	if err := tx.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE version = 2`).Scan(&v2ID); err != nil {
+		t.Fatalf("read the version=2 row: %v -- expected the v2 migration's row, got none "+
 			"(has the v2 migration been applied via `make migrate-up`?) [RS-V2-09 precondition]", err)
 	}
 	var v2RuleCount int
@@ -425,13 +407,10 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 	}
 
 	// The v2 migration's Down, per task-111 §a: delete v2 (rules cascade,
-	// ON DELETE CASCADE) -> reactivate v1 -> re-insert the 2 line-item rules
+	// ON DELETE CASCADE) -> re-insert the 2 line-item rules
 	// under v1, params verbatim from migrations/20260715120000_line_rules.sql.
 	if _, err := tx.Exec(ctx, `DELETE FROM rule_set_versions WHERE version = 2`); err != nil {
 		t.Fatalf("Down step 1 (delete v2): %v", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 1`); err != nil {
-		t.Fatalf("Down step 2 (reactivate v1): %v", err)
 	}
 	var v1ID string
 	if err := tx.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE version = 1`).Scan(&v1ID); err != nil {
@@ -443,15 +422,7 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 		 ($1, 'line-items-sum-subtotal', 'line_sum', '', '{"items":"line_items","amount":"unit_price","quantity":"quantity","expected":"subtotal","tolerance":0.005}'::jsonb, 'error', NULL, 'Line item amounts must sum to the invoice subtotal.', 'document', true)`,
 		v1ID,
 	); err != nil {
-		t.Fatalf("Down step 3 (re-insert line-item rules under v1): %v", err)
-	}
-
-	var v1Active bool
-	if err := tx.QueryRow(ctx, `SELECT is_active FROM rule_set_versions WHERE version = 1`).Scan(&v1Active); err != nil {
-		t.Fatalf("read v1.is_active after Down: %v", err)
-	}
-	if !v1Active {
-		t.Error("v1.is_active after Down = false, want true [RS-V2-09]")
+		t.Fatalf("Down step 2 (re-insert line-item rules under v1): %v", err)
 	}
 
 	var v1RuleCount int
@@ -471,56 +442,13 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------
-// RS-V2-10, 12, 13 -- Category-A fixtures must restore the previously-active
-// version by captured id, not by hardcoding `version = 1`.
-// ---------------------------------------------------------------------
-
-// simulateActiveVersion deactivates whichever rule_set_versions row is
-// currently active (today, that is the real migration-seeded v1) and
-// activates a fresh, disposable seedVersion(...,false) fixture row instead
-// -- using only existing package fixtures + plain SQL, no schema change --
-// so "the sanctioned active version" and "version = 1" diverge for the rest
-// of THIS test, the same way they diverge for real once v2 ships. Registers
-// a t.Cleanup that unconditionally restores the PREVIOUSLY-ACTIVE row --
-// captured by id on entry -- as the sole active row at the end of the test
-// (pass or fail, deactivating whatever is active FIRST so the restore itself
-// can never collide with rule_set_versions_one_active), so no other test in
-// the package ever observes the simulated active row once this test returns.
-//
-// EXECUTOR NOTE (M4-04-01 Stage 3): this cleanup originally hardcoded
-// `WHERE version = 1`, correct only while v1 was the sanctioned active
-// version. Post-v2-publish it set v1 active and left v2 inactive -- measured:
-// a full suite run left the shared dev DB at `v1|is_active=t, v2|is_active=f`,
-// i.e. the suite RE-CREATED the exact live data-integrity defect this story
-// exists to fix, and knocked out TestSeed_ActiveVersionLoads /
-// TestSeed_DemoContract / TestSeed_CollectAllOrdering (this file sorts before
-// seed_test.go, so they ran against the corrupted active version). The helper
-// whose own tests assert "restore by captured id, never hardcode version = 1"
-// was itself hardcoding version = 1. Fixed by applying this task's governing
-// rule to it. No assertion in this file was changed.
-//
-// WHY this is necessary: pre-migration there is only ever one real active
-// version (v1, literally version 1), so any fixture/cleanup that hardcodes
-// `version = 1` happens to restore the right row by pure coincidence -- see
-// this file's TestRuleSetV2_* callers' doc comments. This helper breaks
-// that coincidence on purpose, inside a disposable fixture, to make the
-// hardcode-vs-discover-by-id bug class (RS-V2-10/11/12/13) OBSERVABLE before
-// the real v2 migration exists.
-func simulateActiveVersion(t *testing.T, super *pgxpool.Pool) (id string, version int) {
-	t.Helper()
-	id, version = seedVersion(t, super, false)
-	sealAndActivate(t, super, id)
-	return id, version
-}
-
-// activeVersionRow reads the sole active rule_set_versions row's id+version.
+// activeVersionRow reads the rule_set_versions row in force today (id, version).
 func activeVersionRow(t *testing.T, app *pgxpool.Pool) (id string, version int) {
 	t.Helper()
 	if err := app.QueryRow(context.Background(),
-		`SELECT id, version FROM rule_set_versions WHERE is_active`,
+		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
 	).Scan(&id, &version); err != nil {
-		t.Fatalf("read the active rule_set_versions row: %v", err)
+		t.Fatalf("read the rule_set_versions row in force today: %v", err)
 	}
 	return id, version
 }
@@ -549,81 +477,31 @@ func ruleKeysUnder(t *testing.T, pool *pgxpool.Pool, versionID string) []string 
 	return keys
 }
 
-// TestRuleSetV2_SeedVersionRestoresPreviousActiveByID (RS-V2-10): a nested
-// seedVersion(t, super, true) call (schema_test.go) -- the SAME fixture
-// every DB-backed test in this package that needs an active row uses --
-// must restore the row that was ACTIVE BEFORE it ran, identified by id, not
-// by hardcoding `WHERE version = 1` (schema_test.go:107). Uses the REAL
-// seedVersion function (unmodified): this test's greenness therefore tracks
-// schema_test.go's actual fix, not a frozen copy of today's behavior.
-func TestRuleSetV2_SeedVersionRestoresPreviousActiveByID(t *testing.T) {
-	super, _ := dbTestPools(t)
-	ctx := context.Background()
-
-	baselineID, baselineVersion := simulateActiveVersion(t, super)
-
-	t.Run("nested_seedVersion_active", func(t *testing.T) {
-		seedVersion(t, super, true)
-	})
-
-	var gotID string
-	if err := super.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE is_active`).Scan(&gotID); err != nil {
-		t.Fatalf("read the active version id after the nested seedVersion(active) fixture's cleanup: %v", err)
-	}
-	if gotID != baselineID {
-		t.Errorf("active version id after seedVersion(active)'s cleanup = %s, want %s (version=%d, the row that "+
-			"was active BEFORE the nested fixture ran) -- seedVersion's cleanup (schema_test.go) must restore by "+
-			"captured id, not hardcode `WHERE version = 1` (which silently reactivates the wrong row once the "+
-			"sanctioned active version is not literally version 1) [RS-V2-10]", gotID, baselineID, baselineVersion)
-	}
-}
-
-// TestRuleSetV2_ReversibilityRollbackPostConditionSurvivesV2 (RS-V2-13):
-// seed_test.go's TestSeed_ReversibilityRollback deletes v1 (within an
-// always-rolled-back superuser tx) and today asserts the GLOBAL active
-// count drops to 0 (seed_test.go:648-654) -- true only because v1 is the
-// sole real active version today. Simulates the post-v2-publish topology
-// (v1 exists but inactive; a different, disposable version is the real
-// active one) and invokes the REAL test function (unmodified) as a subtest,
-// so this test's greenness tracks seed_test.go's actual fix rather than a
-// re-implementation of it.
-func TestRuleSetV2_ReversibilityRollbackPostConditionSurvivesV2(t *testing.T) {
-	super, _ := dbTestPools(t)
-
-	simulateActiveVersion(t, super) // v1 now exists but inactive; a disposable fixture is active instead.
-
-	t.Run("as_TestSeed_ReversibilityRollback", TestSeed_ReversibilityRollback)
-}
-
 // ---------------------------------------------------------------------
 // RS-V2-11 -- the kill-switch cleanup hazard.
 // ---------------------------------------------------------------------
 
-// TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion (RS-V2-11): the restore
+// TestRuleSetV2_KillSwitchCleanupTargetsVersionInForce (RS-V2-11): the restore
 // statement TestSeed_KillSwitch's cleanup runs (pinned here as a copy, keep in
-// lockstep) re-enables the rule on the ACTIVE version, not a hardcoded v1.
-func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
+// lockstep) re-enables the rule on the version in force today, not a hardcoded v1.
+func TestRuleSetV2_KillSwitchCleanupTargetsVersionInForce(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
 
-	// M4-18: cannot use simulateActiveVersion here -- it now seals+activates immediately
-	// (zero rules), and Guard A (M4-17) forbids inserting rules into an
-	// already-sealed parent. Inline the same lawful publish order the 11 store_test.go
-	// sites use instead: seed unsealed+inactive, insert the rule, THEN seal+activate.
-	baselineID, _ := seedVersion(t, super, false)
+	// Guard A forbids inserting rules into a sealed parent: seed, insert the rule, THEN seal+date.
+	baselineID, _ := seedVersion(t, super)
 	seedFullRule(t, super, baselineID, ruleFixture{Key: "vat-standard-rate", Enabled: true})
-	sealAndActivate(t, super, baselineID)
 	sealAndDate(t, super, baselineID, todayUTC()) // the kill switch targets the version in force today (D16)
 
 	if n := runKillSwitch(t, super, "vat-standard-rate", false); n != 1 {
-		t.Fatalf("kill switch (vat-standard-rate, false) on the simulated active version: rows = %d, want 1", n)
+		t.Fatalf("kill switch (vat-standard-rate, false) on the simulated in-force version: rows = %d, want 1", n)
 	}
 
 	// TestSeed_KillSwitch's cleanup statement, verbatim.
 	if _, err := super.Exec(ctx,
 		`UPDATE rules r SET enabled = true
 		   FROM rule_set_versions v
-		  WHERE r.rule_set_version_id = v.id AND v.is_active AND r.key = 'vat-standard-rate'`,
+		  WHERE r.rule_set_version_id = v.id AND v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = 'vat-standard-rate'`,
 	); err != nil {
 		t.Fatalf("run TestSeed_KillSwitch's cleanup statement: %v", err)
 	}
@@ -631,15 +509,15 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 	var enabled bool
 	if err := super.QueryRow(ctx,
 		`SELECT r.enabled FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		 WHERE v.is_active AND r.key = 'vat-standard-rate'`,
+		 WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = 'vat-standard-rate'`,
 	).Scan(&enabled); err != nil {
-		t.Fatalf("read vat-standard-rate.enabled on the active version: %v", err)
+		t.Fatalf("read vat-standard-rate.enabled on the version in force: %v", err)
 	}
 	if !enabled {
-		t.Error("vat-standard-rate.enabled = false on the ACTIVE version after running TestSeed_KillSwitch's " +
-			"cleanup statement -- the cleanup hardcodes `WHERE v.version = 1`, so once the sanctioned active " +
-			"version is not literally version 1 (post-v2-publish), it silently leaves the rule disabled on the " +
-			"LIVE active rule-set [RS-V2-11, QA Debate Log F2]")
+		t.Error("vat-standard-rate.enabled = false on the version in force after running TestSeed_KillSwitch's " +
+			"cleanup statement -- the cleanup hardcodes `WHERE v.version = 1`, so once the version in force " +
+			"is not literally version 1 (post-v2-publish), it silently leaves the rule disabled on the " +
+			"LIVE rule-set [RS-V2-11, QA Debate Log F2]")
 	}
 }
 

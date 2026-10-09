@@ -87,7 +87,7 @@ func activeRuleID(t *testing.T, super *pgxpool.Pool, key string) string {
 	var id string
 	if err := super.QueryRow(context.Background(),
 		`SELECT r.id::text FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		 WHERE v.is_active AND r.key = $1`, key,
+		 WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $1`, key,
 	).Scan(&id); err != nil {
 		t.Fatalf("read active rules.id for %q: %v", key, err)
 	}

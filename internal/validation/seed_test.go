@@ -74,6 +74,7 @@ package validation
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -758,5 +759,65 @@ func TestSeed_LineItemRulesAtTheActiveVersionAreUnchanged(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotParsed, wantParsed) {
 		t.Errorf("line-items-sum-subtotal params decoded = %v, want %v (byte-identical to the migration's, decode-compared since jsonb reorders/respaces keys)", gotParsed, wantParsed)
+	}
+}
+
+// TestSeed_DemoInvoicesStampedByIssueDateVersion re-runs db/seed.dev.sql in a rolled-back tx
+// beside two dated fixtures that split the demo issue dates (2026-01..06), so a seed that
+// stamps one version for all (the old single-active model) cannot pass.
+func TestSeed_DemoInvoicesStampedByIssueDateVersion(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	seedSQL, err := os.ReadFile("../../db/seed.dev.sql")
+	if err != nil {
+		t.Fatalf("read db/seed.dev.sql: %v", err)
+	}
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var early, late string
+	for _, f := range []struct {
+		dst  *string
+		from string
+	}{{&early, "2026-03-01"}, {&late, "2026-05-01"}} {
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO rule_set_versions (version, sealed, effective_from, notes)
+			 VALUES ($1, true, $2::date, $3) RETURNING id::text`,
+			nextVersion(), f.from, fixtureNotes).Scan(f.dst); err != nil {
+			t.Fatalf("insert fixture dated %s: %v", f.from, err)
+		}
+	}
+	if _, err := tx.Exec(ctx, string(seedSQL)); err != nil {
+		t.Fatalf("run db/seed.dev.sql: %v", err)
+	}
+
+	var stamped, undated, wrongForDate, wrongSplit, earlyN, lateN int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*),
+		        count(*) FILTER (WHERE issue_date IS NULL),
+		        count(*) FILTER (WHERE rule_set_version_id IS DISTINCT FROM rule_set_version_for(issue_date)),
+		        count(*) FILTER (WHERE rule_set_version_id IS DISTINCT FROM
+		                         CASE WHEN issue_date >= '2026-05-01' THEN $2::uuid ELSE $1::uuid END),
+		        count(*) FILTER (WHERE rule_set_version_id = $1::uuid),
+		        count(*) FILTER (WHERE rule_set_version_id = $2::uuid)
+		   FROM invoices WHERE invoice_number LIKE 'DEMO-%' AND rule_set_version_id IS NOT NULL`,
+		early, late).Scan(&stamped, &undated, &wrongForDate, &wrongSplit, &earlyN, &lateN); err != nil {
+		t.Fatalf("read the stamped demo invoices: %v", err)
+	}
+	if stamped == 0 || undated != 0 {
+		t.Fatalf("stamped demo invoices = %d (without an issue date: %d), want > 0 and none undated", stamped, undated)
+	}
+	if earlyN == 0 || lateN == 0 {
+		t.Errorf("stamped by the early fixture = %d, by the late fixture = %d, want both > 0 (the seed stamps by issue date)", earlyN, lateN)
+	}
+	if wrongForDate != 0 {
+		t.Errorf("%d of %d stamped demo invoices differ from rule_set_version_for(issue_date)", wrongForDate, stamped)
+	}
+	if wrongSplit != 0 {
+		t.Errorf("%d of %d stamped demo invoices are not the early fixture before 2026-05-01 and the late one from then on", wrongSplit, stamped)
 	}
 }

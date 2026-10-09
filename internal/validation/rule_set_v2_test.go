@@ -613,6 +613,7 @@ func TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion(t *testing.T) {
 	baselineID, _ := seedVersion(t, super, false)
 	seedFullRule(t, super, baselineID, ruleFixture{Key: "vat-standard-rate", Enabled: true})
 	sealAndActivate(t, super, baselineID)
+	sealAndDate(t, super, baselineID, todayUTC()) // the kill switch targets the version in force today (D16)
 
 	if n := runKillSwitch(t, super, "vat-standard-rate", false); n != 1 {
 		t.Fatalf("kill switch (vat-standard-rate, false) on the simulated active version: rows = %d, want 1", n)

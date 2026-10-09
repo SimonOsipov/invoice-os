@@ -566,3 +566,161 @@ func gooseDownStatements(t *testing.T, sql string) []string {
 	flush()
 	return stmts
 }
+
+// ---------------------------------------------------------------------
+// ENGI-04-05 -- Migration B drops the single-active model.
+// ---------------------------------------------------------------------
+
+const dropActiveFlagMigrationGlob = "*_drop_rule_set_active_flag.sql"
+
+func TestEffectiveDates_SingleActiveModelIsGone(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	// Positive probes first: the negative ones below would pass vacuously on a wrong table name.
+	requireEffectiveFrom(t, ctx, super)
+	var datedCheck, approvalColumn, approvalCheck bool
+	if err := super.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rule_set_versions_dated_is_sealed'),
+		        EXISTS (SELECT 1 FROM information_schema.columns
+		                 WHERE table_name = 'approval_policy_versions' AND column_name = 'is_active'),
+		        EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'approval_policy_versions_active_is_sealed')`,
+	).Scan(&datedCheck, &approvalColumn, &approvalCheck); err != nil {
+		t.Fatalf("probe the successor and sibling model: %v", err)
+	}
+	if !datedCheck {
+		t.Error("rule_set_versions_dated_is_sealed is missing: the successor invariant must stay")
+	}
+	if !approvalColumn || !approvalCheck {
+		t.Errorf("approval_policy_versions.is_active present=%t, its CHECK present=%t: Migration B must leave that table alone",
+			approvalColumn, approvalCheck)
+	}
+
+	for _, c := range []struct{ what, sql string }{
+		{"column rule_set_versions.is_active", `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'rule_set_versions' AND column_name = 'is_active')`},
+		{"index rule_set_versions_one_active", `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'rule_set_versions_one_active')`},
+		{"constraint rule_set_versions_active_is_sealed", `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rule_set_versions_active_is_sealed')`},
+	} {
+		var exists bool
+		if err := super.QueryRow(ctx, c.sql).Scan(&exists); err != nil {
+			t.Fatalf("probe %s: %v", c.what, err)
+		}
+		if exists {
+			t.Errorf("%s still exists, want it dropped (Core AC 1)", c.what)
+		}
+	}
+}
+
+func TestEffectiveDates_DropDownRestoresTheActiveFlag(t *testing.T) {
+	migrator := migratorPool(t)
+	ctx := context.Background()
+
+	matches, err := fs.Glob(migrations.FS, dropActiveFlagMigrationGlob)
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("want exactly one migrations/%s, got %v (err %v)", dropActiveFlagMigrationGlob, matches, err)
+	}
+	raw, err := fs.ReadFile(migrations.FS, matches[0])
+	if err != nil {
+		t.Fatalf("read %s: %v", matches[0], err)
+	}
+	downStmts := gooseDownStatements(t, string(raw))
+	if len(downStmts) == 0 {
+		t.Fatalf("%s has no Down statements", matches[0])
+	}
+
+	const inForce = `rule_set_version_for((now() AT TIME ZONE 'UTC')::date)::text`
+	for _, tc := range []struct {
+		name         string
+		fixtureToday bool
+	}{
+		{"the version in force is the active one", false},
+		{"a version dated today becomes the active one", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tx := edBegin(t, ctx, migrator)
+			requireEffectiveFrom(t, ctx, tx)
+			var present bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'rule_set_versions' AND column_name = 'is_active')`).Scan(&present); err != nil {
+				t.Fatalf("probe is_active: %v", err)
+			}
+			if present {
+				t.Fatal("rule_set_versions.is_active exists before the Down: Migration B is not applied")
+			}
+
+			v4 := versionIDByVersion(t, ctx, tx, 4)
+			want := v4
+			if tc.fixtureToday {
+				if err := tx.QueryRow(ctx,
+					`INSERT INTO rule_set_versions (version, sealed, effective_from, notes)
+					 VALUES ($1, true, (now() AT TIME ZONE 'UTC')::date, $2) RETURNING id`,
+					nextVersion(), fixtureNotes).Scan(&want); err != nil {
+					t.Fatalf("insert the fixture dated today: %v", err)
+				}
+			}
+			var forceNow *string
+			if err := tx.QueryRow(ctx, `SELECT `+inForce).Scan(&forceNow); err != nil {
+				t.Fatalf("read the version in force: %v", err)
+			}
+			edWant(t, forceNow, want, "version in force before the Down")
+
+			for _, stmt := range downStmts {
+				if _, err := tx.Exec(ctx, stmt); err != nil {
+					t.Fatalf("Down statement failed: %v\n%s", err, stmt)
+				}
+			}
+
+			var colType, nullable, dflt string
+			if err := tx.QueryRow(ctx,
+				`SELECT data_type, is_nullable, coalesce(column_default, '') FROM information_schema.columns
+				  WHERE table_name = 'rule_set_versions' AND column_name = 'is_active'`,
+			).Scan(&colType, &nullable, &dflt); err != nil {
+				t.Fatalf("is_active column missing after the Down: %v", err)
+			}
+			if colType != "boolean" || nullable != "NO" || dflt != "false" {
+				t.Errorf("is_active = %s nullable=%s default=%q, want boolean NOT NULL DEFAULT false", colType, nullable, dflt)
+			}
+
+			var idxDef, checkDef string
+			if err := tx.QueryRow(ctx, `SELECT indexdef FROM pg_indexes WHERE indexname = 'rule_set_versions_one_active'`).Scan(&idxDef); err != nil {
+				t.Fatalf("rule_set_versions_one_active missing after the Down: %v", err)
+			}
+			if !strings.Contains(idxDef, "UNIQUE") || !strings.Contains(idxDef, "WHERE is_active") {
+				t.Errorf("rule_set_versions_one_active = %q, want a unique index WHERE is_active", idxDef)
+			}
+			if err := tx.QueryRow(ctx, `SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'rule_set_versions_active_is_sealed'`).Scan(&checkDef); err != nil {
+				t.Fatalf("rule_set_versions_active_is_sealed missing after the Down: %v", err)
+			}
+			if !strings.Contains(checkDef, "is_active") || !strings.Contains(checkDef, "sealed") {
+				t.Errorf("rule_set_versions_active_is_sealed = %q, want a CHECK on is_active and sealed", checkDef)
+			}
+
+			var active []string
+			rows, err := tx.Query(ctx, `SELECT id::text FROM rule_set_versions WHERE is_active`)
+			if err != nil {
+				t.Fatalf("read active rows: %v", err)
+			}
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					t.Fatalf("scan active row: %v", err)
+				}
+				active = append(active, id)
+			}
+			rows.Close()
+			if len(active) != 1 || active[0] != want {
+				t.Errorf("active rows after the Down = %v, want exactly [%s] (the version in force today)", active, want)
+			}
+			if tc.fixtureToday && len(active) == 1 && active[0] == v4 {
+				t.Error("v4 is active although a version dated today is in force")
+			}
+
+			// The restored objects enforce, not just exist.
+			unsealed := edFixture(t, ctx, tx, nextVersion(), false, "")
+			assertSQLState(t, attemptWithSavepoint(t, ctx, tx,
+				`UPDATE rule_set_versions SET is_active = true WHERE id = $1`, unsealed), "23514")
+			sealedOther := edFixture(t, ctx, tx, nextVersion(), true, "")
+			assertSQLState(t, attemptWithSavepoint(t, ctx, tx,
+				`UPDATE rule_set_versions SET is_active = true WHERE id = $1`, sealedOther), "23505")
+		})
+	}
+}

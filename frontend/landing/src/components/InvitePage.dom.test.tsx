@@ -672,6 +672,50 @@ describe('the account-exists views', () => {
     expect(headings()).toEqual(['Create your account'])
     expect(alerts()).toEqual([REGISTER_UNAVAILABLE])
   })
+
+  it('invitePage_aRefusedSubmitMovesToTheMatchingView: only a 409 moves the view', async () => {
+    stubFetch({ register: () => json(500, { error: 'account_exists' }) })
+    await mount()
+    await toRegisterView()
+
+    await submit(PASSWORD)
+
+    expect(headings()).toEqual(['Create your account'])
+    expect(text()).not.toContain(EXISTS_TEXT)
+  })
+
+  it('invitePage_aRefusedSubmitMovesToTheMatchingView: Sign in on the moved view carries the invite', async () => {
+    stubFetch({ register: () => json(409, { error: 'account_exists' }) })
+    await mount()
+    await toRegisterView()
+    await submit(PASSWORD)
+
+    await click(button('Sign in'))
+
+    expect(assigned).toEqual([SIGN_IN_HREF])
+  })
+
+  it('invitePage_unconfirmedSendItAgainResendsToTheInvitedAddress: a failed resend shows the alert, not the notice', async () => {
+    await toView('unconfirmed', { resend: () => json(500, { error: 'boom' }) })
+
+    await click(button('Send it again'))
+    await settle()
+
+    expect(alerts()).toEqual([RESEND_FAILED])
+    expect(text()).not.toContain(RESEND_SENT)
+    expect(button('Send it again').disabled).toBe(false)
+  })
+
+  it('invitePage_unconfirmedSendItAgainResendsToTheInvitedAddress: the resend notice is not the peach reset notice', async () => {
+    await toView('unconfirmed', { resend: () => json(202, {}) })
+
+    await click(button('Send it again'))
+    await settle()
+
+    expect(text()).toContain(RESEND_SENT)
+    expect(peachNotice()).toBeUndefined()
+    expect(text()).not.toContain(RESET_SENT)
+  })
 })
 
 describe('the unusable invite', () => {

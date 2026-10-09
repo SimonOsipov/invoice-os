@@ -4,14 +4,18 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -483,6 +487,86 @@ func TestStaffHeaders_ClientCopiesAreOverwritten(t *testing.T) {
 				t.Fatalf("status = %d, hits = %d, want 200 and 1", rec.Code, cap.hits)
 			}
 			assertStaffHeaders(t, cap.header, tc.wantS, tc.wantR)
+		})
+	}
+}
+
+// The gateway in front of a guarded platform.App: the gateway decides who may enter, the service
+// decides who holds the rules role, and a forged X-User-Rules-Role changes neither.
+func TestStaffRoute_GatewayAndServiceTogether(t *testing.T) {
+	tg := setupGateway(t)
+
+	t.Setenv("SENTRY_DSN", "")
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	app, err := platform.New("validation")
+	if err != nil {
+		t.Fatalf("platform.New: %v", err)
+	}
+	var handled atomic.Int32
+	app.Mux.HandleFunc("GET /v1/staff/probe", func(w http.ResponseWriter, r *http.Request) {
+		handled.Add(1)
+		staff, _ := staffCaller(r.Context())
+		_, _ = w.Write([]byte(staff.Subject))
+	})
+	app.RequireGateway(testGatewayToken)
+
+	var reached atomic.Int32
+	inner := app.Handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Add(1)
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse upstream url: %v", err)
+	}
+	gw := Handler(Options{Verifier: tg.verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"validation": u}, GatewayToken: testGatewayToken})
+
+	const path = "/api/validation/v1/staff/probe"
+	cases := []struct {
+		name        string
+		opts        auth.MintOptions
+		forge       bool // the client sends X-User-Rules-Role: true itself
+		wantStatus  int
+		wantReached int32
+		wantHandled int32
+		wantBody    string
+	}{
+		{"customer", auth.MintOptions{TenantID: testTenant}, false, http.StatusForbidden, 0, 0, `{"error":"forbidden"}`},
+		{"customer with forged staff headers", auth.MintOptions{TenantID: testTenant}, true, http.StatusForbidden, 0, 0, `{"error":"forbidden"}`},
+		{"staff without the rules role", auth.MintOptions{TenantID: testTenant, Staff: true}, false, http.StatusForbidden, 1, 0, `{"error":"forbidden"}`},
+		{"staff with a forged rules-role header", auth.MintOptions{TenantID: testTenant, Staff: true}, true, http.StatusForbidden, 1, 0, `{"error":"forbidden"}`},
+		{"tenant-less staff with a forged rules-role header", auth.MintOptions{Staff: true}, true, http.StatusForbidden, 1, 0, `{"error":"forbidden"}`},
+		{"tenant-less staff with the rules role", auth.MintOptions{Staff: true, RulesRole: true}, false, http.StatusOK, 1, 1, testSubject},
+		{"tenant-bearing staff with the rules role", auth.MintOptions{TenantID: testTenant, Staff: true, RulesRole: true}, false, http.StatusOK, 1, 1, testSubject},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reached.Store(0)
+			handled.Store(0)
+			tc.opts.Subject, tc.opts.Role = testSubject, testRole
+			req := request(http.MethodGet, path, tg.mint(t, tc.opts))
+			if tc.forge {
+				req.Header.Set(wireUserRulesRole, "true")
+				req.Header.Set(wireUserStaff, "true")
+			}
+			rec := httptest.NewRecorder()
+			gw.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Errorf("status = %d, want %d (body %q)", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if got := strings.TrimSpace(rec.Body.String()); got != tc.wantBody {
+				t.Errorf("body = %q, want %q", got, tc.wantBody)
+			}
+			if got := reached.Load(); got != tc.wantReached {
+				t.Errorf("service saw %d request(s), want %d", got, tc.wantReached)
+			}
+			if got := handled.Load(); got != tc.wantHandled {
+				t.Errorf("staff handler ran %d time(s), want %d", got, tc.wantHandled)
+			}
 		})
 	}
 }

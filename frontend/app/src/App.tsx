@@ -2118,7 +2118,9 @@ export default function App() {
     if (dest) {
       startBounced.current = true
       holdPendingInvite(startInvite)
-      window.location.href = dest
+      // replace drops the ?auth=start entry; the invite hop (Out of Scope) keeps its push.
+      if (startInvite) window.location.href = dest
+      else window.location.replace(dest)
     }
   }, [authStart, startInvite])
 

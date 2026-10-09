@@ -43,22 +43,25 @@ function createMemoryStorage() {
 // Real jsdom location (so replaceState strips are observable); only href writes are recorded.
 function interceptHref() {
   const hrefWrites: string[] = []
+  const replaceWrites: string[] = []
   const real = window.location
-  const proxy = new Proxy(real, {
-    set(target, prop, value) {
+  // Plain target: jsdom's location.replace is non-configurable, so a get trap on the real location cannot override it.
+  const proxy = new Proxy({} as Location, {
+    set(_t, prop, value) {
       if (prop === 'href') {
         hrefWrites.push(value)
         return true
       }
-      return Reflect.set(target, prop, value)
+      return Reflect.set(real, prop, value)
     },
-    get(target, prop) {
-      const v = (target as unknown as Record<PropertyKey, unknown>)[prop]
-      return typeof v === 'function' ? v.bind(target) : v
+    get(_t, prop) {
+      if (prop === 'replace') return (url: string) => void replaceWrites.push(url)
+      const v = (real as unknown as Record<PropertyKey, unknown>)[prop]
+      return typeof v === 'function' ? v.bind(real) : v
     },
   })
   Object.defineProperty(window, 'location', { configurable: true, value: proxy })
-  return { hrefWrites }
+  return { hrefWrites, replaceWrites }
 }
 
 function storedState(): string | null {
@@ -94,13 +97,14 @@ afterEach(() => {
 describe('the front door carries the stored state (AUTH-05-11)', () => {
   it('StrictMode bounces with one state', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(
       <StrictMode>
         <App />
       </StrictMode>,
     )
     expect(hrefWrites.length, 'the front door must navigate').toBeGreaterThan(0)
+    expect(replaceWrites).toEqual([])
     const s = storedState()
     expect(hrefWrites).toEqual(hrefWrites.map(() => `https://landing.example/?state=${s}`))
     expect(s).toEqual(expect.stringMatching(STATE_RE))
@@ -111,10 +115,11 @@ describe('?auth=start bounces to landing with signin=ready (AUTH-05-11)', () => 
   it('auth=start bounces with signin=ready', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(<App />)
     const s = storedState()
-    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(replaceWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(hrefWrites).toEqual([])
     expect(s).toEqual(expect.stringMatching(STATE_RE))
   })
 
@@ -122,10 +127,11 @@ describe('?auth=start bounces to landing with signin=ready (AUTH-05-11)', () => 
     localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(<App />)
     const s = storedState()
-    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(replaceWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(hrefWrites).toEqual([])
     expect(s).toEqual(expect.stringMatching(STATE_RE))
   })
 
@@ -134,10 +140,11 @@ describe('?auth=start bounces to landing with signin=ready (AUTH-05-11)', () => 
     expect(readDestination(), 'sanity: the destination is stored before boot').toEqual({ path: '/audit', query: '' })
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(<App />)
     const s = storedState()
-    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(replaceWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(hrefWrites).toEqual([])
     expect(readDestination()).toEqual({ path: '/audit', query: '' })
   })
 
@@ -145,12 +152,13 @@ describe('?auth=start bounces to landing with signin=ready (AUTH-05-11)', () => 
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start&persona=firm')
     const replace = vi.spyOn(window.history, 'replaceState')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     await act(async () => {
       render(<App />)
     })
     const s = storedState()
-    expect(hrefWrites, 'the start bounce, as without persona=').toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(replaceWrites, 'the start bounce, as without persona=').toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(hrefWrites).toEqual([])
     expect(s).toEqual(expect.stringMatching(STATE_RE))
     expect(signInSpy, 'no mint').not.toHaveBeenCalled()
     // The strip writes a null history state; Workspace's own URL writes carry `{ e }`.
@@ -160,10 +168,11 @@ describe('?auth=start bounces to landing with signin=ready (AUTH-05-11)', () => 
 
   it('auth=start without a landing URL shows the picker', () => {
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(<App />)
     expect(screen.getByText('Choose an account')).toBeTruthy()
     expect(hrefWrites).toEqual([])
+    expect(replaceWrites).toEqual([])
     expect(window.location.search).toBe('')
   })
 })
@@ -175,12 +184,13 @@ describe('signInState adversarial: App', () => {
   it('App adversarial: a URL state beside auth=start is never adopted', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', `/?state=${X}&auth=start`)
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(<App />)
     const s = storedState()
     expect(s).toEqual(expect.stringMatching(STATE_RE))
     expect(s).not.toBe(X)
-    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(replaceWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(hrefWrites).toEqual([])
   })
 
   it('App adversarial: a URL state on a sessionless boot is never adopted', () => {
@@ -207,9 +217,10 @@ describe('signInState adversarial: App', () => {
     captureDestination('/audit', '', Date.now())
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     const { container } = render(<App />)
-    expect(hrefWrites).toEqual([`https://landing.example/?state=${storedState()}&signin=ready`])
+    expect(replaceWrites).toEqual([`https://landing.example/?state=${storedState()}&signin=ready`])
+    expect(hrefWrites).toEqual([])
     expect(container.innerHTML, 'nothing renders while the bounce leaves').toBe('')
     expect(readDestination()).toEqual({ path: '/audit', query: '' })
   })
@@ -226,21 +237,23 @@ describe('signInState adversarial: App', () => {
   it('App adversarial: StrictMode auth=start navigates once', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(
       <StrictMode>
         <App />
       </StrictMode>,
     )
-    expect(hrefWrites).toEqual([`https://landing.example/?state=${storedState()}&signin=ready`])
+    expect(replaceWrites).toEqual([`https://landing.example/?state=${storedState()}&signin=ready`])
+    expect(hrefWrites).toEqual([])
   })
 
   it('App adversarial: a repeated auth param reads the first value', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start&auth=other')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(<App />)
-    expect(hrefWrites).toEqual([`https://landing.example/?state=${storedState()}&signin=ready`])
+    expect(replaceWrites).toEqual([`https://landing.example/?state=${storedState()}&signin=ready`])
+    expect(hrefWrites).toEqual([])
     expect(window.location.search).toBe('')
   })
 
@@ -285,10 +298,11 @@ describe('signInState adversarial: App', () => {
 
   it('App adversarial: auth=start without a landing URL mints no state', () => {
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(<App />)
     expect(screen.getByText('Choose an account')).toBeTruthy()
     expect(hrefWrites).toEqual([])
+    expect(replaceWrites).toEqual([])
     expect(sessionStorage.getItem(KEY)).toBeNull()
   })
 })
@@ -316,20 +330,21 @@ describe('?auth=start mints a fresh state', () => {
     sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - NINE_MIN }))
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(<App />)
     const s = storedState()
     expect(s).toEqual(expect.stringMatching(STATE_RE))
     expect(s, 'the live stored state is not reused').not.toBe(X)
     expect(storedAt()).toBe(NOW)
-    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(replaceWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(hrefWrites).toEqual([])
   })
 
   it('StrictMode auth=start over a live state navigates once with the stored fresh state', () => {
     sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - NINE_MIN }))
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(
       <StrictMode>
         <App />
@@ -338,7 +353,8 @@ describe('?auth=start mints a fresh state', () => {
     const s = storedState()
     expect(s, 'the live stored state is not reused').not.toBe(X)
     expect(storedAt()).toBe(NOW)
-    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(replaceWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(hrefWrites).toEqual([])
   })
 
   // Under a minute old, ensureSignInState would reuse it; only a mint replaces it.
@@ -346,7 +362,7 @@ describe('?auth=start mints a fresh state', () => {
     sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: X, at: NOW - 30_000 }))
     vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     render(
       <StrictMode>
         <App />
@@ -356,7 +372,8 @@ describe('?auth=start mints a fresh state', () => {
     expect(s).toEqual(expect.stringMatching(STATE_RE))
     expect(s, 'the stored state is not reused').not.toBe(X)
     expect(storedAt()).toBe(NOW)
-    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(replaceWrites).toEqual([`https://landing.example/?state=${s}&signin=ready`])
+    expect(hrefWrites).toEqual([])
   })
 
   it('control: the front door still reuses the same live state', () => {

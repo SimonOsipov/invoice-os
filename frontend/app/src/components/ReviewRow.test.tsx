@@ -1347,7 +1347,7 @@ describe('ReviewRow row-expansion: Open line N (ENGI-16-04)', () => {
     const before = detailFixture({ status: 'draft', can_edit: true, vat: '75.00', violations: [LINE_VIOLATION, VAT_VIOLATION] })
     const fetchMock = vi.fn((_url: string, init?: { method?: string }) => {
       if (init?.method === 'PATCH') saved = true
-      const body = saved ? { ...before, vat: '999' } : before
+      const body = saved ? { ...before, vat: '999.00' } : before
       return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(body) })
     })
     vi.stubGlobal('fetch', fetchMock)

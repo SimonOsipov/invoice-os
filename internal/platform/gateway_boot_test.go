@@ -440,6 +440,28 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 				}
 			})
 
+			t.Run("checks the rules role on the whole staff class", func(t *testing.T) {
+				staff := func(h map[string]string, rules bool) map[string]string {
+					out := gwWith(gwWith(h, "X-Gateway-Token", gwToken), "X-User-Staff", "true")
+					if rules {
+						out["X-User-Rules-Role"] = "true"
+					}
+					return out
+				}
+				for _, target := range []string{"/v1/staff/x", "/v1/staff", "/v1/./staff/x"} {
+					if code, body := p.do(t, "GET", target, "", staff(gwForged(), false)); code != http.StatusForbidden || body != "{\"error\":\"forbidden\"}\n" {
+						t.Errorf("GET %s, staff without the rules role = %d %q, want 403 forbidden", target, code, body)
+					}
+				}
+				if code, body := p.do(t, "GET", "/v1/staff/x", "", map[string]string{"X-Gateway-Token": gwToken}); code != http.StatusUnauthorized || body != gwUnauthorizedBody {
+					t.Errorf("GET /v1/staff/x, token and no caller = %d %q, want 401 %q", code, body, gwUnauthorizedBody)
+				}
+				// Control: with the rules role the check admits the request, so the 403s above are the check's.
+				if code, body := p.do(t, "GET", "/v1/staff/x", "", staff(gwForged(), true)); code == http.StatusForbidden || code == http.StatusUnauthorized {
+					t.Errorf("GET /v1/staff/x, staff with the rules role = %d %q, want the check to admit it", code, body)
+				}
+			})
+
 			t.Run("keeps health routes open without the token", func(t *testing.T) {
 				if code, _ := p.do(t, "GET", "/healthz", "", gwForged()); code != http.StatusOK {
 					t.Errorf("GET /healthz, no token = %d, want 200", code)

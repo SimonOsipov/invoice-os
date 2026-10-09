@@ -1,8 +1,8 @@
 package platform
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -213,6 +213,10 @@ func TestStaffClass_VariantsAreChecked(t *testing.T) {
 		"/v1//staff/x",
 		"/v1/x/../staff/x",
 		"/v1/staff/../staff/x",
+		"/v1/staff/..",
+		"/v1/staff/../ping",
+		"/v1/staff%2Fx",
+		"/v1/staff/no-such-route",
 	}
 	for _, target := range variants {
 		t.Run(target, func(t *testing.T) {
@@ -235,6 +239,28 @@ func TestStaffClass_VariantsAreChecked(t *testing.T) {
 		if rec := rig.serve(staffRules.request(http.MethodGet, target)); rec.Code != http.StatusOK || rig.staff.count() != 1 {
 			t.Errorf("control %s: status %d, handler ran %d times, want 200 and 1", target, rec.Code, rig.staff.count())
 		}
+	}
+}
+
+// An open route (no gateway token) strips the identity headers, so a forged staff caller on a
+// /v1/staff path has no caller left and the handler stays unreached.
+func TestStaffClass_OpenRouteSpoofIsNotAStaffCaller(t *testing.T) {
+	rig := newStaffRig(t, false)
+	rig.app.RequireGateway(guardToken, "GET /v1/staff/x")
+	spoof := staffRules
+	spoof.noGatewayTk = true
+
+	rec := rig.serve(spoof.request(http.MethodGet, "/v1/staff/x"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 (body %q)", rec.Code, rec.Body.String())
+	}
+	if n := rig.staff.count(); n != 0 {
+		t.Errorf("handler ran %d times for a forged staff caller on an open route, want 0", n)
+	}
+
+	// Control: the same caller with the gateway token reaches the handler.
+	if rec := rig.serve(staffRules.request(http.MethodGet, "/v1/staff/x")); rec.Code != http.StatusOK || rig.staff.count() != 1 {
+		t.Errorf("control: status %d, handler ran %d times, want 200 and 1", rec.Code, rig.staff.count())
 	}
 }
 
@@ -281,7 +307,6 @@ func TestStaffClass_RefusalIsRequestLogged(t *testing.T) {
 
 // A staff handler's panic is recovered as a 500. A caller without the rules role never reaches
 // the panic, so the 500 is the rules-role caller's and the 403 is the check's.
-// The plan expects a request line with status 500; recovery wraps the request log, so none is written.
 func TestStaffClass_PanicIsRecovered(t *testing.T) {
 	rig := newStaffRig(t, true)
 	rec := rig.serve(staffOnly.request(http.MethodGet, "/v1/staff/boom"))

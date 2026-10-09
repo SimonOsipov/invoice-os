@@ -1,8 +1,8 @@
 package gateway
 
 import (
-	"context"
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"

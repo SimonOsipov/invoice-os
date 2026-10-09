@@ -13,7 +13,7 @@ import (
 
 // Trusted identity headers the gateway injects on every proxied request after it
 // verifies the caller's JWT. They mirror the gateway's outbound contract
-// (internal/gateway: X-Tenant-ID / X-User-ID / X-User-Role / X-User-Email). headerTenantID is
+// (internal/gateway). headerTenantID is
 // already declared in middleware.go (same package) and reused here.
 const (
 	headerUserID    = "X-User-ID"

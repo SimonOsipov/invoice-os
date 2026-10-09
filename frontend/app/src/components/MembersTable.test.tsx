@@ -367,22 +367,43 @@ describe('the status-error strip', () => {
 })
 
 describe('the room reserved under an open menu', () => {
-  // 205px is the tallest menu's overhang below the card, measured in Chromium; layout is not
-  // observable in jsdom, so the reserved padding is the only handle.
+  // Layout is not observable in jsdom, so the reserved padding is the handle. The plain menu
+  // overhangs the card by 205px (Chromium); the account note adds about 35px.
   const scroller = () => screen.getByTestId('members-table').parentElement as HTMLElement
-
-  it('reserves the measured overhang plus a small margin while a menu is open, and nothing when closed', () => {
-    renderRows(ROSTER())
+  const reservedAfterOpening = (row: HTMLElement) => {
     expect(scroller().style.paddingBottom).toBe('0px')
-
-    fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
-
+    fireEvent.click(within(row).getByTestId('member-menu-trigger'))
     const reserved = parseFloat(scroller().style.paddingBottom)
-    expect(reserved).toBeGreaterThanOrEqual(205)
-    expect(reserved, 'over-reserving leaves a visible gap under the card').toBeLessThanOrEqual(220)
-
-    fireEvent.click(rowOf('Cy Invited').getByTestId('member-menu-trigger'))
+    fireEvent.click(within(row).getByTestId('member-menu-trigger'))
     expect(scroller().style.paddingBottom).toBe('0px')
+    return reserved
+  }
+
+  it('reserves the plain overhang plus a small margin for a menu without a note', () => {
+    renderRows(ROSTER())
+    for (const name of ['Bo Active', 'Cy Invited']) {
+      const reserved = reservedAfterOpening(screen.getByText(name).closest('[data-testid="member-row"], [data-testid="invite-row"]') as HTMLElement)
+      expect(reserved, `${name}: less than the menu needs`).toBeGreaterThanOrEqual(205)
+      expect(reserved, `${name}: over-reserving leaves a visible gap under the card`).toBeLessThanOrEqual(225)
+    }
+  })
+
+  it('reserves the noted menu\'s overhang while a menu with an account note is open', () => {
+    for (const account of ['unconfirmed', 'confirmed'] as const) {
+      cleanup()
+      renderPending({ invites: [{ ...INVITE, account }] })
+      const reserved = reservedAfterOpening(screen.getByTestId('invite-row'))
+      expect(reserved, `${account}: less than the menu with its note needs`).toBeGreaterThanOrEqual(240)
+      expect(reserved, `${account}: over-reserving leaves a visible gap under the card`).toBeLessThanOrEqual(260)
+    }
+  })
+
+  it('reserves the plain overhang for a pending row whose account state adds no note', () => {
+    for (const account of ['none', 'unknown', undefined] as const) {
+      cleanup()
+      renderPending({ invites: [{ ...INVITE, account }] })
+      expect(reservedAfterOpening(screen.getByTestId('invite-row')), String(account)).toBeLessThanOrEqual(225)
+    }
   })
 
   it('releases the room when a filter removes the row whose menu was open', () => {
@@ -449,7 +470,7 @@ const INVITE: PendingInvite = {
 }
 
 function renderPending(over: { invites?: PendingInvite[]; onResend?: (id: string) => void; resending?: ReadonlySet<string>; onOpen?: (id: string) => void; extra?: Member[] } = {}) {
-  const pending = invitedMember(INVITE)
+  const pending = invitedMember(over.invites?.[0] ?? INVITE)
   const rows = [...(over.extra ?? []), pending]
   render(
     <MembersTable
@@ -579,5 +600,89 @@ describe('RESEND-07-04: the pending row menu', () => {
       menu = openMenuOf(row)
     }).not.toThrow()
     expect(within(menu).getByRole('button', { name: 'Resend invite' })).toBeTruthy()
+  })
+})
+
+describe('LOGFIX-05-03: the invitee account state on the pending row', () => {
+  const withState = (over: Partial<PendingInvite>) => renderPending({ invites: [{ ...INVITE, ...over }] })
+  const stateOf = () => screen.getByTestId('invite-account-state')
+  const FOLLOWS = Node.DOCUMENT_POSITION_FOLLOWING
+
+  it('MembersTable: the status cell names an unconfirmed and a confirmed invitee', () => {
+    for (const [account, label] of [
+      ['unconfirmed', 'Account created, email not confirmed'],
+      ['confirmed', 'Confirmed, not joined'],
+    ] as const) {
+      cleanup()
+      withState({ account })
+      const state = stateOf()
+      expect(state.textContent).toBe(label)
+      expect(within(screen.getByTestId('invite-row')).getByText('INVITED').compareDocumentPosition(state) & FOLLOWS, 'pill precedes').toBeTruthy()
+      expect(state.compareDocumentPosition(screen.getByText(/^Expires in/)) & FOLLOWS, 'expiry line follows').toBeTruthy()
+    }
+  })
+
+  it('MembersTable: none, unknown and absent keep today\'s cell', () => {
+    for (const account of ['none', 'unknown', undefined] as const) {
+      cleanup()
+      withState({ account })
+      expect(screen.queryByTestId('invite-account-state'), String(account)).toBeNull()
+      expect(screen.getByText('INVITED')).toBeTruthy()
+      expect(screen.getByText(/^Expires in/)).toBeTruthy()
+    }
+  })
+
+  it('MembersTable: an expired or unsent invite still names the state', () => {
+    withState({ account: 'confirmed', expiresAt: new Date(Date.now() - 86_400_000).toISOString() })
+    expect(stateOf().textContent).toBe('Confirmed, not joined')
+    expect(stateOf().compareDocumentPosition(screen.getByText('Expired')) & FOLLOWS, 'state line first').toBeTruthy()
+
+    cleanup()
+    withState({ account: 'unconfirmed', delivery: 'failed' })
+    expect(stateOf().textContent).toBe('Account created, email not confirmed')
+    expect(stateOf().compareDocumentPosition(screen.getByText('Email not sent')) & FOLLOWS, 'state line first').toBeTruthy()
+  })
+
+  it("MembersTable: the state line matches the expiry line's type", () => {
+    withState({ account: 'unconfirmed' })
+    const state = getComputedStyle(stateOf())
+    const expiry = getComputedStyle(screen.getByText(/^Expires in/))
+    expect(state.fontSize).toBe(expiry.fontSize)
+    expect(state.color).toBe(expiry.color)
+    expect(state.fontSize, 'control: the size is set, not empty').toBe('11px')
+  })
+
+  it('MembersTable: the pending menu shows the state above its items', () => {
+    for (const [account, label] of [
+      ['unconfirmed', 'Account created, email not confirmed'],
+      ['confirmed', 'Confirmed, not joined'],
+    ] as const) {
+      cleanup()
+      withState({ account })
+      const menu = openMenuOf(screen.getByTestId('invite-row'))
+      const note = within(menu).getByTestId('member-menu-state')
+      expect(note.textContent).toBe(label)
+      expect(note.compareDocumentPosition(within(menu).getByRole('button', { name: 'Resend invite' })) & FOLLOWS).toBeTruthy()
+    }
+  })
+
+  it('MembersTable: no state note for none, unknown or a member row', () => {
+    for (const account of ['none', 'unknown', undefined] as const) {
+      cleanup()
+      withState({ account })
+      expect(within(openMenuOf(screen.getByTestId('invite-row'))).queryByTestId('member-menu-state'), String(account)).toBeNull()
+    }
+    cleanup()
+    renderPending({ extra: [member({ id: 'u2', name: 'Ada Person' })] })
+    expect(within(openMenuOf(screen.getByTestId('member-row'))).queryByTestId('member-menu-state')).toBeNull()
+  })
+
+  it("MembersTable: a pending row's menu offers Resend and two disabled items with their reasons (confirmed row)", () => {
+    withState({ account: 'confirmed' })
+    const menu = openMenuOf(screen.getByTestId('invite-row'))
+    const items = within(menu).getAllByRole('button') as HTMLButtonElement[]
+    expect(items.map((i) => i.textContent)).toEqual(['Resend invite', 'Copy invite link', 'Revoke invite'])
+    expect(items.map((i) => i.disabled)).toEqual([false, true, true])
+    expect(within(menu).getAllByTestId('member-menu-reason')).toHaveLength(2)
   })
 })

@@ -603,9 +603,10 @@ export const MEMBER_UNBACKED: Record<
 // The invitations wire and the invite rules
 // ---------------------------------------------------------------------------
 
-/** One item of the invitations endpoints (internal/tenancy `InviteResult`; the list adds fields this module ignores). */
-export type InvitationWire = { id: string; email: string; role: string; status: string; expires_at: string; delivery: string }
-export type PendingInvite = { id: string; email: string; role: AccessRole; expiresAt: string; delivery: string }
+/** One item of the invitations endpoints (internal/tenancy `InviteResult`). */
+export type InvitationWire = { id: string; email: string; role: string; status: string; expires_at: string; delivery: string; account?: string }
+export type InviteAccount = 'none' | 'unconfirmed' | 'confirmed' | 'unknown'
+export type PendingInvite = { id: string; email: string; role: AccessRole; expiresAt: string; delivery: string; account?: InviteAccount }
 
 export const INVITE_ADMIN_ONLY = 'Only an admin can invite people.'
 
@@ -633,12 +634,19 @@ export function resendInvitation(f: AuthedFetch, base: string, id: string): Prom
 
 /** `role` is verbatim, like `toMember`. */
 export function toPendingInvite(w: InvitationWire): PendingInvite {
-  return { id: w.id, email: w.email, role: w.role as AccessRole, expiresAt: w.expires_at, delivery: w.delivery }
+  const invite: PendingInvite = { id: w.id, email: w.email, role: w.role as AccessRole, expiresAt: w.expires_at, delivery: w.delivery }
+  if (w.account === undefined) return invite
+  const a = w.account
+  return { ...invite, account: a === 'none' || a === 'unconfirmed' || a === 'confirmed' ? a : 'unknown' }
 }
 
-/** Replaces by `id`, appends new ids; always allocates. */
+/** Replaces by `id`, appends new ids; always allocates. A replacement without `account` keeps the listed one. */
 export function upsertInvites(list: readonly PendingInvite[], items: readonly PendingInvite[]): PendingInvite[] {
-  const out = list.map((i) => items.find((n) => n.id === i.id) ?? i)
+  const out = list.map((i) => {
+    const n = items.find((x) => x.id === i.id)
+    if (!n) return i
+    return n.account === undefined && i.account !== undefined ? { ...n, account: i.account } : n
+  })
   return [...out, ...items.filter((n) => !list.some((i) => i.id === n.id))]
 }
 
@@ -740,15 +748,23 @@ export function serverRefusedAddresses(message: string, chips: readonly string[]
 
 const HOUR_MS = 3_600_000
 const DAY_MS = 24 * HOUR_MS
+const CLOCK_SLACK_MS = 30 * 60_000
 
-/** Whole days with an hour of slack, so a browser clock a little behind still reads 7 days. */
+/** The account-state line under the INVITED pill; `null` when there is nothing to add. */
+export function inviteAccountLine(i: PendingInvite): string | null {
+  if (i.account === 'unconfirmed') return 'Account created, email not confirmed'
+  if (i.account === 'confirmed') return 'Confirmed, not joined'
+  return null
+}
+
+/** Whole days left, with 30 minutes of slack for a browser clock ahead of the server. */
 export function inviteStatusLine(i: PendingInvite, nowMs: number): string {
   if (i.delivery === 'failed') return 'Email not sent'
   const expires = Date.parse(i.expiresAt)
   if (Number.isNaN(expires)) return ABSENT_LABEL
   const remaining = expires - nowMs
   if (remaining <= 0) return 'Expired'
-  const days = Math.max(1, Math.ceil((remaining - HOUR_MS) / DAY_MS))
+  const days = Math.max(1, Math.floor((remaining + CLOCK_SLACK_MS) / DAY_MS))
   return `Expires in ${days} ${days === 1 ? 'day' : 'days'}`
 }
 

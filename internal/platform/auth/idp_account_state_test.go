@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"sort"
@@ -16,7 +19,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/tenancy"
 )
 
 const stateCall = `SELECT public.invitee_account_state($1::text)`
@@ -474,4 +480,186 @@ func TestIdP_UnknownStateStillMeetsGoTruesEmptyIdentities(t *testing.T) {
 
 	status, body = w.registerInvitee(t, "pw-"+uuid.NewString())
 	requireAccountExists(t, status, body)
+}
+
+// inviteAnother has the admin invite one more fresh address and returns it.
+func (w inviteWorld) inviteAnother(t *testing.T, prefix string) string {
+	t.Helper()
+	email := prefix + uuid.NewString() + "@gmail.com"
+	t.Cleanup(func() {
+		_, _ = superConn(t).Exec(context.Background(), `DELETE FROM auth.users WHERE email = $1`, email)
+	})
+	inviter := &tenancy.Inviter{Store: w.store, Sender: accountmail.NewResend(w.resend.URL, "k_test", nil), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if res, err := inviter.Invite(w.adminCtx, []string{email}, "preparer"); err != nil || len(res) != 1 {
+		t.Fatalf("invite %s: %+v, err %v", email, res, err)
+	}
+	return email
+}
+
+// listRowsFor returns the admin's list rows for one address.
+func (w inviteWorld) listRowsFor(t *testing.T, email string) (rows []tenancy.Invitation, total int) {
+	t.Helper()
+	all, err := w.store.ListInvitations(w.adminCtx)
+	if err != nil {
+		t.Fatalf("ListInvitations: %v", err)
+	}
+	for _, r := range all {
+		if r.Email == email {
+			rows = append(rows, r)
+		}
+	}
+	return rows, len(all)
+}
+
+func (w inviteWorld) requireListState(t *testing.T, want string) tenancy.Invitation {
+	t.Helper()
+	rows, _ := w.listRowsFor(t, w.email)
+	if len(rows) != 1 || rows[0].Account != want {
+		t.Fatalf("list rows for %s = %+v, want exactly one with account %q", w.email, rows, want)
+	}
+	return rows[0]
+}
+
+func TestIdP_InvitationsListCarriesTheAccountState(t *testing.T) {
+	w := newInviteWorld(t, "liststate-")
+	password := "pw-" + uuid.NewString()
+	u := idpUser{email: w.email, password: password}
+
+	// A second pending address keeps its own state while the first moves.
+	other := w.inviteAnother(t, "listother-")
+	first := w.requireListState(t, "none")
+	check := func(want string) {
+		t.Helper()
+		got := w.requireListState(t, want)
+		if got.ID != first.ID || got.Role != first.Role || got.Status != first.Status || got.Delivery != first.Delivery {
+			t.Fatalf("row changed with the account state: %+v, was %+v", got, first)
+		}
+		if rows, total := w.listRowsFor(t, other); len(rows) != 1 || rows[0].Account != "none" || total != 2 {
+			t.Fatalf("second invitee rows = %+v of %d; want exactly one, account none, in a list of 2", rows, total)
+		}
+	}
+
+	w.register(t, password)
+	check("unconfirmed")
+	confirmByLink(t, u)
+	check("confirmed")
+
+	// A repeat registration leaves one confirmed row.
+	status, body := w.registerInvitee(t, "pw-"+uuid.NewString())
+	requireAccountExists(t, status, body)
+	check("confirmed")
+
+	// Accepting removes the row from the list; the list is not empty before it.
+	if _, total := w.listRowsFor(t, w.email); total == 0 {
+		t.Fatal("the list is empty before the accept")
+	}
+	status, session := signIn(t, w.base, u)
+	token, _ := session["access_token"].(string)
+	if status != http.StatusOK || token == "" {
+		t.Fatalf("sign in: status %d, body %v; want 200", status, session)
+	}
+	caller, err := idpVerifier(t, w.base).Verify(context.Background(), token)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if code, body := w.accept(caller); code != http.StatusOK {
+		t.Fatalf("accept: status %d, body %s; want 200", code, body)
+	}
+	if rows, total := w.listRowsFor(t, w.email); len(rows) != 0 || total != 1 {
+		t.Errorf("list after the accept holds %d rows, %+v for %s; want only the second invitee's row", total, rows, w.email)
+	}
+}
+
+func TestIdP_InvitationsListStateIsAdminOnly(t *testing.T) {
+	w := newInviteWorld(t, "adminonly-")
+	password := "pw-" + uuid.NewString()
+	w.register(t, password)
+	confirmByLink(t, idpUser{email: w.email, password: password})
+
+	su := superConn(t)
+	member := func(role, status string) string {
+		id := uuid.NewString()
+		exec(t, su, `INSERT INTO memberships (tenant_id, user_id, role, status, display_name, email) VALUES ($1, $2, $3, $4, $5, $6)`,
+			w.tenant, id, role, status, role+" "+status, id+"@members.test")
+		return id
+	}
+	// A suspended or absent member is refused earlier, as db.ErrNotActiveMember (TestInvitations_NonAdminIsRefused).
+	callers := []struct {
+		name, id string
+		want     error
+	}{
+		{"active preparer", member("preparer", "active"), tenancy.ErrInviteNotPermitted},
+		{"active reviewer", member("reviewer", "active"), tenancy.ErrInviteNotPermitted},
+		{"suspended admin", member("admin", "suspended"), db.ErrNotActiveMember},
+		{"no membership", uuid.NewString(), db.ErrNotActiveMember},
+	}
+	for _, c := range callers {
+		ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: c.id, Role: "authenticated", TenantID: w.tenant})
+		got, err := w.store.ListInvitations(ctx)
+		if !errors.Is(err, c.want) || got != nil {
+			t.Errorf("%s: ListInvitations = %+v, err %v; want %v and a nil slice", c.name, got, err, c.want)
+		}
+	}
+	w.requireListState(t, "confirmed")
+}
+
+func TestIdP_InvitationsListDegradesToUnknownWithoutTheGrant(t *testing.T) {
+	w := newInviteWorld(t, "listnogrant-")
+	su := superConn(t)
+	w.inviteAnother(t, "listnogrant2-")
+	before, err := w.store.ListInvitations(w.adminCtx)
+	if err != nil || len(before) != 2 {
+		t.Fatalf("list before the revoke: %d rows, err %v; want 2", len(before), err)
+	}
+	for _, r := range before {
+		if r.Account != "none" {
+			t.Fatalf("control: row %s account = %q before the revoke, want none", r.Email, r.Account)
+		}
+	}
+
+	exec(t, su, `REVOKE USAGE ON SCHEMA auth FROM auth_hook_reader`)
+	t.Cleanup(func() {
+		if _, err := db.GrantAccountStateRead(context.Background(), mailEnv(t, "DATABASE_AUTH_ADMIN_URL")); err != nil {
+			t.Errorf("re-run the grant: %v", err)
+		}
+	})
+	after, err := w.store.ListInvitations(w.adminCtx)
+	if err != nil {
+		t.Fatalf("ListInvitations without the grant: %v", err)
+	}
+	if len(after) != 2 {
+		t.Fatalf("list without the grant = %d rows, want 2", len(after))
+	}
+	for i, r := range after {
+		b := before[i]
+		if r.Account != "unknown" {
+			t.Errorf("row %s account = %q, want unknown", r.Email, r.Account)
+		}
+		if r.ID != b.ID || r.Email != b.Email || r.Role != b.Role || r.Status != b.Status || r.Delivery != b.Delivery || r.InvitedBy != b.InvitedBy {
+			t.Errorf("row %d changed without the grant: %+v, was %+v", i, r, b)
+		}
+	}
+
+	// Through the handler: 200, every row unknown, one WARN with the SQLSTATE and no address.
+	var logs strings.Builder
+	h := tenancy.InvitationsListHandler(w.store.ListInvitations, slog.New(slog.NewTextHandler(&logs, nil)))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/invitations", nil).WithContext(w.adminCtx))
+	var body struct {
+		Invitations []struct{ Email, Account string }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusOK || len(body.Invitations) != 2 {
+		t.Fatalf("handler: status %d, body %s, err %v; want 200 with 2 items", rec.Code, rec.Body, err)
+	}
+	for _, it := range body.Invitations {
+		if it.Account != "unknown" {
+			t.Errorf("handler item account = %q, want unknown", it.Account)
+		}
+		if strings.Contains(logs.String(), it.Email) {
+			t.Errorf("log leaks %s:\n%s", it.Email, logs.String())
+		}
+	}
+	if n := strings.Count(logs.String(), "level=WARN"); n != 1 || !strings.Contains(logs.String(), "sqlstate=42501") {
+		t.Errorf("want one WARN with sqlstate=42501, got:\n%s", logs.String())
+	}
 }

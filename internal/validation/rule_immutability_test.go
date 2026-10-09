@@ -621,7 +621,7 @@ func TestRIL09_UnsealRejected(t *testing.T) {
 // TestRIL10_IsActiveFlipAllowedOnSealed (RIL-10): the legitimate `is_active`
 // activation flip (deactivate whichever version is currently active, activate
 // v1) must remain legal even though both v1/v2 are sealed -- Guard C's UPDATE
-// branch only rejects an unseal transition, never touches is_active.
+// branch never looks at is_active.
 // Rolled-back super tx. Precondition (requireSealed) makes this 42703
 // pre-migration, per the spec's Setup ("sealed v1 (inactive) + v2 (active)").
 //
@@ -677,7 +677,7 @@ func TestRIL10_IsActiveFlipAllowedOnSealed(t *testing.T) {
 // TestRIL11_SealFalseToTrueAndNoOpAllowed (RIL-11): a fresh throwaway
 // version is born unsealed (sealed=false, the default), then sealed
 // (false->true, must succeed), then sealed again (true->true, a no-op, must
-// also succeed -- only true->false is rejected, per Guard C). Rolled-back
+// also succeed -- Guard C rejects only true->false of sealed). Rolled-back
 // super tx. Pre-migration this fails 42703 at the very first `SELECT
 // sealed` (the column does not exist yet to even carry a default).
 func TestRIL11_SealFalseToTrueAndNoOpAllowed(t *testing.T) {

@@ -415,8 +415,11 @@ func TestV4_DownRestoresV3Active(t *testing.T) {
 	if err := tx.QueryRow(ctx, `SELECT effective_from::text FROM rule_set_versions WHERE version = 4`).Scan(&v4From); err != nil {
 		t.Fatalf("read v4 effective_from: %v [AC-6 precondition]", err)
 	}
-	if v4From == nil || *v4From != "2026-08-06" {
-		t.Fatalf("v4 effective_from = %v before the simulated Down, want 2026-08-06 [AC-6 precondition]", v4From)
+	if v4From == nil {
+		t.Fatal("v4 effective_from = NULL before the simulated Down, want 2026-08-06 [AC-6 precondition]")
+	}
+	if *v4From != "2026-08-06" {
+		t.Fatalf("v4 effective_from = %s before the simulated Down, want 2026-08-06 [AC-6 precondition]", *v4From)
 	}
 
 	// db/seed.dev.sql seeds demo invoices that stamp the active version via

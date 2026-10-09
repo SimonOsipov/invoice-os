@@ -194,6 +194,32 @@ func TestEffectiveDates_FirstDateOnSealedUndatedVersionAllowed(t *testing.T) {
 		t.Fatalf("RowsAffected = %d, want 1", tag.RowsAffected())
 	}
 	edWant(t, edFrom(t, ctx, tx, id), "3001-01-01", "fixture effective_from")
+
+	// The first date is itself final.
+	assertSQLState(t, attemptWithSavepoint(t, ctx, tx,
+		`UPDATE rule_set_versions SET effective_from = '3001-02-02' WHERE id = $1`, id), "23001")
+	edWant(t, edFrom(t, ctx, tx, id), "3001-01-01", "fixture effective_from after the refused re-date")
+}
+
+func TestEffectiveDates_SealedUpdateThatKeepsTheDateIsAllowed(t *testing.T) {
+	migrator := migratorPool(t)
+	ctx := context.Background()
+	tx := edBegin(t, ctx, migrator)
+
+	id := edFixture(t, ctx, tx, nextVersion(), true, "3001-01-01")
+	for _, stmt := range []string{
+		`UPDATE rule_set_versions SET effective_from = effective_from WHERE id = $1`,
+		`UPDATE rule_set_versions SET notes = 'ed-keep-date' WHERE id = $1`,
+	} {
+		tag, err := tx.Exec(ctx, stmt, id)
+		if err != nil {
+			t.Fatalf("%s: %v -- want success, the date does not change", stmt, err)
+		}
+		if tag.RowsAffected() != 1 {
+			t.Fatalf("%s: RowsAffected = %d, want 1", stmt, tag.RowsAffected())
+		}
+	}
+	edWant(t, edFrom(t, ctx, tx, id), "3001-01-01", "fixture effective_from")
 }
 
 func TestEffectiveDates_GuardStillRefusesUnsealAndDelete(t *testing.T) {
@@ -258,16 +284,33 @@ func TestVersionFor_SameStartDateGoesToTheHigherVersion(t *testing.T) {
 	if got != nil && *got == loID {
 		t.Errorf("tie went to the lower version %d", lo)
 	}
+
+	// Pre-history tie: both start before v4, and a date before both gets the higher version.
+	preLo, preHi := nextVersion(), nextVersion()
+	preHiID := edFixture(t, ctx, tx, preHi, true, "1000-01-01")
+	edFixture(t, ctx, tx, preLo, true, "1000-01-01")
+	edWant(t, edVersionFor(t, ctx, tx, "0999-01-01"), preHiID, "rule_set_version_for(0999-01-01) = higher of the earliest tie")
 }
 
 func TestVersionFor_DateBeforeEveryStartGetsTheEarliest(t *testing.T) {
-	_, app := dbTestPools(t)
+	super, app := dbTestPools(t)
 	ctx := context.Background()
 
 	requireEffectiveFrom(t, ctx, app)
 	v4 := versionIDByVersion(t, ctx, app, 4)
 	for _, date := range []string{"1999-01-01", "2026-08-05", "2026-08-06"} {
 		edWant(t, edVersionFor(t, ctx, app, date), v4, "rule_set_version_for("+date+")")
+	}
+
+	// With a later dated version present, "earliest" still means v4, not the latest.
+	tx := edBegin(t, ctx, super)
+	later := edFixture(t, ctx, tx, nextVersion(), true, "3001-01-01")
+	for _, date := range []string{"1999-01-01", "2026-08-05"} {
+		got := edVersionFor(t, ctx, tx, date)
+		edWant(t, got, v4, "rule_set_version_for("+date+") with a later version present")
+		if got != nil && *got == later {
+			t.Errorf("rule_set_version_for(%s) chose the later fixture", date)
+		}
 	}
 }
 
@@ -320,6 +363,32 @@ func TestRechecks_AppCanReadAndInsertOnly(t *testing.T) {
 	tx := edBegin(t, ctx, super)
 
 	id := edFixture(t, ctx, tx, nextVersion(), true, "3001-01-01")
+
+	// The table is global and holds no tenant data; only the app role and the owner may touch it.
+	rows, err := tx.Query(ctx,
+		`SELECT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END, a.privilege_type
+		   FROM pg_class c, aclexplode(c.relacl) a
+		  WHERE c.oid = 'rule_set_version_rechecks'::regclass AND a.grantee <> c.relowner
+		  ORDER BY 1, 2`)
+	if err != nil {
+		t.Fatalf("read rule_set_version_rechecks ACL: %v", err)
+	}
+	var grants []string
+	for rows.Next() {
+		var grantee, priv string
+		if err := rows.Scan(&grantee, &priv); err != nil {
+			t.Fatalf("scan ACL: %v", err)
+		}
+		grants = append(grants, grantee+":"+priv)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("ACL rows: %v", err)
+	}
+	if want := "invoice_app:INSERT,invoice_app:SELECT"; strings.Join(grants, ",") != want {
+		t.Errorf("non-owner grants on rule_set_version_rechecks = %v, want %s", grants, want)
+	}
+
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE invoice_app`); err != nil {
 		t.Fatalf("SET LOCAL ROLE invoice_app: %v", err)
 	}

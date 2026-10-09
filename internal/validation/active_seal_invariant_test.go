@@ -543,17 +543,19 @@ func TestASIAdv_ConstraintIsValidated(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
 
-	var convalidated bool
-	if err := app.QueryRow(ctx,
-		`SELECT convalidated FROM pg_constraint
-		  WHERE conname = 'rule_set_versions_active_is_sealed'
-		    AND conrelid = 'rule_set_versions'::regclass`,
-	).Scan(&convalidated); err != nil {
-		t.Fatalf("query pg_constraint.convalidated for rule_set_versions_active_is_sealed: %v", err)
-	}
-	if !convalidated {
-		t.Error("rule_set_versions_active_is_sealed.convalidated = false -- the CHECK was added NOT VALID (or " +
-			"never validated), so it does not guarantee pre-existing rows satisfy the active⟹sealed invariant")
+	for _, name := range []string{"rule_set_versions_active_is_sealed", "rule_set_versions_dated_is_sealed"} {
+		var convalidated bool
+		if err := app.QueryRow(ctx,
+			`SELECT convalidated FROM pg_constraint
+			  WHERE conname = $1
+			    AND conrelid = 'rule_set_versions'::regclass`, name,
+		).Scan(&convalidated); err != nil {
+			t.Fatalf("query pg_constraint.convalidated for %s: %v", name, err)
+		}
+		if !convalidated {
+			t.Errorf("%s.convalidated = false -- the CHECK was added NOT VALID (or "+
+				"never validated), so it does not guarantee pre-existing rows satisfy the invariant", name)
+		}
 	}
 }
 

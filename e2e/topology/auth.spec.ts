@@ -835,23 +835,25 @@ const historyLength = (page: Page) => page.evaluate(() => history.length)
 // ceiling: fixed wait, an absence has no event to await; raise if a late bounce is ever seen
 const BOUNCE_SETTLE_MS = 3_000
 
+async function expectPlainLanding(page: Page, when: string, appNavigations: () => string[]) {
+  expect(page.url().startsWith(LANDING_URL), `${when}: left the landing: ${page.url()}`).toBe(true)
+  const u = new URL(page.url())
+  expect(u.pathname, `${when}: path`).not.toBe('/privacy')
+  expect(u.searchParams.has('signin'), `${when}: signin survived: ${page.url()}`).toBe(false)
+  expect(u.searchParams.has('state'), `${when}: state survived: ${page.url()}`).toBe(false)
+  await expect(headerSignIn(page)).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(appNavigations(), `${when}: a request went to the app`).toHaveLength(1)
+}
+
 test('deployed landing: Back after the Sign in bounce leaves a working Sign in', async ({ page }) => {
+  const errors = collectErrors(page)
   await seedConsent(page, false)
   await page.goto(`${LANDING_URL}/privacy`)
   await page.goto(LANDING_URL)
   const base = await historyLength(page)
   const appNavigations = recordAppNavigations(page)
   const form = signInDialog(page).getByLabel('Work email', { exact: true })
-  const expectPlainLanding = async (when: string) => {
-    expect(page.url().startsWith(LANDING_URL), `${when}: left the landing: ${page.url()}`).toBe(true)
-    const u = new URL(page.url())
-    expect(u.pathname, `${when}: path`).not.toBe('/privacy')
-    expect(u.searchParams.has('signin'), `${when}: signin survived: ${page.url()}`).toBe(false)
-    expect(u.searchParams.has('state'), `${when}: state survived: ${page.url()}`).toBe(false)
-    await expect(headerSignIn(page)).toBeVisible()
-    await expect(page.getByRole('dialog')).toHaveCount(0)
-    expect(appNavigations(), `${when}: a request went to the app`).toHaveLength(1)
-  }
 
   await headerSignIn(page).click()
   await expect(form).toBeVisible({ timeout: 20_000 })
@@ -862,7 +864,7 @@ test('deployed landing: Back after the Sign in bounce leaves a working Sign in',
   await page.goBack()
   await page.waitForLoadState('load')
   await page.waitForTimeout(BOUNCE_SETTLE_MS)
-  await expectPlainLanding('first Back')
+  await expectPlainLanding(page, 'first Back', appNavigations)
   expect(await historyLength(page)).toBe(base + 1)
 
   await page.goBack()
@@ -876,23 +878,26 @@ test('deployed landing: Back after the Sign in bounce leaves a working Sign in',
   await page.goForward()
   await page.waitForLoadState('load')
   await page.waitForTimeout(BOUNCE_SETTLE_MS)
-  await expectPlainLanding('Forward x2')
+  await expectPlainLanding(page, 'Forward x2', appNavigations)
 
   await page.reload()
   await page.waitForLoadState('load')
   await page.waitForTimeout(BOUNCE_SETTLE_MS)
-  await expectPlainLanding('reload')
+  await expectPlainLanding(page, 'reload', appNavigations)
 
   await headerSignIn(page).click()
   await expect(form).toBeVisible({ timeout: 20_000 })
   expect(appNavigations()).toHaveLength(2)
   expect(new URL(appNavigations()[1]).searchParams.get('auth')).toBe('start')
   expect(await historyLength(page), 'the second click added one entry').toBe(base + 2)
+
+  expect(errors, `console errors on the landing page:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('deployed landing: a Sign in click after Back adds one entry and signs in for real', async ({ page }) => {
   test.setTimeout(180_000)
   const account = await provisionRealAccount('handoff-back')
+  const errors = collectErrors(page)
   await seedConsent(page, false)
   await page.goto(`${LANDING_URL}/privacy`)
   await page.goto(LANDING_URL)
@@ -912,9 +917,12 @@ test('deployed landing: a Sign in click after Back adds one entry and signs in f
     submitSignIn(page, account.email, account.password),
   ])
   await expectInWorkspace(page, account)
+
+  expect(errors, `console errors on the landing and app:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('deployed landing: Back with no earlier page in the tab leaves the site', async ({ page, context }) => {
+  const errors = collectErrors(page)
   const settled = async () => {
     await page.waitForLoadState('load')
     await page.waitForTimeout(BOUNCE_SETTLE_MS)
@@ -932,10 +940,7 @@ test('deployed landing: Back with no earlier page in the tab leaves the site', a
 
     await page.goBack()
     await settled()
-    expect(page.url().startsWith(LANDING_URL), `first Back left the landing: ${page.url()}`).toBe(true)
-    expect(new URL(page.url()).searchParams.has('signin'), `signin survived: ${page.url()}`).toBe(false)
-    await expect(headerSignIn(page)).toBeVisible()
-    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expectPlainLanding(page, 'first Back', appNavigations)
 
     await page.goBack()
     await page.waitForURL('about:blank')
@@ -946,20 +951,25 @@ test('deployed landing: Back with no earlier page in the tab leaves the site', a
 
   await test.step('a link to the app in a new tab: Back leaves', async () => {
     const tab = await context.newPage()
+    const tabErrors = collectErrors(tab)
     await seedConsent(tab, false)
     const appNavigations = recordAppNavigations(tab)
 
+    const base = await historyLength(tab)
     await tab.goto(`${APP_URL}/?auth=start`)
     await tab.waitForURL((u) => u.href.startsWith(LANDING_URL) && u.searchParams.get('signin') === 'ready', { timeout: 20_000 })
     await expect(signInDialog(tab).getByLabel('Work email', { exact: true })).toBeVisible({ timeout: 20_000 })
-    expect(await historyLength(tab), 'the app hop added no entry').toBe(2)
+    expect(await historyLength(tab), 'the app hop added no entry beyond the landing').toBe(base + 1)
 
     await tab.goBack()
     await tab.waitForURL('about:blank')
     await tab.waitForTimeout(BOUNCE_SETTLE_MS)
     expect(tab.url()).toBe('about:blank')
     expect(appNavigations(), 'the app ran again after Back').toHaveLength(1)
+    errors.push(...tabErrors)
   })
+
+  expect(errors, `console errors on the landing and app:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('deployed landing: a blocked app shows Sign in unavailable and does not navigate', async ({ page }) => {

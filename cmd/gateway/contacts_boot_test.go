@@ -96,6 +96,8 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			_, _ = io.WriteString(w, session(signInID))
 		case "/signup":
 			_, _ = io.WriteString(w, session(registerID))
+		case "/internal/invitations/pending":
+			_, _ = io.WriteString(w, `{"pending":false}`)
 		default:
 			_, _ = io.WriteString(w, `{}`)
 		}

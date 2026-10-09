@@ -1470,7 +1470,7 @@ test('[inhouse-can-file] LIVE: the in-house persona resolves its seeded entity a
 // unwrapped: the api run ahead of this one
 // leaves the firm tenant's active slot empty (contract-invoice.spec.ts's own armedInvoice
 // cleanup), and [topology-never-publishes] stays satisfied -- this restores the tenant's
-// OWN seeded policy, never a new one (docs/e2e-convention.md).
+// OWN seeded policy, never a new one (.claude/rules/e2e.md).
 test.describe('INVCR-E2E-1 governs the firm tenant before submitting', () => {
   test.beforeAll(async () => {
     const token = await login(PERSONAS.A)
@@ -3324,13 +3324,11 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
     )
   }
 
-  // The field SET itself, twenty-three names. EXTR-18-05 re-pointed this fixture at the wired
-  // extractor's own reading (rich_invoice.pdf), so this is transcribed from the real
-  // Reconcile(Resolve(...)) result -- computed via `go run ./.ralph/measure/main.go
-  // internal/extraction/testdata/rich_invoice.pdf internal/extraction/testdata/rich_invoice.docling.json`,
-  // never from mock.go and never from the SPA. This is the only DEPLOYED oracle that the rich
-  // fixture reaches the screen unchanged, so a wiring regression must red here and not only in
-  // Go. Both sides are sorted in JS, so the database's collation is not what this compares.
+  // The field SET itself, twenty-three names, from the wired extractor's reading of
+  // rich_invoice.pdf. Re-derive it from the rows `rfRun` returns in
+  // internal/extraction/corpus_wired_db_test.go (no Go test pins the full name set). Only
+  // DEPLOYED oracle that the rich fixture reaches the screen unchanged. Both sides are sorted
+  // in JS, so the database's collation is not what this compares.
   const WIRE_FIELD_SET = [
     'buyer_name',
     'buyer_tin',

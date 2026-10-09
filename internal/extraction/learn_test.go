@@ -111,7 +111,7 @@ func TestAnchorLabelText_MatchesTheMeasuredCorpusOracles(t *testing.T) {
 // unreachable under LearnRule's own step-5 ordering (same_token always wins at gap 0), and its
 // expected rule extracts nothing from the page it names -- ShapeTIN's anchored pattern rejects
 // "TIN: 99999999-0402" whole. Measured with the real reader instead: same_token, gap 0, label
-// "(?i)\bTIN\b" (see .ralph/subtasks/extr-14-04-arch.md S:0). AC-3's below coverage moves to a
+// "(?i)\bTIN\b". AC-3's below coverage moves to a
 // second fixture on the same page (TestLearnRule_R01Below_BuyerNameBelowBuyerLabel).
 
 // rvAnchor builds a synthetic AnchorObservation on page 1, band 0. LearnRule reads o.Text

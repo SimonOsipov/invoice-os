@@ -301,7 +301,7 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 // inviteTokenShape is a 32-byte token in unpadded base64url.
 var inviteTokenShape = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
-// PreviewInvitation names the workspace, role and address of a live invite. A
+// PreviewInvitation names the workspace, role, address and account state of a live invite. A
 // malformed token is refused without a query; every unusable token answers
 // ErrInvitationNotValid alike.
 func (s *Store) PreviewInvitation(ctx context.Context, token string) (InvitationPreview, error) {
@@ -316,12 +316,34 @@ func (s *Store) PreviewInvitation(ctx context.Context, token string) (Invitation
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvitationNotValid
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		// A savepoint keeps a failed state read from aborting the transaction.
+		p.Account, p.accountErr = accountState(ctx, tx, p.Email)
+		return nil
 	})
 	if err != nil {
 		return InvitationPreview{}, err
 	}
 	return p, nil
+}
+
+// accountState reads the state of the address inside a savepoint; any failure is "unknown".
+func accountState(ctx context.Context, tx pgx.Tx, email string) (string, error) {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return "unknown", err
+	}
+	var state string
+	if err := sp.QueryRow(ctx, `SELECT public.invitee_account_state($1)`, email).Scan(&state); err != nil {
+		_ = sp.Rollback(ctx)
+		return "unknown", err
+	}
+	if err := sp.Commit(ctx); err != nil {
+		return "unknown", err
+	}
+	return state, nil
 }
 
 // AcceptInvitation joins the caller to the invite's workspace with the invited

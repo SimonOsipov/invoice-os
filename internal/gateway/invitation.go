@@ -14,7 +14,7 @@ import (
 )
 
 // InvitationPreview is what a token holder sees before signing in.
-type InvitationPreview struct{ Workspace, Role, Email string }
+type InvitationPreview struct{ Workspace, Role, Email, Account string }
 
 // ErrInvitationNotValid means the token names no live invite.
 var ErrInvitationNotValid = errors.New("gateway: invitation is not valid")
@@ -31,6 +31,8 @@ const (
 	maxPreviewResponseBytes  = 4 << 10
 	previewPath              = "internal/invitations/preview"
 	msgInviteeFieldsRequired = "token and password are required"
+	msgAccountExists         = "account_exists"
+	msgAccountUnconfirmed    = "account_unconfirmed"
 )
 
 // NewHTTPInvitationPreviewer asks tenancy's internal preview route, with the gateway token and no identity.
@@ -68,11 +70,17 @@ func NewHTTPInvitationPreviewer(base *url.URL, client *http.Client, gatewayToken
 				Workspace string `json:"workspace"`
 				Role      string `json:"role"`
 				Email     string `json:"email"`
+				Account   string `json:"account"`
 			}
 			if err := json.NewDecoder(lr).Decode(&out); err != nil {
 				return InvitationPreview{}, errors.New("invitation preview: tenancy answered 200 with an unreadable body")
 			}
-			return InvitationPreview{Workspace: out.Workspace, Role: out.Role, Email: out.Email}, nil
+			switch out.Account {
+			case "none", "unconfirmed", "confirmed":
+			default:
+				out.Account = "unknown"
+			}
+			return InvitationPreview{Workspace: out.Workspace, Role: out.Role, Email: out.Email, Account: out.Account}, nil
 		case http.StatusNotFound:
 			return InvitationPreview{}, ErrInvitationNotValid
 		default:
@@ -101,7 +109,7 @@ func previewToken(w http.ResponseWriter, r *http.Request, preview InvitationPrev
 	return InvitationPreview{}, false
 }
 
-// InvitationHandler answers POST /auth/invitation with the workspace, role and address a live token names.
+// InvitationHandler answers POST /auth/invitation with the workspace, role, address and account state a live token names.
 func InvitationHandler(preview InvitationPreviewer, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
@@ -118,7 +126,7 @@ func InvitationHandler(preview InvitationPreviewer, log *slog.Logger) http.Handl
 		if !ok {
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"workspace": p.Workspace, "role": p.Role, "email": p.Email})
+		writeJSON(w, http.StatusOK, map[string]string{"workspace": p.Workspace, "role": p.Role, "email": p.Email, "account": p.Account})
 	})
 }
 
@@ -148,6 +156,15 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		if !ok {
 			return
 		}
-		signUp(w, r, client, signup, map[string]any{"email": p.Email, "password": in.Password}, start, minResponse, perIP, enforce, log)
+		switch p.Account {
+		case "confirmed":
+			writeError(w, http.StatusConflict, msgAccountExists)
+			return
+		case "unconfirmed":
+			writeError(w, http.StatusConflict, msgAccountUnconfirmed)
+			return
+		}
+		exists := func() { writeError(w, http.StatusConflict, msgAccountExists) }
+		signUp(w, r, client, signup, map[string]any{"email": p.Email, "password": in.Password}, start, minResponse, perIP, enforce, log, exists)
 	})
 }

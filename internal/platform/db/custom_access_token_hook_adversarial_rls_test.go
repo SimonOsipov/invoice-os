@@ -328,7 +328,7 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 
 	rows, err := h.super.Query(ctx,
 		`SELECT table_name, count(*) FROM information_schema.column_privileges
-		 WHERE grantee = 'auth_hook_reader' GROUP BY table_name`)
+		 WHERE grantee = 'auth_hook_reader' AND table_schema = 'public' GROUP BY table_name`)
 	if err != nil {
 		t.Fatalf("read auth_hook_reader column privileges: %v", err)
 	}

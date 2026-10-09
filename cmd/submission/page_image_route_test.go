@@ -1,7 +1,6 @@
 // page_image_route_test.go: the cmd/submission half of EXTR-11-03 -- the object-store adapter
-// the page route streams through, and the read-path-suspension row the route owes. Nothing here
-// serves a mux or opens a database (main() is not unit-testable, main_test.go:1-4): the adapter
-// is driven over a fake ObjectStore and the doc claim is read off the file. The route's
+// the page route streams through. Nothing here serves a mux or opens a database (main() is not
+// unit-testable): the adapter is driven over a fake ObjectStore. The route's
 // registration is asserted in main_test.go's shipped ast.Inspect switch.
 //
 // Helpers use a pgi* prefix; dr ea wt ds are taken.
@@ -11,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -19,14 +17,6 @@ import (
 )
 
 const (
-	pgiDocRoute = "GET /v1/extractions/{id}/pages/{n}"
-
-	// docs/read-path-suspension.md:321 reads "60 distinct routes, 66 registrations" before this
-	// route lands. Floors, not equalities, so a later story raises them rather than breaking
-	// this.
-	pgiMinDocRoutes        = 61
-	pgiMinDocRegistrations = 67
-
 	// A key in the shape extraction_page_images_key_tenant_scoped admits. The adapter must hand
 	// it to the store byte for byte.
 	pgiKey = "tenants/11111111-1111-1111-1111-111111111111/pages/" +
@@ -157,84 +147,4 @@ func TestNewPageObjectReader_ClosesBodyWhenGetErrors(t *testing.T) {
 			t.Errorf("err = %q, want it to name the key %q an operator has to look up", err.Error(), pgiKey)
 		}
 	})
-}
-
-// AC 2. TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute already errors for a registered route
-// with no row -- but only once the route is registered, so it cannot say the doc is owed until
-// the moment the fleet would ship it unclassified. This says it now, the way
-// TestReadPathSuspensionDoc_DeclaresTheExtractionDetailRoute did for EXTR-11-02.
-func TestReadPathSuspensionDoc_DeclaresTheExtractionPageImageRoute(t *testing.T) {
-	lines := drDocSection(t)
-
-	declared := map[string]string{}
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "|") {
-			continue
-		}
-		cells := strings.Split(strings.Trim(trimmed, "|"), "|")
-		if len(cells) < 3 {
-			continue
-		}
-		m := drRowCell.FindStringSubmatch(strings.TrimSpace(cells[0]))
-		if m == nil {
-			continue
-		}
-		declared[m[1]] = strings.TrimSpace(cells[2])
-	}
-	if len(declared) < drMinDocRows {
-		t.Fatalf("%s's endpoint table parsed to %d row(s), want at least %d -- a parse that lost the table finds no missing row either",
-			drDocPath, len(declared), drMinDocRows)
-	}
-
-	// Control needle: the detail route this one hangs off is declared today, so a parse that
-	// reads nothing fails here rather than reporting the page route missing.
-	if got, ok := declared[drDocRoute]; !ok || got != "covered" {
-		t.Fatalf("the parse read `%s` as verdict %q (present=%v), want covered -- the row parser is broken", drDocRoute, got, ok)
-	}
-
-	verdict, ok := declared[pgiDocRoute]
-	switch {
-	case !ok:
-		t.Errorf("%s declares no row for `%s` -- TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute goes red the moment the route is registered without it", drDocPath, pgiDocRoute)
-	case verdict != "covered":
-		t.Errorf("%s declares `%s` with verdict %q, want exactly covered", drDocPath, pgiDocRoute, verdict)
-	}
-
-	pgiAssertCountLine(t, lines)
-}
-
-// The prose count is corrected for honesty, not for CI -- but an honest doc is the deliverable,
-// so the floor moves with the table. drAssertCountLine floors it at EXTR-11-02's 60/66; this
-// route raises both by one.
-func pgiAssertCountLine(t *testing.T, lines []string) {
-	t.Helper()
-
-	var m []string
-	for _, line := range lines {
-		if got := drCountLine.FindStringSubmatch(line); got != nil {
-			if m != nil {
-				t.Fatalf("%s carries two route-count sentences; they can disagree", drDocPath)
-			}
-			m = got
-		}
-	}
-	if m == nil {
-		t.Fatalf("%s's endpoint section carries no \"N distinct routes, M registrations\" sentence -- the assertion below has nothing to read", drDocPath)
-	}
-
-	routes, err := strconv.Atoi(m[1])
-	if err != nil {
-		t.Fatalf("route count %q is not a number: %v", m[1], err)
-	}
-	registrations, err := strconv.Atoi(m[2])
-	if err != nil {
-		t.Fatalf("registration count %q is not a number: %v", m[2], err)
-	}
-	if routes < pgiMinDocRoutes {
-		t.Errorf("%s claims %d distinct routes, want at least %d -- the page-image route raises it by one", drDocPath, routes, pgiMinDocRoutes)
-	}
-	if registrations < pgiMinDocRegistrations {
-		t.Errorf("%s claims %d registrations, want at least %d -- the page-image route raises it by one", drDocPath, registrations, pgiMinDocRegistrations)
-	}
 }

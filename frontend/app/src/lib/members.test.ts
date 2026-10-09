@@ -1281,8 +1281,7 @@ describe('inviteSentNotice — the send confirmation (D8)', () => {
 // ---------------------------------------------------------------------------
 // Mutation-tested: all ten mutations of the T6 batch's own subjects were caught, but
 // EIGHT mutations of the modal's WIRING survived all three gates, because vitest is
-// `environment: node` and the repo has no DOM component layer (docs/e2e-convention.md
-// also puts Settings out of scope for browser E2E). This is what remains inside
+// `environment: node` and the repo has no DOM component layer. This is what remains inside
 // this module's reach — everything else on that list is a Phase 3.5 gate item.
 
 describe('MEMB-01-06 QA — the picker filter is literal (QA47)', () => {

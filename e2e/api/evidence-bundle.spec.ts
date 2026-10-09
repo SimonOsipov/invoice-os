@@ -19,7 +19,7 @@
 // story) are proven ONLY in internal/archive/exchange_db_test.go. The first describe's
 // invoice is never submitted. The second describe submits one through the mock adapter and
 // proves only that its body files exist and the request body carries the invoice number.
-// Departure from docs/e2e-convention.md's "containment, never a literal count": each
+// Departure from .claude/rules/e2e.md (containment or live-read, never a literal count): each
 // describe's bundle is scoped to an entity it creates and nothing else ever touches, so
 // the counts are deterministic. The exact count is also STRICTLY STRONGER than containment
 // here -- it proves no OTHER entity's invoice leaked into the bundle, which a toContain
@@ -192,7 +192,7 @@ function parseCsv(text: string): Record<string, string>[] {
 }
 
 // Own copy of invoice-surfaces.spec.ts's submittable fixture (no cross-suite imports).
-// 99999999-0001 is the mock adapter's explicit accept trigger (docs/mock-app-adapter.md).
+// 99999999-0001 is the mock adapter's explicit accept trigger (.claude/rules/submission-mock.md).
 function acceptInvoiceFields(invoiceNumber: string) {
   return {
     invoice_number: invoiceNumber,
@@ -248,8 +248,8 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
     // This entity and invoice are exclusive to this spec run -- history.go/submissions.go/
     // exchange.go all scope on `invoice_id = ANY($1)` over exactly the ids this entity+period
     // resolved to, never tenant-wide -- so "no data row" is a deterministic property of a
-    // private fixture, not a shared-state count. The "no count" rule (docs/e2e-convention.md
-    // :83-85, audit.spec.ts:14-18) governs counts over state this spec does not own, which
+    // private fixture, not a shared-state count. The "no count" rule (.claude/rules/e2e.md)
+    // governs counts over state this spec does not own, which
     // does not apply here.
     const submissionsRows = decoder.decode(zip['submissions.csv']).trim().split('\n')
     const exchangeRows = decoder.decode(zip['exchange.csv']).trim().split('\n')

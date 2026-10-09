@@ -3,13 +3,14 @@ package jev
 import (
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
 
-// retiredRoots are the source roots the guard walks; docs/ and frontend/ name the retired strings on purpose.
+// retiredRoots are the source roots the guard walks; frontend/ names the retired strings on purpose.
 var retiredRoots = []string{"cmd", "internal", "scripts", "tools", ".github", "e2e"}
 
 const (
@@ -180,4 +181,17 @@ func TestRetiredRouteScan_FlagsEveryRootAndFileKind(t *testing.T) {
 	if !slices.Equal(flagged, want) {
 		t.Errorf("flagged %v, want exactly %v (hits: %q)", flagged, want, hits)
 	}
+}
+
+func jevRepoRoot(t *testing.T) string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), "git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --show-toplevel: %v", err)
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		t.Fatal("git reported an empty worktree root; every scan below would read nothing")
+	}
+	return root
 }

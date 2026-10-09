@@ -4,7 +4,7 @@
 # same version locally and in CI. Migrations run as the MIGRATOR role
 # (DATABASE_MIGRATION_URL); the one-time role bootstrap runs as the SUPERUSER
 # (DATABASE_SUPERUSER_URL). The app role (DATABASE_URL) is never used here.
-# Set the DATABASE_* URLs in .env (gitignored) or your environment; see docs/migrations.md §1.
+# Set the DATABASE_* URLs in .env (gitignored) or your environment; see .claude/rules/db-migrations.md.
 
 # Load local overrides from .env if present (gitignored).
 -include .env
@@ -186,6 +186,7 @@ test-idp: ## Run the TestIdP suite against real supabase/auth containers on the 
 	IDP_PINNED_TAG="$$(go run ./internal/tools/idppin tag sidecar/auth/Dockerfile)" \
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
+	DATABASE_AUTH_ADMIN_URL="$(DEV_DB_AUTH_ADMIN_URL)" \
 	go test -p 1 -count=1 -run TestIdP ./internal/platform/auth/...
 
 .PHONY: guard-migration-url

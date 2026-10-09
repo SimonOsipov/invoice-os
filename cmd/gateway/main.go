@@ -58,8 +58,8 @@ func main() {
 	// (gated, DEMO-04) -> seed (gated), all complete before
 	// app.Run opens the listener, so a green /healthz continues to mean "fully
 	// provisioned" (task-128). Every step is fatal on error except the purge,
-	// which logs and continues — see db.Provision's doc comment. The gateway remains the fleet's single in-network migrator
-	// (docs/migrations.md §2): migrate is unconditional regardless of the
+	// which logs and continues — see db.Provision's doc comment. The gateway remains the fleet's single in-network migrator:
+	// migrate is unconditional regardless of the
 	// guard below, exactly as before.
 	//
 	// The bootstrap/seed guard reads the RAW
@@ -78,9 +78,9 @@ func main() {
 		// RAILWAY_ENVIRONMENT_NAME, NOT ENVIRONMENT: the destructive reset step
 		// (db.Reset, gated by db.ResetEnabled) keys on a name no one hand-sets.
 		// ENVIRONMENT is an ordinary app variable that CI writes in every fork
-		// (docs/deploy-model.md "ENVIRONMENT in a fork is set by CI").
+		// (.claude/rules/ci-railway.md).
 		// RAILWAY_ENVIRONMENT_NAME is a Railway-injected system variable
-		// (docs/add-a-service.md; never set manually): "pr-<N>" inside a fork,
+		// (.claude/rules/add-service.md; never set manually): "pr-<N>" inside a fork,
 		// the persistent environment's real name on that environment. See
 		// db.ResetEnabled's doc comment for the full reasoning.
 		RailwayEnvironmentName: os.Getenv("RAILWAY_ENVIRONMENT_NAME"),
@@ -107,6 +107,10 @@ func main() {
 	if err := db.Provision(context.Background(), provisionCfg); err != nil {
 		platform.Fatal(app.Logger, "gateway: provision: %v", err)
 	}
+
+	startAccountStateGrant(os.Getenv("RAILWAY_ENVIRONMENT_NAME"), provisionCfg.MigrationDSN, provisionCfg.Passwords.AuthAdmin, app.Logger, func(dsn string) {
+		go grantAccountStateRead(context.Background(), dsn, db.GrantAccountStateRead, 10*time.Second, 60, app.Logger)
+	})
 
 	// Publish what the sequence above actually did, off the same predicate it
 	// branched on, before app.Run opens the listener — so the first /healthz any
@@ -256,7 +260,7 @@ const dbConnectWait = 120 * time.Second
 //
 // It returns handlers rather than registering them, and leaves the CORS wrap to
 // main, so both source scans still see what they assert on:
-// TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute (the app.Mux calls) and
+// TestRLS_EveryRegisteredRouteHasAVerdict (the app.Mux calls) and
 // TestGatewayApiMountIsCORSWrappedAndNotMethodScoped (withCORS at the mount).
 func gatewayHandlers(
 	verifier *auth.Verifier,

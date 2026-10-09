@@ -17,8 +17,8 @@
 // only HTTP-path callers of the identity-free core are the four deliberate
 // exemptions, Store.Me, Store.ProvisionWorkspace, Store.AcceptInvitation and Store.PreviewInvitation. Together they make the
 // gated seam a monopoly, so every route that touches the database is gated BY
-// CONSTRUCTION. Scan 3 keeps the written
-// enumeration complete. Core AC 6 = 1 + 2 + 3.
+// CONSTRUCTION. Scan 3 keeps scRouteVerdicts
+// complete. Core AC 6 = 1 + 2 + 3.
 //
 // All three assert an ABSENCE, which is the instrument class that reports
 // all-clear while examining nothing. So each carries planted control needles and
@@ -71,8 +71,6 @@ import (
 const (
 	scPgxpoolPath = "github.com/jackc/pgx/v5/pgxpool"
 	scPgxPath     = "github.com/jackc/pgx/v5"
-	// scDocPath is the contract doc scan 3 reads.
-	scDocPath = "docs/read-path-suspension.md"
 	// scSelfPath is this file, which the reason check reads back.
 	scSelfPath = "internal/platform/db/seam_coverage_test.go"
 	// scMinReasonRunes is the shortest text that can carry a reason.
@@ -192,20 +190,21 @@ func (e scPoolExemption) covers(s scPoolSite) bool {
 
 // scPoolAllowlist is every caller allowed to reach the database without the seam.
 var scPoolAllowlist = []scPoolExemption{
-	{file: "internal/platform/db/db.go"},                                         // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
-	{file: "internal/platform/db/tenant.go"},                                     // declares the gated seam; its pool.BeginTx IS the gate this story shipped
-	{file: "internal/platform/db/migrate.go"},                                    // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
-	{file: "internal/platform/db/bootstrap.go"},                                  // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
-	{file: "internal/platform/db/provision.go"},                                  // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
-	{file: "internal/validation/store.go", fn: "LoadActiveRuleSetGlobal"},        // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
-	{file: "internal/importer/backfill.go"},                                      // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
-	{file: "internal/invoice/revalidate.go"},                                     // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
-	{file: "internal/reconciliation/sweep.go"},                                   // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
-	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                    // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
-	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},    // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
-	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"}, // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
-	{file: "internal/notifications/store.go"},                                    // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
-	{file: "internal/notifications/worker.go"},                                   // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
+	{file: "internal/platform/db/db.go"},                                              // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
+	{file: "internal/platform/db/tenant.go"},                                          // declares the gated seam; its pool.BeginTx IS the gate this story shipped
+	{file: "internal/platform/db/migrate.go"},                                         // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
+	{file: "internal/platform/db/bootstrap.go"},                                       // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
+	{file: "internal/platform/db/provision.go"},                                       // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
+	{file: "internal/validation/store.go", fn: "LoadActiveRuleSetGlobal"},             // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
+	{file: "internal/importer/backfill.go"},                                           // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
+	{file: "internal/invoice/revalidate.go"},                                          // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
+	{file: "internal/reconciliation/sweep.go"},                                        // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                         // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},         // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"},      // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/account_state_read.go", fn: "GrantAccountStateRead"}, // boot-time grant on the supabase_auth_admin DSN, before any request or tenant exists
+	{file: "internal/notifications/store.go"},                                         // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
+	{file: "internal/notifications/worker.go"},                                        // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,
@@ -930,7 +929,7 @@ func TestRLS_UngatedCoreIsWorkerAndExemptionOnly(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scan 3 — the route table and the contract doc agree
+// Scan 3 — every registered route has a verdict
 // ---------------------------------------------------------------------------
 
 // scRoute is one Mux registration.
@@ -946,12 +945,126 @@ func (r scRoute) String() string {
 
 var scMuxMethods = map[string]bool{"Handle": true, "HandleFunc": true}
 
-var scBacktickRE = regexp.MustCompile("`([^`]+)`")
+type scRouteVerdict struct{ verdict, reason string }
 
-// scEndpointTableHeading bounds the parse. The doc carries other tables — the
-// cost figures, the plan crossover — and an unbounded walk would read a
-// measurement row as an unclassified endpoint.
-const scEndpointTableHeading = "the endpoint table"
+const (
+	scCovered = "covered"
+	scExempt  = "exempt"
+)
+
+// scRouteVerdicts classifies every registered route; TestRLS_EveryRegisteredRouteHasAVerdict keeps it total.
+// covered: the gated seam is a monopoly (scans 1 and 2), so the route is gated by construction.
+var scRouteVerdicts = map[string]scRouteVerdict{
+	"/api/":                                               {verdict: scExempt, reason: "the proxy mount, not an endpoint — it forwards to the seven services"},
+	"DELETE /v1/approval-policies/{id}":                   {verdict: scCovered},
+	"DELETE /v1/invoices/{id}/keep-as-is":                 {verdict: scCovered},
+	"DELETE /v1/invoices/{id}/resolved-outside":           {verdict: scCovered},
+	"DELETE /v1/workflow-roles/{key}":                     {verdict: scCovered},
+	"GET /.well-known/jwks.json":                          {verdict: scExempt, reason: "serves the public verification keys; unauthenticated by design"},
+	"GET /auth/reset-password":                            {verdict: scExempt, reason: "no database; renders the reset page"},
+	"GET /auth/verify":                                    {verdict: scExempt, reason: "no database; renders the confirm page, or redirects a stateless open to landing"},
+	"GET /emails/confirmation.html":                       {verdict: scExempt, reason: "no database; static account-mail template"},
+	"GET /emails/mark.png":                                {verdict: scExempt, reason: "no database; static account-mail logo"},
+	"GET /emails/recovery.html":                           {verdict: scExempt, reason: "no database; static account-mail template"},
+	"GET /healthz":                                        {verdict: scExempt, reason: "must answer while the database is down; a membership lookup would invert its meaning"},
+	"GET /healthz/fleet":                                  {verdict: scExempt, reason: "fleet roll-up across services, deliberately outside the verifier"},
+	"GET /readyz":                                         {verdict: scExempt, reason: "readiness reports on the database, so it cannot depend on reaching it"},
+	"GET /v1/approval-policies":                           {verdict: scCovered},
+	"GET /v1/approval-policies/{id}":                      {verdict: scCovered},
+	"GET /v1/audit-log":                                   {verdict: scCovered},
+	"GET /v1/contacts/me":                                 {verdict: scExempt, reason: "reads the caller's own contact by the token's email; contacts carry no tenant"},
+	"GET /v1/documents/{id}":                              {verdict: scCovered},
+	"GET /v1/documents/{id}/sheet":                        {verdict: scCovered},
+	"GET /v1/entities":                                    {verdict: scCovered},
+	"GET /v1/entities/{id}":                               {verdict: scCovered},
+	"GET /v1/evidence-bundle":                             {verdict: scCovered},
+	"GET /v1/evidence-bundle/preview":                     {verdict: scCovered},
+	"GET /v1/extractions":                                 {verdict: scCovered},
+	"GET /v1/extractions/{id}":                            {verdict: scCovered},
+	"GET /v1/extractions/{id}/pages/{n}":                  {verdict: scCovered},
+	"GET /v1/imports/document/reading":                    {verdict: scCovered},
+	"GET /v1/imports/saved-mapping":                       {verdict: scCovered},
+	"GET /v1/imports/{id}":                                {verdict: scCovered},
+	"GET /v1/invitations":                                 {verdict: scCovered},
+	"GET /v1/invitations/mine":                            {verdict: scExempt, reason: "the caller has no membership yet; the verified email names the invites"},
+	"GET /v1/invoices":                                    {verdict: scCovered},
+	"GET /v1/invoices/violation-summary":                  {verdict: scCovered},
+	"GET /v1/invoices/{id}":                               {verdict: scCovered},
+	"GET /v1/invoices/{id}/approval":                      {verdict: scCovered},
+	"GET /v1/invoices/{id}/history":                       {verdict: scCovered},
+	"GET /v1/invoices/{id}/source-document":               {verdict: scCovered},
+	"GET /v1/invoices/{id}/ubl":                           {verdict: scCovered},
+	"GET /v1/me":                                          {verdict: scExempt, reason: "the SPA's boot round trip; gating it would make the 403 unreachable"},
+	"GET /v1/memberships":                                 {verdict: scCovered},
+	"GET /v1/ping":                                        {verdict: scExempt, reason: "a liveness echo; it opens no transaction and reads no table"},
+	"GET /v1/rollup":                                      {verdict: scCovered},
+	"GET /v1/workflow-roles":                              {verdict: scCovered},
+	"OPTIONS /auth/exchange":                              {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /auth/invitation":                            {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /auth/invitation/register":                   {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /auth/login":                                 {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /auth/refresh":                               {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /auth/register":                              {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /auth/request-password-reset":                {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /auth/resend-verification":                   {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /auth/sign-in":                               {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /auth/sign-out":                              {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /contacts/demo-request":                      {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"PATCH /v1/entities/{id}":                             {verdict: scCovered},
+	"PATCH /v1/invoices/{id}":                             {verdict: scCovered},
+	"PATCH /v1/memberships/{user_id}":                     {verdict: scCovered},
+	"PATCH /v1/rules/{key}":                               {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},
+	"PATCH /v1/workflow-roles/{key}":                      {verdict: scCovered},
+	"POST /auth/exchange":                                 {verdict: scExempt, reason: "no database; in-process code store"},
+	"POST /auth/invitation":                               {verdict: scExempt, reason: "no database; asks tenancy"},
+	"POST /auth/invitation/register":                      {verdict: scExempt, reason: "no database; asks tenancy, calls GoTrue"},
+	"POST /auth/login":                                    {verdict: scExempt, reason: "unauthenticated by definition; there is no caller yet to hold a membership"},
+	"POST /auth/mock/invitation-token":                    {verdict: scExempt, reason: "mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity"},
+	"POST /auth/mock/member":                              {verdict: scExempt, reason: "mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity"},
+	"POST /auth/mock/staff":                               {verdict: scExempt, reason: "mock builds only; grants staff on the owner DSN for the E2E fork, with no caller identity"},
+	"POST /auth/refresh":                                  {verdict: scExempt, reason: "no database; calls GoTrue"},
+	"POST /auth/register":                                 {verdict: scExempt, reason: "no database; calls GoTrue"},
+	"POST /auth/request-password-reset":                   {verdict: scExempt, reason: "no database; calls GoTrue"},
+	"POST /auth/resend-verification":                      {verdict: scExempt, reason: "no database; calls GoTrue"},
+	"POST /auth/reset-password":                           {verdict: scExempt, reason: "no database; calls GoTrue"},
+	"POST /auth/sign-in":                                  {verdict: scExempt, reason: "no database; calls GoTrue"},
+	"POST /auth/sign-out":                                 {verdict: scExempt, reason: "no database; calls GoTrue"},
+	"POST /auth/verify":                                   {verdict: scExempt, reason: "no database; calls GoTrue"},
+	"POST /contacts/demo-request":                         {verdict: scExempt, reason: "no database; hands the form to notifications"},
+	"POST /internal/contacts/demo-requests":               {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
+	"POST /internal/contacts/registrants":                 {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate"},
+	"POST /internal/invitations/preview":                  {verdict: scExempt, reason: "no caller; the token names the invite"},
+	"POST /v1/approval-policies":                          {verdict: scCovered},
+	"POST /v1/approval-policies/{id}/publish":             {verdict: scCovered},
+	"POST /v1/documents":                                  {verdict: scCovered},
+	"POST /v1/entities":                                   {verdict: scCovered},
+	"POST /v1/entities/{id}/offboard":                     {verdict: scCovered},
+	"POST /v1/entities/{id}/onboard":                      {verdict: scCovered},
+	"POST /v1/extractions/{id}/fields/{name}/corrections": {verdict: scCovered},
+	"POST /v1/extractions/{id}/line-items":                {verdict: scCovered},
+	"POST /v1/imports":                                    {verdict: scCovered},
+	"POST /v1/imports/check-mapping":                      {verdict: scCovered},
+	"POST /v1/imports/document":                           {verdict: scCovered},
+	"POST /v1/imports/document/invoice":                   {verdict: scCovered},
+	"POST /v1/imports/preview":                            {verdict: scCovered},
+	"POST /v1/imports/suggest-mapping":                    {verdict: scCovered},
+	"POST /v1/invitations":                                {verdict: scCovered},
+	"POST /v1/invitations/accept":                         {verdict: scExempt, reason: "the caller has no membership yet"},
+	"POST /v1/invitations/{id}/accept":                    {verdict: scExempt, reason: "the caller has no membership yet; the verified email names the invites"},
+	"POST /v1/invitations/{id}/resend":                    {verdict: scCovered},
+	"POST /v1/invoices":                                   {verdict: scCovered},
+	"POST /v1/invoices/submissions":                       {verdict: scCovered},
+	"POST /v1/invoices/{id}/approvals":                    {verdict: scCovered},
+	"POST /v1/invoices/{id}/keep-as-is":                   {verdict: scCovered},
+	"POST /v1/invoices/{id}/resolved-outside":             {verdict: scCovered},
+	"POST /v1/invoices/{id}/transitions":                  {verdict: scCovered},
+	"POST /v1/invoices/{id}/validate":                     {verdict: scCovered},
+	"POST /v1/validate/batch":                             {verdict: scExempt, reason: "peer call with no caller identity by construction; the gateway strips any client-supplied X-S2S-Token"},
+	"POST /v1/workflow-roles":                             {verdict: scCovered},
+	"POST /v1/workspaces":                                 {verdict: scExempt, reason: "the caller has no membership yet"},
+	"PUT /v1/approval-policies/{id}/draft":                {verdict: scCovered},
+	"PUT /v1/workflow-roles/{key}/members":                {verdict: scCovered},
+}
 
 // scStringConstsIn adds f's file-level string consts to out.
 func scStringConstsIn(f *ast.File, out map[string]string) {
@@ -1017,71 +1130,6 @@ func scRoutesIn(fset *token.FileSet, rel string, f *ast.File, consts map[string]
 	return routes, unresolved
 }
 
-// scDocRow is one endpoint-table row: the routes its FIRST cell backticks, and
-// the verdict some later cell states.
-type scDocRow struct {
-	line    int
-	routes  []string
-	verdict string
-}
-
-// scVerdict reads a cell as a verdict. Exact match on the trimmed cell, never a
-// substring of the row: "not covered" and "recovered" both contain the word and
-// neither classifies anything.
-func scVerdict(cell string) string {
-	c := strings.ToLower(strings.Trim(strings.TrimSpace(cell), "`* "))
-	if c == "covered" || c == "exempt" {
-		return c
-	}
-	return ""
-}
-
-// scDocRows parses the doc's endpoint table. A row declares the routes backticked
-// in its first cell, so a longer path in a neighbouring row cannot answer for a
-// shorter one. found is false when the table's heading is absent.
-func scDocRows(doc string) (rows []scDocRow, found bool) {
-	lines := strings.Split(doc, "\n")
-	start := -1
-	for i, l := range lines {
-		if strings.HasPrefix(strings.TrimSpace(l), "#") && strings.Contains(strings.ToLower(l), scEndpointTableHeading) {
-			start = i
-			break
-		}
-	}
-	if start < 0 {
-		return nil, false
-	}
-	for i := start + 1; i < len(lines); i++ {
-		t := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(t, "#") { // any heading, including a sub-section's own table
-			break
-		}
-		if !strings.HasPrefix(t, "|") {
-			continue
-		}
-		cells := strings.Split(strings.Trim(t, "|"), "|")
-		if len(cells) < 2 {
-			continue
-		}
-		var routes []string
-		for _, m := range scBacktickRE.FindAllStringSubmatch(cells[0], -1) {
-			routes = append(routes, strings.TrimSpace(m[1]))
-		}
-		if len(routes) == 0 { // header row, separator row, or prose
-			continue
-		}
-		verdict := ""
-		for _, c := range cells[1:] {
-			if v := scVerdict(c); v != "" {
-				verdict = v
-				break
-			}
-		}
-		rows = append(rows, scDocRow{line: i + 1, routes: routes, verdict: verdict})
-	}
-	return rows, true
-}
-
 // scFixtureRoutes runs scan 3's route walk over one in-test source string.
 func scFixtureRoutes(t *testing.T, name, src string) ([]scRoute, []string) {
 	t.Helper()
@@ -1108,9 +1156,6 @@ func main() {
 const routePrefix = "/api/"
 `
 
-// scNeedleDocHead is the fixture table every doc needle is written under.
-const scNeedleDocHead = "## 8. The endpoint table\n\n| route | service | verdict | reason |\n|---|---|---|---|\n"
-
 func scRouteControlNeedles(t *testing.T) {
 	t.Run("N1 a literal and a const both resolve", func(t *testing.T) {
 		routes, unresolved := scFixtureRoutes(t, "n1.go", scNeedleRoutes)
@@ -1126,65 +1171,81 @@ func scRouteControlNeedles(t *testing.T) {
 		}
 	})
 
-	t.Run("N2 the table's heading bounds the parse", func(t *testing.T) {
-		if _, found := scDocRows("## 6. The measured cost\n\n| shape | µs/op |\n|---|---|\n| `A` | 689 |\n"); found {
-			t.Fatal("a doc with no endpoint table reads as having one — every route would then be checked against a measurement table")
+	t.Run("N2 each defect in the map is named by route", func(t *testing.T) {
+		reg := map[string]bool{"GET /a": true, "GET /b": true, "GET /c": true, "GET /d": true}
+		ok := scRouteVerdict{verdict: scExempt, reason: strings.Repeat("r", scMinReasonRunes)}
+		cases := []struct {
+			name     string
+			verdicts map[string]scRouteVerdict
+			must     []string
+			want     string
+		}{
+			{"clean", map[string]scRouteVerdict{"GET /a": {verdict: scCovered}, "GET /b": ok, "GET /c": ok, "GET /d": ok}, []string{"GET /a"}, ""},
+			{"missing entry", map[string]scRouteVerdict{"GET /a": ok, "GET /b": ok, "GET /c": ok}, nil, "GET /d is registered but has no entry"},
+			{"stale entry", map[string]scRouteVerdict{"GET /a": ok, "GET /b": ok, "GET /c": ok, "GET /d": ok, "GET /nope": ok}, nil, "GET /nope has an entry"},
+			{"bad verdict", map[string]scRouteVerdict{"GET /a": {verdict: "partial"}, "GET /b": ok, "GET /c": ok, "GET /d": ok}, nil, "GET /a has verdict"},
+			{"short reason", map[string]scRouteVerdict{"GET /a": {verdict: scExempt, reason: strings.Repeat("r", scMinReasonRunes-1)}, "GET /b": ok, "GET /c": ok, "GET /d": ok}, nil, "GET /a is exempt with a reason"},
+			{"must-be-covered exempt", map[string]scRouteVerdict{"GET /a": ok, "GET /b": ok, "GET /c": ok, "GET /d": ok}, []string{"GET /a"}, "GET /a is in scMustBeCovered but is not covered"},
+			{"must-be-covered unregistered", map[string]scRouteVerdict{"GET /a": ok, "GET /b": ok, "GET /c": ok, "GET /d": ok}, []string{"GET /z"}, "GET /z is in scMustBeCovered but is not registered"},
 		}
-		rows, found := scDocRows(scNeedleDocHead + "| `GET /v1/ping` | tenancy | exempt | no DB, a liveness echo |\n")
-		if !found || len(rows) != 1 {
-			t.Fatalf("found=%v rows=%v, want one row under the heading", found, rows)
-		}
-		if rows[0].verdict != "exempt" || len(rows[0].routes) != 1 || rows[0].routes[0] != "GET /v1/ping" {
-			t.Fatalf("row = %+v, want the ping route marked exempt", rows[0])
-		}
-
-		// A sub-section's own table is past the boundary: the endpoint table ends
-		// at the next heading of ANY level, or §8.1's non-HTTP callers read as
-		// routes nobody registers.
-		rows, _ = scDocRows(scNeedleDocHead +
-			"| `GET /v1/ping` | tenancy | exempt | no DB |\n\n" +
-			"### 8.1 The non-HTTP callers\n\n| `internal/submission` | River jobs |\n")
-		if len(rows) != 1 {
-			t.Fatalf("parsed %d row(s) %v, want 1 — the parse ran past the sub-heading", len(rows), rows)
-		}
-	})
-
-	t.Run("N3 a verdict is an exact cell, never a substring", func(t *testing.T) {
-		for _, tc := range []struct{ name, cell string }{
-			{"prose", "a liveness echo"},
-			{"negated", "not covered"},
-			{"not yet", "not yet covered"},
-			{"embedded", "recovered"},
-			{"exempted-elsewhere", "the gateway exempts it"},
-		} {
-			rows, _ := scDocRows(scNeedleDocHead + "| `GET /v1/ping` | tenancy | " + tc.cell + " | why |\n")
-			if len(rows) != 1 {
-				t.Fatalf("%s: parsed %d row(s), want 1", tc.name, len(rows))
+		for _, tc := range cases {
+			got := scRouteVerdictProblems(tc.verdicts, reg, tc.must)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Errorf("%s: reported %v, want none", tc.name, got)
+				}
+				continue
 			}
-			if rows[0].verdict != "" {
-				t.Errorf("%s: cell %q read as the verdict %q — a row that classifies nothing would satisfy the guard", tc.name, tc.cell, rows[0].verdict)
+			if len(got) != 1 || !strings.HasPrefix(got[0], tc.want) {
+				t.Errorf("%s: reported %v, want exactly one starting %q", tc.name, got, tc.want)
 			}
-		}
-		for _, cell := range []string{"covered", "**covered**", " Exempt ", "`exempt`"} {
-			rows, _ := scDocRows(scNeedleDocHead + "| `GET /v1/ping` | tenancy | " + cell + " | why |\n")
-			if len(rows) != 1 || rows[0].verdict == "" {
-				t.Errorf("cell %q states a verdict the scan cannot read", cell)
-			}
-		}
-	})
-
-	t.Run("N4 a longer path does not answer for a shorter one", func(t *testing.T) {
-		rows, _ := scDocRows(scNeedleDocHead + "| `GET /v1/invoices/{id}/history` | invoice | covered | the seam |\n")
-		if len(rows) != 1 {
-			t.Fatalf("parsed %d row(s), want 1", len(rows))
-		}
-		if rows[0].routes[0] != "GET /v1/invoices/{id}/history" {
-			t.Fatalf("row routes = %v — a substring match would let this row classify GET /v1/invoices/{id}, which has no row of its own", rows[0].routes)
 		}
 	})
 }
 
-func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
+// scMustBeCovered are the extraction routes that must stay classified covered.
+var scMustBeCovered = []string{
+	"GET /v1/extractions",
+	"GET /v1/extractions/{id}",
+	"GET /v1/extractions/{id}/pages/{n}",
+	"POST /v1/extractions/{id}/line-items",
+	"POST /v1/extractions/{id}/fields/{name}/corrections",
+}
+
+// scRouteVerdictProblems returns one message per defect in verdicts against the registered routes.
+func scRouteVerdictProblems(verdicts map[string]scRouteVerdict, registered map[string]bool, mustBeCovered []string) []string {
+	var out []string
+	for route := range registered {
+		if _, ok := verdicts[route]; !ok {
+			out = append(out, route+" is registered but has no entry in scRouteVerdicts")
+		}
+	}
+	for route, v := range verdicts {
+		if !registered[route] {
+			out = append(out, route+" has an entry in scRouteVerdicts but no walked root registers it")
+		}
+		switch v.verdict {
+		case scCovered:
+		case scExempt:
+			if n := len([]rune(v.reason)); n < scMinReasonRunes {
+				out = append(out, route+" is exempt with a reason of "+strconv.Itoa(n)+" rune(s), want at least "+strconv.Itoa(scMinReasonRunes))
+			}
+		default:
+			out = append(out, route+" has verdict "+strconv.Quote(v.verdict)+", want covered or exempt")
+		}
+	}
+	for _, route := range mustBeCovered {
+		if !registered[route] {
+			out = append(out, route+" is in scMustBeCovered but is not registered")
+		} else if verdicts[route].verdict != scCovered {
+			out = append(out, route+" is in scMustBeCovered but is not covered")
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestRLS_EveryRegisteredRouteHasAVerdict(t *testing.T) {
 	t.Run("control needles", scRouteControlNeedles)
 
 	root := repoRootDir(t)
@@ -1224,143 +1285,23 @@ func TestRLS_ReadPathSuspensionDocEnumeratesEveryRoute(t *testing.T) {
 		t.Fatalf("found %d registration(s) across %d file(s), want at least 55 across at least 8 (63 across 9 measured at AUDIT-10-04) — a walk that reads nothing classifies nothing", len(routes), rootsWithRoutes)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scDocPath)))
-	if err != nil {
-		t.Fatalf("read %s: %v — Core AC 6 wants the enumeration written down, and this scan is what keeps it complete", scDocPath, err)
-	}
-	rows, found := scDocRows(string(raw))
-	if !found {
-		t.Fatalf("%s carries no heading naming %q — the parse is bounded by that heading, and without it this scan reads nothing", scDocPath, scEndpointTableHeading)
-	}
-	if len(rows) == 0 {
-		t.Fatalf("%s's endpoint table declares no route — the doc parser found nothing to check against", scDocPath)
-	}
-
-	declared := map[string]scDocRow{}
-	for _, row := range rows {
-		for _, route := range row.routes {
-			if prev, dup := declared[route]; dup {
-				t.Errorf("%s:%d declares %q, already declared at line %d — two rows for one route can disagree", scDocPath, row.line, route, prev.line)
-			}
-			declared[route] = row
-		}
-	}
-
-	// The static account-mail routes are registered and exempt, each with its own row.
-	for _, route := range []string{"GET /emails/confirmation.html", "GET /emails/mark.png"} {
-		found := false
-		for _, r := range routes {
-			found = found || r.route == route
-		}
-		if !found {
-			t.Errorf("cmd/gateway does not register %q", route)
-		}
-		if row, ok := declared[route]; !ok || row.verdict != "exempt" {
-			t.Errorf("%s: %q has row %+v (found %v), want a row with verdict exempt", scDocPath, route, row, ok)
-		}
-	}
-
 	registered := map[string]bool{}
 	for _, r := range routes {
-		if registered[r.route] {
-			continue
-		}
 		registered[r.route] = true
-		row, ok := declared[r.route]
-		switch {
-		case !ok:
-			t.Errorf("%s is registered but has no row in %s — add `%s` to the endpoint table; Core AC 6 wants every endpoint enumerated, and a partial rollout that leaves one unclassified is the failure it names", r, scDocPath, r.route)
-		case row.verdict == "":
-			t.Errorf("%s:%d lists `%s` with no verdict cell reading exactly covered or exempt — an endpoint listed without a verdict is not an enumeration", scDocPath, row.line, r.route)
-		}
 	}
-	// Anti-rot: a row for a route nobody registers any more is a stale claim.
-	for route, row := range declared {
+
+	// The static account-mail routes are registered by cmd/gateway and exempt.
+	for _, route := range []string{"GET /emails/confirmation.html", "GET /emails/mark.png"} {
 		if !registered[route] {
-			t.Errorf("%s:%d classifies `%s`, which no walked root registers — delete the row or fix the path", scDocPath, row.line, route)
+			t.Errorf("cmd/gateway does not register %q", route)
+		}
+		if v := scRouteVerdicts[route].verdict; v != scExempt {
+			t.Errorf("%q has verdict %q, want exempt", route, v)
 		}
 	}
 
-	// The count line is exact; cmd/submission's readers only floor it.
-	counts := regexp.MustCompile(`(\d+) distinct routes, (\d+) registrations`).FindAllStringSubmatch(string(raw), -1)
-	if len(counts) != 1 {
-		t.Fatalf("%s holds %d \"N distinct routes, M registrations\" line(s), want 1", scDocPath, len(counts))
-	}
-	if want := strconv.Itoa(len(registered)) + " distinct routes, " + strconv.Itoa(len(routes)) + " registrations"; counts[0][0] != want {
-		t.Errorf("%s says %q, the walk counts %q", scDocPath, counts[0][0], want)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Scan 3b — the doc no longer claims the narrow rule (AUDIT-12-08)
-// ---------------------------------------------------------------------------
-//
-// AUDIT-10 wrote the narrow rule down in two places: the outcome table's
-// "does not exist" row and §5's heading. AUDIT-12 flips the rule to strict;
-// this scan stops the sentence outliving the behaviour it used to describe.
-//
-// Both phrases are scoped past the bare substring "runs the closure": the
-// outcome table's OTHER row (an active membership) legitimately keeps that
-// substring after the rewrite, so banning it bare would fail a correct doc.
-
-// scStaleNarrowRulePhrases are the exact substrings AUDIT-10 left behind
-// claiming a caller with no membership row is admitted. Neither may survive
-// the strict-rule rewrite.
-var scStaleNarrowRulePhrases = []string{
-	"does not exist | runs the closure",
-	"no membership row is still admitted",
-}
-
-func scStaleNarrowRuleControlNeedles(t *testing.T) {
-	t.Run("N1 the needle fires when planted", func(t *testing.T) {
-		fixture := "## 5. The narrow rule: a caller with no membership row is still admitted\n\n" +
-			"| does not exist | runs the closure — see §5 |\n"
-		for _, phrase := range scStaleNarrowRulePhrases {
-			if !strings.Contains(fixture, phrase) {
-				t.Errorf("fixture does not contain %q — the needle would not fire against the real doc's own wording either", phrase)
-			}
-		}
-	})
-
-	t.Run("N2 the legitimate active-row line is not a false positive", func(t *testing.T) {
-		// The active-membership row keeps "runs the closure" after the
-		// rewrite; the scan must not flag it.
-		fixture := "| exists, `status = 'active'` | runs the closure |\n"
-		for _, phrase := range scStaleNarrowRulePhrases {
-			if strings.Contains(fixture, phrase) {
-				t.Errorf("the legitimate active-row line matched %q — this scan would fail a doc that correctly keeps the row it must keep", phrase)
-			}
-		}
-	})
-}
-
-// TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim fails while
-// docs/read-path-suspension.md still asserts the AUDIT-10 narrow rule that
-// AUDIT-12 replaces: a caller with no membership row is no longer admitted.
-func TestRLS_ReadPathSuspensionDocHasNoStaleNarrowRuleClaim(t *testing.T) {
-	t.Run("control needles", scStaleNarrowRuleControlNeedles)
-
-	root := repoRootDir(t)
-	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(scDocPath)))
-	if err != nil {
-		t.Fatalf("read %s: %v — a doc the scan cannot read is a doc it silently reports clean on", scDocPath, err)
-	}
-	doc := string(raw)
-
-	headings := 0
-	for _, l := range strings.Split(doc, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(l), "## ") {
-			headings++
-		}
-	}
-	if headings < 10 {
-		t.Fatalf("%s parsed only %d top-level section heading(s), want at least 10 — a truncated or empty read would report clean while examining nothing", scDocPath, headings)
-	}
-
-	for _, phrase := range scStaleNarrowRulePhrases {
-		if strings.Contains(doc, phrase) {
-			t.Errorf("%s still contains %q — the narrow rule it describes was replaced by AUDIT-12's strict rule; rewrite the sentence", scDocPath, phrase)
-		}
+	for _, p := range scRouteVerdictProblems(scRouteVerdicts, registered, scMustBeCovered) {
+		t.Error(p)
 	}
 }
 

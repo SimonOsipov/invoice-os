@@ -190,6 +190,8 @@ func TestCIRunFiltersReachEveryTestInThePackage(t *testing.T) {
 				strings.HasPrefix(n, "TestNewPool") ||
 				strings.HasPrefix(n, "TestBootstrapCreatesAuth") ||
 				strings.HasPrefix(n, "TestRestoreCheck") ||
+				strings.HasPrefix(n, "TestAuthAdminDSN") ||
+				strings.HasPrefix(n, "TestGrantAccountStateRead") ||
 				n == "TestBootstrapRotatesAuthAdminPasswordIdempotently" ||
 				n == "TestBootstrapRefusesEmptyAuthAdminBeforeDialing"
 		}

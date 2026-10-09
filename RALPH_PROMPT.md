@@ -103,8 +103,8 @@ Harbourmaster keeps the story's subtasks. Ralph runs only as a Harbourmaster wor
 - `import` keeps each subtask's status and notes. It names each subtask that the plan dropped. Remove it with `hm subtask rm <ID>`.
 - When an `hm subtask` command fails, run it again once. On a second failure, HALT and report the command and its error.
 
-## Docs
-Read the docs related to your change. `ls docs/` is the list, and every file in it is a Stage 4 sweep target. Key ones: `migrations.md`, `deploy-model.md`, `topology-e2e.md`, `add-a-service.md`, `e2e-convention.md`, `mock-app-adapter.md`.
+## Rules
+Area rules live in `.claude/rules/<area>.md`. A rule loads by itself when an agent reads or edits a file that its `paths:` glob matches. Do not paste rule text into a stage brief.
 
 Design references for UI stories: Claude Design **prototype** project `6269a212-5677-4abd-b8a9-08aad10b1c65` (`InvoiceOS Africa.dc.html` = landing, `Platform.dc.html` = `frontend/app`, `Ops Console.dc.html` = `frontend/ops-console`) and **design system** project `999b7034-9f23-43d4-9229-51af7dde9f62`.
 
@@ -307,7 +307,7 @@ Spawn `product-qa-spec` (Mode B) with the acceptance criteria, the plan, the Def
   3. matches every letter case, unless case is the point — then a comment says so.
   Prove it with one break: delete the guarded code, keep its comment, run the scan, and it must go red. Record that as a mutation row.
 - **An absence scan** also needs a control needle that must be found and a floor on the population scanned. Offer no "zero hits" as evidence until the same command has found a planted hit.
-- **Re-read every comment and doc your change made false**, and fix them in the same commit. Sweep in cost order: (1) comments your diff did not edit in files it did (`git diff "origin/$BASE...HEAD" -U15`); (2) comments in files you never opened — name the fact your change altered and search the whole tree for it; (3) every file in `docs/`. Treat your own earlier future-tense notes as suspects.
+- **Re-read every comment and doc your change made false**, and fix them in the same commit. Sweep in cost order: (1) comments your diff did not edit in files it did (`git diff "origin/$BASE...HEAD" -U15`); (2) comments in files you never opened — name the fact your change altered and search the whole tree for it; (3) every rule file in `.claude/rules/` whose `paths:` glob matches a file your diff changed. Treat your own earlier future-tense notes as suspects.
 - **State a shared fact in one place** and cite that place.
 - **Report test deletions.** List each test this subtask made redundant in the QA report. Delete it in the same commit.
 - **A fix to a false comment deletes the false clause and adds no new clause.** A needed new claim names the test or command that proves it.
@@ -401,7 +401,7 @@ Runs once per story, after `CI` is green. It verifies the assembled feature agai
 
 After the PR merges (manually or via `/gh-merge-pr`), run `/post-merge-cleanup <STORY>`. It removes the worktree and branch and archives the story. The PM updates sysmap. A `/ralph-goal` loop advances only after this runs.
 
-Teardown of the PR environment is repo-side: `dev-env-teardown.yml` on PR close (best-effort), `dev-env-sweeper.yml` daily as the authority. See `docs/deploy-model.md`.
+Teardown of the PR environment is repo-side: `dev-env-teardown.yml` on PR close (best-effort), `dev-env-sweeper.yml` daily as the authority. See `.claude/rules/ci-railway.md`.
 
 ---
 

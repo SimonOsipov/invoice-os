@@ -243,7 +243,7 @@ test.describe('Audit screen', () => {
       if (rowBox && headBox) measured.push({ width, row: rowBox.width, head: headBox.width, table: tableWidth })
 
       // Attached, never compared to a baseline -- visual regression is banned here
-      // (docs/e2e-convention.md). This is the rendered half of
+      // (.claude/rules/e2e.md). This is the rendered half of
       // [layout-needs-rendered-verification]: BUG-03-05 shipped 32% dead space with its
       // numeric assertion passing, and a human eye on the render is what caught it.
       await test.info().attach(`audit-${width}`, { body: await page.screenshot(), contentType: 'image/png' })

@@ -42,8 +42,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -69,11 +67,6 @@ const (
 	// anControlEvent is a non-scoped writer with an inline payload the scan must
 	// still find. Located by event name, never by line: line numbers drift.
 	anControlEvent = "portfolio.entity.created"
-
-	anDocPath          = "docs/audit-log-read-contract.md"
-	anMinSectionRunes  = 200
-	anMinDocSubheads   = 12
-	anDocSubheadPrefix = "### 10."
 )
 
 // ---------------------------------------------------------------------------
@@ -689,103 +682,5 @@ func TestRLS_AuditNumberScanPopulationFloor(t *testing.T) {
 	}
 	if len(sites) < anMinCalls || len(byFile) < anMinFiles {
 		t.Fatalf("found %d audit.Record call(s) across %d file(s) %v, want at least %d across at least %d (35 across 13 measured at AUDIT-11-06) -- zero is what a broken walk and a repo with no writers both look like; these are CALLS, not the 41 text occurrences, four of which are doc comments", len(sites), len(byFile), sortedKeys(byFile), anMinCalls, anMinFiles)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// AC-5 -- the read contract no longer denies the number
-// ---------------------------------------------------------------------------
-
-// anDocRule is one phrase the corrected sections must, or must not, carry.
-type anDocRule struct {
-	section string
-	phrase  string
-	reason  string
-}
-
-// anForbidden is one entry per false sentence AUDIT-11 leaves behind. Matched
-// case-insensitively on whitespace-normalised text.
-var anForbidden = []anDocRule{
-	{"10.12", "no writer records an invoice number", "17 event families now record the key"},
-	{"10.12", "no writer puts the human-facing number", "every invoice-scoped writer puts it there"},
-	{"10.8", "nothing to match", "a typed number now reaches rows through the invoices fold-in"},
-	{"10.12", "should not promise otherwise", "the audit screen promises exactly that"},
-	{"10.8", "exactly four OR-ed arms", "there are five"},
-	{"10.8", "two fold-in", "there are three, and the third resolves a number"},
-	{"10.8", "3 of 27 keys", "a corpus-dependent denominator this page's own 10.7 says not to pin"},
-}
-
-// anRequired is what stops a delete-only correction from passing.
-var anRequired = []anDocRule{
-	{"10.8", "five OR-ed arms", "the arm count must be restated, not deleted"},
-	{"10.8", "three fold-in", "the fold-in count must be restated, not deleted"},
-	{"10.8", "a.invoice_id = ANY", "the arm a typed number actually reaches"},
-	{"10.8", "kv.key <> 'invoice_number'", "the generic arm skips the recorded key, the opposite of what the old prose implied"},
-	{"10.12", "invoice_number", "the section must name the key writers now record"},
-}
-
-// anDocSection returns one numbered subsection, heading line included, with every
-// whitespace run collapsed to one space. Re-wrapping a markdown paragraph would
-// otherwise split a phrase across a newline and make its absence vacuous.
-func anDocSection(t *testing.T, doc, number string) string {
-	t.Helper()
-	lines := strings.Split(doc, "\n")
-	var starts []int
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "### ") {
-			continue
-		}
-		if fields := strings.Fields(strings.TrimPrefix(line, "### ")); len(fields) > 0 && fields[0] == number {
-			starts = append(starts, i)
-		}
-	}
-	if len(starts) != 1 {
-		t.Fatalf("%s holds %d heading(s) numbered %s, want exactly 1 -- a renamed, deleted or duplicated heading leaves this oracle reading the wrong prose, or none", anDocPath, len(starts), number)
-	}
-	end := len(lines)
-	for i := starts[0] + 1; i < len(lines); i++ {
-		if strings.HasPrefix(lines[i], "## ") || strings.HasPrefix(lines[i], "### ") {
-			end = i
-			break
-		}
-	}
-	body := strings.TrimSpace(whitespaceRun.ReplaceAllString(strings.Join(lines[starts[0]:end], " "), " "))
-	if n := len([]rune(body)); n < anMinSectionRunes {
-		t.Fatalf("%s section %s carries %d rune(s), want at least %d -- an absence check over an emptied section always passes", anDocPath, number, n, anMinSectionRunes)
-	}
-	return body
-}
-
-func TestRLS_AuditDocReadContractNoLongerDeniesTheNumber(t *testing.T) {
-	root := repoRootDir(t)
-	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(anDocPath)))
-	if err != nil {
-		t.Fatalf("read %s: %v -- three downstream stories cite this page as fact, and this oracle is what keeps it true", anDocPath, err)
-	}
-	doc := string(raw)
-
-	if n := strings.Count(doc, "\n"+anDocSubheadPrefix); n < anMinDocSubheads {
-		t.Fatalf("%s holds %d %q subsection(s), want at least %d (12 measured at AUDIT-11-06) -- a truncated file passes every absence check below", anDocPath, n, anDocSubheadPrefix, anMinDocSubheads)
-	}
-
-	bodies := map[string]string{
-		"10.8":  anDocSection(t, doc, "10.8"),
-		"10.12": anDocSection(t, doc, "10.12"),
-	}
-
-	// Present-needle: proves the parse landed on live prose, not on nothing.
-	if !strings.Contains(bodies["10.8"], "jsonb_each_text") {
-		t.Fatalf("%s section 10.8 no longer names jsonb_each_text -- the extraction is reading the wrong section, so every phrase check below is vacuous", anDocPath)
-	}
-
-	for _, r := range anForbidden {
-		if strings.Contains(strings.ToLower(bodies[r.section]), strings.ToLower(r.phrase)) {
-			t.Errorf("%s section %s still says %q -- %s", anDocPath, r.section, r.phrase, r.reason)
-		}
-	}
-	for _, r := range anRequired {
-		if !strings.Contains(strings.ToLower(bodies[r.section]), strings.ToLower(r.phrase)) {
-			t.Errorf("%s section %s does not say %q -- %s; deleting the false sentence is not the same as correcting it", anDocPath, r.section, r.phrase, r.reason)
-		}
 	}
 }

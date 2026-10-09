@@ -57,7 +57,6 @@ function searchOf(params: Record<string, string>): string {
 const APP_TSX = fileURLToPath(new URL('../App.tsx', import.meta.url))
 const ROUTE_TS = fileURLToPath(new URL('./route.ts', import.meta.url))
 const PACKAGE_JSON = fileURLToPath(new URL('../../package.json', import.meta.url))
-const ROUTING_DOC = fileURLToPath(new URL('../../../../docs/routing.md', import.meta.url))
 const TYPES_TS = fileURLToPath(new URL('../types.ts', import.meta.url))
 
 // Both DOM-scan tests below call this -- a typo'd pattern would report a clean zero on
@@ -920,7 +919,6 @@ describe('parseReviewHash: widened to a run (BULK-01-06, AC-1) — migrated to p
 // Built concatenated, not as a literal: a literal would make this scanner's own source
 // match itself, so the shell AC-1 grep could never return a true zero.
 const REVIEW_FRAGMENT = '#' + 'review'
-const LOCATION_HASH = 'location' + '.hash'
 
 // A read of the url fragment, however spelled: `.hash`, `['hash']` or a destructured `hash`.
 const FRAGMENT_READ = /\.\s*hash\b|\[\s*['"`]hash['"`]\s*\]|\{[^}]*\bhash\b[^}]*\}\s*=\s*[\w.]*location\b/g
@@ -954,84 +952,6 @@ describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app'
         expect(code.includes(VERIFY_FRAGMENT_READ), `${name} no longer reads the confirm fragment through readVerifyFragment`).toBe(true)
       }
     }
-  })
-})
-
-// ROUTE-03-07 AC-3/AC-4: the two guards below are a PAIR by design. An absence guard alone
-// would pass on a doc that deleted the review section instead of updating it -- the positive
-// guard is what rules that out.
-const PATHNAME_SEARCH_HASH = 'pathname + search' + ' + hash'
-
-describe('ROUTE-03-07 AC-3: the routing doc names no retired scheme', () => {
-  it('guard_theRoutingDocNamesNoRetiredScheme', () => {
-    const src = readFileSync(ROUTING_DOC, 'utf8')
-    // Floor: a broken path reads back '', which would make the absence checks below pass on
-    // nothing read rather than a clean doc -- M4-04 burned five instruments this way.
-    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
-    // Needle: proves .includes() can see a match on this file at all, so the absence checks
-    // below aren't vacuous.
-    expect(src.includes('routeUrl'), 'control needle: the doc must still discuss routeUrl, or this scan proves nothing').toBe(true)
-    expect(src.includes(REVIEW_FRAGMENT), 'docs/routing.md still mentions the retired review-hash fragment').toBe(false)
-    expect(src.includes(LOCATION_HASH), 'docs/routing.md still reads or writes the url fragment').toBe(false)
-    expect(src.includes(PATHNAME_SEARCH_HASH), 'docs/routing.md still describes the retired pathname+search+hash rebuild').toBe(false)
-  })
-})
-
-describe('ROUTE-03-07 AC-4: the routing doc names the shipped form', () => {
-  it('guard_theRoutingDocNamesTheShippedForm', () => {
-    const src = readFileSync(ROUTING_DOC, 'utf8')
-    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
-    expect(src.includes('/imports/'), 'docs/routing.md no longer names the shipped review path').toBe(true)
-    expect(src.includes(':batchIds'), 'docs/routing.md no longer names the shipped batchIds segment').toBe(true)
-  })
-})
-
-// ROUTE-07-07 AC-8/AC-11: the two guards below are a PAIR by design, the same rule as the
-// ROUTE-03-07 pair above. An absence guard alone would pass on a doc that DELETED the route
-// table, the R2 rule and the /settings/:tab section instead of correcting them -- the
-// presence guard is what rules that out. Five retired claims, five replacements.
-const RETIRED_FIELD_COUNT = 'seven fields'
-const RETIRED_MEMBERS_DEFAULT = '`members` is the default, so R2 omits it'
-const RETIRED_TWO_DRILLDOWN_ROWS = "The last two rows aren't a 14th/15th `View`"
-const RETIRED_MEMBERS_PIN = 'settings_returningToMembersWritesTheBarePath'
-// The whole route-table row, pipes included -- NOT the bare '/workflows/:id'. The owned-param
-// table below it names that path too, so the bare form would read green on a route table that
-// never grew the row.
-const WORKFLOWS_ROUTE_ROW = '| `workflows` (drill-down) | `/workflows/:id` |'
-// R2's own wording -- the third area AC-8 names, and the one the four needles above miss:
-// reverting only this paragraph left all four green.
-const RETIRED_R2_UNIFORM_RULE = '**R2 — Omit the default.**'
-const R2_NON_UNIFORM_RULE = '**R2 — The query params omit their defaults; the settings tab is always explicit.**'
-
-describe('ROUTE-07-07 AC-8: the routing doc states no retired rule', () => {
-  it('guard_theRoutingDocNamesNoRetiredRule', () => {
-    const src = readFileSync(ROUTING_DOC, 'utf8')
-    // Floor: a broken path reads back '', which would make every absence check below pass on
-    // nothing read rather than on a corrected doc -- M4-04 burned five instruments this way.
-    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
-    // Needle: proves .includes() can see a match on this file at all, so the five absence
-    // checks below aren't vacuous.
-    expect(src.includes('routeUrl'), 'control needle: the doc must still discuss routeUrl, or this scan proves nothing').toBe(true)
-    expect(src.includes(RETIRED_FIELD_COUNT), 'docs/routing.md still says parseLocation returns seven fields').toBe(false)
-    expect(src.includes(RETIRED_MEMBERS_DEFAULT), 'docs/routing.md still states that R2 omits the members tab').toBe(false)
-    expect(src.includes(RETIRED_TWO_DRILLDOWN_ROWS), 'docs/routing.md still says only two route-table rows are drill-down forms').toBe(false)
-    expect(src.includes(RETIRED_MEMBERS_PIN), 'docs/routing.md still names the retired Members writer pin').toBe(false)
-    expect(src.includes(RETIRED_R2_UNIFORM_RULE), 'docs/routing.md still states R2 as the uniform omit-the-default rule').toBe(false)
-  })
-})
-
-describe('ROUTE-07-07 AC-11: the routing doc names both new forms', () => {
-  it('guard_theRoutingDocNamesBothNewForms', () => {
-    const src = readFileSync(ROUTING_DOC, 'utf8')
-    expect(src.length, 'docs/routing.md read back empty -- the path is broken').toBeGreaterThan(0)
-    expect(src.includes('eight fields'), 'docs/routing.md no longer states parseLocation eight-field result').toBe(true)
-    // Floor, not a discriminator: '/settings/members' already occurred once in the doc before
-    // this story -- inside the very paragraph that denied it. Its presence proves the section
-    // survived; only the absence guard above proves the claim was corrected.
-    expect(src.includes('/settings/members'), 'docs/routing.md no longer names the canonical Members path').toBe(true)
-    expect(src.includes(WORKFLOWS_ROUTE_ROW), 'docs/routing.md route table has no /workflows/:id row').toBe(true)
-    expect(src.includes('settings_returningToMembersWritesTheCanonicalPath'), 'docs/routing.md no longer names the Members writer pin').toBe(true)
-    expect(src.includes(R2_NON_UNIFORM_RULE), 'docs/routing.md no longer states R2 as non-uniform -- query params omit, the settings tab never does').toBe(true)
   })
 })
 

@@ -1,0 +1,38 @@
+---
+paths:
+  - "e2e/**"
+---
+# End-to-end tests
+
+- Organise specs by capability, never by milestone or date. Name a file for its subject or for the axis it varies.
+- Extend the capability flow in place to prove new value. Add no dated journey.
+- Run specs against a deployed environment only. Start no local server.
+- Keep the browser layer thin. Cover behaviour in Go tests and in the `e2e/api/` contract suite.
+- Assert DOM and state. Fail a journey on any `console.error` or `pageerror`.
+- Add no screenshot, pixel-diff or visual-snapshot gate.
+- Carry a console-gate exception in `consoleGate.ts`, scoped by resource URL. Never change an API to satisfy the gate.
+- Run Chromium only. Keep `workers: 1` in the api and topology configs. The smoke config runs fully parallel.
+- Add each new topology spec file to a unit in `e2e/topology/shards.ts`. `shards.test.ts` fails on a spec in no unit.
+- Keep a spec on `serial-lane` while it needs the seeded tenants 1111 and 2222. A shard gets its own tenant pair from `db/seed.e2e-shards.sql`.
+- Sign in an app session with `signInAs(page, id, { tenantId })` from `e2e/personaSession.ts`. It admits the e2e member through `ensureMember`.
+- Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token.
+- Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
+- Serve `/auth/mock/staff`, `/auth/mock/member` and `/auth/mock/invitation-token` only from the `mockissuer` build. Only `pull_request` stamps that tag.
+- Never assume an empty table. Smoke, api and topology run in that order against one deployment, with no reset between them.
+- Expect a Playwright retry to rerun a failed test against the rows its first attempt left.
+- Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.
+- Assert containment or a live-read comparison, never a literal count.
+- Expect specs to leave rows in `auth.users`, `staff_members`, `tenants`, `memberships` and `business_entities`. Every run registers a fresh address, so this is harmless.
+- Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
+- Treat the `app` SPA and the landing sign-in form as the only places a browser test proves the stack. The consoles hold mock data.
+- Never publish a policy in a topology spec. A topology spec may restore the tenant's own seeded policy through `ensureFirmPolicyActive`.
+- Put the UI-driven approve and reject journey in `e2e/api/contract-invoice.spec.ts`, not in a topology spec.
+- Treat the persona as an axis. Register personas, surfaces and coverage in `e2e/personas.ts`.
+- Grade coverage as `drives` or `nav-only`. Add no `pending` grade.
+- Downgrade a surface to `nav-only` only through `EXPECTED_NAV_ONLY` in `e2e/personas.test.ts`.
+- Assert the sidebar marker `[title="Tenant verified via /v1/me"]` to prove a backend-resolved identity.
+- Prove cross-tenant isolation with mock-issuer tokens for two tenants and `GET /api/tenancy/v1/me`. Both tenants exist in the seed, so RLS is the filter.
+- Expect the fleet roll-up to report `sentry` `off` on a PR and `on` or `off` on the persistent environment. `auth` is exempt.
+- Expect `notifications` to report `contacts` `fake` on a PR and `real` or `off` on the persistent environment.
+- Write the fork's URL variables, `RECONCILIATION_URL` and `GATEWAY_TOKEN` on each run. A fork never inherits them.
+- Expect a fork to accept registrations, send no mail and confirm at once. `fork-vars-before-urls` sets `GOTRUE_DISABLE_SIGNUP`, a blank SMTP host and `GOTRUE_MAILER_AUTOCONFIRM`.

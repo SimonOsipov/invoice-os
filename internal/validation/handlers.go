@@ -20,7 +20,7 @@ import (
 const rulesManagedMessage = "rules are managed by ASComply"
 
 // ToggleHandler answers 401 without an identity, otherwise 403: rules change only through the operator
-// kill switch (docs/rule-kill-switch.md). It never reads the body and reaches
+// kill switch (vault runbook "Rule kill switch"). It never reads the body and reaches
 // no database, so no key or body shape is an oracle.
 func ToggleHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

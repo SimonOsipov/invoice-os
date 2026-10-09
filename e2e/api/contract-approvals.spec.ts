@@ -303,7 +303,7 @@ test.describe('workflow-role contract (API E2E, over the deployed gateway)', () 
 //     body, never a follow-up GET.
 //   - `steps` is the policy's HIGHEST version's tree, which is not necessarily the sealed
 //     one: the moment a draft is opened it is an unpublished proposal, and there is no
-//     endpoint for the in-force tree at all (docs/approvals.md §10). Never described here
+//     endpoint for the in-force tree at all (.claude/rules/approvals.md). Never described here
 //     as "the active tree".
 //   - every test mints its own policy inline, because a CI retry replays the whole test:
 //     a shared published policy would answer 409 the second time round.

@@ -33,7 +33,7 @@ sidecar
 # DB tooling — not needed to compile a service binary. `migrations/` and the
 # `!db/*.sql` files below are the exceptions (M2-12, M4-21-03): the
 # gateway embeds migrations/*.sql AND the db/*.sql files `db/embed.go` embeds via go:embed
-# (migrations.md §2; internal/platform/db.Bootstrap/.Seed), so they MUST be in the
+# (internal/platform/db.Bootstrap/.Seed), so they MUST be in the
 # Go build context or the gateway image fails to compile. It is a shared
 # Dockerfile, so migrations/ and those db/*.sql files land in every service's
 # context; the seven context services simply never import them.

@@ -2850,7 +2850,7 @@ describe('InvoiceDetail UBL document card (task-401, BUG-04-05)', () => {
 
   // The prototype's action group is `View UBL/XML · PDF · Transmit`; only the first is in
   // scope. PDF rendering is explicitly Out of Scope and a second dead button is exactly
-  // what this story exists to remove (.ralph/design-spec.md §1).
+  // what this story exists to remove.
   it.each([
     ['an editable', editable],
     ['a non-editable', { status: 'accepted' as InvoiceStatus, can_edit: false, can_submit: false }],

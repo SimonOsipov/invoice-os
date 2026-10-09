@@ -1,0 +1,32 @@
+---
+paths:
+  - "internal/archive/**"
+  - "frontend/app/src/lib/evidenceBundle.ts"
+  - "internal/gateway/cors.go"
+---
+# Evidence bundle
+
+- Run both routes under `bundleTxOptions`: `REPEATABLE READ`, `READ ONLY`. `WithinRequestTenantTx` alone gives one snapshot per statement.
+- Mount both routes on the invoice service. The gateway needs no route change.
+- Check identity first. Parse every parameter before any database call.
+- Return every 4xx and 5xx JSON error before the first ZIP byte.
+- After the first ZIP byte, return without calling `bw.Close()`. A missing central directory makes every ZIP reader refuse the file.
+- Read child rows with `= ANY($1::uuid[])` in chunks of 500. Never JOIN `invoices`.
+- Stream rows and bodies. Never call `CollectRows`.
+- Hold at most one row's bodies in memory.
+- Write no `tenant_id` predicate. RLS isolates the tenant.
+- Count invoices against `maxBundleInvoices` before the first ZIP byte. The download returns 400 over the cap.
+- Make the preview return the counts and `over_limit: true` over the cap. The preview never refuses.
+- Give the preview no byte estimate.
+- Write `manifest.json` last. It lists a SHA-256 for every earlier entry.
+- Call the manifest a checksum list. Never call it signed.
+- Emit an empty CSV cell for a NULL column. Marshal a NULL `entity.tin` as JSON `null`.
+- Emit every CSV with its header row, even with no data rows.
+- Scrub request and response headers with `ScrubHeaders` on output, whatever write time stored.
+- Write `poll_ref` in `submissions.csv` only.
+- Resolve names with `actor.Resolve` once per chunk on the assembler's transaction.
+- Render `Content-Disposition` with `mime.FormatMediaType`. It leaves the filename unquoted.
+- Parse the filename without a quoted-string regex. Read `preview.filename` before the build.
+- Declare no `Content-Length`. Let `net/http` frame the body.
+- Expose `Content-Disposition` to browsers through the gateway CORS expose header.
+- Run `ANALYZE` as the owner or the superuser before you measure a plan. `invoice_app` cannot analyze.

@@ -87,6 +87,7 @@ func newInviteWorld(t *testing.T, prefix string) inviteWorld {
 	t.Helper()
 	ctx := context.Background()
 	base := idpMailURL(t)
+	grantAccountStateRead(t)
 	conn := superConn(t)
 
 	pool, err := db.NewPool(ctx, mailEnv(t, "DATABASE_URL"))
@@ -132,7 +133,7 @@ func newInviteWorld(t *testing.T, prefix string) inviteWorld {
 		if err == tenancy.ErrInvitationNotValid {
 			return gateway.InvitationPreview{}, gateway.ErrInvitationNotValid
 		}
-		return gateway.InvitationPreview{Workspace: p.Workspace, Role: p.Role, Email: p.Email}, err
+		return gateway.InvitationPreview{Workspace: p.Workspace, Role: p.Role, Email: p.Email, Account: p.Account}, err
 	}
 	w.gw = startInviteGateway(t, base, preview)
 	return w
@@ -258,22 +259,22 @@ func TestIdP_InviteeRegistersVerifiesSignsInAndJoins(t *testing.T) {
 	}
 }
 
-// First unconfirmed signup wins: the second signup's password is dropped, and the click confirms the first.
+// A second signup for an unconfirmed address is refused before GoTrue: no second mail, and the click confirms the first.
 func TestIdP_InviteeSecondSignupKeepsTheFirstPassword(t *testing.T) {
 	w := newInviteWorld(t, "resend06b-")
 	u := idpUser{email: w.email}
 	p1, p2 := "pw1-"+uuid.NewString(), "pw2-"+uuid.NewString()
 
 	w.register(t, p1)
-	w.register(t, p2)
-
-	n := mailCount(t, u.email)
-	t.Logf("mailpit message count for the invitee after two registrations: %d", n)
-	if n < 1 {
-		t.Fatalf("mailpit holds %d mails after two registrations, want at least 1", n)
+	status, body := postGW(t, w.gw+"/auth/invitation/register", map[string]string{"token": w.token, "password": p2})
+	if status != http.StatusConflict || body != `{"error":"account_unconfirmed"}`+"\n" {
+		t.Fatalf("second registration: status %d, body %q; want 409 account_unconfirmed", status, body)
 	}
-	links := confirmationLinks(t, u.email, n)
-	if got := follow(t, links[len(links)-1]); got != siteURL+"/?verified=1" {
+
+	if n := mailCount(t, u.email); n != 1 {
+		t.Fatalf("mailpit holds %d mails after two registrations, want 1", n)
+	}
+	if got := follow(t, confirmationLink(t, u.email)); got != siteURL+"/?verified=1" {
 		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
 	}
 

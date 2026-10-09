@@ -66,8 +66,8 @@ test('deployed app: sign-out redirects to the landing page', async ({ page }) =>
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// A live hand-off session wins over a later sign-in from landing (docs/identity-provider.md,
-// "Precedence in the app"): a second account only takes the tab once the first session is gone.
+// A live hand-off session wins over a later sign-in from landing:
+// a second account only takes the tab once the first session is gone.
 test('deployed app: a second real sign-in replaces the session only after the first one is gone', async ({ page }) => {
   test.setTimeout(180_000)
   const errors = collectErrors(page)
@@ -138,7 +138,7 @@ test('deployed app: a visit with no session redirects to the landing page', asyn
 })
 
 // ROUTE-01-08: the only spec that presses Back/Forward. Lives in the sign-in capability
-// file it depends on (docs/e2e-convention.md: organize by capability, not by date).
+// file it depends on (.claude/rules/e2e.md: organise by capability, never by date).
 //
 // goBack() alone would only prove Chromium reused a bfcached page, not that the router
 // restored the view. So every step asserts the URL AND the rendered panel, never one alone.
@@ -488,8 +488,7 @@ test('deployed landing: the sign-in dialog offers the form and no persona', asyn
 
 // ROUTE-06-06 AC-1: the plain top-level views ROUTE-06-05's popstate sweep leaves with no
 // coverage (dashboard/audit/settings/extraction/detail already have their own deep-link
-// specs above). One test looping all 8 paths in-process — docs/e2e-convention.md forbids
-// a test() per screen.
+// specs above). One test looping all 8 paths in-process, not a test() per screen.
 test('deployed app: every top-level path cold-boots to its own screen', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = collectErrors(page)
@@ -1456,7 +1455,7 @@ async function storedRenewal(page: Page): Promise<StoredRenewal> {
   return JSON.parse(raw ?? 'null') as StoredRenewal
 }
 
-// Moves received_at back past GOTRUE_JWT_EXP (3600 s, docs/identity-provider.md), whatever the page clock reads.
+// Moves received_at back past GOTRUE_JWT_EXP (3600 s), whatever the page clock reads.
 async function ageStoredSession(page: Page, patch: Partial<StoredRenewal> = {}): Promise<void> {
   await page.evaluate(
     ({ key, patch, ageMs }) => {
@@ -2711,6 +2710,8 @@ test('deployed journey: an invitee creates an account on the accept page, signs 
     const heading = page.getByRole('heading', { name: 'Check your email', exact: true })
     const text = page.getByText('a confirmation link is on its way to')
     await expect(text).toContainText(account.email)
+    await expect(text).toContainText('A confirmation link is on its way to')
+    await expect(text).not.toContainText('If this address can be registered')
     await expectAcceptStack(
       page,
       375,
@@ -2729,6 +2730,188 @@ test('deployed journey: an invitee creates an account on the accept page, signs 
   expect(identity.user.role, 'the invited role').toBe('reviewer')
   expect(urls.filter((u) => u.includes('signin=no-workspace')), 'a navigation carried signin=no-workspace').toEqual([])
   expect(workspacesCreated, 'workspaces created on the way').toBe(0)
+})
+
+// The preview's account state is read from the auth store, which a fork fills asynchronously; poll, never sleep.
+async function awaitAccountState(token: string, want: 'none' | 'unconfirmed' | 'confirmed'): Promise<void> {
+  await expect
+    .poll(async () => ((await rawFetch('/auth/invitation', { method: 'POST', body: { token } })).body as { account?: string } | null)?.account, {
+      message: `the preview never reported account ${want}`,
+      timeout: 120_000,
+    })
+    .toBe(want)
+}
+
+const existsText = (page: Page, address: string) => page.getByText(`${address} already has an ASComply account.`)
+const INVITE_PREVIEW = /\/auth\/invitation$/
+
+// Answers the preview with the real answer, its `account` replaced by whatever `state.account` holds when the page asks.
+async function fulfilPreview(page: Page, state: { account: 'confirmed' | 'unconfirmed' }): Promise<void> {
+  await page.route(INVITE_PREVIEW, async (route) => {
+    if (route.request().method() === 'OPTIONS') return route.continue()
+    const response = await route.fetch()
+    const body = (await response.json()) as Record<string, unknown>
+    return route.fulfill({ response, json: { ...body, account: state.account } })
+  })
+}
+
+test('deployed journey: an invitee who already registered and submits Create account again on the open page is sent to Sign in', async ({ page }) => {
+  test.setTimeout(240_000)
+  const workspace = await inviteWorkspace()
+  const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+  const errors = gatedErrors(page, [expectedStatusDropper(page, 409, /\/auth\/invitation\/register$/)])
+  await seedConsent(page, false)
+  await openInvite(page, token)
+  await expect(page.getByRole('button', { name: 'Create account', exact: true })).toBeVisible({ timeout: 30_000 })
+
+  // The page still shows the ready view: the account appears behind its back.
+  const registered = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password: account.password } })
+  expect(registered.status, JSON.stringify(registered.body)).toBe(202)
+  await awaitAccountState(token, 'confirmed')
+
+  await page.getByRole('button', { name: 'Create account', exact: true }).click()
+  await page.getByLabel('Password', { exact: true }).fill(crypto.randomUUID().slice(0, 16))
+  await page.getByRole('button', { name: 'Create account →', exact: true }).click()
+  await expect(existsText(page, account.email)).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('button', { name: 'Create account', exact: true })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await signInInOpenWindow(page, account)
+  const identity = await readSessionIdentity(page)
+
+  expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
+  expect(identity.user.role, 'the invited role').toBe('reviewer')
+  expect(errors, `console errors on the accept page:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed journey: an invitee who registered opens the invite on another device and is offered only Sign in', async ({ browser }) => {
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace()
+  const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+
+  const contextA = await browser.newContext()
+  try {
+    await registerOnAcceptPage(await contextA.newPage(), token, account.password)
+  } finally {
+    await contextA.close()
+  }
+  await awaitAccountState(token, 'confirmed')
+
+  const contextB = await browser.newContext()
+  try {
+    const page = await contextB.newPage()
+    const errors = gatedErrors(page, [])
+    await seedConsent(page, false)
+    await openInvite(page, token)
+    await expect(existsText(page, account.email)).toBeVisible({ timeout: 30_000 })
+    expect(await page.getByRole('button').allTextContents(), 'the buttons on the existing-account view').toEqual(['Sign in'])
+
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await signInInOpenWindow(page, account)
+    const identity = await readSessionIdentity(page)
+
+    expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
+    expect(identity.user.role, 'the invited role').toBe('reviewer')
+    expect(errors, `console errors on the accept page:\n${errors.join('\n')}`).toEqual([])
+  } finally {
+    await contextB.close()
+  }
+})
+
+test('deployed landing: the existing-account views stack at every width', async ({ page }) => {
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace(`W${crypto.randomUUID().replaceAll('-', '')}`.padEnd(200, 'w'))
+  expect(workspace.name, 'the workspace name').toHaveLength(200)
+  const long = longInviteAddress()
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, long)
+  const widths = [...WIDE_WIDTHS, 375]
+  const errors = collectErrors(page)
+  await seedConsent(page, false)
+  const state: { account: 'confirmed' | 'unconfirmed' } = { account: 'confirmed' }
+  await fulfilPreview(page, state)
+
+  const sentence = (address: string) => page.getByText(`${address} already has an ASComply account.`)
+  const readConfirmed: number[] = []
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: TALL })
+    await openInvite(page, token)
+    const text = sentence(long)
+    await expect(text).toBeVisible({ timeout: 30_000 })
+    const signIn = page.getByRole('button', { name: 'Sign in', exact: true })
+    await expectAcceptStack(page, width, text, [['text', text], ['sign in', signIn]], ['text', 'sign in'])
+    readConfirmed.push(width)
+  }
+  expect(readConfirmed, 'the widths the existing-account sweep read').toEqual(widths)
+
+  state.account = 'unconfirmed'
+  const readUnconfirmed: number[] = []
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: TALL })
+    await openInvite(page, token)
+    const text = page.getByText(`A confirmation email was already sent to ${long}.`)
+    await expect(text).toBeVisible({ timeout: 30_000 })
+    await expectAcceptStack(
+      page,
+      width,
+      text,
+      [
+        ['text', text],
+        ['resend', page.getByRole('button', { name: 'Send it again', exact: true })],
+        ['forgot', page.getByRole('button', { name: 'Forgot password?', exact: true })],
+        ['sign in', page.getByRole('button', { name: 'Sign in', exact: true })],
+      ],
+      ['resend', 'sign in'],
+    )
+    readUnconfirmed.push(width)
+  }
+  expect(readUnconfirmed, 'the widths the unconfirmed sweep read').toEqual(widths)
+  expect(errors, `console errors on the accept page:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed landing: the unconfirmed view\'s controls resolve like their siblings', async ({ page }) => {
+  test.setTimeout(120_000)
+  const workspace = await inviteWorkspace()
+  const address = `invite-controls-${crypto.randomUUID()}@example.com`
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, address)
+  const errors = collectErrors(page)
+  await seedConsent(page, false)
+  await fulfilPreview(page, { account: 'unconfirmed' })
+  await page.setViewportSize({ width: 1280, height: TALL })
+  await openInvite(page, token)
+
+  const text = page.getByText(`A confirmation email was already sent to ${address}.`)
+  await expect(text).toBeVisible({ timeout: 30_000 })
+  const resend = page.getByRole('button', { name: 'Send it again', exact: true })
+  const signIn = page.getByRole('button', { name: 'Sign in', exact: true })
+  const forgot = page.getByRole('button', { name: 'Forgot password?', exact: true })
+  const read = (el: Locator) =>
+    el.evaluate((node) => {
+      const css = getComputedStyle(node)
+      return { fontSize: css.fontSize, fontWeight: css.fontWeight, height: css.height, borderTopColor: css.borderTopColor, backgroundColor: css.backgroundColor }
+    })
+  expect(await read(resend), 'Send it again resolves like Sign in').toEqual(await read(signIn))
+  expect((await read(forgot)).fontSize, 'Forgot password? font size').toBe('13px')
+
+  const answer = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === RESET_REQUEST_PATH)
+  await forgot.click()
+  expect((await answer).status(), 'the fork gateway answers the reset request').toBe(202)
+  const notice = page.getByText(RESET_SENT, { exact: true })
+  await expect(notice).toBeVisible()
+  const card = text.locator('xpath=../..')
+  const accent = await card.evaluate((node) => {
+    const probe = document.createElement('div')
+    probe.style.background = 'var(--accent)'
+    node.appendChild(probe)
+    const color = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return color
+  })
+  const fill = (await read(notice)).backgroundColor
+  expect(fill, 'the reset notice is not transparent').not.toBe('rgba(0, 0, 0, 0)')
+  expect(fill, 'the reset notice fills with --accent').toBe(accent)
+  expect(errors, `console errors on the accept page:\n${errors.join('\n')}`).toEqual([])
 })
 
 const ONE_REVIEWER = 'Invite E2E invited you as Reviewer.'

@@ -733,6 +733,12 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     setSwitcherOpen((o) => !o)
   }
 
+  function adoptBatchClient(entityId: string) {
+    if (activeEntityId !== null || !clients.some((c) => c.entityId === entityId)) return
+    setActiveEntityId(entityId)
+    window.history.replaceState({ e: entityId }, '', window.location.href)
+  }
+
   function switchClient(id: string) {
     setActiveEntityId(id)
     // The entry being left names a drill-down of the company being left. Scrub its id
@@ -1700,6 +1706,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     documentStages,
     importError,
     reviewBatchIds,
+    adoptBatchClient,
     importedInvoiceId: detailInvoiceId,
     auditPrefilter,
     extractionJobId,

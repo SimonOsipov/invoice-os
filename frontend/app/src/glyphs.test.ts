@@ -134,7 +134,7 @@ describe('Sidebar wires navIconColStyle onto the icon wrapper, not just defines 
     // Structural guard only. navIconColStyle could exist with the right shape (tests above)
     // and still be a constant nobody uses -- this fails that case even though it can't
     // prove the resulting geometry; that half is persona-surfaces.spec.ts Test 5's job
-    // (no DOM layer here to render the span and measure it, docs/e2e-convention.md "Target surface").
+    // (no DOM layer here to render the span and measure it).
     expect(SIDEBAR_SRC).toMatch(/<span style=\{\{\s*\.\.\.navIconColStyle/)
   })
 })

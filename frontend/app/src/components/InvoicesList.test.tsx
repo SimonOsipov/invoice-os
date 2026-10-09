@@ -1996,7 +1996,7 @@ describe('InvoicesList: a filter refetch swaps the rows instead of rebuilding th
 })
 
 // QA Stage 4 (BUG-10-01, task-864). The five specs above cover truth-table rows 4, 5, 6,
-// 10 and 17 (.ralph/SUBTASK-01-ARCH.md §2). These cover the reachable rows they left open
+// 10 and 17. These cover the reachable rows they left open
 // -- 7, 13/14 and the paging/company-switch paths D-3 widened -- plus the poll gate C-1,
 // which the architect found by reading and which no test in this repo could see.
 describe('QA BUG-10-01: the held envelope at its edges', () => {
@@ -2286,7 +2286,7 @@ describe('InvoicesList: an empty register says which kind of empty it is', () =>
 
     const filtered = await screen.findByTestId('invoices-empty-filtered')
     expect(filtered.textContent, 'the filtered empty state must say which kind of empty this is').toContain('Nothing needs attention')
-    expect(filtered.textContent, 'the System Design copy verbatim (.ralph/PLAN.md:498-502) -- this sentence IS the claim, so a reword is a new claim').toContain('No invoice in this register is waiting on you. Clear the filter to see the rest.')
+    expect(filtered.textContent, 'the System Design copy verbatim -- this sentence IS the claim, so a reword is a new claim').toContain('No invoice in this register is waiting on you. Clear the filter to see the rest.')
     expect(within(filtered).getByTestId('clear-needs-attention').textContent, 'the way back must say where it goes -- S2 clicks it by testid and would not notice a rename').toBe('Show all invoices')
     expect(screen.queryByTestId('invoices-empty'), 'the generic copy must be REPLACED, not joined -- two empty states at once is the same lie twice').toBeNull()
     expect(screen.queryByText('No invoices yet'), 'a workspace that has invoices must never be told it has none').toBeNull()

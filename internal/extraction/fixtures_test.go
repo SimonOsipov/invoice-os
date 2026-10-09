@@ -47,7 +47,7 @@ const (
 )
 
 // The golden corpus: the six anchor-rule layouts, flat in testdata/ under corpus_test.go's
-// corpusPrefix. See docs/extraction-corpus.md.
+// corpusPrefix. See .claude/rules/extraction-corpus.md.
 const (
 	fxCorpusInline    = "corpus_inline_labels.pdf"
 	fxCorpusSplit     = "corpus_split_labels.pdf"
@@ -412,7 +412,7 @@ func fxBuildRichInvoice() []byte {
 // so the number of fxLine values per field IS the token granularity a layout exercises.
 // Every TIN sits in the free part of the reserved 99999999- block, never -0001..-0009
 // (internal/submission/mock_script.go). corpus_test.go holds what Tier-1 must resolve from
-// each; docs/extraction-corpus.md holds the rest.
+// each; .claude/rules/extraction-corpus.md holds the rest.
 
 // fxTextPage is one US-Letter page of text over a single Helvetica.
 func fxTextPage(lines ...fxLine) []byte {
@@ -622,7 +622,7 @@ func fxBuildCorpusTotalsBlock() []byte {
 
 // fxLearnedTwoParty is deliberately named outside corpusPrefix: it is EXTR-14-09's before/after
 // document, not a seventh Tier-1 layout, so it stays out of corpusExpect, corpusLayouts,
-// corpusTokenFloor and both accuracy rates. docs/extraction-corpus.md, "## Learned rules".
+// corpusTokenFloor and both accuracy rates. .claude/rules/extraction-corpus.md.
 const fxLearnedTwoParty = "learned_two_party.pdf"
 
 // fxBuildLearnedTwoParty stacks both party blocks (label / name / BARE TIN) in page 1's top
@@ -650,8 +650,8 @@ func fxBuildLearnedTwoParty() []byte {
 // --- the wild arrangements (NOT corpus layouts) -----------------------------
 
 // Five production layouts reproduced by arrangement only -- which labels appear, where, and at
-// what token granularity. No bytes are copied. Scrubbed per docs/extraction-corpus.md
-// "Scrubbing an anonymised real document" by Claude Opus 5 on 2026-09-06 (the four text layers)
+// what token granularity. No bytes are copied. Scrubbed per .claude/rules/extraction-corpus.md
+// by Claude Opus 5 on 2026-09-06 (the four text layers)
 // and 2026-09-07 (the image-only one); step 7's second-person confirmation is recorded on the
 // pull request, not here.
 //

@@ -65,6 +65,7 @@ func TestIdP_InviteResendTellsSentFromHeld(t *testing.T) {
 	}
 	submit := func(link string) string {
 		action, values := confirmForm(t, link)
+		values.Del("state")
 		values.Set("password", "pw-"+uuid.NewString())
 		_, location, err := postForm(action, values)
 		if err != nil {

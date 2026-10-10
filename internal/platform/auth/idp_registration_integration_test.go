@@ -105,6 +105,8 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	mux.Handle("POST /auth/verify", gateway.VerifyHandler(authURL, site, noRedirect, log, sink, store))
 	mux.Handle("POST /auth/exchange", gateway.ExchangeHandler(store))
+	inviteeSignIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	mux.Handle("POST /auth/invitation/password", gateway.InvitationPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), inviteeSignIn, sink, log, store))
 	confirmationMail, err := gateway.MailTemplate("confirmation")
 	if err != nil {
 		t.Fatal(err)

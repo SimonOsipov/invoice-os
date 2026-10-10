@@ -38,7 +38,6 @@ func startInviteGateway(t *testing.T, authBase string, store *tenancy.Store) str
 	if err != nil {
 		t.Fatal(err)
 	}
-	site, _ := url.Parse(siteURL)
 	mux, _ := gatewayMux(t, authBase, 0, nil)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	limit := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
@@ -59,13 +58,11 @@ func startInviteGateway(t *testing.T, authBase string, store *tenancy.Store) str
 		},
 		Release: store.ReleaseInvitationRegistration,
 	}
-	signInLimit := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	mux.Handle("POST /auth/invitation", gateway.InvitationHandler(preview, log))
 	mux.Handle("POST /auth/invitation/register", gateway.InvitationRegisterHandler(authURL, noRedirect, 0, limit, true, log, preview, registrations))
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/invitation/resend", gateway.InvitationResendHandler(authURL, noRedirect, perAddress, perIP, true, log, preview))
-	mux.Handle("POST /auth/invitation/password", gateway.InvitationPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), signInLimit, nil, log, gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)))
 	return serveGateway(t, mux)
 }
 
@@ -217,6 +214,7 @@ func (w inviteWorld) setPasswordFromMail(t *testing.T, password string) (string,
 	if u, err := url.Parse(action); err != nil || u.Path != "/auth/invitation/password" {
 		t.Fatalf("the invitee's confirmation form posts to %s, want /auth/invitation/password", action)
 	}
+	values.Del("state")
 	values.Set("password", password)
 	status, location, err := postForm(action, values)
 	if err != nil {
@@ -226,6 +224,25 @@ func (w inviteWorld) setPasswordFromMail(t *testing.T, password string) (string,
 		t.Fatalf("submitting the set-password form: status %d, Location %q; want 303 %s/?verified=1", status, location, siteURL)
 	}
 	return action, values
+}
+
+// setPasswordWithState opens the one confirmation mail's link with state, submits the set-password form with password
+// and returns the form's action, its values and the redirect target.
+func (w inviteWorld) setPasswordWithState(t *testing.T, password, state string) (string, url.Values, string) {
+	t.Helper()
+	action, values := confirmFormWithState(t, confirmationLink(t, w.email), state)
+	if u, err := url.Parse(action); err != nil || u.Path != "/auth/invitation/password" {
+		t.Fatalf("the invitee's confirmation form posts to %s, want /auth/invitation/password", action)
+	}
+	if values.Get("state") != state {
+		t.Fatalf("the set-password form carries state %q, want %q", values.Get("state"), state)
+	}
+	values.Set("password", password)
+	status, location, err := postForm(action, values)
+	if err != nil || status != http.StatusSeeOther {
+		t.Fatalf("POST %s: status %d, err %v; want 303", action, status, err)
+	}
+	return action, values, location
 }
 
 // accept runs the accept handler as the tenant-less caller the middleware would build.

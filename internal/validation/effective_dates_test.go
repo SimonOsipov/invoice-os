@@ -85,6 +85,20 @@ func edVersionFor(t *testing.T, ctx context.Context, q queryRower, date string) 
 	return got
 }
 
+// latestRealDated returns the id of the newest published, dated rule-set version (not a fixture),
+// so tests that look past every real start date survive the next publish.
+func latestRealDated(t *testing.T, ctx context.Context, q queryRower) string {
+	t.Helper()
+	var id string
+	if err := q.QueryRow(ctx,
+		`SELECT id FROM rule_set_versions
+		  WHERE notes LIKE 'MBS global rule-set v%' AND effective_from IS NOT NULL
+		  ORDER BY effective_from DESC, version DESC LIMIT 1`).Scan(&id); err != nil {
+		t.Fatalf("read the latest real dated version: %v", err)
+	}
+	return id
+}
+
 func edWant(t *testing.T, got *string, want, what string) {
 	t.Helper()
 	if got == nil {
@@ -321,9 +335,10 @@ func TestVersionFor_UndatedVersionsAreNeverChosen(t *testing.T) {
 
 	undated := edFixture(t, ctx, tx, nextVersion(), true, "")
 	v4 := versionIDByVersion(t, ctx, tx, 4)
-	for _, date := range []string{"1999-01-01", "2026-08-06", "3001-01-01"} {
+	latest := latestRealDated(t, ctx, tx)
+	for date, want := range map[string]string{"1999-01-01": v4, "2026-08-06": v4, "3001-01-01": latest} {
 		got := edVersionFor(t, ctx, tx, date)
-		edWant(t, got, v4, "rule_set_version_for("+date+")")
+		edWant(t, got, want, "rule_set_version_for("+date+")")
 		if got != nil && *got == undated {
 			t.Errorf("rule_set_version_for(%s) chose the undated fixture", date)
 		}

@@ -182,6 +182,7 @@ func v4Row(t *testing.T, super *pgxpool.Pool) (id string) {
 
 func TestStore_LoadForDatesPicksTheVersionInForceOnEachDate(t *testing.T) {
 	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
 	aID, aVer := dateFixture(t, super, "3001-01-01", "t-a")
 	bID, bVer := dateFixture(t, super, "3001-06-01", "t-b")
 
@@ -193,9 +194,9 @@ func TestStore_LoadForDatesPicksTheVersionInForceOnEachDate(t *testing.T) {
 	if len(got) != len(dates) {
 		t.Fatalf("len(result) = %d, want %d (total over the requested dates)", len(got), len(dates))
 	}
-	v4 := v4Row(t, super)
-	if got["3000-12-31"].ID != v4 || got["3000-12-31"].Version != 4 {
-		t.Errorf("3000-12-31 = %s v%d, want v4 (%s)", got["3000-12-31"].ID, got["3000-12-31"].Version, v4)
+	latest := latestRealDated(t, context.Background(), super)
+	if got["3000-12-31"].ID != latest {
+		t.Errorf("3000-12-31 = %s v%d, want the latest real dated version (%s)", got["3000-12-31"].ID, got["3000-12-31"].Version, latest)
 	}
 	if g := got["3001-02-01"]; g.ID != aID || g.Version != aVer {
 		t.Errorf("3001-02-01 = %s v%d, want fixture A %s v%d", g.ID, g.Version, aID, aVer)
@@ -536,6 +537,7 @@ func TestStore_LoadActiveRuleSetPopulatesID(t *testing.T) {
 
 func TestStore_LoadForDatesStartDateIsInclusiveAndDuplicatesCollapse(t *testing.T) {
 	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
 	aID, _ := dateFixture(t, super, "3001-01-01", "t-a")
 
 	got, err := NewStore(app).LoadForDates(context.Background(),
@@ -549,8 +551,8 @@ func TestStore_LoadForDatesStartDateIsInclusiveAndDuplicatesCollapse(t *testing.
 	if got["3001-01-01"].ID != aID {
 		t.Errorf("start day resolved to %s, want fixture %s (inclusive)", got["3001-01-01"].ID, aID)
 	}
-	if got["3000-12-31"].ID == aID || got["3000-12-31"].Version != 4 {
-		t.Errorf("day before start = %s v%d, want v4", got["3000-12-31"].ID, got["3000-12-31"].Version)
+	if latest := latestRealDated(t, context.Background(), super); got["3000-12-31"].ID == aID || got["3000-12-31"].ID != latest {
+		t.Errorf("day before start = %s v%d, want the latest real dated version (%s), not the fixture", got["3000-12-31"].ID, got["3000-12-31"].Version, latest)
 	}
 }
 

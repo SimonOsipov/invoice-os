@@ -20,32 +20,32 @@ import (
 )
 
 // ---------------------------------------------------------------------
-// AC-1 -- v4 is sealed and in force today; v3 stays sealed, not in force, unmutated.
+// AC-1 -- v4 is sealed and in force on 2026-08-06; v3 stays sealed, not in force, unmutated.
 // ---------------------------------------------------------------------
 
-// TestV4_IsInForceAndSealed (AC-1): v4 sealed and in force today, v3 sealed and not.
+// TestV4_IsInForceAndSealed (AC-1): v4 sealed and in force on activeSeedDate, v3 sealed and not.
 func TestV4_IsInForceAndSealed(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
 
 	var v4InForce, v4Sealed bool
-	if err := app.QueryRow(ctx, `SELECT id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date), sealed FROM rule_set_versions WHERE version = 4`).Scan(&v4InForce, &v4Sealed); err != nil {
+	if err := app.QueryRow(ctx, `SELECT id = rule_set_version_for($1::date), sealed FROM rule_set_versions WHERE version = 4`, activeSeedDate).Scan(&v4InForce, &v4Sealed); err != nil {
 		t.Fatalf("read v4 in-force/sealed: %v -- expected the v4 migration to be applied "+
 			"(has `make migrate-up` been run?) [AC-1]", err)
 	}
 	if !v4InForce {
-		t.Error("v4 is not the version in force today, want it to be [AC-1]")
+		t.Error("v4 is not the version in force on 2026-08-06, want it to be [AC-1]")
 	}
 	if !v4Sealed {
 		t.Error("v4.sealed = false, want true [AC-1]")
 	}
 
 	var v3InForce, v3Sealed bool
-	if err := app.QueryRow(ctx, `SELECT id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date), sealed FROM rule_set_versions WHERE version = 3`).Scan(&v3InForce, &v3Sealed); err != nil {
+	if err := app.QueryRow(ctx, `SELECT id = rule_set_version_for($1::date), sealed FROM rule_set_versions WHERE version = 3`, activeSeedDate).Scan(&v3InForce, &v3Sealed); err != nil {
 		t.Fatalf("read v3 in-force/sealed: %v [AC-1]", err)
 	}
 	if v3InForce {
-		t.Error("v3 is the version in force today, want v4 (it supersedes v3) [AC-1]")
+		t.Error("v3 is the version in force on 2026-08-06, want v4 (it supersedes v3) [AC-1]")
 	}
 	if !v3Sealed {
 		t.Error("v3.sealed = false, want still true (sealing is permanent) [AC-1]")

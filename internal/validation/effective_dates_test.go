@@ -655,7 +655,10 @@ func TestEffectiveDates_DropDownRestoresTheActiveFlag(t *testing.T) {
 			}
 
 			v4 := versionIDByVersion(t, ctx, tx, 4)
-			want := v4
+			var want string
+			if err := tx.QueryRow(ctx, `SELECT `+inForce).Scan(&want); err != nil {
+				t.Fatalf("read the version in force before the fixture: %v", err)
+			}
 			if tc.fixtureToday {
 				if err := tx.QueryRow(ctx,
 					`INSERT INTO rule_set_versions (version, sealed, effective_from, notes)

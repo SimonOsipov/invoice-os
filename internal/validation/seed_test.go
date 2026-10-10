@@ -78,9 +78,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // newTestIdentity builds a fresh authenticated identity context. rule_set_versions/
@@ -94,42 +96,35 @@ func newTestIdentity() context.Context {
 	})
 }
 
-// activeSeedVersion is the ONE place this package names the migration-seeded
-// ACTIVE rule-set version. INVCR-01-13 (D8, task-289) published v3 (v2's same
-// 19 rules, target filled on 4 keys) and deactivated v2 -- see
-// migrations/20260731090000_rule_set_v3.sql. Previously M4-04-01 published v2
-// (v1's 17 base rules + the 2 line-item rules) and deactivated v1, restoring
-// v1's immutability -- see migrations/20260716185106_rule_set_v2.sql. Every
-// fixture below that needs "the sanctioned active version" resolves it
-// through here or by discovering it from the DB, so the next version publish
-// is a one-line change here rather than a scavenger hunt through scattered
-// literals ([active-version-pinning-is-the-bug]).
+// activeSeedVersion is the version in force on activeSeedDate (v4's start date); the
+// content tests judge it, whatever version today's date selects.
 const activeSeedVersion = 4
 
-// loadActive loads the ACTIVE RuleSet via the real Store -- the shared "DB
-// load" half of this file's DB-load -> engine-evaluate chain (combining
-// store_test.go's load-with-identity pattern with registry_test.go's
-// NewDefaultEngine().Evaluate pattern, per this file's header).
-//
-// It deliberately does NOT assert a version: its callers each test something
-// else entirely (tax-math tolerance, TIN format, the kill-switch...), and a
-// version assertion here would t.Fatalf all of them at this line, BEFORE the
-// assertion each was written to make -- the exact trap the old loadV1's
-// `if rs.Version != 1` sprang on all 23 call sites the moment the active
-// version stopped being literally 1 (RS-V2-15). Which version is active is
-// asserted ONCE, on purpose, by TestSeed_ActiveVersionLoads.
-//
-// If the seed is missing entirely, LoadActiveRuleSet returns
-// ErrNoActiveRuleSet and callers fail here with a message that reads
-// unambiguously as "the seed is not applied yet", not a build/skip/connection
-// fault.
+const activeSeedDate = "2026-08-06"
+
+// activeSeedNow is activeSeedDate as a batch handler's injected clock string (fixedNow).
+const activeSeedNow = activeSeedDate + "T00:00:00Z"
+
+// loadSeedRuleSet loads the version in force on activeSeedDate in the tenant-tx shape of
+// Store.LoadActiveRuleSet, under ctx's identity.
+func loadSeedRuleSet(ctx context.Context, app *pgxpool.Pool) (RuleSet, error) {
+	var rs RuleSet
+	err := db.WithinRequestTenantTx(ctx, app, func(tx pgx.Tx) error {
+		m, err := loadForDatesTx(ctx, tx, []string{activeSeedDate})
+		rs = m[activeSeedDate]
+		return err
+	})
+	return rs, err
+}
+
+// loadActive is loadSeedRuleSet under a fresh identity. It asserts no version:
+// TestSeed_ActiveVersionLoads does.
 func loadActive(t *testing.T, app *pgxpool.Pool) RuleSet {
 	t.Helper()
-	store := NewStore(app)
-	rs, err := store.LoadActiveRuleSet(newTestIdentity())
+	rs, err := loadSeedRuleSet(newTestIdentity(), app)
 	if err != nil {
-		t.Fatalf("LoadActiveRuleSet: %v -- expected the migration-seeded active rule-set, got none "+
-			"(have the migrations been applied via `make migrate-up`?)", err)
+		t.Fatalf("load the rule-set in force on %s: %v -- have the migrations been applied via `make migrate-up`?",
+			activeSeedDate, err)
 	}
 	return rs
 }
@@ -217,12 +212,12 @@ func TestSeed_ActiveVersionLoads(t *testing.T) {
 
 	var inForce int
 	if err := app.QueryRow(ctx,
-		`SELECT version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
+		`SELECT version FROM rule_set_versions WHERE id = rule_set_version_for($1::date)`, activeSeedDate,
 	).Scan(&inForce); err != nil {
-		t.Fatalf("read the rule_set_versions row in force today: %v", err)
+		t.Fatalf("read the rule_set_versions row in force on %s: %v", activeSeedDate, err)
 	}
 	if inForce != activeSeedVersion {
-		t.Fatalf("version in force today = %d, want %d -- expected the migration-seeded rule-set", inForce, activeSeedVersion)
+		t.Fatalf("version in force on %s = %d, want %d -- expected the migration-seeded rule-set", activeSeedDate, inForce, activeSeedVersion)
 	}
 
 	rs := loadActive(t, app)
@@ -582,19 +577,18 @@ func TestSeed_DuplicateLineItemsCEL(t *testing.T) {
 func TestSeed_KillSwitch(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	// Restore on the version in force today, the row the kill switch writes
-	// (TestRuleSetV2_KillSwitchCleanupTargetsVersionInForce).
+	// Restore the row the kill switch writes (TestRuleSetV2_KillSwitchCleanupTargetsVersionInForce).
 	t.Cleanup(func() {
 		if _, err := super.Exec(context.Background(),
 			`UPDATE rules r SET enabled = true
 			   FROM rule_set_versions v
-			  WHERE r.rule_set_version_id = v.id AND v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = 'vat-standard-rate'`,
+			  WHERE r.rule_set_version_id = v.id AND v.id = rule_set_version_for($1::date) AND r.key = 'vat-standard-rate'`, activeSeedDate,
 		); err != nil {
 			t.Errorf("cleanup: restore vat-standard-rate enabled=true: %v", err)
 		}
 	})
 
-	if n := runKillSwitch(t, super, "vat-standard-rate", false); n != 1 {
+	if n := runKillSwitchSeed(t, super, "vat-standard-rate", false); n != 1 {
 		t.Fatalf("kill switch (vat-standard-rate, false) rows = %d, want 1", n)
 	}
 

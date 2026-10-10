@@ -98,13 +98,14 @@ func rbActiveVersionID(t *testing.T, super *pgxpool.Pool) string {
 	return id
 }
 
+// rbActiveRule reads key from the version in force on docCleanValues' issue date, the one the gate judges.
 func rbActiveRule(t *testing.T, super *pgxpool.Pool, key string) (message, versionID string) {
 	t.Helper()
 	if err := super.QueryRow(context.Background(),
 		`SELECT r.message, r.rule_set_version_id::text FROM rules r
 		   JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		  WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $1`, key).Scan(&message, &versionID); err != nil {
-		t.Fatalf("read the active rule %q: %v", key, err)
+		  WHERE v.id = rule_set_version_for($1::date) AND r.key = $2`, *docCleanValues("")["issue_date"], key).Scan(&message, &versionID); err != nil {
+		t.Fatalf("read the rule %q in force on the fixture's issue date: %v", key, err)
 	}
 	return message, versionID
 }

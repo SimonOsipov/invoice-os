@@ -96,7 +96,7 @@ func TestBatch_EmptyInvoiceFiresEveryRequired(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadForDates, eng, nil, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForDates, eng, fixedNow(activeSeedNow), nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -144,9 +144,9 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 	var wantID string
 	var wantVersion int
 	if err := super.QueryRow(context.Background(),
-		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
+		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for($1::date)`, activeSeedDate,
 	).Scan(&wantID, &wantVersion); err != nil {
-		t.Fatalf("read the rule_set_versions row in force today: %v", err)
+		t.Fatalf("read the rule_set_versions row in force on %s: %v", activeSeedDate, err)
 	}
 
 	reqBody, err := json.Marshal(map[string]any{
@@ -158,7 +158,7 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadForDates, eng, nil, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForDates, eng, fixedNow(activeSeedNow), nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -198,8 +198,15 @@ func TestBatch_DB_TwoVersionsInOneBatch(t *testing.T) {
 
 func TestBatch_DB_UndatedInvoiceIgnoresAScheduledVersion(t *testing.T) {
 	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
 	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format(time.DateOnly)
 	fixtureID, _ := dateFixture(t, super, tomorrow, "t-tomorrow")
+	var todayID string
+	var todayVersion int
+	if err := super.QueryRow(context.Background(),
+		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`).Scan(&todayID, &todayVersion); err != nil {
+		t.Fatalf("read the version in force today: %v", err)
+	}
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[{"ref":"a","invoice":{}}]}`))
 	rec := httptest.NewRecorder()
@@ -208,9 +215,9 @@ func TestBatch_DB_UndatedInvoiceIgnoresAScheduledVersion(t *testing.T) {
 		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
 	}
 	got := decodeBatch(t, rec).Results[0]
-	if got.RuleSetVersion != 4 || got.RuleSetVersionID == fixtureID {
-		t.Errorf("undated item stamp = v%d %s, want v4 and not the scheduled fixture %s",
-			got.RuleSetVersion, got.RuleSetVersionID, fixtureID)
+	if got.RuleSetVersion != todayVersion || got.RuleSetVersionID != todayID || got.RuleSetVersionID == fixtureID {
+		t.Errorf("undated item stamp = v%d %s, want today's v%d %s and not the scheduled fixture %s",
+			got.RuleSetVersion, got.RuleSetVersionID, todayVersion, todayID, fixtureID)
 	}
 }
 
@@ -218,6 +225,7 @@ func TestBatch_DB_UndatedInvoiceIgnoresAScheduledVersion(t *testing.T) {
 // rest of the batch keeps its own version.
 func TestBatch_DB_YearZeroIssueDateIsJudgedAsUndated(t *testing.T) {
 	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
 	bID, _ := dateFixture(t, super, "3001-06-01", "t-yz")
 	var todayID string
 	if err := super.QueryRow(context.Background(),

@@ -249,20 +249,20 @@ func TestDueRechecks_InForceAndUnmarkedOnly(t *testing.T) {
 
 func TestDueRechecks_NothingDueAtHead(t *testing.T) {
 	super, app := dbTestPools(t)
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	v4Day := day(2026, 8, 6) // v4's start date; v5 is scheduled after it
 
 	// Positive control: a dated, marked version exists, so an empty answer is the marker at work.
 	if n := mustCount(t, super,
 		`SELECT count(*) FROM rule_set_versions v JOIN rule_set_version_rechecks r ON r.rule_set_version_id = v.id
-		  WHERE v.effective_from <= $1::date`, today); n == 0 {
-		t.Fatal("fixture: no dated, marked version in force today (v4's marker row is missing)")
+		  WHERE v.effective_from <= $1::date`, v4Day); n == 0 {
+		t.Fatal("fixture: no dated, marked version in force on 2026-08-06 (v4's marker row is missing)")
 	}
-	got, err := DueRechecks(context.Background(), app, today)
+	got, err := DueRechecks(context.Background(), app, v4Day)
 	if err != nil {
-		t.Fatalf("DueRechecks(today): %v", err)
+		t.Fatalf("DueRechecks(2026-08-06): %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("DueRechecks(today) = %v, want none -- every real version in force is marked", dueIDs(got))
+		t.Errorf("DueRechecks(2026-08-06) = %v, want none -- every real version in force is marked", dueIDs(got))
 	}
 }
 

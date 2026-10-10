@@ -1401,7 +1401,7 @@ describe('ReviewRow row-expansion: Explain and Accept (ENGI-17-06)', () => {
 
   function setup(o: Opts = {}) {
     const detail = detailFixture({ status: 'draft', can_edit: true, vat: '75.00', line_items: lines, violations: [LINE_V, VAT_V], ...o.detail })
-    const fetchMock = vi.fn((url: string, init?: { method?: string }) => {
+    const fetchMock = vi.fn((url: string, init?: { method?: string; body?: string }) => {
       const m = init?.method ?? 'GET'
       if (url.endsWith('/explain')) return Promise.resolve(reply(o.explain ?? OK_FIX))
       if (m === 'PATCH') return (o.patch ?? (() => Promise.resolve(reply(detail))))()

@@ -6153,6 +6153,7 @@ test('ENGI-16 detail: Line 2 opens the editor on line 2', async ({ page }) => {
     line_items: [
       { description: 'Widget A', quantity: '1', unit_price: '105.00', line_total: '105.00' },
       { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '-5.00' },
+      { description: 'Widget C', quantity: '1', unit_price: '0.00', line_total: '0.00' },
     ],
   })
 
@@ -6165,6 +6166,8 @@ test('ENGI-16 detail: Line 2 opens the editor on line 2', async ({ page }) => {
   await expect(violations).toContainText('line-cost-non-negative')
   const open = violations.getByTestId('violation-open-line')
   await expect(open).toHaveText('Line 2')
+  await expect(open, 'Line 2 is the one line rule violation').toBeVisible()
+  await expect(violations.getByTestId('violation-open-line')).toHaveCount(1)
 
   const entry = page.viewportSize()
   try {

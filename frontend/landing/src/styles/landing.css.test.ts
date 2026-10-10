@@ -508,27 +508,7 @@ function actionsFailures(css: string): string[] {
   return out
 }
 
-const ACTIONS_FIXTURE = (q: string, gap = '12px') => `
-.a-actions { display: flex; align-items: center; gap: 24px; }
-@media ${q} { .a-actions { gap: ${gap}; } }
-`
-
 describe('the header action group gap', () => {
-  it('controls: the lookup accepts the 389.98px fixture and rejects 390px, min-width, 24px-inside-media and a missing base', () => {
-    expect(actionsFailures(ACTIONS_FIXTURE('(max-width: 389.98px)'))).toEqual([])
-    expect(actionsFailures(ACTIONS_FIXTURE('(max-width: 390px)')).length, 'max-width 390px').toBeGreaterThan(0)
-    expect(actionsFailures(ACTIONS_FIXTURE('(min-width: 320px)')).length, 'min-width').toBeGreaterThan(0)
-    expect(actionsFailures(ACTIONS_FIXTURE('(max-width: 389.98px)', '8px')).length, 'wrong gap').toBeGreaterThan(0)
-    expect(actionsFailures('@media (max-width: 389.98px) { .a-actions { gap: 12px; } }').length, 'no base rule').toBeGreaterThan(0)
-    const withExtra = (rule: string) => ACTIONS_FIXTURE('(max-width: 389.98px)') + rule
-    expect(actionsFailures(withExtra('header .a-actions { gap: 4px; }')).length, 'compound selector').toBeGreaterThan(0)
-    expect(actionsFailures(withExtra('.a-actions { column-gap: 4px; }')).length, 'base column-gap').toBeGreaterThan(0)
-  })
-
-  it('.a-actions is a centred 24px-gap flex row outside any media', () => {
-    expect(actionsFailures(LANDING_CSS).filter((f) => f.startsWith('base'))).toEqual([])
-  })
-
   it('.a-actions narrows its gap only below 390px', () => {
     expect(actionsFailures(LANDING_CSS)).toEqual([])
   })

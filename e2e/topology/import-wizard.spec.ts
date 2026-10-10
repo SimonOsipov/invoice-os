@@ -111,6 +111,8 @@ import {
   buildMixedCsv,
   buildPerfCsv,
   buildSingleInvoiceCsv,
+  IMPORT_KEYS,
+  nullImportKeys,
   PERF_HEADER,
   steerMarker,
 } from '../importFixtures'
@@ -192,17 +194,8 @@ async function approveOpenRunsForEntity(token: string, entityId: string): Promis
 // steered answer only needs to place invoice_number for the screen to carry both AUTO and
 // SUGGESTED badges at once.
 const AIRL01_ANSWER = {
+  ...nullImportKeys(),
   invoice_number: 'Invoice No',
-  issue_date: null,
-  buyer_tin: null,
-  buyer_name: null,
-  currency: null,
-  subtotal: null,
-  vat: null,
-  total: null,
-  line_description: null,
-  line_quantity: null,
-  line_unit_price: null,
   header_row: 1,
   date_format: null,
   decimal_separator: null,
@@ -750,10 +743,8 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
   await expect(page.getByTestId('map-suggested-badge')).toHaveCount(0)
   await expect(page.locator('main div.mono'), 'the header cells are exactly the file headers').toHaveText(headersA)
   await expect(columns.locator('div.mono + *'), 'every placement cell reads only "drop field"').toHaveText(Array(12).fill('drop field'))
-  await expect(palette).toHaveCount(11)
-  expect(await paletteKeys(), 'the palette offers all eleven fields').toEqual(
-    ['buyer_name', 'buyer_tin', 'currency', 'invoice_number', 'issue_date', 'line_description', 'line_quantity', 'line_unit_price', 'subtotal', 'total', 'vat'],
-  )
+  await expect(palette).toHaveCount(IMPORT_KEYS.length)
+  expect(await paletteKeys(), 'the palette offers every import field').toEqual([...IMPORT_KEYS].sort())
 
   const continueBtn = page.locator('main button', { hasText: /^(Map invoice number to continue|Continue to next file|Import \d+ rows)$/ })
   await expect(continueBtn).toHaveText('Map invoice number to continue')
@@ -770,8 +761,8 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
   await expect(page.getByTestId('map-suggested-badge'), 'exactly one SUGGESTED badge on the page').toHaveCount(1)
   await expect(columns.locator('div.mono + span[draggable]'), 'eight placed chips').toHaveCount(8)
   await expect(columns.locator('div.mono + div'), 'four unplaced columns').toHaveText(Array(4).fill('drop field'))
-  await expect(palette).toHaveCount(3)
-  expect(await paletteKeys()).toEqual(['buyer_name', 'line_description', 'subtotal'])
+  await expect(palette).toHaveCount(IMPORT_KEYS.length - CHECK05_AUTOMATIC.length)
+  expect(await paletteKeys()).toEqual(IMPORT_KEYS.filter((k) => !CHECK05_AUTOMATIC.includes(k)).sort())
   await expect(continueBtn).toHaveText('Import 1 rows')
 
   await continueBtn.click()

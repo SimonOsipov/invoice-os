@@ -45,7 +45,7 @@ import { login, createEntity, apiBase, checkMapping, getSavedMapping, PERSONAS, 
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
 import { listInvoices, rawFetch } from './client'
-import { PERF_HEADER, PERF_MAPPING, steerMarker } from '../importFixtures'
+import { PERF_HEADER, PERF_MAPPING, nullImportKeys, steerMarker } from '../importFixtures'
 import { strToU8, zipSync } from 'fflate'
 
 // importFetch(): the multipart request seam, adapting fetch's Response into
@@ -847,17 +847,8 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
 // Own local steered-answer fixture, mirroring import-wizard.spec.ts's AIRL01_ANSWER
 // without importing it (repo convention -- no cross-suite imports between spec files).
 const AIR07_API_ANSWER: Record<string, unknown> = {
+  ...nullImportKeys(),
   invoice_number: 'Invoice No',
-  issue_date: null,
-  buyer_tin: null,
-  buyer_name: null,
-  currency: null,
-  subtotal: null,
-  vat: null,
-  total: null,
-  line_description: null,
-  line_quantity: null,
-  line_unit_price: null,
   header_row: 1,
   date_format: null,
   decimal_separator: null,

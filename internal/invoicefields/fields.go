@@ -2,6 +2,8 @@
 // extraction and SPA field lists derive from.
 package invoicefields
 
+import "strings"
+
 type Type string
 
 const (
@@ -34,12 +36,12 @@ var All = []Field{
 	{Key: "subtotal", Label: "Subtotal", Type: Money, Import: true, Edit: true, Extract: true},
 	{Key: "vat", Label: "VAT", Type: Money, Import: true, Edit: true, Extract: true},
 	{Key: "total", Label: "Total", Type: Money, Import: true, Edit: true, Extract: true},
-	{Key: "invoice_kind", Label: "Invoice kind", Type: Text},
-	{Key: "tax_currency_code", Label: "Tax currency code", Type: Text},
-	{Key: "due_date", Label: "Due date", Type: Date},
-	{Key: "issue_time", Label: "Issue time", Type: Text},
-	{Key: "tax_point_date", Label: "Tax point date", Type: Date},
-	{Key: "payment_status", Label: "Payment status", Type: Text},
+	{Key: "invoice_kind", Label: "Invoice kind", Type: Text, Import: true},
+	{Key: "tax_currency_code", Label: "Tax currency code", Type: Text, Import: true},
+	{Key: "due_date", Label: "Due date", Type: Date, Import: true},
+	{Key: "issue_time", Label: "Issue time", Type: Text, Import: true},
+	{Key: "tax_point_date", Label: "Tax point date", Type: Date, Import: true},
+	{Key: "payment_status", Label: "Payment status", Type: Text, Import: true},
 	{Key: "supplier_email", Label: "Supplier email", Type: Text},
 	{Key: "supplier_telephone", Label: "Supplier telephone", Type: Text},
 	{Key: "supplier_street", Label: "Supplier street", Type: Text},
@@ -48,33 +50,34 @@ var All = []Field{
 	{Key: "supplier_country", Label: "Supplier country", Type: Text},
 	{Key: "supplier_state", Label: "Supplier state", Type: Text},
 	{Key: "supplier_lga", Label: "Supplier LGA", Type: Text},
-	{Key: "buyer_email", Label: "Buyer email", Type: Text},
-	{Key: "buyer_telephone", Label: "Buyer telephone", Type: Text},
-	{Key: "buyer_street", Label: "Buyer street", Type: Text},
-	{Key: "buyer_city", Label: "Buyer city", Type: Text},
-	{Key: "buyer_postal_zone", Label: "Buyer postal zone", Type: Text},
-	{Key: "buyer_country", Label: "Buyer country", Type: Text},
-	{Key: "buyer_state", Label: "Buyer state", Type: Text},
-	{Key: "buyer_lga", Label: "Buyer LGA", Type: Text},
+	{Key: "buyer_email", Label: "Buyer email", Type: Text, Import: true},
+	{Key: "buyer_telephone", Label: "Buyer telephone", Type: Text, Import: true},
+	{Key: "buyer_street", Label: "Buyer street", Type: Text, Import: true},
+	{Key: "buyer_city", Label: "Buyer city", Type: Text, Import: true},
+	{Key: "buyer_postal_zone", Label: "Buyer postal zone", Type: Text, Import: true},
+	{Key: "buyer_country", Label: "Buyer country", Type: Text, Import: true},
+	{Key: "buyer_state", Label: "Buyer state", Type: Text, Import: true},
+	{Key: "buyer_lga", Label: "Buyer LGA", Type: Text, Import: true},
 	{Key: "description", Label: "Description", Type: Text, Line: true, Import: true, Edit: true, Extract: true},
 	{Key: "quantity", Label: "Quantity", Type: Quantity, Line: true, Import: true, Edit: true, Extract: true},
 	{Key: "unit_price", Label: "Unit price", Type: Money, Line: true, Import: true, Edit: true, Extract: true},
-	{Key: "line_total", Label: "Line total", Type: Money, Line: true, Edit: true, Extract: true},
-	{Key: "line_tax", Label: "Line tax", Type: Money, Line: true, Edit: true, Extract: true},
-	{Key: "tax_category", Label: "Tax category", Type: Text, Line: true},
-	{Key: "hsn_code", Label: "HSN code", Type: Text, Line: true},
-	{Key: "isic_code", Label: "ISIC code", Type: Text, Line: true},
-	{Key: "product_category", Label: "Product category", Type: Text, Line: true},
-	{Key: "service_category", Label: "Service category", Type: Text, Line: true},
-	{Key: "sellers_item_identification", Label: "Seller's item identification", Type: Text, Line: true},
-	{Key: "price_unit", Label: "Price unit", Type: Text, Line: true},
-	{Key: "tax_percent", Label: "Tax percent", Type: Money, Line: true},
-	{Key: "base_quantity", Label: "Base quantity", Type: Quantity, Line: true},
+	{Key: "line_total", Label: "Line total", Type: Money, Line: true, Import: true, Edit: true, Extract: true},
+	{Key: "line_tax", Label: "Line tax", Type: Money, Line: true, Import: true, Edit: true, Extract: true},
+	{Key: "tax_category", Label: "Tax category", Type: Text, Line: true, Import: true},
+	{Key: "hsn_code", Label: "HSN code", Type: Text, Line: true, Import: true},
+	{Key: "isic_code", Label: "ISIC code", Type: Text, Line: true, Import: true},
+	{Key: "product_category", Label: "Product category", Type: Text, Line: true, Import: true},
+	{Key: "service_category", Label: "Service category", Type: Text, Line: true, Import: true},
+	{Key: "sellers_item_identification", Label: "Seller's item identification", Type: Text, Line: true, Import: true},
+	{Key: "price_unit", Label: "Price unit", Type: Text, Line: true, Import: true},
+	{Key: "tax_percent", Label: "Tax percent", Type: Money, Line: true, Import: true},
+	{Key: "base_quantity", Label: "Base quantity", Type: Quantity, Line: true, Import: true},
 }
 
-// ImportKey is the key on the import Map step: line fields get a "line_" prefix.
+// ImportKey is the key on the import Map step: line fields get a "line_" prefix,
+// unless the key already has one.
 func (f Field) ImportKey() string {
-	if f.Line {
+	if f.Line && !strings.HasPrefix(f.Key, "line_") {
 		return "line_" + f.Key
 	}
 	return f.Key

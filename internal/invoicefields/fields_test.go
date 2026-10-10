@@ -2,6 +2,7 @@ package invoicefields
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -22,35 +23,44 @@ func TestAll_HeaderFieldsPrecedeLineFields(t *testing.T) {
 	}
 }
 
-func TestImportKeys_AreTheElevenImportFieldsInOrder(t *testing.T) {
-	want := []string{"invoice_number", "issue_date", "buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total", "line_description", "line_quantity", "line_unit_price"}
+func TestImportKeys_AreTheThirtySixImportFieldsInOrder(t *testing.T) {
+	want := []string{
+		"invoice_number", "issue_date", "buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
+		"invoice_kind", "tax_currency_code", "due_date", "issue_time", "tax_point_date", "payment_status",
+		"buyer_email", "buyer_telephone", "buyer_street", "buyer_city", "buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+		"line_description", "line_quantity", "line_unit_price", "line_total", "line_tax",
+		"line_tax_category", "line_hsn_code", "line_isic_code", "line_product_category", "line_service_category",
+		"line_sellers_item_identification", "line_price_unit", "line_tax_percent", "line_base_quantity",
+	}
 	if got := ImportKeys(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ImportKeys() = %v, want %v", got, want)
 	}
 }
 
-func TestImportKeys_LeaveOutFieldsNotImported(t *testing.T) {
-	got := map[string]bool{}
+func TestImportKeys_LeaveOutTheSupplierFields(t *testing.T) {
 	for _, k := range ImportKeys() {
-		got[k] = true
-	}
-	for _, k := range []string{"supplier_tin", "supplier_name", "line_total", "line_tax", "description"} {
-		if got[k] {
+		if strings.HasPrefix(k, "supplier_") || strings.HasPrefix(k, "line_line_") {
 			t.Errorf("ImportKeys() holds %q", k)
 		}
 	}
 }
 
-func TestImportKey_PrefixesOnlyLineFields(t *testing.T) {
+func TestImportKey_PrefixesALineFieldOnce(t *testing.T) {
 	byKey := map[string]Field{}
 	for _, f := range All {
 		byKey[f.Key] = f
 	}
-	if got := byKey["buyer_tin"].ImportKey(); got != "buyer_tin" {
-		t.Errorf("buyer_tin ImportKey() = %q", got)
-	}
-	if got := byKey["unit_price"].ImportKey(); got != "line_unit_price" {
-		t.Errorf("unit_price ImportKey() = %q", got)
+	for key, want := range map[string]string{
+		"buyer_tin":   "buyer_tin",
+		"description": "line_description",
+		"unit_price":  "line_unit_price",
+		"line_total":  "line_total",
+		"line_tax":    "line_tax",
+		"tax_percent": "line_tax_percent",
+	} {
+		if got := byKey[key].ImportKey(); got != want {
+			t.Errorf("%s ImportKey() = %q, want %q", key, got, want)
+		}
 	}
 }
 

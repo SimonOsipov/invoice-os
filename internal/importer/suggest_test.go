@@ -145,7 +145,7 @@ func TestMappingSystem_SurvivesGofmtAndCarriesNoCurledQuote(t *testing.T) {
 }
 
 // T02 (row 2). AC-3's real oracle: a real *ai.Client in fake mode must accept mappingSchema
-// with no refused outcome, answering all 14 properties as nil.
+// with no refused outcome, answering all 39 properties as nil.
 func TestMappingSchema_IsAcceptedByTheAIClient(t *testing.T) {
 	ans, err, outcome := sgFakeAnswer(t, "Row 1: a,b")
 	if err != nil {
@@ -157,12 +157,12 @@ func TestMappingSchema_IsAcceptedByTheAIClient(t *testing.T) {
 	if outcome != "fake" {
 		t.Errorf("outcome = %q, want %q", outcome, "fake")
 	}
-	if len(ans) != 14 {
-		t.Fatalf("answer has %d key(s), want 14: %v", len(ans), ans)
+	if len(ans) != 39 {
+		t.Fatalf("answer has %d key(s), want 39: %v", len(ans), ans)
 	}
 	want := append(append([]string{}, mappingFields...), "header_row", "date_format", "decimal_separator")
-	if len(want) != 14 {
-		t.Fatalf("fixture builds %d name(s), want 14 -- mappingFields is wrong", len(want))
+	if len(want) != 39 {
+		t.Fatalf("fixture builds %d name(s), want 39 -- mappingFields is wrong", len(want))
 	}
 	for _, k := range want {
 		v, ok := ans[k]

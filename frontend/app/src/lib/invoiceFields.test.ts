@@ -11,25 +11,21 @@ describe('invoiceFields', () => {
     expect(labelOf('line_tax')).toBe('Line tax')
   })
 
-  it('CANON is the eleven import fields, invoice_number alone required', () => {
-    expect(CANON).toStrictEqual([
-      { key: 'invoice_number', required: true },
-      { key: 'issue_date' },
-      { key: 'buyer_tin' },
-      { key: 'buyer_name' },
-      { key: 'currency' },
-      { key: 'subtotal' },
-      { key: 'vat' },
-      { key: 'total' },
-      { key: 'line_description' },
-      { key: 'line_quantity' },
-      { key: 'line_unit_price' },
-    ])
+  it('CANON is the import fields, invoice_number alone required', () => {
+    const keys = [
+      'invoice_number', 'issue_date', 'buyer_tin', 'buyer_name', 'currency', 'subtotal', 'vat', 'total',
+      'invoice_kind', 'tax_currency_code', 'due_date', 'issue_time', 'tax_point_date', 'payment_status',
+      'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city', 'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+      'line_description', 'line_quantity', 'line_unit_price', 'line_total', 'line_tax',
+      'line_tax_category', 'line_hsn_code', 'line_isic_code', 'line_product_category', 'line_service_category',
+      'line_sellers_item_identification', 'line_price_unit', 'line_tax_percent', 'line_base_quantity',
+    ]
+    expect(CANON).toStrictEqual(keys.map((key) => (key === 'invoice_number' ? { key, required: true } : { key })))
   })
 
   it('CANON leaves out fields off the import path', () => {
     const keys: string[] = CANON.map((c) => c.key)
-    for (const k of ['supplier_tin', 'supplier_name', 'line_total', 'line_tax', 'description']) {
+    for (const k of ['supplier_tin', 'supplier_name', 'supplier_email', 'description', 'line_line_total']) {
       expect(keys).not.toContain(k)
     }
   })

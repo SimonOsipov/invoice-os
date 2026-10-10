@@ -55,10 +55,14 @@ func ddCode(path string, src []byte) string {
 var ddScanExts = []string{".go", ".sql", ".ts", ".tsx"}
 
 // ddScanRoots is where extraction routes a due date; the invoice has its own due_date column
-// elsewhere. ddScanFloor is the eligible-file count measured there.
-var ddScanRoots = []string{"internal/extraction", "internal/importer", "cmd/submission"}
+// elsewhere, and the CSV import maps it. The importer files are the document-reading ones.
+// ddScanFloor is the eligible-file count measured there.
+var ddScanRoots = []string{
+	"internal/extraction", "cmd/submission",
+	"internal/importer/document.go", "internal/importer/handlers_document.go", "internal/importer/rulebreaks.go",
+}
 
-const ddScanFloor = 51
+const ddScanFloor = 42
 
 func ddScanEligible(path string) bool {
 	ext := filepath.Ext(path)

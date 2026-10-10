@@ -2,9 +2,11 @@ package importer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,7 +120,7 @@ func nrsBuild(t *testing.T, rows ...map[string]string) []invoice.CreateInput {
 	}
 	out := make([]invoice.CreateInput, len(order))
 	for i, num := range order {
-		out[i] = buildCreateInput("entity-1", data, colIndex, groups[num], "", "", 1, "Acme", nil)
+		out[i] = buildCreateInput("entity-1", data, colIndex, groups[num], "", "", 1, "Acme", nil, "")
 	}
 	return out
 }
@@ -467,7 +469,7 @@ func newNRSRun(t *testing.T) *nrsRun {
 func (r *nrsRun) do(dryRun bool, rows ...map[string]string) BatchResult {
 	r.t.Helper()
 	header, mapping, data := nrsFile(rows...)
-	res, err := r.svc.Import(r.ctx, r.entityID, "", "", 1, mapping, header, data, dryRun)
+	res, err := r.svc.Import(r.ctx, r.entityID, "", "", 1, mapping, header, data, dryRun, "")
 	if err != nil {
 		r.t.Fatalf("Import (dryRun=%v): %v", dryRun, err)
 	}
@@ -924,5 +926,95 @@ func TestImport_ChecksRunInTheDesignOrder(t *testing.T) {
 	}
 	if len(r.sent()) != 1 {
 		t.Errorf("gate got %v, want only ORD-OK", r.refs())
+	}
+}
+
+// --- ENGI-07-03: per-import default invoice kind ---------------------------
+
+func (r *nrsRun) doKind(dryRun bool, kind string, rows ...map[string]string) (BatchResult, error) {
+	r.t.Helper()
+	header, mapping, data := nrsFile(rows...)
+	return r.svc.Import(r.ctx, r.entityID, "", "", 1, mapping, header, data, dryRun, kind)
+}
+
+func nrsPlainRow(num string, kv ...string) map[string]string {
+	r := map[string]string{
+		"invoice_number": num, "issue_date": "2026-07-01", "buyer_name": "Beta Ltd", "currency": "NGN",
+		"subtotal": "100.00", "vat": "7.50", "total": "107.50",
+	}
+	for i := 0; i+1 < len(kv); i += 2 {
+		r[kv[i]] = kv[i+1]
+	}
+	return r
+}
+
+func TestImport_TheDefaultKindFillsEveryInvoice(t *testing.T) {
+	r := newNRSRun(t)
+	res, err := r.doKind(false, "B2G", nrsPlainRow("DK-1"), nrsPlainRow("DK-2"))
+	if err != nil || res.ReadyInvoices != 2 {
+		t.Fatalf("ready = %d, err = %v, want 2 and nil", res.ReadyInvoices, err)
+	}
+	for _, num := range []string{"DK-1", "DK-2"} {
+		var kind *string
+		if err := r.super.QueryRow(r.ctx, `SELECT invoice_kind FROM invoices WHERE id = $1`,
+			invoiceIDByNumber(t, r.super, r.entityID, num)).Scan(&kind); err != nil {
+			t.Fatalf("read %s: %v", num, err)
+		}
+		if sv(kind) != "B2G" {
+			t.Errorf("%s invoice_kind = %s, want B2G", num, sv(kind))
+		}
+	}
+}
+
+func TestImport_TheDefaultKindReachesTheDryRunPayload(t *testing.T) {
+	r := newNRSRun(t)
+	if _, err := r.doKind(true, "B2G", nrsPlainRow("DK-1"), nrsPlainRow("DK-2")); err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if len(r.gate.evaluateItems) != 2 {
+		t.Fatalf("evaluated %d items, want 2", len(r.gate.evaluateItems))
+	}
+	for _, it := range r.gate.evaluateItems {
+		if sv(it.Invoice.InvoiceKind) != "B2G" {
+			t.Errorf("%s payload InvoiceKind = %s, want B2G", it.Ref, sv(it.Invoice.InvoiceKind))
+		}
+	}
+}
+
+func TestImport_ADefaultKindWithAMappedKindIsRejected(t *testing.T) {
+	r := newNRSRun(t)
+	_, err := r.doKind(false, "B2B", nrsPlainRow("DK-1", "invoice_kind", "B2C"))
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if want := "default_invoice_kind cannot be set when invoice_kind is mapped"; !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to contain %q", err, want)
+	}
+	if n := r.count(); n != 0 {
+		t.Errorf("invoices = %d, want 0", n)
+	}
+	if n := countImportBatchesForEntity(t, r.super, r.entityID); n != 0 {
+		t.Errorf("import batches = %d, want 0", n)
+	}
+	if r.gate.validateBatchCalls != 0 {
+		t.Errorf("validateBatchCalls = %d, want 0", r.gate.validateBatchCalls)
+	}
+}
+
+func TestImport_AMappedKindColumnIsCarriedPerInvoice(t *testing.T) {
+	r := newNRSRun(t)
+	res, err := r.doKind(false, "", nrsPlainRow("DK-1", "invoice_kind", "B2B"), nrsPlainRow("DK-2", "invoice_kind", "B2C"))
+	if err != nil || res.ReadyInvoices != 2 {
+		t.Fatalf("ready = %d, err = %v, want 2 and nil", res.ReadyInvoices, err)
+	}
+	for num, want := range map[string]string{"DK-1": "B2B", "DK-2": "B2C"} {
+		var kind *string
+		if err := r.super.QueryRow(r.ctx, `SELECT invoice_kind FROM invoices WHERE id = $1`,
+			invoiceIDByNumber(t, r.super, r.entityID, num)).Scan(&kind); err != nil {
+			t.Fatalf("read %s: %v", num, err)
+		}
+		if sv(kind) != want {
+			t.Errorf("%s invoice_kind = %s, want %s", num, sv(kind), want)
+		}
 	}
 }

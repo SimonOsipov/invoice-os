@@ -563,7 +563,7 @@ func TestServiceImport_ZeroRowEarlyFinalizePathPersistsFilename(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	const wantFilename = "header-only.csv"
-	res, err := svc.Import(c, entityID, wantFilename, "", 1, stdMapping, stdHeader, nil, false)
+	res, err := svc.Import(c, entityID, wantFilename, "", 1, stdMapping, stdHeader, nil, false, "")
 	if err != nil {
 		t.Fatalf("Import (zero data rows): %v", err)
 	}
@@ -659,7 +659,7 @@ func TestServiceImport_DryRunHeaderOnlyFileCreatesNoBatchOrFilename(t *testing.T
 	svc := newTestService(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "header-only-dryrun.csv", "", 1, stdMapping, stdHeader, nil, true)
+	res, err := svc.Import(c, entityID, "header-only-dryrun.csv", "", 1, stdMapping, stdHeader, nil, true, "")
 	if err != nil {
 		t.Fatalf("Import (dry-run, zero data rows): %v", err)
 	}

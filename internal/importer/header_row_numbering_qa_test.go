@@ -134,13 +134,13 @@ func TestServiceImport_EveryRowErrorKindCountsFromTheHeaderRow(t *testing.T) {
 	svc := newTestServiceWithGate(app, &headerRowGate{target: "INV-OK"})
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	dry, err := svc.Import(c, entityID, "", documentID, 5, stdMapping, stdHeader, headerRowEveryKindRows(), true)
+	dry, err := svc.Import(c, entityID, "", documentID, 5, stdMapping, stdHeader, headerRowEveryKindRows(), true, "")
 	if err != nil {
 		t.Fatalf("Import (dry run): %v", err)
 	}
 	assertEveryKindCountsFromRow5(t, dry, storedID)
 
-	realRes, err := svc.Import(c, entityID, "", documentID, 5, stdMapping, stdHeader, headerRowEveryKindRows(), false)
+	realRes, err := svc.Import(c, entityID, "", documentID, 5, stdMapping, stdHeader, headerRowEveryKindRows(), false, "")
 	if err != nil {
 		t.Fatalf("Import (real): %v", err)
 	}
@@ -188,7 +188,7 @@ func TestServiceImport_CreateTimeQuarantineCountsFromTheHeaderRow(t *testing.T) 
 		mkRow("INV-OV", "2026-01-10", "TIN", "Buyer", "NGN", "100.00", "7.50", "107.50", "Item", "99999999999999", "100.00"),
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 4, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 4, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestServiceImport_RacingDuplicateCountsFromTheHeaderRow(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		res, err := svc.Import(c, entityID, "", "", 7, stdMapping, stdHeader, rows, false)
+		res, err := svc.Import(c, entityID, "", "", 7, stdMapping, stdHeader, rows, false, "")
 		done <- outcome{res, err}
 	}()
 
@@ -288,7 +288,7 @@ func TestServiceImport_ZeroRowFileRecordsTheHeaderRow(t *testing.T) {
 	svc := newTestService(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", "", 4, stdMapping, stdHeader, nil, false)
+	res, err := svc.Import(c, entityID, "", "", 4, stdMapping, stdHeader, nil, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}

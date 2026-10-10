@@ -503,7 +503,7 @@ func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) 
 // ([supplier-from-entity]); batchID is the ONE minted id for this whole
 // import run — the guardrail is trivially satisfied since Import never
 // accepts a caller-supplied batch id.
-func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, documentID string, headerRow int, supplierName string, supplierTIN *string) invoice.CreateInput {
+func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, documentID string, headerRow int, supplierName string, supplierTIN *string, defaultInvoiceKind string) invoice.CreateInput {
 	firstRow := rows[g.rowIdxs[0]]
 
 	// classify (dateParseError) already rejected any unparseable date, so a nil
@@ -517,6 +517,11 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 		return t
 	}
 	issueDate := date("issue_date")
+
+	kind := fieldValue(firstRow, colIndex, "invoice_kind")
+	if _, mapped := colIndex["invoice_kind"]; !mapped && defaultInvoiceKind != "" {
+		kind = &defaultInvoiceKind
+	}
 
 	in := invoice.CreateInput{
 		EntityID:      entityID,
@@ -532,7 +537,7 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 		Total:         fieldValue(firstRow, colIndex, "total"),
 		ImportBatchID: &batchID,
 
-		InvoiceKind:     fieldValue(firstRow, colIndex, "invoice_kind"),
+		InvoiceKind:     kind,
 		TaxCurrencyCode: fieldValue(firstRow, colIndex, "tax_currency_code"),
 		DueDate:         date("due_date"),
 		IssueTime:       fieldValue(firstRow, colIndex, "issue_time"),
@@ -792,10 +797,13 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 //
 // headerRow is the file row the header was read from; every row number counts
 // from it.
-func (s *Service) Import(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+func (s *Service) Import(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool, defaultInvoiceKind string) (BatchResult, error) {
 	colIndex, err := resolveMapping(mapping, header)
 	if err != nil {
 		return BatchResult{}, err
+	}
+	if _, mapped := colIndex["invoice_kind"]; mapped && defaultInvoiceKind != "" {
+		return BatchResult{}, fmt.Errorf("%w: default_invoice_kind cannot be set when invoice_kind is mapped", ErrValidation)
 	}
 
 	groups := map[string]*invoiceGroup{}
@@ -967,7 +975,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			// batchID is "" -- no batch exists on a dry-run and none is
 			// minted. MBSPayload never reads ImportBatchID, so it cannot
 			// reach 04 or affect a single verdict.
-			in := buildCreateInput(entityID, rows, colIndex, g, "", "", headerRow, supplierName, supplierTIN)
+			in := buildCreateInput(entityID, rows, colIndex, g, "", "", headerRow, supplierName, supplierTIN, defaultInvoiceKind)
 			// Ref is the invoice_number, not an id: no id exists yet
 			// pre-Create. 04 echoes Ref back untouched and never interprets
 			// it, and group numbers are unique by construction (groups is
@@ -1052,7 +1060,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 
 	readyCount := 0
 	for _, g := range readyGroups {
-		in := buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, headerRow, supplierName, supplierTIN)
+		in := buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, headerRow, supplierName, supplierTIN, defaultInvoiceKind)
 		inv, createErr := s.inv.Create(ctx, in)
 		if createErr == nil {
 			readyCount++

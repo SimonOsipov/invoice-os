@@ -76,6 +76,14 @@ export const navIconColStyle: CSSProperties = {
   height: NAV_ICON_COL,
 }
 
+// Open-book glyph; the sidebar's Feature library link, not a NavDef (it leaves the app).
+export const libraryGlyph = (
+  <Icon
+    paths={['M12 7v14', 'M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z']}
+    size={NAV_ICON_SIZE}
+  />
+)
+
 export const NAV_DASHBOARD: NavDef = { id: 'dashboard', label: 'Overview', glyph: <Icon paths={['M3 13h8V3H3zM13 21h8V11h-8zM13 3v6h8V3zM3 21h8v-6H3z']} size={17} /> }
 export const NAV_INVOICES: NavDef = {
   id: 'invoices',

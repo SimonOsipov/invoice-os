@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import { overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from '../topology/layout'
-import { seedConsent } from './landingConsent'
+import { consoleGate, seedConsent } from './landingConsent'
 
 // The cookie consent notice on the deployed landing: mount predicate, layout
 // relationships, focus containment, and the reopen round trip.
@@ -13,7 +13,7 @@ import { seedConsent } from './landingConsent'
 //
 // Relationship assertions only, never a raw dimension bound — see topology/layout.ts.
 // No describe.configure: the smoke config is fullyParallel, every test gets its own
-// context, and consent lives in per-origin localStorage, so no test can reach another's.
+// context, and on a fork consent lives in per-origin localStorage, so no test can reach another's.
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 const PRIVACY_URL = `${LANDING_URL}/privacy`
@@ -46,18 +46,6 @@ const MIN_SWEEP_STOPS = 10
 // Connect's three buttons, Privacy policy and Cookie choices (Footer.tsx). A floor, not the
 // count: the claim is that the query reached the footer at all.
 const MIN_FOOTER_CONTROLS = 5
-
-/** Attach the console/pageerror gate BEFORE navigating; returns the sink to assert on. */
-function consoleGate(page: Page): string[] {
-  const errors: string[] = []
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text())
-  })
-  page.on('pageerror', (err) => {
-    errors.push(`pageerror: ${err.message}`)
-  })
-  return errors
-}
 
 function expectNoConsoleErrors(errors: string[]): void {
   expect(errors, `console errors with the cookie notice on the page:\n${errors.join('\n')}`).toEqual([])
@@ -885,6 +873,28 @@ test('landing consent: the closing CTA scrolls clear of the notice at 390px', as
     `the spacer reserves ${spacerRect.height}px for a ${reserved}px band, leaving dead scroll below the footer`,
   ).toBeLessThanOrEqual(reserved + MOBILE_INSET_PX)
 
+  expectNoConsoleErrors(errors)
+})
+
+// LC-375 — the band holds at the narrowest tested phone width.
+test('landing consent: at 375px the spacer reserves the reopened card', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 844 })
+  const { errors, card } = await openLanding(page)
+  await card.locator('[data-consent="reject"]').click()
+  await expect(card).toHaveCount(0)
+  await page.reload()
+  await expect(card, 'the notice came back on its own after Reject').toHaveCount(0)
+  await page.evaluate(() => document.fonts.ready.then(() => true))
+  await page.getByRole('contentinfo').getByRole('button', { name: 'Cookie choices' }).click()
+  await expect(card).toBeVisible()
+  await expect(card.locator('.cn-setting')).toHaveText('Analytics cookies are off.')
+  await scrollToDocumentEnd(page)
+  const reopened = await rectOf(card, 'the reopened cookie notice', 'at the document end')
+  const spacer = await rectOf(page.locator('.cn-spacer'), 'the scroll spacer', 'at the document end')
+  expect(
+    spacer.height,
+    `the spacer reserves ${spacer.height}px but the notice covers ${reopened.height + MOBILE_INSET_PX}px`,
+  ).toBeGreaterThanOrEqual(reopened.height + MOBILE_INSET_PX)
   expectNoConsoleErrors(errors)
 })
 

@@ -20,6 +20,7 @@ import { ANALYTICS_DEFAULT_SENTENCE, GA_RETENTION_MONTHS, PRIVACY_CONTACT, PROSE
 import { CONSENT_TEXT } from './demoForm'
 import { CookieNotice } from './CookieNotice'
 import { PRODUCTION_HOSTNAMES, submissionUrl } from '../hubspot'
+import { LIBRARY_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
 import { CONSENT_DEFAULT_ANALYTICS } from '../consent'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import {
@@ -377,7 +378,7 @@ describe('T3-15/T3-17/T3-18: the page describes the control that now exists', ()
   it('control: the qualifier classifier discriminates on shipped copy', () => {
     // Positive: the cookies section already carries the condition this spec asks the
     // other two sentences to carry. Negative: an unrelated shipped sentence does not.
-    expect(carriesConsentQualifier(paragraphContaining('Our own code sets no cookies at all'))).toBe(true)
+    expect(carriesConsentQualifier(paragraphContaining('These two are set by Google, not by our own code'))).toBe(true)
     expect(carriesConsentQualifier('HubSpot holds all of this on their EU servers.')).toBe(false)
     expect(carriesConsentQualifier('Google measures how this site is used.')).toBe(false)
   })
@@ -619,5 +620,134 @@ describe('AUTH-17-09: what goes to HubSpot and to Resend, and when', () => {
     expect(before.some((b) => b.includes('Resend')), 'control: a Resend paragraph precedes the EU paragraph').toBe(true)
     expect(before.some((b) => /our own server/.test(b)), 'control: an own-server paragraph precedes the EU paragraph').toBe(true)
     expect(paras[at], '"all of this" reaches the Resend and own-server paragraphs above it').not.toMatch(/\b(?:all of )?this\b/i)
+  })
+})
+
+describe('the Library shares the landing\'s choice', () => {
+  const html = renderToStaticMarkup(createElement(Privacy))
+  const LANDING_ANALYTICS = readFileSync(join(SRC_DIR, '..', 'analytics.ts'), 'utf8')
+
+  const text = (markup: string) =>
+    markup
+      .replace(/<[^>]+>/g, '')
+      .replace(/&#x27;/g, "'")
+      .replace(/&amp;/g, '&')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+  const LIB_HEADING = '>The Feature Library</h2>'
+  const libraryParagraphs = (): string[] => {
+    const at = html.indexOf(LIB_HEADING)
+    const end = html.indexOf('<h2', at)
+    return Array.from(html.slice(at, end).matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)).map((m) => text(m[1]))
+  }
+
+  // Pending PM approval of this copy.
+  const LIBRARY_SECTION = [
+    `Our Feature Library at ${LIBRARY_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site and the Library: whatever you choose on either applies to both, and the other does not ask you again. Cookie choices, at the foot of this site's pages and of the Library's sidebar, brings the notice back on either, and a change made there applies to both.`,
+    `If you allow analytics there, Google Analytics measures the Library in the same way and under the same property. Google also receives each Library page you view, when you choose Book the Demo, when you start the tour, and when you choose Open in Platform, with the feature or group it was for. The Library shares the _ga cookies with this site, so Google can tell that a visit to both came from the same browser. Choosing Reject on either site deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies.`,
+    'The Library has no forms, so it sends HubSpot nothing. It is typeset in the same Google fonts. When a Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry how long its pages take to load.',
+  ]
+
+  it('PL-01 the active-on sentence names both hosts from the lists', () => {
+    const para = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
+      .map((m) => text(m[1]))
+      .find((t) => t.includes('and nowhere else'))
+    expect(para, 'the active-on paragraph is gone').toBeDefined()
+    expect(para).toContain(PRODUCTION_HOSTNAMES[0])
+    expect(para).toContain(LIBRARY_HOSTNAMES[0])
+    const src = readFileSync(PRIVACY_TSX, 'utf8')
+    expect(src).toMatch(/import\s*\{[^}]*LIBRARY_HOSTNAMES[^}]*\}\s*from\s*['"]\.\.\/hubspot['"]/)
+    expect(src).not.toContain('library.ascomply.com')
+  })
+
+  it('PL-02 one Library section, between what it is not used for and Google Fonts', () => {
+    expect(html.split(LIB_HEADING).length - 1, 'exactly one Library heading').toBe(1)
+    const at = html.indexOf(LIB_HEADING)
+    expect(at).toBeGreaterThan(html.indexOf('>What it is not used for</h2>'))
+    expect(at).toBeLessThan(html.indexOf('>Google Fonts</h2>'))
+    expect(libraryParagraphs()).toEqual(LIBRARY_SECTION)
+  })
+
+  it('PL-03 every library sender has its words on the page', () => {
+    const senders = Array.from(
+      LANDING_ANALYTICS.matchAll(/export function (trackLibrary\w+|trackTourStart|trackOpenInPlatform)\([^)]*\)[^{]*\{\s*send\('(\w+)'/g),
+    ).map((m) => [m[1], m[2]] as const)
+    const WORDS: Record<string, string> = {
+      page_view: 'each Library page you view',
+      demo_open: 'Book the Demo',
+      tour_start: 'start the tour',
+      open_in_platform: 'Open in Platform',
+    }
+    expect(senders.map(([, e]) => e).sort(), 'control: the four library events').toEqual(Object.keys(WORDS).sort())
+    const section = libraryParagraphs().join(' ')
+    for (const [fn, event] of senders) {
+      expect(WORDS[event], `${fn} sends ${event}, which has no page words`).toBeDefined()
+      expect(section, `${event} (${fn}) is not described in the Library section`).toContain(WORDS[event])
+    }
+  })
+
+  it('PL-04 the attached-details sentence covers every parameter key', () => {
+    const keys = new Set(Array.from(LANDING_ANALYTICS.matchAll(/send\('\w+', \{ (\w+):/g)).map((m) => m[1]))
+    const target = LANDING_ANALYTICS.match(/trackOpenInPlatform\(target: ([^)]*)\)/)?.[1] ?? ''
+    for (const m of target.matchAll(/(\w+): string/g)) keys.add(m[1])
+    expect([...keys].sort()).toEqual(['cta_location', 'feature_id', 'form_name', 'group_id', 'percent_scrolled'])
+    expect(text(html)).toContain('which feature or group you opened')
+  })
+
+  it('PL-05 the section states the one choice, the reopen on either site and the shared deletion', () => {
+    const section = libraryParagraphs().join(' ')
+    for (const needle of [
+      'One analytics choice covers this site and the Library',
+      'whatever you choose on either applies to both',
+      'Cookie choices',
+      'a change made there applies to both',
+      'Choosing Reject on either site deletes those shared _ga cookies',
+      'sends HubSpot nothing',
+      'does not send Sentry how long',
+    ]) {
+      expect(section, `missing "${needle}"`).toContain(needle)
+    }
+    expect(section).not.toContain('ascomply.com as a whole')
+    expect(section).not.toContain('either address')
+  })
+
+  it('PS-01 no sentence keeps the old separation or the old storage claims', () => {
+    const page = text(html)
+    expect(page.length, 'the page rendered no text').toBeGreaterThan(5000)
+    expect(page, 'control: a shipped sentence is found by the same scan').toContain('Google Analytics sets two cookies on your device')
+    for (const old of [
+      'asks for your analytics choice itself',
+      'keeps the answer for each address apart',
+      'does not carry to the other',
+      `are set for ${LIBRARY_HOSTNAMES[0]} only`,
+      'Our own code sets no cookies at all',
+      'though not as a cookie',
+      'never sends anywhere',
+    ]) {
+      expect(page, `the page still says "${old}"`).not.toContain(old)
+    }
+  })
+
+  it('PS-02 the record paragraph names the shared cookie from the constant', () => {
+    const paras = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
+      .map((m) => text(m[1]))
+      .filter((t) => t.includes('asc_consent'))
+    expect(paras.length, 'exactly one paragraph names asc_consent').toBe(1)
+    for (const needle of [
+      'cookie of our own named asc_consent',
+      `It is set for ${SHARED_COOKIE_DOMAIN}`,
+      'our servers do not read it',
+    ]) {
+      expect(paras[0], `missing "${needle}"`).toContain(needle)
+    }
+  })
+
+  it('PL-08 no sentence still scopes analytics to the landing alone', () => {
+    expect(text(html)).not.toContain('It runs on this public site only.')
+    const cookies = Array.from(html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g))
+      .map((m) => text(m[1]))
+      .find((t) => t.includes('These two are set by Google, not by our own code'))
+    expect(cookies).toContain('until then your cookie list for this site holds neither of them')
   })
 })

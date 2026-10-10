@@ -245,7 +245,7 @@ test('landing nav: no link is marked current outside the nav sections', async ({
 
   // A count of 0 is trivially true on a page that never rendered, so prove the nav
   // is really there first. Without this, E8 would survive the nav disappearing.
-  await expect(nav.getByRole('link')).toHaveCount(NAV_HREFS.length)
+  await expect(nav.locator('a[href^="#"]')).toHaveCount(NAV_HREFS.length)
 
   // At the top of the page the last-crossed section is the hero, which has no link.
   await expect(nav.locator('[aria-current]')).toHaveCount(0)

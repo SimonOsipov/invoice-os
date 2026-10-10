@@ -160,3 +160,49 @@ func TestValidationMain_PatchRulesAnswersEveryForwardedIdentity(t *testing.T) {
 		})
 	}
 }
+
+// Each staff route is registered once (a second owner of a pattern panics ServeMux at boot);
+// other /v1/staff patterns are allowed.
+func TestValidationMain_StaffRoutesAreRegisteredAndToggleStays(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", string(raw), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers := map[string][]string{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		pattern := strings.Trim(lit.Value, `"`)
+		name := "?"
+		if h, ok := call.Args[1].(*ast.CallExpr); ok {
+			if hs, ok := h.Fun.(*ast.SelectorExpr); ok {
+				name = exprName(hs.X) + "." + hs.Sel.Name
+			}
+		}
+		handlers[pattern] = append(handlers[pattern], name)
+		return true
+	})
+	for pattern, want := range map[string]string{
+		"PATCH /v1/rules/{key}":       "validation.ToggleHandler",
+		"GET /v1/staff/rules":         "validation.StaffListRulesHandler",
+		"PATCH /v1/staff/rules/{key}": "validation.StaffSwitchRuleHandler",
+	} {
+		if got := handlers[pattern]; len(got) != 1 || got[0] != want {
+			t.Errorf("%q registered with %v, want exactly [%s]", pattern, got, want)
+		}
+	}
+}

@@ -1,11 +1,10 @@
 // Package ubl renders a stored invoice as a UBL 2.1 Invoice document.
 //
 // The output is structurally well-formed UBL declaring the PEPPOL BIS 3.0 profile and
-// faithfully reflecting stored invoice content. It is NOT a validator-certified document --
-// for example, EN 16931 mandates seller and buyer postal address + country code, and nothing
-// in this system stores them; see [followup-bis-party-address-gap]. That is an instance of the
-// gap, not the whole of it. No comment, error string or test name here may claim otherwise
-// [ubl-conformance-is-structural-not-certified].
+// faithfully reflecting stored invoice content. Postal address and contact render when
+// stored; EN 16931 mandates them and nothing here enforces that. It is NOT a
+// validator-certified document. No comment, error string or test name here may claim
+// otherwise [ubl-conformance-is-structural-not-certified].
 package ubl
 
 import (
@@ -14,6 +13,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
@@ -34,6 +34,7 @@ const (
 	profileID       = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"
 	invoiceTypeCode = "380" // commercial invoice
 	taxSchemeID     = "TIN"
+	vatSchemeID     = "VAT"
 	issueDateLayout = "2006-01-02"
 )
 
@@ -48,8 +49,12 @@ type document struct {
 	ProfileID            string         `xml:"cbc:ProfileID"`
 	ID                   string         `xml:"cbc:ID"`
 	IssueDate            string         `xml:"cbc:IssueDate"` // pre-formatted, never time.Time
+	IssueTime            *string        `xml:"cbc:IssueTime,omitempty"`
+	DueDate              *string        `xml:"cbc:DueDate,omitempty"`
 	InvoiceTypeCode      string         `xml:"cbc:InvoiceTypeCode"`
+	TaxPointDate         *string        `xml:"cbc:TaxPointDate,omitempty"`
 	DocumentCurrencyCode string         `xml:"cbc:DocumentCurrencyCode,omitempty"`
+	TaxCurrencyCode      *string        `xml:"cbc:TaxCurrencyCode,omitempty"`
 	Supplier             party          `xml:"cac:AccountingSupplierParty"`
 	Buyer                party          `xml:"cac:AccountingCustomerParty"`
 	TaxTotal             *taxTotal      `xml:"cac:TaxTotal,omitempty"`
@@ -63,7 +68,27 @@ type party struct {
 
 type partyBody struct {
 	PartyName      *partyName      `xml:"cac:PartyName,omitempty"`
+	PostalAddress  *postalAddress  `xml:"cac:PostalAddress,omitempty"`
 	PartyTaxScheme *partyTaxScheme `xml:"cac:PartyTaxScheme,omitempty"`
+	Contact        *contact        `xml:"cac:Contact,omitempty"`
+}
+
+type postalAddress struct {
+	StreetName           *string  `xml:"cbc:StreetName,omitempty"`
+	CityName             *string  `xml:"cbc:CityName,omitempty"`
+	PostalZone           *string  `xml:"cbc:PostalZone,omitempty"`
+	CountrySubentityCode *string  `xml:"cbc:CountrySubentityCode,omitempty"`
+	District             *string  `xml:"cbc:District,omitempty"`
+	Country              *country `xml:"cac:Country,omitempty"`
+}
+
+type country struct {
+	IdentificationCode string `xml:"cbc:IdentificationCode"`
+}
+
+type contact struct {
+	Telephone      *string `xml:"cbc:Telephone,omitempty"`
+	ElectronicMail *string `xml:"cbc:ElectronicMail,omitempty"`
 }
 
 type partyName struct {
@@ -87,7 +112,20 @@ type amount struct {
 }
 
 type taxTotal struct {
-	TaxAmount amount `xml:"cbc:TaxAmount"`
+	TaxAmount   amount        `xml:"cbc:TaxAmount"`
+	TaxSubtotal []taxSubtotal `xml:"cac:TaxSubtotal"`
+}
+
+type taxSubtotal struct {
+	TaxableAmount *amount     `xml:"cbc:TaxableAmount,omitempty"`
+	TaxAmount     amount      `xml:"cbc:TaxAmount"`
+	TaxCategory   taxCategory `xml:"cac:TaxCategory"`
+}
+
+type taxCategory struct {
+	ID        string    `xml:"cbc:ID"`
+	Percent   *string   `xml:"cbc:Percent,omitempty"`
+	TaxScheme taxScheme `xml:"cac:TaxScheme"`
 }
 
 type monetaryTotal struct {
@@ -97,16 +135,44 @@ type monetaryTotal struct {
 }
 
 type item struct {
-	Name string `xml:"cbc:Name"`
+	Name                      *string              `xml:"cbc:Name,omitempty"`
+	SellersItemIdentification *itemIdentification  `xml:"cac:SellersItemIdentification,omitempty"`
+	CommodityClassification   []commodityClass     `xml:"cac:CommodityClassification"`
+	ClassifiedTaxCategory     *taxCategory         `xml:"cac:ClassifiedTaxCategory,omitempty"`
+	AdditionalItemProperty    []additionalProperty `xml:"cac:AdditionalItemProperty"`
+}
+
+type itemIdentification struct {
+	ID string `xml:"cbc:ID"`
+}
+
+type commodityClass struct {
+	Code classificationCode `xml:"cbc:ItemClassificationCode"`
+}
+
+type classificationCode struct {
+	ListID string `xml:"listID,attr"`
+	Value  string `xml:",chardata"`
+}
+
+type additionalProperty struct {
+	Name  string `xml:"cbc:Name"`
+	Value string `xml:"cbc:Value"`
+}
+
+type quantity struct {
+	UnitCode string `xml:"unitCode,attr,omitempty"`
+	Value    string `xml:",chardata"`
 }
 
 type price struct {
-	PriceAmount amount `xml:"cbc:PriceAmount"`
+	PriceAmount  amount    `xml:"cbc:PriceAmount"`
+	BaseQuantity *quantity `xml:"cbc:BaseQuantity,omitempty"`
 }
 
 type line struct {
 	ID                  string    `xml:"cbc:ID"`
-	InvoicedQuantity    *string   `xml:"cbc:InvoicedQuantity,omitempty"`
+	InvoicedQuantity    *quantity `xml:"cbc:InvoicedQuantity,omitempty"`
 	LineExtensionAmount *amount   `xml:"cbc:LineExtensionAmount,omitempty"`
 	TaxTotal            *taxTotal `xml:"cac:TaxTotal,omitempty"`
 	Item                *item     `xml:"cac:Item,omitempty"`
@@ -174,8 +240,12 @@ func build(c submission.Canonical) document {
 	if c.Currency != nil {
 		doc.DocumentCurrencyCode = *c.Currency
 	}
+	doc.IssueTime = c.IssueTime
+	doc.DueDate = dateText(c.DueDate)
+	doc.TaxPointDate = dateText(c.TaxPointDate)
+	doc.TaxCurrencyCode = c.TaxCurrencyCode
 	if a := amountFrom(c.VAT, c.Currency); a != nil {
-		doc.TaxTotal = &taxTotal{TaxAmount: *a}
+		doc.TaxTotal = &taxTotal{TaxAmount: *a, TaxSubtotal: subtotalsFrom(c)}
 	}
 	// LineExtensionAmount and TaxExclusiveAmount both read Subtotal; separate calls so the two
 	// elements never share a pointer.
@@ -193,17 +263,20 @@ func build(c submission.Canonical) document {
 	for _, l := range c.Lines {
 		ln := line{
 			ID:                  strconv.Itoa(l.LineNo),
-			InvoicedQuantity:    l.Quantity, // bare: Canonical carries no unit, and unitCode is not ours to invent
 			LineExtensionAmount: amountFrom(l.LineTotal, c.Currency),
+		}
+		if l.Quantity != nil {
+			ln.InvoicedQuantity = &quantity{UnitCode: deref(l.PriceUnit), Value: *l.Quantity}
 		}
 		if a := amountFrom(l.LineTax, c.Currency); a != nil {
 			ln.TaxTotal = &taxTotal{TaxAmount: *a}
 		}
-		if l.Description != nil {
-			ln.Item = &item{Name: *l.Description}
-		}
+		ln.Item = itemFrom(l)
 		if a := amountFrom(l.UnitPrice, c.Currency); a != nil {
 			ln.Price = &price{PriceAmount: *a}
+			if l.BaseQuantity != nil {
+				ln.Price.BaseQuantity = &quantity{UnitCode: deref(l.PriceUnit), Value: *l.BaseQuantity}
+			}
 		}
 		doc.Lines = append(doc.Lines, ln)
 	}
@@ -219,7 +292,84 @@ func partyFrom(p submission.Party) party {
 	if p.TIN != nil {
 		body.PartyTaxScheme = &partyTaxScheme{CompanyID: *p.TIN, TaxScheme: taxScheme{ID: taxSchemeID}}
 	}
+	addr := postalAddress{
+		StreetName:           p.Street,
+		CityName:             p.City,
+		PostalZone:           p.PostalZone,
+		CountrySubentityCode: p.State,
+		District:             p.LGA,
+	}
+	if p.Country != nil {
+		addr.Country = &country{IdentificationCode: *p.Country}
+	}
+	if addr != (postalAddress{}) {
+		body.PostalAddress = &addr
+	}
+	if ct := (contact{Telephone: p.Telephone, ElectronicMail: p.Email}); ct != (contact{}) {
+		body.Contact = &ct
+	}
 	return party{Party: body}
+}
+
+// subtotalsFrom skips a subtotal with no tax amount: TaxAmount is mandatory and not ours to invent.
+func subtotalsFrom(c submission.Canonical) []taxSubtotal {
+	var out []taxSubtotal
+	for _, s := range c.TaxSubtotals {
+		ta := amountFrom(s.TaxAmount, c.Currency)
+		if ta == nil {
+			continue
+		}
+		out = append(out, taxSubtotal{
+			TaxableAmount: amountFrom(s.TaxableAmount, c.Currency),
+			TaxAmount:     *ta,
+			TaxCategory:   taxCategory{ID: s.Category, Percent: s.Percent, TaxScheme: taxScheme{ID: vatSchemeID}},
+		})
+	}
+	return out
+}
+
+// itemFrom is nil when the line stores no item member. A percent without a category renders nowhere.
+func itemFrom(l submission.CanonicalLine) *item {
+	it := item{Name: l.Description}
+	if l.SellersItemIdentification != nil {
+		it.SellersItemIdentification = &itemIdentification{ID: *l.SellersItemIdentification}
+	}
+	if l.HSNCode != nil {
+		it.CommodityClassification = append(it.CommodityClassification, commodityClass{classificationCode{ListID: "HS", Value: *l.HSNCode}})
+	}
+	if l.ISICCode != nil {
+		it.CommodityClassification = append(it.CommodityClassification, commodityClass{classificationCode{ListID: "ISIC", Value: *l.ISICCode}})
+	}
+	if l.TaxCategory != nil {
+		it.ClassifiedTaxCategory = &taxCategory{ID: *l.TaxCategory, Percent: l.TaxPercent, TaxScheme: taxScheme{ID: vatSchemeID}}
+	}
+	if l.ProductCategory != nil {
+		it.AdditionalItemProperty = append(it.AdditionalItemProperty, additionalProperty{"product_category", *l.ProductCategory})
+	}
+	if l.ServiceCategory != nil {
+		it.AdditionalItemProperty = append(it.AdditionalItemProperty, additionalProperty{"service_category", *l.ServiceCategory})
+	}
+	if it.Name == nil && it.SellersItemIdentification == nil && len(it.CommodityClassification) == 0 &&
+		it.ClassifiedTaxCategory == nil && len(it.AdditionalItemProperty) == 0 {
+		return nil
+	}
+	return &it
+}
+
+// dateText formats in the value's own location, as the issue date does.
+func dateText(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := t.Format(issueDateLayout)
+	return &s
+}
+
+func deref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // amountFrom passes the ::text-read decimal through verbatim -- no parse, no rounding.

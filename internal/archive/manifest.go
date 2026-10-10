@@ -31,6 +31,7 @@ type manifestPeriod struct {
 
 type manifestCounts struct {
 	Invoices          int `json:"invoices"`
+	LineItems         int `json:"line_items"`
 	StatusTransitions int `json:"status_transitions"`
 	Submissions       int `json:"submissions"`
 	ExchangeAttempts  int `json:"exchange_attempts"`
@@ -130,6 +131,7 @@ func (bw *bundleWriter) writeManifest(p ManifestParams) error {
 		Period:      bundlePeriod(p.Request),
 		Counts: manifestCounts{
 			Invoices:          entryCount(bw.entries, "invoices.csv"),
+			LineItems:         entryCount(bw.entries, "line_items.csv"),
 			StatusTransitions: entryCount(bw.entries, "status_history.csv"),
 			Submissions:       entryCount(bw.entries, "submissions.csv"),
 			ExchangeAttempts:  entryCount(bw.entries, "exchange.csv"),

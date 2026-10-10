@@ -436,6 +436,16 @@ export interface LineItemCreateInput {
   unit_price: string | null
   line_total: string | null
   line_tax: string | null
+  id?: string
+  tax_category?: string | null
+  hsn_code?: string | null
+  isic_code?: string | null
+  product_category?: string | null
+  service_category?: string | null
+  sellers_item_identification?: string | null
+  price_unit?: string | null
+  tax_percent?: string | null
+  base_quantity?: string | null
 }
 
 // createInvoice's POST body (handlers.go's `type createRequest`). `entity_id`/
@@ -460,6 +470,28 @@ export interface InvoiceCreateInput {
   // an absent key is "no document", and JSON.stringify drops `undefined`, so nothing
   // crosses the wire when the invoice was typed from scratch.
   source_document_id?: string
+  invoice_kind?: string | null
+  tax_currency_code?: string | null
+  due_date?: string | null
+  issue_time?: string | null
+  tax_point_date?: string | null
+  payment_status?: string | null
+  supplier_email?: string | null
+  supplier_telephone?: string | null
+  supplier_street?: string | null
+  supplier_city?: string | null
+  supplier_postal_zone?: string | null
+  supplier_country?: string | null
+  supplier_state?: string | null
+  supplier_lga?: string | null
+  buyer_email?: string | null
+  buyer_telephone?: string | null
+  buyer_street?: string | null
+  buyer_city?: string | null
+  buyer_postal_zone?: string | null
+  buyer_country?: string | null
+  buyer_state?: string | null
+  buyer_lga?: string | null
 }
 
 // The 9 editable header fields, from the shared field list; the invoice number is edited

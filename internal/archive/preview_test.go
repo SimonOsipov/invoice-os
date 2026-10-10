@@ -78,7 +78,7 @@ func TestPreview_JSONShapeIsExactlyTheContract(t *testing.T) {
 		Entity:    manifestEntity{ID: validEntityID, Name: "Honeywell Group", TIN: &tin},
 		Period:    manifestPeriod{From: validFrom, To: validTo, Bounds: "inclusive", Basis: "invoices.created_at"},
 		Filename:  "ASComply_evidence_Honeywell-Group_20260101_20260331.zip",
-		Counts:    manifestCounts{Invoices: 1, StatusTransitions: 2, Submissions: 3, ExchangeAttempts: 4, BodyFiles: 5},
+		Counts:    manifestCounts{Invoices: 1, LineItems: 6, StatusTransitions: 2, Submissions: 3, ExchangeAttempts: 4, BodyFiles: 5},
 		OverLimit: true,
 	}
 	raw, err := json.Marshal(p)
@@ -108,7 +108,7 @@ func TestPreview_JSONShapeIsExactlyTheContract(t *testing.T) {
 	if !ok {
 		t.Fatal("no \"counts\" key -- cannot check its shape")
 	}
-	assertExactJSONKeys(t, counts, []string{"invoices", "status_transitions", "submissions", "exchange_attempts", "body_files"})
+	assertExactJSONKeys(t, counts, []string{"invoices", "line_items", "status_transitions", "submissions", "exchange_attempts", "body_files"})
 }
 
 // TestPreviewSQL_ScopeConstantsAppearExactlyOnceInSource (D-47): a second hand-written

@@ -19,7 +19,7 @@ import type { Mapping } from '../types'
 
 // The only two layouts.json fields either half of this story reads (§1.5). Not the whole
 // record: an extra field here is a needle TestDateFormatAndDecimalSeparator_AreReadNowhere
-// OutsideSuggest / TestExtraction_NoDueDateFieldExists could catch.
+// OutsideSuggest could catch.
 interface JevLayout {
   id: string
   columns: string[]

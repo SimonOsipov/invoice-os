@@ -58,7 +58,7 @@ func preview(ctx context.Context, tx pgx.Tx, r Request, o previewOpts) (Preview,
 	}, nil
 }
 
-// countChildren sums status_transitions/submissions/exchange_attempts/body_files over
+// countChildren sums line_items/status_transitions/submissions/exchange_attempts/body_files over
 // ids, chunked through chunk(ids, 500) so preview only ever runs the parameter regime
 // the download already exercises. chunk(nil, 500) is nil, so zero ids runs zero
 // statements and every count stays 0 (AC-3 structural, D-47).
@@ -70,6 +70,11 @@ func countChildren(ctx context.Context, tx pgx.Tx, ids []string) (manifestCounts
 			return manifestCounts{}, fmt.Errorf("archive: count invoice_status_history: %w", err)
 		}
 		c.StatusTransitions += n
+
+		if err := tx.QueryRow(ctx, countLineItemsSQL, batch).Scan(&n); err != nil {
+			return manifestCounts{}, fmt.Errorf("archive: count line_items: %w", err)
+		}
+		c.LineItems += n
 
 		if err := tx.QueryRow(ctx, countSubmissionsSQL, batch).Scan(&n); err != nil {
 			return manifestCounts{}, fmt.Errorf("archive: count submission_jobs: %w", err)

@@ -1163,7 +1163,31 @@ const TAB_CAP = 80
 const MIN_O4_CONTROLS = 20 // fewer means the walk never crossed the page
 const MIN_O4_CONTROLS_PRIVACY = 5 // header and footer links
 
-type FocusRead = { inside: boolean; name: string; rect: Rect; notice: Rect } | null
+const BAND_ALIGN_PX = 1 // scroll offsets snap to whole pixels, layout positions are fractional
+
+type Control = {
+  name: string
+  rect: Rect
+  notice: Rect
+  role: string | null
+  bandTop: number
+  platformPanel: boolean
+  namedBySelectedTab: boolean
+}
+type FocusRead = (Control & { inside: boolean }) | null
+
+/** Why a focused control is under the notice, or null. An oversized tab panel passes with its top parked at the band top, above the notice. */
+function coverViolation(c: Control): string | null {
+  if (!rectsOverlap(c.notice, c.rect)) return null
+  const band = c.notice.y - c.bandTop
+  if (c.role === 'tabpanel' && c.rect.height > band + BOX_SLACK_PX) {
+    const aligned = Math.abs(c.rect.y - c.bandTop) <= BAND_ALIGN_PX
+    if (aligned && c.rect.y < c.notice.y) return null
+    return `${c.name} is taller than the ${Math.round(band)}px band and its top sits at ${c.rect.y.toFixed(1)}px, not at the band top ${c.bandTop}px`
+  }
+  const o = overlapOf(c.notice, c.rect)
+  return `${c.name} is under the notice by ${Math.round(o.width)}x${Math.round(o.height)}px`
+}
 
 /** Park focus at the page top so the next Tab starts from the first control, not a stale starting point. */
 async function focusPageTop(page: Page): Promise<void> {
@@ -1178,8 +1202,8 @@ async function focusPageTop(page: Page): Promise<void> {
 }
 
 /** Tab until focus enters the notice (or the cap), returning every control focused outside it. */
-async function tabToNotice(page: Page): Promise<{ controls: Array<{ name: string; rect: Rect; notice: Rect }>; entered: boolean; presses: number }> {
-  const controls: Array<{ name: string; rect: Rect; notice: Rect }> = []
+async function tabToNotice(page: Page): Promise<{ controls: Control[]; entered: boolean; presses: number }> {
+  const controls: Control[] = []
   for (let press = 1; press <= TAB_CAP; press++) {
     await page.keyboard.press('Tab')
     // Wait for the scroll that focus triggers to land: the rects must repeat across frames.
@@ -1198,16 +1222,28 @@ async function tabToNotice(page: Page): Promise<{ controls: Array<{ name: string
         await new Promise<void>((r) => requestAnimationFrame(() => r()))
       }
       const name = `${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 40)}"`
-      return { inside: card.contains(el), name, rect: box(el), notice: box(card) }
+      const labelledBy = el.getAttribute('aria-labelledby')
+      const tab = labelledBy ? document.getElementById(labelledBy) : null
+      return {
+        inside: card.contains(el),
+        name,
+        rect: box(el),
+        notice: box(card),
+        role: el.getAttribute('role'),
+        bandTop: parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop),
+        platformPanel: el.matches('#platform [role=tabpanel]'),
+        namedBySelectedTab: tab?.getAttribute('role') === 'tab' && tab.getAttribute('aria-selected') === 'true' && tab.getAttribute('aria-controls') === el.id,
+      }
     })
     if (!read) continue
     if (read.inside) return { controls, entered: true, presses: press }
-    controls.push({ name: read.name, rect: read.rect, notice: read.notice })
+    const { inside: _inside, ...control } = read
+    controls.push(control)
   }
   return { controls, entered: false, presses: TAB_CAP }
 }
 
-async function expectTabClearsNotice(page: Page, testInfo: TestInfo, label: string, floor: number) {
+async function expectTabClearsNotice(page: Page, testInfo: TestInfo, label: string, floor: number): Promise<Control[]> {
   await focusPageTop(page)
   const walk = await tabToNotice(page)
   await testInfo.attach(`cookie-notice-tab-${label}.json`, {
@@ -1217,17 +1253,14 @@ async function expectTabClearsNotice(page: Page, testInfo: TestInfo, label: stri
   expect(walk.entered, `${label}: Tab never reached the notice in ${TAB_CAP} presses, so the walk did not cross the page`).toBe(true)
   expect(walk.controls.length, `${label}: only ${walk.controls.length} controls measured before the notice`).toBeGreaterThanOrEqual(floor)
 
-  const covered = walk.controls
-    .filter((c) => rectsOverlap(c.notice, c.rect))
-    .map((c) => {
-      const o = overlapOf(c.notice, c.rect)
-      return `${c.name} is under the notice by ${Math.round(o.width)}x${Math.round(o.height)}px`
-    })
+  const covered = walk.controls.map(coverViolation).filter((v): v is string => v !== null)
   expect(covered, `${label}: focus landed under the notice:\n${covered.join('\n')}`).toEqual([])
+  return walk.controls
 }
 
 // O4 — Tab never lands focus under the notice. The browser scrolls a focused control to
 // the viewport edge, which is under a fixed notice unless scroll-padding reserves the band.
+// A tab panel taller than the band cannot clear it: it passes with its top at scroll-padding-top.
 const O4_CASES = [
   { label: '1440x900 first visit', viewport: { width: 1440, height: 900 }, reopen: false },
   { label: '390x844 first visit', viewport: PHONE, reopen: false },
@@ -1251,7 +1284,10 @@ for (const c of O4_CASES) {
       await scrollToTop(page)
     }
 
-    await expectTabClearsNotice(page, testInfo, c.label, MIN_O4_CONTROLS)
+    const controls = await expectTabClearsNotice(page, testInfo, c.label, MIN_O4_CONTROLS)
+    const panel = controls.filter((x) => x.platformPanel)
+    expect(panel.length, `${c.label}: Tab never focused the Platform tab panel exactly once (${panel.length} stops)`).toBe(1)
+    expect(panel[0].namedBySelectedTab, `${c.label}: the Platform panel is not named by the selected tab`).toBe(true)
     expectNoConsoleErrors(errors)
   })
 }

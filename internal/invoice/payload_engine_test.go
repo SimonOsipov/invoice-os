@@ -661,7 +661,7 @@ func seedV5MapperLists(t *testing.T) {
 	t.Helper()
 	url := os.Getenv("DATABASE_SUPERUSER_URL")
 	if url == "" {
-		t.Skip("DB-backed: set DATABASE_SUPERUSER_URL")
+		t.Fatal("DATABASE_SUPERUSER_URL is not set")
 	}
 	ctx := context.Background()
 	super, err := pgxpool.New(ctx, url)
@@ -692,8 +692,9 @@ func seedV5MapperLists(t *testing.T) {
 
 // The mapper and v5 agree: a compliant B2B invoice, mapped by MBSPayload, has zero violations.
 func TestPayloadEngine_V5CompliantInvoiceThroughTheMapper(t *testing.T) {
+	pool := rulesAppPool(t) // skips when no DB is configured
 	seedV5MapperLists(t)
-	rs := ruleSetOn(t, validation.NewStore(rulesAppPool(t)), "2027-01-15")
+	rs := ruleSetOn(t, validation.NewStore(pool), "2027-01-15")
 	if rs.Version != 5 {
 		t.Fatalf("rule set on 2027-01-15 = version %d, want 5", rs.Version)
 	}

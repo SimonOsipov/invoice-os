@@ -549,7 +549,7 @@ func notesContain(notes []string, substr string) bool {
 }
 
 // readAllTenantIDs runs SELECT id FROM tenants ORDER BY id over pool --
-// exactly the query reconciliation's enumerateTenants runs (sweep.go:185).
+// exactly the query reconciliation's EnumerateTenants runs (sweep.go:185).
 func readAllTenantIDs(t *testing.T, pool *pgxpool.Pool) []string {
 	t.Helper()
 	rows, err := pool.Query(context.Background(), `SELECT id FROM tenants ORDER BY id`)

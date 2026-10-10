@@ -198,7 +198,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/validation/store.go", fn: "LoadForDates"},                   // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
 	{file: "internal/importer/backfill.go"},                                      // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
 	{file: "internal/invoice/revalidate.go"},                                     // operator CLI tools/revalidate-invoices and the reconciliation re-check; same shape, same absence of a caller
-	{file: "internal/reconciliation/sweep.go"},                                   // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+	{file: "internal/reconciliation/sweep.go"},                                   // EnumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
 	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                    // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},    // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"}, // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists

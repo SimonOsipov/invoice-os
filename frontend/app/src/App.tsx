@@ -311,10 +311,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // it at each consumer ([gate-on-the-resolved-entity]). Two things depend on it being the
   // resolved object and not `active.entityId`:
   //
-  //  - the filing gate. `active` is rebuilt from `entitiesList` by an effect, so between a
-  //    refetch landing and that rebuild the id can name an entity not (yet) in the list.
-  //    Gating on the id there arms the button and the click does nothing — the exact
-  //    silent-no-op shape [inhouse-can-start] exists to forbid.
+  //  - the filing gate. `active.entityId` can be non-null while the entity is not in the
+  //    list (the emptyClient() placeholder, a refetch that dropped it). Gating on the id
+  //    there arms the button and the click does nothing — the exact silent-no-op shape
+  //    [inhouse-can-start] exists to forbid.
   //  - draftToCreateRequest, which takes `Entity` and never `Client`: buildClientForEntity
   //    does `tin: e.tin ?? '—'`, so a TIN-less entity is unrepresentable through Client and
   //    would cross the wire as the literal em-dash.

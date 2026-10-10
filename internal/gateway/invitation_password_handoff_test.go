@@ -291,6 +291,9 @@ func TestInvitationPassword_FailedSignOutFallsBackToVerifiedAndMakesNoGrant(t *t
 func TestInvitationPassword_GoneSignOutConfirmsWithoutACodeAndMakesNoGrant(t *testing.T) {
 	t.Run("control: a valid state mints a code", ihControlMints)
 
+	if len(goneCodes) == 0 {
+		t.Fatal("goneCodes is empty, so the loop below proves nothing")
+	}
 	for code := range goneCodes {
 		t.Run(code, func(t *testing.T) {
 			g := newIHRig(t, testHandoffStore())

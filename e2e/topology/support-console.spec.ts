@@ -1,8 +1,8 @@
-// The deployed v2 Support Console. The console is mock-backed: this spec pins fixture behaviour and the v2 look, not a contract.
+// The deployed v2 Support Console. The Rules screen reads and switches real rules; every other screen is mock-backed, so those pin fixture behaviour and the v2 look, not a contract.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
-import { provisionStaffAccount, type StaffAccount } from '../api/client'
+import { provisionStaffAccount, rawFetch, signInSession, type StaffAccount } from '../api/client'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -10,7 +10,7 @@ import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } 
 test.use({ viewport: { width: 1440, height: 900 } })
 
 let staff: Promise<StaffAccount> | undefined
-const staffAccount = (): Promise<StaffAccount> => (staff ??= provisionStaffAccount('reskin-support'))
+const staffAccount = (): Promise<StaffAccount> => (staff ??= provisionStaffAccount('reskin-support', undefined, { rulesRole: true }))
 
 const SHADOW_CARD = 'rgba(40, 83, 52, 0.21) 0px 14px 22px -16px'
 
@@ -513,10 +513,11 @@ const SCREENS: Screen[] = [
     rowUp: 2,
     reads: async (page, testInfo) => {
       const mn = mainOf(page)
+      await expect(mn.locator('[role="switch"]').first(), 'the rules have loaded').toBeVisible()
       const tags = mn.locator('span.mono').filter({ hasText: /^(DRAFT|ACTIVE|ARCHIVED)$/ })
       await everyStyles(parent(tags), 4, 'version tag', { radius: '4px' })
       await expectStyles(parent(mn.getByText('Learned rules', { exact: true })).locator('span.mono'), 'learned-rules count', { radius: '4px' })
-      await expectStyles(mn.getByText('EDITING DRAFT v9', { exact: true }), 'EDITING DRAFT v9', { radius: '4px' })
+      await expectStyles(mn.getByText(/^IN FORCE v\d+$/), 'IN FORCE badge', { radius: '4px' })
       const row = mn.locator('.ops-row').first()
       await expectStyles(kid(row, 2), 'type chip', { radius: '4px' })
       await expectStyles(kid(kid(row, 4), 1), 'severity badge', { radius: '4px' })
@@ -790,6 +791,7 @@ test('SUP-04 rule and audit drawers', async ({ page }, testInfo) => {
   const mn = mainOf(page)
 
   await openScreen(page, 'Rules', 'Rules admin')
+  await expect(mn.locator('[role="switch"]').first()).toBeVisible()
   await mn.locator('.ops-row').first().click()
   const { drawer } = await expectDrawer(page, 'rule drawer')
   await expectStyles(drawer.getByRole('button', { name: 'Kill-switch' }), 'Kill-switch', { radius: '7px' })
@@ -802,14 +804,6 @@ test('SUP-04 rule and audit drawers', async ({ page }, testInfo) => {
   const passed = parent(drawer.getByText('Rule passed'))
   await expect(passed, 'the Rule passed box').toBeVisible()
   await expectStyles(passed, 'Rule passed box', { radius: '6px' })
-
-  await drawer.getByRole('button', { name: 'Close' }).click()
-  await expect(drawer).toBeHidden()
-  await mn.locator('.ops-row').filter({ hasText: 'line.qty.range' }).click()
-  await expect(drawer).toBeVisible()
-  await expect(drawer.getByRole('button', { name: 'Kill-switch' }), 'a disabled rule offers no kill-switch').toHaveCount(0)
-  await settle(page, drawer)
-  await attachShot(page, testInfo, 'rule-drawer-disabled')
 
   await drawer.getByRole('button', { name: 'Close' }).click()
   await expect(drawer).toBeHidden()
@@ -827,11 +821,14 @@ test('SUP-04 kill confirm', async ({ page }, testInfo) => {
   const errors = await startSupport(page)
 
   await openScreen(page, 'Rules', 'Rules admin')
-  await mainOf(page).locator('[role="switch"]').first().click()
+  const firstSwitch = mainOf(page).locator('[role="switch"]').first()
+  await expect(firstSwitch).toBeVisible()
+  await firstSwitch.click()
   const dialog = page.getByRole('dialog').filter({ hasText: 'Disable a live rule?' })
   await expectPanel(page, dialog, 'kill confirm')
   await expectStyles(dialog.locator('h3').locator('xpath=preceding-sibling::span[1]'), 'kill icon tile', { radius: '6px' })
-  await expectStyles(parent(dialog.getByText('After NRS accreditation')), 'amber note', { radius: '6px' })
+  await expect(dialog.getByRole('textbox', { name: 'Reason' }), 'the confirm asks for a reason').toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Disable rule' }), 'Disable rule waits for a reason').toBeDisabled()
   await expectStyles(dialog.getByRole('button', { name: 'Disable rule' }), 'Disable rule', { 'background-color': 'rgb(162, 50, 50)', color: 'rgb(255, 255, 255)', radius: '7px' })
   await attachShot(page, testInfo, 'kill-confirm')
 
@@ -839,6 +836,91 @@ test('SUP-04 kill confirm', async ({ page }, testInfo) => {
   await expect(dialog.locator('h3'), 'Cancel closes the confirm').toBeHidden()
 
   noErrors(errors, 'SUP-04 kill confirm')
+})
+
+// The probe is a global rule no other spec names (contract-validation.spec.ts).
+const PROBE_RULE = 'no-duplicate-line-items'
+const STAFF_RULES = '/api/validation/v1/staff/rules'
+
+async function probeEnabled(token: string): Promise<boolean> {
+  const res = await rawFetch(STAFF_RULES, { headers: { Authorization: `Bearer ${token}` } })
+  expect(res.status, 'staff rules list').toBe(200)
+  const probe = (res.body as { rules: { key: string; enabled: boolean }[] }).rules.find((r) => r.key === PROBE_RULE)
+  if (!probe) throw new Error(`probe rule ${PROBE_RULE} is not in the version in force`)
+  return probe.enabled
+}
+
+test('SUP-05 kill switch: real rows, reason-gated confirm, switch and restore', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const account = await staffAccount()
+  const api = (await signInSession(account.email, account.password)).access_token
+  const mn = mainOf(page)
+
+  try {
+    await openScreen(page, 'Rules', 'Rules admin')
+    const row = mn.locator('.ops-row').filter({ hasText: PROBE_RULE })
+    const sw = row.getByRole('switch')
+    await expect(sw, 'the probe row has its switch').toBeVisible()
+    await expect(sw).toHaveAttribute('aria-checked', 'true')
+
+    await sw.click()
+    const off = page.getByRole('dialog').filter({ hasText: 'Disable a live rule?' })
+    await expect(off.getByRole('button', { name: 'Disable rule' }), 'confirm waits for a reason').toBeDisabled()
+    await off.getByRole('textbox', { name: 'Reason' }).fill('e2e kill switch')
+    await off.getByRole('button', { name: 'Disable rule' }).click()
+    await expect(sw, 'the switch reads off').toHaveAttribute('aria-checked', 'false')
+    expect(await probeEnabled(api), 'the API agrees the rule is off').toBe(false)
+
+    await expect(sw).toBeEnabled()
+    await sw.click()
+    const on = page.getByRole('dialog').filter({ hasText: 'Enable this rule?' })
+    await expect(on.getByRole('button', { name: 'Enable rule' }), 'confirm waits for a reason').toBeDisabled()
+    await on.getByRole('textbox', { name: 'Reason' }).fill('e2e restore')
+    await on.getByRole('button', { name: 'Enable rule' }).click()
+    await expect(sw, 'the switch reads on').toHaveAttribute('aria-checked', 'true')
+    expect(await probeEnabled(api), 'the API agrees the rule is on').toBe(true)
+  } finally {
+    if (!(await probeEnabled(api))) await rawFetch(`${STAFF_RULES}/${PROBE_RULE}`, { method: 'PATCH', headers: { Authorization: `Bearer ${api}` }, body: { enabled: true, reason: 'e2e restore' } })
+  }
+
+  noErrors(errors, 'SUP-05 kill switch')
+})
+
+test('SUP-05 kill confirm layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+
+  await openScreen(page, 'Rules', 'Rules admin')
+  const sw = mainOf(page).locator('.ops-row').filter({ hasText: PROBE_RULE }).getByRole('switch')
+  await expect(sw).toBeVisible()
+  await sw.click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Disable a live rule?' })
+  await expect(dialog).toBeVisible()
+
+  await atWidths(page, 'SUP-05 kill confirm layout', async () => {
+    const vp = page.viewportSize()!
+    const r = await boxes(page, {
+      dialog,
+      reason: dialog.getByRole('textbox', { name: 'Reason' }),
+      cancel: dialog.getByRole('button', { name: 'Cancel' }),
+      confirm: dialog.getByRole('button', { name: 'Disable rule' }),
+    })
+    return {
+      problems: [
+        ...within({ x: 0, y: 0, width: vp.width, height: vp.height }, r.dialog, 'dialog in the viewport'),
+        ...within(r.dialog, r.reason, 'Reason field in the dialog'),
+        ...apart(r.reason, r.cancel, 'Reason / Cancel'),
+        ...apart(r.reason, r.confirm, 'Reason / confirm'),
+        ...apart(r.cancel, r.confirm, 'Cancel / confirm'),
+      ],
+      rects: r,
+    }
+  })
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dialog, 'Cancel closes the confirm').toBeHidden()
+  noErrors(errors, 'SUP-05 kill confirm layout')
 })
 
 test('SUP-04 publish modal', async ({ page }, testInfo) => {

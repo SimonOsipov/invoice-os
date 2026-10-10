@@ -716,3 +716,66 @@ func TestEffectiveDates_DropDownRestoresTheActiveFlag(t *testing.T) {
 		})
 	}
 }
+
+// TestEffectiveDates_DownChainKeepsTheActiveFlag: Migration B's Down then Migration A's Down
+// leaves is_active and its index and CHECK, with the version in force still the active one
+// (older Downs read the flag). Replaces the D9 check Migration A's own Down test lost.
+func TestEffectiveDates_DownChainKeepsTheActiveFlag(t *testing.T) {
+	migrator := migratorPool(t)
+	ctx := context.Background()
+
+	tx := edBegin(t, ctx, migrator)
+	requireEffectiveFrom(t, ctx, tx)
+	var inForce string
+	if err := tx.QueryRow(ctx, `SELECT rule_set_version_for((now() AT TIME ZONE 'UTC')::date)::text`).Scan(&inForce); err != nil {
+		t.Fatalf("read the version in force: %v", err)
+	}
+
+	for _, glob := range []string{dropActiveFlagMigrationGlob, effectiveDatesMigrationGlob} {
+		matches, err := fs.Glob(migrations.FS, glob)
+		if err != nil || len(matches) != 1 {
+			t.Fatalf("want exactly one migrations/%s, got %v (err %v)", glob, matches, err)
+		}
+		raw, err := fs.ReadFile(migrations.FS, matches[0])
+		if err != nil {
+			t.Fatalf("read %s: %v", matches[0], err)
+		}
+		stmts := gooseDownStatements(t, string(raw))
+		if len(stmts) == 0 {
+			t.Fatalf("%s has no Down statements", matches[0])
+		}
+		for _, stmt := range stmts {
+			if _, err := tx.Exec(ctx, stmt); err != nil {
+				t.Fatalf("Down statement of %s failed: %v\n%s", matches[0], err, stmt)
+			}
+		}
+	}
+
+	var column, index, check bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'rule_set_versions'::regclass AND attname = 'is_active' AND NOT attisdropped),
+		        EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'rule_set_versions_one_active'),
+		        EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rule_set_versions_active_is_sealed')`,
+	).Scan(&column, &index, &check); err != nil {
+		t.Fatalf("probe the restored flag: %v", err)
+	}
+	if !column || !index || !check {
+		t.Fatalf("after both Downs is_active column=%t, one_active index=%t, active_is_sealed CHECK=%t, want all present", column, index, check)
+	}
+	var active []string
+	rows, err := tx.Query(ctx, `SELECT id::text FROM rule_set_versions WHERE is_active`)
+	if err != nil {
+		t.Fatalf("read active rows: %v", err)
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan active row: %v", err)
+		}
+		active = append(active, id)
+	}
+	rows.Close()
+	if len(active) != 1 || active[0] != inForce {
+		t.Errorf("active rows after both Downs = %v, want exactly [%s] (the version that was in force)", active, inForce)
+	}
+}

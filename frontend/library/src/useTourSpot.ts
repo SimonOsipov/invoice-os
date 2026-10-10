@@ -51,12 +51,18 @@ export function useTourSpot(tour: TourState | null, routeKey: string): { rect: R
     window.addEventListener('resize', onResize)
     main?.addEventListener('scroll', onScroll)
     nav?.addEventListener('scroll', onScroll)
+    // The Manrope swap resizes the target after the first measure; no resize or scroll event follows.
+    const stop = TOUR[i]
+    const target = document.getElementById(phase === 'menu' ? `nav-${stop.g}` : `fc-${stop.f}`)
+    const ro = target && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => measure(false)) : null
+    if (target) ro?.observe(target)
     return () => {
+      ro?.disconnect()
       window.removeEventListener('resize', onResize)
       main?.removeEventListener('scroll', onScroll)
       nav?.removeEventListener('scroll', onScroll)
     }
-  }, [i, measure])
+  }, [i, phase, measure])
 
   return { rect: tour ? rect : null, win }
 }

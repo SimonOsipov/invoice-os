@@ -12,7 +12,7 @@ let root: Root
 let errorSpy: ReturnType<typeof vi.spyOn>
 let seen: { rect: Rect | null; win: Win }
 const realRect = Element.prototype.getBoundingClientRect
-const NAV = { left: 10, top: 100, width: 267, height: 36 }
+let NAV = { left: 10, top: 100, width: 267, height: 36 }
 
 function Harness({ tour, routeKey }: { tour: TourState | null; routeKey: string }) {
   seen = useTourSpot(tour, routeKey)
@@ -33,6 +33,8 @@ beforeEach(() => {
 
 afterEach(() => {
   Element.prototype.getBoundingClientRect = realRect
+  NAV = { left: 10, top: 100, width: 267, height: 36 }
+  vi.unstubAllGlobals()
   act(() => root.unmount())
   container.remove()
   document.body.innerHTML = ''
@@ -60,5 +62,30 @@ describe('useTourSpot', () => {
 
     render({ i: 0, phase: 'card' }, '/next')
     expect(seen.rect).toBeNull()
+  })
+
+  it('useTourSpot_reMeasuresWhenTheTargetResizesWithoutAResizeOrScrollEvent', () => {
+    let fire = () => {}
+    const observed: Element[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          fire = cb
+        }
+        observe = (el: Element) => void observed.push(el)
+        disconnect = () => {}
+      },
+    )
+    const nav = document.createElement('nav')
+    nav.id = 'nav-invoices'
+    document.body.appendChild(nav)
+    render({ i: 0, phase: 'menu' })
+    expect(seen.rect).toEqual({ x: 6, y: 97, w: 275, h: 42 })
+    expect(observed).toEqual([nav])
+
+    NAV = { left: 10, top: 104, width: 267, height: 40 }
+    act(() => fire())
+    expect(seen.rect).toEqual({ x: 6, y: 101, w: 275, h: 46 })
   })
 })

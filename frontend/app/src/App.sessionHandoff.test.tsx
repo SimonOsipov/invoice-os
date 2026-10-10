@@ -1001,6 +1001,28 @@ describe('a state older than its TTL (LOGFIX-11-03, D22)', () => {
     expect(hrefWrites.some((h) => h.startsWith(`${LANDING}/?state=`) && h.endsWith('&signin=failed'))).toBe(true)
   })
 
+  it('an old state whose marker is bound to a different state is refused', async () => {
+    seedOld(true)
+    sessionStorage.setItem('invoice-os.pendingVerify', JSON.stringify({ v: 1, at: OLD, s: 'P'.repeat(43) }))
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(hrefWrites.some((h) => h.startsWith(`${LANDING}/?state=`) && h.endsWith('&signin=failed'))).toBe(true)
+  })
+
+  it('a redeem consumes the marker and the state, so a second code in the same tab fails', async () => {
+    seedOld(true)
+    await bootCode()
+    expect(exchangeBodies).toHaveLength(1)
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+    expect(storedState()).toBeNull()
+    cleanup()
+    localStorage.clear()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toHaveLength(1)
+    expect(hrefWrites.some((h) => h.endsWith('&signin=failed'))).toBe(true)
+  })
+
   it('a handoff code in a tab with no stored state takes the failure arm and posts no exchange', async () => {
     const hrefWrites = await bootCode()
     expect(exchangeBodies).toHaveLength(0)

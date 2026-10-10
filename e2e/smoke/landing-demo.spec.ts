@@ -876,10 +876,24 @@ test('landing demo: the marketing row lines up under the consent row at 1440 and
 test('landing analytics: reading the whole page requests gtag.js only on the live host', async ({ page }) => {
   const sinks = await openLanding(page)
 
+  // Before layout commits, scrollHeight <= innerHeight and scrollTo(0, <=0) is a no-op.
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight), { message: 'the landing page never became taller than the viewport' })
+    .toBeGreaterThan(0)
+
   for (const fraction of [0.25, 0.5, 0.75, 1]) {
-    await page.evaluate((f) => {
-      window.scrollTo(0, (document.documentElement.scrollHeight - window.innerHeight) * f)
-    }, fraction)
+    // Retargets each poll so a late height change cannot strand the milestone.
+    await expect
+      .poll(
+        () =>
+          page.evaluate((f) => {
+            const target = Math.floor((document.documentElement.scrollHeight - window.innerHeight) * f)
+            window.scrollTo(0, target)
+            return Math.abs(window.scrollY - target) <= 1
+          }, fraction),
+        { message: `scroll milestone ${fraction} was not reached` },
+      )
+      .toBe(true)
     await settleLayout(page)
   }
 

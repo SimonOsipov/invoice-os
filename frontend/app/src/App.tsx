@@ -275,16 +275,14 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
 
   // The switcher roster. Rebuilt whenever the live entity list changes (first load, or a
   // refetch after Add/Edit client on the Clients page) — a full rebuild, not a merge, and
-  // since INVCR-01-03 this effect is its ONLY writer: the mock approve() that used to
+  // since INVCR-01-03 this memo is its ONLY writer: the mock approve() that used to
   // prepend a locally-built invoice to a client's list is gone, so no creation path writes
   // active.invoices any more. Those generated SAMPLE rows never rendered anywhere live
   // anyway — InvoiceDetail's mock branch is fully retired (M5-09-04); they only ever fed
   // CustomersView/ReportsView, themselves still-mock surfaces this plan's next
   // step migrates off active.invoices.
-  const [clients, setClients] = useState<Client[]>([])
-  useEffect(() => {
-    setClients(buildClients(entitiesList))
-  }, [entitiesList])
+  // Derived, not mirrored: `active` must resolve in the commit the fetch lands, before any navigation.
+  const clients = useMemo(() => buildClients(entitiesList), [entitiesList])
 
   // [entity-picker] keystone: the active selection is a real entity id, never an index
   // into a mock array. null until the user (or the fallback below) picks one.
@@ -455,7 +453,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     { immediate: base != null },
   )
   const membersState = membersViewState(base, membersAsync.status)
-  // A local mirror rebuilt from the async data, the `entitiesList → setClients` shape:
+  // A local mirror rebuilt from the async data:
   // `asyncReducer`'s `start` nulls `data`, so refetching after a status write would blank
   // the whole roster for the round trip. The write patches this instead; any later refetch
   // overwrites it wholesale, so the fetch stays authoritative.

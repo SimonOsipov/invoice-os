@@ -46,6 +46,31 @@ For each field, the value is the exact header text of the one column that holds 
 - line_description: the line's item or service description.
 - line_quantity: the line's quantity.
 - line_unit_price: the line's price per unit. Not a line total.
+- invoice_kind: the buyer type, B2B, B2G or B2C. Not a document type such as invoice or credit note.
+- tax_currency_code: the currency code the tax is stated in.
+- due_date: the date payment is due. Not the issue date.
+- issue_time: the time of day the invoice was issued.
+- tax_point_date: the tax point or supply date.
+- payment_status: whether the invoice is paid or pending. Not an amount.
+- buyer_email: the buyer's (customer's) email address. Not the seller's.
+- buyer_telephone: the buyer's (customer's) telephone number. Not the seller's.
+- buyer_street: the buyer's (customer's) street address. Not the seller's.
+- buyer_city: the buyer's (customer's) city. Not the seller's.
+- buyer_postal_zone: the buyer's (customer's) postal code. Not the seller's.
+- buyer_country: the buyer's (customer's) country. Not the seller's.
+- buyer_state: the buyer's (customer's) state. Not the seller's.
+- buyer_lga: the buyer's (customer's) local government area. Not the seller's.
+- line_total: the line's amount before tax. Not the invoice subtotal or total.
+- line_tax: the line's tax amount. Not a rate or the invoice's VAT.
+- line_tax_category: the line's tax category, such as standard VAT, zero-rated or exempt.
+- line_hsn_code: the line's HS code for goods.
+- line_isic_code: the line's service (ISIC) code.
+- line_product_category: the line's product category. Not a description or a code.
+- line_service_category: the line's service category. Not a description or a code.
+- line_sellers_item_identification: the seller's own item code or SKU. Not an HS or service code.
+- line_price_unit: the line's unit of measure. Not a price.
+- line_tax_percent: the line's tax rate in percent. Not an amount.
+- line_base_quantity: the quantity the unit price is for.
 
 Also return:
 - header_row: the 1-based row number of the header row among the rows shown. Return 1 when only headers are shown.

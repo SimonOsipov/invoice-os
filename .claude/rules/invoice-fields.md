@@ -61,6 +61,10 @@ paths:
 
 - Turning on `Import` changes `mappingSchema`. Change `mappingSystem` in `internal/importer/suggest.go` in the same story.
 - Change `FIELDS` in `tools/aimodeltest/csvrun.py` with it. Change `FIELDS` in `tools/aimodeltest/csvgen.py` too.
+- Change `mappingCheckInstructions` in `internal/importer/jevcheck.go` and `MappingCheckInstructions` in `internal/jevmeasure/wording.go` with it. The two stay byte-identical.
+- The 11 measured definition lines of `mappingSystem` stay byte-identical (`TestMappingSystem_KeepsTheElevenMeasuredDefinitions`). Only add lines.
+- Mapping pins: `TestMappingPrompt_MatchesTheMeasuredHarness` (`SYSTEM`), `TestMappingFields_MatchTheMeasuredHarness` (csvrun `FIELDS`), `TestMappingCheck_TheQuestionIsTheMeasuredQuestion` (measured text, run-2 prefix).
+- Score csvrun answers with `tools/aimodeltest/csvscore.py`. `tools/aimodeltest/csvscore_test.go` pins it.
 - Turning on `Extract` for a header field changes `aiFieldSchema`. Change `aiSystem` in `internal/extraction/aireading.go` in the same story.
 - Change `SYSTEM` and `FIELDS` in `tools/aimodeltest/run.py` with it.
 - Turning on `Extract` for a line field changes the line schema and `LineRoles`. Change `aiLinesSystem` in `internal/extraction/ailines.go` in the same story.

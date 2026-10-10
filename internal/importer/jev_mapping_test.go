@@ -1046,7 +1046,7 @@ func TestJevMapping_AutoAndAIAreReportedSeparately(t *testing.T) {
 // Row 15. busy_01 has 3 AUTO placements and 5 AI placements -> exactly 2 requests, one carrying
 // 3 questions, the other 5. quiet_01 has an all-null AUTO entry and 2 AI placements -> exactly 1
 // further request, the AI one -- without this leg an implementation that always calls once per
-// layout per set burns 15 pointless calls on the real 48-layout corpus.
+// layout per set burns 15 pointless calls on the real 72-layout corpus.
 func TestJevMapping_OneLayoutSetProducesOneCall(t *testing.T) {
 	dir := t.TempDir()
 	layouts := []jpLayout{
@@ -1288,10 +1288,10 @@ func TestJevMapping_AnAllNullAutoEntryPlacesNothingAndIsNotAnError(t *testing.T)
 	}
 }
 
-// --- new: the 528-slot invariant (deliberately NOT pinning the 56) -------------------------
+// --- new: the 2592-slot invariant (deliberately NOT pinning the 56) -------------------------
 
-// Row 19. Over the REAL generated corpus: asked + not-asked == 528 (48 layouts x 11 fields) and
-// documents == 48. Deliberately does not pin the 56 placements (a property of the shipped alias
+// Row 19. Over the REAL generated corpus: asked + not-asked == 2592 (72 layouts x 36 fields) and
+// documents == 72. Deliberately does not pin the 56 placements (a property of the shipped alias
 // table, not the generator; CHECK-01-04 D-7 rules against a second corpus ratchet). Gated on
 // JEV_OUT holding a real corpus -- CI's go job has neither python3-generated layouts.json nor a
 // pnpm-built auto_placements.json on hand, so this declines (logs, returns) rather than skips;
@@ -1312,13 +1312,13 @@ func TestJevMapping_TheAutoSetCoversEveryLayoutAndEverySlot(t *testing.T) {
 	}
 
 	layouts := jpLoadLayouts(t, dir)
-	if len(layouts) != 48 {
-		t.Fatalf("layouts.json holds %d layout(s), want 48", len(layouts))
+	if len(layouts) != 72 {
+		t.Fatalf("layouts.json holds %d layout(s), want 72", len(layouts))
 	}
 	auto := jpAutoSet(t, dir, layouts)
 
 	// Count the slots the ARTIFACT carries, never len(layouts) x len(mappingFields): the loop
-	// walks those two and would sum to 528 whatever jpAutoSet returned.
+	// walks those two and would sum to 2592 whatever jpAutoSet returned.
 	asked, notAsked, slots := 0, 0, 0
 	for _, l := range layouts {
 		entry, ok := auto[l.ID]
@@ -1335,14 +1335,14 @@ func TestJevMapping_TheAutoSetCoversEveryLayoutAndEverySlot(t *testing.T) {
 			}
 		}
 	}
-	if slots != 528 {
-		t.Errorf("the AUTO artifact carries %d slot(s), want 528 (48 layouts x 11 fields)", slots)
+	if slots != 2592 {
+		t.Errorf("the AUTO artifact carries %d slot(s), want 2592 (72 layouts x 36 fields)", slots)
 	}
 	if asked+notAsked != slots {
 		t.Errorf("asked(%d) + not-asked(%d) = %d, want every one of the %d slots", asked, notAsked, asked+notAsked, slots)
 	}
 	if asked == 0 {
-		t.Errorf("the AUTO artifact places nothing at all over 48 layouts -- a reader that answered empty strings reads exactly this way")
+		t.Errorf("the AUTO artifact places nothing at all over 72 layouts -- a reader that answered empty strings reads exactly this way")
 	}
 }
 

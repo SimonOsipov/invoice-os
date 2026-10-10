@@ -130,7 +130,7 @@ describe('DEMO_FORM_CSS is the form half only (A5)', () => {
     for (const needle of ['dmSpin', '.dm-input', '.dm-input:focus', '.dm-err', '.dm-select', '.dm-row']) {
       expect(DEMO_FORM_CSS).toContain(needle)
     }
-    // SignInForm and ForgotPasswordForm render this string on its own; a shell rule here would restyle them.
+    // Other components render this string beside their own shell CSS; a shell rule here would restyle them.
     for (const shellOnly of ['ovIn', 'cardIn', '.si-close', '.dm-overlay']) {
       expect(DEMO_FORM_CSS).not.toContain(shellOnly)
     }

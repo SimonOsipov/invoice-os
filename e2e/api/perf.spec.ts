@@ -241,8 +241,8 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     expect(cleanInvoice.status).toBe('validated')
     expect(cleanInvoice.violations).toEqual([])
 
-    // PERF-03/04: rule_set_version is the ONE shared stamp the whole
-    // 500-invoice batch was evaluated against ([batch-of-one]) -- already
+    // PERF-03/04: rule_set_version is the lowest version in the 500-invoice
+    // batch (all rows share one issue date here, so one version) -- already
     // parsed into `body` and already asserted === ACTIVE_RULE_SET_VERSION by
     // PERF-02 above, so no fresh call is needed here to reuse it. A fresh
     // POST .../validate is not an option for PERF-03 either way: cleanInvoice
@@ -285,8 +285,8 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     // through a real membership, so pinning the text would couple this spec to the
     // seed's display_name. actor_kind IS pinned -- 'person' is the whole point.
     expect(history).toEqual([
-      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String) },
-      { from_status: 'draft', to_status: 'validated', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String) },
+      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null },
+      { from_status: 'draft', to_status: 'validated', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null },
     ])
 
     // ---- PERF-05 negative: history is a real transition, not an echo ----
@@ -302,7 +302,7 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     const neverValidatedEntry = body.invoice_violations[1]
     const neverValidatedHistory = await getInvoiceHistory(token, neverValidatedEntry.invoice_id)
     expect(neverValidatedHistory).toEqual([
-      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String) },
+      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null },
     ])
   })
 

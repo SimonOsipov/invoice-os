@@ -323,7 +323,7 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO extraction_rule_breaks
 		     (tenant_id, extraction_job_id, field_name, rule_set_version_id, rule_key, message)
-		 VALUES ($1, $2, 'total_amount', (SELECT id FROM rule_set_versions WHERE is_active), 'vat-standard-rate', 'witness')`,
+		 VALUES ($1, $2, 'total_amount', (SELECT id FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)), 'vat-standard-rate', 'witness')`,
 		tenantID, extractionJobID,
 	); err != nil {
 		t.Fatalf("seed extraction_rule_breaks fixture: %v", err)

@@ -312,12 +312,12 @@ func TestSeed_RangeNonNumericValue(t *testing.T) {
 func TestSeed_KillSwitchSymmetry(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	// Restore on the active version, the row the kill switch writes.
+	// Restore on the version in force today, the row the kill switch writes.
 	t.Cleanup(func() {
 		if _, err := super.Exec(context.Background(),
 			`UPDATE rules r SET enabled = true
 			   FROM rule_set_versions v
-			  WHERE r.rule_set_version_id = v.id AND v.is_active AND r.key = 'supplier-tin-format'`,
+			  WHERE r.rule_set_version_id = v.id AND v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = 'supplier-tin-format'`,
 		); err != nil {
 			t.Errorf("cleanup: restore supplier-tin-format enabled=true: %v", err)
 		}

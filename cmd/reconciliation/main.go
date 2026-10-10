@@ -3,7 +3,9 @@
 // ticks Reconciler.SweepOnce on RECONCILE_INTERVAL — comparing invoices.status against
 // submission_jobs.state per tenant, re-arming lost polls through the existing PollWorker
 // path, and flagging every other drift as an append-only reconciliation.* audit record
-// (internal/reconciliation).
+// (internal/reconciliation). A second Sweeper ticks invoice.Rechecker.RunOnce, which re-checks
+// each tenant's validated invoices once a rule-set version's start date arrives; it needs
+// VALIDATION_URL and S2S_TOKEN.
 package main
 
 import (
@@ -11,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
@@ -26,6 +29,17 @@ func main() {
 	}
 
 	ctx := context.Background()
+
+	// Required, checked before any pool: a service that cannot reach validation would never
+	// run the re-check, and a silently-off compliance step is worse than a crash.
+	validationURL := os.Getenv("VALIDATION_URL")
+	if validationURL == "" {
+		platform.Fatal(app.Logger, "reconciliation: VALIDATION_URL is required")
+	}
+	s2sToken := os.Getenv("S2S_TOKEN")
+	if s2sToken == "" {
+		platform.Fatal(app.Logger, "reconciliation: S2S_TOKEN is required")
+	}
 
 	// Connect as the app role (invoice_app, NOBYPASSRLS) — never the migrator or
 	// superuser (.claude/rules/db-migrations.md). This pool runs ReArmPoll's enqueue and every
@@ -89,6 +103,18 @@ func main() {
 	// The Sweeper drives rec.SweepOnce on cfg.Interval, single-flight, and drains within
 	// the platform shutdown window on SIGINT/SIGTERM (internal/reconciliation/sweeper.go).
 	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, rec.SweepOnce))
+
+	// The re-check runs as invoice_app (appPool): RecheckCovered refuses a privileged role.
+	// reconciliation cannot import invoice, so the enumeration is passed in from here.
+	store := invoice.NewStore(appPool)
+	rechecker := &invoice.Rechecker{
+		Pool:    appPool,
+		Store:   store,
+		Gate:    invoice.NewGate(store, invoice.NewValidator(validationURL, s2sToken, nil)),
+		Tenants: func(ctx context.Context) ([]string, error) { return reconciliation.EnumerateTenants(ctx, readerPool) },
+		Logger:  app.Logger,
+	}
+	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, rechecker.RunOnce))
 
 	if err := app.Run(ctx); err != nil {
 		platform.Fatal(app.Logger, "reconciliation: %v", err)

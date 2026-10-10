@@ -1,14 +1,14 @@
 // M4-04-03 (task-109) -- Stage 4 (QA Verify, Mode B) adversarial coverage,
 // added on top of the executor's green suite without modifying any existing
 // test. store_adversarial_test.go proves the G3 guard holds at the STORE
-// layer (loadActiveRuleSetTx / LoadActiveRuleSet / LoadActiveRuleSetGlobal).
+// layer (loadRuleSetByIDTx / LoadActiveRuleSet / LoadActiveRuleSetGlobal).
 // This file proves it survives end-to-end through the REAL HTTP handler,
 // wired to the REAL Store and REAL Engine over the live DB -- i.e. that
 // nothing between the store and the wire response (statusForErr, the
 // handler's own error branch) accidentally swallows ErrEmptyRuleSet back
 // into a 200:
 //
-//   - BatchValidateHandler + Store.LoadActiveRuleSetGlobal: the tenant-free
+//   - BatchValidateHandler + Store.LoadForDates: the tenant-free
 //     batch path -- the disaster case named directly in the story: a
 //     silently-empty rule-set masquerading as "every invoice is compliant"
 //     for an entire batch at once, not just one invoice.
@@ -24,7 +24,7 @@ import (
 
 // TestBatchValidate_ActiveVersionZeroRules503NotCleanPass (G3, batch
 // surface): the same scenario through BatchValidateHandler +
-// Store.LoadActiveRuleSetGlobal -- a batch of otherwise-invalid invoices
+// Store.LoadForDates -- a batch of otherwise-invalid invoices
 // (empty {} bodies, which would fire every `required` rule against the
 // real v2 rule-set, per VB-13) must still answer 503 for the WHOLE batch,
 // never a 200 reporting every item's violations: [] (an entire batch
@@ -33,7 +33,8 @@ import (
 func TestBatchValidate_ActiveVersionZeroRules503NotCleanPass(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	seedVersion(t, super, true) // zero rules
+	zeroID, _ := seedVersion(t, super) // zero rules
+	sealAndDate(t, super, zeroID, todayUTC())
 
 	store := NewStore(app)
 	eng := NewDefaultEngine()
@@ -41,7 +42,7 @@ func TestBatchValidate_ActiveVersionZeroRules503NotCleanPass(t *testing.T) {
 	reqBody := `{"invoices":[{"ref":"a","invoice":{}},{"ref":"b","invoice":{}}]}`
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(reqBody))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForDates, eng, nil, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusServiceUnavailable {
 		var raw map[string]json.RawMessage

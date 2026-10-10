@@ -41,12 +41,12 @@ func (g *rbGate) Evaluate(ctx context.Context, items []invoice.EvalItem) (invoic
 		g.ctxErr <- ctx.Err()
 		return invoice.EvalResult{}, ctx.Err()
 	}
-	return invoice.EvalResult{RuleSetVersionID: g.versionID, ByRef: map[string][]invoice.Violation{items[0].Ref: g.violations}}, nil
+	return invoice.EvalResult{StampByRef: map[string]invoice.Stamp{items[0].Ref: {ID: g.versionID}}, ByRef: map[string][]invoice.Violation{items[0].Ref: g.violations}}, nil
 }
 
 func (g *rbGate) ValidateBatch(ctx context.Context, invs []invoice.Invoice) (invoice.BatchOutcome, error) {
 	_, _ = g.fakeGate.ValidateBatch(ctx, invs)
-	return invoice.BatchOutcome{RuleSetVersionID: g.versionID, ByID: map[string][]invoice.Violation{invs[0].ID: g.violations}}, nil
+	return invoice.BatchOutcome{StampByID: map[string]invoice.Stamp{invs[0].ID: {ID: g.versionID}}, ByID: map[string][]invoice.Violation{invs[0].ID: g.violations}}, nil
 }
 
 var (
@@ -92,7 +92,7 @@ func rbCountTenants(t *testing.T, super *pgxpool.Pool, tenantIDs ...string) int 
 func rbActiveVersionID(t *testing.T, super *pgxpool.Pool) string {
 	t.Helper()
 	var id string
-	if err := super.QueryRow(context.Background(), `SELECT id::text FROM rule_set_versions WHERE is_active`).Scan(&id); err != nil {
+	if err := super.QueryRow(context.Background(), `SELECT id::text FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`).Scan(&id); err != nil {
 		t.Fatalf("read the active rule-set version: %v", err)
 	}
 	return id
@@ -103,7 +103,7 @@ func rbActiveRule(t *testing.T, super *pgxpool.Pool, key string) (message, versi
 	if err := super.QueryRow(context.Background(),
 		`SELECT r.message, r.rule_set_version_id::text FROM rules r
 		   JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		  WHERE v.is_active AND r.key = $1`, key).Scan(&message, &versionID); err != nil {
+		  WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $1`, key).Scan(&message, &versionID); err != nil {
 		t.Fatalf("read the active rule %q: %v", key, err)
 	}
 	return message, versionID
@@ -786,8 +786,8 @@ func TestRLS_AViolationFiledUnderAnotherRefIsNotRecorded(t *testing.T) {
 	tenantID, entityID := rbTenant(t, super, "RB-REF")
 	documentID, jobID := rbSeed(t, super, tenantID, rbBadTIN(docCleanValues("RB-REF-INV")))
 	g := &fakeGate{evaluateResult: invoice.EvalResult{
-		RuleSetVersionID: rbActiveVersionID(t, super),
-		ByRef:            map[string][]invoice.Violation{"some-other-invoice": {rbBuyerTINViolation}},
+		StampByRef: map[string]invoice.Stamp{"some-other-invoice": {ID: rbActiveVersionID(t, super)}},
+		ByRef:      map[string][]invoice.Violation{"some-other-invoice": {rbBuyerTINViolation}},
 	}}
 
 	res, err := newTestServiceWithGate(app, g).ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID)

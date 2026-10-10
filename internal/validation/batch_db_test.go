@@ -1,7 +1,6 @@
 // M4-04-03 (task-109, Test-first: yes) -- Mode A RED DB-backed specs for
 // BatchValidateHandler driven end-to-end against the REAL Store
-// (LoadActiveRuleSetGlobal, currently the QA scaffold in
-// store_qa_scaffold.go) and the REAL validation.Engine (NewDefaultEngine)
+// (LoadForDates) and the REAL validation.Engine (NewDefaultEngine)
 // over the live migrated DB (v4 active, 20 rules). No identity is ever placed
 // in the request context here -- that is the whole point of the tenant-free
 // batch endpoint ([s2s-identity]).
@@ -21,6 +20,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBatch_FullyValidInvoiceZeroViolations (VB-12, [batch-payload-rooting]'s
@@ -54,7 +54,7 @@ func TestBatch_FullyValidInvoiceZeroViolations(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForDates, eng, nil, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -96,7 +96,7 @@ func TestBatch_EmptyInvoiceFiresEveryRequired(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForDates, eng, nil, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -133,7 +133,7 @@ func TestBatch_EmptyInvoiceFiresEveryRequired(t *testing.T) {
 // Captured by QUERY (not hardcoded) -- rule_set_versions.id is DB-generated
 // (gen_random_uuid()), so a literal uuid would only be correct against
 // today's local dev DB, not CI or any other environment (same discipline
-// as store_test.go's TestStore_LoadNoActiveErrors / seedVersion doc
+// as store_test.go's seedVersion doc
 // comments: "restoring by CAPTURED ID rather than by naming a version
 // number is the point").
 func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
@@ -144,9 +144,9 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 	var wantID string
 	var wantVersion int
 	if err := super.QueryRow(context.Background(),
-		`SELECT id, version FROM rule_set_versions WHERE is_active LIMIT 1`,
+		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
 	).Scan(&wantID, &wantVersion); err != nil {
-		t.Fatalf("read the active rule_set_versions row: %v", err)
+		t.Fatalf("read the rule_set_versions row in force today: %v", err)
 	}
 
 	reqBody, err := json.Marshal(map[string]any{
@@ -158,7 +158,7 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForDates, eng, nil, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -173,5 +173,69 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 	}
 	if body.RuleSetVersion != wantVersion {
 		t.Errorf("response rule_set_version = %d, want %d", body.RuleSetVersion, wantVersion)
+	}
+}
+
+func TestBatch_DB_TwoVersionsInOneBatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	aID, _ := dateFixture(t, super, "3001-01-01", "t-a")
+	bID, _ := dateFixture(t, super, "3001-06-01", "t-b")
+
+	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[
+		{"ref":"a","invoice":{"issue_date":"3001-02-01"}},
+		{"ref":"b","invoice":{"issue_date":"3001-07-01"}}]}`))
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForDates, NewDefaultEngine(), nil, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeBatch(t, rec)
+	if body.Results[0].RuleSetVersionID != aID || body.Results[1].RuleSetVersionID != bID {
+		t.Errorf("item stamps = %s, %s; want %s, %s",
+			body.Results[0].RuleSetVersionID, body.Results[1].RuleSetVersionID, aID, bID)
+	}
+}
+
+func TestBatch_DB_UndatedInvoiceIgnoresAScheduledVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format(time.DateOnly)
+	fixtureID, _ := dateFixture(t, super, tomorrow, "t-tomorrow")
+
+	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[{"ref":"a","invoice":{}}]}`))
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForDates, NewDefaultEngine(), nil, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	got := decodeBatch(t, rec).Results[0]
+	if got.RuleSetVersion != 4 || got.RuleSetVersionID == fixtureID {
+		t.Errorf("undated item stamp = v%d %s, want v4 and not the scheduled fixture %s",
+			got.RuleSetVersion, got.RuleSetVersionID, fixtureID)
+	}
+}
+
+// Year 0 parses in Go but Postgres rejects it at d::date; the item is judged as undated and the
+// rest of the batch keeps its own version.
+func TestBatch_DB_YearZeroIssueDateIsJudgedAsUndated(t *testing.T) {
+	super, app := dbTestPools(t)
+	bID, _ := dateFixture(t, super, "3001-06-01", "t-yz")
+	var todayID string
+	if err := super.QueryRow(context.Background(),
+		`SELECT rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`).Scan(&todayID); err != nil {
+		t.Fatalf("read the version in force today: %v", err)
+	}
+
+	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[
+		{"ref":"bad","invoice":{"issue_date":"0000-01-01"}},
+		{"ref":"ok","invoice":{"issue_date":"3001-07-01"}}]}`))
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForDates, NewDefaultEngine(), nil, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeBatch(t, rec)
+	if body.Results[0].RuleSetVersionID != todayID || body.Results[1].RuleSetVersionID != bID {
+		t.Errorf("item stamps = %s, %s; want %s (today), %s",
+			body.Results[0].RuleSetVersionID, body.Results[1].RuleSetVersionID, todayID, bID)
 	}
 }

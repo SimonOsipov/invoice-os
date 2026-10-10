@@ -429,7 +429,7 @@ func (s *Service) recordImportRuleBreaks(ctx context.Context, ex SettledExtracti
 		slog.WarnContext(ctx, "importer: evaluate imported invoice", slog.String("invoice_id", created.ID), slog.Any("err", err))
 		return
 	}
-	if err := s.batch.RecordRuleBreaks(ctx, ex.JobID, res.RuleSetVersionID, ruleBreaks(ex, res.ByRef[created.ID])); err != nil {
+	if err := s.batch.RecordRuleBreaks(ctx, ex.JobID, res.StampByRef[created.ID].ID, ruleBreaks(ex, res.ByRef[created.ID])); err != nil {
 		slog.WarnContext(ctx, "importer: record rule breaks", slog.String("invoice_id", created.ID), slog.Any("err", err))
 	}
 }
@@ -495,7 +495,7 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 		slog.WarnContext(ctx, "importer: validate supplied invoice", slog.String("invoice_id", created.ID), slog.Any("err", err))
 		return created, nil
 	}
-	if err := s.batch.RecordRuleBreaks(ctx, ex.JobID, outcome.RuleSetVersionID, ruleBreaks(ex, outcome.ByID[created.ID])); err != nil {
+	if err := s.batch.RecordRuleBreaks(ctx, ex.JobID, outcome.StampByID[created.ID].ID, ruleBreaks(ex, outcome.ByID[created.ID])); err != nil {
 		slog.WarnContext(ctx, "importer: record rule breaks", slog.String("invoice_id", created.ID), slog.Any("err", err))
 	}
 	got, err := s.inv.Get(ctx, created.ID)

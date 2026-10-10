@@ -130,6 +130,16 @@ func TestDemoteRevalidated_WritesOneHistoryRow(t *testing.T) {
 	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != 1 {
 		t.Errorf("total invoice_status_history rows for invoice = %d, want exactly 1", n)
 	}
+	// The demotion row records the version that caused it.
+	var cause *string
+	if err := super.QueryRow(context.Background(),
+		`SELECT cause_rule_set_version_id::text FROM invoice_status_history WHERE invoice_id = $1`, invID,
+	).Scan(&cause); err != nil {
+		t.Fatalf("read cause_rule_set_version_id: %v", err)
+	}
+	if cause == nil || *cause != versionID {
+		t.Errorf("history row cause_rule_set_version_id = %v, want %s", cause, versionID)
+	}
 }
 
 // TestDemoteRevalidated_WritesBothAuditRows (AC-3): invoice.transitioned
@@ -474,6 +484,11 @@ func newOutageValidatorServer(t *testing.T) *httptest.Server {
 // JSON string literal (RS-V2-14 / F7 pin-detector scope note, gate_test.go).
 func writeValidateResponse(t *testing.T, w http.ResponseWriter, ruleSetVersionID string, results []validateBatchItemResult) {
 	t.Helper()
+	for i := range results {
+		if results[i].RuleSetVersionID == "" {
+			results[i].RuleSetVersion, results[i].RuleSetVersionID = cannedRuleSetVersion, ruleSetVersionID
+		}
+	}
 	b, err := json.Marshal(validateBatchResponse{RuleSetVersion: cannedRuleSetVersion, RuleSetVersionID: ruleSetVersionID, Results: results})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -534,7 +549,7 @@ func notesContain(notes []string, substr string) bool {
 }
 
 // readAllTenantIDs runs SELECT id FROM tenants ORDER BY id over pool --
-// exactly the query reconciliation's enumerateTenants runs (sweep.go:185).
+// exactly the query reconciliation's EnumerateTenants runs.
 func readAllTenantIDs(t *testing.T, pool *pgxpool.Pool) []string {
 	t.Helper()
 	rows, err := pool.Query(context.Background(), `SELECT id FROM tenants ORDER BY id`)
@@ -1439,6 +1454,56 @@ func TestRevalidate_CancelsThenRearms(t *testing.T) {
 	}
 }
 
+func TestRevalidateActive_DemoteStampsTheItemsOwnVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "OWN-STAMP tenant")
+	entityID := seedEntity(t, super, tenantID, "OWN-STAMP entity")
+	inv1 := seedInvoiceWithViolations(t, super, tenantID, entityID, "OWN-STAMP-1", "validated", "[]")
+	inv2 := seedInvoiceWithViolations(t, super, tenantID, entityID, "OWN-STAMP-2", "validated", "[]")
+	var idX, idY string
+	if err := super.QueryRow(ctx, `SELECT (SELECT id FROM rule_set_versions ORDER BY version LIMIT 1),
+		(SELECT id FROM rule_set_versions ORDER BY version LIMIT 1 OFFSET 1)`).Scan(&idX, &idY); err != nil || idX == "" || idY == "" || idX == idY {
+		t.Fatalf("need two distinct rule_set_versions ids, got %q %q: %v", idX, idY, err)
+	}
+	stampFor := map[string]string{inv1: idX, inv2: idY}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req validateBatchRequest
+		_ = json.Unmarshal(body, &req)
+		results := make([]validateBatchItemResult, len(req.Invoices))
+		for i, it := range req.Invoices {
+			results[i] = validateBatchItemResult{
+				Ref: it.Ref, Violations: tinOnlyViolations(it.Invoice),
+				RuleSetVersion: cannedRuleSetVersion, RuleSetVersionID: stampFor[it.Ref],
+			}
+		}
+		writeValidateResponse(t, w, idX, results)
+	}))
+	t.Cleanup(srv.Close)
+	gate := NewGate(store, NewValidator(srv.URL, revalidateS2SToken, nil))
+
+	res, err := RevalidateActive(ctx, app, store, gate, tenantID, false)
+	if err != nil {
+		t.Fatalf("RevalidateActive: %v", err)
+	}
+	if res.Demoted != 2 {
+		t.Fatalf("Demoted = %d, want 2", res.Demoted)
+	}
+	for id, want := range stampFor {
+		var got string
+		if err := super.QueryRow(ctx, `SELECT rule_set_version_id FROM invoices WHERE id = $1`, id).Scan(&got); err != nil {
+			t.Fatalf("read stamp: %v", err)
+		}
+		if got != want {
+			t.Errorf("invoice %s stamped %s, want its own version %s", id, got, want)
+		}
+	}
+}
+
 func TestBlockingRuleKeys_NamesEachRuleOnce(t *testing.T) {
 	vs := []Violation{
 		{RuleKey: "line-cost-non-negative", Severity: "error", Path: "line_items[1]"},
@@ -1452,5 +1517,41 @@ func TestBlockingRuleKeys_NamesEachRuleOnce(t *testing.T) {
 	want := []string{"line-cost-non-negative", "currency-allowed", "later-error", "some-warning"}
 	if got := blockingRuleKeys(vs); !reflect.DeepEqual(got, want) {
 		t.Errorf("blockingRuleKeys = %q, want %q", got, want)
+	}
+}
+
+// A RevalidateActive demotion names no cause: only a re-check demotion's history row does.
+func TestRevalidateActive_DemotionHistoryRowHasNullCause(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "RA-NULLCAUSE tenant")
+	entityID := seedEntity(t, super, tenantID, "RA-NULLCAUSE entity")
+	id := seedInvoiceAtStatus(t, super, tenantID, entityID, "RA-NULLCAUSE-1", StatusValidated)
+
+	srv := newTINValidatorServer(t, seedRuleSetVersionID(t, super))
+	gate := NewGate(store, NewValidator(srv.URL, revalidateS2SToken, nil))
+	if res, err := RevalidateActive(ctx, app, store, gate, tenantID, false); err != nil || res.Demoted != 1 {
+		t.Fatalf("RevalidateActive = %+v, %v; want one demotion", res, err)
+	}
+
+	ident := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
+	rec := doInvoiceHistory(t, store.History, &ident, id)
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("history %s: %v", rec.Body.String(), err)
+	}
+	var demotion map[string]json.RawMessage
+	for _, r := range rows {
+		if string(r["to_status"]) == `"draft"` {
+			demotion = r
+		}
+	}
+	if demotion == nil {
+		t.Fatalf("no draft row in history %s", rec.Body.String())
+	}
+	if c, ok := demotion["cause"]; !ok || string(c) != "null" {
+		t.Errorf("demotion cause = %s (present %v), want null", c, ok)
 	}
 }

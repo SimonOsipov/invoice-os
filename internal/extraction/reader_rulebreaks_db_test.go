@@ -17,7 +17,7 @@ func rbSeedBreak(t *testing.T, ctx context.Context, tenantID, jobID, field, key,
 	if _, err := stRequire(t).super.Exec(ctx,
 		`INSERT INTO extraction_rule_breaks
 		     (tenant_id, extraction_job_id, field_name, rule_set_version_id, rule_key, message)
-		 VALUES ($1, $2, $3, (SELECT id FROM rule_set_versions WHERE is_active), $4, $5)`,
+		 VALUES ($1, $2, $3, (SELECT id FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)), $4, $5)`,
 		tenantID, jobID, field, key, msg,
 	); err != nil {
 		t.Fatalf("seed rule break %s on %s: %v", key, field, err)
@@ -81,7 +81,7 @@ func rbSeedBreakAt(t *testing.T, ctx context.Context, tenantID, jobID, field, ke
 	if _, err := stRequire(t).super.Exec(ctx,
 		`INSERT INTO extraction_rule_breaks
 		     (tenant_id, extraction_job_id, field_name, rule_set_version_id, rule_key, message, created_at)
-		 VALUES ($1, $2, $3, (SELECT id FROM rule_set_versions WHERE is_active), $4, $5, $6)`,
+		 VALUES ($1, $2, $3, (SELECT id FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)), $4, $5, $6)`,
 		tenantID, jobID, field, key, "msg "+key, at,
 	); err != nil {
 		t.Fatalf("seed rule break %s on %s: %v", key, field, err)

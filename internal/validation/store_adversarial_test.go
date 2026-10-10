@@ -1,7 +1,7 @@
 // M4-04-03 (task-109) -- Stage 4 (QA Verify, Mode B) adversarial coverage,
 // added on top of the executor's green VB-01..17 without modifying any of
 // them. Closes the one gap Stage-1 addendum G3 named but VB-14 does not
-// close by itself: G3's fix (loadActiveRuleSetTx's len(rules)==0 ->
+// close by itself: G3's fix (loadRuleSetByIDTx's len(rules)==0 ->
 // ErrEmptyRuleSet guard, store.go) is real, but nothing in the shipped VB
 // suite actually DRIVES a real active-version-with-zero-rules DB state
 // through either loader and asserts the guard fires. VB-14 only asserts
@@ -12,12 +12,12 @@
 // Both loaders are covered, not just the global one: [tenant-free-ruleset-load]
 // claimed "fails closed" for LoadActiveRuleSetGlobal, but store.go's actual
 // refactor routes LoadActiveRuleSet through the SAME shared
-// loadActiveRuleSetTx helper -- so the tenant-scoped LoadActiveRuleSet must be
+// loadRuleSetByIDTx helper -- so the tenant-scoped LoadActiveRuleSet must be
 // guarded too, or the identity-carrying loader still fails open even after this
 // subtask ships.
 //
-// Fixture: seedVersion(t, super, true) (schema_test.go) with NO seedRule
-// call -- a real, live rule_set_versions row, is_active=true, holding zero
+// Fixture: seedVersion + sealAndDate (schema_test.go) with NO seedRule
+// call -- a real, live rule_set_versions row, in force today, holding zero
 // rules underneath it. This is exactly the state the Stage-1 addendum
 // verified reachable live (RLS added to `rules` alone, or -- more mundanely
 // today -- any operational mistake that leaves a published version's rules
@@ -47,7 +47,8 @@ func TestStore_LoadActiveRuleSetGlobal_ZeroRulesFailsClosed(t *testing.T) {
 	ctx := context.Background()
 
 	// Zero rules is the point: no seedRule call follows.
-	versionID, version := seedVersion(t, super, true)
+	versionID, version := seedVersion(t, super)
+	sealAndDate(t, super, versionID, todayUTC())
 
 	store := NewStore(app)
 	rs, err := store.LoadActiveRuleSetGlobal(ctx)
@@ -76,7 +77,7 @@ func TestStore_LoadActiveRuleSetGlobal_ZeroRulesFailsClosed(t *testing.T) {
 // TestStore_LoadActiveRuleSet_ZeroRulesFailsClosed (G3, audit item 1b): the
 // SAME zero-rules guard, but through LoadActiveRuleSet -- the tenant-wrapped
 // tenant-scoped loader that shipped before this subtask, and that this
-// subtask's refactor (loadActiveRuleSetTx) now routes through the identical
+// subtask's refactor (loadRuleSetByIDTx) now routes through the identical
 // shared code path. If this loader were NOT guarded, the identity-carrying
 // path would still fail open even after M4-04-03 ships, despite the story's
 // own framing of G3 as fixed.
@@ -84,7 +85,8 @@ func TestStore_LoadActiveRuleSet_ZeroRulesFailsClosed(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
-	versionID, version := seedVersion(t, super, true) // zero rules
+	versionID, version := seedVersion(t, super) // zero rules
+	sealAndDate(t, super, versionID, todayUTC())
 
 	store := NewStore(app)
 	tenantID := uuid.NewString()

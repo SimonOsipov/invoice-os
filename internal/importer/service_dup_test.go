@@ -44,8 +44,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -440,11 +438,10 @@ func (g *contentViolationGate) ValidateBatch(ctx context.Context, invs []invoice
 		clean++
 	}
 	return invoice.BatchOutcome{
-		RuleSetVersion:   2,
-		RuleSetVersionID: uuid.NewString(),
-		Clean:            clean,
-		WithViolations:   withViolations,
-		ByID:             byID,
+		RuleSetVersion: 2,
+		Clean:          clean,
+		WithViolations: withViolations,
+		ByID:           byID,
 	}, nil
 }
 

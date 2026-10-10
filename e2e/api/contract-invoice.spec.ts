@@ -609,6 +609,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect('from_status' in first, 'a history row should carry from_status (nullable)').toBe(true)
       expect('actor_name' in first, 'a history row should carry actor_name').toBe(true)
       expect('actor_kind' in first, 'a history row should carry actor_kind').toBe(true)
+      expect(first.cause, 'a genesis row carries "cause": null, never a dropped key').toBeNull()
       expect(['person', 'system', 'raw'], 'actor_kind should be one of the three wire values').toContain(first.actor_kind)
     })
 

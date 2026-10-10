@@ -268,7 +268,7 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	plant("extraction_rule_breaks", "id", ruleBreakID,
 		`INSERT INTO extraction_rule_breaks
 		     (id, tenant_id, extraction_job_id, field_name, rule_set_version_id, rule_key, message)
-		 VALUES ($1,$2,$3,'total_amount',(SELECT id FROM rule_set_versions WHERE is_active),'vat-standard-rate','witness')`,
+		 VALUES ($1,$2,$3,'total_amount',(SELECT id FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)),'vat-standard-rate','witness')`,
 		ruleBreakID, tenantID, extractionJobID)
 	plant("extraction_page_images", "id", pageImageID,
 		`INSERT INTO extraction_page_images

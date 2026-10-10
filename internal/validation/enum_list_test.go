@@ -278,7 +278,7 @@ func doBatchWithLog(t *testing.T, load func(context.Context) (RuleSet, error), l
 	t.Helper()
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[{"ref":"a","invoice":{}}]}`))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(load, NewDefaultEngine(), log).ServeHTTP(rec, r)
+	BatchValidateHandler(allDates(load), NewDefaultEngine(), nil, log).ServeHTTP(rec, r)
 	return rec
 }
 

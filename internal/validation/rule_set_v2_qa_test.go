@@ -30,15 +30,6 @@
 //     hashes the full content (key/type/target/params/severity/when/message/
 //     scope; enabled deliberately excluded -- see its doc comment) of every
 //     rule under the active version and pins the digest.
-//
-//  3. TestRuleSetV2_NestedFlipsRestoreToOriginalActive -- RS-V2-10 proves a
-//     SINGLE nested seedVersion(active) restores the pre-existing active row
-//     by id. This test nests the same restore-by-id pattern TWO levels deep
-//     (simulateActiveVersion inside simulateActiveVersion) to prove the LIFO
-//     restore-by-id discipline survives compounding, not just one level --
-//     the shape a future test author is most likely to reach for once a
-//     second DB-backed fixture needs its own "swap the active version"
-//     scratch space.
 package validation
 
 import (
@@ -193,78 +184,5 @@ func TestRuleSetV2_ActiveContentFingerprintUnmutated(t *testing.T) {
 			"in-place mutation of an already-published version's content (the exact defect "+
 			"task-111 reverts), update wantFingerprint deliberately, with the diff reviewed -- "+
 			"never silently", got, wantFingerprint)
-	}
-}
-
-// ---------------------------------------------------------------------
-// 3. Nested restore-by-id, two levels deep.
-// ---------------------------------------------------------------------
-
-// TestRuleSetV2_NestedFlipsRestoreToOriginalActive (QA-added adversarial):
-// RS-V2-10 proves ONE nested seedVersion(active) restores the pre-existing
-// active row by id (rule_set_v2_test.go's TestRuleSetV2_
-// SeedVersionRestoresPreviousActiveByID). This test nests the SAME
-// restore-by-id primitive (simulateActiveVersion) two levels deep -- the
-// shape a future test author reaches for the moment a second DB-backed
-// fixture needs its own "swap the active version" scratch space inside an
-// already-swapped one -- and proves the one-active invariant still unwinds
-// to the ORIGINAL row (not the intermediate one) once both levels' cleanups
-// have run.
-func TestRuleSetV2_NestedFlipsRestoreToOriginalActive(t *testing.T) {
-	super, app := dbTestPools(t)
-	ctx := context.Background()
-
-	originalID, originalVersion := activeVersionRow(t, app)
-
-	t.Run("level_one", func(t *testing.T) {
-		level1ID, _ := simulateActiveVersion(t, super)
-
-		var midActiveID string
-		if err := super.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE is_active`).Scan(&midActiveID); err != nil {
-			t.Fatalf("read active id at nesting level one: %v", err)
-		}
-		if midActiveID != level1ID {
-			t.Fatalf("active id at nesting level one = %s, want %s (the level-one fixture itself)", midActiveID, level1ID)
-		}
-
-		t.Run("level_two", func(t *testing.T) {
-			level2ID, _ := simulateActiveVersion(t, super)
-
-			var innerActiveID string
-			if err := super.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE is_active`).Scan(&innerActiveID); err != nil {
-				t.Fatalf("read active id at nesting level two: %v", err)
-			}
-			if innerActiveID != level2ID {
-				t.Fatalf("active id at nesting level two = %s, want %s (the level-two fixture itself)", innerActiveID, level2ID)
-			}
-		})
-
-		// level_two's t.Cleanup has now run (subtests complete, and their
-		// Cleanups fire, before the parent subtest's own body continues past
-		// t.Run). The one-active slot must be back to level1ID, not
-		// originalID -- restore-by-id must unwind ONE level at a time, not
-		// jump straight to the outermost original.
-		var afterLevelTwoID string
-		if err := super.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE is_active`).Scan(&afterLevelTwoID); err != nil {
-			t.Fatalf("read active id after level-two cleanup: %v", err)
-		}
-		if afterLevelTwoID != level1ID {
-			t.Errorf("active id after level-two's cleanup = %s, want %s (level one's fixture -- "+
-				"restore-by-id must unwind exactly one level, not skip straight to the original)",
-				afterLevelTwoID, level1ID)
-		}
-	})
-
-	// level_one's t.Cleanup has now run. The one-active slot must be back to
-	// the ORIGINAL row this test started with.
-	var finalActiveID string
-	var finalActiveVersion int
-	if err := super.QueryRow(ctx, `SELECT id, version FROM rule_set_versions WHERE is_active`).Scan(&finalActiveID, &finalActiveVersion); err != nil {
-		t.Fatalf("read active id after both levels' cleanup: %v", err)
-	}
-	if finalActiveID != originalID {
-		t.Errorf("active id after both nested fixtures' cleanup = %s, want %s (version=%d, the "+
-			"row active before this test ran) -- two levels of restore-by-id must compose back to "+
-			"the original, not leak an intermediate row as active", finalActiveID, originalID, originalVersion)
 	}
 }

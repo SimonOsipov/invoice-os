@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -44,7 +45,10 @@ func selectLineItems(ctx context.Context, tx pgx.Tx, ids []string, w csvWriter) 
 		return err
 	}
 
-	for _, batch := range chunk(ids, 500) {
+	// Canonical lowercase uuid text sorts like Postgres's byte order, so chunks concatenate in ORDER BY invoice_id order.
+	sorted := slices.Clone(ids)
+	slices.Sort(sorted)
+	for _, batch := range chunk(sorted, 500) {
 		if err := writeLineItemsBatch(ctx, tx, batch, numbers, w); err != nil {
 			return err
 		}

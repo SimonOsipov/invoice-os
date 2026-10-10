@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -293,5 +294,51 @@ func TestAssemble_LineItemsManifestEntryMatchesTheZipEntry(t *testing.T) {
 	}
 	if doc.Format != "ascomply-evidence-bundle/1" {
 		t.Errorf("manifest format = %q, want ascomply-evidence-bundle/1 (D13)", doc.Format)
+	}
+}
+
+func TestSelectLineItems_OrderedByInvoiceAcrossChunks(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-lineitems-chunk-order")
+	entity := mustCreateEntity(t, tx, tenant, "Chunk Order Co", "90000015-0001")
+	base := time.Date(2027, 5, 1, 0, 0, 0, 0, time.UTC)
+
+	const total = 501
+	ids := make([]string, total)
+	wantLines := 0
+	for i := range ids {
+		ids[i] = mustCreateInvoice(t, tx, invoiceFixture{
+			id: fmt.Sprintf("00000000-0000-4000-8000-%012d", total-i), tenantID: tenant, entityID: entity,
+			invoiceNumber: fmt.Sprintf("INV-LI-O-%04d", i), createdAt: base.Add(time.Duration(i) * time.Second),
+		})
+		for n := 1; n <= 1+i%3/2; n++ {
+			mustCreateLineItem(t, tx, lineItemFixture{tenantID: tenant, invoiceID: ids[i], lineNo: n})
+			wantLines++
+		}
+	}
+	actingAs(t, tx, tenant)
+
+	before := append([]string(nil), ids...)
+	rows := runSelectLineItems(t, tx, ids)[1:]
+	if !slices.Equal(ids, before) {
+		t.Error("selectLineItems reordered the caller's ids slice")
+	}
+	if len(rows) != wantLines {
+		t.Fatalf("%d data rows, want %d", len(rows), wantLines)
+	}
+	seen := map[string]bool{}
+	for i, r := range rows {
+		key := r[0] + "/" + r[2]
+		if seen[key] {
+			t.Errorf("row %d: line %s repeated", i, key)
+		}
+		seen[key] = true
+		if i > 0 {
+			p := rows[i-1]
+			if r[0] < p[0] || (r[0] == p[0] && r[2] <= p[2]) {
+				t.Fatalf("row %d (%s, line %s) follows (%s, line %s): not ordered by invoice_id, line_no", i, r[0], r[2], p[0], p[2])
+			}
+		}
 	}
 }

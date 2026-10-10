@@ -744,32 +744,55 @@ func TestVerifyPage_InviteLinkServesTheSetPasswordPage(t *testing.T) {
 	}
 }
 
-// An invite link carries no state; the set-password page needs none, the confirm page does.
-func TestVerifyPage_StatelessInviteLinkServesTheSetPasswordPage(t *testing.T) {
+const inviteBounceLocation = siteURLValue + "/?confirm=invite#token=" + vpToken
+
+func TestVerifyPage_StatelessInviteLinkBouncesToLanding(t *testing.T) {
 	h := vpHandler(t)
-
-	rec := vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+"&invite=1")
-
-	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
-		t.Fatalf("status %d Content-Type %q, want 200 text/html; charset=utf-8", rec.Code, rec.Header().Get("Content-Type"))
-	}
-	if got := vpFormAction(t, rec.Body.String()); got != "/auth/invitation/password" {
-		t.Errorf("form action = %q, want /auth/invitation/password", got)
-	}
-	vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)), bounceLocation)
-
-	head := vpDo(t, h, http.MethodHead, vpQueryBare(vpToken)+"&invite=1")
-	if head.Code != http.StatusOK || head.Body.Len() != 0 {
-		t.Errorf("stateless HEAD: status %d body %q, want 200 and no body", head.Code, head.Body.String())
-	}
-	for name, extra := range map[string]string{"invite=0": "&invite=0", "invite=1 twice": "&invite=1&invite=1", "invite=1, then 0": "&invite=1&invite=0", "invite empty": "&invite="} {
-		t.Run(name+" bounces", func(t *testing.T) {
-			vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+extra), bounceLocation)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run(method, func(t *testing.T) {
+			rec := vpDo(t, h, method, vpQueryBare(vpToken)+"&invite=1")
+			vpBounced(t, rec, inviteBounceLocation)
+			if method == http.MethodHead && rec.Body.Len() != 0 {
+				t.Errorf("HEAD body = %q, want empty", rec.Body.String())
+			}
+			if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("Cache-Control = %q, want no-store", got)
+			}
 		})
 	}
-	t.Run("an empty token fails before the page", func(t *testing.T) {
+	t.Run("an empty token fails before the bounce", func(t *testing.T) {
 		vpBounced(t, vpDo(t, h, http.MethodGet, "token=&type=signup&invite=1"), failedLocation)
 	})
+}
+
+func TestVerifyPage_MalformedStateOnInviteLinkBounces(t *testing.T) {
+	h := vpHandler(t)
+	base := vpQueryBare(vpToken) + "&invite=1&state="
+	for name, query := range map[string]string{
+		"42 chars":    base + vpState[:42],
+		"44 chars":    base + vpState + "a",
+		"plus":        base + url.QueryEscape(vpState[:42]+"+"),
+		"state twice": base + vpState + "&state=" + vpState,
+	} {
+		t.Run(name, func(t *testing.T) {
+			vpBounced(t, vpDo(t, h, http.MethodGet, query), inviteBounceLocation)
+		})
+	}
+}
+
+func TestVerifyPage_InviteBounceEscapesTheToken(t *testing.T) {
+	rec := vpDo(t, vpHandler(t), http.MethodGet, vpQueryBare("a&b=c")+"&invite=1")
+	vpBounced(t, rec, siteURLValue+"/?confirm=invite#token=a%26b%3Dc")
+}
+
+func vpInputValue(doc *html.Node, name string) string {
+	for _, in := range vpFind(doc, vpTag("input")) {
+		if n, _ := vpAttr(in, "name"); n == name {
+			v, _ := vpAttr(in, "value")
+			return v
+		}
+	}
+	return ""
 }
 
 func TestVerifyPage_InvitePageHasOneBoundedPasswordForm(t *testing.T) {
@@ -793,10 +816,10 @@ func TestVerifyPage_InvitePageHasOneBoundedPasswordForm(t *testing.T) {
 		name, _ := vpAttr(in, "name")
 		inputs[name] = in
 	}
-	if len(inputs) != 3 {
-		t.Fatalf("named inputs = %d, want exactly 3 (token, type, password)", len(inputs))
+	if len(inputs) != 4 {
+		t.Fatalf("named inputs = %d, want exactly 4 (token, type, state, password)", len(inputs))
 	}
-	for name, want := range map[string]string{"token": vpToken, "type": "signup"} {
+	for name, want := range map[string]string{"token": vpToken, "type": "signup", "state": vpState} {
 		in := inputs[name]
 		if in == nil {
 			t.Errorf("no %q input", name)
@@ -846,9 +869,12 @@ func TestVerifyPage_InvitePageHasOneBoundedPasswordForm(t *testing.T) {
 func TestVerifyPage_InviteLinkBadTokenOrTypeIsTheFailedNotice(t *testing.T) {
 	h := vpHandler(t)
 	for name, query := range map[string]string{
-		"empty token":    "token=&type=signup&invite=1",
-		"257-byte token": vpInviteQuery(strings.Repeat("a", vpMaxLen+1)),
-		"type recovery":  "token=" + vpToken + "&type=recovery&invite=1",
+		"empty token":              "token=&type=signup&invite=1&state=" + vpState,
+		"257-byte token":           vpInviteQuery(strings.Repeat("a", vpMaxLen+1)),
+		"type recovery":            "token=" + vpToken + "&type=recovery&invite=1&state=" + vpState,
+		"empty token, no state":    "token=&type=signup&invite=1",
+		"257-byte token, no state": vpQueryBare(strings.Repeat("a", vpMaxLen+1)) + "&invite=1",
+		"type recovery, no state":  "token=" + vpToken + "&type=recovery&invite=1",
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := vpDo(t, h, http.MethodGet, query)
@@ -884,6 +910,11 @@ func TestVerifyPage_WithoutExactlyOneInviteFlagIsTheConfirmPage(t *testing.T) {
 			}
 		})
 	}
+	for name, extra := range map[string]string{"no invite": "", "invite=0": "&invite=0", "invite=1 twice": "&invite=1&invite=1", "invite=1, then 0": "&invite=1&invite=0", "invite empty": "&invite="} {
+		t.Run(name+", stateless", func(t *testing.T) {
+			vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+extra), bounceLocation)
+		})
+	}
 	rec := vpDo(t, h, http.MethodGet, vpInviteQuery(vpToken))
 	if rec.Code != http.StatusOK || vpFormAction(t, rec.Body.String()) != "/auth/invitation/password" {
 		t.Errorf("control, one invite=1: status %d; want 200 serving the set-password page", rec.Code)
@@ -910,6 +941,9 @@ func TestVerifyPage_InviteTokenIsEscaped(t *testing.T) {
 			}
 			if token != raw {
 				t.Errorf("token input = %q, want the literal %q", token, raw)
+			}
+			if state := vpInputValue(doc, "state"); state != vpState {
+				t.Errorf("state input = %q, want %q", state, vpState)
 			}
 			if strings.Contains(body, "<script>\"") {
 				t.Errorf("the token is not HTML-escaped in the page: %q", body)

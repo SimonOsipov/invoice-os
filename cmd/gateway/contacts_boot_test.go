@@ -340,9 +340,18 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		}
 	})
 	t.Run("invitation password", func(t *testing.T) {
-		link := base + "/auth/verify?token=t&type=signup&invite=1"
+		bare := base + "/auth/verify?token=t&type=signup&invite=1"
 		before := len(goTrueCalls())
-		resp, err := client.Get(link)
+		resp, err := client.Get(bare)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if want := "http://site.invalid/?confirm=invite#token=t"; resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != want {
+			t.Fatalf("stateless GET of the invitee link answered %d Location %q, want 303 %s\n%s", resp.StatusCode, resp.Header.Get("Location"), want, out)
+		}
+		link := bare + "&state=" + strings.Repeat("A", 43)
+		resp, err = client.Get(link)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -356,6 +365,11 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		}
 
 		action, values := pageForm(t, link, string(b))
+		if values.Get("state") == "" {
+			t.Fatal("the invitee page carries no state")
+		}
+		// Stateless POST keeps the ?verified=1 fallback.
+		values.Del("state")
 		values.Set("password", "new-password-1")
 		resp, err = client.PostForm(action, values)
 		if err != nil {

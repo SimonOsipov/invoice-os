@@ -211,7 +211,10 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     assertErrorEnvelope(res, 403, 'a tenant-less token on the membership list')
   })
 
-  const passwordPageUrl = (token: string) => `${apiBase()}/auth/verify?token=${token}&type=signup&invite=1`
+  // A 43-character base64url state, the shape the gateway requires to render the page.
+  const INVITE_STATE = 'A'.repeat(43)
+  const passwordPageUrl = (token: string, state = INVITE_STATE) =>
+    `${apiBase()}/auth/verify?token=${token}&type=signup&invite=1${state ? `&state=${state}` : ''}`
   const landingFailed = () => `${resolveTarget('LANDING_URL')}/${VERIFY_FAILED}`
   const postPassword = (fields: Record<string, string>) =>
     fetch(`${apiBase()}/auth/invitation/password`, {
@@ -230,6 +233,13 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     for (const part of ['action="/auth/invitation/password"', 'name="password"', 'minlength="6"', 'maxlength="72"']) {
       expect(html, part).toContain(part)
     }
+  })
+
+  test('invitation accept: a set-password link without a state bounces 303 to the landing invite confirm', async () => {
+    const token = `bogus-${crypto.randomUUID()}`
+    const res = await fetch(passwordPageUrl(token, ''), { redirect: 'manual' })
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location'), 'the Location header').toBe(`${resolveTarget('LANDING_URL')}/?confirm=invite#token=${token}`)
   })
 
   test('invitation accept: a set-password link with an empty token redirects 303 to the landing failure notice', async () => {

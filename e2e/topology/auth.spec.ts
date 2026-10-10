@@ -1536,7 +1536,7 @@ test('the confirmed notice sits clear of the sidebar at each wide width', async 
 test("the invitee's set-password link opens one bounded form, and a bogus token's double-submit lands on the failed notice", async ({ page }) => {
   const errors = collectErrors(page)
   const posts = recordPosts(page, '/auth/invitation/password')
-  const url = `${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup&invite=1`
+  const url = `${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup&invite=1&state=${'A'.repeat(43)}`
   const password = page.locator('input[name="password"]')
   const button = page.getByRole('button')
 

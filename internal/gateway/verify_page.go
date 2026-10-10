@@ -49,8 +49,9 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		// The confirm=invite literal is parsed by frontend/landing/src/verifyLink.test.ts.
 		if inv := r.URL.Query()["invite"]; len(inv) == 1 && inv[0] == "1" {
-			serveInvitationPasswordPage(w, r, failed)
+			serveInvitationPasswordPage(w, r, site, failed)
 			return
 		}
 		// redirect_to and every other query value are ignored, never rendered.

@@ -342,6 +342,19 @@ func TestResetPasswordPage_RendersOneFormWithTheToken(t *testing.T) {
 	}
 }
 
+func TestResetPasswordPage_RendersNoStateInput(t *testing.T) {
+	rec, doc := rpPage(t, rpToken)
+	if n := len(vpFind(doc, vpTag("form"))); n != 1 {
+		t.Errorf("forms = %d, want 1", n)
+	}
+	if _, ok := rpInputs(doc)["state"]; ok {
+		t.Error("the reset page has a state input")
+	}
+	if strings.Contains(rec.Body.String(), "{{") {
+		t.Errorf("a placeholder is left in the body: %q", rec.Body.String())
+	}
+}
+
 func TestResetPasswordPage_HeadersAndScriptHash(t *testing.T) {
 	h := rpPageHandler(t)
 	get := rpGet(h, http.MethodGet, rpQuery(rpToken))

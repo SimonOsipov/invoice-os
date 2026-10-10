@@ -38,14 +38,22 @@ var resetCSP = func() string {
 }()
 
 func renderResetPage(token, alert string) string {
-	return renderPasswordPage(resetPageHTML, token, alert)
+	return renderPasswordPage(resetPageHTML, token, "", alert)
 }
 
-func renderPasswordPage(page, token, alert string) string {
+func renderPasswordPage(page, token, state, alert string) string {
 	if alert != "" {
 		alert = `<p class="alert" role="alert">` + html.EscapeString(alert) + `</p>`
 	}
-	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.Alert}}", alert, "{{.Script}}", resetScript).Replace(page)
+	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.State}}", html.EscapeString(state), "{{.Alert}}", alert, "{{.Script}}", resetScript).Replace(page)
+}
+
+// formState is the posted state when it has the shape of one, so a re-rendered page keeps it.
+func formState(r *http.Request) string {
+	if s := r.PostForm.Get("state"); stateShape.MatchString(s) {
+		return s
+	}
+	return ""
 }
 
 func setResetPageHeaders(h http.Header) {
@@ -139,7 +147,7 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 		}
 		if len(password) < resetPasswordMin || len(password) > resetPasswordMax {
 			setResetPageHeaders(w.Header())
-			writeResetPage(w, r.Method, http.StatusBadRequest, renderPasswordPage(flow.page, token, resetPasswordHint))
+			writeResetPage(w, r.Method, http.StatusBadRequest, renderPasswordPage(flow.page, token, formState(r), resetPasswordHint))
 			return
 		}
 

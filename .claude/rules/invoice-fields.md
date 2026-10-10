@@ -9,6 +9,7 @@ paths:
   - "internal/importer/suggest.go"
   - "internal/importer/service.go"
   - "internal/importer/document.go"
+  - "internal/importer/rulebreaks.go"
   - "internal/extraction/aireading.go"
   - "internal/extraction/ailines.go"
   - "internal/extraction/tier1.go"
@@ -42,6 +43,7 @@ paths:
 - Add the field to `invoicesCSVHeader` in `internal/archive/invoices.go`.
 - Add the field to the per-field `CreateInput` assignment in `internal/importer/service.go`.
 - Add the field to `documentCreateInput` in `internal/importer/document.go`.
+- Add a header field to the path map in `internal/importer/rulebreaks.go` when a rule targets it and the field is not locked.
 - Add the field to `invoiceEditFor` in `cmd/submission/main.go`.
 - Add a spec for an extracted header field to `tier1Specs` in `internal/extraction/tier1.go`. Give it a label id from `anchorLexicon` in `internal/extraction/anchor.go`.
 - Without a spec, the Tier-1 rules and the learning path skip the field.

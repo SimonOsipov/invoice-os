@@ -31,9 +31,9 @@ export interface ExtractionPage {
   height_px: number
 }
 
-// The four reason_code values extraction_field_results' CHECK admits, plus '' for a clean
-// field. A union, not string: the wire cannot carry a fifth code.
-export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing'
+// The reason_code values extraction_field_results' CHECK admits, plus '' for a clean
+// field. A union, not string: the wire cannot carry a code outside the CHECK.
+export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing' | 'rule_break'
 
 // internal/extraction/reader.go, ExtractionCandidate. One alternative reading; it carries no
 // name, no reason and no alternatives of its own.
@@ -51,6 +51,12 @@ export interface ExtractionCorrected {
   where: string | null
 }
 
+// internal/extraction/reader.go, ExtractionRuleBreak: one validation rule a reading violates.
+export interface ExtractionRuleBreak {
+  key: string
+  message: string
+}
+
 // internal/extraction/reader.go, ExtractionFieldState. region is null when the extractor
 // pointed at nothing. reason, alternatives and corrected are always present — Go has no
 // omitempty here, so no key is optional; corrected is null on a field no human has touched.
@@ -61,6 +67,7 @@ export interface ExtractionFieldState {
   reason: ExtractionReason
   alternatives: ExtractionCandidate[]
   corrected: ExtractionCorrected | null
+  rules: ExtractionRuleBreak[]
 }
 
 // internal/extraction/reader.go, ExtractionDocument. stored_at is RFC3339 text, not a time.
@@ -128,6 +135,7 @@ const REASON_PILLS: Record<Exclude<ExtractionReason, '' | 'ambiguous'>, string> 
   unreadable: "COULDN'T READ THIS CLEARLY",
   inconsistent: "DOESN'T ADD UP",
   missing: 'NOT FOUND',
+  rule_break: 'BREAKS A RULE',
 }
 
 // Words keep the design's "TWO"; resolve.go:47 caps a field at 8 candidates, so the numeral is unreachable from a real read.
@@ -171,7 +179,8 @@ export function reasonPill(reason: ExtractionReason, candidateCount: number): st
 }
 
 /** Keyed on the reason first: a clean subtotal carries no note. */
-export function fieldNote(reason: ExtractionReason, name: string): string | null {
+export function fieldNote(reason: ExtractionReason, name: string, rules: ExtractionRuleBreak[]): string | null {
+  if (reason === 'rule_break') return rules.length === 0 ? null : rules.map((r) => r.message).join(' ')
   if (reason !== 'inconsistent') return null
   if (name === 'subtotal') return NOTE_SUBTOTAL
   return SUPPLIER_MISMATCH_FIELDS.includes(name) ? NOTE_SUPPLIER : NOTE_GENERIC

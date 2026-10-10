@@ -3332,8 +3332,9 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   // buyer_tin with no assertion noticing. A read at one index was never a key-set claim.
   for (const f of detail.fields) {
     expect(Object.keys(f).sort(), `${f.name}'s key set drifted from internal/extraction/reader.go`).toEqual(
-      ['alternatives', 'corrected', 'name', 'reason', 'region', 'value'].sort(),
+      ['alternatives', 'corrected', 'name', 'reason', 'region', 'rules', 'value'].sort(),
     )
+    expect(Array.isArray(f.rules), `${f.name}'s rules arrived as null, not []`).toBe(true)
   }
 
   // The field SET itself, twenty-three names, from the wired extractor's reading of
@@ -4092,11 +4093,11 @@ test('EXTR12-E2E-01 (AC-2): every reason the extractor reported renders its pill
   ])
 
   // The code itself is machine vocabulary and never reaches the screen. `Object.keys(REASON_PILL)`
-  // lost `ambiguous` when the table dropped its fixed key, so all four codes are named
+  // lost `ambiguous` when the table dropped its fixed key, so every code is named
   // explicitly -- the retype must not silently stop checking one of them.
   const paneText = await page.getByTestId('extraction-fields').innerText()
   expect(paneText.length, 'the fields pane rendered no text -- the absences below are vacuous').toBeGreaterThan(0)
-  for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing'] as const) {
+  for (const code of ['unreadable', 'ambiguous', 'inconsistent', 'missing', 'rule_break'] as const) {
     expect(paneText, `the pane rendered the raw reason code "${code}"`).not.toContain(code)
   }
 

@@ -11,6 +11,9 @@ paths:
   - "internal/importer/jevcheck.go"
   - "internal/importer/suggest.go"
   - "internal/importer/handlers_suggest.go"
+  - "internal/invoice/explain.go"
+  - "internal/invoice/handlers_explain.go"
+  - "tools/aimodeltest/explainrun.py"
 ---
 # OpenRouter clients
 
@@ -46,6 +49,8 @@ paths:
 - Omit `tenant_id` from the log line when the identity has none. Never log it blank.
 - Keep `FakeScope` out of the wire request and the log. It must match `^[A-Z]+$`.
 - Send `FakeScope: "LINES"` on the line-item call. Leave the header call unscoped.
+- Send `FakeScope: "EXPLAIN"` on the explain call.
+- Pin `explainSystem` to `SYSTEM` in `tools/aimodeltest/explainrun.py`.
 - Search an AI fake marker in `Request.Text`, then in `Request.FakeHint`. Never scan `Request.System`.
 - Match fake markers case-sensitively with no word boundary. The first match in a field wins.
 - A scoped request matches only its own `AIFAKE-<SCOPE>-` spelling. It never falls back to an unscoped marker.

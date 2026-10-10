@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -1406,5 +1407,22 @@ func TestCall_BackoffIsCappedSoTheBudgetFitsTenAttempts(t *testing.T) {
 	}
 	if got := fc.now().Sub(time.Unix(0, 0)); got != 13750*time.Millisecond {
 		t.Errorf("slept %v in total, want 13.75s", got)
+	}
+}
+
+func TestCall_PurposeExplainIsAccepted(t *testing.T) {
+	buf := &bytes.Buffer{}
+	c := fakeModeClientWithLogger(t, slog.New(slog.NewJSONHandler(buf, nil)))
+	req := baseReq()
+	req.Purpose = PurposeExplain
+	req.Text = answerMarker(validContent)
+
+	noDials(t, func() {
+		if _, err := c.Call(t.Context(), req); err != nil {
+			t.Fatalf("Call() err = %v, want nil", err)
+		}
+	})
+	if got := only(t, buf)["purpose"]; got != "explain" {
+		t.Errorf("purpose = %v, want explain", got)
 	}
 }

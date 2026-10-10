@@ -749,6 +749,32 @@ export function validateInvoice(token: string, id: string): Promise<ValidateInvo
   return apiFetch<ValidateInvoiceResult>(`${apiBase()}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST', token })
 }
 
+// ExplainFix mirrors internal/invoice/explain.go's ExplainFix; line is null for a header field.
+export interface ExplainFix {
+  field: string
+  label: string
+  line: number | null
+  current: string | null
+  value: string
+}
+
+// ExplainResult mirrors internal/invoice/explain.go's ExplainResult.
+export interface ExplainResult {
+  status: 'ok' | 'unavailable'
+  explanation: string | null
+  fix: ExplainFix | null
+}
+
+// explainViolation(): POST /v1/invoices/{id}/explain (internal/invoice/handlers_explain.go's
+// ExplainHandler). 404 for a foreign invoice, 409 for a violation not on the stored verdict.
+export function explainViolation(
+  token: string,
+  id: string,
+  body: { rule_key: string; path: string },
+): Promise<ExplainResult> {
+  return apiFetch<ExplainResult>(`${apiBase()}/api/invoice/v1/invoices/${id}/explain`, { method: 'POST', body, token })
+}
+
 // One line of InvoiceCreateInput's line_items. Named rather than inlined so
 // wireMirrors.test.ts's tsInterfaceKeys can read InvoiceCreateInput at all -- its body
 // regex is `[^{}]*`, and a nested object literal makes the whole interface extract to []

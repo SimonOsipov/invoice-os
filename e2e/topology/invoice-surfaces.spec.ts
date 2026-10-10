@@ -35,7 +35,7 @@ import {
 } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
-import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
+import { buildMixedCsv, buildPerfCsv, steerExplainMarker } from '../importFixtures'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import {
   assertFillsColumn,
@@ -6192,6 +6192,89 @@ test('ENGI-16 detail: Line 2 opens the editor on line 2', async ({ page }) => {
   const first = page.getByTestId('line-row').nth(1).locator('[data-line-field="description"]')
   await expect(first, 'line-row 2 first input takes focus').toBeFocused()
   await expect(first, 'line-row 2 first input is in the viewport').toBeInViewport()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The answer's 300-character unbroken token must wrap inside the table (D23); the line fix is the model's to propose.
+test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ENGI-17 detail ${Date.now()}`, tin: freshTin() })
+  const marker = steerExplainMarker({
+    explanation: 'Line 2 has a unit price of -5.00, but a unit price cannot be negative. ' + 'x'.repeat(300),
+    fix_field: 'unit_price',
+    fix_value: '5.00',
+  })
+  const inv = await createInvoice(token, {
+    entity_id: entity.id,
+    ...cleanInvoiceFields(`INV-ENGI17-${Date.now()}`),
+    subtotal: '100',
+    vat: '7.50',
+    total: '107.50',
+    line_items: [
+      { description: 'Widget A', quantity: '1', unit_price: '105.00', line_total: '105.00' },
+      { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '-5.00' },
+      { description: marker, quantity: '1', unit_price: '0.00', line_total: '0.00' },
+    ],
+  })
+  const before = (await getInvoice(token, inv.id)).line_items!
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${inv.id}` })
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await page.getByTestId('revalidate').click()
+
+  const violations = page.getByTestId('violations-table')
+  const row = violations.locator('tr').filter({ hasText: 'line-cost-non-negative' }).filter({ has: page.getByTestId('violation-explain') })
+  const explain = row.getByTestId('violation-explain')
+  await expect(explain).toBeVisible()
+  await explain.click()
+
+  const panel = violations.getByTestId('explain-panel')
+  await expect(panel.getByTestId('explain-text')).toContainText('cannot be negative')
+  await expect(panel.getByTestId('explain-fix')).toHaveText('Line 2 · Unit price: -5.00 → 5.00')
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 900 })
+      const cell = explain.locator('xpath=ancestor::td[1]')
+      await settleAnimations(cell, explain, violations, panel)
+      await expect
+        .poll(async () => enclosesRect((await cell.boundingBox())!, (await explain.boundingBox())!, 1), {
+          message: `violation-explain sits inside its table cell at ${width}px`,
+        })
+        .toBe(true)
+      await expect
+        .poll(async () => enclosesRect((await violations.boundingBox())!, (await panel.boundingBox())!, 1), {
+          message: `explain-panel sits inside violations-table at ${width}px`,
+        })
+        .toBe(true)
+      await assertPageDoesNotScrollSideways(page, `detail at ${width}px`)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  await panel.getByTestId('explain-accept').click()
+  await expect(page.getByTestId('stale-verdict')).toBeVisible()
+
+  await expect
+    .poll(async () => (await getInvoice(token, inv.id)).line_items![1].unit_price, { message: 'line 2 unit_price saved' })
+    .toMatch(/^5(\.0+)?$/)
+  const after = (await getInvoice(token, inv.id)).line_items!
+  expect(after, 'still three lines').toHaveLength(3)
+  expect(after[0], 'line 1 unchanged').toEqual(before[0])
+  expect(after[2], 'line 3 unchanged').toEqual(before[2])
+
+  await page.getByTestId('revalidate').click()
+  await expect(page.getByTestId('stale-verdict')).toBeHidden()
+  await expect
+    .poll(async () => (await getInvoice(token, inv.id)).violations.map((v) => v.rule_key), { message: 'the negative-line rule clears' })
+    .not.toContain('line-cost-non-negative')
+  await expect(page.getByTestId('violations-table')).not.toContainText('line-cost-non-negative')
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

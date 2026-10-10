@@ -1140,6 +1140,55 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
+
+  test('RX-04: a rule break reads like its inconsistent sibling on the deployed build', async ({ page }) => {
+    test.setTimeout(420_000)
+    const errors = collectErrors(page)
+
+    await extractOneDocument(page, 'ENGI-18 rule break')
+    // Read-side only: total becomes a rule break (extraction.ReasonRuleBreak); subtotal stays inconsistent.
+    const MESSAGE = Array.from({ length: 50 }, (_, i) => `rule${i}`).join(' ').slice(0, 300).trimEnd()
+    const DETAIL_GLOB = /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/
+    await page.route(DETAIL_GLOB, async (route) => {
+      if (route.request().method() !== 'GET') return route.continue()
+      const response = await route.fetch()
+      const body = (await response.json()) as ExtractionDetail
+      const fields = body.fields.map((f) =>
+        f.name === 'total' ? { ...f, reason: 'rule_break', rules: [{ key: 'total_sum', message: MESSAGE }] } : f,
+      )
+      await route.fulfill({ response, json: { ...body, fields } })
+    })
+    try {
+      await openExtractionReview(page)
+
+      const cell = page.getByTestId('extraction-field-total')
+      const pill = cell.getByText('BREAKS A RULE', { exact: true })
+      const sibling = page.getByTestId('extraction-field-subtotal').getByText("DOESN'T ADD UP", { exact: true })
+      await expect(pill, 'the rule break must draw its pill').toBeVisible({ timeout: 60_000 })
+      await expect(sibling, 'the inconsistent sibling must keep its pill').toBeVisible()
+
+      const look = (loc: Locator) =>
+        loc.evaluate((el) => {
+          const cs = getComputedStyle(el)
+          return { color: cs.color, background: cs.backgroundColor, border: cs.borderTopColor, fontSize: cs.fontSize }
+        })
+      expect(await look(pill), 'the rule-break pill is styled apart from its inconsistent sibling').toEqual(await look(sibling))
+
+      const note = cell.getByText(MESSAGE, { exact: true })
+      await expect(note, 'the note must carry the whole rule message').toBeVisible()
+      const noteBox = (await note.boundingBox())!
+      const cellBox = (await cell.boundingBox())!
+      expect(noteBox.x + noteBox.width, 'the note spills out of its cell').toBeLessThanOrEqual(cellBox.x + cellBox.width + 0.5)
+      const scroll = await cell.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+      expect(scroll.scrollWidth, 'the cell scrolls sideways').toBeLessThanOrEqual(scroll.clientWidth)
+
+      expect(await page.getByTestId('extraction-fields').innerText(), 'the raw code reached the screen').not.toContain('rule_break')
+    } finally {
+      await page.unroute(DETAIL_GLOB)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
 })
 
 test.describe('ENGI-16 import review opens the editor at the line', () => {

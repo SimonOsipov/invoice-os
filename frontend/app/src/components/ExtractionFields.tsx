@@ -328,7 +328,7 @@ export function ExtractionFields({
                 // instead. mock.go gives total, subtotal and buyer_tin no region and a typed
                 // correction leaves the region alone, so the cue outlives the reason otherwise.
                 const settled = correctedMarker(f.corrected, f.region)
-                const note = settled === null ? fieldNote(f.reason, f.name) : null
+                const note = settled === null ? fieldNote(f.reason, f.name, f.rules) : null
                 // One slot, and the reason outranks the region cue.
                 const cue = f.region === null ? NO_REGION : null
                 // The gate is the REASON first -- a field can carry alternatives the extractor

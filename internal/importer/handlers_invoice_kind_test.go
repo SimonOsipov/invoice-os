@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -95,5 +96,18 @@ func TestCreateHandler_TheSavedMappingHoldsNoDefault(t *testing.T) {
 	}
 	if got := spy.calls[0].mapping; len(got) != 1 || got["invoice_number"] != "Invoice No" {
 		t.Errorf("saved mapping = %v, want only invoice_number", got)
+	}
+}
+
+func TestCreateHandler_ADefaultWithAMappedKindIs400FromTheRealService(t *testing.T) {
+	id := testIdentity()
+	mappingJSON := mustMappingJSON(t, map[string]string{"invoice_number": "Invoice No", "invoice_kind": "Kind"})
+	open := newFakeDocOpen("data.csv", "text/csv", csvBody(t, []string{"Invoice No", "Kind"}, [][]string{{"INV-1", "B2C"}}))
+	body, ct := buildImportForm(t, uuid.NewString(), mappingJSON, open.doc.ID,
+		importPart{field: "default_invoice_kind", content: []byte("B2B")})
+	rec, raw, resp := doImportSave(t, (&Service{}).Import, open.fn(), (&saveSpy{}).fn(), nil, &id, "", ct, body)
+	want := "default_invoice_kind cannot be set when invoice_kind is mapped"
+	if rec.Code != http.StatusBadRequest || !strings.Contains(resp.Error, want) {
+		t.Errorf("status = %d, error = %q, want 400 containing %q (body=%s)", rec.Code, resp.Error, want, raw)
 	}
 }

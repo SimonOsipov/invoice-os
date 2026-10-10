@@ -161,7 +161,10 @@ func TestMain_UnreadableMainRefExitsTwo(t *testing.T) {
 // migration reads as already on main and the reverse-order break goes silent.
 func TestMain_ReverseOrderMergeFailsWhenMainIsTheBeforeSha(t *testing.T) {
 	if os.Getenv("MIGRATIONORDER_RUN_MAIN") == "2" {
-		os.Args = []string{"migrationorder", "-base", os.Getenv("MO_BEFORE"), "-head", "HEAD", "-main", os.Getenv("MO_MAIN")}
+		os.Args = []string{"migrationorder", "-base", os.Getenv("MO_BEFORE"), "-head", os.Getenv("MO_HEAD")}
+		if m := os.Getenv("MO_MAIN"); m != "" {
+			os.Args = append(os.Args, "-main", m)
+		}
 		main()
 		return
 	}
@@ -198,10 +201,15 @@ func TestMain_ReverseOrderMergeFailsWhenMainIsTheBeforeSha(t *testing.T) {
 	before := run("rev-parse", "HEAD")
 	run("merge", "-q", "--no-ff", "pr2", "-m", "m2")
 
-	exit := func(mainRef string) int {
+	run("checkout", "-qb", "pr3", "pr2~1")
+	run("commit", "-q", "--allow-empty", "-m", "pr3")
+	pr3 := run("rev-parse", "HEAD")
+	run("checkout", "-q", "main")
+
+	exit := func(mainRef, head string) int {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestMain_ReverseOrderMergeFailsWhenMainIsTheBeforeSha$")
 		cmd.Dir = repo
-		cmd.Env = append(os.Environ(), "MIGRATIONORDER_RUN_MAIN=2", "MO_BEFORE="+before, "MO_MAIN="+mainRef)
+		cmd.Env = append(os.Environ(), "MIGRATIONORDER_RUN_MAIN=2", "MO_BEFORE="+before, "MO_HEAD="+head, "MO_MAIN="+mainRef)
 		err := cmd.Run()
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
@@ -212,11 +220,16 @@ func TestMain_ReverseOrderMergeFailsWhenMainIsTheBeforeSha(t *testing.T) {
 		}
 		return 0
 	}
-	if got := exit(before); got != 1 {
+	if got := exit(before, "HEAD"); got != 1 {
 		t.Fatalf("-main=before sha: want exit 1 (violation), got %d", got)
 	}
-	// Positive pair: main already holding the file skips it.
-	if got := exit("HEAD"); got != 0 {
-		t.Fatalf("-main=HEAD: want exit 0 (skipped), got %d", got)
+	// Positive pair: a head outside main whose file main already holds is skipped.
+	if got := exit("main", pr3); got != 0 {
+		t.Fatalf("head outside main, file on main: want exit 0 (skipped), got %d", got)
+	}
+	// Push to main with the default -main: main == head after the merge.
+	run("update-ref", "refs/remotes/origin/main", "HEAD")
+	if got := exit("", "HEAD"); got != 1 {
+		t.Fatalf("push to main, -main=origin/main==head: want exit 1, got %d", got)
 	}
 }

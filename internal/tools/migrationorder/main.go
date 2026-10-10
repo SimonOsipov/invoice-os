@@ -43,6 +43,11 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Head already in main (push to main): nothing is "already on main" to skip.
+	if exec.Command("git", "merge-base", "--is-ancestor", *head, *mainRef).Run() == nil {
+		onMain = ""
+	}
+
 	violations, err := Check(SkipOnMain(lines(added), lines(onMain)), lines(onBase))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)

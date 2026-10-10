@@ -393,7 +393,7 @@ export function clampFilterText(s: string): string {
 }
 
 // One entry of editInvoice's optional `line_items` array (lineItemReq,
-// handlers.go:42-48, INVED-01-05). Five nullable strings -- NO `id` and NO `line_no`:
+// handlers.go:42-48, INVED-01-05). Five nullable strings and no `line_no`:
 // line_no is system-assigned 1..N by array POSITION ([line-no-by-position]) and a
 // client-supplied one is silently ignored, so this array's order IS the only line
 // ordering the wire carries.

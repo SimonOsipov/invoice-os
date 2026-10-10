@@ -175,9 +175,11 @@ func main() {
 	// One sink for both hand-off paths; the sink bounds each call and never follows a redirect.
 	sink := gateway.NewHTTPContactSink(routed["notifications"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 
+	pending := gateway.NewHTTPPendingInviteLookup(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
+
 	// Public registration, outside /api/ and the verifier, in every build. Register is
 	// CORS-wrapped for the landing page; the OPTIONS route stops the POST route 405ing the preflight.
-	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink)
+	reg := registrationHandlers(probed["auth"], siteURL, registerMinResponse, app.Logger, sink, pending)
 	app.Mux.Handle("POST /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("OPTIONS /auth/register", withCORS(reg.Register))
 	app.Mux.Handle("POST /auth/resend-verification", withCORS(reg.ResendVerification))
@@ -188,7 +190,8 @@ func main() {
 	app.Mux.Handle("GET /auth/verify", verifyPage)
 	app.Mux.Handle("POST /auth/verify", reg.Verify)
 	previewer := gateway.NewHTTPInvitationPreviewer(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
-	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, reg.RegisterPerIP, previewer, app.Logger)
+	registrations := gateway.NewHTTPInvitationRegistrations(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
+	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, reg.RegisterPerIP, previewer, registrations, app.Logger)
 	app.Mux.Handle("POST /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("OPTIONS /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("POST /auth/invitation/register", withCORS(inviteeRegister))
@@ -208,6 +211,7 @@ func main() {
 	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("OPTIONS /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("POST /auth/reset-password", resetPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, app.Logger))
+	app.Mux.Handle("POST /auth/invitation/password", invitationPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, sink, app.Logger))
 
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
 	platform.MockIssuer = "absent"
@@ -289,10 +293,10 @@ type registration struct {
 }
 
 // invitationHandlers builds the accept-page preview handler and the invitee-registration handler.
-// Registration shares perIP with /auth/register and answers 503 while any of authURL, siteURL or perIP is nil; the preview needs none of them.
-func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, perIP *gateway.SignInThrottle, preview gateway.InvitationPreviewer, log *slog.Logger) (invitation, register http.Handler) {
+// Registration shares perIP with /auth/register and answers 503 while any of authURL, siteURL, perIP, registrations.Claim or registrations.Release is nil; the preview needs none of them.
+func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, perIP *gateway.SignInThrottle, preview gateway.InvitationPreviewer, registrations gateway.InvitationRegistrations, log *slog.Logger) (invitation, register http.Handler) {
 	invitation = gateway.InvitationHandler(preview, log)
-	if authURL == nil || siteURL == nil || perIP == nil {
+	if authURL == nil || siteURL == nil || perIP == nil || registrations.Claim == nil || registrations.Release == nil {
 		return invitation, gateway.RegistrationNotConfigured()
 	}
 	client := &http.Client{
@@ -300,7 +304,7 @@ func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, pe
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
-	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, perIP, enforce, log, preview)
+	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, perIP, enforce, log, registrations)
 }
 
 // newJWKSClient builds the JWKS fetch client.
@@ -309,29 +313,30 @@ func newJWKSClient() *http.Client {
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
-// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification, RequestPasswordReset and Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
-// On a PR preview the per-client limits log but do not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
-func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink) registration {
+// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification, RequestPasswordReset and Verify answer 503 (TestRegistrationHandlers_NotConfigured503). A nil pending lookup makes Register alone answer 503 (TestRegistrationHandlers_NilPendingLookupIsNotConfigured).
+// On a PR preview the per-client limits (register, resend, reset, demo-request) log but do not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
+func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink, pending gateway.PendingInviteLookup) registration {
+	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	demoPerIP := gateway.NewSignInThrottle("demo-request", gateway.DemoRequestPerIP, gateway.DemoRequestMaxKeys, gateway.DemoRequestWindow, time.Now)
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
-		return registration{Register: nc, Verify: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, log)}
+		return registration{Register: nc, Verify: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, demoPerIP, enforce, log)}
 	}
 	client := &http.Client{
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
 	// Resend and reset share both throttles: one budget per address and per client.
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	registerPerIP := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
 	return registration{
-		Register:             gateway.RegisterHandler(authURL, client, minResponse, registerPerIP, enforce, log),
+		Register:             gateway.RegisterHandler(authURL, client, minResponse, registerPerIP, enforce, log, pending),
 		RegisterPerIP:        registerPerIP,
 		Verify:               gateway.VerifyHandler(authURL, siteURL, client, log, sink),
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
 		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
-		DemoRequest:          gateway.DemoRequestHandler(sink, log),
+		DemoRequest:          gateway.DemoRequestHandler(sink, demoPerIP, enforce, log),
 	}
 }
 
@@ -342,6 +347,15 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
+}
+
+// invitationPasswordHandler builds the invitee set-password handler; a nil authURL or siteURL makes it answer 503.
+func invitationPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, sink gateway.ContactSink, log *slog.Logger) http.Handler {
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, signIn, sink, log)
 }
 
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.

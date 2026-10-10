@@ -14,8 +14,9 @@
 // "no database HANDLE is acquired outside the allowlist" — a pool method, a bare
 // connection, a constructed pool and a database/sql handle all count, because a
 // monopoly with one named DSN hole left open is not a monopoly. Scan 2 says the
-// only HTTP-path callers of the identity-free core are the four deliberate
-// exemptions, Store.Me, Store.ProvisionWorkspace, Store.AcceptInvitation and Store.PreviewInvitation. Together they make the
+// only HTTP-path callers of the identity-free core are the deliberate
+// exemptions, Store.Me, Store.ProvisionWorkspace, Store.AcceptInvitation, Store.PreviewInvitation,
+// Store.InvitationPendingForEmail, Store.ClaimInvitationRegistration and Store.ReleaseInvitationRegistration. Together they make the
 // gated seam a monopoly, so every route that touches the database is gated BY
 // CONSTRUCTION. Scan 3 keeps scRouteVerdicts
 // complete. Core AC 6 = 1 + 2 + 3.
@@ -204,6 +205,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"}, // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
 	{file: "internal/notifications/store.go"},                                    // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
 	{file: "internal/notifications/worker.go"},                                   // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
+	{file: "internal/notifications/deal.go"},                                     // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,
@@ -664,7 +666,7 @@ func TestRLS_NoDirectPoolUseOutsideTheSeam(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Scan 2 — the identity-free core is worker, CLI and four exemptions only
+// Scan 2 — the identity-free core is worker, CLI and exemptions only
 // ---------------------------------------------------------------------------
 
 // scCoreExemption is one exemption from the ungated core. Exactly one of pkg,
@@ -700,19 +702,22 @@ func (e scCoreExemption) covers(s scCoreSite) bool {
 
 // scCoreAllowlist is every caller allowed to reach the identity-free core.
 var scCoreAllowlist = []scCoreExemption{
-	{pkg: "internal/submission"},                                  // River job workers; the job row carries its tenant and there is no request identity to gate
-	{pkg: "internal/reconciliation"},                              // the sweep worker, same shape: a schedule opened it, not a caller
-	{pkg: "internal/demodocs"},                                    // boot-time document seeder; it runs to completion before the first request is served
-	{pkg: "internal/demopolicy"},                                  // boot-time approval-policy seeder, on the same pre-request boot phase
-	{file: "internal/extraction/store.go"},                        // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
-	{file: "internal/extraction/worker.go"},                       // the extraction River worker itself, same shape: the job row carries the tenant
-	{file: "internal/extraction/anchor_store.go"},                 // the learned-rule read, same shape as store.go: no request path reaches it
-	{file: "internal/importer/backfill.go"},                       // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
-	{file: "internal/invoice/revalidate.go"},                      // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
-	{file: "internal/tenancy/store.go", fn: "Me"},                 // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
-	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"}, // the caller has no membership yet; the seam would refuse before the closure
-	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},  // the token is the only credential and names the invite; there is no caller to gate
-	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},   // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
+	{pkg: "internal/submission"},                                                           // River job workers; the job row carries its tenant and there is no request identity to gate
+	{pkg: "internal/reconciliation"},                                                       // the sweep worker, same shape: a schedule opened it, not a caller
+	{pkg: "internal/demodocs"},                                                             // boot-time document seeder; it runs to completion before the first request is served
+	{pkg: "internal/demopolicy"},                                                           // boot-time approval-policy seeder, on the same pre-request boot phase
+	{file: "internal/extraction/store.go"},                                                 // the extraction worker's store; a River job carries its own tenant and there is no request identity to gate
+	{file: "internal/extraction/worker.go"},                                                // the extraction River worker itself, same shape: the job row carries the tenant
+	{file: "internal/extraction/anchor_store.go"},                                          // the learned-rule read, same shape as store.go: no request path reaches it
+	{file: "internal/importer/backfill.go"},                                                // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
+	{file: "internal/invoice/revalidate.go"},                                               // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/tenancy/store.go", fn: "Me"},                                          // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
+	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"},                          // the caller has no membership yet; the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                           // the token is the only credential and names the invite; there is no caller to gate
+	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},                            // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
+	{file: "internal/tenancy/invite_registration.go", fn: "InvitationPendingForEmail"},     // a gateway-token route; there is no caller to gate
+	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},   // a gateway-token route; the token names the invite and there is no caller to gate
+	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"}, // a gateway-token route; the token names the invite and there is no caller to gate
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST
@@ -1012,6 +1017,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/workflow-roles/{key}":                      {verdict: scCovered},
 	"POST /auth/exchange":                                 {verdict: scExempt, reason: "no database; in-process code store"},
 	"POST /auth/invitation":                               {verdict: scExempt, reason: "no database; asks tenancy"},
+	"POST /auth/invitation/password":                      {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/invitation/register":                      {verdict: scExempt, reason: "no database; asks tenancy, calls GoTrue"},
 	"POST /auth/login":                                    {verdict: scExempt, reason: "unauthenticated by definition; there is no caller yet to hold a membership"},
 	"POST /auth/mock/invitation-token":                    {verdict: scExempt, reason: "mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity"},
@@ -1029,6 +1035,9 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /internal/contacts/demo-requests":               {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/contacts/registrants":                 {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate"},
 	"POST /internal/invitations/preview":                  {verdict: scExempt, reason: "no caller; the token names the invite"},
+	"POST /internal/invitations/pending":                  {verdict: scExempt, reason: "no caller; a gateway-token lookup"},
+	"POST /internal/invitations/register":                 {verdict: scExempt, reason: "no caller; the token names the invite"},
+	"POST /internal/invitations/release":                  {verdict: scExempt, reason: "no caller; the token names the invite"},
 	"POST /v1/approval-policies":                          {verdict: scCovered},
 	"POST /v1/approval-policies/{id}/publish":             {verdict: scCovered},
 	"POST /v1/documents":                                  {verdict: scCovered},

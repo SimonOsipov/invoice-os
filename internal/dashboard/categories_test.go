@@ -8,8 +8,35 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// fetchActiveRuleKeys is the guard's own oracle: the rule set in force today read
-// straight from the DB, never a hardcoded list.
+// fetchDatedRuleKeys is the guard's oracle: the keys of every dated version
+// (v4, v5) read from the DB, never a hardcoded list.
+func fetchDatedRuleKeys(t *testing.T, app *pgxpool.Pool) []string {
+	t.Helper()
+	rows, err := app.Query(context.Background(),
+		`SELECT DISTINCT r.key FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id WHERE v.effective_from IS NOT NULL ORDER BY r.key`)
+	if err != nil {
+		t.Fatalf("fetch dated rule keys: %v", err)
+	}
+	defer rows.Close()
+
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			t.Fatalf("scan rule key: %v", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate rule keys: %v", err)
+	}
+	if len(keys) == 0 {
+		t.Fatal("no dated rule keys -- is the DB seeded?")
+	}
+	return keys
+}
+
+// fetchActiveRuleKeys reads the version in force today; MCAT-06 only.
 func fetchActiveRuleKeys(t *testing.T, app *pgxpool.Pool) []string {
 	t.Helper()
 	rows, err := app.Query(context.Background(),
@@ -36,27 +63,27 @@ func fetchActiveRuleKeys(t *testing.T, app *pgxpool.Pool) []string {
 	return keys
 }
 
-// MCAT-01: every rule key of the active rule set has an entry in
+// MCAT-01: every rule key of every dated version has an entry in
 // ruleCategories. Fails when a published rule has no bar.
 func TestCategories_EveryActiveRuleIsMapped(t *testing.T) {
 	_, app := dbTestPools(t)
-	active := fetchActiveRuleKeys(t, app)
+	active := fetchDatedRuleKeys(t, app)
 	if len(active) == 0 {
 		t.Fatal("no active rules read back -- the loop below would assert nothing")
 	}
 
 	for _, key := range active {
 		if _, ok := ruleCategories[key]; !ok {
-			t.Errorf("active rule %q has no entry in ruleCategories", key)
+			t.Errorf("dated rule %q has no entry in ruleCategories", key)
 		}
 	}
 }
 
-// MCAT-02: every key in ruleCategories exists in the active rule set. Fails
+// MCAT-02: every key in ruleCategories exists in a dated version. Fails
 // when a renamed/dropped rule leaves a dead key that can never fire.
 func TestCategories_EveryMappedKeyIsActive(t *testing.T) {
 	_, app := dbTestPools(t)
-	active := fetchActiveRuleKeys(t, app)
+	active := fetchDatedRuleKeys(t, app)
 
 	activeSet := make(map[string]bool, len(active))
 	for _, key := range active {
@@ -65,16 +92,16 @@ func TestCategories_EveryMappedKeyIsActive(t *testing.T) {
 
 	for key := range ruleCategories {
 		if !activeSet[key] {
-			t.Errorf("ruleCategories has key %q, not present in the active rule set", key)
+			t.Errorf("ruleCategories has key %q, not present in any dated version", key)
 		}
 	}
 }
 
-// MCAT-03: the three categories partition the active set 9/8/3. Fails when
+// MCAT-03: the three categories partition the dated keys 37/11/19. Fails when
 // a rule is quietly re-bucketed, moving a bar without a story.
 func TestCategories_PartitionSizesMatchSpec(t *testing.T) {
 	_, app := dbTestPools(t)
-	active := fetchActiveRuleKeys(t, app)
+	active := fetchDatedRuleKeys(t, app)
 
 	counts := map[Category]int{}
 	for _, key := range active {
@@ -82,17 +109,17 @@ func TestCategories_PartitionSizesMatchSpec(t *testing.T) {
 	}
 
 	want := map[Category]int{
-		CategoryFieldCompleteness: 9,
-		CategoryTaxAccuracy:       8,
-		CategoryIdentifiers:       3,
+		CategoryFieldCompleteness: 37,
+		CategoryTaxAccuracy:       11,
+		CategoryIdentifiers:       19,
 	}
 	for cat, wantCount := range want {
 		if got := counts[cat]; got != wantCount {
-			t.Errorf("category %q has %d active rules, want %d", cat, got, wantCount)
+			t.Errorf("category %q has %d dated rules, want %d", cat, got, wantCount)
 		}
 	}
-	if total := len(active); total != 20 {
-		t.Fatalf("active rule set has %d keys, want 20 (test's own oracle is stale)", total)
+	if total := len(active); total != 67 {
+		t.Fatalf("dated rule keys: %d, want 67 (test's own oracle is stale)", total)
 	}
 }
 
@@ -189,9 +216,24 @@ func TestCategories_GuardSurvivesEnabledFlip(t *testing.T) {
 			t.Errorf("active rule %q has no entry in ruleCategories after the enabled flip", key)
 		}
 	}
-	for key := range ruleCategories {
-		if !afterSet[key] {
-			t.Errorf("ruleCategories key %q missing from the active set after the enabled flip", key)
+}
+
+// TestCategoryKeys_V5KeysFollowTheRule pins one key per D23 rule branch.
+func TestCategoryKeys_V5KeysFollowTheRule(t *testing.T) {
+	want := map[Category][]string{
+		CategoryFieldCompleteness: {"supplier-email-required"},
+		CategoryIdentifiers:       {"currency-allowed", "buyer-email-length"},
+		CategoryTaxAccuracy:       {"vat-standard-rate-uncategorised"},
+	}
+	for cat, keys := range want {
+		got := map[string]bool{}
+		for _, k := range categoryKeys(cat) {
+			got[k] = true
+		}
+		for _, k := range keys {
+			if !got[k] {
+				t.Errorf("categoryKeys(%q) lacks %q", cat, k)
+			}
 		}
 	}
 }

@@ -3332,8 +3332,9 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   // buyer_tin with no assertion noticing. A read at one index was never a key-set claim.
   for (const f of detail.fields) {
     expect(Object.keys(f).sort(), `${f.name}'s key set drifted from internal/extraction/reader.go`).toEqual(
-      ['alternatives', 'corrected', 'name', 'reason', 'region', 'value'].sort(),
+      ['alternatives', 'corrected', 'name', 'reason', 'region', 'rules', 'value'].sort(),
     )
+    expect(Array.isArray(f.rules), `${f.name}'s rules arrived as null, not []`).toBe(true)
   }
 
   // The field SET itself, twenty-three names, from the wired extractor's reading of

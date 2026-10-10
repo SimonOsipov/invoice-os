@@ -1397,14 +1397,18 @@ describe('ReviewRow row-expansion: Explain and Accept (ENGI-17-06)', () => {
     patch?: () => Promise<MockResponse>
     validate?: () => Promise<MockResponse>
     keep?: () => Promise<MockResponse>
+    afterPatch?: Partial<InvoiceDetailRecord>
   }
 
   function setup(o: Opts = {}) {
-    const detail = detailFixture({ status: 'draft', can_edit: true, vat: '75.00', line_items: lines, violations: [LINE_V, VAT_V], ...o.detail })
+    let detail = detailFixture({ status: 'draft', can_edit: true, vat: '75.00', line_items: lines, violations: [LINE_V, VAT_V], ...o.detail })
     const fetchMock = vi.fn((url: string, init?: { method?: string; body?: string }) => {
       const m = init?.method ?? 'GET'
       if (url.endsWith('/explain')) return Promise.resolve(reply(o.explain ?? OK_FIX))
-      if (m === 'PATCH') return (o.patch ?? (() => Promise.resolve(reply(detail))))()
+      if (m === 'PATCH') {
+        if (o.afterPatch) detail = { ...detail, ...o.afterPatch }
+        return (o.patch ?? (() => Promise.resolve(reply(detail))))()
+      }
       if (url.endsWith('/validate')) return (o.validate ?? (() => Promise.resolve(reply(detail))))()
       if (url.endsWith('/keep-as-is')) return (o.keep ?? (() => Promise.resolve(reply(detail))))()
       return Promise.resolve(reply(detail))
@@ -1585,5 +1589,60 @@ describe('ReviewRow row-expansion: Explain and Accept (ENGI-17-06)', () => {
     fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '999' } })
     fireEvent.click(screen.getByTestId('review-fix-save'))
     await waitFor(() => expect(calls('/inv-1', 'PATCH')).toHaveLength(1))
+  })
+  it('reviewRow_acceptClearsTheDraft', async () => {
+    const { calls } = setup({
+      explain: { status: 'ok', explanation: 'x', fix: { field: 'vat', label: 'VAT', line: null, current: '75.00', value: '80.00' } },
+      afterPatch: { vat: '80.00' },
+    })
+    await screen.findAllByTestId('review-fix-explain')
+    const input = screen.getByTestId('review-fix-input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '1' } })
+    fireEvent.change(input, { target: { value: '75.00' } })
+    fireEvent.click(explainButtons()[1])
+    const accept = (await screen.findByTestId('explain-accept')) as HTMLButtonElement
+    expect(accept.disabled).toBe(false)
+    fireEvent.click(accept)
+    await waitFor(() => expect(calls('/inv-1', 'PATCH')).toHaveLength(1))
+    expect(JSON.parse(calls('/inv-1', 'PATCH')[0][1]!.body as string)).toEqual({ vat: '80.00' })
+    await waitFor(() => expect((screen.getByTestId('review-fix-input') as HTMLInputElement).value).toBe('80.00'))
+  })
+
+  it('reviewRow_failedAcceptLeavesExplainEnabled', async () => {
+    setup({ patch: () => Promise.resolve(reply({ error: 'stale line ids' }, 400)) })
+    await screen.findAllByTestId('review-fix-explain')
+    fireEvent.click(explainButtons()[0])
+    fireEvent.click(await screen.findByTestId('explain-accept'))
+    await screen.findByTestId('explain-notice')
+    expect(explainButtons()[0].disabled).toBe(false)
+    fireEvent.click(explainButtons()[0])
+    await screen.findByTestId('explain-panel')
+    expect(screen.queryByTestId('explain-notice')).toBeNull()
+  })
+
+  it('reviewRow_noticeClearsOnSaveRevalidateAndKeep', async () => {
+    setup({ patch: () => Promise.resolve(reply({ error: 'stale line ids' }, 400)) })
+    const fail = async () => {
+      fireEvent.click(explainButtons()[0])
+      fireEvent.click(await screen.findByTestId('explain-accept'))
+      await screen.findByTestId('explain-notice')
+    }
+    await screen.findAllByTestId('review-fix-explain')
+    await fail()
+    fireEvent.click(screen.getByTestId('review-revalidate'))
+    await waitFor(() => expect(screen.queryByTestId('explain-notice')).toBeNull())
+    await waitFor(() => expect(explainButtons()[0].disabled).toBe(false))
+    await fail()
+    fireEvent.change(screen.getByTestId('review-keep-reason'), { target: { value: 'ok' } })
+    fireEvent.click(screen.getByTestId('review-keep'))
+    await waitFor(() => expect(screen.queryByTestId('explain-notice')).toBeNull())
+  })
+
+  it('reviewRow_explainTargetsTheCardsOwnViolation', async () => {
+    const { calls } = setup()
+    await screen.findAllByTestId('review-fix-explain')
+    fireEvent.click(explainButtons()[0])
+    await screen.findByTestId('explain-panel')
+    expect(JSON.parse(calls('/explain')[0][1]!.body as string)).toEqual({ rule_key: 'line-cost', path: 'line_items[2].unit_price' })
   })
 })

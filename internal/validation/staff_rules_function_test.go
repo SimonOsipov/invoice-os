@@ -156,3 +156,37 @@ func TestStaffRulesFunction_FlipsASealedVersionAndTouchesNoContent(t *testing.T)
 		t.Errorf("the version row changed:\n before %s\n after  %s", versionBefore, versionAfter)
 	}
 }
+
+// AC3/AC7: a key that exists only in a scheduled version is unknown to the function.
+func TestStaffRulesFunction_KeyOnlyInAScheduledVersionReturnsZeroRows(t *testing.T) {
+	super, app := dbTestPools(t)
+	restoreRulesOnCleanup(t, super)
+	actor := seedRulesStaffRow(t, super)
+
+	versionID, _ := seedVersion(t, super)
+	const scheduledOnly = "scheduled-only-qa-rule"
+	scheduled := seedRule(t, super, versionID, scheduledOnly)
+	sealAndDate(t, super, versionID, "3001-01-01")
+	if !ruleEnabledByID(t, super, scheduled) {
+		t.Fatal("the scheduled fixture starts disabled: the test cannot discriminate")
+	}
+
+	rows, err := app.Query(context.Background(), `SELECT was_enabled FROM set_rule_enabled($1::uuid, $2, false)`, actor, scheduledOnly)
+	if err != nil {
+		t.Fatalf("set_rule_enabled as invoice_app: %v (is the migration applied?)", err)
+	}
+	n := 0
+	for rows.Next() {
+		n++
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("returned %d rows for a key only a scheduled version carries, want 0", n)
+	}
+	if !ruleEnabledByID(t, super, scheduled) {
+		t.Error("the scheduled version's rule was disabled")
+	}
+}

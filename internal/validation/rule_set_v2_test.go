@@ -653,8 +653,6 @@ func detectionHitAllowed(file, line string) bool {
 	return strings.HasPrefix(file, "internal/validation/") ||
 		file == "e2e/topology/targets.ts" ||
 		file == "frontend/app/src/lib/validationApi.test.ts" ||
-		// ENGI-13-01: names the permanent historical v1 row as the shadow-table target.
-		file == "internal/platform/db/rules_set_enabled_rls_test.go" ||
 		file == "migrations/20260711121327_seed_mbs_v1.sql" ||
 		file == "migrations/20260715120000_line_rules.sql" ||
 		// M4-04-01's own migration: Category B by the same rule as the two

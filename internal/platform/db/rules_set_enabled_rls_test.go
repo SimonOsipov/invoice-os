@@ -4,6 +4,7 @@ package db_test
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"reflect"
 	"sync"
@@ -35,7 +36,7 @@ type rowsQuerier interface {
 }
 
 // callSetRuleEnabled returns the function's rows, or the call's error.
-func callSetRuleEnabled(q rowsQuerier, actor, key string, enabled bool) ([]ruleSwitched, error) {
+func callSetRuleEnabled(q rowsQuerier, actor, key, enabled any) ([]ruleSwitched, error) {
 	rows, err := q.Query(context.Background(), setRuleEnabledSQL, actor, key, enabled)
 	if err != nil {
 		return nil, err
@@ -193,7 +194,7 @@ func TestRLS_SetRuleEnabledIgnoresATempTableShadow(t *testing.T) {
 	var v1 string
 	if err := h.super.QueryRow(ctx, `SELECT v.id::text FROM public.rule_set_versions v JOIN public.rules r
 	                                 ON r.rule_set_version_id = v.id AND r.key = $1
-	                                 WHERE v.version = 1`, killKey).Scan(&v1); err != nil {
+	                                 WHERE v.version < $2 ORDER BY v.version LIMIT 1`, killKey, versionNumberOf(t, ver)).Scan(&v1); err != nil {
 		t.Fatalf("the superseded v1 row of %s: %v", killKey, err)
 	}
 	if v1 == ver {
@@ -209,7 +210,7 @@ func TestRLS_SetRuleEnabledIgnoresATempTableShadow(t *testing.T) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	for _, s := range []string{
-		`CREATE TEMP TABLE rule_set_versions AS SELECT * FROM public.rule_set_versions WHERE version = 1`,
+		fmt.Sprintf(`CREATE TEMP TABLE rule_set_versions AS SELECT * FROM public.rule_set_versions WHERE id = '%s'`, v1),
 		`UPDATE rule_set_versions SET effective_from = DATE '2000-01-01'`,
 		`GRANT ALL ON pg_temp.rule_set_versions TO invoice_migrator`,
 	} {
@@ -280,7 +281,7 @@ func TestRLS_SetRuleEnabledRefusesAnActorWithoutTheRulesRole(t *testing.T) {
 	granted := uuid.NewString()
 	seedRulesStaff(t, granted)
 
-	for name, actor := range map[string]string{"no staff row": uuid.NewString(), "rules_role false": plain} {
+	for name, actor := range map[string]any{"no staff row": uuid.NewString(), "rules_role false": plain, "NULL actor": nil} {
 		got, err := callSetRuleEnabled(h.app, actor, killKey, false)
 		if pgCode(err) != "42501" {
 			t.Errorf("%s: SQLSTATE %q, want 42501 (err %v, rows %v)", name, pgCode(err), err, got)
@@ -290,6 +291,34 @@ func TestRLS_SetRuleEnabledRefusesAnActorWithoutTheRulesRole(t *testing.T) {
 
 	if got := mustSwitch(t, h.app, granted, killKey, false); !got.was {
 		t.Errorf("control: a rules-role actor got %+v, want was_enabled true", got)
+	}
+}
+
+// AC6: the role is read on every call, so a revoke between two calls of one tx refuses the second.
+func TestRLS_SetRuleEnabledRefusesAnActorRevokedMidSession(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	restoreRulesEnabledOnCleanup(t)
+	actor := uuid.NewString()
+	seedRulesStaff(t, actor)
+	ver := requireKeyEnabledInForce(t, killKey)
+
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin app tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	mustSwitch(t, tx, actor, killKey, false)
+	if _, err := h.super.Exec(ctx, `UPDATE public.staff_members SET rules_role = false WHERE user_id = $1`, actor); err != nil {
+		t.Fatalf("revoke the rules role: %v", err)
+	}
+	_, err = callSetRuleEnabled(tx, actor, killKey, true)
+	if pgCode(err) != "42501" {
+		t.Errorf("call after the revoke: SQLSTATE %q, want 42501: %v", pgCode(err), err)
+	}
+	_ = tx.Rollback(ctx)
+	if !ruleEnabledAt(t, ver, killKey) {
+		t.Error("the rolled-back tx left the rule disabled")
 	}
 }
 
@@ -347,11 +376,34 @@ func TestRLS_SetRuleEnabledUnknownKeyAndNoOp(t *testing.T) {
 	}
 	requireRulesUnchanged(t, snap, "an unknown key")
 
+	if got, err := callSetRuleEnabled(h.app, actor, nil, false); err != nil || len(got) != 0 {
+		t.Errorf("NULL key returned %v, err %v, want zero rows", got, err)
+	}
+	requireRulesUnchanged(t, snap, "a NULL key")
+
+	if got, err := callSetRuleEnabled(h.app, actor, killKey, nil); err == nil && len(got) != 0 {
+		t.Errorf("NULL enabled returned %v with no error, want an error or zero rows", got)
+	}
+	requireRulesUnchanged(t, snap, "a NULL enabled")
+
+	var xminBefore string
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT xmin::text FROM public.rules WHERE rule_set_version_id = $1 AND key = $2`, ver, killKey).Scan(&xminBefore); err != nil {
+		t.Fatalf("read xmin: %v", err)
+	}
 	same := mustSwitch(t, h.app, actor, killKey, true)
 	if !same.was || same.versionID != ver {
 		t.Errorf("enable of an enabled rule returned %+v, want was_enabled true in %s", same, ver)
 	}
 	requireRulesUnchanged(t, snap, "enabling an enabled rule")
+	var xminAfter string
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT xmin::text FROM public.rules WHERE rule_set_version_id = $1 AND key = $2`, ver, killKey).Scan(&xminAfter); err != nil {
+		t.Fatalf("re-read xmin: %v", err)
+	}
+	if xminAfter != xminBefore {
+		t.Errorf("a no-op request rewrote the row: xmin %s -> %s", xminBefore, xminAfter)
+	}
 
 	mustSwitch(t, h.app, actor, killKey, false)
 	again := mustSwitch(t, h.app, actor, killKey, false)

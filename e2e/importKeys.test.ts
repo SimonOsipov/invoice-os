@@ -9,12 +9,13 @@ import { AIR07_ROW3_ANSWER, IMPORT_KEYS, nullImportKeys } from './importFixtures
 
 const here = dirname(fileURLToPath(import.meta.url))
 
-// The two spec files cannot be imported (Playwright registers their tests); read the literal.
+// The two spec files cannot be imported (Playwright registers their tests); read the literal with comments stripped.
 function answerLiteral(file: string, name: string): string {
   const src = readFileSync(join(here, file), 'utf8')
   const start = src.indexOf(`const ${name}`)
   expect(start, `${name} in ${file}`).toBeGreaterThanOrEqual(0)
-  return src.slice(start, src.indexOf('\n}', start))
+  const literal = src.slice(start, src.indexOf('\n}', start))
+  return literal.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 }
 
 describe('IMPORT_KEYS', () => {

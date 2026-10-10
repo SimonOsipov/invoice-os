@@ -25,7 +25,10 @@ const CONSENT_TEXT_FIXTURE =
 beforeEach(() => {
   h.captureApiFailure.mockReset()
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
 
 async function rejection(thunk: () => Promise<unknown>): Promise<unknown> {
   try {
@@ -35,6 +38,10 @@ async function rejection(thunk: () => Promise<unknown>): Promise<unknown> {
   }
   throw new Error('expected a rejection')
 }
+
+const timeoutError = () => new DOMException('signal timed out', 'TimeoutError')
+const abortError = () => new DOMException('The operation was aborted.', 'AbortError')
+const spyTimeout = (signal: AbortSignal) => vi.spyOn(AbortSignal, 'timeout').mockReturnValue(signal)
 
 const submit = () => submitDemoLead(TARGET, FULL_LEAD, CONSENT_TEXT_FIXTURE)
 
@@ -48,6 +55,58 @@ describe('submitDemoLead reporting', () => {
 
     expect(await rejection(submit)).toBe(failure)
 
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
+    expect(h.captureApiFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'network', status: null, method: 'POST', url: submissionUrl(TARGET) }),
+    )
+  })
+
+  it.each([
+    ['TimeoutError reason', (init: RequestInit) => (init.signal as AbortSignal).reason],
+    ['AbortError', () => abortError()],
+  ])('submitDemoLead_reportsATimeoutOnceInEitherRejectionShape %s', async (_label, makeFailure) => {
+    const signal = AbortSignal.abort(timeoutError())
+    const timeoutSpy = spyTimeout(signal)
+    let failure: unknown
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => Promise.reject((failure = makeFailure(init))))
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await rejection(submit)).toBe(failure)
+
+    expect(timeoutSpy).toHaveBeenCalledWith(15_000)
+    expect(fetchMock.mock.calls[0][1].signal).toBe(signal)
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
+    const arg = h.captureApiFailure.mock.calls[0][0] as object
+    expect(arg).toMatchObject({ kind: 'network', status: null, method: 'POST', url: submissionUrl(TARGET) })
+    expect(Object.keys(arg).sort()).toEqual(['error', 'kind', 'method', 'status', 'url'])
+  })
+
+  it.each([
+    ['AbortSignal.abort()', () => AbortSignal.abort()],
+    ["AbortSignal.abort('why')", () => AbortSignal.abort('why')],
+  ])('submitDemoLead_reportsNoAbortWhoseReasonIsNotATimeout %s', async (_label, makeSignal) => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.reject(abortError())))
+    spyTimeout(makeSignal())
+    await submit().catch(() => undefined)
+    expect(h.captureApiFailure).not.toHaveBeenCalled()
+
+    // Control: the same rejection on a timed-out signal is reported.
+    spyTimeout(AbortSignal.abort(timeoutError()))
+    await submit().catch(() => undefined)
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
+  })
+
+  it('submitDemoLead_reportsOnceWhenAbortSignalTimeoutThrows', async () => {
+    const failure = new TypeError('AbortSignal.timeout is not a function')
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => {
+      throw failure
+    })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await rejection(submit)).toBe(failure)
+
+    expect(fetchMock).not.toHaveBeenCalled()
     expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
     expect(h.captureApiFailure).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'network', status: null, method: 'POST', url: submissionUrl(TARGET) }),
@@ -129,9 +188,11 @@ describe('submitDemoLead reporting', () => {
       vi.fn().mockResolvedValue({ ok: false, status: 500 }),
       vi.fn().mockResolvedValue({ ok: false, status: 404 }),
       vi.fn().mockRejectedValue(new TypeError('Failed to fetch')),
+      vi.fn().mockRejectedValue(abortError()),
     ]
-    for (const fetchMock of rows) {
+    for (const [i, fetchMock] of rows.entries()) {
       h.captureApiFailure.mockReset()
+      if (i === rows.length - 1) spyTimeout(AbortSignal.abort(timeoutError()))
       vi.stubGlobal('fetch', fetchMock)
       await submit().catch(() => undefined)
 

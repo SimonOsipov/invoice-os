@@ -118,15 +118,17 @@ export async function submitDemoLead(
 ): Promise<void> {
   const url = submissionUrl(t)
   let res: Response
+  let signal: AbortSignal | undefined
   try {
+    signal = AbortSignal.timeout(15_000) // inside the try: a browser without it still gets reported
     res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildSubmission(lead, consentText)),
-      signal: AbortSignal.timeout(15_000),
+      signal,
     })
   } catch (e) {
-    reportApiFailure(e, { method: 'POST', url })
+    reportApiFailure(e, { method: 'POST', url, signal })
     throw e
   }
   // Status only, NEVER a field value — the rejection message is surfaced nowhere

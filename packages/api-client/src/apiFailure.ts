@@ -5,8 +5,12 @@ const isNamed = (v: unknown, name: string): boolean => v instanceof DOMException
 
 // Q12: a caller cancel is not an issue; a timeout is a network failure.
 export function countsAsIssue(err: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) {
+    if (!isNamed(signal.reason, 'TimeoutError')) return false
+    // Some browsers reject a timed-out fetch with AbortError; the reason names the cause.
+    if (isNamed(err, 'AbortError')) return true
+  }
   if (isNamed(err, 'AbortError')) return false
-  if (signal?.aborted && !isNamed(signal.reason, 'TimeoutError')) return false
   if (err instanceof ApiError) {
     return err.kind === 'http' ? err.status !== null && err.status >= 500 && err.status <= 599 : true
   }

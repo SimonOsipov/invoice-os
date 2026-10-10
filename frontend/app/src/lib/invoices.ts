@@ -398,6 +398,8 @@ export function clampFilterText(s: string): string {
 // client-supplied one is silently ignored, so this array's order IS the only line
 // ordering the wire carries.
 export interface LineItemEditInput {
+  // Only fixPatch sends it (ENGI-17), so the server keeps the line's identity.
+  id?: string
   description: string | null
   quantity: string | null
   unit_price: string | null

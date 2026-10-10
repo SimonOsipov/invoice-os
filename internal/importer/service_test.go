@@ -787,7 +787,7 @@ func TestServiceImport_MappingReferencesAbsentHeaderValidationBeforeAnyWrite(t *
 // --- IMP-SVC-10b (CodeRabbit, M4-03 PR review) -----------------------------
 
 // TestServiceImport_MappingUnknownKeyValidationBeforeAnyWrite: a mapping
-// containing a KEY that isn't one of the 11 canonical fields (e.g. a typo
+// containing a KEY that isn't one of the canonical fields (e.g. a typo
 // "totla" instead of "total") must ErrValidation BEFORE any write, by exact
 // symmetry with IMP-SVC-10's absent-mapped-header check: [mapping]'s
 // guarantee is that the server structurally cannot mis-map, so an unknown

@@ -25,7 +25,7 @@
 export const PERF_HEADER = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
 
 // PERF_MAPPING: the canonical importer field -> this fixture's header column, the
-// same 11-key contract e2e/api/import.spec.ts and perf.spec.ts's own PERF_MAPPINGs
+// same contract e2e/api/import.spec.ts and perf.spec.ts's own PERF_MAPPINGs
 // use (internal/importer/service.go's canonicalFields). The UI test does NOT submit
 // this object on the wire -- CreateMapping.tsx maps fields by click-to-place, and
 // initMappingFromHeaders auto-recognizes every key below except invoice_number and

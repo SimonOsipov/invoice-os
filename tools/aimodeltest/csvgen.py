@@ -3,7 +3,7 @@
 
 Writes $DATA/layouts.json and one CSV per layout under $DATA/csv/. Header spellings in the
 "software" layouts are modelled on common accounting-software exports; every value is synthetic.
-The answer key follows the importer's 11 fields (frontend/app/src/data.tsx CANON): one row per
+The answer key follows the importer's fields (frontend/app/src/data.tsx CANON): one row per
 invoice line, invoice-level values repeated on every line, and a line total is never a subtotal.
 """
 import csv, datetime as dt, io, json, os, random, re

@@ -59,7 +59,7 @@ func jpAutoEntryIsComplete(entry map[string]string) bool {
 }
 
 // jpLoadLayouts reads $JEV_OUT/layouts.json. Fatal on absence, decode failure, zero layouts, or
-// any layout whose key does not hold all eleven canonicalFields.
+// any layout whose key does not hold every mappingFields key.
 func jpLoadLayouts(t *testing.T, dir string) []jpLayout {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(dir, "layouts.json"))
@@ -75,7 +75,7 @@ func jpLoadLayouts(t *testing.T, dir string) []jpLayout {
 	}
 	for _, l := range layouts {
 		if !jpKeyIsComplete(l.Key) {
-			t.Fatalf("layout %q's key does not hold all eleven canonical fields", l.ID)
+			t.Fatalf("layout %q's key does not hold every mapping field", l.ID)
 		}
 	}
 	return layouts
@@ -83,7 +83,7 @@ func jpLoadLayouts(t *testing.T, dir string) []jpLayout {
 
 // jpAutoSet reads $JEV_OUT/auto_placements.json: layout id -> field -> header, a JSON null
 // decoding to "" (an unplaced field, not an error; CHECK-01-06 §2.1). Fatal only on: file
-// absent, decode failure, an id not in layouts.json, or an entry missing one of the eleven keys
+// absent, decode failure, an id not in layouts.json, or an entry missing one of the mapping fields
 // -- an all-null entry (a layout that placed nothing) is normal output, never fatal.
 func jpAutoSet(t *testing.T, dir string, layouts []jpLayout) map[string]map[string]string {
 	t.Helper()
@@ -104,7 +104,7 @@ func jpAutoSet(t *testing.T, dir string, layouts []jpLayout) map[string]map[stri
 			t.Fatalf("auto_placements.json names layout %q, absent from layouts.json", id)
 		}
 		if !jpAutoEntryIsComplete(entry) {
-			t.Fatalf("auto_placements.json entry %q does not hold all eleven canonical fields", id)
+			t.Fatalf("auto_placements.json entry %q does not hold every mapping field", id)
 		}
 	}
 	return raw
@@ -451,7 +451,7 @@ func TestJevMapping_Measure(t *testing.T) {
 
 func jpKeyPtr(s string) *string { return &s }
 
-// jpFullKey builds an eleven-field Key map, [null] for every field not named in overrides.
+// jpFullKey builds a full Key map, [null] for every field not named in overrides.
 func jpFullKey(overrides map[string][]*string) map[string][]*string {
 	key := make(map[string][]*string, len(mappingFields))
 	for _, f := range mappingFields {
@@ -486,8 +486,8 @@ func jpWriteCSV(t *testing.T, dir, id, content string) {
 }
 
 // jpWriteAutoPlacements writes $JEV_OUT/auto_placements.json, filling every layout's entry out
-// to all eleven canonical fields ("" for anything the caller did not set) -- CHECK-01-06's own
-// shape (AC-2: every layout gets a full eleven-key mapping).
+// to every mapping field ("" for anything the caller did not set) -- CHECK-01-06's own
+// shape (AC-2: every layout gets a full mapping).
 func jpWriteAutoPlacements(t *testing.T, dir string, placements map[string]map[string]string) {
 	t.Helper()
 	full := make(map[string]map[string]string, len(placements))
@@ -1274,10 +1274,10 @@ func TestJevMapping_AnAllNullAutoEntryPlacesNothingAndIsNotAnError(t *testing.T)
 		t.Errorf("full_01[invoice_number] = %q, want %q", got["full_01"]["invoice_number"], "Invoice No")
 	}
 
-	// Control/floor: an entry missing one of the eleven keys is a real malformed artifact, not
+	// Control/floor: an entry missing one mapping field is a real malformed artifact, not
 	// an all-null one -- tested on the pure predicate jpAutoSet's fatal check is built from.
 	if jpAutoEntryIsComplete(map[string]string{"invoice_number": "X"}) {
-		t.Errorf("jpAutoEntryIsComplete must be false for an entry missing 10 of the 11 keys")
+		t.Errorf("jpAutoEntryIsComplete must be false for an entry missing all but one mapping field")
 	}
 	full := map[string]string{}
 	for _, f := range mappingFields {

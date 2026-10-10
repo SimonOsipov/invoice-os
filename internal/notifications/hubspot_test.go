@@ -564,3 +564,527 @@ func TestClients_RedirectIsNotDelivery(t *testing.T) {
 		})
 	}
 }
+
+// dealPlan scripts the four HubSpot steps of OpenDemoDeal; a zero status falls to the default.
+type dealPlan struct {
+	contactGet, contactPost, contactGet2, assoc, batch, dealPost int
+	contactBody, assocBody, batchBody, postContactBody           string
+}
+
+func (p dealPlan) respond(s seenReq) (int, string) {
+	pick := func(st, def int) int {
+		if st == 0 {
+			return def
+		}
+		return st
+	}
+	or := func(b, def string) string {
+		if b == "" {
+			return def
+		}
+		return b
+	}
+	switch {
+	case s.Method == http.MethodGet && strings.HasPrefix(s.path(), hsCreatePath+"/"):
+		return pick(p.contactGet, 200), or(p.contactBody, `{"id":"77"}`)
+	case s.Method == http.MethodPost && s.path() == hsCreatePath:
+		return pick(p.contactPost, 201), or(p.postContactBody, `{"id":"91"}`)
+	case s.Method == http.MethodGet && strings.Contains(s.path(), "/associations/deals"):
+		return pick(p.assoc, 200), or(p.assocBody, `{"results":[]}`)
+	case s.path() == "/crm/v3/objects/deals/batch/read":
+		return pick(p.batch, 200), or(p.batchBody, `{"results":[]}`)
+	case s.Method == http.MethodPost && s.path() == "/crm/v3/objects/deals":
+		return pick(p.dealPost, 201), `{"id":"500"}`
+	}
+	return 500, `{"message":"unexpected request"}`
+}
+
+func assocOf(ids ...string) string {
+	var parts []string
+	for _, id := range ids {
+		parts = append(parts, `{"toObjectId":`+id+`}`)
+	}
+	return `{"results":[` + strings.Join(parts, ",") + `]}`
+}
+
+func dealRes(closed string) string {
+	return `{"id":"1","properties":{"hs_is_closed":` + closed + `}}`
+}
+
+func batchOf(res ...string) string { return `{"results":[` + strings.Join(res, ",") + `]}` }
+
+func runDeal(t *testing.T, p dealPlan) (*fakeVendor, error) {
+	t.Helper()
+	v := newVendor(t, p.respond)
+	return v, hubspotAt(v, shortClient()).OpenDemoDeal(t.Context(), fullContact("ada@corp.example"), "Analytical Engines — demo request")
+}
+
+func dealPosts(v *fakeVendor) []seenReq {
+	var out []seenReq
+	for _, s := range v.calls() {
+		if s.Method == http.MethodPost && s.path() == "/crm/v3/objects/deals" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func hasLabel(v *fakeVendor, label string) bool {
+	for _, l := range v.labels() {
+		if l == label {
+			return true
+		}
+	}
+	return false
+}
+
+const batchLabel = "POST /crm/v3/objects/deals/batch/read"
+
+func TestHubSpotOpenDemoDeal_CreatesTheDealAtTheFirstStage(t *testing.T) {
+	v, err := runDeal(t, dealPlan{})
+	if err != nil {
+		t.Fatalf("OpenDemoDeal() err = %v, want nil", err)
+	}
+	want := []string{"GET " + hsCreatePath + "/ada@corp.example", "GET /crm/v4/objects/contacts/77/associations/deals", "POST /crm/v3/objects/deals"}
+	if got := v.labels(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("requests = %v, want %v", got, want)
+	}
+	for _, c := range v.calls() {
+		if c.Auth != "Bearer hs-tok" || c.CType != "application/json" {
+			t.Errorf("%s auth = %q, content type = %q", c.label(), c.Auth, c.CType)
+		}
+	}
+	var body struct {
+		Properties   map[string]string `json:"properties"`
+		Associations []struct {
+			To    struct{ ID string } `json:"to"`
+			Types []struct {
+				Category string `json:"associationCategory"`
+				TypeID   int    `json:"associationTypeId"`
+			} `json:"types"`
+		} `json:"associations"`
+	}
+	if err := json.Unmarshal(dealPosts(v)[0].Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	wantProps := map[string]string{"dealname": "Analytical Engines — demo request", "pipeline": "default", "dealstage": "5716044996"}
+	if !reflect.DeepEqual(body.Properties, wantProps) {
+		t.Errorf("properties = %v, want %v", body.Properties, wantProps)
+	}
+	if len(body.Associations) != 1 || body.Associations[0].To.ID != "77" ||
+		len(body.Associations[0].Types) != 1 || body.Associations[0].Types[0].Category != "HUBSPOT_DEFINED" || body.Associations[0].Types[0].TypeID != 3 {
+		t.Errorf("associations = %+v, want contact 77 via HUBSPOT_DEFINED 3", body.Associations)
+	}
+}
+
+func TestHubSpotOpenDemoDeal_NoDealsSkipsTheBatchRead(t *testing.T) {
+	v, err := runDeal(t, dealPlan{})
+	if err != nil || hasLabel(v, batchLabel) {
+		t.Errorf("err = %v, requests = %v, want nil and no batch read", err, v.labels())
+	}
+}
+
+func dealAssocID(t *testing.T, v *fakeVendor) string {
+	t.Helper()
+	posts := dealPosts(v)
+	if len(posts) != 1 {
+		t.Fatalf("deal POSTs = %d, want 1 (requests %v)", len(posts), v.labels())
+	}
+	var b struct {
+		Associations []struct {
+			To struct{ ID string } `json:"to"`
+		} `json:"associations"`
+	}
+	if err := json.Unmarshal(posts[0].Body, &b); err != nil || len(b.Associations) != 1 {
+		t.Fatalf("deal body %q: %v", posts[0].Body, err)
+	}
+	return b.Associations[0].To.ID
+}
+
+func TestHubSpotOpenDemoDeal_CreatesTheContactOn404(t *testing.T) {
+	v, err := runDeal(t, dealPlan{contactGet: 404})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if id := dealAssocID(t, v); id != "91" {
+		t.Errorf("association id = %q, want 91", id)
+	}
+	var create seenReq
+	for _, c := range v.calls() {
+		if c.Method == http.MethodPost && c.path() == hsCreatePath {
+			create = c
+		}
+	}
+	want := map[string]string{"email": "ada@corp.example", "firstname": "Ada", "lastname": "Lovelace", "company": "Analytical Engines"}
+	if got := jsonProps(t, create); !reflect.DeepEqual(got, want) {
+		t.Errorf("contact properties = %v, want %v (no tags)", got, want)
+	}
+
+	// Blank fields are left out.
+	v2 := newVendor(t, dealPlan{contactGet: 404}.respond)
+	if err := hubspotAt(v2, nil).OpenDemoDeal(t.Context(), Contact{Email: "bare@corp.example", Tags: bothTags()}, "x"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range v2.calls() {
+		if c.Method == http.MethodPost && c.path() == hsCreatePath {
+			if got := jsonProps(t, c); !reflect.DeepEqual(got, map[string]string{"email": "bare@corp.example"}) {
+				t.Errorf("bare contact properties = %v, want email only", got)
+			}
+		}
+	}
+}
+
+func TestHubSpotOpenDemoDeal_ContactCreate409ReadsTheContactAgain(t *testing.T) {
+	var gets int
+	v := newVendor(t, func(s seenReq) (int, string) {
+		if s.Method == http.MethodGet && strings.HasPrefix(s.path(), hsCreatePath+"/") {
+			gets++
+			if gets == 1 {
+				return 404, `{}`
+			}
+			return 200, `{"id":"55"}`
+		}
+		return dealPlan{contactPost: 409}.respond(s)
+	})
+	if err := hubspotAt(v, nil).OpenDemoDeal(t.Context(), fullContact("ada@corp.example"), "n"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if id := dealAssocID(t, v); id != "55" {
+		t.Errorf("association id = %q, want 55", id)
+	}
+}
+
+func TestHubSpotOpenDemoDeal_ContactCreate409ThenStill404IsAnError(t *testing.T) {
+	v, err := runDeal(t, dealPlan{contactGet: 404, contactPost: 409})
+	var de *DeliveryError
+	if !errors.As(err, &de) || de.Status != 409 {
+		t.Fatalf("err = %v, want *DeliveryError{409}", err)
+	}
+	if len(dealPosts(v)) != 0 {
+		t.Errorf("a deal was created: %v", v.labels())
+	}
+}
+
+func TestHubSpotOpenDemoDeal_OpenDealBlocksANewOne(t *testing.T) {
+	v, err := runDeal(t, dealPlan{assocBody: assocOf("1001"), batchBody: batchOf(dealRes(`"false"`))})
+	if err != nil || len(dealPosts(v)) != 0 {
+		t.Errorf("err = %v, requests = %v, want nil and no deal POST", err, v.labels())
+	}
+}
+
+func TestHubSpotOpenDemoDeal_ClosedDealsDoNotBlock(t *testing.T) {
+	v, err := runDeal(t, dealPlan{assocBody: assocOf("1001", "1002"), batchBody: batchOf(dealRes(`"true"`), dealRes(`"true"`))})
+	if err != nil || len(dealPosts(v)) != 1 {
+		t.Errorf("err = %v, requests = %v, want nil and one deal POST", err, v.labels())
+	}
+}
+
+func TestHubSpotOpenDemoDeal_OneOpenAmongClosedBlocks(t *testing.T) {
+	v, err := runDeal(t, dealPlan{
+		assocBody: assocOf("1", "2", "3"),
+		batchBody: batchOf(dealRes(`"true"`), dealRes(`"true"`), dealRes(`"false"`)),
+	})
+	if err != nil || len(dealPosts(v)) != 0 {
+		t.Errorf("err = %v, requests = %v, want nil and no deal POST", err, v.labels())
+	}
+	// The open deal sits in the middle too.
+	v, err = runDeal(t, dealPlan{
+		assocBody: assocOf("1", "2", "3"),
+		batchBody: batchOf(dealRes(`"true"`), dealRes(`"false"`), dealRes(`"true"`)),
+	})
+	if err != nil || len(dealPosts(v)) != 0 {
+		t.Errorf("middle open: err = %v, requests = %v, want no deal POST", err, v.labels())
+	}
+}
+
+func TestHubSpotOpenDemoDeal_MissingClosedPropertyCountsAsOpen(t *testing.T) {
+	for _, res := range []string{dealRes(`null`), `{"id":"1","properties":{}}`} {
+		v, err := runDeal(t, dealPlan{assocBody: assocOf("1"), batchBody: batchOf(res)})
+		if err != nil || len(dealPosts(v)) != 0 {
+			t.Errorf("%s: err = %v, requests = %v, want no deal POST", res, err, v.labels())
+		}
+	}
+}
+
+func TestHubSpotOpenDemoDeal_RetryAfterLostCreateResponseMakesOneDeal(t *testing.T) {
+	var mu sync.Mutex
+	var deals, posts int
+	v := newVendor(t, func(s seenReq) (int, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case s.Method == http.MethodGet && strings.Contains(s.path(), "/associations/deals"):
+			if deals == 0 {
+				return 200, `{"results":[]}`
+			}
+			return 200, assocOf("500")
+		case s.path() == "/crm/v3/objects/deals/batch/read":
+			return 200, batchOf(dealRes(`"false"`))
+		case s.Method == http.MethodPost && s.path() == "/crm/v3/objects/deals":
+			posts++
+			deals++
+			if posts == 1 {
+				return 500, `{}`
+			}
+			return 201, `{"id":"500"}`
+		}
+		return dealPlan{}.respond(s)
+	})
+	hs := hubspotAt(v, nil)
+	if err := hs.OpenDemoDeal(t.Context(), fullContact("ada@corp.example"), "n"); err == nil {
+		t.Fatal("first call err = nil, want the lost response to fail")
+	}
+	if err := hs.OpenDemoDeal(t.Context(), fullContact("ada@corp.example"), "n"); err != nil {
+		t.Fatalf("retry err = %v", err)
+	}
+	if deals != 1 || len(dealPosts(v)) != 1 {
+		t.Errorf("deals = %d, deal POSTs = %d, want 1 and 1", deals, len(dealPosts(v)))
+	}
+}
+
+// dealStageLabels is the OpenDemoDeal request order; failingPlan makes stage i answer with status.
+var dealStageLabels = []string{"contact", "associations", "batch", "deal"}
+
+func failingPlan(stage, status int) dealPlan {
+	p := dealPlan{assocBody: assocOf("1"), batchBody: batchOf(dealRes(`"true"`))}
+	switch stage {
+	case 0:
+		p.contactGet = status
+	case 1:
+		p.assoc = status
+	case 2:
+		p.batch = status
+	case 3:
+		p.dealPost = status
+	}
+	return p
+}
+
+func TestHubSpotOpenDemoDeal_FailureAtEachStageStops(t *testing.T) {
+	for stage, name := range dealStageLabels {
+		for _, status := range []int{500, 429, 403, 400, hangStatus} {
+			t.Run(name+"/"+strconv.Itoa(status), func(t *testing.T) {
+				v, err := runDeal(t, failingPlan(stage, status))
+				var de *DeliveryError
+				if !errors.As(err, &de) {
+					t.Fatalf("err = %v, want a *DeliveryError", err)
+				}
+				want := status
+				if status == hangStatus {
+					want = 0
+				}
+				if de.Status != want || de.Permanent() != (want == 400 || want == 403) {
+					t.Errorf("Status = %d, Permanent() = %v, want %d", de.Status, de.Permanent(), want)
+				}
+				if got := len(v.calls()); got != stage+1 {
+					t.Errorf("requests = %v, want %d (none after the failure)", v.labels(), stage+1)
+				}
+			})
+		}
+	}
+}
+
+func TestHubSpotOpenDemoDeal_BatchRead207JudgesTheReturnedDeals(t *testing.T) {
+	v, err := runDeal(t, dealPlan{assocBody: assocOf("1", "2", "3"), batch: 207,
+		batchBody: `{"status":"COMPLETE","results":[` + dealRes(`"true"`) + `,` + dealRes(`"true"`) + `],"errors":[{"status":"error","category":"OBJECT_NOT_FOUND"}]}`})
+	if err != nil || len(dealPosts(v)) != 1 {
+		t.Errorf("closed+error+closed: err = %v, requests = %v, want one deal POST", err, v.labels())
+	}
+	v, err = runDeal(t, dealPlan{assocBody: assocOf("1", "2", "3"), batch: 207,
+		batchBody: `{"status":"COMPLETE","results":[` + dealRes(`"false"`) + `,` + dealRes(`"true"`) + `],"errors":[{"status":"error"}]}`})
+	if err != nil || len(dealPosts(v)) != 0 {
+		t.Errorf("error+open+closed: err = %v, requests = %v, want no deal POST", err, v.labels())
+	}
+}
+
+func TestHubSpotOpenDemoDeal_ShortBatchResultIsJudgedAsReturned(t *testing.T) {
+	for _, body := range []string{batchOf(dealRes(`"true"`)), batchOf()} {
+		v, err := runDeal(t, dealPlan{assocBody: assocOf("1", "2", "3"), batchBody: body})
+		if err != nil || len(dealPosts(v)) != 1 {
+			t.Errorf("%s: err = %v, requests = %v, want one deal POST", body, err, v.labels())
+		}
+	}
+}
+
+func TestHubSpotOpenDemoDeal_BatchReadOtherStatusIsAnError(t *testing.T) {
+	v, err := runDeal(t, dealPlan{assocBody: assocOf("1"), batch: 502})
+	var de *DeliveryError
+	if !errors.As(err, &de) || de.Status != 502 || len(dealPosts(v)) != 0 {
+		t.Errorf("err = %v, requests = %v, want *DeliveryError{502} and no deal POST", err, v.labels())
+	}
+}
+
+func TestHubSpotOpenDemoDeal_UndecodableBodyIsTransient(t *testing.T) {
+	v, err := runDeal(t, dealPlan{contactBody: "not json"})
+	var de *DeliveryError
+	if !errors.As(err, &de) || de.Status != 0 || de.Permanent() {
+		t.Fatalf("err = %v, want *DeliveryError{0}", err)
+	}
+	if n := len(v.calls()); n != 1 {
+		t.Errorf("requests = %v, want only the contact GET", v.labels())
+	}
+}
+
+func TestHubSpotOpenDemoDeal_RedirectIsNotFollowed(t *testing.T) {
+	elsewhere := newVendor(t, func(seenReq) (int, string) { return 200, `{"id":"1"}` })
+	redirect := newRedirectVendor(t, elsewhere.srv.URL)
+	err := NewHubSpot(redirect.URL, Keys{HubSpotToken: "hs-tok"}, NewHTTPClient(nil)).OpenDemoDeal(t.Context(), fullContact("ada@corp.example"), "n")
+	var de *DeliveryError
+	if !errors.As(err, &de) || de.Status != 301 {
+		t.Errorf("err = %v, want *DeliveryError{301}", err)
+	}
+	if n := len(elsewhere.calls()); n != 0 {
+		t.Errorf("redirect target received %d requests, want 0", n)
+	}
+}
+
+func newRedirectVendor(t *testing.T, to string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, to+r.URL.Path, http.StatusMovedPermanently)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestHubSpotOpenDemoDeal_ErrorsNeverCarryTheEmail(t *testing.T) {
+	const email = "ada.lovelace+test@corp.example"
+	needles := []string{email, url.QueryEscape(email), "ada.lovelace", "corp.example", "Analytical Engines", "hs-tok"}
+	echo := `{"message":"contact ` + email + ` Analytical Engines already exists"}`
+	for stage, name := range dealStageLabels {
+		for _, status := range []int{422, 500, hangStatus} {
+			t.Run(name+"/"+strconv.Itoa(status), func(t *testing.T) {
+				p := failingPlan(stage, status)
+				switch stage {
+				case 0:
+					p.contactBody = echo
+				case 1:
+					p.assocBody = echo
+				case 2:
+					p.batchBody = echo
+				}
+				v := newVendor(t, p.respond)
+				err := hubspotAt(v, shortClient()).OpenDemoDeal(t.Context(), Contact{Email: email, Company: "Analytical Engines"}, "Analytical Engines — demo request")
+				if err == nil {
+					t.Fatal("err = nil, want a failure")
+				}
+				for _, text := range errChain(err) {
+					for _, n := range needles {
+						if strings.Contains(strings.ToLower(text), strings.ToLower(n)) {
+							t.Errorf("error text %q carries %q", text, n)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestHubSpotOpenDemoDeal_ContactCreateFailureStops(t *testing.T) {
+	for _, status := range []int{500, 429, 400, 403, hangStatus} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			v, err := runDeal(t, dealPlan{contactGet: 404, contactPost: status})
+			var de *DeliveryError
+			want := status
+			if status == hangStatus {
+				want = 0
+			}
+			if !errors.As(err, &de) || de.Status != want {
+				t.Fatalf("err = %v, want *DeliveryError{%d}", err, want)
+			}
+			if got := len(v.calls()); got != 2 {
+				t.Errorf("requests = %v, want GET and POST contact only", v.labels())
+			}
+		})
+	}
+}
+
+func TestHubSpotOpenDemoDeal_ContactCreate409ThenReadFailureIsA409(t *testing.T) {
+	var gets int
+	v := newVendor(t, func(s seenReq) (int, string) {
+		if s.Method == http.MethodGet && strings.HasPrefix(s.path(), hsCreatePath+"/") {
+			gets++
+			if gets == 1 {
+				return 404, `{}`
+			}
+			return 500, `{}`
+		}
+		return dealPlan{contactPost: 409}.respond(s)
+	})
+	err := hubspotAt(v, nil).OpenDemoDeal(t.Context(), fullContact("ada@corp.example"), "n")
+	var de *DeliveryError
+	if !errors.As(err, &de) || de.Status != 409 || len(dealPosts(v)) != 0 {
+		t.Errorf("err = %v, requests = %v, want *DeliveryError{409} and no deal POST", err, v.labels())
+	}
+}
+
+func TestHubSpotOpenDemoDeal_BatchReadAsksForEveryAssociatedDeal(t *testing.T) {
+	v, err := runDeal(t, dealPlan{assocBody: assocOf("9007199254740993", "12", "13"), batchBody: batchOf(dealRes(`"true"`))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var batch seenReq
+	for _, c := range v.calls() {
+		if c.label() == batchLabel {
+			batch = c
+		}
+	}
+	var body struct {
+		Properties []string            `json:"properties"`
+		Inputs     []map[string]string `json:"inputs"`
+	}
+	if err := json.Unmarshal(batch.Body, &body); err != nil {
+		t.Fatalf("batch body %q: %v", batch.Body, err)
+	}
+	wantIn := []map[string]string{{"id": "9007199254740993"}, {"id": "12"}, {"id": "13"}}
+	if !reflect.DeepEqual(body.Inputs, wantIn) || !reflect.DeepEqual(body.Properties, []string{"hs_is_closed"}) {
+		t.Errorf("batch body = %s, want inputs %v and properties [hs_is_closed]", batch.Body, wantIn)
+	}
+}
+
+func TestHubSpotOpenDemoDeal_UndecodableBatchBodyIsTransient(t *testing.T) {
+	v, err := runDeal(t, dealPlan{assocBody: assocOf("1"), batchBody: "not json"})
+	var de *DeliveryError
+	if !errors.As(err, &de) || de.Status != 0 || len(dealPosts(v)) != 0 {
+		t.Errorf("err = %v, requests = %v, want *DeliveryError{0} and no deal POST", err, v.labels())
+	}
+}
+
+// truncatedBody answers 200 with a Content-Length it does not fill, so the client's body read fails.
+func truncatedBody(t *testing.T) (*httptest.Server, *int) {
+	t.Helper()
+	var n int
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		n++
+		mu.Unlock()
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("{"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &n
+}
+
+func TestClients_NoBodyCallDeliversDespiteAFailedBodyRead(t *testing.T) {
+	keys := Keys{HubSpotToken: "t", ResendAPIKey: "k", ResendSegmentID: "s", ResendTopicID: "tp"}
+	t.Run("HubSpot Upsert", func(t *testing.T) {
+		srv, n := truncatedBody(t)
+		if err := NewHubSpot(srv.URL, keys, nil).Upsert(t.Context(), fullContact(adaEmail)); err != nil {
+			t.Errorf("Upsert err = %v, want nil", err)
+		}
+		if *n != 1 {
+			t.Errorf("requests = %d, want 1", *n)
+		}
+	})
+	t.Run("Resend Sync opt_in", func(t *testing.T) {
+		srv, n := truncatedBody(t)
+		if err := NewResend(srv.URL, keys, nil).Sync(t.Context(), demoContact(adaEmail), true); err != nil {
+			t.Errorf("Sync err = %v, want nil", err)
+		}
+		if *n != 2 {
+			t.Errorf("requests = %d, want the GET and one opt_in PATCH", *n)
+		}
+	})
+}

@@ -9,7 +9,7 @@ paths:
 
 - Never put an email address or a name in a log line or an error.
 - Never wait on a vendor in signup, sign-in or the demo route. Hand off in the background.
-- Hand a registrant off after `POST /auth/verify` and after a sign-in whose user has `user_metadata.registration`.
+- Hand a registrant off after `POST /auth/verify`, after `POST /auth/invitation/password` and after a sign-in whose user has `user_metadata.registration`.
 - Send the demo route's call once, with no retry. Answer 502 when the sink fails.
 - Store a contact with no `tenant_id` and no RLS. Write no tenant predicate.
 - Merge a contact with `COALESCE`. A set fact never changes. A trigger refuses any update of it.
@@ -28,7 +28,10 @@ paths:
 - Run a preview environment in `fake` mode and discard its vendor keys.
 - Answer 404 to an intake request that carries `X-User-ID`. Require the gateway token on every intake route.
 - Answer 404 at the gateway for any `/api/<service>/internal/...` path, raw and cleaned.
+- Open one HubSpot deal per demo request. A registration opens none.
+- Open no deal while the contact has an open one, decided by HubSpot `hs_is_closed`.
 - Retry a delivery with River's default policy. Any non-nil worker error retries.
 - Log a vendor 4xx other than 408 and 429 as ERROR. Log every other failure as WARN.
 - Reject a present `marketing_consent_text` that is blank or over 500 characters, on register and on the demo route.
-- `ceiling:` the demo route has no rate limit. Add a per-IP limit and a double opt-in step before you send marketing email to its contacts.
+- Limit the demo route to `DemoRequestPerIP` requests per client IP per hour. Answer 429 over the limit and log no IP.
+- `ceiling:` the demo route has no double opt-in step. Add one before you send marketing email to its contacts.

@@ -180,3 +180,271 @@ func TestExplainSystem_SurvivesGofmtAndCarriesNoCurledQuote(t *testing.T) {
 		t.Error("explainSystem carries a curled quote")
 	}
 }
+
+func TestExplainTarget_HeaderPaths(t *testing.T) {
+	for path, want := range map[string]string{
+		"issue_date": "issue_date", "supplier.tin": "supplier_tin", "supplier.name": "supplier_name",
+		"buyer.tin": "buyer_tin", "buyer.name": "buyer_name", "currency": "currency",
+		"subtotal": "subtotal", "vat": "vat", "total": "total",
+	} {
+		field, line, ok := explainTarget(path, 2, "")
+		if !ok || field != want || line != 0 {
+			t.Errorf("%s: got (%q, %d, %v), want (%q, 0, true)", path, field, line, ok, want)
+		}
+	}
+}
+
+func TestExplainTarget_NonEditHeaderHasNoFix(t *testing.T) {
+	for _, path := range []string{"invoice_number", "due_date", "buyer.state"} {
+		if _, _, ok := explainTarget(path, 2, ""); ok {
+			t.Errorf("%s: want no target", path)
+		}
+	}
+}
+
+func TestExplainTarget_LineFieldPath(t *testing.T) {
+	if f, n, ok := explainTarget("line_items[2].unit_price", 3, ""); !ok || f != "unit_price" || n != 2 {
+		t.Errorf("got (%q, %d, %v)", f, n, ok)
+	}
+	if _, _, ok := explainTarget("line_items[2].hsn_code", 3, "unit_price"); ok {
+		t.Error("hsn_code is not an Edit line field")
+	}
+}
+
+func TestExplainTarget_BareLineUsesModelField(t *testing.T) {
+	if f, n, ok := explainTarget("line_items[2]", 3, "unit_price"); !ok || f != "unit_price" || n != 2 {
+		t.Errorf("got (%q, %d, %v)", f, n, ok)
+	}
+	for _, model := range []string{"hsn_code", "", "buyer_tin"} {
+		if _, _, ok := explainTarget("line_items[2]", 3, model); ok {
+			t.Errorf("model field %q: want no target", model)
+		}
+	}
+}
+
+func TestExplainTarget_ModelCannotMoveAHeaderFix(t *testing.T) {
+	if f, _, ok := explainTarget("vat", 2, "subtotal"); !ok || f != "vat" {
+		t.Errorf("got (%q, %v), want vat", f, ok)
+	}
+}
+
+func TestExplainTarget_OutOfRangeAndUnmappable(t *testing.T) {
+	for _, path := range []string{"line_items[4]", "line_items[0]", "line_items", "tax_subtotals[1].tax_category", "line_items[1].", ""} {
+		if _, _, ok := explainTarget(path, 3, "unit_price"); ok {
+			t.Errorf("%q: want no target", path)
+		}
+	}
+}
+
+func TestParseLinePath_ReadsTheEngineFixture(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "validation", "testdata", "line_paths.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []struct {
+		List  string `json:"list"`
+		N     int    `json:"n"`
+		Field string `json:"field"`
+		Path  string `json:"path"`
+	}
+	if err := json.Unmarshal(b, &rows); err != nil {
+		t.Fatal(err)
+	}
+	var lineRows, otherRows int
+	for _, r := range rows {
+		n, field, ok := parseLinePath(r.Path)
+		if r.List == "line_items" {
+			lineRows++
+			if !ok || n != r.N || field != r.Field {
+				t.Errorf("%s: got (%d, %q, %v), want (%d, %q, true)", r.Path, n, field, ok, r.N, r.Field)
+			}
+		} else {
+			otherRows++
+			if ok {
+				t.Errorf("%s: want refused", r.Path)
+			}
+		}
+	}
+	if lineRows == 0 || otherRows == 0 {
+		t.Fatalf("fixture has %d line rows and %d other rows", lineRows, otherRows)
+	}
+}
+
+func explainAnswer(expl any, field, value any) map[string]any {
+	return map[string]any{"explanation": expl, "fix_field": field, "fix_value": value}
+}
+
+func explainPayload() map[string]any {
+	return map[string]any{
+		"currency":   "USD",
+		"issue_date": "2026-09-30",
+		"supplier":   map[string]any{"tin": "12345678-0001"},
+		"line_items": []any{
+			map[string]any{"unit_price": json.Number("10.00")},
+			map[string]any{"unit_price": json.Number("-5.00"), "description": "Toner"},
+		},
+	}
+}
+
+func TestGuardExplanation_LongOrLinkedIsDropped(t *testing.T) {
+	v := Violation{Message: "m", Path: "currency"}
+	for text, want := range map[string]string{
+		strings.Repeat("a", 1201): "unavailable",
+		strings.Repeat("a", 1200): "ok",
+		"see https://x.example":   "unavailable",
+		"visit www.x.example":     "unavailable",
+		strings.Repeat("é", 1200): "ok",
+	} {
+		if got := guardExplanation(v, explainPayload(), explainAnswer(text, nil, nil)); got.Status != want {
+			t.Errorf("%.20q (%d runes): status %s, want %s", text, len([]rune(text)), got.Status, want)
+		}
+	}
+}
+
+func TestGuardExplanation_MoneyValueMustBeDecimal(t *testing.T) {
+	v := Violation{Message: "m", Path: "line_items[2].unit_price"}
+	for value, wantFix := range map[string]bool{"5.00": true, "-5": false, "5,00": false, "1e3": false, "five": false, "": false} {
+		got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "unit_price", value))
+		if (got.Fix != nil) != wantFix || got.Explanation == nil {
+			t.Errorf("value %q: fix %v, explanation %v", value, got.Fix, got.Explanation)
+		}
+	}
+	// "-5" is a valid decimal but equals the stored -5.00, so it also gives no fix
+	if got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "unit_price", "-6")); got.Fix == nil {
+		t.Error("-6 is a valid decimal: want a fix")
+	}
+}
+
+func TestGuardExplanation_DateValueMustBeISO(t *testing.T) {
+	v := Violation{Message: "m", Path: "issue_date"}
+	for value, wantFix := range map[string]bool{"2026-10-11": true, "11/10/2026": false, "2026-13-01": false} {
+		got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "issue_date", value))
+		if (got.Fix != nil) != wantFix || got.Explanation == nil {
+			t.Errorf("value %q: fix %v", value, got.Fix)
+		}
+	}
+}
+
+func TestGuardExplanation_TextValueBounds(t *testing.T) {
+	v := Violation{Message: "m", Path: "buyer.name"}
+	for value, wantFix := range map[string]bool{"  ": false, strings.Repeat("a", 201): false, strings.Repeat("a", 200): true, "Acme Ltd": true} {
+		got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "name", value))
+		if (got.Fix != nil) != wantFix {
+			t.Errorf("value %.12q (%d): fix %v", value, len(value), got.Fix)
+		}
+	}
+}
+
+func TestGuardExplanation_EqualValueIsNoFix(t *testing.T) {
+	v := Violation{Message: "m", Path: "line_items[2].unit_price"}
+	if got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "unit_price", "-5")); got.Fix != nil {
+		t.Errorf("fix %v, want none", got.Fix)
+	}
+	v = Violation{Message: "m", Path: "currency"}
+	if got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "currency", "USD")); got.Fix != nil {
+		t.Errorf("text equal: fix %v, want none", got.Fix)
+	}
+}
+
+func TestGuardExplanation_FixCarriesCurrentAndLabel(t *testing.T) {
+	v := Violation{Message: "m", Path: "line_items[2]"}
+	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "unit_price", "5.00"))
+	b, _ := json.Marshal(got.Fix)
+	want := `{"field":"unit_price","label":"Unit price","line":2,"current":"-5.00","value":"5.00"}`
+	if string(b) != want {
+		t.Errorf("fix %s, want %s", b, want)
+	}
+	v = Violation{Message: "m", Path: "currency"}
+	got = guardExplanation(v, explainPayload(), explainAnswer("Why.", "currency", "NGN"))
+	b, _ = json.Marshal(got.Fix)
+	want = `{"field":"currency","label":"Currency","line":null,"current":"USD","value":"NGN"}`
+	if string(b) != want {
+		t.Errorf("fix %s, want %s", b, want)
+	}
+}
+
+func TestGuardExplanation_AbsentCurrentIsNull(t *testing.T) {
+	v := Violation{Message: "m", Path: "buyer.tin"}
+	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "tin", "12345678-0001"))
+	if got.Fix == nil || got.Fix.Current != nil || got.Fix.Field != "buyer_tin" {
+		t.Errorf("fix %+v, want buyer_tin with null current", got.Fix)
+	}
+}
+
+func TestGuardExplanation_BlankIsUnavailable(t *testing.T) {
+	for _, expl := range []any{nil, "", "  "} {
+		got := guardExplanation(Violation{Path: "currency"}, explainPayload(), explainAnswer(expl, "currency", "NGN"))
+		if got.Status != "unavailable" || got.Explanation != nil || got.Fix != nil {
+			t.Errorf("%v: got %+v", expl, got)
+		}
+	}
+}
+
+func TestGuardExplanation_UncitedRegulationIsDropped(t *testing.T) {
+	v := Violation{Message: "Unit price must not be negative.", Path: "line_items[2]"}
+	for _, text := range []string{"This breaks the Finance Act.", "See Section 12.", "A penalty applies.", "The tax law says so.", "A 2025 directive requires it.", "Per clause 4."} {
+		if got := guardExplanation(v, explainPayload(), explainAnswer(text, nil, nil)); got.Status != "unavailable" {
+			t.Errorf("%q: status %s", text, got.Status)
+		}
+	}
+	if got := guardExplanation(v, explainPayload(), explainAnswer("Fill in the HSN code.", nil, nil)); got.Status != "ok" {
+		t.Errorf("HSN code: status %s", got.Status)
+	}
+}
+
+func TestGuardExplanation_CitationInTheMessagePasses(t *testing.T) {
+	v := Violation{Message: "VAT Act requires 7.5%.", Path: "vat"}
+	if got := guardExplanation(v, explainPayload(), explainAnswer("The VAT Act sets the rate.", nil, nil)); got.Status != "ok" {
+		t.Errorf("status %s", got.Status)
+	}
+}
+
+func TestGuardExplanation_WordBoundaries(t *testing.T) {
+	v := Violation{Message: "m", Path: "vat"}
+	if got := guardExplanation(v, explainPayload(), explainAnswer("the exact amount reacts", nil, nil)); got.Status != "ok" {
+		t.Errorf("status %s", got.Status)
+	}
+}
+
+func TestExplainResult_MarshalsNullsNotOmitted(t *testing.T) {
+	b, err := json.Marshal(explainUnavailable())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"status":"unavailable","explanation":null,"fix":null}`; string(b) != want {
+		t.Errorf("got %s, want %s", b, want)
+	}
+}
+
+// want_field in the cases is the model's name for the field ("tin"), so a header case matches its party suffix.
+func TestExplainCases_WantedFixesPassTheTargetGuard(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "tools", "aimodeltest", "explain_cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		ID        string `json:"id"`
+		Violation struct {
+			Path string `json:"path"`
+		} `json:"violation"`
+		Invoice struct {
+			LineItems []json.RawMessage `json:"line_items"`
+		} `json:"invoice"`
+		WantField *string `json:"want_field"`
+	}
+	if err := json.Unmarshal(b, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases")
+	}
+	for _, c := range cases {
+		if c.WantField == nil {
+			continue
+		}
+		field, _, ok := explainTarget(c.Violation.Path, len(c.Invoice.LineItems), *c.WantField)
+		if !ok || (field != *c.WantField && !strings.HasSuffix(field, "_"+*c.WantField)) {
+			t.Errorf("%s: want_field %q, target (%q, %v)", c.ID, *c.WantField, field, ok)
+		}
+	}
+}

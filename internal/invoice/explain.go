@@ -3,6 +3,13 @@ package invoice
 import (
 	"bytes"
 	"encoding/json"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 )
 
 const (
@@ -37,4 +44,176 @@ func explainJSON(v any) string {
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(v) // Violation and the MBS payload are plain data: Encode cannot fail
 	return string(bytes.TrimSuffix(buf.Bytes(), []byte("\n")))
+}
+
+const (
+	explainMaxRunes     = 1200
+	explainMaxTextValue = 200
+)
+
+var (
+	linePathRe   = regexp.MustCompile(`^line_items\[([1-9][0-9]*)\](?:\.([a-z][a-z0-9_]*))?$`)
+	citationRe   = regexp.MustCompile(`(?i)\b(?:acts?|laws?|regulations?|sections?|schedule|circular|gazette|statutes?|decrees?|directives?|clauses?|penalty|penalties)\b`)
+	linkRe       = regexp.MustCompile(`(?i)https?://|www\.`)
+	explainNumRe = regexp.MustCompile(`^-?(0|[1-9][0-9]*)(\.[0-9]+)?$`)
+)
+
+// ExplainFix is one suggested correction. Line is null for a header field.
+type ExplainFix struct {
+	Field   string  `json:"field"`
+	Label   string  `json:"label"`
+	Line    *int    `json:"line"`
+	Current *string `json:"current"`
+	Value   string  `json:"value"`
+}
+
+// ExplainResult is the Explain answer; explanation and fix marshal as null, never omitted.
+type ExplainResult struct {
+	Status      string      `json:"status"`
+	Explanation *string     `json:"explanation"`
+	Fix         *ExplainFix `json:"fix"`
+}
+
+func explainUnavailable() ExplainResult { return ExplainResult{Status: "unavailable"} }
+
+// parseLinePath reads line_items[N] and line_items[N].<field>; a bare path gives field "".
+func parseLinePath(path string) (n int, field string, ok bool) {
+	m := linePathRe.FindStringSubmatch(path)
+	if m == nil {
+		return 0, "", false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, "", false
+	}
+	return n, m[2], true
+}
+
+func explainField(key string, line bool) (invoicefields.Field, bool) {
+	for _, f := range invoicefields.All {
+		if f.Key == key && f.Line == line && f.Edit {
+			return f, true
+		}
+	}
+	return invoicefields.Field{}, false
+}
+
+// headerMBSPath maps supplier_tin to supplier.tin; other keys are their own path.
+func headerMBSPath(key string) string {
+	for _, party := range []string{"supplier", "buyer"} {
+		if rest, ok := strings.CutPrefix(key, party+"_"); ok {
+			return party + "." + rest
+		}
+	}
+	return key
+}
+
+// explainTarget binds the fix to the violation path; the model only picks the field of a bare line path.
+func explainTarget(path string, lineCount int, modelField string) (field string, line int, ok bool) {
+	if n, f, isLine := parseLinePath(path); isLine {
+		if n > lineCount {
+			return "", 0, false
+		}
+		if f == "" {
+			f = modelField
+		}
+		if _, ok := explainField(f, true); !ok {
+			return "", 0, false
+		}
+		return f, n, true
+	}
+	for _, f := range invoicefields.All {
+		if !f.Line && f.Edit && headerMBSPath(f.Key) == path {
+			return f.Key, 0, true
+		}
+	}
+	return "", 0, false
+}
+
+func explainCitationOK(explanation, message string) bool {
+	inMessage := map[string]bool{}
+	for _, w := range citationRe.FindAllString(message, -1) {
+		inMessage[strings.ToLower(w)] = true
+	}
+	for _, w := range citationRe.FindAllString(explanation, -1) {
+		if !inMessage[strings.ToLower(w)] {
+			return false
+		}
+	}
+	return true
+}
+
+func explainValueOK(t invoicefields.Type, value string) bool {
+	switch t {
+	case invoicefields.Money, invoicefields.Quantity:
+		return explainNumRe.MatchString(value)
+	case invoicefields.Date:
+		_, err := time.Parse("2006-01-02", value)
+		return err == nil
+	default:
+		return strings.TrimSpace(value) != "" && utf8.RuneCountInString(value) <= explainMaxTextValue
+	}
+}
+
+// explainCurrent reads the stored value the fix replaces; null when absent or not a number or string.
+func explainCurrent(payload map[string]any, field string, line int) *string {
+	var src any
+	if line > 0 {
+		lines, _ := payload["line_items"].([]any)
+		if line > len(lines) {
+			return nil
+		}
+		row, _ := lines[line-1].(map[string]any)
+		src = row[field]
+	} else if party, key, found := strings.Cut(headerMBSPath(field), "."); found {
+		sub, _ := payload[party].(map[string]any)
+		src = sub[key]
+	} else {
+		src = payload[field]
+	}
+	switch v := src.(type) {
+	case json.Number:
+		s := v.String()
+		return &s
+	case string:
+		return &v
+	}
+	return nil
+}
+
+// guardExplanation keeps only the part of a model answer that is grounded, path-bound and typed.
+func guardExplanation(v Violation, payload map[string]any, ans map[string]any) ExplainResult {
+	text, _ := ans["explanation"].(string)
+	if strings.TrimSpace(text) == "" || utf8.RuneCountInString(text) > explainMaxRunes ||
+		linkRe.MatchString(text) || !explainCitationOK(text, v.Message) {
+		return explainUnavailable()
+	}
+	res := ExplainResult{Status: "ok", Explanation: &text}
+	lines, _ := payload["line_items"].([]any)
+	modelField, _ := ans["fix_field"].(string)
+	value, isStr := ans["fix_value"].(string)
+	field, line, ok := explainTarget(v.Path, len(lines), modelField)
+	if !ok || !isStr {
+		return res
+	}
+	f, _ := explainField(field, line > 0)
+	if !explainValueOK(f.Type, value) {
+		return res
+	}
+	current := explainCurrent(payload, field, line)
+	if current != nil {
+		if f.Type == invoicefields.Money || f.Type == invoicefields.Quantity {
+			if sameDecimal(current, &value) {
+				return res
+			}
+		} else if *current == value {
+			return res
+		}
+	}
+	fix := &ExplainFix{Field: field, Label: f.Label, Current: current, Value: value}
+	if line > 0 {
+		fix.Line = &line
+	}
+	res.Fix = fix
+	return res
 }

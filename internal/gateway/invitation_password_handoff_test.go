@@ -287,6 +287,28 @@ func TestInvitationPassword_FailedSignOutFallsBackToVerifiedAndMakesNoGrant(t *t
 	rpRequireWarn(t, g.log, "invitation-password: global sign-out failed", map[string]any{"upstream_status": float64(http.StatusInternalServerError)})
 }
 
+// A gone logout answer (a goneCodes error_code) still confirms, but only a 2xx sign-out hands off.
+func TestInvitationPassword_GoneSignOutConfirmsWithoutACodeAndMakesNoGrant(t *testing.T) {
+	t.Run("control: a valid state mints a code", ihControlMints)
+
+	for code := range goneCodes {
+		t.Run(code, func(t *testing.T) {
+			g := newIHRig(t, testHandoffStore())
+			g.f.logout = answer(http.StatusUnauthorized, `{"error_code":"`+code+`"}`)
+
+			rpRequireRedirect(t, g.submit(t, vhState), ipOK)
+
+			want := []string{"POST /verify", "PUT /user", "POST /logout"}
+			if got := g.f.names(); !slices.Equal(got, want) {
+				t.Errorf("GoTrue calls = %v, want %v and no POST /token", got, want)
+			}
+			if n := storeMapEntries(g.store); n != 0 {
+				t.Errorf("store holds %d codes, want 0", n)
+			}
+		})
+	}
+}
+
 func TestInvitationPassword_FailedOrIncompleteGrantFallsBackToVerified(t *testing.T) {
 	rows := []struct {
 		name     string

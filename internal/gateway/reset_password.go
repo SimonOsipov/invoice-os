@@ -48,10 +48,10 @@ func renderPasswordPage(page, token, state, alert string) string {
 	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.State}}", html.EscapeString(state), "{{.Alert}}", alert, "{{.Script}}", resetScript).Replace(page)
 }
 
-// formState is the posted state when it has the shape of one, so a re-rendered page keeps it.
+// formState is the posted state when exactly one state field has the shape of one, else "".
 func formState(r *http.Request) string {
-	if s := r.PostForm.Get("state"); stateShape.MatchString(s) {
-		return s
+	if v := r.PostForm["state"]; len(v) == 1 && stateShape.MatchString(v[0]) {
+		return v[0]
 	}
 	return ""
 }
@@ -189,7 +189,8 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 		}
 
 		status, gone, err := postGoTrueBearer(ctx, client, logout, confirmed.AccessToken)
-		signedOut := err == nil && ((status >= 200 && status < 300) || gone)
+		loggedOut := err == nil && status >= 200 && status < 300
+		signedOut := loggedOut || (err == nil && gone)
 		if !signedOut {
 			attrs := []any{slog.Int("upstream_status", status)}
 			if err != nil {
@@ -208,8 +209,8 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 			flow.onConfirmed(ctx, confirmed.User)
 		}
 		location := done
-		if flow.handOff != nil && signedOut && len(r.PostForm["state"]) == 1 && stateShape.MatchString(r.PostForm.Get("state")) {
-			if code := flow.handOff(ctx, confirmed.User, password, r.PostForm.Get("state")); code != "" {
+		if state := formState(r); flow.handOff != nil && loggedOut && state != "" {
+			if code := flow.handOff(ctx, confirmed.User, password, state); code != "" {
 				location += "&handoff=" + code
 			}
 		}

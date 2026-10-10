@@ -14,7 +14,7 @@ export function monitoredSpas(): string[] {
     .filter((e) => e.isDirectory() && existsSync(join(FRONTEND, e.name, 'src/main.tsx')))
     .map((e) => e.name)
     .sort()
-  // Floor: the walk found the SPAs; all four must be monitored below.
+  // Floor: the walk found the SPAs; all five must be monitored below.
   expect(spas, 'the walk found no SPA').toContain('landing')
 
   const initsIn = (n: string) => {

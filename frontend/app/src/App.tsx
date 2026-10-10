@@ -5,7 +5,7 @@ import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPa
 import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
-import { consumeSignInState, ensureSignInState, landingInviteUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
+import { consumeSignInState, ensureSignInState, landingInviteUrl, landingRegisterUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
 import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './lib/pendingInvite'
 import { HANDOFF_PARAM, InviteRefusedError, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
@@ -2036,7 +2036,13 @@ export default function App() {
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
     if (seat || authStart || handoffPending || frontDoorBounced.current) return
-    const dest = landingBase() ? landingSignInUrl(ensureSignInState()) : null
+    // Read before parseLocation: `via` is not an owned param, so the codec drops it.
+    const fromLibrary = new URLSearchParams(window.location.search).get('via') === 'library'
+    const dest = landingBase()
+      ? fromLibrary
+        ? landingRegisterUrl(ensureSignInState())
+        : landingSignInUrl(ensureSignInState())
+      : null
     if (dest) {
       // The ref keeps StrictMode to one navigation.
       frontDoorBounced.current = true

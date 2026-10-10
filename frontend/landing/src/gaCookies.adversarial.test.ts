@@ -5,9 +5,7 @@
 //      accepted there, so the jar can never observe that write. A real browser CAN:
 //      a cookie set with no `domain=` is a different cookie from `.host` and only a
 //      delete with no `domain=` removes it. The oracle here is the write log.
-//   2. `Privacy.tsx` publishes "the only thing our code ever writes to that list is
-//      the instruction that deletes these two", so every write must be an
-//      expiry. Nothing asserted it. Now the log does.
+//   2. `Privacy.tsx` publishes "The only change our code ever makes to them is the instruction that deletes them"; the write log asserts every write is an expiry.
 import { describe, expect, it } from 'vitest'
 import { clearGaCookies, cookieDomainVariants, gaCookieNames, isGaCookieName } from './gaCookies'
 

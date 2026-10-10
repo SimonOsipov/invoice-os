@@ -41,7 +41,7 @@ const LEDGER_NEEDLES: readonly (readonly [string, string])[] = [
   ['C18 the notice is the control', 'The cookie notice on this site is where you choose'],
   ['E1 optional answers are pre-selected', 'come with an answer already selected when the form opens'],
   ['E2 the separate marketing box is quoted from code', MARKETING_CONSENT_TEXT],
-  ['E3 our code sets no cookies', 'Our own code sets no cookies at all'],
+  ['E3 Google sets the _ga cookies', 'These two are set by Google, not by our own code'],
   ['lede: no third company', 'Your browser loads nothing on this site from, and sends nothing to, any other company'],
 ]
 
@@ -218,7 +218,7 @@ describe('T4-10 (AC-11): the page describes reopening iff a reopen control rende
 })
 
 describe('T4-12 (AC-12): asc_consent is disclosed, and E3 is not softened to buy it', () => {
-  const E3 = 'Our own code sets no cookies at all'
+  const E3 = 'These two are set by Google, not by our own code'
 
   it('control: the splitter works and E3 sits in exactly one paragraph', () => {
     expect(html.split('</p>').length, 'the page rendered no paragraphs').toBeGreaterThan(1)
@@ -244,6 +244,7 @@ describe('T4-12 (AC-12): asc_consent is disclosed, and E3 is not softened to buy
     // The page says so; without this the clause is the one sentence here nothing pins.
     expect(para, 'the disclosure drops what Reject writes').toMatch(/only thing our own code writes/i)
     expect(para, 'the Reject clause does not name Reject').toContain('Reject')
+    expect(para, 'the record is not disclosed as a cookie of ours').toMatch(/cookie of our own/)
   })
 
   // The one exception to "the only thing our own code writes": inviteLink.ts, pinned by its own tests.

@@ -72,6 +72,12 @@ export const landingBase = (): string | null => {
   return v || null
 }
 
+// Base URL of the Feature library; null when unset, so the sidebar link is not rendered.
+export const libraryBase = (): string | null => {
+  const v = (import.meta.env.VITE_LIBRARY_URL ?? '').trim().replace(/\/+$/, '')
+  return v || null
+}
+
 export type TenantKind = 'firm' | 'in_house'
 
 export interface Me {

@@ -766,9 +766,16 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
       expect(pxOf(card[0].body, prop), `phone ${prop}`).toBe(px)
     }
     expect(valueOf(card[0].body, 'width')).toBe('auto')
-    const actions = phone.filter((r) => selectorParts(r).includes('.cn-actions'))
-    expect(actions.length, 'expected one phone .cn-actions rule').toBe(1)
-    expect(valueOf(actions[0].body, 'flex-direction')).toBe('column')
+    // BUG-25: the phone buttons share one row; no card-scoped rule at any depth may stack them.
+    const stackers = (css: string) =>
+      parseRules(css).filter(
+        (r) => selectorParts(r).some((p) => CARD_SCOPE.test(p)) && valueOf(r.body, 'flex-direction') === 'column',
+      )
+    expect(
+      stackers('@media (max-width: 640px) { .cookie-note .cn-actions { flex-direction: column; } }').length,
+      'control',
+    ).toBe(1)
+    expect(stackers(CSS_SRC).map((r) => r.selector)).toEqual([])
 
     const desktop = baseRulesFor(CSS_SRC, '.cookie-note')
     expect(desktop.length).toBe(1)

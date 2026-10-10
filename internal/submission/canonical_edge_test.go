@@ -43,7 +43,12 @@ func TestCanonical_MoneyFieldsAreStringPointersNeverNumeric(t *testing.T) {
 	}
 
 	line := reflect.TypeOf(submission.CanonicalLine{})
-	for _, field := range []string{"Quantity", "UnitPrice", "LineTotal", "LineTax"} {
+	for _, field := range []string{"Quantity", "UnitPrice", "LineTotal", "LineTax", "TaxPercent", "BaseQuantity"} {
 		assertStringPointerField(t, line, field)
+	}
+
+	sub := reflect.TypeOf(submission.TaxSubtotal{})
+	for _, field := range []string{"Percent", "TaxableAmount", "TaxAmount"} {
+		assertStringPointerField(t, sub, field)
 	}
 }

@@ -927,3 +927,25 @@ func TestMockWire_ParseRejectsStructurallyWrongJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestMockWire_NRSFieldsLeaveTheWireUnchanged(t *testing.T) {
+	base := mwFullCanonical()
+	withNRS := mwDeepCopyCanonical(base)
+	d := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	withNRS.InvoiceKind, withNRS.TaxCurrencyCode = mwStrPtr("380"), mwStrPtr("USD")
+	withNRS.DueDate, withNRS.TaxPointDate = &d, &d
+	withNRS.IssueTime, withNRS.PaymentStatus = mwStrPtr("14:30:00"), mwStrPtr("PAID")
+	withNRS.TaxSubtotals = []TaxSubtotal{{Category: "STANDARD_VAT", Percent: mwStrPtr("7.50"), TaxableAmount: mwStrPtr("1000.00"), TaxAmount: mwStrPtr("75.00")}}
+	for _, p := range []*Party{&withNRS.Supplier, &withNRS.Buyer} {
+		for _, f := range []**string{&p.Email, &p.Telephone, &p.Street, &p.City, &p.PostalZone, &p.Country, &p.State, &p.LGA} {
+			*f = mwStrPtr("x")
+		}
+	}
+	l := &withNRS.Lines[0]
+	for _, f := range []**string{&l.TaxCategory, &l.HSNCode, &l.ISICCode, &l.ProductCategory, &l.ServiceCategory, &l.SellersItemIdentification, &l.PriceUnit, &l.TaxPercent, &l.BaseQuantity} {
+		*f = mwStrPtr("x")
+	}
+	if a, b := mwWire(t, base), mwWire(t, withNRS); a != b {
+		t.Errorf("wire changed with NRS fields:\n%s\n%s", a, b)
+	}
+}

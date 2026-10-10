@@ -110,8 +110,8 @@ func TestServiceImport_ColumnCountAnomaliesDegradeGracefully(t *testing.T) {
 // the story) -- it characterizes whatever the ACTUAL outcome is. Reasoned
 // ahead of running: the invoices/line_items schema keeps every MBS-content
 // column NULLABLE with no CHECK (store-invalid-faithfully,
-// migrations/20260714103137_invoices.sql), classify's three quarantine
-// checks (headerConflictField, issueDateParseError,
+// migrations/20260714103137_invoices.sql), classify's quarantine
+// checks (headerConflictField, dateParseError,
 // bestEffortBadNumericField) all skip a blank/out-of-range cell rather than
 // flagging it, and newTestService wires an INERT fakeGate (zero violations,
 // no rejection) -- so the tiny row is expected to COMMIT with every

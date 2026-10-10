@@ -133,16 +133,6 @@ var (
 	lineNumericOrder   = numericImportKeys(func(f invoicefields.Field) bool { return f.Line })
 )
 
-// numericFields are the import fields that get [numeric-normalization] (ASCII grouping commas
-// + surrounding whitespace stripped) before becoming a CreateInput string.
-var numericFields = func() map[string]bool {
-	m := map[string]bool{}
-	for _, k := range numericOrder {
-		m[k] = true
-	}
-	return m
-}()
-
 // importFields maps each import key to its field, so cells are read by type.
 var importFields = func() map[string]invoicefields.Field {
 	m := map[string]invoicefields.Field{}
@@ -417,7 +407,7 @@ func cellAt(row []string, idx int, field string) string {
 	return normalizeCell(field, v)
 }
 
-// bestEffortBadNumericField scans the group's 5 numeric fields (header
+// bestEffortBadNumericField scans the group's numeric fields (header
 // fields off rowIdxs[0], line fields off every row), returning the FIRST
 // whose normalized value doesn't parse as a plain decimal number. It serves
 // two callers: (1) Import's classify step, where it is now authoritative —
@@ -426,9 +416,7 @@ func cellAt(row []string, idx int, field string) string {
 // numeric validity used to be deferred entirely to Postgres's ::numeric cast
 // at Create time, which a dry-run never reaches, so a non-numeric cell (e.g.
 // "N/A") wrongly reported READY in dry-run but quarantined for real. Checking
-// it here, in BOTH dry-run and real, closes that gap — mirroring how
-// issueDateParseError already quarantines a non-empty unparseable issue_date
-// at classify time rather than at Create; (2) Create's error path (Import,
+// it here, in BOTH dry-run and real, closes that gap; (2) Create's error path (Import,
 // below), where it is still a best-effort diagnostic: if Create returns
 // invoice.ErrValidation for a reason THIS scan didn't catch, its SQLSTATE
 // (22P02) doesn't itself disambiguate which column broke, so this gives
@@ -509,8 +497,7 @@ func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) 
 }
 
 // buildCreateInput assembles one invoice.CreateInput for a READY group:
-// header fields (issue_date/buyer_tin/buyer_name/currency/subtotal/vat/total)
-// come from the group's first row (they agree across the group, by
+// header fields come from the group's first row (they agree across the group, by
 // classification); line items are one LineItemInput per row, in group (file)
 // order. supplierName/supplierTIN come from EntitySupplier
 // ([supplier-from-entity]); batchID is the ONE minted id for this whole
@@ -611,9 +598,8 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 // SAME id and fire that rule on every multi-line dry-run invoice.
 //
 // Status/Violations/RuleSetVersionID/CreatedAt are likewise left at their zero
-// value: MBSPayload reads none of them (it projects invoice_number, issue_date,
-// currency, the three money fields, supplier/buyer and line_items only), so a
-// dry-run needs no id and no persisted state to be evaluated faithfully.
+// value: MBSPayload reads none of them, so a dry-run needs no id and no
+// persisted state to be evaluated faithfully.
 //
 // KNOWN INCOMPLETENESS (recorded, deliberately NOT fixed -- Stage-1 F5), the
 // second of two on this path alongside M4-06's store-level duplicate rule,
@@ -765,7 +751,7 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 //     YYYY-MM-DD quarantines it too (RowError.Field "issue_date" -- Core
 //     AC#7: a badly-formatted date must never be silently NULLed, only a
 //     genuinely blank cell reads as NULL); else a non-empty numeric-mapped
-//     cell (subtotal/vat/total/line_quantity/line_unit_price) that doesn't
+//     cell that doesn't
 //     parse as a plain decimal quarantines it too (RowError.Field the
 //     offending field -- Core AC#2: dry-run must report the EXACT same
 //     verdict the real import produces, so numeric validity is checked HERE,

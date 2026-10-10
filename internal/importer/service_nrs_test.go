@@ -82,7 +82,7 @@ func nrsRow(num string, kv ...string) map[string]string {
 // nrsFullRow sets all 36 import keys; kv pairs override.
 func nrsFullRow(num string, kv ...string) map[string]string {
 	r := nrsRow(num,
-		"invoice_kind", "B2B", "tax_currency_code", "NGN", "due_date", "2026-07-31", "issue_time", "9:05",
+		"invoice_kind", "B2B", "tax_currency_code", "USD", "due_date", "2026-07-31", "issue_time", "9:05",
 		"tax_point_date", "2026-07-02", "payment_status", "PENDING", "buyer_email", "ada@beta.example",
 		"buyer_telephone", "+2348012345678", "buyer_street", "1 Marina Road", "buyer_city", "Lagos",
 		"buyer_postal_zone", "101233", "buyer_country", "NG", "buyer_state", "LA", "buyer_lga", "IKJ",
@@ -158,7 +158,7 @@ func TestBuildCreateInput_SetsEveryNewImportKey(t *testing.T) {
 	in, li := ins[0], ins[0].LineItems[0]
 	checkWants(t, []nrsWant{
 		{"InvoiceKind", sv(in.InvoiceKind), "B2B"},
-		{"TaxCurrencyCode", sv(in.TaxCurrencyCode), "NGN"},
+		{"TaxCurrencyCode", sv(in.TaxCurrencyCode), "USD"},
 		{"DueDate", dv(in.DueDate), "2026-07-31"},
 		{"IssueTime", sv(in.IssueTime), "09:05:00"},
 		{"TaxPointDate", dv(in.TaxPointDate), "2026-07-02"},
@@ -185,8 +185,8 @@ func TestBuildCreateInput_SetsEveryNewImportKey(t *testing.T) {
 	})
 }
 
-// flatValues lists every string, *string and *time.Time value in in and its lines.
-func flatValues(in invoice.CreateInput) map[string]bool {
+// flatValues lists every string, *string and *time.Time value in in (a CreateInput or an Invoice) and its lines.
+func flatValues(in any) map[string]bool {
 	out := map[string]bool{}
 	var walk func(v reflect.Value)
 	walk = func(v reflect.Value) {
@@ -260,27 +260,29 @@ func TestBuildCreateInput_ReadsEveryImportKey(t *testing.T) {
 }
 
 func TestBuildCreateInput_DropsAPercentSignFromTaxPercent(t *testing.T) {
-	ins := nrsBuild(t,
-		nrsRow("P-1", "line_tax_percent", "7.5%"),
-		nrsRow("P-2", "line_tax_percent", " 7.5 % "),
-		nrsRow("P-3", "line_tax_percent", "7.5"),
-	)
-	if len(ins) != 3 {
-		t.Fatalf("got %d invoices, want 3", len(ins))
+	cells := []string{"7.5%", " 7.5 % ", "7.5", "0.075", "-7.5%", "100 %", "1,000%"}
+	want := []string{"7.5", "7.5", "7.5", "0.075", "-7.5", "100", "1000"} // D6: a fraction is not multiplied by 100
+	var rows []map[string]string
+	for i, c := range cells {
+		rows = append(rows, nrsRow(fmt.Sprintf("P-%d", i), "line_tax_percent", c))
+	}
+	ins := nrsBuild(t, rows...)
+	if len(ins) != len(cells) {
+		t.Fatalf("got %d invoices, want %d", len(ins), len(cells))
 	}
 	for i, in := range ins {
 		if len(in.LineItems) != 1 {
 			t.Fatalf("invoice %d has %d lines", i, len(in.LineItems))
 		}
-		if got := sv(in.LineItems[0].TaxPercent); got != "7.5" {
-			t.Errorf("invoice %d TaxPercent = %q, want %q", i, got, "7.5")
+		if got := sv(in.LineItems[0].TaxPercent); got != want[i] {
+			t.Errorf("tax_percent %q -> %q, want %q", cells[i], got, want[i])
 		}
 	}
 }
 
 func TestBuildCreateInput_PadsAShortIssueTime(t *testing.T) {
-	cells := []string{"9:05", "09:05", "9:05:07", "09:05:00"}
-	want := []string{"09:05:00", "09:05:00", "09:05:07", "09:05:00"}
+	cells := []string{"9:05", "09:05", "9:05:07", "09:05:00", " 9:05 ", "0:00", "23:59", "00:00:00"}
+	want := []string{"09:05:00", "09:05:00", "09:05:07", "09:05:00", "09:05:00", "00:00:00", "23:59:00", "00:00:00"}
 	var rows []map[string]string
 	for i, c := range cells {
 		rows = append(rows, nrsRow(fmt.Sprintf("T-%d", i), "issue_time", c))
@@ -356,6 +358,86 @@ func TestBuildCreateInput_CodeCellsAreTrimmedNotFolded(t *testing.T) {
 		{"BuyerLGA (a name is not turned into a code)", sv(in.BuyerLGA), "Lagos"},
 		{"HSNCode", sv(in.LineItems[0].HSNCode), "8471.30"},
 	})
+}
+
+// D4/D5/D7 for every import key: Code trims, new Text keeps its raw text, a blank cell is nil
+// except for today's five Text keys, which keep the raw cell (02 AC8).
+func TestBuildCreateInput_EveryKeyReadsByItsFieldType(t *testing.T) {
+	var subtests, codes, texts int
+	for _, f := range invoicefields.All {
+		if !f.Import || f.ImportKey() == "invoice_number" {
+			continue
+		}
+		key := f.ImportKey()
+		subtests++
+		t.Run(key, func(t *testing.T) {
+			keepsRaw := f.Type == invoicefields.Text && f.Lead
+			got := flatValues(nrsBuild(t, map[string]string{"invoice_number": "INV-NRS", key: " "})[0])
+			if got[" "] != keepsRaw {
+				t.Errorf("blank %s cell kept as text = %v, want %v", key, got[" "], keepsRaw)
+			}
+		})
+		switch f.Type {
+		case invoicefields.Text:
+			texts++
+			t.Run(key+" raw", func(t *testing.T) {
+				if !flatValues(nrsBuild(t, map[string]string{"invoice_number": "INV-NRS", key: " ab "})[0])[" ab "] {
+					t.Errorf("%s: padded text %q was not kept raw", key, " ab ")
+				}
+			})
+		case invoicefields.Code:
+			codes++
+			t.Run(key+" trimmed", func(t *testing.T) {
+				got := flatValues(nrsBuild(t, map[string]string{"invoice_number": "INV-NRS", key: " ab "})[0])
+				if !got["ab"] || got[" ab "] {
+					t.Errorf("%s: padded code was not trimmed to %q", key, "ab")
+				}
+			})
+		}
+	}
+	if subtests < 35 || codes < 9 || texts < 9 {
+		t.Fatalf("looked at %d keys, %d Code, %d Text; the import field set is 36 keys", subtests+1, codes, texts)
+	}
+}
+
+// Every settable CreateInput and LineItemInput field reaches the Invoice the dry run sends to the gate.
+func TestInvoiceFromCreateInput_CopiesEveryInputField(t *testing.T) {
+	n := 0
+	fill := func(v reflect.Value, skip map[string]bool) (want []string) {
+		for i := 0; i < v.NumField(); i++ {
+			name := v.Type().Field(i).Name
+			if skip[name] {
+				continue
+			}
+			switch v.Field(i).Type() {
+			case reflect.TypeOf((*string)(nil)):
+				n++
+				s := fmt.Sprintf("val-%d-%s", n, name)
+				v.Field(i).Set(reflect.ValueOf(&s))
+				want = append(want, s)
+			case reflect.TypeOf((*time.Time)(nil)):
+				n++
+				d := time.Date(2026, 1, n, 0, 0, 0, 0, time.UTC)
+				v.Field(i).Set(reflect.ValueOf(&d))
+				want = append(want, d.Format("2006-01-02"))
+			}
+		}
+		return want
+	}
+	var in invoice.CreateInput
+	var li invoice.LineItemInput
+	want := fill(reflect.ValueOf(&in).Elem(), map[string]bool{"SourceDocumentID": true}) // absent from Invoice by design
+	want = append(want, fill(reflect.ValueOf(&li).Elem(), map[string]bool{"ID": true})...)
+	in.LineItems = []invoice.LineItemInput{li}
+	if len(want) < 45 {
+		t.Fatalf("filled %d fields, want at least 45 (32 header, 14 line)", len(want))
+	}
+	got := flatValues(invoiceFromCreateInput(in))
+	for _, w := range want {
+		if !got[w] {
+			t.Errorf("value %q set on the CreateInput is missing from the dry-run Invoice", w)
+		}
+	}
 }
 
 // --- DB-backed: Service.Import with fakeGate -------------------------------
@@ -443,7 +525,7 @@ func TestImport_TheRealRunStoresEveryNewKey(t *testing.T) {
 		t.Fatalf("read invoice: %v", err)
 	}
 	wantHdr := []nrsWant{
-		{"invoice_kind", sv(hdr[0]), "B2B"}, {"tax_currency_code", sv(hdr[1]), "NGN"},
+		{"invoice_kind", sv(hdr[0]), "B2B"}, {"tax_currency_code", sv(hdr[1]), "USD"},
 		{"due_date", sv(hdr[2]), "2026-07-31"}, {"issue_time", sv(hdr[3]), "09:05:00"},
 		{"tax_point_date", sv(hdr[4]), "2026-07-02"}, {"payment_status", sv(hdr[5]), "PENDING"},
 		{"buyer_email", sv(hdr[6]), "ada@beta.example"}, {"buyer_telephone", sv(hdr[7]), "+2348012345678"},
@@ -481,7 +563,7 @@ func TestImport_DryRunCarriesEveryNewKeyToTheGate(t *testing.T) {
 	}
 	li := inv.LineItems[0]
 	checkWants(t, []nrsWant{
-		{"InvoiceKind", sv(inv.InvoiceKind), "B2B"}, {"TaxCurrencyCode", sv(inv.TaxCurrencyCode), "NGN"},
+		{"InvoiceKind", sv(inv.InvoiceKind), "B2B"}, {"TaxCurrencyCode", sv(inv.TaxCurrencyCode), "USD"},
 		{"DueDate", dv(inv.DueDate), "2026-07-31"}, {"IssueTime", sv(inv.IssueTime), "09:05:00"},
 		{"TaxPointDate", dv(inv.TaxPointDate), "2026-07-02"}, {"PaymentStatus", sv(inv.PaymentStatus), "PENDING"},
 		{"BuyerEmail", sv(inv.BuyerEmail), "ada@beta.example"}, {"BuyerTelephone", sv(inv.BuyerTelephone), "+2348012345678"},
@@ -522,6 +604,38 @@ func TestImport_AnExponentInALineAmountQuarantines(t *testing.T) {
 	if got := sv(ok.LineItems[0].LineTax); got != "7.50" {
 		t.Errorf("EXP-OK line_tax = %q, want 7.50", got)
 	}
+
+	// Every non-plain-decimal shape on every new numeric key; NaN and Infinity are valid Postgres numerics.
+	bad := []string{"1E5", "NaN", "Infinity", "-Infinity", "+5", ".5", "5.", "0x10", "1_000", "7.5e-1"}
+	fields := []string{"line_total", "line_tax", "line_tax_percent", "line_base_quantity"}
+	var rows []map[string]string
+	for fi, f := range fields {
+		for bi, v := range bad {
+			rows = append(rows, nrsRow(fmt.Sprintf("X-%d-%d", fi, bi), f, v))
+		}
+	}
+	r2 := newNRSRun(t)
+	res = r2.do(true, rows...)
+	if len(res.Errors) != len(rows) {
+		t.Fatalf("errors = %d, want %d (one per bad cell)", len(res.Errors), len(rows))
+	}
+	for i := range rows {
+		f := fields[i/len(bad)]
+		if e, found := errorFor(res, i+2); !found || e.Field != f || e.Message != nrsNotNumber(f) {
+			t.Errorf("%s %q: error = %+v (found %v), want %q", f, bad[i%len(bad)], e, found, nrsNotNumber(f))
+		}
+	}
+	if r2.gate.evaluateCalls != 0 {
+		t.Errorf("evaluateCalls = %d for an all-quarantined file, want 0", r2.gate.evaluateCalls)
+	}
+
+	// The bad cell is on the second row of the invoice: the scan reads every row.
+	r3 := newNRSRun(t)
+	res = r3.do(true, nrsRow("EXP-2ROW", "line_tax", "7.50"), nrsRow("EXP-2ROW", "line_tax", "1e400"))
+	onlyError(t, res, "line_tax", nrsNotNumber("line_tax"))
+	if e := res.Errors[0]; !reflect.DeepEqual(e.Rows, []int{2, 3}) {
+		t.Errorf("rows = %v, want [2 3]", e.Rows)
+	}
 }
 
 func TestImport_AnExponentInTaxPercentQuarantines(t *testing.T) {
@@ -555,12 +669,13 @@ func TestImport_ANonNumberInLineTotalOrBaseQuantityQuarantines(t *testing.T) {
 	res := r.do(true,
 		nrsRow("NAN-1", "line_total", "abc"),
 		nrsRow("NAN-2", "line_base_quantity", "x"),
+		nrsRow("NAN-3", "line_total", "100%"), // a percent sign belongs to line_tax_percent alone
 		nrsRow("NAN-OK", "line_total", "100.00", "line_base_quantity", "1.000"),
 	)
-	if len(res.Errors) != 2 {
-		t.Fatalf("errors = %+v, want 2", res.Errors)
+	if len(res.Errors) != 3 {
+		t.Fatalf("errors = %+v, want 3", res.Errors)
 	}
-	for row, field := range map[int]string{2: "line_total", 3: "line_base_quantity"} {
+	for row, field := range map[int]string{2: "line_total", 3: "line_base_quantity", 4: "line_total"} {
 		e, ok := errorFor(res, row)
 		if !ok || e.Field != field || e.Message != nrsNotNumber(field) {
 			t.Errorf("row %d error = %+v (found %v), want %s %q", row, e, ok, field, nrsNotNumber(field))
@@ -585,8 +700,17 @@ func TestImport_ACommaDecimalTaxPercentQuarantines(t *testing.T) {
 
 func TestImport_TwoPercentSignsQuarantine(t *testing.T) {
 	r := newNRSRun(t)
-	res := r.do(true, nrsRow("PP-1", "line_tax_percent", "7.5%%"), nrsRow("PP-OK", "line_tax_percent", " 7.5 % "))
-	onlyError(t, res, "line_tax_percent", nrsNotNumber("line_tax_percent"))
+	// Only one trailing sign is dropped (D6): doubled, leading and inner signs stay bad.
+	res := r.do(true, nrsRow("PP-1", "line_tax_percent", "7.5%%"), nrsRow("PP-2", "line_tax_percent", "%7.5"),
+		nrsRow("PP-3", "line_tax_percent", "7%5"), nrsRow("PP-OK", "line_tax_percent", " 7.5 % "))
+	if len(res.Errors) != 3 {
+		t.Fatalf("errors = %+v, want 3", res.Errors)
+	}
+	for row := 2; row <= 4; row++ {
+		if e, found := errorFor(res, row); !found || e.Field != "line_tax_percent" || e.Message != nrsNotNumber("line_tax_percent") {
+			t.Errorf("row %d: error = %+v (found %v), want %q", row, e, found, nrsNotNumber("line_tax_percent"))
+		}
+	}
 	ok := r.sent()["PP-OK"]
 	if len(r.sent()) != 1 || len(ok.LineItems) != 1 || sv(ok.LineItems[0].TaxPercent) != "7.5" {
 		t.Errorf("gate got %v, want only PP-OK with tax_percent 7.5", r.refs())
@@ -598,27 +722,38 @@ func TestImport_AnUnparseableDueDateQuarantines(t *testing.T) {
 	res := r.do(true,
 		nrsRow("DD-1", "due_date", "30/01/2026"),
 		nrsRow("DD-2", "tax_point_date", "31 Jan 2026"),
+		nrsRow("DD-3", "due_date", "2026-02-30"),
+		nrsRow("DD-4", "due_date", "2026-7-1"),
 		nrsRow("DD-OK", "due_date", "2026-07-31", "tax_point_date", "2026-07-02"),
+		nrsRow("DD-OK2", "due_date", " 2026-07-31 "),
 	)
-	if len(res.Errors) != 2 {
-		t.Fatalf("errors = %+v, want 2", res.Errors)
+	if len(res.Errors) != 4 {
+		t.Fatalf("errors = %+v, want 4", res.Errors)
 	}
-	for row, w := range map[int][2]string{2: {"due_date", "30/01/2026"}, 3: {"tax_point_date", "31 Jan 2026"}} {
+	for row, w := range map[int][2]string{2: {"due_date", "30/01/2026"}, 3: {"tax_point_date", "31 Jan 2026"}, 4: {"due_date", "2026-02-30"}, 5: {"due_date", "2026-7-1"}} {
 		e, ok := errorFor(res, row)
 		if !ok || e.Field != w[0] || e.Message != nrsBadDate(w[0], w[1]) {
 			t.Errorf("row %d error = %+v (found %v), want %s %q", row, e, ok, w[0], nrsBadDate(w[0], w[1]))
 		}
 	}
 	ok := r.sent()["DD-OK"]
-	if len(r.sent()) != 1 || dv(ok.DueDate) != "2026-07-31" || dv(ok.TaxPointDate) != "2026-07-02" {
-		t.Errorf("gate got %v, want only DD-OK with both dates", r.refs())
+	if len(r.sent()) != 2 || dv(ok.DueDate) != "2026-07-31" || dv(ok.TaxPointDate) != "2026-07-02" || dv(r.sent()["DD-OK2"].DueDate) != "2026-07-31" {
+		t.Errorf("gate got %v, want DD-OK with both dates and DD-OK2 with a trimmed due_date", r.refs())
 	}
 }
 
 func TestImport_IssueDateMessageIsUnchanged(t *testing.T) {
 	r := newNRSRun(t)
-	res := r.do(true, nrsRow("ID-1", "issue_date", "bad"), nrsRow("ID-OK", "due_date", "2026-07-31"))
-	onlyError(t, res, "issue_date", nrsBadDate("issue_date", "bad"))
+	res := r.do(true, nrsRow("ID-1", "issue_date", "bad"), nrsRow("ID-OK", "due_date", "2026-07-31"),
+		nrsRow("ID-2", "issue_date", " 2026-13-01 "), nrsRow("ID-3", "issue_date", "bad", "due_date", "worse"))
+	if len(res.Errors) != 3 {
+		t.Fatalf("errors = %+v, want 3", res.Errors)
+	}
+	for row, v := range map[int]string{2: "bad", 4: "2026-13-01", 5: "bad"} { // ID-3: the issue_date error outranks due_date
+		if e, found := errorFor(res, row); !found || e.Field != "issue_date" || e.Message != nrsBadDate("issue_date", v) {
+			t.Errorf("row %d: error = %+v (found %v), want issue_date %q", row, e, found, nrsBadDate("issue_date", v))
+		}
+	}
 	if ok := r.sent()["ID-OK"]; len(r.sent()) != 1 || dv(ok.DueDate) != "2026-07-31" {
 		t.Errorf("gate got %v, want only ID-OK with due_date", r.refs())
 	}
@@ -626,12 +761,13 @@ func TestImport_IssueDateMessageIsUnchanged(t *testing.T) {
 
 func TestImport_AnIssueTimeOutsideTheAcceptedShapesQuarantines(t *testing.T) {
 	r := newNRSRun(t)
-	bad := []string{"24:00:00", "09:05:00.5", "9:05 AM", "9.05", "9:5", "24:00", "9:60"}
+	bad := []string{"24:00:00", "09:05:00.5", "9:05 AM", "9.05", "9:5", "24:00", "9:60",
+		"9:05:7", "9:5:00", "12:3", "009:05", "9:05:60", "25:00", "-1:00", "９:05", "9:05:00 PM"}
 	var rows []map[string]string
 	for i, v := range bad {
 		rows = append(rows, nrsRow(fmt.Sprintf("IT-%d", i), "issue_time", v))
 	}
-	rows = append(rows, nrsRow("IT-OK1", "issue_time", "23:59:59"), nrsRow("IT-OK2", "issue_time", "9:05"))
+	rows = append(rows, nrsRow("IT-OK1", "issue_time", "23:59:59"), nrsRow("IT-OK2", "issue_time", "9:05"), nrsRow("IT-OK3", "issue_time", "0:00"))
 	res := r.do(true, rows...)
 	if len(res.Errors) != len(bad) {
 		t.Fatalf("errors = %+v, want %d", res.Errors, len(bad))
@@ -643,8 +779,8 @@ func TestImport_AnIssueTimeOutsideTheAcceptedShapesQuarantines(t *testing.T) {
 		}
 	}
 	sent := r.sent()
-	if len(sent) != 2 || sv(sent["IT-OK1"].IssueTime) != "23:59:59" || sv(sent["IT-OK2"].IssueTime) != "09:05:00" {
-		t.Errorf("gate got %v, want IT-OK1 23:59:59 and IT-OK2 09:05:00", r.refs())
+	if len(sent) != 3 || sv(sent["IT-OK1"].IssueTime) != "23:59:59" || sv(sent["IT-OK2"].IssueTime) != "09:05:00" || sv(sent["IT-OK3"].IssueTime) != "00:00:00" {
+		t.Errorf("gate got %v, want IT-OK1 23:59:59, IT-OK2 09:05:00 and IT-OK3 00:00:00", r.refs())
 	}
 }
 
@@ -654,14 +790,15 @@ func TestImport_RowsThatDisagreeOnANewHeaderFieldQuarantine(t *testing.T) {
 		nrsRow("DIS-1", "buyer_state", "LA"), nrsRow("DIS-1", "buyer_state", "OG"),
 		nrsRow("DIS-2", "buyer_state", "LA"), nrsRow("DIS-2", "buyer_state", "LA"),
 		nrsRow("DIS-3", "buyer_state", "LA"), nrsRow("DIS-3", "buyer_state", " LA "),
+		nrsRow("DIS-4", "issue_time", "9:05"), nrsRow("DIS-4", "issue_time", "09:05:00"),
 	)
 	onlyError(t, res, "buyer_state", "rows disagree on buyer_state")
 	if _, ok := findRowErrorWithRows(res.Errors, []int{2, 3}); !ok {
 		t.Errorf("errors = %+v, want one citing rows [2 3]", res.Errors)
 	}
 	sent := r.sent()
-	if len(sent) != 2 || sv(sent["DIS-2"].BuyerState) != "LA" || sv(sent["DIS-3"].BuyerState) != "LA" {
-		t.Errorf("gate got %v, want DIS-2 and DIS-3 with buyer_state LA (a padded Code agrees with its trim)", r.refs())
+	if len(sent) != 3 || sv(sent["DIS-2"].BuyerState) != "LA" || sv(sent["DIS-3"].BuyerState) != "LA" || sv(sent["DIS-4"].IssueTime) != "09:05:00" {
+		t.Errorf("gate got %v, want DIS-2 and DIS-3 with buyer_state LA (a padded Code agrees with its trim) and DIS-4 with a padded time", r.refs())
 	}
 }
 
@@ -673,15 +810,20 @@ func TestImport_ANewNumberTooLongForItsColumnQuarantines(t *testing.T) {
 		nrsRow("LONG-2", "line_tax", "1234567890123"),
 		nrsRow("LONG-3", "line_tax_percent", "1234567890123"),
 		nrsRow("LONG-4", "line_base_quantity", "123456789012"),
+		nrsRow("LONG-5", "line_total", "-1234567890123"),
 		nrsRow("LONG-OK", "line_total", "123456789012.50", "line_tax", "999999999999.99",
 			"line_tax_percent", "123456789012", "line_base_quantity", "12345678901.125"),
+		// A sign and leading zeros are not digits.
+		nrsRow("LONG-OK2", "line_total", "-999999999999.99", "line_base_quantity", "-00000000000000012345678901.125"),
+		nrsRow("LONG-OK3", "line_total", "0000000000000012.50", "line_tax_percent", "000000000000007.5"),
 	}
-	fields := []string{"line_total", "line_tax", "line_tax_percent", "line_base_quantity"}
+	fields := []string{"line_total", "line_tax", "line_tax_percent", "line_base_quantity", "line_total"}
+	okNums := []string{"LONG-OK", "LONG-OK2", "LONG-OK3"}
 
 	assertRun := func(res BatchResult) {
 		t.Helper()
-		if len(res.Errors) != len(fields) || res.QuarantinedInvoices != len(fields) || res.ReadyInvoices != 1 {
-			t.Fatalf("errors = %+v quarantined = %d ready = %d, want %d, %d, 1", res.Errors, res.QuarantinedInvoices, res.ReadyInvoices, len(fields), len(fields))
+		if len(res.Errors) != len(fields) || res.QuarantinedInvoices != len(fields) || res.ReadyInvoices != len(okNums) {
+			t.Fatalf("errors = %+v quarantined = %d ready = %d, want %d, %d, %d", res.Errors, res.QuarantinedInvoices, res.ReadyInvoices, len(fields), len(fields), len(okNums))
 		}
 		for i, f := range fields {
 			e, ok := errorFor(res, i+2)
@@ -692,21 +834,23 @@ func TestImport_ANewNumberTooLongForItsColumnQuarantines(t *testing.T) {
 	}
 
 	assertRun(r.do(true, rows...))
-	if sent := r.sent(); len(sent) != 1 || sent["LONG-OK"].InvoiceNumber != "LONG-OK" {
-		t.Errorf("dry run: gate got %v, want only LONG-OK", r.refs())
+	if sent := r.sent(); !reflect.DeepEqual(r.refs(), okNums) || len(sent) != len(okNums) {
+		t.Errorf("dry run: gate got %v, want only %v", r.refs(), okNums)
 	}
 	if n := r.count(); n != 0 {
 		t.Fatalf("dry run stored %d invoices", n)
 	}
 
 	assertRun(r.do(false, rows...))
-	for _, num := range []string{"LONG-1", "LONG-2", "LONG-3", "LONG-4"} {
+	for _, num := range []string{"LONG-1", "LONG-2", "LONG-3", "LONG-4", "LONG-5"} {
 		if n := countInvoicesByNumber(t, r.super, r.entityID, num); n != 0 {
 			t.Errorf("%s stored %d times, want 0", num, n)
 		}
 	}
-	if n := countInvoicesByNumber(t, r.super, r.entityID, "LONG-OK"); n != 1 {
-		t.Errorf("LONG-OK stored %d times, want 1 (the 12 and 11 digit values fit)", n)
+	for _, num := range okNums {
+		if n := countInvoicesByNumber(t, r.super, r.entityID, num); n != 1 {
+			t.Errorf("%s stored %d times, want 1 (the 12 and 11 digit values fit)", num, n)
+		}
 	}
 }
 
@@ -717,10 +861,13 @@ func TestImport_AnOverScaleNewNumberQuarantines(t *testing.T) {
 		nrsRow("SC-2", "line_base_quantity", "1.0005"),
 		nrsRow("SC-3", "line_total", "1.005"),
 		nrsRow("SC-4", "line_tax", "0.001"),
+		nrsRow("SC-5", "line_tax_percent", "7.505"),
+		nrsRow("SC-6", "line_total", "-0.001"),
 		nrsRow("SC-OK", "line_tax_percent", "7.500", "line_base_quantity", "1.2340",
 			"line_total", "123456789012.500", "line_tax", "0.010"),
+		nrsRow("SC-OK2", "line_tax_percent", "7.550", "line_total", "0.000", "line_tax", "-1.50"),
 	)
-	want := map[int]string{2: "line_tax_percent", 3: "line_base_quantity", 4: "line_total", 5: "line_tax"}
+	want := map[int]string{2: "line_tax_percent", 3: "line_base_quantity", 4: "line_total", 5: "line_tax", 6: "line_tax_percent", 7: "line_total"}
 	if len(res.Errors) != len(want) {
 		t.Fatalf("errors = %+v, want %d", res.Errors, len(want))
 	}
@@ -732,12 +879,50 @@ func TestImport_AnOverScaleNewNumberQuarantines(t *testing.T) {
 	}
 	sent := r.sent()
 	ok := sent["SC-OK"]
-	if len(sent) != 1 || len(ok.LineItems) != 1 {
-		t.Fatalf("gate got %v, want only SC-OK", r.refs())
+	if len(sent) != 2 || len(ok.LineItems) != 1 || len(sent["SC-OK2"].LineItems) != 1 {
+		t.Fatalf("gate got %v, want only SC-OK and SC-OK2", r.refs())
 	}
 	checkWants(t, []nrsWant{
 		{"SC-OK tax_percent", sv(ok.LineItems[0].TaxPercent), "7.500"},
 		{"SC-OK base_quantity", sv(ok.LineItems[0].BaseQuantity), "1.2340"},
 		{"SC-OK line_total", sv(ok.LineItems[0].LineTotal), "123456789012.500"},
+		{"SC-OK2 tax_percent (a non-zero 2nd decimal fits)", sv(sent["SC-OK2"].LineItems[0].TaxPercent), "7.550"},
 	})
+}
+
+// 02 AC8 / D15: the range check covers the four new numeric keys; the old numeric keys keep their checks.
+func TestImport_TheRangeCheckStopsAtTheNewNumericKeys(t *testing.T) {
+	r := newNRSRun(t)
+	res := r.do(true, nrsRow("OLD-1", "line_unit_price", "1234567890123.456", "line_quantity", "1234567890123.4567",
+		"subtotal", "1234567890123456", "vat", "0.001", "total", "1234567890123456"))
+	if res.ReadyInvoices != 1 || len(res.Errors) != 0 {
+		t.Errorf("ready = %d, errors = %+v, want the old numeric keys unchecked for range", res.ReadyInvoices, res.Errors)
+	}
+}
+
+// Design order: date, then time, then number, then range.
+func TestImport_ChecksRunInTheDesignOrder(t *testing.T) {
+	r := newNRSRun(t)
+	res := r.do(true,
+		nrsRow("ORD-1", "due_date", "bad", "issue_time", "99:99"),
+		nrsRow("ORD-2", "issue_time", "99:99", "line_tax", "abc"),
+		nrsRow("ORD-3", "line_tax", "abc", "line_total", "1234567890123"),
+		nrsRow("ORD-OK"),
+	)
+	want := map[int][2]string{
+		2: {"due_date", nrsBadDate("due_date", "bad")},
+		3: {"issue_time", nrsIssueTimeMsg},
+		4: {"line_tax", nrsNotNumber("line_tax")},
+	}
+	if len(res.Errors) != len(want) {
+		t.Fatalf("errors = %+v, want %d", res.Errors, len(want))
+	}
+	for row, w := range want {
+		if e, found := errorFor(res, row); !found || e.Field != w[0] || e.Message != w[1] {
+			t.Errorf("row %d: error = %+v (found %v), want %s %q", row, e, found, w[0], w[1])
+		}
+	}
+	if len(r.sent()) != 1 {
+		t.Errorf("gate got %v, want only ORD-OK", r.refs())
+	}
 }

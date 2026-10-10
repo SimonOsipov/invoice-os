@@ -174,7 +174,7 @@ func nested(inv map[string]any, key, field string) any {
 // Canonical text: the real run reads Postgres text, so both runs agree (D15).
 func nrsCanonicalRows(num string) []map[string]string {
 	hdr := []string{
-		"invoice_kind", "B2B", "tax_currency_code", "NGN", "due_date", "2026-07-31", "issue_time", "09:05:00",
+		"invoice_kind", "B2B", "tax_currency_code", "USD", "due_date", "2026-07-31", "issue_time", "9:05",
 		"tax_point_date", "2026-07-02", "payment_status", "PENDING", "buyer_email", "ada@beta.example",
 		"buyer_telephone", "+2348012345678", "buyer_street", "1 Marina Road", "buyer_city", "Lagos",
 		"buyer_postal_zone", "101233", "buyer_country", "NG", "buyer_state", "LA", "buyer_lga", "IKJ",
@@ -185,7 +185,7 @@ func nrsCanonicalRows(num string) []map[string]string {
 		"line_description": "Laptop", "line_quantity": "2.000", "line_unit_price": "50.00", "line_total": "100.00", "line_tax": "7.50",
 		"line_tax_category": "VAT", "line_hsn_code": "8471.30", "line_isic_code": "6201", "line_product_category": "Electronics",
 		"line_service_category": "Consulting", "line_sellers_item_identification": "SKU-42", "line_price_unit": "EA",
-		"line_tax_percent": "7.50", "line_base_quantity": "2.000",
+		"line_tax_percent": "7.50%", "line_base_quantity": "2.000",
 	} {
 		l1[k] = v
 	}
@@ -194,7 +194,7 @@ func nrsCanonicalRows(num string) []map[string]string {
 		"line_description": "Mouse", "line_quantity": "1.000", "line_unit_price": "50.00", "line_total": "50.00", "line_tax": "3.75",
 		"line_tax_category": "VAT", "line_hsn_code": "0101.21", "line_isic_code": "6202", "line_product_category": "Peripherals",
 		"line_service_category": "Support", "line_sellers_item_identification": "SKU-43", "line_price_unit": "EA",
-		"line_tax_percent": "7.50", "line_base_quantity": "1.000",
+		"line_tax_percent": "7.50 %", "line_base_quantity": "1.000",
 	} {
 		l2[k] = v
 	}
@@ -219,6 +219,17 @@ func TestImportNRS_DryRunAndRealRunSendTheSamePayload(t *testing.T) {
 	l1, l2 := lineOf(t, dryInv, 0), lineOf(t, dryInv, 1)
 	checkWants(t, []nrsWant{
 		{"invoice_kind", sv(strp(dryInv["invoice_kind"])), "B2B"},
+		{"tax_currency_code (differs from currency)", sv(strp(dryInv["tax_currency_code"])), "USD"},
+		{"payment_status", sv(strp(dryInv["payment_status"])), "PENDING"},
+		{"buyer.telephone", sv(strp(nested(dryInv, "buyer", "telephone"))), "+2348012345678"},
+		{"buyer.street", sv(strp(nested(dryInv, "buyer", "street"))), "1 Marina Road"},
+		{"buyer.city", sv(strp(nested(dryInv, "buyer", "city"))), "Lagos"},
+		{"buyer.postal_zone", sv(strp(nested(dryInv, "buyer", "postal_zone"))), "101233"},
+		{"buyer.country", sv(strp(nested(dryInv, "buyer", "country"))), "NG"},
+		{"buyer.lga", sv(strp(nested(dryInv, "buyer", "lga"))), "IKJ"},
+		{"line 1 isic_code", sv(strp(l1["isic_code"])), "6201"},
+		{"line 1 product_category", sv(strp(l1["product_category"])), "Electronics"},
+		{"line 1 service_category", sv(strp(l1["service_category"])), "Consulting"},
 		{"issue_time", sv(strp(dryInv["issue_time"])), "09:05:00"},
 		{"due_date", sv(strp(dryInv["due_date"])), "2026-07-31"},
 		{"tax_point_date", sv(strp(dryInv["tax_point_date"])), "2026-07-02"},
@@ -232,6 +243,7 @@ func TestImportNRS_DryRunAndRealRunSendTheSamePayload(t *testing.T) {
 		{"line 1 base_quantity", num(l1["base_quantity"]), "2.000"},
 		{"line 2 sellers_item_identification", sv(strp(l2["sellers_item_identification"])), "SKU-43"},
 		{"line 2 price_unit", sv(strp(l2["price_unit"])), "EA"},
+		{"line 2 tax_percent (7.50 % -> 7.50)", num(l2["tax_percent"]), "7.50"},
 	})
 
 	if !reflect.DeepEqual(dryInv, realInv) {

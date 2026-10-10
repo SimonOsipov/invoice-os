@@ -26,18 +26,6 @@ func TestHeaderFieldOrder_IsTheTwentyOneImportHeaderFieldsWithoutTheNumber(t *te
 	}
 }
 
-func TestNumericFields_AreTheMoneyAndQuantityImportFields(t *testing.T) {
-	want := []string{"line_base_quantity", "line_quantity", "line_tax", "line_tax_percent", "line_total", "line_unit_price", "subtotal", "total", "vat"}
-	if got := sortedKeys(numericFields); !slices.Equal(got, want) {
-		t.Errorf("numericFields = %v, want %v", got, want)
-	}
-	for _, absent := range []string{"line_description", "issue_date"} {
-		if numericFields[absent] {
-			t.Errorf("numericFields holds %q", absent)
-		}
-	}
-}
-
 func TestCanonicalFields_AreTheImportKeys(t *testing.T) {
 	want := invoicefields.ImportKeys()
 	sort.Strings(want)

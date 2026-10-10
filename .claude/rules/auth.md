@@ -56,7 +56,7 @@ paths:
 - Keep GoTrue private. The gateway calls fixed GoTrue paths and forwards no client path or query.
 - Answer a new, a repeat and a confirmed address on `/auth/register` with the same 202.
 - Answer `POST /auth/invitation` with `account` set to `none`, `unconfirmed`, `confirmed` or `unknown`. Map any other tenancy value to `unknown`.
-- Answer `/auth/invitation/register` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_unconfirmed` when it reads `unconfirmed`. Send both at once, before the claim and the GoTrue call.
+- Answer `/auth/invitation/register` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_unconfirmed` when it reads `unconfirmed`. Send both before the claim and the GoTrue call.
 - Map GoTrue's 200 with empty `identities`, 422 `user_already_exists` and 422 `email_exists` to 409 `account_exists` on `/auth/invitation/register` only.
 - Answer a resend or reset request with the same 202 for every outcome after the 400 checks. `/auth/invitation/resend` is the exception (next rule).
 - Answer `POST /auth/invitation/resend` for a live token with 200 `sent` when GoTrue mailed.

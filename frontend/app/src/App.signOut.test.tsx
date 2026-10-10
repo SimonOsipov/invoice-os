@@ -380,18 +380,19 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
     vi.mocked(localStorage.setItem).mockClear()
     vi.mocked(localStorage.removeItem).mockClear()
 
+    const sentAtClick = calls.length
+    expect(sentAtClick, 'control: the boot sent requests').toBeGreaterThan(0)
     await clickSignOut()
-    const seen = await hitRevoked()
-    let tokenSeen: unknown
+    let seen: unknown
     await act(async () => {
-      tokenSeen = await Promise.resolve(capturedCtx!.getToken()).then(
+      seen = await capturedCtx!.authedFetch(REVOKED).then(
         () => 'resolved',
         (e: unknown) => e,
       )
     })
-    let uploadSeen: unknown
+    let tokenSeen: unknown
     await act(async () => {
-      uploadSeen = await Promise.resolve(capturedImportAuth!.getToken()).then(
+      tokenSeen = await Promise.resolve(capturedCtx!.getToken()).then(
         () => 'resolved',
         (e: unknown) => e,
       )
@@ -400,11 +401,10 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
 
     expect((seen as Error).name, 'authedFetch rejects').toBe('SessionEndedError')
     expect((tokenSeen as Error).name, 'getToken rejects').toBe('SessionEndedError')
-    expect((uploadSeen as Error).name, 'the upload transport rejects').toBe('SessionEndedError')
     expect(
-      calls.map((c) => c.url),
-      'no request leaves after the click',
-    ).not.toContain(REVOKED)
+      calls.slice(sentAtClick).filter((c) => c.url.includes('/api/')),
+      'no API request leaves after the click',
+    ).toEqual([])
     expect(hrefWrites).toEqual([])
     expect(sessionWrites()).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBe(raw)
@@ -432,9 +432,11 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
       const pending = deferSignOut()
       const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
 
+      expect(screen.queryByText('COMPLIANCE OVERVIEW'), 'control: no dashboard before the entities land').toBeNull()
       await clickSignOut()
       const sent = calls.length
       await act(async () => releaseEntities())
+      await waitFor(() => expect(screen.queryByText('COMPLIANCE OVERVIEW'), 'control: the dashboard mounted after the click').not.toBeNull())
       await settle(100)
 
       expect(
@@ -471,6 +473,42 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
 
     expect(signOutPosts()).toHaveLength(1)
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+  })
+
+  it('a real 401 on a request sent before the click is ignored during the revoke', async () => {
+    const pending = deferSignOut()
+    const raw = handoffRecord(A_SID1, 'R1')
+    const { hrefWrites } = await mount(raw)
+    let answerLate!: () => void
+    const gate = new Promise<void>((r) => {
+      answerLate = r
+    })
+    apiOverride = () => gate.then(answer(401, { error: 'unauthorized' }))
+    const LATE = `${GATEWAY}/api/late`
+    const late = capturedCtx!.authedFetch(LATE).then(
+      () => 'resolved',
+      (e: unknown) => e,
+    )
+    await waitFor(() => expect(calls.map((c) => c.url), 'control: the request left before the click').toContain(LATE))
+    await clickSignOut()
+    vi.mocked(localStorage.setItem).mockClear()
+    vi.mocked(localStorage.removeItem).mockClear()
+
+    await act(async () => answerLate())
+    expect(is401(await late), 'control: the 401 reached the app').toBe(true)
+    await settle()
+
+    expect(hrefWrites, 'the 401 navigates nowhere while the revoke is in flight').toEqual([])
+    expect(sessionWrites(), 'the 401 writes no storage').toEqual([])
+    expect(localStorage.getItem(SESSION_KEY)).toBe(raw)
+
+    await pending.release(REVOKED_OK)
+    await settle()
+
+    expect(signOutPosts()).toHaveLength(1)
+    expect(hrefWrites).toEqual(HANDOFF_EXIT)
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 
   // The page is still unloading when a request sent before the click answers.

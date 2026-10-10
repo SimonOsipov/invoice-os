@@ -13,6 +13,7 @@ import { APP_PERSONAS } from '../auth'
 import { APPROVAL_CARD_COPY, type ApprovalRun } from '../lib/approvals'
 import type { AuditEvent, AuditResponse } from '../lib/audit'
 import { createAuthedFetch } from '../lib/authedFetch'
+import { EXPLAIN_COPY, fixPatch, type ExplainFix } from '../lib/explain'
 import { fmtDateTime } from '../lib/format'
 import {
   DETAIL_SUBMIT_COPY,
@@ -178,6 +179,8 @@ interface DetailFetchOptions {
   // GET .../audit-log, overriding `auditLog` so a non-2xx can be produced. Absent (the
   // default) leaves every pre-existing test's behaviour byte-identical.
   auditLogResponse?: MockResponse
+  // POST .../explain (ENGI-17-05). Every call body is recorded into `explainCalls`.
+  explainResponse?: MockResponse
 }
 
 // getInvoice and getInvoiceHistory fire concurrently (two independent useAsync effects) --
@@ -196,6 +199,8 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
   const submitCalls: SubmitCallBody[] = []
   const resolveCalls: ResolveCall[] = []
   const decideCalls: DecideCall[] = []
+  const explainCalls: { rule_key: string; path: string }[] = []
+  const patchCalls: unknown[] = []
   const NO_RUN: MockResponse = { ok: false, status: 404, json: () => Promise.resolve({ error: 'no approval run for this invoice' }) }
 
   const fetchMock = vi.fn((url: string, init: RequestInit = {}) => {
@@ -248,10 +253,17 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
         { ok: true, status: 200, json: () => Promise.resolve({ results: [] }) }
       return Promise.resolve(resp)
     }
+    if (method === 'POST' && url.endsWith('/explain')) {
+      explainCalls.push(JSON.parse(String(init.body)))
+      return Promise.resolve<MockResponse>(
+        opts.explainResponse ?? { ok: true, status: 200, json: () => Promise.resolve({ status: 'unavailable', explanation: null, fix: null }) },
+      )
+    }
     if (method === 'POST' && url.endsWith('/validate')) {
       return Promise.resolve(opts.revalidateResponse ?? { ok: true, status: 200, json: () => Promise.resolve(detail) })
     }
     if (method === 'PATCH') {
+      patchCalls.push(JSON.parse(String(init.body)))
       return Promise.resolve(opts.editResponse ?? { ok: true, status: 200, json: () => Promise.resolve(detail) })
     }
     // Dispatched BEFORE the detail-refetch counter, like /source-document below: without
@@ -338,7 +350,7 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(record) })
   })
   vi.stubGlobal('fetch', fetchMock)
-  return { fetchMock, submitCalls, resolveCalls, decideCalls }
+  return { fetchMock, submitCalls, resolveCalls, decideCalls, explainCalls, patchCalls }
 }
 
 beforeEach(() => {
@@ -4462,6 +4474,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
   // The edit form's invoice number cell.
   const EXTR_27_TESTIDS = ['edit-invoice-number']
+  const ENGI_17_TESTIDS = ['violation-explain']
 
   // The rail's UBL document card.
   const BUG_18_TESTIDS = [
@@ -4727,7 +4740,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
     // Closed-world, and deliberately so: "no card gained a testid" is half of AC-5. A new
     // element on this page must be declared, in one of the three lists above, by whoever adds it.
-    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS, ...BUG_18_TESTIDS])
+    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS, ...ENGI_17_TESTIDS, ...BUG_18_TESTIDS])
     const undeclared = [...seen.keys()].filter((id) => !declared.has(id)).sort()
     expect(
       undeclared,
@@ -6606,5 +6619,187 @@ describe('InvoiceDetail opens at the line the review screen handed over (ENGI-16
     await waitFor(() => expect((screen.getByTestId('revalidate') as HTMLButtonElement).textContent).not.toMatch(/Revalidating/))
     await screen.findByTestId('edit-toggle')
     expect(screen.queryByTestId('edit-invoice')).toBeNull()
+  })
+})
+
+
+describe('InvoiceDetail explain (ENGI-17-05)', () => {
+  const ID = 'inv-explain-1'
+  const lines = [1, 2, 3].map((n) => ({
+    id: `l${n}`,
+    line_no: n,
+    description: `Item ${n}`,
+    quantity: '1',
+    unit_price: n === 2 ? '-5.00' : '10.00',
+    line_total: '10.00',
+    line_tax: '0.75',
+  }))
+  const viol = (path: string) => ({ rule_key: 'line.sum', severity: 'error' as const, message: `bad ${path}`, path })
+  const base = {
+    id: ID,
+    status: 'validated' as InvoiceStatus,
+    can_edit: true,
+    can_revalidate: true,
+    line_items: lines,
+    rule_set_version: 3,
+    violations: [viol('line_items[1]'), viol('line_items[2].unit_price')],
+  }
+  const fix: ExplainFix = { field: 'unit_price', label: 'Unit price', line: 2, current: '-5.00', value: '5.00' }
+  const okFix = (f: ExplainFix = fix): MockResponse => ({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ status: 'ok', explanation: 'The price is negative.', fix: f }),
+  })
+  const fail = (status: number, error: string): MockResponse => ({ ok: false, status, json: () => Promise.resolve({ error }) })
+  const accept = () => screen.findByTestId('explain-accept') as Promise<HTMLButtonElement>
+
+  it('invoiceDetail_explainRunsOnlyOnClick', async () => {
+    const { explainCalls } = mockDetailFetch(detailRecord(base), [], { explainResponse: okFix() })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const buttons = await screen.findAllByTestId('violation-explain')
+    expect(explainCalls).toHaveLength(0)
+
+    fireEvent.click(buttons[1])
+    await screen.findByTestId('explain-text')
+    expect(explainCalls).toEqual([{ rule_key: 'line.sum', path: 'line_items[2].unit_price' }])
+  })
+
+  it('invoiceDetail_explainEnabledWhenNotEditable', async () => {
+    mockDetailFetch(detailRecord({ ...base, can_edit: false }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    for (const b of await screen.findAllByTestId('violation-explain')) expect((b as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('invoiceDetail_secondClickClosesThePanel', async () => {
+    mockDetailFetch(detailRecord(base), [], { explainResponse: okFix() })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const buttons = await screen.findAllByTestId('violation-explain')
+    fireEvent.click(buttons[0])
+    await screen.findByTestId('explain-panel')
+    fireEvent.click(buttons[0])
+    expect(screen.queryByTestId('explain-panel')).toBeNull()
+
+    fireEvent.click(buttons[0])
+    await screen.findByTestId('explain-panel')
+    fireEvent.click(buttons[1])
+    const panels = await screen.findAllByTestId('explain-panel')
+    expect(panels).toHaveLength(1)
+    const rows = screen.getAllByRole('row')
+    const explRow = screen.getByTestId('violation-explanation-row')
+    expect(rows[rows.indexOf(explRow) - 1].textContent).toContain('line_items[2].unit_price')
+  })
+
+  it('invoiceDetail_acceptSavesAndMarksStale', async () => {
+    const { patchCalls, fetchMock } = mockDetailFetch(detailRecord(base), [], { explainResponse: okFix() })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click((await screen.findAllByTestId('violation-explain'))[1])
+    fireEvent.click(await accept())
+
+    await screen.findByTestId('stale-verdict')
+    expect(patchCalls).toEqual([fixPatch(lines, fix)])
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+    expect(screen.queryByTestId('explain-panel')).toBeNull()
+    const gets = fetchMock.mock.calls.filter(([u, i]) => (i?.method ?? 'GET') === 'GET' && String(u).endsWith(`/invoices/${ID}`))
+    expect(gets.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('invoiceDetail_acceptDisabledWhenNotEditable', async () => {
+    const { patchCalls } = mockDetailFetch(detailRecord({ ...base, can_edit: false }), [], { explainResponse: okFix() })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click((await screen.findAllByTestId('violation-explain'))[1])
+    const btn = await accept()
+    expect(btn.disabled).toBe(true)
+    expect(btn.style.opacity).toBe('0.45')
+    expect(btn.style.cursor).toBe('not-allowed')
+    expect(btn.title).toBe('')
+    fireEvent.click(btn)
+    expect(patchCalls).toHaveLength(0)
+  })
+
+  it('invoiceDetail_acceptDisabledWhileEditing', async () => {
+    const { patchCalls } = mockDetailFetch(detailRecord(base), [], { explainResponse: okFix() })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    const row = (await screen.findAllByTestId('line-row'))[0]
+    const input = row.querySelector('input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'typed' } })
+    fireEvent.click((await screen.findAllByTestId('violation-explain'))[1])
+    const btn = await accept()
+    expect(btn.disabled).toBe(true)
+    expect(btn.title).toBe(EXPLAIN_COPY.editorOpen)
+    fireEvent.click(btn)
+    expect(patchCalls).toHaveLength(0)
+    expect((screen.getAllByTestId('line-row')[0].querySelector('input') as HTMLInputElement).value).toBe('typed')
+  })
+
+  it('invoiceDetail_unavailableLeavesThePageWorking', async () => {
+    const { fetchMock } = mockDetailFetch(detailRecord(base))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click((await screen.findAllByTestId('violation-explain'))[1])
+    expect((await screen.findByTestId('explain-unavailable')).textContent).toBe(EXPLAIN_COPY.unavailable)
+
+    fireEvent.click(screen.getAllByTestId('violation-open-line')[0])
+    await screen.findByTestId('edit-invoice')
+    fireEvent.click(screen.getByTestId('edit-cancel'))
+    fireEvent.click(screen.getByTestId('revalidate'))
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u, i]) => i?.method === 'POST' && String(u).endsWith('/validate'))).toBe(true),
+    )
+  })
+
+  it('invoiceDetail_failedAcceptReloadsAndCloses', async () => {
+    const msg = 'line_items id must name a line of this invoice'
+    const { patchCalls, fetchMock } = mockDetailFetch(detailRecord(base), [], { explainResponse: okFix(), editResponse: fail(400, msg) })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const gets = () => fetchMock.mock.calls.filter(([u, i]) => (i?.method ?? 'GET') === 'GET' && String(u).endsWith(`/invoices/${ID}`)).length
+    fireEvent.click((await screen.findAllByTestId('violation-explain'))[1])
+    fireEvent.click(await accept())
+
+    const notice = await screen.findByTestId('explain-notice')
+    expect(notice.textContent).toBe(`${EXPLAIN_COPY.acceptFailed} ${msg}`)
+    expect(screen.queryByTestId('explain-panel')).toBeNull()
+    expect(gets()).toBe(2)
+    expect(patchCalls).toHaveLength(1)
+  })
+
+  it('invoiceDetail_explainDisabledWhileStale', async () => {
+    const { explainCalls } = mockDetailFetch(detailRecord(base), [], { explainResponse: okFix() })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(await screen.findByDisplayValue('Beta Ltd'), { target: { value: 'Beta Ltd 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await screen.findByTestId('stale-verdict')
+
+    const buttons = (await screen.findAllByTestId('violation-explain')) as HTMLButtonElement[]
+    expect(buttons[0].disabled).toBe(true)
+    expect(buttons[0].title).toBe(EXPLAIN_COPY.stale)
+    fireEvent.click(buttons[0])
+    expect(explainCalls).toHaveLength(0)
+
+    fireEvent.click(screen.getByTestId('revalidate'))
+    await waitFor(() => expect(screen.queryByTestId('stale-verdict')).toBeNull())
+    await waitFor(() => expect((screen.getAllByTestId('violation-explain')[0] as HTMLButtonElement).disabled).toBe(false))
+  })
+
+  it('invoiceDetail_editorSaveClosesThePanel', async () => {
+    mockDetailFetch(detailRecord(base), [], { explainResponse: okFix() })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click((await screen.findAllByTestId('violation-explain'))[1])
+    await screen.findByTestId('explain-panel')
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+    fireEvent.change(await screen.findByDisplayValue('Beta Ltd'), { target: { value: 'Beta Ltd 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await screen.findByTestId('stale-verdict')
+    expect(screen.queryByTestId('explain-panel')).toBeNull()
+  })
+
+  it('invoiceDetail_revalidateClosesThePanel', async () => {
+    mockDetailFetch(detailRecord(base), [], { explainResponse: okFix() })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click((await screen.findAllByTestId('violation-explain'))[1])
+    await screen.findByTestId('explain-panel')
+    fireEvent.click(screen.getByTestId('revalidate'))
+    await waitFor(() => expect(screen.queryByTestId('explain-panel')).toBeNull())
   })
 })

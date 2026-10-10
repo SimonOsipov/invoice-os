@@ -27,7 +27,8 @@ import {
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { getExtractions, type ExtractionJobsResponse } from '../lib/importApi'
 import type { LineEditKey } from '../lib/invoiceFields'
-import type { LineTarget } from '../lib/validationApi'
+import { EXPLAIN_COPY } from '../lib/explain'
+import { violationKey, type LineTarget } from '../lib/validationApi'
 import { stripNodes } from '../lib/invoiceStrip'
 import {
   BUYER_TIN_MISSING,
@@ -71,6 +72,7 @@ import {
 import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/reviewBatch'
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
+import { ExplainPanel } from './ExplainPanel'
 import { ApprovalStateCard } from './ApprovalStateCard'
 import { InvoiceActivityCard } from './InvoiceActivityCard'
 import { SourceDocumentCard } from './SourceDocumentCard'
@@ -308,6 +310,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   const [editing, setEditing] = useState(false)
   // onFocusApplied resets this to null after focusing, so a repeat click on the same line re-focuses.
   const [lineFocus, setLineFocus] = useState<{ seq: number; target: LineTarget } | null>(null)
+  const [explainOpen, setExplainOpen] = useState<string | null>(null)
+  const [explainNotice, setExplainNotice] = useState<string | null>(null)
 
   // Read once at mount: the review screen's Open line target, applied when the record first loads.
   const pendingLine = useRef(ctx.importedInvoiceLine ?? null)
@@ -390,6 +394,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       // the editor can never remount against a half-refreshed record (INVED-01-07).
       setEditing(false)
       setStaleSinceEdit(true)
+      setExplainOpen(null)
+      setExplainNotice(null)
       // M5-09-07: clear the poll overlay BEFORE detail.run(), so this user-initiated
       // refresh's own result -- success or error -- is what renders next, never a stale
       // `live` value ([poll-overlay-not-rerun]). Unreachable while a tick is in flight
@@ -428,6 +434,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
       try {
         await revalidateInvoice(ctx.authedFetch, base, invoiceId)
         setStaleSinceEdit(false)
+        setExplainOpen(null)
+        setExplainNotice(null)
         gen.current++ // see handleSaved above -- invalidate any already-in-flight tick too
         // See handleSaved above -- a stale submit banner must not survive a re-validate either.
         setSubmitPhase('idle')
@@ -1007,6 +1015,14 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                     Edited since the last validation — this verdict is stale. Run Re-validate to refresh it.
                   </div>
                 )}
+                {explainNotice != null && (
+                  <div
+                    data-testid="explain-notice"
+                    style={{ padding: '9px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', overflowWrap: 'anywhere' }}
+                  >
+                    {EXPLAIN_COPY.acceptFailed} {explainNotice}
+                  </div>
+                )}
                 {inv.rule_set_version != null ? (
                   <div data-testid="violations-table">
                     <ViolationsTable
@@ -1018,6 +1034,34 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                         setEditing(true)
                         setLineFocus((f) => ({ seq: (f?.seq ?? 0) + 1, target }))
                       }}
+                      explainOpen={explainOpen}
+                      explainDisabled={verdict === 'stale'}
+                      explainTitle={EXPLAIN_COPY.stale}
+                      onExplain={(v) => {
+                        const k = violationKey(v)
+                        setExplainOpen((cur) => (cur === k ? null : k))
+                        setExplainNotice(null)
+                      }}
+                      renderExplanation={(v) => (
+                        <ExplainPanel
+                          key={violationKey(v)}
+                          ctx={ctx}
+                          base={base}
+                          invoiceId={invoiceId}
+                          violation={v}
+                          lines={inv.line_items ?? []}
+                          acceptDisabled={!inv.can_edit || editing}
+                          acceptTitle={editing ? EXPLAIN_COPY.editorOpen : undefined}
+                          onAccepted={() => handleSaved(false)}
+                          onAcceptFailed={(m) => {
+                            setExplainOpen(null)
+                            setExplainNotice(m)
+                            gen.current++
+                            setLive(null)
+                            detail.run()
+                          }}
+                        />
+                      )}
                     />
                   </div>
                 ) : (

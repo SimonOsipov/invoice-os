@@ -1099,7 +1099,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   // 4th <td>) must render it here, on this LIVE invoice-detail mount of the table, not
   // the em-dash placeholder a blank target would leave.
   const vatRow = violationsTable.locator('tbody tr').filter({ hasText: 'vat-standard-rate' })
-  await expect(vatRow.locator('td').nth(3), 'v3 fills target on vat-standard-rate -- Path must not render the placeholder').not.toHaveText('—')
+  await expect(vatRow.locator('td').nth(3).locator('span').first(), 'v3 fills target on vat-standard-rate -- Path must not render the placeholder').not.toHaveText('—')
 
   await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
   await expectStripStates(page, { draft: 'current', validated: 'unreached' })
@@ -4235,7 +4235,7 @@ test.describe.serial("detail surface: the compliance card's geometry", () => {
     await expect(row.locator('td').nth(2), 'the Rule key cell must read back the substituted string exactly').toHaveText(
       STUB_VIOLATION.rule_key,
     )
-    await expect(row.locator('td').nth(3), 'the Path cell must read back the substituted string exactly').toHaveText(
+    await expect(row.locator('td').nth(3).locator('span').first(), 'the Path cell must read back the substituted string exactly').toHaveText(
       STUB_VIOLATION.path,
     )
     expect(intercepted(), 'the stub route must have substituted the detail response at least once').toBeGreaterThan(0)

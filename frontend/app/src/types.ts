@@ -263,8 +263,8 @@ export type PlatformCtx = {
   // `active` — null for a workspace (either persona) with no entity resolved yet, for
   // the emptyClient() placeholder, and for the whole loading/error/no-gateway window.
   // Every filing gate
-  // reads THIS, never `active.entityId`: `active` is rebuilt from `entities` by an effect,
-  // so the id can be non-null while the entity itself is not yet in the list, and a gate
+  // reads THIS, never `active.entityId`: the id can be non-null
+  // while the entity itself is not in the list, and a gate
   // on the id would arm a button that swallows the click ([gate-on-the-resolved-entity]).
   // draftToCreateRequest also needs the real Entity, never a Client — Client.tin is lossy
   // (`e.tin ?? '—'`), so a TIN-less entity is unrepresentable through it.

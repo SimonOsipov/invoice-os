@@ -139,6 +139,11 @@ button {
   align-items: center;
   gap: 28px;
 }
+.a-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
 .a-burger {
   display: none;
   width: 44px;
@@ -189,6 +194,12 @@ button {
 @media (max-width: 1219px) {
   .a-create {
     display: none;
+  }
+}
+/* Header row fits 375px: e2e/topology/design-system.spec.ts `landing header row at 390, 389 and 375`. */
+@media (max-width: 389.98px) {
+  .a-actions {
+    gap: 12px;
   }
 }
 @media (min-width: 1120.02px) {

@@ -481,3 +481,46 @@ describe('HD-13 the registration entry hides at 1219px and the 1120px breakpoint
     expect(createEntryFailures(LANDING_CSS)).toEqual([])
   })
 })
+
+/** The `.a-actions` gap contract: the failures, empty when it holds. */
+function actionsFailures(css: string): string[] {
+  const rules = parseRules(css).filter((r) => selectorParts(r).includes('.a-actions'))
+  const base = rules.filter((r) => r.at.length === 0)
+  const out: string[] = []
+  const baseDecl = (prop: string) => declared(base, '.a-actions', prop, () => true)
+  if (baseDecl('display') !== 'flex') out.push(`base display: ${baseDecl('display')} != flex`)
+  if (baseDecl('align-items') !== 'center') out.push(`base align-items: ${baseDecl('align-items')} != center`)
+  if (baseDecl('gap') !== '24px') out.push(`base gap: ${baseDecl('gap')} != 24px`)
+  const narrowed = rules.filter((r) => r.at.length > 0 && declarations(r.body).some((d) => d.prop === 'gap' || d.prop === 'column-gap'))
+  if (narrowed.length !== 1) out.push(`${narrowed.length} gap rules under an at-rule, want 1`)
+  for (const r of narrowed) {
+    const q = r.at.join(' ')
+    const gap = declared([r], '.a-actions', 'gap', () => true)
+    if (!/^@media \(\s*max-width\s*:\s*389\.98px\s*\)$/i.test(q)) out.push(`gap rule under ${q}`)
+    if (gap !== '12px') out.push(`gap rule under ${q} sets ${gap}`)
+  }
+  return out
+}
+
+const ACTIONS_FIXTURE = (q: string, gap = '12px') => `
+.a-actions { display: flex; align-items: center; gap: 24px; }
+@media ${q} { .a-actions { gap: ${gap}; } }
+`
+
+describe('the header action group gap', () => {
+  it('controls: the lookup accepts the 389.98px fixture and rejects 390px, min-width, 24px-inside-media and a missing base', () => {
+    expect(actionsFailures(ACTIONS_FIXTURE('(max-width: 389.98px)'))).toEqual([])
+    expect(actionsFailures(ACTIONS_FIXTURE('(max-width: 390px)')).length, 'max-width 390px').toBeGreaterThan(0)
+    expect(actionsFailures(ACTIONS_FIXTURE('(min-width: 320px)')).length, 'min-width').toBeGreaterThan(0)
+    expect(actionsFailures(ACTIONS_FIXTURE('(max-width: 389.98px)', '8px')).length, 'wrong gap').toBeGreaterThan(0)
+    expect(actionsFailures('@media (max-width: 389.98px) { .a-actions { gap: 12px; } }').length, 'no base rule').toBeGreaterThan(0)
+  })
+
+  it('.a-actions is a centred 24px-gap flex row outside any media', () => {
+    expect(actionsFailures(LANDING_CSS).filter((f) => f.startsWith('base'))).toEqual([])
+  })
+
+  it('.a-actions narrows its gap only below 390px', () => {
+    expect(actionsFailures(LANDING_CSS)).toEqual([])
+  })
+})

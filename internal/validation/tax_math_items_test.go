@@ -6,6 +6,8 @@ package validation
 import (
 	"encoding/json"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -86,6 +88,12 @@ func TestTaxMathItems_ZeroRateWithTaxViolates(t *testing.T) {
 		t.Fatalf("violations = %+v, want exactly 1", vs)
 	}
 	wantExpectedActual(t, vs[0], "0", "37.5")
+
+	vs = mustEvalTaxItems(t, `[`+sub("EXEMPTED", "200", "15")+`]`)
+	if len(vs) != 1 {
+		t.Fatalf("EXEMPTED with tax: violations = %+v, want exactly 1", vs)
+	}
+	wantExpectedActual(t, vs[0], "0", "15")
 }
 
 // 1.00 x 0.075 vs 0.08 is exactly 0.005 in decimal; float64 maths would flag it.
@@ -98,6 +106,13 @@ func TestTaxMathItems_HalfCentBoundary(t *testing.T) {
 		t.Fatalf("1.00/0.081: violations = %+v, want exactly 1 (diff 0.006)", vs)
 	}
 	wantExpectedActual(t, vs[0], "0.075", "0.081")
+
+	if vs := mustEvalTaxItems(t, `[`+sub("STANDARD_VAT", "1.00", "0.07")+`]`); len(vs) != 0 {
+		t.Errorf("1.00/0.07: violations = %+v, want none (diff exactly 0.005 below)", vs)
+	}
+	if vs := mustEvalTaxItems(t, `[`+sub("STANDARD_VAT", "1.00", "0.069")+`]`); len(vs) != 1 {
+		t.Errorf("1.00/0.069: violations = %+v, want exactly 1 (diff 0.006 below)", vs)
+	}
 }
 
 func TestTaxMathItems_UnratedCategoryIsSkipped(t *testing.T) {
@@ -109,6 +124,22 @@ func TestTaxMathItems_UnratedCategoryIsSkipped(t *testing.T) {
 		sub("STANDARD_VAT", "1000", "70")+`]`)
 	if len(vs) != 1 || vs[0].Path != "tax_subtotals[4]" {
 		t.Fatalf("violations = %+v, want only tax_subtotals[4]", vs)
+	}
+
+	// Category match is exact, and an unrated element is skipped before its operands are read.
+	vs = mustEvalTaxItems(t, `[`+
+		sub("standard_vat", "1000", "999")+`,`+
+		`{"tax_category":"STAMP_DUTY"},`+
+		sub("STANDARD_VAT", "1000", "70")+`]`)
+	if len(vs) != 1 || vs[0].Path != "tax_subtotals[3]" {
+		t.Fatalf("case/operands: violations = %+v, want only tax_subtotals[3]", vs)
+	}
+
+	// A numeric rate_by value is never coerced to a string key.
+	const numericKey = `{"items":"tax_subtotals","base":"taxable_amount","expected":"tax_amount","rate_by":"tax_category","rates":{"7":0.075},"tolerance":0.005}`
+	got, err := evalTaxItems(t, taxItemsPayload(t, `[{"tax_category":7,"taxable_amount":1000,"tax_amount":999}]`), numericKey)
+	if err != nil || len(got) != 0 {
+		t.Errorf("numeric tax_category: violations = %+v, err = %v, want none", got, err)
 	}
 }
 
@@ -145,10 +176,12 @@ func TestTaxMathItems_NoItemsPasses(t *testing.T) {
 		"string": taxItemsPayload(t, `"x"`),
 		"empty":  taxItemsPayload(t, `[]`),
 	} {
-		vs, err := evalTaxItems(t, p, taxItemsParams)
-		if err != nil || len(vs) != 0 {
-			t.Errorf("%s: violations = %+v, err = %v, want none", name, vs, err)
-		}
+		t.Run(name, func(t *testing.T) {
+			vs, err := evalTaxItems(t, p, taxItemsParams)
+			if err != nil || len(vs) != 0 {
+				t.Errorf("violations = %+v, err = %v, want none", vs, err)
+			}
+		})
 	}
 }
 
@@ -173,6 +206,8 @@ func TestTaxMathItems_ConfigFaultsFailLoud(t *testing.T) {
 		"rate_by w/o items":   `{` + ops + `,` + by + `,"rate":0.075,` + tol + `}`,
 		"blank items":         `{"items":"",` + ops + `,"rate":0.075,` + tol + `}`,
 		"negative tolerance":  `{` + items + `,` + ops + `,` + by + `,` + rates + `,"tolerance":-1}`,
+		"missing base":        `{` + items + `,"expected":"tax_amount",` + by + `,` + rates + `,` + tol + `}`,
+		"missing expected":    `{` + items + `,"base":"taxable_amount",` + by + `,` + rates + `,` + tol + `}`,
 	}
 	payloads := map[string]Payload{
 		"items present": taxItemsPayload(t, `[`+sub("STANDARD_VAT", "1000", "75")+`]`),
@@ -212,5 +247,101 @@ func TestTaxMathItems_EveryBadElementReported(t *testing.T) {
 	}
 	if first == nil || first.Path != "tax_subtotals[1]" {
 		t.Fatalf("Eval = %+v, want the tax_subtotals[1] violation", first)
+	}
+}
+
+func TestTaxMathItems_ZeroNullAndAbsentOperands(t *testing.T) {
+	// Zero tax on a zero base is correct; tax on a zero base is not.
+	if vs := mustEvalTaxItems(t, `[`+sub("STANDARD_VAT", "0", "0")+`]`); len(vs) != 0 {
+		t.Errorf("0/0: violations = %+v, want none", vs)
+	}
+	vs := mustEvalTaxItems(t, `[`+sub("STANDARD_VAT", "0", "1")+`]`)
+	if len(vs) != 1 {
+		t.Fatalf("0/1: violations = %+v, want exactly 1", vs)
+	}
+	wantExpectedActual(t, vs[0], "0", "1")
+
+	cases := []struct{ name, element, path string }{
+		{"null tax_amount", `{"tax_category":"STANDARD_VAT","taxable_amount":1000,"tax_amount":null}`, "tax_subtotals[1].tax_amount"},
+		{"null taxable_amount", `{"tax_category":"STANDARD_VAT","taxable_amount":null,"tax_amount":75}`, "tax_subtotals[1].taxable_amount"},
+		{"absent taxable_amount", `{"tax_category":"STANDARD_VAT","tax_amount":75}`, "tax_subtotals[1].taxable_amount"},
+		{"string tax_amount", `{"tax_category":"STANDARD_VAT","taxable_amount":1000,"tax_amount":"75"}`, "tax_subtotals[1].tax_amount"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			vs := mustEvalTaxItems(t, `[`+c.element+`]`)
+			if len(vs) != 1 || vs[0].Path != c.path {
+				t.Fatalf("violations = %+v, want one at %s", vs, c.path)
+			}
+			if vs[0].Expected != nil || vs[0].Actual != nil {
+				t.Errorf("Expected/Actual = %v/%v, want both nil", ptrStr(vs[0].Expected), ptrStr(vs[0].Actual))
+			}
+		})
+	}
+}
+
+// 333.33 x 0.075 = 24.99975: the violation carries every decimal, unrounded.
+func TestTaxMathItems_RoundingKeepsFullDecimalPrecision(t *testing.T) {
+	if vs := mustEvalTaxItems(t, `[`+sub("STANDARD_VAT", "333.33", "25.00")+`]`); len(vs) != 0 {
+		t.Errorf("333.33/25.00: violations = %+v, want none (diff 0.00025)", vs)
+	}
+	vs := mustEvalTaxItems(t, `[`+sub("STANDARD_VAT", "333.33", "24.00")+`]`)
+	if len(vs) != 1 {
+		t.Fatalf("333.33/24.00: violations = %+v, want exactly 1", vs)
+	}
+	wantExpectedActual(t, vs[0], "24.99975", "24")
+}
+
+// base and expected resolve inside the element, never against the invoice root.
+func TestTaxMathItems_OperandsResolveInsideTheElement(t *testing.T) {
+	var p Payload
+	if err := json.Unmarshal([]byte(`{"invoice":{"taxable_amount":1000,"tax_amount":75,"tax_subtotals":[{"tax_category":"STANDARD_VAT"}]}}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	vs, err := evalTaxItems(t, p, taxItemsParams)
+	if err != nil || len(vs) != 1 || vs[0].Path != "tax_subtotals[1].taxable_amount" {
+		t.Fatalf("violations = %+v, err = %v, want one at tax_subtotals[1].taxable_amount", vs, err)
+	}
+
+	const nested = `{"items":"tax_subtotals","base":"amounts.taxable","expected":"amounts.tax","rate_by":"tax_category","rates":{"STANDARD_VAT":0.075},"tolerance":0.005}`
+	vs, err = evalTaxItems(t, taxItemsPayload(t, `[{"tax_category":"STANDARD_VAT","amounts":{"taxable":1000,"tax":70}}]`), nested)
+	if err != nil || len(vs) != 1 || vs[0].Path != "tax_subtotals[1]" {
+		t.Fatalf("nested operands: violations = %+v, err = %v, want one at tax_subtotals[1]", vs, err)
+	}
+	wantExpectedActual(t, vs[0], "75", "70")
+}
+
+// With rate instead of rates, every element is judged at that rate.
+func TestTaxMathItems_PlainRateJudgesEveryElement(t *testing.T) {
+	const flat = `{"items":"tax_subtotals","base":"taxable_amount","expected":"tax_amount","rate":0.075,"tolerance":0.005}`
+	vs, err := evalTaxItems(t, taxItemsPayload(t, `[`+sub("ANY", "1000", "75")+`,`+sub("OTHER", "1000", "70")+`]`), flat)
+	if err != nil || len(vs) != 1 || vs[0].Path != "tax_subtotals[2]" {
+		t.Fatalf("violations = %+v, err = %v, want only tax_subtotals[2]", vs, err)
+	}
+}
+
+// 11 elements: evalLines keeps array order (the engine later sorts paths as strings).
+func TestTaxMathItems_ElevenElementsKeepArrayOrder(t *testing.T) {
+	var parts, want []string
+	for i := 1; i <= 11; i++ {
+		parts = append(parts, sub("STANDARD_VAT", "1000", "1"))
+		want = append(want, "tax_subtotals["+strconv.Itoa(i)+"]")
+	}
+	p := taxItemsPayload(t, `[`+strings.Join(parts, ",")+`]`)
+
+	vs, err := taxMathEval{}.evalLines(p, taxItemsRule(taxItemsParams))
+	if err != nil {
+		t.Fatalf("evalLines: %v", err)
+	}
+	var paths []string
+	for _, v := range vs {
+		paths = append(paths, v.Path)
+	}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("paths = %q, want %q", paths, want)
+	}
+	first, err := taxMathEval{}.Eval(p, taxItemsRule(taxItemsParams))
+	if err != nil || first == nil || first.Path != "tax_subtotals[1]" {
+		t.Fatalf("Eval = %+v, err = %v, want the tax_subtotals[1] violation", first, err)
 	}
 }

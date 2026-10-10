@@ -247,9 +247,19 @@ func TestBatch_DB_V5StampsInvoicesFromItsStartDate(t *testing.T) {
 
 	dayBefore := v5Invoice("B2B", []map[string]any{v5Line("1", "STANDARD_VAT", 1000, 7.5, 75)})
 	invoiceOf(dayBefore)["issue_date"] = "2026-12-31"
+	// supplier.street is required by v5 only: the same invoice is clean under v4 and fails under v5.
+	noStreet := func(date string) map[string]any {
+		p := v5Invoice("B2B", []map[string]any{v5Line("1", "STANDARD_VAT", 1000, 7.5, 75)})
+		inv := invoiceOf(p)
+		inv["issue_date"] = date
+		delete(v5PartyOf(inv, "supplier"), "street")
+		return inv
+	}
 	reqBody, err := json.Marshal(map[string]any{"invoices": []map[string]any{
 		{"ref": "v4", "invoice": invoiceOf(dayBefore)},
 		{"ref": "v5", "invoice": invoiceOf(v5B2BPayload())},
+		{"ref": "v4-lax", "invoice": noStreet("2026-12-31")},
+		{"ref": "v5-strict", "invoice": noStreet(v5Start)},
 	}})
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
@@ -265,7 +275,7 @@ func TestBatch_DB_V5StampsInvoicesFromItsStartDate(t *testing.T) {
 	for i, c := range []struct {
 		date    string
 		version int
-	}{{"2026-12-31", 4}, {v5Start, 5}} {
+	}{{"2026-12-31", 4}, {v5Start, 5}, {"2026-12-31", 4}, {v5Start, 5}} {
 		var wantID string
 		if err := super.QueryRow(context.Background(),
 			`SELECT id FROM rule_set_versions WHERE version = $1 AND id = rule_set_version_for($2::date)`, c.version, c.date).Scan(&wantID); err != nil {
@@ -275,8 +285,14 @@ func TestBatch_DB_V5StampsInvoicesFromItsStartDate(t *testing.T) {
 		if got.RuleSetVersion != c.version || got.RuleSetVersionID != wantID {
 			t.Errorf("item %s stamp = v%d %s, want v%d %s", got.Ref, got.RuleSetVersion, got.RuleSetVersionID, c.version, wantID)
 		}
-		if len(got.Violations) != 0 {
-			t.Errorf("item %s has violations %+v, want none", got.Ref, got.Violations)
+		wantViolations := 0
+		if got.Ref == "v5-strict" {
+			wantViolations = 1
+		}
+		if len(got.Violations) != wantViolations {
+			t.Errorf("item %s has violations %+v, want %d", got.Ref, got.Violations, wantViolations)
+		} else if wantViolations == 1 && got.Violations[0].RuleKey != "supplier-street-required" {
+			t.Errorf("item %s violation = %s, want supplier-street-required", got.Ref, got.Violations[0].RuleKey)
 		}
 	}
 }

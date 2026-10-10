@@ -493,11 +493,7 @@ func TestPayloadEngine_LineSum_Violates(t *testing.T) {
 // "supplier.tin"/"supplier.name") both fire on the resulting absence, and
 // every money field is a string (not a number), tripping range/tax_math/
 // line_sum too. Uses the pinned fixture from task-108's Stage-1 addendum
-// D4, checked rule-by-rule against all 19 live rules under the active
-// version -- v3 (INVCR-01-13/task-289) since it superseded v2, but the fixture
-// only ever depended on the 19 KEYS/EVALUATORS being identical (true of both:
-// v3 is v2's content with only 4 keys' `target` filled in, which this
-// zero-violations assertion does not distinguish).
+// D4.
 func TestPayloadEngine_ValidInvoice_ZeroViolationsAgainstRealV2(t *testing.T) {
 	pool := rulesAppPool(t)
 	store := validation.NewStore(pool)

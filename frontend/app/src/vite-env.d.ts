@@ -11,6 +11,8 @@ interface ImportMetaEnv {
   // (M4-23), so there is no hardcoded default — unset means Sign out stays put rather
   // than routing to the wrong environment (see `landingBase()` in auth.ts).
   readonly VITE_LANDING_URL?: string
+  // Base URL of the Feature library; unset hides the sidebar link (see `libraryBase()` in auth.ts).
+  readonly VITE_LIBRARY_URL?: string
   readonly VITE_SENTRY_DSN?: string
   readonly VITE_SENTRY_TEST_DIGEST?: string
   readonly VITE_RAILWAY_GIT_COMMIT_SHA?: string

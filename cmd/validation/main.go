@@ -55,8 +55,13 @@ func main() {
 	store := validation.NewStore(pool)
 	engine := validation.NewDefaultEngine()
 
-	// 401 without an identity, otherwise 403; rules change only through the operator kill switch.
+	// 401 without an identity, otherwise 403. Staff switch a rule through PATCH /v1/staff/rules/{key};
+	// the owner statement is the break-glass path.
 	app.Mux.HandleFunc("PATCH /v1/rules/{key}", validation.ToggleHandler())
+
+	// Staff routes: the platform admits only a rules-role caller.
+	app.Mux.HandleFunc("GET /v1/staff/rules", validation.StaffListRulesHandler(store.RulesInForce, app.Logger))
+	app.Mux.HandleFunc("PATCH /v1/staff/rules/{key}", validation.StaffSwitchRuleHandler(store.SwitchRule, app.Logger))
 
 	// POST /v1/validate/batch — the tenant-free peer surface 03 (submission)
 	// calls to validate a whole batch in one request. It carries NO identity: it is

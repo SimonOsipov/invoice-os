@@ -281,6 +281,7 @@ describe('Sidebar nav badges, firm mode', () => {
 // Tripwire: any padding, gap, avatar or dot change in the footer fails it. Circles are 50%; Sign out carries no pf-btn.
 describe('Sidebar footer, characterization pin', () => {
   it('the footer renders the v2 markup', async () => {
+    vi.stubEnv('VITE_LIBRARY_URL', 'https://lib.x')
     await renderSidebar(
       rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }),
       sidebarCtx({ user: { name: 'Chinedu Okafor', initials: 'CO', verified: true, tenantName: 'Okafor & Partners' } }),
@@ -313,6 +314,53 @@ describe('Sidebar footer, the card reads ctx.user (AUTH-09-02)', () => {
     cleanup()
     await renderSidebar(ROLLUP, sidebarCtx({ user: { name: '', initials: '', verified: false, tenantName: 'Acme' } }))
     expect(footer().querySelectorAll(BADGE)).toHaveLength(0)
+  })
+})
+
+describe('Sidebar Feature library link (LIB-06)', () => {
+  const link = () => screen.queryByRole('link', { name: 'Feature library' })
+
+  it('sidebar_libraryLinkOpensANewTabForBothPersonas', async () => {
+    vi.stubEnv('VITE_LIBRARY_URL', 'https://lib.x/')
+    const bucket = { validated: 1, awaitingApproval: 1, needsAttention: 1 }
+    for (const ctx of [sidebarCtx(), firmCtx()]) {
+      await renderSidebar(rollup({ ...bucket, entity: bucket }), ctx)
+      const a = screen.getAllByRole('link', { name: 'Feature library' })
+      expect(a).toHaveLength(1)
+      expect(a[0].getAttribute('href')).toBe('https://lib.x')
+      expect(a[0].getAttribute('target')).toBe('_blank')
+      expect(a[0].getAttribute('rel')).toContain('noopener')
+      expect(a[0].getAttribute('rel')).toContain('noreferrer')
+      expect(a[0].closest('nav.pf-nav-list')).toBeNull()
+      const nav = document.querySelector('nav.pf-nav-list')!
+      const card = screen.getByTestId('identity-card')
+      expect(nav.compareDocumentPosition(a[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(a[0].compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      cleanup()
+    }
+  })
+
+  it('sidebar_noLibraryLinkWhenUnset', async () => {
+    await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
+    expect(link()).toBeNull()
+    expect(navButton('Invoices')).toBeTruthy()
+    cleanup()
+    vi.stubEnv('VITE_LIBRARY_URL', '  ')
+    await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
+    expect(link()).toBeNull()
+    expect(navButton('Invoices')).toBeTruthy()
+  })
+
+  it('sidebar_libraryLinkMatchesAnInactiveNavRow', async () => {
+    vi.stubEnv('VITE_LIBRARY_URL', 'https://lib.x')
+    await renderSidebar(rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 }))
+    const a = link()!
+    const row = navButton('Invoices')
+    expect(a.classList.contains('pf-nav')).toBe(true)
+    for (const prop of ['fontSize', 'fontWeight', 'color', 'padding', 'gap', 'borderRadius'] as const) {
+      expect(a.style[prop], prop).not.toBe('')
+      expect(a.style[prop], prop).toBe(row.style[prop])
+    }
   })
 })
 

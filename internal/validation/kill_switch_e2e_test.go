@@ -1,5 +1,5 @@
-// Kill-switch suite: staff switch a rule off with an owner-role statement
-// (vault runbook "Rule kill switch"). `rules` is global, so these tests mutate the
+// Kill-switch suite: the owner-role statement is the break-glass path (vault runbook "Rule kill switch");
+// staff switch rules through PATCH /v1/staff/rules/{key}. `rules` is global, so these tests mutate the
 // shared seeded rows; each registers a superuser restore in t.Cleanup before
 // its first write. No t.Parallel().
 //

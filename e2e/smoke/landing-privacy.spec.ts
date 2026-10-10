@@ -137,10 +137,13 @@ test('landing privacy: the nav returns the visitor to the sales page', async ({ 
   const nav = page.getByRole('navigation', { name: 'Primary' })
 
   const hrefs = await nav.locator('a').evaluateAll((els) => els.map((e) => e.getAttribute('href')))
-  expect(hrefs).toEqual(['/#problem', '/#solution', '/#platform', '/#solutions', '/#integrations']) // Nav.tsx#NAV_LINKS under hrefPrefix '/'
-  for (const href of hrefs) {
-    expect(href ?? '', 'a nav link lost its /privacy hrefPrefix').toMatch(/^\/#/)
-  }
+  // Nav.tsx#NAV_LINKS under hrefPrefix '/', then the one external Library link (absolute, never prefixed).
+  const hashHrefs = hrefs.filter((h) => h?.startsWith('/#'))
+  expect(hashHrefs).toEqual(['/#problem', '/#solution', '/#platform', '/#solutions', '/#integrations'])
+  const others = hrefs.filter((h) => !h?.startsWith('/#'))
+  expect(others, 'the one non-anchor nav link').toHaveLength(1)
+  expect(others[0] ?? '', 'the Library href').toMatch(/^https:\/\//)
+  await expect(nav.getByRole('link', { name: 'Library' })).toHaveAttribute('href', others[0]!)
 
   // The default viewport is wide enough for the nav to show.
   await nav.locator('a[href="/#problem"]').click()

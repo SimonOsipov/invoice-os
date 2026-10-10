@@ -1,5 +1,4 @@
-// The only place this repo writes `document.cookie`, and it writes nothing but
-// expiries: Reject deletes Google's cookies, it never stores one of ours.
+// The only place this repo expires `document.cookie` entries for Google. `consent.ts` writes the consent cookie.
 // `document` resolves at call time so the module imports inert under node.
 
 const GA_COOKIE_NAME = /^_ga(_[A-Za-z0-9]+)?$/

@@ -185,7 +185,7 @@ describe('the revocation cannot be bypassed by the tag path', () => {
   })
 })
 
-describe('applyChoice is the only writer of the revocation flag', () => {
+describe('applyChoice and syncConsent are the only writers of the revocation flag', () => {
   const files = readdirSync(HERE, { recursive: true, encoding: 'utf8' })
     .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f))
     .map((f) => join(HERE, f))
@@ -197,7 +197,7 @@ describe('applyChoice is the only writer of the revocation flag', () => {
     expect(combined).toContain('setAnalyticsRevoked')
   })
 
-  it('exactly one production call site, in consentActions.ts', () => {
+  it('production call sites only in consentActions.ts, one in each of applyChoice and syncConsent', () => {
     // A second caller — a stray setAnalyticsRevoked(false) on any other path — would
     // reopen the hole with every behavioural spec still green.
     const callers = files.filter((f) => {
@@ -206,8 +206,9 @@ describe('applyChoice is the only writer of the revocation flag', () => {
     })
     expect(callers.map((f) => f.replace(`${HERE}/`, ''))).toEqual(['consentActions.ts'])
     const src = readFileSync(join(HERE, 'consentActions.ts'), 'utf8')
-    expect((src.match(/setAnalyticsRevoked\s*\(/g) ?? []).length, 'more than one call in the seam').toBe(1)
+    expect((src.match(/setAnalyticsRevoked\s*\(/g) ?? []).length, 'a call beyond applyChoice and syncConsent').toBe(2)
     // Unconditional: a guarded call is what leaves the tag resident-but-muted.
     expect(src).toMatch(/^\s*setAnalyticsRevoked\(!accepted\)$/m)
+    expect(src).toMatch(/^\s*setAnalyticsRevoked\(!allowed\)$/m)
   })
 })

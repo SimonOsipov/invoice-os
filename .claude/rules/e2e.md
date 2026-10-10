@@ -13,6 +13,7 @@ paths:
 - Carry a console-gate exception in `consoleGate.ts`, scoped by resource URL. Never change an API to satisfy the gate.
 - Run Chromium only. Keep `workers: 1` in the api and topology configs. The smoke config runs fully parallel.
 - Add each new topology spec file to a unit in `e2e/topology/shards.ts`. `shards.test.ts` fails on a spec in no unit.
+- Run `library.spec.ts` in the `library` unit. It reads the public Library and uses no tenant.
 - Keep a spec on `serial-lane` while it needs the seeded tenants 1111 and 2222. A shard gets its own tenant pair from `db/seed.e2e-shards.sql`.
 - Sign in an app session with `signInAs(page, id, { tenantId })` from `e2e/personaSession.ts`. It admits the e2e member through `ensureMember`.
 - Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token.
@@ -23,8 +24,10 @@ paths:
 - Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.
 - Assert containment or a live-read comparison, never a literal count.
 - Expect specs to leave rows in `auth.users`, `staff_members`, `tenants` and `memberships`. Every run registers a fresh address, so this is harmless.
+- Expect the Support Console Rules screen to read real rules. The other console screens hold mock data.
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
-- Treat the `app` SPA and the landing sign-in form as the only places a browser test proves the stack. The consoles hold mock data.
+- Test the `library` SPA for render and consent only. It is static content with no backend.
+- Cover the library consent notice, the stored answer, the privacy link and the production-host-only tag in `e2e/smoke/library-consent.spec.ts`.
 - Never publish a policy in a topology spec. A topology spec may restore the tenant's own seeded policy through `ensureFirmPolicyActive`.
 - Put the UI-driven approve and reject journey in `e2e/api/contract-invoice.spec.ts`, not in a topology spec.
 - Treat the persona as an axis. Register personas, surfaces and coverage in `e2e/personas.ts`.
@@ -35,4 +38,6 @@ paths:
 - Expect the fleet roll-up to report `sentry` `off` on a PR and `on` or `off` on the persistent environment. `auth` is exempt.
 - Expect `notifications` to report `contacts` `fake` on a PR and `real` or `off` on the persistent environment.
 - Write the fork's URL variables, `RECONCILIATION_URL` and `GATEWAY_TOKEN`, and reconciliation's `VALIDATION_URL` and `S2S_TOKEN` on each run. A fork never inherits them.
+- Write `VITE_LIBRARY_URL` on `landing` and `app`, and `VITE_APP_URL` and `VITE_LANDING_URL` on `library`, on each fork.
+- Expect `library` to be the one SPA with no gateway wiring. A fork writes no `VITE_GATEWAY_URL` on it, and it is no CORS origin.
 - Expect a fork to accept registrations, send no mail and confirm at once. `fork-vars-before-urls` sets `GOTRUE_DISABLE_SIGNUP`, a blank SMTP host and `GOTRUE_MAILER_AUTOCONFIRM`.

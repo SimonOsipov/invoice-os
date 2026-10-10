@@ -252,7 +252,7 @@ func TestRLS_GrantStaffIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestGrantStaff_SetsTheRulesRoleColumn(t *testing.T) {
+func TestRLS_GrantStaffSetsTheRulesRoleColumn(t *testing.T) {
 	h := requireHarness(t)
 	reapplyStaffMigration(t)
 	ctx := context.Background()

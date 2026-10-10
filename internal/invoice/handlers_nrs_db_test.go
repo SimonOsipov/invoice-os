@@ -230,3 +230,52 @@ func (f nrsFixture) get2(t *testing.T, ctx context.Context, id string) Invoice {
 	}
 	return inv
 }
+
+func TestNRSInvoiceHTTP_NULInTextIs400AndWritesNothing(t *testing.T) {
+	f := newNRSFixture(t, "NRS-NUL")
+	h := nrsHTTP{f}
+	const wantMsg = "invoice: validation"
+	line := map[string]any{"description": "Widget", "quantity": "1", "unit_price": "100.00", "line_total": "100.00", "line_tax": "7.50"}
+
+	for _, key := range []string{"buyer_city", "buyer_name"} {
+		body := nrsHeaderBody()
+		body["entity_id"], body["invoice_number"], body["line_items"] = f.entityID, "NRS-NUL-"+key, []any{line}
+		body[key] = "a\u0000b"
+		code, m := h.post(t, mustJSON(t, body))
+		if code != http.StatusBadRequest || str(t, m["error"]) != wantMsg {
+			t.Errorf("POST %s NUL = %d %s, want 400 %q", key, code, m["error"], wantMsg)
+		}
+		var n int
+		if err := f.super.QueryRow(context.Background(), `SELECT count(*) FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`, f.tenantID, "NRS-NUL-"+key).Scan(&n); err != nil || n != 0 {
+			t.Errorf("POST %s NUL left %d rows (err %v), want 0", key, n, err)
+		}
+	}
+
+	body := nrsHeaderBody()
+	body["entity_id"], body["invoice_number"], body["line_items"] = f.entityID, "NRS-NUL-OK", []any{line}
+	code, created := h.post(t, mustJSON(t, body))
+	if code != http.StatusCreated {
+		t.Fatalf("POST = %d %s", code, created["error"])
+	}
+	id := str(t, created["id"])
+	before := h.get(t, id)
+
+	patches := map[string]string{
+		"buyer_city":  `{"buyer_city":"a\u0000b"}`,
+		"buyer_name":  `{"buyer_name":"a\u0000b"}`,
+		"line text":   `{"line_items":[{"description":"a\u0000b","quantity":"1","unit_price":"100.00","line_total":"100.00","line_tax":"7.50"}]}`,
+		"line + head": `{"buyer_city":"Changed","line_items":[{"description":"a\u0000b","quantity":"1","unit_price":"100.00","line_total":"100.00","line_tax":"7.50"}]}`,
+	}
+	for name, p := range patches {
+		code, m := h.patch(t, f.c, id, p)
+		if code != http.StatusBadRequest || str(t, m["error"]) != wantMsg {
+			t.Errorf("PATCH %s NUL = %d %s, want 400 %q", name, code, m["error"], wantMsg)
+		}
+	}
+	after := h.get(t, id)
+	for _, k := range []string{"buyer_city", "buyer_name", "line_items"} {
+		if string(after[k]) != string(before[k]) {
+			t.Errorf("%s changed by a refused edit: %s -> %s", k, before[k], after[k])
+		}
+	}
+}

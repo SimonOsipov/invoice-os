@@ -597,3 +597,40 @@ func TestInvoiceFieldsList_NamesTheWireContentKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestEditHandler_LastDuplicateKeyWinsOnANullableKey(t *testing.T) {
+	cases := []struct {
+		name, body string
+		check      func(t *testing.T, in EditInput)
+	}{
+		{"null then value", `{"buyer_email":null,"buyer_email":"x"}`, func(t *testing.T, in EditInput) {
+			if in.BuyerEmail == nil || in.BuyerEmail == ClearText || *in.BuyerEmail != "x" {
+				t.Errorf("BuyerEmail = %v, want \"x\"", in.BuyerEmail)
+			}
+		}},
+		{"null then valid time", `{"issue_time":null,"issue_time":"10:00:00"}`, func(t *testing.T, in EditInput) {
+			if in.IssueTime == nil || in.IssueTime == ClearText || *in.IssueTime != "10:00:00" {
+				t.Errorf("IssueTime = %v, want \"10:00:00\"", in.IssueTime)
+			}
+		}},
+		{"bad time then null", `{"issue_time":"bad","issue_time":null}`, func(t *testing.T, in EditInput) {
+			if in.IssueTime != ClearText {
+				t.Errorf("IssueTime = %v, want ClearText", in.IssueTime)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got EditInput
+			edit := func(_ context.Context, _ string, in EditInput) (Invoice, error) {
+				got = in
+				return Invoice{ID: "x"}, nil
+			}
+			rec, _ := doInvoiceEdit(t, edit, &nrsIdentity, uuid.NewString(), tc.body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			tc.check(t, got)
+		})
+	}
+}

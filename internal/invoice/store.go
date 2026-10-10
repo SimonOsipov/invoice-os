@@ -253,7 +253,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			switch pgCode(err) {
 			case "23505":
 				return ErrDuplicateNumber
-			case "23503", "22P02", "22007", "22008":
+			case "23503", "22P02", "22007", "22008", "22021":
 				return ErrValidation
 			}
 			return err
@@ -274,7 +274,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 				li.Quantity, li.UnitPrice, li.LineTotal, li.LineTax,
 				li.TaxCategory, li.HSNCode, li.ISICCode, li.ProductCategory, li.ServiceCategory, li.SellersItemIdentification, li.PriceUnit, li.TaxPercent, li.BaseQuantity,
 			), &item); err != nil {
-				if code := pgCode(err); code == "22003" || code == "22P02" {
+				if code := pgCode(err); code == "22003" || code == "22P02" || code == "22021" {
 					return ErrValidation
 				}
 				return err
@@ -550,7 +550,7 @@ func replaceLinesTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string, 
 			li.Quantity, li.UnitPrice, li.LineTotal, li.LineTax,
 			li.TaxCategory, li.HSNCode, li.ISICCode, li.ProductCategory, li.ServiceCategory, li.SellersItemIdentification, li.PriceUnit, li.TaxPercent, li.BaseQuantity,
 		), &item); err != nil {
-			if code := pgCode(err); code == "22P02" || code == "22003" {
+			if code := pgCode(err); code == "22P02" || code == "22003" || code == "22021" {
 				return nil, ErrValidation
 			}
 			return nil, err
@@ -1290,7 +1290,7 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Invoice{}, nil, ErrNotFound
 		}
-		if code := pgCode(err); code == "22P02" || code == "22007" || code == "22008" {
+		if code := pgCode(err); code == "22P02" || code == "22007" || code == "22008" || code == "22021" {
 			return Invoice{}, nil, ErrValidation
 		}
 		return Invoice{}, nil, err

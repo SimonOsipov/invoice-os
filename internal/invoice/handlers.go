@@ -122,9 +122,10 @@ type nullable[T any] struct {
 
 func (n *nullable[T]) UnmarshalJSON(b []byte) error {
 	if string(b) == "null" {
-		n.null = true
+		n.val, n.null = nil, true
 		return nil
 	}
+	n.null = false
 	return json.Unmarshal(b, &n.val)
 }
 

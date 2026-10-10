@@ -75,8 +75,8 @@ function Console() {
   }
 
   // ---- job actions (proto:1114) ----
-  // Cross-tenant mutations. Nothing reaches the audit log until accreditation (TopBar.tsx,
-  // KillConfirm.tsx), so the tag names that gate rather than asserting a write happened.
+  // Cross-tenant mutations. Nothing reaches the audit log until accreditation (TopBar.tsx),
+  // so the tag names that gate rather than asserting a write happened.
   const openJob = (id: string) => {
     setDrawer({ type: 'job', id })
     setReqOpen(true)

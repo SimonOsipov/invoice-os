@@ -134,11 +134,8 @@ func (w inviteWorld) requireTenantAfterRefresh(t *testing.T, refresh string) {
 func TestIdP_ConfirmInAnotherTabThenJoinByEmail(t *testing.T) {
 	w := newInviteWorld(t, "logfix03a-")
 	u := idpUser{email: w.email, password: "pw-" + uuid.NewString()}
-	w.register(t, u.password)
-	link := confirmationLink(t, u.email)
-	if got := follow(t, link); got != siteURL+"/?verified=1" {
-		t.Fatalf("verify redirect = %q, want %s/?verified=1", got, siteURL)
-	}
+	w.register(t)
+	w.setPasswordFromMail(t, u.password)
 
 	access, refresh := signedIn(t, w.base, u)
 	newJoinEdge(t, w.base).requireJoinRoutes(t, access)
@@ -152,8 +149,8 @@ func TestIdP_ConfirmInAnotherTabThenJoinByEmail(t *testing.T) {
 
 func TestIdP_ResetThenSignInJoinsByEmail(t *testing.T) {
 	w := newInviteWorld(t, "logfix03b-")
-	u := idpUser{email: w.email, password: "pw-" + uuid.NewString()}
-	w.register(t, u.password)
+	u := idpUser{email: w.email}
+	w.register(t)
 	requestResetAccepted(t, w.gw, u.email)
 	action, values := confirmForm(t, recoveryLink(t, u.email, 2))
 	u.password = "pw-new-" + uuid.NewString()
@@ -171,9 +168,9 @@ func TestIdP_ResetThenSignInJoinsByEmail(t *testing.T) {
 }
 
 func TestIdP_UnconfirmedInviteeGetsNoTokenToJoinWith(t *testing.T) {
-	w := newInviteWorld(t, "logfix03c-")
-	u := idpUser{email: w.email, password: "pw-" + uuid.NewString()}
-	w.register(t, u.password)
+	pw := "pw-" + uuid.NewString()
+	w := newPreRegisteredInviteWorld(t, "logfix03c-", pw, false)
+	u := idpUser{email: w.email, password: pw}
 	status, body := signIn(t, w.base, u)
 	if status != http.StatusBadRequest || body["error_code"] != "email_not_confirmed" {
 		t.Fatalf("password grant before any click: status %d, body %v; want 400 email_not_confirmed", status, body)

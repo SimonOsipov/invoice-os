@@ -18,7 +18,6 @@ type View = 'loading' | 'invalid' | 'unavailable' | 'ready' | 'register' | 'sent
 
 const WRAP = { overflowWrap: 'anywhere' } as const
 const TEXT = { margin: 0, lineHeight: 1.55, ...WRAP } as const
-const PASSWORD_ID = 'inv-password'
 // internal/gateway/invitation.go: msgAccountExists, msgAccountUnconfirmed, msgAccountMissing.
 const ACCOUNT_EXISTS = 'account_exists'
 const ACCOUNT_UNCONFIRMED = 'account_unconfirmed'
@@ -28,8 +27,6 @@ const isNotFound = (err: unknown) => err instanceof ApiError && err.kind === 'ht
 export function InvitePage({ token }: { token: string | null }) {
   const [view, setView] = useState<View>(token ? 'loading' : 'invalid')
   const [invite, setInvite] = useState<InvitationPreview>()
-  const [password, setPassword] = useState('')
-  const [passwordError, setPasswordError] = useState<string>()
   const [formError, setFormError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
   // A refusal moves the page to the view that has a way forward; the view effect below drops the failed note the rethrow leaves.
@@ -72,21 +69,15 @@ export function InvitePage({ token }: { token: string | null }) {
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (submitting || !token) return
-    if (!password) {
-      setPasswordError('Choose a password.')
-      document.getElementById(PASSWORD_ID)?.focus()
-      return
-    }
     setFormError(undefined)
     setSubmitting(true)
     try {
-      await registerInvitee(token, password)
+      await registerInvitee(token)
       setView('sent')
     } catch (err) {
       const conflict = err instanceof ApiError && err.kind === 'http' && err.status === 409 ? err.message : undefined
       if (isNotFound(err)) setView('invalid')
       else if (conflict === ACCOUNT_EXISTS || conflict === ACCOUNT_UNCONFIRMED) {
-        setPassword('')
         setView(conflict === ACCOUNT_EXISTS ? 'exists' : 'unconfirmed')
       } else {
         const outcome = registerOutcome(err)
@@ -167,7 +158,10 @@ export function InvitePage({ token }: { token: string | null }) {
   } else if (view === 'register' && invite) {
     body = (
       <>
-        <h3 style={{ ...HEADING_STYLE, margin: '0 0 16px' }}>Create your account</h3>
+        <h3 style={{ ...HEADING_STYLE, margin: '0 0 10px' }}>Create your account</h3>
+        <p className="t-body-sm" style={{ ...TEXT, margin: '0 0 16px' }}>
+          We will email {invite.email} a link to confirm the address and choose your password.
+        </p>
         <form noValidate onSubmit={handleSubmit}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div>
@@ -184,26 +178,6 @@ export function InvitePage({ token }: { token: string | null }) {
                 style={FIELD_STYLE}
               />
             </div>
-            <div>
-              <label htmlFor={PASSWORD_ID} className="label" style={{ display: 'block', marginBottom: 6 }}>Password</label>
-              <input
-                id={PASSWORD_ID}
-                type="password"
-                className={'dm-input' + (passwordError ? ' dm-err' : '')}
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value)
-                  setPasswordError(undefined)
-                }}
-                autoComplete="new-password"
-                aria-required="true"
-                aria-invalid={Boolean(passwordError)}
-                aria-describedby={passwordError ? `${PASSWORD_ID}-error` : undefined}
-                disabled={submitting}
-                style={FIELD_STYLE}
-              />
-              {passwordError && <Alert id={`${PASSWORD_ID}-error`} text={passwordError} />}
-            </div>
           </div>
           <button type="submit" disabled={submitting} className="ds-btn ds-btn--primary ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
             {submitting ? (
@@ -218,7 +192,7 @@ export function InvitePage({ token }: { token: string | null }) {
           {formError && <Alert text={formError} />}
           <p className="t-caption" style={{ textAlign: 'center', margin: '14px 0 0' }}>{PRODUCT_EMAIL_NOTICE}</p>
           <div style={{ marginTop: 14 }}>
-            <Button variant="text" type="button" onClick={() => { setPassword(''); setPasswordError(undefined); setFormError(undefined); setView('ready') }} disabled={submitting} style={{ fontSize: 13 }}>
+            <Button variant="text" type="button" onClick={() => { setFormError(undefined); setView('ready') }} disabled={submitting} style={{ fontSize: 13 }}>
               Back
             </Button>
           </div>
@@ -230,7 +204,7 @@ export function InvitePage({ token }: { token: string | null }) {
       <>
         <h3 style={{ ...HEADING_STYLE, margin: '0 0 10px' }}>Check your email</h3>
         <p className="t-body-sm" style={TEXT}>
-          A confirmation link is on its way to {invite.email}. Open it and confirm your email, then come back to this page and choose Sign in. Already have an account? Sign in now.
+          A link to confirm the address and choose your password is on its way to {invite.email}. Open it and choose your password, then come back to this page and choose Sign in. Already have an account? Sign in now.
         </p>
         <button type="button" onClick={() => resend()} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
           {resending ? 'Sending…' : 'Send the link again'}

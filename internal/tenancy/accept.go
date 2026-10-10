@@ -46,10 +46,10 @@ const (
 	msgWrongAddress   = "this invite was sent to a different email address"
 )
 
-// maxInviteTokenBodyBytes bounds the {"token"} body before it is decoded.
+// maxInviteTokenBodyBytes bounds an invite route body before it is decoded.
 const maxInviteTokenBodyBytes = 1 << 10
 
-// inviteTokenRequest is the wire body of both invite routes.
+// inviteTokenRequest is the {"token"} wire body.
 type inviteTokenRequest struct {
 	Token string `json:"token"`
 }

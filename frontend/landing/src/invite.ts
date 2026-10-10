@@ -35,8 +35,8 @@ function base(): string {
 export const previewInvitation = (token: string) =>
   apiFetch<InvitationPreview>(`${base()}/auth/invitation`, { method: 'POST', body: { token } })
 
-export async function registerInvitee(token: string, password: string): Promise<void> {
-  await apiFetch<unknown>(`${base()}/auth/invitation/register`, { method: 'POST', body: { token, password } })
+export async function registerInvitee(token: string): Promise<void> {
+  await apiFetch<unknown>(`${base()}/auth/invitation/register`, { method: 'POST', body: { token } })
 }
 
 export type ResendOutcome = 'sent' | 'held' | 'maybe'

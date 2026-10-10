@@ -711,3 +711,215 @@ func TestVerifyPage_BadTokenFailsBeforeTheStateCheck(t *testing.T) {
 		})
 	}
 }
+
+func vpInviteQuery(token string) string { return vpQuery(token) + "&invite=1" }
+
+// vpFormAction is the action of the page's one form.
+func vpFormAction(t *testing.T, body string) string {
+	t.Helper()
+	forms := vpFind(vpParse(t, body), vpTag("form"))
+	if len(forms) != 1 {
+		t.Fatalf("forms = %d, want exactly 1 in %q", len(forms), body)
+	}
+	action, _ := vpAttr(forms[0], "action")
+	return action
+}
+
+func TestVerifyPage_InviteLinkServesTheSetPasswordPage(t *testing.T) {
+	h := vpHandler(t)
+
+	get := vpDo(t, h, http.MethodGet, vpInviteQuery(vpToken))
+	head := vpDo(t, h, http.MethodHead, vpInviteQuery(vpToken))
+
+	for name, rec := range map[string]*httptest.ResponseRecorder{"GET": get, "HEAD": head} {
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+			t.Errorf("%s: status %d Content-Type %q, want 200 text/html; charset=utf-8", name, rec.Code, rec.Header().Get("Content-Type"))
+		}
+	}
+	if head.Body.Len() != 0 {
+		t.Errorf("HEAD body = %q, want empty", head.Body.String())
+	}
+	if got := vpFormAction(t, get.Body.String()); got != "/auth/invitation/password" {
+		t.Errorf("GET form action = %q, want /auth/invitation/password (the set-password page)", got)
+	}
+}
+
+// An invite link carries no state; the set-password page needs none, the confirm page does.
+func TestVerifyPage_StatelessInviteLinkServesTheSetPasswordPage(t *testing.T) {
+	h := vpHandler(t)
+
+	rec := vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+"&invite=1")
+
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+		t.Fatalf("status %d Content-Type %q, want 200 text/html; charset=utf-8", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if got := vpFormAction(t, rec.Body.String()); got != "/auth/invitation/password" {
+		t.Errorf("form action = %q, want /auth/invitation/password", got)
+	}
+	vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)), bounceLocation)
+
+	head := vpDo(t, h, http.MethodHead, vpQueryBare(vpToken)+"&invite=1")
+	if head.Code != http.StatusOK || head.Body.Len() != 0 {
+		t.Errorf("stateless HEAD: status %d body %q, want 200 and no body", head.Code, head.Body.String())
+	}
+	for name, extra := range map[string]string{"invite=0": "&invite=0", "invite=1 twice": "&invite=1&invite=1", "invite=1, then 0": "&invite=1&invite=0", "invite empty": "&invite="} {
+		t.Run(name+" bounces", func(t *testing.T) {
+			vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+extra), bounceLocation)
+		})
+	}
+	t.Run("an empty token fails before the page", func(t *testing.T) {
+		vpBounced(t, vpDo(t, h, http.MethodGet, "token=&type=signup&invite=1"), failedLocation)
+	})
+}
+
+func TestVerifyPage_InvitePageHasOneBoundedPasswordForm(t *testing.T) {
+	get := vpDo(t, vpHandler(t), http.MethodGet, vpInviteQuery(vpToken))
+	if get.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200", get.Code)
+	}
+	doc := vpParse(t, get.Body.String())
+	forms := vpFind(doc, vpTag("form"))
+	if len(forms) != 1 {
+		t.Fatalf("forms = %d, want exactly 1", len(forms))
+	}
+	if got, _ := vpAttr(forms[0], "method"); got != "post" {
+		t.Errorf("form method = %q, want post", got)
+	}
+	if got, _ := vpAttr(forms[0], "action"); got != "/auth/invitation/password" {
+		t.Errorf("form action = %q, want /auth/invitation/password", got)
+	}
+	inputs := map[string]*html.Node{}
+	for _, in := range vpFind(forms[0], vpTag("input")) {
+		name, _ := vpAttr(in, "name")
+		inputs[name] = in
+	}
+	if len(inputs) != 3 {
+		t.Fatalf("named inputs = %d, want exactly 3 (token, type, password)", len(inputs))
+	}
+	for name, want := range map[string]string{"token": vpToken, "type": "signup"} {
+		in := inputs[name]
+		if in == nil {
+			t.Errorf("no %q input", name)
+			continue
+		}
+		if typ, _ := vpAttr(in, "type"); typ != "hidden" {
+			t.Errorf("input %q type = %q, want hidden", name, typ)
+		}
+		if v, _ := vpAttr(in, "value"); v != want {
+			t.Errorf("input %q value = %q, want %q", name, v, want)
+		}
+	}
+	if pw := inputs["password"]; pw == nil {
+		t.Error("no password input")
+	} else {
+		for k, want := range map[string]string{"type": "password", "autocomplete": "new-password", "minlength": "6", "maxlength": "72"} {
+			if got, ok := vpAttr(pw, k); !ok || got != want {
+				t.Errorf("password input %s = %q (present %v), want %q", k, got, ok, want)
+			}
+		}
+		if _, ok := vpAttr(pw, "required"); !ok {
+			t.Error("password input is not required")
+		}
+	}
+	h1 := vpFind(doc, vpTag("h1"))
+	if len(h1) != 1 || strings.TrimSpace(vpText(h1[0])) != "Choose your password" {
+		t.Errorf("h1 elements = %d, want one reading %q", len(h1), "Choose your password")
+	}
+	buttons := vpFind(doc, vpTag("button"))
+	if len(buttons) != 1 || strings.TrimSpace(vpText(buttons[0])) != "Confirm and set password" {
+		t.Errorf("buttons = %d, want one reading %q", len(buttons), "Confirm and set password")
+	}
+
+	wantCSP := strings.Replace(vpWantCSP, "%s", vpHash(vpScript(t, doc)), 1)
+	for header, want := range map[string]string{
+		"Content-Security-Policy": wantCSP, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+	} {
+		if got := get.Header().Get(header); got != want {
+			t.Errorf("%s = %q, want %q", header, got, want)
+		}
+	}
+	if got := get.Header().Get("Content-Security-Policy"); got != resetCSP {
+		t.Errorf("Content-Security-Policy = %q, want the reset page's %q", got, resetCSP)
+	}
+}
+
+func TestVerifyPage_InviteLinkBadTokenOrTypeIsTheFailedNotice(t *testing.T) {
+	h := vpHandler(t)
+	for name, query := range map[string]string{
+		"empty token":    "token=&type=signup&invite=1",
+		"257-byte token": vpInviteQuery(strings.Repeat("a", vpMaxLen+1)),
+		"type recovery":  "token=" + vpToken + "&type=recovery&invite=1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := vpDo(t, h, http.MethodGet, query)
+			if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verify=failed" {
+				t.Errorf("answer = %d Location %q, want 303 https://site.example/?verify=failed", rec.Code, rec.Header().Get("Location"))
+			}
+			if strings.Contains(rec.Body.String(), "<form") {
+				t.Errorf("a bad link rendered a form: %q", rec.Body.String())
+			}
+		})
+	}
+	rec := vpDo(t, h, http.MethodGet, vpInviteQuery(strings.Repeat("a", vpMaxLen)))
+	if rec.Code != http.StatusOK || vpFormAction(t, rec.Body.String()) != "/auth/invitation/password" {
+		t.Errorf("control, 256-byte token: status %d; want 200 serving the set-password page", rec.Code)
+	}
+}
+
+func TestVerifyPage_WithoutExactlyOneInviteFlagIsTheConfirmPage(t *testing.T) {
+	h := vpHandler(t)
+	for name, query := range map[string]string{
+		"no invite":        vpQuery(vpToken),
+		"invite=0":         vpQuery(vpToken) + "&invite=0",
+		"invite=1 twice":   vpQuery(vpToken) + "&invite=1&invite=1",
+		"invite=1, then 0": vpQuery(vpToken) + "&invite=1&invite=0",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := vpDo(t, h, http.MethodGet, query)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			if got := vpFormAction(t, rec.Body.String()); got != vpPath {
+				t.Errorf("form action = %q, want %s (the confirm page)", got, vpPath)
+			}
+		})
+	}
+	rec := vpDo(t, h, http.MethodGet, vpInviteQuery(vpToken))
+	if rec.Code != http.StatusOK || vpFormAction(t, rec.Body.String()) != "/auth/invitation/password" {
+		t.Errorf("control, one invite=1: status %d; want 200 serving the set-password page", rec.Code)
+	}
+}
+
+func TestVerifyPage_InviteTokenIsEscaped(t *testing.T) {
+	for _, raw := range []string{`<script>"{{.Alert}}`, "{{.Script}}", "{{.Token}}"} {
+		t.Run(raw, func(t *testing.T) {
+			rec := vpDo(t, vpHandler(t), http.MethodGet, vpInviteQuery(raw))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			body := rec.Body.String()
+			if got := vpFormAction(t, body); got != "/auth/invitation/password" {
+				t.Fatalf("form action = %q, want /auth/invitation/password", got)
+			}
+			doc := vpParse(t, body)
+			var token string
+			for _, in := range vpFind(doc, vpTag("input")) {
+				if name, _ := vpAttr(in, "name"); name == "token" {
+					token, _ = vpAttr(in, "value")
+				}
+			}
+			if token != raw {
+				t.Errorf("token input = %q, want the literal %q", token, raw)
+			}
+			if strings.Contains(body, "<script>\"") {
+				t.Errorf("the token is not HTML-escaped in the page: %q", body)
+			}
+			if n := len(vpFind(doc, vpTag("script"))); n != 1 {
+				t.Errorf("script elements = %d, want 1", n)
+			}
+			if n := strings.Count(body, "addEventListener('submit'"); n != 1 {
+				t.Errorf("the submit-once script appears %d times, want 1", n)
+			}
+		})
+	}
+}

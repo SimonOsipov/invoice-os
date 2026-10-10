@@ -1533,6 +1533,38 @@ test('the confirmed notice sits clear of the sidebar at each wide width', async 
   }
 })
 
+test("the invitee's set-password link opens one bounded form, and a bogus token's double-submit lands on the failed notice", async ({ page }) => {
+  const errors = collectErrors(page)
+  const posts = recordPosts(page, '/auth/invitation/password')
+  const url = `${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup&invite=1`
+  const password = page.locator('input[name="password"]')
+  const button = page.getByRole('button')
+
+  for (const width of [...WIDE_WIDTHS, 375]) {
+    const height = 1080
+    await page.setViewportSize({ width, height })
+    await page.goto(url)
+    await expect(page.locator('form'), `one form at ${width}px`).toHaveCount(1)
+    await expect(password, `one password input at ${width}px`).toHaveCount(1)
+    await expect(button, `one button at ${width}px`).toHaveCount(1)
+    const card = page.locator('main')
+    const [cardBox, formBox] = await Promise.all([card.boundingBox(), page.locator('form').boundingBox()])
+    if (!cardBox || !formBox) throw new Error(`card or form rendered no box at ${width}px`)
+    expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(cardBox)})`).toBe(true)
+    expect(enclosesRect(cardBox, formBox, 1), `the form leaves the card at ${width}px (${JSON.stringify({ cardBox, formBox })})`).toBe(true)
+    await noSidewaysScroll(page, 'the set-password page', width)
+  }
+
+  const beforeSubmit = [...errors]
+  expect(beforeSubmit, `console errors on the set-password page:\n${beforeSubmit.join('\n')}`).toEqual([])
+
+  await password.fill(crypto.randomUUID().slice(0, 16))
+  await Promise.all([page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }), button.dblclick()])
+  await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
+  await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
+  expect(posts.length, 'POST /auth/invitation/password requests sent by the double-click').toBe(1)
+})
+
 // internal/tenancy/tenancy.go maxNameChars is 200; 6 x 32 + 5 spaces = 197.
 const LONG_NAME = 'Oluwaseyifunmi Adebanjo-Ogunleye '.repeat(6).trim()
 // One unbroken 200-char word: the add-company subtitle must wrap it, not scroll the page.
@@ -2726,20 +2758,23 @@ async function expectReadyView(page: Page, width: number, token: string, workspa
   )
 }
 
-// Opens the link at `width` and the register view, then asserts its fields and submit stack.
-async function expectRegisterView(page: Page, width: number, token: string): Promise<void> {
+// Opens the link at `width` and the register view, then asserts heading, text, email and submit stack.
+async function expectRegisterView(page: Page, width: number, token: string, address: string): Promise<void> {
   await page.setViewportSize({ width, height: TALL })
   await openInvite(page, token)
   await page.getByRole('button', { name: 'Create account', exact: true }).click()
   const heading = page.getByRole('heading', { name: 'Create your account', exact: true })
   await expect(heading).toBeVisible()
+  const text = page.getByText(`We will email ${address} a link to confirm the address and choose your password.`, { exact: true })
+  await expect(text).toBeVisible()
   await expectAcceptStack(
     page,
     width,
     heading,
     [
+      ['heading', heading],
+      ['text', text],
       ['email', page.getByLabel('Work email', { exact: true })],
-      ['password', page.getByLabel('Password', { exact: true })],
       ['submit', page.getByRole('button', { name: 'Create account →', exact: true })],
     ],
     ['email', 'submit'],
@@ -2779,7 +2814,7 @@ test('deployed landing: the accept page names the workspace and role at every wi
 
   const registerWidths: number[] = []
   for (const width of widths) {
-    await expectRegisterView(page, width, longToken)
+    await expectRegisterView(page, width, longToken, long)
     registerWidths.push(width)
   }
   expect(registerWidths, 'the widths the long-address register sweep read').toEqual(widths)
@@ -2800,11 +2835,10 @@ test('deployed landing: the accept page names the workspace and role at every wi
 })
 
 // Registers the invitee on the accept page and ends on "Check your email".
-async function registerOnAcceptPage(page: Page, token: string, password: string): Promise<void> {
+async function registerOnAcceptPage(page: Page, token: string): Promise<void> {
   await seedConsent(page, false)
   await openInvite(page, token)
   await page.getByRole('button', { name: 'Create account', exact: true }).click()
-  await page.getByLabel('Password', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Create account →', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Check your email', exact: true })).toBeVisible({ timeout: 30_000 })
 }
@@ -2824,25 +2858,20 @@ async function signInInOpenWindow(page: Page, account: { email: string; password
   ])
 }
 
-test('deployed journey: an invitee creates an account on the accept page, signs in and lands in the workspace with the invited role', async ({ page }) => {
+test('deployed journey: an invitee creates an account on the accept page', async ({ page }) => {
   test.setTimeout(240_000)
   const workspace = await inviteWorkspace()
-  const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
-  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
-  const urls = recordUrls(page)
-  let workspacesCreated = 0
-  page.on('request', (r) => {
-    if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/tenancy/v1/workspaces')) workspacesCreated += 1
-  })
+  const email = `invitee-${crypto.randomUUID()}@example.com`
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, email)
 
-  await registerOnAcceptPage(page, token, account.password)
+  await registerOnAcceptPage(page, token)
 
   await test.step('the sent view stacks at 375 px', async () => {
     await page.setViewportSize({ width: 375, height: TALL })
     const heading = page.getByRole('heading', { name: 'Check your email', exact: true })
-    const text = page.getByText('a confirmation link is on its way to')
-    await expect(text).toContainText(account.email)
-    await expect(text).toContainText('A confirmation link is on its way to')
+    const text = page.getByText('a link to confirm the address and choose your password is on its way to')
+    await expect(text).toContainText(email)
+    await expect(text).toContainText('A link to confirm the address and choose your password is on its way to')
     await expect(text).not.toContainText('If this address can be registered')
     await expectAcceptStack(
       page,
@@ -2851,9 +2880,22 @@ test('deployed journey: an invitee creates an account on the accept page, signs 
       [['heading', heading], ['text', text], ['resend', page.getByRole('button', { name: RESEND, exact: true })], ['sign in', page.getByRole('button', { name: 'Sign in', exact: true })]],
       ['resend', 'sign in'],
     )
-    await page.setViewportSize({ width: 1280, height: 800 })
+  })
+})
+
+test('deployed journey: an account registered before the invite signs in from the accept page and lands in the workspace with the invited role', async ({ page }) => {
+  test.setTimeout(240_000)
+  const workspace = await inviteWorkspace()
+  const account = await registerFresh('invitee')
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+  const urls = recordUrls(page)
+  let workspacesCreated = 0
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/tenancy/v1/workspaces')) workspacesCreated += 1
   })
 
+  await seedConsent(page, false)
+  await openInvite(page, token)
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()
   await signInInOpenWindow(page, account)
   const identity = await readSessionIdentity(page)
@@ -2878,7 +2920,7 @@ const existsText = (page: Page, address: string) => page.getByText(`${address} a
 const INVITE_PREVIEW = /\/auth\/invitation$/
 
 // Answers the preview with the real answer, its `account` replaced by whatever `state.account` holds when the page asks.
-async function fulfilPreview(page: Page, state: { account: 'confirmed' | 'unconfirmed' }): Promise<void> {
+async function fulfilPreview(page: Page, state: { account: 'none' | 'confirmed' | 'unconfirmed' }): Promise<void> {
   await page.route(INVITE_PREVIEW, async (route) => {
     if (route.request().method() === 'OPTIONS') return route.continue()
     const response = await route.fetch()
@@ -2890,20 +2932,17 @@ async function fulfilPreview(page: Page, state: { account: 'confirmed' | 'unconf
 test('deployed journey: an invitee who already registered and submits Create account again on the open page is sent to Sign in', async ({ page }) => {
   test.setTimeout(240_000)
   const workspace = await inviteWorkspace()
-  const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
+  const account = await registerFresh('invitee')
   const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
   const errors = gatedErrors(page, [expectedStatusDropper(page, 409, /\/auth\/invitation\/register$/)])
   await seedConsent(page, false)
+  // The real preview reads the registered account; 'none' keeps the ready view up until the real register answers 409.
+  await fulfilPreview(page, { account: 'none' })
   await openInvite(page, token)
   await expect(page.getByRole('button', { name: 'Create account', exact: true })).toBeVisible({ timeout: 30_000 })
-
-  // The page still shows the ready view: the account appears behind its back.
-  const registered = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password: account.password } })
-  expect(registered.status, JSON.stringify(registered.body)).toBe(202)
   await awaitAccountState(token, 'confirmed')
 
   await page.getByRole('button', { name: 'Create account', exact: true }).click()
-  await page.getByLabel('Password', { exact: true }).fill(crypto.randomUUID().slice(0, 16))
   await page.getByRole('button', { name: 'Create account →', exact: true }).click()
   await expect(existsText(page, account.email)).toBeVisible({ timeout: 30_000 })
   await expect(page.getByRole('button', { name: 'Create account', exact: true })).toHaveCount(0)
@@ -2920,15 +2959,8 @@ test('deployed journey: an invitee who already registered and submits Create acc
 test('deployed journey: an invitee who registered opens the invite on another device and is offered only Sign in', async ({ browser }) => {
   test.setTimeout(300_000)
   const workspace = await inviteWorkspace()
-  const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
+  const account = await registerFresh('invitee')
   const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
-
-  const contextA = await browser.newContext()
-  try {
-    await registerOnAcceptPage(await contextA.newPage(), token, account.password)
-  } finally {
-    await contextA.close()
-  }
   await awaitAccountState(token, 'confirmed')
 
   const contextB = await browser.newContext()
@@ -3069,15 +3101,8 @@ const errorsAllowing403Me = (page: Page) => gatedErrors(page, [expectedStatusDro
 test('deployed journey: an invitee who registered in one browser signs in from another and joins from the Join screen', async ({ browser }) => {
   test.setTimeout(300_000)
   const workspace = await inviteWorkspace()
-  const account = { email: `invitee-${crypto.randomUUID()}@example.com`, password: crypto.randomUUID().slice(0, 16) }
-  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
-
-  const contextA = await browser.newContext()
-  try {
-    await registerOnAcceptPage(await contextA.newPage(), token, account.password)
-  } finally {
-    await contextA.close()
-  }
+  const account = await registerFresh('invitee')
+  await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
 
   // A new context holds no invite: it stands for the tab the verification mail opens.
   const contextB = await browser.newContext()

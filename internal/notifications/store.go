@@ -87,6 +87,7 @@ RETURNING email, version, hubspot_delivered_at IS NULL,
 
 type intake struct {
 	email, userID, first, last, company string
+	name                                string
 	registered, demo                    bool
 	consentText                         string
 	consentAt                           time.Time
@@ -104,7 +105,7 @@ func (s *Store) DemoRequest(ctx context.Context, in DemoIntake) error {
 	first, last := splitName(in.Name)
 	return s.merge(ctx, intake{
 		email: in.Email, first: first, last: last, company: strings.TrimSpace(in.Company),
-		demo: true, consentText: in.ConsentText,
+		name: strings.TrimSpace(in.Name), demo: true, consentText: in.ConsentText,
 	})
 }
 
@@ -146,6 +147,11 @@ func (s *Store) merge(ctx context.Context, in intake) error {
 		dest := d.name
 		if _, err := s.river.InsertTx(ctx, tx, DeliverArgs{Email: email, Destination: dest, Version: version}, nil); err != nil {
 			return fmt.Errorf("notifications: queue %s delivery: %w", dest, err)
+		}
+	}
+	if in.demo {
+		if _, err := s.river.InsertTx(ctx, tx, DemoDealArgs{Email: email, Name: in.name, Company: in.company}, nil); err != nil {
+			return fmt.Errorf("notifications: queue demo deal: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

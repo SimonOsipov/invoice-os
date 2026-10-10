@@ -119,7 +119,7 @@ func TestGatewayMainWiresAuthSiteURLIntoRegistration(t *testing.T) {
 					siteVar, parseAt = types.ExprString(as.Lhs[0]), i
 				}
 			}
-			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 5 {
+			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 {
 				wiredArg = types.ExprString(call.Args[1])
 			}
 		}
@@ -149,7 +149,7 @@ func TestRegistrationClientTimeoutAndNoFollow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	for _, name := range []string{"registrationHandlers", "resetPasswordHandler"} {
+	for _, name := range []string{"registrationHandlers", "resetPasswordHandler", "invitationHandlers", "invitationPasswordHandler"} {
 		var fn *ast.FuncDecl
 		for _, d := range f.Decls {
 			if d, ok := d.(*ast.FuncDecl); ok && d.Name.Name == name {
@@ -220,7 +220,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	t.Cleanup(srv.Close)
 	authURL, _ := url.Parse(srv.URL)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 
 	if rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`); rec.Code != http.StatusBadGateway {
 		t.Errorf("Register = %d, want 502: %s", rec.Code, rec.Body.String())
@@ -268,7 +268,7 @@ func verifyMux(t *testing.T, verify http.Handler, site *url.URL) *http.ServeMux 
 func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 	mux := verifyMux(t, handoffVerify(authURL, site, nil), site)
 	mux.Handle("POST /auth/register", reg.Register)
 	// No method in the pattern, so the handler's own method check answers.
@@ -402,7 +402,7 @@ func TestResetPasswordRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	authURL, _ := url.Parse(srv.URL)
 	site, _ := url.Parse("https://site.example")
 	mux := http.NewServeMux()
-	mountResetRoutes(t, mux, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil), authURL, site)
+	mountResetRoutes(t, mux, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite), authURL, site)
 	const link = "http://gateway.test/auth/reset-password?token=T&type=recovery"
 
 	var page string
@@ -438,16 +438,19 @@ func TestResetPasswordRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 	_, body := parseMain(t)
 
-	regVar, previewerVar, regAt, invAt := "", "", -1, -1
+	regVar, previewerVar, registrationsVar, regAt, invAt := "", "", "", -1, -1
 	var invCalls []*ast.CallExpr
-	var previewerCall *ast.CallExpr
+	var previewerCall, registrationsCall *ast.CallExpr
 	for i, st := range body.List {
 		if as, ok := st.(*ast.AssignStmt); ok && len(as.Rhs) == 1 {
-			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 5 && len(as.Lhs) == 1 {
+			if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 && len(as.Lhs) == 1 {
 				regVar, regAt = types.ExprString(as.Lhs[0]), i
 			}
 			if call, ok := isCallTo(as.Rhs[0], "gateway", "NewHTTPInvitationPreviewer"); ok && len(as.Lhs) == 1 {
 				previewerVar, previewerCall = types.ExprString(as.Lhs[0]), call
+			}
+			if call, ok := isCallTo(as.Rhs[0], "gateway", "NewHTTPInvitationRegistrations"); ok && len(as.Lhs) == 1 {
+				registrationsVar, registrationsCall = types.ExprString(as.Lhs[0]), call
 			}
 		}
 		ast.Inspect(st, func(n ast.Node) bool {
@@ -461,14 +464,14 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 		})
 	}
 	if regVar == "" {
-		t.Fatal("main has no top-level `x := registrationHandlers(...)` with 5 arguments")
+		t.Fatal("main has no top-level `x := registrationHandlers(...)` with 6 arguments")
 	}
 	if len(invCalls) != 1 {
 		t.Fatalf("main calls invitationHandlers %d times, want exactly once", len(invCalls))
 	}
 	call := invCalls[0]
-	if len(call.Args) != 6 {
-		t.Fatalf("invitationHandlers call has %d arguments, want 6", len(call.Args))
+	if len(call.Args) != 7 {
+		t.Fatalf("invitationHandlers call has %d arguments, want 7", len(call.Args))
 	}
 	if invAt <= regAt {
 		t.Errorf("invitationHandlers is statement %d, registrationHandlers %d; the throttle is read before it exists", invAt, regAt)
@@ -478,7 +481,7 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 		1: "siteURL",
 		2: "registerMinResponse",
 		3: regVar + ".RegisterPerIP",
-		5: "app.Logger",
+		6: "app.Logger",
 	} {
 		if got := types.ExprString(call.Args[i]); got != want {
 			t.Errorf("invitationHandlers argument %d = %s, want %s", i+1, got, want)
@@ -493,6 +496,32 @@ func TestGatewayMainSharesTheRegisterBudgetWithInvitations(t *testing.T) {
 	if len(previewerCall.Args) != 3 || types.ExprString(previewerCall.Args[0]) != `routed["tenancy"]` || types.ExprString(previewerCall.Args[2]) != "gatewayToken" {
 		t.Errorf("NewHTTPInvitationPreviewer args = %v, want routed[\"tenancy\"], a client and gatewayToken", previewerCall.Args)
 	}
+	if registrationsCall == nil {
+		t.Fatal("main has no top-level `x := gateway.NewHTTPInvitationRegistrations(...)`")
+	}
+	if got := types.ExprString(call.Args[5]); got != registrationsVar {
+		t.Errorf("invitationHandlers registrations argument = %s, want %s", got, registrationsVar)
+	}
+	if len(registrationsCall.Args) != 3 || types.ExprString(registrationsCall.Args[0]) != `routed["tenancy"]` || types.ExprString(registrationsCall.Args[2]) != "gatewayToken" {
+		t.Errorf("NewHTTPInvitationRegistrations args = %v, want routed[\"tenancy\"], a client and gatewayToken", registrationsCall.Args)
+	}
+	if len(registrationsCall.Args) == 3 {
+		traced := false
+		ast.Inspect(registrationsCall.Args[1], func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if _, ok := isCallTo(c, "platform", "TraceTransport"); ok {
+					traced = true
+				}
+			}
+			return true
+		})
+		if !traced {
+			t.Error("NewHTTPInvitationRegistrations client is not wrapped in platform.TraceTransport")
+		}
+	}
+	if registrationsVar == previewerVar {
+		t.Errorf("registrations and previewer are one variable %s", registrationsVar)
+	}
 }
 
 // main's patterns for the two invitation routes, mounted on a mux behind the gateway's CORS layer.
@@ -505,7 +534,7 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	sites, _ := mainRoutes(t, src)
 	var patterns []string
 	for _, s := range sites {
-		if strings.Contains(s.pattern, " /auth/invitation") {
+		if strings.Contains(s.pattern, " /auth/invitation") && !strings.HasSuffix(s.pattern, "/password") {
 			patterns = append(patterns, s.pattern)
 		}
 	}
@@ -519,8 +548,9 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	preview := func(context.Context, string) (gateway.InvitationPreview, error) {
 		return gateway.InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: "tunde@obi.test"}, nil
 	}
-	invitation, register := invitationHandlers(authURL, site, 0, perIP, preview, slog.New(slog.DiscardHandler))
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	regs, _ := invitationRegistrationsStub("tunde@obi.test")
+	invitation, register := invitationHandlers(authURL, site, 0, perIP, preview, regs, slog.New(slog.DiscardHandler))
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 	resend := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, preview, slog.New(slog.DiscardHandler))
 	withCORS := gateway.CORS([]string{origin})
 	mux := http.NewServeMux()
@@ -562,5 +592,84 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	}
 	if got := calls(); len(got) != 0 {
 		t.Errorf("a preflight or preview reached GoTrue: %v", got)
+	}
+
+	// The set-password route is a same-origin form POST: no OPTIONS route, no grant of its own.
+	if s := sitesFor(sites, "OPTIONS /auth/invitation/password"); len(s) != 0 {
+		t.Errorf("main answers a preflight for /auth/invitation/password: %+v", s)
+	}
+	pw := http.NewServeMux()
+	pw.Handle("POST /auth/invitation/password", invitationPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, slog.New(slog.DiscardHandler)), perIP, nil, slog.New(slog.DiscardHandler)))
+	for _, method := range []string{http.MethodOptions, http.MethodPost} {
+		req := httptest.NewRequest(method, "/auth/invitation/password", strings.NewReader("type=signup"))
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Access-Control-Request-Method", "POST")
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		pw.ServeHTTP(rec, req)
+		if method == http.MethodOptions && rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("cross-origin OPTIONS /auth/invitation/password = %d, want 405", rec.Code)
+		}
+		if method == http.MethodPost && rec.Code != http.StatusSeeOther {
+			t.Errorf("cross-origin POST /auth/invitation/password = %d, want the handler's 303", rec.Code)
+		}
+		for h := range rec.Header() {
+			if strings.HasPrefix(h, "Access-Control-") {
+				t.Errorf("%s /auth/invitation/password answered %s: %q", method, h, rec.Header().Get(h))
+			}
+		}
+	}
+}
+
+// noPendingInvite is the lookup of a tenancy with no invites.
+func noPendingInvite(context.Context, string) (bool, error) { return false, nil }
+
+// Register asks tenancy about the address: main must hand registrationHandlers the HTTP lookup.
+func TestGatewayMainWiresThePendingInviteLookupIntoRegistration(t *testing.T) {
+	_, body := parseMain(t)
+
+	lookupVar, regArg := "", ""
+	var lookupCall *ast.CallExpr
+	for _, st := range body.List {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			continue
+		}
+		if call, ok := isCallTo(as.Rhs[0], "gateway", "NewHTTPPendingInviteLookup"); ok {
+			lookupVar, lookupCall = types.ExprString(as.Lhs[0]), call
+		}
+		if call, ok := isCallTo(as.Rhs[0], "", "registrationHandlers"); ok && len(call.Args) == 6 {
+			regArg = types.ExprString(call.Args[5])
+		}
+	}
+	if lookupCall == nil {
+		t.Fatal("main has no top-level `x := gateway.NewHTTPPendingInviteLookup(...)`")
+	}
+	if len(lookupCall.Args) != 3 || types.ExprString(lookupCall.Args[0]) != `routed["tenancy"]` || types.ExprString(lookupCall.Args[2]) != "gatewayToken" {
+		t.Errorf("NewHTTPPendingInviteLookup args = %v, want routed[\"tenancy\"], a client and gatewayToken", lookupCall.Args)
+	}
+	if regArg == "" {
+		t.Fatal("main has no top-level `x := registrationHandlers(...)` with 6 arguments")
+	}
+	if regArg != lookupVar {
+		t.Errorf("registrationHandlers sixth argument = %q, want %q", regArg, lookupVar)
+	}
+}
+
+// Fail closed: with no lookup, Register must not reach GoTrue for a possibly invited address.
+func TestRegistrationHandlers_NilPendingLookupIsNotConfigured(t *testing.T) {
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, nil)
+
+	rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Register = %d, want 503: %s", rec.Code, rec.Body.String())
+	}
+	if want := `{"error":"registration is not configured"}`; strings.TrimSpace(rec.Body.String()) != want {
+		t.Errorf("body = %s, want %s", rec.Body.String(), want)
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("GoTrue saw %v, want no calls", got)
 	}
 }

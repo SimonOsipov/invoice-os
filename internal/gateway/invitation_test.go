@@ -784,7 +784,7 @@ func TestInvitationRegister_MapsGoTrueLikeRegister(t *testing.T) {
 }
 
 func TestInvitationRegister_AnExistingAccountIsRefusedBeforeGoTrue(t *testing.T) {
-	const floor = 2 * time.Second
+	const floor = 150 * time.Millisecond
 	for _, c := range []struct{ account, want string }{
 		{"confirmed", msgAccountExists},
 		{"unconfirmed", msgAccountUnconfirmed},
@@ -802,8 +802,8 @@ func TestInvitationRegister_AnExistingAccountIsRefusedBeforeGoTrue(t *testing.T)
 				if strings.Contains(rec.Body.String(), inviteAddress) {
 					t.Errorf("409 body carries the address: %s", rec.Body.String())
 				}
-				if elapsed > time.Second {
-					t.Errorf("answered after %v, want at once (floor %v)", elapsed, floor)
+				if elapsed < floor {
+					t.Errorf("answered after %v, want no earlier than the %v floor", elapsed, floor)
 				}
 			}
 			if n := len(fake.Calls()); n != 0 {
@@ -819,6 +819,35 @@ func TestInvitationRegister_AnExistingAccountIsRefusedBeforeGoTrue(t *testing.T)
 			}
 			if n := len(fake.Calls()); n != RegisterPerIP {
 				t.Errorf("GoTrue saw %d calls, want %d", n, RegisterPerIP)
+			}
+		})
+	}
+}
+
+// A preview refusal takes the register budget check as the 202 path does: a spent IP gets the uniform 202 after the floor, not the 409.
+func TestInvitationRegister_PreviewRefusalTakesTheBudgetCheck(t *testing.T) {
+	const floor = 150 * time.Millisecond
+	for _, account := range []string{"confirmed", "unconfirmed"} {
+		t.Run(account, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			perIP := NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
+			perIP.Reserve("192.0.2.1")
+			r := claiming(inviteAddress, true, nil)
+			p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: account}, nil)
+			log, _ := captureLog()
+			req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken)))
+			req.RemoteAddr = "192.0.2.1:5555"
+			rec := httptest.NewRecorder()
+			start := time.Now()
+
+			InvitationRegisterHandler(fake.URL, testClient(), floor, perIP, true, log, p.preview, r.registrations()).ServeHTTP(rec, req)
+
+			requirePending202(t, rec)
+			if elapsed := time.Since(start); elapsed < floor {
+				t.Errorf("answered after %v, want no earlier than the %v floor", elapsed, floor)
+			}
+			if len(r.claims()) != 0 || len(fake.Calls()) != 0 {
+				t.Errorf("claims = %d, GoTrue calls = %d, want 0 and 0", len(r.claims()), len(fake.Calls()))
 			}
 		})
 	}

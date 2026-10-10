@@ -271,12 +271,25 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		if !ok {
 			return
 		}
+		refusal := ""
 		switch p.Account {
 		case "confirmed":
-			writeError(w, http.StatusConflict, msgAccountExists)
-			return
+			refusal = msgAccountExists
 		case "unconfirmed":
-			writeError(w, http.StatusConflict, msgAccountUnconfirmed)
+			refusal = msgAccountUnconfirmed
+		}
+		if refusal != "" {
+			// Mails nobody, so the slot is refunded as on the GoTrue existing-account 409; the budget check and the floor stay.
+			key, held, proceed := reserveSignUp(w, r, perIP, enforce, log, start, minResponse)
+			if !proceed {
+				return
+			}
+			if held {
+				perIP.Refund(key)
+			}
+			if holdMinimum(r.Context(), log, "registration: signup timing", start, time.Since(start), minResponse) {
+				writeError(w, http.StatusConflict, refusal)
+			}
 			return
 		}
 		email, first, err := registrations.Claim(r.Context(), in.Token)

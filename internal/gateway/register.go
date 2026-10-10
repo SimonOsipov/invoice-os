@@ -102,19 +102,8 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 // A non-nil existing is sent instead of the 202 when GoTrue reports an address that already has an account.
 // It reports whether an account may exist for the address afterwards: GoTrue 200, an existing address or the 23505 race.
 func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, invited func(context.Context) (bool, error), existing func()) (accountMayExist bool) {
-	key, source := clientKey(r)
-	held := perIP.Reserve(key)
-	refused := false
-	if !held {
-		log.WarnContext(r.Context(), "registration: limit reached",
-			slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
-		refused = enforce
-	}
-
-	if refused {
-		if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
-			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
-		}
+	key, held, proceed := reserveSignUp(w, r, perIP, enforce, log, start, minResponse)
+	if !proceed {
 		return false
 	}
 
@@ -198,6 +187,23 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		send()
 	}
 	return mayExist
+}
+
+// reserveSignUp takes a per-IP register slot. Over budget and enforced, it holds the floor, answers the uniform 202 and reports false.
+func reserveSignUp(w http.ResponseWriter, r *http.Request, perIP *SignInThrottle, enforce bool, log *slog.Logger, start time.Time, minResponse time.Duration) (key string, held, proceed bool) {
+	key, source := clientKey(r)
+	held = perIP.Reserve(key)
+	if !held {
+		log.WarnContext(r.Context(), "registration: limit reached",
+			slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
+		if enforce {
+			if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
+				writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+			}
+			return key, held, false
+		}
+	}
+	return key, held, true
 }
 
 // registrationAnswers trims and validates the answers with tenancy.ProvisionHandler's rules and

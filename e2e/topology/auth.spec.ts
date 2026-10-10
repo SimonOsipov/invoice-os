@@ -1559,9 +1559,8 @@ test("the invitee's set-password link opens one bounded form, and a bogus token'
   expect(beforeSubmit, `console errors on the set-password page:\n${beforeSubmit.join('\n')}`).toEqual([])
 
   await password.fill(crypto.randomUUID().slice(0, 16))
-  await button.dblclick()
-  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
+  await Promise.all([page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }), button.dblclick()])
+  await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
   await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
   expect(posts.length, 'POST /auth/invitation/password requests sent by the double-click').toBe(1)
 })

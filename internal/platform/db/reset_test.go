@@ -319,6 +319,16 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		t.Fatalf("seed extraction_field_corrections fixture: %v", err)
 	}
 
+	// FKs extraction_jobs: without it in resetTables, TRUNCATE extraction_jobs fails 0A000.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO extraction_rule_breaks
+		     (tenant_id, extraction_job_id, field_name, rule_set_version_id, rule_key, message)
+		 VALUES ($1, $2, 'total_amount', (SELECT id FROM rule_set_versions WHERE is_active), 'vat-standard-rate', 'witness')`,
+		tenantID, extractionJobID,
+	); err != nil {
+		t.Fatalf("seed extraction_rule_breaks fixture: %v", err)
+	}
+
 	// The storage_key CHECK admits only this tenant's own prefix.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO extraction_page_images

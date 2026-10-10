@@ -202,8 +202,8 @@ func TestReasonIsANamedStringTypeInThisPackage(t *testing.T) {
 // through an alias of Reason, and a package-level var. Scan for those directly.
 func TestNoReasonValueEscapesTheConstantScan(t *testing.T) {
 	known := reasonConstants(t)
-	if len(known) != 5 {
-		t.Fatalf("reasonConstants found %d constants, want 5: the four CHECK values plus ReasonNone", len(known))
+	if len(known) != 6 {
+		t.Fatalf("reasonConstants found %d constants, want 6: the five CHECK values plus ReasonNone", len(known))
 	}
 	allowed := map[string]bool{}
 	for _, v := range known {
@@ -279,30 +279,17 @@ func TestNoReasonValueEscapesTheConstantScan(t *testing.T) {
 	}
 }
 
-// The Go constants are pinned to one migration file. A later ALTER that widened the CHECK
-// somewhere else would leave that pin passing against a set the database no longer enforces.
+// The Go constants are pinned to the newest migration that writes the CHECK. A further
+// migration that redefines it must be listed here, so the author sees the pin move.
 func TestNoOtherMigrationRedefinesTheReasonCheck(t *testing.T) {
-	all, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.sql"))
-	if err != nil {
-		t.Fatalf("glob migrations: %v", err)
+	carriers, _ := reasonCheckMigrations(t)
+	want := []string{
+		"20260827100320_extraction_field_results.sql",
+		"20261009133403_extraction_rule_breaks.sql",
 	}
-	if len(all) < 2 {
-		t.Fatalf("globbed %d migrations; the scan below would pass vacuously", len(all))
-	}
-
-	var carriers []string
-	for _, p := range all {
-		body, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatalf("read %s: %v", p, err)
-		}
-		if reasonCheckRE.Match(body) {
-			carriers = append(carriers, filepath.Base(p))
-		}
-	}
-	if len(carriers) != 1 || !strings.HasSuffix(carriers[0], "_extraction_field_results.sql") {
-		t.Errorf("the reason_code CHECK set is written in %v, want only the extraction_field_results "+
-			"migration -- TestReasonConstantsMatchMigrationCheck reads that file alone", carriers)
+	if !reflect.DeepEqual(carriers, want) {
+		t.Errorf("the reason_code CHECK set is written in %v, want %v -- "+
+			"TestReasonConstantsMatchMigrationCheck reads the newest of them", carriers, want)
 	}
 }
 

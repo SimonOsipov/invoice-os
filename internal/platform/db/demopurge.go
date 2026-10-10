@@ -52,6 +52,7 @@ var purgeTables = []string{
 	"extraction_anchor_rules",
 	"extraction_field_results",
 	"extraction_field_corrections",
+	"extraction_rule_breaks",
 	"extraction_jobs",
 	"extraction_page_images",
 	"documents",

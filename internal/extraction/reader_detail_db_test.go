@@ -41,7 +41,8 @@ var rvdWireStructs = []struct {
 	{rdReaderSource, "ExtractionPage", []string{"page", "width_px", "height_px"}},
 	{rdReaderSource, "ExtractionCandidate", []string{"value", "region"}},
 	{rdReaderSource, "ExtractionCorrected", []string{"method", "was", "where"}},
-	{rdReaderSource, "ExtractionFieldState", []string{"name", "value", "region", "reason", "alternatives", "corrected"}},
+	{rdReaderSource, "ExtractionRuleBreak", []string{"key", "message"}},
+	{rdReaderSource, "ExtractionFieldState", []string{"name", "value", "region", "reason", "alternatives", "corrected", "rules"}},
 	{rdReaderSource, "ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
 	// EXTR-15-01 FK-8: failure_kind is pinned immediately after state — the two scalars a
 	// reader consults together — because this list compares declaration ORDER, not a set.

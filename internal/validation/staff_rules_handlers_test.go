@@ -81,6 +81,10 @@ func TestStaffRulesHandlers_SwitchWireShape(t *testing.T) {
 	if call.key != "vat-standard-rate" || call.enabled || call.reason != "x" {
 		t.Errorf("switch call = %+v", call)
 	}
+	_, call = patchRule(t, `{"enabled":true,"reason":"y"}`, SwitchResult{Enabled: true}, nil)
+	if !call.enabled {
+		t.Errorf("enabled:true reached the switch as %+v", call)
+	}
 }
 
 func TestStaffRulesHandlers_RejectsBadBodies(t *testing.T) {

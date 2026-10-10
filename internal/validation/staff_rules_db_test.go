@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -77,6 +78,10 @@ func versionInForce(t *testing.T, super *pgxpool.Pool) (id string, version int) 
 
 func TestStaffRules_ListReturnsTheVersionInForce(t *testing.T) {
 	super, app := dbTestPools(t)
+	restoreRulesOnCleanup(t, super)
+	if n := runKillSwitch(t, super, functionKey, false); n != 1 {
+		t.Fatalf("fixture: disabled %d rows of %s, want 1", n, functionKey)
+	}
 	got, err := NewStore(app).RulesInForce(staffCtx(t, uuid.NewString()))
 	if err != nil {
 		t.Fatalf("RulesInForce: %v", err)
@@ -102,13 +107,47 @@ func TestStaffRules_ListReturnsTheVersionInForce(t *testing.T) {
 	if len(want) == 0 || len(got.Rules) != len(want) {
 		t.Fatalf("got %d rules, want %d (>0)", len(got.Rules), len(want))
 	}
+	var sawDisabled bool
 	for i := range want {
 		if got.Rules[i] != want[i] {
 			t.Errorf("rule %d = %+v, want %+v", i, got.Rules[i], want[i])
 		}
+		if got.Rules[i].Key == functionKey {
+			sawDisabled = !got.Rules[i].Enabled
+		}
 		if got.Rules[i].Scope != "document" {
 			t.Errorf("rule %s scope = %q, want document", got.Rules[i].Key, got.Rules[i].Scope)
 		}
+	}
+	if !sawDisabled {
+		t.Errorf("%s was disabled but the list shows it enabled", functionKey)
+	}
+}
+
+// A session whose rule_set_versions is empty has no version in force: ErrNoActiveRuleSet, which the handler maps to 503.
+func TestStaffRules_ListWithNoVersionInForceIsErrNoActiveRuleSet(t *testing.T) {
+	dbTestPools(t)
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.MaxConns = 1
+	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+		_, err := c.Exec(ctx, `CREATE TEMP TABLE rule_set_versions AS SELECT * FROM public.rule_set_versions WHERE false`)
+		return err
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	_, err = NewStore(pool).RulesInForce(staffCtx(t, uuid.NewString()))
+	if !errors.Is(err, ErrNoActiveRuleSet) {
+		t.Fatalf("err = %v, want ErrNoActiveRuleSet", err)
+	}
+	if status, _ := staffRulesError(err); status != 503 {
+		t.Errorf("status = %d, want 503", status)
 	}
 }
 
@@ -335,6 +374,9 @@ func TestStaffRules_NonUUIDSubjectIs403(t *testing.T) {
 	_, err := NewStore(app).SwitchRule(staffCtx(t, "not-a-uuid"), functionKey, false, "r")
 	if !errors.Is(err, db.ErrNotStaff) {
 		t.Fatalf("err = %v, want db.ErrNotStaff", err)
+	}
+	if _, err := NewStore(app).SwitchRule(context.Background(), functionKey, false, "r"); !errors.Is(err, db.ErrNotStaff) {
+		t.Errorf("no checked caller in ctx: err = %v, want db.ErrNotStaff", err)
 	}
 	if !ruleEnabledActive(t, super, functionKey) {
 		t.Error("rules.enabled changed")

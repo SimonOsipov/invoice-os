@@ -88,4 +88,29 @@ describe('useTourSpot', () => {
     act(() => fire())
     expect(seen.rect).toEqual({ x: 6, y: 101, w: 275, h: 46 })
   })
+
+  it('useTourSpot_disconnectsTheObserverOnCleanupAndWatchesTheNewTargetOnAPhaseChange', () => {
+    const live = new Set<Element>()
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        els: Element[] = []
+        observe = (el: Element) => void (this.els.push(el), live.add(el))
+        disconnect = () => void this.els.forEach((el) => live.delete(el))
+      },
+    )
+    const nav = document.createElement('nav')
+    nav.id = 'nav-invoices'
+    const card = document.createElement('div')
+    card.id = 'fc-import-files'
+    document.body.append(nav, card)
+    render({ i: 0, phase: 'menu' })
+    expect([...live]).toEqual([nav])
+
+    render({ i: 0, phase: 'card' })
+    expect([...live]).toEqual([card])
+
+    render(null)
+    expect([...live]).toEqual([])
+  })
 })

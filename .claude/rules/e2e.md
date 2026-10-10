@@ -23,6 +23,7 @@ paths:
 - Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.
 - Assert containment or a live-read comparison, never a literal count.
 - Expect specs to leave rows in `auth.users`, `staff_members`, `tenants` and `memberships`. Every run registers a fresh address, so this is harmless.
+- Expect the Support Console Rules screen to read real rules. The other console screens hold mock data.
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
 - Never publish a policy in a topology spec. A topology spec may restore the tenant's own seeded policy through `ensureFirmPolicyActive`.
 - Put the UI-driven approve and reject journey in `e2e/api/contract-invoice.spec.ts`, not in a topology spec.

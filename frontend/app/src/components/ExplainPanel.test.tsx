@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { EXPLAIN_COPY, fixPatch, type ExplainFix, type ExplainResult } from '../lib/explain'
@@ -57,6 +57,9 @@ describe('ExplainPanel', () => {
   it('explainPanel_headerFixHasNoLinePrefix', async () => {
     setup(Promise.resolve(ok({ field: 'currency', label: 'Currency', line: null, current: 'USD', value: 'NGN' })))
     expect((await screen.findByTestId('explain-fix')).textContent).toBe('Currency: USD → NGN')
+    cleanup()
+    setup(Promise.resolve(ok({ field: 'currency', label: 'Currency', line: null, current: null, value: 'NGN' })))
+    expect((await screen.findByTestId('explain-fix')).textContent).toBe('Currency: — → NGN')
   })
 
   it('explainPanel_noPatchWithoutAccept', async () => {
@@ -102,6 +105,16 @@ describe('ExplainPanel', () => {
     fireEvent.click(btn)
     await waitFor(() => expect(btn.textContent).toBe(EXPLAIN_COPY.accepting))
     expect(btn.disabled).toBe(true)
+    expect(patches()).toHaveLength(1)
+  })
+
+  it('explainPanel_twoClicksInOneTickSendOnePatch', async () => {
+    const { patches } = setup(Promise.resolve(ok(lineFix)), () => new Promise(() => {}))
+    const btn = (await screen.findByTestId('explain-accept')) as HTMLButtonElement
+    act(() => {
+      btn.click()
+      btn.click()
+    })
     expect(patches()).toHaveLength(1)
   })
 

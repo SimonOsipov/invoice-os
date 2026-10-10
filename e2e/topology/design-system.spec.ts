@@ -485,7 +485,9 @@ test('landing frame geometry at 1440, 834, 390 and 375', async ({ page }, testIn
     })
     expect(enclosesRect(column, eyebrow.box, 1), `${label}: hero eyebrow outside its text column`).toBe(true)
     for (const [i, line] of eyebrow.lines.entries()) {
-      expect(enclosesRect(eyebrow.box, line, 1), `${label}: eyebrow text line ${i} outside the eyebrow box`).toBe(true)
+      // Horizontal only: a 10px glyph box overshoots the 10px line box by 2px top and bottom.
+      const inside = line.x >= eyebrow.box.x - 1 && line.x + line.width <= eyebrow.box.x + eyebrow.box.width + 1
+      expect(inside, `${label}: eyebrow text line ${i} outside the eyebrow box`).toBe(true)
     }
     expect(eyebrow.scrollWidth, `${label}: eyebrow scrollWidth vs clientWidth`).toBeLessThanOrEqual(eyebrow.clientWidth)
 

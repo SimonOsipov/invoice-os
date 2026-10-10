@@ -20,6 +20,21 @@ INSERT INTO rule_set_versions (version, sealed, notes)
 VALUES (5, false, 'MBS global rule-set v5 (ENGI-09: NRS content field set)');
 
 -- Carried unchanged; enabled forced true as in v4 (a kill-switch flip is not published content).
+-- supplier-tin-required: NRS v1.1 card 1.23 AccountingSupplierParty, field 1.22.2 tin; /accounting-supplier-party
+-- supplier-name-required: NRS v1.1 card 1.23 AccountingSupplierParty, field 1.22.1 PartyName; /accounting-supplier-party
+-- invoice-number-required: NRS v1.1 irn (InvNo part of InvNo-ServiceID-YYYYMMDD); card number unconfirmed
+-- issue-date-required: NRS v1.1 card 1.3 IssueDate
+-- currency-required: NRS v1.1 card 1.11 DocumentCurrencyCode
+-- subtotal-required: NRS v1.1 card 1.33 LegalMonetaryTotal, LineExtensionAmount and TaxExclusiveAmount (D17)
+-- subtotal-non-negative: NRS v1.1 card 1.33 LegalMonetaryTotal, LineExtensionAmount and TaxExclusiveAmount (D17)
+-- vat-required: NRS v1.1 card 1.32 TaxTotal, field 1.3.1 TaxAmount (/tax-total) (D17)
+-- vat-non-negative: NRS v1.1 card 1.32 TaxTotal, field 1.3.1 TaxAmount (/tax-total) (D17)
+-- total-required: NRS v1.1 card 1.33 LegalMonetaryTotal, TaxInclusiveAmount and PayableAmount (D17)
+-- total-non-negative: NRS v1.1 card 1.33 LegalMonetaryTotal, TaxInclusiveAmount and PayableAmount (D17)
+-- line-items-required: NRS v1.1 card 1.34 InvoiceLine, at least one line
+-- line-items-sum-subtotal: NRS v1.1 card 1.34 InvoiceLine, field 1.41.10 LineExtensionAmount, summed to card 1.33 LineExtensionAmount; /invoice-line
+-- line-cost-non-negative: NRS v1.1 card 1.34 InvoiceLine, field 1.41.12 Price PriceAmount; /invoice-line
+-- no-duplicate-line-items: NRS v1.1 card 1.34 InvoiceLine, one entry per line; no NRS field, MBS rule
 INSERT INTO rules
     (rule_set_version_id, key, type, target, params, severity, "when", message, scope, enabled)
 SELECT v5.id, r.key, r.type, r.target, r.params, r.severity, r."when", r.message, r.scope, true

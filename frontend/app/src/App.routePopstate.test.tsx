@@ -1297,7 +1297,9 @@ describe('ROUTE-06-02 AC-7: the boot entry is backfilled once the entities resol
 
   it('boot_theBootEntryCarriesTheStampInTheCommitThatResolvesTheCompany', async () => {
     await bootAtWithGateway(`/invoices/${INVOICE_ID}`)
-    expect(stampOnResolve.length, 'floor: the recorder must have seen the resolving commit').toBeGreaterThan(0)
+    await waitFor(() =>
+      expect(stampOnResolve.length, 'floor: the recorder must have seen the resolving commit').toBeGreaterThan(0),
+    )
     expect(stampOnResolve[0], 'the stamp must land in the commit that names the company, not a later passive flush').toBe(
       ENTITY_A,
     )

@@ -48,13 +48,14 @@ func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, s
 		onConfirmed: func(ctx context.Context, user gotrueUser) {
 			handOffRegistrant(ctx, log, "invitation-password", sink, user.contact())
 		},
-		handOff: func(ctx context.Context, user gotrueUser, password, state string) string {
+		handOff: func(r *http.Request, user gotrueUser, password, state string) string {
+			ctx := r.Context()
 			var grant struct {
 				AccessToken  string `json:"access_token"`
 				RefreshToken string `json:"refresh_token"`
 			}
 			// No throttle reservation: the password was set one call ago behind a mailbox token.
-			status, gt, err := postGoTrue(new(http.Request).WithContext(ctx), client, tokenURL, map[string]string{"email": user.Email, "password": password}, &grant)
+			status, gt, err := postGoTrue(r, client, tokenURL, map[string]string{"email": user.Email, "password": password}, &grant)
 			if err != nil || status != http.StatusOK || grant.AccessToken == "" || grant.RefreshToken == "" {
 				attrs := []any{slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode)}
 				if err != nil {

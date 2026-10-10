@@ -121,7 +121,7 @@ type passwordLinkFlow struct {
 	verifyType, label, page, done, failed string
 	onConfirmed                           func(ctx context.Context, user gotrueUser)
 	// handOff returns a hand-off code, or "" to fall back to done with no code.
-	handOff func(ctx context.Context, user gotrueUser, password, state string) string
+	handOff func(r *http.Request, user gotrueUser, password, state string) string
 }
 
 // passwordLinkHandler verifies the link, sets the password with that session, ends every session and clears the sign-in failures.
@@ -210,7 +210,7 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 		}
 		location := done
 		if state := formState(r); flow.handOff != nil && loggedOut && state != "" {
-			if code := flow.handOff(ctx, confirmed.User, password, state); code != "" {
+			if code := flow.handOff(rr, confirmed.User, password, state); code != "" {
 				location += "&handoff=" + code
 			}
 		}

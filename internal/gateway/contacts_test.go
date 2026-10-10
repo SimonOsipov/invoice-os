@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1087,8 +1088,12 @@ func serveDemo(h http.Handler, body string) *httptest.ResponseRecorder {
 	return serve(h, http.MethodPost, "/contacts/demo-request", body)
 }
 
+func newDemoThrottle() *SignInThrottle {
+	return NewSignInThrottle("demo-request", DemoRequestPerIP, DemoRequestMaxKeys, DemoRequestWindow, time.Now)
+}
+
 func newDemoHandler(sink ContactSink) http.Handler {
-	return DemoRequestHandler(sink, slog.New(slog.DiscardHandler))
+	return DemoRequestHandler(sink, newDemoThrottle(), true, slog.New(slog.DiscardHandler))
 }
 
 // requireDemoAnswer fails unless rec is a JSON answer with this status and body and Cache-Control: no-store.
@@ -1274,7 +1279,7 @@ func TestDemoRequest_UpstreamFailureIs502(t *testing.T) {
 	t.Run("log carries no personal data", func(t *testing.T) {
 		log, store := newCaptureLog()
 		sink := &demoSink{err: errors.New("connection refused")}
-		rec := serveDemo(DemoRequestHandler(sink, log), demoJSON(map[string]any{"marketing_consent_text": "I agree to everything."}))
+		rec := serveDemo(DemoRequestHandler(sink, newDemoThrottle(), true, log), demoJSON(map[string]any{"marketing_consent_text": "I agree to everything."}))
 		requireDemoAnswer(t, rec, http.StatusBadGateway, demoUnavail)
 		for _, l := range store.all() {
 			for _, pii := range []string{demoEmail, demoName, demoCompany, "I agree to everything."} {
@@ -1334,5 +1339,213 @@ func TestDemoRequest_OnlyPostIsServed(t *testing.T) {
 	requireDemoAnswer(t, serveDemo(newDemoHandler(sink), demoJSON(nil)), http.StatusAccepted, `{"status":"accepted"}`)
 	if n := len(sink.got()); n != 1 {
 		t.Errorf("sink saw %d calls for the POST, want 1", n)
+	}
+}
+
+const demoTooMany = `{"error":"too many requests"}`
+
+// postDemoFrom posts a valid demo body from remoteAddr, with an optional X-Real-IP.
+func postDemoFrom(h http.Handler, remoteAddr, realIP string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/contacts/demo-request", strings.NewReader(demoJSON(nil)))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = remoteAddr
+	if realIP != "" {
+		req.Header.Set("X-Real-IP", realIP)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestDemoRequest_SixthFromOneIPIsRefused(t *testing.T) {
+	sink := &demoSink{}
+	h := newDemoHandler(sink)
+	for i := 1; i <= 5; i++ {
+		if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusAccepted {
+			t.Fatalf("request %d = %d, want 202", i, rec.Code)
+		}
+	}
+	requireDemoAnswer(t, postDemoFrom(h, "203.0.113.7:4000", ""), http.StatusTooManyRequests, demoTooMany)
+	if n := len(sink.got()); n != 5 {
+		t.Errorf("sink saw %d, want 5", n)
+	}
+}
+
+func TestDemoRequest_OtherIPStillGoesThrough(t *testing.T) {
+	sink := &demoSink{}
+	h := newDemoHandler(sink)
+	for range DemoRequestPerIP + 1 {
+		postDemoFrom(h, "203.0.113.7:4000", "")
+	}
+	if rec := postDemoFrom(h, "198.51.100.9:4000", ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("other IP = %d, want 202", rec.Code)
+	}
+	if n := len(sink.got()); n != DemoRequestPerIP+1 {
+		t.Errorf("sink saw %d, want %d", n, DemoRequestPerIP+1)
+	}
+}
+
+func TestDemoRequest_KeyIsXRealIPThenRemoteAddr(t *testing.T) {
+	h := newDemoHandler(&demoSink{})
+	for range DemoRequestPerIP {
+		postDemoFrom(h, "192.0.2.1:1", "203.0.113.7")
+	}
+	if rec := postDemoFrom(h, "192.0.2.1:1", "198.51.100.9"); rec.Code != http.StatusAccepted {
+		t.Errorf("other X-Real-IP = %d, want 202", rec.Code)
+	}
+	if rec := postDemoFrom(h, "192.0.2.2:1", "203.0.113.7"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("same X-Real-IP, other RemoteAddr = %d, want 429", rec.Code)
+	}
+	h = newDemoHandler(&demoSink{})
+	for i := range DemoRequestPerIP {
+		addr := "[2001:db8:1:2::1]:1"
+		if i%2 == 1 {
+			addr = "[2001:db8:1:2:ffff::9]:1"
+		}
+		postDemoFrom(h, addr, "")
+	}
+	if rec := postDemoFrom(h, "[2001:db8:1:2::77]:1", ""); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("sixth in one /64 = %d, want 429", rec.Code)
+	}
+}
+
+func TestDemoRequest_InvalidBodySpendsNoBudget(t *testing.T) {
+	h := newDemoHandler(&demoSink{})
+	for range 8 {
+		req := httptest.NewRequest(http.MethodPost, "/contacts/demo-request", strings.NewReader(demoJSON(map[string]any{"email": "nope"})))
+		req.RemoteAddr = "203.0.113.7:4000"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("bad email = %d, want 400", rec.Code)
+		}
+	}
+	for i := range DemoRequestPerIP {
+		if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusAccepted {
+			t.Fatalf("valid %d = %d, want 202", i+1, rec.Code)
+		}
+	}
+	if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("sixth valid = %d, want 429", rec.Code)
+	}
+}
+
+func TestDemoRequest_NonPostSpendsNoBudget(t *testing.T) {
+	h := newDemoHandler(&demoSink{})
+	for range 8 {
+		req := httptest.NewRequest(http.MethodGet, "/contacts/demo-request", nil)
+		req.RemoteAddr = "203.0.113.7:4000"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("GET = %d, want 405", rec.Code)
+		}
+	}
+	for i := range DemoRequestPerIP {
+		if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusAccepted {
+			t.Fatalf("valid %d = %d, want 202", i+1, rec.Code)
+		}
+	}
+}
+
+func TestDemoRequest_SinkFailureSpendsBudget(t *testing.T) {
+	sink := &demoSink{err: errors.New("connection refused")}
+	h := newDemoHandler(sink)
+	for i := range DemoRequestPerIP {
+		if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusBadGateway {
+			t.Fatalf("failing request %d = %d, want 502", i+1, rec.Code)
+		}
+	}
+	if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("sixth = %d, want 429", rec.Code)
+	}
+	if n := len(sink.got()); n != DemoRequestPerIP {
+		t.Errorf("sink saw %d calls, want %d", n, DemoRequestPerIP)
+	}
+}
+
+func TestDemoRequest_Sink4xxRefundsBudget(t *testing.T) {
+	sink := &demoSink{err: sinkStatusError(http.StatusBadRequest)}
+	h := newDemoHandler(sink)
+	for i := range DemoRequestPerIP + 3 {
+		if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusBadGateway {
+			t.Fatalf("request %d = %d, want 502 (budget refunded)", i+1, rec.Code)
+		}
+	}
+}
+
+func TestDemoRequest_Sink5xxSpendsBudget(t *testing.T) {
+	sink := &demoSink{err: sinkStatusError(http.StatusServiceUnavailable)}
+	h := newDemoHandler(sink)
+	for i := range DemoRequestPerIP {
+		if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusBadGateway {
+			t.Fatalf("request %d = %d, want 502", i+1, rec.Code)
+		}
+	}
+	if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("sixth = %d, want 429", rec.Code)
+	}
+}
+
+func TestDemoRequest_UnenforcedLogsAndLetsThrough(t *testing.T) {
+	sink := &demoSink{}
+	log, store := newCaptureLog()
+	h := DemoRequestHandler(sink, newDemoThrottle(), false, log)
+	for i := range DemoRequestPerIP + 1 {
+		if rec := postDemoFrom(h, "203.0.113.7:4000", ""); rec.Code != http.StatusAccepted {
+			t.Fatalf("request %d = %d, want 202", i+1, rec.Code)
+		}
+	}
+	if n := len(sink.got()); n != DemoRequestPerIP+1 {
+		t.Errorf("sink saw %d, want %d", n, DemoRequestPerIP+1)
+	}
+	var hits []logRecord
+	for _, l := range store.all() {
+		if strings.HasPrefix(l.text, "demo-request: limit reached") {
+			hits = append(hits, l)
+		}
+	}
+	if len(hits) != 1 {
+		t.Fatalf("limit log lines = %d, want 1", len(hits))
+	}
+	for k, v := range map[string]string{"limit": "ip", "key_source": "remote_addr", "enforced": "false"} {
+		if hits[0].attrs[k] != v {
+			t.Errorf("log %s = %q, want %q", k, hits[0].attrs[k], v)
+		}
+	}
+}
+
+func TestDemoRequest_LimitLogCarriesNoIPOrEmail(t *testing.T) {
+	var buf bytes.Buffer
+	h := DemoRequestHandler(&demoSink{}, newDemoThrottle(), true, slog.New(slog.NewJSONHandler(&buf, nil)))
+	for range DemoRequestPerIP + 1 {
+		postDemoFrom(h, "203.0.113.7:4000", "")
+	}
+	if !strings.Contains(buf.String(), "demo-request: limit reached") {
+		t.Fatalf("no limit log line in %q", buf.String())
+	}
+	for _, s := range []string{"203.0.113.7", demoEmail} {
+		if strings.Contains(buf.String(), s) {
+			t.Errorf("log carries %q: %s", s, buf.String())
+		}
+	}
+}
+
+func TestDemoRequest_FullMapRefusesNewKeys(t *testing.T) {
+	sink := &demoSink{}
+	h := DemoRequestHandler(sink, NewSignInThrottle("demo-request", 5, 2, time.Hour, time.Now), true, slog.New(slog.DiscardHandler))
+	for _, ip := range []string{"192.0.2.1:1", "192.0.2.2:1"} {
+		if rec := postDemoFrom(h, ip, ""); rec.Code != http.StatusAccepted {
+			t.Fatalf("%s = %d, want 202", ip, rec.Code)
+		}
+	}
+	if rec := postDemoFrom(h, "192.0.2.3:1", ""); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("new IP with the map full = %d, want 429", rec.Code)
+	}
+	if n := len(sink.got()); n != 2 {
+		t.Errorf("sink saw %d, want 2", n)
+	}
+	if rec := postDemoFrom(h, "192.0.2.1:1", ""); rec.Code != http.StatusAccepted {
+		t.Errorf("counted IP = %d, want 202", rec.Code)
 	}
 }

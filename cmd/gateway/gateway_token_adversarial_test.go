@@ -87,7 +87,7 @@ func TestGatewayOwnRoutesSendNoGatewayToken(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 	api, fleet := gatewayHandlers(verifier, nilURLSessions(), routed, probed, map[string]string{"auth": ".well-known/jwks.json"}, log, token)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(probed["auth"], site, 0, log, nil)
+	reg := registrationHandlers(probed["auth"], site, 0, log, nil, noPendingInvite)
 	hand := handoffMux(t, probed["auth"], true)
 
 	serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`)

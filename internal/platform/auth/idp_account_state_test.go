@@ -398,7 +398,7 @@ func TestIdP_PreviewCarriesTheAccountState(t *testing.T) {
 		t.Fatalf("register through the gateway: status %d, body %v; want 202", status, body)
 	}
 	check("unconfirmed")
-	confirmByLink(t, idpUser{email: w.email, password: password})
+	w.setPasswordFromMail(t, password)
 	check("confirmed")
 }
 
@@ -435,9 +435,8 @@ func requireAccountExists(t *testing.T, status int, body string) {
 
 func TestIdP_ConfirmedInviteeRegisteringAgainIsToldToSignIn(t *testing.T) {
 	w := newInviteWorld(t, "again-")
-	password := "pw-" + uuid.NewString()
-	w.register(t, password)
-	confirmByLink(t, idpUser{email: w.email, password: password})
+	w.register(t)
+	w.setPasswordFromMail(t, "pw-"+uuid.NewString())
 
 	status, body := w.previewStatus(t)
 	var pv struct{ Account string }
@@ -461,10 +460,7 @@ func TestIdP_ConfirmedInviteeRegisteringAgainIsToldToSignIn(t *testing.T) {
 }
 
 func TestIdP_UnknownStateStillMeetsGoTruesEmptyIdentities(t *testing.T) {
-	w := newInviteWorld(t, "unknown-")
-	password := "pw-" + uuid.NewString()
-	w.register(t, password)
-	confirmByLink(t, idpUser{email: w.email, password: password})
+	w := newPreRegisteredInviteWorld(t, "unknown-", "pw-"+uuid.NewString(), true)
 
 	exec(t, superConn(t), `REVOKE USAGE ON SCHEMA auth FROM auth_hook_reader`)
 	t.Cleanup(func() {
@@ -539,9 +535,9 @@ func TestIdP_InvitationsListCarriesTheAccountState(t *testing.T) {
 		}
 	}
 
-	w.register(t, password)
+	w.register(t)
 	check("unconfirmed")
-	confirmByLink(t, u)
+	w.setPasswordFromMail(t, password)
 	check("confirmed")
 
 	// A repeat registration leaves one confirmed row.
@@ -572,9 +568,8 @@ func TestIdP_InvitationsListCarriesTheAccountState(t *testing.T) {
 
 func TestIdP_InvitationsListStateIsAdminOnly(t *testing.T) {
 	w := newInviteWorld(t, "adminonly-")
-	password := "pw-" + uuid.NewString()
-	w.register(t, password)
-	confirmByLink(t, idpUser{email: w.email, password: password})
+	w.register(t)
+	w.setPasswordFromMail(t, "pw-"+uuid.NewString())
 
 	su := superConn(t)
 	member := func(role, status string) string {

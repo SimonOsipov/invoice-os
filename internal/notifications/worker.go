@@ -111,7 +111,7 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 		}
 	}
 	if err != nil {
-		w.logFailure(ctx, dest, err)
+		logDeliveryFailure(ctx, w.Logger, dest, err)
 		return err
 	}
 
@@ -128,15 +128,15 @@ func (w *DeliverWorker) Work(ctx context.Context, job *river.Job[DeliverArgs]) e
 	return nil
 }
 
-func (w *DeliverWorker) logFailure(ctx context.Context, dest string, err error) {
+func logDeliveryFailure(ctx context.Context, log *slog.Logger, dest string, err error) {
 	var de *DeliveryError
 	if errors.As(err, &de) && de.Permanent() {
-		w.Logger.ErrorContext(ctx, "contacts: "+dest+" rejected the delivery", slog.String("destination", dest), slog.Int("status", de.Status))
+		log.ErrorContext(ctx, "contacts: "+dest+" rejected the delivery", slog.String("destination", dest), slog.Int("status", de.Status))
 		return
 	}
 	status := 0
 	if de != nil {
 		status = de.Status
 	}
-	w.Logger.WarnContext(ctx, "contacts: "+dest+" delivery failed", slog.String("destination", dest), slog.Int("status", status))
+	log.WarnContext(ctx, "contacts: "+dest+" delivery failed", slog.String("destination", dest), slog.Int("status", status))
 }

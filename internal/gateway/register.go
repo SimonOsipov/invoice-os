@@ -32,15 +32,19 @@ const (
 	RegisterMaxKeys = 10_000
 )
 
-// RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL.
+// RegisterHandler answers POST /auth/register by calling GoTrue's /signup under authURL, except for an invited address (TestRegister_InvitedAddressCreatesNothing).
 // Every answer except a 400 arrives no earlier than minResponse after the request; 0 means no wait.
-func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
+func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, pending PendingInviteLookup) http.Handler {
 	signup := authURL.JoinPath("signup").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Not postOnly: it sets headers on a POST, and a gone client must see no write.
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if pending == nil {
+			writeError(w, http.StatusServiceUnavailable, "registration is not configured")
 			return
 		}
 		start := time.Now()
@@ -87,14 +91,17 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 			body["data"] = data
 		}
 
-		signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log, nil)
+		invited := func(ctx context.Context) (bool, error) { return pending(ctx, in.Email) }
+		_ = signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log, invited, nil)
 	})
 }
 
 // signUp spends the per-IP budget, posts body to GoTrue's /signup and answers with the floor held.
-// RegisterHandler and InvitationRegisterHandler share it.
+// RegisterHandler and InvitationRegisterHandler share it, so both map GoTrue's answers alike.
+// A non-nil invited runs after the reservation: true answers as a new address without calling GoTrue.
 // A non-nil existing is sent instead of the 202 when GoTrue reports an address that already has an account.
-func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, existing func()) {
+// It reports whether an account may exist for the address afterwards: GoTrue 200, an existing address or the 23505 race.
+func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, invited func(context.Context) (bool, error), existing func()) (accountMayExist bool) {
 	key, source := clientKey(r)
 	held := perIP.Reserve(key)
 	refused := false
@@ -108,7 +115,25 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
 		}
-		return
+		return false
+	}
+
+	if invited != nil {
+		yes, lerr := invited(r.Context())
+		if lerr != nil || yes {
+			send := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
+			if lerr != nil {
+				if held {
+					perIP.Refund(key)
+				}
+				log.WarnContext(r.Context(), "registration: pending invite lookup failed", slog.String("error", lerr.Error()))
+				send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
+			}
+			if holdMinimum(r.Context(), log, "registration: signup timing", start, time.Since(start), minResponse) {
+				send()
+			}
+			return false
+		}
 	}
 
 	var created any
@@ -128,6 +153,7 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 	}
 	pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
 	var send func()
+	mayExist := false
 	if err != nil {
 		log.WarnContext(r.Context(), "registration: gotrue unreachable", slog.String("error", err.Error()))
 		send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
@@ -138,10 +164,12 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 	case err != nil:
 	case existing != nil && (existingAccount || gt.ErrorCode == "user_already_exists" || gt.ErrorCode == "email_exists"):
 		send = existing
+		mayExist = true
 	case status == http.StatusOK,
 		gt.ErrorCode == "user_already_exists",
 		gt.ErrorCode == "email_exists":
 		send = pending
+		mayExist = true
 	case gt.ErrorCode == "over_email_send_rate_limit":
 		// ceiling: GoTrue's instance-wide mail cap (30/h) answers the same code, so this WARN is its only signal; raise GOTRUE_RATE_LIMIT_EMAIL_SENT when signups near it.
 		log.WarnContext(r.Context(), "registration: gotrue email send rate limit", slog.Int("upstream_status", status))
@@ -150,11 +178,12 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		// The loser of two concurrent signups for one address gets GoTrue's unique-violation 500.
 		log.WarnContext(r.Context(), "registration: gotrue concurrent duplicate signup")
 		send = pending
+		mayExist = true
 	case gt.ErrorCode == "validation_failed",
 		gt.ErrorCode == "weak_password",
 		gt.ErrorCode == "email_address_invalid":
 		writeError(w, http.StatusBadRequest, gt.Msg)
-		return
+		return false
 	case gt.ErrorCode == "signup_disabled":
 		send = func() { writeError(w, http.StatusServiceUnavailable, "registration is closed") }
 	case status == http.StatusTooManyRequests:
@@ -168,6 +197,7 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 	if holdMinimum(r.Context(), log, "registration: signup timing", start, upstream, minResponse) {
 		send()
 	}
+	return mayExist
 }
 
 // registrationAnswers trims and validates the answers with tenancy.ProvisionHandler's rules and

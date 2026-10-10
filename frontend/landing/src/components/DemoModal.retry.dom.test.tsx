@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DemoModal } from './DemoModal'
 import { CONSENT_TEXT, DEFAULT_TAXPAYER_SIZE } from './demoForm'
 import { buildSubmission, hubspotTarget, submissionUrl, type DemoLead } from '../hubspot'
+import { ensureTag } from '../analytics'
+import { CONSENT_VERSION } from '../consent'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -240,6 +242,122 @@ describe('AUTH-17-08: a failure on either call shows the error panel and a retry
       expect(d.textContent).toContain("You're booked")
     })
   }
+})
+
+describe('RESEND2-02-02: a gateway 429 shows the try-later panel', () => {
+  async function submit(d: HTMLElement) {
+    await act(async () => d.querySelector<HTMLButtonElement>('button[type="submit"]')!.click())
+    await flushAsync()
+  }
+
+  it('a gateway 429 shows the try-later panel', async () => {
+    openGate()
+    routeFetch(hsOk, gwError(429, 'too many requests'))
+    await mount()
+    const d = dialog()
+    await fillValidForm(d)
+    await submit(d)
+
+    expect(d.textContent).toContain('Too many requests')
+    expect(d.textContent).toContain('try again later')
+    expect(d.textContent).not.toContain('Something went wrong')
+    expect(d.textContent).not.toContain("You're booked")
+  })
+
+  it('a HubSpot 429 keeps the generic panel', async () => {
+    openGate()
+    const fetchMock = routeFetch(() => new Response('{}', { status: 429 }), gwAccepted)
+    await mount()
+    const d = dialog()
+    await fillValidForm(d)
+    await submit(d)
+
+    expect(d.textContent).toContain('Something went wrong')
+    expect(d.textContent).not.toContain('Too many requests')
+    expect(urls(fetchMock)).not.toContain(GATEWAY_URL)
+  })
+
+  it('after a 429 Try again restores the form and a later accept books', async () => {
+    openGate()
+    let gw: () => Response = gwError(429, 'too many requests')
+    routeFetch(hsOk, () => gw())
+    await mount()
+    const d = dialog()
+    await fillValidForm(d)
+    await submit(d)
+    expect(d.textContent).toContain('Too many requests')
+
+    await act(async () => document.getElementById('dm-error-retry')!.click())
+    expect((document.getElementById('dm-name') as HTMLInputElement).value).toBe('Ada Okafor')
+    expect((document.getElementById('dm-email') as HTMLInputElement).value).toBe('ada@okafor.ng')
+    expect((document.getElementById('dm-company') as HTMLInputElement).value).toBe('Okafor & Partners')
+
+    gw = gwAccepted
+    await submit(d)
+    expect(d.textContent).toContain("You're booked")
+  })
+
+  it('a gateway 429 shows the exact try-later copy and keeps the Try again button', async () => {
+    openGate()
+    routeFetch(hsOk, gwError(429, 'too many requests'))
+    await mount()
+    const d = dialog()
+    await fillValidForm(d)
+    await submit(d)
+
+    expect(d.querySelector('h3')?.textContent).toBe('Too many requests')
+    expect(d.querySelector('p.t-body-sm')?.textContent).toBe(
+      'Too many demo requests came from your network. Please try again later \u2014 your details are still here.',
+    )
+    expect(d.querySelector('#dm-error-retry')?.textContent).toBe('Try again')
+  })
+
+  it('a gateway network error keeps the generic panel', async () => {
+    openGate()
+    routeFetch(hsOk, () => {
+      throw new TypeError('Failed to fetch')
+    })
+    await mount()
+    const d = dialog()
+    await fillValidForm(d)
+    await submit(d)
+
+    expect(d.textContent).toContain('Something went wrong')
+    expect(d.textContent).not.toContain('Too many requests')
+  })
+
+  it('a gateway 429 reports generate_lead and no demo_submit_failed only the HubSpot outcome reports', async () => {
+    vi.stubEnv('VITE_GA_MEASUREMENT_ID', 'G-E409H76XYY')
+    expect(ensureTag('www.ascomply.com', { analytics: true, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION })).toBe(true)
+    const gtag = vi.fn()
+    ;(window as unknown as { gtag: unknown }).gtag = gtag
+    openGate()
+    routeFetch(hsOk, gwError(429, 'too many requests'))
+    await mount()
+    const d = dialog()
+    await fillValidForm(d)
+    await submit(d)
+
+    expect(d.textContent).toContain('Too many requests')
+    const names = gtag.mock.calls.map((c) => c[1])
+    expect(names).toContain('generate_lead')
+    expect(names).not.toContain('demo_submit_failed')
+  })
+
+  it('a later non-429 failure goes back to the generic panel', async () => {
+    openGate()
+    let gw: () => Response = gwError(429, 'too many requests')
+    routeFetch(hsOk, () => gw())
+    await mount()
+    const d = dialog()
+    await fillValidForm(d)
+    await submit(d)
+    await act(async () => document.getElementById('dm-error-retry')!.click())
+    gw = gwError(502, 'demo request is unavailable')
+    await submit(d)
+    expect(d.textContent).toContain('Something went wrong')
+    expect(d.textContent).not.toContain('Too many requests')
+  })
 })
 
 describe('S15 (CHARACTERIZATION, regression oracle): a valid submit reaches HubSpot exactly once', () => {

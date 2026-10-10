@@ -170,9 +170,18 @@ func (u gotrueUser) contact() RegistrantContact {
 
 const maxDemoBodyBytes = 4096
 
+// ceiling: in-process counts; one office behind a NAT shares 5 requests an hour. Raise it when a visitor reports the 429.
+// ceiling: a full key map (10,000) refuses every new IP for up to an hour. Revisit when the demo-request full-map WARN fires.
+const (
+	DemoRequestPerIP   = 5
+	DemoRequestWindow  = time.Hour
+	DemoRequestMaxKeys = 10_000
+)
+
 // DemoRequestHandler takes the landing's demo-request form and hands it to the sink once, with no retry.
-// ceiling: public and unthrottled, any address can be ticked; no marketing email to demo-route contacts until double opt-in exists, per-IP limit before signup opens (U3).
-func DemoRequestHandler(sink ContactSink, log *slog.Logger) http.Handler {
+// perIP is spent per valid request and refunded only when the sink answers 4xx (it stored nothing); enforce=false logs the miss and lets the request through.
+// ceiling: any address can be ticked; no marketing email to demo-route contacts until double opt-in exists.
+func DemoRequestHandler(sink ContactSink, perIP *SignInThrottle, enforce bool, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != http.MethodPost {
@@ -195,11 +204,25 @@ func DemoRequestHandler(sink ContactSink, log *slog.Logger) http.Handler {
 			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
+		key, source := clientKey(r)
+		held := perIP.Reserve(key)
+		if !held {
+			log.WarnContext(r.Context(), "demo-request: limit reached",
+				slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
+			if enforce {
+				writeError(w, http.StatusTooManyRequests, "too many requests")
+				return
+			}
+		}
 		if in.Text != nil {
 			d.MarketingConsentText = *in.Text
 		}
 		if err := sink.DemoRequest(r.Context(), d); err != nil {
-			log.WarnContext(r.Context(), "contacts: demo request hand-off failed", slog.Int("status", failureStatus(err)))
+			status := failureStatus(err)
+			if held && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+				perIP.Refund(key)
+			}
+			log.WarnContext(r.Context(), "contacts: demo request hand-off failed", slog.Int("status", status))
 			writeError(w, http.StatusBadGateway, "demo request is unavailable")
 			return
 		}

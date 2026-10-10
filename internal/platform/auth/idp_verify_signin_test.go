@@ -16,8 +16,7 @@ func exchange(t *testing.T, gw, code, state string) (int, map[string]any) {
 }
 
 func TestIdP_ConfirmClickSignsTheInviteeInToTheJoinRoutes(t *testing.T) {
-	w := newInviteWorld(t, "logfix04a-")
-	w.register(t, "pw-"+uuid.NewString())
+	w := newPreRegisteredInviteWorld(t, "logfix04a-", "pw-"+uuid.NewString(), false)
 
 	code, state := followSignedIn(t, confirmationLink(t, w.email))
 	status, session := exchange(t, w.gw, code, state)
@@ -33,8 +32,7 @@ func TestIdP_ConfirmClickSignsTheInviteeInToTheJoinRoutes(t *testing.T) {
 }
 
 func TestIdP_ConfirmClickSessionRefreshes(t *testing.T) {
-	w := newInviteWorld(t, "logfix04b-")
-	w.register(t, "pw-"+uuid.NewString())
+	w := newPreRegisteredInviteWorld(t, "logfix04b-", "pw-"+uuid.NewString(), false)
 
 	code, state := followSignedIn(t, confirmationLink(t, w.email))
 	status, session := exchange(t, w.gw, code, state)

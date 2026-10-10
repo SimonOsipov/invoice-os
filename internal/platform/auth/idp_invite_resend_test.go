@@ -39,8 +39,8 @@ func requireMails(t *testing.T, email string, want int, what string) {
 // Real GoTrue answers 429 inside the 60 s cooldown and 200 after it; the token route turns that into held and sent.
 func TestIdP_InviteResendTellsSentFromHeld(t *testing.T) {
 	w := newInviteWorld(t, "resend09-")
-	u := idpUser{email: w.email, password: "pw-" + uuid.NewString()}
-	w.register(t, u.password)
+	u := idpUser{email: w.email}
+	w.register(t)
 	registrationLink := confirmationLink(t, u.email)
 
 	w.requireResend(t, "resend inside the cooldown", http.StatusOK, inviteResendHeld)
@@ -63,10 +63,19 @@ func TestIdP_InviteResendTellsSentFromHeld(t *testing.T) {
 	if newest == "" {
 		t.Fatal("the resend mailed the registration link again, want a new one")
 	}
-	if got := follow(t, registrationLink); got != siteURL+"/?verify=failed" {
+	submit := func(link string) string {
+		action, values := confirmForm(t, link)
+		values.Set("password", "pw-"+uuid.NewString())
+		_, location, err := postForm(action, values)
+		if err != nil {
+			t.Fatalf("POST %s: %v", action, err)
+		}
+		return location
+	}
+	if got := submit(registrationLink); got != siteURL+"/?verify=failed" {
 		t.Errorf("the registration link = %q, want %s/?verify=failed", got, siteURL)
 	}
-	if got := follow(t, newest); got != siteURL+"/?verified=1" {
+	if got := submit(newest); got != siteURL+"/?verified=1" {
 		t.Errorf("the newest link = %q, want %s/?verified=1", got, siteURL)
 	}
 }
@@ -74,9 +83,9 @@ func TestIdP_InviteResendTellsSentFromHeld(t *testing.T) {
 // Another device confirmed the account: the page must learn that, and no mail goes out.
 func TestIdP_InviteResendForAConfirmedAccountIs409(t *testing.T) {
 	w := newInviteWorld(t, "resend09c-")
-	u := idpUser{email: w.email, password: "pw-" + uuid.NewString()}
-	w.register(t, u.password)
-	confirmByLink(t, u)
+	u := idpUser{email: w.email}
+	w.register(t)
+	w.setPasswordFromMail(t, "pw-"+uuid.NewString())
 
 	w.requireResend(t, "resend for a confirmed account", http.StatusConflict, `{"error":"account_exists"}`)
 	requireMails(t, u.email, 1, "after a refused resend")
@@ -96,10 +105,10 @@ func TestIdP_InviteResendWithoutTheStateGrantIsMaybeNotSent(t *testing.T) {
 
 	t.Run("confirmed elsewhere", func(t *testing.T) {
 		w := newInviteWorld(t, "resend09m-")
-		u := idpUser{email: w.email, password: "pw-" + uuid.NewString()}
-		w.register(t, u.password)
+		u := idpUser{email: w.email}
+		w.register(t)
 		revoke(t)
-		confirmByLink(t, u)
+		w.setPasswordFromMail(t, "pw-"+uuid.NewString())
 
 		w.requireResend(t, "resend without the state grant", http.StatusOK, `{"status":"maybe"}`)
 		requireMails(t, u.email, 1, "after a maybe")
@@ -107,7 +116,7 @@ func TestIdP_InviteResendWithoutTheStateGrantIsMaybeNotSent(t *testing.T) {
 
 	t.Run("unconfirmed inside the cooldown", func(t *testing.T) {
 		w := newInviteWorld(t, "resend09h-")
-		w.register(t, "pw-"+uuid.NewString())
+		w.register(t)
 		revoke(t)
 
 		w.requireResend(t, "resend inside the cooldown without the state grant", http.StatusOK, inviteResendHeld)

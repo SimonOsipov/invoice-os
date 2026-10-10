@@ -8,6 +8,7 @@ paths:
   - "internal/gateway/resend_verification*.go"
   - "internal/gateway/password_reset*.go"
   - "internal/gateway/reset_password*"
+  - "internal/gateway/invitation_password*"
   - "internal/gateway/verify_page*"
   - "internal/gateway/signin*.go"
   - "internal/gateway/signout*.go"
@@ -55,7 +56,7 @@ paths:
 - Keep GoTrue private. The gateway calls fixed GoTrue paths and forwards no client path or query.
 - Answer a new, a repeat and a confirmed address on `/auth/register` with the same 202.
 - Answer `POST /auth/invitation` with `account` set to `none`, `unconfirmed`, `confirmed` or `unknown`. Map any other tenancy value to `unknown`.
-- Answer `/auth/invitation/register` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_unconfirmed` when it reads `unconfirmed`. Send both at once, before the GoTrue call.
+- Answer `/auth/invitation/register` with 409 `account_exists` when the preview reads `confirmed` and 409 `account_unconfirmed` when it reads `unconfirmed`. Send both at once, before the claim and the GoTrue call.
 - Map GoTrue's 200 with empty `identities`, 422 `user_already_exists` and 422 `email_exists` to 409 `account_exists` on `/auth/invitation/register` only.
 - Answer a resend or reset request with the same 202 for every outcome after the 400 checks. `/auth/invitation/resend` is the exception (next rule).
 - Answer `POST /auth/invitation/resend` for a live token with 200 `sent` when GoTrue mailed.
@@ -68,7 +69,7 @@ paths:
 - Spend one shared budget on resend and password-reset requests.
 - Log no email address, password, token, code or client IP.
 - Read the confirm token and the `state` from the POST form body only. The GET page makes no GoTrue call.
-- Answer `GET /auth/verify` with 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>` when the request carries no valid `state`. Render the confirm page only for a 43-character base64url `state`.
+- Answer `GET /auth/verify` with 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>` when the request carries no valid `state` and no `invite=1`. Render the confirm page only for a 43-character base64url `state`.
 - Store the verify session in the hand-off store and redirect with `handoff=<code>` only when the form holds a valid `state` and GoTrue returns both tokens. Otherwise redirect to `?verified=1` with no code.
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
@@ -87,6 +88,10 @@ paths:
 - Answer a join with 409 `you already belong to a workspace` for a caller who holds a membership of any status.
 - Keep the live stored session over a verify hand-off code. Show the confirmed notice and post no exchange.
 - Offer the invites from `GET /api/tenancy/v1/invitations/mine` when `/me` answers 403 and no invite is held.
+- Set an invitee's password only after proof of the invited mailbox: the confirmation mail's set-password page.
+- Sign up an invite-link registration with a random password. Never store, log or return it.
+- Create no account on register for an address with a pending invite. Answer it as any other register.
+- Back one registration with each invite token.
 
 - Ship mock-issuer code only behind the `mockissuer` build tag. `TestProductionGatewayBinaryCannotMint` must stay green.
 - Serve the mock routes only when `GATEWAY_MOCK_ISSUER` is `true` and `ENVIRONMENT` is not `production`.

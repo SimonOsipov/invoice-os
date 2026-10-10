@@ -77,6 +77,9 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/invitations/mine", tenancy.InvitationsMineHandler(store.MyPendingInvitations, app.Logger))
 	app.Mux.HandleFunc("POST /v1/invitations/{id}/accept", tenancy.AcceptInvitationByIDHandler(store.AcceptInvitationByID, app.Logger))
 	app.Mux.HandleFunc("POST /internal/invitations/preview", tenancy.InvitationPreviewHandler(store.PreviewInvitation, app.Logger))
+	app.Mux.HandleFunc("POST /internal/invitations/pending", tenancy.InvitationPendingHandler(store.InvitationPendingForEmail, app.Logger))
+	app.Mux.HandleFunc("POST /internal/invitations/register", tenancy.InvitationRegisterClaimHandler(store.ClaimInvitationRegistration, app.Logger))
+	app.Mux.HandleFunc("POST /internal/invitations/release", tenancy.InvitationRegisterReleaseHandler(store.ReleaseInvitationRegistration, app.Logger))
 
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 

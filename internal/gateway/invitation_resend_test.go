@@ -21,7 +21,7 @@ const (
 	invResendLimitMsg     = "invitation-resend: limit reached"
 	invResendCapMsg       = "invitation-resend: gotrue email send rate limit"
 	invResendIP           = "203.0.113.9"
-	otherInviteToken      = "Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8R"
+	otherResendToken      = "Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8Rx8R"
 	gtInstanceMailCap     = `{"code":429,"error_code":"over_email_send_rate_limit","msg":"email rate limit exceeded"}`
 	resendSent            = `{"status":"sent"}`
 	resendHeld            = `{"status":"held"}`
@@ -486,7 +486,7 @@ func TestInvitationResend_IPRefusalSpendsNoAddressAndBudgetsArePerAddress(t *tes
 	perIP := NewSignInThrottle("resend-ip", 2, ResendMaxKeys, ResendWindow, time.Now)
 	p := &recordingPreviewer{result: func(token string) (InvitationPreview, error) {
 		inv := unconfirmedInvite()
-		if token == otherInviteToken {
+		if token == otherResendToken {
 			inv.Email = "ada@obi.test"
 		}
 		return inv, nil
@@ -502,7 +502,7 @@ func TestInvitationResend_IPRefusalSpendsNoAddressAndBudgetsArePerAddress(t *tes
 	// Address count is 2 if the refusal spent none; a third send from another client is the last one allowed.
 	requireInviteAnswer(t, press(inviteToken, other), http.StatusOK, resendSent, "press 4: another client, address count 3")
 	requireInviteAnswer(t, press(inviteToken, other), http.StatusTooManyRequests, jsonError("too many requests"), "press 5: address spent")
-	requireInviteAnswer(t, press(otherInviteToken, "198.51.100.5"), http.StatusOK, resendSent, "press 6: a different address has its own budget")
+	requireInviteAnswer(t, press(otherResendToken, "198.51.100.5"), http.StatusOK, resendSent, "press 6: a different address has its own budget")
 	if n := len(fake.Calls()); n != 4 {
 		t.Errorf("GoTrue saw %d calls, want 4", n)
 	}

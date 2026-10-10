@@ -32,7 +32,7 @@ func serveInvitationPasswordPage(w http.ResponseWriter, r *http.Request, site, f
 }
 
 // InvitationPasswordHandler answers the invitee page's form POST: confirm the address, set the password, end every session.
-func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, sink ContactSink, log *slog.Logger) http.Handler {
+func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessions *SessionChecker, signIn *SignInThrottle, sink ContactSink, log *slog.Logger, store *HandoffStore) http.Handler {
 	if authURL == nil || siteURL == nil {
 		return RegistrationNotConfigured()
 	}

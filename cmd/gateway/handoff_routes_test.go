@@ -133,6 +133,56 @@ func TestHandoffHandlers_VerifyCodeRedeemsThroughExchange(t *testing.T) {
 	}
 }
 
+// One handoffHandlers call builds the invitee set-password and exchange handlers over one store.
+func TestHandoffHandlers_InvitationPasswordCodeRedeemsThroughExchange(t *testing.T) {
+	const (
+		prefix  = "https://site.example/?verified=1&handoff="
+		verify  = `{"access_token":"verify-at","refresh_token":"verify-rt","user":{"id":"u-1","email":"invitee@corp.example"}}`
+		session = `{"access_token":"grant-at","refresh_token":"grant-rt"}`
+	)
+	site, _ := url.Parse("https://site.example")
+	gotrue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/verify"):
+			_, _ = w.Write([]byte(verify))
+		case strings.HasSuffix(r.URL.Path, "/token"):
+			_, _ = w.Write([]byte(session))
+		case strings.HasSuffix(r.URL.Path, "/logout"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}))
+	t.Cleanup(gotrue.Close)
+	authURL, _ := url.Parse(gotrue.URL)
+	log := slog.New(slog.DiscardHandler)
+	h := handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil)
+
+	rec := serveForm(h.InvitationPassword, "/auth/invitation/password", "token=T&type=signup&password=n3w-Passw0rd&state="+handoffState)
+
+	loc := rec.Header().Get("Location")
+	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, prefix) {
+		t.Fatalf("invitation password = %d Location %q, want 303 %s<code>", rec.Code, loc, prefix)
+	}
+	code := strings.TrimPrefix(loc, prefix)
+	exchange := func(state string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"code": code, "state": state})
+		return postJSON(h.Exchange, "/auth/exchange", handoffAllowedOrigin, string(body))
+	}
+	rec = exchange(handoffState)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exchange = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got) != 2 || got["access_token"] != "grant-at" || got["refresh_token"] != "grant-rt" {
+		t.Errorf("exchange body = %s, want exactly the grant's access_token grant-at and refresh_token grant-rt", rec.Body.String())
+	}
+	if rec = exchange(handoffState); rec.Code != http.StatusBadRequest {
+		t.Errorf("second exchange = %d, want 400", rec.Code)
+	}
+}
+
 // handoffMux mounts handoffHandlers on the hand-off patterns the way main does.
 func handoffMux(t *testing.T, authURL *url.URL, withOptions bool) *http.ServeMux {
 	t.Helper()

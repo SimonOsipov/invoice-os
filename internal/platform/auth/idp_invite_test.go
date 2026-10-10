@@ -65,7 +65,7 @@ func startInviteGateway(t *testing.T, authBase string, store *tenancy.Store) str
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/invitation/resend", gateway.InvitationResendHandler(authURL, noRedirect, perAddress, perIP, true, log, preview))
-	mux.Handle("POST /auth/invitation/password", gateway.InvitationPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), signInLimit, nil, log))
+	mux.Handle("POST /auth/invitation/password", gateway.InvitationPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), signInLimit, nil, log, gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)))
 	return serveGateway(t, mux)
 }
 

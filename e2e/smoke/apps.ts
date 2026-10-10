@@ -2,9 +2,8 @@ import { expect, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import type { ConsoleTarget } from '../staffSession'
 
-// The three SPAs under smoke test (landing, ops-console, support-console). The consoles'
-// data has no backend, so a render check is sufficient; they open only on a real staff session,
-// which `console` names (staffSession.ts). The app SPA is always gateway-wired in the deployed env,
+// The three SPAs under smoke test (landing, ops-console, support-console). The consoles open
+// only on a real staff session, which `console` names (staffSession.ts). The app SPA is always gateway-wired in the deployed env,
 // so its (backend-verified) assertion lives in the topology suite instead (see e2e/topology/).
 // Each PR now deploys to its own ephemeral Railway environment (M4-23), so each URL is
 // REQUIRED — resolveTarget throws rather than falling back to a hardcoded dev deployment

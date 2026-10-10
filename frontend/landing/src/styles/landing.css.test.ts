@@ -499,6 +499,12 @@ function actionsFailures(css: string): string[] {
     if (!/^@media \(\s*max-width\s*:\s*389\.98px\s*\)$/i.test(q)) out.push(`gap rule under ${q}`)
     if (gap !== '12px') out.push(`gap rule under ${q} sets ${gap}`)
   }
+  const gapProp = (d: { prop: string }) => /^(gap|column-gap|row-gap)$/.test(d.prop)
+  const stray = parseRules(css).filter(
+    (r) => selectorParts(r).some((s) => s.includes('a-actions') && s !== '.a-actions') && declarations(r.body).some(gapProp),
+  )
+  if (stray.length > 0) out.push(`gap set through a compound selector: ${stray.map((r) => r.selector).join('; ')}`)
+  if (base.some((r) => declarations(r.body).some((d) => d.prop === 'column-gap' || d.prop === 'row-gap'))) out.push('base sets column-gap or row-gap')
   return out
 }
 
@@ -514,6 +520,9 @@ describe('the header action group gap', () => {
     expect(actionsFailures(ACTIONS_FIXTURE('(min-width: 320px)')).length, 'min-width').toBeGreaterThan(0)
     expect(actionsFailures(ACTIONS_FIXTURE('(max-width: 389.98px)', '8px')).length, 'wrong gap').toBeGreaterThan(0)
     expect(actionsFailures('@media (max-width: 389.98px) { .a-actions { gap: 12px; } }').length, 'no base rule').toBeGreaterThan(0)
+    const withExtra = (rule: string) => ACTIONS_FIXTURE('(max-width: 389.98px)') + rule
+    expect(actionsFailures(withExtra('header .a-actions { gap: 4px; }')).length, 'compound selector').toBeGreaterThan(0)
+    expect(actionsFailures(withExtra('.a-actions { column-gap: 4px; }')).length, 'base column-gap').toBeGreaterThan(0)
   })
 
   it('.a-actions is a centred 24px-gap flex row outside any media', () => {

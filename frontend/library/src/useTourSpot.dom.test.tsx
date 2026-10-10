@@ -61,4 +61,45 @@ describe('useTourSpot', () => {
     render({ i: 0, phase: 'card' }, '/next')
     expect(seen.rect).toBeNull()
   })
+
+  describe('document.fonts.ready', () => {
+    let resolve: () => void
+    let height: number
+    const fontsDesc = Object.getOwnPropertyDescriptor(document, 'fonts')
+
+    beforeEach(() => {
+      height = 36
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        const b = this.id === 'nav-invoices' ? { ...NAV, height } : { left: 0, top: 0, width: 0, height: 0 }
+        return { ...b, x: b.left, y: b.top, right: b.left + b.width, bottom: b.top + b.height, toJSON: () => b } as DOMRect
+      }
+      const ready = new Promise<void>((r) => (resolve = r))
+      Object.defineProperty(document, 'fonts', { configurable: true, value: { ready } })
+      const nav = document.createElement('nav')
+      nav.id = 'nav-invoices'
+      document.body.appendChild(nav)
+    })
+
+    afterEach(() => {
+      if (fontsDesc) Object.defineProperty(document, 'fonts', fontsDesc)
+      else delete (document as { fonts?: unknown }).fonts
+    })
+
+    it('useTourSpot_remeasuresWhenFontsReadyResolves', async () => {
+      render({ i: 0, phase: 'menu' })
+      expect(seen.rect?.h).toBe(42)
+      height = 41
+      await act(async () => {
+        resolve()
+        await Promise.resolve()
+      })
+      expect(seen.rect?.h).toBe(47)
+    })
+
+    it('useTourSpot_withoutDocumentFontsStillMeasures', () => {
+      delete (document as { fonts?: unknown }).fonts
+      render({ i: 0, phase: 'menu' })
+      expect(seen.rect?.h).toBe(42)
+    })
+  })
 })

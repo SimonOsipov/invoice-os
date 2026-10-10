@@ -59,7 +59,7 @@ export const UNITS: Unit[] = [
       'roles.spec.ts':
         'Asserts the exact seeded roles, staffing and rosters of both tenants (the seeded rows plus the e2e member of each role that exists), derived by hand from `db/seed.dev.sql`, and the demopolicy-sealed policies. Its last test invites on 1111, whose invitations every deploy purges; no other spec in the lane reads them.',
       'support-console.spec.ts':
-        'Cost, not shared state ([fork-lane-by-cost]): signs a provisioned staff account in to the mock-backed Support Console; reads and writes no tenant data.',
+        'Reads the real rule list with a rules-role staff account and flips then restores one global rule (`no-duplicate-line-items`), so it must not share a lane with a spec that depends on that rule; none does. Reads and writes no tenant data.',
       'workflows.spec.ts':
         "Creates and deletes one firm policy in 1111 and asserts the list count as `baseline` / `baseline + 1`, where the baseline includes the demopolicy-seeded firm policy. The count holds only while no other spec writes 1111's policies at the same time, which the lane guarantees. It never publishes (`[topology-never-publishes]`).",
     },

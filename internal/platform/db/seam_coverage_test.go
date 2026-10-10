@@ -1015,6 +1015,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/entities/{id}":                             {verdict: scCovered},
 	"PATCH /v1/invoices/{id}":                             {verdict: scCovered},
 	"PATCH /v1/memberships/{user_id}":                     {verdict: scCovered},
+	"GET /v1/staff/rules":                                 {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
+	"PATCH /v1/staff/rules/{key}":                         {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
 	"PATCH /v1/rules/{key}":                               {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},
 	"PATCH /v1/workflow-roles/{key}":                      {verdict: scCovered},
 	"POST /auth/exchange":                                 {verdict: scExempt, reason: "no database; in-process code store"},

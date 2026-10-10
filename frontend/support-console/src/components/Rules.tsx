@@ -2,8 +2,15 @@ import { LEARNED_RULES, PUBLISH_ICON, RULE_SET_VERSIONS, SPARK_ICON } from '../d
 import { SeverityBadge } from './StatusBadge'
 import type { Rule } from '../types'
 
+export type RulesStatus = 'loading' | 'ready' | 'forbidden' | 'error'
+
 type Props = {
   rules: Rule[]
+  status: RulesStatus
+  errorText?: string
+  version: number | null
+  busy: boolean
+  onRetry: () => void
   onOpenRule: (key: string) => void
   onToggleRule: (key: string) => void
   onPublish: () => void
@@ -19,7 +26,7 @@ const VERSION_TONE = {
   arch: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)' },
 } as const
 
-export function Rules({ rules, onOpenRule, onToggleRule, onPublish, onPromote }: Props) {
+export function Rules({ rules, status, errorText, version, busy, onRetry, onOpenRule, onToggleRule, onPublish, onPromote }: Props) {
   return (
     <div className="ops-screen-pad">
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20, gap: 24, flexWrap: 'wrap' }}>
@@ -97,9 +104,11 @@ export function Rules({ rules, onOpenRule, onToggleRule, onPublish, onPromote }:
           <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 880 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: 'var(--tracking-card)', fontFamily: 'var(--font-display)' }}>Rules</span>
-              <span className="mono" style={{ fontSize: 10, fontWeight: 700, background: 'var(--status-amber-bg)', color: 'var(--status-amber-text)', border: '1px solid var(--status-amber-border)', borderRadius: 'var(--radius-sm)', padding: '1px 8px' }}>
-                EDITING DRAFT v9
-              </span>
+              {version !== null && (
+                <span className="mono" style={{ fontSize: 10, fontWeight: 700, background: 'var(--status-green-bg)', color: 'var(--status-green-text)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-sm)', padding: '1px 8px' }}>
+                  IN FORCE v{version}
+                </span>
+              )}
             </div>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
               {rules.length} RULES
@@ -116,6 +125,16 @@ export function Rules({ rules, onOpenRule, onToggleRule, onPublish, onPromote }:
               On
             </span>
           </div>
+          {status !== 'ready' && (
+            <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: 'var(--fg-3)', minWidth: 880 }}>
+              <span>{status === 'loading' ? 'Loading rules…' : status === 'forbidden' ? 'Your account has no rules role.' : errorText}</span>
+              {status === 'error' && (
+                <button type="button" onClick={onRetry} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 30 }}>
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
           {rules.map((r) => (
             <div
               key={r.key}
@@ -149,7 +168,9 @@ export function Rules({ rules, onOpenRule, onToggleRule, onPublish, onPromote }:
                   aria-label={`${r.enabled ? 'Disable' : 'Enable'} ${r.key}`}
                   onClick={() => onToggleRule(r.key)}
                   className="ops-toggle"
-                  style={{ display: 'inline-flex', width: 34, height: 20, borderRadius: 99, background: r.enabled ? 'var(--action)' : 'var(--line-3)', padding: 2, border: 0, cursor: 'pointer' }}
+                  disabled={busy}
+                  title={busy ? 'Switching…' : undefined}
+                  style={{ display: 'inline-flex', width: 34, height: 20, borderRadius: 99, background: r.enabled ? 'var(--action)' : 'var(--line-3)', padding: 2, border: 0, ...(busy ? { opacity: 0.45, cursor: 'not-allowed' } : { cursor: 'pointer' }) }}
                 >
                   <span className="ops-knob" style={{ width: 16, height: 16, borderRadius: '50%', background: 'var(--bg-2)', transform: r.enabled ? 'translateX(14px)' : 'translateX(0)' }} />
                 </button>

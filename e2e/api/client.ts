@@ -242,10 +242,10 @@ export interface StaffAccount {
 }
 
 // POST /auth/mock/staff exists only in the mock build, which every PR fork runs.
-export async function provisionStaffAccount(prefix: string, password?: string): Promise<StaffAccount> {
+export async function provisionStaffAccount(prefix: string, password?: string, opts?: { rulesRole?: boolean }): Promise<StaffAccount> {
   const account = await registerFresh(prefix, password)
   const userId = subjectOf((await signInSession(account.email, account.password)).access_token)
-  const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: userId } })
+  const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: userId, ...(opts?.rulesRole ? { rules_role: true } : {}) } })
   if (grant.status !== 204) throw new Error(`staff grant answered ${grant.status}: ${JSON.stringify(grant.body)}`)
   return { ...account, userId }
 }

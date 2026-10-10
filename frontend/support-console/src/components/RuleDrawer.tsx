@@ -6,6 +6,7 @@ type Props = {
   rule: Rule
   testRan: boolean
   onRunTest: () => void
+  busy: boolean
   onKill: () => void
   onClose: () => void
 }
@@ -29,7 +30,7 @@ function ruleJSON(rule: Rule, params: { label: string; value: string }[]): strin
 }`
 }
 
-export function RuleDrawer({ rule, testRan, onRunTest, onKill, onClose }: Props) {
+export function RuleDrawer({ rule, testRan, onRunTest, busy, onKill, onClose }: Props) {
   const params = RULE_PARAMS[rule.type] ?? [{ label: 'Config', value: '—' }]
 
   return (
@@ -64,8 +65,9 @@ export function RuleDrawer({ rule, testRan, onRunTest, onKill, onClose }: Props)
             <button
               type="button"
               onClick={onKill}
+              disabled={busy}
               className="ops-btn"
-              style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 38, padding: '0 14px', borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, color: 'var(--status-red-text)', display: 'inline-flex', alignItems: 'center', gap: 7 }}
+              style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', ...(busy ? { opacity: 0.45, cursor: 'not-allowed' } : { cursor: 'pointer' }), height: 38, padding: '0 14px', borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, color: 'var(--status-red-text)', display: 'inline-flex', alignItems: 'center', gap: 7 }}
             >
               {KILL_ICON} Kill-switch
             </button>

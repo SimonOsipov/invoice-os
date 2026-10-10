@@ -446,3 +446,36 @@ describe('R5-GE-4 the FAQ aside is static in the one-column layout', () => {
     expect(declared(rules, '[data-faq-aside]', 'position', noAt), 'a base rule would fight the sticky inline style').toBeUndefined()
   })
 })
+
+const NAV_GAP_FIXTURE = (max: string) => `
+.a-nav { gap: 28px; }
+@media (max-width: ${max}) { .a-nav { gap: 16px; } }
+`
+
+/** The nav gap contract: the failures, empty when it holds. */
+function navGapFailures(css: string): string[] {
+  const rules = parseRules(css)
+  const gaps = rules.filter((r) => selectorParts(r).includes('.a-nav') && declarations(r.body).some((d) => d.prop === 'gap'))
+  const checks: [string, string | undefined, string | undefined][] = [
+    ['.a-nav gap outside any media', declared(rules, '.a-nav', 'gap', noAt), '28px'],
+    ['.a-nav gap at max-width 1279px', declared(rules, '.a-nav', 'gap', maxWidth(1279)), '16px'],
+    ['rules that set the .a-nav gap', String(gaps.length), '2'],
+  ]
+  return checks.filter(([, got, want]) => got !== want).map(([what, got, want]) => `${what}: ${got} != ${want}`)
+}
+
+describe('HD-14 the nav gap tightens at 1279px and nowhere else', () => {
+  it('controls: the lookup accepts a 1279px fixture and rejects 1278px and a commented-out rule', () => {
+    expect(navGapFailures(NAV_GAP_FIXTURE('1279px'))).toEqual([])
+    expect(navGapFailures(NAV_GAP_FIXTURE('1278px')).length, 'a max-width 1278px copy must fail the lookup').toBeGreaterThan(0)
+    const commented = NAV_GAP_FIXTURE('1279px').replace('@media (max-width: 1279px) { .a-nav { gap: 16px; } }', '/* @media (max-width: 1279px) { .a-nav { gap: 16px; } } */')
+    expect(commented).not.toBe(NAV_GAP_FIXTURE('1279px'))
+    expect(navGapFailures(commented).length, 'a commented-out rule must fail the lookup').toBeGreaterThan(0)
+  })
+
+  it('landing.css sets .a-nav gap 28px, 16px at max-width 1279px only', () => {
+    const rules = parseRules(LANDING_CSS)
+    expect(rules.length, 'control: the sheet parsed').toBeGreaterThan(10)
+    expect(navGapFailures(LANDING_CSS)).toEqual([])
+  })
+})

@@ -45,7 +45,7 @@ async function buildSpa(name: string): Promise<Built> {
 }
 
 function built(name: string): Built {
-  expect(SPAS).toEqual(['app', 'landing', 'ops-console', 'support-console'])
+  expect(SPAS).toEqual(['app', 'landing', 'library', 'ops-console', 'support-console'])
   const b = builds.get(name)!
   expect(b, `${name}: no build result`).toBeDefined()
   expect(b.failure, `${name}: build failed`).toBeUndefined()
@@ -145,5 +145,17 @@ describe('sourcemaps (real SPA builds)', () => {
         expect(/\/\/[#@]\s*sourceMappingURL=/.test(text), `${name}: dist/${f} carries a sourceMappingURL comment`).toBe(false)
       }
     }
+  }, TIMEOUT)
+
+  it('bundle_theLibraryShipsNoHubSpotOrGatewayClient', () => {
+    const js = (name: string) => {
+      const b = built(name)
+      return b.dist.filter((f) => f.endsWith('.js')).map((f) => readFileSync(join(b.appDir, 'dist', f), 'utf8')).join('\n')
+    }
+    const lib = js('library')
+    expect(lib.length, 'library: no shipped JS').toBeGreaterThan(0)
+    expect(lib.includes('hsforms.com'), 'library bundle carries hsforms.com').toBe(false)
+    expect(lib.includes('/submissions/v3/integration/submit/'), 'library bundle carries the HubSpot submit path').toBe(false)
+    expect(js('landing').includes('hsforms.com'), 'control: the landing bundle carries hsforms.com').toBe(true)
   }, TIMEOUT)
 })

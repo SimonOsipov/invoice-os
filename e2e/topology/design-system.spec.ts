@@ -253,6 +253,9 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
 
     const navLinks = row.filter((e) => e.tag === 'a' && e.nav)
     expect(navLinks.length > 0, `${width}px: Primary nav links shown`).toBe(width > BURGER_MAX)
+    if (width > BURGER_MAX) {
+      expect(navLinks.filter((e) => e.text === 'Library'), `${width}px: the nav "Library" link (is landing.VITE_LIBRARY_URL set?)`).toHaveLength(1)
+    }
     if (navLinks.length > 0) {
       navLineHeight ??= Math.min(...navLinks.map((e) => e.bottom - e.top))
       for (const e of navLinks) {
@@ -267,7 +270,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
 // BURGER_MAX + 1 is the narrowest width that shows the five nav links.
 // Widest first (layout.ts).
 test('landing header row: inside the viewport and no overlap from 2560 to 834', async ({ page }, testInfo) => {
-  await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1240, BURGER_MAX + 1, 1080, 834])
+  await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1279, 1240, BURGER_MAX + 1, 1080, 834])
 })
 
 test('landing header row at 390: inside the viewport and no overlap', async ({ page }, testInfo) => {
@@ -739,6 +742,7 @@ test('landing mobile menu at 834 and 390', async ({ page }, testInfo) => {
     const navLinks = await page.locator('nav[aria-label="Primary"] a').count()
     expect(navLinks, `${label}: Primary nav links`).toBeGreaterThan(0)
     await expect(menu.locator('a'), `${label}: one menu link per nav link`).toHaveCount(navLinks)
+    await expect(menu.getByRole('link', { name: 'Library' }), `${label}: one "Library" link in the menu (is landing.VITE_LIBRARY_URL set?)`).toHaveCount(1)
     const signIn = menu.getByRole('button', { name: 'Sign in', exact: true })
     await expect(signIn, `${label}: exactly one "Sign in" in the menu`).toHaveCount(1)
     await expect(menu.getByRole('button'), `${label}: the menu buttons`).toHaveText(['Sign in'])

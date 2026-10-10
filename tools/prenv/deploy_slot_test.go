@@ -36,6 +36,7 @@ const (
 	jobGateway = "Deploy gateway → pr-353"
 	jobLegSPA  = "Deploy app → pr-353"
 	jobLegCtx  = "Deploy tenancy → pr-353"
+	jobLibrary = "Deploy library (small lane) → persistent env"
 )
 
 // slotShim is gh, date and sleep on PATH. gh answers by URL: the runs list from runs.seq (one
@@ -540,6 +541,47 @@ func TestDeploySlot_PushRunCountsAsHolder(t *testing.T) {
 	wantExit(t, code, 0, out)
 	wantContains(t, "poll 1", pollLine(t, out, 1), "2 of 2 held", "run 250 (push main)")
 	s.wantSleeps(t, 1)
+}
+
+// A library-scope push skips the fleet chain; its slot is held until the library deploy and the release end.
+func TestDeploySlot_ALibraryScopePushHoldsItsSlot(t *testing.T) {
+	t.Parallel()
+	libraryRun := func(library string, release ...string) string {
+		return chainJobs(append([]string{
+			jobDone(jobPrepare, "success", 90), jobDone(jobGateway, "skipped", 80), jobDone(jobHealth, "skipped", 80),
+			jobDone(jobFleet, "skipped", 80), library}, release...)...)
+	}
+	cases := []struct {
+		name   string
+		jobs   string
+		holder bool
+	}{
+		{"library deploy in progress, release absent", libraryRun(jobOpen(jobLibrary, "in_progress")), true},
+		{"library deploy and release completed", libraryRun(jobDone(jobLibrary, "success", 20), jobDone(jobRelease, "success", 5)), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSlotShim(t)
+			s.runs(t, slotList(slotRun{id: 150, event: "push", branch: "main"}, slotRun{id: 151, pr: 6}), slotList())
+			s.jobsAlways(t, 150, c.jobs)
+			holdersOf(t, s, 151)
+			out, code := s.run(t)
+
+			wantExit(t, code, 0, out)
+			line := pollLine(t, out, 1)
+			if c.holder {
+				wantContains(t, "poll 1", line, "2 of 2 held", "run 150 (push main)")
+				s.wantSleeps(t, 1)
+			} else {
+				wantContains(t, "poll 1", line, "1 of 2 held")
+				if strings.Contains(line, "run 150") {
+					t.Errorf("poll 1 names run 150, which is settled: %q", line)
+				}
+				s.wantSleeps(t, 0)
+			}
+		})
+	}
 }
 
 func TestDeploySlot_ListsRunsWithoutStatusFilter(t *testing.T) {

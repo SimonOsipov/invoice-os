@@ -306,7 +306,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // isInFlight (queued/submitted, lib/invoices.ts:683-688), which is disjoint from the
   // can_edit set the Edit button lives behind (see the `gen` comment above).
   const [editing, setEditing] = useState(false)
-  // `seq` makes a repeat click on the same line a new focus request.
+  // onFocusApplied resets this to null after focusing, so a repeat click on the same line re-focuses.
   const [lineFocus, setLineFocus] = useState<{ seq: number; target: LineTarget } | null>(null)
 
   // Read once at mount: the review screen's Open line target, applied when the record first loads.

@@ -227,7 +227,7 @@ export function Row({
 }
 
 // A `card.line` card adds Open line N, which hands off to invoice detail's editor
-// (ENGI-16): disabled when the invoice is not editable or the panel holds an unsaved edit.
+// Open line is disabled when the invoice is not editable or the panel holds an unsaved edit.
 // One fix-editor card (§7.3): severity pill, mono rule key, the server's message
 // VERBATIM, an inline editor scoped to `card.field` (absent when unmappable — AC-2), and
 // the mono expectation from `card.hint` (expected/actual, D9). No card-level Save — the

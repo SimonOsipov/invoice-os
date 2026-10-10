@@ -21,11 +21,13 @@ export function Nav({
   onBookDemo,
   onCreateAccount,
   hrefPrefix = '',
+  libraryHref = null,
 }: {
   onSignIn: () => void
   onBookDemo: () => void
   onCreateAccount?: () => void
   hrefPrefix?: string
+  libraryHref?: string | null
 }) {
   const [activeHref, setActiveHref] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -152,6 +154,23 @@ export function Nav({
               </a>
             )
           })}
+          {libraryHref && (
+            // Cross-origin, so no hrefPrefix, and not a NAV_LINKS entry: the spy and AN-01 only know sections.
+            <a
+              href={libraryHref}
+              className="ios-nav-link"
+              style={{
+                fontSize: 14,
+                fontWeight: 600,
+                color: 'var(--ink)',
+                borderBottom: '2px solid transparent',
+                paddingTop: 6,
+                paddingBottom: 4,
+              }}
+            >
+              Library
+            </a>
+          )}
         </nav>
         <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
           <button type="button" className="a-login a-link" onClick={onSignIn} style={{ fontSize: 14, fontWeight: 600 }}>
@@ -200,6 +219,11 @@ export function Nav({
               {l.label}
             </a>
           ))}
+          {libraryHref && (
+            <a href={libraryHref} className="a-menu-link" onClick={() => setMenuOpen(false)}>
+              Library
+            </a>
+          )}
           <button
             type="button"
             className="a-link a-menu-login"

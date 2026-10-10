@@ -22,6 +22,7 @@ const (
 	retryLandingID  = "svc-landing-retry"
 	retryOpsID      = "svc-ops-retry"
 	retrySupportID  = "svc-support-retry"
+	retryLibraryID  = "svc-library-retry"
 	retryPostgresID = "svc-pg-retry"
 	retryForkBucket = "source-documents-fork-1a2b"
 
@@ -83,6 +84,7 @@ func retryExports() string {
 		"export RAILWAY_SVC_LANDING_ID=" + retryLandingID + "\n" +
 		"export RAILWAY_SVC_OPS_CONSOLE_ID=" + retryOpsID + "\n" +
 		"export RAILWAY_SVC_SUPPORT_CONSOLE_ID=" + retrySupportID + "\n" +
+		"export RAILWAY_SVC_LIBRARY_ID=" + retryLibraryID + "\n" +
 		"export RAILWAY_SVC_POSTGRES_ID=" + retryPostgresID + "\n"
 }
 
@@ -118,7 +120,7 @@ func bucketNamed(name string) string {
 
 func retrySettle(withPostgres bool) string {
 	edges := []string{instance(retryGatewayID, "gateway"), instance(retryAppID, "app"), instance(retryLandingID, "landing"),
-		instance(retryOpsID, "ops-console"), instance(retrySupportID, "support-console")}
+		instance(retryOpsID, "ops-console"), instance(retrySupportID, "support-console"), instance(retryLibraryID, "library")}
 	if withPostgres {
 		edges = append(edges, instance(retryPostgresID, "Postgres"))
 	}
@@ -144,7 +146,7 @@ func reconcileForkFixture(t *testing.T) authShim {
 		"bucketCreds-" + retryForkEnv: bucketNamed(retryForkBucket),
 		"bucketCreds-" + src:          bucketNamed("source-documents-dev-9z8y"),
 	}
-	for _, svc := range []string{retryGatewayID, retryAppID, retryLandingID, retryOpsID, retrySupportID} {
+	for _, svc := range []string{retryGatewayID, retryAppID, retryLandingID, retryOpsID, retrySupportID, retryLibraryID} {
 		r["dom-"+retryForkEnv+"-"+svc] = domainsOf(false, svc+"-pr-900.up.railway.app")
 		r["dom-"+src+"-"+svc] = domainsOf(true, svc+".ascomply.com")
 	}
@@ -1292,6 +1294,62 @@ func TestSettleForkMissingServiceFailsOnFirstRead(t *testing.T) {
 	}
 }
 
+func TestRequireForkIDs_NamesAMissingLibraryID(t *testing.T) {
+	exports := strings.Replace(retryExports(), "export RAILWAY_SVC_LIBRARY_ID="+retryLibraryID+"\n", "", 1)
+	s := newAuthShim(t, map[string]string{}, nil)
+	stdout, stderr, code := s.run(t, exports, "verify-spa-domains", retryForkEnv)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+	}
+	if e := errorLines(stdout + stderr); !strings.Contains(e, "Missing Railway service id(s): RAILWAY_SVC_LIBRARY_ID") {
+		t.Errorf("error lines do not name RAILWAY_SVC_LIBRARY_ID: %q", e)
+	}
+	if n := len(s.calls(t)); n != 0 {
+		t.Errorf("Railway calls = %d, want 0 before the ids are known", n)
+	}
+}
+
+func TestSettleFork_NamesAMissingLibraryInstance(t *testing.T) {
+	s := reconcileForkFixture(t)
+	writeFile(t, filepath.Join(s.dir, "settle.json"), forkSettle(
+		instance(retryGatewayID, "gateway"), instance(retryAppID, "app"), instance(retryLandingID, "landing"),
+		instance(retryOpsID, "ops-console"), instance(retrySupportID, "support-console"), instance(retryPostgresID, "Postgres")))
+	stdout, stderr, code := runReconcileFork(t, s)
+
+	if code != 1 {
+		t.Errorf("exit %d, want 1; output = %q", code, stdout+stderr)
+	}
+	if e := errorLines(stdout + stderr); !strings.Contains(e, retryLibraryID) {
+		t.Errorf("error lines do not name the missing id %s: %q", retryLibraryID, e)
+	}
+
+	c := reconcileForkFixture(t)
+	stdout, stderr, code = runReconcileFork(t, c)
+	if code != 0 || !strings.Contains(stdout, "All 7 reconciled service instances") {
+		t.Errorf("control: exit %d, want 0 with the 7-instance message; output = %q", code, stdout+stderr)
+	}
+}
+
+func TestReconcileDomains_CreatesTheLibraryDomain(t *testing.T) {
+	s := reconcileForkFixture(t)
+	writeFile(t, filepath.Join(s.dir, "dom-"+retryForkEnv+"-"+retryLibraryID+".seq"),
+		noDomains+"\n"+domainsOf(false, "library-pr-900.up.railway.app")+"\n")
+	stdout, stderr, code := runReconcileFork(t, s)
+
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	creates := callsOf(s, t, "domCreate")
+	if len(creates) != 1 {
+		t.Fatalf("domCreate calls = %d, want 1", len(creates))
+	}
+	in, _ := creates[0].Variables["input"].(map[string]any)
+	if in["serviceId"] != retryLibraryID || in["environmentId"] != retryForkEnv || in["targetPort"] != float64(8080) {
+		t.Errorf("serviceDomainCreate input = %v, want the library id, the fork env and targetPort 8080", in)
+	}
+}
+
 func TestBucketIsolationSourceReadErrorFailsOnFirstOccurrence(t *testing.T) {
 	s := reconcileForkFixture(t)
 	writeFile(t, filepath.Join(s.dir, "bucketCreds-"+persistentEnvironmentID+".json"), gqlProblem)
@@ -1582,7 +1640,7 @@ func TestRailwayAPI_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 func TestVerifySPADomains_RetryKeepsEveryDiscoveredURL(t *testing.T) {
 	spas := []struct{ id, key string }{
 		{retryLandingID, "LANDING_URL"}, {retryAppID, "APP_URL"},
-		{retryOpsID, "OPS_CONSOLE_URL"}, {retrySupportID, "SUPPORT_CONSOLE_URL"},
+		{retryOpsID, "OPS_CONSOLE_URL"}, {retrySupportID, "SUPPORT_CONSOLE_URL"}, {retryLibraryID, "LIBRARY_URL"},
 	}
 	r := map[string]string{}
 	var want string
@@ -2175,7 +2233,7 @@ func TestRailwayAPI_BatchedRequestsGetALargerCurlBudget(t *testing.T) {
 		}
 		requireMaxTimes(t, got)
 	})
-	t.Run("discover-urls: the five-alias read gets 90 s", func(t *testing.T) {
+	t.Run("discover-urls: the six-alias read gets 90 s", func(t *testing.T) {
 		s := newURLsShim(t, nil)
 		if stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID); code != 0 {
 			t.Fatalf("control: exit %d; output = %q", code, stdout+stderr)

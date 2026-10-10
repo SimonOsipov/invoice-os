@@ -1133,3 +1133,12 @@ describe('ROUTE-07-04 AC-6: an unknown policy id renders the list and keeps its 
     expect(window.location.pathname, 'the address must be unchanged across the swap').toBe(`/workflows/${POLICY_ID}`)
   })
 })
+
+describe('LIB-06 AC-4: a Library link into a signed-in app', () => {
+  it('boot_aSignedInViaLibraryVisitLandsOnThePathWithoutVia', async () => {
+    await bootAt('/invoices?via=library')
+    expect(requireCtx().view).toBe('invoices')
+    expect(window.location.pathname).toBe('/invoices')
+    expect(window.location.search).toBe('')
+  })
+})

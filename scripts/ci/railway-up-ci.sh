@@ -51,7 +51,7 @@ case "$svc" in
   gateway) verdict="health-gate" ;;
   tenancy | portfolio | invoice | validation | submission | dashboard | notifications | reconciliation | docling) verdict="fleet-gate" ;;
   auth) verdict="fleet-gate's auth deployment wait" ;;
-  landing | app | ops-console | support-console) verdict="The SPA build check" ;;
+  landing | app | ops-console | support-console | library) verdict="The SPA build check" ;;
   *) verdict="" ;;
 esac
 

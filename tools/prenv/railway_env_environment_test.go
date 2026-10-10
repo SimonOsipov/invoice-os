@@ -23,7 +23,7 @@ const (
 	forkEnvSecretSibling = `"DATABASE_URL":"sentinel-secret-dsn"`
 	prOnlyCondition      = "github.event_name == 'pull_request'"
 	forkVarsBeforeRunCmd = `bash scripts/ci/railway-env.sh fork-vars-before-urls "$ENV_ID"`
-	forkVarsAfterRunCmd  = `bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL"`
+	forkVarsAfterRunCmd  = `bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL"`
 	forkSelfTestRunCmd   = "bash scripts/ci/railway-env.sh set-fork-environment --self-test"
 )
 

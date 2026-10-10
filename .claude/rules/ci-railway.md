@@ -48,6 +48,16 @@ paths:
 - Hold at most two PR runs of `dev-env.yml` in the deploy chain. `scripts/ci/deploy-slot.sh` enforces it.
 - Let a push or dispatch run take a slot without waiting. A PR wait over 2400 s fails the job.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database reset runs only when the gateway deploys.
-- Run `spa-build-gate` on push and dispatch. Each SPA must serve `/health` and a `/build.txt` that names the commit.
+- Run `spa-build-gate` on a full-scope push and dispatch. Each SPA must serve `/health` and a `/build.txt` that names the commit.
+- Give a PR the small lane when every changed path is under `frontend/library/`. `scripts/ci/lane.sh` decides.
+- On the small lane, CI runs the `Library` job in place of `Frontend`. Dev Env prepares no fork and runs no E2E.
+- Keep the small lane to `frontend/library/`. `TestLane_OnlyANamedPackageTakesTheSmallLane` fails when another package takes it.
+- On a `main` push, deploy only the library when every path since the last full deploy is under `frontend/library/`.
+- Take the last full deploy from the newest push run whose gateway deploy, fleet gate and SPA build gate succeeded.
+- A library-only deploy never counts as a full deploy.
+- Deploy the full fleet on a lookup failure, a non-ancestor base, or any path outside the library.
+- Let the push scope step fail to `full`. It runs with `continue-on-error`, and the output defaults to `full`.
+- On a library-only deploy, `library-build-gate` checks only the library's `/build.txt`.
+- After a dispatch or a rollback, a library-only push leaves the fleet as it is. Dispatch Dev Env on `main` to reconverge it.
 - Run "Gate on the account-mail templates" on `pull_request` and `push`, not `workflow_dispatch`. A project token cannot read variables.
 - Roll back the gateway and every guarded service together. A split rollback logs `request refused: no gateway token`.

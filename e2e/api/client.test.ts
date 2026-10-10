@@ -692,6 +692,39 @@ describe('grantMembership', () => {
   })
 })
 
+describe('provisionStaffAccount', () => {
+  const USER_ID = 'a1b2c3d4-0000-4000-8000-000000000002'
+  const jwt = `x.${Buffer.from(JSON.stringify({ sub: USER_ID })).toString('base64url')}.y`
+
+  function stubGateway() {
+    const stub = vi.fn(async (url: string, _init?: { body?: string }) => {
+      if (url.endsWith('/auth/register')) return new Response(null, { status: 202 })
+      if (url.endsWith('/auth/exchange')) return new Response(JSON.stringify({ access_token: jwt, refresh_token: 'r' }), { status: 200 })
+      return new Response(null, { status: 204 })
+    })
+    vi.stubGlobal('fetch', stub)
+    return stub
+  }
+  function staffBody(stub: ReturnType<typeof stubGateway>): Record<string, unknown> {
+    const call = stub.mock.calls.find(([url]) => String(url).endsWith('/auth/mock/staff'))
+    return JSON.parse((call?.[1] as unknown as { body: string }).body)
+  }
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('provisionStaffAccount sends rules_role only when asked', async () => {
+    const { provisionStaffAccount } = await import('./client')
+
+    const plain = stubGateway()
+    await provisionStaffAccount('x')
+    expect(staffBody(plain)).toEqual({ user_id: USER_ID })
+
+    const ruled = stubGateway()
+    const account = await provisionStaffAccount('x', undefined, { rulesRole: true })
+    expect(staffBody(ruled)).toEqual({ user_id: USER_ID, rules_role: true })
+    expect(account.userId).toBe(USER_ID)
+  })
+})
+
 describe('setInvitationToken and inviteWithToken', () => {
   const TENANT = '11111111-1111-1111-1111-111111111111'
   const INVITATION = '22222222-2222-2222-2222-222222222222'

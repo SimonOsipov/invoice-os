@@ -20,12 +20,14 @@ const (
 )
 
 type staffGrantRecorder struct {
-	got []uuid.UUID
-	err error
+	got       []uuid.UUID
+	rulesRole []bool
+	err       error
 }
 
-func (g *staffGrantRecorder) grant(_ context.Context, id uuid.UUID) error {
+func (g *staffGrantRecorder) grant(_ context.Context, id uuid.UUID, rulesRole bool) error {
 	g.got = append(g.got, id)
+	g.rulesRole = append(g.rulesRole, rulesRole)
 	return g.err
 }
 
@@ -217,7 +219,7 @@ type staffCtxKey struct{}
 func TestMockStaff_GrantRunsUnderTheRequestContext(t *testing.T) {
 	log, _ := captureLog()
 	var seen any
-	h := MockStaffHandler(func(ctx context.Context, _ uuid.UUID) error {
+	h := MockStaffHandler(func(ctx context.Context, _ uuid.UUID, _ bool) error {
 		seen = ctx.Value(staffCtxKey{})
 		return nil
 	}, log)
@@ -254,6 +256,52 @@ func TestMockStaff_RefusesAUserIDWrappedInJunk(t *testing.T) {
 			}
 			if len(rec.got) != 0 {
 				t.Errorf("grant ran for user_id %q: %v", c.userID, rec.got)
+			}
+		})
+	}
+}
+
+func TestMockStaff_PassesRulesRoleToTheGrant(t *testing.T) {
+	id := uuid.NewString()
+	cases := []struct {
+		name, body string
+		want       bool
+	}{
+		{"true", `{"user_id":"` + id + `","rules_role":true}`, true},
+		{"false", `{"user_id":"` + id + `","rules_role":false}`, false},
+		{"absent", `{"user_id":"` + id + `"}`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			log, _ := captureLog()
+			rec := &staffGrantRecorder{}
+
+			resp := postMockStaff(MockStaffHandler(rec.grant, log), c.body)
+
+			if resp.Code != http.StatusNoContent {
+				t.Fatalf("POST = %d (body %s), want 204", resp.Code, resp.Body.String())
+			}
+			if len(rec.rulesRole) != 1 || rec.rulesRole[0] != c.want {
+				t.Errorf("grant rulesRole args = %v, want [%v]", rec.rulesRole, c.want)
+			}
+		})
+	}
+}
+
+func TestMockStaff_RefusesANonBooleanRulesRole(t *testing.T) {
+	id := uuid.NewString()
+	for _, v := range []string{`"yes"`, `1`, `null`} {
+		t.Run(v, func(t *testing.T) {
+			log, _ := captureLog()
+			rec := &staffGrantRecorder{}
+
+			resp := postMockStaff(MockStaffHandler(rec.grant, log), `{"user_id":"`+id+`","rules_role":`+v+`}`)
+
+			if resp.Code != http.StatusBadRequest {
+				t.Errorf("POST rules_role %s = %d, want 400", v, resp.Code)
+			}
+			if len(rec.got) != 0 {
+				t.Errorf("grant ran for rules_role %s: %v", v, rec.got)
 			}
 		})
 	}

@@ -243,11 +243,35 @@ func TestRLS_GrantStaffIsIdempotent(t *testing.T) {
 	}
 
 	for i := 1; i <= 2; i++ {
-		if err := db.GrantStaff(ctx, os.Getenv("DATABASE_MIGRATION_URL"), userID); err != nil {
+		if err := db.GrantStaff(ctx, os.Getenv("DATABASE_MIGRATION_URL"), userID, false); err != nil {
 			t.Fatalf("GrantStaff call %d: %v", i, err)
 		}
 		if n := count(); n != 1 {
 			t.Errorf("staff_members rows for the user after call %d = %d, want 1", i, n)
+		}
+	}
+}
+
+func TestGrantStaff_SetsTheRulesRoleColumn(t *testing.T) {
+	h := requireHarness(t)
+	reapplyStaffMigration(t)
+	ctx := context.Background()
+	for _, want := range []bool{true, false} {
+		userID := uuid.New()
+		t.Cleanup(func() {
+			_, _ = h.super.Exec(context.Background(), `DELETE FROM public.staff_members WHERE user_id = $1`, userID)
+		})
+		for i := 1; i <= 2; i++ {
+			if err := db.GrantStaff(ctx, os.Getenv("DATABASE_MIGRATION_URL"), userID, want); err != nil {
+				t.Fatalf("GrantStaff(rulesRole=%v) call %d: %v", want, i, err)
+			}
+		}
+		var got bool
+		if err := h.super.QueryRow(ctx, `SELECT rules_role FROM public.staff_members WHERE user_id = $1`, userID).Scan(&got); err != nil {
+			t.Fatalf("read rules_role: %v", err)
+		}
+		if got != want {
+			t.Errorf("rules_role after GrantStaff(…, %v) = %v", want, got)
 		}
 	}
 }

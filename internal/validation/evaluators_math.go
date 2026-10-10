@@ -79,7 +79,7 @@ import (
 // literal (JSON number) -- see file-header contract.
 //
 // Config faults (=> error, Decision N15): undecodable params; rate a
-// non-number or absent; base/expected param key absent; a negative
+// non-number; base/expected param key absent; a negative
 // tolerance (which would make a zero mismatch on an exactly-correct invoice
 // register as > tolerance and silently flag it). Data faults (=> violation,
 // mirroring rangeEval's non-numeric handling): a base/expected path that is

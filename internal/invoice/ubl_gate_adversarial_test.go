@@ -374,7 +374,7 @@ func TestUBLGate_RefusesVATThatDiffersFromTheCategories(t *testing.T) {
 		{"nil tax amount", gateWithSubtotals(t, ublStr("75.00"), ublStr("75.00"), nil), false},
 		{"non-decimal subtotal", gateWithSubtotals(t, ublStr("75.00"), ublStr("abc")), false},
 		{"non-decimal vat", gateWithSubtotals(t, ublStr("abc"), ublStr("75.00")), false},
-		{"exponent text does not hang or panic", gateWithSubtotals(t, ublStr("75.00"), ublStr("7.5e1")), true},
+		{"exponent text compares by value", gateWithSubtotals(t, ublStr("75.00"), ublStr("7.5e1")), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// carryNRSLines gives each entry of a line replace the NRS fields it omits (D23). An entry with
+// carryNRSLines gives each entry of a line replace the NRS fields it omits. An entry with
 // an id takes them from that stored line; an entry with none and no NRS field of its own takes
 // them from the first unclaimed stored line with equal legacy content. before is the locked,
 // RLS-filtered line set, so an id outside it (other invoice, other tenant, replaced, malformed,

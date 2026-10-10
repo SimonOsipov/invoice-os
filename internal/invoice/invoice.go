@@ -129,7 +129,7 @@ type Invoice struct {
 	// explicit-null rationale as KeptAsIsReason above.
 	FailureKind *string `json:"failure_kind"`
 
-	// NRS header and party fields (ENGI-02): explicit null when unset.
+	// NRS header and party fields: explicit null when unset.
 	InvoiceKind        *string    `json:"invoice_kind"`
 	TaxCurrencyCode    *string    `json:"tax_currency_code"`
 	DueDate            *time.Time `json:"due_date"`
@@ -207,7 +207,7 @@ type StatusChange struct {
 // is deliberately NOT part of this input — it is system-assigned 1..N by the
 // slice's array position ([D10]), never caller-supplied.
 type LineItemInput struct {
-	// ID is the stored line this entry continues (D23); nil for a new line.
+	// ID is the stored line this entry continues; nil for a new line.
 	ID          *string
 	Description *string
 	Quantity    *string
@@ -537,7 +537,7 @@ var (
 	ErrNumberTaken = errors.New("invoice: number taken")
 	ErrNumberFixed = errors.New("invoice: number fixed")
 
-	// ErrUnknownLineID: a line_items id that names no line of this invoice (D23).
+	// ErrUnknownLineID: a line_items id that names no line of this invoice.
 	ErrUnknownLineID = errors.New("invoice: unknown line id")
 )
 

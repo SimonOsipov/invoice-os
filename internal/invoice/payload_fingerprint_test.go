@@ -638,7 +638,7 @@ func TestContentFingerprint_DuplicateLineNoIsOrderDependent(t *testing.T) {
 	}
 }
 
-// Every content field found by reflection moves the digest (D26); a field added later with no hashing fails here.
+// Every content field found by reflection moves the digest; a field added later with no hashing fails here.
 func TestContentFingerprint_EveryContentFieldIsSignificant(t *testing.T) {
 	base := fullFingerprintFixture()
 	baseFP := contentFingerprint(base, base.LineItems)
@@ -900,7 +900,7 @@ func TestContentFingerprint_LegacyShapesKeepTheirHeadDigest(t *testing.T) {
 	}
 }
 
-// Distinct NRS tuples never share a digest, whatever the values contain (D9 injectivity).
+// Distinct NRS tuples never share a digest, whatever the values contain.
 // Singles and pairs of fields are set from a pool of delimiter-like values, over 0, 1 and 2 lines.
 func TestContentFingerprint_DistinctNRSTuplesNeverCollide(t *testing.T) {
 	type slot struct {

@@ -411,7 +411,7 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // appended last of all, from canCorrectNumber (store.go). The reason is non-null
 // exactly when CanEdit && !CanCorrectInvoiceNumber.
 //
-// TaxSubtotals sits directly after Invoice (ENGI-02 D7): derived from the lines,
+// TaxSubtotals sits directly after Invoice: derived from the lines,
 // `[]` when none, never null.
 type getResponse struct {
 	Invoice

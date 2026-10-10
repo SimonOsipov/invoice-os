@@ -1,4 +1,4 @@
-// ENGI-02-01: the 22 invoices and 9 line_items NRS columns. Every DB test leads with
+// The 22 invoices and 9 line_items NRS columns. Every DB test leads with
 // requireNRSColumns, so a schema without them fails on a named assertion, not on SQLSTATE 42703.
 package db_test
 

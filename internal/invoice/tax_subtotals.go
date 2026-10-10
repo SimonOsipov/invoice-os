@@ -6,7 +6,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// TaxSubtotal is one tax category's totals, derived from the lines (ENGI-02 D6).
+// TaxSubtotal is one tax category's totals, derived from the lines.
 type TaxSubtotal struct {
 	TaxCategory   string  `json:"tax_category"`
 	TaxPercent    *string `json:"tax_percent"`

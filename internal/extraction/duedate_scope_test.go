@@ -54,8 +54,8 @@ func ddCode(path string, src []byte) string {
 
 var ddScanExts = []string{".go", ".sql", ".ts", ".tsx"}
 
-// ddScanRoots is where extraction routes a due date; ENGI-02 gave the invoice its own
-// due_date column elsewhere. ddScanFloor is the eligible-file count measured there.
+// ddScanRoots is where extraction routes a due date; the invoice has its own due_date column
+// elsewhere. ddScanFloor is the eligible-file count measured there.
 var ddScanRoots = []string{"internal/extraction", "internal/importer", "cmd/submission"}
 
 const ddScanFloor = 51

@@ -466,7 +466,7 @@ func TestCreateAndEditHandler_WrongJSONTypeOnANewKeyIs400(t *testing.T) {
 	}
 }
 
-// D23/D24: null on a line field is "omitted" (the line's stored value carries); only the
+// Null on a line field is "omitted" (the line's stored value carries); only the
 // header keys clear. A wrongly typed line key or id is a 400, and a malformed id is the store's to refuse.
 func TestEditHandler_LineNRSKeysNullAreOmittedAndIDStaysAsSent(t *testing.T) {
 	var got EditInput

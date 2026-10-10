@@ -433,7 +433,7 @@ func TestTaxSubtotals_NegativeSumRoundingToZeroPrintsPlainZero(t *testing.T) {
 	tsAssert(t, taxSubtotals(lines), []tsWant{{"STANDARD_VAT", "7.50", "0.00", "0.00"}})
 }
 
-// ENGI-02 D6: the JSON keys are tax_category, tax_percent, taxable_amount, tax_amount;
+// The JSON keys are tax_category, tax_percent, taxable_amount, tax_amount;
 // an absent value is null.
 func TestTaxSubtotals_JSONKeysAndNullForAbsent(t *testing.T) {
 	got := taxSubtotals([]LineItem{tsLine(1, tsPtr("EXEMPTED"), nil, nil, tsPtr("0.00"))})

@@ -317,7 +317,7 @@ func contentFingerprint(inv Invoice, lines []LineItem) string {
 	writeFingerprintField(h, inv.VAT)
 	writeFingerprintField(h, inv.Total)
 
-	// NRS header fields (D9): hashed only when set, tagged by index, so a legacy invoice keeps its digest.
+	// NRS header fields: hashed only when set, tagged by index, so a legacy invoice keeps its digest.
 	var dueDate, taxPointDate *string
 	if inv.DueDate != nil {
 		v := inv.DueDate.Format(mbsDateLayout)

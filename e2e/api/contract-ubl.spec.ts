@@ -205,7 +205,7 @@ test.describe('invoice UBL contract (API E2E, over the deployed gateway)', () =>
 
   test('ubl contract: the document carries the NRS address, tax subtotal and unit code', async () => {
     const entity = await createEntity(tokenA, { name: `Zz ENGI-02 ubl ${freshTin()}`, tin: freshTin() })
-    // vat = sum of line_tax of the categorised lines, or the gate answers 409 (D25).
+    // vat = sum of line_tax of the categorised lines, or the gate answers 409.
     const created = await createInvoice(tokenA, {
       entity_id: entity.id,
       ...cleanInvoiceFields(`INV-ENGI02-UBL-${freshTin()}`),

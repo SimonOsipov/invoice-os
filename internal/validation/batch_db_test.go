@@ -213,3 +213,29 @@ func TestBatch_DB_UndatedInvoiceIgnoresAScheduledVersion(t *testing.T) {
 			got.RuleSetVersion, got.RuleSetVersionID, fixtureID)
 	}
 }
+
+// Year 0 parses in Go but Postgres rejects it at d::date; the item is judged as undated and the
+// rest of the batch keeps its own version.
+func TestBatch_DB_YearZeroIssueDateIsJudgedAsUndated(t *testing.T) {
+	super, app := dbTestPools(t)
+	bID, _ := dateFixture(t, super, "3001-06-01", "t-yz")
+	var todayID string
+	if err := super.QueryRow(context.Background(),
+		`SELECT rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`).Scan(&todayID); err != nil {
+		t.Fatalf("read the version in force today: %v", err)
+	}
+
+	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[
+		{"ref":"bad","invoice":{"issue_date":"0000-01-01"}},
+		{"ref":"ok","invoice":{"issue_date":"3001-07-01"}}]}`))
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForDates, NewDefaultEngine(), nil, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeBatch(t, rec)
+	if body.Results[0].RuleSetVersionID != todayID || body.Results[1].RuleSetVersionID != bID {
+		t.Errorf("item stamps = %s, %s; want %s (today), %s",
+			body.Results[0].RuleSetVersionID, body.Results[1].RuleSetVersionID, todayID, bID)
+	}
+}

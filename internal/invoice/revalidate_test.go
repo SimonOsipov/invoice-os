@@ -1519,3 +1519,39 @@ func TestBlockingRuleKeys_NamesEachRuleOnce(t *testing.T) {
 		t.Errorf("blockingRuleKeys = %q, want %q", got, want)
 	}
 }
+
+// A RevalidateActive demotion names no cause: only a re-check demotion's history row does.
+func TestRevalidateActive_DemotionHistoryRowHasNullCause(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+
+	tenantID := seedTenant(t, super, "RA-NULLCAUSE tenant")
+	entityID := seedEntity(t, super, tenantID, "RA-NULLCAUSE entity")
+	id := seedInvoiceAtStatus(t, super, tenantID, entityID, "RA-NULLCAUSE-1", StatusValidated)
+
+	srv := newTINValidatorServer(t, seedRuleSetVersionID(t, super))
+	gate := NewGate(store, NewValidator(srv.URL, revalidateS2SToken, nil))
+	if res, err := RevalidateActive(ctx, app, store, gate, tenantID, false); err != nil || res.Demoted != 1 {
+		t.Fatalf("RevalidateActive = %+v, %v; want one demotion", res, err)
+	}
+
+	ident := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
+	rec := doInvoiceHistory(t, store.History, &ident, id)
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("history %s: %v", rec.Body.String(), err)
+	}
+	var demotion map[string]json.RawMessage
+	for _, r := range rows {
+		if string(r["to_status"]) == `"draft"` {
+			demotion = r
+		}
+	}
+	if demotion == nil {
+		t.Fatalf("no draft row in history %s", rec.Body.String())
+	}
+	if c, ok := demotion["cause"]; !ok || string(c) != "null" {
+		t.Errorf("demotion cause = %s (present %v), want null", c, ok)
+	}
+}

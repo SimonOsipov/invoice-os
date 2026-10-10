@@ -13,7 +13,7 @@ import (
 
 // Sweeper implements platform.BackgroundWorker (Start/Stop). sweepFn and Interval are the
 // test seams TestSweeper* use to run with no DB and a short tick period — production
-// wiring (cmd/reconciliation, M5-06-07) points sweepFn at Reconciler.SweepOnce and
+// wiring (cmd/reconciliation) points sweepFn at Reconciler.SweepOnce and
 // invoice.Rechecker.RunOnce, one Sweeper each, and Interval at Cfg.Interval.
 type Sweeper struct {
 	// Interval is the tick period between sweeps.

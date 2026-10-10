@@ -171,7 +171,7 @@ type StatusChange struct {
 	Cause *HistoryCause `json:"cause"`
 }
 
-// HistoryCause is the rule-set version that caused a history row (D29). EffectiveFrom is
+// HistoryCause is the rule-set version that caused a history row. EffectiveFrom is
 // YYYY-MM-DD, null for an undated version.
 type HistoryCause struct {
 	RuleSetVersion   int     `json:"rule_set_version"`

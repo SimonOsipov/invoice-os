@@ -1947,7 +1947,7 @@ func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Sta
 }
 
 // transitionCausedTx is transitionTx plus the rule-set version that caused the
-// transition, written to the history row; "" stores NULL (D29).
+// transition, written to the history row; "" stores NULL.
 func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, causeVersionID string) (Invoice, error) {
 	if !canTransition(current, target) {
 		return Invoice{}, ErrIllegalTransition

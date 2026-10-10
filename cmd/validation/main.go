@@ -4,7 +4,7 @@
 // identity, otherwise 403, and reaches no database. POST /v1/validate/batch
 // is the tenant-free peer surface 03 submits batches to:
 // peer-authenticated via S2S_TOKEN, carrying no identity, loading the rule-set
-// once per batch.
+// versions for the batch's dates once per batch (LoadForDates).
 package main
 
 import (
@@ -61,17 +61,17 @@ func main() {
 	// POST /v1/validate/batch — the tenant-free peer surface 03 (submission)
 	// calls to validate a whole batch in one request. It carries NO identity: it is
 	// authenticated as a fleet PEER via the shared S2S_TOKEN ([s2s-peer-auth]) and reads no tenant, because
-	// rule evaluation is a pure function of (payload, active global rule-set)
-	// and there is no tenant-scoped data behind it ([s2s-identity]). Hence
-	// LoadForDates rather than LoadActiveRuleSet: the tenant-wrapped
-	// loader returns db.ErrNoTenant with no identity in context, so an
+	// rule evaluation is a pure function of (payload, the rule-set version
+	// in force on its issue date) and there is no tenant-scoped data behind it
+	// ([s2s-identity]). Hence LoadForDates rather than LoadActiveRuleSet: the
+	// tenant-wrapped loader returns db.ErrNoTenant with no identity in context, so an
 	// identity-less peer call structurally cannot use it.
 	//
 	// S2S_TOKEN is required via mustEnv: an unset var makes platform.Fatal exit at boot
 	// rather than starting this endpoint with an empty token that would admit
 	// every caller. The var is set in the deploy env (M4-04-08, [env-wiring]).
-	// The stateless engine is reused; the rule-set is loaded once per batch,
-	// inside the handler.
+	// The stateless engine is reused; LoadForDates runs once per batch, inside
+	// the handler, and each item is judged by the version for its own date.
 	app.Mux.Handle("POST /v1/validate/batch", validation.S2SMiddleware(mustEnv("S2S_TOKEN"))(
 		validation.BatchValidateHandler(store.LoadForDates, engine, nil, app.Logger)))
 

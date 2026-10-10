@@ -75,7 +75,7 @@ type batchItemResult struct {
 }
 
 // batchResponse is the POST /v1/validate/batch success body. The top-level
-// rule-set version + uuid are the LOWEST version used in the batch (D10); each
+// rule-set version + uuid are the LOWEST version used in the batch; each
 // item carries its own stamp.
 type batchResponse struct {
 	RuleSetVersion   int               `json:"rule_set_version"`
@@ -147,7 +147,8 @@ func BatchValidateHandler(load func(ctx context.Context, dates []string) (map[st
 		for i, it := range req.Invoices {
 			d := today
 			if v, ok := it.Invoice["issue_date"].(string); ok {
-				if _, err := time.Parse(time.DateOnly, v); err == nil {
+				// Year 0 parses in Go but Postgres rejects it at d::date, which would 500 the batch.
+				if t, err := time.Parse(time.DateOnly, v); err == nil && t.Year() >= 1 {
 					d = v
 				}
 			}

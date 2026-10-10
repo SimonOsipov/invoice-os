@@ -32,10 +32,10 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
+	"github.com/SimonOsipov/invoice-os/internal/reconciliation"
 )
 
 // tenantFlag collects a repeatable --tenant. flag.String cannot repeat, so
@@ -101,7 +101,7 @@ func run(ctx context.Context, tenants []string, allTenants, dryRun, verify bool)
 			return err
 		}
 		defer reader.Close()
-		if tenantIDs, err = enumerateTenants(ctx, reader); err != nil {
+		if tenantIDs, err = reconciliation.EnumerateTenants(ctx, reader); err != nil {
 			return err
 		}
 	}
@@ -150,31 +150,6 @@ func run(ctx context.Context, tenants []string, allTenants, dryRun, verify bool)
 			demoted, strings.Join(remaining, "\n  "))
 	}
 	return nil
-}
-
-// enumerateTenants lists every tenant id via the reader pool
-// (invoice_tenant_reader, no app.current_tenant GUC set) -- the
-// tenant_enumerate policy ORs in every row for that role alone
-// (reconciliation.EnumerateTenants).
-func enumerateTenants(ctx context.Context, reader *pgxpool.Pool) ([]string, error) {
-	rows, err := reader.Query(ctx, `SELECT id FROM tenants ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("enumerate tenants: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan tenant id: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("enumerate tenants rows: %w", err)
-	}
-	return ids, nil
 }
 
 func report(tenantID string, res invoice.RevalidateResult) {

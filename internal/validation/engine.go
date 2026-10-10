@@ -3,7 +3,7 @@
 // Core AC #2, #4). It dispatches to whatever Evaluators are registered and
 // whatever GuardFunc is injected -- both get concrete implementations in
 // later subtasks (evaluators: M3-04-03/04; CEL guard backend: M3-04-05).
-// The engine core has NO DB import: LoadActiveRuleSet (the DB "load" stage)
+// The engine core has NO DB import: the DB "load" stage (Store.LoadForDates, one load per batch)
 // lives one layer up, in the M3-04-06 Store.
 //
 // The exported surface -- the Engine struct's field set, the NewEngine

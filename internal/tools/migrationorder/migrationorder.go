@@ -6,7 +6,7 @@
 // production database can see the break. A branch cut before another branch's
 // migration merged is the usual cause: its timestamp is older than main's newest.
 //
-// A file whose name already exists on -main (default origin/main) is skipped: main
+// While -head is outside -main (default origin/main), a file already on -main is skipped: main
 // has applied it, so a branch that merged main in did not add it.
 //
 // Usage:

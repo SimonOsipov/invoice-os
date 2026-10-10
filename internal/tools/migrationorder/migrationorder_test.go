@@ -203,6 +203,7 @@ func TestMain_ReverseOrderMergeFailsWhenMainIsTheBeforeSha(t *testing.T) {
 
 	run("checkout", "-qb", "pr3", "pr2~1")
 	run("commit", "-q", "--allow-empty", "-m", "pr3")
+	run("merge", "-q", "--no-ff", "pr2", "-m", "pr3 merges pr2")
 	pr3 := run("rev-parse", "HEAD")
 	run("checkout", "-q", "main")
 

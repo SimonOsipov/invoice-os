@@ -853,6 +853,32 @@ func TestInvitationRegister_PreviewRefusalTakesTheBudgetCheck(t *testing.T) {
 	}
 }
 
+func TestInvitationRegister_PreviewRefusalOnASpentIPIsNotEnforcedWhenOff(t *testing.T) {
+	const floor = 150 * time.Millisecond
+	fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+	perIP := NewSignInThrottle("register", 1, RegisterMaxKeys, RegisterWindow, time.Now)
+	perIP.Reserve("192.0.2.1")
+	r := claiming(inviteAddress, true, nil)
+	p := previewing(InvitationPreview{Workspace: inviteWorkspace, Role: inviteRole, Email: inviteAddress, Account: "confirmed"}, nil)
+	log, _ := captureLog()
+	req := httptest.NewRequest(http.MethodPost, "/auth/invitation/register", strings.NewReader(tokenBody(inviteToken)))
+	req.RemoteAddr = "192.0.2.1:5555"
+	rec := httptest.NewRecorder()
+	start := time.Now()
+
+	InvitationRegisterHandler(fake.URL, testClient(), floor, perIP, false, log, p.preview, r.registrations()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict || errorBody(t, rec) != msgAccountExists {
+		t.Fatalf("answer = %d %s, want 409 %s", rec.Code, rec.Body.String(), msgAccountExists)
+	}
+	if elapsed := time.Since(start); elapsed < floor {
+		t.Errorf("answered after %v, want no earlier than the %v floor", elapsed, floor)
+	}
+	if len(r.claims()) != 0 || len(fake.Calls()) != 0 {
+		t.Errorf("claims = %d, GoTrue calls = %d, want 0 and 0", len(r.claims()), len(fake.Calls()))
+	}
+}
+
 func TestInvitationRegister_ExistingAccountWaitsTheFloor(t *testing.T) {
 	const floor = 150 * time.Millisecond
 	shapes := []struct {

@@ -31,6 +31,16 @@ func exchanged(t *testing.T, gw, code, state string) (string, string) {
 	return access, refresh
 }
 
+// passwordHash reads the account's stored hash: the random invite password is unknowable, so only its replacement is observable.
+func passwordHash(t *testing.T, email string) string {
+	t.Helper()
+	var hash string
+	if err := superConn(t).QueryRow(context.Background(), `SELECT encrypted_password FROM auth.users WHERE email = $1`, email).Scan(&hash); err != nil {
+		t.Fatalf("read the password hash: %v", err)
+	}
+	return hash
+}
+
 func TestIdP_SetPasswordSignsTheInviteeInToTheJoinRoutes(t *testing.T) {
 	w := newInviteWorld(t, "logfix11a-")
 	u := idpUser{email: w.email, password: "pw-" + uuid.NewString()}
@@ -38,7 +48,11 @@ func TestIdP_SetPasswordSignsTheInviteeInToTheJoinRoutes(t *testing.T) {
 
 	w.register(t)
 	requireSignIn(t, w.base, u, u.password, http.StatusBadRequest, "invalid_credentials")
+	randomHash := passwordHash(t, w.email)
 	_, _, location := w.setPasswordWithState(t, u.password, state)
+	if after := passwordHash(t, w.email); after == "" || after == randomHash {
+		t.Fatalf("password hash after the set-password POST equals the invite's random one (%q); want it replaced", after)
+	}
 
 	access, _ := exchanged(t, w.gw, inviteHandoffCode(t, location), state)
 	caller, err := idpVerifier(t, w.base).Verify(context.Background(), access)

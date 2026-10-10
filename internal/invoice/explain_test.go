@@ -229,7 +229,7 @@ func TestExplainTarget_ModelCannotMoveAHeaderFix(t *testing.T) {
 }
 
 func TestExplainTarget_OutOfRangeAndUnmappable(t *testing.T) {
-	for _, path := range []string{"line_items[4]", "line_items[0]", "line_items", "tax_subtotals[1].tax_category", "line_items[1].", ""} {
+	for _, path := range []string{"line_items[4]", "line_items[0]", "line_items[0].unit_price", "line_items[01].unit_price", "line_items", "tax_subtotals[1].tax_category", "line_items[1].", ""} {
 		if _, _, ok := explainTarget(path, 3, "unit_price"); ok {
 			t.Errorf("%q: want no target", path)
 		}
@@ -443,7 +443,12 @@ func TestExplainCases_WantedFixesPassTheTargetGuard(t *testing.T) {
 			continue
 		}
 		field, _, ok := explainTarget(c.Violation.Path, len(c.Invoice.LineItems), *c.WantField)
-		if !ok || (field != *c.WantField && !strings.HasSuffix(field, "_"+*c.WantField)) {
+		// want_field is the name the model returns: the last path segment for a header path.
+		_, last, _ := strings.Cut(headerMBSPath(field), ".")
+		if last == "" {
+			last = field
+		}
+		if !ok || last != *c.WantField || headerMBSPath(field) != c.Violation.Path && !strings.HasPrefix(c.Violation.Path, "line_items") {
 			t.Errorf("%s: want_field %q, target (%q, %v)", c.ID, *c.WantField, field, ok)
 		}
 	}

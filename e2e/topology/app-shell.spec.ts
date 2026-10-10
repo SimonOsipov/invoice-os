@@ -6,6 +6,7 @@ import { test, expect, type Locator, type Page, type TestInfo } from '@playwrigh
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { resolveTarget } from '../targets'
 import { APP_URL, GATEWAY_URL } from './targets'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -296,6 +297,48 @@ test('AS-03 header row fits at every wide width', async ({ page }, testInfo) => 
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+test('AS-LIB the Feature library link sits between the nav and the identity card at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  const bakedLibraryUrl = resolveTarget('BAKED_LIBRARY_URL')
+  const entry = page.viewportSize()
+  const measured: Record<string, unknown>[] = []
+  try {
+    for (const persona of ['firm', 'inhouse'] as const) {
+      await signInAs(page, persona)
+      const link = aside(page).getByRole('link', { name: 'Feature library' })
+      const nav = aside(page).locator('nav.pf-nav-list')
+      const card = page.getByTestId('identity-card')
+      const main = page.locator('main.pf-main')
+      await expect(link, `${persona}: no Feature library link (is app.VITE_LIBRARY_URL set?)`).toHaveCount(1)
+      expect(await link.getAttribute('href'), `${persona}: the link href is the baked library URL`).toBe(bakedLibraryUrl)
+      for (const width of WIDE_WIDTHS) {
+        await page.setViewportSize({ width, height: 1080 })
+        const read = async (): Promise<{ problems: string[]; rects: Record<string, Rect> }> => {
+          await settle(page, aside(page), link, nav, card, main)
+          const boxes = { aside: await aside(page).boundingBox(), nav: await nav.boundingBox(), link: await link.boundingBox(), card: await card.boundingBox(), main: await main.boundingBox() }
+          const problems = Object.entries(boxes).filter(([, b]) => !b).map(([n]) => `${n} has no box`)
+          if (problems.length) return { problems, rects: {} }
+          const r = boxes as Record<string, Rect>
+          if (!enclosesRect(r.aside, r.link, 1)) problems.push('link sticks out of the aside')
+          if (!enclosesRect(r.aside, r.card, 1)) problems.push('card sticks out of the aside')
+          if (r.link.y < r.nav.y + r.nav.height - 1) problems.push('link starts above the nav bottom')
+          if (r.link.y + r.link.height > r.card.y + 1) problems.push('link ends below the card top')
+          if (rectsOverlap(r.link, r.nav)) problems.push('link overlaps the nav')
+          if (rectsOverlap(r.link, r.card)) problems.push('link overlaps the card')
+          if (rectsOverlap(r.aside, r.main)) problems.push('aside overlaps main')
+          return { problems, rects: r }
+        }
+        await expect.poll(async () => (await read()).problems, { message: `${persona} at ${width}px`, timeout: 10_000 }).toEqual([])
+        measured.push({ persona, width, ...(await read()).rects })
+      }
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  await attachJson(testInfo, 'as-lib-measurements', measured)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('AS-04 environment banner: sandbox rendered, live by probe', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await signInAs(page, 'firm')
@@ -509,7 +552,8 @@ test('AS-08 the suspended card: radius and Sign out corner', async ({ page }, te
     if (route.request().method() === 'OPTIONS') return route.continue()
     return route.fulfill({ status: 403, contentType: 'application/json', headers: { 'access-control-allow-origin': origin }, body: NOT_ACTIVE_BODY })
   })
-  await navButton(page, /^Invoices/).click()
+  // A call already in flight can draw the card first and detach the nav; the card assertion is the check.
+  await navButton(page, /^Invoices/).click({ timeout: 5_000 }).catch(() => {})
 
   const card = page.getByTestId('suspended-notice')
   await expect(card, 'the 403 with the not-active body renders the suspended card').toBeVisible()

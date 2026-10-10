@@ -196,7 +196,7 @@ func TestRailwayEnvUsageListsSayProductionIsWrittenByHand(t *testing.T) {
 		t.Errorf("the header usage list does not name fork-vars-before-urls <environment-id>:\n%s", list)
 	}
 
-	const afterUsage = `fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url>`
+	const afterUsage = `fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>`
 	if !regexp.MustCompile(`[<|]` + afterUsage + `[|>]`).MatchString(generic) {
 		t.Errorf("the dispatcher's usage does not name %s; output = %q", afterUsage, generic)
 	}

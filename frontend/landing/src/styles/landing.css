@@ -144,6 +144,12 @@ button {
   align-items: center;
   gap: 24px;
 }
+/* Room for the Library link before the burger edge. */
+@media (max-width: 1279px) {
+  .a-nav {
+    gap: 16px;
+  }
+}
 .a-burger {
   display: none;
   width: 44px;
@@ -452,7 +458,7 @@ html:has(.cookie-note) {
 
 @media (max-width: 640px) {
   :root {
-    --cn-band: 282px;
+    --cn-band: 294px;
   }
   .cookie-note {
     left: 12px;
@@ -460,13 +466,14 @@ html:has(.cookie-note) {
     bottom: 12px;
     width: auto;
     padding: 16px;
-    gap: 12px;
+    gap: 10px;
   }
   /* 44px touch target; landing-consent.spec.ts C9 and C9b measure it. */
   .cn-actions button {
     height: 44px;
   }
 }
+/* end: cookie consent notice */
 
 .btn-on-dark {
   color: var(--accent) !important;

@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as signInState from './signInState'
-import { consumeSignInState, ensureSignInState, landingSignInUrl, SIGN_IN_STATE_TTL_MS } from './signInState'
+import { consumeSignInState, ensureSignInState, landingRegisterUrl, landingSignInUrl, SIGN_IN_STATE_TTL_MS } from './signInState'
 
 // Read off the namespace so a missing export fails the assertion, not the import.
 const SIGN_IN_STATE_REUSE_MS = (signInState as Record<string, unknown>).SIGN_IN_STATE_REUSE_MS
@@ -164,5 +164,14 @@ describe('landingSignInUrl', () => {
     vi.stubEnv('VITE_LANDING_URL', '')
     expect(landingSignInUrl(S)).toBeNull()
     expect(landingSignInUrl(S, 'ready')).toBeNull()
+  })
+})
+
+describe('landingRegisterUrl', () => {
+  it('landingRegisterUrl_appendsRegisterAfterTheState', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://l.x/')
+    expect(landingRegisterUrl('S')).toBe('https://l.x/?state=S&register')
+    vi.stubEnv('VITE_LANDING_URL', '')
+    expect(landingRegisterUrl('S')).toBeNull()
   })
 })

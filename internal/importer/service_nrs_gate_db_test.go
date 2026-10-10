@@ -242,6 +242,13 @@ func TestImportNRS_DryRunAndRealRunSendTheSamePayload(t *testing.T) {
 		{"line 1 tax_percent", num(l1["tax_percent"]), "7.50"},
 		{"line 1 base_quantity", num(l1["base_quantity"]), "2.000"},
 		{"line 2 sellers_item_identification", sv(strp(l2["sellers_item_identification"])), "SKU-43"},
+		{"line 2 hsn_code (a line field is read per row)", sv(strp(l2["hsn_code"])), "0101.21"},
+		{"line 2 isic_code", sv(strp(l2["isic_code"])), "6202"},
+		{"line 2 product_category", sv(strp(l2["product_category"])), "Peripherals"},
+		{"line 2 service_category", sv(strp(l2["service_category"])), "Support"},
+		{"line 2 line_total", num(l2["line_total"]), "50.00"},
+		{"line 2 line_tax", num(l2["line_tax"]), "3.75"},
+		{"line 2 base_quantity", num(l2["base_quantity"]), "1.000"},
 		{"line 2 price_unit", sv(strp(l2["price_unit"])), "EA"},
 		{"line 2 tax_percent (7.50 % -> 7.50)", num(l2["tax_percent"]), "7.50"},
 	})

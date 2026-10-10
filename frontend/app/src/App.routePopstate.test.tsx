@@ -39,12 +39,21 @@ function createMemoryStorage() {
 }
 
 let capturedCtx: PlatformCtx | undefined
-vi.mock('./components/Sidebar', () => ({
-  Sidebar: (p: { ctx: PlatformCtx }) => {
-    capturedCtx = p.ctx
-    return null
-  },
-}))
+const { stampOnResolve } = vi.hoisted(() => ({ stampOnResolve: [] as (string | null)[] }))
+vi.mock('./components/Sidebar', async () => {
+  const { useEffect } = await import('react')
+  return {
+    Sidebar: (p: { ctx: PlatformCtx }) => {
+      capturedCtx = p.ctx
+      const id = p.ctx.active.entityId
+      // A child's passive effect runs before App's: it sees what a navigation right after the roster commit sees.
+      useEffect(() => {
+        if (id !== null) stampOnResolve.push((window.history.state as { e?: string | null } | null)?.e ?? null)
+      }, [id])
+      return null
+    },
+  }
+})
 
 // Records every mount, including the job id it carried -- the Q6 oracle needs to see the
 // screen did NOT render, not just that extractionJobId cleared.
@@ -87,6 +96,7 @@ vi.mock('./lib/importApi', async (importOriginal) => {
 
 beforeEach(() => {
   capturedCtx = undefined
+  stampOnResolve.length = 0
   extractionReviewMounts.length = 0
   invoiceDetailMounts.length = 0
   window.history.replaceState(null, '', '/')
@@ -1283,6 +1293,45 @@ describe('ROUTE-06-02 AC-7: the boot entry is backfilled once the entities resol
     expect(window.location.pathname, 'the backfill must not move the entry it stamps').toBe(`/invoices/${INVOICE_ID}`)
     const backfills = replaceSpy.mock.calls.filter((c) => (c[0] as { e?: string | null } | null)?.e === ENTITY_A)
     expect(backfills, 'the backfill is gated on a null stamp: it fills once, it does not re-run').toHaveLength(1)
+  })
+
+  it('boot_theBootEntryCarriesTheStampInTheCommitThatResolvesTheCompany', async () => {
+    await bootAtWithGateway(`/invoices/${INVOICE_ID}`)
+    expect(stampOnResolve.length, 'floor: the recorder must have seen the resolving commit').toBeGreaterThan(0)
+    expect(stampOnResolve[0], 'the stamp must land in the commit that names the company, not a later passive flush').toBe(
+      ENTITY_A,
+    )
+  })
+
+  it('boot_theBackfillFillsOnceUnderStrictMode', async () => {
+    routeFetch()
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    window.history.replaceState(null, '', `/invoices/${INVOICE_ID}`)
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    vi.resetModules()
+    const { default: App } = await import('./App')
+    render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+    await waitFor(() => expect(currentEntry().e, 'the boot entry must carry the resolved company').toBe(ENTITY_A))
+    const backfills = replaceSpy.mock.calls.filter((c) => (c[0] as { e?: string | null } | null)?.e === ENTITY_A)
+    expect(backfills, 'StrictMode must not double the null-gated backfill').toHaveLength(1)
+  })
+
+  it('switchClient_theBackfillNeverOverwritesAStampedEntry', async () => {
+    await bootAtWithGateway('/')
+    await waitFor(() => expect(currentEntry().e).toBe(ENTITY_A))
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the switch must really move the active company').toBe(ENTITY_B)
+    // The backfill is the only writer that passes the absolute href.
+    const backfills = replaceSpy.mock.calls.filter((c) => String(c[2]).startsWith('http'))
+    expect(backfills, 'the switch commit must not re-stamp an already stamped entry').toHaveLength(0)
   })
 
   it('popstate_aColdBootDeepLinkEntryClampsAfterASwitch', async () => {

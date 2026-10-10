@@ -602,7 +602,8 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // unclampable. Gated on null so it can only FILL, never overwrite switchClient's stamp.
   // Third argument is the live href: a two-arg call records call[2] as undefined and would
   // fail the three popstate no-history specs if it ever fired under a gateway.
-  useEffect(() => {
+  // Layout, not passive: a navigation before a passive flush would leave the boot entry unstamped. boot_theBootEntryCarriesTheStampInTheCommitThatResolvesTheCompany
+  useLayoutEffect(() => {
     activeEntityIdRef.current = active.entityId
     if (active.entityId === null) return
     const minted = (window.history.state as { e?: string | null } | null)?.e ?? null

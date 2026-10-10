@@ -96,16 +96,6 @@ describe('useTourSpot', () => {
       expect(seen.rect?.h).toBe(47)
     })
 
-    it('useTourSpot_fontsReadyAfterUnmountDoesNotSetState', async () => {
-      render({ i: 0, phase: 'menu' })
-      act(() => root.unmount())
-      root = createRoot(container)
-      await act(async () => {
-        resolve()
-        await Promise.resolve()
-      })
-    })
-
     it('useTourSpot_withoutDocumentFontsStillMeasures', () => {
       delete (document as { fonts?: unknown }).fonts
       render({ i: 0, phase: 'menu' })

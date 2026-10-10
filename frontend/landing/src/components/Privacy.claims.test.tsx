@@ -531,8 +531,8 @@ describe('ENGI-10: no training, retention, region, deletion or law claim in the 
   })
 })
 
-// pm-approved copy: change only with a new approval.
-const APPROVED_EXPLAIN_SECTION =
+// Not yet approved: wording approval is owed at the epic review (ENGI-17 U2, Q31). Rename to APPROVED_* once given.
+const PROPOSED_EXPLAIN_SECTION =
   "This is also about the signed-in ASComply product. When you click Explain on a rule that an invoice breaks, our server sends that invoice's details and the rule's result to the same AI provider, so that it can explain the problem in plain words and suggest a correction. Nothing is sent until you click Explain, and a suggested correction is saved only when you accept it."
 
 const EXPLAIN_H2 = 'If you ask for an explanation'
@@ -554,10 +554,10 @@ describe('ENGI-17: the explanation section discloses the Explain call', () => {
     expect(at(EXPLAIN_H2)).toBeLessThan(at('Error and performance monitoring'))
   })
 
-  it('ENGI-17: the explanation section is the approved text, in one paragraph', () => {
+  it('ENGI-17: the explanation section is the proposed text, in one paragraph', () => {
     const section = explainSectionHtml()
     expect(section.match(/<p[\s>]/g) ?? []).toHaveLength(1)
-    expect(plainText(section)).toBe(APPROVED_EXPLAIN_SECTION)
+    expect(plainText(section)).toBe(PROPOSED_EXPLAIN_SECTION)
   })
 
   it('ENGI-17: the section says nothing is sent until Explain is clicked', () => {

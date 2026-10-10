@@ -19,6 +19,7 @@ describe('isStubbedHost', () => {
     expect(isStubbedHost('https://www.ascomply.com/')).toBe(false)
     expect(isStubbedHost('https://fonts.googleapis.com/css2')).toBe(false)
     expect(isStubbedHost('https://evil.example/?x=sentry.io')).toBe(false)
+    expect(isStubbedHost('https://evilgoogle-analytics.com/g/collect')).toBe(false)
     expect(isStubbedHost('not a url')).toBe(false)
   })
 })

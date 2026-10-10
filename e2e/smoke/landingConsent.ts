@@ -52,7 +52,7 @@ export function isStubbedHost(rawUrl: string): boolean {
   } catch {
     return false
   }
-  return host === 'www.googletagmanager.com' || host.endsWith('google-analytics.com') || isSentryHost(rawUrl)
+  return host === 'www.googletagmanager.com' || host === 'google-analytics.com' || host.endsWith('.google-analytics.com') || isSentryHost(rawUrl)
 }
 
 /**

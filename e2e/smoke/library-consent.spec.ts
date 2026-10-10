@@ -239,7 +239,11 @@ async function controlRouting(page: Page, request: APIRequestContext): Promise<v
     expect(expected, 'routing, not consent: the fork serves an empty /build.txt').not.toBe('')
     expect((await routed?.text())?.trim(), `routing, not consent: ${host} does not serve the fork's build`).toBe(expected)
   }
-  await openWww(page)
+  await page.goto(`${WWW}/`)
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Africa moves. Compliance keeps up.' }),
+    'routing, not consent: the routed landing did not render its heading',
+  ).toBeVisible()
 }
 
 routedTest('SC-00 shared consent: the production hostnames serve the fork', async ({ routed, request }) => {

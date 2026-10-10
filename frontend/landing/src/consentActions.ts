@@ -24,10 +24,11 @@ export function applyChoice(
   return record
 }
 
-/** Re-reads the shared choice so an open tab obeys an answer given in another tab. */
+/** Re-reads the shared choice so an open tab obeys an answer given in another tab. `null`: nothing stored, nothing changed. */
 export function syncConsent(opts?: { hostname?: string; hosts?: readonly string[] }): ConsentRecord | null {
   const hostname = opts?.hostname ?? window.location.hostname
-  const record = readConsent()
+  const record = readConsent(undefined, undefined, hostname)
+  if (!record) return null
   const allowed = analyticsAllowed(record)
   setAnalyticsRevoked(!allowed)
   if (allowed) ensureTag(hostname, record, opts?.hosts)

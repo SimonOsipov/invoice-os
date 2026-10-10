@@ -421,6 +421,30 @@ describe('open-tab sync', () => {
     expect(layer().filter((e) => e[0] === 'event')).toEqual([])
   })
 
+  it('SY-07 a sync that finds nothing stored keeps the page-load choice when the cookie write was dropped', async () => {
+    const { applyChoice, syncConsent } = await import('./consentActions')
+    const { trackDemoOpen } = await import('./analytics')
+    Object.defineProperty(document, 'cookie', { configurable: true, get: () => '', set: () => {} })
+    const opts = { hostname: WWW, hosts: [WWW] }
+
+    expect(applyChoice('accept', opts).analytics).toBe(true)
+    expect(syncConsent(opts)).toBeNull()
+
+    trackDemoOpen('hero')
+    expect(layer().filter((e) => e[0] === 'event').length).toBeGreaterThan(0)
+  })
+
+  it('SY-08 a sync reads the store of the host it was given, not of location', async () => {
+    const { syncConsent } = await import('./consentActions')
+    setCookie(false)
+    localStorage.setItem(KEY, JSON.stringify(rec(true, '2026-03-01T00:00:00.000Z')))
+    try {
+      expect(syncConsent({ hostname: 'localhost' })?.analytics).toBe(true)
+    } finally {
+      localStorage.removeItem(KEY)
+    }
+  })
+
   it('SY-01 a Reject from another tab stops this tab', async () => {
     const { syncConsent } = await import('./consentActions')
     const { ensureTag, trackDemoOpen } = await import('./analytics')

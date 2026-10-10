@@ -38,7 +38,9 @@ export function App() {
 
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === 'visible') setConsent(syncLibraryConsent())
+      if (document.visibilityState !== 'visible') return
+      const next = syncLibraryConsent()
+      if (next) setConsent(next)
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
@@ -127,7 +129,8 @@ export function App() {
         tourLabel={tourButtonLabel(tourOn ? tour : null)}
         onTour={phone ? null : toggleTour}
         onCookieChoices={() => {
-          setConsent(syncLibraryConsent())
+          const next = syncLibraryConsent()
+          if (next) setConsent(next)
           setReopened(true)
         }}
       />

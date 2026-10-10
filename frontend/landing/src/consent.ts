@@ -12,7 +12,7 @@ export type ConsentRecord = { analytics: boolean; ts: string; v: number }
 export type ConsentStore = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem'>>
 export type ConsentJar = Pick<Document, 'cookie'>
 
-const COOKIE_MAX_AGE_S = 400 * 24 * 60 * 60 // Chrome's cap, counted from the choice
+const COOKIE_MAX_AGE_S = 400 * 24 * 60 * 60 // Chrome's cap
 
 /** The shared cookie domain for an exact production host, else `null`. */
 export function sharedConsentDomain(hostname: string): string | null {
@@ -71,6 +71,7 @@ export function parseConsent(raw: string | null): ConsentRecord | null {
 function readLocal(store: ConsentStore | null): ConsentRecord | null {
   if (!store) return null
 
+  // The try wraps the getItem CALL: under native Node the global is present but its methods throw.
   let raw: string | null
   try {
     raw = store.getItem(CONSENT_STORAGE_KEY)
@@ -116,9 +117,6 @@ function sameRecord(a: ConsentRecord | null, b: ConsentRecord | null): boolean {
   return !!a && !!b && a.analytics === b.analytics && a.ts === b.ts
 }
 
-// The try wraps the getItem CALL, not a presence check: under native Node the global
-// is present but its methods throw. Covered by "a present-but-unusable localStorage
-// is not an error on either path".
 export function readConsent(
   store: ConsentStore | null = defaultStore(),
   jar: ConsentJar | null = defaultJar(),

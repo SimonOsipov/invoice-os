@@ -82,7 +82,7 @@ export default function App() {
   const [deepLink] = useState(() => readDeepLink(window.location.search, signInBoot.open))
   const [demoOpen, setDemoOpen] = useState(deepLink === 'demo')
   const [registerOpen, setRegisterOpen] = useState(deepLink === 'register')
-  // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
+  // A stored choice keeps the notice down until `reopened` flips.
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
   const [reopened, setReopened] = useState(false)
@@ -108,7 +108,9 @@ export default function App() {
 
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === 'visible') setConsent(syncConsent())
+      if (document.visibilityState !== 'visible') return
+      const next = syncConsent()
+      if (next) setConsent(next)
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
@@ -197,7 +199,8 @@ export default function App() {
         </>
       )}
       <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => {
-        setConsent(syncConsent())
+        const next = syncConsent()
+        if (next) setConsent(next)
         setReopened(true)
       }} />
       {/* Pinned by "the notice mounts after Footer and before the modals": last in flow puts the

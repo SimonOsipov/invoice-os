@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -378,5 +379,79 @@ func TestInvitationPassword_RefusalsMintNoGrantAndNoCode(t *testing.T) {
 				t.Errorf("store holds %d codes, want 0", n)
 			}
 		})
+	}
+}
+
+func TestInvitationPassword_EachSubmitGetsItsOwnCodeBoundToItsOwnState(t *testing.T) {
+	g := newIHRig(t, testHandoffStore())
+
+	first := g.submit(t, vhState)
+	second := g.submit(t, vhOtherState)
+
+	code1, code2 := vhCode(t, first), vhCode(t, second)
+	if code1 == code2 {
+		t.Fatalf("two submits minted the same code %q", code1)
+	}
+	if loc := second.Header().Get("Location"); loc != vhCodePrefix+code2 || strings.Contains(loc, code1) {
+		t.Errorf("second Location = %q, want %s%s and no trace of the first code", loc, vhCodePrefix, code2)
+	}
+	if rec := vhExchange(g.store, code2, vhState); rec.Code != http.StatusBadRequest {
+		t.Errorf("second code with the first state = %d, want 400", rec.Code)
+	}
+	if rec := vhExchange(g.store, code1, vhState); rec.Code != http.StatusOK {
+		t.Errorf("first code with its own state = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Each parallel submit chooses its own password and state; a code must redeem only the grant minted for that submit.
+func TestInvitationPassword_ParallelSubmitsNeverCrossCodesOrSessions(t *testing.T) {
+	const n = 12
+	g := newIHRig(t, testHandoffStore())
+	g.f.token = func(w http.ResponseWriter, r *http.Request) {
+		var in struct{ Password string }
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		answer(http.StatusOK, `{"access_token":"at-`+in.Password+`","refresh_token":"rt-`+in.Password+`"}`)(w, r)
+	}
+	state := func(i int) string { return strings.Repeat(string(rune('A'+i)), 43) }
+
+	recs := make([]*httptest.ResponseRecorder, n)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range recs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			v := rpValues(rpToken, "signup", "pw-"+strconv.Itoa(i)+"-padded")
+			v.Set("state", state(i))
+			recs[i] = ipPost(t, g.h, v)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	seen := map[string]bool{}
+	for i, rec := range recs {
+		code := vhCode(t, rec)
+		if seen[code] {
+			t.Fatalf("code %q minted twice", code)
+		}
+		seen[code] = true
+		if rec.Header().Get("Location") != vhCodePrefix+code {
+			t.Errorf("submit %d Location = %q, want exactly one code", i, rec.Header().Get("Location"))
+		}
+		if i%2 == 1 {
+			if rec := vhExchange(g.store, code, state((i+1)%n)); rec.Code != http.StatusBadRequest {
+				t.Errorf("submit %d code with a neighbour's state = %d, want 400", i, rec.Code)
+			}
+			continue
+		}
+		want := map[string]string{"access_token": "at-pw-" + strconv.Itoa(i) + "-padded", "refresh_token": "rt-pw-" + strconv.Itoa(i) + "-padded"}
+		if got := ihExchanged(t, g.store, code, state(i)); !maps.Equal(got, want) {
+			t.Errorf("submit %d session = %v, want its own grant %v", i, got, want)
+		}
+	}
+	if len(seen) != n {
+		t.Fatalf("%d codes for %d submits", len(seen), n)
 	}
 }

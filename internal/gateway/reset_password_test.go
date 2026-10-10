@@ -77,6 +77,7 @@ func newResetGoTrue(t *testing.T) *resetGoTrue {
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(b))
 		f.mu.Lock()
 		f.calls = append(f.calls, rpCall{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization"), r.Header.Get("Content-Type"), b})
 		f.mu.Unlock()

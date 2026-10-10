@@ -137,13 +137,19 @@ func TestInvitationPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.
 			}
 		})
 	}
-	for name, tc := range map[string]struct{ posted, want string }{
-		"valid state is kept":      {vpState, vpState},
-		"malformed state is empty": {`x"><script>`, ""},
+	for name, tc := range map[string]struct {
+		posted []string
+		want   string
+	}{
+		"valid state is kept":                   {[]string{vpState}, vpState},
+		"malformed state is empty":              {[]string{`x"><script>`}, ""},
+		"repeated valid states are empty":       {[]string{vpState, vhOtherState}, ""},
+		"repeated identical valid states empty": {[]string{vpState, vpState}, ""},
+		"repeated, malformed first, is empty":   {[]string{"short", vpState}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := rpValues(rpToken, "signup", "abc")
-			v.Set("state", tc.posted)
+			v["state"] = tc.posted
 			f := newResetGoTrue(t)
 			rec := ipPost(t, newInviteHandler(t, f, nil, nil), v)
 			if rec.Code != http.StatusBadRequest {

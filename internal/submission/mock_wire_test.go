@@ -932,7 +932,7 @@ func TestMockWire_NRSFieldsLeaveTheWireUnchanged(t *testing.T) {
 	base := mwFullCanonical()
 	withNRS := mwDeepCopyCanonical(base)
 	d := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
-	withNRS.InvoiceKind, withNRS.TaxCurrencyCode = mwStrPtr("380"), mwStrPtr("USD")
+	withNRS.InvoiceKind, withNRS.TaxCurrencyCode = mwStrPtr("381"), mwStrPtr("USD")
 	withNRS.DueDate, withNRS.TaxPointDate = &d, &d
 	withNRS.IssueTime, withNRS.PaymentStatus = mwStrPtr("14:30:00"), mwStrPtr("PAID")
 	withNRS.TaxSubtotals = []TaxSubtotal{{Category: "STANDARD_VAT", Percent: mwStrPtr("7.50"), TaxableAmount: mwStrPtr("1000.00"), TaxAmount: mwStrPtr("75.00")}}
@@ -947,5 +947,63 @@ func TestMockWire_NRSFieldsLeaveTheWireUnchanged(t *testing.T) {
 	}
 	if a, b := mwWire(t, base), mwWire(t, withNRS); a != b {
 		t.Errorf("wire changed with NRS fields:\n%s\n%s", a, b)
+	}
+}
+
+// mwFillNRS sets every field of v that is not in legacy to a sentinel naming it. It walks
+// the struct, so a field added to Canonical later is covered without editing this helper.
+func mwFillNRS(v reflect.Value, legacy map[string]bool, path string) {
+	for i := 0; i < v.NumField(); i++ {
+		name, f := v.Type().Field(i).Name, v.Field(i)
+		if legacy[path+name] {
+			continue
+		}
+		switch f.Type() {
+		case reflect.TypeOf((*string)(nil)):
+			f.Set(reflect.ValueOf(mwStrPtr("NRSX-" + name)))
+		case reflect.TypeOf((*time.Time)(nil)):
+			d := time.Date(2031, 2, 3, 0, 0, 0, 0, time.UTC)
+			f.Set(reflect.ValueOf(&d))
+		case reflect.TypeOf([]TaxSubtotal(nil)):
+			ts := TaxSubtotal{Category: "NRSX-Category"}
+			mwFillNRS(reflect.ValueOf(&ts).Elem(), map[string]bool{"TaxSubtotal.Category": true}, "TaxSubtotal.")
+			f.Set(reflect.ValueOf([]TaxSubtotal{ts}))
+		default:
+			panic("mwFillNRS: unhandled field " + path + name + " of type " + f.Type().String())
+		}
+	}
+}
+
+// mwBareLineCanonical has a line with no legacy member, so an NRS value that leaks into a
+// legacy slot is not overwritten by the legacy value.
+func mwBareLineCanonical() Canonical {
+	return Canonical{InvoiceNumber: "INV-BARE-0001", Lines: []CanonicalLine{{LineID: "l1", LineNo: 1}}}
+}
+
+func TestMockWire_NoNRSValueReachesTheWire(t *testing.T) {
+	legacyCanonical := map[string]bool{"InvoiceID": true, "InvoiceNumber": true, "IssueDate": true, "Supplier": true, "Buyer": true,
+		"Currency": true, "Subtotal": true, "VAT": true, "Total": true, "Lines": true}
+	legacyParty := map[string]bool{"TIN": true, "Name": true}
+	legacyLine := map[string]bool{"LineID": true, "LineNo": true, "Description": true, "Quantity": true,
+		"UnitPrice": true, "LineTotal": true, "LineTax": true}
+	for name, base := range map[string]Canonical{"full": mwFullCanonical(), "minimal": mwMinimalCanonical(), "no lines": mwNoLinesCanonical(), "bare line": mwBareLineCanonical()} {
+		t.Run(name, func(t *testing.T) {
+			with := mwDeepCopyCanonical(base)
+			mwFillNRS(reflect.ValueOf(&with).Elem(), legacyCanonical, "")
+			mwFillNRS(reflect.ValueOf(&with.Supplier).Elem(), legacyParty, "")
+			mwFillNRS(reflect.ValueOf(&with.Buyer).Elem(), legacyParty, "")
+			for i := range with.Lines {
+				mwFillNRS(reflect.ValueOf(&with.Lines[i]).Elem(), legacyLine, "")
+			}
+			if with.PaymentStatus == nil || with.Supplier.LGA == nil || with.Buyer.Email == nil {
+				t.Fatal("mwFillNRS left a field unset")
+			}
+			got, want := mwWire(t, with), mwWire(t, base)
+			if got != want {
+				t.Errorf("wire changed with NRS fields:\n%s\n%s", got, want)
+			}
+			mwWantAbsent(t, got, "NRSX-", "an NRS value reached the wire")
+			mwWantContains(t, got, base.InvoiceNumber, "the legacy wire content is still there")
+		})
 	}
 }

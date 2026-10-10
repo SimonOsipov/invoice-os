@@ -1,3 +1,4 @@
+import { ApiError } from '@invoice-os/api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { submissionUrl, submitDemoLead, type DemoLead, type HubSpotTarget } from './hubspot'
@@ -65,8 +66,22 @@ describe('submitDemoLead reporting', () => {
     )
   })
 
-  it('submitDemoLead_throwsTheValueItReported', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }))
+  it.each([400, 404, 429, 499])('submitDemoLead_reportsA4xxOnce %i', async (status) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status }))
+
+    const err = await rejection(submit)
+    expect((err as Error).message).toBe(`hubspot ${status}`)
+
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
+    expect(h.captureApiFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'http', status, method: 'POST', url: submissionUrl(TARGET) }),
+    )
+    // Only the route and the error travel; no request body or lead field.
+    expect(Object.keys(h.captureApiFailure.mock.calls[0][0] as object).sort()).toEqual(['error', 'kind', 'method', 'status', 'url'])
+  })
+
+  it.each([503, 404])('submitDemoLead_throwsTheValueItReported %i', async (status) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status }))
 
     const err = await rejection(submit)
 
@@ -75,19 +90,26 @@ describe('submitDemoLead reporting', () => {
   })
 
   it.each([
-    ['400', () => vi.fn().mockResolvedValue({ ok: false, status: 400 })],
-    ['404', () => vi.fn().mockResolvedValue({ ok: false, status: 404 })],
-    ['429', () => vi.fn().mockResolvedValue({ ok: false, status: 429 })],
-    ['499', () => vi.fn().mockResolvedValue({ ok: false, status: 499 })],
     ['200', () => vi.fn().mockResolvedValue({ ok: true, status: 200 })],
     ['AbortError', () => vi.fn().mockRejectedValue(new DOMException('a', 'AbortError'))],
-  ])('submitDemoLead_reportsNo4xxSuccessOrCancel %s', async (_label, makeFetch) => {
+  ])('submitDemoLead_reportsNoSuccessOrCancel %s', async (_label, makeFetch) => {
     vi.stubGlobal('fetch', makeFetch())
     await submit().catch(() => undefined)
     expect(h.captureApiFailure).not.toHaveBeenCalled()
 
     // Control: a 500 through the same path is reported.
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }))
+    await submit().catch(() => undefined)
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([399, 600])('submitDemoLead_reportsNoNonOkOutside4xxOr5xx %i', async (status) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status }))
+    expect(((await rejection(submit)) as Error).message).toBe(`hubspot ${status}`)
+    expect(h.captureApiFailure).not.toHaveBeenCalled()
+
+    // Control: a 404 through the same path is reported.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }))
     await submit().catch(() => undefined)
     expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
   })
@@ -105,6 +127,7 @@ describe('submitDemoLead reporting', () => {
     ]
     const rows = [
       vi.fn().mockResolvedValue({ ok: false, status: 500 }),
+      vi.fn().mockResolvedValue({ ok: false, status: 404 }),
       vi.fn().mockRejectedValue(new TypeError('Failed to fetch')),
     ]
     for (const fetchMock of rows) {
@@ -132,9 +155,26 @@ describe('submitDemoLead reporting', () => {
     // Control: the throwing reporter was reached.
     expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
 
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404 }))
+    expect(((await rejection(submit)) as Error).message).toBe('hubspot 404')
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(2)
+
     const failure = new TypeError('Failed to fetch')
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(failure))
     expect(await rejection(submit)).toBe(failure)
-    expect(h.captureApiFailure).toHaveBeenCalledTimes(2)
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([400, 429, 499])('submitDemoLead_aThrowingReporterKeepsTheApiError %i', async (status) => {
+    h.captureApiFailure.mockImplementation(() => {
+      throw new Error('reporter down')
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status }))
+
+    const err = await rejection(submit)
+
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({ kind: 'http', status, message: `hubspot ${status}` })
   })
 })

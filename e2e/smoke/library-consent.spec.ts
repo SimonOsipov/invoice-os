@@ -201,6 +201,8 @@ const routedTest = test.extend<{ routed: Page }>({
     const context = await browser.newContext()
     await routeProductionHosts(context, { landing: LANDING_URL, library: LIBRARY_URL })
     await use(await context.newPage())
+    // in-flight route.fetch calls reject once the context closes
+    await context.unrouteAll({ behavior: 'ignoreErrors' })
     await context.close()
   },
 })

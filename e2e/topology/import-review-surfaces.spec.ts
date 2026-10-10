@@ -1185,9 +1185,10 @@ test.describe('ENGI-16 import review opens the editor at the line', () => {
     await open.click()
     await expect(page, 'Open line 2 leaves the review for the invoice').toHaveURL(/\/invoices\/[0-9a-f-]{36}$/)
     await expect(page.getByTestId('edit-invoice')).toBeVisible()
-    const price = page.getByTestId('line-row').nth(1).locator('[data-line-field="unit_price"]')
-    await expect(price, 'line-row 2 unit price takes focus').toBeFocused()
-    await expect(price, 'line-row 2 unit price is in the viewport').toBeInViewport()
+    // line-cost-non-negative reports the bare path line_items[2], so focus falls to the row's first input.
+    const first = page.getByTestId('line-row').nth(1).locator('[data-line-field="description"]')
+    await expect(first, 'line-row 2 first input takes focus').toBeFocused()
+    await expect(first, 'line-row 2 first input is in the viewport').toBeInViewport()
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

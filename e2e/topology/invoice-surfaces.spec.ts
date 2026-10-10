@@ -6188,9 +6188,10 @@ test('ENGI-16 detail: Line 2 opens the editor on line 2', async ({ page }) => {
 
   await open.click()
   await expect(page.getByTestId('edit-invoice')).toBeVisible()
-  const price = page.getByTestId('line-row').nth(1).locator('[data-line-field="unit_price"]')
-  await expect(price, 'line-row 2 unit price takes focus').toBeFocused()
-  await expect(price, 'line-row 2 unit price is in the viewport').toBeInViewport()
+  // line-cost-non-negative reports the bare path line_items[2], so focus falls to the row's first input.
+  const first = page.getByTestId('line-row').nth(1).locator('[data-line-field="description"]')
+  await expect(first, 'line-row 2 first input takes focus').toBeFocused()
+  await expect(first, 'line-row 2 first input is in the viewport').toBeInViewport()
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

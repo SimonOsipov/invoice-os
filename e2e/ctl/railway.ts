@@ -3,8 +3,8 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { CtlError } from './main'
 
-export type ServiceLabel = 'gateway' | 'app' | 'landing' | 'ops-console' | 'support-console'
-export type UrlVar = 'GATEWAY_URL' | 'APP_URL' | 'LANDING_URL' | 'OPS_CONSOLE_URL' | 'SUPPORT_CONSOLE_URL'
+export type ServiceLabel = 'gateway' | 'app' | 'landing' | 'ops-console' | 'support-console' | 'library'
+export type UrlVar = 'GATEWAY_URL' | 'APP_URL' | 'LANDING_URL' | 'OPS_CONSOLE_URL' | 'SUPPORT_CONSOLE_URL' | 'LIBRARY_URL'
 
 export const URL_VAR: Record<ServiceLabel, UrlVar> = {
   gateway: 'GATEWAY_URL',
@@ -12,6 +12,7 @@ export const URL_VAR: Record<ServiceLabel, UrlVar> = {
   landing: 'LANDING_URL',
   'ops-console': 'OPS_CONSOLE_URL',
   'support-console': 'SUPPORT_CONSOLE_URL',
+  library: 'LIBRARY_URL',
 }
 
 export interface RailwayIds {
@@ -36,6 +37,7 @@ const ID_KEY: Record<ServiceLabel, string> = {
   landing: 'RAILWAY_SVC_LANDING_ID',
   'ops-console': 'RAILWAY_SVC_OPS_CONSOLE_ID',
   'support-console': 'RAILWAY_SVC_SUPPORT_CONSOLE_ID',
+  library: 'RAILWAY_SVC_LIBRARY_ID',
 }
 export const RAILWAY_ID_KEYS = ['RAILWAY_PROJECT_ID', ...Object.values(ID_KEY)]
 

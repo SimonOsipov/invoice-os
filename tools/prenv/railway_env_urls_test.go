@@ -1,10 +1,12 @@
-// railway_env_urls_test.go pins railway-env.sh discover-urls (one aliased domains read of the five
+// railway_env_urls_test.go pins railway-env.sh discover-urls (one aliased domains read of the
 // public services) and the dev-env.yml urls step that publishes its stdout.
 package main
 
 import (
 	"encoding/json"
 	"maps"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -27,6 +29,7 @@ var urlsServices = []urlsService{
 	{"landing", "RAILWAY_SVC_LANDING_ID", "landing_url", "svc-landing-urls", []string{"www.ascomply.test"}, []string{"landing-pr-7.up.railway.app"}},
 	{"ops-console", "RAILWAY_SVC_OPS_CONSOLE_ID", "ops_console_url", "svc-ops-console-urls", nil, []string{"ops-console-pr-7.up.railway.app"}},
 	{"support-console", "RAILWAY_SVC_SUPPORT_CONSOLE_ID", "support_console_url", "svc-support-console-urls", nil, []string{"support-console-pr-7.up.railway.app"}},
+	{"library", "RAILWAY_SVC_LIBRARY_ID", "library_url", "svc-library-urls", nil, []string{"library-pr-7.up.railway.app"}},
 }
 
 const urlsProjectToken = "tok-project-sentinel-not-real"
@@ -62,7 +65,7 @@ func newURLsShim(t *testing.T, override map[string]string) authShim {
 	return s
 }
 
-// urlsExports sets the five service ids but not the Postgres one: discover-urls needs only the five.
+// urlsExports sets the public service ids but not the Postgres one: discover-urls needs only those.
 func urlsExports(apiToken, projectToken bool, unset ...string) string {
 	var b strings.Builder
 	if apiToken {
@@ -135,7 +138,7 @@ func requireURLsRefused(t *testing.T, stdout, stderr string, code int) {
 
 var urlsAliasField = regexp.MustCompile(`(\w+)\s*:\s*domains\(([^)]*)\)`)
 
-func TestDiscoverURLs_OneRequestForFiveDomains(t *testing.T) {
+func TestDiscoverURLs_OneRequestForSixDomains(t *testing.T) {
 	s := newURLsShim(t, nil)
 	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 	if code != 0 {
@@ -163,8 +166,8 @@ func TestDiscoverURLs_OneRequestForFiveDomains(t *testing.T) {
 		}
 	}
 	fields := urlsAliasField.FindAllStringSubmatch(c.Query, -1)
-	if len(fields) != 5 {
-		t.Fatalf("the query has %d aliased domains(...) fields, want 5:\n%s", len(fields), c.Query)
+	if len(fields) != 6 {
+		t.Fatalf("the query has %d aliased domains(...) fields, want 6:\n%s", len(fields), c.Query)
 	}
 	seenAlias, seenVar := map[string]bool{}, map[string]bool{}
 	for _, f := range fields {
@@ -179,8 +182,8 @@ func TestDiscoverURLs_OneRequestForFiveDomains(t *testing.T) {
 		}
 		seenAlias[f[1]], seenVar[m[1]] = true, true
 	}
-	if len(seenVar) != 5 {
-		t.Errorf("the 5 fields read %d distinct service variables, want 5", len(seenVar))
+	if len(seenVar) != 6 {
+		t.Errorf("the 6 fields read %d distinct service variables, want 6", len(seenVar))
 	}
 }
 
@@ -232,7 +235,7 @@ func TestDiscoverURLs_NullCustomDomainsRefuses(t *testing.T) {
 	}
 }
 
-func TestDiscoverURLs_PrintsExactlyFiveOutputLines(t *testing.T) {
+func TestDiscoverURLs_PrintsExactlySixOutputLines(t *testing.T) {
 	s := newURLsShim(t, nil)
 	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 	if code != 0 {
@@ -250,17 +253,21 @@ func TestDiscoverURLs_PrintsExactlyFiveOutputLines(t *testing.T) {
 }
 
 func TestDiscoverURLs_NoDomainFailsNamingTheService(t *testing.T) {
-	s := newURLsShim(t, map[string]string{"support-console": domainsJSON(t, nil, nil)})
-	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
-	requireOneDiscoverCall(t, s)
-	requireURLsRefused(t, stdout, stderr, code)
-	want := "No domain found for support-console (service svc-support-console-urls) in environment " + forkEnvID +
-		" — neither a custom domain nor a Railway-generated one. Every public service must have at least one."
-	if !strings.Contains(stderr, want) {
-		t.Errorf("stderr does not carry today's message %q; stderr = %q", want, stderr)
-	}
-	if strings.Contains(stderr, "docs/") {
-		t.Errorf("stderr points at a docs/ path; stderr = %q", stderr)
+	for _, svc := range urlsServices {
+		t.Run(svc.label, func(t *testing.T) {
+			s := newURLsShim(t, map[string]string{svc.label: domainsJSON(t, nil, nil)})
+			stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
+			requireOneDiscoverCall(t, s)
+			requireURLsRefused(t, stdout, stderr, code)
+			want := "No domain found for " + svc.label + " (service " + svc.id + ") in environment " + forkEnvID +
+				" — neither a custom domain nor a Railway-generated one. Every public service must have at least one."
+			if !strings.Contains(stderr, want) {
+				t.Errorf("stderr does not carry today's message %q; stderr = %q", want, stderr)
+			}
+			if strings.Contains(stderr, "docs/") {
+				t.Errorf("stderr points at a docs/ path; stderr = %q", stderr)
+			}
+		})
 	}
 }
 
@@ -292,7 +299,8 @@ func TestDiscoverURLs_GraphQLErrorEmptyStdout(t *testing.T) {
 		{"errors beside a complete data", beside(""), nil, true},
 		{"a path names the service of the alias", beside(`"s2"`), []int{2}, false},
 		{"two aliased errors name both services", beside(`"s0"`, `"s4"`), []int{0, 4}, false},
-		{"an alias past the request names the environment", beside(`"s5"`), nil, true},
+		{"the last alias names the library", beside(`"s5"`), []int{5}, false},
+		{"an alias past the request names the environment", beside(`"s6"`), nil, true},
 		{"a path that is no alias names the environment", beside(`"domains"`), nil, true},
 		{"an in-range and an out-of-range alias name only the real service", beside(`"s1"`, `"s9"`), []int{1}, false},
 	} {
@@ -415,7 +423,7 @@ func wrapData(d map[string]string, backwards bool) string {
 	return `{"data":{` + strings.Join(parts, ",") + `}}`
 }
 
-// goodAliases is the five aliases s0..s4 in urlsServices order; override[i] replaces alias i.
+// goodAliases is the six aliases s0..s5 in urlsServices order; override[i] replaces alias i.
 func goodAliases(t *testing.T, override map[int]string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -432,7 +440,7 @@ func goodAliases(t *testing.T, override map[int]string) map[string]string {
 func TestDiscoverURLs_VerbatimResponses(t *testing.T) {
 	gen := func(i int) []string { return urlsServices[i].generated }
 	extra := goodAliases(t, nil)
-	extra["s5"] = domainsJSON(t, []string{"stray.ascomply.test"}, nil)
+	extra["s6"] = domainsJSON(t, []string{"stray.ascomply.test"}, nil)
 	extra["s99"] = `null`
 	extra["gateway"] = domainsJSON(t, []string{"named-alias.ascomply.test"}, nil)
 	cases := []struct {
@@ -506,7 +514,7 @@ func TestDiscoverURLs_UnusableResponseRefuses(t *testing.T) {
 		{"data a string", func(*testing.T) string { return `{"data":"oops"}` }},
 		{"a top-level array", func(*testing.T) string { return `[]` }},
 		{"the first alias is missing", func(t *testing.T) string { return wrapData(without(t, "s0"), false) }},
-		{"the last alias is missing", func(t *testing.T) string { return wrapData(without(t, "s4"), false) }},
+		{"the last alias is missing", func(t *testing.T) string { return wrapData(without(t, "s5"), false) }},
 		{"an alias is an empty object", func(t *testing.T) string {
 			d := good(t)
 			d["s3"] = `{}`
@@ -727,7 +735,7 @@ func jobOutputs(j workflowJob) map[string]string {
 	return out
 }
 
-func TestDevEnvYmlURLsStepWritesTheFiveOutputs(t *testing.T) {
+func TestDevEnvYmlURLsStepWritesTheSixOutputs(t *testing.T) {
 	yml := readWorkflow(t, "dev-env.yml")
 	var prep *workflowJob
 	for _, j := range workflowJobsOf(yml) {
@@ -804,6 +812,118 @@ func TestDevEnvYmlURLsStepWritesTheFiveOutputs(t *testing.T) {
 		}
 		if n := strings.Count(yml, "needs.prepare-env.outputs."+svc.key); n < 1 {
 			t.Errorf("control: no later job reads needs.prepare-env.outputs.%s", svc.key)
+		}
+	}
+
+	top := map[string]string{}
+	for _, line := range stripHashComments(strings.Split(yml, "\n")) {
+		if strings.HasPrefix(line, "jobs:") {
+			break
+		}
+		if strings.HasPrefix(line, "  RAILWAY_SVC_") {
+			k, v, _ := strings.Cut(strings.TrimSpace(line), ":")
+			top[k] = strings.TrimSpace(v)
+		}
+	}
+	if top["RAILWAY_SVC_SUPPORT_CONSOLE_ID"] == "" {
+		t.Fatalf("control: the top-level env holds no RAILWAY_SVC_SUPPORT_CONSOLE_ID: %v", top)
+	}
+	for _, svc := range urlsServices {
+		if top[svc.idVar] == "" {
+			t.Errorf("the top-level env has no %s", svc.idVar)
+		}
+	}
+	for _, name := range []string{"spa-build-gate", "e2e"} {
+		var env map[string]string
+		for _, j := range workflowJobsOf(yml) {
+			if j.name == name {
+				env = jobEnv(j)
+			}
+		}
+		if env["SUPPORT_CONSOLE_URL"] == "" {
+			t.Fatalf("control: job %s env holds no SUPPORT_CONSOLE_URL: %v", name, env)
+		}
+		if want := "${{ needs.prepare-env.outputs.library_url }}"; env["LIBRARY_URL"] != want {
+			t.Errorf("job %s env LIBRARY_URL = %q, want %q", name, env["LIBRARY_URL"], want)
+		}
+	}
+}
+
+// jobEnv returns a job's own env: map (not a step's).
+func jobEnv(j workflowJob) map[string]string {
+	out := map[string]string{}
+	in := false
+	for _, line := range j.lines {
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case trimmed == "":
+		case indent == 4 && trimmed == "env:":
+			in = true
+		case indent <= 4:
+			in = false
+		case in && indent == 6:
+			if k, v, ok := strings.Cut(trimmed, ":"); ok {
+				out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+			}
+		}
+	}
+	return out
+}
+
+// The topology job takes the library URL and the baked-URL oracles, and its guard step refuses each empty.
+func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
+	var job *workflowJob
+	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
+		if j.name == "topology" {
+			job = &j
+		}
+	}
+	if job == nil {
+		t.Fatal("control: no topology job in dev-env.yml")
+	}
+	env := jobEnv(*job)
+	for k, want := range map[string]string{
+		"LIBRARY_URL":       "${{ needs.e2e.outputs.library_url }}",
+		"BAKED_APP_URL":     "${{ needs.prepare-env.outputs.app_url }}",
+		"BAKED_LANDING_URL": "${{ needs.prepare-env.outputs.landing_url }}",
+		"BAKED_LIBRARY_URL": "${{ needs.prepare-env.outputs.library_url }}",
+		"APP_URL":           "${{ needs.e2e.outputs.app_url }}", // control
+	} {
+		if env[k] != want {
+			t.Errorf("topology env %s = %q, want %q", k, env[k], want)
+		}
+	}
+	var run string
+	for _, s := range job.steps() {
+		if s.keys["id"] == "targets" {
+			run = s.keys["run"]
+		}
+	}
+	if run == "" {
+		t.Fatal("control: topology has no step with id targets")
+	}
+	vars := []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BAKED_APP_URL", "BAKED_LANDING_URL", "BAKED_LIBRARY_URL"}
+	guard := func(empty string) (string, error) {
+		cmd := exec.Command("bash", "-c", run)
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+		for _, v := range vars {
+			if v != empty {
+				cmd.Env = append(cmd.Env, v+"=https://x.example")
+			} else {
+				cmd.Env = append(cmd.Env, v+"=")
+			}
+		}
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := guard(""); err != nil {
+		t.Errorf("all nine set: guard failed: %v %q", err, out)
+	}
+	for _, v := range vars {
+		out, err := guard(v)
+		if err == nil || !strings.Contains(out, "::error::"+v+" is empty") {
+			t.Errorf("empty %s: err=%v output=%q, want a refusal naming it", v, err, out)
 		}
 	}
 }

@@ -101,23 +101,7 @@ func TestEveryAppViteVariableHasADockerfileArg(t *testing.T) {
 		t.Fatalf("found %d VITE_* names set on the app service, want >= 2 (vacuity guard — extraction may be broken)", matches)
 	}
 
-	dockerfilePath := filepath.Join(repoRoot(t), "frontend", "app", "Dockerfile")
-	raw, err := os.ReadFile(dockerfilePath)
-	if err != nil {
-		t.Fatalf("reading %s: %v", dockerfilePath, err)
-	}
-	dockerfile := string(raw)
-
-	for name := range names {
-		argLine := "ARG " + name
-		envLine := "ENV " + name + "=$" + name
-		if !strings.Contains(dockerfile, argLine) {
-			t.Errorf("%s is upserted onto the app service but %s declares no %q — the value cannot reach vite build", name, dockerfilePath, argLine)
-		}
-		if !strings.Contains(dockerfile, envLine) {
-			t.Errorf("%s is upserted onto the app service but %s never promotes it with %q", name, dockerfilePath, envLine)
-		}
-	}
+	assertViteArgsBeforeBuild(t, "app", names, "RUN pnpm --filter @invoice-os/app build")
 }
 
 // T5 (AC-4) — GUARD: the ci.yml go: paths filter lists scripts/ci/**, as dev-env.yml does.
@@ -141,6 +125,37 @@ func TestCIYmlGoFilterReachesScriptsCI(t *testing.T) {
 	}
 }
 
+// Exact lines before the build step; a prefix match would let VITE_APP_URL cover VITE_APP_URL_X.
+func assertViteArgsBeforeBuild(t *testing.T, service string, names map[string]bool, buildLine string) {
+	t.Helper()
+	dockerfilePath := filepath.Join(repoRoot(t), "frontend", service, "Dockerfile")
+	raw, err := os.ReadFile(dockerfilePath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", dockerfilePath, err)
+	}
+	// Dockerfile comments are whole lines starting with #.
+	var lines []string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if s := strings.TrimSpace(l); s != "" && !strings.HasPrefix(s, "#") {
+			lines = append(lines, s)
+		}
+	}
+	build := slices.Index(lines, buildLine)
+	if build < 0 {
+		t.Fatalf("control: %s has no `%s` line", dockerfilePath, buildLine)
+	}
+	for name := range names {
+		for _, want := range []string{"ARG " + name, "ENV " + name + "=$" + name} {
+			i := slices.Index(lines, want)
+			if i < 0 {
+				t.Errorf("%s is upserted onto %s but %s has no %q line", name, service, dockerfilePath, want)
+			} else if i > build {
+				t.Errorf("%s: %q comes after the %s build step", dockerfilePath, want, service)
+			}
+		}
+	}
+}
+
 // Sibling of TestEveryAppViteVariableHasADockerfileArg for the landing service.
 func TestEveryLandingViteVariableHasADockerfileArg(t *testing.T) {
 	// Bash names are case-sensitive, so the match is too.
@@ -155,34 +170,23 @@ func TestEveryLandingViteVariableHasADockerfileArg(t *testing.T) {
 		t.Fatalf("found %d distinct VITE_* upserts on the landing service (%v), want >= 4", len(names), names)
 	}
 
-	dockerfilePath := filepath.Join(repoRoot(t), "frontend", "landing", "Dockerfile")
-	raw, err := os.ReadFile(dockerfilePath)
-	if err != nil {
-		t.Fatalf("reading %s: %v", dockerfilePath, err)
-	}
-	// Dockerfile comments are whole lines starting with #.
-	var lines []string
-	for _, l := range strings.Split(string(raw), "\n") {
-		if s := strings.TrimSpace(l); s != "" && !strings.HasPrefix(s, "#") {
-			lines = append(lines, s)
+	assertViteArgsBeforeBuild(t, "landing", names, "RUN pnpm --filter @invoice-os/landing build")
+}
+
+// Sibling of TestEveryLandingViteVariableHasADockerfileArg for the library service.
+func TestEveryLibraryViteVariableHasADockerfileArg(t *testing.T) {
+	names := make(map[string]bool)
+	for _, c := range reconcileCalls(t) {
+		if c.label == "library" && strings.HasPrefix(c.name, "VITE_") {
+			names[c.name] = true
 		}
 	}
-	build := slices.Index(lines, "RUN pnpm --filter @invoice-os/landing build")
-	if build < 0 {
-		t.Fatalf("control: %s has no `RUN pnpm --filter @invoice-os/landing build` line", dockerfilePath)
+	// APP and LANDING.
+	if len(names) < 2 {
+		t.Fatalf("found %d distinct VITE_* upserts on the library service (%v), want >= 2", len(names), names)
 	}
 
-	// Exact lines before the build step; a prefix match would let VITE_APP_URL cover VITE_APP_URL_X.
-	for name := range names {
-		for _, want := range []string{"ARG " + name, "ENV " + name + "=$" + name} {
-			i := slices.Index(lines, want)
-			if i < 0 {
-				t.Errorf("%s is upserted onto landing but %s has no %q line", name, dockerfilePath, want)
-			} else if i > build {
-				t.Errorf("%s: %q comes after the landing build step", dockerfilePath, want)
-			}
-		}
-	}
+	assertViteArgsBeforeBuild(t, "library", names, "RUN pnpm --filter @invoice-os/library build")
 }
 
 func TestLandingDependsOnAPIClient(t *testing.T) {

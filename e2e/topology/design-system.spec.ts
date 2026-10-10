@@ -314,6 +314,9 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
 
     const navLinks = row.filter((e) => e.tag === 'a' && e.nav)
     expect(navLinks.length > 0, `${width}px: Primary nav links shown`).toBe(width > BURGER_MAX)
+    if (width > BURGER_MAX) {
+      expect(navLinks.filter((e) => e.text === 'Library'), `${width}px: the nav "Library" link (is landing.VITE_LIBRARY_URL set?)`).toHaveLength(1)
+    }
     if (navLinks.length > 0) {
       navLineHeight ??= Math.min(...navLinks.map((e) => e.bottom - e.top))
       for (const e of navLinks) {
@@ -325,10 +328,9 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
   expect(errors, `console errors on the header sweep:\n${errors.join('\n')}`).toEqual([])
 }
 
-// BURGER_MAX + 1 is the narrowest width that shows the five nav links.
 // Widest first (layout.ts); 1220 and 1219 straddle the entry's edge.
 test('landing header row: inside the viewport and no overlap from 2560 to 834', async ({ page }, testInfo) => {
-  await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1240, CREATE_MAX + 1, CREATE_MAX, BURGER_MAX + 1, 1080, 834])
+  await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1279, 1240, CREATE_MAX + 1, CREATE_MAX, BURGER_MAX + 1, 1080, 834])
 })
 
 test('landing header row at 390, 389 and 375: inside the content box, one line, no overlap', async ({ page }, testInfo) => {
@@ -826,6 +828,7 @@ test('landing mobile menu at 834, 390 and 375', async ({ page }, testInfo) => {
     const navLinks = await page.locator('nav[aria-label="Primary"] a').count()
     expect(navLinks, `${label}: Primary nav links`).toBeGreaterThan(0)
     await expect(menu.locator('a'), `${label}: one menu link per nav link`).toHaveCount(navLinks)
+    await expect(menu.getByRole('link', { name: 'Library' }), `${label}: one "Library" link in the menu (is landing.VITE_LIBRARY_URL set?)`).toHaveCount(1)
     await expect(menu.getByRole('button', { name: 'Platform login' }), `${label}: Platform login in the menu`).toHaveCount(1)
     const create = menu.getByRole('button', { name: CREATE_LABEL })
     await expect(create, `${label}: exactly one "${CREATE_LABEL}" in the menu (is landing.VITE_REGISTRATION_OPEN on?)`).toHaveCount(1)

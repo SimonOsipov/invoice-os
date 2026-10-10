@@ -28,7 +28,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { CONSENT_STORAGE_KEY, CONSENT_VERSION, type ConsentStore } from './consent'
+import { CONSENT_STORAGE_KEY, CONSENT_VERSION, readConsentCookie, type ConsentStore } from './consent'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -160,9 +160,10 @@ async function clickBySelector(selector: string): Promise<void> {
 }
 
 function storedRecord(): Record<string, unknown> {
-  const raw = store.getItem(CONSENT_STORAGE_KEY)
-  expect(raw, `nothing stored under ${CONSENT_STORAGE_KEY}`).not.toBeNull()
-  return JSON.parse(raw!) as Record<string, unknown>
+  const record = readConsentCookie(document)
+  expect(record, `no ${CONSENT_STORAGE_KEY} cookie`).not.toBeNull()
+  expect(store.getItem(CONSENT_STORAGE_KEY), 'the record must not stay in the store').toBeNull()
+  return record as unknown as Record<string, unknown>
 }
 
 describe('environment controls', () => {
@@ -269,6 +270,8 @@ describe('T3-10: a stored record suppresses the notice on mount', () => {
     root = createRoot(container)
     vi.resetModules()
 
+    // The first mount moved the valid record into the cookie; expire it so only v:0 remains.
+    document.cookie = `${CONSENT_STORAGE_KEY}=; Max-Age=0; Path=/; Domain=ascomply.com`
     // A record from a superseded version is not a choice: parseConsent rejects it.
     store.setItem(CONSENT_STORAGE_KEY, JSON.stringify({ analytics: true, ts: '', v: 0 }))
     await mountApp()

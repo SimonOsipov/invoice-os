@@ -6,19 +6,21 @@ paths:
   - "frontend/landing/src/hubspot*"
   - "frontend/landing/Dockerfile"
   - "e2e/smoke/landing-*.spec.ts"
+  - "frontend/library/**"
+  - "e2e/smoke/library-consent.spec.ts"
 ---
 # Landing analytics
 
-- Ship GA4 on the public landing page only. Never add GA to the app or the consoles.
+- Ship GA4 on the public landing page and the public Feature Library only. Never add GA to the app or the consoles.
 - Load the `gtag.js` tag only when `shouldLoadTag` holds: a production hostname, granted analytics consent and a baked measurement id.
-- Match the hostname exactly against `PRODUCTION_HOSTNAMES` in `hubspot.ts`. The hostname gate does not depend on the measurement id.
+- Match the landing hostname exactly against `PRODUCTION_HOSTNAMES` in `hubspot.ts`. That gate does not depend on the measurement id.
 - Keep `CONSENT_DEFAULT_ANALYTICS` false. A visitor with no stored record loads no tag.
-- Set `VITE_GA_MEASUREMENT_ID` on the production landing service only. An unset variable elsewhere keeps previews dark.
-- Declare `ARG` and `ENV` for every `VITE_*` variable in `frontend/landing/Dockerfile`. Railway drops a build arg that has no `ARG`.
-- Redeploy landing to change a `VITE_*` value. Vite bakes it at build time.
-- Never send `page_view` by hand. `gtag('config', id)` sends it, and a manual event double-counts.
+- Set `VITE_GA_MEASUREMENT_ID` on the `landing` and `library` services. A fork inherits it, so the hostname gate keeps previews dark.
+- Declare `ARG` and `ENV` for every `VITE_*` variable in `frontend/landing/Dockerfile` and `frontend/library/Dockerfile`. Railway drops a build arg that has no `ARG`.
+- Redeploy the `landing` or `library` service to change its `VITE_*` value. Vite bakes it at build time.
+- Never send `page_view` by hand on the landing. `gtag('config', id)` sends it, and a manual event double-counts.
 - Push an `arguments` object to `dataLayer`, never an array. GA4 ignores an array.
-- Send fixed literals as event parameters: `cta_location`, `form_name` and `percent_scrolled`. Never send form data.
+- Send fixed literals as event parameters: `cta_location`, `form_name`, `percent_scrolled`, `feature_id` and `group_id`. Never send form data.
 - Send every event through `send`. It returns early when the tag is not loaded or the visitor has rejected.
 - Keep the sender functions for `generate_lead` and `demo_submit_failed` module-private. Wrap only the HubSpot call in `trackedHubSpotSubmit`.
 - Report no event for a honeypot or closed-gate submission. Only a HubSpot outcome reports.
@@ -27,3 +29,12 @@ paths:
 - Apply a consent choice in `applyChoice` on every choice, not only when it injects the tag. A reject sets the revoked flag and clears the `_ga` cookies.
 - Ship no `gtag('consent', ...)` call. Google Consent Mode is out of scope.
 - Seed a granted consent record in `openLanding()` before the landing e2e navigates. A denied default makes the production-host assertion false.
+- Gate the library tag on `LIBRARY_HOSTNAMES` in `hubspot.ts`. A fork of either host sends nothing.
+- Keep the library senders in `frontend/landing/src/analytics.ts`. `frontend/library/src/analytics.ts` binds them to the library host.
+- Store the consent choice in the `asc_consent` cookie on `SHARED_COOKIE_DOMAIN` on a production host. Keep it in `localStorage` on any other host. Move an older `localStorage` record into the cookie. Keep the record with the later `ts`.
+- Leave `cookie_domain` out of the `gtag('config')` call. GA4's default then shares `_ga` on `SHARED_COOKIE_DOMAIN` across both sites. A Reject on either site expires `_ga` on every parent domain of its host.
+- Send the library `page_view` by hand through `trackLibraryPageView`, once per later path change. The first view comes from `gtag('config')`.
+- Keep GA4 history-event page views off in the web stream, or each navigation counts twice.
+- Send `demo_open` from the library with `cta_location` `library`. Send `tour_start` with no parameter.
+- Send `open_in_platform` with `feature_id` or `group_id`. Both are content ids, never visitor input.
+- Send no HubSpot form and no `generate_lead` from the library. It has no forms.

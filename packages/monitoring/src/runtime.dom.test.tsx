@@ -159,7 +159,7 @@ async function navigationFlow(sink: string[], ageSeconds?: number): Promise<void
 // Must stay the first test: the SDK's fetch handlers are module-global and an earlier app init leaves a tracing handler on them.
 describe('console tracing', () => {
   it('tracePropagation_consolesSendNoTraceHeaders', async () => {
-    for (const service of ['ops-console', 'support-console'] as const) {
+    for (const service of ['ops-console', 'support-console', 'library'] as const) {
       fetchCalls.length = 0
       boot([], service)
       expect(Sentry.getActiveSpan(), service).toBeUndefined()

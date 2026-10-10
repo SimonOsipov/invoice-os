@@ -185,6 +185,9 @@ test('support console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or I
   expect(errors, `console errors on support console:\n${errors.join('\n')}`).toEqual([])
 })
 
+// 375, 389 and 390 are phone widths: they share one viewport height so only the width varies.
+const phoneH = (width: number, other: number) => (width <= 390 ? 844 : other)
+
 type Measured = { tag: string; text: string; left: number; right: number; top: number; bottom: number; nav?: boolean }
 
 // Relationships, not pixel values.
@@ -195,9 +198,10 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
 
   // A tight row wraps a label rather than overlapping it, so the widest reading is the one-line height.
   let navLineHeight: number | undefined
+  let gapAt390: number | undefined
 
   for (const width of widths) {
-    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
+    await page.setViewportSize({ width, height: phoneH(width, 900) })
     await expect(page.locator('header').first()).toBeVisible()
     const m = await page.evaluate(async () => {
       await document.fonts.ready
@@ -217,13 +221,35 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
       }
       const all = [...document.querySelectorAll('header *')].map(measure).filter((e) => e.shown)
       const row = [...document.querySelectorAll('header a, header button')].map(measure).filter((e) => e.shown)
-      return { innerWidth: window.innerWidth, all, row }
+      const container = document.querySelector('header .container')!
+      const cr = container.getBoundingClientRect()
+      const ccs = getComputedStyle(container)
+      const content = { left: cr.left + parseFloat(ccs.paddingLeft), right: cr.right - parseFloat(ccs.paddingRight) }
+      const inside = [...container.querySelectorAll('*')].map(measure).filter((e) => e.shown)
+      const bookDemo = [...document.querySelectorAll('header button')].find((b) => b.textContent?.trim() === 'Book a demo')
+      const group = bookDemo?.parentElement
+      const actions = group
+        ? { columnGap: parseFloat(getComputedStyle(group).columnGap), kids: [...group.children].map(measure).filter((e) => e.shown) }
+        : null
+      const logo = document.querySelector('header a[aria-label="ASComply Africa"]')
+      const burger = document.querySelector('header button[aria-label="Menu"]')
+      return {
+        innerWidth: window.innerWidth,
+        all,
+        row,
+        content,
+        inside,
+        actions,
+        logo: logo ? measure(logo) : null,
+        book: bookDemo ? measure(bookDemo) : null,
+        burger: burger ? measure(burger) : null,
+      }
     })
     const strip = ({ tag, text, left, right, top, bottom, nav }: Measured & { shown?: boolean }): Measured => ({ tag, text, left, right, top, bottom, nav })
     const all = m.all.map(strip)
     const row = m.row.map(strip).sort((a, b) => a.left - b.left)
     await testInfo.attach(`header-${width}.json`, {
-      body: JSON.stringify({ width, innerWidth: m.innerWidth, all, row }, null, 2),
+      body: JSON.stringify({ width, innerWidth: m.innerWidth, all, row, content: m.content, actions: m.actions }, null, 2),
       contentType: 'application/json',
     })
 
@@ -237,6 +263,42 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
         row[i].right,
         `${width}px: "${row[i].text}" overlaps "${row[i + 1].text}"`,
       ).toBeLessThanOrEqual(row[i + 1].left + 1)
+    }
+
+    // Soft: one run reports every width, so the red run shows the 389 and 375 failures together.
+    const outside = m.inside.filter((e) => e.left < m.content.left - 1 || e.right > m.content.right + 1)
+    expect
+      .soft(
+        outside.map((e) => `<${e.tag}> "${e.text}" ${e.left.toFixed(1)}..${e.right.toFixed(1)}`),
+        `${width}px: elements outside the header container's content box ${m.content.left}..${m.content.right}`,
+      )
+      .toEqual([])
+
+    expect(m.actions, `${width}px: the Book a demo button has no parent group`).not.toBeNull()
+    const { columnGap, kids } = m.actions!
+    kids.sort((a, b) => a.left - b.left)
+    if (width >= 390) {
+      for (let i = 0; i < kids.length - 1; i++) {
+        const gap = kids[i + 1].left - kids[i].right
+        expect
+          .soft(Math.abs(gap - columnGap), `${width}px: gap ${gap} between "${kids[i].text}" and "${kids[i + 1].text}" vs row column-gap ${columnGap}`)
+          .toBeLessThanOrEqual(0.5)
+      }
+    }
+    if (m.book && m.burger) {
+      const bookToBurger = m.burger.left - m.book.right
+      if (width === 390) gapAt390 = bookToBurger
+      if (width < 390) {
+        expect(gapAt390, `${width}px: the 390 reading must run first`).toBeDefined()
+        expect.soft(bookToBurger, `${width}px: Book a demo to burger gap vs the gap at 390 (${gapAt390})`).toBeLessThan(gapAt390!)
+      }
+    }
+    if (width <= BURGER_MAX) {
+      expect(m.logo && m.book && m.burger, `${width}px: logo, Book a demo and burger shown`).toBeTruthy()
+      const mid = (e: { top: number; bottom: number }) => (e.top + e.bottom) / 2
+      for (const [name, e] of [['Book a demo', m.book!], ['burger', m.burger!]] as const) {
+        expect.soft(Math.abs(mid(e) - mid(m.logo!)), `${width}px: ${name} centre line vs the logo's`).toBeLessThanOrEqual(1)
+      }
     }
 
     const login = row.find((e) => e.tag === 'button' && e.text === 'Platform login')
@@ -272,8 +334,8 @@ test('landing header row: inside the viewport and no overlap from 2560 to 834', 
   await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1240, CREATE_MAX + 1, CREATE_MAX, BURGER_MAX + 1, 1080, 834])
 })
 
-test('landing header row at 390: inside the viewport and no overlap', async ({ page }, testInfo) => {
-  await assertHeaderRow(page, testInfo, [390])
+test('landing header row at 390, 389 and 375: inside the content box, one line, no overlap', async ({ page }, testInfo) => {
+  await assertHeaderRow(page, testInfo, [390, 389, 375])
 })
 
 // Resolved --header-h per width, from packages/design-tokens/v2/tokens/spacing.css (86; 73 at <=767px).
@@ -281,7 +343,10 @@ const FRAME_VIEWPORTS = [
   { width: 1440, height: 900, headerH: 86 },
   { width: 834, height: 1112, headerH: 86 },
   { width: 390, height: 844, headerH: 73 },
+  { width: 375, height: 844, headerH: 73 },
 ] as const
+
+const isPhone = (width: number) => width <= 390
 
 // Burger shows at <=1120px (landing.css .a-burger).
 const BURGER_MAX = 1120
@@ -324,7 +389,7 @@ async function box(loc: Locator, label: string) {
 const FRAME_ALL = 'header, header *, #top, #top *, [data-strip], [data-strip] *, footer, footer *'
 const FRAME_DESCENDANTS = 'header *, #top *, [data-strip] *, footer *'
 
-test('landing frame geometry at 1440, 834 and 390', async ({ page }, testInfo) => {
+test('landing frame geometry at 1440, 834, 390 and 375', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await openLandingFrame(page)
   const header = page.getByRole('banner')
@@ -410,10 +475,27 @@ test('landing frame geometry at 1440, 834 and 390', async ({ page }, testInfo) =
       expect(card.y, `${label}: card top vs CTA row bottom`).toBeGreaterThanOrEqual(cta.y + cta.height - 1)
     }
 
-    measured.push({ width: vp.width, tokenH, headerBox, h1Size, h1Want, shadow, overflow, column, card })
+    const eyebrow = await page.locator('#top .t-eyebrow').evaluate((el) => {
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      const r = el.getBoundingClientRect()
+      return {
+        box: { x: r.left, y: r.top, width: r.width, height: r.height },
+        lines: [...range.getClientRects()].map((l) => ({ x: l.left, y: l.top, width: l.width, height: l.height })),
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+      }
+    })
+    expect(enclosesRect(column, eyebrow.box, 1), `${label}: hero eyebrow outside its text column`).toBe(true)
+    for (const [i, line] of eyebrow.lines.entries()) {
+      expect(enclosesRect(eyebrow.box, line, 1), `${label}: eyebrow text line ${i} outside the eyebrow box`).toBe(true)
+    }
+    expect(eyebrow.scrollWidth, `${label}: eyebrow scrollWidth vs clientWidth`).toBeLessThanOrEqual(eyebrow.clientWidth)
+
+    measured.push({ width: vp.width, tokenH, headerBox, h1Size, h1Want, shadow, overflow, column, card, eyebrow })
   }
 
-  // 1440 is within tolerance of the 80px ceiling and 834/390 sit on the floor; only a width between them reads the vw term.
+  // 1440 is within tolerance of the 80px ceiling and 834/390/375 sit on the floor; only a width between them reads the vw term.
   for (const width of [1100, 1280]) {
     await settleFrame(page, { width, height: 900 })
     const h1Size = await page.locator('#top h1').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
@@ -433,8 +515,8 @@ test('landing frame and section columns share one left edge', async ({ page }, t
   await openLandingFrame(page)
   const measured: unknown[] = []
 
-  for (const width of [...WIDE_WIDTHS, 834, 390]) {
-    await settleFrame(page, { width, height: width === 390 ? 844 : 1080 })
+  for (const width of [...WIDE_WIDTHS, 834, 390, 375]) {
+    await settleFrame(page, { width, height: phoneH(width, 1080) })
     const lefts = {
       headerLogo: (await box(page.getByRole('banner').locator('.ds-logo'), `${width} header logo`)).x,
       heroEyebrow: (await box(page.locator('#top .t-eyebrow').first(), `${width} hero eyebrow`)).x,
@@ -538,7 +620,7 @@ const checkTags = (page: Page) => page.locator('#problem-check [data-check="row"
 
 const SECTION_ROOTS = ['#problem', '#solution', '#platform']
 
-test('landing sections at 1440, 834 and 390', async ({ page }, testInfo) => {
+test('landing sections at 1440, 834, 390 and 375', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await openLandingFrame(page)
   const measured: unknown[] = []
@@ -620,7 +702,7 @@ test('landing sections at 1440, 834 and 390', async ({ page }, testInfo) => {
     if (vp.width !== 834) expect(read.panelPaddingLeft, `${label}: tabpanel padding-left`).toBe(wide ? '48px' : '24px')
 
     let tabs: unknown = null
-    if (vp.width === 390) {
+    if (isPhone(vp.width)) {
       tabs = await page.evaluate(() => {
         const list = document.querySelector('#platform [role=tablist]')!
         return {
@@ -673,14 +755,14 @@ test('landing sections at 1440, 834 and 390', async ({ page }, testInfo) => {
       measuredRing = ring
     }
 
-    measured.push({ width: vp.width, overflow, tablist, columns, cells: cells.length, grid, problemColumn, problemCard, panelColumn, panelCard, caps, h2s, want, read, tabs, ring: vp.width === 390 ? measuredRing : null })
+    measured.push({ width: vp.width, overflow, tablist, columns, cells: cells.length, grid, problemColumn, problemCard, panelColumn, panelCard, caps, h2s, want, read, tabs, ring: isPhone(vp.width) ? measuredRing : null })
   }
 
   await attachJson(testInfo, 'sections.json', measured)
   expect(errors, `console errors on the sections sweep:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('landing problem check plays after scrolling into view at 1440, 834 and 390', async ({ page }, testInfo) => {
+test('landing problem check plays after scrolling into view at 1440, 834, 390 and 375', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   const measured: unknown[] = []
 
@@ -718,7 +800,7 @@ test('landing problem check plays after scrolling into view at 1440, 834 and 390
   expect(errors, `console errors on the problem check:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('landing mobile menu at 834 and 390', async ({ page }, testInfo) => {
+test('landing mobile menu at 834, 390 and 375', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await openLandingFrame(page)
   const header = page.getByRole('banner')
@@ -906,14 +988,18 @@ test('landing hero and problem check under reduced motion', async ({ page }, tes
   await page.waitForTimeout(600)
   await expectEnd('after Run check again')
 
-  await settleFrame(page, { width: 390, height: 844 })
-  await problem.evaluate((el) => el.scrollIntoView({ block: 'center' }))
-  const narrow = await walkOverflow(page, '#problem, #problem *', ['#problem'])
-  expectNoOverflow(narrow, 'reduced motion, 390px')
-  const card390 = await box(problem, '390 check card')
-  const footer390 = await box(checkFooter(page), '390 footer text')
-  expect(enclosesRect(card390, footer390, 1), '390px: footer text outside the card').toBe(true)
-  await attachJson(testInfo, 'reduced-motion-check.json', { narrow, card390, footer390 })
+  const narrowReads: Record<string, unknown> = {}
+  for (const width of [390, 375]) {
+    await settleFrame(page, { width, height: phoneH(width, 900) })
+    await problem.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+    const narrow = await walkOverflow(page, '#problem, #problem *', ['#problem'])
+    expectNoOverflow(narrow, `reduced motion, ${width}px`)
+    const card = await box(problem, `${width} check card`)
+    const footer = await box(checkFooter(page), `${width} footer text`)
+    expect(enclosesRect(card, footer, 1), `${width}px: footer text outside the card`).toBe(true)
+    narrowReads[width] = { narrow, card, footer }
+  }
+  await attachJson(testInfo, 'reduced-motion-check.json', narrowReads)
 
   // Control: without the preference the same elements animate, so the reads above come from the media rule.
   await page.emulateMedia({ reducedMotion: 'no-preference' })
@@ -964,10 +1050,10 @@ test('landing coverage and intelligence geometry', async ({ page }, testInfo) =>
   await expect(page.locator('html'), 'reduced motion drops smooth scrolling').toHaveCSS('scroll-behavior', 'auto')
   const measured: unknown[] = []
 
-  for (const width of [...WIDE_WIDTHS, 901, 900, 834, 390]) {
+  for (const width of [...WIDE_WIDTHS, 901, 900, 834, 390, 375]) {
     const label = `${width}px`
     const wide = width > 900
-    await settleFrame(page, { width, height: width === 390 ? 844 : 900 })
+    await settleFrame(page, { width, height: phoneH(width, 900) })
     await page.locator('#coverage').evaluate((el) => el.scrollIntoView({ block: 'start' }))
 
     // (a) bands: the tone classes resolve the tokens the section files name.
@@ -1050,9 +1136,9 @@ test('landing coverage and intelligence geometry', async ({ page }, testInfo) =>
     const steps = await page
       .locator('[data-intel-steps]')
       .evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, overflowX: getComputedStyle(el).overflowX }))
-    if (width === 390) {
-      expect(steps.scrollWidth, '390px: control, the step row overflows').toBeGreaterThan(steps.clientWidth)
-      expect(['auto', 'scroll'], '390px: control, the step row scrolls inside itself').toContain(steps.overflowX)
+    if (width <= 390) {
+      expect(steps.scrollWidth, `${label}: control, the step row overflows`).toBeGreaterThan(steps.clientWidth)
+      expect(['auto', 'scroll'], `${label}: control, the step row scrolls inside itself`).toContain(steps.overflowX)
     }
 
     // (f) one-line titles and labels at 1440: breaks if a title or label loses its fit.
@@ -1184,8 +1270,8 @@ test('landing coverage markers by keyboard and pointer', async ({ page }, testIn
 })
 
 // Bands, Solutions, Integrations, API, FAQ and closing panel.
-const GE_WIDTHS = [...WIDE_WIDTHS, 1001, 1000, 901, 900, 834, 641, 640, 390]
-const geFrame = (width: number): Frame => ({ width, height: width === 390 ? 844 : 900 })
+const GE_WIDTHS = [...WIDE_WIDTHS, 1001, 1000, 901, 900, 834, 641, 640, 390, 375]
+const geFrame = (width: number): Frame => ({ width, height: phoneH(width, 900) })
 
 // Band tokens from the hero down (AC 12), then the footer.
 const BAND_TOKENS = [
@@ -1209,7 +1295,7 @@ test('landing v2 bands, top to bottom, and no horizontal overflow', async ({ pag
   const errors = collectErrors(page)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await openLandingFrame(page)
-  const bandWidths = [1440, 834, 390]
+  const bandWidths = [1440, 834, 390, 375]
   const measured: unknown[] = []
 
   for (const width of GE_WIDTHS) {
@@ -1349,7 +1435,7 @@ test('landing solutions panel height and tabs', async ({ page }, testInfo) => {
     }
     expect(tabsRead.buttons[0].box.x, `${label}: first button left inside the scroller`).toBeGreaterThanOrEqual(tabsRead.scroller.x + 4)
 
-    if (width === 390) {
+    if (width <= 390) {
       const sizes = await scroller.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
       expect(sizes.scrollWidth, `${label}: the tab scroller scrolls`).toBeGreaterThan(sizes.clientWidth)
       await scroller.evaluate((el) => (el.scrollLeft = el.scrollWidth))
@@ -1415,7 +1501,7 @@ test('landing faq sticky and closing panel', async ({ page }, testInfo) => {
     const wide = width > 900
     await settleFrame(page, geFrame(width))
 
-    if ([1440, 834, 390].includes(width)) {
+    if ([1440, 834, 390, 375].includes(width)) {
       const headerH = await headerHeightToken(page)
       const [split, aside] = await rectsOf(page, '#faq .split, [data-faq-aside]')
       const spare = split.height - aside.height

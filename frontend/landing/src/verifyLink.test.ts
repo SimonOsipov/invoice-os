@@ -32,6 +32,33 @@ describe('verifyForward', () => {
     expect(verifyForward(loc('?confirm=1', '#token=abc_-1'), APP).strip).toBe('/')
   })
 
+  it('verifyForward_inviteConfirmGoesToTheAppWithTheToken', async () => {
+    const { verifyForward } = await load('/')
+    const r = verifyForward(loc('?confirm=invite', '#token=abc_-1'), APP)
+    expect(r).toEqual({ strip: '/', target: 'https://app.t?auth=verify-invite#token=abc_-1', failed: false })
+  })
+
+  it('verifyForward_plainConfirmIsUnchanged', async () => {
+    const { verifyForward } = await load('/')
+    expect(verifyForward(loc('?confirm=1', '#token=T'), APP).target).toBe('https://app.t?auth=verify#token=T')
+  })
+
+  it('verifyForward_otherConfirmValuesAreFailed', async () => {
+    const { verifyForward } = await load('/')
+    for (const s of ['?confirm=2', '?confirm=Invite', '?confirm=', '?confirm=invite&confirm=1', '?confirm=invite&confirm=invite']) {
+      const r = verifyForward(loc(s, '#token=abc'), APP)
+      expect(r, s).toEqual({ strip: '/?verify=failed', target: null, failed: true })
+    }
+  })
+
+  it('verifyForward_inviteWithBadTokenOrNoAppIsFailed', async () => {
+    const { verifyForward } = await load('/')
+    for (const h of ['#token=a b', `#token=${'a'.repeat(257)}`, '#token=abc&token=def']) {
+      expect(verifyForward(loc('?confirm=invite', h), APP), h).toEqual({ strip: '/?verify=failed', target: null, failed: true })
+    }
+    expect(verifyForward(loc('?confirm=invite', '#token=abc'), null)).toEqual({ strip: '/?verify=failed', target: null, failed: true })
+  })
+
   it('verifyForward_handoffGoesToTheApp', async () => {
     const { verifyForward } = await load('/')
     expect(verifyForward(loc(`?verified=1&handoff=${CODE}`), APP)).toEqual({ strip: '/?verified=1', target: `https://app.t?handoff=${CODE}`, failed: false })

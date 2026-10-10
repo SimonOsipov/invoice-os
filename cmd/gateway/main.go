@@ -218,7 +218,7 @@ func main() {
 	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("OPTIONS /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("POST /auth/reset-password", resetPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, app.Logger))
-	app.Mux.Handle("POST /auth/invitation/password", invitationPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, sink, app.Logger))
+	app.Mux.Handle("POST /auth/invitation/password", h.InvitationPassword)
 
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
 	platform.MockIssuer = "absent"
@@ -373,24 +373,15 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
 }
 
-// invitationPasswordHandler builds the invitee set-password handler; a nil authURL or siteURL makes it answer 503.
-func invitationPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, sink gateway.ContactSink, log *slog.Logger) http.Handler {
-	client := &http.Client{
-		Timeout:       10 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	return gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, signIn, sink, log)
-}
-
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
 type handoff struct {
-	SignIn, Exchange, Refresh, SignOut, Verify http.Handler
-	SignInThrottle                             *gateway.SignInThrottle
+	SignIn, Exchange, Refresh, SignOut, Verify, InvitationPassword http.Handler
+	SignInThrottle                                                 *gateway.SignInThrottle
 }
 
 // handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
 // Sign-out evicts from sessions, the API's own checker.
-// Sign-in, verify and exchange share one code store: a code minted by either is redeemable only through exchange.
+// Sign-in, verify, the invitee set-password handler and exchange share one code store: a code minted by any minter is redeemable only through exchange.
 // A nil siteURL makes Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
 func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
@@ -406,6 +397,8 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log),
 		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink, store),
+
+		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, store),
 
 		SignInThrottle: throttle,
 	}

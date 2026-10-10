@@ -969,6 +969,67 @@ describe('precedence (AC-9..AC-13, D9, D18)', () => {
   })
 })
 
+const storedStateKey = () => (JSON.parse(sessionStorage.getItem(STATE_KEY) ?? 'null') as { s: string } | null)?.s
+
+describe('a state older than its TTL (LOGFIX-11-03, D22)', () => {
+  const OLD = Date.now() - 11 * 60 * 1000
+  const S_OLD = 'O'.repeat(43)
+  const seedOld = (withMarker: boolean) => {
+    sessionStorage.setItem(STATE_KEY, JSON.stringify({ v: 1, s: S_OLD, at: OLD }))
+    if (withMarker) sessionStorage.setItem('invoice-os.pendingVerify', JSON.stringify({ v: 1, at: OLD, s: S_OLD }))
+  }
+  const bootCode = async () => {
+    configure()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await settle()
+    return hrefWrites
+  }
+
+  it('a code for a bounce state older than the TTL still redeems while the pending marker is held', async () => {
+    seedOld(true)
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toEqual([{ code: CODE, state: S_OLD }])
+    expect(hrefWrites.filter((h) => h.includes('signin=failed'))).toEqual([])
+  })
+
+  it('an old state with no marker is refused', async () => {
+    seedOld(false)
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(hrefWrites.some((h) => h.startsWith(`${LANDING}/?state=`) && h.endsWith('&signin=failed'))).toBe(true)
+  })
+
+  it('an old state whose marker is bound to a different state is refused', async () => {
+    seedOld(true)
+    sessionStorage.setItem('invoice-os.pendingVerify', JSON.stringify({ v: 1, at: OLD, s: 'P'.repeat(43) }))
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(hrefWrites.some((h) => h.startsWith(`${LANDING}/?state=`) && h.endsWith('&signin=failed'))).toBe(true)
+  })
+
+  it('a redeem consumes the marker and the state, so a second code in the same tab fails', async () => {
+    seedOld(true)
+    await bootCode()
+    expect(exchangeBodies).toHaveLength(1)
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+    expect(storedState()).toBeNull()
+    cleanup()
+    localStorage.clear()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toHaveLength(1)
+    expect(hrefWrites.some((h) => h.endsWith('&signin=failed'))).toBe(true)
+  })
+
+  it('a handoff code in a tab with no stored state takes the failure arm and posts no exchange', async () => {
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(hrefWrites.some((h) => h.startsWith(`${LANDING}/?state=`) && h.endsWith('&signin=failed'))).toBe(true)
+  })
+})
+
 describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
   const A_ME: Me = { ...OLD_ME, user: { ...OLD_ME.user, email: 'a@corp.example' } }
   const A_TOKEN = jwt(A_ME.user.id, nowSec() + 3600)
@@ -1011,6 +1072,43 @@ describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
     expect(exchangeBodies).toEqual([{ code: CODE, state: S }])
     expect(toast()).toBeNull()
     expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+  })
+
+  it('an invitee code over a live session keeps A, posts nothing and shows the confirmed notice', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    window.history.replaceState(null, '', '/?auth=verify-invite#token=tok_1')
+    interceptHref()
+    await bootApp()
+    await settle()
+    cleanup()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(storedRecord()?.token).toBe(A_TOKEN)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
+  it('an invitee code with no session signs in as B', async () => {
+    configure()
+    window.history.replaceState(null, '', '/?auth=verify-invite#token=tok_1')
+    interceptHref()
+    await bootApp()
+    await settle()
+    const S = storedStateKey()
+    cleanup()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    await settle()
+    expect(exchangeBodies).toEqual([{ code: CODE, state: S }])
+    expect(toast()).toBeNull()
   })
 
   it('a plain handoff over a live session shows no notice', async () => {

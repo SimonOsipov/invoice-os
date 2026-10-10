@@ -38,14 +38,22 @@ var resetCSP = func() string {
 }()
 
 func renderResetPage(token, alert string) string {
-	return renderPasswordPage(resetPageHTML, token, alert)
+	return renderPasswordPage(resetPageHTML, token, "", alert)
 }
 
-func renderPasswordPage(page, token, alert string) string {
+func renderPasswordPage(page, token, state, alert string) string {
 	if alert != "" {
 		alert = `<p class="alert" role="alert">` + html.EscapeString(alert) + `</p>`
 	}
-	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.Alert}}", alert, "{{.Script}}", resetScript).Replace(page)
+	return strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.State}}", html.EscapeString(state), "{{.Alert}}", alert, "{{.Script}}", resetScript).Replace(page)
+}
+
+// formState is the posted state when exactly one state field has the shape of one, else "".
+func formState(r *http.Request) string {
+	if v := r.PostForm["state"]; len(v) == 1 && stateShape.MatchString(v[0]) {
+		return v[0]
+	}
+	return ""
 }
 
 func setResetPageHeaders(h http.Header) {
@@ -112,6 +120,8 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 type passwordLinkFlow struct {
 	verifyType, label, page, done, failed string
 	onConfirmed                           func(ctx context.Context, user gotrueUser)
+	// handOff returns a hand-off code, or "" to fall back to done with no code.
+	handOff func(r *http.Request, user gotrueUser, password, state string) string
 }
 
 // passwordLinkHandler verifies the link, sets the password with that session, ends every session and clears the sign-in failures.
@@ -139,7 +149,7 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 		}
 		if len(password) < resetPasswordMin || len(password) > resetPasswordMax {
 			setResetPageHeaders(w.Header())
-			writeResetPage(w, r.Method, http.StatusBadRequest, renderPasswordPage(flow.page, token, resetPasswordHint))
+			writeResetPage(w, r.Method, http.StatusBadRequest, renderPasswordPage(flow.page, token, formState(r), resetPasswordHint))
 			return
 		}
 
@@ -179,7 +189,8 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 		}
 
 		status, gone, err := postGoTrueBearer(ctx, client, logout, confirmed.AccessToken)
-		signedOut := err == nil && ((status >= 200 && status < 300) || gone)
+		loggedOut := err == nil && status >= 200 && status < 300
+		signedOut := loggedOut || (err == nil && gone)
 		if !signedOut {
 			attrs := []any{slog.Int("upstream_status", status)}
 			if err != nil {
@@ -197,6 +208,12 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 		if flow.onConfirmed != nil {
 			flow.onConfirmed(ctx, confirmed.User)
 		}
-		http.Redirect(w, r, done, http.StatusSeeOther)
+		location := done
+		if state := formState(r); flow.handOff != nil && loggedOut && state != "" {
+			if code := flow.handOff(rr, confirmed.User, password, state); code != "" {
+				location += "&handoff=" + code
+			}
+		}
+		http.Redirect(w, r, location, http.StatusSeeOther)
 	})
 }

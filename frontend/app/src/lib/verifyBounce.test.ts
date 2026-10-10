@@ -31,6 +31,12 @@ describe('readVerifyFragment', () => {
 })
 
 describe('gatewayVerifyUrl', () => {
+  it('gatewayVerifyUrl_inviteAddsTheFlagBeforeTheState', () => {
+    const state = 'S'.repeat(43)
+    expect(gatewayVerifyUrl('https://gw.test', 'a_b', state, true)).toBe(`https://gw.test/auth/verify?token=a_b&type=signup&invite=1&state=${state}`)
+    expect(gatewayVerifyUrl('https://gw.test', 'a_b', state)).not.toContain('invite')
+  })
+
   it('gatewayVerifyUrl_buildsTheConfirmPageUrl', () => {
     const state = 'S'.repeat(43)
     expect(gatewayVerifyUrl('https://gw.test', 'a_b', state)).toBe(`https://gw.test/auth/verify?token=a_b&type=signup&state=${state}`)

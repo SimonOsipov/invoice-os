@@ -149,7 +149,7 @@ func TestRegistrationClientTimeoutAndNoFollow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	for _, name := range []string{"registrationHandlers", "resetPasswordHandler", "invitationHandlers", "invitationPasswordHandler"} {
+	for _, name := range []string{"registrationHandlers", "resetPasswordHandler", "invitationHandlers", "handoffHandlers"} {
 		var fn *ast.FuncDecl
 		for _, d := range f.Decls {
 			if d, ok := d.(*ast.FuncDecl); ok && d.Name.Name == name {
@@ -599,7 +599,8 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 		t.Errorf("main answers a preflight for /auth/invitation/password: %+v", s)
 	}
 	pw := http.NewServeMux()
-	pw.Handle("POST /auth/invitation/password", invitationPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, slog.New(slog.DiscardHandler)), perIP, nil, slog.New(slog.DiscardHandler)))
+	pwLog := slog.New(slog.DiscardHandler)
+	pw.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, pwLog), pwLog, nil).InvitationPassword)
 	for _, method := range []string{http.MethodOptions, http.MethodPost} {
 		req := httptest.NewRequest(method, "/auth/invitation/password", strings.NewReader("type=signup"))
 		req.Header.Set("Origin", origin)

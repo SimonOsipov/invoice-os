@@ -1410,13 +1410,16 @@ test('deployed app: a real sign-in names the account holder on the identity card
 const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
 // internal/gateway/signin.go stateShape.
 const STATE_43 = /^[A-Za-z0-9_-]{43}$/
-const isConfirmPage = (u: URL) =>
-  u.origin === new URL(GATEWAY_URL).origin && u.pathname === '/auth/verify' && STATE_43.test(u.searchParams.get('state') ?? '')
+const isConfirmPage = (u: URL, invite = false) =>
+  u.origin === new URL(GATEWAY_URL).origin &&
+  u.pathname === '/auth/verify' &&
+  STATE_43.test(u.searchParams.get('state') ?? '') &&
+  u.searchParams.has('invite') === invite
 
 // The mailed link runs gateway -> landing -> app -> gateway. `commit` returns before the client redirects interrupt the load.
-async function openMailedLink(page: Page): Promise<URL> {
-  await page.goto(`${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`, { waitUntil: 'commit' })
-  await page.waitForURL(isConfirmPage, { timeout: 30_000 })
+async function openMailedLink(page: Page, invite = false): Promise<URL> {
+  await page.goto(`${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup${invite ? '&invite=1' : ''}`, { waitUntil: 'commit' })
+  await page.waitForURL((u) => isConfirmPage(u, invite), { timeout: 30_000 })
   return new URL(page.url())
 }
 
@@ -1479,9 +1482,9 @@ test('landing forwards a verify code to the app', async ({ page }) => {
   expect(urls.filter((u) => isHandoffNavigation(u) && new URL(u).searchParams.get('handoff') === code), 'navigations to the app with the code').not.toHaveLength(0)
 })
 
-// A confirm code over a live session: the app keeps the session, posts no exchange and shows the confirmed notice.
-// Returns the exchange POSTs and every request seen after the sign-in.
-async function confirmOverLiveSession(page: Page): Promise<{ email: string; exchanges: string[]; seen: string[] }> {
+// A confirm or invitee code over a live session: the app keeps the session, posts no exchange and shows the confirmed notice.
+// `entry` is the app's bounce entry. Returns the exchange POSTs and every request seen after the sign-in.
+async function confirmOverLiveSession(page: Page, entry: 'verify' | 'verify-invite'): Promise<{ email: string; exchanges: string[]; seen: string[] }> {
   const { email } = await ensureMember(TENANTS.a.id, 'firm')
   await signInAs(page, 'firm')
   const seen: string[] = []
@@ -1491,8 +1494,8 @@ async function confirmOverLiveSession(page: Page): Promise<{ email: string; exch
     if (r.method() === 'POST' && new URL(r.url()).pathname === '/auth/exchange') exchanges.push(r.url())
   })
   // The bounce holds the pending-confirm marker, bound to the state it mints.
-  await page.goto(`${APP_URL}/?auth=verify#token=bogus-${crypto.randomUUID()}`, { waitUntil: 'commit' })
-  await page.waitForURL(isConfirmPage, { timeout: 30_000 })
+  await page.goto(`${APP_URL}/?auth=${entry}#token=bogus-${crypto.randomUUID()}`, { waitUntil: 'commit' })
+  await page.waitForURL((u) => isConfirmPage(u, entry === 'verify-invite'), { timeout: 30_000 })
   await page.goto(`${LANDING_URL}/?verified=1&handoff=${'A'.repeat(43)}`, { waitUntil: 'commit' })
   await page.waitForURL((u) => u.href.startsWith(APP_URL), { timeout: 30_000 })
   return { email, exchanges, seen }
@@ -1500,7 +1503,20 @@ async function confirmOverLiveSession(page: Page): Promise<{ email: string; exch
 
 test('a confirm over a live session shows the confirmed notice naming the signed-in account', async ({ page }) => {
   test.setTimeout(180_000)
-  const { email, exchanges, seen } = await confirmOverLiveSession(page)
+  const { email, exchanges, seen } = await confirmOverLiveSession(page, 'verify')
+  const toast = page.getByTestId('verify-confirmed-toast')
+  await expect(toast).toBeVisible({ timeout: 30_000 })
+  // Read before the toast's 5.2 s auto-dismiss (AuditExportToast EXPORT_TOAST_MS).
+  await expect(toast).toContainText(`signed in as ${email}`)
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+  expect(seen.some(isHandoffNavigation), 'the listener saw the code reach the app').toBe(true)
+  expect(exchanges, 'POST /auth/exchange requests over the live session').toEqual([])
+})
+
+test('an invitee code over a live session shows the confirmed notice naming the signed-in account', async ({ page }) => {
+  test.setTimeout(180_000)
+  const { email, exchanges, seen } = await confirmOverLiveSession(page, 'verify-invite')
   const toast = page.getByTestId('verify-confirmed-toast')
   await expect(toast).toBeVisible({ timeout: 30_000 })
   // Read before the toast's 5.2 s auto-dismiss (AuditExportToast EXPORT_TOAST_MS).
@@ -1518,7 +1534,7 @@ test('the confirmed notice sits clear of the sidebar at each wide width', async 
   for (const width of WIDE_WIDTHS) {
     await page.setViewportSize({ width, height })
     await page.goto(`${APP_URL}/?auth=verify#token=bogus-${crypto.randomUUID()}`, { waitUntil: 'commit' })
-    await page.waitForURL(isConfirmPage, { timeout: 30_000 })
+    await page.waitForURL((u) => isConfirmPage(u), { timeout: 30_000 })
     await page.goto(`${LANDING_URL}/?verified=1&handoff=${'A'.repeat(43)}`, { waitUntil: 'commit' })
     const toast = page.getByTestId('verify-confirmed-toast')
     await expect(toast).toBeVisible({ timeout: 30_000 })
@@ -1536,14 +1552,19 @@ test('the confirmed notice sits clear of the sidebar at each wide width', async 
 test("the invitee's set-password link opens one bounded form, and a bogus token's double-submit lands on the failed notice", async ({ page }) => {
   const errors = collectErrors(page)
   const posts = recordPosts(page, '/auth/invitation/password')
-  const url = `${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup&invite=1`
   const password = page.locator('input[name="password"]')
   const button = page.getByRole('button')
+  // One bounce mints the state; the loop reloads the stated URL, which renders the page with no second bounce.
+  const pageUrl = await openMailedLink(page, true)
+  const state = pageUrl.searchParams.get('state')
+  expect(state, 'the set-password page state').toMatch(STATE_43)
+  expect(pageUrl.searchParams.get('invite'), 'the invite flag').toBe('1')
+  await expect(page.locator('input[name="state"]'), 'the form holds the minted state').toHaveValue(state ?? '')
 
   for (const width of [...WIDE_WIDTHS, 375]) {
     const height = 1080
     await page.setViewportSize({ width, height })
-    await page.goto(url)
+    await page.goto(pageUrl.href)
     await expect(page.locator('form'), `one form at ${width}px`).toHaveCount(1)
     await expect(password, `one password input at ${width}px`).toHaveCount(1)
     await expect(button, `one button at ${width}px`).toHaveCount(1)
@@ -1558,6 +1579,7 @@ test("the invitee's set-password link opens one bounded form, and a bogus token'
   const beforeSubmit = [...errors]
   expect(beforeSubmit, `console errors on the set-password page:\n${beforeSubmit.join('\n')}`).toEqual([])
 
+  await page.goto(pageUrl.href)
   await password.fill(crypto.randomUUID().slice(0, 16))
   await Promise.all([page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }), button.dblclick()])
   await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()

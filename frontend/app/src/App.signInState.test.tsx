@@ -560,3 +560,92 @@ describe('?auth=verify opens the gateway confirm page (LOGFIX-04-05)', () => {
     expect(hrefWrites).toEqual([`${GATEWAY}/auth/verify?token=${T}&type=signup&state=${s}`])
   })
 })
+
+describe('?auth=verify-invite opens the gateway set-password page (LOGFIX-11-03)', () => {
+  const GATEWAY = 'https://gw.test'
+  const T = 'tok_123-abc'
+  const configure = () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  }
+  const boot = (url: string, strict = false) => {
+    window.history.replaceState(null, '', url)
+    const { hrefWrites } = interceptHref()
+    render(strict ? <StrictMode><App /></StrictMode> : <App />)
+    return hrefWrites
+  }
+  const inviteUrl = (s: string | null) => `${GATEWAY}/auth/verify?token=${T}&type=signup&invite=1&state=${s}`
+
+  it('auth=verify-invite in a fresh tab mints a state and opens the set-password page', () => {
+    configure()
+    const hrefWrites = boot(`/?auth=verify-invite#token=${T}`)
+    const s = storedState()
+    expect(s).toEqual(expect.stringMatching(STATE_RE))
+    expect(hrefWrites).toEqual([inviteUrl(s)])
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).not.toBeNull()
+  })
+
+  it('the invite token is stripped and never logged or stored', () => {
+    configure()
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m))
+    boot(`/?auth=verify-invite#token=${T}`)
+    expect(window.location.hash).toBe('')
+    expect(window.location.search).toBe('')
+    expect(spies.flatMap((sp) => sp.mock.calls).filter((c) => JSON.stringify(c).includes(T))).toEqual([])
+    const stored = [localStorage, sessionStorage].flatMap((st) => Object.keys(st).map((k) => st.getItem(k) ?? ''))
+    expect(stored.length).toBeGreaterThan(0)
+    expect(stored.filter((v) => v.includes(T))).toEqual([])
+  })
+
+  it('StrictMode auth=verify-invite navigates once', () => {
+    configure()
+    const hrefWrites = boot(`/?auth=verify-invite#token=${T}`, true)
+    expect(hrefWrites).toEqual([inviteUrl(storedState())])
+  })
+
+  it('auth=verify-invite bounces over a stored session', () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    captureDestination('/audit', '', Date.now())
+    const hrefWrites = boot(`/?auth=verify-invite#token=${T}`)
+    expect(hrefWrites).toEqual([inviteUrl(storedState())])
+    expect(document.body.textContent).toBe('')
+    expect(readDestination()).toEqual({ path: '/audit', query: '' })
+  })
+
+  it('?handoff= wins over ?auth=verify-invite', async () => {
+    configure()
+    const exchange = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')))
+    vi.stubGlobal('fetch', exchange)
+    ensureSignInState()
+    const hrefWrites = boot(`/?handoff=${'C'.repeat(43)}&auth=verify-invite#token=${T}`)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30))
+    })
+    expect((exchange.mock.calls as unknown[][]).map((c) => c[0])).toContain(`${GATEWAY}/auth/exchange`)
+    expect(hrefWrites.filter((h) => h.includes('/auth/verify'))).toEqual([])
+  })
+
+  it('auth=verify-invite with a bad token goes to the failed notice', () => {
+    for (const hash of ['#token=a b', '', '#token=a&token=b']) {
+      cleanup()
+      configure()
+      const hrefWrites = boot(`/?auth=verify-invite${hash}`)
+      expect(hrefWrites).toEqual(['https://landing.example/?verify=failed'])
+      expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+    }
+    cleanup()
+    vi.unstubAllEnvs()
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    expect(boot('/?auth=verify-invite')).toEqual([])
+    expect(document.body.textContent).not.toBe('')
+  })
+
+  it('App adversarial: a URL state beside auth=verify-invite is never adopted', () => {
+    configure()
+    const hrefWrites = boot(`/?auth=verify-invite&state=${X}#token=${T}`)
+    const s = storedState()
+    expect(s).not.toBe(X)
+    expect(hrefWrites).toEqual([inviteUrl(s)])
+  })
+})

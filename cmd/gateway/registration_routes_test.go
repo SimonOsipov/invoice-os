@@ -260,7 +260,7 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"OPTIONS /auth/request-password-reset": "withCORS(" + recv + ".RequestPasswordReset)",
 		"GET /auth/reset-password":             "gateway.ResetPasswordPageHandler(siteURL)",
 		"POST /auth/reset-password":            `resetPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, app.Logger)`,
-		"POST /auth/invitation/password":       `invitationPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, sink, app.Logger)`,
+		"POST /auth/invitation/password":       hand + ".InvitationPassword",
 
 		// Browser-called from the landing accept page, like register: CORS-wrapped with a preflight.
 		"POST /auth/invitation":             "withCORS(" + invPreview + ")",
@@ -416,7 +416,7 @@ func TestAccountMailRoutesRegisteredUnconditionally(t *testing.T) {
 	}
 }
 
-// The invitee set-password POST is mounted at the top level of main, in every build, over its own builder.
+// The invitee set-password POST is mounted at the top level of main, in every build, over the hand-off constructor's handler.
 func TestRegistrationRoutes_InvitationPasswordIsMounted(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {
@@ -425,9 +425,20 @@ func TestRegistrationRoutes_InvitationPasswordIsMounted(t *testing.T) {
 	if buildConstrained(src) {
 		t.Fatal("main.go carries a build constraint; its routes are not in every build")
 	}
-	sites, _ := mainRoutes(t, src)
+	sites, stmts := mainRoutes(t, src)
 	if len(sites) < 4 {
 		t.Fatalf("found %d literal-pattern routes in main, want at least 4; the scan went blind: %+v", len(sites), sites)
+	}
+	hand := ""
+	for _, s := range stmts {
+		if as, ok := s.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+			if call, ok := as.Rhs[0].(*ast.CallExpr); ok && types.ExprString(call.Fun) == "handoffHandlers" {
+				hand = types.ExprString(as.Lhs[0])
+			}
+		}
+	}
+	if hand == "" {
+		t.Fatal("main has no top-level `x := handoffHandlers(...)`; the invitee route names no receiver")
 	}
 	if s := sitesFor(sites, "POST /auth/invitation/password"); len(s) != 1 {
 		t.Errorf("POST /auth/invitation/password is registered %d times, want exactly once", len(s))
@@ -435,17 +446,16 @@ func TestRegistrationRoutes_InvitationPasswordIsMounted(t *testing.T) {
 		if !s[0].topLevel {
 			t.Error("POST /auth/invitation/password is registered under a condition; it must be a top-level statement of main")
 		}
-		if !strings.HasPrefix(s[0].handler, `invitationPasswordHandler(probed["auth"], siteURL, `) {
-			t.Errorf("POST /auth/invitation/password handler = %s, want invitationPasswordHandler(probed[\"auth\"], siteURL, ...) with no CORS wrap", s[0].handler)
+		if want := hand + ".InvitationPassword"; s[0].handler != want {
+			t.Errorf("POST /auth/invitation/password handler = %s, want %s with no CORS wrap and no second builder", s[0].handler, want)
 		}
 	}
 
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	log := slog.New(slog.DiscardHandler)
-	signIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	mux := http.NewServeMux()
-	mux.Handle("POST /auth/invitation/password", invitationPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), signIn, nil, log))
+	mux.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil).InvitationPassword)
 
 	rec := serveForm(mux, "/auth/invitation/password", "type=signup&password=new-password-1")
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verify=failed" {

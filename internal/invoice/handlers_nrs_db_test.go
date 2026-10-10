@@ -251,6 +251,25 @@ func TestNRSInvoiceHTTP_NULInTextIs400AndWritesNothing(t *testing.T) {
 		}
 	}
 
+	for _, key := range []string{"description", "hsn_code"} {
+		bad := map[string]any{}
+		for k, v := range line {
+			bad[k] = v
+		}
+		bad[key] = "a\u0000b"
+		num := "NRS-NUL-LINE-" + key
+		body := nrsHeaderBody()
+		body["entity_id"], body["invoice_number"], body["line_items"] = f.entityID, num, []any{bad}
+		code, m := h.post(t, mustJSON(t, body))
+		if code != http.StatusBadRequest || str(t, m["error"]) != wantMsg {
+			t.Errorf("POST line %s NUL = %d %s, want 400 %q", key, code, m["error"], wantMsg)
+		}
+		var n int
+		if err := f.super.QueryRow(context.Background(), `SELECT count(*) FROM invoices WHERE tenant_id = $1 AND invoice_number = $2`, f.tenantID, num).Scan(&n); err != nil || n != 0 {
+			t.Errorf("POST line %s NUL left %d invoice rows (err %v), want 0", key, n, err)
+		}
+	}
+
 	body := nrsHeaderBody()
 	body["entity_id"], body["invoice_number"], body["line_items"] = f.entityID, "NRS-NUL-OK", []any{line}
 	code, created := h.post(t, mustJSON(t, body))

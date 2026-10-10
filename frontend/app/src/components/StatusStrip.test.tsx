@@ -58,6 +58,7 @@ function h(to: InvoiceStatus, changed_at: string, over: Partial<StatusChange> = 
     actor_name: 'Ada Lovelace',
     actor_kind: 'person',
     changed_at,
+    cause: null,
     ...over,
   }
 }

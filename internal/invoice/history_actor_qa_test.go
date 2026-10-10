@@ -307,7 +307,7 @@ func TestHistory_WireShapeCarriesBothKeysNeverNull(t *testing.T) {
 		t.Fatalf("the marshalled body carried %d rows, want 3", len(rows))
 	}
 
-	wantKeys := []string{"from_status", "to_status", "actor", "actor_name", "actor_kind", "changed_at"}
+	wantKeys := []string{"from_status", "to_status", "actor", "actor_name", "actor_kind", "changed_at", "cause"}
 	for i, row := range rows {
 		if len(row) != len(wantKeys) {
 			t.Errorf("row %d carries %d keys (%v), want exactly %v", i, len(row), row, wantKeys)

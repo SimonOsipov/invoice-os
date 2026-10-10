@@ -167,6 +167,16 @@ type StatusChange struct {
 	ActorName  string    `json:"actor_name"`
 	ActorKind  string    `json:"actor_kind"`
 	ChangedAt  time.Time `json:"changed_at"`
+	// Cause is the rule-set version behind a re-check demotion; null on every other row.
+	Cause *HistoryCause `json:"cause"`
+}
+
+// HistoryCause is the rule-set version that caused a history row (D29). EffectiveFrom is
+// YYYY-MM-DD, null for an undated version.
+type HistoryCause struct {
+	RuleSetVersion   int     `json:"rule_set_version"`
+	RuleSetVersionID string  `json:"rule_set_version_id"`
+	EffectiveFrom    *string `json:"effective_from"`
 }
 
 // LineItemInput is one line of Store.Create's CreateInput.LineItems. LineNo

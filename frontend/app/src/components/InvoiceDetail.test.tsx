@@ -1492,10 +1492,10 @@ describe('InvoiceDetail state strip: mount position and the two unowned error br
   const HISTORY_ACTOR = '9a000000-0000-4000-8000-0000000000ab'
   const HISTORY_ACTOR_NAME = 'Adaeze Nwosu'
   const HEALTHY_HISTORY: StatusChange[] = [
-    { from_status: null, to_status: 'draft', changed_at: '2026-07-01T09:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person' },
-    { from_status: 'draft', to_status: 'validated', changed_at: '2026-07-01T10:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person' },
-    { from_status: 'validated', to_status: 'queued', changed_at: '2026-07-01T11:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person' },
-    { from_status: 'queued', to_status: 'accepted', changed_at: '2026-07-01T12:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person' },
+    { from_status: null, to_status: 'draft', changed_at: '2026-07-01T09:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person', cause: null },
+    { from_status: 'draft', to_status: 'validated', changed_at: '2026-07-01T10:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person', cause: null },
+    { from_status: 'validated', to_status: 'queued', changed_at: '2026-07-01T11:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person', cause: null },
+    { from_status: 'queued', to_status: 'accepted', changed_at: '2026-07-01T12:00:00Z', actor: HISTORY_ACTOR, actor_name: HISTORY_ACTOR_NAME, actor_kind: 'person', cause: null },
   ]
 
   interface StripReadout {
@@ -1640,7 +1640,7 @@ describe('InvoiceDetail state strip: mount position and the two unowned error br
 describe('InvoiceDetail state strip: actor resolution ([actor-label-shared])', () => {
   it('AC2: the strip renders a person, not a subject uuid', async () => {
     const history: StatusChange[] = [
-      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person' },
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', cause: null },
     ]
     mockDetailFetch(detailRecord(), history)
 
@@ -1659,7 +1659,7 @@ describe('InvoiceDetail state strip: actor resolution ([actor-label-shared])', (
   it('AC2: an unknown subject still renders raw, in mono', async () => {
     const unknown = '7f214c0a-9d33-4b21-8e55-0a1b2c3d4e5f'
     const history: StatusChange[] = [
-      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: unknown, actor_name: unknown, actor_kind: 'raw' },
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: unknown, actor_name: unknown, actor_kind: 'raw', cause: null },
     ]
     mockDetailFetch(detailRecord(), history)
 
@@ -1684,7 +1684,7 @@ describe('InvoiceDetail state strip: actor resolution ([actor-label-shared])', (
   it('AC-9: a row the server could not name never borrows the other tenant\'s persona', async () => {
     const honeywellAdmin = APP_PERSONAS.inhouse.subject
     const history: StatusChange[] = [
-      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: honeywellAdmin, actor_name: honeywellAdmin, actor_kind: 'raw' },
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: honeywellAdmin, actor_name: honeywellAdmin, actor_kind: 'raw', cause: null },
     ]
     mockDetailFetch(detailRecord(), history)
 
@@ -1712,7 +1712,7 @@ describe('InvoiceDetail state strip: actor resolution ([actor-label-shared])', (
   it('QA: a whitespace-only resolved name paints an empty actor cell, and still no persona', async () => {
     const honeywellAdmin = APP_PERSONAS.inhouse.subject
     const history: StatusChange[] = [
-      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: honeywellAdmin, actor_name: ' ', actor_kind: 'person' },
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: honeywellAdmin, actor_name: ' ', actor_kind: 'person', cause: null },
     ]
     mockDetailFetch(detailRecord(), history)
 
@@ -3642,8 +3642,8 @@ describe('InvoiceDetail Approve/Reject decision machines (task-547, APPR-13-05)'
   })
 
   it("AC-6: a rejection's demotion surfaces through the refetch", async () => {
-    const row1: StatusChange = { from_status: null, to_status: 'validated', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', changed_at: '2026-08-01T00:00:00Z' }
-    const row2: StatusChange = { from_status: 'validated', to_status: 'draft', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', changed_at: '2026-08-02T00:00:00Z' }
+    const row1: StatusChange = { from_status: null, to_status: 'validated', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', changed_at: '2026-08-01T00:00:00Z', cause: null }
+    const row2: StatusChange = { from_status: 'validated', to_status: 'draft', actor: APP_PERSONAS.firm.subject, actor_name: APP_PERSONAS.firm.name, actor_kind: 'person', changed_at: '2026-08-02T00:00:00Z', cause: null }
     const afterReject = detailRecord({ id: ID, status: 'draft', can_edit: true, can_reject: false })
     const { fetchMock } = mockDetailFetch(detailRecord({ id: ID, status: 'validated', can_edit: true, can_reject: true }), [row1], {
       detailSequence: [afterReject],
@@ -4030,7 +4030,7 @@ describe('InvoiceDetail no-source canvas: only a person is named ([actor-label-s
 
   it('a system genesis actor omits the "by" clause instead of claiming System typed it in', async () => {
     const canvas = await openNoSourceCanvas([
-      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: 'system', actor_name: 'System', actor_kind: 'system' },
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: 'system', actor_name: 'System', actor_kind: 'system', cause: null },
     ])
 
     expect(canvas.textContent).not.toContain('by System')
@@ -4039,7 +4039,7 @@ describe('InvoiceDetail no-source canvas: only a person is named ([actor-label-s
 
   it("a person genesis actor is named from the server's pair, never from APP_PERSONAS", async () => {
     const canvas = await openNoSourceCanvas([
-      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.inhouse.subject, actor_name: 'Adaeze Nwosu', actor_kind: 'person' },
+      { from_status: null, to_status: 'draft', changed_at: '2026-07-01T00:00:00Z', actor: APP_PERSONAS.inhouse.subject, actor_name: 'Adaeze Nwosu', actor_kind: 'person', cause: null },
     ])
 
     expect(canvas.textContent).toContain('by Adaeze Nwosu')

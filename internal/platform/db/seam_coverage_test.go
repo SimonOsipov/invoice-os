@@ -197,7 +197,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/platform/db/provision.go"},                                  // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
 	{file: "internal/validation/store.go", fn: "LoadForDates"},                   // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
 	{file: "internal/importer/backfill.go"},                                      // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
-	{file: "internal/invoice/revalidate.go"},                                     // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
+	{file: "internal/invoice/revalidate.go"},                                     // operator CLI tools/revalidate-invoices and the reconciliation re-check; same shape, same absence of a caller
 	{file: "internal/reconciliation/sweep.go"},                                   // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
 	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                    // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},    // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
@@ -710,7 +710,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/extraction/worker.go"},                       // the extraction River worker itself, same shape: the job row carries the tenant
 	{file: "internal/extraction/anchor_store.go"},                 // the learned-rule read, same shape as store.go: no request path reaches it
 	{file: "internal/importer/backfill.go"},                       // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
-	{file: "internal/invoice/revalidate.go"},                      // operator CLI only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/invoice/revalidate.go"},                      // operator CLI and the reconciliation re-check only, and internal/invoice is the largest HTTP-serving package in the tree
 	{file: "internal/tenancy/store.go", fn: "Me"},                 // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
 	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"}, // the caller has no membership yet; the seam would refuse before the closure
 	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},  // the token is the only credential and names the invite; there is no caller to gate
@@ -3341,6 +3341,7 @@ var scSweepSkipAllowlist = []scSweepSkipExemption{
 	{file: "internal/invoice/store_test.go", fn: "dbTestPools"},                                               // same guard, invoice's own pool helper
 	{file: "internal/invoice/payload_engine_test.go", fn: "rulesAppPool"},                                     // same guard, PAY-18's app-role-only pool helper
 	{file: "internal/invoice/revalidate_test.go", fn: "TestRevalidateAllTenants_CoversEveryEnumeratedTenant"}, // pre-existing: skips when DATABASE_READER_URL is unset, unrelated to the sweep
+	{file: "internal/invoice/recheck_test.go", fn: "TestStatusHistoryCause_DownDropsTheColumn"},               // env-gated: skips without DATABASE_MIGRATION_URL, the owner role the Down must run as
 	{file: "internal/approval/policy_immutability_test.go", fn: "migratorPool"},                               // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
 	{file: "internal/approval/workflow_roles_test.go", fn: "dbTestPools"},                                     // same guard, approval's own pool helper
 	{file: "internal/tenancy/tenancy_test.go", fn: "dbTestPools"},                                             // same guard, tenancy's own pool helper

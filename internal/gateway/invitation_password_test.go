@@ -137,6 +137,25 @@ func TestInvitationPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.
 			}
 		})
 	}
+	for name, tc := range map[string]struct{ posted, want string }{
+		"valid state is kept":      {vpState, vpState},
+		"malformed state is empty": {`x"><script>`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := rpValues(rpToken, "signup", "abcde")
+			v.Set("state", tc.posted)
+			rec := ipPost(t, newInviteHandler(t, newResetGoTrue(t), nil, nil), v)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rec.Code)
+			}
+			if got := vpInputValue(vpParse(t, rec.Body.String()), "state"); got != tc.want {
+				t.Errorf("re-rendered state = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(rec.Body.String(), "<script>\"") || strings.Count(rec.Body.String(), "<script") != 1 {
+				t.Errorf("a posted state reached the page unescaped: %q", rec.Body.String())
+			}
+		})
+	}
 	for name, pw := range map[string]string{"6 bytes": "abcdef", "72 bytes": strings.Repeat("a", 72)} {
 		t.Run("control "+name, func(t *testing.T) {
 			f := newResetGoTrue(t)

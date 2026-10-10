@@ -1426,3 +1426,15 @@ func TestCall_PurposeExplainIsAccepted(t *testing.T) {
 		t.Errorf("purpose = %v, want explain", got)
 	}
 }
+
+func TestCall_NearMissPurposeIsStillRefused(t *testing.T) {
+	for _, p := range []Purpose{"Explain", "explain ", "explanation", ""} {
+		c := fakeModeClientWithLogger(t, slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+		req := baseReq()
+		req.Purpose = p
+		req.Text = answerMarker(validContent)
+		if _, err := c.Call(t.Context(), req); err == nil {
+			t.Errorf("purpose %q: err = nil, want refusal", p)
+		}
+	}
+}

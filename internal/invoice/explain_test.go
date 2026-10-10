@@ -104,6 +104,21 @@ func TestExplainSchema_KeysMatchTheHarness(t *testing.T) {
 	if len(py) == 0 || !reflect.DeepEqual(py, parsed.Required) {
 		t.Errorf("harness required = %v, explainSchema required = %v", py, parsed.Required)
 	}
+
+	lit := regexp.MustCompile(`(?s)\nSCHEMA = (\{.*?\})\n\n\ndef `).FindStringSubmatch(explainHarness(t))
+	if lit == nil {
+		t.Fatal("SCHEMA literal not found in explainrun.py")
+	}
+	var pySchema, goSchema any
+	if err := json.Unmarshal([]byte(strings.NewReplacer("False", "false", "True", "true").Replace(lit[1])), &pySchema); err != nil {
+		t.Fatalf("harness SCHEMA: %v", err)
+	}
+	if err := json.Unmarshal(explainSchema, &goSchema); err != nil {
+		t.Fatalf("explainSchema: %v", err)
+	}
+	if !reflect.DeepEqual(pySchema, goSchema) {
+		t.Errorf("harness SCHEMA = %v, explainSchema = %v", pySchema, goSchema)
+	}
 }
 
 func TestExplainPromptText_CarriesTheViolationAndPayload(t *testing.T) {

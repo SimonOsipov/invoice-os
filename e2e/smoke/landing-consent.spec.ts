@@ -131,6 +131,21 @@ async function rectOf(locator: Locator, label: string, at: string): Promise<Rect
   return box!
 }
 
+const TOUCH_TARGET_PX = 44 // landing.css phone `.cn-actions button { height: 44px }`
+
+/** Accept and Reject: tall enough, inside the card, one row with Accept on the left. */
+async function expectTouchRow(card: Locator, cardRect: Rect, label: string, at: string) {
+  const accept = await rectOf(card.locator('[data-consent="accept"]'), `${label} Accept`, at)
+  const reject = await rectOf(card.locator('[data-consent="reject"]'), `${label} Reject`, at)
+  for (const [name, b] of [['Accept', accept], ['Reject', reject]] as const) {
+    expect(b.height, `${label} ${name} is ${b.height}px tall ${at}`).toBeGreaterThanOrEqual(TOUCH_TARGET_PX - BOX_SLACK_PX)
+    expect(enclosesRect(cardRect, b), `${label} ${name} leaves the card ${at}`).toBe(true)
+  }
+  expect(Math.abs(accept.y - reject.y), `${label} buttons are stacked ${at} (Accept y ${accept.y}, Reject y ${reject.y})`).toBeLessThanOrEqual(BOX_SLACK_PX)
+  expect(accept.x + accept.width, `${label} Accept is not left of Reject ${at}`).toBeLessThanOrEqual(reject.x + BOX_SLACK_PX)
+  return { accept, reject }
+}
+
 /**
  * Is Manrope actually available for layout?
  *
@@ -748,10 +763,10 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
   expectNoConsoleErrors(errors)
 })
 
-// C9 — first visit at 390x844. The standard overflow check is vacuous twice here: the
+// C9 — first visit. The standard overflow check is vacuous twice here: the
 // notice is position:fixed so it adds nothing to document.scrollWidth, and it sits inside
 // the App root's overflow-x: clip. The oracle is the card's OWN box.
-test('landing consent: the first-visit card is at most a third of the phone viewport', async ({ page }, testInfo) => {
+test('landing consent: the first-visit card is at most a third of the phone viewport, with 44px buttons in one row, at 390 and 375', async ({ page }, testInfo) => {
   await page.setViewportSize(PHONE)
   const { errors, card } = await openLanding(page)
   await expect(card.locator('.cn-setting'), 'a first visit must not render the current-setting line').toHaveCount(0)
@@ -762,28 +777,38 @@ test('landing consent: the first-visit card is at most a third of the phone view
     `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — a missing webfont reads as a layout bug`,
   ).toBe(true)
 
-  const rect = await rectOf(card, 'the cookie notice', `at ${PHONE.width}x${PHONE.height}`)
+  const records = []
+  for (const width of NARROW_WIDTHS) {
+    const at = `at ${width}x${PHONE.height}`
+    await page.setViewportSize({ width, height: PHONE.height })
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+    await settleLayout(page)
+
+    const rect = await rectOf(card, 'the cookie notice', at)
+    const { accept, reject } = await expectTouchRow(card, rect, 'first visit', at)
+    records.push({ width, card: rect, accept, reject })
+    testInfo.annotations.push({
+      type: 'measurement',
+      description: `first visit ${width}px: ${rect.height}px card against a ${MOBILE_THIRD_PX}px cap, buttons ${accept.height}px / ${reject.height}px`,
+    })
+
+    expect(rect.width, `the card measured ${rect.width}px wide ${at}, so the cap below would pass on an unrendered card`).toBeGreaterThan(MIN_PHONE_CARD_PX)
+    expect(rect.height, `the first-visit card is ${rect.height}px tall ${at} against a ${MOBILE_THIRD_PX}px cap`).toBeLessThanOrEqual(MOBILE_THIRD_PX)
+    expect(rect.x, `the card overhangs the left edge ${at} (x ${rect.x})`).toBeGreaterThanOrEqual(0)
+    expect(rect.x + rect.width, `the card overhangs the right edge ${at} (right ${rect.x + rect.width})`).toBeLessThanOrEqual(width)
+  }
   await testInfo.attach('cookie-notice-mobile-height.json', {
-    body: JSON.stringify({ state: 'first visit', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, manrope }, null, 2),
+    body: JSON.stringify({ state: 'first visit', cap: MOBILE_THIRD_PX, records, manrope }, null, 2),
     contentType: 'application/json',
   })
-  testInfo.annotations.push({
-    type: 'measurement',
-    description: `first visit: ${rect.height}px card against a ${MOBILE_THIRD_PX}px cap`,
-  })
-
-  expect(rect.width, `the card measured ${rect.width}px wide, so the cap below would pass on an unrendered card`).toBeGreaterThan(MIN_PHONE_CARD_PX)
-  expect(rect.height, `the first-visit card is ${rect.height}px tall against a ${MOBILE_THIRD_PX}px cap`).toBeLessThanOrEqual(MOBILE_THIRD_PX)
-  expect(rect.x, `the card overhangs the left edge (x ${rect.x})`).toBeGreaterThanOrEqual(0)
-  expect(rect.x + rect.width, `the card overhangs the right edge (right ${rect.x + rect.width})`).toBeLessThanOrEqual(PHONE.width)
 
   expectNoConsoleErrors(errors)
 })
 
-// C9b — the REOPENED card at 390x844. .cn-setting renders only when `current` is non-null,
+// C9b — the REOPENED card. .cn-setting renders only when `current` is non-null,
 // i.e. only on a reopen, so the taller of the two states is measured nowhere else. Core AC
 // 8 does not distinguish the two, so it applies here unchanged.
-test('landing consent: the reopened card is at most a third of the phone viewport', async ({ page }, testInfo) => {
+test('landing consent: the reopened card is at most a third of the phone viewport, with 44px buttons in one row, at 390 and 375', async ({ page }, testInfo) => {
   await page.setViewportSize(PHONE)
   await seedConsent(page, true)
   const { errors } = await openLanding(page, { expectNotice: false })
@@ -800,20 +825,34 @@ test('landing consent: the reopened card is at most a third of the phone viewpor
     `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — a missing webfont reads as a layout bug`,
   ).toBe(true)
 
-  const rect = await rectOf(card, 'the reopened cookie notice', `at ${PHONE.width}x${PHONE.height}`)
+  const records = []
+  for (const width of NARROW_WIDTHS) {
+    const at = `at ${width}x${PHONE.height}`
+    await page.setViewportSize({ width, height: PHONE.height })
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+    await settleLayout(page)
+
+    const rect = await rectOf(card, 'the reopened cookie notice', at)
+    const { accept, reject } = await expectTouchRow(card, rect, 'reopened', at)
+    const spacer = await rectOf(page.locator('.cn-spacer'), 'the reopened spacer', at)
+    records.push({ width, card: rect, accept, reject, spacer })
+    testInfo.annotations.push({
+      type: 'measurement',
+      description: `reopened ${width}px: ${rect.height}px card against a ${MOBILE_THIRD_PX}px cap, buttons ${accept.height}px / ${reject.height}px, spacer ${spacer.height}px`,
+    })
+
+    expect(rect.width, `the card measured ${rect.width}px wide ${at}, so the cap below would pass on an unrendered card`).toBeGreaterThan(MIN_PHONE_CARD_PX)
+    expect(rect.height, `the reopened card is ${rect.height}px tall ${at} against a ${MOBILE_THIRD_PX}px cap`).toBeLessThanOrEqual(MOBILE_THIRD_PX)
+    expect(rect.x, `the reopened card overhangs the left edge ${at} (x ${rect.x})`).toBeGreaterThanOrEqual(0)
+    expect(rect.x + rect.width, `the reopened card overhangs the right edge ${at} (right ${rect.x + rect.width})`).toBeLessThanOrEqual(width)
+    // Same bounds as C10: the band covers the card plus its inset, and no more than one extra inset.
+    expect(spacer.height, `the spacer is ${spacer.height}px ${at} for a ${rect.height + MOBILE_INSET_PX}px band`).toBeGreaterThanOrEqual(rect.height + MOBILE_INSET_PX)
+    expect(spacer.height, `the spacer leaves dead scroll ${at} (${spacer.height}px for a ${rect.height + MOBILE_INSET_PX}px band)`).toBeLessThanOrEqual(rect.height + 2 * MOBILE_INSET_PX)
+  }
   await testInfo.attach('cookie-notice-mobile-height-reopened.json', {
-    body: JSON.stringify({ state: 'reopened', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, manrope }, null, 2),
+    body: JSON.stringify({ state: 'reopened', cap: MOBILE_THIRD_PX, records, manrope }, null, 2),
     contentType: 'application/json',
   })
-  testInfo.annotations.push({
-    type: 'measurement',
-    description: `reopened: ${rect.height}px card against a ${MOBILE_THIRD_PX}px cap`,
-  })
-
-  expect(rect.width, `the card measured ${rect.width}px wide, so the cap below would pass on an unrendered card`).toBeGreaterThan(MIN_PHONE_CARD_PX)
-  expect(rect.height, `the reopened card is ${rect.height}px tall against a ${MOBILE_THIRD_PX}px cap`).toBeLessThanOrEqual(MOBILE_THIRD_PX)
-  expect(rect.x, `the reopened card overhangs the left edge (x ${rect.x})`).toBeGreaterThanOrEqual(0)
-  expect(rect.x + rect.width, `the reopened card overhangs the right edge (right ${rect.x + rect.width})`).toBeLessThanOrEqual(PHONE.width)
 
   expectNoConsoleErrors(errors)
 })

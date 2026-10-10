@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Locator, type Page, type Request, type Response, type TestInfo } from '@playwright/test'
-import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type Persona } from '../api/client'
+import { login, createEntity, createImportBatch, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type Persona } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, type Dropper } from './consoleGate'
@@ -1186,6 +1186,58 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
     } finally {
       await page.unroute(DETAIL_GLOB)
     }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
+test.describe('ENGI-16 import review opens the editor at the line', () => {
+  test.use({ viewport: { width: 1440, height: 900 } })
+
+  test('ENGI-16 review: Open line 2 lands on the line in the editor', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `ENGI-16 review ${Date.now()}`, tin: freshTin() })
+    const invoiceNumber = `INV-ENGI16-${Date.now()}`
+    const batchId = await createImportBatch(token, entity.id, invoiceNumber, [
+      { item: 'Widget A', qty: '1', unitPrice: '100.00' },
+      { item: 'Widget B', qty: '1', unitPrice: '-5.00' },
+    ])
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${batchId}/review` })
+    const row = page.getByTestId('review-row').filter({ hasText: invoiceNumber })
+    await expect(row).toBeVisible({ timeout: 60_000 })
+    await row.click()
+
+    const open = page.getByTestId('review-fix-open-line').filter({ hasText: 'Open line 2' })
+    await expect(open).toBeVisible()
+    const card = page.getByTestId('review-fix-card').filter({ has: open })
+
+    const entry = page.viewportSize()
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await page.setViewportSize({ width, height: 900 })
+        await settleAnimations(card, open)
+        await expect
+          .poll(async () => enclosesRect((await card.boundingBox())!, (await open.boundingBox())!, 1), {
+            message: `review-fix-open-line sits inside its review-fix-card at ${width}px`,
+          })
+          .toBe(true)
+        await assertPageDoesNotScrollSideways(page, `review at ${width}px`)
+      }
+    } finally {
+      if (entry) await page.setViewportSize(entry)
+    }
+
+    await open.click()
+    await expect(page, 'Open line 2 leaves the review for the invoice').toHaveURL(/\/invoices\/[0-9a-f-]{36}$/)
+    await expect(page.getByTestId('edit-invoice')).toBeVisible()
+    // line-cost-non-negative reports the bare path line_items[2], so focus falls to the row's first input.
+    const first = page.getByTestId('line-row').nth(1).locator('[data-line-field="description"]')
+    await expect(first, 'line-row 2 first input takes focus').toBeFocused()
+    await expect(first, 'line-row 2 first input is in the viewport').toBeInViewport()
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

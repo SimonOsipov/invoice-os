@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Component tests for Row; mirrors InvoiceDetail.test.tsx's fetch-mock + ctx-cast idiom.
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -1284,5 +1284,101 @@ describe('ReviewRow: the review prototype look (RESKIN2-04-04)', () => {
       expect(strip.style.marginTop, id).toBe('12px')
       expect(parseFloat(strip.style.marginBottom) + parseFloat(column.style.gap), `${id}: prototype margin-bottom 10`).toBe(10)
     }
+  })
+})
+
+describe('ReviewRow row-expansion: Open line N (ENGI-16-04)', () => {
+  const LINE_VIOLATION = { rule_key: 'line-cost', severity: 'error' as const, message: 'line total off', path: 'line_items[2].unit_price' }
+  const VAT_VIOLATION = { rule_key: 'vat-standard-rate', severity: 'error' as const, message: 'bad rate', path: 'vat', expected: '84375' }
+
+  function renderExpanded(detail: InvoiceDetailRecord) {
+    mockGetInvoice(detail)
+    const openImportedInvoice = vi.fn()
+    const ctx = { ...(rowCtx() as object), openImportedInvoice } as unknown as PlatformCtx
+    render(
+      <Row
+        r={listRow({ status: 'draft' })}
+        batches={[]}
+        checked={false}
+        expanded
+        onToggleExpand={() => {}}
+        onToggle={() => {}}
+        ctx={ctx}
+        base="https://gw"
+        onChanged={() => {}}
+      />,
+    )
+    return openImportedInvoice
+  }
+
+  it('reviewRow_lineCardOpensTheInvoiceAtTheLine', async () => {
+    const spy = renderExpanded(detailFixture({ status: 'draft', can_edit: true, violations: [LINE_VIOLATION] }))
+    const btn = await screen.findByTestId('review-fix-open-line')
+    expect(btn.textContent).toBe('Open line 2')
+    fireEvent.click(btn)
+    expect(spy).toHaveBeenCalledWith('inv-1', { line: 2, field: 'unit_price' })
+  })
+
+  it('reviewRow_lineCardDisabledWhenNotEditable', async () => {
+    const spy = renderExpanded(detailFixture({ status: 'draft', can_edit: false, violations: [LINE_VIOLATION] }))
+    const btn = (await screen.findByTestId('review-fix-open-line')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.style.opacity).toBe('0.45')
+    expect(btn.style.cursor).toBe('not-allowed')
+    fireEvent.click(btn)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('reviewRow_lineCardDisabledWhileUnsaved', async () => {
+    const spy = renderExpanded(detailFixture({ status: 'draft', can_edit: true, vat: '75.00', violations: [LINE_VIOLATION, VAT_VIOLATION] }))
+    const btn = (await screen.findByTestId('review-fix-open-line')) as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+    fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '999' } })
+    expect(btn.disabled).toBe(true)
+    expect(btn.title).toBe(ROW_EXPANSION_COPY.openLineUnsaved)
+    fireEvent.click(btn)
+    expect(spy).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '75.00' } })
+    expect(btn.disabled, 'reverting the edit re-enables it').toBe(false)
+  })
+
+  it('reviewRow_lineCardReenabledAfterASavedEdit', async () => {
+    let saved = false
+    const before = detailFixture({ status: 'draft', can_edit: true, vat: '75.00', violations: [LINE_VIOLATION, VAT_VIOLATION] })
+    const fetchMock = vi.fn((_url: string, init?: { method?: string }) => {
+      if (init?.method === 'PATCH') saved = true
+      const body = saved ? { ...before, vat: '999.00' } : before
+      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve(body) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const spy = vi.fn()
+    const ctx = { ...(rowCtx() as object), openImportedInvoice: spy } as unknown as PlatformCtx
+    render(<Row r={listRow({ status: 'draft' })} batches={[]} checked={false} expanded onToggleExpand={() => {}} onToggle={() => {}} ctx={ctx} base="https://gw" onChanged={() => {}} />)
+    const btn = (await screen.findByTestId('review-fix-open-line')) as HTMLButtonElement
+    fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '999' } })
+    expect(btn.disabled).toBe(true)
+    fireEvent.click(screen.getByTestId('review-fix-save'))
+    await waitFor(() => expect(saved).toBe(true))
+    await waitFor(() => expect((screen.getByTestId('review-fix-open-line') as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByTestId('review-fix-open-line'))
+    expect(spy).toHaveBeenCalledWith('inv-1', { line: 2, field: 'unit_price' })
+  })
+
+  it('reviewRow_eachLineCardOpensItsOwnLine', async () => {
+    const other = { rule_key: 'line-tax', severity: 'error' as const, message: 'tax off', path: 'line_items[5]' }
+    const spy = renderExpanded(detailFixture({ status: 'draft', can_edit: true, violations: [LINE_VIOLATION, other, VAT_VIOLATION] }))
+    const buttons = await screen.findAllByTestId('review-fix-open-line')
+    expect(buttons.map((b) => b.textContent)).toEqual(['Open line 2', 'Open line 5'])
+    expect(screen.getAllByTestId('review-fix-card'), 'the non-line card has none').toHaveLength(3)
+    fireEvent.click(buttons[1])
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('inv-1', { line: 5, field: null })
+  })
+
+  it('reviewRow_unmappableCardHasNoOpenLine', async () => {
+    renderExpanded(detailFixture({ status: 'draft', can_edit: true, violations: [{ rule_key: 'line-required', severity: 'error', message: 'needs a line', path: 'line_items' }] }))
+    await screen.findByTestId('review-fix-card')
+    expect(screen.queryByTestId('review-fix-open-line')).toBeNull()
+    expect(screen.getByTestId('review-fix-card').textContent).toContain('needs a line')
   })
 })

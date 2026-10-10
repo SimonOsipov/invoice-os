@@ -407,18 +407,13 @@ func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 // retired the per-row Rule-set version column this paragraph used to describe; the spec no
 // longer reads a `<td>` by ordinal for the version at all.
 //
-// More fundamentally, the engine's rule_key-then-path sort (Decision N16, engine.go)
-// can only ever reorder two violations that SHARE a rule_key -- and rules.key carries
-// UNIQUE(rule_set_version_id, key) (20260711051711_rule_set_versions.sql:31), so a
-// single Engine.Evaluate call can never produce two violations with the same RuleKey in
-// the first place (engine.go's loop appends at most one Violation per rs.Rules entry).
-// The path leg of the sort is therefore DEAD for any one invoice's result -- under v2,
-// v3, or any future version alike -- so filling Path on the 4 D8 keys cannot reorder
-// rows AT ALL, let alone change which one is first.
+// The engine's rule_key-then-path sort only reorders violations that share a rule_key.
+// A rule that names lines (cel, via lineEvaluator) can produce several; the fixture
+// payloads here fail no such rule on more than one line, so no two violations share a
+// key. The path leg of the sort is exercised in line_path_test.go.
 //
-// This test pins the structural precondition against the real v3-active corpus: no two
-// violations in a single Result ever share a RuleKey, for the same fixture payloads
-// TestV3PathIsTheOnlyDelta already proves index-for-index identical between v2 and v3.
+// This test pins that precondition for the two fixture payloads TestV3PathIsTheOnlyDelta
+// already proves index-for-index identical between v2 and v3.
 func TestV3ViolationOrderStableUnderPathSort(t *testing.T) {
 	_, app := dbTestPools(t)
 	engine := NewDefaultEngine()
@@ -445,8 +440,8 @@ func TestV3ViolationOrderStableUnderPathSort(t *testing.T) {
 			for _, v := range result.Violations {
 				if seen[v.RuleKey] {
 					t.Fatalf("RuleKey %q appears twice in one Result -- this is the ONE precondition the "+
-						"path-sort tiebreak would need for reordering to matter, and it must never hold "+
-						"(rules.key is UNIQUE per rule_set_version_id) [AC-7]", v.RuleKey)
+						"path-sort tiebreak would need for reordering to matter; these fixtures fail no "+
+						"line rule on more than one line [AC-7]", v.RuleKey)
 				}
 				seen[v.RuleKey] = true
 			}

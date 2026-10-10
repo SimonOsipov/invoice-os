@@ -1,31 +1,18 @@
-// This file (cel.go) is the M3-04-05 subtask: the `type: cel` escape-hatch
-// Evaluator plus the production GuardFunc backend for a rule's optional
-// `when` clause -- the two CEL surfaces from the story's "9 rule-type
-// evaluators (contracts)" table and the engine's select-stage guard
-// (engine.go, GuardFunc). The eight parameterized evaluators
-// (required/format/enum/range/date in evaluators.go, tax_math/cross_field/
-// conditional in evaluators_math.go) resolve Rule.Target with NO "invoice."
-// prefix (Decision N19); CEL is the deliberate exception -- the CEL
-// activation binds a single top-level variable named "invoice" to
-// p["invoice"], so every CEL expression (both a `type: cel` rule's `expr`
-// param and any rule's `when` guard) MUST reference it via the
-// "invoice."-prefixed form, e.g. "invoice.total > 0" (Decision N19,
-// rule.go's Rule.Target/When doc comments).
-//
-// Both surfaces share one evalCELBool helper: it builds a cel.Env exposing
-// the single "invoice" variable (cel.DynType), compiles + programs the
-// expression, evaluates it against an activation binding "invoice" to
-// p["invoice"], and requires a bool result. A compile fault, an eval fault,
-// or a non-bool result are all engine/config faults (Decision N15) surfaced
-// as an error -- never a coercion, a violation, or a silent pass. Registry
-// assembly (wiring celEvaluator into the map[RuleType]Evaluator NewEngine
-// takes, and celGuard as the Engine's GuardFunc) is deferred to M3-04-08.
+// cel.go holds the `type: cel` Evaluator and the GuardFunc backend for a
+// rule's `when` clause. The CEL activation binds one top-level variable,
+// "invoice", to p["invoice"], so every expression references it with the
+// "invoice." prefix (Decision N19), unlike the parameterized evaluators.
+// A compile fault, an eval fault or a non-bool result is a config fault
+// (Decision N15), never a violation. A false element-wise rule reports one
+// violation per failing line via evalLines (D3/D4).
 package validation
 
 import (
 	"fmt"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/ast"
+	"github.com/google/cel-go/parser"
 )
 
 // evalCELBool compiles and evaluates a CEL expression against a payload and
@@ -61,17 +48,22 @@ func evalCELBool(expr string, p Payload) (bool, error) {
 	return b, nil
 }
 
-// celEvaluator implements Evaluator for `type: cel` rules: params
-// {"expr": <CEL string>}. expr is compiled and evaluated against an
-// activation binding the single variable "invoice" to p["invoice"] (Decision
-// N19 -- see file header). expr MUST evaluate to a bool: true => the rule
-// passes (nil, nil); false => a violation (violation(r), nil). A compile
-// error, an eval error, or a non-bool result type are all engine/config
-// faults (Decision N15: fail loud on a broken rule, never a silent pass) --
-// surfaced as (nil, non-nil error), never as a violation.
+// celEvaluator implements Evaluator and lineEvaluator for `type: cel` rules:
+// params {"expr": <CEL string>}. A true expr passes; false is a violation. A
+// rule shaped `[!has(invoice.T) ||] invoice.T.all(v, body)` with T = r.Target
+// and a body that reads only v reports one violation per false element at
+// T[N]; any other false rule reports one violation at r.Target.
 type celEvaluator struct{}
 
-func (celEvaluator) Eval(p Payload, r Rule) (*Violation, error) {
+func (c celEvaluator) Eval(p Payload, r Rule) (*Violation, error) {
+	vs, err := c.evalLines(p, r)
+	if err != nil || len(vs) == 0 {
+		return nil, err
+	}
+	return &vs[0], nil
+}
+
+func (celEvaluator) evalLines(p Payload, r Rule) ([]Violation, error) {
 	var params struct {
 		Expr string `json:"expr"`
 	}
@@ -88,7 +80,94 @@ func (celEvaluator) Eval(p Payload, r Rule) (*Violation, error) {
 	if ok {
 		return nil, nil
 	}
-	return violation(r), nil
+	// ceiling: one violation per failing line, unbounded below the batch body cap; cap it with a measure of the import report size
+	if vs := celLineViolations(params.Expr, p, r); len(vs) > 0 {
+		return vs, nil
+	}
+	return []Violation{*violation(r)}, nil
+}
+
+// celLineViolations returns one violation per element whose body is false, or
+// nil when the expression is not element-wise or no element is blamed. An
+// element whose body errors is not blamed (P13: CEL absorbs it in the whole).
+func celLineViolations(expr string, p Payload, r Rule) []Violation {
+	if r.Target == "" {
+		return nil
+	}
+	v, body, ok := elementWiseBody(expr, r.Target)
+	if !ok {
+		return nil
+	}
+	env, err := cel.NewEnv(cel.Variable(v, cel.DynType))
+	if err != nil {
+		return nil
+	}
+	a, iss := env.Compile(body)
+	if iss != nil && iss.Err() != nil {
+		return nil
+	}
+	prg, err := env.Program(a)
+	if err != nil {
+		return nil
+	}
+	raw, present := resolvePath(p, r.Target)
+	if !present {
+		return nil
+	}
+	els, isList := raw.([]any)
+	if !isList {
+		return nil
+	}
+	var out []Violation
+	for i, el := range els {
+		res, _, err := prg.Eval(map[string]any{v: el})
+		if err != nil {
+			continue
+		}
+		if b, isBool := res.Value().(bool); isBool && !b {
+			out = append(out, *violation(r))
+			out[len(out)-1].Path = linePath(r.Target, i+1, "")
+		}
+	}
+	return out
+}
+
+// elementWiseBody matches `[!has(invoice.T) ||] invoice.T.all(v, body)` on a
+// macro-free parse and returns v and the unparsed body.
+func elementWiseBody(expr, target string) (v, body string, ok bool) {
+	env, err := cel.NewEnv(cel.ClearMacros(), cel.Variable("invoice", cel.DynType))
+	if err != nil {
+		return "", "", false
+	}
+	parsed, iss := env.Parse(expr)
+	if iss != nil && iss.Err() != nil {
+		return "", "", false
+	}
+	info := parsed.NativeRep().SourceInfo()
+	e := parsed.NativeRep().Expr()
+	if e.Kind() == ast.CallKind && e.AsCall().FunctionName() == "_||_" && len(e.AsCall().Args()) == 2 {
+		guard, err := parser.Unparse(e.AsCall().Args()[0], info)
+		if err != nil || guard != "!has(invoice."+target+")" {
+			return "", "", false
+		}
+		e = e.AsCall().Args()[1]
+	}
+	if e.Kind() != ast.CallKind {
+		return "", "", false
+	}
+	all := e.AsCall()
+	if all.FunctionName() != "all" || !all.IsMemberFunction() || len(all.Args()) != 2 || all.Args()[0].Kind() != ast.IdentKind {
+		return "", "", false
+	}
+	tgt, err := parser.Unparse(all.Target(), info)
+	if err != nil || tgt != "invoice."+target {
+		return "", "", false
+	}
+	body, err = parser.Unparse(all.Args()[1], info)
+	if err != nil {
+		return "", "", false
+	}
+	return all.Args()[0].AsIdent(), body, true
 }
 
 // celGuard is the production GuardFunc (rule.go's GuardFunc type) backend

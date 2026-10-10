@@ -77,6 +77,15 @@ func violation(r Rule, opts ...violationOption) *Violation {
 	return v
 }
 
+// linePath builds a line violation path: <list>[N], or <list>[N].<field>.
+func linePath(list string, n int, field string) string {
+	p := fmt.Sprintf("%s[%d]", list, n)
+	if field != "" {
+		p += "." + field
+	}
+	return p
+}
+
 // decodeParams unmarshals a rule's type-specific Params into dst. An empty
 // Params is treated as an empty object so callers can decode optional-only
 // param shapes without a nil-guard; a genuinely malformed body surfaces as a
@@ -198,6 +207,16 @@ func (formatEval) Eval(p Payload, r Rule) (*Violation, error) {
 type enumEval struct{}
 
 func (e enumEval) Eval(p Payload, r Rule) (*Violation, error) {
+	vs, err := e.evalLines(p, r)
+	if err != nil || len(vs) == 0 {
+		return nil, err
+	}
+	return &vs[0], nil
+}
+
+// evalLines is the whole rule: with items it returns every offending element;
+// otherwise at most one violation.
+func (e enumEval) evalLines(p Payload, r Rule) ([]Violation, error) {
 	var params struct {
 		Values *[]any  `json:"values"`
 		List   *string `json:"list"`
@@ -242,12 +261,12 @@ func (e enumEval) Eval(p Payload, r Rule) (*Violation, error) {
 	for i, w := range *params.Values {
 		labels[i] = stringify(w)
 	}
-	return violation(r, withExpected(strings.Join(labels, " · ")), withActual(stringify(val))), nil
+	return []Violation{*violation(r, withExpected(strings.Join(labels, " · ")), withActual(stringify(val)))}, nil
 }
 
 // evalList checks the target (inside each element of items, when set) against
-// r.Codes. The match is exact. It reports the first offender only.
-func (enumEval) evalList(p Payload, r Rule, list string, items *string) (*Violation, error) {
+// r.Codes. The match is exact. With items it reports every offender, no cap (D14).
+func (enumEval) evalList(p Payload, r Rule, list string, items *string) ([]Violation, error) {
 	expected := "NRS list: " + list
 	bad := func(v any) *Violation {
 		return violation(r, withExpected(expected), withActual(stringify(v)))
@@ -266,7 +285,7 @@ func (enumEval) evalList(p Payload, r Rule, list string, items *string) (*Violat
 		if !present || val == nil || inList(val) {
 			return nil, nil
 		}
-		return bad(val), nil
+		return []Violation{*bad(val)}, nil
 	}
 
 	raw, present := resolvePath(p, *items)
@@ -277,17 +296,23 @@ func (enumEval) evalList(p Payload, r Rule, list string, items *string) (*Violat
 	if !ok {
 		return nil, nil
 	}
-	for _, el := range arr {
+	var out []Violation
+	for i, el := range arr {
 		if _, isObj := el.(map[string]any); !isObj {
-			return bad(el), nil
+			v := bad(el)
+			v.Path = linePath(*items, i+1, "")
+			out = append(out, *v)
+			continue
 		}
 		val, present := resolvePath(Payload{"invoice": el}, r.Target)
 		if !present || val == nil || inList(val) {
 			continue
 		}
-		return bad(val), nil
+		v := bad(val)
+		v.Path = linePath(*items, i+1, r.Target)
+		out = append(out, *v)
 	}
-	return nil, nil
+	return out, nil
 }
 
 // rangeEval implements the `range` rule type: params

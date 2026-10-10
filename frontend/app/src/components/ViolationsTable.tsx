@@ -7,14 +7,16 @@
 // Severity | Message | Rule key | Path, in response order (backend pre-sorts by rule_key
 // then path — do NOT re-sort here).
 
-import { severityStyle, type Violation } from '../lib/validationApi'
+import { severityStyle, violationLine, type LineTarget, type Violation } from '../lib/validationApi'
 
 export interface ViolationsTableProps {
   violations: Violation[]
   ruleSetVersion: number
+  onOpenLine?: (t: LineTarget) => void
+  lineDisabled?: boolean
 }
 
-export function ViolationsTable({ violations, ruleSetVersion }: ViolationsTableProps): React.JSX.Element {
+export function ViolationsTable({ violations, ruleSetVersion, onOpenLine, lineDisabled }: ViolationsTableProps): React.JSX.Element {
   if (violations.length === 0) {
     return (
       <div style={{ fontSize: 13, color: 'var(--fg-2)' }}>
@@ -41,6 +43,7 @@ export function ViolationsTable({ violations, ruleSetVersion }: ViolationsTableP
         <tbody>
           {violations.map((v, i) => {
             const st = severityStyle(v.severity)
+            const target = onOpenLine ? violationLine(v.path) : null
             return (
               <tr key={`${v.rule_key}-${v.path ?? ''}-${i}`}>
                 <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--line-1)' }}>
@@ -56,6 +59,27 @@ export function ViolationsTable({ violations, ruleSetVersion }: ViolationsTableP
                 </td>
                 <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--line-1)', overflowWrap: 'anywhere', lineHeight: 1.4 }}>
                   <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>{v.path ?? '—'}</span>
+                  {target && onOpenLine && (
+                    <button
+                      type="button"
+                      data-testid="violation-open-line"
+                      title={`Open line ${target.line} in the editor`}
+                      disabled={lineDisabled}
+                      onClick={() => {
+                        if (!lineDisabled) onOpenLine(target)
+                      }}
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      style={{
+                        height: 24,
+                        padding: '0 8px',
+                        fontSize: 11.5,
+                        marginLeft: 8,
+                        ...(lineDisabled ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
+                      }}
+                    >
+                      Line {target.line}
+                    </button>
+                  )}
                 </td>
               </tr>
             )

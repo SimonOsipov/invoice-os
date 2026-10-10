@@ -550,6 +550,31 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect((getBody.submit_blocked_reason as string).length, 'the submit-blocked reason should be non-empty').toBeGreaterThan(0)
     })
 
+    // Path shape is internal/validation/evaluators.go's `%s[%d]` (1-based, list = line_items), ordered as strings.
+    test('a line rule names its lines, and the stored verdict keeps them', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-LINEPATH-${freshTin()}`),
+        subtotal: '88',
+        vat: '6.60',
+        total: '94.60',
+        line_items: [
+          { description: 'Widget A', quantity: '1', unit_price: '100.00', line_total: '100.00' },
+          { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '-5.00' },
+          { description: 'Widget C', quantity: '1', unit_price: '-7.00', line_total: '-7.00' },
+        ],
+      })
+      const validated = await validateInvoice(token, created.id)
+      const stored = await getInvoice(token, created.id)
+
+      for (const [label, violations] of [['validate response', validated.violations], ['GET', stored.violations]] as const) {
+        const linePaths = violations.filter((v) => v.rule_key === 'line-cost-non-negative').map((v) => v.path)
+        expect(linePaths, `${label}: line-cost-non-negative names lines 2 and 3, in that order`).toEqual(['line_items[2]', 'line_items[3]'])
+        const vat = violations.find((v) => v.rule_key === 'vat-standard-rate')
+        if (vat) expect(vat.path, `${label}: a document rule keeps its field path`).toBe('vat')
+      }
+    })
+
     test('validate not-found (random UUID) -> 404 {error: string}', async () => {
       const res = await rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/validate`, {
         method: 'POST',

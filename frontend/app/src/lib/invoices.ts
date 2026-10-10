@@ -920,7 +920,7 @@ type LineContent = Pick<InvoiceLineItem, LineEditKey>
 // emits '' into a numeric column, where `$N::text::numeric` raises 22P02 -> ErrValidation
 // -> a 400 on a no-op save.
 //
-const LINE_EDIT_FIELDS: readonly LineEditKey[] = INVOICE_FIELDS.filter((f) => f.line && f.edit).map(
+export const LINE_EDIT_FIELDS: readonly LineEditKey[] = INVOICE_FIELDS.filter((f) => f.line && f.edit).map(
   (f) => f.key as LineEditKey,
 )
 

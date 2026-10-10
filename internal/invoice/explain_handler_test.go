@@ -158,6 +158,22 @@ func TestExplain_OffClientAnswersUnavailableWithNoCall(t *testing.T) {
 		t.Errorf("disabled client calls = %d, want 0", n)
 	}
 
+	// main passes ai.FromEnv's *Client: non-nil and off with no key, so Enabled is what gates the call.
+	t.Setenv(ai.EnvFake, "")
+	t.Setenv(ai.EnvKey, "")
+	var buf bytes.Buffer
+	real, err := ai.FromEnv(slog.New(slog.NewJSONHandler(&buf, nil)))
+	if err != nil || real == nil || real.Enabled() {
+		t.Fatalf("ai.FromEnv with no key: client %v, err %v; want a non-nil off client", real, err)
+	}
+	got, err := NewExplainer(explainGet(inv), real).Explain(context.Background(), "inv-1", key)
+	if err != nil || got.Status != "unavailable" || got.Explanation != nil || got.Fix != nil {
+		t.Errorf("real off client: got (%+v, %v), want unavailable with null explanation and fix", got, err)
+	}
+	if strings.Contains(buf.String(), "ai call") {
+		t.Errorf("real off client logged an ai call:\n%s", buf.String())
+	}
+
 	on := newExplainRecorder()
 	if got, _ := NewExplainer(explainGet(inv), on).Explain(context.Background(), "inv-1", key); got.Status != "ok" || on.callCount() != 1 {
 		t.Errorf("enabled client: status %q, calls %d, want ok and 1", got.Status, on.callCount())

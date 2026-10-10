@@ -13,7 +13,7 @@
 //
 // Concrete Evaluators (required/format/enum/range/tax_math/cross_field/
 // conditional/date) land in M3-04-03/04; the CEL evaluator + guard backend
-// in M3-04-05; the DB-backed Store (LoadActiveRuleSet) in
+// in M3-04-05; the DB-backed Store in
 // M3-04-06. This subtask's own tests (engine_test.go) exercise the pipeline
 // with fake Evaluators/GuardFunc only.
 package validation
@@ -53,8 +53,8 @@ type Severity string
 
 // Rule is one row of an active RuleSet -- the verbatim shape
 // {key, type, target, params, severity, when, message, scope, enabled} the
-// story's Constraints section pins, and that the M3-04-06 Store's
-// LoadActiveRuleSet materializes from the `rules` table.
+// story's Constraints section pins, and that the Store materializes from the
+// `rules` table.
 type Rule struct {
 	Key    string          `json:"key"`
 	Type   RuleType        `json:"type"`
@@ -75,9 +75,9 @@ type Rule struct {
 // CodeSet is the set of codes of one NRS code list.
 type CodeSet map[string]struct{}
 
-// RuleSet is the engine's evaluation input: the active published version's
-// number plus its rules, as returned by the (M3-04-06) Store's
-// LoadActiveRuleSet. Published versions are immutable (story Core AC #1) --
+// RuleSet is the engine's evaluation input: one published version's
+// number plus its rules, as returned by the Store (LoadForDates, per
+// issue date). Published versions are immutable (story Core AC #1) --
 // a content change always ships as a new RuleSet.Version.
 //
 // ID (M4-04-03, [uuid-stamp]) is the version's rule_set_versions.id (uuid) --

@@ -43,10 +43,10 @@ type ruleSeed struct {
 	enabled     bool
 }
 
-// activateRules makes a throwaway version carrying the given enum rules active.
+// activateRules makes a throwaway version carrying the given enum rules the one in force today.
 func activateRules(t *testing.T, super *pgxpool.Pool, rules ...ruleSeed) {
 	t.Helper()
-	id, _ := seedVersion(t, super, false)
+	id, _ := seedVersion(t, super)
 	for _, r := range rules {
 		if _, err := super.Exec(context.Background(),
 			`INSERT INTO rules (rule_set_version_id, key, type, target, params, severity, message, enabled)
@@ -55,7 +55,7 @@ func activateRules(t *testing.T, super *pgxpool.Pool, rules ...ruleSeed) {
 			t.Fatalf("seed rule %s: %v", r.key, err)
 		}
 	}
-	sealAndActivate(t, super, id)
+	sealAndDate(t, super, id, todayUTC())
 }
 
 type loaders map[string]func() (RuleSet, error)
@@ -206,11 +206,13 @@ func TestCodeLists_MalformedListParamDoesNotFailLoad(t *testing.T) {
 
 type queryCounter struct {
 	pgx.Tx
-	n int
+	n    int
+	sqls []string
 }
 
 func (c *queryCounter) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	c.n++
+	c.sqls = append(c.sqls, sql)
 	return c.Tx.Query(ctx, sql, args...)
 }
 
@@ -282,5 +284,85 @@ func TestCodeLists_BlankAndNullListDoNotFailLoad(t *testing.T) {
 		ruleSeed{"zz-notobj", `5`, true})
 	if _, err := NewStore(app).LoadActiveRuleSetGlobal(context.Background()); err != nil {
 		t.Fatalf("load failed: %v", err)
+	}
+}
+
+func (c *queryCounter) count(substr string) (n int) {
+	for _, q := range c.sqls {
+		if strings.Contains(q, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+// listRuleVersion makes a version dated `from` with one enabled enum rule naming list.
+func listRuleVersion(t *testing.T, super *pgxpool.Pool, from, key, list string) {
+	t.Helper()
+	id, _ := seedVersion(t, super)
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO rules (rule_set_version_id, key, type, target, params, severity, message, enabled)
+		 VALUES ($1, $2, 'enum', 'supplier.postal_address.lga', $3::jsonb, 'error', 'bad code', true)`,
+		id, key, `{"list":"`+list+`"}`); err != nil {
+		t.Fatalf("seed rule %s: %v", key, err)
+	}
+	sealAndDate(t, super, id, from)
+}
+
+func TestStore_LoadForDatesLoadsEachVersionOnce(t *testing.T) {
+	super, app := dbTestPools(t)
+	a, _ := seedVersion(t, super)
+	seedFullRule(t, super, a, ruleFixture{Key: "t-a", Enabled: true})
+	sealAndDate(t, super, a, "3001-01-01")
+	b, _ := seedVersion(t, super)
+	seedFullRule(t, super, b, ruleFixture{Key: "t-b", Enabled: true})
+	sealAndDate(t, super, b, "3001-06-01")
+
+	tx := countingTx(t, app)
+	got, err := loadForDatesTx(context.Background(), tx, []string{"3001-02-01", "3001-03-01", "3001-07-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Errorf("len(result) = %d, want 3", len(got))
+	}
+	if n := tx.count("FROM rules WHERE"); n != 2 {
+		t.Errorf("rules SELECT ran %d times, want 2 (one per distinct version)", n)
+	}
+	if n := tx.count("rule_set_version_for"); n != 1 {
+		t.Errorf("date SELECT ran %d times, want 1", n)
+	}
+}
+
+func TestCodeLists_EveryLoadedVersionCarriesItsLists(t *testing.T) {
+	super, app := dbTestPools(t)
+	listA, listB := seedCodes(t, super), seedCodes(t, super)
+	listRuleVersion(t, super, "3001-01-01", "t-a", listA)
+	listRuleVersion(t, super, "3001-06-01", "t-b", listB)
+
+	got, err := NewStore(app).LoadForDates(context.Background(), []string{"3001-02-01", "3001-07-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for date, key := range map[string]string{"3001-02-01": "t-a", "3001-07-01": "t-b"} {
+		if c := ruleByKey(t, got[date], key).Codes; len(c) != len(testCodes) {
+			t.Errorf("%s: rule %s Codes = %v, want %d codes", date, key, c, len(testCodes))
+		}
+	}
+}
+
+func TestCodeLists_MissingListInOneVersionFailsTheLoad(t *testing.T) {
+	super, app := dbTestPools(t)
+	listA := seedCodes(t, super)
+	missing := "t-" + uuid.NewString()
+	listRuleVersion(t, super, "3001-01-01", "t-a", listA)
+	listRuleVersion(t, super, "3001-06-01", "t-b", missing)
+
+	_, err := NewStore(app).LoadForDates(context.Background(), []string{"3001-02-01", "3001-07-01"})
+	if !errors.Is(err, ErrCodeListMissing) || !errors.Is(err, ErrNoActiveRuleSet) {
+		t.Fatalf("err = %v, want ErrCodeListMissing and ErrNoActiveRuleSet", err)
+	}
+	if !strings.Contains(err.Error(), missing) {
+		t.Errorf("err %q does not name the list %s", err, missing)
 	}
 }

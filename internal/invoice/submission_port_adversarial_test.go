@@ -352,7 +352,7 @@ func TestInvoicePort_CanonicalMissingRuleSetVersionRowDoesNotError(t *testing.T)
 	}
 	var rsvID string
 	if err := super.QueryRow(ctx,
-		`INSERT INTO rule_set_versions (version, is_active) VALUES ($1, false) RETURNING id`,
+		`INSERT INTO rule_set_versions (version) VALUES ($1) RETURNING id`,
 		maxVersion+1000001, // scratch, never collides with a seeded version
 	).Scan(&rsvID); err != nil {
 		t.Fatalf("seed scratch rule_set_versions row: %v", err)

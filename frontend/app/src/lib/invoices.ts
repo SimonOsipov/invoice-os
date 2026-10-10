@@ -319,6 +319,15 @@ export interface StatusChange {
   actor_name: string
   actor_kind: string
   changed_at: string
+  // The rule-set version behind a re-check demotion; null on every other row. Always present.
+  cause: HistoryCause | null
+}
+
+// effective_from is YYYY-MM-DD, null for an undated version.
+export interface HistoryCause {
+  rule_set_version: number
+  rule_set_version_id: string
+  effective_from: string | null
 }
 
 // listInvoices's twelve filters (ListFilter, invoice.go:200-217; ListHandler,

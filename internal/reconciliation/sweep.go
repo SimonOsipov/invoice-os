@@ -162,7 +162,7 @@ type Reconciler struct {
 // tenant's reconciliation. It returns the joined per-tenant failures, or the enumeration
 // error; nil when nothing failed.
 func (r *Reconciler) SweepOnce(ctx context.Context) error {
-	tenantIDs, err := r.enumerateTenants(ctx)
+	tenantIDs, err := EnumerateTenants(ctx, r.ReaderPool)
 	if err != nil {
 		return err
 	}
@@ -183,11 +183,11 @@ func (r *Reconciler) SweepOnce(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-// enumerateTenants lists every tenant id via ReaderPool (invoice_tenant_reader, no
+// EnumerateTenants lists every tenant id via the reader pool (invoice_tenant_reader, no
 // app.current_tenant GUC set) — the tenant_enumerate policy
 // (migrations/20260707122459_tenants_rls.sql:40) ORs in every row for this role alone.
-func (r *Reconciler) enumerateTenants(ctx context.Context) ([]string, error) {
-	rows, err := r.ReaderPool.Query(ctx, `SELECT id FROM tenants ORDER BY id`)
+func EnumerateTenants(ctx context.Context, reader *pgxpool.Pool) ([]string, error) {
+	rows, err := reader.Query(ctx, `SELECT id FROM tenants ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("reconciliation: enumerate tenants: %w", err)
 	}

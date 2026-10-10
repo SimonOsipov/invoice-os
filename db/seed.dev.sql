@@ -133,7 +133,7 @@ ON CONFLICT ON CONSTRAINT workflow_role_members_tenant_role_user_uq DO NOTHING;
 --
 -- Rules are GLOBAL (no tenant_id, no RLS): restores any rule a prior demo
 -- kill-switched (e.g. vat-standard-rate). Safe under the M4-17
--- rules_content_lock / M4-18 active-implies-sealed lock -- an enabled-only
+-- rules_content_lock -- an enabled-only
 -- UPDATE is the sanctioned M3-06 kill-switch carve-out; every other column
 -- of a sealed rule set stays immutable.
 UPDATE rules SET enabled = true WHERE enabled = false;
@@ -213,9 +213,8 @@ ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
 --
 -- Entity ids are GENERATED (see the block above) -- these INSERTs resolve entity_id by
 -- joining business_entities on its stable, curated TIN, never a literal uuid.
--- rule_set_version_id resolves the same way, via `(SELECT id FROM rule_set_versions
--- WHERE is_active)` -- never a literal, so this seed tracks whichever version is active
--- without a hand-maintained number. `validated` (a seed-only column below, not a real
+-- rule_set_version_id resolves the same way, via `rule_set_version_for(issue_date)` --
+-- never a literal, so each invoice is stamped by the version in force on its issue date. `validated` (a seed-only column below, not a real
 -- one) gates whether a row
 -- stamps rule_set_version_id at all: false for the 3 invoices left genuinely untouched
 -- since creation (rule_set_version_id stays NULL, matching Store.Create's own invariant
@@ -370,7 +369,7 @@ SELECT
 FROM invoice_seed s
 JOIN business_entities e
   ON e.tenant_id = '11111111-1111-1111-1111-111111111111' AND e.tin = s.tin
-CROSS JOIN (SELECT id FROM rule_set_versions WHERE is_active) rsv
+CROSS JOIN LATERAL (SELECT rule_set_version_for(s.issue_date::date) AS id) rsv
 -- Derived here, once, so qr_payload's embedded irn/csid cannot drift from the columns --
 -- nothing in the schema correlates them. translate() strips base64 padding AND the newline
 -- encode() inserts every 76 characters, giving the repo's base64url (RawURLEncoding) shape.
@@ -465,7 +464,7 @@ SELECT
 FROM inhouse_invoice_seed s
 JOIN business_entities e
   ON e.tenant_id = '22222222-2222-2222-2222-222222222222' AND e.tin = '20665510-0001'
-CROSS JOIN (SELECT id FROM rule_set_versions WHERE is_active) rsv
+CROSS JOIN LATERAL (SELECT rule_set_version_for(s.issue_date::date) AS id) rsv
 CROSS JOIN LATERAL (SELECT
     s.invoice_number || '-FBMOCK01-' || to_char(s.issue_date::date, 'YYYYMMDD') AS irn,
     translate(encode(sha256(convert_to(s.invoice_number, 'UTF8')), 'base64'), E'+/=\n', '-_') AS csid

@@ -103,6 +103,8 @@ func gwBootEnv(svc string, port int) []string {
 		env = append(env, "VALIDATION_URL=http://127.0.0.1:1", "S2S_TOKEN="+gwS2SToken)
 	case "validation":
 		env = append(env, "S2S_TOKEN="+gwS2SToken)
+	case "reconciliation":
+		env = append(env, "VALIDATION_URL=http://127.0.0.1:1", "S2S_TOKEN="+gwS2SToken)
 	case "submission":
 		env = append(env, docs...)
 		env = append(env, fakes...)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,7 +26,15 @@ import (
 // Errors propagate RAW so their SQLSTATE survives — a phantom ruleSetVersionID
 // must surface as the FK's 23503
 // (TestDemoteRevalidated_AtomicityRollsBackOnWriteFailure).
+//
+// The history row names ruleSetVersionID as its cause. RevalidateActive does not use this form:
+// it goes through demoteCausedTx with no cause.
 func (s *Store) DemoteRevalidatedTx(ctx context.Context, tx pgx.Tx, id, tenantID string, vs []Violation, ruleSetVersionID string) (Invoice, error) {
+	return s.demoteCausedTx(ctx, tx, id, tenantID, vs, ruleSetVersionID, ruleSetVersionID)
+}
+
+// demoteCausedTx is DemoteRevalidatedTx with the history cause explicit; "" stores NULL.
+func (s *Store) demoteCausedTx(ctx context.Context, tx pgx.Tx, id, tenantID string, vs []Violation, ruleSetVersionID, causeVersionID string) (Invoice, error) {
 	var locked Invoice
 	if err := scanInvoice(tx.QueryRow(ctx,
 		`SELECT `+invoiceColumns+` FROM invoices WHERE id = $1 FOR UPDATE`, id,
@@ -66,9 +75,9 @@ func (s *Store) DemoteRevalidatedTx(ctx context.Context, tx pgx.Tx, id, tenantID
 	}
 
 	actor := RevalidateActor(tenantID)
-	// transitionTx writes the history row AND the invoice.transitioned audit
+	// transitionCausedTx writes the history row (with the cause) AND the invoice.transitioned audit
 	// row; its RETURNING re-reads the stamp above on the same tx.
-	if inv, err = transitionTx(ctx, tx, id, StatusValidated, StatusDraft, actor); err != nil {
+	if inv, err = transitionCausedTx(ctx, tx, id, StatusValidated, StatusDraft, actor, causeVersionID); err != nil {
 		return Invoice{}, err
 	}
 
@@ -132,23 +141,31 @@ func RevalidateActive(
 	tenantID string,
 	dryRun bool,
 ) (RevalidateResult, error) {
-	if err := refuseRevalidatePrivilegedRole(ctx, pool); err != nil {
+	ctx, err := revalidateContext(ctx, pool, tenantID)
+	if err != nil {
 		return RevalidateResult{}, err
 	}
-
-	// Built from our OWN tenantID argument rather than a caller's context, so
-	// "run as A, demote B's invoices" is unrepresentable.
-	ctx = auth.WithIdentity(ctx, auth.Identity{
-		Subject:  RevalidateActor(tenantID).Subject,
-		Role:     "authenticated",
-		TenantID: tenantID,
-	})
 
 	ids, err := validatedInvoiceIDs(ctx, pool, tenantID)
 	if err != nil {
 		return RevalidateResult{}, err
 	}
+	return revalidateIDs(ctx, pool, store, gate, tenantID, ids, dryRun, "")
+}
 
+// revalidateIDs evaluates ids through the gate in chunks and demotes any that now
+// carry a blocking violation. ctx must already carry the tenant's revalidate identity.
+// A non-empty causeVersionID is written to each demotion's history row.
+func revalidateIDs(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	store *Store,
+	gate *Gate,
+	tenantID string,
+	ids []string,
+	dryRun bool,
+	causeVersionID string,
+) (RevalidateResult, error) {
 	var res RevalidateResult
 	for chunk := range slices.Chunk(ids, revalidateChunkSize) {
 		items := make([]EvalItem, 0, len(chunk))
@@ -183,7 +200,7 @@ func RevalidateActive(
 				res.Demoted++
 				continue
 			}
-			demoted, err := demoteRevalidated(ctx, pool, store, tenantID, it.Ref, vs, out.RuleSetVersionID)
+			demoted, err := demoteRevalidated(ctx, pool, store, tenantID, it.Ref, vs, out.StampByRef[it.Ref].ID, causeVersionID)
 			if err != nil {
 				return RevalidateResult{}, fmt.Errorf("invoice: revalidate: demote invoice %s: %w", it.Ref, err)
 			}
@@ -195,6 +212,105 @@ func RevalidateActive(
 		}
 	}
 	return res, nil
+}
+
+// DueVersion is a dated rule-set version whose start date has passed.
+type DueVersion struct {
+	ID            string
+	Version       int
+	EffectiveFrom time.Time
+}
+
+// DueRechecks lists the versions in force on today that have no re-check marker, oldest first.
+func DueRechecks(ctx context.Context, pool *pgxpool.Pool, today time.Time) ([]DueVersion, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT v.id, v.version, v.effective_from
+		   FROM rule_set_versions v
+		  WHERE v.effective_from IS NOT NULL AND v.effective_from <= $1::date
+		    AND NOT EXISTS (SELECT 1 FROM rule_set_version_rechecks m WHERE m.rule_set_version_id = v.id)
+		  ORDER BY v.effective_from, v.version`, today)
+	if err != nil {
+		return nil, fmt.Errorf("invoice: list due rechecks: %w", err)
+	}
+	defer rows.Close()
+	var due []DueVersion
+	for rows.Next() {
+		var d DueVersion
+		if err := rows.Scan(&d.ID, &d.Version, &d.EffectiveFrom); err != nil {
+			return nil, fmt.Errorf("invoice: scan due recheck: %w", err)
+		}
+		due = append(due, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("invoice: list due rechecks: %w", err)
+	}
+	return due, nil
+}
+
+// RecheckCovered re-evaluates the tenant's validated invoices that version v covers and
+// demotes any that now fail, stamped with v. An outage aborts the tenant; earlier chunks stand.
+func RecheckCovered(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	store *Store,
+	gate *Gate,
+	tenantID string,
+	v DueVersion,
+	today time.Time,
+) (RevalidateResult, error) {
+	ctx, err := revalidateContext(ctx, pool, tenantID)
+	if err != nil {
+		return RevalidateResult{}, err
+	}
+
+	var ids []string
+	err = db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+		// ceiling: one rule_set_version_for call per validated row; index it above ~50k validated invoices per tenant
+		rows, err := tx.Query(ctx,
+			`SELECT id FROM invoices
+			  WHERE status = 'validated' AND rule_set_version_id IS DISTINCT FROM $1
+			    AND rule_set_version_for(coalesce(issue_date, $2::date)) = $1
+			  ORDER BY id`, v.ID, today)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return RevalidateResult{}, fmt.Errorf("invoice: recheck: list covered invoices: %w", err)
+	}
+	return revalidateIDs(ctx, pool, store, gate, tenantID, ids, false, v.ID)
+}
+
+// MarkRechecked records that every tenant passed version versionID; a repeat is a no-op.
+func MarkRechecked(ctx context.Context, pool *pgxpool.Pool, versionID string) error {
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO rule_set_version_rechecks (rule_set_version_id) VALUES ($1) ON CONFLICT DO NOTHING`, versionID,
+	); err != nil {
+		return fmt.Errorf("invoice: mark rechecked: %w", err)
+	}
+	return nil
+}
+
+// revalidateContext refuses a privileged role, then returns ctx carrying the tenant's revalidate
+// identity. Built from our OWN tenantID, so "run as A, demote B's invoices" is unrepresentable.
+func revalidateContext(ctx context.Context, pool *pgxpool.Pool, tenantID string) (context.Context, error) {
+	if err := refuseRevalidatePrivilegedRole(ctx, pool); err != nil {
+		return ctx, err
+	}
+	return auth.WithIdentity(ctx, auth.Identity{
+		Subject:  RevalidateActor(tenantID).Subject,
+		Role:     "authenticated",
+		TenantID: tenantID,
+	}), nil
 }
 
 // refuseRevalidatePrivilegedRole fails closed before the first invoice is
@@ -242,7 +358,7 @@ func validatedInvoiceIDs(ctx context.Context, pool *pgxpool.Pool, tenantID strin
 // happened. The status re-read is what keeps Skipped honest: DemoteRevalidatedTx
 // silently no-ops on a row that stopped being validated, and counting that as a
 // demotion would inflate the only number the run reports.
-func demoteRevalidated(ctx context.Context, pool *pgxpool.Pool, store *Store, tenantID, id string, vs []Violation, ruleSetVersionID string) (bool, error) {
+func demoteRevalidated(ctx context.Context, pool *pgxpool.Pool, store *Store, tenantID, id string, vs []Violation, ruleSetVersionID, causeVersionID string) (bool, error) {
 	var demoted bool
 	err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
 		var status string
@@ -255,7 +371,7 @@ func demoteRevalidated(ctx context.Context, pool *pgxpool.Pool, store *Store, te
 		if Status(status) != StatusValidated {
 			return nil
 		}
-		if _, err := store.DemoteRevalidatedTx(ctx, tx, id, tenantID, vs, ruleSetVersionID); err != nil {
+		if _, err := store.demoteCausedTx(ctx, tx, id, tenantID, vs, ruleSetVersionID, causeVersionID); err != nil {
 			return err
 		}
 		demoted = true

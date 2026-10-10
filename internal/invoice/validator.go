@@ -108,21 +108,27 @@ type ValidateItem struct {
 	Invoice map[string]any `json:"invoice"`
 }
 
-// ValidateResult is one batch's outcome: the rule-set the whole batch was
-// evaluated against (stamped ONCE per batch -- one load means one version),
-// plus every sent ref's violations.
+// Stamp is the rule-set version that judged one invoice.
+type Stamp struct {
+	Version int
+	ID      string
+}
+
+// ValidateResult is one batch's outcome: every sent ref's violations and the
+// version that judged each ref (StampByRef), plus the lowest version in the
+// batch (RuleSetVersion, the import report's stamp).
 //
 // This is an in-process return type, not a wire type -- it carries no json
 // tags because it never crosses the wire (validateBatchResponse below does).
-// ByRef is TOTAL over the sent refs by construction: Validate refuses any
-// response that does not cover them, so a missing key is unrepresentable
-// rather than merely untested. That matters because an absent map key returns
-// nil, which reads to a caller as "no violations" -- i.e. as a clean verdict on
-// an invoice 04 never actually judged. [Stage-1 F5]
+// ByRef and StampByRef are TOTAL over the sent refs by construction: Validate
+// refuses any response that does not cover them, so a missing key is
+// unrepresentable rather than merely untested. That matters because an absent
+// map key returns nil, which reads to a caller as "no violations" -- i.e. as a
+// clean verdict on an invoice 04 never actually judged. [Stage-1 F5]
 type ValidateResult struct {
-	RuleSetVersion   int
-	RuleSetVersionID string
-	ByRef            map[string][]Violation
+	RuleSetVersion int
+	StampByRef     map[string]Stamp
+	ByRef          map[string][]Violation
 }
 
 // validateBatchRequest / validateBatchItemResult / validateBatchResponse are
@@ -135,8 +141,10 @@ type validateBatchRequest struct {
 }
 
 type validateBatchItemResult struct {
-	Ref        string      `json:"ref"`
-	Violations []Violation `json:"violations"`
+	Ref              string      `json:"ref"`
+	Violations       []Violation `json:"violations"`
+	RuleSetVersion   int         `json:"rule_set_version"`
+	RuleSetVersionID string      `json:"rule_set_version_id"`
 }
 
 type validateBatchResponse struct {
@@ -169,8 +177,7 @@ func NewValidator(baseURL, s2sToken string, hc *http.Client) *Validator {
 }
 
 // Validate submits items to 04 in one round trip and returns each ref's
-// violations, stamped with the single rule-set they were all evaluated
-// against.
+// violations and the rule-set version that judged it.
 //
 // Errors, never verdicts: a transport failure, a timeout, any non-200 status,
 // an unparseable body, or a response that does not cover every sent ref all
@@ -245,6 +252,8 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 	}
 
 	byRef := make(map[string][]Violation, len(wire.Results))
+	stamps := make(map[string]Stamp, len(wire.Results))
+	stamped := 0
 	for _, r := range wire.Results {
 		// nil -> []Violation{}: a nil Go slice encodes as SQL NULL, and
 		// invoices.violations is jsonb NOT NULL -- M4-04-05's write would raise
@@ -253,6 +262,10 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 			r.Violations = []Violation{}
 		}
 		byRef[r.Ref] = r.Violations
+		stamps[r.Ref] = Stamp{Version: r.RuleSetVersion, ID: r.RuleSetVersionID}
+		if r.RuleSetVersion != 0 || r.RuleSetVersionID != "" {
+			stamped++
+		}
 	}
 
 	// TOTALITY: the response must cover every sent ref before ByRef is built.
@@ -277,9 +290,29 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 		}
 	}
 
+	// A stamp is never guessed: no item carries one (old server) -> the
+	// top-level stamp judged all; some carry one -> outage.
+	// ceiling: remove the fallback in ENGI-09, once every validation service sends item stamps
+	switch stamped {
+	case 0:
+		top := Stamp{Version: wire.RuleSetVersion, ID: wire.RuleSetVersionID}
+		for ref := range stamps {
+			stamps[ref] = top
+		}
+	case len(wire.Results):
+	default:
+		return ValidateResult{}, fmt.Errorf("%w: batch response stamps %d of %d items", ErrUpstream, stamped, len(wire.Results))
+	}
+	for ref, st := range stamps {
+		if st.ID == "" || st.Version < 1 {
+			return ValidateResult{}, fmt.Errorf("%w: batch response stamp for ref %q is invalid (version %d, id %q)",
+				ErrUpstream, ref, st.Version, st.ID)
+		}
+	}
+
 	return ValidateResult{
-		RuleSetVersion:   wire.RuleSetVersion,
-		RuleSetVersionID: wire.RuleSetVersionID,
-		ByRef:            byRef,
+		RuleSetVersion: wire.RuleSetVersion,
+		StampByRef:     stamps,
+		ByRef:          byRef,
 	}, nil
 }

@@ -34,5 +34,5 @@ paths:
 - Prove cross-tenant isolation with mock-issuer tokens for two tenants and `GET /api/tenancy/v1/me`. Both tenants exist in the seed, so RLS is the filter.
 - Expect the fleet roll-up to report `sentry` `off` on a PR and `on` or `off` on the persistent environment. `auth` is exempt.
 - Expect `notifications` to report `contacts` `fake` on a PR and `real` or `off` on the persistent environment.
-- Write the fork's URL variables, `RECONCILIATION_URL` and `GATEWAY_TOKEN` on each run. A fork never inherits them.
+- Write the fork's URL variables, `RECONCILIATION_URL` and `GATEWAY_TOKEN`, and reconciliation's `VALIDATION_URL` and `S2S_TOKEN` on each run. A fork never inherits them.
 - Expect a fork to accept registrations, send no mail and confirm at once. `fork-vars-before-urls` sets `GOTRUE_DISABLE_SIGNUP`, a blank SMTP host and `GOTRUE_MAILER_AUTOCONFIRM`.

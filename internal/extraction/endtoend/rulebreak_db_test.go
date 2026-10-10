@@ -19,10 +19,12 @@ type eeRuleGate struct {
 
 func (g eeRuleGate) Evaluate(_ context.Context, items []invoice.EvalItem) (invoice.EvalResult, error) {
 	by := map[string][]invoice.Violation{}
+	stamps := map[string]invoice.Stamp{}
 	for _, it := range items {
 		by[it.Ref] = g.vs
+		stamps[it.Ref] = invoice.Stamp{ID: g.versionID}
 	}
-	return invoice.EvalResult{ByRef: by, RuleSetVersionID: g.versionID}, nil
+	return invoice.EvalResult{ByRef: by, StampByRef: stamps}, nil
 }
 
 // Worker read, real ImportDocument and real Reader.Detail meet: the importer's rule-break write

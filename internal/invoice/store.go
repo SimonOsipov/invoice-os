@@ -78,10 +78,24 @@ func scanLineItem(row scanner, li *LineItem) error {
 // historyColumns deliberately excludes id/tenant_id/invoice_id (AC #7). It is the
 // SELECT list, not the wire shape: StatusChange also carries ActorName/ActorKind,
 // which History populates after the scan and no column supplies.
-const historyColumns = `from_status, to_status, actor, changed_at`
+const historyColumns = `h.from_status, h.to_status, h.actor, h.changed_at`
+
+// historyCauseColumns come from the LEFT JOIN on the cause version; all NULL for a row with no cause.
+const historyCauseColumns = `v.id::text, v.version, to_char(v.effective_from, 'YYYY-MM-DD')`
 
 func scanStatusChange(row scanner, sc *StatusChange) error {
-	return row.Scan(&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt)
+	var (
+		causeID   *string
+		causeVer  *int
+		causeDate *string
+	)
+	if err := row.Scan(&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt, &causeID, &causeVer, &causeDate); err != nil {
+		return err
+	}
+	if causeID != nil && causeVer != nil {
+		sc.Cause = &HistoryCause{RuleSetVersion: *causeVer, RuleSetVersionID: *causeID, EffectiveFrom: causeDate}
+	}
+	return nil
 }
 
 // Create inserts one invoice and, in the SAME db.WithinRequestTenantTx closure
@@ -535,10 +549,11 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 	var result []StatusChange
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT `+historyColumns+`
-			 FROM invoice_status_history
-			 WHERE invoice_id = $1
-			 ORDER BY changed_at ASC, id ASC`, id,
+			`SELECT `+historyColumns+`, `+historyCauseColumns+`
+			 FROM invoice_status_history h
+			 LEFT JOIN rule_set_versions v ON v.id = h.cause_rule_set_version_id
+			 WHERE h.invoice_id = $1
+			 ORDER BY h.changed_at ASC, h.id ASC`, id,
 		)
 		if err != nil {
 			return err
@@ -1928,6 +1943,12 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 // both 23514, which TestTransition_AtomicityRollsBackOnActorCheckFailure and
 // GATE-13 assert via pgCode.
 func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor) (Invoice, error) {
+	return transitionCausedTx(ctx, tx, id, current, target, actor, "")
+}
+
+// transitionCausedTx is transitionTx plus the rule-set version that caused the
+// transition, written to the history row; "" stores NULL.
+func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, causeVersionID string) (Invoice, error) {
 	if !canTransition(current, target) {
 		return Invoice{}, ErrIllegalTransition
 	}
@@ -1983,9 +2004,9 @@ func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Sta
 	}
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actor.TenantID, id, string(current), string(target), actor.Subject,
+		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, cause_rule_set_version_id)
+		 VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid)`,
+		actor.TenantID, id, string(current), string(target), actor.Subject, causeVersionID,
 	); err != nil {
 		return Invoice{}, err
 	}

@@ -15,7 +15,7 @@
 // re-validates on every migration including this one -- duplicating it as a
 // package-level Go test would mean tearing down and rebuilding the ENTIRE migration
 // history from inside a unit test, corrupting the shared dev DB every other test in this
-// package depends on. TestRuleSetV3_DownRestoresV2Active below is this file's narrower,
+// package depends on. TestRuleSetV3_DownRemovesV3 below is this file's narrower,
 // same-package sanity check on the Down's own mechanics (mirrors
 // TestRuleSetV2_DownRestoresV1).
 //
@@ -95,7 +95,7 @@ func ruleRowsByKey(t *testing.T, app *pgxpool.Pool, version int) map[string]rule
 }
 
 // loadRuleSetByVersion loads a RuleSet by its published version number directly (raw
-// SQL, mirroring store.go's loadActiveRuleSetTx shape) rather than via Store's
+// SQL, mirroring store.go's loadRuleSetByIDTx shape) rather than via Store's
 // active-only LoadActiveRuleSet -- both v2 and v3 are sealed, so their content is stable
 // regardless of which one is currently active. This lets TestV3PathIsTheOnlyDelta
 // evaluate the SAME golden corpus under both without needing to flip which one is
@@ -207,27 +207,19 @@ func TestRuleSetV3_IsV2PlusFourTargets(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// AC-2 -- exactly one version is active, and both v2/v3 are sealed.
+// AC-2 -- v3 is sealed and v2 is no longer in force.
 // ---------------------------------------------------------------------
 
-// TestRuleSetV3_ActiveAndSealed (AC-2; the "and it's v3" half retired below): exactly one
-// rule_set_versions row is active, and v3/v2 are both sealed -- sealing is permanent.
+// TestRuleSetV3_SealedAndV2NotInForce (AC-2; the "and it's v3" half retired below): v3/v2
+// are both sealed -- sealing is permanent -- and v2 is not the version in force today.
 //
 // AC-2's ORIGINAL claim ("the active row is v3") held only until BUG-05 published v4 and
 // superseded it. Which version is active is a moving target every publish changes, and is
-// asserted going forward by rule_set_v4_test.go's TestV4_IsTheSoleSealedActiveVersion, not
+// asserted going forward by rule_set_v4_test.go's TestV4_IsInForceAndSealed, not
 // re-litigated here -- so v3 is resolved by its permanent version number instead.
-func TestRuleSetV3_ActiveAndSealed(t *testing.T) {
+func TestRuleSetV3_SealedAndV2NotInForce(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
-
-	var activeCount int
-	if err := app.QueryRow(ctx, `SELECT count(*) FROM rule_set_versions WHERE is_active`).Scan(&activeCount); err != nil {
-		t.Fatalf("count active rule_set_versions: %v", err)
-	}
-	if activeCount != 1 {
-		t.Fatalf("count(rule_set_versions WHERE is_active) = %d, want 1 [AC-2]", activeCount)
-	}
 
 	var v3Sealed bool
 	if err := app.QueryRow(ctx, `SELECT sealed FROM rule_set_versions WHERE version = 3`).Scan(&v3Sealed); err != nil {
@@ -238,12 +230,12 @@ func TestRuleSetV3_ActiveAndSealed(t *testing.T) {
 		t.Error("v3.sealed = false, want true [AC-2]")
 	}
 
-	var v2Active, v2Sealed bool
-	if err := app.QueryRow(ctx, `SELECT is_active, sealed FROM rule_set_versions WHERE version = 2`).Scan(&v2Active, &v2Sealed); err != nil {
-		t.Fatalf("read v2 is_active/sealed: %v", err)
+	var v2InForce, v2Sealed bool
+	if err := app.QueryRow(ctx, `SELECT id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date), sealed FROM rule_set_versions WHERE version = 2`).Scan(&v2InForce, &v2Sealed); err != nil {
+		t.Fatalf("read v2 in-force/sealed: %v", err)
 	}
-	if v2Active {
-		t.Error("v2.is_active = true, want false (v3 supersedes it) [AC-2]")
+	if v2InForce {
+		t.Error("v2 is the version in force today, want a later one [AC-2]")
 	}
 	if !v2Sealed {
 		t.Error("v2.sealed = false, want still true (sealing is permanent) [AC-2]")
@@ -278,15 +270,15 @@ func TestRuleSetV2_StillHasNineteenRules(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// AC-3 -- the Down restores v2 as active and re-enables both guard triggers.
+// AC-3 -- the Down removes v3 and re-enables both guard triggers.
 // ---------------------------------------------------------------------
 
-// TestRuleSetV3_DownRestoresV2Active (AC-3): mirrors TestRuleSetV2_DownRestoresV1's
+// TestRuleSetV3_DownRemovesV3 (AC-3): mirrors TestRuleSetV2_DownRestoresV1's
 // pattern -- runs the v3 migration's Down (migrations/20260731090000_rule_set_v3.sql)
 // inside a superuser tx that is ALWAYS rolled back, so it never permanently mutates the
 // shared DB other tests in this package depend on. Guards against a vacuous pass by
-// asserting v3 really is active+sealed before attempting the Down.
-func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
+// asserting v3 really is sealed before attempting the Down.
+func TestRuleSetV3_DownRemovesV3(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
 
@@ -296,33 +288,17 @@ func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// This test simulates the v3 migration's OWN Down, whose precondition is "v3 active"
-	// -- true only until BUG-05 published v4 and superseded it. Establish that
-	// precondition inside this always-rolled-back tx: clear whichever version is really
-	// active, then activate v3. The seal guard permits an is_active flip on a sealed row.
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
-		t.Fatalf("clear the active slot (simulated AC-3 precondition): %v", err)
-	}
-	// Rowcount-checked: a missing v3 row would otherwise let the whole Down sequence
-	// below pass trivially.
-	tag, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 3`)
-	if err != nil {
-		t.Fatalf("activate v3 (simulated AC-3 precondition): %v", err)
-	}
-	if tag.RowsAffected() != 1 {
-		t.Fatalf("activating v3 touched %d rows, want 1 [AC-3 precondition]", tag.RowsAffected())
-	}
-
-	var v3Active, v3Sealed bool
-	if err := tx.QueryRow(ctx, `SELECT is_active, sealed FROM rule_set_versions WHERE version = 3`).Scan(&v3Active, &v3Sealed); err != nil {
-		t.Fatalf("read v3 is_active/sealed: %v -- expected the v3 migration's active+sealed row, got none "+
+	// A missing v3 row would otherwise let the whole Down sequence below pass trivially.
+	var v3Sealed bool
+	if err := tx.QueryRow(ctx, `SELECT sealed FROM rule_set_versions WHERE version = 3`).Scan(&v3Sealed); err != nil {
+		t.Fatalf("read v3 sealed: %v -- expected the v3 migration's sealed row, got none "+
 			"(has the v3 migration been applied via `make migrate-up`?) [AC-3 precondition]", err)
 	}
-	if !v3Active || !v3Sealed {
-		t.Fatalf("v3 is_active=%t sealed=%t before running the simulated Down, want both true [AC-3 precondition]", v3Active, v3Sealed)
+	if !v3Sealed {
+		t.Fatalf("v3 sealed=%t before running the simulated Down, want true [AC-3 precondition]", v3Sealed)
 	}
 
-	// db/seed.dev.sql seeds demo invoices that STAMP the active version via
+	// db/seed.dev.sql seeds demo invoices that STAMP a rule-set version via
 	// rule_set_version_id, whose FK carries no ON DELETE clause (NO ACTION) --
 	// [v2-down-is-dev-irreversible], carried over for v3. Clearing them restores the
 	// premise this simulated Down needs; harmless, since the enclosing tx is always
@@ -346,11 +322,8 @@ func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 	if _, err := tx.Exec(ctx, `ALTER TABLE rule_set_versions DISABLE TRIGGER rule_set_versions_seal_guard`); err != nil {
 		t.Fatalf("Down step: disable rule_set_versions_seal_guard: %v", err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false, sealed = false WHERE version = 3`); err != nil {
-		t.Fatalf("Down step: unseal+deactivate v3: %v", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 2`); err != nil {
-		t.Fatalf("Down step: reactivate v2: %v", err)
+	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET sealed = false WHERE version = 3`); err != nil {
+		t.Fatalf("Down step: unseal v3: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM rule_set_versions WHERE version = 3`); err != nil {
 		t.Fatalf("Down step: delete v3: %v", err)
@@ -368,14 +341,6 @@ func TestRuleSetV3_DownRestoresV2Active(t *testing.T) {
 	}
 	if v3Exists {
 		t.Error("rule_set_versions WHERE version=3 still exists after Down, want absent [AC-3]")
-	}
-
-	var v2Active bool
-	if err := tx.QueryRow(ctx, `SELECT is_active FROM rule_set_versions WHERE version = 2`).Scan(&v2Active); err != nil {
-		t.Fatalf("read v2.is_active after Down: %v", err)
-	}
-	if !v2Active {
-		t.Error("v2.is_active after Down = false, want true [AC-3]")
 	}
 
 	for _, tc := range []struct{ table, trigger string }{

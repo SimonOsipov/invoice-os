@@ -50,7 +50,7 @@ func activeRuleSetVersion(t *testing.T) string {
 	t.Helper()
 	var id string
 	if err := h.super.QueryRow(context.Background(),
-		`SELECT id FROM rule_set_versions WHERE is_active`).Scan(&id); err != nil {
+		`SELECT id FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`).Scan(&id); err != nil {
 		t.Fatalf("read the active rule_set_versions row: %v", err)
 	}
 	return id

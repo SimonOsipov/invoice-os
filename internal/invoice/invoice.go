@@ -142,7 +142,7 @@ type Invoice struct {
 // migrations/20260714111246_invoice_status_history.sql): an immutable,
 // append-only record of a single invoice lifecycle transition, written
 // exactly twice over in store.go -- the genesis row (Store.Create,
-// NULL->'draft') and every subsequent transition (transitionTx). Store.History
+// NULL->'draft') and every subsequent transition (transitionCausedTx). Store.History
 // returns them ordered changed_at ASC, id ASC ([D1]/AC #1).
 //
 // FromStatus/ToStatus are typed Status, the SAME CHECK-constrained domain as
@@ -167,6 +167,16 @@ type StatusChange struct {
 	ActorName  string    `json:"actor_name"`
 	ActorKind  string    `json:"actor_kind"`
 	ChangedAt  time.Time `json:"changed_at"`
+	// Cause is the rule-set version behind a re-check demotion; null on every other row.
+	Cause *HistoryCause `json:"cause"`
+}
+
+// HistoryCause is the rule-set version that caused a history row. EffectiveFrom is
+// YYYY-MM-DD, null for an undated version.
+type HistoryCause struct {
+	RuleSetVersion   int     `json:"rule_set_version"`
+	RuleSetVersionID string  `json:"rule_set_version_id"`
+	EffectiveFrom    *string `json:"effective_from"`
 }
 
 // LineItemInput is one line of Store.Create's CreateInput.LineItems. LineNo

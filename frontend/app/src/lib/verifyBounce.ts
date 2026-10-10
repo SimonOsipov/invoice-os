@@ -13,8 +13,8 @@ export function readVerifyFragment(hash: string): string | null {
   return tokens.length === 1 && VERIFY_TOKEN.test(tokens[0]) ? tokens[0] : null
 }
 
-export function gatewayVerifyUrl(base: string, token: string, state: string): string {
-  return `${base}/auth/verify?token=${encodeURIComponent(token)}&type=signup&state=${state}`
+export function gatewayVerifyUrl(base: string, token: string, state: string, invite = false): string {
+  return `${base}/auth/verify?token=${encodeURIComponent(token)}&type=signup${invite ? '&invite=1' : ''}&state=${state}`
 }
 
 export function landingVerifyFailedUrl(): string | null {

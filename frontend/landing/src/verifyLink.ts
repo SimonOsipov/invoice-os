@@ -13,10 +13,13 @@ export function verifyForward(loc: Loc, app: string | null): { strip: string; ta
   if (params.has('confirm')) {
     const entries = [...new URLSearchParams(loc.hash.replace(/^#/, ''))]
     const token = entries.length === 1 && entries[0][0] === 'token' ? entries[0][1] : ''
-    const valid = params.getAll('confirm').join() === '1' && TOKEN_RE.test(token)
+    const kinds = params.getAll('confirm')
+    // `invite` is the Location literal pinned by the gateway's verify_page_test.go.
+    const kind = kinds.length === 1 && (kinds[0] === '1' || kinds[0] === 'invite') ? kinds[0] : ''
+    const valid = kind !== '' && TOKEN_RE.test(token)
     params.delete('confirm')
     if (valid && app) {
-      return { strip: loc.pathname + (params.size ? `?${params}` : ''), target: `${app}?auth=verify#token=${encodeURIComponent(token)}`, failed: false }
+      return { strip: loc.pathname + (params.size ? `?${params}` : ''), target: `${app}?auth=${kind === 'invite' ? 'verify-invite' : 'verify'}#token=${encodeURIComponent(token)}`, failed: false }
     }
     params.set('verify', 'failed')
     return { strip: `${loc.pathname}?${params}`, target: null, failed: true }

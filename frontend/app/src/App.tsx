@@ -1850,10 +1850,12 @@ export default function App() {
   // Read before the strip effect drops the hash; null when `?auth=start` carries no invite.
   const [startInvite] = useState(() => (authStart ? readInviteFragment(window.location.hash) : null))
   const startBounced = useRef(false)
-  // `?auth=verify#token=T`: landing forwards a confirm link. `?handoff=` wins over it.
-  const [authVerify, setAuthVerify] = useState(
-    () => readHandoffCode(window.location.search) === null && new URLSearchParams(window.location.search).get('auth') === 'verify',
-  )
+  // `?auth=verify#token=T` (confirm link) or `?auth=verify-invite#token=T` (invite set-password link). `?handoff=` wins.
+  const [authVerify, setAuthVerify] = useState(() => {
+    const auth = new URLSearchParams(window.location.search).get('auth')
+    return readHandoffCode(window.location.search) === null && (auth === 'verify' || auth === 'verify-invite')
+  })
+  const [verifyInvite] = useState(() => authVerify && new URLSearchParams(window.location.search).get('auth') === 'verify-invite')
   // Read before the strip effect drops the hash.
   const [verifyToken] = useState(() => (authVerify ? readVerifyFragment(window.location.hash) : null))
   const verifyBounced = useRef(false)
@@ -2023,8 +2025,10 @@ export default function App() {
     const base = gatewayBase()
     if (!handoffCode || !base || redeemStarted.current) return
     redeemStarted.current = true
+    // A bound marker means the gateway confirmed the mailbox, so the state's age does not gate the code.
+    const markerBound = holdsPendingVerify()
     consumePendingVerify()
-    const state = consumeSignInState()
+    const state = consumeSignInState(Date.now(), markerBound)
     const invite = consumePendingInvite()
     const redemption = state
       ? redeemHandoff(base, handoffCode, state, Date.now(), invite)
@@ -2130,7 +2134,7 @@ export default function App() {
     const base = gatewayBase()
     let dest: string | null
     if (verifyToken && base) {
-      dest = gatewayVerifyUrl(base, verifyToken, mintSignInState())
+      dest = gatewayVerifyUrl(base, verifyToken, mintSignInState(), verifyInvite)
     } else {
       dest = landingVerifyFailedUrl()
     }
@@ -2142,7 +2146,7 @@ export default function App() {
       // Nowhere to bounce to: fall through to the normal front door.
       setAuthVerify(false)
     }
-  }, [authVerify, verifyToken])
+  }, [authVerify, verifyToken, verifyInvite])
 
   // Back from the confirm page restores this page from the bfcache with the bounce already spent.
   useEffect(() => {

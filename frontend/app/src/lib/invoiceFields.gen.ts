@@ -507,3 +507,43 @@ export const INVOICE_FIELDS = [
     "extract": false
   }
 ] as const
+
+// The import keys in Map-step order.
+export const IMPORT_KEYS = [
+  "invoice_number",
+  "issue_date",
+  "buyer_tin",
+  "buyer_name",
+  "currency",
+  "subtotal",
+  "vat",
+  "total",
+  "line_description",
+  "line_quantity",
+  "line_unit_price",
+  "invoice_kind",
+  "tax_currency_code",
+  "due_date",
+  "issue_time",
+  "tax_point_date",
+  "payment_status",
+  "buyer_email",
+  "buyer_telephone",
+  "buyer_street",
+  "buyer_city",
+  "buyer_postal_zone",
+  "buyer_country",
+  "buyer_state",
+  "buyer_lga",
+  "line_total",
+  "line_tax",
+  "line_tax_category",
+  "line_hsn_code",
+  "line_isic_code",
+  "line_product_category",
+  "line_service_category",
+  "line_sellers_item_identification",
+  "line_price_unit",
+  "line_tax_percent",
+  "line_base_quantity"
+] as const

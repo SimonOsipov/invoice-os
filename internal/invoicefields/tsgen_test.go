@@ -49,6 +49,13 @@ func renderTS(t *testing.T) []byte {
 	b.WriteString("export const INVOICE_FIELDS = ")
 	b.Write(body)
 	b.WriteString(" as const\n")
+	keys, err := json.MarshalIndent(ImportKeys(), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.WriteString("\n// The import keys in Map-step order.\nexport const IMPORT_KEYS = ")
+	b.Write(keys)
+	b.WriteString(" as const\n")
 	return b.Bytes()
 }
 

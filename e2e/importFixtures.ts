@@ -180,6 +180,9 @@ export const IMPORT_KEYS = [
   'subtotal',
   'vat',
   'total',
+  'line_description',
+  'line_quantity',
+  'line_unit_price',
   'invoice_kind',
   'tax_currency_code',
   'due_date',
@@ -194,9 +197,6 @@ export const IMPORT_KEYS = [
   'buyer_country',
   'buyer_state',
   'buyer_lga',
-  'line_description',
-  'line_quantity',
-  'line_unit_price',
   'line_total',
   'line_tax',
   'line_tax_category',
@@ -216,7 +216,7 @@ export function nullImportKeys(): Record<string, null> {
 
 // AIR07_ROW3_ANSWER: places invoice_number only, header at row 3 -- everything else null,
 // mirroring AIRL01_ANSWER's shape.
-const AIR07_ROW3_ANSWER: Record<string, unknown> = {
+export const AIR07_ROW3_ANSWER: Record<string, unknown> = {
   ...nullImportKeys(),
   invoice_number: 'Invoice No',
   header_row: 3,

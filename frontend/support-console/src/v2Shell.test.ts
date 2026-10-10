@@ -287,7 +287,7 @@ describe('v2 shell', () => {
   })
 
   it('SH-07 the modal and drawer bodies carry v2 weights, corners and Q3 text', () => {
-    const kill = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'line.qty.range', env: 'sandbox', onClose: noop, onConfirm: noop }))
+    const kill = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'line.qty.range', action: 'disable', busy: false, onClose: noop, onConfirm: noop }))
     const publish = renderToStaticMarkup(createElement(PublishModal, { onClose: noop, onConfirm: noop }))
     const rule = (testRan: boolean) =>
       renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], testRan, onRunTest: noop, onKill: noop, onClose: noop }))
@@ -318,9 +318,6 @@ describe('v2 shell', () => {
     }
 
     const killTags = parse(kill)
-    const note = killTags.filter((t) => style(t).background === 'var(--status-amber-bg)')
-    expect(note, 'one amber note').toHaveLength(1)
-    expect.soft(style(note[0])['border-radius'], 'amber note radius').toBe('var(--radius-md)')
     const tile = killTags.filter((t) => style(t).width === '36px' && style(t).height === '36px')
     expect(tile, 'one kill icon tile').toHaveLength(1)
     expect.soft(style(tile[0])['border-radius'], 'kill icon tile radius').toBe('var(--radius-md)')
@@ -453,7 +450,7 @@ describe('v2 shell', () => {
     }
 
     const modals = {
-      kill: [renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', env: 'live', onClose: noop, onConfirm: noop })), '440px'],
+      kill: [renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', action: 'disable', busy: false, onClose: noop, onConfirm: noop })), '440px'],
       publish: [renderToStaticMarkup(createElement(PublishModal, { onClose: noop, onConfirm: noop })), '560px'],
     } as const
     for (const [name, [html, width]] of Object.entries(modals)) {
@@ -495,5 +492,51 @@ describe('v2 shell', () => {
         expect.soft(style(d).background, 'dot colour follows the state').toBe('var(--status-red-text)')
       }
     }
+  })
+
+  it('KillConfirm renders a Reason field and a disabled confirm', () => {
+    const html = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', action: 'disable', busy: false, onClose: noop, onConfirm: noop }))
+    const ts = parse(html)
+    const field = ts.findIndex((t) => classes(t).includes('ops-field'))
+    expect(field, 'an .ops-field').toBeGreaterThan(-1)
+    expect(attr(ts[field + 1], 'aria-label'), 'the Reason input sits inside the field').toBe('Reason')
+    const confirm = buttonByText(html, 'Disable rule')
+    expect(confirm.attrs).toContain('disabled=""')
+    expect(style(confirm).opacity).toBe('0.45')
+    const busy = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', action: 'disable', busy: true, onClose: noop, onConfirm: noop }))
+    expect(buttonByText(busy, 'Disabling…').attrs).toContain('disabled=""')
+  })
+
+  it('KillConfirm enable variant', () => {
+    const html = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', action: 'enable', busy: false, onClose: noop, onConfirm: noop }))
+    expect(html).not.toContain('Disable a live rule?')
+    expect(classes(buttonByText(html, 'Enable rule'))).toContain('v2-btn-primary')
+    const busy = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', action: 'enable', busy: true, onClose: noop, onConfirm: noop }))
+    expect(buttonByText(busy, 'Enabling…').attrs).toContain('disabled=""')
+  })
+
+  it('KillConfirm copy', () => {
+    for (const action of ['disable', 'enable'] as const) {
+      const html = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', action, busy: false, onClose: noop, onConfirm: noop }))
+      for (const gone of ['SANDBOX', 'LIVE', 'NRS accreditation']) expect(html, `${action}: ${gone}`).not.toContain(gone)
+      expect(html).toContain('every tenant')
+    }
+  })
+
+  it('RuleDrawer offers Kill-switch only while the rule is enabled', () => {
+    const drawer = (enabled: boolean) =>
+      renderToStaticMarkup(createElement(RuleDrawer, { rule: { ...SEED_RULES[0], enabled }, testRan: false, onRunTest: noop, onKill: noop, onClose: noop }))
+    expect(drawer(true)).toContain('Kill-switch')
+    expect(drawer(false)).not.toContain('Kill-switch')
+  })
+
+  it('TopBar banners no longer call rule switches simulated', () => {
+    for (const env of ENVS) {
+      const html = topBar(env)
+      expect(html, `${env}: kill-switches`).not.toContain('kill-switches')
+      expect(html, `${env}: Rule switches are real`).toContain('Rule switches are real')
+    }
+    expect(topBar('sandbox')).toContain('CROSS-TENANT · ALL ENTITIES')
+    expect(topBar('live')).toContain('CROSS-TENANT · PENDING ACCREDITATION')
   })
 })

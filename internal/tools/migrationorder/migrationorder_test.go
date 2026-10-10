@@ -234,3 +234,19 @@ func TestMain_ReverseOrderMergeFailsWhenMainIsTheBeforeSha(t *testing.T) {
 		t.Fatalf("push to main, -main=origin/main==head: want exit 1, got %d", got)
 	}
 }
+
+// A -main that ls-tree reads but is-ancestor rejects (a tree, git exit 128) must exit 2, not skip nothing.
+func TestMain_IsAncestorFailureExitsTwo(t *testing.T) {
+	if os.Getenv("MIGRATIONORDER_RUN_MAIN") == "3" {
+		os.Args = []string{"migrationorder", "-base", "HEAD", "-main", "HEAD^{tree}"}
+		main()
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMain_IsAncestorFailureExitsTwo$")
+	cmd.Env = append(os.Environ(), "MIGRATIONORDER_RUN_MAIN=3")
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 2 {
+		t.Fatalf("want exit 2, got %v", err)
+	}
+}

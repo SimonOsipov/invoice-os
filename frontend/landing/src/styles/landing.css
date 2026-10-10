@@ -451,7 +451,7 @@ html:has(.cookie-note) {
     padding: 16px;
     gap: 12px;
   }
-  /* 44px touch target; landing-consent.spec.ts C9b measures it. */
+  /* 44px touch target; landing-consent.spec.ts C9 and C9b measure it. */
   .cn-actions button {
     height: 44px;
   }

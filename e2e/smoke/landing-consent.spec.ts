@@ -763,7 +763,7 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
   expectNoConsoleErrors(errors)
 })
 
-// C9 — first visit at 390x844. The standard overflow check is vacuous twice here: the
+// C9 — first visit. The standard overflow check is vacuous twice here: the
 // notice is position:fixed so it adds nothing to document.scrollWidth, and it sits inside
 // the App root's overflow-x: clip. The oracle is the card's OWN box.
 test('landing consent: the first-visit card is at most a third of the phone viewport, with 44px buttons in one row, at 390 and 375', async ({ page }, testInfo) => {
@@ -805,7 +805,7 @@ test('landing consent: the first-visit card is at most a third of the phone view
   expectNoConsoleErrors(errors)
 })
 
-// C9b — the REOPENED card at 390x844. .cn-setting renders only when `current` is non-null,
+// C9b — the REOPENED card. .cn-setting renders only when `current` is non-null,
 // i.e. only on a reopen, so the taller of the two states is measured nowhere else. Core AC
 // 8 does not distinguish the two, so it applies here unchanged.
 test('landing consent: the reopened card is at most a third of the phone viewport, with 44px buttons in one row, at 390 and 375', async ({ page }, testInfo) => {

@@ -79,7 +79,7 @@ paths:
 - Hand an invitee's session off from `POST /auth/invitation/password` only after the global sign-out, as a password grant with the password just set. Reserve no throttle attempt for it.
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
-- Send a sessionless app visit with exactly `?via=library` to `<landing>/?state=<s>&register`. Any other value takes the sign-in path.
+- Send a sessionless app visit with exactly `?via=library` to `<landing>/?state=<s>&register`. Any other value takes the sign-in path. An earlier front-door case wins: `?auth=start`, a confirm hop, a pending hand-off or a join offer. `frontDoor_authStartWinsOverVia` and `frontDoor_aPendingHandoffWinsOverVia` pin it.
 - Expect `?register` to open the create-an-account modal, or "Book a demo" when `registrationOpen()` is false.
 - Expect landing's `?demo` to open the book-a-demo modal.
 - Expect a `?signin` outcome to suppress `?register` and `?demo` in `readDeepLink`. `?register` wins over `?demo`.

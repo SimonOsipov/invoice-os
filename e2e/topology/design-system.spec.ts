@@ -267,7 +267,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
   expect(errors, `console errors on the header sweep:\n${errors.join('\n')}`).toEqual([])
 }
 
-// BURGER_MAX + 1 is the narrowest width that shows the five nav links.
+// BURGER_MAX + 1 is the narrowest width that shows the nav links.
 // Widest first (layout.ts).
 test('landing header row: inside the viewport and no overlap from 2560 to 834', async ({ page }, testInfo) => {
   await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1279, 1240, BURGER_MAX + 1, 1080, 834])

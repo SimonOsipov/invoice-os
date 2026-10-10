@@ -1,3 +1,4 @@
+import { ApiError } from '@invoice-os/api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { submissionUrl, submitDemoLead, type DemoLead, type HubSpotTarget } from './hubspot'
@@ -75,6 +76,8 @@ describe('submitDemoLead reporting', () => {
     expect(h.captureApiFailure).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'http', status, method: 'POST', url: submissionUrl(TARGET) }),
     )
+    // Only the route and the error travel; no request body or lead field.
+    expect(Object.keys(h.captureApiFailure.mock.calls[0][0] as object).sort()).toEqual(['error', 'kind', 'method', 'status', 'url'])
   })
 
   it.each([503, 404])('submitDemoLead_throwsTheValueItReported %i', async (status) => {
@@ -160,5 +163,18 @@ describe('submitDemoLead reporting', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(failure))
     expect(await rejection(submit)).toBe(failure)
     expect(h.captureApiFailure).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([400, 429, 499])('submitDemoLead_aThrowingReporterKeepsTheApiError %i', async (status) => {
+    h.captureApiFailure.mockImplementation(() => {
+      throw new Error('reporter down')
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status }))
+
+    const err = await rejection(submit)
+
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).toMatchObject({ kind: 'http', status, message: `hubspot ${status}` })
   })
 })

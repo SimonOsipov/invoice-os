@@ -2,8 +2,11 @@ package invoice
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 // strOrNil renders a *string for a t.Errorf message -- "nil" or the pointee
@@ -195,6 +198,127 @@ func TestSubmissionCanonical_MapsEveryField(t *testing.T) {
 	}
 }
 
+// canonicalTarget finds the Canonical field an Invoice or LineItem field name maps to:
+// Supplier*/Buyer* land on the party, every other name matches one to one.
+func canonicalTarget(c reflect.Value, name string) reflect.Value {
+	for _, p := range []string{"Supplier", "Buyer"} {
+		if rest, ok := strings.CutPrefix(name, p); ok && rest != "" {
+			if f := c.FieldByName(p).FieldByName(rest); f.IsValid() {
+				return f
+			}
+		}
+	}
+	return c.FieldByName(name)
+}
+
+func TestSubmissionCanonical_MapsEveryNRSField(t *testing.T) {
+	headerIdx, headerTags := contentFields(reflect.TypeOf(Invoice{}))
+	for n, i := range headerIdx {
+		tag := headerTags[n]
+		t.Run(tag, func(t *testing.T) {
+			var inv Invoice
+			setSample(t, reflect.ValueOf(&inv).Elem().Field(i), tag)
+			name := reflect.TypeOf(inv).Field(i).Name
+			got := canonicalTarget(reflect.ValueOf(SubmissionCanonical(inv)), name)
+			if !got.IsValid() {
+				t.Fatalf("Canonical has no field for Invoice.%s", name)
+			}
+			if want := reflect.ValueOf(inv).Field(i).Interface(); !reflect.DeepEqual(got.Interface(), want) {
+				t.Errorf("Canonical for Invoice.%s = %v, want %v", name, got.Interface(), want)
+			}
+		})
+	}
+	if len(headerIdx) < 28 {
+		t.Fatalf("walked %d header fields, want at least 28", len(headerIdx))
+	}
+
+	lineIdx, lineTags := contentFields(reflect.TypeOf(LineItem{}))
+	for n, i := range lineIdx {
+		tag := lineTags[n]
+		t.Run("line_"+tag, func(t *testing.T) {
+			var li LineItem
+			setSample(t, reflect.ValueOf(&li).Elem().Field(i), tag)
+			name := reflect.TypeOf(li).Field(i).Name
+			got := reflect.ValueOf(SubmissionCanonical(Invoice{LineItems: []LineItem{li}}).Lines[0]).FieldByName(name)
+			if !got.IsValid() {
+				t.Fatalf("CanonicalLine has no field for LineItem.%s", name)
+			}
+			if want := reflect.ValueOf(li).Field(i).Interface(); !reflect.DeepEqual(got.Interface(), want) {
+				t.Errorf("CanonicalLine.%s = %v, want %v", name, got.Interface(), want)
+			}
+		})
+	}
+	if len(lineIdx) < 15 {
+		t.Fatalf("walked %d line fields, want at least 15", len(lineIdx))
+	}
+}
+
+// assertNoZeroField fails for every zero field reachable from v, descending into
+// structs and the first element of each slice.
+func assertNoZeroField(t *testing.T, v reflect.Value, path string) {
+	t.Helper()
+	switch v.Kind() {
+	case reflect.Struct:
+		if v.Type() == reflect.TypeOf(time.Time{}) {
+			return
+		}
+		for i := 0; i < v.NumField(); i++ {
+			assertNoZeroField(t, v.Field(i), path+"."+v.Type().Field(i).Name)
+		}
+	case reflect.Slice:
+		if v.Len() == 0 {
+			t.Errorf("%s is empty", path)
+			return
+		}
+		assertNoZeroField(t, v.Index(0), path+"[0]")
+	case reflect.Ptr:
+		if v.IsNil() {
+			t.Errorf("%s is nil", path)
+		}
+	default:
+		if v.IsZero() {
+			t.Errorf("%s is zero", path)
+		}
+	}
+}
+
+func TestSubmissionCanonical_NoCanonicalFieldIsLeftZero(t *testing.T) {
+	inv := fullyPopulatedInvoice()
+	idx, tags := contentFields(reflect.TypeOf(Invoice{}))
+	for n, i := range idx {
+		setSample(t, reflect.ValueOf(&inv).Elem().Field(i), tags[n])
+	}
+	lIdx, lTags := contentFields(reflect.TypeOf(LineItem{}))
+	li := &inv.LineItems[0]
+	for n, i := range lIdx {
+		setSample(t, reflect.ValueOf(li).Elem().Field(i), lTags[n])
+	}
+	li.LineNo = 1
+	li.LineTotal, li.LineTax, li.TaxPercent = strPtr("10.00"), strPtr("0.75"), strPtr("7.50")
+
+	assertNoZeroField(t, reflect.ValueOf(SubmissionCanonical(inv)), "Canonical")
+}
+
+func TestSubmissionCanonical_TaxSubtotalsFromLines(t *testing.T) {
+	lines := []LineItem{
+		{LineNo: 1, TaxCategory: strPtr("STANDARD_VAT"), TaxPercent: strPtr("7.50"), LineTotal: strPtr("100.00"), LineTax: strPtr("7.50")},
+		{LineNo: 2, TaxCategory: strPtr("ZERO_RATED"), TaxPercent: strPtr("0"), LineTotal: strPtr("50.00"), LineTax: strPtr("0.00")},
+		{LineNo: 3, TaxCategory: strPtr("STANDARD_VAT"), TaxPercent: strPtr("7.50"), LineTotal: strPtr("20.00"), LineTax: strPtr("1.50")},
+	}
+	got := SubmissionCanonical(Invoice{LineItems: lines}).TaxSubtotals
+	want := taxSubtotals(lines)
+	if len(want) != 2 || len(got) != len(want) {
+		t.Fatalf("got %d entries, want %d (2 expected)", len(got), len(want))
+	}
+	for i, w := range want {
+		g := got[i]
+		if g.Category != w.TaxCategory || !reflect.DeepEqual(g.Percent, w.TaxPercent) ||
+			!reflect.DeepEqual(g.TaxableAmount, w.TaxableAmount) || !reflect.DeepEqual(g.TaxAmount, w.TaxAmount) {
+			t.Errorf("TaxSubtotals[%d] = %+v, want %+v", i, g, w)
+		}
+	}
+}
+
 // TestSubmissionCanonical_NilStaysNil (AC-1): an Invoice with all nullable
 // fields nil maps to a Canonical whose nullable fields are nil, never
 // coerced to "".
@@ -229,6 +353,27 @@ func TestSubmissionCanonical_NilStaysNil(t *testing.T) {
 	}
 	if got.Buyer.Name != nil {
 		t.Errorf("Buyer.Name = %v, want nil", got.Buyer.Name)
+	}
+
+	// NRS fields: the only non-nil values allowed are the line-less LineID/LineNo/InvoiceID zeros.
+	nilLine := SubmissionCanonical(Invoice{LineItems: []LineItem{{}}})
+	for _, v := range []reflect.Value{reflect.ValueOf(got), reflect.ValueOf(nilLine.Lines[0])} {
+		for i := 0; i < v.NumField(); i++ {
+			if f := v.Field(i); f.Kind() == reflect.Ptr && !f.IsNil() {
+				t.Errorf("%s = %v, want nil", v.Type().Field(i).Name, f.Elem())
+			}
+		}
+	}
+	for _, p := range []submission.Party{got.Supplier, got.Buyer} {
+		v := reflect.ValueOf(p)
+		for i := 0; i < v.NumField(); i++ {
+			if !v.Field(i).IsNil() {
+				t.Errorf("Party.%s = %v, want nil", v.Type().Field(i).Name, v.Field(i).Elem())
+			}
+		}
+	}
+	if got.TaxSubtotals != nil {
+		t.Errorf("TaxSubtotals = %v, want nil", got.TaxSubtotals)
 	}
 }
 

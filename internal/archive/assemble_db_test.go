@@ -161,11 +161,14 @@ func TestAssemble_EmptyPeriodProducesHeaderOnlyCSVs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zip.NewReader: %v", err)
 	}
-	for _, name := range []string{"invoices.csv", "status_history.csv", "submissions.csv", "exchange.csv"} {
+	for _, name := range []string{"invoices.csv", "line_items.csv", "status_history.csv", "submissions.csv", "exchange.csv"} {
 		rows := parseCSV(t, mustReadZipEntry(t, zr, name))
 		if len(rows) != 1 {
 			t.Errorf("%s has %d rows, want 1 (header only)", name, len(rows))
 		}
+	}
+	if len(zr.File) < 2 || zr.File[0].Name != "invoices.csv" || zr.File[1].Name != "line_items.csv" {
+		t.Errorf("entries = %v, want line_items.csv directly after invoices.csv", entryNames(zr))
 	}
 	for _, f := range zr.File {
 		if strings.HasPrefix(f.Name, "bodies/") {

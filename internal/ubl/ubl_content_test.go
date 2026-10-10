@@ -244,11 +244,14 @@ func TestRender_MapsEveryLineFieldToItsUBLElement(t *testing.T) {
 	wantTextsAt(t, nodes, linePath+"/cac:Price/cbc:PriceAmount", []string{"400.00", "200.00"}, "UnitPrice")
 }
 
-// TestRender_InvoicedQuantityCarriesNoUnitCode pins the knowing structural gap: Canonical stores
-// no unit, and a fabricated unitCode is the same class of invention as a derived cbc:Percent
-// [ubl-conformance-is-structural-not-certified].
+// TestRender_InvoicedQuantityCarriesNoUnitCode: with no stored price_unit the unit is not ours
+// to invent.
 func TestRender_InvoicedQuantityCarriesNoUnitCode(t *testing.T) {
-	nodes := walkDocument(t, mustRender(t, completeCanonical(t)))
+	c := completeCanonical(t)
+	for i := range c.Lines {
+		c.Lines[i].PriceUnit = nil
+	}
+	nodes := walkDocument(t, mustRender(t, c))
 
 	got := nodesAt(nodes, linePath+"/cbc:InvoicedQuantity")
 	if len(got) == 0 {

@@ -16,12 +16,18 @@ type csvWriter interface {
 	Write(record []string) error
 }
 
-// invoicesCSVHeader: the 17 invoices.csv columns (D-3 keeps issue_date for a
-// regulator to re-filter by; D-8 governs the three fiscal-outcome columns).
+// invoicesCSVHeader: the 39 invoices.csv columns (D-3 keeps issue_date for a
+// regulator to re-filter by; D-8 governs the three fiscal-outcome columns). The
+// first 17 keep their positions; the 22 NRS header and party columns follow.
 var invoicesCSVHeader = []string{
 	"invoice_id", "invoice_number", "status", "issue_date", "currency",
 	"subtotal", "vat", "total", "supplier_tin", "supplier_name", "buyer_tin", "buyer_name",
 	"irn", "csid", "qr_payload", "rejection_reasons", "created_at",
+	"invoice_kind", "tax_currency_code", "payment_status", "due_date", "tax_point_date", "issue_time",
+	"supplier_email", "supplier_telephone", "supplier_street", "supplier_city",
+	"supplier_postal_zone", "supplier_country", "supplier_state", "supplier_lga",
+	"buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+	"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
 }
 
 // invoicesScope: the FROM/WHERE every invoices.go statement shares (D-47).
@@ -30,11 +36,16 @@ var invoicesCSVHeader = []string{
 const invoicesScope = `
   FROM invoices WHERE entity_id = $1 AND created_at >= $2 AND created_at <= $3`
 
-// issue_date needs an explicit ::text cast — pgx errors scanning date into *string
-// without it. numeric and jsonb scan into *string/string fine, no cast needed.
+// date and time columns need an explicit ::text cast — pgx errors scanning them into
+// *string without it. numeric and jsonb scan into *string/string fine, no cast needed.
 const selectInvoicesSQL = `
 SELECT id, invoice_number, status, issue_date::text, currency, subtotal, vat, total,
-       supplier_tin, supplier_name, buyer_tin, buyer_name, irn, csid, qr_payload, rejection_reasons, created_at` +
+       supplier_tin, supplier_name, buyer_tin, buyer_name, irn, csid, qr_payload, rejection_reasons, created_at,
+       invoice_kind, tax_currency_code, payment_status, due_date::text, tax_point_date::text, issue_time::text,
+       supplier_email, supplier_telephone, supplier_street, supplier_city,
+       supplier_postal_zone, supplier_country, supplier_state, supplier_lga,
+       buyer_email, buyer_telephone, buyer_street, buyer_city,
+       buyer_postal_zone, buyer_country, buyer_state, buyer_lga` +
 	invoicesScope + ` ORDER BY created_at, id`
 
 // selectInvoiceIDsSQL: no ORDER BY -- order cannot change a row set or a count
@@ -65,8 +76,13 @@ func selectInvoices(ctx context.Context, tx pgx.Tx, r Request, w csvWriter) ([]s
 		var id, invoiceNumber, status, rejectionReasons string
 		var issueDate, currency, subtotal, vat, total, supplierTIN, supplierName, buyerTIN, buyerName, irn, csid, qrPayload *string
 		var createdAt time.Time
-		if err := rows.Scan(&id, &invoiceNumber, &status, &issueDate, &currency, &subtotal, &vat, &total,
-			&supplierTIN, &supplierName, &buyerTIN, &buyerName, &irn, &csid, &qrPayload, &rejectionReasons, &createdAt); err != nil {
+		nrs := make([]*string, 22)
+		dest := []any{&id, &invoiceNumber, &status, &issueDate, &currency, &subtotal, &vat, &total,
+			&supplierTIN, &supplierName, &buyerTIN, &buyerName, &irn, &csid, &qrPayload, &rejectionReasons, &createdAt}
+		for i := range nrs {
+			dest = append(dest, &nrs[i])
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("archive: scan invoice row: %w", err)
 		}
 		compact, err := compactJSON(rejectionReasons)
@@ -77,6 +93,9 @@ func selectInvoices(ctx context.Context, tx pgx.Tx, r Request, w csvWriter) ([]s
 			emptyIfNil(subtotal), emptyIfNil(vat), emptyIfNil(total), emptyIfNil(supplierTIN), emptyIfNil(supplierName),
 			emptyIfNil(buyerTIN), emptyIfNil(buyerName), emptyIfNil(irn), emptyIfNil(csid), emptyIfNil(qrPayload),
 			compact, createdAt.UTC().Format(time.RFC3339Nano)}
+		for _, v := range nrs {
+			record = append(record, emptyIfNil(v))
+		}
 		if err := w.Write(record); err != nil {
 			return nil, fmt.Errorf("archive: write invoices.csv row %s: %w", id, err)
 		}

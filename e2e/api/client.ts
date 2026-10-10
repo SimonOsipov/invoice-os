@@ -440,6 +440,15 @@ export interface InvoiceLineItem {
   unit_price: string | null
   line_total: string | null
   line_tax: string | null
+  tax_category: string | null
+  hsn_code: string | null
+  isic_code: string | null
+  product_category: string | null
+  service_category: string | null
+  sellers_item_identification: string | null
+  price_unit: string | null
+  tax_percent: string | null
+  base_quantity: string | null
 }
 
 // Invoice mirrors internal/invoice/invoice.go's Invoice struct exactly (M4-04-08,
@@ -479,6 +488,28 @@ export interface Invoice {
   kept_as_is_at: string | null
   kept_as_is_by: string | null
   kept_as_is_reason: string | null
+  invoice_kind: string | null
+  tax_currency_code: string | null
+  due_date: string | null
+  issue_time: string | null
+  tax_point_date: string | null
+  payment_status: string | null
+  supplier_email: string | null
+  supplier_telephone: string | null
+  supplier_street: string | null
+  supplier_city: string | null
+  supplier_postal_zone: string | null
+  supplier_country: string | null
+  supplier_state: string | null
+  supplier_lga: string | null
+  buyer_email: string | null
+  buyer_telephone: string | null
+  buyer_street: string | null
+  buyer_city: string | null
+  buyer_postal_zone: string | null
+  buyer_country: string | null
+  buyer_state: string | null
+  buyer_lga: string | null
   line_items?: InvoiceLineItem[]
 }
 
@@ -561,7 +592,17 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
 // can_edit, and do not read a validated status as proof it is null.
 // CanViewUBL/UBLBlockedReason (BUG-04-03): same no-omitempty
 // convention; content-derived (ubl.Missing), never status-derived.
+// InvoiceTaxSubtotal mirrors internal/invoice's TaxSubtotal: one tax category's totals.
+export interface InvoiceTaxSubtotal {
+  tax_category: string
+  tax_percent: string | null
+  taxable_amount: string | null
+  tax_amount: string | null
+}
+
 export interface GetInvoiceResult extends Invoice {
+  // Derived from the lines, directly after the Invoice keys; [] when none.
+  tax_subtotals: InvoiceTaxSubtotal[]
   rule_set_version: number | null
   qr_png_base64: string | null
   can_edit: boolean
@@ -605,6 +646,29 @@ export interface InvoiceEditInput {
   vat?: string
   total?: string
   invoice_number?: string
+  // The 22 NRS keys; an explicit null clears the stored value.
+  invoice_kind?: string | null
+  tax_currency_code?: string | null
+  due_date?: string | null
+  issue_time?: string | null
+  tax_point_date?: string | null
+  payment_status?: string | null
+  supplier_email?: string | null
+  supplier_telephone?: string | null
+  supplier_street?: string | null
+  supplier_city?: string | null
+  supplier_postal_zone?: string | null
+  supplier_country?: string | null
+  supplier_state?: string | null
+  supplier_lga?: string | null
+  buyer_email?: string | null
+  buyer_telephone?: string | null
+  buyer_street?: string | null
+  buyer_city?: string | null
+  buyer_postal_zone?: string | null
+  buyer_country?: string | null
+  buyer_state?: string | null
+  buyer_lga?: string | null
   // line_items (INVED-01-08) mirrors editReq.LineItems, a POINTER to a slice on the Go side
   // (editReq.LineItems, `*[]lineItemReq`) -- three states over the wire: the
   // key ABSENT (or `undefined`, which JSON.stringify drops) leaves the stored lines
@@ -613,11 +677,21 @@ export interface InvoiceEditInput {
   // InvoiceCreateLineItem below rather than shared -- the two wire request types
   // (createRequest/editReq) are themselves independent on the Go side.
   line_items?: Array<{
+    id?: string
     description?: string
     quantity?: string
     unit_price?: string
     line_total?: string
     line_tax?: string
+    tax_category?: string
+    hsn_code?: string
+    isic_code?: string
+    product_category?: string
+    service_category?: string
+    sellers_item_identification?: string
+    price_unit?: string
+    tax_percent?: string
+    base_quantity?: string
   }>
 }
 
@@ -687,6 +761,16 @@ export interface InvoiceCreateLineItem {
   unit_price?: string
   line_total?: string
   line_tax?: string
+  id?: string
+  tax_category?: string
+  hsn_code?: string
+  isic_code?: string
+  product_category?: string
+  service_category?: string
+  sellers_item_identification?: string
+  price_unit?: string
+  tax_percent?: string
+  base_quantity?: string
 }
 
 // InvoiceCreateInput mirrors internal/invoice/handlers.go's createRequest wire body
@@ -711,6 +795,28 @@ export interface InvoiceCreateInput {
   // EXTR-15-06: the document a hand-off was started from; appended last, matching
   // createRequest's own declaration order.
   source_document_id?: string
+  invoice_kind?: string
+  tax_currency_code?: string
+  due_date?: string
+  issue_time?: string
+  tax_point_date?: string
+  payment_status?: string
+  supplier_email?: string
+  supplier_telephone?: string
+  supplier_street?: string
+  supplier_city?: string
+  supplier_postal_zone?: string
+  supplier_country?: string
+  supplier_state?: string
+  supplier_lga?: string
+  buyer_email?: string
+  buyer_telephone?: string
+  buyer_street?: string
+  buyer_city?: string
+  buyer_postal_zone?: string
+  buyer_country?: string
+  buyer_state?: string
+  buyer_lga?: string
 }
 
 // createInvoice(): POST /v1/invoices. Reuses the Invoice interface above -- same

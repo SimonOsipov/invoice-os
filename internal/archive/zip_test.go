@@ -113,6 +113,7 @@ func buildFixtureBundle(t *testing.T) fixtureBundle {
 		header []string
 	}{
 		{"invoices.csv", invoicesCSVHeader},
+		{"line_items.csv", lineItemsCSVHeader},
 		{"status_history.csv", historyCSVHeader},
 		{"submissions.csv", submissionsCSVHeader},
 	} {
@@ -204,6 +205,7 @@ func TestBundle_EveryCSVFirstRecordIsItsDeclaredHeader(t *testing.T) {
 
 	headers := map[string][]string{
 		"invoices.csv":       invoicesCSVHeader,
+		"line_items.csv":     lineItemsCSVHeader,
 		"status_history.csv": historyCSVHeader,
 		"submissions.csv":    submissionsCSVHeader,
 		"exchange.csv":       exchangeCSVHeader,
@@ -225,6 +227,7 @@ func TestBundle_EveryCSVRecordHasTheHeaderFieldCount(t *testing.T) {
 
 	headers := map[string][]string{
 		"invoices.csv":       invoicesCSVHeader,
+		"line_items.csv":     lineItemsCSVHeader,
 		"status_history.csv": historyCSVHeader,
 		"submissions.csv":    submissionsCSVHeader,
 		"exchange.csv":       exchangeCSVHeader,
@@ -521,7 +524,7 @@ func TestManifest_CSVRowCountsMatchDataRows(t *testing.T) {
 	doc := readManifest(t, mustReadZip(t, fb.zipBytes))
 
 	checked := 0
-	for _, name := range []string{"invoices.csv", "status_history.csv", "submissions.csv", "exchange.csv"} {
+	for _, name := range []string{"invoices.csv", "line_items.csv", "status_history.csv", "submissions.csv", "exchange.csv"} {
 		var found *manifestEntry
 		for i := range doc.Entries {
 			if doc.Entries[i].Name == name {
@@ -612,6 +615,7 @@ func TestManifest_CountsMatchTheEntriesTheyAreDerivedFrom(t *testing.T) {
 
 	want := manifestCounts{
 		Invoices:          1,
+		LineItems:         1,
 		StatusTransitions: 1,
 		Submissions:       1,
 		ExchangeAttempts:  1,

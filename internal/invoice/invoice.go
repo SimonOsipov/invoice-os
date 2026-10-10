@@ -61,6 +61,16 @@ type LineItem struct {
 	UnitPrice   *string `json:"unit_price"`
 	LineTotal   *string `json:"line_total"`
 	LineTax     *string `json:"line_tax"`
+
+	TaxCategory               *string `json:"tax_category"`
+	HSNCode                   *string `json:"hsn_code"`
+	ISICCode                  *string `json:"isic_code"`
+	ProductCategory           *string `json:"product_category"`
+	ServiceCategory           *string `json:"service_category"`
+	SellersItemIdentification *string `json:"sellers_item_identification"`
+	PriceUnit                 *string `json:"price_unit"`
+	TaxPercent                *string `json:"tax_percent"`
+	BaseQuantity              *string `json:"base_quantity"`
 }
 
 // Invoice is an invoices row plus its hydrated LineItems (Store.Get only;
@@ -118,6 +128,30 @@ type Invoice struct {
 	// nil for a pre-migration/legacy failed row. No omitempty, same
 	// explicit-null rationale as KeptAsIsReason above.
 	FailureKind *string `json:"failure_kind"`
+
+	// NRS header and party fields: explicit null when unset.
+	InvoiceKind        *string    `json:"invoice_kind"`
+	TaxCurrencyCode    *string    `json:"tax_currency_code"`
+	DueDate            *time.Time `json:"due_date"`
+	IssueTime          *string    `json:"issue_time"`
+	TaxPointDate       *time.Time `json:"tax_point_date"`
+	PaymentStatus      *string    `json:"payment_status"`
+	SupplierEmail      *string    `json:"supplier_email"`
+	SupplierTelephone  *string    `json:"supplier_telephone"`
+	SupplierStreet     *string    `json:"supplier_street"`
+	SupplierCity       *string    `json:"supplier_city"`
+	SupplierPostalZone *string    `json:"supplier_postal_zone"`
+	SupplierCountry    *string    `json:"supplier_country"`
+	SupplierState      *string    `json:"supplier_state"`
+	SupplierLGA        *string    `json:"supplier_lga"`
+	BuyerEmail         *string    `json:"buyer_email"`
+	BuyerTelephone     *string    `json:"buyer_telephone"`
+	BuyerStreet        *string    `json:"buyer_street"`
+	BuyerCity          *string    `json:"buyer_city"`
+	BuyerPostalZone    *string    `json:"buyer_postal_zone"`
+	BuyerCountry       *string    `json:"buyer_country"`
+	BuyerState         *string    `json:"buyer_state"`
+	BuyerLGA           *string    `json:"buyer_lga"`
 
 	LineItems []LineItem `json:"line_items,omitempty"`
 
@@ -183,11 +217,23 @@ type HistoryCause struct {
 // is deliberately NOT part of this input — it is system-assigned 1..N by the
 // slice's array position ([D10]), never caller-supplied.
 type LineItemInput struct {
+	// ID is the stored line this entry continues; nil for a new line.
+	ID          *string
 	Description *string
 	Quantity    *string
 	UnitPrice   *string
 	LineTotal   *string
 	LineTax     *string
+
+	TaxCategory               *string
+	HSNCode                   *string
+	ISICCode                  *string
+	ProductCategory           *string
+	ServiceCategory           *string
+	SellersItemIdentification *string
+	PriceUnit                 *string
+	TaxPercent                *string
+	BaseQuantity              *string
 }
 
 // CreateInput is the Store.Create argument. EntityID and InvoiceNumber are
@@ -195,19 +241,41 @@ type LineItemInput struct {
 // that Store.Create persists un-rejected even when negative/NULL/blank
 // (store-invalid-faithfully, AC-6).
 type CreateInput struct {
-	EntityID      string
-	InvoiceNumber string
-	IssueDate     *time.Time
-	SupplierTIN   *string
-	SupplierName  *string
-	BuyerTIN      *string
-	BuyerName     *string
-	Currency      *string
-	Subtotal      *string
-	VAT           *string
-	Total         *string
-	LineItems     []LineItemInput
-	ImportBatchID *string
+	EntityID           string
+	InvoiceNumber      string
+	IssueDate          *time.Time
+	SupplierTIN        *string
+	SupplierName       *string
+	BuyerTIN           *string
+	BuyerName          *string
+	Currency           *string
+	Subtotal           *string
+	VAT                *string
+	Total              *string
+	InvoiceKind        *string
+	TaxCurrencyCode    *string
+	DueDate            *time.Time
+	IssueTime          *string
+	TaxPointDate       *time.Time
+	PaymentStatus      *string
+	SupplierEmail      *string
+	SupplierTelephone  *string
+	SupplierStreet     *string
+	SupplierCity       *string
+	SupplierPostalZone *string
+	SupplierCountry    *string
+	SupplierState      *string
+	SupplierLGA        *string
+	BuyerEmail         *string
+	BuyerTelephone     *string
+	BuyerStreet        *string
+	BuyerCity          *string
+	BuyerPostalZone    *string
+	BuyerCountry       *string
+	BuyerState         *string
+	BuyerLGA           *string
+	LineItems          []LineItemInput
+	ImportBatchID      *string
 	// SourceDocumentID points at the documents row an import read this invoice
 	// out of; nil for a manual create. Deliberately absent from Invoice and
 	// invoiceColumns -- that projection feeds a POSITIONAL scanInvoice and the
@@ -254,9 +322,32 @@ type UpdateInput struct {
 	Subtotal     *string
 	VAT          *string
 	Total        *string
+
+	InvoiceKind        *string
+	TaxCurrencyCode    *string
+	DueDate            *time.Time
+	IssueTime          *string
+	TaxPointDate       *time.Time
+	PaymentStatus      *string
+	SupplierEmail      *string
+	SupplierTelephone  *string
+	SupplierStreet     *string
+	SupplierCity       *string
+	SupplierPostalZone *string
+	SupplierCountry    *string
+	SupplierState      *string
+	SupplierLGA        *string
+	BuyerEmail         *string
+	BuyerTelephone     *string
+	BuyerStreet        *string
+	BuyerCity          *string
+	BuyerPostalZone    *string
+	BuyerCountry       *string
+	BuyerState         *string
+	BuyerLGA           *string
 }
 
-// EditInput is the Store.Edit argument (INVED-01-04): the 9 optional header
+// EditInput is the Store.Edit argument (INVED-01-04): the optional header
 // fields of an embedded UpdateInput, plus the invoice's line items. Edit takes
 // this rather than a widened UpdateInput because updateContentTx is SHARED with
 // Store.Update, which must keep taking a header-only UpdateInput byte-identical
@@ -455,6 +546,9 @@ var (
 	// the number UPDATE, and the canCorrectNumber guard, respectively).
 	ErrNumberTaken = errors.New("invoice: number taken")
 	ErrNumberFixed = errors.New("invoice: number fixed")
+
+	// ErrUnknownLineID: a line_items id that names no line of this invoice.
+	ErrUnknownLineID = errors.New("invoice: unknown line id")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

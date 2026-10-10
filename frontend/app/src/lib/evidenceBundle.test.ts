@@ -89,7 +89,7 @@ describe('evidence-bundle wire mirror', () => {
     expect(jsonTagsOf(manifest, 'manifestCounts')).toContain('body_files')
 
     const tags = sources.flatMap(([src, name]) => jsonTagsOf(src, name))
-    expect(tags).toHaveLength(17)
+    expect(tags).toHaveLength(18)
 
     // TS side: the haystack is the four wire interfaces' bodies, nothing else in the file.
     const bodies = interfaceBodiesOf(ts, ['BundleEntity', 'BundlePeriod', 'BundleCounts', 'EvidenceBundlePreview'])
@@ -179,7 +179,7 @@ describe('getEvidenceBundlePreview', () => {
         basis: 'invoices.created_at',
       },
       filename: 'ASComply_evidence_Honeywell-Group_20260101_20260331.zip',
-      counts: { invoices: 3, status_transitions: 4, submissions: 2, exchange_attempts: 2, body_files: 1 },
+      counts: { invoices: 3, line_items: 5, status_transitions: 4, submissions: 2, exchange_attempts: 2, body_files: 1 },
       over_limit: false,
     } as unknown as EvidenceBundlePreview
     const authedFetch = vi.fn().mockResolvedValue(payload)
@@ -465,7 +465,7 @@ describe('evidence-bundle wire mirror (placement)', () => {
         if (!fields.includes(tag)) misplaced.push(`${iface}.${tag}`)
       }
     }
-    expect(checked).toBe(17)
+    expect(checked).toBe(18)
     expect(misplaced).toEqual([])
   })
 })
@@ -512,7 +512,7 @@ describe('bundleRequestFor (boundaries)', () => {
 
 describe('getEvidenceBundlePreview (passthrough and abort)', () => {
   it('EB-01-22 bundlePreview_returnsThePayloadUntouched', async () => {
-    const counts = { invoices: 3, status_transitions: 4, submissions: 2, exchange_attempts: 2, body_files: 1 }
+    const counts = { invoices: 3, line_items: 5, status_transitions: 4, submissions: 2, exchange_attempts: 2, body_files: 1 }
     const payload = {
       entity: { id: REQ.entityId, name: 'Honeywell Group', tin: null },
       period: {

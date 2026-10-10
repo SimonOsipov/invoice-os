@@ -160,7 +160,7 @@ const PREVIEW: EvidenceBundlePreview = {
   entity: { id: 'ent-a', name: 'Honeywell Group', tin: '12345678-0001' },
   period: { from: '2026-07-01T00:00:00Z', to: '2026-07-31T23:59:59Z', bounds: 'inclusive', basis: 'invoices.created_at' },
   filename: 'ASComply_evidence_Honeywell_Group_20260701_20260731.zip',
-  counts: { invoices: 507, status_transitions: 2028, submissions: 1204, exchange_attempts: 1521, body_files: 3042 },
+  counts: { invoices: 507, line_items: 1811, status_transitions: 2028, submissions: 1204, exchange_attempts: 1521, body_files: 3042 },
   over_limit: false,
 }
 const LOCAL = mkEntity('ent-a', 'Locally Picked Ltd')
@@ -828,6 +828,21 @@ describe('EvidenceBundleDrawer', () => {
 
     expect(screen.queryByTestId('evidence-confirm-block')).toBeNull()
     expect((screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('confirmBlock_listsInvoiceLinesSecondOfEightWithThePreviewCount', async () => {
+    mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+
+    await screen.findByTestId('evidence-confirm-block')
+    const rows = screen.getAllByTestId('evidence-confirm-row')
+    expect(rows).toHaveLength(8)
+    const second = rows[1]
+    expect(within(second).getByTestId('evidence-confirm-row-label').textContent).toBe('Invoice lines (line_items.csv)')
+    expect(within(second).getByTestId('evidence-confirm-row-value').textContent).toBe((1811).toLocaleString('en-NG'))
+    expect(within(rows[0]).getByTestId('evidence-confirm-row-label').textContent).toBe('Invoices (invoices.csv)')
   })
 
   // EB-05-10 -- jsdom applies no stylesheet, so only the inline `style` attribute is a live

@@ -543,3 +543,101 @@ func TestPayloadEngine_ValidInvoice_ZeroViolationsAgainstRealV2(t *testing.T) {
 			"payload fires every required rule, not zero) [PAY-18/AC#1/batch-payload-rooting]", res.Violations)
 	}
 }
+
+// pay18NRSInvoice is PAY-18's valid invoice plus every NRS field.
+func pay18NRSInvoice() invoice.Invoice {
+	d := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	issueDate := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	line := func(id string, no int, qty, price, total, tax string) invoice.LineItem {
+		return invoice.LineItem{
+			ID: id, LineNo: no, Quantity: ptr(qty), UnitPrice: ptr(price), LineTotal: ptr(total), LineTax: ptr(tax),
+			TaxCategory: ptr("STANDARD_VAT"), HSNCode: ptr("8471"), ISICCode: ptr("6201"),
+			ProductCategory: ptr("goods"), ServiceCategory: ptr("svc"), SellersItemIdentification: ptr("SKU-1"),
+			PriceUnit: ptr("NGN per EA"), TaxPercent: ptr("7.50"), BaseQuantity: ptr("1.000"),
+		}
+	}
+	return invoice.Invoice{
+		InvoiceNumber: "INV-001", IssueDate: &issueDate,
+		Currency:    ptr("NGN"),
+		SupplierTIN: ptr("12345678-0001"), SupplierName: ptr("Acme Ltd"),
+		BuyerTIN: ptr("87654321-0002"), BuyerName: ptr("Beta Ltd"),
+		Subtotal: ptr("250.00"), VAT: ptr("18.75"), Total: ptr("268.75"),
+		InvoiceKind: ptr("380"), TaxCurrencyCode: ptr("NGN"), DueDate: &d, IssueTime: ptr("14:30:00"),
+		TaxPointDate: &d, PaymentStatus: ptr("PENDING"),
+		SupplierEmail: ptr("s@acme.ng"), SupplierTelephone: ptr("+2348000000001"), SupplierStreet: ptr("1 Main St"),
+		SupplierCity: ptr("Lagos"), SupplierPostalZone: ptr("100001"), SupplierCountry: ptr("NG"),
+		SupplierState: ptr("NG-LA"), SupplierLGA: ptr("Ikeja"),
+		BuyerEmail: ptr("b@beta.ng"), BuyerTelephone: ptr("+2348000000002"), BuyerStreet: ptr("2 Side St"),
+		BuyerCity: ptr("Abuja"), BuyerPostalZone: ptr("900001"), BuyerCountry: ptr("NG"),
+		BuyerState: ptr("NG-FC"), BuyerLGA: ptr("Abuja Municipal"),
+		LineItems: []invoice.LineItem{
+			line(uuid.NewString(), 1, "2", "100.00", "200.00", "15.00"),
+			line(uuid.NewString(), 2, "1", "50.00", "50.00", "3.75"),
+		},
+	}
+}
+
+// activeV4RuleSet loads the active rule set and fails unless it is v4 with 20 rules.
+func activeV4RuleSet(t *testing.T) validation.RuleSet {
+	t.Helper()
+	rs, err := validation.NewStore(rulesAppPool(t)).LoadActiveRuleSet(rulesIdentity())
+	if err != nil {
+		t.Fatalf("LoadActiveRuleSet: %v", err)
+	}
+	if rs.Version != 4 || len(rs.Rules) != 20 {
+		t.Fatalf("active rule set = version %d with %d rules, want version 4 with 20", rs.Version, len(rs.Rules))
+	}
+	return rs
+}
+
+// Every NRS field on the PAY-18 invoice leaves the active rule set's verdict at zero violations.
+func TestPayloadEngine_NRSFieldsLeaveTheV4VerdictUnchanged(t *testing.T) {
+	rs := activeV4RuleSet(t)
+	res, err := validation.NewDefaultEngine().Evaluate(rooted(t, pay18NRSInvoice()), rs)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(res.Violations) != 0 {
+		t.Errorf("violations = %v, want zero", res.Violations)
+	}
+}
+
+// Control for the zero-violation verdict: the same NRS invoice with a wrong VAT still violates, so the rules do run on it.
+func TestPayloadEngine_NRSInvoiceWithAWrongVATStillViolatesUnderV4(t *testing.T) {
+	rs := activeV4RuleSet(t)
+	inv := pay18NRSInvoice()
+	inv.VAT = ptr("1.00")
+	inv.SupplierTIN = nil
+	res, err := validation.NewDefaultEngine().Evaluate(rooted(t, inv), rs)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	got := map[string]bool{}
+	for _, v := range res.Violations {
+		got[v.RuleKey] = true
+	}
+	if !got["vat-standard-rate"] || !got["supplier-tin-required"] {
+		t.Errorf("violations = %v, want vat-standard-rate and supplier-tin-required", res.Violations)
+	}
+}
+
+// Empty and non-number NRS values reach the engine without an error or a violation: no v4 rule reads an NRS key.
+func TestPayloadEngine_EmptyAndNonNumericNRSValuesLeaveTheV4VerdictUnchanged(t *testing.T) {
+	rs := activeV4RuleSet(t)
+	inv := pay18NRSInvoice()
+	empty := ""
+	inv.InvoiceKind, inv.TaxCurrencyCode, inv.IssueTime, inv.PaymentStatus = &empty, &empty, &empty, &empty
+	inv.SupplierEmail, inv.SupplierState, inv.BuyerLGA, inv.BuyerCountry = &empty, &empty, &empty, &empty
+	for i := range inv.LineItems {
+		l := &inv.LineItems[i]
+		l.TaxCategory, l.HSNCode, l.PriceUnit = &empty, &empty, &empty
+		l.TaxPercent, l.BaseQuantity = ptr("x"), ptr("NaN")
+	}
+	res, err := validation.NewDefaultEngine().Evaluate(rooted(t, inv), rs)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(res.Violations) != 0 {
+		t.Errorf("violations = %v, want zero", res.Violations)
+	}
+}

@@ -14,6 +14,7 @@ package submission_test
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
@@ -22,16 +23,32 @@ import (
 // Status, Violations or RuleSetVersionID field -- it is 05's invoice-content projection, not
 // a tenant- or validation-scoped record [canonical-is-invoice-content].
 func TestCanonical_CarriesNoTenantOrStatus(t *testing.T) {
-	typ := reflect.TypeOf(submission.Canonical{})
 	forbidden := map[string]bool{
 		"TenantID":         true,
+		"EntityID":         true,
 		"Status":           true,
 		"Violations":       true,
 		"RuleSetVersionID": true,
 	}
-	for i := 0; i < typ.NumField(); i++ {
-		if name := typ.Field(i).Name; forbidden[name] {
-			t.Errorf("Canonical has a %q field, want none (Core AC-4: canonical is invoice content only)", name)
+	seen := map[reflect.Type]bool{}
+	var walk func(typ reflect.Type)
+	walk = func(typ reflect.Type) {
+		for typ.Kind() == reflect.Ptr || typ.Kind() == reflect.Slice {
+			typ = typ.Elem()
 		}
+		if typ.Kind() != reflect.Struct || typ == reflect.TypeOf(time.Time{}) || seen[typ] {
+			return
+		}
+		seen[typ] = true
+		for i := 0; i < typ.NumField(); i++ {
+			if name := typ.Field(i).Name; forbidden[name] {
+				t.Errorf("%s has a %q field, want none (Core AC-4: canonical is invoice content only)", typ.Name(), name)
+			}
+			walk(typ.Field(i).Type)
+		}
+	}
+	walk(reflect.TypeOf(submission.Canonical{}))
+	if len(seen) != 4 {
+		t.Errorf("walked %d struct types, want 4 (Canonical, Party, CanonicalLine, TaxSubtotal)", len(seen))
 	}
 }

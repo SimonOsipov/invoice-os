@@ -61,4 +61,28 @@ describe('useTourSpot', () => {
     render({ i: 0, phase: 'card' }, '/next')
     expect(seen.rect).toBeNull()
   })
+
+  it('useTourSpot_remeasuresWhenWebFontsFinishLoading', () => {
+    const fonts = new EventTarget() as EventTarget & { ready: Promise<unknown> }
+    fonts.ready = new Promise(() => {})
+    Object.defineProperty(document, 'fonts', { value: fonts, configurable: true })
+    try {
+      const nav = document.createElement('nav')
+      nav.id = 'nav-invoices'
+      document.body.appendChild(nav)
+      render({ i: 0, phase: 'menu' })
+      expect(seen.rect).toEqual({ x: 6, y: 97, w: 275, h: 42 })
+
+      NAV.top = 106
+      NAV.height = 32
+      act(() => {
+        fonts.dispatchEvent(new Event('loadingdone'))
+      })
+      expect(seen.rect).toEqual({ x: 6, y: 103, w: 275, h: 38 })
+    } finally {
+      NAV.top = 100
+      NAV.height = 36
+      delete (document as { fonts?: unknown }).fonts
+    }
+  })
 })

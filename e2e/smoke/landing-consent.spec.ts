@@ -1125,6 +1125,7 @@ test('landing consent: O3 the notice is anchored bottom-right on desktop and a b
     ...WIDE_WIDTHS.map((width) => ({ width, height: 1080, band: false })),
     { width: 600, height: 844, band: true },
     { ...PHONE, band: true },
+    { width: 375, height: 844, band: true },
   ]
   const measured: Array<Gaps & { state: string }> = []
   const entry = page.viewportSize()
@@ -1231,6 +1232,8 @@ const O4_CASES = [
   { label: '1440x900 first visit', viewport: { width: 1440, height: 900 }, reopen: false },
   { label: '390x844 first visit', viewport: PHONE, reopen: false },
   { label: '390x844 reopened', viewport: PHONE, reopen: true },
+  { label: '375x844 first visit', viewport: { width: 375, height: 844 }, reopen: false },
+  { label: '375x844 reopened', viewport: { width: 375, height: 844 }, reopen: true },
   { label: '1280x720 first visit', viewport: { width: 1280, height: 720 }, reopen: false },
 ]
 for (const c of O4_CASES) {
@@ -1253,15 +1256,17 @@ for (const c of O4_CASES) {
   })
 }
 
-test('landing consent: O4 Tab never lands focus under the notice (/privacy 390x844)', async ({ page }, testInfo) => {
-  test.setTimeout(120_000)
-  await page.emulateMedia({ reducedMotion: 'reduce' })
-  await page.setViewportSize(PHONE)
-  const { errors } = await openLanding(page, { url: PRIVACY_URL, privacy: true })
+for (const width of [390, 375]) {
+  test(`landing consent: O4 Tab never lands focus under the notice (/privacy ${width}x844)`, async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setViewportSize({ width, height: 844 })
+    const { errors } = await openLanding(page, { url: PRIVACY_URL, privacy: true })
 
-  await expectTabClearsNotice(page, testInfo, 'privacy 390x844', MIN_O4_CONTROLS_PRIVACY)
-  expectNoConsoleErrors(errors)
-})
+    await expectTabClearsNotice(page, testInfo, `privacy ${width}x844`, MIN_O4_CONTROLS_PRIVACY)
+    expectNoConsoleErrors(errors)
+  })
+}
 
 /** The computed value of `prop` when set to `expr` (a token) on a probe element: the cascade-free reference. */
 function resolved(page: Page, prop: string, expr: string): Promise<string> {
@@ -1280,7 +1285,7 @@ function resolved(page: Page, prop: string, expr: string): Promise<string> {
 
 // Resolved values: card-floating and the v2 tokens must win the cascade. CN-1 reads source
 // and cannot see a rule that beats the class. Each value is compared to its token, not a literal.
-for (const viewport of [{ width: 1440, height: 900 }, PHONE]) {
+for (const viewport of [{ width: 1440, height: 900 }, PHONE, { width: 375, height: 844 }]) {
   test(`landing consent: the card, label, setting line and buttons resolve to their v2 tokens (${viewport.width}x${viewport.height})`, async ({
     page,
   }) => {

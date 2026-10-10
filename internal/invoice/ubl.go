@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/ubl"
@@ -35,8 +37,44 @@ func ublBlockedReason(missing []string) *string {
 // ubl_blocked_reason and this route's 409 -- one return, so the two cannot
 // drift. ok == (reason == nil) by construction.
 func ublGate(c submission.Canonical) (bool, *string) {
-	reason := ublBlockedReason(ubl.Missing(c))
-	return reason == nil, reason
+	if reason := ublBlockedReason(ubl.Missing(c)); reason != nil {
+		return false, reason
+	}
+	if reason := taxCategoryRefusal(c); reason != nil {
+		return false, reason
+	}
+	return true, nil
+}
+
+// taxCategoryRefusal compares by decimal value; a non-decimal amount refuses rather than panics.
+func taxCategoryRefusal(c submission.Canonical) *string {
+	if len(c.TaxSubtotals) == 0 {
+		return nil
+	}
+	if c.VAT == nil {
+		r := "The invoice has tax categories but no VAT total."
+		return &r
+	}
+	mismatch := "The VAT total does not equal the sum of the tax categories."
+	vat, err := decimal.NewFromString(*c.VAT)
+	if err != nil {
+		return &mismatch
+	}
+	sum := decimal.Zero
+	for _, s := range c.TaxSubtotals {
+		if s.TaxAmount == nil {
+			return &mismatch
+		}
+		a, err := decimal.NewFromString(*s.TaxAmount)
+		if err != nil {
+			return &mismatch
+		}
+		sum = sum.Add(a)
+	}
+	if !sum.Equal(vat) {
+		return &mismatch
+	}
+	return nil
 }
 
 // UBLHandler returns GET /v1/invoices/{id}/ubl -- same identity-first-401 order

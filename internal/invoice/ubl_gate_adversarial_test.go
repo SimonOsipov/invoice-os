@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/ubl"
 )
 
@@ -337,5 +338,64 @@ func TestRLS_GetHandlerCrossTenantUBLKeysNotLeaked(t *testing.T) {
 		if strings.Contains(recA.Body.String(), k) {
 			t.Errorf("body = %s, %s must never leak across tenants, in any form", recA.Body.String(), k)
 		}
+	}
+}
+
+const (
+	gateNoVAT    = "The invoice has tax categories but no VAT total."
+	gateMismatch = "The VAT total does not equal the sum of the tax categories."
+)
+
+func gateWithSubtotals(t *testing.T, vat *string, taxAmounts ...*string) submission.Canonical {
+	t.Helper()
+	c := SubmissionCanonical(completeUBLInvoice(t, "INV-GATE-CAT"))
+	c.VAT = vat
+	for _, a := range taxAmounts {
+		c.TaxSubtotals = append(c.TaxSubtotals, submission.TaxSubtotal{Category: "STANDARD_VAT", TaxAmount: a})
+	}
+	return c
+}
+
+func TestUBLGate_RefusesCategoriesWithoutVAT(t *testing.T) {
+	ok, reason := ublGate(gateWithSubtotals(t, nil, ublStr("7.50")))
+	if ok || reason == nil || *reason != gateNoVAT {
+		t.Errorf("ublGate = %v, %v; want false, %q", ok, reason, gateNoVAT)
+	}
+}
+
+func TestUBLGate_RefusesVATThatDiffersFromTheCategories(t *testing.T) {
+	cases := []struct {
+		name string
+		c    submission.Canonical
+		ok   bool
+	}{
+		{"differs", gateWithSubtotals(t, ublStr("75.00"), ublStr("40.00"), ublStr("30.00")), false},
+		{"equal by value not text", gateWithSubtotals(t, ublStr("75.0"), ublStr("45.00"), ublStr("30.00")), true},
+		{"nil tax amount", gateWithSubtotals(t, ublStr("75.00"), ublStr("75.00"), nil), false},
+		{"non-decimal subtotal", gateWithSubtotals(t, ublStr("75.00"), ublStr("abc")), false},
+		{"non-decimal vat", gateWithSubtotals(t, ublStr("abc"), ublStr("75.00")), false},
+		{"exponent text does not hang or panic", gateWithSubtotals(t, ublStr("75.00"), ublStr("7.5e1")), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, reason := ublGate(tc.c)
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v (reason %v)", ok, tc.ok, reason)
+			}
+			if !ok && (reason == nil || *reason != gateMismatch) {
+				t.Errorf("reason = %v, want %q", reason, gateMismatch)
+			}
+			if ok && reason != nil {
+				t.Errorf("reason = %q on an open gate", *reason)
+			}
+		})
+	}
+}
+
+func TestUBLGate_InvoiceWithoutCategoriesIsUnaffected(t *testing.T) {
+	c := SubmissionCanonical(completeUBLInvoice(t, "INV-GATE-NOCAT"))
+	c.VAT = nil
+	if ok, reason := ublGate(c); !ok || reason != nil {
+		t.Errorf("ublGate = %v, %v; want true, nil", ok, reason)
 	}
 }

@@ -75,6 +75,16 @@ const WIRE_MIRRORS = [
     floor: 6,
   },
   {
+    ts: 'HistoryCause',
+    go: 'HistoryCause',
+    goPath: 'internal/invoice/invoice.go',
+    goAnchor: 'func (s Status) valid() bool',
+    spaPath: 'frontend/app/src/lib/invoices.ts',
+    spaAnchor: 'export async function getInvoiceHistory(',
+    e2eAnchor: 'export function getInvoiceHistory(',
+    floor: 3,
+  },
+  {
     ts: 'AuditEvent',
     go: 'Event',
     goPath: 'internal/audit/reader.go',
@@ -437,6 +447,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     // mirror nothing runs.
     expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual([
       'StatusChange',
+      'HistoryCause',
       'AuditEvent',
       'ExtractionCandidate',
       'ExtractionCorrected',

@@ -142,7 +142,7 @@ type Invoice struct {
 // migrations/20260714111246_invoice_status_history.sql): an immutable,
 // append-only record of a single invoice lifecycle transition, written
 // exactly twice over in store.go -- the genesis row (Store.Create,
-// NULL->'draft') and every subsequent transition (transitionTx). Store.History
+// NULL->'draft') and every subsequent transition (transitionCausedTx). Store.History
 // returns them ordered changed_at ASC, id ASC ([D1]/AC #1).
 //
 // FromStatus/ToStatus are typed Status, the SAME CHECK-constrained domain as

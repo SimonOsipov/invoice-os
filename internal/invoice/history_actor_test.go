@@ -494,7 +494,7 @@ func TestHistory_CrossTenantActorNameNeverRenders(t *testing.T) {
 	}
 }
 
-// TestHistory_OrdinaryTransitionsHaveNoCause (ENGI-04-06, D29): a promotion through the gate
+// TestHistory_OrdinaryTransitionsHaveNoCause: a promotion through the gate
 // and an Edit demotion carry "cause": null -- the key is present on every row.
 func TestHistory_OrdinaryTransitionsHaveNoCause(t *testing.T) {
 	super, app := dbTestPools(t)

@@ -130,7 +130,7 @@ func TestDemoteRevalidated_WritesOneHistoryRow(t *testing.T) {
 	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, invID); n != 1 {
 		t.Errorf("total invoice_status_history rows for invoice = %d, want exactly 1", n)
 	}
-	// ENGI-04-06 (D29): the demotion row records the version that caused it.
+	// The demotion row records the version that caused it.
 	var cause *string
 	if err := super.QueryRow(context.Background(),
 		`SELECT cause_rule_set_version_id::text FROM invoice_status_history WHERE invoice_id = $1`, invID,

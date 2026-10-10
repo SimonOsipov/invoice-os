@@ -1,7 +1,7 @@
 package invoice
 
-// ENGI-04-06 Mode A: the re-check of the invoices a rule-set version covers, and the history
-// cause Migration C adds. Fixture versions are dated in year 3001 and `today` is injected, so
+// The re-check of the invoices a rule-set version covers, and the history cause Migration C
+// adds. Fixture versions are dated in year 3001 and `today` is injected, so
 // the real versions never interfere. Versions are seeded before tenants: LIFO cleanup deletes
 // the invoices that stamp a version before the version itself.
 
@@ -458,6 +458,57 @@ func TestRecheckCovered_NeverTouchesAnotherTenantsInvoices(t *testing.T) {
 	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1`, inv2); n != 0 {
 		t.Errorf("T2 history rows = %d, want 0", n)
 	}
+	// The demotion's history and audit rows belong to T1, and T2 gains none.
+	if n := mustCount(t, super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND tenant_id = $2`, inv1, t1); n != 1 {
+		t.Errorf("T1 history rows carrying tenant T1 = %d, want 1", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM audit_log WHERE payload->>'id' = $1 AND event = 'invoice.validated' AND tenant_id = $2`, inv1, t1); n != 1 {
+		t.Errorf("T1 invoice.validated audit rows carrying tenant T1 = %d, want 1", n)
+	}
+	if n := mustCount(t, super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event LIKE 'invoice.%'`, t2); n != 0 {
+		t.Errorf("T2 invoice audit rows = %d, want 0", n)
+	}
+}
+
+// RecheckCovered's id query writes no tenant predicate (RLS scopes it), so a superuser pool
+// would list every tenant's invoices: the refusal must run first.
+func TestRecheckCovered_RefusesAPrivilegedRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	bID, bVer := seedBuyerNameVersion(t, super, "3001-06-01")
+	t1 := seedTenant(t, super, "RC-PRIV T1")
+	t2 := seedTenant(t, super, "RC-PRIV T2")
+	e1 := seedEntity(t, super, t1, "RC-PRIV e1")
+	e2 := seedEntity(t, super, t2, "RC-PRIV e2")
+	requireVersionFor(t, super, "3001-07-01", bID)
+	inv1 := seedRecheckInvoice(t, super, t1, e1, "RC-PRIV-1", StatusValidated, strPtr("3001-07-01"), nil)
+	inv2 := seedRecheckInvoice(t, super, t2, e2, "RC-PRIV-2", StatusValidated, strPtr("3001-07-01"), nil)
+	v := DueVersion{ID: bID, Version: bVer, EffectiveFrom: day(3001, 6, 1)}
+	srv, calls := newBlockingStub(t, bID, bVer, 99)
+	superStore := NewStore(super)
+
+	_, err := RecheckCovered(ctx, super, superStore, NewGate(superStore, NewValidator(srv.URL, revalidateS2SToken, nil)), t1, v, day(3001, 6, 1))
+	if !errors.Is(err, ErrRevalidatePrivilegedRole) {
+		t.Errorf("err = %v, want ErrRevalidatePrivilegedRole", err)
+	}
+	if calls.Load() != 0 {
+		t.Errorf("validator received %d requests, want 0 -- the refusal comes before any invoice is read", calls.Load())
+	}
+	for _, id := range []string{inv1, inv2} {
+		if got := readInvoiceStatus(t, super, id); got != StatusValidated {
+			t.Errorf("invoice %s status = %q after the refused run, want validated", id, got)
+		}
+	}
+
+	// Positive control: the invoice_app pool demotes T1's invoice and only T1's.
+	appStore := NewStore(app)
+	res, err := RecheckCovered(ctx, app, appStore, NewGate(appStore, NewValidator(srv.URL, revalidateS2SToken, nil)), t1, v, day(3001, 6, 1))
+	if err != nil || res.Demoted != 1 {
+		t.Fatalf("control run: res %+v, err %v, want Demoted 1", res, err)
+	}
+	if got := readInvoiceStatus(t, super, inv2); got != StatusValidated {
+		t.Errorf("T2 invoice status = %q after T1's run, want validated", got)
+	}
 }
 
 // --- AC 5: only validated; outages --------------------------------------------
@@ -746,6 +797,49 @@ func TestHistoryHandler_ReturnsTheCauseOfARecheckDemotion(t *testing.T) {
 	want := map[string]any{"rule_set_version": float64(bVer), "rule_set_version_id": bID, "effective_from": "3001-06-01"}
 	if fmt.Sprint(cause) != fmt.Sprint(want) {
 		t.Errorf("demotion row cause = %v, want %v", cause, want)
+	}
+}
+
+// A version before the first dated one (v1-v3) has no effective_from: the cause stays an
+// object and carries "effective_from": null, never a dropped key.
+func TestHistoryHandler_CauseOfAnUndatedVersionCarriesNullEffectiveFrom(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+	tenantID := seedTenant(t, super, "RC-UNDATEDV tenant")
+	entityID := seedEntity(t, super, tenantID, "RC-UNDATEDV entity")
+	var vID string
+	var vNum int
+	if err := super.QueryRow(ctx,
+		`SELECT id::text, version FROM rule_set_versions WHERE effective_from IS NULL ORDER BY version LIMIT 1`).Scan(&vID, &vNum); err != nil {
+		t.Fatalf("fixture: no undated rule-set version: %v", err)
+	}
+	inv := seedRecheckInvoice(t, super, tenantID, entityID, "RC-UNDATEDV-1", StatusValidated, strPtr("2020-01-01"), nil)
+	if err := db.WithinTenantTx(ctx, app, tenantID, func(tx pgx.Tx) error {
+		_, err := store.DemoteRevalidatedTx(ctx, tx, inv, tenantID, []Violation{{RuleKey: buyerNameRuleKey, Severity: "error"}}, vID)
+		return err
+	}); err != nil {
+		t.Fatalf("DemoteRevalidatedTx: %v", err)
+	}
+
+	ident := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID}
+	rec := doInvoiceHistory(t, store.History, &ident, inv)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET history = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil || len(rows) != 1 {
+		t.Fatalf("history = %s (err %v), want one row", rec.Body.String(), err)
+	}
+	var cause map[string]json.RawMessage
+	if err := json.Unmarshal(rows[0]["cause"], &cause); err != nil {
+		t.Fatalf("cause %s is not an object: %v", rows[0]["cause"], err)
+	}
+	if raw, ok := cause["effective_from"]; !ok || string(raw) != "null" {
+		t.Errorf("effective_from = %s (present %v), want the key present with null", raw, ok)
+	}
+	if string(cause["rule_set_version_id"]) != `"`+vID+`"` || string(cause["rule_set_version"]) != fmt.Sprint(vNum) {
+		t.Errorf("cause = %v, want version %d id %s", cause, vNum, vID)
 	}
 }
 

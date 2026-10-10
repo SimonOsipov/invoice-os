@@ -60,10 +60,10 @@ func lastOp(ops []string) string {
 
 func passLabel(id string) string { return strings.TrimSuffix(strings.TrimPrefix(id, "svc-"), "-gt") }
 
-// passServices is auth plus the eight GATEWAY_TOKEN services: nine distinct names, gateway once.
+// passServices is auth, the eight GATEWAY_TOKEN services and reconciliation: ten distinct names, gateway once.
 func passServices(t *testing.T) []string {
 	t.Helper()
-	return append([]string{"auth"}, gatewayTokenTargets(t)...)
+	return append(append([]string{"auth"}, gatewayTokenTargets(t)...), "reconciliation")
 }
 
 func passServiceIDs(t *testing.T) []string {
@@ -257,7 +257,7 @@ func TestForkPass_OneGuardReadPerPassWhateverTheContributorCount(t *testing.T) {
 	}
 }
 
-func TestForkVarsBeforeURLs_ReadCoversTheNineServicesOnce(t *testing.T) {
+func TestForkVarsBeforeURLs_ReadCoversTheTenServicesOnce(t *testing.T) {
 	s := newPassShim(t, nil, nil)
 	if out, code := runPass(t, s); code != 0 {
 		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
@@ -267,12 +267,12 @@ func TestForkVarsBeforeURLs_ReadCoversTheNineServicesOnce(t *testing.T) {
 		t.Fatalf("%d varsRead calls, want 2: the read and the re-read", len(reads))
 	}
 	want := passServiceIDs(t)
-	if len(want) != 9 {
-		t.Fatalf("control: the expected service set has %d ids, want 9", len(want))
+	if len(want) != 10 {
+		t.Fatalf("control: the expected service set has %d ids, want 10", len(want))
 	}
 	for i, c := range reads {
 		got := readServices(c)
-		if len(got) != 9 || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+		if len(got) != 10 || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
 			t.Errorf("varsRead %d asks for %v, want each of %v exactly once", i+1, got, want)
 		}
 		if !regexp.MustCompile(`unrendered:\s*true`).MatchString(c.Query) {
@@ -604,6 +604,8 @@ func passHeldStores(t *testing.T, key string, allHeld bool) map[string]map[strin
 		for _, n := range gatewayTokenTargets(t) {
 			stores[gtSvcID(n)]["GATEWAY_TOKEN"] = gtGoodValue
 		}
+		stores[gtSvcID("reconciliation")]["VALIDATION_URL"] = validationInternalURL
+		stores[gtSvcID("reconciliation")]["S2S_TOKEN"] = validationTokenRef
 	}
 	return stores
 }
@@ -654,14 +656,15 @@ func TestForkPass_AServiceWithNothingToWriteHasNoAlias(t *testing.T) {
 		t.Errorf("tenancy already holds the run's token and has %d write input(s), want none: a service with nothing to write has no alias", len(got))
 	}
 	want := map[string][]string{
-		"auth":          {"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET"},
-		"gateway":       {"AUTH_ADMIN_PASSWORD", "GATEWAY_TOKEN"},
-		"portfolio":     {"GATEWAY_TOKEN"},
-		"invoice":       {"GATEWAY_TOKEN"},
-		"validation":    {"GATEWAY_TOKEN"},
-		"submission":    {"GATEWAY_TOKEN"},
-		"dashboard":     {"GATEWAY_TOKEN"},
-		"notifications": {"GATEWAY_TOKEN"},
+		"auth":           {"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET"},
+		"gateway":        {"AUTH_ADMIN_PASSWORD", "GATEWAY_TOKEN"},
+		"portfolio":      {"GATEWAY_TOKEN"},
+		"invoice":        {"GATEWAY_TOKEN"},
+		"validation":     {"GATEWAY_TOKEN"},
+		"submission":     {"GATEWAY_TOKEN"},
+		"dashboard":      {"GATEWAY_TOKEN"},
+		"notifications":  {"GATEWAY_TOKEN"},
+		"reconciliation": {"S2S_TOKEN", "VALIDATION_URL"},
 	}
 	got := map[string][]string{}
 	for _, w := range ws {
@@ -782,16 +785,16 @@ func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
 			}
 		}
 	})
-	// The write is auth, gateway, tenancy, portfolio, invoice, validation, submission, dashboard, notifications.
+	// The write is auth, gateway, tenancy, portfolio, invoice, validation, submission, dashboard, notifications, reconciliation.
 	for _, mode := range []string{"abort", "null"} {
-		for _, c := range []struct{ svc, at string }{{"auth", "first"}, {"invoice", "middle"}, {"notifications", "last"}} {
+		for _, c := range []struct{ svc, at string }{{"auth", "first"}, {"validation", "middle"}, {"reconciliation", "last"}} {
 			t.Run(mode+"/"+c.at+" alias fails", func(t *testing.T) {
 				s := newPassShim(t, nil, nil)
 				s.failAlias(t, gtSvcID(c.svc), mode)
 				out, code := runPass(t, s)
 				ws := passWrites(t, s)
 				pos := map[string]int{"first": 0, "middle": len(ws) / 2, "last": len(ws) - 1}[c.at]
-				if len(ws) != 9 || ws[pos].Service != gtSvcID(c.svc) {
+				if len(ws) != 10 || ws[pos].Service != gtSvcID(c.svc) {
 					t.Fatalf("control: %s is not the %s alias of the write; services = %v", c.svc, c.at, ws)
 				}
 				requireAliasFailureReport(t, s, out, code, c.svc)
@@ -808,18 +811,18 @@ func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
 		withOpenssl(t, s, `echo `+gtGoodValue)
 		s.failAlias(t, gtSvcID("portfolio"), "abort")
 		out, code := runPass(t, s)
-		if ws := passWrites(t, s); len(ws) != 8 || len(writesTo(ws, gtSvcID("tenancy"))) != 0 || ws[2].Service != gtSvcID("portfolio") {
-			t.Fatalf("control: want 8 aliases, no tenancy, portfolio as alias 2; services = %v", ws)
+		if ws := passWrites(t, s); len(ws) != 9 || len(writesTo(ws, gtSvcID("tenancy"))) != 0 || ws[2].Service != gtSvcID("portfolio") {
+			t.Fatalf("control: want 9 aliases, no tenancy, portfolio as alias 2; services = %v", ws)
 		}
 		requireAliasFailureReport(t, s, out, code, "portfolio")
 	})
 	t.Run("a valid alias beside an out-of-range one names only the valid one", func(t *testing.T) {
 		s := newPassShim(t, nil, nil)
-		s.plantWriteReply(t, writeErrors(`"path":["s2"],`, `"path":["s9"],`))
+		s.plantWriteReply(t, writeErrors(`"path":["s2"],`, `"path":["s10"],`))
 		out, code := runPass(t, s)
 		requireAliasFailureReport(t, s, out, code, "tenancy")
 		if n := strings.Count(errorLines(out), "The batched variable write"); n != 1 {
-			t.Errorf("%d failure line(s) name a service, want 1 (s9 names none); error lines = %q", n, errorLines(out))
+			t.Errorf("%d failure line(s) name a service, want 1 (s10 names none); error lines = %q", n, errorLines(out))
 		}
 	})
 	t.Run("two aliases fail: both are named, neither is listed as not confirmed", func(t *testing.T) {
@@ -830,8 +833,8 @@ func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
 			t.Errorf("exit %d, want 1; output = %q", code, clip(out))
 		}
 		ws := passWrites(t, s)
-		if len(ws) != 9 {
-			t.Fatalf("control: the write carried %d service input(s), want 9", len(ws))
+		if len(ws) != 10 {
+			t.Fatalf("control: the write carried %d service input(s), want 10", len(ws))
 		}
 		for n, i := range []int{1, 4} {
 			words := append([]string{"The batched variable write", "failed for " + passLabel(ws[i].Service) + ":", traceOf(n)}, slices.Sorted(maps.Keys(ws[i].Vars))...)
@@ -848,7 +851,7 @@ func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
 	})
 	t.Run("a 200 with no errors and false for one alias is not confirmed by the re-read", func(t *testing.T) {
 		s := newPassShim(t, nil, nil)
-		s.plantWriteReply(t, `{"data":{"s0":true,"s1":true,"s2":false,"s3":true,"s4":true,"s5":true,"s6":true,"s7":true,"s8":true}}`)
+		s.plantWriteReply(t, `{"data":{"s0":true,"s1":true,"s2":false,"s3":true,"s4":true,"s5":true,"s6":true,"s7":true,"s8":true,"s9":true}}`)
 		out, code := runPass(t, s)
 		if n := opCount(t, s, "varsWrite"); n != 1 {
 			t.Fatalf("%d varsWrite call(s), want 1", n)
@@ -885,7 +888,7 @@ func TestForkPass_WriteErrorWithNoPathNamesEveryService(t *testing.T) {
 				`{"errors":[{"message":"Variable \"$i0\" got invalid value \"`+passEchoNeedle+`\"","extensions":{"code":"BAD_USER_INPUT"}}]}`)
 		}},
 		{"a 200 error with no path key", func(t *testing.T, s authShim) { s.plantWriteReply(t, writeErrors(``)) }},
-		{"an alias past the end of the write", func(t *testing.T, s authShim) { s.plantWriteReply(t, writeErrors(`"path":["s9"],`)) }},
+		{"an alias past the end of the write", func(t *testing.T, s authShim) { s.plantWriteReply(t, writeErrors(`"path":["s10"],`)) }},
 		{"a non-canonical alias", func(t *testing.T, s authShim) { s.plantWriteReply(t, writeErrors(`"path":["s01"],`)) }},
 		{"a path that is not an alias", func(t *testing.T, s authShim) {
 			s.plantWriteReply(t, writeErrors(`"path":["variableCollectionUpsert"],`))
@@ -900,8 +903,8 @@ func TestForkPass_WriteErrorWithNoPathNamesEveryService(t *testing.T) {
 				t.Errorf("exit %d, want 1; output = %q", code, clip(out))
 			}
 			ws := passWrites(t, s)
-			if len(ws) != 9 {
-				t.Fatalf("the failed write carried %d service input(s), want all 9", len(ws))
+			if len(ws) != 10 {
+				t.Fatalf("the failed write carried %d service input(s), want all 10", len(ws))
 			}
 			// One failure line names every service; a "not confirmed" list would also name them.
 			line := requireNamedIn(t, errorLines(out), "The batched variable write", "failed for")

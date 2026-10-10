@@ -3496,7 +3496,7 @@ cmd_fork_vars_before_urls() {
     echo "::error::usage: railway-env.sh fork-vars-before-urls <environment-id>"
     exit 2
   fi
-  fork_pass "$env_id" fork_auth gateway_token
+  fork_pass "$env_id" fork_auth gateway_token reconciliation_validation
 }
 
 # cmd_set_production_gateway_token <environment-id>
@@ -3747,6 +3747,31 @@ reconciliation_url() {
 reconciliation_url_verdict() {
   pass_owned_verdict reconciliation_url || return 1
   echo "gateway.RECONCILIATION_URL confirmed in environment $PASS_ENV."
+}
+
+# --- The fork reconciliation's validation config ----------------------------
+# S2S_TOKEN is a reference, so a fork follows its own validation's token.
+
+VALIDATION_INTERNAL_URL="http://validation.railway.internal:8080"
+
+reconciliation_validation_check() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to set VALIDATION_URL and S2S_TOKEN in the persistent environment ($1). Its reconciliation variables are the user's; no CI path may write them."
+    exit 1
+  fi
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}VALIDATION_URL"
+}
+
+reconciliation_validation() {
+  local id
+  id=$(service_id_by_name "$PASS_SETTLE" reconciliation "environment $1" VALIDATION_URL) || exit 1
+  # shellcheck disable=SC2016  # a Railway reference, expanded by Railway.
+  pass_plan_add "$id" reconciliation "" "VALIDATION_URL=$VALIDATION_INTERNAL_URL" 'S2S_TOKEN=${{validation.S2S_TOKEN}}'
+}
+
+reconciliation_validation_verdict() {
+  pass_owned_verdict reconciliation_validation || return 1
+  echo "reconciliation.VALIDATION_URL and reconciliation.S2S_TOKEN confirmed in environment $PASS_ENV."
 }
 
 # cmd_set_fork_reconciliation_url <environment-id>

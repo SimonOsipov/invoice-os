@@ -757,6 +757,19 @@ func TestVerifyPage_StatelessInviteLinkServesTheSetPasswordPage(t *testing.T) {
 		t.Errorf("form action = %q, want /auth/invitation/password", got)
 	}
 	vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)), bounceLocation)
+
+	head := vpDo(t, h, http.MethodHead, vpQueryBare(vpToken)+"&invite=1")
+	if head.Code != http.StatusOK || head.Body.Len() != 0 {
+		t.Errorf("stateless HEAD: status %d body %q, want 200 and no body", head.Code, head.Body.String())
+	}
+	for name, extra := range map[string]string{"invite=0": "&invite=0", "invite=1 twice": "&invite=1&invite=1", "invite=1, then 0": "&invite=1&invite=0", "invite empty": "&invite="} {
+		t.Run(name+" bounces", func(t *testing.T) {
+			vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+extra), bounceLocation)
+		})
+	}
+	t.Run("an empty token fails before the page", func(t *testing.T) {
+		vpBounced(t, vpDo(t, h, http.MethodGet, "token=&type=signup&invite=1"), failedLocation)
+	})
 }
 
 func TestVerifyPage_InvitePageHasOneBoundedPasswordForm(t *testing.T) {

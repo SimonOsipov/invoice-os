@@ -1197,14 +1197,18 @@ func TestInvitation_MalformedTokenMakesNoTenancyCall(t *testing.T) {
 		t.Run("register "+name, func(t *testing.T) {
 			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
 			r := claiming("e@x.test", true, nil)
+			p := previewing(liveInvite, nil)
 
-			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), previewing(liveInvite, nil), r), tokenBody(token))
+			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), p, r), tokenBody(token))
 
 			if rec.Code != 404 {
 				t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
 			}
 			if got := errorBody(t, rec); got != wantInviteNotValid {
 				t.Errorf("error = %q, want %q", got, wantInviteNotValid)
+			}
+			if n := len(p.calls()); n != 0 {
+				t.Errorf("previewer calls = %d, want 0", n)
 			}
 			if n := len(r.claims()); n != 0 {
 				t.Errorf("claims = %d, want 0", n)
@@ -1352,6 +1356,41 @@ func TestInvitationRegister_PreviewRefusalComesBeforeTheClaim(t *testing.T) {
 			}
 			if got := len(fake.Calls()); got != wantCalls {
 				t.Errorf("GoTrue calls = %d, want %d", got, wantCalls)
+			}
+		})
+	}
+}
+
+// A preview that fails answers as the preview route does, before any claim or GoTrue call.
+func TestInvitationRegister_PreviewFailureAnswersBeforeTheClaim(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+		msg  string
+	}{
+		{"token names no invite", ErrInvitationNotValid, http.StatusNotFound, wantInviteNotValid},
+		{"tenancy answers 500", errors.New("tenancy answered 500"), http.StatusBadGateway, wantLookupUnavailable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := newFakeGoTrue(t, http.StatusOK, gtNewUser)
+			r := claiming(inviteAddress, true, nil)
+			p := previewing(InvitationPreview{}, c.err)
+
+			rec, _ := postInvitee(inviteeHandler(fake.URL, 0, freshRegisterLimit(), p, r), tokenBody(inviteToken))
+
+			if rec.Code != c.want || errorBody(t, rec) != c.msg {
+				t.Errorf("answer = %d %s, want %d %s", rec.Code, rec.Body.String(), c.want, c.msg)
+			}
+			if got := len(p.calls()); got != 1 {
+				t.Errorf("previewer calls = %d, want 1: the case proves nothing without a preview", got)
+			}
+			if got := len(r.claims()); got != 0 {
+				t.Errorf("claims = %d, want 0", got)
+			}
+			if got := len(fake.Calls()); got != 0 {
+				t.Errorf("GoTrue calls = %d, want 0", got)
 			}
 		})
 	}

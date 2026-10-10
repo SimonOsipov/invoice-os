@@ -97,7 +97,7 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 }
 
 // signUp spends the per-IP budget, posts body to GoTrue's /signup and answers with the floor held.
-// RegisterHandler and InvitationRegisterHandler share it, so both map GoTrue's answers alike.
+// RegisterHandler and InvitationRegisterHandler share it.
 // A non-nil invited runs after the reservation: true answers as a new address without calling GoTrue.
 // A non-nil existing is sent instead of the 202 when GoTrue reports an address that already has an account.
 // It reports whether an account may exist for the address afterwards: GoTrue 200, an existing address or the 23505 race.

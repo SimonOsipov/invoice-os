@@ -549,6 +549,9 @@ var (
 
 	// ErrUnknownLineID: a line_items id that names no line of this invoice.
 	ErrUnknownLineID = errors.New("invoice: unknown line id")
+
+	// ErrViolationGone: an Explain key that is not on the invoice's stored verdict.
+	ErrViolationGone = errors.New("invoice: violation gone")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

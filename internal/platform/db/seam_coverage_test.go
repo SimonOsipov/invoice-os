@@ -1060,6 +1060,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/invoices":                                   {verdict: scCovered},
 	"POST /v1/invoices/submissions":                       {verdict: scCovered},
 	"POST /v1/invoices/{id}/approvals":                    {verdict: scCovered},
+	"POST /v1/invoices/{id}/explain":                      {verdict: scCovered},
 	"POST /v1/invoices/{id}/keep-as-is":                   {verdict: scCovered},
 	"POST /v1/invoices/{id}/resolved-outside":             {verdict: scCovered},
 	"POST /v1/invoices/{id}/transitions":                  {verdict: scCovered},

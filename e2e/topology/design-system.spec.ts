@@ -265,7 +265,6 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
       ).toBeLessThanOrEqual(row[i + 1].left + 1)
     }
 
-    // Soft: one run reports every width, so the red run shows the 389 and 375 failures together.
     const outside = m.inside.filter((e) => e.left < m.content.left - 1 || e.right > m.content.right + 1)
     expect
       .soft(
@@ -277,13 +276,11 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
     expect(m.actions, `${width}px: the Book a demo button has no parent group`).not.toBeNull()
     const { columnGap, kids } = m.actions!
     kids.sort((a, b) => a.left - b.left)
-    if (width >= 390) {
-      for (let i = 0; i < kids.length - 1; i++) {
-        const gap = kids[i + 1].left - kids[i].right
-        expect
-          .soft(Math.abs(gap - columnGap), `${width}px: gap ${gap} between "${kids[i].text}" and "${kids[i + 1].text}" vs row column-gap ${columnGap}`)
-          .toBeLessThanOrEqual(0.5)
-      }
+    for (let i = 0; i < kids.length - 1; i++) {
+      const gap = kids[i + 1].left - kids[i].right
+      expect
+        .soft(Math.abs(gap - columnGap), `${width}px: gap ${gap} between "${kids[i].text}" and "${kids[i + 1].text}" vs row column-gap ${columnGap}`)
+        .toBeLessThanOrEqual(0.5)
     }
     if (m.book && m.burger) {
       const bookToBurger = m.burger.left - m.book.right

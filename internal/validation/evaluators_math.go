@@ -37,6 +37,8 @@
 //     numbers, never paths. Violation iff
 //     abs(expected - base*rate) > tolerance (exact decimal math --
 //     shopspring/decimal per the story's Data Model, to avoid float error).
+//     Per-element mode adds items (array path), rate_by (element field) and
+//     rates ({value: rate}, instead of rate): base/expected resolve inside each element.
 //
 //   - cross_field: {"left": <string path>, "op": "eq|ne|lt|le|gt|ge",
 //     "right": <string path>}. left and right are ALWAYS dotted payload
@@ -84,7 +86,7 @@ import (
 // absent or resolves to a non-numeric value.
 type taxMathEval struct{}
 
-func (taxMathEval) Eval(p Payload, r Rule) (*Violation, error) {
+func (taxMathEval) evalHeader(p Payload, r Rule) (*Violation, error) {
 	var params struct {
 		Base      json.RawMessage `json:"base"`
 		Rate      *float64        `json:"rate"`
@@ -133,6 +135,110 @@ func (taxMathEval) Eval(p Payload, r Rule) (*Violation, error) {
 		return violation(r, withExpected(computed.String()), withActual(expected.String())), nil
 	}
 	return nil, nil
+}
+
+func (e taxMathEval) Eval(p Payload, r Rule) (*Violation, error) {
+	vs, err := e.evalLines(p, r)
+	if err != nil || len(vs) == 0 {
+		return nil, err
+	}
+	return &vs[0], nil
+}
+
+// evalLines is the whole rule: without items/rates/rate_by it is the header
+// check; with them it checks every element of the items array at its rate.
+func (e taxMathEval) evalLines(p Payload, r Rule) ([]Violation, error) {
+	var params struct {
+		Items     *string            `json:"items"`
+		RateBy    *string            `json:"rate_by"`
+		Rates     map[string]float64 `json:"rates"`
+		Rate      *float64           `json:"rate"`
+		Base      json.RawMessage    `json:"base"`
+		Expected  json.RawMessage    `json:"expected"`
+		Tolerance float64            `json:"tolerance"`
+	}
+	if err := decodeParams(r.Params, &params); err != nil {
+		return nil, fmt.Errorf("validation: tax_math rule %q params: %w", r.Key, err)
+	}
+	if params.Items == nil && params.RateBy == nil && params.Rates == nil {
+		v, err := e.evalHeader(p, r)
+		if err != nil || v == nil {
+			return nil, err
+		}
+		return []Violation{*v}, nil
+	}
+
+	switch {
+	case params.Rate != nil && params.Rates != nil:
+		return nil, fmt.Errorf("validation: tax_math rule %q has both rate and rates", r.Key)
+	case params.Rate == nil && params.Rates == nil:
+		return nil, fmt.Errorf("validation: tax_math rule %q missing rate or rates", r.Key)
+	case params.Rates != nil && len(params.Rates) == 0:
+		return nil, fmt.Errorf("validation: tax_math rule %q has empty rates", r.Key)
+	case params.Rates != nil && (params.RateBy == nil || *params.RateBy == ""):
+		return nil, fmt.Errorf("validation: tax_math rule %q rates needs rate_by", r.Key)
+	case params.Items == nil:
+		return nil, fmt.Errorf("validation: tax_math rule %q has rates or rate_by without items", r.Key)
+	case *params.Items == "":
+		return nil, fmt.Errorf("validation: tax_math rule %q has blank items", r.Key)
+	case len(params.Base) == 0:
+		return nil, fmt.Errorf("validation: tax_math rule %q missing base", r.Key)
+	case len(params.Expected) == 0:
+		return nil, fmt.Errorf("validation: tax_math rule %q missing expected", r.Key)
+	case params.Tolerance < 0:
+		return nil, fmt.Errorf("validation: tax_math rule %q tolerance must be non-negative, got %v", r.Key, params.Tolerance)
+	}
+
+	raw, _ := resolvePath(p, *params.Items)
+	elems, _ := raw.([]any)
+	tolerance := decimal.NewFromFloat(params.Tolerance)
+	var out []Violation
+	for i, it := range elems {
+		n := i + 1
+		fail := func(field string, opts ...violationOption) {
+			v := violation(r, opts...)
+			v.Path = linePath(*params.Items, n, field)
+			out = append(out, *v)
+		}
+		el, ok := it.(map[string]any)
+		if !ok {
+			fail("")
+			continue
+		}
+		rate := params.Rate
+		if params.Rates != nil {
+			cat, _ := el[*params.RateBy].(string)
+			rv, rated := params.Rates[cat]
+			if !rated {
+				continue
+			}
+			rate = &rv
+		}
+		ep := Payload{"invoice": el}
+		base, ok := resolveNumericOperand(ep, params.Base)
+		if !ok {
+			fail(operandField(params.Base))
+			continue
+		}
+		expected, ok := resolveNumericOperand(ep, params.Expected)
+		if !ok {
+			fail(operandField(params.Expected))
+			continue
+		}
+		computed := base.Mul(decimal.NewFromFloat(*rate))
+		if expected.Sub(computed).Abs().GreaterThan(tolerance) {
+			fail("", withExpected(computed.String()), withActual(expected.String()))
+		}
+	}
+	return out, nil
+}
+
+// operandField is the element field a failed operand names; a literal
+// operand cannot fail, so it only ever sees a string path.
+func operandField(raw json.RawMessage) string {
+	var path string
+	_ = json.Unmarshal(raw, &path)
+	return path
 }
 
 // resolveNumericOperand resolves a tax_math base/expected operand to an exact

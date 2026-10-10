@@ -550,7 +550,7 @@ function ExpandedFixPanel({
                   invoiceId={invoiceId}
                   violation={v}
                   lines={inv.line_items ?? []}
-                  acceptDisabled={!inv.can_edit || hasUnsavedEdit || saving || revalidating || keeping}
+                  acceptDisabled={!inv.can_edit || hasUnsavedEdit || revalidating || keeping}
                   acceptTitle={hasUnsavedEdit ? EXPLAIN_COPY.unsaved : undefined}
                   onAccepted={() => {
                     setDraft({})

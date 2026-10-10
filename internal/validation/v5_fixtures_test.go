@@ -2,8 +2,12 @@ package validation
 
 import (
 	"context"
+	"io/fs"
+	"strings"
 	"testing"
 
+	"github.com/SimonOsipov/invoice-os/migrations"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -46,6 +50,40 @@ func seedV5Lists(t *testing.T, super *pgxpool.Pool) {
 			_, _ = super.Exec(context.Background(), `DELETE FROM nrs_codes WHERE list = $1 AND code = $2`, r.list, r.code)
 		}
 	})
+}
+
+// v5MigrationSQL returns the embedded v5 migration file.
+func v5MigrationSQL(t *testing.T) string {
+	t.Helper()
+	matches, err := fs.Glob(migrations.FS, v5MigrationGlob)
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("want exactly one migrations/%s, got %v (err %v)", v5MigrationGlob, matches, err)
+	}
+	raw, err := fs.ReadFile(migrations.FS, matches[0])
+	if err != nil {
+		t.Fatalf("read %s: %v", matches[0], err)
+	}
+	return string(raw)
+}
+
+// v5ReappliedTx runs the migration's Down then its Up from the embedded file in a superuser tx rolled
+// back at cleanup. Tests read the file, not the migrated DB, so an edit to the file is observable
+// without re-migrating (the mutation replay needs this).
+func v5ReappliedTx(t *testing.T, super *pgxpool.Pool) pgx.Tx {
+	t.Helper()
+	ctx := context.Background()
+	raw := v5MigrationSQL(t)
+	tx := edBegin(t, ctx, super)
+	for _, stmt := range gooseDownStatements(t, raw) {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			t.Fatalf("roll v5 back before re-applying it: %v\n%s", err, stmt)
+		}
+	}
+	up := raw[strings.Index(raw, "-- +goose Up")+len("-- +goose Up") : strings.Index(raw, "-- +goose Down")]
+	if _, err := tx.Exec(ctx, up); err != nil {
+		t.Fatalf("apply the v5 migration's Up: %v", err)
+	}
+	return tx
 }
 
 // v5Line builds one categorised goods line. Numbers are float64: the real path decodes JSON to float64 and

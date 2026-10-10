@@ -1,5 +1,5 @@
-// ENGI-09-02 (Test-first) -- rule-set v5, dated 2027-01-01. Authored before
-// migrations/<ts>_rule_set_v5.sql exists: each test fails at "v5 is missing", never on a compile error.
+// Rule-set v5, dated 2027-01-01. Content tests read the migration file re-applied in a
+// rolled-back tx (v5ReappliedTx), so an edit to the file is observable without re-migrating.
 // Version-boundary tests use fixed dates only, so none reads today's date.
 package validation
 
@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io/fs"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
-	"github.com/SimonOsipov/invoice-os/migrations"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -21,18 +23,28 @@ const (
 	v5MigrationGlob = "*_rule_set_v5.sql"
 )
 
-// v5 seeds the code lists and returns the rule set in force on v5's start date.
+// v5RuleSet seeds the code lists and loads the rule set in force on v5's start date from the
+// migration file re-applied in a rolled-back tx (see v5ReappliedTx).
 func v5RuleSet(t *testing.T) RuleSet {
 	t.Helper()
-	super, app := dbTestPools(t)
+	super, _ := dbTestPools(t)
 	seedV5Lists(t, super)
-	got, err := NewStore(app).LoadForDates(context.Background(), []string{v5Start})
+	return v5LoadOn(t, v5ReappliedTx(t, super), v5Start, 5)
+}
+
+// v5LoadOn loads the rule set in force on date through tx and fails unless it is wantVersion.
+func v5LoadOn(t *testing.T, tx pgx.Tx, date string, wantVersion int) RuleSet {
+	t.Helper()
+	got, err := loadForDatesTx(context.Background(), tx, []string{date})
 	if err != nil {
-		t.Fatalf("LoadForDates(%s): %v", v5Start, err)
+		t.Fatalf("load the rule set in force on %s: %v", date, err)
 	}
-	rs := got[v5Start]
-	if rs.Version != 5 {
-		t.Fatalf("rule set in force on %s is v%d, want v5 -- rule_set_v5 migration is not applied", v5Start, rs.Version)
+	rs := got[date]
+	if rs.Version != wantVersion {
+		t.Fatalf("rule set in force on %s is v%d, want v%d", date, rs.Version, wantVersion)
+	}
+	if len(rs.Rules) == 0 {
+		t.Fatalf("v%d has no rules", wantVersion)
 	}
 	return rs
 }
@@ -87,11 +99,10 @@ func wantAt(t *testing.T, v Violation, path, expected, actual string) {
 	}
 }
 
-func versionOnDate(t *testing.T, date string) int {
+func versionOnDate(t *testing.T, q queryRower, date string) int {
 	t.Helper()
-	_, app := dbTestPools(t)
 	var v *int
-	if err := app.QueryRow(context.Background(),
+	if err := q.QueryRow(context.Background(),
 		`SELECT v.version FROM rule_set_versions v WHERE v.id = rule_set_version_for($1::date)`, date).Scan(&v); err != nil || v == nil {
 		t.Fatalf("version in force on %s: %v (%v)", date, err, v)
 	}
@@ -99,14 +110,15 @@ func versionOnDate(t *testing.T, date string) int {
 }
 
 func TestV5_IsScheduledAndSealed(t *testing.T) {
-	_, app := dbTestPools(t)
+	super, _ := dbTestPools(t)
 	ctx := context.Background()
+	app := v5ReappliedTx(t, super)
 
 	var sealed bool
 	var from, notes *string
 	if err := app.QueryRow(ctx,
 		`SELECT sealed, effective_from::text, notes FROM rule_set_versions WHERE version = 5`).Scan(&sealed, &from, &notes); err != nil {
-		t.Fatalf("read v5: %v -- rule_set_v5 migration is not applied", err)
+		t.Fatalf("read v5: %v", err)
 	}
 	if !sealed {
 		t.Error("v5.sealed = false, want true")
@@ -136,8 +148,10 @@ func TestV5_IsScheduledAndSealed(t *testing.T) {
 }
 
 func TestV5_VersionForBoundary(t *testing.T) {
+	super, _ := dbTestPools(t)
+	tx := v5ReappliedTx(t, super)
 	for date, want := range map[string]int{"2026-12-31": 4, "2027-01-01": 5, "2027-06-30": 5} {
-		if got := versionOnDate(t, date); got != want {
+		if got := versionOnDate(t, tx, date); got != want {
 			t.Errorf("rule_set_version_for(%s) = v%d, want v%d", date, got, want)
 		}
 	}
@@ -151,7 +165,8 @@ var v5CarriedKeys = []string{
 }
 
 func TestV5_CarriesTheUnchangedV4RulesVerbatim(t *testing.T) {
-	_, app := dbTestPools(t)
+	super, _ := dbTestPools(t)
+	app := v5ReappliedTx(t, super)
 	v5 := ruleRowsByKey(t, app, 5)
 	v4 := ruleRowsByKey(t, app, 4)
 	if len(v5CarriedKeys) != 15 {
@@ -176,8 +191,8 @@ func TestV5_CarriesTheUnchangedV4RulesVerbatim(t *testing.T) {
 }
 
 func TestV5_WhenGuards(t *testing.T) {
-	_, app := dbTestPools(t)
-	rows := ruleRowsByKey(t, app, 5)
+	super, _ := dbTestPools(t)
+	rows := ruleRowsByKey(t, v5ReappliedTx(t, super), 5)
 
 	want := map[string]string{"vat-standard-rate-uncategorised": `!has(invoice.tax_subtotals)`}
 	for _, f := range []string{"tin", "name", "email", "street", "city", "postal-zone", "lga", "state", "country"} {
@@ -198,9 +213,9 @@ func TestV5_WhenGuards(t *testing.T) {
 }
 
 func TestV5_V4IsUnchanged(t *testing.T) {
-	_, app := dbTestPools(t)
+	super, _ := dbTestPools(t)
 	ctx := context.Background()
-	loadRuleSetByVersion(t, app, 5) // precondition: "unchanged by the v5 publish" needs v5 to exist
+	app := v5ReappliedTx(t, super) // v4 as the v5 publish leaves it
 
 	rows := ruleRowsByKey(t, app, 4)
 	if len(rows) != 20 {
@@ -262,8 +277,20 @@ func TestV5_VATPerCategory(t *testing.T) {
 	wantKeys(t, "vat 80 against subtotals 75", res, "vat-equals-tax-subtotals")
 	wantAt(t, violationOf(t, res, "vat-equals-tax-subtotals"), "vat", "75", "80")
 
-	// 1.00 x 7.5% = 0.075 against a rounded 0.08 sits exactly on the 0.005 tolerance.
+	// 1.00 x 7.5% = 0.075 against a rounded 0.08 sits exactly on the 0.005 tolerance; 0.081 is just past it.
 	wantKeys(t, "rounded boundary", evalV5(t, rs, v5Invoice("B2B", []map[string]any{v5Line("1", "STANDARD_VAT", 1.0, 7.5, 0.08)})))
+	wantKeys(t, "past the boundary", evalV5(t, rs, v5Invoice("B2B", []map[string]any{v5Line("1", "STANDARD_VAT", 1.0, 7.5, 0.081)})), "vat-standard-rate")
+
+	// ZERO_VAT and EXEMPTED are rated at 0: any tax on them is a violation, each at its own element.
+	for _, cat := range []string{"ZERO_VAT", "EXEMPTED"} {
+		lines := v5StandardLines()
+		lines[1], lines[2] = v5Line("2", "ZERO_VAT", 500, 0, 0), v5Line("3", "EXEMPTED", 200, 0, 0)
+		idx := map[string]int{"ZERO_VAT": 1, "EXEMPTED": 2}[cat]
+		lines[idx]["line_tax"] = 10.0
+		res := evalV5(t, rs, v5Invoice("B2B", lines))
+		wantKeys(t, cat+" taxed", res, "vat-standard-rate")
+		wantAt(t, violationOf(t, res, "vat-standard-rate"), fmt.Sprintf("tax_subtotals[%d]", idx+1), "0", "10")
+	}
 }
 
 func TestV5_PercentMustMatchCategory(t *testing.T) {
@@ -327,7 +354,7 @@ func TestV5_TINFormatAcceptsRN(t *testing.T) {
 			invoiceOf(p)[who].(map[string]any)["tin"] = tin
 			wantKeys(t, who+" TIN "+tin, evalV5(t, rs, p))
 		}
-		for _, tin := range []string{"RN-", "rn-123", "RN-12A", "12345678-001", "BADTIN"} {
+		for _, tin := range []string{"RN-", "rn-123", "RN-12A", "12345678-001", "BADTIN", "x12345678-0001", "12345678-0001-", "RN-847789\n", " RN-847789"} {
 			p := v5B2BPayload()
 			invoiceOf(p)[who].(map[string]any)["tin"] = tin
 			res := evalV5(t, rs, p)
@@ -352,31 +379,163 @@ func TestV5_CurrencyAgainstTheList(t *testing.T) {
 	if v := violationOf(t, res, "currency-allowed"); v.Expected == nil || *v.Expected != "NRS list: currencies" || v.Actual == nil || *v.Actual != "XXX" {
 		t.Errorf("currency-allowed Expected/Actual = %s/%s, want NRS list: currencies/XXX", ptrStr(v.Expected), ptrStr(v.Actual))
 	}
+
+	// D10: matching is exact. NRS holds no "NGN " and no "ngn", so neither passes.
+	for _, bad := range []string{"NGN ", "ngn", " NGN"} {
+		invoiceOf(p)["currency"] = bad
+		wantKeys(t, "currency "+bad, evalV5(t, rs, p), "currency-allowed")
+	}
+
+	// The tax currency is judged by its own rule against the same list.
+	p = v5B2BPayload()
+	invoiceOf(p)["tax_currency_code"] = "USD"
+	wantKeys(t, "tax currency USD", evalV5(t, rs, p))
+	for _, bad := range []string{"XXX", "NGN "} {
+		invoiceOf(p)["tax_currency_code"] = bad
+		wantKeys(t, "tax currency "+bad, evalV5(t, rs, p), "tax-currency-allowed")
+	}
+}
+
+func TestV5_BuyerRulesFollowTheInvoiceKind(t *testing.T) {
+	rs := v5RuleSet(t)
+	presence := []string{
+		"buyer-tin-required", "buyer-name-required", "buyer-email-required", "buyer-street-required", "buyer-city-required",
+		"buyer-postal-zone-required", "buyer-lga-required", "buyer-state-required", "buyer-country-required",
+	}
+	with := func(kind string, buyer map[string]any) Payload {
+		p := v5B2BPayload()
+		inv := invoiceOf(p)
+		if kind == "" {
+			delete(inv, "invoice_kind")
+		} else {
+			inv["invoice_kind"] = kind
+		}
+		if buyer == nil {
+			delete(inv, "buyer")
+		} else {
+			inv["buyer"] = buyer
+		}
+		return p
+	}
+	sameKeys := func(what string, res Result, keys ...string) {
+		t.Helper()
+		got, want := violationKeys(res), slices.Clone(keys)
+		slices.Sort(got)
+		slices.Sort(want)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: violations = %s, want exactly %v", what, showViolations(res), want)
+		}
+	}
+
+	for _, buyer := range []map[string]any{nil, {}} {
+		sameKeys("B2C, buyer block absent or empty", evalV5(t, rs, with("B2C", buyer)))
+	}
+	for _, kind := range []string{"B2B", "B2G"} {
+		for _, buyer := range []map[string]any{nil, {}} {
+			sameKeys(kind+", buyer block absent or empty", evalV5(t, rs, with(kind, buyer)), presence...)
+		}
+		noTIN := v5Party("", "Buyer Ltd", "NG-FC-AML", "NG-FC")
+		delete(noTIN, "tin")
+		res := evalV5(t, rs, with(kind, noTIN))
+		sameKeys(kind+", buyer without a TIN", res, "buyer-tin-required")
+		if v := violationOf(t, res, "buyer-tin-required"); v.Path != "buyer.tin" {
+			t.Errorf("Path = %q, want buyer.tin", v.Path)
+		}
+		blankTIN := v5Party("   ", "Buyer Ltd", "NG-FC-AML", "NG-FC")
+		if res := evalV5(t, rs, with(kind, blankTIN)); !hasViolation(res, "buyer-tin-required") {
+			t.Errorf("%s, blank buyer TIN: %s, want buyer-tin-required", kind, showViolations(res))
+		}
+	}
+
+	// D7: no kind, or a kind outside the list, is the kind rules' failure and never a buyer failure (and never an engine error).
+	sameKeys("no invoice_kind", evalV5(t, rs, with("", nil)), "invoice-kind-required")
+	for _, kind := range []string{"b2b", "B2X", "G2B"} {
+		sameKeys("invoice_kind "+kind, evalV5(t, rs, with(kind, nil)), "invoice-kind-allowed")
+	}
+}
+
+func TestV5_V4StillJudgesTheDayBefore(t *testing.T) {
+	super, _ := dbTestPools(t)
+	seedV5Lists(t, super)
+	tx := v5ReappliedTx(t, super)
+	v4 := v5LoadOn(t, tx, "2026-12-31", 4)
+	v5 := v5LoadOn(t, tx, v5Start, 5)
+	if len(v4.Rules) != 20 {
+		t.Fatalf("v4 holds %d rules, want 20", len(v4.Rules))
+	}
+
+	lines := []map[string]any{v5Line("1", "STANDARD_VAT", 1000, 7.5, 75)}
+	wantKeys(t, "compliant B2B under v4", evalV5(t, v4, v5Invoice("B2B", lines)))
+
+	// Each payload below is a v4 failure and a v5 pass: the issue date alone picks the judge.
+	usd := v5Invoice("B2B", lines)
+	invoiceOf(usd)["currency"] = "USD"
+	rn := v5Invoice("B2B", lines)
+	invoiceOf(rn)["supplier"].(map[string]any)["tin"] = "RN-847789"
+	for _, c := range []struct {
+		name string
+		p    Payload
+		key  string
+	}{
+		{"USD", usd, "currency-allowed"},
+		{"RN- supplier TIN", rn, "supplier-tin-format"},
+		{"B2C without a buyer block", v5Invoice("B2C", lines), "buyer-tin-required"},
+	} {
+		wantKeys(t, c.name+" under v4", evalV5(t, v4, c.p), c.key)
+		wantKeys(t, c.name+" under v5", evalV5(t, v5, c.p))
+	}
 }
 
 func TestV5_MissingListFailsLoud(t *testing.T) {
 	super, _ := dbTestPools(t)
 	seedV5Lists(t, super)
 	ctx := context.Background()
-	tx, err := super.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin: %v", err)
+	if len(v5Lists) != 8 {
+		t.Fatalf("v5 names %d lists, want 8", len(v5Lists))
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	for list := range v5Lists {
+		t.Run(list, func(t *testing.T) {
+			tx := v5ReappliedTx(t, super)
+			v5LoadOn(t, tx, v5Start, 5) // the load succeeds while the list is present
+			if _, err := tx.Exec(ctx, `DELETE FROM nrs_codes WHERE list = $1`, list); err != nil {
+				t.Fatalf("delete %s: %v", list, err)
+			}
+			_, err := loadForDatesTx(ctx, tx, []string{v5Start})
+			if !errors.Is(err, ErrCodeListMissing) {
+				t.Fatalf("load without %s: err = %v, want ErrCodeListMissing", list, err)
+			}
+			if !strings.Contains(err.Error(), list) {
+				t.Errorf("err %q does not name the %s list", err, list)
+			}
+		})
+	}
+}
 
-	got, err := loadForDatesTx(ctx, tx, []string{v5Start})
-	if err != nil || got[v5Start].Version != 5 {
-		t.Fatalf("load with the lists present = v%d, %v; want v5 and no error", got[v5Start].Version, err)
+// The lists v5's rules name are exactly Design's eight, and each is an ENGI-03 list.
+func TestV5_EnumRulesNameOnlyENGI03Lists(t *testing.T) {
+	super, _ := dbTestPools(t)
+	named := map[string]bool{}
+	for key, r := range ruleRowsByKey(t, v5ReappliedTx(t, super), 5) {
+		var p struct{ List string }
+		if err := json.Unmarshal([]byte(r.Params), &p); err != nil {
+			t.Fatalf("%s params %q: %v", key, r.Params, err)
+		}
+		if r.Type != "enum" || p.List == "" {
+			continue
+		}
+		named[p.List] = true
+		if !slices.ContainsFunc(codelist.Lists, func(l codelist.List) bool { return l.Name == p.List }) {
+			t.Errorf("%s names list %q, which is not an ENGI-03 list", key, p.List)
+		}
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM nrs_codes WHERE list = 'currencies'`); err != nil {
-		t.Fatalf("delete currencies: %v", err)
+	want := []string{"countries", "currencies", "hs-codes", "invoice-quantity-codes", "lgas", "services-codes", "states", "tax-categories"}
+	got := make([]string, 0, len(named))
+	for n := range named {
+		got = append(got, n)
 	}
-	_, err = loadForDatesTx(ctx, tx, []string{v5Start})
-	if !errors.Is(err, ErrCodeListMissing) {
-		t.Fatalf("load without currencies: err = %v, want ErrCodeListMissing", err)
-	}
-	if !strings.Contains(err.Error(), "currencies") {
-		t.Errorf("err %q does not name the currencies list", err)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("lists named by v5 enum rules = %v, want %v", got, want)
 	}
 }
 
@@ -384,17 +543,9 @@ func TestV5_DownRemovesV5(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()
 
-	matches, err := fs.Glob(migrations.FS, v5MigrationGlob)
-	if err != nil || len(matches) != 1 {
-		t.Fatalf("want exactly one migrations/%s, got %v (err %v)", v5MigrationGlob, matches, err)
-	}
-	raw, err := fs.ReadFile(migrations.FS, matches[0])
-	if err != nil {
-		t.Fatalf("read %s: %v", matches[0], err)
-	}
-	down := gooseDownStatements(t, string(raw))
+	down := gooseDownStatements(t, v5MigrationSQL(t))
 	if len(down) == 0 {
-		t.Fatalf("%s has no Down statements", matches[0])
+		t.Fatal("the v5 migration has no Down statements")
 	}
 
 	tx := edBegin(t, ctx, super)
@@ -431,4 +582,16 @@ func TestV5_DownRemovesV5(t *testing.T) {
 		t.Errorf("v4 after the Down: sealed=%t from=%v rules=%d, want sealed, 2026-08-06, 20", sealed, from, v4Rules)
 	}
 	edWant(t, edVersionFor(t, ctx, tx, v5Start), versionIDByVersion(t, ctx, tx, 4), "rule_set_version_for("+v5Start+") after the Down")
+
+	// A Down that leaves a guard disabled would silently drop the immutability of every sealed version.
+	for _, tc := range []struct{ table, trigger string }{{"rules", "rules_content_lock"}, {"rule_set_versions", "rule_set_versions_seal_guard"}} {
+		var enabled string
+		if err := tx.QueryRow(ctx,
+			`SELECT tgenabled FROM pg_trigger WHERE tgname = $1 AND tgrelid = $2::regclass`, tc.trigger, tc.table).Scan(&enabled); err != nil {
+			t.Fatalf("read tgenabled of %s on %s: %v", tc.trigger, tc.table, err)
+		}
+		if enabled != "O" {
+			t.Errorf("%s on %s tgenabled = %q after the Down, want \"O\" (re-enabled)", tc.trigger, tc.table, enabled)
+		}
+	}
 }

@@ -98,7 +98,7 @@ func TestAll_KeysAndImportKeysAreUnique(t *testing.T) {
 func TestAll_TypesAreTheClosedSet(t *testing.T) {
 	for _, f := range All {
 		switch f.Type {
-		case Text, Date, Money, Quantity:
+		case Text, Date, Money, Quantity, Code, Time, Percent:
 		default:
 			t.Errorf("field %q has type %q", f.Key, f.Type)
 		}

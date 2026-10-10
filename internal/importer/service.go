@@ -110,12 +110,16 @@ func NewService(batch *Store, inv *invoice.Store, g gate) *Service {
 	return &Service{batch: batch, inv: inv, gate: g}
 }
 
-// numericImportKeys lists the money and quantity import keys in field-list order
+func isNumericType(t invoicefields.Type) bool {
+	return t == invoicefields.Money || t == invoicefields.Quantity || t == invoicefields.Percent
+}
+
+// numericImportKeys lists the money, quantity and percent import keys in field-list order
 // that pass keep.
 func numericImportKeys(keep func(invoicefields.Field) bool) []string {
 	var keys []string
 	for _, f := range invoicefields.All {
-		if f.Import && (f.Type == invoicefields.Money || f.Type == invoicefields.Quantity) && keep(f) {
+		if f.Import && isNumericType(f.Type) && keep(f) {
 			keys = append(keys, f.ImportKey())
 		}
 	}
@@ -138,6 +142,33 @@ var numericFields = func() map[string]bool {
 	}
 	return m
 }()
+
+// importFields maps each import key to its field, so cells are read by type.
+var importFields = func() map[string]invoicefields.Field {
+	m := map[string]invoicefields.Field{}
+	for _, f := range invoicefields.All {
+		if f.Import {
+			m[f.ImportKey()] = f
+		}
+	}
+	return m
+}()
+
+// dateOrder is the import Date keys in list order.
+var dateOrder = func() []string {
+	var keys []string
+	for _, f := range invoicefields.All {
+		if f.Import && f.Type == invoicefields.Date {
+			keys = append(keys, f.ImportKey())
+		}
+	}
+	return keys
+}()
+
+// numericRange is the digits a new numeric column holds (D17): numeric(14,2) and numeric(14,3).
+var numericRange = map[string]struct{ intDigits, scale int }{
+	"line_total": {12, 2}, "line_tax": {12, 2}, "line_tax_percent": {12, 2}, "line_base_quantity": {11, 3},
+}
 
 // headerFieldOrder is the import header keys that must agree across every row of one
 // invoice_number group ([dedup]), in the order in-file conflicts are detected (first
@@ -218,13 +249,40 @@ func normalizeNumeric(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// fieldValue reads field's raw cell from row via colIndex, normalizing it
-// first if field is one of the 5 numeric fields. Returns nil when the field
-// is not mapped at all (colIndex has no entry) or, for a numeric field, when
-// the normalized value is blank (an empty numeric cell means "no value", not
-// a literal empty string that would fail Postgres's ::numeric cast) — a
-// non-numeric field's blank cell is still returned as a pointer to "" (store-invalid-
-// faithfully; a blank string is valid TEXT content).
+// issueTimeShortRe matches the H:MM, HH:MM and H:MM:SS shapes that padIssueTime completes.
+var issueTimeShortRe = regexp.MustCompile(`^([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?$`)
+
+// padIssueTime completes H:MM, HH:MM and H:MM:SS to HH:MM:SS (D18); any other shape is returned as is.
+func padIssueTime(s string) string {
+	m := issueTimeShortRe.FindStringSubmatch(s)
+	if m == nil {
+		return s
+	}
+	sec := m[3]
+	if sec == "" {
+		sec = "00"
+	}
+	return strings.Repeat("0", 2-len(m[1])) + m[1] + ":" + m[2] + ":" + sec
+}
+
+// normalizeCell reads a raw cell by its field's type. Text keeps the raw cell.
+func normalizeCell(field, raw string) string {
+	switch importFields[field].Type {
+	case invoicefields.Money, invoicefields.Quantity:
+		return normalizeNumeric(raw)
+	case invoicefields.Percent:
+		return normalizeNumeric(strings.TrimSuffix(strings.TrimSpace(raw), "%"))
+	case invoicefields.Code, invoicefields.Date:
+		return strings.TrimSpace(raw)
+	case invoicefields.Time:
+		return padIssueTime(strings.TrimSpace(raw))
+	}
+	return raw
+}
+
+// fieldValue reads field's cell from row via colIndex, normalized by type.
+// It returns nil when the field is unmapped or the cell is blank, except for
+// the five original Text keys, which keep a blank cell as "" (D7).
 func fieldValue(row []string, colIndex map[string]int, field string) *string {
 	idx, ok := colIndex[field]
 	if !ok {
@@ -234,50 +292,79 @@ func fieldValue(row []string, colIndex map[string]int, field string) *string {
 	if idx < len(row) {
 		v = row[idx]
 	}
-	if numericFields[field] {
-		v = normalizeNumeric(v)
-		if v == "" {
-			return nil
-		}
+	v = normalizeCell(field, v)
+	f := importFields[field]
+	if strings.TrimSpace(v) == "" && !(f.Type == invoicefields.Text && f.Lead) {
+		return nil
 	}
 	return &v
 }
 
-// parseIssueDate parses s (already the raw, un-normalized issue_date cell —
-// issue_date is not one of the 5 numeric fields) as the one canonical
-// YYYY-MM-DD date format this importer accepts. A blank (whitespace-only) s
-// is not an error: it returns (nil, nil), the faithful "they wrote nothing"
-// reading (store-invalid-faithfully). A NON-EMPTY s that fails to parse
-// returns (nil, err) — distinct from blank, so the classify step can tell
-// "wrote nothing" apart from "wrote something we can't understand" and
-// quarantine the latter (Core AC#7: silently NULLing a firm-written but
-// badly-formatted date would be an uncorrected-looking correction, and would
-// launder a "date format wrong" error into a misleading "date missing").
-func parseIssueDate(s string) (*time.Time, error) {
+// parseDate parses s as YYYY-MM-DD. A blank s is (nil, nil); a non-blank one
+// that fails is an error, so classify can quarantine it rather than NULL it.
+func parseDate(field, s string) (*time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, nil
 	}
 	t, err := time.Parse("2006-01-02", s)
 	if err != nil {
-		return nil, fmt.Errorf("issue_date %q is not in YYYY-MM-DD format", s)
+		return nil, fmt.Errorf("%s %q is not in YYYY-MM-DD format", field, s)
 	}
 	return &t, nil
 }
 
-// issueDateParseError reports the parse error (if any) for a group's
-// issue_date value, read off rowIdxs[0]. By the time classify calls this,
-// headerConflictField has already confirmed the group's rows agree on
-// issue_date (it's a header field), so checking the first row once is
-// sufficient. Returns nil when issue_date is unmapped, blank, or parses
-// cleanly.
-func issueDateParseError(rows [][]string, colIndex map[string]int, rowIdxs []int) error {
-	p := fieldValue(rows[rowIdxs[0]], colIndex, "issue_date")
-	if p == nil {
+// parseIssueDate is parseDate for issue_date; the document-reading import calls it too.
+func parseIssueDate(s string) (*time.Time, error) { return parseDate("issue_date", s) }
+
+// dateParseError reports the first import Date field (in dateOrder) whose first-row
+// cell is non-blank and unparseable. headerConflictField has already made the group's
+// header cells agree.
+func dateParseError(rows [][]string, colIndex map[string]int, rowIdxs []int) (string, error) {
+	for _, field := range dateOrder {
+		p := fieldValue(rows[rowIdxs[0]], colIndex, field)
+		if p == nil {
+			continue
+		}
+		if _, err := parseDate(field, *p); err != nil {
+			return field, err
+		}
+	}
+	return "", nil
+}
+
+// issueTimeError reports a non-blank issue_time that fails the API's own check.
+func issueTimeError(rows [][]string, colIndex map[string]int, rowIdxs []int) error {
+	p := fieldValue(rows[rowIdxs[0]], colIndex, "issue_time")
+	if p == nil || invoice.ValidIssueTime(*p) {
 		return nil
 	}
-	_, err := parseIssueDate(*p)
-	return err
+	return errors.New(invoice.IssueTimeMsg)
+}
+
+// exceedsRange reports whether the plain decimal v does not fit numericRange[field].
+// Leading zeros and trailing zero decimals do not count.
+func exceedsRange(field, v string) bool {
+	lim := numericRange[field]
+	whole, frac, _ := strings.Cut(strings.TrimPrefix(v, "-"), ".")
+	return len(strings.TrimLeft(whole, "0")) > lim.intDigits || len(strings.TrimRight(frac, "0")) > lim.scale
+}
+
+// numericRangeField returns the first new numeric line field with a value that
+// overflows its column on any row of the group, or "". It runs after the decimal check.
+func numericRangeField(rows [][]string, colIndex map[string]int, rowIdxs []int) string {
+	for _, field := range lineNumericOrder {
+		idx, ok := colIndex[field]
+		if _, limited := numericRange[field]; !ok || !limited {
+			continue
+		}
+		for _, ri := range rowIdxs {
+			if exceedsRange(field, cellAt(rows[ri], idx, field)) {
+				return field
+			}
+		}
+	}
+	return ""
 }
 
 // sheetRow converts a 0-based rows[] index into its 1-based file row.
@@ -319,27 +406,15 @@ func headerConflictField(rows [][]string, colIndex map[string]int, rowIdxs []int
 	return ""
 }
 
-// cellAt reads row[idx] (or "" if out of range), normalizing it if field is
-// numeric, or trimming surrounding whitespace if field is issue_date — a
-// shared helper for headerConflictField and bestEffortBadNumericField, which
-// both need the raw (not nil-on-blank) normalized string rather than
-// fieldValue's *string/nil-on-blank shape. issue_date's trim mirrors
-// parseIssueDate's own strings.TrimSpace: without it, "2026-01-10" and
-// " 2026-01-10 " in the same group would spuriously conflict in
-// headerConflictField despite parseIssueDate resolving them to the identical
-// stored date.
+// cellAt reads row[idx] (or "" if out of range), normalized by field type. It
+// serves headerConflictField and bestEffortBadNumericField, which need the
+// string even when blank.
 func cellAt(row []string, idx int, field string) string {
 	var v string
 	if idx < len(row) {
 		v = row[idx]
 	}
-	switch {
-	case numericFields[field]:
-		v = normalizeNumeric(v)
-	case field == "issue_date":
-		v = strings.TrimSpace(v)
-	}
-	return v
+	return normalizeCell(field, v)
 }
 
 // bestEffortBadNumericField scans the group's 5 numeric fields (header
@@ -444,15 +519,17 @@ func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) 
 func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, documentID string, headerRow int, supplierName string, supplierTIN *string) invoice.CreateInput {
 	firstRow := rows[g.rowIdxs[0]]
 
-	issueDateStr := ""
-	if p := fieldValue(firstRow, colIndex, "issue_date"); p != nil {
-		issueDateStr = *p
+	// classify (dateParseError) already rejected any unparseable date, so a nil
+	// here is a blank cell.
+	date := func(field string) *time.Time {
+		p := fieldValue(firstRow, colIndex, field)
+		if p == nil {
+			return nil
+		}
+		t, _ := parseDate(field, *p)
+		return t
 	}
-	// classify (issueDateParseError) already rejected any non-empty,
-	// unparseable issue_date for this group before it ever reached
-	// readyGroups, so the error here is always nil — a blank cell (nil,
-	// nil) is the only remaining case, which is the correct NULL.
-	issueDate, _ := parseIssueDate(issueDateStr)
+	issueDate := date("issue_date")
 
 	in := invoice.CreateInput{
 		EntityID:      entityID,
@@ -467,6 +544,21 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 		VAT:           fieldValue(firstRow, colIndex, "vat"),
 		Total:         fieldValue(firstRow, colIndex, "total"),
 		ImportBatchID: &batchID,
+
+		InvoiceKind:     fieldValue(firstRow, colIndex, "invoice_kind"),
+		TaxCurrencyCode: fieldValue(firstRow, colIndex, "tax_currency_code"),
+		DueDate:         date("due_date"),
+		IssueTime:       fieldValue(firstRow, colIndex, "issue_time"),
+		TaxPointDate:    date("tax_point_date"),
+		PaymentStatus:   fieldValue(firstRow, colIndex, "payment_status"),
+		BuyerEmail:      fieldValue(firstRow, colIndex, "buyer_email"),
+		BuyerTelephone:  fieldValue(firstRow, colIndex, "buyer_telephone"),
+		BuyerStreet:     fieldValue(firstRow, colIndex, "buyer_street"),
+		BuyerCity:       fieldValue(firstRow, colIndex, "buyer_city"),
+		BuyerPostalZone: fieldValue(firstRow, colIndex, "buyer_postal_zone"),
+		BuyerCountry:    fieldValue(firstRow, colIndex, "buyer_country"),
+		BuyerState:      fieldValue(firstRow, colIndex, "buyer_state"),
+		BuyerLGA:        fieldValue(firstRow, colIndex, "buyer_lga"),
 	}
 	// Nil, not &"": source_document_id is a uuid column, so "" is a 22P02.
 	// SourceRows belongs INSIDE this guard: source_rows without a document
@@ -482,6 +574,18 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 			Description: fieldValue(row, colIndex, "line_description"),
 			Quantity:    fieldValue(row, colIndex, "line_quantity"),
 			UnitPrice:   fieldValue(row, colIndex, "line_unit_price"),
+			LineTotal:   fieldValue(row, colIndex, "line_total"),
+			LineTax:     fieldValue(row, colIndex, "line_tax"),
+
+			TaxCategory:               fieldValue(row, colIndex, "line_tax_category"),
+			HSNCode:                   fieldValue(row, colIndex, "line_hsn_code"),
+			ISICCode:                  fieldValue(row, colIndex, "line_isic_code"),
+			ProductCategory:           fieldValue(row, colIndex, "line_product_category"),
+			ServiceCategory:           fieldValue(row, colIndex, "line_service_category"),
+			SellersItemIdentification: fieldValue(row, colIndex, "line_sellers_item_identification"),
+			PriceUnit:                 fieldValue(row, colIndex, "line_price_unit"),
+			TaxPercent:                fieldValue(row, colIndex, "line_tax_percent"),
+			BaseQuantity:              fieldValue(row, colIndex, "line_base_quantity"),
 		})
 	}
 	return in
@@ -547,6 +651,29 @@ func invoiceFromCreateInput(in invoice.CreateInput) invoice.Invoice {
 		Subtotal:      in.Subtotal,
 		VAT:           in.VAT,
 		Total:         in.Total,
+
+		InvoiceKind:        in.InvoiceKind,
+		TaxCurrencyCode:    in.TaxCurrencyCode,
+		DueDate:            in.DueDate,
+		IssueTime:          in.IssueTime,
+		TaxPointDate:       in.TaxPointDate,
+		PaymentStatus:      in.PaymentStatus,
+		SupplierEmail:      in.SupplierEmail,
+		SupplierTelephone:  in.SupplierTelephone,
+		SupplierStreet:     in.SupplierStreet,
+		SupplierCity:       in.SupplierCity,
+		SupplierPostalZone: in.SupplierPostalZone,
+		SupplierCountry:    in.SupplierCountry,
+		SupplierState:      in.SupplierState,
+		SupplierLGA:        in.SupplierLGA,
+		BuyerEmail:         in.BuyerEmail,
+		BuyerTelephone:     in.BuyerTelephone,
+		BuyerStreet:        in.BuyerStreet,
+		BuyerCity:          in.BuyerCity,
+		BuyerPostalZone:    in.BuyerPostalZone,
+		BuyerCountry:       in.BuyerCountry,
+		BuyerState:         in.BuyerState,
+		BuyerLGA:           in.BuyerLGA,
 	}
 	for i, li := range in.LineItems {
 		inv.LineItems = append(inv.LineItems, invoice.LineItem{
@@ -556,6 +683,16 @@ func invoiceFromCreateInput(in invoice.CreateInput) invoice.Invoice {
 			UnitPrice:   li.UnitPrice,
 			LineTotal:   li.LineTotal,
 			LineTax:     li.LineTax,
+
+			TaxCategory:               li.TaxCategory,
+			HSNCode:                   li.HSNCode,
+			ISICCode:                  li.ISICCode,
+			ProductCategory:           li.ProductCategory,
+			ServiceCategory:           li.ServiceCategory,
+			SellersItemIdentification: li.SellersItemIdentification,
+			PriceUnit:                 li.PriceUnit,
+			TaxPercent:                li.TaxPercent,
+			BaseQuantity:              li.BaseQuantity,
 		})
 	}
 	return inv
@@ -730,11 +867,21 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			invalidRows += len(g.rowIdxs)
 			continue
 		}
-		if dateErr := issueDateParseError(rows, colIndex, g.rowIdxs); dateErr != nil {
+		if field, dateErr := dateParseError(rows, colIndex, g.rowIdxs); dateErr != nil {
 			errorsList = append(errorsList, RowError{
 				Rows:    sheetRows(headerRow, g.rowIdxs),
-				Field:   "issue_date",
+				Field:   field,
 				Message: dateErr.Error(),
+			})
+			quarantinedInvoices++
+			invalidRows += len(g.rowIdxs)
+			continue
+		}
+		if timeErr := issueTimeError(rows, colIndex, g.rowIdxs); timeErr != nil {
+			errorsList = append(errorsList, RowError{
+				Rows:    sheetRows(headerRow, g.rowIdxs),
+				Field:   "issue_time",
+				Message: timeErr.Error(),
 			})
 			quarantinedInvoices++
 			invalidRows += len(g.rowIdxs)
@@ -745,6 +892,17 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 				Rows:    sheetRows(headerRow, g.rowIdxs),
 				Field:   field,
 				Message: fmt.Sprintf("%s is not a valid number", field),
+			})
+			quarantinedInvoices++
+			invalidRows += len(g.rowIdxs)
+			continue
+		}
+		if field := numericRangeField(rows, colIndex, g.rowIdxs); field != "" {
+			lim := numericRange[field]
+			errorsList = append(errorsList, RowError{
+				Rows:    sheetRows(headerRow, g.rowIdxs),
+				Field:   field,
+				Message: fmt.Sprintf("%s must have at most %d digits before the decimal point and %d after", field, lim.intDigits, lim.scale),
 			})
 			quarantinedInvoices++
 			invalidRows += len(g.rowIdxs)

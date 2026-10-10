@@ -11,6 +11,9 @@ const (
 	Date     Type = "date"
 	Money    Type = "money"
 	Quantity Type = "quantity"
+	Code     Type = "code"
+	Time     Type = "time"
+	Percent  Type = "percent"
 )
 
 type Field struct {
@@ -37,10 +40,10 @@ var All = []Field{
 	{Key: "subtotal", Label: "Subtotal", Type: Money, Import: true, Lead: true, Edit: true, Extract: true},
 	{Key: "vat", Label: "VAT", Type: Money, Import: true, Lead: true, Edit: true, Extract: true},
 	{Key: "total", Label: "Total", Type: Money, Import: true, Lead: true, Edit: true, Extract: true},
-	{Key: "invoice_kind", Label: "Invoice kind", Type: Text, Import: true},
-	{Key: "tax_currency_code", Label: "Tax currency code", Type: Text, Import: true},
+	{Key: "invoice_kind", Label: "Invoice kind", Type: Code, Import: true},
+	{Key: "tax_currency_code", Label: "Tax currency code", Type: Code, Import: true},
 	{Key: "due_date", Label: "Due date", Type: Date, Import: true},
-	{Key: "issue_time", Label: "Issue time", Type: Text, Import: true},
+	{Key: "issue_time", Label: "Issue time", Type: Time, Import: true},
 	{Key: "tax_point_date", Label: "Tax point date", Type: Date, Import: true},
 	{Key: "payment_status", Label: "Payment status", Type: Text, Import: true},
 	{Key: "supplier_email", Label: "Supplier email", Type: Text},
@@ -56,22 +59,22 @@ var All = []Field{
 	{Key: "buyer_street", Label: "Buyer street", Type: Text, Import: true},
 	{Key: "buyer_city", Label: "Buyer city", Type: Text, Import: true},
 	{Key: "buyer_postal_zone", Label: "Buyer postal zone", Type: Text, Import: true},
-	{Key: "buyer_country", Label: "Buyer country", Type: Text, Import: true},
-	{Key: "buyer_state", Label: "Buyer state", Type: Text, Import: true},
-	{Key: "buyer_lga", Label: "Buyer LGA", Type: Text, Import: true},
+	{Key: "buyer_country", Label: "Buyer country", Type: Code, Import: true},
+	{Key: "buyer_state", Label: "Buyer state", Type: Code, Import: true},
+	{Key: "buyer_lga", Label: "Buyer LGA", Type: Code, Import: true},
 	{Key: "description", Label: "Description", Type: Text, Line: true, Import: true, Lead: true, Edit: true, Extract: true},
 	{Key: "quantity", Label: "Quantity", Type: Quantity, Line: true, Import: true, Lead: true, Edit: true, Extract: true},
 	{Key: "unit_price", Label: "Unit price", Type: Money, Line: true, Import: true, Lead: true, Edit: true, Extract: true},
 	{Key: "line_total", Label: "Line total", Type: Money, Line: true, Import: true, Edit: true, Extract: true},
 	{Key: "line_tax", Label: "Line tax", Type: Money, Line: true, Import: true, Edit: true, Extract: true},
-	{Key: "tax_category", Label: "Tax category", Type: Text, Line: true, Import: true},
-	{Key: "hsn_code", Label: "HSN code", Type: Text, Line: true, Import: true},
-	{Key: "isic_code", Label: "ISIC code", Type: Text, Line: true, Import: true},
+	{Key: "tax_category", Label: "Tax category", Type: Code, Line: true, Import: true},
+	{Key: "hsn_code", Label: "HSN code", Type: Code, Line: true, Import: true},
+	{Key: "isic_code", Label: "ISIC code", Type: Code, Line: true, Import: true},
 	{Key: "product_category", Label: "Product category", Type: Text, Line: true, Import: true},
 	{Key: "service_category", Label: "Service category", Type: Text, Line: true, Import: true},
 	{Key: "sellers_item_identification", Label: "Seller's item identification", Type: Text, Line: true, Import: true},
-	{Key: "price_unit", Label: "Price unit", Type: Text, Line: true, Import: true},
-	{Key: "tax_percent", Label: "Tax percent", Type: Money, Line: true, Import: true},
+	{Key: "price_unit", Label: "Price unit", Type: Code, Line: true, Import: true},
+	{Key: "tax_percent", Label: "Tax percent", Type: Percent, Line: true, Import: true},
 	{Key: "base_quantity", Label: "Base quantity", Type: Quantity, Line: true, Import: true},
 }
 

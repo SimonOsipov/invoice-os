@@ -140,7 +140,11 @@ func (n nullable[T]) update(clear *T) *T {
 // issueTimeRE is stricter than Postgres time on purpose: no AM/PM, no fraction, no 24:00:00.
 var issueTimeRE = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$`)
 
-const issueTimeMsg = "issue_time must be HH:MM:SS"
+// IssueTimeMsg is the 400 text for a bad issue_time; the importer quarantines with it too.
+const IssueTimeMsg = "issue_time must be HH:MM:SS"
+
+// ValidIssueTime is the one issue_time check, shared by the API and the importer.
+func ValidIssueTime(s string) bool { return issueTimeRE.MatchString(s) }
 
 // editReq is the PATCH /v1/invoices/{id} wire body (M4-05-03, [A1]): the 9
 // optional header MBS-content fields, snake_case tags IDENTICAL to
@@ -290,8 +294,8 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 			}
 		}
 
-		if req.IssueTime != nil && !issueTimeRE.MatchString(*req.IssueTime) {
-			writeError(w, http.StatusBadRequest, issueTimeMsg)
+		if req.IssueTime != nil && !ValidIssueTime(*req.IssueTime) {
+			writeError(w, http.StatusBadRequest, IssueTimeMsg)
 			return
 		}
 
@@ -1180,8 +1184,8 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 			return
 		}
 
-		if t := req.IssueTime.val; t != nil && !issueTimeRE.MatchString(*t) {
-			writeError(w, http.StatusBadRequest, issueTimeMsg)
+		if t := req.IssueTime.val; t != nil && !ValidIssueTime(*t) {
+			writeError(w, http.StatusBadRequest, IssueTimeMsg)
 			return
 		}
 

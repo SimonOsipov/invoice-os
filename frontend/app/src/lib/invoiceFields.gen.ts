@@ -113,7 +113,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "invoice_kind",
     "label": "Invoice kind",
-    "type": "text",
+    "type": "code",
     "line": false,
     "importKey": "invoice_kind",
     "required": false,
@@ -124,7 +124,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "tax_currency_code",
     "label": "Tax currency code",
-    "type": "text",
+    "type": "code",
     "line": false,
     "importKey": "tax_currency_code",
     "required": false,
@@ -146,7 +146,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "issue_time",
     "label": "Issue time",
-    "type": "text",
+    "type": "time",
     "line": false,
     "importKey": "issue_time",
     "required": false,
@@ -322,7 +322,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "buyer_country",
     "label": "Buyer country",
-    "type": "text",
+    "type": "code",
     "line": false,
     "importKey": "buyer_country",
     "required": false,
@@ -333,7 +333,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "buyer_state",
     "label": "Buyer state",
-    "type": "text",
+    "type": "code",
     "line": false,
     "importKey": "buyer_state",
     "required": false,
@@ -344,7 +344,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "buyer_lga",
     "label": "Buyer LGA",
-    "type": "text",
+    "type": "code",
     "line": false,
     "importKey": "buyer_lga",
     "required": false,
@@ -410,7 +410,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "tax_category",
     "label": "Tax category",
-    "type": "text",
+    "type": "code",
     "line": true,
     "importKey": "line_tax_category",
     "required": false,
@@ -421,7 +421,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "hsn_code",
     "label": "HSN code",
-    "type": "text",
+    "type": "code",
     "line": true,
     "importKey": "line_hsn_code",
     "required": false,
@@ -432,7 +432,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "isic_code",
     "label": "ISIC code",
-    "type": "text",
+    "type": "code",
     "line": true,
     "importKey": "line_isic_code",
     "required": false,
@@ -476,7 +476,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "price_unit",
     "label": "Price unit",
-    "type": "text",
+    "type": "code",
     "line": true,
     "importKey": "line_price_unit",
     "required": false,
@@ -487,7 +487,7 @@ export const INVOICE_FIELDS = [
   {
     "key": "tax_percent",
     "label": "Tax percent",
-    "type": "money",
+    "type": "percent",
     "line": true,
     "importKey": "line_tax_percent",
     "required": false,

@@ -1476,7 +1476,8 @@ describe('ReviewRow row-expansion: Explain and Accept (ENGI-17-06)', () => {
       ],
     })
     await waitFor(() => expect(gets()).toHaveLength(2))
-    expect(screen.queryByTestId('explain-panel')).toBeNull()    expect(explainButtons()[0].disabled).toBe(true)
+    expect(screen.queryByTestId('explain-panel')).toBeNull()
+    expect(explainButtons()[0].disabled).toBe(true)
     expect(explainButtons()[0].title).toBe(EXPLAIN_COPY.stale)
   })
 

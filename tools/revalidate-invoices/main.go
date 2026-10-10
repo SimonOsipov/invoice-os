@@ -155,7 +155,7 @@ func run(ctx context.Context, tenants []string, allTenants, dryRun, verify bool)
 // enumerateTenants lists every tenant id via the reader pool
 // (invoice_tenant_reader, no app.current_tenant GUC set) -- the
 // tenant_enumerate policy ORs in every row for that role alone
-// (reconciliation.enumerateTenants).
+// (reconciliation.EnumerateTenants).
 func enumerateTenants(ctx context.Context, reader *pgxpool.Pool) ([]string, error) {
 	rows, err := reader.Query(ctx, `SELECT id FROM tenants ORDER BY id`)
 	if err != nil {

@@ -118,15 +118,16 @@ export async function submitDemoLead(
 ): Promise<void> {
   const url = submissionUrl(t)
   let res: Response
+  const signal = AbortSignal.timeout(15_000)
   try {
     res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildSubmission(lead, consentText)),
-      signal: AbortSignal.timeout(15_000),
+      signal,
     })
   } catch (e) {
-    reportApiFailure(e, { method: 'POST', url })
+    reportApiFailure(e, { method: 'POST', url, signal })
     throw e
   }
   // Status only, NEVER a field value — the rejection message is surfaced nowhere

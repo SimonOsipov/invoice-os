@@ -722,6 +722,10 @@ describe('provisionStaffAccount', () => {
     const account = await provisionStaffAccount('x', undefined, { rulesRole: true })
     expect(staffBody(ruled)).toEqual({ user_id: USER_ID, rules_role: true })
     expect(account.userId).toBe(USER_ID)
+
+    const off = stubGateway()
+    await provisionStaffAccount('x', undefined, { rulesRole: false })
+    expect(staffBody(off)).toEqual({ user_id: USER_ID })
   })
 })
 

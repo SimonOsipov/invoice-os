@@ -290,7 +290,7 @@ func TestMockStaff_PassesRulesRoleToTheGrant(t *testing.T) {
 
 func TestMockStaff_RefusesANonBooleanRulesRole(t *testing.T) {
 	id := uuid.NewString()
-	for _, v := range []string{`"yes"`, `1`, `null`} {
+	for _, v := range []string{`"yes"`, `1`, `null`, `"true"`, `0`, `[]`, `{}`, `[true]`} {
 		t.Run(v, func(t *testing.T) {
 			log, _ := captureLog()
 			rec := &staffGrantRecorder{}

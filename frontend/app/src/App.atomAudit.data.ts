@@ -223,6 +223,16 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     note: 'Cleared at App.tsx#switchClient, but popstate re-derives it from an older /invoices/<id> entry at App.tsx#onPopState. Reaches the screen as ctx.importedInvoiceId, read by InvoiceDetail. Fixed by ROUTE-06-02.',
   },
   {
+    binding: 'detailLine, setDetailLine',
+    name: 'detailLine',
+    kind: 'useState',
+    resetBySwitchClient: true,
+    routes: ['/invoice', '/invoices/<id>'],
+    verdict: 'correctly-reset',
+    citation: { text: 'setDetailLine(line ?? null)' },
+    note: 'One-shot line target from the review Open line button. Cleared at App.tsx#switchClient and App.tsx#onPopState; reaches the screen as ctx.importedInvoiceLine, read once at InvoiceDetail mount.',
+  },
+  {
     binding: 'auditPrefilter, setAuditPrefilter',
     name: 'auditPrefilter',
     kind: 'useState',

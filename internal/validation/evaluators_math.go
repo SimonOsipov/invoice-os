@@ -18,18 +18,12 @@
 // Rule.Target explicitly -- the executor's Eval bodies must not derive Path
 // from Params on their own initiative.
 //
-// NOTE (INVCR-01-13/D8): the constraint above governs the EVALUATOR, not the
-// RULE ROW -- an Eval body here must never compute/derive a Path from Params
-// on its own initiative (e.g. echoing tax_math's `expected` param string back
-// as a Path). It does NOT forbid a rule's author from setting Rule.Target on
-// one of these three types via the DATA (a migration's rules row), which is
-// exactly what rule-set v3 does for vat-standard-rate (target: "vat") and
-// no-duplicate-line-items (target: "line_items") -- neither taxMathEval.Eval
-// nor celEvaluator.Eval reads r.Target at all, so setting it is inert to
-// evaluation and only changes what violation(r) copies into Violation.Path
-// (see migrations/20260731090000_rule_set_v3.sql,
-// TestTaxMathTargetDoesNotChangeEvaluation below, and golden_test.go's
-// TestV3PathIsTheOnlyDelta).
+// NOTE (INVCR-01-13/D8): an Eval body here must not derive a Path from Params. A rule
+// author may set Rule.Target on these types via DATA (rule-set v3 does for
+// vat-standard-rate and no-duplicate-line-items), which only changes what violation(r)
+// copies into Violation.Path. The one exception is a lineEvaluator (cel, and the
+// per-line rule types that follow): its evalLines names the failing line as
+// <list>[N] via linePath.
 //
 // Param shapes (pinned here so the executor's implementation and this RED
 // suite agree byte-for-byte; QA Mode A decision, not yet in the story's Test
@@ -194,7 +188,18 @@ func resolveNumericOperand(p Payload, raw json.RawMessage) (decimal.Decimal, boo
 // absent or non-numeric expected value.
 type lineSumEval struct{}
 
-func (lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
+func (e lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
+	vs, err := e.evalLines(p, r)
+	if err != nil || len(vs) == 0 {
+		return nil, err
+	}
+	return &vs[0], nil
+}
+
+// evalLines reports each malformed line (first fault of the line) at its own
+// path and compares no sum while any line is malformed; a sum mismatch or a
+// bad expected keeps r.Target.
+func (lineSumEval) evalLines(p Payload, r Rule) ([]Violation, error) {
 	var params struct {
 		Items     string  `json:"items"`
 		Amount    string  `json:"amount"`
@@ -231,41 +236,50 @@ func (lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
 	}
 
 	sum := decimal.Zero
-	for _, it := range items {
+	var bad []Violation
+	for i, it := range items {
+		n := i + 1
+		line := func(field string) {
+			v := violation(r)
+			v.Path = linePath(params.Items, n, field)
+			bad = append(bad, *v)
+		}
 		m, ok := it.(map[string]any)
 		if !ok {
-			return violation(r), nil // a non-object line is malformed data for this rule
+			line("")
+			continue
 		}
-		amountVal, ok := m[params.Amount]
+		amountF, ok := toFloat(m[params.Amount])
 		if !ok {
-			return violation(r), nil // an amount-less line can't reconcile
+			line(params.Amount) // absent is nil, which toFloat rejects
+			continue
 		}
-		amountF, ok := toFloat(amountVal)
-		if !ok {
-			return violation(r), nil
-		}
-		line := decimal.NewFromFloat(amountF)
+		lineAmt := decimal.NewFromFloat(amountF)
 		if params.Quantity != "" {
 			if qtyVal, has := m[params.Quantity]; has {
 				qtyF, ok := toFloat(qtyVal)
 				if !ok {
-					return violation(r), nil
+					line(params.Quantity)
+					continue
 				}
-				line = line.Mul(decimal.NewFromFloat(qtyF))
+				lineAmt = lineAmt.Mul(decimal.NewFromFloat(qtyF))
 			}
 			// quantity field absent on this line -> implicit weight of 1.
 		}
-		sum = sum.Add(line)
+		sum = sum.Add(lineAmt)
+	}
+	if len(bad) > 0 {
+		return bad, nil
 	}
 
 	expectedVal, present := resolvePath(p, params.Expected)
 	if !present {
 		// No natural Expected/Actual: nothing to compare sum against.
-		return violation(r), nil
+		return []Violation{*violation(r)}, nil
 	}
 	expectedF, ok := toFloat(expectedVal)
 	if !ok {
-		return violation(r), nil
+		return []Violation{*violation(r)}, nil
 	}
 	// Hoisted ONCE and reused in both the comparison below and the
 	// violation's Actual, so the reported Actual can never disagree with
@@ -274,7 +288,7 @@ func (lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
 	if sum.Sub(declared).Abs().GreaterThan(decimal.NewFromFloat(params.Tolerance)) {
 		// Expected = the folded line total (sum); Actual = the declared
 		// "expected"(param) field -- both exact decimal strings ([D13]).
-		return violation(r, withExpected(sum.String()), withActual(declared.String())), nil
+		return []Violation{*violation(r, withExpected(sum.String()), withActual(declared.String()))}, nil
 	}
 	return nil, nil
 }

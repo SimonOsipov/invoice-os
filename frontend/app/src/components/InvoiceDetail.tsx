@@ -27,6 +27,7 @@ import {
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { getExtractions, type ExtractionJobsResponse } from '../lib/importApi'
 import type { LineEditKey } from '../lib/invoiceFields'
+import type { LineTarget } from '../lib/validationApi'
 import { stripNodes } from '../lib/invoiceStrip'
 import {
   BUYER_TIN_MISSING,
@@ -305,6 +306,20 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   // isInFlight (queued/submitted, lib/invoices.ts:683-688), which is disjoint from the
   // can_edit set the Edit button lives behind (see the `gen` comment above).
   const [editing, setEditing] = useState(false)
+  // onFocusApplied resets this to null after focusing, so a repeat click on the same line re-focuses.
+  const [lineFocus, setLineFocus] = useState<{ seq: number; target: LineTarget } | null>(null)
+
+  // Read once at mount: the review screen's Open line target, applied when the record first loads.
+  const pendingLine = useRef(ctx.importedInvoiceLine ?? null)
+  useEffect(() => {
+    const target = pendingLine.current
+    if (target == null || inv == null) return
+    pendingLine.current = null
+    ctx.consumeImportedInvoiceLine() // one-shot: a later visit must not replay it
+    if (!inv.can_edit) return
+    setEditing(true)
+    setLineFocus({ seq: 1, target })
+  }, [inv])
 
   let content: ReactNode
 
@@ -904,6 +919,8 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   base={base}
                   invoiceId={invoiceId}
                   inv={inv}
+                  focus={lineFocus}
+                  onFocusApplied={() => setLineFocus(null)}
                   onSaved={handleSaved}
                   onCancel={() => setEditing(false)}
                 />
@@ -992,7 +1009,16 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                 )}
                 {inv.rule_set_version != null ? (
                   <div data-testid="violations-table">
-                    <ViolationsTable violations={inv.violations} ruleSetVersion={inv.rule_set_version} />
+                    <ViolationsTable
+                      violations={inv.violations}
+                      ruleSetVersion={inv.rule_set_version}
+                      lineDisabled={!inv.can_edit}
+                      onOpenLine={(target) => {
+                        if (!inv.can_edit) return
+                        setEditing(true)
+                        setLineFocus((f) => ({ seq: (f?.seq ?? 0) + 1, target }))
+                      }}
+                    />
                   </div>
                 ) : (
                   <div data-testid="not-validated" style={{ fontSize: 13, color: 'var(--fg-3)' }}>
@@ -1207,6 +1233,8 @@ function InvoiceEditBody({
   base,
   invoiceId,
   inv,
+  focus,
+  onFocusApplied,
   onSaved,
   onCancel,
 }: {
@@ -1214,6 +1242,8 @@ function InvoiceEditBody({
   base: string
   invoiceId: string
   inv: InvoiceDetailRecord
+  focus: { seq: number; target: LineTarget } | null
+  onFocusApplied: () => void
   onSaved: (renamed: boolean) => void
   onCancel: () => void
 }) {
@@ -1224,6 +1254,18 @@ function InvoiceEditBody({
   const [rows, setRows] = useState<LineRowState[]>(() => rowsFromInvoice(inv))
   const [submitting, setSubmitting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const linesRef = useRef<HTMLDivElement>(null)
+
+  // Runs on mount too, so the first click (which mounts the editor) lands focus.
+  useEffect(() => {
+    if (!focus) return
+    const row = linesRef.current?.querySelectorAll('[data-testid="line-row"]')[focus.target.line - 1]
+    onFocusApplied() // consume once, so a later Edit open does not replay it
+    if (!row) return
+    const inputs = Array.from(row.querySelectorAll<HTMLInputElement>('[data-line-field]'))
+    const hit = inputs.find((el) => el.dataset.lineField === focus.target.field) ?? inputs[0]
+    hit?.focus()
+  }, [focus?.seq])
 
   // Field flags (task-251 AC #3/#5): one per rejection reason whose MBS path maps to one
   // of this form's editable fields, carrying the reason's code — so the operator sees
@@ -1443,7 +1485,7 @@ function InvoiceEditBody({
             Line items
           </div>
           <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflowX: 'auto' }}>
-            <div style={{ minWidth: 'min-content' }}>
+            <div ref={linesRef} style={{ minWidth: 'min-content' }}>
             <div style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)' }}>
               <span className="label">Description</span>
               <span className="label">Qty</span>
@@ -1454,11 +1496,11 @@ function InvoiceEditBody({
             </div>
             {rows.map((row, i) => (
               <div key={i} data-testid="line-row" style={{ display: 'grid', gridTemplateColumns: LINE_EDIT_GRID, gap: 8, padding: '8px 12px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
-                <input className="pf-input" type="text" value={row.description} onChange={(e) => updateRow(i, 'description', e.target.value)} style={{ ...LINE_INPUT }} disabled={submitting} />
-                <input className="pf-input" type="text" value={row.quantity} onChange={(e) => updateRow(i, 'quantity', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
-                <input className="pf-input" type="text" value={row.unit_price} onChange={(e) => updateRow(i, 'unit_price', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
-                <input className="pf-input" type="text" value={row.line_total} onChange={(e) => updateRow(i, 'line_total', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
-                <input className="pf-input" type="text" value={row.line_tax} onChange={(e) => updateRow(i, 'line_tax', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+                <input data-line-field="description" className="pf-input" type="text" value={row.description} onChange={(e) => updateRow(i, 'description', e.target.value)} style={{ ...LINE_INPUT }} disabled={submitting} />
+                <input data-line-field="quantity" className="pf-input" type="text" value={row.quantity} onChange={(e) => updateRow(i, 'quantity', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+                <input data-line-field="unit_price" className="pf-input" type="text" value={row.unit_price} onChange={(e) => updateRow(i, 'unit_price', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+                <input data-line-field="line_total" className="pf-input" type="text" value={row.line_total} onChange={(e) => updateRow(i, 'line_total', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
+                <input data-line-field="line_tax" className="pf-input" type="text" value={row.line_tax} onChange={(e) => updateRow(i, 'line_tax', e.target.value)} style={{ ...LINE_INPUT, fontFamily: 'var(--font-mono)', padding: '0 8px' }} disabled={submitting} />
                 <button
                   type="button"
                   data-testid="line-remove"

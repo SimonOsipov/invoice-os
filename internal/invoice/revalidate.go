@@ -265,11 +265,11 @@ func demoteRevalidated(ctx context.Context, pool *pgxpool.Pool, store *Store, te
 }
 
 // blockingRuleKeys names the severity:"error" rules behind a demotion, for the
-// run's Notes (what --verify lists).
+// run's Notes (what --verify lists). Each key appears once, first-seen order.
 func blockingRuleKeys(vs []Violation) []string {
 	var keys []string
 	for _, v := range vs {
-		if v.Severity == "error" {
+		if v.Severity == "error" && !slices.Contains(keys, v.RuleKey) {
 			keys = append(keys, v.RuleKey)
 		}
 	}

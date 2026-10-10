@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
@@ -254,6 +255,7 @@ func TestRegistrationRoutesRegisteredUnconditionally(t *testing.T) {
 		"OPTIONS /auth/request-password-reset": "withCORS(" + recv + ".RequestPasswordReset)",
 		"GET /auth/reset-password":             "gateway.ResetPasswordPageHandler(siteURL)",
 		"POST /auth/reset-password":            `resetPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, app.Logger)`,
+		"POST /auth/invitation/password":       `invitationPasswordHandler(probed["auth"], siteURL, sessions, ` + hand + `.SignInThrottle, sink, app.Logger)`,
 
 		// Browser-called from the landing accept page, like register: CORS-wrapped with a preflight.
 		"POST /auth/invitation":             "withCORS(" + invPreview + ")",
@@ -358,6 +360,49 @@ func TestAccountMailRoutesRegisteredUnconditionally(t *testing.T) {
 	}
 }
 
+// The invitee set-password POST is mounted at the top level of main, in every build, over its own builder.
+func TestRegistrationRoutes_InvitationPasswordIsMounted(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if buildConstrained(src) {
+		t.Fatal("main.go carries a build constraint; its routes are not in every build")
+	}
+	sites, _ := mainRoutes(t, src)
+	if len(sites) < 4 {
+		t.Fatalf("found %d literal-pattern routes in main, want at least 4; the scan went blind: %+v", len(sites), sites)
+	}
+	if s := sitesFor(sites, "POST /auth/invitation/password"); len(s) != 1 {
+		t.Errorf("POST /auth/invitation/password is registered %d times, want exactly once", len(s))
+	} else {
+		if !s[0].topLevel {
+			t.Error("POST /auth/invitation/password is registered under a condition; it must be a top-level statement of main")
+		}
+		if !strings.HasPrefix(s[0].handler, `invitationPasswordHandler(probed["auth"], siteURL, `) {
+			t.Errorf("POST /auth/invitation/password handler = %s, want invitationPasswordHandler(probed[\"auth\"], siteURL, ...) with no CORS wrap", s[0].handler)
+		}
+	}
+
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	log := slog.New(slog.DiscardHandler)
+	signIn := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
+	mux := http.NewServeMux()
+	mux.Handle("POST /auth/invitation/password", invitationPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, log), signIn, nil, log))
+
+	rec := serveForm(mux, "/auth/invitation/password", "type=signup&password=new-password-1")
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verify=failed" {
+		t.Errorf("POST with a bad form = %d Location %q, want 303 https://site.example/?verify=failed", rec.Code, rec.Header().Get("Location"))
+	}
+	if rec := serveRegistration(mux, http.MethodGet, "/auth/invitation/password", ""); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /auth/invitation/password = %d, want 405", rec.Code)
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("a bad form or a wrong method reached GoTrue: %v", got)
+	}
+}
+
 const registerAllowedOrigin = "https://landing.example"
 
 // registerMux mounts the real register handler behind the CORS allow-list on both patterns, as main does.
@@ -365,7 +410,7 @@ func registerMux(t *testing.T) (*http.ServeMux, func() []string) {
 	t.Helper()
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 	withCORS := gateway.CORS([]string{registerAllowedOrigin})
 	mux := http.NewServeMux()
 	mux.Handle("POST /auth/register", withCORS(reg.Register))
@@ -463,7 +508,7 @@ func mailLinkMux(t *testing.T, path string, pick func(registration) http.Handler
 	t.Helper()
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 	withCORS := gateway.CORS([]string{registerAllowedOrigin})
 	mux := http.NewServeMux()
 	mux.Handle("POST "+path, withCORS(pick(reg)))
@@ -631,7 +676,7 @@ func demoMux(t *testing.T) (*http.ServeMux, *demoRecSink) {
 	authURL, _ := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	sink := &demoRecSink{}
-	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), sink)
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), sink, noPendingInvite)
 	withCORS := gateway.CORS([]string{registerAllowedOrigin})
 	mux := http.NewServeMux()
 	mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
@@ -830,5 +875,26 @@ func TestDemoRequest_OptionsWithoutOriginIsNotADemoRequest(t *testing.T) {
 	}
 	if got := sink.calls(); len(got) != 1 {
 		t.Errorf("sink saw %+v after one POST, want one call", got)
+	}
+}
+
+func TestDemoRequest_LimitAnswerIsReadableFromTheLandingOrigin(t *testing.T) {
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	mux, _ := demoMux(t)
+	const good = `{"email":"ada@corp.example","name":"Ada Lovelace","company":"Analytical Engines Ltd"}`
+	for i := range gateway.DemoRequestPerIP {
+		if rec := postJSON(mux, "/contacts/demo-request", registerAllowedOrigin, good); rec.Code != http.StatusAccepted {
+			t.Fatalf("request %d = %d, want 202", i+1, rec.Code)
+		}
+	}
+	rec := postJSON(mux, "/contacts/demo-request", registerAllowedOrigin, good)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("sixth = %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != registerAllowedOrigin {
+		t.Errorf("429 Access-Control-Allow-Origin = %q, want %q", got, registerAllowedOrigin)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"error":"too many requests"}` {
+		t.Errorf("429 body = %q", got)
 	}
 }

@@ -5,6 +5,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   value: {
     getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
     setItem: (k: string, v: string) => void store.set(k, String(v)),
+    removeItem: (k: string) => void store.delete(k),
     clear: () => store.clear(),
   },
 })

@@ -82,4 +82,12 @@ describe('library consent off the library host', () => {
     expect(document.querySelectorAll(ANY_TAG)).toHaveLength(0)
     expect((window as TestWindow).dataLayer).toBeUndefined()
   })
+
+  it('CO-05 a stored Reject on a PR fork host boots nothing and keeps the record', async () => {
+    localStorage.setItem(KEY, '{"analytics":false,"ts":"","v":1}')
+    const m = await mount()
+    expect(m.analytics.bootLibraryAnalytics()).toBe(false)
+    expect(document.querySelectorAll(ANY_TAG)).toHaveLength(0)
+    expect(JSON.parse(localStorage.getItem(KEY)!).analytics).toBe(false)
+  })
 })

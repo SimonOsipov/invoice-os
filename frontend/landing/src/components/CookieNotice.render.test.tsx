@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 
 import { CONSENT_VERSION } from '../consent'
 import type { ConsentRecord } from '../consent'
+import { SHARED_COOKIE_DOMAIN } from '../hubspot'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const COMPONENT_PATH = join(HERE, 'CookieNotice.tsx')
@@ -40,7 +41,8 @@ const DENIED: ConsentRecord = { analytics: false, ts: '2026-01-01T00:00:00.000Z'
 
 // Verbatim from the story's Final copy table. Not paraphrased, punctuation untouched.
 const BODY_COPY =
-  'We use Google Analytics to see how people find and use this page. That is the only non-essential cookie we set: no advertising, no remarketing, no data sold to anyone.'
+  'We use Google Analytics to see how people find and use this page. That is the only non-essential cookie we set: no advertising, no remarketing, no data sold to anyone. ' +
+  `Your choice applies to ${SHARED_COOKIE_DOMAIN} and the Feature Library.`
 const LINK_TEXT = 'Read the privacy &amp; cookie policy'
 const SETTING_ON = 'Analytics cookies are on.'
 const SETTING_OFF = 'Analytics cookies are off.'

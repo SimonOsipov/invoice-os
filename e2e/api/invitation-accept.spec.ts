@@ -2,8 +2,9 @@
 // A fork's sender captures mail, so each token is set through POST /auth/mock/invitation-token (inviteWithToken).
 // Every test invites into a workspace of its own run, so the daily invite count stays at zero.
 import { test, expect } from '@playwright/test'
-import { claimsOf, grantMembership, inviteWithToken, me, mintSignInState, rawFetch, registerFormAccount, registerFresh, setMembershipStatus, signInSession, subjectOf } from './client'
+import { apiBase, claimsOf, grantMembership, inviteWithToken, me, mintSignInState, rawFetch, registerFormAccount, registerFresh, setMembershipStatus, signInSession, subjectOf } from './client'
 import { assertErrorEnvelope } from './contract-helpers'
+import { resolveTarget } from '../targets'
 
 // internal/tenancy/accept.go msgInviteNotValid, msgAlreadyMember and msgWrongAddress.
 const NOT_VALID = 'this invite is no longer valid'
@@ -11,12 +12,17 @@ const ALREADY_MEMBER = 'you already belong to a workspace'
 const WRONG_ADDRESS = 'this invite was sent to a different email address'
 // internal/gateway/register.go's verification_pending answer, served by POST /auth/invitation/register too.
 const PENDING = { status: 'verification_pending' }
+const INVALID_CREDENTIALS = 'invalid email or password'
+// internal/gateway/invitation_password.go failed redirect; reset_password.go resetPasswordHint, shared by the password-link handler.
+const VERIFY_FAILED = '?verify=failed'
+const PASSWORD_HINT = 'Use a password of 6 to 72 characters.'
 
 function auth(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}` }
 }
 
 const preview = (token: string) => rawFetch('/auth/invitation', { method: 'POST', body: { token } })
+const signInAttempt = (email: string, password: string) => rawFetch('/auth/sign-in', { method: 'POST', body: { email, password, state: mintSignInState() } })
 const accept = (session: string, token: string) => rawFetch('/api/tenancy/v1/invitations/accept', { method: 'POST', headers: auth(session), body: { token } })
 
 function tenantClaim(token: string): unknown {
@@ -56,15 +62,45 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     expect((bogus.body as { error: string }).error).toBe(NOT_VALID)
   })
 
-  test('invitation accept: a fresh invitee registers with the token, signs in tenant-less, accepts and the next token carries the workspace', async () => {
-    const email = inviteAddress('accept-fresh')
+  test('invitation accept: a normal registration for an invited address creates no account', async () => {
+    const invited = inviteAddress('accept-closed')
+    await inviteWithToken(adminToken, tenantId, invited)
+    const uninvited = inviteAddress('accept-control')
+    const password = crypto.randomUUID().slice(0, 16)
+
+    for (const email of [invited, uninvited]) {
+      const res = await rawFetch('/auth/register', { method: 'POST', body: { email, password } })
+      expect([res.status, res.body], email).toEqual([202, PENDING])
+    }
+
+    const refused = await signInAttempt(invited, password)
+    assertErrorEnvelope(refused, 401, 'sign-in with the password a normal registration offered for an invited address')
+    expect((refused.body as { error: string }).error).toBe(INVALID_CREDENTIALS)
+    expect((await signInSession(uninvited, password)).access_token, 'the uninvited control signs in').toBeTruthy()
+  })
+
+  test('invitation accept: the link registers with no usable password, and a second registration answers alike', async () => {
+    const email = inviteAddress('accept-link')
+    const token = await inviteWithToken(adminToken, tenantId, email)
+    const password = crypto.randomUUID().slice(0, 16)
+
+    for (const attempt of ['first', 'second']) {
+      const res = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password } })
+      expect([res.status, res.body], `the ${attempt} link registration`).toEqual([202, PENDING])
+    }
+
+    const refused = await signInAttempt(email, password)
+    assertErrorEnvelope(refused, 401, 'sign-in with the password the link registration offered')
+    expect((refused.body as { error: string }).error).toBe(INVALID_CREDENTIALS)
+    const still = await preview(token)
+    expect(still.status, 'the invite stays pending').toBe(200)
+  })
+
+  test('invitation accept: an account registered before the invite signs in tenant-less, accepts and the next token carries the workspace', async () => {
+    const { email, password } = await registerFresh('accept-fresh')
     const token = await inviteWithToken(adminToken, tenantId, email)
     const stillPending = inviteAddress('accept-pending')
     await inviteWithToken(adminToken, tenantId, stillPending)
-    const password = crypto.randomUUID().slice(0, 16)
-
-    const registered = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password } })
-    expect([registered.status, registered.body]).toEqual([202, PENDING])
 
     const first = (await signInSession(email, password)).access_token
     expect(tenantClaim(first), 'the first sign-in carries no tenant claim').toBeUndefined()
@@ -139,5 +175,46 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     const res = await rawFetch('/api/tenancy/v1/memberships', { headers: auth(session) })
 
     assertErrorEnvelope(res, 403, 'a tenant-less token on the membership list')
+  })
+
+  const passwordPageUrl = (token: string) => `${apiBase()}/auth/verify?token=${token}&type=signup&invite=1`
+  const landingFailed = () => `${resolveTarget('LANDING_URL')}/${VERIFY_FAILED}`
+  const postPassword = (fields: Record<string, string>) =>
+    fetch(`${apiBase()}/auth/invitation/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ type: 'signup', ...fields }),
+      redirect: 'manual',
+    })
+
+  test("invitation accept: the invitee's set-password link answers the page", async () => {
+    const res = await fetch(passwordPageUrl(`bogus-${crypto.randomUUID()}`), { redirect: 'manual' })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
+    expect(res.headers.get('location'), 'a Location header').toBeNull()
+    const html = await res.text()
+    for (const part of ['action="/auth/invitation/password"', 'name="password"', 'minlength="6"', 'maxlength="72"']) {
+      expect(html, part).toContain(part)
+    }
+  })
+
+  test('invitation accept: a set-password link with an empty token redirects 303 to the landing failure notice', async () => {
+    const res = await fetch(passwordPageUrl(''), { redirect: 'manual' })
+    expect(res.status).toBe(303)
+    // Exact, so a lookalike host cannot pass a prefix match.
+    expect(res.headers.get('location'), 'the Location header').toBe(landingFailed())
+  })
+
+  test('invitation accept: a bogus set-password form post redirects 303 to the landing failure notice', async () => {
+    const res = await postPassword({ token: `bogus-${crypto.randomUUID()}`, password: crypto.randomUUID() })
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location'), 'the Location header').toBe(landingFailed())
+  })
+
+  test('invitation accept: a too-short set-password re-renders the page with 400', async () => {
+    const res = await postPassword({ token: `bogus-${crypto.randomUUID()}`, password: 'abc' })
+    expect(res.status).toBe(400)
+    expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
+    expect(await res.text()).toContain(PASSWORD_HINT)
   })
 })

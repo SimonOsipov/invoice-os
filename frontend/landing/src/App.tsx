@@ -22,7 +22,7 @@ import { CookieNotice } from './components/CookieNotice'
 import { isScrollable, scrollDepthPercent, trackDemoOpen, trackScrollDepth, type DemoCtaSource } from './analytics'
 import { libraryBase } from './auth'
 import { readConsent, type ConsentRecord } from './consent'
-import { applyChoice } from './consentActions'
+import { applyChoice, syncConsent } from './consentActions'
 import { INVITE_PARAM, readInviteOutcome } from './invite'
 import { isPrivacyPath } from './route'
 import { readResetOutcome, RESET_PARAM } from './passwordReset'
@@ -82,7 +82,7 @@ export default function App() {
   const [deepLink] = useState(() => readDeepLink(window.location.search, signInBoot.open))
   const [demoOpen, setDemoOpen] = useState(deepLink === 'demo')
   const [registerOpen, setRegisterOpen] = useState(deepLink === 'register')
-  // Read once at mount: a stored choice keeps the notice down until `reopened` flips.
+  // A stored choice keeps the notice down until `reopened` flips.
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
   const [reopened, setReopened] = useState(false)
@@ -105,6 +105,16 @@ export default function App() {
       }
     : undefined
   const privacy = isPrivacyPath(window.location.pathname)
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      const next = syncConsent()
+      if (next) setConsent(next)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
 
   useEffect(() => {
     const onShow = (e: PageTransitionEvent) => {
@@ -188,7 +198,11 @@ export default function App() {
           <ClosingCta onBookDemo={book('closing')} />
         </>
       )}
-      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => setReopened(true)} />
+      <Footer onBookDemo={book('footer')} onSignIn={onSignIn} hrefPrefix={privacy ? '/' : ''} onCookieChoices={() => {
+        const next = syncConsent()
+        if (next) setConsent(next)
+        setReopened(true)
+      }} />
       {/* Pinned by "the notice mounts after Footer and before the modals": last in flow puts the
           spacer's scroll room at the document end and the tab order after the footer. */}
       {(consent === null || reopened) && (

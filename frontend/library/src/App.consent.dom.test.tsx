@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readConsentCookie } from '../../landing/src/consent'
 import { sliceCookieNoticeCss } from './cookieNoticeCss'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -25,6 +26,7 @@ Object.defineProperty(globalThis, 'localStorage', {
   value: {
     getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
     setItem: (k: string, v: string) => void store.set(k, String(v)),
+    removeItem: (k: string) => void store.delete(k),
     clear: () => store.clear(),
   },
 })
@@ -74,7 +76,23 @@ const notices = () => container.querySelectorAll('[role="region"][aria-label="Co
 const byText = (text: string) =>
   [...container.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent?.trim() === text)!
 const click = (el: Element) => act(() => void el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
-const record = () => JSON.parse(localStorage.getItem(KEY)!)
+const record = () => {
+  expect(localStorage.getItem(KEY)).toBeNull()
+  return readConsentCookie(document)!
+}
+function spyWrites(): string[] {
+  const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')!
+  const writes: string[] = []
+  Object.defineProperty(document, 'cookie', {
+    configurable: true,
+    get: () => desc.get!.call(document),
+    set: (v: string) => {
+      writes.push(v)
+      desc.set!.call(document, v)
+    },
+  })
+  return writes
+}
 const entries = () => ((window as TestWindow).dataLayer ?? []).map((a) => Array.from(a))
 
 describe('library consent', () => {
@@ -96,7 +114,7 @@ describe('library consent', () => {
     expect(notices()).toHaveLength(0)
   })
 
-  it('CO-02 a choice is stored on this origin and closes the notice', async () => {
+  it('CO-02 a choice is stored and closes the notice', async () => {
     await mount()
     click(byText('Accept'))
     expect(record()).toMatchObject({ analytics: true, v: 1 })
@@ -105,6 +123,7 @@ describe('library consent', () => {
     container.remove()
 
     localStorage.clear()
+    document.cookie = `${KEY}=; Max-Age=0; Path=/; Domain=ascomply.com`
     await mount()
     click(byText('Reject'))
     expect(record()).toMatchObject({ analytics: false, v: 1 })
@@ -127,6 +146,7 @@ describe('library consent', () => {
 
     document.head.innerHTML = ''
     localStorage.clear()
+    document.cookie = `${KEY}=; Max-Age=0; Path=/; Domain=ascomply.com`
     const none = await mount()
     expect(none.analytics.bootLibraryAnalytics()).toBe(false)
     expect(document.querySelectorAll('script[src^="https://www.googletagmanager.com/"]')).toHaveLength(0)
@@ -144,7 +164,7 @@ describe('library consent', () => {
     expect(record().analytics).toBe(false)
   })
 
-  it('CO-06 the library keeps its _ga on its own host', async () => {
+  it('CO-06 the library shares _ga with the landing', async () => {
     const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie')!
     document.cookie = '_ga=x'
     const writes: string[] = []
@@ -158,12 +178,122 @@ describe('library consent', () => {
     })
     await mount()
     click(byText('Accept'))
-    expect(entries().find((e) => e[0] === 'config')).toEqual(['config', ID, { cookie_domain: 'library.ascomply.com' }])
+    expect(entries().find((e) => e[0] === 'config')).toEqual(['config', ID])
 
     click(byText('Cookie choices'))
     click(byText('Reject'))
-    expect(writes.some((w) => w.includes('domain=library.ascomply.com'))).toBe(true)
-    expect(writes.filter((w) => /domain=\.?ascomply\.com/.test(w))).toEqual([])
+    expect(writes.some((w) => w.startsWith('_ga') && w.endsWith('domain=.ascomply.com'))).toBe(true)
+    expect(writes.some((w) => w.startsWith('_ga') && w.endsWith('domain=library.ascomply.com'))).toBe(true)
+  })
+
+  it('CO-07 a choice stored by the landing shows no notice on the Library', async () => {
+    const grant = encodeURIComponent('{"analytics":true,"ts":"2026-01-01T00:00:00.000Z","v":1}')
+    document.cookie = `${KEY}=${grant}; Domain=ascomply.com; Path=/; Secure`
+    await mount()
+    expect(notices()).toHaveLength(0)
+    click(byText('Cookie choices'))
+    expect(container.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are on.')
+    click(byText('Reject'))
+    expect(record().analytics).toBe(false)
+  })
+
+  it('BL-01 a Library boot with a stored Reject expires the leftover _ga', async () => {
+    document.cookie = `${KEY}=${encodeURIComponent(DENY)}; Domain=ascomply.com; Path=/; Secure`
+    document.cookie = '_ga=x'
+    const writes = spyWrites()
+    const m = await mount()
+    expect(m.analytics.bootLibraryAnalytics()).toBe(false)
+    expect(document.querySelectorAll('script[src^="https://www.googletagmanager.com/"]')).toHaveLength(0)
+    const gaExpiries = writes.filter((w) => w.startsWith('_ga=; Max-Age=0'))
+    expect(gaExpiries.some((w) => !w.includes('domain='))).toBe(true)
+    for (const d of ['library.ascomply.com', '.library.ascomply.com', 'ascomply.com', '.ascomply.com']) {
+      expect(gaExpiries.some((w) => w.endsWith(`domain=${d}`)), d).toBe(true)
+    }
+    expect(readConsentCookie(document)!.analytics).toBe(false)
+  })
+
+  it('BL-02 a Library boot with a stored Accept or no choice expires nothing', async () => {
+    document.cookie = '_ga=x'
+    const writes = spyWrites()
+    const expiries = () => writes.filter((w) => w.startsWith('_ga=') && w.includes('Max-Age=0'))
+
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    const granted = await mount()
+    expect(granted.analytics.bootLibraryAnalytics()).toBe(true)
+    expect(document.querySelectorAll(TAG)).toHaveLength(1)
+    expect(expiries()).toEqual([])
+    unmount()
+    container.remove()
+
+    document.head.innerHTML = ''
+    document.cookie = `${KEY}=; Max-Age=0; Path=/; Domain=ascomply.com`
+    writes.length = 0
+    const none = await mount()
+    expect(none.analytics.bootLibraryAnalytics()).toBe(false)
+    expect(document.querySelectorAll('script[src^="https://www.googletagmanager.com/"]')).toHaveLength(0)
+    expect(expiries()).toEqual([])
+  })
+
+  it('CO-08 the Library follows another tab', async () => {
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    await mount()
+    document.cookie = `${KEY}=${encodeURIComponent(DENY)}; Domain=ascomply.com; Path=/; Secure`
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    click(byText('Cookie choices'))
+    expect(container.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are off.')
+    click(container.querySelector<HTMLElement>('#nav-rules')!)
+    expect(entries().filter((e) => e[1] === 'page_view')).toHaveLength(0)
+  })
+
+  it('CO-09 a Reject from another tab revokes the Library tab and expires _ga on every domain form', async () => {
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    const m = await mount()
+    expect(m.analytics.bootLibraryAnalytics()).toBe(true)
+    document.cookie = '_ga=x'
+    const writes = spyWrites()
+    document.cookie = `${KEY}=${encodeURIComponent(DENY)}; Domain=ascomply.com; Path=/; Secure`
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    const exp = writes.filter((w) => w.startsWith('_ga=; Max-Age=0'))
+    expect(exp.filter((w) => !w.includes('domain='))).toHaveLength(1)
+    expect(exp.filter((w) => w.includes('domain=')).map((w) => w.split('domain=')[1]).sort()).toEqual(
+      ['.ascomply.com', '.library.ascomply.com', 'ascomply.com', 'library.ascomply.com'],
+    )
+    m.analytics.trackLibraryDemoOpen()
+    expect(entries().filter((e) => e[0] === 'event')).toEqual([])
+    expect(readConsentCookie(document)!.analytics).toBe(false)
+  })
+
+  it('CO-10 an Accept from another tab closes the Library notice and loads the tag once', async () => {
+    await mount()
+    expect(notices()).toHaveLength(1)
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(notices()).toHaveLength(0)
+    expect(document.querySelectorAll(TAG)).toHaveLength(1)
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    click(byText('Cookie choices'))
+    expect(document.querySelectorAll(TAG)).toHaveLength(1)
+    expect(entries().filter((e) => e[0] === 'config')).toEqual([['config', ID]])
+  })
+
+  it('CO-11 Cookie choices alone re-reads the shared choice, and a hidden tab does not', async () => {
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    await mount()
+    document.cookie = `${KEY}=${encodeURIComponent(DENY)}; Domain=ascomply.com; Path=/; Secure`
+    const state = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(document.querySelectorAll(TAG)).toHaveLength(0)
+    state.mockReturnValue('visible')
+    click(byText('Cookie choices'))
+    expect(container.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are off.')
+  })
+
+  it('CO-12 a hidden tab keeps its notice until it is visible', async () => {
+    await mount()
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(notices()).toHaveLength(1)
   })
 
   it('CSS-03 the app renders the slice', async () => {

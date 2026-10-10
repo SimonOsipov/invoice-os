@@ -10,7 +10,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { CONSENT_STORAGE_KEY, CONSENT_VERSION, type ConsentStore } from './consent'
+import { CONSENT_STORAGE_KEY, CONSENT_VERSION, readConsentCookie, type ConsentStore } from './consent'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -105,7 +105,8 @@ describe('a choice made while a modal is open', () => {
 
     expect(document.querySelectorAll(NOTICE).length, 'the notice survived a choice').toBe(0)
     expect(document.querySelectorAll('[role="dialog"]').length, 'the choice closed the modal').toBe(1)
-    expect(JSON.parse(store.getItem(CONSENT_STORAGE_KEY)!).analytics).toBe(true)
+    expect(readConsentCookie(document)!.analytics).toBe(true)
+    expect(store.getItem(CONSENT_STORAGE_KEY)).toBeNull()
     expect(document.querySelectorAll(GTAG_SCRIPT).length).toBe(1)
     expect(consoleError).not.toHaveBeenCalled()
   })
@@ -126,7 +127,8 @@ describe('a double click on Accept', () => {
       accept.click()
     })
 
-    const record = JSON.parse(store.getItem(CONSENT_STORAGE_KEY)!) as Record<string, unknown>
+    const record = readConsentCookie(document) as unknown as Record<string, unknown>
+    expect(store.getItem(CONSENT_STORAGE_KEY)).toBeNull()
     expect(record.analytics).toBe(true)
     expect(record.v).toBe(CONSENT_VERSION)
     expect(Number.isFinite(Date.parse(record.ts as string))).toBe(true)
@@ -181,5 +183,68 @@ describe('a stored record this build does not understand', () => {
     expect(document.querySelectorAll(NOTICE).length).toBe(1)
     expect(document.querySelectorAll(GTAG_SCRIPT).length).toBe(0)
     expect(consoleError).not.toHaveBeenCalled()
+  })
+})
+
+describe('a choice made in another tab', () => {
+  const cookie = (analytics: boolean) =>
+    (document.cookie = `${CONSENT_STORAGE_KEY}=${encodeURIComponent(JSON.stringify({ analytics, ts: '2026-01-01T00:00:00.000Z', v: CONSENT_VERSION }))}; Domain=ascomply.com; Path=/; Secure`)
+  const becomeVisible = async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+  }
+
+  afterEach(() => {
+    document.cookie = `${CONSENT_STORAGE_KEY}=; Max-Age=0; Path=/; Domain=ascomply.com`
+  })
+
+  it('SY-03 the landing follows another tab on visibility and on reopen', async () => {
+    cookie(true)
+    await mountApp()
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(0)
+
+    cookie(false)
+    await becomeVisible()
+    await clickByText('Cookie choices')
+    expect(document.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are off.')
+  })
+
+  it('SY-03 an open notice closes when another tab has answered', async () => {
+    await mountApp()
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(1)
+
+    cookie(true)
+    await becomeVisible()
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(0)
+  })
+
+  it('SY-03 Cookie choices alone re-reads the shared choice, with no visibility event', async () => {
+    cookie(true)
+    await mountApp()
+    cookie(false)
+    await clickByText('Cookie choices')
+    expect(document.querySelector('.cn-setting')?.textContent).toBe('Analytics cookies are off.')
+  })
+
+  it('SY-03 a hidden tab does not follow until it is visible', async () => {
+    await mountApp()
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(1)
+
+    cookie(true)
+    const state = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(1)
+    expect(document.querySelectorAll(GTAG_SCRIPT)).toHaveLength(0)
+
+    state.mockReturnValue('visible')
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(document.querySelectorAll(NOTICE)).toHaveLength(0)
+    expect(document.querySelectorAll(GTAG_SCRIPT)).toHaveLength(1)
   })
 })

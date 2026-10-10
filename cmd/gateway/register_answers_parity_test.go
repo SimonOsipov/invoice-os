@@ -59,7 +59,7 @@ func TestRegisterAnswersMatchProvisionRules(t *testing.T) {
 			t.Cleanup(gt.Close)
 			authURL, _ := url.Parse(gt.URL)
 			site, _ := url.Parse("https://site.example")
-			register := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil).Register
+			register := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite).Register
 
 			var got tenancy.ProvisionInput
 			var provisioned bool

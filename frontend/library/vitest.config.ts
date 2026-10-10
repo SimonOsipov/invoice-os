@@ -5,5 +5,6 @@ export default defineConfig({
   define: cookieNoticeDefine(),
   test: {
     environment: 'node',
+    setupFiles: ['../landing/src/consentCookie.test.util.ts'],
   },
 })

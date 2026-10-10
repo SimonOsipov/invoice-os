@@ -49,6 +49,7 @@ func main() {
 		river.AddWorker(workers, &notifications.DeliverWorker{
 			Pool: pool, HubSpot: hubspot, Resend: resend, Mode: mode, Logger: app.Logger,
 		})
+		river.AddWorker(workers, &notifications.DemoDealWorker{Pool: pool, HubSpot: hubspot, Logger: app.Logger})
 		qcfg.Workers = workers
 		qcfg.Queues = map[string]river.QueueConfig{notifications.QueueContacts: {MaxWorkers: 2}}
 	}

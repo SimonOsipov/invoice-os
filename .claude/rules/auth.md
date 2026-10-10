@@ -8,6 +8,7 @@ paths:
   - "internal/gateway/resend_verification*.go"
   - "internal/gateway/password_reset*.go"
   - "internal/gateway/reset_password*"
+  - "internal/gateway/invitation_password*"
   - "internal/gateway/verify_page*"
   - "internal/gateway/signin*.go"
   - "internal/gateway/signout*.go"
@@ -19,6 +20,9 @@ paths:
   - "internal/gateway/mock*.go"
   - "cmd/gateway/mockissuer.go"
   - "packages/console-session/**"
+  - "frontend/app/src/App.tsx"
+  - "frontend/app/src/lib/signInState.ts"
+  - "frontend/landing/src/App.tsx"
 ---
 # Identity provider
 
@@ -73,6 +77,10 @@ paths:
 - Evict the subject's session-check cache on sign-out.
 - Mint the staff claim from `public.staff_members` in the access-token hook. Never read `user_metadata` for it.
 - Accept an invite only for the account whose verified email equals the invited address.
+- Set an invitee's password only after proof of the invited mailbox: the confirmation mail's set-password page.
+- Sign up an invite-link registration with a random password. Never store, log or return it.
+- Create no account on register for an address with a pending invite. Answer it as any other register.
+- Back one registration with each invite token.
 
 - Ship mock-issuer code only behind the `mockissuer` build tag. `TestProductionGatewayBinaryCannotMint` must stay green.
 - Serve the mock routes only when `GATEWAY_MOCK_ISSUER` is `true` and `ENVIRONMENT` is not `production`.

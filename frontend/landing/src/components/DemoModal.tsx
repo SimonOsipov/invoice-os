@@ -74,7 +74,6 @@ export function DemoModal({ onClose, submit }: { onClose: () => void; submit?: (
 
         <DemoLeadForm
           idPrefix="dm"
-          variant="modal"
           heading={
             <>
               <div style={{ marginBottom: 14 }}><Eyebrow>BOOK A DEMO</Eyebrow></div>

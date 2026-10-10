@@ -1,6 +1,6 @@
 // QA Mode B gap-fill for the DemoLeadForm extraction. The Stage 2.5 specs (S1-S17)
 // transcribe the plan; these rows cover what the plan's table did not: the popup's
-// DOM golden, the per-variant panel padding, the CSS split, the hook-order contract
+// DOM golden, the panel padding, the CSS split, the hook-order contract
 // each slot at a time, and the comment-blind source scans in analytics.test.ts.
 /// <reference types="node" />
 import { describe, expect, it, vi } from 'vitest'
@@ -32,7 +32,7 @@ function stripComments(src: string): string {
 async function renderSeeded(
   slot: number,
   value: unknown,
-  props: { idPrefix: string; variant: 'modal' | 'card'; onDone?: () => void },
+  props: { idPrefix: string; onDone?: () => void },
 ): Promise<string> {
   vi.resetModules()
   vi.doMock('react', async (importOriginal) => {
@@ -101,32 +101,26 @@ describe('the popup DOM survives the extraction (A1-A3)', () => {
   })
 
   it('A3: the success panel is the one node that gained markup — id + tabindex, nothing else', async () => {
-    const html = await renderSeeded(3, 'success', { idPrefix: 'dm', variant: 'modal', onDone: noop })
+    const html = await renderSeeded(3, 'success', { idPrefix: 'dm', onDone: noop })
     expect(html).toContain(`<div id="dm-success" tabindex="-1" style="${MODAL_PANEL_STYLE}">`)
     // Pre-extraction the error panel's wrapper carried neither; it must still carry neither.
-    const error = await renderSeeded(3, 'error', { idPrefix: 'dm', variant: 'modal', onDone: noop })
+    const error = await renderSeeded(3, 'error', { idPrefix: 'dm', onDone: noop })
     expect(error).toContain(`<div style="${MODAL_PANEL_STYLE}">`)
   })
 })
 
-describe('panel padding follows the variant (A4)', () => {
-  it('A4: modal pads the form and both panels; card pads neither', async () => {
-    const modalForm = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'dm', variant: 'modal' }))
-    const cardForm = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'dc', variant: 'card' }))
+describe('the form and both panels carry the modal padding (A4)', () => {
+  it('A4: the form and both panels are padded', async () => {
+    const modalForm = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'dm' }))
     expect(modalForm.startsWith('<form noValidate="" style="padding:24px 24px 22px">')).toBe(true)
-    expect(cardForm.startsWith('<form noValidate="" style="padding:0">')).toBe(true)
-    // Through DemoModal too: rendering the form alone cannot see which variant the
-    // popup asks for.
+    // Through DemoModal too: the popup is the form's only production mount.
     expect(renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))).toContain(
       '<form noValidate="" style="padding:24px 24px 22px">',
     )
 
     for (const step of ['success', 'error'] as const) {
-      const modalPanel = await renderSeeded(3, step, { idPrefix: 'dm', variant: 'modal', onDone: noop })
-      const cardPanel = await renderSeeded(3, step, { idPrefix: 'dc', variant: 'card' })
+      const modalPanel = await renderSeeded(3, step, { idPrefix: 'dm', onDone: noop })
       expect(modalPanel).toContain(MODAL_PANEL_STYLE)
-      expect(cardPanel).toContain('padding:0;text-align:center')
-      expect(cardPanel).not.toContain('36px 24px 26px')
     }
   })
 })
@@ -136,8 +130,7 @@ describe('DEMO_FORM_CSS is the form half only (A5)', () => {
     for (const needle of ['dmSpin', '.dm-input', '.dm-input:focus', '.dm-err', '.dm-select', '.dm-row']) {
       expect(DEMO_FORM_CSS).toContain(needle)
     }
-    // The card (BUG-19-02) renders this string on its own — a leaked overlay or
-    // close-button rule would restyle a surface that has neither.
+    // SignInForm and ForgotPasswordForm render this string on its own; a shell rule here would restyle them.
     for (const shellOnly of ['ovIn', 'cardIn', '.si-close', '.dm-overlay']) {
       expect(DEMO_FORM_CSS).not.toContain(shellOnly)
     }
@@ -147,16 +140,16 @@ describe('DEMO_FORM_CSS is the form half only (A5)', () => {
 describe('the heading is a slot with no wrapper (A6)', () => {
   it('A6: a given heading is the form’s first child; an absent one emits nothing at all', () => {
     const withHeading = renderToStaticMarkup(
-      createElement(DemoLeadForm, { idPrefix: 'zz', variant: 'card', heading: createElement('h9' as 'h1', null, 'SLOT') }),
+      createElement(DemoLeadForm, { idPrefix: 'zz', heading: createElement('h9' as 'h1', null, 'SLOT') }),
     )
-    expect(withHeading.startsWith('<form noValidate="" style="padding:0"><h9>SLOT</h9><div style="display:flex')).toBe(true)
+    expect(withHeading.startsWith('<form noValidate="" style="padding:24px 24px 22px"><h9>SLOT</h9><div style="display:flex')).toBe(true)
 
-    const without = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'zz', variant: 'card' }))
-    expect(without.startsWith('<form noValidate="" style="padding:0"><div style="display:flex')).toBe(true)
+    const without = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'zz' }))
+    expect(without.startsWith('<form noValidate="" style="padding:24px 24px 22px"><div style="display:flex')).toBe(true)
   })
 
   it('A10: the form still closes on the submit button and the reassurance line', () => {
-    const html = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'zz', variant: 'card' }))
+    const html = renderToStaticMarkup(createElement(DemoLeadForm, { idPrefix: 'zz' }))
     expect(html).toMatch(/<button type="submit"[^>]*>Book my demo →<\/button>/)
     expect(html.endsWith('No card required</p></form>')).toBe(true)
   })
@@ -167,15 +160,15 @@ describe('the three useState slots are the ones the adversarial mock assumes (A7
     const slot1 = await renderSeeded(
       1,
       { name: 'Seeded Name', email: 'a@b.co', company: 'C', role: 'Other', size: 'Below ₦50m', volume: '100k+', consent: true },
-      { idPrefix: 'zz', variant: 'card' },
+      { idPrefix: 'zz' },
     )
     expect(slot1).toMatch(/<input id="zz-name"[^>]*value="Seeded Name"/)
 
-    const slot2 = await renderSeeded(2, { consent: 'SEEDED CONSENT ERROR' }, { idPrefix: 'zz', variant: 'card' })
+    const slot2 = await renderSeeded(2, { consent: 'SEEDED CONSENT ERROR' }, { idPrefix: 'zz' })
     expect(slot2).toContain('SEEDED CONSENT ERROR')
     expect(slot2).toMatch(/<input[^>]*id="zz-consent"[^>]*aria-describedby="zz-consent-error"/)
 
-    const slot3 = await renderSeeded(3, 'error', { idPrefix: 'zz', variant: 'card' })
+    const slot3 = await renderSeeded(3, 'error', { idPrefix: 'zz' })
     expect(slot3).toContain('Something went wrong')
     expect(slot3).not.toContain('id="zz-name"')
   })
@@ -245,7 +238,7 @@ const buttonByText = (html: string, text: string) =>
     .find((b) => b.replace(/<[^>]*>/g, '').trim() === text)
 
 const popupSeed = (slot: number, value: unknown) =>
-  renderSeeded(slot, value, { idPrefix: 'dm', variant: 'modal', onDone: noop })
+  renderSeeded(slot, value, { idPrefix: 'dm', onDone: noop })
 
 describe('the demo form wears the v2 field, ring and buttons (FL rows)', () => {
   const popup = renderToStaticMarkup(createElement(DemoModal, { onClose: noop }))
@@ -333,7 +326,7 @@ describe('the demo form wears the v2 field, ring and buttons (FL rows)', () => {
     const html = await renderSeeded(
       2,
       { name: 'E1', email: 'E2', company: 'E3', consent: 'E4' },
-      { idPrefix: 'dm', variant: 'modal', onDone: noop },
+      { idPrefix: 'dm', onDone: noop },
     )
     const alerts = Array.from(html.matchAll(/<div\b[^>]*role="alert"[^>]*>[\s\S]*?<\/div>/g)).map((m) => m[0])
     const stars = Array.from(html.matchAll(/<span style="([^"]*)">\*<\/span>/g)).map((m) => m[1])

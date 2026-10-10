@@ -15,3 +15,5 @@ paths:
 - Read the actor with `auth.StaffFromContext`.
 - Give a staff route an `exempt` verdict in `scRouteVerdicts`.
 - Keep `PATCH /v1/rules/{key}` as `ToggleHandler`.
+- Select a rule-set version only through `rule_set_version_for(date)`.
+- Publish a version with one `UPDATE` that sets `sealed` and `effective_from`.

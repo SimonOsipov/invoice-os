@@ -271,6 +271,9 @@ func TestFakes_MakeNoNetworkCallAndNeverFail(t *testing.T) {
 		if err := hs.Upsert(t.Context(), c); err != nil {
 			t.Errorf("FakeHubSpot.Upsert(%q) err = %v, want nil", c.Email, err)
 		}
+		if err := hs.OpenDemoDeal(t.Context(), c, "Acme — demo request"); err != nil {
+			t.Errorf("FakeHubSpot.OpenDemoDeal(%q) err = %v, want nil", c.Email, err)
+		}
 		for _, optIn := range []bool{false, true} {
 			if err := rs.Sync(t.Context(), c, optIn); err != nil {
 				t.Errorf("FakeResend.Sync(%q, %v) err = %v, want nil", c.Email, optIn, err)

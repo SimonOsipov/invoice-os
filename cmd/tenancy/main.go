@@ -75,6 +75,9 @@ func main() {
 	// The invitee holds no membership (or no tenant) yet: accept is the caller's own act; preview is token-only.
 	app.Mux.HandleFunc("POST /v1/invitations/accept", tenancy.AcceptInvitationHandler(store.AcceptInvitation, app.Logger))
 	app.Mux.HandleFunc("POST /internal/invitations/preview", tenancy.InvitationPreviewHandler(store.PreviewInvitation, app.Logger))
+	app.Mux.HandleFunc("POST /internal/invitations/pending", tenancy.InvitationPendingHandler(store.InvitationPendingForEmail, app.Logger))
+	app.Mux.HandleFunc("POST /internal/invitations/register", tenancy.InvitationRegisterClaimHandler(store.ClaimInvitationRegistration, app.Logger))
+	app.Mux.HandleFunc("POST /internal/invitations/release", tenancy.InvitationRegisterReleaseHandler(store.ReleaseInvitationRegistration, app.Logger))
 
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 

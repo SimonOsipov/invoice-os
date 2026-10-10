@@ -20,7 +20,7 @@ import {
 } from './demoForm'
 import { resolveSubmitTarget, submitDemoLead, type DemoLead } from '../hubspot'
 import { trackedHubSpotSubmit } from '../analytics'
-import { sendDemoRequest } from '../demoRequest'
+import { DemoRateLimited, sendDemoRequest } from '../demoRequest'
 import { IconTile } from './ds/IconTile'
 import { MarketingConsent } from './MarketingConsent'
 
@@ -76,6 +76,7 @@ export function DemoLeadForm({
   const [form, setForm] = useState<DemoFormState>(DEFAULT_FORM)
   const [errors, setErrors] = useState<DemoFormErrors>({})
   const [demoStep, setDemoStep] = useState<DemoStep>('form')
+  const [limited, setLimited] = useState(false)
   const submitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mounted = useRef(true)
   const firstFormPanel = useRef(true)
@@ -150,6 +151,7 @@ export function DemoLeadForm({
       return
     }
     setErrors({})
+    setLimited(false)
     setDemoStep('submitting')
 
     // Built field by field. The honeypot's value is
@@ -187,8 +189,11 @@ export function DemoLeadForm({
         }
       }
       if (mounted.current) setDemoStep('success')
-    } catch {
-      if (mounted.current) setDemoStep('error')
+    } catch (e) {
+      if (mounted.current) {
+        setLimited(e instanceof DemoRateLimited)
+        setDemoStep('error')
+      }
     }
   }
 
@@ -453,8 +458,12 @@ export function DemoLeadForm({
           <span style={{ width: 48, height: 48, borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', color: 'var(--destructive)', display: 'inline-grid', placeItems: 'center' }}>
             <Glyph d={WARN_PATHS} size={24} sw={1.8} />
           </span>
-          <h3 style={panelH3}>Something went wrong</h3>
-          <p className="t-body-sm" style={panelP}>We couldn't book your demo just now. Please try again — your details are still here.</p>
+          <h3 style={panelH3}>{limited ? 'Too many requests' : 'Something went wrong'}</h3>
+          <p className="t-body-sm" style={panelP}>
+            {limited
+              ? 'Too many demo requests came from your network. Please try again later — your details are still here.'
+              : "We couldn't book your demo just now. Please try again — your details are still here."}
+          </p>
           <button id={`${idPrefix}-error-retry`} onClick={retry} className="ds-btn ds-btn--primary ds-btn--md" style={{ width: '100%' }}>Try again</button>
         </div>
       )}

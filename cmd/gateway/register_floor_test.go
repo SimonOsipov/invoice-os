@@ -25,7 +25,7 @@ func TestRegistrationNotConfigured_DoesNotWait(t *testing.T) {
 	// Control: with a site URL the same 150 ms minimum does hold the answer.
 	site, _ := url.Parse("https://site.example")
 	start := time.Now()
-	if rec := serveRegistration(registrationHandlers(authURL, site, 150*time.Millisecond, log, nil).Register, http.MethodPost, "/auth/register", body); rec.Code != http.StatusAccepted {
+	if rec := serveRegistration(registrationHandlers(authURL, site, 150*time.Millisecond, log, nil, noPendingInvite).Register, http.MethodPost, "/auth/register", body); rec.Code != http.StatusAccepted {
 		t.Fatalf("control Register = %d, want 202: %s", rec.Code, rec.Body.String())
 	}
 	if elapsed := time.Since(start); elapsed < 150*time.Millisecond {
@@ -33,7 +33,7 @@ func TestRegistrationNotConfigured_DoesNotWait(t *testing.T) {
 	}
 	before := len(calls())
 
-	reg := registrationHandlers(authURL, nil, 3*time.Second, log, nil)
+	reg := registrationHandlers(authURL, nil, 3*time.Second, log, nil, noPendingInvite)
 	start = time.Now()
 	rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", body)
 	elapsed := time.Since(start)

@@ -6,9 +6,12 @@
 // production database can see the break. A branch cut before another branch's
 // migration merged is the usual cause: its timestamp is older than main's newest.
 //
+// While -head is outside -main (default origin/main), a file already on -main is skipped: main
+// has applied it, so a branch that merged main in did not add it.
+//
 // Usage:
 //
-//	go run ./internal/tools/migrationorder -base <rev> [-head HEAD]
+//	go run ./internal/tools/migrationorder -base <rev> [-head HEAD] [-main origin/main]
 package main
 
 import (
@@ -21,6 +24,21 @@ import (
 
 // Dir is the one goose migrations directory; db/ holds bootstrap and seed SQL, not migrations.
 const Dir = "migrations"
+
+// SkipOnMain drops every added file whose path is already in onMain.
+func SkipOnMain(added, onMain []string) []string {
+	have := make(map[string]bool, len(onMain))
+	for _, f := range onMain {
+		have[f] = true
+	}
+	var kept []string
+	for _, f := range added {
+		if !have[f] {
+			kept = append(kept, f)
+		}
+	}
+	return kept
+}
 
 // Violation is an added migration that does not sort after base's newest.
 type Violation struct {

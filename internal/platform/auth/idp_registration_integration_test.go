@@ -87,7 +87,12 @@ func gatewayMux(t *testing.T, authBase string, minResponse time.Duration, sink g
 	log := slog.New(slog.NewJSONHandler(&syncWriter{w: logs}, nil))
 	mux := http.NewServeMux()
 	registerLimit := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
-	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, registerLimit, true, log))
+	pool, err := db.NewPool(context.Background(), mailEnv(t, "DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	mux.Handle("POST /auth/register", gateway.RegisterHandler(authURL, noRedirect, minResponse, registerLimit, true, log, tenancy.NewStore(pool).InvitationPendingForEmail))
 	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
 	mux.Handle("POST /auth/resend-verification", gateway.ResendVerificationHandler(authURL, noRedirect, minResponse, perAddress, perIP, true, log))

@@ -11,6 +11,7 @@ import {
   type InvoiceListResponse,
   type InvoiceRecord,
 } from '../lib/invoices'
+import { EXPLAIN_COPY } from '../lib/explain'
 import { ROW_EXPANSION_COPY, verdictPill } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { InvoicesList } from './InvoicesList'
@@ -1380,5 +1381,208 @@ describe('ReviewRow row-expansion: Open line N (ENGI-16-04)', () => {
     await screen.findByTestId('review-fix-card')
     expect(screen.queryByTestId('review-fix-open-line')).toBeNull()
     expect(screen.getByTestId('review-fix-card').textContent).toContain('needs a line')
+  })
+})
+
+describe('ReviewRow row-expansion: Explain and Accept (ENGI-17-06)', () => {
+  const LINE_V = { rule_key: 'line-cost', severity: 'error' as const, message: 'line total off', path: 'line_items[2].unit_price' }
+  const VAT_V = { rule_key: 'vat-standard-rate', severity: 'error' as const, message: 'bad rate', path: 'vat' }
+  const lines = [1, 2].map((n) => ({ id: `l${n}`, line_no: n, description: `Item ${n}`, quantity: '1', unit_price: '10.00', line_total: '10.00', line_tax: '0.75' }))
+  const OK_FIX = { status: 'ok', explanation: 'Because.', fix: { field: 'unit_price', label: 'Unit price', line: 2, current: '-5.00', value: '5.00' } }
+  const reply = (body: unknown, status = 200): MockResponse => ({ ok: status < 400, status, json: () => Promise.resolve(body) })
+
+  interface Opts {
+    detail?: Partial<InvoiceDetailRecord>
+    explain?: unknown
+    patch?: () => Promise<MockResponse>
+    validate?: () => Promise<MockResponse>
+    keep?: () => Promise<MockResponse>
+  }
+
+  function setup(o: Opts = {}) {
+    const detail = detailFixture({ status: 'draft', can_edit: true, vat: '75.00', line_items: lines, violations: [LINE_V, VAT_V], ...o.detail })
+    const fetchMock = vi.fn((url: string, init?: { method?: string }) => {
+      const m = init?.method ?? 'GET'
+      if (url.endsWith('/explain')) return Promise.resolve(reply(o.explain ?? OK_FIX))
+      if (m === 'PATCH') return (o.patch ?? (() => Promise.resolve(reply(detail))))()
+      if (url.endsWith('/validate')) return (o.validate ?? (() => Promise.resolve(reply(detail))))()
+      if (url.endsWith('/keep-as-is')) return (o.keep ?? (() => Promise.resolve(reply(detail))))()
+      return Promise.resolve(reply(detail))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onChanged = vi.fn()
+    const openImportedInvoice = vi.fn()
+    const ctx = { ...(rowCtx() as object), openImportedInvoice } as unknown as PlatformCtx
+    render(<Row r={listRow({ status: 'draft' })} batches={[]} checked={false} expanded onToggleExpand={() => {}} onToggle={() => {}} ctx={ctx} base="https://gw" onChanged={onChanged} />)
+    const calls = (suffix: string, method?: string) =>
+      fetchMock.mock.calls.filter(([u, i]) => u.endsWith(suffix) && (method == null || (i?.method ?? 'GET') === method))
+    const gets = () => fetchMock.mock.calls.filter(([u, i]) => !u.endsWith('/explain') && (i?.method ?? 'GET') === 'GET')
+    return { fetchMock, onChanged, calls, gets }
+  }
+
+  const explainButtons = () => screen.getAllByTestId('review-fix-explain') as HTMLButtonElement[]
+  const pending = () => {
+    let release!: (r: MockResponse) => void
+    const p = new Promise<MockResponse>((res) => { release = res })
+    return { p, release }
+  }
+
+  it('reviewRow_explainRunsOnlyOnClick', async () => {
+    const { calls } = setup()
+    await screen.findAllByTestId('review-fix-explain')
+    expect(calls('/explain')).toHaveLength(0)
+    fireEvent.click(explainButtons()[1])
+    await screen.findByTestId('explain-panel')
+    expect(calls('/explain')).toHaveLength(1)
+    expect(JSON.parse(calls('/explain')[0][1]!.body as string)).toEqual({ rule_key: 'vat-standard-rate', path: 'vat' })
+  })
+
+  it('reviewRow_explainOnEveryCard', async () => {
+    setup({ detail: { can_edit: false } })
+    const buttons = await screen.findAllByTestId('review-fix-explain')
+    expect(buttons).toHaveLength(2)
+    const lineCard = screen.getAllByTestId('review-fix-card')[0]
+    const kids = Array.from(lineCard.querySelectorAll('button')).map((b) => b.getAttribute('data-testid'))
+    expect(kids.indexOf('review-fix-explain')).toBe(kids.indexOf('review-fix-open-line') + 1)
+    expect((buttons[0] as HTMLButtonElement).disabled).toBe(false)
+    expect((buttons[1] as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('reviewRow_secondClickClosesThePanel', async () => {
+    setup()
+    await screen.findAllByTestId('review-fix-explain')
+    fireEvent.click(explainButtons()[0])
+    await screen.findByTestId('explain-panel')
+    fireEvent.click(explainButtons()[0])
+    expect(screen.queryByTestId('explain-panel')).toBeNull()
+    fireEvent.click(explainButtons()[0])
+    await screen.findByTestId('explain-panel')
+    fireEvent.click(explainButtons()[1])
+    await waitFor(() => expect(screen.getAllByTestId('explain-panel')).toHaveLength(1))
+    expect(within(screen.getAllByTestId('review-fix-card')[1]).getByTestId('explain-panel')).toBeTruthy()
+  })
+
+  it('reviewRow_acceptSavesTheLineFix', async () => {
+    const { calls, gets, onChanged } = setup()
+    await screen.findAllByTestId('review-fix-explain')
+    fireEvent.click(explainButtons()[0])
+    fireEvent.click(await screen.findByTestId('explain-accept'))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    expect(calls('/inv-1', 'PATCH')).toHaveLength(1)
+    expect(JSON.parse(calls('/inv-1', 'PATCH')[0][1]!.body as string)).toEqual({
+      line_items: [
+        { id: 'l1', description: 'Item 1', quantity: '1', unit_price: '10.00', line_total: '10.00', line_tax: '0.75' },
+        { id: 'l2', description: 'Item 2', quantity: '1', unit_price: '5.00', line_total: '10.00', line_tax: '0.75' },
+      ],
+    })
+    await waitFor(() => expect(gets()).toHaveLength(2))
+    expect(screen.queryByTestId('explain-panel')).toBeNull()    expect(explainButtons()[0].disabled).toBe(true)
+    expect(explainButtons()[0].title).toBe(EXPLAIN_COPY.stale)
+  })
+
+  it('reviewRow_acceptDisabledWhenNotEditable', async () => {
+    const { calls } = setup({ detail: { can_edit: false } })
+    await screen.findAllByTestId('review-fix-explain')
+    fireEvent.click(explainButtons()[0])
+    const accept = (await screen.findByTestId('explain-accept')) as HTMLButtonElement
+    expect(accept.disabled).toBe(true)
+    expect(accept.style.opacity).toBe('0.45')
+    expect(accept.style.cursor).toBe('not-allowed')
+    fireEvent.click(accept)
+    expect(calls('/inv-1', 'PATCH')).toHaveLength(0)
+  })
+
+  it('reviewRow_acceptDisabledWhileUnsaved', async () => {
+    setup()
+    await screen.findAllByTestId('review-fix-explain')
+    fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '999' } })
+    fireEvent.click(explainButtons()[0])
+    const accept = (await screen.findByTestId('explain-accept')) as HTMLButtonElement
+    expect(accept.disabled).toBe(true)
+    expect(accept.title).toBe(EXPLAIN_COPY.unsaved)
+    fireEvent.click(screen.getByTestId('review-fix-save'))
+    await waitFor(() => expect((screen.queryByTestId('explain-accept') as HTMLButtonElement | null)).toBeNull())
+  })
+
+  it('reviewRow_acceptDisabledWhileBusy', async () => {
+    for (const action of ['revalidate', 'save', 'keep'] as const) {
+      const held = pending()
+      const { calls } = setup({ [action === 'save' ? 'patch' : action === 'keep' ? 'keep' : 'validate']: () => held.p } as Opts)
+      await screen.findAllByTestId('review-fix-explain')
+      fireEvent.click(explainButtons()[0])
+      const accept = (await screen.findByTestId('explain-accept')) as HTMLButtonElement
+      expect(accept.disabled).toBe(false)
+      if (action === 'revalidate') fireEvent.click(screen.getByTestId('review-revalidate'))
+      if (action === 'save') {
+        fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '999' } })
+        fireEvent.click(screen.getByTestId('review-fix-save'))
+      }
+      if (action === 'keep') {
+        fireEvent.change(screen.getByTestId('review-keep-reason'), { target: { value: 'ok' } })
+        fireEvent.click(screen.getByTestId('review-keep'))
+      }
+      await waitFor(() => expect((screen.getByTestId('explain-accept') as HTMLButtonElement).disabled, action).toBe(true))
+      expect(calls('/inv-1', 'PATCH').length).toBe(action === 'save' ? 1 : 0)
+      held.release(reply(detailFixture()))
+      cleanup()
+    }
+  })
+
+  it('reviewRow_saveRevalidateKeepCloseThePanel', async () => {
+    setup()
+    await screen.findAllByTestId('review-fix-explain')
+    const open = async () => {
+      fireEvent.click(explainButtons()[0])
+      await screen.findByTestId('explain-panel')
+    }
+    await open()
+    fireEvent.click(screen.getByTestId('review-revalidate'))
+    await waitFor(() => expect(screen.queryByTestId('explain-panel')).toBeNull())
+    await waitFor(() => expect(explainButtons()[0]).toBeTruthy())
+    await open()
+    fireEvent.change(screen.getByTestId('review-keep-reason'), { target: { value: 'ok' } })
+    fireEvent.click(screen.getByTestId('review-keep'))
+    await waitFor(() => expect(screen.queryByTestId('explain-panel')).toBeNull())
+    await waitFor(() => expect(explainButtons()[0]).toBeTruthy())
+    await open()
+    fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '999' } })
+    fireEvent.click(screen.getByTestId('review-fix-save'))
+    await waitFor(() => expect(screen.queryByTestId('explain-panel')).toBeNull())
+  })
+
+  it('reviewRow_explainDisabledAfterASaveUntilRevalidate', async () => {
+    setup()
+    await screen.findAllByTestId('review-fix-explain')
+    fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '999' } })
+    fireEvent.click(screen.getByTestId('review-fix-save'))
+    await waitFor(() => expect(explainButtons()[0].disabled).toBe(true))
+    expect(explainButtons()[0].title).toBe(EXPLAIN_COPY.stale)
+    fireEvent.click(await screen.findByTestId('review-revalidate'))
+    await waitFor(() => expect(explainButtons()[0].disabled).toBe(false))
+  })
+
+  it('reviewRow_failedAcceptReloadsAndCloses', async () => {
+    const { calls, gets } = setup({ patch: () => Promise.resolve(reply({ error: 'stale line ids' }, 400)) })
+    await screen.findAllByTestId('review-fix-explain')
+    fireEvent.click(explainButtons()[0])
+    fireEvent.click(await screen.findByTestId('explain-accept'))
+    const notice = await screen.findByTestId('explain-notice')
+    expect(notice.textContent).toBe(`${EXPLAIN_COPY.acceptFailed} stale line ids`)
+    expect(screen.queryByTestId('explain-panel')).toBeNull()
+    expect(calls('/inv-1', 'PATCH')).toHaveLength(1)
+    await waitFor(() => expect(gets()).toHaveLength(2))
+  })
+
+  it('reviewRow_unavailableLeavesTheRowWorking', async () => {
+    const { calls } = setup({ explain: { status: 'unavailable', explanation: null, fix: null } })
+    await screen.findAllByTestId('review-fix-explain')
+    fireEvent.click(explainButtons()[0])
+    const unavailable = await screen.findByTestId('explain-unavailable')
+    expect(within(screen.getAllByTestId('review-fix-card')[0]).getByTestId('explain-unavailable')).toBe(unavailable)
+    fireEvent.click(screen.getByTestId('review-revalidate'))
+    await waitFor(() => expect(calls('/validate', 'POST')).toHaveLength(1))
+    fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '999' } })
+    fireEvent.click(screen.getByTestId('review-fix-save'))
+    await waitFor(() => expect(calls('/inv-1', 'PATCH')).toHaveLength(1))
   })
 })

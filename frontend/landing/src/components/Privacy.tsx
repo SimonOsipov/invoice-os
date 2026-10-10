@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { CONSENT_TEXT } from './demoForm'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
-import { PRODUCTION_HOSTNAMES } from '../hubspot'
+import { LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
 
 export const GA_RETENTION_MONTHS = 14
 export const AI_PROVIDER_HOST = 'openrouter.ai'
@@ -55,14 +55,14 @@ export function Privacy() {
 
           <h2 style={H2}>Google Analytics</h2>
           <p style={P}>
-            We use Google Analytics 4 to measure how people use this marketing site — which pages get read, what
+            We use Google Analytics 4 to measure how people use this marketing site and our Feature Library — which pages get read, what
             visitors do next, and where the site is confusing. It runs only if you have allowed analytics.
           </p>
           <p style={P}>
-            It runs on this public site only. There is no analytics code anywhere inside the signed-in ASComply product.
+            It runs on this public site and on our public Feature Library only. There is no analytics code anywhere inside the signed-in ASComply product.
           </p>
           <p style={P}>
-            It is active on {PRODUCTION_HOSTNAMES[0]} and nowhere else. Our preview and test builds run the same code,
+            It is active on {PRODUCTION_HOSTNAMES[0]} and on our Feature Library at {LIBRARY_HOSTNAMES[0]}, and nowhere else. Our preview and test builds run the same code,
             but that code only measures on the live address, so those builds send Google nothing.
           </p>
 
@@ -80,8 +80,8 @@ export function Privacy() {
           <h2 style={H2}>What Google never receives</h2>
           <p style={P}>
             We never send Google your name, your email address, your company, or any answer you typed or chose in the
-            demo form. The only details we attach ourselves are which button you used, which form it was, and how far
-            down you scrolled — the rest of the list above is collected by Google's own code.
+            demo form. The only details we attach ourselves are which button you used, which form it was, how far
+            down you scrolled, and on the Library which feature or group you opened — the rest of the list above is collected by Google's own code.
           </p>
 
           <h2 style={H2}>Cookies on your device</h2>
@@ -90,18 +90,18 @@ export function Privacy() {
             specific to our analytics property. Together they are what let Google tell a returning visit from a new one.
           </p>
           <p style={P}>
-            Our own code sets no cookies at all — these come from Google's script. They appear only once you have
-            allowed analytics; until then your cookie list for this site holds neither of them. The only thing our
-            code ever writes to that list is the instruction that deletes these two, which is what choosing Reject
-            does.
+            These two are set by Google, not by our own code. They appear only once you have allowed analytics; until
+            then your cookie list for this site holds neither of them. The only change our code ever makes to them is
+            the instruction that deletes them, which is what choosing Reject does.
           </p>
           <p style={P}>
-            Your answer itself is stored on your device too, though not as a cookie. It is a small record named
-            asc_consent, which our own code writes to your browser's own storage and never sends anywhere: it holds
-            whether you allowed analytics, when you chose, and which version of the record it is. It is what stops the
-            cookie notice asking you again on every visit, and, apart from the deletions described above and the
-            invite link's token, which is kept in this tab's session storage on the invite page only and cleared when
-            the tab closes, it is the only thing our own code writes when you choose Reject.
+            Your answer itself is stored on your device too, in a small cookie of our own named asc_consent. It holds
+            whether you allowed analytics, when you chose, and which version of the record it is. It is set for{' '}
+            {SHARED_COOKIE_DOMAIN}, so this site and our Feature Library read the same answer. Your browser therefore
+            sends it with each request to our {SHARED_COOKIE_DOMAIN} addresses; our servers do not read it. It is what
+            stops the cookie notice asking you again on every visit, and, apart from the deletions described above and
+            the invite link's token, which is kept in this tab's session storage on the invite page only and cleared
+            when the tab closes, it is the only thing our own code writes when you choose Reject.
           </p>
 
           <h2 style={H2}>Where the data goes</h2>
@@ -124,6 +124,28 @@ export function Privacy() {
             We have Google Signals turned off, so none of this is joined to Google advertising profiles or used to
             follow you between your devices. We run no advertising network on this site, and nothing here sets an
             advertising cookie.
+          </p>
+
+          <h2 style={H2}>The Feature Library</h2>
+          <p style={P}>
+            Our Feature Library at {LIBRARY_HOSTNAMES[0]} follows this policy too. One analytics choice covers this
+            site and the Library: whatever you choose on either applies to both, and the other does not ask you again.
+            Cookie choices, at the foot of this site's pages and of the Library's sidebar, brings the notice back on
+            either, and a change made there applies to both.
+          </p>
+          <p style={P}>
+            If you allow analytics there, Google Analytics measures the Library in the same way and under the same
+            property. Google also receives each Library page you view, when you choose Book the Demo, when you start
+            the tour, and when you choose Open in Platform, with the feature or group it was for. The Library shares
+            the _ga cookies with this site, so Google can tell that a visit to both came from the same browser.
+            Choosing Reject on either site deletes those shared _ga cookies. If analytics was running, though,
+            Google's script is still loaded into any of our pages you have open, and until you reload them it can send
+            measurements of its own and re-create those cookies.
+          </p>
+          <p style={P}>
+            The Library has no forms, so it sends HubSpot nothing. It is typeset in the same Google fonts. When a
+            Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry
+            how long its pages take to load.
           </p>
 
           <h2 style={H2}>Google Fonts</h2>

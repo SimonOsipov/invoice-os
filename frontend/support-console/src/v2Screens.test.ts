@@ -64,9 +64,22 @@ const submissionsFiltered = (filter: Parameters<typeof Submissions>[0]['filter']
     createElement(Submissions, { jobs, filter, subTab: 'jobs', onFilterChange: noop, onSubTabChange: noop, onOpenJob: noop, onReDriveAll: noop, onReconcile: noop, onRunSweep: noop }),
   )
 
+const RULES_PROPS: Parameters<typeof Rules>[0] = {
+  rules: SEED_RULES,
+  status: 'ready',
+  version: 4,
+  busy: false,
+  onRetry: noop,
+  onOpenRule: noop,
+  onToggleRule: noop,
+  onPublish: noop,
+  onPromote: noop,
+}
+const rulesWith = (over: Partial<Parameters<typeof Rules>[0]>) => renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS, ...over }))
+
 const SCREENS = {
   submissions: submissions('jobs'),
-  rules: renderToStaticMarkup(createElement(Rules, { rules: SEED_RULES, onOpenRule: noop, onToggleRule: noop, onPublish: noop, onPromote: noop })),
+  rules: renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS })),
   audit: audit(),
   tenants: tenants(),
   health: healthHtml(2),
@@ -189,9 +202,9 @@ describe('v2 screens', () => {
     const learned = rules.filter((t) => t.text === String(LEARNED_RULES.length) && style(t)['margin-left'] === 'auto')
     expect(learned, 'learned count').toHaveLength(1)
     expect.soft(style(learned[0])['border-radius'], 'learned count corner').toBe('var(--radius-sm)')
-    const draft = rules.filter((t) => t.text.startsWith('EDITING DRAFT'))
-    expect(draft, 'EDITING DRAFT tag').toHaveLength(1)
-    expect.soft(style(draft[0])['border-radius'], 'EDITING DRAFT corner').toBe('var(--radius-sm)')
+    const inForce = rules.filter((t) => t.text.startsWith('IN FORCE'))
+    expect(inForce, 'IN FORCE tag').toHaveLength(1)
+    expect.soft(style(inForce[0])['border-radius'], 'IN FORCE corner').toBe('var(--radius-sm)')
 
     const toggles = withClass(rules, 'ops-toggle')
     const knobs = withClass(rules, 'ops-knob')
@@ -399,5 +412,31 @@ describe('v2 screens', () => {
     const jobs = floor(SCREENS.submissions, '150px minmax(220px,1.3fr)', 'jobs')
     expect(jobs, 'jobs: the header row and one row per job').toHaveLength(SEED_JOBS.length + 1)
     for (const r of jobs) expect.soft(style(r)['min-width'], 'jobs row floor').toBe('1040px')
+  })
+
+  it('Rules renders its non-ready states', () => {
+    const forbidden = rulesWith({ status: 'forbidden', rules: [], version: null })
+    expect(forbidden).toContain('Your account has no rules role.')
+    expect(forbidden).not.toContain('role="switch"')
+    expect(forbidden).toContain('Rules admin')
+    const loading = rulesWith({ status: 'loading', rules: [], version: null })
+    expect(loading).toContain('Loading rules…')
+    expect(loading).toContain('Rules admin')
+    const failed = rulesWith({ status: 'error', errorText: 'no rule set in force', rules: [], version: null })
+    expect(failed).toContain('no rule set in force')
+    expect(buttonByText(failed, 'Retry').attrs).toContain('v2-btn-ghost')
+  })
+
+  it('Rules renders the version badge and disables switches while busy', () => {
+    const html = rulesWith({ busy: true })
+    expect(html).toContain('IN FORCE v4')
+    const switches = [...html.matchAll(/<button\b([^>]*role="switch"[^>]*)>/g)].map((m) => ` ${m[1]}`)
+    expect(switches).toHaveLength(SEED_RULES.length)
+    for (const t of switches) {
+      expect(t).toContain('disabled=""')
+      expect(style({ attrs: t })).toMatchObject({ opacity: '0.45', cursor: 'not-allowed' })
+    }
+    expect(html).not.toContain('--fg-4')
+    expect(rulesWith({ busy: false })).not.toContain('disabled=""')
   })
 })

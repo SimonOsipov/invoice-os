@@ -2,9 +2,8 @@ import { expect, type Page } from '@playwright/test'
 import { resolveTarget } from '../targets'
 import type { ConsoleTarget } from '../staffSession'
 
-// The three SPAs under smoke test (landing, ops-console, support-console). The consoles'
-// data has no backend, so a render check is sufficient; they open only on a real staff session,
-// which `console` names (staffSession.ts). The app SPA is always gateway-wired in the deployed env,
+// The SPAs under smoke test (landing, ops-console, support-console, library). The consoles open
+// only on a real staff session, which `console` names (staffSession.ts). The app SPA is always gateway-wired in the deployed env,
 // so its (backend-verified) assertion lives in the topology suite instead (see e2e/topology/).
 // Each PR now deploys to its own ephemeral Railway environment (M4-23), so each URL is
 // REQUIRED — resolveTarget throws rather than falling back to a hardcoded dev deployment
@@ -50,6 +49,22 @@ export const APPS: AppTarget[] = [
       await expect(page.getByText('ASComply').first()).toBeVisible()
       await expect(page.getByRole('heading', { name: 'Submissions ops' })).toBeVisible()
       await expect(page.getByText('CROSS-TENANT VIEW')).toBeVisible()
+    },
+  },
+  {
+    name: 'library',
+    url: resolveTarget('LIBRARY_URL'),
+    assertMainView: async (page) => {
+      await expect(page).toHaveTitle('ASComply Africa — Feature Library')
+      await expect(page.locator('#root')).toBeAttached()
+      // The SPA fallback answers any path with index.html, so a missing entry script shows as text/html.
+      const src = await page.locator('script[type="module"][src]').first().getAttribute('src')
+      expect(src, 'index.html has no module entry script').not.toBeNull()
+      const res = await page.request.get(new URL(src as string, page.url()).href)
+      expect(res.status()).toBe(200)
+      expect(res.headers()['content-type']).toContain('javascript')
+      // Home route: the rendered hero proves the app mounted.
+      await expect(page.getByRole('heading', { level: 1 })).toContainText('Every step from invoice')
     },
   },
 ]

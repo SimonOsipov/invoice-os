@@ -155,3 +155,17 @@ describe('NV-11 the scroll-spy marks each of the five nav sections current, and 
     expect(current).toEqual(href ? [`${hrefPrefix}${href}`] : [])
   })
 })
+
+describe('Nav scroll-spy and the Library link', () => {
+  it('scrollSpy_neverMarksTheLibraryLink', () => {
+    document.getElementById('integrations')!.getBoundingClientRect = () => ({ top: 10 }) as DOMRect
+    SECTIONS.slice(0, SECTIONS.findIndex((s) => s.id === 'integrations')).forEach((s) => {
+      document.getElementById(s.id)!.getBoundingClientRect = () => ({ top: -500 }) as DOMRect
+    })
+    act(() => {
+      root.render(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {}, libraryHref: 'https://lib.x' }))
+    })
+    expect(container.querySelector('a[href="#integrations"]')!.getAttribute('aria-current'), 'control: the spy marks Integrations').toBe('true')
+    expect(container.querySelector('a[href="https://lib.x"]')!.hasAttribute('aria-current')).toBe(false)
+  })
+})

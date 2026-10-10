@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { Submissions } from './components/Submissions'
@@ -12,10 +12,11 @@ import { AuditDrawer } from './components/AuditDrawer'
 import { KillConfirm } from './components/KillConfirm'
 import { PublishModal } from './components/PublishModal'
 import { Toast } from './components/Toast'
-import { AUDIT_ENTRIES, SEED_JOBS, SEED_RULES } from './data'
-import { gatewayBase } from '@invoice-os/api-client'
+import { AUDIT_ENTRIES, SEED_JOBS } from './data'
+import { gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
+import { fetchRulesInForce, switchRule, type RulesInForce } from './rulesApi'
 import { StaffGate } from '@invoice-os/console-session'
-import { SESSION_KEY, landingBase } from './auth'
+import { SESSION_KEY, landingBase, signOut } from './auth'
 import type { AuditFilter, DrawerState, Env, JobFilter, Screen, SubTab, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.asc-app` — that scope defines the design-system tokens
@@ -39,7 +40,8 @@ function Console() {
   const [drawer, setDrawer] = useState<DrawerState>(null)
   const [reqOpen, setReqOpen] = useState(true)
   const [resOpen, setResOpen] = useState(true)
-  const [confirmKill, setConfirmKill] = useState<string | null>(null)
+  const [confirmKill, setConfirmKill] = useState<{ key: string; action: 'disable' | 'enable' } | null>(null)
+  const [switching, setSwitching] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
   const [testRan, setTestRan] = useState(false)
   const [auditQuery, setAuditQuery] = useState('')
@@ -47,7 +49,6 @@ function Console() {
   const [tenantQuery, setTenantQuery] = useState('')
   const [tenantId, setTenantId] = useState('t1')
   const [jobs, setJobs] = useState(SEED_JOBS)
-  const [rules, setRules] = useState(SEED_RULES)
   const [toast, setToast] = useState<ToastState>(null)
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -57,6 +58,20 @@ function Console() {
     toastTimer.current = setTimeout(() => setToast(null), 3400)
   }, [])
 
+  // Read when the Rules screen opens, never on console mount.
+  const rulesRead = useAsync(fetchRulesInForce, { immediate: screen === 'rules', deps: [screen === 'rules'] })
+  const lastList = useRef<RulesInForce | null>(null)
+  if (rulesRead.data) lastList.current = rulesRead.data
+  const list = rulesRead.data ?? (rulesRead.status === 'error' ? null : lastList.current)
+  const rules = list?.rules ?? []
+  const rulesStatus = rulesRead.status === 'error' ? (rulesRead.error?.status === 403 ? 'forbidden' : 'error') : list ? 'ready' : 'loading'
+  const rulesBusy = switching || rulesRead.status === 'loading'
+  const switchInFlight = useRef(false)
+  const expired = rulesRead.status === 'error' && rulesRead.error?.status === 401
+  useEffect(() => {
+    if (expired) void signOut()
+  }, [expired])
+
   const dlCount = jobs.filter((j) => j.state === 'dead-letter').length
 
   const go = (s: Screen) => {
@@ -65,8 +80,8 @@ function Console() {
   }
 
   // ---- job actions (proto:1114) ----
-  // Cross-tenant mutations. Nothing reaches the audit log until accreditation (TopBar.tsx,
-  // KillConfirm.tsx), so the tag names that gate rather than asserting a write happened.
+  // Cross-tenant mutations. Nothing reaches the audit log until accreditation (TopBar.tsx),
+  // so the tag names that gate rather than asserting a write happened.
   const openJob = (id: string) => {
     setDrawer({ type: 'job', id })
     setReqOpen(true)
@@ -88,24 +103,37 @@ function Console() {
     showToast('Cancelled · ' + id, 'AUDIT ON ACCREDITATION', 'red')
   }
 
-  // ---- rule actions (proto:1099) ----
-  // Enabling is immediate; disabling routes through the confirm modal, because turning a
-  // rule off stops validating every tenant's invoices against it.
+  // ---- rule actions ----
   const toggleRule = (key: string) => {
     const rule = rules.find((r) => r.key === key)
-    if (!rule) return
-    if (rule.enabled) {
-      setConfirmKill(key)
-      return
-    }
-    setRules((prev) => prev.map((r) => (r.key === key ? { ...r, enabled: true } : r)))
-    showToast('Re-enabled ' + key, 'RULES')
+    if (rule && !rulesBusy) setConfirmKill({ key, action: rule.enabled ? 'disable' : 'enable' })
   }
-  const doKill = () => {
-    if (!confirmKill) return
-    setRules((prev) => prev.map((r) => (r.key === confirmKill ? { ...r, enabled: false } : r)))
-    showToast('Kill-switch · ' + confirmKill + ' disabled', 'AUDIT ON ACCREDITATION', 'red')
-    setConfirmKill(null)
+  const doSwitch = async (reason: string) => {
+    if (!confirmKill || rulesBusy || switchInFlight.current) return
+    const { key, action } = confirmKill
+    switchInFlight.current = true
+    setSwitching(true)
+    try {
+      await switchRule(key, action === 'enable', reason)
+      setConfirmKill(null)
+      if (action === 'disable') showToast('Kill-switch · ' + key + ' disabled', 'AUDITED', 'red')
+      else showToast('Re-enabled ' + key, 'AUDITED')
+      rulesRead.run()
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.status === 401) {
+        void signOut()
+        return
+      }
+      showToast(err.message, '', 'red')
+      if (err.status === 404 || err.status === 409) {
+        setConfirmKill(null)
+        rulesRead.run()
+      }
+    } finally {
+      switchInFlight.current = false
+      setSwitching(false)
+    }
   }
 
   // ---- resolve open drawer entities ----
@@ -146,6 +174,11 @@ function Console() {
           {screen === 'rules' && (
             <Rules
               rules={rules}
+              status={rulesStatus}
+              errorText={rulesRead.error?.message}
+              version={list?.version ?? null}
+              busy={rulesBusy}
+              onRetry={rulesRead.run}
               onOpenRule={(key) => {
                 setDrawer({ type: 'rule', id: key })
                 setTestRan(false)
@@ -198,7 +231,8 @@ function Console() {
           rule={drawerRule}
           testRan={testRan}
           onRunTest={() => setTestRan(true)}
-          onKill={() => setConfirmKill(drawerRule.key)}
+          busy={rulesBusy}
+          onKill={() => setConfirmKill({ key: drawerRule.key, action: 'disable' })}
           onClose={() => setDrawer(null)}
         />
       )}
@@ -213,7 +247,9 @@ function Console() {
         />
       )}
 
-      {confirmKill && <KillConfirm ruleKey={confirmKill} env={env} onClose={() => setConfirmKill(null)} onConfirm={doKill} />}
+      {confirmKill && (
+        <KillConfirm ruleKey={confirmKill.key} action={confirmKill.action} busy={rulesBusy} onClose={() => setConfirmKill(null)} onConfirm={doSwitch} />
+      )}
 
       {publishOpen && (
         <PublishModal

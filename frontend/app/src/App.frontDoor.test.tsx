@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from './auth'
 import { SESSION_KEY, serializeSession } from './lib/session'
+import { ensureSignInState } from './lib/signInState'
 import App from './App'
 
 // landingBase() is a call-time read of import.meta.env.VITE_LANDING_URL (auth.ts:70-73),
@@ -76,7 +77,7 @@ const ME: Me = {
 }
 
 // Records every href write; `search` seeds the boot query.
-function stubRecordingLocation(search: string) {
+function stubRecordingLocation(search: string, pathname = '/') {
   const hrefWrites: string[] = []
   Object.defineProperty(window, 'location', {
     configurable: true,
@@ -88,7 +89,7 @@ function stubRecordingLocation(search: string) {
       set href(v: string) {
         hrefWrites.push(v)
       },
-      pathname: '/',
+      pathname,
       hash: '',
       hostname: 'localhost',
       origin: 'http://localhost',
@@ -233,5 +234,99 @@ describe('front door: the redirect arm (F-201)', () => {
     render(<App />)
     expect(window.location.href).toBe('http://localhost/')
     expect(screen.getByText('Choose an account')).toBeTruthy()
+  })
+})
+
+const BASE64URL_43 = /^[A-Za-z0-9_-]{43}$/
+
+describe('front door: a Library visit goes to registration (LIB-06)', () => {
+  it('frontDoor_viaLibraryGoesToLandingRegistration', async () => {
+    const { hrefWrites } = stubRecordingLocation('?via=library', '/invoices')
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    await act(async () => {
+      render(<App />)
+    })
+    await settle()
+
+    const s = storedSignInState()
+    expect(s).toEqual(expect.stringMatching(BASE64URL_43))
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${s}&register`])
+  })
+
+  it.each(['?via=other', '?via=LIBRARY', '?via=', '?via=library2'])(
+    'frontDoor_otherViaValuesKeepSignIn [%s]',
+    async (search) => {
+      const { hrefWrites } = stubRecordingLocation(search)
+      vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+      await act(async () => {
+        render(<App />)
+      })
+      await settle()
+
+      expect(hrefWrites).toEqual([`https://landing.example/?state=${storedSignInState()}`])
+    },
+  )
+
+  it('frontDoor_noViaIsUnchanged', async () => {
+    const { hrefWrites } = stubRecordingLocation('')
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    await act(async () => {
+      render(<App />)
+    })
+    await settle()
+
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${storedSignInState()}`])
+  })
+
+  it('frontDoor_viaLibraryWithoutALandingKeepsThePicker', async () => {
+    const { hrefWrites } = stubRecordingLocation('?via=library')
+    await act(async () => {
+      render(<App />)
+    })
+    await settle()
+
+    expect(hrefWrites).toEqual([])
+    expect(screen.getByText('Choose an account')).toBeTruthy()
+  })
+
+  it('frontDoor_aPendingHandoffWinsOverVia', async () => {
+    const code = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ'
+    const { hrefWrites } = stubRecordingLocation(`?handoff=${code}&via=library`)
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    ensureSignInState()
+    const fetchSpy = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal('fetch', fetchSpy)
+    await act(async () => {
+      render(<App />)
+    })
+    await settle()
+
+    expect(fetchSpy, 'the redemption is in flight').toHaveBeenCalled()
+    expect(hrefWrites).toEqual([])
+  })
+
+  it('frontDoor_aSessionWinsOverVia', async () => {
+    localStorage.setItem(SESSION_KEY, serializeSession(SEAT_SESSION))
+    const { hrefWrites } = stubRecordingLocation('?via=library', '/invoices')
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    await act(async () => {
+      render(<App />)
+    })
+    await settle()
+
+    expect(workspaceIsRendered(), 'the signed-in workspace rendered').toBe(true)
+    expect(hrefWrites).toEqual([])
+  })
+
+  it('frontDoor_authStartWinsOverVia', async () => {
+    const { hrefWrites } = stubRecordingLocation('?auth=start&via=library')
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    await act(async () => {
+      render(<App />)
+    })
+    await settle()
+
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${storedSignInState()}&signin=ready`])
   })
 })

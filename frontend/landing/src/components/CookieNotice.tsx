@@ -1,4 +1,5 @@
 import type { ConsentRecord } from '../consent'
+import { SHARED_COOKIE_DOMAIN } from '../hubspot'
 
 export type ConsentChoice = 'accept' | 'reject'
 
@@ -8,10 +9,12 @@ export function CookieNotice({
   current,
   suppressed,
   onChoose,
+  privacyHref = '/privacy',
 }: {
   current: ConsentRecord | null
   suppressed: boolean
   onChoose: (choice: ConsentChoice) => void
+  privacyHref?: string
 }) {
   return (
     <>
@@ -30,9 +33,9 @@ export function CookieNotice({
         ) : null}
         <p className="cn-body">
           We use Google Analytics to see how people find and use this page. That is the only non-essential cookie we
-          set: no advertising, no remarketing, no data sold to anyone.
+          set: no advertising, no remarketing, no data sold to anyone. Your choice applies to {SHARED_COOKIE_DOMAIN} and the Feature Library.
         </p>
-        <a className="lnk cn-link" href="/privacy">
+        <a className="lnk cn-link" href={privacyHref}>
           Read the privacy &amp; cookie policy
         </a>
         <div className="cn-actions">

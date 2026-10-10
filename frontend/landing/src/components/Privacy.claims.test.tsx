@@ -530,3 +530,46 @@ describe('ENGI-10: no training, retention, region, deletion or law claim in the 
     expect(page).toContain('we do not claim here that it satisfies any particular data-protection law')
   })
 })
+
+// pm-approved copy: change only with a new approval.
+const APPROVED_EXPLAIN_SECTION =
+  "This is also about the signed-in ASComply product. When you click Explain on a rule that an invoice breaks, our server sends that invoice's details and the rule's result to the same AI provider, so that it can explain the problem in plain words and suggest a correction. Nothing is sent until you click Explain, and a suggested correction is saved only when you accept it."
+
+const EXPLAIN_H2 = 'If you ask for an explanation'
+const explainSectionHtml = (): string => {
+  const heading = `>${EXPLAIN_H2}</h2>`
+  const at = html.indexOf(heading)
+  expect(at, 'the explanation section heading is missing').toBeGreaterThanOrEqual(0)
+  const afterH2 = html.slice(at + heading.length)
+  const next = afterH2.indexOf('<h2')
+  return next < 0 ? afterH2 : afterH2.slice(0, next)
+}
+
+describe('ENGI-17: the explanation section discloses the Explain call', () => {
+  it('ENGI-17: the explanation section sits after uploads and before monitoring', () => {
+    const at = (h: string) => html.indexOf(`>${h}</h2>`)
+    expect(html.match(/If you ask for an explanation<\/h2>/g) ?? []).toHaveLength(1)
+    expect(at('If you upload invoice documents')).toBeGreaterThan(-1)
+    expect(at('If you upload invoice documents')).toBeLessThan(at(EXPLAIN_H2))
+    expect(at(EXPLAIN_H2)).toBeLessThan(at('Error and performance monitoring'))
+  })
+
+  it('ENGI-17: the explanation section is the approved text, in one paragraph', () => {
+    const section = explainSectionHtml()
+    expect(section.match(/<p[\s>]/g) ?? []).toHaveLength(1)
+    expect(plainText(section)).toBe(APPROVED_EXPLAIN_SECTION)
+  })
+
+  it('ENGI-17: the section says nothing is sent until Explain is clicked', () => {
+    const text = plainText(explainSectionHtml())
+    expect(text).toContain('Nothing is sent until you click Explain')
+    expect(text).toContain('saved only when you accept it')
+  })
+
+  it('ENGI-17: the explanation section makes no training, retention, region or compliance claim', () => {
+    const CLAIM = /train|retain|retention|kept|stored|storage|delete|region|located|hosted|EU\b|EEA|United States|\bUS\b|NDPA|GDPR|complian|keep|\bdays?\b|\bmonths?\b|\byears?\b|erase|remov|purge|discard|europe|european|week/i
+    const sentences = plainText(explainSectionHtml()).split(/(?<=[.!?])\s+/)
+    expect(sentences.length).toBeGreaterThan(1)
+    expect(sentences.filter((s) => CLAIM.test(s))).toEqual([])
+  })
+})

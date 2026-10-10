@@ -212,6 +212,14 @@ export function Privacy() {
             their own terms.
           </p>
 
+          <h2 style={H2}>If you ask for an explanation</h2>
+          <p style={P}>
+            This is also about the signed-in ASComply product. When you click Explain on a rule that an invoice breaks,
+            our server sends that invoice's details and the rule's result to the same AI provider, so that it can explain
+            the problem in plain words and suggest a correction. Nothing is sent until you click Explain, and a suggested
+            correction is saved only when you accept it.
+          </p>
+
           <h2 style={H2}>Error and performance monitoring</h2>
           <p style={P}>
             We use Sentry to find out when something breaks or runs slowly. When a page on this site or in the signed-in

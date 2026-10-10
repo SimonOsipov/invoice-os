@@ -22,6 +22,8 @@ paths:
   - "internal/extraction/jevcheck.go"
   - "internal/importer/suggest.go"
   - "internal/importer/jevcheck.go"
+  - "internal/invoice/explain.go"
+  - "internal/invoice/handlers_explain.go"
   - "frontend/app/src/components/CreateUpload.tsx"
 ---
 # Privacy page
@@ -45,7 +47,8 @@ paths:
 
 - Quote the OpenRouter host from `AI_PROVIDER_HOST`. Never retype it.
 - Keep the `Model` prefixes of the AI clients and the vendors named on the page in step. `Privacy.claims.test.tsx` enforces it.
-- Change the page section and `AI_DISCLOSURE` in the same PR as any change to the AI clients.
+- Change the page section and `AI_DISCLOSURE` in the same PR as any change to the AI clients' document reading. Disclose the explain call on the page only, never in `AI_DISCLOSURE` and never beside Explain (Q28).
+- Change the explanation section in the same PR as any change to when the explain call runs or what it sends.
 - Make no training, retention, region or deletion claim about OpenRouter, Google or TypeSafe. Wait until one vendor statement backs every provider behind a request.
 - The request sets only `provider.require_parameters`. `data_collection` and `zdr` are unset, so OpenRouter may route to any endpoint of the model.
 - Keep the check date in this file only. The page carries no date.

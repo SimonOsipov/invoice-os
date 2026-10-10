@@ -824,3 +824,62 @@ func TestRLS_EveryViolationOfOneImportIsRecordedInOneWrite(t *testing.T) {
 		t.Errorf("rows = %+v, want exactly buyer_tin and the warning-severity vat row (locked, supplier and line paths flag nothing)", rows)
 	}
 }
+
+// rbSeedV5Lists inserts one real code per v5 code list as the superuser; cleanup deletes only the rows it inserted.
+func rbSeedV5Lists(t *testing.T, super *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	codes := map[string]string{
+		"currencies": "NGN", "countries": "NG", "states": "NG-LA", "lgas": "NG-LA-AGE",
+		"invoice-quantity-codes": "EA", "hs-codes": "8471.30", "services-codes": "6201", "tax-categories": "STANDARD_VAT",
+	}
+	var inserted [][2]string
+	for list, code := range codes {
+		tag, err := super.Exec(ctx,
+			`INSERT INTO nrs_codes (list, code, entries) VALUES ($1, $2, '[{}]') ON CONFLICT DO NOTHING`, list, code)
+		if err != nil {
+			t.Fatalf("seed nrs_codes %s/%s: %v", list, code, err)
+		}
+		if tag.RowsAffected() == 1 {
+			inserted = append(inserted, [2]string{list, code})
+		}
+	}
+	t.Cleanup(func() {
+		for _, r := range inserted {
+			_, _ = super.Exec(context.Background(), `DELETE FROM nrs_codes WHERE list = $1 AND code = $2`, r[0], r[1])
+		}
+	})
+}
+
+// Under v5 a reading carries no tax category, so the header VAT is judged by vat-standard-rate-uncategorised.
+func TestRLS_AV5DocumentImportRecordsAnUncategorisedVatBreak(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	rbSeedV5Lists(t, super)
+	tenantID, entityID := rbTenant(t, super, "RB-V5")
+	values := rbAddLines(docCleanValues("RB-V5-INV"))
+	values["issue_date"] = sxPtr("2027-01-15")
+	values["vat"] = sxPtr("50.00")
+	documentID, jobID := rbSeed(t, super, tenantID, values)
+
+	var wantMessage, wantVersion string
+	var version int
+	if err := super.QueryRow(ctx,
+		`SELECT r.message, v.id::text, v.version FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
+		  WHERE v.id = rule_set_version_for('2027-01-15'::date) AND r.key = 'vat-standard-rate-uncategorised'`).Scan(&wantMessage, &wantVersion, &version); err != nil {
+		t.Fatalf("read vat-standard-rate-uncategorised in force on 2027-01-15: %v", err)
+	}
+	if version != 5 {
+		t.Fatalf("rule set in force on 2027-01-15 = v%d, want v5", version)
+	}
+
+	if _, err := newTestServiceWithGate(app, rbRealGate(t, app)).ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+
+	rows := rbRows(t, super, jobID)
+	want := rbRow{tenantID: tenantID, jobID: jobID, field: "vat", ruleKey: "vat-standard-rate-uncategorised", message: wantMessage, versionID: wantVersion}
+	if len(rows) != 1 || rows[0] != want {
+		t.Errorf("extraction_rule_breaks rows = %+v, want exactly %+v", rows, want)
+	}
+}

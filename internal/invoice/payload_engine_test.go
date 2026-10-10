@@ -502,14 +502,9 @@ func TestPayloadEngine_ValidInvoice_ZeroViolationsAgainstRealV2(t *testing.T) {
 	pool := rulesAppPool(t)
 	store := validation.NewStore(pool)
 
-	rs, err := store.LoadActiveRuleSet(rulesIdentity())
-	if err != nil {
-		t.Fatalf("LoadActiveRuleSet: %v [PAY-18]", err)
-	}
-	// TRAP FOR THE NEXT PUBLISH: bump this literal (and gate_test.go's identical one)
-	// together on every future rule-set publish -- see that file's matching note.
+	rs := ruleSetOn(t, store, "2026-07-01")
 	if rs.Version != 4 || len(rs.Rules) != 20 {
-		t.Fatalf("active rule set = version %d with %d rules, want version 4 with 20 "+
+		t.Fatalf("rule set on 2026-07-01 = version %d with %d rules, want version 4 with 20 "+
 			"rules -- dev DB drifted from the pinned state [PAY-18 precondition]", rs.Version, len(rs.Rules))
 	}
 
@@ -577,15 +572,22 @@ func pay18NRSInvoice() invoice.Invoice {
 	}
 }
 
-// activeV4RuleSet loads the active rule set and fails unless it is v4 with 20 rules.
+// ruleSetOn loads the rule set in force on date.
+func ruleSetOn(t *testing.T, store *validation.Store, date string) validation.RuleSet {
+	t.Helper()
+	got, err := store.LoadForDates(context.Background(), []string{date})
+	if err != nil {
+		t.Fatalf("LoadForDates(%s): %v", date, err)
+	}
+	return got[date]
+}
+
+// activeV4RuleSet loads v4 by the fixtures' issue date and fails unless it has 20 rules.
 func activeV4RuleSet(t *testing.T) validation.RuleSet {
 	t.Helper()
-	rs, err := validation.NewStore(rulesAppPool(t)).LoadActiveRuleSet(rulesIdentity())
-	if err != nil {
-		t.Fatalf("LoadActiveRuleSet: %v", err)
-	}
+	rs := ruleSetOn(t, validation.NewStore(rulesAppPool(t)), "2026-07-01")
 	if rs.Version != 4 || len(rs.Rules) != 20 {
-		t.Fatalf("active rule set = version %d with %d rules, want version 4 with 20", rs.Version, len(rs.Rules))
+		t.Fatalf("rule set on 2026-07-01 = version %d with %d rules, want version 4 with 20", rs.Version, len(rs.Rules))
 	}
 	return rs
 }
@@ -633,6 +635,94 @@ func TestPayloadEngine_EmptyAndNonNumericNRSValuesLeaveTheV4VerdictUnchanged(t *
 		l.TaxCategory, l.HSNCode, l.PriceUnit = &empty, &empty, &empty
 		l.TaxPercent, l.BaseQuantity = ptr("x"), ptr("NaN")
 	}
+	res, err := validation.NewDefaultEngine().Evaluate(rooted(t, inv), rs)
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(res.Violations) != 0 {
+		t.Errorf("violations = %v, want zero", res.Violations)
+	}
+}
+
+// v5MapperLists are the real NRS codes the compliant invoice below uses.
+var v5MapperLists = map[string][]string{
+	"currencies":             {"NGN"},
+	"countries":              {"NG"},
+	"states":                 {"NG-LA", "NG-FC"},
+	"lgas":                   {"NG-LA-AGE", "NG-FC-AML"},
+	"invoice-quantity-codes": {"EA"},
+	"hs-codes":               {"8471.30"},
+	"services-codes":         {"6201"},
+	"tax-categories":         {"STANDARD_VAT", "ZERO_VAT"},
+}
+
+// seedV5MapperLists inserts the v5 code lists as the superuser; cleanup deletes only the rows this call inserted.
+func seedV5MapperLists(t *testing.T) {
+	t.Helper()
+	url := os.Getenv("DATABASE_SUPERUSER_URL")
+	if url == "" {
+		t.Skip("DB-backed: set DATABASE_SUPERUSER_URL")
+	}
+	ctx := context.Background()
+	super, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatalf("connect superuser pool: %v", err)
+	}
+	t.Cleanup(super.Close)
+	type row struct{ list, code string }
+	var inserted []row
+	for list, codes := range v5MapperLists {
+		for _, code := range codes {
+			tag, err := super.Exec(ctx,
+				`INSERT INTO nrs_codes (list, code, entries) VALUES ($1, $2, '[{}]') ON CONFLICT DO NOTHING`, list, code)
+			if err != nil {
+				t.Fatalf("seed nrs_codes %s/%s: %v", list, code, err)
+			}
+			if tag.RowsAffected() == 1 {
+				inserted = append(inserted, row{list, code})
+			}
+		}
+	}
+	t.Cleanup(func() {
+		for _, r := range inserted {
+			_, _ = super.Exec(context.Background(), `DELETE FROM nrs_codes WHERE list = $1 AND code = $2`, r.list, r.code)
+		}
+	})
+}
+
+// The mapper and v5 agree: a compliant B2B invoice, mapped by MBSPayload, has zero violations.
+func TestPayloadEngine_V5CompliantInvoiceThroughTheMapper(t *testing.T) {
+	seedV5MapperLists(t)
+	rs := ruleSetOn(t, validation.NewStore(rulesAppPool(t)), "2027-01-15")
+	if rs.Version != 5 {
+		t.Fatalf("rule set on 2027-01-15 = version %d, want 5", rs.Version)
+	}
+
+	date := time.Date(2027, 1, 15, 0, 0, 0, 0, time.UTC)
+	line := func(no int, category, qty, price, total, percent, tax string) invoice.LineItem {
+		return invoice.LineItem{
+			ID: uuid.NewString(), LineNo: no, Description: ptr("Laptop"), Quantity: ptr(qty), UnitPrice: ptr(price),
+			LineTotal: ptr(total), LineTax: ptr(tax), TaxCategory: ptr(category), TaxPercent: ptr(percent),
+			HSNCode: ptr("8471.30"), ProductCategory: ptr("Computers"), SellersItemIdentification: ptr("SKU-1"),
+			PriceUnit: ptr("EA"), BaseQuantity: ptr("1"),
+		}
+	}
+	inv := invoice.Invoice{
+		InvoiceNumber: "INV-2027-000123", IssueDate: &date, Currency: ptr("NGN"),
+		InvoiceKind: ptr("B2B"), TaxCurrencyCode: ptr("NGN"),
+		SupplierTIN: ptr("12345678-0001"), SupplierName: ptr("Acme Nigeria Ltd"), SupplierEmail: ptr("accounts@acme.ng"),
+		SupplierStreet: ptr("1 Marina Road"), SupplierCity: ptr("Lagos"), SupplierPostalZone: ptr("100001"),
+		SupplierLGA: ptr("NG-LA-AGE"), SupplierState: ptr("NG-LA"), SupplierCountry: ptr("NG"),
+		BuyerTIN: ptr("87654321-0002"), BuyerName: ptr("Beta Ltd"), BuyerEmail: ptr("ap@beta.ng"),
+		BuyerStreet: ptr("2 Side Street"), BuyerCity: ptr("Abuja"), BuyerPostalZone: ptr("900001"),
+		BuyerLGA: ptr("NG-FC-AML"), BuyerState: ptr("NG-FC"), BuyerCountry: ptr("NG"),
+		Subtotal: ptr("150.00"), VAT: ptr("7.50"), Total: ptr("157.50"),
+		LineItems: []invoice.LineItem{
+			line(1, "STANDARD_VAT", "1", "100.00", "100.00", "7.50", "7.50"),
+			line(2, "ZERO_VAT", "1", "50.00", "50.00", "0", "0.00"),
+		},
+	}
+
 	res, err := validation.NewDefaultEngine().Evaluate(rooted(t, inv), rs)
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)

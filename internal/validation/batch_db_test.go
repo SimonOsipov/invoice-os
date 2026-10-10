@@ -239,3 +239,44 @@ func TestBatch_DB_YearZeroIssueDateIsJudgedAsUndated(t *testing.T) {
 			body.Results[0].RuleSetVersionID, body.Results[1].RuleSetVersionID, todayID, bID)
 	}
 }
+
+// One batch stamps each item with the version in force on its own issue date, across the v4/v5 boundary.
+func TestBatch_DB_V5StampsInvoicesFromItsStartDate(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
+
+	dayBefore := v5Invoice("B2B", []map[string]any{v5Line("1", "STANDARD_VAT", 1000, 7.5, 75)})
+	invoiceOf(dayBefore)["issue_date"] = "2026-12-31"
+	reqBody, err := json.Marshal(map[string]any{"invoices": []map[string]any{
+		{"ref": "v4", "invoice": invoiceOf(dayBefore)},
+		{"ref": "v5", "invoice": invoiceOf(v5B2BPayload())},
+	}})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForDates, NewDefaultEngine(), nil, nil).
+		ServeHTTP(rec, httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeBatch(t, rec)
+
+	for i, c := range []struct {
+		date    string
+		version int
+	}{{"2026-12-31", 4}, {v5Start, 5}} {
+		var wantID string
+		if err := super.QueryRow(context.Background(),
+			`SELECT id FROM rule_set_versions WHERE version = $1 AND id = rule_set_version_for($2::date)`, c.version, c.date).Scan(&wantID); err != nil {
+			t.Fatalf("v%d is not in force on %s: %v", c.version, c.date, err)
+		}
+		got := body.Results[i]
+		if got.RuleSetVersion != c.version || got.RuleSetVersionID != wantID {
+			t.Errorf("item %s stamp = v%d %s, want v%d %s", got.Ref, got.RuleSetVersion, got.RuleSetVersionID, c.version, wantID)
+		}
+		if len(got.Violations) != 0 {
+			t.Errorf("item %s has violations %+v, want none", got.Ref, got.Violations)
+		}
+	}
+}

@@ -830,6 +830,21 @@ describe('EvidenceBundleDrawer', () => {
     expect((screen.getByTestId('evidence-bundle-prepare') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('confirmBlock_listsInvoiceLinesSecondOfEightWithThePreviewCount', async () => {
+    mockFetchSequence([previewResponse(PREVIEW)])
+    await renderDrawer({ ctx: evidenceCtx([LOCAL]) })
+    fireEvent.click(screen.getByTestId('evidence-company-trigger'))
+    fireEvent.click(screen.getByTestId('evidence-company-row-ent-a'))
+
+    await screen.findByTestId('evidence-confirm-block')
+    const rows = screen.getAllByTestId('evidence-confirm-row')
+    expect(rows).toHaveLength(8)
+    const second = rows[1]
+    expect(within(second).getByTestId('evidence-confirm-row-label').textContent).toBe('Invoice lines (line_items.csv)')
+    expect(within(second).getByTestId('evidence-confirm-row-value').textContent).toBe((1811).toLocaleString('en-NG'))
+    expect(within(rows[0]).getByTestId('evidence-confirm-row-label').textContent).toBe('Invoices (invoices.csv)')
+  })
+
   // EB-05-10 -- jsdom applies no stylesheet, so only the inline `style` attribute is a live
   // oracle, and it must be scoped to the block: ErrorState ships '#fff' and the drawer's own
   // scrim ships a color-mix() expression, both correct and both outside this block.

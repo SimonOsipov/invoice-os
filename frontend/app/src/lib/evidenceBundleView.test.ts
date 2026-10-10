@@ -245,6 +245,7 @@ describe('bundleManifestLines', () => {
 
     const lines = bundleManifestLines(PREVIEW)
     expect(lines).toHaveLength(8)
+    expect(lines[1]).toEqual({ label: 'Invoice lines (line_items.csv)', value: COUNTS.line_items.toLocaleString('en-NG') })
 
     const expected = [
       COUNTS.invoices,

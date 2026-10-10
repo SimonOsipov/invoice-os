@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client/client'
 
 import { MARKETING_CONSENT_TEXT } from './components/MarketingConsent'
-import { sendDemoRequest } from './demoRequest'
+import { DemoRateLimited, sendDemoRequest } from './demoRequest'
 import type { DemoLead } from './hubspot'
 
 afterEach(() => {
@@ -118,5 +118,36 @@ describe('sendDemoRequest', () => {
     const p = sendDemoRequest(LEAD)
     expect(p, 'control: a configured gateway starts a request').not.toBeNull()
     await expect(p).rejects.toBeInstanceOf(ApiError)
+  })
+
+  // 429 is the gateway's http.StatusTooManyRequests (internal/gateway/contacts.go).
+  it('sendDemoRequest rejects with DemoRateLimited on a 429', async () => {
+    stubGateway(() => new Response(JSON.stringify({ error: 'too many requests' }), { status: 429, headers: { 'Content-Type': 'application/json' } }))
+    const p = sendDemoRequest(LEAD)
+    expect(p, 'control: a configured gateway starts a request').not.toBeNull()
+    await expect(p).rejects.toBeInstanceOf(DemoRateLimited)
+  })
+
+  it('sendDemoRequest leaves other failures as ApiError', async () => {
+    for (const status of [400, 502, 503]) {
+      stubGateway(() => new Response(JSON.stringify({ error: 'x' }), { status, headers: { 'Content-Type': 'application/json' } }))
+      const err = await sendDemoRequest(LEAD)!.then(
+        () => null,
+        (e: unknown) => e,
+      )
+      expect(err, `${status}`).toBeInstanceOf(ApiError)
+      expect(err, `${status}`).not.toBeInstanceOf(DemoRateLimited)
+      expect(err as ApiError).toMatchObject({ kind: 'http', status })
+    }
+    stubGateway(() => {
+      throw new TypeError('Failed to fetch')
+    })
+    const err = await sendDemoRequest(LEAD)!.then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err).not.toBeInstanceOf(DemoRateLimited)
+    expect(err as ApiError).toMatchObject({ kind: 'network' })
   })
 })

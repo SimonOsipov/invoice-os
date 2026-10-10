@@ -96,6 +96,10 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			_, _ = io.WriteString(w, session(signInID))
 		case "/signup":
 			_, _ = io.WriteString(w, session(registerID))
+		case "/internal/invitations/pending":
+			_, _ = io.WriteString(w, `{"pending":false}`)
+		case "/internal/invitations/register":
+			_, _ = io.WriteString(w, `{"email":"invitee@corp.example","first":true}`)
 		default:
 			_, _ = io.WriteString(w, `{}`)
 		}
@@ -201,6 +205,21 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusAccepted {
 			t.Fatalf("register answered %d, want 202\n%s", resp.StatusCode, out)
+		}
+	})
+	// Only the booted binary shows main hands the HTTP claim and release to the invitee route: a nil pair answers 503.
+	t.Run("invitee registration claims through tenancy then signs up", func(t *testing.T) {
+		before := len(goTrueCalls())
+		resp, err := client.Post(base+"/auth/invitation/register", "application/json", strings.NewReader(`{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("invitee registration answered %d, want 202\n%s", resp.StatusCode, out)
+		}
+		if got, want := goTrueCalls()[before:], []string{"POST /internal/invitations/register", "POST /signup"}; !slices.Equal(got, want) {
+			t.Errorf("tenancy and GoTrue saw %v, want %v", got, want)
 		}
 	})
 	t.Run("verify", func(t *testing.T) {
@@ -309,6 +328,37 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		if got, want := goTrueCalls()[before:], []string{"POST /verify", "PUT /user", "POST /logout"}; !slices.Equal(got, want) {
 			t.Errorf("GoTrue saw %v, want %v", got, want)
 		}
+	})
+	t.Run("invitation password", func(t *testing.T) {
+		link := base + "/auth/verify?token=t&type=signup&invite=1"
+		before := len(goTrueCalls())
+		resp, err := client.Get(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET of the invitee link answered %d, want 200\n%s", resp.StatusCode, out)
+		}
+		if got := goTrueCalls(); len(got) != before {
+			t.Fatalf("opening the invitee link reached GoTrue: %v", got[before:])
+		}
+
+		action, values := pageForm(t, link, string(b))
+		values.Set("password", "new-password-1")
+		resp, err = client.PostForm(action, values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "http://site.invalid/?verified=1" {
+			t.Fatalf("the set-password POST answered %d Location %q, want 303 ?verified=1\n%s", resp.StatusCode, resp.Header.Get("Location"), out)
+		}
+		if got, want := goTrueCalls()[before:], []string{"POST /verify", "PUT /user", "POST /logout"}; !slices.Equal(got, want) {
+			t.Errorf("GoTrue saw %v, want %v", got, want)
+		}
+		requireIntake(t, next(t), verifyID)
 	})
 	t.Run("sign-in", func(t *testing.T) {
 		raw := make([]byte, 32)

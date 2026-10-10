@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -153,5 +154,69 @@ func TestMain_UnreadableMainRefExitsTwo(t *testing.T) {
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) || ee.ExitCode() != 2 {
 		t.Fatalf("want exit 2, got %v", err)
+	}
+}
+
+// Post-merge push to main: -main must be main before the push, or every added
+// migration reads as already on main and the reverse-order break goes silent.
+func TestMain_ReverseOrderMergeFailsWhenMainIsTheBeforeSha(t *testing.T) {
+	if os.Getenv("MIGRATIONORDER_RUN_MAIN") == "2" {
+		os.Args = []string{"migrationorder", "-base", os.Getenv("MO_BEFORE"), "-head", "HEAD", "-main", os.Getenv("MO_MAIN")}
+		main()
+		return
+	}
+	repo := t.TempDir()
+	run := func(args ...string) string {
+		c := exec.Command("git", args...)
+		c.Dir = repo
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	add := func(name string) {
+		if err := os.MkdirAll(filepath.Join(repo, Dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, Dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		run("add", "-A")
+		run("commit", "-qm", name)
+	}
+	run("init", "-q", "-b", "main")
+	add("20260101000000_a.sql")
+	run("checkout", "-qb", "pr1")
+	add("20260301000000_late.sql")
+	run("checkout", "-q", "main")
+	run("checkout", "-qb", "pr2")
+	add("20260201000000_early.sql")
+	run("checkout", "-q", "main")
+	run("merge", "-q", "--no-ff", "pr1", "-m", "m1")
+	before := run("rev-parse", "HEAD")
+	run("merge", "-q", "--no-ff", "pr2", "-m", "m2")
+
+	exit := func(mainRef string) int {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestMain_ReverseOrderMergeFailsWhenMainIsTheBeforeSha$")
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "MIGRATIONORDER_RUN_MAIN=2", "MO_BEFORE="+before, "MO_MAIN="+mainRef)
+		err := cmd.Run()
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode()
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return 0
+	}
+	if got := exit(before); got != 1 {
+		t.Fatalf("-main=before sha: want exit 1 (violation), got %d", got)
+	}
+	// Positive pair: main already holding the file skips it.
+	if got := exit("HEAD"); got != 0 {
+		t.Fatalf("-main=HEAD: want exit 0 (skipped), got %d", got)
 	}
 }

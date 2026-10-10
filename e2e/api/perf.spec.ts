@@ -285,8 +285,8 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     // through a real membership, so pinning the text would couple this spec to the
     // seed's display_name. actor_kind IS pinned -- 'person' is the whole point.
     expect(history).toEqual([
-      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String) },
-      { from_status: 'draft', to_status: 'validated', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String) },
+      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null },
+      { from_status: 'draft', to_status: 'validated', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null },
     ])
 
     // ---- PERF-05 negative: history is a real transition, not an echo ----
@@ -302,7 +302,7 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     const neverValidatedEntry = body.invoice_violations[1]
     const neverValidatedHistory = await getInvoiceHistory(token, neverValidatedEntry.invoice_id)
     expect(neverValidatedHistory).toEqual([
-      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String) },
+      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null },
     ])
   })
 

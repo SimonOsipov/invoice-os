@@ -13,6 +13,7 @@ package invoice
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -490,5 +491,50 @@ func TestHistory_CrossTenantActorNameNeverRenders(t *testing.T) {
 	own := rowFor(t, got, fx.subject)
 	if own.ActorName != fx.name || own.ActorKind != kindPerson {
 		t.Errorf("the SAME call resolved tenant A's own member to {name:%q kind:%q}, want {%q,%q} -- without this control the absence above passes against a Resolve that resolves nothing", own.ActorName, own.ActorKind, fx.name, kindPerson)
+	}
+}
+
+// TestHistory_OrdinaryTransitionsHaveNoCause (ENGI-04-06, D29): a promotion through the gate
+// and an Edit demotion carry "cause": null -- the key is present on every row.
+func TestHistory_OrdinaryTransitionsHaveNoCause(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	store := NewStore(app)
+	tenantID := seedTenant(t, super, "HIST-CAUSE tenant")
+	// The entity supplies the supplier TIN and name the valid-invoice fixture relies on.
+	entityID := seedEntityWithTIN(t, super, tenantID, "Acme Ltd", "12345678-0001")
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	inv, err := store.Create(c, gapiValidInvoiceInput(entityID, "HIST-CAUSE-1"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	gate := NewGate(store, NewValidator(startInProcess04(t, app).URL, gapiS2SToken, nil))
+	if got, _, err := gate.Validate(c, inv.ID); err != nil || got.Status != StatusValidated {
+		t.Fatalf("Validate: status %q, err %v, violations %s, want validated", got.Status, err, got.Violations)
+	}
+	if got, err := store.Edit(c, inv.ID, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("Edited Ltd")}}); err != nil || got.Status != StatusDraft {
+		t.Fatalf("Edit: status %q, err %v, want the demotion to draft", got.Status, err)
+	}
+
+	rows, err := store.History(c, inv.ID)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("History rows = %d, want 3 (genesis, promotion, edit demotion): %+v", len(rows), rows)
+	}
+	for i, sc := range rows {
+		b, err := json.Marshal(sc)
+		if err != nil {
+			t.Fatalf("marshal row %d: %v", i, err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("decode row %d: %v", i, err)
+		}
+		if raw, ok := m["cause"]; !ok || string(raw) != "null" {
+			t.Errorf("row %d (-> %s) cause = %s (key present %v), want null", i, sc.ToStatus, raw, ok)
+		}
 	}
 }

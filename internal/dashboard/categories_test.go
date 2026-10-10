@@ -58,7 +58,7 @@ func fetchActiveRuleKeys(t *testing.T, app *pgxpool.Pool) []string {
 		t.Fatalf("iterate rule keys: %v", err)
 	}
 	if len(keys) == 0 {
-		t.Fatal("active rule set is empty -- is the DB seeded with v4?")
+		t.Fatal("active rule set is empty -- is the DB seeded?")
 	}
 	return keys
 }
@@ -178,9 +178,8 @@ func TestCategories_GuardSurvivesEnabledFlip(t *testing.T) {
 	active := fetchActiveRuleKeys(t, app)
 	target := active[0]
 
-	// Same key exists in every rule_set_versions row (v1..v4 each copy the
-	// prior version) -- scope by the active row's id, not by key, or the
-	// flip leaks into sealed historical versions.
+	// Same key exists in several versions -- scope by the active row's id,
+	// or the flip leaks into sealed ones.
 	var ruleID string
 	var prevEnabled bool
 	if err := app.QueryRow(context.Background(),

@@ -389,10 +389,18 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
         (e: unknown) => e,
       )
     })
+    let uploadSeen: unknown
+    await act(async () => {
+      uploadSeen = await Promise.resolve(capturedImportAuth!.getToken()).then(
+        () => 'resolved',
+        (e: unknown) => e,
+      )
+    })
     await settle()
 
     expect((seen as Error).name, 'authedFetch rejects').toBe('SessionEndedError')
     expect((tokenSeen as Error).name, 'getToken rejects').toBe('SessionEndedError')
+    expect((uploadSeen as Error).name, 'the upload transport rejects').toBe('SessionEndedError')
     expect(
       calls.map((c) => c.url),
       'no request leaves after the click',

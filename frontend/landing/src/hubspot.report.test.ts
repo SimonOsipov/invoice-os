@@ -96,6 +96,23 @@ describe('submitDemoLead reporting', () => {
     expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
   })
 
+  it('submitDemoLead_reportsOnceWhenAbortSignalTimeoutThrows', async () => {
+    const failure = new TypeError('AbortSignal.timeout is not a function')
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => {
+      throw failure
+    })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await rejection(submit)).toBe(failure)
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(h.captureApiFailure).toHaveBeenCalledTimes(1)
+    expect(h.captureApiFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'network', status: null, method: 'POST', url: submissionUrl(TARGET) }),
+    )
+  })
+
   it.each([500, 503, 599])('submitDemoLead_reportsA5xxOnce %i', async (status) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status }))
 

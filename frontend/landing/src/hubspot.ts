@@ -118,8 +118,9 @@ export async function submitDemoLead(
 ): Promise<void> {
   const url = submissionUrl(t)
   let res: Response
-  const signal = AbortSignal.timeout(15_000)
+  let signal: AbortSignal | undefined
   try {
+    signal = AbortSignal.timeout(15_000) // inside the try: a browser without it still gets reported
     res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

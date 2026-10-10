@@ -88,6 +88,7 @@ export const UNITS: Unit[] = [
       inHouse: '22222222-2222-2222-2222-00000000e2e2',
     },
   },
+  { name: 'library', specs: ['library.spec.ts'] },
 ]
 
 /** shardOf returns the unit that owns a spec file (base name), or undefined. */

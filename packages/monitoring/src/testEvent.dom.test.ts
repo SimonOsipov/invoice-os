@@ -6,7 +6,7 @@ import type { Service } from './options'
 import { RELEASE } from './release'
 
 const DSN = 'https://public@o1.ingest.de.sentry.io/1'
-const SERVICES: Service[] = ['app', 'landing', 'ops-console', 'support-console']
+const SERVICES: Service[] = ['app', 'landing', 'library', 'ops-console', 'support-console']
 // Pinned from `printf %s "$P" | shasum -a 256`; rows never compute a digest themselves.
 const P = 'asc-go-live-test-passphrase'
 const DIGEST = 'd699ff08fe92157bd9a90c8d4099583b7a807ed3884094448a4c0f3e55d6e53e'

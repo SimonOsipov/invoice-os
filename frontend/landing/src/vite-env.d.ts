@@ -12,6 +12,8 @@ interface ImportMetaEnv {
   readonly VITE_OPS_URL?: string
   // The support-console service — the cross-tenant internal console.
   readonly VITE_SUPPORT_URL?: string
+  // The Feature Library SPA. Unset or blank hides the nav's Library link.
+  readonly VITE_LIBRARY_URL?: string
   // The HubSpot portal that owns the Book-a-Demo form (LAND-02). Unset means
   // hubspotTarget() returns null (see hubspot.ts) and the demo form never posts —
   // which is what keeps a PR/fork build from writing into the sales pipeline.

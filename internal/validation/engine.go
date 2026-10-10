@@ -79,6 +79,14 @@ func (e *Engine) Evaluate(p Payload, rs RuleSet) (Result, error) {
 		if !ok {
 			return Result{}, fmt.Errorf("validation: unknown rule type %q", rule.Type)
 		}
+		if le, ok := ev.(lineEvaluator); ok {
+			vs, err := le.evalLines(p, rule)
+			if err != nil {
+				return Result{}, err
+			}
+			violations = append(violations, vs...)
+			continue
+		}
 		v, err := ev.Eval(p, rule)
 		if err != nil {
 			return Result{}, err

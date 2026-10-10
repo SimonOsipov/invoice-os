@@ -43,12 +43,9 @@ import (
 	"testing"
 )
 
-// countViolations returns how many times key appears in result.Violations --
-// used where "fires" must mean exactly once, not merely "at least once"
-// (TestSeed_CELDupVariants: a single cel rule can only ever contribute at
-// most one Violation per Evaluate call, since Engine.Evaluate calls each
-// applicable rule's Eval exactly once -- this test makes that guarantee an
-// explicit, checked assertion rather than an implicit one).
+// countViolations returns how many times key appears in result.Violations,
+// where "fires" must mean exactly once (TestSeed_CELDupVariants: that payload's
+// duplicate rule is bare, so it contributes one violation).
 func countViolations(result Result, key string) int {
 	n := 0
 	for _, v := range result.Violations {

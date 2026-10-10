@@ -715,10 +715,16 @@ export function createInvoice(token: string, body: InvoiceCreateInput): Promise<
 // ([upload-once]: preview -> document_id, then import -> id). Raw fetch, not apiFetch --
 // apiFetch always JSON-serializes its body, which cannot carry a multipart file (mirrors
 // contract-import.spec.ts's own local previewFetch/importFetch pair).
-export async function createImportBatch(token: string, entityId: string, invoiceNumber: string): Promise<string> {
+export async function createImportBatch(
+  token: string,
+  entityId: string,
+  invoiceNumber: string,
+  lines: { item: string; qty: string; unitPrice: string }[] = [{ item: 'Item 1', qty: '1', unitPrice: '100.00' }],
+): Promise<string> {
   const csvHeader = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
-  const row = [invoiceNumber, '2026-01-15', '87654321-0002', 'Batch Buyer Ltd', 'NGN', '1000.00', '75.00', '1075.00', 'Item 1', '1', '100.00'].join(
-    ',',
+  // One CSV row per line; rows sharing an invoice number group into one invoice.
+  const rows = lines.map((l) =>
+    [invoiceNumber, '2026-01-15', '87654321-0002', 'Batch Buyer Ltd', 'NGN', '1000.00', '75.00', '1075.00', l.item, l.qty, l.unitPrice].join(','),
   )
   const mapping: Record<string, string> = {
     invoice_number: 'Invoice No',
@@ -735,7 +741,7 @@ export async function createImportBatch(token: string, entityId: string, invoice
   }
 
   const previewForm = new FormData()
-  previewForm.set('file', new Blob([`${csvHeader}\n${row}`], { type: 'text/csv' }), 'import.csv')
+  previewForm.set('file', new Blob([`${csvHeader}\n${rows.join('\n')}`], { type: 'text/csv' }), 'import.csv')
   const preview = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },

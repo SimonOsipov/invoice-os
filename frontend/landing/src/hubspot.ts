@@ -6,6 +6,7 @@
 // imports nothing from src/components/ — CONSENT_TEXT is passed in as an argument.
 
 import { ApiError, reportApiFailure } from '@invoice-os/api-client'
+import { captureApiFailure } from '@invoice-os/monitoring/report'
 
 /** The hostnames that ARE the real production landing site. Exact match only. */
 export const PRODUCTION_HOSTNAMES: readonly string[] = ['www.ascomply.com']
@@ -132,7 +133,14 @@ export async function submitDemoLead(
   // near a log sink, and must not carry the visitor's email or company.
   if (!res.ok) {
     const err = new ApiError('http', 'hubspot ' + res.status, res.status)
-    reportApiFailure(err, { method: 'POST', url })
+    // A 4xx here means the form setup broke, so it counts, unlike countsAsIssue (submitDemoLead_reportsA4xxOnce).
+    if (res.status >= 400 && res.status <= 499) {
+      try {
+        captureApiFailure({ kind: 'http', status: res.status, method: 'POST', url, error: err })
+      } catch {
+        // reporting must never change what the transport throws
+      }
+    } else reportApiFailure(err, { method: 'POST', url })
     throw err
   }
 }

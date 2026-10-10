@@ -3,6 +3,7 @@ paths:
   - "cmd/validation/**"
   - "internal/validation/**"
   - "migrations/*rules*"
+  - "migrations/*rule_set*"
 ---
 # Validation rules
 

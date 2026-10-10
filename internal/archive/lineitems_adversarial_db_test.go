@@ -177,7 +177,7 @@ func TestLineItems_ChunkBoundariesAgreeAcrossDownloadAndPreview(t *testing.T) {
 	ids := make([]string, total)
 	for i := range ids {
 		ids[i] = mustCreateInvoice(t, tx, invoiceFixture{
-			id: fmt.Sprintf("00000000-0000-4000-8000-%012d", total-i), tenantID: tenant, entityID: entity,
+			id: fmt.Sprintf("00000000-0000-4000-8000-%012x", total-i), tenantID: tenant, entityID: entity,
 			invoiceNumber: fmt.Sprintf("INV-LI-B-%04d", i), createdAt: base.Add(time.Duration(i) * time.Second),
 		})
 	}
@@ -224,8 +224,8 @@ func TestLineItems_ChunkBoundariesAgreeAcrossDownloadAndPreview(t *testing.T) {
 		if len(seen) != n {
 			t.Errorf("n=%d: %d distinct invoices, want %d", n, len(seen), n)
 		}
-		// Up to one chunk the whole file is ordered by invoice_id, line_no.
-		if n <= 500 && !sort.SliceIsSorted(rows, func(i, j int) bool {
+		// The whole file is ordered by invoice_id, line_no.
+		if !sort.SliceIsSorted(rows, func(i, j int) bool {
 			if rows[i][0] != rows[j][0] {
 				return rows[i][0] < rows[j][0]
 			}

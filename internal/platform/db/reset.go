@@ -223,6 +223,9 @@ func ResetEnabled(environment, flag string) bool {
 //	                          (EXTR-12). Same composite FK to extraction_jobs as
 //	                          extraction_field_results above, so the same 0A000
 //	                          rule applies.
+//	extraction_rule_breaks    the append-only rule violations of a read.
+//	                          Same composite FK to extraction_jobs, so the same
+//	                          0A000 rule applies.
 //	extraction_page_images    the rendered-page inventory of a document (EXTR-02).
 //	                          Its composite FK (tenant_id, document_id) is ON
 //	                          DELETE CASCADE against documents, and TRUNCATE
@@ -324,7 +327,7 @@ const resetTables = `TRUNCATE
 	import_mappings,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,
 	documents, extraction_jobs, extraction_field_results, extraction_field_corrections,
-	extraction_page_images, extraction_anchor_rules,
+	extraction_rule_breaks, extraction_page_images, extraction_anchor_rules,
 	approval_runs, approval_run_steps, approval_decisions,
 	river_job, river_leader, river_queue, river_notification
 RESTART IDENTITY`

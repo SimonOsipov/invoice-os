@@ -200,6 +200,7 @@ type BatchOutcome struct {
 	RuleSetVersion int
 	Clean          int
 	WithViolations int
+	StampByID      map[string]Stamp
 	ByID           map[string][]Violation
 }
 
@@ -237,6 +238,7 @@ func (g *Gate) ValidateBatch(ctx context.Context, invs []Invoice) (BatchOutcome,
 
 	out := BatchOutcome{
 		RuleSetVersion: res.RuleSetVersion,
+		StampByID:      make(map[string]Stamp, len(invs)),
 		ByID:           make(map[string][]Violation, len(invs)),
 	}
 	for _, inv := range invs {
@@ -244,6 +246,7 @@ func (g *Gate) ValidateBatch(ctx context.Context, invs []Invoice) (BatchOutcome,
 		if _, err := g.store.ApplyValidation(ctx, inv.ID, vs, res.StampByRef[inv.ID].ID, fingerprints[inv.ID]); err != nil {
 			return BatchOutcome{}, fmt.Errorf("apply validation to invoice %s: %w", inv.ID, err)
 		}
+		out.StampByID[inv.ID] = res.StampByRef[inv.ID]
 		out.ByID[inv.ID] = vs
 		if hasBlockingViolation(vs) {
 			out.WithViolations++

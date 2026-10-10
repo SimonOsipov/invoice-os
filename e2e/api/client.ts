@@ -1400,7 +1400,7 @@ export interface ExtractionPage {
   height_px: number
 }
 
-export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing'
+export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing' | 'rule_break'
 
 export interface ExtractionCandidate {
   value: string | null
@@ -1413,6 +1413,11 @@ export interface ExtractionCorrected {
   where: string | null
 }
 
+export interface ExtractionRuleBreak {
+  key: string
+  message: string
+}
+
 export interface ExtractionFieldState {
   name: string
   value: string | null
@@ -1420,6 +1425,7 @@ export interface ExtractionFieldState {
   reason: ExtractionReason
   alternatives: ExtractionCandidate[]
   corrected: ExtractionCorrected | null
+  rules: ExtractionRuleBreak[]
 }
 
 export interface ExtractionDocument {

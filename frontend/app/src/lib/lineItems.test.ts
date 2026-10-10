@@ -46,7 +46,7 @@ function mkField(
   reason: ExtractionReason = '',
   alternatives: ExtractionCandidate[] = [],
 ): ExtractionFieldState {
-  return { name, value, region, reason, alternatives, corrected: null }
+  return { name, value, region, reason, alternatives, corrected: null, rules: [] }
 }
 
 function cell(name: string | null, value: string | null): LineCell {

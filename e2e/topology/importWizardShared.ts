@@ -176,6 +176,7 @@ export const REASON_PILL: Record<Exclude<ExtractionReason, '' | 'ambiguous'>, st
   unreadable: "COULDN'T READ THIS CLEARLY",
   inconsistent: "DOESN'T ADD UP",
   missing: 'NOT FOUND',
+  rule_break: 'BREAKS A RULE',
 }
 
 // The extract header fields of internal/invoicefields, in Save order; transcribed, not imported.

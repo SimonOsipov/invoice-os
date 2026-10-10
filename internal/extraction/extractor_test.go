@@ -20,13 +20,15 @@ import (
 // reason_code appears three times on one line of the migration; only the IN form
 // is the CHECK, so anchoring on the whole group skips the column declaration.
 var (
-	reasonCheckRE = regexp.MustCompile(`reason_code\s+IN\s*\(([^)]*)\)`)
+	reasonCheckRE = regexp.MustCompile(`(?i)reason_code\s+IN\s*\(([^)]*)\)`)
 	sqlLiteralRE  = regexp.MustCompile(`'([^']*)'`)
+
+	sqlLineCommentRE = regexp.MustCompile(`--[^\n]*`)
 )
 
 // reasonConstants reads the declared Reason constants out of the package source.
-// Go cannot enumerate constants at runtime, so a hardcoded list of four could not
-// notice a fifth being added.
+// Go cannot enumerate constants at runtime, so a hardcoded list could not notice
+// a new one being added.
 func reasonConstants(t *testing.T) map[string]string {
 	t.Helper()
 
@@ -81,24 +83,44 @@ func reasonConstants(t *testing.T) map[string]string {
 	return out
 }
 
-func TestReasonConstantsMatchMigrationCheck(t *testing.T) {
-	const glob = "*_extraction_field_results.sql"
-
-	matches, err := filepath.Glob(filepath.Join("..", "..", "migrations", glob))
+// reasonCheckMigrations lists, oldest first, the migrations whose Up section writes the
+// reason_code CHECK set. The Down section and SQL comments are cut off before matching.
+func reasonCheckMigrations(t *testing.T) (names []string, bodies []string) {
+	t.Helper()
+	all, err := filepath.Glob(filepath.Join("..", "..", "migrations", "*.sql"))
 	if err != nil {
 		t.Fatalf("glob migrations: %v", err)
 	}
-	if len(matches) != 1 {
-		t.Fatalf("found %d migrations named %s, want exactly 1: %v", len(matches), glob, matches)
+	if len(all) < 2 {
+		t.Fatalf("globbed %d migrations; the scan would pass vacuously", len(all))
 	}
-	body, err := os.ReadFile(matches[0])
-	if err != nil {
-		t.Fatalf("read %s: %v", matches[0], err)
+	sort.Strings(all)
+	for _, p := range all {
+		body, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		up, _, _ := strings.Cut(string(body), "-- +goose Down")
+		up = sqlLineCommentRE.ReplaceAllString(up, "")
+		if reasonCheckRE.MatchString(up) {
+			names = append(names, filepath.Base(p))
+			bodies = append(bodies, up)
+		}
 	}
+	return names, bodies
+}
 
-	groups := reasonCheckRE.FindAllStringSubmatch(string(body), -1)
+func TestReasonConstantsMatchMigrationCheck(t *testing.T) {
+	names, bodies := reasonCheckMigrations(t)
+	if len(names) == 0 {
+		t.Fatalf("no migration writes the reason_code CHECK; the comparison below would pass vacuously")
+	}
+	// The newest definition is the one the database enforces.
+	newest, body := names[len(names)-1], bodies[len(bodies)-1]
+
+	groups := reasonCheckRE.FindAllStringSubmatch(body, -1)
 	if len(groups) != 1 {
-		t.Fatalf("found %d reason_code IN (...) groups in %s, want exactly 1", len(groups), matches[0])
+		t.Fatalf("found %d reason_code IN (...) groups in %s, want exactly 1", len(groups), newest)
 	}
 	var want []string
 	for _, lit := range sqlLiteralRE.FindAllStringSubmatch(groups[0][1], -1) {

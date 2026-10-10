@@ -34,6 +34,7 @@ func mgRead() []ExtractionFieldState {
 			{Value: mgStr("ALT-1"), Region: mgAlt1},
 			{Value: mgStr("ALT-2"), Region: mgAlt2},
 		},
+		Rules: []ExtractionRuleBreak{},
 	}}
 }
 
@@ -59,8 +60,8 @@ func TestExtractionMerge_ResolvesEachMethodWithoutADatabase(t *testing.T) {
 			corrections: []Correction{mgCorrection(MethodTyped, "HUMAN-B", mgStr("HUMAN-OLD"))},
 			want: ExtractionFieldState{
 				Name: "total", Value: mgStr("HUMAN-B"), Region: mgR0, Reason: "",
-				Alternatives: []ExtractionCandidate{},
-				Corrected:    &ExtractionCorrected{Method: "typed", Was: mgStr("HUMAN-OLD")},
+				Alternatives: []ExtractionCandidate{}, Rules: []ExtractionRuleBreak{},
+				Corrected: &ExtractionCorrected{Method: "typed", Was: mgStr("HUMAN-OLD")},
 			},
 		},
 		{
@@ -68,8 +69,8 @@ func TestExtractionMerge_ResolvesEachMethodWithoutADatabase(t *testing.T) {
 			corrections: []Correction{mgCorrection(MethodChosen, "ALT-2", nil)},
 			want: ExtractionFieldState{
 				Name: "total", Value: mgStr("ALT-2"), Region: mgAlt2, Reason: "",
-				Alternatives: []ExtractionCandidate{},
-				Corrected:    &ExtractionCorrected{Method: "chosen", Was: mgStr("READ-A")},
+				Alternatives: []ExtractionCandidate{}, Rules: []ExtractionRuleBreak{},
+				Corrected: &ExtractionCorrected{Method: "chosen", Was: mgStr("READ-A")},
 			},
 		},
 		{
@@ -77,8 +78,8 @@ func TestExtractionMerge_ResolvesEachMethodWithoutADatabase(t *testing.T) {
 			corrections: []Correction{mgCorrection(MethodChosen, "HUMAN-NOMATCH", nil)},
 			want: ExtractionFieldState{
 				Name: "total", Value: mgStr("HUMAN-NOMATCH"), Region: mgR0, Reason: "",
-				Alternatives: []ExtractionCandidate{},
-				Corrected:    &ExtractionCorrected{Method: "chosen", Was: mgStr("READ-A")},
+				Alternatives: []ExtractionCandidate{}, Rules: []ExtractionRuleBreak{},
+				Corrected: &ExtractionCorrected{Method: "chosen", Was: mgStr("READ-A")},
 			},
 		},
 		{
@@ -92,8 +93,8 @@ func TestExtractionMerge_ResolvesEachMethodWithoutADatabase(t *testing.T) {
 			}()},
 			want: ExtractionFieldState{
 				Name: "total", Value: mgStr("HUMAN-P"), Region: mgPointed, Reason: "",
-				Alternatives: []ExtractionCandidate{},
-				Corrected:    &ExtractionCorrected{Method: "pointed", Was: mgStr("READ-A"), Where: mgStr("Total due")},
+				Alternatives: []ExtractionCandidate{}, Rules: []ExtractionRuleBreak{},
+				Corrected: &ExtractionCorrected{Method: "pointed", Was: mgStr("READ-A"), Where: mgStr("Total due")},
 			},
 		},
 		{
@@ -123,8 +124,8 @@ func TestExtractionMerge_ResolvesEachMethodWithoutADatabase(t *testing.T) {
 		}
 		want := ExtractionFieldState{
 			Name: "currency", Value: mgStr("NGN"), Reason: "",
-			Alternatives: []ExtractionCandidate{},
-			Corrected:    &ExtractionCorrected{Method: "typed"},
+			Alternatives: []ExtractionCandidate{}, Rules: []ExtractionRuleBreak{},
+			Corrected: &ExtractionCorrected{Method: "typed"},
 		}
 		if got[0].Name != "total" {
 			t.Errorf("the merge put %q first, want the read field total", got[0].Name)

@@ -3155,7 +3155,7 @@ test('EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices 
   test.setTimeout(600_000)
   const errors = collectErrors(page)
 
-  // A document import runs no gate, so both invoices land unstamped -- no second run needed.
+  // Both invoices land unstamped -- no second run needed.
   const { token, entityId, jobs } = await runDocuments(page, 'EXTR-30 unvalidated', [
     { name: RICH_PDF_NAME, mimeType: 'application/pdf', buffer: uniquePdfBytes() },
     { name: GOLDEN_DOCX_NAME, mimeType: DOCX_MIME, buffer: uniqueGoldenDocxBytes() },
@@ -3216,7 +3216,7 @@ test('EXTR30-E2E-01 (AC-2/AC-4): a document run counts its unvalidated invoices 
   ).toEqual([batchId1, batchId2].sort())
   expect(respUrl.searchParams.get('limit'), 'the count is a pagination total, not a page of rows').toBe('1')
   const neTotal = ((await resp.json()) as { pagination: { total: number } }).pagination.total
-  expect(neTotal, 'a document import runs no gate, so both invoices are unevaluated').toBe(2)
+  expect(neTotal, 'both invoices are unevaluated').toBe(2)
 
   // AC-5: the header and the three tile values.
   await expect(page.getByRole('heading', { name: '2 invoices imported', exact: true })).toBeVisible({ timeout: 60_000 })

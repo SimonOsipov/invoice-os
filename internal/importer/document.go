@@ -325,7 +325,8 @@ func carriedReading(documentID, jobID string, in invoice.CreateInput) *CarriedRe
 
 // ImportDocument is the document-import orchestration entrypoint (EXTR-06-03, task-763):
 // read -> map -> mint batch -> dedup precheck -> create -> finalize. rows_total is always 1
-// (D-5, one document = one invoice); no gate runs (RuleSetVersion stays nil, AC #6).
+// (D-5, one document = one invoice). It evaluates and stamps nothing: RuleSetVersion stays nil
+// and the one read-only Evaluate only feeds the rule breaks.
 //
 // SettledExtraction precedes CreateBatch so a document with nothing to import mints no batch
 // (D-10). CreateBatch runs BEFORE the mapper's RowError is checked, so an unreadable
@@ -373,7 +374,8 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		return BatchResult{}, err
 	}
 
-	if _, createErr := s.inv.Create(ctx, in); createErr != nil {
+	created, createErr := s.inv.Create(ctx, in)
+	if createErr != nil {
 		msg, isDomainErr := domainCreateErrorMessage(createErr)
 		if !isDomainErr {
 			_ = s.batch.Finalize(ctx, batchID, 1, 1, 0, nil, "failed")
@@ -404,6 +406,8 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 	if err := s.batch.Finalize(ctx, batchID, 1, 1, 0, []RowError{}, "completed"); err != nil {
 		return BatchResult{}, err
 	}
+	// After Finalize: the gate call is a network hop and must not strand the batch in processing.
+	s.recordImportRuleBreaks(ctx, ex, created)
 	return BatchResult{
 		ID:                batchID,
 		Status:            "completed",
@@ -413,6 +417,21 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		Errors:            []RowError{},
 		InvoiceViolations: []InvoiceViolations{},
 	}, nil
+}
+
+// recordImportRuleBreaks is best effort: an Evaluate or write failure is logged and the import
+// result stays as it was.
+func (s *Service) recordImportRuleBreaks(ctx context.Context, ex SettledExtraction, created invoice.Invoice) {
+	evalCtx, cancel := context.WithTimeout(ctx, ruleBreakEvaluateTimeout)
+	defer cancel()
+	res, err := s.gate.Evaluate(evalCtx, []invoice.EvalItem{{Ref: created.ID, Invoice: created}})
+	if err != nil {
+		slog.WarnContext(ctx, "importer: evaluate imported invoice", slog.String("invoice_id", created.ID), slog.Any("err", err))
+		return
+	}
+	if err := s.batch.RecordRuleBreaks(ctx, ex.JobID, res.StampByRef[created.ID].ID, ruleBreaks(ex, res.ByRef[created.ID])); err != nil {
+		slog.WarnContext(ctx, "importer: record rule breaks", slog.String("invoice_id", created.ID), slog.Any("err", err))
+	}
 }
 
 // CarriedReading answers nil for anything with nothing to carry, including another tenant's
@@ -471,9 +490,13 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 		return invoice.Invoice{}, err
 	}
 	// An outage is not a verdict: the filed draft keeps its Re-validate.
-	if _, err := s.gate.ValidateBatch(ctx, []invoice.Invoice{created}); err != nil {
+	outcome, err := s.gate.ValidateBatch(ctx, []invoice.Invoice{created})
+	if err != nil {
 		slog.WarnContext(ctx, "importer: validate supplied invoice", slog.String("invoice_id", created.ID), slog.Any("err", err))
 		return created, nil
+	}
+	if err := s.batch.RecordRuleBreaks(ctx, ex.JobID, outcome.StampByID[created.ID].ID, ruleBreaks(ex, outcome.ByID[created.ID])); err != nil {
+		slog.WarnContext(ctx, "importer: record rule breaks", slog.String("invoice_id", created.ID), slog.Any("err", err))
 	}
 	got, err := s.inv.Get(ctx, created.ID)
 	if err != nil {

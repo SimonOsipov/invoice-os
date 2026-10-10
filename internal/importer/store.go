@@ -114,6 +114,28 @@ func (s *Store) CreateBatch(ctx context.Context, entityID, filename, documentID 
 	return id, nil
 }
 
+// RecordRuleBreaks files the rule breaks of one document reading; a repeat of a row is a no-op.
+func (s *Store) RecordRuleBreaks(ctx context.Context, jobID, ruleSetVersionID string, breaks []RuleBreak) error {
+	if len(breaks) == 0 {
+		return nil
+	}
+	return db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		identity, _ := auth.IdentityFromContext(ctx)
+		for _, b := range breaks {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO extraction_rule_breaks
+				   (tenant_id, extraction_job_id, field_name, rule_set_version_id, rule_key, message)
+				 VALUES ($1, $2, $3, $4, $5, $6)
+				 ON CONFLICT (tenant_id, extraction_job_id, field_name, rule_key) DO NOTHING`,
+				identity.TenantID, jobID, b.Field, ruleSetVersionID, b.RuleKey, b.Message,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // Finalize updates one import_batches row's terminal counts/status/errors. A
 // nil errs marshals to the jsonb empty array `[]`, never `null` (init to
 // []RowError{} first). RLS scopes the UPDATE's WHERE to the caller's tenant

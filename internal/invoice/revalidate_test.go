@@ -157,6 +157,7 @@ func TestDemoteRevalidated_WritesBothAuditRows(t *testing.T) {
 	vs := []Violation{
 		{RuleKey: "buyer-tin-required", Severity: "error", Message: "Buyer TIN is required"},
 		{RuleKey: "vat-standard-rate", Severity: "warning", Message: "advisory"},
+		{RuleKey: "buyer-tin-required", Severity: "error", Message: "Buyer TIN is required", Path: "line_items[2]"},
 	}
 
 	beforeTransitioned := auditCount(t, app, tenantID, "invoice.transitioned")
@@ -1500,5 +1501,21 @@ func TestRevalidateActive_DemoteStampsTheItemsOwnVersion(t *testing.T) {
 		if got != want {
 			t.Errorf("invoice %s stamped %s, want its own version %s", id, got, want)
 		}
+	}
+}
+
+func TestBlockingRuleKeys_NamesEachRuleOnce(t *testing.T) {
+	vs := []Violation{
+		{RuleKey: "line-cost-non-negative", Severity: "error", Path: "line_items[1]"},
+		{RuleKey: "currency-allowed", Severity: "error", Path: "currency"},
+		{RuleKey: "line-cost-non-negative", Severity: "error", Path: "line_items[3]"},
+		{RuleKey: "some-warning", Severity: "warning"},
+		{RuleKey: "later-error", Severity: "error"},
+		{RuleKey: "some-warning", Severity: "error"},
+		{RuleKey: "currency-allowed", Severity: "error"},
+	}
+	want := []string{"line-cost-non-negative", "currency-allowed", "later-error", "some-warning"}
+	if got := blockingRuleKeys(vs); !reflect.DeepEqual(got, want) {
+		t.Errorf("blockingRuleKeys = %q, want %q", got, want)
 	}
 }

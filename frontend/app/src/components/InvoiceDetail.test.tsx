@@ -18,6 +18,7 @@ import {
   DETAIL_SUBMIT_COPY,
   FAILURE_EXPLANATION_FALLBACK,
   FAILURE_KINDS,
+  LINE_EDIT_FIELDS,
   LIVE_POLL_MS,
   failureExplanation,
   isBuyerTinMissing,
@@ -6434,3 +6435,176 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
   })
 })
 
+
+describe('InvoiceDetail line links (ENGI-16-03)', () => {
+  const ID = 'inv-line-link-1'
+  const lines = [1, 2].map((n) => ({
+    id: `l${n}`,
+    line_no: n,
+    description: `Item ${n}`,
+    quantity: '1',
+    unit_price: '10.00',
+    line_total: '10.00',
+    line_tax: '0.75',
+  }))
+  const viol = (path: string) => ({ rule_key: 'line.sum', severity: 'error' as const, message: `bad ${path}`, path })
+  const base = { id: ID, status: 'validated' as InvoiceStatus, can_edit: true, line_items: lines, rule_set_version: 3 }
+
+  const lineRow = (n: number) => screen.getAllByTestId('line-row')[n - 1]
+
+  it('invoiceDetail_lineLinkFocusesTheField', async () => {
+    mockDetailFetch(detailRecord({ ...base, violations: [viol('line_items[2].unit_price')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('violation-open-line'))
+
+    await screen.findByTestId('edit-invoice')
+    expect(document.activeElement).toBe(lineRow(2).querySelector('[data-line-field="unit_price"]'))
+  })
+
+  it('invoiceDetail_lineLinkWithoutFieldFocusesFirstInput', async () => {
+    mockDetailFetch(detailRecord({ ...base, violations: [viol('line_items[2]')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('violation-open-line'))
+
+    await screen.findByTestId('edit-invoice')
+    expect(document.activeElement).toBe(lineRow(2).querySelector('input'))
+  })
+
+  it('invoiceDetail_everyLineEditFieldHasATarget', async () => {
+    mockDetailFetch(detailRecord({ ...base, line_items: [lines[0]], violations: [] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+
+    await screen.findByTestId('edit-invoice')
+    expect(LINE_EDIT_FIELDS.length).toBeGreaterThan(0)
+    for (const key of LINE_EDIT_FIELDS) {
+      expect(lineRow(1).querySelectorAll(`input[data-line-field="${key}"]`), key).toHaveLength(1)
+    }
+  })
+
+  it('invoiceDetail_secondLineLinkMovesFocus', async () => {
+    mockDetailFetch(detailRecord({ ...base, violations: [viol('line_items[1]'), viol('line_items[2]')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const links = await screen.findAllByTestId('violation-open-line')
+    fireEvent.click(links[0])
+    await screen.findByTestId('edit-invoice')
+    expect(lineRow(1).contains(document.activeElement)).toBe(true)
+
+    fireEvent.click(screen.getAllByTestId('violation-open-line')[1])
+    expect(lineRow(2).contains(document.activeElement)).toBe(true)
+  })
+
+  it('invoiceDetail_lineBeyondRowsOpensEditorOnly', async () => {
+    mockDetailFetch(detailRecord({ ...base, violations: [viol('line_items[5]')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('violation-open-line'))
+
+    expect(await screen.findByTestId('edit-invoice')).toBeTruthy()
+    expect(screen.getAllByTestId('line-row')).toHaveLength(2)
+  })
+
+  it('invoiceDetail_sameLineLinkRefocusesAfterFocusLeaves', async () => {
+    mockDetailFetch(detailRecord({ ...base, violations: [viol('line_items[2].unit_price')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('violation-open-line'))
+    await screen.findByTestId('edit-invoice')
+    const target = lineRow(2).querySelector('[data-line-field="unit_price"]')
+    expect(document.activeElement).toBe(target)
+
+    ;(lineRow(1).querySelector('input') as HTMLInputElement).focus()
+    expect(document.activeElement).not.toBe(target)
+    fireEvent.click(screen.getByTestId('violation-open-line'))
+    expect(document.activeElement).toBe(target)
+  })
+
+  it('invoiceDetail_editToggleAfterCancelDoesNotReplayTheLineFocus', async () => {
+    mockDetailFetch(detailRecord({ ...base, violations: [viol('line_items[2].unit_price')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('violation-open-line'))
+    await screen.findByTestId('edit-invoice')
+    fireEvent.click(screen.getByTestId('edit-cancel'))
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('edit-toggle'))
+    await screen.findByTestId('edit-invoice')
+    expect(lineRow(2).contains(document.activeElement)).toBe(false)
+  })
+
+  it('invoiceDetail_editToggleAfterSaveDoesNotReplayTheLineFocus', async () => {
+    mockDetailFetch(detailRecord({ ...base, violations: [viol('line_items[2].unit_price')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('violation-open-line'))
+    fireEvent.change(await screen.findByDisplayValue('Beta Ltd'), { target: { value: 'Beta Ltd 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(screen.queryByTestId('edit-invoice')).toBeNull())
+
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    await screen.findByTestId('edit-invoice')
+    expect(lineRow(2).contains(document.activeElement)).toBe(false)
+  })
+
+  it('invoiceDetail_lineLinkDisabledWhenNotEditable', async () => {
+    mockDetailFetch(detailRecord({ ...base, can_edit: false, violations: [viol('line_items[1]')] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    const btn = (await screen.findByTestId('violation-open-line')) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    fireEvent.click(btn)
+
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+  })
+})
+
+describe('InvoiceDetail opens at the line the review screen handed over (ENGI-16-04)', () => {
+  const ID = 'inv-line-target-1'
+  const lines = [1, 2].map((n) => ({
+    id: `l${n}`,
+    line_no: n,
+    description: `Item ${n}`,
+    quantity: '1',
+    unit_price: '10.00',
+    line_total: '10.00',
+    line_tax: '0.75',
+  }))
+  const base = { id: ID, status: 'validated' as InvoiceStatus, can_edit: true, can_revalidate: true, line_items: lines, rule_set_version: 3 }
+  const lineRow = (n: number) => screen.getAllByTestId('line-row')[n - 1]
+  const consume = vi.fn()
+  const ctxWithLine = () =>
+    ({ ...detailCtx(ID), importedInvoiceLine: { line: 2, field: 'unit_price' }, consumeImportedInvoiceLine: consume }) as unknown as PlatformCtx
+
+  it('invoiceDetail_mountWithLineTargetOpensEditor', async () => {
+    mockDetailFetch(detailRecord(base))
+    render(<InvoiceDetail ctx={ctxWithLine()} />)
+
+    await screen.findByTestId('edit-invoice')
+    expect(document.activeElement).toBe(lineRow(2).querySelector('[data-line-field="unit_price"]'))
+  })
+
+  it('invoiceDetail_lineTargetIsConsumedFromTheApp', async () => {
+    consume.mockClear()
+    mockDetailFetch(detailRecord(base))
+    render(<InvoiceDetail ctx={ctxWithLine()} />)
+    await screen.findByTestId('edit-invoice')
+    expect(consume).toHaveBeenCalledTimes(1)
+  })
+
+  it('invoiceDetail_mountWithLineTargetNotEditable', async () => {
+    mockDetailFetch(detailRecord({ ...base, can_edit: false }))
+    render(<InvoiceDetail ctx={ctxWithLine()} />)
+
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+  })
+
+  it('invoiceDetail_lineTargetAppliesOnce', async () => {
+    mockDetailFetch(detailRecord(base))
+    render(<InvoiceDetail ctx={ctxWithLine()} />)
+    await screen.findByTestId('edit-invoice')
+    fireEvent.click(screen.getByTestId('edit-cancel'))
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('revalidate'))
+    await waitFor(() => expect((screen.getByTestId('revalidate') as HTMLButtonElement).textContent).not.toMatch(/Revalidating/))
+    await screen.findByTestId('edit-toggle')
+    expect(screen.queryByTestId('edit-invoice')).toBeNull()
+  })
+})

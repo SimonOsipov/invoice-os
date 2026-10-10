@@ -14,6 +14,7 @@ package validation
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -472,5 +473,69 @@ func TestV4_DownRemovesV4(t *testing.T) {
 		if enabled != "O" {
 			t.Errorf("pg_trigger.tgenabled for %s on %s = %q, want %q (re-enabled) [AC-6]", tc.trigger, tc.table, enabled, "O")
 		}
+	}
+}
+
+// TestV4_LineCostNamesTheLine: the sealed v4 rows name the failing line.
+func TestV4_LineCostNamesTheLine(t *testing.T) {
+	_, app := dbTestPools(t)
+	rs := loadRuleSetByVersion(t, app, 4)
+	engine := NewDefaultEngine()
+
+	line := func(price any) map[string]any {
+		l := map[string]any{"quantity": 1.0, "line_total": 1.0}
+		if price != nil {
+			l["unit_price"] = price
+		}
+		return l
+	}
+	eval := func(prices ...any) []Violation {
+		p := validInvoicePayload()
+		inv := p["invoice"].(map[string]any)
+		lines := make([]any, len(prices))
+		for i, pr := range prices {
+			l := line(pr)
+			l["id"] = fmt.Sprint(i + 1)
+			lines[i] = l
+		}
+		inv["line_items"] = lines
+		inv["currency"] = "USD"
+		res, err := engine.Evaluate(p, rs)
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		return res.Violations
+	}
+	pathsOf := func(vs []Violation, key string) []string {
+		out := []string{}
+		for _, v := range vs {
+			if v.RuleKey == key {
+				out = append(out, v.Path)
+			}
+		}
+		return out
+	}
+
+	vs := eval(-5.0, 100.0, -7.0)
+	if got, want := pathsOf(vs, "line-cost-non-negative"), []string{"line_items[1]", "line_items[3]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("line-cost-non-negative paths = %q, want %q", got, want)
+	}
+	if got, want := pathsOf(vs, "currency-allowed"), []string{"currency"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("currency-allowed paths = %q, want %q", got, want)
+	}
+	for _, p := range pathsOf(vs, "line-items-sum-subtotal") {
+		if p != "subtotal" {
+			t.Errorf("line-items-sum-subtotal path = %q, want subtotal", p)
+		}
+	}
+	for _, p := range pathsOf(vs, "no-duplicate-line-items") {
+		if p != "line_items" {
+			t.Errorf("no-duplicate-line-items path = %q, want line_items", p)
+		}
+	}
+
+	vs = eval(10.0, nil, 10.0)
+	if got, want := pathsOf(vs, "line-items-sum-subtotal"), []string{"line_items[2].unit_price"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("line-items-sum-subtotal paths = %q, want %q", got, want)
 	}
 }

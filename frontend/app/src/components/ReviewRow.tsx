@@ -64,7 +64,7 @@ import {
   verdictPill,
   type FixCard,
 } from '../lib/reviewBatch'
-import { severityStyle } from '../lib/validationApi'
+import { severityStyle, type LineTarget } from '../lib/validationApi'
 import type { PlatformCtx } from '../types'
 
 // Decision 19's grid, minus the 40px `Ln` track (ReviewInvoicesTab.tsx's own file-header
@@ -226,6 +226,8 @@ export function Row({
   )
 }
 
+// A `card.line` card adds Open line N, which hands off to invoice detail's editor
+// Open line is disabled when the invoice is not editable or the panel holds an unsaved edit.
 // One fix-editor card (§7.3): severity pill, mono rule key, the server's message
 // VERBATIM, an inline editor scoped to `card.field` (absent when unmappable — AC-2), and
 // the mono expectation from `card.hint` (expected/actual, D9). No card-level Save — the
@@ -236,11 +238,17 @@ function FixCardView({
   value,
   onChange,
   disabled,
+  onOpenLine,
+  lineDisabled,
+  lineTitle,
 }: {
   card: FixCard
   value: string
   onChange: (v: string) => void
   disabled: boolean
+  onOpenLine: (t: LineTarget) => void
+  lineDisabled: boolean
+  lineTitle?: string
 }) {
   const st = severityStyle(card.severity)
   return (
@@ -250,6 +258,24 @@ function FixCardView({
         <span className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)' }}>{card.ruleKey}</span>
       </div>
       <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: '0 0 10px', lineHeight: 1.5 }}>{card.message}</p>
+      {card.line != null && (
+        <button
+          type="button"
+          data-testid="review-fix-open-line"
+          onClick={() => onOpenLine(card.line as LineTarget)}
+          disabled={lineDisabled}
+          title={lineTitle}
+          className="v2-btn v2-btn-ghost pf-btn"
+          style={{
+            height: 34,
+            padding: '0 14px',
+            fontSize: 13,
+            ...(lineDisabled ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
+          }}
+        >
+          Open line {card.line.line}
+        </button>
+      )}
       {card.field != null && (
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>{EDIT_FIELD_LABELS[card.field]}</div>
@@ -449,6 +475,9 @@ function ExpandedFixPanel({
               value={card.field != null ? fieldValue(card.field) : ''}
               onChange={(v) => card.field != null && updateField(card.field, v)}
               disabled={saving}
+              onOpenLine={(t) => ctx.openImportedInvoice(invoiceId, t)}
+              lineDisabled={!inv.can_edit || hasUnsavedEdit}
+              lineTitle={hasUnsavedEdit ? ROW_EXPANSION_COPY.openLineUnsaved : undefined}
             />
           ))}
           {saveError != null && (

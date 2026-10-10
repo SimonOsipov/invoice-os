@@ -120,6 +120,8 @@ func ResetPasswordHandler(authURL, siteURL *url.URL, client *http.Client, sessio
 type passwordLinkFlow struct {
 	verifyType, label, page, done, failed string
 	onConfirmed                           func(ctx context.Context, user gotrueUser)
+	// handOff returns a hand-off code, or "" to fall back to done with no code.
+	handOff func(ctx context.Context, user gotrueUser, password, state string) string
 }
 
 // passwordLinkHandler verifies the link, sets the password with that session, ends every session and clears the sign-in failures.
@@ -205,6 +207,12 @@ func passwordLinkHandler(authURL *url.URL, client *http.Client, sessions *Sessio
 		if flow.onConfirmed != nil {
 			flow.onConfirmed(ctx, confirmed.User)
 		}
-		http.Redirect(w, r, done, http.StatusSeeOther)
+		location := done
+		if flow.handOff != nil && signedOut && len(r.PostForm["state"]) == 1 && stateShape.MatchString(r.PostForm.Get("state")) {
+			if code := flow.handOff(ctx, confirmed.User, password, r.PostForm.Get("state")); code != "" {
+				location += "&handoff=" + code
+			}
+		}
+		http.Redirect(w, r, location, http.StatusSeeOther)
 	})
 }

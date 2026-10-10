@@ -71,6 +71,7 @@ paths:
 - Read the confirm token and the `state` from the POST form body only. The GET page makes no GoTrue call.
 - Answer `GET /auth/verify` with 303 to `<AUTH_SITE_URL>/?confirm=1#token=<token>` for a confirm link, and to `<AUTH_SITE_URL>/?confirm=invite#token=<token>` for `invite=1`, when the request carries no valid `state`. Render a page only for a 43-character base64url `state`.
 - Store the verify session in the hand-off store and redirect with `handoff=<code>` only when the form holds a valid `state` and GoTrue returns both tokens. Otherwise redirect to `?verified=1` with no code.
+- Hand an invitee's session off from `POST /auth/invitation/password` only after the global sign-out, as a password grant with the password just set. Reserve no throttle attempt for it.
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
 - Reserve a sign-in throttle attempt before the GoTrue call.

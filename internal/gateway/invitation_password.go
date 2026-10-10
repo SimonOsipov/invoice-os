@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -37,11 +39,36 @@ func InvitationPasswordHandler(authURL, siteURL *url.URL, client *http.Client, s
 		return RegistrationNotConfigured()
 	}
 	site := strings.TrimSuffix(siteURL.String(), "/")
+	token := authURL.JoinPath("token")
+	token.RawQuery = "grant_type=password"
+	tokenURL := token.String()
 	return passwordLinkHandler(authURL, client, sessions, signIn, log, passwordLinkFlow{
 		verifyType: "signup", label: "invitation-password", page: invitationPageHTML,
 		done: site + "/?verified=1", failed: verifyFailedURL(siteURL),
 		onConfirmed: func(ctx context.Context, user gotrueUser) {
 			handOffRegistrant(ctx, log, "invitation-password", sink, user.contact())
+		},
+		handOff: func(ctx context.Context, user gotrueUser, password, state string) string {
+			var grant struct {
+				AccessToken  string `json:"access_token"`
+				RefreshToken string `json:"refresh_token"`
+			}
+			// No throttle reservation: the password was set one call ago behind a mailbox token.
+			status, gt, err := postGoTrue(new(http.Request).WithContext(ctx), client, tokenURL, map[string]string{"email": user.Email, "password": password}, &grant)
+			if err != nil || status != http.StatusOK || grant.AccessToken == "" || grant.RefreshToken == "" {
+				attrs := []any{slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode)}
+				if err != nil {
+					attrs = []any{slog.String("error", err.Error())}
+				}
+				log.WarnContext(ctx, "invitation-password: sign-in after set failed", attrs...)
+				return ""
+			}
+			answer, _ := json.Marshal(map[string]string{"access_token": grant.AccessToken, "refresh_token": grant.RefreshToken}) // cannot fail
+			code, ok := store.Put(string(answer), sha256.Sum256([]byte(state)))
+			if !ok {
+				log.WarnContext(ctx, "invitation-password: hand-off store full")
+			}
+			return code
 		},
 	})
 }

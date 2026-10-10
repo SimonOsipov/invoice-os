@@ -290,7 +290,7 @@ describe('v2 shell', () => {
     const kill = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'line.qty.range', action: 'disable', busy: false, onClose: noop, onConfirm: noop }))
     const publish = renderToStaticMarkup(createElement(PublishModal, { onClose: noop, onConfirm: noop }))
     const rule = (testRan: boolean) =>
-      renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], testRan, onRunTest: noop, onKill: noop, onClose: noop }))
+      renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], testRan, onRunTest: noop, busy: false, onKill: noop, onClose: noop }))
     const idle = rule(false)
     const ran = rule(true)
     const job = renderToStaticMarkup(
@@ -393,7 +393,7 @@ describe('v2 shell', () => {
       }),
     )
     const rule = (testRan: boolean) =>
-      renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], testRan, onRunTest: noop, onKill: noop, onClose: noop }))
+      renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], testRan, onRunTest: noop, busy: false, onKill: noop, onClose: noop }))
     const audit = (env: Env) =>
       renderToStaticMarkup(createElement(AuditDrawer, { entry: AUDIT_ENTRIES[0], env, onClose: noop, onCopy: noop, onExport: noop }))
     const drawers = {
@@ -525,7 +525,7 @@ describe('v2 shell', () => {
 
   it('RuleDrawer offers Kill-switch only while the rule is enabled', () => {
     const drawer = (enabled: boolean) =>
-      renderToStaticMarkup(createElement(RuleDrawer, { rule: { ...SEED_RULES[0], enabled }, testRan: false, onRunTest: noop, onKill: noop, onClose: noop }))
+      renderToStaticMarkup(createElement(RuleDrawer, { rule: { ...SEED_RULES[0], enabled }, testRan: false, onRunTest: noop, busy: false, onKill: noop, onClose: noop }))
     expect(drawer(true)).toContain('Kill-switch')
     expect(drawer(false)).not.toContain('Kill-switch')
   })

@@ -178,7 +178,7 @@ func TestStaffRulesHandlers_ErrorMapping(t *testing.T) {
 			}
 		})
 	}
-	// No version in force is a 503 on the list and a 404 on the switch (D21).
+	// No version in force is a 503 on the list and a 404 on the switch.
 	list := httptest.NewRecorder()
 	StaffListRulesHandler(func(context.Context) (InForceRules, error) { return InForceRules{}, ErrNoActiveRuleSet }, nil).
 		ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/v1/staff/rules", nil))

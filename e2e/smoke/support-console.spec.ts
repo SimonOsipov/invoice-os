@@ -14,11 +14,6 @@ import { seedStaffSession, test } from '../staffSession'
 // are read from the rendered UI rather than hardcoded. The rules contract lives in
 // api/contract-validation.spec.ts and the switch journey in topology/support-console.spec.ts.
 //
-// WHY A BROWSER IS THE ONLY HARNESS. Every frontend vitest project runs in `node` with no
-// DOM (frontend/support-console/vitest.config.ts:5), so there is no component-test layer in
-// which a click, a filter or a detail pane could be exercised at all. Same rationale and
-// same suite as smoke/landing-nav.spec.ts and smoke.spec.ts.
-//
 // PARALLEL-SAFE. Each test seeds its own gateway session for the worker's one staff account,
 // and none signs it out, so smoke's `fullyParallel: true` needs no carve-out here. Every
 // mutation below lives in React state inside one page.

@@ -3,7 +3,7 @@ import { loadConsoleSession } from '@invoice-os/console-session'
 import { SESSION_KEY } from './auth'
 import type { Rule, Severity } from './types'
 
-// Wire shapes: ENGI-13 story Design § API contracts.
+// Wire shapes: internal/validation/staff_rules.go.
 interface WireRule {
   key: string
   type: string
@@ -37,7 +37,7 @@ export const toRule = (w: WireRule): Rule => ({
   message: w.message,
 })
 
-// The server trims, then counts runes (D22); Array.from counts code points.
+// The server trims, then counts runes; Array.from counts code points.
 export const reasonValid = (reason: string): boolean => {
   const n = Array.from(reason.trim()).length
   return n >= 1 && n <= REASON_MAX

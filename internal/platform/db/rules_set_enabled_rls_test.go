@@ -156,7 +156,6 @@ func requireRulesUnchanged(t *testing.T, want map[string]bool, what string) {
 	}
 }
 
-// AC1.
 func TestRLS_SetRuleEnabledFlipsTheRuleInForce(t *testing.T) {
 	requireHarness(t)
 	restoreRulesEnabledOnCleanup(t)
@@ -182,7 +181,7 @@ func TestRLS_SetRuleEnabledFlipsTheRuleInForce(t *testing.T) {
 	}
 }
 
-// AC3: a temp rule_set_versions made by invoice_app cannot redirect the flip.
+// a temp rule_set_versions made by invoice_app cannot redirect the flip.
 func TestRLS_SetRuleEnabledIgnoresATempTableShadow(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -242,7 +241,7 @@ func TestRLS_SetRuleEnabledIgnoresATempTableShadow(t *testing.T) {
 	}
 }
 
-// AC5: after a successful call, invoice_app still has no UPDATE on rules.
+// after a successful call, invoice_app still has no UPDATE on rules.
 func TestRLS_SetRuleEnabledLeavesTheAppWithoutUpdate(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -269,7 +268,6 @@ func TestRLS_SetRuleEnabledLeavesTheAppWithoutUpdate(t *testing.T) {
 	}
 }
 
-// AC6.
 func TestRLS_SetRuleEnabledRefusesAnActorWithoutTheRulesRole(t *testing.T) {
 	requireHarness(t)
 	snap := restoreRulesEnabledOnCleanup(t)
@@ -294,7 +292,7 @@ func TestRLS_SetRuleEnabledRefusesAnActorWithoutTheRulesRole(t *testing.T) {
 	}
 }
 
-// AC6: the role is read on every call, so a revoke between two calls of one tx refuses the second.
+// the role is read on every call, so a revoke between two calls of one tx refuses the second.
 func TestRLS_SetRuleEnabledRefusesAnActorRevokedMidSession(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -322,7 +320,6 @@ func TestRLS_SetRuleEnabledRefusesAnActorRevokedMidSession(t *testing.T) {
 	}
 }
 
-// AC6.
 func TestRLS_SetRuleEnabledExecuteGrants(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -359,7 +356,6 @@ func TestRLS_SetRuleEnabledExecuteGrants(t *testing.T) {
 	}
 }
 
-// AC7.
 func TestRLS_SetRuleEnabledUnknownKeyAndNoOp(t *testing.T) {
 	requireHarness(t)
 	snap := restoreRulesEnabledOnCleanup(t)
@@ -415,7 +411,7 @@ func TestRLS_SetRuleEnabledUnknownKeyAndNoOp(t *testing.T) {
 	}
 }
 
-// AC7: a body that finds no version in force makes the function return nothing.
+// a body that finds no version in force makes the function return nothing.
 func TestRLS_SetRuleEnabledNoVersionInForceReturnsZeroRows(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -449,7 +445,7 @@ func TestRLS_SetRuleEnabledNoVersionInForceReturnsZeroRows(t *testing.T) {
 	}
 }
 
-// AC7: a second flip waits on the first one's row lock and then sees the new state.
+// a second flip waits on the first one's row lock and then sees the new state.
 func TestRLS_SetRuleEnabledSerialisesConcurrentFlips(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -508,7 +504,6 @@ func TestRLS_SetRuleEnabledSerialisesConcurrentFlips(t *testing.T) {
 	}
 }
 
-// AC8.
 func TestRLS_SetRuleEnabledDownAndUp(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()

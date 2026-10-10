@@ -37,7 +37,7 @@ func switchRuleViaFunction(t *testing.T, app *pgxpool.Pool, actor, key string, e
 	return was
 }
 
-// AC2: a fresh load sees the switch, with no redeploy.
+// a fresh load sees the switch, with no redeploy.
 func TestStaffRulesFunction_NextLoadSeesTheSwitch(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
@@ -83,7 +83,7 @@ func TestStaffRulesFunction_NextLoadSeesTheSwitch(t *testing.T) {
 	}
 }
 
-// AC3: only the version in force changes.
+// only the version in force changes.
 func TestStaffRulesFunction_LeavesAScheduledAndASupersededVersionAlone(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
@@ -116,7 +116,7 @@ func TestStaffRulesFunction_LeavesAScheduledAndASupersededVersionAlone(t *testin
 	}
 }
 
-// AC4: the flip passes the content lock on a sealed version and touches no other column.
+// the flip passes the content lock on a sealed version and touches no other column.
 func TestStaffRulesFunction_FlipsASealedVersionAndTouchesNoContent(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
@@ -157,7 +157,7 @@ func TestStaffRulesFunction_FlipsASealedVersionAndTouchesNoContent(t *testing.T)
 	}
 }
 
-// AC3/AC7: a key that exists only in a scheduled version is unknown to the function.
+// a key that exists only in a scheduled version is unknown to the function.
 func TestStaffRulesFunction_KeyOnlyInAScheduledVersionReturnsZeroRows(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)

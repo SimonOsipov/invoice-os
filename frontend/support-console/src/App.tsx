@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { Submissions } from './components/Submissions'
@@ -16,7 +16,7 @@ import { AUDIT_ENTRIES, SEED_JOBS } from './data'
 import { gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { fetchRulesInForce, switchRule, type RulesInForce } from './rulesApi'
 import { StaffGate } from '@invoice-os/console-session'
-import { SESSION_KEY, landingBase } from './auth'
+import { SESSION_KEY, landingBase, signOut } from './auth'
 import type { AuditFilter, DrawerState, Env, JobFilter, Screen, SubTab, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.asc-app` — that scope defines the design-system tokens
@@ -58,7 +58,7 @@ function Console() {
     toastTimer.current = setTimeout(() => setToast(null), 3400)
   }, [])
 
-  // Read when the Rules screen opens, never on console mount (D25).
+  // Read when the Rules screen opens, never on console mount.
   const rulesRead = useAsync(fetchRulesInForce, { immediate: screen === 'rules', deps: [screen === 'rules'] })
   const lastList = useRef<RulesInForce | null>(null)
   if (rulesRead.data) lastList.current = rulesRead.data
@@ -66,6 +66,11 @@ function Console() {
   const rules = list?.rules ?? []
   const rulesStatus = rulesRead.status === 'error' ? (rulesRead.error?.status === 403 ? 'forbidden' : 'error') : list ? 'ready' : 'loading'
   const rulesBusy = switching || rulesRead.status === 'loading'
+  const switchInFlight = useRef(false)
+  const expired = rulesRead.status === 'error' && rulesRead.error?.status === 401
+  useEffect(() => {
+    if (expired) void signOut()
+  }, [expired])
 
   const dlCount = jobs.filter((j) => j.state === 'dead-letter').length
 
@@ -104,8 +109,9 @@ function Console() {
     if (rule && !rulesBusy) setConfirmKill({ key, action: rule.enabled ? 'disable' : 'enable' })
   }
   const doSwitch = async (reason: string) => {
-    if (!confirmKill || rulesBusy) return
+    if (!confirmKill || rulesBusy || switchInFlight.current) return
     const { key, action } = confirmKill
+    switchInFlight.current = true
     setSwitching(true)
     try {
       await switchRule(key, action === 'enable', reason)
@@ -115,12 +121,17 @@ function Console() {
       rulesRead.run()
     } catch (e) {
       const err = toApiError(e)
+      if (err.status === 401) {
+        void signOut()
+        return
+      }
       showToast(err.message, '', 'red')
       if (err.status === 404 || err.status === 409) {
         setConfirmKill(null)
         rulesRead.run()
       }
     } finally {
+      switchInFlight.current = false
       setSwitching(false)
     }
   }
@@ -220,6 +231,7 @@ function Console() {
           rule={drawerRule}
           testRan={testRan}
           onRunTest={() => setTestRan(true)}
+          busy={rulesBusy}
           onKill={() => setConfirmKill({ key: drawerRule.key, action: 'disable' })}
           onClose={() => setDrawer(null)}
         />

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import { KillConfirm } from './components/KillConfirm'
+import { signOutConsole } from '@invoice-os/console-session'
 import { fetchRulesInForce, switchRule } from './rulesApi'
 import type { Rule } from './types'
 
@@ -166,6 +167,60 @@ describe('Console rules wiring', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
     expect(await screen.findByText('Your account has no rules role.')).toBeTruthy()
     expect(screen.queryAllByRole('switch')).toHaveLength(0)
+  })
+
+  it('a 401 on the list signs the console out; a 403 does not', async () => {
+    read.mockRejectedValue(new ApiError('http', 'expired', 403))
+    const { unmount } = render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await screen.findByText('Your account has no rules role.')
+    expect(signOutConsole).not.toHaveBeenCalled()
+    unmount()
+    read.mockRejectedValue(new ApiError('http', 'expired', 401))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await waitFor(() => expect(signOutConsole).toHaveBeenCalledTimes(1))
+  })
+
+  it('a 401 on the switch signs the console out without a red toast', async () => {
+    sw.mockRejectedValue(new ApiError('http', 'expired', 401))
+    render(<App />)
+    await openRules()
+    fireEvent.click(screen.getByRole('switch', { name: 'Disable real.on' }))
+    reason('r')
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Disable rule' }))
+    await waitFor(() => expect(signOutConsole).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('two synchronous confirm clicks send one PATCH', async () => {
+    sw.mockReturnValue(new Promise(() => undefined))
+    render(<App />)
+    await openRules()
+    fireEvent.click(screen.getByRole('switch', { name: 'Disable real.on' }))
+    reason('r')
+    const btn = within(dialog()).getByRole('button', { name: 'Disable rule' })
+    act(() => {
+      btn.click()
+      btn.click()
+    })
+    expect(sw).toHaveBeenCalledTimes(1)
+  })
+
+  it('the drawer Kill-switch is disabled while a switch is pending', async () => {
+    sw.mockReturnValue(new Promise(() => undefined))
+    render(<App />)
+    await openRules()
+    fireEvent.click(screen.getByText('real.on'))
+    const kill = (await screen.findByRole('button', { name: /Kill-switch/ })) as HTMLButtonElement
+    expect(kill.disabled).toBe(false)
+    fireEvent.click(screen.getByRole('switch', { name: 'Disable real.on' }))
+    reason('r')
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Disable rule' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: /Kill-switch/ }) as HTMLButtonElement).disabled).toBe(true))
+    const style = screen.getByRole('button', { name: /Kill-switch/ }).getAttribute('style') ?? ''
+    expect(style).toContain('opacity: 0.45')
+    expect(style).toContain('not-allowed')
   })
 
   it('the drawer Kill-switch button opens the disable confirm', async () => {

@@ -819,11 +819,15 @@ test('SUP-04 rule and audit drawers', async ({ page }, testInfo) => {
 test('SUP-04 kill confirm', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
+  const account = await staffAccount()
+  const api = (await signInSession(account.email, account.password)).access_token
+  if (!(await probeEnabled(api))) await rawFetch(`${STAFF_RULES}/${PROBE_RULE}`, { method: 'PATCH', headers: { Authorization: `Bearer ${api}` }, body: { enabled: true, reason: 'e2e restore' } })
 
   await openScreen(page, 'Rules', 'Rules admin')
-  const firstSwitch = mainOf(page).locator('[role="switch"]').first()
-  await expect(firstSwitch).toBeVisible()
-  await firstSwitch.click()
+  const probeSwitch = mainOf(page).locator('.ops-row').filter({ hasText: PROBE_RULE }).getByRole('switch')
+  await expect(probeSwitch).toBeVisible()
+  await expect(probeSwitch).toHaveAttribute('aria-checked', 'true')
+  await probeSwitch.click()
   const dialog = page.getByRole('dialog').filter({ hasText: 'Disable a live rule?' })
   await expectPanel(page, dialog, 'kill confirm')
   await expectStyles(dialog.locator('h3').locator('xpath=preceding-sibling::span[1]'), 'kill icon tile', { radius: '6px' })

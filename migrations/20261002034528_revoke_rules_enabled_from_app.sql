@@ -1,4 +1,4 @@
--- Golden rules are staff-managed; the kill switch runs as the owner (docs/rule-kill-switch.md).
+-- Golden rules are staff-managed.
 
 -- +goose Up
 REVOKE UPDATE (enabled) ON rules FROM invoice_app;

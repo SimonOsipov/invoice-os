@@ -224,7 +224,7 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
       redirect: 'manual',
     })
 
-  test("invitation accept: the invitee's set-password link answers the page", async () => {
+  test('invitation accept: a stated open answers the set-password page', async () => {
     const res = await fetch(passwordPageUrl(`bogus-${crypto.randomUUID()}`), { redirect: 'manual' })
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
@@ -233,9 +233,10 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     for (const part of ['action="/auth/invitation/password"', 'name="password"', 'minlength="6"', 'maxlength="72"']) {
       expect(html, part).toContain(part)
     }
+    expect(html, 'the hidden state field').toMatch(new RegExp(`<input[^>]*name="state"[^>]*value="${INVITE_STATE}"|<input[^>]*value="${INVITE_STATE}"[^>]*name="state"`))
   })
 
-  test('invitation accept: a set-password link without a state bounces 303 to the landing invite confirm', async () => {
+  test("invitation accept: the invitee's set-password link bounces to landing for a state", async () => {
     const token = `bogus-${crypto.randomUUID()}`
     const res = await fetch(passwordPageUrl(token, ''), { redirect: 'manual' })
     expect(res.status).toBe(303)

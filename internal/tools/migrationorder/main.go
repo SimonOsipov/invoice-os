@@ -11,6 +11,7 @@ import (
 func main() {
 	base := flag.String("base", "", "base branch commit the change will land on")
 	head := flag.String("head", "HEAD", "commit holding the change")
+	mainRef := flag.String("main", "origin/main", "ref whose migrations count as already applied")
 	flag.Parse()
 
 	if *base == "" {
@@ -36,7 +37,13 @@ func main() {
 		os.Exit(2)
 	}
 
-	violations, err := Check(lines(added), lines(onBase))
+	onMain, err := git("ls-tree", "--name-only", *mainRef, "--", Dir+"/")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migrationorder: git ls-tree %s: %v\n", *mainRef, err)
+		os.Exit(2)
+	}
+
+	violations, err := Check(SkipOnMain(lines(added), lines(onMain)), lines(onBase))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
 		os.Exit(2)

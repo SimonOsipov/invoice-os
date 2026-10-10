@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -115,5 +117,41 @@ func TestVersion_ParsesEveryRealMigration(t *testing.T) {
 	}
 	if parsed < 50 {
 		t.Fatalf("parsed %d migrations in %s, want at least 50", parsed, Dir)
+	}
+}
+
+// A migration main already holds is skipped even when it sorts before base's newest;
+// a branch-new one at the same position still violates.
+func TestSkipOnMain_SkipsMainFilesButKeepsBranchNewOnes(t *testing.T) {
+	onMain := []string{"migrations/20260806131239_rule_set_v4.sql", "migrations/embed.go"}
+	added := []string{
+		"migrations/20260806131239_rule_set_v4.sql",
+		"migrations/20260806140000_branch_new.sql",
+	}
+	got := mustCheck(t, SkipOnMain(added, onMain), mainAtPR143)
+	if len(got) != 1 || got[0].File != "migrations/20260806140000_branch_new.sql" {
+		t.Fatalf("want only the branch-new file to violate, got %+v", got)
+	}
+}
+
+func TestSkipOnMain_EmptyMainSkipsNothing(t *testing.T) {
+	added := []string{"migrations/20260806131239_rule_set_v4.sql"}
+	if got := SkipOnMain(added, nil); len(got) != 1 {
+		t.Fatalf("want nothing skipped, got %v", got)
+	}
+}
+
+func TestMain_UnreadableMainRefExitsTwo(t *testing.T) {
+	if os.Getenv("MIGRATIONORDER_RUN_MAIN") == "1" {
+		os.Args = []string{"migrationorder", "-base", "HEAD", "-main", "refs/nope/missing"}
+		main()
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMain_UnreadableMainRefExitsTwo$")
+	cmd.Env = append(os.Environ(), "MIGRATIONORDER_RUN_MAIN=1")
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 2 {
+		t.Fatalf("want exit 2, got %v", err)
 	}
 }

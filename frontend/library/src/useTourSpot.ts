@@ -42,6 +42,18 @@ export function useTourSpot(tour: TourState | null, routeKey: string): { rect: R
     measure(true)
   }, [measure, routeKey])
 
+  // Manrope swaps in after first paint and resizes the target.
+  useEffect(() => {
+    if (i === undefined || !document.fonts?.ready) return
+    let live = true
+    void document.fonts.ready.then(() => {
+      if (live) measure(false)
+    })
+    return () => {
+      live = false
+    }
+  }, [i, measure])
+
   useEffect(() => {
     if (i === undefined) return
     const onResize = () => measure(true)

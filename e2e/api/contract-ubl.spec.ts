@@ -203,6 +203,38 @@ test.describe('invoice UBL contract (API E2E, over the deployed gateway)', () =>
     }
   })
 
+  test('ubl contract: the document carries the NRS address, tax subtotal and unit code', async () => {
+    const entity = await createEntity(tokenA, { name: `Zz ENGI-02 ubl ${freshTin()}`, tin: freshTin() })
+    // vat = sum of line_tax of the categorised lines, or the gate answers 409 (D25).
+    const created = await createInvoice(tokenA, {
+      entity_id: entity.id,
+      ...cleanInvoiceFields(`INV-ENGI02-UBL-${freshTin()}`),
+      buyer_street: '2 Buyer Road',
+      buyer_city: 'Abuja',
+      buyer_country: 'NG',
+      buyer_state: 'NG-FC',
+      line_items: [
+        {
+          description: 'Widget',
+          quantity: '10',
+          unit_price: '100',
+          line_total: '1000',
+          line_tax: '75',
+          tax_category: 'STANDARD_VAT',
+          tax_percent: '7.50',
+          price_unit: 'KGM',
+        },
+      ],
+    })
+
+    const res = await ublFetch(tokenA, created.id)
+    expect(res.status, 'categories agree with vat, so the gate is open').toBe(200)
+    expect(res.text, 'the buyer address').toContain('<cac:PostalAddress>')
+    const subtotal = section(res.text, 'cac:TaxSubtotal')
+    expect(subtotal, 'the NRS category code inside the subtotal').toContain('<cbc:ID>STANDARD_VAT</cbc:ID>')
+    expect(res.text, 'the unit code').toContain('unitCode="KGM"')
+  })
+
   test('ubl contract: an incomplete invoice is refused with the SAME sentence the payload carries', async () => {
     const entity = await createEntity(tokenA, { name: `BUG-04 ubl gap ${freshTin()}`, tin: freshTin() })
     const invoiceNumber = `INV-BUG04-GAP-${freshTin()}`

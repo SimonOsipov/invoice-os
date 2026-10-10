@@ -1836,4 +1836,137 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       }
     })
   })
+
+  test.describe('nrs fields', () => {
+    // Values are in stored form (dates RFC3339 midnight, numerics at column scale) so GET equals the input.
+    const NRS_HEADER = {
+      invoice_kind: '380',
+      tax_currency_code: 'NGN',
+      due_date: '2026-02-01T00:00:00Z',
+      issue_time: '09:30:15',
+      tax_point_date: '2026-01-02T00:00:00Z',
+      payment_status: 'PENDING',
+      supplier_email: 'supplier@example.test',
+      supplier_telephone: '+2348000000001',
+      supplier_street: '1 Supplier Road',
+      supplier_city: 'Lagos',
+      supplier_postal_zone: '100001',
+      supplier_country: 'NG',
+      supplier_state: 'NG-LA',
+      supplier_lga: 'Ikeja',
+      buyer_email: 'buyer@example.test',
+      buyer_telephone: '+2348000000002',
+      buyer_street: '2 Buyer Road',
+      buyer_city: 'Abuja',
+      buyer_postal_zone: '900001',
+      buyer_country: 'NG',
+      buyer_state: 'NG-FC',
+      buyer_lga: 'Garki',
+    }
+    const NRS_LINE = {
+      tax_category: 'STANDARD_VAT',
+      hsn_code: '8471.30',
+      isic_code: '4651',
+      product_category: 'Electronics',
+      service_category: 'Retail',
+      sellers_item_identification: 'SKU-1',
+      price_unit: 'KGM',
+      tax_percent: '7.50',
+      base_quantity: '10.000',
+    }
+
+    test('nrs fields: create and read round-trip every field', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-NRS-${freshTin()}`),
+        ...NRS_HEADER,
+        line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000', line_tax: '75', ...NRS_LINE }],
+      })
+      const got = await getInvoice(token, created.id)
+      expect(got, 'GET returns every header and party field as sent').toMatchObject(NRS_HEADER)
+      expect(got.line_items, 'one line').toHaveLength(1)
+      expect(got.line_items![0], 'GET returns every line field as sent').toMatchObject(NRS_LINE)
+    })
+
+    test('nrs fields: a patch of header, party and line fields is read back', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-NRS-${freshTin()}`),
+        ...NRS_HEADER,
+        line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000', line_tax: '75', ...NRS_LINE }],
+      })
+      const lineId = (await getInvoice(token, created.id)).line_items![0].id
+
+      await editInvoice(token, created.id, {
+        payment_status: 'PAID',
+        buyer_lga: 'Wuse',
+        line_items: [{ id: lineId, description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000', line_tax: '75', price_unit: 'LTR' }],
+      })
+      const got = await getInvoice(token, created.id)
+      expect(got.payment_status, 'header field').toBe('PAID')
+      expect(got.buyer_lga, 'party field').toBe('Wuse')
+      expect(got.buyer_city, 'an untouched new key stays').toBe(NRS_HEADER.buyer_city)
+      expect(got.line_items![0].price_unit, 'line field').toBe('LTR')
+    })
+
+    test('nrs fields: tax_subtotals are the per-category sums', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-NRS-${freshTin()}`),
+        line_items: [
+          { description: 'A', quantity: '1', unit_price: '1000', line_total: '1000', line_tax: '75', tax_category: 'STANDARD_VAT', tax_percent: '7.50' },
+          { description: 'B', quantity: '1', unit_price: '500', line_total: '500', line_tax: '37.5', tax_category: 'STANDARD_VAT', tax_percent: '7.50' },
+          { description: 'C', quantity: '1', unit_price: '200', line_total: '200', line_tax: '0', tax_category: 'ZERO_VAT', tax_percent: '0.00' },
+        ],
+      })
+      const got = await getInvoice(token, created.id)
+      expect(got.tax_subtotals, 'one entry per category, in first-line order').toEqual([
+        { tax_category: 'STANDARD_VAT', tax_percent: '7.50', taxable_amount: '1500.00', tax_amount: '112.50' },
+        { tax_category: 'ZERO_VAT', tax_percent: '0.00', taxable_amount: '200.00', tax_amount: '0.00' },
+      ])
+    })
+
+    test('nrs fields: a line edited by id keeps its NRS fields', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-NRS-${freshTin()}`),
+        line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000', ...NRS_LINE }],
+      })
+      const line = (await getInvoice(token, created.id)).line_items![0]
+
+      await editInvoice(token, created.id, {
+        line_items: [{ id: line.id, description: 'Widget', quantity: '20', unit_price: '100', line_total: '2000' }],
+      })
+      const after = (await getInvoice(token, created.id)).line_items![0]
+      expect(Number(after.quantity), 'the content change was written').toBe(20)
+      expect(after.tax_category, 'tax_category carried by id').toBe('STANDARD_VAT')
+      expect(after.price_unit, 'price_unit carried by id').toBe('KGM')
+    })
+
+    test('nrs fields: a line id from another invoice is a 400', async () => {
+      const a = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-NRS-${freshTin()}`) })
+      const b = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-NRS-${freshTin()}`) })
+      const foreignId = (await getInvoice(token, b.id)).line_items![0].id
+      const before = await getInvoice(token, a.id)
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${a.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { line_items: [{ id: foreignId, description: 'Stolen', quantity: '1', unit_price: '1', line_total: '1' }] },
+      })
+      assertErrorEnvelope(res, 400, 'a foreign line id')
+      expect((res.body as { error: string }).error).toBe('line_items id must name a line of this invoice')
+      expect((await getInvoice(token, a.id)).line_items, 'invoice A is unchanged').toEqual(before.line_items)
+    })
+
+    test('nrs fields: a malformed issue_time is a 400', async () => {
+      const res = await rawFetch('/api/invoice/v1/invoices', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { entity_id: entity.id, invoice_number: `INV-NRS-${freshTin()}`, issue_time: '25:61' },
+      })
+      assertErrorEnvelope(res, 400, 'a malformed issue_time')
+      expect((res.body as { error: string }).error).toBe('issue_time must be HH:MM:SS')
+    })
+  })
 })

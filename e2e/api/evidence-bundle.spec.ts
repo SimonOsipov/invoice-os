@@ -102,6 +102,7 @@ interface BundlePeriod {
 }
 interface BundleCounts {
   invoices: number
+  line_items: number
   status_transitions: number
   submissions: number
   exchange_attempts: number
@@ -228,14 +229,19 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
     const entity = await createEntity(token, { name: `Zz AUDIT-05 ${freshTin()}`, tin: freshTin() })
     entityId = entity.id
     invoiceNumber = `INV-AUDIT-05-${freshTin()}`
-    await createInvoice(token, { entity_id: entityId, invoice_number: invoiceNumber })
+    await createInvoice(token, {
+      entity_id: entityId,
+      invoice_number: invoiceNumber,
+      buyer_state: 'NG-LA',
+      line_items: [{ description: 'Widget', quantity: '1', unit_price: '100', line_total: '100', tax_category: 'STANDARD_VAT', price_unit: 'KGM' }],
+    })
   })
 
-  test('download: zip, opens, carries the four CSVs + manifest; invoices.csv contains this invoice; the never-submitted invoice leaves submissions/exchange header-only', async () => {
+  test('download: zip, opens, carries the five CSVs + manifest; invoices.csv contains this invoice; the never-submitted invoice leaves submissions/exchange header-only', async () => {
     const { zip, manifest, filename } = await fetchBundle(token, entityId, period)
 
     const names = Object.keys(zip)
-    for (const want of ['invoices.csv', 'status_history.csv', 'submissions.csv', 'exchange.csv', 'manifest.json']) {
+    for (const want of ['invoices.csv', 'line_items.csv', 'status_history.csv', 'submissions.csv', 'exchange.csv', 'manifest.json']) {
       expect(names, `zip entries: ${names.join(', ')}`).toContain(want)
     }
 
@@ -244,6 +250,23 @@ test.describe('evidence bundle (API E2E, over the deployed gateway)', () => {
     expect(invoicesCsv, 'invoices.csv must contain the invoice number this spec created (containment, not count)').toContain(
       invoiceNumber,
     )
+
+    const invoiceRows = parseCsv(invoicesCsv)
+    expect(Object.keys(invoiceRows[0]).slice(-22), 'invoices.csv header ends with the 22 NRS columns').toEqual([
+      'invoice_kind', 'tax_currency_code', 'payment_status', 'due_date', 'tax_point_date', 'issue_time',
+      'supplier_email', 'supplier_telephone', 'supplier_street', 'supplier_city',
+      'supplier_postal_zone', 'supplier_country', 'supplier_state', 'supplier_lga',
+      'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city',
+      'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+    ])
+    expect(invoiceRows.find((r) => r.invoice_number === invoiceNumber)?.buyer_state, 'the invoice row carries buyer_state').toBe('NG-LA')
+
+    const lineRows = parseCsv(decoder.decode(zip['line_items.csv']))
+    expect(lineRows, 'line_items.csv holds the invoice\'s one line').toHaveLength(1)
+    expect(lineRows[0].invoice_number, 'line row invoice_number').toBe(invoiceNumber)
+    expect(lineRows[0].tax_category, 'line row tax_category').toBe('STANDARD_VAT')
+    expect(lineRows[0].price_unit, 'line row price_unit').toBe('KGM')
+    expect(manifest.counts.line_items, 'manifest line_items count').toBe(1)
 
     // This entity and invoice are exclusive to this spec run -- history.go/submissions.go/
     // exchange.go all scope on `invoice_id = ANY($1)` over exactly the ids this entity+period

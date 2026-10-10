@@ -81,7 +81,7 @@ func evaluationOf(t *testing.T, app *pgxpool.Pool, who goldenTenant) tenantEvalu
 	return tenantEvaluation{identity: evalKeys(t, rsID), global: evalKeys(t, rsGlobal)}
 }
 
-// activeRuleID reads the active version's rules.id for key.
+// activeRuleID reads the rules.id of key in the version in force today.
 func activeRuleID(t *testing.T, super *pgxpool.Pool, key string) string {
 	t.Helper()
 	var id string

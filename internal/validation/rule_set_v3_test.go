@@ -298,7 +298,7 @@ func TestRuleSetV3_DownRemovesV3(t *testing.T) {
 		t.Fatalf("v3 sealed=%t before running the simulated Down, want true [AC-3 precondition]", v3Sealed)
 	}
 
-	// db/seed.dev.sql seeds demo invoices that STAMP the active version via
+	// db/seed.dev.sql seeds demo invoices that STAMP a rule-set version via
 	// rule_set_version_id, whose FK carries no ON DELETE clause (NO ACTION) --
 	// [v2-down-is-dev-irreversible], carried over for v3. Clearing them restores the
 	// premise this simulated Down needs; harmless, since the enclosing tx is always

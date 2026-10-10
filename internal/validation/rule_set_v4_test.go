@@ -413,7 +413,7 @@ func TestV4_DownRemovesV4(t *testing.T) {
 		t.Fatalf("v4 effective_from = %s before the simulated Down, want 2026-08-06 [AC-6 precondition]", *v4From)
 	}
 
-	// db/seed.dev.sql seeds demo invoices that stamp the active version via
+	// db/seed.dev.sql seeds demo invoices that stamp a rule-set version via
 	// rule_set_version_id, whose FK carries no ON DELETE clause -- clear them so the
 	// Down's DELETE below doesn't 23503 (harmless: this tx is always rolled back).
 	// Delete order as in TestRuleSetV2_DownRestoresV1: approval_runs -> app_exchange ->

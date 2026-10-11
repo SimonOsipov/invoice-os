@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -464,7 +465,7 @@ func TestMergeAI_LineRowsAndOrderAreUntouched(t *testing.T) {
 	}
 	engine := Reconcile(Input{Lines: lines})
 	if len(engine) != len(HeaderFields)+3 {
-		t.Fatalf("Reconcile emitted %d rows, want %d (10 header + line_items + 2 line totals)", len(engine), len(HeaderFields)+3)
+		t.Fatalf("Reconcile emitted %d rows, want %d (every header field + line_items + 2 line totals)", len(engine), len(HeaderFields)+3)
 	}
 	wantTail := cloneResults(engine[len(HeaderFields):])
 
@@ -837,5 +838,128 @@ func TestMergeAI_ADueDateEchoingTheIssueDateIsRefused(t *testing.T) {
 	mgUnreadable(t, mgRow(t, got, "due_date"), "2026-07-14")
 	if !reflect.DeepEqual(mgRow(t, got, "issue_date"), issueBefore) {
 		t.Errorf("issue_date = %+v, want unchanged %+v", mgRow(t, got, "issue_date"), issueBefore)
+	}
+}
+
+// --- ENGI-08-02 QA: adversarial cover for the nine AI-only fields ------------------------
+
+var mgNewFieldPrints = []struct{ field, value, text string }{
+	{"due_date", "2026-08-13", "Due Date: 2026-08-13"},
+	{"buyer_email", "ap@honeywell.example", "Email: ap@honeywell.example"},
+	{"buyer_telephone", "+234 801 234 5678", "Tel: +234 801 234 5678"},
+	{"buyer_street", "12 Marina Road", "Address: 12 Marina Road"},
+	{"buyer_city", "Lagos", "City: Lagos"},
+	{"buyer_postal_zone", "101233", "Postal Code: 101233"},
+	{"buyer_country", "Nigeria", "Country: Nigeria"},
+	{"buyer_state", "Lagos State", "State: Lagos State"},
+	{"buyer_lga", "Eti-Osa", "LGA: Eti-Osa"},
+}
+
+func TestMergeAI_EveryNewHeaderFieldFillsWhenPrinted(t *testing.T) {
+	if len(mgNewFieldPrints) != 9 {
+		t.Fatalf("table holds %d fields, want the 9 AI-only fields", len(mgNewFieldPrints))
+	}
+	for _, c := range mgNewFieldPrints {
+		pages := onePage(1, tok(c.text, 1, 0.10, 0.30, 0.50, 0.32))
+		got := mergeWith([]FieldResult{mgMissing(c.field)}, map[string]any{c.field: c.value}, pages, nil)
+		if got[0].Value == nil || *got[0].Value != c.value || got[0].Reason != ReasonNone || got[0].Region == nil {
+			t.Errorf("%s = %+v, want %q / none with the token's region", c.field, got[0], c.value)
+		}
+	}
+}
+
+func TestMergeAI_NewHeaderFieldsAbsentOrBlankStayMissingNeverGuessed(t *testing.T) {
+	var tokens []Token
+	var rows []FieldResult
+	for _, c := range mgNewFieldPrints {
+		tokens = append(tokens, tok(c.text, 1, 0.10, 0.30, 0.50, 0.32))
+		rows = append(rows, mgMissing(c.field))
+	}
+	if len(rows) != 9 {
+		t.Fatalf("rows = %d, want 9", len(rows))
+	}
+	blank := map[string]any{}
+	for _, c := range mgNewFieldPrints {
+		blank[c.field] = "  "
+	}
+	for name, ans := range map[string]map[string]any{"absent": {}, "blank": blank, "null": {"buyer_city": nil}} {
+		got := mergeWith(cloneResults(rows), ans, onePage(1, tokens...), nil)
+		for _, r := range got {
+			if r.Value != nil || r.Reason != ReasonMissing || len(r.Alternatives) != 0 {
+				t.Errorf("%s answer: %s = %+v, want nil / missing with no alternative although the page prints it", name, r.Name, r)
+			}
+		}
+	}
+}
+
+func TestMergeAI_AMalformedPhoneIsNotARead(t *testing.T) {
+	for _, bad := range []string{"call us", "12", "+234 801 234 5678 ext 9x"} {
+		pages := onePage(1, tok("Tel: "+bad, 1, 0.10, 0.30, 0.50, 0.32))
+		got := mergeWith([]FieldResult{mgMissing("buyer_telephone")}, map[string]any{"buyer_telephone": bad}, pages, nil)
+		mgUnreadable(t, got[0], bad)
+	}
+}
+
+func TestMergeAI_ADueDateAnswerNeverFillsAMissingIssueDate(t *testing.T) {
+	pages := onePage(1, tok("Due Date: 2026-08-13", 1, 0.10, 0.20, 0.50, 0.22))
+	engine := []FieldResult{mgMissing("issue_date"), mgMissing("due_date")}
+
+	got := mergeWith(engine, map[string]any{"due_date": "2026-08-13"}, pages, nil)
+
+	if r := mgRow(t, got, "due_date"); r.Value == nil || *r.Value != "2026-08-13" {
+		t.Errorf("due_date = %+v, want 2026-08-13", r)
+	}
+	if r := mgRow(t, got, "issue_date"); r.Value != nil || r.Reason != ReasonMissing || len(r.Alternatives) != 0 {
+		t.Errorf("issue_date = %+v, want nil / missing: a due date never fills it", r)
+	}
+}
+
+func TestCheckAI_ADueDateLabelOnThePreviousTokenCounts(t *testing.T) {
+	label := onePage(1, tok("Due Date", 1, 0.10, 0.20, 0.25, 0.22), tok("2026-08-13", 1, 0.30, 0.20, 0.45, 0.22))
+	if got, ok := checkAI("due_date", "2026-08-13", label); !ok || got.Value != "2026-08-13" {
+		t.Errorf("checkAI(due_date) under a Due Date label token = %+v ok=%v, want ok", got, ok)
+	}
+	issue := onePage(1, tok("Invoice Date", 1, 0.10, 0.20, 0.25, 0.22), tok("2026-08-13", 1, 0.30, 0.20, 0.45, 0.22))
+	if got, ok := checkAI("due_date", "2026-08-13", issue); ok {
+		t.Errorf("checkAI(due_date) under an Invoice Date label = %+v, want refused", got)
+	}
+}
+
+func TestAIPrompt_AsksNoSupplierContactField(t *testing.T) {
+	if len(HeaderFields) != 19 {
+		t.Fatalf("HeaderFields holds %d, want 19", len(HeaderFields))
+	}
+	for _, f := range []string{"supplier_email", "supplier_telephone", "supplier_street", "supplier_city",
+		"supplier_postal_zone", "supplier_country", "supplier_state", "supplier_lga"} {
+		if slices.Contains(HeaderFields, f) || strings.Contains(aiSystem, f) {
+			t.Errorf("%s is asked of the AI (HeaderFields or aiSystem); the supplier is read from the entity (D31)", f)
+		}
+	}
+	if !strings.Contains(aiSystem, "- buyer_email:") {
+		t.Error("control: aiSystem lacks the buyer_email line, so the absence scan above reads the wrong string")
+	}
+}
+
+func TestMergeAI_ABlankNewFieldAnswerIsNotARead(t *testing.T) {
+	rows := []FieldResult{mgMissing("buyer_city"), mgMissing("due_date")}
+	pages := onePage(1, tok("City: Lagos", 1, 0.10, 0.30, 0.50, 0.32))
+
+	got := mergeAI(cloneResults(rows), map[string]string{"buyer_city": "  ", "due_date": ""}, pages, nil)
+
+	if !reflect.DeepEqual(got, rows) {
+		t.Errorf("a blank answer moved the rows: %+v, want %+v", got, rows)
+	}
+}
+
+func TestCallAI_DropsABlankNewFieldAnswer(t *testing.T) {
+	stub := &recordingAI{enabled: true, answer: map[string]any{"buyer_city": "  ", "buyer_email": "a@b.example"}}
+
+	got, failed := askAI(context.Background(), stub, onePage(1, tok("x", 1, 0, 0, 1, 1)))
+
+	if failed || got["buyer_email"] != "a@b.example" {
+		t.Fatalf("control: askAI = %v failed=%v, want buyer_email kept", got, failed)
+	}
+	if _, ok := got["buyer_city"]; ok {
+		t.Errorf("askAI kept the blank buyer_city answer: %v", got)
 	}
 }

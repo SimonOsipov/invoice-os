@@ -196,12 +196,6 @@ button {
     display: inline-flex;
   }
 }
-/* The entry needs ~149px on Linux Chromium metrics; hidden 1121-1219px. */
-@media (max-width: 1219px) {
-  .a-create {
-    display: none;
-  }
-}
 /* Header row fits 375px: e2e/topology/design-system.spec.ts `landing header row at 390, 389 and 375`. */
 @media (max-width: 389.98px) {
   .a-actions {

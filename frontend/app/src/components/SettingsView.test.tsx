@@ -20,6 +20,8 @@ function settingsCtx(tab: SettingsTab, handoff: boolean, over: Record<string, un
     entitiesState: 'ready',
     entitiesError: null,
     refetchEntities: vi.fn(),
+    members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+    membersState: 'ready',
     setSettingsTab: vi.fn(),
     toggleConnector: vi.fn(),
     ...over,
@@ -175,6 +177,29 @@ describe('Settings > Company card', () => {
     render(<SettingsView ctx={inhouse()} />)
     expect(screen.getByRole('button', { name: 'Add company' }).className).toBe('v2-btn v2-btn-primary pf-btn')
     expect(screen.queryByRole('button', { name: 'Edit company' })).toBeNull()
+    expect(screen.getByText('No company set up yet')).toBeTruthy()
+  })
+
+  it.each(['preparer', 'reviewer'])('Company tab: a non-admin with no company sees No company created and no Add company (%s)', (role) => {
+    render(<SettingsView ctx={inhouse({ members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role, status: 'active', isYou: true }] })} />)
+    expect(screen.queryByRole('button', { name: 'Add company' })).toBeNull()
+    expect(screen.getByText('No company created')).toBeTruthy()
+    expect(screen.getByText('Your workspace admin adds the company. You can start when it exists.')).toBeTruthy()
+    expect(screen.queryByText('No company set up yet')).toBeNull()
+  })
+
+  it('Company tab: Edit company shows for a preparer when the company exists', () => {
+    const members = [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'preparer', status: 'active', isYou: true }]
+    render(<SettingsView ctx={inhouse({ activeEntity: ENTITY, members })} />)
+    expect(screen.getByRole('button', { name: 'Edit company' })).toBeTruthy()
+  })
+
+  it.each([
+    ['loading', []],
+    ['error', []],
+  ])('Company tab: no Add company while the roster is %s', (membersState, members) => {
+    render(<SettingsView ctx={inhouse({ membersState, members })} />)
+    expect(screen.queryByRole('button', { name: 'Add company' })).toBeNull()
     expect(screen.getByText('No company set up yet')).toBeTruthy()
   })
 

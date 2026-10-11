@@ -149,7 +149,7 @@ func TestRegistrationClientTimeoutAndNoFollow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	for _, name := range []string{"registrationHandlers", "resetPasswordHandler", "invitationHandlers", "invitationPasswordHandler"} {
+	for _, name := range []string{"registrationHandlers", "resetPasswordHandler", "invitationHandlers", "handoffHandlers"} {
 		var fn *ast.FuncDecl
 		for _, d := range f.Decls {
 			if d, ok := d.(*ast.FuncDecl); ok && d.Name.Name == name {
@@ -225,7 +225,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 	if rec := serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`); rec.Code != http.StatusBadGateway {
 		t.Errorf("Register = %d, want 502: %s", rec.Code, rec.Body.String())
 	}
-	rec := serveForm(reg.Verify, "/auth/verify", "token=T&type=signup")
+	rec := serveForm(handoffVerify(authURL, site, nil), "/auth/verify", "token=T&type=signup")
 	if loc := rec.Header().Get("Location"); loc != "https://site.example/?verify=failed" {
 		t.Errorf("Verify Location = %q, want https://site.example/?verify=failed", loc)
 	}
@@ -251,7 +251,7 @@ func TestRegistrationHandlers_DoNotFollowGoTrueRedirects(t *testing.T) {
 }
 
 // verifyMux mounts main's two /auth/verify patterns over the real handlers.
-func verifyMux(t *testing.T, reg registration, site *url.URL) *http.ServeMux {
+func verifyMux(t *testing.T, verify http.Handler, site *url.URL) *http.ServeMux {
 	t.Helper()
 	page, err := gateway.VerifyPageHandler(site)
 	if err != nil {
@@ -259,7 +259,7 @@ func verifyMux(t *testing.T, reg registration, site *url.URL) *http.ServeMux {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("GET /auth/verify", page)
-	mux.Handle("POST /auth/verify", reg.Verify)
+	mux.Handle("POST /auth/verify", verify)
 	return mux
 }
 
@@ -269,7 +269,7 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
 	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
-	mux := verifyMux(t, reg, site)
+	mux := verifyMux(t, handoffVerify(authURL, site, nil), site)
 	mux.Handle("POST /auth/register", reg.Register)
 	// No method in the pattern, so the handler's own method check answers.
 	mux.Handle("/auth/resend-verification", reg.ResendVerification)
@@ -282,7 +282,7 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	if rec := serveRegistration(mux, http.MethodPost, "/auth/resend-verification", `{"email":"a@corp.example"}`); rec.Code != http.StatusAccepted {
 		t.Errorf("POST /auth/resend-verification = %d, want 202", rec.Code)
 	}
-	if rec := serveRegistration(mux, http.MethodGet, "/auth/verify?token=T&type=signup", ""); rec.Code != http.StatusOK {
+	if rec := serveRegistration(mux, http.MethodGet, "/auth/verify?token=T&type=signup&state="+verifyState, ""); rec.Code != http.StatusOK {
 		t.Fatalf("GET /auth/verify = %d, want 200", rec.Code)
 	}
 	if rec := serveForm(mux, "/auth/verify", "token=T&type=signup"); rec.Code != http.StatusSeeOther {
@@ -327,35 +327,40 @@ func TestRegistrationRoutes_WrongMethodIs405(t *testing.T) {
 	}
 }
 
+// verifyState is a well-formed 43-char base64url state (gateway.stateShape).
+const verifyState = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde"
+
 // Opening the link, by GET or HEAD, spends nothing; only the POST of the page's own form reaches GoTrue.
 func TestVerifyRoute_OpeningNeverReachesGoTrue(t *testing.T) {
 	authURL, calls := fakeAuth(t)
 	site, _ := url.Parse("https://site.example")
-	mux := verifyMux(t, registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite), site)
+	mux := verifyMux(t, handoffVerify(authURL, site, nil), site)
 	const link = "http://gateway.test/auth/verify?token=T&type=signup"
 
-	var page string
 	for _, method := range []string{http.MethodGet, http.MethodGet, http.MethodHead} {
 		rec := serveRegistration(mux, method, link, "")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s %s = %d, want 200", method, link, rec.Code)
-		}
-		if method == http.MethodGet {
-			page = rec.Body.String()
+		if want := "https://site.example/?confirm=1#token=T"; rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != want {
+			t.Fatalf("%s %s = %d Location %q, want 303 %s", method, link, rec.Code, rec.Header().Get("Location"), want)
 		}
 	}
+	statedLink := link + "&state=" + verifyState
+	opened := serveRegistration(mux, http.MethodGet, statedLink, "")
+	if opened.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200", statedLink, opened.Code)
+	}
+	page := opened.Body.String()
 	if got := calls(); len(got) != 0 {
 		t.Fatalf("opening the link reached GoTrue: %v", got)
 	}
 
-	action, values := pageForm(t, link, page)
-	if values.Get("token") != "T" || values.Get("type") != "signup" {
-		t.Fatalf("form values = %v, want token=T and type=signup", values)
+	action, values := pageForm(t, statedLink, page)
+	if values.Get("token") != "T" || values.Get("type") != "signup" || values.Get("state") != verifyState {
+		t.Fatalf("form values = %v, want token=T, type=signup and state=%s", values, verifyState)
 	}
 	rec := serveForm(mux, action, values.Encode())
 
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
-		t.Errorf("click = %d Location %q, want 303 https://site.example/?verified=1", rec.Code, rec.Header().Get("Location"))
+	if loc := rec.Header().Get("Location"); rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, "https://site.example/?verified=1&handoff=") {
+		t.Errorf("click = %d Location %q, want 303 https://site.example/?verified=1&handoff=<code>", rec.Code, loc)
 	}
 	if got, want := calls(), []string{"POST /verify"}; !slices.Equal(got, want) {
 		t.Errorf("GoTrue saw %v, want %v", got, want)
@@ -533,8 +538,8 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 			patterns = append(patterns, s.pattern)
 		}
 	}
-	if len(patterns) != 4 {
-		t.Fatalf("main registers %d invitation routes %v, want 4 (POST and OPTIONS of /auth/invitation and /auth/invitation/register)", len(patterns), patterns)
+	if len(patterns) != 6 {
+		t.Fatalf("main registers %d invitation routes %v, want 6 (POST and OPTIONS of /auth/invitation, /auth/invitation/register and /auth/invitation/resend)", len(patterns), patterns)
 	}
 
 	authURL, calls := fakeAuth(t)
@@ -545,17 +550,21 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 	}
 	regs, _ := invitationRegistrationsStub("tunde@obi.test")
 	invitation, register := invitationHandlers(authURL, site, 0, perIP, preview, regs, slog.New(slog.DiscardHandler))
+	reg := registrationHandlers(authURL, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
+	resend := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, preview, slog.New(slog.DiscardHandler))
 	withCORS := gateway.CORS([]string{origin})
 	mux := http.NewServeMux()
 	for _, p := range patterns {
 		if strings.HasSuffix(p, "/register") {
 			mux.Handle(p, withCORS(register))
+		} else if strings.HasSuffix(p, "/resend") {
+			mux.Handle(p, withCORS(resend))
 		} else {
 			mux.Handle(p, withCORS(invitation))
 		}
 	}
 
-	for _, path := range []string{"/auth/invitation", "/auth/invitation/register"} {
+	for _, path := range []string{"/auth/invitation", "/auth/invitation/register", "/auth/invitation/resend"} {
 		req := httptest.NewRequest(http.MethodOptions, path, nil)
 		req.Header.Set("Origin", origin)
 		req.Header.Set("Access-Control-Request-Method", "POST")
@@ -590,7 +599,8 @@ func TestInvitationRoutes_PreflightAnswersCORS(t *testing.T) {
 		t.Errorf("main answers a preflight for /auth/invitation/password: %+v", s)
 	}
 	pw := http.NewServeMux()
-	pw.Handle("POST /auth/invitation/password", invitationPasswordHandler(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, slog.New(slog.DiscardHandler)), perIP, nil, slog.New(slog.DiscardHandler)))
+	pwLog := slog.New(slog.DiscardHandler)
+	pw.Handle("POST /auth/invitation/password", handoffHandlers(authURL, site, gateway.NewSessionChecker(nil, nil, time.Now, pwLog), pwLog, nil).InvitationPassword)
 	for _, method := range []string{http.MethodOptions, http.MethodPost} {
 		req := httptest.NewRequest(method, "/auth/invitation/password", strings.NewReader("type=signup"))
 		req.Header.Set("Origin", origin)

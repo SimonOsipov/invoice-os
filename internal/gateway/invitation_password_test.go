@@ -29,7 +29,7 @@ func newInviteRig(t *testing.T, sink ContactSink) *resetRig {
 	t.Helper()
 	r := newResetRig(t)
 	log := slog.New(slog.NewJSONHandler(r.log, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	r.handler = InvitationPasswordHandler(r.gotrue.URL, siteURL(t), testClient(), r.sessions, r.throttle, sink, log)
+	r.handler = InvitationPasswordHandler(r.gotrue.URL, siteURL(t), testClient(), r.sessions, r.throttle, sink, log, testHandoffStore())
 	return r
 }
 
@@ -39,7 +39,7 @@ func newInviteHandler(t *testing.T, f *resetGoTrue, log *slog.Logger, sink Conta
 		log = slog.New(slog.DiscardHandler)
 	}
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
-	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, sink, log)
+	return InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, sink, log, testHandoffStore())
 }
 
 func ipPost(t *testing.T, h http.Handler, v url.Values) *httptest.ResponseRecorder {
@@ -134,6 +134,35 @@ func TestInvitationPassword_PasswordOutsideTheBoundsRerendersThePage(t *testing.
 			}
 			if got := f.names(); len(got) != 0 {
 				t.Errorf("GoTrue calls = %v, want none", got)
+			}
+		})
+	}
+	for name, tc := range map[string]struct {
+		posted []string
+		want   string
+	}{
+		"valid state is kept":                   {[]string{vpState}, vpState},
+		"malformed state is empty":              {[]string{`x"><script>`}, ""},
+		"repeated valid states are empty":       {[]string{vpState, vhOtherState}, ""},
+		"repeated identical valid states empty": {[]string{vpState, vpState}, ""},
+		"repeated, malformed first, is empty":   {[]string{"short", vpState}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := rpValues(rpToken, "signup", "abc")
+			v["state"] = tc.posted
+			f := newResetGoTrue(t)
+			rec := ipPost(t, newInviteHandler(t, f, nil, nil), v)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rec.Code)
+			}
+			if got := f.names(); len(got) != 0 {
+				t.Errorf("GoTrue calls = %v, want none", got)
+			}
+			if got := vpInputValue(vpParse(t, rec.Body.String()), "state"); got != tc.want {
+				t.Errorf("re-rendered state = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(rec.Body.String(), "<script>\"") || strings.Count(rec.Body.String(), "<script") != 1 {
+				t.Errorf("a posted state reached the page unescaped: %q", rec.Body.String())
 			}
 		})
 	}
@@ -240,8 +269,8 @@ func TestInvitationPassword_NonPostIs405AndUnconfiguredIs503(t *testing.T) {
 	th := NewSignInThrottle("sign-in", 10, 10, SignInWindow, newTestClock().Now)
 	log := slog.New(slog.DiscardHandler)
 	for name, h := range map[string]http.Handler{
-		"nil authURL": InvitationPasswordHandler(nil, siteURL(t), testClient(), liveSessions(t), th, nil, log),
-		"nil siteURL": InvitationPasswordHandler(f.URL, nil, testClient(), liveSessions(t), th, nil, log),
+		"nil authURL": InvitationPasswordHandler(nil, siteURL(t), testClient(), liveSessions(t), th, nil, log, testHandoffStore()),
+		"nil siteURL": InvitationPasswordHandler(f.URL, nil, testClient(), liveSessions(t), th, nil, log, testHandoffStore()),
 	} {
 		rec := ipPost(t, h, rpValues(rpToken, "signup", rpPass))
 		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "registration is not configured") {
@@ -250,24 +279,36 @@ func TestInvitationPassword_NonPostIs405AndUnconfiguredIs503(t *testing.T) {
 	}
 }
 
-func TestInvitationPassword_LogsCarryNoTokenPasswordOrAddress(t *testing.T) {
+func TestInvitationPassword_NoSecretInLocationOrLogs(t *testing.T) {
 	const (
-		token = "leak-token-9f3a7c"
-		pass  = "leak-pass-7c1d4e"
-		mail  = "leak-probe@corp.example"
+		token    = "leak-token-9f3a7c"
+		pass     = "leak-pass-7c1d4e"
+		mail     = "leak-probe@corp.example"
+		verifyAT = "leak-verify-at-2b6d1f"
+		verifyRT = "leak-verify-rt-8e0a35"
+		grantAT  = "leak-grant-at-5c9e72"
+		grantRT  = "leak-grant-rt-1d4b88"
 	)
 	// GoTrue bodies echo the secrets, so a handler that logs a body or a message leaks them.
 	echo := func(status int, code string) http.HandlerFunc {
-		return answer(status, `{"code":`+strconv.Itoa(status)+`,"error_code":"`+code+`","msg":"`+pass+` `+mail+` `+token+`"}`)
+		return answer(status, `{"code":`+strconv.Itoa(status)+`,"error_code":"`+code+`","msg":"`+pass+` `+mail+` `+token+` `+grantAT+` `+grantRT+`"}`)
+	}
+	session := func(at, rt string) http.HandlerFunc {
+		return answer(200, `{"access_token":"`+at+`","refresh_token":"`+rt+`","user":{"id":"u1","email":"`+mail+`"}}`)
 	}
 	rows := []struct {
-		name                 string
-		verify, user, logout http.HandlerFunc
-		want                 string
-		warn                 bool
+		name                        string
+		verify, user, logout, grant http.HandlerFunc
+		fill                        bool
+		want                        string // ipOK, ipFailed or "code"
+		warn                        bool
 	}{
-		{name: "success", want: ipOK},
+		{name: "success", want: "code"},
 		{name: "PUT 200, sign-out 500", logout: echo(500, "unexpected_failure"), want: ipOK, warn: true},
+		{name: "grant 400", grant: echo(400, "invalid_credentials"), want: ipOK, warn: true},
+		{name: "grant 200 with only an access token", grant: answer(200, `{"access_token":"`+grantAT+`"}`), want: ipOK, warn: true},
+		{name: "grant unreachable", grant: dropped, want: ipOK, warn: true},
+		{name: "store full", fill: true, want: ipOK, warn: true},
 		{name: "verify 403", verify: echo(403, "otp_expired"), want: ipFailed, warn: true},
 		{name: "verify unreachable", verify: dropped, want: ipFailed, warn: true},
 		{name: "verify incomplete", verify: answer(200, `{"access_token":"","user":{"id":"u1","email":"`+mail+`"}}`), want: ipFailed, warn: true},
@@ -279,25 +320,48 @@ func TestInvitationPassword_LogsCarryNoTokenPasswordOrAddress(t *testing.T) {
 	}
 	for _, c := range rows {
 		t.Run(c.name, func(t *testing.T) {
+			store := testHandoffStore()
+			if c.fill {
+				for range HandoffMaxLive {
+					store.Put("x", [32]byte{})
+				}
+			}
 			f := newResetGoTrue(t)
-			f.verify = rpVerifyAnswer("u1", mail)
+			f.verify = session(verifyAT, verifyRT)
+			f.token = session(grantAT, grantRT)
 			for _, set := range []struct {
 				dst *http.HandlerFunc
 				src http.HandlerFunc
-			}{{&f.verify, c.verify}, {&f.user, c.user}, {&f.logout, c.logout}} {
+			}{{&f.verify, c.verify}, {&f.user, c.user}, {&f.logout, c.logout}, {&f.token, c.grant}} {
 				if set.src != nil {
 					*set.dst = set.src
 				}
 			}
 			log, buf := captureLog()
+			th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, newTestClock().Now)
+			h := InvitationPasswordHandler(f.URL, siteURL(t), testClient(), liveSessions(t), th, nil, log, store)
+			v := rpValues(token, "signup", pass)
+			v.Set("state", vhState)
 
-			rec := ipPost(t, newInviteHandler(t, f, log, nil), rpValues(token, "signup", pass))
+			rec := ipPost(t, h, v)
 
-			rpRequireRedirect(t, rec, c.want)
+			loc := rec.Header().Get("Location")
+			secrets := []string{token, pass, mail, vhState, verifyAT, verifyRT, grantAT, grantRT}
+			if c.want == "code" {
+				code := vhCode(t, rec)
+				for _, s := range secrets {
+					if strings.Contains(loc, s) {
+						t.Errorf("the Location holds %q: %s", s, loc)
+					}
+				}
+				secrets = append(secrets, code)
+			} else {
+				rpRequireRedirect(t, rec, c.want)
+			}
 			if c.warn && warnCount(t, buf) == 0 {
 				t.Fatalf("the outcome logged no WARN, so the log check proves nothing")
 			}
-			for _, secret := range []string{token, pass, mail} {
+			for _, secret := range secrets {
 				if strings.Contains(buf.String(), secret) {
 					t.Errorf("the log holds %q: %s", secret, buf.String())
 				}
@@ -333,7 +397,7 @@ func ipOfflineHandler(t *testing.T, client *http.Client, sink ContactSink, log *
 	t.Helper()
 	th := NewSignInThrottle("sign-in", SignInMaxFailures, SignInMaxKeys, SignInWindow, time.Now)
 	sessions := NewSessionChecker(offlineAuth, offlineClient(http.StatusOK, `{}`), time.Now, log)
-	return InvitationPasswordHandler(offlineAuth, siteURL(t), client, sessions, th, sink, log)
+	return InvitationPasswordHandler(offlineAuth, siteURL(t), client, sessions, th, sink, log, testHandoffStore())
 }
 
 func TestInvitationPassword_OnlyAConfirmedPasswordedUserReachesTheContactSink(t *testing.T) {

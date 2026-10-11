@@ -1,11 +1,13 @@
 // The landing sign-in client.
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client/client'
 
 import {
+  bounceToStart,
   handoffUrl,
   isUnverified,
+  PREFLIGHT_MS,
   readSignInConsole,
   readSignInState,
   signInConfigured,
@@ -223,5 +225,62 @@ describe('isUnverified', () => {
     ]
     expect(others.length).toBeGreaterThan(0)
     for (const [name, err] of others) expect(isUnverified(err), name).toBe(false)
+  })
+})
+
+describe('bounceToStart', () => {
+  let hrefs: string[]
+  beforeEach(() => {
+    hrefs = []
+    vi.stubGlobal('window', { location: { set href(v: string) { hrefs.push(v) } } })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('bounceToStart_preflightsThenAssignsTheStartUrl', async () => {
+    vi.stubEnv('VITE_APP_URL', 'https://app.x/')
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://support.x/')
+    const f = vi.fn().mockResolvedValue(new Response(null))
+    vi.stubGlobal('fetch', f)
+    expect(await bounceToStart()).toBe(true)
+    expect(f).toHaveBeenCalledTimes(1)
+    expect(f).toHaveBeenCalledWith('https://app.x', expect.objectContaining({ mode: 'no-cors', signal: expect.any(AbortSignal) }))
+    expect(hrefs).toEqual(['https://app.x?auth=start'])
+    expect(await bounceToStart('support')).toBe(true)
+    expect(hrefs[1]).toBe('https://support.x?auth=start')
+  })
+
+  it('bounceToStart_preflightRejects_assignsNothing', async () => {
+    vi.stubEnv('VITE_APP_URL', 'https://app.x/')
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    expect(await bounceToStart()).toBe(false)
+    expect(hrefs).toEqual([])
+  })
+
+  it('bounceToStart_preflightTimesOut_assignsNothing', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('VITE_APP_URL', 'https://app.x/')
+    vi.stubGlobal('fetch', vi.fn((_u: string, init: RequestInit) => new Promise((_res, rej) => {
+      init.signal!.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
+    })))
+    let settled: boolean | undefined
+    void bounceToStart().then((v) => { settled = v })
+    await vi.advanceTimersByTimeAsync(PREFLIGHT_MS - 1)
+    expect(settled).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(settled).toBe(false)
+    expect(hrefs).toEqual([])
+  })
+
+  it('bounceToStart_withoutAUrl_assignsNothing', async () => {
+    vi.stubEnv('VITE_APP_URL', '')
+    vi.stubEnv('VITE_SUPPORT_URL', '')
+    const f = vi.fn()
+    vi.stubGlobal('fetch', f)
+    expect(await bounceToStart()).toBe(false)
+    expect(await bounceToStart('support')).toBe(false)
+    expect(f).not.toHaveBeenCalled()
+    expect(hrefs).toEqual([])
   })
 })

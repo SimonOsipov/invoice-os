@@ -34,7 +34,9 @@ import {
   type EntityFilterPos,
   type EntityListResponse,
 } from '../lib/portfolio'
+import { companySetupAccess } from '../lib/members'
 import { entityHealth, getRollup, type EntityHealth, type Rollup } from '../lib/dashboard'
+import { NO_COMPANY_COPY } from './AddCompanyTask'
 import { EntityFormModal } from './EntityFormModal'
 import type { PlatformCtx } from '../types'
 
@@ -120,6 +122,8 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
     { isEmpty: entityListIsEmpty, immediate: base != null, deps: [pos] },
   )
   const filteredState = base == null ? 'idle' : filtered.status
+  const access = companySetupAccess(ctx.membersState, ctx.members)
+  const noClients = access === 'wait' ? NO_COMPANY_COPY : { title: 'No entities yet', message: 'Add your first business entity to get started.' }
   const rows = filtered.data?.entities ?? []
   const shown = rows.length
   const total = filtered.data?.pagination.total ?? 0
@@ -211,13 +215,15 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                 {label}
               </button>
             ))}
-          <button
-            onClick={() => setModal({ mode: 'create' })}
-            disabled={base == null}
-            className="v2-btn v2-btn-primary pf-btn"
-          >
-            <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add client
-          </button>
+          {access === 'add' && (
+            <button
+              onClick={() => setModal({ mode: 'create' })}
+              disabled={base == null}
+              className="v2-btn v2-btn-primary pf-btn"
+            >
+              <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add client
+            </button>
+          )}
         </div>
       </div>
 
@@ -225,13 +231,11 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
 
       {filteredState === 'error' && filtered.error && <ErrorState error={filtered.error} onRetry={filtered.run} />}
 
-      {filteredState === 'idle' && (
-        <EmptyState title="No entities yet" message="Add your first business entity to get started." />
-      )}
+      {filteredState === 'idle' && <EmptyState title={noClients.title} message={noClients.message} />}
 
       {filteredState === 'empty' &&
         (pos === 'all' ? (
-          <EmptyState title="No entities yet" message="Add your first business entity to get started." />
+          <EmptyState title={noClients.title} message={noClients.message} />
         ) : (
           <EmptyState title="No clients match this filter" message="Try a different status filter." />
         ))}

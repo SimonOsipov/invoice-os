@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"reflect"
 	"testing"
@@ -24,26 +25,48 @@ func staffMigrationVersion(t *testing.T) int64 {
 	return migrationVersion(t, "*_staff_members.sql")
 }
 
-// reapplyHookMigrationOnCleanup rolls the rules-role, staff and hook migrations back and forward after the test.
+// joinMigrationVersion is the join-by-email migration, whose column grants on memberships and
+// invitations the hook Down revokes. ok is false while the file does not exist.
+func joinMigrationVersion(t *testing.T) (v int64, ok bool) {
+	t.Helper()
+	matches, err := fs.Glob(migrations.FS, "*_invitation_join_by_email.sql")
+	if err != nil {
+		t.Fatalf("glob join migration: %v", err)
+	}
+	if len(matches) == 0 {
+		return 0, false
+	}
+	return migrationVersion(t, "*_invitation_join_by_email.sql"), true
+}
+
+// reapplyHookMigrationOnCleanup rolls the join, rules-role, staff and hook migrations back and forward after the test.
 // A memberships Down/Up round-trip drops status, which strips auth_hook_reader's column grant.
 // Rules-role then staff Down run first: each restores the earlier body over the function the hook Down drops.
+// Join goes first on the way down and last on the way up: the hook Down revokes its grants.
 func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 	t.Helper()
 	rules, staff, hook := rulesRoleMigrationVersion(t), staffMigrationVersion(t), hookMigrationVersion(t)
+	join, hasJoin := joinMigrationVersion(t)
 	t.Cleanup(func() {
 		ctx := context.Background()
-		for _, step := range []struct {
+		type migStep struct {
 			what    string
 			version int64
 			up      bool
-		}{
+		}
+		steps := []migStep{
 			{"roll back the rules-role migration", rules, false},
 			{"roll back the staff migration", staff, false},
 			{"roll back the hook migration", hook, false},
 			{"re-apply the hook migration", hook, true},
 			{"re-apply the staff migration", staff, true},
 			{"re-apply the rules-role migration", rules, true},
-		} {
+		}
+		if hasJoin {
+			steps = append([]migStep{{"roll back the join migration", join, false}}, steps...)
+			steps = append(steps, migStep{"re-apply the join migration", join, true})
+		}
+		for _, step := range steps {
 			if _, err := provider.ApplyVersion(ctx, step.version, step.up); err != nil {
 				t.Errorf("%s: %v", step.what, err)
 				return
@@ -307,7 +330,7 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 
 	rows, err := h.super.Query(ctx,
 		`SELECT table_name, count(*) FROM information_schema.column_privileges
-		 WHERE grantee = 'auth_hook_reader' GROUP BY table_name`)
+		 WHERE grantee = 'auth_hook_reader' AND table_schema = 'public' GROUP BY table_name`)
 	if err != nil {
 		t.Fatalf("read auth_hook_reader column privileges: %v", err)
 	}
@@ -324,7 +347,7 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate column privileges: %v", err)
 	}
-	if want := map[string]int{"memberships": 3, "staff_members": 2, "invitations": 7, "tenants": 2}; !reflect.DeepEqual(cols, want) {
+	if want := map[string]int{"memberships": 5, "staff_members": 2, "invitations": 8, "tenants": 2}; !reflect.DeepEqual(cols, want) {
 		t.Errorf("auth_hook_reader column privileges per table = %v, want %v", cols, want)
 	}
 
@@ -345,6 +368,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	reapplyStaffMigration(t)
 	ctx := context.Background()
 	hook, staff, rules := hookMigrationVersion(t), staffMigrationVersion(t), rulesRoleMigrationVersion(t)
+	join, hasJoin := joinMigrationVersion(t)
 
 	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
 	if err != nil {
@@ -356,14 +380,16 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		t.Fatalf("build migration provider: %v", err)
 	}
 
-	// Counts memberships privileges only: staff_members' column grant is not the hook's (P16).
+	// Counts the hook's own memberships columns: staff_members' grant and the join-by-email
+	// columns (display_name, email) belong to other migrations.
 	footprint := func() (fn, policy, privs int) {
 		t.Helper()
 		if err := h.super.QueryRow(ctx,
 			`SELECT (SELECT count(*) FROM pg_proc WHERE proname = 'custom_access_token_hook'),
 			        (SELECT count(*) FROM pg_policies WHERE policyname = 'auth_hook_lookup'),
 			        (SELECT count(*) FROM information_schema.column_privileges
-			          WHERE grantee = 'auth_hook_reader' AND table_name = 'memberships')
+			          WHERE grantee = 'auth_hook_reader' AND table_name = 'memberships'
+			            AND column_name IN ('tenant_id', 'user_id', 'status'))
 			      + (SELECT count(*) FROM information_schema.table_privileges
 			          WHERE grantee = 'auth_hook_reader' AND table_name = 'memberships')`,
 		).Scan(&fn, &policy, &privs); err != nil {
@@ -376,7 +402,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		t.Fatalf("before Down: function=%d policy=%d privileges=%d, want 1 1 3", fn, policy, privs)
 	}
 
-	rulesApplied, staffApplied, hookApplied := true, true, true
+	rulesApplied, staffApplied, hookApplied, joinApplied := true, true, true, hasJoin
 	t.Cleanup(func() {
 		ctx := context.Background()
 		if !hookApplied {
@@ -394,11 +420,18 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		if !rulesApplied {
 			if _, err := provider.ApplyVersion(ctx, rules, true); err != nil {
 				t.Errorf("restore the rules-role migration: %v", err)
+				return
+			}
+		}
+		if hasJoin && !joinApplied {
+			if _, err := provider.ApplyVersion(ctx, join, true); err != nil {
+				t.Errorf("restore the join migration: %v", err)
 			}
 		}
 	})
 
-	for _, step := range []struct {
+	// The join Down runs first: the hook Down revokes the table-level grant it adds columns to.
+	downs := []struct {
 		what    string
 		version int64
 		up      bool
@@ -407,7 +440,16 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		{"roll back the rules-role migration", rules, false, &rulesApplied},
 		{"roll back the staff migration", staff, false, &staffApplied},
 		{"roll back the hook migration", hook, false, &hookApplied},
-	} {
+	}
+	if hasJoin {
+		downs = append([]struct {
+			what    string
+			version int64
+			up      bool
+			applied *bool
+		}{{"roll back the join migration", join, false, &joinApplied}}, downs...)
+	}
+	for _, step := range downs {
 		if _, err := provider.ApplyVersion(ctx, step.version, step.up); err != nil {
 			t.Fatalf("%s: %v", step.what, err)
 		}
@@ -430,6 +472,12 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 			t.Fatalf("%s: %v", step.what, err)
 		}
 		*step.applied = true
+	}
+	if hasJoin {
+		if _, err := provider.ApplyVersion(ctx, join, true); err != nil {
+			t.Fatalf("re-apply the join migration: %v", err)
+		}
+		joinApplied = true
 	}
 	if fn, policy, privs := footprint(); fn != 1 || policy != 1 || privs != 3 {
 		t.Errorf("after Up: function=%d policy=%d privileges=%d, want 1 1 3", fn, policy, privs)

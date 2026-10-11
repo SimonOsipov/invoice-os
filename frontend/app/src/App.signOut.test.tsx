@@ -127,6 +127,8 @@ let signOutReply: () => Promise<unknown> = REVOKED_OK
 let meReply: Reply = answer(200, ME)
 // Non-null: every tenant call answers this instead of an empty page.
 let apiOverride: Reply | null = null
+// Non-null: the entities list answers this.
+let entitiesReply: Reply | null = null
 
 // The sign-out answer waits until the test releases it.
 function deferSignOut(): { release: (r: () => Promise<unknown>) => Promise<void> } {
@@ -156,6 +158,7 @@ function routeFetch() {
       if (url === `${GATEWAY}/auth/login`) return answer(200, { access_token: jwt(OTHER_ME, null, 'P') })()
       if (url === `${GATEWAY}/api/tenancy/v1/me`) return meReply()
       if (url.startsWith(REVOKED)) return answer(401, { error: 'unauthorized' })()
+      if (entitiesReply && url.startsWith(`${GATEWAY}/api/portfolio/v1/entities`)) return entitiesReply()
       if (apiOverride && url.startsWith(`${GATEWAY}/api/`)) return apiOverride()
       return answer(200, {
         entities: [],
@@ -237,6 +240,7 @@ beforeEach(() => {
   signOutReply = REVOKED_OK
   meReply = answer(200, ME)
   apiOverride = null
+  entitiesReply = null
   routeFetch()
 })
 
@@ -369,7 +373,87 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
     expect(hrefWrites).toEqual(HANDOFF_EXIT)
   })
 
-  it('a 401 during sign-out is ignored', async () => {
+  it('a request during sign-out sends nothing', async () => {
+    const pending = deferSignOut()
+    const raw = handoffRecord(A_SID1, 'R1')
+    const { hrefWrites } = await mount(raw)
+    vi.mocked(localStorage.setItem).mockClear()
+    vi.mocked(localStorage.removeItem).mockClear()
+
+    const sentAtClick = calls.length
+    expect(sentAtClick, 'control: the boot sent requests').toBeGreaterThan(0)
+    await clickSignOut()
+    let seen: unknown
+    await act(async () => {
+      seen = await capturedCtx!.authedFetch(REVOKED).then(
+        () => 'resolved',
+        (e: unknown) => e,
+      )
+    })
+    let tokenSeen: unknown
+    await act(async () => {
+      tokenSeen = await Promise.resolve(capturedCtx!.getToken()).then(
+        () => 'resolved',
+        (e: unknown) => e,
+      )
+    })
+    await settle()
+
+    expect((seen as Error).name, 'authedFetch rejects').toBe('SessionEndedError')
+    expect((tokenSeen as Error).name, 'getToken rejects').toBe('SessionEndedError')
+    expect(
+      calls.slice(sentAtClick).filter((c) => c.url.includes('/api/')),
+      'no API request leaves after the click',
+    ).toEqual([])
+    expect(hrefWrites).toEqual([])
+    expect(sessionWrites()).toEqual([])
+    expect(localStorage.getItem(SESSION_KEY)).toBe(raw)
+
+    await pending.release(REVOKED_OK)
+    await settle()
+
+    expect(signOutPosts()).toHaveLength(1)
+    expect(hrefWrites).toEqual(HANDOFF_EXIT)
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+  })
+
+  it('a dashboard mounted during the revoke sends nothing', async () => {
+    const rejections: unknown[] = []
+    const onRejection = (e: unknown) => rejections.push(e)
+    process.on('unhandledRejection', onRejection)
+    try {
+      let releaseEntities!: () => void
+      const gate = new Promise<void>((r) => {
+        releaseEntities = r
+      })
+      const entity = { id: 'e1', name: 'Acme', tin: null, registration: null, sector: null, address: null, status: 'active', created_at: '2026-01-01T00:00:00Z' }
+      entitiesReply = () =>
+        gate.then(answer(200, { entities: [entity], pagination: { limit: 200, offset: 0, total: 1 } }))
+      const pending = deferSignOut()
+      const { hrefWrites } = await mount(handoffRecord(A_SID1, 'R1'))
+
+      expect(screen.queryByText('COMPLIANCE OVERVIEW'), 'control: no dashboard before the entities land').toBeNull()
+      await clickSignOut()
+      const sent = calls.length
+      await act(async () => releaseEntities())
+      await waitFor(() => expect(screen.queryByText('COMPLIANCE OVERVIEW'), 'control: the dashboard mounted after the click').not.toBeNull())
+      await settle(100)
+
+      expect(
+        calls.slice(sent).filter((c) => c.url.includes('/api/')),
+        'the dashboard sends nothing after the click',
+      ).toEqual([])
+      expect(rejections, 'no unhandled rejection').toEqual([])
+
+      await pending.release(REVOKED_OK)
+      await settle()
+      expect(hrefWrites).toEqual(HANDOFF_EXIT)
+    } finally {
+      process.off('unhandledRejection', onRejection)
+    }
+  })
+
+  it('a 401 callback during sign-out is ignored', async () => {
     const pending = deferSignOut()
     const raw = handoffRecord(A_SID1, 'R1')
     const { hrefWrites } = await mount(raw)
@@ -377,11 +461,45 @@ describe('one sign-out at a time (AC-7, AC-8)', () => {
     vi.mocked(localStorage.removeItem).mockClear()
 
     await clickSignOut()
-    const seen = await hitRevoked()
+    await act(async () => capturedImportAuth!.onUnauthorized())
     await settle()
 
     expect(hrefWrites, 'the 401 navigates nowhere while the revoke is in flight').toEqual([])
-    expect(is401(seen), 'control: the 401 reached the app').toBe(true)
+    expect(sessionWrites(), 'the 401 writes no storage').toEqual([])
+    expect(localStorage.getItem(SESSION_KEY)).toBe(raw)
+
+    await pending.release(REVOKED_OK)
+    await settle()
+
+    expect(signOutPosts()).toHaveLength(1)
+    expect(hrefWrites).toEqual(HANDOFF_EXIT)
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+  })
+
+  it('a real 401 on a request sent before the click is ignored during the revoke', async () => {
+    const pending = deferSignOut()
+    const raw = handoffRecord(A_SID1, 'R1')
+    const { hrefWrites } = await mount(raw)
+    let answerLate!: () => void
+    const gate = new Promise<void>((r) => {
+      answerLate = r
+    })
+    apiOverride = () => gate.then(answer(401, { error: 'unauthorized' }))
+    const LATE = `${GATEWAY}/api/late`
+    const late = capturedCtx!.authedFetch(LATE).then(
+      () => 'resolved',
+      (e: unknown) => e,
+    )
+    await waitFor(() => expect(calls.map((c) => c.url), 'control: the request left before the click').toContain(LATE))
+    await clickSignOut()
+    vi.mocked(localStorage.setItem).mockClear()
+    vi.mocked(localStorage.removeItem).mockClear()
+
+    await act(async () => answerLate())
+    expect(is401(await late), 'control: the 401 reached the app').toBe(true)
+    await settle()
+
+    expect(hrefWrites, 'the 401 navigates nowhere while the revoke is in flight').toEqual([])
     expect(sessionWrites(), 'the 401 writes no storage').toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBe(raw)
 

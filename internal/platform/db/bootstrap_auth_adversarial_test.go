@@ -206,10 +206,15 @@ func TestBootstrapSQLAuthSchemaIsClosedToEveryOtherRole(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
 	outsiders := []string{"invoice_app", "invoice_tenant_reader", "invoice_migrator", hookReaderRole}
-	t.Cleanup(func() {
+	revokeAuth := func() {
 		mustExecSQL(t, pool, `REVOKE ALL ON SCHEMA auth FROM PUBLIC, invoice_app, invoice_tenant_reader, invoice_migrator, auth_hook_reader`)
+	}
+	t.Cleanup(func() {
+		revokeAuth()
 		restoreDevDefaultPasswords(t, pool)
 	})
+	// The runtime grant (GrantAccountStateRead) gives auth_hook_reader USAGE; bootstrap does not remove it.
+	revokeAuth()
 	applyDevBootstrap(t, pool, readBootstrapSQL(t))
 
 	ownerHas := func(role, priv string) bool {

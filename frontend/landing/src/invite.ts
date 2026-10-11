@@ -17,7 +17,8 @@ export const INVITE_NOTICES: Record<InviteOutcome, string> = {
 
 export const ROLE_LABELS: Record<string, string> = { admin: 'Admin', preparer: 'Preparer', reviewer: 'Reviewer' }
 
-export type InvitationPreview = { workspace: string; role: string; email: string }
+// account mirrors the gateway's four values; an older gateway omits it.
+export type InvitationPreview = { workspace: string; role: string; email: string; account?: 'none' | 'unconfirmed' | 'confirmed' | 'unknown' }
 
 // Exactly one recognised value reads as an outcome; anything else, repeats included, is none.
 export function readInviteOutcome(search: string): InviteOutcome | null {
@@ -37,6 +38,18 @@ export const previewInvitation = (token: string) =>
 export async function registerInvitee(token: string): Promise<void> {
   await apiFetch<unknown>(`${base()}/auth/invitation/register`, { method: 'POST', body: { token } })
 }
+
+export type ResendOutcome = 'sent' | 'held' | 'maybe'
+
+// internal/gateway/invitation.go: the InvitationResendHandler 200 statuses.
+export async function resendInvitee(token: string): Promise<ResendOutcome> {
+  const res = await apiFetch<{ status?: unknown }>(`${base()}/auth/invitation/resend`, { method: 'POST', body: { token } })
+  if (res?.status === 'sent' || res?.status === 'held' || res?.status === 'maybe') return res.status
+  throw new ApiError('malformed', 'unexpected resend answer')
+}
+
+export const inviteResendSent = (email: string) => `A new link is on its way to ${email}. Use the newest one.`
+export const inviteResendHeld = (email: string) => `We just sent a link to ${email}. Check your inbox, or try again in a minute.`
 
 export function inviteSignInUrl(token: string | null): string | null {
   const app = appBase()

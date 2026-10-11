@@ -518,7 +518,10 @@ describe('v2 shell', () => {
     const html = renderToStaticMarkup(
       createElement(RuleDrawer, { rule: { ...SEED_RULES[0], params: { min: 0 }, when: 'has(invoice.x)' }, inForce: true, busy: false, onKill: noop, onClose: noop }),
     )
-    for (const want of ['min', 'has(invoice.x)', 'Underlying rule JSON']) expect(html).toContain(want)
+    for (const want of ['Underlying rule JSON', '>Parameters<']) expect(html).toContain(want)
+    for (const label of ['min', 'When']) expect(html, `a ${label} row`).toContain(`>${label}</div>`)
+    expect(html).toContain('<span class="mono">0</span>')
+    expect(html).toContain('<span class="mono">has(invoice.x)</span>')
     expect(html).toContain('&quot;min&quot;: 0')
     for (const gone of ['Run test', 'Rule passed', 'Save to draft', 'No test run yet.']) expect(html).not.toContain(gone)
     const json = html.match(/<pre class="ops-json">([\s\S]*?)<\/pre>/)

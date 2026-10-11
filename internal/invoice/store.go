@@ -212,9 +212,11 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		// and its no-partial-write sibling) -- no new lookup was introduced.
 		var entityName string
 		var entityTIN *string
+		var contact SupplierContact
 		if err := tx.QueryRow(ctx,
-			`SELECT name, tin FROM business_entities WHERE id = $1`, in.EntityID,
-		).Scan(&entityName, &entityTIN); err != nil {
+			`SELECT name, tin, email, telephone, street, city, postal_zone, country, state, lga FROM business_entities WHERE id = $1`, in.EntityID,
+		).Scan(&entityName, &entityTIN, &contact.Email, &contact.Telephone, &contact.Street, &contact.City,
+			&contact.PostalZone, &contact.Country, &contact.State, &contact.LGA); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrValidation
 			}
@@ -248,6 +250,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		// still violates buyer-tin-format faithfully.
 		in.SupplierTIN = MBSSupplierTIN(entityTIN)
 		in.SupplierName = &entityName
+		DefaultSupplierContact(&in, contact)
 
 		if err := scanInvoice(tx.QueryRow(ctx,
 			`INSERT INTO invoices

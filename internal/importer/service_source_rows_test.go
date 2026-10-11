@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -71,7 +72,7 @@ func TestBuildCreateInput_SetsSourceRowsFromGroup(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 1, 2}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 1, "Acme", nil, "")
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 1, "Acme", nil, invoice.SupplierContact{}, "")
 
 	want := []int{2, 3, 4}
 	if len(in.SourceRows) != len(want) {
@@ -97,7 +98,7 @@ func TestBuildCreateInput_NoDocumentLeavesSourceRowsNil(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 1, 2}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "", 1, "Acme", nil, "")
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "", 1, "Acme", nil, invoice.SupplierContact{}, "")
 
 	if in.SourceRows != nil {
 		t.Errorf("SourceRows = %#v, want nil (not merely empty) when documentID is \"\"", in.SourceRows)
@@ -118,7 +119,7 @@ func TestBuildCreateInput_NonContiguousGroupKeepsEveryRow(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 2, 5}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 1, "Acme", nil, "")
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 1, "Acme", nil, invoice.SupplierContact{}, "")
 
 	want := []int{2, 4, 7}
 	if len(in.SourceRows) != len(want) {
@@ -307,7 +308,7 @@ func TestBuildCreateInput_SetsSourceRowsFromGroupBelowATitle(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 1, 2}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 3, "Acme", nil, "")
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 3, "Acme", nil, invoice.SupplierContact{}, "")
 
 	want := []int{4, 5, 6}
 	if len(in.SourceRows) != len(want) {

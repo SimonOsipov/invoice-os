@@ -362,7 +362,7 @@ func TestStoreEntitySupplier_ReturnsNameAndNilTIN(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	name, tin, err := store.EntitySupplier(c, entityID)
+	name, tin, _, err := store.EntitySupplier(c, entityID)
 	if err != nil {
 		t.Fatalf("EntitySupplier: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestStoreEntitySupplier_NotFoundOutsideTenant(t *testing.T) {
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	bogusEntityID := uuid.NewString()
-	if _, _, err := store.EntitySupplier(c, bogusEntityID); !errors.Is(err, ErrNotFound) {
+	if _, _, _, err := store.EntitySupplier(c, bogusEntityID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("EntitySupplier(nonexistent id) err = %v, want ErrNotFound", err)
 	}
 }

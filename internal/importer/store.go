@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -219,24 +220,25 @@ func (s *Store) DocumentHasInvoice(ctx context.Context, documentID string) (bool
 	return has, err
 }
 
-// EntitySupplier returns the (name, tin) of the business_entities row
+// EntitySupplier returns the (name, tin, contact) of the business_entities row
 // identified by entityID, for use as an import batch's supplier defaults
 // ([supplier-from-entity]). tin is nullable and scans into a nil *string
 // when unset. Zero rows under the caller's tenant (RLS-scoped, same as a
 // genuinely nonexistent id) maps to ErrNotFound.
-func (s *Store) EntitySupplier(ctx context.Context, entityID string) (name string, tin *string, err error) {
+func (s *Store) EntitySupplier(ctx context.Context, entityID string) (name string, tin *string, contact invoice.SupplierContact, err error) {
 	txErr := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT name, tin FROM business_entities WHERE id = $1`, entityID,
-		).Scan(&name, &tin)
+			`SELECT name, tin, email, telephone, street, city, postal_zone, country, state, lga FROM business_entities WHERE id = $1`, entityID,
+		).Scan(&name, &tin, &contact.Email, &contact.Telephone, &contact.Street, &contact.City,
+			&contact.PostalZone, &contact.Country, &contact.State, &contact.LGA)
 	})
 	if txErr != nil {
 		if errors.Is(txErr, pgx.ErrNoRows) {
-			return "", nil, ErrNotFound
+			return "", nil, invoice.SupplierContact{}, ErrNotFound
 		}
-		return "", nil, txErr
+		return "", nil, invoice.SupplierContact{}, txErr
 	}
-	return name, tin, nil
+	return name, tin, contact, nil
 }
 
 // Batch is one import_batches row plus its DERIVED rule_set_version

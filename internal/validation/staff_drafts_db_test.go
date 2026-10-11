@@ -670,3 +670,23 @@ func TestStaffDrafts_TestWritesNothing(t *testing.T) {
 		t.Errorf("counts (versions, rules, audit) = %d %d %d before, %d %d %d after, want equal", v0, r0, a0, v1, r1, a1)
 	}
 }
+
+func TestStaffDrafts_TestReportsAMissingCodeList(t *testing.T) {
+	_, _, store, _, ctx := draftSetup(t)
+	if _, err := store.OpenDraft(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddDraftRule(ctx, "e2e-nolist", mustValid(t, "e2e-nolist", "enum", "m", `{"list":"e2e_no_such_list"}`)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.TestDraft(ctx, NewDefaultEngine(), map[string]any{})
+	if err != nil {
+		t.Fatalf("TestDraft: %v", err)
+	}
+	if got.Draft.Error == nil || !strings.Contains(*got.Draft.Error, "e2e_no_such_list") {
+		t.Errorf("draft.error = %v, want it to name e2e_no_such_list", got.Draft.Error)
+	}
+	if got.Draft.Violations == nil || len(got.Draft.Violations) != 0 || len(got.InForce.Violations) == 0 {
+		t.Errorf("draft violations %#v, in-force %d, want [] and some", got.Draft.Violations, len(got.InForce.Violations))
+	}
+}

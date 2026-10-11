@@ -339,3 +339,18 @@ func TestAILinesSystem_KeepsTheFiveMeasuredDefinitions(t *testing.T) {
 		}
 	}
 }
+
+// Pinned surprise: one numeric cell in a new role fails the whole line call, like the five measured roles.
+func TestAskAILines_ANumberInANewRoleFailsTheWholeLineSet(t *testing.T) {
+	pages := onePage(1, tok("Widget", 1, 0.10, 0.10, 0.20, 0.12))
+	for _, role := range LineRoles[5:] {
+		stub := &recordingAI{enabled: true, answer: map[string]any{"line_items": []any{
+			map[string]any{"description": "Good row"},
+			map[string]any{"description": "Widget", role: json.Number("5")},
+		}}}
+		got, failed := askAILines(context.Background(), stub, pages)
+		if got != nil || !failed {
+			t.Errorf("%s: askAILines = %v, %v, want nil, true", role, got, failed)
+		}
+	}
+}

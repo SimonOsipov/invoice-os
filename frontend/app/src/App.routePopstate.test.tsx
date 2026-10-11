@@ -1938,4 +1938,44 @@ describe('BUG-34: entries pushed before the company list loads', () => {
     expect(window.location.pathname).toBe('/settings/roles')
   })
 
+  it('popstate_aReorderingRefetchAfterAnAdoptionLeavesTheWindowResolvingToTheAdoptedCompany', async () => {
+    const release = await bootPreLoad(`/invoices/${INVOICE_ID}`)
+    await act(async () => capturedCtx!.nav('invoices'))
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    await traverse(-1)
+    await act(async () => requireCtx().adoptBatchClient(ENTITY_B))
+    expect(requireCtx().active.entityId, 'floor: the adoption must take').toBe(ENTITY_B)
+    const base = globalThis.fetch as unknown as (url: string) => Promise<unknown>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        url.includes('/portfolio/v1/entities')
+          ? Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () =>
+                Promise.resolve({
+                  entities: [entityRow(ENTITY_B, 'Clamp Co B', '12345678-0002'), entityRow(ENTITY_A, 'Clamp Co A', '12345678-0001')],
+                  pagination: { limit: 200, offset: 0, total: 2 },
+                }),
+            })
+          : base(url),
+      ),
+    )
+    await act(async () => capturedCtx!.refetchEntities())
+    await waitFor(() => expect(requireCtx().entities[0]!.id, 'floor: the first row moved').toBe(ENTITY_B))
+    await act(async () => capturedCtx!.setSettingsTab('roles'))
+    expect(requireCtx().active.entityId).toBe(ENTITY_B)
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await traverse(1)
+    expect(window.location.pathname).toBe('/invoices')
+    expect(replaceSpy, 'the pushed pre-load entry resolves to the adopted company: no clamp').not.toHaveBeenCalled()
+    await act(async () => capturedCtx!.switchClient(ENTITY_A))
+    await traverse(-1)
+    expect(stateNow()!.e, 'floor: Back to the boot entry after a switch clamps to the active company').toBe(ENTITY_A)
+  })
 })

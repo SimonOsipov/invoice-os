@@ -82,6 +82,10 @@ func CodeSearchHandler(search func(ctx context.Context, list, q string, limit in
 			writeError(w, http.StatusBadRequest, "q must be at most 100 characters")
 			return
 		}
+		if !utf8.ValidString(q) || strings.ContainsRune(q, 0) {
+			writeError(w, http.StatusBadRequest, "q must be valid text")
+			return
+		}
 		limit := codeSearchDefaultLimit
 		if raw := query.Get("limit"); raw != "" {
 			n, err := strconv.Atoi(raw)

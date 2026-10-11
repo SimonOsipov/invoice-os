@@ -183,7 +183,10 @@ func TestRLS_RuleDraftFunctionsRefuseAnActorWithoutTheRulesRole(t *testing.T) {
 		t.Fatalf("the plain staff row is not rules_role false: %d rows", n)
 	}
 	ruleDraftAsApp(t, tx)
-	actors := []struct{ name, id string }{{"no staff row", uuid.NewString()}, {"rules_role false", plain}}
+	actors := []struct {
+		name string
+		id   any
+	}{{"no staff row", uuid.NewString()}, {"rules_role false", plain}, {"NULL actor", nil}}
 
 	refuse := func(phase string) {
 		t.Helper()
@@ -240,6 +243,25 @@ func TestRLS_RuleDraftFunctionsExecuteGrants(t *testing.T) {
 		}
 	}
 
+	// The functions are the only write path: no direct write grant, table or column level, on either table.
+	for _, role := range []string{"invoice_app", "invoice_tenant_reader"} {
+		for _, table := range []string{"public.rules", "public.rule_set_versions"} {
+			for _, priv := range []string{"INSERT", "UPDATE", "DELETE", "TRUNCATE"} {
+				var held bool
+				if err := h.super.QueryRow(ctx, `SELECT has_table_privilege($1, $2, $3)
+				    OR CASE WHEN $3 IN ('INSERT', 'UPDATE') THEN has_any_column_privilege($1, $2, $3) ELSE false END`, role, table, priv).Scan(&held); err != nil {
+					t.Fatalf("privilege %s on %s for %s: %v", priv, table, role, err)
+				}
+				if held {
+					t.Errorf("%s holds %s on %s, want no direct write grant", role, priv, table)
+				}
+			}
+		}
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM pg_roles WHERE rolname IN ('invoice_app', 'invoice_tenant_reader')`); n != 2 {
+		t.Fatalf("%d of the two audited roles exist: the grant check is vacuous", n)
+	}
+
 	for _, c := range ruleDraftCalls {
 		rows, err := h.reader.Query(ctx, c.sql, uuid.NewString())
 		if err == nil {
@@ -269,8 +291,9 @@ func TestRLS_RuleDraftOpenIgnoresATempTableShadow(t *testing.T) {
 
 	inForce := versionInForce(t, h.super)
 	inForceNo := versionNumberOf(t, inForce)
-	if inForceNo == 1 {
-		t.Fatal("the version in force is v1: the shadow cannot discriminate")
+	minVersion := mustCount(t, h.super, `SELECT min(version) FROM public.rule_set_versions`)
+	if inForceNo == minVersion {
+		t.Fatal("the version in force is the oldest: the shadow cannot discriminate")
 	}
 	maxVersion := mustCount(t, h.super, `SELECT max(version) FROM public.rule_set_versions`)
 
@@ -278,7 +301,7 @@ func TestRLS_RuleDraftOpenIgnoresATempTableShadow(t *testing.T) {
 	actor := ruleDraftSeedStaff(t, tx, true)
 	ruleDraftAsApp(t, tx)
 	for _, s := range []string{
-		`CREATE TEMP TABLE rule_set_versions AS SELECT * FROM public.rule_set_versions WHERE version = 1`,
+		`CREATE TEMP TABLE rule_set_versions AS SELECT * FROM public.rule_set_versions WHERE version = (SELECT min(version) FROM public.rule_set_versions)`,
 		`UPDATE rule_set_versions SET effective_from = DATE '2000-01-01'`,
 		`GRANT ALL ON pg_temp.rule_set_versions TO invoice_migrator`,
 	} {
@@ -289,7 +312,7 @@ func TestRLS_RuleDraftOpenIgnoresATempTableShadow(t *testing.T) {
 
 	got := ruleDraftMustOpen(t, tx, actor)
 	if got.from != inForceNo {
-		t.Errorf("from_version = %d, want %d (the version in force, not the shadow's v1)", got.from, inForceNo)
+		t.Errorf("from_version = %d, want %d (the version in force, not the shadow's oldest)", got.from, inForceNo)
 	}
 	if got.version != maxVersion+1 {
 		t.Errorf("version = %d, want %d (the real max + 1, not the shadow's)", got.version, maxVersion+1)

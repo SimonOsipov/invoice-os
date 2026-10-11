@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 // sweepOrphanFixtures removes throwaway rule_set_versions rows a hard-aborted prior run
 // left behind. Sealed orphans resist a plain DELETE (Guard C), so it brackets the
 // delete in DISABLE/ENABLE TRIGGER USER. Targets
-// ONLY fixtureNotes-tagged rows (never the v1/v2 seeds) -- fixtureNotes is already a
+// ONLY fixtureNotes-tagged rows and the rules desk's "Rules desk: %" drafts (never the v1/v2 seeds) -- fixtureNotes is already a
 // fixed, greppable const (this file) shared across runs, so no marker redefinition is
 // needed. Triple-guarded: the fixtureNotes match, the explicit `version NOT IN (1,2)`
 // (belt-and-suspenders), and the fact every fixture row uses nextVersion() values >=

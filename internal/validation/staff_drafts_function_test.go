@@ -10,7 +10,9 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -614,9 +616,13 @@ func TestStaffDraftsFunction_RemoveDeletesOnlyFromTheDraft(t *testing.T) {
 		t.Fatalf("%s is not in the version in force: the test cannot discriminate", deskInForceKey)
 	}
 
+	before := ruleCountOf(t, super, draft.id)
 	got := mustDeskRemove(t, app, actor, deskInForceKey)
 	if got.id != draft.id || got.version != draft.version || !got.removed {
 		t.Errorf("remove returned %+v, want draft %s v%d, removed true", got, draft.id, draft.version)
+	}
+	if n := ruleCountOf(t, super, draft.id); n != before-1 {
+		t.Errorf("the draft holds %d rules after removing one key, want %d", n, before-1)
 	}
 	if _, found := ruleMessage(t, super, draft.id, deskInForceKey); found {
 		t.Error("the rule is still in the draft")
@@ -688,6 +694,11 @@ func TestStaffDraftsFunction_PublishRefusesAPastDateAndAnEmptyDraft(t *testing.T
 		t.Errorf("publish for yesterday: SQLSTATE %q, want 22023 (err %v)", sqlStateOf(err), err)
 	}
 	requireStillDraft("a past date")
+
+	if _, err = app.Exec(context.Background(), `SELECT * FROM rule_draft_publish($1::uuid, NULL)`, actor); sqlStateOf(err) != "22023" {
+		t.Errorf("publish with a NULL date: SQLSTATE %q, want 22023 (err %v)", sqlStateOf(err), err)
+	}
+	requireStillDraft("a NULL date")
 
 	for _, k := range keys {
 		if got := mustDeskRemove(t, app, actor, k); !got.removed {
@@ -825,5 +836,206 @@ func TestStaffDraftsFunction_OtherVersionsUntouched(t *testing.T) {
 	sort.Strings(changed)
 	if len(changed) != 0 {
 		t.Errorf("%d rows of other versions changed in a session on %s: %v", len(changed), draft.id, changed)
+	}
+}
+
+// otherRulesDigest fingerprints every rule of a version except one key.
+func otherRulesDigest(t *testing.T, super *pgxpool.Pool, versionID, key string) string {
+	t.Helper()
+	var d string
+	if err := super.QueryRow(context.Background(),
+		`SELECT coalesce(string_agg((to_jsonb(r) - 'id')::text, '|' ORDER BY r.key), '') FROM rules r
+		  WHERE r.rule_set_version_id = $1 AND r.key <> $2`, versionID, key).Scan(&d); err != nil {
+		t.Fatalf("digest the other rules of %s: %v", versionID, err)
+	}
+	return d
+}
+
+func TestStaffDraftsFunction_PutDetectsEveryColumnChange(t *testing.T) {
+	super, app := dbTestPools(t)
+	removeDeskVersionsOnCleanup(t, super)
+	actor := seedRulesStaffRow(t, super)
+
+	draft := mustDeskOpen(t, app, actor)
+	base := deskTestRule(deskNewKey, "base")
+	mustDeskPut(t, app, actor, base, true)
+	others := otherRulesDigest(t, super, draft.id, base.key)
+	if others == "" {
+		t.Fatal("the draft holds no other rules: the test cannot discriminate")
+	}
+
+	variants := map[string]func(deskRule) deskRule{
+		"type":     func(r deskRule) deskRule { r.typ = "enum"; return r },
+		"target":   func(r deskRule) deskRule { r.target = "invoice.buyer.tin"; return r },
+		"params":   func(r deskRule) deskRule { r.params = `{"pattern":"^[A-Z]+$"}`; return r },
+		"severity": func(r deskRule) deskRule { r.severity = "error"; return r },
+		"when":     func(r deskRule) deskRule { r.when = nil; return r },
+		"message":  func(r deskRule) deskRule { r.message = "changed"; return r },
+		"enabled":  func(r deskRule) deskRule { r.enabled = true; return r },
+	}
+	cols := make([]string, 0, len(variants))
+	for c := range variants {
+		cols = append(cols, c)
+	}
+	sort.Strings(cols)
+	for _, col := range cols {
+		v := variants[col](base)
+		if got := mustDeskPut(t, app, actor, v, false); !got.existed || !got.change {
+			t.Errorf("edit of only %s returned %+v, want existed true, changed true", col, got)
+		}
+		if !ruleMatches(t, super, draft.id, v) {
+			t.Errorf("edit of only %s did not store the new value", col)
+		}
+		if got := mustDeskPut(t, app, actor, v, false); !got.existed || got.change {
+			t.Errorf("repeat of the %s edit returned %+v, want changed false", col, got)
+		}
+		if got := mustDeskPut(t, app, actor, base, false); !got.change {
+			t.Errorf("reverting %s returned %+v, want changed true", col, got)
+		}
+		if d := otherRulesDigest(t, super, draft.id, base.key); d != others {
+			t.Errorf("edit of only %s changed another rule of the draft", col)
+		}
+	}
+}
+
+func TestStaffDraftsFunction_PublishDateIsUTCInAnySessionTimeZone(t *testing.T) {
+	super, app := dbTestPools(t)
+	removeDeskVersionsOnCleanup(t, super)
+	actor := seedRulesStaffRow(t, super)
+	ctx := context.Background()
+
+	utcDay := dbDay(t, super, 0)
+	var zone, zoneDay string
+	for _, z := range []string{"Pacific/Kiritimati", "Etc/GMT+12"} {
+		var d string
+		if err := super.QueryRow(ctx, `SELECT (now() AT TIME ZONE $1)::date::text`, z).Scan(&d); err != nil {
+			t.Fatalf("read the date in %s: %v", z, err)
+		}
+		if d != utcDay {
+			zone, zoneDay = z, d
+			break
+		}
+	}
+	if zone == "" {
+		t.Fatal("no probe time zone has a date different from UTC: the test cannot discriminate")
+	}
+
+	tx, err := app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL TIME ZONE '`+zone+`'`); err != nil {
+		t.Fatalf("set the session time zone: %v", err)
+	}
+	if _, err := tx.Exec(ctx, deskOpenSQL, actor); err != nil {
+		failDeskCall(t, "rule_draft_open", err)
+	}
+	publish := func(day string) error {
+		if _, err := tx.Exec(ctx, `SAVEPOINT p`); err != nil {
+			t.Fatalf("savepoint: %v", err)
+		}
+		_, err := tx.Exec(ctx, deskPublishSQL, actor, day)
+		if err != nil {
+			if _, rerr := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT p`); rerr != nil {
+				t.Fatalf("rollback to savepoint: %v", rerr)
+			}
+		}
+		return err
+	}
+	if zoneDay > utcDay {
+		if err := publish(utcDay); err != nil {
+			t.Errorf("publish for today (UTC) in %s, where the local date is %s: %v, want success", zone, zoneDay, err)
+		}
+	} else if err := publish(dbDay(t, super, -1)); sqlStateOf(err) != "22023" {
+		t.Errorf("publish for yesterday (UTC) in %s, where the local date is %s: SQLSTATE %q, want 22023", zone, zoneDay, sqlStateOf(err))
+	}
+}
+
+func TestStaffDraftsFunction_ReopenAfterPublishCopiesThePublishedVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	removeDeskVersionsOnCleanup(t, super)
+	opener, editor, publisher := seedRulesStaffRow(t, super), seedRulesStaffRow(t, super), seedRulesStaffRow(t, super)
+	today := dbDay(t, super, 0)
+	_, inForceNo := versionInForce(t, super)
+
+	first := mustDeskOpen(t, app, opener)
+	mustDeskPut(t, app, editor, deskTestRule(deskNewKey, "from the editor"), true)
+	if got := mustDeskRemove(t, app, editor, deskInForceKey); !got.removed {
+		t.Fatalf("remove returned %+v, want removed true", got)
+	}
+	mustDeskPublish(t, app, publisher, deskFarDate)
+
+	// A scheduled version is not in force: the next draft copies the version in force, not it.
+	second := mustDeskOpen(t, app, opener)
+	if second.from != inForceNo || second.version != first.version+1 {
+		t.Errorf("open after a future publish = v%d from v%d, want v%d from v%d", second.version, second.from, first.version+1, inForceNo)
+	}
+	if _, found := ruleMessage(t, super, second.id, deskNewKey); found {
+		t.Error("the draft copied the scheduled version's rule")
+	}
+	// The seeded rules carry no "when"; this one does, so a copy that drops it shows.
+	mustDeskPut(t, app, editor, deskTestRule(deskNewKey, "in force today"), true)
+	mustDeskPublish(t, app, publisher, today)
+
+	third := mustDeskOpen(t, app, opener)
+	if third.from != second.version || third.version != second.version+1 {
+		t.Errorf("open after a publish for today = v%d from v%d, want v%d from v%d", third.version, third.from, second.version+1, second.version)
+	}
+	var withWhen int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM rules WHERE rule_set_version_id = $1 AND "when" IS NOT NULL`, second.id).Scan(&withWhen); err != nil || withWhen == 0 {
+		t.Fatalf("the published version holds %d rules with a when (err %v): the test cannot discriminate", withWhen, err)
+	}
+	if want := contentOf(t, super, second.id); len(want) == 0 || !reflect.DeepEqual(contentOf(t, super, third.id), want) {
+		t.Errorf("the third draft does not equal the version published for today (%d rules)", len(want))
+	}
+}
+
+func TestStaffDraftsFunction_EachCallWaitsForTheDraftLockAfterTheActorCheck(t *testing.T) {
+	super, app := dbTestPools(t)
+	removeDeskVersionsOnCleanup(t, super)
+	actor := seedRulesStaffRow(t, super)
+	stranger := uuid.NewString()
+	ctx := context.Background()
+	if n := unsealedCount(t, super); n != 0 {
+		t.Fatalf("%d unsealed versions, want 0", n)
+	}
+
+	calls := []struct{ name, sql string }{
+		{"open", `SELECT 1 FROM rule_draft_open($1::uuid)`},
+		{"put", `SELECT 1 FROM rule_draft_put_rule($1::uuid, 'lock-probe', 'required', 'invoice.number', '{}'::jsonb, 'error', NULL, 'probe', true, true)`},
+		{"remove", `SELECT 1 FROM rule_draft_remove_rule($1::uuid, 'lock-probe')`},
+		{"publish", `SELECT 1 FROM rule_draft_publish($1::uuid, DATE '3001-01-01')`},
+	}
+	lock, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the lock holder: %v", err)
+	}
+	defer func() { _ = lock.Rollback(ctx) }()
+	if _, err := lock.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('rule_set_versions:draft'))`); err != nil {
+		t.Fatalf("take the draft lock: %v", err)
+	}
+	for _, c := range calls {
+		bctx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+		_, err := app.Exec(bctx, c.sql, actor)
+		cancel()
+		if err == nil || bctx.Err() == nil {
+			t.Errorf("%s with the draft lock held returned %v, want it to wait until the timeout", c.name, err)
+		}
+		fctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		_, err = app.Exec(fctx, c.sql, stranger)
+		cancel()
+		if sqlStateOf(err) != "42501" {
+			t.Errorf("%s for an actor with no staff row, lock held: SQLSTATE %q (err %v), want 42501 before any wait", c.name, sqlStateOf(err), err)
+		}
+	}
+	if err := lock.Rollback(ctx); err != nil {
+		t.Fatalf("release the draft lock: %v", err)
+	}
+	for _, c := range calls {
+		if _, err := app.Exec(ctx, c.sql, actor); err != nil {
+			t.Errorf("control: %s with the lock free: %v", c.name, err)
+		}
 	}
 }

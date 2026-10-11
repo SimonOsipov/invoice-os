@@ -550,4 +550,127 @@ describe('Console draft wiring', () => {
     expect(await modal.findByText(/v4 took effect after this draft was opened/)).toBeTruthy()
     expect(modal.getByText(/v6 is scheduled from 2027-01-01/)).toBeTruthy()
   })
+
+  const publishReady = async (date = '2026-10-11') => {
+    await openDraftView()
+    fireEvent.click(btn('Publish draft v5'))
+    const modal = within(dialog())
+    await modal.findByText('real-off')
+    fireEvent.change(modal.getByLabelText('Start date'), { target: { value: date } })
+    return { modal, confirm: modal.getByRole('button', { name: 'Publish v5' }) as HTMLButtonElement }
+  }
+
+  it('two synchronous Publish clicks send one request', async () => {
+    publish.mockReturnValue(new Promise(() => undefined))
+    const { confirm } = await publishReady()
+    act(() => {
+      confirm.click()
+      confirm.click()
+    })
+    expect(publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refused publish shows the server text, keeps the modal and re-reads on a 409', async () => {
+    publish.mockRejectedValue(new ApiError('http', 'the draft has no rules', 409))
+    const { confirm } = await publishReady()
+    versionsRead.mockClear()
+    fireEvent.click(confirm)
+    expect(await screen.findByText('the draft has no rules')).toBeTruthy()
+    expect(toast().innerHTML).toContain('var(--status-red-text)')
+    expect(within(dialog()).getByRole('button', { name: 'Publish v5' })).toBeTruthy()
+    await waitFor(() => expect(versionsRead).toHaveBeenCalledTimes(1))
+  })
+
+  it('an empty diff says so and leaves the date as the only gate', async () => {
+    read.mockImplementation(async () => IN_FORCE)
+    const { modal, confirm } = await (async () => {
+      versionsRead.mockResolvedValue(DRAFT_VERSIONS)
+      render(<App />)
+      fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+      fireEvent.click(await screen.findByRole('button', { name: /^v5/ }))
+      await screen.findByText('real-on')
+      fireEvent.click(btn('Publish draft v5'))
+      const m = within(dialog())
+      await m.findByText('No changes against the version in force.')
+      return { modal: m, confirm: m.getByRole('button', { name: 'Publish v5' }) as HTMLButtonElement }
+    })()
+    expect(confirm.disabled, 'no date').toBe(true)
+    fireEvent.change(modal.getByLabelText('Start date'), { target: { value: '2026-10-11' } })
+    expect(confirm.disabled).toBe(false)
+  })
+
+  it('a draft opened after the version in force shows no warning lines', async () => {
+    const { modal } = await publishReady()
+    expect(modal.queryByText(/took effect after/)).toBeNull()
+    expect(modal.queryByText(/is scheduled from/)).toBeNull()
+  })
+
+  it('a 401 on a draft write signs the console out without a red toast', async () => {
+    open.mockRejectedValue(new ApiError('http', 'expired', 401))
+    versionsRead.mockResolvedValue(NO_DRAFT_VERSIONS)
+    read.mockImplementation(byVersion())
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await screen.findByRole('switch', { name: 'Disable real-on' })
+    fireEvent.click(btn('New draft'))
+    await waitFor(() => expect(signOutConsole).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('a 404 on Remove shows the server text, keeps the drawer and re-reads', async () => {
+    remove.mockRejectedValue(new ApiError('http', 'no such rule in the draft', 404))
+    await openDraftView()
+    fireEvent.click(screen.getByText('d-new'))
+    versionsRead.mockClear()
+    fireEvent.click(within(dialog()).getByRole('button', { name: /Remove from draft/ }))
+    expect(await screen.findByText('no such rule in the draft')).toBeTruthy()
+    expect(within(dialog()).getByRole('button', { name: 'Save to draft' })).toBeTruthy()
+    await waitFor(() => expect(versionsRead).toHaveBeenCalledTimes(1))
+  })
+
+  it('a new rule has no Remove from draft', async () => {
+    await openDraftView()
+    fireEvent.click(btn('Add rule'))
+    expect(within(dialog()).queryByRole('button', { name: /Remove from draft/ })).toBeNull()
+    expect(within(dialog()).getByLabelText('Key')).toBeTruthy()
+  })
+
+  it('an in-force rule opens no draft form', async () => {
+    await openDraftView()
+    fireEvent.click(screen.getByRole('button', { name: /^v4/ }))
+    await screen.findByRole('switch', { name: 'Disable real-on' })
+    fireEvent.click(screen.getByText('real-on'))
+    expect(within(dialog()).queryByRole('button', { name: 'Save to draft' })).toBeNull()
+    expect(within(dialog()).queryByLabelText('Message')).toBeNull()
+  })
+
+  it('Run test refuses JSON that is not an object and sends one request on a double click', async () => {
+    test.mockReturnValue(new Promise(() => undefined))
+    await openDraftView()
+    fireEvent.click(btn('Test draft'))
+    const area = field('Sample invoice') as unknown as HTMLTextAreaElement
+    const run = within(dialog()).getByRole('button', { name: 'Run test' }) as HTMLButtonElement
+    for (const bad of ['[1]', 'null', '"x"', '']) {
+      fireEvent.change(area, { target: { value: bad } })
+      expect(run.disabled, bad).toBe(true)
+      expect(within(dialog()).getByText('Invoice JSON does not parse.')).toBeTruthy()
+    }
+    fireEvent.change(area, { target: { value: '{}' } })
+    act(() => {
+      run.click()
+      run.click()
+    })
+    expect(test).toHaveBeenCalledTimes(1)
+    expect(test).toHaveBeenCalledWith({})
+  })
+
+  it('a draft fault shows with the in-force column and no draft violations', async () => {
+    test.mockResolvedValue({ draft: { rule_set_version: 5, violations: [], error: 'the draft does not evaluate' }, in_force: { rule_set_version: 4, violations: [{ rule_key: 'from-force', severity: 'error', message: 'bad' }] } })
+    await openDraftView()
+    fireEvent.click(btn('Test draft'))
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Run test' }))
+    expect((await within(dialog()).findByRole('alert')).textContent).toBe('the draft does not evaluate')
+    expect(within(dialog()).getByText('No violations.')).toBeTruthy()
+    expect(within(dialog()).getByText(/from-force/)).toBeTruthy()
+  })
 })

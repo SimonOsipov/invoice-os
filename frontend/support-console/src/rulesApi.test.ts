@@ -16,6 +16,7 @@ import {
   openDraft,
   publishDraft,
   publishWarnings,
+  RULE_TYPES,
   reasonValid,
   removeDraftRule,
   ruleBody,
@@ -284,5 +285,18 @@ describe('SAMPLE_INVOICE', () => {
   it('is the invoice of internal/validation/sample_invoice.json', () => {
     const file = JSON.parse(readFileSync(new URL('../../../internal/validation/sample_invoice.json', import.meta.url), 'utf8'))
     expect(JSON.parse(SAMPLE_INVOICE)).toEqual(file.invoice)
+  })
+})
+
+describe('RULE_TYPES', () => {
+  it('lists the RuleType constants of internal/validation/rule.go, no more and no fewer', () => {
+    const src = readFileSync(new URL('../../../internal/validation/rule.go', import.meta.url), 'utf8')
+    const code = src
+      .split('\n')
+      .map((l) => l.replace(/\/\/.*$/, ''))
+      .join('\n')
+    const types = [...code.matchAll(/^\s*Type\w+\s+RuleType\s*=\s*"([^"]+)"/gm)].map((m) => m[1])
+    expect(types.length, 'constants found').toBeGreaterThan(5)
+    expect([...RULE_TYPES].sort()).toEqual([...types].sort())
   })
 })

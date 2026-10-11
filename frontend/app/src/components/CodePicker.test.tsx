@@ -106,6 +106,12 @@ describe('CodePicker', () => {
     expect(onChange).toHaveBeenCalledExactlyOnceWith('')
   })
 
+  it('codePicker_clearingCommitsBlankWithoutBlur', () => {
+    const { input, onChange } = mount(vi.fn().mockResolvedValue({ codes: [] }), 'NG-AB')
+    fireEvent.change(input, { target: { value: '' } })
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('')
+  })
+
   it('codePicker_failedSearchKeepsTheValue', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { input, onChange } = mount(vi.fn().mockRejectedValue(new Error('boom')), 'NG-AB')

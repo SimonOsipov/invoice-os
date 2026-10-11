@@ -71,6 +71,11 @@ export function CodePicker({ list, authedFetch, value, onChange, onPick, disable
     clearTimeout(timer.current)
     const hit = commitCode(next, results)
     if (hit) commit(hit)
+    if (next.trim() === '' && valueRef.current !== '') {
+      valueRef.current = ''
+      setPicked(null)
+      onChange('')
+    }
     timer.current = setTimeout(() => void run(next.trim()), DEBOUNCE_MS)
   }
 

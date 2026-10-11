@@ -5982,7 +5982,15 @@ describe('InvoiceDetail edit form: the invoice number cell', () => {
     expect(grid.style.gridTemplateColumns).toBe('1fr 1fr')
     // DOM order in a two-track grid: cells 2k and 2k+1 share a row.
     const labels = Array.from(grid.children).map((cell) => cell.firstElementChild?.textContent)
-    expect(labels.slice(0, 10)).toEqual(['Invoice number', 'Issue date', 'Supplier name', 'Supplier TIN', 'Buyer name', 'Buyer TIN', 'Subtotal', 'VAT', 'Total', 'Currency'])
+    const expected = ['Invoice number', 'Issue date', 'Supplier name', 'Supplier TIN', 'Buyer name', 'Buyer TIN', 'Subtotal', 'VAT', 'Total', 'Currency']
+    const nrs = [
+      'Tax currency code', 'Due date', 'Issue time', 'Tax point date', 'Payment status',
+      'Supplier email', 'Supplier telephone', 'Supplier street', 'Supplier city', 'Supplier postal zone', 'Supplier country', 'Supplier state', 'Supplier LGA',
+      'Invoice kind', 'Buyer email', 'Buyer telephone', 'Buyer street', 'Buyer city', 'Buyer postal zone', 'Buyer country', 'Buyer state', 'Buyer LGA',
+    ]
+    // Sub-headings and the buyer note carry no label cell; every other cell must be a known field.
+    expect(labels.slice(0, 10)).toEqual(expected)
+    expect(labels.filter((l) => l !== undefined).sort()).toEqual([...expected, ...nrs].sort())
   })
 
   it('EXTR27-D15: a fixed number uses the Supplier TIN read-only recipe and is never disabled', async () => {
@@ -7037,6 +7045,22 @@ describe('InvoiceDetail editor: the NRS fields (ENGI-06-04)', () => {
     save()
     expect(await screen.findByText(stale)).toBeTruthy()
     expect(screen.getByTestId('edit-invoice')).toBeTruthy()
+  })
+
+  it('invoiceDetail_clearingAPickerThenEnterSavesTheClear', async () => {
+    const { patchCalls } = await openEditor({ buyer_state: 'NG-LA' })
+    fireEvent.change(control('Buyer state'), { target: { value: '' } })
+    fireEvent.submit(screen.getByTestId('edit-invoice'))
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    expect(patchCalls[0]).toEqual({ buyer_state: null })
+  })
+
+  it('invoiceDetail_clearingALinePickerThenEnterIsRefused', async () => {
+    const { patchCalls } = await openEditor()
+    fireEvent.change(lineInput(1, 'hsn_code'), { target: { value: '' } })
+    fireEvent.submit(screen.getByTestId('edit-invoice'))
+    expect(await screen.findByText(`Line 1: HSN code cannot be cleared once saved. ${REFUSED}`)).toBeTruthy()
+    expect(patchCalls).toHaveLength(0)
   })
 
   it('invoiceDetail_buyerTypeNote', async () => {

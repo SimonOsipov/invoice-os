@@ -187,6 +187,21 @@ describe('the header action group', () => {
   })
 })
 
+describe('the header bar', () => {
+  it('the header bar carries .a-bar and no inline style', () => {
+    const html = render()
+    const at = html.indexOf('aria-label="ASComply Africa"')
+    expect(at, 'expected the logo link').toBeGreaterThan(-1)
+    const parent = [...html.slice(0, at).matchAll(/<div\b[^>]*>/g)].at(-1)?.[0]
+    expect(parent, 'expected an enclosing <div>').toBeDefined()
+    const attrs = attrsOf(parent!)
+    const cls = (attrs.class ?? '').split(/\s+/)
+    expect(cls, 'class list').toContain('container')
+    expect(cls, 'class list').toContain('a-bar')
+    expect(attrs, 'no inline style').not.toHaveProperty('style')
+  })
+})
+
 describe('the Library link', () => {
   const LIB = 'https://lib.x'
   const withLib = () =>

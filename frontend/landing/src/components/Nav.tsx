@@ -122,10 +122,7 @@ export function Nav({
         borderBottom: '1px solid var(--header-border)',
       }}
     >
-      <div
-        className="container"
-        style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24 }}
-      >
+      <div className="container a-bar">
         <a href={`${hrefPrefix}#top`} aria-label="ASComply Africa" style={{ display: 'inline-flex', flex: 'none' }}>
           <Logo size={32} />
         </a>

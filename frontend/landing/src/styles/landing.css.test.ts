@@ -514,6 +514,127 @@ describe('the header action group gap', () => {
   })
 })
 
+const maxWidthQuery = (at: string[]): number | undefined => {
+  const m = at.length === 1 ? /^@media \(\s*max-width\s*:\s*([\d.]+)px\s*\)$/i.exec(at[0]) : null
+  return m ? Number(m[1]) : undefined
+}
+
+/** The header bar contract (row layout, gap, wordmark, hit area): the failures, empty when it holds. */
+function barFailures(css: string): string[] {
+  const all = parseRules(css)
+  const out: string[] = []
+  const bar = all.filter((r) => selectorParts(r).includes('.a-bar'))
+  const base = bar.filter((r) => r.at.length === 0)
+  const want: [string, string][] = [
+    ['height', '100%'],
+    ['display', 'flex'],
+    ['align-items', 'center'],
+    ['justify-content', 'space-between'],
+    ['gap', '24px'],
+  ]
+  for (const [prop, v] of want) {
+    const got = declared(base, '.a-bar', prop, () => true)
+    if (got !== v) out.push(`base ${prop}: ${got} != ${v}`)
+  }
+  const gaps = bar.filter((r) => r.at.length > 0 && declarations(r.body).some((d) => d.prop === 'gap' || d.prop === 'column-gap'))
+  if (gaps.length !== 1) out.push(`${gaps.length} .a-bar gap rules under an at-rule, want 1`)
+  for (const r of gaps) {
+    const q = r.at.join(' ')
+    const gap = declared([r], '.a-bar', 'gap', () => true)
+    if (maxWidthQuery(r.at) !== 374.98) out.push(`gap rule under ${q}`)
+    if (gap !== '8px' && gap !== '4px') out.push(`gap rule under ${q} sets ${gap}`)
+  }
+  const wordAll = all.filter((r) => r.selector.includes('.ds-logo-word'))
+  if (wordAll.length !== 1) out.push(`${wordAll.length} .ds-logo-word rules in landing.css, want 1`)
+  for (const r of wordAll.filter((x) => x.at.length > 0)) {
+    const n = maxWidthQuery(r.at)
+    if (r.selector.trim() !== '.a-bar .ds-logo-word') out.push(`wordmark selector ${r.selector.trim()}`)
+    if (n === undefined || n < 353.98 || n > 359.98) out.push(`wordmark rule under ${r.at.join(' ')}`)
+    if (declared([r], r.selector.trim(), 'display', () => true) !== 'none') out.push('wordmark rule does not set display: none')
+  }
+  if (wordAll.some((r) => r.at.length === 0)) out.push('wordmark rule outside any media')
+  const hit = all.filter((r) => selectorParts(r).some((s) => s.includes('.a-actions .ds-btn')))
+  if (hit.length !== 2) out.push(`${hit.length} hit-area rules, want 2`)
+  for (const r of hit) {
+    if (maxWidthQuery(r.at) !== 374.98) out.push(`hit-area rule ${r.selector.trim()} under ${r.at.join(' ') || 'no at-rule'}`)
+    const sel = r.selector.trim()
+    const d = (prop: string) => declared([r], sel, prop, () => true)
+    const props: [string, string | undefined][] =
+      sel === '.a-actions .ds-btn'
+        ? [['position', 'relative']]
+        : sel === '.a-actions .ds-btn::after'
+          ? [['content', "''"], ['position', 'absolute'], ['top', 'calc(50% - 22px)'], ['height', '44px']]
+          : [['selector', undefined]]
+    for (const [prop, v] of props) if (d(prop) !== v) out.push(`hit-area ${sel} ${prop}: ${d(prop)} != ${v}`)
+  }
+  return out
+}
+
+describe('the header bar below 375px', () => {
+  const rewrite = (from: string | RegExp, to: string) => {
+    const next = LANDING_CSS.replace(from, to)
+    expect(next, 'control: the rewrite changed the sheet').not.toBe(LANDING_CSS)
+    return next
+  }
+
+  it('.a-bar holds the header row layout at every width', () => {
+    expect(barFailures(LANDING_CSS)).toEqual([])
+  })
+
+  it('control: a base gap other than 24px is flagged', () => {
+    const css = rewrite(/(\.a-bar \{[^}]*?)gap: 24px/, '$1gap: 8px')
+    expect(barFailures(css).join('\n')).toContain('base gap')
+  })
+
+  it('.a-bar narrows its gap only below 375px', () => {
+    const gaps = parseRules(LANDING_CSS).filter((r) => selectorParts(r).includes('.a-bar') && r.at.length > 0)
+    expect(gaps.length, 'control: the narrowing rule parsed').toBeGreaterThan(0)
+    expect(barFailures(LANDING_CSS)).toEqual([])
+  })
+
+  it('control: a gap that does not narrow is flagged', () => {
+    const css = rewrite(/(\.a-bar \{\s*gap: )8px/, '$112px')
+    expect(barFailures(css).join('\n')).toContain('sets 12px')
+  })
+
+  it('boundary: a gap rule at 375px or above is flagged', () => {
+    const css = rewrite(/@media \(max-width: 374\.98px\) \{(\s*\.a-bar \{\s*gap)/, '@media (max-width: 389.98px) {$1')
+    expect(barFailures(css).join('\n')).toContain('gap rule under @media (max-width: 389.98px)')
+  })
+
+  it('the header wordmark hides only below 354px', () => {
+    const words = parseRules(LANDING_CSS).filter((r) => r.selector.includes('.ds-logo-word'))
+    expect(words.length, 'control: the wordmark rule parsed').toBe(1)
+    expect(words[0].selector.trim()).toBe('.a-bar .ds-logo-word')
+    expect(maxWidthQuery(words[0].at)).toBe(353.98)
+    expect(declared(words, '.a-bar .ds-logo-word', 'display', () => true)).toBe('none')
+    expect(barFailures(LANDING_CSS)).toEqual([])
+  })
+
+  it('boundary: a wordmark rule at 360px or above is flagged', () => {
+    const css = rewrite('@media (max-width: 353.98px)', '@media (max-width: 360px)')
+    expect(barFailures(css).join('\n')).toContain('wordmark rule under @media (max-width: 360px)')
+  })
+
+  it('control: an unscoped wordmark rule is flagged', () => {
+    const css = rewrite('.a-bar .ds-logo-word', '.ds-logo-word')
+    expect(barFailures(css).join('\n')).toContain('wordmark selector .ds-logo-word')
+  })
+
+  it('the Book a demo hit area exists only below 375px', () => {
+    const hit = parseRules(LANDING_CSS).filter((r) => selectorParts(r).some((s) => s.includes('.a-actions .ds-btn')))
+    expect(hit.map((r) => r.selector.trim())).toEqual(['.a-actions .ds-btn', '.a-actions .ds-btn::after'])
+    expect(hit.map((r) => maxWidthQuery(r.at))).toEqual([374.98, 374.98])
+    expect(barFailures(LANDING_CSS)).toEqual([])
+  })
+
+  it('boundary: a hit-area rule outside the 374.98px query is flagged', () => {
+    const block = /  \.a-actions \.ds-btn::after \{[^}]*\}\n/.exec(LANDING_CSS)![0]
+    const css = rewrite(block, '') + block.replace(/^ {2}/gm, '')
+    expect(barFailures(css).join('\n')).toContain('hit-area rule .a-actions .ds-btn::after under no at-rule')
+  })
+})
+
 const NAV_GAP_FIXTURE = (max: string) => `
 .a-nav { gap: 28px; }
 @media (max-width: ${max}) { .a-nav { gap: 16px; } }

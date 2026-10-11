@@ -699,9 +699,15 @@ test('ENGI07-E2E-01: the buyer-type select sits in the palette card', async ({ p
     for (const width of WIDE_WIDTHS) {
       await page.setViewportSize({ width, height: 1080 })
       await settleAnimations(card, select)
-      const [cardBox, selectBox] = await Promise.all([card.boundingBox(), select.boundingBox()])
-      expect(cardBox && selectBox, `the card and the select must both render at ${width}px`).toBeTruthy()
-      expect(enclosesRect(cardBox!, selectBox!, 1), `the select must sit inside the palette card at ${width}px`).toBe(true)
+      await expect
+        .poll(
+          async () => {
+            const [cardBox, selectBox] = await Promise.all([card.boundingBox(), select.boundingBox()])
+            return cardBox && selectBox ? enclosesRect(cardBox, selectBox, 1) : null
+          },
+          { message: `the select must sit inside the palette card at ${width}px (null means one never rendered)`, timeout: 10_000 },
+        )
+        .toBe(true)
       await assertPageDoesNotScrollSideways(page, `Map step at ${width}px`)
     }
   } finally {

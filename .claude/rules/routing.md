@@ -28,6 +28,7 @@ paths:
 - Stamp the `id` parameter in `switchClient`. The state read has not committed.
 - Clamp a `popstate` entry whose stamp differs from the active company. Re-derive its path through `carryView` at the top of the handler.
 - Resolve an entry of this mount's pre-load window to `bootEntityIdRef`. The window is a null stamp that carries this mount's `m`, and the backfill stamp (`p`). Treat every other entry with no stamp as unknown. Never clamp it.
+- Keep `p` when the review-path mirror rewrites a window entry that still names the window's company.
 - Re-point `bootEntityIdRef` in `adoptBatchClient` only while the current entry is in the window. Never re-point it later.
 - Never rely on RLS to hide another company's data inside one tenant. Entities of one firm share a tenant, so the clamp does that job.
 - Write the `auditPrefilter` atom and the `/audit?invoice=` param together. They are one fact.

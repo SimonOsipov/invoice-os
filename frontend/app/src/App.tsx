@@ -680,7 +680,14 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     // other view, so the early return is what stops two writers fighting one URL.
     if (view !== 'create') return
     const ids = reviewNavIds(view, createStep, reviewBatchIds)
-    window.history.replaceState({ e: active.entityId, m: mountKey }, '', routeUrl('create', { reviewBatchIds: ids }))
+    // Keep a window entry in the window while it still names the window's company.
+    const keepWindow =
+      active.entityId !== null && isWindowEntry(window.history.state) && bootEntityIdRef.current === active.entityId
+    window.history.replaceState(
+      { e: active.entityId, m: mountKey, p: keepWindow || undefined },
+      '',
+      routeUrl('create', { reviewBatchIds: ids }),
+    )
     // `reviewBatchIds.join(',')`, never the array reference: a fresh array every render
     // would re-run this effect forever.
   }, [view, createStep, reviewBatchIds.join(',')])

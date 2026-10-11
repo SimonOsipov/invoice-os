@@ -227,8 +227,7 @@ describe('cold load of /imports/<id>/review', () => {
     await act(async () => (nav as HTMLButtonElement).click())
   }
 
-  // KNOWN DEFECT (QA-2 F1): the review mirror re-stamps the boot entry {e: fallback, m} before adoption, so it is not a window entry and the ref stays on the fallback. Flip to `it` with the fix.
-  it.fails('coldLoad_aBackfilledEntryAndAReviewAdoptionShareOneWindow', async () => {
+  it('coldLoad_aBackfilledEntryAndAReviewAdoptionShareOneWindow', async () => {
     let release!: () => void
     const portfolioGate = new Promise<void>((r) => (release = r))
     await coldLoadReview({ portfolioGate })

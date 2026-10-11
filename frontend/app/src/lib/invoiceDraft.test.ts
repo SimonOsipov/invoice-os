@@ -4,18 +4,23 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@invoice-os/api-client'
 
 import {
+  applyBuyerRecord,
+  buyerRequirement,
+  draftLineTaxes,
   draftToCreateRequest,
   draftTotals,
   fileDraftGate,
   fileDraftInvoice,
   fileSuppliedNumber,
+  withSupplierDefaults,
   type FileDraftDeps,
   type FileSuppliedNumberDeps,
 } from './invoiceDraft'
 import type { SupplyNumberRequest } from './importApi'
 import type { Entity } from './portfolio'
-import { DRAFT_NRS_BLANK, emptyClient, startingDraft } from './clients'
-import type { Draft } from '../types'
+import type { Customer } from './buyerDirectory'
+import { DRAFT_NRS_BLANK, draftLine, emptyClient, startingDraft } from './clients'
+import type { Draft, DraftLine } from '../types'
 
 // buyerAddress/wht/docType left `Draft` in INVCR-01-03 (task-279) — the create flow was
 // de-intersected from the mock verdict engine's `Validatable`, and none of the three has a
@@ -791,7 +796,8 @@ describe('draftTotals (TEST-03-04)', () => {
     expect(wires.filter((w) => w.total !== null)).toHaveLength(2)
     cases.forEach(([name, items], i) => {
       const wire = wires[i]!
-      expect(draftTotals(items), name).toEqual({ subtotal: wire.subtotal, vat: wire.vat, total: wire.total })
+      const { vatLabel: _label, ...money } = draftTotals(items)
+      expect(money, name).toEqual({ subtotal: wire.subtotal, vat: wire.vat, total: wire.total })
     })
   })
 })
@@ -813,5 +819,299 @@ describe('draftToCreateRequest: a blank hand-off draft (AUTH-10-07)', () => {
     const blank = startingDraft(emptyClient(), true)
     expect(fileDraftGate(blank, baseEntity)).toEqual({ canFile: false, reason: 'Invoice number is required' })
     expect(fileDraftGate({ ...blank, number: 'X' }, baseEntity)).toEqual({ canFile: true })
+  })
+})
+
+// A categorised line: one unit at `price` unless `qty` is given.
+const taxed = (price: number, tax_category = 'STANDARD_VAT', tax_percent = '7.5', qty = 1): DraftLine =>
+  draftLine({ desc: 'x', qty, price, tax_category, tax_percent })
+
+describe('draftLineTaxes: largest remainder (AC-1)', () => {
+  it('draftLineTaxes_largestRemainderMeetsTheGroupTotal', () => {
+    // Per-line rounding gives 0.01 x 3 = 0.03; the group total is round2(0.0225) = 0.02.
+    const taxes = draftLineTaxes([taxed(0.1), taxed(0.1), taxed(0.1)])
+
+    expect(taxes).toEqual(['0.01', '0.01', '0.00'])
+  })
+
+  it('draftLineTaxes_tiesGoToTheLowerLine', () => {
+    // Exact 0.015 each, T = 0.03: the one leftover kobo goes to line 1.
+    expect(draftLineTaxes([taxed(0.2), taxed(0.2)])).toEqual(['0.02', '0.01'])
+  })
+
+  it('draftLineTaxes_leftoverGoesToTheLargestRemainder', () => {
+    // Exact 0.0015, 0.0045, 0.0075; T = round2(0.0135) = 0.01 goes to line 3, not line 1.
+    expect(draftLineTaxes([taxed(0.02), taxed(0.06), taxed(0.1)])).toEqual(['0.00', '0.00', '0.01'])
+  })
+
+  it('draftLineTaxes_eachLineWithinAKobo', () => {
+    const prices = [0.1, 1.37, 12.99, 100.01, 0.03, 45.55, 7.77]
+    const taxes = draftLineTaxes(prices.map((p) => taxed(p)))
+
+    // T = round2(167.82 x 0.075) = 12.59; three leftover kobo go to lines 1, 6 and 3 by remainder.
+    expect(taxes).toEqual(['0.01', '0.10', '0.98', '7.50', '0.00', '3.42', '0.58'])
+    const cents = taxes.map((t) => BigInt(t!.replace('.', '')))
+    expect(cents.reduce((a, b) => a + b, 0n)).toBe(1259n)
+    prices.forEach((p, i) => {
+      const exactKobo = (BigInt(Math.round(p * 100)) * 75n) / 1000n
+      expect(cents[i]! - exactKobo <= 1n && cents[i]! >= exactKobo, `line ${i + 1}`).toBe(true)
+    })
+  })
+
+  it('draftLineTaxes_largeAmountsStayExact', () => {
+    // Exact tax 74999999999.99925, which a float cannot hold at the kobo.
+    expect(draftLineTaxes([taxed(999999999999.99)])).toEqual(['75000000000.00'])
+  })
+
+  it('draftLineTaxes_negativeLine', () => {
+    expect(draftLineTaxes([taxed(-100)])).toEqual(['-7.50'])
+  })
+
+  it('draftLineTaxes_twoGroupsEachMeetTheirOwnTotal', () => {
+    // Interleaved: 7.5% lines at 1, 3, 5 share T = 0.02; 5% lines at 2, 4 share T = 0.01.
+    const taxes = draftLineTaxes([taxed(0.1), taxed(0.1, 'STANDARD_VAT', '5'), taxed(0.1), taxed(0.1, 'STANDARD_VAT', '5'), taxed(0.1)])
+
+    expect(taxes).toEqual(['0.01', '0.01', '0.01', '0.00', '0.00'])
+  })
+
+  it('draftLineTaxes_groupsByCategoryAndPercent', () => {
+    // Same percent, two categories: 2 lines (T = 0.02) and 1 line (T = 0.01). One group would give 0.02 in all.
+    const taxes = draftLineTaxes([taxed(0.1), taxed(0.1), taxed(0.1, 'LOCAL_SALES_TAX')])
+
+    expect(taxes).toEqual(['0.01', '0.01', '0.01'])
+  })
+
+  it('draftLineTaxes_mathsUseThePercentRoundedTo2dp', () => {
+    expect(draftLineTaxes([taxed(100000, 'STANDARD_VAT', '7.504')])).toEqual(['7500.00'])
+  })
+})
+
+describe('draftLineTaxes: groups and nulls (AC-2)', () => {
+  it('draftLineTaxes_percentGroupsByValue', () => {
+    // Merged: T = round2(0.0225) = 0.02. Apart, '7.5' would give 0.02 and '7.50' 0.01.
+    const taxes = draftLineTaxes([taxed(0.1, 'STANDARD_VAT', '7.5'), taxed(0.1, 'STANDARD_VAT', '7.50'), taxed(0.1, 'STANDARD_VAT', '7.5')])
+
+    expect(taxes).toEqual(['0.01', '0.01', '0.00'])
+  })
+
+  it('draftLineTaxes_nullWithoutCategoryPercentOrTotal', () => {
+    const taxes = draftLineTaxes([
+      taxed(0.1),
+      taxed(0.1, ''),
+      taxed(0.1, 'STANDARD_VAT', 'abc'),
+      taxed(0.1, 'STANDARD_VAT', ''),
+      draftLine({ desc: 'x', qty: NaN, price: 1, tax_category: 'STANDARD_VAT', tax_percent: '7.5' }),
+      taxed(0.1),
+    ])
+
+    // The two valid lines form their own group: T = round2(0.015) = 0.02.
+    expect(taxes).toEqual(['0.01', null, null, null, null, '0.01'])
+  })
+
+  it('draftLineTaxes_zeroRate', () => {
+    expect(draftLineTaxes([taxed(100, 'ZERO_VAT', '0'), taxed(5.55, 'ZERO_VAT', '0.00')])).toEqual(['0.00', '0.00'])
+  })
+})
+
+describe('draftTotals: category-aware VAT (AC-3)', () => {
+  it('draftTotals_uncategorisedKeepsTheFlatRate', () => {
+    const totals = draftTotals([draftLine({ desc: 'x', qty: 3, price: 1000.005 })])
+
+    expect(totals).toEqual({ subtotal: '3000.02', vat: '225.00', total: '3225.02', vatLabel: 'VAT · 7.5%' })
+  })
+
+  it('draftTotals_categorisedSumsTheGroups', () => {
+    const totals = draftTotals([taxed(1000), taxed(500, 'ZERO_VAT', '0')])
+
+    // Flat 7.5% of 1500.00 would be 112.50.
+    expect(totals).toEqual({ subtotal: '1500.00', vat: '75.00', total: '1575.00', vatLabel: 'VAT' })
+  })
+
+  it('draftTotals_uncategorisedLineAddsNoTax', () => {
+    const totals = draftTotals([taxed(200), draftLine({ desc: 'x', qty: 1, price: 100 })])
+
+    expect(totals).toEqual({ subtotal: '300.00', vat: '15.00', total: '315.00', vatLabel: 'VAT' })
+  })
+})
+
+describe('draftToCreateRequest: NRS keys (AC-4)', () => {
+  const HEADER_KEYS = [
+    'invoice_kind', 'tax_currency_code', 'due_date', 'issue_time', 'tax_point_date', 'payment_status',
+    'supplier_email', 'supplier_telephone', 'supplier_street', 'supplier_city', 'supplier_postal_zone', 'supplier_country',
+    'supplier_state', 'supplier_lga', 'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city',
+    'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+  ]
+  const LEGACY_KEYS = [
+    'entity_id', 'invoice_number', 'issue_date', 'supplier_tin', 'supplier_name', 'buyer_tin', 'buyer_name',
+    'currency', 'subtotal', 'vat', 'total', 'line_items',
+  ]
+  const LINE_KEYS = [
+    'description', 'quantity', 'unit_price', 'line_total', 'line_tax', 'tax_category', 'hsn_code', 'isic_code',
+    'product_category', 'service_category', 'sellers_item_identification', 'price_unit', 'tax_percent', 'base_quantity',
+  ]
+
+  it('draftToCreateRequest_sendsTheNrsHeaderKeys', () => {
+    const draft: Draft = { ...baseDraft, due_date: '2027-01-31', issue_time: '09:05:00', buyer_email: '' }
+
+    const result = draftToCreateRequest(draft, baseEntity) as unknown as Record<string, unknown>
+
+    expect(Object.keys(result).sort()).toEqual([...LEGACY_KEYS, ...HEADER_KEYS].sort())
+    expect(result.due_date).toBe('2027-01-31T00:00:00Z')
+    expect(result.issue_time).toBe('09:05:00')
+    expect(result.buyer_email).toBeNull()
+    expect(result.tax_point_date).toBeNull()
+    expect(result.tax_currency_code).toBe('NGN')
+  })
+
+  it('draftToCreateRequest_sendsEveryTypedHeaderValueAndNullsTheRest', () => {
+    const typed = Object.fromEntries(HEADER_KEYS.map((k) => [k, `v-${k}`]))
+    const draft: Draft = { ...baseDraft, ...typed, due_date: '2027-01-31', tax_point_date: '2027-01-15', buyer_lga: '' }
+
+    const result = draftToCreateRequest(draft, baseEntity) as unknown as Record<string, unknown>
+
+    for (const k of HEADER_KEYS) {
+      if (k === 'due_date') expect(result[k]).toBe('2027-01-31T00:00:00Z')
+      else if (k === 'tax_point_date') expect(result[k]).toBe('2027-01-15T00:00:00Z')
+      else if (k === 'buyer_lga') expect(result[k]).toBeNull()
+      else expect(result[k], k).toBe(`v-${k}`)
+    }
+  })
+
+  it('draftToCreateRequest_sendsTheNrsLineKeys', () => {
+    const draft: Draft = {
+      ...baseDraft,
+      items: [
+        draftLine({ desc: 'Widget', qty: 2, price: 100, tax_category: 'STANDARD_VAT', tax_percent: '7.5', hsn_code: '0101.21' }),
+        draftLine({ desc: 'Plain', qty: 1, price: 50 }),
+      ],
+    }
+
+    const result = draftToCreateRequest(draft, baseEntity)
+    const [first, second] = result.line_items
+
+    expect(result.line_items).toHaveLength(2)
+    expect(Object.keys(first!).sort()).toEqual([...LINE_KEYS].sort())
+    expect(first).toMatchObject({
+      line_total: '200.00',
+      line_tax: '15.00',
+      tax_category: 'STANDARD_VAT',
+      tax_percent: '7.5',
+      hsn_code: '0101.21',
+      isic_code: null,
+      product_category: null,
+      service_category: null,
+      sellers_item_identification: null,
+      price_unit: null,
+      base_quantity: '1',
+    })
+    expect(Object.keys(second!).sort()).toEqual([...LINE_KEYS].sort())
+    expect(second).toMatchObject({ line_tax: null, tax_category: null, tax_percent: null, hsn_code: null, base_quantity: '1' })
+  })
+
+  it('draftToCreateRequest_lineTaxIsTheGroupsLargestRemainderSplit', () => {
+    const draft: Draft = { ...baseDraft, items: [taxed(0.1), taxed(0.1), taxed(0.1)] }
+
+    const result = draftToCreateRequest(draft, baseEntity)
+
+    expect(result.line_items.map((l) => l.line_tax)).toEqual(['0.01', '0.01', '0.00'])
+    expect(result.subtotal).toBe('0.30')
+    expect(result.vat).toBe('0.02')
+    expect(result.total).toBe('0.32')
+  })
+})
+
+describe('withSupplierDefaults (AC-5)', () => {
+  it('withSupplierDefaults_fillsOnlyBlanks', () => {
+    const draft: Draft = { ...baseDraft, supplier_email: 'typed', supplier_state: 'Lagos' }
+    const entity = { email: 'co@x', street: 'S', city: null, state: 'Abia', telephone: '', country: 'NG' }
+
+    const filled = withSupplierDefaults(draft, entity)
+
+    expect(filled.supplier_email).toBe('typed')
+    expect(filled.supplier_state).toBe('Lagos')
+    expect(filled.supplier_street).toBe('S')
+    expect(filled.supplier_country).toBe('NG')
+    expect(filled.supplier_city).toBe('')
+    expect(filled.supplier_telephone).toBe('')
+    expect(filled.supplier_postal_zone).toBe('')
+    expect(filled.supplier_lga).toBe('')
+    expect(draft.supplier_street, 'the input draft is not mutated').toBe('')
+    expect({ ...filled, supplier_street: '', supplier_country: '' }).toEqual(draft)
+  })
+})
+
+describe('applyBuyerRecord (AC-6)', () => {
+  const BUYER_KEYS = [
+    'buyer', 'invoice_kind', 'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city',
+    'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+  ] as const
+
+  const record: Customer = {
+    id: 'c-1',
+    tin: '12345678-0001',
+    name: 'Acme',
+    contact_person: 'Ada',
+    buyer_type: 'B2G',
+    email: 'acme@x',
+    telephone: '0800',
+    street: '1 Main',
+    city: 'Ikeja',
+    postal_zone: '100001',
+    country: 'NG',
+    state: 'Lagos',
+    lga: null,
+    created_at: '2026-10-01T00:00:00Z',
+  }
+
+  it('applyBuyerRecord_setsTheTenBuyerKeys', () => {
+    const draft: Draft = { ...baseDraft, buyer: 'Typed Ltd', buyerTin: '12345678-0001', buyer_street: 'typed street', buyer_lga: 'Old LGA' }
+
+    const { draft: out, fill } = applyBuyerRecord(draft, record, {})
+
+    expect(out.buyer).toBe('Acme')
+    expect(out.invoice_kind).toBe('B2G')
+    expect(out.buyer_email).toBe('acme@x')
+    expect(out.buyer_telephone).toBe('0800')
+    expect(out.buyer_street, 'a typed value is overwritten').toBe('1 Main')
+    expect(out.buyer_city).toBe('Ikeja')
+    expect(out.buyer_postal_zone).toBe('100001')
+    expect(out.buyer_country).toBe('NG')
+    expect(out.buyer_state).toBe('Lagos')
+    expect(out.buyer_lga, 'a null field becomes ""').toBe('')
+    expect(fill).toEqual({
+      buyer: 'Acme', invoice_kind: 'B2G', buyer_email: 'acme@x', buyer_telephone: '0800', buyer_street: '1 Main',
+      buyer_city: 'Ikeja', buyer_postal_zone: '100001', buyer_country: 'NG', buyer_state: 'Lagos', buyer_lga: '',
+    })
+    expect(out.buyerTin).toBe('12345678-0001')
+    expect(out.number).toBe(draft.number)
+    expect(Object.keys(out)).not.toContain('buyer_name')
+  })
+
+  it('applyBuyerRecord_noMatchClearsOnlyThePreviousFill', () => {
+    const draft: Draft = { ...baseDraft, buyer: 'Acme', buyer_email: 'a@x', buyer_street: 'typed street', supplier_email: 'keep' }
+    const lastFill = { buyer: 'Acme', buyer_email: 'a@x', buyer_street: 'Old St' }
+
+    const { draft: out } = applyBuyerRecord(draft, null, lastFill)
+
+    expect(out.buyer).toBe('')
+    expect(out.buyer_email).toBe('')
+    expect(out.buyer_street, 'a value the user changed is kept').toBe('typed street')
+    expect(out.buyerTin).toBe(baseDraft.buyerTin)
+    expect(out.supplier_email).toBe('keep')
+    for (const k of BUYER_KEYS) if (k !== 'buyer' && k !== 'buyer_email' && k !== 'buyer_street') expect(out[k], k).toBe(draft[k])
+  })
+})
+
+describe('buyerRequirement (AC-7)', () => {
+  it('buyerRequirement_byKind', () => {
+    const NINE = ['buyerTin', 'buyer', 'buyer_email', 'buyer_street', 'buyer_city', 'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga']
+
+    for (const kind of ['B2B', 'B2G']) {
+      const req = buyerRequirement(kind)
+      expect(req.level, kind).toBe('required')
+      expect([...req.keys].sort(), kind).toEqual([...NINE].sort())
+    }
+    expect(buyerRequirement('B2C')).toEqual({ level: 'optional', keys: [] })
+    expect(buyerRequirement('')).toEqual({ level: 'choose', keys: [] })
   })
 })

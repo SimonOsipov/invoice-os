@@ -63,7 +63,8 @@ import {
   type Scaled,
 } from './invoices'
 import type { SupplyNumberRequest } from './importApi'
-import type { Draft, LineItem } from '../types'
+import type { Draft, DraftLine, LineItem } from '../types'
+import type { Customer } from './buyerDirectory'
 import type { Entity } from './portfolio'
 
 // 0.075 exactly, as a Scaled literal (75 x 10^-3) rather than parseScaled('0.075') so a
@@ -119,7 +120,12 @@ function sumAmounts(amounts: ReadonlyArray<Scaled | null>): Scaled | null {
 
 // The filed subtotal/vat/total strings; null when any line is unparseable or there are no lines.
 // CreateForm's manual summary renders these, so the screen shows what crosses the wire.
-export function draftTotals(items: LineItem[]): { subtotal: string | null; vat: string | null; total: string | null } {
+export function draftTotals(items: LineItem[]): {
+  subtotal: string | null
+  vat: string | null
+  total: string | null
+  vatLabel: string
+} {
   const exactSubtotal = sumAmounts(items.map(lineAmount))
   const subtotal = exactSubtotal === null ? null : round2(exactSubtotal)
   const vat = subtotal === null ? null : round2(mulScaled(subtotal, VAT_RATE))
@@ -128,7 +134,58 @@ export function draftTotals(items: LineItem[]): { subtotal: string | null; vat: 
     subtotal: subtotal === null ? null : renderScaled(subtotal),
     vat: vat === null ? null : renderScaled(vat),
     total: total === null ? null : renderScaled(total),
+    vatLabel: 'stub',
   }
+}
+
+// Stub: replaced by the implementation.
+export function draftLineTaxes(_items: ReadonlyArray<DraftLine>): (string | null)[] {
+  return []
+}
+
+export type SupplierDefaults = Pick<
+  Entity,
+  'email' | 'telephone' | 'street' | 'city' | 'postal_zone' | 'country' | 'state' | 'lga'
+>
+
+// Stub: replaced by the implementation.
+export function withSupplierDefaults(draft: Draft, _entity: SupplierDefaults): Draft {
+  return draft
+}
+
+export type BuyerDraftKey =
+  | 'buyer'
+  | 'invoice_kind'
+  | 'buyer_email'
+  | 'buyer_telephone'
+  | 'buyer_street'
+  | 'buyer_city'
+  | 'buyer_postal_zone'
+  | 'buyer_country'
+  | 'buyer_state'
+  | 'buyer_lga'
+export type BuyerFill = Partial<Record<BuyerDraftKey, string>>
+
+// Stub: replaced by the implementation.
+export function applyBuyerRecord(draft: Draft, _record: Customer | null, _lastFill: BuyerFill): { draft: Draft; fill: BuyerFill } {
+  return { draft, fill: {} }
+}
+
+export type BuyerRequiredKey =
+  | 'buyerTin'
+  | 'buyer'
+  | 'buyer_email'
+  | 'buyer_street'
+  | 'buyer_city'
+  | 'buyer_postal_zone'
+  | 'buyer_country'
+  | 'buyer_state'
+  | 'buyer_lga'
+export type BuyerRequirement = { level: 'required' | 'optional' | 'choose'; keys: readonly BuyerRequiredKey[] }
+
+// Stub: replaced by the implementation.
+export function buyerRequirement(_kind: string): BuyerRequirement {
+  return { level: 'optional', keys: [] }
 }
 
 // Key order below is the WIRE order -- apiFetch JSON.stringifies the body verbatim, so

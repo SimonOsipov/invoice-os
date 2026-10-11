@@ -21,7 +21,7 @@ import { hash, mulberry } from './prng'
 import { validate } from './validation'
 import type { Entity } from './portfolio'
 import type { AsyncStatus } from '@invoice-os/api-client'
-import type { Client, ClientCfg, Draft, Invoice, InvoiceStatus, LineItem, StatusStyle } from '../types'
+import type { Client, ClientCfg, Draft, DraftLine, DraftLineNRSKey, Invoice, InvoiceStatus, LineItem, StatusStyle } from '../types'
 
 function mulberrySeed(name: string) {
   return mulberry(hash(name))
@@ -270,4 +270,20 @@ export function defaultDraft(client: ClientCfg): Draft {
 export function startingDraft(client: ClientCfg, handoff: boolean): Draft {
   if (!handoff) return defaultDraft(client)
   return { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [{ desc: '', qty: 1, price: 0 }] }
+}
+
+const DRAFT_LINE_BLANK: Record<DraftLineNRSKey, string> = {
+  tax_category: '',
+  hsn_code: '',
+  isic_code: '',
+  product_category: '',
+  service_category: '',
+  sellers_item_identification: '',
+  price_unit: '',
+  tax_percent: '',
+}
+
+// A draft line with the 8 NRS keys blank unless given.
+export function draftLine(partial: LineItem & Partial<Record<DraftLineNRSKey, string>>): DraftLine {
+  return { ...DRAFT_LINE_BLANK, ...partial }
 }

@@ -63,6 +63,7 @@ func main() {
 	// Staff routes: the platform admits only a rules-role caller.
 	app.Mux.HandleFunc("GET /v1/staff/rules", validation.StaffListRulesHandler(store.RulesOfVersion, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/rule-versions", validation.StaffVersionsHandler(store.Versions, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/code-list-syncs", validation.StaffCodeListSyncsHandler(store.CodeListSyncs, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/staff/rules/{key}", validation.StaffSwitchRuleHandler(store.SwitchRule, app.Logger))
 	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft", validation.StaffOpenDraftHandler(store.OpenDraft, app.Logger))
 	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/rules", validation.StaffAddDraftRuleHandler(store.AddDraftRule, app.Logger))

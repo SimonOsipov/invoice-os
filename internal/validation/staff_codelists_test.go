@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -28,6 +29,15 @@ import (
 //
 // where T is the read's result type.
 var bindCodeListSyncsHandler func(onRead func(list *string)) http.Handler
+
+func init() {
+	bindCodeListSyncsHandler = func(on func(*string)) http.Handler {
+		return StaffCodeListSyncsHandler(func(_ context.Context, l *string) (CodeListSyncs, error) {
+			on(l)
+			return CodeListSyncs{}, nil
+		}, nil)
+	}
+}
 
 type syncRow struct {
 	syncedAt             time.Time
@@ -291,22 +301,50 @@ func TestStaffCodeLists_ListDetailNewestFirstCappedAt30(t *testing.T) {
 }
 
 // A later migration adds a column (ENGI-20 adds a sync state): the read names its columns, so it must not care.
+// The column goes on a private copy of the table that shadows it through search_path, so the shared table
+// takes no DDL and a killed run leaves only an unused schema.
 func TestStaffCodeLists_ReadSurvivesAnExtraColumn(t *testing.T) {
-	super, app := dbTestPools(t)
+	_, _ = dbTestPools(t)
 	ctx := context.Background()
-	store := NewStore(app)
 
-	const col = "zz_extra_probe"
-	drop := func() {
-		if _, err := super.Exec(ctx, `ALTER TABLE nrs_code_list_syncs DROP COLUMN IF EXISTS `+col); err != nil {
-			t.Errorf("drop the probe column: %v", err)
+	schema := "zz_probe_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	owner, err := pgxpool.New(ctx, os.Getenv("DATABASE_SUPERUSER_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(owner.Close)
+	t.Cleanup(func() {
+		if _, err := owner.Exec(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`); err != nil {
+			t.Errorf("drop the probe schema: %v", err)
+		}
+	})
+	for _, stmt := range []string{
+		`CREATE SCHEMA ` + schema,
+		`CREATE TABLE ` + schema + `.nrs_code_list_syncs (LIKE public.nrs_code_list_syncs INCLUDING ALL)`,
+		`ALTER TABLE ` + schema + `.nrs_code_list_syncs ADD COLUMN zz_extra_probe text NOT NULL DEFAULT 'applied'`,
+		`GRANT USAGE ON SCHEMA ` + schema + ` TO invoice_app`,
+		`GRANT SELECT ON ` + schema + `.nrs_code_list_syncs TO invoice_app`,
+	} {
+		if _, err := owner.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
 		}
 	}
-	drop()
-	t.Cleanup(drop) // registered before the seeds, so it runs after their deletes
-	if _, err := super.Exec(ctx, `ALTER TABLE nrs_code_list_syncs ADD COLUMN `+col+` text NOT NULL DEFAULT 'applied'`); err != nil {
-		t.Fatalf("add the probe column: %v", err)
+
+	pooled := func(url string) *pgxpool.Pool {
+		cfg, err := pgxpool.ParseConfig(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.ConnConfig.RuntimeParams["search_path"] = schema + ", public"
+		p, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(p.Close)
+		return p
 	}
+	super := pooled(os.Getenv("DATABASE_SUPERUSER_URL"))
+	store := NewStore(pooled(os.Getenv("DATABASE_URL")))
 
 	list := newSyncList()
 	base := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)

@@ -629,8 +629,8 @@ func TestRLS_CustomRuleRevisionsHistoryCauseColumn(t *testing.T) {
 	if e := rows.Err(); e != nil {
 		t.Fatalf("iterate foreign keys: %v", e)
 	}
-	if fks != 1 || refTable != "custom_rule_revisions" || refCol != "id" || col != "cause_custom_rule_revision_id" {
-		t.Errorf("foreign keys from invoice_status_history to custom_rule_revisions = %d (%s.%s <- %s), want 1 (custom_rule_revisions.id <- cause_custom_rule_revision_id)",
+	if fks != 1 || refTable != "custom_rule_revisions" || refCol != "id,tenant_id" || col != "cause_custom_rule_revision_id,tenant_id" {
+		t.Errorf("foreign keys from invoice_status_history to custom_rule_revisions = %d (%s.%s <- %s), want 1 (custom_rule_revisions.id,tenant_id <- cause_custom_rule_revision_id,tenant_id)",
 			fks, refTable, refCol, col)
 	}
 
@@ -666,6 +666,40 @@ func TestRLS_CustomRuleRevisionsHistoryCauseColumn(t *testing.T) {
 		t.Fatalf("a history row citing a real revision: want success, got: %v", e)
 	}
 	csAssertPGCode(t, insertHist(phantomID, uuid.NewString()), "23503", "", "a history row citing a revision that does not exist")
+}
+
+// The superuser bypasses RLS, so only the composite foreign keys can refuse a cross-tenant reference.
+func TestRLS_CustomRuleRevisionsForeignEntityRefusedByCompositeFK(t *testing.T) {
+	h := requireHarness(t)
+	crrRequireTable(t, h.super)
+	entityB, cleanup := seedBusinessEntity(t, h.tenantB, "crr-fk-entity-b")
+	t.Cleanup(cleanup)
+
+	id := uuid.NewString()
+	crrCleanup(t, id)
+	_, err := h.super.Exec(context.Background(), crrInsert,
+		id, h.tenantA, uuid.NewString(), 1, entityB, "error", "must be present")
+	csAssertPGCode(t, err, "23503", "", "tenant A revision naming tenant B's entity")
+}
+
+func TestRLS_CustomRuleRevisionsHistoryCitingForeignRevisionRefusedByCompositeFK(t *testing.T) {
+	h := requireHarness(t)
+	crrRequireTable(t, h.super)
+	ctx := context.Background()
+	entityID, cleanupEntity := seedBusinessEntity(t, h.tenantA, "crr-fk-entity-a")
+	t.Cleanup(cleanupEntity)
+	invoiceID, cleanupInvoice := seedInvoice(t, h.tenantA, entityID, "CRR-FK-1")
+	t.Cleanup(cleanupInvoice)
+	revB, _ := seedCRR(t, h.tenantB, nil, 1)
+
+	histID := uuid.NewString()
+	t.Cleanup(func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM invoice_status_history WHERE id = $1`, histID)
+	})
+	_, err := h.super.Exec(ctx,
+		`INSERT INTO invoice_status_history (id, tenant_id, invoice_id, from_status, to_status, actor, cause_custom_rule_revision_id)
+		 VALUES ($1, $2, $3, 'validated', 'draft', 'system', $4)`, histID, h.tenantA, invoiceID, revB)
+	csAssertPGCode(t, err, "23503", "", "tenant A history row citing tenant B's revision")
 }
 
 // Purge runs under full FK enforcement: the revision must be deleted after the history row

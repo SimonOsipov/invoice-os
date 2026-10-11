@@ -6,7 +6,7 @@ CREATE TABLE custom_rule_revisions (
     tenant_id    uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     rule_id      uuid        NOT NULL,
     revision     integer     NOT NULL CHECK (revision >= 1),
-    entity_id    uuid        REFERENCES business_entities(id),
+    entity_id    uuid,
     type         text        NOT NULL CHECK (char_length(type) > 0),
     target       text        NOT NULL,
     params       jsonb       NOT NULL DEFAULT '{}',
@@ -18,7 +18,11 @@ CREATE TABLE custom_rule_revisions (
     created_by   text        NOT NULL CHECK (char_length(created_by) > 0),
     created_at   timestamptz NOT NULL DEFAULT now(),
     rechecked_at timestamptz,
-    CONSTRAINT custom_rule_revisions_rule_revision_uq UNIQUE (tenant_id, rule_id, revision)
+    CONSTRAINT custom_rule_revisions_rule_revision_uq UNIQUE (tenant_id, rule_id, revision),
+    CONSTRAINT custom_rule_revisions_tenant_id_id_uq UNIQUE (tenant_id, id),
+    -- Tenant-composite so a foreign entity is refused even with RLS bypassed; NULL entity_id = firm-wide.
+    CONSTRAINT custom_rule_revisions_tenant_entity_fk
+        FOREIGN KEY (tenant_id, entity_id) REFERENCES business_entities (tenant_id, id)
 );
 
 CREATE INDEX custom_rule_revisions_pending_idx ON custom_rule_revisions (tenant_id) WHERE rechecked_at IS NULL;
@@ -34,7 +38,9 @@ GRANT SELECT, INSERT ON custom_rule_revisions TO invoice_app;
 GRANT UPDATE (rechecked_at) ON custom_rule_revisions TO invoice_app;
 
 ALTER TABLE invoice_status_history
-    ADD COLUMN cause_custom_rule_revision_id uuid REFERENCES custom_rule_revisions(id);
+    ADD COLUMN cause_custom_rule_revision_id uuid,
+    ADD CONSTRAINT invoice_status_history_tenant_cause_custom_rule_fk
+        FOREIGN KEY (tenant_id, cause_custom_rule_revision_id) REFERENCES custom_rule_revisions (tenant_id, id);
 
 -- +goose StatementBegin
 CREATE OR REPLACE FUNCTION audit_log_entity_for(p_event text, p_payload jsonb)

@@ -1,6 +1,7 @@
 // Specs for the audit filter and the health-card derivation, run over the mock dataset.
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { describe, expect, it } from 'vitest'
 
 import * as data from './data'
@@ -72,7 +73,8 @@ describe('Rules admin mock data', () => {
       readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name)] : []))
     const all = files(__dirname).filter((f) => !f.endsWith('data.test.ts'))
     const isTest = (f: string) => /\.test\.tsx?$/.test(f)
-    const naming = all.filter((f) => !f.endsWith('rulesFixture.ts') && readFileSync(f, 'utf8').includes('rulesFixture'))
+    expect(all.length, 'files scanned').toBeGreaterThan(20)
+    const naming = all.filter((f) => !f.endsWith('rulesFixture.ts') && stripComments(readFileSync(f, 'utf8')).toLowerCase().includes('rulesfixture'))
     expect(naming.filter((f) => !isTest(f))).toEqual([])
     expect(naming.filter(isTest).length).toBeGreaterThan(0)
   })

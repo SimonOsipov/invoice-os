@@ -96,16 +96,20 @@ func (e *Engine) Evaluate(p Payload, rs RuleSet) (Result, error) {
 		}
 	}
 
-	// aggregate stage: deterministic order -- rule key ascending, then path
-	// ascending (Decision N16 -- stable output for the M3-10 golden suite).
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].RuleKey != violations[j].RuleKey {
-			return violations[i].RuleKey < violations[j].RuleKey
-		}
-		return violations[i].Path < violations[j].Path
-	})
+	sortViolations(violations)
 
 	return Result{RuleSetVersion: rs.Version, Violations: violations}, nil
+}
+
+// sortViolations orders by rule key ascending, then path ascending (Decision
+// N16 -- stable output for the M3-10 golden suite).
+func sortViolations(vs []Violation) {
+	sort.Slice(vs, func(i, j int) bool {
+		if vs[i].RuleKey != vs[j].RuleKey {
+			return vs[i].RuleKey < vs[j].RuleKey
+		}
+		return vs[i].Path < vs[j].Path
+	})
 }
 
 // resolvePath resolves a dotted target (e.g. "supplier.tin") against the

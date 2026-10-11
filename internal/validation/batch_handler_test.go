@@ -42,6 +42,7 @@ type batchResponseBody struct {
 		Violations       []Violation `json:"violations"`
 		RuleSetVersion   int         `json:"rule_set_version"`
 		RuleSetVersionID string      `json:"rule_set_version_id"`
+		CustomRuleIDs    []string    `json:"custom_rule_ids"`
 	} `json:"results"`
 	Error string `json:"error"`
 }
@@ -55,8 +56,8 @@ func doBatch(t *testing.T, loadRuleSet func(ctx context.Context) (RuleSet, error
 }
 
 // allDates serves the one rule-set the load func returns for every requested date.
-func allDates(load func(ctx context.Context) (RuleSet, error)) func(ctx context.Context, dates []string) (map[string]RuleSet, error) {
-	return func(ctx context.Context, dates []string) (map[string]RuleSet, error) {
+func allDates(load func(ctx context.Context) (RuleSet, error)) func(ctx context.Context, dates []string, _ []Rule) (map[string]RuleSet, error) {
+	return func(ctx context.Context, dates []string, _ []Rule) (map[string]RuleSet, error) {
 		rs, err := load(ctx)
 		if err != nil {
 			return nil, err
@@ -69,7 +70,7 @@ func allDates(load func(ctx context.Context) (RuleSet, error)) func(ctx context.
 	}
 }
 
-func doBatchAt(t *testing.T, load func(ctx context.Context, dates []string) (map[string]RuleSet, error), eng *Engine, now func() time.Time, rawBody string) *httptest.ResponseRecorder {
+func doBatchAt(t *testing.T, load func(ctx context.Context, dates []string, _ []Rule) (map[string]RuleSet, error), eng *Engine, now func() time.Time, rawBody string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(rawBody))
 	rec := httptest.NewRecorder()
@@ -244,8 +245,8 @@ func TestBatch_ConfigFault500NoPartialResults(t *testing.T) {
 
 // datesLoader serves sets by date, records each call's dates, and fails on a
 // date it has no set for.
-func datesLoader(calls *[][]string, sets map[string]RuleSet) func(context.Context, []string) (map[string]RuleSet, error) {
-	return func(_ context.Context, dates []string) (map[string]RuleSet, error) {
+func datesLoader(calls *[][]string, sets map[string]RuleSet) func(context.Context, []string, []Rule) (map[string]RuleSet, error) {
+	return func(_ context.Context, dates []string, _ []Rule) (map[string]RuleSet, error) {
 		*calls = append(*calls, append([]string(nil), dates...))
 		out := map[string]RuleSet{}
 		for _, d := range dates {
@@ -390,7 +391,7 @@ func TestBatch_OneLoaderCallPerBatch(t *testing.T) {
 }
 
 func TestBatch_LoaderOmittingADateIs500(t *testing.T) {
-	load := func(_ context.Context, dates []string) (map[string]RuleSet, error) {
+	load := func(_ context.Context, dates []string, _ []Rule) (map[string]RuleSet, error) {
 		return map[string]RuleSet{dates[0]: {ID: "a", Version: 1}}, nil
 	}
 	rec := doBatchAt(t, load, NewDefaultEngine(), nil, `{"invoices":[

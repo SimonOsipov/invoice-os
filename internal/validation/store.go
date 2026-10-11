@@ -160,13 +160,20 @@ func loadForDatesTx(ctx context.Context, tx pgx.Tx, dates []string) (map[string]
 	return out, nil
 }
 
-// LoadForDates returns the rule-set version in force on each date, keyed by
-// date, in one read-only transaction. Plain pool.Begin: no caller identity is
-// needed -- rule_set_versions and rules are GLOBAL, untenanted tables (no
-// RLS), so the S2S batch path (no identity in context) can use it. Fails
-// closed: ErrNoActiveRuleSet for a date with no version, ErrEmptyRuleSet
-// (wraps it) for a version with no rules.
+// LoadForDates is LoadForBatch with no custom rules.
 func (s *Store) LoadForDates(ctx context.Context, dates []string) (map[string]RuleSet, error) {
+	return s.LoadForBatch(ctx, dates, nil)
+}
+
+// LoadForBatch returns the rule-set version in force on each date, keyed by
+// date, and fills Codes on the custom list rules, in one read-only transaction.
+// Plain pool.Begin: no caller identity is needed -- rule_set_versions, rules
+// and nrs_codes are GLOBAL, untenanted tables (no RLS), so the S2S batch path
+// (no identity in context) can use it. Fails closed: ErrNoActiveRuleSet for a
+// date with no version, ErrEmptyRuleSet (wraps it) for a version with no rules.
+// A custom list with no rows is not an error: its rule keeps nil Codes and
+// faults at evaluation (D5, D10).
+func (s *Store) LoadForBatch(ctx context.Context, dates []string, custom []Rule) (map[string]RuleSet, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -175,6 +182,9 @@ func (s *Store) LoadForDates(ctx context.Context, dates []string) (map[string]Ru
 
 	out, err := loadForDatesTx(ctx, tx, dates)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := attachCustomCodeLists(ctx, tx, custom); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {

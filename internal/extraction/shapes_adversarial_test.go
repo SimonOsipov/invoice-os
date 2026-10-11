@@ -601,3 +601,29 @@ func TestShapeCurrency_WhitespaceAloneIsNotANairaToken(t *testing.T) {
 		wantOne(t, extraction.ShapeCurrency, raw, "NGN")
 	}
 }
+
+func TestShapeEmail_RefusesMalformed(t *testing.T) {
+	long := strings.Repeat("a", 245) + "@b.example" // 255 runes
+	for _, raw := range []string{"", "ap.honeywell.example", "a@@b.example", "a b@c.example", "a@example", "a@.example", "a@example.", "@b.example", long} {
+		if got := extraction.ShapeEmail.Normalize(raw); got != nil {
+			t.Errorf("ShapeEmail.Normalize(%q) = %v, want nil", raw, got)
+		}
+	}
+	atCap := strings.Repeat("a", 244) + "@b.example" // 254 runes
+	if got := extraction.ShapeEmail.Normalize(atCap); len(got) != 1 {
+		t.Errorf("ShapeEmail.Normalize(<254 runes>) = %v, want one reading", got)
+	}
+}
+
+func TestShapePhone_RefusesMalformed(t *testing.T) {
+	for _, raw := range []string{"123456", "1234567890123456", "0801 234 ABCD", "234+801", "", strings.Repeat("1 ", 16) + "1"} {
+		if got := extraction.ShapePhone.Normalize(raw); got != nil {
+			t.Errorf("ShapePhone.Normalize(%q) = %v, want nil", raw, got)
+		}
+	}
+	for _, raw := range []string{"1234567", "123456789012345"} {
+		if got := extraction.ShapePhone.Normalize(raw); len(got) != 1 {
+			t.Errorf("ShapePhone.Normalize(%q) = %v, want one reading", raw, got)
+		}
+	}
+}

@@ -73,6 +73,9 @@ const (
 	ShapeTIN           Shape = "tin"
 	ShapeCurrency      Shape = "currency"
 	ShapeName          Shape = "name"
+	// ShapeEmail and ShapePhone serve checkAI only; ParseRule refuses them (no learned rule).
+	ShapeEmail Shape = "email"
+	ShapePhone Shape = "phone"
 )
 
 // ParseRule decodes and validates one rule body, compiling Label. Every failure is an error:

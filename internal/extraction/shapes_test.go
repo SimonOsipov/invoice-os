@@ -233,3 +233,17 @@ func TestShapeCurrency_AcceptsADecoratedNairaToken(t *testing.T) {
 		wantOne(t, extraction.ShapeCurrency, raw, "NGN")
 	}
 }
+
+func TestShapeEmail_TrimsAndKeepsCase(t *testing.T) {
+	if got, want := extraction.ShapeEmail.Normalize("  AP@Honeywell.example "), []string{"AP@Honeywell.example"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ShapeEmail.Normalize = %v, want %v", got, want)
+	}
+}
+
+func TestShapePhone_TrimsAsPrinted(t *testing.T) {
+	for raw, want := range map[string]string{" +234 801 234 5678 ": "+234 801 234 5678", "(01) 234-5678": "(01) 234-5678"} {
+		if got := extraction.ShapePhone.Normalize(raw); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("ShapePhone.Normalize(%q) = %v, want [%q]", raw, got, want)
+		}
+	}
+}

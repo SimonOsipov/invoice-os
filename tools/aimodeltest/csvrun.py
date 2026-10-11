@@ -52,8 +52,8 @@ For each field, the value is the exact header text of the one column that holds 
 - buyer_country: the buyer's (customer's) country. Not the seller's.
 - buyer_state: the buyer's (customer's) state. Not the seller's.
 - buyer_lga: the buyer's (customer's) local government area. Not the seller's.
-- line_total: a per-line amount column whose header names the line or item, such as Line Amount, Item Amount or Line Total. A column headed subtotal, untaxed, taxable, net, or before or excluding VAT is the invoice's subtotal, not line_total.
-- line_tax: a per-line tax column whose header names the line or item, such as Line Tax, Item Tax or Tax on Line. A plain VAT, output VAT or tax amount column is the invoice's vat, not line_tax.
+- line_total: the line's amount before tax, only from a column whose header names the line or item, such as Line Amount, Item Amount or Line Total. Otherwise null: any other amount column is the invoice's subtotal or total, or stays unmapped.
+- line_tax: the line's tax amount, only from a column whose header names the line or item, such as Line Tax, Item Tax or Tax on Line. Otherwise null: any other VAT or tax amount column is the invoice's vat.
 - line_tax_category: the line's tax category, such as standard VAT, zero-rated or exempt.
 - line_hsn_code: the line's HS code for goods.
 - line_isic_code: the line's service (ISIC) code.

@@ -243,7 +243,7 @@ export const diffRules = (draft: Rule[], inForce: Rule[]): DiffRow[] => {
 }
 
 // D30: a draft cannot be rebased, so publish says what it does not carry.
-export const publishWarnings = (versions: RuleVersion[]): string[] => {
+export const publishWarnings = (versions: RuleVersion[], draftRules: Rule[] = [], inForceRules: Rule[] = []): string[] => {
   const draft = versions.find((v) => v.state === 'draft')
   if (!draft) return []
   const out: string[] = []
@@ -252,9 +252,17 @@ export const publishWarnings = (versions: RuleVersion[]): string[] => {
   if (inForce?.effective_from && opened && inForce.effective_from > opened) {
     out.push(`v${inForce.version} took effect after this draft was opened. The diff shows what publishing changes.`)
   }
+  if (inForce) {
+    const off = new Set(inForceRules.filter((r) => !r.enabled).map((r) => r.key))
+    for (const r of draftRules) {
+      if (r.enabled && off.has(r.key)) out.push(`${r.key} is switched off in v${inForce.version} but enabled in this draft. Publishing switches it back on.`)
+    }
+  }
   for (const v of versions) {
     if (v.state === 'scheduled' && v.effective_from) {
-      out.push(`v${v.version} is scheduled from ${v.effective_from}. This draft does not carry its rules. A start date on or after ${v.effective_from} replaces v${v.version}.`)
+      out.push(
+        `v${v.version} is scheduled from ${v.effective_from}. This draft does not carry its rules. A start date before ${v.effective_from} is replaced by v${v.version} on that date. A start date on or after ${v.effective_from} replaces v${v.version}.`,
+      )
     }
   }
   return out
@@ -283,7 +291,7 @@ export const fetchCodeListSyncs = async (list: string, signal?: AbortSignal): Pr
   (await request<{ list: string; syncs: CodeListSync[] }>(`${SYNCS_PATH}?list=${encodeURIComponent(list)}`, { signal })).syncs
 
 export const CODES_SHOWN = 200
-export const capCodes = (codes: string[], max: number): { shown: string[]; more: number } => ({ shown: codes.slice(0, max), more: Math.max(0, codes.length - max) })
+export const capCodes = (codes: string[], max: number, total = codes.length): { shown: string[]; more: number } => ({ shown: codes.slice(0, max), more: Math.max(0, total - max) })
 
 // The date of a sync for the panel row; the time of day for the drawer block.
 export const syncDate = (iso: string): string => iso.slice(0, 10)

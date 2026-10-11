@@ -311,12 +311,13 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
     for (const { list, synced_at } of lists) {
       const detail = await get(rulesRole, `${SYNCS}?list=${encodeURIComponent(list)}`)
       expect(detail.status, `detail of ${list}`).toBe(200)
-      const syncs = (detail.body as { syncs: Array<{ synced_at: string; added: unknown; removed: unknown; changed: unknown }> }).syncs
+      const syncs = (detail.body as { syncs: Array<{ synced_at: string; added: unknown; removed: unknown; changed: unknown; added_count: unknown; removed_count: unknown; changed_count: unknown }> }).syncs
       expect(Array.isArray(syncs), `${list} syncs is an array`).toBe(true)
       expect(syncs.length, `${list} has a sync, since the summary lists it`).toBeGreaterThan(0)
       expect(syncs[0].synced_at, `${list}: the newest sync is the summary's`).toBe(synced_at)
       for (const s of syncs) {
         expect([Array.isArray(s.added), Array.isArray(s.removed), Array.isArray(s.changed)], `${list} code arrays`).toEqual([true, true, true])
+        expect([typeof s.added_count, typeof s.removed_count, typeof s.changed_count], `${list} code counts`).toEqual(['number', 'number', 'number'])
       }
     }
   })

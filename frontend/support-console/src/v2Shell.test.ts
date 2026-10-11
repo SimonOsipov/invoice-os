@@ -552,7 +552,10 @@ describe('v2 shell', () => {
     expect(topBar('live')).toContain('CROSS-TENANT · PENDING ACCREDITATION')
   })
 
-  const sync = (status: string, over: Partial<CodeListSync> = {}): CodeListSync => ({ status, synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: ['A1'], removed: ['R1'], changed: ['C1'], ...over })
+  const sync = (status: string, over: Partial<CodeListSync> = {}): CodeListSync => {
+    const s = { status, synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: ['A1'], removed: ['R1'], changed: ['C1'], ...over }
+    return { added_count: s.added.length, removed_count: s.removed.length, changed_count: s.changed.length, ...s }
+  }
   const drawerHtml = (syncs: CodeListSync[] | null) => renderToStaticMarkup(createElement(CodeListDrawer, { list: 'hs-codes', syncs, note: 'Loading…', onClose: noop }))
 
   it('CodeListDrawer renders each sync', () => {
@@ -565,7 +568,8 @@ describe('v2 shell', () => {
     expect(html).not.toContain('Would remove')
     expect(html).not.toContain('--fg-4')
     expect(html).toContain('width:580px')
-    const big = drawerHtml([sync('applied', { added: Array.from({ length: 250 }, (_, i) => `K${i}`) })])
+    const big = drawerHtml([sync('applied', { added: Array.from({ length: 200 }, (_, i) => `K${i}`), added_count: 250 })])
+    expect(big).toContain('Added · 250')
     expect(big).toContain('and 50 more')
     expect(big).toContain('K199')
     expect(big).not.toContain('K200')
@@ -586,7 +590,7 @@ describe('v2 shell', () => {
 
   it('each category caps at 200 on its own: 201 removed shows 1 more, 200 added shows none', () => {
     const codes = (n: number, p: string) => Array.from({ length: n }, (_, i) => `${p}${i}`)
-    const html = drawerHtml([sync('applied', { added: codes(200, 'A'), removed: codes(201, 'R'), changed: codes(199, 'C') })])
+    const html = drawerHtml([sync('applied', { added: codes(200, 'A'), removed: codes(200, 'R'), removed_count: 201, changed: codes(199, 'C') })])
     expect(html.match(/and \d+ more/g)).toEqual(['and 1 more'])
     expect(html).toContain('R199')
     expect(html).not.toContain('R200')

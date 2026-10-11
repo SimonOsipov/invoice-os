@@ -61,9 +61,13 @@ export interface CodeListSync {
   status: string
   synced_at: string
   entry_count: number
+  /** At most CODES_SHOWN codes each; the counts are the true totals. */
   added: string[]
   removed: string[]
   changed: string[]
+  added_count: number
+  removed_count: number
+  changed_count: number
 }
 
 export interface ReconRow {

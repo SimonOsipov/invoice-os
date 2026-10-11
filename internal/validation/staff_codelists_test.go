@@ -288,6 +288,13 @@ func TestStaffCodeLists_ListDetailNewestFirstCappedAt30(t *testing.T) {
 	if strings.Contains(raw, "null") || !strings.Contains(raw, `"removed":[]`) || !strings.Contains(raw, `"changed":[]`) {
 		t.Errorf("empty arrays must marshal as [] and no field as null: %.300s", raw)
 	}
+	for k, s := range syncs {
+		i := 30 - k
+		wantAdded, wantRemoved, wantChanged := 1, i%2, 2*((i+1)%2)
+		if got := [3]float64{num(s["added_count"]), num(s["removed_count"]), num(s["changed_count"])}; got != [3]float64{float64(wantAdded), float64(wantRemoved), float64(wantChanged)} {
+			t.Errorf("syncs[%d] counts = %v, want %d %d %d", k, got, wantAdded, wantRemoved, wantChanged)
+		}
+	}
 	for _, sy := range syncs {
 		if n, _ := sy["entry_count"].(float64); n == 999 {
 			t.Errorf("detail leaks the row of another list: %.300s", raw)
@@ -542,5 +549,40 @@ func TestStaffCodeListsHandler_MapsReadErrors(t *testing.T) {
 		if got := strings.TrimSpace(rec.Body.String()); rec.Code != c.code || got != c.body {
 			t.Errorf("%s: %d %s, want %d %s", name, rec.Code, got, c.code, c.body)
 		}
+	}
+}
+
+func num(v any) float64 { n, _ := v.(float64); return n }
+
+func TestStaffCodeLists_ListDetailCapsEachArrayAt200AndKeepsTheTrueCount(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	codes := func(n int, p string) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("%s%04d", p, i)
+		}
+		return out
+	}
+	list := newSyncList()
+	seedSyncs(t, super, list, syncRow{syncedAt: time.Now().UTC().Add(-time.Hour), entryCount: 5, added: codes(250, "a"), removed: codes(200, "r"), chng: codes(3, "c"), status: "held"})
+	body, _ := readSyncs(t, store, &list)
+	s := objects(t, body["syncs"], "syncs")[0]
+	for _, c := range []struct {
+		field, count string
+		shown, total int
+	}{{"added", "added_count", 200, 250}, {"removed", "removed_count", 200, 200}, {"changed", "changed_count", 3, 3}} {
+		if got := strings0(t, s[c.field], c.field); len(got) != c.shown {
+			t.Errorf("%s holds %d codes, want %d", c.field, len(got), c.shown)
+		}
+		if num(s[c.count]) != float64(c.total) {
+			t.Errorf("%s = %v, want %d", c.count, s[c.count], c.total)
+		}
+	}
+	if got := strings0(t, s["added"], "added"); got[0] != "a0000" || got[199] != "a0199" {
+		t.Errorf("added keeps the first 200 in order, got %s..%s", got[0], got[199])
+	}
+	if s["status"] != "held" {
+		t.Errorf("status = %v, want held", s["status"])
 	}
 }

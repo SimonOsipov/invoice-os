@@ -11,15 +11,15 @@ type Props = {
   onClose: () => void
 }
 
-function Codes({ caption, codes }: { caption: string; codes: string[] }) {
-  const { shown, more } = capCodes(codes, CODES_SHOWN)
+function Codes({ caption, codes, total }: { caption: string; codes: string[]; total: number }) {
+  const { shown, more } = capCodes(codes, CODES_SHOWN, total)
   return (
     <div style={{ marginTop: 10 }}>
       <div className="label" style={{ marginBottom: 4 }}>
-        {caption} · {codes.length}
+        {caption} · {total}
       </div>
       <div className="mono" style={{ fontSize: 11.5, color: 'var(--fg-2)', overflowWrap: 'anywhere', lineHeight: 1.5 }}>
-        {codes.length === 0 ? 'None' : shown.join(', ')}
+        {total === 0 ? 'None' : shown.join(', ')}
         {more > 0 && <span style={{ color: 'var(--fg-3)' }}>{` and ${more} more`}</span>}
       </div>
     </div>
@@ -55,9 +55,9 @@ export function CodeListDrawer({ list, syncs, note, onClose }: Props) {
           <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)', marginTop: 2 }}>
             {s.entry_count} entries{isHeld(s.status) ? ' · held, not applied' : ''}
           </div>
-          <Codes caption="Added" codes={s.added} />
-          <Codes caption={isHeld(s.status) ? 'Would remove' : 'Removed'} codes={s.removed} />
-          <Codes caption="Changed" codes={s.changed} />
+          <Codes caption="Added" codes={s.added} total={s.added_count} />
+          <Codes caption={isHeld(s.status) ? 'Would remove' : 'Removed'} codes={s.removed} total={s.removed_count} />
+          <Codes caption="Changed" codes={s.changed} total={s.changed_count} />
         </div>
       ))}
     </Drawer>

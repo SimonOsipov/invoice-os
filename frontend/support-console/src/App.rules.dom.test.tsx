@@ -324,7 +324,7 @@ describe('Console code-list wiring', () => {
 
   it('opening a list reads its syncs', async () => {
     summary.mockResolvedValue([latest('hs-codes', 'applied'), latest('currencies', 'held')])
-    syncsRead.mockResolvedValue([{ status: 'applied', synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: ['ZZ-ADDED'], removed: [], changed: [] }])
+    syncsRead.mockResolvedValue([{ status: 'applied', synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: ['ZZ-ADDED'], removed: [], changed: [], added_count: 1, removed_count: 0, changed_count: 0 }])
     render(<App />)
     await openRules()
     expect(syncsRead).not.toHaveBeenCalled()
@@ -335,7 +335,7 @@ describe('Console code-list wiring', () => {
 
   it('a held sync shows Would remove in the drawer', async () => {
     summary.mockResolvedValue([latest('hs-codes', 'held')])
-    syncsRead.mockResolvedValue([{ status: 'held', synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: [], removed: ['GONE'], changed: [] }])
+    syncsRead.mockResolvedValue([{ status: 'held', synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: [], removed: ['GONE'], changed: [], added_count: 0, removed_count: 1, changed_count: 0 }])
     render(<App />)
     await openRules()
     fireEvent.click(await screen.findByRole('button', { name: /hs-codes/ }))
@@ -359,7 +359,7 @@ describe('Console code-list wiring', () => {
     await waitFor(() => expect(screen.getAllByText('Your account has no rules role.').length).toBeGreaterThan(0))
   })
 
-  const syncOf = (added: string[], status = 'applied') => ({ status, synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added, removed: [], changed: [] })
+  const syncOf = (added: string[], status = 'applied') => ({ status, synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added, removed: [], changed: [], added_count: added.length, removed_count: 0, changed_count: 0 })
 
   it('a 500 on the summary shows the server text, not the no-role wording', async () => {
     summary.mockRejectedValue(new ApiError('http', 'db down', 500))
@@ -679,6 +679,17 @@ describe('Console draft wiring', () => {
     const modal = within(dialog())
     expect(await modal.findByText(/v4 took effect after this draft was opened/)).toBeTruthy()
     expect(modal.getByText(/v6 is scheduled from 2027-01-01/)).toBeTruthy()
+  })
+
+  it('the modal warns that publish re-enables a rule switched off in the version in force', async () => {
+    versionsRead.mockResolvedValue(DRAFT_VERSIONS)
+    read.mockImplementation(byVersion({ version: 4, rules: [rule('real-on', false)] }))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^v5/ }))
+    await screen.findByText('d-new')
+    fireEvent.click(btn('Publish draft v5'))
+    expect(await within(dialog()).findByText('real-on is switched off in v4 but enabled in this draft. Publishing switches it back on.')).toBeTruthy()
   })
 
   const publishReady = async (date = '2026-10-11') => {

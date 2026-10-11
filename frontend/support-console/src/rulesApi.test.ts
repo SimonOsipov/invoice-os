@@ -276,7 +276,14 @@ describe('publishWarnings', () => {
   })
   it('names each scheduled version the draft does not carry', () => {
     expect(publishWarnings([draft, ver(6, 'scheduled', '2027-01-01'), ver(4, 'in_force', '2026-09-01')])).toEqual([
-      'v6 is scheduled from 2027-01-01. This draft does not carry its rules. A start date on or after 2027-01-01 replaces v6.',
+      'v6 is scheduled from 2027-01-01. This draft does not carry its rules. A start date before 2027-01-01 is replaced by v6 on that date. A start date on or after 2027-01-01 replaces v6.',
+    ])
+  })
+  it('names a rule switched off in the version in force and enabled in the draft', () => {
+    const rule = (key: string, enabled: boolean) => ({ key, enabled }) as Rule
+    const inForce = ver(4, 'in_force', '2026-09-01')
+    expect(publishWarnings([draft, inForce], [rule('a', true), rule('b', true), rule('c', false), rule('new', true)], [rule('a', false), rule('b', true), rule('c', false)])).toEqual([
+      'a is switched off in v4 but enabled in this draft. Publishing switches it back on.',
     ])
   })
   it('says nothing without a draft', () => {
@@ -310,7 +317,7 @@ describe('RULE_TYPES', () => {
     expect(await fetchCodeListSummary()).toEqual(lists)
     expect(fetchMock.mock.calls[0][0]).toBe(url)
     expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer T')
-    const syncs = [{ status: 'applied', synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: ['A'], removed: [], changed: [] }]
+    const syncs = [{ status: 'applied', synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: ['A'], removed: [], changed: [], added_count: 1, removed_count: 0, changed_count: 0 }]
     fetchMock.mockResolvedValueOnce(json(200, { list: 'hs-codes', syncs }))
     expect(await fetchCodeListSyncs('hs-codes')).toEqual(syncs)
     expect(fetchMock.mock.calls[1][0]).toBe(`${url}?list=hs-codes`)

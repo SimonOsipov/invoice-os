@@ -29,13 +29,17 @@ type CodeListLatest struct {
 
 // CodeListSync is one sync of a list with the codes it moved. Status is open: the sync log owns its values.
 // A held row lists the codes it would have removed in Removed; they were not removed.
+// Each array holds at most codeListCodesShown codes; the counts are the true totals.
 type CodeListSync struct {
-	Status     string    `json:"status"`
-	SyncedAt   time.Time `json:"synced_at"`
-	EntryCount int       `json:"entry_count"`
-	Added      []string  `json:"added"`
-	Removed    []string  `json:"removed"`
-	Changed    []string  `json:"changed"`
+	Status       string    `json:"status"`
+	SyncedAt     time.Time `json:"synced_at"`
+	EntryCount   int       `json:"entry_count"`
+	Added        []string  `json:"added"`
+	Removed      []string  `json:"removed"`
+	Changed      []string  `json:"changed"`
+	AddedCount   int       `json:"added_count"`
+	RemovedCount int       `json:"removed_count"`
+	ChangedCount int       `json:"changed_count"`
 }
 
 // CodeListSyncs is the response body: lists for the summary, list and syncs for one list's detail.
@@ -46,7 +50,10 @@ type CodeListSyncs struct {
 	Syncs *[]CodeListSync   `json:"syncs,omitempty"`
 }
 
-const codeListDetailLimit = 30
+const (
+	codeListDetailLimit = 30
+	codeListCodesShown  = 200 // the console's per-category cap (CODES_SHOWN)
+)
 
 // CodeListSyncs reads the sync log: a summary when list is nil, else the newest 30 syncs of that list.
 func (s *Store) CodeListSyncs(ctx context.Context, list *string) (CodeListSyncs, error) {
@@ -73,11 +80,12 @@ SELECT DISTINCT ON (list) list, synced_at, entry_count, cardinality(added), card
 			return rows.Err()
 		}
 		rows, err := tx.Query(ctx, `
-SELECT synced_at, entry_count, added, removed, changed, status
+SELECT synced_at, entry_count, added[1:$3], removed[1:$3], changed[1:$3],
+       cardinality(added), cardinality(removed), cardinality(changed), status
   FROM nrs_code_list_syncs
  WHERE list = $1
  ORDER BY synced_at DESC, id DESC
- LIMIT $2`, *list, codeListDetailLimit)
+ LIMIT $2`, *list, codeListDetailLimit, codeListCodesShown)
 		if err != nil {
 			return fmt.Errorf("validation: read code-list syncs of %s: %w", *list, err)
 		}
@@ -85,7 +93,7 @@ SELECT synced_at, entry_count, added, removed, changed, status
 		syncs := []CodeListSync{}
 		for rows.Next() {
 			var c CodeListSync
-			if err := rows.Scan(&c.SyncedAt, &c.EntryCount, &c.Added, &c.Removed, &c.Changed, &c.Status); err != nil {
+			if err := rows.Scan(&c.SyncedAt, &c.EntryCount, &c.Added, &c.Removed, &c.Changed, &c.AddedCount, &c.RemovedCount, &c.ChangedCount, &c.Status); err != nil {
 				return fmt.Errorf("validation: scan code-list sync: %w", err)
 			}
 			syncs = append(syncs, c)

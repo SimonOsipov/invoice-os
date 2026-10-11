@@ -9,10 +9,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// ErrHeld marks a pull that the shrink guard refused; nrs_codes is unchanged.
+var ErrHeld = errors.New("pull held")
+
 // Change is what one sync did to a list. Entries is the published entry count.
+// Held: nothing was applied and Removed is what the pull would have removed.
 type Change struct {
 	Added, Removed, Changed []string
 	Entries                 int
+	Held                    bool
 }
 
 // Syncer fetches the NRS lists and applies them to nrs_codes.

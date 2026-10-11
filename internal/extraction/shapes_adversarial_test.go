@@ -616,7 +616,7 @@ func TestShapeEmail_RefusesMalformed(t *testing.T) {
 }
 
 func TestShapePhone_RefusesMalformed(t *testing.T) {
-	for _, raw := range []string{"123456", "1234567890123456", "0801 234 ABCD", "234+801", "", strings.Repeat("1 ", 16) + "1"} {
+	for _, raw := range []string{"123456", "1234567890123456", "0801 234 ABCD", "234+801", "", "1234567890" + strings.Repeat("-", 23)} {
 		if got := extraction.ShapePhone.Normalize(raw); got != nil {
 			t.Errorf("ShapePhone.Normalize(%q) = %v, want nil", raw, got)
 		}

@@ -25,9 +25,9 @@ import (
 // `type: cel` rule's expr and any rule's `when` guard compile+evaluate
 // identically.
 func evalCELBool(expr string, p Payload) (bool, error) {
-	env, err := cel.NewEnv(cel.Variable("invoice", cel.DynType))
+	env, err := newCELEnv()
 	if err != nil {
-		return false, fmt.Errorf("validation: cel env: %w", err)
+		return false, err
 	}
 	ast, iss := env.Compile(expr)
 	if iss != nil && iss.Err() != nil {
@@ -48,14 +48,28 @@ func evalCELBool(expr string, p Payload) (bool, error) {
 	return b, nil
 }
 
-// compileCEL compiles expr in the evalCELBool environment without evaluating it.
-func compileCEL(expr string) error {
+// newCELEnv is the one environment evalCELBool and compileCEL share.
+func newCELEnv() (*cel.Env, error) {
 	env, err := cel.NewEnv(cel.Variable("invoice", cel.DynType))
 	if err != nil {
-		return fmt.Errorf("validation: cel env: %w", err)
+		return nil, fmt.Errorf("validation: cel env: %w", err)
 	}
-	if _, iss := env.Compile(expr); iss != nil && iss.Err() != nil {
+	return env, nil
+}
+
+// compileCEL compiles expr in the evalCELBool environment without evaluating it,
+// and rejects an output type that is neither bool nor dyn.
+func compileCEL(expr string) error {
+	env, err := newCELEnv()
+	if err != nil {
+		return err
+	}
+	a, iss := env.Compile(expr)
+	if iss != nil && iss.Err() != nil {
 		return fmt.Errorf("validation: cel compile %q: %w", expr, iss.Err())
+	}
+	if t := a.OutputType(); !t.IsExactType(cel.BoolType) && !t.IsExactType(cel.DynType) {
+		return fmt.Errorf("validation: cel expression %q yields %s, not bool", expr, t)
 	}
 	return nil
 }

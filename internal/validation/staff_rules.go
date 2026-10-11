@@ -19,7 +19,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SimonOsipov/invoice-os/internal/audit"
-	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -122,13 +121,9 @@ func (s *Store) RulesOfVersion(ctx context.Context, version *int) (InForceRules,
 // SwitchRule flips key in the version in force and records the staff audit row in one tx.
 // A same-state request or a failed audit write rolls the tx back.
 func (s *Store) SwitchRule(ctx context.Context, key string, enabled bool, reason string) (SwitchResult, error) {
-	id, ok := auth.StaffFromContext(ctx)
-	if !ok {
-		return SwitchResult{}, db.ErrNotStaff
-	}
-	actor, err := uuid.Parse(id.Subject)
+	actor, err := staffActorOf(ctx)
 	if err != nil {
-		return SwitchResult{}, db.ErrNotStaff
+		return SwitchResult{}, err
 	}
 	event := "validation.rule.disabled"
 	if enabled {

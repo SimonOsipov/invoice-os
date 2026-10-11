@@ -25,7 +25,7 @@ const draftNewKey = "e2e-x"
 func mustValid(t *testing.T, key, typ, message string, params string) validated {
 	t.Helper()
 	yes := true
-	v, err := validateDraftRule(key, draftRuleRequest{
+	v, err := validateDraftRule(NewDefaultEngine(), key, draftRuleRequest{
 		Type: typ, Target: "invoice.x", Params: []byte(params), Severity: "warning", Message: message, Enabled: &yes,
 	})
 	if err != nil {
@@ -544,7 +544,7 @@ func TestStaffDrafts_EveryGoldenRuleValidates(t *testing.T) {
 		}
 		for _, r := range got.Rules {
 			checked++
-			if _, err := validateDraftRule(r.Key, draftRuleRequest{
+			if _, err := validateDraftRule(NewDefaultEngine(), r.Key, draftRuleRequest{
 				Type: r.Type, Target: r.Target, Params: r.Params, Severity: r.Severity, When: r.When, Message: r.Message, Enabled: &r.Enabled,
 			}); err != nil {
 				t.Errorf("v%d rule %s: %v", v, r.Key, err)
@@ -673,7 +673,8 @@ func TestStaffDrafts_TestWritesNothing(t *testing.T) {
 
 func TestStaffDrafts_TestReportsAMissingCodeList(t *testing.T) {
 	_, _, store, _, ctx := draftSetup(t)
-	if _, err := store.OpenDraft(ctx); err != nil {
+	draft, err := store.OpenDraft(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AddDraftRule(ctx, "e2e-nolist", mustValid(t, "e2e-nolist", "enum", "m", `{"list":"e2e_no_such_list"}`)); err != nil {
@@ -686,7 +687,38 @@ func TestStaffDrafts_TestReportsAMissingCodeList(t *testing.T) {
 	if got.Draft.Error == nil || !strings.Contains(*got.Draft.Error, "e2e_no_such_list") {
 		t.Errorf("draft.error = %v, want it to name e2e_no_such_list", got.Draft.Error)
 	}
+	if got.Draft.RuleSetVersion != draft.Version || got.Draft.RuleSetVersionID != draft.RuleSetVersionID {
+		t.Errorf("draft stamp = %d %s, want %d %s", got.Draft.RuleSetVersion, got.Draft.RuleSetVersionID, draft.Version, draft.RuleSetVersionID)
+	}
 	if got.Draft.Violations == nil || len(got.Draft.Violations) != 0 || len(got.InForce.Violations) == 0 {
 		t.Errorf("draft violations %#v, in-force %d, want [] and some", got.Draft.Violations, len(got.InForce.Violations))
+	}
+}
+
+func TestStaffDrafts_PublishProbesDisabledRules(t *testing.T) {
+	for name, c := range map[string]struct{ typ, params string }{
+		"enum on a missing list": {"enum", `{"list":"e2e_no_such_list"}`},
+		"cel runtime fault":      {"cel", `{"expr":"invoice.missing.field == 1"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			super, _, store, _, ctx := draftSetup(t)
+			draft, err := store.OpenDraft(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := mustValid(t, "e2e-off", c.typ, "m", c.params)
+			r.enabled = false
+			if _, err := store.AddDraftRule(ctx, "e2e-off", r); err != nil {
+				t.Fatal(err)
+			}
+			far, _ := time.Parse("2006-01-02", deskFarDate)
+			_, err = store.PublishDraft(ctx, NewDefaultEngine(), far)
+			if !errors.Is(err, ErrDraftInvalid) || !strings.Contains(err.Error(), "e2e-off") {
+				t.Fatalf("publish = %v, want ErrDraftInvalid naming e2e-off", err)
+			}
+			if isSealed(t, super, draft.RuleSetVersionID) {
+				t.Error("the draft was sealed with a faulting disabled rule")
+			}
+		})
 	}
 }

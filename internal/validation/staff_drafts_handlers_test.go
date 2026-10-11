@@ -85,11 +85,11 @@ func TestStaffDraftsHandlers_OpenMapping(t *testing.T) {
 
 func TestStaffDraftsHandlers_AddEditMapping(t *testing.T) {
 	var adds, edits int
-	add := StaffAddDraftRuleHandler(func(_ context.Context, key string, _ validated) (DraftRuleResult, error) {
+	add := StaffAddDraftRuleHandler(NewDefaultEngine(), func(_ context.Context, key string, _ validated) (DraftRuleResult, error) {
 		adds++
 		return DraftRuleResult{Key: key}, ErrRuleInDraft
 	}, nil)
-	edit := StaffEditDraftRuleHandler(func(_ context.Context, key string, _ validated) (DraftRuleEdited, error) {
+	edit := StaffEditDraftRuleHandler(NewDefaultEngine(), func(_ context.Context, key string, _ validated) (DraftRuleEdited, error) {
 		edits++
 		return DraftRuleEdited{}, ErrRuleNotInDraft
 	}, nil)
@@ -127,10 +127,10 @@ func TestStaffDraftsHandlers_AddEditMapping(t *testing.T) {
 
 func TestStaffDraftsHandlers_AddAndEditSuccessShapes(t *testing.T) {
 	id := uuid.New()
-	add := StaffAddDraftRuleHandler(func(_ context.Context, key string, _ validated) (DraftRuleResult, error) {
+	add := StaffAddDraftRuleHandler(NewDefaultEngine(), func(_ context.Context, key string, _ validated) (DraftRuleResult, error) {
 		return DraftRuleResult{Key: key, RuleSetVersion: 5, RuleSetVersionID: id}, nil
 	}, nil)
-	edit := StaffEditDraftRuleHandler(func(_ context.Context, key string, _ validated) (DraftRuleEdited, error) {
+	edit := StaffEditDraftRuleHandler(NewDefaultEngine(), func(_ context.Context, key string, _ validated) (DraftRuleEdited, error) {
 		return DraftRuleEdited{DraftRuleResult{Key: key, RuleSetVersion: 5, RuleSetVersionID: id}, true}, nil
 	}, nil)
 	remove := StaffRemoveDraftRuleHandler(func(_ context.Context, key string) (DraftRuleResult, error) {
@@ -159,8 +159,8 @@ func TestStaffDraftsHandlers_AddAndEditSuccessShapes(t *testing.T) {
 
 func TestStaffDraftsHandlers_NoDraftIs404(t *testing.T) {
 	noDraft := fmt.Errorf("x: %w", ErrNoDraft)
-	add := StaffAddDraftRuleHandler(func(context.Context, string, validated) (DraftRuleResult, error) { return DraftRuleResult{}, noDraft }, nil)
-	edit := StaffEditDraftRuleHandler(func(context.Context, string, validated) (DraftRuleEdited, error) { return DraftRuleEdited{}, noDraft }, nil)
+	add := StaffAddDraftRuleHandler(NewDefaultEngine(), func(context.Context, string, validated) (DraftRuleResult, error) { return DraftRuleResult{}, noDraft }, nil)
+	edit := StaffEditDraftRuleHandler(NewDefaultEngine(), func(context.Context, string, validated) (DraftRuleEdited, error) { return DraftRuleEdited{}, noDraft }, nil)
 	remove := StaffRemoveDraftRuleHandler(func(context.Context, string) (DraftRuleResult, error) { return DraftRuleResult{}, noDraft }, nil)
 	publish := StaffPublishDraftHandler(func(context.Context, time.Time) (DraftPublished, error) { return DraftPublished{}, noDraft }, nil)
 	for name, call := range map[string]http.HandlerFunc{
@@ -184,7 +184,7 @@ func TestStaffDraftsHandlers_NoDraftIs404(t *testing.T) {
 
 func TestStaffDraftsHandlers_PutRejectsBadBodies(t *testing.T) {
 	var calls int
-	edit := StaffEditDraftRuleHandler(func(context.Context, string, validated) (DraftRuleEdited, error) {
+	edit := StaffEditDraftRuleHandler(NewDefaultEngine(), func(context.Context, string, validated) (DraftRuleEdited, error) {
 		calls++
 		return DraftRuleEdited{}, nil
 	}, nil)
@@ -315,6 +315,9 @@ func TestValidateDraftRule(t *testing.T) {
 		{"params null", "k", with(func(r *draftRuleRequest) { r.Params = json.RawMessage(`null`) }), true},
 		{"when blank", "k", with(func(r *draftRuleRequest) { r.When = str("") }), false},
 		{"when no compile", "k", with(func(r *draftRuleRequest) { r.When = str("invoice.") }), false},
+		{"when not bool", "k", with(func(r *draftRuleRequest) { r.When = str("1 + 2") }), false},
+		{"when dyn", "k", with(func(r *draftRuleRequest) { r.When = str("invoice.vat") }), true},
+		{"cel expr not bool", "k", with(func(r *draftRuleRequest) { r.Type = "cel"; r.Params = json.RawMessage(`{"expr":"'x'"}`) }), false},
 		{"when ok", "k", with(func(r *draftRuleRequest) { r.When = str("invoice.vat > 0") }), true},
 		{"cel without expr", "k", with(func(r *draftRuleRequest) { r.Type = "cel" }), false},
 		{"cel expr no compile", "k", with(func(r *draftRuleRequest) { r.Type = "cel"; r.Params = json.RawMessage(`{"expr":"1 +"}`) }), false},
@@ -331,7 +334,7 @@ func TestValidateDraftRule(t *testing.T) {
 		{"enabled absent", "k", with(func(r *draftRuleRequest) { r.Enabled = nil }), false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := validateDraftRule(c.key, c.in)
+			_, err := validateDraftRule(NewDefaultEngine(), c.key, c.in)
 			if (err == nil) != c.ok {
 				t.Errorf("err = %v, want ok=%v", err, c.ok)
 			}
@@ -341,7 +344,7 @@ func TestValidateDraftRule(t *testing.T) {
 
 func TestValidateDraftRule_NormalisesBody(t *testing.T) {
 	yes := true
-	v, err := validateDraftRule("k", draftRuleRequest{Type: "required", Severity: "info", Message: "  hi  ", Enabled: &yes})
+	v, err := validateDraftRule(NewDefaultEngine(), "k", draftRuleRequest{Type: "required", Severity: "info", Message: "  hi  ", Enabled: &yes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,11 +356,11 @@ func TestValidateDraftRule_NormalisesBody(t *testing.T) {
 // A valid body padded with trailing spaces to exactly the limit passes; one byte more is 413.
 func TestStaffDraftsHandlers_BodyLimitsAreExact(t *testing.T) {
 	var calls int
-	add := StaffAddDraftRuleHandler(func(context.Context, string, validated) (DraftRuleResult, error) {
+	add := StaffAddDraftRuleHandler(NewDefaultEngine(), func(context.Context, string, validated) (DraftRuleResult, error) {
 		calls++
 		return DraftRuleResult{}, nil
 	}, nil)
-	edit := StaffEditDraftRuleHandler(func(context.Context, string, validated) (DraftRuleEdited, error) {
+	edit := StaffEditDraftRuleHandler(NewDefaultEngine(), func(context.Context, string, validated) (DraftRuleEdited, error) {
 		calls++
 		return DraftRuleEdited{}, nil
 	}, nil)
@@ -445,5 +448,31 @@ func TestStaffDraftsHandlers_TestBodies(t *testing.T) {
 		if rec.Code != c.status || errText(t, rec) != c.msg {
 			t.Errorf("%v maps to %d %q, want %d %q", c.err, rec.Code, errText(t, rec), c.status, c.msg)
 		}
+	}
+}
+
+func TestValidateDraftRule_NonBoolCELNamesTheField(t *testing.T) {
+	yes := true
+	base := draftRuleRequest{Type: "required", Severity: "info", Message: "m", Enabled: &yes}
+	w := base
+	w.When = func() *string { s := "1 + 2"; return &s }()
+	c := base
+	c.Type, c.Params = "cel", json.RawMessage(`{"expr":"'x'"}`)
+	for field, in := range map[string]draftRuleRequest{"when": w, "params.expr": c} {
+		if _, err := validateDraftRule(NewDefaultEngine(), "k", in); err == nil || !strings.HasPrefix(err.Error(), field+" ") {
+			t.Errorf("%s: err = %v, want a message naming the field", field, err)
+		}
+	}
+}
+
+func TestValidateDraftRule_ChecksTypesAgainstTheInjectedEngine(t *testing.T) {
+	yes := true
+	in := draftRuleRequest{Type: "cel", Params: json.RawMessage(`{"expr":"true"}`), Severity: "info", Message: "m", Enabled: &yes}
+	small := NewEngine(map[RuleType]Evaluator{TypeRequired: requiredEval{}}, celGuard)
+	if _, err := validateDraftRule(small, "k", in); err == nil {
+		t.Error("cel accepted by an engine without it, want unknown rule type")
+	}
+	if _, err := validateDraftRule(NewDefaultEngine(), "k", in); err != nil {
+		t.Errorf("default engine: %v", err)
 	}
 }

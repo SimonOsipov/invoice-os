@@ -1,5 +1,5 @@
 -- DEFINER because no non-owner role may write rules (TestSchema_OnlyTheOwnerCanWriteRules); these are the app role's only write path.
--- ceiling: any invoice_app code path can call them with a rules-role staff UUID; the route, not the function, writes the audit row.
+-- ceiling: any invoice_app code path can call them with a rules-role staff UUID; the route, not the function, writes the audit row. Revisit when a second service gets invoice_app write access.
 -- +goose Up
 CREATE UNIQUE INDEX rule_set_versions_one_draft ON rule_set_versions ((true)) WHERE NOT sealed;
 

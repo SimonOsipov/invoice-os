@@ -66,8 +66,8 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/staff/code-list-syncs", validation.StaffCodeListSyncsHandler(store.CodeListSyncs, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/staff/rules/{key}", validation.StaffSwitchRuleHandler(store.SwitchRule, app.Logger))
 	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft", validation.StaffOpenDraftHandler(store.OpenDraft, app.Logger))
-	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/rules", validation.StaffAddDraftRuleHandler(store.AddDraftRule, app.Logger))
-	app.Mux.HandleFunc("PUT /v1/staff/rule-versions/draft/rules/{key}", validation.StaffEditDraftRuleHandler(store.EditDraftRule, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/rules", validation.StaffAddDraftRuleHandler(engine, store.AddDraftRule, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/staff/rule-versions/draft/rules/{key}", validation.StaffEditDraftRuleHandler(engine, store.EditDraftRule, app.Logger))
 	app.Mux.HandleFunc("DELETE /v1/staff/rule-versions/draft/rules/{key}", validation.StaffRemoveDraftRuleHandler(store.RemoveDraftRule, app.Logger))
 	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/publish", validation.StaffPublishDraftHandler(func(ctx context.Context, from time.Time) (validation.DraftPublished, error) {
 		return store.PublishDraft(ctx, engine, from)

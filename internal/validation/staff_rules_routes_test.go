@@ -64,11 +64,11 @@ func newRoutesRig(t *testing.T) *routesRig {
 		count()
 		return DraftOpened{}, nil
 	}, log))
-	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/rules", StaffAddDraftRuleHandler(func(context.Context, string, validated) (DraftRuleResult, error) {
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/rules", StaffAddDraftRuleHandler(NewDefaultEngine(), func(context.Context, string, validated) (DraftRuleResult, error) {
 		count()
 		return DraftRuleResult{}, nil
 	}, log))
-	app.Mux.HandleFunc("PUT /v1/staff/rule-versions/draft/rules/{key}", StaffEditDraftRuleHandler(func(context.Context, string, validated) (DraftRuleEdited, error) {
+	app.Mux.HandleFunc("PUT /v1/staff/rule-versions/draft/rules/{key}", StaffEditDraftRuleHandler(NewDefaultEngine(), func(context.Context, string, validated) (DraftRuleEdited, error) {
 		count()
 		return DraftRuleEdited{}, nil
 	}, log))

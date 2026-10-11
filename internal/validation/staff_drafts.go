@@ -117,13 +117,13 @@ func (v validated) auditRule() map[string]any {
 }
 
 // validateDraftRule runs the static checks on a rule body before any SQL.
-// ceiling: static checks only; a parameter fault in a branch neither publish probe reaches passes publish and fails loud at validation time. The kill switch is the rescue.
-func validateDraftRule(key string, in draftRuleRequest) (validated, error) {
+// ceiling: static checks only; a parameter fault in a branch neither publish probe reaches passes publish and fails loud at validation time. The kill switch is the rescue. Revisit if a validation fault reaches production.
+func validateDraftRule(eng *Engine, key string, in draftRuleRequest) (validated, error) {
 	var v validated
 	if len(key) > maxDraftKeyLen || !draftKeyPattern.MatchString(key) {
 		return v, fmt.Errorf("key must be kebab-case, 1 to %d characters", maxDraftKeyLen)
 	}
-	if _, ok := NewDefaultEngine().registry[RuleType(in.Type)]; !ok {
+	if _, ok := eng.registry[RuleType(in.Type)]; !ok {
 		return v, errors.New("unknown rule type")
 	}
 	switch in.Severity {
@@ -151,7 +151,7 @@ func validateDraftRule(key string, in draftRuleRequest) (validated, error) {
 			return v, fmt.Errorf("when must be 1 to %d characters", maxDraftWhenRunes)
 		}
 		if err := compileCEL(w); err != nil {
-			return v, errors.New("when does not compile")
+			return v, errors.New("when must compile to a boolean expression")
 		}
 		v.when = in.When
 	}
@@ -162,7 +162,7 @@ func validateDraftRule(key string, in draftRuleRequest) (validated, error) {
 			return v, errors.New("a cel rule needs params.expr")
 		}
 		if err := compileCEL(expr); err != nil {
-			return v, errors.New("params.expr does not compile")
+			return v, errors.New("params.expr must compile to a boolean expression")
 		}
 	case TypeFormat:
 		pattern, ok := params["pattern"].(string)
@@ -364,7 +364,7 @@ func draftFault(format string, args ...any) error {
 }
 
 // PublishDraft seals the draft and dates it from. Under the draft lock it first evaluates
-// the draft on an empty invoice and on the sample; a fault is ErrDraftInvalid.
+// each draft rule, enabled or not, on an empty invoice and on the sample; a fault is ErrDraftInvalid.
 func (s *Store) PublishDraft(ctx context.Context, eng *Engine, from time.Time) (DraftPublished, error) {
 	actor, err := staffActorOf(ctx)
 	if err != nil {
@@ -393,9 +393,17 @@ func (s *Store) PublishDraft(ctx context.Context, eng *Engine, from time.Time) (
 		case err != nil:
 			return fmt.Errorf("validation: load draft: %w", err)
 		}
-		for _, p := range []Payload{{"invoice": map[string]any{}}, sample} {
-			if _, err := eng.Evaluate(p, rs); err != nil {
-				return draftFault("the draft does not evaluate: %s", err.Error())
+		// Probe each rule as if switched on: the kill switch can enable a disabled one later.
+		for _, r := range rs.Rules {
+			r.Enabled = true
+			one := []Rule{r}
+			if err := attachCodeLists(ctx, tx, one); err != nil {
+				return draftFault("rule %s: %s", r.Key, err.Error())
+			}
+			for _, p := range []Payload{{"invoice": map[string]any{}}, sample} {
+				if _, err := eng.Evaluate(p, RuleSet{Version: rs.Version, Rules: one}); err != nil {
+					return draftFault("the draft does not evaluate: rule %s: %s", r.Key, err.Error())
+				}
 			}
 		}
 		err = tx.QueryRow(ctx,
@@ -464,6 +472,11 @@ func (s *Store) TestDraft(ctx context.Context, eng *Engine, invoice map[string]a
 			return err
 		}
 		res.Draft = DraftTestSide{RuleSetVersion: draft.Version, Violations: []Violation{}}
+		if draft.Version == 0 {
+			if err := tx.QueryRow(ctx, `SELECT version FROM rule_set_versions WHERE id = $1`, draftID).Scan(&res.Draft.RuleSetVersion); err != nil {
+				return fmt.Errorf("validation: read draft version: %w", err)
+			}
+		}
 		res.Draft.RuleSetVersionID, _ = uuid.Parse(draftID)
 		if draftErr == nil {
 			var r Result
@@ -557,7 +570,7 @@ func StaffOpenDraftHandler(open func(ctx context.Context) (DraftOpened, error), 
 }
 
 // StaffAddDraftRuleHandler serves POST /v1/staff/rule-versions/draft/rules.
-func StaffAddDraftRuleHandler(add func(ctx context.Context, key string, r validated) (DraftRuleResult, error), log *slog.Logger) http.HandlerFunc {
+func StaffAddDraftRuleHandler(eng *Engine, add func(ctx context.Context, key string, r validated) (DraftRuleResult, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -566,7 +579,7 @@ func StaffAddDraftRuleHandler(add func(ctx context.Context, key string, r valida
 		if !decodeDraftBody(w, r, maxDraftRuleBodyBytes, &req) {
 			return
 		}
-		rule, err := validateDraftRule(req.Key, req.draftRuleRequest)
+		rule, err := validateDraftRule(eng, req.Key, req.draftRuleRequest)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -581,7 +594,7 @@ func StaffAddDraftRuleHandler(add func(ctx context.Context, key string, r valida
 }
 
 // StaffEditDraftRuleHandler serves PUT /v1/staff/rule-versions/draft/rules/{key}.
-func StaffEditDraftRuleHandler(edit func(ctx context.Context, key string, r validated) (DraftRuleEdited, error), log *slog.Logger) http.HandlerFunc {
+func StaffEditDraftRuleHandler(eng *Engine, edit func(ctx context.Context, key string, r validated) (DraftRuleEdited, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -591,7 +604,7 @@ func StaffEditDraftRuleHandler(edit func(ctx context.Context, key string, r vali
 			return
 		}
 		key := r.PathValue("key")
-		rule, err := validateDraftRule(key, req)
+		rule, err := validateDraftRule(eng, key, req)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

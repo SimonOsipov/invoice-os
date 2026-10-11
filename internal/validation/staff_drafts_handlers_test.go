@@ -476,3 +476,31 @@ func TestValidateDraftRule_ChecksTypesAgainstTheInjectedEngine(t *testing.T) {
 		t.Errorf("default engine: %v", err)
 	}
 }
+
+func TestStaffDraftsHandlers_AddAndEditUseTheInjectedEngine(t *testing.T) {
+	small := NewEngine(map[RuleType]Evaluator{TypeRequired: requiredEval{}}, celGuard)
+	var calls int
+	add := StaffAddDraftRuleHandler(small, func(context.Context, string, validated) (DraftRuleResult, error) {
+		calls++
+		return DraftRuleResult{}, nil
+	}, nil)
+	edit := StaffEditDraftRuleHandler(small, func(context.Context, string, validated) (DraftRuleEdited, error) {
+		calls++
+		return DraftRuleEdited{}, nil
+	}, nil)
+	body := `{"key":"k","type":"cel","params":{"expr":"true"},"severity":"info","message":"m","enabled":true}`
+	rec, req := draftReq("POST", "/x", body)
+	add(rec, req)
+	if rec.Code != 400 || errText(t, rec) != "unknown rule type" {
+		t.Errorf("add = %d %s, want 400 unknown rule type", rec.Code, rec.Body.String())
+	}
+	rec, req = draftReq("PUT", "/x", strings.Replace(body, `"key":"k",`, "", 1))
+	req.SetPathValue("key", "k")
+	edit(rec, req)
+	if rec.Code != 400 || errText(t, rec) != "unknown rule type" {
+		t.Errorf("edit = %d %s, want 400 unknown rule type", rec.Code, rec.Body.String())
+	}
+	if calls != 0 {
+		t.Errorf("fake called %d times, want 0", calls)
+	}
+}

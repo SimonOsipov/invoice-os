@@ -722,3 +722,31 @@ func TestStaffDrafts_PublishProbesDisabledRules(t *testing.T) {
 		})
 	}
 }
+
+func TestStaffDrafts_PublishAcceptsDisabledRulesThatOnlyViolate(t *testing.T) {
+	super, _, store, _, ctx := draftSetup(t)
+	draft, err := store.OpenDraft(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, r := range map[string]validated{
+		"e2e-off-required": mustValid(t, "e2e-off-required", "required", "m", ""),
+		"e2e-off-cel":      mustValid(t, "e2e-off-cel", "cel", "m", `{"expr":"has(invoice.nothing_like_this)"}`),
+	} {
+		r.enabled = false
+		if _, err := store.AddDraftRule(ctx, key, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	far, _ := time.Parse("2006-01-02", deskFarDate)
+	if _, err := store.PublishDraft(ctx, NewDefaultEngine(), far); err != nil {
+		t.Fatalf("publish refused a draft whose disabled rules only violate: %v", err)
+	}
+	var off int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM rules WHERE rule_set_version_id = $1 AND key LIKE 'e2e-off-%' AND NOT enabled`, draft.RuleSetVersionID).Scan(&off); err != nil {
+		t.Fatal(err)
+	}
+	if off != 2 {
+		t.Errorf("%d disabled rules stayed disabled after publish, want 2", off)
+	}
+}

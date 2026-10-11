@@ -81,7 +81,18 @@ import {
 } from '../api/client'
 import { ensureFirmPolicyActive, ensureInhousePolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
-import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
+import {
+  assertFillsColumn,
+  assertPageDoesNotScrollSideways,
+  assertSameHeight,
+  enclosesRect,
+  gaps,
+  overlapOf,
+  rectsOverlap,
+  settleAnimations,
+  WIDE_WIDTHS,
+  type Rect,
+} from './layout'
 import { signInAs } from '../personaSession'
 import { INHOUSE_PERSONA } from './targets'
 import {
@@ -653,6 +664,63 @@ test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ 
   const importBtn = page.getByRole('button', { name: /^Import \d+ rows$/ })
   await expect(importBtn, 'a hand placement must still enable Import, proving the screen stayed live').toBeEnabled()
   await expect(page.getByTestId('map-suggested-badge'), 'a hand placement earns no SUGGESTED badge').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Opens the Map step of a file with no invoice_kind column; the fake AI places nothing.
+async function openUnsteeredMapStep(page: Page, label: string): Promise<void> {
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `${label} ${freshTin()}`, tin: freshTin() })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  const csv = buildAir07UnsteeredCsv(`INV-ENGI07-${freshTin()}`)
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles({ name: 'engi07.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
+  await expect(readColumnsBtn).toBeEnabled()
+  await readColumnsBtn.click()
+  await expect(page.getByTestId('map-column')).toHaveCount(11)
+}
+
+test('ENGI07-E2E-01: the buyer-type select sits in the palette card', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await openUnsteeredMapStep(page, 'ENGI-07 select')
+
+  const select = page.getByTestId('map-invoice-kind')
+  await expect(select, 'a file with no invoice_kind column offers the select').toBeVisible()
+  // The innermost div holding the card title and the select is the palette card.
+  const card = page.locator('div').filter({ has: page.getByText(/^Map fields to columns/) }).filter({ has: select }).last()
+  const chip = page.getByRole('button', { name: 'invoice_number' })
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await settleAnimations(card, select)
+      const [cardBox, selectBox] = await Promise.all([card.boundingBox(), select.boundingBox()])
+      expect(cardBox && selectBox, `the card and the select must both render at ${width}px`).toBeTruthy()
+      expect(enclosesRect(cardBox!, selectBox!, 1), `the select must sit inside the palette card at ${width}px`).toBe(true)
+      await assertPageDoesNotScrollSideways(page, `Map step at ${width}px`)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  await assertSameHeight(page, select, chip, 'the buyer-type select and a palette chip')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('ENGI07-E2E-02: placing invoice_kind hides the select', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await openUnsteeredMapStep(page, 'ENGI-07 hide')
+
+  await expect(page.getByTestId('map-invoice-kind'), 'control: the select shows before invoice_kind is placed').toHaveCount(1)
+  await page.getByRole('button', { name: 'invoice_kind' }).click()
+  await page.getByTestId('map-column').nth(0).click()
+  await expect(page.getByTestId('map-invoice-kind'), 'a mapped invoice_kind column replaces the default').toHaveCount(0)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

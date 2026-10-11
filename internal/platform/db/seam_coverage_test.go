@@ -3381,6 +3381,8 @@ var scSweepSkipAllowlist = []scSweepSkipExemption{
 	{file: "internal/invoice/payload_engine_test.go", fn: "rulesAppPool"},                                     // same guard, PAY-18's app-role-only pool helper
 	{file: "internal/invoice/revalidate_test.go", fn: "TestRevalidateAllTenants_CoversEveryEnumeratedTenant"}, // pre-existing: skips when DATABASE_READER_URL is unset, unrelated to the sweep
 	{file: "internal/invoice/recheck_test.go", fn: "TestStatusHistoryCause_DownDropsTheColumn"},               // env-gated: skips without DATABASE_MIGRATION_URL, the owner role the Down must run as
+	{file: "internal/invoice/customer_fill_test.go", fn: "cfFailFill"},                                        // env-gated: skips without DATABASE_MIGRATION_URL, the owner role that adds the trigger
+	{file: "internal/importer/customer_fill_test.go", fn: "cfFailFill"},                                       // same guard, importer's copy of the helper
 	{file: "internal/approval/policy_immutability_test.go", fn: "migratorPool"},                               // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
 	{file: "internal/approval/workflow_roles_test.go", fn: "dbTestPools"},                                     // same guard, approval's own pool helper
 	{file: "internal/tenancy/tenancy_test.go", fn: "dbTestPools"},                                             // same guard, tenancy's own pool helper

@@ -24,6 +24,7 @@ const (
 type routesRig struct {
 	h        http.Handler
 	lists    atomic.Int32
+	versions atomic.Int32
 	switches atomic.Int32
 	actor    atomic.Value // Subject that StaffFromContext reported
 }
@@ -36,11 +37,15 @@ func newRoutesRig(t *testing.T) *routesRig {
 		t.Fatal(err)
 	}
 	rig := &routesRig{}
-	app.Mux.HandleFunc("GET /v1/staff/rules", StaffListRulesHandler(func(ctx context.Context) (InForceRules, error) {
+	app.Mux.HandleFunc("GET /v1/staff/rules", StaffListRulesHandler(func(ctx context.Context, _ *int) (InForceRules, error) {
 		rig.lists.Add(1)
 		id, _ := auth.StaffFromContext(ctx)
 		rig.actor.Store(id.Subject)
 		return InForceRules{Rules: []StaffRule{}}, nil
+	}, nil))
+	app.Mux.HandleFunc("GET /v1/staff/rule-versions", StaffVersionsHandler(func(context.Context) (VersionList, error) {
+		rig.versions.Add(1)
+		return VersionList{Versions: []StaffVersion{}}, nil
 	}, nil))
 	app.Mux.HandleFunc("PATCH /v1/staff/rules/{key}", StaffSwitchRuleHandler(func(ctx context.Context, key string, enabled bool, _ string) (SwitchResult, error) {
 		rig.switches.Add(1)
@@ -91,6 +96,8 @@ func TestStaffRulesRoutes_RefuseEveryNonRulesCaller(t *testing.T) {
 			rig := newRoutesRig(t)
 			for _, req := range []struct{ method, path, body string }{
 				{"GET", "/v1/staff/rules", ""},
+				{"GET", "/v1/staff/rules?version=4", ""},
+				{"GET", "/v1/staff/rule-versions", ""},
 				{"PATCH", "/v1/staff/rules/vat-standard-rate", switchBody},
 			} {
 				rec := rig.do(c, req.method, req.path, req.body)
@@ -98,8 +105,8 @@ func TestStaffRulesRoutes_RefuseEveryNonRulesCaller(t *testing.T) {
 					t.Errorf("%s %s = %d (%s), want 403", req.method, req.path, rec.Code, rec.Body.String())
 				}
 			}
-			if rig.lists.Load() != 0 || rig.switches.Load() != 0 {
-				t.Errorf("handlers ran: list %d, switch %d, want 0", rig.lists.Load(), rig.switches.Load())
+			if rig.lists.Load() != 0 || rig.switches.Load() != 0 || rig.versions.Load() != 0 {
+				t.Errorf("handlers ran: list %d, switch %d, versions %d, want 0", rig.lists.Load(), rig.switches.Load(), rig.versions.Load())
 			}
 		})
 	}
@@ -110,12 +117,17 @@ func TestStaffRulesRoutes_RefuseEveryNonRulesCaller(t *testing.T) {
 			if rec := rig.do(c, "GET", "/v1/staff/rules", ""); rec.Code != 200 {
 				t.Errorf("GET = %d (%s), want 200", rec.Code, rec.Body.String())
 			}
+			for _, path := range []string{"/v1/staff/rules?version=4", "/v1/staff/rule-versions"} {
+				if rec := rig.do(c, "GET", path, ""); rec.Code != 200 {
+					t.Errorf("GET %s = %d (%s), want 200", path, rec.Code, rec.Body.String())
+				}
+			}
 			if rec := rig.do(c, "PATCH", "/v1/staff/rules/vat-standard-rate", switchBody); rec.Code != 200 {
 				t.Errorf("PATCH = %d (%s), want 200", rec.Code, rec.Body.String())
 			}
 		}
-		if rig.lists.Load() != 2 || rig.switches.Load() != 2 {
-			t.Errorf("handler calls: list %d, switch %d, want 2 and 2", rig.lists.Load(), rig.switches.Load())
+		if rig.lists.Load() != 4 || rig.switches.Load() != 2 || rig.versions.Load() != 2 {
+			t.Errorf("handler calls: list %d, switch %d, versions %d, want 4, 2 and 2", rig.lists.Load(), rig.switches.Load(), rig.versions.Load())
 		}
 		if got, _ := rig.actor.Load().(string); got != routesSubject {
 			t.Errorf("StaffFromContext subject = %q, want %q", got, routesSubject)

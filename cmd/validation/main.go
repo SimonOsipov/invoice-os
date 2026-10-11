@@ -60,7 +60,8 @@ func main() {
 	app.Mux.HandleFunc("PATCH /v1/rules/{key}", validation.ToggleHandler())
 
 	// Staff routes: the platform admits only a rules-role caller.
-	app.Mux.HandleFunc("GET /v1/staff/rules", validation.StaffListRulesHandler(store.RulesInForce, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/rules", validation.StaffListRulesHandler(store.RulesOfVersion, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/rule-versions", validation.StaffVersionsHandler(store.Versions, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/staff/rules/{key}", validation.StaffSwitchRuleHandler(store.SwitchRule, app.Logger))
 
 	// POST /v1/validate/batch — the tenant-free peer surface 03 (submission)

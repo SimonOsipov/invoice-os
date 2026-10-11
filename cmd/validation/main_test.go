@@ -200,6 +200,7 @@ func TestValidationMain_StaffRoutesAreRegisteredAndToggleStays(t *testing.T) {
 		"PATCH /v1/rules/{key}":       "validation.ToggleHandler",
 		"GET /v1/staff/rules":         "validation.StaffListRulesHandler",
 		"PATCH /v1/staff/rules/{key}": "validation.StaffSwitchRuleHandler",
+		"GET /v1/staff/rule-versions": "validation.StaffVersionsHandler",
 	} {
 		if got := handlers[pattern]; len(got) != 1 || got[0] != want {
 			t.Errorf("%q registered with %v, want exactly [%s]", pattern, got, want)

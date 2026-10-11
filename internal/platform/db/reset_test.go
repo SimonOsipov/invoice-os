@@ -149,7 +149,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 		t.Fatalf("parsed %d tables out of reset.go (%v); the parser is broken and every reset assertion below is vacuous",
 			len(resetTargetTables), resetTargetTables)
 	}
-	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs"} {
+	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs", "customers"} {
 		if !slices.Contains(resetTargetTables, want) {
 			t.Errorf("resetTables does not truncate %q", want)
 		}
@@ -199,8 +199,8 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 	}
 
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO customers (tenant_id, tin) VALUES ($1, $2)`,
-		tenantID, "99999999-"+uuid.NewString()[:4],
+		`INSERT INTO customers (tenant_id, tin) VALUES ($1, '99999999-0001') ON CONFLICT DO NOTHING`,
+		tenantID,
 	); err != nil {
 		t.Fatalf("seed customers fixture: %v", err)
 	}
@@ -505,6 +505,10 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 
 	if after := countAllResetTargetTables(t, pool); after != 0 {
 		t.Errorf("rows remaining across the reset target tables after Reset = %d, want 0", after)
+	}
+	// Named, not parsed: a table dropped from resetTables leaves the loop above.
+	if n := mustCount(t, pool, `SELECT count(*) FROM customers`); n != 0 {
+		t.Errorf("customers rows after Reset = %d, want 0", n)
 	}
 }
 

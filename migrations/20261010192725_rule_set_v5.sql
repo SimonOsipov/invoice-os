@@ -1,20 +1,6 @@
 -- +goose Up
--- Publish rule-set v5 (NRS content field set), dated 2027-01-01. v1-v4 are untouched.
--- Order is forced: v5 unsealed, its rules (rules_content_lock allows child INSERTs only under an
--- unsealed parent), then ONE UPDATE that seals and dates it. No rule_set_version_rechecks row:
--- the re-check writes it on 2027-01-01.
--- 67 rules: 15 v4 rules SELECT-copied, 5 fixed, 47 new. Each row's comment names its NRS v1.1
--- card, field and doc page (/docs/system-integrator/invoice-schema/<page>).
---
--- Known gaps, not enforced (NRS v1.1 cards):
---   * note (1.9) and payment_status (1.8): "Limit: 3 Characters" against longer documented values.
---   * accounting_cost (1.13): "Limit: 2 Characters" against the example 2000.
---   * HSNCode NNNN.NN, 7 chars (1.41.1) against the 8-digit vat-exemptions codes (3 with trailing spaces).
---   * REDUCED_VAT is listed at 7.5%; STAMP_DUTY 1% and WITHHOLDING_TAX are not rate-checked (D4).
---   * G2B invoice kind: changelog only, not in the field table (D8).
---   * Unenforced limits: street 255, city 100, postal zone 20, TIN 13, telephone "+" prefix (D15).
---   * NRS's TaxTotal example is inconsistent (TaxAmount 56.07 against a 60 subtotal, 1.32).
---   * The supplier sub-page says "buyer"; its example omits State and LGA, which it marks mandatory.
+-- Publish rule-set v5 (NRS content field set, 67 rules), dated 2027-01-01. v1-v4 untouched.
+-- v5 stays unsealed while rules insert (rules_content_lock), then one UPDATE seals and dates it.
 
 INSERT INTO rule_set_versions (version, sealed, notes)
 VALUES (5, false, 'MBS global rule-set v5 (ENGI-09: NRS content field set)');

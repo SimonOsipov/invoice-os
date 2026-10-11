@@ -30,7 +30,7 @@ const inviteNotValid = "this invite is no longer valid"
 
 var inviteTokenRe = regexp.MustCompile(`https://www\.ascomply\.com/invite#token=([A-Za-z0-9_-]+)`)
 
-// startInviteGateway serves startGateway's routes plus the invite preview, invitee registration and set-password page,
+// startInviteGateway serves startGateway's routes plus the invite preview, invitee registration, set-password page and token resend,
 // with the store's real lookup, claim and release.
 func startInviteGateway(t *testing.T, authBase string, store *tenancy.Store) string {
 	t.Helper()
@@ -38,7 +38,6 @@ func startInviteGateway(t *testing.T, authBase string, store *tenancy.Store) str
 	if err != nil {
 		t.Fatal(err)
 	}
-	site, _ := url.Parse(siteURL)
 	mux, _ := gatewayMux(t, authBase, 0, nil)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	limit := gateway.NewSignInThrottle("register", gateway.RegisterPerIP, gateway.RegisterMaxKeys, gateway.RegisterWindow, time.Now)
@@ -50,7 +49,7 @@ func startInviteGateway(t *testing.T, authBase string, store *tenancy.Store) str
 	}
 	preview := func(ctx context.Context, token string) (gateway.InvitationPreview, error) {
 		p, err := store.PreviewInvitation(ctx, token)
-		return gateway.InvitationPreview{Workspace: p.Workspace, Role: p.Role, Email: p.Email}, notValid(err)
+		return gateway.InvitationPreview{Workspace: p.Workspace, Role: p.Role, Email: p.Email, Account: p.Account}, notValid(err)
 	}
 	registrations := gateway.InvitationRegistrations{
 		Claim: func(ctx context.Context, token string) (string, bool, error) {
@@ -59,10 +58,11 @@ func startInviteGateway(t *testing.T, authBase string, store *tenancy.Store) str
 		},
 		Release: store.ReleaseInvitationRegistration,
 	}
-	signInLimit := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	mux.Handle("POST /auth/invitation", gateway.InvitationHandler(preview, log))
-	mux.Handle("POST /auth/invitation/register", gateway.InvitationRegisterHandler(authURL, noRedirect, 0, limit, true, log, registrations))
-	mux.Handle("POST /auth/invitation/password", gateway.InvitationPasswordHandler(authURL, site, noRedirect, gateway.NewSessionChecker(authURL, noRedirect, time.Now, log), signInLimit, nil, log))
+	mux.Handle("POST /auth/invitation/register", gateway.InvitationRegisterHandler(authURL, noRedirect, 0, limit, true, log, preview, registrations))
+	perAddress := gateway.NewSignInThrottle("resend-address", gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	perIP := gateway.NewSignInThrottle("resend-ip", gateway.ResendPerIP, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	mux.Handle("POST /auth/invitation/resend", gateway.InvitationResendHandler(authURL, noRedirect, perAddress, perIP, true, log, preview))
 	return serveGateway(t, mux)
 }
 
@@ -101,6 +101,7 @@ type inviteWorld struct {
 	gw, base, email, token, tenant string
 	store                          *tenancy.Store
 	resend                         *resendStandIn
+	adminCtx                       context.Context
 }
 
 // newInviteWorld is newInviteWorldAt on gmail.com.
@@ -122,6 +123,7 @@ func newInviteWorldFor(t *testing.T, email string, before func(w inviteWorld)) i
 	t.Helper()
 	ctx := context.Background()
 	base := idpMailURL(t)
+	grantAccountStateRead(t)
 	conn := superConn(t)
 
 	pool, err := db.NewPool(ctx, mailEnv(t, "DATABASE_URL"))
@@ -147,6 +149,7 @@ func newInviteWorldFor(t *testing.T, email string, before func(w inviteWorld)) i
 
 	inviter := &tenancy.Inviter{Store: store, Sender: accountmail.NewResend(w.resend.URL, "k_test", nil), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	adminCtx := auth.WithIdentity(ctx, auth.Identity{Subject: admin, Role: "authenticated", TenantID: w.tenant})
+	w.adminCtx = adminCtx
 	if res, err := inviter.Invite(adminCtx, []string{w.email}, "reviewer"); err != nil || len(res) != 1 || res[0].Delivery != "sent" {
 		t.Fatalf("invite %s: %+v, err %v; want one sent", w.email, res, err)
 	}
@@ -166,6 +169,20 @@ func newInviteWorldFor(t *testing.T, email string, before func(w inviteWorld)) i
 	}
 	w.token = m[1]
 	return w
+}
+
+// newPreRegisteredInviteWorld registers a fresh address through /auth/register with password (and confirms it when confirm
+// is set) before the admin invites it: an invite-created account has no password anybody holds.
+func newPreRegisteredInviteWorld(t *testing.T, prefix, password string, confirm bool) inviteWorld {
+	t.Helper()
+	return newInviteWorldFor(t, prefix+uuid.NewString()+"@example.com", func(w inviteWorld) {
+		if status, body := postGW(t, w.gw+"/auth/register", map[string]string{"email": w.email, "password": password}); status != http.StatusAccepted {
+			t.Fatalf("/auth/register before the invite: status %d, body %s; want 202", status, body)
+		}
+		if confirm {
+			confirmByLink(t, idpUser{email: w.email, password: password})
+		}
+	})
 }
 
 // postGW posts JSON to the gateway and returns the status and body.
@@ -197,6 +214,7 @@ func (w inviteWorld) setPasswordFromMail(t *testing.T, password string) (string,
 	if u, err := url.Parse(action); err != nil || u.Path != "/auth/invitation/password" {
 		t.Fatalf("the invitee's confirmation form posts to %s, want /auth/invitation/password", action)
 	}
+	values.Del("state")
 	values.Set("password", password)
 	status, location, err := postForm(action, values)
 	if err != nil {
@@ -206,6 +224,25 @@ func (w inviteWorld) setPasswordFromMail(t *testing.T, password string) (string,
 		t.Fatalf("submitting the set-password form: status %d, Location %q; want 303 %s/?verified=1", status, location, siteURL)
 	}
 	return action, values
+}
+
+// setPasswordWithState opens the one confirmation mail's link with state, submits the set-password form with password
+// and returns the form's action, its values and the redirect target.
+func (w inviteWorld) setPasswordWithState(t *testing.T, password, state string) (string, url.Values, string) {
+	t.Helper()
+	action, values := confirmFormWithState(t, confirmationLink(t, w.email), state)
+	if u, err := url.Parse(action); err != nil || u.Path != "/auth/invitation/password" {
+		t.Fatalf("the invitee's confirmation form posts to %s, want /auth/invitation/password", action)
+	}
+	if values.Get("state") != state {
+		t.Fatalf("the set-password form carries state %q, want %q", values.Get("state"), state)
+	}
+	values.Set("password", password)
+	status, location, err := postForm(action, values)
+	if err != nil || status != http.StatusSeeOther {
+		t.Fatalf("POST %s: status %d, err %v; want 303", action, status, err)
+	}
+	return action, values, location
 }
 
 // accept runs the accept handler as the tenant-less caller the middleware would build.

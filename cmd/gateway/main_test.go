@@ -1210,7 +1210,7 @@ func TestRegistrationHandlers_WiresRegisterAndVerify(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("Register = %d, want 202: %s", rec.Code, rec.Body.String())
 	}
-	rec = serveForm(reg.Verify, "/auth/verify", "token=T&type=signup")
+	rec = serveForm(handoffVerify(authURL, site, nil), "/auth/verify", "token=T&type=signup")
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
 		t.Errorf("Verify = %d Location %q, want 303 https://site.example/?verified=1", rec.Code, rec.Header().Get("Location"))
 	}
@@ -1232,13 +1232,20 @@ func TestRegistrationHandlers_NotConfigured503(t *testing.T) {
 				reg = registrationHandlers(nil, site, 0, slog.New(slog.DiscardHandler), nil, noPendingInvite)
 			}
 
-			for name, rec := range map[string]*httptest.ResponseRecorder{
+			answers := map[string]*httptest.ResponseRecorder{
 				"Register": serveRegistration(reg.Register, http.MethodPost, "/auth/register", `{"email":"new@corp.example","password":"Corr3ct-Horse"}`),
-				"Verify":   serveForm(reg.Verify, "/auth/verify", "token=T&type=signup"),
 
 				"ResendVerification":   serveRegistration(reg.ResendVerification, http.MethodPost, "/auth/resend-verification", `{"email":"new@corp.example"}`),
 				"RequestPasswordReset": serveRegistration(reg.RequestPasswordReset, http.MethodPost, "/auth/request-password-reset", `{"email":"new@corp.example"}`),
-			} {
+			}
+			// handoffHandlers builds Verify and needs a GoTrue URL to build the rest, so only AUTH_SITE_URL unset reaches it.
+			if unset == "AUTH_SITE_URL" {
+				answers["Verify"] = serveForm(handoffVerify(authURL, nil, nil), "/auth/verify", "token=T&type=signup")
+				log := slog.New(slog.DiscardHandler)
+				invitee := handoffHandlers(authURL, nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, nil).InvitationPassword
+				answers["InvitationPassword"] = serveForm(invitee, "/auth/invitation/password", "token=T&type=signup&password=n3w-Passw0rd")
+			}
+			for name, rec := range answers {
 				if rec.Code != http.StatusServiceUnavailable {
 					t.Errorf("%s = %d, want 503: %s", name, rec.Code, rec.Body.String())
 					continue
@@ -1361,6 +1368,121 @@ func TestInvitationHandlers_NotConfigured503(t *testing.T) {
 	}
 }
 
+// unconfirmedPreviewer reads every token as a live invite for an unconfirmed account at address; the count reports its calls.
+func unconfirmedPreviewer(address string) (gateway.InvitationPreviewer, func() int) {
+	var mu sync.Mutex
+	n := 0
+	return func(context.Context, string) (gateway.InvitationPreview, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			n++
+			return gateway.InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: address, Account: "unconfirmed"}, nil
+		}, func() int {
+			mu.Lock()
+			defer mu.Unlock()
+			return n
+		}
+}
+
+const resendToken = "Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"
+
+// AUTH_URL, AUTH_SITE_URL or either resend throttle missing: the token resend route refuses and reaches neither tenancy nor GoTrue.
+func TestInvitationResendHandler_NotConfigured503(t *testing.T) {
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
+	site, _ := url.Parse("https://site.example")
+	throttle := func(name string) *gateway.SignInThrottle {
+		return gateway.NewSignInThrottle(name, gateway.ResendPerAddress, gateway.ResendMaxKeys, gateway.ResendWindow, time.Now)
+	}
+	const body = `{"token":"` + resendToken + `"}`
+
+	// Control: configured, the same call sends, so the 503s below are the unset input.
+	t.Run("configured", func(t *testing.T) {
+		authURL, calls := fakeAuth(t)
+		preview, previewed := unconfirmedPreviewer("tunde@obi.test")
+		h := invitationResendHandler(authURL, site, throttle("resend-address"), throttle("resend-ip"), preview, slog.New(slog.DiscardHandler))
+
+		rec := serveRegistration(h, http.MethodPost, "/auth/invitation/resend", body)
+
+		if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"status":"sent"}` {
+			t.Fatalf("resend = %d %s, want 200 {\"status\":\"sent\"}", rec.Code, rec.Body.String())
+		}
+		if got := calls(); !slices.Equal(got, []string{"POST /resend"}) || previewed() != 1 {
+			t.Errorf("GoTrue saw %v and the previewer %d call(s), want one resend and one preview", got, previewed())
+		}
+	})
+
+	for _, unset := range []string{"AUTH_URL", "AUTH_SITE_URL", "address throttle", "ip throttle"} {
+		t.Run(unset, func(t *testing.T) {
+			authURL, calls := fakeAuth(t)
+			preview, previewed := unconfirmedPreviewer("tunde@obi.test")
+			log := slog.New(slog.DiscardHandler)
+			perAddress, perIP := throttle("resend-address"), throttle("resend-ip")
+			var h http.Handler
+			switch unset {
+			case "AUTH_URL":
+				h = invitationResendHandler(nil, site, perAddress, perIP, preview, log)
+			case "AUTH_SITE_URL":
+				h = invitationResendHandler(authURL, nil, perAddress, perIP, preview, log)
+			case "address throttle":
+				h = invitationResendHandler(authURL, site, nil, perIP, preview, log)
+			default:
+				h = invitationResendHandler(authURL, site, perAddress, nil, preview, log)
+			}
+
+			rec := serveRegistration(h, http.MethodPost, "/auth/invitation/resend", body)
+
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("resend = %d, want 503: %s", rec.Code, rec.Body.String())
+			}
+			var got map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got) != 1 || got["error"] != "registration is not configured" {
+				t.Errorf("body = %s, want {\"error\":\"registration is not configured\"}", rec.Body.String())
+			}
+			if got := calls(); len(got) != 0 || previewed() != 0 {
+				t.Errorf("GoTrue saw %v and the previewer %d call(s), want none", got, previewed())
+			}
+		})
+	}
+}
+
+// The budgets the token resend route spends are the ones ResendVerification spends, and they exist only when GoTrue and the site URL are set.
+func TestRegistrationHandlers_ResendBudgetsAreSharedWithTheInviteResend(t *testing.T) {
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "")
+	const remote = "203.0.113.7:4000"
+	authURL, calls := fakeAuth(t)
+	site, _ := url.Parse("https://site.example")
+	log := slog.New(slog.DiscardHandler)
+
+	reg := registrationHandlers(authURL, site, 0, log, nil, noPendingInvite)
+	if reg.ResendByAddress == nil || reg.ResendByIP == nil {
+		t.Fatal("ResendByAddress or ResendByIP is nil with AUTH_URL and AUTH_SITE_URL configured")
+	}
+	for range gateway.ResendPerAddress {
+		if rec := resendFrom(reg.ResendVerification, "tunde@obi.test", remote); rec.Code != http.StatusAccepted {
+			t.Fatalf("anonymous resend = %d, want 202: %s", rec.Code, rec.Body.String())
+		}
+	}
+	preview, _ := unconfirmedPreviewer("tunde@obi.test")
+	h := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, preview, log)
+	req := httptest.NewRequest(http.MethodPost, "/auth/invitation/resend", strings.NewReader(`{"token":"`+resendToken+`"}`))
+	req.RemoteAddr = remote
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("invite resend after the address spent its anonymous budget = %d, want 429: %s", rec.Code, rec.Body.String())
+	}
+	if got := countCalls(calls(), "POST /resend"); got != gateway.ResendPerAddress {
+		t.Errorf("GoTrue /resend calls = %d, want %d: the invite route was not refused by the shared budget", got, gateway.ResendPerAddress)
+	}
+
+	if got := registrationHandlers(nil, site, 0, log, nil, noPendingInvite); got.ResendByAddress != nil || got.ResendByIP != nil {
+		t.Error("a resend throttle is non-nil with AUTH_URL unset")
+	}
+	if got := registrationHandlers(authURL, nil, 0, log, nil, noPendingInvite); got.ResendByAddress != nil || got.ResendByIP != nil {
+		t.Error("a resend throttle is non-nil with AUTH_SITE_URL unset")
+	}
+}
+
 // A claim without a release would strand the invitee, so a missing half refuses before any claim.
 func TestInvitationHandlers_NilRegistrationsIsNotConfigured(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
@@ -1417,14 +1539,15 @@ func TestInvitationHandlers_NilRegistrationsIsNotConfigured(t *testing.T) {
 // Invitee registration enforces its per-client limit exactly where /auth/register does: not on a PR preview.
 func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 	for _, c := range []struct {
-		name, env string
-		wantCalls int
+		name, env  string
+		wantCalls  int
+		wantResend int
 	}{
-		{"pr-7", "pr-7", 11},
-		{"production", "production", gateway.RegisterPerIP},
-		{"development", "development", gateway.RegisterPerIP},
-		{"empty", "", gateway.RegisterPerIP},
-		{"upper-case PR-7", "PR-7", gateway.RegisterPerIP},
+		{"pr-7", "pr-7", 11, 11},
+		{"production", "production", gateway.RegisterPerIP, gateway.ResendPerAddress},
+		{"development", "development", gateway.RegisterPerIP, gateway.ResendPerAddress},
+		{"empty", "", gateway.RegisterPerIP, gateway.ResendPerAddress},
+		{"upper-case PR-7", "PR-7", gateway.RegisterPerIP, gateway.ResendPerAddress},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("RAILWAY_ENVIRONMENT_NAME", c.env)
@@ -1447,6 +1570,19 @@ func TestInvitationHandlers_EnforcementFollowsThePosture(t *testing.T) {
 			}
 			if got := countCalls(calls(), "POST /signup"); got != c.wantCalls {
 				t.Errorf("GoTrue /signup calls = %d, want %d", got, c.wantCalls)
+			}
+
+			// The token resend route follows the same posture: its address budget refuses off a PR preview only.
+			resend := invitationResendHandler(authURL, site, reg.ResendByAddress, reg.ResendByIP, func(context.Context, string) (gateway.InvitationPreview, error) {
+				return gateway.InvitationPreview{Email: "tunde@obi.test", Account: "unconfirmed"}, nil
+			}, log)
+			for range 11 {
+				req := httptest.NewRequest(http.MethodPost, "/auth/invitation/resend", strings.NewReader(`{"token":"`+resendToken+`"}`))
+				req.RemoteAddr = "203.0.113.7:4000"
+				resend.ServeHTTP(httptest.NewRecorder(), req)
+			}
+			if got := countCalls(calls(), "POST /resend"); got != c.wantResend {
+				t.Errorf("GoTrue /resend calls = %d, want %d", got, c.wantResend)
 			}
 		})
 	}
@@ -1874,5 +2010,117 @@ func TestApiMountPreflightGrantsTraceHeaders(t *testing.T) {
 	}
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
 		t.Errorf("disallowed-origin preflight Access-Control-Allow-Headers = %q, want none", got)
+	}
+}
+
+// TestGatewayMainStartsTheAccountStateGrantAfterProvision pins main's wiring of the boot-grant gate:
+// main needs Postgres, so it is scanned, not run. The gate itself is tested in account_state_grant_test.go.
+func TestGatewayMainStartsTheAccountStateGrantAfterProvision(t *testing.T) {
+	f, body := parseMain(t)
+
+	selector := func(e ast.Expr) string {
+		var parts []string
+		for {
+			switch x := e.(type) {
+			case *ast.SelectorExpr:
+				parts = append([]string{x.Sel.Name}, parts...)
+				e = x.X
+			case *ast.Ident:
+				return strings.Join(append([]string{x.Name}, parts...), ".")
+			default:
+				return ""
+			}
+		}
+	}
+	stmtHolding := func(match func(*ast.CallExpr) bool) (idx, n int) {
+		idx = -1
+		for i, s := range body.List {
+			ast.Inspect(s, func(nd ast.Node) bool {
+				if c, ok := nd.(*ast.CallExpr); ok && match(c) {
+					idx = i
+					n++
+				}
+				return true
+			})
+		}
+		return idx, n
+	}
+
+	starts := 0
+	ast.Inspect(f, func(nd ast.Node) bool {
+		if c, ok := nd.(*ast.CallExpr); ok {
+			if _, is := isCallTo(c, "", "startAccountStateGrant"); is {
+				starts++
+			}
+		}
+		return true
+	})
+	if starts != 1 {
+		t.Fatalf("main.go calls startAccountStateGrant %d times, want exactly 1", starts)
+	}
+
+	var start *ast.CallExpr
+	startIdx := -1
+	for i, s := range body.List {
+		if es, ok := s.(*ast.ExprStmt); ok {
+			if c, is := isCallTo(es.X, "", "startAccountStateGrant"); is {
+				start, startIdx = c, i
+			}
+		}
+	}
+	if start == nil {
+		t.Fatal("startAccountStateGrant is not a statement of its own directly in func main (not inside an if, go or func literal)")
+	}
+
+	provIdx, provN := stmtHolding(func(c *ast.CallExpr) bool { _, is := isCallTo(c, "db", "Provision"); return is })
+	runIdx, runN := stmtHolding(func(c *ast.CallExpr) bool { _, is := isCallTo(c, "app", "Run"); return is })
+	if provN != 1 || runN != 1 {
+		t.Fatalf("main calls db.Provision %d times and app.Run %d times, want 1 each", provN, runN)
+	}
+	if !(provIdx < startIdx && startIdx < runIdx) {
+		t.Errorf("statement order: db.Provision at %d, startAccountStateGrant at %d, app.Run at %d; want Provision < start < Run", provIdx, startIdx, runIdx)
+	}
+
+	if len(start.Args) != 5 {
+		t.Fatalf("startAccountStateGrant has %d arguments, want 5", len(start.Args))
+	}
+	if c, is := isCallTo(start.Args[0], "os", "Getenv"); !is || len(c.Args) != 1 || !isStringLit(c.Args[0], "RAILWAY_ENVIRONMENT_NAME") {
+		t.Errorf("argument 1 is not os.Getenv(\"RAILWAY_ENVIRONMENT_NAME\")")
+	}
+	if got := selector(start.Args[1]); got != "provisionCfg.MigrationDSN" {
+		t.Errorf("argument 2 = %q, want provisionCfg.MigrationDSN", got)
+	}
+	if got := selector(start.Args[2]); got != "provisionCfg.Passwords.AuthAdmin" {
+		t.Errorf("argument 3 = %q, want provisionCfg.Passwords.AuthAdmin", got)
+	}
+	if got := selector(start.Args[3]); got != "app.Logger" {
+		t.Errorf("argument 4 = %q, want app.Logger", got)
+	}
+	lit, ok := start.Args[4].(*ast.FuncLit)
+	if !ok || len(lit.Body.List) != 1 {
+		t.Fatalf("argument 5 is not a func literal holding exactly one statement")
+	}
+	gs, ok := lit.Body.List[0].(*ast.GoStmt)
+	if !ok {
+		t.Fatalf("argument 5's statement is %T, want a go statement", lit.Body.List[0])
+	}
+	if _, is := isCallTo(gs.Call, "", "grantAccountStateRead"); !is || len(gs.Call.Args) < 3 {
+		t.Fatalf("argument 5's go statement does not call grantAccountStateRead with at least 3 arguments")
+	}
+	if got := selector(gs.Call.Args[2]); got != "db.GrantAccountStateRead" {
+		t.Errorf("grantAccountStateRead's third argument = %q, want db.GrantAccountStateRead", got)
+	}
+
+	reads := 0
+	ast.Inspect(f, func(nd ast.Node) bool {
+		if c, ok := nd.(*ast.CallExpr); ok {
+			if _, is := isCallTo(c, "os", "Getenv"); is && len(c.Args) == 1 && isStringLit(c.Args[0], "AUTH_ADMIN_PASSWORD") {
+				reads++
+			}
+		}
+		return true
+	})
+	if reads != 1 {
+		t.Errorf("main.go reads os.Getenv(\"AUTH_ADMIN_PASSWORD\") %d times, want 1 (the grant takes provisionCfg.Passwords.AuthAdmin)", reads)
 	}
 }

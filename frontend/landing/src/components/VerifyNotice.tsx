@@ -5,7 +5,7 @@ import { Button } from './ds/Button'
 
 const COPY = {
   verified: 'Your email address is verified. Please sign in.',
-  failed: 'That link did not work. It may have expired or already been used.',
+  failed: 'This link is already used or expired. If you confirmed your email, sign in.',
   reset: RESET_DONE,
   'reset-failed': RESET_FAILED,
   ...INVITE_NOTICES,
@@ -21,7 +21,7 @@ const TONE = {
   'other-address': { background: 'var(--status-red-bg)', color: 'var(--status-red-text)' },
 } as const
 
-export function VerifyNotice({ outcome, onDismiss, onRequestReset }: { outcome: NonNullable<VerifyOutcome | ResetOutcome | InviteOutcome>; onDismiss: () => void; onRequestReset?: () => void }) {
+export function VerifyNotice({ outcome, onDismiss, onRequestReset, onSignIn }: { outcome: NonNullable<VerifyOutcome | ResetOutcome | InviteOutcome>; onDismiss: () => void; onRequestReset?: () => void; onSignIn?: () => void }) {
   return (
     <div className="container" style={{ paddingTop: 16 }}>
       <div
@@ -42,6 +42,11 @@ export function VerifyNotice({ outcome, onDismiss, onRequestReset }: { outcome: 
         {outcome === 'reset-failed' && onRequestReset && (
           <Button variant="text" onClick={onRequestReset} style={{ color: 'inherit', borderBottomColor: 'currentColor' }}>
             Request a new link
+          </Button>
+        )}
+        {outcome === 'failed' && onSignIn && (
+          <Button variant="text" onClick={onSignIn} style={{ color: 'inherit', borderBottomColor: 'currentColor' }}>
+            Sign in
           </Button>
         )}
         <Button variant="text" onClick={onDismiss} style={{ color: 'inherit', borderBottomColor: 'currentColor' }}>

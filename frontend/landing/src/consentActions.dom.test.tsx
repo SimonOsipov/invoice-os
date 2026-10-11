@@ -287,7 +287,7 @@ describe('T3-11: inert tracks the modal state', () => {
     expect(card, 'expected the notice to mount').not.toBeNull()
     expect(card!.hasAttribute('inert'), 'the notice was inert with no modal open').toBe(false)
 
-    await clickByText('Platform login')
+    await clickByText('Sign in')
     expect(document.querySelectorAll('[role="dialog"]').length, 'the sign-in modal did not open').toBe(1)
     expect(document.querySelector(NOTICE)!.hasAttribute('inert'), 'the notice is reachable under the scrim').toBe(true)
 
@@ -399,7 +399,7 @@ describe('the Cookie choices control under repeated and out-of-order use', () =>
     granted()
     await mountApp()
 
-    await clickByText('Platform login')
+    await clickByText('Sign in')
     expect(document.querySelectorAll('[role="dialog"]').length, 'the sign-in modal did not open').toBe(1)
 
     await clickByText('Cookie choices')

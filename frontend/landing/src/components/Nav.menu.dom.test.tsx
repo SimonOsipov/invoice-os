@@ -59,11 +59,11 @@ const menu = () => document.getElementById(burger().getAttribute('aria-controls'
 const toggle = () => act(() => void burger().click())
 const paths = (el: Element) => Array.from(el.querySelectorAll('path')).map((p) => p.getAttribute('d'))
 
-describe('HD-04 Platform login opens sign-in', () => {
+describe('HD-04 Sign in opens sign-in', () => {
   it('the header button calls onSignIn once, is type=button and carries a-login a-link', () => {
     mount()
-    const login = headerButton('Platform login')
-    expect(login, 'expected a header button "Platform login"').toBeDefined()
+    const login = headerButton('Sign in')
+    expect(login, 'expected a header button "Sign in"').toBeDefined()
     expect(login!.getAttribute('type')).toBe('button')
     expect(login!.classList.contains('a-login')).toBe(true)
     expect(login!.classList.contains('a-link')).toBe(true)
@@ -87,8 +87,8 @@ describe('HD-05 Book a demo is the small primary DS button', () => {
   })
 })
 
-describe('HD-07 the burger opens a menu that repeats the links and Platform login', () => {
-  it('opens with links and one Platform login, swaps the glyph, and closes on a second click', () => {
+describe('HD-07 the burger opens a menu that repeats the links and Sign in', () => {
+  it('opens with links and one Sign in, swaps the glyph, and closes on a second click', () => {
     mount({ hrefPrefix: '/' })
     expect(burger().getAttribute('aria-expanded'), 'control: closed at rest').toBe('false')
     expect(menu(), 'control: no menu at rest').toBeNull()
@@ -100,8 +100,9 @@ describe('HD-07 the burger opens a menu that repeats the links and Platform logi
     const links = Array.from(m!.querySelectorAll('a.a-menu-link'))
     expect(links.length, 'one a.a-menu-link per NAV_LINKS entry').toBe(NAV_LINKS.length)
     expect(links.map((a) => a.getAttribute('href'))).toEqual(NAV_LINKS.map((l) => `/${l.href}`))
-    const logins = Array.from(m!.querySelectorAll('button')).filter((b) => b.textContent?.trim() === 'Platform login')
-    expect(logins.length, 'exactly one Platform login in the menu').toBe(1)
+    const logins = Array.from(m!.querySelectorAll('button')).filter((b) => b.textContent?.trim() === 'Sign in')
+    expect(logins.length, 'exactly one Sign in in the menu').toBe(1)
+    expect(Array.from(m!.querySelectorAll('button'), (b) => b.textContent?.trim()), 'menu_holdsOnlySignIn').toEqual(['Sign in'])
     expect(paths(burger())).toEqual([...GLYPHS.x])
 
     toggle()
@@ -144,7 +145,7 @@ describe('HD-08b Escape with the menu closed does nothing', () => {
 })
 
 describe('HD-09 menu actions close the menu first', () => {
-  it('a link, Platform login and Book a demo each close the menu and fire once', () => {
+  it('a link, Sign in and Book a demo each close the menu and fire once', () => {
     mount()
 
     toggle()
@@ -152,10 +153,10 @@ describe('HD-09 menu actions close the menu first', () => {
     expect(menu(), 'a menu link click closes the menu').toBeNull()
 
     toggle()
-    const login = Array.from(menu()!.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Platform login')
-    expect(login, 'expected the menu Platform login').toBeDefined()
+    const login = Array.from(menu()!.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Sign in')
+    expect(login, 'expected the menu Sign in').toBeDefined()
     act(() => void login!.click())
-    expect(menu(), 'menu Platform login closes the menu').toBeNull()
+    expect(menu(), 'menu Sign in closes the menu').toBeNull()
     expect(onSignIn).toHaveBeenCalledTimes(1)
 
     toggle()
@@ -323,7 +324,7 @@ describe('HD-09b header Book a demo and burger interplay', () => {
     expect(onBookDemo).toHaveBeenCalledTimes(1)
   })
 
-  it('a menu link click sets the active link and closes; the header Platform login stays one control', () => {
+  it('a menu link click sets the active link and closes; the header Sign in stays one control', () => {
     for (const s of [
       { id: 'top', top: -500 },
       { id: 'problem', top: 500 },
@@ -340,7 +341,7 @@ describe('HD-09b header Book a demo and burger interplay', () => {
     expect(menu()).toBeNull()
     const current = document.querySelector('nav[aria-label="Primary"] a[aria-current="true"]')
     expect(current?.getAttribute('href'), 'the click lights the nav link at once').toBe('#problem')
-    expect(Array.from(header().querySelectorAll('button')).filter((b) => b.textContent?.trim() === 'Platform login').length).toBe(1)
+    expect(Array.from(header().querySelectorAll('button')).filter((b) => b.textContent?.trim() === 'Sign in').length).toBe(1)
   })
 })
 

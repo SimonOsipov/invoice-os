@@ -788,7 +788,7 @@ test('landing demo: the modal card fits and sits centred at every width', async 
 
   // Both scrims pad alike on a phone: the demo overlay carries no phone-only override.
   await page.goto(`${LANDING_URL}/?state=${'A'.repeat(43)}&signin=ready`)
-  const signIn = page.getByRole('dialog', { name: 'Platform login' })
+  const signIn = page.getByRole('dialog', { name: 'Sign in', exact: true })
   await expect(signIn).toBeVisible()
   for (const width of [390, 375]) {
     await page.setViewportSize({ width, height: 667 })

@@ -76,12 +76,24 @@ export function mintSignInState(now: number = Date.now()): string {
   return s
 }
 
-// One-shot: removes the key whatever it held, returns the state only when live.
-export function consumeSignInState(now: number = Date.now()): string | null {
+// The stored state when live; leaves the key alone.
+export function peekSignInState(now: number = Date.now()): string | null {
+  try {
+    return liveState(sessionStorage.getItem(SIGN_IN_STATE_KEY), now)
+  } catch (e) {
+    console.warn(`[signInState] failed to read state at "${SIGN_IN_STATE_KEY}":`, e)
+    return null
+  }
+}
+
+// One-shot: removes the key whatever it held, returns the state only when live (any age with `anyAge`).
+export function consumeSignInState(now: number = Date.now(), anyAge = false): string | null {
   try {
     const raw = sessionStorage.getItem(SIGN_IN_STATE_KEY)
     sessionStorage.removeItem(SIGN_IN_STATE_KEY)
-    return liveState(raw, now)
+    if (!anyAge) return liveState(raw, now)
+    const p = storedState(raw)
+    return p && p.at <= now ? p.s : null
   } catch (e) {
     console.warn(`[signInState] failed to consume state at "${SIGN_IN_STATE_KEY}":`, e)
     return null

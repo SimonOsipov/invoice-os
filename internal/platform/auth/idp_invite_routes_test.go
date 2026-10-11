@@ -97,7 +97,7 @@ func TestIdP_InviteLinkCreatesTheAccountWithoutAUsablePassword(t *testing.T) {
 	requireSignIn(t, w.base, u, pn, http.StatusOK, "")
 }
 
-// A forwarded link: whoever registers first sends the one mail to the invitee, a later registration sends none, and only the invitee's choice signs in.
+// A forwarded link: whoever registers first sends the one mail to the invitee, a later registration is refused as unconfirmed and sends none, and only the invitee's choice signs in.
 func TestIdP_ForwardedLinkHolderNeverOwnsThePassword(t *testing.T) {
 	w := newInviteWorldAt(t, "resend2-01fw-", "example.com")
 	u := idpUser{email: w.email}
@@ -119,8 +119,8 @@ func TestIdP_ForwardedLinkHolderNeverOwnsThePassword(t *testing.T) {
 
 	inviteeStatus, inviteeBody := postGW(t, registerURL, map[string]string{"token": w.token, "password": pi})
 
-	if inviteeStatus != http.StatusAccepted || inviteeBody != holderBody {
-		t.Errorf("invitee registration: status %d, body %s; want 202 %s", inviteeStatus, inviteeBody, holderBody)
+	if inviteeStatus != http.StatusConflict || inviteeBody != `{"error":"account_unconfirmed"}`+"\n" {
+		t.Errorf("second registration: status %d, body %q; want 409 account_unconfirmed", inviteeStatus, inviteeBody)
 	}
 	if n := mailCount(t, w.email); n != 1 {
 		t.Fatalf("mails after the second registration = %d, want still 1", n)
@@ -155,7 +155,7 @@ func TestIdP_SpentConfirmationLinkCannotResetTheChosenPassword(t *testing.T) {
 	requireSignIn(t, w.base, u, p2, http.StatusBadRequest, "invalid_credentials")
 }
 
-// An address that confirmed an account before it was invited: the link registration mails nothing, spends the claim and leaves the password alone.
+// An address that confirmed an account before it was invited: the link registration answers 409, mails nothing, spends no claim and leaves the password alone.
 func TestIdP_LinkRegistrationForAConfirmedAccountChangesNothing(t *testing.T) {
 	email := "resend2-01cf-" + uuid.NewString() + "@example.com"
 	u := idpUser{email: email}
@@ -177,19 +177,19 @@ func TestIdP_LinkRegistrationForAConfirmedAccountChangesNothing(t *testing.T) {
 
 	status, body := postGW(t, w.gw+"/auth/invitation/register", map[string]string{"token": w.token, "password": pb})
 
-	if status != http.StatusAccepted {
-		t.Fatalf("link registration: status %d, body %s; want 202", status, body)
+	if status != http.StatusConflict || body != `{"error":"account_exists"}`+"\n" {
+		t.Fatalf("link registration: status %d, body %q; want 409 account_exists", status, body)
 	}
 	if after := mailCount(t, email); after != before {
 		t.Errorf("mails after the link registration = %d, want %d", after, before)
 	}
-	var spent bool
+	var claimed bool
 	if err := superConn(t).QueryRow(context.Background(),
-		`SELECT registered_token_hash = token_hash FROM invitations WHERE tenant_id = $1 AND invitee_email = $2`, w.tenant, email).Scan(&spent); err != nil {
+		`SELECT registered_token_hash IS NOT NULL FROM invitations WHERE tenant_id = $1 AND invitee_email = $2`, w.tenant, email).Scan(&claimed); err != nil {
 		t.Fatalf("read the invitation: %v", err)
 	}
-	if !spent {
-		t.Error("registered_token_hash != token_hash: the claim was released although the account exists")
+	if claimed {
+		t.Error("registered_token_hash is set: the preview refusal must come before the claim")
 	}
 	requireSignIn(t, w.base, u, pa, http.StatusOK, "")
 	requireSignIn(t, w.base, u, pb, http.StatusBadRequest, "invalid_credentials")

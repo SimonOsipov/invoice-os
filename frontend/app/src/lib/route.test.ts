@@ -922,13 +922,14 @@ const REVIEW_FRAGMENT = '#' + 'review'
 
 // A read of the url fragment, however spelled: `.hash`, `['hash']` or a destructured `hash`.
 const FRAGMENT_READ = /\.\s*hash\b|\[\s*['"`]hash['"`]\s*\]|\{[^}]*\bhash\b[^}]*\}\s*=\s*[\w.]*location\b/g
-// The one fragment read the app keeps: the invite link's token, parsed by lib/pendingInvite.ts.
+// The two fragment reads the app keeps: the invite link's token (lib/pendingInvite.ts) and the confirm link's (lib/verifyBounce.ts).
 const INVITE_FRAGMENT_READ = 'readinvitefragment(window.location.hash)'
+const VERIFY_FRAGMENT_READ = 'readverifyfragment(window.location.hash)'
 
 describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app', () => {
   it('guard_noReviewHashSurvivesInTheApp', () => {
     const files = [
-      { name: 'App.tsx', path: APP_TSX, inviteReads: 1 },
+      { name: 'App.tsx', path: APP_TSX, inviteReads: 2 },
       { name: 'lib/reviewBatch.ts', path: fileURLToPath(new URL('./reviewBatch.ts', import.meta.url)), inviteReads: 0 },
       { name: 'lib/route.ts', path: ROUTE_TS, inviteReads: 0 },
       { name: 'types.ts', path: fileURLToPath(new URL('../types.ts', import.meta.url)), inviteReads: 0 },
@@ -942,12 +943,13 @@ describe('ROUTE-03-05 AC-1: no retired review-hash fragment survives in the app'
       expect(raw.length, `${name} read back empty -- the path is broken`).toBeGreaterThan(0)
       const code = stripComments(raw).toLowerCase()
       expect(code.includes(REVIEW_FRAGMENT), `${name} still mentions the retired review-hash fragment`).toBe(false)
-      // App.tsx keeps exactly one fragment read, the invite link's; any other read is a review hash returning.
+      // App.tsx keeps exactly two fragment reads, the invite link's and the confirm link's; any other read is a review hash returning.
       const reads = code.match(FRAGMENT_READ) ?? []
-      expect(reads.length, `${name} reads or writes the url fragment ${inviteReads === 0 ? 'at all' : 'beyond the invite link'}`).toBe(inviteReads)
+      expect(reads.length, `${name} reads or writes the url fragment ${inviteReads === 0 ? 'at all' : 'beyond the invite and confirm links'}`).toBe(inviteReads)
       if (inviteReads > 0) {
-        // Control needle: the one allowed read is the invite's, so the count above is not a count of nothing.
+        // Control needle: the allowed reads are the invite's and the confirm link's, so the count above is not a count of nothing.
         expect(code.includes(INVITE_FRAGMENT_READ), `${name} no longer reads the invite fragment through readInviteFragment`).toBe(true)
+        expect(code.includes(VERIFY_FRAGMENT_READ), `${name} no longer reads the confirm fragment through readVerifyFragment`).toBe(true)
       }
     }
   })

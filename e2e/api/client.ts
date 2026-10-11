@@ -283,6 +283,25 @@ export async function inviteWithToken(adminToken: string, tenantId: string, emai
   return token
 }
 
+// PendingInvite mirrors internal/tenancy's PendingInvite: five keys, none omitempty, `inviter` null when unnamed.
+export interface PendingInvite {
+  id: string
+  workspace: string
+  role: string
+  inviter: string | null
+  expires_at: string
+}
+
+// GET /api/tenancy/v1/invitations/mine, raw so a spec can assert the refusals.
+export function listMine(token: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch('/api/tenancy/v1/invitations/mine', { headers: { Authorization: `Bearer ${token}` } })
+}
+
+// POST /api/tenancy/v1/invitations/{id}/accept: no body, 200 in the token-accept shape.
+export function acceptById(token: string, id: string): Promise<{ status: number; body: unknown }> {
+  return rawFetch(`/api/tenancy/v1/invitations/${id}/accept`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+}
+
 // ---- Wire contract types, declared locally to the verified contract
 // (internal/tenancy, internal/portfolio/portfolio.go, internal/validation/
 // rule.go + handlers.go). Me mirrors e2e/topology/isolation.spec.ts's Me

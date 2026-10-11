@@ -69,8 +69,8 @@ func registeredHash(t *testing.T, id string) []byte {
 	return got
 }
 
-// pendingFor calls the lookup as invoice_app; an empty guc leaves app.current_tenant unset.
-func pendingFor(t *testing.T, guc, email string) bool {
+// invitationPendingFor calls the lookup as invoice_app; an empty guc leaves app.current_tenant unset.
+func invitationPendingFor(t *testing.T, guc, email string) bool {
 	t.Helper()
 	var got bool
 	err := inAppTx(context.Background(), guc, func(tx pgx.Tx) error {
@@ -160,7 +160,7 @@ func TestRLS_InvitationPendingForEmailSeesEveryTenant(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			for _, addr := range []string{a, b} {
-				if !pendingFor(t, c.guc, addr) {
+				if !invitationPendingFor(t, c.guc, addr) {
 					t.Errorf("pending_for_email(%q) = false, want true", addr)
 				}
 			}
@@ -181,7 +181,7 @@ func TestRLS_InvitationPendingForEmailIgnoresSpentExpiredAndOtherAddresses(t *te
 	setInviteState(t, idD, `status = 'revoked'`)
 	setInviteState(t, idE, `expires_at = now() - interval '1 second'`)
 
-	if !pendingFor(t, "", f) {
+	if !invitationPendingFor(t, "", f) {
 		t.Fatalf("control: pending invite of %q = false, want true", f)
 	}
 	for _, tc := range []struct{ name, addr string }{
@@ -190,7 +190,7 @@ func TestRLS_InvitationPendingForEmailIgnoresSpentExpiredAndOtherAddresses(t *te
 		{"expired", e},
 		{"another address", uniqueAddress("g")},
 	} {
-		if pendingFor(t, "", tc.addr) {
+		if invitationPendingFor(t, "", tc.addr) {
 			t.Errorf("%s: pending_for_email(%q) = true, want false", tc.name, tc.addr)
 		}
 	}
@@ -205,7 +205,7 @@ func TestRLS_InvitationPendingForEmailFoldsCaseAndSpaces(t *testing.T) {
 	mixed := "Mixed-" + uuid.NewString()[:8]
 	seedAcceptInvite(t, tenant, "reviewer", mixed+"@Firm.Test", newToken(t))
 
-	if !pendingFor(t, "", local+"@firm.test") {
+	if !invitationPendingFor(t, "", local+"@firm.test") {
 		t.Fatalf("control: exact address = false, want true")
 	}
 	for _, c := range []struct{ name, addr string }{
@@ -217,11 +217,11 @@ func TestRLS_InvitationPendingForEmailFoldsCaseAndSpaces(t *testing.T) {
 		{"stored mixed case, probed as stored", mixed + "@Firm.Test"},
 		{"stored mixed case, probed upper", "  " + strings.ToUpper(mixed) + "@FIRM.TEST "},
 	} {
-		if !pendingFor(t, "", c.addr) {
+		if !invitationPendingFor(t, "", c.addr) {
 			t.Errorf("%s: pending_for_email(%q) = false, want true", c.name, c.addr)
 		}
 	}
-	if pendingFor(t, "", "  "+local+"x@Firm.Test ") {
+	if invitationPendingFor(t, "", "  "+local+"x@Firm.Test ") {
 		t.Errorf("a different address after folding = true, want false")
 	}
 }
@@ -319,7 +319,7 @@ func TestRLS_InvitationPendingForEmailRefusesEveryOtherRole(t *testing.T) {
 	addr := uniqueAddress("role")
 	seedAcceptInvite(t, tenant, "reviewer", addr, newToken(t))
 
-	if !pendingFor(t, "", addr) {
+	if !invitationPendingFor(t, "", addr) {
 		t.Fatalf("control: invoice_app sees the pending invite of %q = false, want true", addr)
 	}
 	for _, role := range []struct {
@@ -383,7 +383,7 @@ func TestRLS_InvitationPendingForEmailRevealsOnlyABoolean(t *testing.T) {
 			t.Errorf("%q: columns=%d type oid=%d rows=%d, want 1 column of boolean (oid 16) and 1 row, though two tenants hold the address", probe, cols, oid, rowCount)
 		}
 	}
-	if !pendingFor(t, "", addr) || pendingFor(t, "", uniqueAddress("nobody")) {
+	if !invitationPendingFor(t, "", addr) || invitationPendingFor(t, "", uniqueAddress("nobody")) {
 		t.Errorf("the boolean is not true for the shared address and false for a stranger")
 	}
 }
@@ -426,11 +426,11 @@ func TestRLS_InvitationPendingForEmailTreatsPatternCharactersAsLiterals(t *testi
 	local := "pat-" + uuid.NewString()[:8]
 	seedAcceptInvite(t, tenant, "reviewer", local+"@firm.test", newToken(t))
 
-	if !pendingFor(t, "", local+"@firm.test") {
+	if !invitationPendingFor(t, "", local+"@firm.test") {
 		t.Fatalf("control: exact address = false, want true")
 	}
 	for _, probe := range []string{"%", "_", "%@firm.test", local + "%", local, local + "@firm.tes_", local + "@firm.test.", "x" + local + "@firm.test"} {
-		if pendingFor(t, "", probe) {
+		if invitationPendingFor(t, "", probe) {
 			t.Errorf("pending_for_email(%q) = true, want false", probe)
 		}
 	}

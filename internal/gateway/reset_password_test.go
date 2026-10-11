@@ -20,15 +20,19 @@ import (
 )
 
 const (
-	rpPath     = "/auth/reset-password"
-	rpToken    = "tok-Abc123_xyz"
-	rpEmail    = "ada@corp.example"
-	rpPass     = "n3w-Passw0rd"
-	rpAccess   = "at1"
-	rpFailed   = "https://site.example/?reset=failed"
-	rpOK       = "https://site.example/?reset=1"
-	rpAlert    = "Use a password of 6 to 72 characters."
-	rpFormType = "application/x-www-form-urlencoded"
+	rpPath    = "/auth/reset-password"
+	rpToken   = "tok-Abc123_xyz"
+	rpEmail   = "ada@corp.example"
+	rpPass    = "n3w-Passw0rd"
+	rpAccess  = "at1"
+	rpRefresh = "rt1"
+
+	rpGrantAccess  = "grant-at-7a1c" // the password grant's session, distinct from the verify session
+	rpGrantRefresh = "grant-rt-4e9b"
+	rpFailed       = "https://site.example/?reset=failed"
+	rpOK           = "https://site.example/?reset=1"
+	rpAlert        = "Use a password of 6 to 72 characters."
+	rpFormType     = "application/x-www-form-urlencoded"
 
 	rpMsgSignOutFailed = "reset-password: global sign-out failed"
 	rpMsgIncomplete    = "reset-password: gotrue verify answer incomplete"
@@ -49,17 +53,17 @@ type rpCall struct {
 
 func (c rpCall) String() string { return c.Method + " " + c.Path }
 
-// resetGoTrue is GoTrue's /verify, PUT /user and /logout, matched by path suffix. Each route
+// resetGoTrue is GoTrue's /verify, PUT /user, /logout and /token, matched by path suffix. Each route
 // defaults to success; a test swaps a field before the first request.
 type resetGoTrue struct {
-	URL                  *url.URL
-	mu                   sync.Mutex
-	calls                []rpCall
-	verify, user, logout http.HandlerFunc
+	URL                         *url.URL
+	mu                          sync.Mutex
+	calls                       []rpCall
+	verify, user, logout, token http.HandlerFunc
 }
 
 func rpVerifyAnswer(id, email string) http.HandlerFunc {
-	b, _ := json.Marshal(map[string]any{"access_token": rpAccess, "user": map[string]string{"id": id, "email": email}})
+	b, _ := json.Marshal(map[string]any{"access_token": rpAccess, "refresh_token": rpRefresh, "user": map[string]string{"id": id, "email": email}})
 	return answer(http.StatusOK, string(b))
 }
 
@@ -69,9 +73,11 @@ func newResetGoTrue(t *testing.T) *resetGoTrue {
 		verify: rpVerifyAnswer(subjectS1, rpEmail),
 		user:   answer(http.StatusOK, `{}`),
 		logout: answer(http.StatusNoContent, ""),
+		token:  answer(http.StatusOK, `{"access_token":"`+rpGrantAccess+`","refresh_token":"`+rpGrantRefresh+`"}`),
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(b))
 		f.mu.Lock()
 		f.calls = append(f.calls, rpCall{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization"), r.Header.Get("Content-Type"), b})
 		f.mu.Unlock()
@@ -82,6 +88,8 @@ func newResetGoTrue(t *testing.T) *resetGoTrue {
 			f.user(w, r)
 		case strings.HasSuffix(r.URL.Path, "/logout"):
 			f.logout(w, r)
+		case strings.HasSuffix(r.URL.Path, "/token"):
+			f.token(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -342,6 +350,19 @@ func TestResetPasswordPage_RendersOneFormWithTheToken(t *testing.T) {
 	}
 }
 
+func TestResetPasswordPage_RendersNoStateInput(t *testing.T) {
+	rec, doc := rpPage(t, rpToken)
+	if n := len(vpFind(doc, vpTag("form"))); n != 1 {
+		t.Errorf("forms = %d, want 1", n)
+	}
+	if _, ok := rpInputs(doc)["state"]; ok {
+		t.Error("the reset page has a state input")
+	}
+	if strings.Contains(rec.Body.String(), "{{") {
+		t.Errorf("a placeholder is left in the body: %q", rec.Body.String())
+	}
+}
+
 func TestResetPasswordPage_HeadersAndScriptHash(t *testing.T) {
 	h := rpPageHandler(t)
 	get := rpGet(h, http.MethodGet, rpQuery(rpToken))
@@ -489,6 +510,23 @@ func TestResetPassword_VerifiesSetsThePasswordThenSignsOutEverywhere(t *testing.
 	}
 	if calls[2].RawQuery != "scope=global" {
 		t.Errorf("logout query = %q, want scope=global", calls[2].RawQuery)
+	}
+}
+
+func TestResetPassword_NeverGrantsOrHandsOff(t *testing.T) {
+	f := newResetGoTrue(t)
+	v := rpValues(rpToken, "recovery", rpPass)
+	v.Set("state", vhState)
+
+	rec := rpPost(t, newResetHandler(t, f, nil), v)
+
+	rpRequireRedirect(t, rec, rpOK)
+	want := []string{"POST /verify", "PUT /user", "POST /logout"}
+	if got := f.names(); !slices.Equal(got, want) {
+		t.Errorf("GoTrue calls = %v, want %v and no POST /token", got, want)
+	}
+	if strings.Contains(rec.Header().Get("Location"), "handoff") {
+		t.Errorf("Location %q carries a hand-off code", rec.Header().Get("Location"))
 	}
 }
 

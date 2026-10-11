@@ -83,7 +83,7 @@ describe('deep links', () => {
     await act(async () => document.querySelector<HTMLElement>(`${DIALOG} [aria-label="Close"], ${DIALOG} button.close`)?.click())
     if (dialogs().length) await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
     expect(dialogs(), 'the register dialog closed').toEqual([])
-    const login = Array.from(document.querySelectorAll<HTMLButtonElement>('header button')).find((b) => b.textContent?.trim() === 'Platform login')!
+    const login = Array.from(document.querySelectorAll<HTMLButtonElement>('header button')).find((b) => b.textContent?.trim() === 'Sign in')!
     await act(async () => login.click())
     const d = document.querySelector<HTMLElement>(DIALOG)!
     const cont = Array.from(d.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.includes('Continue with email'))
@@ -116,7 +116,7 @@ describe('deep links', () => {
 
   it('deepLink_aSignInOutcomeWins', async () => {
     await bootAt(`/?state=${STATE}&signin=ready&register`)
-    expect(dialogs()).toEqual(['Platform login'])
+    expect(dialogs()).toEqual(['Sign in'])
   })
 
   it('deepLink_registerWinsOverDemo', async () => {

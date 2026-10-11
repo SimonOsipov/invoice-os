@@ -10,11 +10,12 @@ import type { ConsentStore } from './consent'
 import { CHECK_INPUT_STYLE, CHECK_LABEL_STYLE, DemoLeadForm } from './components/DemoLeadForm'
 import { MARKETING_CONSENT_TEXT } from './components/MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './components/RegisterModal'
+import { captureNavigation } from './navigation.test.util'
 import { FREE_MAIL_REFUSED } from './register'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const LOGIN = 'Platform login'
+const LOGIN = 'Sign in'
 const CREATE = 'Create an account'
 const DIALOG = '[role="dialog"]'
 const REGISTER_DIALOG = `${DIALOG}[aria-label="${CREATE}"]`
@@ -59,7 +60,8 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function mountApp(): Promise<void> {
+async function mountApp(seed = true): Promise<void> {
+  if (seed && !window.location.search) window.history.replaceState(null, '', `/?state=${STATE}`)
   const mod = (await import('./App')) as { default: () => ReturnType<typeof createElement> }
   await act(async () => {
     root.render(createElement(mod.default))
@@ -111,7 +113,8 @@ async function openMenu(): Promise<Element> {
 }
 
 async function openRegistration(): Promise<HTMLElement> {
-  await clickByText(header(), CREATE)
+  await clickByText(header(), LOGIN)
+  await clickByText(document.querySelector<HTMLElement>(DIALOG)!, CREATE)
   const d = document.querySelector<HTMLElement>(REGISTER_DIALOG)
   expect(d, 'expected the registration window').not.toBeNull()
   return d!
@@ -181,53 +184,16 @@ function stubFetch(make: () => Response | Promise<Response>) {
 }
 
 describe('the entries', () => {
-  it('registration open: the header entry follows Platform login and opens the registration window', async () => {
+  it('header_showsSignInAndBookADemoOnly', async () => {
     await mountApp()
-    expect(document.querySelectorAll(DIALOG).length, 'control: no dialog at rest').toBe(0)
-    const login = buttons(header()).find((b) => b.textContent?.trim() === LOGIN)
-    expect(login, 'control: Platform login is in the header').toBeDefined()
-
-    const create = login!.nextElementSibling as HTMLElement | null
-    expect(create?.textContent?.trim(), 'the entry right after Platform login').toBe(CREATE)
-    expect(create!.tagName).toBe('BUTTON')
-    expect(create!.classList.contains('a-create')).toBe(true)
-    expect(create!.classList.contains('a-link')).toBe(true)
-
-    await act(async () => {
-      create!.click()
-    })
-    expect(document.querySelectorAll(DIALOG).length).toBe(1)
-    expect(document.querySelectorAll(REGISTER_DIALOG).length).toBe(1)
+    expect(buttons(header()).map((b) => b.textContent?.trim() || b.getAttribute('aria-label'))).toEqual([LOGIN, 'Book a demo', 'Menu'])
   })
 
-  it('registration open: the mobile menu entry follows Platform login and opens the registration window', async () => {
+  it('menu_hasNoCreateEntry', async () => {
     await mountApp()
     const menu = await openMenu()
-    const login = buttons(menu).find((b) => b.textContent?.trim() === LOGIN)
-    expect(login, 'control: Platform login is in the menu').toBeDefined()
-
-    const create = login!.nextElementSibling as HTMLElement | null
-    expect(create?.textContent?.trim(), 'the entry right after Platform login').toBe(CREATE)
-    expect(create!.classList.contains('a-link')).toBe(true)
-    expect(create!.classList.contains('a-menu-login')).toBe(true)
-
-    await act(async () => {
-      create!.click()
-    })
-    expect(document.querySelectorAll(REGISTER_DIALOG).length).toBe(1)
-  })
-
-  it('the menu entry closes the menu first', async () => {
-    await mountApp()
-    const burger = document.querySelector<HTMLButtonElement>('header button.a-burger')!
-    const menu = await openMenu()
-    expect(document.querySelectorAll(DIALOG).length, 'control: no dialog yet').toBe(0)
-
-    await clickByText(menu, CREATE)
-
-    expect(document.querySelectorAll(REGISTER_DIALOG).length).toBe(1)
-    expect(document.querySelector('.a-menu'), 'the menu closes before the window opens').toBeNull()
-    expect(burger.getAttribute('aria-expanded')).toBe('false')
+    expect(buttons(menu).map((b) => b.textContent?.trim())).toEqual([LOGIN])
+    expect(menu.textContent).not.toContain(CREATE)
   })
 
   it('registration open: the sign-in window link closes it and opens the registration window', async () => {
@@ -256,29 +222,34 @@ describe('the entries', () => {
   })
 
   it('the sign-in window link shows without a held state too', async () => {
-    await mountApp()
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    window.history.replaceState(null, '', '/')
+    const nav = captureNavigation()
+    await mountApp(false)
     await clickByText(header(), LOGIN)
+    await settle()
+    nav.restore()
+    expect(nav.assigned).toEqual([])
     const signIn = document.querySelector<HTMLElement>(DIALOG)!
-    expect(byText(signIn, 'Continue with email'), 'control: no held state, the bounce button shows').toBeDefined()
+    expect(signIn.querySelectorAll('input[type="email"]').length, 'control: no held state, the failed preflight opens the form').toBe(1)
     expect(byText(signIn, CREATE)).toBeDefined()
   })
 
-  it('registration closed: no entry anywhere, and the same page shows one when open', async () => {
-    // Positive half first: open renders the entries, so the closed assertions below cannot pass on a missing page.
+  it('header_hasNoCreateEntry_whenRegistrationClosed, signInWindow_hasNoCreateRoute_whenRegistrationClosed', async () => {
     await mountApp()
-    expect(byText(header(), CREATE), 'control: open shows the header entry').toBeDefined()
+    await clickByText(header(), LOGIN)
+    expect(byText(document.querySelector<HTMLElement>(DIALOG)!, CREATE), 'control: open shows the window link').toBeDefined()
 
     for (const flag of [undefined, 'false']) {
       vi.stubEnv('VITE_REGISTRATION_OPEN', flag)
       await remountApp()
-      expect(byText(header(), LOGIN), `control: Platform login stays (flag ${flag})`).toBeDefined()
-      expect(byText(header(), CREATE), `header, flag ${flag}`).toBeUndefined()
+      expect(buttons(header()).map((b) => b.textContent?.trim() || b.getAttribute('aria-label')), `header, flag ${flag}`).toEqual([LOGIN, 'Book a demo', 'Menu'])
       const menu = await openMenu()
-      expect(byText(menu, LOGIN), 'control: menu login stays').toBeDefined()
-      expect(byText(menu, CREATE), `menu, flag ${flag}`).toBeUndefined()
+      expect(buttons(menu).map((b) => b.textContent?.trim()), `menu, flag ${flag}`).toEqual([LOGIN])
       await clickByText(menu, LOGIN)
       const signIn = document.querySelector<HTMLElement>(DIALOG)!
-      expect(signIn.querySelectorAll('input[type="email"]').length + (byText(signIn, 'Continue with email') ? 1 : 0), 'control: the sign-in form shows').toBe(1)
+      expect(signIn.querySelectorAll('input[type="email"]').length, 'control: the sign-in form shows').toBe(1)
       expect(signIn.textContent).not.toContain(CREATE)
       expect(document.body.textContent).not.toContain(CREATE)
     }
@@ -290,8 +261,8 @@ describe('the entries', () => {
     const signIn = document.querySelector<HTMLElement>(DIALOG)!
     const link = byText(signIn, CREATE)
     expect(link, 'expected the link in the sign-in window').toBeDefined()
-    const form = signIn.querySelector('form') ?? byText(signIn, 'Continue with email')
-    expect(form, 'control: the sign-in form (or its bounce) is in the window').toBeTruthy()
+    const form = signIn.querySelector('form')
+    expect(form, 'control: the sign-in form is in the window').toBeTruthy()
     expect(form!.compareDocumentPosition(link!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the link sits under the sign-in form').toBeTruthy()
     expect(link!.parentElement!.textContent).toContain('New to ASComply?')
     expect(signIn.querySelector('[data-testid="persona-picker"]'), 'no persona picker in the window').toBeNull()
@@ -529,7 +500,7 @@ describe('the window as a dialog', () => {
     expect(document.querySelectorAll(DIALOG).length).toBe(0)
   })
 
-  it('the header Close control closes the window and the entry opens it again', async () => {
+  it('the header Close control closes the window and it opens again', async () => {
     await mountApp()
     const d = await openRegistration()
     await act(async () => {
@@ -1146,7 +1117,8 @@ describe('the resend control on the check-your-email view', () => {
   })
 
   it('every 202 shows the same sent notice', async () => {
-    const answers = [() => json(202, { status: 'accepted' }), () => json(202, {})]
+    // The invite signal's bodies never reach the public view.
+    const answers = [() => json(202, { status: 'accepted' }), () => json(202, {}), () => json(200, { status: 'held' }), () => json(200, { status: 'sent' })]
     let n = 0
     routedFetch(() => answers[n++]())
     await mountApp()

@@ -229,6 +229,12 @@ func InvitationsListHandler(list InvitationsLister, log *slog.Logger) http.Handl
 		if items == nil {
 			items = []Invitation{}
 		}
+		for _, it := range items {
+			if it.accountErr != nil {
+				logAccountStateErr(r.Context(), log, it.accountErr) // once per list
+				break
+			}
+		}
 		writeJSON(w, http.StatusOK, map[string][]Invitation{"invitations": items})
 	}
 }

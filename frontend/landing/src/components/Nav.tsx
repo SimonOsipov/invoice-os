@@ -19,13 +19,11 @@ const NAV_HREFS = NAV_LINKS.map((l) => l.href)
 export function Nav({
   onSignIn,
   onBookDemo,
-  onCreateAccount,
   hrefPrefix = '',
   libraryHref = null,
 }: {
   onSignIn: () => void
   onBookDemo: () => void
-  onCreateAccount?: () => void
   hrefPrefix?: string
   libraryHref?: string | null
 }) {
@@ -174,13 +172,8 @@ export function Nav({
         </nav>
         <div className="a-actions">
           <button type="button" className="a-login a-link" onClick={onSignIn} style={{ fontSize: 14, fontWeight: 600 }}>
-            Platform login
+            Sign in
           </button>
-          {onCreateAccount && (
-            <button type="button" className="a-create a-link" onClick={onCreateAccount} style={{ fontSize: 14, fontWeight: 600 }}>
-              Create an account
-            </button>
-          )}
           <Button
             size="sm"
             onClick={() => {
@@ -232,20 +225,8 @@ export function Nav({
               onSignIn()
             }}
           >
-            Platform login
+            Sign in
           </button>
-          {onCreateAccount && (
-            <button
-              type="button"
-              className="a-link a-menu-login"
-              onClick={() => {
-                setMenuOpen(false)
-                onCreateAccount()
-              }}
-            >
-              Create an account
-            </button>
-          )}
         </div>
       )}
     </header>

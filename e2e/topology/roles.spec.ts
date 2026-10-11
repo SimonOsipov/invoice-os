@@ -74,12 +74,14 @@ import {
   memberships,
   PERSONAS,
   rawFetch,
+  registerFresh,
 } from '../api/client'
 import { browserToken, collectErrors, signInAs } from '../personaSession'
 import { E2E_MEMBER_ROLES, e2eMember } from '../realAccounts'
 import { expectedStatusDropper } from './consoleGate'
 import { enclosesRect, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import {
+  INVITE_ACCOUNT_LABELS,
   MEMBERS_TABLE_HEADS,
   SEED_FIRM_MEMBERS,
   SEED_INHOUSE_MEMBERS,
@@ -1102,7 +1104,7 @@ test.afterAll(async () => {
 // A live row of GET /api/tenancy/v1/invitations (internal/tenancy/invitations.go).
 // accountmail.InviteValidDays.
 const INVITE_VALID_DAYS = 7
-type LiveInvite = { id: string; email: string; role: string; status: string; expires_at: string; delivery: string }
+type LiveInvite = { id: string; email: string; role: string; status: string; expires_at: string; delivery: string; account?: string }
 
 /** Runs `fn` at each WIDE_WIDTHS entry, widest first, and restores the entry viewport. */
 async function atEachWidth<T>(page: Page, fn: (width: number) => Promise<T>): Promise<T[]> {
@@ -1129,7 +1131,7 @@ async function boxOf(target: Locator, name: string): Promise<Rect> {
 }
 
 test('firm Settings: an admin invites from the Members screen, sees the pending row, and resends', async ({ page }, testInfo) => {
-  test.setTimeout(180_000)
+  test.setTimeout(300_000)
   // The refused-address send is a deliberate 400, which Chromium logs as a console error.
   const errors: string[] = []
   const dropRefusal = expectedStatusDropper(page, 400, /\/api\/tenancy\/v1\/invitations$/)
@@ -1338,6 +1340,93 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   })
   expect(l4.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
   await testInfo.attach('members-top-bar-fit.json', { body: JSON.stringify(l4, null, 2), contentType: 'application/json' })
+
+  // --- the invitee's account state: a confirmed invitee, then a faked `unconfirmed` row ------
+  // A registered address reads `confirmed` once the fork's grant lands. Account values: Invitation.Account, internal/tenancy/invitations.go.
+  const registered = (await registerFresh('invite-ui-account')).email
+  const registeredInvite = await rawFetch('/api/tenancy/v1/invitations', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: { emails: [registered], role: 'preparer' },
+  })
+  expect(registeredInvite.status, JSON.stringify(registeredInvite.body)).toBe(200)
+  await expect
+    .poll(async () => (await liveInvites()).find((i) => i.email === registered)?.account, {
+      message: `${registered} never read confirmed`,
+      timeout: 120_000,
+    })
+    .toBe('confirmed')
+  await page.reload()
+  await goTo(page, 'Settings')
+  const accountRow = rowFor(registered)
+  await expect(accountRow.getByTestId('invite-account-state')).toHaveText(INVITE_ACCOUNT_LABELS.confirmed)
+  await accountRow.getByTestId('member-menu-trigger').click()
+  await expect(menu.getByTestId('member-menu-state')).toHaveText(INVITE_ACCOUNT_LABELS.confirmed)
+  await expect(menu.getByRole('button', { name: 'Resend invite', exact: true })).toBeEnabled()
+  await expect(menu.getByTestId('member-menu-reason')).toHaveCount(2)
+  await accountRow.getByTestId('member-menu-trigger').click()
+  await expect(menu).toBeHidden()
+
+  // Fixture check: the fork cannot make an `unconfirmed` account, so the list response is faked
+  // for GET only. This proves the layout of the longest label, not the server's `unconfirmed`.
+  const fakeUnconfirmed = '**/api/tenancy/v1/invitations'
+  await page.route(fakeUnconfirmed, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const response = await route.fetch()
+    const json = (await response.json()) as { invitations: LiveInvite[] }
+    for (const item of json.invitations) if (item.email === registered) item.account = 'unconfirmed'
+    return route.fulfill({ response, json })
+  })
+  try {
+    await page.reload()
+    await goTo(page, 'Settings')
+    const fakedRow = rowFor(registered)
+    await expect(fakedRow.getByTestId('invite-account-state')).toHaveText(INVITE_ACCOUNT_LABELS.unconfirmed)
+    await expect(page.getByTestId('invite-row').last(), 'the new invite is the last pending row').toContainText(registered)
+
+    // L5: the longest state line stays inside its Status cell and row, between the pill and the expiry line, clear of the trigger.
+    const fakedCells = fakedRow.locator('xpath=./span')
+    const stateLine = fakedRow.getByTestId('invite-account-state')
+    const l5 = await atEachWidth(page, async (width) => {
+      await settleAnimations(fakedRow)
+      const status = await boxOf(fakedCells.nth(3), `the Status cell at ${width}px`)
+      const pill = await boxOf(fakedCells.nth(3).getByText('INVITED'), `the INVITED pill at ${width}px`)
+      const expiry = await boxOf(fakedCells.nth(3).getByText(/^Expires in/), `the expiry line at ${width}px`)
+      const line = await boxOf(stateLine, `the state line at ${width}px`)
+      const trigger = await boxOf(fakedRow.getByTestId('member-menu-trigger'), `the trigger at ${width}px`)
+      const rowBox = await boxOf(fakedRow, `the invite row at ${width}px`)
+      const clip = await stateLine.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, lineHeight: parseFloat(getComputedStyle(el).lineHeight) }))
+      expect(enclosesRect(status, line, 1), `the state line must sit inside the Status cell at ${width}px`).toBe(true)
+      expect(clip.scrollWidth, `the state line must not be clipped at ${width}px`).toBeLessThanOrEqual(clip.clientWidth)
+      expect(line.y, `the state line must sit below the INVITED pill at ${width}px`).toBeGreaterThanOrEqual(pill.y + pill.height - 1)
+      expect(line.y + line.height, `the state line must end above the expiry line at ${width}px`).toBeLessThanOrEqual(expiry.y + 1)
+      expect(rectsOverlap(line, trigger), `the state line must not overlap the trigger at ${width}px`).toBe(false)
+      expect(enclosesRect(rowBox, line, 1), `the invite row must hold the state line at ${width}px`).toBe(true)
+      // Recorded, not asserted: the wrap is the design.
+      return { width, stateLineHeight: line.height, stateLineLines: Math.round(line.height / clip.lineHeight), status, pill, line, expiry, trigger }
+    })
+    expect(l5.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
+    await testInfo.attach('invite-account-state-fit.json', { body: JSON.stringify(l5, null, 2), contentType: 'application/json' })
+
+    // L2b: the menu that carries the note fits the scroller, which does not scroll.
+    await fakedRow.getByTestId('member-menu-trigger').click()
+    await expect(menu.getByTestId('member-menu-state')).toHaveText(INVITE_ACCOUNT_LABELS.unconfirmed)
+    const l2b = await atEachWidth(page, async (width) => {
+      await settleAnimations(menu, scroll)
+      const menuBox = await boxOf(menu, `the menu at ${width}px`)
+      const scrollBox = await boxOf(scroll, `the scroller at ${width}px`)
+      const { scrollHeight, clientHeight } = await scroll.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
+      expect(enclosesRect(scrollBox, menuBox, 1), `the noted menu must sit inside members-table-scroll at ${width}px`).toBe(true)
+      expect(scrollHeight - clientHeight, `members-table-scroll must not scroll for the noted menu at ${width}px`).toBeLessThanOrEqual(1)
+      const menuClearance = await scroll.evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom))
+      return { width, menuHeight: menuBox.height, menuClearance, scrollHeight, clientHeight }
+    })
+    expect(l2b.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
+    await testInfo.attach('members-invite-noted-menu-fit.json', { body: JSON.stringify(l2b, null, 2), contentType: 'application/json' })
+    await fakedRow.getByTestId('member-menu-trigger').click()
+  } finally {
+    await page.unroute(fakeUnconfirmed)
+  }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

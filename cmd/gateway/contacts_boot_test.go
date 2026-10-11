@@ -96,6 +96,8 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			_, _ = io.WriteString(w, session(signInID))
 		case "/signup":
 			_, _ = io.WriteString(w, session(registerID))
+		case "/internal/invitations/preview":
+			_, _ = io.WriteString(w, `{"workspace":"Quillworks Ltd","role":"reviewer","email":"invitee@corp.example","account":"none"}`)
 		case "/internal/invitations/pending":
 			_, _ = io.WriteString(w, `{"pending":false}`)
 		case "/internal/invitations/register":
@@ -207,8 +209,8 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			t.Fatalf("register answered %d, want 202\n%s", resp.StatusCode, out)
 		}
 	})
-	// Only the booted binary shows main hands the HTTP claim and release to the invitee route: a nil pair answers 503.
-	t.Run("invitee registration claims through tenancy then signs up", func(t *testing.T) {
+	// Only the booted binary shows main hands the HTTP preview, claim and release to the invitee route: a nil pair answers 503.
+	t.Run("invitee registration previews and claims through tenancy then signs up", func(t *testing.T) {
 		before := len(goTrueCalls())
 		resp, err := client.Post(base+"/auth/invitation/register", "application/json", strings.NewReader(`{"token":"Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9Tt9T"}`))
 		if err != nil {
@@ -218,7 +220,7 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		if resp.StatusCode != http.StatusAccepted {
 			t.Fatalf("invitee registration answered %d, want 202\n%s", resp.StatusCode, out)
 		}
-		if got, want := goTrueCalls()[before:], []string{"POST /internal/invitations/register", "POST /signup"}; !slices.Equal(got, want) {
+		if got, want := goTrueCalls()[before:], []string{"POST /internal/invitations/preview", "POST /internal/invitations/register", "POST /signup"}; !slices.Equal(got, want) {
 			t.Errorf("tenancy and GoTrue saw %v, want %v", got, want)
 		}
 	})
@@ -229,28 +231,34 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			return slices.Clone(verifyBodies)
 		}
 		link := base + "/auth/verify?token=tok&type=signup"
-		var page string
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			req, _ := http.NewRequest(method, link, nil)
 			resp, err := client.Do(req)
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("%s of the link answered %d, want 200\n%s", method, resp.StatusCode, out)
-			}
-			if method == http.MethodGet {
-				page = string(b)
+			if want := "http://site.invalid/?confirm=1#token=tok"; resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != want {
+				t.Fatalf("%s of the link answered %d Location %q, want 303 %s\n%s", method, resp.StatusCode, resp.Header.Get("Location"), want, out)
 			}
 		}
+		statedLink := link + "&state=" + strings.Repeat("A", 43)
+		resp, err := client.Get(statedLink)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET of the stated link answered %d, want 200\n%s", resp.StatusCode, out)
+		}
+		page := string(b)
 		if got := verifyCalls(); len(got) != 0 {
 			t.Fatalf("opening the link reached GoTrue /verify %d times: %v", len(got), got)
 		}
 
 		// Through main's mux: a POST with the token only in the URL fails, and other methods get 405.
-		resp, err := client.Post(link, "application/x-www-form-urlencoded", nil)
+		resp, err = client.Post(link, "application/x-www-form-urlencoded", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -279,8 +287,10 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "http://site.invalid/?verified=1" {
-			t.Fatalf("the click answered %d Location %q", resp.StatusCode, resp.Header.Get("Location"))
+		const verifiedPrefix = "http://site.invalid/?verified=1&handoff="
+		loc := resp.Header.Get("Location")
+		if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, verifiedPrefix) || len(loc)-len(verifiedPrefix) != 43 {
+			t.Fatalf("the click answered %d Location %q, want 303 %s<43-char code>", resp.StatusCode, loc, verifiedPrefix)
 		}
 		got := verifyCalls()
 		if len(got) != 1 {
@@ -330,9 +340,18 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		}
 	})
 	t.Run("invitation password", func(t *testing.T) {
-		link := base + "/auth/verify?token=t&type=signup&invite=1"
+		bare := base + "/auth/verify?token=t&type=signup&invite=1"
 		before := len(goTrueCalls())
-		resp, err := client.Get(link)
+		resp, err := client.Get(bare)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if want := "http://site.invalid/?confirm=invite#token=t"; resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != want {
+			t.Fatalf("stateless GET of the invitee link answered %d Location %q, want 303 %s\n%s", resp.StatusCode, resp.Header.Get("Location"), want, out)
+		}
+		link := bare + "&state=" + strings.Repeat("A", 43)
+		resp, err = client.Get(link)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -346,6 +365,11 @@ func TestGatewayBinary_HandsOffThroughTheMainWiring(t *testing.T) {
 		}
 
 		action, values := pageForm(t, link, string(b))
+		if values.Get("state") == "" {
+			t.Fatal("the invitee page carries no state")
+		}
+		// Stateless POST keeps the ?verified=1 fallback.
+		values.Del("state")
 		values.Set("password", "new-password-1")
 		resp, err = client.PostForm(action, values)
 		if err != nil {

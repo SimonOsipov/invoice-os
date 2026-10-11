@@ -23,7 +23,7 @@ paths:
 - Expect a Playwright retry to rerun a failed test against the rows its first attempt left.
 - Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.
 - Assert containment or a live-read comparison, never a literal count.
-- Expect specs to leave rows in `auth.users`, `staff_members`, `tenants` and `memberships`. Every run registers a fresh address, so this is harmless.
+- Expect specs to leave rows in `auth.users`, `staff_members`, `tenants`, `memberships` and `business_entities`. Every run registers a fresh address, so this is harmless.
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
 - Treat the `app` SPA and the landing sign-in form as the only places a browser test proves the stack. The consoles hold mock data.
 - Test the `library` SPA for render and consent only. It is static content with no backend.

@@ -158,17 +158,26 @@ type sessionUpstream struct {
 	hits   atomic.Int64
 	mu     sync.Mutex
 	header http.Header
+	method string
+	path   string
 }
 
 func (u *sessionUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u.hits.Add(1)
 	u.mu.Lock()
 	u.header = r.Header.Clone()
+	u.method, u.path = r.Method, r.URL.Path
 	u.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
 }
 
 func (u *sessionUpstream) Hits() int { return int(u.hits.Load()) }
+
+func (u *sessionUpstream) Last() (method, path string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.method, u.path
+}
 
 func (u *sessionUpstream) Header() http.Header {
 	u.mu.Lock()
@@ -183,6 +192,7 @@ type sessionRig struct {
 	signer   *sidSigner
 	mock     *auth.MockIssuer
 	upstream *sessionUpstream
+	other    *sessionUpstream // portfolio, to prove a near miss reaches no other service
 }
 
 // newSessionRig builds the /api/ handler with a checker against authURL (nil allowed).
@@ -215,6 +225,10 @@ func newSessionRig(t *testing.T, authURL *url.URL, client *http.Client, log *slo
 	upSrv := httptest.NewServer(up)
 	t.Cleanup(upSrv.Close)
 	upURL, _ := url.Parse(upSrv.URL)
+	other := &sessionUpstream{}
+	otherSrv := httptest.NewServer(other)
+	t.Cleanup(otherSrv.Close)
+	otherURL, _ := url.Parse(otherSrv.URL)
 
 	clk := newTestClock()
 	sessions := NewSessionChecker(authURL, client, clk.Now, log)
@@ -222,7 +236,7 @@ func newSessionRig(t *testing.T, authURL *url.URL, client *http.Client, log *slo
 		handler: Handler(Options{
 			Verifier:  verifier,
 			Sessions:  sessions,
-			Upstreams: map[string]*url.URL{"tenancy": upURL},
+			Upstreams: map[string]*url.URL{"tenancy": upURL, "portfolio": otherURL},
 			Logger:    log,
 
 			GatewayToken: testGatewayToken,
@@ -232,6 +246,7 @@ func newSessionRig(t *testing.T, authURL *url.URL, client *http.Client, log *slo
 		signer:   signer,
 		mock:     mock,
 		upstream: up,
+		other:    other,
 	}
 }
 
@@ -1112,5 +1127,238 @@ func TestSessionCheck_DefaultCapIsSessionCheckMaxEntries(t *testing.T) {
 		if n := fake.Hits(); n != s.want {
 			t.Errorf("%s: GoTrue /user calls = %d, want %d", s.name, n, s.want)
 		}
+	}
+}
+
+// confirmedJoinToken is a tenant-less sid token whose email GoTrue's /user confirms.
+func confirmedJoinToken(t *testing.T, rg *sessionRig, sid string) string {
+	t.Helper()
+	return rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid})
+}
+
+func TestSessionCheck_CacheHitCarriesTheConfirmedEmail(t *testing.T) {
+	rg, fake := joinRig(t, confirmedUser(t, nil))
+	tok := confirmedJoinToken(t, rg, sid1)
+
+	for i := range 2 {
+		rec := rg.do(http.MethodGet, joinMinePath, tok)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d: status = %d, want 200: %s", i+1, rec.Code, rec.Body.String())
+		}
+		assertHeader(t, rg.upstream.Header(), "X-User-Email", joinEmail)
+		rg.clock.Advance(time.Second)
+	}
+	if n := fake.Hits(); n != 1 {
+		t.Fatalf("GoTrue /user calls = %d, want 1 (the second request is a cache hit)", n)
+	}
+
+	fake.set(http.StatusOK, confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = nil }))
+	rg.clock.Advance(30 * time.Second)
+	rec := rg.do(http.MethodGet, joinMinePath, tok)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("after the TTL: status = %d, want 403 (GoTrue no longer confirms)", rec.Code)
+	}
+	if n := fake.Hits(); n != 2 {
+		t.Errorf("GoTrue /user calls = %d after the TTL, want 2", n)
+	}
+	if n := rg.upstream.Hits(); n != 2 {
+		t.Errorf("tenancy hits = %d, want 2 (the refused request reached nothing)", n)
+	}
+}
+
+func TestSessionCheck_SharedCallCarriesTheConfirmedEmail(t *testing.T) {
+	rg, fake := joinRig(t, confirmedUser(t, nil))
+	release, open := gate(t)
+	body := confirmedUser(t, nil)
+	fake.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, body)
+	})
+	tok := confirmedJoinToken(t, rg, sid1)
+
+	const n = 4
+	codes := make([]int, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes[i] = rg.do(http.MethodGet, joinMinePath, tok).Code
+		}()
+	}
+	called := waitFor(2*time.Second, func() bool { return fake.Hits() >= 1 })
+	// Without sharing, the others reach GoTrue well inside this window.
+	waitFor(300*time.Millisecond, func() bool { return fake.Hits() > 1 })
+	open()
+	wg.Wait()
+
+	if !called {
+		t.Fatalf("GoTrue /user was never called")
+	}
+	if got := fake.Hits(); got != 1 {
+		t.Errorf("GoTrue /user calls = %d for %d concurrent cold requests, want 1", got, n)
+	}
+	for i, c := range codes {
+		if c != http.StatusOK {
+			t.Errorf("request %d: status = %d, want 200", i, c)
+		}
+	}
+	if got := rg.upstream.Hits(); got != n {
+		t.Errorf("tenancy hits = %d, want %d", got, n)
+	}
+	assertHeader(t, rg.upstream.Header(), "X-User-Email", joinEmail)
+}
+
+// countingTransport counts the response-body bytes the session check reads.
+type countingTransport struct {
+	base http.RoundTripper
+	read *atomic.Int64
+}
+
+func (c countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := c.base.RoundTrip(r)
+	if err == nil {
+		resp.Body = countingBody{resp.Body, c.read}
+	}
+	return resp, err
+}
+
+type countingBody struct {
+	io.ReadCloser
+	read *atomic.Int64
+}
+
+func (b countingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.read.Add(int64(n))
+	return n, err
+}
+
+func TestSessionCheck_ReadsAndDrainsTheUserBodyAtSixteenKiB(t *testing.T) {
+	const limit = 16 << 10
+	cases := []struct {
+		name     string
+		body     string
+		confirms bool
+		wantRead int64 // 0: the whole body
+	}{
+		{"one byte under", confirmedUserSized(t, limit-1), true, 0},
+		{"exactly the limit", confirmedUserSized(t, limit), true, 0},
+		{"one byte over", confirmedUserSized(t, limit+1), false, 0},
+		// The object ends early; the drain reads the rest, through the same limit.
+		{"trailing bytes past the object", confirmedUser(t, nil) + strings.Repeat(" ", 20<<10), true, limit},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newUserFake(t, http.StatusOK, tc.body)
+			var read atomic.Int64
+			client := &http.Client{Transport: countingTransport{http.DefaultTransport, &read}}
+			rg := newSessionRig(t, fake.URL, client, nil)
+
+			rec := rg.do(http.MethodGet, joinMinePath, confirmedJoinToken(t, rg, sid1))
+			got := read.Load()
+
+			if tc.confirms && (rec.Code != http.StatusOK || rg.upstream.Hits() != 1) {
+				t.Errorf("join route = %d, tenancy hits = %d, want 200 and 1", rec.Code, rg.upstream.Hits())
+			}
+			if !tc.confirms {
+				assertForbiddenNoUpstream(t, rg, rec, "join route")
+			}
+			want := tc.wantRead
+			if want == 0 && tc.confirms {
+				want = int64(len(tc.body))
+			}
+			if got == 0 || got > limit {
+				t.Errorf("session check read %d bytes, want between 1 and %d", got, limit)
+			}
+			if want != 0 && got != want {
+				t.Errorf("session check read %d bytes, want %d", got, want)
+			}
+
+			// A body that does not confirm is still a live session on every other route.
+			if rec := rg.get(rg.signer.token(t, subjectS1, sid2)); rec.Code != http.StatusOK {
+				t.Errorf("GET /me = %d, want 200 (live)", rec.Code)
+			}
+		})
+	}
+}
+
+// The cache is keyed by session_id: one session's confirmation admits no other session or address.
+func TestSessionCheck_ConfirmationDoesNotLeakAcrossSessions(t *testing.T) {
+	rg, fake := joinRig(t, "{}")
+	a := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: joinEmail, sid: sid1})
+	b := rg.signer.tenantlessToken(t, subjectS2, tenantlessClaims{email: joinEmail, sid: sid2})
+	other := rg.signer.tenantlessToken(t, subjectS1, tenantlessClaims{email: "bob@corp.example", sid: sid1})
+	confirmed := confirmedUser(t, nil)
+	unconfirmed := confirmedUser(t, func(m map[string]any) { m["email_confirmed_at"] = nil })
+	fake.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+		body := unconfirmed
+		if r.Header.Get("Authorization") == "Bearer "+a {
+			body = confirmed
+		}
+		_, _ = io.WriteString(w, body)
+	})
+
+	if rec := rg.do(http.MethodGet, joinMinePath, a); rec.Code != http.StatusOK {
+		t.Fatalf("session 1: status = %d, want 200", rec.Code)
+	}
+	if rec := rg.do(http.MethodGet, joinMinePath, b); rec.Code != http.StatusForbidden || rg.upstream.Hits() != 1 {
+		t.Fatalf("session 2 after session 1 confirmed: status = %d, tenancy hits = %d, want 403 and 1 (session 1's)", rec.Code, rg.upstream.Hits())
+	}
+	if n := fake.Hits(); n != 2 {
+		t.Fatalf("GoTrue /user calls = %d, want 2 (one per session)", n)
+	}
+
+	// Both verdicts now come from the cache and stay apart.
+	if rec := rg.do(http.MethodGet, joinMinePath, a); rec.Code != http.StatusOK {
+		t.Errorf("session 1 cached: status = %d, want 200", rec.Code)
+	}
+	if rec := rg.do(http.MethodGet, joinMinePath, b); rec.Code != http.StatusForbidden {
+		t.Errorf("session 2 cached: status = %d, want 403", rec.Code)
+	}
+	// Same session, a token whose email differs from the confirmed one.
+	if rec := rg.do(http.MethodGet, joinMinePath, other); rec.Code != http.StatusForbidden {
+		t.Errorf("session 1 with another email claim: status = %d, want 403", rec.Code)
+	}
+	if n := fake.Hits(); n != 2 {
+		t.Errorf("GoTrue /user calls = %d, want 2 (the rest are cache hits)", n)
+	}
+}
+
+// The 16 KiB limit is for a /user 200 only; a refusal is still read and drained at 1 KiB.
+func TestSessionCheck_RefusalBodiesStayAtOneKiB(t *testing.T) {
+	pad := strings.Repeat(" ", 20<<10)
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		revoke bool
+	}{
+		{"gone code", http.StatusForbidden, gtError(403, "session_not_found") + pad, true},
+		{"server error", http.StatusInternalServerError, pad, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newUserFake(t, tc.status, tc.body)
+			var read atomic.Int64
+			client := &http.Client{Transport: countingTransport{http.DefaultTransport, &read}}
+			rg := newSessionRig(t, fake.URL, client, nil)
+			refusal := rg.refusal(t)
+
+			rec := rg.get(rg.signer.token(t, subjectS1, sid1))
+			if tc.revoke {
+				assertRevoked(t, rec, refusal)
+			} else {
+				assertUnavailable(t, rec)
+			}
+			if got := read.Load(); got != 1024 {
+				t.Errorf("session check read %d bytes of a %d-byte refusal, want 1024", got, len(tc.body))
+			}
+		})
 	}
 }

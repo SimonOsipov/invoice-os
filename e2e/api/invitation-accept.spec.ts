@@ -12,6 +12,8 @@ const ALREADY_MEMBER = 'you already belong to a workspace'
 const WRONG_ADDRESS = 'this invite was sent to a different email address'
 // internal/gateway/register.go's verification_pending answer, served by POST /auth/invitation/register too.
 const PENDING = { status: 'verification_pending' }
+// internal/gateway/invitation.go msgAccountExists.
+const ACCOUNT_EXISTS = 'account_exists'
 const INVALID_CREDENTIALS = 'invalid email or password'
 // internal/gateway/invitation_password.go failed redirect; reset_password.go resetPasswordHint, shared by the password-link handler.
 const VERIFY_FAILED = '?verify=failed'
@@ -24,6 +26,18 @@ function auth(token: string): Record<string, string> {
 const preview = (token: string) => rawFetch('/auth/invitation', { method: 'POST', body: { token } })
 const signInAttempt = (email: string, password: string) => rawFetch('/auth/sign-in', { method: 'POST', body: { email, password, state: mintSignInState() } })
 const accept = (session: string, token: string) => rawFetch('/api/tenancy/v1/invitations/accept', { method: 'POST', headers: auth(session), body: { token } })
+
+// The preview's account state is read from the auth store, which a fork fills asynchronously; poll, never sleep.
+async function awaitAccountState(token: string, want: 'none' | 'unconfirmed' | 'confirmed'): Promise<{ status: number; body: unknown }> {
+  let last: { status: number; body: unknown } = { status: 0, body: null }
+  await expect
+    .poll(async () => {
+      last = await preview(token)
+      return (last.body as { account?: string } | null)?.account
+    }, { message: `the preview never reported account ${want}`, timeout: 120_000 })
+    .toBe(want)
+  return last
+}
 
 function tenantClaim(token: string): unknown {
   return (claimsOf(token).app_metadata as { tenant_id?: unknown } | undefined)?.tenant_id
@@ -52,14 +66,36 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     const email = inviteAddress('accept-preview')
     const token = await inviteWithToken(adminToken, tenantId, email)
 
-    const live = await preview(token)
+    const live = await awaitAccountState(token, 'none')
     expect(live.status, JSON.stringify(live.body)).toBe(200)
-    expect(Object.keys(live.body as object).sort()).toEqual(['email', 'role', 'workspace'])
-    expect(live.body).toEqual({ workspace: (await me(adminToken)).tenant.name, role: 'reviewer', email })
+    expect(Object.keys(live.body as object).sort()).toEqual(['account', 'email', 'role', 'workspace'])
+    expect(live.body).toEqual({ workspace: (await me(adminToken)).tenant.name, role: 'reviewer', email, account: 'none' })
 
     const bogus = await preview(mintSignInState())
     assertErrorEnvelope(bogus, 404, 'a token no invite holds')
     expect((bogus.body as { error: string }).error).toBe(NOT_VALID)
+  })
+
+  test('invitation accept: an address that already has an account is told so on the invite routes only', async () => {
+    const email = inviteAddress('accept-exists')
+    const token = await inviteWithToken(adminToken, tenantId, email)
+    const password = crypto.randomUUID().slice(0, 16)
+
+    const registered = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password } })
+    expect([registered.status, registered.body]).toEqual([202, PENDING])
+    const known = await awaitAccountState(token, 'confirmed')
+    expect((known.body as { account: string }).account).toBe('confirmed')
+
+    const again = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password } })
+    assertErrorEnvelope(again, 409, 'a second invitee registration')
+    expect((again.body as { error: string }).error).toBe(ACCOUNT_EXISTS)
+
+    // The open route keeps its enumeration-safe answer.
+    const open = await rawFetch('/auth/register', {
+      method: 'POST',
+      body: { email, password, workspace_name: `Exists E2E ${crypto.randomUUID().slice(0, 8)}`, display_name: 'Exists E2E', kind: 'firm' },
+    })
+    expect([open.status, open.body]).toEqual([202, PENDING])
   })
 
   test('invitation accept: a normal registration for an invited address creates no account', async () => {
@@ -79,15 +115,13 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     expect((await signInSession(uninvited, password)).access_token, 'the uninvited control signs in').toBeTruthy()
   })
 
-  test('invitation accept: the link registers with no usable password, and a second registration answers alike', async () => {
+  test('invitation accept: the link registers with no usable password', async () => {
     const email = inviteAddress('accept-link')
     const token = await inviteWithToken(adminToken, tenantId, email)
     const password = crypto.randomUUID().slice(0, 16)
 
-    for (const attempt of ['first', 'second']) {
-      const res = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password } })
-      expect([res.status, res.body], `the ${attempt} link registration`).toEqual([202, PENDING])
-    }
+    const res = await rawFetch('/auth/invitation/register', { method: 'POST', body: { token, password } })
+    expect([res.status, res.body], 'the link registration').toEqual([202, PENDING])
 
     const refused = await signInAttempt(email, password)
     assertErrorEnvelope(refused, 401, 'sign-in with the password the link registration offered')
@@ -177,7 +211,10 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     assertErrorEnvelope(res, 403, 'a tenant-less token on the membership list')
   })
 
-  const passwordPageUrl = (token: string) => `${apiBase()}/auth/verify?token=${token}&type=signup&invite=1`
+  // A 43-character base64url state, the shape the gateway requires to render the page.
+  const INVITE_STATE = 'A'.repeat(43)
+  const passwordPageUrl = (token: string, state = INVITE_STATE) =>
+    `${apiBase()}/auth/verify?token=${token}&type=signup&invite=1${state ? `&state=${state}` : ''}`
   const landingFailed = () => `${resolveTarget('LANDING_URL')}/${VERIFY_FAILED}`
   const postPassword = (fields: Record<string, string>) =>
     fetch(`${apiBase()}/auth/invitation/password`, {
@@ -187,7 +224,7 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
       redirect: 'manual',
     })
 
-  test("invitation accept: the invitee's set-password link answers the page", async () => {
+  test('invitation accept: a stated open answers the set-password page', async () => {
     const res = await fetch(passwordPageUrl(`bogus-${crypto.randomUUID()}`), { redirect: 'manual' })
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
@@ -196,6 +233,14 @@ test.describe.serial('invitation accept (API E2E, over the deployed gateway)', (
     for (const part of ['action="/auth/invitation/password"', 'name="password"', 'minlength="6"', 'maxlength="72"']) {
       expect(html, part).toContain(part)
     }
+    expect(html, 'the hidden state field').toMatch(new RegExp(`<input[^>]*name="state"[^>]*value="${INVITE_STATE}"|<input[^>]*value="${INVITE_STATE}"[^>]*name="state"`))
+  })
+
+  test("invitation accept: the invitee's set-password link bounces to landing for a state", async () => {
+    const token = `bogus-${crypto.randomUUID()}`
+    const res = await fetch(passwordPageUrl(token, ''), { redirect: 'manual' })
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location'), 'the Location header').toBe(`${resolveTarget('LANDING_URL')}/?confirm=invite#token=${token}`)
   })
 
   test('invitation accept: a set-password link with an empty token redirects 303 to the landing failure notice', async () => {

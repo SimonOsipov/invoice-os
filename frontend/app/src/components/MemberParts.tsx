@@ -533,7 +533,7 @@ export type MenuAction = {
  * at a time and the table can make vertical room for whichever one it is (MENU_CLEARANCE
  * in MembersTable.tsx).
  */
-export function MoreMenu({ open, onOpen, onClose, label, items }: {
+export function MoreMenu({ open, onOpen, onClose, label, items, note }: {
   open: boolean
   onOpen: () => void
   /** Must be stable — it is a `useDismiss` dependency. */
@@ -541,6 +541,8 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
   /** Names the row, for the trigger's accessible name. */
   label: string
   items: MenuAction[]
+  /** Row state shown above the items; not a disabled-item reason. */
+  note?: string
 }) {
   // On the WRAPPER, not the panel: with the ref on the panel alone, clicking the trigger of
   // an open menu would dismiss it on mousedown and re-open it on click.
@@ -605,6 +607,11 @@ export function MoreMenu({ open, onOpen, onClose, label, items }: {
             animation: 'popIn 140ms ease-out',
           }}
         >
+          {note && (
+            <div data-testid="member-menu-state" style={{ fontSize: 11, lineHeight: 1.45, color: 'var(--fg-3)', padding: '6px 12px 8px', borderBottom: '1px solid var(--line-1)', marginBottom: 4 }}>
+              {note}
+            </div>
+          )}
           {items.map((item) => (
             <button
               key={item.label}

@@ -16,6 +16,7 @@ import (
 
 const (
 	vpToken   = "tok-Abc123_xyz"
+	vpState   = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcde" // 43 base64url, stateShape
 	vpPath    = "/auth/verify"
 	vpIcon    = "/emails/mark.png"
 	vpMaxLen  = 256 // maxVerifyTokenBytes
@@ -41,7 +42,10 @@ func vpDo(t *testing.T, h http.Handler, method, query string) *httptest.Response
 	return rec
 }
 
-func vpQuery(token string) string { return "token=" + url.QueryEscape(token) + "&type=signup" }
+func vpQueryBare(token string) string { return "token=" + url.QueryEscape(token) + "&type=signup" }
+
+// vpQuery is a link carrying a valid state, the only kind that renders the page.
+func vpQuery(token string) string { return vpQueryBare(token) + "&state=" + vpState }
 
 func vpParse(t *testing.T, body string) *html.Node {
 	t.Helper()
@@ -225,8 +229,8 @@ func TestVerifyPage_OneFormOneConfirmButton(t *testing.T) {
 		}
 		hidden[name] = val
 	}
-	if len(hidden) != 2 || hidden["token"] != vpToken || hidden["type"] != "signup" {
-		t.Errorf("hidden inputs = %v, want token=%q and type=signup only", hidden, vpToken)
+	if len(hidden) != 3 || hidden["token"] != vpToken || hidden["type"] != "signup" || hidden["state"] != vpState {
+		t.Errorf("hidden inputs = %v, want token=%q, type=signup and state=%q only", hidden, vpToken, vpState)
 	}
 	submits := vpFind(doc, func(n *html.Node) bool {
 		typ, has := vpAttr(n, "type")
@@ -253,7 +257,7 @@ func TestVerifyPage_OneFormOneConfirmButton(t *testing.T) {
 	}
 }
 
-func TestVerifyPage_RevealsNothingButTheToken(t *testing.T) {
+func TestVerifyPage_RevealsNothingButTheTokenAndState(t *testing.T) {
 	h := vpHandler(t)
 	tokA, tokB := strings.Repeat("a", 40), strings.Repeat("b", 40)
 	recA := vpDo(t, h, http.MethodGet, vpQuery(tokA)+"&redirect_to="+url.QueryEscape("https://evil.example/x")+"&extra=leak")
@@ -272,7 +276,7 @@ func TestVerifyPage_RevealsNothingButTheToken(t *testing.T) {
 	if !headersEqual(recA.Header(), recB.Header()) {
 		t.Errorf("headers differ:\nA %v\nB %v", recA.Header(), recB.Header())
 	}
-	rep := vpDo(t, h, http.MethodGet, "token=first-one&token=second-one&type=signup")
+	rep := vpDo(t, h, http.MethodGet, "token=first-one&token=second-one&type=signup&state="+vpState)
 	if rep.Code != http.StatusOK || !strings.Contains(rep.Body.String(), "first-one") || strings.Contains(rep.Body.String(), "second-one") {
 		t.Errorf("repeated token: status %d; want 200 rendering only the first value", rep.Code)
 	}
@@ -572,7 +576,7 @@ func TestVerifyPage_RedirectUsesTheSiteWithoutDoubleSlash(t *testing.T) {
 }
 
 func TestVerifyPage_RepeatedTypeFirstValueWins(t *testing.T) {
-	rec := vpDo(t, vpHandler(t), http.MethodGet, "token="+vpToken+"&type=signup&type=recovery")
+	rec := vpDo(t, vpHandler(t), http.MethodGet, "token="+vpToken+"&type=signup&type=recovery&state="+vpState)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -617,6 +621,97 @@ func TestVerifyPage_OtherMethods405(t *testing.T) {
 	}
 }
 
+const bounceLocation = siteURLValue + "/?confirm=1#token=" + vpToken
+
+func vpBounced(t *testing.T, rec *httptest.ResponseRecorder, want string) {
+	t.Helper()
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+	if strings.Contains(rec.Body.String(), "<form") {
+		t.Errorf("the bounce holds a form: %q", rec.Body.String())
+	}
+}
+
+func TestVerifyPage_StatelessOpenBouncesToLanding(t *testing.T) {
+	rec := vpDo(t, vpHandler(t), http.MethodGet, vpQueryBare(vpToken))
+	vpBounced(t, rec, bounceLocation)
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestVerifyPage_MalformedStateBounces(t *testing.T) {
+	h := vpHandler(t)
+	for name, state := range map[string]string{
+		"42 chars": vpState[:42],
+		"44 chars": vpState + "a",
+		"plus":     vpState[:42] + "+",
+		"empty":    "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+"&state="+url.QueryEscape(state)), bounceLocation)
+		})
+	}
+	t.Run("repeated state, bad first", func(t *testing.T) {
+		vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+"&state=short&state="+vpState), bounceLocation)
+	})
+}
+
+func TestVerifyPage_HeadWithoutStateBounces(t *testing.T) {
+	rec := vpDo(t, vpHandler(t), http.MethodHead, vpQueryBare(vpToken))
+	vpBounced(t, rec, bounceLocation)
+	if rec.Body.Len() != 0 {
+		t.Errorf("HEAD bounce body = %q, want empty", rec.Body.String())
+	}
+}
+
+func TestVerifyPage_BounceEscapesTheToken(t *testing.T) {
+	rec := vpDo(t, vpHandler(t), http.MethodGet, vpQueryBare("a&b=c"))
+	vpBounced(t, rec, siteURLValue+"/?confirm=1#token=a%26b%3Dc")
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loc.RawQuery != "confirm=1" {
+		t.Errorf("site query = %q, want only confirm=1", loc.RawQuery)
+	}
+}
+
+func TestVerifyPage_StateRendersAsHiddenField(t *testing.T) {
+	_, doc := vpPage(t, vpToken)
+	forms := vpFind(doc, vpTag("form"))
+	if len(forms) != 1 {
+		t.Fatalf("forms = %d, want 1", len(forms))
+	}
+	got := map[string]string{}
+	for _, in := range vpFind(forms[0], vpTag("input")) {
+		name, _ := vpAttr(in, "name")
+		val, _ := vpAttr(in, "value")
+		got[name] = val
+	}
+	want := map[string]string{"token": vpToken, "type": "signup", "state": vpState}
+	if len(got) != len(want) || got["token"] != want["token"] || got["type"] != want["type"] || got["state"] != want["state"] {
+		t.Errorf("inputs = %v, want %v", got, want)
+	}
+}
+
+func TestVerifyPage_BadTokenFailsBeforeTheStateCheck(t *testing.T) {
+	h := vpHandler(t)
+	for name, query := range map[string]string{
+		"empty token, valid state": "token=&type=signup&state=" + vpState,
+		"recovery, no state":       "token=" + vpToken + "&type=recovery",
+		"no token, no state":       "type=signup",
+	} {
+		t.Run(name, func(t *testing.T) {
+			vpBounced(t, vpDo(t, h, http.MethodGet, query), failedLocation)
+		})
+	}
+}
+
 func vpInviteQuery(token string) string { return vpQuery(token) + "&invite=1" }
 
 // vpFormAction is the action of the page's one form.
@@ -649,6 +744,57 @@ func TestVerifyPage_InviteLinkServesTheSetPasswordPage(t *testing.T) {
 	}
 }
 
+const inviteBounceLocation = siteURLValue + "/?confirm=invite#token=" + vpToken
+
+func TestVerifyPage_StatelessInviteLinkBouncesToLanding(t *testing.T) {
+	h := vpHandler(t)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run(method, func(t *testing.T) {
+			rec := vpDo(t, h, method, vpQueryBare(vpToken)+"&invite=1")
+			vpBounced(t, rec, inviteBounceLocation)
+			if method == http.MethodHead && rec.Body.Len() != 0 {
+				t.Errorf("HEAD body = %q, want empty", rec.Body.String())
+			}
+			if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("Cache-Control = %q, want no-store", got)
+			}
+		})
+	}
+	t.Run("an empty token fails before the bounce", func(t *testing.T) {
+		vpBounced(t, vpDo(t, h, http.MethodGet, "token=&type=signup&invite=1"), failedLocation)
+	})
+}
+
+func TestVerifyPage_MalformedStateOnInviteLinkBounces(t *testing.T) {
+	h := vpHandler(t)
+	base := vpQueryBare(vpToken) + "&invite=1&state="
+	for name, query := range map[string]string{
+		"42 chars":    base + vpState[:42],
+		"44 chars":    base + vpState + "a",
+		"plus":        base + url.QueryEscape(vpState[:42]+"+"),
+		"state twice": base + vpState + "&state=" + vpState,
+	} {
+		t.Run(name, func(t *testing.T) {
+			vpBounced(t, vpDo(t, h, http.MethodGet, query), inviteBounceLocation)
+		})
+	}
+}
+
+func TestVerifyPage_InviteBounceEscapesTheToken(t *testing.T) {
+	rec := vpDo(t, vpHandler(t), http.MethodGet, vpQueryBare("a&b=c")+"&invite=1")
+	vpBounced(t, rec, siteURLValue+"/?confirm=invite#token=a%26b%3Dc")
+}
+
+func vpInputValue(doc *html.Node, name string) string {
+	for _, in := range vpFind(doc, vpTag("input")) {
+		if n, _ := vpAttr(in, "name"); n == name {
+			v, _ := vpAttr(in, "value")
+			return v
+		}
+	}
+	return ""
+}
+
 func TestVerifyPage_InvitePageHasOneBoundedPasswordForm(t *testing.T) {
 	get := vpDo(t, vpHandler(t), http.MethodGet, vpInviteQuery(vpToken))
 	if get.Code != http.StatusOK {
@@ -670,10 +816,10 @@ func TestVerifyPage_InvitePageHasOneBoundedPasswordForm(t *testing.T) {
 		name, _ := vpAttr(in, "name")
 		inputs[name] = in
 	}
-	if len(inputs) != 3 {
-		t.Fatalf("named inputs = %d, want exactly 3 (token, type, password)", len(inputs))
+	if len(inputs) != 4 {
+		t.Fatalf("named inputs = %d, want exactly 4 (token, type, state, password)", len(inputs))
 	}
-	for name, want := range map[string]string{"token": vpToken, "type": "signup"} {
+	for name, want := range map[string]string{"token": vpToken, "type": "signup", "state": vpState} {
 		in := inputs[name]
 		if in == nil {
 			t.Errorf("no %q input", name)
@@ -723,9 +869,12 @@ func TestVerifyPage_InvitePageHasOneBoundedPasswordForm(t *testing.T) {
 func TestVerifyPage_InviteLinkBadTokenOrTypeIsTheFailedNotice(t *testing.T) {
 	h := vpHandler(t)
 	for name, query := range map[string]string{
-		"empty token":    "token=&type=signup&invite=1",
-		"257-byte token": vpInviteQuery(strings.Repeat("a", vpMaxLen+1)),
-		"type recovery":  "token=" + vpToken + "&type=recovery&invite=1",
+		"empty token":              "token=&type=signup&invite=1&state=" + vpState,
+		"257-byte token":           vpInviteQuery(strings.Repeat("a", vpMaxLen+1)),
+		"type recovery":            "token=" + vpToken + "&type=recovery&invite=1&state=" + vpState,
+		"empty token, no state":    "token=&type=signup&invite=1",
+		"257-byte token, no state": vpQueryBare(strings.Repeat("a", vpMaxLen+1)) + "&invite=1",
+		"type recovery, no state":  "token=" + vpToken + "&type=recovery&invite=1",
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := vpDo(t, h, http.MethodGet, query)
@@ -761,6 +910,11 @@ func TestVerifyPage_WithoutExactlyOneInviteFlagIsTheConfirmPage(t *testing.T) {
 			}
 		})
 	}
+	for name, extra := range map[string]string{"no invite": "", "invite=0": "&invite=0", "invite=1 twice": "&invite=1&invite=1", "invite=1, then 0": "&invite=1&invite=0", "invite empty": "&invite="} {
+		t.Run(name+", stateless", func(t *testing.T) {
+			vpBounced(t, vpDo(t, h, http.MethodGet, vpQueryBare(vpToken)+extra), bounceLocation)
+		})
+	}
 	rec := vpDo(t, h, http.MethodGet, vpInviteQuery(vpToken))
 	if rec.Code != http.StatusOK || vpFormAction(t, rec.Body.String()) != "/auth/invitation/password" {
 		t.Errorf("control, one invite=1: status %d; want 200 serving the set-password page", rec.Code)
@@ -787,6 +941,9 @@ func TestVerifyPage_InviteTokenIsEscaped(t *testing.T) {
 			}
 			if token != raw {
 				t.Errorf("token input = %q, want the literal %q", token, raw)
+			}
+			if state := vpInputValue(doc, "state"); state != vpState {
+				t.Errorf("state input = %q, want %q", state, vpState)
 			}
 			if strings.Contains(body, "<script>\"") {
 				t.Errorf("the token is not HTML-escaped in the page: %q", body)

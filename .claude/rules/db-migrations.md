@@ -20,6 +20,13 @@ paths:
 - Loop over tenants one at a time for cross-tenant work.
 - Enumerate tenants only through `invoice_tenant_reader`.
 - Install a trusted extension in a migration. Install an untrusted extension in `db/bootstrap.sql`.
+- Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.accept_invitation_by_id` and `public.invitee_account_state` to `invoice_app` only.
+- Grant `auth_hook_reader` SELECT on the `auth.users` columns `email`, `email_confirmed_at` and `is_sso_user` only.
+- Never grant `auth_hook_reader` a table-level privilege on `auth.users`.
+- Treat `invitee_account_state` as callable by every `invoice_app` service for any address.
+- Treat `invoice_migrator` as able to read `email`, `email_confirmed_at` and `is_sso_user` of every `auth.users` row through `SET ROLE auth_hook_reader`.
+- Return no rows from `pending_invites_for_email` for a user id that holds a membership of any status.
+- Refuse `accept_invitation_by_id` in this order: GUC mismatch `42501`, not valid `invitation_not_valid`, already a member `one_workspace_per_identity`.
 - Name a new migration with a current timestamp.
 - Check the order with `go run ./internal/tools/migrationorder -base origin/main`.
 - Write a working Down in every migration. CI resets all migrations and applies them again.
@@ -28,6 +35,17 @@ paths:
 - Gate deploy-time provisioning with an allowlist of environment names, never a blocklist.
 - Pass the raw `ENVIRONMENT` value to `BootstrapEnabled`.
 - Gate `db.Reset` on `RAILWAY_ENVIRONMENT_NAME`, never on `ENVIRONMENT`.
+- Gate the gateway's account-state boot grant on `platform.Posture(RAILWAY_ENVIRONMENT_NAME)`. Start it only for the `local` and `preview` postures.
+- Connect as `supabase_auth_admin` only from GoTrue and from `db.GrantAccountStateRead`.
+- Grant the account-state read on production by hand, as the superuser or `supabase_auth_admin`. The production gateway never runs it.
+
+```sql
+GRANT USAGE ON SCHEMA auth TO auth_hook_reader;
+GRANT SELECT (email, email_confirmed_at, is_sso_user) ON auth.users TO auth_hook_reader;
+CREATE POLICY invitee_account_state_read ON auth.users FOR SELECT TO auth_hook_reader USING (true);
+```
+
+- Run the three statements again when a GoTrue upgrade drops the policy `invitee_account_state_read`.
 - Keep `db.DemoTenants` a Go literal. Never derive it from `db/seed.dev.sql`.
 - Add every new `tenant_id` table to `purgeTables` or `purgeExcludedTables`. `TestPurgeTableListCoversEveryTenantOwnedTable` fails otherwise.
 - Order `purgeTables` leaf-first so foreign keys stay enforced.

@@ -44,10 +44,12 @@ import { useState } from 'react'
 import { gatewayBase } from '@invoice-os/api-client'
 
 import { importGlyph } from '../glyphs'
+import { companySetupAccess } from '../lib/members'
 import { classifyPickedFile, computeNoEntity } from '../lib/importFlow'
 import { canReadColumnsAll, canStartDocumentRun, kindMismatchNote, oversizeNote, runKindOf } from '../lib/importRun'
 import type { PickedKind } from '../lib/importFlow'
 import type { PlatformCtx } from '../types'
+import { NO_COMPANY_COPY } from './AddCompanyTask'
 
 export const AMBER_COPY = {
   title: { inhouse: 'Add your company before you file', firm: 'Add a client before you file' },
@@ -280,11 +282,14 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               refusal at the commit. It disables nothing — `Read columns` below is
               deliberately still live, because reading columns genuinely does not need an
               entity. */}
-          {noEntity && (
+          {noEntity && (() => {
+            const access = companySetupAccess(ctx.membersState, ctx.members)
+            return (
             <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', color: 'var(--status-amber-text)' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 5 }}>{AMBER_COPY.title[mode]}</div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 5 }}>{access === 'wait' ? NO_COMPANY_COPY.title : AMBER_COPY.title[mode]}</div>
               <p style={{ fontSize: 12.5, margin: 0, lineHeight: 1.55 }}>{AMBER_COPY.body}</p>
               {/* Navigating away discards a picked file; nothing is uploaded yet. */}
+              {access === 'add' && (
               <button
                 onClick={() =>
                   mode === 'inhouse' ? ctx.nav('settings', { settingsTab: 'company' }) : ctx.nav('clients')
@@ -294,8 +299,10 @@ export function CreateUpload({ ctx }: { ctx: PlatformCtx }) {
               >
                 {AMBER_COPY.button[mode]}
               </button>
+              )}
             </div>
-          )}
+            )
+          })()}
 
           {importError && (
             <p style={{ fontSize: 12.5, color: 'var(--status-red-text)', margin: 0, lineHeight: 1.5 }}>{importError.message}</p>

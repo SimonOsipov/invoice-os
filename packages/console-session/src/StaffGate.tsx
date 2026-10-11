@@ -31,7 +31,10 @@ export function StaffGate(p: {
     const search = window.location.search
     stripOneShotParams()
     void resolveConsoleBoot({ search, storageKey: p.storageKey, target: p.target, gateway: p.gateway, landing: p.landing }).then((b) => {
-      if (b.kind === 'leave') window.location.href = b.url
+      if (b.kind === 'leave') {
+        if (b.replace) window.location.replace(b.url)
+        else window.location.href = b.url
+      }
       setBoot(b)
     })
   }, [p.storageKey, p.target, p.gateway, p.landing])

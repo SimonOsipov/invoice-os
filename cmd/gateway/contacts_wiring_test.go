@@ -76,9 +76,9 @@ func goTrueAnswering(t *testing.T, body string) *url.URL {
 func TestRegistrationHandlers_VerifyHandsOffToTheSink(t *testing.T) {
 	site, _ := url.Parse("https://site.example")
 	sink := newChanSink()
-	reg := registrationHandlers(goTrueAnswering(t, cwSession), site, 0, slog.New(slog.DiscardHandler), sink, noPendingInvite)
+	verify := handoffVerify(goTrueAnswering(t, cwSession), site, sink)
 
-	rec := serveForm(reg.Verify, "/auth/verify", "token=tok&type=signup")
+	rec := serveForm(verify, "/auth/verify", "token=tok&type=signup")
 
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "https://site.example/?verified=1" {
 		t.Fatalf("verify answered %d Location %q, want 303 to /?verified=1", rec.Code, rec.Header().Get("Location"))
@@ -91,7 +91,7 @@ func TestRegistrationHandlers_VerifyHandsOffToTheSink(t *testing.T) {
 func TestHandoffHandlers_SignInHandsOffToTheSink(t *testing.T) {
 	sink := newChanSink()
 	log := slog.New(slog.DiscardHandler)
-	h := handoffHandlers(goTrueAnswering(t, cwSession), gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink)
+	h := handoffHandlers(goTrueAnswering(t, cwSession), nil, gateway.NewSessionChecker(nil, nil, time.Now, log), log, sink)
 
 	rec := httptest.NewRecorder()
 	h.SignIn.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/sign-in",

@@ -174,6 +174,14 @@ describe('HD-03b the Primary nav renders every entry in list order', () => {
   })
 })
 
+describe('nav_rendersWithoutOnCreateAccount', () => {
+  it('renders Sign in and no Create an account with only onSignIn and onBookDemo', () => {
+    const html = render()
+    expect(html).toContain('Sign in')
+    expect(html).not.toContain('Create an account')
+  })
+})
+
 describe('the header action group', () => {
   it('the header action group carries .a-actions and no inline style', () => {
     const html = render()

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Nav } from './components/Nav'
 import { VerifyNotice } from './components/VerifyNotice'
 import { SignInModal } from './components/SignInModal'
@@ -27,7 +27,7 @@ import { INVITE_PARAM, readInviteOutcome } from './invite'
 import { isPrivacyPath } from './route'
 import { readResetOutcome, RESET_PARAM } from './passwordReset'
 import { registrationOpen } from './register'
-import { readSignInConsole, readSignInState } from './signIn'
+import { bounceToStart, readSignInConsole, readSignInState, SIGN_IN_UNAVAILABLE, signInConfigured } from './signIn'
 import { readVerifyOutcome, VERIFIED_PARAM, VERIFY_PARAM } from './verify'
 
 // Copy for the ?signin= outcome; `ready` opens the modal with no message.
@@ -39,7 +39,7 @@ const SIGN_IN_OUTCOMES = new Map<string, string | undefined>([
 ])
 
 // Params the boot reads once and removes from the address bar.
-const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM, RESET_PARAM, INVITE_PARAM, 'register', 'demo']
+const BOOT_PARAMS = ['state', 'console', 'signin', VERIFIED_PARAM, VERIFY_PARAM, RESET_PARAM, INVITE_PARAM, 'confirm', 'handoff', 'register', 'demo']
 
 // Held a minute short of the 10-minute state TTL, so a posted state is still live.
 const STATE_HOLD_MS = 9 * 60 * 1000
@@ -86,17 +86,36 @@ export default function App() {
   const [consent, setConsent] = useState<ConsentRecord | null>(() => readConsent())
   // Once a choice is stored the footer control is the only route back to the notice.
   const [reopened, setReopened] = useState(false)
+  // Counts window opens, so a sign-in preflight that settles after one can tell it is stale.
+  const windowsOpened = useRef(0)
   // Source-bound per call site: the components keep `onBookDemo: () => void`, so this file carries the attribution.
   const book = (source: DemoCtaSource) => () => {
     trackDemoOpen(source)
+    windowsOpened.current++
     setDemoOpen(true)
   }
   // The one opener (consentActions.test.ts AC-13).
   const openSignIn = (view: 'sign-in' | 'forgot') => {
+    windowsOpened.current++
     setSignInView(view)
     setSignInOpen(true)
   }
-  const onSignIn = () => openSignIn('sign-in')
+  const bouncing = useRef(false)
+  // The click decides: a live state opens the form, otherwise the app issues one.
+  // The flag holds after a successful bounce until unload (or a bfcache restore); a stale or failed one clears it.
+  const onSignIn = async () => {
+    if (heldState() || !signInConfigured()) return openSignIn('sign-in')
+    if (bouncing.current) return
+    bouncing.current = true
+    const seen = windowsOpened.current
+    const stale = () => windowsOpened.current !== seen
+    const bounced = await bounceToStart(signInBoot.consoleTarget ?? undefined, stale)
+    if (bounced) return
+    bouncing.current = false
+    if (stale()) return
+    setSignInError(SIGN_IN_UNAVAILABLE)
+    openSignIn('sign-in')
+  }
   const onCreateAccount = registrationOpen()
     ? () => {
         setSignInOpen(false)
@@ -118,7 +137,9 @@ export default function App() {
 
   useEffect(() => {
     const onShow = (e: PageTransitionEvent) => {
-      if (e.persisted) setStateDropped(true)
+      if (!e.persisted) return
+      setStateDropped(true)
+      bouncing.current = false
     }
     window.addEventListener('pageshow', onShow)
     return () => window.removeEventListener('pageshow', onShow)
@@ -172,12 +193,13 @@ export default function App() {
         overflowX: 'clip',
       }}
     >
-      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} onCreateAccount={onCreateAccount} hrefPrefix={privacy ? '/' : ''} libraryHref={libraryBase()} />
+      <Nav onSignIn={onSignIn} onBookDemo={book('nav')} hrefPrefix={privacy ? '/' : ''} libraryHref={libraryBase()} />
       {notice && (
         <VerifyNotice
           outcome={notice}
           onDismiss={() => setNotice(null)}
           onRequestReset={() => openSignIn('forgot')}
+          onSignIn={onSignIn}
         />
       )}
       {privacy ? (

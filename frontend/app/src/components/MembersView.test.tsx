@@ -860,6 +860,22 @@ describe('RESEND-07-04', () => {
       expect(flash().textContent).toBe('Invite sent to zed@x.ng.')
     })
 
+    it('MembersView: the listed state renders and survives a resend', async () => {
+      const gw = gateway({
+        list: [answer(listOf(wire({ id: 'i1', account: 'confirmed' })))],
+        resend: [answer(wire({ id: 'i1' }))],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(within(inviteRows()[0]).getByText('Confirmed, not joined')).toBeTruthy())
+
+      clickResendOn(inviteRows()[0])
+
+      await waitFor(() => expect(gw.resends()).toHaveLength(1))
+      await waitFor(() => expect(flash().textContent).toBe('Invite sent to zed@x.ng.'))
+      expect(within(inviteRows()[0]).getByText('Confirmed, not joined')).toBeTruthy()
+      expect(gw.lists()).toHaveLength(1)
+    })
+
     it('MembersView: a second Resend while the first is in flight sends nothing', async () => {
       const first = hold()
       const gw = gateway({ list: [answer(listOf(wire()))], resend: [first.responder] })

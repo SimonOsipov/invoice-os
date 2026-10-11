@@ -154,9 +154,11 @@ describe('readSignInState adversarial', () => {
 })
 
 describe('signIn module surface', () => {
-  it('exports only the D12 and D25 functions and the unavailable copy', () => {
+  it('exports only the D12, D25 and D14 functions and the unavailable copy', () => {
     expect(Object.keys(signIn).sort()).toEqual([
+      'PREFLIGHT_MS',
       'SIGN_IN_UNAVAILABLE',
+      'bounceToStart',
       'handoffUrl',
       'isUnverified',
       'readSignInConsole',

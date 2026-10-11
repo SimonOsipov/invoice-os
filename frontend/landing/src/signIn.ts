@@ -1,7 +1,8 @@
 // Landing sign-in client.
+import { reportApiFailure } from '@invoice-os/api-client'
 import { ApiError, apiFetch, gatewayBase } from '@invoice-os/api-client/client'
 
-import { appBase, consoleBase } from './auth'
+import { appBase, consoleBase, handoffTarget } from './auth'
 
 const STATE_RE = /^[A-Za-z0-9_-]{43}$/
 
@@ -14,7 +15,7 @@ export type ConsoleTarget = 'ops' | 'support'
 
 export function handoffUrl(code: string, target?: ConsoleTarget): string | null {
   const base = target ? consoleBase(target) : appBase()
-  return base ? `${base}?handoff=${encodeURIComponent(code)}` : null
+  return base ? handoffTarget(base, code) : null
 }
 
 export function signInConfigured(): boolean {
@@ -60,4 +61,27 @@ export function readSignInConsole(search: string): ConsoleTarget | null {
 export function startUrl(target?: ConsoleTarget): string | null {
   const base = target ? consoleBase(target) : appBase()
   return base ? `${base}?auth=start` : null
+}
+
+export const PREFLIGHT_MS = 3000
+
+// `stale` drops the result after the preflight: no navigation, returns false.
+// Preflight so a dead app origin shows SIGN_IN_UNAVAILABLE instead of a browser error page.
+export async function bounceToStart(target?: ConsoleTarget, stale?: () => boolean): Promise<boolean> {
+  const base = target ? consoleBase(target) : appBase()
+  const url = startUrl(target)
+  if (!base || !url) return false
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(new DOMException('preflight timed out', 'TimeoutError')), PREFLIGHT_MS)
+  try {
+    await fetch(base, { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal })
+  } catch (e) {
+    reportApiFailure(e, { method: 'GET', url: base, signal: ctrl.signal })
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+  if (stale?.()) return false
+  window.location.href = url
+  return true
 }

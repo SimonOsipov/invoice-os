@@ -308,8 +308,11 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   const activeEntityIdRef = useRef<string | null>(null)
   // Marks entries written before the company resolves; popstate resolves them to bootEntityIdRef.
   const [mountKey] = useState(() => Math.random().toString(36).slice(2))
-  // The first company this mount resolved: the company of every pre-load entry.
+  // The company of every entry in this mount's pre-load window; adoptBatchClient re-points it only from inside the window.
   const bootEntityIdRef = useRef<string | null>(null)
+  // `p` marks the backfill's stamp: a window entry that already names a company.
+  const isWindowEntry = (s: { e?: string | null; m?: string; p?: boolean } | null) =>
+    s?.m === mountKey && (s.e == null || s.p === true)
 
   // The REAL portfolio entity behind `active`, resolved once here rather than re-`find`ing
   // it at each consumer ([gate-on-the-resolved-entity]). Two things depend on it being the
@@ -610,7 +613,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     if (active.entityId === null) return
     bootEntityIdRef.current ??= active.entityId
     const minted = (window.history.state as { e?: string | null } | null)?.e ?? null
-    if (minted === null) window.history.replaceState({ e: active.entityId }, '', window.location.href)
+    if (minted === null) window.history.replaceState({ e: active.entityId, m: mountKey, p: true }, '', window.location.href)
   }, [active.entityId])
   // Back/Forward: the browser already moved the URL -- re-derive every owned atom from it, no
   // write on the unclamped path. A push here would duplicate an entry on every Back press;
@@ -625,8 +628,8 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
       // setter below reads the clamped path: a tail rewrite leaves each atom armed for a
       // frame and has to enumerate them.
       // popstate_anOlderAuditEntryFromAnotherCompanyDoesNotResumeItsInvoiceFilter
-      const state = event.state as { e?: string | null; m?: string } | null
-      const minted = state?.e ?? (state?.m === mountKey ? bootEntityIdRef.current : null)
+      const state = event.state as { e?: string | null; m?: string; p?: boolean } | null
+      const minted = isWindowEntry(state) ? bootEntityIdRef.current : (state?.e ?? null)
       const here = activeEntityIdRef.current
       // Any other no-stamp shape, and a null stamp from another mount, names no company: never clamp.
       // popstate_anUnstampedEntryDoesNotClamp
@@ -738,8 +741,8 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   function adoptBatchClient(entityId: string) {
     if (activeEntityId !== null || !clients.some((c) => c.entityId === entityId)) return
     setActiveEntityId(entityId)
-    // Adoption is how a cold review link resolves its company: pre-load entries follow it.
-    bootEntityIdRef.current = entityId
+    // A cold review link resolves its company here: the window follows, but only from a window entry.
+    if (isWindowEntry(window.history.state)) bootEntityIdRef.current = entityId
     window.history.replaceState({ e: entityId }, '', window.location.href)
   }
 

@@ -132,7 +132,7 @@ function requireCtx(): PlatformCtx {
   return capturedCtx!
 }
 
-// Moves the URL by hand, then fires popstate. `traverse` (BUG-34 block) walks the real stack.
+// Moves the URL by hand, then fires popstate. `traverse` (below) walks the real stack.
 async function popTo(path: string) {
   window.history.replaceState(null, '', path)
   await act(async () => {
@@ -1429,7 +1429,7 @@ describe('ROUTE-06-02 QA: the other two shapes the no-stamp fold collapses', () 
   })
 
   // `{ e: null }` with no mount key: an entry from another mount. This mount's own null
-  // entries carry `m` and resolve (BUG-34 block below).
+  // entries carry `m` and resolve (see the `entries pushed before the company list loads` describe).
   it('popstate_anEntryStampedNullDoesNotClamp', async () => {
     await bootAtWithGateway('/')
     await act(async () => {
@@ -1593,7 +1593,7 @@ describe('ROUTE-07-05 AC-6 (D3): carryView collapses three views and passes work
   })
 })
 
-// --- BUG-34: entries pushed before the company list loads -----------------------------
+// --- entries pushed before the company list loads -----------------------------
 
 // routeFetch with the portfolio call held until `release()`; `failFirst` answers the first one 500.
 function gatedRouteFetch(failFirst = false) {
@@ -1771,5 +1771,42 @@ describe('BUG-34: entries pushed before the company list loads', () => {
     await traverse(-1)
     expect(window.location.pathname).toBe('/invoices')
     expect(requireCtx().importedInvoiceId).toBeNull()
+  })
+  it('popstate_anAdoptionFromAnEntryOutsideThePreLoadWindowNeverRepointsIt', async () => {
+    const release = await bootPreLoad(`/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    window.history.pushState({ scroll: 0 }, '', '/invoices')
+    await act(async () => requireCtx().adoptBatchClient(ENTITY_B))
+    expect(requireCtx().active.entityId, 'floor: the adoption must take').toBe(ENTITY_B)
+    await traverse(-2)
+    expect(window.location.pathname, 'the boot entry names Alpha, not the adopted Bravo').toBe('/invoices')
+    expect(requireCtx().importedInvoiceId).toBeNull()
+  })
+
+  it('popstate_everyEntryOfOnePreLoadWindowResolvesToTheAdoptedCompany', async () => {
+    const release = await bootPreLoad(`/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_A)
+    })
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    await traverse(-1)
+    await act(async () => requireCtx().adoptBatchClient(ENTITY_B))
+    expect(requireCtx().active.entityId, 'floor: the adoption must take').toBe(ENTITY_B)
+    await traverse(1)
+    expect(window.location.pathname, 'the backfilled entry is in the same window and keeps its drill-down').toBe(
+      `/extraction/${JOB_A}`,
+    )
+    expect(requireCtx().extractionJobId).toBe(JOB_A)
   })
 })

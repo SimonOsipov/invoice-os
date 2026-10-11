@@ -464,8 +464,8 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     resetBySwitchClient: false,
     routes: [],
     verdict: 'deliberate',
-    citation: { text: '// The first company this mount resolved: the company of every pre-load entry.' },
-    note: 'BUG-34. Not on ctx and no screen reads it: the company a pre-load entry resolves to. Set once by the stamp backfill or adoptBatchClient and kept across a switch, so Back to a pre-load entry still names the company it was made under.',
+    citation: { text: '// The company of every entry in this mount\'s pre-load window; adoptBatchClient re-points it only from inside the window.' },
+    note: 'BUG-34. Not on ctx and no screen reads it: the company a pre-load entry resolves to. Set by the stamp backfill, re-pointed by adoptBatchClient only from a window entry, and kept across a switch, so Back to a pre-load entry still names the company it was made under.',
   },
   {
     binding: 'reqInFlight',

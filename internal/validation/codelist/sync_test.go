@@ -539,6 +539,20 @@ func TestSync_HeldPullIsRecorded(t *testing.T) {
 
 func TestSync_HeldRemovedIsSorted(t *testing.T) {
 	s, srv, l, super := seedN(t, 30)
+	// Reinsert in reverse so heap order is not sorted order.
+	if _, err := super.Exec(context.Background(), `WITH old AS (DELETE FROM nrs_codes WHERE list = $1 RETURNING code, entries)
+INSERT INTO nrs_codes (list, code, entries) SELECT $1, code, entries FROM old ORDER BY code DESC`, l.Name); err != nil {
+		t.Fatal(err)
+	}
+	// The primary-key index returns sorted codes; force a seq scan so only the sort orders them.
+	cfg := s.pool.Config().Copy()
+	cfg.ConnConfig.RuntimeParams["options"] = "-c enable_indexscan=off -c enable_indexonlyscan=off -c enable_bitmapscan=off"
+	seq, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(seq.Close)
+	s.pool = seq
 	srv.set(200, pull(cEntries(1, 20, "x")))
 	ch, err := s.SyncList(context.Background(), l)
 	wantHeld(t, ch, err, l.Name)

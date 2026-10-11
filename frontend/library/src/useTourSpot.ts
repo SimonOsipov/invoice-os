@@ -57,6 +57,7 @@ export function useTourSpot(tour: TourState | null, routeKey: string): { rect: R
     window.addEventListener('resize', onResize)
     main?.addEventListener('scroll', onScroll)
     nav?.addEventListener('scroll', onScroll)
+    // Re-measure when the target resizes with no font, resize or scroll event.
     const stop = TOUR[i]
     const target = document.getElementById(phase === 'menu' ? `nav-${stop.g}` : `fc-${stop.f}`)
     const ro = target && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => measure(false)) : null

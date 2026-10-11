@@ -605,6 +605,7 @@ export interface GetInvoiceResult extends Invoice {
   tax_subtotals: InvoiceTaxSubtotal[]
   rule_set_version: number | null
   qr_png_base64: string | null
+  verdict_stale: boolean
   can_edit: boolean
   can_revalidate: boolean
   revalidate_blocked_reason: string | null

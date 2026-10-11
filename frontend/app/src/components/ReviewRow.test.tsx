@@ -71,6 +71,7 @@ function detailFixture(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRe
   return {
     ...listRow(),
     qr_png_base64: null,
+    verdict_stale: false,
     can_edit: false,
     can_revalidate: true,
     revalidate_blocked_reason: null,
@@ -1553,6 +1554,13 @@ describe('ReviewRow row-expansion: Explain and Accept (ENGI-17-06)', () => {
     fireEvent.change(screen.getByTestId('review-fix-input'), { target: { value: '999' } })
     fireEvent.click(screen.getByTestId('review-fix-save'))
     await waitFor(() => expect(screen.queryByTestId('explain-panel')).toBeNull())
+  })
+
+  it('reviewRow_explainDisabledWhenTheServerSaysTheVerdictIsStale', async () => {
+    setup({ detail: { verdict_stale: true } })
+    await screen.findAllByTestId('review-fix-explain')
+    expect(explainButtons()[0].disabled).toBe(true)
+    expect(explainButtons()[0].title).toBe(EXPLAIN_COPY.stale)
   })
 
   it('reviewRow_explainDisabledAfterASaveUntilRevalidate', async () => {

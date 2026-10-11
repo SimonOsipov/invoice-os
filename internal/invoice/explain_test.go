@@ -1,6 +1,7 @@
 package invoice
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"go/format"
@@ -8,8 +9,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 )
@@ -326,9 +329,9 @@ func TestGuardExplanation_DateValueMustBeISO(t *testing.T) {
 }
 
 func TestGuardExplanation_TextValueBounds(t *testing.T) {
-	v := Violation{Message: "m", Path: "buyer.name"}
+	v := Violation{Message: "m", Path: "currency"}
 	for value, wantFix := range map[string]bool{"  ": false, strings.Repeat("a", 201): false, strings.Repeat("a", 200): true, "Acme Ltd": true} {
-		got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "name", value))
+		got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "currency", value))
 		if (got.Fix != nil) != wantFix {
 			t.Errorf("value %.12q (%d): fix %v", value, len(value), got.Fix)
 		}
@@ -364,10 +367,29 @@ func TestGuardExplanation_FixCarriesCurrentAndLabel(t *testing.T) {
 }
 
 func TestGuardExplanation_AbsentCurrentIsNull(t *testing.T) {
-	v := Violation{Message: "m", Path: "buyer.tin"}
-	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "tin", "12345678-0001"))
-	if got.Fix == nil || got.Fix.Current != nil || got.Fix.Field != "buyer_tin" {
-		t.Errorf("fix %+v, want buyer_tin with null current", got.Fix)
+	v := Violation{Message: "m", Path: "total"}
+	got := guardExplanation(v, explainPayload(), explainAnswer("Why.", "total", "5.00"))
+	if got.Fix == nil || got.Fix.Current != nil || got.Fix.Field != "total" {
+		t.Errorf("fix %+v, want total with null current", got.Fix)
+	}
+}
+
+func TestGuardExplanation_BlankIdentityValueIsNotInvented(t *testing.T) {
+	payload := explainPayload()
+	payload["buyer"] = map[string]any{"name": "  "}
+	for _, tc := range []struct {
+		path, field, value string
+		wantFix            bool
+	}{
+		{"buyer.tin", "tin", "12345678-0001", false},
+		{"buyer.name", "name", "Acme Ltd", false},
+		{"supplier.name", "name", "Acme Ltd", false},
+		{"supplier.tin", "tin", "99999999-0001", true},
+	} {
+		got := guardExplanation(Violation{Message: "m", Path: tc.path}, payload, explainAnswer("Why.", tc.field, tc.value))
+		if got.Status != "ok" || got.Explanation == nil || (got.Fix != nil) != tc.wantFix {
+			t.Errorf("%s: status %s, fix %v, want fix %v with the explanation kept", tc.path, got.Status, got.Fix, tc.wantFix)
+		}
 	}
 }
 
@@ -451,5 +473,110 @@ func TestExplainCases_WantedFixesPassTheTargetGuard(t *testing.T) {
 		if !ok || last != *c.WantField || headerMBSPath(field) != c.Violation.Path && !strings.HasPrefix(c.Violation.Path, "line_items") {
 			t.Errorf("%s: want_field %q, target (%q, %v)", c.ID, *c.WantField, field, ok)
 		}
+	}
+}
+
+type explainCaseFile struct {
+	ID        string    `json:"id"`
+	Violation Violation `json:"violation"`
+	Invoice   struct {
+		InvoiceNumber string  `json:"invoice_number"`
+		IssueDate     *string `json:"issue_date"`
+		Currency      *string `json:"currency"`
+		Subtotal      *float64
+		VAT           *float64
+		Total         *float64
+		Supplier      *struct{ TIN, Name *string }
+		Buyer         *struct{ TIN, Name *string }
+		LineItems     []struct {
+			ID          string   `json:"id"`
+			LineNo      int      `json:"line_no"`
+			Description *string  `json:"description"`
+			Quantity    *float64 `json:"quantity"`
+			UnitPrice   *float64 `json:"unit_price"`
+			LineTotal   *float64 `json:"line_total"`
+			LineTax     *float64 `json:"line_tax"`
+		} `json:"line_items"`
+	} `json:"invoice"`
+}
+
+// explainCaseUserText builds the user message of one harness case through MBSPayload and explainPromptText,
+// so the harness sends exactly what production sends.
+func explainCaseUserText(t *testing.T, c explainCaseFile) string {
+	t.Helper()
+	dec := func(f *float64, places int) *string {
+		if f == nil {
+			return nil
+		}
+		s := strconv.FormatFloat(*f, 'f', places, 64)
+		return &s
+	}
+	in := c.Invoice
+	inv := Invoice{
+		InvoiceNumber: in.InvoiceNumber, Currency: in.Currency,
+		Subtotal: dec(in.Subtotal, 2), VAT: dec(in.VAT, 2), Total: dec(in.Total, 2),
+	}
+	if in.IssueDate != nil {
+		d, err := time.Parse("2006-01-02", *in.IssueDate)
+		if err != nil {
+			t.Fatalf("%s: issue_date: %v", c.ID, err)
+		}
+		inv.IssueDate = &d
+	}
+	if in.Supplier != nil {
+		inv.SupplierTIN, inv.SupplierName = in.Supplier.TIN, in.Supplier.Name
+	}
+	if in.Buyer != nil {
+		inv.BuyerTIN, inv.BuyerName = in.Buyer.TIN, in.Buyer.Name
+	}
+	for i, l := range in.LineItems {
+		id := l.ID
+		if id == "" {
+			id = "00000000-0000-4000-8000-00000000000" + strconv.Itoa(i+1)
+		}
+		inv.LineItems = append(inv.LineItems, LineItem{ID: id, LineNo: l.LineNo, Description: l.Description,
+			Quantity: dec(l.Quantity, 3), UnitPrice: dec(l.UnitPrice, 2), LineTotal: dec(l.LineTotal, 2), LineTax: dec(l.LineTax, 2)})
+	}
+	return explainPromptText(c.Violation, MBSPayload(inv))
+}
+
+// explain_user_text.json is what explainrun.py sends as the user message; regenerate with UPDATE_EXPLAIN_USER_TEXT=1.
+func TestExplainPrompt_HarnessUserTextIsWhatProductionSends(t *testing.T) {
+	dir := filepath.Join("..", "..", "tools", "aimodeltest")
+	b, err := os.ReadFile(filepath.Join(dir, "explain_cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []explainCaseFile
+	if err := json.Unmarshal(b, &cases); err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases")
+	}
+	want := map[string]string{}
+	for _, c := range cases {
+		want[c.ID] = explainCaseUserText(t, c)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", " ")
+	if err := enc.Encode(want); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "explain_user_text.json")
+	if os.Getenv("UPDATE_EXPLAIN_USER_TEXT") == "1" {
+		if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v (run with UPDATE_EXPLAIN_USER_TEXT=1)", path, err)
+	}
+	if !bytes.Equal(got, buf.Bytes()) {
+		t.Errorf("explain_user_text.json is out of date with explainPromptText; run with UPDATE_EXPLAIN_USER_TEXT=1")
 	}
 }

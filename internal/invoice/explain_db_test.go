@@ -236,3 +236,30 @@ func TestRLS_ExplainLogsTenantPurposeAndCost(t *testing.T) {
 		t.Errorf("ai call line = %v, want tenant_id %s, purpose explain, a cost key, outcome fake", got, x.tenantID)
 	}
 }
+
+func TestRLS_ExplainAfterAnEditSinceValidationIs409AndCallsNoAI(t *testing.T) {
+	x := newExplainDB(t, "EXPLAIN-STALE")
+	vs := []Violation{{RuleKey: "line-cost-non-negative", Severity: "error", Message: explainTestMessage, Path: "line_items[2]"}}
+	cur := x.get(t, x.invoiceID)
+	if _, err := x.store.ApplyValidation(x.c, x.invoiceID, vs, seedRuleSetVersionID(t, x.super), contentFingerprint(cur, cur.LineItems)); err != nil {
+		t.Fatalf("ApplyValidation: %v", err)
+	}
+	if rec := x.post(t, x.member(), x.invoiceID, explainBody, x.fake); rec.Code != http.StatusOK || x.fake.callCount() != 1 {
+		t.Fatalf("control before the edit: status %d, calls %d, want 200 and 1 (body=%s)", rec.Code, x.fake.callCount(), rec.Body.String())
+	}
+
+	lines := []LineItemInput{nrsLine("a", "1", "105.00"), nrsLine("c", "1", "0.00")}
+	if _, err := x.store.Edit(x.c, x.invoiceID, EditInput{LineItems: &lines}); err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+	rec := x.post(t, x.member(), x.invoiceID, explainBody, x.fake)
+	if rec.Code != http.StatusConflict || explainErrorOf(t, rec) != "the invoice changed since its last validation; re-validate it first" {
+		t.Errorf("got %d %s, want 409 with the re-validate message", rec.Code, rec.Body.String())
+	}
+	if n := x.fake.callCount(); n != 1 {
+		t.Errorf("AI calls = %d, want still 1", n)
+	}
+	if !x.get(t, x.invoiceID).VerdictStale {
+		t.Error("Get.VerdictStale = false after an edit, want true")
+	}
+}

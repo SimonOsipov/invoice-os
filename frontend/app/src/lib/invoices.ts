@@ -276,6 +276,8 @@ export interface InvoiceApproval {
 export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'> {
   rule_set_version: number | null
   qr_png_base64: string | null
+  // The invoice changed since its stored verdict was evaluated; false for a verdict that predates the fingerprint.
+  verdict_stale: boolean
   can_edit: boolean
   can_revalidate: boolean
   revalidate_blocked_reason: string | null
@@ -392,13 +394,12 @@ export function clampFilterText(s: string): string {
   return new TextDecoder().decode(bytes.subarray(0, end))
 }
 
-// One entry of editInvoice's optional `line_items` array (lineItemReq,
-// handlers.go:42-48, INVED-01-05). Five nullable strings and no `line_no`:
+// One entry of editInvoice's optional `line_items` array (lineItemReq, INVED-01-05). Five nullable strings and no `line_no`:
 // line_no is system-assigned 1..N by array POSITION ([line-no-by-position]) and a
 // client-supplied one is silently ignored, so this array's order IS the only line
 // ordering the wire carries.
 export interface LineItemEditInput {
-  // Only fixPatch sends it (ENGI-17), so the server keeps the line's identity.
+  // Only fixPatch sends it, so the server keeps the line's identity.
   id?: string
   description: string | null
   quantity: string | null
@@ -666,6 +667,7 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     ...res,
     rule_set_version: res.rule_set_version ?? null,
     qr_png_base64: res.qr_png_base64 ?? null,
+    verdict_stale: res.verdict_stale === true,
     can_edit: res.can_edit === true,
     can_revalidate: res.can_revalidate === true,
     revalidate_blocked_reason: res.revalidate_blocked_reason ?? null,
@@ -847,9 +849,9 @@ export function invoiceStatusStyle(status: InvoiceStatus): StatusStyle {
 
 export function verdictStatus(
   staleSinceEdit: boolean,
-  inv: Pick<InvoiceRecord, 'status' | 'rule_set_version_id' | 'violations'>,
+  inv: Pick<InvoiceRecord, 'status' | 'rule_set_version_id' | 'violations'> & { verdict_stale?: boolean },
 ): 'stale' | 'current' {
-  if (staleSinceEdit) return 'stale'
+  if (staleSinceEdit || inv.verdict_stale === true) return 'stale'
   const demotedSinceValidation =
     inv.status === 'draft' && inv.rule_set_version_id != null && !inv.violations.some((v) => v.severity === 'error')
   return demotedSinceValidation ? 'stale' : 'current'

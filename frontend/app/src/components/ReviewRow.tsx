@@ -370,7 +370,6 @@ function ExpandedFixPanel({
   const [keepError, setKeepError] = useState<string | null>(null)
   const [explainOpen, setExplainOpen] = useState<string | null>(null)
   const [explainNotice, setExplainNotice] = useState<string | null>(null)
-  // ceiling: a reload loses this flag, so an edited invoice that still has errors can be explained against current content
   const [editedSinceValidation, setEditedSinceValidation] = useState(false)
 
   const inv = detail.data
@@ -540,7 +539,7 @@ function ExpandedFixPanel({
                 setExplainOpen((cur) => (cur === key ? null : key))
                 setExplainNotice(null)
               }}
-              explainDisabled={editedSinceValidation}
+              explainDisabled={editedSinceValidation || inv.verdict_stale}
               explainTitle={EXPLAIN_COPY.stale}
               explanation={
                 <ExplainPanel

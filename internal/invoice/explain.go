@@ -143,6 +143,9 @@ func explainCitationOK(explanation, message string) bool {
 	return true
 }
 
+// explainIdentityField: party identity the model cannot know, so a blank one gets no proposed value.
+var explainIdentityField = map[string]bool{"supplier_tin": true, "buyer_tin": true, "supplier_name": true, "buyer_name": true}
+
 func explainValueOK(t invoicefields.Type, value string) bool {
 	switch t {
 	case invoicefields.Money, invoicefields.Quantity:
@@ -201,6 +204,9 @@ func guardExplanation(v Violation, payload map[string]any, ans map[string]any) E
 		return res
 	}
 	current := explainCurrent(payload, field, line)
+	if explainIdentityField[field] && (current == nil || strings.TrimSpace(*current) == "") {
+		return res
+	}
 	if current != nil {
 		if f.Type == invoicefields.Money || f.Type == invoicefields.Quantity {
 			if sameDecimal(current, &value) {

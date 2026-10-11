@@ -367,6 +367,7 @@ func TestGetHandler_ApproveFlagsAreLastInWireOrder(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
 	got := topLevelKeyOrder(t, rec.Body.Bytes())
+	got = got[:len(got)-1] // verdict_stale is the last wire key
 	quartet := []string{"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason"}
 	numberTail := []string{"can_correct_invoice_number", "invoice_number_blocked_reason"}
 	want := len(quartet) + len(numberTail)

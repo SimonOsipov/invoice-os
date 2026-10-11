@@ -93,6 +93,7 @@ function detailRecord(over: Partial<InvoiceDetailRecord> = {}): InvoiceDetailRec
     // story's honest-line assertion, which only depends on status/rejection_reasons.
     rule_set_version: null,
     qr_png_base64: null,
+    verdict_stale: false,
     can_edit: false,
     can_revalidate: false,
     revalidate_blocked_reason: null,
@@ -179,7 +180,7 @@ interface DetailFetchOptions {
   // GET .../audit-log, overriding `auditLog` so a non-2xx can be produced. Absent (the
   // default) leaves every pre-existing test's behaviour byte-identical.
   auditLogResponse?: MockResponse
-  // POST .../explain (ENGI-17-05). Every call body is recorded into `explainCalls`.
+  // POST .../explain. Every call body is recorded into `explainCalls`.
   explainResponse?: MockResponse
 }
 
@@ -6801,5 +6802,32 @@ describe('InvoiceDetail explain (ENGI-17-05)', () => {
     await screen.findByTestId('explain-panel')
     fireEvent.click(screen.getByTestId('revalidate'))
     await waitFor(() => expect(screen.queryByTestId('explain-panel')).toBeNull())
+  })
+
+  it('invoiceDetail_acceptDisabledWhileRevalidating', async () => {
+    let release!: () => void
+    const held: MockResponse = {
+      ok: true,
+      status: 200,
+      json: () => new Promise((resolve) => (release = () => resolve(detailRecord(base)))),
+    }
+    const { patchCalls } = mockDetailFetch(detailRecord(base), [], { explainResponse: okFix(), revalidateResponse: held })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click((await screen.findAllByTestId('violation-explain'))[1])
+    const btn = await accept()
+    expect(btn.disabled).toBe(false)
+
+    fireEvent.click(screen.getByTestId('revalidate'))
+    await waitFor(() => expect(btn.disabled).toBe(true))
+    fireEvent.click(btn)
+    expect(patchCalls).toHaveLength(0)
+    release()
+  })
+
+  it('invoiceDetail_staleVerdictFromTheServerDisablesExplain', async () => {
+    mockDetailFetch(detailRecord({ ...base, verdict_stale: true }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('stale-verdict')
+    for (const b of await screen.findAllByTestId('violation-explain')) expect((b as HTMLButtonElement).disabled).toBe(true)
   })
 })

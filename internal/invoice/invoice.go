@@ -167,6 +167,10 @@ type Invoice struct {
 	// Edit/Transition/ApplyValidation) leaves it unset.
 	RuleSetVersion *int `json:"-"`
 
+	// VerdictStale: the invoice content changed since the stored verdict was evaluated;
+	// false when the verdict predates the fingerprint. Filled by getTx only.
+	VerdictStale bool `json:"-"`
+
 	// EverSubmitted: some history row left draft/validated; filled by getTx
 	// only. Feeds canCorrectNumber's history-aware half (store.go).
 	EverSubmitted bool `json:"-"`
@@ -552,6 +556,9 @@ var (
 
 	// ErrViolationGone: an Explain key that is not on the invoice's stored verdict.
 	ErrViolationGone = errors.New("invoice: violation gone")
+
+	// ErrVerdictStale: the invoice changed since its stored verdict, so Explain refuses.
+	ErrVerdictStale = errors.New("invoice: verdict stale")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

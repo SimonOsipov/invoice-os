@@ -433,6 +433,7 @@ type getResponse struct {
 	RejectBlockedReason         *string       `json:"reject_blocked_reason"`
 	CanCorrectInvoiceNumber     bool          `json:"can_correct_invoice_number"`
 	InvoiceNumberBlockedReason  *string       `json:"invoice_number_blocked_reason"`
+	VerdictStale                bool          `json:"verdict_stale"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -677,6 +678,7 @@ func GetHandler(
 			CanReject:                   canDecide,
 			RejectBlockedReason:         decideReason,
 			CanCorrectInvoiceNumber:     canCorrectNumber(inv.Status, inv.EverSubmitted),
+			VerdictStale:                inv.VerdictStale,
 		}
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local
@@ -1743,6 +1745,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "invoice changed during validation"
 	case errors.Is(err, ErrViolationGone):
 		return http.StatusConflict, "the violation is not on this invoice's last validation"
+	case errors.Is(err, ErrVerdictStale):
+		return http.StatusConflict, "the invoice changed since its last validation; re-validate it first"
 	case errors.Is(err, ErrNotFixable):
 		return http.StatusConflict, "invoice is not in a fixable state"
 	case errors.Is(err, ErrNumberTaken):

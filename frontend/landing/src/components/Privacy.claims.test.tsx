@@ -532,7 +532,7 @@ describe('ENGI-10: no training, retention, region, deletion or law claim in the 
   })
 })
 
-// Not yet approved: wording approval is owed at the epic review (ENGI-17 U2, Q31). Rename to APPROVED_* once given.
+// Not yet approved: wording approval is owed at the epic review (U2, Q31). Rename to APPROVED_* once given.
 const PROPOSED_EXPLAIN_SECTION =
   "This is also about the signed-in ASComply product. When you click Explain on a rule that an invoice breaks, our server sends that invoice's details and the rule's result to the same AI provider, so that it can explain the problem in plain words and suggest a correction. Nothing is sent until you click Explain, and a suggested correction is saved only when you accept it."
 

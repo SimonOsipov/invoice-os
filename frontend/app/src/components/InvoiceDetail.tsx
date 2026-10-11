@@ -1050,7 +1050,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                           invoiceId={invoiceId}
                           violation={v}
                           lines={inv.line_items ?? []}
-                          acceptDisabled={!inv.can_edit || editing}
+                          acceptDisabled={!inv.can_edit || editing || revalidating || submitPhase === 'submitting'}
                           acceptTitle={editing ? EXPLAIN_COPY.editorOpen : undefined}
                           onAccepted={() => handleSaved(false)}
                           onAcceptFailed={(m) => {

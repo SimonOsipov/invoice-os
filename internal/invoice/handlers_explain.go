@@ -42,6 +42,9 @@ func (e *Explainer) Explain(ctx context.Context, id string, key ViolationKey) (E
 	if err != nil {
 		return ExplainResult{}, err
 	}
+	if inv.VerdictStale {
+		return ExplainResult{}, ErrVerdictStale
+	}
 	var stored []Violation
 	if err := json.Unmarshal(inv.Violations, &stored); err != nil {
 		return ExplainResult{}, fmt.Errorf("invoice: explain: stored violations: %w", err)

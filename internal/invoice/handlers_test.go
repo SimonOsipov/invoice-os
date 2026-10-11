@@ -4149,7 +4149,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	// the same way, 41 -> 43.
 	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason",
 		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
-		"can_correct_invoice_number", "invoice_number_blocked_reason"}
+		"can_correct_invoice_number", "invoice_number_blocked_reason", "verdict_stale"}
 
 	tests := []struct {
 		name              string
@@ -4320,6 +4320,8 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// EXTR-27-01: appended after reject_blocked_reason, so these now land
 		// last of all.
 		"can_correct_invoice_number", "invoice_number_blocked_reason",
+		// ENGI-17: appended after invoice_number_blocked_reason.
+		"verdict_stale",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())

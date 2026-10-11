@@ -10,6 +10,7 @@ import { captureDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import { ensureSignInState, mintSignInState } from './lib/signInState'
 import { holdPendingVerify } from './lib/verifyBounce'
+import { DRAFT_NRS_BLANK } from './lib/clients'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { SUGGESTED_RULES } from './lib/rules'
 import type { PlatformCtx, SignedInUser } from './types'
@@ -488,7 +489,7 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
   describe('the draft reseed paths (AUTH-10-07)', () => {
     const ENTITY_A = 'aaaaaaaa-0000-4000-8000-000000000001'
     const ENTITY_B = 'bbbbbbbb-0000-4000-8000-000000000002'
-    const BLANK = { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: '', qty: 1, price: 0 }] }
+    const BLANK = { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [{ desc: '', qty: 1, price: 0 }] }
     const personaRecord = () => JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true })
 
     function entityRow(id: string, name: string, tin: string) {

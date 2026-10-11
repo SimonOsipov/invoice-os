@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
 
-import { emptyClient, startingDraft } from '../lib/clients'
+import { DRAFT_NRS_BLANK, emptyClient, startingDraft } from '../lib/clients'
 import { draftToCreateRequest } from '../lib/invoiceDraft'
 import type { CreateStep, Draft, LineItem, PlatformCtx } from '../types'
 import { CreateFlow } from './CreateFlow'
@@ -55,7 +55,7 @@ function createFlowCtx(
     readAllColumns: () => {},
     skipUpload: () => {},
     // CreateForm
-    draft: { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [] },
+    draft: { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [] },
     filing: false,
     filingError: null,
     updateDraft: () => {},
@@ -537,7 +537,7 @@ const C_READING = {
 function carriedCtx(over: Record<string, unknown> = {}): PlatformCtx {
   return createFlowCtx('form', null, {
     handOffReading: C_READING,
-    draft: { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [] },
+    draft: { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [] },
     activeEntity: { id: 'e-1', name: 'Lagos Freight Ltd', tin: '12345678-0001' },
     ...over,
   })
@@ -612,7 +612,7 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
       <CreateFlow
         ctx={createFlowCtx('form', null, {
           activeEntity: { id: 'e-1', name: 'Lagos Freight Ltd', tin: '12345678-0001' },
-          draft: { number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: '', qty: 1, price: 1 }] },
+          draft: { number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [{ desc: '', qty: 1, price: 1 }] },
         })}
       />,
     )
@@ -643,7 +643,7 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
     const { container } = render(
       <CreateFlow
         ctx={carriedCtx({
-          draft: { number: 'TAKEN-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [] },
+          draft: { number: 'TAKEN-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [] },
           filingError: new ApiError('http', C_TAKEN, 409),
         })}
       />,
@@ -740,7 +740,7 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
 const S_ENTITY = { id: 'e-1', name: 'Lagos Freight Ltd', tin: '12345678-0001' }
 
 function renderSummary(items: LineItem[]) {
-  const draft: Draft = { number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', items }
+  const draft: Draft = { number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items }
   const { container } = render(<CreateFlow ctx={createFlowCtx('form', null, { draft, activeEntity: S_ENTITY })} />)
   const text = (id: string) => container.querySelector(`[data-testid="summary-${id}"]`)?.textContent
   const filed = draftToCreateRequest(draft, S_ENTITY)
@@ -806,7 +806,7 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
   })
 
   it('the summary follows an edited line on rerender', () => {
-    const draft = (price: number): Draft => ({ number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: 'Item', qty: 1, price }] })
+    const draft = (price: number): Draft => ({ number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [{ desc: 'Item', qty: 1, price }] })
     const { container, rerender } = render(<CreateFlow ctx={createFlowCtx('form', null, { draft: draft(20.93), activeEntity: S_ENTITY })} />)
     const total = () => container.querySelector('[data-testid="summary-total"]')?.textContent
     expect(total()).toBe('22.50')
@@ -817,7 +817,7 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
 
   it('carried mode renders the reading, never the manual summary ids', () => {
     const { container } = render(
-      <CreateFlow ctx={carriedCtx({ draft: { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: 'Item', qty: 1, price: 20.93 }] } })} />,
+      <CreateFlow ctx={carriedCtx({ draft: { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [{ desc: 'Item', qty: 1, price: 20.93 }] } })} />,
     )
     expect(container.querySelector('[data-testid="carried-total"]')?.textContent).toBe('1075.00')
     expect(container.querySelectorAll('[data-testid^="summary-"]')).toHaveLength(0)
@@ -948,7 +948,7 @@ describe('CreateFlow — the manual form follows the v2 prototype (RESKIN2-04-02
     { desc: 'Bolts', qty: 2, price: 10 },
     { desc: 'Nuts', qty: 1, price: 5 },
   ]
-  const draftOf = (items: LineItem[], number = 'INV-1'): Draft => ({ number, buyer: '', buyerTin: '', date: '', currency: 'NGN', items })
+  const draftOf = (items: LineItem[], number = 'INV-1'): Draft => ({ number, buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items })
   const COLS = '1fr 70px 120px 130px 24px'
 
   function formCtx(over: Record<string, unknown> = {}): PlatformCtx {

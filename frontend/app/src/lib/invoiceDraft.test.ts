@@ -14,7 +14,7 @@ import {
 } from './invoiceDraft'
 import type { SupplyNumberRequest } from './importApi'
 import type { Entity } from './portfolio'
-import { emptyClient, startingDraft } from './clients'
+import { DRAFT_NRS_BLANK, emptyClient, startingDraft } from './clients'
 import type { Draft } from '../types'
 
 // buyerAddress/wht/docType left `Draft` in INVCR-01-03 (task-279) — the create flow was
@@ -26,6 +26,7 @@ const baseDraft: Draft = {
   buyerTin: '00000000002',
   date: '2026-06-16',
   currency: 'NGN',
+  ...DRAFT_NRS_BLANK,
   items: [{ desc: 'Logistics consulting — Q2', qty: 1, price: 2500000 }],
 }
 

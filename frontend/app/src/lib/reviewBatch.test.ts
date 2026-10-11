@@ -2073,8 +2073,8 @@ describe('fixCard: field targeting is mbsPathToEditField alone — no rule-key m
   })
 })
 
-describe('EDIT_FIELD_LABELS: every one of the 9 EDIT_FIELD_KEYS has a human label (AC-2)', () => {
-  it('all nine keys are present, matching InvoiceDetail.tsx\'s own edit-form labels verbatim', () => {
+describe('EDIT_FIELD_LABELS: every one of the 31 EDIT_FIELD_KEYS has a human label (AC-2)', () => {
+  it('all 31 keys are present, matching InvoiceDetail.tsx\'s own edit-form labels verbatim', () => {
     const expected: Record<EditFieldKey, string> = {
       issue_date: 'Issue date',
       supplier_tin: 'Supplier TIN',
@@ -2085,6 +2085,28 @@ describe('EDIT_FIELD_LABELS: every one of the 9 EDIT_FIELD_KEYS has a human labe
       subtotal: 'Subtotal',
       vat: 'VAT',
       total: 'Total',
+      invoice_kind: 'Invoice kind',
+      tax_currency_code: 'Tax currency code',
+      due_date: 'Due date',
+      issue_time: 'Issue time',
+      tax_point_date: 'Tax point date',
+      payment_status: 'Payment status',
+      supplier_email: 'Supplier email',
+      supplier_telephone: 'Supplier telephone',
+      supplier_street: 'Supplier street',
+      supplier_city: 'Supplier city',
+      supplier_postal_zone: 'Supplier postal zone',
+      supplier_country: 'Supplier country',
+      supplier_state: 'Supplier state',
+      supplier_lga: 'Supplier LGA',
+      buyer_email: 'Buyer email',
+      buyer_telephone: 'Buyer telephone',
+      buyer_street: 'Buyer street',
+      buyer_city: 'Buyer city',
+      buyer_postal_zone: 'Buyer postal zone',
+      buyer_country: 'Buyer country',
+      buyer_state: 'Buyer state',
+      buyer_lga: 'Buyer LGA',
     }
 
     expect(EDIT_FIELD_LABELS).toEqual(expected)
@@ -2380,6 +2402,10 @@ describe("fixEditPatch: only genuinely-changed fields reach the wire — mirrors
 
   it("FIXPATCH-4: a bare YYYY-MM-DD issue_date normalizes to midnight UTC RFC3339, mirroring InvoiceDetail.tsx's own normalization", () => {
     expect(fixEditPatch(original, { issue_date: '2026-08-15' })).toEqual({ issue_date: '2026-08-15T00:00:00Z' })
+  })
+
+  it('fixEditPatch_nrsDateIsRfc3339', () => {
+    expect(fixEditPatch(original, { tax_point_date: '2027-01-05' })).toEqual({ tax_point_date: '2027-01-05T00:00:00Z' })
   })
 
   it('FIXPATCH-5: a cleared issue_date is OMITTED, never sent as "" — the PATCH cannot represent an explicit clear (JSON "null" and an absent key both mean "leave unchanged")', () => {

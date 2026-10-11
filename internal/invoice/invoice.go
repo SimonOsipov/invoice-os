@@ -238,6 +238,9 @@ type LineItemInput struct {
 	PriceUnit                 *string
 	TaxPercent                *string
 	BaseQuantity              *string
+
+	// NRSSent: the request entry named an NRS key, null included. The carry skips it.
+	NRSSent bool
 }
 
 // CreateInput is the Store.Create argument. EntityID and InvoiceNumber are

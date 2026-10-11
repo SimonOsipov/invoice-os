@@ -45,6 +45,7 @@ import {
   invoiceStatusStyle,
   isBuyerTinMissing,
   keptAsIs,
+  LINE_EDIT_FIELDS,
   LIVE_POLL_MS,
   newIdempotencyKey,
   reasonFieldFlags,
@@ -114,8 +115,9 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 // carries null, because a controlled React input holds '' and never null. Deliberately no
 // `id` and no `line_no`: line_no is system-assigned 1..N by array POSITION
 // ([line-no-by-position], lib/invoices.ts:234-245), so this array's order IS the wire's
-// line ordering, and diffLineItems compares by position over the five content fields only.
-type LineRowState = Record<LineEditKey, string>
+// line ordering, and diffLineItems compares by position over the 14 content fields only.
+// `id` is the stored line's, kept off-screen so a save re-sends it; an added row has none.
+type LineRowState = Record<LineEditKey, string> & { id?: string }
 
 // description / qty / unit / amount / tax / remove, declared once so header and rows cannot drift.
 // Tracks are the prototype's, with a 120px Description floor; the box scrolls sideways only when the floor no longer fits.
@@ -126,12 +128,13 @@ const LINE_INPUT = { ...EDIT_INPUT, height: 30 } as const
 
 function rowsFromInvoice(inv: Pick<InvoiceRecord, 'line_items'>): LineRowState[] {
   return (inv.line_items ?? []).map((it) => ({
-    description: it.description ?? '',
-    quantity: it.quantity ?? '',
-    unit_price: it.unit_price ?? '',
-    line_total: it.line_total ?? '',
-    line_tax: it.line_tax ?? '',
+    ...(Object.fromEntries(LINE_EDIT_FIELDS.map((k) => [k, it[k] ?? ''])) as LineRowState),
+    id: it.id,
   }))
+}
+
+function blankRow(): LineRowState {
+  return Object.fromEntries(LINE_EDIT_FIELDS.map((k) => [k, ''])) as LineRowState
 }
 
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
@@ -1351,12 +1354,12 @@ function InvoiceEditBody({
     setForm((f) => ({ ...f, [field]: value }))
   }
 
-  function updateRow(idx: number, field: keyof LineRowState, value: string) {
+  function updateRow(idx: number, field: LineEditKey, value: string) {
     setRows((rs) => rs.map((row, i) => (i === idx ? { ...row, [field]: value } : row)))
   }
 
   function addRow() {
-    setRows((rs) => [...rs, { description: '', quantity: '', unit_price: '', line_total: '', line_tax: '' }])
+    setRows((rs) => [...rs, blankRow()])
   }
 
   function removeRow(idx: number) {

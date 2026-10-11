@@ -225,6 +225,31 @@ export function resolveActiveClient(clients: Client[], activeEntityId: string | 
 // - `currency` stays fixed at NGN with no editor: NGN-only is the real `currency-allowed`
 //   rule parameter, not a UI simplification, so a picker would offer values the rule pack
 //   rejects.
+export const DRAFT_NRS_BLANK: Omit<Draft, 'number' | 'buyer' | 'buyerTin' | 'date' | 'currency' | 'items'> = {
+  invoice_kind: '',
+  tax_currency_code: 'NGN',
+  due_date: '',
+  issue_time: '',
+  tax_point_date: '',
+  payment_status: '',
+  supplier_email: '',
+  supplier_telephone: '',
+  supplier_street: '',
+  supplier_city: '',
+  supplier_postal_zone: '',
+  supplier_country: '',
+  supplier_state: '',
+  supplier_lga: '',
+  buyer_email: '',
+  buyer_telephone: '',
+  buyer_street: '',
+  buyer_city: '',
+  buyer_postal_zone: '',
+  buyer_country: '',
+  buyer_state: '',
+  buyer_lga: '',
+}
+
 export function defaultDraft(client: ClientCfg): Draft {
   const sd = SECTORS[client.sector] || SECTORS.foods
   return {
@@ -233,6 +258,7 @@ export function defaultDraft(client: ClientCfg): Draft {
     buyerTin: '',
     date: '2026-06-16',
     currency: 'NGN',
+    ...DRAFT_NRS_BLANK,
     items: [
       { desc: 'Logistics consulting — Q2', qty: 1, price: 2500000 },
       { desc: sd.items[1] || 'Supply', qty: 12, price: 85000 },
@@ -243,5 +269,5 @@ export function defaultDraft(client: ClientCfg): Draft {
 // A hand-off session starts blank; date '' maps to issue_date null, so nothing demo is filed.
 export function startingDraft(client: ClientCfg, handoff: boolean): Draft {
   if (!handoff) return defaultDraft(client)
-  return { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: '', qty: 1, price: 0 }] }
+  return { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [{ desc: '', qty: 1, price: 0 }] }
 }

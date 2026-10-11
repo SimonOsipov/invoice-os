@@ -634,3 +634,30 @@ func TestEditHandler_LastDuplicateKeyWinsOnANullableKey(t *testing.T) {
 		})
 	}
 }
+
+func TestLineItemReq_RecordsNRSKeyPresence(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"null NRS key", `{"tax_percent":null}`, true},
+		{"value NRS key", `{"hsn_code":"1001"}`, true},
+		{"legacy keys only", `{"description":"d","quantity":"1","unit_price":"1","line_total":"1","line_tax":"0"}`, false},
+		{"id with NRS keys", `{"id":"` + uuid.NewString() + `","price_unit":null}`, true},
+	} {
+		var l lineItemReq
+		if err := json.Unmarshal([]byte(tc.body), &l); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if l.NRSSent != tc.want {
+			t.Errorf("%s: NRSSent = %v, want %v", tc.name, l.NRSSent, tc.want)
+		}
+	}
+	var l lineItemReq
+	if err := json.Unmarshal([]byte(`{"id":"x","tax_percent":null}`), &l); err != nil {
+		t.Fatal(err)
+	}
+	if l.ID == nil || *l.ID != "x" || l.TaxPercent != nil || l.Description != nil {
+		t.Errorf("id entry = %+v, want the id kept and omitted fields nil", l)
+	}
+}

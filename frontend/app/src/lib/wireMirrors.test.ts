@@ -686,6 +686,33 @@ describe('wire mirror: Go Invoice, LineItem and TaxSubtotal <-> the e2e read typ
     for (const k of NRS_LINE) expect(go, `Go LineItem lacks ${k}`).toContain(k)
   })
 
+  const SPA_INVOICES = 'frontend/app/src/lib/invoices.ts'
+
+  it('wire mirror: LineItem <-> InvoiceLineItem (SPA)', () => {
+    const go = goStructKeys(repoFile(GO_INVOICE), 'LineItem')
+    const spa = tsInterfaceKeys(repoFile(SPA_INVOICES), 'InvoiceLineItem')
+    expect(go.length, 'Go LineItem under its floor').toBeGreaterThanOrEqual(16)
+    expect(spa.length, 'SPA InvoiceLineItem under its floor').toBeGreaterThanOrEqual(16)
+    expect(keySetDiff(go, spa)).toEqual([])
+  })
+
+  it('wire mirror: lineItemReq <-> LineItemEditInput', () => {
+    const go = goStructKeys(repoFile('internal/invoice/handlers.go'), 'lineItemReq')
+    const spa = tsInterfaceKeys(repoFile(SPA_INVOICES), 'LineItemEditInput')
+    expect(go.length, 'Go lineItemReq under its floor').toBeGreaterThanOrEqual(15)
+    expect(spa.length, 'SPA LineItemEditInput under its floor').toBeGreaterThanOrEqual(15)
+    expect(keySetDiff(go, spa)).toEqual([])
+  })
+
+  it('wire mirror: InvoiceRecord carries the 22 NRS header keys', () => {
+    const spa = tsInterfaceKeys(repoFile(SPA_INVOICES), 'InvoiceRecord')
+    const go = goStructKeys(repoFile(GO_INVOICE), 'Invoice')
+    for (const k of NRS_HEADER) {
+      expect(go, `Go Invoice lacks ${k}`).toContain(k)
+      expect(spa, `SPA InvoiceRecord lacks ${k}`).toContain(k)
+    }
+  })
+
   it('wire mirror: TaxSubtotal <-> InvoiceTaxSubtotal, and GetInvoiceResult carries tax_subtotals', () => {
     const go = goStructKeys(repoFile('internal/invoice/tax_subtotals.go'), 'TaxSubtotal')
     const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'InvoiceTaxSubtotal')

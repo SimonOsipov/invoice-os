@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -108,13 +109,16 @@ func headerMBSPath(key string) string {
 	return key
 }
 
-// explainTarget binds the fix to the violation path; the model only picks the field of a bare line path.
+// explainTarget binds the fix to the violation path; the model only picks the field of a bare line path, from the five legacy line fields.
 func explainTarget(path string, lineCount int, modelField string) (field string, line int, ok bool) {
 	if n, f, isLine := parseLinePath(path); isLine {
 		if n > lineCount {
 			return "", 0, false
 		}
 		if f == "" {
+			if !slices.Contains(invoicefields.ExtractLineKeys(), modelField) {
+				return "", 0, false
+			}
 			f = modelField
 		}
 		if _, ok := explainField(f, true); !ok {
@@ -148,8 +152,12 @@ var explainIdentityField = map[string]bool{"supplier_tin": true, "buyer_tin": tr
 
 func explainValueOK(t invoicefields.Type, value string) bool {
 	switch t {
-	case invoicefields.Money, invoicefields.Quantity:
+	case invoicefields.Money, invoicefields.Quantity, invoicefields.Percent:
 		return explainNumRe.MatchString(value)
+	case invoicefields.Code:
+		return false
+	case invoicefields.Time:
+		return ValidIssueTime(value)
 	case invoicefields.Date:
 		_, err := time.Parse("2006-01-02", value)
 		return err == nil
@@ -208,7 +216,7 @@ func guardExplanation(v Violation, payload map[string]any, ans map[string]any) E
 		return res
 	}
 	if current != nil {
-		if f.Type == invoicefields.Money || f.Type == invoicefields.Quantity {
+		if f.Type == invoicefields.Money || f.Type == invoicefields.Quantity || f.Type == invoicefields.Percent {
 			if sameDecimal(current, &value) {
 				return res
 			}

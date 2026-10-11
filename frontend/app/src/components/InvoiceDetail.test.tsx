@@ -6942,7 +6942,8 @@ describe('InvoiceDetail editor: the NRS fields (ENGI-06-04)', () => {
       const el = within(screen.getByTestId('edit-invoice')).getByText(labelOf(key), { selector: 'div.label' }).nextElementSibling!
       expect((el.querySelector('input,select') ?? el) as HTMLInputElement, key).toHaveProperty('disabled', true)
     }
-    for (const key of ['hsn_code', 'tax_percent']) expect(lineInput(1, key).disabled, key).toBe(true)
+    expect(LINE_EDIT_FIELDS.slice(5)).toHaveLength(9)
+    for (const key of LINE_EDIT_FIELDS) expect(lineInput(1, key).disabled, key).toBe(true)
   })
 
   it('invoiceDetail_legacyLineInputsComeFirst', async () => {
@@ -7063,5 +7064,76 @@ describe('InvoiceDetail editor: the NRS fields (ENGI-06-04)', () => {
     )
     fireEvent.change(lineInput(1, 'tax_category'), { target: { value: 'ZERO_VAT' } })
     await waitFor(() => expect(lineInput(1, 'tax_percent').value).toBe('0.0'))
+  })
+
+  // The picker commits a typed code only after its debounced search answers.
+  async function settlePick(fetchMock: { mock: { calls: unknown[][] } }, q: string) {
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]).includes(`q=${q}`))).toBe(true))
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+  }
+
+  async function answerCodes(fetchMock: { getMockImplementation(): any; mockImplementation(f: any): any }, codes: Array<Record<string, string>>) {
+    const orig = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      url.includes('/code-lists/') ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ codes }) }) : orig(url, init),
+    )
+  }
+
+  it('invoiceDetail_blankedThenRetypedLineFieldIsNotRefused', async () => {
+    const { patchCalls, fetchMock } = await openEditor()
+    await answerCodes(fetchMock, [{ code: '2002', label: 'Two' }])
+    const hsn = lineInput(1, 'hsn_code')
+    fireEvent.change(hsn, { target: { value: '' } })
+    fireEvent.blur(hsn)
+    fireEvent.change(hsn, { target: { value: '2002' } })
+    await settlePick(fetchMock, '2002')
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const sent = (patchCalls[0] as { line_items: Array<Record<string, unknown>> }).line_items
+    expect(sent[0]).toMatchObject({ id: 'l1', hsn_code: '2002' })
+  })
+
+  it('invoiceDetail_refusalNamesTheLineAndTheFieldThatWasBlanked', async () => {
+    const { patchCalls } = await openEditor()
+    const unit = lineInput(2, 'price_unit')
+    fireEvent.change(unit, { target: { value: '' } })
+    fireEvent.blur(unit)
+    save()
+    expect(await screen.findByText(`Line 2: Price unit cannot be cleared once saved. ${REFUSED}`)).toBeTruthy()
+    expect(patchCalls).toHaveLength(0)
+  })
+
+  it('invoiceDetail_aTaxCategoryPickWithoutAPercentKeepsTheTypedPercent', async () => {
+    const { fetchMock } = await openEditor()
+    const orig = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      url.includes('/code-lists/')
+        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ codes: [{ code: 'EXEMPT', label: 'Exempt' }] }) })
+        : orig(url, init),
+    )
+    fireEvent.change(lineInput(1, 'tax_percent'), { target: { value: '5' } })
+    fireEvent.change(lineInput(1, 'tax_category'), { target: { value: 'EXEMPT' } })
+    await waitFor(() => expect(lineInput(1, 'tax_category').value).toBe('EXEMPT'))
+    expect(lineInput(1, 'tax_percent').value).toBe('5')
+  })
+
+  it('invoiceDetail_buyerTypeNoteRequiresForB2G', async () => {
+    await openEditor()
+    fireEvent.change(control('Invoice kind'), { target: { value: 'B2G' } })
+    expect(screen.getByTestId('buyer-type-note').textContent).toBe('Buyer TIN, name, email and address are required for a B2B or B2G invoice.')
+    expect(control('Buyer LGA').getAttribute('aria-required')).toBe('true')
+  })
+
+  it('invoiceDetail_editingALineCodeSendsItWithItsId', async () => {
+    const { patchCalls, fetchMock } = await openEditor()
+    await answerCodes(fetchMock, [{ code: '9999', label: 'Nine' }])
+    fireEvent.change(lineInput(2, 'hsn_code'), { target: { value: '9999' } })
+    await settlePick(fetchMock, '9999')
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const sent = (patchCalls[0] as { line_items: Array<Record<string, unknown>> }).line_items
+    expect(sent.map((r) => r.id)).toEqual(['l1', 'l2'])
+    expect(sent[1]).toMatchObject({ hsn_code: '9999', description: 'Item 2' })
+    expect(sent[0]).toMatchObject({ hsn_code: '1001' })
   })
 })

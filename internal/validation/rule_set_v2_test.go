@@ -652,6 +652,8 @@ func detectionHitAllowed(file, line string) bool {
 	}
 	return strings.HasPrefix(file, "internal/validation/") ||
 		file == "e2e/topology/targets.ts" ||
+		// Seeds a temp-table shadow from v1 on purpose (TestRLS_RuleDraftOpenIgnoresATempTableShadow).
+		file == "internal/platform/db/rule_set_drafts_rls_test.go" ||
 		file == "frontend/app/src/lib/validationApi.test.ts" ||
 		file == "migrations/20260711121327_seed_mbs_v1.sql" ||
 		file == "migrations/20260715120000_line_rules.sql" ||

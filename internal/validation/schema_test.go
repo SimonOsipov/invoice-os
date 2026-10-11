@@ -107,6 +107,8 @@ func sweepOrphanFixtures(superURL string) {
 	record("disable rules triggers", err)
 	_, err = tx.Exec(ctx, `DELETE FROM rule_set_versions WHERE notes = $1 AND version NOT IN (1, 2)`, fixtureNotes)
 	record("delete orphan fixtures", err)
+	_, err = tx.Exec(ctx, `DELETE FROM rule_set_versions WHERE notes LIKE 'Rules desk: %' AND version NOT IN (1, 2)`)
+	record("delete orphan desk drafts", err)
 	_, err = tx.Exec(ctx, `ALTER TABLE rules ENABLE TRIGGER USER`)
 	record("enable rules triggers", err)
 	_, err = tx.Exec(ctx, `ALTER TABLE rule_set_versions ENABLE TRIGGER USER`)
@@ -592,9 +594,11 @@ func TestSchema_AppCannotMutateRemainingContentColumns(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 
+	// Sealed first: two unsealed versions violate rule_set_versions_one_draft.
+	otherVersionID, _ := seedVersion(t, super)
+	sealAndDate(t, super, otherVersionID, "3001-01-01")
 	versionID, _ := seedVersion(t, super)
 	ruleID := seedRule(t, super, versionID, "content-immutable-remaining-probe")
-	otherVersionID, _ := seedVersion(t, super)
 
 	cases := []struct {
 		col  string

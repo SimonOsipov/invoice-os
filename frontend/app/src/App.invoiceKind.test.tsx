@@ -196,15 +196,6 @@ function importReport(id: string, readyInvoices: number) {
   }
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
-  let resolve!: (v: T) => void
-  const promise = new Promise<T>((res) => {
-    resolve = res
-  })
-  return { promise, resolve }
-}
-
-
 const kindSelect = () => document.querySelector<HTMLSelectElement>('[data-testid="map-invoice-kind"]')
 
 function chooseKind(value: string) {

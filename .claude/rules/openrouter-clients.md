@@ -51,6 +51,9 @@ paths:
 - Send `FakeScope: "LINES"` on the line-item call. Leave the header call unscoped.
 - Send `FakeScope: "EXPLAIN"` on the explain call.
 - Pin `explainSystem` to `SYSTEM` in `tools/aimodeltest/explainrun.py`.
+- Send `explain_user_text.json` as the user message in `explainrun.py`. After a change to `explainPromptText`, regenerate it with `UPDATE_EXPLAIN_USER_TEXT=1` on `TestExplainPrompt_HarnessUserTextIsWhatProductionSends`.
+- Answer an explain on a stale verdict with 409 and make no AI call. A verdict is stale when `invoices.verdict_fingerprint` differs from the content fingerprint. A NULL fingerprint is trusted.
+- Propose no fix value for a blank supplier or buyer TIN or name.
 - Make the explain call only from `POST /v1/invoices/{id}/explain`. Never call it from validation or import.
 - Answer an off, failed, blank or dropped explain answer with 200 `status: "unavailable"`. Never 5xx.
 - Take the fix target from the violation path. Read the model's `fix_field` only for a bare line path.

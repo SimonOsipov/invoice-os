@@ -6824,6 +6824,31 @@ describe('InvoiceDetail explain (ENGI-17-05)', () => {
     release()
   })
 
+  it('invoiceDetail_acceptDisabledWhileSubmitting', async () => {
+    let release!: () => void
+    const held: MockResponse = {
+      ok: true,
+      status: 200,
+      json: () => new Promise((resolve) => (release = () => resolve({ results: [{ invoice_id: ID, enqueued: true, status: 'queued' }] }))),
+    }
+    const { patchCalls, submitCalls } = mockDetailFetch(detailRecord({ ...base, can_submit: true }), [], {
+      explainResponse: okFix(),
+      submitResponses: [held],
+    })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click((await screen.findAllByTestId('violation-explain'))[1])
+    const btn = await accept()
+    expect(btn.disabled).toBe(false)
+
+    fireEvent.click(screen.getByTestId('detail-submit'))
+    fireEvent.click(screen.getByTestId('detail-submit-confirm'))
+    await waitFor(() => expect(submitCalls).toHaveLength(1))
+    await waitFor(() => expect(btn.disabled).toBe(true))
+    fireEvent.click(btn)
+    expect(patchCalls).toHaveLength(0)
+    release()
+  })
+
   it('invoiceDetail_staleVerdictFromTheServerDisablesExplain', async () => {
     mockDetailFetch(detailRecord({ ...base, verdict_stale: true }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)

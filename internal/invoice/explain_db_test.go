@@ -263,3 +263,67 @@ func TestRLS_ExplainAfterAnEditSinceValidationIs409AndCallsNoAI(t *testing.T) {
 		t.Error("Get.VerdictStale = false after an edit, want true")
 	}
 }
+
+func TestRLS_VerdictStaleTracksContentNotTheWriter(t *testing.T) {
+	f := newNRSFixture(t, "STALE-WRITERS")
+	in := CreateInput{LineItems: []LineItemInput{fullNRSLine()}}
+	fullNRSHeader(&in)
+	inv := f.create(t, "STALE-W-1", in)
+	rsv := seedRuleSetVersionID(t, f.super)
+	apply := func(vs []Violation) {
+		t.Helper()
+		cur := f.get(t, inv.ID)
+		if _, err := f.store.ApplyValidation(f.c, inv.ID, vs, rsv, contentFingerprint(cur, cur.LineItems)); err != nil {
+			t.Fatalf("ApplyValidation: %v", err)
+		}
+	}
+	blocking := []Violation{{RuleKey: "line-cost-non-negative", Severity: "error", Message: "m", Path: "line_items[1]"}}
+
+	if f.get(t, inv.ID).VerdictStale {
+		t.Fatal("a never-validated invoice is stale, want false (NULL fingerprint is trusted)")
+	}
+	apply([]Violation{})
+	got := f.get(t, inv.ID)
+	if got.Status != StatusValidated || got.VerdictStale {
+		t.Fatalf("after a clean validation: status %s stale %v, want validated and fresh (NRS fields must hash the same on both paths)", got.Status, got.VerdictStale)
+	}
+
+	demoted, err := demoteRevalidated(f.c, f.app, f.store, f.tenantID, inv.ID, blocking, rsv, "")
+	if err != nil || !demoted {
+		t.Fatalf("demoteRevalidated: demoted %v err %v, want true and nil", demoted, err)
+	}
+	if got := f.get(t, inv.ID); got.Status != StatusDraft || got.VerdictStale {
+		t.Errorf("after a revalidate demotion: status %s stale %v, want draft and fresh (content did not change)", got.Status, got.VerdictStale)
+	}
+
+	renamed := "STALE-W-2"
+	if _, err := f.store.Edit(f.c, inv.ID, EditInput{InvoiceNumber: &renamed}); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if !f.get(t, inv.ID).VerdictStale {
+		t.Error("after an invoice-number correction: stale = false, want true")
+	}
+	orig := inv.InvoiceNumber
+	if _, err := f.store.Edit(f.c, inv.ID, EditInput{InvoiceNumber: &orig}); err != nil {
+		t.Fatalf("rename back: %v", err)
+	}
+	if f.get(t, inv.ID).VerdictStale {
+		t.Error("after the number is restored: stale = true, want false (same content as the verdict)")
+	}
+
+	changed := []LineItemInput{fullNRSLine()}
+	changed[0].TaxPercent = strPtr("5")
+	if _, err := f.store.Edit(f.c, inv.ID, EditInput{LineItems: &changed}); err != nil {
+		t.Fatalf("Edit: %v", err)
+	}
+	if !f.get(t, inv.ID).VerdictStale {
+		t.Fatal("after an NRS line field edit: stale = false, want true")
+	}
+
+	if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET verdict_fingerprint = NULL WHERE id = $1`, inv.ID); err != nil {
+		t.Fatalf("null the fingerprint: %v", err)
+	}
+	if f.get(t, inv.ID).VerdictStale {
+		t.Error("a NULL fingerprint on an edited invoice is stale, want trusted (false)")
+	}
+}

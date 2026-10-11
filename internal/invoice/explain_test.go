@@ -35,15 +35,6 @@ func explainPyString(t *testing.T, src, name string) string {
 	return m[1]
 }
 
-func explainPyLine(t *testing.T, src, name string) string {
-	t.Helper()
-	m := regexp.MustCompile(`(?m)^` + name + ` = "([^"]+)"$`).FindStringSubmatch(src)
-	if m == nil {
-		t.Fatalf("%s line not found in explainrun.py", name)
-	}
-	return m[1]
-}
-
 func TestExplainSchema_PassesTheClientSchemaCheck(t *testing.T) {
 	t.Setenv(ai.EnvFake, "true")
 	t.Setenv(ai.EnvKey, "")
@@ -73,12 +64,6 @@ func TestExplainPrompt_MatchesTheMeasuredHarness(t *testing.T) {
 	src := explainHarness(t)
 	if got := explainPyString(t, src, "SYSTEM"); got != explainSystem {
 		t.Errorf("explainrun.py SYSTEM differs from explainSystem:\n got %q\nwant %q", got, explainSystem)
-	}
-	if got := explainPyLine(t, src, "VIOLATION_INTRO"); got != explainViolationIntro {
-		t.Errorf("VIOLATION_INTRO = %q, want %q", got, explainViolationIntro)
-	}
-	if got := explainPyLine(t, src, "INVOICE_INTRO"); got != explainInvoiceIntro {
-		t.Errorf("INVOICE_INTRO = %q, want %q", got, explainInvoiceIntro)
 	}
 	m := regexp.MustCompile(`"response_format": \{"type": "json_schema", "json_schema": \{"name": "([^"]+)"`).FindStringSubmatch(src)
 	if m == nil {
@@ -375,20 +360,26 @@ func TestGuardExplanation_AbsentCurrentIsNull(t *testing.T) {
 }
 
 func TestGuardExplanation_BlankIdentityValueIsNotInvented(t *testing.T) {
-	payload := explainPayload()
-	payload["buyer"] = map[string]any{"name": "  "}
 	for _, tc := range []struct {
 		path, field, value string
+		blankSupplier      bool
 		wantFix            bool
 	}{
-		{"buyer.tin", "tin", "12345678-0001", false},
-		{"buyer.name", "name", "Acme Ltd", false},
-		{"supplier.name", "name", "Acme Ltd", false},
-		{"supplier.tin", "tin", "99999999-0001", true},
+		{"buyer.tin", "tin", "12345678-0001", false, false},
+		{"buyer.name", "name", "Acme Ltd", false, false},
+		{"supplier.name", "name", "Acme Ltd", false, false},
+		{"supplier.tin", "tin", "99999999-0001", false, true},
+		{"supplier.tin", "tin", "99999999-0001", true, false},
+		{"supplier.name", "name", "Acme Ltd", true, false},
 	} {
+		payload := explainPayload()
+		payload["buyer"] = map[string]any{"name": "  "}
+		if tc.blankSupplier {
+			payload["supplier"] = map[string]any{"tin": " ", "name": ""}
+		}
 		got := guardExplanation(Violation{Message: "m", Path: tc.path}, payload, explainAnswer("Why.", tc.field, tc.value))
 		if got.Status != "ok" || got.Explanation == nil || (got.Fix != nil) != tc.wantFix {
-			t.Errorf("%s: status %s, fix %v, want fix %v with the explanation kept", tc.path, got.Status, got.Fix, tc.wantFix)
+			t.Errorf("%s (blank supplier %v): status %s, fix %v, want fix %v with the explanation kept", tc.path, tc.blankSupplier, got.Status, got.Fix, tc.wantFix)
 		}
 	}
 }

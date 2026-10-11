@@ -6401,3 +6401,20 @@ func TestCreateHandler_MissingNumberOutranksAMalformedSourceDocumentID(t *testin
 		t.Errorf("error = %q, want a message naming invoice_number", resp.Error)
 	}
 }
+
+func TestGetHandler_VerdictStaleIsTheStoresFlag(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	for _, stale := range []bool{true, false} {
+		inv := Invoice{ID: invoiceID, Status: StatusDraft, Violations: json.RawMessage(`[]`), VerdictStale: stale}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return inv, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("stale=%v: status %d err %v body=%s", stale, rec.Code, err, rec.Body.String())
+		}
+		if got, want := string(raw["verdict_stale"]), map[bool]string{true: "true", false: "false"}[stale]; got != want {
+			t.Errorf("verdict_stale = %s, want %s", got, want)
+		}
+	}
+}

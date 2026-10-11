@@ -266,9 +266,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
   )
 
   // Within-session fix-loop indicator (Core AC #7 / [stale-violations-honest] /
-  // [stale-is-session-state]): set on a successful edit, cleared on Re-validate. On
-  // initial load this stays false, so the stored verdict renders WITHOUT a stale banner
-  // — the on-load honesty derivation is [stale-on-load-followup], deferred.
+  // [stale-is-session-state]): set on a successful edit, cleared on Re-validate.
   const [staleSinceEdit, setStaleSinceEdit] = useState(false)
   const [revalidating, setRevalidating] = useState(false)
   const [revalidateError, setRevalidateError] = useState<string | null>(null)

@@ -18,6 +18,7 @@ type Props = {
   placeholder?: string
   'data-line-field'?: string
   'aria-label'?: string
+  'aria-required'?: boolean
 }
 
 function listOf(key: string) {

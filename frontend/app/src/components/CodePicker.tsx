@@ -19,6 +19,7 @@ type Props = {
   style?: CSSProperties
   'data-line-field'?: string
   'aria-label'?: string
+  'aria-required'?: boolean
 }
 
 export function CodePicker({ list, authedFetch, value, onChange, onPick, disabled, style, ...rest }: Props) {

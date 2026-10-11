@@ -1437,7 +1437,7 @@ test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
   await atWidths(page, 'SUP-08 code-list drawer layout', async () => {
     const d = await boxes(page, { drawer })
     const blocks = await rectsOf(page, drawer.locator('xpath=./div[2]/div'), 'sync block')
-    const codes = await rectsOf(page, drawer.locator('xpath=./div[2]//div.mono'), 'code block')
+    const codes = await rectsOf(page, drawer.locator('xpath=./div[2]').locator('div.mono'), 'code block')
     await noSidewaysScroll(page, 'the code-list drawer page')
     const m = await drawer.locator('xpath=./div[2]').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
     return {

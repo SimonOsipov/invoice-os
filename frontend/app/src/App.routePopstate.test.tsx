@@ -1875,4 +1875,68 @@ describe('BUG-34: entries pushed before the company list loads', () => {
     )
     expect(requireCtx().extractionJobId).toBe(JOB_A)
   })
+
+  it('replaceStamp_aPreLoadWriteKeepsTheMountKeyAndNeverSetsP', async () => {
+    await bootPreLoad('/settings/members')
+    await act(async () => capturedCtx!.setSettingsTab('roles'))
+    expect(stateNow()).toMatchObject({ e: null, m: expect.any(String) })
+    expect(stateNow()!.p).toBeUndefined()
+  })
+
+  it.each([
+    ['a non-window entry after a switch', async () => {
+      await act(async () => capturedCtx!.switchClient(ENTITY_B))
+    }],
+    ['an entry from another mount', async () => {
+      window.history.pushState({ e: null, m: 'another-mount' }, '', '/settings/members')
+    }],
+  ] as [string, () => Promise<void>][])('replaceStamp_neverPromotesAnEntryOutsideTheWindow: %s', async (_n, arrange) => {
+    const release = await bootPreLoad('/settings/members')
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    await arrange()
+    expect(stateNow()!.p, 'floor: the arranged entry is not promoted').toBeUndefined()
+    await act(async () => capturedCtx!.setSettingsTab('roles'))
+    expect(stateNow()!.p).toBeUndefined()
+  })
+
+  // known defect: the first row changes with no switch, so a window entry is current while active differs from the boot company.
+  it.fails('popstate_aFirstRowChangeWithoutASwitchDoesNotClampAnEntryStampedWithTheNewCompany', async () => {
+    const release = await bootPreLoad('/settings/members')
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    const base = globalThis.fetch as unknown as (url: string) => Promise<unknown>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        url.includes('/portfolio/v1/entities')
+          ? Promise.resolve({
+              ok: true,
+              status: 200,
+              json: () =>
+                Promise.resolve({
+                  entities: [entityRow(ENTITY_B, 'Clamp Co B', '12345678-0002'), entityRow(ENTITY_A, 'Clamp Co A', '12345678-0001')],
+                  pagination: { limit: 200, offset: 0, total: 2 },
+                }),
+            })
+          : base(url),
+      ),
+    )
+    await act(async () => capturedCtx!.refetchEntities())
+    await waitFor(() => expect(requireCtx().active.entityId, 'floor: the first row moved').toBe(ENTITY_B))
+    await act(async () => capturedCtx!.setSettingsTab('roles'))
+    expect(stateNow()!.e, 'floor: the entry names the new company').toBe(ENTITY_B)
+    await act(async () => capturedCtx!.nav('dashboard'))
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await traverse(-1)
+    expect(replaceSpy, 'the entry names the active company: no clamp').not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe('/settings/roles')
+  })
+
 })

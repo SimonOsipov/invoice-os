@@ -442,12 +442,12 @@ func TestSchema_AppKeepsReadOnRules(t *testing.T) {
 		}
 	}
 
-	rs, err := NewStore(app).LoadActiveRuleSetGlobal(ctx)
+	byDate, err := NewStore(app).LoadForDates(ctx, []string{activeSeedDate})
 	if err != nil {
-		t.Fatalf("LoadActiveRuleSetGlobal: %v", err)
+		t.Fatalf("LoadForDates(%s): %v", activeSeedDate, err)
 	}
-	if len(rs.Rules) == 0 {
-		t.Error("LoadActiveRuleSetGlobal returned no rules, want the seeded active set")
+	if len(byDate[activeSeedDate].Rules) == 0 {
+		t.Error("LoadForDates returned no rules, want the seeded active set")
 	}
 }
 

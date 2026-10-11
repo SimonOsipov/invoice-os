@@ -451,10 +451,7 @@ func TestGateValidate_PropagatesEvaluatedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	// TRAP FOR THE NEXT PUBLISH: this package has no shared "sanctioned active version"
-	// constant (unlike internal/validation's seed_test.go activeSeedVersion) -- bump this
-	// literal (and payload_engine_test.go's identical one) together on every future
-	// rule-set publish, or this test goes red for the wrong reason.
+	// The fixture is dated 2026-07-01, so v4 judges it whatever is published later.
 	if version != 4 {
 		t.Errorf("version = %d, want 4 -- the real seeded active version, threaded out of Gate.Validate's own "+
 			"return value, not merely stamped into rule_set_version_id and discarded", version)

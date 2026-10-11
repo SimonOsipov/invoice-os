@@ -194,12 +194,8 @@ func TestRuleSetV2_OnlyV2ActiveWithNineteenRules(t *testing.T) {
 // re-hardcoding the identical trap this test's own name warns against.
 func TestRuleSetV2_LoadActiveRuleSetReturnsV2(t *testing.T) {
 	_, app := dbTestPools(t)
-	store := NewStore(app)
 
-	rs, err := store.LoadActiveRuleSet(newTestIdentity())
-	if err != nil {
-		t.Fatalf("LoadActiveRuleSet: %v", err)
-	}
+	rs := loadActive(t, app)
 	if rs.Version != activeSeedVersion {
 		t.Errorf("RuleSet.Version = %d, want %d [RS-V2-05]", rs.Version, activeSeedVersion)
 	}
@@ -442,13 +438,13 @@ func TestRuleSetV2_DownRestoresV1(t *testing.T) {
 	}
 }
 
-// activeVersionRow reads the rule_set_versions row in force today (id, version).
+// activeVersionRow reads the rule_set_versions row in force on activeSeedDate (id, version).
 func activeVersionRow(t *testing.T, app *pgxpool.Pool) (id string, version int) {
 	t.Helper()
 	if err := app.QueryRow(context.Background(),
-		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
+		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for($1::date)`, activeSeedDate,
 	).Scan(&id, &version); err != nil {
-		t.Fatalf("read the rule_set_versions row in force today: %v", err)
+		t.Fatalf("read the rule_set_versions row in force on %s: %v", activeSeedDate, err)
 	}
 	return id, version
 }
@@ -482,8 +478,8 @@ func ruleKeysUnder(t *testing.T, pool *pgxpool.Pool, versionID string) []string 
 // ---------------------------------------------------------------------
 
 // TestRuleSetV2_KillSwitchCleanupTargetsVersionInForce (RS-V2-11): the restore
-// statement TestSeed_KillSwitch's cleanup runs (pinned here as a copy, keep in
-// lockstep) re-enables the rule on the version in force today, not a hardcoded v1.
+// statement shape TestSeed_KillSwitch's cleanup runs (dated today here) re-enables the rule on the
+// version in force, not a hardcoded v1.
 func TestRuleSetV2_KillSwitchCleanupTargetsVersionInForce(t *testing.T) {
 	super, _ := dbTestPools(t)
 	ctx := context.Background()

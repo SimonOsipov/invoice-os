@@ -19,3 +19,5 @@ paths:
 - Keep `PATCH /v1/rules/{key}` as `ToggleHandler`.
 - Select a rule-set version only through `rule_set_version_for(date)`.
 - Publish a version with one `UPDATE` that sets `sealed` and `effective_from`.
+- Guard every `when` path with `has()`. A guard on an absent key fails the whole evaluation.
+- Write a per-category tax rule as `tax_math` with `items`, `rate_by` and `rates`.

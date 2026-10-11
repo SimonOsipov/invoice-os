@@ -32,6 +32,7 @@ package validation
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"os"
@@ -123,6 +124,57 @@ func TestGolden(t *testing.T) {
 				t.Errorf("golden mismatch for %s (%s) -- re-run with -update if this change is intended\n"+
 					"--- want (golden, %s) ---\n%s\n--- got (fresh Evaluate output) ---\n%s",
 					tc.name, path, path, want, got)
+			}
+		})
+	}
+}
+
+// TestGoldenV5 pins the Result JSON of v5, loaded by a date it is in force on, for a compliant B2B
+// invoice and a compliant B2C invoice with no buyer block.
+func TestGoldenV5(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
+	got, err := NewStore(app).LoadForDates(context.Background(), []string{"2027-01-15"})
+	if err != nil {
+		t.Fatalf("LoadForDates: %v", err)
+	}
+	rs := got["2027-01-15"]
+	if rs.Version != 5 {
+		t.Fatalf("rule set on 2027-01-15 = v%d, want v5", rs.Version)
+	}
+	engine := NewDefaultEngine()
+
+	for _, tc := range []struct {
+		name    string
+		payload func() Payload
+	}{
+		{"v5_b2b_compliant", v5B2BPayload},
+		{"v5_b2c_no_buyer", v5B2CPayload},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := engine.Evaluate(tc.payload(), rs)
+			if err != nil {
+				t.Fatalf("Evaluate(%s): %v", tc.name, err)
+			}
+			out, err := json.MarshalIndent(result, "", "  ")
+			if err != nil {
+				t.Fatalf("MarshalIndent(%s result): %v", tc.name, err)
+			}
+			out = normalizeRuleSetVersion(append(out, '\n'))
+
+			path := filepath.Join("testdata", "golden", tc.name+".json")
+			if *update {
+				if err := os.WriteFile(path, out, 0o644); err != nil {
+					t.Fatalf("write golden %s: %v", path, err)
+				}
+				return
+			}
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read golden %s: %v (run with -update to generate it)", path, err)
+			}
+			if !bytes.Equal(out, want) {
+				t.Errorf("golden mismatch for %s -- re-run with -update if intended\n--- want ---\n%s\n--- got ---\n%s", path, want, out)
 			}
 		})
 	}

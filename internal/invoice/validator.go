@@ -253,7 +253,6 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 
 	byRef := make(map[string][]Violation, len(wire.Results))
 	stamps := make(map[string]Stamp, len(wire.Results))
-	stamped := 0
 	for _, r := range wire.Results {
 		// nil -> []Violation{}: a nil Go slice encodes as SQL NULL, and
 		// invoices.violations is jsonb NOT NULL -- M4-04-05's write would raise
@@ -263,9 +262,6 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 		}
 		byRef[r.Ref] = r.Violations
 		stamps[r.Ref] = Stamp{Version: r.RuleSetVersion, ID: r.RuleSetVersionID}
-		if r.RuleSetVersion != 0 || r.RuleSetVersionID != "" {
-			stamped++
-		}
 	}
 
 	// TOTALITY: the response must cover every sent ref before ByRef is built.
@@ -290,19 +286,7 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 		}
 	}
 
-	// A stamp is never guessed: no item carries one (old server) -> the
-	// top-level stamp judged all; some carry one -> outage.
-	// ceiling: remove the fallback in ENGI-09, once every validation service sends item stamps
-	switch stamped {
-	case 0:
-		top := Stamp{Version: wire.RuleSetVersion, ID: wire.RuleSetVersionID}
-		for ref := range stamps {
-			stamps[ref] = top
-		}
-	case len(wire.Results):
-	default:
-		return ValidateResult{}, fmt.Errorf("%w: batch response stamps %d of %d items", ErrUpstream, stamped, len(wire.Results))
-	}
+	// A stamp is never guessed: every item carries one, or the response is an outage.
 	for ref, st := range stamps {
 		if st.ID == "" || st.Version < 1 {
 			return ValidateResult{}, fmt.Errorf("%w: batch response stamp for ref %q is invalid (version %d, id %q)",

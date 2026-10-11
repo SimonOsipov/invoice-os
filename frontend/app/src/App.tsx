@@ -313,6 +313,12 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // `p` marks the backfill's stamp: a window entry that already names a company.
   const isWindowEntry = (s: { e?: string | null; m?: string; p?: boolean } | null) =>
     s?.m === mountKey && (s.e == null || s.p === true)
+  // Stamp for a replace of the current entry: a window entry stays in the window once the company resolves.
+  const replaceStamp = () => ({
+    e: active.entityId,
+    m: mountKey,
+    p: (active.entityId !== null && isWindowEntry(window.history.state)) || undefined,
+  })
 
   // The REAL portfolio entity behind `active`, resolved once here rather than re-`find`ing
   // it at each consumer ([gate-on-the-resolved-entity]). Two things depend on it being the
@@ -680,14 +686,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     // other view, so the early return is what stops two writers fighting one URL.
     if (view !== 'create') return
     const ids = reviewNavIds(view, createStep, reviewBatchIds)
-    // Keep a window entry in the window while it still names the window's company.
-    const keepWindow =
-      active.entityId !== null && isWindowEntry(window.history.state) && bootEntityIdRef.current === active.entityId
-    window.history.replaceState(
-      { e: active.entityId, m: mountKey, p: keepWindow || undefined },
-      '',
-      routeUrl('create', { reviewBatchIds: ids }),
-    )
+    window.history.replaceState(replaceStamp(), '', routeUrl('create', { reviewBatchIds: ids }))
     // `reviewBatchIds.join(',')`, never the array reference: a fresh array every render
     // would re-run this effect forever.
   }, [view, createStep, reviewBatchIds.join(',')])
@@ -738,7 +737,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   function setInvoiceQuery(q: string) {
     setInvoiceQuery_(q)
     const url = routeUrl(view, { settingsTab, q, auditInvoice: auditPrefilter?.invoiceId ?? null })
-    window.history.replaceState({ e: active.entityId, m: mountKey }, '', url)
+    window.history.replaceState(replaceStamp(), '', url)
   }
 
   function toggleSwitcher() {
@@ -1504,7 +1503,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   function setAuditInvoiceFilter(invoiceId: string | null, invoiceNumber: string | null) {
     setAuditPrefilter(invoiceId ? { invoiceId, invoiceNumber } : null)
     const url = routeUrl(view, { settingsTab, q: invoiceQuery, auditInvoice: invoiceId })
-    window.history.replaceState({ e: active.entityId, m: mountKey }, '', url)
+    window.history.replaceState(replaceStamp(), '', url)
   }
 
   // Same one-handler shape as openAuditForInvoice above, same reason.
@@ -1517,7 +1516,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
     const url = routeUrl(view, { settingsTab: t, q: invoiceQuery, auditInvoice: auditPrefilter?.invoiceId ?? null })
-    window.history.replaceState({ e: active.entityId, m: mountKey }, '', url)
+    window.history.replaceState(replaceStamp(), '', url)
   }
 
   function toggleConnector(id: ConnectorId) {

@@ -1787,8 +1787,7 @@ describe('BUG-34: entries pushed before the company list loads', () => {
     expect(stateNow()!.p, 'a post-load push is not a window entry').toBeUndefined()
   })
 
-  // KNOWN DEFECT (QA-3): these writers drop `p`, so the entry clamps after an adoption its window-mates survive. Flip to `it.each` with the fix.
-  it.fails.each([
+  it.each([
     ['setInvoiceQuery', () => capturedCtx!.setInvoiceQuery('x')],
     ['setAuditInvoiceFilter', () => capturedCtx!.setAuditInvoiceFilter(AUDIT_INVOICE_ID, null)],
     ['setSettingsTab', () => capturedCtx!.setSettingsTab('roles')],

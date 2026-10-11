@@ -1267,7 +1267,7 @@ describe('ROUTE-06-02 AC-7: every Workspace history write carries the company st
     const src = stripComments(readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8'))
     const slice = src.slice(src.indexOf('function Workspace({ session,'), src.indexOf('export default function App()'))
     const stamps = slice.match(/\{\s*e:\s*active\.entityId\b[^}]*\}/g) ?? []
-    expect(stamps, 'seven writes stamp active.entityId -- fewer means a mis-anchored slice or a lost writer').toHaveLength(7)
+    expect(stamps, 'four writes stamp active.entityId -- fewer means a mis-anchored slice or a lost writer').toHaveLength(4)
     expect(
       stamps.filter((st) => !/\bm:\s*mountKey\b/.test(st)),
       'a write of active.entityId without `m: mountKey` is invisible to the pre-load window',

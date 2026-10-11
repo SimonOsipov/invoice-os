@@ -7104,17 +7104,15 @@ describe('InvoiceDetail editor: the NRS fields (ENGI-06-04)', () => {
   })
 
   it('invoiceDetail_aTaxCategoryPickWithoutAPercentKeepsTheTypedPercent', async () => {
-    const { fetchMock } = await openEditor()
-    const orig = fetchMock.getMockImplementation()!
-    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
-      url.includes('/code-lists/')
-        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ codes: [{ code: 'EXEMPT', label: 'Exempt' }] }) })
-        : orig(url, init),
-    )
+    const { patchCalls, fetchMock } = await openEditor()
+    await answerCodes(fetchMock, [{ code: 'EXEMPT', label: 'Exempt', percent: null as unknown as string }])
     fireEvent.change(lineInput(1, 'tax_percent'), { target: { value: '5' } })
     fireEvent.change(lineInput(1, 'tax_category'), { target: { value: 'EXEMPT' } })
-    await waitFor(() => expect(lineInput(1, 'tax_category').value).toBe('EXEMPT'))
-    expect(lineInput(1, 'tax_percent').value).toBe('5')
+    await settlePick(fetchMock, 'EXEMPT')
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const first = (patchCalls[0] as { line_items: Array<Record<string, unknown>> }).line_items[0]
+    expect(first).toMatchObject({ tax_category: 'EXEMPT', tax_percent: '5' })
   })
 
   it('invoiceDetail_buyerTypeNoteRequiresForB2G', async () => {

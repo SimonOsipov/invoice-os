@@ -417,3 +417,42 @@ func TestNewInvoiceLineItemsApplier_LeavesTheCallersSliceUntouched(t *testing.T)
 		t.Errorf("the caller's slice is now %+v, want %+v -- the adapter must convert, never write back", in, want)
 	}
 }
+
+func TestNewInvoiceLineItemsApplier_ABlankNewRoleReachesTheInvoiceAsNil(t *testing.T) {
+	blank, kept := " ", "8517"
+	in := []extraction.LineItemInput{
+		{HSNCode: &blank, ISICCode: &blank, TaxCategory: &blank, SellersItemIdentification: &blank, PriceUnit: &blank},
+		{HSNCode: &kept},
+	}
+	spy := &fcEditSpy{returnedID: fcInvoiceID}
+	if _, err := newInvoiceLineItemsApplier(spy.edit)(context.Background(), nil, liDocumentID, in); err != nil {
+		t.Fatalf("applier: %v", err)
+	}
+	got := spy.gotInput.LineItems
+	if got == nil || len(*got) != 2 {
+		t.Fatalf("captured %v, want 2 lines", got)
+	}
+	if (*got)[1].HSNCode == nil || *(*got)[1].HSNCode != kept {
+		t.Fatalf("control: line 2 HSNCode = %v", (*got)[1].HSNCode)
+	}
+	a := (*got)[0]
+	if a.HSNCode != nil || a.ISICCode != nil || a.TaxCategory != nil || a.SellersItemIdentification != nil || a.PriceUnit != nil {
+		t.Errorf("blank cells reached the invoice as text: %+v, want nil (ENGI-07 D7)", a)
+	}
+}
+
+func TestNewInvoiceLineItemsApplier_ALineWithNoNewRolesCopiesNilNotInvented(t *testing.T) {
+	d := "Item"
+	spy := &fcEditSpy{returnedID: fcInvoiceID}
+	if _, err := newInvoiceLineItemsApplier(spy.edit)(context.Background(), nil, liDocumentID, []extraction.LineItemInput{{Description: &d}}); err != nil {
+		t.Fatalf("applier: %v", err)
+	}
+	got := spy.gotInput.LineItems
+	if got == nil || len(*got) != 1 || (*got)[0].Description == nil {
+		t.Fatalf("captured %v", got)
+	}
+	l := (*got)[0]
+	if l.ID != nil || l.HSNCode != nil || l.ISICCode != nil || l.TaxCategory != nil || l.SellersItemIdentification != nil || l.PriceUnit != nil {
+		t.Errorf("line = %+v, want only Description set", l)
+	}
+}

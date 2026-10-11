@@ -1776,3 +1776,59 @@ func TestCarriedInput_CarriesTheNewFields(t *testing.T) {
 		t.Errorf("carried input = %+v, want BuyerEmail and line 1 HSNCode set", in)
 	}
 }
+
+func TestReadingCreateInput_ABlankNewFieldIsNilNotEmptyText(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "due_date", Value: mpPtr("  ")},
+		{Name: "buyer_email", Value: mpPtr(" ")},
+		{Name: "buyer_state", Value: mpPtr("  ")},
+		{Name: "line_items[1].hsn_code", Value: mpPtr(" ")},
+		{Name: "buyer_city", Value: mpPtr("Lagos")},
+	}}
+	got, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v", rowErr)
+	}
+	if got.BuyerCity == nil {
+		t.Fatal("control BuyerCity = nil")
+	}
+	if len(got.LineItems) != 1 {
+		t.Fatalf("lines = %d, want 1", len(got.LineItems))
+	}
+	if got.DueDate != nil || got.BuyerEmail != nil || got.BuyerState != nil || got.LineItems[0].HSNCode != nil {
+		t.Errorf("DueDate=%v BuyerEmail=%q BuyerState=%q HSNCode=%q, want all nil (ENGI-07 D7)",
+			got.DueDate, mpShow(got.BuyerEmail), mpShow(got.BuyerState), mpShow(got.LineItems[0].HSNCode))
+	}
+}
+
+func mpShow(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return *p
+}
+
+func TestReadingCreateInput_SupplierFieldsAreNeverSet(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "supplier_email", Value: mpPtr("s@x.ng")}, {Name: "supplier_city", Value: mpPtr("Abuja")},
+		{Name: "buyer_city", Value: mpPtr("Lagos")},
+	}}
+	got, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr != nil || got.BuyerCity == nil {
+		t.Fatalf("rowErr=%+v BuyerCity=%v, want nil and set", rowErr, got.BuyerCity)
+	}
+	if got.SupplierEmail != nil || got.SupplierCity != nil || got.SupplierState != nil || got.SupplierLGA != nil {
+		t.Errorf("supplier address fields were set: %+v", got)
+	}
+}
+
+func TestReadingCreateInput_ADueDateWithPaddingParsesAndAnImpossibleOneRefuses(t *testing.T) {
+	ok, rowErr := readingCreateInput("e", "d", SettledExtraction{Fields: []extractedField{{Name: "due_date", Value: mpPtr(" 2026-08-13 ")}}})
+	if rowErr != nil || ok.DueDate == nil || ok.DueDate.Format("2006-01-02") != "2026-08-13" {
+		t.Fatalf("padded due_date: rowErr=%+v DueDate=%v", rowErr, ok.DueDate)
+	}
+	_, rowErr = readingCreateInput("e", "d", SettledExtraction{Fields: []extractedField{{Name: "due_date", Value: mpPtr("2026-13-01")}}})
+	if rowErr == nil || rowErr.Field != "due_date" {
+		t.Errorf("rowErr = %+v, want a due_date RowError", rowErr)
+	}
+}

@@ -55,8 +55,9 @@ func TestRuleBreaks_MapsEachPathToItsField(t *testing.T) {
 func TestRuleBreaks_SkipsLockedLineAndUnknownPaths(t *testing.T) {
 	// every name is valued, so only the path can be the reason a violation is skipped
 	ex := rbReading("invoice_number", "supplier_tin", "supplier_name", "line_items", "line_items[1].description",
-		"nope", "buyer_tin")
-	skipped := []string{"invoice_number", "supplier.tin", "supplier.name", "line_items", "", "nope", "buyer_tin"}
+		"nope", "buyer_tin", "supplier_email", "supplier_city")
+	skipped := []string{"invoice_number", "supplier.tin", "supplier.name", "line_items", "", "nope", "buyer_tin",
+		"supplier.email", "supplier.city", "supplier.state"}
 	for _, path := range skipped {
 		t.Run("path="+path, func(t *testing.T) {
 			if got := ruleBreaks(ex, []invoice.Violation{rbViolation(path, "rule-x")}); len(got) != 0 {

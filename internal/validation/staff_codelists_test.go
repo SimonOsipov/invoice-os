@@ -49,6 +49,7 @@ type syncRow struct {
 	entryCount           int
 	added, removed, chng []string
 	id                   string
+	status               string // empty takes the column default
 }
 
 func newSyncList() string { return "t-" + uuid.NewString() }
@@ -68,8 +69,8 @@ func seedSyncs(t *testing.T, super *pgxpool.Pool, list string, rows ...syncRow) 
 			id = uuid.NewString()
 		}
 		if _, err := super.Exec(ctx,
-			`INSERT INTO nrs_code_list_syncs (id, list, synced_at, entry_count, added, removed, changed) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)`,
-			id, list, r.syncedAt, r.entryCount, orEmpty(r.added), orEmpty(r.removed), orEmpty(r.chng)); err != nil {
+			`INSERT INTO nrs_code_list_syncs (id, list, synced_at, entry_count, added, removed, changed, status) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, COALESCE(NULLIF($8, ''), 'applied'))`,
+			id, list, r.syncedAt, r.entryCount, orEmpty(r.added), orEmpty(r.removed), orEmpty(r.chng), r.status); err != nil {
 			t.Fatalf("seed sync row of %s: %v", list, err)
 		}
 	}
@@ -352,7 +353,7 @@ func probeSyncsTable(t *testing.T) (super *pgxpool.Pool, store *Store) {
 	return pooled(os.Getenv("DATABASE_SUPERUSER_URL")), NewStore(pooled(os.Getenv("DATABASE_URL")))
 }
 
-// A later migration adds a column (ENGI-20 adds a sync state): the read names its columns, so it must not care.
+// The read names its columns, so a column added later must not break it.
 func TestStaffCodeLists_ReadSurvivesAnExtraColumn(t *testing.T) {
 	super, store := probeSyncsTable(t)
 
@@ -384,6 +385,80 @@ func TestStaffCodeLists_ReadSurvivesAnExtraColumn(t *testing.T) {
 	}
 	if n, _ := syncs[0]["entry_count"].(float64); n != 5 {
 		t.Errorf("newest sync entry_count = %v with the extra column, want 5", syncs[0]["entry_count"])
+	}
+}
+
+// Status values copied from the CHECK in migrations/20261011031657_nrs_code_list_syncs_status.sql.
+func TestStaffCodeLists_HeldAndReleasedRowsCarryStatus(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := NewStore(app)
+	base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+
+	held, released := newSyncList(), newSyncList()
+	seedSyncs(t, super, held,
+		syncRow{syncedAt: base, entryCount: 10, added: []string{"A"}},
+		syncRow{syncedAt: base.Add(time.Hour), entryCount: 10, removed: []string{"R1", "R2"}, status: "held"},
+	)
+	seedSyncs(t, super, released,
+		syncRow{syncedAt: base, entryCount: 4, removed: []string{"R1"}, status: "held"},
+		syncRow{syncedAt: base.Add(time.Hour), entryCount: 4, removed: []string{"R1"}, status: "released"},
+	)
+
+	body, raw := readSyncs(t, store, nil)
+	wantStatus := map[string]string{held: "held", released: "released"}
+	seen := 0
+	for _, l := range objects(t, body["lists"], "lists") {
+		name, _ := l["list"].(string)
+		want, mine := wantStatus[name]
+		if !mine {
+			continue
+		}
+		seen++
+		if l["status"] != want {
+			t.Errorf("summary %s status = %v, want %s (the newest row, held or not)", name, l["status"], want)
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("summary carries %d of the 2 seeded lists: %.300s", seen, raw)
+	}
+	for _, l := range objects(t, body["lists"], "lists") {
+		if l["list"] == held && (l["removed_count"] != float64(2) || l["added_count"] != float64(0)) {
+			t.Errorf("held summary counts = removed %v added %v, want removed 2 added 0", l["removed_count"], l["added_count"])
+		}
+	}
+
+	body, _ = readSyncs(t, store, &held)
+	syncs := objects(t, body["syncs"], "syncs")
+	if len(syncs) != 2 || syncs[0]["status"] != "held" || syncs[1]["status"] != "applied" {
+		t.Fatalf("held detail = %v, want [held, applied] newest first", syncs)
+	}
+	if got := strings0(t, syncs[0]["removed"], "removed"); !reflect.DeepEqual(got, []string{"R1", "R2"}) {
+		t.Errorf("held removed = %v, want the codes it would have removed", got)
+	}
+	if got := strings0(t, syncs[0]["added"], "added"); len(got) != 0 {
+		t.Errorf("held added = %v, want empty", got)
+	}
+	body, _ = readSyncs(t, store, &released)
+	syncs = objects(t, body["syncs"], "syncs")
+	if len(syncs) != 2 || syncs[0]["status"] != "released" || syncs[1]["status"] != "held" {
+		t.Fatalf("released detail = %v, want [released, held] newest first", syncs)
+	}
+}
+
+// The handler passes the read's status through untouched, including a value it does not know.
+func TestStaffCodeListsHandler_StatusIsAnOpenString(t *testing.T) {
+	lists := []CodeListLatest{{List: "x", Status: "held"}, {List: "y", Status: "some-future-state"}}
+	h := StaffCodeListSyncsHandler(func(context.Context, *string) (CodeListSyncs, error) {
+		return CodeListSyncs{Lists: &lists}, nil
+	}, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/staff/code-list-syncs", nil))
+	var got struct{ Lists []map[string]any }
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Lists) != 2 {
+		t.Fatalf("body %s: %v", rec.Body.String(), err)
+	}
+	if got.Lists[0]["status"] != "held" || got.Lists[1]["status"] != "some-future-state" {
+		t.Errorf("wire statuses = %v, %v, want held and some-future-state", got.Lists[0]["status"], got.Lists[1]["status"])
 	}
 }
 

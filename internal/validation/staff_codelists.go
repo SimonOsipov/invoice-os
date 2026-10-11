@@ -24,10 +24,13 @@ type CodeListLatest struct {
 	AddedCount   int       `json:"added_count"`
 	RemovedCount int       `json:"removed_count"`
 	ChangedCount int       `json:"changed_count"`
+	Status       string    `json:"status"`
 }
 
-// CodeListSync is one sync of a list with the codes it moved.
+// CodeListSync is one sync of a list with the codes it moved. Status is open: the sync log owns its values.
+// A held row lists the codes it would have removed in Removed; they were not removed.
 type CodeListSync struct {
+	Status     string    `json:"status"`
 	SyncedAt   time.Time `json:"synced_at"`
 	EntryCount int       `json:"entry_count"`
 	Added      []string  `json:"added"`
@@ -51,7 +54,7 @@ func (s *Store) CodeListSyncs(ctx context.Context, list *string) (CodeListSyncs,
 	err := db.WithinStaffTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if list == nil {
 			rows, err := tx.Query(ctx, `
-SELECT DISTINCT ON (list) list, synced_at, entry_count, cardinality(added), cardinality(removed), cardinality(changed)
+SELECT DISTINCT ON (list) list, synced_at, entry_count, cardinality(added), cardinality(removed), cardinality(changed), status
   FROM nrs_code_list_syncs
  ORDER BY list, synced_at DESC, id DESC`)
 			if err != nil {
@@ -61,7 +64,7 @@ SELECT DISTINCT ON (list) list, synced_at, entry_count, cardinality(added), card
 			lists := []CodeListLatest{}
 			for rows.Next() {
 				var l CodeListLatest
-				if err := rows.Scan(&l.List, &l.SyncedAt, &l.EntryCount, &l.AddedCount, &l.RemovedCount, &l.ChangedCount); err != nil {
+				if err := rows.Scan(&l.List, &l.SyncedAt, &l.EntryCount, &l.AddedCount, &l.RemovedCount, &l.ChangedCount, &l.Status); err != nil {
 					return fmt.Errorf("validation: scan code-list sync: %w", err)
 				}
 				lists = append(lists, l)
@@ -70,7 +73,7 @@ SELECT DISTINCT ON (list) list, synced_at, entry_count, cardinality(added), card
 			return rows.Err()
 		}
 		rows, err := tx.Query(ctx, `
-SELECT synced_at, entry_count, added, removed, changed
+SELECT synced_at, entry_count, added, removed, changed, status
   FROM nrs_code_list_syncs
  WHERE list = $1
  ORDER BY synced_at DESC, id DESC
@@ -82,7 +85,7 @@ SELECT synced_at, entry_count, added, removed, changed
 		syncs := []CodeListSync{}
 		for rows.Next() {
 			var c CodeListSync
-			if err := rows.Scan(&c.SyncedAt, &c.EntryCount, &c.Added, &c.Removed, &c.Changed); err != nil {
+			if err := rows.Scan(&c.SyncedAt, &c.EntryCount, &c.Added, &c.Removed, &c.Changed, &c.Status); err != nil {
 				return fmt.Errorf("validation: scan code-list sync: %w", err)
 			}
 			syncs = append(syncs, c)

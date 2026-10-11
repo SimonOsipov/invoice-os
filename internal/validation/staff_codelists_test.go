@@ -394,14 +394,17 @@ func TestStaffCodeLists_HeldAndReleasedRowsCarryStatus(t *testing.T) {
 	store := NewStore(app)
 	base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
 
+	// The newest row has the smallest id, so an id-first order picks the older row.
+	small, large := "00000000-"+uuid.NewString()[9:], "ffffffff-"+uuid.NewString()[9:]
 	held, released := newSyncList(), newSyncList()
 	seedSyncs(t, super, held,
-		syncRow{syncedAt: base, entryCount: 10, added: []string{"A"}},
-		syncRow{syncedAt: base.Add(time.Hour), entryCount: 10, removed: []string{"R1", "R2"}, status: "held"},
+		syncRow{syncedAt: base, entryCount: 10, added: []string{"A"}, id: large},
+		syncRow{syncedAt: base.Add(time.Hour), entryCount: 10, removed: []string{"R1", "R2"}, status: "held", id: small},
 	)
+	small, large = "00000000-"+uuid.NewString()[9:], "ffffffff-"+uuid.NewString()[9:]
 	seedSyncs(t, super, released,
-		syncRow{syncedAt: base, entryCount: 4, removed: []string{"R1"}, status: "held"},
-		syncRow{syncedAt: base.Add(time.Hour), entryCount: 4, removed: []string{"R1"}, status: "released"},
+		syncRow{syncedAt: base, entryCount: 4, removed: []string{"R1"}, status: "held", id: large},
+		syncRow{syncedAt: base.Add(time.Hour), entryCount: 4, removed: []string{"R1"}, status: "released", id: small},
 	)
 
 	body, raw := readSyncs(t, store, nil)

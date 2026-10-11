@@ -178,4 +178,15 @@ func TestRLS_CodeListSyncsReadDownAndUp(t *testing.T) {
 	if syncsPrivilege(t, tx, "invoice_app", "UPDATE", "after the Up") || syncsPrivilege(t, tx, "invoice_app", "DELETE", "after the Up") {
 		t.Error("after the Up: invoice_app holds UPDATE or DELETE, want neither")
 	}
+	// The grant is column-level: a table-wide SELECT or a column UPDATE passes the checks above.
+	if syncsPrivilege(t, tx, "invoice_app", "SELECT", "after the Up") {
+		t.Error("after the Up: invoice_app holds a table-wide SELECT, want column grants only")
+	}
+	var anyUpdate bool
+	if err := tx.QueryRow(ctx, `SELECT has_any_column_privilege('invoice_app', $1, 'UPDATE')`, syncsTable).Scan(&anyUpdate); err != nil {
+		t.Fatalf("has_any_column_privilege after the Up: %v", err)
+	}
+	if anyUpdate {
+		t.Error("after the Up: invoice_app holds a column UPDATE, want none")
+	}
 }

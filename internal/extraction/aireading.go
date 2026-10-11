@@ -38,7 +38,16 @@ Return a JSON object with exactly these keys. Each value is a string, or null wh
 - currency: the ISO 4217 code of the invoice currency. A printed ₦, N or Naira means NGN.
 - subtotal: the amount before VAT, as digits with a decimal point and no currency symbol or thousands separators (1250000.00).
 - vat: the VAT amount (not the rate), same number format.
-- total: the total amount payable, same number format.`
+- total: the total amount payable, same number format.
+- due_date: the date payment is due, as YYYY-MM-DD. Not the issue date.
+- buyer_email: the buyer's email address, exactly as printed. Not the seller's.
+- buyer_telephone: the buyer's telephone number, exactly as printed. Not the seller's.
+- buyer_street: the street line of the buyer's address, exactly as printed.
+- buyer_city: the city of the buyer's address, exactly as printed.
+- buyer_postal_zone: the postal code of the buyer's address, exactly as printed.
+- buyer_country: the country of the buyer's address, exactly as printed.
+- buyer_state: the state of the buyer's address, exactly as printed.
+- buyer_lga: the Local Government Area of the buyer's address, exactly as printed.`
 
 const aiTextIntro = `The document text below was read by a PDF parser. Each line is one visual row on the page. y is the row's vertical position and x each text run's horizontal position, both from 0 to 1 measured from the top-left corner.`
 
@@ -142,6 +151,9 @@ var paymentLabelRE = regexp.MustCompile(`(?i)\b(account\s*name|account\s*no|acco
 // aiInvoiceNoLabel is anchorLabelMatchers' "invoice_no" entry, looked up once for check (d).
 var aiInvoiceNoLabel = anchorMatcherRE("invoice_no")
 
+// aiDueDateLabel is the "due_date" lexicon entry, for check (e).
+var aiDueDateLabel = anchorMatcherRE("due_date")
+
 func anchorMatcherRE(id string) *regexp.Regexp {
 	for _, m := range anchorLabelMatchers {
 		if m.ID == id {
@@ -179,7 +191,7 @@ func aiReadings(field, raw string) (Shape, []string, bool) {
 	return shape, shape.Normalize(raw), true
 }
 
-// checkAI runs (a)-(d) against one AI-answered field. A value passing every check is checked;
+// checkAI runs (a)-(e) against one AI-answered field. A value passing every check is checked;
 // its region is the page check's first qualifying occurrence.
 func checkAI(field, raw string, pages []TokenPage) (aiReading, bool) {
 	shape, want, ok := aiReadings(field, raw)
@@ -223,6 +235,15 @@ func checkAI(field, raw string, pages []TokenPage) (aiReading, bool) {
 			}
 		}
 		return aiReading{}, false // (d)
+	}
+
+	if field == "due_date" {
+		for _, occ := range occurrences {
+			if aiDueDateLabel.MatchString(occ.front) {
+				return aiReading{Value: value, Region: occ.region}, true
+			}
+		}
+		return aiReading{}, false // (e)
 	}
 
 	return aiReading{Value: value, Region: occurrences[0].region}, true

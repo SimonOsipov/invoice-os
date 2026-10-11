@@ -286,7 +286,10 @@ func TestAliAnswers_ANestedLineItemsArrayHardFailsTheHeaderLoader(t *testing.T) 
 func TestAliRunPy_TheHeaderPromptIsByteUnchanged(t *testing.T) {
 	src := aliRunPy(t)
 
-	system := aliPyLiteral(t, src, "SYSTEM")
+	system, _, found := strings.Cut(aliPyLiteral(t, src, "SYSTEM"), "\n- due_date:") // the measured prefix; later lines are appended
+	if !found {
+		t.Fatal("SYSTEM has no \"- due_date:\" line to cut the measured prefix at")
+	}
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(system))); got != aliSystemSHA256 {
 		t.Errorf("sha256(SYSTEM) = %s, want %s -- SYSTEM changed", got, aliSystemSHA256)
 	}

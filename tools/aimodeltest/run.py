@@ -9,7 +9,9 @@ KEY = ""
 MODELS = ["google/gemini-3.5-flash-lite", "google/gemini-3.8-flash", "openai/gpt-5.6-luna",
           "openai/gpt-5.6-luna-pro", "qwen/qwen3.8-flash"]
 FIELDS = ["invoice_number", "issue_date", "supplier_tin", "supplier_name",
-          "buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total"]
+          "buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
+          "due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+          "buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"]
 PURPOSES = ["header", "combined", "lines"]
 COST_CAP = float(os.environ.get("COST_CAP", "4.0"))
 OUT = os.path.join(BASE, os.environ.get("ANSWERS", "answers.jsonl"))
@@ -28,7 +30,16 @@ Return a JSON object with exactly these keys. Each value is a string, or null wh
 - currency: the ISO 4217 code of the invoice currency. A printed ₦, N or Naira means NGN.
 - subtotal: the amount before VAT, as digits with a decimal point and no currency symbol or thousands separators (1250000.00).
 - vat: the VAT amount (not the rate), same number format.
-- total: the total amount payable, same number format."""
+- total: the total amount payable, same number format.
+- due_date: the date payment is due, as YYYY-MM-DD. Not the issue date.
+- buyer_email: the buyer's email address, exactly as printed. Not the seller's.
+- buyer_telephone: the buyer's telephone number, exactly as printed. Not the seller's.
+- buyer_street: the street line of the buyer's address, exactly as printed.
+- buyer_city: the city of the buyer's address, exactly as printed.
+- buyer_postal_zone: the postal code of the buyer's address, exactly as printed.
+- buyer_country: the country of the buyer's address, exactly as printed.
+- buyer_state: the state of the buyer's address, exactly as printed.
+- buyer_lga: the Local Government Area of the buyer's address, exactly as printed."""
 
 TEXT_INTRO = """The document text below was read by a PDF parser. Each line is one visual row on the page. y is the row's vertical position and x each text run's horizontal position, both from 0 to 1 measured from the top-left corner."""
 IMAGE_INTRO = "The document has no text layer. Its pages are attached as images."

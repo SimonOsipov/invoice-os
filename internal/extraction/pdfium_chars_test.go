@@ -470,7 +470,7 @@ func TestCharsIn_ASlidingRunReadsOnce(t *testing.T) {
 // flip or by charsIn existing, so none of these rows may move.
 var pdcTextCharsGoldens = map[string]struct{ pages, withText, textChars int }{
 	"ai_lines_invoice.pdf":                  {1, 1, 656},
-	"ai_steered_invoice.pdf":                {1, 1, 480},
+	"ai_steered_invoice.pdf":                {1, 1, 717},
 	"ai_unavailable_invoice.pdf":            {1, 1, 105},
 	"advisory_dense.pdf":                    {1, 1, 1766},
 	"advisory_register.pdf":                 {2, 2, 804},

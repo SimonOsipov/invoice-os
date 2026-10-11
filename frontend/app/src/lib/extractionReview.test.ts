@@ -761,6 +761,12 @@ describe('fieldLabel', () => {
     expect(fieldLabel('line_items[0].line_total')).toBe('line_items[0].line_total')
   })
 
+  it('names each new header field by its INVOICE_FIELDS label', () => {
+    expect(fieldLabel('due_date')).toBe('Due date')
+    expect(fieldLabel('buyer_postal_zone')).toBe('Buyer postal zone')
+    expect(fieldLabel('buyer_lga')).toBe('Buyer LGA')
+  })
+
   it('leaves a bare line role unlabelled', () => {
     expect(fieldLabel('description')).toBe('description')
     expect(fieldLabel('line_tax')).toBe('line_tax')

@@ -4123,7 +4123,7 @@ test('CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, kee
     await expect(page.getByTestId(`extraction-field-${name}`).locator('.mono'), `${name} renders a pill`).toHaveCount(0)
   }
 
-  // The other seven header fields were never read, so never asked.
+  // The other header fields were never read, so never asked.
   const decided: string[] = Object.keys(JEV_DOUBT_READ)
   for (const name of VOCABULARY.filter((n) => !decided.includes(n))) {
     const w = wire.get(name)

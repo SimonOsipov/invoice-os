@@ -14,7 +14,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
-// vsAdvisoryPage is one synthetic header page carrying all ten HeaderFields, with buyerLabel as
+// vsAdvisoryPage is one synthetic header page carrying the ten engine-read HeaderFields, with buyerLabel as
 // the only thing that ever varies between two calls. The buyer name sits BELOW its label, the
 // arrangement T-01.4 exists to prove the loosened rule resolves exactly like the exact one.
 func vsAdvisoryPage(buyerLabel string) []extraction.TokenPage {
@@ -49,8 +49,9 @@ func TestReconcile_ALoosenedPartyLabelDecidesExactlyAsTheExactOneDoes(t *testing
 	exact := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(vsAdvisoryPage("Bill to"), rules)})
 	loosened := extraction.Reconcile(extraction.Input{Candidates: extraction.Resolve(vsAdvisoryPage("Billed to"), rules)})
 
-	// Non-vacuity: both sides must actually have produced the ten header fields, or the
-	// per-field loop below would range over nothing and pass trivially.
+	// Non-vacuity: both sides must actually have produced every header row, or the per-field
+	// loop below would range over nothing and pass trivially. The page prints only the labelled
+	// fields; the AI-only rows come back missing on both sides.
 	if len(exact) < len(extraction.HeaderFields) || len(loosened) < len(extraction.HeaderFields) {
 		t.Fatalf("Reconcile returned %d (exact) and %d (loosened) result(s), want at least %d each", len(exact), len(loosened), len(extraction.HeaderFields))
 	}

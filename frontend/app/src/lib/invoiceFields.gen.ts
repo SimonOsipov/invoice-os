@@ -141,7 +141,7 @@ export const INVOICE_FIELDS = [
     "required": false,
     "formKey": null,
     "edit": false,
-    "extract": false
+    "extract": true
   },
   {
     "key": "issue_time",
@@ -273,7 +273,7 @@ export const INVOICE_FIELDS = [
     "required": false,
     "formKey": null,
     "edit": false,
-    "extract": false
+    "extract": true
   },
   {
     "key": "buyer_telephone",
@@ -284,7 +284,7 @@ export const INVOICE_FIELDS = [
     "required": false,
     "formKey": null,
     "edit": false,
-    "extract": false
+    "extract": true
   },
   {
     "key": "buyer_street",
@@ -295,7 +295,7 @@ export const INVOICE_FIELDS = [
     "required": false,
     "formKey": null,
     "edit": false,
-    "extract": false
+    "extract": true
   },
   {
     "key": "buyer_city",
@@ -306,7 +306,7 @@ export const INVOICE_FIELDS = [
     "required": false,
     "formKey": null,
     "edit": false,
-    "extract": false
+    "extract": true
   },
   {
     "key": "buyer_postal_zone",
@@ -317,7 +317,7 @@ export const INVOICE_FIELDS = [
     "required": false,
     "formKey": null,
     "edit": false,
-    "extract": false
+    "extract": true
   },
   {
     "key": "buyer_country",
@@ -328,7 +328,7 @@ export const INVOICE_FIELDS = [
     "required": false,
     "formKey": null,
     "edit": false,
-    "extract": false
+    "extract": true
   },
   {
     "key": "buyer_state",
@@ -339,7 +339,7 @@ export const INVOICE_FIELDS = [
     "required": false,
     "formKey": null,
     "edit": false,
-    "extract": false
+    "extract": true
   },
   {
     "key": "buyer_lga",
@@ -350,7 +350,7 @@ export const INVOICE_FIELDS = [
     "required": false,
     "formKey": null,
     "edit": false,
-    "extract": false
+    "extract": true
   },
   {
     "key": "description",

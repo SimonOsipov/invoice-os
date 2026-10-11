@@ -208,14 +208,15 @@ func fxPage(res string, contents int) fxObject {
 
 // fxLine is one line of page text at a point size and a bottom-left PDF user-space origin.
 type fxLine struct {
-	size, x, y int
-	text       string
+	size float64
+	x, y int
+	text string
 }
 
 func fxText(lines ...fxLine) []byte {
 	var b bytes.Buffer
 	for _, l := range lines {
-		fmt.Fprintf(&b, "BT\n/F1 %d Tf\n%d %d Td\n(%s) Tj\nET\n", l.size, l.x, l.y, l.text)
+		fmt.Fprintf(&b, "BT\n/F1 %g Tf\n%d %d Td\n(%s) Tj\nET\n", l.size, l.x, l.y, l.text)
 	}
 	return b.Bytes()
 }
@@ -1712,6 +1713,13 @@ const fxAISteered = "ai_steered_invoice.pdf"
 
 const fxAISteeredMarkerPrefix = "AIFAKE-ANSWER-"
 
+// The marker is drawn small and near the left edge so the run fits the page width
+// (TestFixtures_AISteeredMarkerFitsThePageWidth).
+const (
+	fxAISteeredMarkerPt = 1.5
+	fxAISteeredMarkerX  = 20
+)
+
 // fxAISteeredAnswer is the fake's steered payload: every HeaderFields key null except the three
 // values this fixture's marker carries.
 func fxAISteeredAnswer() map[string]any {
@@ -1773,7 +1781,7 @@ func fxAISteeredLines() []fxLine {
 		{12, 72, 582, "Subtotal: 1,800.00"},
 		{12, 72, 564, "VAT: 135.00"},
 		{12, 72, 546, "Total: 1,935.00"},
-		{3, 72, 38, fxAISteeredMarker()},
+		{fxAISteeredMarkerPt, fxAISteeredMarkerX, 38, fxAISteeredMarker()},
 	}
 }
 
@@ -1885,7 +1893,7 @@ func TestFixtures_AISteeredMarkerDecodesAndResolvesNoCandidate(t *testing.T) {
 // proves mergeAI's outcome never depends on where it lands among the other nine tokens.
 func TestFixtures_AISteeredOutcomeIgnoresTokenOrder(t *testing.T) {
 	lines := fxAISteeredLines()
-	if last := lines[len(lines)-1]; last.size != 3 || !strings.HasPrefix(last.text, fxAISteeredMarkerPrefix) {
+	if last := lines[len(lines)-1]; last.size != fxAISteeredMarkerPt || !strings.HasPrefix(last.text, fxAISteeredMarkerPrefix) {
 		t.Fatalf("the generator's own line list does not place the marker last: %+v", last)
 	}
 	answer := fxDecodeAISteeredMarker(t, fxAISteeredMarker())
@@ -3598,7 +3606,7 @@ func TestFixtures_DenseIndexHeaderIsTheMeasuredShape(t *testing.T) {
 
 var (
 	// The last block's newline is optional: fxContent trims the stream's trailing EOL.
-	fxTextBlockRe = regexp.MustCompile(`BT\n/F1 (\d+) Tf\n(\d+) (\d+) Td\n\((.*)\) Tj\nET\n?`)
+	fxTextBlockRe = regexp.MustCompile(`BT\n/F1 ([\d.]+) Tf\n(\d+) (\d+) Td\n\((.*)\) Tj\nET\n?`)
 	fxAmountRe    = regexp.MustCompile(`[0-9][0-9,]*\.[0-9]{2}`)
 )
 
@@ -3614,7 +3622,7 @@ func fxDrawnLines(t *testing.T, raw []byte) (lines []fxLine, outside map[int]str
 	}
 	content := string(fxContent(t, objs, pages[0]))
 	for _, m := range fxTextBlockRe.FindAllStringSubmatch(content, -1) {
-		size, _ := strconv.Atoi(m[1])
+		size, _ := strconv.ParseFloat(m[1], 64)
 		x, _ := strconv.Atoi(m[2])
 		y, _ := strconv.Atoi(m[3])
 		lines = append(lines, fxLine{size, x, y, m[4]})
@@ -3643,7 +3651,7 @@ func fxGeometryProblems(twin, sibling []fxLine, changed []int) []string {
 	for i, a := range twin {
 		b := sibling[i]
 		if a.size != b.size || a.x != b.x || a.y != b.y {
-			out = append(out, fmt.Sprintf("line %d moved: %dpt (%d,%d) -> %dpt (%d,%d)", i, a.size, a.x, a.y, b.size, b.x, b.y))
+			out = append(out, fmt.Sprintf("line %d moved: %gpt (%d,%d) -> %gpt (%d,%d)", i, a.size, a.x, a.y, b.size, b.x, b.y))
 		}
 		if declared := slices.Contains(changed, i); declared != (a.text != b.text) {
 			out = append(out, fmt.Sprintf("line %d: %q -> %q, declared changed=%v", i, a.text, b.text, declared))
@@ -3932,6 +3940,31 @@ func TestFixtures_AILinesMarkerFitsThePageWidth(t *testing.T) {
 	if right > limit {
 		t.Errorf("marker of %d chars at %dpt from x=%d ends at %.1fpt, past the %.1fpt limit on a %dpt page: the deployed reader would clip it mid-payload",
 			len(marker), fxAILinesMarkerPt, fxAILinesMarkerX, right, limit, fxPageWidthPt)
+	}
+}
+
+// TestFixtures_AISteeredMarkerFitsThePageWidth is AILinesMarkerFitsThePageWidth's twin for the
+// header marker: the generator's own marker line must end inside 95% of the page.
+func TestFixtures_AISteeredMarkerFitsThePageWidth(t *testing.T) {
+	lines := fxAISteeredLines()
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last.text, fxAISteeredMarkerPrefix) {
+		t.Fatalf("the generator's last line is not the marker: %q", last.text)
+	}
+
+	milli := 0
+	for _, r := range last.text {
+		w, ok := fxHelveticaWidths[r]
+		if !ok {
+			t.Fatalf("no Helvetica width for %q; the marker alphabet grew and this guard no longer measures it", r)
+		}
+		milli += w
+	}
+	right := float64(last.x) + float64(milli)*last.size/1000
+
+	if limit := float64(fxPageWidthPt) * 0.95; right > limit {
+		t.Errorf("marker of %d chars at %gpt from x=%d ends at %.1fpt, past the %.1fpt limit on a %dpt page: the deployed reader would clip it mid-payload",
+			len(last.text), last.size, last.x, right, limit, fxPageWidthPt)
 	}
 }
 

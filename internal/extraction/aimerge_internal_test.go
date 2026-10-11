@@ -709,3 +709,133 @@ func TestMergeAI_TheCheckLeavesEngineDecidedAmountsAlone(t *testing.T) {
 		}
 	})
 }
+
+// --- ENGI-08-02: the nine AI-only header fields -------------------------------------------
+
+func mgMissing(name string) FieldResult {
+	return FieldResult{Field: Field{Name: name, Reason: ReasonMissing}, Alternatives: []Field{}}
+}
+
+// mgRow returns the merged row called name.
+func mgRow(t *testing.T, rows []FieldResult, name string) FieldResult {
+	t.Helper()
+	for _, r := range rows {
+		if r.Name == name {
+			return r
+		}
+	}
+	t.Fatalf("no %q row in %+v", name, rows)
+	return FieldResult{}
+}
+
+func mgUnreadable(t *testing.T, r FieldResult, wantAlt string) {
+	t.Helper()
+	if r.Value != nil || r.Reason != ReasonUnreadable {
+		t.Errorf("%s = value %v reason %q, want nil / unreadable", r.Name, r.Value, r.Reason)
+	}
+	if len(r.Alternatives) != 1 || r.Alternatives[0].Value == nil || *r.Alternatives[0].Value != wantAlt {
+		t.Errorf("%s alternatives = %+v, want one %q", r.Name, r.Alternatives, wantAlt)
+	}
+}
+
+func TestMergeAI_FillsANewHeaderFieldPrintedOnThePage(t *testing.T) {
+	pages := onePage(1, tok("Email: ap@honeywell.example", 1, 0.10, 0.30, 0.50, 0.32))
+
+	got := mergeWith([]FieldResult{mgMissing("buyer_email")}, map[string]any{"buyer_email": "ap@honeywell.example"}, pages, nil)
+
+	wantRegion := Region{Page: 1, X0: 0.10, Y0: 0.30, X1: 0.50, Y1: 0.32}
+	want := FieldResult{Field: Field{Name: "buyer_email", Value: mgStr("ap@honeywell.example"), Region: &wantRegion, Reason: ReasonNone}, Alternatives: []Field{}}
+	if !reflect.DeepEqual(got[0], want) {
+		t.Errorf("buyer_email = %+v, want %+v", got[0], want)
+	}
+}
+
+func TestMergeAI_ANewHeaderFieldNotOnThePageStaysUnfilled(t *testing.T) {
+	pages := onePage(1, tok("Email: ap@honeywell.example", 1, 0.10, 0.30, 0.50, 0.32))
+
+	got := mergeWith([]FieldResult{mgMissing("buyer_state")}, map[string]any{"buyer_state": "Lagos"}, pages, nil)
+
+	mgUnreadable(t, got[0], "Lagos")
+}
+
+func TestMergeAI_ANewHeaderValuePrintedElsewhereOnThePageIsAccepted(t *testing.T) {
+	pages := onePage(1,
+		tok("Supplier address: Nigeria", 1, 0.10, 0.10, 0.50, 0.12),
+		tok("Bill To: Honeywell Group", 1, 0.10, 0.30, 0.50, 0.32),
+	)
+
+	got := mergeWith([]FieldResult{mgMissing("buyer_country")}, map[string]any{"buyer_country": "Nigeria"}, pages, nil)
+
+	if got[0].Value == nil || *got[0].Value != "Nigeria" || got[0].Reason != ReasonNone {
+		t.Errorf("buyer_country = %+v, want Nigeria / none (the page check is page-wide, P31)", got[0])
+	}
+}
+
+func TestMergeAI_AMalformedEmailIsNotARead(t *testing.T) {
+	pages := onePage(1, tok("Email: ap at honeywell", 1, 0.10, 0.30, 0.50, 0.32))
+
+	got := mergeWith([]FieldResult{mgMissing("buyer_email")}, map[string]any{"buyer_email": "ap at honeywell"}, pages, nil)
+
+	mgUnreadable(t, got[0], "ap at honeywell")
+}
+
+func mgDueDateEngine() []FieldResult {
+	issueRegion := &Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.50, Y1: 0.12}
+	return []FieldResult{
+		{Field: Field{Name: "issue_date", Value: mgStr("2026-07-14"), Region: issueRegion, Reason: ReasonNone}, Alternatives: []Field{}},
+		mgMissing("due_date"),
+	}
+}
+
+func TestMergeAI_APrintedDueDateFillsDueDateNeverIssueDate(t *testing.T) {
+	pages := onePage(1,
+		tok("Invoice Date: 2026-07-14", 1, 0.10, 0.10, 0.50, 0.12),
+		tok("Due Date: 2026-08-13", 1, 0.10, 0.20, 0.50, 0.22),
+	)
+	engine := mgDueDateEngine()
+	issueBefore := cloneResults(engine)[0]
+
+	got := mergeWith(engine, map[string]any{"due_date": "2026-08-13"}, pages, nil)
+
+	dueRegion := Region{Page: 1, X0: 0.10, Y0: 0.20, X1: 0.50, Y1: 0.22}
+	wantDue := FieldResult{Field: Field{Name: "due_date", Value: mgStr("2026-08-13"), Region: &dueRegion, Reason: ReasonNone}, Alternatives: []Field{}}
+	if !reflect.DeepEqual(mgRow(t, got, "due_date"), wantDue) {
+		t.Errorf("due_date = %+v, want %+v", mgRow(t, got, "due_date"), wantDue)
+	}
+	if !reflect.DeepEqual(mgRow(t, got, "issue_date"), issueBefore) {
+		t.Errorf("issue_date = %+v, want unchanged %+v", mgRow(t, got, "issue_date"), issueBefore)
+	}
+}
+
+func TestMergeAI_AnAmbiguousDueDateIsRefused(t *testing.T) {
+	pages := onePage(1, tok("Due Date: 03/04/2026", 1, 0.10, 0.20, 0.50, 0.22))
+
+	got := mergeWith([]FieldResult{mgMissing("due_date")}, map[string]any{"due_date": "03/04/2026"}, pages, nil)
+
+	mgUnreadable(t, got[0], "03/04/2026")
+}
+
+func TestCheckAI_ADueDateNeedsADueDateLabel(t *testing.T) {
+	issueOnly := onePage(1, tok("Invoice Date: 2026-07-14", 1, 0.10, 0.10, 0.50, 0.12))
+	if got, ok := checkAI("due_date", "2026-07-14", issueOnly); ok {
+		t.Errorf("checkAI accepted the issue date as a due date: %+v", got)
+	}
+
+	labelled := onePage(1, tok("Due Date: 2026-08-13", 1, 0.10, 0.20, 0.50, 0.22))
+	if got, ok := checkAI("due_date", "2026-08-13", labelled); !ok || got.Value != "2026-08-13" {
+		t.Errorf("control: checkAI(due_date) = %+v ok=%v, want 2026-08-13 ok", got, ok)
+	}
+}
+
+func TestMergeAI_ADueDateEchoingTheIssueDateIsRefused(t *testing.T) {
+	pages := onePage(1, tok("Invoice Date: 2026-07-14", 1, 0.10, 0.10, 0.50, 0.12))
+	engine := mgDueDateEngine()
+	issueBefore := cloneResults(engine)[0]
+
+	got := mergeWith(engine, map[string]any{"due_date": "2026-07-14"}, pages, nil)
+
+	mgUnreadable(t, mgRow(t, got, "due_date"), "2026-07-14")
+	if !reflect.DeepEqual(mgRow(t, got, "issue_date"), issueBefore) {
+		t.Errorf("issue_date = %+v, want unchanged %+v", mgRow(t, got, "issue_date"), issueBefore)
+	}
+}

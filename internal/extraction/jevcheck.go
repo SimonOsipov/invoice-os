@@ -36,14 +36,16 @@ func ValueCheckQuestion(field, value string) jev.Question {
 	}
 }
 
+// valueCheckFields are the 8 header fields Jev was measured on (D10). The supplier pair is
+// absent: invoice.Store overwrites it from the client entity. An AI-only field was never measured.
+var valueCheckFields = []string{"invoice_number", "issue_date", "buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total"}
+
 // valueCheckRequest returns the asked result indexes too; nil means nothing to ask.
-// The supplier pair is skipped: invoice.Store overwrites it from the client entity.
 func valueCheckRequest(pages []TokenPage, results []FieldResult) (jev.Request, []int) {
 	req := jev.Request{Purpose: jev.PurposeValueCheck, Questions: map[string]jev.Question{}}
 	var asked []int
 	for i, r := range results {
-		if !slices.Contains(HeaderFields, r.Name) || r.Name == "supplier_tin" || r.Name == "supplier_name" ||
-			r.Reason != ReasonNone || r.Value == nil {
+		if !slices.Contains(valueCheckFields, r.Name) || r.Reason != ReasonNone || r.Value == nil {
 			continue
 		}
 		req.Questions[r.Name] = ValueCheckQuestion(r.Name, *r.Value)

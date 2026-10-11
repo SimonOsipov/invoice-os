@@ -7,9 +7,11 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 )
 
-func TestHeaderFields_AreTheTenInOrder(t *testing.T) {
+func TestHeaderFields_AreTheNineteenInOrder(t *testing.T) {
 	want := []string{"invoice_number", "issue_date", "supplier_tin", "supplier_name",
-		"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total"}
+		"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
+		"due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}
 	if !slices.Equal(extraction.HeaderFields, want) {
 		t.Errorf("HeaderFields = %v, want %v", extraction.HeaderFields, want)
 	}

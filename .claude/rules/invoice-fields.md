@@ -46,7 +46,7 @@ paths:
 - Add a header field to the path map in `internal/importer/rulebreaks.go` when a rule targets it and the field is not locked.
 - Add the field to `invoiceEditFor` in `cmd/submission/main.go`.
 - Add a spec for an extracted header field to `tier1Specs` in `internal/extraction/tier1.go`. Give it a label id from `anchorLexicon` in `internal/extraction/anchor.go`.
-- Without a spec, the Tier-1 rules and the learning path skip the field.
+- Without a spec, the Tier-1 rules and the learning path skip the field. An AI-only spec (label id `""`) gets a shape for `checkAI` and no rule, learned or Tier-1.
 - Add the field to `lockedFields` in `internal/extraction/handlers_correction.go` only when a correction needs the extractor's doubt flag.
 - Add the field to `doubtfulFields` in `internal/extraction/reconcile.go` only when the reconcile pass must present its adjacent generic reads as doubtful.
 - Add the field to the mock readings in `internal/extraction/mock.go`.
@@ -73,7 +73,7 @@ paths:
 - Import pins: `TestImportKeys_AreTheThirtySixImportFieldsInOrder` and `TestCanonicalFields_AreTheImportKeys`. The vitest pin is `CANON is the import fields, invoice_number alone required` in `frontend/app/src/lib/invoiceFields.test.ts`.
 - The import set is 36 keys. `ImportKeys()` lists the `Lead` fields (the original 11) first, then the rest in list order; the generated `IMPORT_KEYS` carries that order. The 10 `supplier_*` fields stay off the import path: the importer reads the supplier from the entity.
 - The AI schema requires every import key. Mirror a new key in `IMPORT_KEYS` in `e2e/importFixtures.ts`. The three steered answers spread `nullImportKeys()`.
-- Header extract pins: `TestExtractHeaderKeys_AreTheTenInOrder` and `TestHeaderFields_AreTheTenInOrder`. The vitest pin is `HEADER_FIELDS is the ten extraction header fields in order`.
+- Header extract pins: `TestExtractHeaderKeys_AreTheNineteenInOrder` and `TestHeaderFields_AreTheNineteenInOrder`. The vitest pin is `HEADER_FIELDS is the nineteen extraction header fields in order`.
 - Line extract pins: `TestExtractLineKeys_AreTheFiveInOrder` and `TestLineRoles_AreTheFiveRoleConstantsInEmitOrder`.
 - Edit pin: `EDIT_FIELD_KEYS is the nine editable header fields in order` in `frontend/app/src/lib/invoiceFields.test.ts`.
 - Form pin: `Draft is the five form keys plus items` in `frontend/app/src/lib/invoiceFields.test.ts`.

@@ -378,3 +378,37 @@ func TestTier1_TheNairaSweepReusesTheShapePattern(t *testing.T) {
 		t.Fatalf("Tier1Rules carries no t1.currency.sweep rule; the label comparison above ran over nothing")
 	}
 }
+
+func TestTier1Shape_EveryHeaderFieldHasAShape(t *testing.T) {
+	for _, f := range HeaderFields {
+		if _, ok := tier1Shape(f); !ok {
+			t.Errorf("tier1Shape(%q) has no shape; checkAI would refuse every answer for it", f)
+		}
+	}
+	for field, want := range map[string]Shape{"buyer_email": ShapeEmail, "buyer_telephone": ShapePhone, "due_date": ShapeDate} {
+		if got, _ := tier1Shape(field); got != want {
+			t.Errorf("tier1Shape(%q) = %q, want %q", field, got, want)
+		}
+	}
+}
+
+func TestTier1_AIOnlySpecsBuildNoRule(t *testing.T) {
+	if len(Tier1Rules) != 35 {
+		t.Fatalf("Tier1Rules holds %d rule(s), want 35", len(Tier1Rules))
+	}
+	var aiOnly []string
+	for _, s := range tier1Specs {
+		if s.labelID == "" {
+			aiOnly = append(aiOnly, s.field)
+		}
+	}
+	if want := []string{"due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}; !slices.Equal(aiOnly, want) {
+		t.Fatalf("label-less tier1Specs = %v, want %v", aiOnly, want)
+	}
+	for _, r := range Tier1Rules {
+		if slices.Contains(aiOnly, r.Field) {
+			t.Errorf("rule %q names the AI-only field %q", r.Key, r.Field)
+		}
+	}
+}

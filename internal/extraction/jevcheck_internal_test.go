@@ -111,6 +111,30 @@ func TestValueCheck_AsksEveryDecidedHeaderFieldButTheSupplierPair(t *testing.T) 
 	}
 }
 
+func TestValueCheckRequest_AsksOnlyTheMeasuredFields(t *testing.T) {
+	var measured []string
+	for _, f := range HeaderFields[:10] {
+		if f != "supplier_tin" && f != "supplier_name" {
+			measured = append(measured, f)
+		}
+	}
+	if !slices.Equal(valueCheckFields, measured) {
+		t.Errorf("valueCheckFields = %v, want the first ten HeaderFields minus the supplier pair %v", valueCheckFields, measured)
+	}
+
+	results := []FieldResult{vcDecided("buyer_tin"), vcDecided("due_date"), vcDecided("buyer_email")}
+	results[1].Value, results[2].Value = mgStr("2026-08-13"), mgStr("ap@honeywell.example")
+
+	req, asked := valueCheckRequest(vcPages(), results)
+
+	if got := vcIDs(req); !slices.Equal(got, []string{"buyer_tin"}) {
+		t.Errorf("question ids = %v, want only [buyer_tin]", got)
+	}
+	if !slices.Equal(asked, []int{0}) {
+		t.Errorf("asked indexes = %v, want [0]", asked)
+	}
+}
+
 func TestValueCheck_NeverAsksAFlaggedOrEmptyField(t *testing.T) {
 	ambiguous := vcDecided("issue_date")
 	ambiguous.Reason = ReasonAmbiguous

@@ -1313,3 +1313,49 @@ func TestLearnBoxlessRule_ACurrencyRuleIsLearnableFromANonCurrencyLabel(t *testi
 		t.Errorf("control: LearnBoxlessRule(currency, NGN, %v) ok = true, body = %s, want false: two naira glyphs", twoGlyphs, lr.Body)
 	}
 }
+
+// --- ENGI-08-02: an AI-only field teaches no rule (D7) ------------------------------------
+
+func TestLearnRule_RefusesAnAIOnlyField(t *testing.T) {
+	anchor := rvAnchor("a", "Label", 0.10, 0.10, 0.30, 0.13)
+	region := extraction.Region{Page: 1, X0: 0.10, Y0: 0.10, X1: 0.30, Y1: 0.13}
+
+	for _, field := range []string{"due_date", "buyer_email"} {
+		lr, ok := extraction.LearnRule(field, region, []extraction.AnchorObservation{anchor})
+		if ok || !reflect.DeepEqual(lr, extraction.LearnedRule{}) {
+			t.Errorf("LearnRule(%s) = %+v ok=%v, want the zero LearnedRule and false", field, lr, ok)
+		}
+	}
+	if _, ok := extraction.LearnRule("buyer_name", region, []extraction.AnchorObservation{anchor}); !ok {
+		t.Error("control: LearnRule(buyer_name) ok = false, want true on the same box and anchor")
+	}
+}
+
+func TestLearnBoxlessRule_RefusesAnAIOnlyField(t *testing.T) {
+	tokens := []string{"Tel: +234 801 234 5678"}
+	if lr, ok := extraction.LearnBoxlessRule("buyer_telephone", "+234 801 234 5678", tokens); ok {
+		t.Errorf("LearnBoxlessRule(buyer_telephone) ok = true, body = %s, want false", lr.Body)
+	}
+	// A lexicon label before the value: only the AI-only gate stops this one deriving.
+	if lr, ok := extraction.LearnBoxlessRule("buyer_city", "Lagos Island", []string{"Bill To: Lagos Island"}); ok {
+		t.Errorf("LearnBoxlessRule(buyer_city) ok = true, body = %s, want false", lr.Body)
+	}
+	if _, ok := extraction.LearnBoxlessRule("buyer_name", "Lagos Island", []string{"Bill To: Lagos Island"}); !ok {
+		t.Error("control: LearnBoxlessRule(buyer_name) ok = false, want true on the same token")
+	}
+	if _, ok := extraction.LearnBoxlessRule("invoice_number", "ASC-2026-0919", dxParagraphs); !ok {
+		t.Error("control: LearnBoxlessRule(invoice_number) ok = false, want true")
+	}
+}
+
+func TestLearnTypedRule_RefusesAnAIOnlyField(t *testing.T) {
+	page := extraction.TokenPage{Number: 1, Tokens: []extraction.Token{
+		tok("Due Date", 0.10, 0.10, 0.25, 0.13),
+		tok("2026-08-13", 0.30, 0.10, 0.45, 0.13),
+	}}
+	lr, v := extraction.LearnTypedRule("due_date", "2026-08-13", page, extraction.AnchorObservations([]extraction.TokenPage{page}))
+	if v != extraction.TypedNoToken {
+		t.Errorf("verdict = %d, want TypedNoToken", v)
+	}
+	ltZero(t, "due_date", lr)
+}

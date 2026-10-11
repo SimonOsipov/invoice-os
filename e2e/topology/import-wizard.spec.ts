@@ -3402,7 +3402,7 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
     expect(Array.isArray(f.rules), `${f.name}'s rules arrived as null, not []`).toBe(true)
   }
 
-  // The field SET itself, twenty-three names, from the wired extractor's reading of
+  // The field SET itself, thirty-two names, from the wired extractor's reading of
   // rich_invoice.pdf. Re-derive it from the rows `rfRun` returns in
   // internal/extraction/corpus_wired_db_test.go (no Go test pins the full name set). Only
   // DEPLOYED oracle that the rich fixture reaches the screen unchanged. Both sides are sorted
@@ -3435,6 +3435,16 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
     'supplier_tin',
     'total',
     'vat',
+    // The nine AI-only header fields: Reconcile emits a missing row for each.
+    'due_date',
+    'buyer_email',
+    'buyer_telephone',
+    'buyer_street',
+    'buyer_city',
+    'buyer_postal_zone',
+    'buyer_country',
+    'buyer_state',
+    'buyer_lga',
   ]
   expect(
     [...detail.fields.map((f) => f.name)].sort(),

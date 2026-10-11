@@ -1346,8 +1346,8 @@ func TestJevValue_DecidedFieldsMatchTheEngine(t *testing.T) {
 			t.Fatalf("%s: LineItems returned %d line(s), want 3 -- the fixture no longer discriminates", layout, len(lines))
 		}
 		rows := jvRows(t, layout)
-		if len(rows) != 22 {
-			t.Errorf("%s: jvRows returned %d row(s), want 22 -- Lines must be passed to Reconcile", layout, len(rows))
+		if len(rows) != 31 {
+			t.Errorf("%s: jvRows returned %d row(s), want 31 -- Lines must be passed to Reconcile", layout, len(rows))
 		}
 	})
 

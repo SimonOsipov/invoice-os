@@ -22,11 +22,11 @@ paths:
 - Render the policy list for a `/workflows/:id` that names nothing. Leave the address bar alone.
 - Push on navigation through `navigate`. Replace on a correction.
 - Write nothing in the `popstate` handler except the identity-clamp `replaceState`.
-- Stamp every `Workspace` history write with `{ e: active.entityId }`. `guard_everyWorkspaceHistoryWriteCarriesTheStamp` counts the writes.
+- Stamp every `Workspace` write of `active.entityId` with `{ e: active.entityId, m: mountKey }`. Stamp a known id with `{ e }` in `switchClient`, the backfill, the clamp and `adoptBatchClient`. `guard_everyWorkspaceHistoryWriteCarriesTheStamp` counts the writes.
 - Never stamp the raw `activeEntityId` atom. It stays null until `switchClient` writes it.
 - Stamp the `id` parameter in `switchClient`. The state read has not committed.
 - Clamp a `popstate` entry whose stamp differs from the active company. Re-derive its path through `carryView` at the top of the handler.
-- Treat an entry with no stamp as unknown. Never clamp it.
+- Resolve a null stamp that carries this mount's `m` to `bootEntityIdRef`, the company the mount resolved or adopted. Treat every other entry with no stamp as unknown. Never clamp it.
 - Never rely on RLS to hide another company's data inside one tenant. Entities of one firm share a tenant, so the clamp does that job.
 - Write the `auditPrefilter` atom and the `/audit?invoice=` param together. They are one fact.
 - Clear `auditPrefilter` and its param when `navigate` leaves `audit`. Keep `invoiceQuery` and `settingsTab` durable.

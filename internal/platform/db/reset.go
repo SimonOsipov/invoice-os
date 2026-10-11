@@ -324,7 +324,7 @@ func ResetEnabled(environment, flag string) bool {
 //	                          rules/rule_set_versions exclusion above.
 const resetTables = `TRUNCATE
 	invoices, line_items, invoice_status_history, business_entities, import_batches,
-	import_mappings,
+	import_mappings, customers,
 	submission_jobs, app_exchange, idempotency_keys, submission_rate_limits, audit_log,
 	documents, extraction_jobs, extraction_field_results, extraction_field_corrections,
 	extraction_rule_breaks, extraction_page_images, extraction_anchor_rules,

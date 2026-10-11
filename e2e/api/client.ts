@@ -1657,6 +1657,11 @@ export interface LineItemInput {
   unit_price: string | null
   line_total: string | null
   line_tax: string | null
+  tax_category: string | null
+  hsn_code: string | null
+  isic_code: string | null
+  sellers_item_identification: string | null
+  price_unit: string | null
 }
 
 export interface LineItemsRequest {

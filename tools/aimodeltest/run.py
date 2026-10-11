@@ -44,7 +44,7 @@ Return a JSON object with exactly these keys. Each value is a string, or null wh
 TEXT_INTRO = """The document text below was read by a PDF parser. Each line is one visual row on the page. y is the row's vertical position and x each text run's horizontal position, both from 0 to 1 measured from the top-left corner."""
 IMAGE_INTRO = "The document has no text layer. Its pages are attached as images."
 
-LINE_ROLES = ["description", "quantity", "unit_price", "line_total", "line_tax"]
+LINE_ROLES = ["description", "quantity", "unit_price", "line_total", "line_tax", "tax_category", "hsn_code", "isic_code", "sellers_item_identification", "price_unit"]
 
 LINE_RULES = """Return the invoice's printed line-item rows under the key line_items, in printed order, top to bottom. Return an empty list when the document prints no line-item rows at all.
 
@@ -57,7 +57,12 @@ Each object has exactly these keys. Each value is a string, or null when the row
 - quantity: the number of units, exactly as printed.
 - unit_price: the price of one unit, as digits with a decimal point and no currency symbol or thousands separators (1250.00).
 - line_total: the row's own amount, same number format.
-- line_tax: the tax amount charged on this row, same number format. A tax rate (7.5%) is not a tax amount; when the row prints only a rate, line_tax is null."""
+- line_tax: the tax amount charged on this row, same number format. A tax rate (7.5%) is not a tax amount; when the row prints only a rate, line_tax is null.
+- tax_category: the row's tax category, exactly as printed (Standard, Zero-rated, Exempt). A tax rate or amount is not a category; when the row prints only a rate, tax_category is null.
+- hsn_code: the row's HS goods code, exactly as printed.
+- isic_code: the row's ISIC service code, exactly as printed.
+- sellers_item_identification: the seller's own item code or SKU for the row, exactly as printed. Not an HS or ISIC code.
+- price_unit: the unit the quantity is counted in (kg, pcs, hours), exactly as printed. Not a price."""
 
 LINE_SYSTEM = "You extract the line items of one invoice for a Nigerian e-invoicing system.\n\n" + LINE_RULES
 COMBINED_SYSTEM = SYSTEM + "\n\nYou also extract the same invoice's line items.\n\n" + LINE_RULES

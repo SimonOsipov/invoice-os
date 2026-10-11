@@ -2378,7 +2378,7 @@ const fxAILinesMarkerPrefix = "AIFAKE-LINES-ANSWER-"
 // Docling clips a run at the page edge and returns the prefix, which decodes to a base64
 // error and quarantines the document -- TestFixtures_AILinesMarkerFitsThePageWidth.
 const (
-	fxAILinesMarkerPt = 2
+	fxAILinesMarkerPt = 1
 	fxAILinesMarkerX  = 20
 )
 
@@ -2432,9 +2432,13 @@ var fxAILinesAIOnlyLine = strings.Join(fxAILinesAIOnlyRow, " ")
 // except unit_price, and row 3 is fxAILinesAIOnlyRow.
 func fxAILinesAnswer() []map[string]any {
 	row := func(cells []string, unitPrice string) map[string]any {
-		return map[string]any{
+		m := map[string]any{
 			"description": cells[0], "quantity": cells[1], "unit_price": unitPrice, "line_total": cells[3], "line_tax": nil,
 		}
+		for _, role := range extraction.LineRoles[5:] { // the fake validates the full schema
+			m[role] = nil
+		}
+		return m
 	}
 	return []map[string]any{
 		row(fxAILinesRow1, fxAILinesRow1[2]),            // AGREEING
@@ -2485,6 +2489,8 @@ func fxDecodeAILinesMarker(t *testing.T, marker string) []extraction.AILine {
 		lines[i] = extraction.AILine{
 			Description: str(row, "description"), Quantity: str(row, "quantity"), UnitPrice: str(row, "unit_price"),
 			LineTotal: str(row, "line_total"), LineTax: str(row, "line_tax"),
+			TaxCategory: str(row, "tax_category"), HSNCode: str(row, "hsn_code"), ISICCode: str(row, "isic_code"),
+			SellersItem: str(row, "sellers_item_identification"), PriceUnit: str(row, "price_unit"),
 		}
 	}
 	return lines

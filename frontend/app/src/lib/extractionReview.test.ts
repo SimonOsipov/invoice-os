@@ -639,7 +639,18 @@ describe('getExtractionDetail', () => {
 describe('postLineItems', () => {
   it('postLineItems_postsTheWrappedBodyToTheGatewayPath', async () => {
     const lines: LineItemInput[] = [
-      { description: 'Widget', quantity: '2', unit_price: '10.00', line_total: '20.00', line_tax: null },
+      {
+        description: 'Widget',
+        quantity: '2',
+        unit_price: '10.00',
+        line_total: '20.00',
+        line_tax: null,
+        tax_category: null,
+        hsn_code: null,
+        isic_code: null,
+        sellers_item_identification: null,
+        price_unit: null,
+      },
     ]
     const response: LineItemsResponse = { id: 'line-set-1', invoice_id: 'inv-1', lines, created_at: '2026-09-02T00:00:00Z' }
     const authedFetch = vi.fn().mockResolvedValue(response)

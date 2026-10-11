@@ -469,7 +469,7 @@ func TestCharsIn_ASlidingRunReadsOnce(t *testing.T) {
 // row per committed fixture. pdfiumTokens' non-whitespace char count is unaffected by the mode
 // flip or by charsIn existing, so none of these rows may move.
 var pdcTextCharsGoldens = map[string]struct{ pages, withText, textChars int }{
-	"ai_lines_invoice.pdf":                  {1, 1, 656},
+	"ai_lines_invoice.pdf":                  {1, 1, 1080},
 	"ai_steered_invoice.pdf":                {1, 1, 717},
 	"ai_unavailable_invoice.pdf":            {1, 1, 105},
 	"advisory_dense.pdf":                    {1, 1, 1766},

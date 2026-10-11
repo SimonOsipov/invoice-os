@@ -11,6 +11,7 @@ package extraction
 import (
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -57,6 +58,13 @@ func aliRoleReadings(role, raw string) []string {
 			out[i] = aliTrimTrailingZeros(r)
 		}
 		return out
+	case LineRoleTaxCategory, LineRoleHSNCode, LineRoleISICCode, LineRoleSellersItemID, LineRolePriceUnit:
+		// Whitespace collapsed, case kept: two different codes never read as equal (ENGI-08 D8).
+		v := strings.Join(strings.Fields(raw), " ")
+		if v == "" || utf8.RuneCountInString(v) > 256 {
+			return nil
+		}
+		return []string{v}
 	}
 	return nil
 }
@@ -276,6 +284,16 @@ func (l AILine) Cell(role string) *string {
 		return l.LineTotal
 	case LineRoleLineTax:
 		return l.LineTax
+	case LineRoleTaxCategory:
+		return l.TaxCategory
+	case LineRoleHSNCode:
+		return l.HSNCode
+	case LineRoleISICCode:
+		return l.ISICCode
+	case LineRoleSellersItemID:
+		return l.SellersItem
+	case LineRolePriceUnit:
+		return l.PriceUnit
 	}
 	return nil
 }
@@ -297,6 +315,16 @@ func aliEngineDocLine(index int, cells map[string]FieldResult) DocLine {
 			line.LineTotal = &v
 		case LineRoleLineTax:
 			line.LineTax = &v
+		case LineRoleTaxCategory:
+			line.TaxCategory = &v
+		case LineRoleHSNCode:
+			line.HSNCode = &v
+		case LineRoleISICCode:
+			line.ISICCode = &v
+		case LineRoleSellersItemID:
+			line.SellersItem = &v
+		case LineRolePriceUnit:
+			line.PriceUnit = &v
 		}
 	}
 	return line
@@ -310,6 +338,11 @@ func aliAIDocLine(index int, l AILine) DocLine {
 		UnitPrice:   l.UnitPrice,
 		LineTotal:   l.LineTotal,
 		LineTax:     l.LineTax,
+		TaxCategory: l.TaxCategory,
+		HSNCode:     l.HSNCode,
+		ISICCode:    l.ISICCode,
+		SellersItem: l.SellersItem,
+		PriceUnit:   l.PriceUnit,
 	}
 }
 
@@ -363,6 +396,8 @@ func aliWriteValue(role, raw string) (string, bool) {
 			return "", false
 		}
 		return readings[0], true
+	case LineRoleTaxCategory, LineRoleHSNCode, LineRoleISICCode, LineRoleSellersItemID, LineRolePriceUnit:
+		return strings.TrimSpace(raw), true
 	}
 	return "", false
 }

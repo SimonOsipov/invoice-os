@@ -69,6 +69,10 @@ func intSliceEqual(a, b []int) bool {
 
 // aliSweepCells classifies every cell of every pair. Fatal on an empty pair list: a right/wrong
 // count over zero pairs would be vacuous.
+// aliMeasuredRoles are the five roles these fixtures fill; the five AI-only roles are null on
+// both sides here and would only add trivial right cells.
+var aliMeasuredRoles = LineRoles[:5]
+
 func aliSweepCells(t *testing.T, pairs []aliPair, answer, key []DocLine) (right, wrong, missing int) {
 	t.Helper()
 	if len(pairs) == 0 {
@@ -76,7 +80,7 @@ func aliSweepCells(t *testing.T, pairs []aliPair, answer, key []DocLine) (right,
 	}
 	for _, p := range pairs {
 		a, k := answer[p.Answer-1], key[p.Key-1]
-		for _, role := range LineRoles {
+		for _, role := range aliMeasuredRoles {
 			switch aliClassifyCell(role, a.Cell(role), k.Cell(role)) {
 			case aliRight:
 				right++
@@ -95,7 +99,7 @@ func aliSweepCells(t *testing.T, pairs []aliPair, answer, key []DocLine) (right,
 func aliCountValueAndNullCells(pairs []aliPair, key []DocLine) (value, null int) {
 	for _, p := range pairs {
 		k := key[p.Key-1]
-		for _, role := range LineRoles {
+		for _, role := range aliMeasuredRoles {
 			if aliKeyHasValue(k.Cell(role)) {
 				value++
 			} else {
@@ -261,8 +265,8 @@ func TestAliRoleReadings_ATitleOnlyDescriptionDiffersFromTheJoinedTruth(t *testi
 }
 
 func TestAliRoleReadings_ABlankRawHasNoReading(t *testing.T) {
-	if len(LineRoles) != 5 {
-		t.Fatalf("len(LineRoles) = %d, want 5", len(LineRoles))
+	if len(LineRoles) != 10 {
+		t.Fatalf("len(LineRoles) = %d, want 10", len(LineRoles))
 	}
 	for _, role := range LineRoles {
 		if got := aliRoleReadings(role, "  "); len(got) != 0 {

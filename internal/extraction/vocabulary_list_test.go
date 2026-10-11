@@ -17,13 +17,16 @@ func TestHeaderFields_AreTheNineteenInOrder(t *testing.T) {
 	}
 }
 
-func TestLineRoles_AreTheFiveRoleConstantsInEmitOrder(t *testing.T) {
+func TestLineRoles_AreTheTenRoleConstantsInEmitOrder(t *testing.T) {
 	consts := []string{extraction.LineRoleDescription, extraction.LineRoleQuantity,
-		extraction.LineRoleUnitPrice, extraction.LineRoleLineTotal, extraction.LineRoleLineTax}
+		extraction.LineRoleUnitPrice, extraction.LineRoleLineTotal, extraction.LineRoleLineTax,
+		extraction.LineRoleTaxCategory, extraction.LineRoleHSNCode, extraction.LineRoleISICCode,
+		extraction.LineRoleSellersItemID, extraction.LineRolePriceUnit}
 	if !slices.Equal(extraction.LineRoles, consts) {
 		t.Errorf("LineRoles = %v, want the LineRole* constants %v", extraction.LineRoles, consts)
 	}
-	literal := []string{"description", "quantity", "unit_price", "line_total", "line_tax"}
+	literal := []string{"description", "quantity", "unit_price", "line_total", "line_tax",
+		"tax_category", "hsn_code", "isic_code", "sellers_item_identification", "price_unit"}
 	if !slices.Equal(extraction.LineRoles, literal) {
 		t.Errorf("LineRoles = %v, want %v", extraction.LineRoles, literal)
 	}

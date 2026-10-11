@@ -73,8 +73,9 @@ func TestExtractHeaderKeys_AreTheNineteenInOrder(t *testing.T) {
 	}
 }
 
-func TestExtractLineKeys_AreTheFiveInOrder(t *testing.T) {
-	want := []string{"description", "quantity", "unit_price", "line_total", "line_tax"}
+func TestExtractLineKeys_AreTheTenInOrder(t *testing.T) {
+	want := []string{"description", "quantity", "unit_price", "line_total", "line_tax",
+		"tax_category", "hsn_code", "isic_code", "sellers_item_identification", "price_unit"}
 	if got := ExtractLineKeys(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ExtractLineKeys() = %v, want %v", got, want)
 	}

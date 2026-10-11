@@ -444,8 +444,8 @@ func TestRLS_LineItemsAppendsOneCorrectionRowAndEchoesTheStoredSet(t *testing.T)
 	body := `{"lines":[` +
 		`{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00"},` +
 		`{"description":"Gadget","quantity":"1","unit_price":"5.00","line_total":"5.00"}]}`
-	wantValue := `[{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00","line_tax":null},` +
-		`{"description":"Gadget","quantity":"1","unit_price":"5.00","line_total":"5.00","line_tax":null}]`
+	wantValue := `[{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00","line_tax":null,"tax_category":null,"hsn_code":null,"isic_code":null,"sellers_item_identification":null,"price_unit":null},` +
+		`{"description":"Gadget","quantity":"1","unit_price":"5.00","line_total":"5.00","line_tax":null,"tax_category":null,"hsn_code":null,"isic_code":null,"sellers_item_identification":null,"price_unit":null}]`
 
 	w := lixDBServe(t, reqCtx, jobID, body, lixApplier(lixApplyOpts{write: true}), cxAuditor(nil))
 	if w.Code != http.StatusCreated {

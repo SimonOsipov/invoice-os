@@ -74,7 +74,7 @@ paths:
 - The import set is 36 keys. `ImportKeys()` lists the `Lead` fields (the original 11) first, then the rest in list order; the generated `IMPORT_KEYS` carries that order. The 10 `supplier_*` fields stay off the import path: the importer reads the supplier from the entity.
 - The AI schema requires every import key. Mirror a new key in `IMPORT_KEYS` in `e2e/importFixtures.ts`. The three steered answers spread `nullImportKeys()`.
 - Header extract pins: `TestExtractHeaderKeys_AreTheNineteenInOrder` and `TestHeaderFields_AreTheNineteenInOrder`. The vitest pin is `HEADER_FIELDS is the nineteen extraction header fields in order`.
-- Line extract pins: `TestExtractLineKeys_AreTheFiveInOrder` and `TestLineRoles_AreTheFiveRoleConstantsInEmitOrder`.
+- Line extract pins: `TestExtractLineKeys_AreTheTenInOrder` and `TestLineRoles_AreTheTenRoleConstantsInEmitOrder`.
 - Edit pin: `EDIT_FIELD_KEYS is the nine editable header fields in order` in `frontend/app/src/lib/invoiceFields.test.ts`.
 - Form pin: `Draft is the five form keys plus items` in `frontend/app/src/lib/invoiceFields.test.ts`.
 - The Go pins live in `internal/invoicefields/fields_test.go`, `internal/importer/fields_test.go` and `internal/extraction/vocabulary_list_test.go`.

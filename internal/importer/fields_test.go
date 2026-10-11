@@ -50,7 +50,8 @@ func TestMapperLists_AreTheExtractionProjections(t *testing.T) {
 	if !slices.Equal(mapperFieldNames, wantFields) {
 		t.Errorf("mapperFieldNames = %v, want %v", mapperFieldNames, wantFields)
 	}
-	wantRoles := []string{"description", "quantity", "unit_price", "line_total", "line_tax"}
+	wantRoles := []string{"description", "quantity", "unit_price", "line_total", "line_tax",
+		"tax_category", "hsn_code", "isic_code", "sellers_item_identification", "price_unit"}
 	if !slices.Equal(mapperLineRoles, wantRoles) {
 		t.Errorf("mapperLineRoles = %v, want %v", mapperLineRoles, wantRoles)
 	}

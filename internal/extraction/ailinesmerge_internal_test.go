@@ -423,3 +423,47 @@ func TestMergeAILines_AnInventedRowFullyRefusedByThePageCheckConsumesNoIndex(t *
 		t.Errorf("index 2 description = %v, want Gadget renumbered past the refused ghost row", gadget.Value)
 	}
 }
+
+func TestAliMergeCell_ANewRolePrintedOnTheRowIsWrittenTrimmed(t *testing.T) {
+	pages := onePage(1, tok("HS 8471.30", 1, 0.10, 0.10, 0.50, 0.12))
+
+	got := aliMergeCell(LineRoleHSNCode, FieldResult{}, false, aliStr(" 8471.30 "), pages)
+
+	if got == nil || got.Value == nil {
+		t.Fatalf("aliMergeCell = %+v, want a written cell", got)
+	}
+	if *got.Value != "8471.30" || got.Reason != ReasonNone {
+		t.Errorf("cell = %q reason %q, want \"8471.30\" with no reason", *got.Value, got.Reason)
+	}
+}
+
+func TestAliMergeCell_ANewRoleNotOnThePageIsRefused(t *testing.T) {
+	pages := onePage(1, tok("Laptop 1 10.00", 1, 0.10, 0.10, 0.50, 0.12))
+
+	if got := aliMergeCell(LineRoleTaxCategory, FieldResult{}, false, aliStr("Standard"), pages); got != nil {
+		t.Errorf("aliMergeCell = %+v, want nil: no token prints Standard", got)
+	}
+}
+
+// Pins today's page-wide check (ENGI-08 D33): a category printed on row 1 backs row 2.
+func TestAliMergeCell_ANewRolePrintedOnAnotherRowIsAccepted(t *testing.T) {
+	pages := onePage(1,
+		tok("Laptop 1 10.00 Standard", 1, 0.10, 0.10, 0.80, 0.12),
+		tok("Consulting 2 20.00", 1, 0.10, 0.20, 0.80, 0.22),
+	)
+
+	got := aliMergeCell(LineRoleTaxCategory, FieldResult{}, false, aliStr("Standard"), pages)
+
+	if got == nil || got.Value == nil || *got.Value != "Standard" {
+		t.Errorf("aliMergeCell = %+v, want Standard written from the page-wide match", got)
+	}
+}
+
+func TestAliRoleReadings_NewRolesCompareCaseSensitively(t *testing.T) {
+	if hasCommonReading(aliRoleReadings(LineRolePriceUnit, "EA"), aliRoleReadings(LineRolePriceUnit, "ea")) {
+		t.Error("price_unit EA and ea share a reading, want none (case-sensitive)")
+	}
+	if !hasCommonReading(aliRoleReadings(LineRoleTaxCategory, "Zero  rated"), aliRoleReadings(LineRoleTaxCategory, "Zero rated")) {
+		t.Error("tax_category \"Zero  rated\" and \"Zero rated\" share no reading, want one (whitespace collapsed)")
+	}
+}

@@ -589,6 +589,7 @@ func TestValidate_SomeItemsWithoutStampIsErrUpstream(t *testing.T) {
 		"missing":      `{"ref":"r2","violations":[]}`,
 		"zero version": fmt.Sprintf(`{"ref":"r2","violations":[],"rule_set_version":%d,"rule_set_version_id":"id-b"}`, 0),
 		"empty id":     fmt.Sprintf(`{"ref":"r2","violations":[],"rule_set_version":%d,"rule_set_version_id":""}`, cannedRuleSetVersion),
+		"negative":     `{"ref":"r2","violations":[],"rule_set_version":-1,"rule_set_version_id":"id-b"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := stampServer(t, fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"id-top","results":[
@@ -598,6 +599,19 @@ func TestValidate_SomeItemsWithoutStampIsErrUpstream(t *testing.T) {
 				t.Errorf("err = %v, want ErrUpstream -- a half-stamped response must never be a verdict", err)
 			}
 		})
+	}
+}
+
+func TestValidate_FirstItemUnstampedIsErrUpstream(t *testing.T) {
+	v := stampServer(t, fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"id-top","results":[
+		{"ref":"r1","violations":[]},
+		{"ref":"r2","violations":[],"rule_set_version":%d,"rule_set_version_id":"id-b"}]}`, cannedRuleSetVersion, cannedRuleSetVersion))
+	res, err := v.Validate(context.Background(), twoRefs)
+	if !errors.Is(err, ErrUpstream) {
+		t.Errorf("err = %v, want ErrUpstream", err)
+	}
+	if len(res.StampByRef) != 0 {
+		t.Errorf("StampByRef = %+v, want none", res.StampByRef)
 	}
 }
 

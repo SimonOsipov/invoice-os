@@ -73,7 +73,7 @@ var nrsLineWireKeys = [...]string{
 }
 
 // UnmarshalJSON records whether the entry names any NRS key: a pointer cannot tell an
-// explicit null from an absent key.
+// explicit null from an absent key. Names match case-insensitively, as encoding/json does.
 func (l *lineItemReq) UnmarshalJSON(b []byte) error {
 	type plain lineItemReq
 	if err := json.Unmarshal(b, (*plain)(l)); err != nil {
@@ -84,9 +84,11 @@ func (l *lineItemReq) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	l.NRSSent = false
-	for _, k := range nrsLineWireKeys {
-		if _, ok := keys[k]; ok {
-			l.NRSSent = true
+	for name := range keys {
+		for _, k := range nrsLineWireKeys {
+			if strings.EqualFold(name, k) {
+				l.NRSSent = true
+			}
 		}
 	}
 	return nil

@@ -643,6 +643,7 @@ func TestLineItemReq_RecordsNRSKeyPresence(t *testing.T) {
 		{"null NRS key", `{"tax_percent":null}`, true},
 		{"value NRS key", `{"hsn_code":"1001"}`, true},
 		{"legacy keys only", `{"description":"d","quantity":"1","unit_price":"1","line_total":"1","line_tax":"0"}`, false},
+		{"mixed-case null NRS key", `{"HSN_Code":null}`, true},
 		{"id with NRS keys", `{"id":"` + uuid.NewString() + `","price_unit":null}`, true},
 	} {
 		var l lineItemReq

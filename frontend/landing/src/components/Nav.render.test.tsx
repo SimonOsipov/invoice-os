@@ -185,6 +185,28 @@ describe('the header action group', () => {
     expect((attrs.class ?? '').split(/\s+/), 'class list').toContain('a-actions')
     expect(attrs, 'no inline style').not.toHaveProperty('style')
   })
+
+  it('the header logo link holds the .ds-logo-word span that the narrow-width rule hides', () => {
+    const html = render()
+    const link = /<a\b[^>]*aria-label="ASComply Africa"[^>]*>([\s\S]*?)<\/a>/.exec(html)
+    expect(link, 'expected the logo link').not.toBeNull()
+    expect(link![1]).toContain('class="ds-logo-word"')
+  })
+})
+
+describe('the header bar', () => {
+  it('the header bar carries .a-bar and no inline style', () => {
+    const html = render()
+    const at = html.indexOf('aria-label="ASComply Africa"')
+    expect(at, 'expected the logo link').toBeGreaterThan(-1)
+    const parent = [...html.slice(0, at).matchAll(/<div\b[^>]*>/g)].at(-1)?.[0]
+    expect(parent, 'expected an enclosing <div>').toBeDefined()
+    const attrs = attrsOf(parent!)
+    const cls = (attrs.class ?? '').split(/\s+/)
+    expect(cls, 'class list').toContain('container')
+    expect(cls, 'class list').toContain('a-bar')
+    expect(attrs, 'no inline style').not.toHaveProperty('style')
+  })
 })
 
 describe('the Library link', () => {

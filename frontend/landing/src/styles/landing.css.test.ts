@@ -491,7 +491,7 @@ function actionsFailures(css: string): string[] {
   if (baseDecl('display') !== 'flex') out.push(`base display: ${baseDecl('display')} != flex`)
   if (baseDecl('align-items') !== 'center') out.push(`base align-items: ${baseDecl('align-items')} != center`)
   if (baseDecl('gap') !== '24px') out.push(`base gap: ${baseDecl('gap')} != 24px`)
-  const narrowed = rules.filter((r) => r.at.length > 0 && declarations(r.body).some((d) => d.prop === 'gap' || d.prop === 'column-gap'))
+  const narrowed = rules.filter((r) => r.at.length > 0 && declarations(r.body).some((d) => d.prop === 'gap'))
   if (narrowed.length !== 1) out.push(`${narrowed.length} gap rules under an at-rule, want 1`)
   for (const r of narrowed) {
     const q = r.at.join(' ')
@@ -511,6 +511,86 @@ function actionsFailures(css: string): string[] {
 describe('the header action group gap', () => {
   it('.a-actions narrows its gap only below 390px', () => {
     expect(actionsFailures(LANDING_CSS)).toEqual([])
+  })
+})
+
+const maxWidthQuery = (at: string[]): number | undefined => {
+  const m = at.length === 1 ? /^@media \(\s*max-width\s*:\s*([\d.]+)px\s*\)$/i.exec(at[0]) : null
+  return m ? Number(m[1]) : undefined
+}
+
+/** The header bar contract (row layout, gap, wordmark, hit area): the failures, empty when it holds. */
+function barFailures(css: string): string[] {
+  const all = parseRules(css)
+  const out: string[] = []
+  const bar = all.filter((r) => selectorParts(r).includes('.a-bar'))
+  const base = bar.filter((r) => r.at.length === 0)
+  const want: [string, string][] = [
+    ['height', '100%'],
+    ['display', 'flex'],
+    ['align-items', 'center'],
+    ['justify-content', 'space-between'],
+    ['gap', '24px'],
+  ]
+  for (const [prop, v] of want) {
+    const got = declared(base, '.a-bar', prop, () => true)
+    if (got !== v) out.push(`base ${prop}: ${got} != ${v}`)
+  }
+  const gaps = bar.filter((r) => r.at.length > 0 && declarations(r.body).some((d) => d.prop === 'gap'))
+  if (gaps.length !== 1) out.push(`${gaps.length} .a-bar gap rules under an at-rule, want 1`)
+  for (const r of gaps) {
+    const q = r.at.join(' ')
+    const gap = declared([r], '.a-bar', 'gap', () => true)
+    if (maxWidthQuery(r.at) !== 374.98) out.push(`gap rule under ${q}`)
+    if (gap !== '8px') out.push(`gap rule under ${q} sets ${gap}`)
+  }
+  const wordAll = all.filter((r) => r.selector.includes('.ds-logo-word'))
+  if (wordAll.length !== 1) out.push(`${wordAll.length} .ds-logo-word rules in landing.css, want 1`)
+  for (const r of wordAll.filter((x) => x.at.length > 0)) {
+    const n = maxWidthQuery(r.at)
+    if (r.selector.trim() !== '.a-bar .ds-logo-word') out.push(`wordmark selector ${r.selector.trim()}`)
+    if (n !== 353.98) out.push(`wordmark rule under ${r.at.join(' ')}`)
+    if (declared([r], r.selector.trim(), 'display', () => true) !== 'none') out.push('wordmark rule does not set display: none')
+  }
+  if (wordAll.some((r) => r.at.length === 0)) out.push('wordmark rule outside any media')
+  const hit = all.filter((r) => selectorParts(r).some((s) => s.includes('.a-actions .ds-btn')))
+  if (hit.length !== 2) out.push(`${hit.length} hit-area rules, want 2`)
+  for (const r of hit) {
+    if (maxWidthQuery(r.at) !== 374.98) out.push(`hit-area rule ${r.selector.trim()} under ${r.at.join(' ') || 'no at-rule'}`)
+    const sel = r.selector.trim()
+    const d = (prop: string) => declared([r], sel, prop, () => true)
+    const props: [string, string | undefined][] =
+      sel === '.a-actions .ds-btn'
+        ? [['position', 'relative']]
+        : sel === '.a-actions .ds-btn::after'
+          ? [['content', "''"], ['position', 'absolute'], ['left', '0'], ['right', '0'], ['top', 'calc(50% - 22px)'], ['height', '44px']]
+          : [['selector', undefined]]
+    for (const [prop, v] of props) if (d(prop) !== v) out.push(`hit-area ${sel} ${prop}: ${d(prop)} != ${v}`)
+  }
+  return out
+}
+
+describe('the header bar below 375px', () => {
+  it('.a-bar holds the header row layout at every width', () => {
+    const all = parseRules(LANDING_CSS)
+    expect(all.filter((r) => selectorParts(r).includes('.a-bar') && r.at.length > 0).length, 'control: the narrowing rule parsed').toBeGreaterThan(0)
+    expect(all.filter((r) => r.selector.includes('.ds-logo-word')).length, 'control: the wordmark rule parsed').toBe(1)
+    expect(all.filter((r) => selectorParts(r).some((s) => s.includes('.a-actions .ds-btn'))).length, 'control: the hit-area rules parsed').toBe(2)
+    expect(barFailures(LANDING_CSS)).toEqual([])
+  })
+
+  it('the header wordmark hides only below 354px', () => {
+    const words = parseRules(LANDING_CSS).filter((r) => r.selector.includes('.ds-logo-word'))
+    expect(words.length, 'control: the wordmark rule parsed').toBe(1)
+    expect(words[0].selector.trim()).toBe('.a-bar .ds-logo-word')
+    expect(maxWidthQuery(words[0].at)).toBe(353.98)
+    expect(declared(words, '.a-bar .ds-logo-word', 'display', () => true)).toBe('none')
+  })
+
+  it('the Book a demo hit area exists only below 375px', () => {
+    const hit = parseRules(LANDING_CSS).filter((r) => selectorParts(r).some((s) => s.includes('.a-actions .ds-btn')))
+    expect(hit.map((r) => r.selector.trim())).toEqual(['.a-actions .ds-btn', '.a-actions .ds-btn::after'])
+    expect(hit.map((r) => maxWidthQuery(r.at))).toEqual([374.98, 374.98])
   })
 })
 

@@ -111,26 +111,27 @@ const (
 	ScopeUnattributed CompanyScope = "unattributed"
 )
 
-// firmWideEvents are the sixteen genuinely firm-wide event names — the whole of the
-// Policies (4), Roles (4), Memberships (6) and Validation-rule (2) domains (§2 rule 2).
+// firmWideEvents are the seventeen genuinely firm-wide event names — the whole of the
+// Policies (4), Roles (4), Memberships (6), Validation-rule (2) and Buyers (1) domains (§2 rule 2).
 // Hand-maintained: nothing derives this set from the SQL resolver.
 var firmWideEvents = map[string]struct{}{
-	"approval_policy.created":   {},
-	"approval_policy.updated":   {},
-	"approval_policy.published": {},
-	"approval_policy.deleted":   {},
-	"workflow_role.created":     {},
-	"workflow_role.updated":     {},
-	"workflow_role.deleted":     {},
-	"workflow_role.staffed":     {},
-	"membership.suspended":      {},
-	"membership.reactivated":    {},
-	"workspace.provisioned":     {},
-	"invitation.sent":           {},
-	"invitation.resent":         {},
-	"invitation.accepted":       {},
-	"validation.rule.enabled":   {},
-	"validation.rule.disabled":  {},
+	"approval_policy.created":    {},
+	"approval_policy.updated":    {},
+	"approval_policy.published":  {},
+	"approval_policy.deleted":    {},
+	"workflow_role.created":      {},
+	"workflow_role.updated":      {},
+	"workflow_role.deleted":      {},
+	"workflow_role.staffed":      {},
+	"membership.suspended":       {},
+	"membership.reactivated":     {},
+	"workspace.provisioned":      {},
+	"invitation.sent":            {},
+	"invitation.resent":          {},
+	"invitation.accepted":        {},
+	"validation.rule.enabled":    {},
+	"validation.rule.disabled":   {},
+	"customers.customer.updated": {},
 }
 
 // ScopeOf classifies one event (§2): entity_id set → company; entity_id nil and event in

@@ -3,6 +3,7 @@ package customer_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -572,8 +573,13 @@ func TestStoreUpdate_AuditFailureRollsBackTheCorrection(t *testing.T) {
 	// audit_log's actor length CHECK after the UPDATE has run.
 	badCtx := auth.WithIdentity(context.Background(),
 		auth.Identity{Subject: strings.Repeat("a", 256), Role: "authenticated", TenantID: tenantA})
-	if _, err := store.Update(badCtx, id, customer.UpdateInput{Email: ptr("new@x.ng")}); err == nil {
+	_, err := store.Update(badCtx, id, customer.UpdateInput{Email: ptr("new@x.ng")})
+	if err == nil {
 		t.Fatal("Update with an audit-failing actor succeeded, want an error")
+	}
+	// audit_log's actor CHECK is also SQLSTATE 23514; it is an operational 500, not a 400.
+	if errors.Is(err, customer.ErrValidation) {
+		t.Errorf("audit-write failure = %v, want an error that is not ErrValidation", err)
 	}
 	r := readRow(t, super, id)
 	if strVal(r.Email) != "old@x.ng" || !reflect.DeepEqual(r.Edited, []string{"state"}) {

@@ -7,17 +7,27 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 var (
 	ErrValidation = errors.New("customer: validation")
 	ErrNotFound   = errors.New("customer: not found")
+)
 
-	errNotImplemented = errors.New("customer: not implemented")
+// validationError is an ErrValidation whose text is the 400 message.
+type validationError string
+
+func (e validationError) Error() string        { return string(e) }
+func (e validationError) Is(target error) bool { return target == ErrValidation }
+
+const (
+	errNoFields  = validationError("no fields to update")
+	errBuyerType = validationError("buyer_type must be B2B, B2G or B2C")
 )
 
 // Customer is a customers row. edited_fields is not on the wire.
@@ -60,42 +70,144 @@ type UpdateInput struct {
 	LGA           *string
 }
 
-// Store reads and corrects customers as the invoice_app role.
-type Store struct {
-	pool *pgxpool.Pool
+type listPagination struct {
+	Limit  int `json:"limit"`
+	Offset int `json:"offset"`
+	Total  int `json:"total"`
 }
 
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+type listResponse struct {
+	Customers  []Customer     `json:"customers"`
+	Pagination listPagination `json:"pagination"`
 }
 
-func (s *Store) List(ctx context.Context, f ListFilter) ([]Customer, int, error) {
-	return nil, 0, errNotImplemented
-}
-
-func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Customer, error) {
-	return Customer{}, errNotImplemented
-}
-
-// LookupByTIN runs in the caller's tenant tx; nil, nil when no record matches.
-func LookupByTIN(ctx context.Context, tx pgx.Tx, tin string) (*Customer, error) {
-	return nil, errNotImplemented
-}
-
+// ListHandler serves GET /v1/customers. A limit over 200 clamps; limit < 1 and offset < 0 are 400.
 func ListHandler(list func(ctx context.Context, f ListFilter) ([]Customer, int, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, errNotImplemented.Error())
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		query := r.URL.Query()
+
+		limit := 50
+		if raw := query.Get("limit"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "limit must be an integer")
+				return
+			}
+			limit = n
+		}
+		if limit > 200 {
+			limit = 200
+		} else if limit < 1 {
+			writeError(w, http.StatusBadRequest, "limit must be >= 1")
+			return
+		}
+
+		offset := 0
+		if raw := query.Get("offset"); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "offset must be an integer")
+				return
+			}
+			offset = n
+		}
+		if offset < 0 {
+			writeError(w, http.StatusBadRequest, "offset must be >= 0")
+			return
+		}
+
+		filter := ListFilter{TIN: query.Get("tin"), Limit: limit, Offset: offset}
+		items, total, err := list(r.Context(), filter)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "customer: list customers", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, listResponse{
+			Customers:  items,
+			Pagination: listPagination{Limit: filter.Limit, Offset: filter.Offset, Total: total},
+		})
 	}
 }
 
+type updateRequest struct {
+	Name          *string `json:"name"`
+	ContactPerson *string `json:"contact_person"`
+	BuyerType     *string `json:"buyer_type"`
+	Email         *string `json:"email"`
+	Telephone     *string `json:"telephone"`
+	Street        *string `json:"street"`
+	City          *string `json:"city"`
+	PostalZone    *string `json:"postal_zone"`
+	Country       *string `json:"country"`
+	State         *string `json:"state"`
+	LGA           *string `json:"lga"`
+}
+
+// UpdateHandler serves PATCH /v1/customers/{id}. Unknown keys, tin included, are ignored.
 func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (Customer, error), log *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, errNotImplemented.Error())
+	if log == nil {
+		log = slog.Default()
 	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req updateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		in := UpdateInput(req)
+		if in == (UpdateInput{}) {
+			writeError(w, http.StatusBadRequest, errNoFields.Error())
+			return
+		}
+		c, err := update(r.Context(), r.PathValue("id"), in)
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "customer: update customer", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+	}
+}
+
+func statusForErr(err error) (status int, msg string) {
+	switch {
+	case errors.Is(err, db.ErrNoTenant):
+		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
+	case errors.Is(err, ErrValidation):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, ErrNotFound):
+		return http.StatusNotFound, "not found"
+	default:
+		return http.StatusInternalServerError, "internal server error"
+	}
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	writeJSON(w, status, map[string]string{"error": msg})
 }

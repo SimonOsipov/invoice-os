@@ -177,6 +177,8 @@ func (e taxMathEval) evalLines(p Payload, r Rule) ([]Violation, error) {
 		return nil, fmt.Errorf("validation: tax_math rule %q has empty rates", r.Key)
 	case params.Rates != nil && (params.RateBy == nil || *params.RateBy == ""):
 		return nil, fmt.Errorf("validation: tax_math rule %q rates needs rate_by", r.Key)
+	case params.Rates == nil && params.RateBy != nil:
+		return nil, fmt.Errorf("validation: tax_math rule %q rate_by needs rates", r.Key)
 	case params.Items == nil:
 		return nil, fmt.Errorf("validation: tax_math rule %q has rates or rate_by without items", r.Key)
 	case *params.Items == "":

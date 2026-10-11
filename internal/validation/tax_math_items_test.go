@@ -196,18 +196,19 @@ func TestTaxMathItems_ConfigFaultsFailLoud(t *testing.T) {
 		tol   = `"tolerance":0.005`
 	)
 	faults := map[string]string{
-		"rate and rates":      `{` + items + `,` + ops + `,` + by + `,` + rates + `,"rate":0.075,` + tol + `}`,
-		"neither rate nor":    `{` + items + `,` + ops + `,` + by + `,` + tol + `}`,
-		"empty rates":         `{` + items + `,` + ops + `,` + by + `,"rates":{},` + tol + `}`,
-		"non-numeric rate":    `{` + items + `,` + ops + `,` + by + `,"rates":{"A":"x"},` + tol + `}`,
-		"rates without by":    `{` + items + `,` + ops + `,` + rates + `,` + tol + `}`,
-		"blank rate_by":       `{` + items + `,` + ops + `,"rate_by":"",` + rates + `,` + tol + `}`,
-		"rates without items": `{` + ops + `,` + by + `,` + rates + `,` + tol + `}`,
-		"rate_by w/o items":   `{` + ops + `,` + by + `,"rate":0.075,` + tol + `}`,
-		"blank items":         `{"items":"",` + ops + `,"rate":0.075,` + tol + `}`,
-		"negative tolerance":  `{` + items + `,` + ops + `,` + by + `,` + rates + `,"tolerance":-1}`,
-		"missing base":        `{` + items + `,"expected":"tax_amount",` + by + `,` + rates + `,` + tol + `}`,
-		"missing expected":    `{` + items + `,"base":"taxable_amount",` + by + `,` + rates + `,` + tol + `}`,
+		"rate and rates":         `{` + items + `,` + ops + `,` + by + `,` + rates + `,"rate":0.075,` + tol + `}`,
+		"neither rate nor":       `{` + items + `,` + ops + `,` + tol + `}`,
+		"empty rates":            `{` + items + `,` + ops + `,` + by + `,"rates":{},` + tol + `}`,
+		"non-numeric rate":       `{` + items + `,` + ops + `,` + by + `,"rates":{"A":"x"},` + tol + `}`,
+		"rates without by":       `{` + items + `,` + ops + `,` + rates + `,` + tol + `}`,
+		"rate_by with flat rate": `{` + items + `,` + ops + `,` + by + `,"rate":0.075,` + tol + `}`,
+		"blank rate_by":          `{` + items + `,` + ops + `,"rate_by":"",` + rates + `,` + tol + `}`,
+		"rates without items":    `{` + ops + `,` + by + `,` + rates + `,` + tol + `}`,
+		"rate_by w/o items":      `{` + ops + `,` + by + `,"rate":0.075,` + tol + `}`,
+		"blank items":            `{"items":"",` + ops + `,"rate":0.075,` + tol + `}`,
+		"negative tolerance":     `{` + items + `,` + ops + `,` + by + `,` + rates + `,"tolerance":-1}`,
+		"missing base":           `{` + items + `,"expected":"tax_amount",` + by + `,` + rates + `,` + tol + `}`,
+		"missing expected":       `{` + items + `,"base":"taxable_amount",` + by + `,` + rates + `,` + tol + `}`,
 	}
 	payloads := map[string]Payload{
 		"items present": taxItemsPayload(t, `[`+sub("STANDARD_VAT", "1000", "75")+`]`),

@@ -1,5 +1,5 @@
-// Kill-switch suite: staff switch a rule off with an owner-role statement
-// (vault runbook "Rule kill switch"). `rules` is global, so these tests mutate the
+// Kill-switch suite: the owner-role statement is the break-glass path (vault runbook "Rule kill switch");
+// staff switch rules through PATCH /v1/staff/rules/{key}. `rules` is global, so these tests mutate the
 // shared seeded rows; each registers a superuser restore in t.Cleanup before
 // its first write. No t.Parallel().
 //
@@ -8,18 +8,35 @@ package validation
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const killSwitchTmpl = "UPDATE rules r SET enabled = $1 FROM rule_set_versions v WHERE r.rule_set_version_id = v.id AND v.id = rule_set_version_for(%s) AND r.key = $2"
+
 // killSwitchStatement is the operator's statement (D16): the row for $2 in the
 // version in force today.
-const killSwitchStatement = "UPDATE rules r SET enabled = $1 FROM rule_set_versions v WHERE r.rule_set_version_id = v.id AND v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $2"
+var killSwitchStatement = fmt.Sprintf(killSwitchTmpl, "(now() AT TIME ZONE 'UTC')::date")
+
+// killSwitchSeedStatement is the same statement aimed at the version loadActive loads.
+var killSwitchSeedStatement = fmt.Sprintf(killSwitchTmpl, "'"+activeSeedDate+"'::date")
 
 // runKillSwitch runs killSwitchStatement as invoice_migrator in its own tx and
 // returns the rows affected.
 func runKillSwitch(t *testing.T, super *pgxpool.Pool, key string, enabled bool) int64 {
+	t.Helper()
+	return runKillSwitchSQL(t, super, killSwitchStatement, key, enabled)
+}
+
+// runKillSwitchSeed is runKillSwitch on the version in force on activeSeedDate.
+func runKillSwitchSeed(t *testing.T, super *pgxpool.Pool, key string, enabled bool) int64 {
+	t.Helper()
+	return runKillSwitchSQL(t, super, killSwitchSeedStatement, key, enabled)
+}
+
+func runKillSwitchSQL(t *testing.T, super *pgxpool.Pool, stmt, key string, enabled bool) int64 {
 	t.Helper()
 	ctx := context.Background()
 	tx, err := super.Begin(ctx)
@@ -30,7 +47,7 @@ func runKillSwitch(t *testing.T, super *pgxpool.Pool, key string, enabled bool) 
 	if _, err := tx.Exec(ctx, "SET LOCAL ROLE invoice_migrator"); err != nil {
 		t.Fatalf("SET LOCAL ROLE invoice_migrator: %v", err)
 	}
-	tag, err := tx.Exec(ctx, killSwitchStatement, enabled, key)
+	tag, err := tx.Exec(ctx, stmt, enabled, key)
 	if err != nil {
 		t.Fatalf("kill switch (%s, %t): %v", key, enabled, err)
 	}
@@ -51,7 +68,7 @@ type killSwitchCase struct {
 }
 
 // TestKillSwitch_E2E disables and restores two seeded rules of different types
-// (tax_math, enum) through runKillSwitch and checks the effect on evaluation.
+// (tax_math, enum) through runKillSwitchSeed and checks the effect on evaluation.
 func TestKillSwitch_E2E(t *testing.T) {
 	super, app := dbTestPools(t)
 
@@ -89,10 +106,10 @@ func TestKillSwitch_E2E(t *testing.T) {
 				t.Fatalf("baseline: %s did not fire -- violations=%+v (fixture payload must trip this rule before the kill switch)", tc.key, result.Violations)
 			}
 
-			if n := runKillSwitch(t, super, tc.key, false); n != 1 {
+			if n := runKillSwitchSeed(t, super, tc.key, false); n != 1 {
 				t.Fatalf("kill switch (%s, false) rows = %d, want 1", tc.key, n)
 			}
-			if ruleEnabledActive(t, super, tc.key) {
+			if ruleEnabledSeed(t, super, tc.key) {
 				t.Errorf("%s: rules.enabled = true after the kill switch, want false", tc.key)
 			}
 
@@ -113,10 +130,10 @@ func TestKillSwitch_E2E(t *testing.T) {
 				t.Errorf("control rule supplier-tin-format did not fire after disabling %s -- only the switched rule should drop", tc.key)
 			}
 
-			if n := runKillSwitch(t, super, tc.key, true); n != 1 {
+			if n := runKillSwitchSeed(t, super, tc.key, true); n != 1 {
 				t.Fatalf("kill switch (%s, true) rows = %d, want 1", tc.key, n)
 			}
-			if !ruleEnabledActive(t, super, tc.key) {
+			if !ruleEnabledSeed(t, super, tc.key) {
 				t.Errorf("%s: rules.enabled = false after restore, want true", tc.key)
 			}
 
@@ -376,6 +393,19 @@ func ruleEnabledActive(t *testing.T, pool *pgxpool.Pool, key string) bool {
 		 WHERE r.rule_set_version_id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $1`, key,
 	).Scan(&enabled); err != nil {
 		t.Fatalf("read rules.enabled for key=%q: %v", key, err)
+	}
+	return enabled
+}
+
+// ruleEnabledSeed is ruleEnabledActive on the version in force on activeSeedDate.
+func ruleEnabledSeed(t *testing.T, pool *pgxpool.Pool, key string) bool {
+	t.Helper()
+	var enabled bool
+	if err := pool.QueryRow(context.Background(),
+		`SELECT r.enabled FROM rules r
+		 WHERE r.rule_set_version_id = rule_set_version_for($1::date) AND r.key = $2`, activeSeedDate, key,
+	).Scan(&enabled); err != nil {
+		t.Fatalf("read rules.enabled for key=%q on %s: %v", key, activeSeedDate, err)
 	}
 	return enabled
 }

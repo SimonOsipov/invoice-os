@@ -113,12 +113,7 @@ func TestCreateHandler_RealResponseCarriesNewGateFields(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body=%s)", rec.Code, rec.Body.String())
 	}
-	// TRAP FOR THE NEXT PUBLISH: this package has no shared "sanctioned active version"
-	// constant (unlike internal/validation's seed_test.go activeSeedVersion) -- bump this
-	// literal (and this file's other one, plus service_gate_test.go's) together on every
-	// future rule-set publish. This test only proves handlers.go serializes whatever a
-	// REAL gate evaluation returns (see file header), so the literal is an independent
-	// oracle, not a wiring bug.
+	// v4 judges the fixture: its issue date is 2026-07-01.
 	if resp.RuleSetVersion == nil {
 		t.Error("RuleSetVersion = nil, want a pointer to 4 -- the batch WAS evaluated")
 	} else if *resp.RuleSetVersion != 4 {
@@ -161,8 +156,7 @@ func TestCreateHandler_DryRunResponseCarriesNewGateFieldsNoIDStatus(t *testing.T
 	if resp.ID != "" || resp.Status != "" {
 		t.Errorf("dry-run (ID=%q Status=%q), want both empty (M4-03 shape preserved)", resp.ID, resp.Status)
 	}
-	// TRAP FOR THE NEXT PUBLISH: see TestCreateHandler_RealResponseCarriesNewGateFields's
-	// matching note above.
+	// v4 judges the fixture: its issue date is 2026-07-01.
 	if resp.RuleSetVersion == nil {
 		t.Error("RuleSetVersion = nil, want a pointer to 4 -- the batch WAS evaluated")
 	} else if *resp.RuleSetVersion != 4 {

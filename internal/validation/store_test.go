@@ -171,17 +171,20 @@ func ruleKeys(rs RuleSet) []string {
 	return keys
 }
 
-func v4Row(t *testing.T, super *pgxpool.Pool) (id string) {
+// todaysVersion reads the version in force today by SQL, never a literal.
+func todaysVersion(t *testing.T, super *pgxpool.Pool) (id string, version int) {
 	t.Helper()
 	if err := super.QueryRow(context.Background(),
-		`SELECT id FROM rule_set_versions WHERE version = 4`).Scan(&id); err != nil {
-		t.Fatalf("read v4: %v", err)
+		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
+	).Scan(&id, &version); err != nil {
+		t.Fatalf("read the version in force today: %v", err)
 	}
-	return id
+	return id, version
 }
 
 func TestStore_LoadForDatesPicksTheVersionInForceOnEachDate(t *testing.T) {
 	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
 	aID, aVer := dateFixture(t, super, "3001-01-01", "t-a")
 	bID, bVer := dateFixture(t, super, "3001-06-01", "t-b")
 
@@ -193,9 +196,9 @@ func TestStore_LoadForDatesPicksTheVersionInForceOnEachDate(t *testing.T) {
 	if len(got) != len(dates) {
 		t.Fatalf("len(result) = %d, want %d (total over the requested dates)", len(got), len(dates))
 	}
-	v4 := v4Row(t, super)
-	if got["3000-12-31"].ID != v4 || got["3000-12-31"].Version != 4 {
-		t.Errorf("3000-12-31 = %s v%d, want v4 (%s)", got["3000-12-31"].ID, got["3000-12-31"].Version, v4)
+	latest := latestRealDated(t, context.Background(), super)
+	if got["3000-12-31"].ID != latest {
+		t.Errorf("3000-12-31 = %s v%d, want the latest real dated version (%s)", got["3000-12-31"].ID, got["3000-12-31"].Version, latest)
 	}
 	if g := got["3001-02-01"]; g.ID != aID || g.Version != aVer {
 		t.Errorf("3001-02-01 = %s v%d, want fixture A %s v%d", g.ID, g.Version, aID, aVer)
@@ -208,24 +211,25 @@ func TestStore_LoadForDatesPicksTheVersionInForceOnEachDate(t *testing.T) {
 	}
 }
 
-func TestStore_TodayIsV4AtHead(t *testing.T) {
+func TestStore_LoadActiveRuleSetIsTodaysVersion(t *testing.T) {
 	super, app := dbTestPools(t)
-	want := v4Row(t, super)
+	seedV5Lists(t, super)
+	wantID, wantVersion := todaysVersion(t, super)
 	store := NewStore(app)
 
 	g, err := store.LoadActiveRuleSetGlobal(context.Background())
 	if err != nil {
 		t.Fatalf("LoadActiveRuleSetGlobal: %v", err)
 	}
-	if g.Version != 4 || g.ID != want {
-		t.Errorf("global = %s v%d, want v4 %s", g.ID, g.Version, want)
+	if g.Version != wantVersion || g.ID != wantID {
+		t.Errorf("global = %s v%d, want today's v%d %s", g.ID, g.Version, wantVersion, wantID)
 	}
 	te, err := store.LoadActiveRuleSet(newTestIdentity())
 	if err != nil {
 		t.Fatalf("LoadActiveRuleSet: %v", err)
 	}
-	if te.Version != 4 || te.ID != want {
-		t.Errorf("tenant = %s v%d, want v4 %s", te.ID, te.Version, want)
+	if te.Version != wantVersion || te.ID != wantID {
+		t.Errorf("tenant = %s v%d, want today's v%d %s", te.ID, te.Version, wantVersion, wantID)
 	}
 }
 
@@ -245,6 +249,8 @@ func TestStore_LoadActiveRuleSetGlobalIsTheVersionInForceToday(t *testing.T) {
 
 func TestStore_ScheduledVersionIsNotTodaysVersion(t *testing.T) {
 	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
+	wantID, wantVersion := todaysVersion(t, super)
 	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format(time.DateOnly)
 	id, _ := dateFixture(t, super, tomorrow, "t-tomorrow")
 
@@ -255,8 +261,8 @@ func TestStore_ScheduledVersionIsNotTodaysVersion(t *testing.T) {
 	if rs.ID == id {
 		t.Errorf("loaded the version scheduled for %s as today's", tomorrow)
 	}
-	if rs.Version != 4 {
-		t.Errorf("Version = %d, want 4", rs.Version)
+	if rs.ID != wantID || rs.Version != wantVersion {
+		t.Errorf("loaded %s v%d, want today's v%d %s", rs.ID, rs.Version, wantVersion, wantID)
 	}
 }
 
@@ -463,6 +469,7 @@ func TestStore_LoadOrdersAndRoundTripsFields(t *testing.T) {
 // "fails closed" being ASSERTED (in prose) and being TESTED.
 func TestStore_LoadActiveRuleSetGlobalNoIdentity(t *testing.T) {
 	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
 	ctx := context.Background() // deliberately NOT auth.WithIdentity
 
 	var wantID string
@@ -511,6 +518,7 @@ func TestStore_LoadActiveRuleSetGlobalNoIdentity(t *testing.T) {
 // subtask, silently discarded (store.go:72-76, [uuid-stamp]).
 func TestStore_LoadActiveRuleSetPopulatesID(t *testing.T) {
 	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
 	ctx := context.Background()
 
 	var wantID string
@@ -536,6 +544,7 @@ func TestStore_LoadActiveRuleSetPopulatesID(t *testing.T) {
 
 func TestStore_LoadForDatesStartDateIsInclusiveAndDuplicatesCollapse(t *testing.T) {
 	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
 	aID, _ := dateFixture(t, super, "3001-01-01", "t-a")
 
 	got, err := NewStore(app).LoadForDates(context.Background(),
@@ -549,8 +558,8 @@ func TestStore_LoadForDatesStartDateIsInclusiveAndDuplicatesCollapse(t *testing.
 	if got["3001-01-01"].ID != aID {
 		t.Errorf("start day resolved to %s, want fixture %s (inclusive)", got["3001-01-01"].ID, aID)
 	}
-	if got["3000-12-31"].ID == aID || got["3000-12-31"].Version != 4 {
-		t.Errorf("day before start = %s v%d, want v4", got["3000-12-31"].ID, got["3000-12-31"].Version)
+	if latest := latestRealDated(t, context.Background(), super); got["3000-12-31"].ID == aID || got["3000-12-31"].ID != latest {
+		t.Errorf("day before start = %s v%d, want the latest real dated version (%s), not the fixture", got["3000-12-31"].ID, got["3000-12-31"].Version, latest)
 	}
 }
 
@@ -587,6 +596,8 @@ func TestStore_LoadForDatesEmptyAndMalformedInput(t *testing.T) {
 
 func TestStore_TenantLoaderIgnoresAScheduledVersion(t *testing.T) {
 	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
+	wantID, wantVersion := todaysVersion(t, super)
 	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format(time.DateOnly)
 	id, _ := dateFixture(t, super, tomorrow, "t-tomorrow")
 
@@ -594,7 +605,7 @@ func TestStore_TenantLoaderIgnoresAScheduledVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadActiveRuleSet: %v", err)
 	}
-	if rs.ID == id || rs.Version != 4 {
-		t.Errorf("tenant loader = %s v%d, want v4 (not the version scheduled for %s)", rs.ID, rs.Version, tomorrow)
+	if rs.ID == id || rs.ID != wantID || rs.Version != wantVersion {
+		t.Errorf("tenant loader = %s v%d, want today's v%d %s (not the version scheduled for %s)", rs.ID, rs.Version, wantVersion, wantID, tomorrow)
 	}
 }

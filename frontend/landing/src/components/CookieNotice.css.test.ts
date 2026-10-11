@@ -762,7 +762,7 @@ describe('CookieNotice CSS source (LAND-05-02)', () => {
     const phone = rules.filter((r) => r.at.length === 1 && r.at[0] === '@media (max-width: 640px)')
     const card = phone.filter((r) => selectorParts(r).includes('.cookie-note'))
     expect(card.length, 'expected one phone .cookie-note rule').toBe(1)
-    for (const [prop, px] of [['left', 12], ['right', 12], ['bottom', 12], ['padding', 16], ['gap', 12]] as const) {
+    for (const [prop, px] of [['left', 12], ['right', 12], ['bottom', 12], ['padding', 16], ['gap', 10]] as const) {
       expect(pxOf(card[0].body, prop), `phone ${prop}`).toBe(px)
     }
     expect(valueOf(card[0].body, 'width')).toBe('auto')

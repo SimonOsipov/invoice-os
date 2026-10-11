@@ -38,6 +38,9 @@ export async function settleAnimations(...targets: Locator[]): Promise<void> {
 /** Widest first — see the file header for why the order is load-bearing. */
 export const WIDE_WIDTHS = [2560, 1920, 1440, 1280] as const
 
+/** Phone widths; 767 is the library's PHONE_MAX_WIDTH. */
+export const PHONE_WIDTHS = [375, 414, 767] as const
+
 /** The horizontal extent of a rendered element. Playwright's boundingBox() shape. */
 export type Box = { x: number; width: number }
 

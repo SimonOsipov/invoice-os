@@ -542,3 +542,26 @@ func TestMetrics_ReadinessEqualsTotalMinusNeedsAttentionMinusNeverValidated(t *t
 			got, want, total, row.NeedsAttention, row.Metrics["never_validated"].Num)
 	}
 }
+
+// A v5-only key lowers exactly its own bar; each of D23's three branches is hit.
+func TestMetrics_V5KeysLowerOnlyTheirOwnBar(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "V5BAR tenant")
+	entityID := seedEntity(t, super, tenantID, "V5BAR entity")
+	for i, c := range []struct{ key, bar string }{
+		{"supplier-email-required", "bar_field_completeness"},
+		{"vat-equals-tax-subtotals", "bar_tax_accuracy"},
+		{"buyer-email-length", "bar_identifiers_format"},
+	} {
+		seedInvoiceWithViolations(t, super, tenantID, entityID, fmt.Sprintf("V5BAR-%d", i), "validated",
+			fmt.Sprintf(`[{"rule_key":%q,"severity":"error","message":"x"}]`, c.key))
+	}
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "V5BAR-clean", "validated", `[]`)
+
+	row := rollupFor(t, app, tenantID).Clients[0]
+	for _, bar := range []string{"bar_field_completeness", "bar_tax_accuracy", "bar_identifiers_format"} {
+		if m := row.Metrics[bar]; m != (Metric{Num: 3, Den: 4}) {
+			t.Errorf("%s = %+v, want {3 4}: exactly one v5 key maps to it", bar, m)
+		}
+	}
+}

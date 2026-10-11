@@ -262,8 +262,7 @@ func assertAppRefused(t *testing.T, err error, what string) {
 
 // TestSchema_AppCannotMutateContent (Test Spec #1): as invoice_app, an UPDATE naming any
 // content column (key, severity, type — anything other than enabled) must fail with
-// insufficient_privilege (42501). The app holds SELECT only on rules; the kill switch runs
-// as the owner (TestKillSwitch_OnlyTheOwnerCanRunIt).
+// insufficient_privilege (42501). The app holds SELECT only on rules.
 func TestSchema_AppCannotMutateContent(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
@@ -441,12 +440,12 @@ func TestSchema_AppKeepsReadOnRules(t *testing.T) {
 		}
 	}
 
-	rs, err := NewStore(app).LoadActiveRuleSetGlobal(ctx)
+	byDate, err := NewStore(app).LoadForDates(ctx, []string{activeSeedDate})
 	if err != nil {
-		t.Fatalf("LoadActiveRuleSetGlobal: %v", err)
+		t.Fatalf("LoadForDates(%s): %v", activeSeedDate, err)
 	}
-	if len(rs.Rules) == 0 {
-		t.Error("LoadActiveRuleSetGlobal returned no rules, want the seeded active set")
+	if len(byDate[activeSeedDate].Rules) == 0 {
+		t.Error("LoadForDates returned no rules, want the seeded active set")
 	}
 }
 

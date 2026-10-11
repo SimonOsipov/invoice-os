@@ -30,6 +30,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -60,7 +61,9 @@ type ruleRow struct {
 // ruleRowsByKey reads every rule under the rule_set_versions row with the given
 // `version` number, keyed by `key` -- the shared fixture TestRuleSetV3_IsV2PlusFourTargets
 // and TestRuleSetV2_StillHasNineteenRules both build their comparisons over.
-func ruleRowsByKey(t *testing.T, app *pgxpool.Pool, version int) map[string]ruleRow {
+func ruleRowsByKey(t *testing.T, app interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}, version int) map[string]ruleRow {
 	t.Helper()
 	ctx := context.Background()
 

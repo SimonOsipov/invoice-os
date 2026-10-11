@@ -214,4 +214,52 @@ describe('cold load of /imports/<id>/review', () => {
     expect(window.location.pathname).toBe('/invoices')
     expect(window.history.state?.e).toBeNull()
   })
+  const traverseBy = async (delta: number) => {
+    await act(async () => {
+      const popped = new Promise<void>((r) => window.addEventListener('popstate', () => r(), { once: true }))
+      window.history.go(delta)
+      await popped
+    })
+  }
+  const goInvoices = async () => {
+    const nav = [...document.querySelectorAll('button.pf-nav')].find((b) => b.textContent?.trim().endsWith('Invoices'))
+    expect(nav, 'the Invoices nav button').toBeTruthy()
+    await act(async () => (nav as HTMLButtonElement).click())
+  }
+
+  // KNOWN DEFECT (QA-2 F1): the review mirror re-stamps the boot entry {e: fallback, m} before adoption, so it is not a window entry and the ref stays on the fallback. Flip to `it` with the fix.
+  it.fails('coldLoad_aBackfilledEntryAndAReviewAdoptionShareOneWindow', async () => {
+    let release!: () => void
+    const portfolioGate = new Promise<void>((r) => (release = r))
+    await coldLoadReview({ portfolioGate })
+    await goInvoices()
+    await act(async () => release())
+    await waitFor(() => expect(window.history.state?.p, 'floor: the backfill stamped the Invoices entry').toBe(true))
+    await traverseBy(-1)
+    await waitFor(() => expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu'))
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await traverseBy(1)
+    expect(replaceSpy, 'the backfilled entry resolves to the adopted company: no clamp').not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe('/invoices')
+  })
+
+  it('coldLoad_anAdoptionFromAnEntryOutsideTheWindowNeverRepointsTheBootEntry', async () => {
+    let release!: () => void
+    const portfolioGate = new Promise<void>((r) => (release = r))
+    await coldLoadReview({ portfolioGate }, '/invoices?q=a')
+    await act(async () => release())
+    await waitFor(() => expect(window.history.state?.p, 'floor: the backfill stamped the boot entry').toBe(true))
+    window.history.pushState({ scroll: 0 }, '', `/imports/${BATCH_ID}/review`)
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state: { scroll: 0 } }))
+    })
+    await waitFor(() => expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu'))
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await traverseBy(-1)
+    expect(replaceSpy, 'the boot entry names Alpha, the active company is Zulu: clamp').toHaveBeenCalledWith(
+      { e: ENTITY_SECOND },
+      '',
+      '/invoices',
+    )
+  })
 })

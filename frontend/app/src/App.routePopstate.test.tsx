@@ -1728,6 +1728,28 @@ describe('BUG-34: entries pushed before the company list loads', () => {
     expect(requireCtx().view).toBe('detail')
   })
 
+  it('popstate_aPromotedEntryFromAnotherMountResolvesByItsOwnCompanyNotThisMountsRef', async () => {
+    const release = await bootPreLoad('/')
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    expect(stateNow(), 'floor: this mount backfilled its boot entry').toMatchObject({ e: ENTITY_A, p: true })
+    const foreignB = { e: ENTITY_B, m: 'another-mount', p: true }
+    window.history.replaceState(foreignB, '', `/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state: foreignB }))
+    })
+    expect(window.location.pathname, 'its own Bravo differs from the active Alpha: clamp').toBe('/invoices')
+    const foreignA = { e: ENTITY_A, m: 'another-mount', p: true }
+    window.history.replaceState(foreignA, '', `/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state: foreignA }))
+    })
+    expect(requireCtx().importedInvoiceId, 'its own Alpha equals the active one: restore').toBe(INVOICE_ID)
+  })
+
   it.each([
     ['review mirror', '/create', () => {}],
     ['setInvoiceQuery', '/invoices?q=a', () => capturedCtx!.setInvoiceQuery('')],

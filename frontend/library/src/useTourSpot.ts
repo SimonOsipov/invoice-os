@@ -60,10 +60,18 @@ export function useTourSpot(tour: TourState | null, routeKey: string): { rect: R
     const onScroll = () => measure(false)
     const main = document.getElementById('lib-main')
     const nav = document.querySelector('aside nav')
+    // Web fonts swap in after the first measure and resize the nav row; re-read then.
+    const fonts = document.fonts
+    let live = true
+    const onFonts = () => live && measure(false)
+    void fonts?.ready.then(onFonts)
+    fonts?.addEventListener('loadingdone', onFonts)
     window.addEventListener('resize', onResize)
     main?.addEventListener('scroll', onScroll)
     nav?.addEventListener('scroll', onScroll)
     return () => {
+      live = false
+      fonts?.removeEventListener('loadingdone', onFonts)
       window.removeEventListener('resize', onResize)
       main?.removeEventListener('scroll', onScroll)
       nav?.removeEventListener('scroll', onScroll)

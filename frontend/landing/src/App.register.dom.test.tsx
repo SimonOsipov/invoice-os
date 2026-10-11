@@ -677,7 +677,7 @@ describe('the product-email notice and the marketing box', () => {
     document.body.appendChild(demoHost)
     const demoRoot = createRoot(demoHost)
     await act(async () => {
-      demoRoot.render(createElement(DemoLeadForm, { idPrefix: 'tdemo', variant: 'card' }))
+      demoRoot.render(createElement(DemoLeadForm, { idPrefix: 'tdemo' }))
     })
     const demoBox = demoHost.querySelector<HTMLInputElement>('#tdemo-consent')
     expect(demoBox, 'control: the demo consent checkbox renders').not.toBeNull()

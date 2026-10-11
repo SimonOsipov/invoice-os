@@ -68,7 +68,7 @@ describe('AC-3: the seam writers never read location.search', () => {
     const mirrorBody = findBody(appSrc, 'useEffect(() => {', mirrorAnchorIdx)
     const backfillAnchorIdx = appSrc.indexOf("Backfills the boot entry's stamp once the portfolio resolves")
     expect(backfillAnchorIdx, 'stamp-backfill anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
-    const backfillBody = findBody(appSrc, 'useEffect(() => {', backfillAnchorIdx)
+    const backfillBody = findBody(appSrc, 'useLayoutEffect(() => {', backfillAnchorIdx)
 
     // Floor: a broken anchor search silently returning an empty population would make the
     // loop below vacuously pass with nothing checked. setInvoiceQuery is in the population
@@ -147,7 +147,7 @@ describe('ROUTE-03-05 AC-3: no writer in the population appends the fragment', (
     const mirrorBody = findBody(appSrc, 'useEffect(() => {', mirrorAnchorIdx)
     const backfillAnchorIdx = appSrc.indexOf("Backfills the boot entry's stamp once the portfolio resolves")
     expect(backfillAnchorIdx, 'stamp-backfill anchor comment not found -- App.tsx was restructured').toBeGreaterThan(-1)
-    const backfillBody = findBody(appSrc, 'useEffect(() => {', backfillAnchorIdx)
+    const backfillBody = findBody(appSrc, 'useLayoutEffect(() => {', backfillAnchorIdx)
 
     // Same ten bodies guard_theSeamsWriterNeverReadsLocationSearch scans above. This
     // population structurally EXCLUDES signOut and the one-shot strip -- neither is a

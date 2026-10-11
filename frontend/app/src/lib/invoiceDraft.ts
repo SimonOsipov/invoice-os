@@ -275,9 +275,8 @@ export async function fileSuppliedNumber(
 // §8.5, §2); the first is byte-identical to CreateMapping's own refusal, reused rather
 // than re-authored -- mapping and form are different steps, so the two never both mount.
 //
-// Gates on the RESOLVED Entity, never on a Client.entityId: `active` is rebuilt from the
-// live entity list by an effect, so there is a window where the id is non-null but not yet
-// present in the fetched list, and gating on the id there renders an armed button that
+// Gates on the RESOLVED Entity, never on a Client.entityId: the id can be
+// non-null while the entity is not in the fetched list, and gating on the id there renders an armed button that
 // swallows the click. `null` covers every honest refusal at once -- a workspace (either
 // persona) with no entity resolved yet, the emptyClient() placeholder, and the
 // no-gateway build.

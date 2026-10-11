@@ -153,10 +153,12 @@ describe('Tabs', () => {
   })
 
   it('TB-07 an unknown value keeps the first tab reachable', async () => {
-    const tabs = tabsIn(await mount({ value: 'missing' }))
+    const c = await mount({ value: 'missing' })
+    const tabs = tabsIn(c)
     expect(tabs).toHaveLength(3)
     expect(tabs.map((t) => t.tabIndex)).toEqual([0, -1, -1])
     expect(tabs.map((t) => t.getAttribute('aria-selected'))).toEqual(['false', 'false', 'false'])
+    expect(c.querySelector('[role=tabpanel]')?.getAttribute('tabindex'), 'the panel stays a tab stop').toBe('0')
   })
 
   it('TB-08 panelStyle and children land in the panel', async () => {
@@ -314,15 +316,12 @@ describe('Tabs', () => {
     expect(unnamed?.hasAttribute('aria-label')).toBe(false)
   })
 
-  it('TB-17 the panel is a tab stop unless panelFocusable is false, and stays a labelled tabpanel either way', async () => {
-    const dflt = await mount({ value: 'approve' })
-    expect(dflt.querySelector('[role=tabpanel]')?.getAttribute('tabindex')).toBe('0')
-
-    const off = await mount({ value: 'approve', panelFocusable: false })
-    const panel = off.querySelector('[role=tabpanel]')
+  it('TB-17 the panel is a tab stop and a labelled tabpanel', async () => {
+    const c = await mount({ value: 'approve' })
+    const panel = c.querySelector('[role=tabpanel]')
     expect(panel, 'control: the panel rendered').not.toBeNull()
-    expect(panel?.hasAttribute('tabindex')).toBe(false)
-    expect(panel?.getAttribute('aria-labelledby')).toBe(tabsIn(off)[1].id)
-    expect(tabsIn(off)[1].getAttribute('aria-controls')).toBe(panel?.id)
+    expect(panel?.getAttribute('tabindex')).toBe('0')
+    expect(panel?.getAttribute('aria-labelledby')).toBe(tabsIn(c)[1].id)
+    expect(tabsIn(c)[1].getAttribute('aria-controls')).toBe(panel?.id)
   })
 })

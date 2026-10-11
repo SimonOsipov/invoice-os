@@ -143,16 +143,19 @@ describe('PL-05 the panel link books a demo on every tab', () => {
   })
 })
 
-describe('PL-06 the panel is not a tab stop', () => {
-  it('has no tabindex, and the next tab stop after the selected tab is the panel link', async () => {
+describe('PL-10 the panel is a tab stop named by its tab', () => {
+  it.each([0, 1, 2])('after tab %i is selected, the stop after it is the panel, then the panel link', async (i) => {
     const c = await mount()
+    const tabs = tabsIn(c)
+    click(tabs[i])
     const panel = panelOf(c)
-    expect(panel.hasAttribute('tabindex')).toBe(false)
+    expect(panel.getAttribute('tabindex')).toBe('0')
+    expect(panel.getAttribute('aria-labelledby')).toBe(tabs[i].id)
 
     const stops = [...c.querySelectorAll<HTMLElement>('button, [tabindex]')].filter((el) => el.tabIndex >= 0)
-    const selected = tabsIn(c)[selectedIndex(tabsIn(c))]
-    const next = stops[stops.indexOf(selected) + 1]
-    expect(next, 'control: a stop follows the selected tab').toBeDefined()
-    expect(next).toBe(panel.querySelector('button.ds-btn--text'))
+    const at = stops.indexOf(tabs[i])
+    expect(at, 'control: the selected tab is a stop').toBeGreaterThanOrEqual(0)
+    expect(stops[at + 1]).toBe(panel)
+    expect(stops[at + 2]).toBe(panel.querySelector('button.ds-btn--text'))
   })
 })

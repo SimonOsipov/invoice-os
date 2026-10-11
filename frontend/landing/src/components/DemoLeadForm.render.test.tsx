@@ -50,7 +50,7 @@ describe('DemoLeadForm renders every control under any idPrefix (S6, NEW-BEHAVIO
     if (!mod) return
 
     const demoForm = await demoFormModule()
-    const html = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'zz', variant: 'card' }))
+    const html = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'zz' }))
 
     const labelTargets = Array.from(html.matchAll(/<label[^>]*\sfor="([^"]+)"/g)).map((m) => m[1])
     expect(labelTargets.length).toBeGreaterThan(0)
@@ -89,7 +89,7 @@ describe('DemoLeadForm honeypot hardening under any idPrefix (S7, NEW-BEHAVIOUR)
     expect(mod, 'expected ./DemoLeadForm.tsx to exist').not.toBeNull()
     if (!mod) return
 
-    const html = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'zz', variant: 'card' }))
+    const html = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'zz' }))
     const honeypotMatch = html.match(/<input[^>]*name="website"[^>]*>/)
     expect(honeypotMatch, 'expected the honeypot input').not.toBeNull()
     if (!honeypotMatch) return
@@ -116,14 +116,14 @@ describe('DemoLeadForm honeypot hardening under any idPrefix (S7, NEW-BEHAVIOUR)
 })
 
 describe('two mounted instances never collide (S8, NEW-BEHAVIOUR)', () => {
-  it('S8: idPrefix="dm" and idPrefix="dc" rendered together produce 16 unique ids', async () => {
+  it('S8: idPrefix="dm" and idPrefix="zz" rendered together produce 16 unique ids', async () => {
     const mod = await demoLeadFormModule()
     expect(mod, 'expected ./DemoLeadForm.tsx to exist').not.toBeNull()
     if (!mod) return
 
-    const dm = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'dm', variant: 'modal' }))
-    const dc = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'dc', variant: 'card' }))
-    const ids = Array.from((dm + dc).matchAll(/\sid="([^"]+)"/g)).map((m) => m[1])
+    const dm = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'dm' }))
+    const zz = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'zz' }))
+    const ids = Array.from((dm + zz).matchAll(/\sid="([^"]+)"/g)).map((m) => m[1])
     expect(ids.length).toBe(16)
     expect(new Set(ids).size).toBe(ids.length)
   })
@@ -151,7 +151,7 @@ describe('an absent heading emits nothing; the popup heading sits above the firs
     expect(mod, 'expected ./DemoLeadForm.tsx to exist').not.toBeNull()
     if (!mod) return
 
-    const html = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'zz', variant: 'card' }))
+    const html = renderToStaticMarkup(createElement(mod.DemoLeadForm, { idPrefix: 'zz' }))
     const formStart = html.indexOf('<form')
     const fieldStart = html.indexOf('id="zz-name"')
     expect(formStart).toBeGreaterThanOrEqual(0)

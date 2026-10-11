@@ -62,13 +62,11 @@ export const CHECK_INPUT_STYLE: CSSProperties = { flex: 'none', width: 18, heigh
 
 export function DemoLeadForm({
   idPrefix,
-  variant,
   heading,
   onDone,
   submit,
 }: {
   idPrefix: string
-  variant: 'modal' | 'card'
   heading?: ReactNode
   onDone?: () => void
   submit?: (lead: DemoLead) => Promise<void>
@@ -79,7 +77,6 @@ export function DemoLeadForm({
   const [limited, setLimited] = useState(false)
   const submitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mounted = useRef(true)
-  const firstFormPanel = useRef(true)
 
   // Demo-mode stub: client-side theater, always resolves to success after ~1300ms
   // (matching the prototype's submitDemo). Its timer is stored on the shared
@@ -102,19 +99,16 @@ export function DemoLeadForm({
   )
 
   // Keyed on demoStep, never a deferred setTimeout: a deferred focus used to land
-  // after a submit and yank focus off the field at fault. The card skips only its
-  // FIRST form panel, so mounting a card does not steal the page's focus.
+  // after a submit and yank focus off the field at fault.
   useEffect(() => {
     if (demoStep === 'form') {
-      const skip = variant === 'card' && firstFormPanel.current
-      firstFormPanel.current = false
-      if (!skip) document.getElementById(`${idPrefix}-name`)?.focus()
+      document.getElementById(`${idPrefix}-name`)?.focus()
     } else if (demoStep === 'success') {
       ;(document.getElementById(`${idPrefix}-success-done`) ?? document.getElementById(`${idPrefix}-success`))?.focus()
     } else if (demoStep === 'error') {
       document.getElementById(`${idPrefix}-error-retry`)?.focus()
     }
-  }, [demoStep, idPrefix, variant])
+  }, [demoStep, idPrefix])
 
   function setField(key: DemoFieldKey, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -204,16 +198,14 @@ export function DemoLeadForm({
   }
 
   const submitting = demoStep === 'submitting'
-  const formPadding = variant === 'modal' ? '24px 24px 22px' : 0
-  const panelPadding = variant === 'modal' ? '36px 24px 26px' : 0
-  const panelStyle: CSSProperties = { padding: panelPadding, textAlign: 'center', display: 'grid', gap: 12, justifyItems: 'center' }
+  const panelStyle: CSSProperties = { padding: '36px 24px 26px', textAlign: 'center', display: 'grid', gap: 12, justifyItems: 'center' }
   const panelH3: CSSProperties = { fontSize: 24, fontWeight: 700, letterSpacing: 'var(--tracking-h3)', margin: '4px 0 0', color: 'var(--ink)' }
   const panelP: CSSProperties = { lineHeight: 1.6, margin: '0 auto 8px', maxWidth: 360 }
 
   return (
     <>
       {(demoStep === 'form' || demoStep === 'submitting') && (
-        <form noValidate onSubmit={handleSubmit} style={{ padding: formPadding }}>
+        <form noValidate onSubmit={handleSubmit} style={{ padding: '24px 24px 22px' }}>
           {heading}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

@@ -537,6 +537,28 @@ func TestSync_HeldPullIsRecorded(t *testing.T) {
 	wantStrings(t, "changed", h.change)
 }
 
+func TestSync_HeldRemovedIsSorted(t *testing.T) {
+	s, srv, l, super := seedN(t, 30)
+	srv.set(200, pull(cEntries(1, 20, "x")))
+	ch, err := s.SyncList(context.Background(), l)
+	wantHeld(t, ch, err, l.Name)
+	var want []string
+	for i := 21; i <= 30; i++ {
+		want = append(want, fmt.Sprintf("c%02d", i))
+	}
+	wantStrings(t, "Change.Removed", ch.Removed, want...)
+	wantStrings(t, "Change.Added", ch.Added)
+	wantStrings(t, "Change.Changed", ch.Changed)
+	if ch.Entries != 20 {
+		t.Errorf("Change.Entries = %d, want 20", ch.Entries)
+	}
+	syncs := syncRows(t, super, l.Name)
+	if len(syncs) != 2 {
+		t.Fatalf("%d sync rows, want 2", len(syncs))
+	}
+	wantStrings(t, "row removed", syncs[1].removed, want...)
+}
+
 // mux serves each list's flipServer under /<list>.
 func mux(t *testing.T, srvs map[string]*flipServer) string {
 	t.Helper()
@@ -791,10 +813,23 @@ IF NEW.list = '`+l.Name+`' AND NEW.status = 'held' THEN RAISE EXCEPTION 'held in
 }
 
 func TestSync_LaterCommitHasLaterSyncedAt(t *testing.T) {
-	super, app := dbTestPools(t)
+	t.Run("applied row", func(t *testing.T) {
+		super, app := dbTestPools(t)
+		l := testList(newListName(t, super))
+		laterCommitWins(t, super, l, newSyncer(t, app, newFlipServer(t, abcBody).URL), 0)
+	})
+	t.Run("held row", func(t *testing.T) {
+		s, srv, l, super := seedN(t, 20)
+		srv.set(200, pull(cEntries(1, 17, "x")))
+		laterCommitWins(t, super, l, s, 1)
+	})
+}
+
+// laterCommitWins makes SyncList wait on the list lock while a holder commits a row (entry_count 99),
+// and asserts the waiter's row sorts after it; prior is 1 when a seed row exists (the waiter is then held).
+func laterCommitWins(t *testing.T, super *pgxpool.Pool, l List, s *Syncer, prior int) {
+	t.Helper()
 	ctx := context.Background()
-	l := testList(newListName(t, super))
-	s := newSyncer(t, app, newFlipServer(t, abcBody).URL)
 
 	holder, err := super.Begin(ctx)
 	if err != nil {
@@ -818,19 +853,23 @@ func TestSync_LaterCommitHasLaterSyncedAt(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// entry_count 99 marks the holder's row.
 	if _, err := holder.Exec(ctx, `INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed, synced_at) VALUES ($1, 99, '{}', '{}', '{}', clock_timestamp())`, l.Name); err != nil {
 		t.Fatal(err)
 	}
 	if err := holder.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-done; err != nil {
+	if err := <-done; prior == 0 && err != nil {
 		t.Fatal(err)
+	} else if prior == 1 && !errors.Is(err, ErrHeld) {
+		t.Fatalf("err = %v, want ErrHeld", err)
 	}
 	syncs := syncRows(t, super, l.Name)
-	if len(syncs) != 2 || syncs[0].entryCount != 99 {
+	if len(syncs) != 2+prior || syncs[prior].entryCount != 99 || syncs[prior+1].entryCount == 99 {
 		t.Fatalf("sync rows = %+v, want the holder's row (99) then the waiter's", syncs)
+	}
+	if want := []string{"applied", "held"}[prior]; syncs[prior+1].status != want {
+		t.Errorf("waiter status = %q, want %q", syncs[prior+1].status, want)
 	}
 }
 

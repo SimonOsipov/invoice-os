@@ -16,7 +16,7 @@ import (
 )
 
 // The importer records which rules a document reading breaks. Real-gate tests run
-// against the active rule set on the dev DB (v4: buyer-tin-format, vat-standard-rate).
+// against the rule set in force on the fixtures' issue dates (v4: buyer-tin-format, vat-standard-rate).
 
 // rbGate reports one fixed violation list for the invoice it is handed. hang makes Evaluate block
 // until its ctx is done and sends that ctx's error on ctxErr. cancel, when set, cancels the

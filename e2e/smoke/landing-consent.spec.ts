@@ -119,6 +119,21 @@ async function rectOf(locator: Locator, label: string, at: string): Promise<Rect
   return box!
 }
 
+const TOUCH_TARGET_PX = 44 // landing.css phone `.cn-actions button { height: 44px }`
+
+/** Accept and Reject: tall enough, inside the card, one row with Accept on the left. */
+async function expectTouchRow(card: Locator, cardRect: Rect, label: string, at: string) {
+  const accept = await rectOf(card.locator('[data-consent="accept"]'), `${label} Accept`, at)
+  const reject = await rectOf(card.locator('[data-consent="reject"]'), `${label} Reject`, at)
+  for (const [name, b] of [['Accept', accept], ['Reject', reject]] as const) {
+    expect(b.height, `${label} ${name} is ${b.height}px tall ${at}`).toBeGreaterThanOrEqual(TOUCH_TARGET_PX - BOX_SLACK_PX)
+    expect(enclosesRect(cardRect, b), `${label} ${name} leaves the card ${at}`).toBe(true)
+  }
+  expect(Math.abs(accept.y - reject.y), `${label} buttons are stacked ${at} (Accept y ${accept.y}, Reject y ${reject.y})`).toBeLessThanOrEqual(BOX_SLACK_PX)
+  expect(accept.x + accept.width, `${label} Accept is not left of Reject ${at}`).toBeLessThanOrEqual(reject.x + BOX_SLACK_PX)
+  return { accept, reject }
+}
+
 /**
  * Is Manrope actually available for layout?
  *
@@ -736,10 +751,10 @@ test('landing consent: keyboard focus cannot reach the notice while a modal is o
   expectNoConsoleErrors(errors)
 })
 
-// C9 — first visit at 390x844. The standard overflow check is vacuous twice here: the
+// C9 — first visit. The standard overflow check is vacuous twice here: the
 // notice is position:fixed so it adds nothing to document.scrollWidth, and it sits inside
 // the App root's overflow-x: clip. The oracle is the card's OWN box.
-test('landing consent: the first-visit card is at most a third of the phone viewport', async ({ page }, testInfo) => {
+test('landing consent: the first-visit card is at most a third of the phone viewport, with 44px buttons in one row, at 390 and 375', async ({ page }, testInfo) => {
   await page.setViewportSize(PHONE)
   const { errors, card } = await openLanding(page)
   await expect(card.locator('.cn-setting'), 'a first visit must not render the current-setting line').toHaveCount(0)
@@ -750,28 +765,38 @@ test('landing consent: the first-visit card is at most a third of the phone view
     `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — a missing webfont reads as a layout bug`,
   ).toBe(true)
 
-  const rect = await rectOf(card, 'the cookie notice', `at ${PHONE.width}x${PHONE.height}`)
+  const records = []
+  for (const width of NARROW_WIDTHS) {
+    const at = `at ${width}x${PHONE.height}`
+    await page.setViewportSize({ width, height: PHONE.height })
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+    await settleLayout(page)
+
+    const rect = await rectOf(card, 'the cookie notice', at)
+    const { accept, reject } = await expectTouchRow(card, rect, 'first visit', at)
+    records.push({ width, card: rect, accept, reject })
+    testInfo.annotations.push({
+      type: 'measurement',
+      description: `first visit ${width}px: ${rect.height}px card against a ${MOBILE_THIRD_PX}px cap, buttons ${accept.height}px / ${reject.height}px`,
+    })
+
+    expect(rect.width, `the card measured ${rect.width}px wide ${at}, so the cap below would pass on an unrendered card`).toBeGreaterThan(MIN_PHONE_CARD_PX)
+    expect(rect.height, `the first-visit card is ${rect.height}px tall ${at} against a ${MOBILE_THIRD_PX}px cap`).toBeLessThanOrEqual(MOBILE_THIRD_PX)
+    expect(rect.x, `the card overhangs the left edge ${at} (x ${rect.x})`).toBeGreaterThanOrEqual(0)
+    expect(rect.x + rect.width, `the card overhangs the right edge ${at} (right ${rect.x + rect.width})`).toBeLessThanOrEqual(width)
+  }
   await testInfo.attach('cookie-notice-mobile-height.json', {
-    body: JSON.stringify({ state: 'first visit', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, manrope }, null, 2),
+    body: JSON.stringify({ state: 'first visit', cap: MOBILE_THIRD_PX, records, manrope }, null, 2),
     contentType: 'application/json',
   })
-  testInfo.annotations.push({
-    type: 'measurement',
-    description: `first visit: ${rect.height}px card against a ${MOBILE_THIRD_PX}px cap`,
-  })
-
-  expect(rect.width, `the card measured ${rect.width}px wide, so the cap below would pass on an unrendered card`).toBeGreaterThan(MIN_PHONE_CARD_PX)
-  expect(rect.height, `the first-visit card is ${rect.height}px tall against a ${MOBILE_THIRD_PX}px cap`).toBeLessThanOrEqual(MOBILE_THIRD_PX)
-  expect(rect.x, `the card overhangs the left edge (x ${rect.x})`).toBeGreaterThanOrEqual(0)
-  expect(rect.x + rect.width, `the card overhangs the right edge (right ${rect.x + rect.width})`).toBeLessThanOrEqual(PHONE.width)
 
   expectNoConsoleErrors(errors)
 })
 
-// C9b — the REOPENED card at 390x844. .cn-setting renders only when `current` is non-null,
+// C9b — the REOPENED card. .cn-setting renders only when `current` is non-null,
 // i.e. only on a reopen, so the taller of the two states is measured nowhere else. Core AC
 // 8 does not distinguish the two, so it applies here unchanged.
-test('landing consent: the reopened card is at most a third of the phone viewport', async ({ page }, testInfo) => {
+test('landing consent: the reopened card is at most a third of the phone viewport, with 44px buttons in one row, at 390 and 375', async ({ page }, testInfo) => {
   await page.setViewportSize(PHONE)
   await seedConsent(page, true)
   const { errors } = await openLanding(page, { expectNotice: false })
@@ -788,20 +813,34 @@ test('landing consent: the reopened card is at most a third of the phone viewpor
     `Manrope is not available for layout (probe ${manrope.withManrope}px vs fallback ${manrope.fallback}px) — a missing webfont reads as a layout bug`,
   ).toBe(true)
 
-  const rect = await rectOf(card, 'the reopened cookie notice', `at ${PHONE.width}x${PHONE.height}`)
+  const records = []
+  for (const width of NARROW_WIDTHS) {
+    const at = `at ${width}x${PHONE.height}`
+    await page.setViewportSize({ width, height: PHONE.height })
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+    await settleLayout(page)
+
+    const rect = await rectOf(card, 'the reopened cookie notice', at)
+    const { accept, reject } = await expectTouchRow(card, rect, 'reopened', at)
+    const spacer = await rectOf(page.locator('.cn-spacer'), 'the reopened spacer', at)
+    records.push({ width, card: rect, accept, reject, spacer })
+    testInfo.annotations.push({
+      type: 'measurement',
+      description: `reopened ${width}px: ${rect.height}px card against a ${MOBILE_THIRD_PX}px cap, buttons ${accept.height}px / ${reject.height}px, spacer ${spacer.height}px`,
+    })
+
+    expect(rect.width, `the card measured ${rect.width}px wide ${at}, so the cap below would pass on an unrendered card`).toBeGreaterThan(MIN_PHONE_CARD_PX)
+    expect(rect.height, `the reopened card is ${rect.height}px tall ${at} against a ${MOBILE_THIRD_PX}px cap`).toBeLessThanOrEqual(MOBILE_THIRD_PX)
+    expect(rect.x, `the reopened card overhangs the left edge ${at} (x ${rect.x})`).toBeGreaterThanOrEqual(0)
+    expect(rect.x + rect.width, `the reopened card overhangs the right edge ${at} (right ${rect.x + rect.width})`).toBeLessThanOrEqual(width)
+    // Same bounds as C10: the band covers the card plus its inset, and no more than one extra inset.
+    expect(spacer.height, `the spacer is ${spacer.height}px ${at} for a ${rect.height + MOBILE_INSET_PX}px band`).toBeGreaterThanOrEqual(rect.height + MOBILE_INSET_PX)
+    expect(spacer.height, `the spacer leaves dead scroll ${at} (${spacer.height}px for a ${rect.height + MOBILE_INSET_PX}px band)`).toBeLessThanOrEqual(rect.height + 2 * MOBILE_INSET_PX)
+  }
   await testInfo.attach('cookie-notice-mobile-height-reopened.json', {
-    body: JSON.stringify({ state: 'reopened', viewport: PHONE, cap: MOBILE_THIRD_PX, rect, manrope }, null, 2),
+    body: JSON.stringify({ state: 'reopened', cap: MOBILE_THIRD_PX, records, manrope }, null, 2),
     contentType: 'application/json',
   })
-  testInfo.annotations.push({
-    type: 'measurement',
-    description: `reopened: ${rect.height}px card against a ${MOBILE_THIRD_PX}px cap`,
-  })
-
-  expect(rect.width, `the card measured ${rect.width}px wide, so the cap below would pass on an unrendered card`).toBeGreaterThan(MIN_PHONE_CARD_PX)
-  expect(rect.height, `the reopened card is ${rect.height}px tall against a ${MOBILE_THIRD_PX}px cap`).toBeLessThanOrEqual(MOBILE_THIRD_PX)
-  expect(rect.x, `the reopened card overhangs the left edge (x ${rect.x})`).toBeGreaterThanOrEqual(0)
-  expect(rect.x + rect.width, `the reopened card overhangs the right edge (right ${rect.x + rect.width})`).toBeLessThanOrEqual(PHONE.width)
 
   expectNoConsoleErrors(errors)
 })
@@ -1096,6 +1135,7 @@ test('landing consent: O3 the notice is anchored bottom-right on desktop and a b
     ...WIDE_WIDTHS.map((width) => ({ width, height: 1080, band: false })),
     { width: 600, height: 844, band: true },
     { ...PHONE, band: true },
+    { width: 375, height: 844, band: true },
   ]
   const measured: Array<Gaps & { state: string }> = []
   const entry = page.viewportSize()
@@ -1133,7 +1173,31 @@ const TAB_CAP = 80
 const MIN_O4_CONTROLS = 20 // fewer means the walk never crossed the page
 const MIN_O4_CONTROLS_PRIVACY = 5 // header and footer links
 
-type FocusRead = { inside: boolean; name: string; rect: Rect; notice: Rect } | null
+const BAND_ALIGN_PX = 1 // scroll offsets snap to whole pixels, layout positions are fractional
+
+type Control = {
+  name: string
+  rect: Rect
+  notice: Rect
+  role: string | null
+  bandTop: number
+  platformPanel: boolean
+  namedBySelectedTab: boolean
+}
+type FocusRead = (Control & { inside: boolean }) | null
+
+/** Why a focused control is under the notice, or null. An oversized tab panel passes with its top parked at the band top, above the notice. */
+function coverViolation(c: Control): string | null {
+  if (!rectsOverlap(c.notice, c.rect)) return null
+  const band = c.notice.y - c.bandTop
+  if (c.role === 'tabpanel' && c.rect.height > band + BOX_SLACK_PX) {
+    const aligned = Math.abs(c.rect.y - c.bandTop) <= BAND_ALIGN_PX
+    if (aligned && c.rect.y < c.notice.y) return null
+    return `${c.name} is taller than the ${Math.round(band)}px band and its top sits at ${c.rect.y.toFixed(1)}px, not at the band top ${c.bandTop}px`
+  }
+  const o = overlapOf(c.notice, c.rect)
+  return `${c.name} is under the notice by ${Math.round(o.width)}x${Math.round(o.height)}px`
+}
 
 /** Park focus at the page top so the next Tab starts from the first control, not a stale starting point. */
 async function focusPageTop(page: Page): Promise<void> {
@@ -1148,8 +1212,8 @@ async function focusPageTop(page: Page): Promise<void> {
 }
 
 /** Tab until focus enters the notice (or the cap), returning every control focused outside it. */
-async function tabToNotice(page: Page): Promise<{ controls: Array<{ name: string; rect: Rect; notice: Rect }>; entered: boolean; presses: number }> {
-  const controls: Array<{ name: string; rect: Rect; notice: Rect }> = []
+async function tabToNotice(page: Page): Promise<{ controls: Control[]; entered: boolean; presses: number }> {
+  const controls: Control[] = []
   for (let press = 1; press <= TAB_CAP; press++) {
     await page.keyboard.press('Tab')
     // Wait for the scroll that focus triggers to land: the rects must repeat across frames.
@@ -1168,16 +1232,28 @@ async function tabToNotice(page: Page): Promise<{ controls: Array<{ name: string
         await new Promise<void>((r) => requestAnimationFrame(() => r()))
       }
       const name = `${el.tagName.toLowerCase()} "${(el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 40)}"`
-      return { inside: card.contains(el), name, rect: box(el), notice: box(card) }
+      const labelledBy = el.getAttribute('aria-labelledby')
+      const tab = labelledBy ? document.getElementById(labelledBy) : null
+      return {
+        inside: card.contains(el),
+        name,
+        rect: box(el),
+        notice: box(card),
+        role: el.getAttribute('role'),
+        bandTop: parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop),
+        platformPanel: el.matches('#platform [role=tabpanel]'),
+        namedBySelectedTab: tab?.getAttribute('role') === 'tab' && tab.getAttribute('aria-selected') === 'true' && tab.getAttribute('aria-controls') === el.id,
+      }
     })
     if (!read) continue
     if (read.inside) return { controls, entered: true, presses: press }
-    controls.push({ name: read.name, rect: read.rect, notice: read.notice })
+    const { inside: _inside, ...control } = read
+    controls.push(control)
   }
   return { controls, entered: false, presses: TAB_CAP }
 }
 
-async function expectTabClearsNotice(page: Page, testInfo: TestInfo, label: string, floor: number) {
+async function expectTabClearsNotice(page: Page, testInfo: TestInfo, label: string, floor: number): Promise<Control[]> {
   await focusPageTop(page)
   const walk = await tabToNotice(page)
   await testInfo.attach(`cookie-notice-tab-${label}.json`, {
@@ -1187,21 +1263,20 @@ async function expectTabClearsNotice(page: Page, testInfo: TestInfo, label: stri
   expect(walk.entered, `${label}: Tab never reached the notice in ${TAB_CAP} presses, so the walk did not cross the page`).toBe(true)
   expect(walk.controls.length, `${label}: only ${walk.controls.length} controls measured before the notice`).toBeGreaterThanOrEqual(floor)
 
-  const covered = walk.controls
-    .filter((c) => rectsOverlap(c.notice, c.rect))
-    .map((c) => {
-      const o = overlapOf(c.notice, c.rect)
-      return `${c.name} is under the notice by ${Math.round(o.width)}x${Math.round(o.height)}px`
-    })
+  const covered = walk.controls.map(coverViolation).filter((v): v is string => v !== null)
   expect(covered, `${label}: focus landed under the notice:\n${covered.join('\n')}`).toEqual([])
+  return walk.controls
 }
 
 // O4 — Tab never lands focus under the notice. The browser scrolls a focused control to
 // the viewport edge, which is under a fixed notice unless scroll-padding reserves the band.
+// A tab panel taller than the band cannot clear it: it passes with its top at scroll-padding-top.
 const O4_CASES = [
   { label: '1440x900 first visit', viewport: { width: 1440, height: 900 }, reopen: false },
   { label: '390x844 first visit', viewport: PHONE, reopen: false },
   { label: '390x844 reopened', viewport: PHONE, reopen: true },
+  { label: '375x844 first visit', viewport: { width: 375, height: 844 }, reopen: false },
+  { label: '375x844 reopened', viewport: { width: 375, height: 844 }, reopen: true },
   { label: '1280x720 first visit', viewport: { width: 1280, height: 720 }, reopen: false },
 ]
 for (const c of O4_CASES) {
@@ -1219,20 +1294,25 @@ for (const c of O4_CASES) {
       await scrollToTop(page)
     }
 
-    await expectTabClearsNotice(page, testInfo, c.label, MIN_O4_CONTROLS)
+    const controls = await expectTabClearsNotice(page, testInfo, c.label, MIN_O4_CONTROLS)
+    const panel = controls.filter((x) => x.platformPanel)
+    expect(panel.length, `${c.label}: Tab never focused the Platform tab panel exactly once (${panel.length} stops)`).toBe(1)
+    expect(panel[0].namedBySelectedTab, `${c.label}: the Platform panel is not named by the selected tab`).toBe(true)
     expectNoConsoleErrors(errors)
   })
 }
 
-test('landing consent: O4 Tab never lands focus under the notice (/privacy 390x844)', async ({ page }, testInfo) => {
-  test.setTimeout(120_000)
-  await page.emulateMedia({ reducedMotion: 'reduce' })
-  await page.setViewportSize(PHONE)
-  const { errors } = await openLanding(page, { url: PRIVACY_URL, privacy: true })
+for (const width of [390, 375]) {
+  test(`landing consent: O4 Tab never lands focus under the notice (/privacy ${width}x844)`, async ({ page }, testInfo) => {
+    test.setTimeout(120_000)
+    await page.emulateMedia({ reducedMotion: 'reduce' })
+    await page.setViewportSize({ width, height: 844 })
+    const { errors } = await openLanding(page, { url: PRIVACY_URL, privacy: true })
 
-  await expectTabClearsNotice(page, testInfo, 'privacy 390x844', MIN_O4_CONTROLS_PRIVACY)
-  expectNoConsoleErrors(errors)
-})
+    await expectTabClearsNotice(page, testInfo, `privacy ${width}x844`, MIN_O4_CONTROLS_PRIVACY)
+    expectNoConsoleErrors(errors)
+  })
+}
 
 /** The computed value of `prop` when set to `expr` (a token) on a probe element: the cascade-free reference. */
 function resolved(page: Page, prop: string, expr: string): Promise<string> {
@@ -1251,7 +1331,7 @@ function resolved(page: Page, prop: string, expr: string): Promise<string> {
 
 // Resolved values: card-floating and the v2 tokens must win the cascade. CN-1 reads source
 // and cannot see a rule that beats the class. Each value is compared to its token, not a literal.
-for (const viewport of [{ width: 1440, height: 900 }, PHONE]) {
+for (const viewport of [{ width: 1440, height: 900 }, PHONE, { width: 375, height: 844 }]) {
   test(`landing consent: the card, label, setting line and buttons resolve to their v2 tokens (${viewport.width}x${viewport.height})`, async ({
     page,
   }) => {

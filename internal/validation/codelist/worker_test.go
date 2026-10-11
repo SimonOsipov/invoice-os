@@ -123,6 +123,20 @@ func TestWorker_FailedRunReachesSentry(t *testing.T) {
 	}
 }
 
+func TestWorker_HeldPullReachesSentry(t *testing.T) {
+	s, srv, l, _ := seedN(t, 20)
+	srv.set(200, pull(cEntries(1, 17, "x")))
+	s.lists = []List{l}
+	_, rec, want := sentrytest.Boot(t, "validation")
+	startWorker(t, time.Hour, s.SyncAll)
+	waitFor(t, "the event", func() bool { return len(rec.Events()) >= 1 })
+
+	e := rec.One(t, want)
+	if got := eventText(e); !strings.Contains(got, l.Name) || !strings.Contains(got, "held") {
+		t.Errorf("event text = %q, want it to carry %q and %q", got, l.Name, "held")
+	}
+}
+
 func TestWorker_EachFailedRunIsReported(t *testing.T) {
 	_, rec, want := sentrytest.Boot(t, "validation")
 	var calls atomic.Int64

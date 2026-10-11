@@ -127,6 +127,31 @@ func TestMigrateUpFromEmbedded(t *testing.T) {
 	// Roll all the way back so Up is proven from zero. DownTo(0) runs every Down
 	// in the embedded set — a stale/incomplete embed would already fail here.
 	resetInvoicesBeforeFullSchemaReset(t, ctx)
+
+	// DownTo(0) drops the sync table, so it cannot see a bad Down of the status migration.
+	// ApplyVersion, not DownTo: goose rolls back by apply order, which other tests scramble.
+	const statusMigration = 20261011031657
+	const statusState = `SELECT
+		EXISTS (SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'nrs_code_list_syncs' AND column_name = 'status'),
+		has_column_privilege('invoice_app', 'nrs_code_list_syncs', 'synced_at', 'SELECT')`
+	var hasStatus, appReads bool
+	if err := sqlDB.QueryRowContext(ctx, statusState).Scan(&hasStatus, &appReads); err != nil {
+		t.Fatalf("read status migration state: %v", err)
+	}
+	if !hasStatus || !appReads {
+		t.Fatalf("before Down: status column %v, app SELECT synced_at %v, want both true", hasStatus, appReads)
+	}
+	if _, err := provider.ApplyVersion(ctx, statusMigration, false); err != nil {
+		t.Fatalf("down past the status migration: %v", err)
+	}
+	if err := sqlDB.QueryRowContext(ctx, statusState).Scan(&hasStatus, &appReads); err != nil {
+		t.Fatalf("read state after status Down: %v", err)
+	}
+	if hasStatus || appReads {
+		t.Fatalf("after Down: status column %v, app SELECT synced_at %v, want both false", hasStatus, appReads)
+	}
+
 	if _, err := provider.DownTo(ctx, 0); err != nil {
 		t.Fatalf("reset to empty (down to 0): %v", err)
 	}

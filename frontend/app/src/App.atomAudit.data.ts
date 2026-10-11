@@ -34,7 +34,7 @@ export type AuditedAtom = {
 // `correctly-reset` covers TWO shapes, deliberately not split into a fifth verdict:
 // (a) actively reset by switchClient (App.tsx#switchClient), directly or via navigate('dashboard');
 // (b) tenant-scoped or otherwise invariant across a company switch, so it cannot go stale.
-// Shape (b): suspended, clients, bootPath/bootSearch, seed, sandbox, connectors,
+// Shape (b): suspended, bootPath/bootSearch, seed, sandbox, connectors,
 // connectorMappings, customRuleStore, policies, members, roles. Named, not indexed --
 // inserting a row renumbers an index list and nothing catches it.
 
@@ -66,15 +66,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     verdict: 'correctly-reset',
     citation: { text: 'if (suspended) return <SuspendedNotice onSignOut={onSignOut} />' },
     note: 'Tenant/membership-scoped and latched, never unlatched -- it pre-empts the whole shell at App.tsx#Workspace. Every company here shares one tenant.',
-  },
-  {
-    binding: 'clients, setClients',
-    name: 'clients',
-    kind: 'useState',
-    resetBySwitchClient: false,
-    routes: ALL_13,
-    verdict: 'correctly-reset',
-    note: 'Tenant-scoped portfolio -- the switcher list itself. listEntities (lib/portfolio.ts:87-89) passes no entityId, and useAsync defaults deps to [], so the set is identical across a switch. Read by Sidebar and CreateUpload.',
   },
   {
     binding: 'activeEntityId, setActiveEntityId',

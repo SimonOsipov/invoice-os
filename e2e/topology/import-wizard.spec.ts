@@ -3449,6 +3449,29 @@ test('EXTR11-E2E-04/04b: the image is the stored grid, and the wire is exactly t
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+type FrameRead = {
+  frameBox: { x: number; width: number } | null
+  innerBox: { x: number; width: number } | null
+  groundScrollsX: boolean
+  groundScrollsY: boolean
+}
+
+// innerBox is the ground's inner pad, the frame's containing block: its only element child,
+// which ExtractionCanvas.test.tsx pins from the other side.
+function readFrameBands(ground: Element, frameId: string): FrameRead {
+  const box = (el: Element | null) => {
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.x, width: r.width }
+  }
+  return {
+    frameBox: box(ground.querySelector(`[data-testid="${frameId}"]`)),
+    innerBox: box(ground.firstElementChild),
+    groundScrollsX: ground.scrollWidth > ground.clientWidth + 1,
+    groundScrollsY: ground.scrollHeight > ground.clientHeight + 1,
+  }
+}
+
 test('EXTR11-E2E-06 (AC-2/AC-5): the page frame scales with zoom, centred where it fits', async ({ page }, testInfo) => {
   test.setTimeout(300_000)
   const errors = collectErrors(page)
@@ -3456,11 +3479,7 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame scales with zoom, centred where 
   await extractOneDocument(page, 'EXTR-11-05 band')
   await openExtractionReview(page)
 
-  const frame = page.getByTestId('extraction-page-1')
   const ground = page.getByTestId('extraction-ground')
-  // The ground's inner pad -- the frame's actual containing block. Its only element child,
-  // which ExtractionCanvas.test.tsx pins from the other side.
-  const innerPad = ground.locator('> div').first()
 
   type Fit = {
     width: number
@@ -3486,17 +3505,22 @@ test('EXTR11-E2E-06 (AC-2/AC-5): the page frame scales with zoom, centred where 
       for (const width of WIDE_WIDTHS) {
         await page.setViewportSize({ width, height: 1080 })
 
-        const m = await settledRead(async () => {
-          const [frameBox, innerBox, scroll] = await Promise.all([
-            frame.boundingBox(),
-            innerPad.boundingBox(),
-            ground.evaluate((el) => ({
-              groundScrollsX: el.scrollWidth > el.clientWidth + 1,
-              groundScrollsY: el.scrollHeight > el.clientHeight + 1,
-            })),
-          ])
-          return { frameBox, innerBox, ...scroll }
-        }, `page frame at ${width}px, zoom ${zoom}`)
+        // One evaluate, so the frame and its pad come from the same layout. Poll the invariant
+        // itself: two agreeing reads can both be a stale pre-settle layout.
+        let m!: FrameRead
+        await expect
+          .poll(
+            async () => {
+              m = await ground.evaluate(readFrameBands, 'extraction-page-1')
+              if (!m.frameBox || !m.innerBox) return 'the frame or its pad has no box'
+              const { left, right } = gaps({ x: m.frameBox.x, width: m.frameBox.width }, { x: m.innerBox.x, width: m.innerBox.width })
+              const fitsNow = m.frameBox.width <= m.innerBox.width + 1
+              if (fitsNow) return Math.abs(left - right) <= 2 ? '' : `margins disagree (left ${left}, right ${right})`
+              return m.groundScrollsX ? '' : 'the frame overflows and the ground does not scroll'
+            },
+            { message: `page frame at ${width}px, zoom ${zoom} never reached its centred or scrolling state`, timeout: 15_000 },
+          )
+          .toBe('')
 
         expect(m.frameBox && m.innerBox, `the frame and its pad must both render at ${width}px`).toBeTruthy()
         const g = gaps({ x: m.frameBox!.x, width: m.frameBox!.width }, { x: m.innerBox!.x, width: m.innerBox!.width })

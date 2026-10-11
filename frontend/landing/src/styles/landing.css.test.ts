@@ -563,7 +563,7 @@ function barFailures(css: string): string[] {
       sel === '.a-actions .ds-btn'
         ? [['position', 'relative']]
         : sel === '.a-actions .ds-btn::after'
-          ? [['content', "''"], ['position', 'absolute'], ['top', 'calc(50% - 22px)'], ['height', '44px']]
+          ? [['content', "''"], ['position', 'absolute'], ['left', '0'], ['right', '0'], ['top', 'calc(50% - 22px)'], ['height', '44px']]
           : [['selector', undefined]]
     for (const [prop, v] of props) if (d(prop) !== v) out.push(`hit-area ${sel} ${prop}: ${d(prop)} != ${v}`)
   }
@@ -626,6 +626,11 @@ describe('the header bar below 375px', () => {
     expect(hit.map((r) => r.selector.trim())).toEqual(['.a-actions .ds-btn', '.a-actions .ds-btn::after'])
     expect(hit.map((r) => maxWidthQuery(r.at))).toEqual([374.98, 374.98])
     expect(barFailures(LANDING_CSS)).toEqual([])
+  })
+
+  it('control: a hit area without left and right 0 (zero width, never hit) is flagged', () => {
+    const css = rewrite('    left: 0;\n    right: 0;\n    top: calc(50% - 22px);', '    top: calc(50% - 22px);')
+    expect(barFailures(css).join('\n')).toContain('hit-area .a-actions .ds-btn::after left: undefined != 0')
   })
 
   it('boundary: a hit-area rule outside the 374.98px query is flagged', () => {

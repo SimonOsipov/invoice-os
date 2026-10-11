@@ -185,6 +185,13 @@ describe('the header action group', () => {
     expect((attrs.class ?? '').split(/\s+/), 'class list').toContain('a-actions')
     expect(attrs, 'no inline style').not.toHaveProperty('style')
   })
+
+  it('the header logo link holds the .ds-logo-word span that the narrow-width rule hides', () => {
+    const html = render()
+    const link = /<a\b[^>]*aria-label="ASComply Africa"[^>]*>([\s\S]*?)<\/a>/.exec(html)
+    expect(link, 'expected the logo link').not.toBeNull()
+    expect(link![1]).toContain('class="ds-logo-word"')
+  })
 })
 
 describe('the header bar', () => {

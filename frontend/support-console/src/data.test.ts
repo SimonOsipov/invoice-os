@@ -1,8 +1,15 @@
 // Specs for the audit filter and the health-card derivation, run over the mock dataset.
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { describe, expect, it } from 'vitest'
 
+import * as data from './data'
 import { AUDIT_ENTRIES, healthCards } from './data'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { filterAudit } from './components/Audit'
+import { PublishModal } from './components/PublishModal'
 
 describe('audit', () => {
   it('DAT-14: an unfiltered view returns everything', () => {
@@ -56,5 +63,30 @@ describe('healthCards', () => {
     expect(clear?.value).toBe('0')
     expect(clear?.status).toBe('CLEAR')
     expect(clear?.tone).toBe('green')
+  })
+})
+
+describe('Rules admin mock data', () => {
+  it('no Rules admin mock data remains', () => {
+    for (const name of ['RULE_SET_VERSIONS', 'LEARNED_RULES', 'RULE_PARAMS', 'SEED_RULES', 'DIFF_ROWS']) expect(Object.keys(data), name).not.toContain(name)
+  })
+
+  it('no publish mock data remains', () => {
+    expect(Object.keys(data)).not.toContain('DIFF_ROWS')
+    const html = renderToStaticMarkup(
+      createElement(PublishModal, { draftVersion: 5, inForceVersion: 4, rows: [], warnings: [], today: '2026-10-11', busy: false, error: null, onClose: () => undefined, onConfirm: () => undefined }),
+    )
+    expect(html).not.toContain('v9')
+  })
+
+  it('rulesFixture is imported only by tests', () => {
+    const files = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name)] : []))
+    const all = files(__dirname).filter((f) => !f.endsWith('data.test.ts'))
+    const isTest = (f: string) => /\.test\.tsx?$/.test(f)
+    expect(all.length, 'files scanned').toBeGreaterThan(20)
+    const naming = all.filter((f) => !f.endsWith('rulesFixture.ts') && stripComments(readFileSync(f, 'utf8')).toLowerCase().includes('rulesfixture'))
+    expect(naming.filter((f) => !isTest(f))).toEqual([])
+    expect(naming.filter(isTest).length).toBeGreaterThan(0)
   })
 })

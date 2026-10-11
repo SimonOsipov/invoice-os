@@ -197,9 +197,17 @@ func TestValidationMain_StaffRoutesAreRegisteredAndToggleStays(t *testing.T) {
 		return true
 	})
 	for pattern, want := range map[string]string{
-		"PATCH /v1/rules/{key}":       "validation.ToggleHandler",
-		"GET /v1/staff/rules":         "validation.StaffListRulesHandler",
-		"PATCH /v1/staff/rules/{key}": "validation.StaffSwitchRuleHandler",
+		"PATCH /v1/rules/{key}":                            "validation.ToggleHandler",
+		"GET /v1/staff/rules":                              "validation.StaffListRulesHandler",
+		"PATCH /v1/staff/rules/{key}":                      "validation.StaffSwitchRuleHandler",
+		"GET /v1/staff/rule-versions":                      "validation.StaffVersionsHandler",
+		"POST /v1/staff/rule-versions/draft":               "validation.StaffOpenDraftHandler",
+		"POST /v1/staff/rule-versions/draft/rules":         "validation.StaffAddDraftRuleHandler",
+		"PUT /v1/staff/rule-versions/draft/rules/{key}":    "validation.StaffEditDraftRuleHandler",
+		"DELETE /v1/staff/rule-versions/draft/rules/{key}": "validation.StaffRemoveDraftRuleHandler",
+		"POST /v1/staff/rule-versions/draft/publish":       "validation.StaffPublishDraftHandler",
+		"POST /v1/staff/rule-versions/draft/test":          "validation.StaffTestDraftHandler",
+		"GET /v1/staff/code-list-syncs":                    "validation.StaffCodeListSyncsHandler",
 	} {
 		if got := handlers[pattern]; len(got) != 1 || got[0] != want {
 			t.Errorf("%q registered with %v, want exactly [%s]", pattern, got, want)

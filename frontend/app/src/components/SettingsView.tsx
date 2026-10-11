@@ -139,6 +139,14 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                     { label: 'Sector', value: activeEntity.sector, mono: false },
                     { label: 'Registration', value: activeEntity.registration, mono: false },
                     { label: 'Address', value: activeEntity.address, mono: false },
+                    { label: 'Email', value: activeEntity.email, mono: false },
+                    { label: 'Phone', value: activeEntity.telephone, mono: false },
+                    { label: 'Street', value: activeEntity.street, mono: false },
+                    { label: 'City', value: activeEntity.city, mono: false },
+                    { label: 'Postal zone', value: activeEntity.postal_zone, mono: false },
+                    { label: 'Country', value: activeEntity.country, mono: false },
+                    { label: 'State', value: activeEntity.state, mono: false },
+                    { label: 'LGA', value: activeEntity.lga, mono: false },
                   ].map((r, k, all) => (
                     <div key={r.label} style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 12, padding: '10px 0', borderBottom: k === all.length - 1 ? 0 : '1px solid var(--line-1)' }}>
                       <span className="label">{r.label}</span>

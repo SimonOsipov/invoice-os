@@ -123,6 +123,7 @@ describe('Settings > Signing', () => {
 
 // Resolved paint against the prototype Settings view (radius, dots, rows, titles).
 const ENTITY = { id: 'e1', name: 'Honeywell Group', tin: '12345678-0001', sector: 'Food', registration: null, address: '1 Marina Rd', status: 'active', created_at: '2026-01-01T00:00:00.000Z' }
+const NRS_LABELS = ['Email', 'Phone', 'Street', 'City', 'Postal zone', 'Country', 'State', 'LGA']
 const inhouse = (over: Record<string, unknown> = {}) => settingsCtx('company', false, { mode: 'inhouse', ...over })
 const radii = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>('*')].map((e) => e.style.borderRadius).filter(Boolean)
 
@@ -142,6 +143,13 @@ describe('Settings > shell', () => {
 })
 
 describe('Settings > Company card', () => {
+  it('lists the NRS rows with — for unset', () => {
+    render(<SettingsView ctx={inhouse({ activeEntity: { ...ENTITY, state: 'NG-LA' } })} />)
+    const value = (l: string) => screen.getByText(l, { exact: true }).parentElement!.lastElementChild!.textContent
+    expect(value('State')).toBe('NG-LA')
+    for (const l of NRS_LABELS.filter((l) => l !== 'State')) expect(value(l), l).toBe('—')
+  })
+
   it('the header pads 14px 20px with a 15/700 title and a 32-tall ghost Edit company', () => {
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
     render(<SettingsView ctx={inhouse({ activeEntity: ENTITY })} />)
@@ -158,15 +166,15 @@ describe('Settings > Company card', () => {
 
   it('rows are 140px 1fr with a divider between them and none under the last; a null value reads —', () => {
     render(<SettingsView ctx={inhouse({ activeEntity: ENTITY })} />)
-    const labels = ['Name', 'TIN', 'Sector', 'Registration', 'Address'].map((l) => screen.getByText(l, { exact: true }))
+    const labels = ['Name', 'TIN', 'Sector', 'Registration', 'Address', ...NRS_LABELS].map((l) => screen.getByText(l, { exact: true }))
     labels.forEach((l) => expect(l.className).toBe('label'))
     const rows = labels.map((l) => l.parentElement as HTMLElement)
     rows.forEach((r) => {
       expect(r.style.gridTemplateColumns).toBe('140px 1fr')
       expect(r.style.padding).toBe('10px 0px')
     })
-    rows.slice(0, 4).forEach((r) => expect(r.style.borderBottom).toBe('1px solid var(--line-1)'))
-    expect(rows[4].style.borderBottom).toMatch(/^(0|0px|none)/)
+    rows.slice(0, 12).forEach((r) => expect(r.style.borderBottom).toBe('1px solid var(--line-1)'))
+    expect(rows[12].style.borderBottom).toMatch(/^(0|0px|none)/)
     expect(rows[3].lastElementChild!.textContent).toBe('—')
     expect(rows[1].lastElementChild!.className).toBe('mono')
     expect((rows[1].lastElementChild as HTMLElement).style.fontSize).toBe('12.5px')

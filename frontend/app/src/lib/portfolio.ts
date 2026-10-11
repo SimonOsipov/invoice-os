@@ -49,6 +49,14 @@ export interface Entity {
   registration: string | null
   sector: string | null
   address: string | null
+  email?: string | null
+  telephone?: string | null
+  street?: string | null
+  city?: string | null
+  postal_zone?: string | null
+  country?: string | null
+  state?: string | null
+  lga?: string | null
   status: EntityStatus
   created_at: string
 }
@@ -64,6 +72,14 @@ export interface EntityInput {
   registration?: string
   sector?: string
   address?: string
+  email?: string
+  telephone?: string
+  street?: string
+  city?: string
+  postal_zone?: string
+  country?: string
+  state?: string
+  lga?: string
 }
 
 // The authedFetch seam these helpers consume — createAuthedFetch's return type

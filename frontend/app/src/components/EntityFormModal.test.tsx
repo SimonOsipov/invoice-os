@@ -186,7 +186,7 @@ describe('EntityFormModal TIN hint (AUTH-10-02)', () => {
   it('only the TIN input points at the hint', () => {
     const { dialog } = mount('create', 'inhouse')
     const inputs = Array.from(dialog.getAllByRole('textbox'))
-    expect(inputs).toHaveLength(5)
+    expect(inputs).toHaveLength(13)
     const described = inputs.filter((i) => i.getAttribute('aria-describedby') === 'entity-tin-hint')
     expect(described).toHaveLength(1)
     expect((described[0] as HTMLInputElement).placeholder).toBe('########-####')
@@ -474,11 +474,46 @@ describe('PR-01 the entity modal sits 10px over the v2 scrim', () => {
     const { container } = mount('create', 'firm')
     const inputs = Array.from(container.querySelectorAll<HTMLInputElement>('input.pf-input'))
 
-    expect(inputs, 'the five fields render').toHaveLength(5)
+    expect(inputs, 'the thirteen fields render').toHaveLength(13)
     for (const input of inputs) {
       expect(input.style.borderColor, 'inline border-color').toBe('')
       expect(input.style.boxShadow, 'inline box-shadow').toBe('')
       expect(input.style.border, 'inline border').toBe('')
     }
+  })
+})
+
+describe('EntityFormModal NRS fields', () => {
+  beforeEach(() => {
+    vi.mocked(createEntity).mockReset()
+    vi.mocked(updateEntity).mockReset()
+  })
+  afterEach(cleanup)
+
+  it('edit modal PATCHes only the changed NRS field', async () => {
+    vi.mocked(updateEntity).mockResolvedValue(undefined as never)
+    const entity: Entity = { ...ENTITY, email: 'old@x.ng', city: 'Lagos' }
+    render(<EntityFormModal mode="edit" entity={entity} ctx={ctxFor('firm')} base="https://gateway.test" onClose={() => {}} onSuccess={() => {}} />)
+    const dialog = within(screen.getByRole('dialog'))
+
+    fireEvent.change(dialog.getByDisplayValue('old@x.ng'), { target: { value: 'new@x.ng' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateEntity).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateEntity).mock.calls[0][3]).toEqual({ email: 'new@x.ng' })
+  })
+
+  it('the 8 NRS inputs are disabled while submitting, like Address', async () => {
+    vi.mocked(createEntity).mockReturnValue(new Promise(() => {}))
+    const { dialog } = mount('create', 'firm')
+    const inputs = Array.from(screen.getByRole('dialog').querySelectorAll<HTMLInputElement>('input.pf-input'))
+    expect(inputs).toHaveLength(13)
+
+    fireEvent.change(dialog.getAllByRole('textbox')[0], { target: { value: 'Acme' } })
+    fireEvent.change(dialog.getByPlaceholderText('########-####'), { target: { value: '20184412-0001' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add client' }))
+
+    await waitFor(() => expect(inputs[4].disabled).toBe(true))
+    for (const input of inputs.slice(4)) expect(input.disabled).toBe(true)
   })
 })

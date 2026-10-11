@@ -82,18 +82,19 @@ func listRows(t *testing.T, super *pgxpool.Pool, list string) []codeRow {
 type syncRow struct {
 	entryCount             int
 	added, removed, change []string
+	status                 string
 }
 
 func syncRows(t *testing.T, super *pgxpool.Pool, list string) []syncRow {
 	t.Helper()
 	rows, err := super.Query(context.Background(),
-		`SELECT entry_count, added, removed, changed FROM nrs_code_list_syncs WHERE list = $1 ORDER BY synced_at, id`, list)
+		`SELECT entry_count, added, removed, changed, status FROM nrs_code_list_syncs WHERE list = $1 ORDER BY synced_at, id`, list)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (syncRow, error) {
 		var s syncRow
-		return s, r.Scan(&s.entryCount, &s.added, &s.removed, &s.change)
+		return s, r.Scan(&s.entryCount, &s.added, &s.removed, &s.change, &s.status)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +106,68 @@ func wantStrings(t *testing.T, what string, got []string, want ...string) {
 	t.Helper()
 	if got == nil || !slices.Equal(got, append([]string{}, want...)) {
 		t.Errorf("%s = %#v, want %#v", what, got, want)
+	}
+}
+
+// release runs the runbook's guarded UPDATE as invoice_migrator and returns the rows it changed.
+func release(t *testing.T, super *pgxpool.Pool, list string) int64 {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE invoice_migrator`); err != nil {
+		t.Fatal(err)
+	}
+	tag, err := tx.Exec(ctx, `UPDATE nrs_code_list_syncs SET status = 'released' WHERE id = (SELECT id FROM nrs_code_list_syncs WHERE list = $1 ORDER BY synced_at DESC, id DESC LIMIT 1) AND status = 'held'`, list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return tag.RowsAffected()
+}
+
+// cEntries returns entries for codes c<lo>..c<hi> with one description.
+func cEntries(lo, hi int, desc string) []string {
+	var out []string
+	for i := lo; i <= hi; i++ {
+		out = append(out, entry(fmt.Sprintf("c%02d", i), desc))
+	}
+	return out
+}
+
+func pull(parts ...[]string) string {
+	var all []string
+	for _, p := range parts {
+		all = append(all, p...)
+	}
+	return envelope(all...)
+}
+
+// seedN syncs c01..c<n> into a fresh list.
+func seedN(t *testing.T, n int) (*Syncer, *flipServer, List, *pgxpool.Pool) {
+	t.Helper()
+	super, app := dbTestPools(t)
+	l := testList(newListName(t, super))
+	srv := newFlipServer(t, pull(cEntries(1, n, "x")))
+	s := newSyncer(t, app, srv.URL)
+	if _, err := s.SyncList(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	return s, srv, l, super
+}
+
+func wantHeld(t *testing.T, ch Change, err error, list string) {
+	t.Helper()
+	if !errors.Is(err, ErrHeld) || !strings.Contains(err.Error(), list) {
+		t.Fatalf("err = %v, want ErrHeld naming %s", err, list)
+	}
+	if !ch.Held {
+		t.Errorf("Change.Held = false, want true")
 	}
 }
 
@@ -155,6 +218,11 @@ func TestSync_RecordsAddedRemovedChanged(t *testing.T) {
 	s, srv, l, super := seeded(t)
 	srv.set(200, envelope(entry("A", "a"), entry("B", "b-new"), entry("D", "d")))
 
+	held, err := s.SyncList(context.Background(), l)
+	wantHeld(t, held, err, l.Name)
+	if n := release(t, super, l.Name); n != 1 {
+		t.Fatalf("release affected %d rows, want 1", n)
+	}
 	ch, err := s.SyncList(context.Background(), l)
 	if err != nil {
 		t.Fatal(err)
@@ -163,10 +231,13 @@ func TestSync_RecordsAddedRemovedChanged(t *testing.T) {
 	wantStrings(t, "Removed", ch.Removed, "C")
 	wantStrings(t, "Changed", ch.Changed, "B")
 	syncs := syncRows(t, super, l.Name)
-	if len(syncs) != 2 {
-		t.Fatalf("%d sync rows, want 2", len(syncs))
+	if len(syncs) != 3 {
+		t.Fatalf("%d sync rows, want 3", len(syncs))
 	}
-	last := syncs[1]
+	last := syncs[len(syncs)-1]
+	if last.status != "applied" {
+		t.Errorf("last status = %q, want applied", last.status)
+	}
 	wantStrings(t, "row added", last.added, "D")
 	wantStrings(t, "row removed", last.removed, "C")
 	wantStrings(t, "row changed", last.change, "B")
@@ -241,10 +312,15 @@ func TestSync_MalformedListKeepsPreviousList(t *testing.T) {
 
 func TestSync_DBErrorRollsBackTheList(t *testing.T) {
 	s, srv, l, super := seeded(t)
-	rows, n := listRows(t, super, l.Name), len(syncRows(t, super, l.Name))
 	// C is dropped (DELETE runs first); D's \u0000 makes the upsert fail.
 	srv.set(200, envelope(entry("A", "a-new"), entry("B", "b1"), `{"code":"D","description":"x\u0000y"}`))
-	_, err := s.SyncList(context.Background(), l)
+	held, err := s.SyncList(context.Background(), l)
+	wantHeld(t, held, err, l.Name)
+	if n := release(t, super, l.Name); n != 1 {
+		t.Fatalf("release affected %d rows, want 1", n)
+	}
+	rows, n := listRows(t, super, l.Name), len(syncRows(t, super, l.Name))
+	_, err = s.SyncList(context.Background(), l)
 	if err == nil || !strings.Contains(err.Error(), "upsert") {
 		t.Fatalf("err = %v, want an upsert error", err)
 	}
@@ -373,6 +449,11 @@ func TestSync_ChangeListsAreSorted(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.set(200, envelope(entry("c1", "y"), entry("c2", "y"), entry("c3", "y"), entry("d1", "x"), entry("d2", "x"), entry("d3", "x")))
+	held, err := s.SyncList(context.Background(), l)
+	wantHeld(t, held, err, l.Name)
+	if n := release(t, super, l.Name); n != 1 {
+		t.Fatalf("release affected %d rows, want 1", n)
+	}
 	ch, err := s.SyncList(context.Background(), l)
 	if err != nil {
 		t.Fatal(err)
@@ -380,8 +461,441 @@ func TestSync_ChangeListsAreSorted(t *testing.T) {
 	wantStrings(t, "Added", ch.Added, "d1", "d2", "d3")
 	wantStrings(t, "Removed", ch.Removed, "c4", "c5")
 	wantStrings(t, "Changed", ch.Changed, "c1", "c2", "c3")
-	row := syncRows(t, super, l.Name)[1]
+	syncs := syncRows(t, super, l.Name)
+	row := syncs[len(syncs)-1]
 	wantStrings(t, "row added", row.added, "d1", "d2", "d3")
 	wantStrings(t, "row removed", row.removed, "c4", "c5")
 	wantStrings(t, "row changed", row.change, "c1", "c2", "c3")
+}
+
+func TestSync_ShrinkOverTenPercentIsHeld(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	rows := listRows(t, super, l.Name)
+	srv.set(200, pull(cEntries(1, 17, "x")))
+	ch, err := s.SyncList(context.Background(), l)
+	wantHeld(t, ch, err, l.Name)
+	assertUnchanged(t, super, l.Name, rows, 2)
+}
+
+func TestSync_HeldPullWritesNoUpsert(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	rows := listRows(t, super, l.Name)
+	srv.set(200, pull(cEntries(1, 1, "y"), cEntries(2, 17, "x"), []string{entry("n1", "x")}))
+	ch, err := s.SyncList(context.Background(), l)
+	wantHeld(t, ch, err, l.Name)
+	assertUnchanged(t, super, l.Name, rows, 2)
+}
+
+func TestSync_ThresholdIsOfTheStoredCount(t *testing.T) {
+	s, srv, l, _ := seedN(t, 20)
+	srv.set(200, pull(cEntries(1, 17, "x"), cEntries(21, 40, "x")))
+	ch, err := s.SyncList(context.Background(), l)
+	wantHeld(t, ch, err, l.Name)
+}
+
+func TestSync_SmallListSingleRemovalIsHeld(t *testing.T) {
+	t.Run("3 stored", func(t *testing.T) {
+		s, srv, l, _ := seeded(t)
+		srv.set(200, envelope(entry("A", "a"), entry("B", "b1")))
+		ch, err := s.SyncList(context.Background(), l)
+		wantHeld(t, ch, err, l.Name)
+	})
+	t.Run("9 stored", func(t *testing.T) {
+		s, srv, l, _ := seedN(t, 9)
+		srv.set(200, pull(cEntries(1, 8, "x")))
+		ch, err := s.SyncList(context.Background(), l)
+		wantHeld(t, ch, err, l.Name)
+	})
+	t.Run("10 stored applies", func(t *testing.T) {
+		s, srv, l, super := seedN(t, 10)
+		srv.set(200, pull(cEntries(1, 9, "x")))
+		if _, err := s.SyncList(context.Background(), l); err != nil {
+			t.Fatal(err)
+		}
+		if n := len(listRows(t, super, l.Name)); n != 9 {
+			t.Errorf("%d rows, want 9", n)
+		}
+	})
+}
+
+func TestSync_HeldPullIsRecorded(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	srv.set(200, pull(cEntries(1, 17, "x")))
+	if _, err := s.SyncList(context.Background(), l); !errors.Is(err, ErrHeld) {
+		t.Fatalf("err = %v, want ErrHeld", err)
+	}
+	syncs := syncRows(t, super, l.Name)
+	if len(syncs) != 2 || syncs[0].status != "applied" {
+		t.Fatalf("sync rows = %+v, want applied then held", syncs)
+	}
+	h := syncs[1]
+	if h.status != "held" || h.entryCount != 17 {
+		t.Errorf("held row = %+v, want status held, entry_count 17", h)
+	}
+	wantStrings(t, "removed", h.removed, "c18", "c19", "c20")
+	wantStrings(t, "added", h.added)
+	wantStrings(t, "changed", h.change)
+}
+
+func TestSync_HeldRemovedIsSorted(t *testing.T) {
+	s, srv, l, super := seedN(t, 30)
+	// Reinsert in reverse so heap order is not sorted order.
+	if _, err := super.Exec(context.Background(), `WITH old AS (DELETE FROM nrs_codes WHERE list = $1 RETURNING code, entries)
+INSERT INTO nrs_codes (list, code, entries) SELECT $1, code, entries FROM old ORDER BY code DESC`, l.Name); err != nil {
+		t.Fatal(err)
+	}
+	// The primary-key index returns sorted codes; force a seq scan so only the sort orders them.
+	cfg := s.pool.Config().Copy()
+	cfg.ConnConfig.RuntimeParams["options"] = "-c enable_indexscan=off -c enable_indexonlyscan=off -c enable_bitmapscan=off"
+	seq, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(seq.Close)
+	s.pool = seq
+	srv.set(200, pull(cEntries(1, 20, "x")))
+	ch, err := s.SyncList(context.Background(), l)
+	wantHeld(t, ch, err, l.Name)
+	var want []string
+	for i := 21; i <= 30; i++ {
+		want = append(want, fmt.Sprintf("c%02d", i))
+	}
+	wantStrings(t, "Change.Removed", ch.Removed, want...)
+	wantStrings(t, "Change.Added", ch.Added)
+	wantStrings(t, "Change.Changed", ch.Changed)
+	if ch.Entries != 20 {
+		t.Errorf("Change.Entries = %d, want 20", ch.Entries)
+	}
+	syncs := syncRows(t, super, l.Name)
+	if len(syncs) != 2 {
+		t.Fatalf("%d sync rows, want 2", len(syncs))
+	}
+	wantStrings(t, "row removed", syncs[1].removed, want...)
+}
+
+// mux serves each list's flipServer under /<list>.
+func mux(t *testing.T, srvs map[string]*flipServer) string {
+	t.Helper()
+	m := http.NewServeMux()
+	for name, f := range srvs {
+		m.Handle("/"+name, f.Config.Handler)
+	}
+	srv := httptest.NewServer(m)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestSyncAll_HeldListDoesNotStopOthers(t *testing.T) {
+	super, app := dbTestPools(t)
+	held, good := testList(newListName(t, super)), testList(newListName(t, super))
+	heldSrv, goodSrv := newFlipServer(t, pull(cEntries(1, 20, "x"))), newFlipServer(t, abcBody)
+	s := newSyncer(t, app, mux(t, map[string]*flipServer{held.Name: heldSrv, good.Name: goodSrv}))
+	s.lists = []List{held, good}
+	if err := s.SyncAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	heldSrv.set(200, pull(cEntries(1, 17, "x")))
+	err := s.SyncAll(context.Background())
+	if !errors.Is(err, ErrHeld) || !strings.Contains(err.Error(), held.Name) || strings.Contains(err.Error(), good.Name) {
+		t.Fatalf("err = %v, want ErrHeld naming only %s", err, held.Name)
+	}
+	if n := len(syncRows(t, super, good.Name)); n != 2 {
+		t.Errorf("good list has %d sync rows, want 2", n)
+	}
+	if n := len(listRows(t, super, held.Name)); n != 20 {
+		t.Errorf("held list has %d rows, want 20", n)
+	}
+}
+
+func TestSync_RemovalOfExactlyTenPercentApplies(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	srv.set(200, pull(cEntries(1, 18, "x")))
+	if _, err := s.SyncList(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(listRows(t, super, l.Name)); n != 18 {
+		t.Errorf("%d rows, want 18", n)
+	}
+	syncs := syncRows(t, super, l.Name)
+	last := syncs[len(syncs)-1]
+	if last.status != "applied" {
+		t.Errorf("status = %q, want applied", last.status)
+	}
+	wantStrings(t, "removed", last.removed, "c19", "c20")
+}
+
+func TestSync_AddsAndChangesNeverHold(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	srv.set(200, pull(cEntries(1, 5, "y"), cEntries(6, 20, "x"), cEntries(21, 30, "x")))
+	if _, err := s.SyncList(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	syncs := syncRows(t, super, l.Name)
+	last := syncs[len(syncs)-1]
+	if len(last.added) != 10 || len(last.change) != 5 || last.status != "applied" {
+		t.Errorf("last = %+v, want 10 added, 5 changed, applied", last)
+	}
+}
+
+func TestSync_ReleasedHoldAppliesTheNextPull(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	short := pull(cEntries(1, 17, "x"))
+	srv.set(200, short)
+	if _, err := s.SyncList(context.Background(), l); !errors.Is(err, ErrHeld) {
+		t.Fatalf("err = %v, want ErrHeld", err)
+	}
+	if n := release(t, super, l.Name); n != 1 {
+		t.Fatalf("release affected %d rows, want 1", n)
+	}
+	if _, err := s.SyncList(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(listRows(t, super, l.Name)); n != 17 {
+		t.Errorf("%d rows, want 17", n)
+	}
+	syncs := syncRows(t, super, l.Name)
+	if len(syncs) != 3 {
+		t.Fatalf("%d sync rows, want 3", len(syncs))
+	}
+	for i, want := range []string{"applied", "released", "applied"} {
+		if syncs[i].status != want {
+			t.Errorf("row %d status = %q, want %q", i, syncs[i].status, want)
+		}
+	}
+	wantStrings(t, "removed", syncs[2].removed, "c18", "c19", "c20")
+}
+
+func TestSync_ReleaseEndsAfterOneApply(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	srv.set(200, pull(cEntries(1, 17, "x")))
+	_, _ = s.SyncList(context.Background(), l)
+	if n := release(t, super, l.Name); n != 1 {
+		t.Fatalf("release affected %d rows, want 1", n)
+	}
+	if _, err := s.SyncList(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	srv.set(200, pull(cEntries(1, 14, "x")))
+	if _, err := s.SyncList(context.Background(), l); !errors.Is(err, ErrHeld) {
+		t.Fatalf("err = %v, want ErrHeld after the release was consumed", err)
+	}
+}
+
+func TestSync_ReleaseIsPerList(t *testing.T) {
+	super, app := dbTestPools(t)
+	a, b := testList(newListName(t, super)), testList(newListName(t, super))
+	aSrv, bSrv := newFlipServer(t, pull(cEntries(1, 20, "x"))), newFlipServer(t, pull(cEntries(1, 20, "x")))
+	s := newSyncer(t, app, mux(t, map[string]*flipServer{a.Name: aSrv, b.Name: bSrv}))
+	s.lists = []List{a, b}
+	if err := s.SyncAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	aSrv.set(200, pull(cEntries(1, 17, "x")))
+	bSrv.set(200, pull(cEntries(1, 17, "x")))
+	if err := s.SyncAll(context.Background()); err == nil {
+		t.Fatal("want both lists held")
+	}
+	if n := release(t, super, a.Name); n != 1 {
+		t.Fatalf("release affected %d rows, want 1", n)
+	}
+	err := s.SyncAll(context.Background())
+	if !errors.Is(err, ErrHeld) || strings.Contains(err.Error(), a.Name) || !strings.Contains(err.Error(), b.Name) {
+		t.Fatalf("err = %v, want ErrHeld naming only %s", err, b.Name)
+	}
+	if n := len(listRows(t, super, a.Name)); n != 17 {
+		t.Errorf("released list has %d rows, want 17", n)
+	}
+	if n := len(listRows(t, super, b.Name)); n != 20 {
+		t.Errorf("other list has %d rows, want 20", n)
+	}
+}
+
+func TestSync_OlderHeldRowForcesNothing(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	srv.set(200, pull(cEntries(1, 17, "x")))
+	for range 2 {
+		if _, err := s.SyncList(context.Background(), l); !errors.Is(err, ErrHeld) {
+			t.Fatalf("err = %v, want ErrHeld", err)
+		}
+	}
+	if _, err := super.Exec(context.Background(), `UPDATE nrs_code_list_syncs SET status = 'released' WHERE id = (SELECT id FROM nrs_code_list_syncs WHERE list = $1 AND status = 'held' ORDER BY synced_at, id LIMIT 1)`, l.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SyncList(context.Background(), l); !errors.Is(err, ErrHeld) {
+		t.Fatalf("err = %v, want ErrHeld (only the latest row counts)", err)
+	}
+}
+
+func TestSync_FailedFetchKeepsTheRelease(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	short := pull(cEntries(1, 17, "x"))
+	srv.set(200, short)
+	_, _ = s.SyncList(context.Background(), l)
+	if n := release(t, super, l.Name); n != 1 {
+		t.Fatalf("release affected %d rows, want 1", n)
+	}
+	rows, n := listRows(t, super, l.Name), len(syncRows(t, super, l.Name))
+
+	srv.set(500, "boom")
+	if _, err := s.SyncList(context.Background(), l); err == nil || errors.Is(err, ErrHeld) {
+		t.Fatalf("err = %v, want a fetch error", err)
+	}
+	srv.set(200, `{"code":200,"data":[]}`)
+	if _, err := s.SyncList(context.Background(), l); !errors.Is(err, ErrEmptyList) {
+		t.Fatalf("err = %v, want ErrEmptyList", err)
+	}
+	assertUnchanged(t, super, l.Name, rows, n)
+
+	srv.set(200, short)
+	if _, err := s.SyncList(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(listRows(t, super, l.Name)); got != 17 {
+		t.Errorf("%d rows, want 17", got)
+	}
+}
+
+func TestSync_ReleaseUpdateIgnoresANonHeldLatestRow(t *testing.T) {
+	t.Run("latest applied", func(t *testing.T) {
+		s, srv, l, super := seedN(t, 20)
+		if n := release(t, super, l.Name); n != 0 {
+			t.Errorf("release affected %d rows, want 0", n)
+		}
+		srv.set(200, pull(cEntries(1, 17, "x")))
+		if _, err := s.SyncList(context.Background(), l); !errors.Is(err, ErrHeld) {
+			t.Fatalf("err = %v, want ErrHeld", err)
+		}
+	})
+	t.Run("older held under newer applied", func(t *testing.T) {
+		s, srv, l, super := seedN(t, 20)
+		short, full := pull(cEntries(1, 17, "x")), pull(cEntries(1, 20, "x"))
+		srv.set(200, short)
+		_, _ = s.SyncList(context.Background(), l)
+		srv.set(200, full)
+		if _, err := s.SyncList(context.Background(), l); err != nil {
+			t.Fatal(err)
+		}
+		if n := release(t, super, l.Name); n != 0 {
+			t.Errorf("release affected %d rows, want 0", n)
+		}
+		srv.set(200, short)
+		if _, err := s.SyncList(context.Background(), l); !errors.Is(err, ErrHeld) {
+			t.Fatalf("err = %v, want ErrHeld", err)
+		}
+	})
+}
+
+func TestSync_HeldThenCompletePullApplies(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	srv.set(200, pull(cEntries(1, 17, "x")))
+	_, _ = s.SyncList(context.Background(), l)
+	srv.set(200, pull(cEntries(1, 20, "x")))
+	if _, err := s.SyncList(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(listRows(t, super, l.Name)); n != 20 {
+		t.Errorf("%d rows, want 20", n)
+	}
+	syncs := syncRows(t, super, l.Name)
+	if last := syncs[len(syncs)-1]; last.status != "applied" {
+		t.Errorf("last status = %q, want applied", last.status)
+	}
+}
+
+func TestSync_HeldRowWriteFailureIsReportedNotHeld(t *testing.T) {
+	s, srv, l, super := seedN(t, 20)
+	ctx := context.Background()
+	fn := "fail_held_" + strings.ReplaceAll(strings.TrimPrefix(l.Name, "t-"), "-", "_")
+	if _, err := super.Exec(ctx, `CREATE FUNCTION `+fn+`() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+IF NEW.list = '`+l.Name+`' AND NEW.status = 'held' THEN RAISE EXCEPTION 'held insert refused'; END IF; RETURN NEW; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(ctx, `DROP TRIGGER IF EXISTS `+fn+` ON nrs_code_list_syncs`)
+		_, _ = super.Exec(ctx, `DROP FUNCTION IF EXISTS `+fn+`()`)
+	})
+	if _, err := super.Exec(ctx, `CREATE TRIGGER `+fn+` BEFORE INSERT ON nrs_code_list_syncs FOR EACH ROW EXECUTE FUNCTION `+fn+`()`); err != nil {
+		t.Fatal(err)
+	}
+	rows := listRows(t, super, l.Name)
+	srv.set(200, pull(cEntries(1, 17, "x")))
+	_, err := s.SyncList(ctx, l)
+	if err == nil || errors.Is(err, ErrHeld) || !strings.Contains(err.Error(), "held insert refused") {
+		t.Fatalf("err = %v, want the held-insert DB error, not ErrHeld", err)
+	}
+	assertUnchanged(t, super, l.Name, rows, 1)
+}
+
+func TestSync_LaterCommitHasLaterSyncedAt(t *testing.T) {
+	t.Run("applied row", func(t *testing.T) {
+		super, app := dbTestPools(t)
+		l := testList(newListName(t, super))
+		laterCommitWins(t, super, l, newSyncer(t, app, newFlipServer(t, abcBody).URL), 0)
+	})
+	t.Run("held row", func(t *testing.T) {
+		s, srv, l, super := seedN(t, 20)
+		srv.set(200, pull(cEntries(1, 17, "x")))
+		laterCommitWins(t, super, l, s, 1)
+	})
+}
+
+// laterCommitWins makes SyncList wait on the list lock while a holder commits a row (entry_count 99),
+// and asserts the waiter's row sorts after it; prior is 1 when a seed row exists (the waiter is then held).
+func laterCommitWins(t *testing.T, super *pgxpool.Pool, l List, s *Syncer, prior int) {
+	t.Helper()
+	ctx := context.Background()
+
+	holder, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	const key = `hashtext('nrs_codes:' || $1)`
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(`+key+`)`, l.Name); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := s.SyncList(ctx, l); done <- err }()
+	deadline := time.Now().Add(10 * time.Second)
+	for waiting := false; !waiting; {
+		if time.Now().After(deadline) {
+			t.Fatal("SyncList never waited on the list lock")
+		}
+		if err := super.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND objid = `+key+`)`, l.Name).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := holder.Exec(ctx, `INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed, synced_at) VALUES ($1, 99, '{}', '{}', '{}', clock_timestamp())`, l.Name); err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; prior == 0 && err != nil {
+		t.Fatal(err)
+	} else if prior == 1 && !errors.Is(err, ErrHeld) {
+		t.Fatalf("err = %v, want ErrHeld", err)
+	}
+	syncs := syncRows(t, super, l.Name)
+	if len(syncs) != 2+prior || syncs[prior].entryCount != 99 || syncs[prior+1].entryCount == 99 {
+		t.Fatalf("sync rows = %+v, want the holder's row (99) then the waiter's", syncs)
+	}
+	if want := []string{"applied", "held"}[prior]; syncs[prior+1].status != want {
+		t.Errorf("waiter status = %q, want %q", syncs[prior+1].status, want)
+	}
+}
+
+func TestSync_FirstSyncIsNeverHeld(t *testing.T) {
+	super, app := dbTestPools(t)
+	l := testList(newListName(t, super))
+	ch, err := newSyncer(t, app, newFlipServer(t, abcBody).URL).SyncList(context.Background(), l)
+	if err != nil || ch.Held {
+		t.Fatalf("err = %v, held = %v, want a clean apply", err, ch.Held)
+	}
+	syncs := syncRows(t, super, l.Name)
+	if len(listRows(t, super, l.Name)) != 3 || len(syncs) != 1 || syncs[0].status != "applied" {
+		t.Errorf("rows/syncs = %d/%+v, want 3 rows and one applied row", len(listRows(t, super, l.Name)), syncs)
+	}
 }

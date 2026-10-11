@@ -419,7 +419,7 @@ func TestNewInvoiceLineItemsApplier_LeavesTheCallersSliceUntouched(t *testing.T)
 }
 
 func TestNewInvoiceLineItemsApplier_ABlankNewRoleReachesTheInvoiceAsNil(t *testing.T) {
-	blank, kept := " ", "8517"
+	blank, kept := " ", " 8517 "
 	in := []extraction.LineItemInput{
 		{HSNCode: &blank, ISICCode: &blank, TaxCategory: &blank, SellersItemIdentification: &blank, PriceUnit: &blank},
 		{HSNCode: &kept},
@@ -432,7 +432,7 @@ func TestNewInvoiceLineItemsApplier_ABlankNewRoleReachesTheInvoiceAsNil(t *testi
 	if got == nil || len(*got) != 2 {
 		t.Fatalf("captured %v, want 2 lines", got)
 	}
-	if (*got)[1].HSNCode == nil || *(*got)[1].HSNCode != kept {
+	if (*got)[1].HSNCode == nil || *(*got)[1].HSNCode != "8517" {
 		t.Fatalf("control: line 2 HSNCode = %v", (*got)[1].HSNCode)
 	}
 	a := (*got)[0]

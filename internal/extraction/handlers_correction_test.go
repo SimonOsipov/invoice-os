@@ -202,6 +202,11 @@ func TestCorrectionHandler_BlankValueIsRefused(t *testing.T) {
 
 			hndAssert(t, w, http.StatusBadRequest, hndErrBody(t, corMsgBlankValue))
 			corAssertUntouched(t, spy)
+
+			spy = newCorSpy()
+			w = corPost(t, spy, "buyer_city", corBody(value, "typed", ""))
+			hndAssert(t, w, http.StatusBadRequest, hndErrBody(t, corMsgBlankValue))
+			corAssertUntouched(t, spy)
 		})
 	}
 }

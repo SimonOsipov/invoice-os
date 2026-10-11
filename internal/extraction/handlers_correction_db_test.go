@@ -583,6 +583,26 @@ func TestRLS_CorrectionNormalisesADueDate(t *testing.T) {
 	}
 }
 
+func TestRLS_CorrectionOfANewFieldReachesTheSeamTrimmed(t *testing.T) {
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	cxInvoice(t, ctx, tenantID, entityID, documentID, "ENGI08-04-TRIM-"+jobID[:8], "draft")
+
+	var gotValue string
+	apply := func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, m extraction.CorrectionMethod) (string, error) {
+		gotValue = cxShowValue(value)
+		return cxApplier(false, nil)(ctx, tx, documentID, field, value, m)
+	}
+
+	w := cxServe(t, reqCtx, jobID, "buyer_city", cxBody("  Lagos \t"), apply, cxAuditor(nil))
+
+	if w.Code != http.StatusCreated || gotValue != `"Lagos"` {
+		t.Errorf("status = %d, seam value = %s, want 201 and \"Lagos\" (body=%q)", w.Code, gotValue, w.Body.String())
+	}
+}
+
 // --- the confirming correction ----------------------------------------------------------
 
 // A correction whose value equals what is already stored, and an undone correction reverting to

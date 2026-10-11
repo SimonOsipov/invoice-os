@@ -1783,17 +1783,21 @@ func TestReadingCreateInput_ABlankNewFieldIsNilNotEmptyText(t *testing.T) {
 		{Name: "buyer_email", Value: mpPtr(" ")},
 		{Name: "buyer_state", Value: mpPtr("  ")},
 		{Name: "line_items[1].hsn_code", Value: mpPtr(" ")},
-		{Name: "buyer_city", Value: mpPtr("Lagos")},
+		{Name: "buyer_city", Value: mpPtr(" Lagos ")},
+		{Name: "line_items[1].price_unit", Value: mpPtr(" kg ")},
 	}}
 	got, rowErr := readingCreateInput("e", "d", ex)
 	if rowErr != nil {
 		t.Fatalf("rowErr = %+v", rowErr)
 	}
-	if got.BuyerCity == nil {
-		t.Fatal("control BuyerCity = nil")
+	if got.BuyerCity == nil || *got.BuyerCity != "Lagos" {
+		t.Fatalf("control BuyerCity = %q, want trimmed Lagos", mpShow(got.BuyerCity))
 	}
 	if len(got.LineItems) != 1 {
 		t.Fatalf("lines = %d, want 1", len(got.LineItems))
+	}
+	if pu := got.LineItems[0].PriceUnit; pu == nil || *pu != "kg" {
+		t.Errorf("PriceUnit = %q, want trimmed kg", mpShow(pu))
 	}
 	if got.DueDate != nil || got.BuyerEmail != nil || got.BuyerState != nil || got.LineItems[0].HSNCode != nil {
 		t.Errorf("DueDate=%v BuyerEmail=%q BuyerState=%q HSNCode=%q, want all nil (ENGI-07 D7)",

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -78,6 +79,7 @@ func TestSchema_CodeListTablesAreGlobal(t *testing.T) {
 		"nrs_code_list_syncs": {
 			"id": "uuid", "list": "text", "synced_at": "timestamp with time zone",
 			"entry_count": "integer", "added": "ARRAY", "removed": "ARRAY", "changed": "ARRAY",
+			"status": "text",
 		},
 	}
 	for table, cols := range want {
@@ -183,28 +185,50 @@ func TestSchema_AppCannotRewriteCodeOrList(t *testing.T) {
 	}
 }
 
-func TestSchema_SyncLogIsInsertOnlyForApp(t *testing.T) {
+func TestSchema_SyncLogAppInsertsAndReadsStatusOnly(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	list := newListName(t, super)
 
-	const id = "00000000-0000-4000-8000-0000000000e3"
-	t.Cleanup(func() { _, _ = super.Exec(ctx, `DELETE FROM nrs_code_list_syncs WHERE id = $1::uuid`, id) })
+	const id, heldID = "00000000-0000-4000-8000-0000000000e3", "00000000-0000-4000-8000-0000000000e4"
+	t.Cleanup(func() {
+		_, _ = super.Exec(ctx, `DELETE FROM nrs_code_list_syncs WHERE id = ANY($1::uuid[])`, []string{id, heldID})
+	})
 	if _, err := app.Exec(ctx,
 		`INSERT INTO nrs_code_list_syncs (id, list, entry_count, added, removed, changed)
 		 VALUES ($1::uuid, $2, 3, '{A,B}', '{}', '{}')`, id, list); err != nil {
 		t.Fatalf("app INSERT sync row: %v", err)
+	}
+	if _, err := app.Exec(ctx,
+		`INSERT INTO nrs_code_list_syncs (id, list, entry_count, added, removed, changed, status)
+		 VALUES ($1::uuid, $2, 3, '{}', '{A}', '{}', 'held')`, heldID, list); err != nil {
+		t.Fatalf("app INSERT held sync row: %v", err)
 	}
 	var n int
 	_, err := app.Exec(ctx,
 		`INSERT INTO nrs_code_list_syncs (id, list, entry_count, added, removed, changed)
 		 VALUES ($1::uuid, $2, 1, '{}', '{}', '{}')`, id, list)
 	wantState(t, "app INSERT duplicate sync id", err, "23505")
-	_, err = app.Exec(ctx, `SELECT entry_count FROM nrs_code_list_syncs WHERE id = $1::uuid`, id)
-	wantState(t, "app SELECT sync row", err, "42501")
+
+	var gotList, gotStatus string
+	var syncedAt time.Time
+	if err := app.QueryRow(ctx,
+		`SELECT list, synced_at, status FROM nrs_code_list_syncs WHERE id = $1::uuid`, heldID,
+	).Scan(&gotList, &syncedAt, &gotStatus); err != nil {
+		t.Fatalf("app SELECT id, list, synced_at, status: %v", err)
+	}
+	if gotList != list || gotStatus != "held" || syncedAt.IsZero() {
+		t.Fatalf("app read (%q, %v, %q), want (%q, set, held)", gotList, syncedAt, gotStatus, list)
+	}
+	for _, col := range []string{"entry_count", "added", "removed", "changed"} {
+		_, err = app.Exec(ctx, `SELECT `+col+` FROM nrs_code_list_syncs WHERE id = $1::uuid`, id)
+		wantState(t, "app SELECT "+col, err, "42501")
+	}
 	// WHERE false names no column, so only the UPDATE or DELETE privilege is checked, not SELECT.
 	_, err = app.Exec(ctx, `UPDATE nrs_code_list_syncs SET entry_count = 4 WHERE false`)
 	wantState(t, "app UPDATE sync row", err, "42501")
+	_, err = app.Exec(ctx, `UPDATE nrs_code_list_syncs SET status = 'released' WHERE id = $1::uuid`, heldID)
+	wantState(t, "app UPDATE status", err, "42501")
 	_, err = app.Exec(ctx, `DELETE FROM nrs_code_list_syncs WHERE false`)
 	wantState(t, "app DELETE sync row", err, "42501")
 
@@ -214,6 +238,13 @@ func TestSchema_SyncLogIsInsertOnlyForApp(t *testing.T) {
 	}
 	if n != 3 {
 		t.Fatalf("entry_count = %d after refused UPDATE, want 3", n)
+	}
+	if err := super.QueryRow(ctx,
+		`SELECT status FROM nrs_code_list_syncs WHERE id = $1::uuid`, heldID).Scan(&gotStatus); err != nil {
+		t.Fatalf("held row gone after refused DELETE: %v", err)
+	}
+	if gotStatus != "held" {
+		t.Fatalf("status = %q after refused UPDATE, want held", gotStatus)
 	}
 }
 
@@ -255,6 +286,41 @@ func TestSchema_RefusesBlankAndMalformedRows(t *testing.T) {
 	if _, err := app.Exec(ctx, sync, list, 1); err != nil {
 		t.Fatalf("valid sync INSERT: %v", err)
 	}
+	var status string
+	if err := super.QueryRow(ctx, `SELECT status FROM nrs_code_list_syncs WHERE list = $1`, list).Scan(&status); err != nil {
+		t.Fatalf("read status of the row inserted without one: %v", err)
+	}
+	if status != "applied" {
+		t.Fatalf("status of a row inserted with no status = %q, want applied", status)
+	}
+	const syncStatus = `INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed, status)
+		VALUES ($1, $2, '{}', '{A}', '{}', $3)`
+	if _, err := app.Exec(ctx, syncStatus, list, 1, "held"); err != nil {
+		t.Fatalf("held sync INSERT: %v", err)
+	}
+	for _, c := range []struct {
+		name   string
+		count  int
+		status any
+		want   string
+	}{
+		{"sync status bogus", 1, "bogus", "23514"},
+		{"sync status blank", 1, "", "23514"},
+		{"sync status NULL", 1, nil, "23502"},
+		{"sync held entry_count zero", 0, "held", "23514"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := app.Exec(ctx, syncStatus, list, c.count, c.status)
+			wantState(t, c.name, err, c.want)
+		})
+	}
+	tag, err := super.Exec(ctx, `UPDATE nrs_code_list_syncs SET status = 'released' WHERE list = $1 AND status = 'held'`, list)
+	if err != nil {
+		t.Fatalf("superuser UPDATE status to released: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("release affected %d rows, want 1 (the held row)", tag.RowsAffected())
+	}
 	for _, c := range []struct {
 		name  string
 		list  string
@@ -285,8 +351,8 @@ func TestSchema_RefusesBlankAndMalformedRows(t *testing.T) {
 	if err := super.QueryRow(ctx, `SELECT count(*) FROM nrs_code_list_syncs WHERE list = $1`, list).Scan(&n); err != nil {
 		t.Fatalf("count syncs: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("nrs_code_list_syncs rows for list = %d, want 1 (only the valid row)", n)
+	if n != 2 {
+		t.Fatalf("nrs_code_list_syncs rows for list = %d, want 2 (the applied and the held row)", n)
 	}
 }
 

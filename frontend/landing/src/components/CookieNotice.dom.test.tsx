@@ -85,7 +85,7 @@ describe('the cookie notice and its spacer', () => {
 
   it('keep the spacer while a modal makes the notice inert', async () => {
     await mountApp()
-    await click(byText('Platform login'), 'the sign-in trigger')
+    await click(byText('Sign in'), 'the sign-in trigger')
     expect(document.querySelector(NOTICE)!.hasAttribute('inert'), 'control: the notice is inert under the modal').toBe(true)
     expect(document.querySelectorAll('.cn-spacer').length, 'the modal dropped the band').toBe(1)
   })

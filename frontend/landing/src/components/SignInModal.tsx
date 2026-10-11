@@ -36,7 +36,7 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError, conso
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Platform login"
+      aria-label="Sign in"
       style={MODAL_SCRIM_STYLE}
     >
       <style>{MODAL_CHROME_CSS}</style>
@@ -49,7 +49,7 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError, conso
 
         <div style={{ padding: '22px 20px 20px' }}>
           <div style={{ marginBottom: 14 }}>
-            <Eyebrow>PLATFORM LOGIN</Eyebrow>
+            <Eyebrow>SIGN IN</Eyebrow>
           </div>
           <h3 style={{ ...HEADING_STYLE, margin: '0 0 16px' }}>{view === 'forgot' ? 'Reset your password' : 'Sign in to your workspace'}</h3>
           {signInConfigured() ? (
@@ -60,7 +60,7 @@ export function SignInModal({ onClose, heldState = NO_STATE, initialError, conso
                 <SignInForm heldState={heldState} initialError={shownError} consoleTarget={consoleTarget} onForgot={() => show('forgot')} />
               )}
               {onCreateAccount && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--border)', fontSize: 13, color: 'var(--muted-foreground)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center', gap: 6, marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--border)', fontSize: 13, color: 'var(--muted-foreground)' }}>
                   New to ASComply?
                   <button type="button" className="a-link" onClick={onCreateAccount} style={{ fontSize: 13 }}>Create an account</button>
                 </div>

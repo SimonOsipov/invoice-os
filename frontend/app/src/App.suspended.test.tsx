@@ -15,11 +15,12 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
 import { APP_PERSONAS, type Session } from './auth'
+import { JoinWorkspace } from './components/JoinWorkspace'
 import { NOT_ACTIVE_MEMBER_MESSAGE } from './lib/authedFetch'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import type { PlatformCtx } from './types'
@@ -194,6 +195,22 @@ describe('AC-4: the suspended card replaces the workspace', () => {
     const text = screen.getByTestId('suspended-notice').textContent ?? ''
     expect(text, 'the card must say the membership is not active').toMatch(/membership in this workspace is not active/i)
     expect(text, 'the card must say who can fix it').toMatch(/workspace admin/i)
+  })
+
+  it('appSuspended_signOutChromeMatchesTheJoinScreenButtons', async () => {
+    await renderApp()
+    const ctx = requireCtx()
+    await act(async () => {
+      await ctx.authedFetch('/x').catch(() => {})
+    })
+    const chrome = (b: HTMLElement) => ({ cls: b.className, h: b.style.height, pad: b.style.padding, font: b.style.fontSize, align: b.style.alignSelf })
+    const suspended = chrome(within(screen.getByTestId('suspended-notice')).getByRole('button', { name: 'Sign out' }))
+    expect(suspended.h, 'control: the suspended style is read').toBe('34px')
+    cleanup()
+    const invites = [{ id: 'a', workspace: 'Obi', role: 'reviewer', inviter: null, expires_at: '2026-10-20T00:00:00Z' }]
+    render(<JoinWorkspace invites={invites} joining={null} onJoin={() => {}} onSignOut={() => {}} />)
+    expect(chrome(screen.getByRole('button', { name: 'Sign out' }))).toEqual(suspended)
+    expect(chrome(screen.getByRole('button', { name: 'Join Obi' })), 'Join differs from Sign out only in variant').toEqual({ ...suspended, cls: 'v2-btn v2-btn-primary pf-btn' })
   })
 
   it('appSuspended_theCardOffersExactlyOneControlAndItIsSignOut', async () => {

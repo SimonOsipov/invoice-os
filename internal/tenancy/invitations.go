@@ -21,14 +21,16 @@ const maxInviteMailsPerDay = 20
 
 // Invitation is one pending-invite row of GET /v1/invitations.
 type Invitation struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Role      string    `json:"role"`
-	Status    string    `json:"status"`
-	ExpiresAt time.Time `json:"expires_at"`
-	CreatedAt time.Time `json:"created_at"`
-	InvitedBy string    `json:"invited_by"`
-	Delivery  string    `json:"delivery"`
+	ID         string    `json:"id"`
+	Email      string    `json:"email"`
+	Role       string    `json:"role"`
+	Status     string    `json:"status"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	CreatedAt  time.Time `json:"created_at"`
+	InvitedBy  string    `json:"invited_by"`
+	Delivery   string    `json:"delivery"`
+	Account    string    `json:"account"` // none, unconfirmed, confirmed or unknown
+	accountErr error     // set with Account "unknown"; the handler logs its SQLSTATE
 }
 
 // IssuedInvite is one freshly minted invite. Token exists only here, for the mail.
@@ -249,7 +251,15 @@ func (s *Store) ListInvitations(ctx context.Context) ([]Invitation, error) {
 			}
 			out = append(out, i)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close() // the connection is busy until the rows are closed
+		// ceiling: one savepoint round trip per pending row; batch the read above ~500 rows
+		for i := range out {
+			out[i].Account, out[i].accountErr = accountState(ctx, tx, out[i].Email)
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

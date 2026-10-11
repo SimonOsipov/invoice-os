@@ -29,6 +29,7 @@ paths:
 - Never grant DELETE on `approval_policies` or `approval_policy_versions` to `invoice_app`.
 - Delete a policy softly with `deleted_at`.
 - Start every policy write with `requireActiveAdmin` inside its transaction.
+- Refuse a non-admin in portfolio `Store.Create` before the input check. A non-admin gets 403 whatever the input.
 - Decide a step on two axes. The caller is an active admin or reviewer, and holds the pending step's workflow role.
 - Answer an unknown, cross-tenant or malformed id with the same 404.
 - Accept only `All invoices` as a policy `scope`. The `CHECK` constraint enforces it.

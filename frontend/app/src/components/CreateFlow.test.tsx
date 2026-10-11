@@ -46,6 +46,8 @@ function createFlowCtx(
     entitiesState: 'ready',
     entities: [],
     clients: [],
+    members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+    membersState: 'ready',
     addPickedFiles: () => {},
     removePickedFile: () => {},
     setSettingsTab: () => {},

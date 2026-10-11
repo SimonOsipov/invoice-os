@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
@@ -140,7 +141,7 @@ func keysOf(m map[string]any) []string {
 
 var (
 	createItemKeys = []string{"delivery", "email", "expires_at", "id", "role", "status"}
-	listItemKeys   = []string{"created_at", "delivery", "email", "expires_at", "id", "invited_by", "role", "status"}
+	listItemKeys   = []string{"account", "created_at", "delivery", "email", "expires_at", "id", "invited_by", "role", "status"}
 )
 
 func apiItems(t *testing.T, rec *httptest.ResponseRecorder) []map[string]any {
@@ -723,6 +724,9 @@ func TestInvitationsAPI_ListShape(t *testing.T) {
 		if it["status"] != "pending" || it["role"] != "reviewer" || it["delivery"] != "sent" || it["invited_by"] != a.admin {
 			t.Errorf("item %d = %v, want pending reviewer sent invited by %s", i, it, a.admin)
 		}
+		if it["account"] != "none" && it["account"] != "unknown" {
+			t.Errorf("item %d account = %v, want none or unknown", i, it["account"])
+		}
 		got = append(got, fmt.Sprint(it["email"]))
 	}
 	slices.Sort(got)
@@ -1213,5 +1217,80 @@ func TestInvitationsAPI_NoSecretReachesLogsOrSentryAcrossFailureAndResend(t *tes
 				t.Errorf("Sentry event %d holds %q: %s", i, secret, raw)
 			}
 		}
+	}
+}
+
+func listStub(rows ...Invitation) InvitationsLister {
+	return func(context.Context) ([]Invitation, error) { return rows, nil }
+}
+
+func listWithLog(t *testing.T, rows ...Invitation) ([]map[string]any, string) {
+	t.Helper()
+	var logs syncBuf
+	h := InvitationsListHandler(listStub(rows...), slog.New(slog.NewTextHandler(&logs, nil)))
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()})
+	items := apiItems(t, apiDo(h, ctx, http.MethodGet, "/v1/invitations", ""))
+	if len(items) != len(rows) {
+		t.Fatalf("items = %d, want %d", len(items), len(rows))
+	}
+	return items, logs.String()
+}
+
+func TestInvitationsListHandler_AStateFailureLogsOnceWithTheSQLStateOnly(t *testing.T) {
+	pgErr := func() error { return &pgconn.PgError{Code: "42501", Message: "permission denied"} }
+	items, out := listWithLog(t,
+		Invitation{ID: uuid.NewString(), Email: "tunde@obi.test", Account: "unknown", accountErr: pgErr()},
+		Invitation{ID: uuid.NewString(), Email: "ada@obi.test", Account: "unknown", accountErr: pgErr()})
+	for i, it := range items {
+		if it["account"] != "unknown" {
+			t.Errorf("item %d account = %v, want unknown", i, it["account"])
+		}
+	}
+	if n := strings.Count(out, "level=WARN"); n != 1 || !strings.Contains(out, "sqlstate=42501") {
+		t.Errorf("want one WARN with sqlstate=42501, got:\n%s", out)
+	}
+	for _, leak := range []string{"tunde@obi.test", "ada@obi.test"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("log leaks %q:\n%s", leak, out)
+		}
+	}
+}
+
+func TestInvitationsListHandler_ANonPgErrorLogsUnknown(t *testing.T) {
+	_, out := listWithLog(t, Invitation{ID: uuid.NewString(), Email: "tunde@obi.test", Account: "unknown", accountErr: errors.New("reset for tunde@obi.test")})
+	if n := strings.Count(out, "level=WARN"); n != 1 || !strings.Contains(out, "sqlstate=unknown") {
+		t.Errorf("want one WARN with sqlstate=unknown, got:\n%s", out)
+	}
+	if strings.Contains(out, "tunde@obi.test") {
+		t.Errorf("log leaks the address:\n%s", out)
+	}
+}
+
+func TestInvitationsListHandler_MixedRowsKeepTheirStates(t *testing.T) {
+	items, out := listWithLog(t,
+		Invitation{ID: uuid.NewString(), Email: "tunde@obi.test", Account: "unknown", accountErr: &pgconn.PgError{Code: "42501"}},
+		Invitation{ID: uuid.NewString(), Email: "ada@obi.test", Account: "confirmed"})
+	if items[0]["account"] != "unknown" || items[1]["account"] != "confirmed" {
+		t.Errorf("accounts = %v, %v; want unknown, confirmed", items[0]["account"], items[1]["account"])
+	}
+	if n := strings.Count(out, "level=WARN"); n != 1 || !strings.Contains(out, "sqlstate=42501") {
+		t.Errorf("want one WARN with sqlstate=42501, got:\n%s", out)
+	}
+	for _, leak := range []string{"tunde@obi.test", "ada@obi.test"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("log leaks %q:\n%s", leak, out)
+		}
+	}
+}
+
+func TestInvitationsListHandler_NoStateFailureLogsNothing(t *testing.T) {
+	items, out := listWithLog(t,
+		Invitation{ID: uuid.NewString(), Email: "ada@obi.test", Account: "confirmed"},
+		Invitation{ID: uuid.NewString(), Email: "tunde@obi.test", Account: "none"})
+	if items[0]["account"] != "confirmed" || items[1]["account"] != "none" {
+		t.Errorf("accounts = %v, %v; want confirmed, none", items[0]["account"], items[1]["account"])
+	}
+	if strings.Contains(out, "level=WARN") {
+		t.Errorf("a clean list logged a WARN:\n%s", out)
 	}
 }

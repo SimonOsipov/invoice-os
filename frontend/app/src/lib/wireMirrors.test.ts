@@ -75,6 +75,16 @@ const WIRE_MIRRORS = [
     floor: 6,
   },
   {
+    ts: 'PendingInvite',
+    go: 'PendingInvite',
+    goPath: 'internal/tenancy/store.go',
+    goAnchor: 'func (s *Store) MyPendingInvitations(',
+    spaPath: 'frontend/app/src/lib/sessionHandoff.ts',
+    spaAnchor: 'export async function redeemHandoff(',
+    e2eAnchor: 'export function listMine(',
+    floor: 5,
+  },
+  {
     ts: 'AuditEvent',
     go: 'Event',
     goPath: 'internal/audit/reader.go',
@@ -437,6 +447,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     // mirror nothing runs.
     expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual([
       'StatusChange',
+      'PendingInvite',
       'AuditEvent',
       'ExtractionCandidate',
       'ExtractionCorrected',

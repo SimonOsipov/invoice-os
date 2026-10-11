@@ -1,7 +1,7 @@
 import { test, expect, type BrowserContext, type Frame, type Locator, type Page, type Request, type Response } from '@playwright/test'
 import { APP_URL, FIRM_PERSONA, GATEWAY_URL, INHOUSE_PERSONA, TENANTS } from './targets'
 import { resolveTarget } from '../targets'
-import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, isHandoffNavigation, sidebarRoster, signInAs, signInAtFrontDoor, submitSignIn } from '../personaSession'
+import { DESTINATION_READY, VERIFIED, browserToken, collectErrors, expectInWorkspace, headerSignIn, isHandoffNavigation, passFrontDoor, sidebarRoster, signInAs, signInAtFrontDoor, signInDialog, submitSignIn } from '../personaSession'
 import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession, type ConsoleTarget } from '../staffSession'
 import { ensureMember } from '../realAccounts'
 import {
@@ -12,16 +12,18 @@ import {
   createImportBatch,
   claimsOf,
   exchangeCode,
+  grantMembership,
   inviteWithToken,
   listEntities,
   me,
   mintSignInState,
   provisionRealAccount,
   provisionStaffAccount,
-  rawFetch,
   registerFresh,
+  rawFetch,
   signInForCode,
   signInSession,
+  subjectOf,
   PERSONAS as API_PERSONAS,
   type Me,
   type RealAccount,
@@ -79,7 +81,7 @@ test('deployed app: a second real sign-in replaces the session only after the fi
   // and keeps it, then the hand-off code is ignored.
   await page.goto(`${APP_URL}/?auth=start`)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  const dialog = signInDialog(page)
   await expect(dialog.getByLabel('Work email', { exact: true })).toBeVisible()
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
@@ -469,7 +471,7 @@ test('deployed landing: the sign-in dialog offers the form and no persona', asyn
   // ?auth=start bounces to landing with a sign-in state, which opens the dialog on its form.
   await page.goto(`${APP_URL}/?auth=start`)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  const dialog = signInDialog(page)
   await expect(dialog).toBeVisible()
 
   // Positive control first: an absence check beside an unrendered form passes vacuously.
@@ -678,6 +680,8 @@ const HANDOFF_TTL_MS = 60_000
 // frontend/landing/src/App.tsx SIGN_IN_OUTCOMES and src/signIn.ts INCORRECT.
 const HANDOFF_FAILED = "We couldn't open your workspace. Sign in again."
 const INCORRECT = 'Email or password is incorrect.'
+// frontend/landing/src/signIn.ts SIGN_IN_UNAVAILABLE.
+const SIGN_IN_UNAVAILABLE = 'Sign-in is unavailable right now. Try again shortly.'
 // internal/gateway/signin.go: the exchange refusal.
 const INVALID_CODE = 'invalid or expired code'
 
@@ -729,8 +733,8 @@ test('deployed app: a real sign-in from the front door returns to its destinatio
     .poll(() => new URL(page.url()).searchParams.has('state'), { message: `landing kept ?state= at ${page.url()}` })
     .toBe(false)
 
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  await expect(page.getByRole('dialog', { name: 'Platform login' })).toBeVisible()
+  await headerSignIn(page).click()
+  await expect(signInDialog(page)).toBeVisible()
   const [handoffNav] = await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -783,16 +787,13 @@ test('deployed app: a real sign-in from a direct landing visit bounces for a sta
   const urls = recordUrls(page)
 
   await page.goto(LANDING_URL)
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
-  await expect(dialog.getByRole('button', { name: 'Continue with email', exact: true })).toBeVisible()
-  await expect(dialog.getByLabel('Work email', { exact: true }), 'a stateless landing must not offer the form').toHaveCount(0)
+  const dialog = signInDialog(page)
 
-  // Armed before the click: app ?auth=start, then back to landing with signin=ready.
+  // Armed before the click: one click on "Sign in" goes to app ?auth=start, then back to landing with signin=ready.
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(APP_URL) && new URL(r.url()).searchParams.get('auth') === 'start'),
     page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(LANDING_URL) && new URL(r.url()).searchParams.get('signin') === 'ready'),
-    dialog.getByRole('button', { name: 'Continue with email', exact: true }).click(),
+    headerSignIn(page).click(),
   ])
   await expect(dialog.getByLabel('Work email', { exact: true })).toBeVisible()
 
@@ -809,6 +810,197 @@ test('deployed app: a real sign-in from a direct landing visit bounces for a sta
   expect(leakingUrls(urls), 'a JWT appeared in these URLs').toEqual([])
 
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+// Main-frame navigation requests, counted from the call on.
+function countMainFrameNavigations(page: Page): () => number {
+  let n = 0
+  page.on('request', (r) => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame()) n++
+  })
+  return () => n
+}
+
+// URLs of main-frame navigation requests to the app, from the call on.
+function recordAppNavigations(page: Page): () => string[] {
+  const urls: string[] = []
+  page.on('request', (r) => {
+    if (r.isNavigationRequest() && r.frame() === page.mainFrame() && r.url().startsWith(APP_URL)) urls.push(r.url())
+  })
+  return () => urls
+}
+
+const historyLength = (page: Page) => page.evaluate(() => history.length)
+
+// ceiling: fixed wait, an absence has no event to await; raise if a late bounce is ever seen
+const BOUNCE_SETTLE_MS = 3_000
+
+async function expectPlainLanding(page: Page, when: string, appNavigations: () => string[]) {
+  expect(page.url().startsWith(LANDING_URL), `${when}: left the landing: ${page.url()}`).toBe(true)
+  const u = new URL(page.url())
+  expect(u.pathname, `${when}: path`).not.toBe('/privacy')
+  expect(u.searchParams.has('signin'), `${when}: signin survived: ${page.url()}`).toBe(false)
+  expect(u.searchParams.has('state'), `${when}: state survived: ${page.url()}`).toBe(false)
+  await expect(headerSignIn(page)).toBeVisible()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(appNavigations(), `${when}: a request went to the app`).toHaveLength(1)
+}
+
+test('deployed landing: Back after the Sign in bounce leaves a working Sign in', async ({ page }) => {
+  const errors = collectErrors(page)
+  await seedConsent(page, false)
+  await page.goto(`${LANDING_URL}/privacy`)
+  await page.goto(LANDING_URL)
+  const base = await historyLength(page)
+  const appNavigations = recordAppNavigations(page)
+  const form = signInDialog(page).getByLabel('Work email', { exact: true })
+
+  await headerSignIn(page).click()
+  await expect(form).toBeVisible({ timeout: 20_000 })
+  expect(appNavigations()).toHaveLength(1)
+  expect(new URL(appNavigations()[0]).searchParams.get('auth')).toBe('start')
+  expect(await historyLength(page), 'the click added one entry').toBe(base + 1)
+
+  await page.goBack()
+  await page.waitForLoadState('load')
+  await page.waitForTimeout(BOUNCE_SETTLE_MS)
+  await expectPlainLanding(page, 'first Back', appNavigations)
+  expect(await historyLength(page)).toBe(base + 1)
+
+  await page.goBack()
+  await page.waitForLoadState('load')
+  await page.waitForTimeout(BOUNCE_SETTLE_MS)
+  expect(new URL(page.url()).pathname, 'second Back reaches the page before the landing').toBe('/privacy')
+  expect(appNavigations()).toHaveLength(1)
+
+  await page.goForward()
+  await page.waitForLoadState('load')
+  await page.goForward()
+  await page.waitForLoadState('load')
+  await page.waitForTimeout(BOUNCE_SETTLE_MS)
+  await expectPlainLanding(page, 'Forward x2', appNavigations)
+
+  await page.reload()
+  await page.waitForLoadState('load')
+  await page.waitForTimeout(BOUNCE_SETTLE_MS)
+  await expectPlainLanding(page, 'reload', appNavigations)
+
+  await headerSignIn(page).click()
+  await expect(form).toBeVisible({ timeout: 20_000 })
+  expect(appNavigations()).toHaveLength(2)
+  expect(new URL(appNavigations()[1]).searchParams.get('auth')).toBe('start')
+  expect(await historyLength(page), 'the second click added one entry').toBe(base + 2)
+
+  expect(errors, `console errors on the landing page:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed landing: a Sign in click after Back adds one entry and signs in for real', async ({ page }) => {
+  test.setTimeout(180_000)
+  const account = await provisionRealAccount('handoff-back')
+  const errors = collectErrors(page)
+  await seedConsent(page, false)
+  await page.goto(`${LANDING_URL}/privacy`)
+  await page.goto(LANDING_URL)
+  const base = await historyLength(page)
+  const form = signInDialog(page).getByLabel('Work email', { exact: true })
+
+  await headerSignIn(page).click()
+  await expect(form).toBeVisible({ timeout: 20_000 })
+  await page.goBack()
+  await page.waitForLoadState('load')
+  await headerSignIn(page).click()
+  await expect(form).toBeVisible({ timeout: 20_000 })
+  expect(await historyLength(page), 'the second click drops the first entry and adds its own').toBe(base + 1)
+
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
+    submitSignIn(page, account.email, account.password),
+  ])
+  await expectInWorkspace(page, account)
+
+  expect(errors, `console errors on the landing and app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed landing: Back with no earlier page in the tab leaves the site', async ({ page, context }) => {
+  const errors = collectErrors(page)
+  const settled = async () => {
+    await page.waitForLoadState('load')
+    await page.waitForTimeout(BOUNCE_SETTLE_MS)
+  }
+  await test.step('landing as the first page: click, Back, Back', async () => {
+    await seedConsent(page, false)
+    await page.goto(LANDING_URL)
+    const base = await historyLength(page)
+    const appNavigations = recordAppNavigations(page)
+    const form = signInDialog(page).getByLabel('Work email', { exact: true })
+
+    await headerSignIn(page).click()
+    await expect(form).toBeVisible({ timeout: 20_000 })
+    expect(await historyLength(page), 'the click added one entry').toBe(base + 1)
+
+    await page.goBack()
+    await settled()
+    await expectPlainLanding(page, 'first Back', appNavigations)
+
+    await page.goBack()
+    await page.waitForURL('about:blank')
+    await page.waitForTimeout(BOUNCE_SETTLE_MS)
+    expect(page.url()).toBe('about:blank')
+    expect(appNavigations(), 'only the click reached the app').toHaveLength(1)
+  })
+
+  await test.step('a link to the app in a new tab: Back leaves', async () => {
+    const tab = await context.newPage()
+    const tabErrors = collectErrors(tab)
+    await seedConsent(tab, false)
+    const appNavigations = recordAppNavigations(tab)
+
+    const base = await historyLength(tab)
+    await tab.goto(`${APP_URL}/?auth=start`)
+    await tab.waitForURL((u) => u.href.startsWith(LANDING_URL) && u.searchParams.get('signin') === 'ready', { timeout: 20_000 })
+    await expect(signInDialog(tab).getByLabel('Work email', { exact: true })).toBeVisible({ timeout: 20_000 })
+    expect(await historyLength(tab), 'the app hop added no entry beyond the landing').toBe(base + 1)
+
+    await tab.goBack()
+    await tab.waitForURL('about:blank')
+    await tab.waitForTimeout(BOUNCE_SETTLE_MS)
+    expect(tab.url()).toBe('about:blank')
+    expect(appNavigations(), 'the app ran again after Back').toHaveLength(1)
+    errors.push(...tabErrors)
+  })
+
+  expect(errors, `console errors on the landing and app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed landing: a blocked app shows Sign in unavailable and does not navigate', async ({ page }) => {
+  await seedConsent(page, false)
+  await page.goto(LANDING_URL)
+  const base = await historyLength(page)
+  await page.route(`${APP_URL}/**`, (r) => r.abort('connectionrefused'))
+  const navigations = countMainFrameNavigations(page)
+  const appNavigations: string[] = []
+  page.on('request', (r) => {
+    if (r.isNavigationRequest() && r.url().startsWith(APP_URL)) appNavigations.push(r.url())
+  })
+
+  await headerSignIn(page).click()
+  const dialog = signInDialog(page)
+  await expect(dialog.getByRole('alert')).toHaveText(SIGN_IN_UNAVAILABLE)
+  expect(page.url().startsWith(LANDING_URL), `the click left the landing: ${page.url()}`).toBe(true)
+  expect(navigations(), 'a main-frame navigation fired with the app blocked').toBe(0)
+  expect(appNavigations, 'a navigation to the app fired').toEqual([])
+
+  // Retry: with the app reachable the Submit bounce succeeds and the form shows.
+  await page.unroute(`${APP_URL}/**`)
+  await dialog.getByLabel('Work email', { exact: true }).fill('retry@example.com')
+  await dialog.getByLabel('Password', { exact: true }).fill('not-a-real-password')
+  await Promise.all([
+    page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(APP_URL) && new URL(r.url()).searchParams.get('auth') === 'start'),
+    page.waitForRequest((r) => r.isNavigationRequest() && r.url().startsWith(LANDING_URL) && new URL(r.url()).searchParams.get('signin') === 'ready'),
+    dialog.getByRole('button', { name: 'Sign in →', exact: true }).click(),
+  ])
+  await expect(signInDialog(page).getByLabel('Work email', { exact: true })).toBeVisible()
+  expect(await historyLength(page), 'the Submit bounce added one entry').toBe(base + 1)
 })
 
 // A code redeems only with the state its own tab minted on the app origin.
@@ -831,7 +1023,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
 
       await victim.goto(`${APP_URL}/?handoff=${c1}`)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(victim.getByRole('dialog', { name: 'Platform login' })).toContainText(HANDOFF_FAILED)
+      await expect(signInDialog(victim)).toContainText(HANDOFF_FAILED)
       expect(exchanges, 'the victim tab called /auth/exchange').toEqual([])
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()
       expect(errors, `console errors in the victim tab:\n${errors.join('\n')}`).toEqual([])
@@ -861,7 +1053,7 @@ test('deployed app: a hand-off code minted in another browser signs no tab in', 
       // An expired code answers the same 400, which would prove nothing about the state.
       expect(Date.now() - mintedAt, 'the code could have expired before the victim tab redeemed it').toBeLessThan(HANDOFF_TTL_MS)
       await victim.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(victim.getByRole('dialog', { name: 'Platform login' })).toContainText(HANDOFF_FAILED)
+      await expect(signInDialog(victim)).toContainText(HANDOFF_FAILED)
       expect(await storedSession(context), 'the victim tab stored a session').toBeNull()
       expect(errors, `console errors in the victim tab:\n${errors.join('\n')}`).toEqual([])
     } finally {
@@ -1072,6 +1264,121 @@ test('deployed app: a new firm lands on Add your first client, and the import st
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
+// internal/portfolio/portfolio.go statusForErr(ErrNotPermitted)
+const ONLY_ADMIN_ADDS = 'only an admin can add a company'
+// frontend/app/src/components/AddCompanyTask.tsx NO_COMPANY_COPY
+const NO_COMPANY = 'No company created'
+const NO_COMPANY_MESSAGE = 'Your workspace admin adds the company. You can start when it exists.'
+const ENTITIES_URL = /\/api\/portfolio\/v1\/entities$/
+
+// A fresh workspace with no company, and a second account admitted to it as `role`.
+async function workspaceWithMember(prefix: string, kind: TenantKind, role: 'admin' | 'preparer' | 'reviewer') {
+  const owner = await provisionRealAccount(prefix, kind)
+  const ownerToken = (await signInSession(owner.email, owner.password)).access_token
+  const tenantId = (await me(ownerToken)).tenant.id
+  const member = await registerFresh(`${prefix}-member`)
+  const userId = subjectOf((await signInSession(member.email, member.password)).access_token)
+  const grant = { user_id: userId, tenant_id: tenantId, display_name: 'Role E2E', email: member.email }
+  await grantMembership({ ...grant, role })
+  return { owner, ownerToken, member: { ...member, workspaceName: owner.workspaceName }, grant }
+}
+
+async function expectWaitingOverview(page: Page): Promise<void> {
+  const waiting = page.getByTestId('company-setup-waiting')
+  await expect(waiting).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: NO_COMPANY, exact: true })).toBeVisible()
+  await expect(waiting.getByText(NO_COMPANY_MESSAGE, { exact: true })).toBeVisible()
+  await expect(waiting.getByRole('button')).toHaveCount(0)
+  await expect(page.getByTestId('add-company-task')).toHaveCount(0)
+}
+
+test('deployed app: a firm Preparer of a workspace with no company sees no add control, is refused by the server, and sees the company once it exists', async ({ page }) => {
+  test.setTimeout(240_000)
+  const { owner, ownerToken, member } = await workspaceWithMember('role-firm-prep', 'firm', 'preparer')
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, member, '/')
+  await expectWaitingOverview(page)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await expect(page.getByRole('button', { name: 'Read columns' })).toBeVisible()
+  await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add a client →' })).toHaveCount(0)
+
+  await sidebarNav(page).getByRole('button', { name: 'Clients' }).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Client portfolio', exact: true })).toBeVisible()
+  await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add client' })).toHaveCount(0)
+
+  const refused = await rawFetch('/api/portfolio/v1/entities', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${await browserToken(page)}` },
+    body: { name: `Role E2E ${Date.now()}`, tin: freshTin() },
+  })
+  expect([refused.status, refused.body], 'the Preparer POST').toEqual([403, { error: ONLY_ADMIN_ADDS }])
+
+  // The wrong turn last: an open tab learns of the company with no navigation.
+  await sidebarNav(page).getByRole('button', { name: 'Overview' }).click()
+  await expect(page.getByTestId('company-setup-waiting')).toBeVisible()
+  // framenavigated also fires on the SPA's pushState, so a window marker proves no document reload.
+  await page.evaluate(() => { (window as unknown as { __noReload: boolean }).__noReload = true })
+  await createEntity(ownerToken, { name: `Role E2E ${owner.workspaceName}`, tin: freshTin() })
+  // Headless Chromium fires no visibilitychange on a tab switch.
+  for (const state of ['hidden', 'visible']) {
+    await page.evaluate((value) => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => value })
+      document.dispatchEvent(new Event('visibilitychange'))
+    }, state)
+  }
+  await expect(page.getByText('COMPLIANCE OVERVIEW', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('company-setup-waiting')).toHaveCount(0)
+  expect(await page.evaluate(() => (window as unknown as { __noReload?: boolean }).__noReload), 'the document survived: no reload').toBe(true)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: an in-house Reviewer of a workspace with no company sees no add control', async ({ page }) => {
+  test.setTimeout(240_000)
+  const { member } = await workspaceWithMember('role-inhouse-rev', 'in_house', 'reviewer')
+  const errors = collectErrors(page)
+
+  await signInAtFrontDoor(page, member, '/')
+  await expectWaitingOverview(page)
+
+  await sidebarNav(page).getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Company', exact: true }).click()
+  await expect(page.getByText('Your company', { exact: true })).toBeVisible()
+  await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add company' })).toHaveCount(0)
+
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await expect(page.getByRole('button', { name: 'Read columns' })).toBeVisible()
+  await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add your company →' })).toHaveCount(0)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: an admin demoted while adding the company is refused, and no company is created', async ({ page }) => {
+  test.setTimeout(240_000)
+  const { ownerToken, member, grant } = await workspaceWithMember('role-demoted', 'in_house', 'admin')
+  const errors = gatedErrors(page, [expectedStatusDropper(page, 403, ENTITIES_URL)])
+
+  await signInAtFrontDoor(page, member, '/')
+  await expectAddCompanyTask(page, 'Add your company')
+  await page.getByTestId('add-company-task').getByRole('button', { name: 'Add company' }).click()
+
+  await grantMembership({ ...grant, role: 'preparer' })
+  const dialog = page.getByRole('dialog', { name: 'Add company' })
+  await dialog.getByRole('textbox').first().fill(`Role E2E ${Date.now()}`)
+  await dialog.getByPlaceholder('########-####').fill(freshTin())
+  const answer = page.waitForResponse((r) => r.request().method() === 'POST' && ENTITIES_URL.test(r.url()))
+  await dialog.getByRole('button', { name: 'Add company' }).click()
+  expect((await answer).status(), 'the demoted admin POST').toBe(403)
+
+  await expectWaitingOverview(page)
+  expect((await listEntities(ownerToken)).entities, 'companies in the workspace').toHaveLength(0)
+  expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
+})
+
 test('deployed app: a real sign-in names the account holder on the identity card', async ({ page, context }) => {
   test.setTimeout(180_000)
   const account = await provisionRealAccount('card-name', undefined, 'Ada Nwosu')
@@ -1099,20 +1406,35 @@ test('deployed app: a real sign-in names the account holder on the identity card
   expect(errors, `console errors on the journey:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('the emailed link opens a confirm page, and a bogus token\'s click lands on the failed notice', async ({ page }, testInfo) => {
+// frontend/landing/src/components/VerifyNotice.tsx COPY.failed.
+const VERIFY_FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
+// internal/gateway/signin.go stateShape.
+const STATE_43 = /^[A-Za-z0-9_-]{43}$/
+const isConfirmPage = (u: URL, invite = false) =>
+  u.origin === new URL(GATEWAY_URL).origin &&
+  u.pathname === '/auth/verify' &&
+  STATE_43.test(u.searchParams.get('state') ?? '') &&
+  u.searchParams.has('invite') === invite
+
+// The mailed link runs gateway -> landing -> app -> gateway. `commit` returns before the client redirects interrupt the load.
+async function openMailedLink(page: Page, invite = false): Promise<URL> {
+  await page.goto(`${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup${invite ? '&invite=1' : ''}`, { waitUntil: 'commit' })
+  await page.waitForURL((u) => isConfirmPage(u, invite), { timeout: 30_000 })
+  return new URL(page.url())
+}
+
+test('the emailed link reaches the confirm page through the app, and a bogus click lands on the failed notice', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  const posts: string[] = []
-  page.on('request', (req) => {
-    if (req.method() === 'POST' && new URL(req.url()).pathname === '/auth/verify') posts.push(req.url())
-  })
-  const url = `${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`
+  const posts = recordPosts(page, '/auth/verify')
+  const confirmUrl = await openMailedLink(page)
+  expect(confirmUrl.searchParams.get('state'), 'the confirm page state').toMatch(STATE_43)
   const button = page.getByRole('button')
 
   const readings: { width: number; fontSize: string; fontWeight: string }[] = []
   for (const width of [...WIDE_WIDTHS, 375]) {
     const height = 1080
     await page.setViewportSize({ width, height })
-    await page.goto(url)
+    await page.goto(confirmUrl.href)
     await expect(button, `one button at ${width}px`).toHaveCount(1)
     await expect(button).toHaveText('Confirm my email')
     const card = page.locator('main')
@@ -1122,9 +1444,7 @@ test('the emailed link opens a confirm page, and a bogus token\'s click lands on
     expect(enclosesRect({ x: 0, y: 0, width, height }, cardBox, 1), `the card leaves the viewport at ${width}px (${JSON.stringify(cardBox)})`).toBe(true)
     expect(enclosesRect(cardBox, buttonBox, 1), `the button leaves the card at ${width}px (${JSON.stringify({ cardBox, buttonBox })})`).toBe(true)
     // The gateway page has no app shell, so layout.ts's `.pf-scroll` helper would never resolve.
-    const doc = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }))
-    expect(doc.clientWidth, `the document has no width at ${width}px`).toBeGreaterThan(0)
-    expect(doc.scrollWidth - doc.clientWidth, `the confirm page scrolls sideways at ${width}px (${JSON.stringify(doc)})`).toBeLessThanOrEqual(1)
+    await noSidewaysScroll(page, 'the confirm page', width)
     // A dropped `font` shorthand computes the browser default (13.333px / 400).
     const reading = await button.evaluate((el) => ({ fontSize: getComputedStyle(el).fontSize, fontWeight: getComputedStyle(el).fontWeight }))
     expect(reading, `the button font at ${width}px`).toEqual({ fontSize: '14px', fontWeight: '700' })
@@ -1137,24 +1457,114 @@ test('the emailed link opens a confirm page, and a bogus token\'s click lands on
   const beforeClick = [...errors]
   expect(beforeClick, `console errors on the confirm page:\n${beforeClick.join('\n')}`).toEqual([])
 
-  await button.dblclick()
-  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
+  await Promise.all([page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }), button.dblclick()])
+  await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
   await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
   expect(posts.length, 'POST /auth/verify requests sent by the double-click').toBe(1)
+  for (const width of [...WIDE_WIDTHS, 375]) {
+    await page.setViewportSize({ width, height: 1080 })
+    await expectFailedNotice(page, width, VERIFY_FAILED, 'Sign in')
+  }
+})
+
+test('the failed verify notice\'s Sign in opens the sign-in window', async ({ page }) => {
+  await seedConsent(page, false)
+  await page.goto(`${LANDING_URL}/?verify=failed`)
+  await page.getByRole('status').filter({ hasText: VERIFY_FAILED }).getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(signInDialog(page)).toBeVisible({ timeout: 30_000 })
+})
+
+test('landing forwards a verify code to the app', async ({ page }) => {
+  const code = 'A'.repeat(43)
+  const urls = recordUrls(page)
+  await page.goto(`${LANDING_URL}/?verified=1&handoff=${code}`)
+  await expect(signInDialog(page)).toContainText(HANDOFF_FAILED, { timeout: 30_000 })
+  expect(urls.filter((u) => isHandoffNavigation(u) && new URL(u).searchParams.get('handoff') === code), 'navigations to the app with the code').not.toHaveLength(0)
+})
+
+// A confirm or invitee code over a live session: the app keeps the session, posts no exchange and shows the confirmed notice.
+// `entry` is the app's bounce entry. Returns the exchange POSTs and every request seen after the sign-in.
+async function confirmOverLiveSession(page: Page, entry: 'verify' | 'verify-invite'): Promise<{ email: string; exchanges: string[]; seen: string[] }> {
+  const { email } = await ensureMember(TENANTS.a.id, 'firm')
+  await signInAs(page, 'firm')
+  const seen: string[] = []
+  const exchanges: string[] = []
+  page.on('request', (r) => {
+    seen.push(r.url())
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/auth/exchange') exchanges.push(r.url())
+  })
+  // The bounce holds the pending-confirm marker, bound to the state it mints.
+  await page.goto(`${APP_URL}/?auth=${entry}#token=bogus-${crypto.randomUUID()}`, { waitUntil: 'commit' })
+  await page.waitForURL((u) => isConfirmPage(u, entry === 'verify-invite'), { timeout: 30_000 })
+  await page.goto(`${LANDING_URL}/?verified=1&handoff=${'A'.repeat(43)}`, { waitUntil: 'commit' })
+  await page.waitForURL((u) => u.href.startsWith(APP_URL), { timeout: 30_000 })
+  return { email, exchanges, seen }
+}
+
+test('a confirm over a live session shows the confirmed notice naming the signed-in account', async ({ page }) => {
+  test.setTimeout(180_000)
+  const { email, exchanges, seen } = await confirmOverLiveSession(page, 'verify')
+  const toast = page.getByTestId('verify-confirmed-toast')
+  await expect(toast).toBeVisible({ timeout: 30_000 })
+  // Read before the toast's 5.2 s auto-dismiss (AuditExportToast EXPORT_TOAST_MS).
+  await expect(toast).toContainText(`signed in as ${email}`)
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+  expect(seen.some(isHandoffNavigation), 'the listener saw the code reach the app').toBe(true)
+  expect(exchanges, 'POST /auth/exchange requests over the live session').toEqual([])
+})
+
+test('an invitee code over a live session shows the confirmed notice naming the signed-in account', async ({ page }) => {
+  test.setTimeout(180_000)
+  const { email, exchanges, seen } = await confirmOverLiveSession(page, 'verify-invite')
+  const toast = page.getByTestId('verify-confirmed-toast')
+  await expect(toast).toBeVisible({ timeout: 30_000 })
+  // Read before the toast's 5.2 s auto-dismiss (AuditExportToast EXPORT_TOAST_MS).
+  await expect(toast).toContainText(`signed in as ${email}`)
+  await expect(page.locator(VERIFIED)).toBeAttached({ timeout: 30_000 })
+  await expect(page.locator('aside.pf-sidebar')).toContainText(FIRM_PERSONA.tenantName.toUpperCase())
+  expect(seen.some(isHandoffNavigation), 'the listener saw the code reach the app').toBe(true)
+  expect(exchanges, 'POST /auth/exchange requests over the live session').toEqual([])
+})
+
+test('the confirmed notice sits clear of the sidebar at each wide width', async ({ page }) => {
+  test.setTimeout(240_000)
+  const height = 1080
+  await signInAs(page, 'firm')
+  for (const width of WIDE_WIDTHS) {
+    await page.setViewportSize({ width, height })
+    await page.goto(`${APP_URL}/?auth=verify#token=bogus-${crypto.randomUUID()}`, { waitUntil: 'commit' })
+    await page.waitForURL((u) => isConfirmPage(u), { timeout: 30_000 })
+    await page.goto(`${LANDING_URL}/?verified=1&handoff=${'A'.repeat(43)}`, { waitUntil: 'commit' })
+    const toast = page.getByTestId('verify-confirmed-toast')
+    await expect(toast).toBeVisible({ timeout: 30_000 })
+    await settleAnimations(toast)
+    // The toast dismisses itself after 5.2 s, so both boxes are read at once.
+    const [toastBox, sidebarBox] = await Promise.all([
+      boxOf('the toast', toast, width),
+      boxOf('the sidebar', page.locator('aside.pf-sidebar'), width),
+    ])
+    expect(enclosesRect({ x: 0, y: 0, width, height }, toastBox, 1), `the toast leaves the viewport at ${width}px (${JSON.stringify(toastBox)})`).toBe(true)
+    expect(rectsOverlap(toastBox, sidebarBox), `the toast overlaps the sidebar at ${width}px (${JSON.stringify({ toastBox, sidebarBox })})`).toBe(false)
+  }
 })
 
 test("the invitee's set-password link opens one bounded form, and a bogus token's double-submit lands on the failed notice", async ({ page }) => {
   const errors = collectErrors(page)
   const posts = recordPosts(page, '/auth/invitation/password')
-  const url = `${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup&invite=1`
   const password = page.locator('input[name="password"]')
   const button = page.getByRole('button')
+  // One bounce mints the state; the loop reloads the stated URL, which renders the page with no second bounce.
+  const pageUrl = await openMailedLink(page, true)
+  const state = pageUrl.searchParams.get('state')
+  expect(state, 'the set-password page state').toMatch(STATE_43)
+  expect(pageUrl.searchParams.get('invite'), 'the invite flag').toBe('1')
+  await expect(page.locator('input[name="state"]'), 'the form holds the minted state').toHaveValue(state ?? '')
 
   for (const width of [...WIDE_WIDTHS, 375]) {
     const height = 1080
     await page.setViewportSize({ width, height })
-    await page.goto(url)
+    await page.goto(pageUrl.href)
     await expect(page.locator('form'), `one form at ${width}px`).toHaveCount(1)
     await expect(password, `one password input at ${width}px`).toHaveCount(1)
     await expect(button, `one button at ${width}px`).toHaveCount(1)
@@ -1169,10 +1579,10 @@ test("the invitee's set-password link opens one bounded form, and a bogus token'
   const beforeSubmit = [...errors]
   expect(beforeSubmit, `console errors on the set-password page:\n${beforeSubmit.join('\n')}`).toEqual([])
 
+  await page.goto(pageUrl.href)
   await password.fill(crypto.randomUUID().slice(0, 16))
-  await button.dblclick()
-  await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
+  await Promise.all([page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }), button.dblclick()])
+  await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
   await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
   expect(posts.length, 'POST /auth/invitation/password requests sent by the double-click').toBe(1)
 })
@@ -1379,7 +1789,7 @@ test('deployed app: a refused renewal returns to landing and keeps the destinati
   ).toBe(true)
   expect(await storedSession(page.context()), 'the app origin kept a stored session').toBeNull()
 
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+  await headerSignIn(page).click()
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -1469,7 +1879,7 @@ test('deployed app: signing out on one device ends the session on every device',
       await b.page.locator('aside.pf-sidebar nav.pf-nav-list').getByRole('button', { name: 'Invoices' }).click()
       expect((await refused).status(), "B's first /api/ answer after the sign-out").toBe(401)
       expect((await bFrontDoor).status(), "B's front door answer").toBe(200)
-      await expect(b.page.getByRole('banner').getByRole('button', { name: 'Platform login' })).toBeVisible()
+      await expect(headerSignIn(b.page)).toBeVisible()
       expect(await storedSession(b.context), 'B kept a stored session').toBeNull()
 
       const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: recordB.refresh_token } })
@@ -1477,7 +1887,7 @@ test('deployed app: signing out on one device ends the session on every device',
     })
 
     await test.step('B signs in again and lands on /, not the old destination', async () => {
-      await b.page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
+      await headerSignIn(b.page).click()
       await Promise.all([
         b.page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
         submitSignIn(b.page, account.email, account.password),
@@ -1574,7 +1984,7 @@ async function visitConsole(page: Page, target: ConsoleTarget): Promise<void> {
 }
 
 async function signInThroughLanding(page: Page, target: ConsoleTarget, account: { email: string; password: string }): Promise<Request> {
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click({ timeout: 15_000 })
+  await headerSignIn(page).click({ timeout: 15_000 })
   const [handoff] = await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isConsoleHandoff(r.url(), target)),
     submitSignIn(page, account.email, account.password),
@@ -1649,7 +2059,7 @@ test("deployed consoles: a customer's real session opens neither console and is 
         await signInThroughLanding(page, target, account)
         expect((await notStaff).status(), `the ${target} not-staff landing answer`).toBe(200)
         await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-        await expect(page.getByRole('dialog', { name: 'Platform login' }).getByRole('alert')).toContainText(NOT_STAFF)
+        await expect(signInDialog(page).getByRole('alert')).toContainText(NOT_STAFF)
 
         expect(await consoleRecord(context, target), `${target} kept a session for a customer`).toBeNull()
         expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
@@ -1802,12 +2212,13 @@ const KIND_LABEL: Record<TenantKind, string> = {
 }
 const CREATE = 'Create an account'
 
-// Opens the registration window from the header, fills it, submits, and ends on "Check your email".
+// Opens the registration window through the sign-in window (one "Sign in" click bounces for a state), fills it, submits, and ends on "Check your email".
 // A firstEmail is submitted first: the window must refuse it inline and keep every other field.
 async function registerThroughLanding(page: Page, account: RealAccount, kind: TenantKind, firstEmail?: string, marketing = false): Promise<void> {
   await seedConsent(page, false)
   await page.goto(LANDING_URL)
-  await page.getByRole('banner').getByRole('button', { name: CREATE }).click()
+  await headerSignIn(page).click()
+  await signInDialog(page).getByRole('button', { name: CREATE, exact: true }).click()
   const dialog = page.getByRole('dialog', { name: CREATE })
   await expect(dialog).toBeVisible()
   const email = dialog.getByLabel('Work email', { exact: true })
@@ -1870,15 +2281,17 @@ test('deployed journey: a stranger registers through the landing and lands in a 
     })
 
     await test.step(`${kind}: the emailed link's landing shows the failed and the verified notice`, async () => {
-      // Step 2 of the verify half is a stand-in; the failed half is real: a bogus token opens the
-      // confirm page, and its click makes the deployed gateway answer 303 to ?verify=failed.
+      // Step 2 of the verify half is a stand-in; the failed half is real: a bogus token runs landing -> app -> the
+      // gateway confirm page, and its click makes the deployed gateway answer 303 to ?verify=failed.
       // `?verified=1` below is COPY-ONLY: the test types the query itself, so it proves the notice
       // text and that no dialog opens, not that the gateway verified anything. The verified redirect
       // is proven in CI by TestIdP_EmailedLinkVerifiesThenSignInSucceeds.
-      await page.goto(`${GATEWAY_URL}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`)
-      await page.getByRole('button', { name: 'Confirm my email' }).click()
-      await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-      await expect(page.getByRole('status').filter({ hasText: 'That link did not work' })).toBeVisible()
+      await openMailedLink(page)
+      await Promise.all([
+        page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 }),
+        page.getByRole('button', { name: 'Confirm my email' }).click(),
+      ])
+      await expect(page.getByRole('status').filter({ hasText: VERIFY_FAILED })).toBeVisible()
       await expect.poll(() => new URL(page.url()).searchParams.has('verify'), { message: 'the landing strips ?verify' }).toBe(false)
       await expectNoDialog(page)
 
@@ -2035,13 +2448,13 @@ async function fakeUnverifiedSignIn(page: Page): Promise<void> {
   })
 }
 
-// Front door -> "Platform login" -> the form signs in `email`; the faked 403 shows the alert.
+// Front door -> "Sign in" -> the form signs in `email`; the faked 403 shows the alert.
 async function signInUnverified(page: Page, email: string): Promise<Locator> {
   await seedConsent(page, false)
   await page.goto(`${resolveTarget('APP_URL')}/`)
   await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-  await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Platform login' })
+  await headerSignIn(page).click()
+  const dialog = signInDialog(page)
   await expect(dialog).toBeVisible()
   await submitSignIn(page, email, crypto.randomUUID().slice(0, 16))
   await expect(dialog.getByRole('alert').filter({ hasText: UNVERIFIED })).toBeVisible()
@@ -2217,12 +2630,12 @@ async function expectResetPage(page: Page, width: number, height: number): Promi
   await noSidewaysScroll(page, 'the reset page', width)
 }
 
-// The notice encloses its text and both buttons, and none of the three overlaps another.
-async function expectFailedNotice(page: Page, width: number): Promise<void> {
-  const notice = page.getByRole('status').filter({ hasText: RESET_LINK_FAILED })
+// The notice encloses its text, its action and Dismiss, and none of the three overlaps another.
+async function expectFailedNotice(page: Page, width: number, text: string, action: string): Promise<void> {
+  const notice = page.getByRole('status').filter({ hasText: text })
   const parts: [string, Locator][] = [
-    ['text', notice.getByText(RESET_LINK_FAILED)],
-    ['request', notice.getByRole('button', { name: 'Request a new link', exact: true })],
+    ['text', notice.getByText(text)],
+    [action, notice.getByRole('button', { name: action, exact: true })],
     ['dismiss', notice.getByRole('button', { name: 'Dismiss', exact: true })],
   ]
   const noticeBox = await boxOf('the notice', notice, width)
@@ -2247,7 +2660,7 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
     await page.setViewportSize({ width: 1280, height: TALL })
     await page.goto(`${APP_URL}/?auth=start`)
     await page.waitForURL((u) => u.href.startsWith(LANDING_URL), { timeout: 20_000 })
-    const dialog = page.getByRole('dialog', { name: 'Platform login' })
+    const dialog = signInDialog(page)
     await expect(dialog.getByRole('heading', { name: 'Sign in to your workspace' })).toBeVisible()
     const forgot = dialog.getByRole('button', { name: 'Forgot password?', exact: true })
     await expect(forgot).toBeVisible()
@@ -2303,7 +2716,7 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
     expect(posts, 'POST /auth/reset-password requests sent by the double-click').toHaveLength(1)
     for (const width of [1280, 375]) {
       await reset.setViewportSize({ width, height })
-      await expectFailedNotice(reset, width)
+      await expectFailedNotice(reset, width, RESET_LINK_FAILED, 'Request a new link')
     }
 
     await reset.getByRole('button', { name: 'Request a new link', exact: true }).click()
@@ -2316,13 +2729,11 @@ test('deployed landing: "Forgot password?" sends a reset request, and a bogus re
 
 // The accept page of an invite link (frontend/landing/src/components/InvitePage.tsx).
 const INVITE_INVALID = 'This invite is no longer valid'
-// frontend/landing/src/App.tsx SIGN_IN_OUTCOMES, no-workspace.
-const NO_WORKSPACE = 'This account has no workspace yet. If you were invited, open the invite link in your email.'
 const inviteUrl = (token: string) => `${LANDING_URL}/invite#token=${token}`
 
 // A fresh admin with a workspace of `workspaceName` (default: a short one; maxNameChars, internal/tenancy/tenancy.go, is 200).
-async function inviteWorkspace(workspaceName?: string): Promise<{ adminToken: string; tenantId: string; name: string }> {
-  const admin = await provisionRealAccount('invite-admin', 'firm', 'Invite E2E', workspaceName)
+async function inviteWorkspace(workspaceName?: string, displayName = 'Invite E2E'): Promise<{ adminToken: string; tenantId: string; name: string }> {
+  const admin = await provisionRealAccount('invite-admin', 'firm', displayName, workspaceName)
   const adminToken = (await signInSession(admin.email, admin.password)).access_token
   return { adminToken, tenantId: (await me(adminToken)).tenant.id, name: admin.workspaceName }
 }
@@ -2460,9 +2871,9 @@ async function readSessionIdentity(page: Page): Promise<Me> {
   return me(await browserToken(page))
 }
 
-// The landing "Platform login" window, as `signInAtFrontDoor` completes it, once the invite page's "Sign in" opened it.
+// The landing "Sign in" window, as `signInAtFrontDoor` completes it, once the invite page's "Sign in" opened it.
 async function signInInOpenWindow(page: Page, account: { email: string; password: string }): Promise<void> {
-  await expect(page.getByRole('dialog', { name: 'Platform login' }).getByLabel('Work email', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(signInDialog(page).getByLabel('Work email', { exact: true })).toBeVisible({ timeout: 30_000 })
   await Promise.all([
     page.waitForRequest((r) => r.isNavigationRequest() && isHandoffNavigation(r.url())),
     submitSignIn(page, account.email, account.password),
@@ -2480,8 +2891,10 @@ test('deployed journey: an invitee creates an account on the accept page', async
   await test.step('the sent view stacks at 375 px', async () => {
     await page.setViewportSize({ width: 375, height: TALL })
     const heading = page.getByRole('heading', { name: 'Check your email', exact: true })
-    const text = page.getByText('a link to confirm it and choose your password is on its way to')
+    const text = page.getByText('a link to confirm the address and choose your password is on its way to')
     await expect(text).toContainText(email)
+    await expect(text).toContainText('A link to confirm the address and choose your password is on its way to')
+    await expect(text).not.toContainText('If this address can be registered')
     await expectAcceptStack(
       page,
       375,
@@ -2515,33 +2928,342 @@ test('deployed journey: an account registered before the invite signs in from th
   expect(workspacesCreated, 'workspaces created on the way').toBe(0)
 })
 
-test('deployed journey: an invitee who signs in from another tab without the invite is pointed back to the invite link and joins through it', async ({ browser }) => {
+// The preview's account state is read from the auth store, which a fork fills asynchronously; poll, never sleep.
+async function awaitAccountState(token: string, want: 'none' | 'unconfirmed' | 'confirmed'): Promise<void> {
+  await expect
+    .poll(async () => ((await rawFetch('/auth/invitation', { method: 'POST', body: { token } })).body as { account?: string } | null)?.account, {
+      message: `the preview never reported account ${want}`,
+      timeout: 120_000,
+    })
+    .toBe(want)
+}
+
+const existsText = (page: Page, address: string) => page.getByText(`${address} already has an ASComply account.`)
+const INVITE_PREVIEW = /\/auth\/invitation$/
+
+// Answers the preview with the real answer, its `account` replaced by whatever `state.account` holds when the page asks.
+async function fulfilPreview(page: Page, state: { account: 'none' | 'confirmed' | 'unconfirmed' }): Promise<void> {
+  await page.route(INVITE_PREVIEW, async (route) => {
+    if (route.request().method() === 'OPTIONS') return route.continue()
+    const response = await route.fetch()
+    const body = (await response.json()) as Record<string, unknown>
+    return route.fulfill({ response, json: { ...body, account: state.account } })
+  })
+}
+
+test('deployed journey: an invitee who already registered and submits Create account again on the open page is sent to Sign in', async ({ page }) => {
+  test.setTimeout(240_000)
+  const workspace = await inviteWorkspace()
+  const account = await registerFresh('invitee')
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+  const errors = gatedErrors(page, [expectedStatusDropper(page, 409, /\/auth\/invitation\/register$/)])
+  await seedConsent(page, false)
+  // The real preview reads the registered account; 'none' keeps the ready view up until the real register answers 409.
+  await fulfilPreview(page, { account: 'none' })
+  await openInvite(page, token)
+  await expect(page.getByRole('button', { name: 'Create account', exact: true })).toBeVisible({ timeout: 30_000 })
+  await awaitAccountState(token, 'confirmed')
+
+  await page.getByRole('button', { name: 'Create account', exact: true }).click()
+  await page.getByRole('button', { name: 'Create account →', exact: true }).click()
+  await expect(existsText(page, account.email)).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByRole('button', { name: 'Create account', exact: true })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await signInInOpenWindow(page, account)
+  const identity = await readSessionIdentity(page)
+
+  expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
+  expect(identity.user.role, 'the invited role').toBe('reviewer')
+  expect(errors, `console errors on the accept page:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed journey: an invitee who registered opens the invite on another device and is offered only Sign in', async ({ browser }) => {
   test.setTimeout(300_000)
   const workspace = await inviteWorkspace()
   const account = await registerFresh('invitee')
   const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
+  await awaitAccountState(token, 'confirmed')
+
+  const contextB = await browser.newContext()
+  try {
+    const page = await contextB.newPage()
+    const errors = gatedErrors(page, [])
+    await seedConsent(page, false)
+    await openInvite(page, token)
+    await expect(existsText(page, account.email)).toBeVisible({ timeout: 30_000 })
+    expect(await page.getByRole('button').allTextContents(), 'the buttons on the existing-account view').toEqual(['Sign in'])
+
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await signInInOpenWindow(page, account)
+    const identity = await readSessionIdentity(page)
+
+    expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
+    expect(identity.user.role, 'the invited role').toBe('reviewer')
+    expect(errors, `console errors on the accept page:\n${errors.join('\n')}`).toEqual([])
+  } finally {
+    await contextB.close()
+  }
+})
+
+test('deployed landing: the existing-account views stack at every width', async ({ page }) => {
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace(`W${crypto.randomUUID().replaceAll('-', '')}`.padEnd(200, 'w'))
+  expect(workspace.name, 'the workspace name').toHaveLength(200)
+  const long = longInviteAddress()
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, long)
+  const widths = [...WIDE_WIDTHS, 375]
+  const errors = collectErrors(page)
+  await seedConsent(page, false)
+  const state: { account: 'confirmed' | 'unconfirmed' } = { account: 'confirmed' }
+  await fulfilPreview(page, state)
+
+  const sentence = (address: string) => page.getByText(`${address} already has an ASComply account.`)
+  const readConfirmed: number[] = []
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: TALL })
+    await openInvite(page, token)
+    const text = sentence(long)
+    await expect(text).toBeVisible({ timeout: 30_000 })
+    const signIn = page.getByRole('button', { name: 'Sign in', exact: true })
+    await expectAcceptStack(page, width, text, [['text', text], ['sign in', signIn]], ['text', 'sign in'])
+    readConfirmed.push(width)
+  }
+  expect(readConfirmed, 'the widths the existing-account sweep read').toEqual(widths)
+
+  state.account = 'unconfirmed'
+  const readUnconfirmed: number[] = []
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: TALL })
+    await openInvite(page, token)
+    const text = page.getByText(`A confirmation email was already sent to ${long}.`)
+    await expect(text).toBeVisible({ timeout: 30_000 })
+    await expectAcceptStack(
+      page,
+      width,
+      text,
+      [
+        ['text', text],
+        ['resend', page.getByRole('button', { name: 'Send it again', exact: true })],
+        ['forgot', page.getByRole('button', { name: 'Forgot password?', exact: true })],
+        ['sign in', page.getByRole('button', { name: 'Sign in', exact: true })],
+      ],
+      ['resend', 'sign in'],
+    )
+    readUnconfirmed.push(width)
+  }
+  expect(readUnconfirmed, 'the widths the unconfirmed sweep read').toEqual(widths)
+  expect(errors, `console errors on the accept page:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed landing: the unconfirmed view\'s controls resolve like their siblings', async ({ page }) => {
+  test.setTimeout(120_000)
+  const workspace = await inviteWorkspace()
+  const address = `invite-controls-${crypto.randomUUID()}@example.com`
+  const token = await inviteWithToken(workspace.adminToken, workspace.tenantId, address)
+  const errors = collectErrors(page)
+  await seedConsent(page, false)
+  await fulfilPreview(page, { account: 'unconfirmed' })
+  await page.setViewportSize({ width: 1280, height: TALL })
+  await openInvite(page, token)
+
+  const text = page.getByText(`A confirmation email was already sent to ${address}.`)
+  await expect(text).toBeVisible({ timeout: 30_000 })
+  const resend = page.getByRole('button', { name: 'Send it again', exact: true })
+  const signIn = page.getByRole('button', { name: 'Sign in', exact: true })
+  const forgot = page.getByRole('button', { name: 'Forgot password?', exact: true })
+  const read = (el: Locator) =>
+    el.evaluate((node) => {
+      const css = getComputedStyle(node)
+      return { fontSize: css.fontSize, fontWeight: css.fontWeight, height: css.height, borderTopColor: css.borderTopColor, backgroundColor: css.backgroundColor }
+    })
+  expect(await read(resend), 'Send it again resolves like Sign in').toEqual(await read(signIn))
+  expect((await read(forgot)).fontSize, 'Forgot password? font size').toBe('13px')
+
+  const answer = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === RESET_REQUEST_PATH)
+  await forgot.click()
+  expect((await answer).status(), 'the fork gateway answers the reset request').toBe(202)
+  const notice = page.getByText(RESET_SENT, { exact: true })
+  await expect(notice).toBeVisible()
+  const card = text.locator('xpath=../..')
+  const accent = await card.evaluate((node) => {
+    const probe = document.createElement('div')
+    probe.style.background = 'var(--accent)'
+    node.appendChild(probe)
+    const color = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return color
+  })
+  const fill = (await read(notice)).backgroundColor
+  expect(fill, 'the reset notice is not transparent').not.toBe('rgba(0, 0, 0, 0)')
+  expect(fill, 'the reset notice fills with --accent').toBe(accent)
+  expect(errors, `console errors on the accept page:\n${errors.join('\n')}`).toEqual([])
+})
+
+const ONE_REVIEWER = 'Invite E2E invited you as Reviewer.'
+
+// The statuses an admin's invite list holds for `email`.
+async function invitationStatuses(adminToken: string, email: string): Promise<string[]> {
+  const res = await rawFetch('/api/tenancy/v1/invitations', { headers: { Authorization: `Bearer ${adminToken}` } })
+  expect(res.status, JSON.stringify(res.body)).toBe(200)
+  return (res.body as { invitations: { email: string; status: string }[] }).invitations.filter((i) => i.email === email).map((i) => i.status)
+}
+
+// A form registrant who is not provisioned yet: the answers ride in user_metadata, so the first sign-in carries them.
+async function registerWithAnswers(prefix: string): Promise<{ email: string; password: string }> {
+  const id = crypto.randomUUID()
+  const account = { email: `${prefix}-${id}@example.com`, password: id.slice(0, 16) }
+  const res = await rawFetch('/auth/register', { method: 'POST', body: { ...account, workspace_name: `Join E2E ${id.slice(0, 8)}`, display_name: 'Join E2E', kind: 'firm' } })
+  expect(res.status, JSON.stringify(res.body)).toBe(202)
+  return account
+}
+
+const errorsAllowing403Me = (page: Page) => gatedErrors(page, [expectedStatusDropper(page, 403, /\/api\/tenancy\/v1\/me$/)])
+
+test('deployed journey: an invitee who registered in one browser signs in from another and joins from the Join screen', async ({ browser }) => {
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace()
+  const account = await registerFresh('invitee')
+  await inviteWithToken(workspace.adminToken, workspace.tenantId, account.email)
 
   // A new context holds no invite: it stands for the tab the verification mail opens.
   const contextB = await browser.newContext()
   try {
     const page = await contextB.newPage()
     const urls = recordUrls(page)
+    const errors = errorsAllowing403Me(page)
     await seedConsent(page, false)
     await page.goto(LANDING_URL)
-    await page.getByRole('banner').getByRole('button', { name: 'Platform login' }).click()
-    const dialog = page.getByRole('dialog', { name: 'Platform login' })
-    await dialog.getByRole('button', { name: 'Continue with email', exact: true }).click()
+    await headerSignIn(page).click()
     await signInInOpenWindow(page, account)
-    await expect(page.getByRole('dialog', { name: 'Platform login' })).toContainText(NO_WORKSPACE, { timeout: 30_000 })
-    expect(urls.filter((u) => u.includes('signin=no-workspace')).length, 'the landing was reached at ?signin=no-workspace').toBeGreaterThan(0)
 
-    await openInvite(page, token)
-    await page.getByRole('button', { name: 'Sign in', exact: true }).click()
-    await signInInOpenWindow(page, account)
+    await expect(page.getByRole('heading', { name: `Join ${workspace.name}`, exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByText(ONE_REVIEWER, { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: `Join ${workspace.name}`, exact: true }).click()
     const identity = await readSessionIdentity(page)
+
     expect(identity.tenant.id, 'the session is bound to the inviting workspace').toBe(workspace.tenantId)
     expect(identity.user.role, 'the invited role').toBe('reviewer')
+    expect(urls.filter((u) => u.includes('signin=no-workspace')), 'a navigation carried signin=no-workspace').toEqual([])
+    expect(errors, `console errors on the Join screen:\n${errors.join('\n')}`).toEqual([])
   } finally {
     await contextB.close()
   }
+})
+
+test('deployed journey: an invitee with two invites picks one from the chooser', async ({ page }) => {
+  test.setTimeout(240_000)
+  const first = await inviteWorkspace()
+  const second = await inviteWorkspace()
+  const account = await registerFresh('join-pick')
+  await inviteWithToken(first.adminToken, first.tenantId, account.email)
+  await inviteWithToken(second.adminToken, second.tenantId, account.email)
+  const errors = errorsAllowing403Me(page)
+  await seedConsent(page, false)
+
+  await passFrontDoor(page, account, '/')
+  await expect(page.getByRole('heading', { name: 'Choose a workspace to join', exact: true })).toBeVisible({ timeout: 30_000 })
+  const rows = page.getByTestId('join-invite')
+  await expect(rows).toHaveCount(2)
+  await rows.filter({ hasText: second.name }).getByRole('button', { name: `Join ${second.name}`, exact: true }).click()
+  const identity = await readSessionIdentity(page)
+
+  expect(identity.tenant.id, 'the session is bound to the second workspace').toBe(second.tenantId)
+  expect(await invitationStatuses(first.adminToken, account.email), 'the first workspace still shows the invite').toEqual(['pending'])
+  expect(errors, `console errors on the chooser:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed journey: a registrant with an invite can join it or create their own workspace', async ({ browser }) => {
+  test.setTimeout(300_000)
+  const workspace = await inviteWorkspace()
+  const joiner = await registerWithAnswers('join-reg')
+  const founder = await registerWithAnswers('join-own')
+  await inviteWithToken(workspace.adminToken, workspace.tenantId, joiner.email)
+  await inviteWithToken(workspace.adminToken, workspace.tenantId, founder.email)
+
+  for (const [account, choice] of [[joiner, `Join ${workspace.name}`], [founder, 'Create my own workspace']] as const) {
+    const context = await browser.newContext()
+    try {
+      const page = await context.newPage()
+      const errors = errorsAllowing403Me(page)
+      await seedConsent(page, false)
+      await passFrontDoor(page, account, '/')
+      await expect(page.getByRole('heading', { name: `Join ${workspace.name}`, exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(page.getByRole('button', { name: `Join ${workspace.name}`, exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Create my own workspace', exact: true })).toBeVisible()
+      await page.getByRole('button', { name: choice, exact: true }).click()
+      const identity = await readSessionIdentity(page)
+
+      if (account === joiner) {
+        expect(identity.tenant.id, 'Join opens the inviting workspace').toBe(workspace.tenantId)
+      } else {
+        expect(identity.tenant.id, 'Create my own workspace opens a new workspace').not.toBe(workspace.tenantId)
+        expect(await invitationStatuses(workspace.adminToken, founder.email), 'the invite stays pending').toEqual(['pending'])
+      }
+      expect(errors, `console errors on the Join screen:\n${errors.join('\n')}`).toEqual([])
+    } finally {
+      await context.close()
+    }
+  }
+})
+
+// The Join card is the join-screen test id: heading, count or invite line, rows, Join buttons and Sign out stack inside it.
+async function expectJoinStack(page: Page, width: number, kind: 'single' | 'chooser', lines: { text: Locator; rows?: Locator[] }): Promise<void> {
+  await page.setViewportSize({ width, height: TALL })
+  const card = page.getByTestId('join-screen')
+  const heading = card.getByRole('heading')
+  const signOut = card.getByRole('button', { name: 'Sign out', exact: true })
+  if (kind === 'single') {
+    const join = card.getByRole('button', { name: /^Join / })
+    await expectStack(page, width, card, [['heading', heading], ['text', lines.text], ['join', join], ['sign out', signOut]], ['heading', 'text'])
+  } else {
+    const rows = lines.rows!
+    await expectStack(page, width, card, [['heading', heading], ['text', lines.text], ['row 1', rows[0]], ['row 2', rows[1]], ['sign out', signOut]], ['row 1', 'row 2'])
+    const joins = rows.map((row) => row.getByRole('button', { name: /^Join / }))
+    await expectStack(page, width, card, [['heading', heading], ['text', lines.text], ['join 1', joins[0]], ['join 2', joins[1]], ['sign out', signOut]], ['join 1', 'join 2'])
+  }
+  const box = await card.boundingBox()
+  if (!box) throw new Error(`the join card rendered no box at ${width}px`)
+  expect(box.x, `the card starts left of the viewport at ${width}px`).toBeGreaterThanOrEqual(-1)
+  expect(box.x + box.width, `the card ends right of the viewport at ${width}px`).toBeLessThanOrEqual(width + 1)
+}
+
+test('deployed app: the Join screen and the chooser stack at every width', async ({ page }) => {
+  // Two sign-ins and ten width reads, one of them with two stacks.
+  test.setTimeout(300_000)
+  const long = await inviteWorkspace(`W${crypto.randomUUID().replaceAll('-', '')}`.padEnd(200, 'w'), 'D'.repeat(200))
+  const ordinary = await inviteWorkspace()
+  expect(long.name, 'the workspace name').toHaveLength(200)
+  const widths = [...WIDE_WIDTHS, 375]
+  await seedConsent(page, false)
+
+  const chooserAccount = await registerFresh('join-chooser')
+  await inviteWithToken(long.adminToken, long.tenantId, chooserAccount.email)
+  await inviteWithToken(ordinary.adminToken, ordinary.tenantId, chooserAccount.email)
+  await passFrontDoor(page, chooserAccount, '/')
+  await expect(page.getByRole('heading', { name: 'Choose a workspace to join', exact: true })).toBeVisible({ timeout: 30_000 })
+  const rows = page.getByTestId('join-invite')
+  await expect(rows).toHaveCount(2)
+  const chooserText = page.getByText('You are invited to 2 workspaces. An account can belong to only one.', { exact: true })
+  const chooserRead: number[] = []
+  for (const width of widths) {
+    await expectJoinStack(page, width, 'chooser', { text: chooserText, rows: [rows.nth(0), rows.nth(1)] })
+    chooserRead.push(width)
+  }
+  expect(chooserRead, 'the widths the chooser sweep read').toEqual(widths)
+
+  const singleAccount = await registerFresh('join-single')
+  await inviteWithToken(long.adminToken, long.tenantId, singleAccount.email)
+  await page.goto('about:blank')
+  // The sweep ends at 375 px, where the landing header folds Sign in into the mobile menu.
+  await page.setViewportSize({ width: 1280, height: 1080 })
+  await passFrontDoor(page, singleAccount, '/')
+  await expect(page.getByRole('heading', { name: `Join ${long.name}`, exact: true })).toBeVisible({ timeout: 30_000 })
+  const singleText = page.getByText(`${'D'.repeat(200)} invited you as Reviewer.`, { exact: true })
+  const singleRead: number[] = []
+  for (const width of widths) {
+    await expectJoinStack(page, width, 'single', { text: singleText })
+    singleRead.push(width)
+  }
+  expect(singleRead, 'the widths the single-invite sweep read').toEqual(widths)
 })

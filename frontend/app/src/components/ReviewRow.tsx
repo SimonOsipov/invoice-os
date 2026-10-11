@@ -30,12 +30,15 @@
 // FIRST, store.go:864-868, and only THEN does `can_revalidate` read true) rather than one
 // combined button — Re-validate's disabled state is `!inv.can_revalidate` alone (AC-4),
 // with no local override for "there are unsaved edits".
+//
+// Each fix card also carries Explain (ExplainPanel): a suggested fix the user can Accept.
 
 import { useState } from 'react'
 
 import { ErrorState, Loading, useAsync } from '@invoice-os/api-client'
 
 import { chevDownGlyph } from '../glyphs'
+import { EXPLAIN_COPY } from '../lib/explain'
 import type { ImportBatch } from '../lib/importApi'
 import { fmt, fmtDate } from '../lib/format'
 import {
@@ -64,8 +67,9 @@ import {
   verdictPill,
   type FixCard,
 } from '../lib/reviewBatch'
-import { severityStyle, type LineTarget } from '../lib/validationApi'
+import { severityStyle, violationKey, type LineTarget, type Violation } from '../lib/validationApi'
 import type { PlatformCtx } from '../types'
+import { ExplainPanel } from './ExplainPanel'
 
 // Decision 19's grid, minus the 40px `Ln` track (ReviewInvoicesTab.tsx's own file-header
 // comment explains why): select-all · Invoice # (mono) · Buyer · Issue date · Total ·
@@ -228,6 +232,7 @@ export function Row({
 
 // A `card.line` card adds Open line N, which hands off to invoice detail's editor
 // Open line is disabled when the invoice is not editable or the panel holds an unsaved edit.
+// Explain follows it (or stands alone) and opens `explanation` below the message.
 // One fix-editor card (§7.3): severity pill, mono rule key, the server's message
 // VERBATIM, an inline editor scoped to `card.field` (absent when unmappable — AC-2), and
 // the mono expectation from `card.hint` (expected/actual, D9). No card-level Save — the
@@ -241,6 +246,11 @@ function FixCardView({
   onOpenLine,
   lineDisabled,
   lineTitle,
+  explainOpen,
+  onExplain,
+  explainDisabled,
+  explainTitle,
+  explanation,
 }: {
   card: FixCard
   value: string
@@ -249,6 +259,11 @@ function FixCardView({
   onOpenLine: (t: LineTarget) => void
   lineDisabled: boolean
   lineTitle?: string
+  explainOpen: boolean
+  onExplain: () => void
+  explainDisabled: boolean
+  explainTitle?: string
+  explanation: React.ReactNode
 }) {
   const st = severityStyle(card.severity)
   return (
@@ -258,6 +273,7 @@ function FixCardView({
         <span className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)' }}>{card.ruleKey}</span>
       </div>
       <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: '0 0 10px', lineHeight: 1.5 }}>{card.message}</p>
+      {explainOpen && <div style={{ margin: '0 0 10px' }}>{explanation}</div>}
       {card.line != null && (
         <button
           type="button"
@@ -276,6 +292,24 @@ function FixCardView({
           Open line {card.line.line}
         </button>
       )}
+      <button
+        type="button"
+        data-testid="review-fix-explain"
+        aria-expanded={explainOpen}
+        disabled={explainDisabled}
+        title={explainDisabled ? explainTitle : undefined}
+        onClick={onExplain}
+        className="v2-btn v2-btn-ghost pf-btn"
+        style={{
+          height: 34,
+          padding: '0 14px',
+          fontSize: 13,
+          ...(card.line != null ? { marginLeft: 8 } : null),
+          ...(explainDisabled ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
+        }}
+      >
+        {EXPLAIN_COPY.button}
+      </button>
       {card.field != null && (
         <div>
           <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>{EDIT_FIELD_LABELS[card.field]}</div>
@@ -334,6 +368,9 @@ function ExpandedFixPanel({
   const [keepReason, setKeepReason] = useState('')
   const [keeping, setKeeping] = useState(false)
   const [keepError, setKeepError] = useState<string | null>(null)
+  const [explainOpen, setExplainOpen] = useState<string | null>(null)
+  const [explainNotice, setExplainNotice] = useState<string | null>(null)
+  const [editedSinceValidation, setEditedSinceValidation] = useState(false)
 
   const inv = detail.data
 
@@ -367,6 +404,9 @@ function ExpandedFixPanel({
     try {
       await editInvoice(ctx.authedFetch, base, invoiceId, patch)
       setDraft({})
+      setEditedSinceValidation(true)
+      setExplainOpen(null)
+      setExplainNotice(null)
       detail.run()
       onChanged()
     } catch (err) {
@@ -384,6 +424,9 @@ function ExpandedFixPanel({
     setRevalidateError(null)
     try {
       await revalidateInvoice(ctx.authedFetch, base, invoiceId)
+      setEditedSinceValidation(false)
+      setExplainOpen(null)
+      setExplainNotice(null)
       detail.run()
       onChanged()
     } catch (err) {
@@ -406,6 +449,8 @@ function ExpandedFixPanel({
     try {
       await keepInvoiceAsIs(ctx.authedFetch, base, invoiceId, keepReason.trim())
       setKeepReason('')
+      setExplainOpen(null)
+      setExplainNotice(null)
       detail.run()
       onChanged()
     } catch (err) {
@@ -468,7 +513,18 @@ function ExpandedFixPanel({
               never "Failed rules" -- rowExpansionView already resolved which one, this
               never re-derives `blocking` itself. */}
           <div className="label" style={{ margin: '12px 0 0' }}>{view.sectionLabel}</div>
-          {view.cards.map((card, i) => (
+          {explainNotice != null && (
+            <div
+              data-testid="explain-notice"
+              style={{ padding: '9px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', overflowWrap: 'anywhere' }}
+            >
+              {EXPLAIN_COPY.acceptFailed} {explainNotice}
+            </div>
+          )}
+          {view.cards.map((card, i) => {
+            const v: Violation = inv.violations[i]
+            const key = violationKey(v)
+            return (
             <FixCardView
               key={`${card.ruleKey}-${card.field ?? 'unmapped'}-${i}`}
               card={card}
@@ -478,8 +534,40 @@ function ExpandedFixPanel({
               onOpenLine={(t) => ctx.openImportedInvoice(invoiceId, t)}
               lineDisabled={!inv.can_edit || hasUnsavedEdit}
               lineTitle={hasUnsavedEdit ? ROW_EXPANSION_COPY.openLineUnsaved : undefined}
+              explainOpen={explainOpen === key}
+              onExplain={() => {
+                setExplainOpen((cur) => (cur === key ? null : key))
+                setExplainNotice(null)
+              }}
+              explainDisabled={editedSinceValidation || inv.verdict_stale}
+              explainTitle={EXPLAIN_COPY.stale}
+              explanation={
+                <ExplainPanel
+                  key={key}
+                  ctx={ctx}
+                  base={base}
+                  invoiceId={invoiceId}
+                  violation={v}
+                  lines={inv.line_items ?? []}
+                  acceptDisabled={!inv.can_edit || hasUnsavedEdit || revalidating || keeping}
+                  acceptTitle={hasUnsavedEdit ? EXPLAIN_COPY.unsaved : undefined}
+                  onAccepted={() => {
+                    setDraft({})
+                    setExplainOpen(null)
+                    setEditedSinceValidation(true)
+                    detail.run()
+                    onChanged()
+                  }}
+                  onAcceptFailed={(m) => {
+                    setExplainOpen(null)
+                    setExplainNotice(m)
+                    detail.run()
+                  }}
+                />
+              }
             />
-          ))}
+            )
+          })}
           {saveError != null && (
             <div style={{ padding: '9px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-red-bg)', border: '1px solid var(--status-red-border)', fontSize: 12.5, color: 'var(--status-red-text)' }}>
               {saveError}

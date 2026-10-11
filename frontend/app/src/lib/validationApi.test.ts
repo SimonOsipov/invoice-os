@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { severityStyle, violationLine, type Severity } from './validationApi'
+import { severityStyle, violationKey, violationLine, type Severity } from './validationApi'
 
 describe('severityStyle', () => {
   const cases: Array<[Severity, string]> = [
@@ -73,5 +73,10 @@ describe('violationLine', () => {
     const lineRows = rows.filter((r) => r.list === 'line_items')
     expect(lineRows.length).toBeGreaterThan(0)
     for (const r of lineRows) expect(violationLine(r.path), r.path).toEqual({ line: r.n, field: r.field || null })
+  })
+
+  it('violationKey_distinguishesPaths', () => {
+    expect(violationKey({ rule_key: 'r', path: 'line_items[1]' })).not.toBe(violationKey({ rule_key: 'r', path: 'line_items[2]' }))
+    expect(violationKey({ rule_key: 'r', path: undefined })).toBe(violationKey({ rule_key: 'r', path: '' }))
   })
 })

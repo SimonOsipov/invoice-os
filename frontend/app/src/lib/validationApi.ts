@@ -50,3 +50,10 @@ export function violationLine(path: string | undefined): LineTarget | null {
   const m = path === undefined ? null : LINE_PATH.exec(path)
   return m ? { line: Number(m[1]), field: m[2] ?? null } : null
 }
+
+export const EXPLAIN_LABEL = 'Explain'
+
+// Identity of a violation across re-validates; an absent path equals an empty one.
+export function violationKey(v: Pick<Violation, 'rule_key' | 'path'>): string {
+  return `${v.rule_key}\u0000${v.path ?? ''}`
+}

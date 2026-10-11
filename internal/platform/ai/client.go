@@ -30,6 +30,7 @@ const (
 	PurposeDocument    Purpose = "document"
 	PurposeSpreadsheet Purpose = "spreadsheet"
 	PurposeLineItems   Purpose = "line_items"
+	PurposeExplain     Purpose = "explain"
 )
 
 // Request is one call's input. FakeHint and FakeScope are read only in fake
@@ -197,7 +198,7 @@ func realSleep(ctx context.Context, d time.Duration) error {
 var fakeScopeRE = regexp.MustCompile(`^[A-Z]+$`)
 
 func validateRequest(req Request) error {
-	if req.Purpose != PurposeDocument && req.Purpose != PurposeSpreadsheet && req.Purpose != PurposeLineItems {
+	if req.Purpose != PurposeDocument && req.Purpose != PurposeSpreadsheet && req.Purpose != PurposeLineItems && req.Purpose != PurposeExplain {
 		return fmt.Errorf("ai: invalid request: unsupported purpose %q", req.Purpose)
 	}
 	if req.Text == "" && len(req.Pages) == 0 {

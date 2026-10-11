@@ -214,6 +214,15 @@ export function nullImportKeys(): Record<string, null> {
   return Object.fromEntries(IMPORT_KEYS.map((k) => [k, null]))
 }
 
+// steerExplainMarker(): the Explain-scoped marker (FakeScope "EXPLAIN" in internal/invoice/handlers_explain.go;
+// scoped spelling per internal/platform/ai/fake.go's markerAnswerPrefixFor). An unscoped steerMarker never steers it.
+export function steerExplainMarker(answer: unknown): string {
+  return `AIFAKE-EXPLAIN-ANSWER-${Buffer.from(JSON.stringify(answer)).toString('base64url')}`
+}
+
+// fake.go's markerUnavailableFor("EXPLAIN"): makes the fake Explain call fail.
+export const EXPLAIN_UNAVAILABLE_MARKER = 'AIFAKE-EXPLAIN-UNAVAILABLE'
+
 // AIR07_ROW3_ANSWER: places invoice_number only, header at row 3 -- everything else null,
 // mirroring AIRL01_ANSWER's shape.
 export const AIR07_ROW3_ANSWER: Record<string, unknown> = {

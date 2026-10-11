@@ -44,8 +44,8 @@ import { test, expect } from '@playwright/test'
 import { login, createEntity, apiBase, checkMapping, getSavedMapping, PERSONAS, suggestMapping } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope, type RawResult } from './contract-helpers'
-import { listInvoices, rawFetch } from './client'
-import { PERF_HEADER, PERF_MAPPING, steerMarker } from '../importFixtures'
+import { getInvoice, listInvoices, rawFetch } from './client'
+import { PERF_HEADER, PERF_MAPPING, nullImportKeys, steerMarker } from '../importFixtures'
 import { strToU8, zipSync } from 'fflate'
 
 // importFetch(): the multipart request seam, adapting fetch's Response into
@@ -847,17 +847,8 @@ test.describe('header row contract (API E2E, over the deployed gateway)', () => 
 // Own local steered-answer fixture, mirroring import-wizard.spec.ts's AIRL01_ANSWER
 // without importing it (repo convention -- no cross-suite imports between spec files).
 const AIR07_API_ANSWER: Record<string, unknown> = {
+  ...nullImportKeys(),
   invoice_number: 'Invoice No',
-  issue_date: null,
-  buyer_tin: null,
-  buyer_name: null,
-  currency: null,
-  subtotal: null,
-  vat: null,
-  total: null,
-  line_description: null,
-  line_quantity: null,
-  line_unit_price: null,
   header_row: 1,
   date_format: null,
   decimal_separator: null,
@@ -945,5 +936,114 @@ test.describe('check-mapping contract (API E2E, over the deployed gateway)', () 
     expect(JSON.stringify((refused as { body: unknown }).body)).toContain('supplier_tin')
 
     expect(await checkMapping(token, { document_id: plain, mapping: {} }), 'an empty mapping asks nothing').toEqual({ doubted: [] })
+  })
+})
+
+const NRS_HEADER = `${IMPORT_HEADER},HS Code,Tax Category,Tax Rate,Line Tax,Line Net,State,Due Date`
+const NRS_MAPPING: Record<string, string> = {
+  ...IMPORT_MAPPING,
+  line_hsn_code: 'HS Code',
+  line_tax_category: 'Tax Category',
+  line_tax_percent: 'Tax Rate',
+  line_tax: 'Line Tax',
+  line_total: 'Line Net',
+  buyer_state: 'State',
+  due_date: 'Due Date',
+}
+
+// Two lines of one invoice: nets 100.00 + 50.00, tax 7.50 + 3.75. The rate cell is "7.5" so the read-back "7.50" shows the column scale.
+function nrsCsv(num: string, secondLineTax = '3.75'): string {
+  const head = [num, '2026-01-15', '87654321-0002', 'NRS Import Buyer', 'NGN', '150.00', '11.25', '161.25']
+  const line1 = [...head, 'Item 1', '1', '100.00', '8471.30', 'STANDARD_VAT', '7.5', '7.50', '100.00', 'NG-FC', '2026-02-28']
+  const line2 = [...head, 'Item 2', '1', '50.00', '8471.30', 'STANDARD_VAT', '7.5', secondLineTax, '50.00', 'NG-FC', '2026-02-28']
+  return `${NRS_HEADER}\n${line1.join(',')}\n${line2.join(',')}`
+}
+
+test.describe('NRS import fields contract (API E2E, over the deployed gateway)', () => {
+  let token: string
+
+  test.beforeAll(async () => {
+    token = await login(PERSONAS.A)
+  })
+
+  test('ENGI07-API-01: NRS columns are stored and read back', async () => {
+    const entity = await createEntity(token, { name: `ENGI-07 nrs ${freshTin()}`, tin: freshTin() })
+    const num = `INV-NRS-${freshTin()}`
+    const documentId = await uploadDocument(token, nrsCsv(num))
+    const res = await importFetch(token, buildForm(entity.id, documentId, { mapping: NRS_MAPPING }))
+    expect(res.status, 'the real import should return 201').toBe(201)
+    expect((res.body as Record<string, unknown>).errors ?? [], 'no row error').toEqual([])
+
+    const { invoices } = await listInvoices(token, { entity_id: entity.id, limit: 50 })
+    const listed = invoices.find((i) => i.invoice_number === num)
+    expect(listed, 'the imported invoice is listed').toBeTruthy()
+    const got = await getInvoice(token, listed!.id)
+
+    expect(got.buyer_state).toBe('NG-FC')
+    expect(got.due_date, 'a date reads back as RFC3339 midnight').toBe('2026-02-28T00:00:00Z')
+    const lines = [...(got.line_items ?? [])].sort((a, b) => a.line_no - b.line_no)
+    expect(lines.map((l) => l.hsn_code)).toEqual(['8471.30', '8471.30'])
+    expect(lines.map((l) => l.tax_category)).toEqual(['STANDARD_VAT', 'STANDARD_VAT'])
+    expect(lines.map((l) => l.tax_percent), 'tax_percent reads back at column scale').toEqual(['7.50', '7.50'])
+    expect(lines.map((l) => l.line_total)).toEqual(['100.00', '50.00'])
+    expect(lines.map((l) => l.line_tax)).toEqual(['7.50', '3.75'])
+    expect(got.tax_subtotals, 'one entry for the one category').toEqual([
+      { tax_category: 'STANDARD_VAT', tax_percent: '7.50', taxable_amount: '150.00', tax_amount: '11.25' },
+    ])
+  })
+
+  test('ENGI07-API-02: the dry run of NRS columns is ready', async () => {
+    const entity = await createEntity(token, { name: `ENGI-07 nrs ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, nrsCsv(`INV-NRS-${freshTin()}`))
+    const res = await importFetch(token, buildForm(entity.id, documentId, { mapping: NRS_MAPPING }), '?dry_run=true')
+    expect(res.status, 'the dry run should return 200').toBe(200)
+    const body = res.body as Record<string, unknown>
+    expect(body.ready_invoices).toBe(1)
+    expect(body.errors ?? [], 'no row error').toEqual([])
+  })
+
+  test('ENGI07-API-03: an exponent in line_tax is a row error', async () => {
+    const entity = await createEntity(token, { name: `ENGI-07 nrs ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, nrsCsv(`INV-NRS-${freshTin()}`, '1e400'))
+    const res = await importFetch(token, buildForm(entity.id, documentId, { mapping: NRS_MAPPING }), '?dry_run=true')
+    expect(res.status).toBe(200)
+    const body = res.body as Record<string, unknown>
+    expect(body.errors, 'one error for the one invoice, on the field').toEqual([
+      expect.objectContaining({ field: 'line_tax', message: 'line_tax is not a valid number', rows: [2, 3] }),
+    ])
+    expect(body.ready_invoices, 'the bad invoice is not ready').toBe(0)
+  })
+
+  test('ENGI07-API-04: default_invoice_kind fills the invoice', async () => {
+    const entity = await createEntity(token, { name: `ENGI-07 kind ${freshTin()}`, tin: freshTin() })
+    const num = `INV-KIND-${freshTin()}`
+    const documentId = await uploadDocument(token, buildCleanCsv(num))
+    const form = buildForm(entity.id, documentId)
+    form.set('default_invoice_kind', 'B2G')
+    const res = await importFetch(token, form)
+    expect(res.status, 'the real import should return 201').toBe(201)
+
+    const { invoices } = await listInvoices(token, { entity_id: entity.id, limit: 50 })
+    const listed = invoices.find((i) => i.invoice_number === num)
+    expect(listed, 'the imported invoice is listed').toBeTruthy()
+    expect((await getInvoice(token, listed!.id)).invoice_kind).toBe('B2G')
+  })
+
+  test('ENGI07-API-05: a bad or conflicting default is 400', async () => {
+    const entity = await createEntity(token, { name: `ENGI-07 kind ${freshTin()}`, tin: freshTin() })
+    const documentId = await uploadDocument(token, buildCleanCsv(`INV-KIND-${freshTin()}`))
+    const bad = buildForm(entity.id, documentId)
+    bad.set('default_invoice_kind', 'B2X')
+    const badRes = await importFetch(token, bad)
+    assertErrorEnvelope(badRes, 400, 'default B2X')
+    expect((badRes.body as { error: string }).error).toBe('default_invoice_kind must be B2B, B2G or B2C')
+
+    const kindCsv = `${IMPORT_HEADER},Kind\n${buildCleanCsv(`INV-KIND-${freshTin()}`).split('\n')[1]},B2B`
+    const kindDoc = await uploadDocument(token, kindCsv)
+    const both = buildForm(entity.id, kindDoc, { mapping: { ...IMPORT_MAPPING, invoice_kind: 'Kind' } })
+    both.set('default_invoice_kind', 'B2B')
+    const bothRes = await importFetch(token, both)
+    assertErrorEnvelope(bothRes, 400, 'default beside a mapped invoice_kind')
+    expect((bothRes.body as { error: string }).error).toContain('default_invoice_kind cannot be set when invoice_kind is mapped')
   })
 })

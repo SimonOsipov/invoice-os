@@ -763,8 +763,9 @@ test('landing demo: the modal card fits and sits centred at every width', async 
   const card = dialog.locator(':scope > div')
   await expect(card).toHaveCount(1)
 
-  const viewports = [...WIDE_WIDTHS.map((width) => ({ width, height: 1080 })), { width: 390, height: 667 }]
+  const viewports = [...WIDE_WIDTHS.map((width) => ({ width, height: 1080 })), { width: 390, height: 667 }, { width: 375, height: 667 }]
   const measured: Array<{ width: number; height: number; cardWidth: number; left: number; right: number }> = []
+  const demoPadding: Record<number, string> = {}
   for (const viewport of viewports) {
     await page.setViewportSize(viewport)
     const at = `${viewport.width}x${viewport.height}`
@@ -782,31 +783,35 @@ test('landing demo: the modal card fits and sits centred at every width', async 
     const box = (await card.boundingBox())!
     const side = gaps(box, { x: 0, width: viewport.width })
     measured.push({ ...viewport, cardWidth: box.width, left: side.left, right: side.right })
+    if (viewport.height === 667) demoPadding[viewport.width] = await dialog.evaluate((el) => getComputedStyle(el).padding)
   }
 
-  // Both scrims pad alike at 390: the demo overlay carries no phone-only override.
-  const demoPadding = await dialog.evaluate((el) => getComputedStyle(el).padding)
+  // Both scrims pad alike on a phone: the demo overlay carries no phone-only override.
   await page.goto(`${LANDING_URL}/?state=${'A'.repeat(43)}&signin=ready`)
   const signIn = page.getByRole('dialog', { name: 'Platform login' })
   await expect(signIn).toBeVisible()
-  const signInPadding = await signIn.evaluate((el) => getComputedStyle(el).padding)
-  expect(signInPadding, 'the sign-in scrim has no padding').not.toBe('')
-  expect(demoPadding, 'the demo scrim pads differently from the sign-in scrim at 390').toBe(signInPadding)
+  for (const width of [390, 375]) {
+    await page.setViewportSize({ width, height: 667 })
+    const signInPadding = await signIn.evaluate((el) => getComputedStyle(el).padding)
+    expect(signInPadding, `the sign-in scrim has no padding at ${width}`).not.toBe('')
+    expect(demoPadding[width], `the demo scrim pads differently from the sign-in scrim at ${width}`).toBe(signInPadding)
+  }
 
   await testInfo.attach('demo-modal-fit.json', { body: JSON.stringify(measured, null, 2), contentType: 'application/json' })
-  expect(measured.length, 'one reading per width').toBe(WIDE_WIDTHS.length + 1)
+  expect(measured.length, 'one reading per width').toBe(WIDE_WIDTHS.length + 2)
   expect(measured[0].width, 'the widest width is read first').toBe(2560)
   for (const m of measured) expect(m.cardWidth, `the card has no width at ${m.width}`).toBeGreaterThan(0)
 })
 
-// O2: at 390x667 the card scrolls its own content; the page behind it does not move.
-test('landing demo: the modal card scrolls inside itself at 390', async ({ page }) => {
+// O2: at 390x667 and 375x667 the card scrolls its own content; the page behind it does not move.
+for (const width of [390, 375]) {
+test(`landing demo: the modal card scrolls inside itself at ${width}`, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1080 })
   await openLanding(page)
   const dialog = await openDemoModal(page)
   const card = dialog.locator(':scope > div')
   await expect(card).toHaveCount(1)
-  await page.setViewportSize({ width: 390, height: 667 })
+  await page.setViewportSize({ width, height: 667 })
   await settleAnimations(card)
 
   const scrollY0 = await page.evaluate(() => window.scrollY)
@@ -815,7 +820,7 @@ test('landing demo: the modal card scrolls inside itself at 390', async ({ page 
 
   const overflow = await card.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }))
   // Non-vacuity: a card that fits has nothing to scroll.
-  expect(overflow.scrollHeight, 'the card has no overflow to scroll at 390x667').toBeGreaterThan(overflow.clientHeight + 1)
+  expect(overflow.scrollHeight, `the card has no overflow to scroll at ${width}x667`).toBeGreaterThan(overflow.clientHeight + 1)
   await expect.poll(() => card.evaluate((el) => el.scrollTop), { message: 'the card did not scroll' }).toBeGreaterThan(0)
 
   const [cardBox, submitBox] = await Promise.all([card.boundingBox(), submit.boundingBox()])
@@ -825,6 +830,7 @@ test('landing demo: the modal card scrolls inside itself at 390', async ({ page 
   await expect(submit).toBeInViewport()
   expect(await page.evaluate(() => window.scrollY), 'the page behind the modal scrolled').toBe(scrollY0)
 })
+}
 
 // O3: the marketing row sits under the consent row on the same left edge, inside the card.
 test('landing demo: the marketing row lines up under the consent row at 1440 and 390', async ({ page }) => {
@@ -870,10 +876,24 @@ test('landing demo: the marketing row lines up under the consent row at 1440 and
 test('landing analytics: reading the whole page requests gtag.js only on the live host', async ({ page }) => {
   const sinks = await openLanding(page)
 
+  // Before layout commits, scrollHeight <= innerHeight and scrollTo(0, <=0) is a no-op.
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight), { message: 'the landing page never became taller than the viewport' })
+    .toBeGreaterThan(0)
+
   for (const fraction of [0.25, 0.5, 0.75, 1]) {
-    await page.evaluate((f) => {
-      window.scrollTo(0, (document.documentElement.scrollHeight - window.innerHeight) * f)
-    }, fraction)
+    // Retargets each poll so a late height change cannot strand the milestone.
+    await expect
+      .poll(
+        () =>
+          page.evaluate((f) => {
+            const target = Math.floor((document.documentElement.scrollHeight - window.innerHeight) * f)
+            window.scrollTo(0, target)
+            return Math.abs(window.scrollY - target) <= 1
+          }, fraction),
+        { message: `scroll milestone ${fraction} was not reached` },
+      )
+      .toBe(true)
     await settleLayout(page)
   }
 

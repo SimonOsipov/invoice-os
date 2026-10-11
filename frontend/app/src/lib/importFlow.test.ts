@@ -10,7 +10,7 @@
 // Spec map (AC coverage complete — plan §E):
 //   FLOW-01  canReadColumns: gates on the file ONLY — no entity required            (AC3)
 //   FLOW-02  canReadColumns rejects a non-csv/xlsx extension (e.g. .pdf)          (AC1,3)
-//   FLOW-03  canStartImport: needs preview AND invoice_number placed, not all 11    (AC3)
+//   FLOW-03  canStartImport: needs preview AND invoice_number placed, not all CANON  (AC3)
 //   FLOW-04  canStartImport delegates to canSubmitMapping, never re-derives         (AC3)
 //   FLOW-05  hasImportableExtension: case-insensitive, last-segment match only      (AC1)
 //   FLOW-06  previewColumns: column-major samples, not row-major                    (AC2)
@@ -102,7 +102,7 @@ describe('canStartImport (FLOW-03, FLOW-04)', () => {
   const placed: Mapping = { invoice_number: 'A' }
 
   // FLOW-03 — falsification: an impl ignoring preview (Import enabled before columns
-  // are read); an impl requiring all 11 CANON fields placed (stricter than the server).
+  // are read); an impl requiring every CANON field placed (stricter than the server).
   it('needs a preview AND invoice_number placed — not every field', () => {
     expect(canStartImport(null, placed)).toBe(false)
     expect(canStartImport(preview, { invoice_number: null, total: 'T' })).toBe(false)
@@ -791,7 +791,7 @@ describe('computeNoEntity (FLOW-15..17, task-304 AC-6)', () => {
   })
 
   // FLOW-17 — guard 2 (rosterCatchingUp): the one-render-late window where entities has
-  // already landed but the `clients` effect has not yet rebuilt from it. Falsification: an
+  // already landed but `clients` is still []. Falsification: an
   // impl missing this guard would fire the panel for one frame on every load with data.
   it('FLOW-17: does not fire in the one-render roster-catching-up window (entities landed, clients still [])', () => {
     expect(computeNoEntity(null, 'ready', 5, 0)).toBe(false)

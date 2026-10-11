@@ -71,7 +71,7 @@ func TestServiceImport_ColumnCountAnomaliesDegradeGracefully(t *testing.T) {
 		"1.00", "11.00", "Item1", "1", "10.00",
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, anomalyHeader, [][]string{wideRow, shortRow}, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, anomalyHeader, [][]string{wideRow, shortRow}, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v (column-count anomalies must never trigger wholesale rejection)", err)
 	}
@@ -110,8 +110,8 @@ func TestServiceImport_ColumnCountAnomaliesDegradeGracefully(t *testing.T) {
 // the story) -- it characterizes whatever the ACTUAL outcome is. Reasoned
 // ahead of running: the invoices/line_items schema keeps every MBS-content
 // column NULLABLE with no CHECK (store-invalid-faithfully,
-// migrations/20260714103137_invoices.sql), classify's three quarantine
-// checks (headerConflictField, issueDateParseError,
+// migrations/20260714103137_invoices.sql), classify's quarantine
+// checks (headerConflictField, dateParseError,
 // bestEffortBadNumericField) all skip a blank/out-of-range cell rather than
 // flagging it, and newTestService wires an INERT fakeGate (zero violations,
 // no rejection) -- so the tiny row is expected to COMMIT with every
@@ -142,7 +142,7 @@ func TestServiceImport_DrasticallyShortRowNoPanic(t *testing.T) {
 		"1.00", "11.00", "Item1", "1", "10.00", "10.00",
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, anomalyHeader, [][]string{tinyRow, fullRow}, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, anomalyHeader, [][]string{tinyRow, fullRow}, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v (a drastically out-of-range row must never panic or wholesale-reject the batch)", err)
 	}

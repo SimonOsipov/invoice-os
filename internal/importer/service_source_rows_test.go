@@ -71,7 +71,7 @@ func TestBuildCreateInput_SetsSourceRowsFromGroup(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 1, 2}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 1, "Acme", nil)
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 1, "Acme", nil, "")
 
 	want := []int{2, 3, 4}
 	if len(in.SourceRows) != len(want) {
@@ -97,7 +97,7 @@ func TestBuildCreateInput_NoDocumentLeavesSourceRowsNil(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 1, 2}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "", 1, "Acme", nil)
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "", 1, "Acme", nil, "")
 
 	if in.SourceRows != nil {
 		t.Errorf("SourceRows = %#v, want nil (not merely empty) when documentID is \"\"", in.SourceRows)
@@ -118,7 +118,7 @@ func TestBuildCreateInput_NonContiguousGroupKeepsEveryRow(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 2, 5}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 1, "Acme", nil)
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 1, "Acme", nil, "")
 
 	want := []int{2, 4, 7}
 	if len(in.SourceRows) != len(want) {
@@ -150,7 +150,7 @@ func TestServiceImport_PersistsSourceRowsPerInvoice(t *testing.T) {
 		mkRow("INV-B", "2026-01-11", "TIN-B", "Buyer B", "NGN", "200.00", "20.00", "220.00", "Gadget B2", "1", "100.00"), // sheet 5
 	}
 
-	res, err := svc.Import(c, entityID, "", documentID, 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", documentID, 1, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestServiceImport_DryRunWritesNoSourceRows(t *testing.T) {
 		mkRow("INV-B", "2026-01-11", "TIN-B", "Buyer B", "NGN", "200.00", "20.00", "220.00", "Gadget B1", "1", "100.00"),
 	}
 
-	res, err := svc.Import(c, entityID, "", documentID, 1, stdMapping, stdHeader, rows, true)
+	res, err := svc.Import(c, entityID, "", documentID, 1, stdMapping, stdHeader, rows, true, "")
 	if err != nil {
 		t.Fatalf("Import (dry-run): %v", err)
 	}
@@ -242,7 +242,7 @@ func TestServiceImport_NoDocumentStillImports(t *testing.T) {
 		mkRow("INV-A", "2026-01-10", "TIN-A", "Buyer A", "NGN", "300.00", "30.00", "330.00", "Widget A", "1", "100.00"),
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestBuildCreateInput_SetsSourceRowsFromGroupBelowATitle(t *testing.T) {
 	}
 	g := &invoiceGroup{number: "INV-1", rowIdxs: []int{0, 1, 2}}
 
-	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 3, "Acme", nil)
+	in := buildCreateInput("entity-1", rows, colIndex, g, "batch-1", "doc-1", 3, "Acme", nil, "")
 
 	want := []int{4, 5, 6}
 	if len(in.SourceRows) != len(want) {
@@ -343,7 +343,7 @@ func TestServiceImport_PersistsSourceRowsBelowATitle(t *testing.T) {
 		mkRow("INV-B", "2026-01-11", "TIN-B", "Buyer B", "NGN", "200.00", "20.00", "220.00", "Gadget B2", "1", "100.00"), // file row 7
 	}
 
-	res, err := svc.Import(c, entityID, "", documentID, 3, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", documentID, 3, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestServiceImport_RowErrorsCountFromTheHeaderRow(t *testing.T) {
 		mkRow("INV-X", "2026-01-11", "", "", "", "", "", "", "", "", ""),
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 3, stdMapping, stdHeader, rows, true)
+	res, err := svc.Import(c, entityID, "", "", 3, stdMapping, stdHeader, rows, true, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestServiceImport_RowErrorsCountFromTheHeaderRow(t *testing.T) {
 	}
 
 	// Control: the identical rows read from row 1 (no title above the header).
-	controlRes, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, true)
+	controlRes, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, true, "")
 	if err != nil {
 		t.Fatalf("Import (control): %v", err)
 	}

@@ -164,8 +164,9 @@ func detectFormat(filename, contentType string) string {
 }
 
 const (
-	headerRowMalformed = "header_row must be a whole number of 1 or more"
-	headerRowPastEnd   = "header_row is past the last row of the file"
+	headerRowMalformed        = "header_row must be a whole number of 1 or more"
+	headerRowPastEnd          = "header_row is past the last row of the file"
+	defaultInvoiceKindInvalid = "default_invoice_kind must be B2B, B2G or B2C"
 )
 
 // parseHeaderRow reads the optional header_row value; "" is row 1.
@@ -201,7 +202,7 @@ func parseHeaderRow(raw string) (int, error) {
 // object storage is down ([fail-closed]). A dry run needs the bytes too --
 // it decodes them, it just persists nothing.
 func CreateHandler(
-	imp func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error),
+	imp func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool, defaultInvoiceKind string) (BatchResult, error),
 	open func(ctx context.Context, id, rangeHeader string) (document.Document, document.Object, error),
 	save func(ctx context.Context, entityID string, header []string, mapping map[string]string) error,
 	log *slog.Logger,
@@ -252,6 +253,14 @@ func CreateHandler(
 			remember = false
 		default:
 			writeError(w, http.StatusBadRequest, "remember_mapping must be true or false")
+			return
+		}
+
+		defaultKind := r.FormValue("default_invoice_kind")
+		switch defaultKind {
+		case "", "B2B", "B2G", "B2C":
+		default:
+			writeError(w, http.StatusBadRequest, defaultInvoiceKindInvalid)
 			return
 		}
 
@@ -348,7 +357,7 @@ func CreateHandler(
 			return
 		}
 
-		res, err := imp(r.Context(), entityID, filename, documentID, headerRow, mapping, header, rows, dryRun)
+		res, err := imp(r.Context(), entityID, filename, documentID, headerRow, mapping, header, rows, dryRun, defaultKind)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError {

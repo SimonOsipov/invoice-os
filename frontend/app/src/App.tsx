@@ -41,6 +41,7 @@ import type { DocumentRowState } from './lib/documentRun'
 import {
   canSubmitAllMappings,
   checkGroups,
+  defaultInvoiceKindFor,
   groupByLayout,
   groupOfFile,
   rememberMapping,
@@ -48,6 +49,7 @@ import {
   returnToAutomatic,
   splitOut,
   suggestGroups,
+  type InvoiceKind,
   type MappingGroup,
 } from './lib/mappingGroups'
 import {
@@ -276,16 +278,14 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
 
   // The switcher roster. Rebuilt whenever the live entity list changes (first load, or a
   // refetch after Add/Edit client on the Clients page) — a full rebuild, not a merge, and
-  // since INVCR-01-03 this effect is its ONLY writer: the mock approve() that used to
+  // since INVCR-01-03 this memo is its ONLY writer: the mock approve() that used to
   // prepend a locally-built invoice to a client's list is gone, so no creation path writes
   // active.invoices any more. Those generated SAMPLE rows never rendered anywhere live
   // anyway — InvoiceDetail's mock branch is fully retired (M5-09-04); they only ever fed
   // CustomersView/ReportsView, themselves still-mock surfaces this plan's next
   // step migrates off active.invoices.
-  const [clients, setClients] = useState<Client[]>([])
-  useEffect(() => {
-    setClients(buildClients(entitiesList))
-  }, [entitiesList])
+  // Derived, not mirrored: `active` must resolve in the commit the fetch lands, before any navigation.
+  const clients = useMemo(() => buildClients(entitiesList), [entitiesList])
 
   // [entity-picker] keystone: the active selection is a real entity id, never an index
   // into a mock array. null until the user (or the fallback below) picks one.
@@ -314,10 +314,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // it at each consumer ([gate-on-the-resolved-entity]). Two things depend on it being the
   // resolved object and not `active.entityId`:
   //
-  //  - the filing gate. `active` is rebuilt from `entitiesList` by an effect, so between a
-  //    refetch landing and that rebuild the id can name an entity not (yet) in the list.
-  //    Gating on the id there arms the button and the click does nothing — the exact
-  //    silent-no-op shape [inhouse-can-start] exists to forbid.
+  //  - the filing gate. `active.entityId` can be non-null while the entity is not in the
+  //    list (the emptyClient() placeholder, a refetch that dropped it). Gating on the id
+  //    there arms the button and the click does nothing — the exact silent-no-op shape
+  //    [inhouse-can-start] exists to forbid.
   //  - draftToCreateRequest, which takes `Entity` and never `Client`: buildClientForEntity
   //    does `tin: e.tin ?? '—'`, so a TIN-less entity is unrepresentable through Client and
   //    would cross the wire as the literal em-dash.
@@ -458,7 +458,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     { immediate: base != null },
   )
   const membersState = membersViewState(base, membersAsync.status)
-  // A local mirror rebuilt from the async data, the `entitiesList → setClients` shape:
+  // A local mirror rebuilt from the async data:
   // `asyncReducer`'s `start` nulls `data`, so refetching after a status write would blank
   // the whole roster for the round trip. The write patches this instead; any later refetch
   // overwrites it wholesale, so the fetch stays authoritative.
@@ -605,7 +605,8 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // unclampable. Gated on null so it can only FILL, never overwrite switchClient's stamp.
   // Third argument is the live href: a two-arg call records call[2] as undefined and would
   // fail the three popstate no-history specs if it ever fired under a gateway.
-  useEffect(() => {
+  // Layout, not passive: a navigation before a passive flush would leave the boot entry unstamped. boot_theBootEntryCarriesTheStampInTheCommitThatResolvesTheCompany
+  useLayoutEffect(() => {
     activeEntityIdRef.current = active.entityId
     if (active.entityId === null) return
     const minted = (window.history.state as { e?: string | null } | null)?.e ?? null
@@ -1155,6 +1156,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
                 mapping: toImportMapping(group.mapping),
                 rememberMapping: rememberMapping(group),
                 headerRow: group.headerRow,
+                defaultInvoiceKind: defaultInvoiceKindFor(group),
               },
               (phase) => {
                 localRun = runReducer(localRun, { type: 'phase', phase })
@@ -1329,6 +1331,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // `groupIndex` (and therefore the screen the operator is currently on) is unaffected.
   function splitOutFile(fileId: string) {
     setGroups((gs) => splitOut(gs, fileId))
+  }
+
+  function setInvoiceKind(groupId: string, kind: InvoiceKind | undefined) {
+    setGroups((gs) => gs.map((g) => (g.id === groupId ? { ...g, invoiceKind: kind } : g)))
   }
 
   function resetGroupToAutomatic() {
@@ -1740,6 +1746,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     startDocumentRun,
     splitOutFile,
     resetGroupToAutomatic,
+    setInvoiceKind,
     backToImport,
     restartImport,
     skipUpload,

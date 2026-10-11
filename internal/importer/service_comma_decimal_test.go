@@ -21,7 +21,7 @@ func commaDecimalImport(t *testing.T, label string, rows [][]string, dryRun bool
 	tenantID := seedTenant(t, super, label+" tenant")
 	entityID = seedEntity(t, super, tenantID, label+" entity")
 	c := auth.WithIdentity(context.Background(), auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
-	res, err := newTestService(app).Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, dryRun)
+	res, err := newTestService(app).Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, dryRun, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}

@@ -144,8 +144,8 @@ describe('AC-1: auto placement writer is silent without JEV_OUT', () => {
 
 // --- AC-2 -----------------------------------------------------------------------------------
 
-describe('AC-2: every layout gets a full eleven-key mapping', () => {
-  it('layout A places three fields, layout B places zero, both keep all eleven keys', () => {
+describe('AC-2: every layout gets a full CANON-key mapping', () => {
+  it('layout A places three fields, layout B places zero, both keep every CANON key', () => {
     const layouts: JevLayout[] = [
       { id: 'A', columns: ['Date', 'VAT', 'Total', 'Invoice No'] },
       { id: 'B', columns: ['A', 'B', 'C'] },
@@ -198,17 +198,10 @@ describe('AC-3: the alias table is the shipped one', () => {
   // Measured today (§3 Row 3): the four literal placements, not a call-site identity that
   // would move with any change to ALIAS.
   const want: Mapping = {
-    invoice_number: null,
+    ...Object.fromEntries(CANON.map((c) => [c.key, null])),
     issue_date: 'Date',
-    buyer_tin: null,
-    buyer_name: null,
-    currency: null,
-    subtotal: null,
     vat: 'VAT',
     total: 'Total',
-    line_description: null,
-    line_quantity: null,
-    line_unit_price: null,
   }
 
   it('matches the measured literal placements', () => {

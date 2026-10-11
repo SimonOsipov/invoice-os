@@ -390,6 +390,24 @@ describe('createImport', () => {
     expect(xhr.body!.getAll('remember_mapping')).toHaveLength(1)
   })
 
+  it('IMPAPI-ENGI07-01: defaultInvoiceKind adds default_invoice_kind', async () => {
+    const promise = createImport(fakeAuth(), base, { ...makeReq(), defaultInvoiceKind: 'B2G' }, () => {}, FakeXhrCtor)
+    FakeXhr.last()?.respond(201, JSON.stringify(REPORT_BODY))
+    await promise
+
+    const body = FakeXhr.last()!.body!
+    expect(body.getAll('default_invoice_kind')).toEqual(['B2G'])
+  })
+
+  it('IMPAPI-ENGI07-02: no defaultInvoiceKind, no part', async () => {
+    const promise = createImport(fakeAuth(), base, { ...makeReq(), defaultInvoiceKind: undefined }, () => {}, FakeXhrCtor)
+    FakeXhr.last()?.respond(201, JSON.stringify(REPORT_BODY))
+    await promise
+
+    const keys = Array.from(FakeXhr.last()!.body!.entries()).map(([k]) => k).sort()
+    expect(keys).toEqual(['document_id', 'entity_id', 'mapping', 'remember_mapping'])
+  })
+
   it('IMPAPI-28: rememberMapping false is sent as the string \'false\', never dropped', async () => {
     const req = { ...makeReq(), rememberMapping: false }
     const promise = createImport(fakeAuth(), base, req, () => {}, FakeXhrCtor)

@@ -81,7 +81,18 @@ import {
 } from '../api/client'
 import { ensureFirmPolicyActive, ensureInhousePolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
-import { assertFillsColumn, assertPageDoesNotScrollSideways, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
+import {
+  assertFillsColumn,
+  assertPageDoesNotScrollSideways,
+  assertSameHeight,
+  enclosesRect,
+  gaps,
+  overlapOf,
+  rectsOverlap,
+  settleAnimations,
+  WIDE_WIDTHS,
+  type Rect,
+} from './layout'
 import { signInAs } from '../personaSession'
 import { INHOUSE_PERSONA } from './targets'
 import {
@@ -111,6 +122,8 @@ import {
   buildMixedCsv,
   buildPerfCsv,
   buildSingleInvoiceCsv,
+  IMPORT_KEYS,
+  nullImportKeys,
   PERF_HEADER,
   steerMarker,
 } from '../importFixtures'
@@ -192,17 +205,8 @@ async function approveOpenRunsForEntity(token: string, entityId: string): Promis
 // steered answer only needs to place invoice_number for the screen to carry both AUTO and
 // SUGGESTED badges at once.
 const AIRL01_ANSWER = {
+  ...nullImportKeys(),
   invoice_number: 'Invoice No',
-  issue_date: null,
-  buyer_tin: null,
-  buyer_name: null,
-  currency: null,
-  subtotal: null,
-  vat: null,
-  total: null,
-  line_description: null,
-  line_quantity: null,
-  line_unit_price: null,
   header_row: 1,
   date_format: null,
   decimal_separator: null,
@@ -664,6 +668,69 @@ test("AIR07-E2E-04: an unsteered file opens exactly today's Map step", async ({ 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// Opens the Map step of a file with no invoice_kind column; the fake AI places nothing.
+async function openUnsteeredMapStep(page: Page, label: string): Promise<void> {
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `${label} ${freshTin()}`, tin: freshTin() })
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  const readColumnsBtn = page.getByRole('button', { name: 'Read columns' })
+  const csv = buildAir07UnsteeredCsv(`INV-ENGI07-${freshTin()}`)
+  await page.locator('input[type="file"]#pf-import-file').setInputFiles({ name: 'engi07.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') })
+  await expect(readColumnsBtn).toBeEnabled()
+  await readColumnsBtn.click()
+  await expect(page.getByTestId('map-column')).toHaveCount(11)
+}
+
+test('ENGI07-E2E-01: the buyer-type select sits in the palette card', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await openUnsteeredMapStep(page, 'ENGI-07 select')
+
+  const select = page.getByTestId('map-invoice-kind')
+  await expect(select, 'a file with no invoice_kind column offers the select').toBeVisible()
+  // The innermost div holding the card title and the select is the palette card.
+  const card = page.locator('div').filter({ has: page.getByText(/^Map fields to columns/) }).filter({ has: select }).last()
+  const chip = page.getByRole('button', { name: 'invoice_number' })
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await settleAnimations(card, select)
+      await expect
+        .poll(
+          async () => {
+            const [cardBox, selectBox] = await Promise.all([card.boundingBox(), select.boundingBox()])
+            return cardBox && selectBox ? enclosesRect(cardBox, selectBox, 1) : null
+          },
+          { message: `the select must sit inside the palette card at ${width}px (null means one never rendered)`, timeout: 10_000 },
+        )
+        .toBe(true)
+      await assertPageDoesNotScrollSideways(page, `Map step at ${width}px`)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  await assertSameHeight(page, select, chip, 'the buyer-type select and a palette chip')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('ENGI07-E2E-02: placing invoice_kind hides the select', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+  await openUnsteeredMapStep(page, 'ENGI-07 hide')
+
+  await expect(page.getByTestId('map-invoice-kind'), 'control: the select shows before invoice_kind is placed').toHaveCount(1)
+  await page.getByRole('button', { name: 'invoice_kind' }).click()
+  await page.getByTestId('map-column').nth(0).click()
+  await expect(page.getByTestId('map-invoice-kind'), 'a mapped invoice_kind column replaces the default').toHaveCount(0)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // AIRL01's steered file plus a twelfth, unaliased column. A JEVFAKE-DOUBT header makes the
 // mapping-check fake doubt every placement of that file's layout group.
 function buildCheck05Csv(num: string, notesHeader: string): string {
@@ -750,10 +817,8 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
   await expect(page.getByTestId('map-suggested-badge')).toHaveCount(0)
   await expect(page.locator('main div.mono'), 'the header cells are exactly the file headers').toHaveText(headersA)
   await expect(columns.locator('div.mono + *'), 'every placement cell reads only "drop field"').toHaveText(Array(12).fill('drop field'))
-  await expect(palette).toHaveCount(11)
-  expect(await paletteKeys(), 'the palette offers all eleven fields').toEqual(
-    ['buyer_name', 'buyer_tin', 'currency', 'invoice_number', 'issue_date', 'line_description', 'line_quantity', 'line_unit_price', 'subtotal', 'total', 'vat'],
-  )
+  await expect(palette).toHaveCount(IMPORT_KEYS.length)
+  expect(await paletteKeys(), 'the palette offers every import field').toEqual([...IMPORT_KEYS].sort())
 
   const continueBtn = page.locator('main button', { hasText: /^(Map invoice number to continue|Continue to next file|Import \d+ rows)$/ })
   await expect(continueBtn).toHaveText('Map invoice number to continue')
@@ -770,8 +835,8 @@ test("CHECK05-E2E-01 (AC-4, AC-5, AC-9): a doubted group opens unplaced and impo
   await expect(page.getByTestId('map-suggested-badge'), 'exactly one SUGGESTED badge on the page').toHaveCount(1)
   await expect(columns.locator('div.mono + span[draggable]'), 'eight placed chips').toHaveCount(8)
   await expect(columns.locator('div.mono + div'), 'four unplaced columns').toHaveText(Array(4).fill('drop field'))
-  await expect(palette).toHaveCount(3)
-  expect(await paletteKeys()).toEqual(['buyer_name', 'line_description', 'subtotal'])
+  await expect(palette).toHaveCount(IMPORT_KEYS.length - CHECK05_AUTOMATIC.length)
+  expect(await paletteKeys()).toEqual(IMPORT_KEYS.filter((k) => !CHECK05_AUTOMATIC.includes(k)).sort())
   await expect(continueBtn).toHaveText('Import 1 rows')
 
   await continueBtn.click()

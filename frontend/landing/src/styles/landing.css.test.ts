@@ -482,6 +482,38 @@ describe('HD-13 the registration entry hides at 1219px and the 1120px breakpoint
   })
 })
 
+/** The `.a-actions` gap contract: the failures, empty when it holds. */
+function actionsFailures(css: string): string[] {
+  const rules = parseRules(css).filter((r) => selectorParts(r).includes('.a-actions'))
+  const base = rules.filter((r) => r.at.length === 0)
+  const out: string[] = []
+  const baseDecl = (prop: string) => declared(base, '.a-actions', prop, () => true)
+  if (baseDecl('display') !== 'flex') out.push(`base display: ${baseDecl('display')} != flex`)
+  if (baseDecl('align-items') !== 'center') out.push(`base align-items: ${baseDecl('align-items')} != center`)
+  if (baseDecl('gap') !== '24px') out.push(`base gap: ${baseDecl('gap')} != 24px`)
+  const narrowed = rules.filter((r) => r.at.length > 0 && declarations(r.body).some((d) => d.prop === 'gap' || d.prop === 'column-gap'))
+  if (narrowed.length !== 1) out.push(`${narrowed.length} gap rules under an at-rule, want 1`)
+  for (const r of narrowed) {
+    const q = r.at.join(' ')
+    const gap = declared([r], '.a-actions', 'gap', () => true)
+    if (!/^@media \(\s*max-width\s*:\s*389\.98px\s*\)$/i.test(q)) out.push(`gap rule under ${q}`)
+    if (gap !== '12px') out.push(`gap rule under ${q} sets ${gap}`)
+  }
+  const gapProp = (d: { prop: string }) => /^(gap|column-gap|row-gap)$/.test(d.prop)
+  const stray = parseRules(css).filter(
+    (r) => selectorParts(r).some((s) => s.includes('a-actions') && s !== '.a-actions') && declarations(r.body).some(gapProp),
+  )
+  if (stray.length > 0) out.push(`gap set through a compound selector: ${stray.map((r) => r.selector).join('; ')}`)
+  if (base.some((r) => declarations(r.body).some((d) => d.prop === 'column-gap' || d.prop === 'row-gap'))) out.push('base sets column-gap or row-gap')
+  return out
+}
+
+describe('the header action group gap', () => {
+  it('.a-actions narrows its gap only below 390px', () => {
+    expect(actionsFailures(LANDING_CSS)).toEqual([])
+  })
+})
+
 const NAV_GAP_FIXTURE = (max: string) => `
 .a-nav { gap: 28px; }
 @media (max-width: ${max}) { .a-nav { gap: 16px; } }

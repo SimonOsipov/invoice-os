@@ -313,11 +313,16 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // `p` marks the backfill's stamp: a window entry that already names a company.
   const isWindowEntry = (s: { e?: string | null; m?: string; p?: boolean } | null) =>
     s?.m === mountKey && (s.e == null || s.p === true)
-  // Stamp for a replace of the current entry: a window entry stays in the window once the company resolves.
+  // Stamp for a replace of the current entry: a window entry stays in the window while it names the window's company.
+  // The first row can change with no switch (a reordered refetch), so the ref match is not redundant.
   const replaceStamp = () => ({
     e: active.entityId,
     m: mountKey,
-    p: (active.entityId !== null && isWindowEntry(window.history.state)) || undefined,
+    p:
+      (active.entityId !== null &&
+        isWindowEntry(window.history.state) &&
+        bootEntityIdRef.current === active.entityId) ||
+      undefined,
   })
 
   // The REAL portfolio entity behind `active`, resolved once here rather than re-`find`ing

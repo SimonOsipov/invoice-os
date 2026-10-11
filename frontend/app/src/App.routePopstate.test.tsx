@@ -1903,8 +1903,7 @@ describe('BUG-34: entries pushed before the company list loads', () => {
     expect(stateNow()!.p).toBeUndefined()
   })
 
-  // known defect: the first row changes with no switch, so a window entry is current while active differs from the boot company.
-  it.fails('popstate_aFirstRowChangeWithoutASwitchDoesNotClampAnEntryStampedWithTheNewCompany', async () => {
+  it('popstate_aFirstRowChangeWithoutASwitchDoesNotClampAnEntryStampedWithTheNewCompany', async () => {
     const release = await bootPreLoad('/settings/members')
     await act(async () => {
       release()

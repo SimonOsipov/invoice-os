@@ -151,7 +151,7 @@ const SAMPLE_INVOICE = {
   line_items: [{ id: '1', description: 'Widget', quantity: 10.0, unit_price: 100.0, line_total: 1000.0 }],
 }
 
-type DeskVersion = { version: number; state: string }
+type DeskVersion = { version: number; state: string; rule_count: number }
 
 test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
   let customer: string
@@ -233,11 +233,12 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
     expect(forced, 'exactly one version in force').toHaveLength(1)
     expect(forced[0].version, 'the list agrees with GET rules').toBe(await inForce())
 
-    const other = list.find((v) => v.state !== 'in_force')
-    expect(other, 'another listed version').toBeDefined()
+    const other = list.find((v) => v.state !== 'in_force' && v.rule_count > 0)
+    expect(other, 'another listed version with rules').toBeDefined()
     const res = await get(rulesRole, `${STAFF_RULES}?version=${other!.version}`)
     expect(res.status, 'rules of another version').toBe(200)
     expect(res.body).toMatchObject({ version: other!.version })
+    expect((res.body as { rules: StaffRule[] }).rules, 'the list rule_count matches the rules read').toHaveLength(other!.rule_count)
   })
 
   test('a rules-role staff member drafts and tests a rule', async () => {
@@ -275,7 +276,9 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
     const publish = (effective_from: string) => send(rulesRole, 'POST', `${DRAFT}/publish`, { effective_from })
 
-    assertErrorEnvelope(await publish(yesterday), 400, 'publish with yesterday')
+    const refused = await publish(yesterday)
+    assertErrorEnvelope(refused, 400, 'publish with yesterday')
+    expect(refused.body, 'refused for the date').toEqual({ error: 'start date must be today or later' })
     expect((await versions()).find((v) => v.version === draft)?.state, 'a refused publish leaves the draft').toBe('draft')
 
     // Publishing seals whatever the draft holds, so no rule list is asserted.
@@ -297,13 +300,21 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
   test('the sync log is readable by rules staff', async () => {
     const summary = await get(rulesRole, SYNCS)
     expect(summary.status, 'sync summary').toBe(200)
-    const lists = (summary.body as { lists: Array<{ list: string }> }).lists
+    const lists = (summary.body as { lists: Array<{ list: string; synced_at: string }> }).lists
     expect(Array.isArray(lists), 'lists is an array').toBe(true)
-    for (const { list } of lists) {
+
+    // The detail route answers for a list with no sync: 200 and an empty array, whatever the log holds.
+    const none = await get(rulesRole, `${SYNCS}?list=e2e-never-synced`)
+    expect(none.status, 'detail of an unsynced list').toBe(200)
+    expect(none.body).toEqual({ list: 'e2e-never-synced', syncs: [] })
+
+    for (const { list, synced_at } of lists) {
       const detail = await get(rulesRole, `${SYNCS}?list=${encodeURIComponent(list)}`)
       expect(detail.status, `detail of ${list}`).toBe(200)
-      const syncs = (detail.body as { syncs: Array<{ added: unknown; removed: unknown; changed: unknown }> }).syncs
+      const syncs = (detail.body as { syncs: Array<{ synced_at: string; added: unknown; removed: unknown; changed: unknown }> }).syncs
       expect(Array.isArray(syncs), `${list} syncs is an array`).toBe(true)
+      expect(syncs.length, `${list} has a sync, since the summary lists it`).toBeGreaterThan(0)
+      expect(syncs[0].synced_at, `${list}: the newest sync is the summary's`).toBe(synced_at)
       for (const s of syncs) {
         expect([Array.isArray(s.added), Array.isArray(s.removed), Array.isArray(s.changed)], `${list} code arrays`).toEqual([true, true, true])
       }

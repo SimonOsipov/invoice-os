@@ -1143,9 +1143,10 @@ test('SUP-06 rules desk: versions, draft edit, test and publish confirm', async 
   await expect(mn.locator('[role="switch"]').first()).toBeVisible()
 
   const rows = mn.locator(`.ops-rules-grid ${RAIL_ROWS}`)
-  await expect(rows.filter({ hasText: 'IN FORCE' }), 'one version in force').toHaveCount(1)
+  // A regex: a string hasText is case-insensitive and would match every retired row's "never in force".
+  await expect(rows.filter({ hasText: /IN FORCE/ }), 'one version in force').toHaveCount(1)
 
-  const other = rows.filter({ hasNotText: 'IN FORCE' }).filter({ hasNotText: 'DRAFT' }).filter({ hasNotText: '· 0 rules' }).first()
+  const other = rows.filter({ hasNotText: /IN FORCE|DRAFT/ }).filter({ hasNotText: '· 0 rules' }).first()
   await other.click()
   const switches = mn.locator('[role="switch"]')
   await expect(switches.first(), 'switches are locked off the version in force').toBeDisabled()
@@ -1153,7 +1154,7 @@ test('SUP-06 rules desk: versions, draft edit, test and publish confirm', async 
 
   const newDraft = mn.getByRole('button', { name: 'New draft' })
   if (await newDraft.isEnabled()) await newDraft.click()
-  await rows.filter({ hasText: 'DRAFT' }).click()
+  await rows.filter({ hasText: /DRAFT/ }).click()
   const addRule = mn.getByRole('button', { name: 'Add rule' })
   await expect(addRule, 'the draft is selected').toBeVisible()
 
@@ -1194,7 +1195,7 @@ const DRAFT_ROW = `.ops-rules-grid ${RAIL_ROWS}`
 async function openDraftView(page: Page, token: string, extra?: ProbeRule): Promise<number> {
   const draft = await ensureDraft(token, extra)
   await openScreen(page, 'Rules', 'Rules admin')
-  await mainOf(page).locator(DRAFT_ROW).filter({ hasText: 'DRAFT' }).click()
+  await mainOf(page).locator(DRAFT_ROW).filter({ hasText: /DRAFT/ }).click()
   await expect(mainOf(page).getByRole('button', { name: 'Add rule' }), 'the draft is selected').toBeVisible()
   return draft
 }
@@ -1338,7 +1339,7 @@ test('SUP-07 desk controls paint', async ({ page }) => {
   const testDraft = mn.getByRole('button', { name: 'Test draft' })
   await expectStyles(mn.getByRole('button', { name: 'Add rule' }), 'Add rule', { radius, height: (await styles(testDraft, ['height']))['height'] })
 
-  await mn.locator(DRAFT_ROW).filter({ hasText: 'IN FORCE' }).click()
+  await mn.locator(DRAFT_ROW).filter({ hasText: /IN FORCE/ }).click()
   await mn.locator('[role="switch"]').first().click()
   const kill = page.getByRole('dialog').filter({ hasText: 'Disable a live rule?' })
   const [reasonRadius] = await radii(parent(kill.getByRole('textbox', { name: 'Reason' })))

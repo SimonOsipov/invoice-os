@@ -83,6 +83,11 @@ const RULES_PROPS: Parameters<typeof Rules>[0] = {
   onOpenRule: noop,
   onToggleRule: noop,
   onPublish: noop,
+  draftVersion: 9,
+  draftBusy: false,
+  onNewDraft: noop,
+  onAddRule: noop,
+  onTestDraft: noop,
 }
 const rulesWith = (over: Partial<Parameters<typeof Rules>[0]>) => renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS, ...over }))
 
@@ -475,6 +480,40 @@ describe('v2 screens', () => {
       expect(style({ attrs: t })).toMatchObject({ opacity: '0.45', cursor: 'not-allowed' })
     }
     expect(html).not.toContain('--fg-4')
-    expect(rulesWith({ busy: false })).not.toContain('disabled=""')
+    const idle = [...rulesWith({ busy: false }).matchAll(/<button\b([^>]*role="switch"[^>]*)>/g)]
+    expect(idle).toHaveLength(SEED_RULES.length)
+    for (const m of idle) expect(m[1]).not.toContain('disabled=""')
+  })
+
+  it('the header buttons follow the draft: New draft needs none, Publish draft needs one', () => {
+    const btn = (html: string, name: string) => {
+      const hit = [...html.matchAll(/<button\b([^>]*)>([^<]*(?:<svg[\s\S]*?<\/svg>)?[^<]*)<\/button>/g)].filter((m) => m[2].replace(/<svg[\s\S]*?<\/svg>/, '').trim() === name)
+      expect(hit, `one "${name}" button`).toHaveLength(1)
+      return ` ${hit[0][1]}`
+    }
+    const withDraft = rulesWith({ draftVersion: 9 })
+    expect(btn(withDraft, 'New draft')).toContain('disabled=""')
+    expect(btn(withDraft, 'Publish draft v9')).not.toContain('disabled=""')
+    const none = rulesWith({ draftVersion: null })
+    expect(btn(none, 'New draft')).not.toContain('disabled=""')
+    expect(btn(none, 'Publish draft')).toContain('disabled=""')
+    for (const html of [withDraft, none]) {
+      const t = btn(html, html === withDraft ? 'New draft' : 'Publish draft')
+      expect(style({ attrs: t })).toMatchObject({ opacity: '0.45', cursor: 'not-allowed' })
+    }
+    expect(btn(rulesWith({ draftVersion: 9, draftBusy: true }), 'Publish draft v9')).toContain('disabled=""')
+    expect(btn(rulesWith({ draftVersion: null }), 'New draft')).toContain('class="ops-btn v2-btn v2-btn-ghost"')
+  })
+
+  it('Add rule and Test draft show on the draft only, in the sibling ghost paint at height 30', () => {
+    const on = rulesWith({ state: 'draft', version: 9 })
+    for (const name of ['Add rule', 'Test draft']) {
+      const m = on.match(new RegExp(`<button([^>]*)>${name}</button>`))
+      expect(m, `${name} on the draft`).not.toBeNull()
+      expect(m![1]).toContain('v2-btn-ghost')
+      expect(style({ attrs: ` ${m![1]}` }).height).toBe('30px')
+      expect(rulesWith({ state: 'in_force' }), `${name} off the draft`).not.toContain(`>${name}<`)
+    }
+    expect(rulesWith({ state: 'draft', version: 9, draftBusy: true })).toMatch(/<button[^>]*disabled=""[^>]*>Add rule/)
   })
 })

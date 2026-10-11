@@ -917,13 +917,49 @@ test('SUP-05 kill confirm layout', async ({ page }) => {
   noErrors(errors, 'SUP-05 kill confirm layout')
 })
 
+// A draft always exists after this: opened if absent, with a probe rule so the publish diff has a row.
+const STAFF_VERSIONS = '/api/validation/v1/staff/rule-versions'
+const DRAFT_PROBE = 'e2e-desk-probe'
+type StaffVersion = { version: number; state: string }
+
+type ProbeRule = { key: string; message: string; when?: string }
+
+async function ensureDraft(token: string, extra?: ProbeRule): Promise<number> {
+  const headers = { Authorization: `Bearer ${token}` }
+  const findDraft = async (): Promise<StaffVersion | undefined> => {
+    const res = await rawFetch(STAFF_VERSIONS, { headers })
+    expect(res.status, 'staff versions list').toBe(200)
+    return (res.body as { versions: StaffVersion[] }).versions.find((v) => v.state === 'draft')
+  }
+  let draft = await findDraft()
+  if (!draft) {
+    const opened = await rawFetch(`${STAFF_VERSIONS}/draft`, { method: 'POST', headers })
+    expect([201, 409], 'open a draft').toContain(opened.status)
+    draft = await findDraft()
+  }
+  if (!draft) throw new Error('no draft after opening one')
+  const probe: ProbeRule = { key: DRAFT_PROBE, message: 'e2e desk probe' }
+  for (const r of [probe, ...(extra ? [extra] : [])]) {
+    const rule = { type: r.when ? 'cel' : 'required', target: 'invoice.invoice_number', params: r.when ? { expr: 'true' } : {}, severity: 'info', when: r.when ?? null, enabled: false, ...r }
+    const added = await rawFetch(`${STAFF_VERSIONS}/draft/rules`, { method: 'POST', headers, body: rule })
+    expect([201, 409], `add draft rule ${r.key}`).toContain(added.status)
+  }
+  return draft.version
+}
+
+async function staffToken(): Promise<string> {
+  const account = await staffAccount()
+  return (await signInSession(account.email, account.password)).access_token
+}
+
 test('SUP-04 publish modal', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
+  const draft = await ensureDraft(await staffToken())
 
   await openScreen(page, 'Rules', 'Rules admin')
-  await mainOf(page).getByRole('button', { name: 'Publish draft' }).click()
-  const dialog = page.getByRole('dialog').filter({ hasText: 'Publish draft → v9' })
+  await mainOf(page).getByRole('button', { name: `Publish draft v${draft}` }).click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Publish draft → v' })
   await expectPanel(page, dialog, 'publish modal')
   await everyStyles(dialog.locator('span[style*="width: 22px"]'), 1, 'diff sign tile', { radius: '4px' })
   await attachShot(page, testInfo, 'publish-modal')
@@ -1093,4 +1129,190 @@ test('SUP-06 rule drawer holds long content', async ({ page }) => {
   expect(enclosesRect(dBox, json, 1), 'the JSON block sits inside the drawer').toBe(true)
 
   noErrors(errors, 'SUP-06 rule drawer holds long content')
+})
+
+const DRAFT_ROW = `.ops-rules-grid ${RAIL_ROWS}`
+
+async function openDraftView(page: Page, token: string, extra?: ProbeRule): Promise<number> {
+  const draft = await ensureDraft(token, extra)
+  await openScreen(page, 'Rules', 'Rules admin')
+  await mainOf(page).locator(DRAFT_ROW).filter({ hasText: 'DRAFT' }).click()
+  await expect(mainOf(page).getByRole('button', { name: 'Add rule' }), 'the draft is selected').toBeVisible()
+  return draft
+}
+
+test('SUP-07 draft controls layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const draft = await openDraftView(page, await staffToken())
+  const mn = mainOf(page)
+
+  await atWidths(page, 'SUP-07 draft controls layout', async () => {
+    const r = await boxes(page, {
+      title: parent(mn.getByRole('heading', { level: 1, name: 'Rules admin' })),
+      newDraft: mn.getByRole('button', { name: 'New draft' }),
+      publish: mn.getByRole('button', { name: `Publish draft v${draft}` }),
+      addRule: mn.getByRole('button', { name: 'Add rule' }),
+      testDraft: mn.getByRole('button', { name: 'Test draft' }),
+      badge: mn.getByText(new RegExp(`^DRAFT v${draft}$`)),
+      count: mn.getByText(/^\d+ RULES$/),
+    })
+    await noSidewaysScroll(page, 'Rules')
+    return {
+      problems: [
+        ...apart(r.newDraft, r.publish, 'New draft / Publish draft'),
+        ...apart(r.title, r.newDraft, 'title block / New draft'),
+        ...apart(r.title, r.publish, 'title block / Publish draft'),
+        ...pairwiseApart([r.addRule, r.testDraft, r.badge, r.count], 'table bar'),
+      ],
+      rects: r,
+    }
+  })
+
+  noErrors(errors, 'SUP-07 draft controls layout')
+})
+
+test('SUP-07 draft drawer layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  await openDraftView(page, await staffToken())
+  const mn = mainOf(page)
+
+  await mn.getByRole('button', { name: 'Add rule' }).click()
+  const { drawer: fresh } = await expectDrawer(page, 'new rule drawer')
+  await atWidths(page, 'SUP-07 draft drawer layout', async () => {
+    const names = ['Key', 'Type', 'Severity', 'Target', 'Params', 'When', 'Message']
+    const r = await boxes(page, { drawer: fresh, ...Object.fromEntries(names.map((n) => [n, parent(fresh.getByLabel(n, { exact: true }))])), enabled: fresh.getByLabel('Enabled'), save: fresh.getByRole('button', { name: 'Save to draft' }) })
+    const fields = [...names.map((n) => r[n as keyof typeof r]), r.enabled]
+    return {
+      problems: [...fields.flatMap((f, i) => within(r.drawer, f, `field ${i} in the drawer`)), ...pairwiseApart(fields, 'fields'), ...within(r.drawer, r.save, 'Save in the drawer')],
+      rects: r,
+    }
+  })
+  await fresh.getByRole('button', { name: 'Close' }).click()
+
+  await mn.getByText(DRAFT_PROBE, { exact: true }).click()
+  const { drawer } = await expectDrawer(page, 'draft rule drawer')
+  await atWidths(page, 'SUP-07 draft drawer footer', async () => {
+    const r = await boxes(page, { drawer, remove: drawer.getByRole('button', { name: /Remove from draft/ }), save: drawer.getByRole('button', { name: 'Save to draft' }) })
+    return { problems: [...within(r.drawer, r.remove, 'Remove in the drawer'), ...within(r.drawer, r.save, 'Save in the drawer'), ...apart(r.remove, r.save, 'Remove / Save')], rects: r }
+  })
+
+  noErrors(errors, 'SUP-07 draft drawer layout')
+})
+
+test('SUP-07 test modal layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  await openDraftView(page, await staffToken())
+
+  await mainOf(page).getByRole('button', { name: 'Test draft' }).click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Sample invoice' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Run test' }).click()
+  const draftHead = dialog.getByText(/^Draft v\d+$/)
+  await expect(draftHead, 'the result columns show').toBeVisible()
+
+  await atWidths(page, 'SUP-07 test modal layout', async () => {
+    const vp = page.viewportSize()!
+    const r = await boxes(page, {
+      dialog,
+      sample: dialog.getByLabel('Sample invoice'),
+      draftCol: parent(draftHead),
+      forceCol: parent(dialog.getByText(/^In force v\d+$/)),
+    })
+    return {
+      problems: [
+        ...within({ x: 0, y: 0, width: vp.width, height: vp.height }, r.dialog, 'dialog in the viewport'),
+        ...within(r.dialog, r.sample, 'textarea in the dialog'),
+        ...apart(r.draftCol, r.forceCol, 'result columns'),
+      ],
+      rects: r,
+    }
+  })
+
+  noErrors(errors, 'SUP-07 test modal layout')
+})
+
+test('SUP-07 publish modal layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const draft = await openDraftView(page, await staffToken())
+
+  await mainOf(page).getByRole('button', { name: `Publish draft v${draft}` }).click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Publish draft → v' })
+  await expect(dialog).toBeVisible()
+
+  await atWidths(page, 'SUP-07 publish modal layout', async () => {
+    const vp = page.viewportSize()!
+    const r = await boxes(page, {
+      dialog,
+      date: parent(dialog.getByLabel('Start date')),
+      cancel: dialog.getByRole('button', { name: 'Cancel' }),
+      publish: dialog.getByRole('button', { name: `Publish v${draft}` }),
+    })
+    return {
+      problems: [
+        ...within({ x: 0, y: 0, width: vp.width, height: vp.height }, r.dialog, 'dialog in the viewport'),
+        ...within(r.dialog, r.date, 'date field in the dialog'),
+        ...apart(r.date, r.cancel, 'date / Cancel'),
+        ...apart(r.date, r.publish, 'date / Publish'),
+        ...apart(r.cancel, r.publish, 'Cancel / Publish'),
+      ],
+      rects: r,
+    }
+  })
+
+  noErrors(errors, 'SUP-07 publish modal layout')
+})
+
+test('SUP-07 desk controls paint', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const draft = await openDraftView(page, await staffToken())
+  const mn = mainOf(page)
+  await settle(page, mn.getByRole('button', { name: 'New draft' }))
+
+  const publish = mn.getByRole('button', { name: `Publish draft v${draft}` })
+  const [radius] = await radii(publish)
+  const { height } = await styles(publish, ['height'])
+  await expectStyles(mn.getByRole('button', { name: 'New draft' }), 'New draft (disabled: a draft exists)', { radius, height, opacity: '0.45', cursor: 'not-allowed' })
+  const testDraft = mn.getByRole('button', { name: 'Test draft' })
+  await expectStyles(mn.getByRole('button', { name: 'Add rule' }), 'Add rule', { radius, height: (await styles(testDraft, ['height']))['height'] })
+
+  await mn.locator(DRAFT_ROW).filter({ hasText: 'IN FORCE' }).click()
+  await mn.locator('[role="switch"]').first().click()
+  const kill = page.getByRole('dialog').filter({ hasText: 'Disable a live rule?' })
+  const [reasonRadius] = await radii(parent(kill.getByRole('textbox', { name: 'Reason' })))
+  await kill.getByRole('button', { name: 'Cancel' }).click()
+  await expect(kill).toBeHidden()
+
+  await publish.click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Publish draft → v' })
+  await expect(dialog).toBeVisible()
+  await expectStyles(parent(dialog.getByLabel('Start date')), 'date field wrapper', { radius: reasonRadius })
+
+  noErrors(errors, 'SUP-07 desk controls paint')
+})
+
+test('SUP-07 draft drawer holds long content', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const key = 'e2e-desk-long'
+  await openDraftView(page, await staffToken(), { key, message: 'M'.repeat(500), when: `true${' && true'.repeat(37)}` })
+  const mn = mainOf(page)
+
+  await mn.getByText(key, { exact: true }).click()
+  const { drawer } = await expectDrawer(page, 'draft drawer')
+  await expect(drawer.getByLabel('Message')).toHaveValue('M'.repeat(500))
+  await noSidewaysScroll(page, 'the draft drawer page')
+  const m = await drawer.locator('xpath=./div[2]').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  expect(m.scrollWidth - m.clientWidth, 'the draft drawer body scrolls sideways').toBeLessThanOrEqual(1)
+  const box = await boxes(page, { drawer })
+  for (const name of ['Type', 'Severity', 'Target', 'Params', 'When', 'Message']) {
+    const f = await boxes(page, { f: parent(drawer.getByLabel(name, { exact: true })) })
+    expect(enclosesRect(box.drawer, f.f, 1), `${name} sits inside the drawer`).toBe(true)
+  }
+
+  noErrors(errors, 'SUP-07 draft drawer holds long content')
 })

@@ -2,7 +2,34 @@ import { ApiError } from '@invoice-os/api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_KEY } from './auth'
-import { fetchRules, fetchRulesInForce, fetchVersions, reasonValid, stateLabel, switchRule, toRule, versionMeta, type VersionState } from './rulesApi'
+import { readFileSync } from 'node:fs'
+import {
+  addDraftRule,
+  diffRules,
+  draftRuleErrors,
+  editDraftRule,
+  EMPTY_FORM,
+  fetchRules,
+  fetchRulesInForce,
+  fetchVersions,
+  formFromRule,
+  openDraft,
+  publishDraft,
+  publishWarnings,
+  reasonValid,
+  removeDraftRule,
+  ruleBody,
+  SAMPLE_INVOICE,
+  stateLabel,
+  switchRule,
+  testDraft,
+  toRule,
+  versionMeta,
+  type RuleForm,
+  type RuleVersion,
+  type VersionState,
+} from './rulesApi'
+import type { Rule } from './types'
 
 const GW = 'https://gw.test'
 const RULES = `${GW}/api/validation/v1/staff/rules`
@@ -108,5 +135,154 @@ describe('rulesApi', () => {
     await expect(fetchRulesInForce()).rejects.toMatchObject({ status: 403 })
     fetchMock.mockResolvedValueOnce(json(409, { error: 'rule is already disabled' }))
     await expect(switchRule('k', false, 'r')).rejects.toMatchObject({ status: 409, message: 'rule is already disabled' })
+  })
+})
+
+const VERSIONS = `${GW}/api/validation/v1/staff/rule-versions`
+const body = (i: number) => JSON.parse(fetchMock.mock.calls[i][1].body)
+
+describe('draft requests', () => {
+  it('addDraftRule, editDraftRule and removeDraftRule build requests', async () => {
+    fetchMock.mockImplementation(async () => json(200, {}))
+    const rule = { type: 'cel', target: '', params: {}, severity: 'error' as const, when: null, message: 'm', enabled: true }
+    await addDraftRule({ key: 'a-b', ...rule })
+    await editDraftRule('a-b', rule)
+    await removeDraftRule('a-b')
+    const [add, edit, rm] = fetchMock.mock.calls
+    expect([add[0], add[1].method]).toEqual([`${VERSIONS}/draft/rules`, 'POST'])
+    expect(body(0)).toEqual({ key: 'a-b', ...rule })
+    expect([edit[0], edit[1].method]).toEqual([`${VERSIONS}/draft/rules/a-b`, 'PUT'])
+    expect(body(1)).toEqual(rule)
+    expect(body(1)).not.toHaveProperty('key')
+    expect([rm[0], rm[1].method]).toEqual([`${VERSIONS}/draft/rules/a-b`, 'DELETE'])
+    expect(rm[1].body).toBeUndefined()
+  })
+
+  it('encodes the key of an edit and a removal', async () => {
+    fetchMock.mockImplementation(async () => json(200, {}))
+    await removeDraftRule('a/b c')
+    expect(fetchMock.mock.calls[0][0]).toBe(`${VERSIONS}/draft/rules/a%2Fb%20c`)
+  })
+
+  it('openDraft, testDraft and publishDraft build requests', async () => {
+    fetchMock.mockImplementation(async () => json(200, {}))
+    await openDraft()
+    await testDraft({ total: 1 })
+    await publishDraft('2026-12-01')
+    expect(fetchMock.mock.calls.map((c) => [c[0], c[1].method])).toEqual([
+      [`${VERSIONS}/draft`, 'POST'],
+      [`${VERSIONS}/draft/test`, 'POST'],
+      [`${VERSIONS}/draft/publish`, 'POST'],
+    ])
+    expect(body(1)).toEqual({ invoice: { total: 1 } })
+    expect(body(2)).toEqual({ effective_from: '2026-12-01' })
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer T')
+  })
+
+  it('a server refusal reaches the caller with its text', async () => {
+    fetchMock.mockResolvedValueOnce(json(409, { error: 'rule already in the draft' }))
+    await expect(addDraftRule({ key: 'a', type: 'cel', target: '', params: {}, severity: 'error', when: null, message: 'm', enabled: true })).rejects.toMatchObject({ status: 409, message: 'rule already in the draft' })
+  })
+})
+
+const form = (over: Partial<RuleForm> = {}): RuleForm => ({ ...EMPTY_FORM, key: 'ok-key', type: 'cel', message: 'msg', ...over })
+const v4Rule: Rule = { key: 'no-duplicate-line-items', type: 'format/regex', field: 'supplier.tin', severity: 'warn', scope: 'global', enabled: true, message: 'TIN shape', params: { pattern: '^\\d+$' }, when: 'has(invoice.x)' }
+
+describe('draftRuleErrors', () => {
+  it.each([
+    ['a bad key', { key: 'Bad' }, 'lowercase'],
+    ['a 65-character key', { key: 'a'.repeat(65) }, 'at most 64'],
+    ['a blank key', { key: '' }, 'Key is required'],
+    ['a missing type', { type: '' }, 'Type is required'],
+    ['params that are an array', { params: '[1]' }, 'JSON object'],
+    ['params that are not JSON', { params: 'not json' }, 'not valid JSON'],
+    ['params null', { params: 'null' }, 'JSON object'],
+    ['a blank message', { message: '   ' }, 'Message is required'],
+    ['a 501-character message', { message: '😀'.repeat(501) }, 'at most 500'],
+  ] as [string, Partial<RuleForm>, string][])('%s gives one error', (_, over, text) => {
+    const errs = draftRuleErrors(form(over), [])
+    expect(errs).toHaveLength(1)
+    expect(errs[0]).toContain(text)
+  })
+
+  it('a new key already in the draft gives the draft line', () => {
+    expect(draftRuleErrors(form({ key: 'dup' }), ['dup'])).toEqual(['Key already in the draft.'])
+    expect(draftRuleErrors(form({ key: 'dup' }), [])).toEqual([])
+  })
+
+  it('a v4-shaped rule, a 64-character key and a 500-point message pass', () => {
+    expect(draftRuleErrors(formFromRule(v4Rule), [])).toEqual([])
+    expect(draftRuleErrors(form({ key: 'a'.repeat(64), message: '😀'.repeat(500) }), [])).toEqual([])
+  })
+})
+
+describe('form and body', () => {
+  it('formFromRule maps warn to warning and ruleBody maps back', () => {
+    const f = formFromRule(v4Rule)
+    expect(f.severity).toBe('warning')
+    expect(ruleBody(f)).toEqual({ type: 'format/regex', target: 'supplier.tin', params: { pattern: '^\\d+$' }, severity: 'warning', when: 'has(invoice.x)', message: 'TIN shape', enabled: true })
+  })
+
+  it('a blank when is null, blank params are {} and the message is trimmed', () => {
+    expect(ruleBody(form({ when: '  ', params: ' ', message: ' hi ' }))).toMatchObject({ when: null, params: {}, message: 'hi' })
+  })
+})
+
+const r = (key: string, over: Partial<Rule> = {}): Rule => ({ key, type: 'cel', field: 'invoice.total', severity: 'error', scope: 'global', enabled: true, message: 'm', params: { expr: 'true' }, when: null, ...over })
+
+describe('diffRules', () => {
+  it('lists added, changed and removed by key and leaves the same rule out', () => {
+    const draft = [r('y', { params: { expr: 'false' } }), r('x'), r('w')]
+    const inForce = [r('z'), r('y'), r('w')]
+    expect(diffRules(draft, inForce)).toEqual([
+      { sign: '+', key: 'x', detail: 'cel · error · invoice.total', tag: 'ADDED', kind: 'added' },
+      { sign: '~', key: 'y', detail: 'params changed', tag: 'CHANGED', kind: 'changed' },
+      { sign: '−', key: 'z', detail: 'cel · error · invoice.total', tag: 'REMOVED', kind: 'removed' },
+    ])
+    expect(diffRules(inForce, inForce)).toEqual([])
+    expect(diffRules([], [])).toEqual([])
+  })
+
+  it.each([
+    ['type', { type: 'enum' }],
+    ['target', { field: 'invoice.vat' }],
+    ['severity', { severity: 'info' as const }],
+    ['when', { when: 'true' }],
+    ['message', { message: 'other' }],
+    ['enabled', { enabled: false }],
+  ] as [string, Partial<Rule>][])('a %s change is a changed row', (name, over) => {
+    expect(diffRules([r('k', over)], [r('k')])).toEqual([expect.objectContaining({ key: 'k', kind: 'changed', detail: `${name} changed` })])
+  })
+
+  it('sorts by key whatever the input order', () => {
+    expect(diffRules([r('b'), r('a')], [r('c')]).map((d) => d.key)).toEqual(['a', 'b', 'c'])
+  })
+})
+
+const ver = (version: number, state: VersionState, effective_from: string | null, opened_at: string | null = null): RuleVersion => ({ rule_set_version_id: `id${version}`, version, state, effective_from, opened_at, rule_count: 1 })
+
+describe('publishWarnings', () => {
+  const draft = ver(5, 'draft', null, '2026-10-01T09:30:00Z')
+  it('names an in-force version that took effect after the draft was opened', () => {
+    expect(publishWarnings([draft, ver(4, 'in_force', '2026-10-05')])).toEqual(['v4 took effect after this draft was opened. The diff shows what publishing changes.'])
+  })
+  it('stays quiet for an earlier or equal effective date', () => {
+    expect(publishWarnings([draft, ver(4, 'in_force', '2026-09-01')])).toEqual([])
+    expect(publishWarnings([draft, ver(4, 'in_force', '2026-10-01')])).toEqual([])
+  })
+  it('names each scheduled version the draft does not carry', () => {
+    expect(publishWarnings([draft, ver(6, 'scheduled', '2027-01-01'), ver(4, 'in_force', '2026-09-01')])).toEqual([
+      'v6 is scheduled from 2027-01-01. This draft does not carry its rules. A start date on or after 2027-01-01 replaces v6.',
+    ])
+  })
+  it('says nothing without a draft', () => {
+    expect(publishWarnings([ver(6, 'scheduled', '2027-01-01'), ver(4, 'in_force', '2026-10-05')])).toEqual([])
+  })
+})
+
+describe('SAMPLE_INVOICE', () => {
+  it('is the invoice of internal/validation/sample_invoice.json', () => {
+    const file = JSON.parse(readFileSync(new URL('../../../internal/validation/sample_invoice.json', import.meta.url), 'utf8'))
+    expect(JSON.parse(SAMPLE_INVOICE)).toEqual(file.invoice)
   })
 })

@@ -20,6 +20,11 @@ type Props = {
   onOpenRule: (key: string) => void
   onToggleRule: (key: string) => void
   onPublish: () => void
+  draftVersion: number | null
+  draftBusy: boolean
+  onNewDraft: () => void
+  onAddRule: () => void
+  onTestDraft: () => void
 }
 
 const RULE_COLS = 'minmax(150px,1.1fr) 150px minmax(120px,1fr) 78px 96px minmax(160px,1.3fr) 50px'
@@ -33,9 +38,10 @@ const VERSION_TONE: Record<VersionState, { bg: string; border: string; text: str
   superseded: MUTED,
   retired: MUTED,
 }
+const LOCKED = { opacity: 0.45, filter: 'none', cursor: 'not-allowed' } as const
 const SWITCH_LOCKED = 'Only the version in force is switched'
 
-export function Rules({ rules, status, errorText, version, state, versions, versionsNote, selected, onSelectVersion, busy, onRetry, onOpenRule, onToggleRule, onPublish }: Props) {
+export function Rules({ rules, status, errorText, version, state, versions, versionsNote, selected, onSelectVersion, busy, onRetry, onOpenRule, onToggleRule, onPublish, draftVersion, draftBusy, onNewDraft, onAddRule, onTestDraft }: Props) {
   const locked = state !== 'in_force'
   return (
     <div className="ops-screen-pad">
@@ -46,9 +52,26 @@ export function Rules({ rules, status, errorText, version, state, versions, vers
           </div>
           <h1 style={{ fontSize: 24, margin: 0 }}>Rules admin</h1>
         </div>
-        <button type="button" onClick={onPublish} className="ops-btn v2-btn v2-btn-primary" style={{ height: 36, padding: '0 14px' }}>
-          {PUBLISH_ICON} Publish draft
-        </button>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            type="button"
+            onClick={onNewDraft}
+            disabled={draftVersion !== null || draftBusy}
+            className="ops-btn v2-btn v2-btn-ghost"
+            style={{ height: 36, padding: '0 14px', ...(draftVersion !== null || draftBusy ? LOCKED : {}) }}
+          >
+            New draft
+          </button>
+          <button
+            type="button"
+            onClick={onPublish}
+            disabled={draftVersion === null || draftBusy}
+            className="ops-btn v2-btn v2-btn-primary"
+            style={{ height: 36, padding: '0 14px', ...(draftVersion === null || draftBusy ? LOCKED : {}) }}
+          >
+            {PUBLISH_ICON} {draftVersion === null ? 'Publish draft' : `Publish draft v${draftVersion}`}
+          </button>
+        </div>
       </div>
 
       <div className="ops-rules-grid" style={{ display: 'grid', gridTemplateColumns: '230px minmax(0,1fr)', gap: 18 }}>
@@ -99,6 +122,16 @@ export function Rules({ rules, status, errorText, version, state, versions, vers
                 <span className="mono" style={{ fontSize: 10, fontWeight: 700, background: VERSION_TONE[state].bg, color: VERSION_TONE[state].text, border: `1px solid ${VERSION_TONE[state].border}`, borderRadius: 'var(--radius-sm)', padding: '1px 8px' }}>
                   {`${stateLabel(state)} v${version}`}
                 </span>
+              )}
+              {state === 'draft' && (
+                <>
+                  <button type="button" onClick={onAddRule} disabled={draftBusy} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 30, ...(draftBusy ? LOCKED : {}) }}>
+                    Add rule
+                  </button>
+                  <button type="button" onClick={onTestDraft} disabled={draftBusy} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 30, ...(draftBusy ? LOCKED : {}) }}>
+                    Test draft
+                  </button>
+                </>
               )}
             </div>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>

@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
@@ -6,6 +6,7 @@ import { AuditDrawer } from './components/AuditDrawer'
 import { Drawer } from './components/Drawer'
 import { JobDrawer } from './components/JobDrawer'
 import { KillConfirm } from './components/KillConfirm'
+import { DraftTestModal } from './components/DraftTestModal'
 import { Modal } from './components/Modal'
 import { PublishModal } from './components/PublishModal'
 import { RuleDrawer } from './components/RuleDrawer'
@@ -13,13 +14,21 @@ import { Sidebar } from './components/Sidebar'
 import { Badge } from './components/StatusBadge'
 import { Toast } from './components/Toast'
 import { TopBar } from './components/TopBar'
-import { AUDIT_ENTRIES, DIFF_ROWS, NAV_ITEMS, SEED_JOBS } from './data'
+import { AUDIT_ENTRIES, NAV_ITEMS, SEED_JOBS } from './data'
+import type { DiffRow } from './rulesApi'
 import { SEED_RULES } from './rulesFixture'
 import type { Env, Screen } from './types'
 
 // SSR markup is the oracle: jsdom drops backdrop-filter and Chromium aliases the prefixed one.
 // The resolved look is SUP-01, SUP-02 and SUP-04 (deploy gate).
 const noop = () => {}
+
+const DIFF: DiffRow[] = [
+  { sign: '+', key: 'new.rule', detail: 'required · error · buyer.tin', tag: 'ADDED', kind: 'added' },
+  { sign: '~', key: 'vat.rate', detail: 'params changed', tag: 'CHANGED', kind: 'changed' },
+  { sign: '−', key: 'old.rule', detail: 'range · info', tag: 'REMOVED', kind: 'removed' },
+]
+const publishProps: ComponentProps<typeof PublishModal> = { draftVersion: 5, inForceVersion: 4, rows: DIFF, warnings: [], today: '2026-10-11', busy: false, error: null, onClose: noop, onConfirm: noop }
 
 type Tag = { name: string; attrs: string; text: string }
 const attr = (t: { attrs: string }, name: string) => t.attrs.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1] ?? ''
@@ -289,7 +298,7 @@ describe('v2 shell', () => {
 
   it('SH-07 the modal and drawer bodies carry v2 weights, corners and Q3 text', () => {
     const kill = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'line.qty.range', action: 'disable', busy: false, onClose: noop, onConfirm: noop }))
-    const publish = renderToStaticMarkup(createElement(PublishModal, { onClose: noop, onConfirm: noop }))
+    const publish = renderToStaticMarkup(createElement(PublishModal, publishProps))
     const idle = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: true, busy: false, onKill: noop, onClose: noop }))
     const job = renderToStaticMarkup(
       createElement(JobDrawer, {
@@ -433,7 +442,7 @@ describe('v2 shell', () => {
 
     const modals = {
       kill: [renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', action: 'disable', busy: false, onClose: noop, onConfirm: noop })), '440px'],
-      publish: [renderToStaticMarkup(createElement(PublishModal, { onClose: noop, onConfirm: noop })), '560px'],
+      publish: [renderToStaticMarkup(createElement(PublishModal, publishProps)), '560px'],
     } as const
     for (const [name, [html, width]] of Object.entries(modals)) {
       const ts = parse(html)
@@ -455,9 +464,9 @@ describe('v2 shell', () => {
       expect.soft(classes({ attrs: buttonByText(html, 'Cancel').attrs }), `${name}: Cancel classes`).toEqual(expect.arrayContaining(['v2-btn', 'v2-btn-ghost']))
     }
     const signs = parse(modals.publish[0]).filter((t) => style(t).width === '22px' && style(t).height === '22px')
-    expect(signs, 'one sign tile per diff row').toHaveLength(DIFF_ROWS.length)
+    expect(signs, 'one sign tile per diff row').toHaveLength(DIFF.length)
     for (const t of signs) expect.soft(style(t)['border-radius'], 'sign tile radius').toBe('var(--radius-sm)')
-    expect.soft(classes({ attrs: buttonByText(modals.publish[0], 'Publish v9').attrs }), 'Publish v9 classes').toContain('v2-btn-primary')
+    expect.soft(classes({ attrs: buttonByText(modals.publish[0], 'Publish v5').attrs }), 'Publish v5 classes').toContain('v2-btn-primary')
   })
 
   it('SH-10 the badge keeps the sm corner and a round dot, with and without the dot', () => {
@@ -540,5 +549,45 @@ describe('v2 shell', () => {
     }
     expect(topBar('sandbox')).toContain('CROSS-TENANT · ALL ENTITIES')
     expect(topBar('live')).toContain('CROSS-TENANT · PENDING ACCREDITATION')
+  })
+
+  it('DraftTestModal renders both columns and a fault', () => {
+    const v = (rule_key: string) => ({ rule_key, severity: 'error' as const, message: `${rule_key} failed`, path: 'invoice.total' })
+    const res = (error: string | null, draft = [v('a')]) => ({ draft: { rule_set_version: 5, violations: draft, error }, in_force: { rule_set_version: 4, violations: [v('b')] } })
+    const render = (result: ReturnType<typeof res> | null) => renderToStaticMarkup(createElement(DraftTestModal, { result, busy: false, onRun: noop, onClose: noop }))
+    const html = render(res(null))
+    expect(html).toContain('>Draft v5<')
+    expect(html).toContain('>In force v4<')
+    expect(html).toContain('a · error · a failed · invoice.total')
+    expect(html).toContain('b · error · b failed · invoice.total')
+    expect(html).not.toContain('role="alert"')
+    expect(render(res(null, []))).toContain('No violations.')
+    const fault = render(res('the draft does not evaluate: bad cel', []))
+    expect(fault).toContain('role="alert"')
+    expect(fault).toContain('the draft does not evaluate: bad cel')
+    expect(style(parse(fault).find((t) => attr(t, 'role') === 'alert')!).background).toBe('var(--status-red-bg)')
+    expect(render(null), 'no columns before a run').not.toContain('>Draft v')
+    expect(attr(parse(html).find((t) => t.name === 'textarea')!, 'aria-label')).toBe('Sample invoice')
+    expect(classes(buttonByText(html, 'Run test'))).toContain('v2-btn-primary')
+  })
+
+  it('PublishModal markup: min is today, the diff is real, a stale draft shows its lines', () => {
+    const render = (over: Partial<ComponentProps<typeof PublishModal>>) => renderToStaticMarkup(createElement(PublishModal, { ...publishProps, ...over }))
+    const html = render({})
+    expect(attr(parse(html).find((t) => t.name === 'input')!, 'min')).toBe('2026-10-11')
+    expect(html).toContain('Publish draft → v5')
+    expect(html).toContain('1 ADDED · 1 CHANGED · 1 REMOVED')
+    expect(html).not.toContain('v9')
+    for (const [name, over] of [['no date', {}], ['busy', { busy: true }], ['still loading', { rows: null }], ['a read error', { error: 'down', rows: null }]] as const) {
+      expect(buttonByText(render(over), 'Publish v5').attrs, name).toContain('disabled=""')
+    }
+    const loading = render({ rows: null })
+    expect(loading).toContain('Loading diff…')
+    expect(render({ error: 'versions unavailable', rows: null })).toContain('versions unavailable')
+    const warned = render({ warnings: ['v4 took effect after this draft was opened.'] })
+    const box = parse(warned).find((t) => t.text === 'v4 took effect after this draft was opened.')!
+    expect(style(box).background).toBe('var(--status-amber-bg)')
+    expect(style(box).color).toBe('var(--status-amber-text)')
+    expect(warned.indexOf('v4 took effect')).toBeLessThan(warned.indexOf('type="date"'))
   })
 })

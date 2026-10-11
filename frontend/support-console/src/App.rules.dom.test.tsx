@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { KillConfirm } from './components/KillConfirm'
 import { signOutConsole } from '@invoice-os/console-session'
-import { fetchRules, fetchVersions, switchRule, type RuleVersion } from './rulesApi'
+import { SAMPLE_INVOICE, addDraftRule, editDraftRule, fetchRules, fetchVersions, openDraft, publishDraft, removeDraftRule, switchRule, testDraft, type RuleVersion } from './rulesApi'
 import type { Rule } from './types'
 
 vi.mock('@invoice-os/console-session', () => ({
@@ -19,11 +19,23 @@ vi.mock('./rulesApi', async (importOriginal) => ({
   fetchRules: vi.fn(),
   fetchVersions: vi.fn(),
   switchRule: vi.fn(),
+  openDraft: vi.fn(),
+  addDraftRule: vi.fn(),
+  editDraftRule: vi.fn(),
+  removeDraftRule: vi.fn(),
+  testDraft: vi.fn(),
+  publishDraft: vi.fn(),
 }))
 
 const read = vi.mocked(fetchRules)
 const versionsRead = vi.mocked(fetchVersions)
 const sw = vi.mocked(switchRule)
+const open = vi.mocked(openDraft)
+const add = vi.mocked(addDraftRule)
+const edit = vi.mocked(editDraftRule)
+const remove = vi.mocked(removeDraftRule)
+const test = vi.mocked(testDraft)
+const publish = vi.mocked(publishDraft)
 const rule = (key: string, enabled: boolean): Rule => ({ key, type: 'cel', field: 'invoice.total', severity: 'error', scope: 'global', enabled, message: 'm', params: {}, when: null })
 const ver = (version: number, state: RuleVersion['state'], effective_from: string | null = '2026-01-01'): RuleVersion => ({ rule_set_version_id: `id${version}`, version, state, effective_from, opened_at: null, rule_count: 2 })
 const VERSIONS = { today: '2026-10-11', versions: [ver(8, 'draft', null), ver(7, 'in_force'), ver(3, 'retired', null)] }
@@ -278,5 +290,264 @@ describe('Console rules wiring', () => {
     fireEvent.click(screen.getByText('real.on'))
     fireEvent.click(await screen.findByRole('button', { name: /Kill-switch/ }))
     expect(within(dialog()).getByText('Disable a live rule?')).toBeTruthy()
+  })
+})
+
+const DRAFT = { rule_set_version: 5, rule_set_version_id: 'id5' }
+const DRAFT_VERSIONS = { today: '2026-10-11', versions: [ver(5, 'draft', null), ver(4, 'in_force'), ver(3, 'retired', null)] }
+const NO_DRAFT_VERSIONS = { today: '2026-10-11', versions: [ver(4, 'in_force'), ver(3, 'retired', null)] }
+const IN_FORCE = { version: 4, rules: [rule('real-on', true), rule('real-off', false)] }
+const DRAFT_LIST = { version: 5, rules: [rule('real-on', true), rule('d-new', true)] }
+// A read by version: the draft, the version in force, or an older one.
+const byVersion = (inForce = IN_FORCE) => async (v?: number) => (v === 5 ? DRAFT_LIST : v === 3 ? { version: 3, rules: [rule('old-key', true)] } : inForce)
+const btn = (name: string | RegExp) => screen.getByRole('button', { name }) as HTMLButtonElement
+const field = (label: string) => within(dialog()).getByLabelText(label) as HTMLInputElement
+const type = (label: string, value: string) => fireEvent.change(field(label), { target: { value } })
+
+const openDraftView = async () => {
+  versionsRead.mockResolvedValue(DRAFT_VERSIONS)
+  read.mockImplementation(byVersion())
+  render(<App />)
+  fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /^v5/ }))
+  await screen.findByText('d-new')
+}
+
+describe('Console draft wiring', () => {
+  it('New draft opens and selects the draft', async () => {
+    versionsRead.mockResolvedValue(NO_DRAFT_VERSIONS)
+    read.mockImplementation(byVersion())
+    open.mockResolvedValue({ version: 5, from_version: 4 })
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await screen.findByRole('switch', { name: 'Disable real-on' })
+    expect(btn('Publish draft').disabled).toBe(true)
+    versionsRead.mockResolvedValue(DRAFT_VERSIONS)
+    fireEvent.click(btn('New draft'))
+    await screen.findByText('DRAFT v5')
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(versionsRead).toHaveBeenCalledTimes(2)
+    expect(read).toHaveBeenLastCalledWith(5)
+    expect(btn('New draft').disabled).toBe(true)
+    expect(btn('Publish draft v5').disabled).toBe(false)
+  })
+
+  it('New draft is disabled while a draft exists', async () => {
+    await openDraftView()
+    expect(btn('New draft').disabled).toBe(true)
+    fireEvent.click(btn('New draft'))
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('a 409 on New draft shows the server text and re-reads', async () => {
+    versionsRead.mockResolvedValue(NO_DRAFT_VERSIONS)
+    read.mockImplementation(byVersion())
+    open.mockRejectedValue(new ApiError('http', 'a draft already exists', 409))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await screen.findByRole('switch', { name: 'Disable real-on' })
+    versionsRead.mockResolvedValue(DRAFT_VERSIONS)
+    fireEvent.click(btn('New draft'))
+    expect(await screen.findByText('a draft already exists')).toBeTruthy()
+    expect(toast().innerHTML).toContain('var(--status-red-text)')
+    await waitFor(() => expect(versionsRead).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(btn('New draft').disabled).toBe(true))
+  })
+
+  it('Save to draft and Remove from draft', async () => {
+    edit.mockResolvedValue({ ...DRAFT, key: 'd-new', changed: true })
+    add.mockResolvedValue({ ...DRAFT, key: 'fresh-key' })
+    remove.mockResolvedValue({ ...DRAFT, key: 'd-new' })
+    await openDraftView()
+    const reads = read.mock.calls.length
+
+    fireEvent.click(screen.getByText('d-new'))
+    type('Message', 'edited text')
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Save to draft' }))
+    await waitFor(() => expect(edit).toHaveBeenCalledWith('d-new', { type: 'cel', target: 'invoice.total', params: {}, severity: 'error', when: null, message: 'edited text', enabled: true }))
+    await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(reads))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(add).not.toHaveBeenCalled()
+
+    fireEvent.click(btn('Add rule'))
+    const save = () => within(dialog()).getByRole('button', { name: 'Save to draft' }) as HTMLButtonElement
+    expect(save().disabled).toBe(true)
+    type('Key', 'd-new')
+    type('Message', 'm')
+    expect(save().disabled, 'a key already in the draft').toBe(true)
+    expect(within(dialog()).getByText('Key already in the draft.')).toBeTruthy()
+    fireEvent.click(save())
+    expect(add).not.toHaveBeenCalled()
+    type('Key', 'fresh-key')
+    type('Params', '[1]')
+    expect(save().disabled, 'params that are not an object').toBe(true)
+    fireEvent.click(save())
+    expect(add).not.toHaveBeenCalled()
+    type('Params', '{"a": 1}')
+    fireEvent.click(save())
+    await waitFor(() => expect(add).toHaveBeenCalledWith({ key: 'fresh-key', type: 'required', target: '', params: { a: 1 }, severity: 'error', when: null, message: 'm', enabled: true }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    fireEvent.click(screen.getByText('d-new'))
+    fireEvent.click(within(dialog()).getByRole('button', { name: /Remove from draft/ }))
+    await waitFor(() => expect(remove).toHaveBeenCalledWith('d-new'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('a 409 on add shows the server text and keeps the form', async () => {
+    add.mockRejectedValue(new ApiError('http', 'rule already in the draft', 409))
+    await openDraftView()
+    fireEvent.click(btn('Add rule'))
+    type('Key', 'racing-key')
+    type('Message', 'm')
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Save to draft' }))
+    expect(await screen.findByText('rule already in the draft')).toBeTruthy()
+    expect(toast().innerHTML).toContain('var(--status-red-text)')
+    expect(field('Key').value).toBe('racing-key')
+  })
+
+  it('one draft request is in flight at a time', async () => {
+    add.mockReturnValue(new Promise(() => undefined))
+    await openDraftView()
+    fireEvent.click(btn('Add rule'))
+    type('Key', 'slow-key')
+    type('Message', 'm')
+    const save = within(dialog()).getByRole('button', { name: 'Save to draft' }) as HTMLButtonElement
+    act(() => {
+      save.click()
+      save.click()
+    })
+    expect(add).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(save.disabled).toBe(true))
+  })
+
+  it('Add rule and Test draft show on the draft only', async () => {
+    await openDraftView()
+    expect(btn('Add rule')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^v4/ }))
+    await screen.findByRole('switch', { name: 'Disable real-on' })
+    expect(screen.queryByRole('button', { name: 'Add rule' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Test draft' })).toBeNull()
+  })
+
+  it('Test draft is prefilled with the sample, gates bad JSON and shows both columns', async () => {
+    const v = (rule_key: string) => ({ rule_key, severity: 'error' as const, message: 'bad', path: 'invoice.total' })
+    test.mockResolvedValue({ draft: { rule_set_version: 5, violations: [v('from-draft')], error: null }, in_force: { rule_set_version: 4, violations: [v('from-force')] } })
+    await openDraftView()
+    fireEvent.click(btn('Test draft'))
+    const area = field('Sample invoice') as unknown as HTMLTextAreaElement
+    expect(area.value).toBe(SAMPLE_INVOICE)
+    const run = within(dialog()).getByRole('button', { name: 'Run test' }) as HTMLButtonElement
+    fireEvent.change(area, { target: { value: '{"invoice": ' } })
+    expect(run.disabled).toBe(true)
+    expect(within(dialog()).getByText('Invoice JSON does not parse.')).toBeTruthy()
+    fireEvent.change(area, { target: { value: SAMPLE_INVOICE } })
+    expect(run.disabled).toBe(false)
+    fireEvent.click(run)
+    await within(dialog()).findByText('Draft v5')
+    expect(test).toHaveBeenCalledWith(JSON.parse(SAMPLE_INVOICE))
+    expect(within(dialog()).getByText('In force v4')).toBeTruthy()
+    expect(within(dialog()).getByText(/from-draft/)).toBeTruthy()
+    expect(within(dialog()).getByText(/from-force/)).toBeTruthy()
+  })
+
+  it('Publish reads the draft and the version in force whatever is selected', async () => {
+    await openDraftView()
+    read.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: /^v3/ }))
+    await screen.findByText('old-key')
+    read.mockClear()
+    fireEvent.click(btn('Publish draft v5'))
+    await within(dialog()).findByText('real-off')
+    expect(read).toHaveBeenCalledWith(5)
+    expect(read.mock.calls.some((c) => c.length === 0)).toBe(true)
+    const modal = within(dialog())
+    expect(modal.getByText('d-new')).toBeTruthy()
+    expect(modal.getByText('real-off')).toBeTruthy()
+    expect(modal.queryByText('old-key')).toBeNull()
+    expect(modal.getByText('1 ADDED · 1 REMOVED')).toBeTruthy()
+  })
+
+  it('a failed in-force read shows its text in the modal and keeps Publish disabled', async () => {
+    await openDraftView()
+    read.mockImplementation(async (v?: number) => {
+      if (v === undefined) throw new ApiError('http', 'no rule set in force', 503)
+      return DRAFT_LIST
+    })
+    fireEvent.click(btn('Publish draft v5'))
+    expect(await within(dialog()).findByText('no rule set in force')).toBeTruthy()
+    fireEvent.change(within(dialog()).getByLabelText('Start date'), { target: { value: '3001-01-01' } })
+    expect((within(dialog()).getByRole('button', { name: 'Publish v5' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('the publish modal shows Loading diff and enables Publish only once both reads resolve', async () => {
+    await openDraftView()
+    const pending: Array<() => void> = []
+    read.mockImplementation((v?: number) => new Promise((r) => pending.push(() => r(v === 5 ? DRAFT_LIST : IN_FORCE))) as never)
+    fireEvent.click(btn('Publish draft v5'))
+    const modal = within(dialog())
+    expect(modal.getByText('Loading diff…')).toBeTruthy()
+    fireEvent.change(modal.getByLabelText('Start date'), { target: { value: '2026-10-11' } })
+    const confirm = () => modal.getByRole('button', { name: 'Publish v5' }) as HTMLButtonElement
+    expect(confirm().disabled, 'both reads pending').toBe(true)
+    await act(async () => pending[0]())
+    expect(confirm().disabled, 'one read pending').toBe(true)
+    await act(async () => pending[1]())
+    await modal.findByText('real-off')
+    expect(confirm().disabled).toBe(false)
+  })
+
+  it('PublishModal date gate', async () => {
+    publish.mockReturnValue(new Promise(() => undefined))
+    await openDraftView()
+    fireEvent.click(btn('Publish draft v5'))
+    const modal = within(dialog())
+    await modal.findByText('real-off')
+    const date = modal.getByLabelText('Start date') as HTMLInputElement
+    const disabled = () => (modal.getByRole('button', { name: 'Publish v5' }) as HTMLButtonElement).disabled
+    expect(date.min).toBe('2026-10-11')
+    expect(disabled(), 'no date').toBe(true)
+    fireEvent.change(date, { target: { value: '2026-10-10' } })
+    expect(disabled(), 'yesterday').toBe(true)
+    fireEvent.change(date, { target: { value: '2026-10-11' } })
+    expect(disabled(), 'today').toBe(false)
+    fireEvent.click(modal.getByRole('button', { name: 'Publish v5' }))
+    await waitFor(() => expect(disabled(), 'in flight').toBe(true))
+    expect(publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('publish re-reads and selects the version in force', async () => {
+    publish.mockResolvedValue({ version: 5, effective_from: '3001-01-01', rule_count: 2 })
+    await openDraftView()
+    fireEvent.click(btn('Publish draft v5'))
+    const modal = within(dialog())
+    await modal.findByText('real-off')
+    fireEvent.change(modal.getByLabelText('Start date'), { target: { value: '3001-01-01' } })
+    versionsRead.mockClear()
+    read.mockClear()
+    fireEvent.click(modal.getByRole('button', { name: 'Publish v5' }))
+    await waitFor(() => expect(publish).toHaveBeenCalledWith('3001-01-01'))
+    expect(await within(toast()).findByText('Published v5 · starts 3001-01-01')).toBeTruthy()
+    expect(within(toast()).getByText('AUDITED')).toBeTruthy()
+    await waitFor(() => expect(versionsRead).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(read).toHaveBeenLastCalledWith(undefined))
+    expect(screen.getByRole('button', { name: /^v4/ }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('a stale draft shows its warning lines in the modal', async () => {
+    versionsRead.mockResolvedValue({
+      today: '2026-10-11',
+      versions: [ver(6, 'scheduled', '2027-01-01'), { ...ver(5, 'draft', null), opened_at: '2026-10-01T09:00:00Z' }, ver(4, 'in_force', '2026-10-05')],
+    })
+    read.mockImplementation(byVersion())
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^v5/ }))
+    await screen.findByText('d-new')
+    fireEvent.click(btn('Publish draft v5'))
+    const modal = within(dialog())
+    expect(await modal.findByText(/v4 took effect after this draft was opened/)).toBeTruthy()
+    expect(modal.getByText(/v6 is scheduled from 2027-01-01/)).toBeTruthy()
   })
 })

@@ -6,7 +6,10 @@ import { describe, expect, it } from 'vitest'
 
 import * as data from './data'
 import { AUDIT_ENTRIES, healthCards } from './data'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { filterAudit } from './components/Audit'
+import { PublishModal } from './components/PublishModal'
 
 describe('audit', () => {
   it('DAT-14: an unfiltered view returns everything', () => {
@@ -65,7 +68,15 @@ describe('healthCards', () => {
 
 describe('Rules admin mock data', () => {
   it('no Rules admin mock data remains', () => {
-    for (const name of ['RULE_SET_VERSIONS', 'LEARNED_RULES', 'RULE_PARAMS', 'SEED_RULES']) expect(Object.keys(data), name).not.toContain(name)
+    for (const name of ['RULE_SET_VERSIONS', 'LEARNED_RULES', 'RULE_PARAMS', 'SEED_RULES', 'DIFF_ROWS']) expect(Object.keys(data), name).not.toContain(name)
+  })
+
+  it('no publish mock data remains', () => {
+    expect(Object.keys(data)).not.toContain('DIFF_ROWS')
+    const html = renderToStaticMarkup(
+      createElement(PublishModal, { draftVersion: 5, inForceVersion: 4, rows: [], warnings: [], today: '2026-10-11', busy: false, error: null, onClose: () => undefined, onConfirm: () => undefined }),
+    )
+    expect(html).not.toContain('v9')
   })
 
   it('rulesFixture is imported only by tests', () => {

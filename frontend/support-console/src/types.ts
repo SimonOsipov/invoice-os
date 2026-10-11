@@ -57,14 +57,6 @@ export interface ReconRow {
   detail: string
 }
 
-export interface DiffRow {
-  sign: '+' | '~' | '−'
-  key: string
-  detail: string
-  tag: 'ADDED' | 'CHANGED' | 'REMOVED'
-  kind: 'added' | 'changed' | 'removed'
-}
-
 export type AuditTone = 'red' | 'amber' | 'green' | 'teal'
 
 export type AuditObjectType = 'submission' | 'rule' | 'state'
@@ -131,7 +123,7 @@ export interface NavItem {
   glyph: ReactNode
 }
 
-export type DrawerState = { type: 'job'; id: string } | { type: 'audit'; id: string } | { type: 'rule'; id: string } | null
+export type DrawerState = { type: 'job'; id: string } | { type: 'audit'; id: string } | { type: 'rule'; id: string } | { type: 'new-rule' } | null
 
 export type ToastTone = 'ok' | 'red'
 

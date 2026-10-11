@@ -11,7 +11,6 @@
 import { Icon } from './icons'
 import type {
   AuditEntry,
-  DiffRow,
   HealthCard,
   Job,
   NavItem,
@@ -126,17 +125,6 @@ export const RECON_ROWS: ReconRow[] = [
   { id: 'job_8f28c4', tenant: 'Adeyemi & Sons Trading', internal: 'accepted', app: 'rejected', detail: 'Late MBS reversal — duplicate IRN' },
   { id: 'job_8f2890', tenant: 'Kano Textile Mills Plc', internal: 'submitting', app: 'pending', detail: 'Stuck submitting > 30m, APP holds it' },
   { id: 'job_8f2851', tenant: 'Westgate Pharma Ltd', internal: 'failed', app: 'accepted', detail: 'Local schema fail after APP accepted' },
-]
-
-// ---------- rules ----------
-
-// proto:1237. The publish-diff between draft v9 and active v8.
-export const DIFF_ROWS: DiffRow[] = [
-  { sign: '+', key: 'buyer.email.format', detail: 'format-regex · warn · from learned inbox', tag: 'ADDED', kind: 'added' },
-  { sign: '+', key: 'lines[].hsn.required', detail: 'required · error · global', tag: 'ADDED', kind: 'added' },
-  { sign: '+', key: 'fx.rate.range', detail: 'range · info · global', tag: 'ADDED', kind: 'added' },
-  { sign: '~', key: 'vat.rate.taxmath', detail: 'tolerance ±0.01 → ±0.005 NGN', tag: 'CHANGED', kind: 'changed' },
-  { sign: '−', key: 'line.qty.range', detail: 'disabled rule removed from set', tag: 'REMOVED', kind: 'removed' },
 ]
 
 // ---------- audit ----------

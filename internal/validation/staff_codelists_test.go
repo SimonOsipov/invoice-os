@@ -6,7 +6,10 @@ package validation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +21,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // bindCodeListSyncsHandler builds StaffCodeListSyncsHandler over a read that reports the list it was given
@@ -300,10 +305,11 @@ func TestStaffCodeLists_ListDetailNewestFirstCappedAt30(t *testing.T) {
 	}
 }
 
-// A later migration adds a column (ENGI-20 adds a sync state): the read names its columns, so it must not care.
-// The column goes on a private copy of the table that shadows it through search_path, so the shared table
-// takes no DDL and a killed run leaves only an unused schema.
-func TestStaffCodeLists_ReadSurvivesAnExtraColumn(t *testing.T) {
+// probeSyncsTable gives an empty private copy of nrs_code_list_syncs, with one extra column, that shadows the
+// shared table through search_path on both pools. The shared table takes no DDL; a killed run leaves only
+// an unused schema.
+func probeSyncsTable(t *testing.T) (super *pgxpool.Pool, store *Store) {
+	t.Helper()
 	_, _ = dbTestPools(t)
 	ctx := context.Background()
 
@@ -343,8 +349,12 @@ func TestStaffCodeLists_ReadSurvivesAnExtraColumn(t *testing.T) {
 		t.Cleanup(p.Close)
 		return p
 	}
-	super := pooled(os.Getenv("DATABASE_SUPERUSER_URL"))
-	store := NewStore(pooled(os.Getenv("DATABASE_URL")))
+	return pooled(os.Getenv("DATABASE_SUPERUSER_URL")), NewStore(pooled(os.Getenv("DATABASE_URL")))
+}
+
+// A later migration adds a column (ENGI-20 adds a sync state): the read names its columns, so it must not care.
+func TestStaffCodeLists_ReadSurvivesAnExtraColumn(t *testing.T) {
+	super, store := probeSyncsTable(t)
 
 	list := newSyncList()
 	base := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Microsecond)
@@ -404,11 +414,55 @@ func TestStaffCodeListsHandler_ListParam(t *testing.T) {
 	}
 
 	for _, bad := range []string{
-		"HS", "Hs-codes", "a%2Fb", "a_b", "hs%20codes", "hs-codes%0A", "%E2%82%AC", strings.Repeat("a", 65), "a%00b",
+		"", "HS", "Hs-codes", "a%2Fb", "a_b", "hs%20codes", "hs-codes%0A", "%E2%82%AC", strings.Repeat("a", 65), "a%00b",
 	} {
 		code, body, calls := serve(route + "?list=" + bad)
 		if code != 400 || body != `{"error":"invalid list"}` || len(calls) != 0 {
 			t.Errorf("?list=%s: %d %s, read called %d times, want 400 {\"error\":\"invalid list\"} and no call", bad, code, body, len(calls))
+		}
+	}
+}
+
+// The probe table starts empty, which the shared table never is.
+func TestStaffCodeLists_EmptyLogAnswersAnEmptySummary(t *testing.T) {
+	_, store := probeSyncsTable(t)
+	_, raw := readSyncs(t, store, nil)
+	if raw != `{"lists":[]}` {
+		t.Errorf("empty log summary = %s, want {\"lists\":[]}", raw)
+	}
+	other := "t-" + uuid.NewString()
+	_, raw = readSyncs(t, store, &other)
+	if raw != `{"list":"`+other+`","syncs":[]}` {
+		t.Errorf("empty log detail = %s, want the list name and \"syncs\":[]", raw)
+	}
+}
+
+func TestStaffCodeLists_RefusesANonStaffContext(t *testing.T) {
+	_, app := dbTestPools(t)
+	store := NewStore(app)
+	list := "hs-codes"
+	for _, l := range []*string{nil, &list} {
+		if _, err := store.CodeListSyncs(context.Background(), l); !errors.Is(err, db.ErrNotStaff) {
+			t.Errorf("CodeListSyncs(no staff in ctx, list %v) error = %v, want db.ErrNotStaff", l, err)
+		}
+	}
+}
+
+func TestStaffCodeListsHandler_MapsReadErrors(t *testing.T) {
+	for name, c := range map[string]struct {
+		err  error
+		code int
+		body string
+	}{
+		"not staff": {db.ErrNotStaff, 403, `{"error":"forbidden"}`},
+		"wrapped":   {fmt.Errorf("x: %w", db.ErrNotStaff), 403, `{"error":"forbidden"}`},
+		"database":  {errors.New("pq: secret detail"), 500, `{"error":"internal error"}`},
+	} {
+		h := StaffCodeListSyncsHandler(func(context.Context, *string) (CodeListSyncs, error) { return CodeListSyncs{}, c.err }, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/staff/code-list-syncs", nil))
+		if got := strings.TrimSpace(rec.Body.String()); rec.Code != c.code || got != c.body {
+			t.Errorf("%s: %d %s, want %d %s", name, rec.Code, got, c.code, c.body)
 		}
 	}
 }

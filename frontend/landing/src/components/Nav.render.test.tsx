@@ -182,6 +182,19 @@ describe('nav_rendersWithoutOnCreateAccount', () => {
   })
 })
 
+describe('the header action group', () => {
+  it('the header action group carries .a-actions and no inline style', () => {
+    const html = render()
+    const at = html.indexOf('Book a demo')
+    expect(at, 'expected a Book a demo button').toBeGreaterThan(-1)
+    const parent = [...html.slice(0, at).matchAll(/<div\b[^>]*>/g)].at(-1)?.[0]
+    expect(parent, 'expected an enclosing <div>').toBeDefined()
+    const attrs = attrsOf(parent!)
+    expect((attrs.class ?? '').split(/\s+/), 'class list').toContain('a-actions')
+    expect(attrs, 'no inline style').not.toHaveProperty('style')
+  })
+})
+
 describe('the Library link', () => {
   const LIB = 'https://lib.x'
   const withLib = () =>

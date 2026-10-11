@@ -185,6 +185,9 @@ func TestCodeSearchHandler_UnstorableQueryIs400(t *testing.T) {
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
 			}
+			if got := codeSearchErrorOf(t, rec); got != "q must be valid text" {
+				t.Errorf("error = %q, want %q", got, "q must be valid text")
+			}
 			if len(f.calls) != 0 {
 				t.Errorf("search called %d times on a 400, want 0", len(f.calls))
 			}

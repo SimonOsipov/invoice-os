@@ -81,6 +81,28 @@ describe('Console rules wiring', () => {
     expect(screen.getByText('IN FORCE v7')).toBeTruthy()
   })
 
+  it('the version in force is selected on open and a failed versions read keeps the table live', async () => {
+    render(<App />)
+    await openRules()
+    const pressed = (name: RegExp) => screen.getByRole('button', { name }).getAttribute('aria-pressed')
+    expect([pressed(/^v7/), pressed(/^v8/), pressed(/^v3/)]).toEqual(['true', 'false', 'false'])
+    cleanup()
+    versionsRead.mockRejectedValue(new ApiError('http', 'versions down', 500))
+    render(<App />)
+    await openRules()
+    expect(await screen.findByText('versions down')).toBeTruthy()
+    expect(screen.queryAllByRole('button', { pressed: true })).toHaveLength(0)
+    expect((screen.getByRole('switch', { name: 'Disable real.on' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByText('IN FORCE v7')).toBeTruthy()
+  })
+
+  it('a 401 on the versions read signs the console out', async () => {
+    versionsRead.mockRejectedValue(new ApiError('http', 'expired', 401))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    await waitFor(() => expect(signOutConsole).toHaveBeenCalledTimes(1))
+  })
+
   it('reads the list when Rules opens and on each re-entry, never on mount', async () => {
     render(<App />)
     expect(read).not.toHaveBeenCalled()

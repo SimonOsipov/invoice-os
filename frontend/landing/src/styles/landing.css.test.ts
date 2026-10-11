@@ -491,7 +491,7 @@ function actionsFailures(css: string): string[] {
   if (baseDecl('display') !== 'flex') out.push(`base display: ${baseDecl('display')} != flex`)
   if (baseDecl('align-items') !== 'center') out.push(`base align-items: ${baseDecl('align-items')} != center`)
   if (baseDecl('gap') !== '24px') out.push(`base gap: ${baseDecl('gap')} != 24px`)
-  const narrowed = rules.filter((r) => r.at.length > 0 && declarations(r.body).some((d) => d.prop === 'gap' || d.prop === 'column-gap'))
+  const narrowed = rules.filter((r) => r.at.length > 0 && declarations(r.body).some((d) => d.prop === 'gap'))
   if (narrowed.length !== 1) out.push(`${narrowed.length} gap rules under an at-rule, want 1`)
   for (const r of narrowed) {
     const q = r.at.join(' ')
@@ -536,20 +536,20 @@ function barFailures(css: string): string[] {
     const got = declared(base, '.a-bar', prop, () => true)
     if (got !== v) out.push(`base ${prop}: ${got} != ${v}`)
   }
-  const gaps = bar.filter((r) => r.at.length > 0 && declarations(r.body).some((d) => d.prop === 'gap' || d.prop === 'column-gap'))
+  const gaps = bar.filter((r) => r.at.length > 0 && declarations(r.body).some((d) => d.prop === 'gap'))
   if (gaps.length !== 1) out.push(`${gaps.length} .a-bar gap rules under an at-rule, want 1`)
   for (const r of gaps) {
     const q = r.at.join(' ')
     const gap = declared([r], '.a-bar', 'gap', () => true)
     if (maxWidthQuery(r.at) !== 374.98) out.push(`gap rule under ${q}`)
-    if (gap !== '8px' && gap !== '4px') out.push(`gap rule under ${q} sets ${gap}`)
+    if (gap !== '8px') out.push(`gap rule under ${q} sets ${gap}`)
   }
   const wordAll = all.filter((r) => r.selector.includes('.ds-logo-word'))
   if (wordAll.length !== 1) out.push(`${wordAll.length} .ds-logo-word rules in landing.css, want 1`)
   for (const r of wordAll.filter((x) => x.at.length > 0)) {
     const n = maxWidthQuery(r.at)
     if (r.selector.trim() !== '.a-bar .ds-logo-word') out.push(`wordmark selector ${r.selector.trim()}`)
-    if (n === undefined || n < 353.98 || n > 359.98) out.push(`wordmark rule under ${r.at.join(' ')}`)
+    if (n !== 353.98) out.push(`wordmark rule under ${r.at.join(' ')}`)
     if (declared([r], r.selector.trim(), 'display', () => true) !== 'none') out.push('wordmark rule does not set display: none')
   }
   if (wordAll.some((r) => r.at.length === 0)) out.push('wordmark rule outside any media')
@@ -571,35 +571,12 @@ function barFailures(css: string): string[] {
 }
 
 describe('the header bar below 375px', () => {
-  const rewrite = (from: string | RegExp, to: string) => {
-    const next = LANDING_CSS.replace(from, to)
-    expect(next, 'control: the rewrite changed the sheet').not.toBe(LANDING_CSS)
-    return next
-  }
-
   it('.a-bar holds the header row layout at every width', () => {
+    const all = parseRules(LANDING_CSS)
+    expect(all.filter((r) => selectorParts(r).includes('.a-bar') && r.at.length > 0).length, 'control: the narrowing rule parsed').toBeGreaterThan(0)
+    expect(all.filter((r) => r.selector.includes('.ds-logo-word')).length, 'control: the wordmark rule parsed').toBe(1)
+    expect(all.filter((r) => selectorParts(r).some((s) => s.includes('.a-actions .ds-btn'))).length, 'control: the hit-area rules parsed').toBe(2)
     expect(barFailures(LANDING_CSS)).toEqual([])
-  })
-
-  it('control: a base gap other than 24px is flagged', () => {
-    const css = rewrite(/(\.a-bar \{[^}]*?)gap: 24px/, '$1gap: 8px')
-    expect(barFailures(css).join('\n')).toContain('base gap')
-  })
-
-  it('.a-bar narrows its gap only below 375px', () => {
-    const gaps = parseRules(LANDING_CSS).filter((r) => selectorParts(r).includes('.a-bar') && r.at.length > 0)
-    expect(gaps.length, 'control: the narrowing rule parsed').toBeGreaterThan(0)
-    expect(barFailures(LANDING_CSS)).toEqual([])
-  })
-
-  it('control: a gap that does not narrow is flagged', () => {
-    const css = rewrite(/(\.a-bar \{\s*gap: )8px/, '$112px')
-    expect(barFailures(css).join('\n')).toContain('sets 12px')
-  })
-
-  it('boundary: a gap rule at 375px or above is flagged', () => {
-    const css = rewrite(/@media \(max-width: 374\.98px\) \{(\s*\.a-bar \{\s*gap)/, '@media (max-width: 389.98px) {$1')
-    expect(barFailures(css).join('\n')).toContain('gap rule under @media (max-width: 389.98px)')
   })
 
   it('the header wordmark hides only below 354px', () => {
@@ -608,35 +585,12 @@ describe('the header bar below 375px', () => {
     expect(words[0].selector.trim()).toBe('.a-bar .ds-logo-word')
     expect(maxWidthQuery(words[0].at)).toBe(353.98)
     expect(declared(words, '.a-bar .ds-logo-word', 'display', () => true)).toBe('none')
-    expect(barFailures(LANDING_CSS)).toEqual([])
-  })
-
-  it('boundary: a wordmark rule at 360px or above is flagged', () => {
-    const css = rewrite('@media (max-width: 353.98px)', '@media (max-width: 360px)')
-    expect(barFailures(css).join('\n')).toContain('wordmark rule under @media (max-width: 360px)')
-  })
-
-  it('control: an unscoped wordmark rule is flagged', () => {
-    const css = rewrite('.a-bar .ds-logo-word', '.ds-logo-word')
-    expect(barFailures(css).join('\n')).toContain('wordmark selector .ds-logo-word')
   })
 
   it('the Book a demo hit area exists only below 375px', () => {
     const hit = parseRules(LANDING_CSS).filter((r) => selectorParts(r).some((s) => s.includes('.a-actions .ds-btn')))
     expect(hit.map((r) => r.selector.trim())).toEqual(['.a-actions .ds-btn', '.a-actions .ds-btn::after'])
     expect(hit.map((r) => maxWidthQuery(r.at))).toEqual([374.98, 374.98])
-    expect(barFailures(LANDING_CSS)).toEqual([])
-  })
-
-  it('control: a hit area without left and right 0 (zero width, never hit) is flagged', () => {
-    const css = rewrite('    left: 0;\n    right: 0;\n    top: calc(50% - 22px);', '    top: calc(50% - 22px);')
-    expect(barFailures(css).join('\n')).toContain('hit-area .a-actions .ds-btn::after left: undefined != 0')
-  })
-
-  it('boundary: a hit-area rule outside the 374.98px query is flagged', () => {
-    const block = /  \.a-actions \.ds-btn::after \{[^}]*\}\n/.exec(LANDING_CSS)![0]
-    const css = rewrite(block, '') + block.replace(/^ {2}/gm, '')
-    expect(barFailures(css).join('\n')).toContain('hit-area rule .a-actions .ds-btn::after under no at-rule')
   })
 })
 

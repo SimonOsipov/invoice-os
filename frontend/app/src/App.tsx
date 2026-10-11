@@ -1964,6 +1964,8 @@ export default function App() {
   const signOut = useCallback(async () => {
     if (signingOut.current) return
     signingOut.current = true
+    // Untracked, new requests reject before sending; the revoke reads its refresh token elsewhere.
+    renewerRef.current?.track(null)
     const base = gatewayBase()
     if (seat?.handoff && seat.renewal && base) {
       // Another tab may have rotated the seat's refresh token.

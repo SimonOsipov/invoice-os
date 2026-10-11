@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from 'react'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,15 +9,34 @@ import { CodePicker } from './CodePicker'
 const lagos: CodeEntry = { code: 'NG-LA', label: 'Lagos', percent: null }
 const UNAVAILABLE = 'Codes are unavailable right now. Try again later.'
 
+// Stateful parent: the label shows only once the parent feeds the picked code back as value.
 function mount(fetch: ReturnType<typeof vi.fn>, value = '', over: Partial<React.ComponentProps<typeof CodePicker>> = {}) {
   const onChange = vi.fn()
   const onPick = vi.fn()
-  render(<CodePicker list="states" authedFetch={fetch as never} value={value} onChange={onChange} onPick={onPick} aria-label="State" {...over} />)
+  function Parent() {
+    const [v, setV] = useState(value)
+    return (
+      <CodePicker
+        list="states"
+        authedFetch={fetch as never}
+        value={v}
+        onChange={(c) => {
+          onChange(c)
+          setV(c)
+        }}
+        onPick={onPick}
+        aria-label="State"
+        {...over}
+      />
+    )
+  }
+  render(<Parent />)
   return { onChange, onPick, input: screen.getByLabelText('State') as HTMLInputElement }
 }
 
 const qOf = (fetch: ReturnType<typeof vi.fn>, call: number) => new URL(fetch.mock.calls[call][0]).searchParams.get('q')
 const optionValues = () => Array.from(document.querySelectorAll('datalist option')).map((o) => (o as HTMLOptionElement).value)
+const helperText = () => Array.from(document.querySelectorAll('span')).map((s) => s.textContent)
 const flush = () => act(async () => {})
 
 describe('CodePicker', () => {
@@ -66,7 +86,7 @@ describe('CodePicker', () => {
     await act(async () => void vi.advanceTimersByTime(250))
     expect(onChange).toHaveBeenCalledExactlyOnceWith('NG-LA')
     expect(onPick).toHaveBeenCalledExactlyOnceWith(lagos)
-    expect(screen.getByText('Lagos')).toBeTruthy()
+    expect(helperText()).toEqual(['Lagos'])
   })
 
   it('codePicker_revertsUnlistedTextOnBlur', async () => {
@@ -117,6 +137,6 @@ describe('CodePicker', () => {
     fireEvent.change(input, { target: { value: 'NG-LA' } })
     await act(async () => void vi.advanceTimersByTime(250))
     expect(screen.queryByText('No matching code.')).toBeNull()
-    expect(screen.getByText('Lagos')).toBeTruthy()
+    expect(helperText()).toEqual(['Lagos'])
   })
 })

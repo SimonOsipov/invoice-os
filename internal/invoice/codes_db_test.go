@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -74,16 +75,27 @@ func TestSearchCodes_OrdersExactThenPrefixThenLabel(t *testing.T) {
 	p := codePrefix()
 	// Plain code order would put the label matches (0a, 0b) first.
 	seedCodes(t, super,
-		codeRow{"states", p + "0b", `[{"name":"` + p + `a1 town b"}]`},
+		codeRow{"states", p + "0b", `[{"name":"town of ` + p + `a1 b"}]`},
 		codeRow{"states", p + "a11", `[{"name":"x"}]`},
 		codeRow{"states", p + "a1", `[{"name":"x"}]`},
-		codeRow{"states", p + "0a", `[{"name":"` + p + `a1 town a"}]`},
+		codeRow{"states", p + "0a", `[{"name":"town of ` + p + `a1 a"}]`},
 		codeRow{"states", p + "a10", `[{"name":"x"}]`},
 		codeRow{"states", p + "zz", `[{"name":"unrelated"}]`},
 	)
 
 	got := searchAs(t, app, tenant, "states", p+"a1", 50)
 	assertCodes(t, "exact, prefix, label", got, p+"a1", p+"a10", p+"a11", p+"0a", p+"0b")
+}
+
+func TestSearchCodes_MatchesCaseInsensitively(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant := seedTenant(t, super, "codes case")
+	p := codePrefix()
+	seedCodes(t, super, codeRow{"states", p + "Lagos", `[{"name":"` + p + ` Lagos State"}]`})
+	lower := strings.ToLower(p)
+
+	assertCodes(t, "code arm", searchAs(t, app, tenant, "states", lower+"lag", 50), p+"Lagos")
+	assertCodes(t, "label arm", searchAs(t, app, tenant, "states", lower+" lagos st", 50), p+"Lagos")
 }
 
 func TestSearchCodes_HonoursTheLimit(t *testing.T) {
@@ -111,11 +123,13 @@ func TestSearchCodes_LabelKeyOrder(t *testing.T) {
 		codeRow{"lgas", p + "4", `[{"name":"","description":"d4"}]`},
 		codeRow{"lgas", p + "5", `[{"name":"","value":"v5","description":"D5"}]`},
 		codeRow{"lgas", p + "6", `[{"name":"first"},{"name":"second"}]`},
+		codeRow{"lgas", p + "7", `[{"name":null,"value":null}]`},
+		codeRow{"lgas", p + "8", `[{"value":"","description":"D8"}]`},
 	)
 
 	got := searchAs(t, app, tenant, "lgas", p, 50)
-	assertCodes(t, "rows", got, p+"1", p+"2", p+"3", p+"4", p+"5", p+"6")
-	for i, want := range []string{"N1", "V2", "D3", "d4", "v5", "first"} {
+	assertCodes(t, "rows", got, p+"1", p+"2", p+"3", p+"4", p+"5", p+"6", p+"7", p+"8")
+	for i, want := range []string{"N1", "V2", "D3", "d4", "v5", "first", "", "D8"} {
 		if i < len(got) && got[i].Label != want {
 			t.Errorf("label of %s = %q, want %q", got[i].Code, got[i].Label, want)
 		}
@@ -208,9 +222,13 @@ func TestSearchCodes_WildcardsMatchLiterally(t *testing.T) {
 		codeRow{"states", p + "bcx", `[{"name":"x"}]`},
 		codeRow{"states", p + "L1", `[{"name":"` + p + `w_z"}]`},
 		codeRow{"states", p + "L2", `[{"name":"` + p + `wxz"}]`},
+		codeRow{"states", p + "_Zx", `[{"name":"x"}]`},
+		codeRow{"states", p + "aY%x", `[{"name":"x"}]`},
 	)
 
 	assertCodes(t, "underscore and percent", searchAs(t, app, tenant, "states", p+"_%", 50), p+"_%x")
+	assertCodes(t, "percent mid-query", searchAs(t, app, tenant, "states", p+"_%x", 50), p+"_%x")
+	assertCodes(t, "underscore mid-query", searchAs(t, app, tenant, "states", p+"aY%", 50), p+"aY%x")
 	assertCodes(t, "backslash", searchAs(t, app, tenant, "states", p+`b\`, 50), p+`b\x`)
 	assertCodes(t, "underscore in the label arm", searchAs(t, app, tenant, "states", p+"w_z", 50), p+"L1")
 }

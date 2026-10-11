@@ -1,16 +1,20 @@
 package invoice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
@@ -138,6 +142,85 @@ func TestCodeSearchHandler_LongQueryIs400(t *testing.T) {
 	// An empty result is [] on the wire, never null.
 	if got := strings.TrimSpace(rec.Body.String()); got != `{"codes":[]}` {
 		t.Errorf("body = %s, want {\"codes\":[]}", got)
+	}
+
+	// The cap counts characters, not bytes, after trimming.
+	multi := strings.Repeat("\u00e9", 100)
+	for name, tc := range map[string]struct {
+		target string
+		status int
+		wantQ  string
+	}{
+		"100 two-byte characters":        {"q=" + url.QueryEscape(multi), http.StatusOK, multi},
+		"101 two-byte characters":        {"q=" + url.QueryEscape(multi+"\u00e9"), http.StatusBadRequest, ""},
+		"100 characters in padding":      {"q=" + url.QueryEscape("  "+q+"  "), http.StatusOK, q},
+		"whitespace only searches blank": {"q=" + url.QueryEscape(" \t "), http.StatusOK, ""},
+		"inner space is kept":            {"q=" + url.QueryEscape(" a b "), http.StatusOK, "a b"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeCodeSearch{}
+			rec := codeSearchGet(t, f, "/v1/code-lists/states?"+tc.target)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tc.status, rec.Body.String())
+			}
+			if tc.status != http.StatusOK {
+				if len(f.calls) != 0 {
+					t.Errorf("search called %d times on a 400, want 0", len(f.calls))
+				}
+				return
+			}
+			if len(f.calls) != 1 || f.calls[0].q != tc.wantQ {
+				t.Errorf("search calls = %+v, want one call with q %q", f.calls, tc.wantQ)
+			}
+		})
+	}
+}
+
+// A malformed q is the caller's mistake: 400, never a 500 that pages Sentry.
+func TestCodeSearchHandler_UnstorableQueryIs400(t *testing.T) {
+	for name, q := range map[string]string{"NUL byte": "a%00b", "invalid UTF-8": "%ff", "truncated UTF-8": "%C3"} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeCodeSearch{}
+			rec := codeSearchGet(t, f, "/v1/code-lists/states?q="+q)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if len(f.calls) != 0 {
+				t.Errorf("search called %d times on a 400, want 0", len(f.calls))
+			}
+		})
+	}
+	// Control: a well-formed multi-byte q reaches the search.
+	f := &fakeCodeSearch{}
+	if rec := codeSearchGet(t, f, "/v1/code-lists/states?q=%C3%A9"); rec.Code != http.StatusOK || len(f.calls) != 1 {
+		t.Errorf("control: status %d, calls %+v, want 200 and one call", rec.Code, f.calls)
+	}
+}
+
+func TestCodeSearchHandler_500LogsTheOperationNotTheQuery(t *testing.T) {
+	var buf bytes.Buffer
+	f := &fakeCodeSearch{err: errors.New("boom")}
+	mux := http.NewServeMux()
+	mux.Handle("GET /v1/code-lists/{list}", CodeSearchHandler(f.search, slog.New(slog.NewTextHandler(&buf, nil))))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/code-lists/lgas?q=SECRETNEEDLE", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "code_search") || !strings.Contains(logged, "lgas") {
+		t.Errorf("log %q lacks the operation name and list", logged)
+	}
+	if strings.Contains(logged, "SECRETNEEDLE") {
+		t.Errorf("log carries q: %s", logged)
+	}
+
+	// A 4xx domain refusal is not logged as an error.
+	buf.Reset()
+	f.err = db.ErrNotActiveMember
+	mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/code-lists/lgas?q=a", nil))
+	if buf.Len() != 0 {
+		t.Errorf("a 403 logged %q, want nothing", buf.String())
 	}
 }
 

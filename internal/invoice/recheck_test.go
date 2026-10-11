@@ -190,6 +190,17 @@ func dueIDs(vs []DueVersion) []string {
 	return ids
 }
 
+// dueFixtureIDs keeps only the due versions this test created, so a real unmarked version in force does not count.
+func dueFixtureIDs(vs []DueVersion, fixtures ...string) []string {
+	ids := []string{}
+	for _, v := range vs {
+		if slices.Contains(fixtures, v.ID) {
+			ids = append(ids, v.ID)
+		}
+	}
+	return ids
+}
+
 // --- AC 1: DueRechecks --------------------------------------------------------
 
 func TestDueRechecks_InForceAndUnmarkedOnly(t *testing.T) {
@@ -206,14 +217,16 @@ func TestDueRechecks_InForceAndUnmarkedOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DueRechecks(3001-06-01): %v", err)
 	}
-	if want := []string{aID, bID}; !slices.Equal(dueIDs(got), want) {
-		t.Fatalf("DueRechecks(3001-06-01) ids = %v, want [A B] = %v (oldest first; marked C and the marked real versions excluded)", dueIDs(got), want)
+	if want := []string{aID, bID}; !slices.Equal(dueFixtureIDs(got, aID, bID, cID), want) {
+		t.Fatalf("DueRechecks(3001-06-01) fixture ids = %v, want [A B] = %v (oldest first; marked C excluded)", dueFixtureIDs(got, aID, bID, cID), want)
 	}
-	if got[0].Version != aVer || got[1].Version != bVer {
-		t.Errorf("versions = %d, %d, want %d, %d", got[0].Version, got[1].Version, aVer, bVer)
+	// Real versions are not asserted on; their order against the fixtures is by start date, oldest first.
+	if len(got) < 2 || got[len(got)-2].Version != aVer || got[len(got)-1].Version != bVer {
+		t.Fatalf("due versions = %v, want A then B last (oldest start first)", dueIDs(got))
 	}
-	if got[0].EffectiveFrom.Format("2006-01-02") != "3001-01-01" || got[1].EffectiveFrom.Format("2006-01-02") != "3001-06-01" {
-		t.Errorf("EffectiveFrom = %s, %s, want 3001-01-01, 3001-06-01", got[0].EffectiveFrom, got[1].EffectiveFrom)
+	a, b := got[len(got)-2], got[len(got)-1]
+	if a.EffectiveFrom.Format("2006-01-02") != "3001-01-01" || b.EffectiveFrom.Format("2006-01-02") != "3001-06-01" {
+		t.Errorf("EffectiveFrom = %s, %s, want 3001-01-01, 3001-06-01", a.EffectiveFrom, b.EffectiveFrom)
 	}
 
 	// B starts on 3001-06-01: the day before, it is scheduled, not due.
@@ -221,35 +234,35 @@ func TestDueRechecks_InForceAndUnmarkedOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DueRechecks(3001-05-31): %v", err)
 	}
-	if want := []string{aID}; !slices.Equal(dueIDs(got), want) {
-		t.Errorf("DueRechecks(3001-05-31) ids = %v, want only A = %v (scheduled B is not due)", dueIDs(got), want)
+	if want := []string{aID}; !slices.Equal(dueFixtureIDs(got, aID, bID, cID), want) {
+		t.Errorf("DueRechecks(3001-05-31) fixture ids = %v, want only A = %v (scheduled B is not due)", dueFixtureIDs(got, aID, bID, cID), want)
 	}
 
 	got, err = DueRechecks(ctx, app, day(3000, 12, 31))
 	if err != nil {
 		t.Fatalf("DueRechecks(3000-12-31): %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("DueRechecks(3000-12-31) = %v, want none (every fixture is scheduled)", dueIDs(got))
+	if ids := dueFixtureIDs(got, aID, bID, cID); len(ids) != 0 {
+		t.Errorf("DueRechecks(3000-12-31) fixture ids = %v, want none (every fixture is scheduled)", ids)
 	}
 }
 
 func TestDueRechecks_NothingDueAtHead(t *testing.T) {
 	super, app := dbTestPools(t)
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	v4Day := day(2026, 8, 6) // v4's start date; v5 is scheduled after it
 
 	// Positive control: a dated, marked version exists, so an empty answer is the marker at work.
 	if n := mustCount(t, super,
 		`SELECT count(*) FROM rule_set_versions v JOIN rule_set_version_rechecks r ON r.rule_set_version_id = v.id
-		  WHERE v.effective_from <= $1::date`, today); n == 0 {
-		t.Fatal("fixture: no dated, marked version in force today (v4's marker row is missing)")
+		  WHERE v.effective_from <= $1::date`, v4Day); n == 0 {
+		t.Fatal("fixture: no dated, marked version in force on 2026-08-06 (v4's marker row is missing)")
 	}
-	got, err := DueRechecks(context.Background(), app, today)
+	got, err := DueRechecks(context.Background(), app, v4Day)
 	if err != nil {
-		t.Fatalf("DueRechecks(today): %v", err)
+		t.Fatalf("DueRechecks(2026-08-06): %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("DueRechecks(today) = %v, want none -- every real version in force is marked", dueIDs(got))
+		t.Errorf("DueRechecks(2026-08-06) = %v, want none -- every real version in force is marked", dueIDs(got))
 	}
 }
 

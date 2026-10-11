@@ -4,6 +4,7 @@ package validation
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -41,46 +42,58 @@ func switchRuleViaFunction(t *testing.T, app *pgxpool.Pool, actor, key string, e
 func TestStaffRulesFunction_NextLoadSeesTheSwitch(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
+	seedV5Lists(t, super)
 	actor := seedRulesStaffRow(t, super)
 	engine := NewDefaultEngine()
+	const key = "supplier-tin-format"
 
-	firePayload := validInvoicePayload()
-	invoiceOf(firePayload)["vat"] = 70.0
-	result, err := engine.Evaluate(firePayload, loadActive(t, app))
-	if err != nil {
-		t.Fatalf("Evaluate baseline: %v", err)
+	violationKeys := func() []string {
+		result, err := engine.Evaluate(badInvoicePayload(), loadToday(t, app))
+		if err != nil {
+			t.Fatalf("Evaluate: %v", err)
+		}
+		var keys []string
+		for _, v := range result.Violations {
+			keys = append(keys, v.RuleKey)
+		}
+		return keys
 	}
-	if !hasViolation(result, functionKey) {
-		t.Fatalf("baseline: %s did not fire -- violations=%+v", functionKey, result.Violations)
+	without := func(keys []string, drop string) []string {
+		var out []string
+		for _, k := range keys {
+			if k != drop {
+				out = append(out, k)
+			}
+		}
+		return out
 	}
 
-	if was := switchRuleViaFunction(t, app, actor, functionKey, false); !was {
+	baseline := violationKeys()
+	if !containsKey(baseline, key) || len(without(baseline, key)) == 0 {
+		t.Fatalf("baseline: want %s and a control violation, got %v", key, baseline)
+	}
+
+	if was := switchRuleViaFunction(t, app, actor, key, false); !was {
 		t.Error("disable returned was_enabled = false, want true")
 	}
-	rs := loadActive(t, app)
-	result, err = engine.Evaluate(firePayload, rs)
-	if err != nil {
-		t.Fatalf("Evaluate after the switch: %v", err)
-	}
-	if hasViolation(result, functionKey) {
-		t.Errorf("%s still fires after the switch -- violations=%+v", functionKey, result.Violations)
-	}
-	control, err := engine.Evaluate(badInvoicePayload(), rs)
-	if err != nil {
-		t.Fatalf("Evaluate control: %v", err)
-	}
-	if !hasViolation(control, "supplier-tin-format") {
-		t.Errorf("control rule supplier-tin-format did not fire -- only the switched rule should drop")
+	if got, want := violationKeys(), without(baseline, key); !reflect.DeepEqual(got, want) {
+		t.Errorf("after the switch violations = %v, want only %s dropped: %v", got, key, want)
 	}
 
-	switchRuleViaFunction(t, app, actor, functionKey, true)
-	result, err = engine.Evaluate(firePayload, loadActive(t, app))
+	switchRuleViaFunction(t, app, actor, key, true)
+	if got := violationKeys(); !reflect.DeepEqual(got, baseline) {
+		t.Errorf("after the restore violations = %v, want %v", got, baseline)
+	}
+}
+
+// loadToday loads the version in force today, the one the switch targets.
+func loadToday(t *testing.T, app *pgxpool.Pool) RuleSet {
+	t.Helper()
+	rs, err := NewStore(app).LoadActiveRuleSet(newTestIdentity())
 	if err != nil {
-		t.Fatalf("Evaluate after the restore: %v", err)
+		t.Fatalf("LoadActiveRuleSet: %v", err)
 	}
-	if !hasViolation(result, functionKey) {
-		t.Errorf("%s did not fire again after the restore", functionKey)
-	}
+	return rs
 }
 
 // only the version in force changes.

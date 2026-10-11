@@ -154,14 +154,16 @@ func TestStaffRules_ListWithNoVersionInForceIsErrNoActiveRuleSet(t *testing.T) {
 func TestStaffRules_SwitchOffAndOnChangesTheNextLoad(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
+	seedV5Lists(t, super)
 	actor := seedRulesStaffRow(t, super)
 	ctx, store := staffCtx(t, actor), NewStore(app)
+	today := todayUTC() // the switch targets the version in force today
 	enabledIn := func() bool {
-		rs, err := store.LoadForDates(ctx, []string{"2026-10-11"})
+		rs, err := store.LoadForDates(ctx, []string{today})
 		if err != nil {
 			t.Fatalf("LoadForDates: %v", err)
 		}
-		for _, r := range rs["2026-10-11"].Rules {
+		for _, r := range rs[today].Rules {
 			if r.Key == functionKey {
 				return r.Enabled
 			}

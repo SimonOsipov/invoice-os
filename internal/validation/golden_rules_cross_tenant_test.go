@@ -63,31 +63,31 @@ func evalKeys(t *testing.T, rs RuleSet) []string {
 
 // tenantEvaluation is a tenant's violation keys under both loaders.
 type tenantEvaluation struct {
-	identity []string // LoadActiveRuleSet under the tenant's identity
-	global   []string // LoadActiveRuleSetGlobal, the path every invoice takes
+	identity []string // the tenant-tx loader, under the tenant's identity
+	global   []string // LoadForDates, the identity-free path every invoice takes
 }
 
 func evaluationOf(t *testing.T, app *pgxpool.Pool, who goldenTenant) tenantEvaluation {
 	t.Helper()
 	store := NewStore(app)
-	rsID, err := store.LoadActiveRuleSet(who.ctx)
+	rsID, err := loadSeedRuleSet(who.ctx, app)
 	if err != nil {
-		t.Fatalf("LoadActiveRuleSet(tenant %s): %v", who.id, err)
+		t.Fatalf("load the seed rule-set (tenant %s): %v", who.id, err)
 	}
-	rsGlobal, err := store.LoadActiveRuleSetGlobal(context.Background())
+	byDate, err := store.LoadForDates(context.Background(), []string{activeSeedDate})
 	if err != nil {
-		t.Fatalf("LoadActiveRuleSetGlobal: %v", err)
+		t.Fatalf("LoadForDates(%s): %v", activeSeedDate, err)
 	}
-	return tenantEvaluation{identity: evalKeys(t, rsID), global: evalKeys(t, rsGlobal)}
+	return tenantEvaluation{identity: evalKeys(t, rsID), global: evalKeys(t, byDate[activeSeedDate])}
 }
 
-// activeRuleID reads the rules.id of key in the version in force today.
+// activeRuleID reads the rules.id of key in the version in force on activeSeedDate.
 func activeRuleID(t *testing.T, super *pgxpool.Pool, key string) string {
 	t.Helper()
 	var id string
 	if err := super.QueryRow(context.Background(),
 		`SELECT r.id::text FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		 WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $1`, key,
+		 WHERE v.id = rule_set_version_for($1::date) AND r.key = $2`, activeSeedDate, key,
 	).Scan(&id); err != nil {
 		t.Fatalf("read active rules.id for %q: %v", key, err)
 	}
@@ -134,10 +134,10 @@ func containsKey(keys []string, key string) bool {
 func assertSameEvaluation(t *testing.T, got, want tenantEvaluation, when string) {
 	t.Helper()
 	if !reflect.DeepEqual(got.identity, want.identity) {
-		t.Errorf("%s: LoadActiveRuleSet keys = %v, want baseline %v", when, got.identity, want.identity)
+		t.Errorf("%s: tenant-tx loader keys = %v, want baseline %v", when, got.identity, want.identity)
 	}
 	if !reflect.DeepEqual(got.global, want.global) {
-		t.Errorf("%s: LoadActiveRuleSetGlobal keys = %v, want baseline %v", when, got.global, want.global)
+		t.Errorf("%s: LoadForDates keys = %v, want baseline %v", when, got.global, want.global)
 	}
 }
 
@@ -161,7 +161,7 @@ func TestGoldenRules_TenantACannotChangeTenantBEvaluation(t *testing.T) {
 		assertAppRefused(t, appToggle(t, app, a.id, activeRuleID(t, super, k), false), "UPDATE rules SET enabled = false ("+k+")")
 	}
 	for _, k := range keys {
-		if !ruleEnabledActive(t, super, k) {
+		if !ruleEnabledSeed(t, super, k) {
 			t.Errorf("%s enabled = false after A's attempts, want true", k)
 		}
 	}
@@ -180,7 +180,7 @@ func TestGoldenRules_TenantACannotOverrideAStaffKillSwitch(t *testing.T) {
 	restoreRulesOnCleanup(t, super)
 	a, b := newGoldenTenant(), newGoldenTenant()
 
-	if n := runKillSwitch(t, super, goldenCurrencyKey, false); n != 1 {
+	if n := runKillSwitchSeed(t, super, goldenCurrencyKey, false); n != 1 {
 		t.Fatalf("kill switch (%s, false) rows = %d, want 1", goldenCurrencyKey, n)
 	}
 	baseline := evaluationOf(t, app, b)
@@ -195,7 +195,7 @@ func TestGoldenRules_TenantACannotOverrideAStaffKillSwitch(t *testing.T) {
 	assertAppRefused(t, appToggle(t, app, a.id, activeRuleID(t, super, goldenCurrencyKey), true),
 		"UPDATE rules SET enabled = true ("+goldenCurrencyKey+")")
 
-	if ruleEnabledActive(t, super, goldenCurrencyKey) {
+	if ruleEnabledSeed(t, super, goldenCurrencyKey) {
 		t.Errorf("%s enabled = true after A's attempts, want the staff decision (false)", goldenCurrencyKey)
 	}
 	assertSameEvaluation(t, evaluationOf(t, app, b), baseline, "after A's attempts")

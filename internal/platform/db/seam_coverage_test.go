@@ -1023,6 +1023,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PUT /v1/staff/rule-versions/draft/rules/{key}":       {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
 	"DELETE /v1/staff/rule-versions/draft/rules/{key}":    {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/staff/rule-versions/draft/publish":          {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
+	"POST /v1/staff/rule-versions/draft/test":             {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
 	"PATCH /v1/rules/{key}":                               {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},
 	"PATCH /v1/workflow-roles/{key}":                      {verdict: scCovered},
 	"POST /auth/exchange":                                 {verdict: scExempt, reason: "no database; in-process code store"},

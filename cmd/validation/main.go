@@ -71,6 +71,9 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/publish", validation.StaffPublishDraftHandler(func(ctx context.Context, from time.Time) (validation.DraftPublished, error) {
 		return store.PublishDraft(ctx, engine, from)
 	}, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/test", validation.StaffTestDraftHandler(func(ctx context.Context, invoice map[string]any) (validation.DraftTestResult, error) {
+		return store.TestDraft(ctx, engine, invoice)
+	}, app.Logger))
 
 	// POST /v1/validate/batch — the tenant-free peer surface 03 (submission)
 	// calls to validate a whole batch in one request. It carries NO identity: it is

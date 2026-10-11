@@ -79,6 +79,10 @@ func newRoutesRig(t *testing.T) *routesRig {
 		count()
 		return DraftPublished{}, nil
 	}, log))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/test", StaffTestDraftHandler(func(context.Context, map[string]any) (DraftTestResult, error) {
+		count()
+		return DraftTestResult{}, nil
+	}, log))
 	app.Mux.HandleFunc("PATCH /v1/rules/{key}", ToggleHandler())
 	app.RequireGateway(routesGatewayToken)
 	rig.h = app.Handler()
@@ -130,6 +134,7 @@ func TestStaffRulesRoutes_RefuseEveryNonRulesCaller(t *testing.T) {
 				{"PUT", "/v1/staff/rule-versions/draft/rules/k", ruleBody},
 				{"DELETE", "/v1/staff/rule-versions/draft/rules/k", ""},
 				{"POST", "/v1/staff/rule-versions/draft/publish", `{"effective_from":"3001-01-01"}`},
+				{"POST", "/v1/staff/rule-versions/draft/test", `{"invoice":{}}`},
 			} {
 				rec := rig.do(c, req.method, req.path, req.body)
 				if rec.Code != 403 {
@@ -162,14 +167,15 @@ func TestStaffRulesRoutes_RefuseEveryNonRulesCaller(t *testing.T) {
 				{"PUT", "/v1/staff/rule-versions/draft/rules/k", ruleBody},
 				{"DELETE", "/v1/staff/rule-versions/draft/rules/k", ""},
 				{"POST", "/v1/staff/rule-versions/draft/publish", `{"effective_from":"3001-01-01"}`},
+				{"POST", "/v1/staff/rule-versions/draft/test", `{"invoice":{}}`},
 			} {
 				if rec := rig.do(c, req.method, req.path, req.body); rec.Code/100 != 2 {
 					t.Errorf("%s %s = %d (%s), want 2xx", req.method, req.path, rec.Code, rec.Body.String())
 				}
 			}
 		}
-		if rig.lists.Load() != 4 || rig.switches.Load() != 2 || rig.versions.Load() != 2 || rig.drafts.Load() != 10 {
-			t.Errorf("handler calls: list %d, switch %d, versions %d, drafts %d, want 4, 2, 2 and 10", rig.lists.Load(), rig.switches.Load(), rig.versions.Load(), rig.drafts.Load())
+		if rig.lists.Load() != 4 || rig.switches.Load() != 2 || rig.versions.Load() != 2 || rig.drafts.Load() != 12 {
+			t.Errorf("handler calls: list %d, switch %d, versions %d, drafts %d, want 4, 2, 2 and 12", rig.lists.Load(), rig.switches.Load(), rig.versions.Load(), rig.drafts.Load())
 		}
 		if got, _ := rig.actor.Load().(string); got != routesSubject {
 			t.Errorf("StaffFromContext subject = %q, want %q", got, routesSubject)

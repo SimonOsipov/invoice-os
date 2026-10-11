@@ -388,3 +388,62 @@ func TestStaffDraftsHandlers_BodyLimitsAreExact(t *testing.T) {
 		}
 	}
 }
+
+func TestStaffDraftsHandlers_TestBodies(t *testing.T) {
+	var calls int
+	var got map[string]any
+	h := StaffTestDraftHandler(func(_ context.Context, inv map[string]any) (DraftTestResult, error) {
+		calls++
+		got = inv
+		return DraftTestResult{}, nil
+	}, nil)
+	pad := func(n int) string { b := `{"invoice":{}}`; return b + strings.Repeat(" ", n-len(b)) }
+	for _, c := range []struct {
+		name, body string
+		status     int
+	}{
+		{"missing invoice", `{}`, 400},
+		{"null", `{"invoice":null}`, 400},
+		{"array", `{"invoice":[]}`, 400},
+		{"string", `{"invoice":"x"}`, 400},
+		{"unknown field", `{"invoice":{},"x":1}`, 400},
+		{"1 MiB + 1", pad(1<<20 + 1), 413},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec, req := draftReq("POST", "/x", c.body)
+			h(rec, req)
+			if rec.Code != c.status {
+				t.Errorf("status = %d (%.80s), want %d", rec.Code, rec.Body.String(), c.status)
+			}
+			if c.status == 400 && c.name != "unknown field" && errText(t, rec) != "invoice must be an object" {
+				t.Errorf("error = %q, want invoice must be an object", errText(t, rec))
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("fake called %d times on a refused body, want 0", calls)
+	}
+	rec, req := draftReq("POST", "/x", pad(1<<20))
+	h(rec, req)
+	if rec.Code != 200 || calls != 1 || got == nil {
+		t.Errorf("1 MiB body = %d, calls %d, want 200 and one call", rec.Code, calls)
+	}
+
+	for _, c := range []struct {
+		err    error
+		status int
+		msg    string
+	}{
+		{ErrNoDraft, 404, "no draft"},
+		{fmt.Errorf("%w: the draft has no rules", ErrDraftInvalid), 409, "the draft has no rules"},
+		{ErrNoActiveRuleSet, 503, "no rule set in force"},
+		{db.ErrNotStaff, 403, "forbidden"},
+	} {
+		h := StaffTestDraftHandler(func(context.Context, map[string]any) (DraftTestResult, error) { return DraftTestResult{}, c.err }, nil)
+		rec, req := draftReq("POST", "/x", `{"invoice":{}}`)
+		h(rec, req)
+		if rec.Code != c.status || errText(t, rec) != c.msg {
+			t.Errorf("%v maps to %d %q, want %d %q", c.err, rec.Code, errText(t, rec), c.status, c.msg)
+		}
+	}
+}

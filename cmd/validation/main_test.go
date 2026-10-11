@@ -206,6 +206,7 @@ func TestValidationMain_StaffRoutesAreRegisteredAndToggleStays(t *testing.T) {
 		"PUT /v1/staff/rule-versions/draft/rules/{key}":    "validation.StaffEditDraftRuleHandler",
 		"DELETE /v1/staff/rule-versions/draft/rules/{key}": "validation.StaffRemoveDraftRuleHandler",
 		"POST /v1/staff/rule-versions/draft/publish":       "validation.StaffPublishDraftHandler",
+		"POST /v1/staff/rule-versions/draft/test":          "validation.StaffTestDraftHandler",
 	} {
 		if got := handlers[pattern]; len(got) != 1 || got[0] != want {
 			t.Errorf("%q registered with %v, want exactly [%s]", pattern, got, want)

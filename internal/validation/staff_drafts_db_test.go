@@ -555,3 +555,118 @@ func TestStaffDrafts_EveryGoldenRuleValidates(t *testing.T) {
 		t.Fatal("no golden rule was checked")
 	}
 }
+
+func hasKey(vs []Violation, key string) bool {
+	for _, v := range vs {
+		if v.RuleKey == key {
+			return true
+		}
+	}
+	return false
+}
+
+func TestStaffDrafts_TestShowsDraftBesideInForce(t *testing.T) {
+	super, _, store, _, ctx := draftSetup(t)
+	inForceID, inForceVersion := versionInForce(t, super)
+	draft, err := store.OpenDraft(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddDraftRule(ctx, "e2e-probe", mustValid(t, "e2e-probe", "required", "probe", "")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RemoveDraftRule(ctx, "vat-standard-rate"); err != nil {
+		t.Fatal(err)
+	}
+	inv := validInvoicePayload()["invoice"].(map[string]any)
+	inv["vat"] = 70.0
+	got, err := store.TestDraft(ctx, NewDefaultEngine(), inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Draft.Error != nil {
+		t.Fatalf("draft.error = %q", *got.Draft.Error)
+	}
+	if !hasKey(got.Draft.Violations, "e2e-probe") || hasKey(got.Draft.Violations, "vat-standard-rate") {
+		t.Errorf("draft violations = %v, want e2e-probe and no vat-standard-rate", violationKeys(Result{Violations: got.Draft.Violations}))
+	}
+	if !hasKey(got.InForce.Violations, "vat-standard-rate") || hasKey(got.InForce.Violations, "e2e-probe") {
+		t.Errorf("in-force violations = %v, want vat-standard-rate and no e2e-probe", violationKeys(Result{Violations: got.InForce.Violations}))
+	}
+	if got.Draft.RuleSetVersion != draft.Version || got.Draft.RuleSetVersionID != draft.RuleSetVersionID {
+		t.Errorf("draft stamp = %d %s, want %d %s", got.Draft.RuleSetVersion, got.Draft.RuleSetVersionID, draft.Version, draft.RuleSetVersionID)
+	}
+	if got.InForce.RuleSetVersion != inForceVersion || got.InForce.RuleSetVersionID.String() != inForceID {
+		t.Errorf("in-force stamp = %d %s, want %d %s", got.InForce.RuleSetVersion, got.InForce.RuleSetVersionID, inForceVersion, inForceID)
+	}
+}
+
+func TestStaffDrafts_TestReportsADraftFault(t *testing.T) {
+	_, _, store, _, ctx := draftSetup(t)
+	if _, err := store.OpenDraft(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddDraftRule(ctx, "e2e-fault", mustValid(t, "e2e-fault", "cel", "m", `{"expr":"invoice.nope.x == 1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.TestDraft(ctx, NewDefaultEngine(), map[string]any{})
+	if err != nil {
+		t.Fatalf("TestDraft: %v", err)
+	}
+	if got.Draft.Error == nil || *got.Draft.Error == "" {
+		t.Error("draft.error empty, want the fault text")
+	}
+	if got.Draft.Violations == nil || len(got.Draft.Violations) != 0 {
+		t.Errorf("draft.violations = %#v, want []", got.Draft.Violations)
+	}
+	if len(got.InForce.Violations) == 0 {
+		t.Error("in-force violations empty on an empty invoice, want some")
+	}
+}
+
+func TestStaffDrafts_TestRefusals(t *testing.T) {
+	super, _, store, _, ctx := draftSetup(t)
+	eng := NewDefaultEngine()
+	if _, err := store.TestDraft(ctx, eng, map[string]any{}); !errors.Is(err, ErrNoDraft) {
+		t.Errorf("no draft err = %v, want ErrNoDraft", err)
+	}
+	draft, err := store.OpenDraft(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range ruleKeysOf(t, super, draft.RuleSetVersionID.String()) {
+		if _, err := store.RemoveDraftRule(ctx, k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = store.TestDraft(ctx, eng, map[string]any{})
+	if !errors.Is(err, ErrDraftInvalid) || !strings.HasSuffix(err.Error(), "the draft has no rules") {
+		t.Errorf("empty draft err = %v, want ErrDraftInvalid the draft has no rules", err)
+	}
+}
+
+func TestStaffDrafts_TestWritesNothing(t *testing.T) {
+	super, _, store, actor, ctx := draftSetup(t)
+	if _, err := store.OpenDraft(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "m")); err != nil {
+		t.Fatal(err)
+	}
+	counts := func() (versions, rules, audit int) {
+		t.Helper()
+		if err := super.QueryRow(context.Background(), `SELECT
+			(SELECT count(*) FROM rule_set_versions), (SELECT count(*) FROM rules),
+			(SELECT count(*) FROM staff_audit_log WHERE actor = $1)`, actor).Scan(&versions, &rules, &audit); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	v0, r0, a0 := counts()
+	if _, err := store.TestDraft(ctx, NewDefaultEngine(), validInvoicePayload()["invoice"].(map[string]any)); err != nil {
+		t.Fatal(err)
+	}
+	if v1, r1, a1 := counts(); v0 != v1 || r0 != r1 || a0 != a1 {
+		t.Errorf("counts (versions, rules, audit) = %d %d %d before, %d %d %d after, want equal", v0, r0, a0, v1, r1, a1)
+	}
+}

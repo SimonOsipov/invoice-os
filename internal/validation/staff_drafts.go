@@ -28,6 +28,7 @@ import (
 const (
 	maxDraftRuleBodyBytes = 32 << 10
 	maxPublishBodyBytes   = 8 << 10
+	maxTestBodyBytes      = 1 << 20
 	maxDraftParamsBytes   = 16 << 10
 	maxDraftKeyLen        = 64
 	maxDraftTargetRunes   = 200
@@ -345,6 +346,19 @@ func (s *Store) RemoveDraftRule(ctx context.Context, key string) (DraftRuleResul
 	return res, nil
 }
 
+// draftIDTx reads the id of the unsealed version; none is ErrNoDraft.
+func draftIDTx(ctx context.Context, tx pgx.Tx) (string, error) {
+	var id string
+	err := tx.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE NOT sealed`).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNoDraft
+	}
+	if err != nil {
+		return "", fmt.Errorf("validation: read draft: %w", err)
+	}
+	return id, nil
+}
+
 func draftFault(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrDraftInvalid, fmt.Sprintf(format, args...))
 }
@@ -366,13 +380,9 @@ func (s *Store) PublishDraft(ctx context.Context, eng *Engine, from time.Time) (
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('rule_set_versions:draft'))`); err != nil {
 			return fmt.Errorf("validation: lock draft: %w", err)
 		}
-		var draftID string
-		err := tx.QueryRow(ctx, `SELECT id FROM rule_set_versions WHERE NOT sealed`).Scan(&draftID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNoDraft
-		}
+		draftID, err := draftIDTx(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("validation: read draft: %w", err)
+			return err
 		}
 		rs, err := loadRuleSetByIDTx(ctx, tx, draftID)
 		switch {
@@ -402,6 +412,79 @@ func (s *Store) PublishDraft(ctx context.Context, eng *Engine, from time.Time) (
 	})
 	if err != nil {
 		return DraftPublished{}, err
+	}
+	return res, nil
+}
+
+// DraftTestSide is the draft's half of a test result; Error holds an evaluation fault.
+type DraftTestSide struct {
+	RuleSetVersion   int         `json:"rule_set_version"`
+	RuleSetVersionID uuid.UUID   `json:"rule_set_version_id"`
+	Violations       []Violation `json:"violations"`
+	Error            *string     `json:"error"`
+}
+
+// InForceTestSide is the half for the version in force today.
+type InForceTestSide struct {
+	RuleSetVersion   int         `json:"rule_set_version"`
+	RuleSetVersionID uuid.UUID   `json:"rule_set_version_id"`
+	Violations       []Violation `json:"violations"`
+}
+
+// DraftTestResult is the POST /v1/staff/rule-versions/draft/test body.
+type DraftTestResult struct {
+	Draft   DraftTestSide   `json:"draft"`
+	InForce InForceTestSide `json:"in_force"`
+}
+
+// TestDraft evaluates the invoice against the draft and the version in force today. It writes nothing.
+// A draft that cannot load its code lists or evaluate fills Draft.Error; an in-force fault is an error.
+func (s *Store) TestDraft(ctx context.Context, eng *Engine, invoice map[string]any) (DraftTestResult, error) {
+	if _, err := staffActorOf(ctx); err != nil {
+		return DraftTestResult{}, err
+	}
+	var res DraftTestResult
+	err := db.WithinStaffTx(ctx, s.pool, func(tx pgx.Tx) error {
+		draftID, err := draftIDTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		draft, err := loadRuleSetByIDTx(ctx, tx, draftID)
+		var draftErr error
+		switch {
+		case errors.Is(err, ErrEmptyRuleSet):
+			return draftFault("the draft has no rules")
+		case errors.Is(err, ErrCodeListMissing):
+			draftErr = err
+		case err != nil:
+			return fmt.Errorf("validation: load draft: %w", err)
+		}
+		inForce, err := loadTodayTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		res.Draft = DraftTestSide{RuleSetVersion: draft.Version, Violations: []Violation{}}
+		res.Draft.RuleSetVersionID, _ = uuid.Parse(draftID)
+		if draftErr == nil {
+			var r Result
+			if r, draftErr = eng.Evaluate(Payload{"invoice": invoice}, draft); draftErr == nil {
+				res.Draft.Violations = r.Violations
+			}
+		}
+		if draftErr != nil {
+			msg := draftErr.Error()
+			res.Draft.Error = &msg
+		}
+		r, err := eng.Evaluate(Payload{"invoice": invoice}, inForce)
+		if err != nil {
+			return fmt.Errorf("validation: evaluate version in force: %w", err)
+		}
+		res.InForce = InForceTestSide{RuleSetVersion: inForce.Version, Violations: r.Violations}
+		res.InForce.RuleSetVersionID, _ = uuid.Parse(inForce.ID)
+		return nil
+	})
+	if err != nil {
+		return DraftTestResult{}, err
 	}
 	return res, nil
 }
@@ -563,6 +646,34 @@ func StaffPublishDraftHandler(publish func(ctx context.Context, from time.Time) 
 		res, err := publish(r.Context(), from)
 		if err != nil {
 			writeDraftError(w, r, log, "publish draft", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	}
+}
+
+type testRequest struct {
+	Invoice json.RawMessage `json:"invoice"`
+}
+
+// StaffTestDraftHandler serves POST /v1/staff/rule-versions/draft/test.
+func StaffTestDraftHandler(test func(ctx context.Context, invoice map[string]any) (DraftTestResult, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req testRequest
+		if !decodeDraftBody(w, r, maxTestBodyBytes, &req) {
+			return
+		}
+		var invoice map[string]any
+		if raw := strings.TrimSpace(string(req.Invoice)); !strings.HasPrefix(raw, "{") || json.Unmarshal(req.Invoice, &invoice) != nil {
+			writeError(w, http.StatusBadRequest, "invoice must be an object")
+			return
+		}
+		res, err := test(r.Context(), invoice)
+		if err != nil {
+			writeDraftError(w, r, log, "test draft", err)
 			return
 		}
 		writeJSON(w, http.StatusOK, res)

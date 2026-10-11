@@ -456,9 +456,10 @@ func TestStoreUpdate_AddsSentFieldsToEditedFields(t *testing.T) {
 	}{
 		{"adds new, keeps old", []string{"email"}, customer.UpdateInput{Email: ptr("a@x.ng"), State: ptr("LA")}, []string{"email", "state"}},
 		{"no duplicates, sorted", []string{"state"}, customer.UpdateInput{State: ptr("OG"), City: ptr("Abeokuta")}, []string{"city", "state"}},
+		{"keeps an old key that was not sent", []string{"city"}, customer.UpdateInput{State: ptr("OG")}, []string{"city", "state"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tin := map[string]string{"adds new, keeps old": tin1, "no duplicates, sorted": tin2}[tc.name]
+			tin := map[string]string{"adds new, keeps old": tin1, "no duplicates, sorted": tin2, "keeps an old key that was not sent": tin3}[tc.name]
 			id := seedCustomer(t, super, tenantA, seed{TIN: tin, Edited: tc.before})
 			if _, err := store.Update(ctxA, id, tc.in); err != nil {
 				t.Fatalf("Update: %v", err)
@@ -756,5 +757,225 @@ func TestLookupByTIN_AbsentIsNilNil(t *testing.T) {
 	}
 	if got, err := lookup(t, app, ctxA, tin1); err != nil || got == nil {
 		t.Errorf("control: LookupByTIN(present) = %v, %v, want the record", got, err)
+	}
+}
+
+// --- adversarial ----------------------------------------------------------
+
+func TestListHandler_LimitAndOffsetBoundaries(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer bounds")
+	seedCustomer(t, super, tenantA, seed{TIN: tin1, Name: ptr("Abe")})
+	seedCustomer(t, super, tenantA, seed{TIN: tin2, Name: ptr("Bea")})
+
+	for _, tc := range []struct {
+		query                      string
+		wantLimit, wantOffset, len int
+	}{
+		{"limit=1", 1, 0, 1},
+		{"limit=200", 200, 0, 2},
+		{"limit=201", 200, 0, 2},
+		{"offset=0", 50, 0, 2},
+		{"offset=2", 50, 2, 0},
+		{"offset=99", 50, 99, 0},
+	} {
+		rec := do(t, h, ctxA, http.MethodGet, "/v1/customers?"+tc.query, "")
+		wantStatus(t, rec, http.StatusOK)
+		var body listBody
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode %s: %v", tc.query, err)
+		}
+		if body.Pagination.Limit != tc.wantLimit || body.Pagination.Offset != tc.wantOffset ||
+			body.Pagination.Total != 2 || len(body.Customers) != tc.len {
+			t.Errorf("?%s → %+v with %d item(s), want limit %d offset %d total 2 with %d",
+				tc.query, body.Pagination, len(body.Customers), tc.wantLimit, tc.wantOffset, tc.len)
+		}
+	}
+
+	rec := do(t, h, ctxA, http.MethodGet, "/v1/customers?limit=-1", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("?limit=-1 = %d, want 400", rec.Code)
+	}
+}
+
+func TestUpdateHandler_MalformedBodyIs400(t *testing.T) {
+	called := false
+	update := func(context.Context, string, customer.UpdateInput) (customer.Customer, error) {
+		called = true
+		return customer.Customer{}, nil
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("PATCH /v1/customers/{id}", customer.UpdateHandler(update, nil))
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated"})
+
+	for _, tc := range []struct{ body, msg string }{
+		{`{`, "invalid request body"},
+		{``, "invalid request body"},
+		{`[]`, "invalid request body"},
+		{`"x"`, "invalid request body"},
+		{`{"name":5}`, "invalid request body"},
+		{`{"name":null}`, "no fields to update"},
+	} {
+		rec := do(t, mux, ctx, http.MethodPatch, "/v1/customers/"+uuid.NewString(), tc.body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("PATCH %q = %d, want 400 (body %q)", tc.body, rec.Code, rec.Body.String())
+			continue
+		}
+		if got := errorBody(t, rec); got != tc.msg {
+			t.Errorf("PATCH %q error = %q, want %q", tc.body, got, tc.msg)
+		}
+	}
+	if called {
+		t.Error("the update function ran for a body with no correctable key")
+	}
+
+	rec := do(t, mux, ctx, http.MethodPatch, "/v1/customers/"+uuid.NewString(), `{"name":"x"}`)
+	wantStatus(t, rec, http.StatusOK)
+	if !called {
+		t.Error("control: a valid body did not reach the update function")
+	}
+}
+
+func TestUpdateHandler_AuditWriteFailureIs500NotBadRequest(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA := seedTenant(t, super, "customer audit 500")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1, Email: ptr("old@x.ng")})
+	badCtx := auth.WithIdentity(context.Background(),
+		auth.Identity{Subject: strings.Repeat("a", 256), Role: "authenticated", TenantID: tenantA})
+
+	rec := do(t, h, badCtx, http.MethodPatch, "/v1/customers/"+id, `{"email":"new@x.ng"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("PATCH with an audit-failing actor = %d, want 500 (body %q)", rec.Code, rec.Body.String())
+	}
+	if got := errorBody(t, rec); got != "internal server error" {
+		t.Errorf("error = %q, want the generic message", got)
+	}
+	if got := strVal(readRow(t, super, id).Email); got != "old@x.ng" {
+		t.Errorf("email after failed audit = %q, want unchanged old@x.ng", got)
+	}
+}
+
+func TestUpdateHandler_EveryAllowedBuyerTypeIsAccepted(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer buyer types")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1})
+
+	for _, tc := range []struct{ sent, want string }{{"B2B", "B2B"}, {"B2G", "B2G"}, {"B2C", "B2C"}, {" B2C ", "B2C"}} {
+		rec := do(t, h, ctxA, http.MethodPatch, "/v1/customers/"+id, `{"buyer_type":"`+tc.sent+`"}`)
+		wantStatus(t, rec, http.StatusOK)
+		if got := strVal(readRow(t, super, id).BuyerType); got != tc.want {
+			t.Errorf("buyer_type after sending %q = %q, want %q", tc.sent, got, tc.want)
+		}
+	}
+}
+
+func TestUpdateHandler_EachKeyLandsInItsOwnColumn(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer each key")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1})
+
+	rec := do(t, h, ctxA, http.MethodPatch, "/v1/customers/"+id, `{"name":"v-name","contact_person":"v-contact",
+		"buyer_type":"B2G","email":"v-email","telephone":"v-tel","street":"v-street","city":"v-city",
+		"postal_zone":"v-zone","country":"v-country","state":"v-state","lga":"v-lga"}`)
+	wantStatus(t, rec, http.StatusOK)
+
+	r := readRow(t, super, id)
+	for col, got := range map[string]*string{"name": r.Name, "contact_person": r.ContactPerson, "email": r.Email,
+		"telephone": r.Telephone, "street": r.Street, "city": r.City, "postal_zone": r.PostalZone,
+		"country": r.Country, "state": r.State, "lga": r.LGA} {
+		if want := "v-" + strings.NewReplacer("_person", "", "telephone", "tel", "postal_zone", "zone").Replace(col); strVal(got) != want {
+			t.Errorf("column %s = %q, want %q", col, strVal(got), want)
+		}
+	}
+	if strVal(r.BuyerType) != "B2G" {
+		t.Errorf("buyer_type = %q, want B2G", strVal(r.BuyerType))
+	}
+	wantFields := []string{"buyer_type", "city", "contact_person", "country", "email", "lga", "name", "postal_zone", "state", "street", "telephone"}
+	if !reflect.DeepEqual(r.Edited, wantFields) {
+		t.Errorf("edited_fields = %v, want %v", r.Edited, wantFields)
+	}
+	var resp customer.Customer
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if strVal(resp.Street) != "v-street" || strVal(resp.LGA) != "v-lga" || strVal(resp.PostalZone) != "v-zone" || strVal(resp.ContactPerson) != "v-contact" {
+		t.Errorf("response = street %q lga %q postal_zone %q contact_person %q, want the sent values",
+			strVal(resp.Street), strVal(resp.LGA), strVal(resp.PostalZone), strVal(resp.ContactPerson))
+	}
+	rows := auditRows(t, super, tenantA, updatedEvent)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %d, want 1", len(rows))
+	}
+	if f, _ := rows[0].Payload["fields"].([]any); len(f) != 11 {
+		t.Errorf("audit fields = %v, want all 11 names", rows[0].Payload["fields"])
+	}
+}
+
+func TestHandlers_IdentityWithoutTenantIs401(t *testing.T) {
+	_, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated"})
+
+	for _, tc := range []struct{ method, target, body string }{
+		{http.MethodGet, "/v1/customers", ""},
+		{http.MethodPatch, "/v1/customers/" + uuid.NewString(), `{"email":"a@x.ng"}`},
+	} {
+		rec := do(t, h, ctx, tc.method, tc.target, tc.body)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s with no tenant on the identity = %d, want 401 (body %q)", tc.method, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestStoreUpdate_EmptyInputIsValidationAndWritesNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer empty input")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1, Name: ptr("Keep")})
+
+	if _, err := store.Update(ctxA, id, customer.UpdateInput{}); !errors.Is(err, customer.ErrValidation) {
+		t.Errorf("Update with no field = %v, want ErrValidation", err)
+	}
+	r := readRow(t, super, id)
+	if len(r.Edited) != 0 || strVal(r.Name) != "Keep" {
+		t.Errorf("row after empty Update = name %q edited %v, want Keep []", strVal(r.Name), r.Edited)
+	}
+	if n := len(auditRows(t, super, tenantA, updatedEvent)); n != 0 {
+		t.Errorf("audit rows after empty Update = %d, want 0", n)
+	}
+}
+
+func TestListHandler_TINQueryParamFilters(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer tin param")
+	seedCustomer(t, super, tenantA, seed{TIN: tin1})
+	seedCustomer(t, super, tenantA, seed{TIN: tin2})
+
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		{"tin=" + tin2, []string{tin2}},
+		{"tin=RN-9", nil},
+		{"tin=", []string{tin1, tin2}},
+	} {
+		rec := do(t, h, ctxA, http.MethodGet, "/v1/customers?"+tc.query, "")
+		wantStatus(t, rec, http.StatusOK)
+		var body listBody
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode %s: %v", tc.query, err)
+		}
+		var got []string
+		for _, c := range body.Customers {
+			got = append(got, c["tin"].(string))
+		}
+		if !reflect.DeepEqual(got, tc.want) || body.Pagination.Total != len(tc.want) {
+			t.Errorf("?%s → tins %v total %d, want %v total %d", tc.query, got, body.Pagination.Total, tc.want, len(tc.want))
+		}
 	}
 }

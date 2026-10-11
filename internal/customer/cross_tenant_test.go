@@ -66,3 +66,22 @@ func TestLookupByTIN_NeverReturnsAnotherTenantsRecord(t *testing.T) {
 		t.Errorf("LookupByTIN as A for B's TIN = %v, %v, want nil, nil", got, err)
 	}
 }
+
+func TestStoreList_TINFilterNeverCrossesTenants(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer filter A")
+	tenantB, _, _ := seedTenantWithAdmin(t, super, "customer filter B")
+	aID := seedCustomer(t, super, tenantA, seed{TIN: tin1})
+	seedCustomer(t, super, tenantB, seed{TIN: tin1})
+	seedCustomer(t, super, tenantB, seed{TIN: tin2})
+
+	got, total, err := store.List(ctxA, customer.ListFilter{TIN: tin1, Limit: 50})
+	if err != nil || total != 1 || !reflect.DeepEqual(ids(got), []string{aID}) {
+		t.Errorf("List tin=%s as A = ids %v total %d err %v, want only A's [%s] total 1", tin1, ids(got), total, err, aID)
+	}
+	got, total, err = store.List(ctxA, customer.ListFilter{TIN: tin2, Limit: 50})
+	if err != nil || len(got) != 0 || total != 0 {
+		t.Errorf("List tin=%s (held only by B) as A = %v total %d err %v, want none", tin2, tins(got), total, err)
+	}
+}

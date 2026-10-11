@@ -309,6 +309,24 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // Latest-value mirror of active.entityId for the popstate handler, whose deps are [] --
   // a closure read there freezes at mount, when clients is still [].
   const activeEntityIdRef = useRef<string | null>(null)
+  // Marks entries written before the company resolves; popstate resolves them to bootEntityIdRef.
+  const [mountKey] = useState(() => Math.random().toString(36).slice(2))
+  // The company of every entry in this mount's pre-load window; adoptBatchClient re-points it only from inside the window.
+  const bootEntityIdRef = useRef<string | null>(null)
+  // `p` marks the backfill's stamp: a window entry that already names a company.
+  const isWindowEntry = (s: { e?: string | null; m?: string; p?: boolean } | null) =>
+    s?.m === mountKey && (s.e == null || s.p === true)
+  // Stamp for a replace of the current entry: a window entry stays in the window while it names the window's company.
+  // The first row can change with no switch (a reordered refetch), so the ref match is not redundant.
+  const replaceStamp = () => ({
+    e: active.entityId,
+    m: mountKey,
+    p:
+      (active.entityId !== null &&
+        isWindowEntry(window.history.state) &&
+        bootEntityIdRef.current === active.entityId) ||
+      undefined,
+  })
 
   // The REAL portfolio entity behind `active`, resolved once here rather than re-`find`ing
   // it at each consumer ([gate-on-the-resolved-entity]). Two things depend on it being the
@@ -594,7 +612,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
       auditInvoice: auditPrefilter?.invoiceId ?? null,
       reviewBatchIds: bootView === 'create' ? bootBatchIds : [],
     })
-    window.history.replaceState({ e: active.entityId }, '', url)
+    window.history.replaceState({ e: active.entityId, m: mountKey }, '', url)
     clearDestination()
   }, [])
   // Backfills the boot entry's stamp once the portfolio resolves, and keeps the popstate
@@ -607,8 +625,9 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   useLayoutEffect(() => {
     activeEntityIdRef.current = active.entityId
     if (active.entityId === null) return
+    bootEntityIdRef.current ??= active.entityId
     const minted = (window.history.state as { e?: string | null } | null)?.e ?? null
-    if (minted === null) window.history.replaceState({ e: active.entityId }, '', window.location.href)
+    if (minted === null) window.history.replaceState({ e: active.entityId, m: mountKey, p: true }, '', window.location.href)
   }, [active.entityId])
   // Back/Forward: the browser already moved the URL -- re-derive every owned atom from it, no
   // write on the unclamped path. A push here would duplicate an entry on every Back press;
@@ -623,9 +642,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
       // setter below reads the clamped path: a tail rewrite leaves each atom armed for a
       // frame and has to enumerate them.
       // popstate_anOlderAuditEntryFromAnotherCompanyDoesNotResumeItsInvoiceFilter
-      const minted = (event.state as { e?: string | null } | null)?.e ?? null
+      const state = event.state as { e?: string | null; m?: string; p?: boolean } | null
+      const minted = isWindowEntry(state) ? bootEntityIdRef.current : (state?.e ?? null)
       const here = activeEntityIdRef.current
-      // `?? null` folds every no-stamp shape into "names no company, never clamp".
+      // Any other no-stamp shape, and a null stamp from another mount, names no company: never clamp.
       // popstate_anUnstampedEntryDoesNotClamp
       const stale = minted !== null && here !== null && minted !== here
       const path = stale
@@ -674,7 +694,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     // other view, so the early return is what stops two writers fighting one URL.
     if (view !== 'create') return
     const ids = reviewNavIds(view, createStep, reviewBatchIds)
-    window.history.replaceState({ e: active.entityId }, '', routeUrl('create', { reviewBatchIds: ids }))
+    window.history.replaceState(replaceStamp(), '', routeUrl('create', { reviewBatchIds: ids }))
     // `reviewBatchIds.join(',')`, never the array reference: a fresh array every render
     // would re-run this effect forever.
   }, [view, createStep, reviewBatchIds.join(',')])
@@ -707,7 +727,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     )
     setEditingPolicyId(policyNext)
     const url = routeUrl(view, { id: params?.id, settingsTab: tabNext, q: qNext, auditInvoice: auditNext })
-    window.history.pushState({ e: active.entityId }, '', url)
+    window.history.pushState({ e: active.entityId, m: mountKey }, '', url)
   }
 
   function nav(id: View, params?: RouteParams) {
@@ -725,7 +745,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   function setInvoiceQuery(q: string) {
     setInvoiceQuery_(q)
     const url = routeUrl(view, { settingsTab, q, auditInvoice: auditPrefilter?.invoiceId ?? null })
-    window.history.replaceState({ e: active.entityId }, '', url)
+    window.history.replaceState(replaceStamp(), '', url)
   }
 
   function toggleSwitcher() {
@@ -735,6 +755,8 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   function adoptBatchClient(entityId: string) {
     if (activeEntityId !== null || !clients.some((c) => c.entityId === entityId)) return
     setActiveEntityId(entityId)
+    // A cold review link resolves its company here: the window follows, but only from a window entry.
+    if (isWindowEntry(window.history.state)) bootEntityIdRef.current = entityId
     window.history.replaceState({ e: entityId }, '', window.location.href)
   }
 
@@ -1489,7 +1511,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   function setAuditInvoiceFilter(invoiceId: string | null, invoiceNumber: string | null) {
     setAuditPrefilter(invoiceId ? { invoiceId, invoiceNumber } : null)
     const url = routeUrl(view, { settingsTab, q: invoiceQuery, auditInvoice: invoiceId })
-    window.history.replaceState({ e: active.entityId }, '', url)
+    window.history.replaceState(replaceStamp(), '', url)
   }
 
   // Same one-handler shape as openAuditForInvoice above, same reason.
@@ -1502,7 +1524,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   function setSettingsTab(t: SettingsTab) {
     setSettingsTab_(t)
     const url = routeUrl(view, { settingsTab: t, q: invoiceQuery, auditInvoice: auditPrefilter?.invoiceId ?? null })
-    window.history.replaceState({ e: active.entityId }, '', url)
+    window.history.replaceState(replaceStamp(), '', url)
   }
 
   function toggleConnector(id: ConnectorId) {

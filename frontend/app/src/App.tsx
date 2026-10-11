@@ -41,6 +41,7 @@ import type { DocumentRowState } from './lib/documentRun'
 import {
   canSubmitAllMappings,
   checkGroups,
+  defaultInvoiceKindFor,
   groupByLayout,
   groupOfFile,
   rememberMapping,
@@ -48,6 +49,7 @@ import {
   returnToAutomatic,
   splitOut,
   suggestGroups,
+  type InvoiceKind,
   type MappingGroup,
 } from './lib/mappingGroups'
 import {
@@ -1155,6 +1157,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
                 mapping: toImportMapping(group.mapping),
                 rememberMapping: rememberMapping(group),
                 headerRow: group.headerRow,
+                defaultInvoiceKind: defaultInvoiceKindFor(group),
               },
               (phase) => {
                 localRun = runReducer(localRun, { type: 'phase', phase })
@@ -1329,6 +1332,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // `groupIndex` (and therefore the screen the operator is currently on) is unaffected.
   function splitOutFile(fileId: string) {
     setGroups((gs) => splitOut(gs, fileId))
+  }
+
+  function setInvoiceKind(groupId: string, kind: InvoiceKind | undefined) {
+    setGroups((gs) => gs.map((g) => (g.id === groupId ? { ...g, invoiceKind: kind } : g)))
   }
 
   function resetGroupToAutomatic() {
@@ -1740,6 +1747,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     startDocumentRun,
     splitOutFile,
     resetGroupToAutomatic,
+    setInvoiceKind,
     backToImport,
     restartImport,
     skipUpload,

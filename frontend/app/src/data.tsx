@@ -168,9 +168,7 @@ export const CANON: CanonField[] = IMPORT_KEYS.map((key) =>
   INVOICE_FIELDS.some((f) => f.importKey === key && f.required) ? { key, required: true } : { key },
 )
 
-// NO consumers — the Workflows builder's doc-type condition was the last one, and the
-// create form's picker went before it. Retained deliberately: this is the doc-type
-// vocabulary, and `invoices` still has no column to file a choice into.
+// The buyer-type vocabulary; the Map step's buyer-type select (CreateMapping) reads it.
 export const DOC_TYPE_DEFS: [string, string, string][] = [
   ['B2B', 'Business', 'Standard tax invoice'],
   ['B2G', 'Government', 'Routed to MDA portal'],

@@ -139,6 +139,11 @@ button {
   align-items: center;
   gap: 28px;
 }
+.a-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
 /* Room for the Library link before the burger edge. */
 @media (max-width: 1279px) {
   .a-nav {
@@ -189,6 +194,12 @@ button {
   }
   .a-burger {
     display: inline-flex;
+  }
+}
+/* Header row fits 375px: e2e/topology/design-system.spec.ts `landing header row at 390, 389 and 375`. */
+@media (max-width: 389.98px) {
+  .a-actions {
+    gap: 12px;
   }
 }
 @media (min-width: 1120.02px) {
@@ -451,9 +462,7 @@ html:has(.cookie-note) {
     padding: 16px;
     gap: 10px;
   }
-  .cn-actions {
-    flex-direction: column;
-  }
+  /* 44px touch target; landing-consent.spec.ts C9 and C9b measure it. */
   .cn-actions button {
     height: 44px;
   }

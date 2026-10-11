@@ -48,16 +48,24 @@ export function useTourSpot(tour: TourState | null, routeKey: string): { rect: R
     const onScroll = () => measure(false)
     const main = document.getElementById('lib-main')
     const nav = document.querySelector('aside nav')
+    // Web fonts swap in after the first measure and resize the nav row; re-read then.
+    const fonts = document.fonts
+    let live = true
+    const onFonts = () => live && measure(false)
+    void fonts?.ready.then(onFonts)
+    fonts?.addEventListener('loadingdone', onFonts)
     window.addEventListener('resize', onResize)
     main?.addEventListener('scroll', onScroll)
     nav?.addEventListener('scroll', onScroll)
-    // The Manrope swap resizes the target after the first measure; no resize or scroll event follows.
+    // Re-measure when the target resizes with no font, resize or scroll event.
     const stop = TOUR[i]
     const target = document.getElementById(phase === 'menu' ? `nav-${stop.g}` : `fc-${stop.f}`)
     const ro = target && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => measure(false)) : null
     if (target) ro?.observe(target)
     return () => {
       ro?.disconnect()
+      live = false
+      fonts?.removeEventListener('loadingdone', onFonts)
       window.removeEventListener('resize', onResize)
       main?.removeEventListener('scroll', onScroll)
       nav?.removeEventListener('scroll', onScroll)

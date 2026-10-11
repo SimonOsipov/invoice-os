@@ -68,7 +68,12 @@ describe('countsAsIssue', () => {
       ['TimeoutError, signal cancelled', new DOMException('t', 'TimeoutError'), cancelSignal, false],
       ['network, signal aborted with a string reason', new ApiError('network', 'm', null), AbortSignal.abort('why'), false],
       ['network, signal not aborted', new ApiError('network', 'm', null), new AbortController().signal, true],
-      ['AbortError, signal timed out', new DOMException('a', 'AbortError'), timeoutSignal, false],
+      ['AbortError, signal timed out', new DOMException('a', 'AbortError'), timeoutSignal, true],
+      ['AbortError, signal cancelled', new DOMException('a', 'AbortError'), cancelSignal, false],
+      ['AbortError, signal aborted with a string reason', new DOMException('a', 'AbortError'), AbortSignal.abort('why'), false],
+      ['AbortError, signal not aborted', new DOMException('a', 'AbortError'), new AbortController().signal, false],
+      ['an Error named AbortError, signal timed out', Object.assign(new Error('a'), { name: 'AbortError' }), timeoutSignal, false],
+      ['http 404, signal timed out', http(404), timeoutSignal, false],
       ['other DOMException', new DOMException('n', 'NetworkError'), undefined, false],
       ['an Error named AbortError', Object.assign(new Error('a'), { name: 'AbortError' }), undefined, false],
       ['a string', 'boom', undefined, false],
@@ -77,6 +82,17 @@ describe('countsAsIssue', () => {
     expect(rows.some((r) => r[3]) && rows.some((r) => !r[3])).toBe(true)
     const wrong = rows.filter(([, err, signal, want]) => countsAsIssue(err, signal) !== want).map((r) => r[0])
     expect(wrong).toEqual([])
+  })
+})
+
+describe('reportApiFailure', () => {
+  it('reportApiFailure_reportsAnAbortErrorOnATimedOutSignalAsNetwork', () => {
+    const e = new DOMException('a', 'AbortError')
+    const signal = AbortSignal.abort(new DOMException('t', 'TimeoutError'))
+    reportApiFailure(e, { method: 'POST', url: URL_, signal })
+    expect(reporter).toHaveBeenCalledTimes(1)
+    expect(reporter.mock.calls[0][0]).toEqual({ kind: 'network', status: null, method: 'POST', url: URL_, error: e })
+    expect(reporter.mock.calls[0][0].error).toBe(e)
   })
 })
 

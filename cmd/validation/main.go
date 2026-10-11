@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -63,6 +64,13 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/staff/rules", validation.StaffListRulesHandler(store.RulesOfVersion, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/rule-versions", validation.StaffVersionsHandler(store.Versions, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/staff/rules/{key}", validation.StaffSwitchRuleHandler(store.SwitchRule, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft", validation.StaffOpenDraftHandler(store.OpenDraft, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/rules", validation.StaffAddDraftRuleHandler(store.AddDraftRule, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/staff/rule-versions/draft/rules/{key}", validation.StaffEditDraftRuleHandler(store.EditDraftRule, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/staff/rule-versions/draft/rules/{key}", validation.StaffRemoveDraftRuleHandler(store.RemoveDraftRule, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/publish", validation.StaffPublishDraftHandler(func(ctx context.Context, from time.Time) (validation.DraftPublished, error) {
+		return store.PublishDraft(ctx, engine, from)
+	}, app.Logger))
 
 	// POST /v1/validate/batch — the tenant-free peer surface 03 (submission)
 	// calls to validate a whole batch in one request. It carries NO identity: it is

@@ -10,13 +10,19 @@ import (
 	"testing"
 )
 
-// A second Go caller of the SQL function could flip a rule with no staff_audit_log row:
-// the function takes a caller-supplied actor and writes no audit row itself.
+// A second Go caller of a staff SQL function could write rules with no staff_audit_log row:
+// each function takes a caller-supplied actor and writes no audit row itself.
 // It reads string literals only, so a comment naming the function is no caller.
-func TestSource_SetRuleEnabledHasOneCaller(t *testing.T) {
+func TestSource_StaffSQLFunctionsHaveOneCaller(t *testing.T) {
 	root := repoRoot(t)
-	const owner = "internal/validation/staff_rules.go"
-	var sawOwner bool
+	owners := map[string]string{
+		"set_rule_enabled":       "internal/validation/staff_rules.go",
+		"rule_draft_open":        "internal/validation/staff_drafts.go",
+		"rule_draft_put_rule":    "internal/validation/staff_drafts.go",
+		"rule_draft_remove_rule": "internal/validation/staff_drafts.go",
+		"rule_draft_publish":     "internal/validation/staff_drafts.go",
+	}
+	sawOwner := map[string]bool{}
 	for _, dir := range []string{"cmd", "internal", "tools"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -26,30 +32,34 @@ func TestSource_SetRuleEnabledHasOneCaller(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			var found bool
-			ast.Inspect(f, func(n ast.Node) bool {
-				if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING &&
-					strings.Contains(strings.ToLower(lit.Value), "set_rule_enabled") {
-					found = true
-				}
-				return !found
-			})
-			if !found {
-				return nil
-			}
 			rel, _ := filepath.Rel(root, path)
-			if rel = filepath.ToSlash(rel); rel == owner {
-				sawOwner = true
-				return nil
-			}
-			t.Errorf("%s names set_rule_enabled in a string: the function takes a caller-supplied actor and writes no audit row, so only %s may call it", rel, owner)
+			rel = filepath.ToSlash(rel)
+			ast.Inspect(f, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					return true
+				}
+				for fn, owner := range owners {
+					if !strings.Contains(strings.ToLower(lit.Value), fn) {
+						continue
+					}
+					if rel == owner {
+						sawOwner[fn] = true
+					} else {
+						t.Errorf("%s names %s in a string: the function takes a caller-supplied actor and writes no audit row, so only %s may call it", rel, fn, owner)
+					}
+				}
+				return true
+			})
 			return nil
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	if !sawOwner {
-		t.Fatalf("the scan did not find set_rule_enabled in %s: it reads nothing", owner)
+	for fn, owner := range owners {
+		if !sawOwner[fn] {
+			t.Errorf("the scan did not find %s in %s: it reads nothing", fn, owner)
+		}
 	}
 }

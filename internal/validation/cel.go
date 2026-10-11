@@ -48,6 +48,18 @@ func evalCELBool(expr string, p Payload) (bool, error) {
 	return b, nil
 }
 
+// compileCEL compiles expr in the evalCELBool environment without evaluating it.
+func compileCEL(expr string) error {
+	env, err := cel.NewEnv(cel.Variable("invoice", cel.DynType))
+	if err != nil {
+		return fmt.Errorf("validation: cel env: %w", err)
+	}
+	if _, iss := env.Compile(expr); iss != nil && iss.Err() != nil {
+		return fmt.Errorf("validation: cel compile %q: %w", expr, iss.Err())
+	}
+	return nil
+}
+
 // celEvaluator implements Evaluator and lineEvaluator for `type: cel` rules:
 // params {"expr": <CEL string>}. A true expr passes; false is a violation. A
 // rule shaped `[!has(invoice.T) ||] invoice.T.all(v, body)` with T = r.Target

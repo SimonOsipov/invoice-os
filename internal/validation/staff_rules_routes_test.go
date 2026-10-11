@@ -3,11 +3,13 @@ package validation
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -19,6 +21,7 @@ const (
 	routesGatewayToken = "routes-test-gateway-token"
 	routesSubject      = "11111111-1111-1111-1111-111111111111"
 	switchBody         = `{"enabled":false,"reason":"r"}`
+	ruleBody           = `{"type":"required","severity":"error","message":"m","enabled":true}`
 )
 
 type routesRig struct {
@@ -26,6 +29,7 @@ type routesRig struct {
 	lists    atomic.Int32
 	versions atomic.Int32
 	switches atomic.Int32
+	drafts   atomic.Int32
 	actor    atomic.Value // Subject that StaffFromContext reported
 }
 
@@ -53,6 +57,28 @@ func newRoutesRig(t *testing.T) *routesRig {
 		rig.actor.Store(id.Subject)
 		return SwitchResult{Key: key, Enabled: enabled}, nil
 	}, nil))
+	count := func() { rig.drafts.Add(1) }
+	log := slog.Default()
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft", StaffOpenDraftHandler(func(context.Context) (DraftOpened, error) {
+		count()
+		return DraftOpened{}, nil
+	}, log))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/rules", StaffAddDraftRuleHandler(func(context.Context, string, validated) (DraftRuleResult, error) {
+		count()
+		return DraftRuleResult{}, nil
+	}, log))
+	app.Mux.HandleFunc("PUT /v1/staff/rule-versions/draft/rules/{key}", StaffEditDraftRuleHandler(func(context.Context, string, validated) (DraftRuleEdited, error) {
+		count()
+		return DraftRuleEdited{}, nil
+	}, log))
+	app.Mux.HandleFunc("DELETE /v1/staff/rule-versions/draft/rules/{key}", StaffRemoveDraftRuleHandler(func(context.Context, string) (DraftRuleResult, error) {
+		count()
+		return DraftRuleResult{}, nil
+	}, log))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/publish", StaffPublishDraftHandler(func(context.Context, time.Time) (DraftPublished, error) {
+		count()
+		return DraftPublished{}, nil
+	}, log))
 	app.Mux.HandleFunc("PATCH /v1/rules/{key}", ToggleHandler())
 	app.RequireGateway(routesGatewayToken)
 	rig.h = app.Handler()
@@ -99,14 +125,19 @@ func TestStaffRulesRoutes_RefuseEveryNonRulesCaller(t *testing.T) {
 				{"GET", "/v1/staff/rules?version=4", ""},
 				{"GET", "/v1/staff/rule-versions", ""},
 				{"PATCH", "/v1/staff/rules/vat-standard-rate", switchBody},
+				{"POST", "/v1/staff/rule-versions/draft", ""},
+				{"POST", "/v1/staff/rule-versions/draft/rules", `{"key":"k",` + ruleBody[1:]},
+				{"PUT", "/v1/staff/rule-versions/draft/rules/k", ruleBody},
+				{"DELETE", "/v1/staff/rule-versions/draft/rules/k", ""},
+				{"POST", "/v1/staff/rule-versions/draft/publish", `{"effective_from":"3001-01-01"}`},
 			} {
 				rec := rig.do(c, req.method, req.path, req.body)
 				if rec.Code != 403 {
 					t.Errorf("%s %s = %d (%s), want 403", req.method, req.path, rec.Code, rec.Body.String())
 				}
 			}
-			if rig.lists.Load() != 0 || rig.switches.Load() != 0 || rig.versions.Load() != 0 {
-				t.Errorf("handlers ran: list %d, switch %d, versions %d, want 0", rig.lists.Load(), rig.switches.Load(), rig.versions.Load())
+			if rig.lists.Load() != 0 || rig.switches.Load() != 0 || rig.versions.Load() != 0 || rig.drafts.Load() != 0 {
+				t.Errorf("handlers ran: list %d, switch %d, versions %d, drafts %d, want 0", rig.lists.Load(), rig.switches.Load(), rig.versions.Load(), rig.drafts.Load())
 			}
 		})
 	}
@@ -125,9 +156,20 @@ func TestStaffRulesRoutes_RefuseEveryNonRulesCaller(t *testing.T) {
 			if rec := rig.do(c, "PATCH", "/v1/staff/rules/vat-standard-rate", switchBody); rec.Code != 200 {
 				t.Errorf("PATCH = %d (%s), want 200", rec.Code, rec.Body.String())
 			}
+			for _, req := range []struct{ method, path, body string }{
+				{"POST", "/v1/staff/rule-versions/draft", ""},
+				{"POST", "/v1/staff/rule-versions/draft/rules", `{"key":"k",` + ruleBody[1:]},
+				{"PUT", "/v1/staff/rule-versions/draft/rules/k", ruleBody},
+				{"DELETE", "/v1/staff/rule-versions/draft/rules/k", ""},
+				{"POST", "/v1/staff/rule-versions/draft/publish", `{"effective_from":"3001-01-01"}`},
+			} {
+				if rec := rig.do(c, req.method, req.path, req.body); rec.Code/100 != 2 {
+					t.Errorf("%s %s = %d (%s), want 2xx", req.method, req.path, rec.Code, rec.Body.String())
+				}
+			}
 		}
-		if rig.lists.Load() != 4 || rig.switches.Load() != 2 || rig.versions.Load() != 2 {
-			t.Errorf("handler calls: list %d, switch %d, versions %d, want 4, 2 and 2", rig.lists.Load(), rig.switches.Load(), rig.versions.Load())
+		if rig.lists.Load() != 4 || rig.switches.Load() != 2 || rig.versions.Load() != 2 || rig.drafts.Load() != 10 {
+			t.Errorf("handler calls: list %d, switch %d, versions %d, drafts %d, want 4, 2, 2 and 10", rig.lists.Load(), rig.switches.Load(), rig.versions.Load(), rig.drafts.Load())
 		}
 		if got, _ := rig.actor.Load().(string); got != routesSubject {
 			t.Errorf("StaffFromContext subject = %q, want %q", got, routesSubject)

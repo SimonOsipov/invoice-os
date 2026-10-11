@@ -5,14 +5,14 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Locator, type Page, type Request, type Response, type TestInfo } from '@playwright/test'
-import { login, createEntity, createImportBatch, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type Persona } from '../api/client'
+import { login, createEntity, createImportBatch, getInvoice, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type Persona } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { GATEWAY_URL, shardTenants } from './targets'
 import { signInAs } from '../personaSession'
-import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv } from '../importFixtures'
+import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv, steerExplainMarker } from '../importFixtures'
 
 const SHARD = shardTenants('import-review-surfaces.spec.ts')
 const GATEWAY_ORIGIN = new URL(GATEWAY_URL).origin
@@ -1238,6 +1238,74 @@ test.describe('ENGI-16 import review opens the editor at the line', () => {
     const first = page.getByTestId('line-row').nth(1).locator('[data-line-field="description"]')
     await expect(first, 'line-row 2 first input takes focus').toBeFocused()
     await expect(first, 'line-row 2 first input is in the viewport').toBeInViewport()
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('ENGI-17 review: Explain proposes a line fix and Accept saves it', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `ENGI-17 review ${Date.now()}`, tin: freshTin() })
+    const invoiceNumber = `INV-ENGI17-${Date.now()}`
+    const marker = steerExplainMarker({
+      explanation: 'Line 2 has a unit price of -5.00, but a unit price cannot be negative.',
+      fix_field: 'unit_price',
+      fix_value: '5.00',
+    })
+    const batchId = await createImportBatch(token, entity.id, invoiceNumber, [
+      { item: 'Widget A', qty: '1', unitPrice: '100.00' },
+      { item: marker, qty: '1', unitPrice: '-5.00' },
+    ])
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${batchId}/review` })
+    const row = page.getByTestId('review-row').filter({ hasText: invoiceNumber })
+    await expect(row).toBeVisible({ timeout: 60_000 })
+    await row.click()
+
+    const open = page.getByTestId('review-fix-open-line').filter({ hasText: 'Open line 2' })
+    const card = page.getByTestId('review-fix-card').filter({ has: open })
+    const explain = card.getByTestId('review-fix-explain')
+    await expect(explain).toBeVisible()
+    await explain.click()
+    const panel = card.getByTestId('explain-panel')
+    await expect(panel.getByTestId('explain-text')).toContainText('cannot be negative')
+
+    const entry = page.viewportSize()
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await page.setViewportSize({ width, height: 900 })
+        await settleAnimations(card, explain, panel)
+        await expect
+          .poll(async () => enclosesRect((await card.boundingBox())!, (await explain.boundingBox())!, 1), {
+            message: `review-fix-explain sits inside its review-fix-card at ${width}px`,
+          })
+          .toBe(true)
+        await expect
+          .poll(async () => enclosesRect((await card.boundingBox())!, (await panel.boundingBox())!, 1), {
+            message: `explain-panel sits inside its review-fix-card at ${width}px`,
+          })
+          .toBe(true)
+        await assertPageDoesNotScrollSideways(page, `review at ${width}px`)
+      }
+    } finally {
+      if (entry) await page.setViewportSize(entry)
+    }
+
+    const found = (await listInvoices(token, { entity_id: entity.id })).invoices.find((i) => i.invoice_number === invoiceNumber)
+    expect(found, 'the import made the invoice').toBeDefined()
+    const before = (await getInvoice(token, found!.id)).line_items!
+
+    await panel.getByTestId('explain-accept').click()
+    await expect
+      .poll(async () => (await getInvoice(token, found!.id)).line_items![1].unit_price, { message: 'line 2 unit_price saved' })
+      .toMatch(/^5(\.0+)?$/)
+    const after = (await getInvoice(token, found!.id)).line_items!
+    expect(after, 'still two lines').toHaveLength(2)
+    // Edit re-inserts the lines, so row ids change; every other field must survive.
+    const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+    expect(withoutId(after[0]), 'line 1 unchanged').toEqual(withoutId(before[0]))
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

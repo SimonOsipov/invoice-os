@@ -4149,7 +4149,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	// the same way, 41 -> 43.
 	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason",
 		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
-		"can_correct_invoice_number", "invoice_number_blocked_reason"}
+		"can_correct_invoice_number", "invoice_number_blocked_reason", "verdict_stale"}
 
 	tests := []struct {
 		name              string
@@ -4320,6 +4320,8 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// EXTR-27-01: appended after reject_blocked_reason, so these now land
 		// last of all.
 		"can_correct_invoice_number", "invoice_number_blocked_reason",
+		// ENGI-17: appended after invoice_number_blocked_reason.
+		"verdict_stale",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
@@ -6397,5 +6399,22 @@ func TestCreateHandler_MissingNumberOutranksAMalformedSourceDocumentID(t *testin
 	}
 	if !strings.Contains(resp.Error, "invoice_number") {
 		t.Errorf("error = %q, want a message naming invoice_number", resp.Error)
+	}
+}
+
+func TestGetHandler_VerdictStaleIsTheStoresFlag(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	for _, stale := range []bool{true, false} {
+		inv := Invoice{ID: invoiceID, Status: StatusDraft, Violations: json.RawMessage(`[]`), VerdictStale: stale}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return inv, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("stale=%v: status %d err %v body=%s", stale, rec.Code, err, rec.Body.String())
+		}
+		if got, want := string(raw["verdict_stale"]), map[bool]string{true: "true", false: "false"}[stale]; got != want {
+			t.Errorf("verdict_stale = %s, want %s", got, want)
+		}
 	}
 }

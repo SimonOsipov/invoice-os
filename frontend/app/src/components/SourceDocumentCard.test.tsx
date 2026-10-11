@@ -46,6 +46,7 @@ function detailRecord(): InvoiceDetailRecord {
     line_items: [],
     rule_set_version: null,
     qr_png_base64: null,
+    verdict_stale: false,
     can_edit: false,
     can_revalidate: false,
     revalidate_blocked_reason: null,

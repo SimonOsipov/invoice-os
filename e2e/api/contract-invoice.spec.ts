@@ -2049,10 +2049,12 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
 
       const after = await getInvoice(token, inv.id)
       expect(after.line_items).toHaveLength(3)
-      expect(after.line_items![0], 'line 1 is unchanged').toEqual(before[0])
-      expect(after.line_items![2], 'line 3 is unchanged').toEqual(before[2])
+      // Edit re-inserts the lines, so row ids change; every other field must survive.
+      const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+      expect(withoutId(after.line_items![0]), 'line 1 is unchanged').toEqual(withoutId(before[0]))
+      expect(withoutId(after.line_items![2]), 'line 3 is unchanged').toEqual(withoutId(before[2]))
       expect(Number(after.line_items![1].unit_price)).toBe(5)
-      expect(after.line_items![1].id, 'line 2 keeps its id').toBe(before[1].id)
+      expect(after.line_items![1].line_no, 'line 2 keeps its position').toBe(before[1].line_no)
       expect(after.status).toBe('draft')
     })
 

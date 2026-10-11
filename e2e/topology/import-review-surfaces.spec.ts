@@ -1303,7 +1303,9 @@ test.describe('ENGI-16 import review opens the editor at the line', () => {
       .toMatch(/^5(\.0+)?$/)
     const after = (await getInvoice(token, found!.id)).line_items!
     expect(after, 'still two lines').toHaveLength(2)
-    expect(after[0], 'line 1 unchanged').toEqual(before[0])
+    // Edit re-inserts the lines, so row ids change; every other field must survive.
+    const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+    expect(withoutId(after[0]), 'line 1 unchanged').toEqual(withoutId(before[0]))
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

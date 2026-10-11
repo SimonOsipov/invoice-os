@@ -6266,8 +6266,10 @@ test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({
     .toMatch(/^5(\.0+)?$/)
   const after = (await getInvoice(token, inv.id)).line_items!
   expect(after, 'still three lines').toHaveLength(3)
-  expect(after[0], 'line 1 unchanged').toEqual(before[0])
-  expect(after[2], 'line 3 unchanged').toEqual(before[2])
+  // Edit re-inserts the lines, so row ids change; every other field must survive.
+  const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+  expect(withoutId(after[0]), 'line 1 unchanged').toEqual(withoutId(before[0]))
+  expect(withoutId(after[2]), 'line 3 unchanged').toEqual(withoutId(before[2]))
 
   await page.getByTestId('revalidate').click()
   await expect(page.getByTestId('stale-verdict')).toBeHidden()

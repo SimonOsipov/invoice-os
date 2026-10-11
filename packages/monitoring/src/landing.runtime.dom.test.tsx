@@ -278,8 +278,8 @@ describe('what the landing SDK sends', () => {
     for (const needle of [LEAD, COMPANY]) expect(raw, needle).not.toContain(needle)
   })
 
-  it('demoForm_failureIssueCarriesOnlyTheRoute', async () => {
-    hubspotStatus = 500
+  it.each([500, 404])('demoForm_failureIssueCarriesOnlyTheRoute %i', async (status) => {
+    hubspotStatus = status
     const sink: string[] = []
     window.history.replaceState(null, '', '/')
     boot(sink)
@@ -287,15 +287,16 @@ describe('what the landing SDK sends', () => {
     await demoPost()
     captureApiFailure({
       kind: 'http',
-      status: 500,
+      status,
       method: 'POST',
       url: 'https://api-eu1.hsforms.com/submissions/v3/integration/submit/148915098/abc-123-needle',
-      error: new Error('hubspot 500'),
+      error: new Error(`hubspot ${status}`),
     })
     await Sentry.flush(1000)
     const events = items(sink, 'event')
     expect(events.length, 'one event').toBe(1)
-    expect(events[0].body.exception.values[0].value).toBe('http 500 POST /submissions/v3/integration/submit/:id/:id')
+    expect(events[0].body.exception.values[0].value).toBe(`http ${status} POST /submissions/v3/integration/submit/:id/:id`)
+    expect(events[0].body.tags['api.status']).toBe(String(status))
     const raw = sink.join('\n')
     for (const needle of ['148915098', 'abc-123-needle', LEAD, COMPANY]) expect(raw, needle).not.toContain(needle)
   })

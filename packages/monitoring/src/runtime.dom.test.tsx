@@ -72,6 +72,9 @@ function boot(sink: string[], service: Service = 'app', over: Partial<Monitoring
 }
 
 async function reset(): Promise<void> {
+  // An open idle span's timer would end it into the next test's client through the shared scope.
+  const open = Sentry.getActiveSpan()
+  if (open) getRootSpan(open).end()
   await Sentry.close()
   Sentry.getCurrentScope().clear()
   Sentry.getIsolationScope().clear()

@@ -3,6 +3,7 @@ package codelist
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -11,8 +12,9 @@ import (
 )
 
 // apply replaces one list with the published state in a single transaction and
-// records the diff. The DELETE runs before the upsert so a failed upsert proves
-// the rollback (TestSync_DBErrorRollsBackTheList).
+// records the diff. A pull that omits over 10% of the stored codes is held
+// unless the list's latest sync row is released. The DELETE runs before the
+// upsert so a failed upsert proves the rollback (TestSync_DBErrorRollsBackTheList).
 func apply(ctx context.Context, pool *pgxpool.Pool, l List, grouped map[string][]json.RawMessage, entries int) (Change, error) {
 	codes := make([]string, 0, len(grouped))
 	texts := make([]string, 0, len(grouped))
@@ -38,6 +40,38 @@ func apply(ctx context.Context, pool *pgxpool.Pool, l List, grouped map[string][
 	existing, err := queryCodes(ctx, tx, `SELECT code FROM nrs_codes WHERE list = $1`, l.Name)
 	if err != nil {
 		return Change{}, fmt.Errorf("codelist: apply %s: read existing: %w", l.Name, err)
+	}
+	// ceiling: unindexed latest-row scan, index (list, synced_at) above ~100k rows
+	var latest string
+	if err := tx.QueryRow(ctx,
+		`SELECT status FROM nrs_code_list_syncs WHERE list = $1 ORDER BY synced_at DESC, id DESC LIMIT 1`,
+		l.Name).Scan(&latest); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Change{}, fmt.Errorf("codelist: apply %s: read latest status: %w", l.Name, err)
+	}
+	pulled := make(map[string]bool, len(codes))
+	for _, c := range codes {
+		pulled[c] = true
+	}
+	gone := []string{}
+	for _, c := range existing {
+		if !pulled[c] {
+			gone = append(gone, c)
+		}
+	}
+	slices.Sort(gone)
+	if latest != "released" && len(gone)*10 > len(existing) {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed, status, synced_at)
+VALUES ($1, $2, $3, $4, $5, 'held', clock_timestamp())`,
+			l.Name, entries, []string{}, gone, []string{}); err != nil {
+			return Change{}, fmt.Errorf("codelist: apply %s: record held sync: %w", l.Name, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return Change{}, fmt.Errorf("codelist: apply %s: commit: %w", l.Name, err)
+		}
+		return Change{Added: []string{}, Removed: gone, Changed: []string{}, Entries: entries, Held: true},
+			fmt.Errorf("codelist: %s held: pull omits %d of %d stored codes (over 10%%): %w",
+				l.Name, len(gone), len(existing), ErrHeld)
 	}
 	removed, err := queryCodes(ctx, tx,
 		`DELETE FROM nrs_codes WHERE list = $1 AND NOT (code = ANY($2::text[])) RETURNING code`, l.Name, codes)
@@ -72,7 +106,7 @@ RETURNING code`, l.Name, codes, texts)
 	slices.Sort(ch.Changed)
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed) VALUES ($1, $2, $3, $4, $5)`,
+		`INSERT INTO nrs_code_list_syncs (list, entry_count, added, removed, changed, synced_at) VALUES ($1, $2, $3, $4, $5, clock_timestamp())`,
 		l.Name, ch.Entries, ch.Added, ch.Removed, ch.Changed); err != nil {
 		return Change{}, fmt.Errorf("codelist: apply %s: record sync: %w", l.Name, err)
 	}

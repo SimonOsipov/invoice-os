@@ -172,7 +172,7 @@ export function Nav({
             </a>
           )}
         </nav>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+        <div className="a-actions">
           <button type="button" className="a-login a-link" onClick={onSignIn} style={{ fontSize: 14, fontWeight: 600 }}>
             Platform login
           </button>

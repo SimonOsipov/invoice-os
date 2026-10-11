@@ -1,5 +1,5 @@
-// nrs_code_list_syncs: invoice_app may INSERT (the syncer) and, from this migration, SELECT (the staff
-// sync-log read); it never UPDATEs or DELETEs. Every write rolls back.
+// nrs_code_list_syncs: invoice_app may INSERT (the syncer) and SELECT every column (the status migration
+// grants four, this migration the other four); it never UPDATEs or DELETEs. Every write rolls back.
 package db_test
 
 import (
@@ -30,6 +30,20 @@ func syncsPrivilege(t *testing.T, q interface {
 	return ok
 }
 
+// syncsReadColumns are the columns this migration grants; the status migration grants the rest.
+var syncsReadColumns = []string{"entry_count", "added", "removed", "changed"}
+
+func syncsColumnSelect(t *testing.T, q interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}, col, when string) bool {
+	t.Helper()
+	var ok bool
+	if err := q.QueryRow(context.Background(), `SELECT has_column_privilege('invoice_app', $1, $2, 'SELECT')`, syncsTable, col).Scan(&ok); err != nil {
+		t.Fatalf("has_column_privilege(%s) %s: %v", col, when, err)
+	}
+	return ok
+}
+
 func TestRLS_CodeListSyncsReadGrant(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -38,19 +52,30 @@ func TestRLS_CodeListSyncsReadGrant(t *testing.T) {
 		role, priv string
 		want       bool
 	}{
-		{"invoice_app", "SELECT", true},
 		{"invoice_app", "INSERT", true},
 		{"invoice_app", "UPDATE", false},
 		{"invoice_app", "DELETE", false},
 		{"invoice_app", "TRUNCATE", false},
 		{"invoice_app", "REFERENCES", false},
 		{"invoice_app", "TRIGGER", false},
-		{"invoice_tenant_reader", "SELECT", false},
 		{"invoice_tenant_reader", "INSERT", false},
 	} {
 		if got := syncsPrivilege(t, h.super, c.role, c.priv, "after the migration"); got != c.want {
 			t.Errorf("%s holds %s on nrs_code_list_syncs = %t, want %t", c.role, c.priv, got, c.want)
 		}
+	}
+
+	for _, col := range append([]string{"id", "list", "synced_at", "status"}, syncsReadColumns...) {
+		if !syncsColumnSelect(t, h.super, col, "after the migration") {
+			t.Errorf("invoice_app holds no SELECT on nrs_code_list_syncs.%s, want it", col)
+		}
+	}
+	var readerSelect bool
+	if err := h.super.QueryRow(ctx, `SELECT has_any_column_privilege('invoice_tenant_reader', $1, 'SELECT')`, syncsTable).Scan(&readerSelect); err != nil {
+		t.Fatalf("has_any_column_privilege reader: %v", err)
+	}
+	if readerSelect {
+		t.Error("invoice_tenant_reader holds a SELECT on nrs_code_list_syncs, want none")
 	}
 
 	// Column-level UPDATE would not show in the table-level check above.
@@ -62,7 +87,7 @@ func TestRLS_CodeListSyncsReadGrant(t *testing.T) {
 		t.Error("invoice_app holds a column UPDATE on nrs_code_list_syncs, want none")
 	}
 
-	// The whole non-owner ACL: this migration adds the SELECT and nothing else.
+	// The table-level non-owner ACL stays INSERT only; the SELECT grants are column-level.
 	rows, err := h.super.Query(ctx, `
 SELECT g.grantee::regrole::text, g.privilege_type
   FROM pg_class c, LATERAL aclexplode(c.relacl) g
@@ -83,7 +108,7 @@ SELECT g.grantee::regrole::text, g.privilege_type
 		t.Fatal(err)
 	}
 	sort.Strings(got)
-	if want := []string{"invoice_app:INSERT", "invoice_app:SELECT"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"invoice_app:INSERT"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("non-owner ACL of nrs_code_list_syncs = %v, want %v", got, want)
 	}
 
@@ -119,16 +144,25 @@ func TestRLS_CodeListSyncsReadDownAndUp(t *testing.T) {
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE invoice_migrator`); err != nil {
 		t.Fatalf("SET LOCAL ROLE invoice_migrator: %v", err)
 	}
-	if !syncsPrivilege(t, tx, "invoice_app", "SELECT", "before the Down") {
-		t.Fatal("before the Down: invoice_app holds no SELECT: is the migration applied?")
+	for _, col := range syncsReadColumns {
+		if !syncsColumnSelect(t, tx, col, "before the Down") {
+			t.Fatalf("before the Down: invoice_app holds no SELECT on %s: is the migration applied?", col)
+		}
 	}
 	for _, s := range down {
 		if _, err := tx.Exec(ctx, s); err != nil {
 			t.Fatalf("shipped Down statement %q: %v", s, err)
 		}
 	}
-	if syncsPrivilege(t, tx, "invoice_app", "SELECT", "after the Down") {
-		t.Error("after the Down: invoice_app still holds SELECT, want it revoked")
+	for _, col := range syncsReadColumns {
+		if syncsColumnSelect(t, tx, col, "after the Down") {
+			t.Errorf("after the Down: invoice_app still holds SELECT on %s, want it revoked", col)
+		}
+	}
+	for _, col := range []string{"id", "list", "synced_at", "status"} {
+		if !syncsColumnSelect(t, tx, col, "after the Down") {
+			t.Errorf("after the Down: invoice_app lost SELECT on %s, want the status migration's grant kept", col)
+		}
 	}
 	if !syncsPrivilege(t, tx, "invoice_app", "INSERT", "after the Down") {
 		t.Error("after the Down: invoice_app lost INSERT, want the syncer's grant kept")
@@ -136,8 +170,10 @@ func TestRLS_CodeListSyncsReadDownAndUp(t *testing.T) {
 	if _, err := tx.Exec(ctx, up); err != nil {
 		t.Fatalf("shipped Up as the migrator: %v", err)
 	}
-	if !syncsPrivilege(t, tx, "invoice_app", "SELECT", "after the Up") {
-		t.Error("after the Up: invoice_app holds no SELECT")
+	for _, col := range syncsReadColumns {
+		if !syncsColumnSelect(t, tx, col, "after the Up") {
+			t.Errorf("after the Up: invoice_app holds no SELECT on %s", col)
+		}
 	}
 	if syncsPrivilege(t, tx, "invoice_app", "UPDATE", "after the Up") || syncsPrivilege(t, tx, "invoice_app", "DELETE", "after the Up") {
 		t.Error("after the Up: invoice_app holds UPDATE or DELETE, want neither")

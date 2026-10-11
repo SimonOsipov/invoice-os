@@ -188,9 +188,8 @@ export function canStartImport(preview: ImportPreview | null, mapping: Mapping |
 //  1. entityAnswerSettled — the entities fetch must have definitively answered ('ready'
 //     or 'empty'); 'idle'/'loading'/'error' have not, and 'idle' also covers the
 //     no-gateway build.
-//  2. !rosterCatchingUp — `clients` is derived from `entities` by a useEffect one render
-//     late; on the render where the fetch resolves, entitiesState is already settled
-//     while `clients` is still [], which would otherwise flash the panel for one frame.
+//  2. !rosterCatchingUp — `entities` landed while `clients` is still [] would flash
+//     the panel for one frame.
 export function computeNoEntity(
   activeEntity: Entity | null,
   entitiesState: AsyncStatus,

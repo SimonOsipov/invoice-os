@@ -49,9 +49,9 @@ function typeInto(input: HTMLInputElement, value: string): void {
   input.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-async function mountCard(props: Partial<Parameters<typeof DemoLeadForm>[0]> = {}): Promise<void> {
+async function mountForm(props: Partial<Parameters<typeof DemoLeadForm>[0]> = {}): Promise<void> {
   await act(async () => {
-    root.render(createElement(DemoLeadForm, { idPrefix: 'dc', variant: 'card', ...props }))
+    root.render(createElement(DemoLeadForm, { idPrefix: 'dm', ...props }))
   })
 }
 
@@ -61,7 +61,7 @@ function $<T extends HTMLElement>(sel: string): T {
   return el!
 }
 
-async function fillValid(prefix = 'dc'): Promise<void> {
+async function fillValid(prefix = 'dm'): Promise<void> {
   await act(async () => {
     typeInto($<HTMLInputElement>(`#${prefix}-name`), 'Ada Okafor')
     typeInto($<HTMLInputElement>(`#${prefix}-email`), 'ada@okafor.ng')
@@ -83,7 +83,7 @@ describe('B1: a tripped honeypot is dropped silently', () => {
     openGate()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 })
     vi.stubGlobal('fetch', fetchMock)
-    await mountCard()
+    await mountForm()
     await fillValid()
 
     // Uncontrolled and read straight off the form, so a direct DOM write is exactly
@@ -116,76 +116,80 @@ describe('B2: a failed validation focuses the first field at fault', () => {
     openGate()
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 })
     vi.stubGlobal('fetch', fetchMock)
-    await mountCard()
+    await mountForm()
 
     const submit = $<HTMLButtonElement>('button[type="submit"]')
 
+    // The form focuses the name field on mount; move focus off it so the walk below proves the validation focus.
+    expect(document.activeElement?.id).toBe('dm-name')
+    submit.focus()
+    expect(document.activeElement).toBe(submit)
+
     // Nothing filled: name is at fault first.
     await act(async () => submit.click())
-    expect(document.activeElement?.id).toBe('dc-name')
+    expect(document.activeElement?.id).toBe('dm-name')
     expect(fetchMock).not.toHaveBeenCalled()
 
     // Name only: email is next.
-    await act(async () => typeInto($<HTMLInputElement>('#dc-name'), 'Ada Okafor'))
+    await act(async () => typeInto($<HTMLInputElement>('#dm-name'), 'Ada Okafor'))
     await act(async () => submit.click())
-    expect(document.activeElement?.id).toBe('dc-email')
+    expect(document.activeElement?.id).toBe('dm-email')
 
     // A malformed email is still an email fault, not a company one.
-    await act(async () => typeInto($<HTMLInputElement>('#dc-email'), 'ada-at-okafor'))
+    await act(async () => typeInto($<HTMLInputElement>('#dm-email'), 'ada-at-okafor'))
     await act(async () => submit.click())
-    expect(document.activeElement?.id).toBe('dc-email')
+    expect(document.activeElement?.id).toBe('dm-email')
     expect(container.textContent).toContain('Enter a valid work email address.')
 
     // Valid email, blank company.
-    await act(async () => typeInto($<HTMLInputElement>('#dc-email'), 'ada@okafor.ng'))
+    await act(async () => typeInto($<HTMLInputElement>('#dm-email'), 'ada@okafor.ng'))
     await act(async () => submit.click())
-    expect(document.activeElement?.id).toBe('dc-company')
+    expect(document.activeElement?.id).toBe('dm-company')
 
     // Everything but the box: consent is last and still blocks.
-    await act(async () => typeInto($<HTMLInputElement>('#dc-company'), 'Okafor & Partners'))
+    await act(async () => typeInto($<HTMLInputElement>('#dm-company'), 'Okafor & Partners'))
     await act(async () => submit.click())
-    expect(document.activeElement?.id).toBe('dc-consent')
+    expect(document.activeElement?.id).toBe('dm-consent')
     expect(container.textContent).toContain('Please confirm you agree before we can contact you.')
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 
-describe('B3: the card surface owns the same failure/retry contract as the popup', () => {
+describe('B3: the form owns the failure/retry contract', () => {
   it('shows the error panel, retries without retyping, and re-focuses the first field', async () => {
     openGate()
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('net')))
-    await mountCard()
+    await mountForm()
     await fillValid()
 
     await act(async () => $<HTMLButtonElement>('button[type="submit"]').click())
     await flushAsync()
 
     expect(container.textContent).toContain('Something went wrong')
-    const retry = $<HTMLButtonElement>('#dc-error-retry')
+    const retry = $<HTMLButtonElement>('#dm-error-retry')
     expect(document.activeElement).toBe(retry)
 
     await act(async () => retry.click())
 
-    expect($<HTMLInputElement>('#dc-name').value).toBe('Ada Okafor')
-    expect($<HTMLInputElement>('#dc-email').value).toBe('ada@okafor.ng')
-    expect($<HTMLInputElement>('#dc-company').value).toBe('Okafor & Partners')
-    expect($<HTMLInputElement>('#dc-consent').checked).toBe(true)
-    // A card mounts unfocused, but a panel that appears LATER still claims focus.
-    expect(document.activeElement?.id).toBe('dc-name')
+    expect($<HTMLInputElement>('#dm-name').value).toBe('Ada Okafor')
+    expect($<HTMLInputElement>('#dm-email').value).toBe('ada@okafor.ng')
+    expect($<HTMLInputElement>('#dm-company').value).toBe('Okafor & Partners')
+    expect($<HTMLInputElement>('#dm-consent').checked).toBe(true)
+    expect(document.activeElement?.id).toBe('dm-name')
   })
 
   it('without onDone the success panel renders no button and takes focus itself', async () => {
     openGate()
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }))
-    await mountCard()
+    await mountForm()
     await fillValid()
 
     await act(async () => $<HTMLButtonElement>('button[type="submit"]').click())
     await flushAsync()
 
     expect(container.textContent).toContain("You're booked")
-    expect(container.querySelector('#dc-success-done')).toBeNull()
-    expect(document.activeElement).toBe($<HTMLElement>('#dc-success'))
+    expect(container.querySelector('#dm-success-done')).toBeNull()
+    expect(document.activeElement).toBe($<HTMLElement>('#dm-success'))
   })
 })
 
@@ -196,8 +200,8 @@ describe('B4: two instances in one document share nothing', () => {
         createElement(
           'div',
           null,
-          createElement(DemoLeadForm, { key: 'dm', idPrefix: 'dm', variant: 'modal' }),
-          createElement(DemoLeadForm, { key: 'dc', idPrefix: 'dc', variant: 'card' }),
+          createElement(DemoLeadForm, { key: 'dm', idPrefix: 'dm' }),
+          createElement(DemoLeadForm, { key: 'zz', idPrefix: 'zz' }),
         ),
       )
     })
@@ -207,18 +211,18 @@ describe('B4: two instances in one document share nothing', () => {
     expect(new Set(ids).size).toBe(ids.length)
 
     await act(async () => typeInto($<HTMLInputElement>('#dm-name'), 'Popup Person'))
-    await act(async () => $<HTMLInputElement>('#dc-consent').click())
-    await act(async () => $<HTMLInputElement>('#dc-marketing').click())
+    await act(async () => $<HTMLInputElement>('#zz-consent').click())
+    await act(async () => $<HTMLInputElement>('#zz-marketing').click())
 
-    expect($<HTMLInputElement>('#dc-marketing').checked).toBe(true)
+    expect($<HTMLInputElement>('#zz-marketing').checked).toBe(true)
     expect($<HTMLInputElement>('#dm-marketing').checked).toBe(false)
     expect($<HTMLInputElement>('#dm-name').value).toBe('Popup Person')
-    expect($<HTMLInputElement>('#dc-name').value).toBe('')
-    expect($<HTMLInputElement>('#dc-consent').checked).toBe(true)
+    expect($<HTMLInputElement>('#zz-name').value).toBe('')
+    expect($<HTMLInputElement>('#zz-consent').checked).toBe(true)
     expect($<HTMLInputElement>('#dm-consent').checked).toBe(false)
 
     // Each label still points at its own control.
-    for (const prefix of ['dm', 'dc']) {
+    for (const prefix of ['dm', 'zz']) {
       const label = Array.from(container.querySelectorAll('label')).find((l) => l.htmlFor === `${prefix}-name`)
       expect(label, `expected a label for ${prefix}-name`).toBeDefined()
     }
@@ -230,7 +234,7 @@ describe('B5: the in-flight guard is on the handler, not only the button', () =>
     openGate()
     const fetchMock = vi.fn(() => new Promise(() => {}))
     vi.stubGlobal('fetch', fetchMock)
-    await mountCard()
+    await mountForm()
     await fillValid()
 
     const form = $<HTMLFormElement>('form')
@@ -253,7 +257,7 @@ describe('B6: the injected submit prop still short-circuits the wire', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 })
     vi.stubGlobal('fetch', fetchMock)
     const injected = vi.fn<(lead: DemoLead) => Promise<void>>().mockRejectedValue(new Error('injected'))
-    await mountCard({ submit: injected })
+    await mountForm({ submit: injected })
     await fillValid()
 
     await act(async () => $<HTMLButtonElement>('button[type="submit"]').click())
@@ -280,9 +284,9 @@ describe('B6: the injected submit prop still short-circuits the wire', () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 })
     vi.stubGlobal('fetch', fetchMock)
     const injected = vi.fn<(lead: DemoLead) => Promise<void>>().mockResolvedValue(undefined)
-    await mountCard({ submit: injected })
+    await mountForm({ submit: injected })
     await fillValid()
-    await act(async () => $<HTMLInputElement>('#dc-marketing').click())
+    await act(async () => $<HTMLInputElement>('#dm-marketing').click())
 
     await act(async () => $<HTMLButtonElement>('button[type="submit"]').click())
     await flushAsync()

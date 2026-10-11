@@ -2055,6 +2055,9 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(withoutId(after.line_items![2]), 'line 3 is unchanged').toEqual(withoutId(before[2]))
       expect(Number(after.line_items![1].unit_price)).toBe(5)
       expect(after.line_items![1].line_no, 'line 2 keeps its position').toBe(before[1].line_no)
+      const { unit_price: _a, ...fixedAfter } = withoutId(after.line_items![1])
+      const { unit_price: _b, ...fixedBefore } = withoutId(before[1])
+      expect(fixedAfter, 'line 2 changes only unit_price').toEqual(fixedBefore)
       expect(after.status).toBe('draft')
     })
 

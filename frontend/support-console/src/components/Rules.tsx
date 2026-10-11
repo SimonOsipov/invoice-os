@@ -220,8 +220,8 @@ export function Rules({ rules, status, errorText, version, state, versions, vers
               <span>
                 <SeverityBadge severity={r.severity} />
               </span>
-              <span className="mono" style={{ fontSize: 10.5, color: r.scope === 'global' ? 'var(--fg-3)' : 'var(--action)', fontWeight: 600 }}>
-                {r.scope === 'global' ? 'GLOBAL' : 'TENANT'}
+              <span className="mono" style={{ fontSize: 10.5, color: r.scope === 'tenant-override' ? 'var(--action)' : 'var(--fg-3)', fontWeight: 600 }}>
+                {r.scope === 'tenant-override' ? 'TENANT' : r.scope.toUpperCase()}
               </span>
               <span style={{ fontSize: 12, color: 'var(--fg-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 12 }}>{r.message}</span>
               {/* The toggle sits inside a clickable row, so its own click must not also

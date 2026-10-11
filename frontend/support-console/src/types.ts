@@ -19,9 +19,8 @@ export type SubTab = 'jobs' | 'recon'
 
 export type Severity = 'error' | 'warn' | 'info'
 
-// 'global' applies to every tenant; 'tenant-override' means at least one tenant has
-// its own variant. The console renders these as GLOBAL / TENANT (proto:910).
-export type RuleScope = 'global' | 'tenant-override'
+// The wire value (rule.go scope, 'document' in v1); the seed fixture also uses 'global' and 'tenant-override'.
+export type RuleScope = string
 
 export interface Job {
   id: string

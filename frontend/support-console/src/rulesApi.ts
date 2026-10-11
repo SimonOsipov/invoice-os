@@ -58,7 +58,7 @@ export const toRule = (w: WireRule): Rule => ({
   type: w.type,
   field: w.target,
   severity: (w.severity === 'warning' ? 'warn' : w.severity) as Severity,
-  scope: 'global',
+  scope: w.scope,
   enabled: w.enabled,
   message: w.message,
   params: w.params,

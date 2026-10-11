@@ -16,7 +16,7 @@ import { Badge } from './components/StatusBadge'
 import { Toast } from './components/Toast'
 import { TopBar } from './components/TopBar'
 import { AUDIT_ENTRIES, NAV_ITEMS, SEED_JOBS } from './data'
-import type { DiffRow } from './rulesApi'
+import { toRule, type DiffRow } from './rulesApi'
 import { SEED_RULES } from './rulesFixture'
 import type { CodeListSync, Env, Screen } from './types'
 
@@ -538,6 +538,10 @@ describe('v2 shell', () => {
     expect(json, 'the JSON block').not.toBeNull()
     expect(json![1]).toContain('&quot;when&quot;: &quot;has(invoice.x)&quot;')
     expect(json![1]).toContain('&quot;min&quot;: 0')
+    const wired = renderToStaticMarkup(createElement(RuleDrawer, { rule: toRule({ key: 'k', type: 'cel', target: 'invoice.total', params: {}, severity: 'warning', when: null, scope: 'document', message: 'm', enabled: true }), inForce: true, busy: false, onKill: noop, onClose: noop }))
+    const wiredJson = wired.match(/<pre class="ops-json">([\s\S]*?)<\/pre>/)![1]
+    for (const want of ['&quot;target&quot;', '&quot;scope&quot;: &quot;document&quot;', '&quot;severity&quot;: &quot;warning&quot;']) expect(wiredJson).toContain(want)
+    expect(wiredJson).not.toContain('&quot;field&quot;')
     const bare = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: true, busy: false, onKill: noop, onClose: noop }))
     expect(bare, 'no When row when unset').not.toContain('>When<')
   })

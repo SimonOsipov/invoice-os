@@ -23,12 +23,11 @@ type Props = {
   onClose: () => void
 }
 
-const ruleJSON = (rule: Rule): string =>
-  JSON.stringify(
-    { key: rule.key, type: rule.type, field: rule.field, severity: rule.severity, scope: rule.scope, enabled: rule.enabled, params: rule.params, when: rule.when, message: rule.message },
-    null,
-    2,
-  )
+// The rule as the API holds it: wire keys and severity.
+const ruleJSON = (rule: Rule): string => {
+  const { target, severity } = formFromRule(rule)
+  return JSON.stringify({ key: rule.key, type: rule.type, target, severity, scope: rule.scope, enabled: rule.enabled, params: rule.params, when: rule.when, message: rule.message }, null, 2)
+}
 
 const readOnlyRow = (label: string, value: string, mono: boolean) => (
   <div key={label}>

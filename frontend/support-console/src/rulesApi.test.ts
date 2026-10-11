@@ -59,7 +59,7 @@ afterEach(() => {
 
 describe('rulesApi', () => {
   it('toRule maps a wire rule onto the console Rule', () => {
-    expect(toRule(wire)).toEqual({ key: 'k', type: 'cel', field: 'invoice.total', severity: 'warn', scope: 'global', enabled: false, message: 'm', params: { min: 0 }, when: null })
+    expect(toRule(wire)).toEqual({ key: 'k', type: 'cel', field: 'invoice.total', severity: 'warn', scope: 'document', enabled: false, message: 'm', params: { min: 0 }, when: null })
     expect(toRule({ ...wire, severity: 'error' }).severity).toBe('error')
     expect(toRule({ ...wire, severity: 'info' }).severity).toBe('info')
   })

@@ -43,6 +43,7 @@ import {
   createEntity,
   createInvoice,
   validateInvoice,
+  explainViolation,
   rawFetch,
   listInvoices,
   getInvoice,
@@ -61,6 +62,7 @@ import {
   type Entity,
 } from './client'
 import { freshTin, freshPolicyName } from './fixtures'
+import { EXPLAIN_UNAVAILABLE_MARKER, steerExplainMarker, steerMarker } from '../importFixtures'
 import { assertErrorEnvelope, ensureFirmPolicyActive } from './contract-helpers'
 
 // cleanInvoiceFields(): own copy (repo convention — no cross-suite imports
@@ -1993,6 +1995,115 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       })
       assertErrorEnvelope(res, 400, 'a malformed issue_time')
       expect((res.body as { error: string }).error).toBe('issue_time must be HH:MM:SS')
+    })
+  })
+
+  test.describe('explain', () => {
+    const RULE = 'line-cost-non-negative'
+    const PATH = 'line_items[2]'
+    const ANSWER = {
+      explanation: 'Line 2 has a unit price of -5.00, but a unit price cannot be negative.',
+      fix_field: 'unit_price',
+      fix_value: '5.00',
+    }
+
+    // Three lines, line 2 negative; line 3's description carries the marker the fake AI reads.
+    async function validatedWith(marker: string, tok = token) {
+      const inv = await createInvoice(tok, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-EXPLAIN-${freshTin()}`),
+        subtotal: '100',
+        vat: '7.50',
+        total: '107.50',
+        line_items: [
+          { description: 'Widget A', quantity: '1', unit_price: '105.00', line_total: '105.00' },
+          { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '-5.00' },
+          { description: marker, quantity: '1', unit_price: '0.00', line_total: '0.00' },
+        ],
+      })
+      const v = await validateInvoice(tok, inv.id)
+      expect(v.violations.map((x) => x.rule_key), 'setup: the negative line fails its rule').toContain(RULE)
+      return inv
+    }
+
+    test('explain answers a steered line fix, and the fix PATCH keeps the other lines', async () => {
+      const inv = await validatedWith(steerExplainMarker(ANSWER))
+      const res = await explainViolation(token, inv.id, { rule_key: RULE, path: PATH })
+      expect(res.status).toBe('ok')
+      expect(res.explanation).toBe(ANSWER.explanation)
+      expect(res.fix).toMatchObject({ field: 'unit_price', line: 2, current: '-5.00', value: '5.00' })
+
+      const before = (await getInvoice(token, inv.id)).line_items!
+      expect(before).toHaveLength(3)
+      // The body the SPA's fixPatch (frontend/app/src/lib/explain.ts) builds: every line with its id, one value changed.
+      // line_tax is null on a stored line; the client type only models strings, the wire carries null.
+      const line_items = before.map((l) => ({
+        id: l.id,
+        description: l.description!,
+        quantity: l.quantity!,
+        unit_price: l.line_no === 2 ? res.fix!.value : l.unit_price!,
+        line_total: l.line_total!,
+        line_tax: l.line_tax as string,
+      }))
+      await editInvoice(token, inv.id, { line_items })
+
+      const after = await getInvoice(token, inv.id)
+      expect(after.line_items).toHaveLength(3)
+      // Edit re-inserts the lines, so row ids change; every other field must survive.
+      const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+      expect(withoutId(after.line_items![0]), 'line 1 is unchanged').toEqual(withoutId(before[0]))
+      expect(withoutId(after.line_items![2]), 'line 3 is unchanged').toEqual(withoutId(before[2]))
+      expect(Number(after.line_items![1].unit_price)).toBe(5)
+      expect(after.line_items![1].line_no, 'line 2 keeps its position').toBe(before[1].line_no)
+      const { unit_price: _a, ...fixedAfter } = withoutId(after.line_items![1])
+      const { unit_price: _b, ...fixedBefore } = withoutId(before[1])
+      expect(fixedAfter, 'line 2 changes only unit_price').toEqual(fixedBefore)
+      expect(after.status).toBe('draft')
+    })
+
+    test('explain says unavailable when the fake AI fails', async () => {
+      const inv = await validatedWith(EXPLAIN_UNAVAILABLE_MARKER)
+      const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { rule_key: RULE, path: PATH },
+      })
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ status: 'unavailable', explanation: null, fix: null })
+    })
+
+    test('an unscoped AI marker does not steer explain', async () => {
+      const inv = await validatedWith(steerMarker(ANSWER))
+      const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { rule_key: RULE, path: PATH },
+      })
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ status: 'unavailable', explanation: null, fix: null })
+    })
+
+    test("explain on another tenant's invoice is 404", async () => {
+      const inv = await validatedWith(steerExplainMarker(ANSWER))
+      const tokenB = await login(PERSONAS.B)
+      const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenB}` },
+        body: { rule_key: RULE, path: PATH },
+      })
+      assertErrorEnvelope(res, 404, "another tenant's invoice")
+    })
+
+    test('explain on a violation not on the verdict is 409', async () => {
+      const inv = await validatedWith(steerExplainMarker(ANSWER))
+      const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { rule_key: 'currency-allowed', path: 'currency' },
+      })
+      assertErrorEnvelope(res, 409, 'a violation not on the verdict')
+      // handlers.go statusForErr's ErrViolationGone message
+      expect((res.body as { error: string }).error).toBe("the violation is not on this invoice's last validation")
     })
   })
 })

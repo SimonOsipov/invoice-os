@@ -69,7 +69,7 @@ function detailRecord(): InvoiceDetailRecord {
     subtotal: '1000.00', vat: '75.00', total: '1075.00', violations: [], rule_set_version_id: null,
     created_at: '2026-06-12T09:15:00Z', irn: null, csid: null, qr_payload: null, rejection_reasons: [],
     kept_as_is_at: null, kept_as_is_by: null, kept_as_is_reason: null, failure_kind: null,
-    line_items: [], rule_set_version: null, qr_png_base64: null, can_edit: false, can_revalidate: false,
+    line_items: [], rule_set_version: null, qr_png_base64: null, verdict_stale: false, can_edit: false, can_revalidate: false,
     revalidate_blocked_reason: null, can_submit: true, submit_blocked_reason: null, can_view_ubl: true,
     ubl_blocked_reason: null, can_resolve_outside: false, resolve_outside_blocked_reason: null,
     can_approve: false, approve_blocked_reason: null, can_reject: false, reject_blocked_reason: null,

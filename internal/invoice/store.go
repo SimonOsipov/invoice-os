@@ -398,6 +398,12 @@ func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
 		return Invoice{}, err
 	}
 
+	var verdictFP *string
+	if err := tx.QueryRow(ctx, `SELECT verdict_fingerprint FROM invoices WHERE id = $1`, inv.ID).Scan(&verdictFP); err != nil {
+		return Invoice{}, err
+	}
+	inv.VerdictStale = verdictFP != nil && *verdictFP != contentFingerprint(inv, lines)
+
 	return inv, nil
 }
 
@@ -2252,8 +2258,8 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 
 		// 4. stamp the verdict, blocking or not.
 		if err := scanInvoice(tx.QueryRow(ctx,
-			`UPDATE invoices SET violations = $1, rule_set_version_id = $2 WHERE id = $3 RETURNING `+invoiceColumns,
-			violationsJSON, ruleSetVersionID, id,
+			`UPDATE invoices SET violations = $1, rule_set_version_id = $2, verdict_fingerprint = $3 WHERE id = $4 RETURNING `+invoiceColumns,
+			violationsJSON, ruleSetVersionID, evaluatedFingerprint, id,
 		), &inv); err != nil {
 			return err
 		}

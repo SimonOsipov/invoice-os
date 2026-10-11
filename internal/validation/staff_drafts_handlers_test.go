@@ -349,3 +349,42 @@ func TestValidateDraftRule_NormalisesBody(t *testing.T) {
 		t.Errorf("got %+v, want trimmed message, params {}, no when, empty target", v)
 	}
 }
+
+// A valid body padded with trailing spaces to exactly the limit passes; one byte more is 413.
+func TestStaffDraftsHandlers_BodyLimitsAreExact(t *testing.T) {
+	var calls int
+	add := StaffAddDraftRuleHandler(func(context.Context, string, validated) (DraftRuleResult, error) {
+		calls++
+		return DraftRuleResult{}, nil
+	}, nil)
+	edit := StaffEditDraftRuleHandler(func(context.Context, string, validated) (DraftRuleEdited, error) {
+		calls++
+		return DraftRuleEdited{}, nil
+	}, nil)
+	publish := StaffPublishDraftHandler(func(context.Context, time.Time) (DraftPublished, error) { calls++; return DraftPublished{}, nil }, nil)
+	padTo := func(body string, n int) string { return body + strings.Repeat(" ", n-len(body)) }
+	for _, c := range []struct {
+		name  string
+		h     http.HandlerFunc
+		body  string
+		limit int
+	}{
+		{"add", add, `{"key":"k",` + goodRuleJSON + `}`, 32 << 10},
+		{"edit", edit, `{` + goodRuleJSON + `}`, 32 << 10},
+		{"publish", publish, `{"effective_from":"3001-01-01"}`, 8 << 10},
+	} {
+		before := calls
+		rec, req := draftReq("POST", "/x", padTo(c.body, c.limit))
+		req.SetPathValue("key", "k")
+		c.h(rec, req)
+		if rec.Code/100 != 2 || calls != before+1 {
+			t.Errorf("%s at the limit = %d (%.80s), want 2xx and one call", c.name, rec.Code, rec.Body.String())
+		}
+		rec, req = draftReq("POST", "/x", padTo(c.body, c.limit+1))
+		req.SetPathValue("key", "k")
+		c.h(rec, req)
+		if rec.Code != 413 || calls != before+1 {
+			t.Errorf("%s one byte over = %d, want 413 and no further call", c.name, rec.Code)
+		}
+	}
+}

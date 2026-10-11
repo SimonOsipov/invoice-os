@@ -23,6 +23,7 @@ func TestSource_StaffSQLFunctionsHaveOneCaller(t *testing.T) {
 		"rule_draft_publish":     "internal/validation/staff_drafts.go",
 	}
 	sawOwner := map[string]bool{}
+	files := 0
 	for _, dir := range []string{"cmd", "internal", "tools"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -32,6 +33,7 @@ func TestSource_StaffSQLFunctionsHaveOneCaller(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			files++
 			rel, _ := filepath.Rel(root, path)
 			rel = filepath.ToSlash(rel)
 			ast.Inspect(f, func(n ast.Node) bool {
@@ -56,6 +58,9 @@ func TestSource_StaffSQLFunctionsHaveOneCaller(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	if files < 100 {
+		t.Errorf("the scan parsed %d non-test Go files, want at least 100: it walks the wrong root", files)
 	}
 	for fn, owner := range owners {
 		if !sawOwner[fn] {

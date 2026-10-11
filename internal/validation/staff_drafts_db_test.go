@@ -8,6 +8,7 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -214,6 +215,24 @@ func TestStaffDrafts_PublishRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Each probe payload alone must be able to refuse the publish.
+	for key, expr := range map[string]string{
+		"e2e-empty-only":  `invoice.currency == "NGN"`,
+		"e2e-sample-only": `!has(invoice.currency) || invoice.currency + 1 == 2`,
+	} {
+		if _, err := store.AddDraftRule(ctx, key, mustValid(t, key, "cel", "m", `{"expr":`+strconv.Quote(expr)+`}`)); err != nil {
+			t.Fatal(err)
+		}
+		_, err = store.PublishDraft(ctx, eng, future)
+		if !errors.Is(err, ErrDraftInvalid) || !strings.Contains(err.Error(), key) {
+			t.Errorf("%s err = %v, want ErrDraftInvalid naming the rule", key, err)
+		}
+		stillDraft(key)
+		if _, err := store.RemoveDraftRule(ctx, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	if _, err := store.AddDraftRule(ctx, "e2e-list", mustValid(t, "e2e-list", "enum", "m", `{"list":"t-never-synced"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -325,6 +344,23 @@ func TestStaffDrafts_AuditFailureRollsBack(t *testing.T) {
 	if _, found := ruleMessage(t, super, draft.RuleSetVersionID.String(), draftNewKey); found {
 		t.Error("the rule survived a failed audit write")
 	}
+	recordStaff = orig
+	if _, err := store.AddDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "first")); err != nil {
+		t.Fatal(err)
+	}
+	recordStaff = func(context.Context, pgx.Tx, uuid.UUID, uuid.UUID, string, any) error { return boom }
+	if _, err := store.EditDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "second")); !errors.Is(err, boom) {
+		t.Fatalf("edit err = %v, want the audit error", err)
+	}
+	if msg, _ := ruleMessage(t, super, draft.RuleSetVersionID.String(), draftNewKey); msg != "first" {
+		t.Errorf("message after a failed audit write = %q, want first", msg)
+	}
+	if _, err := store.RemoveDraftRule(ctx, draftNewKey); !errors.Is(err, boom) {
+		t.Fatalf("remove err = %v, want the audit error", err)
+	}
+	if _, found := ruleMessage(t, super, draft.RuleSetVersionID.String(), draftNewKey); !found {
+		t.Error("the rule was removed despite a failed audit write")
+	}
 	far, _ := time.Parse("2006-01-02", deskFarDate)
 	if _, err := store.PublishDraft(ctx, NewDefaultEngine(), far); !errors.Is(err, boom) {
 		t.Fatalf("publish err = %v, want the audit error", err)
@@ -332,11 +368,13 @@ func TestStaffDrafts_AuditFailureRollsBack(t *testing.T) {
 	if isSealed(t, super, draft.RuleSetVersionID) {
 		t.Error("the draft was sealed despite a failed audit write")
 	}
-	if n := len(auditRowsOf(t, super, actor)); n != 1 {
-		t.Errorf("%d audit rows, want only the draft_opened row", n)
+	if n := len(auditRowsOf(t, super, actor)); n != 2 {
+		t.Errorf("%d audit rows, want only draft_opened and the successful rule_added", n)
 	}
 }
 
+// The holder commits a faulting rule under the lock. Publish must wait for the Go-side lock, then
+// see that rule; without it the pre-check reads before the commit and the SQL function seals the rule.
 func TestStaffDrafts_PublishHoldsTheDraftLock(t *testing.T) {
 	super, _, store, _, ctx := draftSetup(t)
 	draft, err := store.OpenDraft(ctx)
@@ -349,6 +387,11 @@ func TestStaffDrafts_PublishHoldsTheDraftLock(t *testing.T) {
 	}
 	defer func() { _ = holder.Rollback(context.Background()) }()
 	if _, err := holder.Exec(context.Background(), `SELECT pg_advisory_xact_lock(hashtext('rule_set_versions:draft'))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(context.Background(),
+		`INSERT INTO rules (rule_set_version_id, key, type, target, params, severity, message)
+		 VALUES ($1, 'e2e-late', 'cel', '', '{"expr":"invoice.missing.field == 1"}', 'error', 'late')`, draft.RuleSetVersionID); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -367,21 +410,20 @@ func TestStaffDrafts_PublishHoldsTheDraftLock(t *testing.T) {
 	}
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("publish after release: %v", err)
+		if !errors.Is(err, ErrDraftInvalid) || !strings.Contains(err.Error(), "e2e-late") {
+			t.Fatalf("publish after release = %v, want ErrDraftInvalid naming the rule written under the lock", err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("publish did not finish after the lock was released")
 	}
-	if !isSealed(t, super, draft.RuleSetVersionID) {
-		t.Error("draft not sealed")
+	if isSealed(t, super, draft.RuleSetVersionID) {
+		t.Error("the draft was sealed with a rule the pre-check never evaluated")
 	}
 }
 
 func TestStaffDrafts_NonUUIDSubjectIs403(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	ctx := staffCtx(t, "not-a-uuid")
 	store := NewStore(app)
 	count := func() (versions, audits int) {
 		t.Helper()
@@ -393,21 +435,26 @@ func TestStaffDrafts_NonUUIDSubjectIs403(t *testing.T) {
 	}
 	v0, a0 := count()
 	far, _ := time.Parse("2006-01-02", deskFarDate)
-	for name, err := range map[string]error{
-		"open": func() error { _, e := store.OpenDraft(ctx); return e }(),
-		"add": func() error {
-			_, e := store.AddDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "m"))
-			return e
-		}(),
-		"edit": func() error {
-			_, e := store.EditDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "m"))
-			return e
-		}(),
-		"remove":  func() error { _, e := store.RemoveDraftRule(ctx, draftNewKey); return e }(),
-		"publish": func() error { _, e := store.PublishDraft(ctx, NewDefaultEngine(), far); return e }(),
+	for who, ctx := range map[string]context.Context{
+		"subject not a uuid": staffCtx(t, "not-a-uuid"),
+		"no staff identity":  context.Background(),
 	} {
-		if !errors.Is(err, db.ErrNotStaff) {
-			t.Errorf("%s err = %v, want db.ErrNotStaff", name, err)
+		for name, err := range map[string]error{
+			"open": func() error { _, e := store.OpenDraft(ctx); return e }(),
+			"add": func() error {
+				_, e := store.AddDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "m"))
+				return e
+			}(),
+			"edit": func() error {
+				_, e := store.EditDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "m"))
+				return e
+			}(),
+			"remove":  func() error { _, e := store.RemoveDraftRule(ctx, draftNewKey); return e }(),
+			"publish": func() error { _, e := store.PublishDraft(ctx, NewDefaultEngine(), far); return e }(),
+		} {
+			if !errors.Is(err, db.ErrNotStaff) {
+				t.Errorf("%s / %s err = %v, want db.ErrNotStaff", who, name, err)
+			}
 		}
 	}
 	if v1, a1 := count(); v1 != v0 || a1 != a0 {
@@ -415,39 +462,96 @@ func TestStaffDrafts_NonUUIDSubjectIs403(t *testing.T) {
 	}
 }
 
+// A subject with no rules role, or no staff row at all, is refused on all five writes against a live
+// draft: nothing changes and no audit row is written.
 func TestStaffDrafts_NonRulesActorIsNotStaff(t *testing.T) {
-	super, app := dbTestPools(t)
-	removeDeskVersionsOnCleanup(t, super)
-	actor := uuid.NewString()
-	if _, err := super.Exec(context.Background(), `INSERT INTO staff_members (user_id, rules_role) VALUES ($1, false)`, actor); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM staff_members WHERE user_id = $1`, actor) })
-	if _, err := NewStore(app).OpenDraft(staffCtx(t, actor)); !errors.Is(err, db.ErrNotStaff) {
-		t.Fatalf("err = %v, want db.ErrNotStaff (42501 mapped)", err)
-	}
-	if n := unsealedCount(t, super); n != 0 {
-		t.Errorf("%d drafts, want 0", n)
-	}
-}
-
-// Every rule v4 ships must pass the desk's own checks, so a draft copied from v4 is editable.
-func TestStaffDrafts_EveryV4RuleValidates(t *testing.T) {
-	_, app, store, _, ctx := draftSetup(t)
-	_ = app
-	four := 4
-	got, err := store.RulesOfVersion(ctx, &four)
+	super, app, store, ruler, rulesCtx := draftSetup(t)
+	draft, err := store.OpenDraft(rulesCtx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Rules) == 0 {
-		t.Fatal("v4 has no rules")
+	revoked := uuid.NewString()
+	if _, err := super.Exec(context.Background(), `INSERT INTO staff_members (user_id, rules_role) VALUES ($1, false)`, revoked); err != nil {
+		t.Fatal(err)
 	}
-	for _, r := range got.Rules {
-		if _, err := validateDraftRule(r.Key, draftRuleRequest{
-			Type: r.Type, Target: r.Target, Params: r.Params, Severity: r.Severity, When: r.When, Message: r.Message, Enabled: &r.Enabled,
-		}); err != nil {
-			t.Errorf("v4 rule %s: %v", r.Key, err)
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM staff_members WHERE user_id = $1`, revoked)
+	})
+	before := contentOf(t, super, draft.RuleSetVersionID.String())
+	if len(before) == 0 {
+		t.Fatal("the draft holds no rules")
+	}
+	far, _ := time.Parse("2006-01-02", deskFarDate)
+	for name, actor := range map[string]string{"no rules role": revoked, "no staff row": uuid.NewString()} {
+		ctx := staffCtx(t, actor)
+		s := NewStore(app)
+		for op, err := range map[string]error{
+			"open": func() error { _, e := s.OpenDraft(ctx); return e }(),
+			"add": func() error {
+				_, e := s.AddDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "m"))
+				return e
+			}(),
+			"edit": func() error {
+				_, e := s.EditDraftRule(ctx, deskInForceKey, requiredRule(t, deskInForceKey, "m"))
+				return e
+			}(),
+			"remove":  func() error { _, e := s.RemoveDraftRule(ctx, deskInForceKey); return e }(),
+			"publish": func() error { _, e := s.PublishDraft(ctx, NewDefaultEngine(), far); return e }(),
+		} {
+			if !errors.Is(err, db.ErrNotStaff) {
+				t.Errorf("%s / %s err = %v, want db.ErrNotStaff", name, op, err)
+			}
 		}
+		if n := len(auditRowsOf(t, super, actor)); n != 0 {
+			t.Errorf("%s: %d audit rows, want 0", name, n)
+		}
+	}
+	if !reflect.DeepEqual(contentOf(t, super, draft.RuleSetVersionID.String()), before) || isSealed(t, super, draft.RuleSetVersionID) {
+		t.Error("a refused actor changed or sealed the draft")
+	}
+	if rows := auditRowsOf(t, super, ruler); len(rows) != 1 {
+		t.Errorf("rules actor has %d audit rows, want the draft_opened row only", len(rows))
+	}
+}
+
+// Every rule of every golden version must pass the desk's own checks, so a draft copied from the
+// version in force stays editable.
+func TestStaffDrafts_EveryGoldenRuleValidates(t *testing.T) {
+	super, _, store, _, ctx := draftSetup(t)
+	rows, err := super.Query(context.Background(),
+		`SELECT version FROM rule_set_versions WHERE sealed AND notes NOT LIKE $1 AND notes <> $2 ORDER BY version`, deskNotesLike, fixtureNotes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var versions []int
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		versions = append(versions, v)
+	}
+	rows.Close()
+	if len(versions) < 2 {
+		t.Fatalf("golden versions = %v, want at least v4 and v5", versions)
+	}
+	checked := 0
+	for _, v := range versions {
+		v := v
+		got, err := store.RulesOfVersion(ctx, &v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range got.Rules {
+			checked++
+			if _, err := validateDraftRule(r.Key, draftRuleRequest{
+				Type: r.Type, Target: r.Target, Params: r.Params, Severity: r.Severity, When: r.When, Message: r.Message, Enabled: &r.Enabled,
+			}); err != nil {
+				t.Errorf("v%d rule %s: %v", v, r.Key, err)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no golden rule was checked")
 	}
 }

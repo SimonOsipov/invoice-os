@@ -139,6 +139,13 @@ button {
   align-items: center;
   gap: 28px;
 }
+.a-bar {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
 .a-actions {
   display: flex;
   align-items: center;
@@ -202,10 +209,33 @@ button {
     display: none;
   }
 }
-/* Header row fits 375px: e2e/topology/design-system.spec.ts `landing header row at 390, 389 and 375`. */
+/* Header row fits 375px: e2e/topology/design-system.spec.ts `landing header row at 390, 389, 375, 360, 354, 353 and 320`. */
 @media (max-width: 389.98px) {
   .a-actions {
     gap: 12px;
+  }
+}
+/* Fits 360px; Book a demo gets a 44px hit area. Same topology test. */
+@media (max-width: 374.98px) {
+  .a-bar {
+    gap: 8px;
+  }
+  .a-actions .ds-btn {
+    position: relative;
+  }
+  .a-actions .ds-btn::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(50% - 22px);
+    height: 44px;
+  }
+}
+/* Fits 320px: header logo is the mark only. Same topology test. */
+@media (max-width: 353.98px) {
+  .a-bar .ds-logo-word {
+    display: none;
   }
 }
 @media (min-width: 1120.02px) {

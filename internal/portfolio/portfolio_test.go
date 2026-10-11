@@ -3641,3 +3641,210 @@ func TestStoreUpdate_PreparerCanSetNRSFields(t *testing.T) {
 		t.Errorf("stored telephone = %v (err %v), want +2348000000000", again.Telephone, err)
 	}
 }
+
+func nrsDistinct(prefix string) []string {
+	out := make([]string, len(nrsKeys))
+	for i, k := range nrsKeys {
+		out[i] = prefix + "-" + k
+	}
+	return out
+}
+
+func nrsCreateInput(vals []string) CreateInput {
+	return CreateInput{Name: "Acme", TIN: "1234567897",
+		Email: &vals[0], Telephone: &vals[1], Street: &vals[2], City: &vals[3],
+		PostalZone: &vals[4], Country: &vals[5], State: &vals[6], LGA: &vals[7]}
+}
+
+func nrsUpdateInput(i int, v *string) UpdateInput {
+	var u UpdateInput
+	f := []**string{&u.Email, &u.Telephone, &u.Street, &u.City, &u.PostalZone, &u.Country, &u.State, &u.LGA}
+	*f[i] = v
+	return u
+}
+
+func TestStoreUpdate_EachNRSKeySetsOnlyItself(t *testing.T) {
+	super, app, store, c, tenantID := nrsCtx(t, "admin")
+	created, err := store.Create(c, nrsCreateInput(nrsDistinct("old")))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for i, key := range nrsKeys {
+		got, err := store.Update(c, created.ID, nrsUpdateInput(i, strPtr("new-"+key)))
+		if err != nil {
+			t.Fatalf("Update %s: %v", key, err)
+		}
+		for j, v := range nrsValues(got) {
+			want := "old-" + nrsKeys[j]
+			if j <= i {
+				want = "new-" + nrsKeys[j]
+			}
+			if v == nil || *v != want {
+				t.Errorf("after PATCH %s: %s = %v, want %q", key, nrsKeys[j], v, want)
+			}
+		}
+		if got.Name != "Acme" || got.TIN == nil || *got.TIN != "1234567897" {
+			t.Errorf("after PATCH %s: name/tin changed: %q %v", key, got.Name, got.TIN)
+		}
+	}
+	var n int
+	if err := db.WithinTenantTx(context.Background(), app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(),
+			`SELECT count(*) FROM audit_log WHERE event = 'portfolio.entity.updated' AND payload->>'id' = $1 AND payload->'fields' = to_jsonb(ARRAY[payload->'fields'->>0]) AND payload->'fields'->>0 = ANY($2)`,
+			created.ID, nrsKeys).Scan(&n)
+	}); err != nil {
+		t.Fatalf("audit: %v", err)
+	}
+	if n != len(nrsKeys) {
+		t.Errorf("single-key audit rows = %d, want %d", n, len(nrsKeys))
+	}
+	_ = super
+}
+
+func TestStoreUpdate_EmptyUpdateInputRefused(t *testing.T) {
+	_, _, store, c, _ := nrsCtx(t, "admin")
+	if _, err := store.Update(c, uuid.NewString(), UpdateInput{}); !errors.Is(err, ErrValidation) {
+		t.Errorf("err = %v, want ErrValidation", err)
+	}
+	for i, key := range nrsKeys {
+		_, err := store.Update(c, uuid.NewString(), nrsUpdateInput(i, strPtr("x")))
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("only %s: err = %v, want ErrNotFound (guard passed)", key, err)
+		}
+	}
+}
+
+func TestStoreSetStatus_CarriesTheNRSFields(t *testing.T) {
+	_, _, store, c, _ := nrsCtx(t, "admin")
+	created, err := store.Create(c, nrsCreateInput(nrsDistinct("v")))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	for _, target := range []string{"archived", "active"} {
+		got, err := store.SetStatus(c, created.ID, target)
+		if err != nil {
+			t.Fatalf("SetStatus %s: %v", target, err)
+		}
+		vals := nrsValues(got)
+		if len(vals) != len(nrsKeys) {
+			t.Fatalf("got %d values", len(vals))
+		}
+		for i, v := range vals {
+			if v == nil || *v != "v-"+nrsKeys[i] {
+				t.Errorf("SetStatus %s: %s = %v, want %q", target, nrsKeys[i], v, "v-"+nrsKeys[i])
+			}
+		}
+	}
+}
+
+func TestStoreList_CarriesAllEightNRSFields(t *testing.T) {
+	_, _, store, c, _ := nrsCtx(t, "admin")
+	if _, err := store.Create(c, nrsCreateInput(nrsDistinct("l"))); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	other := CreateInput{Name: "Bare", TIN: "123456780006"}
+	if _, err := store.Create(c, other); err != nil {
+		t.Fatalf("Create bare: %v", err)
+	}
+	items, _, err := store.List(c, ListFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("rows = %d, want 2", len(items))
+	}
+	for _, e := range items {
+		for i, v := range nrsValues(e) {
+			if e.Name == "Acme" && (v == nil || *v != "l-"+nrsKeys[i]) {
+				t.Errorf("Acme %s = %v", nrsKeys[i], v)
+			}
+			if e.Name == "Bare" && v != nil {
+				t.Errorf("Bare %s = %q, want nil", nrsKeys[i], *v)
+			}
+		}
+	}
+}
+
+func TestStoreCreate_EmptyStringNRSStaysEmpty(t *testing.T) {
+	_, _, store, c, _ := nrsCtx(t, "admin")
+	in := CreateInput{Name: "Acme", TIN: "1234567897", Email: strPtr("")}
+	created, err := store.Create(c, in)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := store.GetByID(c, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Email == nil || *got.Email != "" {
+		t.Errorf("email = %v, want empty string", got.Email)
+	}
+	if got.Telephone != nil {
+		t.Errorf("telephone = %q, want nil (absent)", *got.Telephone)
+	}
+}
+
+func TestCreateHandler_ForwardsAndEchoesEachNRSKey(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	var seen CreateInput
+	create := func(ctx context.Context, in CreateInput) (Entity, error) {
+		seen = in
+		return Entity{ID: uuid.NewString(), Name: in.Name, Email: in.Email, Telephone: in.Telephone, Street: in.Street,
+			City: in.City, PostalZone: in.PostalZone, Country: in.Country, State: in.State, LGA: in.LGA,
+			Status: "active", CreatedAt: time.Now()}, nil
+	}
+	body := map[string]string{"name": "Acme", "tin": "1234567897"}
+	for _, k := range nrsKeys {
+		body[k] = "w-" + k
+	}
+	b, _ := json.Marshal(body)
+	r := httptest.NewRequest("POST", "/v1/entities", bytes.NewReader(b))
+	r = r.WithContext(auth.WithIdentity(r.Context(), id))
+	rec := httptest.NewRecorder()
+	CreateHandler(create, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	for i, v := range nrsValues(Entity{Email: seen.Email, Telephone: seen.Telephone, Street: seen.Street, City: seen.City,
+		PostalZone: seen.PostalZone, Country: seen.Country, State: seen.State, LGA: seen.LGA}) {
+		if v == nil || *v != "w-"+nrsKeys[i] {
+			t.Errorf("create input %s = %v", nrsKeys[i], v)
+		}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, k := range nrsKeys {
+		if m[k] != "w-"+k {
+			t.Errorf("response %s = %v", k, m[k])
+		}
+	}
+}
+
+func TestUpdateHandler_ForwardsEachNRSKeyAlone(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	for _, val := range []string{"v", ""} {
+		for i, key := range nrsKeys {
+			var seen UpdateInput
+			update := func(ctx context.Context, gotID string, in UpdateInput) (Entity, error) {
+				seen = in
+				return Entity{ID: gotID, Name: "n", Status: "active", CreatedAt: time.Now()}, nil
+			}
+			rec, _ := doUpdate(t, update, &id, uuid.NewString(), `{"`+key+`":"`+val+`"}`)
+			if rec.Code != http.StatusOK {
+				t.Errorf("%s=%q: status = %d, want 200", key, val, rec.Code)
+				continue
+			}
+			for j, p := range nrsValues(Entity{Email: seen.Email, Telephone: seen.Telephone, Street: seen.Street, City: seen.City,
+				PostalZone: seen.PostalZone, Country: seen.Country, State: seen.State, LGA: seen.LGA}) {
+				if j == i && (p == nil || *p != val) {
+					t.Errorf("%s=%q: forwarded %v", key, val, p)
+				}
+				if j != i && p != nil {
+					t.Errorf("%s=%q: %s leaked as %q", key, val, nrsKeys[j], *p)
+				}
+			}
+		}
+	}
+}

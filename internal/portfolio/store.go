@@ -162,7 +162,7 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 }
 
 // Update partially updates a business_entities row's mutable fields
-// (name/tin/registration/sector/address) and writes a
+// and writes a
 // "portfolio.entity.updated" audit row in the same transaction (M3-03-04,
 // task-37). An all-nil in is rejected as ErrValidation before any tx opens
 // (a no-op UPDATE is forbidden). A non-nil in.TIN is re-validated via

@@ -185,7 +185,7 @@ test('support console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or I
   expect(errors, `console errors on support console:\n${errors.join('\n')}`).toEqual([])
 })
 
-// 375, 389 and 390 are phone widths: they share one viewport height so only the width varies.
+// 390, 389, 375, 360, 354, 353 and 320 are phone widths: they share one viewport height so only the width varies.
 const phoneH = (width: number, other: number) => (width <= 390 ? 844 : other)
 
 type Measured = { tag: string; text: string; left: number; right: number; top: number; bottom: number; nav?: boolean }
@@ -199,6 +199,7 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
   // A tight row wraps a label rather than overlapping it, so the widest reading is the one-line height.
   let navLineHeight: number | undefined
   let gapAt390: number | undefined
+  let book375: { w: number; h: number } | undefined
 
   for (const width of widths) {
     await page.setViewportSize({ width, height: phoneH(width, 900) })
@@ -233,8 +234,21 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
         : null
       const logo = document.querySelector('header a[aria-label="ASComply Africa"]')
       const burger = document.querySelector('header button[aria-label="Menu"]')
+      const mark = document.querySelector('header a[aria-label="ASComply Africa"] img')
+      const word = document.querySelector('header .ds-logo-word')
+      let hit = null
+      if (bookDemo) {
+        const b = bookDemo.getBoundingClientRect()
+        const x = (b.left + b.right) / 2
+        const at = (y: number) => document.elementFromPoint(x, y) === bookDemo
+        hit = { hitAbove: at(b.top - 1.5), hitBelow: at(b.bottom + 1.5), missAbove: !at(b.top - 3), missBelow: !at(b.bottom + 3) }
+      }
       return {
         innerWidth: window.innerWidth,
+        docScrollWidth: document.documentElement.scrollWidth,
+        mark: mark ? measure(mark) : null,
+        wordShown: word ? measure(word).shown : false,
+        hit,
         all,
         row,
         content,
@@ -249,10 +263,11 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
     const all = m.all.map(strip)
     const row = m.row.map(strip).sort((a, b) => a.left - b.left)
     await testInfo.attach(`header-${width}.json`, {
-      body: JSON.stringify({ width, innerWidth: m.innerWidth, all, row, content: m.content, actions: m.actions }, null, 2),
+      body: JSON.stringify({ width, innerWidth: m.innerWidth, docScrollWidth: m.docScrollWidth, mark: m.mark, wordShown: m.wordShown, hit: m.hit, all, row, content: m.content, actions: m.actions }, null, 2),
       contentType: 'application/json',
     })
 
+    expect(m.docScrollWidth, `${width}px: the document scrolls sideways`).toBeLessThanOrEqual(m.innerWidth)
     expect(all.length, `${width}px: visible header elements measured`).toBeGreaterThanOrEqual(3)
     for (const e of all) {
       expect(e.left, `${width}px: <${e.tag}> "${e.text}" left edge`).toBeGreaterThanOrEqual(-1)
@@ -285,12 +300,37 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
     if (m.book && m.burger) {
       const bookToBurger = m.burger.left - m.book.right
       if (width === 390) gapAt390 = bookToBurger
+      if (width === 375) book375 = { w: m.book.right - m.book.left, h: m.book.bottom - m.book.top }
       if (width < 390) {
         expect(gapAt390, `${width}px: the 390 reading must run first`).toBeDefined()
         expect.soft(bookToBurger, `${width}px: Book a demo to burger gap vs the gap at 390 (${gapAt390})`).toBeLessThan(gapAt390!)
       }
     }
+    if (m.book) {
+      const { hitAbove, hitBelow, missAbove, missBelow } = m.hit!
+      if (width < 375) {
+        expect(book375, `${width}px: the 375 reading must run first`).toBeDefined()
+        expect(m.book.right - m.book.left, `${width}px: Book a demo width vs 375`).toBeCloseTo(book375!.w, 0)
+        expect(m.book.bottom - m.book.top, `${width}px: Book a demo height vs 375`).toBeCloseTo(book375!.h, 0)
+        expect(
+          { hitAbove, hitBelow, missAbove, missBelow },
+          `${width}px: Book a demo tap target is 44px tall (1.5px outside hits, 3px outside misses)`,
+        ).toEqual({ hitAbove: true, hitBelow: true, missAbove: true, missBelow: true })
+      } else {
+        expect({ hitAbove, hitBelow }, `${width}px: no hit area beyond the drawn Book a demo box`).toEqual({ hitAbove: false, hitBelow: false })
+      }
+    }
     if (width <= BURGER_MAX) {
+      const mk = m.mark
+      expect(mk, `${width}px: logo mark shown`).not.toBeNull()
+      expect(mk!.right - mk!.left, `${width}px: logo mark width`).toBeGreaterThan(0)
+      expect(mk!.bottom - mk!.top, `${width}px: logo mark height`).toBeGreaterThan(0)
+      expect(mk!.left, `${width}px: logo mark left in content box`).toBeGreaterThanOrEqual(m.content.left - 1)
+      expect(mk!.right, `${width}px: logo mark right in content box`).toBeLessThanOrEqual(m.content.right + 1)
+      expect(m.burger, `${width}px: burger shown`).not.toBeNull()
+      expect(m.burger!.right - m.burger!.left, `${width}px: burger width`).toBeGreaterThanOrEqual(44)
+      expect(m.burger!.bottom - m.burger!.top, `${width}px: burger height`).toBeGreaterThanOrEqual(44)
+      expect(m.wordShown, `${width}px: the wordmark is shown from 354px, hidden below`).toBe(width >= 354)
       expect(m.logo && m.book && m.burger, `${width}px: logo, Book a demo and burger shown`).toBeTruthy()
       const mid = (e: { top: number; bottom: number }) => (e.top + e.bottom) / 2
       for (const [name, e] of [['Book a demo', m.book!], ['burger', m.burger!]] as const) {
@@ -333,8 +373,8 @@ test('landing header row: inside the viewport and no overlap from 2560 to 834', 
   await assertHeaderRow(page, testInfo, [...WIDE_WIDTHS, 1279, 1240, CREATE_MAX + 1, CREATE_MAX, BURGER_MAX + 1, 1080, 834])
 })
 
-test('landing header row at 390, 389 and 375: inside the content box, one line, no overlap', async ({ page }, testInfo) => {
-  await assertHeaderRow(page, testInfo, [390, 389, 375])
+test('landing header row at 390, 389, 375, 360, 354, 353 and 320: inside the content box, one line, no overlap', async ({ page }, testInfo) => {
+  await assertHeaderRow(page, testInfo, [390, 389, 375, 360, 354, 353, 320])
 })
 
 // Resolved --header-h per width, from packages/design-tokens/v2/tokens/spacing.css (86; 73 at <=767px).

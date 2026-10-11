@@ -575,7 +575,9 @@ describe('v2 shell', () => {
   })
 
   it('a held sync says it is held and labels its removed codes Would remove (D32)', () => {
-    const html = drawerHtml([sync('held'), sync('applied')])
+    const html = drawerHtml([sync('held', { removed: ['HELD-GONE'] }), sync('applied', { removed: ['APPLIED-GONE'] })])
+    expect(html).toMatch(/>Would remove · 1<\/div><div[^>]*>HELD-GONE</)
+    expect(html).toMatch(/>Removed · 1<\/div><div[^>]*>APPLIED-GONE</)
     expect(html).toContain('HELD')
     expect(html).toContain('held, not applied')
     expect(html.match(/>Would remove · /g)).toHaveLength(1)
@@ -595,7 +597,7 @@ describe('v2 shell', () => {
   it('a held sync with zero removed codes still says held and Would remove · 0', () => {
     const html = drawerHtml([sync('held', { removed: [] })])
     expect(html).toContain('held, not applied')
-    expect(html).toContain('>Would remove · 0')
+    expect(html).toMatch(/>Would remove · 0<\/div><div[^>]*>None</)
     expect(html).not.toContain('>Removed · ')
   })
 

@@ -333,6 +333,11 @@ describe('parseLocation — the inverse of routeUrl', () => {
     expect(parseLocation('/audit', '?q=acme').q).toBe('')
   })
 
+  it('parseLocation_readsSettingsBuyersAsTheBuyersTab', () => {
+    expect(parseLocation('/settings/buyers', '')).toMatchObject({ view: 'settings', settingsTab: 'buyers' })
+    expect(routeUrl('settings', { settingsTab: 'buyers' })).toBe('/settings/buyers')
+  })
+
   it('parseLocation_fallsBackToMembersForAnUnknownTab', () => {
     // constructor and toString are prototype keys: a `seg in table` lookup would accept both.
     const unknown = [

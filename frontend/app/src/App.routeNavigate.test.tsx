@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -1260,6 +1261,17 @@ describe('ROUTE-06-02 AC-7: every Workspace history write carries the company st
     expect(sites, 'ten Workspace history writes are expected -- fewer means a mis-anchored slice or a lost writer').toHaveLength(10)
     const unstamped = slice.match(/window\.history\.(?:push|replace)State\(\s*null\s*,/g) ?? []
     expect(unstamped, 'zero Workspace history writes may still pass a literal null first argument').toEqual([])
+  })
+
+  it('guard_everyWorkspaceCompanyStampCarriesTheMountKey', () => {
+    const src = stripComments(readFileSync(path.join(process.cwd(), 'src/App.tsx'), 'utf8'))
+    const slice = src.slice(src.indexOf('function Workspace({ session,'), src.indexOf('export default function App()'))
+    const stamps = slice.match(/\{\s*e:\s*active\.entityId\b[^}]*\}/g) ?? []
+    expect(stamps, 'seven writes stamp active.entityId -- fewer means a mis-anchored slice or a lost writer').toHaveLength(7)
+    expect(
+      stamps.filter((st) => !/\bm:\s*mountKey\b/.test(st)),
+      'a write of active.entityId without `m: mountKey` is invisible to the pre-load window',
+    ).toEqual([])
   })
 })
 

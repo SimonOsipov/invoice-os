@@ -188,4 +188,77 @@ describe('cold load of /imports/<id>/review', () => {
     expect(window.location.pathname).toBe(`/imports/${BATCH_ID}/review`)
     await waitFor(() => expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu'))
   })
+
+  it('coldLoad_aPreLoadEntryResolvesToTheAdoptedCompany', async () => {
+    let release!: () => void
+    const portfolioGate = new Promise<void>((r) => (release = r))
+    await coldLoadReview({ portfolioGate })
+    const traverse = async (delta: number) => {
+      await act(async () => {
+        const popped = new Promise<void>((r) => window.addEventListener('popstate', () => r(), { once: true }))
+        window.history.go(delta)
+        await popped
+      })
+    }
+    const invoicesNav = [...document.querySelectorAll('button.pf-nav')].find((b) => b.textContent?.trim().endsWith('Invoices'))
+    expect(invoicesNav, 'the Invoices nav button').toBeTruthy()
+    await act(async () => (invoicesNav as HTMLButtonElement).click())
+    await traverse(-1)
+    expect(window.location.pathname).toBe(`/imports/${BATCH_ID}/review`)
+    expect(window.history.state?.e, 'floor: no company resolved yet').toBeNull()
+    await act(async () => release())
+    await waitFor(() => expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu'))
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await traverse(1)
+    expect(replaceSpy).not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe('/invoices')
+    expect(window.history.state?.e).toBeNull()
+  })
+  const traverseBy = async (delta: number) => {
+    await act(async () => {
+      const popped = new Promise<void>((r) => window.addEventListener('popstate', () => r(), { once: true }))
+      window.history.go(delta)
+      await popped
+    })
+  }
+  const goInvoices = async () => {
+    const nav = [...document.querySelectorAll('button.pf-nav')].find((b) => b.textContent?.trim().endsWith('Invoices'))
+    expect(nav, 'the Invoices nav button').toBeTruthy()
+    await act(async () => (nav as HTMLButtonElement).click())
+  }
+
+  it('coldLoad_aBackfilledEntryAndAReviewAdoptionShareOneWindow', async () => {
+    let release!: () => void
+    const portfolioGate = new Promise<void>((r) => (release = r))
+    await coldLoadReview({ portfolioGate })
+    await goInvoices()
+    await act(async () => release())
+    await waitFor(() => expect(window.history.state?.p, 'floor: the backfill stamped the Invoices entry').toBe(true))
+    await traverseBy(-1)
+    await waitFor(() => expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu'))
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await traverseBy(1)
+    expect(replaceSpy, 'the backfilled entry resolves to the adopted company: no clamp').not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe('/invoices')
+  })
+
+  it('coldLoad_anAdoptionFromAnEntryOutsideTheWindowNeverRepointsTheBootEntry', async () => {
+    let release!: () => void
+    const portfolioGate = new Promise<void>((r) => (release = r))
+    await coldLoadReview({ portfolioGate }, '/invoices?q=a')
+    await act(async () => release())
+    await waitFor(() => expect(window.history.state?.p, 'floor: the backfill stamped the boot entry').toBe(true))
+    window.history.pushState({ scroll: 0 }, '', `/imports/${BATCH_ID}/review`)
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state: { scroll: 0 } }))
+    })
+    await waitFor(() => expect(screen.getByTestId('company-switcher').textContent).toContain('Zulu'))
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await traverseBy(-1)
+    expect(replaceSpy, 'the boot entry names Alpha, the active company is Zulu: clamp').toHaveBeenCalledWith(
+      { e: ENTITY_SECOND },
+      '',
+      '/invoices',
+    )
+  })
 })

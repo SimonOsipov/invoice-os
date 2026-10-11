@@ -132,8 +132,7 @@ function requireCtx(): PlatformCtx {
   return capturedCtx!
 }
 
-// jsdom runs no real history stack for back()/forward() -- move the URL the way the
-// browser would, then fire the event the browser fires.
+// Moves the URL by hand, then fires popstate. `traverse` (below) walks the real stack.
 async function popTo(path: string) {
   window.history.replaceState(null, '', path)
   await act(async () => {
@@ -1429,8 +1428,8 @@ describe('ROUTE-06-02 QA: the other two shapes the no-stamp fold collapses', () 
     expect(ctx.view, 'it must still restore its own view').toBe('detail')
   })
 
-  // `{ e: null }` -- the shape the mount alignment mints before the portfolio resolves, and
-  // the one a cold boot really carries until the backfill fills it.
+  // `{ e: null }` with no mount key: an entry from another mount. This mount's own null
+  // entries carry `m` and resolve (see the `entries pushed before the company list loads` describe).
   it('popstate_anEntryStampedNullDoesNotClamp', async () => {
     await bootAtWithGateway('/')
     await act(async () => {
@@ -1591,5 +1590,290 @@ describe('ROUTE-07-05 AC-6 (D3): carryView collapses three views and passes work
       await scrubbedPathAfterSwitching(() => capturedCtx!.openPolicy(POLICY_ID), ENTITY_A),
       'workflows passes through -- the list is where a dropped policy id lands',
     ).toBe('/workflows')
+  })
+})
+
+// --- entries pushed before the company list loads -----------------------------
+
+// routeFetch with the portfolio call held until `release()`; `failFirst` answers the first one 500.
+function gatedRouteFetch(failFirst = false) {
+  routeFetch()
+  const base = globalThis.fetch as unknown as (url: string) => Promise<unknown>
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  let portfolioCalls = 0
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => {
+      if (!url.includes('/portfolio/v1/entities')) return base(url)
+      portfolioCalls += 1
+      if (failFirst && portfolioCalls === 1) {
+        return gate.then(() => ({ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) }))
+      }
+      return portfolioCalls === 1 ? gate.then(() => base(url)) : base(url)
+    }),
+  )
+  return release
+}
+
+async function bootPreLoad(path: string, failFirst = false) {
+  const release = gatedRouteFetch(failFirst)
+  vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+  await bootAt(path)
+  await waitFor(() => expect(capturedCtx).toBeDefined())
+  expect(requireCtx().entities.length, 'floor: the list has not landed').toBe(0)
+  expect(requireCtx().active.entityId, 'floor: no company resolved').toBeNull()
+  return release
+}
+
+async function landAndSwitchToB(release: () => void) {
+  await act(async () => {
+    release()
+    await Promise.resolve()
+  })
+  await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+  await act(async () => {
+    capturedCtx!.switchClient(ENTITY_B)
+  })
+}
+
+async function traverse(delta: number) {
+  await act(async () => {
+    const popped = new Promise<void>((r) => window.addEventListener('popstate', () => r(), { once: true }))
+    window.history.go(delta)
+    await popped
+  })
+}
+
+const stateNow = () => window.history.state as { e?: string | null; m?: unknown; p?: boolean } | null
+
+describe('BUG-34: entries pushed before the company list loads', () => {
+  it('boot_everyEntryWrittenBeforeTheListLoadsCarriesTheMountKey', async () => {
+    await bootPreLoad(`/invoices/${INVOICE_ID}`)
+    const boot = stateNow()
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    const pushed = stateNow()
+    expect(boot).toEqual({ e: null, m: expect.any(String) })
+    expect(pushed).toEqual({ e: null, m: boot!.m })
+  })
+
+  it('popstate_aBootEntryLeftBeforeTheListLoadedClampsAfterASwitch', async () => {
+    const release = await bootPreLoad(`/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await landAndSwitchToB(release)
+    await traverse(-1)
+    await traverse(-1)
+    expect(window.location.pathname).toBe('/invoices')
+    expect(requireCtx().importedInvoiceId).toBeNull()
+    expect(stateNow()!.e).toBe(ENTITY_B)
+  })
+
+  it('popstate_everyEntryPushedBeforeTheListLoadedClampsAfterASwitch', async () => {
+    const release = await bootPreLoad(`/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_A)
+    })
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await landAndSwitchToB(release)
+    const mountsBefore = extractionReviewMounts.filter((j) => j === JOB_A).length
+    await traverse(-1)
+    await traverse(-1)
+    expect(window.location.pathname).toBe('/invoices')
+    expect(requireCtx().extractionJobId).toBeNull()
+    expect(extractionReviewMounts.filter((j) => j === JOB_A).length, 'the extraction screen must not mount').toBe(
+      mountsBefore,
+    )
+    await traverse(-1)
+    expect(window.location.pathname).toBe('/invoices')
+    expect(requireCtx().importedInvoiceId).toBeNull()
+  })
+
+  it('popstate_aPreLoadEntryRestoresUnderTheCompanyItResolvedTo', async () => {
+    const release = await bootPreLoad(`/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await traverse(-1)
+    expect(requireCtx().view).toBe('detail')
+    expect(requireCtx().importedInvoiceId).toBe(INVOICE_ID)
+    expect(pushSpy).not.toHaveBeenCalled()
+    expect(replaceSpy).not.toHaveBeenCalled()
+  })
+
+  it('popstate_aNullStampFromAnotherMountNeverClamps', async () => {
+    await bootAtWithGateway('/')
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().active.entityId, 'floor: the active company must be known').toBe(ENTITY_B)
+    const state = { e: null, m: 'another-mount' }
+    window.history.replaceState(state, '', `/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state }))
+    })
+    expect(requireCtx().importedInvoiceId).toBe(INVOICE_ID)
+    expect(requireCtx().view).toBe('detail')
+  })
+
+  it('popstate_aPromotedEntryFromAnotherMountResolvesByItsOwnCompanyNotThisMountsRef', async () => {
+    const release = await bootPreLoad('/')
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    expect(stateNow(), 'floor: this mount backfilled its boot entry').toMatchObject({ e: ENTITY_A, p: true })
+    const foreignB = { e: ENTITY_B, m: 'another-mount', p: true }
+    window.history.replaceState(foreignB, '', `/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state: foreignB }))
+    })
+    expect(window.location.pathname, 'its own Bravo differs from the active Alpha: clamp').toBe('/invoices')
+    const foreignA = { e: ENTITY_A, m: 'another-mount', p: true }
+    window.history.replaceState(foreignA, '', `/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state: foreignA }))
+    })
+    expect(requireCtx().importedInvoiceId, 'its own Alpha equals the active one: restore').toBe(INVOICE_ID)
+  })
+
+  it.each([
+    ['review mirror', '/create', () => {}],
+    ['setInvoiceQuery', '/invoices?q=a', () => capturedCtx!.setInvoiceQuery('')],
+    ['setAuditInvoiceFilter', '/audit', () => capturedCtx!.setAuditInvoiceFilter(AUDIT_INVOICE_ID, null)],
+    ['setSettingsTab', '/settings/members', () => capturedCtx!.setSettingsTab('roles')],
+  ] as [string, string, () => void][])(
+    'popstate_aPreLoadReplaceKeepsTheMountKeyAndClampsAfterASwitch: %s',
+    async (_name, path, write) => {
+      const release = await bootPreLoad(path)
+      await act(async () => write())
+      expect(typeof stateNow()!.m, 'the pre-load replace must keep the mount key').toBe('string')
+      expect(stateNow()!.p, 'no company yet: nothing to promote').toBeUndefined()
+      await act(async () => {
+        capturedCtx!.nav('dashboard')
+      })
+      await landAndSwitchToB(release)
+      await traverse(-1)
+      await traverse(-1)
+      expect(stateNow()!.e).toBe(ENTITY_B)
+    },
+  )
+
+  it('popstate_theReviewMirrorPromotesNoPostLoadEntryIntoTheWindow', async () => {
+    const release = await bootPreLoad('/dashboard')
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    await act(async () => {
+      capturedCtx!.nav('create')
+    })
+    expect(requireCtx().view, 'floor: the mirror ran on a create entry').toBe('create')
+    expect(stateNow()).toMatchObject({ e: ENTITY_A, m: expect.any(String) })
+    expect(stateNow()!.p, 'a post-load push is not a window entry').toBeUndefined()
+  })
+
+  // KNOWN DEFECT (QA-3): these writers drop `p`, so the entry clamps after an adoption its window-mates survive. Flip to `it.each` with the fix.
+  it.fails.each([
+    ['setInvoiceQuery', () => capturedCtx!.setInvoiceQuery('x')],
+    ['setAuditInvoiceFilter', () => capturedCtx!.setAuditInvoiceFilter(AUDIT_INVOICE_ID, null)],
+    ['setSettingsTab', () => capturedCtx!.setSettingsTab('roles')],
+  ] as [string, () => void][])(
+    'popstate_aPostLoadReplaceKeepsAWindowEntryInTheWindowSoAdoptionMovesItWithTheRest: %s',
+    async (_name, write) => {
+      const release = await bootPreLoad('/create')
+      await act(async () => {
+        capturedCtx!.nav('invoices')
+      })
+      await act(async () => {
+        release()
+        await Promise.resolve()
+      })
+      await waitFor(() => expect(stateNow()!.p, 'floor: the backfill promoted the entry').toBe(true))
+      await act(async () => write())
+      await traverse(-1)
+      expect(requireCtx().view, 'floor: back on the boot create entry').toBe('create')
+      await act(async () => requireCtx().adoptBatchClient(ENTITY_B))
+      expect(requireCtx().active.entityId, 'floor: the adoption must take').toBe(ENTITY_B)
+      const replaceSpy = vi.spyOn(window.history, 'replaceState')
+      await traverse(1)
+      expect(requireCtx().view).toBe('invoices')
+      expect(replaceSpy, 'same window as the boot entry: resolves to the adopted company, no clamp').not.toHaveBeenCalled()
+    },
+  )
+
+  it('popstate_aPreLoadEntryClampsAfterAFailedListLoadIsRefetched', async () => {
+    const release = await bootPreLoad(`/invoices/${INVOICE_ID}`, true)
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().entitiesError).toBeTruthy())
+    expect(requireCtx().active.entityId, 'floor: the failed load resolved no company').toBeNull()
+    await act(async () => {
+      capturedCtx!.refetchEntities()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    await traverse(-1)
+    await traverse(-1)
+    expect(window.location.pathname).toBe('/invoices')
+    expect(requireCtx().importedInvoiceId).toBeNull()
+  })
+  it('popstate_anAdoptionFromAnEntryOutsideThePreLoadWindowNeverRepointsIt', async () => {
+    const release = await bootPreLoad(`/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      capturedCtx!.nav('invoices')
+    })
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    window.history.pushState({ scroll: 0 }, '', '/invoices')
+    await act(async () => requireCtx().adoptBatchClient(ENTITY_B))
+    expect(requireCtx().active.entityId, 'floor: the adoption must take').toBe(ENTITY_B)
+    await traverse(-2)
+    expect(window.location.pathname, 'the boot entry names Alpha, not the adopted Bravo').toBe('/invoices')
+    expect(requireCtx().importedInvoiceId).toBeNull()
+  })
+
+  it('popstate_everyEntryOfOnePreLoadWindowResolvesToTheAdoptedCompany', async () => {
+    const release = await bootPreLoad(`/invoices/${INVOICE_ID}`)
+    await act(async () => {
+      capturedCtx!.openExtraction(JOB_A)
+    })
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    await traverse(-1)
+    await act(async () => requireCtx().adoptBatchClient(ENTITY_B))
+    expect(requireCtx().active.entityId, 'floor: the adoption must take').toBe(ENTITY_B)
+    await traverse(1)
+    expect(window.location.pathname, 'the backfilled entry is in the same window and keeps its drill-down').toBe(
+      `/extraction/${JOB_A}`,
+    )
+    expect(requireCtx().extractionJobId).toBe(JOB_A)
   })
 })

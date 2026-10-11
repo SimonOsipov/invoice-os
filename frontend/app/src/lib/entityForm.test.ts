@@ -408,3 +408,64 @@ describe('NRS buyer fields', () => {
     expect(toEntityUpdateInput(entity, entityFormFrom(entity))).toEqual({})
   })
 })
+
+const NRS_PAIRS = [
+  ['email', 'email'],
+  ['telephone', 'telephone'],
+  ['street', 'street'],
+  ['city', 'city'],
+  ['postalZone', 'postal_zone'],
+  ['country', 'country'],
+  ['state', 'state'],
+  ['lga', 'lga'],
+] as const
+
+describe('NRS buyer fields, one by one', () => {
+  it('covers 8 distinct fields', () => {
+    expect(new Set(NRS_PAIRS.map((p) => p[0])).size).toBe(8)
+  })
+
+  it.each(NRS_PAIRS)('create: %s is trimmed into %s and its siblings are omitted', (formKey, wireKey) => {
+    const result = toEntityInput({ ...emptyEntityForm(), name: 'Acme', tin: '0000000000', [formKey]: `  v-${formKey} ` })
+    expect(result).toEqual({ name: 'Acme', tin: '0000000000', [wireKey]: `v-${formKey}` })
+  })
+
+  it.each(NRS_PAIRS)('create: a whitespace-only %s is omitted', (formKey) => {
+    const result = toEntityInput({ ...emptyEntityForm(), name: 'Acme', tin: '0000000000', [formKey]: '   ' })
+    expect(Object.keys(result).sort()).toEqual(['name', 'tin'])
+  })
+
+  it.each(NRS_PAIRS)('edit: only a changed %s is sent, as %s, trimmed', (formKey, wireKey) => {
+    const original = baseEntity({ [wireKey]: 'old' })
+    const state = { ...entityFormFrom(original), [formKey]: ' new ' }
+    expect(toEntityUpdateInput(original, state)).toEqual({ [wireKey]: 'new' })
+  })
+
+  it.each(NRS_PAIRS)('edit: a cleared %s sends an empty string for %s', (formKey, wireKey) => {
+    const original = baseEntity({ [wireKey]: 'old' })
+    const state = { ...entityFormFrom(original), [formKey]: '' }
+    expect(toEntityUpdateInput(original, state)).toEqual({ [wireKey]: '' })
+  })
+
+  it.each(NRS_PAIRS)('edit: a whitespace-only %s on an unset field is no change', (formKey) => {
+    const original = baseEntity()
+    const state = { ...entityFormFrom(original), [formKey]: '   ' }
+    expect(toEntityUpdateInput(original, state)).toEqual({})
+  })
+
+  it.each(NRS_PAIRS)('edit: an untouched %s is not sent while another field changes', (formKey, wireKey) => {
+    const original = baseEntity({ [wireKey]: 'keep' })
+    const state = { ...entityFormFrom(original), name: 'Renamed' }
+    const diff = toEntityUpdateInput(original, state)
+    expect(diff).toEqual({ name: 'Renamed' })
+    expect(diff).not.toHaveProperty(wireKey)
+    expect(formKey.length).toBeGreaterThan(0)
+  })
+
+  it('an entity with null NRS keys and one missing the keys both form to empty strings', () => {
+    const nulls = baseEntity({ email: null, telephone: null, street: null, city: null, postal_zone: null, country: null, state: null, lga: null })
+    expect(entityFormFrom(nulls)).toMatchObject(NRS_BLANK)
+    expect(entityFormFrom(baseEntity())).toMatchObject(NRS_BLANK)
+    expect(toEntityUpdateInput(nulls, entityFormFrom(nulls))).toEqual({})
+  })
+})

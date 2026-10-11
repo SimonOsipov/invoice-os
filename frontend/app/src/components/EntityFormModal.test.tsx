@@ -503,6 +503,69 @@ describe('EntityFormModal NRS fields', () => {
     expect(vi.mocked(updateEntity).mock.calls[0][3]).toEqual({ email: 'new@x.ng' })
   })
 
+  const NRS_INPUTS = [
+    ['Email (optional)', '', 'email'],
+    ['Phone (optional)', '', 'telephone'],
+    ['Street (optional)', '', 'street'],
+    ['City (optional)', '', 'city'],
+    ['Postal zone (optional)', '', 'postal_zone'],
+    ['Country (optional)', 'NG', 'country'],
+    ['State (optional)', 'NG-XX', 'state'],
+    ['LGA (optional)', 'NG-XX-XXX', 'lga'],
+  ] as const
+
+  it.each(NRS_INPUTS)('the %s input follows Address with placeholder %j', (label, placeholder) => {
+    mount('create', 'firm')
+    const inputs = Array.from(screen.getByRole('dialog').querySelectorAll<HTMLInputElement>('input.pf-input'))
+    const labelEl = within(screen.getByRole('dialog')).getByText(label, { exact: true })
+    const input = labelEl.nextElementSibling as HTMLInputElement
+    expect(input.tagName).toBe('INPUT')
+    expect(inputs.indexOf(input)).toBeGreaterThanOrEqual(4)
+    expect(input.placeholder).toBe(placeholder)
+  })
+
+  it.each(NRS_INPUTS)('create: typing into %s posts only that wire key, trimmed', async (label, _p, wireKey) => {
+    vi.mocked(createEntity).mockResolvedValue(ENTITY)
+    const { container, dialog } = mount('create', 'firm')
+    fireEvent.change(container.querySelector('input.pf-input') as HTMLInputElement, { target: { value: 'Acme' } })
+    fireEvent.change(dialog.getByPlaceholderText('########-####'), { target: { value: '20184412-0001' } })
+    fireEvent.change(dialog.getByText(label, { exact: true }).nextElementSibling as HTMLInputElement, { target: { value: '  x1 ' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add client' }))
+
+    await waitFor(() => expect(createEntity).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(createEntity).mock.calls[0][2]).toEqual({ name: 'Acme', tin: '20184412-0001', [wireKey]: 'x1' })
+  })
+
+  it.each(NRS_INPUTS)('edit: clearing %s PATCHes an empty string for that key only', async (label, _p, wireKey) => {
+    vi.mocked(updateEntity).mockResolvedValue(undefined as never)
+    const entity = { ...ENTITY, [wireKey]: 'val' } as Entity
+    render(<EntityFormModal mode="edit" entity={entity} ctx={ctxFor('firm')} base="https://gateway.test" onClose={() => {}} onSuccess={() => {}} />)
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.change(dialog.getByText(label, { exact: true }).nextElementSibling as HTMLInputElement, { target: { value: '' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(updateEntity).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(updateEntity).mock.calls[0][3]).toEqual({ [wireKey]: '' })
+  })
+
+  it('an untouched edit form sends no request', async () => {
+    const onClose = vi.fn()
+    const entity: Entity = { ...ENTITY, email: 'a@x.ng', postal_zone: '100001', lga: 'NG-LA-001' }
+    render(<EntityFormModal mode="edit" entity={entity} ctx={ctxFor('firm')} base="https://gateway.test" onClose={onClose} onSuccess={() => {}} />)
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(updateEntity).not.toHaveBeenCalled()
+    expect(createEntity).not.toHaveBeenCalled()
+  })
+
+  it('an edit form opens with every stored NRS value in its input', () => {
+    const entity: Entity = { ...ENTITY, email: 'a@x.ng', telephone: '080', street: 'S1', city: 'C1', postal_zone: 'P1', country: 'NG', state: 'NG-LA', lga: 'NG-LA-001' }
+    render(<EntityFormModal mode="edit" entity={entity} ctx={ctxFor('firm')} base="https://gateway.test" onClose={() => {}} onSuccess={() => {}} />)
+    const dialog = within(screen.getByRole('dialog'))
+    for (const v of ['a@x.ng', '080', 'S1', 'C1', 'P1', 'NG', 'NG-LA', 'NG-LA-001']) expect(dialog.getByDisplayValue(v)).toBeTruthy()
+  })
+
   it('the 8 NRS inputs are disabled while submitting, like Address', async () => {
     vi.mocked(createEntity).mockReturnValue(new Promise(() => {}))
     const { dialog } = mount('create', 'firm')

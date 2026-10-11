@@ -150,6 +150,21 @@ describe('Settings > Company card', () => {
     for (const l of NRS_LABELS.filter((l) => l !== 'State')) expect(value(l), l).toBe('—')
   })
 
+  it('each NRS row shows its own entity value', () => {
+    const entity = { ...ENTITY, email: 'a@x.ng', telephone: '080', street: 'S1', city: 'C1', postal_zone: 'P1', country: 'NG', state: 'NG-LA', lga: 'NG-LA-001' }
+    render(<SettingsView ctx={inhouse({ activeEntity: entity })} />)
+    const value = (l: string) => screen.getByText(l, { exact: true }).parentElement!.lastElementChild!.textContent
+    const want: Record<string, string> = { Email: 'a@x.ng', Phone: '080', Street: 'S1', City: 'C1', 'Postal zone': 'P1', Country: 'NG', State: 'NG-LA', LGA: 'NG-LA-001' }
+    expect(Object.keys(want)).toHaveLength(8)
+    for (const [l, v] of Object.entries(want)) expect(value(l), l).toBe(v)
+  })
+
+  it('NRS rows read — when the keys are null or absent', () => {
+    render(<SettingsView ctx={inhouse({ activeEntity: { ...ENTITY, email: null, lga: null } })} />)
+    const value = (l: string) => screen.getByText(l, { exact: true }).parentElement!.lastElementChild!.textContent
+    for (const l of NRS_LABELS) expect(value(l), l).toBe('—')
+  })
+
   it('the header pads 14px 20px with a 15/700 title and a 32-tall ghost Edit company', () => {
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
     render(<SettingsView ctx={inhouse({ activeEntity: ENTITY })} />)

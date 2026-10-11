@@ -3,14 +3,14 @@
 // unlike portfolio.test.ts / authedFetch.test.ts.
 //
 // Contract (Obsidian M3-08 story, §6 System Design + [A-k]):
-// - `emptyEntityForm()` — all-'' form state (name/tin/registration/sector/address).
+// - `emptyEntityForm()` — all-'' form state.
 // - `entityFormFrom(entity)` — live Entity -> form state; null optionals -> '' (inputs
 //   stay controlled).
 // - `validateEntityForm(state)` — presence-only (name + TIN required); server owns TIN
 //   grammar/duplicate checks (surfaced via mapSubmitError from 400/409, not
 //   re-implemented here, [A-g]). Returns `{valid, errors: {name?, tin?}}`.
 // - `toEntityInput(state)` — CREATE path: trim every field; omit an empty optional
-//   (registration/sector/address) entirely (the backend reads an absent field as
+//   entirely (the backend reads an absent field as
 //   "unset on create").
 // - `toEntityUpdateInput(original, state)` — EDIT path ([A-k], F6 fix-now, GATE verified
 //   against the backend: a PATCH pointer-to-"" persists and clears — portfolio.go /

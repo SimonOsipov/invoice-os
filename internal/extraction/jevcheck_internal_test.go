@@ -79,7 +79,7 @@ func vcIDs(req jev.Request) []string {
 	return ids
 }
 
-func TestValueCheck_AsksEveryDecidedHeaderFieldButTheSupplierPair(t *testing.T) {
+func TestValueCheck_AsksOnlyTheEightMeasuredHeaderFields(t *testing.T) {
 	results := vcRows(HeaderFields...)
 	results = append(results,
 		FieldResult{Field: Field{Name: "line_items[1].description", Value: mgStr("Cement 50kg")}, Alternatives: []Field{}},

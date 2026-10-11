@@ -1,7 +1,8 @@
 import { PUBLISH_ICON } from '../data'
-import { stateLabel, versionMeta, type RuleVersion, type VersionState } from '../rulesApi'
+import { stateLabel, syncDate, versionMeta, type RuleVersion, type VersionState } from '../rulesApi'
 import { SeverityBadge } from './StatusBadge'
-import type { Rule } from '../types'
+import { isHeld, SyncChip } from './SyncStatus'
+import type { CodeListLatest, Rule } from '../types'
 
 export type RulesStatus = 'loading' | 'ready' | 'forbidden' | 'error'
 
@@ -25,6 +26,10 @@ type Props = {
   onNewDraft: () => void
   onAddRule: () => void
   onTestDraft: () => void
+  /** null while the summary read is in flight or failed (codeListsNote says which). */
+  codeLists: CodeListLatest[] | null
+  codeListsNote: string
+  onOpenCodeList: (list: string) => void
 }
 
 const RULE_COLS = 'minmax(150px,1.1fr) 150px minmax(120px,1fr) 78px 96px minmax(160px,1.3fr) 50px'
@@ -41,7 +46,10 @@ const VERSION_TONE: Record<VersionState, { bg: string; border: string; text: str
 const LOCKED = { opacity: 0.45, filter: 'none', cursor: 'not-allowed' } as const
 const SWITCH_LOCKED = 'Only the version in force is switched'
 
-export function Rules({ rules, status, errorText, version, state, versions, versionsNote, selected, onSelectVersion, busy, onRetry, onOpenRule, onToggleRule, onPublish, draftVersion, draftBusy, onNewDraft, onAddRule, onTestDraft }: Props) {
+const syncCounts = (l: CodeListLatest): string =>
+  isHeld(l.status) ? `+${l.added_count} would remove ${l.removed_count} ~${l.changed_count}` : `+${l.added_count} −${l.removed_count} ~${l.changed_count}`
+
+export function Rules({ rules, status, errorText, version, state, versions, versionsNote, selected, onSelectVersion, busy, onRetry, onOpenRule, onToggleRule, onPublish, draftVersion, draftBusy, onNewDraft, onAddRule, onTestDraft, codeLists, codeListsNote, onOpenCodeList }: Props) {
   const locked = state !== 'in_force'
   return (
     <div className="ops-screen-pad">
@@ -110,6 +118,40 @@ export function Rules({ rules, status, errorText, version, state, versions, vers
                 </button>
               )
             })}
+          </div>
+
+          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden' }}>
+            <div style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--line-1)' }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>Code-list syncs</span>
+              {codeLists && (
+                <span className="mono" style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, background: 'var(--action-tint)', color: 'var(--action)', borderRadius: 'var(--radius-sm)', padding: '1px 7px' }}>
+                  {codeLists.length}
+                </span>
+              )}
+            </div>
+            {codeLists === null && <div style={{ padding: '11px 14px', fontSize: 12, color: 'var(--fg-3)' }}>{codeListsNote}</div>}
+            {codeLists?.length === 0 && <div style={{ padding: '11px 14px', fontSize: 12, color: 'var(--fg-3)' }}>No sync recorded yet.</div>}
+            {codeLists?.map((l) => (
+              <button
+                key={l.list}
+                type="button"
+                onClick={() => onOpenCodeList(l.list)}
+                style={{ width: '100%', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', borderWidth: '0 0 1px 0', borderStyle: 'solid', borderColor: 'var(--line-1)', padding: '11px 14px', display: 'block', background: 'var(--bg-2)' }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span className="mono" style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 700, color: 'var(--fg-1)', overflowWrap: 'anywhere' }}>
+                    {l.list}
+                  </span>
+                  <SyncChip status={l.status} />
+                </span>
+                <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginTop: 1 }}>
+                  synced {syncDate(l.synced_at)}
+                </span>
+                <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-2)', marginTop: 1 }}>
+                  {syncCounts(l)}
+                </span>
+              </button>
+            ))}
           </div>
         </div>
 

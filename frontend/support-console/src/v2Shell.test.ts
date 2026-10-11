@@ -6,6 +6,7 @@ import { AuditDrawer } from './components/AuditDrawer'
 import { Drawer } from './components/Drawer'
 import { JobDrawer } from './components/JobDrawer'
 import { KillConfirm } from './components/KillConfirm'
+import { CodeListDrawer } from './components/CodeListDrawer'
 import { DraftTestModal } from './components/DraftTestModal'
 import { Modal } from './components/Modal'
 import { PublishModal } from './components/PublishModal'
@@ -17,7 +18,7 @@ import { TopBar } from './components/TopBar'
 import { AUDIT_ENTRIES, NAV_ITEMS, SEED_JOBS } from './data'
 import type { DiffRow } from './rulesApi'
 import { SEED_RULES } from './rulesFixture'
-import type { Env, Screen } from './types'
+import type { CodeListSync, Env, Screen } from './types'
 
 // SSR markup is the oracle: jsdom drops backdrop-filter and Chromium aliases the prefixed one.
 // The resolved look is SUP-01, SUP-02 and SUP-04 (deploy gate).
@@ -549,6 +550,43 @@ describe('v2 shell', () => {
     }
     expect(topBar('sandbox')).toContain('CROSS-TENANT · ALL ENTITIES')
     expect(topBar('live')).toContain('CROSS-TENANT · PENDING ACCREDITATION')
+  })
+
+  const sync = (status: string, over: Partial<CodeListSync> = {}): CodeListSync => ({ status, synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: ['A1'], removed: ['R1'], changed: ['C1'], ...over })
+  const drawerHtml = (syncs: CodeListSync[] | null) => renderToStaticMarkup(createElement(CodeListDrawer, { list: 'hs-codes', syncs, note: 'Loading…', onClose: noop }))
+
+  it('CodeListDrawer renders each sync', () => {
+    const html = drawerHtml([sync('applied', { synced_at: '2026-10-09T08:15:00Z' }), sync('applied', { synced_at: '2026-10-01T06:00:00Z', added: [] })])
+    expect(html.indexOf('2026-10-09 08:15 UTC')).toBeGreaterThan(-1)
+    expect(html.indexOf('2026-10-09 08:15 UTC')).toBeLessThan(html.indexOf('2026-10-01 06:00 UTC'))
+    for (const caption of ['Added', 'Removed', 'Changed']) expect(html.match(new RegExp(`>${caption} · `, 'g'))).toHaveLength(2)
+    expect(html).toContain('A1')
+    expect(html).toContain('None')
+    expect(html).not.toContain('Would remove')
+    expect(html).not.toContain('--fg-4')
+    expect(html).toContain('width:580px')
+    const big = drawerHtml([sync('applied', { added: Array.from({ length: 250 }, (_, i) => `K${i}`) })])
+    expect(big).toContain('and 50 more')
+    expect(big).toContain('K199')
+    expect(big).not.toContain('K200')
+    expect(drawerHtml([sync('applied', { added: Array.from({ length: 200 }, (_, i) => `K${i}`) })])).not.toContain('more')
+    expect(drawerHtml([])).toContain('No sync recorded yet.')
+    expect(drawerHtml(null)).toContain('Loading…')
+  })
+
+  it('a held sync says it is held and labels its removed codes Would remove (D32)', () => {
+    const html = drawerHtml([sync('held'), sync('applied')])
+    expect(html).toContain('HELD')
+    expect(html).toContain('held, not applied')
+    expect(html.match(/>Would remove · /g)).toHaveLength(1)
+    expect(html.match(/>Removed · /g)).toHaveLength(1)
+  })
+
+  it('an unknown sync status still renders in the drawer (D32)', () => {
+    const html = drawerHtml([sync('released')])
+    expect(html).toContain('RELEASED')
+    expect(html).toContain('>Removed · ')
+    expect(html).toContain('R1')
   })
 
   it('DraftTestModal renders both columns and a fault', () => {

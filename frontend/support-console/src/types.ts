@@ -47,6 +47,25 @@ export interface Rule {
   when: string | null
 }
 
+// Wire shapes: internal/validation/staff_codelists.go. status is open: the sync log owns its values.
+export interface CodeListLatest {
+  list: string
+  synced_at: string
+  entry_count: number
+  added_count: number
+  removed_count: number
+  changed_count: number
+  status: string
+}
+export interface CodeListSync {
+  status: string
+  synced_at: string
+  entry_count: number
+  added: string[]
+  removed: string[]
+  changed: string[]
+}
+
 export interface ReconRow {
   id: string
   tenant: string
@@ -123,7 +142,7 @@ export interface NavItem {
   glyph: ReactNode
 }
 
-export type DrawerState = { type: 'job'; id: string } | { type: 'audit'; id: string } | { type: 'rule'; id: string } | { type: 'new-rule' } | null
+export type DrawerState = { type: 'code-list'; id: string } | { type: 'job'; id: string } | { type: 'audit'; id: string } | { type: 'rule'; id: string } | { type: 'new-rule' } | null
 
 export type ToastTone = 'ok' | 'red'
 

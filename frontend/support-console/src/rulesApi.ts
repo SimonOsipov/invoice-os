@@ -1,7 +1,7 @@
 import { ApiError, apiFetch, gatewayBase } from '@invoice-os/api-client'
 import { loadConsoleSession } from '@invoice-os/console-session'
 import { SESSION_KEY } from './auth'
-import type { Rule, Severity } from './types'
+import type { CodeListLatest, CodeListSync, Rule, Severity } from './types'
 
 export interface DiffRow {
   sign: '+' | '~' | '−'
@@ -276,3 +276,15 @@ export const SAMPLE_INVOICE = JSON.stringify(
   null,
   2,
 )
+
+const SYNCS_PATH = '/api/validation/v1/staff/code-list-syncs'
+export const fetchCodeListSummary = async (signal?: AbortSignal): Promise<CodeListLatest[]> => (await request<{ lists: CodeListLatest[] }>(SYNCS_PATH, { signal })).lists
+export const fetchCodeListSyncs = async (list: string, signal?: AbortSignal): Promise<CodeListSync[]> =>
+  (await request<{ list: string; syncs: CodeListSync[] }>(`${SYNCS_PATH}?list=${encodeURIComponent(list)}`, { signal })).syncs
+
+export const CODES_SHOWN = 200
+export const capCodes = (codes: string[], max: number): { shown: string[]; more: number } => ({ shown: codes.slice(0, max), more: Math.max(0, codes.length - max) })
+
+// The date of a sync for the panel row; the time of day for the drawer block.
+export const syncDate = (iso: string): string => iso.slice(0, 10)
+export const syncStamp = (iso: string): string => `${iso.slice(0, 10)} ${iso.slice(11, 16)}${iso.endsWith('Z') ? ' UTC' : ''}`

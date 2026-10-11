@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { KillConfirm } from './components/KillConfirm'
 import { signOutConsole } from '@invoice-os/console-session'
-import { SAMPLE_INVOICE, addDraftRule, editDraftRule, fetchRules, fetchVersions, openDraft, publishDraft, removeDraftRule, switchRule, testDraft, type RuleVersion } from './rulesApi'
+import { SAMPLE_INVOICE, addDraftRule, editDraftRule, fetchCodeListSummary, fetchCodeListSyncs, fetchRules, fetchVersions, openDraft, publishDraft, removeDraftRule, switchRule, testDraft, type RuleVersion } from './rulesApi'
 import type { Rule } from './types'
 
 vi.mock('@invoice-os/console-session', () => ({
@@ -17,6 +17,8 @@ vi.mock('@invoice-os/console-session', () => ({
 vi.mock('./rulesApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./rulesApi')>()),
   fetchRules: vi.fn(),
+  fetchCodeListSummary: vi.fn(),
+  fetchCodeListSyncs: vi.fn(),
   fetchVersions: vi.fn(),
   switchRule: vi.fn(),
   openDraft: vi.fn(),
@@ -29,6 +31,8 @@ vi.mock('./rulesApi', async (importOriginal) => ({
 
 const read = vi.mocked(fetchRules)
 const versionsRead = vi.mocked(fetchVersions)
+const summary = vi.mocked(fetchCodeListSummary)
+const syncsRead = vi.mocked(fetchCodeListSyncs)
 const sw = vi.mocked(switchRule)
 const open = vi.mocked(openDraft)
 const add = vi.mocked(addDraftRule)
@@ -44,6 +48,8 @@ const LIST = { version: 7, rules: [rule('real.on', true), rule('real.off', false
 beforeEach(() => {
   read.mockResolvedValue(LIST)
   versionsRead.mockResolvedValue(VERSIONS)
+  summary.mockResolvedValue([])
+  syncsRead.mockResolvedValue([])
   sw.mockResolvedValue({ key: 'real.on', enabled: false })
 })
 afterEach(() => {
@@ -312,6 +318,47 @@ const openDraftView = async () => {
   fireEvent.click(await screen.findByRole('button', { name: /^v5/ }))
   await screen.findByText('d-new')
 }
+
+describe('Console code-list wiring', () => {
+  const latest = (list: string, status: string) => ({ list, synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added_count: 1, removed_count: 1, changed_count: 0, status })
+
+  it('opening a list reads its syncs', async () => {
+    summary.mockResolvedValue([latest('hs-codes', 'applied'), latest('currencies', 'held')])
+    syncsRead.mockResolvedValue([{ status: 'applied', synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: ['ZZ-ADDED'], removed: [], changed: [] }])
+    render(<App />)
+    await openRules()
+    expect(syncsRead).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: /currencies/ }))
+    await waitFor(() => expect(syncsRead).toHaveBeenCalledWith('currencies'))
+    expect((await screen.findByRole('dialog')).textContent).toContain('ZZ-ADDED')
+  })
+
+  it('a held sync shows Would remove in the drawer', async () => {
+    summary.mockResolvedValue([latest('hs-codes', 'held')])
+    syncsRead.mockResolvedValue([{ status: 'held', synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: [], removed: ['GONE'], changed: [] }])
+    render(<App />)
+    await openRules()
+    fireEvent.click(await screen.findByRole('button', { name: /hs-codes/ }))
+    const d = await screen.findByRole('dialog')
+    await waitFor(() => expect(d.textContent).toContain('Would remove'))
+    expect(d.textContent).toContain('GONE')
+  })
+
+  it('the panel reads on the Rules screen only and shows the empty state', async () => {
+    render(<App />)
+    expect(summary).not.toHaveBeenCalled()
+    await openRules()
+    expect(summary).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('No sync recorded yet.')).toBeTruthy()
+  })
+
+  it('a 403 on the summary uses the no-role wording', async () => {
+    summary.mockRejectedValue(new ApiError('http', 'forbidden', 403))
+    render(<App />)
+    await openRules()
+    await waitFor(() => expect(screen.getAllByText('Your account has no rules role.').length).toBeGreaterThan(0))
+  })
+})
 
 describe('Console draft wiring', () => {
   it('New draft opens and selects the draft', async () => {

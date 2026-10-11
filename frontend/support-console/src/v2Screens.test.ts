@@ -10,7 +10,7 @@ import { Tenants } from './components/Tenants'
 import { AUDIT_ENTRIES, AUDIT_FILTERS, JOB_FILTERS, RECON_ROWS, SEED_JOBS, TENANTS, healthCards } from './data'
 import { SEED_RULES } from './rulesFixture'
 import type { RuleVersion } from './rulesApi'
-import type { AuditFilter, Job } from './types'
+import type { AuditFilter, CodeListLatest, Job } from './types'
 
 // SSR markup is the oracle for inline values; the resolved look is SUP-03 (deploy gate).
 const noop = () => {}
@@ -69,7 +69,22 @@ const submissionsFiltered = (filter: Parameters<typeof Submissions>[0]['filter']
 const ver = (version: number, state: RuleVersion['state'], effective_from: string | null = '2026-01-01'): RuleVersion => ({ rule_set_version_id: `id${version}`, version, state, effective_from, opened_at: null, rule_count: 2 })
 const VERSIONS: RuleVersion[] = [ver(9, 'draft', null), ver(8, 'in_force'), ver(7, 'scheduled'), ver(6, 'superseded'), ver(3, 'retired', null)]
 
+const latest = (list: string, status: string, over: Partial<CodeListLatest> = {}): CodeListLatest => ({
+  list,
+  synced_at: '2026-10-09T08:15:00Z',
+  entry_count: 5612,
+  added_count: 3,
+  removed_count: 1,
+  changed_count: 0,
+  status,
+  ...over,
+})
+const LISTS = [latest('hs-codes', 'applied'), latest('currencies', 'applied', { synced_at: '2026-10-08T07:00:00Z', added_count: 0, removed_count: 0, changed_count: 2 })]
+
 const RULES_PROPS: Parameters<typeof Rules>[0] = {
+  codeLists: LISTS,
+  codeListsNote: 'Loading…',
+  onOpenCodeList: noop,
   rules: SEED_RULES,
   status: 'ready',
   version: 4,
@@ -515,5 +530,51 @@ describe('v2 screens', () => {
       expect(rulesWith({ state: 'in_force' }), `${name} off the draft`).not.toContain(`>${name}<`)
     }
     expect(rulesWith({ state: 'draft', version: 9, draftBusy: true })).toMatch(/<button[^>]*disabled=""[^>]*>Add rule/)
+  })
+
+  // Panel rows are the buttons that carry no aria-pressed and no role.
+  const panelRows = (html: string) => [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)].filter((m) => !/aria-pressed|role=|v2-btn/.test(m[1]))
+
+  it('Code-list panel renders rows and the empty state', () => {
+    const html = rulesWith({})
+    const rows = panelRows(html)
+    expect(rows).toHaveLength(2)
+    expect(rows[0][2]).toContain('hs-codes')
+    expect(rows[0][2]).toContain('synced 2026-10-09')
+    expect(rows[0][2]).toContain('+3 −1 ~0')
+    expect(rows[1][2]).toContain('+0 −0 ~2')
+    expect(html).toContain('Code-list syncs')
+    expect(html).not.toContain('--fg-4')
+    const empty = rulesWith({ codeLists: [] })
+    expect(panelRows(empty)).toHaveLength(0)
+    expect(empty).toContain('No sync recorded yet.')
+    const loading = rulesWith({ codeLists: null, codeListsNote: 'Your account has no rules role.' })
+    expect(loading).toContain('Your account has no rules role.')
+    expect(loading).not.toContain('No sync recorded yet.')
+  })
+
+  it('a panel row wears the rail row paint: padding, background and chip radius (D31)', () => {
+    const html = rulesWith({ selected: 8 })
+    const rail = [...html.matchAll(/<button\b([^>]*aria-pressed="false"[^>]*)>([\s\S]*?)<\/button>/g)][0]
+    const row = panelRows(html)[0]
+    const chip = (inner: string) => style({ attrs: ` style="${inner.match(/<span style="([^"]*border-radius[^"]*)"/)![1]}"` })
+    const a = style({ attrs: ` ${rail[1]}` })
+    const b = style({ attrs: ` ${row[1]}` })
+    expect([b.padding, b.background]).toEqual([a.padding, a.background])
+    expect(chip(row[2])['border-radius']).toBe(chip(rail[2])['border-radius'])
+  })
+
+  it('a held sync says it is held and would remove, in the panel (D32)', () => {
+    const rows = panelRows(rulesWith({ codeLists: [latest('hs-codes', 'held')] }))
+    expect(rows[0][2]).toContain('HELD')
+    expect(rows[0][2]).toContain('+3 would remove 1 ~0')
+    expect(rows[0][2]).not.toContain('−1')
+  })
+
+  it('an unknown sync status still renders as a muted chip (D32)', () => {
+    const rows = panelRows(rulesWith({ codeLists: [latest('hs-codes', 'quarantined')] }))
+    expect(rows[0][2]).toContain('QUARANTINED')
+    expect(rows[0][2]).toContain('var(--status-muted-bg)')
+    expect(rows[0][2]).toContain('+3 −1 ~0')
   })
 })

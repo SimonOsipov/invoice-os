@@ -8,6 +8,7 @@ import { Tenants } from './components/Tenants'
 import { Health } from './components/Health'
 import { JobDrawer } from './components/JobDrawer'
 import { RuleDrawer } from './components/RuleDrawer'
+import { CodeListDrawer } from './components/CodeListDrawer'
 import { AuditDrawer } from './components/AuditDrawer'
 import { KillConfirm } from './components/KillConfirm'
 import { PublishModal } from './components/PublishModal'
@@ -19,6 +20,8 @@ import {
   addDraftRule,
   diffRules,
   editDraftRule,
+  fetchCodeListSummary,
+  fetchCodeListSyncs,
   fetchRules,
   fetchVersions,
   openDraft,
@@ -84,6 +87,9 @@ function Console() {
   const onRules = screen === 'rules'
   const versionsRead = useAsync(fetchVersions, { immediate: onRules, deps: [onRules] })
   const rulesRead = useAsync(() => fetchRules(selectedVersion ?? undefined), { immediate: onRules, deps: [onRules, selectedVersion] })
+  const codeListsRead = useAsync(fetchCodeListSummary, { immediate: onRules, deps: [onRules], isEmpty: () => false })
+  const codeList = drawer?.type === 'code-list' ? drawer.id : null
+  const syncsRead = useAsync(() => fetchCodeListSyncs(codeList ?? ''), { immediate: codeList !== null, deps: [codeList], isEmpty: () => false })
   const lastList = useRef<RulesInForce | null>(null)
   if (rulesRead.data) lastList.current = rulesRead.data
   const list = rulesRead.data ?? (rulesRead.status === 'error' ? null : lastList.current)
@@ -104,7 +110,9 @@ function Console() {
   const listState = versions.find((v) => v.version === list?.version)?.state ?? (selectedVersion === null && list ? 'in_force' : null)
   const switchable = listState === 'in_force'
   const versionsNote = versionsRead.status === 'error' ? (versionsRead.error?.message ?? 'Versions unavailable') : 'Loading versions…'
-  const expired = rulesRead.error?.status === 401 || versionsRead.error?.status === 401
+  const readNote = (r: { status: string; error: { status: number | null; message: string } | null }): string =>
+    r.status !== 'error' ? 'Loading…' : r.error?.status === 403 ? 'Your account has no rules role.' : (r.error?.message ?? 'Unavailable')
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void signOut()
   }, [expired])
@@ -320,6 +328,9 @@ function Console() {
               draftVersion={draftVersion?.version ?? null}
               draftBusy={draftBusy}
               onNewDraft={newDraft}
+              codeLists={codeListsRead.data}
+              codeListsNote={readNote(codeListsRead)}
+              onOpenCodeList={(list) => setDrawer({ type: 'code-list', id: list })}
               onAddRule={() => setDrawer({ type: 'new-rule' })}
               onTestDraft={() => {
                 setTestResult(null)
@@ -364,6 +375,8 @@ function Console() {
           onCancel={() => cancelJob(drawerJob.id)}
         />
       )}
+
+      {codeList !== null && <CodeListDrawer list={codeList} syncs={syncsRead.data} note={readNote(syncsRead)} onClose={() => setDrawer(null)} />}
 
       {(drawerRule || (drawer?.type === 'new-rule' && onDraft)) && (
         <RuleDrawer

@@ -5,10 +5,13 @@ import { SESSION_KEY } from './auth'
 import { readFileSync } from 'node:fs'
 import {
   addDraftRule,
+  capCodes,
   diffRules,
   draftRuleErrors,
   editDraftRule,
   EMPTY_FORM,
+  fetchCodeListSummary,
+  fetchCodeListSyncs,
   fetchRules,
   fetchRulesInForce,
   fetchVersions,
@@ -298,5 +301,26 @@ describe('RULE_TYPES', () => {
     const types = [...code.matchAll(/^\s*Type\w+\s+RuleType\s*=\s*"([^"]+)"/gm)].map((m) => m[1])
     expect(types.length, 'constants found').toBeGreaterThan(5)
     expect([...RULE_TYPES].sort()).toEqual([...types].sort())
+  })
+
+  it('fetchCodeListSummary and fetchCodeListSyncs build the URLs', async () => {
+    const url = `${GW}/api/validation/v1/staff/code-list-syncs`
+    const lists = [{ list: 'hs-codes', synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added_count: 3, removed_count: 1, changed_count: 0, status: 'held' }]
+    fetchMock.mockResolvedValueOnce(json(200, { lists }))
+    expect(await fetchCodeListSummary()).toEqual(lists)
+    expect(fetchMock.mock.calls[0][0]).toBe(url)
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer T')
+    const syncs = [{ status: 'applied', synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: ['A'], removed: [], changed: [] }]
+    fetchMock.mockResolvedValueOnce(json(200, { list: 'hs-codes', syncs }))
+    expect(await fetchCodeListSyncs('hs-codes')).toEqual(syncs)
+    expect(fetchMock.mock.calls[1][0]).toBe(`${url}?list=hs-codes`)
+  })
+
+  it('capCodes', () => {
+    const n = (k: number) => Array.from({ length: k }, (_, i) => `c${i}`)
+    expect(capCodes(n(199), 200)).toEqual({ shown: n(199), more: 0 })
+    expect(capCodes(n(200), 200)).toEqual({ shown: n(200), more: 0 })
+    expect(capCodes(n(201), 200)).toEqual({ shown: n(200), more: 1 })
+    expect(capCodes([], 200)).toEqual({ shown: [], more: 0 })
   })
 })

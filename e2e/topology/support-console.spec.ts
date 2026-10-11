@@ -1316,3 +1316,73 @@ test('SUP-07 draft drawer holds long content', async ({ page }) => {
 
   noErrors(errors, 'SUP-07 draft drawer holds long content')
 })
+
+const STAFF_SYNCS = '/api/validation/v1/staff/code-list-syncs'
+
+test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const res = await rawFetch(STAFF_SYNCS, { headers: { Authorization: `Bearer ${await staffToken()}` } })
+  const lists = (res.body as { lists: { list: string }[] }).lists
+  const mn = mainOf(page)
+  await openScreen(page, 'Rules', 'Rules admin')
+  await expect(mn.locator('[role="switch"]').first()).toBeVisible()
+  const panel = mn.locator('.ops-rules-grid > div:first-child > div:nth-child(2)')
+  await expect(panel.getByText('Code-list syncs', { exact: true })).toBeVisible()
+
+  if (lists.length === 0) {
+    await expect(panel.getByText('No sync recorded yet.'), 'an empty sync log says so').toBeVisible()
+    noErrors(errors, 'SUP-08 code-list panel and drawer layout')
+    return
+  }
+  const rows = panel.locator('button')
+  await expect(rows, 'one panel row per synced list').toHaveCount(lists.length)
+
+  await atWidths(page, 'SUP-08 code-list panel layout', async () => {
+    const { card, versions } = await boxes(page, { card: panel, versions: mn.locator('.ops-rules-grid > div:first-child > div:first-child') })
+    const rowRects = await rectsOf(page, rows, 'panel row')
+    const names = await rectsOf(page, rows.locator('xpath=./span[1]/span[1]'), 'list name')
+    const chips = await rectsOf(page, rows.locator('xpath=./span[1]/span[2]'), 'status chip')
+    const dates = await rectsOf(page, rows.locator('xpath=./span[2]'), 'sync date')
+    const counts = await rectsOf(page, rows.locator('xpath=./span[3]'), 'counts')
+    await noSidewaysScroll(page, 'Rules')
+    return {
+      problems: [
+        ...rowRects.flatMap((r, i) => within(card, r, `panel row ${i} in the panel card`)),
+        ...names.flatMap((n, i) => pairwiseApart([n, chips[i], dates[i], counts[i]], `panel row ${i} parts`)),
+        ...apart(versions, card, 'versions card / panel'),
+        ...(Math.abs(versions.x - card.x) <= 1 ? [] : [`versions card and panel are not left-aligned: ${versions.x} vs ${card.x}`]),
+        ...below(versions, card, 'panel'),
+      ],
+      rects: { card, versions, rowRects, names, chips, dates, counts },
+    }
+  })
+
+  const rail = mn.locator(`.ops-rules-grid ${RAIL_ROWS}[aria-pressed="false"]`).first()
+  await expect(rail, 'a versions-rail row that is not selected').toBeVisible()
+  const row = rows.first()
+  const paint = ['padding', 'background-color']
+  await expectStyles(row, 'panel row paint (D31)', await styles(rail, paint))
+  await expectStyles(kid(kid(row, 1), 2), 'panel status chip', { radius: (await radii(kid(rail, 2)))[0] })
+
+  await row.click()
+  const { drawer } = await expectDrawer(page, 'code-list drawer')
+  await expect(drawer.getByText('CODE LIST', { exact: true })).toBeVisible()
+  await atWidths(page, 'SUP-08 code-list drawer layout', async () => {
+    const d = await boxes(page, { drawer })
+    const blocks = await rectsOf(page, drawer.locator('xpath=./div[2]/div'), 'sync block')
+    const codes = await rectsOf(page, drawer.locator('xpath=./div[2]//div.mono'), 'code block')
+    await noSidewaysScroll(page, 'the code-list drawer page')
+    const m = await drawer.locator('xpath=./div[2]').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+    return {
+      problems: [
+        ...blocks.flatMap((b, i) => within(d.drawer, b, `sync block ${i} in the drawer`)),
+        ...codes.flatMap((c, i) => within(d.drawer, c, `code block ${i} in the drawer`)),
+        ...(m.scrollWidth - m.clientWidth <= 1 ? [] : [`the drawer body scrolls sideways: ${m.scrollWidth} vs ${m.clientWidth}`]),
+      ],
+      rects: { drawer: d.drawer, blocks, codes },
+    }
+  })
+
+  noErrors(errors, 'SUP-08 code-list panel and drawer layout')
+})

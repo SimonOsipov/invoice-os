@@ -337,6 +337,14 @@ export interface Entity {
   registration: string | null
   sector: string | null
   address: string | null
+  email: string | null
+  telephone: string | null
+  street: string | null
+  city: string | null
+  postal_zone: string | null
+  country: string | null
+  state: string | null
+  lga: string | null
   status: 'active' | 'archived'
   created_at: string
 }
@@ -352,6 +360,54 @@ export interface ListResponse {
   pagination: Pagination
 }
 
+// Customer mirrors internal/customer/customer.go's Customer struct (buyer directory row).
+export interface Customer {
+  id: string
+  tin: string
+  name: string | null
+  contact_person: string | null
+  buyer_type: string | null
+  email: string | null
+  telephone: string | null
+  street: string | null
+  city: string | null
+  postal_zone: string | null
+  country: string | null
+  state: string | null
+  lga: string | null
+  created_at: string
+}
+
+// listCustomers(): GET /v1/customers; `tin` is ListFilter.TIN, an exact match.
+export function listCustomers(token: string, query?: { tin?: string; limit?: number; offset?: number }): Promise<{ customers: Customer[]; pagination: Pagination }> {
+  const params = new URLSearchParams()
+  if (query?.tin !== undefined) params.set('tin', query.tin)
+  if (query?.limit !== undefined) params.set('limit', String(query.limit))
+  if (query?.offset !== undefined) params.set('offset', String(query.offset))
+  const qs = params.toString()
+  return apiFetch(`${apiBase()}/api/invoice/v1/customers${qs ? `?${qs}` : ''}`, { token })
+}
+
+// CustomerUpdateInput mirrors internal/customer/customer.go's updateRequest; tin is not editable.
+export interface CustomerUpdateInput {
+  name?: string
+  contact_person?: string
+  buyer_type?: string
+  email?: string
+  telephone?: string
+  street?: string
+  city?: string
+  postal_zone?: string
+  country?: string
+  state?: string
+  lga?: string
+}
+
+// updateCustomer(): PATCH /v1/customers/{id}.
+export function updateCustomer(token: string, id: string, body: CustomerUpdateInput): Promise<Customer> {
+  return apiFetch<Customer>(`${apiBase()}/api/invoice/v1/customers/${id}`, { method: 'PATCH', body, token })
+}
+
 export interface Violation {
   rule_key: string
   severity: string
@@ -365,6 +421,14 @@ export interface EntityInput {
   registration?: string | null
   sector?: string | null
   address?: string | null
+  email?: string | null
+  telephone?: string | null
+  street?: string | null
+  city?: string | null
+  postal_zone?: string | null
+  country?: string | null
+  state?: string | null
+  lga?: string | null
 }
 
 export interface EntityUpdateInput {
@@ -373,6 +437,14 @@ export interface EntityUpdateInput {
   registration?: string | null
   sector?: string | null
   address?: string | null
+  email?: string | null
+  telephone?: string | null
+  street?: string | null
+  city?: string | null
+  postal_zone?: string | null
+  country?: string | null
+  state?: string | null
+  lga?: string | null
 }
 
 export interface ListEntitiesQuery {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/actor"
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
+	"github.com/SimonOsipov/invoice-os/internal/customer"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -212,9 +214,11 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		// and its no-partial-write sibling) -- no new lookup was introduced.
 		var entityName string
 		var entityTIN *string
+		var contact SupplierContact
 		if err := tx.QueryRow(ctx,
-			`SELECT name, tin FROM business_entities WHERE id = $1`, in.EntityID,
-		).Scan(&entityName, &entityTIN); err != nil {
+			`SELECT name, tin, email, telephone, street, city, postal_zone, country, state, lga FROM business_entities WHERE id = $1`, in.EntityID,
+		).Scan(&entityName, &entityTIN, &contact.Email, &contact.Telephone, &contact.Street, &contact.City,
+			&contact.PostalZone, &contact.Country, &contact.State, &contact.LGA); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrValidation
 			}
@@ -248,6 +252,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		// still violates buyer-tin-format faithfully.
 		in.SupplierTIN = MBSSupplierTIN(entityTIN)
 		in.SupplierName = &entityName
+		DefaultSupplierContact(&in, contact)
 
 		if err := scanInvoice(tx.QueryRow(ctx,
 			`INSERT INTO invoices
@@ -270,6 +275,10 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			case "23503", "22P02", "22007", "22008", "22021":
 				return ErrValidation
 			}
+			return err
+		}
+
+		if err := customer.FillFromInvoiceTx(ctx, tx, inv.ID); err != nil {
 			return err
 		}
 
@@ -1317,7 +1326,26 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 		return Invoice{}, nil, err
 	}
 
+	if touchesBuyer(changedFields) {
+		if err := customer.FillFromInvoiceTx(ctx, tx, inv.ID); err != nil {
+			return Invoice{}, nil, err
+		}
+	}
+
 	return inv, changedFields, nil
+}
+
+// buyerFillColumns are the invoice columns the buyer directory fill reads.
+var buyerFillColumns = []string{"buyer_tin", "buyer_name", "invoice_kind", "buyer_email", "buyer_telephone",
+	"buyer_street", "buyer_city", "buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}
+
+func touchesBuyer(changed []string) bool {
+	for _, c := range changed {
+		if slices.Contains(buyerFillColumns, c) {
+			return true
+		}
+	}
+	return false
 }
 
 // Edit is M4-05-02's fix-loop orchestrator (System Design §4; widened by

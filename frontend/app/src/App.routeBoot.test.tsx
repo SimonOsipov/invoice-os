@@ -330,6 +330,19 @@ describe('ROUTE-04-02 AC-1: the settings tab seeds from the path segment', () =>
   })
 })
 
+describe('ENGI-05-07: /settings/buyers is addressable for both personas', () => {
+  it('boot_settingsBuyersDeepLinkKeepsTheTabForFirmAndInhouse', async () => {
+    await bootAt('/settings/buyers')
+    expect(requireCtx().settingsTab, 'firm must not fall back to members').toBe('buyers')
+    expect(window.location.pathname).toBe('/settings/buyers')
+    cleanup()
+    capturedCtx = undefined
+    await bootAt('/settings/buyers', { persona: APP_PERSONAS.inhouse })
+    expect(requireCtx().settingsTab, 'in-house must keep buyers').toBe('buyers')
+    expect(window.location.pathname).toBe('/settings/buyers')
+  })
+})
+
 describe('ROUTE-04-02 AC-2: the invoice query seeds, and survives the alignment', () => {
   it('boot_theInvoiceQuerySeedsFromTheUrl', async () => {
     await bootAt('/invoices?q=acme')
@@ -663,6 +676,7 @@ describe('ROUTE-04-06 AC-1: a firm-mode /settings/company falls back identically
   const SETTINGS_TAB_LABELS = new Set([
     'Members',
     'Roles',
+    'Buyers',
     'ERP connectors',
     'API & webhooks',
     'Signing & certificates',
@@ -698,7 +712,7 @@ describe('ROUTE-04-06 AC-1: a firm-mode /settings/company falls back identically
       view: 'settings',
       settingsTab: 'members',
       alignedUrl: '/settings/members',
-      stripLabels: ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates'],
+      stripLabels: ['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates'],
     })
   })
 })
@@ -777,7 +791,7 @@ describe('ROUTE-04-06 AC-3: a stale Company entry left behind by an earlier sess
       'a stale Company entry from an earlier in-house session must be clamped for the firm workspace it resurfaces under',
     ).toBe('members')
 
-    const FIRM_TAB_LABELS = ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates']
+    const FIRM_TAB_LABELS = ['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates']
     const stripTabs = Array.from(document.querySelectorAll('.pf-tab')).filter((el) =>
       FIRM_TAB_LABELS.includes(el.textContent ?? ''),
     )

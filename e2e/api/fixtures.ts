@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto'
 // BAD_INVOICE_KEYS: the sorted verdict set a malformed supplier TIN plus a wrong VAT
 // amount fires against the seeded rule set (verified against the committed golden
 // internal/validation/testdata/golden/demo_bad_invoice.json). It has no code consumer --
@@ -59,6 +60,13 @@ export function freshTin(): string {
   const digits11 = tinRunSeed + sequence // 4 + 7 = 11 digits
   const twelve = digits11 + luhnCheckDigit(digits11)
   return `${twelve.slice(0, 8)}-${twelve.slice(8)}`
+}
+
+// freshBuyerTin(): a random NNNNNNNN-NNNN, the shape internal/customer/fill.go files. No check digit is
+// needed for a buyer, and the random source keeps two processes with one pid seed apart.
+export function freshBuyerTin(): string {
+  const digits = (n: number): string => String(randomInt(0, 10 ** n)).padStart(n, '0')
+  return `${digits(8)}-${digits(4)}`
 }
 
 // freshRoleTitle(): a per-run-unique workflow-role title, on freshTin's seed + counter

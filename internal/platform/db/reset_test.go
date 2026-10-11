@@ -149,7 +149,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 		t.Fatalf("parsed %d tables out of reset.go (%v); the parser is broken and every reset assertion below is vacuous",
 			len(resetTargetTables), resetTargetTables)
 	}
-	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs"} {
+	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs", "customers"} {
 		if !slices.Contains(resetTargetTables, want) {
 			t.Errorf("resetTables does not truncate %q", want)
 		}
@@ -164,7 +164,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 // seedFullResetFixture inserts one row into every table db.Reset truncates,
 // chained through the real FK graph (business_entities -> invoices ->
 // line_items / invoice_status_history / submission_jobs -> app_exchange;
-// import_batches -> business_entities; import_mappings -> business_entities),
+// import_batches -> business_entities; import_mappings -> business_entities; customers -> tenants),
 // plus one independent row in each of
 // idempotency_keys/audit_log/the four River tables. Connects as the
 // superuser (BYPASSRLS; several of these tables are FORCE RLS) and returns
@@ -196,6 +196,13 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		tenantID, entityID, strings.Repeat(strings.ReplaceAll(uuid.NewString(), "-", ""), 2), `{"invoice_number":"Invoice No"}`,
 	); err != nil {
 		t.Fatalf("seed import_mappings fixture: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO customers (tenant_id, tin) VALUES ($1, '99999999-0001') ON CONFLICT DO NOTHING`,
+		tenantID,
+	); err != nil {
+		t.Fatalf("seed customers fixture: %v", err)
 	}
 
 	var invoiceID string
@@ -498,6 +505,10 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 
 	if after := countAllResetTargetTables(t, pool); after != 0 {
 		t.Errorf("rows remaining across the reset target tables after Reset = %d, want 0", after)
+	}
+	// Named, not parsed: a table dropped from resetTables leaves the loop above.
+	if n := mustCount(t, pool, `SELECT count(*) FROM customers`); n != 0 {
+		t.Errorf("customers rows after Reset = %d, want 0", n)
 	}
 }
 

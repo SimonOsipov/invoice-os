@@ -980,6 +980,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/approval-policies/{id}":                      {verdict: scCovered},
 	"GET /v1/audit-log":                                   {verdict: scCovered},
 	"GET /v1/contacts/me":                                 {verdict: scExempt, reason: "reads the caller's own contact by the token's email; contacts carry no tenant"},
+	"GET /v1/customers":                                   {verdict: scCovered},
 	"GET /v1/documents/{id}":                              {verdict: scCovered},
 	"GET /v1/documents/{id}/sheet":                        {verdict: scCovered},
 	"GET /v1/entities":                                    {verdict: scCovered},
@@ -1018,6 +1019,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"OPTIONS /auth/sign-in":                               {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /auth/sign-out":                              {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /contacts/demo-request":                      {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"PATCH /v1/customers/{id}":                            {verdict: scCovered},
 	"PATCH /v1/entities/{id}":                             {verdict: scCovered},
 	"PATCH /v1/invoices/{id}":                             {verdict: scCovered},
 	"PATCH /v1/memberships/{user_id}":                     {verdict: scCovered},
@@ -3387,6 +3389,8 @@ var scSweepSkipAllowlist = []scSweepSkipExemption{
 	{file: "internal/invoice/payload_engine_test.go", fn: "rulesAppPool"},                                     // same guard, PAY-18's app-role-only pool helper
 	{file: "internal/invoice/revalidate_test.go", fn: "TestRevalidateAllTenants_CoversEveryEnumeratedTenant"}, // pre-existing: skips when DATABASE_READER_URL is unset, unrelated to the sweep
 	{file: "internal/invoice/recheck_test.go", fn: "TestStatusHistoryCause_DownDropsTheColumn"},               // env-gated: skips without DATABASE_MIGRATION_URL, the owner role the Down must run as
+	{file: "internal/invoice/customer_fill_test.go", fn: "cfFailFill"},                                        // env-gated: skips without DATABASE_MIGRATION_URL, the owner role that adds the trigger
+	{file: "internal/importer/customer_fill_test.go", fn: "cfFailFill"},                                       // same guard, importer's copy of the helper
 	{file: "internal/approval/policy_immutability_test.go", fn: "migratorPool"},                               // pre-existing: skips without DATABASE_MIGRATION_URL, unrelated to the sweep
 	{file: "internal/approval/workflow_roles_test.go", fn: "dbTestPools"},                                     // same guard, approval's own pool helper
 	{file: "internal/tenancy/tenancy_test.go", fn: "dbTestPools"},                                             // same guard, tenancy's own pool helper

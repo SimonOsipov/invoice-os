@@ -3,14 +3,14 @@
 // unlike portfolio.test.ts / authedFetch.test.ts.
 //
 // Contract (Obsidian M3-08 story, §6 System Design + [A-k]):
-// - `emptyEntityForm()` — all-'' form state (name/tin/registration/sector/address).
+// - `emptyEntityForm()` — all-'' form state.
 // - `entityFormFrom(entity)` — live Entity -> form state; null optionals -> '' (inputs
 //   stay controlled).
 // - `validateEntityForm(state)` — presence-only (name + TIN required); server owns TIN
 //   grammar/duplicate checks (surfaced via mapSubmitError from 400/409, not
 //   re-implemented here, [A-g]). Returns `{valid, errors: {name?, tin?}}`.
 // - `toEntityInput(state)` — CREATE path: trim every field; omit an empty optional
-//   (registration/sector/address) entirely (the backend reads an absent field as
+//   entirely (the backend reads an absent field as
 //   "unset on create").
 // - `toEntityUpdateInput(original, state)` — EDIT path ([A-k], F6 fix-now, GATE verified
 //   against the backend: a PATCH pointer-to-"" persists and clears — portfolio.go /
@@ -41,6 +41,14 @@ export interface EntityFormState {
   registration: string
   sector: string
   address: string
+  email: string
+  telephone: string
+  street: string
+  city: string
+  postalZone: string
+  country: string
+  state: string
+  lga: string
 }
 
 export interface EntityFormErrors {
@@ -61,8 +69,28 @@ export interface SubmitError {
   message: string
 }
 
+// Form key -> wire key for the 8 NRS buyer-detail fields.
+const NRS_FIELDS = [
+  ['email', 'email'],
+  ['telephone', 'telephone'],
+  ['street', 'street'],
+  ['city', 'city'],
+  ['postalZone', 'postal_zone'],
+  ['country', 'country'],
+  ['state', 'state'],
+  ['lga', 'lga'],
+] as const
+
+const EMPTY_NRS = { email: '', telephone: '', street: '', city: '', postalZone: '', country: '', state: '', lga: '' }
+
 export function emptyEntityForm(): EntityFormState {
-  return { name: '', tin: '', registration: '', sector: '', address: '' }
+  return { name: '', tin: '', registration: '', sector: '', address: '', ...EMPTY_NRS }
+}
+
+function nrsFormFrom(entity: Entity) {
+  const out = { ...EMPTY_NRS }
+  for (const [formKey, wireKey] of NRS_FIELDS) out[formKey] = entity[wireKey] ?? ''
+  return out
 }
 
 export function entityFormFrom(entity: Entity): EntityFormState {
@@ -72,6 +100,7 @@ export function entityFormFrom(entity: Entity): EntityFormState {
     registration: entity.registration ?? '',
     sector: entity.sector ?? '',
     address: entity.address ?? '',
+    ...nrsFormFrom(entity),
   }
 }
 
@@ -90,6 +119,10 @@ export function toEntityInput(state: EntityFormState): EntityInput {
   if (registration) input.registration = registration
   if (sector) input.sector = sector
   if (address) input.address = address
+  for (const [formKey, wireKey] of NRS_FIELDS) {
+    const v = state[formKey].trim()
+    if (v) input[wireKey] = v
+  }
   return input
 }
 
@@ -100,13 +133,16 @@ export function toEntityUpdateInput(original: Entity, state: EntityFormState): P
     registration: state.registration.trim(),
     sector: state.sector.trim(),
     address: state.address.trim(),
+    ...EMPTY_NRS,
   }
+  for (const [formKey] of NRS_FIELDS) trimmed[formKey] = state[formKey].trim()
   const normalized: EntityFormState = {
     name: original.name,
     tin: original.tin ?? '',
     registration: original.registration ?? '',
     sector: original.sector ?? '',
     address: original.address ?? '',
+    ...nrsFormFrom(original),
   }
   const diff: Partial<EntityInput> = {}
   if (trimmed.name !== normalized.name) diff.name = trimmed.name
@@ -114,6 +150,9 @@ export function toEntityUpdateInput(original: Entity, state: EntityFormState): P
   if (trimmed.registration !== normalized.registration) diff.registration = trimmed.registration
   if (trimmed.sector !== normalized.sector) diff.sector = trimmed.sector
   if (trimmed.address !== normalized.address) diff.address = trimmed.address
+  for (const [formKey, wireKey] of NRS_FIELDS) {
+    if (trimmed[formKey] !== normalized[formKey]) diff[wireKey] = trimmed[formKey]
+  }
   return diff
 }
 

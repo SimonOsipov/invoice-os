@@ -7,7 +7,7 @@ import { AUDIT_EVENTS, auditEventView, type AuditDomain } from './auditVocabular
 
 const REPO_ROOT = resolve(__dirname, '../../../..')
 
-// The 44 identifiers this app claims to label. Four families
+// The 45 identifiers this app claims to label. Four families
 // are built from a variable rather than a literal, so a grep for quoted strings undercounts:
 // tenancy/store.go, portfolio/store.go, document/document.go and
 // submission/verdict_audit.go ("submission."+outcome).
@@ -64,23 +64,24 @@ const EXPECTED: Record<AuditDomain, string[]> = {
   validation: ['validation.rule.enabled', 'validation.rule.disabled'],
   submissions: ['submission.accepted', 'submission.rejected', 'submission.failed'],
   reconciliation: ['reconciliation.drift_detected', 'reconciliation.auto_fixed'],
+  customers: ['customers.customer.updated'],
 }
 
 const ALL = Object.values(EXPECTED).flat()
 
 describe('audit vocabulary', () => {
-  it('auditVocabulary_hasAllFortyFourTypes', () => {
+  it('auditVocabulary_hasAllFortyFiveTypes', () => {
     const shipped = Object.keys(AUDIT_EVENTS)
     // An empty collection satisfies every assertion inside a loop, so pin the size first.
     expect(shipped.length).toBeGreaterThan(0)
-    expect(shipped.length).toBe(44)
-    expect(ALL.length).toBe(44)
+    expect(shipped.length).toBe(45)
+    expect(ALL.length).toBe(45)
     expect(new Set(shipped)).toEqual(new Set(ALL))
   })
 
-  it('auditVocabulary_domainsAreExactlyTen', () => {
+  it('auditVocabulary_domainsAreExactlyEleven', () => {
     const domains = new Set(Object.values(AUDIT_EVENTS).map((e) => e.domain))
-    expect(domains.size).toBe(10)
+    expect(domains.size).toBe(11)
     for (const [domain, ids] of Object.entries(EXPECTED)) {
       for (const id of ids) {
         // Named before it is dereferenced: a missing id would otherwise crash the loop with a
@@ -176,6 +177,16 @@ describe('audit vocabulary', () => {
     // humanise() answers a null domain for an unknown id, so the domain tells labelled from unknown.
     expect(view.domain).toBe('memberships')
     expect(view.label).toBe('Workspace created')
+    expect(view.tone).toBeNull()
+    // Control: the same view function answers a tone for an outcome-bearing event.
+    expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary_buyerUpdatedIsLabelledInCustomers', () => {
+    const view = auditEventView('customers.customer.updated')
+    // humanise() answers a null domain for an unknown id, so the domain tells labelled from unknown.
+    expect(view.domain).toBe('customers')
+    expect(view.label).toBe('Buyer updated')
     expect(view.tone).toBeNull()
     // Control: the same view function answers a tone for an outcome-bearing event.
     expect(auditEventView('submission.failed').tone).not.toBeNull()

@@ -503,7 +503,7 @@ func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) 
 // ([supplier-from-entity]); batchID is the ONE minted id for this whole
 // import run — the guardrail is trivially satisfied since Import never
 // accepts a caller-supplied batch id.
-func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, documentID string, headerRow int, supplierName string, supplierTIN *string, defaultInvoiceKind string) invoice.CreateInput {
+func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, documentID string, headerRow int, supplierName string, supplierTIN *string, contact invoice.SupplierContact, defaultInvoiceKind string) invoice.CreateInput {
 	firstRow := rows[g.rowIdxs[0]]
 
 	// classify (dateParseError) already rejected any unparseable date, so a nil
@@ -580,6 +580,7 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 			BaseQuantity:              fieldValue(row, colIndex, "line_base_quantity"),
 		})
 	}
+	invoice.DefaultSupplierContact(&in, contact)
 	return in
 }
 
@@ -920,7 +921,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		invalidRows++
 	}
 
-	supplierName, supplierTIN, err := s.batch.EntitySupplier(ctx, entityID)
+	supplierName, supplierTIN, supplierContact, err := s.batch.EntitySupplier(ctx, entityID)
 	if err != nil {
 		return BatchResult{}, err
 	}
@@ -975,7 +976,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			// batchID is "" -- no batch exists on a dry-run and none is
 			// minted. MBSPayload never reads ImportBatchID, so it cannot
 			// reach 04 or affect a single verdict.
-			in := buildCreateInput(entityID, rows, colIndex, g, "", "", headerRow, supplierName, supplierTIN, defaultInvoiceKind)
+			in := buildCreateInput(entityID, rows, colIndex, g, "", "", headerRow, supplierName, supplierTIN, supplierContact, defaultInvoiceKind)
 			// Ref is the invoice_number, not an id: no id exists yet
 			// pre-Create. 04 echoes Ref back untouched and never interprets
 			// it, and group numbers are unique by construction (groups is
@@ -1060,7 +1061,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 
 	readyCount := 0
 	for _, g := range readyGroups {
-		in := buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, headerRow, supplierName, supplierTIN, defaultInvoiceKind)
+		in := buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, headerRow, supplierName, supplierTIN, supplierContact, defaultInvoiceKind)
 		inv, createErr := s.inv.Create(ctx, in)
 		if createErr == nil {
 			readyCount++

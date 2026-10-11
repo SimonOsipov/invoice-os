@@ -120,7 +120,7 @@ func nrsBuild(t *testing.T, rows ...map[string]string) []invoice.CreateInput {
 	}
 	out := make([]invoice.CreateInput, len(order))
 	for i, num := range order {
-		out[i] = buildCreateInput("entity-1", data, colIndex, groups[num], "", "", 1, "Acme", nil, "")
+		out[i] = buildCreateInput("entity-1", data, colIndex, groups[num], "", "", 1, "Acme", nil, invoice.SupplierContact{}, "")
 	}
 	return out
 }

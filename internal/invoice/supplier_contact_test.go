@@ -48,3 +48,71 @@ func TestDefaultSupplierContact_TrimsTheCompanyValue(t *testing.T) {
 		t.Fatalf("SupplierCity = %v, want Ikeja", in.SupplierCity)
 	}
 }
+
+// contactFields pairs each CreateInput contact field with its SupplierContact twin.
+func contactFields(in *CreateInput, c *SupplierContact) []struct {
+	name string
+	dst  **string
+	src  **string
+} {
+	return []struct {
+		name string
+		dst  **string
+		src  **string
+	}{
+		{"Email", &in.SupplierEmail, &c.Email}, {"Telephone", &in.SupplierTelephone, &c.Telephone},
+		{"Street", &in.SupplierStreet, &c.Street}, {"City", &in.SupplierCity, &c.City},
+		{"PostalZone", &in.SupplierPostalZone, &c.PostalZone}, {"Country", &in.SupplierCountry, &c.Country},
+		{"State", &in.SupplierState, &c.State}, {"LGA", &in.SupplierLGA, &c.LGA},
+	}
+}
+
+func TestDefaultSupplierContact_EachFieldDefaultsIndependently(t *testing.T) {
+	n := len(contactFields(&CreateInput{}, &SupplierContact{}))
+	if n != 8 {
+		t.Fatalf("contact fields = %d, want 8", n)
+	}
+	for i := 0; i < n; i++ {
+		in, c := CreateInput{}, SupplierContact{}
+		fs := contactFields(&in, &c)
+		*fs[i].src = strPtr("v-" + fs[i].name)
+		DefaultSupplierContact(&in, c)
+		for j, f := range contactFields(&in, &c) {
+			if j == i {
+				if *f.dst == nil || **f.dst != "v-"+f.name {
+					t.Errorf("%s alone: got %v, want its own value", f.name, *f.dst)
+				}
+			} else if *f.dst != nil {
+				t.Errorf("%s set while only %s had a company value", f.name, fs[i].name)
+			}
+		}
+	}
+}
+
+func TestDefaultSupplierContact_EachSentValueWinsPerField(t *testing.T) {
+	for i := 0; i < 8; i++ {
+		for _, sent := range []string{"", "caller"} {
+			in, c := CreateInput{}, fullContact()
+			fs := contactFields(&in, &c)
+			*fs[i].dst = strPtr(sent)
+			DefaultSupplierContact(&in, c)
+			if got := *fs[i].dst; got == nil || *got != sent {
+				t.Errorf("%s sent %q: got %v", fs[i].name, sent, got)
+			}
+		}
+	}
+}
+
+func TestDefaultSupplierContact_BlankOrNilCompanyValueLeavesEachFieldNil(t *testing.T) {
+	for i := 0; i < 8; i++ {
+		for _, blank := range []*string{nil, strPtr(""), strPtr(" \t\n ")} {
+			in, c := CreateInput{}, SupplierContact{}
+			fs := contactFields(&in, &c)
+			*fs[i].src = blank
+			DefaultSupplierContact(&in, c)
+			if *fs[i].dst != nil {
+				t.Errorf("%s with company value %v: got %q, want nil", fs[i].name, blank, **fs[i].dst)
+			}
+		}
+	}
+}

@@ -71,3 +71,19 @@ func TestStoreEdit_AppliesNoSupplierContactDefault(t *testing.T) {
 		t.Errorf("SupplierEmail after edit = %q, want nil", *got)
 	}
 }
+
+func TestStoreCreate_SupplierContactBlankPaddedAndSentEmpty(t *testing.T) {
+	f := newNRSFixture(t, "SC-03")
+	if _, err := f.super.Exec(context.Background(),
+		`UPDATE business_entities SET email = '  co@x.ng ', telephone = '   ', city = 'Ikeja' WHERE id = $1`, f.entityID); err != nil {
+		t.Fatalf("set contact: %v", err)
+	}
+	inv := f.get(t, f.create(t, "SC-3", CreateInput{SupplierStreet: strPtr("")}).ID)
+	got := contactOf(inv)
+	if got[0] != "co@x.ng" || got[1] != "<nil>" || got[2] != "" || got[3] != "Ikeja" || got[7] != "<nil>" {
+		t.Errorf("contact = %v, want trimmed email, nil blank phone, sent-empty street, city, nil lga", got)
+	}
+	if inv.SupplierName == nil || *inv.SupplierName == "" {
+		t.Errorf("SupplierName = %v, want the entity name", inv.SupplierName)
+	}
+}

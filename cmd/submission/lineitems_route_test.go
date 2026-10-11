@@ -151,6 +151,35 @@ func TestNewInvoiceLineItemsApplier_CopiesEveryCellByPosition(t *testing.T) {
 	}
 }
 
+func TestNewInvoiceLineItemsApplier_CopiesAllTenRolesByPosition(t *testing.T) {
+	mk := func(n string) extraction.LineItemInput {
+		p := func(role string) *string { s := role + n; return &s }
+		return extraction.LineItemInput{
+			Description: p("d"), Quantity: p("q"), UnitPrice: p("u"), LineTotal: p("t"), LineTax: p("x"),
+			TaxCategory: p("tc"), HSNCode: p("hs"), ISICCode: p("is"), SellersItemIdentification: p("si"), PriceUnit: p("pu"),
+		}
+	}
+	in := []extraction.LineItemInput{mk("1"), mk("2")}
+	spy := &fcEditSpy{returnedID: fcInvoiceID}
+	if _, err := newInvoiceLineItemsApplier(spy.edit)(context.Background(), nil, liDocumentID, in); err != nil {
+		t.Fatalf("the adapter returned %v, want nil", err)
+	}
+	got := spy.gotInput.LineItems
+	if got == nil || len(*got) != 2 {
+		t.Fatalf("captured %v, want 2 lines", got)
+	}
+	for i, l := range in {
+		want := invoice.LineItemInput{
+			Description: l.Description, Quantity: l.Quantity, UnitPrice: l.UnitPrice, LineTotal: l.LineTotal, LineTax: l.LineTax,
+			TaxCategory: l.TaxCategory, HSNCode: l.HSNCode, ISICCode: l.ISICCode,
+			SellersItemIdentification: l.SellersItemIdentification, PriceUnit: l.PriceUnit,
+		}
+		if !reflect.DeepEqual((*got)[i], want) {
+			t.Errorf("line %d = %+v, want %+v", i, (*got)[i], want)
+		}
+	}
+}
+
 // D-04-1: extraction.LineItemInput now carries LineTax too. The adapter must pass the posted
 // value through unchanged -- never invent one, never drop the one the grid read back -- so a
 // replace-all save no longer erases line_tax the store already had (formerly

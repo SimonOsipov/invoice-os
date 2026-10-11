@@ -558,6 +558,31 @@ func TestRLS_CorrectionNormalisesIssueDateToOneSpelling(t *testing.T) {
 	}
 }
 
+// TestRLS_CorrectionNormalisesADueDate: due_date takes the issue_date path, so the seam is
+// handed ISO.
+func TestRLS_CorrectionNormalisesADueDate(t *testing.T) {
+	ctx := t.Context()
+	reqCtx, tenantID, documentID, jobID := cxJob(t, ctx)
+	t.Cleanup(func() { rdaPurge(t, tenantID) })
+	entityID := cxEntity(t, ctx, tenantID)
+	cxInvoice(t, ctx, tenantID, entityID, documentID, "ENGI08-04-DUE-"+jobID[:8], "draft")
+
+	var gotField, gotValue string
+	apply := func(ctx context.Context, tx pgx.Tx, documentID, field string, value *string, m extraction.CorrectionMethod) (string, error) {
+		gotField, gotValue = field, cxShowValue(value)
+		return cxApplier(false, nil)(ctx, tx, documentID, field, value, m)
+	}
+
+	w := cxServe(t, reqCtx, jobID, "due_date", cxBody("13 Aug 2026"), apply, cxAuditor(nil))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if gotField != "due_date" || gotValue != `"2026-08-13"` {
+		t.Errorf("the seam was handed (%q, %s), want (due_date, \"2026-08-13\")", gotField, gotValue)
+	}
+}
+
 // --- the confirming correction ----------------------------------------------------------
 
 // A correction whose value equals what is already stored, and an undone correction reverting to

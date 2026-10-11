@@ -1672,3 +1672,107 @@ func TestDocumentCreateInput_LinesWithoutAnInvoiceNumberQuarantineWhole(t *testi
 		t.Errorf("CreateInput = %+v, want the zero value -- a quarantined document carries no lines", got)
 	}
 }
+
+// --- ENGI-08-04: the nine header fields and five line roles -----------------------------
+
+func TestReadingCreateInput_MapsTheNineNewHeaderFields(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "due_date", Value: mpPtr("2026-08-13")},
+		{Name: "buyer_email", Value: mpPtr("a@b.ng")},
+		{Name: "buyer_telephone", Value: mpPtr("+2348012345678")},
+		{Name: "buyer_street", Value: mpPtr("1 Marina")},
+		{Name: "buyer_city", Value: mpPtr("Lagos")},
+		{Name: "buyer_postal_zone", Value: mpPtr("100001")},
+		{Name: "buyer_country", Value: mpPtr("NG")},
+		{Name: "buyer_state", Value: mpPtr("Lagos State")},
+		{Name: "buyer_lga", Value: mpPtr("Ikeja")},
+	}}
+	got, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v", rowErr)
+	}
+	if got.DueDate == nil || !got.DueDate.Equal(time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("DueDate = %v, want 2026-08-13 UTC", got.DueDate)
+	}
+	for name, p := range map[string]*string{
+		"buyer_email": got.BuyerEmail, "buyer_telephone": got.BuyerTelephone, "buyer_street": got.BuyerStreet,
+		"buyer_city": got.BuyerCity, "buyer_postal_zone": got.BuyerPostalZone, "buyer_country": got.BuyerCountry,
+		"buyer_state": got.BuyerState, "buyer_lga": got.BuyerLGA,
+	} {
+		var want string
+		for _, f := range ex.Fields {
+			if f.Name == name {
+				want = *f.Value
+			}
+		}
+		if p == nil || *p != want {
+			t.Errorf("%s = %v, want %q", name, p, want)
+		}
+	}
+}
+
+func TestReadingCreateInput_MapsTheFiveNewLineRoles(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "line_items[1].hsn_code", Value: mpPtr("8517")},
+		{Name: "line_items[1].price_unit", Value: mpPtr("per kg")},
+		{Name: "line_items[1].tax_category", Value: mpPtr("Standard")},
+		{Name: "line_items[2].isic_code", Value: mpPtr("4711")},
+		{Name: "line_items[2].sellers_item_identification", Value: mpPtr("SKU-9")},
+	}}
+	got, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr != nil || len(got.LineItems) != 2 {
+		t.Fatalf("rowErr = %+v, lines = %d, want nil and 2", rowErr, len(got.LineItems))
+	}
+	a, b := got.LineItems[0], got.LineItems[1]
+	if a.HSNCode == nil || *a.HSNCode != "8517" || a.PriceUnit == nil || *a.PriceUnit != "per kg" ||
+		a.TaxCategory == nil || *a.TaxCategory != "Standard" || a.ISICCode != nil || a.SellersItemIdentification != nil {
+		t.Errorf("line 1 = %+v", a)
+	}
+	if b.ISICCode == nil || *b.ISICCode != "4711" || b.SellersItemIdentification == nil || *b.SellersItemIdentification != "SKU-9" ||
+		b.HSNCode != nil || b.PriceUnit != nil || b.TaxCategory != nil {
+		t.Errorf("line 2 = %+v", b)
+	}
+}
+
+func TestReadingCreateInput_ANewFieldNotReadStaysNil(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "due_date", Value: nil},
+		{Name: "buyer_city", Value: mpPtr("Lagos")},
+	}}
+	got, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v", rowErr)
+	}
+	if got.BuyerState != nil || got.DueDate != nil {
+		t.Errorf("BuyerState = %v, DueDate = %v, want nil, nil", got.BuyerState, got.DueDate)
+	}
+	if got.BuyerCity == nil {
+		t.Error("BuyerCity = nil, want the control value")
+	}
+}
+
+func TestReadingCreateInput_AnUnparseableDueDateIsARowError(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{{Name: "due_date", Value: mpPtr("13/08/2026")}}}
+	_, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr == nil || rowErr.Field != "due_date" || !strings.Contains(rowErr.Message, "13/08/2026") {
+		t.Errorf("rowErr = %+v, want Field due_date naming the value", rowErr)
+	}
+}
+
+func TestCarriedInput_CarriesTheNewFields(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")},
+		{Name: "issue_date", Value: mpPtr("2026-03-01")},
+		{Name: "total", Value: mpPtr("10.00")},
+		{Name: "buyer_email", Value: mpPtr("a@b.ng")},
+		{Name: "line_items[1].hsn_code", Value: mpPtr("8517")},
+	}}
+	in, ok := carriedInput("d", ex)
+	if !ok {
+		t.Fatal("carriedInput ok = false, want true")
+	}
+	if in.BuyerEmail == nil || *in.BuyerEmail != "a@b.ng" ||
+		len(in.LineItems) != 1 || in.LineItems[0].HSNCode == nil || *in.LineItems[0].HSNCode != "8517" {
+		t.Errorf("carried input = %+v, want BuyerEmail and line 1 HSNCode set", in)
+	}
+}

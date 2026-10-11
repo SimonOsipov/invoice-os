@@ -229,6 +229,18 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 		issueDate = parsed
 	}
 
+	var dueDate *time.Time
+	if v := values["due_date"]; v != nil {
+		parsed, err := parseDate("due_date", *v)
+		if err != nil {
+			return invoice.CreateInput{}, &RowError{
+				Field:   "due_date",
+				Message: fmt.Sprintf("The due date on this document reads %q, which is not a date this importer can read. It accepts dates written as YYYY-MM-DD, such as 2026-03-01. Enter this invoice manually to carry on.", strings.TrimSpace(*v)),
+			}
+		}
+		dueDate = parsed
+	}
+
 	// Group line_items[N].<role> cells by index, then sort NUMERICALLY: SettledExtraction's
 	// ORDER BY created_at, id does not guarantee index order, and Store.Create assigns
 	// line_no = 1..N by array position (D10), so a hole in the indices closes ordinally.
@@ -254,6 +266,16 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 			g.LineTotal = f.Value
 		case "line_tax":
 			g.LineTax = f.Value
+		case "tax_category":
+			g.TaxCategory = f.Value
+		case "hsn_code":
+			g.HSNCode = f.Value
+		case "isic_code":
+			g.ISICCode = f.Value
+		case "sellers_item_identification":
+			g.SellersItemIdentification = f.Value
+		case "price_unit":
+			g.PriceUnit = f.Value
 		}
 	}
 	var lineItems []invoice.LineItemInput
@@ -279,6 +301,15 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 		Subtotal:         values["subtotal"],
 		VAT:              values["vat"],
 		Total:            values["total"],
+		DueDate:          dueDate,
+		BuyerEmail:       values["buyer_email"],
+		BuyerTelephone:   values["buyer_telephone"],
+		BuyerStreet:      values["buyer_street"],
+		BuyerCity:        values["buyer_city"],
+		BuyerPostalZone:  values["buyer_postal_zone"],
+		BuyerCountry:     values["buyer_country"],
+		BuyerState:       values["buyer_state"],
+		BuyerLGA:         values["buyer_lga"],
 		LineItems:        lineItems,
 		SourceDocumentID: &docID,
 	}, nil

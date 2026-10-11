@@ -905,14 +905,13 @@ func TestRLS_AuditResolverDefinerIsTheLatestMigration(t *testing.T) {
 	}
 }
 
-// AC-2: the LATEST replacement is reversible. Its Down restores the previously shipped
+// AC-2: the anchor.learned replacement is reversible. Its Down restores the previously shipped
 // body instead of dropping the function, which the write-time trigger calls on every
 // insert. Executed as the migrator in a rolled-back transaction.
 //
-// The target is resolved by content, so this test follows whichever migration currently
-// defines the resolver last. That is Migration B, which adds extraction.anchor.learned and
-// whose Down restores the extraction body -- where extraction.field_corrected IS still
-// attributed. So the event this test watches flip is extraction.anchor.learned, and
+// Migration B adds extraction.anchor.learned and its Down restores the extraction body --
+// where extraction.field_corrected IS still attributed. So the event this test watches
+// flip is extraction.anchor.learned, and
 // extraction.field_corrected, submission.failed and submission.accepted are the three
 // controls: they stay attributed through both bodies, and a dropped or wrong-body Down
 // cannot fake that.

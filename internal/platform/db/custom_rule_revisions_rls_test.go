@@ -216,6 +216,25 @@ func TestRLS_CustomRuleRevisionsMissingContextFailsClosed(t *testing.T) {
 
 	_, err = tx.Exec(ctx, crrInsert, insID, h.tenantA, uuid.NewString(), 1, nil, "error", "m")
 	csAssertPGCode(t, err, "42501", "", "an insert with no tenant GUC")
+
+	// A pooled connection reads the GUC as '' after a tenant tx ends: that must be no tenant,
+	// not a uuid cast error.
+	tx2, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin for the empty-GUC case: %v", err)
+	}
+	defer func() { _ = tx2.Rollback(context.Background()) }()
+	if _, err := tx2.Exec(ctx, `SELECT set_config('app.current_tenant', '', true)`); err != nil {
+		t.Fatalf("set an empty app.current_tenant: %v", err)
+	}
+	if err := tx2.QueryRow(ctx, `SELECT count(*) FROM custom_rule_revisions`).Scan(&n); err != nil {
+		t.Fatalf("count with an empty tenant GUC: want zero rows and no error, got: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("rows visible with app.current_tenant = '' = %d, want 0", n)
+	}
+	_, err = tx2.Exec(ctx, crrInsert, insID, h.tenantA, uuid.NewString(), 1, nil, "error", "m")
+	csAssertPGCode(t, err, "42501", "", "an insert with an empty tenant GUC")
 }
 
 // FORCE subjects the migrator (the table owner) to the policy: with no GUC it matches nothing.
@@ -504,6 +523,23 @@ func TestRLS_CustomRuleRevisionsRevisionAndMessageChecked(t *testing.T) {
 		t.Errorf("rows after the refused empty message = %d, want 0", n)
 	}
 
+	// type and created_by carry the same non-empty check; crrInsert fixes both, so raw SQL here.
+	for _, c := range []struct{ col, typ, by, check string }{
+		{"type", "", "qa", "custom_rule_revisions_type_check"},
+		{"created_by", "required", "", "custom_rule_revisions_created_by_check"},
+	} {
+		id := uuid.NewString()
+		probes = append(probes, id)
+		err := crrAsApp(h.tenantA,
+			`INSERT INTO custom_rule_revisions (id, tenant_id, rule_id, revision, type, target, severity, message, enabled, created_by)
+			 VALUES ($1, $2, $3, 1, $4, 'invoice.number', 'error', 'm', true, $5)`,
+			id, h.tenantA, uuid.NewString(), c.typ, c.by)
+		csAssertPGCode(t, err, "23514", c.check, "a row with an empty "+c.col)
+		if n := crrCount(t, id); n != 0 {
+			t.Errorf("rows after the refused empty %s = %d, want 0", c.col, n)
+		}
+	}
+
 	// Control: the same statement with revision 1 and a message lands.
 	id, err = insert(1, "m")
 	if err != nil {
@@ -533,6 +569,20 @@ func TestRLS_CustomRuleRevisionsUniqueRevisionPerRule(t *testing.T) {
 	}
 	if n := crrCount(t, otherID); n != 1 {
 		t.Errorf("rows after tenant B's insert of the same rule_id = %d, want 1", n)
+	}
+
+	// A rule is its revisions: the next revision of the same rule_id must land, and so must
+	// revision 1 of another rule in the same tenant.
+	nextID, otherRuleID := uuid.NewString(), uuid.NewString()
+	crrCleanup(t, nextID, otherRuleID)
+	if err := crrAsApp(h.tenantA, crrInsert, otherRuleID, h.tenantA, uuid.NewString(), 1, nil, "error", "m"); err != nil {
+		t.Fatalf("revision 1 of another rule_id under tenant A: want success, got: %v", err)
+	}
+	if err := crrAsApp(h.tenantA, crrInsert, nextID, h.tenantA, ruleID, 2, nil, "error", "m"); err != nil {
+		t.Fatalf("revision 2 of the same rule_id: want success, got: %v", err)
+	}
+	if n := crrCount(t, nextID); n != 1 {
+		t.Errorf("rows after revision 2 = %d, want 1", n)
 	}
 }
 

@@ -25,7 +25,7 @@
 export const PERF_HEADER = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
 
 // PERF_MAPPING: the canonical importer field -> this fixture's header column, the
-// same 11-key contract e2e/api/import.spec.ts and perf.spec.ts's own PERF_MAPPINGs
+// same contract e2e/api/import.spec.ts and perf.spec.ts's own PERF_MAPPINGs
 // use (internal/importer/service.go's canonicalFields). The UI test does NOT submit
 // this object on the wire -- CreateMapping.tsx maps fields by click-to-place, and
 // initMappingFromHeaders auto-recognizes every key below except invoice_number and
@@ -170,6 +170,50 @@ export function steerMarker(answer: unknown): string {
   return `AIFAKE-ANSWER-${Buffer.from(JSON.stringify(answer)).toString('base64url')}`
 }
 
+// The import keys, mirrored from internal/invoicefields ImportKeys(); the mapping schema requires every one.
+export const IMPORT_KEYS = [
+  'invoice_number',
+  'issue_date',
+  'buyer_tin',
+  'buyer_name',
+  'currency',
+  'subtotal',
+  'vat',
+  'total',
+  'line_description',
+  'line_quantity',
+  'line_unit_price',
+  'invoice_kind',
+  'tax_currency_code',
+  'due_date',
+  'issue_time',
+  'tax_point_date',
+  'payment_status',
+  'buyer_email',
+  'buyer_telephone',
+  'buyer_street',
+  'buyer_city',
+  'buyer_postal_zone',
+  'buyer_country',
+  'buyer_state',
+  'buyer_lga',
+  'line_total',
+  'line_tax',
+  'line_tax_category',
+  'line_hsn_code',
+  'line_isic_code',
+  'line_product_category',
+  'line_service_category',
+  'line_sellers_item_identification',
+  'line_price_unit',
+  'line_tax_percent',
+  'line_base_quantity',
+]
+
+export function nullImportKeys(): Record<string, null> {
+  return Object.fromEntries(IMPORT_KEYS.map((k) => [k, null]))
+}
+
 // steerExplainMarker(): the Explain-scoped marker (FakeScope "EXPLAIN" in internal/invoice/handlers_explain.go;
 // scoped spelling per internal/platform/ai/fake.go's markerAnswerPrefixFor). An unscoped steerMarker never steers it.
 export function steerExplainMarker(answer: unknown): string {
@@ -181,18 +225,9 @@ export const EXPLAIN_UNAVAILABLE_MARKER = 'AIFAKE-EXPLAIN-UNAVAILABLE'
 
 // AIR07_ROW3_ANSWER: places invoice_number only, header at row 3 -- everything else null,
 // mirroring AIRL01_ANSWER's shape.
-const AIR07_ROW3_ANSWER: Record<string, unknown> = {
+export const AIR07_ROW3_ANSWER: Record<string, unknown> = {
+  ...nullImportKeys(),
   invoice_number: 'Invoice No',
-  issue_date: null,
-  buyer_tin: null,
-  buyer_name: null,
-  currency: null,
-  subtotal: null,
-  vat: null,
-  total: null,
-  line_description: null,
-  line_quantity: null,
-  line_unit_price: null,
   header_row: 3,
   date_format: null,
   decimal_separator: null,

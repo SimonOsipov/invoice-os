@@ -13,7 +13,7 @@ import type { FormField, ImportKey } from './lib/invoiceFields'
 // Type-only, mirroring the PickedFile edge above — lib/mappingGroups.ts type-imports
 // `Mapping` from THIS file, so this is a benign type-only cycle (erased at compile,
 // TS1484), same shape as the pre-existing PickedFile/Member edges.
-import type { MappingGroup } from './lib/mappingGroups'
+import type { InvoiceKind, MappingGroup } from './lib/mappingGroups'
 // Type-only, and it must stay that way: `lib/members.ts` VALUE-imports `./auth` and
 // `./data`, both of which type-import this file, so `Member` closes the loop
 // members -> auth/data -> types -> members. Benign only because every edge in it is
@@ -488,6 +488,7 @@ export type PlatformCtx = {
   splitOutFile: (fileId: string) => void
   // Reseeds the active group from automatic suggestions and drops both its restored and suggested snapshots; no undo.
   resetGroupToAutomatic: () => void
+  setInvoiceKind: (groupId: string, kind: InvoiceKind | undefined) => void
   backToImport: () => void
   // The review surface's two ways back to the upload step (§7.4's "Import a corrected
   // file", §7.5's "Choose another file"): resetImport THEN backToImport, as one action so

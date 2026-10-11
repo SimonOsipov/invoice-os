@@ -168,12 +168,24 @@ test.describe('registration (API E2E, over the deployed gateway)', () => {
     }
   })
 
-  test('opening a bogus verification link answers the confirm page', async () => {
-    const res = await fetch(`${apiBase()}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup`, { redirect: 'manual' })
+  test('opening a bogus verification link bounces to landing for a state', async () => {
+    const token = `bogus-${crypto.randomUUID()}`
+    const res = await fetch(`${apiBase()}/auth/verify?token=${token}&type=signup`, { redirect: 'manual' })
+    expect(res.status).toBe(303)
+    // internal/gateway/verify_page.go: the stateless open's Location, exact so a lookalike host cannot pass.
+    expect(res.headers.get('location'), 'the Location header').toBe(`${resolveTarget('LANDING_URL')}/?confirm=1#token=${token}`)
+  })
+
+  test('a stated open answers the confirm page', async () => {
+    // 43 base64url chars: internal/gateway stateShape.
+    const state = 'A'.repeat(43)
+    const res = await fetch(`${apiBase()}/auth/verify?token=bogus-${crypto.randomUUID()}&type=signup&state=${state}`, { redirect: 'manual' })
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type'), 'the content type').toMatch(/^text\/html/)
     expect(res.headers.get('location'), 'a Location header').toBeNull()
-    expect(await res.text()).toContain('Confirm my email')
+    const body = await res.text()
+    expect(body).toContain('Confirm my email')
+    expect(body).toContain('name="state"')
   })
 
   test('a bogus confirm click redirects 303 to the landing failure page', async () => {

@@ -55,7 +55,7 @@ function buildPerfCsv(): string {
 }
 
 // PERF_MAPPING: canonical importer field -> this fixture's header column,
-// matching the exact 11-key contract internal/importer/service.go's mapping
+// matching the contract internal/importer/service.go's mapping
 // step expects (see the story's Test Specs table).
 const PERF_MAPPING: Record<string, string> = {
   invoice_number: 'Invoice No',

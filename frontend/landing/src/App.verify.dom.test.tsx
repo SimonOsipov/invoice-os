@@ -6,12 +6,14 @@ import { StrictMode, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { captureNavigation } from './navigation.test.util'
+
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const DIALOG = '[role="dialog"]'
 const STATUS = '[role="status"]'
 const VERIFIED = 'Your email address is verified. Please sign in.'
-const FAILED = 'That link did not work. It may have expired or already been used.'
+const FAILED = 'This link is already used or expired. If you confirmed your email, sign in.'
 const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 
 let container: HTMLDivElement
@@ -160,8 +162,8 @@ describe('verify notice: the emailed-link landing', () => {
     expect(window.location.search).toBe('')
 
     // A re-render after the strip must not re-read the URL.
-    await rebootAt('/?verify=failed')
-    const login = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Platform login')
+    await rebootAt(`/?verify=failed&state=${STATE}`)
+    const login = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Sign in')
     expect(login).toBeDefined()
     await act(async () => (login as HTMLButtonElement).click())
     expect(dialogs().length).toBe(1)
@@ -173,7 +175,7 @@ describe('verify notice: the emailed-link landing', () => {
       ['?verified=1', VERIFIED],
       ['?verify=failed', FAILED],
     ] as const) {
-      await rebootAt(`/${search}`)
+      await rebootAt(`/${search}&state=${STATE}`)
       const n = onlyNotice(text)
       const dismiss = Array.from(n.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Dismiss')
       expect(dismiss, search).toBeDefined()
@@ -184,7 +186,7 @@ describe('verify notice: the emailed-link landing', () => {
       pageMounted()
 
       // A later re-render does not bring it back.
-      const login = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Platform login')
+      const login = Array.from(document.querySelectorAll('header button')).find((b) => b.textContent?.trim() === 'Sign in')
       expect(login, search).toBeDefined()
       await act(async () => (login as HTMLButtonElement).click())
       expect(dialogs().length, search).toBe(1)
@@ -237,5 +239,44 @@ describe('verify notice: coexisting with the sign-in params', () => {
     expect(window.location.search).toBe('?keep=1')
     expect(dialogs().length).toBe(0)
     onlyNotice(VERIFIED)
+  })
+})
+
+describe('verify notice: the Sign in button', () => {
+  const noticeButtons = () => Array.from(onlyNoticeEl().querySelectorAll('button')).map((b) => b.textContent?.trim())
+  const onlyNoticeEl = () => {
+    expect(statuses().length).toBe(1)
+    return statuses()[0]
+  }
+
+  it('failed shows the sign-in prompt and a Sign in button', async () => {
+    await bootAt(`/?verify=failed&state=${STATE}`)
+    onlyNotice(FAILED)
+    expect(noticeButtons()).toEqual(['Sign in', 'Dismiss'])
+    const signIn = Array.from(onlyNoticeEl().querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Sign in')!
+    await act(async () => signIn.click())
+    expect(dialogs().length).toBe(1)
+  })
+
+  it('failed Sign in without a state bounces like the header', async () => {
+    const nav = captureNavigation()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null)))
+    try {
+      await bootAt('/?verify=failed')
+      const signIn = Array.from(onlyNoticeEl().querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Sign in')!
+      await act(async () => signIn.click())
+      expect(nav.assigned).toEqual(['https://app.x?auth=start'])
+    } finally {
+      nav.restore()
+    }
+  })
+
+  it('only the failed notice offers Sign in', async () => {
+    await bootAt('/?verify=failed')
+    expect(noticeButtons(), 'control: failed has it').toContain('Sign in')
+    for (const search of ['?verified=1', '?reset=failed', '?invite=invalid']) {
+      await rebootAt(`/${search}`)
+      expect(noticeButtons(), search).not.toContain('Sign in')
+    }
   })
 })

@@ -1,6 +1,6 @@
-import { INVOICE_FIELDS } from './invoiceFields.gen'
+import { IMPORT_KEYS, INVOICE_FIELDS } from './invoiceFields.gen'
 
-export { INVOICE_FIELDS }
+export { IMPORT_KEYS, INVOICE_FIELDS }
 
 export type InvoiceField = (typeof INVOICE_FIELDS)[number]
 export type ImportKey = NonNullable<InvoiceField['importKey']>

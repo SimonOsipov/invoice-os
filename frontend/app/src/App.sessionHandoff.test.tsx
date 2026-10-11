@@ -2,13 +2,14 @@
 // The app redeems a landing hand-off code.
 
 import { StrictMode } from 'react'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 
 import { APP_PERSONAS, type Me, type Session } from './auth'
 import { captureDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
-import { ensureSignInState } from './lib/signInState'
+import { ensureSignInState, mintSignInState } from './lib/signInState'
+import { holdPendingVerify } from './lib/verifyBounce'
 import { EMPTY_BUCKET } from './lib/dashboard'
 import { SUGGESTED_RULES } from './lib/rules'
 import type { PlatformCtx, SignedInUser } from './types'
@@ -71,22 +72,25 @@ function createMemoryStorage() {
 // Real jsdom location (replaceState strips stay observable); href writes are recorded only.
 function interceptHref() {
   const hrefWrites: string[] = []
+  const replaceWrites: string[] = []
   const real = window.location
-  const proxy = new Proxy(real, {
-    set(target, prop, value) {
+  // Plain target: jsdom's location.replace is non-configurable, so a get trap on the real location cannot override it.
+  const proxy = new Proxy({} as Location, {
+    set(_t, prop, value) {
       if (prop === 'href') {
         hrefWrites.push(value)
         return true
       }
-      return Reflect.set(target, prop, value)
+      return Reflect.set(real, prop, value)
     },
-    get(target, prop) {
-      const v = (target as unknown as Record<PropertyKey, unknown>)[prop]
-      return typeof v === 'function' ? v.bind(target) : v
+    get(_t, prop) {
+      if (prop === 'replace') return (url: string) => void replaceWrites.push(url)
+      const v = (real as unknown as Record<PropertyKey, unknown>)[prop]
+      return typeof v === 'function' ? v.bind(real) : v
     },
   })
   Object.defineProperty(window, 'location', { configurable: true, value: proxy })
-  return { hrefWrites }
+  return { hrefWrites, replaceWrites }
 }
 
 function storedState(): string | null {
@@ -119,6 +123,7 @@ let workspacesReply: Reply = ok({ tenant: ME.tenant })
 let refreshReply: Reply = ok({ access_token: T2, refresh_token: 'R1' })
 let workspacesCalls: { auth: string | null; body: unknown }[] = []
 let refreshBodies: unknown[] = []
+let mineReply: Reply | null = null
 
 function routeFetch() {
   vi.stubGlobal(
@@ -134,6 +139,7 @@ function routeFetch() {
         meAuth.push(init?.headers?.get('Authorization') ?? null)
         return (meQueue.shift() ?? meReply)()
       }
+      if (mineReply && url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) return mineReply()
       if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) {
         workspacesCalls.push({ auth: init?.headers?.get('Authorization') ?? null, body: JSON.parse(init?.body ?? 'null') })
         return workspacesReply()
@@ -222,6 +228,7 @@ beforeEach(() => {
   refreshReply = ok({ access_token: T2, refresh_token: 'R1' })
   workspacesCalls = []
   refreshBodies = []
+  mineReply = ok({ invitations: [] })
   routeFetch()
 })
 
@@ -284,12 +291,13 @@ describe('a hand-off boot redeems the code (AC-1, D9, D25)', () => {
     configure()
     ensureSignInState()
     window.history.replaceState(null, '', `/?handoff=${CODE}&auth=start`)
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     await bootApp()
     await waitFor(() => expect(exchangeBodies).toHaveLength(1))
     await waitForVerifiedWorkspace()
     expect(hrefWrites.filter((h) => h.includes('signin=ready'))).toEqual([])
     expect(hrefWrites).toEqual([])
+    expect(replaceWrites).toEqual([])
     expect(window.location.search).toBe('')
   })
 })
@@ -781,6 +789,7 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     configure()
     ensureSignInState()
     meReply = fail(403, 'forbidden')
+    mineReply = ok({ invitations: [] })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     window.history.replaceState(null, '', `/?handoff=${CODE}`)
     const { hrefWrites } = interceptHref()
@@ -790,6 +799,22 @@ describe('a failed redemption bounces to landing (AC-7, D23)', () => {
     expect(meAuth).toEqual([`Bearer ${T}`])
     expect(workspacesCalls, 'a token without answers provisions nothing').toEqual([])
     expect(refreshBodies).toEqual([])
+    expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+  })
+
+  it('a join offer shows the Join screen, not the no-workspace path', async () => {
+    configure()
+    ensureSignInState()
+    meReply = fail(403, 'forbidden')
+    mineReply = ok({ invitations: [{ id: 'a', workspace: 'WS', role: 'admin', inviter: null, expires_at: '2026-10-20T00:00:00Z' }] })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(screen.getByTestId('join-screen')).toBeTruthy())
+    await settle()
+    expect(hrefWrites).toEqual([])
+    expect(workspacesCalls).toEqual([])
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 
@@ -941,6 +966,350 @@ describe('precedence (AC-9..AC-13, D9, D18)', () => {
     expect(window.location.search).toBe('')
     expect(fetchUrls).toEqual([])
     expect(hrefWrites, 'the front door runs with the unconsumed state').toEqual([`${LANDING}/?state=${S}`])
+  })
+})
+
+const storedStateKey = () => (JSON.parse(sessionStorage.getItem(STATE_KEY) ?? 'null') as { s: string } | null)?.s
+
+describe('a state older than its TTL (LOGFIX-11-03, D22)', () => {
+  const OLD = Date.now() - 11 * 60 * 1000
+  const S_OLD = 'O'.repeat(43)
+  const seedOld = (withMarker: boolean) => {
+    sessionStorage.setItem(STATE_KEY, JSON.stringify({ v: 1, s: S_OLD, at: OLD }))
+    if (withMarker) sessionStorage.setItem('invoice-os.pendingVerify', JSON.stringify({ v: 1, at: OLD, s: S_OLD }))
+  }
+  const bootCode = async () => {
+    configure()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await settle()
+    return hrefWrites
+  }
+
+  it('a code for a bounce state older than the TTL still redeems while the pending marker is held', async () => {
+    seedOld(true)
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toEqual([{ code: CODE, state: S_OLD }])
+    expect(hrefWrites.filter((h) => h.includes('signin=failed'))).toEqual([])
+  })
+
+  it('an old state with no marker is refused', async () => {
+    seedOld(false)
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(hrefWrites.some((h) => h.startsWith(`${LANDING}/?state=`) && h.endsWith('&signin=failed'))).toBe(true)
+  })
+
+  it('an old state whose marker is bound to a different state is refused', async () => {
+    seedOld(true)
+    sessionStorage.setItem('invoice-os.pendingVerify', JSON.stringify({ v: 1, at: OLD, s: 'P'.repeat(43) }))
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(hrefWrites.some((h) => h.startsWith(`${LANDING}/?state=`) && h.endsWith('&signin=failed'))).toBe(true)
+  })
+
+  it('a redeem consumes the marker and the state, so a second code in the same tab fails', async () => {
+    seedOld(true)
+    await bootCode()
+    expect(exchangeBodies).toHaveLength(1)
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+    expect(storedState()).toBeNull()
+    cleanup()
+    localStorage.clear()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toHaveLength(1)
+    expect(hrefWrites.some((h) => h.endsWith('&signin=failed'))).toBe(true)
+  })
+
+  it('a handoff code in a tab with no stored state takes the failure arm and posts no exchange', async () => {
+    const hrefWrites = await bootCode()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(hrefWrites.some((h) => h.startsWith(`${LANDING}/?state=`) && h.endsWith('&signin=failed'))).toBe(true)
+  })
+})
+
+describe('a confirm code over a live session (LOGFIX-04-05, D10, D18)', () => {
+  const A_ME: Me = { ...OLD_ME, user: { ...OLD_ME.user, email: 'a@corp.example' } }
+  const A_TOKEN = jwt(A_ME.user.id, nowSec() + 3600)
+  const NOTICE = (who: string) => `Your email is confirmed. You are signed in ${who}. To use the confirmed account, sign out and sign in with it.`
+  const toast = () => screen.queryByTestId('verify-confirmed-toast')
+
+  async function bootOverLive(me: Me, withMarker = true) {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, me))
+    const S = ensureSignInState()
+    if (withMarker) holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    return S
+  }
+
+  it('a verify code over a live session keeps A, posts nothing and shows the confirmed notice', async () => {
+    await bootOverLive(A_ME)
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(meAuth).toHaveLength(0)
+    expect(storedRecord()?.token).toBe(A_TOKEN)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+    expect(screen.getByTestId('verify-confirmed-toast').firstChild?.textContent).toBe(NOTICE('as a@corp.example'))
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+    expect(window.location.search).toBe('')
+  })
+
+  it('a verify code with no session signs in as B', async () => {
+    configure()
+    const S = ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    await settle()
+    expect(exchangeBodies).toEqual([{ code: CODE, state: S }])
+    expect(toast()).toBeNull()
+    expect(sessionStorage.getItem('invoice-os.pendingVerify')).toBeNull()
+  })
+
+  it('an invitee code over a live session keeps A, posts nothing and shows the confirmed notice', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    window.history.replaceState(null, '', '/?auth=verify-invite#token=tok_1')
+    interceptHref()
+    await bootApp()
+    await settle()
+    cleanup()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(storedRecord()?.token).toBe(A_TOKEN)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
+  it('an invitee code with no session signs in as B', async () => {
+    configure()
+    window.history.replaceState(null, '', '/?auth=verify-invite#token=tok_1')
+    interceptHref()
+    await bootApp()
+    await settle()
+    const S = storedStateKey()
+    cleanup()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    await settle()
+    expect(exchangeBodies).toEqual([{ code: CODE, state: S }])
+    expect(toast()).toBeNull()
+  })
+
+  it('a plain handoff over a live session shows no notice', async () => {
+    await bootOverLive(A_ME, false)
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(capturedCtx?.user.tenantName).toBe(OLD_ME.tenant.name)
+    expect(toast()).toBeNull()
+  })
+
+  it('the confirmed notice falls back to the display name, then to another account', async () => {
+    await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: null } })
+    expect(toast()?.textContent).toContain(NOTICE('as Adaeze Nwankwo'))
+    cleanup()
+    capturedCtx = undefined
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: null, display_name: null } })
+    expect(toast()?.textContent).toContain(NOTICE('to another account'))
+  })
+
+  it('a stale verify marker over a live session shows no notice', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    const S = ensureSignInState()
+    sessionStorage.setItem('invoice-os.pendingVerify', JSON.stringify({ v: 1, at: Date.now() - 11 * 60 * 1000, s: S }))
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(toast()).toBeNull()
+  })
+
+  it('an abandoned confirm, then an unrelated hand-off over a live session, shows no notice', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    ensureSignInState()
+    holdPendingVerify()
+    mintSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(toast()).toBeNull()
+  })
+
+  it('a confirm abandoned by Back, then a front door on the reused state and a hand-off over a live session, shows no notice', async () => {
+    configure()
+    const S = ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', '/')
+    const first = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(first.hrefWrites).toEqual([`${LANDING}/?state=${S}`]))
+    cleanup()
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(toast()).toBeNull()
+  })
+
+  it('a handoff beside auth=verify over a live session neither bounces nor posts, and names A', async () => {
+    configure()
+    localStorage.setItem(SESSION_KEY, handoffRecord(A_TOKEN, A_ME))
+    ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}&auth=verify#token=tok_1`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(hrefWrites).toEqual([])
+    expect(exchangeBodies).toHaveLength(0)
+    expect(storedRecord()?.token).toBe(A_TOKEN)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
+  it('a verify code over a renewable session with an expired access token keeps A', async () => {
+    configure()
+    meReply = ok(A_ME)
+    refreshReply = ok({
+      access_token: jwt(A_ME.user.id, nowSec() + 7200, { iat: nowSec(), app_metadata: { tenant_id: A_ME.tenant.id } }),
+      refresh_token: 'R1',
+    })
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    ensureSignInState()
+    holdPendingVerify()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect((storedRecord()?.me as Me | undefined)?.user.id).toBe(A_ME.user.id)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
+  it('a verify code past the marker and state TTL over a renewable session with an expired access token keeps A', async () => {
+    configure()
+    meReply = ok(A_ME)
+    refreshReply = ok({
+      access_token: jwt(A_ME.user.id, nowSec() + 7200, { iat: nowSec(), app_metadata: { tenant_id: A_ME.tenant.id } }),
+      refresh_token: 'R1',
+    })
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    const old = Date.now() - 12 * 60 * 1000
+    mintSignInState(old)
+    holdPendingVerify(old + 1000)
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(capturedCtx?.user).toBeDefined())
+    await settle()
+    expect(exchangeBodies).toHaveLength(0)
+    expect(hrefWrites).toEqual([])
+    expect((storedRecord()?.me as Me | undefined)?.user.id).toBe(A_ME.user.id)
+    expect(toast()?.textContent).toContain(NOTICE('as a@corp.example'))
+  })
+
+  it('a stale marker bound to a replaced state shows no notice over a renewable session', async () => {
+    configure()
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    const old = Date.now() - 12 * 60 * 1000
+    mintSignInState(old)
+    holdPendingVerify(old + 1000)
+    mintSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(toast()).toBeNull()
+  })
+
+  it('a plain handoff over a renewable session with an expired access token, with no pending confirm, signs in as B', async () => {
+    configure()
+    const expired = jwt(A_ME.user.id, nowSec() - 3600)
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ ...JSON.parse(handoffRecord(expired, A_ME)), refresh_token: 'R0', received_at: Date.now() - 7_200_000 }),
+    )
+    const S = ensureSignInState()
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    interceptHref()
+    await bootApp()
+    await waitForVerifiedWorkspace()
+    expect(exchangeBodies).toEqual([{ code: CODE, state: S }])
+    expect((storedRecord()?.me as Me | undefined)?.user.id).toBe(ME.user.id)
+    expect(toast()).toBeNull()
+  })
+
+  it('the confirm spends the sign-in state, so a later hand-off with no session cannot redeem as B', async () => {
+    const S = await bootOverLive(A_ME)
+    await settle()
+    expect(storedState()).toBeNull()
+    expect(ensureSignInState()).not.toBe(S)
+  })
+
+  it('the confirmed notice renders the email as text', async () => {
+    await bootOverLive({ ...A_ME, user: { ...A_ME.user, email: '<b id="x">a</b>@corp.example' } })
+    expect(toast()?.querySelector('#x')).toBeNull()
+    expect(toast()?.textContent).toContain('<b id="x">a</b>@corp.example')
+  })
+
+  it('the confirmed notice dismisses like its sibling', async () => {
+    await bootOverLive(A_ME)
+    fireEvent.click(screen.getByLabelText('Dismiss'))
+    expect(toast()).toBeNull()
+    cleanup()
+    capturedCtx = undefined
+    if (originalLocation) Object.defineProperty(window, 'location', originalLocation)
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await bootOverLive(A_ME)
+      expect(toast()).not.toBeNull()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5200)
+      })
+      expect(toast()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -1100,16 +1469,19 @@ describe('AUTH-05-08 adversarial', () => {
   })
 
   it('the token and the code never reach a URL, an href or the console', async () => {
-    const cases: [string, Reply][] = [
-      ['success', ok(ME)],
-      ['me 403', fail(403, 'forbidden')],
-      ['me 500', fail(500, 'boom')],
+    const ONE_INVITE = ok({ invitations: [{ id: 'a', workspace: 'WS', role: 'admin', inviter: null, expires_at: '2026-10-20T00:00:00Z' }] })
+    const cases: [string, Reply, Reply | null][] = [
+      ['success', ok(ME), null],
+      ['me 403', fail(403, 'forbidden'), null],
+      ['me 500', fail(500, 'boom'), null],
+      ['me 403, mine one invite, Join screen', fail(403, 'forbidden'), ONE_INVITE],
     ]
     expect(cases.length).toBeGreaterThan(0)
-    for (const [name, reply] of cases) {
+    for (const [name, reply, mine] of cases) {
       configure()
       ensureSignInState()
       meReply = reply
+      if (mine) mineReply = mine
       const spies = consoleSpies()
       window.history.replaceState(null, '', `/?handoff=${CODE}`)
       const replace = vi.spyOn(window.history, 'replaceState')
@@ -1341,9 +1713,10 @@ describe('AUTH-05-08 adversarial', () => {
     configure()
     localStorage.setItem(SESSION_KEY, handoffRecord(OLD_T, OLD_ME))
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     await bootApp()
-    expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=ready`])
+    expect(replaceWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=ready`])
+    expect(hrefWrites).toEqual([])
     expect(storedRecord()?.token).toBe(OLD_T)
     expect(storedRecord()?.handoff).toBe(true)
     expect(exchangeBodies).toHaveLength(0)
@@ -1411,6 +1784,7 @@ describe('the first sign-in provisions the registered workspace', () => {
   const CHAIN = (base: string) => [
     `${base}/auth/exchange`,
     `${base}/api/tenancy/v1/me`,
+    `${base}/api/tenancy/v1/invitations/mine`,
     `${base}/api/tenancy/v1/workspaces`,
     `${base}/auth/refresh`,
     `${base}/api/tenancy/v1/me`,
@@ -1448,7 +1822,7 @@ describe('the first sign-in provisions the registered workspace', () => {
     expect(screens, 'one screen before the workspace: the splash').toHaveLength(1)
     expect(screens[0]).toContain('Opening your workspace…')
     expect(Math.max(...preWorkspace.map((f) => f.prompts)), 'no button, field, link or dialog before the workspace').toBe(0)
-    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(fetchUrls.slice(0, 6)).toEqual(CHAIN(GATEWAY))
     expect(workspacesCalls).toEqual([{ auth: `Bearer ${T_ANSWERS}`, body: ANSWERS }])
     expect(refreshBodies).toEqual([{ refresh_token: 'R0' }])
     expect(meAuth).toEqual([`Bearer ${T_ANSWERS}`, `Bearer ${T2}`])
@@ -1469,7 +1843,7 @@ describe('the first sign-in provisions the registered workspace', () => {
     const { hrefWrites } = registered()
     await bootApp()
     await waitForVerifiedWorkspace()
-    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(fetchUrls.slice(0, 6)).toEqual(CHAIN(GATEWAY))
     expect(hrefWrites).toEqual([])
     expect(storedRecord()?.token).toBe(T2)
   })
@@ -1488,15 +1862,15 @@ describe('the first sign-in provisions the registered workspace', () => {
     const { hrefWrites } = registered({ me: [fail(403, 'forbidden'), fail(403, 'forbidden')] })
     await bootApp()
     await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=no-workspace`]))
-    expect(fetchUrls.slice(0, 5)).toEqual(CHAIN(GATEWAY))
+    expect(fetchUrls.slice(0, 6)).toEqual(CHAIN(GATEWAY))
     expect(localStorage.getItem(SESSION_KEY)).toBeNull()
   })
 
   const failures: [string, () => void, Reply | undefined, number][] = [
-    ['provisioning 400', () => (workspacesReply = fail(400, 'bad request')), undefined, 3],
-    ['provisioning 500', () => (workspacesReply = fail(500, 'boom')), undefined, 3],
-    ['refresh 401', () => (refreshReply = fail(401, 'invalid refresh token')), undefined, 4],
-    ['an exchange without a refresh token', () => {}, ok({ access_token: T_ANSWERS }), 3],
+    ['provisioning 400', () => (workspacesReply = fail(400, 'bad request')), undefined, 4],
+    ['provisioning 500', () => (workspacesReply = fail(500, 'boom')), undefined, 4],
+    ['refresh 401', () => (refreshReply = fail(401, 'invalid refresh token')), undefined, 5],
+    ['an exchange without a refresh token', () => {}, ok({ access_token: T_ANSWERS }), 4],
   ]
   for (const [name, arrange, exchange, calls] of failures) {
     it(`a registered account with ${name} reports failed and stores nothing`, async () => {
@@ -1509,6 +1883,34 @@ describe('the first sign-in provisions the registered workspace', () => {
       expect(localStorage.getItem(SESSION_KEY)).toBeNull()
     })
   }
+
+  const badLists: [string, Reply][] = [
+    ['a 500', fail(500, 'boom')],
+    ['a malformed body', ok({ invitations: 'x' })],
+  ]
+  for (const [name, mine] of badLists) {
+    it(`a registered account with ${name} on the invite lookup reports failed and does not provision`, async () => {
+      mineReply = mine
+      const { hrefWrites } = registered()
+      await bootApp()
+      await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+      expect(workspacesCalls).toEqual([])
+      expect(localStorage.getItem(SESSION_KEY)).toBeNull()
+    })
+  }
+
+  it('an account without answers and a 500 on the invite lookup reports failed, not no-workspace', async () => {
+    configure()
+    ensureSignInState()
+    meReply = fail(403, 'forbidden')
+    mineReply = fail(500, 'boom')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.history.replaceState(null, '', `/?handoff=${CODE}`)
+    const { hrefWrites } = interceptHref()
+    await bootApp()
+    await waitFor(() => expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=failed`]))
+    expect(workspacesCalls).toEqual([])
+  })
 })
 
 // F5: each redemption call aborts after 15 s and takes the failure arm.
@@ -1547,6 +1949,9 @@ describe('a hung redemption times out', () => {
           meCalls++
           return registered && meCalls === 1 ? fail(403, 'forbidden')() : hang(init?.signal)
         }
+        if (url === `${GATEWAY}/api/tenancy/v1/invitations/mine`) {
+          return ok({ invitations: [] })()
+        }
         if (url === `${GATEWAY}/api/tenancy/v1/workspaces`) {
           return hangAt === 'workspaces' ? hang(init?.signal) : ok({ tenant: ME.tenant })()
         }
@@ -1584,9 +1989,9 @@ describe('a hung redemption times out', () => {
   const LEGS: [Leg, string[], number][] = [
     ['exchange', ['/auth/exchange'], 0],
     ['me', ['/auth/exchange', '/api/tenancy/v1/me'], 1],
-    ['workspaces', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces'], 1],
-    ['refresh', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces', '/auth/refresh'], 1],
-    ['second /me', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/workspaces', '/auth/refresh', '/api/tenancy/v1/me'], 2],
+    ['workspaces', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine', '/api/tenancy/v1/workspaces'], 1],
+    ['refresh', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine', '/api/tenancy/v1/workspaces', '/auth/refresh'], 1],
+    ['second /me', ['/auth/exchange', '/api/tenancy/v1/me', '/api/tenancy/v1/invitations/mine', '/api/tenancy/v1/workspaces', '/auth/refresh', '/api/tenancy/v1/me'], 2],
   ]
   for (const [leg, path, meCalls] of LEGS) {
     it(`a hung ${leg} fails once at 15 s, not before`, async () => {

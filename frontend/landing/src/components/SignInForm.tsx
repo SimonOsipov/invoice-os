@@ -5,7 +5,7 @@ import { DEMO_FORM_CSS, Glyph, WARN_PATHS } from './DemoLeadForm'
 import { Button } from './ds/Button'
 import { RESEND_FAILED, resendSentNotice } from '../register'
 import { useResend } from './useResend'
-import { handoffUrl, isUnverified, signInErrorMessage, signInWithPassword, startUrl, type ConsoleTarget } from '../signIn'
+import { bounceToStart, handoffUrl, isUnverified, SIGN_IN_UNAVAILABLE, signInErrorMessage, signInWithPassword, type ConsoleTarget } from '../signIn'
 import { validateSignInForm, type SignInFormErrors } from '../signInForm'
 
 const ID = 'si-form'
@@ -23,21 +23,23 @@ export function Alert({ id, text }: { id?: string; text: string }) {
   )
 }
 
+// peach: ink on --accent, since peach text on white fails contrast.
+const PEACH_NOTICE_STYLE: CSSProperties = { marginTop: 12, marginBottom: 0, padding: '10px 12px', borderRadius: 'var(--radius)', background: 'var(--accent)', color: 'var(--ink)', overflowWrap: 'anywhere' }
+
 // The status region stays mounted while the resend control shows, so screen readers announce the text put into it.
-export function ResendNotice({ note, email, text }: { note?: { ok: boolean }; email: string; text?: string }) {
+export function ResendNotice({ note, email, text, peach }: { note?: { ok: boolean }; email: string; text?: string; peach?: boolean }) {
   return (
     <>
       <div role="status">
-        {note?.ok && <p className="t-body-sm" style={{ marginTop: 8, marginBottom: 0, overflowWrap: 'anywhere' }}>{text ?? resendSentNotice(email)}</p>}
+        {note?.ok && <p className="t-body-sm" style={peach ? PEACH_NOTICE_STYLE : { marginTop: 8, marginBottom: 0, overflowWrap: 'anywhere' }}>{text ?? resendSentNotice(email)}</p>}
       </div>
       {note?.ok === false && <Alert text={RESEND_FAILED} />}
     </>
   )
 }
 
-// heldState is read at open and again at submit: an expired or dropped state is never posted.
+// heldState is read at submit: a missing state bounces to the app, and an expired state is never posted.
 export function SignInForm({ heldState, initialError, consoleTarget, onForgot }: { heldState: () => string | null; initialError?: string; consoleTarget?: ConsoleTarget; onForgot?: () => void }) {
-  const [state, setState] = useState(heldState)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [errors, setErrors] = useState<SignInFormErrors>({})
@@ -45,11 +47,6 @@ export function SignInForm({ heldState, initialError, consoleTarget, onForgot }:
   const [submitting, setSubmitting] = useState(false)
   const [unverified, setUnverified] = useState<string>()
   const { resending, note, resend, reset: resetResend } = useResend(unverified)
-
-  // A new getter means App dropped the state while the form is open.
-  useEffect(() => {
-    if (!heldState()) setState(null)
-  }, [heldState])
 
   // A back/forward-cache restore would otherwise show the page frozen mid-submit.
   useEffect(() => {
@@ -64,45 +61,27 @@ export function SignInForm({ heldState, initialError, consoleTarget, onForgot }:
     return () => window.removeEventListener('pageshow', onShow)
   }, [])
 
-  // No state in memory: the bounce mints one and returns with ?state=.
-  if (!state) {
-    return (
-      <div>
-        <style>{DEMO_FORM_CSS}</style>
-        <button
-          type="button"
-          onClick={() => {
-            const url = startUrl(consoleTarget)
-            if (url) window.location.href = url
-          }}
-          className="ds-btn ds-btn--primary ds-btn--md"
-          style={BUTTON_STYLE}
-        >
-          Continue with email
-        </button>
-        {formError && <Alert text={formError} />}
-      </div>
-    )
-  }
-
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    if (submitting || !state) return
-    const live = heldState()
-    if (!live) {
-      setState(null)
-      return
-    }
+    if (submitting) return
     const next = validateSignInForm({ email, password })
     setErrors(next)
     if (next.email || next.password) {
       document.getElementById(`${ID}-${next.email ? 'email' : 'password'}`)?.focus()
       return
     }
+    const live = heldState()
     setFormError(undefined)
     setUnverified(undefined)
     resetResend()
     setSubmitting(true)
+    if (!live) {
+      if (!(await bounceToStart(consoleTarget))) {
+        setFormError(SIGN_IN_UNAVAILABLE)
+        setSubmitting(false)
+      }
+      return
+    }
     try {
       const url = handoffUrl(await signInWithPassword(email.trim(), password, live), consoleTarget)
       if (url) {

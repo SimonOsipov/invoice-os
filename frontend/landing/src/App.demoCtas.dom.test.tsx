@@ -89,7 +89,7 @@ const ROSTER: { scope: string; label: string }[] = [
 
 // The eighteen controls in these ten scopes that are NOT demo CTAs, named so the
 // 31-button completeness guard below is not a magic number:
-//   header        -- "Platform login" (sign-in), the burger
+//   header        -- "Sign in" (sign-in), the burger
 //   #platform     -- the Validate / Approve / Submit tabs (3)
 //   #coverage     -- the Nigeria / Kenya / South Africa country tabs (3)
 //   #solutions    -- the three Who-it's-for tabs (3)
@@ -403,7 +403,7 @@ describe('F3-i: the footer demo buttons keep the footer attribution; Open the co
       await clickByText(document.querySelector('footer')!, 'Open the cockpit')
 
       expect(trackDemoOpen).not.toHaveBeenCalled()
-      expect(Array.from(document.querySelectorAll(DIALOG), (d) => d.getAttribute('aria-label'))).toEqual(['Platform login'])
+      expect(Array.from(document.querySelectorAll(DIALOG), (d) => d.getAttribute('aria-label'))).toEqual(['Sign in'])
     } finally {
       vi.doUnmock('./analytics')
     }

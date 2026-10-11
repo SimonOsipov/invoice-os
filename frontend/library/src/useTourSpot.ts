@@ -42,18 +42,6 @@ export function useTourSpot(tour: TourState | null, routeKey: string): { rect: R
     measure(true)
   }, [measure, routeKey])
 
-  // Manrope swaps in after first paint and resizes the target.
-  useEffect(() => {
-    if (i === undefined || !document.fonts?.ready) return
-    let live = true
-    void document.fonts.ready.then(() => {
-      if (live) measure(false)
-    })
-    return () => {
-      live = false
-    }
-  }, [i, measure])
-
   useEffect(() => {
     if (i === undefined) return
     const onResize = () => measure(true)
@@ -69,14 +57,20 @@ export function useTourSpot(tour: TourState | null, routeKey: string): { rect: R
     window.addEventListener('resize', onResize)
     main?.addEventListener('scroll', onScroll)
     nav?.addEventListener('scroll', onScroll)
+    // Re-measure when the target resizes with no font, resize or scroll event.
+    const stop = TOUR[i]
+    const target = document.getElementById(phase === 'menu' ? `nav-${stop.g}` : `fc-${stop.f}`)
+    const ro = target && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => measure(false)) : null
+    if (target) ro?.observe(target)
     return () => {
+      ro?.disconnect()
       live = false
       fonts?.removeEventListener('loadingdone', onFonts)
       window.removeEventListener('resize', onResize)
       main?.removeEventListener('scroll', onScroll)
       nav?.removeEventListener('scroll', onScroll)
     }
-  }, [i, measure])
+  }, [i, phase, measure])
 
   return { rect: tour ? rect : null, win }
 }

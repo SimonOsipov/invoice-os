@@ -98,7 +98,7 @@ function entitiesCallUrls(fetchMock: ReturnType<typeof mockFetch>): string[] {
   return fetchMock.mock.calls.map((c) => c[0] as string).filter((url) => !isRollupUrl(url))
 }
 
-function clientsCtx(entities: Entity[]): PlatformCtx {
+function clientsCtx(entities: Entity[], over: Record<string, unknown> = {}): PlatformCtx {
   const ctx = {
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
     user: { name: 'Firm User', initials: 'FU', tenantName: 'Acme Co', verified: true },
@@ -106,6 +106,9 @@ function clientsCtx(entities: Entity[]): PlatformCtx {
     entitiesState: 'ready',
     entitiesError: null,
     refetchEntities: () => {},
+    members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+    membersState: 'ready',
+    ...over,
   }
   return ctx as unknown as PlatformCtx
 }
@@ -245,6 +248,34 @@ describe('ClientsView: a narrowing position with zero rows renders a filter-spec
     // Copy chosen here (not pinned by the story) -- see the RED-run report.
     await screen.findByText('No clients match this filter')
     expect(screen.queryByText('No entities yet'), 'the generic empty state is wrong while active clients exist').toBeNull()
+  })
+})
+
+const SELF = (role: string) => [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role, status: 'active', isYou: true }]
+
+describe('ClientsView: Add client follows the role (LOGFIX-06-03)', () => {
+  it.each(['preparer', 'reviewer'])('Clients: a non-admin sees no Add client (%s)', async (role) => {
+    mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS, { members: SELF(role) })} />)
+    await screen.findByText('Okafor & Partners')
+    expect(screen.queryByRole('button', { name: 'Add client' })).toBeNull()
+    for (const name of ['All', 'Active', 'Archived']) expect(screen.getByRole('button', { name })).toBeTruthy()
+  })
+
+  it('Clients: a non-admin with no clients sees No company created', async () => {
+    mockFetchArchiveAware([])
+    render(<ClientsView ctx={clientsCtx([], { members: SELF('preparer') })} />)
+    await screen.findByText('No company created')
+    expect(screen.getByText('Your workspace admin adds the company. You can start when it exists.')).toBeTruthy()
+    expect(screen.queryByText('Add your first business entity to get started.')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add client' })).toBeNull()
+  })
+
+  it.each(['loading', 'error'])('Clients: no Add client while the roster is %s', async (membersState) => {
+    mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS, { members: [], membersState })} />)
+    await screen.findByText('Okafor & Partners')
+    expect(screen.queryByRole('button', { name: 'Add client' })).toBeNull()
   })
 })
 

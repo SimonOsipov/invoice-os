@@ -4200,6 +4200,15 @@ describe('diffLineItems (INVED-01-06)', () => {
     expect(result?.[2]).not.toHaveProperty('id')
   })
 
+  it('diffLineItems: a removed and re-added row with the same content is sent without id and with blank NRS keys', () => {
+    const stored = [{ id: 'l-1', ...lineFields({ hsn_code: '1001' }) }]
+    const result = diffLineItems(stored, [lineFields({ hsn_code: '' })])
+
+    expect(result).toHaveLength(1)
+    expect(result?.[0]).not.toHaveProperty('id')
+    expect(result?.[0].hsn_code).toBeNull()
+  })
+
   it('diffLineItems_untouchedNrsLinesAreUndefined', () => {
     const stored = [{ id: 'l-1', ...lineFields({ hsn_code: null, tax_percent: '7.50' }) }]
     const edited = stored.map((l) => ({ ...l, hsn_code: '' }))
@@ -4222,6 +4231,15 @@ describe('editValueToWire', () => {
     expect(editValueToWire('buyer_name', '')).toBe('')
     expect(editValueToWire('issue_date', '')).toBeUndefined()
     expect(editValueToWire('issue_date', '2026-08-15')).toBe('2026-08-15T00:00:00Z')
+  })
+
+  it('editValueToWire: a padded or blank NRS date, a time and a malformed date', () => {
+    expect(editValueToWire('tax_point_date', ' 2027-01-31 ')).toBe('2027-01-31T00:00:00Z')
+    expect(editValueToWire('tax_point_date', '   ')).toBeNull()
+    expect(editValueToWire('issue_date', '   ')).toBeUndefined()
+    expect(editValueToWire('issue_time', '09:05:00')).toBe('09:05:00')
+    expect(editValueToWire('due_date', '31/01/2027')).toBe('31/01/2027')
+    expect(editValueToWire('buyer_name', '2027-01-31')).toBe('2027-01-31')
   })
 })
 

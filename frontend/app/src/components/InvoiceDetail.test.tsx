@@ -6072,6 +6072,25 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     expect(header.style.gridTemplateColumns, 'control: the header has a grid').not.toBe('')
   })
 
+  it('a line edit re-sends the stored id and keeps the stored NRS values; an added row has no id', async () => {
+    const nrsLine = { ...LINE, hsn_code: '1001', tax_percent: '7.50', isic_code: null }
+    const { patchCalls } = mockDetailFetch(detailRecord({ ...editable, line_items: [nrsLine] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(screen.getByDisplayValue('Widget'), { target: { value: 'Widget 2' } })
+    fireEvent.click(screen.getByTestId('line-add'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const sent = (patchCalls[0] as { line_items: Array<Record<string, unknown>> }).line_items
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toMatchObject({ id: 'li-1', description: 'Widget 2', hsn_code: '1001', tax_percent: '7.50', isic_code: null })
+    expect(Object.keys(sent[0])).toHaveLength(15)
+    expect(sent[1]).not.toHaveProperty('id')
+    expect(Object.keys(sent[1])).toHaveLength(14)
+    expect(sent[1].hsn_code).toBeNull()
+  })
+
   it('the rail may shrink below its content', async () => {
     mockDetailFetch(detailRecord({ id: ID, status: 'validated' }))
     render(<InvoiceDetail ctx={detailCtx(ID)} />)

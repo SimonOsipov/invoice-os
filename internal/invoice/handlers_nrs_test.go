@@ -653,6 +653,15 @@ func TestLineItemReq_RecordsNRSKeyPresence(t *testing.T) {
 			t.Errorf("%s: NRSSent = %v, want %v", tc.name, l.NRSSent, tc.want)
 		}
 	}
+	for _, k := range nrsLineKeys {
+		var l lineItemReq
+		if err := json.Unmarshal([]byte(`{"`+k+`":null}`), &l); err != nil {
+			t.Fatalf("%s: %v", k, err)
+		}
+		if !l.NRSSent {
+			t.Errorf("%s alone as null: NRSSent = false, want true", k)
+		}
+	}
 	var l lineItemReq
 	if err := json.Unmarshal([]byte(`{"id":"x","tax_percent":null}`), &l); err != nil {
 		t.Fatal(err)

@@ -113,7 +113,7 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 // ladder, zero network when no gateway is configured.
 // One editable line row (INVED-01-07). LineItemEditInput-shaped but with '' where the wire
 // carries null, because a controlled React input holds '' and never null. Deliberately no
-// `id` and no `line_no`: line_no is system-assigned 1..N by array POSITION
+// `line_no`: line_no is system-assigned 1..N by array POSITION
 // ([line-no-by-position], lib/invoices.ts:234-245), so this array's order IS the wire's
 // line ordering, and diffLineItems compares by position over the 14 content fields only.
 // `id` is the stored line's, kept off-screen so a save re-sends it; an added row has none.

@@ -98,7 +98,7 @@ func TestMappingPrompt_MatchesTheMeasuredHarness(t *testing.T) {
 	}
 }
 
-// mappingSystem's 11 measured definition lines stay byte-identical (ENGI-07 D16).
+// mappingSystem's 11 measured definition lines stay byte-identical.
 var sgMeasuredDefinitions = []string{
 	"- invoice_number: the invoice's own number. Not an order, PO, customer, account, internal record ID or payment reference.",
 	"- issue_date: the date the invoice was issued. Not a due date, delivery date or payment date.",

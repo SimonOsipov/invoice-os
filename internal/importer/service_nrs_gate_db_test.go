@@ -19,7 +19,7 @@ import (
 
 const nrsS2SToken = "nrs-qa-test-s2s-token"
 
-// Stub list rules (D9): no shipped rule set checks a code list before ENGI-09.
+// Stub list rules: no shipped rule set checks a code list yet.
 const (
 	ruleHSList    = "stub-hs-code-list"
 	ruleTaxList   = "stub-tax-category-list"
@@ -171,7 +171,7 @@ func nested(inv map[string]any, key, field string) any {
 	return m[field]
 }
 
-// Canonical text: the real run reads Postgres text, so both runs agree (D15).
+// Canonical text: the real run reads Postgres text, so both runs agree.
 func nrsCanonicalRows(num string) []map[string]string {
 	hdr := []string{
 		"invoice_kind", "B2B", "tax_currency_code", "USD", "due_date", "2026-07-31", "issue_time", "9:05",

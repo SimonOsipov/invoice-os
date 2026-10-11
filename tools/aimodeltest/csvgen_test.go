@@ -760,7 +760,7 @@ func TestCSVGen_IsDeterministicAtOneSeed(t *testing.T) {
 	}
 }
 
-// D10: the 48 base layouts keep their bytes. The literal was measured from the base csvgen.py
+// The 48 base layouts keep their bytes. The literal was measured from the base csvgen.py
 // before the NRS layouts were added.
 const cgBaseLayoutsSHA256 = "52b3409c0dc979fb3dac4316d17e611cf17f31a4c0aff4b37c6b46202a553035"
 

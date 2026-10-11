@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// ENGI-07: the Map step's buyer-type select. Renders CreateMapping directly with a hand-built ctx
+// The Map step's buyer-type select. Renders CreateMapping directly with a hand-built ctx
 // (CreateMapping.badge.test.ts precedent).
 
 import { createElement } from 'react'

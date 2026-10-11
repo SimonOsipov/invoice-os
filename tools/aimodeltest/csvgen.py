@@ -127,7 +127,7 @@ ITEMS = [("Diesel (litres)", "AGO diesel delivered to site"), ("Cement 50kg", "P
          ("Freight Lagos-Kano", "Road haulage, 20ft container"), ("Laptop repair", "Motherboard replacement"),
          ("Office rent", "Monthly office rent"), ("Security services", "Guard services, monthly"),
          ("Bottled water (carton)", "75cl x 12 carton"), ("Solar panel 300W", "Monocrystalline panel")]
-# NRS columns (D10): header synonyms per new field, as (cell kind, headers). Cells are fixed per buyer or item.
+# NRS columns: header synonyms per new field, as (cell kind, headers). Cells are fixed per buyer or item.
 NRS_SYN = {
     "invoice_kind": ("invoice_kind", ["Buyer Type", "Customer Type", "Sale Type"]),
     "tax_currency_code": ("tax_currency_code", ["Tax Currency", "Tax Currency Code", "VAT Currency"]),

@@ -30,7 +30,7 @@ func nrsBadDate(field, v string) string {
 	return fmt.Sprintf("%s %q is not in YYYY-MM-DD format", field, v)
 }
 
-// Design "Range" row (D17): numeric(14,2) and numeric(14,3) columns.
+// Design "Range" row: numeric(14,2) and numeric(14,3) columns.
 func nrsRange(field string) string {
 	if field == "line_base_quantity" {
 		return field + " must have at most 11 digits before the decimal point and 3 after"
@@ -263,7 +263,7 @@ func TestBuildCreateInput_ReadsEveryImportKey(t *testing.T) {
 
 func TestBuildCreateInput_DropsAPercentSignFromTaxPercent(t *testing.T) {
 	cells := []string{"7.5%", " 7.5 % ", "7.5", "0.075", "-7.5%", "100 %", "1,000%"}
-	want := []string{"7.5", "7.5", "7.5", "0.075", "-7.5", "100", "1000"} // D6: a fraction is not multiplied by 100
+	want := []string{"7.5", "7.5", "7.5", "0.075", "-7.5", "100", "1000"} // a fraction is not multiplied by 100
 	var rows []map[string]string
 	for i, c := range cells {
 		rows = append(rows, nrsRow(fmt.Sprintf("P-%d", i), "line_tax_percent", c))
@@ -362,7 +362,7 @@ func TestBuildCreateInput_CodeCellsAreTrimmedNotFolded(t *testing.T) {
 	})
 }
 
-// D4/D5/D7 for every import key: Code trims, new Text keeps its raw text, a blank cell is nil
+// For every import key: Code trims, new Text keeps its raw text, a blank cell is nil
 // except for today's five Text keys, which keep the raw cell (02 AC8).
 func TestBuildCreateInput_EveryKeyReadsByItsFieldType(t *testing.T) {
 	var subtests, codes, texts int
@@ -702,7 +702,7 @@ func TestImport_ACommaDecimalTaxPercentQuarantines(t *testing.T) {
 
 func TestImport_TwoPercentSignsQuarantine(t *testing.T) {
 	r := newNRSRun(t)
-	// Only one trailing sign is dropped (D6): doubled, leading and inner signs stay bad.
+	// Only one trailing sign is dropped: doubled, leading and inner signs stay bad.
 	res := r.do(true, nrsRow("PP-1", "line_tax_percent", "7.5%%"), nrsRow("PP-2", "line_tax_percent", "%7.5"),
 		nrsRow("PP-3", "line_tax_percent", "7%5"), nrsRow("PP-OK", "line_tax_percent", " 7.5 % "))
 	if len(res.Errors) != 3 {
@@ -804,7 +804,7 @@ func TestImport_RowsThatDisagreeOnANewHeaderFieldQuarantine(t *testing.T) {
 	}
 }
 
-// Digit-count and scale limits of the new numeric(14,2) and numeric(14,3) columns (D17).
+// Digit-count and scale limits of the new numeric(14,2) and numeric(14,3) columns.
 func TestImport_ANewNumberTooLongForItsColumnQuarantines(t *testing.T) {
 	r := newNRSRun(t)
 	rows := []map[string]string{
@@ -892,7 +892,7 @@ func TestImport_AnOverScaleNewNumberQuarantines(t *testing.T) {
 	})
 }
 
-// 02 AC8 / D15: the range check covers the four new numeric keys; the old numeric keys keep their checks.
+// The range check covers the four new numeric keys; the old numeric keys keep their checks.
 func TestImport_TheRangeCheckStopsAtTheNewNumericKeys(t *testing.T) {
 	r := newNRSRun(t)
 	res := r.do(true, nrsRow("OLD-1", "line_unit_price", "1234567890123.456", "line_quantity", "1234567890123.4567",
@@ -929,7 +929,7 @@ func TestImport_ChecksRunInTheDesignOrder(t *testing.T) {
 	}
 }
 
-// --- ENGI-07-03: per-import default invoice kind ---------------------------
+// --- per-import default invoice kind ---------------------------
 
 func (r *nrsRun) doKind(dryRun bool, kind string, rows ...map[string]string) (BatchResult, error) {
 	r.t.Helper()

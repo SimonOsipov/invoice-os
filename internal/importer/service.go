@@ -155,7 +155,7 @@ var dateOrder = func() []string {
 	return keys
 }()
 
-// numericRange is the digits a new numeric column holds (D17): numeric(14,2) and numeric(14,3).
+// numericRange is the digits a new numeric column holds: numeric(14,2) and numeric(14,3).
 var numericRange = map[string]struct{ intDigits, scale int }{
 	"line_total": {12, 2}, "line_tax": {12, 2}, "line_tax_percent": {12, 2}, "line_base_quantity": {11, 3},
 }
@@ -242,7 +242,7 @@ func normalizeNumeric(s string) string {
 // issueTimeShortRe matches the H:MM, HH:MM and H:MM:SS shapes that padIssueTime completes.
 var issueTimeShortRe = regexp.MustCompile(`^([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?$`)
 
-// padIssueTime completes H:MM, HH:MM and H:MM:SS to HH:MM:SS (D18); any other shape is returned as is.
+// padIssueTime completes H:MM, HH:MM and H:MM:SS to HH:MM:SS; any other shape is returned as is.
 func padIssueTime(s string) string {
 	m := issueTimeShortRe.FindStringSubmatch(s)
 	if m == nil {
@@ -272,7 +272,7 @@ func normalizeCell(field, raw string) string {
 
 // fieldValue reads field's cell from row via colIndex, normalized by type.
 // It returns nil when the field is unmapped or the cell is blank, except for
-// the five original Text keys, which keep a blank cell as "" (D7).
+// the five original Text keys, which keep a blank cell as "".
 func fieldValue(row []string, colIndex map[string]int, field string) *string {
 	idx, ok := colIndex[field]
 	if !ok {

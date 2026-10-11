@@ -267,15 +267,15 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 		case "line_tax":
 			g.LineTax = f.Value
 		case "tax_category":
-			g.TaxCategory = f.Value
+			g.TaxCategory = invoice.TrimmedOrNil(f.Value)
 		case "hsn_code":
-			g.HSNCode = f.Value
+			g.HSNCode = invoice.TrimmedOrNil(f.Value)
 		case "isic_code":
-			g.ISICCode = f.Value
+			g.ISICCode = invoice.TrimmedOrNil(f.Value)
 		case "sellers_item_identification":
-			g.SellersItemIdentification = f.Value
+			g.SellersItemIdentification = invoice.TrimmedOrNil(f.Value)
 		case "price_unit":
-			g.PriceUnit = f.Value
+			g.PriceUnit = invoice.TrimmedOrNil(f.Value)
 		}
 	}
 	var lineItems []invoice.LineItemInput
@@ -302,14 +302,14 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 		VAT:              values["vat"],
 		Total:            values["total"],
 		DueDate:          dueDate,
-		BuyerEmail:       values["buyer_email"],
-		BuyerTelephone:   values["buyer_telephone"],
-		BuyerStreet:      values["buyer_street"],
-		BuyerCity:        values["buyer_city"],
-		BuyerPostalZone:  values["buyer_postal_zone"],
-		BuyerCountry:     values["buyer_country"],
-		BuyerState:       values["buyer_state"],
-		BuyerLGA:         values["buyer_lga"],
+		BuyerEmail:       invoice.TrimmedOrNil(values["buyer_email"]),
+		BuyerTelephone:   invoice.TrimmedOrNil(values["buyer_telephone"]),
+		BuyerStreet:      invoice.TrimmedOrNil(values["buyer_street"]),
+		BuyerCity:        invoice.TrimmedOrNil(values["buyer_city"]),
+		BuyerPostalZone:  invoice.TrimmedOrNil(values["buyer_postal_zone"]),
+		BuyerCountry:     invoice.TrimmedOrNil(values["buyer_country"]),
+		BuyerState:       invoice.TrimmedOrNil(values["buyer_state"]),
+		BuyerLGA:         invoice.TrimmedOrNil(values["buyer_lga"]),
 		LineItems:        lineItems,
 		SourceDocumentID: &docID,
 	}, nil

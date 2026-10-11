@@ -15,6 +15,7 @@ package invoice
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -238,6 +239,18 @@ type LineItemInput struct {
 	PriceUnit                 *string
 	TaxPercent                *string
 	BaseQuantity              *string
+}
+
+// TrimmedOrNil is the value trimmed, or nil when it is nil or blank (ENGI-07 D7).
+func TrimmedOrNil(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	t := strings.TrimSpace(*v)
+	if t == "" {
+		return nil
+	}
+	return &t
 }
 
 // CreateInput is the Store.Create argument. EntityID and InvoiceNumber are

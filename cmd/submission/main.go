@@ -468,11 +468,11 @@ func newInvoiceLineItemsApplier(edit invoiceFieldEdit) extraction.ApplyLineItems
 				LineTotal:   l.LineTotal,
 				LineTax:     l.LineTax,
 
-				TaxCategory:               l.TaxCategory,
-				HSNCode:                   l.HSNCode,
-				ISICCode:                  l.ISICCode,
-				SellersItemIdentification: l.SellersItemIdentification,
-				PriceUnit:                 l.PriceUnit,
+				TaxCategory:               invoice.TrimmedOrNil(l.TaxCategory),
+				HSNCode:                   invoice.TrimmedOrNil(l.HSNCode),
+				ISICCode:                  invoice.TrimmedOrNil(l.ISICCode),
+				SellersItemIdentification: invoice.TrimmedOrNil(l.SellersItemIdentification),
+				PriceUnit:                 invoice.TrimmedOrNil(l.PriceUnit),
 			}
 		}
 		inv, err := edit(ctx, tx, documentID, invoice.EditInput{LineItems: &converted})

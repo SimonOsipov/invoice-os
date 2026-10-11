@@ -32,7 +32,8 @@
 //   'YYYY-MM-DD' draft.date carries -- Go's `*time.Time` 400s on a bare date (GAP 1,
 //   verified: `"2026-06-16"` -> `cannot parse "" as "T"` -> 400 `invalid request body`).
 //   A blank draft.date maps to `issue_date: null`.
-// - buyerAddress/wht/docType have no column and no wire field -- never emitted.
+// - wht/docType have no column and no wire field -- never emitted. The buyer address is
+//   the structured buyer_street..buyer_lga keys.
 // - The money algorithm is the exact-decimal kit exported from ./invoices
 //   (parseScaled/mulScaled/addScaled/renderScaled, [money-primitives-exported]) plus
 //   round2() below -- bigint throughout, no float ever touches a money value. DRAFT-1's
@@ -96,6 +97,11 @@ function nullIfBlank(value: string): string | null {
   return value === '' ? null : value
 }
 
+// A 'YYYY-MM-DD' draft date as RFC3339, like issue_date; blank -> null.
+function dateOrNull(value: string): string | null {
+  return value === '' ? null : `${value}T00:00:00Z`
+}
+
 // quantity x unit_price, EXACT. `null` when either side is non-numeric (String(NaN) ->
 // 'NaN', which parseScaled refuses), which propagates to that line's line_total and to
 // every total.
@@ -118,9 +124,63 @@ function sumAmounts(amounts: ReadonlyArray<Scaled | null>): Scaled | null {
   return sum
 }
 
+// Wire form of a kobo amount.
+const koboString = (kobo: bigint): string => renderScaled({ u: kobo, s: 2 })
+
+// A round2'd Scaled as whole kobo (or hundredths of a percent).
+const toKobo = (value: Scaled): bigint => value.u * 10n ** BigInt(2 - value.s)
+
+const floorDiv = (n: bigint, d: bigint): bigint => (n >= 0n ? n / d : -((-n + d - 1n) / d))
+
+// Per-line tax in kobo, null where the line has none. Lines group by category and percent
+// (2dp); a group's tax is round2(Σ base x percent / 100), its leftover kobo go to the
+// largest remainders, ties to the lower line.
+function lineTaxKobo(items: ReadonlyArray<DraftLine>): (bigint | null)[] {
+  const taxes: (bigint | null)[] = items.map(() => null)
+  const groups = new Map<string, { percent: bigint; members: { index: number; base: bigint }[] }>()
+  items.forEach((item, index) => {
+    if (item.tax_category === '') return
+    const percent = parseScaled(item.tax_percent)
+    const amount = lineAmount(item)
+    if (percent === null || amount === null) return
+    const hundredths = toKobo(round2(percent))
+    const key = `${item.tax_category}|${hundredths}`
+    const group = groups.get(key) ?? { percent: hundredths, members: [] }
+    group.members.push({ index, base: toKobo(round2(amount)) })
+    groups.set(key, group)
+  })
+  for (const { percent, members } of groups.values()) {
+    const exact = members.map((m) => m.base * percent)
+    const sum = exact.reduce((a, b) => a + b, 0n)
+    const rounded = ((sum < 0n ? -sum : sum) + 5000n) / 10000n
+    const groupTax = sum < 0n ? -rounded : rounded
+    const floors = exact.map((e) => floorDiv(e, 10000n))
+    const remainders = exact.map((e, i) => e - floors[i]! * 10000n)
+    let leftover = groupTax - floors.reduce((a, b) => a + b, 0n)
+    const byRemainder = members
+      .map((_m, i) => i)
+      .sort((a, b) => (remainders[a]! === remainders[b]! ? a - b : remainders[a]! > remainders[b]! ? -1 : 1))
+    for (const i of byRemainder) {
+      if (leftover <= 0n) break
+      floors[i]! += 1n
+      leftover -= 1n
+    }
+    members.forEach((m, i) => {
+      taxes[m.index] = floors[i]!
+    })
+  }
+  return taxes
+}
+
+// The tax each line sends; null for a line without a category, a parseable percent and a line total.
+export function draftLineTaxes(items: ReadonlyArray<DraftLine>): (string | null)[] {
+  return lineTaxKobo(items).map((kobo) => (kobo === null ? null : koboString(kobo)))
+}
+
 // The filed subtotal/vat/total strings; null when any line is unparseable or there are no lines.
 // CreateForm's manual summary renders these, so the screen shows what crosses the wire.
-export function draftTotals(items: LineItem[]): {
+// With no categorised line VAT is the flat rate, otherwise the sum of the line taxes.
+export function draftTotals(items: ReadonlyArray<DraftLine>): {
   subtotal: string | null
   vat: string | null
   total: string | null
@@ -128,19 +188,20 @@ export function draftTotals(items: LineItem[]): {
 } {
   const exactSubtotal = sumAmounts(items.map(lineAmount))
   const subtotal = exactSubtotal === null ? null : round2(exactSubtotal)
-  const vat = subtotal === null ? null : round2(mulScaled(subtotal, VAT_RATE))
+  const categorised = items.some((item) => item.tax_category !== '')
+  const vat =
+    subtotal === null
+      ? null
+      : categorised
+        ? { u: lineTaxKobo(items).reduce<bigint>((sum, kobo) => sum + (kobo ?? 0n), 0n), s: 2 }
+        : round2(mulScaled(subtotal, VAT_RATE))
   const total = subtotal === null || vat === null ? null : round2(addScaled(subtotal, vat))
   return {
     subtotal: subtotal === null ? null : renderScaled(subtotal),
     vat: vat === null ? null : renderScaled(vat),
     total: total === null ? null : renderScaled(total),
-    vatLabel: 'stub',
+    vatLabel: categorised ? 'VAT' : 'VAT · 7.5%',
   }
-}
-
-// Stub: replaced by the implementation.
-export function draftLineTaxes(_items: ReadonlyArray<DraftLine>): (string | null)[] {
-  return []
 }
 
 export type SupplierDefaults = Pick<
@@ -148,9 +209,26 @@ export type SupplierDefaults = Pick<
   'email' | 'telephone' | 'street' | 'city' | 'postal_zone' | 'country' | 'state' | 'lga'
 >
 
-// Stub: replaced by the implementation.
-export function withSupplierDefaults(draft: Draft, _entity: SupplierDefaults): Draft {
-  return draft
+const SUPPLIER_KEY_OF: Record<keyof SupplierDefaults, Exclude<keyof Draft, 'items'>> = {
+  email: 'supplier_email',
+  telephone: 'supplier_telephone',
+  street: 'supplier_street',
+  city: 'supplier_city',
+  postal_zone: 'supplier_postal_zone',
+  country: 'supplier_country',
+  state: 'supplier_state',
+  lga: 'supplier_lga',
+}
+
+// Fills only the supplier keys the draft leaves blank, from the entity's non-blank values.
+export function withSupplierDefaults(draft: Draft, entity: Partial<SupplierDefaults>): Draft {
+  const out: Draft = { ...draft }
+  for (const field of Object.keys(SUPPLIER_KEY_OF) as (keyof SupplierDefaults)[]) {
+    const key = SUPPLIER_KEY_OF[field]
+    const value = entity[field]
+    if (out[key] === '' && value != null && value !== '') out[key] = value
+  }
+  return out
 }
 
 export type BuyerDraftKey =
@@ -166,9 +244,35 @@ export type BuyerDraftKey =
   | 'buyer_lga'
 export type BuyerFill = Partial<Record<BuyerDraftKey, string>>
 
-// Stub: replaced by the implementation.
-export function applyBuyerRecord(draft: Draft, _record: Customer | null, _lastFill: BuyerFill): { draft: Draft; fill: BuyerFill } {
-  return { draft, fill: {} }
+const BUYER_KEY_OF: Record<BuyerDraftKey, keyof Customer> = {
+  buyer: 'name',
+  invoice_kind: 'buyer_type',
+  buyer_email: 'email',
+  buyer_telephone: 'telephone',
+  buyer_street: 'street',
+  buyer_city: 'city',
+  buyer_postal_zone: 'postal_zone',
+  buyer_country: 'country',
+  buyer_state: 'state',
+  buyer_lga: 'lga',
+}
+
+// A record sets the ten buyer keys (null -> ''). With no record, only keys still equal to
+// the last fill clear. `buyerTin` is never touched.
+export function applyBuyerRecord(draft: Draft, record: Customer | null, lastFill: BuyerFill): { draft: Draft; fill: BuyerFill } {
+  const keys = Object.keys(BUYER_KEY_OF) as BuyerDraftKey[]
+  const out: Draft = { ...draft }
+  if (record === null) {
+    for (const key of keys) if (lastFill[key] !== undefined && out[key] === lastFill[key]) out[key] = ''
+    return { draft: out, fill: {} }
+  }
+  const fill: BuyerFill = {}
+  for (const key of keys) {
+    const value = record[BUYER_KEY_OF[key]] ?? ''
+    out[key] = value
+    fill[key] = value
+  }
+  return { draft: out, fill }
 }
 
 export type BuyerRequiredKey =
@@ -183,9 +287,21 @@ export type BuyerRequiredKey =
   | 'buyer_lga'
 export type BuyerRequirement = { level: 'required' | 'optional' | 'choose'; keys: readonly BuyerRequiredKey[] }
 
-// Stub: replaced by the implementation.
-export function buyerRequirement(_kind: string): BuyerRequirement {
-  return { level: 'optional', keys: [] }
+// The buyer keys rule set v5 requires of a B2B or B2G invoice.
+const BUYER_REQUIRED_DRAFT_KEYS: readonly BuyerRequiredKey[] = [
+  'buyerTin', 'buyer', 'buyer_email', 'buyer_street', 'buyer_city',
+  'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+]
+
+export const BUYER_TYPE_NOTE = {
+  choose: 'Choose the buyer type. Buyer details are required for B2B and B2G, optional for B2C.',
+  required: 'Buyer TIN, name, email and address are required for a B2B or B2G invoice.',
+  optional: 'Buyer details are optional for a B2C invoice.',
+} as const
+
+export function buyerRequirement(kind: string): BuyerRequirement {
+  if (kind === 'B2B' || kind === 'B2G') return { level: 'required', keys: BUYER_REQUIRED_DRAFT_KEYS }
+  return { level: kind === 'B2C' ? 'optional' : 'choose', keys: [] }
 }
 
 // Key order below is the WIRE order -- apiFetch JSON.stringifies the body verbatim, so
@@ -202,6 +318,7 @@ export function draftToCreateRequest(
   sourceDocumentId?: string,
 ): InvoiceCreateInput {
   const amounts = draft.items.map(lineAmount)
+  const lineTaxes = draftLineTaxes(draft.items)
   const lineItems: LineItemCreateInput[] = draft.items.map((item, index) => {
     const amount = amounts[index]
     return {
@@ -210,7 +327,16 @@ export function draftToCreateRequest(
       quantity: String(item.qty),
       unit_price: String(item.price),
       line_total: amount == null ? null : renderScaled(round2(amount)),
-      line_tax: null,
+      line_tax: lineTaxes[index] ?? null,
+      tax_category: nullIfBlank(item.tax_category),
+      hsn_code: nullIfBlank(item.hsn_code),
+      isic_code: nullIfBlank(item.isic_code),
+      product_category: nullIfBlank(item.product_category),
+      service_category: nullIfBlank(item.service_category),
+      sellers_item_identification: nullIfBlank(item.sellers_item_identification),
+      price_unit: nullIfBlank(item.price_unit),
+      tax_percent: nullIfBlank(item.tax_percent),
+      base_quantity: '1',
     }
   })
 
@@ -234,6 +360,28 @@ export function draftToCreateRequest(
     // Spread, not `source_document_id: sourceDocumentId`: an explicit `undefined` would
     // still make the key PRESENT, and SD-8 reads presence with `in`, not the value.
     ...(sourceDocumentId === undefined ? {} : { source_document_id: sourceDocumentId }),
+    invoice_kind: nullIfBlank(draft.invoice_kind),
+    tax_currency_code: nullIfBlank(draft.tax_currency_code),
+    due_date: dateOrNull(draft.due_date),
+    issue_time: nullIfBlank(draft.issue_time),
+    tax_point_date: dateOrNull(draft.tax_point_date),
+    payment_status: nullIfBlank(draft.payment_status),
+    supplier_email: nullIfBlank(draft.supplier_email),
+    supplier_telephone: nullIfBlank(draft.supplier_telephone),
+    supplier_street: nullIfBlank(draft.supplier_street),
+    supplier_city: nullIfBlank(draft.supplier_city),
+    supplier_postal_zone: nullIfBlank(draft.supplier_postal_zone),
+    supplier_country: nullIfBlank(draft.supplier_country),
+    supplier_state: nullIfBlank(draft.supplier_state),
+    supplier_lga: nullIfBlank(draft.supplier_lga),
+    buyer_email: nullIfBlank(draft.buyer_email),
+    buyer_telephone: nullIfBlank(draft.buyer_telephone),
+    buyer_street: nullIfBlank(draft.buyer_street),
+    buyer_city: nullIfBlank(draft.buyer_city),
+    buyer_postal_zone: nullIfBlank(draft.buyer_postal_zone),
+    buyer_country: nullIfBlank(draft.buyer_country),
+    buyer_state: nullIfBlank(draft.buyer_state),
+    buyer_lga: nullIfBlank(draft.buyer_lga),
   }
 }
 

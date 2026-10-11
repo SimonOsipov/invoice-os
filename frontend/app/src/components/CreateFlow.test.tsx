@@ -13,9 +13,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@invoice-os/api-client'
 
-import { DRAFT_NRS_BLANK, emptyClient, startingDraft } from '../lib/clients'
+import { DRAFT_NRS_BLANK, draftLine, emptyClient, startingDraft } from '../lib/clients'
 import { draftToCreateRequest } from '../lib/invoiceDraft'
-import type { CreateStep, Draft, LineItem, PlatformCtx } from '../types'
+import type { CreateStep, Draft, DraftLine, PlatformCtx } from '../types'
 import { CreateFlow } from './CreateFlow'
 
 // Handler surface enumerated by grepping `ctx\.` in CreateUpload.tsx and CreateForm.tsx —
@@ -612,7 +612,7 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
       <CreateFlow
         ctx={createFlowCtx('form', null, {
           activeEntity: { id: 'e-1', name: 'Lagos Freight Ltd', tin: '12345678-0001' },
-          draft: { number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [{ desc: '', qty: 1, price: 1 }] },
+          draft: { number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [draftLine({ desc: '', qty: 1, price: 1 })] },
         })}
       />,
     )
@@ -739,7 +739,7 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
 // Manual mode: the summary shows the exact strings draftToCreateRequest files (TEST-03-04, gate Q2).
 const S_ENTITY = { id: 'e-1', name: 'Lagos Freight Ltd', tin: '12345678-0001' }
 
-function renderSummary(items: LineItem[]) {
+function renderSummary(items: DraftLine[]) {
   const draft: Draft = { number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items }
   const { container } = render(<CreateFlow ctx={createFlowCtx('form', null, { draft, activeEntity: S_ENTITY })} />)
   const text = (id: string) => container.querySelector(`[data-testid="summary-${id}"]`)?.textContent
@@ -751,7 +751,7 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
   afterEach(() => cleanup())
 
   it('manual summary shows the filed strings exactly (20.93)', () => {
-    const { filed, shown } = renderSummary([{ desc: 'Item', qty: 1, price: 20.93 }])
+    const { filed, shown } = renderSummary([draftLine({ desc: 'Item', qty: 1, price: 20.93 })])
     expect({ subtotal: filed.subtotal, vat: filed.vat, total: filed.total }).toEqual({ subtotal: '20.93', vat: '1.57', total: '22.50' })
     expect(shown.subtotal).toBe(filed.subtotal)
     expect(shown.vat).toBe(filed.vat)
@@ -760,7 +760,7 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
   })
 
   it('manual summary VAT is the half-up filed VAT (6.60)', () => {
-    const { filed, shown } = renderSummary([{ desc: 'Item', qty: 1, price: 6.6 }])
+    const { filed, shown } = renderSummary([draftLine({ desc: 'Item', qty: 1, price: 6.6 })])
     expect({ vat: filed.vat, total: filed.total }).toEqual({ vat: '0.50', total: '7.10' })
     expect(shown.vat).toBe(filed.vat)
     expect(shown.total).toBe(filed.total)
@@ -769,7 +769,7 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
   })
 
   it('manual summary subtotal is the rounded exact subtotal (0.5 × 0.99)', () => {
-    const { filed, shown } = renderSummary([{ desc: 'Item', qty: 0.5, price: 0.99 }])
+    const { filed, shown } = renderSummary([draftLine({ desc: 'Item', qty: 0.5, price: 0.99 })])
     expect({ subtotal: filed.subtotal, vat: filed.vat, total: filed.total }).toEqual({ subtotal: '0.50', vat: '0.04', total: '0.54' })
     expect(shown.subtotal).toBe(filed.subtotal)
     expect(shown.vat).toBe(filed.vat)
@@ -778,7 +778,7 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
   })
 
   it('a NaN quantity shows — in every summary row', () => {
-    const { container, filed, shown } = renderSummary([{ desc: 'Item', qty: NaN, price: 10 }])
+    const { container, filed, shown } = renderSummary([draftLine({ desc: 'Item', qty: NaN, price: 10 })])
     expect({ subtotal: filed.subtotal, vat: filed.vat, total: filed.total }).toEqual({ subtotal: null, vat: null, total: null })
     expect(shown).toEqual({ subtotal: '—', vat: '—', total: '—' })
     expect(container.querySelectorAll('[data-testid^="carried-"]'), 'manual mode renders no carried- ids').toHaveLength(0)
@@ -791,13 +791,13 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
   })
 
   it('a large amount shows the filed string with no grouping or ₦ (12345.67)', () => {
-    const { filed, shown } = renderSummary([{ desc: 'Item', qty: 1, price: 12345.67 }])
+    const { filed, shown } = renderSummary([draftLine({ desc: 'Item', qty: 1, price: 12345.67 })])
     expect({ subtotal: filed.subtotal, vat: filed.vat, total: filed.total }).toEqual({ subtotal: '12345.67', vat: '925.93', total: '13271.60' })
     expect(shown).toEqual({ subtotal: '12345.67', vat: '925.93', total: '13271.60' })
   })
 
   it('a multi-line subtotal rounds the exact sum, not the rounded lines (3 × 10.005)', () => {
-    const line = { desc: 'Item', qty: 1, price: 10.005 }
+    const line = draftLine({ desc: 'Item', qty: 1, price: 10.005 })
     const { filed, shown } = renderSummary([line, { ...line }, { ...line }])
     // Summing the rounded line_totals would give 30.03 / 32.28.
     expect(filed.line_items.map((l) => l.line_total)).toEqual(['10.01', '10.01', '10.01'])
@@ -806,7 +806,7 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
   })
 
   it('the summary follows an edited line on rerender', () => {
-    const draft = (price: number): Draft => ({ number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [{ desc: 'Item', qty: 1, price }] })
+    const draft = (price: number): Draft => ({ number: 'INV-1', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [draftLine({ desc: 'Item', qty: 1, price })] })
     const { container, rerender } = render(<CreateFlow ctx={createFlowCtx('form', null, { draft: draft(20.93), activeEntity: S_ENTITY })} />)
     const total = () => container.querySelector('[data-testid="summary-total"]')?.textContent
     expect(total()).toBe('22.50')
@@ -817,7 +817,7 @@ describe('CreateFlow — the manual summary shows the filed totals (TEST-03-04)'
 
   it('carried mode renders the reading, never the manual summary ids', () => {
     const { container } = render(
-      <CreateFlow ctx={carriedCtx({ draft: { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [{ desc: 'Item', qty: 1, price: 20.93 }] } })} />,
+      <CreateFlow ctx={carriedCtx({ draft: { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [draftLine({ desc: 'Item', qty: 1, price: 20.93 })] } })} />,
     )
     expect(container.querySelector('[data-testid="carried-total"]')?.textContent).toBe('1075.00')
     expect(container.querySelectorAll('[data-testid^="summary-"]')).toHaveLength(0)
@@ -944,11 +944,11 @@ describe('CreateFlow — the v2 strip and blocked hand-off (RESKIN2-04-01)', () 
 describe('CreateFlow — the manual form follows the v2 prototype (RESKIN2-04-02)', () => {
   afterEach(() => cleanup())
 
-  const TWO_LINES: LineItem[] = [
-    { desc: 'Bolts', qty: 2, price: 10 },
-    { desc: 'Nuts', qty: 1, price: 5 },
+  const TWO_LINES: DraftLine[] = [
+    draftLine({ desc: 'Bolts', qty: 2, price: 10 }),
+    draftLine({ desc: 'Nuts', qty: 1, price: 5 }),
   ]
-  const draftOf = (items: LineItem[], number = 'INV-1'): Draft => ({ number, buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items })
+  const draftOf = (items: DraftLine[], number = 'INV-1'): Draft => ({ number, buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items })
   const COLS = '1fr 70px 120px 130px 24px'
 
   function formCtx(over: Record<string, unknown> = {}): PlatformCtx {

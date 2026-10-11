@@ -260,8 +260,8 @@ export function defaultDraft(client: ClientCfg): Draft {
     currency: 'NGN',
     ...DRAFT_NRS_BLANK,
     items: [
-      { desc: 'Logistics consulting — Q2', qty: 1, price: 2500000 },
-      { desc: sd.items[1] || 'Supply', qty: 12, price: 85000 },
+      draftLine({ desc: 'Logistics consulting — Q2', qty: 1, price: 2500000 }),
+      draftLine({ desc: sd.items[1] || 'Supply', qty: 12, price: 85000 }),
     ],
   }
 }
@@ -269,7 +269,7 @@ export function defaultDraft(client: ClientCfg): Draft {
 // A hand-off session starts blank; date '' maps to issue_date null, so nothing demo is filed.
 export function startingDraft(client: ClientCfg, handoff: boolean): Draft {
   if (!handoff) return defaultDraft(client)
-  return { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [{ desc: '', qty: 1, price: 0 }] }
+  return { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [draftLine({ desc: '', qty: 1, price: 0 })] }
 }
 
 const DRAFT_LINE_BLANK: Record<DraftLineNRSKey, string> = {

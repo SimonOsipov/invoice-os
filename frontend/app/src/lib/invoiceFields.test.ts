@@ -52,7 +52,9 @@ describe('invoiceFields', () => {
     const missing: Draft = { number: '', buyer: '', buyerTin: '', date: '', currency: '', ...withoutKind, items: [] }
     // @ts-expect-error supplier_tin is not a Draft key
     const extra: Draft = { number: '', buyer: '', buyerTin: '', date: '', currency: '', ...DRAFT_NRS_BLANK, items: [], supplier_tin: '' }
-    expect([ok, missing, extra]).toHaveLength(3)
+    // @ts-expect-error a bare LineItem lacks the eight NRS line keys
+    const bareLine: Draft = { ...ok, items: [{ desc: 'x', qty: 1, price: 1 }] }
+    expect([ok, missing, extra, bareLine]).toHaveLength(4)
     expect(Object.keys(DRAFT_NRS_BLANK)).toStrictEqual(NRS_HEADER_KEYS)
   })
 

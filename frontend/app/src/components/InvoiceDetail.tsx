@@ -26,6 +26,7 @@ import {
 } from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { getExtractions, type ExtractionJobsResponse } from '../lib/importApi'
+import { BUYER_TYPE_NOTE, buyerRequirement } from '../lib/invoiceDraft'
 import { labelOf, type LineEditKey } from '../lib/invoiceFields'
 import { EXPLAIN_COPY } from '../lib/explain'
 import { violationKey, type LineTarget } from '../lib/validationApi'
@@ -147,16 +148,11 @@ const NRS_PLACEHOLDER: Partial<Record<EditFieldKey, string>> = {
   tax_point_date: 'YYYY-MM-DD',
 }
 
-// The buyer fields rule set v5 requires of a B2B or B2G invoice.
-const BUYER_REQUIRED_KEYS: ReadonlySet<EditFieldKey> = new Set([
-  'buyer_tin', 'buyer_name', 'buyer_email', 'buyer_street', 'buyer_city',
-  'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
-])
-const BUYER_TYPE_NOTE = {
-  choose: 'Choose the buyer type. Buyer details are required for B2B and B2G, optional for B2C.',
-  required: 'Buyer TIN, name, email and address are required for a B2B or B2G invoice.',
-  optional: 'Buyer details are optional for a B2C invoice.',
-} as const
+// buyerRequirement names Draft keys; the editor's two renamed ones map back.
+const EDIT_KEY_OF_DRAFT: Partial<Record<string, EditFieldKey>> = { buyerTin: 'buyer_tin', buyer: 'buyer_name' }
+const BUYER_REQUIRED_KEYS: ReadonlySet<string> = new Set(
+  buyerRequirement('B2B').keys.map((k) => EDIT_KEY_OF_DRAFT[k] ?? k),
+)
 
 function rowsFromInvoice(inv: Pick<InvoiceRecord, 'line_items'>): LineRowState[] {
   return (inv.line_items ?? []).map((it) => ({
@@ -1382,8 +1378,9 @@ function InvoiceEditBody({
     )
   }
 
-  const buyerRequired = form.invoice_kind === 'B2B' || form.invoice_kind === 'B2G'
-  const buyerNote = buyerRequired ? BUYER_TYPE_NOTE.required : form.invoice_kind === 'B2C' ? BUYER_TYPE_NOTE.optional : BUYER_TYPE_NOTE.choose
+  const { level: buyerLevel } = buyerRequirement(form.invoice_kind)
+  const buyerRequired = buyerLevel === 'required'
+  const buyerNote = BUYER_TYPE_NOTE[buyerLevel]
 
   function nrsHeaderField(key: EditFieldKey) {
     return (

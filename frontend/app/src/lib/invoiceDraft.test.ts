@@ -32,7 +32,7 @@ const baseDraft: Draft = {
   date: '2026-06-16',
   currency: 'NGN',
   ...DRAFT_NRS_BLANK,
-  items: [{ desc: 'Logistics consulting — Q2', qty: 1, price: 2500000 }],
+  items: [draftLine({ desc: 'Logistics consulting — Q2', qty: 1, price: 2500000 })],
 }
 
 const baseEntity: Pick<Entity, 'id' | 'name' | 'tin'> = {
@@ -48,7 +48,7 @@ describe('draftToCreateRequest: money', () => {
     //   naive float (3*1000.005).toFixed(2)        -> '3000.01' (WRONG)
     //   exact BigInt, no rounding                    -> '3000.015' (WRONG)
     //   exact BigInt x half-up round to 2dp           -> '3000.02' (the only correct one)
-    const draft: Draft = { ...baseDraft, items: [{ desc: 'x', qty: 3, price: 1000.005 }] }
+    const draft: Draft = { ...baseDraft, items: [draftLine({ desc: 'x', qty: 3, price: 1000.005 })] }
 
     const result = draftToCreateRequest(draft, baseEntity)
 
@@ -64,8 +64,8 @@ describe('draftToCreateRequest: money', () => {
     const draft: Draft = {
       ...baseDraft,
       items: [
-        { desc: 'a', qty: 2, price: 1500.25 },
-        { desc: 'b', qty: 3, price: 99.99 },
+        draftLine({ desc: 'a', qty: 2, price: 1500.25 }),
+        draftLine({ desc: 'b', qty: 3, price: 99.99 }),
       ],
     }
 
@@ -91,7 +91,7 @@ describe('draftToCreateRequest: money', () => {
     // turn quantity '2.567' into '2.57' and unit_price '1000.005' into '1000.01'.
     const draft: Draft = {
       ...baseDraft,
-      items: [{ desc: 'x', qty: 2.567, price: 1000.005 }],
+      items: [draftLine({ desc: 'x', qty: 2.567, price: 1000.005 })],
     }
 
     const result = draftToCreateRequest(draft, baseEntity)
@@ -119,8 +119,8 @@ describe('draftToCreateRequest: money', () => {
     const draft: Draft = {
       ...baseDraft,
       items: [
-        { desc: 'a', qty: 2.5, price: 1500.25 },
-        { desc: 'b', qty: 2.5, price: 1500.25 },
+        draftLine({ desc: 'a', qty: 2.5, price: 1500.25 }),
+        draftLine({ desc: 'b', qty: 2.5, price: 1500.25 }),
       ],
     }
 
@@ -141,8 +141,8 @@ describe('draftToCreateRequest: money', () => {
     const draft: Draft = {
       ...baseDraft,
       items: [
-        { desc: 'valid line', qty: 2, price: 100 },
-        { desc: 'corrupt line', qty: NaN, price: 50 },
+        draftLine({ desc: 'valid line', qty: 2, price: 100 }),
+        draftLine({ desc: 'corrupt line', qty: NaN, price: 50 }),
       ],
     }
 
@@ -167,7 +167,7 @@ describe('draftToCreateRequest: money', () => {
 describe('draftToCreateRequest: VAT base', () => {
   it('VAT is taken from the ROUNDED subtotal: exact 0.195 files vat 0.02', () => {
     // 0.20 x 0.075 = 0.015 -> 0.02; the exact 0.195 x 0.075 = 0.014625 -> 0.01.
-    const draft: Draft = { ...baseDraft, items: [{ desc: 'x', qty: 0.5, price: 0.39 }] }
+    const draft: Draft = { ...baseDraft, items: [draftLine({ desc: 'x', qty: 0.5, price: 0.39 })] }
 
     const result = draftToCreateRequest(draft, baseEntity)
 
@@ -177,7 +177,7 @@ describe('draftToCreateRequest: VAT base', () => {
   })
 
   it('VAT from rounded subtotal: a subtotal already at 2dp is unaffected', () => {
-    const draft: Draft = { ...baseDraft, items: [{ desc: 'x', qty: 1, price: 100.0 }] }
+    const draft: Draft = { ...baseDraft, items: [draftLine({ desc: 'x', qty: 1, price: 100.0 })] }
 
     const result = draftToCreateRequest(draft, baseEntity)
 
@@ -278,7 +278,7 @@ describe('draftToCreateRequest: wire key order', () => {
     // spec pins this: they all read named properties, which is order-independent.
     const draft: Draft = {
       ...baseDraft,
-      items: [{ desc: 'a', qty: 2, price: 1500.25 }],
+      items: [draftLine({ desc: 'a', qty: 2, price: 1500.25 })],
     }
 
     const result = draftToCreateRequest(draft, baseEntity)
@@ -296,6 +296,28 @@ describe('draftToCreateRequest: wire key order', () => {
       'vat',
       'total',
       'line_items',
+      'invoice_kind',
+      'tax_currency_code',
+      'due_date',
+      'issue_time',
+      'tax_point_date',
+      'payment_status',
+      'supplier_email',
+      'supplier_telephone',
+      'supplier_street',
+      'supplier_city',
+      'supplier_postal_zone',
+      'supplier_country',
+      'supplier_state',
+      'supplier_lga',
+      'buyer_email',
+      'buyer_telephone',
+      'buyer_street',
+      'buyer_city',
+      'buyer_postal_zone',
+      'buyer_country',
+      'buyer_state',
+      'buyer_lga',
     ])
     expect(Object.keys(result.line_items[0])).toEqual([
       'description',
@@ -303,6 +325,15 @@ describe('draftToCreateRequest: wire key order', () => {
       'unit_price',
       'line_total',
       'line_tax',
+      'tax_category',
+      'hsn_code',
+      'isic_code',
+      'product_category',
+      'service_category',
+      'sellers_item_identification',
+      'price_unit',
+      'tax_percent',
+      'base_quantity',
     ])
   })
 })
@@ -610,13 +641,11 @@ describe('draftToCreateRequest: source_document_id (EXTR-15-06)', () => {
     expect(withoutDocument.invoice_number).toBe(baseDraft.number)
   })
 
-  it('SD-8 the key takes the LAST wire position, as invoiceDraft.ts:119-121 requires', () => {
-    // The header note pins the return literal to createRequest's declaration order, and an
-    // additive wire field is appended (handlers.go:235-240 states that convention for
-    // getResponse). DRAFT-10 above still pins the 12-key order when no document was recorded.
+  it('SD-8 the key follows the twelve legacy keys and precedes the 22 NRS header keys, createRequest\'s order', () => {
+    // DRAFT-10 above pins the order when no document was recorded.
     const result = draftToCreateRequest(baseDraft, baseEntity, SD8_DOCUMENT_ID)
 
-    expect(Object.keys(result)).toEqual([
+    expect(Object.keys(result).slice(0, 13)).toEqual([
       'entity_id',
       'invoice_number',
       'issue_date',
@@ -631,6 +660,7 @@ describe('draftToCreateRequest: source_document_id (EXTR-15-06)', () => {
       'line_items',
       'source_document_id',
     ])
+    expect(Object.keys(result)).toHaveLength(35)
   })
 })
 
@@ -777,17 +807,17 @@ describe('fileSuppliedNumber: ordering + refusal (EXTR27-F1, F2)', () => {
 
 describe('draftTotals (TEST-03-04)', () => {
   const cases: Array<[string, Draft['items']]> = [
-    ['one line', [{ desc: 'A', qty: 1, price: 20.93 }]],
+    ['one line', [draftLine({ desc: 'A', qty: 1, price: 20.93 })]],
     [
       'three lines, 3-decimal qty',
       [
-        { desc: 'A', qty: 1.005, price: 19.99 },
-        { desc: 'B', qty: 2.125, price: 0.99 },
-        { desc: 'C', qty: 0.333, price: 1000.005 },
+        draftLine({ desc: 'A', qty: 1.005, price: 19.99 }),
+        draftLine({ desc: 'B', qty: 2.125, price: 0.99 }),
+        draftLine({ desc: 'C', qty: 0.333, price: 1000.005 }),
       ],
     ],
     ['empty items', []],
-    ['NaN qty', [{ desc: 'A', qty: NaN, price: 10 }]],
+    ['NaN qty', [draftLine({ desc: 'A', qty: NaN, price: 10 })]],
   ]
 
   it('draftTotals agrees with draftToCreateRequest', () => {

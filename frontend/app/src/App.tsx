@@ -13,7 +13,7 @@ import { AuditExportToast } from './components/AuditExportToast'
 import { HANDOFF_PARAM, InviteRefusedError, createOwnWorkspace, isJoinOffer, isLiveHandoffSession, joinInvite, readHandoffCode, redeemHandoff, type JoinOffer } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
-import { buildClients, resolveActiveClient, startingDraft } from './lib/clients'
+import { buildClients, draftLine, resolveActiveClient, startingDraft } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
 import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
@@ -907,7 +907,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // A blank line, not a copy of the last one: qty 1 is the only value that cannot silently
   // multiply a price the operator has not entered yet.
   function addItem() {
-    setDraft((d) => ({ ...d, items: [...d.items, { desc: '', qty: 1, price: 0 }] }))
+    setDraft((d) => ({ ...d, items: [...d.items, draftLine({ desc: '', qty: 1, price: 0 })] }))
   }
 
   // The form disables its remove control at one remaining line, so this never empties the

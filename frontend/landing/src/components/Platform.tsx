@@ -45,8 +45,6 @@ export function Platform({ onBookDemo }: { onBookDemo: () => void }) {
         value={tab}
         onChange={(id) => setTab(id as PlatformTabId)}
         panelStyle={{ padding: 'clamp(24px, 4vw, 48px)' }}
-        // taller than the band the cookie notice leaves, so a focused panel would sit under it
-        panelFocusable={false}
       >
         <div className="split" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 40, alignItems: 'start' }}>
           <div style={{ display: 'grid', gap: 20, justifyItems: 'start' }}>

@@ -459,7 +459,7 @@ func TestValidateDraftRule_NonBoolCELNamesTheField(t *testing.T) {
 	c := base
 	c.Type, c.Params = "cel", json.RawMessage(`{"expr":"'x'"}`)
 	for field, in := range map[string]draftRuleRequest{"when": w, "params.expr": c} {
-		if _, err := validateDraftRule(NewDefaultEngine(), "k", in); err == nil || !strings.HasPrefix(err.Error(), field+" ") {
+		if _, err := validateDraftRule(NewDefaultEngine(), "k", in); err == nil || err.Error() != field+" must compile to a boolean expression" {
 			t.Errorf("%s: err = %v, want a message naming the field", field, err)
 		}
 	}

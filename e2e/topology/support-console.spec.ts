@@ -1322,8 +1322,15 @@ const STAFF_SYNCS = '/api/validation/v1/staff/code-list-syncs'
 test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
-  const res = await rawFetch(STAFF_SYNCS, { headers: { Authorization: `Bearer ${await staffToken()}` } })
-  const lists = (res.body as { lists: { list: string }[] }).lists
+  const readLists = async () => {
+    const res = await rawFetch(STAFF_SYNCS, { headers: { Authorization: `Bearer ${await staffToken()}` } })
+    return (res.body as { lists: { list: string }[] }).lists
+  }
+  let lists = await readLists()
+  for (let i = 0; i < 6 && lists.length === 0; i++) {
+    await page.waitForTimeout(5_000)
+    lists = await readLists()
+  }
   const mn = mainOf(page)
   await openScreen(page, 'Rules', 'Rules admin')
   await expect(mn.locator('[role="switch"]').first()).toBeVisible()
@@ -1333,7 +1340,7 @@ test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
   if (lists.length === 0) {
     await expect(panel.getByText('No sync recorded yet.'), 'an empty sync log says so').toBeVisible()
     noErrors(errors, 'SUP-08 code-list panel and drawer layout')
-    return
+    test.skip(true, 'no nrs_code_list_syncs rows on this env; the validation boot sync fills them from live NRS')
   }
   const rows = panel.locator('button')
   await expect(rows, 'one panel row per synced list').toHaveCount(lists.length)

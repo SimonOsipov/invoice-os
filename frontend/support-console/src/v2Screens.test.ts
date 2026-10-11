@@ -571,6 +571,28 @@ describe('v2 screens', () => {
     expect(rows[0][2]).not.toContain('−1')
   })
 
+  it('a held row with zero removed says would remove 0; a released row reads as removed', () => {
+    const rows = panelRows(rulesWith({ codeLists: [latest('a', 'held', { removed_count: 0 }), latest('b', 'released', { removed_count: 4 })] }))
+    expect(rows).toHaveLength(2)
+    expect(rows[0][2]).toContain('+3 would remove 0 ~0')
+    expect(rows[1][2]).toContain('RELEASED')
+    expect(rows[1][2]).toContain('+3 −4 ~0')
+    expect(rows[1][2]).not.toContain('would remove')
+  })
+
+  it('panel rows render in the served order', () => {
+    const rows = panelRows(rulesWith({ codeLists: [latest('zz', 'applied'), latest('aa', 'applied')] }))
+    expect(rows).toHaveLength(2)
+    expect(rows[0][2]).toContain('>zz<')
+    expect(rows[1][2]).toContain('>aa<')
+  })
+
+  it('a status named like an Object.prototype key renders as a muted chip', () => {
+    const rows = panelRows(rulesWith({ codeLists: [latest('hs-codes', 'constructor')] }))
+    expect(rows[0][2]).toContain('CONSTRUCTOR')
+    expect(rows[0][2]).toContain('var(--status-muted-bg)')
+  })
+
   it('an unknown sync status still renders as a muted chip (D32)', () => {
     const rows = panelRows(rulesWith({ codeLists: [latest('hs-codes', 'quarantined')] }))
     expect(rows[0][2]).toContain('QUARANTINED')

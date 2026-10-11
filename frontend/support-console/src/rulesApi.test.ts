@@ -316,6 +316,12 @@ describe('RULE_TYPES', () => {
     expect(fetchMock.mock.calls[1][0]).toBe(`${url}?list=hs-codes`)
   })
 
+  it('fetchCodeListSyncs encodes the list name in the query', async () => {
+    fetchMock.mockResolvedValueOnce(json(200, { list: 'a b&c', syncs: [] }))
+    expect(await fetchCodeListSyncs('a b&c')).toEqual([])
+    expect(fetchMock.mock.calls[0][0]).toBe(`${GW}/api/validation/v1/staff/code-list-syncs?list=a%20b%26c`)
+  })
+
   it('capCodes', () => {
     const n = (k: number) => Array.from({ length: k }, (_, i) => `c${i}`)
     expect(capCodes(n(199), 200)).toEqual({ shown: n(199), more: 0 })

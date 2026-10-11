@@ -358,6 +358,89 @@ describe('Console code-list wiring', () => {
     await openRules()
     await waitFor(() => expect(screen.getAllByText('Your account has no rules role.').length).toBeGreaterThan(0))
   })
+
+  const syncOf = (added: string[], status = 'applied') => ({ status, synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added, removed: [], changed: [] })
+
+  it('a 500 on the summary shows the server text, not the no-role wording', async () => {
+    summary.mockRejectedValue(new ApiError('http', 'db down', 500))
+    render(<App />)
+    await openRules()
+    expect(await screen.findByText('db down')).toBeTruthy()
+    expect(screen.queryByText('Your account has no rules role.')).toBeNull()
+    expect(screen.queryByText('No sync recorded yet.')).toBeNull()
+  })
+
+  it('a 403 and a 500 on the syncs read show in the drawer; a list with no syncs says so', async () => {
+    summary.mockResolvedValue([latest('hs-codes', 'applied')])
+    render(<App />)
+    await openRules()
+    const row = await screen.findByRole('button', { name: /hs-codes/ })
+    syncsRead.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
+    fireEvent.click(row)
+    await waitFor(() => expect(dialog().textContent).toContain('Your account has no rules role.'))
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Close' }))
+    syncsRead.mockRejectedValueOnce(new ApiError('http', 'db down', 500))
+    fireEvent.click(row)
+    await waitFor(() => expect(dialog().textContent).toContain('db down'))
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Close' }))
+    syncsRead.mockResolvedValueOnce([])
+    fireEvent.click(row)
+    await waitFor(() => expect(dialog().textContent).toContain('No sync recorded yet.'))
+  })
+
+  it('a 401 on the syncs read signs out', async () => {
+    summary.mockResolvedValue([latest('hs-codes', 'applied')])
+    syncsRead.mockRejectedValue(new ApiError('http', 'expired', 401))
+    render(<App />)
+    await openRules()
+    fireEvent.click(await screen.findByRole('button', { name: /hs-codes/ }))
+    await waitFor(() => expect(vi.mocked(signOutConsole)).toHaveBeenCalled())
+  })
+
+  it('a late reply for a closed list does not paint on the next list', async () => {
+    summary.mockResolvedValue([latest('hs-codes', 'applied'), latest('currencies', 'applied')])
+    let lateA!: (v: ReturnType<typeof syncOf>[]) => void
+    syncsRead.mockImplementation((l) => (l === 'hs-codes' ? new Promise((r) => (lateA = r)) : Promise.resolve([syncOf(['B-ONLY'])])))
+    render(<App />)
+    await openRules()
+    fireEvent.click(await screen.findByRole('button', { name: /hs-codes/ }))
+    await waitFor(() => expect(syncsRead).toHaveBeenCalledWith('hs-codes'))
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('button', { name: /currencies/ }))
+    await waitFor(() => expect(dialog().textContent).toContain('B-ONLY'))
+    await act(async () => lateA([syncOf(['A-STALE'])]))
+    expect(dialog().textContent).toContain('currencies')
+    expect(dialog().textContent).toContain('B-ONLY')
+    expect(dialog().textContent).not.toContain('A-STALE')
+  })
+
+  it('a late reply after close paints nothing when the same list reopens pending', async () => {
+    summary.mockResolvedValue([latest('hs-codes', 'applied')])
+    const late: ((v: ReturnType<typeof syncOf>[]) => void)[] = []
+    syncsRead.mockImplementation(() => new Promise((r) => late.push(r)))
+    render(<App />)
+    await openRules()
+    const row = await screen.findByRole('button', { name: /hs-codes/ })
+    fireEvent.click(row)
+    await waitFor(() => expect(late).toHaveLength(1))
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Close' }))
+    fireEvent.click(row)
+    await waitFor(() => expect(late).toHaveLength(2))
+    await act(async () => late[0]([syncOf(['FIRST-STALE'])]))
+    expect(dialog().textContent).not.toContain('FIRST-STALE')
+    await act(async () => late[1]([syncOf(['SECOND'])]))
+    expect(dialog().textContent).toContain('SECOND')
+  })
+
+  it('panel rows keep the served order', async () => {
+    summary.mockResolvedValue([latest('zz-last', 'applied'), latest('aa-first', 'applied')])
+    render(<App />)
+    await openRules()
+    await screen.findByRole('button', { name: /zz-last/ })
+    const html = document.body.innerHTML
+    expect(html.indexOf('zz-last')).toBeGreaterThan(-1)
+    expect(html.indexOf('zz-last')).toBeLessThan(html.indexOf('aa-first'))
+  })
 })
 
 describe('Console draft wiring', () => {

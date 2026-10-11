@@ -582,6 +582,23 @@ describe('v2 shell', () => {
     expect(html.match(/>Removed · /g)).toHaveLength(1)
   })
 
+  it('each category caps at 200 on its own: 201 removed shows 1 more, 200 added shows none', () => {
+    const codes = (n: number, p: string) => Array.from({ length: n }, (_, i) => `${p}${i}`)
+    const html = drawerHtml([sync('applied', { added: codes(200, 'A'), removed: codes(201, 'R'), changed: codes(199, 'C') })])
+    expect(html.match(/and \d+ more/g)).toEqual(['and 1 more'])
+    expect(html).toContain('R199')
+    expect(html).not.toContain('R200')
+    expect(html).toContain('A199')
+    expect(html).toContain('C198')
+  })
+
+  it('a held sync with zero removed codes still says held and Would remove · 0', () => {
+    const html = drawerHtml([sync('held', { removed: [] })])
+    expect(html).toContain('held, not applied')
+    expect(html).toContain('>Would remove · 0')
+    expect(html).not.toContain('>Removed · ')
+  })
+
   it('an unknown sync status still renders in the drawer (D32)', () => {
     const html = drawerHtml([sync('released')])
     expect(html).toContain('RELEASED')

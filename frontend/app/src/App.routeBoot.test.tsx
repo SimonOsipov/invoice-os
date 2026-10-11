@@ -330,6 +330,19 @@ describe('ROUTE-04-02 AC-1: the settings tab seeds from the path segment', () =>
   })
 })
 
+describe('ENGI-05-07: /settings/buyers is addressable for both personas', () => {
+  it('boot_settingsBuyersDeepLinkKeepsTheTabForFirmAndInhouse', async () => {
+    await bootAt('/settings/buyers')
+    expect(requireCtx().settingsTab, 'firm must not fall back to members').toBe('buyers')
+    expect(window.location.pathname).toBe('/settings/buyers')
+    cleanup()
+    capturedCtx = undefined
+    await bootAt('/settings/buyers', { persona: APP_PERSONAS.inhouse })
+    expect(requireCtx().settingsTab, 'in-house must keep buyers').toBe('buyers')
+    expect(window.location.pathname).toBe('/settings/buyers')
+  })
+})
+
 describe('ROUTE-04-02 AC-2: the invoice query seeds, and survives the alignment', () => {
   it('boot_theInvoiceQuerySeedsFromTheUrl', async () => {
     await bootAt('/invoices?q=acme')

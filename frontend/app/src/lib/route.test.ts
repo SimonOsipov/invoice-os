@@ -226,7 +226,7 @@ describe('routeUrl — serialise', () => {
   })
 
   // ALL_SETTINGS_TABS is a local literal, so the `.length === 7` floor above asserts it
-  // against itself: a seventh tab added to types.ts would leave every tab loop in this file
+  // against itself: a new tab added to types.ts would leave every tab loop in this file
   // one short and silent. ROUTE_PATHS has such an anchor already
   // (routeTable_isTotalOverTheThirteenViews); the tab set had none.
   it('settingsTabs_theTestTableIsAnchoredToTheShippedUnion', () => {

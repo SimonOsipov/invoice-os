@@ -92,4 +92,91 @@ describe('BuyerFormModal', () => {
     await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1))
     expect(authedFetch).toHaveBeenCalledWith('https://gateway.test/api/invoice/v1/customers/c1', { method: 'PATCH', body: { email: 'b@x.ng' } })
   })
+
+  it('a 404 and a network error show the generic message', async () => {
+    for (const err of [new ApiError('http', 'not found', 404), new TypeError('Failed to fetch')]) {
+      const { unmount } = (() => {
+        const r = render(<BuyerFormModal customer={CUSTOMER} ctx={{ authedFetch: vi.fn().mockRejectedValue(err) } as unknown as PlatformCtx} base="https://gateway.test" onClose={vi.fn()} onSuccess={vi.fn()} />)
+        return r
+      })()
+      editEmail()
+      save()
+      expect(await screen.findByText('Something went wrong. Please try again.')).toBeTruthy()
+      unmount()
+    }
+  })
+
+  it('Cancel closes without a request even after an edit', () => {
+    const { authedFetch, onClose } = mount()
+    editEmail()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(authedFetch).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+const FILLED: Customer = {
+  ...CUSTOMER,
+  contact_person: 'Ada',
+  buyer_type: 'B2B',
+  telephone: '0801',
+  street: '1 Road',
+  city: 'Ikeja',
+  postal_zone: '100001',
+  country: 'NG',
+  state: 'NG-LA',
+  lga: 'Ikeja',
+}
+
+const EDITABLE: Array<[label: string, wire: string]> = [
+  ['Name', 'name'],
+  ['Contact person', 'contact_person'],
+  ['Email', 'email'],
+  ['Phone', 'telephone'],
+  ['Street', 'street'],
+  ['City', 'city'],
+  ['Postal zone', 'postal_zone'],
+  ['Country', 'country'],
+  ['State', 'state'],
+  ['LGA', 'lga'],
+]
+
+describe('BuyerFormModal per-field diff', () => {
+  afterEach(cleanup)
+
+  function open(authedFetch = vi.fn().mockResolvedValue(FILLED)) {
+    render(<BuyerFormModal customer={FILLED} ctx={{ authedFetch } as unknown as PlatformCtx} base="https://gateway.test" onClose={vi.fn()} onSuccess={vi.fn()} />)
+    return authedFetch
+  }
+
+  it.each(EDITABLE)('%s: a changed value is sent trimmed, as %s only', async (label, wire) => {
+    expect(EDITABLE).toHaveLength(10)
+    const af = open()
+    fireEvent.change(screen.getByLabelText(label), { target: { value: '  changed  ' } })
+    save()
+    await waitFor(() => expect(af).toHaveBeenCalledTimes(1))
+    expect(af.mock.calls[0][1]).toEqual({ method: 'PATCH', body: { [wire]: 'changed' } })
+  })
+
+  it.each(EDITABLE)('%s: a cleared value is sent as an empty string for %s', async (label, wire) => {
+    const af = open()
+    fireEvent.change(screen.getByLabelText(label), { target: { value: '' } })
+    save()
+    await waitFor(() => expect(af).toHaveBeenCalledTimes(1))
+    expect(af.mock.calls[0][1]).toEqual({ method: 'PATCH', body: { [wire]: '' } })
+  })
+
+  it('Buyer type: a changed type is sent, and choosing — clears it to an empty string', async () => {
+    const af = open()
+    fireEvent.change(screen.getByLabelText('Buyer type'), { target: { value: 'B2G' } })
+    save()
+    await waitFor(() => expect(af).toHaveBeenCalledTimes(1))
+    expect(af.mock.calls[0][1]).toEqual({ method: 'PATCH', body: { buyer_type: 'B2G' } })
+    cleanup()
+    const af2 = open()
+    fireEvent.change(screen.getByLabelText('Buyer type'), { target: { value: '' } })
+    save()
+    await waitFor(() => expect(af2).toHaveBeenCalledTimes(1))
+    expect(af2.mock.calls[0][1]).toEqual({ method: 'PATCH', body: { buyer_type: '' } })
+  })
 })

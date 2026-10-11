@@ -135,6 +135,19 @@ describe('Settings > shell', () => {
     expect(tabs.map((t) => t.textContent)).toEqual(['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates'])
   })
 
+  it.each([
+    ['firm', () => settingsCtx('buyers', false, { authedFetch: vi.fn().mockResolvedValue({ customers: [], pagination: { limit: 50, offset: 0, total: 0 } }) })],
+    ['in-house', () => inhouse({ settingsTab: 'buyers', authedFetch: vi.fn().mockResolvedValue({ customers: [], pagination: { limit: 50, offset: 0, total: 0 } }) })],
+  ] as const)('%s persona: the buyers tab renders the buyer directory', async (_name, make) => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gateway.test')
+    try {
+      render(<SettingsView ctx={make()} />)
+      expect(await screen.findByText('No buyers yet')).toBeTruthy()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('in-house tab strip lists Buyers after Roles', () => {
     render(<SettingsView ctx={inhouse()} />)
     const tabs = screen.getAllByRole('button').filter((b) => b.className === 'pf-tab')

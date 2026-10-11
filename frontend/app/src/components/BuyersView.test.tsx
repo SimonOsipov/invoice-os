@@ -61,6 +61,19 @@ describe('BuyersView', () => {
     expect(cells).toEqual(['Acme Ltd', '20184412-0001', 'B2B', '—', '—', '—'])
   })
 
+  it('the header names the six columns in order', async () => {
+    mount(vi.fn().mockResolvedValue(page([customer()])))
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    const head = document.querySelector('.pf-list-head') as HTMLElement
+    expect(Array.from(head.children).map((c) => c.textContent)).toEqual(['Buyer', 'TIN', 'Type', 'Email', 'Phone', 'State'])
+  })
+
+  it('renders — for a null buyer type', async () => {
+    mount(vi.fn().mockResolvedValue(page([customer({ buyer_type: null })])))
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    expect(rows()[0].children[2].textContent).toBe('—')
+  })
+
   it('shows the empty state', async () => {
     mount(vi.fn().mockResolvedValue(page([])))
     expect(await screen.findByText('No buyers yet')).toBeTruthy()
@@ -106,5 +119,47 @@ describe('BuyersView', () => {
     // success refetches the list and closes the modal
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(af.mock.calls.filter(([, o]) => o?.method !== 'PATCH')).toHaveLength(2)
+  })
+
+  it('shows the loading state before the first response', () => {
+    mount(vi.fn(() => new Promise(() => {})))
+    expect(screen.getByText('Loading buyers…')).toBeTruthy()
+    expect(rows()).toHaveLength(0)
+  })
+
+  it('makes no request without a gateway and shows the empty state', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    const af = vi.fn()
+    mount(af)
+    expect(af).not.toHaveBeenCalled()
+    expect(screen.getByText('No buyers yet')).toBeTruthy()
+  })
+
+  it('the pager walks Next and Previous by offset across the 51-record boundary', async () => {
+    const af = vi.fn((url: string) => {
+      const offset = Number(new URL(url).searchParams.get('offset'))
+      return Promise.resolve(page([customer({ id: `c${offset}` })], 51, offset))
+    })
+    mount(af)
+    const next = async () => (await screen.findByRole('button', { name: /Next/ })) as HTMLButtonElement
+    const prev = () => screen.getByRole('button', { name: /Previous/ }) as HTMLButtonElement
+    expect((await next()).disabled).toBe(false)
+    expect(prev().disabled).toBe(true)
+    fireEvent.click(await next())
+    await waitFor(() => expect(af).toHaveBeenCalledTimes(2))
+    expect((await next()).disabled).toBe(true)
+    expect(prev().disabled).toBe(false)
+    fireEvent.click(prev())
+    await waitFor(() => expect(af).toHaveBeenCalledTimes(3))
+    expect(af.mock.calls.map(([u]) => new URL(u).searchParams.get('offset'))).toEqual(['0', '50', '0'])
+  })
+
+  it('a row click opens the editor for that row, not another', async () => {
+    mount(vi.fn().mockResolvedValue(page([customer({ name: 'First Co' }), customer({ id: 'c2', tin: '20184412-0002', name: 'Second Co' })])))
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    fireEvent.click(rows()[1])
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit buyer' }))
+    expect(dialog.getByText('20184412-0002')).toBeTruthy()
+    expect((dialog.getByLabelText('Name') as HTMLInputElement).value).toBe('Second Co')
   })
 })

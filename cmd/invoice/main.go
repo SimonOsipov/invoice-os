@@ -217,6 +217,7 @@ func main() {
 	// still answers 200 source:"none", never a 5xx (TestSuggestHandler_OffAnswersNoneWithRowOne,
 	// TestSuggestHandler_AValidatedEnvelopeErrorAnswersNoneNotFiveHundred).
 	app.Mux.HandleFunc("POST /v1/imports/suggest-mapping", importer.SuggestMappingHandler(docSvc.Open, impStore.SavedMapping, aiClient, app.Logger))
+	app.Mux.HandleFunc("POST /v1/invoices/{id}/explain", invoice.ExplainHandler(invoice.NewExplainer(store.Get, aiClient).Explain, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/check-mapping", importer.CheckMappingHandler(docSvc.Open, jevClient, app.Logger))
 	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
 	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on

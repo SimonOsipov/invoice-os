@@ -13,7 +13,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { Violation } from '../lib/validationApi'
+import { EXPLAIN_LABEL, violationKey, type Violation } from '../lib/validationApi'
 import { ViolationsTable } from './ViolationsTable'
 
 // 104 chars of [A-Za-z0-9_]: no space, hyphen, dot or bracket, so UAX #14 offers no break
@@ -296,5 +296,74 @@ describe('ViolationsTable line links (ENGI-16-03)', () => {
 
     expect(screen.queryByTestId('violation-open-line')).toBeNull()
     expect(within(screen.getAllByRole('row')[1]).getAllByRole('cell')[3].textContent).toBe('line_items[2]')
+  })
+})
+
+describe('ViolationsTable explain (ENGI-17-05)', () => {
+  const rows = [
+    violation({ rule_key: 'a.rule', path: '$.total' }),
+    violation({ rule_key: 'b.rule', path: 'line_items[2].unit_price' }),
+    violation({ rule_key: 'c.rule', path: undefined }),
+  ]
+
+  it('violationsTable_explainButtonPerRow', () => {
+    const onExplain = vi.fn()
+    render(<ViolationsTable violations={rows} ruleSetVersion={3} onOpenLine={() => {}} onExplain={onExplain} />)
+
+    const buttons = screen.getAllByTestId('violation-explain')
+    expect(buttons).toHaveLength(3)
+    const cell = screen.getByTestId('violation-open-line').parentElement as HTMLElement
+    expect(within(cell).getByTestId('violation-explain').previousElementSibling).toBe(screen.getByTestId('violation-open-line'))
+    fireEvent.click(buttons[1])
+    expect(onExplain).toHaveBeenCalledWith(rows[1])
+  })
+
+  it('violationsTable_oneExplanationRow', () => {
+    render(
+      <ViolationsTable
+        violations={rows}
+        ruleSetVersion={3}
+        onExplain={() => {}}
+        explainOpen={violationKey(rows[1])}
+        renderExplanation={(v) => <span>panel for {v.rule_key}</span>}
+      />,
+    )
+
+    const all = screen.getAllByRole('row')
+    const expl = screen.getAllByTestId('violation-explanation-row')
+    expect(expl).toHaveLength(1)
+    expect(all[all.indexOf(expl[0]) - 1].textContent).toContain('b.rule')
+    expect((expl[0].firstElementChild as HTMLTableCellElement).colSpan).toBe(4)
+    expect(expl[0].textContent).toBe('panel for b.rule')
+  })
+
+  it('violationsTable_explainDisabledUsesTheLineRecipe', () => {
+    const onExplain = vi.fn()
+    render(<ViolationsTable violations={rows} ruleSetVersion={3} onExplain={onExplain} explainDisabled explainTitle="why" />)
+
+    const b = screen.getAllByTestId('violation-explain')[0] as HTMLButtonElement
+    expect(b.disabled).toBe(true)
+    expect(b.title).toBe('why')
+    expect(b.style.opacity).toBe('0.45')
+    expect(b.style.cursor).toBe('not-allowed')
+    fireEvent.click(b)
+    expect(onExplain).not.toHaveBeenCalled()
+  })
+
+  it('violationsTable_explainLabelCarriesNoDisclosure', () => {
+    render(<ViolationsTable violations={rows} ruleSetVersion={3} onExplain={() => {}} />)
+
+    for (const b of screen.getAllByTestId('violation-explain')) {
+      expect(b.textContent).toBe(EXPLAIN_LABEL)
+      expect(b.textContent).not.toMatch(/\bAI\b/)
+      expect(b.textContent).not.toMatch(/provider/i)
+    }
+  })
+
+  it('violationsTable_withoutOnExplainRendersNoExplain', () => {
+    render(<ViolationsTable violations={rows} ruleSetVersion={3} explainOpen={violationKey(rows[0])} />)
+
+    expect(screen.queryByTestId('violation-explain')).toBeNull()
+    expect(screen.queryByTestId('violation-explanation-row')).toBeNull()
   })
 })

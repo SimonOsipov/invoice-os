@@ -7,16 +7,22 @@
 // Severity | Message | Rule key | Path, in response order (backend pre-sorts by rule_key
 // then path — do NOT re-sort here).
 
-import { severityStyle, violationLine, type LineTarget, type Violation } from '../lib/validationApi'
+import { Fragment } from 'react'
+import { EXPLAIN_LABEL, severityStyle, violationKey, violationLine, type LineTarget, type Violation } from '../lib/validationApi'
 
 export interface ViolationsTableProps {
   violations: Violation[]
   ruleSetVersion: number
   onOpenLine?: (t: LineTarget) => void
   lineDisabled?: boolean
+  explainOpen?: string | null
+  onExplain?: (v: Violation) => void
+  renderExplanation?: (v: Violation) => React.ReactNode
+  explainDisabled?: boolean
+  explainTitle?: string
 }
 
-export function ViolationsTable({ violations, ruleSetVersion, onOpenLine, lineDisabled }: ViolationsTableProps): React.JSX.Element {
+export function ViolationsTable({ violations, ruleSetVersion, onOpenLine, lineDisabled, explainOpen, onExplain, renderExplanation, explainDisabled, explainTitle }: ViolationsTableProps): React.JSX.Element {
   if (violations.length === 0) {
     return (
       <div style={{ fontSize: 13, color: 'var(--fg-2)' }}>
@@ -44,8 +50,11 @@ export function ViolationsTable({ violations, ruleSetVersion, onOpenLine, lineDi
           {violations.map((v, i) => {
             const st = severityStyle(v.severity)
             const target = onOpenLine ? violationLine(v.path) : null
+            const key = violationKey(v)
+            const open = onExplain != null && explainOpen === key
             return (
-              <tr key={`${v.rule_key}-${v.path ?? ''}-${i}`}>
+              <Fragment key={`${v.rule_key}-${v.path ?? ''}-${i}`}>
+              <tr>
                 <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--line-1)' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', background: st.bg, border: `1px solid ${st.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 7px' }}>
                     <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: st.text }}>{st.label}</span>
@@ -80,8 +89,38 @@ export function ViolationsTable({ violations, ruleSetVersion, onOpenLine, lineDi
                       Line {target.line}
                     </button>
                   )}
+                  {onExplain && (
+                    <button
+                      type="button"
+                      data-testid="violation-explain"
+                      title={explainDisabled ? explainTitle : undefined}
+                      aria-expanded={open}
+                      disabled={explainDisabled}
+                      onClick={() => {
+                        if (!explainDisabled) onExplain(v)
+                      }}
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      style={{
+                        height: 24,
+                        padding: '0 8px',
+                        fontSize: 11.5,
+                        marginLeft: 8,
+                        ...(explainDisabled ? { background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' } : null),
+                      }}
+                    >
+                      {EXPLAIN_LABEL}
+                    </button>
+                  )}
                 </td>
               </tr>
+              {open && (
+                <tr data-testid="violation-explanation-row">
+                  <td colSpan={4} style={{ padding: '10px 12px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-1)' }}>
+                    {renderExplanation?.(v)}
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             )
           })}
         </tbody>

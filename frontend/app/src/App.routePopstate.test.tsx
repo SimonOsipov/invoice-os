@@ -132,8 +132,7 @@ function requireCtx(): PlatformCtx {
   return capturedCtx!
 }
 
-// jsdom runs no real history stack for back()/forward() -- move the URL the way the
-// browser would, then fire the event the browser fires.
+// Moves the URL by hand, then fires popstate. `traverse` (BUG-34 block) walks the real stack.
 async function popTo(path: string) {
   window.history.replaceState(null, '', path)
   await act(async () => {

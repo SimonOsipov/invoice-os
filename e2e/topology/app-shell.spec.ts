@@ -552,7 +552,8 @@ test('AS-08 the suspended card: radius and Sign out corner', async ({ page }, te
     if (route.request().method() === 'OPTIONS') return route.continue()
     return route.fulfill({ status: 403, contentType: 'application/json', headers: { 'access-control-allow-origin': origin }, body: NOT_ACTIVE_BODY })
   })
-  await navButton(page, /^Invoices/).click()
+  // A call already in flight can draw the card first and detach the nav; the card assertion is the check.
+  await navButton(page, /^Invoices/).click({ timeout: 5_000 }).catch(() => {})
 
   const card = page.getByTestId('suspended-notice')
   await expect(card, 'the 403 with the not-active body renders the suspended card').toBeVisible()

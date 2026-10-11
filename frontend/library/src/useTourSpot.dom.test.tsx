@@ -62,44 +62,62 @@ describe('useTourSpot', () => {
     expect(seen.rect).toBeNull()
   })
 
-  describe('document.fonts.ready', () => {
-    let resolve: () => void
-    let height: number
-    const fontsDesc = Object.getOwnPropertyDescriptor(document, 'fonts')
-
-    beforeEach(() => {
-      height = 36
-      Element.prototype.getBoundingClientRect = function (this: Element) {
-        const b = this.id === 'nav-invoices' ? { ...NAV, height } : { left: 0, top: 0, width: 0, height: 0 }
-        return { ...b, x: b.left, y: b.top, right: b.left + b.width, bottom: b.top + b.height, toJSON: () => b } as DOMRect
-      }
-      const ready = new Promise<void>((r) => (resolve = r))
-      Object.defineProperty(document, 'fonts', { configurable: true, value: { ready } })
+  it('useTourSpot_remeasuresWhenWebFontsFinishLoading', () => {
+    const fonts = new EventTarget() as EventTarget & { ready: Promise<unknown> }
+    fonts.ready = new Promise(() => {})
+    Object.defineProperty(document, 'fonts', { value: fonts, configurable: true })
+    try {
       const nav = document.createElement('nav')
       nav.id = 'nav-invoices'
       document.body.appendChild(nav)
-    })
-
-    afterEach(() => {
-      if (fontsDesc) Object.defineProperty(document, 'fonts', fontsDesc)
-      else delete (document as { fonts?: unknown }).fonts
-    })
-
-    it('useTourSpot_remeasuresWhenFontsReadyResolves', async () => {
       render({ i: 0, phase: 'menu' })
-      expect(seen.rect?.h).toBe(42)
-      height = 41
-      await act(async () => {
-        resolve()
-        await Promise.resolve()
+      expect(seen.rect).toEqual({ x: 6, y: 97, w: 275, h: 42 })
+
+      NAV.top = 106
+      NAV.height = 32
+      act(() => {
+        fonts.dispatchEvent(new Event('loadingdone'))
       })
-      expect(seen.rect?.h).toBe(47)
-    })
-
-    it('useTourSpot_withoutDocumentFontsStillMeasures', () => {
+      expect(seen.rect).toEqual({ x: 6, y: 103, w: 275, h: 38 })
+    } finally {
+      NAV.top = 100
+      NAV.height = 36
       delete (document as { fonts?: unknown }).fonts
+    }
+  })
+
+  it('useTourSpot_remeasuresWhenDocumentFontsReadyResolvesAfterMount', async () => {
+    let ready!: () => void
+    const fonts = new EventTarget() as EventTarget & { ready: Promise<unknown> }
+    fonts.ready = new Promise<void>((r) => (ready = r))
+    Object.defineProperty(document, 'fonts', { value: fonts, configurable: true })
+    try {
+      const nav = document.createElement('nav')
+      nav.id = 'nav-invoices'
+      document.body.appendChild(nav)
       render({ i: 0, phase: 'menu' })
-      expect(seen.rect?.h).toBe(42)
-    })
+      expect(seen.rect).toEqual({ x: 6, y: 97, w: 275, h: 42 })
+
+      NAV.top = 106
+      NAV.height = 32
+      await act(async () => {
+        ready()
+        await fonts.ready
+      })
+      expect(seen.rect).toEqual({ x: 6, y: 103, w: 275, h: 38 })
+    } finally {
+      NAV.top = 100
+      NAV.height = 36
+      delete (document as { fonts?: unknown }).fonts
+    }
+  })
+
+  it('useTourSpot_withoutDocumentFontsStillMeasures', () => {
+    delete (document as { fonts?: unknown }).fonts
+    const nav = document.createElement('nav')
+    nav.id = 'nav-invoices'
+    document.body.appendChild(nav)
+    render({ i: 0, phase: 'menu' })
+    expect(seen.rect).toEqual({ x: 6, y: 97, w: 275, h: 42 })
   })
 })

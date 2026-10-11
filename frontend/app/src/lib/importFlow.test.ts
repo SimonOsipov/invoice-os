@@ -791,7 +791,7 @@ describe('computeNoEntity (FLOW-15..17, task-304 AC-6)', () => {
   })
 
   // FLOW-17 — guard 2 (rosterCatchingUp): the one-render-late window where entities has
-  // already landed but the `clients` effect has not yet rebuilt from it. Falsification: an
+  // already landed but `clients` is still []. Falsification: an
   // impl missing this guard would fire the panel for one frame on every load with data.
   it('FLOW-17: does not fire in the one-render roster-catching-up window (entities landed, clients still [])', () => {
     expect(computeNoEntity(null, 'ready', 5, 0)).toBe(false)

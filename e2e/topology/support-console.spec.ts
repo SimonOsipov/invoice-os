@@ -95,6 +95,9 @@ async function boxes<K extends string>(page: Page, named: Record<K, Locator>): P
 }
 
 const within = (outer: Rect, inner: Rect, what: string): string[] => (enclosesRect(outer, inner, 1) ? [] : [`${what}: sticks out`])
+// Sideways only: a tall body scrolls, so a block below the fold is by design.
+const withinX = (outer: Rect, inner: Rect, what: string): string[] =>
+  inner.x >= outer.x - 1 && inner.x + inner.width <= outer.x + outer.width + 1 ? [] : [`${what}: sticks out sideways`]
 const apart = (a: Rect, b: Rect, what: string): string[] => (rectsOverlap(a, b) ? [`${what}: overlap`] : [])
 const leftOf = (a: Rect, b: Rect, what: string): string[] => (a.x + a.width <= b.x + 1 ? [] : [`${what}: not left of`])
 const below = (above: Rect, lower: Rect, what: string): string[] => (lower.y >= above.y + above.height - 1 ? [] : [`${what}: not below`])
@@ -1439,11 +1442,11 @@ test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
     const blocks = await rectsOf(page, drawer.locator('xpath=./div[2]/div'), 'sync block')
     const codes = await rectsOf(page, drawer.locator('xpath=./div[2]').locator('div.mono'), 'code block')
     await noSidewaysScroll(page, 'the code-list drawer page')
-    const m = await drawer.locator('xpath=./div[2]').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+    const m = await drawer.locator('xpath=./div[2]').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }), undefined, { timeout: 5_000 })
     return {
       problems: [
-        ...blocks.flatMap((b, i) => within(d.drawer, b, `sync block ${i} in the drawer`)),
-        ...codes.flatMap((c, i) => within(d.drawer, c, `code block ${i} in the drawer`)),
+        ...blocks.flatMap((b, i) => withinX(d.drawer, b, `sync block ${i} in the drawer`)),
+        ...codes.flatMap((c, i) => withinX(d.drawer, c, `code block ${i} in the drawer`)),
         ...(m.scrollWidth - m.clientWidth <= 1 ? [] : [`the drawer body scrolls sideways: ${m.scrollWidth} vs ${m.clientWidth}`]),
       ],
       rects: { drawer: d.drawer, blocks, codes },

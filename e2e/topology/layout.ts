@@ -31,7 +31,7 @@ export async function settleAnimations(...targets: Locator[]): Promise<void> {
         return on?.contains(el) && a.effect?.getComputedTiming().endTime !== Infinity
       })
       return Promise.all(running.map((a) => a.finished.catch(() => undefined))).then(() => undefined)
-    })
+    }, undefined, { timeout: 5_000 })
   }
 }
 

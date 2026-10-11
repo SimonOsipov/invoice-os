@@ -1,7 +1,7 @@
 // jev_record_test.go: CHECK-01-06 Flash Lite half -- records one JSON line per layout to
 // mapping_answers.jsonl by sending each layout's window (suggestWindow/mappingPromptText, via
 // the shipped askMapping) through the real ai.Client. Gated on OPENROUTER_API_KEY; the gate
-// exists for determinism of the recorded artifact, not spend -- a full 48-layout run costs
+// exists for determinism of the recorded artifact, not spend -- a full 72-layout run costs
 // about one US cent. AC-8's reader lives here too, not in
 // jev_mapping_test.go, which is CHECK-01-07's file (D-5).
 package importer

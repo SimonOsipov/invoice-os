@@ -36,6 +36,7 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 	sum := sha256.Sum256([]byte(verifyScript))
 	csp := "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'sha256-" +
 		base64.StdEncoding.EncodeToString(sum[:]) + "'; base-uri 'none'; frame-ancestors 'none'"
+	site := strings.TrimSuffix(siteURL.String(), "/")
 	failed := verifyFailedURL(siteURL)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,8 +49,9 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
+		// The confirm=invite literal is parsed by frontend/landing/src/verifyLink.test.ts.
 		if inv := r.URL.Query()["invite"]; len(inv) == 1 && inv[0] == "1" {
-			serveInvitationPasswordPage(w, r, failed)
+			serveInvitationPasswordPage(w, r, site, failed)
 			return
 		}
 		// redirect_to and every other query value are ignored, never rendered.
@@ -59,7 +61,13 @@ func VerifyPageHandler(siteURL *url.URL) (http.Handler, error) {
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 			return
 		}
-		page := strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.Script}}", verifyScript).Replace(verifyPageHTML)
+		// The app mints the state in the clicking tab; a stateless open goes there via landing.
+		state := q.Get("state")
+		if !stateShape.MatchString(state) {
+			http.Redirect(w, r, site+"/?confirm=1#token="+url.QueryEscape(token), http.StatusSeeOther)
+			return
+		}
+		page := strings.NewReplacer("{{.Token}}", html.EscapeString(token), "{{.State}}", html.EscapeString(state), "{{.Script}}", verifyScript).Replace(verifyPageHTML)
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		h.Set("Content-Length", strconv.Itoa(len(page)))
 		w.WriteHeader(http.StatusOK)

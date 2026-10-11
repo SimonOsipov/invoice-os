@@ -61,7 +61,7 @@ export function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
           'Send reset link'
         )}
       </button>
-      <ResendNotice note={note} email={email.trim()} text={RESET_SENT} />
+      <ResendNotice note={note} email={email.trim()} text={RESET_SENT} peach />
       <div style={{ marginTop: 14 }}>
         <Button variant="text" type="button" onClick={onBack} disabled={resending} style={{ fontSize: 13 }}>
           Back to sign in

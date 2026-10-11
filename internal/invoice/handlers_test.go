@@ -6402,6 +6402,20 @@ func TestCreateHandler_MissingNumberOutranksAMalformedSourceDocumentID(t *testin
 	}
 }
 
+func TestIssueTime_OneRegexServesTheAPIAndTheImporter(t *testing.T) {
+	for _, v := range []string{
+		"23:59:59", "00:00:00", "09:05:03", "20:00:00",
+		"25:61", "14:30", "2:30 PM", "9:05:03", "14:30:00.5", "24:00:00", "", " 14:30:00", "23:59:60", "14:60:00",
+	} {
+		create := func(context.Context, CreateInput) (Invoice, error) { return Invoice{ID: "x"}, nil }
+		body := mustJSON(t, map[string]any{"entity_id": uuid.NewString(), "invoice_number": "N", "issue_time": v})
+		rec, _ := doInvoiceCreate(t, create, &nrsIdentity, body)
+		if api := rec.Code == http.StatusCreated; api != ValidIssueTime(v) {
+			t.Errorf("issue_time %q: API accepts = %v, ValidIssueTime = %v", v, api, ValidIssueTime(v))
+		}
+	}
+}
+
 func TestGetHandler_VerdictStaleIsTheStoresFlag(t *testing.T) {
 	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
 	invoiceID := uuid.NewString()

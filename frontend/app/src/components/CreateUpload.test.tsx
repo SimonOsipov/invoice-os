@@ -51,6 +51,8 @@ function uploadCtx(pickedFiles: PickedFile[], addPickedFiles = vi.fn()): Platfor
     entitiesState: 'ready',
     entities: [{ id: 'e1' }],
     clients: [{ id: 'e1' }],
+    members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+    membersState: 'ready',
     mode: 'firm',
     runKind: null,
     addPickedFiles,
@@ -222,7 +224,7 @@ describe('CreateUpload — the picker no longer contradicts its own ACCEPTED cop
 // QA (ROUTE-04-03). The no-entity button moved from the two-call idiom
 // (`ctx.setSettingsTab('company')` then `ctx.nav('settings')`) to one `ctx.nav('settings',
 // { settingsTab: 'company' })`, and nothing covered either branch of it.
-function noEntityCtx(mode: 'firm' | 'inhouse', nav: () => void, setSettingsTab: () => void): PlatformCtx {
+function noEntityCtx(mode: 'firm' | 'inhouse', nav: () => void, setSettingsTab: () => void, over: Record<string, unknown> = {}): PlatformCtx {
   return {
     active: { short: 'Lagos Freight', tin: '20184412-0001' },
     pickedFiles: [],
@@ -233,6 +235,8 @@ function noEntityCtx(mode: 'firm' | 'inhouse', nav: () => void, setSettingsTab: 
     entitiesState: 'ready',
     entities: [],
     clients: [],
+    members: [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'admin', status: 'active', isYou: true }],
+    membersState: 'ready',
     mode,
     runKind: null,
     addPickedFiles: vi.fn(),
@@ -241,6 +245,7 @@ function noEntityCtx(mode: 'firm' | 'inhouse', nav: () => void, setSettingsTab: 
     nav,
     readAllColumns: () => {},
     skipUpload: () => {},
+    ...over,
   } as unknown as PlatformCtx
 }
 
@@ -251,8 +256,11 @@ function amberButton(container: HTMLElement): HTMLButtonElement {
   return buttons[0] as HTMLButtonElement
 }
 
+// Found by its body, not its button: a non-admin's panel has no button.
 function amberPanel(container: HTMLElement): HTMLElement {
-  return amberButton(container).parentElement as HTMLElement
+  const body = Array.from(container.querySelectorAll('p')).find((p) => p.textContent === BODY)
+  expect(body, 'the no-entity panel did not render').toBeTruthy()
+  return body?.parentElement as HTMLElement
 }
 
 // The footnote is the last <p> on the step; it renders only alongside the panel.
@@ -335,6 +343,27 @@ describe('CreateUpload — the amber panel copy (AUTH-10-04)', () => {
     expect(AMBER_COPY.footnote).toBe(FOOTNOTE)
     expect(amberPanel(container).firstElementChild?.textContent).toBe(AMBER_COPY.title[mode])
     expect(amberButton(container).textContent).toBe(AMBER_COPY.button[mode])
+  })
+
+  it.each(['inhouse', 'firm'] as const)('Upload: a non-admin sees No company created and no link (%s)', (mode) => {
+    const members = [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role: 'preparer', status: 'active', isYou: true }]
+    const { container } = render(<CreateUpload ctx={noEntityCtx(mode, vi.fn(), vi.fn(), { members })} />)
+    const arrows = Array.from(container.querySelectorAll('button')).filter((b) => (b.textContent ?? '').endsWith('→'))
+    expect(arrows).toHaveLength(0)
+    const footnote = amberFootnote(container)
+    const panel = Array.from(container.querySelectorAll('p')).find((p) => p.textContent === BODY)?.parentElement as HTMLElement
+    expect(panel, 'the panel did not render').toBeTruthy()
+    expect(panel.firstElementChild?.textContent).toBe('No company created')
+    expect(panel.querySelector('p')?.textContent).toBe(BODY)
+    expect(footnote).toBe(FOOTNOTE)
+  })
+
+  it.each(['loading', 'error'])('Upload: no link while the roster is %s', (membersState) => {
+    const { container } = render(<CreateUpload ctx={noEntityCtx('firm', vi.fn(), vi.fn(), { members: [], membersState })} />)
+    const arrows = Array.from(container.querySelectorAll('button')).filter((b) => (b.textContent ?? '').endsWith('→'))
+    expect(arrows).toHaveLength(0)
+    const panel = Array.from(container.querySelectorAll('p')).find((p) => p.textContent === BODY)?.parentElement as HTMLElement
+    expect(panel.firstElementChild?.textContent).toBe(AMBER_COPY.title.firm)
   })
 
   it.each(['inhouse', 'firm'] as const)('a workspace with an entity shows no amber panel (%s)', (mode) => {

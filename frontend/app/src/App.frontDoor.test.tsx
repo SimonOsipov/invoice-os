@@ -89,6 +89,9 @@ function stubRecordingLocation(search: string, pathname = '/') {
       set href(v: string) {
         hrefWrites.push(v)
       },
+      replace(v: string) {
+        hrefWrites.push(v)
+      },
       pathname,
       hash: '',
       hostname: 'localhost',

@@ -61,12 +61,18 @@ paths:
 
 - Turning on `Import` changes `mappingSchema`. Change `mappingSystem` in `internal/importer/suggest.go` in the same story.
 - Change `FIELDS` in `tools/aimodeltest/csvrun.py` with it. Change `FIELDS` in `tools/aimodeltest/csvgen.py` too.
+- Change `mappingCheckInstructions` in `internal/importer/jevcheck.go` and `MappingCheckInstructions` in `internal/jevmeasure/wording.go` with it. The two stay byte-identical.
+- The 11 measured definition lines of `mappingSystem` stay byte-identical (`TestMappingSystem_KeepsTheElevenMeasuredDefinitions`). Only add lines.
+- Mapping pins: `TestMappingPrompt_MatchesTheMeasuredHarness` (`SYSTEM`), `TestMappingFields_MatchTheMeasuredHarness` (csvrun `FIELDS`), `TestMappingCheck_TheQuestionIsTheMeasuredQuestion` (measured text, run-2 prefix).
+- Score csvrun answers with `tools/aimodeltest/csvscore.py`. `tools/aimodeltest/csvscore_test.go` pins it.
 - Turning on `Extract` for a header field changes `aiFieldSchema`. Change `aiSystem` in `internal/extraction/aireading.go` in the same story.
 - Change `SYSTEM` and `FIELDS` in `tools/aimodeltest/run.py` with it.
 - Turning on `Extract` for a line field changes the line schema and `LineRoles`. Change `aiLinesSystem` in `internal/extraction/ailines.go` in the same story.
 - Change `LINE_SYSTEM` and `LINE_ROLES` in `tools/aimodeltest/run.py` with it. `TestAliRunPy_LineRolesIsExactlyExtractionLineRoles` asserts they match.
 - Update the characterization pins of each path you change.
-- Import pins: `TestImportKeys_AreTheElevenImportFieldsInOrder` and `TestCanonicalFields_AreTheElevenImportKeys`. The vitest pin is `CANON is the eleven import fields, invoice_number alone required` in `frontend/app/src/lib/invoiceFields.test.ts`.
+- Import pins: `TestImportKeys_AreTheThirtySixImportFieldsInOrder` and `TestCanonicalFields_AreTheImportKeys`. The vitest pin is `CANON is the import fields, invoice_number alone required` in `frontend/app/src/lib/invoiceFields.test.ts`.
+- The import set is 36 keys. `ImportKeys()` lists the `Lead` fields (the original 11) first, then the rest in list order; the generated `IMPORT_KEYS` carries that order. The 10 `supplier_*` fields stay off the import path: the importer reads the supplier from the entity.
+- The AI schema requires every import key. Mirror a new key in `IMPORT_KEYS` in `e2e/importFixtures.ts`. The three steered answers spread `nullImportKeys()`.
 - Header extract pins: `TestExtractHeaderKeys_AreTheTenInOrder` and `TestHeaderFields_AreTheTenInOrder`. The vitest pin is `HEADER_FIELDS is the ten extraction header fields in order`.
 - Line extract pins: `TestExtractLineKeys_AreTheFiveInOrder` and `TestLineRoles_AreTheFiveRoleConstantsInEmitOrder`.
 - Edit pin: `EDIT_FIELD_KEYS is the nine editable header fields in order` in `frontend/app/src/lib/invoiceFields.test.ts`.

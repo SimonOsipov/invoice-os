@@ -23,7 +23,15 @@ import (
 var cgCANON = []string{
 	"invoice_number", "issue_date", "buyer_tin", "buyer_name", "currency",
 	"subtotal", "vat", "total", "line_description", "line_quantity", "line_unit_price",
+	"invoice_kind", "tax_currency_code", "due_date", "issue_time", "tax_point_date", "payment_status",
+	"buyer_email", "buyer_telephone", "buyer_street", "buyer_city", "buyer_postal_zone", "buyer_country",
+	"buyer_state", "buyer_lga", "line_total", "line_tax", "line_tax_category", "line_hsn_code",
+	"line_isic_code", "line_product_category", "line_service_category", "line_sellers_item_identification",
+	"line_price_unit", "line_tax_percent", "line_base_quantity",
 }
+
+// cgNewFields are the 25 fields past the original 11.
+var cgNewFields = cgCANON[11:]
 
 type cgLayout struct {
 	ID               string               `json:"id"`
@@ -193,19 +201,19 @@ func cgKeyViolations(l cgLayout) []string {
 
 // AC-1. Folds in the default-seed proof: default == SEED=20260914, and SEED=1 differs --
 // otherwise a generator ignoring SEED would still pass.
-func TestCSVGen_ProducesFortyEightLayouts(t *testing.T) {
+func TestCSVGen_ProducesSeventyTwoLayouts(t *testing.T) {
 	dir := cgRun(t)
 	layouts := cgLoad(t, dir)
-	if len(layouts) != 48 {
-		t.Fatalf("got %d layouts, want 48", len(layouts))
+	if len(layouts) != 72 {
+		t.Fatalf("got %d layouts, want 72", len(layouts))
 	}
 
 	entries, err := os.ReadDir(filepath.Join(dir, "csv"))
 	if err != nil {
 		t.Fatalf("read csv dir: %v", err)
 	}
-	if len(entries) != 48 {
-		t.Errorf("csv/ has %d entries, want 48", len(entries))
+	if len(entries) != 72 {
+		t.Errorf("csv/ has %d entries, want 72", len(entries))
 	}
 	for _, l := range layouts {
 		if _, err := os.Stat(filepath.Join(dir, "csv", l.ID+".csv")); err != nil {
@@ -267,13 +275,13 @@ func TestCSVGen_ZeroLayoutsIsAFatal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cgReadLayouts on a real run: %v", err)
 	}
-	if len(out) != 48 {
-		t.Fatalf("cgReadLayouts on a real run returned %d layouts, want 48", len(out))
+	if len(out) != 72 {
+		t.Fatalf("cgReadLayouts on a real run returned %d layouts, want 72", len(out))
 	}
 }
 
 // AC-2. Three separate equalities, plus a fourth-category control.
-func TestCSVGen_TheCategorySplitIsThirteenTwentySevenEight(t *testing.T) {
+func TestCSVGen_TheCategorySplitIsThirteenTwentySevenEightTwentyFour(t *testing.T) {
 	layouts := cgLoad(t, cgRun(t))
 
 	counts := map[string]int{}
@@ -289,8 +297,11 @@ func TestCSVGen_TheCategorySplitIsThirteenTwentySevenEight(t *testing.T) {
 	if counts["structure"] != 8 {
 		t.Errorf("structure = %d, want 8", counts["structure"])
 	}
-	if len(counts) != 3 {
-		t.Errorf("got %d distinct categories, want 3: %v", len(counts), counts)
+	if counts["nrs"] != 24 {
+		t.Errorf("nrs = %d, want 24", counts["nrs"])
+	}
+	if len(counts) != 4 {
+		t.Errorf("got %d distinct categories, want 4: %v", len(counts), counts)
 	}
 }
 
@@ -299,12 +310,12 @@ func TestCSVGen_EveryKeyNamesItsOwnHeader(t *testing.T) {
 	layouts := cgLoad(t, cgRun(t))
 
 	// A field missing from the key iterates zero times below, so its absence would
-	// read clean; the scorer would then silently measure ten fields, not eleven.
+	// read clean; the scorer would then silently measure fewer fields.
 	wantFields := slices.Sorted(slices.Values(cgCANON))
 	var checked int
 	for _, l := range layouts {
 		if got := slices.Sorted(maps.Keys(l.Key)); !slices.Equal(got, wantFields) {
-			t.Errorf("layout %s: key covers %v, want the eleven canonical fields %v", l.ID, got, wantFields)
+			t.Errorf("layout %s: key covers %v, want the 36 import fields %v", l.ID, got, wantFields)
 		}
 		for _, f := range cgCANON {
 			for _, hp := range l.Key[f] {
@@ -728,7 +739,7 @@ func cgOpenModes(args string) []string {
 	return modes
 }
 
-// AC-7. Two independent runs at the same seed must write the same 49 files with the same bytes.
+// AC-7. Two independent runs at the same seed must write the same 73 files with the same bytes.
 func TestCSVGen_IsDeterministicAtOneSeed(t *testing.T) {
 	digestA := cgDigestTree(t, cgRun(t))
 	digestB := cgDigestTree(t, cgRun(t))
@@ -738,13 +749,145 @@ func TestCSVGen_IsDeterministicAtOneSeed(t *testing.T) {
 	if !slices.Equal(keysA, keysB) {
 		t.Fatalf("run A and run B wrote different file sets\nA-only: %v\nB-only: %v", cgSetDiff(keysA, keysB), cgSetDiff(keysB, keysA))
 	}
-	if len(digestA) != 49 {
-		t.Fatalf("a run wrote %d files, want 49 (48 CSVs + layouts.json)", len(digestA))
+	if len(digestA) != 73 {
+		t.Fatalf("a run wrote %d files, want 73 (72 CSVs + layouts.json)", len(digestA))
 	}
 	for _, k := range keysA {
 		if digestA[k] != digestB[k] {
 			t.Errorf("first divergent file %s: run A digest %s, run B digest %s", k, digestA[k], digestB[k])
 			break
 		}
+	}
+}
+
+// The 48 base layouts keep their bytes. The literal was measured from the base csvgen.py
+// before the NRS layouts were added.
+const cgBaseLayoutsSHA256 = "52b3409c0dc979fb3dac4316d17e611cf17f31a4c0aff4b37c6b46202a553035"
+
+func TestCsvgen_TheBaseLayoutsAreUnchanged(t *testing.T) {
+	layouts := cgLoad(t, cgRun(t))
+	type base struct {
+		ID        string     `json:"id"`
+		HeaderRow int        `json:"header_row"`
+		Columns   []string   `json:"columns"`
+		Rows      [][]string `json:"rows"`
+	}
+	var bs []base
+	for _, l := range layouts[:48] {
+		bs = append(bs, base{l.ID, l.HeaderRow, l.Columns, l.Rows})
+	}
+	b, err := json.Marshal(bs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(b)
+	if got := hex.EncodeToString(sum[:]); got != cgBaseLayoutsSHA256 {
+		t.Errorf("first 48 layouts sha256 = %s, want %s", got, cgBaseLayoutsSHA256)
+	}
+}
+
+func TestCsvgen_KeyHoldsEveryImportField(t *testing.T) {
+	layouts := cgLoad(t, cgRun(t))
+	if len(layouts) != 72 {
+		t.Fatalf("got %d layouts, want 72", len(layouts))
+	}
+	want := slices.Sorted(slices.Values(cgCANON))
+	if len(want) != 36 {
+		t.Fatalf("cgCANON holds %d fields, want 36", len(want))
+	}
+	for _, l := range layouts {
+		if got := slices.Sorted(maps.Keys(l.Key)); !slices.Equal(got, want) {
+			t.Errorf("layout %s: key covers %v, want %v", l.ID, got, want)
+		}
+	}
+}
+
+func TestCsvgen_EveryNewFieldIsKeyedSixTimes(t *testing.T) {
+	layouts := cgLoad(t, cgRun(t))
+	if len(cgNewFields) != 25 {
+		t.Fatalf("cgNewFields holds %d fields, want 25", len(cgNewFields))
+	}
+	for _, f := range cgNewFields {
+		var n int
+		for _, l := range layouts {
+			if len(l.Key[f]) > 0 && l.Key[f][0] != nil {
+				n++
+			}
+		}
+		if n < 6 {
+			t.Errorf("field %s is keyed in %d layouts, want >= 6", f, n)
+		}
+	}
+}
+
+func cgLayoutByID(t *testing.T, layouts []cgLayout, id string) cgLayout {
+	t.Helper()
+	for _, l := range layouts {
+		if l.ID == id {
+			return l
+		}
+	}
+	t.Fatalf("no layout %s", id)
+	return cgLayout{}
+}
+
+func cgKeyIs(l cgLayout, field string, headers ...string) bool {
+	var got []string
+	for _, hp := range l.Key[field] {
+		if hp == nil {
+			got = append(got, "<nil>")
+		} else {
+			got = append(got, *hp)
+		}
+	}
+	return slices.Equal(got, headers)
+}
+
+func TestCsvgen_OdooPaymentStatusIsPaymentStatus(t *testing.T) {
+	odoo := cgLayoutByID(t, cgLoad(t, cgRun(t)), "sw_odoo")
+	if !cgKeyIs(odoo, "payment_status", "Payment Status") {
+		t.Errorf("sw_odoo payment_status key = %v, want [Payment Status]", odoo.Key["payment_status"])
+	}
+}
+
+func TestCsvgen_NewKeysMapTheExistingDecoys(t *testing.T) {
+	layouts := cgLoad(t, cgRun(t))
+	zoho := cgLayoutByID(t, layouts, "sw_zoho")
+	for field, header := range map[string]string{"due_date": "Due Date", "line_tax_percent": "Item Tax %", "line_tax": "Item Tax"} {
+		if !cgKeyIs(zoho, field, header) {
+			t.Errorf("sw_zoho %s key = %v, want [%s]", field, zoho.Key[field], header)
+		}
+	}
+	einv := cgLayoutByID(t, layouts, "sw_einvoice_template")
+	if !cgKeyIs(einv, "buyer_street", "Buyer Address") {
+		t.Errorf("sw_einvoice_template buyer_street key = %v, want [Buyer Address]", einv.Key["buyer_street"])
+	}
+	qb := cgLayoutByID(t, layouts, "sw_quickbooks_import")
+	if !cgKeyIs(qb, "line_tax_category", "ItemTaxCode") {
+		t.Errorf("sw_quickbooks_import line_tax_category key = %v, want [ItemTaxCode]", qb.Key["line_tax_category"])
+	}
+}
+
+// A buyer's LGA code sits under the buyer's state code, as in the NRS lgas list
+// ({"code": "NG-LA-IKE", "state_code": "NG-LA"}).
+func TestCsvgen_EveryLGACodeSitsUnderItsStateCode(t *testing.T) {
+	col := func(l cgLayout, field string) int {
+		return slices.Index(l.Columns, *l.Key[field][0])
+	}
+	var checked int
+	for _, l := range cgLoad(t, cgRun(t)) {
+		if l.Key["buyer_lga"][0] == nil || l.Key["buyer_state"][0] == nil {
+			continue
+		}
+		lc, sc := col(l, "buyer_lga"), col(l, "buyer_state")
+		for _, r := range l.Rows[l.HeaderRow:] {
+			checked++
+			if !regexp.MustCompile(`^NG-[A-Z]{2}-[A-Z0-9]{3}$`).MatchString(r[lc]) || !strings.HasPrefix(r[lc], r[sc]+"-") {
+				t.Errorf("layout %s: lga %q is not under state %q", l.ID, r[lc], r[sc])
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no layout keys both buyer_state and buyer_lga")
 	}
 }

@@ -66,22 +66,25 @@ function createMemoryStorage() {
 // Real jsdom location (replaceState strips stay observable); href writes are recorded only.
 function interceptHref() {
   const hrefWrites: string[] = []
+  const replaceWrites: string[] = []
   const real = window.location
-  const proxy = new Proxy(real, {
-    set(target, prop, value) {
+  // Plain target: jsdom's location.replace is non-configurable, so a get trap on the real location cannot override it.
+  const proxy = new Proxy({} as Location, {
+    set(_t, prop, value) {
       if (prop === 'href') {
         hrefWrites.push(value)
         return true
       }
-      return Reflect.set(target, prop, value)
+      return Reflect.set(real, prop, value)
     },
-    get(target, prop) {
-      const v = (target as unknown as Record<PropertyKey, unknown>)[prop]
-      return typeof v === 'function' ? v.bind(target) : v
+    get(_t, prop) {
+      if (prop === 'replace') return (url: string) => void replaceWrites.push(url)
+      const v = (real as unknown as Record<PropertyKey, unknown>)[prop]
+      return typeof v === 'function' ? v.bind(real) : v
     },
   })
   Object.defineProperty(window, 'location', { configurable: true, value: proxy })
-  return { hrefWrites }
+  return { hrefWrites, replaceWrites }
 }
 
 function storedState(): string | null {
@@ -191,11 +194,12 @@ describe('?auth=start holds the invite across the bounce (D11)', () => {
   it('app_authStartHoldsTheInviteAndBounces', async () => {
     configure()
     window.history.replaceState(null, '', `/?auth=start#invite=${INVITE}`)
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     await bootApp()
     await waitFor(() => expect(hrefWrites).toHaveLength(1))
     expect(JSON.parse(sessionStorage.getItem(INVITE_KEY) ?? 'null')).toEqual({ v: 1, t: INVITE, at: expect.any(Number) })
     expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=ready`])
+    expect(replaceWrites).toEqual([])
     expect(storedState(), 'the bounce carries a stored state').toEqual(expect.stringMatching(/^[A-Za-z0-9_-]{43}$/))
     expect(window.location.hash, 'the address bar holds no hash').toBe('')
     expect(window.location.search).toBe('')
@@ -206,10 +210,11 @@ describe('?auth=start holds the invite across the bounce (D11)', () => {
     holdRaw()
     expect(sessionStorage.getItem(INVITE_KEY), 'control: an invite is held').not.toBeNull()
     window.history.replaceState(null, '', '/?auth=start')
-    const { hrefWrites } = interceptHref()
+    const { hrefWrites, replaceWrites } = interceptHref()
     await bootApp()
-    await waitFor(() => expect(hrefWrites).toHaveLength(1))
-    expect(hrefWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=ready`])
+    await waitFor(() => expect(replaceWrites).toHaveLength(1))
+    expect(replaceWrites).toEqual([`${LANDING}/?state=${storedState()}&signin=ready`])
+    expect(hrefWrites).toEqual([])
     expect(sessionStorage.getItem(INVITE_KEY)).toBeNull()
   })
 })

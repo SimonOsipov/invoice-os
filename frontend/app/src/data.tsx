@@ -8,7 +8,7 @@
 // none is read anywhere else in the render output. They are intentionally omitted here;
 // dropping them changes nothing about what's rendered.
 
-import { INVOICE_FIELDS } from './lib/invoiceFields'
+import { IMPORT_KEYS, INVOICE_FIELDS } from './lib/invoiceFields'
 import type { CanonField, ClientCfg, FieldMapRow, SectorDef, SectorKey, SettingsTab } from './types'
 
 export const SECTORS: Record<SectorKey, SectorDef> = {
@@ -164,13 +164,11 @@ export const ENTER_STEPS: [string, string][] = [
 ]
 
 // Canonical invoice fields the Map step targets: the import fields of the shared list.
-export const CANON: CanonField[] = INVOICE_FIELDS.flatMap((f) =>
-  f.importKey ? [f.required ? { key: f.importKey, required: true } : { key: f.importKey }] : [],
+export const CANON: CanonField[] = IMPORT_KEYS.map((key) =>
+  INVOICE_FIELDS.some((f) => f.importKey === key && f.required) ? { key, required: true } : { key },
 )
 
-// NO consumers — the Workflows builder's doc-type condition was the last one, and the
-// create form's picker went before it. Retained deliberately: this is the doc-type
-// vocabulary, and `invoices` still has no column to file a choice into.
+// The buyer-type vocabulary; the Map step's buyer-type select (CreateMapping) reads it.
 export const DOC_TYPE_DEFS: [string, string, string][] = [
   ['B2B', 'Business', 'Standard tax invoice'],
   ['B2G', 'Government', 'Routed to MDA portal'],

@@ -11,12 +11,15 @@ interface Invitation {
   status: string
   expires_at: string
   delivery: string
+  account?: string
 }
 
 // accountmail.InviteValidDays (internal/accountmail/accountmail.go); the spec allows one hour either way.
 const INVITE_VALID_DAYS = 7
 const HOUR = 3_600_000
 const DAY = 24 * HOUR
+
+const withoutAccount = (list: Invitation[]) => list.map(({ account: _account, ...rest }) => rest)
 
 function auth(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}` }
@@ -74,6 +77,18 @@ test.describe.serial('invitations (API E2E, over the deployed gateway)', () => {
     expect(Date.parse(resent.expires_at)).toBeGreaterThanOrEqual(Date.parse(target.expires_at))
   })
 
+  test("invitations: the pending list names each invitee's account state", async () => {
+    // Values are Invitation.Account in internal/tenancy/invitations.go. The fork's grant is asynchronous.
+    await expect
+      .poll(async () => (await listInvitations(adminToken)).find((i) => i.email === registeredEmail)?.account, {
+        message: `${registeredEmail} never read confirmed`,
+        timeout: 120_000,
+      })
+      .toBe('confirmed')
+    const listed = await listInvitations(adminToken)
+    expect(listed.find((i) => i.email === newEmail)?.account, newEmail).toBe('none')
+  })
+
   test('invitations: a malformed address is refused and nothing is created', async () => {
     const before = await listInvitations(adminToken)
     expect(before).toHaveLength(2)
@@ -81,7 +96,8 @@ test.describe.serial('invitations (API E2E, over the deployed gateway)', () => {
     assertErrorEnvelope(res, 400, 'malformed address')
     // internal/tenancy/invitations_handler.go: "invalid email address: " + each address quoted.
     expect((res.body as { error: string }).error).toBe('invalid email address: "not-an-email"')
-    expect(await listInvitations(adminToken)).toEqual(before)
+    // `account` can flip unknown -> confirmed between the reads when the fork's grant lands.
+    expect(withoutAccount(await listInvitations(adminToken))).toEqual(withoutAccount(before))
   })
 
   test('invitations: a preparer is refused', async () => {
@@ -100,6 +116,10 @@ test.describe.serial('invitations (API E2E, over the deployed gateway)', () => {
     assertErrorEnvelope(res, 403, 'preparer invite')
     // internal/tenancy/tenancy.go: the 403 text of ErrInviteNotPermitted.
     expect((res.body as { error: string }).error).toBe('only an admin can invite people')
+    const listRes = await rawFetch('/api/tenancy/v1/invitations', { headers: auth(token) })
+    assertErrorEnvelope(listRes, 403, 'preparer list')
+    expect((listRes.body as { error: string }).error).toBe('only an admin can invite people')
+    expect(listRes.body).not.toHaveProperty('invitations')
     expect(await listInvitations(adminToken)).toHaveLength(2)
   })
 })

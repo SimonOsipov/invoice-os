@@ -426,7 +426,7 @@ func TestRLS_CustomAccessTokenHookIsDefinerOwnedByHookReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collect column privileges: %v", err)
 	}
-	want := []string{"status:SELECT", "tenant_id:SELECT", "user_id:SELECT"}
+	want := []string{"display_name:SELECT", "email:SELECT", "status:SELECT", "tenant_id:SELECT", "user_id:SELECT"}
 	if !reflect.DeepEqual(cols, want) {
 		t.Errorf("auth_hook_reader column privileges on memberships = %v, want %v", cols, want)
 	}

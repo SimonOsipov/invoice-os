@@ -11,7 +11,7 @@ import {
   type ConsoleTarget,
 } from './state'
 
-export type ConsoleBoot = { kind: 'open'; session: ConsoleSession | null } | { kind: 'leave'; url: string }
+export type ConsoleBoot = { kind: 'open'; session: ConsoleSession | null } | { kind: 'leave'; url: string; replace?: true }
 
 const TIMEOUT_MS = 15000
 
@@ -59,7 +59,8 @@ export async function resolveConsoleBoot(o: {
   }
 
   if (new URLSearchParams(o.search).get('auth') === 'start') {
-    return { kind: 'leave', url: landingSignInUrl(landing, mintSignInState(now), target, 'ready') }
+    // replace drops the ?auth=start entry so Back from the landing skips it.
+    return { kind: 'leave', url: landingSignInUrl(landing, mintSignInState(now), target, 'ready'), replace: true }
   }
 
   const code = readHandoffCode(o.search)

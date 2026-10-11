@@ -97,6 +97,12 @@ export const UNBACKED = {
   revokeInvite: 'There is no way to revoke an invite yet. An unused invite expires 7 days after it was sent.',
 } as const
 
+/** Invitee account-state labels, transcribed from inviteAccountLine in frontend/app/src/lib/members.ts. */
+export const INVITE_ACCOUNT_LABELS = {
+  unconfirmed: 'Account created, email not confirmed',
+  confirmed: 'Confirmed, not joined',
+} as const
+
 /**
  * What suspension actually does — and the copy `[suspend-copy-is-true]` flagged. It is
  * SUSPEND-ONLY: beside `Reactivate` it would assert the opposite of the button's effect, so

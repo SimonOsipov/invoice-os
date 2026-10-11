@@ -51,7 +51,7 @@ const STATE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN-_0'
 
 function dialog(): HTMLElement {
   const d = document.querySelector<HTMLElement>('[role="dialog"]')
-  expect(d, 'expected the Platform login dialog').not.toBeNull()
+  expect(d, 'expected the Sign in dialog').not.toBeNull()
   return d!
 }
 
@@ -128,14 +128,14 @@ describe('v2 content', () => {
   it.each([
     ['unconfigured', unconfigured, 0],
     ['configured', () => { stubTargets(ALL_TARGETS); configured() }, 1],
-  ])('SM-02 %s: the eyebrow is PLATFORM LOGIN', async (_label, setup, forms) => {
+  ])('SM-02 %s: the eyebrow is SIGN IN', async (_label, setup, forms) => {
     setup()
     await mount(vi.fn(), STATE)
     const d = dialog()
     expect(d.querySelectorAll('input[type="password"]').length, 'control: the form shows only when configured').toBe(forms)
     const eyebrows = Array.from(d.querySelectorAll('.t-eyebrow'))
-    expect(eyebrows.map((e) => e.textContent)).toEqual(['PLATFORM LOGIN'])
-    expect(d.textContent).not.toContain('SIGN IN')
+    expect(eyebrows.map((e) => e.textContent)).toEqual(['SIGN IN'])
+    expect(d.textContent!.split('SIGN IN').length - 1, 'the eyebrow is the only SIGN IN').toBe(1)
     expect(consoleError).not.toHaveBeenCalled()
   })
 
@@ -198,19 +198,18 @@ describe('v2 content', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('SM-09: held state and initialError reach the form under the new body', async () => {
+  it('SM-09: modal_noHeldState_rendersTheForm; held state and initialError reach the form', async () => {
     stubTargets(ALL_TARGETS)
     configured()
-    // No held state: the form offers the start bounce.
+    // No held state: the form still renders; Submit bounces.
     await mount(vi.fn(), null, 'Sign-in failed. Try again.')
     let d = dialog()
-    const bounce = Array.from(d.querySelectorAll('button')).find((b) => b.textContent === 'Continue with email')
-    expect(bounce, 'expected the start-bounce button').toBeDefined()
-    expect(d.querySelectorAll('input[type="password"]').length).toBe(0)
+    expect(d.querySelectorAll('input[type="password"]').length).toBe(1)
+    expect(d.textContent).not.toContain('Continue with email')
     expect(Array.from(d.querySelectorAll('[role="alert"]'), (a) => a.textContent?.trim())).toEqual(['Sign-in failed. Try again.'])
     expect(d.querySelectorAll('.t-eyebrow').length).toBe(1)
 
-    // A held state: the credentials form replaces the bounce, and the error still shows.
+    // A held state renders the same form, and the error still shows.
     await act(async () => root.render(null))
     await mount(vi.fn(), STATE, 'Sign-in failed. Try again.')
     d = dialog()
@@ -220,14 +219,14 @@ describe('v2 content', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('SM-11: nothing defeats the focus ring, and the dialog is modal and named Platform login', async () => {
+  it('SM-11: nothing defeats the focus ring, and the dialog is modal and named Sign in', async () => {
     stubTargets(ALL_TARGETS)
     configured()
     await mount(vi.fn(), STATE)
     const d = dialog()
     expect(d.getAttribute('role')).toBe('dialog')
     expect(d.getAttribute('aria-modal')).toBe('true')
-    expect(d.getAttribute('aria-label')).toBe('Platform login')
+    expect(d.getAttribute('aria-label')).toBe('Sign in')
     expect(d.querySelectorAll('[aria-label="Sign in"]').length).toBe(0)
     expect(declsOf('.si-close:focus-visible'), 'control: the parser finds the ring rule').toContain('outline: 2px solid var(--ring)')
     const css = Array.from(d.querySelectorAll('style'), (s) => s.textContent ?? '').join('\n')
@@ -286,6 +285,42 @@ describe('Escape', () => {
   })
 })
 
+describe('the sign-up row is centred', () => {
+  const createButton = () => Array.from(dialog().querySelectorAll('button')).find((b) => b.textContent === 'Create an account')
+
+  it('signUpRow_isCentred_inSignInView', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE, undefined, vi.fn())
+    const row = createButton()!.parentElement as HTMLElement
+    expect(row.textContent).toContain('New to ASComply?')
+    expect(row.style.justifyContent).toBe('center')
+    expect(row.style.flexWrap).toBe('wrap')
+    expect(row.style.textAlign).toBe('center')
+    expect(row.style.borderTop, 'the top border stays').not.toBe('')
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('signUpRow_isCentred_inForgotView', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE, undefined, vi.fn(), 'forgot')
+    const row = createButton()!.parentElement as HTMLElement
+    const back = Array.from(dialog().querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Back to sign in')!
+    expect(row.style.justifyContent).toBe('center')
+    expect(back.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING, 'the row is below Back').toBeTruthy()
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('signUpRow_absent_withoutOnCreateAccount', async () => {
+    stubTargets(ALL_TARGETS)
+    configured()
+    await mount(vi.fn(), STATE, undefined, undefined, 'forgot')
+    expect(createButton()).toBeUndefined()
+    expect(dialog().textContent).not.toContain('New to ASComply?')
+  })
+})
+
 describe('the forgot view', () => {
   const BOOT_ERROR = 'Sign-in failed. Try again.'
   const SIGN_IN_HEADING = 'Sign in to your workspace'
@@ -317,7 +352,7 @@ describe('the forgot view', () => {
     expect(d.querySelectorAll('input[type="password"]').length, 'the sign-in form is gone').toBe(0)
     expect(buttonTexts()).toEqual(expect.arrayContaining(['Send reset link', 'Back to sign in']))
     expect(buttonTexts(), 'the sign-in submit is gone').not.toContain('Sign in →')
-    expect(Array.from(d.querySelectorAll('.t-eyebrow'), (e) => e.textContent), 'the eyebrow stays').toEqual(['PLATFORM LOGIN'])
+    expect(Array.from(d.querySelectorAll('.t-eyebrow'), (e) => e.textContent), 'the eyebrow stays').toEqual(['SIGN IN'])
     expect(buttonTexts(), 'the create link stays').toContain('Create an account')
 
     await press('Back to sign in')

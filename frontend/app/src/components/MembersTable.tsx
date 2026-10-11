@@ -18,6 +18,7 @@ import { Fragment, useCallback, useState } from 'react'
 import {
   accessRoleLabel,
   emailLabel,
+  inviteAccountLine,
   inviteStatusLine,
   isProtectedAdmin,
   MEMBER_UNBACKED,
@@ -48,11 +49,12 @@ const TABLE_MIN_WIDTH = 716
 // would spawn a vertical scrollbar, on any row without room below it. The scroller simply
 // makes room for whichever menu is open.
 //
-// Sized for the tallest reachable menu, the pending row's (Resend plus two reason notes). 216 was
-// measured on the old invited menu of the same shape; roles.spec.ts › "firm Settings: an admin
-// invites from the Members screen, sees the pending row, and resends" (L2) gates it.
-// ceiling: fits today's menu copy; re-measure if an item or reason is added.
+// 216 fits the plain menu, 256 the pending-row menu with its account-state note; roles.spec.ts ›
+// "firm Settings: an admin invites from the Members screen, sees the pending row, and resends"
+// (L2, L2b) gates both.
+// ceiling: re-measure if an item, reason or note is added.
 const MENU_CLEARANCE = 216
+const MENU_CLEARANCE_NOTED = 256
 
 // The INVED-01 regression class. A grid cell only ellipsises if it is allowed to be
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.
@@ -92,7 +94,9 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   // Checked against the rendered rows, not just `!= null`: a filter can narrow the list
   // out from under an open menu, and the clearance below must not be held open for a menu
   // that no longer exists.
-  const menuOpen = openMenuId != null && rows.some((m) => m.id === openMenuId)
+  const openRow = openMenuId != null ? rows.find((m) => m.id === openMenuId) : undefined
+  const openNoted = openRow?.status === 'invited' && invites.some((i) => i.id === openRow.id && inviteAccountLine(i) != null)
+  const clearance = !openRow ? 0 : openNoted ? MENU_CLEARANCE_NOTED : MENU_CLEARANCE
 
   function menuItems(m: Member, protectedAdmin: boolean): MenuAction[] {
     if (m.status === 'invited') {
@@ -131,7 +135,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
     // clearance above has to sit OUTSIDE the card's border. Inside it, opening a menu would
     // visibly grow the card by empty background; outside it, the menu simply
     // overhangs the card's bottom edge the way a dropdown is supposed to.
-    <div data-testid="members-table-scroll" style={{ overflowX: 'auto', paddingBottom: menuOpen ? MENU_CLEARANCE : 0 }}>
+    <div data-testid="members-table-scroll" style={{ overflowX: 'auto', paddingBottom: clearance }}>
       <div
         data-testid="members-table"
         // No `overflow: 'hidden'`: it would clip the `⋯` menu.
@@ -182,6 +186,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
           const roleCell = rolesLanded ? rosterRoleCell(roles, m.id) : { text: '', tooltip: '' }
           const pending = m.status === 'invited'
           const invite = pending ? invites.find((i) => i.id === m.id) : undefined
+          const accountLine = invite ? inviteAccountLine(invite) : null
           return (
             <Fragment key={m.id}>
               <div
@@ -242,6 +247,15 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
 
                 <span style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                   <MemberStatusPill status={m.status} />
+                  {accountLine && (
+                    // Wraps instead of ellipsising: the label is longer than the 120px column.
+                    <span
+                      data-testid="invite-account-state"
+                      style={{ marginTop: 3, maxWidth: '100%', minWidth: 0, fontSize: 11, lineHeight: 1.35, color: 'var(--fg-3)', whiteSpace: 'normal', overflowWrap: 'anywhere' }}
+                    >
+                      {accountLine}
+                    </span>
+                  )}
                   {invite && (
                     <span style={{ marginTop: 3, maxWidth: '100%', ...ELLIPSIS, fontSize: 11, color: 'var(--fg-3)' }}>
                       {inviteStatusLine(invite, Date.now())}
@@ -255,6 +269,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                   onClose={closeMenu}
                   label={m.name}
                   items={menuItems(m, protectedAdmin)}
+                  note={accountLine ?? undefined}
                 />
               </div>
 

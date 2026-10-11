@@ -2,8 +2,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiError } from '@invoice-os/api-client/client'
-import { ROLE_LABELS, inviteSignInUrl, previewInvitation, registerInvitee, type InvitationPreview } from '../invite'
+import { ROLE_LABELS, inviteResendHeld, inviteResendSent, inviteSignInUrl, previewInvitation, registerInvitee, resendInvitee, type InvitationPreview, type ResendOutcome } from '../invite'
 import { registerOutcome, registrationOpen } from '../register'
+import { RESET_SENT, requestPasswordReset } from '../passwordReset'
 import { DEMO_FORM_CSS } from './DemoLeadForm'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { Alert, FIELD_STYLE, ResendNotice, SPINNER_STYLE } from './SignInForm'
@@ -13,10 +14,14 @@ import { Button } from './ds/Button'
 import { Eyebrow } from './ds/Eyebrow'
 import { MODAL_CHROME_CSS, ModalHeader, modalCardStyle } from './modalChrome'
 
-type View = 'loading' | 'invalid' | 'unavailable' | 'ready' | 'register' | 'sent'
+type View = 'loading' | 'invalid' | 'unavailable' | 'ready' | 'register' | 'sent' | 'exists' | 'unconfirmed'
 
 const WRAP = { overflowWrap: 'anywhere' } as const
 const TEXT = { margin: 0, lineHeight: 1.55, ...WRAP } as const
+// internal/gateway/invitation.go: msgAccountExists, msgAccountUnconfirmed, msgAccountMissing.
+const ACCOUNT_EXISTS = 'account_exists'
+const ACCOUNT_UNCONFIRMED = 'account_unconfirmed'
+const ACCOUNT_MISSING = 'account_missing'
 const isNotFound = (err: unknown) => err instanceof ApiError && err.kind === 'http' && err.status === 404
 
 export function InvitePage({ token }: { token: string | null }) {
@@ -24,7 +29,21 @@ export function InvitePage({ token }: { token: string | null }) {
   const [invite, setInvite] = useState<InvitationPreview>()
   const [formError, setFormError] = useState<string>()
   const [submitting, setSubmitting] = useState(false)
-  const { resending, note, resend } = useResend(view === 'sent' ? invite?.email : undefined)
+  // A refusal moves the page to the view that has a way forward; the view effect below drops the failed note the rethrow leaves.
+  const sendInvite = async (): Promise<{ outcome: ResendOutcome }> => {
+    try {
+      return { outcome: await resendInvitee(token!) }
+    } catch (err) {
+      const conflict = err instanceof ApiError && err.kind === 'http' && err.status === 409 ? err.message : undefined
+      if (isNotFound(err)) setView('invalid')
+      else if (conflict === ACCOUNT_EXISTS) setView('exists')
+      else if (conflict === ACCOUNT_MISSING) setView('ready')
+      throw err
+    }
+  }
+  const { resending, note, resend, reset } = useResend(view === 'sent' || view === 'unconfirmed' ? invite?.email : undefined, sendInvite)
+  const { resending: resetting, note: resetNote, resend: sendReset } = useResend(view === 'unconfirmed' ? invite?.email : undefined, requestPasswordReset)
+  useEffect(() => reset(), [view, reset])
   // StrictMode runs the effect twice; the ref keeps it to one request.
   const asked = useRef(false)
 
@@ -34,11 +53,13 @@ export function InvitePage({ token }: { token: string | null }) {
     previewInvitation(token).then(
       (p) => {
         setInvite(p)
-        setView('ready')
+        setView(p.account === 'confirmed' ? 'exists' : p.account === 'unconfirmed' ? 'unconfirmed' : 'ready')
       },
       (err) => setView(isNotFound(err) ? 'invalid' : 'unavailable'),
     )
   }, [token])
+
+  const resendText = (email: string) => (note?.outcome === 'held' ? inviteResendHeld(email) : note?.outcome === 'sent' ? inviteResendSent(email) : undefined)
 
   const signIn = () => {
     const url = inviteSignInUrl(token)
@@ -54,8 +75,11 @@ export function InvitePage({ token }: { token: string | null }) {
       await registerInvitee(token)
       setView('sent')
     } catch (err) {
+      const conflict = err instanceof ApiError && err.kind === 'http' && err.status === 409 ? err.message : undefined
       if (isNotFound(err)) setView('invalid')
-      else {
+      else if (conflict === ACCOUNT_EXISTS || conflict === ACCOUNT_UNCONFIRMED) {
+        setView(conflict === ACCOUNT_EXISTS ? 'exists' : 'unconfirmed')
+      } else {
         const outcome = registerOutcome(err)
         setFormError('form' in outcome ? outcome.form : outcome.message)
       }
@@ -100,6 +124,34 @@ export function InvitePage({ token }: { token: string | null }) {
             </button>
           </>
         )}
+        {signInButton}
+      </>
+    )
+  } else if (view === 'exists' && invite) {
+    body = (
+      <>
+        <p className="t-body-sm" style={TEXT}>
+          {invite.email} already has an ASComply account. Sign in to join {invite.workspace} as {ROLE_LABELS[invite.role] ?? invite.role}.
+        </p>
+        {signInButton}
+      </>
+    )
+  } else if (view === 'unconfirmed' && invite) {
+    body = (
+      <>
+        <p className="t-body-sm" style={TEXT}>
+          A confirmation email was already sent to {invite.email}. Open it, then sign in with the password you chose first.
+        </p>
+        <button type="button" onClick={() => resend()} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
+          {resending ? 'Sending…' : 'Send it again'}
+        </button>
+        <ResendNotice note={note} email={invite.email} text={resendText(invite.email)} />
+        <div style={{ marginTop: 8 }}>
+          <Button variant="text" type="button" onClick={() => sendReset()} disabled={resetting} style={{ fontSize: 13 }}>
+            Forgot password?
+          </Button>
+        </div>
+        <ResendNotice note={resetNote} email={invite.email} text={RESET_SENT} peach />
         {signInButton}
       </>
     )
@@ -152,12 +204,12 @@ export function InvitePage({ token }: { token: string | null }) {
       <>
         <h3 style={{ ...HEADING_STYLE, margin: '0 0 10px' }}>Check your email</h3>
         <p className="t-body-sm" style={TEXT}>
-          If this address can be registered, a link to confirm it and choose your password is on its way to {invite.email}. Open it and choose your password, then come back to this page and choose Sign in. Already have an account? Sign in now.
+          A link to confirm the address and choose your password is on its way to {invite.email}. Open it and choose your password, then come back to this page and choose Sign in. Already have an account? Sign in now.
         </p>
         <button type="button" onClick={() => resend()} disabled={resending} className="ds-btn ds-btn--outline ds-btn--md" style={{ width: '100%', marginTop: 18 }}>
           {resending ? 'Sending…' : 'Send the link again'}
         </button>
-        <ResendNotice note={note} email={invite.email} />
+        <ResendNotice note={note} email={invite.email} text={resendText(invite.email)} />
         {signInButton}
       </>
     )

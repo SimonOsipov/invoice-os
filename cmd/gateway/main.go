@@ -108,6 +108,10 @@ func main() {
 		platform.Fatal(app.Logger, "gateway: provision: %v", err)
 	}
 
+	startAccountStateGrant(os.Getenv("RAILWAY_ENVIRONMENT_NAME"), provisionCfg.MigrationDSN, provisionCfg.Passwords.AuthAdmin, app.Logger, func(dsn string) {
+		go grantAccountStateRead(context.Background(), dsn, db.GrantAccountStateRead, 10*time.Second, 60, app.Logger)
+	})
+
 	// Publish what the sequence above actually did, off the same predicate it
 	// branched on, before app.Run opens the listener — so the first /healthz any
 	// caller can reach already carries it. Both of the reset's inputs are
@@ -188,7 +192,6 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/request-password-reset", withCORS(reg.RequestPasswordReset))
 	app.Mux.Handle("GET /auth/reset-password", gateway.ResetPasswordPageHandler(siteURL))
 	app.Mux.Handle("GET /auth/verify", verifyPage)
-	app.Mux.Handle("POST /auth/verify", reg.Verify)
 	previewer := gateway.NewHTTPInvitationPreviewer(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 	registrations := gateway.NewHTTPInvitationRegistrations(routed["tenancy"], &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken)
 	invitation, inviteeRegister := invitationHandlers(probed["auth"], siteURL, registerMinResponse, reg.RegisterPerIP, previewer, registrations, app.Logger)
@@ -196,12 +199,16 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/invitation", withCORS(invitation))
 	app.Mux.Handle("POST /auth/invitation/register", withCORS(inviteeRegister))
 	app.Mux.Handle("OPTIONS /auth/invitation/register", withCORS(inviteeRegister))
+	inviteResend := invitationResendHandler(probed["auth"], siteURL, reg.ResendByAddress, reg.ResendByIP, previewer, app.Logger)
+	app.Mux.Handle("POST /auth/invitation/resend", withCORS(inviteResend))
+	app.Mux.Handle("OPTIONS /auth/invitation/resend", withCORS(inviteResend))
 	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
 	app.Mux.Handle("OPTIONS /contacts/demo-request", withCORS(reg.DemoRequest))
 
 	// Public sign-in hand-off, session renewal and sign-out, outside the verifier, in every build.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
-	h := handoffHandlers(probed["auth"], sessions, app.Logger, sink)
+	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink)
+	app.Mux.Handle("POST /auth/verify", h.Verify)
 	app.Mux.Handle("POST /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
@@ -211,7 +218,7 @@ func main() {
 	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("OPTIONS /auth/sign-out", withCORS(h.SignOut))
 	app.Mux.Handle("POST /auth/reset-password", resetPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, app.Logger))
-	app.Mux.Handle("POST /auth/invitation/password", invitationPasswordHandler(probed["auth"], siteURL, sessions, h.SignInThrottle, sink, app.Logger))
+	app.Mux.Handle("POST /auth/invitation/password", h.InvitationPassword)
 
 	// Mint routes exist only in a -tags mockissuer build; ENVIRONMENT is read raw, as for provisioning.
 	platform.MockIssuer = "absent"
@@ -287,9 +294,11 @@ func gatewayHandlers(
 
 // registration holds the public registration handlers main mounts outside /api/.
 type registration struct {
-	Register, Verify, DemoRequest, ResendVerification, RequestPasswordReset http.Handler
+	Register, DemoRequest, ResendVerification, RequestPasswordReset http.Handler
 	// RegisterPerIP is the register throttle, nil when unconfigured; invitee registration shares it.
 	RegisterPerIP *gateway.SignInThrottle
+	// ResendByAddress and ResendByIP are the resend budgets that ResendVerification and RequestPasswordReset share; nil when unconfigured.
+	ResendByAddress, ResendByIP *gateway.SignInThrottle
 }
 
 // invitationHandlers builds the accept-page preview handler and the invitee-registration handler.
@@ -304,7 +313,21 @@ func invitationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, pe
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
-	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, perIP, enforce, log, registrations)
+	return invitation, gateway.InvitationRegisterHandler(authURL, client, minResponse, perIP, enforce, log, preview, registrations)
+}
+
+// invitationResendHandler builds POST /auth/invitation/resend on the resend budgets that ResendVerification shares.
+// It answers 503 while any of authURL, siteURL or the throttles is nil.
+func invitationResendHandler(authURL, siteURL *url.URL, perAddress, perIP *gateway.SignInThrottle, preview gateway.InvitationPreviewer, log *slog.Logger) http.Handler {
+	if authURL == nil || siteURL == nil || perAddress == nil || perIP == nil {
+		return gateway.RegistrationNotConfigured()
+	}
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	return gateway.InvitationResendHandler(authURL, client, perAddress, perIP, enforce, log, preview)
 }
 
 // newJWKSClient builds the JWKS fetch client.
@@ -313,14 +336,14 @@ func newJWKSClient() *http.Client {
 }
 
 // registrationHandlers builds the registration handlers against GoTrue at authURL.
-// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification, RequestPasswordReset and Verify answer 503 (TestRegistrationHandlers_NotConfigured503). A nil pending lookup makes Register alone answer 503 (TestRegistrationHandlers_NilPendingLookupIsNotConfigured).
+// A nil authURL or siteURL (AUTH_SITE_URL unset) makes Register, ResendVerification and RequestPasswordReset answer 503 (TestRegistrationHandlers_NotConfigured503). A nil pending lookup makes Register alone answer 503 (TestRegistrationHandlers_NilPendingLookupIsNotConfigured).
 // On a PR preview the per-client limits (register, resend, reset, demo-request) log but do not refuse: a preview sends no mail (TestRegistrationHandlers_PreviewOnlyLogs).
 func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, log *slog.Logger, sink gateway.ContactSink, pending gateway.PendingInviteLookup) registration {
 	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
 	demoPerIP := gateway.NewSignInThrottle("demo-request", gateway.DemoRequestPerIP, gateway.DemoRequestMaxKeys, gateway.DemoRequestWindow, time.Now)
 	if authURL == nil || siteURL == nil {
 		nc := gateway.RegistrationNotConfigured()
-		return registration{Register: nc, Verify: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, demoPerIP, enforce, log)}
+		return registration{Register: nc, ResendVerification: nc, RequestPasswordReset: nc, DemoRequest: gateway.DemoRequestHandler(sink, demoPerIP, enforce, log)}
 	}
 	client := &http.Client{
 		Timeout:       10 * time.Second,
@@ -333,7 +356,8 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	return registration{
 		Register:             gateway.RegisterHandler(authURL, client, minResponse, registerPerIP, enforce, log, pending),
 		RegisterPerIP:        registerPerIP,
-		Verify:               gateway.VerifyHandler(authURL, siteURL, client, log, sink),
+		ResendByAddress:      perAddress,
+		ResendByIP:           perIP,
 		ResendVerification:   gateway.ResendVerificationHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
 		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
 		DemoRequest:          gateway.DemoRequestHandler(sink, demoPerIP, enforce, log),
@@ -349,25 +373,17 @@ func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionCh
 	return gateway.ResetPasswordHandler(authURL, siteURL, client, sessions, signIn, log)
 }
 
-// invitationPasswordHandler builds the invitee set-password handler; a nil authURL or siteURL makes it answer 503.
-func invitationPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, sink gateway.ContactSink, log *slog.Logger) http.Handler {
-	client := &http.Client{
-		Timeout:       10 * time.Second,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	return gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, signIn, sink, log)
-}
-
 // handoff holds the public sign-in hand-off, renewal and sign-out handlers main mounts outside /api/.
 type handoff struct {
-	SignIn, Exchange, Refresh, SignOut http.Handler
-	SignInThrottle                     *gateway.SignInThrottle
+	SignIn, Exchange, Refresh, SignOut, Verify, InvitationPassword http.Handler
+	SignInThrottle                                                 *gateway.SignInThrottle
 }
 
 // handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
 // Sign-out evicts from sessions, the API's own checker.
-// Sign-in and exchange share one code store: a code minted by sign-in is redeemable only through exchange.
-func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink) handoff {
+// Sign-in, verify, the invitee set-password handler and exchange share one code store: a code minted by any minter is redeemable only through exchange.
+// A nil siteURL makes Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
+func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)
 	throttle := gateway.NewSignInThrottle("sign-in", gateway.SignInMaxFailures, gateway.SignInMaxKeys, gateway.SignInWindow, time.Now)
 	// Same settings as registrationHandlers; TestRegistrationClientTimeoutAndNoFollow pins that literal in place.
@@ -380,6 +396,9 @@ func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *sl
 		Exchange: gateway.ExchangeHandler(store),
 		Refresh:  gateway.RefreshHandler(authURL, client, log),
 		SignOut:  gateway.SignOutHandler(authURL, client, sessions, log),
+		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink, store),
+
+		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, store),
 
 		SignInThrottle: throttle,
 	}
@@ -389,7 +408,7 @@ func handoffHandlers(authURL *url.URL, sessions *gateway.SessionChecker, log *sl
 // an absolute http(s) URL, or carries user info, a query or a fragment, stops boot.
 func mustParseSiteURL(raw string, log *slog.Logger) *url.URL {
 	if raw == "" {
-		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, /auth/resend-verification, /auth/request-password-reset, GET and POST /auth/verify and /auth/reset-password answer 503")
+		log.Warn("gateway: AUTH_SITE_URL is unset; /auth/register, /auth/resend-verification, /auth/request-password-reset, /auth/invitation/resend, GET and POST /auth/verify and /auth/reset-password answer 503")
 		return nil
 	}
 	u, err := url.Parse(raw)

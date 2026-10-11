@@ -52,6 +52,10 @@ const tinFixFIRSTIN = "10012345-0007"
 // alongside the FIRS shapes, and which has NO hyphen to restore.
 const tinFixJTBTIN = "1001230000"
 
+// entityAdminSubject is the admin that portfolio.Store.Create requires; the
+// fixtures' memberSubject keeps its own role.
+const entityAdminSubject = "e0000000-0000-0000-0000-0000000000ad"
+
 // createEntityViaRealPortfolioStore creates ONE business_entities row through
 // the REAL portfolio.Store.Create -- ValidateTIN, Luhn, canonicalization and
 // all -- i.e. the exact path POST /v1/entities takes in production, and the
@@ -59,8 +63,13 @@ const tinFixJTBTIN = "1001230000"
 // the CANONICAL tin as actually persisted.
 func createEntityViaRealPortfolioStore(t *testing.T, super, app *pgxpool.Pool, tenantID, name, rawTIN string) (entityID, canonicalTIN string) {
 	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, 'admin', 'active')
+		 ON CONFLICT (tenant_id, user_id) DO NOTHING`, tenantID, entityAdminSubject); err != nil {
+		t.Fatalf("seed entity admin: %v", err)
+	}
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{
-		Subject: memberSubject, Role: "authenticated", TenantID: tenantID,
+		Subject: entityAdminSubject, Role: "authenticated", TenantID: tenantID,
 	})
 	ent, err := portfolio.NewStore(app).Create(ctx, portfolio.CreateInput{Name: name, TIN: rawTIN})
 	if err != nil {

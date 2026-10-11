@@ -117,6 +117,27 @@ describe('ensureSignInState', () => {
 })
 
 describe('consumeSignInState', () => {
+  it('consumeSignInState_anyAgeReturnsAnOldWellFormedState', () => {
+    const t0 = 1000
+    const now = t0 + 11 * 60 * 1000
+    const store = (blob: unknown) => sessionStorage.setItem('invoice-os.signInState', JSON.stringify(blob))
+    const gone = () => sessionStorage.getItem('invoice-os.signInState')
+    store({ v: 1, s: S, at: t0 })
+    expect(consumeSignInState(now)).toBeNull()
+    expect(gone()).toBeNull()
+    store({ v: 1, s: S, at: t0 })
+    expect(consumeSignInState(now, true)).toBe(S)
+    expect(gone()).toBeNull()
+    for (const blob of [{ v: 1, s: 'short', at: t0 }, { v: 1, s: S, at: now + 1 }]) {
+      store(blob)
+      expect(consumeSignInState(now, true)).toBeNull()
+      expect(gone()).toBeNull()
+    }
+    sessionStorage.setItem('invoice-os.signInState', '{not json')
+    expect(consumeSignInState(now, true)).toBeNull()
+    expect(gone()).toBeNull()
+  })
+
   it('consumeSignInState returns the state once', () => {
     storage.store.set(KEY, JSON.stringify({ v: 1, s: S, at: 1000 }))
     expect(consumeSignInState(1001)).toBe(S)

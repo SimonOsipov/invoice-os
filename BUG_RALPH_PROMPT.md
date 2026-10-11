@@ -18,6 +18,7 @@ In every shared rule, `<STORY>` means `<BUG-ID>`.
 | CI Monitoring Protocol | As written. |
 | Phase 3.5: steps 2, 3 and 5 | As written. |
 | Phase 4: Worktree cleanup | As written. |
+| Completion Rules, rule 4 of `RALPH_PROMPT.md` | As written, for a fix to a flow that rule 4 names. List the walk-through under **Needs you** in the report. |
 
 ## Phases
 

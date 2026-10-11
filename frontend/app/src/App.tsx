@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
+import { CREATING_OWN, JoinWorkspace } from './components/JoinWorkspace'
 import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPayload, cardIdentity } from './lib/session'
 import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
 import { consumeSignInState, ensureSignInState, landingInviteUrl, landingRegisterUrl, landingSignInUrl, mintSignInState } from './lib/signInState'
 import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteFragment } from './lib/pendingInvite'
-import { HANDOFF_PARAM, InviteRefusedError, isLiveHandoffSession, readHandoffCode, redeemHandoff } from './lib/sessionHandoff'
+import { consumePendingVerify, gatewayVerifyUrl, holdPendingVerify, holdsPendingVerify, landingVerifyFailedUrl, readVerifyFragment } from './lib/verifyBounce'
+import { AuditExportToast } from './components/AuditExportToast'
+import { HANDOFF_PARAM, InviteRefusedError, createOwnWorkspace, isJoinOffer, isLiveHandoffSession, joinInvite, readHandoffCode, redeemHandoff, type JoinOffer } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, resolveActiveClient, startingDraft } from './lib/clients'
@@ -1819,7 +1822,13 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
 export default function App() {
   const [bootSession] = useState(() => resolveBootSession())
   // A live stored hand-off session wins over `?handoff=`, unless an invite is held: the user signed in again to accept it.
-  const [liveHandoff] = useState(() => isLiveHandoffSession(bootSession) && peekPendingInvite() === null)
+  // A pending confirm also keeps a renewable session whose access token has expired.
+  const [liveHandoff] = useState(
+    () =>
+      (isLiveHandoffSession(bootSession) ||
+        (bootSession?.handoff === true && readHandoffCode(window.location.search) !== null && holdsPendingVerify())) &&
+      peekPendingInvite() === null,
+  )
   // Set while a held invite's code overrides a live stored session: a refusal leaves that session stored.
   const [overridesLive] = useState(() => !liveHandoff && isLiveHandoffSession(bootSession))
   // An unconfigured gateway ignores the code (it is still stripped).
@@ -1828,6 +1837,11 @@ export default function App() {
   )
   const [handoffPending, setHandoffPending] = useState(handoffCode !== null)
   const redeemStarted = useRef(false)
+  const [joinOffer, setJoinOffer] = useState<JoinOffer | null>(null)
+  const [joining, setJoining] = useState<string | null>(null)
+  const [joinNotice, setJoinNotice] = useState<string | null>(null)
+  // Set in the click handler, before any re-render, so a second click in the same tick sends nothing.
+  const joinStarted = useRef(false)
   // `?auth=start`: landing asks for a state. `?handoff=` wins over it.
   const [authStart] = useState(
     () => !handoffCode && new URLSearchParams(window.location.search).get('auth') === 'start',
@@ -1835,6 +1849,22 @@ export default function App() {
   // Read before the strip effect drops the hash; null when `?auth=start` carries no invite.
   const [startInvite] = useState(() => (authStart ? readInviteFragment(window.location.hash) : null))
   const startBounced = useRef(false)
+  // `?auth=verify#token=T` (confirm link) or `?auth=verify-invite#token=T` (invite set-password link). `?handoff=` wins.
+  const [authVerify, setAuthVerify] = useState(() => {
+    const auth = new URLSearchParams(window.location.search).get('auth')
+    return readHandoffCode(window.location.search) === null && (auth === 'verify' || auth === 'verify-invite')
+  })
+  const [verifyInvite] = useState(() => authVerify && new URLSearchParams(window.location.search).get('auth') === 'verify-invite')
+  // Read before the strip effect drops the hash.
+  const [verifyToken] = useState(() => (authVerify ? readVerifyFragment(window.location.hash) : null))
+  const verifyBounced = useRef(false)
+  // A live session wins over a confirm code; a pending verify turns on a notice naming it.
+  const [verifyConfirmedNotice, setVerifyConfirmedNotice] = useState<string | null>(() =>
+    liveHandoff && readHandoffCode(window.location.search) !== null && holdsPendingVerify()
+      ? confirmedNotice(bootSession?.me?.user.email || bootSession?.me?.user.display_name || undefined)
+      : null,
+  )
+  const dismissVerifyNotice = useCallback(() => setVerifyConfirmedNotice(null), [])
   const frontDoorBounced = useRef(false)
   // Lazy initializer: synchronously rehydrate a persisted session at boot (no network,
   // no SignIn flash) so a reload / new tab returns straight to the workspace. A stored
@@ -1901,23 +1931,8 @@ export default function App() {
   // Blocks a second click and a repeat exit (sign-out or revoked session). Stays set when the exit leaves the page; sign-out resets it when it stays.
   const signingOut = useRef(false)
 
-  // Sign out returns the user to the marketing landing page (the real sign-in front
-  // door). Nulling React state alone would only swap in the app's own minimal
-  // persona-picker, so wipe the persisted session and navigate away.
-  // A hand-off seat revokes every session of the account first; the navigation would cancel the request.
-  const signOut = useCallback(async () => {
-    if (signingOut.current) return
-    signingOut.current = true
-    const base = gatewayBase()
-    if (seat?.handoff && seat.renewal && base) {
-      // Another tab may have rotated the seat's refresh token.
-      const stored = loadSession()
-      const refreshToken =
-        stored?.renewal && stored.persona.subject === seat.persona.subject ? stored.renewal.refreshToken : seat.renewal.refreshToken
-      if ((await revokeSessions(base, refreshToken)) === 'failed') {
-        console.warn('[session] sign-out could not reach the server; other sessions stay signed in')
-      }
-    }
+  // Shared tail of both sign-outs: drop the session and the captured destination, then leave.
+  const leaveToLanding = useCallback(() => {
     // First: a renewal settling after this must not restore the session.
     renewerRef.current?.track(null)
     // Drop the in-memory session, not just the persisted copy. clearSession() only wipes
@@ -1939,7 +1954,29 @@ export default function App() {
     const dest = landingBase()
     if (dest) window.location.href = dest
     else signingOut.current = false
-  }, [seat])
+  }, [])
+
+  // Sign out returns the user to the marketing landing page (the real sign-in front
+  // door). Nulling React state alone would only swap in the app's own minimal
+  // persona-picker, so wipe the persisted session and navigate away.
+  // A hand-off seat revokes every session of the account first; the navigation would cancel the request.
+  const signOut = useCallback(async () => {
+    if (signingOut.current) return
+    signingOut.current = true
+    // Untracked, new requests reject before sending; the revoke reads its refresh token elsewhere.
+    renewerRef.current?.track(null)
+    const base = gatewayBase()
+    if (seat?.handoff && seat.renewal && base) {
+      // Another tab may have rotated the seat's refresh token.
+      const stored = loadSession()
+      const refreshToken =
+        stored?.renewal && stored.persona.subject === seat.persona.subject ? stored.renewal.refreshToken : seat.renewal.refreshToken
+      if ((await revokeSessions(base, refreshToken)) === 'failed') {
+        console.warn('[session] sign-out could not reach the server; other sessions stay signed in')
+      }
+    }
+    leaveToLanding()
+  }, [seat, leaveToLanding])
 
   // The 401 seam: the session is already dead, so nothing is sent. Keeps the stored record
   // only when it holds another sign-in (both tokens carry session_ids that differ).
@@ -1989,14 +2026,22 @@ export default function App() {
     const base = gatewayBase()
     if (!handoffCode || !base || redeemStarted.current) return
     redeemStarted.current = true
-    const state = consumeSignInState()
+    // A bound marker means the gateway confirmed the mailbox, so the state's age does not gate the code.
+    const markerBound = holdsPendingVerify()
+    consumePendingVerify()
+    const state = consumeSignInState(Date.now(), markerBound)
     const invite = consumePendingInvite()
     const redemption = state
       ? redeemHandoff(base, handoffCode, state, Date.now(), invite)
       : Promise.reject(new Error('no sign-in state in this tab'))
     redemption.then(
-      (session) => {
-        setSeat(session)
+      (outcome) => {
+        if (isJoinOffer(outcome)) {
+          setJoinOffer(outcome)
+          setHandoffPending(false)
+          return
+        }
+        setSeat(outcome)
         setHandoffPending(false)
       },
       (err: unknown) => {
@@ -2014,6 +2059,62 @@ export default function App() {
     )
   }, [handoffCode])
 
+  // Join and Create my own workspace share one outcome: the workspace mounts, or the page leaves.
+  // A refused invite 'invalid' with other invites left is dropped from the offer; the Join screen stays.
+  const resolveJoin = useCallback((attempt: Promise<Session>, inviteId?: string) => {
+    if (joinStarted.current) return
+    joinStarted.current = true
+    attempt.then(
+      (next) => {
+        setSeat(next)
+        setJoinOffer(null)
+        setJoining(null)
+      },
+      (err: unknown) => {
+        console.warn('[app] joining failed:', err)
+        if (err instanceof InviteRefusedError && err.outcome === 'invalid' && inviteId !== undefined && joinOffer) {
+          const invites = joinOffer.invites.filter((i) => i.id !== inviteId)
+          if (invites.length > 0) {
+            setJoinOffer({ ...joinOffer, invites })
+            setJoinNotice('That invite is no longer valid.')
+            joinStarted.current = false
+            setJoining(null)
+            return
+          }
+        }
+        const dest = err instanceof InviteRefusedError ? landingInviteUrl(err.outcome) : landingSignInUrl(ensureSignInState(), 'failed')
+        // Stays disabled while leaving; with no landing the card is usable again.
+        if (dest) window.location.href = dest
+        else {
+          joinStarted.current = false
+          setJoining(null)
+        }
+      },
+    )
+  }, [joinOffer])
+  const onJoin = (id: string) => {
+    const base = gatewayBase()
+    if (!joinOffer || !base || joinStarted.current) return
+    setJoining(id)
+    setJoinNotice(null)
+    resolveJoin(joinInvite(base, joinOffer, id), id)
+  }
+  const onCreateOwn = () => {
+    const base = gatewayBase()
+    if (!joinOffer || !base || joinStarted.current) return
+    setJoining(CREATING_OWN)
+    resolveJoin(createOwnWorkspace(base, joinOffer))
+  }
+  const onJoinSignOut = async () => {
+    const base = gatewayBase()
+    if (signingOut.current || !joinOffer || !base) return
+    signingOut.current = true
+    if (typeof joinOffer.refreshToken === 'string' && (await revokeSessions(base, joinOffer.refreshToken)) === 'failed') {
+      console.warn('[session] sign-out could not reach the server; other sessions stay signed in')
+    }
+    leaveToLanding()
+  }
+
   // Bounces whatever session is stored; the ref keeps StrictMode to one navigation.
   // A fresh state gives landing the full TTL to hold it.
   useEffect(() => {
@@ -2022,9 +2123,50 @@ export default function App() {
     if (dest) {
       startBounced.current = true
       holdPendingInvite(startInvite)
-      window.location.href = dest
+      // replace drops the ?auth=start entry; the invite hop (Out of Scope) keeps its push.
+      if (startInvite) window.location.href = dest
+      else window.location.replace(dest)
     }
   }, [authStart, startInvite])
+
+  // Bounces over any stored session to the gateway confirm page; the ref keeps StrictMode to one navigation.
+  useEffect(() => {
+    if (!authVerify || verifyBounced.current) return
+    const base = gatewayBase()
+    let dest: string | null
+    if (verifyToken && base) {
+      dest = gatewayVerifyUrl(base, verifyToken, mintSignInState(), verifyInvite)
+    } else {
+      dest = landingVerifyFailedUrl()
+    }
+    if (dest) {
+      verifyBounced.current = true
+      if (verifyToken && base) holdPendingVerify()
+      window.location.href = dest
+    } else {
+      // Nowhere to bounce to: fall through to the normal front door.
+      setAuthVerify(false)
+    }
+  }, [authVerify, verifyToken, verifyInvite])
+
+  // Back from the confirm page restores this page from the bfcache with the bounce already spent.
+  useEffect(() => {
+    if (!authVerify) return
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return
+      consumePendingVerify()
+      setAuthVerify(false)
+    }
+    window.addEventListener('pageshow', onPageShow)
+    return () => window.removeEventListener('pageshow', onPageShow)
+  }, [authVerify])
+
+  // A shown notice spends the marker and the sign-in state, so B's code cannot be redeemed in this tab later.
+  useEffect(() => {
+    if (verifyConfirmedNotice === null) return
+    consumePendingVerify()
+    consumeSignInState()
+  }, [])
 
   // The single front door. Any sessionless visit — never signed in, signed out, session
   // expired while the tab was closed, or token invalidated by a 401 — goes to the landing
@@ -2034,7 +2176,7 @@ export default function App() {
   // redemption navigates itself), so bouncing to landing would break landing → app. Also skipped when no
   // landing URL is configured (the standalone showcase build), which keeps its own picker.
   useEffect(() => {
-    if (seat || authStart || handoffPending || frontDoorBounced.current) return
+    if (seat || authStart || authVerify || handoffPending || joinOffer || frontDoorBounced.current) return
     // Read before parseLocation: `via` is not an owned param, so the codec drops it.
     const fromLibrary = new URLSearchParams(window.location.search).get('via') === 'library'
     const dest = landingBase()
@@ -2045,6 +2187,8 @@ export default function App() {
     if (dest) {
       // The ref keeps StrictMode to one navigation.
       frontDoorBounced.current = true
+      // A confirm abandoned by Back must not turn a later hand-off on this reused state into a notice.
+      consumePendingVerify()
       // Store only the query the codec authored: parse the live location, re-serialise it,
       // keep the query half. An unowned param is discarded here, before storage is touched.
       const at = parseLocation(window.location.pathname, window.location.search)
@@ -2052,12 +2196,25 @@ export default function App() {
       captureDestination(window.location.pathname, routeQuery(at.view, at))
       window.location.href = dest
     }
-  }, [seat, authStart, handoffPending])
+  }, [seat, authStart, authVerify, handoffPending, joinOffer])
 
   // Mounting Workspace would clear the captured destination before the start bounce leaves.
   if (authStart && landingBase()) return null
+  if (authVerify && (gatewayBase() || landingBase())) return null
   if (bootRenewing && seat) return <SignInLoading />
   if (!seat) {
+    if (joinOffer) {
+      return (
+        <JoinWorkspace
+          invites={joinOffer.invites}
+          joining={joining}
+          notice={joinNotice}
+          onJoin={onJoin}
+          onSignOut={onJoinSignOut}
+          onCreateOwn={joinOffer.answers ? onCreateOwn : undefined}
+        />
+      )
+    }
     if (handoffPending) return <SignInLoading />
     // No session and no deep link. The landing page is the product's single sign-in front
     // door, so go there rather than offer a SECOND place to sign in — the effect above has
@@ -2070,11 +2227,21 @@ export default function App() {
     return <SignIn signingIn={signingIn} onPick={doSignIn} />
   }
   return (
-    <Workspace
-      session={seat}
-      onSignOut={signOut}
-      freshToken={freshToken}
-      onUnauthorized={endRevokedSession}
-    />
+    <>
+      <Workspace
+        session={seat}
+        onSignOut={signOut}
+        freshToken={freshToken}
+        onUnauthorized={endRevokedSession}
+      />
+      {verifyConfirmedNotice !== null && (
+        <AuditExportToast kind="success" testId="verify-confirmed-toast" text={verifyConfirmedNotice} onDismiss={dismissVerifyNotice} />
+      )}
+    </>
   )
+}
+
+function confirmedNotice(who: string | undefined): string {
+  const as = who ? `as ${who}` : 'to another account'
+  return `Your email is confirmed. You are signed in ${as}. To use the confirmed account, sign out and sign in with it.`
 }

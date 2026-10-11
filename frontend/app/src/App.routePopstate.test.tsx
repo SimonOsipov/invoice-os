@@ -1645,7 +1645,7 @@ async function traverse(delta: number) {
   })
 }
 
-const stateNow = () => window.history.state as { e?: string | null; m?: unknown } | null
+const stateNow = () => window.history.state as { e?: string | null; m?: unknown; p?: boolean } | null
 
 describe('BUG-34: entries pushed before the company list loads', () => {
   it('boot_everyEntryWrittenBeforeTheListLoadsCarriesTheMountKey', async () => {
@@ -1761,6 +1761,7 @@ describe('BUG-34: entries pushed before the company list loads', () => {
       const release = await bootPreLoad(path)
       await act(async () => write())
       expect(typeof stateNow()!.m, 'the pre-load replace must keep the mount key').toBe('string')
+      expect(stateNow()!.p, 'no company yet: nothing to promote').toBeUndefined()
       await act(async () => {
         capturedCtx!.nav('dashboard')
       })
@@ -1768,6 +1769,50 @@ describe('BUG-34: entries pushed before the company list loads', () => {
       await traverse(-1)
       await traverse(-1)
       expect(stateNow()!.e).toBe(ENTITY_B)
+    },
+  )
+
+  it('popstate_theReviewMirrorPromotesNoPostLoadEntryIntoTheWindow', async () => {
+    const release = await bootPreLoad('/dashboard')
+    await act(async () => {
+      release()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    await act(async () => {
+      capturedCtx!.nav('create')
+    })
+    expect(requireCtx().view, 'floor: the mirror ran on a create entry').toBe('create')
+    expect(stateNow()).toMatchObject({ e: ENTITY_A, m: expect.any(String) })
+    expect(stateNow()!.p, 'a post-load push is not a window entry').toBeUndefined()
+  })
+
+  // KNOWN DEFECT (QA-3): these writers drop `p`, so the entry clamps after an adoption its window-mates survive. Flip to `it.each` with the fix.
+  it.fails.each([
+    ['setInvoiceQuery', () => capturedCtx!.setInvoiceQuery('x')],
+    ['setAuditInvoiceFilter', () => capturedCtx!.setAuditInvoiceFilter(AUDIT_INVOICE_ID, null)],
+    ['setSettingsTab', () => capturedCtx!.setSettingsTab('roles')],
+  ] as [string, () => void][])(
+    'popstate_aPostLoadReplaceKeepsAWindowEntryInTheWindowSoAdoptionMovesItWithTheRest: %s',
+    async (_name, write) => {
+      const release = await bootPreLoad('/create')
+      await act(async () => {
+        capturedCtx!.nav('invoices')
+      })
+      await act(async () => {
+        release()
+        await Promise.resolve()
+      })
+      await waitFor(() => expect(stateNow()!.p, 'floor: the backfill promoted the entry').toBe(true))
+      await act(async () => write())
+      await traverse(-1)
+      expect(requireCtx().view, 'floor: back on the boot create entry').toBe('create')
+      await act(async () => requireCtx().adoptBatchClient(ENTITY_B))
+      expect(requireCtx().active.entityId, 'floor: the adoption must take').toBe(ENTITY_B)
+      const replaceSpy = vi.spyOn(window.history, 'replaceState')
+      await traverse(1)
+      expect(requireCtx().view).toBe('invoices')
+      expect(replaceSpy, 'same window as the boot entry: resolves to the adopted company, no clamp').not.toHaveBeenCalled()
     },
   )
 

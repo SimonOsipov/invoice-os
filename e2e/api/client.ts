@@ -388,6 +388,22 @@ export function listCustomers(token: string, query?: { tin?: string; limit?: num
   return apiFetch(`${apiBase()}/api/invoice/v1/customers${qs ? `?${qs}` : ''}`, { token })
 }
 
+// CodeEntry mirrors internal/invoice/codes.go's CodeEntry; percent is set only for a numeric tax-categories percent.
+export interface CodeEntry {
+  code: string
+  label: string
+  percent: string | null
+}
+
+// searchCodes(): GET /v1/code-lists/{list}; limit defaults to 20 and clamps to 50.
+export function searchCodes(token: string, list: string, query?: { q?: string; limit?: number }): Promise<{ codes: CodeEntry[] }> {
+  const params = new URLSearchParams()
+  if (query?.q !== undefined) params.set('q', query.q)
+  if (query?.limit !== undefined) params.set('limit', String(query.limit))
+  const qs = params.toString()
+  return apiFetch(`${apiBase()}/api/invoice/v1/code-lists/${list}${qs ? `?${qs}` : ''}`, { token })
+}
+
 // CustomerUpdateInput mirrors internal/customer/customer.go's updateRequest; tin is not editable.
 export interface CustomerUpdateInput {
   name?: string

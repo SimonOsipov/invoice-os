@@ -39,7 +39,7 @@ import {
 } from './rulesApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, landingBase, signOut } from './auth'
-import type { AuditFilter, DrawerState, Env, JobFilter, Screen, SubTab, ToastState, ToastTone } from './types'
+import type { AuditFilter, DrawerState, Env, JobFilter, Rule, Screen, SubTab, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.asc-app` — that scope defines the design-system tokens
 // (--action, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label, .mono, .eyebrow)
@@ -64,7 +64,7 @@ function Console() {
   const [resOpen, setResOpen] = useState(true)
   const [confirmKill, setConfirmKill] = useState<{ key: string; action: 'disable' | 'enable' } | null>(null)
   const [switching, setSwitching] = useState(false)
-  const [publish, setPublish] = useState<{ rows: DiffRow[] | null; error: string | null } | null>(null)
+  const [publish, setPublish] = useState<{ rows: DiffRow[] | null; rules?: { draft: Rule[]; inForce: Rule[] }; error: string | null } | null>(null)
   const [testOpen, setTestOpen] = useState(false)
   const [testResult, setTestResult] = useState<DraftTestResult | null>(null)
   const [draftBusy, setDraftBusy] = useState(false)
@@ -236,7 +236,7 @@ function Console() {
     const id = ++publishRead.current
     setPublish({ rows: null, error: null })
     Promise.all([fetchRules(draftVersion.version), fetchRules()]).then(
-      ([d, f]) => id === publishRead.current && setPublish({ rows: diffRules(d.rules, f.rules), error: null }),
+      ([d, f]) => id === publishRead.current && setPublish({ rows: diffRules(d.rules, f.rules), rules: { draft: d.rules, inForce: f.rules }, error: null }),
       (e) => {
         if (id !== publishRead.current) return
         const err = toApiError(e)
@@ -409,7 +409,7 @@ function Console() {
           draftVersion={draftVersion.version}
           inForceVersion={inForceVersion?.version ?? null}
           rows={publish.rows}
-          warnings={publishWarnings(versions)}
+          warnings={publishWarnings(versions, publish.rules?.draft, publish.rules?.inForce)}
           today={today}
           busy={draftBusy}
           error={publish.error}

@@ -17,6 +17,8 @@ const h = vi.hoisted(() => {
     instrumentEvaluated: vi.fn(),
     appEvaluated: vi.fn(),
     inviteLinkEvaluated: vi.fn(),
+    verifyLinkEvaluated: vi.fn(),
+    forwarding: false,
     bootAnalytics: vi.fn(() => {
       seen.atAnalytics = snapshot()
     }),
@@ -27,6 +29,11 @@ const h = vi.hoisted(() => {
 
 // doMock, not mock: a factory runs again only after resetModules plus a fresh registration.
 function mockModules() {
+  // Mocked: the real module would act on the fake location. Tests flip `h.forwarding`.
+  vi.doMock('./verifyLink', () => {
+    h.verifyLinkEvaluated()
+    return { forwarding: h.forwarding }
+  })
   vi.doMock('./instrument', () => {
     h.instrumentEvaluated()
     h.seen.atInstrument = h.snapshot()
@@ -87,6 +94,7 @@ async function bootMain(url: string) {
 type Root = ReactElement<{ children: ReactElement<{ brand: unknown; children: ReactElement<{ token?: string | null }> }> }>
 
 afterEach(() => {
+  h.forwarding = false
   vi.unstubAllGlobals()
 })
 
@@ -160,5 +168,23 @@ describe('main', () => {
     const child = (h.render.mock.calls[0][0] as Root).props.children.props.children
     expect(child.type, 'control: the invite page renders').toBe(InvitePage)
     expect(child.props.token).toBeNull()
+  })
+
+  it('main_importsVerifyLinkFirst', async () => {
+    await bootMain('/')
+
+    expect(h.verifyLinkEvaluated).toHaveBeenCalledTimes(1)
+    expect(h.inviteLinkEvaluated).toHaveBeenCalledTimes(1)
+    expect(h.verifyLinkEvaluated.mock.invocationCallOrder[0]).toBeLessThan(h.inviteLinkEvaluated.mock.invocationCallOrder[0])
+    expect(h.verifyLinkEvaluated.mock.invocationCallOrder[0]).toBeLessThan(h.instrumentEvaluated.mock.invocationCallOrder[0])
+  })
+
+  it('main_rendersNothingWhileForwarding', async () => {
+    h.forwarding = true
+    await bootMain('/')
+
+    expect(h.verifyLinkEvaluated, 'control: the mocked module ran').toHaveBeenCalledTimes(1)
+    expect(h.createRoot).not.toHaveBeenCalled()
+    expect(h.bootAnalytics).not.toHaveBeenCalled()
   })
 })

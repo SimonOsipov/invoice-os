@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -127,10 +128,60 @@ func TestAcceptHandler_Contract(t *testing.T) {
 	})
 }
 
+func TestPreviewHandler_AStateFailureStillAnswersAndLogsTheSQLStateOnly(t *testing.T) {
+	token := strings.Repeat("T", 43)
+	fn := func(context.Context, string) (InvitationPreview, error) {
+		return InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: "tunde@obi.test", Account: "unknown",
+			accountErr: &pgconn.PgError{Code: "42501", Message: "permission denied for tunde@obi.test"}}, nil
+	}
+	var logs syncBuf
+	rec := apiDo(InvitationPreviewHandler(fn, slog.New(slog.NewTextHandler(&logs, nil))), context.Background(),
+		http.MethodPost, "/internal/invitations/preview", `{"token":"`+token+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || got["account"] != "unknown" || got["email"] != "tunde@obi.test" {
+		t.Errorf("body = %v, want the three fields and account unknown", got)
+	}
+	out := logs.String()
+	if n := strings.Count(out, "level=WARN"); n != 1 || !strings.Contains(out, "42501") {
+		t.Errorf("want one WARN with 42501, got:\n%s", out)
+	}
+	for _, leak := range []string{"tunde@obi.test", token} {
+		if strings.Contains(out, leak) {
+			t.Errorf("log leaks %q:\n%s", leak, out)
+		}
+	}
+
+	var plain syncBuf
+	other := func(context.Context, string) (InvitationPreview, error) {
+		return InvitationPreview{Account: "unknown", accountErr: errors.New("connection reset for tunde@obi.test")}, nil
+	}
+	apiDo(InvitationPreviewHandler(other, slog.New(slog.NewTextHandler(&plain, nil))), context.Background(),
+		http.MethodPost, "/internal/invitations/preview", `{"token":"`+token+`"}`)
+	if o := plain.String(); !strings.Contains(o, "sqlstate=unknown") || strings.Contains(o, "tunde@obi.test") {
+		t.Errorf("a non-SQL error must log sqlstate=unknown and no address:\n%s", o)
+	}
+
+	var quiet syncBuf
+	ok := func(context.Context, string) (InvitationPreview, error) {
+		return InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: "tunde@obi.test", Account: "none"}, nil
+	}
+	apiDo(InvitationPreviewHandler(ok, slog.New(slog.NewTextHandler(&quiet, nil))), context.Background(),
+		http.MethodPost, "/internal/invitations/preview", `{"token":"`+token+`"}`)
+	if strings.Contains(quiet.String(), "level=WARN") {
+		t.Errorf("a read that succeeded logged a WARN:\n%s", quiet.String())
+	}
+}
+
 func TestPreviewHandler_Contract(t *testing.T) {
 	token := strings.Repeat("A", 43)
 	okBody := `{"token":"` + token + `"}`
-	preview := InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: inviteeAddr}
+	preview := InvitationPreview{Workspace: "Obi Partners", Role: "reviewer", Email: inviteeAddr, Account: "confirmed"}
 	granted := func(context.Context, string) (InvitationPreview, error) { return preview, nil }
 	failing := func(err error) InvitationPreviewFunc {
 		return func(context.Context, string) (InvitationPreview, error) { return InvitationPreview{}, err }
@@ -156,8 +207,8 @@ func TestPreviewHandler_Contract(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("body %q: %v", rec.Body, err)
 		}
-		if len(got) != 3 || got["workspace"] != "Obi Partners" || got["role"] != "reviewer" || got["email"] != inviteeAddr {
-			t.Errorf("body = %v, want exactly {workspace, role, email}", got)
+		if len(got) != 4 || got["workspace"] != "Obi Partners" || got["role"] != "reviewer" || got["email"] != inviteeAddr || got["account"] != "confirmed" {
+			t.Errorf("body = %v, want exactly {workspace, role, email, account}", got)
 		}
 	})
 

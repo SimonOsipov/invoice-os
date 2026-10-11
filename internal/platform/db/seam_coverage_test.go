@@ -191,21 +191,22 @@ func (e scPoolExemption) covers(s scPoolSite) bool {
 
 // scPoolAllowlist is every caller allowed to reach the database without the seam.
 var scPoolAllowlist = []scPoolExemption{
-	{file: "internal/platform/db/db.go"},                                         // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
-	{file: "internal/platform/db/tenant.go"},                                     // declares the gated seam; its pool.BeginTx IS the gate this story shipped
-	{file: "internal/platform/db/migrate.go"},                                    // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
-	{file: "internal/platform/db/bootstrap.go"},                                  // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
-	{file: "internal/platform/db/provision.go"},                                  // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
-	{file: "internal/validation/store.go", fn: "LoadActiveRuleSetGlobal"},        // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
-	{file: "internal/importer/backfill.go"},                                      // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
-	{file: "internal/invoice/revalidate.go"},                                     // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
-	{file: "internal/reconciliation/sweep.go"},                                   // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
-	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                    // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
-	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},    // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
-	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"}, // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
-	{file: "internal/notifications/store.go"},                                    // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
-	{file: "internal/notifications/worker.go"},                                   // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
-	{file: "internal/notifications/deal.go"},                                     // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
+	{file: "internal/platform/db/db.go"},                                              // declares the identity-free core; its pool.BeginTx IS what every other caller wraps
+	{file: "internal/platform/db/tenant.go"},                                          // declares the gated seam; its pool.BeginTx IS the gate this story shipped
+	{file: "internal/platform/db/migrate.go"},                                         // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
+	{file: "internal/platform/db/bootstrap.go"},                                       // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
+	{file: "internal/platform/db/provision.go"},                                       // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
+	{file: "internal/validation/store.go", fn: "LoadActiveRuleSetGlobal"},             // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
+	{file: "internal/importer/backfill.go"},                                           // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
+	{file: "internal/invoice/revalidate.go"},                                          // operator CLI tools/revalidate-invoices; same shape, same absence of a caller
+	{file: "internal/reconciliation/sweep.go"},                                        // enumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
+	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                         // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},         // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"},      // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
+	{file: "internal/platform/db/account_state_read.go", fn: "GrantAccountStateRead"}, // boot-time grant on the supabase_auth_admin DSN, before any request or tenant exists
+	{file: "internal/notifications/store.go"},                                         // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
+	{file: "internal/notifications/worker.go"},                                        // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
+	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,
@@ -715,6 +716,9 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"},                          // the caller has no membership yet; the seam would refuse before the closure
 	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                           // the token is the only credential and names the invite; there is no caller to gate
 	{file: "internal/tenancy/store.go", fn: "AcceptInvitation"},                            // the invitee has no membership in the invite's tenant yet; the seam would refuse before the closure
+	{file: "internal/tenancy/store.go", fn: "acceptInTenant"},                              // the shared tail of AcceptInvitation and AcceptInvitationByID, same reason
+	{file: "internal/tenancy/store.go", fn: "MyPendingInvitations"},                        // the caller has no membership; the email filter is the guard
+	{file: "internal/tenancy/store.go", fn: "AcceptInvitationByID"},                        // the caller has no membership; the email filter is the guard
 	{file: "internal/tenancy/invite_registration.go", fn: "InvitationPendingForEmail"},     // a gateway-token route; there is no caller to gate
 	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},   // a gateway-token route; the token names the invite and there is no caller to gate
 	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"}, // a gateway-token route; the token names the invite and there is no caller to gate
@@ -963,7 +967,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"DELETE /v1/workflow-roles/{key}":                     {verdict: scCovered},
 	"GET /.well-known/jwks.json":                          {verdict: scExempt, reason: "serves the public verification keys; unauthenticated by design"},
 	"GET /auth/reset-password":                            {verdict: scExempt, reason: "no database; renders the reset page"},
-	"GET /auth/verify":                                    {verdict: scExempt, reason: "no database; renders the confirm page"},
+	"GET /auth/verify":                                    {verdict: scExempt, reason: "no database; renders the confirm page, or redirects a stateless open to landing"},
 	"GET /emails/confirmation.html":                       {verdict: scExempt, reason: "no database; static account-mail template"},
 	"GET /emails/mark.png":                                {verdict: scExempt, reason: "no database; static account-mail logo"},
 	"GET /emails/recovery.html":                           {verdict: scExempt, reason: "no database; static account-mail template"},
@@ -987,6 +991,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/imports/saved-mapping":                       {verdict: scCovered},
 	"GET /v1/imports/{id}":                                {verdict: scCovered},
 	"GET /v1/invitations":                                 {verdict: scCovered},
+	"GET /v1/invitations/mine":                            {verdict: scExempt, reason: "the caller has no membership yet; the verified email names the invites"},
 	"GET /v1/invoices":                                    {verdict: scCovered},
 	"GET /v1/invoices/violation-summary":                  {verdict: scCovered},
 	"GET /v1/invoices/{id}":                               {verdict: scCovered},
@@ -1002,6 +1007,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"OPTIONS /auth/exchange":                              {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /auth/invitation":                            {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /auth/invitation/register":                   {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /auth/invitation/resend":                     {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /auth/login":                                 {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /auth/refresh":                               {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /auth/register":                              {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
@@ -1019,6 +1025,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /auth/invitation":                               {verdict: scExempt, reason: "no database; asks tenancy"},
 	"POST /auth/invitation/password":                      {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/invitation/register":                      {verdict: scExempt, reason: "no database; asks tenancy, calls GoTrue"},
+	"POST /auth/invitation/resend":                        {verdict: scExempt, reason: "no database; asks tenancy, calls GoTrue"},
 	"POST /auth/login":                                    {verdict: scExempt, reason: "unauthenticated by definition; there is no caller yet to hold a membership"},
 	"POST /auth/mock/invitation-token":                    {verdict: scExempt, reason: "mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/mock/member":                              {verdict: scExempt, reason: "mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity"},
@@ -1054,6 +1061,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/imports/suggest-mapping":                    {verdict: scCovered},
 	"POST /v1/invitations":                                {verdict: scCovered},
 	"POST /v1/invitations/accept":                         {verdict: scExempt, reason: "the caller has no membership yet"},
+	"POST /v1/invitations/{id}/accept":                    {verdict: scExempt, reason: "the caller has no membership yet; the verified email names the invites"},
 	"POST /v1/invitations/{id}/resend":                    {verdict: scCovered},
 	"POST /v1/invoices":                                   {verdict: scCovered},
 	"POST /v1/invoices/submissions":                       {verdict: scCovered},
@@ -3109,6 +3117,23 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount"},         // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ATokenJoinsOnlyItsOwnTenant"},                                    // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMalformedTokenOrSubjectSendsNoStatement"},                       // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptByIdJoinsWithTheInvitedRole"},                                  // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListNamesEveryWorkspaceThatInvitedTheAddress"},                       // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListUsesTheNormalisedHeaderEmail"},                                   // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AnotherAddressInAnyTenantIsNeitherListedNorAccepted"},                // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ExpiredInviteIsNotListedAndNotAccepted"},                             // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TenantBearingCallerSendsNoStatement"},                                // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_NoCallerOrANonUuidSubjectSendsNoStatement"},                          // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AFailedAuditRollsTheJoinBack"},                                       // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TwoInvitesJoinOnceUnderRace"},                                        // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_SameInviteTwoConcurrentAcceptsJoinOnce"},                             // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid"},                              // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_JoinByIdAfterTokenLinkIsNoLongerValid"},                              // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_RevokedOrAcceptedInviteIsNeitherListedNorAccepted"},                  // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ANonUuidIdSendsNoStatement"},                                         // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AuditMatchesTheTokenAccept"},                                         // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_HandlersIgnoreBodyAndQueryAndRefuseAlike"},                           // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptNamesTheInviteNotTheFirstOfTheAddress"},                        // the invitee holds no membership before joining
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

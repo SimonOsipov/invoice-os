@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -91,28 +92,18 @@ func RegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Dur
 		}
 
 		invited := func(ctx context.Context) (bool, error) { return pending(ctx, in.Email) }
-		_ = signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log, invited)
+		_ = signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log, invited, nil)
 	})
 }
 
 // signUp spends the per-IP budget, posts body to GoTrue's /signup and answers with the floor held.
-// RegisterHandler and InvitationRegisterHandler share it, so both map GoTrue's answers alike.
+// RegisterHandler and InvitationRegisterHandler share it.
 // A non-nil invited runs after the reservation: true answers as a new address without calling GoTrue.
+// A non-nil existing is sent instead of the 202 when GoTrue reports an address that already has an account.
 // It reports whether an account may exist for the address afterwards: GoTrue 200, an existing address or the 23505 race.
-func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, invited func(context.Context) (bool, error)) (accountMayExist bool) {
-	key, source := clientKey(r)
-	held := perIP.Reserve(key)
-	refused := false
-	if !held {
-		log.WarnContext(r.Context(), "registration: limit reached",
-			slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
-		refused = enforce
-	}
-
-	if refused {
-		if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
-			writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
-		}
+func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup string, body map[string]any, start time.Time, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, invited func(context.Context) (bool, error), existing func()) (accountMayExist bool) {
+	key, held, proceed := reserveSignUp(w, r, perIP, enforce, log, start, minResponse)
+	if !proceed {
 		return false
 	}
 
@@ -134,10 +125,19 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		}
 	}
 
-	status, gt, err := postGoTrue(r, client, signup, body, nil)
+	var created any
+	var sanitized struct {
+		Identities *[]json.RawMessage `json:"identities"`
+	}
+	if existing != nil {
+		created = &sanitized
+	}
+	status, gt, err := postGoTrue(r, client, signup, body, created)
 	upstream := time.Since(start)
-	// GoTrue mails nothing when it answers 4xx; 2xx, 5xx and transport errors may have mailed.
-	if held && err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+	// Sent only on the invite route: the public route cannot tell an existing address from a new one.
+	existingAccount := existing != nil && status == http.StatusOK && sanitized.Identities != nil && len(*sanitized.Identities) == 0
+	// GoTrue mails nothing when it answers 4xx or reports an existing account with 200 and no identities; other 2xx, 5xx and transport errors may have mailed.
+	if held && err == nil && (existingAccount || status >= http.StatusBadRequest && status < http.StatusInternalServerError) {
 		perIP.Refund(key)
 	}
 	pending := func() { writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"}) }
@@ -148,9 +148,12 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		send = func() { writeError(w, http.StatusBadGateway, "registration is unavailable") }
 	}
 
-	// A repeat or confirmed address answers exactly like a new one.
+	// Without existing, a repeat or confirmed address answers exactly like a new one.
 	switch {
 	case err != nil:
+	case existing != nil && (existingAccount || gt.ErrorCode == "user_already_exists" || gt.ErrorCode == "email_exists"):
+		send = existing
+		mayExist = true
 	case status == http.StatusOK,
 		gt.ErrorCode == "user_already_exists",
 		gt.ErrorCode == "email_exists":
@@ -184,6 +187,23 @@ func signUp(w http.ResponseWriter, r *http.Request, client *http.Client, signup 
 		send()
 	}
 	return mayExist
+}
+
+// reserveSignUp takes a per-IP register slot. Over budget and enforced, it holds the floor, answers the uniform 202 and reports false.
+func reserveSignUp(w http.ResponseWriter, r *http.Request, perIP *SignInThrottle, enforce bool, log *slog.Logger, start time.Time, minResponse time.Duration) (key string, held, proceed bool) {
+	key, source := clientKey(r)
+	held = perIP.Reserve(key)
+	if !held {
+		log.WarnContext(r.Context(), "registration: limit reached",
+			slog.String("limit", "ip"), slog.String("key_source", source), slog.Bool("enforced", enforce))
+		if enforce {
+			if holdMinimum(r.Context(), log, "registration: signup timing", start, 0, minResponse) {
+				writeJSON(w, http.StatusAccepted, map[string]string{"status": "verification_pending"})
+			}
+			return key, held, false
+		}
+	}
+	return key, held, true
 }
 
 // registrationAnswers trims and validates the answers with tenancy.ProvisionHandler's rules and
@@ -244,7 +264,7 @@ func holdMinimum(ctx context.Context, log *slog.Logger, msg string, start time.T
 
 // VerifyHandler answers the confirm page's form POST by calling GoTrue's /verify, then redirects to siteURL.
 // The token is read from the form body only; any bad form redirects to the failure notice with no GoTrue call.
-func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink) http.Handler {
+func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Logger, sink ContactSink, store *HandoffStore) http.Handler {
 	if siteURL == nil {
 		return RegistrationNotConfigured()
 	}
@@ -267,20 +287,30 @@ func VerifyHandler(authURL, siteURL *url.URL, client *http.Client, log *slog.Log
 			return
 		}
 		var confirmed struct {
-			User gotrueUser `json:"user"`
+			AccessToken  string     `json:"access_token"`
+			RefreshToken string     `json:"refresh_token"`
+			User         gotrueUser `json:"user"`
 		}
-		status, _, err := postGoTrue(r, client, verify, map[string]string{"type": "signup", "token_hash": token}, &confirmed)
+		status, gt, err := postGoTrue(r, client, verify, map[string]string{"type": "signup", "token_hash": token}, &confirmed)
 		switch {
 		case err != nil:
 			log.WarnContext(r.Context(), "verify: gotrue unreachable", slog.String("error", err.Error()))
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 		case status != http.StatusOK:
-			log.WarnContext(r.Context(), "verify: gotrue refused the link", slog.Int("upstream_status", status))
+			log.WarnContext(r.Context(), "verify: gotrue refused the link", slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
 			http.Redirect(w, r, failed, http.StatusSeeOther)
 		default:
-			// ceiling: the session GoTrue issued is never delivered; any global sign-out or staff cut-off deletes it. Revisit when verifying should sign the user in.
 			handOffRegistrant(r.Context(), log, "verify", sink, confirmed.User.contact())
-			http.Redirect(w, r, verified, http.StatusSeeOther)
+			location := verified
+			if state := r.PostForm.Get("state"); stateShape.MatchString(state) && confirmed.AccessToken != "" && confirmed.RefreshToken != "" {
+				answer, _ := json.Marshal(map[string]string{"access_token": confirmed.AccessToken, "refresh_token": confirmed.RefreshToken}) // cannot fail
+				if code, ok := store.Put(string(answer), sha256.Sum256([]byte(state))); ok {
+					location = verified + "&handoff=" + code
+				} else {
+					log.WarnContext(r.Context(), "verify: hand-off store full")
+				}
+			}
+			http.Redirect(w, r, location, http.StatusSeeOther)
 		}
 	})
 }

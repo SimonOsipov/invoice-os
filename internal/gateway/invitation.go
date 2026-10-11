@@ -12,11 +12,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
 // InvitationPreview is what a token holder sees before signing in.
-type InvitationPreview struct{ Workspace, Role, Email string }
+type InvitationPreview struct{ Workspace, Role, Email, Account string }
 
 // ErrInvitationNotValid means the token names no live invite.
 var ErrInvitationNotValid = errors.New("gateway: invitation is not valid")
@@ -33,9 +34,16 @@ const (
 	maxPreviewResponseBytes  = 4 << 10
 	previewPath              = "internal/invitations/preview"
 	pendingPath              = "internal/invitations/pending"
-	msgInviteeFieldsRequired = "token is required"
 	claimRoute               = "internal/invitations/register"
 	releaseRoute             = "internal/invitations/release"
+	msgInviteeFieldsRequired = "token is required"
+	msgAccountExists         = "account_exists"
+	msgAccountUnconfirmed    = "account_unconfirmed"
+	msgAccountMissing        = "account_missing"
+	msgInviteTokenRequired   = "token is required"
+	msgResendUnavailable     = "invitation resend is unavailable"
+	// GoTrue's 60 s per-address mail cooldown; its instance-wide mail cap uses the same error_code with other wording.
+	msgResendCooldownPrefix = "For security purposes, you can only request this after "
 )
 
 // postTenancy posts payload to an internal tenancy route with the gateway token and no redirect.
@@ -93,13 +101,19 @@ func NewHTTPInvitationPreviewer(base *url.URL, client *http.Client, gatewayToken
 			Workspace string `json:"workspace"`
 			Role      string `json:"role"`
 			Email     string `json:"email"`
+			Account   string `json:"account"`
 		}
 		status, err := postTenancy(ctx, c, target, gatewayToken, "invitation preview", map[string]string{"token": token}, &out)
 		switch {
 		case err != nil:
 			return InvitationPreview{}, err
 		case status == http.StatusOK:
-			return InvitationPreview{Workspace: out.Workspace, Role: out.Role, Email: out.Email}, nil
+			switch out.Account {
+			case "none", "unconfirmed", "confirmed":
+			default:
+				out.Account = "unknown"
+			}
+			return InvitationPreview{Workspace: out.Workspace, Role: out.Role, Email: out.Email, Account: out.Account}, nil
 		case status == http.StatusNotFound:
 			return InvitationPreview{}, ErrInvitationNotValid
 		default:
@@ -155,7 +169,7 @@ func previewToken(w http.ResponseWriter, r *http.Request, preview InvitationPrev
 	return InvitationPreview{}, false
 }
 
-// InvitationHandler answers POST /auth/invitation with the workspace, role and address a live token names.
+// InvitationHandler answers POST /auth/invitation with the workspace, role, address and account state a live token names.
 func InvitationHandler(preview InvitationPreviewer, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
@@ -172,7 +186,7 @@ func InvitationHandler(preview InvitationPreviewer, log *slog.Logger) http.Handl
 		if !ok {
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"workspace": p.Workspace, "role": p.Role, "email": p.Email})
+		writeJSON(w, http.StatusOK, map[string]string{"workspace": p.Workspace, "role": p.Role, "email": p.Email, "account": p.Account})
 	})
 }
 
@@ -226,8 +240,8 @@ func NewHTTPInvitationRegistrations(base *url.URL, client *http.Client, gatewayT
 // InvitationRegisterHandler answers POST /auth/invitation/register: it signs the invited address up with GoTrue
 // under a password nobody keeps; the invitee chooses theirs from the confirmation mail.
 // The address comes from the claim, never from the body. A token backs one sign-up: a repeat answers 202 with no GoTrue call.
-// A first claim whose sign-up left no account is released after the answer.
-func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, registrations InvitationRegistrations) http.Handler {
+// A confirmed or unconfirmed preview is refused before the claim and the sign-up. A first claim whose sign-up left no account is released after the answer.
+func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minResponse time.Duration, perIP *SignInThrottle, enforce bool, log *slog.Logger, preview InvitationPreviewer, registrations InvitationRegistrations) http.Handler {
 	signup := authURL.JoinPath("signup").String()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {
@@ -253,6 +267,31 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 			writeError(w, http.StatusNotFound, msgInviteNotValid)
 			return
 		}
+		p, ok := previewToken(w, r, preview, log, in.Token)
+		if !ok {
+			return
+		}
+		refusal := ""
+		switch p.Account {
+		case "confirmed":
+			refusal = msgAccountExists
+		case "unconfirmed":
+			refusal = msgAccountUnconfirmed
+		}
+		if refusal != "" {
+			// Mails nobody, so the slot is refunded as on the GoTrue existing-account 409; the budget check and the floor stay.
+			key, held, proceed := reserveSignUp(w, r, perIP, enforce, log, start, minResponse)
+			if !proceed {
+				return
+			}
+			if held {
+				perIP.Refund(key)
+			}
+			if holdMinimum(r.Context(), log, "registration: signup timing", start, time.Since(start), minResponse) {
+				writeError(w, http.StatusConflict, refusal)
+			}
+			return
+		}
 		email, first, err := registrations.Claim(r.Context(), in.Token)
 		switch {
 		case errors.Is(err, ErrInvitationNotValid):
@@ -265,7 +304,7 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 		}
 		if !first {
 			// A repeat takes the same budget and floor, and mails nobody.
-			signUp(w, r, client, signup, nil, start, minResponse, perIP, enforce, log, func(context.Context) (bool, error) { return true, nil })
+			_ = signUp(w, r, client, signup, nil, start, minResponse, perIP, enforce, log, func(context.Context) (bool, error) { return true, nil }, nil)
 			return
 		}
 		pw := make([]byte, 32)
@@ -275,10 +314,92 @@ func InvitationRegisterHandler(authURL *url.URL, client *http.Client, minRespons
 			"password": base64.RawURLEncoding.EncodeToString(pw),
 			"data":     map[string]any{"invited": true},
 		}
-		if mayExist := signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log, nil); !mayExist {
+		exists := func() { writeError(w, http.StatusConflict, msgAccountExists) }
+		if mayExist := signUp(w, r, client, signup, body, start, minResponse, perIP, enforce, log, nil, exists); !mayExist {
 			if err := registrations.Release(context.WithoutCancel(r.Context()), in.Token); err != nil {
 				log.WarnContext(r.Context(), "invitation: release failed", slog.String("error", err.Error()))
 			}
 		}
+	})
+}
+
+// InvitationResendHandler answers POST /auth/invitation/resend. Unlike the anonymous resend it says whether GoTrue
+// mailed (sent), held on its cooldown (held) or could not tell (maybe); a GoTrue 4xx mails nothing, so its budget is refunded.
+func InvitationResendHandler(authURL *url.URL, client *http.Client, perAddress, perIP *SignInThrottle, enforce bool, log *slog.Logger, preview InvitationPreviewer) http.Handler {
+	endpoint := authURL.JoinPath("resend").String()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !postOnly(w, r) {
+			return
+		}
+		var in struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxExchangeBodyBytes)).Decode(&in); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if in.Token == "" {
+			writeError(w, http.StatusBadRequest, msgInviteTokenRequired)
+			return
+		}
+		p, ok := previewToken(w, r, preview, log, in.Token)
+		if !ok {
+			return
+		}
+		switch p.Account {
+		case "confirmed":
+			writeError(w, http.StatusConflict, msgAccountExists)
+			return
+		case "none":
+			writeError(w, http.StatusConflict, msgAccountMissing)
+			return
+		}
+
+		// IP first: a request refused for its IP spends no address count.
+		key, source := clientKey(r)
+		ipHeld := perIP.Reserve(key)
+		addrHeld := false
+		limited := func(limit string) {
+			log.WarnContext(r.Context(), "invitation-resend: limit reached",
+				slog.String("limit", limit), slog.String("key_source", source), slog.Bool("enforced", enforce))
+		}
+		if !ipHeld {
+			limited("ip")
+		} else if addrHeld = perAddress.Reserve(p.Email); !addrHeld {
+			limited("address")
+		}
+		if (!ipHeld || !addrHeld) && enforce {
+			writeError(w, http.StatusTooManyRequests, "too many requests")
+			return
+		}
+
+		status, gt, err := postGoTrue(r, client, endpoint, map[string]string{"type": "signup", "email": p.Email}, nil)
+		if err == nil && status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+			if ipHeld {
+				perIP.Refund(key)
+			}
+			if addrHeld {
+				perAddress.Refund(p.Email)
+			}
+		}
+		switch {
+		case err != nil:
+			log.WarnContext(r.Context(), "invitation-resend: gotrue unreachable", slog.String("error", err.Error()))
+		case status == http.StatusOK && p.Account == "unconfirmed":
+			writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
+			return
+		case status == http.StatusOK:
+			writeJSON(w, http.StatusOK, map[string]string{"status": "maybe"})
+			return
+		case status == http.StatusTooManyRequests && gt.ErrorCode == "over_email_send_rate_limit" && strings.HasPrefix(gt.Msg, msgResendCooldownPrefix):
+			writeJSON(w, http.StatusOK, map[string]string{"status": "held"})
+			return
+		case gt.ErrorCode == "over_email_send_rate_limit":
+			log.WarnContext(r.Context(), "invitation-resend: gotrue email send rate limit", slog.Int("upstream_status", status))
+		default:
+			log.WarnContext(r.Context(), "invitation-resend: gotrue resend failed",
+				slog.Int("upstream_status", status), slog.String("error_code", gt.ErrorCode))
+		}
+		writeError(w, http.StatusBadGateway, msgResendUnavailable)
 	})
 }

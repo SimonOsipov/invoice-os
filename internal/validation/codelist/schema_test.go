@@ -185,7 +185,7 @@ func TestSchema_AppCannotRewriteCodeOrList(t *testing.T) {
 	}
 }
 
-func TestSchema_SyncLogAppInsertsAndReadsStatusOnly(t *testing.T) {
+func TestSchema_SyncLogIsReadAndInsertOnlyForApp(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	list := newListName(t, super)
@@ -220,9 +220,21 @@ func TestSchema_SyncLogAppInsertsAndReadsStatusOnly(t *testing.T) {
 	if gotList != list || gotStatus != "held" || syncedAt.IsZero() {
 		t.Fatalf("app read (%q, %v, %q), want (%q, set, held)", gotList, syncedAt, gotStatus, list)
 	}
-	for _, col := range []string{"entry_count", "added", "removed", "changed"} {
-		_, err = app.Exec(ctx, `SELECT `+col+` FROM nrs_code_list_syncs WHERE id = $1::uuid`, id)
-		wantState(t, "app SELECT "+col, err, "42501")
+	var gotCount int
+	var gotAdded []string
+	if err := app.QueryRow(ctx,
+		`SELECT entry_count, added FROM nrs_code_list_syncs WHERE id = $1::uuid`, id).Scan(&gotCount, &gotAdded); err != nil {
+		t.Fatalf("app SELECT entry_count, added: %v", err)
+	}
+	if gotCount != 3 || len(gotAdded) != 2 {
+		t.Fatalf("app read (%d, %v), want (3, [A B])", gotCount, gotAdded)
+	}
+	if err := app.QueryRow(ctx,
+		`SELECT removed, changed FROM nrs_code_list_syncs WHERE id = $1::uuid`, heldID).Scan(&gotAdded, new([]string)); err != nil {
+		t.Fatalf("app SELECT removed, changed: %v", err)
+	}
+	if len(gotAdded) != 1 || gotAdded[0] != "A" {
+		t.Fatalf("app read held removed = %v, want [A]", gotAdded)
 	}
 	// WHERE false names no column, so only the UPDATE or DELETE privilege is checked, not SELECT.
 	_, err = app.Exec(ctx, `UPDATE nrs_code_list_syncs SET entry_count = 4 WHERE false`)

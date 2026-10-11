@@ -2106,4 +2106,19 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect((res.body as { error: string }).error).toBe("the violation is not on this invoice's last validation")
     })
   })
+
+  test.describe('supplier contact defaults', () => {
+    // internal/invoice/supplier_contact.go's DefaultSupplierContact: an absent key takes the company's value, a sent one wins.
+    test('an invoice takes the company supplier contact', async () => {
+      const tin = freshTin()
+      const email = `company-${tin}@example.com`
+      const own = await createEntity(token, { name: `ENGI-05 defaults ${tin}`, tin, email })
+      const fields = cleanInvoiceFields(`INV-ENGI05-DEF-${tin}`)
+      const bare = await createInvoice(token, { entity_id: own.id, ...fields })
+      expect((await getInvoice(token, bare.id)).supplier_email, 'an absent supplier_email takes the company value').toBe(email)
+      const sent = `sent-${tin}@example.com`
+      const withKey = await createInvoice(token, { entity_id: own.id, ...fields, invoice_number: `INV-ENGI05-KEY-${tin}`, supplier_email: sent })
+      expect((await getInvoice(token, withKey.id)).supplier_email, 'a sent supplier_email wins').toBe(sent)
+    })
+  })
 })

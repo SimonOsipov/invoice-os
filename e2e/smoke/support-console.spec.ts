@@ -6,8 +6,9 @@ import { seedStaffSession, test } from '../staffSession'
 // The Support Console, driven as the cross-tenant operator it is for (PERSONA-01-05,
 // Backlog task-274), on a seeded real staff session (staffSession.ts).
 //
-// THE RULES SCREEN IS REAL; THE OTHER SCREENS ARE MOCK. Rules reads GET /v1/staff/rules and
-// switches through PATCH (staff account with the rules role, staffSession.ts); every other screen
+// THE RULES SCREEN IS REAL; THE OTHER SCREENS ARE MOCK. Rules reads the versions list and a version's
+// rules, and switches, drafts, tests and publishes through /v1/staff (staff account with the rules
+// role, staffSession.ts); the sidebar's Rules button carries no badge. Every other screen
 // has no backend call, and the only other gateway calls are the session's renewal and sign-out
 // (packages/console-session). Assertions on those screens pin CLIENT-SIDE BEHAVIOUR over the
 // fixtures in src/data.tsx: not a contract test, and they say nothing about any server. Counts

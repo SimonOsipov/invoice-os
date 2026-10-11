@@ -2,6 +2,7 @@
 // envelope are observable. PATCH /v1/rules/{key} refuses every authenticated caller: 403
 // {error: "rules are managed by ASComply"}, whatever the body. The staff routes
 // (/v1/staff/rules) admit only a rules-role staff token.
+import { randomUUID } from 'node:crypto'
 import { test, expect } from '@playwright/test'
 import { login, provisionStaffAccount, rawFetch, signInSession, PERSONAS } from './client'
 import { assertErrorEnvelope } from './contract-helpers'
@@ -128,5 +129,184 @@ test.describe('staff rules (API E2E, over the deployed gateway)', () => {
     const res = await rawFetch(`/api/validation/v1/rules/${PROBE_RULE}`, { method: 'PATCH', headers: auth(rulesRole), body: { enabled: false } })
     assertErrorEnvelope(res, 403, 'legacy toggle with a rules-role staff token')
     expect(await probeEnabled(), 'probe still enabled').toBe(true)
+  })
+})
+
+const VERSIONS = '/api/validation/v1/staff/rule-versions'
+const DRAFT = `${VERSIONS}/draft`
+const SYNCS = '/api/validation/v1/staff/code-list-syncs'
+// The published version stays scheduled, so no invoice is judged by it; sealed versions cannot be deleted.
+const FAR_FUTURE = '3001-01-01'
+
+// The invoice of internal/validation/sample_invoice.json.
+const SAMPLE_INVOICE = {
+  invoice_number: 'INV-2026-000123',
+  issue_date: '2026-07-11',
+  currency: 'NGN',
+  supplier: { tin: '12345678-0001', name: 'Acme Nigeria Ltd' },
+  buyer: { tin: '87654321-0002', name: 'Buyer Ltd' },
+  subtotal: 1000.0,
+  vat: 75.0,
+  total: 1075.0,
+  line_items: [{ id: '1', description: 'Widget', quantity: 10.0, unit_price: 100.0, line_total: 1000.0 }],
+}
+
+type DeskVersion = { version: number; state: string }
+
+test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
+  let customer: string
+  let noRole: string
+  let rulesRole: string
+
+  test.beforeAll(async () => {
+    customer = await login(PERSONAS.A)
+    const plain = await provisionStaffAccount('desk-no-role')
+    noRole = (await signInSession(plain.email, plain.password)).access_token
+    const granted = await provisionStaffAccount('desk-rules', undefined, { rulesRole: true })
+    rulesRole = (await signInSession(granted.email, granted.password)).access_token
+  })
+
+  const auth = (token: string) => ({ Authorization: `Bearer ${token}` })
+  const get = (token: string, path: string) => rawFetch(path, { headers: auth(token) })
+  const send = (token: string, method: string, path: string, body?: unknown) => rawFetch(path, { method, headers: auth(token), body })
+
+  async function versions(): Promise<DeskVersion[]> {
+    const res = await get(rulesRole, VERSIONS)
+    expect(res.status, 'versions list').toBe(200)
+    return (res.body as { versions: DeskVersion[] }).versions
+  }
+  const inForce = async (): Promise<number> => {
+    const res = await get(rulesRole, STAFF_RULES)
+    expect(res.status, 'rules in force').toBe(200)
+    return (res.body as { version: number }).version
+  }
+  // A topology run or a retry may have left a draft; open one only when none exists.
+  async function draftNumber(): Promise<number> {
+    const found = (await versions()).find((v) => v.state === 'draft')
+    if (found) return found.version
+    const opened = await send(rulesRole, 'POST', DRAFT)
+    expect(opened.status, 'open a draft').toBe(201)
+    return (opened.body as { version: number }).version
+  }
+
+  const probeKey = `e2e-desk-${randomUUID().slice(0, 8)}`
+  const probeBody = (key: string) => ({
+    key,
+    type: 'required',
+    target: probeKey.replace(/-/g, '_'),
+    params: {},
+    severity: 'info',
+    when: null,
+    message: 'e2e desk probe',
+    enabled: true,
+  })
+  const probePut = { ...probeBody(probeKey), key: undefined }
+
+  const refusals: Array<{ name: string; token: () => string }> = [
+    { name: 'a customer token', token: () => customer },
+    { name: 'a staff token without the rules role', token: () => noRole },
+  ]
+
+  for (const who of refusals) {
+    test(`staff rules desk routes refuse ${who.name}`, async () => {
+      const t = who.token()
+      const routes: Array<[string, string, unknown?]> = [
+        ['GET', VERSIONS],
+        ['GET', `${STAFF_RULES}?version=4`],
+        ['GET', SYNCS],
+        ['POST', DRAFT],
+        ['POST', `${DRAFT}/rules`, probeBody(probeKey)],
+        ['PUT', `${DRAFT}/rules/${probeKey}`, probePut],
+        ['DELETE', `${DRAFT}/rules/${probeKey}`],
+        ['POST', `${DRAFT}/publish`, { effective_from: FAR_FUTURE }],
+        ['POST', `${DRAFT}/test`, { invoice: {} }],
+      ]
+      for (const [method, path, body] of routes) {
+        assertErrorEnvelope(await send(t, method, path, body), 403, `${method} ${path} with ${who.name}`)
+      }
+    })
+  }
+
+  test('the versions list has one version in force', async () => {
+    const list = await versions()
+    const forced = list.filter((v) => v.state === 'in_force')
+    expect(forced, 'exactly one version in force').toHaveLength(1)
+    expect(forced[0].version, 'the list agrees with GET rules').toBe(await inForce())
+
+    const other = list.find((v) => v.state !== 'in_force')
+    expect(other, 'another listed version').toBeDefined()
+    const res = await get(rulesRole, `${STAFF_RULES}?version=${other!.version}`)
+    expect(res.status, 'rules of another version').toBe(200)
+    expect(res.body).toMatchObject({ version: other!.version })
+  })
+
+  test('a rules-role staff member drafts and tests a rule', async () => {
+    const draft = await draftNumber()
+    const rules = `${DRAFT}/rules`
+
+    const added = await send(rulesRole, 'POST', rules, probeBody(probeKey))
+    expect(added.status, 'add the probe').toBe(201)
+    expect(added.body).toMatchObject({ key: probeKey, rule_set_version: draft })
+    assertErrorEnvelope(await send(rulesRole, 'POST', rules, probeBody(probeKey)), 409, 'add the probe twice')
+
+    const read = await get(rulesRole, `${STAFF_RULES}?version=${draft}`)
+    expect(read.status, 'rules of the draft').toBe(200)
+    expect((read.body as { rules: StaffRule[] }).rules.map((r) => r.key), 'the draft holds the probe').toContain(probeKey)
+
+    assertErrorEnvelope(await send(rulesRole, 'POST', DRAFT), 409, 'open a second draft')
+
+    const sample = SAMPLE_INVOICE
+    const test = await send(rulesRole, 'POST', `${DRAFT}/test`, { invoice: sample })
+    expect(test.status, 'test the draft').toBe(200)
+    const sides = test.body as { draft: { error: string | null; violations: Array<{ rule_key: string }> }; in_force: { violations: Array<{ rule_key: string }> } }
+    expect(sides.draft.error, 'the draft evaluates').toBeNull()
+    expect(sides.draft.violations.map((v) => v.rule_key), 'the probe fires in the draft').toContain(probeKey)
+    expect(sides.in_force.violations.map((v) => v.rule_key), 'the probe is absent from the version in force').not.toContain(probeKey)
+
+    const removed = await send(rulesRole, 'DELETE', `${rules}/${probeKey}`)
+    expect(removed.status, 'remove the probe').toBe(200)
+    expect(removed.body).toMatchObject({ key: probeKey })
+    expect((await send(rulesRole, 'POST', rules, probeBody(probeKey))).status, 're-add the probe').toBe(201)
+  })
+
+  test('publishing seals the draft with a future start date', async () => {
+    const draft = await draftNumber()
+    const forceBefore = await inForce()
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+    const publish = (effective_from: string) => send(rulesRole, 'POST', `${DRAFT}/publish`, { effective_from })
+
+    assertErrorEnvelope(await publish(yesterday), 400, 'publish with yesterday')
+    expect((await versions()).find((v) => v.version === draft)?.state, 'a refused publish leaves the draft').toBe('draft')
+
+    // Publishing seals whatever the draft holds, so no rule list is asserted.
+    const published = await publish(FAR_FUTURE)
+    expect(published.status, 'publish').toBe(200)
+    const sealed = (published.body as { version: number }).version
+    expect(published.body).toMatchObject({ version: draft, effective_from: FAR_FUTURE })
+
+    const list = await versions()
+    expect(list.find((v) => v.version === sealed)?.state, 'the published version').toBe('scheduled')
+    expect(list.filter((v) => v.state === 'in_force'), 'one version in force').toHaveLength(1)
+    expect(await inForce(), 'the version in force is unchanged').toBe(forceBefore)
+
+    const put = await send(rulesRole, 'PUT', `${DRAFT}/rules/${probeKey}`, probePut)
+    assertErrorEnvelope(put, 404, 'edit with no draft')
+    expect(put.body).toEqual({ error: 'no draft' })
+  })
+
+  test('the sync log is readable by rules staff', async () => {
+    const summary = await get(rulesRole, SYNCS)
+    expect(summary.status, 'sync summary').toBe(200)
+    const lists = (summary.body as { lists: Array<{ list: string }> }).lists
+    expect(Array.isArray(lists), 'lists is an array').toBe(true)
+    for (const { list } of lists) {
+      const detail = await get(rulesRole, `${SYNCS}?list=${encodeURIComponent(list)}`)
+      expect(detail.status, `detail of ${list}`).toBe(200)
+      const syncs = (detail.body as { syncs: Array<{ added: unknown; removed: unknown; changed: unknown }> }).syncs
+      expect(Array.isArray(syncs), `${list} syncs is an array`).toBe(true)
+      for (const s of syncs) {
+        expect([Array.isArray(s.added), Array.isArray(s.removed), Array.isArray(s.changed)], `${list} code arrays`).toEqual([true, true, true])
+      }
+    }
   })
 })

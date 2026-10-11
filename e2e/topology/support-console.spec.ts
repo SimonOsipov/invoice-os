@@ -1,6 +1,7 @@
 // The deployed v2 Support Console. The Rules screen reads and switches real rules; every other screen is mock-backed, so those pin fixture behaviour and the v2 look, not a contract.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
+import { randomUUID } from 'node:crypto'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { provisionStaffAccount, rawFetch, signInSession, type StaffAccount } from '../api/client'
 import { collectErrors } from '../personaSession'
@@ -1129,6 +1130,63 @@ test('SUP-06 rule drawer holds long content', async ({ page }) => {
   expect(enclosesRect(dBox, json, 1), 'the JSON block sits inside the drawer').toBe(true)
 
   noErrors(errors, 'SUP-06 rule drawer holds long content')
+})
+
+// Never publishes: the API contract suite owns the one real publish. The draft is global, so a
+// draft left by an earlier run or retry is reused and the unique rule key keeps this run's rows apart.
+test('SUP-06 rules desk: versions, draft edit, test and publish confirm', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const mn = mainOf(page)
+  const key = `e2e-desk-ui-${randomUUID().slice(0, 8)}`
+  await openScreen(page, 'Rules', 'Rules admin')
+  await expect(mn.locator('[role="switch"]').first()).toBeVisible()
+
+  const rows = mn.locator(`.ops-rules-grid ${RAIL_ROWS}`)
+  await expect(rows.filter({ hasText: 'IN FORCE' }), 'one version in force').toHaveCount(1)
+
+  const other = rows.filter({ hasNotText: 'IN FORCE' }).filter({ hasNotText: 'DRAFT' }).filter({ hasNotText: '· 0 rules' }).first()
+  await other.click()
+  const switches = mn.locator('[role="switch"]')
+  await expect(switches.first(), 'switches are locked off the version in force').toBeDisabled()
+  await expect(switches.last()).toBeDisabled()
+
+  const newDraft = mn.getByRole('button', { name: 'New draft' })
+  if (await newDraft.isEnabled()) await newDraft.click()
+  await rows.filter({ hasText: 'DRAFT' }).click()
+  const addRule = mn.getByRole('button', { name: 'Add rule' })
+  await expect(addRule, 'the draft is selected').toBeVisible()
+
+  await addRule.click()
+  const drawer = page.locator('.ops-drawer')
+  await drawer.getByLabel('Key', { exact: true }).fill(key)
+  await drawer.getByLabel('Severity', { exact: true }).selectOption('info')
+  await drawer.getByLabel('Target', { exact: true }).fill(key.replace(/-/g, '_'))
+  await drawer.getByLabel('Message', { exact: true }).fill('e2e desk journey')
+  await drawer.getByRole('button', { name: 'Save to draft' }).click()
+  await expect(drawer, 'saving closes the drawer').toBeHidden()
+  await expect(mn.getByText(key, { exact: true }), 'the rule is in the draft table').toBeVisible()
+
+  await mn.getByRole('button', { name: 'Test draft' }).click()
+  const testDlg = page.getByRole('dialog').filter({ hasText: 'Sample invoice' })
+  await testDlg.getByRole('button', { name: 'Run test' }).click()
+  const draftCol = parent(testDlg.getByText(/^Draft v\d+$/))
+  const forceCol = parent(testDlg.getByText(/^In force v\d+$/))
+  await expect(draftCol.getByText(key), 'the rule fires in the Draft column').toBeVisible()
+  await expect(forceCol.getByText(key), 'the rule is not in the In force column').toHaveCount(0)
+  await testDlg.getByRole('button', { name: 'Cancel' }).click()
+  await expect(testDlg).toBeHidden()
+
+  await mn.getByRole('button', { name: /^Publish draft v\d+$/ }).click()
+  const publish = page.getByRole('dialog').filter({ hasText: 'Publish draft → v' })
+  const diffRow = parent(parent(publish.getByText(key, { exact: true })))
+  await expect(diffRow, 'the diff lists the rule as added').toContainText('ADDED')
+  await expect(publish.getByLabel('Start date')).toHaveValue('')
+  await expect(publish.getByRole('button', { name: /Publish v\d+$/ }), 'no date, no publish').toBeDisabled()
+  await publish.getByRole('button', { name: 'Cancel' }).click()
+  await expect(publish, 'Cancel closes the modal').toBeHidden()
+
+  noErrors(errors, 'SUP-06 rules desk journey')
 })
 
 const DRAFT_ROW = `.ops-rules-grid ${RAIL_ROWS}`

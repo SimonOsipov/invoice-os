@@ -256,8 +256,11 @@ function amberButton(container: HTMLElement): HTMLButtonElement {
   return buttons[0] as HTMLButtonElement
 }
 
+// Found by its body, not its button: a non-admin's panel has no button.
 function amberPanel(container: HTMLElement): HTMLElement {
-  return amberButton(container).parentElement as HTMLElement
+  const body = Array.from(container.querySelectorAll('p')).find((p) => p.textContent === BODY)
+  expect(body, 'the no-entity panel did not render').toBeTruthy()
+  return body?.parentElement as HTMLElement
 }
 
 // The footnote is the last <p> on the step; it renders only alongside the panel.

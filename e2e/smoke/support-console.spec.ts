@@ -64,9 +64,7 @@ const heading = (page: Page) => page.getByRole('heading', { level: 1 })
 const chips = (page: Page) => page.getByRole('main').locator('button.ops-chip')
 const rows = (page: Page) => page.getByRole('main').locator('.ops-row')
 
-// The sidebar's dead-letter badge. Scoped to the Submissions button on purpose: the Rules
-// button carries a `.mono` badge of its own (the learned-rules inbox, Sidebar.tsx:87), so an
-// unscoped badge locator would resolve to two elements. It is not rendered at all when the
+// The sidebar's dead-letter badge, scoped to the Submissions button. It is not rendered at all when the
 // count is zero, which is what makes `toHaveCount(0)` a real post-condition rather than a
 // text comparison. `{ name: 'Submissions' }` matches by substring, so it still finds the
 // button when the badge has widened its accessible name to "Submissions 2".

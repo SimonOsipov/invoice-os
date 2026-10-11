@@ -13,7 +13,8 @@ import { Sidebar } from './components/Sidebar'
 import { Badge } from './components/StatusBadge'
 import { Toast } from './components/Toast'
 import { TopBar } from './components/TopBar'
-import { AUDIT_ENTRIES, DIFF_ROWS, NAV_ITEMS, SEED_JOBS, SEED_RULES } from './data'
+import { AUDIT_ENTRIES, DIFF_ROWS, NAV_ITEMS, SEED_JOBS } from './data'
+import { SEED_RULES } from './rulesFixture'
 import type { Env, Screen } from './types'
 
 // SSR markup is the oracle: jsdom drops backdrop-filter and Chromium aliases the prefixed one.
@@ -229,8 +230,8 @@ describe('v2 shell', () => {
     const badges = withClass(ts, 'mono').filter((t) => /^\d+$/.test(t.text))
     expect(
       badges.map((t) => t.text),
-      'the Submissions and Rules badges',
-    ).toEqual(['2', '3'])
+      'the Submissions badge only',
+    ).toEqual(['2'])
     for (const b of badges) {
       expect.soft(style(b)['border-radius'], `badge ${b.text} radius`).toBe('var(--radius-sm)')
       expect.soft(classes(b), `badge ${b.text} keeps .mono`).toContain('mono')
@@ -289,10 +290,7 @@ describe('v2 shell', () => {
   it('SH-07 the modal and drawer bodies carry v2 weights, corners and Q3 text', () => {
     const kill = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'line.qty.range', action: 'disable', busy: false, onClose: noop, onConfirm: noop }))
     const publish = renderToStaticMarkup(createElement(PublishModal, { onClose: noop, onConfirm: noop }))
-    const rule = (testRan: boolean) =>
-      renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], testRan, onRunTest: noop, busy: false, onKill: noop, onClose: noop }))
-    const idle = rule(false)
-    const ran = rule(true)
+    const idle = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: true, busy: false, onKill: noop, onClose: noop }))
     const job = renderToStaticMarkup(
       createElement(JobDrawer, {
         job: SEED_JOBS[0],
@@ -322,11 +320,6 @@ describe('v2 shell', () => {
     expect(tile, 'one kill icon tile').toHaveLength(1)
     expect.soft(style(tile[0])['border-radius'], 'kill icon tile radius').toBe('var(--radius-md)')
 
-    expect(ran, 'testRan renders the passed text').toContain('Rule passed')
-    const passed = parse(ran).filter((t) => style(t).background === 'var(--status-green-bg)')
-    expect(passed, 'one passed box').toHaveLength(1)
-    expect.soft(style(passed[0])['border-radius'], 'Rule passed box radius').toBe('var(--radius-md)')
-
     const disable = buttonByText(kill, 'Disable rule')
     expect.soft(style(disable).color, 'Disable rule colour').toBe('var(--primary-foreground)')
     expect.soft(style(disable)['border-radius'], 'Disable rule radius').toBe('var(--radius-btn)')
@@ -334,13 +327,6 @@ describe('v2 shell', () => {
     const cancel = buttonByText(job, 'Cancel')
     expect.soft(style(cancel)['border-radius'], 'Cancel radius').toBe('var(--radius-btn)')
     expect.soft(style(cancel)['font-weight'], 'Cancel weight').toBe('600')
-
-    const run = buttonByText(idle, 'Run test')
-    expect(style(run).height, 'Run test keeps its inline height').toBe('28px')
-    expect.soft(classes(run), 'Run test classes').toEqual(expect.arrayContaining(['ops-btn', 'v2-btn', 'v2-btn-primary']))
-    expect.soft(Object.keys(style(run)), 'Run test inline border-radius').not.toContain('border-radius')
-
-    expect.soft(style(withText(parse(idle), 'No test run yet.')).color, 'No test run yet. colour').toBe('var(--fg-3)')
 
     const jobTags = parse(job)
     const steps = jobTags.filter((t) => style(t).width === '11px' && style(t).height === '11px')
@@ -392,18 +378,16 @@ describe('v2 shell', () => {
         onToggleReq: noop, onToggleRes: noop, onClose: noop, onReDrive: noop, onRePoll: noop, onCancel: noop,
       }),
     )
-    const rule = (testRan: boolean) =>
-      renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], testRan, onRunTest: noop, busy: false, onKill: noop, onClose: noop }))
+    const rule = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: true, busy: false, onKill: noop, onClose: noop }))
     const audit = (env: Env) =>
       renderToStaticMarkup(createElement(AuditDrawer, { entry: AUDIT_ENTRIES[0], env, onClose: noop, onCopy: noop, onExport: noop }))
     const drawers = {
       job,
-      'rule idle': rule(false),
-      'rule passed': rule(true),
+      rule,
       'audit sandbox': audit('sandbox'),
       'audit live': audit('live'),
     }
-    const widths = { job: '560px', 'rule idle': '580px', 'rule passed': '580px', 'audit sandbox': '560px', 'audit live': '560px' } as const
+    const widths = { job: '560px', rule: '580px', 'audit sandbox': '560px', 'audit live': '560px' } as const
     for (const [name, html] of Object.entries(drawers)) {
       const ts = parse(html)
       expect(ts.length, `${name}: markup parsed`).toBeGreaterThan(4)
@@ -418,7 +402,8 @@ describe('v2 shell', () => {
       expect.soft(html, `${name}: markup holds oklch`).not.toContain('oklch')
       expect.soft(style(buttonByText(html, ''))['border-radius'], `${name}: close radius`).toBe('var(--radius-btn)')
       const cards = ts.filter((t) => style(t)['border-radius'] === 'var(--radius-md)')
-      expect(cards.length, `${name}: bodies carry md cards`).toBeGreaterThan(0)
+      // The rule drawer's only card was the mock test box; its JSON block takes its corner from CSS.
+      if (name !== 'rule') expect(cards.length, `${name}: bodies carry md cards`).toBeGreaterThan(0)
       expect.soft(
         ts.map((t) => style(t)['border-radius']).filter((v): v is string => v !== undefined && V1_CORNER.test(v)),
         `${name}: v1 corners`,
@@ -434,10 +419,7 @@ describe('v2 shell', () => {
     const retry = parse(job).filter((t) => style(t).padding === '13px 14px')
     expect(retry, 'job: retry and poll cards').toHaveLength(2)
     for (const c of retry) expect.soft(style(c)['border-radius'], 'job card radius').toBe('var(--radius-md)')
-    const testCard = parse(drawers['rule idle']).filter((t) => style(t).overflow === 'hidden' && style(t).background === 'var(--bg-2)')
-    expect(testCard, 'rule: the sample-test card').toHaveLength(1)
-    expect.soft(style(testCard[0])['border-radius'], 'rule test card radius').toBe('var(--radius-md)')
-    const chip = withText(parse(drawers['rule idle']), SEED_RULES[0].type)
+    const chip = withText(parse(drawers.rule), SEED_RULES[0].type)
     expect.soft(style(chip)['border-radius'], 'rule type chip radius').toBe('var(--radius-sm)')
     const hash = parse(drawers['audit sandbox']).filter((t) => style(t).padding === '12px 14px' && style(t).border === '1px solid var(--line-1)')
     expect(hash, 'audit: the hash card').toHaveLength(1)
@@ -525,9 +507,22 @@ describe('v2 shell', () => {
 
   it('RuleDrawer offers Kill-switch only while the rule is enabled', () => {
     const drawer = (enabled: boolean) =>
-      renderToStaticMarkup(createElement(RuleDrawer, { rule: { ...SEED_RULES[0], enabled }, testRan: false, onRunTest: noop, busy: false, onKill: noop, onClose: noop }))
+      renderToStaticMarkup(createElement(RuleDrawer, { rule: { ...SEED_RULES[0], enabled }, inForce: true, busy: false, onKill: noop, onClose: noop }))
     expect(drawer(true)).toContain('Kill-switch')
     expect(drawer(false)).not.toContain('Kill-switch')
+    const other = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: false, busy: false, onKill: noop, onClose: noop }))
+    expect(other, 'a version not in force offers no Kill-switch').not.toContain('Kill-switch')
+  })
+
+  it('RuleDrawer shows real params and when', () => {
+    const html = renderToStaticMarkup(
+      createElement(RuleDrawer, { rule: { ...SEED_RULES[0], params: { min: 0 }, when: 'has(invoice.x)' }, inForce: true, busy: false, onKill: noop, onClose: noop }),
+    )
+    for (const want of ['min', 'has(invoice.x)', 'Underlying rule JSON']) expect(html).toContain(want)
+    expect(html).toContain('&quot;min&quot;: 0')
+    for (const gone of ['Run test', 'Rule passed', 'Save to draft', 'No test run yet.']) expect(html).not.toContain(gone)
+    const bare = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: true, busy: false, onKill: noop, onClose: noop }))
+    expect(bare, 'no When row when unset').not.toContain('>When<')
   })
 
   it('TopBar banners no longer call rule switches simulated', () => {

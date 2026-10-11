@@ -14,7 +14,7 @@ import { PublishModal } from './components/PublishModal'
 import { Toast } from './components/Toast'
 import { AUDIT_ENTRIES, SEED_JOBS } from './data'
 import { gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
-import { fetchRulesInForce, switchRule, type RulesInForce } from './rulesApi'
+import { fetchRules, fetchVersions, switchRule, type RuleVersion, type RulesInForce } from './rulesApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, landingBase, signOut } from './auth'
 import type { AuditFilter, DrawerState, Env, JobFilter, Screen, SubTab, ToastState, ToastTone } from './types'
@@ -43,7 +43,7 @@ function Console() {
   const [confirmKill, setConfirmKill] = useState<{ key: string; action: 'disable' | 'enable' } | null>(null)
   const [switching, setSwitching] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
-  const [testRan, setTestRan] = useState(false)
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
   const [auditQuery, setAuditQuery] = useState('')
   const [auditFilter, setAuditFilter] = useState<AuditFilter>('all')
   const [tenantQuery, setTenantQuery] = useState('')
@@ -58,8 +58,10 @@ function Console() {
     toastTimer.current = setTimeout(() => setToast(null), 3400)
   }, [])
 
-  // Read when the Rules screen opens, never on console mount.
-  const rulesRead = useAsync(fetchRulesInForce, { immediate: screen === 'rules', deps: [screen === 'rules'] })
+  // Read when the Rules screen opens, never on console mount. selectedVersion null = the version in force.
+  const onRules = screen === 'rules'
+  const versionsRead = useAsync(fetchVersions, { immediate: onRules, deps: [onRules] })
+  const rulesRead = useAsync(() => fetchRules(selectedVersion ?? undefined), { immediate: onRules, deps: [onRules, selectedVersion] })
   const lastList = useRef<RulesInForce | null>(null)
   if (rulesRead.data) lastList.current = rulesRead.data
   const list = rulesRead.data ?? (rulesRead.status === 'error' ? null : lastList.current)
@@ -67,7 +69,14 @@ function Console() {
   const rulesStatus = rulesRead.status === 'error' ? (rulesRead.error?.status === 403 ? 'forbidden' : 'error') : list ? 'ready' : 'loading'
   const rulesBusy = switching || rulesRead.status === 'loading'
   const switchInFlight = useRef(false)
-  const expired = rulesRead.status === 'error' && rulesRead.error?.status === 401
+  const lastVersions = useRef<RuleVersion[]>([])
+  if (versionsRead.data) lastVersions.current = versionsRead.data.versions
+  const versions = lastVersions.current
+  const inForceVersion = versions.find((v) => v.state === 'in_force')
+  const listState = versions.find((v) => v.version === list?.version)?.state ?? (selectedVersion === null && list ? 'in_force' : null)
+  const switchable = listState === 'in_force'
+  const versionsNote = versionsRead.status === 'error' ? (versionsRead.error?.message ?? 'Versions unavailable') : 'Loading versions…'
+  const expired = rulesRead.error?.status === 401 || versionsRead.error?.status === 401
   useEffect(() => {
     if (expired) void signOut()
   }, [expired])
@@ -106,10 +115,10 @@ function Console() {
   // ---- rule actions ----
   const toggleRule = (key: string) => {
     const rule = rules.find((r) => r.key === key)
-    if (rule && !rulesBusy) setConfirmKill({ key, action: rule.enabled ? 'disable' : 'enable' })
+    if (rule && !rulesBusy && switchable) setConfirmKill({ key, action: rule.enabled ? 'disable' : 'enable' })
   }
   const doSwitch = async (reason: string) => {
-    if (!confirmKill || rulesBusy || switchInFlight.current) return
+    if (!confirmKill || rulesBusy || !switchable || switchInFlight.current) return
     const { key, action } = confirmKill
     switchInFlight.current = true
     setSwitching(true)
@@ -134,6 +143,11 @@ function Console() {
       switchInFlight.current = false
       setSwitching(false)
     }
+  }
+
+  const selectVersion = (v: RuleVersion) => {
+    setSelectedVersion(v.state === 'in_force' ? null : v.version)
+    setDrawer(null)
   }
 
   // ---- resolve open drawer entities ----
@@ -177,15 +191,16 @@ function Console() {
               status={rulesStatus}
               errorText={rulesRead.error?.message}
               version={list?.version ?? null}
+              state={listState}
+              versions={versions}
+              versionsNote={versionsNote}
+              selected={selectedVersion ?? inForceVersion?.version ?? null}
+              onSelectVersion={selectVersion}
               busy={rulesBusy}
               onRetry={rulesRead.run}
-              onOpenRule={(key) => {
-                setDrawer({ type: 'rule', id: key })
-                setTestRan(false)
-              }}
+              onOpenRule={(key) => setDrawer({ type: 'rule', id: key })}
               onToggleRule={toggleRule}
               onPublish={() => setPublishOpen(true)}
-              onPromote={(key) => showToast('Promoted ' + key + ' to draft v9', 'RULES')}
             />
           )}
           {screen === 'audit' && (
@@ -229,8 +244,7 @@ function Console() {
       {drawerRule && (
         <RuleDrawer
           rule={drawerRule}
-          testRan={testRan}
-          onRunTest={() => setTestRan(true)}
+          inForce={switchable}
           busy={rulesBusy}
           onKill={() => setConfirmKill({ key: drawerRule.key, action: 'disable' })}
           onClose={() => setDrawer(null)}

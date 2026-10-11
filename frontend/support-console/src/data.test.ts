@@ -1,6 +1,9 @@
 // Specs for the audit filter and the health-card derivation, run over the mock dataset.
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import * as data from './data'
 import { AUDIT_ENTRIES, healthCards } from './data'
 import { filterAudit } from './components/Audit'
 
@@ -56,5 +59,21 @@ describe('healthCards', () => {
     expect(clear?.value).toBe('0')
     expect(clear?.status).toBe('CLEAR')
     expect(clear?.tone).toBe('green')
+  })
+})
+
+describe('Rules admin mock data', () => {
+  it('no Rules admin mock data remains', () => {
+    for (const name of ['RULE_SET_VERSIONS', 'LEARNED_RULES', 'RULE_PARAMS', 'SEED_RULES']) expect(Object.keys(data), name).not.toContain(name)
+  })
+
+  it('rulesFixture is imported only by tests', () => {
+    const files = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name)] : []))
+    const all = files(__dirname).filter((f) => !f.endsWith('data.test.ts'))
+    const isTest = (f: string) => /\.test\.tsx?$/.test(f)
+    const naming = all.filter((f) => !f.endsWith('rulesFixture.ts') && readFileSync(f, 'utf8').includes('rulesFixture'))
+    expect(naming.filter((f) => !isTest(f))).toEqual([])
+    expect(naming.filter(isTest).length).toBeGreaterThan(0)
   })
 })

@@ -1,7 +1,8 @@
 // Mock data for the Support Console, ported from the prototype's seed/static methods
 // (Support Console.dc.html:741-767 and 1189-1245).
 //
-// ALL OF IT IS FICTION. This console reads across every tenant, and no such read path
+// Rules admin reads real data (rulesApi.ts); the rest of this file is fiction.
+// This console reads across every tenant, and no such read path
 // exists yet — the gateway refuses any token without a tenant except on
 // POST /api/tenancy/v1/workspaces (internal/gateway/gateway.go `authorize()`), and the three database roles are all RLS-bound. Wiring these
 // screens to real data needs an operator identity and a cross-tenant read path, which is
@@ -13,11 +14,8 @@ import type {
   DiffRow,
   HealthCard,
   Job,
-  LearnedRule,
   NavItem,
   ReconRow,
-  Rule,
-  RuleSetVersion,
   Screen,
   Tenant,
 } from './types'
@@ -46,9 +44,6 @@ export const REDRIVE_ICON = (
 )
 export const PUBLISH_ICON = <Icon paths={['M12 19V5', 'm5 12 7-7 7 7']} size={15} />
 export const KILL_ICON = <Icon paths={['M18.36 6.64a9 9 0 1 1-12.73 0', 'M12 2v10']} size={15} />
-export const SPARK_ICON = (
-  <Icon paths={['M12 3 14.09 8.26 20 9.27l-4 3.64L17.18 19 12 16.1 6.82 19 8 12.91l-4-3.64 5.91-1.01z']} size={15} />
-)
 export const COPY_ICON = (
   <Icon
     paths={[
@@ -135,34 +130,6 @@ export const RECON_ROWS: ReconRow[] = [
 
 // ---------- rules ----------
 
-// proto:757. Eight rules from the NG-MBS set, one per rule TYPE, so the drawer's
-// parameter form has a case to render for each.
-export const SEED_RULES: Rule[] = [
-  { key: 'buyer.tin.required', type: 'required', field: 'buyer.tin', severity: 'error', scope: 'global', enabled: true, message: 'Buyer TIN is mandatory' },
-  { key: 'buyer.tin.format', type: 'format-regex', field: 'buyer.tin', severity: 'error', scope: 'global', enabled: true, message: 'TIN must match NNNNNNNN-NNNN' },
-  { key: 'vat.rate.taxmath', type: 'tax_math', field: 'lines[].vat', severity: 'error', scope: 'global', enabled: true, message: 'VAT must equal 7.5% of line net' },
-  { key: 'wht.services.crossfield', type: 'cross_field', field: 'lines[].wht', severity: 'warn', scope: 'global', enabled: true, message: 'WHT expected on service lines' },
-  { key: 'currency.enum', type: 'enum', field: 'header.currency', severity: 'error', scope: 'global', enabled: true, message: 'Currency must be NGN, USD or EUR' },
-  { key: 'invoice.no.unique', type: 'expression-CEL', field: 'header.invoice_no', severity: 'error', scope: 'global', enabled: true, message: 'Invoice number must be unique per seller' },
-  { key: 'issue.date.sequence', type: 'date_rule', field: 'header.issue_date', severity: 'warn', scope: 'tenant-override', enabled: true, message: 'Issue date must not precede prior invoice' },
-  { key: 'line.qty.range', type: 'range', field: 'lines[].qty', severity: 'info', scope: 'global', enabled: false, message: 'Quantity outside expected range' },
-]
-
-// proto:917.
-export const RULE_SET_VERSIONS: RuleSetVersion[] = [
-  { version: 'v9 · draft', meta: 'editing · 3 changes', tag: 'DRAFT', kind: 'draft' },
-  { version: 'v8', meta: 'eff. 2026-06-01 · 42 rules', tag: 'ACTIVE', kind: 'active' },
-  { version: 'v7', meta: 'eff. 2026-04-15 · 40 rules', tag: 'ARCHIVED', kind: 'arch' },
-  { version: 'v6', meta: 'eff. 2026-02-01 · 38 rules', tag: 'ARCHIVED', kind: 'arch' },
-]
-
-// proto:928. Candidate rules inferred from recurring rejection codes, awaiting promotion.
-export const LEARNED_RULES: LearnedRule[] = [
-  { key: 'buyer.email.format', source: 'Derived from 47 MBS-419 rejections this week' },
-  { key: 'lines[].hsn.required', source: 'Derived from 23 MBS-431 rejections' },
-  { key: 'fx.rate.range', source: 'Derived from 11 USD invoice anomalies' },
-]
-
 // proto:1237. The publish-diff between draft v9 and active v8.
 export const DIFF_ROWS: DiffRow[] = [
   { sign: '+', key: 'buyer.email.format', detail: 'format-regex · warn · from learned inbox', tag: 'ADDED', kind: 'added' },
@@ -171,31 +138,6 @@ export const DIFF_ROWS: DiffRow[] = [
   { sign: '~', key: 'vat.rate.taxmath', detail: 'tolerance ±0.01 → ±0.005 NGN', tag: 'CHANGED', kind: 'changed' },
   { sign: '−', key: 'line.qty.range', detail: 'disabled rule removed from set', tag: 'REMOVED', kind: 'removed' },
 ]
-
-// proto:1170. Rule parameters, keyed by rule type — the drawer's read-only param form.
-export const RULE_PARAMS: Record<string, { label: string; value: string }[]> = {
-  tax_math: [
-    { label: 'Operation', value: 'multiply' },
-    { label: 'Operand (rate)', value: '0.075' },
-    { label: 'Tolerance', value: '±0.01 NGN' },
-  ],
-  'format-regex': [
-    { label: 'Pattern', value: '^\\d{8}-\\d{4}$' },
-    { label: 'Flags', value: 'none' },
-  ],
-  required: [{ label: 'Applies when', value: 'always' }],
-  enum: [{ label: 'Allowed values', value: 'NGN, USD, EUR' }],
-  range: [
-    { label: 'Min', value: '1' },
-    { label: 'Max', value: '100000' },
-  ],
-  cross_field: [
-    { label: 'When', value: 'line.type == "service"' },
-    { label: 'Require', value: 'line.wht > 0' },
-  ],
-  date_rule: [{ label: 'Constraint', value: 'issue_date >= prev.issue_date' }],
-  'expression-CEL': [{ label: 'CEL', value: 'unique(invoice_no, seller_tin)' }],
-}
 
 // ---------- audit ----------
 

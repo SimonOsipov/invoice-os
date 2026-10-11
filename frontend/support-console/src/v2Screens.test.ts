@@ -7,7 +7,9 @@ import { Health } from './components/Health'
 import { Rules } from './components/Rules'
 import { Submissions } from './components/Submissions'
 import { Tenants } from './components/Tenants'
-import { AUDIT_ENTRIES, AUDIT_FILTERS, JOB_FILTERS, LEARNED_RULES, RECON_ROWS, RULE_SET_VERSIONS, SEED_JOBS, SEED_RULES, TENANTS, healthCards } from './data'
+import { AUDIT_ENTRIES, AUDIT_FILTERS, JOB_FILTERS, RECON_ROWS, SEED_JOBS, TENANTS, healthCards } from './data'
+import { SEED_RULES } from './rulesFixture'
+import type { RuleVersion } from './rulesApi'
 import type { AuditFilter, Job } from './types'
 
 // SSR markup is the oracle for inline values; the resolved look is SUP-03 (deploy gate).
@@ -64,16 +66,23 @@ const submissionsFiltered = (filter: Parameters<typeof Submissions>[0]['filter']
     createElement(Submissions, { jobs, filter, subTab: 'jobs', onFilterChange: noop, onSubTabChange: noop, onOpenJob: noop, onReDriveAll: noop, onReconcile: noop, onRunSweep: noop }),
   )
 
+const ver = (version: number, state: RuleVersion['state'], effective_from: string | null = '2026-01-01'): RuleVersion => ({ rule_set_version_id: `id${version}`, version, state, effective_from, opened_at: null, rule_count: 2 })
+const VERSIONS: RuleVersion[] = [ver(9, 'draft', null), ver(8, 'in_force'), ver(7, 'scheduled'), ver(6, 'superseded'), ver(3, 'retired', null)]
+
 const RULES_PROPS: Parameters<typeof Rules>[0] = {
   rules: SEED_RULES,
   status: 'ready',
   version: 4,
+  state: 'in_force',
+  versions: VERSIONS,
+  versionsNote: 'Loading versions…',
+  selected: 8,
+  onSelectVersion: noop,
   busy: false,
   onRetry: noop,
   onOpenRule: noop,
   onToggleRule: noop,
   onPublish: noop,
-  onPromote: noop,
 }
 const rulesWith = (over: Partial<Parameters<typeof Rules>[0]>) => renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS, ...over }))
 
@@ -196,13 +205,10 @@ describe('v2 screens', () => {
     for (const c of chips) expect.soft(style(c)['border-radius'], 'chip corner').toBe('var(--radius-sm)')
 
     const rules = tagsOf('rules')
-    const pills = rules.flatMap((t, i) => (['DRAFT', 'ACTIVE', 'ARCHIVED'].includes(t.text) && classes(t).includes('mono') ? [rules[i - 1]] : []))
-    expect(pills, 'version tags').toHaveLength(RULE_SET_VERSIONS.length)
+    const pills = rules.flatMap((t, i) => (['DRAFT', 'IN FORCE', 'SCHEDULED', 'SUPERSEDED', 'RETIRED'].includes(t.text) && classes(t).includes('mono') ? [rules[i - 1]] : []))
+    expect(pills, 'version tags').toHaveLength(VERSIONS.length)
     for (const p of pills) expect.soft(style(p)['border-radius'], 'version tag corner').toBe('var(--radius-sm)')
-    const learned = rules.filter((t) => t.text === String(LEARNED_RULES.length) && style(t)['margin-left'] === 'auto')
-    expect(learned, 'learned count').toHaveLength(1)
-    expect.soft(style(learned[0])['border-radius'], 'learned count corner').toBe('var(--radius-sm)')
-    const inForce = rules.filter((t) => t.text.startsWith('IN FORCE'))
+    const inForce = rules.filter((t) => t.text.startsWith('IN FORCE v'))
     expect(inForce, 'IN FORCE tag').toHaveLength(1)
     expect.soft(style(inForce[0])['border-radius'], 'IN FORCE corner').toBe('var(--radius-sm)')
 
@@ -268,7 +274,7 @@ describe('v2 screens', () => {
 
     // Cards, tables and tiles: v2 corner, no shadow, on every screen and tab.
     const surfaces: [string, string][] = [...SCREEN_KEYS.map((k) => [k, SCREENS[k]] as [string, string]), ['recon', RECON], ['tenant t3', tenants('', 't3')], ['health clear', healthHtml(0)]]
-    const floors: Record<string, number> = { submissions: 5, rules: 3, audit: 1, tenants: 2, health: 6, recon: 4 }
+    const floors: Record<string, number> = { submissions: 5, rules: 2, audit: 1, tenants: 2, health: 6, recon: 4 }
     for (const [name, html] of surfaces) {
       const ts = parsed(html, name)
       const cards = ts.filter((t) => style(t).border === '1px solid var(--line-1)' && style(t).background === 'var(--bg-2)' && !classes(t).includes('ops-chip'))
@@ -292,9 +298,7 @@ describe('v2 screens', () => {
 
     const reconcile = buttonsByText(RECON, 'Reconcile')
     expect(reconcile, 'one Reconcile per mismatch').toHaveLength(RECON_ROWS.length)
-    const promote = buttonsByText(SCREENS.rules, 'Promote to draft')
-    expect(promote, 'one Promote per learned rule').toHaveLength(LEARNED_RULES.length)
-    for (const b of [...reconcile, ...promote]) {
+    for (const b of reconcile) {
       const s = style(b)
       expect.soft([s.border, s['border-radius']], `${b.text}: outline border and corner`).toEqual(['1px solid var(--button-outline-border)', 'var(--radius-btn)'])
     }
@@ -333,10 +337,6 @@ describe('v2 screens', () => {
       const at = ts.indexOf(withClass(ts, 'ops-input')[0])
       expect.soft([ts[at + 1].name, style(ts[at + 1]).display, style(ts[at + 1]).color, ts[at + 2].name], `${screen}: search icon wrapper`).toEqual(['span', 'inline-flex', 'var(--fg-3)', 'svg'])
     }
-    const rulesTs = tagsOf('rules')
-    const sparks = rulesTs.filter((t, i) => style(t).color === 'var(--action)' && rulesTs[i + 1]?.name === 'svg')
-    expect(sparks, 'learned-rules spark wrapper').toHaveLength(1)
-    expect.soft(style(sparks[0]).display, 'spark wrapper').toBe('inline-flex')
     for (const [screen, count] of [['submissions', SEED_JOBS.length], ['audit', AUDIT_ENTRIES.length]] as const) {
       const ts = tagsOf(screen)
       const chevrons = ts.filter((t, i) => style(t).color === 'var(--fg-4)' && ts[i + 1]?.name === 'svg')
@@ -425,6 +425,44 @@ describe('v2 screens', () => {
     const failed = rulesWith({ status: 'error', errorText: 'no rule set in force', rules: [], version: null })
     expect(failed).toContain('no rule set in force')
     expect(buttonByText(failed, 'Retry').attrs).toContain('v2-btn-ghost')
+  })
+
+  it('Rules rail renders one row per version with its tone', () => {
+    const html = rulesWith({})
+    const rows = [...html.matchAll(/<button\b([^>]*aria-pressed[^>]*)>([\s\S]*?)<\/button>/g)]
+    expect(rows).toHaveLength(VERSIONS.length)
+    const chipOf = (row: RegExpMatchArray) => style({ attrs: ` style="${row[2].match(/<span style="([^"]*border-radius[^"]*)"/)![1]}"` })
+    const wantBg = ['var(--status-amber-bg)', 'var(--status-green-bg)', 'var(--action-tint)', 'var(--status-muted-bg)', 'var(--status-muted-bg)']
+    rows.forEach((row, i) => {
+      expect(chipOf(row).background, `row ${i} chip`).toBe(wantBg[i])
+      expect(row[2]).toContain(`v${VERSIONS[i].version}`)
+    })
+    expect(attr({ attrs: ` ${rows[1][1]}` }, 'aria-pressed')).toBe('true')
+    expect(style({ attrs: ` ${rows[1][1]}` }).background).toBe('var(--action-tint)')
+    expect(style({ attrs: ` ${rows[0][1]}` }).background).toBe('var(--bg-2)')
+    expect(html).toContain('editing · 2 rules')
+    expect(html).toContain('eff. 2026-01-01 · 2 rules')
+    expect(html).not.toContain('--fg-4')
+    for (const gone of ['v9 · draft', 'ACTIVE', 'ARCHIVED']) expect(html).not.toContain(gone)
+  })
+
+  it('switches are disabled off the version in force', () => {
+    const switchesOf = (html: string) => [...html.matchAll(/<button\b([^>]*role="switch"[^>]*)>/g)].map((m) => ` ${m[1]}`)
+    const locked = switchesOf(rulesWith({ state: 'retired', version: 3 }))
+    expect(locked).toHaveLength(SEED_RULES.length)
+    for (const t of locked) {
+      expect(t).toContain('disabled=""')
+      expect(t).toContain('title="Only the version in force is switched"')
+      expect(style({ attrs: t })).toMatchObject({ opacity: '0.45', cursor: 'not-allowed' })
+    }
+    expect(rulesWith({ state: 'retired', version: 3 })).toContain('RETIRED v3')
+    for (const t of switchesOf(rulesWith({ state: 'in_force' }))) expect(t).not.toContain('disabled=""')
+  })
+
+  it('Rules screen has no learned rules and no Promote', () => {
+    const html = rulesWith({})
+    expect(html).not.toContain('Learned rules')
+    expect(html).not.toContain('Promote to draft')
   })
 
   it('Rules renders the version badge and disables switches while busy', () => {

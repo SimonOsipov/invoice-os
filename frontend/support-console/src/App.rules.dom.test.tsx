@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { KillConfirm } from './components/KillConfirm'
 import { signOutConsole } from '@invoice-os/console-session'
-import { fetchRulesInForce, switchRule } from './rulesApi'
+import { fetchRules, fetchVersions, switchRule, type RuleVersion } from './rulesApi'
 import type { Rule } from './types'
 
 vi.mock('@invoice-os/console-session', () => ({
@@ -16,17 +16,22 @@ vi.mock('@invoice-os/console-session', () => ({
 }))
 vi.mock('./rulesApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./rulesApi')>()),
-  fetchRulesInForce: vi.fn(),
+  fetchRules: vi.fn(),
+  fetchVersions: vi.fn(),
   switchRule: vi.fn(),
 }))
 
-const read = vi.mocked(fetchRulesInForce)
+const read = vi.mocked(fetchRules)
+const versionsRead = vi.mocked(fetchVersions)
 const sw = vi.mocked(switchRule)
-const rule = (key: string, enabled: boolean): Rule => ({ key, type: 'cel', field: 'invoice.total', severity: 'error', scope: 'global', enabled, message: 'm' })
+const rule = (key: string, enabled: boolean): Rule => ({ key, type: 'cel', field: 'invoice.total', severity: 'error', scope: 'global', enabled, message: 'm', params: {}, when: null })
+const ver = (version: number, state: RuleVersion['state'], effective_from: string | null = '2026-01-01'): RuleVersion => ({ rule_set_version_id: `id${version}`, version, state, effective_from, opened_at: null, rule_count: 2 })
+const VERSIONS = { today: '2026-10-11', versions: [ver(8, 'draft', null), ver(7, 'in_force'), ver(3, 'retired', null)] }
 const LIST = { version: 7, rules: [rule('real.on', true), rule('real.off', false)] }
 
 beforeEach(() => {
   read.mockResolvedValue(LIST)
+  versionsRead.mockResolvedValue(VERSIONS)
   sw.mockResolvedValue({ key: 'real.on', enabled: false })
 })
 afterEach(() => {
@@ -54,6 +59,28 @@ describe('KillConfirm', () => {
 })
 
 describe('Console rules wiring', () => {
+  it('selecting a version reads its rules', async () => {
+    render(<App />)
+    await openRules()
+    expect(read).toHaveBeenLastCalledWith(undefined)
+    read.mockResolvedValue({ version: 3, rules: [rule('old.key', true)] })
+    fireEvent.click(await screen.findByRole('button', { name: /^v3/ }))
+    await screen.findByText('old.key')
+    expect(read).toHaveBeenLastCalledWith(3)
+    expect(screen.getByText('RETIRED v3')).toBeTruthy()
+    const sw = screen.getByRole('switch', { name: 'Disable old.key' }) as HTMLButtonElement
+    expect(sw.disabled).toBe(true)
+    fireEvent.click(sw)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(screen.getByText('old.key'))
+    expect(screen.queryByRole('button', { name: /Kill-switch/ })).toBeNull()
+    read.mockResolvedValue(LIST)
+    fireEvent.click(screen.getByRole('button', { name: /^v7/ }))
+    await screen.findByRole('switch', { name: 'Disable real.on' })
+    expect(read).toHaveBeenLastCalledWith(undefined)
+    expect(screen.getByText('IN FORCE v7')).toBeTruthy()
+  })
+
   it('reads the list when Rules opens and on each re-entry, never on mount', async () => {
     render(<App />)
     expect(read).not.toHaveBeenCalled()

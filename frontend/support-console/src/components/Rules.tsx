@@ -1,4 +1,5 @@
-import { LEARNED_RULES, PUBLISH_ICON, RULE_SET_VERSIONS, SPARK_ICON } from '../data'
+import { PUBLISH_ICON } from '../data'
+import { stateLabel, versionMeta, type RuleVersion, type VersionState } from '../rulesApi'
 import { SeverityBadge } from './StatusBadge'
 import type { Rule } from '../types'
 
@@ -9,24 +10,33 @@ type Props = {
   status: RulesStatus
   errorText?: string
   version: number | null
+  state: VersionState | null
+  versions: RuleVersion[]
+  versionsNote: string
+  selected: number | null
+  onSelectVersion: (v: RuleVersion) => void
   busy: boolean
   onRetry: () => void
   onOpenRule: (key: string) => void
   onToggleRule: (key: string) => void
   onPublish: () => void
-  onPromote: (key: string) => void
 }
 
 const RULE_COLS = 'minmax(150px,1.1fr) 150px minmax(120px,1fr) 78px 96px minmax(160px,1.3fr) 50px'
 
-// proto:922. Version chips: the draft is amber, the one in force is green, the rest muted.
-const VERSION_TONE = {
+// Version chips: draft amber, in force green, scheduled the action tint, superseded and retired muted.
+const MUTED = { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)' }
+const VERSION_TONE: Record<VersionState, { bg: string; border: string; text: string }> = {
   draft: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)' },
-  active: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)' },
-  arch: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)' },
-} as const
+  in_force: { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)' },
+  scheduled: { bg: 'var(--action-tint)', border: 'transparent', text: 'var(--action)' },
+  superseded: MUTED,
+  retired: MUTED,
+}
+const SWITCH_LOCKED = 'Only the version in force is switched'
 
-export function Rules({ rules, status, errorText, version, busy, onRetry, onOpenRule, onToggleRule, onPublish, onPromote }: Props) {
+export function Rules({ rules, status, errorText, version, state, versions, versionsNote, selected, onSelectVersion, busy, onRetry, onOpenRule, onToggleRule, onPublish }: Props) {
+  const locked = state !== 'in_force'
   return (
     <div className="ops-screen-pad">
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20, gap: 24, flexWrap: 'wrap' }}>
@@ -42,60 +52,41 @@ export function Rules({ rules, status, errorText, version, busy, onRetry, onOpen
       </div>
 
       <div className="ops-rules-grid" style={{ display: 'grid', gridTemplateColumns: '230px minmax(0,1fr)', gap: 18 }}>
-        {/* versions rail + learned-rules inbox */}
+        {/* versions rail */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden' }}>
             <div className="label" style={{ padding: '12px 14px 8px' }}>
               Rule-set versions · NG-MBS
             </div>
-            {RULE_SET_VERSIONS.map((v) => {
-              const tone = VERSION_TONE[v.kind]
+            {versions.length === 0 && (
+              <div style={{ padding: '11px 14px', borderTop: '1px solid var(--line-1)', fontSize: 12, color: 'var(--fg-3)' }}>{versionsNote}</div>
+            )}
+            {versions.map((v) => {
+              const tone = VERSION_TONE[v.state]
               return (
-                <div key={v.version} style={{ padding: '11px 14px', borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 10, background: v.kind === 'draft' ? 'var(--action-tint)' : 'var(--bg-2)' }}>
+                <button
+                  key={v.version}
+                  type="button"
+                  onClick={() => onSelectVersion(v)}
+                  aria-pressed={v.version === selected}
+                  style={{ width: '100%', textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit', borderWidth: '1px 0 0 0', borderStyle: 'solid', borderColor: 'var(--line-1)', padding: '11px 14px', display: 'flex', alignItems: 'center', gap: 10, background: v.version === selected ? 'var(--action-tint)' : 'var(--bg-2)' }}
+                >
                   <span style={{ flex: 1, minWidth: 0 }}>
                     <span className="mono" style={{ display: 'block', fontSize: 13, fontWeight: 700, color: 'var(--fg-1)' }}>
-                      {v.version}
+                      v{v.version}
                     </span>
                     <span className="mono" style={{ display: 'block', fontSize: 10, color: 'var(--fg-3)', marginTop: 1 }}>
-                      {v.meta}
+                      {versionMeta(v)}
                     </span>
                   </span>
                   <span style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 8px' }}>
                     <span className="mono" style={{ fontSize: 9, fontWeight: 700, color: tone.text, letterSpacing: '0.04em' }}>
-                      {v.tag}
+                      {stateLabel(v.state)}
                     </span>
                   </span>
-                </div>
+                </button>
               )
             })}
-          </div>
-
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', overflow: 'hidden' }}>
-            <div style={{ padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--line-1)' }}>
-              <span style={{ display: 'inline-flex', color: 'var(--action)' }}>{SPARK_ICON}</span>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>Learned rules</span>
-              <span className="mono" style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, background: 'var(--action-tint)', color: 'var(--action)', borderRadius: 'var(--radius-sm)', padding: '1px 7px' }}>
-                {LEARNED_RULES.length}
-              </span>
-            </div>
-            {LEARNED_RULES.map((l) => (
-              <div key={l.key} style={{ padding: '11px 14px', borderBottom: '1px solid var(--line-1)' }}>
-                <div className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 2 }}>
-                  {l.key}
-                </div>
-                <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', lineHeight: 1.4, marginBottom: 8 }}>
-                  {l.source}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => onPromote(l.key)}
-                  className="ops-btn"
-                  style={{ width: '100%', border: '1px solid var(--button-outline-border)', background: 'var(--bg-2)', cursor: 'pointer', height: 28, borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 11.5, fontWeight: 600, color: 'var(--action)' }}
-                >
-                  Promote to draft
-                </button>
-              </div>
-            ))}
           </div>
         </div>
 
@@ -104,9 +95,9 @@ export function Rules({ rules, status, errorText, version, busy, onRetry, onOpen
           <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 880 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 14, fontWeight: 700, letterSpacing: 'var(--tracking-card)', fontFamily: 'var(--font-display)' }}>Rules</span>
-              {version !== null && (
-                <span className="mono" style={{ fontSize: 10, fontWeight: 700, background: 'var(--status-green-bg)', color: 'var(--status-green-text)', border: '1px solid var(--status-green-border)', borderRadius: 'var(--radius-sm)', padding: '1px 8px' }}>
-                  IN FORCE v{version}
+              {version !== null && state !== null && (
+                <span className="mono" style={{ fontSize: 10, fontWeight: 700, background: VERSION_TONE[state].bg, color: VERSION_TONE[state].text, border: `1px solid ${VERSION_TONE[state].border}`, borderRadius: 'var(--radius-sm)', padding: '1px 8px' }}>
+                  {`${stateLabel(state)} v${version}`}
                 </span>
               )}
             </div>
@@ -168,9 +159,9 @@ export function Rules({ rules, status, errorText, version, busy, onRetry, onOpen
                   aria-label={`${r.enabled ? 'Disable' : 'Enable'} ${r.key}`}
                   onClick={() => onToggleRule(r.key)}
                   className="ops-toggle"
-                  disabled={busy}
-                  title={busy ? 'Switching…' : undefined}
-                  style={{ display: 'inline-flex', width: 34, height: 20, borderRadius: 99, background: r.enabled ? 'var(--action)' : 'var(--line-3)', padding: 2, border: 0, ...(busy ? { opacity: 0.45, cursor: 'not-allowed' } : { cursor: 'pointer' }) }}
+                  disabled={busy || locked}
+                  title={locked ? SWITCH_LOCKED : busy ? 'Switching…' : undefined}
+                  style={{ display: 'inline-flex', width: 34, height: 20, borderRadius: 99, background: r.enabled ? 'var(--action)' : 'var(--line-3)', padding: 2, border: 0, ...(busy || locked ? { opacity: 0.45, cursor: 'not-allowed' } : { cursor: 'pointer' }) }}
                 >
                   <span className="ops-knob" style={{ width: 16, height: 16, borderRadius: '50%', background: 'var(--bg-2)', transform: r.enabled ? 'translateX(14px)' : 'translateX(0)' }} />
                 </button>

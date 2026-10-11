@@ -867,3 +867,27 @@ func TestCsvgen_NewKeysMapTheExistingDecoys(t *testing.T) {
 		t.Errorf("sw_quickbooks_import line_tax_category key = %v, want [ItemTaxCode]", qb.Key["line_tax_category"])
 	}
 }
+
+// A buyer's LGA code sits under the buyer's state code, as in the NRS lgas list
+// ({"code": "NG-LA-IKE", "state_code": "NG-LA"}).
+func TestCsvgen_EveryLGACodeSitsUnderItsStateCode(t *testing.T) {
+	col := func(l cgLayout, field string) int {
+		return slices.Index(l.Columns, *l.Key[field][0])
+	}
+	var checked int
+	for _, l := range cgLoad(t, cgRun(t)) {
+		if l.Key["buyer_lga"][0] == nil || l.Key["buyer_state"][0] == nil {
+			continue
+		}
+		lc, sc := col(l, "buyer_lga"), col(l, "buyer_state")
+		for _, r := range l.Rows[l.HeaderRow:] {
+			checked++
+			if !regexp.MustCompile(`^NG-[A-Z]{2}-[A-Z0-9]{3}$`).MatchString(r[lc]) || !strings.HasPrefix(r[lc], r[sc]+"-") {
+				t.Errorf("layout %s: lga %q is not under state %q", l.ID, r[lc], r[sc])
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no layout keys both buyer_state and buyer_lga")
+	}
+}

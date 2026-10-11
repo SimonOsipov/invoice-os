@@ -158,12 +158,12 @@ NRS_SYN = {
 }
 # Per BUYERS entry: (state, LGA, city, postal zone, invoice kind). Per ITEMS entry: (HS, ISIC, price unit, tax category,
 # product category, service category).
-BUYER_NRS = [("NG-LA", "NG-LA-IKJ", "Lagos", "100001", "B2B"), ("NG-KN", "NG-KN-NAS", "Kano", "700001", "B2B"),
-             ("NG-DE", "NG-DE-WAR", "Warri", "332001", "B2B"), ("NG-FC", "NG-FC-AMC", "Abuja", "900001", "B2G"),
-             ("NG-EN", "NG-EN-ENN", "Enugu", "400001", "B2B"), ("NG-OY", "NG-OY-IBN", "Ibadan", "200001", "B2C"),
-             ("NG-RI", "NG-RI-PHC", "Port Harcourt", "500001", "B2B"), ("NG-PL", "NG-PL-JOS", "Jos", "930001", "B2C"),
-             ("NG-CR", "NG-CR-CAL", "Calabar", "540001", "B2C"), ("NG-IM", "NG-IM-OWE", "Owerri", "460001", "B2B"),
-             ("NG-KD", "NG-KD-KAD", "Kaduna", "800001", "B2G"), ("NG-ED", "NG-ED-OVI", "Benin City", "300001", "B2B")]
+BUYER_NRS = [("NG-LA", "NG-LA-IKE", "Lagos", "100001", "B2B"), ("NG-KN", "NG-KN-NAS", "Kano", "700001", "B2B"),
+             ("NG-DE", "NG-DE-WSO", "Warri", "332001", "B2B"), ("NG-FC", "NG-FC-AML", "Abuja", "900001", "B2G"),
+             ("NG-EN", "NG-EN-ENO", "Enugu", "400001", "B2B"), ("NG-OY", "NG-OY-INO", "Ibadan", "200001", "B2C"),
+             ("NG-RI", "NG-RI-PHA", "Port Harcourt", "500001", "B2B"), ("NG-PL", "NG-PL-JNO", "Jos", "930001", "B2C"),
+             ("NG-CR", "NG-CR-CMU", "Calabar", "540001", "B2C"), ("NG-IM", "NG-IM-OMU", "Owerri", "460001", "B2B"),
+             ("NG-KD", "NG-KD-KNO", "Kaduna", "800001", "B2G"), ("NG-ED", "NG-ED-ORE", "Benin City", "300001", "B2B")]
 ITEM_NRS = [("0101.21", "0111", "LTR", "STANDARD_GST", "Fuel", "Delivery"),
             ("0101.29", "0112", "KGM", "STANDARD_GST", "Building materials", "Supply"),
             ("0101.30", "0113", "HUR", "ZERO_GST", "Consulting", "Advisory"),

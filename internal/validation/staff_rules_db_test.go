@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -91,7 +92,7 @@ func TestStaffRules_ListReturnsTheVersionInForce(t *testing.T) {
 		t.Errorf("version = %s v%d, want %s v%d", got.RuleSetVersionID, got.Version, wantID, wantVersion)
 	}
 	rows, err := super.Query(context.Background(),
-		`SELECT key, type, target, severity, scope, message, enabled FROM rules WHERE rule_set_version_id = $1 ORDER BY key`, wantID)
+		`SELECT key, type, target, params, severity, "when", scope, message, enabled FROM rules WHERE rule_set_version_id = $1 ORDER BY key`, wantID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +100,7 @@ func TestStaffRules_ListReturnsTheVersionInForce(t *testing.T) {
 	var want []StaffRule
 	for rows.Next() {
 		var r StaffRule
-		if err := rows.Scan(&r.Key, &r.Type, &r.Target, &r.Severity, &r.Scope, &r.Message, &r.Enabled); err != nil {
+		if err := rows.Scan(&r.Key, &r.Type, &r.Target, &r.Params, &r.Severity, &r.When, &r.Scope, &r.Message, &r.Enabled); err != nil {
 			t.Fatal(err)
 		}
 		want = append(want, r)
@@ -109,7 +110,7 @@ func TestStaffRules_ListReturnsTheVersionInForce(t *testing.T) {
 	}
 	var sawDisabled bool
 	for i := range want {
-		if got.Rules[i] != want[i] {
+		if !reflect.DeepEqual(got.Rules[i], want[i]) {
 			t.Errorf("rule %d = %+v, want %+v", i, got.Rules[i], want[i])
 		}
 		if got.Rules[i].Key == functionKey {

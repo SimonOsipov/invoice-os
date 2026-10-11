@@ -282,7 +282,7 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
     await legible(el, el, `${what} eyebrow`)
   }
   await expectStyles(subm.locator('span.mono'), 'Submissions nav badge', { radius: '4px' })
-  await expectStyles(rulesNav.locator('span.mono'), 'Rules nav badge', { radius: '4px' })
+  await expect(rulesNav.locator('span.mono'), 'the Rules nav holds no badge').toHaveCount(0)
 
   await expect(brand, 'one brand image in the sidebar').toHaveCount(1)
   await expect.poll(() => brand.evaluate((el) => (el as HTMLImageElement).naturalWidth), { message: 'brand image never loaded' }).toBeGreaterThan(0)
@@ -514,9 +514,8 @@ const SCREENS: Screen[] = [
     reads: async (page, testInfo) => {
       const mn = mainOf(page)
       await expect(mn.locator('[role="switch"]').first(), 'the rules have loaded').toBeVisible()
-      const tags = mn.locator('span.mono').filter({ hasText: /^(DRAFT|ACTIVE|ARCHIVED)$/ })
-      await everyStyles(parent(tags), 4, 'version tag', { radius: '4px' })
-      await expectStyles(parent(mn.getByText('Learned rules', { exact: true })).locator('span.mono'), 'learned-rules count', { radius: '4px' })
+      const tags = mn.locator('span.mono').filter({ hasText: /^(DRAFT|IN FORCE|SCHEDULED|SUPERSEDED|RETIRED)$/ })
+      await everyStyles(parent(tags), 1, 'version tag', { radius: '4px' })
       await expectStyles(mn.getByText(/^IN FORCE v\d+$/), 'IN FORCE badge', { radius: '4px' })
       const row = mn.locator('.ops-row').first()
       await expectStyles(kid(row, 2), 'type chip', { radius: '4px' })
@@ -528,7 +527,6 @@ const SCREENS: Screen[] = [
         await expectStyles(kid(sw, 1), `switch ${i} knob`, { radius: '50%', 'box-shadow': 'none' })
       }
       await expectStyles(mn.getByText('Rules', { exact: true }), 'Rules table title', { family: 'Manrope', 'font-weight': '700' })
-      await everyStyles(mn.getByRole('button', { name: 'Promote to draft' }), 1, 'Promote to draft', { radius: '7px' })
       await attachShot(page, testInfo, 'rules')
     },
     layout: async (page) => {
@@ -795,15 +793,7 @@ test('SUP-04 rule and audit drawers', async ({ page }, testInfo) => {
   await mn.locator('.ops-row').first().click()
   const { drawer } = await expectDrawer(page, 'rule drawer')
   await expectStyles(drawer.getByRole('button', { name: 'Kill-switch' }), 'Kill-switch', { radius: '7px' })
-  const run = drawer.getByRole('button', { name: 'Run test' })
-  await expectStyles(run, 'Run test', { radius: '7px', 'background-color': 'rgb(7, 60, 61)' })
-  await expectStyles(drawer.getByText('No test run yet.'), 'no test yet', { color: await resolveColor(drawer, '--fg-3') })
   await attachShot(page, testInfo, 'rule-drawer')
-
-  await run.click()
-  const passed = parent(drawer.getByText('Rule passed'))
-  await expect(passed, 'the Rule passed box').toBeVisible()
-  await expectStyles(passed, 'Rule passed box', { radius: '6px' })
 
   await drawer.getByRole('button', { name: 'Close' }).click()
   await expect(drawer).toBeHidden()
@@ -995,4 +985,112 @@ test('SUP-04 re-drive toast, empty jobs and a clear health card', async ({ page 
   await attachShot(page, testInfo, 'health-clear')
 
   noErrors(errors, 'SUP-04 re-drive')
+})
+
+const RAIL_ROWS = 'button[aria-pressed]'
+const VERSION_TAG = /^(DRAFT|IN FORCE|SCHEDULED|SUPERSEDED|RETIRED)$/
+
+// Chip background and text tokens by tag; the tone is in Rules.tsx VERSION_TONE.
+const TONE_TOKENS: Record<string, [string, string]> = {
+  'IN FORCE': ['--status-green-bg', '--status-green-text'],
+  DRAFT: ['--status-amber-bg', '--status-amber-text'],
+  SUPERSEDED: ['--status-muted-bg', '--status-muted-text'],
+  RETIRED: ['--status-muted-bg', '--status-muted-text'],
+  SCHEDULED: ['--action-tint', '--action'],
+}
+
+test('SUP-06 versions rail layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  await openScreen(page, 'Rules', 'Rules admin')
+  await expect(mainOf(page).locator('[role="switch"]').first()).toBeVisible()
+
+  await atWidths(page, 'SUP-06 versions rail layout', async () => {
+    const mn = mainOf(page)
+    const { card } = await boxes(page, { card: mn.locator('.ops-rules-grid > div:first-child > div:first-child') })
+    const rows = mn.locator(`.ops-rules-grid ${RAIL_ROWS}`)
+    const rowRects = await rectsOf(page, rows, 'rail row')
+    const chips = await rectsOf(page, rows.locator('xpath=./span[2]'), 'tag chip')
+    const texts = await rectsOf(page, rows.locator('xpath=./span[1]'), 'version text')
+    const kids = await gridKids(page, '.ops-rules-grid', 'rules grid')
+    await noSidewaysScroll(page, 'Rules')
+    return {
+      problems: [
+        ...rowRects.flatMap((r, i) => within(card, r, `rail row ${i} in the rail card`)),
+        ...chips.flatMap((c, i) => [...apart(c, texts[i], `tag chip ${i} / version text`), ...within(rowRects[i], c, `tag chip ${i} in its row`)]),
+        ...apart(kids[0], kids[1], 'rail / table columns'),
+      ],
+      rects: { card, rowRects, chips, texts, kids },
+    }
+  })
+
+  noErrors(errors, 'SUP-06 versions rail layout')
+})
+
+test('SUP-06 rules desk paint', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const mn = mainOf(page)
+  await openScreen(page, 'Rules', 'Rules admin')
+  await expect(mn.locator('[role="switch"]').first()).toBeVisible()
+  await settle(page, mn.locator(RAIL_ROWS).first())
+
+  const rows = mn.locator(`.ops-rules-grid ${RAIL_ROWS}`)
+  const seen: string[] = []
+  for (const [i, row] of (await eachOf(rows, 1, 'rail row')).entries()) {
+    const chip = kid(row, 2)
+    const tag = (await kid(chip, 1).innerText()).trim()
+    expect(tag, `rail row ${i} tag`).toMatch(VERSION_TAG)
+    seen.push(tag)
+    const [bg, fg] = TONE_TOKENS[tag]
+    await expectStyles(chip, `${tag} chip`, { 'background-color': await resolveColor(mn, bg) })
+    await expectStyles(kid(chip, 1), `${tag} chip text`, { color: await resolveColor(mn, fg) })
+  }
+  expect(seen, 'one version is in force').toContain('IN FORCE')
+
+  const badgeOf = (tag: string): Locator => mn.getByText(new RegExp(`^${tag} v\\d+$`))
+  const chipPaint = async (row: Locator): Promise<Want> => ({
+    'background-color': (await styles(kid(row, 2), ['background-color']))['background-color'],
+    color: (await styles(kid(kid(row, 2), 1), ['color']))['color'],
+  })
+  const selected = mn.locator(`.ops-rules-grid ${RAIL_ROWS}[aria-pressed="true"]`)
+  await expect(selected, 'one row is selected').toHaveCount(1)
+  await expectStyles(badgeOf('IN FORCE'), 'table badge of the version in force', await chipPaint(selected))
+
+  const other = rows.filter({ hasNotText: 'IN FORCE' }).filter({ hasNotText: '· 0 rules' }).first()
+  await expect(other, 'a version with rules apart from the one in force').toBeVisible()
+  const otherTag = (await kid(kid(other, 2), 1).innerText()).trim()
+  await other.click()
+  await expect(badgeOf(otherTag), 'the table badge follows the selected version').toBeVisible()
+  await expectStyles(badgeOf(otherTag), `table badge of ${otherTag}`, await chipPaint(selected))
+
+  const sw = mn.locator('[role="switch"]').first()
+  await expect(sw, 'every switch is locked off the version in force').toHaveAttribute('title', 'Only the version in force is switched')
+  await expect(sw).toBeDisabled()
+  await expectStyles(sw, 'disabled switch', { opacity: '0.45', cursor: 'not-allowed' })
+
+  noErrors(errors, 'SUP-06 rules desk paint')
+})
+
+test('SUP-06 rule drawer holds long content', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const account = await staffAccount()
+  const api = (await signInSession(account.email, account.password)).access_token
+  const res = await rawFetch(STAFF_RULES, { headers: { Authorization: `Bearer ${api}` } })
+  const rules = (res.body as { rules: { key: string; params: unknown }[] }).rules
+  const longest = rules.reduce((a, b) => (JSON.stringify(b.params).length > JSON.stringify(a.params).length ? b : a))
+
+  const mn = mainOf(page)
+  await openScreen(page, 'Rules', 'Rules admin')
+  await mn.getByText(longest.key, { exact: true }).click()
+  const { drawer } = await expectDrawer(page, 'rule drawer')
+  await noSidewaysScroll(page, 'the rule drawer page')
+  const body = drawer.locator('xpath=./div[2]')
+  const m = await body.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  expect(m.scrollWidth - m.clientWidth, 'the rule drawer body scrolls sideways').toBeLessThanOrEqual(1)
+  const { drawer: dBox, json } = await boxes(page, { drawer, json: drawer.locator('pre.ops-json') })
+  expect(enclosesRect(dBox, json, 1), 'the JSON block sits inside the drawer').toBe(true)
+
+  noErrors(errors, 'SUP-06 rule drawer holds long content')
 })

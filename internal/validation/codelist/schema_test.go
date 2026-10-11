@@ -183,7 +183,7 @@ func TestSchema_AppCannotRewriteCodeOrList(t *testing.T) {
 	}
 }
 
-func TestSchema_SyncLogIsInsertOnlyForApp(t *testing.T) {
+func TestSchema_SyncLogIsReadAndInsertOnlyForApp(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()
 	list := newListName(t, super)
@@ -195,17 +195,20 @@ func TestSchema_SyncLogIsInsertOnlyForApp(t *testing.T) {
 		 VALUES ($1::uuid, $2, 3, '{A,B}', '{}', '{}')`, id, list); err != nil {
 		t.Fatalf("app INSERT sync row: %v", err)
 	}
-	var n int
 	_, err := app.Exec(ctx,
 		`INSERT INTO nrs_code_list_syncs (id, list, entry_count, added, removed, changed)
 		 VALUES ($1::uuid, $2, 1, '{}', '{}', '{}')`, id, list)
 	wantState(t, "app INSERT duplicate sync id", err, "23505")
-	_, err = app.Exec(ctx, `SELECT entry_count FROM nrs_code_list_syncs WHERE id = $1::uuid`, id)
-	wantState(t, "app SELECT sync row", err, "42501")
-	// WHERE false names no column, so only the UPDATE or DELETE privilege is checked, not SELECT.
-	_, err = app.Exec(ctx, `UPDATE nrs_code_list_syncs SET entry_count = 4 WHERE false`)
+	var n int
+	if err := app.QueryRow(ctx, `SELECT entry_count FROM nrs_code_list_syncs WHERE id = $1::uuid`, id).Scan(&n); err != nil {
+		t.Fatalf("app SELECT sync row: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("app read entry_count = %d, want 3", n)
+	}
+	_, err = app.Exec(ctx, `UPDATE nrs_code_list_syncs SET entry_count = 4 WHERE id = $1::uuid`, id)
 	wantState(t, "app UPDATE sync row", err, "42501")
-	_, err = app.Exec(ctx, `DELETE FROM nrs_code_list_syncs WHERE false`)
+	_, err = app.Exec(ctx, `DELETE FROM nrs_code_list_syncs WHERE id = $1::uuid`, id)
 	wantState(t, "app DELETE sync row", err, "42501")
 
 	if err := super.QueryRow(ctx,

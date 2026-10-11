@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -32,6 +33,8 @@ var (
 	ErrRuleNotInForce = errors.New("validation: no such rule in the version in force")
 	// ErrRuleAlreadyInState: the rule already has the requested state.
 	ErrRuleAlreadyInState = errors.New("validation: rule already in the requested state")
+	// ErrNoSuchVersion: no rule-set version with the requested number.
+	ErrNoSuchVersion = errors.New("validation: no such rule-set version")
 )
 
 // recordStaff is a var so a test can force an audit failure.
@@ -39,13 +42,15 @@ var recordStaff = audit.RecordStaff
 
 // StaffRule is one rule on the GET /v1/staff/rules wire.
 type StaffRule struct {
-	Key      string `json:"key"`
-	Type     string `json:"type"`
-	Target   string `json:"target"`
-	Severity string `json:"severity"`
-	Scope    string `json:"scope"`
-	Message  string `json:"message"`
-	Enabled  bool   `json:"enabled"`
+	Key      string          `json:"key"`
+	Type     string          `json:"type"`
+	Target   string          `json:"target"`
+	Params   json.RawMessage `json:"params"`
+	Severity string          `json:"severity"`
+	When     *string         `json:"when"`
+	Scope    string          `json:"scope"`
+	Message  string          `json:"message"`
+	Enabled  bool            `json:"enabled"`
 }
 
 // InForceRules is the GET /v1/staff/rules body.
@@ -65,28 +70,43 @@ type SwitchResult struct {
 
 // RulesInForce returns the version in force today and its rules ordered by key.
 func (s *Store) RulesInForce(ctx context.Context) (InForceRules, error) {
+	return s.RulesOfVersion(ctx, nil)
+}
+
+// RulesOfVersion returns version (nil: the version in force today) and its rules ordered by key.
+func (s *Store) RulesOfVersion(ctx context.Context, version *int) (InForceRules, error) {
 	var out InForceRules
 	err := db.WithinStaffTx(ctx, s.pool, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx,
-			`SELECT v.id, v.version FROM rule_set_versions v WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
-		).Scan(&out.RuleSetVersionID, &out.Version)
+		var err error
+		if version == nil {
+			err = tx.QueryRow(ctx,
+				`SELECT v.id, v.version FROM rule_set_versions v WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
+			).Scan(&out.RuleSetVersionID, &out.Version)
+		} else {
+			err = tx.QueryRow(ctx,
+				`SELECT id, version FROM rule_set_versions WHERE version = $1`, *version,
+			).Scan(&out.RuleSetVersionID, &out.Version)
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
+			if version != nil {
+				return ErrNoSuchVersion
+			}
 			return ErrNoActiveRuleSet
 		}
 		if err != nil {
-			return fmt.Errorf("validation: read version in force: %w", err)
+			return fmt.Errorf("validation: read rule-set version: %w", err)
 		}
 		rows, err := tx.Query(ctx,
-			`SELECT key, type, target, severity, scope, message, enabled FROM rules WHERE rule_set_version_id = $1 ORDER BY key`,
+			`SELECT key, type, target, params, severity, "when", scope, message, enabled FROM rules WHERE rule_set_version_id = $1 ORDER BY key`,
 			out.RuleSetVersionID)
 		if err != nil {
-			return fmt.Errorf("validation: read rules in force: %w", err)
+			return fmt.Errorf("validation: read rules: %w", err)
 		}
 		defer rows.Close()
 		out.Rules = []StaffRule{}
 		for rows.Next() {
 			var r StaffRule
-			if err := rows.Scan(&r.Key, &r.Type, &r.Target, &r.Severity, &r.Scope, &r.Message, &r.Enabled); err != nil {
+			if err := rows.Scan(&r.Key, &r.Type, &r.Target, &r.Params, &r.Severity, &r.When, &r.Scope, &r.Message, &r.Enabled); err != nil {
 				return fmt.Errorf("validation: scan rule: %w", err)
 			}
 			out.Rules = append(out.Rules, r)
@@ -150,6 +170,8 @@ func staffRulesError(err error) (int, string) {
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, ErrNoActiveRuleSet):
 		return http.StatusServiceUnavailable, "no rule set in force"
+	case errors.Is(err, ErrNoSuchVersion):
+		return http.StatusNotFound, "no such rule-set version"
 	case errors.Is(err, ErrRuleNotInForce):
 		return http.StatusNotFound, "no such rule in the version in force"
 	default:
@@ -158,12 +180,22 @@ func staffRulesError(err error) (int, string) {
 }
 
 // StaffListRulesHandler serves GET /v1/staff/rules.
-func StaffListRulesHandler(list func(ctx context.Context) (InForceRules, error), log *slog.Logger) http.HandlerFunc {
+func StaffListRulesHandler(list func(ctx context.Context, version *int) (InForceRules, error), log *slog.Logger) http.HandlerFunc {
 	if log == nil {
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		rules, err := list(r.Context())
+		var version *int
+		if q := r.URL.Query(); q.Has("version") {
+			n, err := strconv.ParseInt(q.Get("version"), 10, 32)
+			if err != nil || n < 1 {
+				writeError(w, http.StatusBadRequest, "invalid version")
+				return
+			}
+			vi := int(n)
+			version = &vi
+		}
+		rules, err := list(r.Context(), version)
 		if err != nil {
 			status, msg := staffRulesError(err)
 			if status == http.StatusInternalServerError {

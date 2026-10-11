@@ -81,9 +81,7 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
         </div>
         {NAV_ITEMS.map((n) => {
           const active = screen === n.key
-          // proto:821-822 — two badges: the live dead-letter count (red) and the
-          // learned-rules inbox (amber). Both are derived, never hardcoded here.
-          const badge = n.key === 'submissions' && deadLetterCount ? String(deadLetterCount) : n.key === 'rules' ? '3' : ''
+          const badge = n.key === 'submissions' && deadLetterCount ? String(deadLetterCount) : ''
           const badgeRed = n.key === 'submissions'
           return (
             <button key={n.key} type="button" onClick={() => onNavigate(n.key)} className="ops-nav" style={navBtnStyle(active)}>

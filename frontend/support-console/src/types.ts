@@ -43,6 +43,8 @@ export interface Rule {
   scope: RuleScope
   enabled: boolean
   message: string
+  params: Record<string, unknown>
+  when: string | null
 }
 
 export interface ReconRow {
@@ -53,18 +55,6 @@ export interface ReconRow {
   /** What the Access Point reports for the same job. */
   app: JobState
   detail: string
-}
-
-export interface RuleSetVersion {
-  version: string
-  meta: string
-  tag: string
-  kind: 'draft' | 'active' | 'arch'
-}
-
-export interface LearnedRule {
-  key: string
-  source: string
 }
 
 export interface DiffRow {

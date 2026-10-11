@@ -70,6 +70,7 @@ export function parseRoute(pathname: string): Route | null {
 const SETTINGS_TAB_TABLE: Record<SettingsTab, true> = {
   members: true,
   roles: true,
+  buyers: true,
   connectors: true,
   api: true,
   signing: true,

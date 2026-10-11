@@ -362,6 +362,16 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function checkMapping(',
     floor: 1,
   },
+  {
+    ts: 'Customer',
+    go: 'Customer',
+    goPath: 'internal/customer/customer.go',
+    goAnchor: 'func ListHandler(',
+    spaPath: 'frontend/app/src/lib/buyerDirectory.ts',
+    spaAnchor: 'export function listCustomers(',
+    e2eAnchor: 'export function listCustomers(',
+    floor: 14,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -494,6 +504,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'SuggestMapping',
       'CheckMappingRequest',
       'CheckMapping',
+      'Customer',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })

@@ -352,6 +352,33 @@ export interface ListResponse {
   pagination: Pagination
 }
 
+// Customer mirrors internal/customer's Customer struct (buyer directory row).
+export interface Customer {
+  id: string
+  tin: string
+  name: string | null
+  contact_person: string | null
+  buyer_type: string | null
+  email: string | null
+  telephone: string | null
+  street: string | null
+  city: string | null
+  postal_zone: string | null
+  country: string | null
+  state: string | null
+  lga: string | null
+  created_at: string
+}
+
+// listCustomers(): GET /v1/customers.
+export function listCustomers(token: string, query?: { limit?: number; offset?: number }): Promise<{ customers: Customer[]; pagination: Pagination }> {
+  const params = new URLSearchParams()
+  if (query?.limit !== undefined) params.set('limit', String(query.limit))
+  if (query?.offset !== undefined) params.set('offset', String(query.offset))
+  const qs = params.toString()
+  return apiFetch(`${apiBase()}/api/invoice/v1/customers${qs ? `?${qs}` : ''}`, { token })
+}
+
 export interface Violation {
   rule_key: string
   severity: string

@@ -132,7 +132,13 @@ describe('Settings > shell', () => {
     render(<SettingsView ctx={settingsCtx('api', false)} />)
     expect(screen.getByRole('heading', { name: 'Settings' }).style.fontWeight).toBe('')
     const tabs = screen.getAllByRole('button').filter((b) => b.className === 'pf-tab')
-    expect(tabs.map((t) => t.textContent)).toEqual(['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates'])
+    expect(tabs.map((t) => t.textContent)).toEqual(['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates'])
+  })
+
+  it('in-house tab strip lists Buyers after Roles', () => {
+    render(<SettingsView ctx={inhouse()} />)
+    const tabs = screen.getAllByRole('button').filter((b) => b.className === 'pf-tab')
+    expect(tabs.map((t) => t.textContent)).toEqual(['Company', 'Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates'])
   })
 
   it.each(['connectors', 'api', 'signing'] as const)('%s: no 99 or 999 radius anywhere', (tab) => {

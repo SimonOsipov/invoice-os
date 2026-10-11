@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 func versionsOf(t *testing.T, app *pgxpool.Pool) VersionList {
@@ -244,4 +246,58 @@ func directRules(t *testing.T, super *pgxpool.Pool, versionID string) []StaffRul
 		out = append(out, r)
 	}
 	return out
+}
+
+func TestStaffVersions_DateBoundariesAroundToday(t *testing.T) {
+	super, app := dbTestPools(t)
+	inForceID, inForce := versionInForce(t, super)
+	var from string
+	if err := super.QueryRow(context.Background(), `SELECT to_char(effective_from, 'YYYY-MM-DD') FROM rule_set_versions WHERE id = $1`, inForceID).Scan(&from); err != nil {
+		t.Fatal(err)
+	}
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format(time.DateOnly)
+
+	tomorrowID, tomorrowV := seedVersion(t, super)
+	sealAndDate(t, super, tomorrowID, tomorrow)
+	// Dated long before today: sealed, dated, not in force.
+	olderID, olderV := seedVersion(t, super)
+	sealAndDate(t, super, olderID, time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.DateOnly))
+
+	got := versionsOf(t, app)
+	for _, v := range got.Versions {
+		if v.Version == tomorrowV && (v.EffectiveFrom == nil || *v.EffectiveFrom != tomorrow) {
+			t.Errorf("effective_from = %v, want %s", v.EffectiveFrom, tomorrow)
+		}
+	}
+	for version, want := range map[int]string{tomorrowV: "scheduled", olderV: "superseded", inForce: "in_force"} {
+		if s := stateOf(t, got, version); s != want {
+			t.Errorf("v%d (in force dated %s, today %s) state = %q, want %q", version, from, got.Today, s, want)
+		}
+	}
+}
+
+func TestStaffVersions_RefusesACallerWithoutTheRulesRole(t *testing.T) {
+	_, app := dbTestPools(t)
+	if _, err := NewStore(app).Versions(context.Background()); !errors.Is(err, db.ErrNotStaff) {
+		t.Errorf("Versions without staff identity = %v, want db.ErrNotStaff", err)
+	}
+	if _, err := NewStore(app).RulesOfVersion(context.Background(), nil); !errors.Is(err, db.ErrNotStaff) {
+		t.Errorf("RulesOfVersion without staff identity = %v, want db.ErrNotStaff", err)
+	}
+}
+
+func TestStaffRules_RulesOfVersionCarriesAWhenAndParams(t *testing.T) {
+	super, app := dbTestPools(t)
+	id, version := seedVersion(t, super)
+	seedRule(t, super, id, "when-rule")
+	if _, err := super.Exec(context.Background(), `UPDATE rules SET "when" = 'has(invoice.currency)', params = '{"min":5}' WHERE rule_set_version_id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewStore(app).RulesOfVersion(staffCtx(t, uuid.NewString()), &version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rules) != 1 || got.Rules[0].When == nil || *got.Rules[0].When != "has(invoice.currency)" || string(got.Rules[0].Params) != `{"min": 5}` {
+		t.Errorf("got %+v, want when and params {\"min\": 5}", got.Rules)
+	}
 }

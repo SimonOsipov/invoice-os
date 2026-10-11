@@ -290,17 +290,8 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 		}
 	}
 
-	// A stamp is never guessed: no item carries one (old server) -> the
-	// top-level stamp judged all; some carry one -> outage.
-	// ceiling: remove the fallback in ENGI-09, once every validation service sends item stamps
-	switch stamped {
-	case 0:
-		top := Stamp{Version: wire.RuleSetVersion, ID: wire.RuleSetVersionID}
-		for ref := range stamps {
-			stamps[ref] = top
-		}
-	case len(wire.Results):
-	default:
+	// A stamp is never guessed: every item carries one, or the response is an outage.
+	if stamped != len(wire.Results) {
 		return ValidateResult{}, fmt.Errorf("%w: batch response stamps %d of %d items", ErrUpstream, stamped, len(wire.Results))
 	}
 	for ref, st := range stamps {

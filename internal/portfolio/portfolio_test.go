@@ -3426,3 +3426,218 @@ func TestCreateHandler_RealStoreByRole(t *testing.T) {
 		})
 	}
 }
+
+// --- NRS contact and address fields ---------------------------------------------------
+
+// nrsKeys are the eight optional wire keys, in the order Store.Update audits them.
+var nrsKeys = []string{"email", "telephone", "street", "city", "postal_zone", "country", "state", "lga"}
+
+// nrsCtx seeds a tenant whose caller holds role and returns the pools, store, caller context and tenant.
+func nrsCtx(t *testing.T, role string) (*pgxpool.Pool, *pgxpool.Pool, *Store, context.Context, string) {
+	t.Helper()
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := uuid.NewString()
+	if _, err := super.Exec(ctx, `INSERT INTO tenants (id, name, kind) VALUES ($1, 'portfolio nrs tenant', 'firm')`, tenantID); err != nil {
+		t.Fatalf("seed tenant: %v", err)
+	}
+	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenantID) })
+	if _, err := super.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role, status) VALUES ($1, $2, $3, 'active')`,
+		tenantID, memberSubject, role); err != nil {
+		t.Fatalf("seed caller membership: %v", err)
+	}
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+	return super, app, NewStore(app), c, tenantID
+}
+
+func nrsValues(e Entity) []*string {
+	return []*string{e.Email, e.Telephone, e.Street, e.City, e.PostalZone, e.Country, e.State, e.LGA}
+}
+
+func TestStoreCreate_StoresTheNRSContactFields(t *testing.T) {
+	_, _, store, c, _ := nrsCtx(t, "admin")
+	in := CreateInput{
+		Name: "Acme Ltd", TIN: "1234567897",
+		Email: strPtr("ops@acme.test"), Telephone: strPtr("+2348012345678"), Street: strPtr("1 Marina"),
+		City: strPtr("Lagos"), PostalZone: strPtr("100001"), Country: strPtr("NG"), State: strPtr("NG-LA"), LGA: strPtr("NG-LA-LAG"),
+	}
+	created, err := store.Create(c, in)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := store.GetByID(c, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	want := nrsValues(Entity{Email: in.Email, Telephone: in.Telephone, Street: in.Street, City: in.City,
+		PostalZone: in.PostalZone, Country: in.Country, State: in.State, LGA: in.LGA})
+	for name, e := range map[string]Entity{"Create": created, "GetByID": got} {
+		for i, v := range nrsValues(e) {
+			if v == nil || *v != *want[i] {
+				t.Errorf("%s: %s = %v, want %q", name, nrsKeys[i], v, *want[i])
+			}
+		}
+	}
+}
+
+func TestCreateHandler_AbsentNRSFieldsAreNull(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	create := func(ctx context.Context, in CreateInput) (Entity, error) {
+		return Entity{ID: uuid.NewString(), Name: in.Name, Status: "active", CreatedAt: time.Now()}, nil
+	}
+	rec, _ := doCreate(t, create, &id, createRequest{Name: "Acme Ltd", TIN: "1234567897"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rec.Code)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, k := range nrsKeys {
+		v, ok := raw[k]
+		if !ok || string(v) != "null" {
+			t.Errorf("key %q = %s (present %v), want null", k, v, ok)
+		}
+	}
+}
+
+func TestStoreList_CarriesEachEntitysNRSFields(t *testing.T) {
+	super, _, store, c, tenantID := nrsCtx(t, "preparer")
+	x := seedEntity(t, super, tenantID, "Xylo", strPtr("1234567897"))
+	y := seedEntity(t, super, tenantID, "Yarrow", strPtr("123456780006"))
+	for id, state := range map[string]string{x: "NG-LA", y: "NG-FC"} {
+		if _, err := super.Exec(context.Background(), `UPDATE business_entities SET state = $1 WHERE id = $2`, state, id); err != nil {
+			t.Fatalf("seed state: %v", err)
+		}
+	}
+	items, _, err := store.List(c, ListFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	got := map[string]string{}
+	for _, e := range items {
+		if e.State != nil {
+			got[e.ID] = *e.State
+		}
+	}
+	if len(items) != 2 || got[x] != "NG-LA" || got[y] != "NG-FC" {
+		t.Errorf("List states = %v (rows %d), want %s=NG-LA %s=NG-FC", got, len(items), x, y)
+	}
+}
+
+func TestStoreGetByID_CarriesTheNRSFields(t *testing.T) {
+	super, _, store, c, tenantID := nrsCtx(t, "preparer")
+	id := seedEntity(t, super, tenantID, "Acme", strPtr("1234567897"))
+	if _, err := super.Exec(context.Background(), `UPDATE business_entities SET lga = 'NG-LA-LAG' WHERE id = $1`, id); err != nil {
+		t.Fatalf("seed lga: %v", err)
+	}
+	got, err := store.GetByID(c, id)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.LGA == nil || *got.LGA != "NG-LA-LAG" {
+		t.Errorf("lga = %v, want NG-LA-LAG", got.LGA)
+	}
+}
+
+func TestStoreUpdate_NRSFieldsAuditTheirNames(t *testing.T) {
+	super, app, store, c, tenantID := nrsCtx(t, "preparer")
+	id := seedEntity(t, super, tenantID, "Acme", strPtr("1234567897"))
+	if _, err := store.Update(c, id, UpdateInput{Email: strPtr("secret@acme.test"), State: strPtr("NG-LA")}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	var payload string
+	if err := db.WithinTenantTx(context.Background(), app, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(),
+			`SELECT payload::text FROM audit_log WHERE event = 'portfolio.entity.updated' AND payload->>'id' = $1`, id,
+		).Scan(&payload)
+	}); err != nil {
+		t.Fatalf("read audit payload: %v", err)
+	}
+	var p struct {
+		Fields []string `json:"fields"`
+	}
+	if err := json.Unmarshal([]byte(payload), &p); err != nil {
+		t.Fatalf("decode payload %q: %v", payload, err)
+	}
+	if strings.Join(p.Fields, ",") != "email,state" {
+		t.Errorf("fields = %v, want [email state]", p.Fields)
+	}
+	if strings.Contains(payload, "secret@acme.test") || strings.Contains(payload, "NG-LA") {
+		t.Errorf("audit payload holds a value: %s", payload)
+	}
+}
+
+func TestStoreUpdate_NRSEmptyStringIsStored(t *testing.T) {
+	_, _, store, c, _ := nrsCtx(t, "admin")
+	created, err := store.Create(c, CreateInput{
+		Name: "Acme", TIN: "1234567897",
+		Email: strPtr("a@b.test"), Telephone: strPtr("+234"), Street: strPtr("1 Marina"), City: strPtr("Lagos"),
+		PostalZone: strPtr("100001"), Country: strPtr("NG"), State: strPtr("NG-LA"), LGA: strPtr("NG-LA-LAG"),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := store.Update(c, created.ID, UpdateInput{Street: strPtr("")})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.Street == nil || *got.Street != "" {
+		t.Errorf("street = %v, want empty string", got.Street)
+	}
+	before, after := nrsValues(created), nrsValues(got)
+	for i, k := range nrsKeys {
+		if k == "street" {
+			continue
+		}
+		if after[i] == nil || *after[i] != *before[i] {
+			t.Errorf("%s = %v, want unchanged %q", k, after[i], *before[i])
+		}
+	}
+}
+
+func TestUpdateHandler_OnlyAnNRSFieldIsNotAnEmptyPatch(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	update := func(ctx context.Context, gotID string, in UpdateInput) (Entity, error) {
+		if in.Name != nil || in.LGA == nil || *in.LGA != "NG-XX-XXX" {
+			t.Fatalf("update input = %+v, want only lga NG-XX-XXX", in)
+		}
+		return Entity{ID: gotID, Name: "Unchanged", LGA: in.LGA, Status: "active", CreatedAt: time.Now()}, nil
+	}
+	rec, body := doUpdate(t, update, &id, uuid.NewString(), `{"lga":"NG-XX-XXX"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	if body.Name != "Unchanged" {
+		t.Errorf("name = %q, want Unchanged", body.Name)
+	}
+}
+
+func TestUpdateHandler_EmptyBodyStillRefused(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	update := func(ctx context.Context, gotID string, in UpdateInput) (Entity, error) {
+		t.Fatal("update must not run for an empty PATCH")
+		return Entity{}, nil
+	}
+	rec, body := doUpdate(t, update, &id, uuid.NewString(), `{}`)
+	if rec.Code != http.StatusBadRequest || body.Error != "no fields to update" {
+		t.Errorf("got %d %q, want 400 \"no fields to update\"", rec.Code, body.Error)
+	}
+}
+
+func TestStoreUpdate_PreparerCanSetNRSFields(t *testing.T) {
+	super, _, store, c, tenantID := nrsCtx(t, "preparer")
+	id := seedEntity(t, super, tenantID, "Acme", strPtr("1234567897"))
+	got, err := store.Update(c, id, UpdateInput{Telephone: strPtr("+2348000000000")})
+	if err != nil {
+		t.Fatalf("Update as preparer: %v", err)
+	}
+	if got.Telephone == nil || *got.Telephone != "+2348000000000" {
+		t.Errorf("telephone = %v, want +2348000000000", got.Telephone)
+	}
+	again, err := store.GetByID(c, id)
+	if err != nil || again.Telephone == nil || *again.Telephone != "+2348000000000" {
+		t.Errorf("stored telephone = %v (err %v), want +2348000000000", again.Telephone, err)
+	}
+}

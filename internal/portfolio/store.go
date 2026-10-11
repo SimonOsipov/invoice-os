@@ -58,11 +58,13 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Entity, error) {
 		}
 
 		if err := tx.QueryRow(ctx,
-			`INSERT INTO business_entities (tenant_id, name, tin, registration, sector, address)
-			 VALUES ($1, $2, $3, $4, $5, $6)
-			 RETURNING id, name, tin, registration, sector, address, status, created_at`,
+			`INSERT INTO business_entities (tenant_id, name, tin, registration, sector, address,
+			                         email, telephone, street, city, postal_zone, country, state, lga)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			 RETURNING id, name, tin, registration, sector, address, email, telephone, street, city, postal_zone, country, state, lga, status, created_at`,
 			id.TenantID, in.Name, canonicalTIN, in.Registration, in.Sector, in.Address,
-		).Scan(&entity.ID, &entity.Name, &entity.TIN, &entity.Registration, &entity.Sector, &entity.Address, &entity.Status, &entity.CreatedAt); err != nil {
+			in.Email, in.Telephone, in.Street, in.City, in.PostalZone, in.Country, in.State, in.LGA,
+		).Scan(&entity.ID, &entity.Name, &entity.TIN, &entity.Registration, &entity.Sector, &entity.Address, &entity.Email, &entity.Telephone, &entity.Street, &entity.City, &entity.PostalZone, &entity.Country, &entity.State, &entity.LGA, &entity.Status, &entity.CreatedAt); err != nil {
 			if pgCode(err) == "23505" {
 				return ErrDuplicateTIN
 			}
@@ -135,7 +137,7 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 
 		selectArgs := append(append([]any{}, args...), f.Limit, f.Offset)
 		rows, err := tx.Query(ctx, fmt.Sprintf(
-			`SELECT id, name, tin, registration, sector, address, status, created_at
+			`SELECT id, name, tin, registration, sector, address, email, telephone, street, city, postal_zone, country, state, lga, status, created_at
 			 FROM business_entities%s
 			 ORDER BY name ASC, id ASC
 			 LIMIT $%d OFFSET $%d`, where, len(args)+1, len(args)+2,
@@ -146,7 +148,7 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 		defer rows.Close()
 		for rows.Next() {
 			var e Entity
-			if err := rows.Scan(&e.ID, &e.Name, &e.TIN, &e.Registration, &e.Sector, &e.Address, &e.Status, &e.CreatedAt); err != nil {
+			if err := rows.Scan(&e.ID, &e.Name, &e.TIN, &e.Registration, &e.Sector, &e.Address, &e.Email, &e.Telephone, &e.Street, &e.City, &e.PostalZone, &e.Country, &e.State, &e.LGA, &e.Status, &e.CreatedAt); err != nil {
 				return err
 			}
 			items = append(items, e)
@@ -171,7 +173,9 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 // RLS-invisible) maps to ErrNotFound; a unique_violation (23505) on the
 // duplicate-TIN partial index maps to ErrDuplicateTIN, same as Create.
 func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Entity, error) {
-	if in.Name == nil && in.TIN == nil && in.Registration == nil && in.Sector == nil && in.Address == nil {
+	if in.Name == nil && in.TIN == nil && in.Registration == nil && in.Sector == nil && in.Address == nil &&
+		in.Email == nil && in.Telephone == nil && in.Street == nil && in.City == nil &&
+		in.PostalZone == nil && in.Country == nil && in.State == nil && in.LGA == nil {
 		return Entity{}, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
 
@@ -217,16 +221,56 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Entity, 
 			setClauses = append(setClauses, fmt.Sprintf("address = $%d", len(args)))
 			changedFields = append(changedFields, "address")
 		}
+		if in.Email != nil {
+			args = append(args, *in.Email)
+			setClauses = append(setClauses, fmt.Sprintf("email = $%d", len(args)))
+			changedFields = append(changedFields, "email")
+		}
+		if in.Telephone != nil {
+			args = append(args, *in.Telephone)
+			setClauses = append(setClauses, fmt.Sprintf("telephone = $%d", len(args)))
+			changedFields = append(changedFields, "telephone")
+		}
+		if in.Street != nil {
+			args = append(args, *in.Street)
+			setClauses = append(setClauses, fmt.Sprintf("street = $%d", len(args)))
+			changedFields = append(changedFields, "street")
+		}
+		if in.City != nil {
+			args = append(args, *in.City)
+			setClauses = append(setClauses, fmt.Sprintf("city = $%d", len(args)))
+			changedFields = append(changedFields, "city")
+		}
+		if in.PostalZone != nil {
+			args = append(args, *in.PostalZone)
+			setClauses = append(setClauses, fmt.Sprintf("postal_zone = $%d", len(args)))
+			changedFields = append(changedFields, "postal_zone")
+		}
+		if in.Country != nil {
+			args = append(args, *in.Country)
+			setClauses = append(setClauses, fmt.Sprintf("country = $%d", len(args)))
+			changedFields = append(changedFields, "country")
+		}
+		if in.State != nil {
+			args = append(args, *in.State)
+			setClauses = append(setClauses, fmt.Sprintf("state = $%d", len(args)))
+			changedFields = append(changedFields, "state")
+		}
+		if in.LGA != nil {
+			args = append(args, *in.LGA)
+			setClauses = append(setClauses, fmt.Sprintf("lga = $%d", len(args)))
+			changedFields = append(changedFields, "lga")
+		}
 
 		args = append(args, id)
 		query := fmt.Sprintf(
 			`UPDATE business_entities SET %s WHERE id = $%d
-			 RETURNING id, name, tin, registration, sector, address, status, created_at`,
+			 RETURNING id, name, tin, registration, sector, address, email, telephone, street, city, postal_zone, country, state, lga, status, created_at`,
 			strings.Join(setClauses, ", "), len(args),
 		)
 
 		if err := tx.QueryRow(ctx, query, args...).Scan(
-			&entity.ID, &entity.Name, &entity.TIN, &entity.Registration, &entity.Sector, &entity.Address, &entity.Status, &entity.CreatedAt,
+			&entity.ID, &entity.Name, &entity.TIN, &entity.Registration, &entity.Sector, &entity.Address, &entity.Email, &entity.Telephone, &entity.Street, &entity.City, &entity.PostalZone, &entity.Country, &entity.State, &entity.LGA, &entity.Status, &entity.CreatedAt,
 		); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
@@ -277,9 +321,9 @@ func (s *Store) SetStatus(ctx context.Context, id, target string) (Entity, error
 
 		if err := tx.QueryRow(ctx,
 			`UPDATE business_entities SET status = $1 WHERE id = $2
-			 RETURNING id, name, tin, registration, sector, address, status, created_at`,
+			 RETURNING id, name, tin, registration, sector, address, email, telephone, street, city, postal_zone, country, state, lga, status, created_at`,
 			target, id,
-		).Scan(&entity.ID, &entity.Name, &entity.TIN, &entity.Registration, &entity.Sector, &entity.Address, &entity.Status, &entity.CreatedAt); err != nil {
+		).Scan(&entity.ID, &entity.Name, &entity.TIN, &entity.Registration, &entity.Sector, &entity.Address, &entity.Email, &entity.Telephone, &entity.Street, &entity.City, &entity.PostalZone, &entity.Country, &entity.State, &entity.LGA, &entity.Status, &entity.CreatedAt); err != nil {
 			return err
 		}
 
@@ -306,9 +350,9 @@ func (s *Store) GetByID(ctx context.Context, id string) (Entity, error) {
 	var entity Entity
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx,
-			`SELECT id, name, tin, registration, sector, address, status, created_at
+			`SELECT id, name, tin, registration, sector, address, email, telephone, street, city, postal_zone, country, state, lga, status, created_at
 			 FROM business_entities WHERE id = $1`, id,
-		).Scan(&entity.ID, &entity.Name, &entity.TIN, &entity.Registration, &entity.Sector, &entity.Address, &entity.Status, &entity.CreatedAt)
+		).Scan(&entity.ID, &entity.Name, &entity.TIN, &entity.Registration, &entity.Sector, &entity.Address, &entity.Email, &entity.Telephone, &entity.Street, &entity.City, &entity.PostalZone, &entity.Country, &entity.State, &entity.LGA, &entity.Status, &entity.CreatedAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}

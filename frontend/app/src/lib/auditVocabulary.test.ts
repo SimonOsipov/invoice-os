@@ -242,6 +242,22 @@ describe('audit vocabulary', () => {
     }
   })
 
+  it('auditVocabulary_customRuleEventsAreLabelledInValidation', () => {
+    for (const [id, label] of [
+      ['custom_rule.created', 'Custom rule created'],
+      ['custom_rule.updated', 'Custom rule updated'],
+      ['custom_rule.deleted', 'Custom rule deleted'],
+    ]) {
+      const view = auditEventView(id)
+      // humanise() answers a null domain for an unknown id, so the domain tells labelled from unknown.
+      expect(view.domain, `${id} must be a labelled validation event`).toBe('validation')
+      expect(view.label).toBe(label)
+      expect(view.tone).toBeNull()
+    }
+    // Control: the same view function answers a tone for an outcome-bearing event.
+    expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
   it('auditVocabulary_unknownTypeIsNeverRawPrimary', () => {
     const view = auditEventView('something.invented_here')
     expect(view.label).not.toBe('something.invented_here')

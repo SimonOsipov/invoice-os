@@ -34,7 +34,7 @@ func NewStore(pool *pgxpool.Pool, check func(context.Context, CheckInput) error)
 const ruleCols = `rule_id::text, id::text, revision, entity_id::text, type, target, params, severity,
 	"when", message, enabled, created_at, created_by`
 
-// latestRevisions is the newest revision of each rule that is not deleted.
+// latestRevisions is the newest revision of each rule.
 const latestRevisions = `(SELECT DISTINCT ON (rule_id) * FROM custom_rule_revisions ORDER BY rule_id, revision DESC) cur`
 
 func scanRule(row pgx.Row) (Rule, error) {

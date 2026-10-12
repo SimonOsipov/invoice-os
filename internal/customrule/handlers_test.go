@@ -280,3 +280,89 @@ func TestCustomRulesHandlers_SuccessStatusesAndRuleShape(t *testing.T) {
 		t.Errorf("list with no rules = %d %q, want 200 {\"custom_rules\":[]}", rec.Code, rec.Body.String())
 	}
 }
+
+// --- Mode B: adversarial ---------------------------------------------------------
+
+func TestCustomRulesHandlers_BadBodiesAre400AndNeverReachTheStore(t *testing.T) {
+	pad := func(n int) string {
+		return strings.Replace(ruleBody, `"message":"m"`, `"message":"`+strings.Repeat("a", n)+`"`, 1)
+	}
+	base := len(pad(0))
+	const limit = 32 << 10
+	noEnabled := strings.Replace(ruleBody, `,"enabled":true`, "", 1)
+	cases := []struct {
+		name, body, msg string
+	}{
+		{"malformed json", `{"type":`, "invalid request body"},
+		{"empty body", ``, "invalid request body"},
+		{"not an object", `[]`, "invalid request body"},
+		{"wrong type for enabled", strings.Replace(ruleBody, `"enabled":true`, `"enabled":"yes"`, 1), "invalid request body"},
+		{"wrong type for entity_id", strings.Replace(ruleBody, `"entity_id":null`, `"entity_id":5`, 1), "invalid request body"},
+		{"enabled absent", noEnabled, "enabled is required"},
+		{"enabled null", strings.Replace(ruleBody, `"enabled":true`, `"enabled":null`, 1), "enabled is required"},
+		{"one byte over 32 KiB", pad(limit + 1 - base), "invalid request body"},
+		{"far over 32 KiB", pad(4 * limit), "invalid request body"},
+	}
+	for name, rt := range writeRoutes() {
+		if name == "delete" {
+			continue
+		}
+		for _, c := range cases {
+			t.Run(name+"/"+c.name, func(t *testing.T) {
+				fs := newFakeStore()
+				rec := call(fs.mux(), rt.method, rt.target, c.body)
+				if rec.Code != http.StatusBadRequest || errorBody(t, rec) != c.msg {
+					t.Errorf("status = %d %q, want 400 %q", rec.Code, rec.Body.String(), c.msg)
+				}
+				if fs.writes() != 0 {
+					t.Errorf("store writes = %d, want 0", fs.writes())
+				}
+			})
+		}
+		t.Run(name+"/exactly 32 KiB is accepted", func(t *testing.T) {
+			body := pad(limit - base)
+			if len(body) != limit {
+				t.Fatalf("test body is %d bytes, want %d", len(body), limit)
+			}
+			fs := newFakeStore()
+			rec := call(fs.mux(), rt.method, rt.target, body)
+			if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+				t.Fatalf("a body of exactly 32 KiB = %d %q, want 2xx", rec.Code, rec.Body.String())
+			}
+			if fs.writes() != 1 || len(fs.lastIn.Message) != limit-base {
+				t.Errorf("store saw %d writes, message length %d", fs.writes(), len(fs.lastIn.Message))
+			}
+		})
+		t.Run(name+"/enabled false is a value, not an absence", func(t *testing.T) {
+			fs := newFakeStore()
+			rec := call(fs.mux(), rt.method, rt.target, strings.Replace(ruleBody, `"enabled":true`, `"enabled":false`, 1))
+			if (rec.Code != http.StatusCreated && rec.Code != http.StatusOK) || fs.writes() != 1 || fs.lastIn.Enabled {
+				t.Errorf("enabled:false = %d %q, writes %d, Enabled %v, want 2xx and one write with Enabled false",
+					rec.Code, rec.Body.String(), fs.writes(), fs.lastIn.Enabled)
+			}
+		})
+	}
+}
+
+func TestCustomRulesHandlers_NoIdentityIs401BeforeTheStore(t *testing.T) {
+	const id = "/v1/custom-rules/11111111-1111-4111-8111-111111111111"
+	for name, rt := range map[string]route{
+		"list":   {http.MethodGet, "/v1/custom-rules", ""},
+		"create": {http.MethodPost, "/v1/custom-rules", ruleBody},
+		"update": {http.MethodPut, id, ruleBody},
+		"delete": {http.MethodDelete, id, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fs := newFakeStore()
+			req := httptest.NewRequest(rt.method, rt.target, strings.NewReader(rt.body))
+			rec := httptest.NewRecorder()
+			fs.mux().ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("status = %d %q, want 401", rec.Code, rec.Body.String())
+			}
+			if fs.writes()+fs.lists != 0 {
+				t.Errorf("store calls = %d, want 0", fs.writes()+fs.lists)
+			}
+		})
+	}
+}

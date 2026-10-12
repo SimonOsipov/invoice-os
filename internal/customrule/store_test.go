@@ -348,9 +348,12 @@ func asInvalid(err error) (customrule.InvalidError, bool) {
 	return ie, errors.As(err, &ie)
 }
 
-// refused reports a 403-class refusal; a suspended admin is stopped by the seam first.
+// refused reports a 403-class refusal; the seam stops a suspended admin before the store's own check.
 func refused(err error, suspended bool) bool {
-	return errors.Is(err, customrule.ErrNotPermitted) || (suspended && errors.Is(err, db.ErrNotActiveMember))
+	if suspended {
+		return errors.Is(err, db.ErrNotActiveMember)
+	}
+	return errors.Is(err, customrule.ErrNotPermitted)
 }
 
 // --- AC 1 ---------------------------------------------------------------------
@@ -1318,5 +1321,329 @@ func TestCustomRules_EveryWriteWaitsForTheTenantSaveLock(t *testing.T) {
 				t.Fatalf("%s did not finish after the lock was released", name)
 			}
 		})
+	}
+}
+
+// --- Mode B: adversarial ---------------------------------------------------------
+
+func TestCustomRules_MalformedIdsAreRefusedLikeUnknownOnes(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule malformed ids")
+	fc := &fakeCheck{}
+	h := newMux(customrule.NewStore(app, fc.fn))
+	existing, _ := seedRule(t, super, ws.id, nil, "existing")
+	before := snapshot(t, super, ws.id)
+
+	for _, id := range []string{"not-a-uuid", "1", "%20", "11111111-1111-1111-1111-11111111111Z"} {
+		for _, tc := range []struct {
+			method string
+			body   any
+		}{{http.MethodPut, input(nil, "x")}, {http.MethodDelete, nil}} {
+			rec := do(t, h, ws.admin, tc.method, "/v1/custom-rules/"+id, tc.body)
+			if rec.Code != http.StatusNotFound || errorBody(t, rec) != "custom rule not found" {
+				t.Errorf("%s /%s = %d %q, want 404 custom rule not found", tc.method, id, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	for _, bad := range []string{"not-a-uuid", "", "00000000-0000-0000-0000-00000000000"} {
+		bad := bad
+		for name, rec := range map[string]*httptest.ResponseRecorder{
+			"create": do(t, h, ws.admin, http.MethodPost, "/v1/custom-rules", input(&bad, "x")),
+			"update": do(t, h, ws.admin, http.MethodPut, "/v1/custom-rules/"+existing, input(&bad, "x")),
+		} {
+			if rec.Code != http.StatusBadRequest || errorBody(t, rec) != entityMsg {
+				t.Errorf("%s with entity_id %q = %d %q, want 400 %q", name, bad, rec.Code, rec.Body.String(), entityMsg)
+			}
+		}
+	}
+	if n := fc.calls.Load(); n != 0 {
+		t.Errorf("check calls after refused ids = %d, want 0", n)
+	}
+	if after := snapshot(t, super, ws.id); after != before {
+		t.Errorf("rows changed by malformed ids:\nbefore %s\nafter  %s", before, after)
+	}
+	if rec := do(t, h, ws.admin, http.MethodPut, "/v1/custom-rules/"+existing, input(nil, "edited")); rec.Code != http.StatusOK {
+		t.Errorf("control: PUT of a real id = %d %q, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCustomRules_ForeignAndUnknownAnswerIdenticalBytesOverHTTP(t *testing.T) {
+	super, app := dbTestPools(t)
+	a := seedWorkspace(t, super, "customrule parity A")
+	b := seedWorkspace(t, super, "customrule parity B")
+	foreignEntity := seedEntity(t, super, b.id, "B's client")
+	theirs, _ := seedRule(t, super, b.id, nil, "b's rule")
+	mine, _ := seedRule(t, super, a.id, nil, "a's rule")
+	h := newMux(customrule.NewStore(app, (&fakeCheck{}).fn))
+	unknownEntity := uuid.NewString()
+
+	foreignRec := do(t, h, a.admin, http.MethodPost, "/v1/custom-rules", input(&foreignEntity, "x"))
+	unknownRec := do(t, h, a.admin, http.MethodPost, "/v1/custom-rules", input(&unknownEntity, "x"))
+	if foreignRec.Code != http.StatusBadRequest || foreignRec.Code != unknownRec.Code || foreignRec.Body.String() != unknownRec.Body.String() {
+		t.Errorf("create foreign entity = %d %q, unknown = %d %q, want one identical 400",
+			foreignRec.Code, foreignRec.Body.String(), unknownRec.Code, unknownRec.Body.String())
+	}
+	foreignRec = do(t, h, a.admin, http.MethodPut, "/v1/custom-rules/"+mine, input(&foreignEntity, "x"))
+	unknownRec = do(t, h, a.admin, http.MethodPut, "/v1/custom-rules/"+mine, input(&unknownEntity, "x"))
+	if foreignRec.Code != http.StatusBadRequest || foreignRec.Code != unknownRec.Code || foreignRec.Body.String() != unknownRec.Body.String() {
+		t.Errorf("update foreign entity = %d %q, unknown = %d %q, want one identical 400",
+			foreignRec.Code, foreignRec.Body.String(), unknownRec.Code, unknownRec.Body.String())
+	}
+	for _, method := range []string{http.MethodPut, http.MethodDelete} {
+		var body any
+		if method == http.MethodPut {
+			body = input(nil, "x")
+		}
+		foreignRec = do(t, h, a.admin, method, "/v1/custom-rules/"+theirs, body)
+		unknownRec = do(t, h, a.admin, method, "/v1/custom-rules/"+uuid.NewString(), body)
+		if foreignRec.Code != http.StatusNotFound || foreignRec.Code != unknownRec.Code || foreignRec.Body.String() != unknownRec.Body.String() {
+			t.Errorf("%s foreign rule = %d %q, unknown = %d %q, want one identical 404",
+				method, foreignRec.Code, foreignRec.Body.String(), unknownRec.Code, unknownRec.Body.String())
+		}
+	}
+	if rows := revRows(t, super, b.id, theirs); len(rows) != 1 {
+		t.Errorf("B's rule has %d revisions after A's refused writes, want 1", len(rows))
+	}
+}
+
+func TestCustomRules_StoreRefusesWhatTheDatabaseWouldNotStoreBeforeTheCheck(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule bad content")
+	fc := &fakeCheck{}
+	store := customrule.NewStore(app, fc.fn)
+	existing, _ := seedRule(t, super, ws.id, nil, "existing")
+	before := snapshot(t, super, ws.id)
+
+	mut := map[string]func(*customrule.RuleInput){
+		"severity info":  func(in *customrule.RuleInput) { in.Severity = "info" },
+		"severity empty": func(in *customrule.RuleInput) { in.Severity = "" },
+		"severity case":  func(in *customrule.RuleInput) { in.Severity = "Error" },
+		"type empty":     func(in *customrule.RuleInput) { in.Type = "" },
+		"message empty":  func(in *customrule.RuleInput) { in.Message = "" },
+	}
+	for name, f := range mut {
+		in := input(nil, "x")
+		f(&in)
+		_, cerr := store.Create(ws.admin, in)
+		_, uerr := store.Update(ws.admin, existing, in)
+		for op, err := range map[string]error{"Create": cerr, "Update": uerr} {
+			if _, ok := asInvalid(err); !ok {
+				t.Errorf("%s (%s) err = %v, want InvalidError (a 400, not a 500)", op, name, err)
+			}
+		}
+	}
+	if n := fc.calls.Load(); n != 0 {
+		t.Errorf("check calls = %d, want 0: content the store refuses never reaches the check", n)
+	}
+	if after := snapshot(t, super, ws.id); after != before {
+		t.Errorf("rows changed by refused content:\nbefore %s\nafter  %s", before, after)
+	}
+	warn := input(nil, "warns")
+	warn.Severity = "warning"
+	if _, err := store.Create(ws.admin, warn); err != nil {
+		t.Errorf("control: severity warning: %v", err)
+	}
+}
+
+func TestCustomRules_ARefusedRuleIdNeverReachesTheCheck(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule 404 before check")
+	fc := &fakeCheck{}
+	store := customrule.NewStore(app, fc.fn)
+	gone := uuid.NewString()
+	insertRev(t, super, rev(ws.id, gone, 1))
+	del := rev(ws.id, gone, 2)
+	del.Deleted = true
+	insertRev(t, super, del)
+
+	for name, id := range map[string]string{"unknown": uuid.NewString(), "deleted": gone, "malformed": "nope"} {
+		if _, err := store.Update(ws.admin, id, input(nil, "x")); !errors.Is(err, customrule.ErrNotFound) {
+			t.Errorf("Update of a %s rule err = %v, want ErrNotFound", name, err)
+		}
+		if err := store.Delete(ws.admin, id); !errors.Is(err, customrule.ErrNotFound) {
+			t.Errorf("Delete of a %s rule err = %v, want ErrNotFound", name, err)
+		}
+	}
+	if n := fc.calls.Load(); n != 0 {
+		t.Errorf("check calls = %d, want 0: a missing rule is refused before the check", n)
+	}
+	if n := revCount(t, super, ws.id); n != 2 {
+		t.Errorf("revisions = %d, want the 2 seeded", n)
+	}
+	if got, err := store.List(ws.admin); err != nil || len(got) != 0 {
+		t.Errorf("List = %v, err %v, want empty: the only rule is deleted", got, err)
+	}
+}
+
+func TestCustomRules_ScopeMovesAndDeleteKeepTheRulesContentAndClient(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule scope moves")
+	ea := seedEntity(t, super, ws.id, "Client A")
+	eb := seedEntity(t, super, ws.id, "Client B")
+	store := customrule.NewStore(app, (&fakeCheck{}).fn)
+
+	created, err := store.Create(ws.admin, input(&ea, "on A"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	moved := input(&eb, "on B")
+	moved.Severity = "warning"
+	moved.Enabled = false
+	if _, err := store.Update(ws.admin, created.ID, moved); err != nil {
+		t.Fatalf("Update to B: %v", err)
+	}
+	if err := store.Delete(ws.admin, created.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	rows := revRows(t, super, ws.id, created.ID)
+	if len(rows) != 3 {
+		t.Fatalf("revisions = %d, want 3", len(rows))
+	}
+	if rows[0].EntityID == nil || *rows[0].EntityID != ea || rows[0].Message != "on A" {
+		t.Errorf("revision 1 = %+v, want client A untouched by the later edits", rows[0])
+	}
+	del := rows[2]
+	if !del.Deleted || del.EntityID == nil || *del.EntityID != eb || del.Message != "on B" ||
+		del.Severity != "warning" || del.Enabled || del.Type != "required" || del.Target != "buyer.name" {
+		t.Errorf("delete revision = %+v, want a deleted copy of revision 2's content", del)
+	}
+	if del.RecheckedNull {
+		t.Errorf("delete revision rechecked_at NULL, want set")
+	}
+
+	for ev, want := range map[string]string{"custom_rule.created": ea, "custom_rule.updated": eb, "custom_rule.deleted": eb} {
+		got := auditRows(t, super, ws.id, ev)
+		if len(got) != 1 || got[0].EntityID == nil || *got[0].EntityID != want {
+			t.Errorf("%s audit rows = %+v, want one attributed to client %s", ev, got, want)
+		}
+	}
+}
+
+func TestCustomRules_UpdateAndDeleteStillWorkAtTheCap(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule cap update")
+	seedCurrentRules(t, super, ws.id, 100)
+	store := customrule.NewStore(app, (&fakeCheck{}).fn)
+	list, err := store.List(ws.admin)
+	if err != nil || len(list) != 100 {
+		t.Fatalf("List = %d, err %v, want 100", len(list), err)
+	}
+	var disabled, enabled string
+	for _, r := range list {
+		if !r.Enabled {
+			disabled = r.ID
+		} else {
+			enabled = r.ID
+		}
+	}
+	if disabled == "" || enabled == "" {
+		t.Fatalf("seed has no disabled and enabled rule (%q, %q)", disabled, enabled)
+	}
+	if _, err := store.Update(ws.admin, enabled, input(nil, "edit enabled")); err != nil {
+		t.Errorf("Update at the cap: %v, want nil: the cap bounds creates only", err)
+	}
+	if _, err := store.Update(ws.admin, disabled, input(nil, "edit disabled")); err != nil {
+		t.Errorf("Update of a disabled rule at the cap: %v", err)
+	}
+	if err := store.Delete(ws.admin, enabled); err != nil {
+		t.Errorf("Delete at the cap: %v", err)
+	}
+	if n := currentCount(t, super, ws.id); n != 99 {
+		t.Errorf("current rules = %d, want 99", n)
+	}
+}
+
+func TestCustomRules_ListIsRefusedToTheSuspendedAndOpenToEveryActiveRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule list roles")
+	seedRule(t, super, ws.id, nil, "one")
+	store := customrule.NewStore(app, (&fakeCheck{}).fn)
+
+	for name, ctx := range map[string]context.Context{"admin": ws.admin, "preparer": ws.preparer, "reviewer": ws.reviewer} {
+		if got, err := store.List(ctx); err != nil || len(got) != 1 {
+			t.Errorf("List as %s = %d rules, err %v, want 1", name, len(got), err)
+		}
+	}
+	if got, err := store.List(ws.suspendedAdm); !errors.Is(err, db.ErrNotActiveMember) || len(got) != 0 {
+		t.Errorf("List as a suspended admin = %v, err %v, want ErrNotActiveMember and no rules", got, err)
+	}
+	if _, err := store.List(context.Background()); !errors.Is(err, db.ErrNoTenant) {
+		t.Errorf("List with no identity err = %v, want ErrNoTenant", err)
+	}
+}
+
+func TestCustomRules_NoIdentityWritesNothingAndSkipsTheCheck(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule no identity")
+	existing, _ := seedRule(t, super, ws.id, nil, "existing")
+	fc := &fakeCheck{}
+	store := customrule.NewStore(app, fc.fn)
+	before := snapshot(t, super, ws.id)
+	ctx := context.Background()
+
+	if _, err := store.Create(ctx, input(nil, "x")); !errors.Is(err, db.ErrNoTenant) {
+		t.Errorf("Create err = %v, want ErrNoTenant", err)
+	}
+	if _, err := store.Update(ctx, existing, input(nil, "x")); !errors.Is(err, db.ErrNoTenant) {
+		t.Errorf("Update err = %v, want ErrNoTenant", err)
+	}
+	if err := store.Delete(ctx, existing); !errors.Is(err, db.ErrNoTenant) {
+		t.Errorf("Delete err = %v, want ErrNoTenant", err)
+	}
+	if n := fc.calls.Load(); n != 0 {
+		t.Errorf("check calls = %d, want 0", n)
+	}
+	if after := snapshot(t, super, ws.id); after != before {
+		t.Errorf("rows changed without an identity")
+	}
+}
+
+// failAudit makes the audit insert of one event in one tenant raise, then removes the trigger.
+func failAudit(t *testing.T, super *pgxpool.Pool, tenantID, event string) {
+	t.Helper()
+	ctx := context.Background()
+	name := "qa_fail_audit_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := super.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS
+		$$ BEGIN RAISE EXCEPTION 'qa: audit refused'; END $$`, name)); err != nil {
+		t.Fatalf("create trigger function: %v", err)
+	}
+	t.Cleanup(func() { _, _ = super.Exec(ctx, fmt.Sprintf(`DROP FUNCTION IF EXISTS %s() CASCADE`, name)) })
+	if _, err := super.Exec(ctx, fmt.Sprintf(
+		`CREATE TRIGGER %s BEFORE INSERT ON audit_log FOR EACH ROW
+		   WHEN (NEW.tenant_id = '%s' AND NEW.event = '%s') EXECUTE FUNCTION %s()`, name, tenantID, event, name)); err != nil {
+		t.Fatalf("create audit trigger: %v", err)
+	}
+}
+
+func TestCustomRules_AFailingAuditRowRollsBackTheRevision(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule audit rollback")
+	store := customrule.NewStore(app, (&fakeCheck{}).fn)
+	existing, _ := seedRule(t, super, ws.id, nil, "existing")
+	before := snapshot(t, super, ws.id)
+
+	failAudit(t, super, ws.id, "custom_rule.created")
+	failAudit(t, super, ws.id, "custom_rule.updated")
+	failAudit(t, super, ws.id, "custom_rule.deleted")
+
+	if _, err := store.Create(ws.admin, input(nil, "x")); err == nil || errors.Is(err, customrule.ErrNotPermitted) {
+		t.Errorf("Create with a failing audit insert err = %v, want the audit error", err)
+	}
+	if _, err := store.Update(ws.admin, existing, input(nil, "x")); err == nil {
+		t.Errorf("Update with a failing audit insert succeeded")
+	}
+	if err := store.Delete(ws.admin, existing); err == nil {
+		t.Errorf("Delete with a failing audit insert succeeded")
+	}
+	if after := snapshot(t, super, ws.id); after != before {
+		t.Errorf("a revision outlived its failed audit row:\nbefore %s\nafter  %s", before, after)
+	}
+	if n := auditTotal(t, super, ws.id); n != 0 {
+		t.Errorf("audit rows = %d, want 0", n)
+	}
+	rec := do(t, newMux(store), ws.admin, http.MethodPost, "/v1/custom-rules", input(nil, "x"))
+	if rec.Code != http.StatusInternalServerError || errorBody(t, rec) != "internal server error" {
+		t.Errorf("POST with a failing audit insert = %d %q, want 500 without the cause", rec.Code, rec.Body.String())
 	}
 }

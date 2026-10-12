@@ -400,3 +400,17 @@ func TestBatch_UnusedInvalidSetIs400(t *testing.T) {
 		t.Errorf("status = %d, want 400 for an invalid set no item names", rec.Code)
 	}
 }
+
+func TestBatch_DuplicateKeyAcrossSetsIs400WithNoLoad(t *testing.T) {
+	var calls []loadCall
+	rec := runCustomBatch(t, goldenFake(), &calls, map[string]any{
+		"invoices": []any{item("a", "firm", "e1")},
+		"custom_rule_sets": map[string]any{
+			"firm": []any{requiredEmail("rev1", "custom:same")},
+			"e1":   []any{requiredEmail("rev2", "custom:same")},
+		},
+	})
+	if rec.Code != http.StatusBadRequest || len(calls) != 0 {
+		t.Errorf("got %d with %d loader calls, want 400 and 0 (body=%s)", rec.Code, len(calls), rec.Body.String())
+	}
+}

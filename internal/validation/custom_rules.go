@@ -46,12 +46,12 @@ func newCustomSets(eng *Engine, sets map[string][]customRuleWire, items []batchI
 
 	cs := &customSets{byName: make(map[string][]int, len(sets))}
 	seenID := map[string]bool{}
+	seenKey := map[string]bool{}
 	for _, name := range names {
 		wires := sets[name]
 		if len(wires) == 0 {
 			return nil, fmt.Errorf("custom_rule_sets[%q] must not be empty", name)
 		}
-		seenKey := map[string]bool{}
 		for _, w := range wires {
 			if err := checkCustomRule(eng, w); err != nil {
 				return nil, fmt.Errorf("custom_rule_sets[%q]: %w", name, err)

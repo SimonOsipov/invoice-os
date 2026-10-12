@@ -59,6 +59,7 @@ func main() {
 	// 401 without an identity, otherwise 403. Staff switch a rule through PATCH /v1/staff/rules/{key};
 	// the owner statement is the break-glass path.
 	app.Mux.HandleFunc("PATCH /v1/rules/{key}", validation.ToggleHandler())
+	app.Mux.HandleFunc("GET /v1/rules", validation.GoldenRulesHandler(store.GoldenRules, app.Logger))
 
 	// Staff routes: the platform admits only a rules-role caller.
 	app.Mux.HandleFunc("GET /v1/staff/rules", validation.StaffListRulesHandler(store.RulesOfVersion, app.Logger))

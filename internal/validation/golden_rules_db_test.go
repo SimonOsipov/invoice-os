@@ -22,6 +22,8 @@ const (
 	goldenTenantHoneywell = "22222222-2222-2222-2222-222222222222"
 	// v4 starts at activeSeedDate; v5 is the scheduled migration.
 	goldenV5Date = "2027-01-01"
+	// Between v4's start and v5's, so v4 is in force and v5 scheduled whenever the suite runs.
+	goldenPinnedToday = "2026-10-12"
 )
 
 // goldenWire is Store.GoldenRules seen as the handler writes it, so a test does not depend on field types.
@@ -76,6 +78,28 @@ func readGolden(ctx context.Context, app *pgxpool.Pool) (goldenWire, error) {
 	}
 	var w goldenWire
 	return w, json.Unmarshal(buf.Bytes(), &w)
+}
+
+// readGoldenAsOf reads as of a pinned today, so a date-based expectation does not rot.
+func readGoldenAsOf(t *testing.T, ctx context.Context, app *pgxpool.Pool, today string) goldenWire {
+	t.Helper()
+	asOf, err := time.Parse(time.DateOnly, today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewStore(app).goldenRulesAsOf(ctx, asOf)
+	if err != nil {
+		t.Fatalf("goldenRulesAsOf: %v", err)
+	}
+	b, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w goldenWire
+	if err := json.Unmarshal(b, &w); err != nil {
+		t.Fatal(err)
+	}
+	return w
 }
 
 func mustReadGolden(t *testing.T, ctx context.Context, app *pgxpool.Pool) goldenWire {
@@ -170,7 +194,7 @@ func TestGoldenRules_DB_ListsDatedVersionsWithState(t *testing.T) {
 	ctx := seedGoldenMember(t, super, goldenTenantOkafor, "admin", "active")
 	_, draft := seedVersion(t, super)
 
-	got := mustReadGolden(t, ctx, app)
+	got := readGoldenAsOf(t, ctx, app, goldenPinnedToday)
 	if len(got.Versions) == 0 {
 		t.Fatal("no versions listed")
 	}

@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/customrule"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
@@ -299,4 +300,42 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 		StampByRef:     stamps,
 		ByRef:          byRef,
 	}, nil
+}
+
+// CheckCustomRule asks the validation service whether a rule may be saved: 204 -> nil,
+// 422 -> customrule.InvalidError, anything else -> ErrUpstream.
+func (v *Validator) CheckCustomRule(ctx context.Context, in customrule.CheckInput) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("%w: marshal custom rule check: %v", ErrUpstream, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.baseURL+"/v1/custom-rules/check", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("%w: build custom rule check: %v", ErrUpstream, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerS2SToken, v.s2sToken)
+	resp, err := v.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: post custom rule check: %v", ErrUpstream, err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode >= http.StatusInternalServerError {
+		platform.ReportedElsewhere(ctx)
+	}
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+	case http.StatusUnprocessableEntity:
+		var out struct {
+			Error string `json:"error"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&out) == nil && out.Error != "" {
+			return customrule.InvalidError{Msg: out.Error}
+		}
+	}
+	return fmt.Errorf("%w: validation service returned status %d", ErrUpstream, resp.StatusCode)
 }

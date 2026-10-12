@@ -7,7 +7,7 @@ import { AUDIT_EVENTS, auditEventView, type AuditDomain } from './auditVocabular
 
 const REPO_ROOT = resolve(__dirname, '../../../..')
 
-// The 45 identifiers this app claims to label. Four families
+// The 48 identifiers this app claims to label. Four families
 // are built from a variable rather than a literal, so a grep for quoted strings undercounts:
 // tenancy/store.go, portfolio/store.go, document/document.go and
 // submission/verdict_audit.go ("submission."+outcome).
@@ -61,7 +61,13 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'invitation.resent',
     'invitation.accepted',
   ],
-  validation: ['validation.rule.enabled', 'validation.rule.disabled'],
+  validation: [
+    'validation.rule.enabled',
+    'validation.rule.disabled',
+    'custom_rule.created',
+    'custom_rule.updated',
+    'custom_rule.deleted',
+  ],
   submissions: ['submission.accepted', 'submission.rejected', 'submission.failed'],
   reconciliation: ['reconciliation.drift_detected', 'reconciliation.auto_fixed'],
   customers: ['customers.customer.updated'],
@@ -70,12 +76,12 @@ const EXPECTED: Record<AuditDomain, string[]> = {
 const ALL = Object.values(EXPECTED).flat()
 
 describe('audit vocabulary', () => {
-  it('auditVocabulary_hasAllFortyFiveTypes', () => {
+  it('auditVocabulary_hasAllFortyEightTypes', () => {
     const shipped = Object.keys(AUDIT_EVENTS)
     // An empty collection satisfies every assertion inside a loop, so pin the size first.
     expect(shipped.length).toBeGreaterThan(0)
-    expect(shipped.length).toBe(45)
-    expect(ALL.length).toBe(45)
+    expect(shipped.length).toBe(48)
+    expect(ALL.length).toBe(48)
     expect(new Set(shipped)).toEqual(new Set(ALL))
   })
 
@@ -142,6 +148,9 @@ describe('audit vocabulary', () => {
       'invitation.sent',
       'invitation.resent',
       'invitation.accepted',
+      'custom_rule.created',
+      'custom_rule.updated',
+      'custom_rule.deleted',
     ]) {
       expect(literals, `${id} must be emitted by a Go writer`).toContain(id)
     }

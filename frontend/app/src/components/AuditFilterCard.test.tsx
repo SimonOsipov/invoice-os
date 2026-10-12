@@ -259,7 +259,7 @@ function openEventPopover() {
 }
 
 describe('AuditFilterCard: event type', () => {
-  it('auditEventFilter_elevenGroupsCoverAllFortyFive', () => {
+  it('auditEventFilter_elevenGroupsCoverAllFortyEight', () => {
     renderCard()
     openEventPopover()
 
@@ -267,7 +267,7 @@ describe('AuditFilterCard: event type', () => {
     expect(groups.length, 'population floor: eleven group headings').toBe(11)
 
     const rows = screen.getAllByTestId(/^audit-event-row-/)
-    expect(rows.length, 'population floor: 45 rows').toBe(45)
+    expect(rows.length, 'population floor: 48 rows').toBe(48)
 
     const flattenedIds = rows.map((r) => r.getAttribute('data-testid')!.replace('audit-event-row-', ''))
     expect(flattenedIds, 'the union of every group must equal the vocabulary exactly').toEqual(Object.keys(AUDIT_EVENTS))
@@ -394,7 +394,7 @@ describe('AuditFilterCard: event type', () => {
     openEventPopover()
 
     const labels = screen.getAllByTestId(/^audit-event-label-/)
-    expect(labels.length, 'population floor: 45 labels').toBe(45)
+    expect(labels.length, 'population floor: 48 labels').toBe(48)
 
     const texts = labels.map((l) => l.textContent ?? '')
     expect(texts, 'control needle: a known human label must be present').toContain('Transmission failed')
@@ -443,7 +443,7 @@ describe('AuditFilterCard: event type', () => {
     openEventPopover()
 
     const rows = screen.getAllByTestId(/^audit-event-row-/)
-    expect(rows.length, 'the vocabulary drives rows, not the facet array -- still exactly 45').toBe(45)
+    expect(rows.length, 'the vocabulary drives rows, not the facet array -- still exactly 48').toBe(48)
     expect(
       screen.queryByTestId('audit-event-row-legacy.retired_event'),
       'an id outside the vocabulary gets no row',

@@ -1970,11 +1970,11 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoice, error) {
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var lockedID string
+		var lockedID, entityID string
 		var current Status
 		if err := tx.QueryRow(ctx,
-			`SELECT id, status FROM invoices WHERE id = $1 FOR UPDATE`, id,
-		).Scan(&lockedID, &current); err != nil {
+			`SELECT id, status, entity_id FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&lockedID, &current, &entityID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -1996,6 +1996,13 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 		// canTransition conjunct keeps an illegal edge reading ErrIllegalTransition
 		// (TestTransition_IllegalEdgeIntoQueuedStillReadsIllegal).
 		if target == StatusQueued && canTransition(current, target) {
+			pending, err := rulesPendingFor(ctx, tx, []string{entityID})
+			if err != nil {
+				return err
+			}
+			if pending(entityID) {
+				return ErrRuleChangePending
+			}
 			clear, err := approval.TransmitClearTx(ctx, tx, []string{lockedID})
 			if err != nil {
 				return err
@@ -2072,12 +2079,40 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 // both 23514, which TestTransition_AtomicityRollsBackOnActorCheckFailure and
 // GATE-13 assert via pgCode.
 func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor) (Invoice, error) {
-	return transitionCausedTx(ctx, tx, id, current, target, actor, "")
+	return transitionCausedTx(ctx, tx, id, current, target, actor, demotionCause{})
 }
 
-// transitionCausedTx is transitionTx plus the rule-set version that caused the
-// transition, written to the history row; "" stores NULL.
-func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, causeVersionID string) (Invoice, error) {
+// rulesPendingFor reads, in one statement, the revisions that can block and are not yet
+// re-checked; a firm-wide one (NULL entity) covers every entity (D26).
+func rulesPendingFor(ctx context.Context, tx pgx.Tx, entityIDs []string) (func(entityID string) bool, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT DISTINCT entity_id::text FROM custom_rule_revisions
+		  WHERE rechecked_at IS NULL AND (entity_id IS NULL OR entity_id = ANY($1::uuid[]))`, entityIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	all, covered := false, map[string]bool{}
+	for rows.Next() {
+		var e *string
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		if e == nil {
+			all = true
+		} else {
+			covered[*e] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return func(entityID string) bool { return all || covered[entityID] }, nil
+}
+
+// transitionCausedTx is transitionTx plus what caused the transition, written to the history
+// row: a rule-set version and/or a custom-rule revision; "" stores NULL.
+func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, cause demotionCause) (Invoice, error) {
 	if !canTransition(current, target) {
 		return Invoice{}, ErrIllegalTransition
 	}
@@ -2133,9 +2168,9 @@ func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, targ
 	}
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, cause_rule_set_version_id)
-		 VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid)`,
-		actor.TenantID, id, string(current), string(target), actor.Subject, causeVersionID,
+		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, cause_rule_set_version_id, cause_custom_rule_revision_id)
+		 VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, NULLIF($7, '')::uuid)`,
+		actor.TenantID, id, string(current), string(target), actor.Subject, cause.VersionID, cause.CustomRuleRevisionID,
 	); err != nil {
 		return Invoice{}, err
 	}

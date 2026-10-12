@@ -472,6 +472,11 @@ const notApproverTransmitReason = "Only an admin or a reviewer can submit an inv
 // (TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal).
 const awaitingApprovalReason = "This invoice is waiting on approval — it can be submitted once an approver approves it."
 
+// ruleChangePendingReason is the 409 body for a queue door refusing an invoice a pending
+// custom-rule revision covers (D26), and the SPA skip label for the same token
+// (TestRuleChangePendingReason_MatchesTheSPASkipLabel). It promises no duration (D29).
+const ruleChangePendingReason = "A custom rule change is being applied to this invoice — it can be submitted once the change has been checked."
+
 // submitBlockedReason mirrors revalidateBlockedReason's canEdit && !canX gate,
 // but the copy FORKS by status: draft points at a live, enabled Re-validate,
 // rejected points at a disabled one, so one shared sentence would lie on
@@ -1743,6 +1748,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "illegal transition"
 	case errors.Is(err, ErrAwaitingApproval):
 		return http.StatusConflict, awaitingApprovalReason
+	case errors.Is(err, ErrRuleChangePending):
+		return http.StatusConflict, ruleChangePendingReason
 	case errors.Is(err, ErrNotDraft):
 		return http.StatusConflict, "invoice is not a draft"
 	case errors.Is(err, ErrStaleValidation):

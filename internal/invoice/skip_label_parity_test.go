@@ -23,7 +23,7 @@ var (
 	// while the map this scan claims to read no longer exists.
 	skipMapAnchorRE = regexp.MustCompile(`\bconst SKIP_REASON_LABELS\b`)
 	skipMapEndRE    = regexp.MustCompile(`(?m)^}$`)
-	skipLabelRowRE  = regexp.MustCompile(`(?m)^\s*(not_validated|duplicate_request|awaiting_approval):\s*'([^']*)',$`)
+	skipLabelRowRE  = regexp.MustCompile(`(?m)^\s*(not_validated|duplicate_request|awaiting_approval|rule_change_pending):\s*'([^']*)',$`)
 )
 
 // readSPASkipLabels extracts SKIP_REASON_LABELS from the SPA source. Every failure here is
@@ -85,7 +85,7 @@ func TestAwaitingApprovalReason_MatchesTheSPASkipLabel(t *testing.T) {
 func TestAwaitingApprovalReason_ParityScanIsNonVacuous(t *testing.T) {
 	labels := readSPASkipLabels(t)
 
-	want := []string{"awaiting_approval", "duplicate_request", "not_validated"}
+	want := []string{"awaiting_approval", "duplicate_request", "not_validated", "rule_change_pending"}
 	keys := make([]string, 0, len(labels))
 	for k, v := range labels {
 		keys = append(keys, k)
@@ -113,4 +113,17 @@ func TestAwaitingApprovalReason_ParityScanIsNonVacuous(t *testing.T) {
 		t.Errorf("awaitingApprovalReason is %d runes, want at least %d", n, skipLabelMinRunes)
 	}
 	t.Logf("go awaitingApprovalReason = %q bytes=%d runes=%d", awaitingApprovalReason, len(awaitingApprovalReason), utf8.RuneCountInString(awaitingApprovalReason))
+}
+
+func TestRuleChangePendingReason_MatchesTheSPASkipLabel(t *testing.T) {
+	got, ok := readSPASkipLabels(t)["rule_change_pending"]
+	if !ok {
+		t.Fatalf("%s no longer maps rule_change_pending", spaInvoicesTSPath)
+	}
+	if got != ruleChangePendingReason {
+		t.Errorf("SKIP_REASON_LABELS.rule_change_pending = %q,\nwant ruleChangePendingReason = %q (internal/invoice/handlers.go)", got, ruleChangePendingReason)
+	}
+	if n := utf8.RuneCountInString(ruleChangePendingReason); n < skipLabelMinRunes {
+		t.Errorf("ruleChangePendingReason is %d runes, want at least %d", n, skipLabelMinRunes)
+	}
 }

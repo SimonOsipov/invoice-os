@@ -39,7 +39,7 @@ import (
 // unrelated error (see that test's own doc comment for why the distinction is load-bearing).
 var errBatchSubmitInjectedTestFailure = errors.New("invoice: batch submit test-injected failure after last enqueue")
 
-// The three reachable skip reasons ([partial-batch] eligibility table, task-231 System
+// The four reachable skip reasons ([partial-batch] eligibility table, task-231 System
 // Design). Every other outcome is a hard-fail (ErrNotFound/ErrValidation), never a skip.
 // frontend/app/src/lib/invoices.ts's SKIP_REASON_LABELS keys on these exact literals;
 // TestBatchSubmitReasonTokens_PinTheWireLiterals holds them still.
@@ -47,6 +47,7 @@ const (
 	batchSubmitReasonNotValidated     = "not_validated"
 	batchSubmitReasonDuplicate        = "duplicate_request"
 	batchSubmitReasonAwaitingApproval = "awaiting_approval"
+	batchSubmitReasonRuleChange       = "rule_change_pending"
 )
 
 // deriveBatchSubmitKey builds the per-invoice outbox key from the request's single
@@ -85,8 +86,8 @@ type BatchSubmitInput struct {
 
 // BatchSubmitResultItem is one invoice's outcome in a BatchSubmitResult (task-231 System
 // Design response body). Reason is empty (omitted from the wire) when Enqueued is true --
-// the three reachable skip reasons are batchSubmitReasonNotValidated /
-// batchSubmitReasonDuplicate / batchSubmitReasonAwaitingApproval. InvoiceID echoes the
+// the reachable skip reasons are batchSubmitReasonNotValidated /
+// batchSubmitReasonDuplicate / batchSubmitReasonAwaitingApproval / batchSubmitReasonRuleChange. InvoiceID echoes the
 // CANONICAL uuid text, not the caller's spelling.
 type BatchSubmitResultItem struct {
 	InvoiceID string `json:"invoice_id"`
@@ -166,17 +167,18 @@ func (s *Submitter) BatchSubmit(ctx context.Context, in BatchSubmitInput) (Batch
 		// on the caller's raw string so two spellings of one uuid still collapse onto one
 		// derived key (TestBatchSubmit_SameIdInTwoSpellingsResolvesOnce).
 		statuses := make(map[string]Status, len(in.InvoiceIDs))
+		entities := make(map[string]string, len(in.InvoiceIDs))
 		canonical := make(map[string]string, len(in.InvoiceIDs))
 		distinct := make([]string, 0, len(in.InvoiceIDs))
 		for _, id := range in.InvoiceIDs {
 			if _, seen := canonical[id]; seen {
 				continue
 			}
-			var lockedID string
+			var lockedID, entityID string
 			var status Status
 			if err := tx.QueryRow(ctx,
-				`SELECT id, status FROM invoices WHERE id = $1 FOR UPDATE`, id,
-			).Scan(&lockedID, &status); err != nil {
+				`SELECT id, status, entity_id FROM invoices WHERE id = $1 FOR UPDATE`, id,
+			).Scan(&lockedID, &status, &entityID); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					return ErrNotFound
 				}
@@ -187,6 +189,7 @@ func (s *Submitter) BatchSubmit(ctx context.Context, in BatchSubmitInput) (Batch
 			}
 			canonical[id] = lockedID
 			statuses[lockedID] = status
+			entities[lockedID] = entityID
 			distinct = append(distinct, lockedID)
 		}
 
@@ -194,6 +197,16 @@ func (s *Submitter) BatchSubmit(ctx context.Context, in BatchSubmitInput) (Batch
 		// One call over the distinct set, so the cost is constant in batch size
 		// (TestBatchSubmit_ApprovalReadIsConstantInBatchSize).
 		clear, err := approval.TransmitClearTx(ctx, tx, distinct)
+		if err != nil {
+			return err
+		}
+
+		// One read for the whole batch (D26): a pending custom-rule revision blocks its invoices.
+		entityIDs := make([]string, 0, len(distinct))
+		for _, id := range distinct {
+			entityIDs = append(entityIDs, entities[id])
+		}
+		rulePending, err := rulesPendingFor(ctx, tx, entityIDs)
 		if err != nil {
 			return err
 		}
@@ -210,6 +223,16 @@ func (s *Submitter) BatchSubmit(ctx context.Context, in BatchSubmitInput) (Batch
 					Enqueued:  false,
 					Status:    string(statuses[id]),
 					Reason:    batchSubmitReasonNotValidated,
+				})
+				continue
+			}
+
+			if rulePending(entities[id]) {
+				results = append(results, BatchSubmitResultItem{
+					InvoiceID: id,
+					Enqueued:  false,
+					Status:    string(statuses[id]),
+					Reason:    batchSubmitReasonRuleChange,
 				})
 				continue
 			}

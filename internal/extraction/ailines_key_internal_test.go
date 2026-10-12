@@ -106,6 +106,16 @@ func aliLoadKey(path string) (aliKey, error) {
 					line.LineTotal = v
 				case LineRoleLineTax:
 					line.LineTax = v
+				case LineRoleTaxCategory:
+					line.TaxCategory = v
+				case LineRoleHSNCode:
+					line.HSNCode = v
+				case LineRoleISICCode:
+					line.ISICCode = v
+				case LineRoleSellersItemID:
+					line.SellersItem = v
+				case LineRolePriceUnit:
+					line.PriceUnit = v
 				}
 			}
 			rows = append(rows, line)

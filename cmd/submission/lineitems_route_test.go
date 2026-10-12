@@ -151,6 +151,35 @@ func TestNewInvoiceLineItemsApplier_CopiesEveryCellByPosition(t *testing.T) {
 	}
 }
 
+func TestNewInvoiceLineItemsApplier_CopiesAllTenRolesByPosition(t *testing.T) {
+	mk := func(n string) extraction.LineItemInput {
+		p := func(role string) *string { s := role + n; return &s }
+		return extraction.LineItemInput{
+			Description: p("d"), Quantity: p("q"), UnitPrice: p("u"), LineTotal: p("t"), LineTax: p("x"),
+			TaxCategory: p("tc"), HSNCode: p("hs"), ISICCode: p("is"), SellersItemIdentification: p("si"), PriceUnit: p("pu"),
+		}
+	}
+	in := []extraction.LineItemInput{mk("1"), mk("2")}
+	spy := &fcEditSpy{returnedID: fcInvoiceID}
+	if _, err := newInvoiceLineItemsApplier(spy.edit)(context.Background(), nil, liDocumentID, in); err != nil {
+		t.Fatalf("the adapter returned %v, want nil", err)
+	}
+	got := spy.gotInput.LineItems
+	if got == nil || len(*got) != 2 {
+		t.Fatalf("captured %v, want 2 lines", got)
+	}
+	for i, l := range in {
+		want := invoice.LineItemInput{
+			Description: l.Description, Quantity: l.Quantity, UnitPrice: l.UnitPrice, LineTotal: l.LineTotal, LineTax: l.LineTax,
+			TaxCategory: l.TaxCategory, HSNCode: l.HSNCode, ISICCode: l.ISICCode,
+			SellersItemIdentification: l.SellersItemIdentification, PriceUnit: l.PriceUnit,
+		}
+		if !reflect.DeepEqual((*got)[i], want) {
+			t.Errorf("line %d = %+v, want %+v", i, (*got)[i], want)
+		}
+	}
+}
+
 // D-04-1: extraction.LineItemInput now carries LineTax too. The adapter must pass the posted
 // value through unchanged -- never invent one, never drop the one the grid read back -- so a
 // replace-all save no longer erases line_tax the store already had (formerly
@@ -319,7 +348,7 @@ func TestSubmissionMain_RegistersTheLineItemsRouteExactlyOnce(t *testing.T) {
 	}
 }
 
-// extraction.LineItemInput carries five fields; invoice.LineItemInput adds ID, the nine NRS line fields and NRSSent (a request marker the adapter leaves false, so the carry applies) -- pinned so
+// extraction.LineItemInput carries ten fields; invoice.LineItemInput adds ID, the nine NRS line fields and NRSSent (a request marker the adapter leaves false, so the carry applies) -- pinned so
 // CopiesEveryCellByPosition cannot go green over a field the adapter silently drops. If either
 // type grows a SIXTH field with no mapping decision taken, this reds again rather than the
 // adapter defaulting the new cell to nil.
@@ -329,7 +358,8 @@ func TestLineItemInputTypes_CarryTheFieldsTheAdapterWasWrittenFor(t *testing.T) 
 		typ  reflect.Type
 		want []string
 	}{
-		{"extraction.LineItemInput", reflect.TypeOf(extraction.LineItemInput{}), []string{"Description", "Quantity", "UnitPrice", "LineTotal", "LineTax"}},
+		{"extraction.LineItemInput", reflect.TypeOf(extraction.LineItemInput{}), []string{"Description", "Quantity", "UnitPrice", "LineTotal", "LineTax",
+			"TaxCategory", "HSNCode", "ISICCode", "SellersItemIdentification", "PriceUnit"}},
 		{"invoice.LineItemInput", reflect.TypeOf(invoice.LineItemInput{}), []string{"ID", "Description", "Quantity", "UnitPrice", "LineTotal", "LineTax",
 			"TaxCategory", "HSNCode", "ISICCode", "ProductCategory", "ServiceCategory", "SellersItemIdentification", "PriceUnit", "TaxPercent", "BaseQuantity", "NRSSent"}},
 	} {
@@ -385,5 +415,44 @@ func TestNewInvoiceLineItemsApplier_LeavesTheCallersSliceUntouched(t *testing.T)
 
 	if !reflect.DeepEqual(in, want) {
 		t.Errorf("the caller's slice is now %+v, want %+v -- the adapter must convert, never write back", in, want)
+	}
+}
+
+func TestNewInvoiceLineItemsApplier_ABlankNewRoleReachesTheInvoiceAsNil(t *testing.T) {
+	blank, kept := " ", " 8517 "
+	in := []extraction.LineItemInput{
+		{HSNCode: &blank, ISICCode: &blank, TaxCategory: &blank, SellersItemIdentification: &blank, PriceUnit: &blank},
+		{HSNCode: &kept},
+	}
+	spy := &fcEditSpy{returnedID: fcInvoiceID}
+	if _, err := newInvoiceLineItemsApplier(spy.edit)(context.Background(), nil, liDocumentID, in); err != nil {
+		t.Fatalf("applier: %v", err)
+	}
+	got := spy.gotInput.LineItems
+	if got == nil || len(*got) != 2 {
+		t.Fatalf("captured %v, want 2 lines", got)
+	}
+	if (*got)[1].HSNCode == nil || *(*got)[1].HSNCode != "8517" {
+		t.Fatalf("control: line 2 HSNCode = %v", (*got)[1].HSNCode)
+	}
+	a := (*got)[0]
+	if a.HSNCode != nil || a.ISICCode != nil || a.TaxCategory != nil || a.SellersItemIdentification != nil || a.PriceUnit != nil {
+		t.Errorf("blank cells reached the invoice as text: %+v, want nil (ENGI-07 D7)", a)
+	}
+}
+
+func TestNewInvoiceLineItemsApplier_ALineWithNoNewRolesCopiesNilNotInvented(t *testing.T) {
+	d := "Item"
+	spy := &fcEditSpy{returnedID: fcInvoiceID}
+	if _, err := newInvoiceLineItemsApplier(spy.edit)(context.Background(), nil, liDocumentID, []extraction.LineItemInput{{Description: &d}}); err != nil {
+		t.Fatalf("applier: %v", err)
+	}
+	got := spy.gotInput.LineItems
+	if got == nil || len(*got) != 1 || (*got)[0].Description == nil {
+		t.Fatalf("captured %v", got)
+	}
+	l := (*got)[0]
+	if l.ID != nil || l.HSNCode != nil || l.ISICCode != nil || l.TaxCategory != nil || l.SellersItemIdentification != nil || l.PriceUnit != nil {
+		t.Errorf("line = %+v, want only Description set", l)
 	}
 }

@@ -27,7 +27,7 @@ import {
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { expectedStatusDropper } from './consoleGate'
-import { assertPageDoesNotScrollSideways, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
+import { assertPageDoesNotScrollSideways, enclosesRect, gaps, overlapOf, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
 import { signInAs } from '../personaSession'
 import {
   boxOf,
@@ -53,6 +53,7 @@ import {
   buildHeaderOnlyCsv,
   buildMixedCsv,
   buildSingleInvoiceCsv,
+  nullExtractHeaderKeys,
 } from '../importFixtures'
 
 const { SHARD, PERSONAS } = shardPersonas('import-wizard-2.spec.ts')
@@ -137,18 +138,20 @@ function uniqueAiLinesPdfBytes(): Buffer {
   return Buffer.concat([AI_LINES_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
+// The NRS-fields deployed fixture (fxE2ECopies): header and lines AI markers on one page. Same recipe.
+const AI_NRS_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_nrs_invoice.pdf'))
+
+function uniqueAiNrsPdfBytes(): Buffer {
+  return Buffer.concat([AI_NRS_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
+}
+
 // No new committed fixture: reuses SCANNED_INVOICE_PDF, uniqueScannedPdfBytes()'s recipe, plus a
 // second trailing comment steering the fake's image-read answer.
 const IMAGE_READ_ANSWER = {
+  ...nullExtractHeaderKeys(),
   invoice_number: 'INV-5520',
   issue_date: '2026-07-14',
-  supplier_tin: null,
-  supplier_name: null,
   buyer_tin: '9999999-1202',
-  buyer_name: null,
-  currency: null,
-  subtotal: null,
-  vat: null,
   total: '1935.00',
 }
 
@@ -838,15 +841,16 @@ test('EXTR12-E2E-07 (AC-4, W-6): the fields pane keeps its floor and its two col
 //   2. `extraction-write-error` still has no deployed coverage (jsdom only) -- unchanged from
 //      EXTR-12, and not this story's to close.
 
-// The RENDERED roles only, deliberately one short of LINE_CELL_RE below: line_tax rides the
-// wire but has no grid input, so widening this set would make gridValues read a control that
-// does not exist.
+// The RENDERED roles only, deliberately short of LINE_CELL_RE below: line_tax and the five
+// AI-only roles ride the wire but have no grid input, so widening this set would make gridValues
+// read a control that does not exist.
 const LINE_ROLE_NAMES = ['description', 'quantity', 'unit_price', 'line_total'] as const
 type LineRoleName = (typeof LINE_ROLE_NAMES)[number]
 
 // lineItems.ts's LINE_FIELD_RE, restated rather than imported: e2e/ compiles against no
 // frontend source, and a spec that imported the parser would assert the parser against itself.
-const LINE_CELL_RE = /^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total|line_tax)$/
+const LINE_CELL_RE =
+  /^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total|line_tax|tax_category|hsn_code|isic_code|sellers_item_identification|price_unit)$/
 
 type WireLineCell = { name: string; value: string | null; region: ExtractionRegion | null }
 type WireLine = { index: number; cells: Partial<Record<LineRoleName, WireLineCell>> }
@@ -4081,6 +4085,169 @@ test('AIR08-LAYOUT-01: with the disagreement chip row rendered, the grid scrollb
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// read: fxAINRSHeader, fxAINRSGoods, fxAINRSService (internal/extraction/fixtures_test.go)
+const NRS_HEADER_READ = {
+  due_date: '2026-08-13',
+  buyer_email: 'ap@honeywell.example',
+  buyer_telephone: '+234 801 234 5678',
+  buyer_street: '12 Broad Street',
+  buyer_city: 'Lagos Island',
+  buyer_postal_zone: '101001',
+  buyer_country: 'Nigeria',
+  buyer_lga: 'Lagos Island',
+}
+const NRS_GOODS_READ = {
+  description: 'Laptop Computer',
+  hsn_code: '8471.30',
+  sellers_item_identification: 'SKU-1001',
+  price_unit: 'EA',
+  tax_category: 'Standard',
+}
+const NRS_SERVICE_READ = { description: 'Software Support', isic_code: '6201', price_unit: 'hours' }
+
+// Label of each VOCABULARY key, copied from `Label` in internal/invoicefields/fields.go.
+const HEADER_LABELS: Record<string, string> = {
+  invoice_number: 'Invoice number',
+  issue_date: 'Issue date',
+  supplier_tin: 'Supplier TIN',
+  supplier_name: 'Supplier name',
+  buyer_tin: 'Buyer TIN',
+  buyer_name: 'Buyer name',
+  currency: 'Currency',
+  subtotal: 'Subtotal',
+  vat: 'VAT',
+  total: 'Total',
+  due_date: 'Due date',
+  buyer_email: 'Buyer email',
+  buyer_telephone: 'Buyer telephone',
+  buyer_street: 'Buyer street',
+  buyer_city: 'Buyer city',
+  buyer_postal_zone: 'Buyer postal zone',
+  buyer_country: 'Buyer country',
+  buyer_state: 'Buyer state',
+  buyer_lga: 'Buyer LGA',
+}
+
+test('ENGI08-E2E-01/02/03 (AC-1, AC-2, AC-4, AC-6): the NRS fields reach the wire, the pane and the invoice', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const token = await login(PERSONAS.A)
+
+  await extractOneDocument(page, 'Zz ENGI-08 nrs', { name: 'ai_nrs_invoice.pdf', buffer: uniqueAiNrsPdfBytes() })
+  const invoiceMatch = /^\/invoices\/([0-9a-fA-F-]{36})$/.exec(new URL(page.url()).pathname)
+  expect(invoiceMatch, 'the steered document must land on the real invoice detail, not the quarantine').not.toBeNull()
+  const invoice = await getInvoice(token, invoiceMatch![1])
+
+  const detail = await openExtractionReview(page)
+  const wire = new Map(detail.fields.map((f) => [f.name, f]))
+  const wireValue = (name: string) => wire.get(name)?.value
+
+  // ENGI08-E2E-01 (AC-1, AC-2, AC-4): each printed new value is decided on the wire and filed.
+  for (const [name, value] of Object.entries(NRS_HEADER_READ)) {
+    expect({ value: wireValue(name), reason: wire.get(name)?.reason }, `${name} on the wire`).toEqual({ value, reason: '' })
+    await expect(page.getByTestId(`extraction-input-${name}`), `${name} in the pane`).toHaveValue(value)
+  }
+  for (const [role, value] of Object.entries(NRS_GOODS_READ)) {
+    expect(wireValue(`line_items[1].${role}`), `row 1 ${role} on the wire`).toBe(value)
+  }
+  for (const [role, value] of Object.entries(NRS_SERVICE_READ)) {
+    expect(wireValue(`line_items[2].${role}`), `row 2 ${role} on the wire`).toBe(value)
+  }
+
+  expect({
+    due_date: invoice.due_date,
+    buyer_email: invoice.buyer_email,
+    buyer_telephone: invoice.buyer_telephone,
+    buyer_street: invoice.buyer_street,
+    buyer_city: invoice.buyer_city,
+    buyer_postal_zone: invoice.buyer_postal_zone,
+    buyer_country: invoice.buyer_country,
+    buyer_lga: invoice.buyer_lga,
+  }, 'the filed invoice header').toEqual({ ...NRS_HEADER_READ, due_date: '2026-08-13T00:00:00Z' })
+  const lines = [...(invoice.line_items ?? [])].sort((a, b) => a.line_no - b.line_no)
+  expect(lines.map((l) => l.line_no), 'the filed invoice holds the two printed rows').toEqual([1, 2])
+  expect(lines[0], 'the filed goods row').toMatchObject(NRS_GOODS_READ)
+  expect(lines[1], 'the filed service row').toMatchObject(NRS_SERVICE_READ)
+
+  // ENGI08-E2E-02 (AC-6): the AI answered `Ogun` and `Exempt`, words the page never prints.
+  // reason `unreadable` is ReasonUnreadable (internal/extraction).
+  expect(
+    { value: wireValue('buyer_state'), reason: wire.get('buyer_state')?.reason },
+    'buyer_state is the AI-only word the page does not print',
+  ).toEqual({ value: null, reason: 'unreadable' })
+  expect(invoice.buyer_state, 'the invoice must not store the unprinted state').toBeNull()
+  expect(wire.has('line_items[2].tax_category'), 'row 2 carries no tax_category on the wire').toBe(false)
+  expect(lines[1].tax_category, 'row 2 stores no tax_category').toBeNull()
+
+  // ENGI08-E2E-03 (AC-4 layout): every header row inside the fields pane, none overlapping, each
+  // labelled from INVOICE_FIELDS. One evaluate per width, so rows and pane share a layout pass.
+  expect(Object.keys(HEADER_LABELS), 'HEADER_LABELS must list the header vocabulary in order').toEqual([...VOCABULARY])
+  type Measured = { width: number; pane: Rect; rows: { key: string; rect: Rect; label: string }[] }
+  const measured: Measured[] = []
+  const entryViewport = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      const m = await settledRead(
+        () =>
+          page.evaluate(() => {
+            const fields = document.querySelector('[data-testid="extraction-fields"]')
+            const body = fields ? ([...fields.children][1] as HTMLElement | undefined) : undefined
+            if (!fields || !body) return null
+            body.scrollTop = 0
+            const f = fields.getBoundingClientRect()
+            const b = body.getBoundingClientRect()
+            // Rows below the fold scroll inside the body, so the pane's extent is its scrollable one.
+            const pane = { x: f.x, y: f.y, width: f.width, height: b.y - f.y + body.scrollHeight }
+            const rows = [...document.querySelectorAll('[data-testid^="extraction-field-"]')].map((el) => {
+              const r = el.getBoundingClientRect()
+              const strip = el.firstElementChild
+              return {
+                key: (el.getAttribute('data-testid') ?? '').slice('extraction-field-'.length),
+                rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+                label: strip?.firstElementChild?.textContent ?? '',
+              }
+            })
+            return { width: window.innerWidth, pane, rows }
+          }),
+        `header rows at ${width}px`,
+      )
+      expect(m, `the fields pane must render at ${width}px`).not.toBeNull()
+      measured.push(m as Measured)
+    }
+  } finally {
+    if (entryViewport) await page.setViewportSize(entryViewport)
+  }
+  expect(measured.map((m) => m.width), 'every WIDE_WIDTHS entry must be measured, widest first').toEqual([...WIDE_WIDTHS])
+
+  for (const m of measured) {
+    expect(m.pane.width, `the fields pane has no width at ${m.width}px`).toBeGreaterThan(0)
+    expect(m.rows.map((r) => r.key).sort(), `header rows at ${m.width}px`).toEqual([...VOCABULARY].sort())
+    for (const r of m.rows) {
+      expect(r.rect.width, `${r.key} collapsed to zero width at ${m.width}px`).toBeGreaterThan(0)
+      expect(enclosesRect(m.pane, r.rect, 1), `${r.key} leaves the fields pane at ${m.width}px`).toBe(true)
+      expect(r.label, `${r.key} label at ${m.width}px`).toBe(HEADER_LABELS[r.key])
+    }
+    for (let i = 0; i < m.rows.length; i += 1) {
+      for (let j = i + 1; j < m.rows.length; j += 1) {
+        expect(
+          rectsOverlap(m.rows[i].rect, m.rows[j].rect),
+          `${m.rows[i].key} overlaps ${m.rows[j].key} at ${m.width}px`,
+        ).toBe(false)
+      }
+    }
+  }
+
+  await testInfo.attach('extraction-nrs-header-rows.json', {
+    body: JSON.stringify(measured, null, 2),
+    contentType: 'application/json',
+  })
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // read: fxJevDoubtLines (internal/extraction/fixtures_test.go)
 const JEV_DOUBT_READ = { invoice_number: 'JD-3310', supplier_name: 'Kaduna Textiles Limited', supplier_tin: '23456789-0001' }
 
@@ -4123,7 +4290,7 @@ test('CHECK03-E2E-01 (AC-4, AC-5, AC-10): a value Jev doubts shows the pill, kee
     await expect(page.getByTestId(`extraction-field-${name}`).locator('.mono'), `${name} renders a pill`).toHaveCount(0)
   }
 
-  // The other seven header fields were never read, so never asked.
+  // The other header fields were never read, so never asked.
   const decided: string[] = Object.keys(JEV_DOUBT_READ)
   for (const name of VOCABULARY.filter((n) => !decided.includes(n))) {
     const w = wire.get(name)

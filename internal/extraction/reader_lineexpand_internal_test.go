@@ -16,8 +16,8 @@ import (
 
 func lxeStr(s string) *string { return &s }
 
-// lxeCarriedRoles are the roles these fixtures state a value for. LineItemInput.cell now knows
-// all five, but expandLineCorrection emits a row only for a NON-NIL cell, so a fixture that
+// lxeCarriedRoles are the roles these fixtures state a value for. LineItemInput.cell knows
+// every line role, but expandLineCorrection emits a row only for a NON-NIL cell, so a fixture that
 // leaves line_tax nil still expands to four rows per line. The fifth row is its own case:
 // TestExtractionMerge_LineExpansionCarriesLineTaxWhenTheCorrectionStatesOne.
 var lxeCarriedRoles = []string{LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal}

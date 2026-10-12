@@ -884,3 +884,27 @@ func TestRLS_AV5DocumentImportRecordsAnUncategorisedVatBreak(t *testing.T) {
 		t.Errorf("extraction_rule_breaks rows = %+v, want exactly %+v", rows, want)
 	}
 }
+
+func TestRLS_ADocumentImportFlagsABuyerCountryOutsideTheList(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	rbSeedV5Lists(t, super)
+	tenantID, entityID := rbTenant(t, super, "RB-CTRY")
+	values := rbAddLines(docCleanValues("RB-CTRY-INV"))
+	values["issue_date"] = sxPtr("2027-01-15")
+	values["buyer_country"] = sxPtr("Nigeria")
+	documentID, jobID := rbSeed(t, super, tenantID, values)
+
+	if _, err := newTestServiceWithGate(app, rbRealGate(t, app)).ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	var found bool
+	for _, r := range rbRows(t, super, jobID) {
+		if r.field == "buyer_country" && r.ruleKey == "buyer-country-allowed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("extraction_rule_breaks rows = %+v, want one on buyer_country naming buyer-country-allowed", rbRows(t, super, jobID))
+	}
+}

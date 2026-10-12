@@ -568,7 +568,7 @@ func TestAppendAnchorRule_ReadsBackAWholeLearnedCorpus(t *testing.T) {
 	const fp = "v1:ar-s09"
 	var lrs []extraction.LearnedRule
 	for _, text := range []string{"Total", "Amount Due"} {
-		for _, field := range extraction.HeaderFields {
+		for _, field := range t1LabelledFields() { // an AI-only field learns no rule
 			lrs = append(lrs, arLearn(t, field, text))
 		}
 	}

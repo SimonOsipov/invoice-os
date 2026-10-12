@@ -78,8 +78,8 @@ func TestAliLoadKey_ACompleteConfirmationMarkerLoads(t *testing.T) {
 // --- AC-2: the accepted-role set, in two halves ----------------------------------------------
 
 func TestAliLoadKey_EveryRoleInLineRolesIsAccepted(t *testing.T) {
-	if len(LineRoles) != 5 {
-		t.Fatalf("len(LineRoles) = %d, want 5", len(LineRoles))
+	if len(LineRoles) != 10 {
+		t.Fatalf("len(LineRoles) = %d, want 10", len(LineRoles))
 	}
 	want := map[string]string{
 		LineRoleDescription: "Widget",
@@ -87,6 +87,12 @@ func TestAliLoadKey_EveryRoleInLineRolesIsAccepted(t *testing.T) {
 		LineRoleUnitPrice:   "500",
 		LineRoleLineTotal:   "1000",
 		LineRoleLineTax:     "75", // non-null: 38 of 50 real rows are null here
+
+		LineRoleTaxCategory:   "Standard",
+		LineRoleHSNCode:       "8471.30",
+		LineRoleISICCode:      "6201",
+		LineRoleSellersItemID: "SKU-1001",
+		LineRolePriceUnit:     "EA",
 	}
 	row := map[string]any{}
 	for role, v := range want {
@@ -362,11 +368,13 @@ func TestAliKeyTotals_SplitsValueCellsFromCorrectNulls(t *testing.T) {
 	if totals.ValueCells != 7 {
 		t.Errorf("ValueCells = %d, want 7", totals.ValueCells)
 	}
-	if totals.NullCells != 3 {
-		t.Errorf("NullCells = %d, want 3", totals.NullCells)
+	// 3 blank cells among the five measured roles, plus the five new roles null on both rows.
+	if totals.NullCells != 13 {
+		t.Errorf("NullCells = %d, want 13", totals.NullCells)
 	}
 	wantNulls := map[string]int{
 		LineRoleDescription: 0, LineRoleQuantity: 1, LineRoleUnitPrice: 1, LineRoleLineTotal: 0, LineRoleLineTax: 1,
+		LineRoleTaxCategory: 2, LineRoleHSNCode: 2, LineRoleISICCode: 2, LineRoleSellersItemID: 2, LineRolePriceUnit: 2,
 	}
 	for role, want := range wantNulls {
 		if got := totals.NullsByRole[role]; got != want {
@@ -418,11 +426,13 @@ func TestAliKey_TheKeyOnDiskSplitsTwoHundredFourValueCellsFromFortySixNulls(t *t
 	if totals.ValueCells != 204 {
 		t.Errorf("ValueCells = %d, want 204", totals.ValueCells)
 	}
-	if totals.NullCells != 46 {
-		t.Errorf("NullCells = %d, want 46", totals.NullCells)
+	// The key on disk predates the five new roles: 46 measured nulls plus 5 x 50 rows.
+	if totals.NullCells != 296 {
+		t.Errorf("NullCells = %d, want 296", totals.NullCells)
 	}
 	wantNulls := map[string]int{
 		LineRoleDescription: 0, LineRoleQuantity: 4, LineRoleUnitPrice: 4, LineRoleLineTotal: 0, LineRoleLineTax: 38,
+		LineRoleTaxCategory: 50, LineRoleHSNCode: 50, LineRoleISICCode: 50, LineRoleSellersItemID: 50, LineRolePriceUnit: 50,
 	}
 	for role, want := range wantNulls {
 		if got := totals.NullsByRole[role]; got != want {

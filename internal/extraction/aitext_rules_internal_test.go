@@ -270,6 +270,16 @@ var aitInventedValues = map[string]string{
 	"subtotal":       "4321.00",
 	"vat":            "222.00",
 	"total":          "9999.00",
+
+	"due_date":          "2031-01-17",
+	"buyer_email":       "nobody@invented.example",
+	"buyer_telephone":   "+234 909 000 0001",
+	"buyer_street":      "7 Invented Close",
+	"buyer_city":        "Nowhereville",
+	"buyer_postal_zone": "135790", // not 999999: a substring of the page's 99999999-NNNN TINs
+	"buyer_country":     "Atlantis",
+	"buyer_state":       "Inventedstate",
+	"buyer_lga":         "Inventedlga",
 }
 
 func TestAIText_EveryRuleRejectsAnInventedValue(t *testing.T) {

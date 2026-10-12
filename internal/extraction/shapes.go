@@ -1,4 +1,4 @@
-// shapes.go: the six value normalisers behind Shape. Each output is exactly what the matching
+// shapes.go: the eight value normalisers behind Shape. Each output is exactly what the matching
 // invoices column wants, so the writer needs no second parser.
 package extraction
 
@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -15,6 +16,14 @@ const isoDate = "2006-01-02"
 // maxNameRunes bounds ShapeName. supplier_name is bare text with no DB cap; this is the
 // shape's own bound.
 const maxNameRunes = 256
+
+// Bounds for ShapeEmail (RFC 5321 path length) and ShapePhone (E.164 digit count).
+const (
+	maxEmailRunes  = 254
+	maxPhoneRunes  = 32
+	minPhoneDigits = 7
+	maxPhoneDigits = 15
+)
 
 // One ₦, at most 24 runes of decoration either side. Shared by ShapeCurrency's matcher below and
 // by t1.currency.sweep's label, so the two cannot drift
@@ -53,6 +62,10 @@ func (s Shape) Normalize(raw string) []string {
 		return normalizeCurrency(raw)
 	case ShapeName:
 		return normalizeName(raw)
+	case ShapeEmail:
+		return normalizeEmail(raw)
+	case ShapePhone:
+		return normalizePhone(raw)
 	default:
 		return nil
 	}
@@ -162,6 +175,49 @@ func normalizeName(raw string) []string {
 		return nil
 	}
 	if isBareAnchorLabel(trimmed) {
+		return nil
+	}
+	return append([]string(nil), trimmed)
+}
+
+// normalizeEmail checks shape only, not deliverability; the text stays as printed.
+func normalizeEmail(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(trimmed) > maxEmailRunes || strings.ContainsFunc(trimmed, unicode.IsSpace) {
+		return nil
+	}
+	local, domain, ok := strings.Cut(trimmed, "@")
+	if !ok || local == "" || strings.Contains(domain, "@") {
+		return nil
+	}
+	if !strings.Contains(domain, ".") || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return nil
+	}
+	return append([]string(nil), trimmed)
+}
+
+// normalizePhone checks the character set and digit count, not a numbering plan; the text
+// stays as printed.
+func normalizePhone(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(trimmed) > maxPhoneRunes {
+		return nil
+	}
+	digits := 0
+	for i, r := range trimmed {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case r == '+':
+			if i != 0 {
+				return nil
+			}
+		case r == ' ' || r == '(' || r == ')' || r == '-' || r == '.':
+		default:
+			return nil
+		}
+	}
+	if digits < minPhoneDigits || digits > maxPhoneDigits {
 		return nil
 	}
 	return append([]string(nil), trimmed)

@@ -639,7 +639,18 @@ describe('getExtractionDetail', () => {
 describe('postLineItems', () => {
   it('postLineItems_postsTheWrappedBodyToTheGatewayPath', async () => {
     const lines: LineItemInput[] = [
-      { description: 'Widget', quantity: '2', unit_price: '10.00', line_total: '20.00', line_tax: null },
+      {
+        description: 'Widget',
+        quantity: '2',
+        unit_price: '10.00',
+        line_total: '20.00',
+        line_tax: null,
+        tax_category: null,
+        hsn_code: null,
+        isic_code: null,
+        sellers_item_identification: null,
+        price_unit: null,
+      },
     ]
     const response: LineItemsResponse = { id: 'line-set-1', invoice_id: 'inv-1', lines, created_at: '2026-09-02T00:00:00Z' }
     const authedFetch = vi.fn().mockResolvedValue(response)
@@ -759,6 +770,12 @@ describe('fieldLabel', () => {
     // emits a per-row line_items[N].line_total. Neither has a curated label.
     expect(fieldLabel('document_text_layer')).toBe('document_text_layer')
     expect(fieldLabel('line_items[0].line_total')).toBe('line_items[0].line_total')
+  })
+
+  it('names each new header field by its INVOICE_FIELDS label', () => {
+    expect(fieldLabel('due_date')).toBe('Due date')
+    expect(fieldLabel('buyer_postal_zone')).toBe('Buyer postal zone')
+    expect(fieldLabel('buyer_lga')).toBe('Buyer LGA')
   })
 
   it('leaves a bare line role unlabelled', () => {

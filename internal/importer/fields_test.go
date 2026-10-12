@@ -44,11 +44,14 @@ func TestCanonicalFields_AreTheImportKeys(t *testing.T) {
 
 func TestMapperLists_AreTheExtractionProjections(t *testing.T) {
 	wantFields := []string{"invoice_number", "issue_date", "supplier_tin", "supplier_name",
-		"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total"}
+		"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
+		"due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}
 	if !slices.Equal(mapperFieldNames, wantFields) {
 		t.Errorf("mapperFieldNames = %v, want %v", mapperFieldNames, wantFields)
 	}
-	wantRoles := []string{"description", "quantity", "unit_price", "line_total", "line_tax"}
+	wantRoles := []string{"description", "quantity", "unit_price", "line_total", "line_tax",
+		"tax_category", "hsn_code", "isic_code", "sellers_item_identification", "price_unit"}
 	if !slices.Equal(mapperLineRoles, wantRoles) {
 		t.Errorf("mapperLineRoles = %v, want %v", mapperLineRoles, wantRoles)
 	}

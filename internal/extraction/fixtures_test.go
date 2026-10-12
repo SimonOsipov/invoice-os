@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
@@ -107,6 +108,8 @@ var fxCorpus = []struct {
 	{fxChromeRegisterTwin, fxBuildChromeRegisterTwin},
 	// AIR-03-05's deployed-steering fixture: not corpus_-prefixed, outside every corpus_ ratchet.
 	{fxAISteered, fxBuildAISteeredInvoice},
+	// The NRS-fields fixture: outside every corpus_ ratchet.
+	{fxAINRS, fxBuildAINRSInvoice},
 	// AIR-04-04's deployed-unavailable fixture: outside every corpus_ ratchet.
 	{fxAIUnavailable, fxBuildAIUnavailableInvoice},
 	// The value check's one-doubt fixture: outside every corpus_ ratchet.
@@ -136,6 +139,7 @@ const (
 
 const (
 	fxHelvetica = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+	fxCourier   = "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>"
 
 	// fxImageDraw scales the 4x4 XObject to fill the page.
 	fxImageDraw = "q\n612 0 0 792 0 0 cm\n/Im0 Do\nQ\n"
@@ -208,14 +212,23 @@ func fxPage(res string, contents int) fxObject {
 
 // fxLine is one line of page text at a point size and a bottom-left PDF user-space origin.
 type fxLine struct {
-	size, x, y int
-	text       string
+	size float64
+	x, y int
+	text string
 }
+
+// fxMono: the header steering marker is drawn in Courier (/F2). Docling inserts spaces into a
+// long proportional-font run, which breaks the marker's payload; fixed pitch keeps it whole.
+func fxMono(text string) bool { return strings.HasPrefix(text, fxAISteeredMarkerPrefix) }
 
 func fxText(lines ...fxLine) []byte {
 	var b bytes.Buffer
 	for _, l := range lines {
-		fmt.Fprintf(&b, "BT\n/F1 %d Tf\n%d %d Td\n(%s) Tj\nET\n", l.size, l.x, l.y, l.text)
+		font := "F1"
+		if fxMono(l.text) {
+			font = "F2"
+		}
+		fmt.Fprintf(&b, "BT\n/%s %g Tf\n%d %d Td\n(%s) Tj\nET\n", font, l.size, l.x, l.y, l.text)
 	}
 	return b.Bytes()
 }
@@ -415,14 +428,23 @@ func fxBuildRichInvoice() []byte {
 // each; .claude/rules/extraction-corpus.md holds the rest.
 
 // fxTextPage is one US-Letter page of text over a single Helvetica.
+// A page with a header marker also carries Courier as /F2.
 func fxTextPage(lines ...fxLine) []byte {
-	return fxAssemble([]fxObject{
+	objs := []fxObject{
 		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
 		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
 		fxPage(fxFontRes(5), 4),
 		fxStream(fxText(lines...)),
 		fxObject(fxHelvetica),
-	})
+	}
+	for _, l := range lines {
+		if fxMono(l.text) {
+			objs[2] = fxPage("<< /Font << /F1 5 0 R /F2 6 0 R >> >>", 4)
+			objs = append(objs, fxObject(fxCourier))
+			break
+		}
+	}
+	return fxAssemble(objs)
 }
 
 // fxNaira is the naira in a PDF string literal: octal for byte 0xA4, the code both
@@ -1712,6 +1734,13 @@ const fxAISteered = "ai_steered_invoice.pdf"
 
 const fxAISteeredMarkerPrefix = "AIFAKE-ANSWER-"
 
+// The marker is drawn small and near the left edge so the run fits the page width
+// (TestFixtures_AISteeredMarkerFitsThePageWidth).
+const (
+	fxAISteeredMarkerPt = 1.5
+	fxAISteeredMarkerX  = 20
+)
+
 // fxAISteeredAnswer is the fake's steered payload: every HeaderFields key null except the three
 // values this fixture's marker carries.
 func fxAISteeredAnswer() map[string]any {
@@ -1773,12 +1802,122 @@ func fxAISteeredLines() []fxLine {
 		{12, 72, 582, "Subtotal: 1,800.00"},
 		{12, 72, 564, "VAT: 135.00"},
 		{12, 72, 546, "Total: 1,935.00"},
-		{3, 72, 38, fxAISteeredMarker()},
+		{fxAISteeredMarkerPt, fxAISteeredMarkerX, 38, fxAISteeredMarker()},
 	}
 }
 
 func fxBuildAISteeredInvoice() []byte {
 	return fxTextPage(fxAISteeredLines()...)
+}
+
+// --- the NRS-fields fixture ---
+
+// fxAINRS: header and lines markers on one page. Each marker carries one value its page never
+// prints (fxAINRSUnprintedState, fxAINRSUnprintedCategory), so the page check must refuse it (AC6).
+const fxAINRS = "ai_nrs_invoice.pdf"
+
+const (
+	fxAINRSMarkerPt = 1.5
+	fxAINRSMarkerX  = 20
+
+	fxAINRSUnprintedState    = "Ogun"
+	fxAINRSUnprintedCategory = "Exempt"
+)
+
+// fxAINRSHeader is the header marker's answer: the 8 printed new values and the unprinted state.
+var fxAINRSHeader = map[string]string{
+	"due_date":          "2026-08-13",
+	"buyer_email":       "ap@honeywell.example",
+	"buyer_telephone":   "+234 801 234 5678",
+	"buyer_street":      "12 Broad Street",
+	"buyer_city":        "Lagos Island",
+	"buyer_postal_zone": "101001",
+	"buyer_country":     "Nigeria",
+	"buyer_state":       fxAINRSUnprintedState,
+	"buyer_lga":         "Lagos Island",
+}
+
+// Printed row text is the marker's row values, space-joined in print order.
+var (
+	fxAINRSGoods   = map[string]string{"description": "Laptop Computer", "quantity": "2", "unit_price": "500.00", "line_total": "1000.00", "hsn_code": "8471.30", "sellers_item_identification": "SKU-1001", "price_unit": "EA", "tax_category": "Standard"}
+	fxAINRSService = map[string]string{"description": "Software Support", "quantity": "3", "unit_price": "250.00", "line_total": "750.00", "isic_code": "6201", "price_unit": "hours", "tax_category": fxAINRSUnprintedCategory}
+	fxAINRSOrder   = []string{"description", "quantity", "unit_price", "line_total", "hsn_code", "isic_code", "sellers_item_identification", "price_unit", "tax_category"}
+)
+
+func fxAINRSRowText(row map[string]string) string {
+	var parts []string
+	for _, role := range fxAINRSOrder {
+		if v, ok := row[role]; ok && v != fxAINRSUnprintedCategory {
+			parts = append(parts, v)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func fxAINRSMarker(prefix string, payload any) string {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		panic("fxAINRSMarker: marshal: " + err.Error())
+	}
+	return prefix + base64.RawURLEncoding.EncodeToString(raw)
+}
+
+// fxAINRSHeaderMarker answers every HeaderFields key; the fake validates the full schema.
+func fxAINRSHeaderMarker() string {
+	answer := make(map[string]any, len(extraction.HeaderFields))
+	for _, f := range extraction.HeaderFields {
+		answer[f] = nil
+	}
+	for k, v := range fxAINRSHeader {
+		answer[k] = v
+	}
+	return fxAINRSMarker(fxAISteeredMarkerPrefix, answer)
+}
+
+// fxAINRSLinesMarker answers both rows with every LineRoles key.
+func fxAINRSLinesMarker() string {
+	rows := make([]map[string]any, 0, 2)
+	for _, src := range []map[string]string{fxAINRSGoods, fxAINRSService} {
+		row := make(map[string]any, len(extraction.LineRoles))
+		for _, role := range extraction.LineRoles {
+			row[role] = nil
+		}
+		for k, v := range src {
+			row[k] = v
+		}
+		rows = append(rows, row)
+	}
+	return fxAINRSMarker(fxAILinesMarkerPrefix, map[string]any{"line_items": rows})
+}
+
+func fxAINRSLines() []fxLine {
+	return []fxLine{
+		{12, 72, 690, "Invoice Number: NRS-8801"},
+		{12, 72, 672, "Invoice Date: 2026-07-14"},
+		{12, 72, 654, "Due Date: " + fxAINRSHeader["due_date"]},
+		{12, 72, 636, "From: Adeyemi Trading Limited"},
+		{12, 72, 618, "Supplier TIN: 99999999-0101"},
+		{12, 72, 600, "Bill To: Honeywell Group"},
+		{12, 72, 582, "Buyer TIN: 99999999-0102"},
+		{12, 72, 564, "Buyer Email: " + fxAINRSHeader["buyer_email"]},
+		{12, 72, 546, "Buyer Phone: " + fxAINRSHeader["buyer_telephone"]},
+		{12, 72, 528, "Buyer Street: " + fxAINRSHeader["buyer_street"]},
+		{12, 72, 510, "Buyer City: " + fxAINRSHeader["buyer_city"]},
+		{12, 72, 492, "Buyer Postal Zone: " + fxAINRSHeader["buyer_postal_zone"]},
+		{12, 72, 474, "Buyer Country: " + fxAINRSHeader["buyer_country"]},
+		{12, 72, 456, "Buyer LGA: " + fxAINRSHeader["buyer_lga"]},
+		{10, 72, 420, fxAINRSRowText(fxAINRSGoods)},
+		{10, 72, 402, fxAINRSRowText(fxAINRSService)},
+		{12, 72, 372, "Subtotal: 1750.00"},
+		{12, 72, 354, "VAT: 131.25"},
+		{12, 72, 336, "Total: 1881.25"},
+		{fxAINRSMarkerPt, fxAINRSMarkerX, 56, fxAINRSHeaderMarker()},
+		{fxAINRSMarkerPt, fxAINRSMarkerX, 38, fxAINRSLinesMarker()},
+	}
+}
+
+func fxBuildAINRSInvoice() []byte {
+	return fxTextPage(fxAINRSLines()...)
 }
 
 // fxAIUnavailable: AIR-04's deployed fixture. The engine alone decides INV-4410, so a deployed
@@ -1885,7 +2024,7 @@ func TestFixtures_AISteeredMarkerDecodesAndResolvesNoCandidate(t *testing.T) {
 // proves mergeAI's outcome never depends on where it lands among the other nine tokens.
 func TestFixtures_AISteeredOutcomeIgnoresTokenOrder(t *testing.T) {
 	lines := fxAISteeredLines()
-	if last := lines[len(lines)-1]; last.size != 3 || !strings.HasPrefix(last.text, fxAISteeredMarkerPrefix) {
+	if last := lines[len(lines)-1]; last.size != fxAISteeredMarkerPt || !strings.HasPrefix(last.text, fxAISteeredMarkerPrefix) {
 		t.Fatalf("the generator's own line list does not place the marker last: %+v", last)
 	}
 	answer := fxDecodeAISteeredMarker(t, fxAISteeredMarker())
@@ -2370,7 +2509,7 @@ const fxAILinesMarkerPrefix = "AIFAKE-LINES-ANSWER-"
 // Docling clips a run at the page edge and returns the prefix, which decodes to a base64
 // error and quarantines the document -- TestFixtures_AILinesMarkerFitsThePageWidth.
 const (
-	fxAILinesMarkerPt = 2
+	fxAILinesMarkerPt = 1
 	fxAILinesMarkerX  = 20
 )
 
@@ -2424,9 +2563,13 @@ var fxAILinesAIOnlyLine = strings.Join(fxAILinesAIOnlyRow, " ")
 // except unit_price, and row 3 is fxAILinesAIOnlyRow.
 func fxAILinesAnswer() []map[string]any {
 	row := func(cells []string, unitPrice string) map[string]any {
-		return map[string]any{
+		m := map[string]any{
 			"description": cells[0], "quantity": cells[1], "unit_price": unitPrice, "line_total": cells[3], "line_tax": nil,
 		}
+		for _, role := range extraction.LineRoles[5:] { // the fake validates the full schema
+			m[role] = nil
+		}
+		return m
 	}
 	return []map[string]any{
 		row(fxAILinesRow1, fxAILinesRow1[2]),            // AGREEING
@@ -2477,6 +2620,8 @@ func fxDecodeAILinesMarker(t *testing.T, marker string) []extraction.AILine {
 		lines[i] = extraction.AILine{
 			Description: str(row, "description"), Quantity: str(row, "quantity"), UnitPrice: str(row, "unit_price"),
 			LineTotal: str(row, "line_total"), LineTax: str(row, "line_tax"),
+			TaxCategory: str(row, "tax_category"), HSNCode: str(row, "hsn_code"), ISICCode: str(row, "isic_code"),
+			SellersItem: str(row, "sellers_item_identification"), PriceUnit: str(row, "price_unit"),
 		}
 	}
 	return lines
@@ -3239,7 +3384,7 @@ const fxE2EDir = "../../e2e/fixtures/documents"
 // fxE2ECopies is the explicit table AC-2 requires: each name here must be byte-identical between
 // fxE2EDir and testdata/. Table-driven, not a directory walk, because fxE2EDir also holds
 // native_invoice_2p.pdf, which has no Go-side original of that name.
-var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxJevDoubt, fxJevReceipt}
+var fxE2ECopies = []string{fxNative, fxScanned, fxDense, fxRich, fxAdvisoryRegister, fxChromeRegister, fxChromeRegisterTwin, fxAISteered, fxAIUnavailable, fxAILines, fxAINRS, fxJevDoubt, fxJevReceipt}
 
 // fxE2EExempt: native_invoice_2p.pdf has no Go-side original -- its closest analog, native_3page.pdf, is a different file.
 var fxE2EExempt = map[string]bool{"native_invoice_2p.pdf": true}
@@ -3598,7 +3743,7 @@ func TestFixtures_DenseIndexHeaderIsTheMeasuredShape(t *testing.T) {
 
 var (
 	// The last block's newline is optional: fxContent trims the stream's trailing EOL.
-	fxTextBlockRe = regexp.MustCompile(`BT\n/F1 (\d+) Tf\n(\d+) (\d+) Td\n\((.*)\) Tj\nET\n?`)
+	fxTextBlockRe = regexp.MustCompile(`BT\n/F1 ([\d.]+) Tf\n(\d+) (\d+) Td\n\((.*)\) Tj\nET\n?`)
 	fxAmountRe    = regexp.MustCompile(`[0-9][0-9,]*\.[0-9]{2}`)
 )
 
@@ -3614,7 +3759,7 @@ func fxDrawnLines(t *testing.T, raw []byte) (lines []fxLine, outside map[int]str
 	}
 	content := string(fxContent(t, objs, pages[0]))
 	for _, m := range fxTextBlockRe.FindAllStringSubmatch(content, -1) {
-		size, _ := strconv.Atoi(m[1])
+		size, _ := strconv.ParseFloat(m[1], 64)
 		x, _ := strconv.Atoi(m[2])
 		y, _ := strconv.Atoi(m[3])
 		lines = append(lines, fxLine{size, x, y, m[4]})
@@ -3643,7 +3788,7 @@ func fxGeometryProblems(twin, sibling []fxLine, changed []int) []string {
 	for i, a := range twin {
 		b := sibling[i]
 		if a.size != b.size || a.x != b.x || a.y != b.y {
-			out = append(out, fmt.Sprintf("line %d moved: %dpt (%d,%d) -> %dpt (%d,%d)", i, a.size, a.x, a.y, b.size, b.x, b.y))
+			out = append(out, fmt.Sprintf("line %d moved: %gpt (%d,%d) -> %gpt (%d,%d)", i, a.size, a.x, a.y, b.size, b.x, b.y))
 		}
 		if declared := slices.Contains(changed, i); declared != (a.text != b.text) {
 			out = append(out, fmt.Sprintf("line %d: %q -> %q, declared changed=%v", i, a.text, b.text, declared))
@@ -3932,6 +4077,196 @@ func TestFixtures_AILinesMarkerFitsThePageWidth(t *testing.T) {
 	if right > limit {
 		t.Errorf("marker of %d chars at %dpt from x=%d ends at %.1fpt, past the %.1fpt limit on a %dpt page: the deployed reader would clip it mid-payload",
 			len(marker), fxAILinesMarkerPt, fxAILinesMarkerX, right, limit, fxPageWidthPt)
+	}
+}
+
+// fxMarkerMilli is a marker run's advance in 1/1000 em: Courier is 600 a glyph, the lines marker
+// uses the Helvetica table.
+func fxMarkerMilli(t *testing.T, text string) int {
+	t.Helper()
+	if fxMono(text) {
+		return 600 * len([]rune(text))
+	}
+	milli := 0
+	for _, r := range text {
+		w, ok := fxHelveticaWidths[r]
+		if !ok {
+			t.Fatalf("no Helvetica width for %q; the marker alphabet grew and this guard no longer measures it", r)
+		}
+		milli += w
+	}
+	return milli
+}
+
+// TestFixtures_AISteeredMarkerFitsThePageWidth is AILinesMarkerFitsThePageWidth's twin for the
+// header marker: the generator's own marker line must end inside 95% of the page.
+func TestFixtures_AISteeredMarkerFitsThePageWidth(t *testing.T) {
+	lines := fxAISteeredLines()
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last.text, fxAISteeredMarkerPrefix) {
+		t.Fatalf("the generator's last line is not the marker: %q", last.text)
+	}
+
+	right := float64(last.x) + float64(fxMarkerMilli(t, last.text))*last.size/1000
+
+	if limit := float64(fxPageWidthPt) * 0.95; right > limit {
+		t.Errorf("marker of %d chars at %gpt from x=%d ends at %.1fpt, past the %.1fpt limit on a %dpt page: the deployed reader would clip it mid-payload",
+			len(last.text), last.size, last.x, right, limit, fxPageWidthPt)
+	}
+}
+
+// TestFixtures_AINRSMarkersFitThePageWidth: both marker lines end inside 95% of the page.
+func TestFixtures_AINRSMarkersFitThePageWidth(t *testing.T) {
+	markers := 0
+	for _, l := range fxAINRSLines() {
+		if !strings.HasPrefix(l.text, fxAISteeredMarkerPrefix) && !strings.HasPrefix(l.text, fxAILinesMarkerPrefix) {
+			continue
+		}
+		markers++
+		right := float64(l.x) + float64(fxMarkerMilli(t, l.text))*l.size/1000
+		if limit := float64(fxPageWidthPt) * 0.95; right > limit {
+			t.Errorf("marker of %d chars at %gpt from x=%d ends at %.1fpt, past the %.1fpt limit on a %dpt page: the deployed reader would clip it mid-payload",
+				len(l.text), l.size, l.x, right, limit, fxPageWidthPt)
+		}
+	}
+	if markers != 2 {
+		t.Fatalf("found %d marker line(s), want the header and the lines marker", markers)
+	}
+}
+
+// fxAINRSTjStrings are the committed fixture's own drawn strings.
+func fxAINRSTjStrings(t *testing.T) []string {
+	t.Helper()
+
+	objs := fxObjects(fxRead(t, fxAINRS))
+	pages := fxPages(t, objs)
+	if len(pages) != 1 {
+		t.Fatalf("found %d page object(s) in %s, want exactly 1", len(pages), fxAINRS)
+	}
+	var out []string
+	for _, m := range fxTjRe.FindAllSubmatch(fxContent(t, objs, pages[0]), -1) {
+		out = append(out, string(m[3]))
+	}
+	if len(out) == 0 {
+		t.Fatalf("%s carries no Td/Tj pair; the assertions below would prove nothing", fxAINRS)
+	}
+	return out
+}
+
+// fxAINRSSteered is every value the two markers carry, as decoded from the committed markers.
+func fxAINRSSteered(t *testing.T) (header map[string]string, lines []extraction.AILine) {
+	t.Helper()
+
+	var hm, lm string
+	for _, s := range fxAINRSTjStrings(t) {
+		switch {
+		case strings.HasPrefix(s, fxAISteeredMarkerPrefix):
+			hm = s
+		case strings.HasPrefix(s, fxAILinesMarkerPrefix):
+			lm = s
+		}
+	}
+	if hm == "" || lm == "" {
+		t.Fatalf("%s lacks a marker: header %t, lines %t", fxAINRS, hm != "", lm != "")
+	}
+	return fxDecodeAISteeredMarker(t, hm), fxDecodeAILinesMarker(t, lm)
+}
+
+// TestFixtures_AINRSPrintsEveryValueButTheTwoUnprinted: every steered value is drawn on the
+// page, except the two AC6 words, which no drawn string holds as a word.
+func TestFixtures_AINRSPrintsEveryValueButTheTwoUnprinted(t *testing.T) {
+	header, lines := fxAINRSSteered(t)
+	drawn := slices.DeleteFunc(fxAINRSTjStrings(t), func(s string) bool {
+		return strings.HasPrefix(s, fxAISteeredMarkerPrefix) || strings.HasPrefix(s, fxAILinesMarkerPrefix)
+	})
+	page := strings.Join(drawn, "\n")
+
+	var steered []string
+	for _, v := range header {
+		steered = append(steered, v)
+	}
+	for _, l := range lines {
+		for _, role := range extraction.LineRoles {
+			if v := l.Cell(role); v != nil {
+				steered = append(steered, *v)
+			}
+		}
+	}
+	if len(steered) < 20 {
+		t.Fatalf("decoded %d steered value(s), want both markers' values -- the loop below would prove little", len(steered))
+	}
+	for _, v := range steered {
+		if v == fxAINRSUnprintedState || v == fxAINRSUnprintedCategory {
+			continue
+		}
+		if !strings.Contains(page, v) {
+			t.Errorf("steered value %q is printed nowhere on the page", v)
+		}
+	}
+
+	if header["buyer_state"] != fxAINRSUnprintedState {
+		t.Errorf("header marker buyer_state = %q, want %q", header["buyer_state"], fxAINRSUnprintedState)
+	}
+	if got := lines[1].TaxCategory; got == nil || *got != fxAINRSUnprintedCategory {
+		t.Errorf("service row tax_category = %v, want %q", got, fxAINRSUnprintedCategory)
+	}
+	for _, word := range []string{fxAINRSUnprintedState, fxAINRSUnprintedCategory} {
+		for _, s := range drawn {
+			for _, w := range strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) }) {
+				if strings.EqualFold(w, word) {
+					t.Errorf("the page prints %q as a word in %q", word, s)
+				}
+			}
+		}
+	}
+}
+
+// TestFixtures_AINRSMergesAsDesigned: the committed page and its decoded markers merge to the
+// designed outcome.
+func TestFixtures_AINRSMergesAsDesigned(t *testing.T) {
+	header, lines := fxAINRSSteered(t)
+	pages := rvCorpusPages(t, fxAINRS)
+
+	var engine []extraction.FieldResult
+	for _, f := range extraction.HeaderFields[10:] {
+		engine = append(engine, extraction.FieldResult{Field: extraction.Field{Name: f, Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}})
+	}
+	if len(engine) != 9 {
+		t.Fatalf("HeaderFields[10:] holds %d field(s), want the 9 new ones", len(engine))
+	}
+	for _, r := range extraction.MergeAIForTest(engine, header, pages, nil) {
+		if r.Name == "buyer_state" {
+			if r.Reason != extraction.ReasonUnreadable || r.Value != nil {
+				t.Errorf("buyer_state = %+v, want unreadable with no value", r)
+			}
+			continue
+		}
+		if want := header[r.Name]; r.Reason != extraction.ReasonNone || r.Value == nil || *r.Value != want {
+			t.Errorf("%s = %+v, want decided %q", r.Name, r, want)
+		}
+	}
+
+	got := map[string]string{}
+	for _, r := range extraction.MergeAILinesForTest(nil, lines, pages) {
+		if r.Value == nil || r.Reason != extraction.ReasonNone {
+			t.Errorf("%s = %+v, want an unmarked cell", r.Name, r)
+			continue
+		}
+		got[r.Name] = *r.Value
+	}
+	want := map[string]string{}
+	for i, src := range []map[string]string{fxAINRSGoods, fxAINRSService} {
+		for role, v := range src {
+			if v != fxAINRSUnprintedCategory {
+				want[extraction.LineFieldName(i+1, role)] = v
+			}
+		}
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("merged line cells = %v, want %v", got, want)
+	}
+	if _, ok := got[extraction.LineFieldName(2, extraction.LineRoleTaxCategory)]; ok {
+		t.Error("the service row's tax_category was written, want nil (AC6)")
 	}
 }
 

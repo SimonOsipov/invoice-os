@@ -91,6 +91,17 @@ var tier1Specs = []struct {
 	{"subtotal", "subtotal", ShapeAmount},
 	{"vat", "vat", ShapeAmount},
 	{"total", "total", ShapeAmount},
+
+	// AI-only: label id "" builds no Tier-1 rule and no learned rule; the shape serves checkAI.
+	{"", "due_date", ShapeDate},
+	{"", "buyer_email", ShapeEmail},
+	{"", "buyer_telephone", ShapePhone},
+	{"", "buyer_street", ShapeName},
+	{"", "buyer_city", ShapeName},
+	{"", "buyer_postal_zone", ShapeName},
+	{"", "buyer_country", ShapeName},
+	{"", "buyer_state", ShapeName},
+	{"", "buyer_lga", ShapeName},
 }
 
 // Tier1Rules is the shipped set, in anchor-lexicon order.
@@ -102,6 +113,9 @@ var Tier1Rules = buildTier1Rules()
 func buildTier1Rules() []Tier1Rule {
 	out := make([]Tier1Rule, 0, tier1RuleCount)
 	for _, s := range tier1Specs {
+		if s.labelID == "" {
+			continue
+		}
 		label := anchorPattern(s.labelID)
 		out = append(out,
 			mustTier1Rule("t1."+s.field+".same_token", s.field, label, RelSameToken, tier1MaxDistanceSameTokenJSON, s.shape, BandAnywhere),

@@ -235,6 +235,37 @@ func clSeed(t *testing.T, ctx context.Context, number string) clFixture {
 	return clFixture{reqCtx: reqCtx, tenantID: tenantID, documentID: documentID, jobID: jobID, invoiceID: invoiceID}
 }
 
+// --- an AI-only field teaches no rule ---
+
+func TestRLS_ADueDateCorrectionStoresNoRule(t *testing.T) {
+	ctx := t.Context()
+	f := clSeed(t, ctx, "ENGI08-02-DD")
+	_, pages := clLayout(t, ctx, f.jobID)
+	region := clTokenRegion(t, pages, clTINToken)
+
+	w := cxServe(t, f.reqCtx, f.jobID, "due_date", clPointedBody("2026-08-13", region, ""),
+		cxApplier(false, nil), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if n := clCorrectionsByMethod(t, ctx, f.jobID, "pointed"); n != 1 {
+		t.Errorf("the job holds %d pointed correction row(s), want the 1 just posted", n)
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 0 {
+		t.Errorf("a due_date correction left %d anchor rule(s), want 0 -- an AI-only field teaches nothing", n)
+	}
+
+	// Control: the same box on buyer_tin learns, so the zero above is the gate and not the box.
+	w = cxServe(t, f.reqCtx, f.jobID, clField, clPointedBody(clTINValue, region, ""),
+		cxApplier(false, nil), cxAuditor(nil))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("control: status = %d, want %d (body=%q)", w.Code, http.StatusCreated, w.Body.String())
+	}
+	if n := len(clRules(t, ctx, f.tenantID)); n != 1 {
+		t.Errorf("control: the same box on buyer_tin left %d rule(s), want 1", n)
+	}
+}
+
 // --- C-01 / AC-1: one rule, keyed to the job's own fingerprint ---------------------------
 
 func TestRLS_PointedCorrectionWritesOneAnchorRuleKeyedToTheJobsFingerprint(t *testing.T) {

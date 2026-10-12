@@ -53,7 +53,19 @@ function cell(name: string | null, value: string | null): LineCell {
   return { name, value: value ?? '', region: null, reason: '', alternatives: [] }
 }
 
-interface RowValues {
+const NEW_ROLES = ['tax_category', 'hsn_code', 'isic_code', 'sellers_item_identification', 'price_unit'] as const
+type NewRole = (typeof NEW_ROLES)[number]
+
+// The five carried roles of a row; name null for a row that came from no wire field.
+function newCells(index: number | null, values: Partial<Record<NewRole, string | null>> = {}): Record<NewRole, LineCell> {
+  return Object.fromEntries(
+    NEW_ROLES.map((r) => [r, cell(index === null ? null : `line_items[${index}].${r}`, values[r] ?? null)]),
+  ) as Record<NewRole, LineCell>
+}
+
+const NULL_NEW_POSTED = Object.fromEntries(NEW_ROLES.map((r) => [r, null]))
+
+interface RowValues extends Partial<Record<NewRole, string | null>> {
   description?: string | null
   quantity?: string | null
   unit_price?: string | null
@@ -71,6 +83,7 @@ function mkRow(index: number, values: RowValues = {}): LineRow {
       unit_price: cell(name('unit_price'), values.unit_price ?? null),
       line_total: cell(name('line_total'), values.line_total ?? null),
       line_tax: cell(`line_items[${index}].line_tax`, values.line_tax ?? null),
+      ...newCells(index, values),
     },
   }
 }
@@ -107,6 +120,17 @@ describe('parseLineFieldName', () => {
       index: 1,
       role: 'line_tax',
     })
+  })
+
+  it('parseLineFieldName reads every wire role', () => {
+    expect(parseLineFieldName('line_items[2].sellers_item_identification'), 'the longest new role').toEqual({
+      index: 2,
+      role: 'sellers_item_identification',
+    })
+    for (const role of LINE_WIRE_ROLES) {
+      expect(parseLineFieldName(`line_items[1].${role}`), `${role} at index 1`).toEqual({ index: 1, role })
+    }
+    expect(parseLineFieldName('line_items[1].product_category'), 'a role no list names').toBeNull()
   })
 
   it('six near-misses all parse to null', () => {
@@ -420,6 +444,7 @@ describe('remapRoles', () => {
         alternatives: [],
       },
       line_tax: { name: 'line_items[1].line_tax', value: '', region: null, reason: '', alternatives: [] },
+      ...newCells(1),
     },
   }
 
@@ -483,6 +508,11 @@ describe('removeRow', () => {
 })
 
 describe('addRow', () => {
+  it('addRow gives every wire role a blank cell', () => {
+    const [row] = addRow([])
+    expect(Object.keys(row.cells), 'a wire role has no cell on a new row').toEqual([...LINE_WIRE_ROLES])
+  })
+
   it('appends one blank row and leaves every existing row untouched', () => {
     const two = [
       mkRow(1, { quantity: '1', unit_price: '1.00', line_total: '1.00' }),
@@ -505,6 +535,13 @@ describe('addRow', () => {
 })
 
 describe('linesToPost', () => {
+  it('linesToPost carries a carried role', () => {
+    const posted = linesToPost([mkRow(1, { hsn_code: '8471.30' })])
+    expect(posted, 'a row whose only value is hsn_code was dropped or lost the value').toEqual([
+      { description: null, quantity: null, unit_price: null, line_total: null, line_tax: null, ...NULL_NEW_POSTED, hsn_code: '8471.30' },
+    ])
+  })
+
   // Title corrected in QA: LineItemInput carries no ordinal key, so "renumbers by position"
   // was unassertable here. The server assigns line_no from array order; the order itself is
   // pinned by the adversarial spec below.
@@ -519,6 +556,7 @@ describe('linesToPost', () => {
           unit_price: cell(null, ''),
           line_total: cell(null, ''),
           line_tax: cell(null, ''),
+          ...newCells(null),
         },
       },
       mkRow(3, { description: '  Widget  ', quantity: '2', unit_price: '5.00', line_total: '10.00' }),
@@ -528,8 +566,8 @@ describe('linesToPost', () => {
 
     expect(posted.length, 'three rows in, two out -- the all-blank row must be dropped').toBe(2)
     expect(posted, "the blank cell must become null, and 'Widget' with its spaces must post verbatim").toEqual([
-      { description: 'Widget', quantity: '1', unit_price: '10.00', line_total: '10.00', line_tax: null },
-      { description: '  Widget  ', quantity: '2', unit_price: '5.00', line_total: '10.00', line_tax: null },
+      { description: 'Widget', quantity: '1', unit_price: '10.00', line_total: '10.00', line_tax: null, ...NULL_NEW_POSTED },
+      { description: '  Widget  ', quantity: '2', unit_price: '5.00', line_total: '10.00', line_tax: null, ...NULL_NEW_POSTED },
     ])
   })
 
@@ -558,6 +596,7 @@ describe('linesToPost', () => {
           unit_price: cell(null, ''),
           line_total: cell(null, ''),
           line_tax: cell(null, '75.00'),
+          ...newCells(null),
         },
       },
     ]
@@ -572,6 +611,12 @@ describe('linesToPost', () => {
 // -- lineSetChanged ---------------------------------------------------------------------------
 
 describe('lineSetChanged', () => {
+  it('lineSetChanged sees a carried-role change', () => {
+    const wire = [mkRow(1, { description: 'W', price_unit: 'kg' })]
+    const draft = [mkRow(1, { description: 'W', price_unit: 'pcs' })]
+    expect(lineSetChanged(wire, draft), 'a price_unit-only difference was ignored').toBe(true)
+  })
+
   const wireRows = [
     mkRow(1, { quantity: '1', unit_price: '10.00', line_total: '10.00' }),
     mkRow(2, { quantity: '2', unit_price: '5.00', line_total: '10.00' }),
@@ -610,7 +655,7 @@ describe('lineSetChanged', () => {
   })
 })
 
-// -- the arity pins: four rendered roles, five wire roles ----------------------------------
+// -- the arity pins: four rendered roles, ten wire roles ----------------------------------
 
 describe('LINE_ROLES', () => {
   it('holds exactly the four roles, in order', () => {
@@ -626,18 +671,23 @@ describe('LINE_ROLES', () => {
     ])
   })
 
-  // AC-6 control: the rendered set (LINE_ROLES) stays four -- VAT is read and carried, never
-  // rendered as a grid column ([vat-carried-not-rendered]) -- but the WIRE set (LINE_WIRE_ROLES)
-  // widens to five, with line_tax last, mirroring extraction.LineRoles' own emit order.
-  it('LINE_WIRE_ROLES holds five roles, line_tax last, one more than the rendered LINE_ROLES', () => {
-    expect(LINE_WIRE_ROLES.length, 'a loop over LINE_WIRE_ROLES asserts less than it claims to').toBe(5)
+  // The rendered set (LINE_ROLES) stays four ([vat-carried-not-rendered]); the WIRE set widens
+  // to ten, mirroring extraction.LineRoles' emit order.
+  it('LINE_WIRE_ROLES holds ten roles and the rendered LINE_ROLES stays four', () => {
+    expect(LINE_WIRE_ROLES.length, 'a loop over LINE_WIRE_ROLES asserts less than it claims to').toBe(10)
     expect([...LINE_WIRE_ROLES], 'the order diverged from extraction.LineRoles').toEqual([
       'description',
       'quantity',
       'unit_price',
       'line_total',
       'line_tax',
+      'tax_category',
+      'hsn_code',
+      'isic_code',
+      'sellers_item_identification',
+      'price_unit',
     ])
+    expect(LINE_ROLES.length).toBe(4)
   })
 })
 
@@ -712,6 +762,7 @@ describe('remapRoles (adversarial)', () => {
       unit_price: { name: 'line_items[1].unit_price', value: '3.00', region: null, reason: 'inconsistent', alternatives: [] },
       line_total: { name: 'line_items[1].line_total', value: '6.00', region: null, reason: 'missing', alternatives: [] },
       line_tax: { name: 'line_items[1].line_tax', value: '', region: null, reason: '', alternatives: [] },
+      ...newCells(1),
     },
   }
 
@@ -869,13 +920,9 @@ describe('linesToPost / lineSetChanged (adversarial)', () => {
   it('every cell of a posted row is carried, not just the ones the grid shows', () => {
     const posted = linesToPost([mkRow(1, { description: 'W', quantity: '1', unit_price: '2.00', line_total: '2.00' })])
     expect(posted.length, 'the single row was dropped').toBe(1)
-    expect(Object.keys(posted[0]).sort(), 'the posted body gained or lost a key').toEqual([
-      'description',
-      'line_tax',
-      'line_total',
-      'quantity',
-      'unit_price',
-    ])
+    expect(Object.keys(posted[0]).sort(), 'the posted body gained or lost a key').toEqual(
+      [...LINE_WIRE_ROLES].sort(),
+    )
   })
 
   it('two empty sets are unchanged, and an added row is a change', () => {

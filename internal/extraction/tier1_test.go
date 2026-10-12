@@ -109,13 +109,30 @@ func t1Floor(t *testing.T) {
 
 // --- the specs --------------------------------------------------------------
 
+// t1AIOnlyFields are the header fields whose tier1Specs entry has no label id: a shape for
+// checkAI, no Tier-1 rule, no learned rule (TestTier1_AIOnlySpecsBuildNoRule pins the match).
+var t1AIOnlyFields = []string{"due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+	"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}
+
+// t1LabelledFields is HeaderFields without the AI-only fields, in vocabulary order.
+func t1LabelledFields() []string {
+	var out []string
+	for _, f := range extraction.HeaderFields {
+		if !slices.Contains(t1AIOnlyFields, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // G-02
 func TestTier1_CoversEveryHeaderField(t *testing.T) {
-	if len(extraction.HeaderFields) != 10 {
-		t.Fatalf("HeaderFields holds %d field(s), want 10; the coverage loop below would run over the wrong vocabulary", len(extraction.HeaderFields))
+	if len(extraction.HeaderFields) != 19 {
+		t.Fatalf("HeaderFields holds %d field(s), want 19; the coverage loop below would run over the wrong vocabulary", len(extraction.HeaderFields))
 	}
 	t1Floor(t)
 
+	var unruled []string
 	for _, field := range extraction.HeaderFields {
 		n := 0
 		for _, r := range extraction.Tier1Rules {
@@ -124,8 +141,11 @@ func TestTier1_CoversEveryHeaderField(t *testing.T) {
 			}
 		}
 		if n == 0 {
-			t.Errorf("no Tier-1 rule names %q; a tenant's first document can never fill it (AC-5)", field)
+			unruled = append(unruled, field)
 		}
+	}
+	if !slices.Equal(unruled, t1AIOnlyFields) {
+		t.Errorf("fields with no Tier-1 rule = %v, want exactly the AI-only set %v (AC-5: a tenant's first document must be able to fill every other field)", unruled, t1AIOnlyFields)
 	}
 
 	for _, r := range extraction.Tier1Rules {
@@ -383,16 +403,17 @@ func TestTier1_RulesAreNotInVocabularyOrder(t *testing.T) {
 			order = append(order, r.Field)
 		}
 	}
-	if len(order) != len(extraction.HeaderFields) {
-		t.Fatalf("the shipped set names %d field(s) and HeaderFields %d; the comparison below only means something over the same membership", len(order), len(extraction.HeaderFields))
+	labelled := t1LabelledFields()
+	if len(order) != len(labelled) {
+		t.Fatalf("the shipped set names %d field(s) and the labelled HeaderFields %d; the comparison below only means something over the same membership", len(order), len(labelled))
 	}
-	for _, field := range extraction.HeaderFields {
+	for _, field := range labelled {
 		if !slices.Contains(order, field) {
 			t.Fatalf("the shipped set never names %q; the two sequences hold different fields and comparing their order proves nothing", field)
 		}
 	}
 
-	if slices.Equal(order, extraction.HeaderFields) {
+	if slices.Equal(order, labelled) {
 		t.Errorf("Tier1Rules runs in HeaderFields order %v, so TestResolve_ReturnsFieldsInVocabularyOrder cannot tell rule order from vocabulary order and passes by luck; the shipped set follows the anchor lexicon, which puts buyer_tin before supplier_name", order)
 	}
 }

@@ -6,6 +6,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -135,6 +136,8 @@ func TestRLS_AICallsColumnsAreExactlyTheRecordFields(t *testing.T) {
 	}
 	for col, typ := range map[string]string{
 		"cost": "numeric", "latency_ms": "bigint", "input_tokens": "bigint", "output_tokens": "bigint",
+		"id": "uuid", "tenant_id": "uuid", "client": "text", "purpose": "text", "model": "text",
+		"outcome": "text", "attempts": "integer", "created_at": "timestamp with time zone",
 	} {
 		if types[col] != typ {
 			t.Errorf("ai_calls.%s data_type = %q, want %q", col, types[col], typ)
@@ -301,6 +304,28 @@ func TestRLS_AICallsMissingContextFailsClosed(t *testing.T) {
 		t.Errorf("ai_calls visible with no tenant set = %d, want 0", n)
 	}
 	assertRLSViolation(t, aiInsert(ctx, tx, t1, aiValidRow()))
+
+	// A connection that never set the GUC (current_setting missing_ok) and one that set it to ''.
+	fresh, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("fresh app connection: %v", err)
+	}
+	defer fresh.Close(ctx)
+	if n := mustCount(t, fresh, `SELECT count(*) FROM ai_calls`); n != 0 {
+		t.Errorf("ai_calls visible on a fresh connection with no tenant = %d, want 0", n)
+	}
+	assertRLSViolation(t, aiInsert(ctx, fresh, t1, aiValidRow()))
+	etx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer etx.Rollback(ctx)
+	if _, err := etx.Exec(ctx, `SELECT set_config('app.current_tenant', '', true)`); err != nil {
+		t.Fatalf("set empty tenant: %v", err)
+	}
+	if n := mustCount(t, etx, `SELECT count(*) FROM ai_calls`); n != 0 {
+		t.Errorf("ai_calls visible with an empty tenant = %d, want 0", n)
+	}
 
 	// The zero above comes from the missing GUC, not an empty table.
 	if err := db.WithinTenantTx(ctx, h.app, t1, func(tx pgx.Tx) error {
@@ -520,6 +545,7 @@ func TestRLS_AICallsChecks(t *testing.T) {
 		{"outcome empty", "outcome", mod(func(r *aiRow) { r.outcome = "" })},
 		{"outcome 65 chars", "outcome", mod(func(r *aiRow) { r.outcome = strings.Repeat("o", 65) })},
 		{"model 129 chars", "model", mod(func(r *aiRow) { r.model = strings.Repeat("m", 129) })},
+		{"model 129 multibyte chars", "model", mod(func(r *aiRow) { r.model = strings.Repeat("é", 129) })},
 		{"input_tokens -1", "input_tokens", mod(func(r *aiRow) { r.inTokens = -1 })},
 		{"output_tokens -1", "output_tokens", mod(func(r *aiRow) { r.outTokens = -1 })},
 		{"cost -0.01", "cost", mod(func(r *aiRow) { r.cost = "-0.01" })},
@@ -535,8 +561,13 @@ func TestRLS_AICallsChecks(t *testing.T) {
 		{"outcome 64 chars", mod(func(r *aiRow) { r.outcome = strings.Repeat("o", 64) })},
 		{"model 128 chars", mod(func(r *aiRow) { r.model = strings.Repeat("m", 128) })},
 		{"model empty", mod(func(r *aiRow) { r.model = "" })},
+		{"model 128 multibyte chars", mod(func(r *aiRow) { r.model = strings.Repeat("é", 128) })},
+		{"purpose 64 multibyte chars", mod(func(r *aiRow) { r.purpose = strings.Repeat("é", 64) })},
 		{"attempts 1", mod(func(r *aiRow) { r.attempts = 1 })},
 		{"cost 0", mod(func(r *aiRow) { r.cost = "0" })},
+		{"input_tokens 0", mod(func(r *aiRow) { r.inTokens = 0 })},
+		{"output_tokens 0", mod(func(r *aiRow) { r.outTokens = 0 })},
+		{"latency_ms 0", mod(func(r *aiRow) { r.latencyMS = 0 })},
 	}
 
 	for _, c := range reject {
@@ -592,5 +623,42 @@ func TestRLS_AICallsCostIsExactNumeric(t *testing.T) {
 	}
 	if got != "0.000123456" {
 		t.Errorf("cost read back = %q, want %q", got, "0.000123456")
+	}
+}
+
+func TestRLS_AICallsNullColumnsAndDuplicateIDRefused(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+	t1 := aiTenants(t, 1)[0]
+
+	// A NULL passes a CHECK, so only NOT NULL refuses it.
+	r := aiValidRow()
+	args := []any{t1, r.client, r.purpose, r.model, r.inTokens, r.outTokens, r.cost, r.latencyMS, r.attempts, r.outcome}
+	cols := []string{"tenant_id", "client", "purpose", "model", "input_tokens", "output_tokens", "cost", "latency_ms", "attempts", "outcome"}
+	for i := 1; i < len(cols); i++ {
+		a := append([]any(nil), args...)
+		a[i] = nil
+		_, err := h.super.Exec(ctx, aiInsertSQL, a...)
+		if failIfUndefinedAICalls(t, "INSERT NULL "+cols[i], err) {
+			return
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23502" || pgErr.ColumnName != cols[i] {
+			t.Errorf("INSERT with NULL %s: got %v, want not_null_violation (23502) on %s", cols[i], err, cols[i])
+		}
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM ai_calls WHERE tenant_id = $1`, t1); n != 0 {
+		t.Errorf("rows after the NULL inserts = %d, want 0", n)
+	}
+
+	// Positive half and primary key: the same explicit id twice.
+	const withID = `INSERT INTO ai_calls (id, tenant_id, client, purpose, model, input_tokens, output_tokens, cost, latency_ms, attempts, outcome)
+		VALUES ($1, $2, 'ai', 'p', 'm', 0, 0, 0, 0, 1, 'ok')`
+	id := uuid.NewString()
+	if _, err := h.super.Exec(ctx, withID, id, t1); err != nil {
+		t.Fatalf("INSERT with an explicit id: %v", err)
+	}
+	if _, err := h.super.Exec(ctx, withID, id, t1); pgCode(err) != "23505" {
+		t.Errorf("duplicate id INSERT: got %v, want unique_violation (23505)", err)
 	}
 }

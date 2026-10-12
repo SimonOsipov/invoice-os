@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -531,6 +532,10 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 	outcome, err := s.gate.ValidateBatch(ctx, []invoice.Invoice{created})
 	if err != nil {
 		slog.WarnContext(ctx, "importer: validate supplied invoice", slog.String("invoice_id", created.ID), slog.Any("err", err))
+		return created, nil
+	}
+	if slices.Contains(outcome.Unvalidated, created.ID) {
+		slog.WarnContext(ctx, "importer: supplied invoice left unvalidated, rules changed twice", slog.String("invoice_id", created.ID))
 		return created, nil
 	}
 	if err := s.batch.RecordRuleBreaks(ctx, ex.JobID, outcome.StampByID[created.ID].ID, ruleBreaks(ex, outcome.ByID[created.ID])); err != nil {

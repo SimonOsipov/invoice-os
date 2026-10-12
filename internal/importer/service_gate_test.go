@@ -29,7 +29,7 @@
 //	IMPV-16 TestServiceImport_AllQuarantinedBatchNullVersionNeverCallsGate
 //
 // IMPV-01..07/12/13/16 are DB-backed (dbTestPools). IMPV-01..07/12 stand up
-// a REAL in-process 04 (internal/validation's Store.LoadForDates
+// a REAL in-process 04 (internal/validation's Store.LoadForBatch
 // + NewDefaultEngine + BatchValidateHandler behind S2SMiddleware, on an
 // httptest.Server) against the live v2 rule set on the shared dev DB --
 // mirroring internal/invoice/gate_test.go's startInProcess04 exactly
@@ -83,7 +83,7 @@ func startInProcess04ForImporter(t *testing.T, app *pgxpool.Pool) *httptest.Serv
 	t.Helper()
 	vstore := validation.NewStore(app)
 	eng := validation.NewDefaultEngine()
-	handler := validation.S2SMiddleware(impvS2SToken)(validation.BatchValidateHandler(vstore.LoadForDates, eng, nil, nil))
+	handler := validation.S2SMiddleware(impvS2SToken)(validation.BatchValidateHandler(vstore.LoadForBatch, eng, nil, nil))
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv

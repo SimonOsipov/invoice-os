@@ -13,8 +13,7 @@ import (
 
 // Sweeper implements platform.BackgroundWorker (Start/Stop). sweepFn and Interval are the
 // test seams TestSweeper* use to run with no DB and a short tick period — production
-// wiring (cmd/reconciliation) points sweepFn at Reconciler.SweepOnce and
-// invoice.Rechecker.RunOnce, one Sweeper each, and Interval at Cfg.Interval.
+// wiring (cmd/reconciliation) points each Sweeper's sweepFn at one sweep and Interval at Cfg.Interval.
 type Sweeper struct {
 	// Interval is the tick period between sweeps.
 	Interval time.Duration
@@ -35,7 +34,7 @@ type Sweeper struct {
 var _ platform.BackgroundWorker = (*Sweeper)(nil)
 
 // NewSweeper builds a Sweeper that invokes fn on each interval tick. cmd/reconciliation
-// passes Reconciler.SweepOnce and invoice.Rechecker.RunOnce, one Sweeper each.
+// passes one sweep per Sweeper.
 func NewSweeper(interval time.Duration, fn func(context.Context) error) *Sweeper {
 	return &Sweeper{Interval: interval, sweepFn: fn}
 }

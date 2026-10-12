@@ -19,6 +19,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/archive"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/customer"
+	"github.com/SimonOsipov/invoice-os/internal/customrule"
 	"github.com/SimonOsipov/invoice-os/internal/demodocs"
 	"github.com/SimonOsipov/invoice-os/internal/demopolicy"
 	"github.com/SimonOsipov/invoice-os/internal/document"
@@ -248,6 +249,14 @@ func main() {
 	// edge is a cycle (TestDocument_ImportsNoRepoPackage). Go 1.22's {id} wildcard
 	// matches one segment, so /sheet cannot be swallowed by the download route above.
 	app.Mux.HandleFunc("GET /v1/documents/{id}/sheet", importer.SheetHandler(docSvc.Open, app.Logger))
+
+	// /v1/custom-rules -- a workspace's own validation rules; writes are admin-only inside the
+	// store. The check call is injected: customrule must not import invoice.
+	ruleStore := customrule.NewStore(pool, validator.CheckCustomRule)
+	app.Mux.HandleFunc("GET /v1/custom-rules", customrule.ListHandler(ruleStore.List, app.Logger))
+	app.Mux.HandleFunc("POST /v1/custom-rules", customrule.CreateHandler(ruleStore.Create, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/custom-rules/{id}", customrule.UpdateHandler(ruleStore.Update, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/custom-rules/{id}", customrule.DeleteHandler(ruleStore.Delete, app.Logger))
 
 	// /v1/workflow-roles... -- Settings > Roles: the approval seats and who staffs
 	// them. Same invoice_app pool as the invoice store above; the writes are

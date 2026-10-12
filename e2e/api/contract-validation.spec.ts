@@ -4,7 +4,25 @@
 // (/v1/staff/rules) admit only a rules-role staff token.
 import { randomUUID } from 'node:crypto'
 import { test, expect } from '@playwright/test'
-import { login, provisionStaffAccount, rawFetch, signInSession, PERSONAS } from './client'
+import {
+  createCustomRule,
+  createEntity,
+  createInvoice,
+  deleteCustomRule,
+  getAuditLog,
+  listCustomRules,
+  login,
+  provisionStaffAccount,
+  rawFetch,
+  signInSession,
+  updateCustomRule,
+  validateInvoice,
+  PERSONAS,
+  type CustomRule,
+  type CustomRuleInput,
+  type Entity,
+} from './client'
+import { freshTin } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
 // rulesManagedMessage in internal/validation/handlers.go.
@@ -320,5 +338,133 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
         expect([typeof s.added_count, typeof s.removed_count, typeof s.changed_count], `${list} code counts`).toEqual(['number', 'number', 'number'])
       }
     }
+  })
+})
+
+// internal/customrule's ErrNotPermitted answer (fail in handlers.go).
+const CUSTOM_RULE_NOT_ADMIN_MESSAGE = 'only a workspace admin can change custom rules'
+// Seeded active PREPARER of tenant a (db/seed.dev.sql): a member, not an admin.
+const CUSTOM_RULE_PREPARER = 'c0000000-0000-0000-0000-000000000003'
+// internal/customrule.Key: "custom:" + rule id.
+const CUSTOM_KEY_PREFIX = 'custom:'
+
+// Every rule is scoped to a fresh client entity and only that entity's invoices are validated (never
+// queued: a saved error rule stays pending until the reconciliation tick), so no other spec is judged by it.
+test.describe('custom rules (API E2E, over the deployed gateway)', () => {
+  let admin: string
+  let preparer: string
+  let entity: Entity
+  const created: string[] = []
+
+  const input = (severity: 'error' | 'warning', message: string): CustomRuleInput => ({
+    entity_id: entity.id,
+    type: 'format/regex', // validation.TypeFormat
+    target: 'invoice_number',
+    params: { pattern: '^NEVER-MATCHES$' },
+    severity,
+    message,
+    enabled: true,
+  })
+
+  async function saveRule(severity: 'error' | 'warning', message: string): Promise<CustomRule> {
+    const rule = await createCustomRule(admin, input(severity, message))
+    created.push(rule.id)
+    return rule
+  }
+
+  async function freshInvoice(): Promise<string> {
+    const inv = await createInvoice(admin, {
+      entity_id: entity.id,
+      invoice_number: `INV-CR-${freshTin()}-${randomUUID().slice(0, 8)}`,
+      issue_date: '2026-01-01T00:00:00Z',
+      supplier_tin: freshTin(),
+      supplier_name: 'Acme Nigeria Ltd',
+      buyer_tin: '87654321-0002',
+      buyer_name: 'Buyer Ltd',
+      currency: 'NGN',
+      subtotal: '1000',
+      vat: '75',
+      total: '1075',
+      line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+    })
+    return inv.id
+  }
+
+  test.beforeAll(async () => {
+    admin = await login(PERSONAS.A)
+    preparer = await login({ ...PERSONAS.A, subject: CUSTOM_RULE_PREPARER })
+    const tin = freshTin()
+    entity = await createEntity(admin, { name: `ENGI-14 custom rules ${tin}`, tin })
+  })
+
+  // Each test starts with no live rule on the entity, so one test's rule never judges another's invoice.
+  async function clearRules() {
+    for (const id of created.splice(0)) await deleteCustomRule(admin, id).catch(() => undefined)
+  }
+  test.afterEach(clearRules)
+  test.afterAll(clearRules)
+
+  test('a blocking client rule keeps the invoice in draft', async () => {
+    const rule = await saveRule('error', 'number must match NEVER-MATCHES')
+    expect(rule.key).toBe(`${CUSTOM_KEY_PREFIX}${rule.id}`)
+    const result = await validateInvoice(admin, await freshInvoice())
+    expect(result.status).toBe('draft')
+    expect(result.violations).toEqual(expect.arrayContaining([expect.objectContaining({ rule_key: rule.key, severity: 'error' })]))
+  })
+
+  test('the same rule as a warning lets the invoice validate', async () => {
+    const rule = await saveRule('error', 'warn me instead')
+    const id = await freshInvoice()
+    expect((await validateInvoice(admin, id)).status).toBe('draft')
+
+    const updated = await updateCustomRule(admin, rule.id, input('warning', 'warn me instead'))
+    expect(updated.revision).toBe(2)
+    const result = await validateInvoice(admin, id)
+    expect(result.status).toBe('validated')
+    expect(result.violations).toEqual(expect.arrayContaining([expect.objectContaining({ rule_key: rule.key, severity: 'warning' })]))
+  })
+
+  test('a preparer reads custom rules but cannot write them', async () => {
+    const rule = await saveRule('warning', 'preparer can read this')
+    const res = await rawFetch('/api/invoice/v1/custom-rules', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${preparer}` },
+      body: input('warning', 'preparer write'),
+    })
+    assertErrorEnvelope(res, 403, 'preparer create')
+    expect(res.body).toEqual({ error: CUSTOM_RULE_NOT_ADMIN_MESSAGE })
+
+    const listed = await listCustomRules(preparer)
+    expect(listed.map((r) => r.id)).toContain(rule.id)
+  })
+
+  test('an invalid expression is refused', async () => {
+    const before = (await listCustomRules(admin)).length
+    const res = await rawFetch('/api/invoice/v1/custom-rules', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${admin}` },
+      body: { ...input('error', 'bad expression'), type: 'cel', target: 'invoice_number', params: { expr: 'invoice.total >' } },
+    })
+    assertErrorEnvelope(res, 400, 'invalid cel')
+    expect((res.body as { error: string }).error).toContain('params.expr')
+    expect((await listCustomRules(admin)).length).toBe(before)
+  })
+
+  test('an admin deletes the rule and the invoice validates', async () => {
+    const rule = await saveRule('error', 'to be deleted')
+    const id = await freshInvoice()
+    expect((await validateInvoice(admin, id)).status).toBe('draft')
+
+    expect(await deleteCustomRule(admin, rule.id)).toBe(204)
+    expect((await listCustomRules(admin)).map((r) => r.id)).not.toContain(rule.id)
+    expect((await validateInvoice(admin, id)).status).toBe('validated')
+  })
+
+  test('the save is audited against the client', async () => {
+    const rule = await saveRule('warning', 'audited')
+    const log = await getAuditLog(admin, { event: ['custom_rule.created'], company: entity.id })
+    const row = log.events.find((e) => (e.payload as { rule_id?: string } | null)?.rule_id === rule.id)
+    expect(row, 'custom_rule.created row for the new rule').toBeDefined()
+    expect(row?.entity_id).toBe(entity.id)
   })
 })

@@ -72,6 +72,7 @@ func TestGate_EvaluateEmptyBatchNoHTTPCallZeroValueResult(t *testing.T) {
 
 	validator := NewValidator(srv.URL, gapiS2SToken, nil)
 	gate := NewGate(nil, validator) // nil store: Evaluate must never touch it either way
+	gate.customRules = noCustomRules
 
 	res, err := gate.Evaluate(context.Background(), nil)
 	if err != nil {
@@ -115,6 +116,7 @@ func TestGate_ValidateBatchEmptyInvoicesNoHTTPNoStoreCallZeroValueOutcome(t *tes
 
 	validator := NewValidator(srv.URL, gapiS2SToken, nil)
 	gate := NewGate(nil, validator) // nil store: ApplyValidation must never run
+	gate.customRules = noCustomRules
 
 	out, err := gate.ValidateBatch(context.Background(), nil)
 	if err != nil {

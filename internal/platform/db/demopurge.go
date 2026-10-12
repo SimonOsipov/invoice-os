@@ -45,6 +45,7 @@ var purgeTables = []string{
 	"submission_jobs",
 	"line_items",
 	"invoice_status_history",
+	"custom_rule_revisions",
 	"invoices",
 	"import_batches",
 	"import_mappings",

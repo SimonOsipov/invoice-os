@@ -2008,8 +2008,8 @@ describe('getInvoiceUbl (task-400, BUG-04-04)', () => {
 describe('getInvoiceHistory', () => {
   it('I10: the bare StatusChange[] array passes through unchanged; GET .../invoices/{id}/history', async () => {
     const history: StatusChange[] = [
-      { from_status: null, to_status: 'draft', actor: 'system', actor_name: 'System', actor_kind: 'system', changed_at: '2026-07-01T00:00:00Z', cause: null },
-      { from_status: 'draft', to_status: 'validated', actor: 'user:u1', actor_name: 'user:u1', actor_kind: 'raw', changed_at: '2026-07-02T00:00:00Z', cause: null },
+      { from_status: null, to_status: 'draft', actor: 'system', actor_name: 'System', actor_kind: 'system', changed_at: '2026-07-01T00:00:00Z', cause: null, custom_rule_cause: null },
+      { from_status: 'draft', to_status: 'validated', actor: 'user:u1', actor_name: 'user:u1', actor_kind: 'raw', changed_at: '2026-07-02T00:00:00Z', cause: null, custom_rule_cause: null },
     ]
     const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(history) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -2508,20 +2508,31 @@ describe('mbsPathToEditField', () => {
 })
 
 describe('skipReasonLabel', () => {
-  it('I-skip-1: skipReasonLabel maps all three reachable reasons and passes others through', () => {
+  it('I-skip-1: skipReasonLabel maps all four reachable reasons and passes others through', () => {
     expect(skipReasonLabel('not_validated')).toBe('Not validated — validate it first')
     expect(skipReasonLabel('duplicate_request')).toBe('Already submitted with this request')
     expect(skipReasonLabel('awaiting_approval')).toBe(
       'This invoice is waiting on approval — it can be submitted once an approver approves it.',
     )
+    expect(skipReasonLabel('rule_change_pending')).toBe(
+      'A custom rule change is being applied to this invoice — it can be submitted once the change has been checked.',
+    )
     expect(skipReasonLabel('wat')).toBe('wat')
 
-    // Three tokens, three distinct non-empty sentences: a map collapsed onto one shared
-    // string would still satisfy the three assertions above once they all name it.
-    const labels = ['not_validated', 'duplicate_request', 'awaiting_approval'].map(skipReasonLabel)
-    expect(labels).toHaveLength(3)
-    expect(labels.filter((l) => l.length > 0)).toHaveLength(3)
-    expect(new Set(labels).size).toBe(3)
+    // Four tokens, four distinct non-empty sentences: a map collapsed onto one shared
+    // string would still satisfy the assertions above once they all name it.
+    const labels = ['not_validated', 'duplicate_request', 'awaiting_approval', 'rule_change_pending'].map(skipReasonLabel)
+    expect(labels).toHaveLength(4)
+    expect(labels.filter((l) => l.length > 0)).toHaveLength(4)
+    expect(new Set(labels).size).toBe(4)
+  })
+
+  // ruleChangePendingReason, internal/invoice/handlers.go; Go half: TestRuleChangePendingReason_MatchesTheSPASkipLabel.
+  it('the rule-change-pending label is the server sentence, byte for byte', () => {
+    expect(skipReasonLabel('rule_change_pending')).toBe(
+      'A custom rule change is being applied to this invoice — it can be submitted once the change has been checked.',
+    )
+    expect(skipReasonLabel('rule_change_pending')).not.toBe(skipReasonLabel('awaiting_approval'))
   })
 
   // The server owns this sentence: awaitingApprovalReason, internal/invoice/handlers.go. Its

@@ -288,7 +288,7 @@ func TestRLS_VerdictStaleTracksContentNotTheWriter(t *testing.T) {
 		t.Fatalf("after a clean validation: status %s stale %v, want validated and fresh (NRS fields must hash the same on both paths)", got.Status, got.VerdictStale)
 	}
 
-	demoted, err := demoteRevalidated(f.c, f.app, f.store, f.tenantID, inv.ID, blocking, rsv, "")
+	demoted, err := demoteRevalidated(f.c, f.app, f.store, f.tenantID, inv.ID, blocking, rsv, nil, demotionCause{})
 	if err != nil || !demoted {
 		t.Fatalf("demoteRevalidated: demoted %v err %v, want true and nil", demoted, err)
 	}

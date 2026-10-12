@@ -822,6 +822,15 @@ export interface StatusChange {
   actor_kind: string
   changed_at: string
   cause: HistoryCause | null
+  custom_rule_cause: CustomRuleCause | null
+}
+
+export interface CustomRuleCause {
+  custom_rule_id: string
+  revision: number
+  revision_id: string
+  key: string
+  message: string
 }
 
 // effective_from is YYYY-MM-DD, null for an undated version.
@@ -1581,6 +1590,58 @@ export interface AuditLogQuery {
   company?: string
   q?: string
   invoice_id?: string
+}
+
+// ---- custom rules: internal/customrule (Rule, RuleInput), /api/invoice/v1/custom-rules ----
+
+export interface CustomRule {
+  id: string
+  key: string
+  revision: number
+  revision_id: string
+  entity_id: string | null
+  type: string
+  target: string
+  params: unknown
+  severity: 'error' | 'warning'
+  when: string | null
+  message: string
+  enabled: boolean
+  updated_at: string
+  updated_by: string
+}
+
+// internal/validation/rule.go RuleType constants (TypeFormat is "format/regex").
+export type CustomRuleType = 'required' | 'format/regex' | 'enum' | 'range' | 'tax_math' | 'cross_field' | 'conditional' | 'date' | 'cel'
+
+export interface CustomRuleInput {
+  entity_id: string | null
+  type: CustomRuleType
+  target: string
+  params: unknown
+  severity: 'error' | 'warning'
+  when?: string | null
+  message: string
+  enabled: boolean
+}
+
+export async function listCustomRules(token: string): Promise<CustomRule[]> {
+  const res = await apiFetch<{ custom_rules: CustomRule[] }>(`${apiBase()}/api/invoice/v1/custom-rules`, { token })
+  return res.custom_rules
+}
+
+export function createCustomRule(token: string, body: CustomRuleInput): Promise<CustomRule> {
+  return apiFetch<CustomRule>(`${apiBase()}/api/invoice/v1/custom-rules`, { method: 'POST', body, token })
+}
+
+export function updateCustomRule(token: string, id: string, body: CustomRuleInput): Promise<CustomRule> {
+  return apiFetch<CustomRule>(`${apiBase()}/api/invoice/v1/custom-rules/${id}`, { method: 'PUT', body, token })
+}
+
+// Raw, so the 204's empty body is not parsed; the caller asserts the status.
+export async function deleteCustomRule(token: string, id: string): Promise<number> {
+  const res = await rawFetch(`/api/invoice/v1/custom-rules/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
+  return res.status
 }
 
 // getAuditLog(): GET /v1/audit-log on the invoice binary — the workspace audit reader.

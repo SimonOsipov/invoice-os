@@ -1154,7 +1154,19 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		// in sync forever.
 		invoicesClean = outcome.Clean
 		invoicesWithViolations = outcome.WithViolations
+		unvalidated := make(map[string]bool, len(outcome.Unvalidated))
+		for _, id := range outcome.Unvalidated {
+			unvalidated[id] = true
+		}
 		for _, c := range created {
+			if unvalidated[c.inv.ID] {
+				errorsList = append(errorsList, RowError{
+					Rows:      sheetRows(headerRow, c.rowIdxs),
+					InvoiceID: c.inv.ID,
+					Message:   unvalidatedMessage,
+				})
+				continue
+			}
 			vs := outcome.ByID[c.inv.ID]
 			if len(vs) == 0 {
 				continue
@@ -1188,3 +1200,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		InvoiceViolations:      invoiceViolations,
 	}, nil
 }
+
+// unvalidatedMessage is the row error of an invoice created as a draft whose rules changed twice during the
+// import. It carries the invoice id and no rule key; the SPA tells it from an unreadable row by that.
+const unvalidatedMessage = "invoice created as a draft but not validated: the validation rules changed during the import; validate it again"

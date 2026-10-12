@@ -105,8 +105,8 @@ func newNRSGateRun(t *testing.T, extra []validation.Rule) *nrsGateRun {
 	entityID := seedEntityWithTIN(t, super, tenantID, "ENGI-07-02 gate entity", "12345678-0001")
 
 	vstore := validation.NewStore(app)
-	load := func(ctx context.Context, dates []string) (map[string]validation.RuleSet, error) {
-		base, err := vstore.LoadForDates(ctx, dates)
+	load := func(ctx context.Context, dates []string, custom []validation.Rule) (map[string]validation.RuleSet, error) {
+		base, err := vstore.LoadForBatch(ctx, dates, custom)
 		if err != nil {
 			return nil, err
 		}

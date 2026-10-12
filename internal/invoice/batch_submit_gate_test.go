@@ -102,6 +102,7 @@ func TestBatchSubmitReasonTokens_PinTheWireLiterals(t *testing.T) {
 		{batchSubmitReasonNotValidated, "not_validated"},
 		{batchSubmitReasonDuplicate, "duplicate_request"},
 		{batchSubmitReasonAwaitingApproval, "awaiting_approval"},
+		{batchSubmitReasonRuleChange, "rule_change_pending"},
 	} {
 		if tt.got != tt.want {
 			t.Errorf("reason token = %q, want %q — SKIP_REASON_LABELS keys on this literal", tt.got, tt.want)

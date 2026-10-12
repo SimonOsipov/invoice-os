@@ -208,6 +208,17 @@ type StatusChange struct {
 	ChangedAt  time.Time `json:"changed_at"`
 	// Cause is the rule-set version behind a re-check demotion; null on every other row.
 	Cause *HistoryCause `json:"cause"`
+	// CustomRuleCause is the custom-rule revision behind a custom re-check demotion; null on every other row.
+	CustomRuleCause *CustomRuleCause `json:"custom_rule_cause"`
+}
+
+// CustomRuleCause names the rule revision that caused a history row. Key is customrule.Key(CustomRuleID).
+type CustomRuleCause struct {
+	CustomRuleID string `json:"custom_rule_id"`
+	Revision     int    `json:"revision"`
+	RevisionID   string `json:"revision_id"`
+	Key          string `json:"key"`
+	Message      string `json:"message"`
 }
 
 // HistoryCause is the rule-set version that caused a history row. EffectiveFrom is
@@ -520,6 +531,12 @@ var (
 	// Store.Update.
 	ErrNotDraft        = errors.New("invoice: not draft")
 	ErrStaleValidation = errors.New("invoice: stale validation")
+
+	// ErrRulesChanged: a custom rule was saved after the verdict was computed (D27).
+	ErrRulesChanged = errors.New("invoice: custom rules changed during validation")
+
+	// ErrRuleChangePending: a custom-rule revision covering the invoice is not yet re-checked (D26).
+	ErrRuleChangePending = errors.New("invoice: custom rule change pending")
 
 	// ErrNotFixable is Store.Edit's own precondition sentinel (M4-05-02,
 	// architect [A2]; widened by task-237 to a third status): the edit

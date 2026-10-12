@@ -53,6 +53,11 @@ var (
 		"portfolio.entity.onboarded",
 		"portfolio.entity.offboarded",
 	}
+	triggerRuleEEvents = []string{ // the entity id is in the payload as `entity_id`
+		"custom_rule.created",
+		"custom_rule.updated",
+		"custom_rule.deleted",
+	}
 )
 
 // triggerRuleDPayloads pairs each workspace-level event with the payload shape its call

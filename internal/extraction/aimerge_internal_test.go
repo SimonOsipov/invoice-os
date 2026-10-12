@@ -840,6 +840,36 @@ func TestMergeAI_ADueDateNeedsTheLabelDirectlyBeforeIt(t *testing.T) {
 	}
 }
 
+func TestCheckAI_ADueDateLabelEdges(t *testing.T) {
+	cases := []struct {
+		name   string
+		pages  []TokenPage
+		answer string
+		want   bool
+	}{
+		{"punctuation and space between label and value", onePage(1, tok("Due Date - : 14/02/2026", 1, 0.1, 0.2, 0.9, 0.22)), "2026-02-14", true},
+		{"upper-case label", onePage(1, tok("DUE DATE: 14/02/2026", 1, 0.1, 0.2, 0.9, 0.22)), "2026-02-14", true},
+		{"lower-case label", onePage(1, tok("due date: 14/02/2026", 1, 0.1, 0.2, 0.9, 0.22)), "2026-02-14", true},
+		{"two labelled values, due answer", onePage(1, tok("Due Date: 14/02/2026 Invoice Date: 15/01/2026", 1, 0.1, 0.2, 0.9, 0.22)), "2026-02-14", true},
+		{"two labelled values, issue answer", onePage(1, tok("Due Date: 14/02/2026 Invoice Date: 15/01/2026", 1, 0.1, 0.2, 0.9, 0.22)), "2026-01-15", false},
+		{"two due labels, the later value", onePage(1, tok("Due Date: 14/02/2026 Due Date: 20/02/2026", 1, 0.1, 0.2, 0.9, 0.22)), "2026-02-20", true},
+		{"label on the previous token", onePage(1, tok("Due Date", 1, 0.1, 0.2, 0.3, 0.22), tok("14/02/2026", 1, 0.4, 0.2, 0.6, 0.22)), "2026-02-14", true},
+		{"previous token is the issue label", onePage(1, tok("Invoice Date", 1, 0.1, 0.2, 0.3, 0.22), tok("14/02/2026", 1, 0.4, 0.2, 0.6, 0.22)), "2026-02-14", false},
+	}
+	if len(cases) == 0 {
+		t.Fatal("no cases")
+	}
+	for _, c := range cases {
+		got, ok := checkAI("due_date", c.answer, c.pages)
+		if ok != c.want {
+			t.Errorf("%s: checkAI(%q) = %+v ok=%v, want ok=%v", c.name, c.answer, got, ok, c.want)
+		}
+		if ok && got.Value != c.answer {
+			t.Errorf("%s: value = %q, want %q", c.name, got.Value, c.answer)
+		}
+	}
+}
+
 func TestMergeAI_ADueDateEchoingTheIssueDateIsRefused(t *testing.T) {
 	pages := onePage(1, tok("Invoice Date: 2026-07-14", 1, 0.10, 0.10, 0.50, 0.12))
 	engine := mgDueDateEngine()

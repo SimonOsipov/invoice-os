@@ -183,10 +183,18 @@ func checkCustomRuleBody(eng *Engine, in customRuleCheck) error {
 	}
 	for _, p := range []Payload{{"invoice": map[string]any{}}, sample} {
 		if _, err := eng.Evaluate(p, RuleSet{Rules: []Rule{r}}); err != nil {
-			return fmt.Errorf("the rule does not evaluate: %w", err)
+			return fmt.Errorf("the rule does not evaluate: %s", rootCause(err))
 		}
 	}
 	return nil
+}
+
+// rootCause is the innermost error of the %w chain, minus the engine's "validation: " prefix.
+func rootCause(err error) string {
+	for u := errors.Unwrap(err); u != nil; u = errors.Unwrap(err) {
+		err = u
+	}
+	return strings.TrimPrefix(err.Error(), "validation: ")
 }
 
 // CheckCustomRuleHandler returns POST /v1/custom-rules/check: 204 valid, 422 with a reason.

@@ -181,3 +181,70 @@ func TestCheckCustomRule_ReasonLeaksNoStack(t *testing.T) {
 		}
 	}
 }
+
+func checkError(t *testing.T, b map[string]any) string {
+	t.Helper()
+	rec := sendCheck(t, b)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Error
+}
+
+func TestCheckCustomRule_FaultNamesTheRootCause(t *testing.T) {
+	when := checkBody(TypeRequired, `{}`)
+	when["when"] = "has(invoice.buyer.type) && invoice.buyer.type == 'B2B'"
+	cases := []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{"cel", checkBody(TypeCEL, `{"expr":"invoice.total > 5"}`), "the rule does not evaluate: no such key: total"},
+		{"when", when, "the rule does not evaluate: no such key: buyer"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := checkError(t, c.body); got != c.want {
+				t.Errorf("error = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestCheckCustomRule_FaultTextHasNoInternals(t *testing.T) {
+	when := func(w string) map[string]any {
+		b := checkBody(TypeRequired, `{}`)
+		b["when"] = w
+		return b
+	}
+	cases := []struct {
+		name string
+		body map[string]any
+		expr string
+	}{
+		{"cel total", checkBody(TypeCEL, `{"expr":"invoice.total > 5"}`), "invoice.total > 5"},
+		{"cel tin size", checkBody(TypeCEL, `{"expr":"invoice.supplier.tin.size() > 0"}`), "invoice.supplier.tin.size() > 0"},
+		{"cel buyer type", checkBody(TypeCEL, `{"expr":"has(invoice.buyer) ? invoice.buyer.type == 'B2B' : true"}`), "invoice.buyer.type == 'B2B'"},
+		{"when buyer", when("has(invoice.buyer.type) && invoice.buyer.type == 'B2B'"), "invoice.buyer.type == 'B2B'"},
+		{"when total", when("invoice.total > 5"), "invoice.total > 5"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := checkError(t, c.body)
+			if !strings.HasPrefix(got, "the rule does not evaluate: ") {
+				t.Fatalf("error = %q, want the fault text", got)
+			}
+			for _, bad := range []string{"validation:", `"custom"`, c.expr} {
+				if strings.Contains(got, bad) {
+					t.Errorf("error %q holds %q", got, bad)
+				}
+			}
+		})
+	}
+}

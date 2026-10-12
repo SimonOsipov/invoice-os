@@ -230,6 +230,18 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 		issueDate = parsed
 	}
 
+	var dueDate *time.Time
+	if v := values["due_date"]; v != nil {
+		parsed, err := parseDate("due_date", *v)
+		if err != nil {
+			return invoice.CreateInput{}, &RowError{
+				Field:   "due_date",
+				Message: fmt.Sprintf("The due date on this document reads %q, which is not a date this importer can read. It accepts dates written as YYYY-MM-DD, such as 2026-03-01. Enter this invoice manually to carry on.", strings.TrimSpace(*v)),
+			}
+		}
+		dueDate = parsed
+	}
+
 	// Group line_items[N].<role> cells by index, then sort NUMERICALLY: SettledExtraction's
 	// ORDER BY created_at, id does not guarantee index order, and Store.Create assigns
 	// line_no = 1..N by array position (D10), so a hole in the indices closes ordinally.
@@ -255,6 +267,16 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 			g.LineTotal = f.Value
 		case "line_tax":
 			g.LineTax = f.Value
+		case "tax_category":
+			g.TaxCategory = invoice.TrimmedOrNil(f.Value)
+		case "hsn_code":
+			g.HSNCode = invoice.TrimmedOrNil(f.Value)
+		case "isic_code":
+			g.ISICCode = invoice.TrimmedOrNil(f.Value)
+		case "sellers_item_identification":
+			g.SellersItemIdentification = invoice.TrimmedOrNil(f.Value)
+		case "price_unit":
+			g.PriceUnit = invoice.TrimmedOrNil(f.Value)
 		}
 	}
 	var lineItems []invoice.LineItemInput
@@ -280,6 +302,15 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 		Subtotal:         values["subtotal"],
 		VAT:              values["vat"],
 		Total:            values["total"],
+		DueDate:          dueDate,
+		BuyerEmail:       invoice.TrimmedOrNil(values["buyer_email"]),
+		BuyerTelephone:   invoice.TrimmedOrNil(values["buyer_telephone"]),
+		BuyerStreet:      invoice.TrimmedOrNil(values["buyer_street"]),
+		BuyerCity:        invoice.TrimmedOrNil(values["buyer_city"]),
+		BuyerPostalZone:  invoice.TrimmedOrNil(values["buyer_postal_zone"]),
+		BuyerCountry:     invoice.TrimmedOrNil(values["buyer_country"]),
+		BuyerState:       invoice.TrimmedOrNil(values["buyer_state"]),
+		BuyerLGA:         invoice.TrimmedOrNil(values["buyer_lga"]),
 		LineItems:        lineItems,
 		SourceDocumentID: &docID,
 	}, nil
@@ -362,6 +393,10 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		}, nil
 	}
 	in.ImportBatchID = &batchID
+	if err := s.fillBuyerType(ctx, &in); err != nil {
+		_ = s.batch.Finalize(ctx, batchID, 1, 1, 0, nil, "failed")
+		return BatchResult{}, err
+	}
 
 	// ExistingNumbers only resolves the colliding id for a nicer message in the non-racing
 	// case (D-12) -- Create's own unique-constraint 23505 below is the real guard. Its own
@@ -486,6 +521,9 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 	in.EntityID = entityID
 	in.InvoiceNumber = number
 	in.NumberSupplied = true
+	if err := s.fillBuyerType(ctx, &in); err != nil {
+		return invoice.Invoice{}, err
+	}
 	created, err := s.inv.Create(ctx, in)
 	if err != nil {
 		return invoice.Invoice{}, err
@@ -509,4 +547,17 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 		return created, nil
 	}
 	return got, nil
+}
+
+// fillBuyerType fills an unprinted buyer type from the tenant's buyer directory.
+func (s *Service) fillBuyerType(ctx context.Context, in *invoice.CreateInput) error {
+	if in.InvoiceKind != nil || in.BuyerTIN == nil || strings.TrimSpace(*in.BuyerTIN) == "" {
+		return nil
+	}
+	bt, err := s.batch.BuyerTypeByTIN(ctx, *in.BuyerTIN)
+	if err != nil {
+		return err
+	}
+	in.InvoiceKind = bt
+	return nil
 }

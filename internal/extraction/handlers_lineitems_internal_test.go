@@ -22,9 +22,9 @@ func TestLineItemsCorrection_ValueIsCanonicalJSON(t *testing.T) {
 		{Description: nil, Quantity: nil, UnitPrice: nil, LineTotal: nil, LineTax: nil},
 	}
 	want := `[` +
-		`{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00","line_tax":"1.50"},` +
-		`{"description":"Assembly fee","quantity":null,"unit_price":null,"line_total":null,"line_tax":null},` +
-		`{"description":null,"quantity":null,"unit_price":null,"line_total":null,"line_tax":null}` +
+		`{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00","line_tax":"1.50","tax_category":null,"hsn_code":null,"isic_code":null,"sellers_item_identification":null,"price_unit":null},` +
+		`{"description":"Assembly fee","quantity":null,"unit_price":null,"line_total":null,"line_tax":null,"tax_category":null,"hsn_code":null,"isic_code":null,"sellers_item_identification":null,"price_unit":null},` +
+		`{"description":null,"quantity":null,"unit_price":null,"line_total":null,"line_tax":null,"tax_category":null,"hsn_code":null,"isic_code":null,"sellers_item_identification":null,"price_unit":null}` +
 		`]`
 
 	if got := canonicalLineJSON(lines); got != want {
@@ -80,7 +80,7 @@ func TestLineItemsWireTypes_HaveBraceFreeBodies(t *testing.T) {
 		name string
 		want int
 	}{
-		{"LineItemInput", 5},
+		{"LineItemInput", 10},
 		{"LineItemsRequest", 1},
 		{"LineItemsResponse", 4},
 	} {
@@ -99,5 +99,49 @@ func TestLineItemsWireTypes_HaveBraceFreeBodies(t *testing.T) {
 	nested := []byte("type lixNested struct {\n\tInner struct{ A string } `json:\"inner\"`\n}\n")
 	if m := regexp.MustCompile(`type\s+lixNested\s+struct\s*\{([^{}]*)\}`).FindSubmatch(nested); m != nil && len(jsonKey.FindAllSubmatch(m[1], -1)) > 0 {
 		t.Errorf("the control matched a nested body, so this test cannot catch what it claims to")
+	}
+}
+
+func TestLineItemInput_CellReadsEveryLineRole(t *testing.T) {
+	in := LineItemInput{}
+	fields := []**string{&in.Description, &in.Quantity, &in.UnitPrice, &in.LineTotal, &in.LineTax,
+		&in.TaxCategory, &in.HSNCode, &in.ISICCode, &in.SellersItemIdentification, &in.PriceUnit}
+	if len(fields) != len(LineRoles) {
+		t.Fatalf("test lists %d fields, LineRoles has %d", len(fields), len(LineRoles))
+	}
+	for i, role := range LineRoles {
+		v := "v-" + role
+		*fields[i] = &v
+	}
+	for _, role := range LineRoles {
+		if got := in.cell(role); got == nil || *got != "v-"+role {
+			t.Errorf("cell(%q) = %v, want %q", role, got, "v-"+role)
+		}
+	}
+}
+
+func TestCanonicalLineJSON_EmitsTheTenKeys(t *testing.T) {
+	code := "8471.30"
+	got := canonicalLineJSON([]LineItemInput{{HSNCode: &code}})
+	want := `[{"description":null,"quantity":null,"unit_price":null,"line_total":null,"line_tax":null,` +
+		`"tax_category":null,"hsn_code":"8471.30","isic_code":null,"sellers_item_identification":null,"price_unit":null}]`
+	if got != want {
+		t.Errorf("canonicalLineJSON = %s, want %s", got, want)
+	}
+}
+
+func TestParseLineItemsJSON_AFiveKeyStoredSetStillParses(t *testing.T) {
+	stored := `[{"description":"Widget","quantity":"2","unit_price":"10.00","line_total":"20.00","line_tax":"1.50"}]`
+	lines, ok := parseLineItemsJSON(stored)
+	if !ok || len(lines) != 1 {
+		t.Fatalf("parseLineItemsJSON = %v, %v, want one line", lines, ok)
+	}
+	if lines[0].Description == nil || *lines[0].Description != "Widget" {
+		t.Errorf("description = %v, want Widget", lines[0].Description)
+	}
+	for _, role := range LineRoles[5:] {
+		if got := lines[0].cell(role); got != nil {
+			t.Errorf("cell(%q) = %q, want nil on a pre-change value", role, *got)
+		}
 	}
 }

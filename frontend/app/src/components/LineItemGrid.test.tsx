@@ -54,6 +54,11 @@ function mkRow(
       unit_price: mkCell(lineFieldName(wireIndex, 'unit_price'), v.unit_price, regions.unit_price ?? null),
       line_total: mkCell(lineFieldName(wireIndex, 'line_total'), v.line_total, regions.line_total ?? null),
       line_tax: mkCell(lineFieldName(wireIndex, 'line_tax'), ''),
+      tax_category: mkCell(lineFieldName(wireIndex, 'tax_category'), ''),
+      hsn_code: mkCell(lineFieldName(wireIndex, 'hsn_code'), ''),
+      isic_code: mkCell(lineFieldName(wireIndex, 'isic_code'), ''),
+      sellers_item_identification: mkCell(lineFieldName(wireIndex, 'sellers_item_identification'), ''),
+      price_unit: mkCell(lineFieldName(wireIndex, 'price_unit'), ''),
     },
   }
 }

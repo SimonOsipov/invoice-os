@@ -202,6 +202,11 @@ func TestCorrectionHandler_BlankValueIsRefused(t *testing.T) {
 
 			hndAssert(t, w, http.StatusBadRequest, hndErrBody(t, corMsgBlankValue))
 			corAssertUntouched(t, spy)
+
+			spy = newCorSpy()
+			w = corPost(t, spy, "buyer_city", corBody(value, "typed", ""))
+			hndAssert(t, w, http.StatusBadRequest, hndErrBody(t, corMsgBlankValue))
+			corAssertUntouched(t, spy)
 		})
 	}
 }
@@ -275,6 +280,27 @@ func TestCorrectionHandler_UnparseableIssueDateIsRefused(t *testing.T) {
 	w := corPost(t, spy, "issue_date", corBody("2026-03-01", "typed", ""))
 	if w.Code == http.StatusBadRequest {
 		t.Errorf("an ISO issue_date was refused with 400 %q; the arms above then prove nothing about the value", w.Body.String())
+	}
+}
+
+const corMsgBadDueDate = "due_date must be a date this system can read"
+
+func TestCorrectionHandler_RefusesAnUnreadableDueDate(t *testing.T) {
+	for _, value := range []string{"soon", "03/04/2026"} {
+		t.Run(value, func(t *testing.T) {
+			spy := newCorSpy()
+
+			w := corPost(t, spy, "due_date", corBody(value, "typed", ""))
+
+			hndAssert(t, w, http.StatusBadRequest, hndErrBody(t, corMsgBadDueDate))
+			corAssertUntouched(t, spy)
+		})
+	}
+
+	// Control: an ISO due date is not refused.
+	w := corPost(t, newCorSpy(), "due_date", corBody("2026-08-13", "typed", ""))
+	if w.Code == http.StatusBadRequest {
+		t.Errorf("an ISO due_date was refused with 400 %q; the arms above prove nothing", w.Body.String())
 	}
 }
 

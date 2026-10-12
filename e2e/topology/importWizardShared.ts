@@ -192,6 +192,15 @@ export const VOCABULARY = [
   'subtotal',
   'vat',
   'total',
+  'due_date',
+  'buyer_email',
+  'buyer_telephone',
+  'buyer_street',
+  'buyer_city',
+  'buyer_postal_zone',
+  'buyer_country',
+  'buyer_state',
+  'buyer_lga',
 ]
 
 // This build's gesture is a drag, not a click.

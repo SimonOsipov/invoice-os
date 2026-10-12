@@ -18,6 +18,14 @@ var ruleBreakFields = map[string]string{
 	"total":      "total",
 	"buyer.tin":  "buyer_tin",
 	"buyer.name": "buyer_name",
+
+	"buyer.email":       "buyer_email",
+	"buyer.street":      "buyer_street",
+	"buyer.city":        "buyer_city",
+	"buyer.postal_zone": "buyer_postal_zone",
+	"buyer.lga":         "buyer_lga",
+	"buyer.state":       "buyer_state",
+	"buyer.country":     "buyer_country",
 }
 
 // ceiling: Evaluate is best effort, cut off at 10 s; raise it if the gate p99 passes ~5 s.

@@ -109,6 +109,9 @@ func headerMBSPath(key string) string {
 	return key
 }
 
+// explainBareLineFields are the five legacy line fields; Extract has grown past them.
+var explainBareLineFields = []string{"description", "quantity", "unit_price", "line_total", "line_tax"}
+
 // explainTarget binds the fix to the violation path; the model only picks the field of a bare line path, from the five legacy line fields.
 func explainTarget(path string, lineCount int, modelField string) (field string, line int, ok bool) {
 	if n, f, isLine := parseLinePath(path); isLine {
@@ -116,7 +119,7 @@ func explainTarget(path string, lineCount int, modelField string) (field string,
 			return "", 0, false
 		}
 		if f == "" {
-			if !slices.Contains(invoicefields.ExtractLineKeys(), modelField) {
+			if !slices.Contains(explainBareLineFields, modelField) {
 				return "", 0, false
 			}
 			f = modelField

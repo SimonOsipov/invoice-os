@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/customer"
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -334,4 +335,19 @@ func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
 		}
 	}
 	return b, nil
+}
+
+// BuyerTypeByTIN is the caller's tenant directory buyer_type for tin; nil when there is no record
+// or it has none.
+func (s *Store) BuyerTypeByTIN(ctx context.Context, tin string) (*string, error) {
+	var bt *string
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		c, err := customer.LookupByTIN(ctx, tx, tin)
+		if err != nil || c == nil {
+			return err
+		}
+		bt = c.BuyerType
+		return nil
+	})
+	return bt, err
 }

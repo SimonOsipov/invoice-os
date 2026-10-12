@@ -17,8 +17,8 @@ import (
 
 // Every role at several indices, so a parse that hard-codes one role or one index fails here.
 func TestParseLineFieldName_AcceptsEveryRoleAtEveryIndex(t *testing.T) {
-	if len(extraction.LineRoles) != 5 {
-		t.Fatalf("LineRoles has %d entries, want 5 -- the table below would not cover the set", len(extraction.LineRoles))
+	if len(extraction.LineRoles) != 10 {
+		t.Fatalf("LineRoles has %d entries, want 10 -- the table below would not cover the set", len(extraction.LineRoles))
 	}
 	checked := 0
 	for _, index := range []int{1, 2, 9, 10, 99, 999} {
@@ -35,9 +35,9 @@ func TestParseLineFieldName_AcceptsEveryRoleAtEveryIndex(t *testing.T) {
 			checked++
 		}
 	}
-	// 6 indices x 5 roles: the table asserts less than it claims if this drifts from LineRoles.
-	if checked != 30 {
-		t.Errorf("the table accepted %d name(s), want 30", checked)
+	// 6 indices x 10 roles: the table asserts less than it claims if this drifts from LineRoles.
+	if checked != 60 {
+		t.Errorf("the table accepted %d name(s), want 60", checked)
 	}
 }
 
@@ -99,8 +99,10 @@ func TestParseLineFieldName_MirrorsTheSPARegex(t *testing.T) {
 	const spaPath = "../../frontend/app/src/lib/lineItems.ts"
 	const e2ePath = "../../e2e/topology/import-wizard-2.spec.ts"
 
-	// The index half: 1-based, no leading zero, no sign.
-	const want = `/^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total|line_tax)$/`
+	// The index half: 1-based, no leading zero, no sign. The e2e file restates the whole regex;
+	// the SPA builds its role half from LINE_WIRE_ROLES (invoiceFields.gen.ts).
+	want := "/^line_items\\[([1-9][0-9]*)\\]\\.(" + strings.Join(extraction.LineRoles, "|") + ")$/"
+	const wantSPA = "`^line_items\\\\[([1-9][0-9]*)\\\\]\\\\.(${LINE_WIRE_ROLES.join('|')})$`"
 
 	for _, path := range []string{spaPath, e2ePath} {
 		b, err := os.ReadFile(path)
@@ -112,6 +114,13 @@ func TestParseLineFieldName_MirrorsTheSPARegex(t *testing.T) {
 		}
 		src := string(b)
 
+		if path == spaPath {
+			if !strings.Contains(src, wantSPA) {
+				t.Errorf("%s no longer builds the line-field regex as\n  %s\n-- ParseLineFieldName "+
+					"(internal/extraction/lineitems.go) claims to mirror it", path, wantSPA)
+			}
+			continue
+		}
 		if !strings.Contains(src, want) {
 			t.Errorf("%s no longer spells the line-field regex as\n  %s\n-- ParseLineFieldName "+
 				"(internal/extraction/lineitems.go) claims to mirror it", path, want)

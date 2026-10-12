@@ -73,6 +73,9 @@ const (
 	ShapeTIN           Shape = "tin"
 	ShapeCurrency      Shape = "currency"
 	ShapeName          Shape = "name"
+	// ShapeEmail and ShapePhone serve checkAI only; ParseRule refuses them (no learned rule).
+	ShapeEmail Shape = "email"
+	ShapePhone Shape = "phone"
 )
 
 // ParseRule decodes and validates one rule body, compiling Label. Every failure is an error:
@@ -129,8 +132,8 @@ const alSuffix = `(?:ed|ing|s|d)?`
 // reading balances; a reviewer settles the rest.
 var anchorLexicon = []struct{ ID, Pattern string }{
 	{"invoice_no", `(?i)\b(invoice|inv|bill|doc(ument)?)\.?\s*((no|num(ber)?)\b|#)`},
-	// due_date is an OWNING PHRASE over issue_date's bare "date": it carries no rule and fills no
-	// field, so a due date is refused rather than routed.
+	// due_date is an OWNING PHRASE over issue_date's bare "date": it fills no engine field, so the
+	// engine refuses a due date; the AI fills due_date.
 	{"due_date", `(?i)\bdue\s*date\b`},
 	{"issue_date", `(?i)\b(invoice\s*date|date\s*of\s*issue|issue\s*date|issued|date)\b`},
 	{"supplier_tin", `(?i)\b(supplier|seller|vendor)\s*\.?\s*(tin|t\.i\.n\.?|tax\s*id(entification)?(\s*(no|number))?)\b`},

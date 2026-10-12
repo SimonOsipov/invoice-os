@@ -45,8 +45,8 @@ func aliPyLiteral(t *testing.T, src, name string) string {
 // T1: LINE_ROLES must equal extraction.LineRoles, in order, checked both as a set (a
 // brace-blind extractor returning zero keys must Fatal, not pass vacuously) and by DeepEqual.
 func TestAliRunPy_LineRolesIsExactlyExtractionLineRoles(t *testing.T) {
-	if len(LineRoles) != 5 {
-		t.Fatalf("extraction.LineRoles has %d entries, want 5 -- this test's ordered pin assumes 5", len(LineRoles))
+	if len(LineRoles) != 10 {
+		t.Fatalf("extraction.LineRoles has %d entries, want 10 -- this test's ordered pin assumes 10", len(LineRoles))
 	}
 	src := aliRunPy(t)
 
@@ -67,8 +67,8 @@ func TestAliRunPy_LineRolesIsExactlyExtractionLineRoles(t *testing.T) {
 	if len(names) == 0 {
 		t.Fatal("LINE_ROLES parsed zero names -- a brace-blind extractor must not pass vacuously")
 	}
-	if len(names) != 5 {
-		t.Fatalf("LINE_ROLES parsed %d names, want 5", len(names))
+	if len(names) != 10 {
+		t.Fatalf("LINE_ROLES parsed %d names, want 10", len(names))
 	}
 	var parsed []string
 	for _, n := range names {
@@ -286,7 +286,10 @@ func TestAliAnswers_ANestedLineItemsArrayHardFailsTheHeaderLoader(t *testing.T) 
 func TestAliRunPy_TheHeaderPromptIsByteUnchanged(t *testing.T) {
 	src := aliRunPy(t)
 
-	system := aliPyLiteral(t, src, "SYSTEM")
+	system, _, found := strings.Cut(aliPyLiteral(t, src, "SYSTEM"), "\n- due_date:") // the measured prefix; later lines are appended
+	if !found {
+		t.Fatal("SYSTEM has no \"- due_date:\" line to cut the measured prefix at")
+	}
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(system))); got != aliSystemSHA256 {
 		t.Errorf("sha256(SYSTEM) = %s, want %s -- SYSTEM changed", got, aliSystemSHA256)
 	}

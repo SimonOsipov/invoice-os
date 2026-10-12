@@ -33,6 +33,13 @@ func TestRuleBreaks_MapsEachPathToItsField(t *testing.T) {
 		{"total", "total"},
 		{"buyer.tin", "buyer_tin"},
 		{"buyer.name", "buyer_name"},
+		{"buyer.email", "buyer_email"},
+		{"buyer.street", "buyer_street"},
+		{"buyer.city", "buyer_city"},
+		{"buyer.postal_zone", "buyer_postal_zone"},
+		{"buyer.lga", "buyer_lga"},
+		{"buyer.state", "buyer_state"},
+		{"buyer.country", "buyer_country"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.path, func(t *testing.T) {
@@ -48,8 +55,9 @@ func TestRuleBreaks_MapsEachPathToItsField(t *testing.T) {
 func TestRuleBreaks_SkipsLockedLineAndUnknownPaths(t *testing.T) {
 	// every name is valued, so only the path can be the reason a violation is skipped
 	ex := rbReading("invoice_number", "supplier_tin", "supplier_name", "line_items", "line_items[1].description",
-		"nope", "buyer_tin")
-	skipped := []string{"invoice_number", "supplier.tin", "supplier.name", "line_items", "", "nope", "buyer_tin"}
+		"nope", "buyer_tin", "supplier_email", "supplier_city")
+	skipped := []string{"invoice_number", "supplier.tin", "supplier.name", "line_items", "", "nope", "buyer_tin",
+		"supplier.email", "supplier.city", "supplier.state"}
 	for _, path := range skipped {
 		t.Run("path="+path, func(t *testing.T) {
 			if got := ruleBreaks(ex, []invoice.Violation{rbViolation(path, "rule-x")}); len(got) != 0 {
@@ -71,8 +79,9 @@ func TestRuleBreaks_SkipsLockedLineAndUnknownPaths(t *testing.T) {
 }
 
 func TestRuleBreaks_MapsOnlyUnlockedExtractHeaderFields(t *testing.T) {
-	// non-vacuity: later stories add paths, so the pin is on the seven that exist today
-	for _, p := range []string{"issue_date", "currency", "subtotal", "vat", "total", "buyer.tin", "buyer.name"} {
+	// non-vacuity: later stories add paths, so the pin is on the fourteen that exist today
+	for _, p := range []string{"issue_date", "currency", "subtotal", "vat", "total", "buyer.tin", "buyer.name",
+		"buyer.email", "buyer.street", "buyer.city", "buyer.postal_zone", "buyer.lga", "buyer.state", "buyer.country"} {
 		if _, ok := ruleBreakFields[p]; !ok {
 			t.Errorf("path map has no entry for %q (Design § Violation -> field mapping)", p)
 		}

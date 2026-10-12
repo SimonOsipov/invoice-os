@@ -806,6 +806,19 @@ describe('the line-item field filter (EXTR-13-07)', () => {
       'a line_tax cell reached the header-field prefix',
     ).toBeNull()
   })
+
+  it('a new line-role cell never renders as a header row', () => {
+    const header = tenFields()
+    const hsn = mkField({ name: 'line_items[1].hsn_code', value: '8471.30' })
+
+    render(fieldsPane({ fields: [...header, hsn] }))
+
+    expect(screen.queryByTestId('extraction-field-total'), 'the header set did not render').not.toBeNull()
+    expect(
+      screen.queryByTestId('extraction-field-line_items[1].hsn_code'),
+      'an hsn_code cell reached the header-field prefix',
+    ).toBeNull()
+  })
 })
 
 // ==========================================================================================

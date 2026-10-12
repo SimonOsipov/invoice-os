@@ -111,6 +111,7 @@ const (
 	msgRegionDisagrees  = "only a pointed correction carries a region"
 	msgRegionBox        = "region must be a normalised box: page at least 1, 0 <= x0 <= x1 <= 1 and 0 <= y0 <= y1 <= 1"
 	msgBadIssueDate     = "issue_date must be a date this system can read"
+	msgBadDueDate       = "due_date must be a date this system can read"
 	msgUnknownField     = "this document field is not one we file on an invoice"
 	msgInvoiceNumberSet = "invoice_number identifies the invoice and is not corrected here"
 	msgSupplierField    = "supplier_tin and supplier_name come from the client record, not from the document"
@@ -270,13 +271,17 @@ func CorrectionHandler(pool *pgxpool.Pool, apply ApplyFieldToInvoice, record Rec
 			writeError(w, http.StatusBadRequest, msgRegionBox)
 			return
 		}
-		// issue_date is the one field the handler parses: UpdateInput.IssueDate is a
+		// issue_date and due_date are the fields the handler parses: their UpdateInput members are
 		// *time.Time, so an unreadable date cannot reach the invoice as text. TWO readings is
 		// refused as well as none -- picking one silently is how a tax period ends up wrong.
-		if field == "issue_date" {
+		if field == "issue_date" || field == "due_date" {
 			readings := ShapeDate.Normalize(value)
 			if len(readings) != 1 {
-				writeError(w, http.StatusBadRequest, msgBadIssueDate)
+				msg := msgBadIssueDate
+				if field == "due_date" {
+					msg = msgBadDueDate
+				}
+				writeError(w, http.StatusBadRequest, msg)
 				return
 			}
 			value = readings[0]

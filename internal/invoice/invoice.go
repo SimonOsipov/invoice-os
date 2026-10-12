@@ -15,6 +15,7 @@ package invoice
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -252,6 +253,18 @@ type LineItemInput struct {
 
 	// NRSSent: the request entry named an NRS key, null included. The carry skips it.
 	NRSSent bool
+}
+
+// TrimmedOrNil is the value trimmed, or nil when it is nil or blank.
+func TrimmedOrNil(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	t := strings.TrimSpace(*v)
+	if t == "" {
+		return nil
+	}
+	return &t
 }
 
 // CreateInput is the Store.Create argument. EntityID and InvoiceNumber are

@@ -317,3 +317,15 @@ func TestStoreList_TieBreaksByIDOnCollidingCreatedAt(t *testing.T) {
 		}
 	}
 }
+
+func TestTrimmedOrNil(t *testing.T) {
+	pad, blank, empty := "  8517 \t", " \t", ""
+	if got := TrimmedOrNil(&pad); got == nil || *got != "8517" {
+		t.Errorf("TrimmedOrNil(%q) = %v, want \"8517\"", pad, got)
+	}
+	for _, in := range []*string{nil, &blank, &empty} {
+		if got := TrimmedOrNil(in); got != nil {
+			t.Errorf("TrimmedOrNil(%v) = %q, want nil", in, *got)
+		}
+	}
+}

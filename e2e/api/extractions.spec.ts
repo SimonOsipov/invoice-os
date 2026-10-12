@@ -81,6 +81,15 @@ const CORRECTION_KEYS = ['created_at', 'field_name', 'id', 'invoice_id', 'method
 // The same claim for LineItemsResponse (handlers_lineitems.go:37-42), sorted.
 const LINE_ITEMS_KEYS = ['created_at', 'id', 'invoice_id', 'lines']
 
+// The five AI-only line roles, null; spread last so JSON.stringify keeps the Go struct order.
+const NULL_NEW_LINE_ROLES = {
+  tax_category: null,
+  hsn_code: null,
+  isic_code: null,
+  sellers_item_identification: null,
+  price_unit: null,
+}
+
 const POLL_BUDGET_MS = 120_000
 const POLL_INTERVAL_MS = 1_000
 const TEST_TIMEOUT_MS = 180_000
@@ -501,8 +510,8 @@ test.describe('line-items replace-all, on a settled job (API E2E, over the deplo
     // No <, > or & anywhere in these strings: Go's json.Marshal escapes all three, and the
     // canonical-JSON equality at the bottom compares against JSON.stringify, which does not.
     const first: LineItemInput[] = [
-      { description: 'EXTR13-API-03 alpha', quantity: '2', unit_price: '10.00', line_total: '20.00', line_tax: null },
-      { description: 'EXTR13-API-03 beta', quantity: null, unit_price: '5.00', line_total: '5.00', line_tax: null },
+      { description: 'EXTR13-API-03 alpha', quantity: '2', unit_price: '10.00', line_total: '20.00', line_tax: null, ...NULL_NEW_LINE_ROLES },
+      { description: 'EXTR13-API-03 beta', quantity: null, unit_price: '5.00', line_total: '5.00', line_tax: null, ...NULL_NEW_LINE_ROLES },
     ]
 
     const raw = await rawFetch(lineItemsPath(job.id), {
@@ -528,7 +537,7 @@ test.describe('line-items replace-all, on a settled job (API E2E, over the deplo
     // value here while `first` above sent nulls: the echo and the canonical blob below are then
     // the only place a per-line VAT is proved to survive the deployed wire, not just a unit seam.
     const replaced: LineItemInput[] = [
-      { description: 'EXTR13-API-03 gamma', quantity: '3', unit_price: '7.00', line_total: '21.00', line_tax: '1.50' },
+      { description: 'EXTR13-API-03 gamma', quantity: '3', unit_price: '7.00', line_total: '21.00', line_tax: '1.50', ...NULL_NEW_LINE_ROLES },
     ]
     const echoed = await postLineItems(token, job.id, { lines: replaced })
     expect(echoed.lines, 'EXTR13-API-03: the second 201 echoes the second set, cell for cell').toEqual(replaced)
@@ -596,6 +605,7 @@ test.describe('a line correction round-trips through Detail (API E2E, over the d
         unit_price: '500.00',
         line_total: '1000.00',
         line_tax: null,
+        ...NULL_NEW_LINE_ROLES,
       },
     ]
     await postLineItems(token, job.id, { lines: corrected })

@@ -168,8 +168,8 @@ func TestReconcile_FindTotalIsWiredForTotalAlone(t *testing.T) {
 			others = append(others, f)
 		}
 	}
-	if len(others) != 7 {
-		t.Fatalf("%d non-money header field(s), want 7; the partition below was measured over a different vocabulary", len(others))
+	if len(others) != 16 {
+		t.Fatalf("%d non-money header field(s), want 16; the partition below was measured over a different vocabulary", len(others))
 	}
 
 	cands := ftF0Candidates()

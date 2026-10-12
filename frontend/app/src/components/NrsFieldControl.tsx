@@ -42,7 +42,7 @@ export function NrsFieldControl({ fieldKey, value, onChange, onPick, authedFetch
     const unknown = value !== '' && !options.some(([v]) => v === value)
     return (
       <span style={{ position: 'relative', display: 'block' }}>
-        <select {...rest} className="pf-select" value={value} disabled={disabled} style={{ ...SELECT_STYLE, ...style }} onChange={(e) => onChange(e.target.value)}>
+        <select {...rest} className="pf-select" value={value} disabled={disabled} style={{ ...SELECT_STYLE, ...style, paddingRight: 32 }} onChange={(e) => onChange(e.target.value)}>
           <option value=""></option>
           {unknown && <option value={value}>{value}</option>}
           {options.map(([v, text]) => (

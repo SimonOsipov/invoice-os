@@ -1947,7 +1947,7 @@ describe('register/detail buyer TIN agreement (AC-5, task-413, BUG-05-04)', () =
     for (const { label, buyer_tin } of states) {
       const record = detailRecord({ buyer_tin })
       // Same invoice, two wires: the list carries `approval`, the detail one does not.
-      const listRow: InvoiceRecord = { ...record, approval: null }
+      const listRow: InvoiceRecord = { ...record, approval: null, demotion: null }
 
       mockDetailFetch(record)
       render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
@@ -1983,7 +1983,7 @@ describe('three-surface buyer TIN agreement table (AC-4/AC-5, task-413, BUG-05-0
   ] as const)('%s renders identical text and colour on InvoicesList, InvoiceDetail and ReviewRow', async (_label, buyerTin) => {
     const record = detailRecord({ buyer_tin: buyerTin as unknown as string | null })
     // Same invoice, two wires: the list carries `approval`, the detail one does not.
-    const listRow: InvoiceRecord = { ...record, approval: null }
+    const listRow: InvoiceRecord = { ...record, approval: null, demotion: null }
 
     mockDetailFetch(record)
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)

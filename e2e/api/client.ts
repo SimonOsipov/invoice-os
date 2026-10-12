@@ -621,7 +621,7 @@ export interface Invoice {
 }
 
 // InvoiceListItem mirrors internal/invoice/handlers.go's listItem: Invoice embedded plus
-// FIVE additive siblings. `approval` sits here and NOT on Invoice because Go declares it
+// SIX additive siblings. `approval` sits here and NOT on Invoice because Go declares it
 // on listItem only -- getResponse does not carry it, so a GET-detail consumer reading it
 // off Invoice would get `undefined` where the type promised `InvoiceApproval | null`. Same
 // reason the POST/PATCH/transition responses (all plain Invoice) do not carry it.
@@ -638,6 +638,7 @@ export interface InvoiceListItem extends Invoice {
   approve_blocked_reason: string | null
   can_submit: boolean
   submit_blocked_reason: string | null
+  demotion: Demotion | null
 }
 
 // Mirrors approval.RowFacts (internal/approval/gate.go) key for key -- its six WIRE keys.
@@ -838,6 +839,13 @@ export interface HistoryCause {
   rule_set_version: number
   rule_set_version_id: string
   effective_from: string | null
+}
+
+// A list row's re-check demotion: the latest history row's cause, set only while the invoice is a draft.
+export interface Demotion {
+  changed_at: string
+  cause: HistoryCause | null
+  custom_rule_cause: CustomRuleCause | null
 }
 
 // getInvoiceHistory(): GET /v1/invoices/{id}/history (task-160/M4-22-01). The success

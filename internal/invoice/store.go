@@ -121,6 +121,11 @@ const historyCauseColumns = `v.id::text, v.version, to_char(v.effective_from, 'Y
 	r.rule_id::text, r.revision, r.id::text, r.message`
 
 func scanStatusChange(row scanner, sc *StatusChange) error {
+	return scanWithCauses(row, []any{&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt}, &sc.Cause, &sc.CustomRuleCause)
+}
+
+// scanWithCauses scans lead followed by historyCauseColumns, leaving an absent cause nil.
+func scanWithCauses(row scanner, lead []any, cause **HistoryCause, custom **CustomRuleCause) error {
 	var (
 		causeID   *string
 		causeVer  *int
@@ -130,15 +135,15 @@ func scanStatusChange(row scanner, sc *StatusChange) error {
 		revID     *string
 		ruleMsg   *string
 	)
-	if err := row.Scan(&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt, &causeID, &causeVer, &causeDate,
-		&ruleID, &ruleRev, &revID, &ruleMsg); err != nil {
+	dest := append(lead, &causeID, &causeVer, &causeDate, &ruleID, &ruleRev, &revID, &ruleMsg)
+	if err := row.Scan(dest...); err != nil {
 		return err
 	}
 	if causeID != nil && causeVer != nil {
-		sc.Cause = &HistoryCause{RuleSetVersion: *causeVer, RuleSetVersionID: *causeID, EffectiveFrom: causeDate}
+		*cause = &HistoryCause{RuleSetVersion: *causeVer, RuleSetVersionID: *causeID, EffectiveFrom: causeDate}
 	}
 	if revID != nil && ruleID != nil && ruleRev != nil && ruleMsg != nil {
-		sc.CustomRuleCause = &CustomRuleCause{CustomRuleID: *ruleID, Revision: *ruleRev, RevisionID: *revID,
+		*custom = &CustomRuleCause{CustomRuleID: *ruleID, Revision: *ruleRev, RevisionID: *revID,
 			Key: customrule.Key(*ruleID), Message: *ruleMsg}
 	}
 	return nil
@@ -1892,9 +1897,34 @@ type ListGateFacts struct {
 	Demotion map[string]Demotion
 }
 
-// latestDemotionsTx is a stub: it reads nothing yet.
+// latestDemotionsTx maps each invoice whose latest history row carries a cause to that cause.
+// One statement per page; RLS scopes it.
 func latestDemotionsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]Demotion, error) {
-	return map[string]Demotion{}, nil
+	rows, err := tx.Query(ctx,
+		`SELECT DISTINCT ON (h.invoice_id) h.invoice_id::text, h.changed_at, `+historyCauseColumns+`
+		 FROM invoice_status_history h
+		 LEFT JOIN rule_set_versions v ON v.id = h.cause_rule_set_version_id
+		 LEFT JOIN custom_rule_revisions r ON r.tenant_id = h.tenant_id AND r.id = h.cause_custom_rule_revision_id
+		 WHERE h.invoice_id = ANY($1::uuid[])
+		 ORDER BY h.invoice_id, h.changed_at DESC, h.id DESC`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Demotion{}
+	for rows.Next() {
+		var (
+			id string
+			d  Demotion
+		)
+		if err := scanWithCauses(rows, []any{&id, &d.ChangedAt}, &d.Cause, &d.CustomRuleCause); err != nil {
+			return nil, err
+		}
+		if d.Cause != nil || d.CustomRuleCause != nil {
+			out[id] = d
+		}
+	}
+	return out, rows.Err()
 }
 
 // RowFacts reads the list-row approval standing of a page of invoice ids, plus the
@@ -1956,7 +1986,12 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 			return err
 		}
 
-		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit, RulePending: pending}
+		demotion, err := latestDemotionsTx(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+
+		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit, RulePending: pending, Demotion: demotion}
 		return nil
 	})
 	if err != nil {

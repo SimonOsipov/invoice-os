@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -330,7 +331,14 @@ func TestStoreRowFacts_RulePendingIsConstantInPageSize(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RowFacts of %d: %v", len(page), err)
 		}
-		if n := len(rec.mentioning("custom_rule_revisions")); n != 1 {
+		// The demotion read joins custom_rule_revisions too; it is pinned by TestListDemotion_OneStatementPerPage.
+		pendingReads := 0
+		for _, q := range rec.mentioning("custom_rule_revisions") {
+			if !strings.Contains(q, "invoice_status_history") {
+				pendingReads++
+			}
+		}
+		if n := pendingReads; n != 1 {
 			t.Errorf("page of %d issued %d statements against custom_rule_revisions, want 1", len(page), n)
 		}
 		sawCovered := false

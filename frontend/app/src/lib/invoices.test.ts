@@ -182,6 +182,7 @@ const draftInvoice: InvoiceRecord = {
   approve_blocked_reason: null,
   can_submit: false,
   submit_blocked_reason: null,
+  demotion: null,
 }
 
 // A row the server would answer `can_submit` on from its status alone. Derived from
@@ -3713,7 +3714,7 @@ describe('mbsPathToEditField: hostile input (adversarial)', () => {
 })
 
 describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
-  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 31 keys mirrored from invoice.go, no more, no fewer', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 32 keys mirrored from invoice.go, no more, no fewer', () => {
     // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
     // json tags). `expectedKeys` is a plain untyped string[] with no `keyof InvoiceRecord`
     // constraint tying it to the interface (invoices.ts:127-151), so nothing here would
@@ -3765,6 +3766,8 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       // same submitGate call the detail wire already used.
       'can_submit',
       'submit_blocked_reason',
+      // ENGI-15-04: +1 -- demotion is a list-only listItem sibling.
+      'demotion',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).
     ]

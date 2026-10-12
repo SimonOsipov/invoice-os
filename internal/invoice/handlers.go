@@ -1041,6 +1041,9 @@ func ListHandler(
 			// The SAME submitGate GetHandler calls.
 			// One map lookup: no query enters this loop.
 			row.CanSubmit, row.SubmitBlockedReason = submitGate(inv.Status, gate.CallerRole, gate.TransmitClear[inv.ID], gate.RulePending[inv.ID])
+			if d, ok := gate.Demotion[inv.ID]; ok && inv.Status == StatusDraft {
+				row.Demotion = &d
+			}
 			rows = append(rows, row)
 		}
 

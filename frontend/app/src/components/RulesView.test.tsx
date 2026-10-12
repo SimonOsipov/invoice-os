@@ -407,6 +407,28 @@ describe('RulesView, admin gating', () => {
     expect(rowKeys()).toHaveLength(GOLDEN_KEYS.length + 2)
   })
 
+  it('rulesView_nonAdminCannotOpenTheEditor', async () => {
+    const { f } = await nonAdmin({ openRuleKey: FIRM.key })
+
+    const edit = screen.getByTestId('rule-edit')
+    expect(edit.hasAttribute('disabled')).toBe(true)
+    expect(edit.getAttribute('title')).toBe(ADMIN_ONLY_REASON)
+    fireEvent.click(edit)
+    fireEvent.click(screen.getByTestId('rules-new'))
+    expect(screen.queryByRole('dialog', { name: 'New custom rule' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: 'Edit custom rule' })).toBeNull()
+    expect(writes(f)).toHaveLength(0)
+  })
+
+  it('an admin sees Edit in the drawer and New rule opens the editor', async () => {
+    const { ctx } = await mount(fakeFetch(), { openRuleKey: FIRM.key })
+    expect(screen.getByTestId('rule-edit').hasAttribute('disabled')).toBe(false)
+    fireEvent.click(screen.getByTestId('rules-new'))
+    expect(await screen.findByRole('dialog', { name: 'New custom rule' })).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: `Rule ${FIRM.key}` }), 'the detail drawer makes way').toBeNull()
+    expect(ctx.closeRule).not.toHaveBeenCalled()
+  })
+
   it('rulesView_unloadedRosterIsNotANonAdmin', async () => {
     for (const [membersState, members] of [['loading', []], ['ready', []], ['error', []]] as const) {
       const { view } = await mount(fakeFetch(), { membersState, members })

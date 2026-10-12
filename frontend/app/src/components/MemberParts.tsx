@@ -32,7 +32,7 @@ import type { Role } from '../lib/roles'
 import { WfSelect, type WfOption } from './WorkflowParts'
 
 /** A native radio painted as the prototype's ring with a 7px dot when checked. */
-const radioPaint = (checked: boolean): CSSProperties => ({
+export const radioPaint = (checked: boolean): CSSProperties => ({
   appearance: 'none',
   WebkitAppearance: 'none',
   flex: 'none',

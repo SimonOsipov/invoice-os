@@ -14,7 +14,7 @@ export type RuleDrawerActions = {
   /** The server's sentence for a failed remove. */
   error: string | null
   onRemove: () => void
-  /** Absent until the editor exists; the button is then not drawn. */
+  /** Absent: the Edit button is not drawn. */
   onEdit?: () => void
 }
 

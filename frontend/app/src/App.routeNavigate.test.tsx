@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { stripComments } from '@invoice-os/api-client/strip-comments'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
@@ -1713,6 +1713,9 @@ describe('ENGI-15-06: switching client leaves the Rules screen', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string, init?: RequestInit) => {
+        if (url.endsWith('/api/tenancy/v1/memberships')) {
+          return reply({ memberships: [{ user_id: APP_PERSONAS.firm.subject, role: 'admin', status: 'active', display_name: 'Ada', email: null }] })
+        }
         if (url.endsWith('/api/validation/v1/rules')) {
           rulesCalls.push('golden')
           return reply({ today: '2026-10-12', versions: [], rule_set_version_id: 'v', version: 4, effective_from: '2026-08-06', rules: [] })
@@ -1748,5 +1751,19 @@ describe('ENGI-15-06: switching client leaves the Rules screen', () => {
     await screen.findByText(/^INHERITED/)
     expect(rulesCalls.sort()).toEqual(['custom', 'custom', 'golden', 'golden'])
     expect(screen.queryByRole('dialog'), 'coming back does not reopen the old drawer').toBeNull()
+
+    await waitFor(() => expect((screen.getByTestId('rules-new') as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByTestId('rules-new'))
+    expect(await screen.findByRole('dialog', { name: 'New custom rule' })).toBeTruthy()
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_A)
+    })
+    expect(requireCtx().view).toBe('dashboard')
+    expect(screen.queryByRole('dialog'), 'no open editor survives the switch').toBeNull()
+    await act(async () => {
+      capturedCtx!.nav('rules')
+    })
+    await screen.findByText(/^INHERITED/)
+    expect(screen.queryByRole('dialog'), 'coming back does not reopen the editor').toBeNull()
   })
 })

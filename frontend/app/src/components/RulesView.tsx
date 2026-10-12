@@ -22,6 +22,7 @@ import {
   type GoldenRules,
   type GoldenVersion,
 } from '../lib/rulesApi'
+import { CustomRuleEditor } from './CustomRuleEditor'
 import { RuleDrawer } from './RuleDrawer'
 import { SeverityPill, TypePill } from './RulePills'
 import type { PlatformCtx } from '../types'
@@ -137,6 +138,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
   const [rowErrors, setRowErrors] = useState<Readonly<Record<string, string>>>({})
   const [removing, setRemoving] = useState(false)
   const [removeError, setRemoveError] = useState<string | null>(null)
+  const [editor, setEditor] = useState<{ rule?: CustomRule } | null>(null)
 
   useEffect(() => setRemoveError(null), [openRuleKey])
 
@@ -180,6 +182,13 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
         return next
       })
     }
+  }
+
+  function saved(rule: CustomRule, edited: boolean) {
+    writes.current++
+    setCustom((list) => (list ? (edited ? list.map((x) => (x.id === rule.id ? rule : x)) : [...list, rule]) : list))
+    setEditor(null)
+    refetchCustom()
   }
 
   async function remove(r: CustomRule) {
@@ -274,10 +283,10 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
                 </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                {/* ENGI-15-07 gives New rule its editor. */}
                 <button
                   type="button"
                   disabled={!canWrite}
+                  onClick={() => setEditor({})}
                   title={reason ?? undefined}
                   aria-describedby={reason ? 'rules-admin-reason' : undefined}
                   data-testid="rules-new"
@@ -401,7 +410,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
       {openGolden && g && (
         <RuleDrawer rule={openGolden} banner={`Managed by ASComply · golden ruleset v${g.version} · read-only`} onClose={ctx.closeRule} />
       )}
-      {openCustom && (
+      {openCustom && !editor && (
         <RuleDrawer
           rule={openCustom}
           banner={customBanner(openCustom)}
@@ -412,8 +421,15 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
             removing,
             error: removeError,
             onRemove: () => void remove(openCustom),
+            onEdit: () => {
+              setEditor({ rule: openCustom })
+              ctx.closeRule()
+            },
           }}
         />
+      )}
+      {editor && base && canWrite && (
+        <CustomRuleEditor ctx={ctx} base={base} rule={editor.rule} onClose={() => setEditor(null)} onSaved={(r) => saved(r, editor.rule != null)} />
       )}
     </div>
   )

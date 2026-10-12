@@ -1,5 +1,5 @@
 // demopurge.go — the demo-tenant purge primitive. Deletes the four seeded demo
-// tenants' rows from every tenant-owned table except the four purgeExcludedTables
+// tenants' rows from every tenant-owned table except the five purgeExcludedTables
 // spares, and reaches no other tenant. Provision (provision.go) calls it on every
 // gated boot, between Reset and Seed.
 package db
@@ -66,14 +66,15 @@ var purgeTables = []string{
 // purgeExcludedTables carries tenant_id but is deliberately never purged:
 // memberships' provision_workspace INSERT creates a new tenant, never a demo one, and internal/demopolicy rebuilds the
 // approval-policy tables for the two persona tenants only, so purging them
-// would leave the other two with no policy and nothing to restore it. Together
-// with purgeTables it must equal the live schema's tenant_id-bearing set
+// would leave the other two with no policy and nothing to restore it. ai_calls is a usage
+// record, never demo state. Together with purgeTables it must equal the live schema's tenant_id-bearing set
 // (TestPurgeTableListCoversEveryTenantOwnedTable).
 var purgeExcludedTables = []string{
 	"memberships",
 	"approval_policies",
 	"approval_policy_versions",
 	"approval_policy_steps",
+	"ai_calls",
 }
 
 // auditLogTable names the replica window by table rather than by position, so

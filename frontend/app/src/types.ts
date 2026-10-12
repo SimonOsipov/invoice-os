@@ -21,7 +21,6 @@ import type { InvoiceKind, MappingGroup } from './lib/mappingGroups'
 // (TS1484, from `verbatimModuleSyntax`), NOT the bundler: `vite build` alone erases a
 // value import here and emits a byte-identical bundle.
 import type { Member, MemberStatus } from './lib/members'
-import type { CustomRule, Suggestion } from './lib/rules'
 // Type-only for the reason the `Member` edge above spells out — `lib/roles.ts` type-imports
 // `lib/members.ts`, which closes the same benign compile-erased loop.
 import type { Role } from './lib/roles'
@@ -310,12 +309,6 @@ export type PlatformCtx = {
   handOffReading: CarriedReading | null
 
   // --- Rules screen ---------------------------------------------------------
-  // The ACTIVE client's custom rules, already resolved out of the per-client store
-  // in App.tsx — components never see the store or the key, so a surface cannot
-  // accidentally render one client's rules under another's name. The golden ruleset
-  // is not here at all: it is inherited, identical for every tenant, and read
-  // straight off lib/rules.ts by the view.
-  customRules: CustomRule[]
   /** Key of the rule whose detail drawer is open, golden or custom. */
   openRuleKey: string | null
 
@@ -532,9 +525,6 @@ export type PlatformCtx = {
   // all to an inherited one.
   openRule: (key: string) => void
   closeRule: () => void
-  addSuggestedRule: (s: Suggestion) => void
-  toggleCustomRule: (key: string) => void
-  removeCustomRule: (key: string) => void
   // Workflows screen. `savePolicy` is the ONE write funnel for a policy's contents: the
   // builder composes the next Policy with the pure reducers in lib/workflows.ts and hands
   // the whole object back, so App.tsx never needs to know the node tree's shape. It

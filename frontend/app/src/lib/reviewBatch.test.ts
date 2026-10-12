@@ -2222,11 +2222,8 @@ describe('rowExpansionView: a clean invoice is the passing line only when a rule
 })
 
 // FIX-9's own "the string v8 appears nowhere in the module" -- scoped to the literal
-// FULL fake label ("NG-MBS v8"), not the bare substring "v8": reviewBatch.ts's own
-// INVCR-01-08-era comment (RULE_SET_NAME's own doc, above) legitimately says `v8` in
-// prose (explaining why lib/rules.ts's GOLDEN_SET is NOT imported here) and a bare-"v8"
-// scan would red on that pre-existing, correct line for the wrong reason. The full label
-// is what a hardcoded fallback would actually emit, and it is genuinely absent today.
+// FULL fake label ("NG-MBS v8"), not the bare substring "v8": the full label is what a
+// hardcoded fallback would actually emit, and it is genuinely absent today.
 describe('reviewBatch.ts source (whole file): the fake "NG-MBS v8" label is never hardcoded (FIX-9b guard)', () => {
   it('FIX-9b: the literal string "NG-MBS v8" appears nowhere in reviewBatch.ts -- the passing line must derive the version from the server, never repeat D1\'s deleted fake', () => {
     const srcPath = fileURLToPath(new URL('./reviewBatch.ts', import.meta.url))

@@ -1,24 +1,42 @@
-// Rule detail drawer. One component covers both halves of the table: the presence of
-// `onRemove` is what makes a rule custom, so a golden rule cannot be rendered with a
-// destructive action by accident — there is no prop to pass one through.
+// Rule detail drawer. `actions` is what makes a rule custom: a golden rule has no prop
+// to carry a destructive action.
 
-import { GOLDEN_SET, GOLDEN_SOURCE_REF, ruleJSON, tenantSlug, type CustomRule, type Rule } from '../lib/rules'
 import { xSmallGlyph } from '../glyphs'
+import { ruleJSON, ruleKeyLabel, type CustomRule, type GoldenRule } from '../lib/rulesApi'
 import { SeverityPill, TypePill } from './RulePills'
 
-type Props = {
-  rule: Rule | CustomRule
-  /** Client (firm mode) or org (in-house) — the tenant this custom rule belongs to. */
-  scope: string
-  onClose: () => void
-  /** Custom rules only. Its absence is what marks the rule inherited and read-only. */
-  onRemove?: () => void
+export type RuleDrawerActions = {
+  /** Non-admin or roster not loaded: both buttons are disabled. */
+  disabled: boolean
+  /** Shown as the buttons' title; null when the viewer is not known to be a non-admin. */
+  reason: string | null
+  removing: boolean
+  /** The server's sentence for a failed remove. */
+  error: string | null
+  onRemove: () => void
+  /** Absent until the editor exists; the button is then not drawn. */
+  onEdit?: () => void
 }
 
-export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
-  const isCustom = onRemove != null
-  const enabled = isCustom ? (rule as CustomRule).enabled : true
-  const sourceRef = isCustom ? `tenant:${tenantSlug(scope)}` : GOLDEN_SOURCE_REF
+type Props = {
+  rule: GoldenRule | CustomRule
+  banner: string
+  onClose: () => void
+  actions?: RuleDrawerActions
+}
+
+const BUTTON_OFF = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' } as const
+
+function paramValue(v: unknown): string {
+  return typeof v === 'string' ? v : JSON.stringify(v)
+}
+
+export function RuleDrawer({ rule, banner, onClose, actions }: Props) {
+  const isCustom = actions != null
+  const enabled = 'enabled' in rule ? rule.enabled : true
+  const params: [string, string][] = Object.entries(rule.params).map(([k, v]) => [k, paramValue(v)])
+  if (rule.when != null) params.push(['Applies when', rule.when])
+  const off = actions != null && (actions.disabled || actions.removing)
 
   return (
     <>
@@ -46,13 +64,13 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
         <div style={{ flex: 'none', padding: '20px 24px 16px', borderBottom: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'flex-start', gap: 14 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 5, flexWrap: 'wrap' }}>
-              <span className="mono" style={{ fontSize: 14, fontWeight: 700, wordBreak: 'break-all' }}>
-                {rule.key}
+              <span className="mono" title={rule.key} style={{ fontSize: 14, fontWeight: 700, wordBreak: 'break-all' }}>
+                {ruleKeyLabel(rule.key)}
               </span>
               <TypePill type={rule.type} />
               <SeverityPill severity={rule.severity} />
             </div>
-            <div className="mono" style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{rule.field}</div>
+            <div className="mono" style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>{rule.target || 'whole invoice'}</div>
           </div>
           <button
             type="button"
@@ -79,9 +97,7 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
             color: isCustom ? 'var(--action)' : 'var(--fg-3)',
           }}
         >
-          {isCustom
-            ? `Custom rule · ${scope} · editable, runs after the golden ruleset`
-            : `Managed by ASComply · inherited from golden ruleset ${GOLDEN_SET.id} ${GOLDEN_SET.version} · read-only`}
+          {banner}
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '18px 24px 28px' }}>
@@ -89,13 +105,13 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
             Parameters
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 24 }}>
-            {rule.params.map((p) => (
-              <div key={p.label}>
+            {params.map(([label, value]) => (
+              <div key={label}>
                 <div className="label" style={{ marginBottom: 5, textTransform: 'none', letterSpacing: 0 }}>
-                  {p.label}
+                  {label}
                 </div>
                 <div className="mono" style={{ display: 'flex', alignItems: 'center', minHeight: 36, padding: '8px 11px', overflowWrap: 'anywhere', fontSize: 12, color: 'var(--fg-1)', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-md)' }}>
-                  {p.value}
+                  {value}
                 </div>
               </div>
             ))}
@@ -112,14 +128,21 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
           <div className="label" style={{ marginBottom: 10 }}>
             Underlying rule JSON
           </div>
-          <pre className="pf-json">{ruleJSON(rule, sourceRef, enabled)}</pre>
+          <pre className="pf-json">{ruleJSON(rule)}</pre>
         </div>
+
+        {actions?.error && (
+          <div
+            data-testid="rule-drawer-error"
+            style={{ flex: 'none', padding: '10px 24px', borderTop: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}
+          >
+            {actions.error}
+          </div>
+        )}
 
         <div style={{ flex: 'none', padding: '14px 24px', borderTop: '1px solid var(--line-1)', background: 'var(--bg-2)', display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 9 }}>
             <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>Live status</span>
-            {/* An inherited rule has no off state to report, so it says ALWAYS ON
-                rather than borrowing the custom rule's LIVE/OFF vocabulary. */}
             <span
               className="mono"
               style={{ fontSize: 10.5, fontWeight: 700, color: !isCustom || enabled ? 'var(--status-green-text)' : 'var(--fg-3)' }}
@@ -127,12 +150,28 @@ export function RuleDrawer({ rule, scope, onClose, onRemove }: Props) {
               {!isCustom ? 'ALWAYS ON' : enabled ? 'LIVE' : 'OFF'}
             </span>
           </div>
-          {onRemove && (
+          {actions?.onEdit && (
             <button
               type="button"
-              onClick={onRemove}
+              disabled={off}
+              onClick={actions.onEdit}
+              title={actions.reason ?? undefined}
+              data-testid="rule-edit"
+              className="v2-btn v2-btn-ghost pf-btn"
+              style={{ height: 36, ...(off ? BUTTON_OFF : null) }}
+            >
+              Edit
+            </button>
+          )}
+          {actions && (
+            <button
+              type="button"
+              disabled={off}
+              onClick={actions.onRemove}
+              title={actions.reason ?? undefined}
+              data-testid="rule-remove"
               className="pf-btn"
-              style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 36, padding: '0 14px', borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, color: 'var(--status-red-text)' }}
+              style={{ border: '1px solid var(--status-red-border)', background: 'var(--status-red-bg)', cursor: 'pointer', height: 36, padding: '0 14px', borderRadius: 'var(--radius-btn)', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, color: 'var(--status-red-text)', ...(off ? BUTTON_OFF : null) }}
             >
               Remove rule
             </button>

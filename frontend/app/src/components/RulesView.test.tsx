@@ -1,340 +1,434 @@
 // @vitest-environment jsdom
-// A real (hand-off) session's Rules screen shows its own empty lines, not the demo rules and suggestions.
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { renderToStaticMarkup } from 'react-dom/server'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+// The Rules screen over a fake authedFetch: golden set, per-client custom rules, admin gating.
+import { ApiError } from '@invoice-os/api-client'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { GOLDEN_RULES, GOLDEN_VERSIONS, SEED_CUSTOM_RULES, SUGGESTED_RULES, type CustomRule } from '../lib/rules'
+import {
+  ADMIN_ONLY_REASON,
+  ruleInputOf,
+  type CustomRule,
+  type GoldenRule,
+  type GoldenRules,
+} from '../lib/rulesApi'
 import type { PlatformCtx } from '../types'
 import { RulesView } from './RulesView'
 
-function rulesCtx(handoff: boolean): PlatformCtx {
-  const ctx = {
+const GW = 'https://gateway.test'
+const A = 'aaaaaaaa-0000-4000-8000-00000000000a'
+const B = 'bbbbbbbb-0000-4000-8000-00000000000b'
+
+function golden(key: string, over: Partial<GoldenRule> = {}): GoldenRule {
+  return { key, type: 'required', target: 'buyer.tin', params: {}, severity: 'error', when: null, message: `${key} message`, ...over }
+}
+
+const GOLDEN_KEYS = ['buyer-tin-format', 'currency-allowed', 'invoice-number-required']
+
+function goldenPayload(over: Partial<GoldenRules> = {}): GoldenRules {
+  return {
+    today: '2026-10-12',
+    versions: [
+      { rule_set_version_id: 'v5', version: 5, state: 'scheduled', effective_from: '2027-01-01', rule_count: 67 },
+      { rule_set_version_id: 'v4', version: 4, state: 'in_force', effective_from: '2026-08-06', rule_count: 3 },
+      { rule_set_version_id: 'v3', version: 3, state: 'superseded', effective_from: '2026-03-01', rule_count: 19 },
+    ],
+    rule_set_version_id: 'v4',
+    version: 4,
+    effective_from: '2026-08-06',
+    rules: GOLDEN_KEYS.map((k) => golden(k)),
+    ...over,
+  }
+}
+
+function custom(id: string, entity: string | null, over: Partial<CustomRule> = {}): CustomRule {
+  return {
+    id,
+    key: `custom:${id}`,
+    revision: 1,
+    revision_id: `rev-${id}`,
+    entity_id: entity,
+    type: 'required',
+    target: 'buyer.email',
+    params: {},
+    severity: 'warning',
+    when: null,
+    message: `message of ${id}`,
+    enabled: true,
+    updated_at: '2026-10-12T00:00:00Z',
+    updated_by: 'u1',
+    ...over,
+  }
+}
+
+const FIRM = custom('r-firm', null)
+const RA = custom('r-a', A)
+const RB = custom('r-b', B)
+
+type Handler = (url: string, init?: { method?: string; body?: unknown }) => unknown
+
+function fakeFetch(opts: { golden?: GoldenRules | Error; custom?: CustomRule[] | Error; write?: Handler } = {}) {
+  return vi.fn(async (url: string, init?: { method?: string; body?: unknown }) => {
+    const method = init?.method ?? 'GET'
+    if (method === 'GET' && url.endsWith('/api/validation/v1/rules')) {
+      const g = opts.golden ?? goldenPayload()
+      if (g instanceof Error) throw g
+      return g
+    }
+    if (method === 'GET' && url.endsWith('/api/invoice/v1/custom-rules')) {
+      const c = opts.custom ?? [FIRM, RA, RB]
+      if (c instanceof Error) throw c
+      return { custom_rules: c }
+    }
+    return opts.write ? opts.write(url, init) : undefined
+  })
+}
+
+type FetchMock = ReturnType<typeof fakeFetch>
+const writes = (f: FetchMock) => f.mock.calls.filter(([, init]) => init?.method && init.method !== 'GET')
+const reads = (f: FetchMock, suffix: string) => f.mock.calls.filter(([u, init]) => !init?.method && u.endsWith(suffix))
+
+const ADMIN = [{ id: 'u1', isYou: true, role: 'admin', status: 'active', name: 'Ada', initials: 'A', email: null }]
+const PREPARER = [{ id: 'u1', isYou: true, role: 'preparer', status: 'active', name: 'Ada', initials: 'A', email: null }]
+
+function ctxOf(authedFetch: unknown, over: Record<string, unknown> = {}): PlatformCtx {
+  return {
     mode: 'firm',
-    handoff,
-    active: { short: 'Adaeze Ventures', initials: 'AV', tin: '', entityId: null },
-    customRules: handoff ? [] : SEED_CUSTOM_RULES,
+    active: { short: 'Adaeze Ventures', initials: 'AV', tin: '', entityId: A },
+    activeEntity: { id: A, name: 'Adaeze Ventures Ltd' },
+    authedFetch,
+    members: ADMIN,
+    membersState: 'ready',
     openRuleKey: null,
     openRule: vi.fn(),
     closeRule: vi.fn(),
-    addSuggestedRule: vi.fn(),
-    toggleCustomRule: vi.fn(),
-    removeCustomRule: vi.fn(),
-  }
-  return ctx as unknown as PlatformCtx
+    ...over,
+  } as unknown as PlatformCtx
 }
 
-afterEach(cleanup)
+async function mount(f: FetchMock, over: Record<string, unknown> = {}) {
+  const ctx = ctxOf(f, over)
+  const view = render(<RulesView ctx={ctx} />)
+  await screen.findByText(/^INHERITED/)
+  return { ctx, view }
+}
 
-describe('RulesView', () => {
-  it('hand-off: Rules shows no custom rule and no suggestion', () => {
-    render(<RulesView ctx={rulesCtx(true)} />)
-    expect(screen.getByText('No suggestions to show.')).toBeTruthy()
+const rowKeys = () => [...document.querySelectorAll('.pf-row')].map((r) => r.children[0].textContent)
+
+beforeEach(() => vi.stubEnv('VITE_GATEWAY_URL', GW))
+afterEach(() => {
+  cleanup()
+  vi.unstubAllEnvs()
+})
+
+describe('RulesView, golden set', () => {
+  it('rulesView_rendersTheServerGoldenSet', async () => {
+    await mount(fakeFetch())
+
+    const rail = screen.getByText('Golden ruleset').parentElement!
+    expect(within(rail).getByText('v4').parentElement!.textContent).toContain('IN USE')
+    expect(within(rail).getByText('since 2026-08-06 · 3 rules')).toBeTruthy()
+    expect(within(rail).getByText('v5').parentElement!.textContent).toContain('SCHEDULED')
+    expect(within(rail).getByText('starts 2027-01-01 · 67 rules')).toBeTruthy()
+    expect(within(rail).getByText('v3').parentElement!.textContent).toContain('SUPERSEDED')
+
+    const goldenRows = [...document.querySelectorAll('.pf-row')].slice(0, 3)
+    expect(goldenRows.map((r) => r.children[0].textContent)).toEqual(GOLDEN_KEYS)
+    goldenRows.forEach((r) => {
+      expect(within(r as HTMLElement).getByText('LOCKED')).toBeTruthy()
+      expect(within(r as HTMLElement).queryByRole('switch')).toBeNull()
+      expect(within(r as HTMLElement).getByText('GOLDEN')).toBeTruthy()
+    })
+    expect(screen.getByText('GOLDEN v4 + 2 CUSTOM')).toBeTruthy()
+  })
+
+  it('the version states carry their tones: in force green, the others muted', async () => {
+    await mount(fakeFetch())
+    const tone = (tag: string) => (screen.getByText(tag).parentElement as HTMLElement).style.background
+    expect(tone('IN USE')).toBe('var(--status-green-bg)')
+    expect(tone('SCHEDULED')).toBe('var(--status-muted-bg)')
+    expect(tone('SUPERSEDED')).toBe('var(--status-muted-bg)')
+  })
+
+  it('rulesView_rendersOnlyWhatTheServerSent', async () => {
+    const f1 = fakeFetch({ golden: goldenPayload({ rules: [golden('only-golden')] }), custom: [custom('only-custom', null)] })
+    const first = await mount(f1)
+    expect(rowKeys()).toEqual(['only-golden', 'Custom rule'])
+    expect(screen.getByText('message of only-custom')).toBeTruthy()
+    first.view.unmount()
+
+    await mount(fakeFetch({ golden: goldenPayload({ rules: [golden('x-1'), golden('x-2')] }), custom: [] }))
+    expect(rowKeys()).toEqual(['x-1', 'x-2'])
+    expect(screen.queryByText('only-golden')).toBeNull()
     expect(screen.getByText('No custom rules yet — the golden ruleset alone is running.')).toBeTruthy()
-    expect(SUGGESTED_RULES.length).toBeGreaterThan(0)
-    SUGGESTED_RULES.forEach((s) => expect(screen.queryByText(s.key)).toBeNull())
-    expect(screen.queryByText(/Derived from/)).toBeNull()
-    expect(screen.queryAllByText('CUSTOM')).toHaveLength(0)
-    expect(screen.queryAllByText('Add as custom rule')).toHaveLength(0)
   })
 
-  // Control: green before and after; the total is arithmetic over ctx.customRules.
-  it('hand-off: the total counts the golden rules only', () => {
-    render(<RulesView ctx={rulesCtx(true)} />)
-    expect(screen.getAllByText(`${GOLDEN_RULES.length} RULES`).length).toBeGreaterThan(0)
-    expect(screen.getByText(/\+ 0 CUSTOM/)).toBeTruthy()
-    SEED_CUSTOM_RULES.forEach((r) => expect(screen.queryByText(r.key)).toBeNull())
+  it('rulesView_noMockOrSuggestionText', async () => {
+    await mount(fakeFetch())
+    const text = document.body.textContent!
+    for (const gone of ['Suggested for you', 'NG-MBS', 'v8', 'Add as custom rule']) expect(text).not.toContain(gone)
   })
 
-  // Control: green before and after.
-  it('persona: Rules keeps the seeded rules and suggestions', () => {
-    render(<RulesView ctx={rulesCtx(false)} />)
-    expect(screen.getAllByText('CUSTOM')).toHaveLength(5)
-    expect(SEED_CUSTOM_RULES).toHaveLength(5)
-    expect(screen.getByText('Derived from 9 rejections on your invoices')).toBeTruthy()
-    expect(screen.getAllByText('Add as custom rule')).toHaveLength(3)
-    expect(screen.getAllByText(`${GOLDEN_RULES.length + 5} RULES`).length).toBeGreaterThan(0)
-    expect(screen.queryByText('No suggestions to show.')).toBeNull()
+  it('a golden row opens its rule; the switch click does not open the row', async () => {
+    const f = fakeFetch()
+    const { ctx } = await mount(f)
+
+    fireEvent.click(screen.getByText('currency-allowed'))
+    expect(ctx.openRule).toHaveBeenCalledWith('currency-allowed')
+    fireEvent.click(screen.getAllByRole('switch')[0])
+    expect(ctx.openRule).toHaveBeenCalledTimes(1)
   })
 })
 
-describe('RulesView, adversarial', () => {
-  const stored: CustomRule[] = [{ ...SEED_CUSTOM_RULES[0], key: 'mine.only' }]
+describe('RulesView, custom group', () => {
+  it('rulesView_customGroupFollowsTheActiveClient', async () => {
+    const f = fakeFetch()
+    const a = await mount(f)
+    const customRows = () => [...document.querySelectorAll('.pf-row')].slice(3).map((r) => [r.children[5].textContent, r.children[4].textContent])
+    expect(customRows()).toEqual([
+      ['message of r-firm', 'FIRM'],
+      ['message of r-a', 'CLIENT'],
+    ])
+    a.view.unmount()
 
-  function ctxWith(handoff: boolean, customRules: CustomRule[]): PlatformCtx {
-    return { ...(rulesCtx(handoff) as unknown as Record<string, unknown>), customRules } as unknown as PlatformCtx
-  }
-
-  it("hand-off: a stored rule renders, the empty row goes, and the total counts it", () => {
-    render(<RulesView ctx={ctxWith(true, stored)} />)
-    expect(screen.getByText('mine.only')).toBeTruthy()
-    expect(screen.getAllByText('CUSTOM')).toHaveLength(1)
-    expect(screen.queryByText('No custom rules yet — the golden ruleset alone is running.')).toBeNull()
-    expect(screen.getAllByText(`${GOLDEN_RULES.length + 1} RULES`).length).toBeGreaterThan(0)
-    expect(screen.getByText('No suggestions to show.')).toBeTruthy()
+    await mount(f, { activeEntity: { id: B, name: 'Bee Ltd' }, active: { short: 'Bee', initials: 'B', tin: '', entityId: B } })
+    expect(customRows()).toEqual([
+      ['message of r-firm', 'FIRM'],
+      ['message of r-b', 'CLIENT'],
+    ])
   })
 
-  // Control: persona copy for the empty custom list and for exhausted suggestions is unchanged.
-  it('persona: an empty custom list keeps the full empty line', () => {
-    render(<RulesView ctx={ctxWith(false, [])} />)
-    expect(screen.getByText('No custom rules yet — the golden ruleset alone is running. Add one from the suggestions on the left.')).toBeTruthy()
-    expect(screen.queryByText('No custom rules yet — the golden ruleset alone is running.')).toBeNull()
-    expect(screen.getAllByText('Add as custom rule')).toHaveLength(3)
+  it('an in-house workspace labels every custom rule CUSTOM', async () => {
+    await mount(fakeFetch(), { mode: 'inhouse' })
+    expect(screen.getAllByText('CUSTOM').filter((e) => e.closest('.pf-row'))).toHaveLength(2)
   })
 
-  it('persona: every suggestion adopted keeps the "Nothing to suggest" line', () => {
-    const adopted = SUGGESTED_RULES.map((s) => ({ ...SEED_CUSTOM_RULES[0], key: s.key }))
-    render(<RulesView ctx={ctxWith(false, adopted)} />)
-    expect(screen.getByText(/^Nothing to suggest right now/)).toBeTruthy()
-    expect(screen.queryByText('No suggestions to show.')).toBeNull()
-    expect(screen.getAllByText('CUSTOM')).toHaveLength(SUGGESTED_RULES.length)
+  it('no resolved client keeps firm-wide rules only', async () => {
+    await mount(fakeFetch(), { activeEntity: null })
+    expect(screen.queryByText('message of r-a')).toBeNull()
+    expect(screen.getByText('message of r-firm')).toBeTruthy()
   })
 })
 
-// The raw style attribute is read from SSR markup: jsdom's `style` drops properties it does not know.
-function mountSsr(ctx: PlatformCtx): HTMLElement {
-  const host = document.createElement('div')
-  host.innerHTML = renderToStaticMarkup(<RulesView ctx={ctx} />)
-  return host
-}
+describe('RulesView, switch', () => {
+  it('rulesView_switchSendsAFullPutAndWaits', async () => {
+    let release!: (r: CustomRule) => void
+    const f = fakeFetch({ write: () => new Promise<CustomRule>((res) => (release = res)) })
+    await mount(f)
+    const sw = screen.getByRole('switch', { name: `Disable ${FIRM.key}` })
 
-function css(el: Element | null | undefined): Map<string, string> {
-  expect(el, 'element exists').toBeTruthy()
-  const style = el!.getAttribute('style') ?? ''
-  return new Map(style.split(';').filter(Boolean).map((d) => [d.slice(0, d.indexOf(':')).trim(), d.slice(d.indexOf(':') + 1).trim()]))
-}
+    fireEvent.click(sw)
+    await waitFor(() => expect(writes(f)).toHaveLength(1))
+    expect(writes(f)[0]).toEqual([
+      `${GW}/api/invoice/v1/custom-rules/${FIRM.id}`,
+      { method: 'PUT', body: { ...ruleInputOf(FIRM), enabled: false } },
+    ])
+    expect(sw.getAttribute('aria-checked'), 'unchanged until the answer').toBe('true')
+    expect(sw.hasAttribute('disabled')).toBe(true)
+    fireEvent.click(sw)
+    expect(writes(f), 'a second click while in flight sends nothing').toHaveLength(1)
 
-const own = (e: Element) =>
-  Array.from(e.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
-
-function allByOwnText(root: Element, match: string | RegExp): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>('*')].filter((e) => (typeof match === 'string' ? own(e) === match : match.test(own(e))))
-}
-
-function byOwnText(root: Element, match: string | RegExp): HTMLElement {
-  const hits = allByOwnText(root, match)
-  expect(hits.length, `an element reads ${String(match)}`).toBeGreaterThan(0)
-  return hits[0]
-}
-
-describe('RulesView, reskin surface', () => {
-  it('headings carry no inline weight', () => {
-    const host = mountSsr(rulesCtx(false))
-    const h1 = host.querySelector('h1')!
-    const inForce = byOwnText(host, 'Rules in force')
-    const suggested = byOwnText(host, 'Suggested for you')
-
-    expect(own(h1), 'control: the h1 is read').toBe('Rules')
-    expect.soft(css(h1).has('font-weight'), 'h1 inherits its weight').toBe(false)
-    expect.soft(inForce.classList.contains('card-title'), 'Rules in force is a card title').toBe(true)
-    expect.soft(css(inForce).has('font-weight'), 'Rules in force has no inline weight').toBe(false)
-    expect.soft(css(inForce).has('font-family'), 'Rules in force has no inline family').toBe(false)
-    expect.soft(css(suggested).get('font-weight'), 'Suggested for you').toBe('700')
+    release({ ...FIRM, enabled: false, revision: 2 })
+    await waitFor(() => expect(screen.getByRole('switch', { name: `Enable ${FIRM.key}` }).getAttribute('aria-checked')).toBe('false'))
+    expect(screen.getByRole('switch', { name: `Enable ${FIRM.key}` }).hasAttribute('disabled')).toBe(false)
   })
 
-  it('pills are 4px, LOCKED is --fg-3, the knob is round', () => {
-    const host = mountSsr(rulesCtx(false))
-    const count = byOwnText(host, 'Suggested for you').nextElementSibling
-    const stack = byOwnText(host, /^GOLDEN v8 \+ 5 CUSTOM$/)
-    const versionTag = byOwnText(host, GOLDEN_VERSIONS[0].tag).parentElement
-    const locked = allByOwnText(host, 'LOCKED')
-    const knobs = [...host.querySelectorAll('.pf-knob')]
-    const suggest = allByOwnText(host, 'Add as custom rule')
+  it('rulesView_switchFailureKeepsTheRow', async () => {
+    const f = fakeFetch({ write: () => Promise.reject(new ApiError('http', 'custom rule not found', 404)) })
+    await mount(f)
+    const sw = screen.getByRole('switch', { name: `Disable ${FIRM.key}` })
 
-    expect(locked, 'control: one LOCKED per golden rule').toHaveLength(GOLDEN_RULES.length)
-    expect(knobs, 'control: one knob per custom rule').toHaveLength(SEED_CUSTOM_RULES.length)
-    expect(suggest, 'control: one suggest button per suggestion').toHaveLength(3)
-    expect.soft(css(count).get('border-radius'), 'suggest count').toBe('var(--radius-sm)')
-    expect.soft(css(count).has('margin-left'), 'suggest count is not pushed right').toBe(false)
-    expect.soft(css(stack).get('border-radius'), 'stack pill').toBe('var(--radius-sm)')
-    expect.soft(css(versionTag).get('border-radius'), 'version tag').toBe('var(--radius-sm)')
-    locked.forEach((l, i) => expect.soft(css(l).get('color'), `LOCKED ${i}`).toBe('var(--fg-3)'))
-    knobs.forEach((k, i) => {
-      expect.soft(css(k).get('border-radius'), `knob ${i} radius`).toBe('50%')
-      expect.soft(css(k).has('box-shadow'), `knob ${i} has no shadow`).toBe(false)
-    })
-    suggest.forEach((b, i) => expect.soft(css(b).get('border-radius'), `suggest button ${i}`).toBe('var(--radius-btn)'))
+    fireEvent.click(sw)
+    expect((await screen.findByTestId('rule-row-error')).textContent).toBe('custom rule not found')
+    expect(screen.getByRole('switch', { name: `Disable ${FIRM.key}` }).getAttribute('aria-checked')).toBe('true')
+    expect(sw.hasAttribute('disabled')).toBe(false)
   })
 
-  // Pin: the toggle track is exempt.
-  it('the toggle track stays a 99px pill', () => {
-    const tracks = [...mountSsr(rulesCtx(false)).querySelectorAll('.pf-toggle')]
-
-    expect(tracks).toHaveLength(SEED_CUSTOM_RULES.length)
-    tracks.forEach((t, i) => expect.soft(css(t).get('border-radius'), `track ${i}`).toBe('99px'))
-  })
-
-  it('the header, rail and table follow the D-34 values', () => {
-    const host = mountSsr(rulesCtx(false))
-    const h1 = host.querySelector('h1')!
-    const left = h1.parentElement!
-    const row = left.parentElement!
-    const total = row.lastElementChild
-    const versionText = byOwnText(host, GOLDEN_VERSIONS[0].version)
-    const suggestHead = byOwnText(host, 'Suggested for you').parentElement
-    const footer = byOwnText(host, /^Custom rules evaluate after the golden ruleset/)
-
-    expect(own(total!), 'control: the header count is read').toBe(`${GOLDEN_RULES.length + 5} RULES`)
-    expect.soft(css(row).get('gap'), 'header row gap').toBe('20px')
-    expect.soft(css(row).get('flex-wrap'), 'carve-out: the row still wraps at narrow widths').toBe('wrap')
-    expect.soft(css(left).get('min-width'), 'left column').toBe('0')
-    expect.soft(css(left.firstElementChild).get('margin-bottom'), 'eyebrow margin').toBe('7px')
-    expect.soft(css(total).has('letter-spacing'), 'header count has no tracking').toBe(false)
-    expect.soft(css(total).get('flex'), 'header count does not shrink').toBe('none')
-    expect.soft(css(versionText).has('flex'), 'version text does not stretch').toBe(false)
-    expect.soft(css(versionText.parentElement).get('gap'), 'version row gap').toBe('10px')
-    expect.soft(css(suggestHead).get('gap'), 'suggest head gap').toBe('8px')
-    expect.soft(css(footer).get('padding'), 'table footer padding').toBe('12px 16px')
-    expect.soft(css(footer).get('line-height'), 'table footer line height').toBe('1.5')
-    expect.soft(css(footer).has('background'), 'table footer has no fill').toBe(false)
-  })
-
-  it('the empty suggestion and empty custom boxes follow the D-34 values', () => {
-    const adopted = SUGGESTED_RULES.map((s) => ({ ...SEED_CUSTOM_RULES[0], key: s.key }))
-    const noSuggest = byOwnText(mountSsr({ ...(rulesCtx(false) as unknown as Record<string, unknown>), customRules: adopted } as unknown as PlatformCtx), /^Nothing to suggest right now/)
-    const noCustom = byOwnText(mountSsr({ ...(rulesCtx(false) as unknown as Record<string, unknown>), customRules: [] } as unknown as PlatformCtx), /^No custom rules yet/)
-    const box = css(noCustom).has('padding') ? noCustom : noCustom.parentElement!
-
-    expect.soft(css(noSuggest).get('padding'), 'empty suggestions padding').toBe('12px 14px')
-    expect.soft(css(box).get('padding'), 'empty custom padding').toBe('18px 16px')
-    expect.soft(css(noCustom).get('line-height') ?? css(box).get('line-height'), 'empty custom line height').toBe('1.55')
+  it('a row error clears when the next attempt starts', async () => {
+    let fail = true
+    const f = fakeFetch({ write: () => (fail ? Promise.reject(new ApiError('http', 'boom', 500)) : Promise.resolve({ ...FIRM, enabled: false })) })
+    await mount(f)
+    fireEvent.click(screen.getByRole('switch', { name: `Disable ${FIRM.key}` }))
+    await screen.findByTestId('rule-row-error')
+    fail = false
+    fireEvent.click(screen.getByRole('switch', { name: `Disable ${FIRM.key}` }))
+    await waitFor(() => expect(screen.queryByTestId('rule-row-error')).toBeNull())
   })
 })
 
-describe('RulesView, rows and drawer wiring', () => {
-  function ctxWith(over: Record<string, unknown>): PlatformCtx {
-    return { ...(rulesCtx(false) as unknown as Record<string, unknown>), ...over } as unknown as PlatformCtx
-  }
+describe('RulesView, remove', () => {
+  it('ruleDrawer_removeDeletesAndRefetches', async () => {
+    const f = fakeFetch({ write: () => undefined })
+    const { ctx } = await mount(f, { openRuleKey: FIRM.key })
 
-  it('golden rows lock, custom rows switch, and only custom rows carry a switch', () => {
-    render(<RulesView ctx={rulesCtx(false)} />)
-    const switches = screen.getAllByRole('switch')
-
-    expect(switches, 'control: one switch per custom rule').toHaveLength(SEED_CUSTOM_RULES.length)
-    expect(screen.getAllByText('LOCKED'), 'one lock per golden rule').toHaveLength(GOLDEN_RULES.length)
-    switches.forEach((sw, i) => {
-      const r = SEED_CUSTOM_RULES[i]
-      expect.soft(sw.getAttribute('aria-checked'), r.key).toBe(String(r.enabled))
-      expect.soft(sw.getAttribute('aria-label'), r.key).toBe(`${r.enabled ? 'Disable' : 'Enable'} ${r.key}`)
-      expect.soft(sw.style.background, `${r.key} track`).toBe(r.enabled ? 'var(--action)' : 'var(--line-3)')
-      expect.soft((sw.firstElementChild as HTMLElement).style.transform, `${r.key} knob`).toBe(r.enabled ? 'translateX(14px)' : 'translateX(0)')
-    })
-    GOLDEN_RULES.forEach((r) => {
-      const row = screen.getByText(r.key).closest('.pf-row') as HTMLElement
-      expect.soft(within(row).queryByRole('switch'), `${r.key} has no switch`).toBeNull()
-      expect.soft(within(row).getByText('GOLDEN'), `${r.key} source`).toBeTruthy()
-    })
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Remove rule'))
+    await waitFor(() => expect(ctx.closeRule).toHaveBeenCalledTimes(1))
+    expect(writes(f)).toEqual([[`${GW}/api/invoice/v1/custom-rules/${FIRM.id}`, { method: 'DELETE' }]])
+    await waitFor(() => expect(reads(f, '/custom-rules')).toHaveLength(2))
   })
 
-  it('a click on a row opens it, and a click on its switch toggles without opening', () => {
-    const ctx = rulesCtx(false)
-    render(<RulesView ctx={ctx} />)
-    const target = SEED_CUSTOM_RULES[2]
+  it('ruleDrawer_removeFailureKeepsTheDrawer', async () => {
+    const f = fakeFetch({ write: () => Promise.reject(new ApiError('http', 'custom rule not found', 404)) })
+    const { ctx } = await mount(f, { openRuleKey: FIRM.key })
 
-    fireEvent.click(screen.getByRole('switch', { name: `Disable ${target.key}` }))
-    expect(ctx.toggleCustomRule).toHaveBeenCalledWith(target.key)
-    expect(ctx.openRule, 'the switch click stops at the switch').not.toHaveBeenCalled()
-    fireEvent.click(screen.getByText(target.key))
-    expect(ctx.openRule).toHaveBeenCalledWith(target.key)
-    fireEvent.click(screen.getByText(GOLDEN_RULES[2].key))
-    expect(ctx.openRule).toHaveBeenLastCalledWith(GOLDEN_RULES[2].key)
-    expect(ctx.toggleCustomRule, 'opening never toggles').toHaveBeenCalledTimes(1)
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Remove rule'))
+    expect((await screen.findByTestId('rule-drawer-error')).textContent).toBe('custom rule not found')
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(ctx.closeRule).not.toHaveBeenCalled()
+    expect(reads(f, '/custom-rules'), 'no refetch').toHaveLength(1)
   })
 
-  it('a suggestion button adopts its own suggestion', () => {
-    const ctx = rulesCtx(false)
-    render(<RulesView ctx={ctx} />)
-    const buttons = screen.getAllByRole('button', { name: 'Add as custom rule' })
+  it('ruleDrawer_removeIsDisabledInFlight', async () => {
+    let release!: () => void
+    const f = fakeFetch({ write: () => new Promise<void>((res) => (release = res)) })
+    await mount(f, { openRuleKey: FIRM.key })
+    const btn = within(screen.getByRole('dialog')).getByText('Remove rule')
 
-    expect(buttons, 'control: one button per suggestion').toHaveLength(SUGGESTED_RULES.length)
-    fireEvent.click(buttons[1])
-    expect(ctx.addSuggestedRule).toHaveBeenCalledTimes(1)
-    expect(ctx.addSuggestedRule).toHaveBeenCalledWith(SUGGESTED_RULES[1])
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    await waitFor(() => expect(btn.hasAttribute('disabled')).toBe(true))
+    expect(writes(f)).toHaveLength(1)
+    release()
   })
 
-  it('an open golden key opens a read-only drawer; an open custom key opens one that removes that rule', () => {
-    const golden = render(<RulesView ctx={ctxWith({ openRuleKey: GOLDEN_RULES[1].key })} />)
-    const gDialog = screen.getByRole('dialog')
-    expect(gDialog.getAttribute('aria-label')).toBe(`Rule ${GOLDEN_RULES[1].key}`)
-    expect(within(gDialog).queryByText('Remove rule'), 'a golden drawer cannot remove').toBeNull()
-    expect(within(gDialog).getByText('ALWAYS ON')).toBeTruthy()
-    golden.unmount()
+  it('an open golden key opens a read-only drawer; a custom key opens the custom banner', async () => {
+    const g = await mount(fakeFetch(), { openRuleKey: 'currency-allowed' })
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.getAttribute('aria-label')).toBe('Rule currency-allowed')
+    expect(within(dialog).getByText('Managed by ASComply · golden ruleset v4 · read-only')).toBeTruthy()
+    expect(within(dialog).queryByText('Remove rule')).toBeNull()
+    g.view.unmount()
 
-    const remove = vi.fn()
-    const target = SEED_CUSTOM_RULES[3]
-    render(<RulesView ctx={ctxWith({ openRuleKey: target.key, removeCustomRule: remove })} />)
-    const cDialog = screen.getByRole('dialog')
-    expect(cDialog.getAttribute('aria-label')).toBe(`Rule ${target.key}`)
-    expect(screen.getAllByRole('dialog'), 'exactly one drawer').toHaveLength(1)
-    fireEvent.click(within(cDialog).getByText('Remove rule'))
-    expect(remove).toHaveBeenCalledTimes(1)
-    expect(remove).toHaveBeenCalledWith(target.key)
+    const c = await mount(fakeFetch(), { openRuleKey: RA.key })
+    expect(screen.getByText('Custom rule · Adaeze Ventures Ltd · runs after the golden ruleset')).toBeTruthy()
+    c.view.unmount()
+    await mount(fakeFetch(), { openRuleKey: FIRM.key })
+    expect(screen.getByText('Custom rule · FIRM-WIDE · runs after the golden ruleset')).toBeTruthy()
   })
 
-  it('no drawer opens for no key or for a key that names no rule', () => {
-    const none = render(<RulesView ctx={rulesCtx(false)} />)
-    expect(screen.getAllByText('LOCKED'), 'control: the view rendered').not.toHaveLength(0)
-    expect(screen.queryByRole('dialog')).toBeNull()
-    none.unmount()
-
-    render(<RulesView ctx={ctxWith({ openRuleKey: 'no.such.rule' })} />)
-    expect(screen.getAllByText('LOCKED'), 'control: the view rendered').not.toHaveLength(0)
+  it('a key of another client opens no drawer', async () => {
+    await mount(fakeFetch(), { openRuleKey: RB.key })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
+})
 
-  it('the subtitle names the scope for a firm and for an in-house workspace', () => {
-    const firm = render(<RulesView ctx={rulesCtx(false)} />)
+describe('RulesView, admin gating', () => {
+  async function nonAdmin(over: Record<string, unknown> = {}) {
+    const f = fakeFetch()
+    const m = await mount(f, { members: PREPARER, ...over })
+    return { f, ...m }
+  }
+
+  it('rulesView_nonAdminSeesDisabledControls', async () => {
+    const { f } = await nonAdmin({ openRuleKey: FIRM.key })
+
+    const controls = [screen.getByTestId('rules-new'), ...screen.getAllByRole('switch'), screen.getByTestId('rule-remove')]
+    for (const c of controls) {
+      expect(c.hasAttribute('disabled')).toBe(true)
+      expect(c.getAttribute('title')).toBe(ADMIN_ONLY_REASON)
+      fireEvent.click(c)
+    }
+    expect(screen.getByTestId('rules-admin-reason').textContent).toBe(ADMIN_ONLY_REASON)
+    expect(writes(f)).toHaveLength(0)
+    expect(rowKeys()).toHaveLength(GOLDEN_KEYS.length + 2)
+  })
+
+  it('rulesView_unloadedRosterIsNotANonAdmin', async () => {
+    for (const [membersState, members] of [['loading', []], ['ready', []], ['error', []]] as const) {
+      const { view } = await mount(fakeFetch(), { membersState, members })
+      expect(screen.getByTestId('rules-new').hasAttribute('disabled'), membersState).toBe(true)
+      screen.getAllByRole('switch').forEach((s) => expect(s.hasAttribute('disabled')).toBe(true))
+      expect(screen.queryByTestId('rules-admin-reason'), membersState).toBeNull()
+      expect(screen.getByTestId('rules-new').getAttribute('title')).toBeNull()
+      view.unmount()
+    }
+    await mount(fakeFetch(), { membersState: 'ready', members: ADMIN })
+    expect(screen.getByTestId('rules-new').hasAttribute('disabled')).toBe(false)
+    screen.getAllByRole('switch').forEach((s) => expect(s.hasAttribute('disabled')).toBe(false))
+  })
+
+  it('an admin sees New rule enabled and no reason line', async () => {
+    await mount(fakeFetch())
+    expect(screen.getByTestId('rules-new').hasAttribute('disabled')).toBe(false)
+    expect(screen.queryByTestId('rules-admin-reason')).toBeNull()
+  })
+
+  it('a suspended admin is not an admin', async () => {
+    await mount(fakeFetch(), { members: [{ ...ADMIN[0], status: 'suspended' }] })
+    expect(screen.getByTestId('rules-new').hasAttribute('disabled')).toBe(true)
+    expect(screen.getByTestId('rules-admin-reason')).toBeTruthy()
+  })
+})
+
+describe('RulesView, load states', () => {
+  it('rulesView_loadFailureAndNoGateway: a failed golden read shows the error, retry refetches', async () => {
+    let fail = true
+    const f = vi.fn(async (url: string) => {
+      if (url.endsWith('/rules')) {
+        if (fail) throw new ApiError('http', 'rules are down', 503)
+        return goldenPayload()
+      }
+      return { custom_rules: [] }
+    })
+    render(<RulesView ctx={ctxOf(f)} />)
+    expect(await screen.findByText('rules are down')).toBeTruthy()
+    expect(screen.queryByText(/^INHERITED/)).toBeNull()
+
+    fail = false
+    fireEvent.click(screen.getByText('Retry'))
+    expect(await screen.findByText(/^INHERITED/)).toBeTruthy()
+  })
+
+  it('a failed custom read shows the error too', async () => {
+    render(<RulesView ctx={ctxOf(fakeFetch({ custom: new ApiError('http', 'custom rules are down', 500) }))} />)
+    expect(await screen.findByText('custom rules are down')).toBeTruthy()
+  })
+
+  it('no gateway shows the empty state and fetches nothing', () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    const f = fakeFetch()
+    render(<RulesView ctx={ctxOf(f)} />)
+    expect(screen.getByText('Rules load from the server.')).toBeTruthy()
+    expect(f).not.toHaveBeenCalled()
+  })
+
+  it('the header and subtitle render while loading', () => {
+    render(<RulesView ctx={ctxOf(() => new Promise(() => {}))} />)
+    expect(screen.getByRole('heading', { name: 'Rules' })).toBeTruthy()
     expect(screen.getByText("ASComply's golden ruleset plus the custom checks you run for Adaeze Ventures")).toBeTruthy()
-    firm.unmount()
+  })
 
-    render(<RulesView ctx={ctxWith({ mode: 'inhouse' })} />)
+  it('the in-house subtitle names the workspace', async () => {
+    await mount(fakeFetch(), { mode: 'inhouse' })
     expect(screen.getByText("ASComply's golden ruleset plus the custom checks Adaeze Ventures runs internally")).toBeTruthy()
   })
 })
 
-// Values are the Platform prototype's seed (goldenRules, seedCustomRules, ruleSuggestions), not read back from lib/rules.
-describe('RulesView, prototype seed', () => {
-  const GOLDEN = [
-    ['buyer.tin.required', 'required', 'buyer.tin', 'ERROR', 'Buyer TIN is mandatory'],
-    ['buyer.tin.format', 'regex', 'buyer.tin', 'ERROR', 'TIN must match 00000000-0000'],
-    ['vat.math', 'expression-CEL', 'totals.vat', 'ERROR', 'VAT must equal 7.5% of taxable base'],
-    ['line.description.required', 'required', 'lines[].description', 'ERROR', 'Every line needs a description'],
-    ['currency.enum', 'enum', 'header.currency', 'ERROR', 'Currency must be NGN, USD or EUR'],
-    ['invoice.no.unique', 'expression-CEL', 'header.invoice_no', 'ERROR', 'Invoice number must be unique per seller'],
-    ['issue.date.sequence', 'date_rule', 'header.issue_date', 'WARN', 'Issue date must not precede prior invoice'],
-  ]
-  const CUSTOM = [
-    ['po.number.required', 'required', 'header.po_number', 'ERROR', 'Purchase-order number is required on every invoice'],
-    ['buyer.approved.list', 'enum', 'buyer.tin', 'ERROR', 'Buyer must be on the approved customer list'],
-    ['cost.centre.required', 'required', 'lines[].cost_centre', 'WARN', 'Every line needs a cost centre'],
-    ['invoice.value.cap', 'range', 'totals.gross', 'WARN', 'Invoices above ₦500M need director approval'],
-    ['wht.required.services', 'cross_field', 'lines[].wht', 'WARN', 'WHT expected on service lines'],
-  ]
-
-  it('the table rows carry the prototype key, type, field, severity and message', () => {
-    const host = mountSsr(rulesCtx(false))
-    const rows = [...host.querySelectorAll('.pf-row')].map((r) => {
-      const c = [...r.children].map((e) => e.textContent)
-      return [c[0], c[1], c[2], c[3], c[5]]
-    })
-
-    expect(rows, 'control: every golden and custom row renders').toHaveLength(GOLDEN.length + CUSTOM.length)
-    expect(rows).toEqual([...GOLDEN, ...CUSTOM])
+describe('RulesView, reskin pins', () => {
+  it('pills are 4px, the lock is --fg-3, the toggle track is a 99px pill with a round knob', async () => {
+    await mount(fakeFetch())
+    const stack = screen.getByText('GOLDEN v4 + 2 CUSTOM')
+    expect(stack.style.borderRadius).toBe('var(--radius-sm)')
+    screen.getAllByText('LOCKED').forEach((l) => expect(l.style.color).toBe('var(--fg-3)'))
+    document.querySelectorAll<HTMLElement>('.pf-toggle').forEach((t) => expect(t.style.borderRadius).toBe('99px'))
+    document.querySelectorAll<HTMLElement>('.pf-knob').forEach((k) => expect(k.style.borderRadius).toBe('50%'))
   })
 
-  it('the rail carries the prototype versions and suggestions', () => {
-    const host = mountSsr(rulesCtx(false))
-    const text = host.textContent!
+  it('New rule copies the Invite people recipe and sits left of the count', async () => {
+    await mount(fakeFetch())
+    const btn = screen.getByTestId('rules-new')
+    expect(btn.className).toContain('v2-btn-primary')
+    expect(btn.nextElementSibling?.textContent).toBe('5 RULES')
+  })
 
-    expect(text, 'control: the rail rendered').toContain('Golden ruleset · NG-MBS')
-    expect.soft(text).toContain('v8IN USEeff. 2026-06-01 · 7 rules')
-    expect.soft(text).toContain('v7SUPERSEDEDeff. 2026-04-15 · 40 rules')
-    expect.soft(text).toContain('buyer.email.formatDerived from 9 rejections on your invoicesAdd as custom rule')
-    expect.soft(text).toContain('lines[].hsn.requiredDerived from 6 rejections on your invoicesAdd as custom rule')
-    expect.soft(text).toContain('fx.rate.rangeDerived from 4 rejections on your USD invoicesAdd as custom rule')
-    expect.soft(text).toContain('Published and maintained by ASComply. New versions arrive automatically — you never edit these.')
-    expect.soft(text).toContain('Custom rules evaluate after the golden ruleset. A golden rule can never be disabled or edited.')
-    expect.soft(text).toContain('INHERITED · GOLDEN RULESET NG-MBS v8')
-    expect.soft(text).toContain('CUSTOM · Adaeze Ventures')
+  it('a disabled New rule wears the Invite people disabled recipe', async () => {
+    await mount(fakeFetch(), { members: PREPARER })
+    const btn = screen.getByTestId('rules-new')
+    expect(btn.style.opacity).toBe('0.45')
+    expect(btn.style.cursor).toBe('not-allowed')
+  })
+
+  it('the empty custom box keeps its padding', async () => {
+    await mount(fakeFetch({ custom: [] }))
+    expect(screen.getByText(/^No custom rules yet/).style.padding).toBe('18px 16px')
   })
 })

@@ -648,7 +648,7 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                       <MarkerPill testId="invoice-error-marker" tone={SEVERITY_TONE.error} label={`${errorCount} ERROR${errorCount === 1 ? '' : 'S'}`} />
                     )}
                     {resolvedOutside(r) != null && (
-                      <MarkerPill testId="invoice-resolved-marker" tone={SEVERITY_TONE.warn} label="RESOLVED OUTSIDE" />
+                      <MarkerPill testId="invoice-resolved-marker" tone={SEVERITY_TONE.warning} label="RESOLVED OUTSIDE" />
                     )}
                   </span>
                 </div>

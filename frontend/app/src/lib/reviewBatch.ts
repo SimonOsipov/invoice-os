@@ -151,10 +151,7 @@ export interface ChannelTiles {
   atZero: boolean
 }
 
-// D1: the APP supplies the rule-set NAME, the server supplies the NUMBER. Kept a module
-// constant rather than imported from lib/rules.ts, whose GOLDEN_SET pins a `v8` the server
-// has never emitted -- that is mock data for the Rules screen (which has no endpoint) and
-// importing it here would let a hard-coded version leak into a live surface.
+// D1: the APP supplies the rule-set NAME, the server supplies the NUMBER.
 const RULE_SET_NAME = 'NG-MBS'
 
 // `undefined` is handled alongside `null` on purpose, despite ImportBatch typing this

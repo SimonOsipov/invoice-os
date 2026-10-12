@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import { stripComments } from '@invoice-os/api-client/strip-comments'
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { APP_PERSONAS, type Session } from './auth'
@@ -1699,5 +1699,53 @@ describe('ROUTE-07-04 QA: the id slot is shared, so the atom is gated on the vie
       `/invoices/${INVOICE_ID}`,
     )
     expect(ctx.editingPolicyId, "an invoice id must never land in the builder's atom").toBeNull()
+  })
+})
+
+describe('ENGI-15-06: switching client leaves the Rules screen', () => {
+  const RULE_ID = 'f0000000-0000-4000-8000-000000000001'
+
+  it('app_switchClientLeavesTheRulesScreen', async () => {
+    routeFetch()
+    const inner = globalThis.fetch
+    const rulesCalls: string[] = []
+    const reply = (body: unknown) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.endsWith('/api/validation/v1/rules')) {
+          rulesCalls.push('golden')
+          return reply({ today: '2026-10-12', versions: [], rule_set_version_id: 'v', version: 4, effective_from: '2026-08-06', rules: [] })
+        }
+        if (url.endsWith('/api/invoice/v1/custom-rules')) {
+          rulesCalls.push('custom')
+          const rule = { id: RULE_ID, key: `custom:${RULE_ID}`, revision: 1, revision_id: 'r', entity_id: null, type: 'required', target: 'buyer.email', params: {}, severity: 'warning', when: null, message: 'm', enabled: true, updated_at: '', updated_by: '' }
+          return reply({ custom_rules: [rule] })
+        }
+        return inner(url, init)
+      }),
+    )
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    await bootAt('/rules')
+    await waitFor(() => expect(requireCtx().active.entityId).toBe(ENTITY_A))
+    await screen.findByText(/^INHERITED/)
+    expect(rulesCalls.sort()).toEqual(['custom', 'golden'])
+
+    await act(async () => {
+      capturedCtx!.openRule(`custom:${RULE_ID}`)
+    })
+    expect(await screen.findByRole('dialog')).toBeTruthy()
+
+    await act(async () => {
+      capturedCtx!.switchClient(ENTITY_B)
+    })
+    expect(requireCtx().view).toBe('dashboard')
+    expect(screen.queryByRole('dialog'), 'no rule drawer survives the switch').toBeNull()
+
+    await act(async () => {
+      capturedCtx!.nav('rules')
+    })
+    await screen.findByText(/^INHERITED/)
+    expect(rulesCalls.sort()).toEqual(['custom', 'custom', 'golden', 'golden'])
   })
 })

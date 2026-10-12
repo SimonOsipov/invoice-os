@@ -215,14 +215,14 @@ function SuspendedNotice({ onSignOut }: { onSignOut: () => void }) {
   )
 }
 
-// A half-built draft or a selected invoice cannot outlive its screen, so both collapse to
-// the list they came from.
 // A fresh draft with the company's supplier details filled in.
 const seedDraft = (client: Client, entity: Entity | null, handoff: boolean): Draft => {
   const draft = startingDraft(client, handoff)
   return entity === null ? draft : withSupplierDefaults(draft, entity)
 }
 
+// A half-built draft or a selected invoice cannot outlive its screen, so both collapse to
+// the list they came from.
 const carryView = (view: View): View => (view === 'create' || view === 'detail' || view === 'extraction' ? 'invoices' : view)
 
 // `company` is in the union but only in an in-house strip (SettingsView builds it). A firm

@@ -31,10 +31,12 @@ import {
   getAuditLog,
   getInvoice,
   getInvoiceApproval,
+  editInvoice,
+  searchCodes,
   type Persona,
 } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
-import { freshTin } from '../api/fixtures'
+import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv, steerExplainMarker } from '../importFixtures'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import {
@@ -6096,9 +6098,21 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
 
     // The line table box does not scroll sideways at wide widths and every remove button stays inside the form.
     const lineBox = form.getByTestId('line-row').first().locator('xpath=../..')
+    const firstRow = form.getByTestId('line-row').first()
     const sweep = await dvSweepWide(page, async () => {
-      const r = await dvRead(page, { form, lineBox }, { within: { lineRows: { of: 'form', sel: '[data-testid="line-row"]' }, lineRemoves: { of: 'form', sel: '[data-testid="line-remove"]' } } })
-      return { form: r.targets.form.rect, lineBox: r.targets.lineBox, lineRows: r.within.lineRows, lineRemoves: r.within.lineRemoves }
+      const r = await dvRead(
+        page,
+        { form, lineBox, firstRow },
+        {
+          within: {
+            lineRows: { of: 'form', sel: '[data-testid="line-row"]' },
+            lineRemoves: { of: 'form', sel: '[data-testid="line-remove"]' },
+            rowControls: { of: 'firstRow', sel: 'input, select, button' },
+            nrsControls: { of: 'firstRow', sel: '[data-testid="line-nrs"] input' },
+          },
+        },
+      )
+      return { form: r.targets.form.rect, lineBox: r.targets.lineBox, lineRows: r.within.lineRows, lineRemoves: r.within.lineRemoves, row: r.targets.firstRow.rect, rowControls: r.within.rowControls, nrsControls: r.within.nrsControls }
     })
     await testInfo.attach('dv-06-line-fit.json', { body: JSON.stringify(sweep, null, 2), contentType: 'application/json' })
     for (const s of sweep) {
@@ -6107,6 +6121,13 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
       expect(s.lineBox.scrollWidth, `the line table box does not scroll sideways at ${s.width}px`).toBeLessThanOrEqual(s.lineBox.clientWidth)
       for (const [i, remove] of s.lineRemoves.entries()) {
         expect(enclosesRect(s.form, remove.rect, 1), `line-remove ${i} lies inside the edit form at ${s.width}px`).toBe(true)
+      }
+      expect(s.nrsControls.length, `the line row holds NRS controls at ${s.width}px`).toBeGreaterThan(0)
+      for (const [i, control] of s.rowControls.entries()) {
+        expect(enclosesRect(s.row, control.rect, 1), `row control ${i} lies inside its line-row at ${s.width}px`).toBe(true)
+        for (const [j, other] of s.rowControls.entries()) {
+          if (j > i) expect(rectsOverlap(control.rect, other.rect), `row controls ${i} and ${j} do not overlap at ${s.width}px`).toBe(false)
+        }
       }
     }
 
@@ -6277,6 +6298,448 @@ test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({
     .poll(async () => (await getInvoice(token, inv.id)).violations.map((v) => v.rule_key), { message: 'the negative-line rule clears' })
     .not.toContain('line-cost-non-negative')
   await expect(page.getByTestId('violations-table')).not.toContainText('line-cost-non-negative')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ENGI-06 deployed proof: the create form and the editor capture the NRS fields.
+// A PR environment seeds the code lists about 30 s after boot, so each journey waits for them first.
+async function codeListsReady(token: string): Promise<void> {
+  await expect
+    .poll(async () => (await searchCodes(token, 'states', { q: 'NG-LA' })).codes.map((c) => c.code), {
+      message: 'the states code list is seeded',
+      timeout: 120_000,
+    })
+    .toContain('NG-LA')
+}
+
+async function firstCode(token: string, list: string, q = ''): Promise<string> {
+  const { codes } = await searchCodes(token, list, { q, limit: 5 })
+  expect(codes.length, `${list} holds a code for "${q}"`).toBeGreaterThan(0)
+  return codes[0].code
+}
+
+// Types a code into a picker and waits until the picker has committed it: a blur reverts uncommitted text.
+async function pickCode(page: Page, input: Locator, list: string, code: string): Promise<void> {
+  const answered = page.waitForResponse((r) => r.url().includes(`/code-lists/${list}?`) && new URL(r.url()).searchParams.get('q') === code)
+  await input.fill(code)
+  await answered
+  await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+  await input.press('Tab')
+  await expect(input, `${list} pick ${code} survives a blur`).toHaveValue(code)
+}
+
+// The editor's header control under a label: the input itself, or the input a picker wraps.
+function editorHeader(form: Locator, label: string): Locator {
+  return form.locator(`xpath=.//div[normalize-space(text())="${label}"]/following-sibling::*[1]`).locator('xpath=self::input | .//input')
+}
+
+const NRS_LINE_KEYS_E2E = ['tax_category', 'hsn_code', 'isic_code', 'product_category', 'service_category', 'sellers_item_identification', 'price_unit', 'tax_percent', 'base_quantity'] as const
+
+type NrsFixture = {
+  token: string
+  entity: Awaited<ReturnType<typeof createEntity>>
+  lagosLga: string
+  abiaLga: string
+  hsCode: string
+  isicCode: string
+  unitCode: string
+}
+
+// A company with the 8 NRS supplier fields, and the code values the journeys pick.
+async function nrsFixture(label: string): Promise<NrsFixture> {
+  const token = await login(PERSONAS.A)
+  await codeListsReady(token)
+  const lagosLga = await firstCode(token, 'lgas', 'NG-LA')
+  const abiaLga = await firstCode(token, 'lgas', 'NG-AB')
+  const entity = await createEntity(token, {
+    name: `ENGI-06 ${label} ${Date.now()}`,
+    tin: freshTin(),
+    email: 'supplier@engi06.test',
+    telephone: '+2348000000006',
+    street: '6 Supplier Road',
+    city: 'Ikeja',
+    postal_zone: '100001',
+    country: 'NG',
+    state: 'NG-LA',
+    lga: lagosLga,
+  })
+  return {
+    token,
+    entity,
+    lagosLga,
+    abiaLga,
+    hsCode: await firstCode(token, 'hs-codes'),
+    isicCode: await firstCode(token, 'services-codes'),
+    unitCode: await firstCode(token, 'invoice-quantity-codes'),
+  }
+}
+
+async function openCreateForm(page: Page, entityName: string): Promise<void> {
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entityName)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+  await expect(page.getByPlaceholder('INV-0000-00000')).toBeVisible()
+}
+
+const createBuyerName = (page: Page) => page.locator('xpath=//div[normalize-space(text())="Buyer name"]/following-sibling::input')
+
+test('create surface: a manual invoice files every NRS field, pre-filled from the company and the directory', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const fx = await nrsFixture('create')
+  const { token, entity } = fx
+
+  // A filed B2B invoice fills the buyer directory (ENGI-05).
+  const buyerTin = freshBuyerTin()
+  await createInvoice(token, {
+    entity_id: entity.id,
+    invoice_number: `INV-ENGI06-DIR-${Date.now()}`,
+    buyer_tin: buyerTin,
+    buyer_name: 'Directory Buyer Ltd',
+    invoice_kind: 'B2B',
+    buyer_email: 'directory@buyer.test',
+    buyer_telephone: '+2348000000007',
+    buyer_street: '7 Buyer Street',
+    buyer_city: 'Lekki',
+    buyer_postal_zone: '101233',
+    buyer_country: 'NG',
+    buyer_state: 'NG-LA',
+    buyer_lga: fx.lagosLga,
+  })
+
+  await openCreateForm(page, entity.name)
+  const field = (label: string) => page.getByLabel(label, { exact: true })
+
+  // Supplier inputs hold the company's values, not just a note.
+  await expect(field('Supplier email')).toHaveValue('supplier@engi06.test')
+  await expect(field('Supplier telephone')).toHaveValue('+2348000000006')
+  await expect(field('Supplier street')).toHaveValue('6 Supplier Road')
+  await expect(field('Supplier city')).toHaveValue('Ikeja')
+  await expect(field('Supplier postal zone')).toHaveValue('100001')
+  await expect(field('Supplier country')).toHaveValue('NG')
+  await expect(field('Supplier state')).toHaveValue('NG-LA')
+  await expect(field('Supplier LGA')).toHaveValue(fx.lagosLga)
+
+  const invoiceNumber = `INV-ENGI06-CREATE-${Date.now()}`
+  await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
+
+  // The directory fills the buyer on a TIN blur; the buyer email is then overridden.
+  const lookup = page.waitForResponse((r) => r.url().includes('/api/invoice/v1/customers?tin='))
+  await page.getByPlaceholder('########-####').fill(buyerTin)
+  await page.getByPlaceholder('########-####').press('Tab')
+  await lookup
+  await expect(createBuyerName(page)).toHaveValue('Directory Buyer Ltd')
+  await expect(field('Invoice kind')).toHaveValue('B2B')
+  await expect(field('Buyer email')).toHaveValue('directory@buyer.test')
+  await expect(field('Buyer street')).toHaveValue('7 Buyer Street')
+  await expect(field('Buyer state')).toHaveValue('NG-LA')
+  await expect(field('Buyer LGA')).toHaveValue(fx.lagosLga)
+  await field('Buyer email').fill('override@buyer.test')
+  await pickCode(page, field('Buyer state'), 'states', 'NG-AB')
+  await pickCode(page, field('Buyer LGA'), 'lgas', fx.abiaLga)
+
+  // 2 x 500; with no category the VAT is the flat 7.5%.
+  await page.getByPlaceholder('Description').fill('Maize sacks')
+  await page.locator('main input[type=number]').nth(0).fill('2')
+  await page.locator('main input[type=number]').nth(1).fill('500')
+  const vatLabel = page.getByTestId('summary-vat').locator('xpath=preceding-sibling::span')
+  await expect(vatLabel).toHaveText('VAT · 7.5%')
+  await expect(page.getByTestId('summary-vat')).toHaveText('75.00')
+
+  await pickCode(page, field('Tax category 1'), 'tax-categories', 'STANDARD_VAT')
+  await expect(field('Tax percent 1'), 'the tax-category pick fills its percent').toHaveValue(/^7\.5/)
+  await pickCode(page, field('HSN code 1'), 'hs-codes', fx.hsCode)
+  await pickCode(page, field('Price unit 1'), 'invoice-quantity-codes', fx.unitCode)
+  await field('Product category 1').fill('Grain')
+  await field("Seller's item identification 1").fill('SKU-ENGI06')
+  await expect(field('Base quantity 1')).toHaveValue('1')
+  await expect(page.getByTestId('draft-line-tax')).toHaveValue('75.00')
+  await expect(vatLabel, 'a categorised line drops the flat-rate label').toHaveText('VAT')
+  await expect(page.getByTestId('summary-vat')).toHaveText('75.00')
+  await expect(page.getByTestId('summary-total')).toHaveText('1075.00')
+
+  const created = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'))
+  await page.getByRole('button', { name: 'File invoice' }).click()
+  const { id } = (await (await created).json()) as { id: string }
+  await expect(page.getByTestId('invoice-detail')).toBeVisible({ timeout: 30_000 })
+
+  const stored = await getInvoice(token, id)
+  expect(stored).toMatchObject({
+    invoice_number: invoiceNumber,
+    invoice_kind: 'B2B',
+    buyer_tin: buyerTin,
+    buyer_name: 'Directory Buyer Ltd',
+    supplier_email: 'supplier@engi06.test',
+    supplier_telephone: '+2348000000006',
+    supplier_street: '6 Supplier Road',
+    supplier_city: 'Ikeja',
+    supplier_postal_zone: '100001',
+    supplier_country: 'NG',
+    supplier_state: 'NG-LA',
+    supplier_lga: fx.lagosLga,
+    buyer_email: 'override@buyer.test',
+    buyer_telephone: '+2348000000007',
+    buyer_street: '7 Buyer Street',
+    buyer_city: 'Lekki',
+    buyer_postal_zone: '101233',
+    buyer_country: 'NG',
+    buyer_state: 'NG-AB',
+    buyer_lga: fx.abiaLga,
+  })
+  // D13: a categorised line makes VAT the sum of the line taxes.
+  expect([stored.subtotal, stored.vat, stored.total].map(Number)).toEqual([1000, 75, 1075])
+  expect(stored.line_items).toHaveLength(1)
+  const line = stored.line_items![0]
+  expect(line).toMatchObject({
+    tax_category: 'STANDARD_VAT',
+    hsn_code: fx.hsCode,
+    price_unit: fx.unitCode,
+    product_category: 'Grain',
+    sellers_item_identification: 'SKU-ENGI06',
+    isic_code: null,
+    service_category: null,
+  })
+  // D12: the line tax is the line's share of the group tax at 7.5%.
+  expect([line.line_total, line.line_tax, line.tax_percent, line.base_quantity].map(Number)).toEqual([1000, 75, 7.5, 1])
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('create surface: a repeat invoice number keeps the NRS values', async ({ page }) => {
+  test.setTimeout(300_000)
+  // The 409 is the premise; the gate expects it from the create route only.
+  const errors = collectErrors(page, expectedStatusDropper(page, 409, /\/api\/invoice\/v1\/invoices$/))
+  const fx = await nrsFixture('repeat')
+  const invoiceNumber = `INV-ENGI06-DUP-${Date.now()}`
+  await createInvoice(fx.token, { entity_id: fx.entity.id, invoice_number: invoiceNumber })
+
+  await openCreateForm(page, fx.entity.name)
+  const field = (label: string) => page.getByLabel(label, { exact: true })
+  await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
+  await field('Buyer email').fill('keep@buyer.test')
+  await pickCode(page, field('Buyer state'), 'states', 'NG-AB')
+  await page.getByPlaceholder('Description').fill('Kept line')
+  await page.locator('main input[type=number]').nth(0).fill('1')
+  await page.locator('main input[type=number]').nth(1).fill('200')
+  await pickCode(page, field('Tax category 1'), 'tax-categories', 'STANDARD_VAT')
+  await pickCode(page, field('HSN code 1'), 'hs-codes', fx.hsCode)
+  await field('Product category 1').fill('Kept grain')
+
+  const values = () => page.locator('.pf-create-grid').locator('input, select').evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value))
+  const before = await values()
+  expect(before.filter((v) => v !== '').length, 'control: the form holds NRS values to lose').toBeGreaterThan(10)
+
+  const created = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'))
+  await page.getByRole('button', { name: 'File invoice' }).click()
+  expect((await created).status()).toBe(409)
+  // internal/invoice/handlers.go statusForErr: the 409 message, shown verbatim.
+  await expect(page.getByText('duplicate invoice number', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('invoice-detail'), 'the form stays; no detail opened').toHaveCount(0)
+  expect(await values(), 'every input keeps its value after the refusal').toEqual(before)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// A two-line draft with the nine NRS values on each line, filed by API.
+function nrsLines(fx: NrsFixture, count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    description: `Line ${i + 1} goods`,
+    quantity: '1',
+    unit_price: '100',
+    line_total: '100',
+    line_tax: '7.50',
+    tax_category: 'STANDARD_VAT',
+    hsn_code: fx.hsCode,
+    isic_code: fx.isicCode,
+    product_category: `Category ${i + 1}`,
+    service_category: `Service ${i + 1}`,
+    sellers_item_identification: `SKU-${i + 1}`,
+    price_unit: fx.unitCode,
+    tax_percent: '7.5',
+    base_quantity: '1',
+  }))
+}
+
+async function openEditor(page: Page, fx: NrsFixture, invoiceNumber: string): Promise<Locator> {
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, fx.entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+  await page.getByTestId('edit-toggle').click()
+  const form = page.getByTestId('edit-invoice')
+  await expect(form).toBeVisible()
+  return form
+}
+
+test('detail surface: the editor edits NRS fields and keeps line fields across a save', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const fx = await nrsFixture('editor')
+  const invoiceNumber = `INV-ENGI06-EDIT-${Date.now()}`
+  const inv = await createInvoice(fx.token, {
+    entity_id: fx.entity.id,
+    invoice_number: invoiceNumber,
+    buyer_tin: freshBuyerTin(),
+    buyer_name: 'Editor Buyer Ltd',
+    invoice_kind: 'B2B',
+    buyer_state: 'NG-LA',
+    due_date: '2026-12-31T00:00:00Z',
+    subtotal: '200',
+    vat: '15',
+    total: '215',
+    line_items: nrsLines(fx, 2),
+  })
+  const before = (await getInvoice(fx.token, inv.id)).line_items!
+  expect(before, 'control: the fixture holds two lines with NRS values').toHaveLength(2)
+  expect(before[0].hsn_code).toBe(fx.hsCode)
+  expect((await getInvoice(fx.token, inv.id)).due_date, 'control: a due date to clear').not.toBeNull()
+
+  const patchCalls: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'PATCH' && new URL(r.url()).pathname.endsWith(`/invoices/${inv.id}`)) patchCalls.push(r.url())
+  })
+
+  const form = await openEditor(page, fx, invoiceNumber)
+  const rows = form.getByTestId('line-row')
+  await expect(rows).toHaveCount(2)
+  await expect(rows.nth(0).locator('[data-line-field="hsn_code"]'), 'the editor seeds a line NRS value').toHaveValue(fx.hsCode)
+
+  await rows.nth(1).locator('[data-line-field="description"]').fill('Line 2 renamed')
+  await pickCode(page, editorHeader(form, 'Buyer state'), 'states', 'NG-AB')
+  await editorHeader(form, 'Due date').fill('')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+  expect(patchCalls, 'one save, one PATCH').toHaveLength(1)
+
+  const after = await getInvoice(fx.token, inv.id)
+  expect(after.buyer_state).toBe('NG-AB')
+  expect(after.due_date, 'a cleared due date is stored as null').toBeNull()
+  expect(after.line_items!.map((l) => l.description)).toEqual(['Line 1 goods', 'Line 2 renamed'])
+  for (const [i, line] of after.line_items!.entries()) {
+    for (const key of NRS_LINE_KEYS_E2E) expect(line[key], `line ${i + 1} keeps ${key}`).toBe(before[i][key])
+  }
+
+  // D21: a saved line NRS field cannot be blanked; the refusal sends nothing.
+  await page.getByTestId('edit-toggle').click()
+  const reopened = page.getByTestId('edit-invoice')
+  await reopened.getByTestId('line-row').nth(0).locator('[data-line-field="hsn_code"]').fill('')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  // frontend/app/src/components/InvoiceDetail.tsx handleSubmit.
+  await expect(reopened).toContainText('Line 1: HSN code cannot be cleared once saved. Remove the line and add it again to start it blank.')
+  await expect(reopened, 'the editor stays open').toBeVisible()
+  expect(patchCalls, 'the refusal sends no PATCH').toHaveLength(1)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('detail surface: remove and re-add starts a line blank', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const fx = await nrsFixture('readd')
+  const invoiceNumber = `INV-ENGI06-READD-${Date.now()}`
+  const inv = await createInvoice(fx.token, { entity_id: fx.entity.id, invoice_number: invoiceNumber, subtotal: '100', vat: '7.50', total: '107.50', line_items: nrsLines(fx, 1) })
+  const [original] = (await getInvoice(fx.token, inv.id)).line_items!
+  expect(original.hsn_code, 'control: the line starts with an HS code').toBe(fx.hsCode)
+
+  const form = await openEditor(page, fx, invoiceNumber)
+  await form.getByTestId('line-remove').click()
+  await form.getByTestId('line-add').click()
+  const row = form.getByTestId('line-row')
+  await expect(row).toHaveCount(1)
+  // The same legacy content as the removed line: the content match must not give the NRS values back.
+  await row.locator('[data-line-field="description"]').fill('Line 1 goods')
+  await row.locator('[data-line-field="quantity"]').fill('1')
+  await row.locator('[data-line-field="unit_price"]').fill('100')
+  await row.locator('[data-line-field="line_total"]').fill('100')
+  await row.locator('[data-line-field="line_tax"]').fill('7.50')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+
+  const lines = (await getInvoice(fx.token, inv.id)).line_items!
+  expect(lines).toHaveLength(1)
+  expect(lines[0].description).toBe('Line 1 goods')
+  expect(lines[0].hsn_code, 'a re-added line starts blank').toBeNull()
+  expect(lines[0].tax_category).toBeNull()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('detail surface: a stale line id is refused in words', async ({ page }) => {
+  test.setTimeout(300_000)
+  const fx = await nrsFixture('stale')
+  const invoiceNumber = `INV-ENGI06-STALE-${Date.now()}`
+  const inv = await createInvoice(fx.token, { entity_id: fx.entity.id, invoice_number: invoiceNumber, line_items: nrsLines(fx, 2) })
+  // The 400 is the premise; the gate expects it from this invoice's PATCH only.
+  const errors = collectErrors(page, expectedStatusDropper(page, 400, new RegExp(`/api/invoice/v1/invoices/${inv.id}$`)))
+
+  const form = await openEditor(page, fx, invoiceNumber)
+  await expect(form.getByTestId('line-row')).toHaveCount(2)
+  // The lines are replaced elsewhere: id-less entries mint new ids.
+  await editInvoice(fx.token, inv.id, { line_items: [{ description: 'Replaced elsewhere', quantity: '1', unit_price: '5', line_total: '5' }] })
+  await form.getByTestId('line-row').nth(0).locator('[data-line-field="description"]').fill('Edited in the stale editor')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+
+  // internal/invoice/handlers.go statusForErr: the 400 message, shown verbatim.
+  await expect(form).toContainText('line_items id must name a line of this invoice')
+  await expect(form, 'the editor stays open').toBeVisible()
+  await expect(form.getByTestId('line-row').nth(0).locator('[data-line-field="description"]'), 'the typed text stays').toHaveValue('Edited in the stale editor')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('create surface: the NRS sections and line sub-rows fit at every wide width', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const fx = await nrsFixture('layout')
+
+  await openCreateForm(page, fx.entity.name)
+  await page.getByRole('button', { name: /Add line/ }).click()
+  await expect(page.getByTestId('draft-line-nrs')).toHaveCount(2)
+
+  const card = page.locator('.pf-create-grid > div').first()
+  const summary = page.locator('.pf-create-grid > div').nth(1)
+  const row0 = page.getByTestId('draft-line-nrs').nth(0).locator('xpath=..')
+  const row1 = page.getByTestId('draft-line-nrs').nth(1).locator('xpath=..')
+  const controls = 'input, select, button'
+  const sweep = await dvSweepWide(page, async () => {
+    const r = await dvRead(
+      page,
+      { card, summary, row0, row1 },
+      {
+        within: {
+          cardControls: { of: 'card', sel: 'input, select' },
+          row0Controls: { of: 'row0', sel: controls },
+          row1Controls: { of: 'row1', sel: controls },
+          row0Nrs: { of: 'row0', sel: '[data-testid="draft-line-nrs"] input' },
+        },
+      },
+    )
+    return { card: r.targets.card, summary: r.targets.summary.rect, row0: r.targets.row0.rect, row1: r.targets.row1.rect, within: r.within }
+  })
+  await testInfo.attach('create-nrs-fit.json', { body: JSON.stringify(sweep, null, 2), contentType: 'application/json' })
+
+  for (const s of sweep) {
+    expect(s.card.scrollWidth, `the create card does not scroll sideways at ${s.width}px`).toBeLessThanOrEqual(s.card.clientWidth)
+    expect(rectsOverlap(s.card.rect, s.summary), `the create card and the summary do not overlap at ${s.width}px`).toBe(false)
+    expect(s.within.row0Nrs.length, `the first sub-row holds controls at ${s.width}px`).toBeGreaterThan(0)
+    for (const [i, c] of s.within.cardControls.entries()) {
+      expect(enclosesRect(s.card.rect, c.rect, 1), `card control ${i} lies inside the card at ${s.width}px`).toBe(true)
+      for (const [j, other] of s.within.cardControls.entries()) {
+        if (j > i) expect(rectsOverlap(c.rect, other.rect), `card controls ${i} and ${j} do not overlap at ${s.width}px`).toBe(false)
+      }
+    }
+    for (const [name, row, list] of [['row0', s.row0, s.within.row0Controls], ['row1', s.row1, s.within.row1Controls]] as const) {
+      expect(list.length, `${name} holds controls at ${s.width}px`).toBeGreaterThan(0)
+      for (const [i, c] of list.entries()) {
+        expect(enclosesRect(row, c.rect, 1), `${name} control ${i} lies inside its row at ${s.width}px`).toBe(true)
+        for (const [j, other] of list.entries()) {
+          if (j > i) expect(rectsOverlap(c.rect, other.rect), `${name} controls ${i} and ${j} do not overlap at ${s.width}px`).toBe(false)
+        }
+      }
+    }
+  }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

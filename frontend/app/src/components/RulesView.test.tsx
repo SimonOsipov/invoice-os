@@ -573,6 +573,25 @@ describe('RulesView, fix cycle 1', () => {
 
     fireEvent.click(within(screen.getByTestId('rules-refresh-error')).getByText('Retry'))
     await waitFor(() => expect(screen.queryByTestId('rules-refresh-error')).toBeNull())
+    await waitFor(() => expect([...document.querySelectorAll('.pf-row')].map((r) => r.children[5].textContent)).toContain('message of r-a'))
+  })
+
+  it('a refetch that starts after several writes is not dropped', async () => {
+    let reads = 0
+    const NEW = custom('r-new', null)
+    const f = vi.fn(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'DELETE') return undefined
+      if (init?.method === 'PUT') return { ...FIRM, enabled: false }
+      if (url.endsWith('/custom-rules')) return { custom_rules: ++reads === 1 ? [FIRM, RA] : [FIRM, NEW] }
+      return goldenPayload()
+    })
+    await mount(f as unknown as FetchMock, { openRuleKey: RA.key })
+    fireEvent.click(screen.getByRole('switch', { name: `Disable rule "${FIRM.message}"` }))
+    await screen.findByRole('switch', { name: `Enable rule "${FIRM.message}"` })
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Remove rule'))
+    const messages = () => [...document.querySelectorAll('.pf-row')].slice(3).map((r) => r.children[5].textContent)
+    await waitFor(() => expect(messages(), 'the post-write refetch lands').toEqual(['message of r-firm', 'message of r-new']))
   })
 
   it('rulesView_staleRefetchCannotOverwriteAToggle', async () => {

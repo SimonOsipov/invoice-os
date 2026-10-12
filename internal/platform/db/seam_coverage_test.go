@@ -1086,6 +1086,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/invoices/{id}/transitions":                  {verdict: scCovered},
 	"POST /v1/invoices/{id}/validate":                     {verdict: scCovered},
 	"POST /v1/validate/batch":                             {verdict: scExempt, reason: "peer call with no caller identity by construction; the gateway strips any client-supplied X-S2S-Token"},
+	"POST /v1/custom-rules/check":                         {verdict: scExempt, reason: "peer call with no caller identity by construction; the gateway strips any client-supplied X-S2S-Token"},
 	"POST /v1/workflow-roles":                             {verdict: scCovered},
 	"POST /v1/workspaces":                                 {verdict: scExempt, reason: "the caller has no membership yet"},
 	"PUT /v1/approval-policies/{id}/draft":                {verdict: scCovered},

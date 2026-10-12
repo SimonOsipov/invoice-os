@@ -3,10 +3,15 @@ package validation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"slices"
 	"sort"
 	"strings"
+
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 const (
@@ -99,7 +104,7 @@ func checkCustomRule(eng *Engine, w customRuleWire) error {
 	if _, ok := eng.registry[w.Type]; !ok {
 		return fmt.Errorf("rule %q has an unknown type", w.ID)
 	}
-	if w.Severity != "error" && w.Severity != "warning" {
+	if !validCustomSeverity(w.Severity) {
 		return fmt.Errorf("rule %q severity must be error or warning", w.ID)
 	}
 	if w.Message == "" {
@@ -128,4 +133,81 @@ func (cs *customSets) evaluate(ctx context.Context, eng *Engine, p Payload, rs R
 		}
 	}
 	return vs, ids
+}
+
+// validCustomSeverity: a custom rule blocks (error) or warns (warning); info is refused (D3).
+func validCustomSeverity(s Severity) bool { return s == "error" || s == "warning" }
+
+// customRuleCheck is the POST /v1/custom-rules/check body.
+type customRuleCheck struct {
+	Type     string          `json:"type"`
+	Target   string          `json:"target"`
+	Params   json.RawMessage `json:"params"`
+	Severity string          `json:"severity"`
+	When     *string         `json:"when"`
+	Message  string          `json:"message"`
+}
+
+// checkCustomRuleBody is the save-time check (D9): the staff desk's static checks, then
+// the publish probe on an empty invoice and on the sample. The error text is the 422 reason.
+func checkCustomRuleBody(eng *Engine, in customRuleCheck) error {
+	if !validCustomSeverity(Severity(in.Severity)) {
+		return errors.New("severity must be error or warning")
+	}
+	enabled := true
+	v, err := validateDraftRule(eng, "custom", draftRuleRequest{
+		Type: in.Type, Target: in.Target, Params: in.Params, Severity: in.Severity,
+		When: in.When, Message: in.Message, Enabled: &enabled,
+	})
+	if err != nil {
+		return err
+	}
+	r := Rule{Key: "custom", Type: RuleType(v.typ), Target: v.target, Params: json.RawMessage(v.params),
+		Severity: Severity(v.severity), When: v.when, Message: v.message, Scope: "document", Enabled: true}
+	if r.Type == TypeEnum {
+		var p struct {
+			List *string `json:"list"`
+		}
+		_ = json.Unmarshal(r.Params, &p)
+		if p.List != nil && *p.List != "" {
+			if !slices.ContainsFunc(codelist.Lists, func(l codelist.List) bool { return l.Name == *p.List }) {
+				return errors.New("params.list names no NRS list")
+			}
+			// non-empty stand-in: enumEval faults on an empty set
+			r.Codes = CodeSet{"": {}}
+		}
+	}
+	var sample Payload
+	if err := json.Unmarshal(sampleInvoiceJSON, &sample); err != nil {
+		return fmt.Errorf("embedded sample invoice: %w", err)
+	}
+	for _, p := range []Payload{{"invoice": map[string]any{}}, sample} {
+		if _, err := eng.Evaluate(p, RuleSet{Rules: []Rule{r}}); err != nil {
+			return fmt.Errorf("the rule does not evaluate: %w", err)
+		}
+	}
+	return nil
+}
+
+// CheckCustomRuleHandler returns POST /v1/custom-rules/check: 204 valid, 422 with a reason.
+// S2S only, no DB, no tenant.
+func CheckCustomRuleHandler(eng *Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxDraftRuleBodyBytes)
+		var in customRuleCheck
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the size limit")
+				return
+			}
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if err := checkCustomRuleBody(eng, in); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

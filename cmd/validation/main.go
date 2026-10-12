@@ -93,10 +93,13 @@ func main() {
 	app.Mux.Handle("POST /v1/validate/batch", validation.S2SMiddleware(mustEnv("S2S_TOKEN"))(
 		validation.BatchValidateHandler(store.LoadForBatch, engine, nil, app.Logger)))
 
+	app.Mux.Handle("POST /v1/custom-rules/check", validation.S2SMiddleware(mustEnv("S2S_TOKEN"))(
+		validation.CheckCustomRuleHandler(engine)))
+
 	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval,
 		codelist.NewSyncer(pool, codelist.DefaultBaseURL, nil, app.Logger).SyncAll))
 
-	app.RequireGateway(mustEnv("GATEWAY_TOKEN"), "POST /v1/validate/batch")
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"), "POST /v1/validate/batch", "POST /v1/custom-rules/check")
 
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "validation: %v", err)

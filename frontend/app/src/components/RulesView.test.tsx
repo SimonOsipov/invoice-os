@@ -238,8 +238,8 @@ describe('RulesView, custom group', () => {
 describe('RulesView, switch', () => {
   it('the switch mirrors the rule: aria-checked, track tone and knob travel follow enabled', async () => {
     await mount(fakeFetch({ custom: [custom('on', null), custom('off', null, { enabled: false })] }))
-    const on = screen.getByRole('switch', { name: 'Disable custom:on' })
-    const off = screen.getByRole('switch', { name: 'Enable custom:off' })
+    const on = screen.getByRole('switch', { name: 'Disable rule "message of on"' })
+    const off = screen.getByRole('switch', { name: 'Enable rule "message of off"' })
     expect([on.getAttribute('aria-checked'), off.getAttribute('aria-checked')]).toEqual(['true', 'false'])
     expect([on.style.background, off.style.background]).toEqual(['var(--action)', 'var(--line-3)'])
     expect([(on.firstElementChild as HTMLElement).style.transform, (off.firstElementChild as HTMLElement).style.transform]).toEqual(['translateX(14px)', 'translateX(0)'])
@@ -249,7 +249,7 @@ describe('RulesView, switch', () => {
     let release!: (r: CustomRule) => void
     const f = fakeFetch({ write: () => new Promise<CustomRule>((res) => (release = res)) })
     await mount(f)
-    const sw = screen.getByRole('switch', { name: `Disable ${FIRM.key}` })
+    const sw = screen.getByRole('switch', { name: `Disable rule "${FIRM.message}"` })
 
     fireEvent.click(sw)
     await waitFor(() => expect(writes(f)).toHaveLength(1))
@@ -263,18 +263,18 @@ describe('RulesView, switch', () => {
     expect(writes(f), 'a second click while in flight sends nothing').toHaveLength(1)
 
     release({ ...FIRM, enabled: false, revision: 2 })
-    await waitFor(() => expect(screen.getByRole('switch', { name: `Enable ${FIRM.key}` }).getAttribute('aria-checked')).toBe('false'))
-    expect(screen.getByRole('switch', { name: `Enable ${FIRM.key}` }).hasAttribute('disabled')).toBe(false)
+    await waitFor(() => expect(screen.getByRole('switch', { name: `Enable rule "${FIRM.message}"` }).getAttribute('aria-checked')).toBe('false'))
+    expect(screen.getByRole('switch', { name: `Enable rule "${FIRM.message}"` }).hasAttribute('disabled')).toBe(false)
   })
 
   it('rulesView_switchFailureKeepsTheRow', async () => {
     const f = fakeFetch({ write: () => Promise.reject(new ApiError('http', 'custom rule not found', 404)) })
     await mount(f)
-    const sw = screen.getByRole('switch', { name: `Disable ${FIRM.key}` })
+    const sw = screen.getByRole('switch', { name: `Disable rule "${FIRM.message}"` })
 
     fireEvent.click(sw)
     expect((await screen.findByTestId('rule-row-error')).textContent).toBe('custom rule not found')
-    expect(screen.getByRole('switch', { name: `Disable ${FIRM.key}` }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('switch', { name: `Disable rule "${FIRM.message}"` }).getAttribute('aria-checked')).toBe('true')
     expect(sw.hasAttribute('disabled')).toBe(false)
   })
 
@@ -282,10 +282,10 @@ describe('RulesView, switch', () => {
     let fail = true
     const f = fakeFetch({ write: () => (fail ? Promise.reject(new ApiError('http', 'boom', 500)) : Promise.resolve({ ...FIRM, enabled: false })) })
     await mount(f)
-    fireEvent.click(screen.getByRole('switch', { name: `Disable ${FIRM.key}` }))
+    fireEvent.click(screen.getByRole('switch', { name: `Disable rule "${FIRM.message}"` }))
     await screen.findByTestId('rule-row-error')
     fail = false
-    fireEvent.click(screen.getByRole('switch', { name: `Disable ${FIRM.key}` }))
+    fireEvent.click(screen.getByRole('switch', { name: `Disable rule "${FIRM.message}"` }))
     await waitFor(() => expect(screen.queryByTestId('rule-row-error')).toBeNull())
   })
 })
@@ -549,5 +549,65 @@ describe('RulesView, reskin pins', () => {
     expect(tag.style.borderRadius).toBe('var(--radius-sm)')
     expect((tag.parentElement as HTMLElement).style.gap).toBe('10px')
     expect(screen.getByText('v4').style.flex).toBe('')
+  })
+})
+
+describe('RulesView, fix cycle 1', () => {
+  it('rulesView_failedRefetchAfterRemoveKeepsTheRules', async () => {
+    let reads = 0
+    const f = vi.fn(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'DELETE') return undefined
+      if (url.endsWith('/custom-rules')) {
+        if (++reads === 2) throw new ApiError('http', 'custom rules are down', 500)
+        return { custom_rules: [FIRM, RA] }
+      }
+      return goldenPayload()
+    })
+    await mount(f as unknown as FetchMock, { openRuleKey: RA.key })
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Remove rule'))
+    expect((await screen.findByTestId('rules-refresh-error')).textContent).toContain('custom rules are down')
+    expect(screen.getByText(/^INHERITED/)).toBeTruthy()
+    expect(screen.getByText('message of r-firm')).toBeTruthy()
+    expect(screen.queryByText('message of r-a')).toBeNull()
+
+    fireEvent.click(within(screen.getByTestId('rules-refresh-error')).getByText('Retry'))
+    await waitFor(() => expect(screen.queryByTestId('rules-refresh-error')).toBeNull())
+  })
+
+  it('rulesView_staleRefetchCannotOverwriteAToggle', async () => {
+    let reads = 0
+    let releaseRead!: () => void
+    let releasePut!: (r: CustomRule) => void
+    const f = vi.fn(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'DELETE') return undefined
+      if (init?.method === 'PUT') return new Promise<CustomRule>((res) => (releasePut = res))
+      if (url.endsWith('/custom-rules')) {
+        if (++reads === 2) await new Promise<void>((res) => (releaseRead = res))
+        return { custom_rules: [FIRM, RA] }
+      }
+      return goldenPayload()
+    })
+    await mount(f as unknown as FetchMock, { openRuleKey: FIRM.key })
+    const messages = () => [...document.querySelectorAll('.pf-row')].slice(3).map((r) => r.children[5].textContent)
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Remove rule'))
+    await waitFor(() => expect(reads).toBe(2))
+    fireEvent.click(screen.getByRole('switch', { name: `Disable rule "${RA.message}"` }))
+    await waitFor(() => expect(releasePut).toBeTypeOf('function'))
+    releasePut({ ...RA, enabled: false })
+    await screen.findByRole('switch', { name: `Enable rule "${RA.message}"` })
+
+    releaseRead()
+    await waitFor(() => expect(screen.queryByText('Loading rules…')).toBeNull())
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.getByRole('switch', { name: `Enable rule "${RA.message}"` }).getAttribute('aria-checked')).toBe('false')
+    expect(messages(), 'the stale list does not bring the removed row back').toEqual(['message of r-a'])
+  })
+
+  it('a switch is named from the rule message, never its uuid', async () => {
+    await mount(fakeFetch())
+    const names = screen.getAllByRole('switch').map((s) => s.getAttribute('aria-label'))
+    expect(names).toEqual(['Disable rule "message of r-firm"', 'Disable rule "message of r-a"'])
   })
 })

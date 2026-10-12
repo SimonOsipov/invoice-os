@@ -1,7 +1,7 @@
 // Rules: the golden ruleset (GET /v1/rules, read-only, locked) and the tenant's custom rules
 // (/v1/custom-rules). Golden rows carry a lock, never a switch (F-285).
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -122,9 +122,16 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
   )
   // Mirror of the last good list, so a toggle replaces one row and a refetch does not blank the table.
   const [custom, setCustom] = useState<CustomRule[] | null>(null)
+  // A response older than the last write is stale: writes bump the counter, a fetch records it at start.
+  const writes = useRef(0)
+  const fetchedAt = useRef(0)
   useEffect(() => {
-    if (customList.data) setCustom(customList.data)
+    if (customList.data && fetchedAt.current === writes.current) setCustom(customList.data)
   }, [customList.data])
+  function refetchCustom() {
+    fetchedAt.current = writes.current
+    customList.run()
+  }
 
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set())
   const [rowErrors, setRowErrors] = useState<Readonly<Record<string, string>>>({})
@@ -141,13 +148,15 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
     ? `ASComply's golden ruleset plus the custom checks you run for ${scope}`
     : `ASComply's golden ruleset plus the custom checks ${scope} runs internally`
 
-  const failed = golden.status === 'error' ? golden : customList.status === 'error' ? customList : null
+  // A failed refetch with rules already shown stays inline; only a first load fails the screen.
+  const failed = golden.status === 'error' ? golden : customList.status === 'error' && custom == null ? customList : null
+  const refreshError = customList.status === 'error' && custom != null ? customList.error : null
   const ready = golden.data != null && custom != null
   const inScope = rulesInScope(custom ?? [], ctx.activeEntity?.id ?? null)
 
   function retry() {
     if (golden.status === 'error') golden.run()
-    if (customList.status === 'error') customList.run()
+    if (customList.status === 'error') refetchCustom()
   }
 
   async function toggle(r: CustomRule) {
@@ -160,6 +169,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
     })
     try {
       const updated = await updateCustomRule(authedFetch, base, r.id, { ...ruleInputOf(r), enabled: !r.enabled })
+      writes.current++
       setCustom((list) => (list ? list.map((x) => (x.id === updated.id ? updated : x)) : list))
     } catch (e) {
       setRowErrors((m) => ({ ...m, [r.id]: errorText(e) }))
@@ -178,9 +188,10 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
     setRemoveError(null)
     try {
       await deleteCustomRule(authedFetch, base, r.id)
+      writes.current++
       setCustom((list) => (list ? list.filter((x) => x.id !== r.id) : list))
       ctx.closeRule()
-      customList.run()
+      refetchCustom()
     } catch (e) {
       setRemoveError(errorText(e))
     } finally {
@@ -281,6 +292,18 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
               </div>
             </div>
 
+            {refreshError && (
+              <div
+                data-testid="rules-refresh-error"
+                style={{ padding: '8px 16px', borderBottom: '1px solid var(--line-1)', fontSize: 12, color: 'var(--status-red-text)', background: 'var(--status-red-bg)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, minWidth: TABLE_MIN_WIDTH }}
+              >
+                <span>{refreshError.message}</span>
+                <button type="button" onClick={refetchCustom} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 26 }}>
+                  Retry
+                </button>
+              </div>
+            )}
+
             {reason && (
               <div
                 id="rules-admin-reason"
@@ -343,7 +366,7 @@ export function RulesView({ ctx }: { ctx: PlatformCtx }) {
                             type="button"
                             role="switch"
                             aria-checked={r.enabled}
-                            aria-label={`${r.enabled ? 'Disable' : 'Enable'} ${r.key}`}
+                            aria-label={`${r.enabled ? 'Disable' : 'Enable'} rule "${r.message}"`}
                             disabled={off}
                             title={reason ?? undefined}
                             onClick={() => void toggle(r)}

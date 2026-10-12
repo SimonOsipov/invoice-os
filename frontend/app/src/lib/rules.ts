@@ -7,9 +7,7 @@
 // those evaluate after the golden ones. Nothing in this module can disable or edit a
 // golden rule, and that is enforced by the types: only CustomRule carries `enabled`.
 //
-// Everything here is mock data + pure functions. There is no rules endpoint yet
-// (§2.6 of the brief lists what the backend will need); the screen is deliberately
-// shaped so that swapping these constants for a fetch changes no component.
+// Everything here is mock data + pure functions.
 
 export type RuleSeverity = 'error' | 'warn' | 'info'
 

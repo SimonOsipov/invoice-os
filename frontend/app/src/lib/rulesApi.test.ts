@@ -155,6 +155,22 @@ describe('rulesApi', () => {
     expect(guidedShapeOf(input({ type: 'range', target: 'buyer.email', params: { max: 1 } }))).toBeNull()
     expect(guidedShapeOf(input({ type: 'range', target: 'total', params: { exclusive_min: 1 } }))).toBeNull()
     expect(guidedShapeOf(input({ severity: 'info' }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'cel', target: 'total', params: {} }))).toBeNull()
+    expect(guidedShapeOf(input({ target: 'quantity' }))).toBeNull()
+    // Extra or mistyped params, and a check the field's type does not offer.
+    expect(guidedShapeOf(input({ params: { note: 1 } }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'format/regex', params: { pattern: '^x$', flags: 'i' } }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'format/regex', params: { pattern: 5 } }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'enum', target: 'currency', params: { values: ['NGN'], list: 'x' } }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'enum', target: 'currency', params: { values: ['NGN', 1] } }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'enum', target: 'currency', params: { values: 'NGN' } }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'range', target: 'total', params: { min: '1' } }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'range', target: 'total', params: { max: 1, min: null } }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'enum', target: 'total', params: { values: ['1'] } }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'format/regex', target: 'invoice_kind', params: { pattern: '^x$' } }))).toBeNull()
+    expect(guidedShapeOf(input({ type: 'range', target: 'issue_date', params: { min: 1 } }))).toBeNull()
+    // On-path control: the same builders accept a shape the form offers.
+    expect(guidedShapeOf(input({ type: 'range', target: 'total', params: { min: 1 } }))).not.toBeNull()
   })
 
   it('expressionRuleInput_emitsCel', () => {
@@ -182,6 +198,9 @@ describe('rulesApi', () => {
       guided({ ...range }),
       guided({ ...range, min: ' ' }),
       guided({ ...range, min: 'abc' }),
+      guided({ ...range, min: '1', max: 'abc' }),
+      guided({ ...range, max: 'Infinity' }),
+      guided({ ...range, min: '1e999' }),
       guided({ message: '' }),
       guided({ message: '   ' }),
       guided({ message: 'x'.repeat(501) }),
@@ -218,15 +237,17 @@ describe('rulesApi', () => {
   })
 
   it('ruleInputOf_roundTripsAndFlips', () => {
-    const r = rule({ entity_id: 'ent-1', type: 'enum', target: 'currency', params: { values: ['NGN'] }, when: 'x', enabled: true })
-    const body = ruleInputOf(r)
+    for (const enabled of [true, false]) {
+      const r = rule({ entity_id: 'ent-1', type: 'enum', target: 'currency', params: { values: ['NGN'] }, severity: 'error', when: 'x', enabled })
+      const body = ruleInputOf(r)
 
-    expect(Object.keys(body).sort()).toEqual(['enabled', 'entity_id', 'message', 'params', 'severity', 'target', 'type', 'when'])
-    for (const k of Object.keys(body) as (keyof CustomRuleInput)[]) expect(body[k]).toEqual(r[k])
+      expect(Object.keys(body).sort()).toEqual(['enabled', 'entity_id', 'message', 'params', 'severity', 'target', 'type', 'when'])
+      for (const k of Object.keys(body) as (keyof CustomRuleInput)[]) expect(body[k], k).toEqual(r[k])
 
-    const flipped = { ...body, enabled: !r.enabled }
-    const differing = (Object.keys(body) as (keyof CustomRuleInput)[]).filter((k) => flipped[k] !== body[k])
-    expect(differing).toEqual(['enabled'])
+      const flipped = { ...body, enabled: !r.enabled }
+      const differing = (Object.keys(body) as (keyof CustomRuleInput)[]).filter((k) => flipped[k] !== body[k])
+      expect(differing).toEqual(['enabled'])
+    }
   })
 
   it('ruleKeyLabel_andScopeLabel', () => {
@@ -235,6 +256,7 @@ describe('rulesApi', () => {
 
     expect(scopeLabel({ entity_id: null }, 'firm')).toBe('FIRM')
     expect(scopeLabel({ entity_id: 'A' }, 'firm')).toBe('CLIENT')
+    expect(scopeLabel({ entity_id: 'A' }, 'inhouse')).toBe('CUSTOM')
     expect(scopeLabel({ entity_id: null }, 'inhouse')).toBe('CUSTOM')
   })
 

@@ -90,7 +90,7 @@ async function openRules(page: Page): Promise<void> {
 async function reopenRules(page: Page): Promise<void> {
   await page.reload()
   await selectEntity(page)
-  await expect(page.getByTestId('rules-new')).toBeEnabled()
+  await showRules(page)
 }
 
 const newButton = (page: Page) => page.getByTestId('rules-new')

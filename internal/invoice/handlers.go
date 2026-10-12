@@ -551,7 +551,7 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 //
 // approvalClear is the LAST rung, after status: an invoice that is not validated
 // has no run to wait on, so the awaiting-approval sentence would be a lie there.
-func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
+func submitGate(s Status, role string, approvalClear, rulePending bool) (bool, *string) {
 	if !isApprover(role) {
 		r := notApproverTransmitReason // a const is not addressable; copy to a local
 		return false, &r
@@ -679,7 +679,7 @@ func GetHandler(
 		}
 
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
-		canSubmitInv, submitReason := submitGate(inv.Status, role, facts.TransmitClear)
+		canSubmitInv, submitReason := submitGate(inv.Status, role, facts.TransmitClear, facts.RulePending)
 		// ONE call feeds both pairs, so can_approve and can_reject cannot diverge
 		// (TestApprovalGate_ApproveAndRejectNeverDiverge).
 		canDecide, decideReason := approvalGate(inv.Status, role, facts)
@@ -1034,7 +1034,7 @@ func ListHandler(
 			})
 			// The SAME submitGate GetHandler calls, over the same three inputs.
 			// One map lookup: no query enters this loop.
-			row.CanSubmit, row.SubmitBlockedReason = submitGate(inv.Status, gate.CallerRole, gate.TransmitClear[inv.ID])
+			row.CanSubmit, row.SubmitBlockedReason = submitGate(inv.Status, gate.CallerRole, gate.TransmitClear[inv.ID], gate.RulePending[inv.ID])
 			rows = append(rows, row)
 		}
 

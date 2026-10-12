@@ -60,7 +60,7 @@ func TestSubmitGate_ApprovalArmOnlyFiresOnValidated(t *testing.T) {
 				if s == StatusValidated {
 					w = submitGateWant{false, wantAwaitingApprovalReason}
 				}
-				can, reason := submitGate(s, role, false)
+				can, reason := submitGate(s, role, false, false)
 				assertSubmitGateRow(t, w, can, reason)
 			})
 		}
@@ -72,7 +72,7 @@ func TestSubmitGate_ApprovalArmOnlyFiresOnValidated(t *testing.T) {
 // doors actually answer (TransitionHandler/BatchSubmitHandler 403 on role before
 // any row is read).
 func TestSubmitGate_RoleStillWinsOverApproval(t *testing.T) {
-	can, reason := submitGate(StatusValidated, "preparer", false)
+	can, reason := submitGate(StatusValidated, "preparer", false, false)
 	if can {
 		t.Error("can = true for a preparer, want false")
 	}
@@ -88,7 +88,7 @@ func TestSubmitGate_RoleStillWinsOverApproval(t *testing.T) {
 // that always refuses cannot pass this and
 // TestSubmitGate_BlockedValidatedApproverGetsTheSharedSentence both.
 func TestSubmitGate_ClearValidatedApproverSubmits(t *testing.T) {
-	can, reason := submitGate(StatusValidated, "admin", true)
+	can, reason := submitGate(StatusValidated, "admin", true, false)
 	if !can {
 		t.Error("can = false for an approver on a clear validated invoice, want true")
 	}
@@ -102,7 +102,7 @@ func TestSubmitGate_ClearValidatedApproverSubmits(t *testing.T) {
 // caller would get read identically. NOT batchSubmitReasonAwaitingApproval, which
 // is the machine code.
 func TestSubmitGate_BlockedValidatedApproverGetsTheSharedSentence(t *testing.T) {
-	can, reason := submitGate(StatusValidated, "admin", false)
+	can, reason := submitGate(StatusValidated, "admin", false, false)
 	if can {
 		t.Error("can = true for an approver on a blocked validated invoice, want false")
 	}
@@ -123,7 +123,7 @@ func TestSubmitGate_ApprovalArmCanOnlyNarrow(t *testing.T) {
 	for _, role := range []string{"admin", "reviewer"} {
 		for _, s := range allStatuses {
 			for _, clear := range []bool{true, false} {
-				can, _ := submitGate(s, role, clear)
+				can, _ := submitGate(s, role, clear, false)
 				if can && !canEdit(s) {
 					t.Errorf("submitGate(%q, %q, %v) = true but canEdit(%q) = false -- the actions bar renders iff can_edit", s, role, clear, s)
 				}

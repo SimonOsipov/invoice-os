@@ -1842,6 +1842,7 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 // the other three feed can_approve/can_reject.
 type ApprovalFacts struct {
 	TransmitClear   bool
+	RulePending     bool
 	RunState        string
 	PendingStepOrd  *int
 	CallerHoldsRole bool
@@ -1881,6 +1882,7 @@ type ListGateFacts struct {
 	HoldsPendingRole map[string]bool
 	// TransmitClear is the page's submit verdict. An absent id reads false -- fail closed.
 	TransmitClear map[string]bool
+	RulePending   map[string]bool
 }
 
 // RowFacts reads the list-row approval standing of a page of invoice ids, plus the

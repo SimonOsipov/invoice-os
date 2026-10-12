@@ -25,6 +25,7 @@ paths:
 - Assert containment or a live-read comparison, never a literal count.
 - Expect specs to leave rows in `auth.users`, `staff_members`, `tenants`, `memberships` and `business_entities`. Every run registers a fresh address, so this is harmless.
 - Expect the Support Console Rules screen to read real versions, rules and code-list syncs. The other console screens hold mock data.
+- Expect the app Rules screen to read the golden set and the custom rules from the server.
 - Never publish a rule-set version in a topology spec. The api contract spec publishes only with the start date `3001-01-01`.
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
 - Test the `library` SPA for render and consent only. It is static content with no backend.

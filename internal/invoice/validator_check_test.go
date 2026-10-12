@@ -86,6 +86,18 @@ func TestValidatorCheckCustomRule_MapsTheValidationAnswers(t *testing.T) {
 		})
 	}
 
+	t.Run("a probe fault reaches the customer path as the plain sentence", func(t *testing.T) {
+		in := goodCheckInput()
+		in.Type, in.Target, in.Params = "cel", "total", json.RawMessage(`{"expr":"invoice.total > 5"}`)
+		var ie customrule.InvalidError
+		if err := v.CheckCustomRule(ctx, in); !errors.As(err, &ie) {
+			t.Fatalf("CheckCustomRule = %v, want customrule.InvalidError", err)
+		}
+		if want := "the rule does not evaluate: no such key: total"; ie.Msg != want {
+			t.Errorf("InvalidError.Msg = %q, want %q", ie.Msg, want)
+		}
+	})
+
 	t.Run("a wrong token is an upstream error", func(t *testing.T) {
 		err := NewValidator(srv.URL, "not-the-token", nil).CheckCustomRule(ctx, goodCheckInput())
 		if !errors.Is(err, ErrUpstream) {

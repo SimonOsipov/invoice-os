@@ -255,6 +255,8 @@ export interface InvoiceRecord {
   // redeclares. REQUIRED, never `?`, for the same fail-open reason as can_approve.
   can_submit: boolean
   submit_blocked_reason: string | null
+  // demotion -- a LIST-wire key ONLY, like `approval`; InvoiceDetailRecord Omits it.
+  demotion: Demotion | null
 }
 
 // One list row's approval standing, mirroring approval.RowFacts (gate.go) key for key --
@@ -304,7 +306,7 @@ export interface InvoiceApproval {
 // and the rest absent; wireMirrors.test.ts's B12-9b pins the submit pair declared once.
 // `approval` runs the other way -- a list-only key (APPR-08-08), Omitted here so it
 // cannot be read off a detail record at all.
-export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'> {
+export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval' | 'demotion'> {
   rule_set_version: number | null
   qr_png_base64: string | null
   // The invoice changed since its stored verdict was evaluated; false for a verdict that predates the fingerprint.
@@ -371,6 +373,29 @@ export interface HistoryCause {
   rule_set_version: number
   rule_set_version_id: string
   effective_from: string | null
+}
+
+// A list row's re-check demotion: the latest history row's cause, set only while the invoice is a draft.
+export interface Demotion {
+  changed_at: string
+  cause: HistoryCause | null
+  custom_rule_cause: CustomRuleCause | null
+}
+
+// D11: the detail derives the list's server rule from the history it loads (T1: latestDemotion_matchesTheServerRule).
+export function latestDemotion(history: readonly StatusChange[], status: InvoiceStatus): Demotion | null {
+  const last = history[history.length - 1]
+  if (status !== 'draft' || !last || (last.cause == null && last.custom_rule_cause == null)) return null
+  return { changed_at: last.changed_at, cause: last.cause, custom_rule_cause: last.custom_rule_cause }
+}
+
+// effective_from is shown as the wire wrote it: no locale formatting, so no day shift.
+export function demotionSentence(d: Demotion): string {
+  if (d.cause) {
+    const on = d.cause.effective_from ? ` on ${d.cause.effective_from}` : ''
+    return `Sent back to draft when rule set v${d.cause.rule_set_version} took effect${on}.`
+  }
+  return `Sent back to draft when the custom rule \u201c${d.custom_rule_cause?.message ?? ''}\u201d changed.`
 }
 
 // listInvoices's twelve filters (ListFilter, invoice.go:200-217; ListHandler,

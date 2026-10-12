@@ -806,7 +806,6 @@ describe('a renewed hand-off session stays a hand-off session (AUTH-10-06, F17)'
     await mountFresh()
     const connected = Object.values(capturedCtx!.connectors).filter(Boolean).length
     expect(connected).toBe(0)
-    expect(capturedCtx?.customRules).toEqual([])
   })
 })
 

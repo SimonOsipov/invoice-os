@@ -42,6 +42,8 @@ import {
   memberships,
   createEntity,
   createInvoice,
+  createCustomRule,
+  deleteCustomRule,
   validateInvoice,
   explainViolation,
   rawFetch,
@@ -136,6 +138,10 @@ const PREPARER_SUBJECT = 'c0000000-0000-0000-0000-000000000003'
 // is an em dash, U+2014). This is the only layer where that Go const meets a TS literal on
 // bytes a running server emitted — assertErrorEnvelope never looks at the message.
 const NOT_APPROVER_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+
+// internal/invoice/handlers.go's ruleChangePendingReason, byte for byte (em dash U+2014).
+const RULE_CHANGE_PENDING_REASON =
+  'A custom rule change is being applied to this invoice — it can be submitted once the change has been checked.'
 
 // internal/invoice/handlers.go's awaitingApprovalReason, byte for byte -- submitGate's third
 // rung, fired only once role and status both pass and the run is still open.
@@ -394,9 +400,55 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(supplierRes.pagination.total, 'pagination.total should be the filtered total, not the tenant-wide total').toBe(1)
     })
 
+    test('list rows carry the demotion key', async () => {
+      const res = await listInvoices(token, { limit: 50 })
+      expect(res.invoices.length, 'the list has rows to check').toBeGreaterThan(0)
+      for (const row of res.invoices) {
+        expect(Object.prototype.hasOwnProperty.call(row, 'demotion'), `row ${row.id} carries the demotion key`).toBe(true)
+        if (row.demotion !== null) {
+          expect(Object.keys(row.demotion).sort()).toEqual(['cause', 'changed_at', 'custom_rule_cause'])
+        }
+      }
+    })
+
     test('list with no auth -> 401 {error: string}', async () => {
       const res = await rawFetch('/api/invoice/v1/invoices')
       assertErrorEnvelope(res, 401, 'list no auth')
+    })
+  })
+
+  // A pending custom revision turns Submit off on the list. The tick marks the revision
+  // after 5 minutes and flips the gate back; the read below follows the save within a second.
+  test.describe('a pending rule change', () => {
+    let ruleId: string | null = null
+    let pendingEntity: Entity
+
+    test.afterAll(async () => {
+      if (ruleId) await deleteCustomRule(token, ruleId).catch(() => undefined)
+    })
+
+    test('a pending rule change turns Submit off', async () => {
+      const tin = freshTin()
+      pendingEntity = await createEntity(token, { name: `ENGI-15 pending ${tin}`, tin })
+      const created = await createInvoice(token, { entity_id: pendingEntity.id, ...cleanInvoiceFields(`INV-PEND-${freshTin()}`) })
+      expect((await validateInvoice(token, created.id)).status).toBe('validated')
+      const before = (await listInvoices(token, { entity_id: pendingEntity.id })).invoices.find((i) => i.id === created.id)
+      expect(before?.submit_blocked_reason, 'no pending change yet').not.toBe(RULE_CHANGE_PENDING_REASON)
+
+      const rule = await createCustomRule(token, {
+        entity_id: pendingEntity.id,
+        type: 'required',
+        target: 'invoice_number',
+        params: {},
+        severity: 'error',
+        message: 'ENGI-15 pending rule',
+        enabled: true,
+      })
+      ruleId = rule.id
+
+      const row = (await listInvoices(token, { entity_id: pendingEntity.id })).invoices.find((i) => i.id === created.id)
+      expect(row?.can_submit).toBe(false)
+      expect(row?.submit_blocked_reason).toBe(RULE_CHANGE_PENDING_REASON)
     })
   })
 

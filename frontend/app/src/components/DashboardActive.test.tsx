@@ -4,7 +4,7 @@
 // untested in both directions. Mirrors InvoiceDetail.test.tsx's fetch-mock + ctx-cast
 // idiom (single-endpoint mock: DashboardActive fires only getRollup, unlike
 // InvoiceDetail's two concurrent effects).
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -206,6 +206,24 @@ describe('DashboardActive live panels (task-429, METR-01-05)', () => {
 
     expect(await screen.findByText('client-only-rule')).toBeDefined()
     expect(screen.queryByText('tenant-wide-rule')).toBeNull()
+  })
+
+  it('dashboardActive_customKeyReadsCustomRule', async () => {
+    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    const data = rollup(0)
+    data.totals.top_violations = [{ rule_key: key, invoices: 4 }, { rule_key: 'vat-standard-rate', invoices: 2 }]
+    mockRollupFetch(data)
+
+    const { container } = render(<DashboardActive ctx={dashCtx()} />)
+    await screen.findByText('Top validation failures')
+
+    const custom = await waitFor(() => {
+      const el = container.querySelector(`[title="${key}"]`)
+      expect(el).not.toBeNull()
+      return el as Element
+    })
+    expect(custom.textContent).toBe('Custom rule')
+    expect(container.querySelector('[title="vat-standard-rate"]')?.textContent).toBe('vat-standard-rate')
   })
 })
 

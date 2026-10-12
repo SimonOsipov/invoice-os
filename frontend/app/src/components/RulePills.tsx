@@ -2,15 +2,15 @@
 // drawer can use them without importing the view that renders the drawer — the same
 // role support-console/src/components/StatusBadge.tsx plays over there.
 
-import type { RuleSeverity } from '../lib/rules'
+import type { Severity } from '../lib/validationApi'
 
-export const SEVERITY_TONE: Record<RuleSeverity, { bg: string; border: string; text: string; label: string }> = {
+export const SEVERITY_TONE: Record<Severity, { bg: string; border: string; text: string; label: string }> = {
   error: { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'ERROR' },
-  warn: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'WARN' },
+  warning: { bg: 'var(--status-amber-bg)', border: 'var(--status-amber-border)', text: 'var(--status-amber-text)', label: 'WARN' },
   info: { bg: 'var(--status-muted-bg)', border: 'var(--status-muted-border)', text: 'var(--status-muted-text)', label: 'INFO' },
 }
 
-export function SeverityPill({ severity }: { severity: RuleSeverity }) {
+export function SeverityPill({ severity }: { severity: Severity }) {
   const tone = SEVERITY_TONE[severity]
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 8px' }}>

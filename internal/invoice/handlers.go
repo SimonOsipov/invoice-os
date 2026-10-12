@@ -245,11 +245,11 @@ type listResponse struct {
 	Pagination listPagination `json:"pagination"`
 }
 
-// listItem is one GET /v1/invoices row: Invoice embedded, plus five additive
+// listItem is one GET /v1/invoices row: Invoice embedded, plus additive
 // siblings. Invoice itself is NOT widened -- it is shared by Get/Create/Edit,
 // and RuleSetVersion is json:"-" for exactly that reason.
 //
-// No omitempty on any of the five: a nil Approval emits explicit null, the
+// No omitempty on any of them: a nil Approval emits explicit null, the
 // honest answer for an invoice with no approval run, and an omitted permission
 // flag would read undefined in the SPA and fail OPEN
 // (TestListItem_InvoiceKeysUnmovedAndUnrenamed,
@@ -267,6 +267,7 @@ type listItem struct {
 	ApproveBlockedReason *string            `json:"approve_blocked_reason"`
 	CanSubmit            bool               `json:"can_submit"`
 	SubmitBlockedReason  *string            `json:"submit_blocked_reason"`
+	Demotion             *Demotion          `json:"demotion"`
 }
 
 // --- handlers ----------------------------------------------------------------
@@ -549,15 +550,20 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 // resolveOutsideGate above: a preparer told "re-validate this invoice first"
 // would run a re-validation that still cannot end in a submit.
 //
+// rulePending precedes approvalClear, as in Store.Transition (TestSubmitGate_RungOrder).
 // approvalClear is the LAST rung, after status: an invoice that is not validated
 // has no run to wait on, so the awaiting-approval sentence would be a lie there.
-func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
+func submitGate(s Status, role string, approvalClear, rulePending bool) (bool, *string) {
 	if !isApprover(role) {
 		r := notApproverTransmitReason // a const is not addressable; copy to a local
 		return false, &r
 	}
 	if !canSubmit(s) {
 		return false, submitBlockedReason(s)
+	}
+	if rulePending {
+		r := ruleChangePendingReason
+		return false, &r
 	}
 	if !approvalClear {
 		r := awaitingApprovalReason
@@ -611,7 +617,7 @@ func approvalGate(s Status, role string, f ApprovalFacts) (bool, *string) {
 // "never errors" contract -- an error from it fails closed (not-an-approver),
 // never a 5xx.
 //
-// approvalFacts feeds submitGate's third rung. An error from it fails closed --
+// approvalFacts feeds submitGate's last two rungs. An error from it fails closed --
 // the zero ApprovalFacts reads TransmitClear false -- and is logged while the
 // response stays 200 (TestGetHandler_ApprovalFactsErrorFailsClosedNot500). It is
 // logged, unlike callerRole, because a failed approval read has no legitimate
@@ -679,7 +685,7 @@ func GetHandler(
 		}
 
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
-		canSubmitInv, submitReason := submitGate(inv.Status, role, facts.TransmitClear)
+		canSubmitInv, submitReason := submitGate(inv.Status, role, facts.TransmitClear, facts.RulePending)
 		// ONE call feeds both pairs, so can_approve and can_reject cannot diverge
 		// (TestApprovalGate_ApproveAndRejectNeverDiverge).
 		canDecide, decideReason := approvalGate(inv.Status, role, facts)
@@ -1032,9 +1038,12 @@ func ListHandler(
 				PendingStepOrd:  f.PendingOrd,
 				CallerHoldsRole: gate.HoldsPendingRole[inv.ID],
 			})
-			// The SAME submitGate GetHandler calls, over the same three inputs.
+			// The SAME submitGate GetHandler calls.
 			// One map lookup: no query enters this loop.
-			row.CanSubmit, row.SubmitBlockedReason = submitGate(inv.Status, gate.CallerRole, gate.TransmitClear[inv.ID])
+			row.CanSubmit, row.SubmitBlockedReason = submitGate(inv.Status, gate.CallerRole, gate.TransmitClear[inv.ID], gate.RulePending[inv.ID])
+			if d, ok := gate.Demotion[inv.ID]; ok && inv.Status == StatusDraft {
+				row.Demotion = &d
+			}
 			rows = append(rows, row)
 		}
 

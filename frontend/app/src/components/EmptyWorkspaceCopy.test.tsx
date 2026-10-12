@@ -155,8 +155,24 @@ describe('emptyClient() in a zero-entity workspace reads mode-neutral on every s
     expectEmptyWorkspaceCopy(['Who must sign off before your company transmits an invoice.'])
   })
 
-  it.each(MODES)('RulesView subtitle and custom group header (%s)', (mode) => {
-    render(<RulesView ctx={baseCtx(mode, { customRules: [], openRuleKey: null })} />)
+  it.each(MODES)('RulesView subtitle and custom group header (%s)', async (mode) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve(
+              url.includes('/custom-rules')
+                ? { custom_rules: [] }
+                : { today: '2026-10-12', versions: [], rule_set_version_id: 'v', version: 4, effective_from: '2026-08-06', rules: [] },
+            ),
+        }),
+      ),
+    )
+    render(<RulesView ctx={baseCtx(mode, { openRuleKey: null })} />)
+    await screen.findByText(/No custom rules yet/)
     expectEmptyWorkspaceCopy(['your company'])
   })
 

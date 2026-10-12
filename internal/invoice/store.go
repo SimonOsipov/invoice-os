@@ -121,6 +121,11 @@ const historyCauseColumns = `v.id::text, v.version, to_char(v.effective_from, 'Y
 	r.rule_id::text, r.revision, r.id::text, r.message`
 
 func scanStatusChange(row scanner, sc *StatusChange) error {
+	return scanWithCauses(row, []any{&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt}, &sc.Cause, &sc.CustomRuleCause)
+}
+
+// scanWithCauses scans lead followed by historyCauseColumns, leaving an absent cause nil.
+func scanWithCauses(row scanner, lead []any, cause **HistoryCause, custom **CustomRuleCause) error {
 	var (
 		causeID   *string
 		causeVer  *int
@@ -130,15 +135,15 @@ func scanStatusChange(row scanner, sc *StatusChange) error {
 		revID     *string
 		ruleMsg   *string
 	)
-	if err := row.Scan(&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt, &causeID, &causeVer, &causeDate,
-		&ruleID, &ruleRev, &revID, &ruleMsg); err != nil {
+	dest := append(lead, &causeID, &causeVer, &causeDate, &ruleID, &ruleRev, &revID, &ruleMsg)
+	if err := row.Scan(dest...); err != nil {
 		return err
 	}
 	if causeID != nil && causeVer != nil {
-		sc.Cause = &HistoryCause{RuleSetVersion: *causeVer, RuleSetVersionID: *causeID, EffectiveFrom: causeDate}
+		*cause = &HistoryCause{RuleSetVersion: *causeVer, RuleSetVersionID: *causeID, EffectiveFrom: causeDate}
 	}
 	if revID != nil && ruleID != nil && ruleRev != nil && ruleMsg != nil {
-		sc.CustomRuleCause = &CustomRuleCause{CustomRuleID: *ruleID, Revision: *ruleRev, RevisionID: *revID,
+		*custom = &CustomRuleCause{CustomRuleID: *ruleID, Revision: *ruleRev, RevisionID: *revID,
 			Key: customrule.Key(*ruleID), Message: *ruleMsg}
 	}
 	return nil
@@ -1785,9 +1790,9 @@ func canRevalidate(s Status) bool { return s == StatusDraft }
 // BatchSubmit hardwires its FROM state to validated, so submittability is
 // the endpoint's own contract, not an edge-table property.
 //
-// It is only HALF the positive predicate. The other half is
+// It is only PART of the positive predicate. Another part is
 // approval.TransmitClear (internal/approval/gate.go), which a validated invoice
-// must also satisfy before it may pass into queued. The two are composed in
+// must also satisfy before it may pass into queued. The parts are composed in
 // submitGate (handlers.go), never here: approval is not a status property, so
 // this stays a pure status literal.
 func canSubmit(s Status) bool { return s == StatusValidated }
@@ -1838,10 +1843,11 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 	return role, nil
 }
 
-// ApprovalFacts is one invoice's approval standing: TransmitClear feeds can_submit,
-// the other three feed can_approve/can_reject.
+// ApprovalFacts is one invoice's approval standing: TransmitClear and RulePending feed
+// can_submit, the other three feed can_approve/can_reject.
 type ApprovalFacts struct {
 	TransmitClear   bool
+	RulePending     bool
 	RunState        string
 	PendingStepOrd  *int
 	CallerHoldsRole bool
@@ -1865,6 +1871,11 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 			PendingStepOrd:  f.PendingStepOrd,
 			CallerHoldsRole: f.CallerHoldsRole,
 		}
+		pending, err := rulePendingByInvoiceTx(ctx, tx, []string{id})
+		if err != nil {
+			return err
+		}
+		out.RulePending = pending[id]
 		return nil
 	})
 	if err != nil {
@@ -1881,6 +1892,39 @@ type ListGateFacts struct {
 	HoldsPendingRole map[string]bool
 	// TransmitClear is the page's submit verdict. An absent id reads false -- fail closed.
 	TransmitClear map[string]bool
+	RulePending   map[string]bool
+	// Demotion is display copy for the list row, not a gate input.
+	Demotion map[string]Demotion
+}
+
+// latestDemotionsTx maps each invoice whose latest history row carries a cause to that cause.
+// One statement per page; RLS scopes it.
+func latestDemotionsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]Demotion, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT DISTINCT ON (h.invoice_id) h.invoice_id::text, h.changed_at, `+historyCauseColumns+`
+		 FROM invoice_status_history h
+		 LEFT JOIN rule_set_versions v ON v.id = h.cause_rule_set_version_id
+		 LEFT JOIN custom_rule_revisions r ON r.tenant_id = h.tenant_id AND r.id = h.cause_custom_rule_revision_id
+		 WHERE h.invoice_id = ANY($1::uuid[])
+		 ORDER BY h.invoice_id, h.changed_at DESC, h.id DESC`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Demotion{}
+	for rows.Next() {
+		var (
+			id string
+			d  Demotion
+		)
+		if err := scanWithCauses(rows, []any{&id, &d.ChangedAt}, &d.Cause, &d.CustomRuleCause); err != nil {
+			return nil, err
+		}
+		if d.Cause != nil || d.CustomRuleCause != nil {
+			out[id] = d
+		}
+	}
+	return out, rows.Err()
 }
 
 // RowFacts reads the list-row approval standing of a page of invoice ids, plus the
@@ -1889,10 +1933,10 @@ type ListGateFacts struct {
 // The returned map is display copy for the approval wire object; ListGateFacts is gate input,
 // never wire copy (TestStoreRowFacts_ReturnsTheArmedStanding).
 //
-// The three gate reads are here rather than inside approval.RowFactsTx so that helper's
+// The gate reads are here rather than inside approval.RowFactsTx so that helper's
 // statement count stays five (TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount);
-// all three are set-shaped, so the whole request stays constant in page size
-// (TestStoreRowFacts_TransmitClearIsConstantInPageSize).
+// all are set-shaped, so the whole request stays constant in page size
+// (TestStoreRowFacts_TransmitClearIsConstantInPageSize, TestStoreRowFacts_RulePendingIsConstantInPageSize).
 func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 	var out map[string]approval.RowFacts
 	var gate ListGateFacts
@@ -1937,7 +1981,17 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 			transmit[id] = clear[id]
 		}
 
-		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit}
+		pending, err := rulePendingByInvoiceTx(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+
+		demotion, err := latestDemotionsTx(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+
+		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit, RulePending: pending, Demotion: demotion}
 		return nil
 	})
 	if err != nil {
@@ -2119,6 +2173,40 @@ func rulesPendingFor(ctx context.Context, tx pgx.Tx, entityIDs []string) (func(e
 		return nil, err
 	}
 	return func(entityID string) bool { return all || covered[entityID] }, nil
+}
+
+// rulePendingByInvoiceTx maps each visible invoice id to whether a pending custom-rule
+// revision covers it: two statements, whatever len(ids). Ids RLS hides are absent (false).
+func rulePendingByInvoiceTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]bool, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT id::text, entity_id::text FROM invoices WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entityOf := make(map[string]string, len(ids))
+	entityIDs := make([]string, 0, len(ids))
+	for rows.Next() {
+		var id, entityID string
+		if err := rows.Scan(&id, &entityID); err != nil {
+			return nil, err
+		}
+		entityOf[id] = entityID
+		entityIDs = append(entityIDs, entityID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	pending, err := rulesPendingFor(ctx, tx, entityIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(entityOf))
+	for id, entityID := range entityOf {
+		out[id] = pending(entityID)
+	}
+	return out, nil
 }
 
 // transitionCausedTx is transitionTx plus what caused the transition, written to the history

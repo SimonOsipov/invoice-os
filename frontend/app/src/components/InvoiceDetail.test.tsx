@@ -1947,7 +1947,7 @@ describe('register/detail buyer TIN agreement (AC-5, task-413, BUG-05-04)', () =
     for (const { label, buyer_tin } of states) {
       const record = detailRecord({ buyer_tin })
       // Same invoice, two wires: the list carries `approval`, the detail one does not.
-      const listRow: InvoiceRecord = { ...record, approval: null }
+      const listRow: InvoiceRecord = { ...record, approval: null, demotion: null }
 
       mockDetailFetch(record)
       render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
@@ -1983,7 +1983,7 @@ describe('three-surface buyer TIN agreement table (AC-4/AC-5, task-413, BUG-05-0
   ] as const)('%s renders identical text and colour on InvoicesList, InvoiceDetail and ReviewRow', async (_label, buyerTin) => {
     const record = detailRecord({ buyer_tin: buyerTin as unknown as string | null })
     // Same invoice, two wires: the list carries `approval`, the detail one does not.
-    const listRow: InvoiceRecord = { ...record, approval: null }
+    const listRow: InvoiceRecord = { ...record, approval: null, demotion: null }
 
     mockDetailFetch(record)
     render(<InvoiceDetail ctx={detailCtx('inv-failed-1')} />)
@@ -7195,5 +7195,70 @@ describe('InvoiceDetail editor: the NRS fields (ENGI-06-04)', () => {
     expect(sent.map((r) => r.id)).toEqual(['l1', 'l2'])
     expect(sent[1]).toMatchObject({ hsn_code: '9999', description: 'Item 2' })
     expect(sent[0]).toMatchObject({ hsn_code: '1001' })
+  })
+})
+
+describe('InvoiceDetail demotion banner and race 409 (ENGI-15-08)', () => {
+  const ID = 'inv-demotion-1'
+  const cause = { rule_set_version: 5, rule_set_version_id: 'rsv-5', effective_from: '2027-01-01' }
+  const hist = (from: StatusChange['from_status'], to: StatusChange['to_status'], over: Partial<StatusChange> = {}): StatusChange => ({
+    from_status: from,
+    to_status: to,
+    changed_at: '2027-01-01T00:00:00Z',
+    actor: 'user-1',
+    actor_name: 'User One',
+    actor_kind: 'person',
+    cause: null,
+    custom_rule_cause: null,
+    ...over,
+  })
+  const demotedHistory = [hist(null, 'draft'), hist('draft', 'validated'), hist('validated', 'draft', { cause })]
+
+  it('invoiceDetail_demotionBannerFromHistory', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft' }), demotedHistory)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const banner = await screen.findByTestId('detail-demotion-banner')
+    expect(banner.textContent).toBe('Sent back to draft when rule set v5 took effect on 2027-01-01.')
+  })
+
+  it('invoiceDetail_noDemotionBannerOutsideDraftOrWithoutACause', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated' }), demotedHistory)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+    await waitFor(() => expect(screen.getByTestId('invoice-status-badge').textContent).toContain('VALIDATED'))
+    expect(screen.queryByTestId('detail-demotion-banner')).toBeNull()
+
+    cleanup()
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft' }), [hist(null, 'draft'), hist('draft', 'validated'), hist('validated', 'draft')])
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await waitFor(() => expect(screen.getByTestId('invoice-status-badge').textContent).toContain('DRAFT'))
+    expect(screen.queryByTestId('detail-demotion-banner')).toBeNull()
+  })
+
+  it('invoiceDetail_demotionBannerKeepsTheWireText', async () => {
+    const message = 'PO \u201cnumber\u201d is "required" & <b>long</b> ' + 'x'.repeat(300)
+    const custom = hist('validated', 'draft', { custom_rule_cause: { custom_rule_id: 'cr-1', revision: 2, revision_id: 'rev-2', key: 'custom:cr-1', message } })
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft' }), [hist(null, 'draft'), hist('draft', 'validated'), custom])
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect((await screen.findByTestId('detail-demotion-banner')).textContent).toBe(`Sent back to draft when the custom rule \u201c${message}\u201d changed.`)
+    cleanup()
+
+    const undated = hist('validated', 'draft', { cause: { ...cause, effective_from: null } })
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft' }), [hist(null, 'draft'), hist('draft', 'validated'), undated])
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect((await screen.findByTestId('detail-demotion-banner')).textContent).toBe('Sent back to draft when rule set v5 took effect.')
+  })
+
+  // Server sentence: ErrRulesChanged in internal/invoice/handlers.go (409 mapping).
+  it('invoiceDetail_revalidateRaceShowsTheServerSentence', async () => {
+    const SENTENCE = 'the rules changed during validation; validate again'
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_revalidate: true }), [], {
+      revalidateResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: SENTENCE }) },
+    })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    fireEvent.click(await screen.findByTestId('revalidate'))
+    await screen.findByText(SENTENCE)
   })
 })

@@ -96,6 +96,16 @@ const WIRE_MIRRORS = [
     floor: 5,
   },
   {
+    ts: 'Demotion',
+    go: 'Demotion',
+    goPath: 'internal/invoice/invoice.go',
+    goAnchor: 'func (s Status) valid() bool',
+    spaPath: 'frontend/app/src/lib/invoices.ts',
+    spaAnchor: 'export async function getInvoiceHistory(',
+    e2eAnchor: 'export function getInvoiceHistory(',
+    floor: 3,
+  },
+  {
     ts: 'PendingInvite',
     go: 'PendingInvite',
     goPath: 'internal/tenancy/store.go',
@@ -383,6 +393,46 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function listCustomers(',
     floor: 14,
   },
+  {
+    ts: 'GoldenRules',
+    go: 'GoldenRules',
+    goPath: 'internal/validation/golden_rules.go',
+    goAnchor: 'func (s *Store) GoldenRules(',
+    spaPath: 'frontend/app/src/lib/rulesApi.ts',
+    spaAnchor: 'export function getGoldenRules(',
+    e2eAnchor: 'export function getGoldenRules(',
+    floor: 6,
+  },
+  {
+    ts: 'GoldenVersion',
+    go: 'GoldenVersion',
+    goPath: 'internal/validation/golden_rules.go',
+    goAnchor: 'func (s *Store) GoldenRules(',
+    spaPath: 'frontend/app/src/lib/rulesApi.ts',
+    spaAnchor: 'export function getGoldenRules(',
+    e2eAnchor: 'export function getGoldenRules(',
+    floor: 5,
+  },
+  {
+    ts: 'GoldenRule',
+    go: 'GoldenRule',
+    goPath: 'internal/validation/golden_rules.go',
+    goAnchor: 'func (s *Store) GoldenRules(',
+    spaPath: 'frontend/app/src/lib/rulesApi.ts',
+    spaAnchor: 'export function getGoldenRules(',
+    e2eAnchor: 'export function getGoldenRules(',
+    floor: 7,
+  },
+  {
+    ts: 'CustomRule',
+    go: 'Rule',
+    goPath: 'internal/customrule/customrule.go',
+    goAnchor: 'func Key(',
+    spaPath: 'frontend/app/src/lib/rulesApi.ts',
+    spaAnchor: 'export async function listCustomRules(',
+    e2eAnchor: 'export async function listCustomRules(',
+    floor: 14,
+  },
 ] as const
 
 // AUDIT-10-07 — the message mirror.
@@ -490,6 +540,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'StatusChange',
       'HistoryCause',
       'CustomRuleCause',
+      'Demotion',
       'PendingInvite',
       'AuditEvent',
       'ExtractionCandidate',
@@ -517,6 +568,10 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'CheckMappingRequest',
       'CheckMapping',
       'Customer',
+      'GoldenRules',
+      'GoldenVersion',
+      'GoldenRule',
+      'CustomRule',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })

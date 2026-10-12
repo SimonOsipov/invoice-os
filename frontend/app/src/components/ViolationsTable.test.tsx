@@ -360,6 +360,15 @@ describe('ViolationsTable explain (ENGI-17-05)', () => {
     }
   })
 
+  it('violationsTable_customKeyReadsCustomRule', () => {
+    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    render(<ViolationsTable violations={[violation({ rule_key: key }), violation({ rule_key: 'buyer-tin-format' })]} ruleSetVersion={3} />)
+
+    const cell = screen.getByText('Custom rule')
+    expect(cell.getAttribute('title')).toBe(key)
+    expect(screen.getByText('buyer-tin-format').getAttribute('title')).toBe('buyer-tin-format')
+  })
+
   it('violationsTable_withoutOnExplainRendersNoExplain', () => {
     render(<ViolationsTable violations={rows} ruleSetVersion={3} explainOpen={violationKey(rows[0])} />)
 

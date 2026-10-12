@@ -31,6 +31,7 @@
 //   to EMPTY_BUCKET. Reuses entityHealth's own `clients.find` join rather than a second
 //   lookup convention.
 import type { AuthedFetch } from './portfolio'
+import { ruleKeyLabel } from './rulesApi'
 import type { DonutSeg } from '../types'
 import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
 
@@ -172,6 +173,7 @@ export function donutSegments(counts: Counts): DonutSeg[] {
 const RULE_KEY_ACRONYMS = new Set(['vat', 'tin', 'mbs', 'firs', 'irn', 'csid', 'ngn', 'ubl', 'xml', 'json', 'pdf', 'api', 'erp', 'id'])
 
 export function deslug(ruleKey: string): string {
+  if (ruleKey.startsWith('custom:')) return ruleKeyLabel(ruleKey)
   return ruleKey
     .split(/[-_\s]+/)
     .filter(Boolean)

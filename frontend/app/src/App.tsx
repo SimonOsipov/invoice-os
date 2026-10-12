@@ -81,16 +81,6 @@ import {
   type MembershipWire,
 } from './lib/members'
 import {
-  addSuggested,
-  customRulesFor,
-  customRulesKey,
-  removeCustom,
-  toggleCustom,
-  type CustomRule,
-  type CustomRuleStore,
-  type Suggestion,
-} from './lib/rules'
-import {
   addRole,
   createStaffedRole,
   deleteWorkflowRole,
@@ -452,15 +442,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
   // mapping survives navigating away from Settings and back.
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
-  // Custom validation rules, PER CLIENT (lib/rules.ts). Held here rather than in
-  // RulesView so a client's set survives navigating away and back, and so switching
-  // company genuinely swaps the set instead of carrying one client's rules over to
-  // the next. A client absent from the store has never been edited; only edited
-  // clients get an entry.
-  const [customRuleStore, setCustomRuleStore] = useState<CustomRuleStore>({})
   const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
-  const rulesKey = customRulesKey(active.entityId)
-  const customRules = customRulesFor(customRuleStore, rulesKey, session.handoff === true)
   // The tenant's approval policies — the `membersAsync` idiom below, verbatim except for
   // the mirror's guard. Per TENANT, so switching company does not swap the set.
   const policiesAsync = useAsync<Policy[]>(
@@ -1578,28 +1560,6 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     setOpenRuleKey(null)
   }
 
-  // All three custom-rule writers go through the same shape: resolve THIS client's
-  // list, run the pure reducer, store it back under this
-  // client's key. `rulesKey` is captured per render off `active`, so a write can
-  // never land on the company the switcher just left.
-  function updateCustomRules(fn: (rules: CustomRule[]) => CustomRule[]) {
-    setCustomRuleStore((store) => ({ ...store, [rulesKey]: fn(customRulesFor(store, rulesKey, session.handoff === true)) }))
-  }
-
-  function addSuggestedRule(s: Suggestion) {
-    updateCustomRules((rules) => addSuggested(rules, s))
-  }
-
-  function toggleCustomRule(key: string) {
-    updateCustomRules((rules) => toggleCustom(rules, key))
-  }
-
-  function removeCustomRule(key: string) {
-    updateCustomRules((rules) => removeCustom(rules, key))
-    // The drawer is showing the rule that just stopped existing.
-    setOpenRuleKey((k) => (k === key ? null : k))
-  }
-
   function openPolicy(id: string) {
     navigate('workflows', { id })
   }
@@ -1734,7 +1694,6 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     filing,
     filingError,
     handOffReading,
-    customRules,
     openRuleKey,
     policies,
     policiesState,
@@ -1811,9 +1770,6 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     saveConnectorMapping,
     openRule,
     closeRule,
-    addSuggestedRule,
-    toggleCustomRule,
-    removeCustomRule,
     openPolicy,
     closePolicy,
     createPolicy,

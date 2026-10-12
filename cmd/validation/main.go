@@ -60,6 +60,8 @@ func main() {
 	// the owner statement is the break-glass path.
 	app.Mux.HandleFunc("PATCH /v1/rules/{key}", validation.ToggleHandler())
 
+	app.Mux.HandleFunc("GET /v1/rules", validation.GoldenRulesHandler(store.GoldenRules, app.Logger))
+
 	// Staff routes: the platform admits only a rules-role caller.
 	app.Mux.HandleFunc("GET /v1/staff/rules", validation.StaffListRulesHandler(store.RulesOfVersion, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/rule-versions", validation.StaffVersionsHandler(store.Versions, app.Logger))

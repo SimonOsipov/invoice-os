@@ -17,6 +17,7 @@ paths:
 - Read the actor with `auth.StaffFromContext`.
 - Give a staff route an `exempt` verdict in `scRouteVerdicts`.
 - Keep `PATCH /v1/rules/{key}` as `ToggleHandler`.
+- Serve the golden set to customers through `GET /v1/rules`, in `db.WithinRequestTenantTx`.
 - Select a rule-set version only through `rule_set_version_for(date)`.
 - Publish a golden version from the Support Console desk (`POST /v1/staff/rule-versions/draft/publish`). It runs one `UPDATE` that sets `sealed`, `effective_from` and `published_at`.
 - Write rule content only through the `rule_draft_*` functions. Each has one Go caller, `internal/validation/staff_drafts.go`.

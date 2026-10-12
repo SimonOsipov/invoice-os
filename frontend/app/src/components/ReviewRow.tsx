@@ -67,6 +67,7 @@ import {
   verdictPill,
   type FixCard,
 } from '../lib/reviewBatch'
+import { ruleKeyLabel } from '../lib/rulesApi'
 import { severityStyle, violationKey, type LineTarget, type Violation } from '../lib/validationApi'
 import type { PlatformCtx } from '../types'
 import { ExplainPanel } from './ExplainPanel'
@@ -270,7 +271,7 @@ function FixCardView({
     <div data-testid="review-fix-card" style={{ border: `1px solid ${st.border}`, borderRadius: 'var(--radius-md)', padding: '12px 14px', background: 'var(--bg-2)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 7, flexWrap: 'wrap' }}>
         <span className="mono" style={{ background: st.bg, border: `1px solid ${st.border}`, borderRadius: 'var(--radius-sm)', padding: '2px 7px', fontSize: 9, fontWeight: 700, letterSpacing: '0.06em', color: st.text }}>{st.label}</span>
-        <span className="mono" style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)' }}>{card.ruleKey}</span>
+        <span className="mono" title={card.ruleKey} style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--fg-1)' }}>{ruleKeyLabel(card.ruleKey)}</span>
       </div>
       <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: '0 0 10px', lineHeight: 1.5 }}>{card.message}</p>
       {explainOpen && <div style={{ margin: '0 0 10px' }}>{explanation}</div>}

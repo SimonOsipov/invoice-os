@@ -197,6 +197,7 @@ func TestValidationMain_StaffRoutesAreRegisteredAndToggleStays(t *testing.T) {
 		return true
 	})
 	for pattern, want := range map[string]string{
+		"GET /v1/rules":                                    "validation.GoldenRulesHandler",
 		"PATCH /v1/rules/{key}":                            "validation.ToggleHandler",
 		"GET /v1/staff/rules":                              "validation.StaffListRulesHandler",
 		"PATCH /v1/staff/rules/{key}":                      "validation.StaffSwitchRuleHandler",

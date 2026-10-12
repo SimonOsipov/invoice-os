@@ -35,6 +35,7 @@ import {
   BUYER_TIN_MISSING,
   canResolveOutside,
   computedLineSum,
+  demotionSentence,
   DETAIL_SUBMIT_COPY,
   diffEditInput,
   diffLineItems,
@@ -47,6 +48,7 @@ import {
   invoiceStatusStyle,
   isBuyerTinMissing,
   keptAsIs,
+  latestDemotion,
   LINE_EDIT_FIELDS,
   LIVE_POLL_MS,
   newIdempotencyKey,
@@ -406,6 +408,7 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
     ) : null
     // keptAsIs has no status field to test; gate here since the mark means "kept as-is" only on a draft.
     const kept = inv.status === 'draft' ? keptAsIs(inv) : null
+    const demotion = latestDemotion(history.data ?? [], inv.status)
     // Unlike keptAsIs above, resolvedOutside self-gates on status === 'failed', so no
     // extra status check is needed here.
     const resolvedMark = resolvedOutside(inv)
@@ -1035,6 +1038,14 @@ function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: st
                   >
                     <div>{ROW_EXPANSION_COPY.keptPrefix}{kept.reason}</div>
                     <div className="mono" style={{ marginTop: 4, opacity: 0.85 }}>{actorLabel(kept.by).text} · {fmtDateTime(kept.at)}</div>
+                  </div>
+                )}
+                {demotion != null && (
+                  <div
+                    data-testid="detail-demotion-banner"
+                    style={{ padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', fontSize: 12.5, color: 'var(--status-amber-text)', lineHeight: 1.5 }}
+                  >
+                    {demotionSentence(demotion)}
                   </div>
                 )}
                 {verdict === 'stale' && (

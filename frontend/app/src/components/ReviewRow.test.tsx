@@ -1247,6 +1247,18 @@ describe('ReviewRow: the review prototype look (RESKIN2-04-04)', () => {
     expect(block.style.fontSize).toBe('10.5px')
   })
 
+  it('reviewRow_customKeyCardReadsCustomRule', async () => {
+    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    await renderOpen(failing({ violations: [{ ...ERR, rule_key: key }, { ...ERR, rule_key: 'vat-standard-rate', path: 'tax_total' }] }))
+    const cards = screen.getAllByTestId('review-fix-card')
+    expect(cards.length).toBeGreaterThan(0)
+    const keyCell = (c: HTMLElement) => c.firstElementChild?.lastElementChild as HTMLElement
+    const custom = cards.map(keyCell).find((e) => e.textContent === 'Custom rule')
+    expect(custom?.getAttribute('title')).toBe(key)
+    const golden = cards.map(keyCell).find((e) => e.textContent === 'vat-standard-rate')
+    expect(golden?.getAttribute('title')).toBe('vat-standard-rate')
+  })
+
   it('the section label sits 10px above the first card (margin plus flex gap)', async () => {
     await renderOpen(failing())
     const label = screen.getByTestId('review-row-expansion').querySelector('.label') as HTMLElement

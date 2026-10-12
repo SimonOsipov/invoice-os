@@ -164,6 +164,18 @@ describe('apiFetch reporting', () => {
     expect(reporter.mock.calls[0][0]).toMatchObject({ kind: 'malformed', status: 200, method: 'GET', url: URL_ })
   })
 
+  it('apiFetch_aNoBody204ResolvesUndefinedAndIsNotReported', async () => {
+    stubFetch(async () => new Response(null, { status: 204 }))
+    await expect(apiFetch(URL_, { method: 'DELETE' })).resolves.toBeUndefined()
+    await expect(apiFetch(URL_, { method: 'POST', responseType: 'text' })).resolves.toBeUndefined()
+    expect(reporter).toHaveBeenCalledTimes(0)
+    // On-path control: a bodyless 200 is still malformed and reported.
+    stubFetch(async () => new Response('', { status: 200 }))
+    const e = (await apiFetch(URL_).catch((x: unknown) => x)) as ApiError
+    expect(e.kind).toBe('malformed')
+    expect(reporter).toHaveBeenCalledTimes(1)
+  })
+
   it('reporterFailure_neverChangesTheCallersError', async () => {
     reporter.mockImplementation(() => {
       throw new Error('sdk broke')

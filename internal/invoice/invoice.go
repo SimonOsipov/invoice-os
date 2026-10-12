@@ -221,6 +221,13 @@ type CustomRuleCause struct {
 	Message      string `json:"message"`
 }
 
+// Demotion is a list row's re-check demotion: the latest history row's cause, set only while the invoice is a draft.
+type Demotion struct {
+	ChangedAt       time.Time        `json:"changed_at"`
+	Cause           *HistoryCause    `json:"cause"`
+	CustomRuleCause *CustomRuleCause `json:"custom_rule_cause"`
+}
+
 // HistoryCause is the rule-set version that caused a history row. EffectiveFrom is
 // YYYY-MM-DD, null for an undated version.
 type HistoryCause struct {

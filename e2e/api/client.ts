@@ -621,7 +621,7 @@ export interface Invoice {
 }
 
 // InvoiceListItem mirrors internal/invoice/handlers.go's listItem: Invoice embedded plus
-// FIVE additive siblings. `approval` sits here and NOT on Invoice because Go declares it
+// SIX additive siblings. `approval` sits here and NOT on Invoice because Go declares it
 // on listItem only -- getResponse does not carry it, so a GET-detail consumer reading it
 // off Invoice would get `undefined` where the type promised `InvoiceApproval | null`. Same
 // reason the POST/PATCH/transition responses (all plain Invoice) do not carry it.
@@ -629,7 +629,7 @@ export interface Invoice {
 // (BUG-12) ride BOTH wires, each from one gate call; the reject pair stays detail-only
 // (U5a). GetInvoiceResult keeps its OWN copy of the submit pair rather than inheriting:
 // both interfaces extend the bare Invoice, so there is nothing to inherit through.
-// All five are required, not optional: no omitempty on any Go field, so an invoice with
+// All of them are required, not optional: no omitempty on any Go field, so an invoice with
 // no run emits an explicit null (TestListItem_InvoiceKeysUnmovedAndUnrenamed,
 // TestListItem_ApproveFlagsCarryNoOmitempty, TestListHandler_NoActionFlagKeys).
 export interface InvoiceListItem extends Invoice {
@@ -638,6 +638,7 @@ export interface InvoiceListItem extends Invoice {
   approve_blocked_reason: string | null
   can_submit: boolean
   submit_blocked_reason: string | null
+  demotion: Demotion | null
 }
 
 // Mirrors approval.RowFacts (internal/approval/gate.go) key for key -- its six WIRE keys.
@@ -838,6 +839,13 @@ export interface HistoryCause {
   rule_set_version: number
   rule_set_version_id: string
   effective_from: string | null
+}
+
+// A list row's re-check demotion: the latest history row's cause, set only while the invoice is a draft.
+export interface Demotion {
+  changed_at: string
+  cause: HistoryCause | null
+  custom_rule_cause: CustomRuleCause | null
 }
 
 // getInvoiceHistory(): GET /v1/invoices/{id}/history (task-160/M4-22-01). The success
@@ -1642,6 +1650,39 @@ export function updateCustomRule(token: string, id: string, body: CustomRuleInpu
 export async function deleteCustomRule(token: string, id: string): Promise<number> {
   const res = await rawFetch(`/api/invoice/v1/custom-rules/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
   return res.status
+}
+
+// ---- golden rules: internal/validation GoldenRules, /api/validation/v1/rules ----
+
+export interface GoldenRule {
+  key: string
+  type: string
+  target: string
+  params: unknown
+  severity: 'error' | 'warning' | 'info'
+  when: string | null
+  message: string
+}
+
+export interface GoldenVersion {
+  rule_set_version_id: string
+  version: number
+  state: 'in_force' | 'scheduled' | 'superseded'
+  effective_from: string
+  rule_count: number
+}
+
+export interface GoldenRules {
+  today: string
+  versions: GoldenVersion[]
+  rule_set_version_id: string
+  version: number
+  effective_from: string
+  rules: GoldenRule[]
+}
+
+export function getGoldenRules(token: string): Promise<GoldenRules> {
+  return apiFetch<GoldenRules>(`${apiBase()}/api/validation/v1/rules`, { token })
 }
 
 // getAuditLog(): GET /v1/audit-log on the invoice binary — the workspace audit reader.

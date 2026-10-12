@@ -131,7 +131,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   }
 
   return (
-    // Two elements where RulesView.tsx:195 uses one, and the split is the whole point: the
+    // Two elements where RulesView uses one, and the split is the whole point: the
     // clearance above has to sit OUTSIDE the card's border. Inside it, opening a menu would
     // visibly grow the card by empty background; outside it, the menu simply
     // overhangs the card's bottom edge the way a dropdown is supposed to.
@@ -194,7 +194,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                 data-testid={pending ? 'invite-row' : 'member-row'}
                 // What makes `.pf-row`'s `cursor: pointer` (platform.css) honest — until
                 // now this was the app's only row that claimed to be clickable and was not.
-                // The InvoicesList.tsx:388-389 / RulesView.tsx:251 shape: `onClick` straight
+                // The InvoicesList / RulesView shape: `onClick` straight
                 // on the row div. No guard is needed against the `⋯` column — the trigger,
                 // the panel and every item already `stopPropagation` (MemberParts.tsx).
                 //

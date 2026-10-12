@@ -239,8 +239,12 @@ func TestStoreRowFacts_RulePendingIsConstantInPageSize(t *testing.T) {
 		ids[i] = seedInvoiceAtStatus(t, f.super, f.tenant, entities[i%3], "E15-03-CONST-"+uuid.NewString(), StatusValidated)
 	}
 
+	covered := map[string]bool{} // entities[1] holds the pending revision
+	for i, id := range ids {
+		covered[id] = i%3 == 1
+	}
 	store := NewStore(tracedApp)
-	for _, page := range [][]string{ids, ids[:1]} {
+	for _, page := range [][]string{ids, ids[1:2], ids[:3]} {
 		rec.reset()
 		_, gate, err := store.RowFacts(f.admin, page)
 		if err != nil {
@@ -249,11 +253,15 @@ func TestStoreRowFacts_RulePendingIsConstantInPageSize(t *testing.T) {
 		if n := len(rec.mentioning("custom_rule_revisions")); n != 1 {
 			t.Errorf("page of %d issued %d statements against custom_rule_revisions, want 1", len(page), n)
 		}
-		if got := gate.RulePending[ids[1]]; !got {
-			t.Errorf("page of %d: RulePending[%s] = false, want true -- the invoice on the covered entity", len(page), ids[1])
+		sawCovered := false
+		for _, id := range page {
+			sawCovered = sawCovered || covered[id]
+			if got := gate.RulePending[id]; got != covered[id] {
+				t.Errorf("page of %d: RulePending[%s] = %v, want %v", len(page), id, got, covered[id])
+			}
 		}
-		if gate.RulePending[ids[0]] || gate.RulePending[ids[2]] {
-			t.Errorf("page of %d: RulePending marks an uncovered entity's invoice", len(page))
+		if !sawCovered {
+			t.Fatalf("page of %d holds no covered invoice -- the marked leg cannot run", len(page))
 		}
 	}
 }

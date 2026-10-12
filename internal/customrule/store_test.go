@@ -1367,6 +1367,29 @@ func TestCustomRules_MalformedIdsAreRefusedLikeUnknownOnes(t *testing.T) {
 	}
 }
 
+func TestCustomRules_UrnAndBracedIdsAreRefusedNotA500(t *testing.T) {
+	super, app := dbTestPools(t)
+	ws := seedWorkspace(t, super, "customrule urn ids")
+	h := newMux(customrule.NewStore(app, (&fakeCheck{}).fn))
+	existing, _ := seedRule(t, super, ws.id, nil, "existing")
+
+	for _, id := range []string{"urn:uuid:" + existing, "{" + existing + "}"} {
+		for _, tc := range []struct {
+			method string
+			body   any
+		}{{http.MethodPut, input(nil, "x")}, {http.MethodDelete, nil}} {
+			rec := do(t, h, ws.admin, tc.method, "/v1/custom-rules/"+id, tc.body)
+			if rec.Code != http.StatusNotFound || errorBody(t, rec) != "custom rule not found" {
+				t.Errorf("%s /%s = %d %q, want 404 custom rule not found", tc.method, id, rec.Code, rec.Body.String())
+			}
+		}
+		bad := id
+		if rec := do(t, h, ws.admin, http.MethodPost, "/v1/custom-rules", input(&bad, "x")); rec.Code != http.StatusBadRequest || errorBody(t, rec) != entityMsg {
+			t.Errorf("create with entity_id %q = %d %q, want 400 %q", bad, rec.Code, rec.Body.String(), entityMsg)
+		}
+	}
+}
+
 func TestCustomRules_ForeignAndUnknownAnswerIdenticalBytesOverHTTP(t *testing.T) {
 	super, app := dbTestPools(t)
 	a := seedWorkspace(t, super, "customrule parity A")

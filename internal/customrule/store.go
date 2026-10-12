@@ -220,7 +220,7 @@ func guard(ctx context.Context, tx pgx.Tx, subject, id string, in RuleInput, del
 		}
 		return Rule{}, nil
 	}
-	if _, err := uuid.Parse(id); err != nil {
+	if !canonicalUUID(id) {
 		return Rule{}, ErrNotFound
 	}
 	var deleted bool
@@ -236,9 +236,16 @@ func guard(ctx context.Context, tx pgx.Tx, subject, id string, in RuleInput, del
 	return latest, err
 }
 
+// canonicalUUID is the 36-char form only: uuid.Parse also takes urn: and braced forms, which
+// Postgres refuses with 22P02.
+func canonicalUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil && len(s) == 36
+}
+
 // entityVisible answers InvalidError for an unknown id and for another tenant's (RLS hides it).
 func entityVisible(ctx context.Context, tx pgx.Tx, entityID string) error {
-	if _, err := uuid.Parse(entityID); err != nil {
+	if !canonicalUUID(entityID) {
 		return InvalidError{entityMsg}
 	}
 	var one int

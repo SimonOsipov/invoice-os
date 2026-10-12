@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
 import type { ImportBatch } from '../lib/importApi'
-import { reviewFooterSummary, TILE_CAPTION_VALID } from '../lib/reviewBatch'
+import { reviewFooterSummary, TILE_CAPTION_VALID, unvalidatedDraftNotice } from '../lib/reviewBatch'
 import type { PlatformCtx } from '../types'
 import { ReviewBatch } from './ReviewBatch'
 
@@ -926,5 +926,24 @@ describe('RESKIN2-04-03 D-18: the rejected surfaces wear the prototype title and
     const restart = screen.getByRole('button', { name: 'Choose another file' })
     expect(restart.style.background).toBe('')
     expect(restart.style.color).toBe('')
+  })
+})
+
+describe('ENGI-14-05: a draft left unvalidated by a twice-changed rule set', () => {
+  it('is not an unreadable row, and shows its own notice', async () => {
+    const run = [
+      batch({
+        filename: 'june.csv',
+        errors: [{ rows: [3, 4], invoice_id: 'inv-7', message: 'invoice created as a draft but not validated' }],
+      }),
+    ]
+    mockReviewFetchAll(run, TOTALS)
+    const { container } = render(<ReviewBatch ctx={reviewCtx(['b1'])} />)
+    await waitFor(() => expect(container.textContent ?? '').toContain(BATCH_ANCHOR))
+
+    expect(container.querySelector('[data-testid="review-unvalidated-drafts"]')?.textContent).toBe(unvalidatedDraftNotice(1))
+    const text = container.textContent ?? ''
+    expect(text).not.toContain('Unreadable rows')
+    expect(text).not.toContain('Nothing was stored')
   })
 })

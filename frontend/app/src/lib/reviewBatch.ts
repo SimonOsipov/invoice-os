@@ -274,6 +274,21 @@ export function isAlreadyImported(e: RowError): boolean {
   return e.rule_key != null
 }
 
+// A created draft the gate left unvalidated (rules changed twice during the import): the entry
+// names the invoice and carries no rule key. It exists, so it is not an unreadable row.
+export function isUnvalidatedDraft(e: RowError): boolean {
+  return e.invoice_id != null && !isAlreadyImported(e)
+}
+
+// The one sentence shown for those drafts; count is the number of invoices.
+export function unvalidatedDraftNotice(count: number): string {
+  return `${count === 1 ? '1 invoice was' : `${count} invoices were`} created as ${count === 1 ? 'a draft' : 'drafts'} but not checked, because the rules changed during the import. Validate ${count === 1 ? 'it' : 'them'} again.`
+}
+
+export function unvalidatedDraftCount(batches: Pick<ImportBatch, 'errors'>[]): number {
+  return batches.reduce((sum, b) => sum + b.errors.filter(isUnvalidatedDraft).length, 0)
+}
+
 // Row numbers come off the SHIPPED union reader rowErrorRows, never a local re-read of
 // the row/rows union -- two readers of one union is the drift hazard importReport.ts
 // already names. `rows:[5,6]` is therefore two entries, not one.
@@ -289,7 +304,7 @@ export function isAlreadyImported(e: RowError): boolean {
 // channelTilesAll both count off this expansion, so this one filter corrects both tiles.
 export function unreadableRows(errors: RowError[]): UnreadableRow[] {
   return errors
-    .filter((e) => !isAlreadyImported(e))
+    .filter((e) => !isAlreadyImported(e) && !isUnvalidatedDraft(e))
     .flatMap((e): UnreadableRow[] => {
       const column = e.field ?? '—'
       const rows = rowErrorRows(e)

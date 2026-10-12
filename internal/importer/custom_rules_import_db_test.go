@@ -135,7 +135,7 @@ func TestImport_DB_TwiceChangedInvoicesAreReportedNotValidated(t *testing.T) {
 	}
 	var named int
 	for _, e := range res.Errors {
-		if e.Message == unvalidatedMessage {
+		if e.Message == unvalidatedMessage && e.InvoiceID != "" && e.RuleKey == "" {
 			named++
 			if len(e.Rows) == 0 {
 				t.Errorf("unvalidated error names no rows: %+v", e)

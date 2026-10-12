@@ -260,6 +260,9 @@ type BatchOutcome struct {
 	WithViolations int
 	StampByID      map[string]Stamp
 	ByID           map[string][]Violation
+	// Unvalidated are the invoices whose rules changed twice during the batch: left as drafts, in
+	// neither Clean nor WithViolations nor the maps above.
+	Unvalidated []string
 }
 
 // ValidateBatch runs the gate over a batch of already-created invoices in ONE
@@ -328,7 +331,7 @@ func (g *Gate) ValidateBatch(ctx context.Context, invs []Invoice) (BatchOutcome,
 		return out, nil
 	}
 
-	// D27: re-evaluate the invoices a rule save overtook, once; a second change aborts.
+	// D27: re-evaluate the invoices a rule save overtook, once; a second change leaves the invoice a draft (Unvalidated).
 	items = items[:0]
 	for _, inv := range changed {
 		items = append(items, EvalItem{Ref: inv.ID, Invoice: inv})
@@ -337,8 +340,16 @@ func (g *Gate) ValidateBatch(ctx context.Context, invs []Invoice) (BatchOutcome,
 	if err != nil {
 		return BatchOutcome{}, err
 	}
+	if again.RuleSetVersion != 0 && (out.RuleSetVersion == 0 || again.RuleSetVersion < out.RuleSetVersion) {
+		out.RuleSetVersion = again.RuleSetVersion
+	}
 	for _, inv := range changed {
-		if err := record(inv, again); err != nil {
+		err := record(inv, again)
+		if errors.Is(err, ErrRulesChanged) {
+			out.Unvalidated = append(out.Unvalidated, inv.ID)
+			continue
+		}
+		if err != nil {
 			return BatchOutcome{}, fmt.Errorf("apply validation to invoice %s: %w", inv.ID, err)
 		}
 	}

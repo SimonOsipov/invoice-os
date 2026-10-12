@@ -557,16 +557,35 @@ func TestGate_DB_ValidateBatchReevaluatesOnceAndAborts(t *testing.T) {
 		}
 	}
 
-	f2 := newCRFixture(t, "ENGI-14-05 batch race twice")
-	c := f2.invoice(t, "ENGI-14-05-BC")
-	srv2 := start04Wrapped(t, f2.app, func(int) { f2.save(t, &f2.entity, "error", true, "race") }, nil)
-	if _, err := f2.gate(t, srv2).ValidateBatch(f2.member, []Invoice{c}); !errors.Is(err, ErrRulesChanged) {
-		t.Fatalf("second change: err = %v, want ErrRulesChanged", err)
+}
+
+func TestGate_DB_ValidateBatchSecondChangeLeavesThatInvoiceDraft(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-05 batch race twice")
+	c := f.invoice(t, "ENGI-14-05-BC")
+	other := f.otherEntity(t, "untouched client")
+	d, err := f.store.Create(f.member, gapiValidInvoiceInput(other, "ENGI-14-05-BD"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
 	}
-	if n := srv2.calls(); n != 2 {
+	srv := start04Wrapped(t, f.app, func(int) { f.save(t, &f.entity, "error", true, "race") }, nil)
+
+	out, err := f.gate(t, srv).ValidateBatch(f.member, []Invoice{c, d})
+	if err != nil {
+		t.Fatalf("ValidateBatch: %v, want no error: the other invoice was already stamped", err)
+	}
+	if n := srv.calls(); n != 2 {
 		t.Errorf("validation calls = %d, want 2", n)
 	}
-	f2.assertUntouched(t, c.ID)
+	if !reflect.DeepEqual(out.Unvalidated, []string{c.ID}) || out.Clean != 1 || out.WithViolations != 0 {
+		t.Errorf("outcome unvalidated/clean/with = %v/%d/%d, want [%s]/1/0", out.Unvalidated, out.Clean, out.WithViolations, c.ID)
+	}
+	if _, ok := out.StampByID[c.ID]; ok {
+		t.Errorf("the twice-changed invoice carries a stamp in the outcome")
+	}
+	f.assertUntouched(t, c.ID)
+	if s := f.status(t, d.ID); s != StatusValidated {
+		t.Errorf("untouched client's invoice = %q, want validated", s)
+	}
 }
 
 func TestApplyValidation_DB_RanRevisionNoLongerCurrentIsRefused(t *testing.T) {

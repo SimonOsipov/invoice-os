@@ -593,3 +593,74 @@ func TestHistoryHandler_CustomRuleCauseWireKeys(t *testing.T) {
 		t.Errorf("custom_rule_cause: genesis %s, demotion %s, want null then an object", rows[0]["custom_rule_cause"], rows[2]["custom_rule_cause"])
 	}
 }
+
+func TestHistory_RuleSetDemotionKeepsItsCauseAndHasNoCustomRuleCause(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-07 golden")
+	inv := f.invoice(t, "E14-07-GOLDEN")
+	versionID := seedRuleSetVersionID(t, f.super)
+	if _, err := f.super.Exec(context.Background(),
+		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, cause_rule_set_version_id)
+		 VALUES ($1, $2, 'validated', 'draft', 'revalidate-rule-set', $3)`, f.tenant, inv.ID, versionID); err != nil {
+		t.Fatalf("seed rule-set demotion: %v", err)
+	}
+	rows, err := f.store.History(f.member, inv.ID)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(rows) < 2 {
+		t.Fatalf("History returned %d rows, want the genesis and the demotion", len(rows))
+	}
+	last := rows[len(rows)-1]
+	if last.Cause == nil || last.Cause.RuleSetVersionID != versionID {
+		t.Errorf("rule-set demotion Cause = %+v, want version %s", last.Cause, versionID)
+	}
+	if last.CustomRuleCause != nil {
+		t.Errorf("rule-set demotion CustomRuleCause = %+v, want nil", last.CustomRuleCause)
+	}
+}
+
+func TestHistory_CustomRuleCauseSurvivesTheRuleBeingDeleted(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-07 deleted")
+	id, rule := f.demotedByRule(t, "E14-07-DEL")
+	if err := f.rules.Delete(f.admin, rule.ID); err != nil {
+		t.Fatalf("delete rule: %v", err)
+	}
+	rows, err := f.store.History(f.member, id)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	got := rows[len(rows)-1].CustomRuleCause
+	if got == nil || got.RevisionID != rule.RevisionID || got.Revision != 1 || got.Message != "email needed" || got.Key != customrule.Key(rule.ID) {
+		t.Errorf("after the delete CustomRuleCause = %+v, want revision 1 %s with the old message", got, rule.RevisionID)
+	}
+}
+
+func TestHistory_OtherTenantsRuleNeverAppearsOnThisHistory(t *testing.T) {
+	a := newCRFixture(t, "ENGI-14-07 iso A")
+	b := newCRFixture(t, "ENGI-14-07 iso B")
+	idA, ruleA := a.demotedByRule(t, "E14-07-ISO-A")
+	idB, ruleB := b.demotedByRule(t, "E14-07-ISO-B")
+	for _, c := range []struct {
+		f    crFixture
+		id   string
+		want customrule.Rule
+		not  customrule.Rule
+	}{{a, idA, ruleA, ruleB}, {b, idB, ruleB, ruleA}} {
+		rows, err := c.f.store.History(c.f.member, c.id)
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		got := rows[len(rows)-1].CustomRuleCause
+		if got == nil || got.RevisionID != c.want.RevisionID {
+			t.Errorf("CustomRuleCause = %+v, want revision %s", got, c.want.RevisionID)
+		}
+		for _, r := range rows {
+			if r.CustomRuleCause != nil && r.CustomRuleCause.RevisionID == c.not.RevisionID {
+				t.Errorf("the other tenant's revision %s leaked into this history", c.not.RevisionID)
+			}
+		}
+	}
+	if _, err := a.store.History(a.member, idB); err == nil {
+		t.Errorf("tenant A read tenant B's history")
+	}
+}

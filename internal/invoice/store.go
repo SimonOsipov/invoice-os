@@ -116,7 +116,7 @@ func scanLineItem(row scanner, li *LineItem) error {
 // which History populates after the scan and no column supplies.
 const historyColumns = `h.from_status, h.to_status, h.actor, h.changed_at`
 
-// historyCauseColumns come from the LEFT JOIN on the cause version; all NULL for a row with no cause.
+// historyCauseColumns come from the LEFT JOINs on the cause version and the custom-rule revision; each group is NULL when its cause is absent.
 const historyCauseColumns = `v.id::text, v.version, to_char(v.effective_from, 'YYYY-MM-DD'),
 	r.rule_id::text, r.revision, r.id::text, r.message`
 

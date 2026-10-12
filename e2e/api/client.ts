@@ -1652,6 +1652,39 @@ export async function deleteCustomRule(token: string, id: string): Promise<numbe
   return res.status
 }
 
+// ---- golden rules: internal/validation GoldenRules, /api/validation/v1/rules ----
+
+export interface GoldenRule {
+  key: string
+  type: string
+  target: string
+  params: unknown
+  severity: 'error' | 'warning' | 'info'
+  when: string | null
+  message: string
+}
+
+export interface GoldenVersion {
+  rule_set_version_id: string
+  version: number
+  state: 'in_force' | 'scheduled' | 'superseded'
+  effective_from: string
+  rule_count: number
+}
+
+export interface GoldenRules {
+  today: string
+  versions: GoldenVersion[]
+  rule_set_version_id: string
+  version: number
+  effective_from: string
+  rules: GoldenRule[]
+}
+
+export function getGoldenRules(token: string): Promise<GoldenRules> {
+  return apiFetch<GoldenRules>(`${apiBase()}/api/validation/v1/rules`, { token })
+}
+
 // getAuditLog(): GET /v1/audit-log on the invoice binary — the workspace audit reader.
 // `!== undefined` rather than truthiness, so q='' stays sendable and is not silently dropped.
 export function getAuditLog(token: string, query?: AuditLogQuery): Promise<AuditResponse> {

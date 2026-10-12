@@ -84,6 +84,9 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
     return fail(new ApiError('http', msg, res.status, responseBody))
   }
 
+  // A 204 has no body to parse (DELETE routes); T5 and T10 still bind the read below.
+  if (res.status === 204) return undefined as T
+
   // Stays below the !res.ok branch, and inside the try: T5 fails if it is hoisted, T10 if
   // it is moved out.
   try {

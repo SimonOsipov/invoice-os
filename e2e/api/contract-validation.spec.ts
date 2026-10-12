@@ -358,7 +358,7 @@ test.describe('custom rules (API E2E, over the deployed gateway)', () => {
 
   const input = (severity: 'error' | 'warning', message: string): CustomRuleInput => ({
     entity_id: entity.id,
-    type: 'format',
+    type: 'format/regex', // validation.TypeFormat
     target: 'invoice_number',
     params: { pattern: '^NEVER-MATCHES$' },
     severity,

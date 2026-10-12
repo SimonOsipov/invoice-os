@@ -1611,9 +1611,12 @@ export interface CustomRule {
   updated_by: string
 }
 
+// internal/validation/rule.go RuleType constants (TypeFormat is "format/regex").
+export type CustomRuleType = 'required' | 'format/regex' | 'enum' | 'range' | 'tax_math' | 'cross_field' | 'conditional' | 'date' | 'cel'
+
 export interface CustomRuleInput {
   entity_id: string | null
-  type: string
+  type: CustomRuleType
   target: string
   params: unknown
   severity: 'error' | 'warning'

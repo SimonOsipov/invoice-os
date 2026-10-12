@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -275,4 +276,15 @@ func TestAsk_RecordedLatencyIsTheLoggedLatencyOnAMovingClock(t *testing.T) {
 		t.Fatalf("LatencyMS = %d, want > 0", got.LatencyMS)
 	}
 	wantNum(t, oneLine(t, buf), "latency_ms", float64(got.LatencyMS))
+}
+
+func TestUsage_HasExactlyItsTwoFields(t *testing.T) {
+	typ := reflect.TypeOf(Usage{})
+	var got []string
+	for i := range typ.NumField() {
+		got = append(got, typ.Field(i).Name)
+	}
+	if want := []string{"InputTokens", "OutputTokens"}; !slices.Equal(got, want) {
+		t.Errorf("fields %v, want %v", got, want)
+	}
 }

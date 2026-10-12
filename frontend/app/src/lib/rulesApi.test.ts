@@ -222,6 +222,12 @@ describe('rulesApi', () => {
     for (const s of complete) expect(formError(s), JSON.stringify(s)).toBeNull()
   })
 
+  it('formError_countsTheMessageAfterTrimming', () => {
+    expect(formError(guided({ message: `${'x'.repeat(500)} ` }))).toBeNull()
+    expect(formError(guided({ message: ` ${'x'.repeat(501)} ` }))).toEqual(expect.any(String))
+    expect(guidedRuleInput(guided({ message: '  hi ' })).message).toBe('hi')
+  })
+
   it('checksFor_offersTheD6Checks', () => {
     expect(checksFor('text')).toEqual(['required', 'regex', 'enum'])
     expect(checksFor('code')).toEqual(['required', 'enum'])

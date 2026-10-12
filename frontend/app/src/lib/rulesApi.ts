@@ -212,7 +212,7 @@ export function guidedRuleInput(s: GuidedState): CustomRuleInput {
     params: guidedParams(s),
     severity: s.severity,
     when: null,
-    message: s.message,
+    message: s.message.trim(),
     enabled: true,
   }
 }
@@ -225,7 +225,7 @@ export function expressionRuleInput(s: ExpressionState): CustomRuleInput {
     params: { expr: s.expr },
     severity: s.severity,
     when: null,
-    message: s.message,
+    message: s.message.trim(),
     enabled: true,
   }
 }
@@ -275,8 +275,9 @@ export function guidedShapeOf(rule: Omit<CustomRuleInput, 'enabled'>): GuidedSta
 
 // The first reason the form cannot be saved, or null. The server accepts every one of these (P9).
 export function formError(s: GuidedState | ExpressionState): string | null {
-  if (s.message.trim() === '') return 'Enter a message.'
-  if ([...s.message].length > MESSAGE_MAX_RUNES) return `The message is limited to ${MESSAGE_MAX_RUNES} characters.`
+  const message = s.message.trim() // the server trims, then counts runes
+  if (message === '') return 'Enter a message.'
+  if ([...message].length > MESSAGE_MAX_RUNES) return `The message is limited to ${MESSAGE_MAX_RUNES} characters.`
   if ('expr' in s) return s.expr.trim() === '' ? 'Enter an expression.' : null
   switch (s.check) {
     case 'regex':

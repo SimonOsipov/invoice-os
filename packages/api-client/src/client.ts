@@ -38,7 +38,8 @@ export function gatewayBase(): string | null {
   return v || null
 }
 
-// Resolves parsed JSON — or the raw body under responseType:'text' — on 2xx; REJECTS with
+// Resolves parsed JSON — or the raw body under responseType:'text' — on 2xx; a 204 resolves
+// undefined, unreported (apiFetch_aNoBody204ResolvesUndefinedAndIsNotReported). REJECTS with
 // ApiError on network / non-2xx / malformed-body.
 export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<T> {
   const headers = new Headers()

@@ -547,13 +547,19 @@ func TestWait_ReturnsOnlyOnceTheRecordedRowIsPresent(t *testing.T) {
 	t1 := e.tenants(t, 1)[0]
 	logger, buf := newLogger()
 	rec := NewRecorder(e.app, logger)
+	rec.timeout = 4 * time.Second
 	c := fullCall(t1, uniquePurpose())
 
 	rec.Record(c)
+	start := time.Now()
 	rec.Wait()
+	waited := time.Since(start)
 
 	if n := e.total(t, c.Purpose); n != 1 {
 		t.Fatalf("%d rows right after Wait, want 1 (log: %v)", n, buf.lines(t))
+	}
+	if waited > 2*time.Second {
+		t.Errorf("Wait took %v after a finished write, want it to return as the write ends, well before the %v timeout", waited, rec.timeout)
 	}
 }
 

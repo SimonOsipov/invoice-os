@@ -312,29 +312,49 @@ func TestCall_RecordedLatencyIsTheLoggedLatencyOnAMovingClock(t *testing.T) {
 }
 
 func TestCall_ACtxDoneBeforeTheFirstRequestRecordsNothing(t *testing.T) {
-	run := func(withSink bool) (error, map[string]any, *sinkSpy, int32) {
-		srv, hits := statusServer(t, http.StatusOK)
-		c, buf, spy := loggedClient(t, srv.URL, withSink)
-		ctx, cancel := context.WithCancel(t1Ctx(t.Context()))
-		cancel()
-		_, err := c.Call(ctx, baseReq())
-		line := only(t, buf)
-		delete(line, "latency_ms")
-		delete(line, "time")
-		return err, line, spy, hits.Load()
+	cases := map[string]struct {
+		done func(context.Context) context.Context
+		want error
+	}{
+		"cancelled": {func(ctx context.Context) context.Context {
+			ctx, cancel := context.WithCancel(ctx)
+			cancel()
+			return ctx
+		}, context.Canceled},
+		"deadline passed": {func(ctx context.Context) context.Context {
+			ctx, cancel := context.WithDeadline(ctx, time.Unix(1, 0))
+			t.Cleanup(cancel)
+			return ctx
+		}, context.DeadlineExceeded},
 	}
-	err, l1, spy, hits := run(true)
-	plain, l2, _, _ := run(false)
-	if hits != 0 {
-		t.Errorf("stub saw %d requests, want 0", hits)
-	}
-	if n := len(spy.calls()); n != 0 {
-		t.Errorf("sink got %d calls, want 0: %+v", n, spy.calls())
-	}
-	if !errors.Is(err, context.Canceled) || plain == nil || err.Error() != plain.Error() {
-		t.Errorf("err %v differs from sink-less %v", err, plain)
-	}
-	if !reflect.DeepEqual(l1, l2) {
-		t.Errorf("log lines differ: %v vs %v", l1, l2)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			run := func(withSink bool) (error, map[string]any, *sinkSpy, int32) {
+				srv, hits := statusServer(t, http.StatusOK)
+				c, buf, spy := loggedClient(t, srv.URL, withSink)
+				_, err := c.Call(tc.done(t1Ctx(t.Context())), baseReq())
+				line := only(t, buf)
+				delete(line, "latency_ms")
+				delete(line, "time")
+				return err, line, spy, hits.Load()
+			}
+			err, l1, spy, hits := run(true)
+			plain, l2, _, _ := run(false)
+			if hits != 0 {
+				t.Errorf("stub saw %d requests, want 0", hits)
+			}
+			if n := len(spy.calls()); n != 0 {
+				t.Errorf("sink got %d calls, want 0: %+v", n, spy.calls())
+			}
+			if !errors.Is(err, tc.want) || plain == nil || err.Error() != plain.Error() {
+				t.Errorf("err %v differs from sink-less %v", err, plain)
+			}
+			if !reflect.DeepEqual(l1, l2) {
+				t.Errorf("log lines differ: %v vs %v", l1, l2)
+			}
+			if l1["attempts"] != float64(1) || l1["outcome"] != "unavailable" {
+				t.Errorf("log line attempts %v outcome %v, want 1 and unavailable", l1["attempts"], l1["outcome"])
+			}
+		})
 	}
 }

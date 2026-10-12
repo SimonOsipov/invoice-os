@@ -1930,18 +1930,19 @@ func isNewExtractWorkerCall(n ast.Node) bool {
 	return ok && wtCallName(call.Fun) == "newExtractWorker"
 }
 
-// TestSubmissionMain_WaitsForTheAICallRecorderBeforeThePoolCloses: `defer <recorder>.Wait()` sits after `defer pool.Close()`, so it runs first and no
-// in-flight row hits a closed pool.
+// TestSubmissionMain_WaitsForTheAICallRecorderBeforeThePoolCloses: a top-level `defer <recorder>.Wait()` sits after `defer pool.Close()`, so it runs first and no
+// in-flight row hits a closed pool. A defer in a nested func literal does not count.
 func TestSubmissionMain_WaitsForTheAICallRecorderBeforeThePoolCloses(t *testing.T) {
 	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse main.go: %v", err)
 	}
+	body := wtMainBody(t, f)
 	var recVar string
 	var closePos, waitPos token.Pos
 	var waits int
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch x := n.(type) {
+	for _, st := range body {
+		switch x := st.(type) {
 		case *ast.AssignStmt:
 			if len(x.Rhs) == 1 && len(x.Lhs) == 1 && isSelectorCall(x.Rhs[0], "aicalls", "NewRecorder") {
 				if id, ok := x.Lhs[0].(*ast.Ident); ok {
@@ -1957,8 +1958,7 @@ func TestSubmissionMain_WaitsForTheAICallRecorderBeforeThePoolCloses(t *testing.
 				waitPos = x.Pos()
 			}
 		}
-		return true
-	})
+	}
 	if recVar == "" || closePos == token.NoPos {
 		t.Fatalf("control: recorder var %q, defer pool.Close at %v -- the walk is broken", recVar, closePos)
 	}

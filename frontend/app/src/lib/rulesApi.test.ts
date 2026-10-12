@@ -191,6 +191,13 @@ describe('rulesApi', () => {
     expect(expressionRuleInput({ ...s, message: '  m ' }).message).toBe('m')
   })
 
+  it('formError_refusesMinGreaterThanMax', () => {
+    const range = { field: 'total', check: 'range' } as const
+    expect(formError(guided({ ...range, min: '500', max: '1000' }))).toBeNull()
+    expect(formError(guided({ ...range, min: '1000', max: '10' }))).toEqual(expect.any(String))
+    expect(formError(guided({ ...range, min: '10', max: '10' }))).toBeNull()
+  })
+
   it('formError_refusesIncompleteForms', () => {
     const range = { field: 'total', check: 'range' } as const
     const refused: GuidedState[] = [

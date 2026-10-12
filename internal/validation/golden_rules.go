@@ -91,8 +91,8 @@ SELECT v.id, v.version,
 		rr, err := tx.Query(ctx, `
 SELECT key, type, target, params, severity, "when", message
   FROM rules
- WHERE rule_set_version_id = rule_set_version_for($1::date) AND enabled
- ORDER BY key`, today)
+ WHERE rule_set_version_id = $1 AND enabled
+ ORDER BY key`, out.RuleSetVersionID)
 		if err != nil {
 			return fmt.Errorf("validation: read golden rules: %w", err)
 		}

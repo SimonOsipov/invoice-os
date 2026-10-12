@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -443,5 +445,66 @@ func TestGoldenRules_DB_WhenSurvivesForAVersionThatHasOne(t *testing.T) {
 		if !ok || (r.When == nil) != (w == nil) || (w != nil && *r.When != *w) {
 			t.Errorf("rule %s when = %v, want %v (listed in the version: %t)", r.Key, r.When, w, ok)
 		}
+	}
+}
+
+type sqlTrace struct {
+	mu   sync.Mutex
+	sqls []string
+	args [][]any
+}
+
+func (s *sqlTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sqls = append(s.sqls, d.SQL)
+	s.args = append(s.args, d.Args)
+	return ctx
+}
+
+func (*sqlTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// The rules statement binds the id the header read, so a version published between the two
+// statements cannot give a vN header with vN+1 rules.
+func TestGoldenRules_DB_RulesAreBoundToTheHeadersVersion(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := seedGoldenMember(t, super, goldenTenantOkafor, "admin", "active")
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &sqlTrace{}
+	cfg.ConnConfig.Tracer = tr
+	app, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+
+	got := mustReadGolden(t, ctx, app)
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	found := false
+	for i, q := range tr.sqls {
+		if !strings.Contains(q, "FROM rules\n WHERE") {
+			continue
+		}
+		found = true
+		if strings.Contains(q, "rule_set_version_for") {
+			t.Errorf("rules statement re-resolves the version in force: %s", q)
+		}
+		bound := false
+		for _, a := range tr.args[i] {
+			if id, ok := a.(uuid.UUID); ok && id.String() == got.RuleSetVersionID {
+				bound = true
+			}
+		}
+		if !bound {
+			t.Errorf("rules statement args = %v, want the header's version %s", tr.args[i], got.RuleSetVersionID)
+		}
+	}
+	if !found {
+		t.Fatal("rules statement not seen")
 	}
 }

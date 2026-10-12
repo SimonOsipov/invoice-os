@@ -3778,7 +3778,7 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       // same submitGate call the detail wire already used.
       'can_submit',
       'submit_blocked_reason',
-      // ENGI-15-04: +1 -- demotion is a list-only listItem sibling.
+      // +1 -- demotion is a list-only listItem sibling.
       'demotion',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).

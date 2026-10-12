@@ -417,7 +417,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
     })
   })
 
-  // A pending custom revision turns Submit off on the list (ENGI-15 D10). The tick marks the revision
+  // A pending custom revision turns Submit off on the list. The tick marks the revision
   // after 5 minutes and flips the gate back; the read below follows the save within a second.
   test.describe('a pending rule change', () => {
     let ruleId: string | null = null

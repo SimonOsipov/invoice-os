@@ -287,7 +287,9 @@ export function formError(s: GuidedState | ExpressionState): string | null {
     case 'range': {
       const bounds = [s.min, s.max].filter((b) => b.trim() !== '')
       if (bounds.length === 0) return 'Enter a minimum, a maximum or both.'
-      return bounds.some((b) => !Number.isFinite(Number(b))) ? 'Bounds must be numbers.' : null
+      if (bounds.some((b) => !Number.isFinite(Number(b)))) return 'Bounds must be numbers.'
+      if (bounds.length === 2 && Number(s.min) > Number(s.max)) return 'The minimum cannot be greater than the maximum.'
+      return null
     }
     default:
       return null

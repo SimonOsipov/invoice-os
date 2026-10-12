@@ -754,7 +754,7 @@ test('register-disclosure: a blocked draft and a clean draft render differently'
 
 // D17 fixture checks: no deployed spec can produce a demotion (a version cannot be published in
 // topology, and a custom re-check waits for a 5-minute tick), so page.route patches one real response.
-// These pin the layout of ENGI-15's marker and banner, not the server's demotion contract.
+// These pin the layout of the marker and banner, not the server's demotion contract.
 const FIXTURE_DEMOTION = {
   rule_set_version: 99,
   rule_set_version_id: '00000000-0000-4000-8000-000000000099',

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 )
 
@@ -182,8 +183,22 @@ func TestExplainTarget_HeaderPaths(t *testing.T) {
 	}
 }
 
+func TestExplainTarget_NrsHeaderAndLineFieldsHaveAFix(t *testing.T) {
+	for _, tc := range []struct {
+		path, field string
+		line        int
+	}{
+		{"due_date", "due_date", 0}, {"buyer.state", "buyer_state", 0}, {"line_items[2].hsn_code", "hsn_code", 2},
+	} {
+		field, line, ok := explainTarget(tc.path, 3, "")
+		if !ok || field != tc.field || line != tc.line {
+			t.Errorf("%s: got (%q, %d, %v), want (%q, %d, true)", tc.path, field, line, ok, tc.field, tc.line)
+		}
+	}
+}
+
 func TestExplainTarget_NonEditHeaderHasNoFix(t *testing.T) {
-	for _, path := range []string{"invoice_number", "due_date", "buyer.state"} {
+	for _, path := range []string{"invoice_number", "tax_subtotals[1].tax_category"} {
 		if _, _, ok := explainTarget(path, 2, ""); ok {
 			t.Errorf("%s: want no target", path)
 		}
@@ -194,8 +209,8 @@ func TestExplainTarget_LineFieldPath(t *testing.T) {
 	if f, n, ok := explainTarget("line_items[2].unit_price", 3, ""); !ok || f != "unit_price" || n != 2 {
 		t.Errorf("got (%q, %d, %v)", f, n, ok)
 	}
-	if _, _, ok := explainTarget("line_items[2].hsn_code", 3, "unit_price"); ok {
-		t.Error("hsn_code is not an Edit line field")
+	if _, _, ok := explainTarget("line_items[2].bogus", 3, "unit_price"); ok {
+		t.Error("bogus is not an Edit line field")
 	}
 }
 
@@ -203,7 +218,7 @@ func TestExplainTarget_BareLineUsesModelField(t *testing.T) {
 	if f, n, ok := explainTarget("line_items[2]", 3, "unit_price"); !ok || f != "unit_price" || n != 2 {
 		t.Errorf("got (%q, %d, %v)", f, n, ok)
 	}
-	for _, model := range []string{"hsn_code", "", "buyer_tin"} {
+	for _, model := range []string{"hsn_code", "tax_percent", "base_quantity", "", "buyer_tin"} {
 		if _, _, ok := explainTarget("line_items[2]", 3, model); ok {
 			t.Errorf("model field %q: want no target", model)
 		}
@@ -380,6 +395,58 @@ func TestGuardExplanation_BlankIdentityValueIsNotInvented(t *testing.T) {
 		got := guardExplanation(Violation{Message: "m", Path: tc.path}, payload, explainAnswer("Why.", tc.field, tc.value))
 		if got.Status != "ok" || got.Explanation == nil || (got.Fix != nil) != tc.wantFix {
 			t.Errorf("%s (blank supplier %v): status %s, fix %v, want fix %v with the explanation kept", tc.path, tc.blankSupplier, got.Status, got.Fix, tc.wantFix)
+		}
+	}
+}
+
+func TestGuardExplanation_PartyContactAndAddressGetNoFix(t *testing.T) {
+	for _, tc := range []struct{ path, field, value string }{
+		{"supplier.email", "supplier_email", "billing@acme.example"},
+		{"buyer.street", "buyer_street", "1 Marina Road"},
+		{"supplier.telephone", "supplier_telephone", "+2348012345678"},
+		{"buyer.postal_zone", "buyer_postal_zone", "100001"},
+		{"supplier.city", "supplier_city", "Abuja"},
+		{"buyer.email", "buyer_email", "ap@buyer.example"},
+	} {
+		payload := explainPayload()
+		payload["buyer"] = map[string]any{"street": "Old Road"}
+		got := guardExplanation(Violation{Message: "m", Path: tc.path}, payload, explainAnswer("Why.", tc.field, tc.value))
+		if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {
+			t.Errorf("%s: status %s, fix %v, want the explanation kept and no fix", tc.path, got.Status, got.Fix)
+		}
+	}
+}
+
+func TestGuardExplanation_CodeValueIsNoFix(t *testing.T) {
+	got := guardExplanation(Violation{Message: "m", Path: "buyer.state"}, explainPayload(), explainAnswer("Why.", "state", "Lagos"))
+	if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {
+		t.Errorf("got %+v, want the explanation kept and no fix", got)
+	}
+}
+
+func TestGuardExplanation_PercentIsComparedAsADecimal(t *testing.T) {
+	payload := map[string]any{"line_items": []any{map[string]any{"tax_percent": json.Number("7.50")}}}
+	v := Violation{Message: "m", Path: "line_items[1].tax_percent"}
+	if got := guardExplanation(v, payload, explainAnswer("Why.", nil, "7.5")); got.Fix != nil {
+		t.Errorf("7.5 equals the stored 7.50: want no fix, got %+v", got.Fix)
+	}
+	if got := guardExplanation(v, payload, explainAnswer("Why.", nil, "5")); got.Fix == nil || got.Fix.Value != "5" {
+		t.Errorf("5 differs from 7.50: want a fix, got %+v", got.Fix)
+	}
+}
+
+func TestExplainValueOK_PercentAndTime(t *testing.T) {
+	for _, tc := range []struct {
+		typ   invoicefields.Type
+		value string
+		want  bool
+	}{
+		{invoicefields.Percent, "7.5", true}, {invoicefields.Percent, "7.5%", false},
+		{invoicefields.Time, "09:05:00", true}, {invoicefields.Time, "9:05", false},
+		{invoicefields.Code, "NG-LA", false},
+	} {
+		if got := explainValueOK(tc.typ, tc.value); got != tc.want {
+			t.Errorf("%s %q: got %v, want %v", tc.typ, tc.value, got, tc.want)
 		}
 	}
 }

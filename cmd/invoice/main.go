@@ -88,6 +88,9 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/ubl", invoice.UBLHandler(store.Get, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices", invoice.ListHandler(store.List, store.RowFacts, app.Logger))
 
+	// /v1/code-lists/{list} -- NRS code search; reached as /api/invoice/v1/code-lists/{list}.
+	app.Mux.HandleFunc("GET /v1/code-lists/{list}", invoice.CodeSearchHandler(store.SearchCodes, app.Logger))
+
 	// /v1/customers -- the workspace buyer directory; reached as /api/invoice/v1/customers.
 	customerStore := customer.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/customers", customer.ListHandler(customerStore.List, app.Logger))

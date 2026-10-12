@@ -298,3 +298,51 @@ func TestNRSInvoiceHTTP_NULInTextIs400AndWritesNothing(t *testing.T) {
 		}
 	}
 }
+
+// An id-less entry that names an NRS key (null included) is written as sent; one that names none
+// still takes the NRS values of the stored line with equal legacy content.
+func TestEditHandler_IdLessEntryNamingNRSKeysIsWrittenAsSent(t *testing.T) {
+	f := newNRSFixture(t, "NRS-SENT")
+	h := nrsHTTP{f}
+	id := f.postOneLine(t, h, "NRS-SENT-1")
+
+	entry := map[string]any{"description": "Widget", "quantity": "1", "unit_price": "100.00", "line_total": "100.00", "line_tax": "7.50"}
+	for _, k := range nrsLineKeys {
+		entry[k] = nil
+	}
+	if code, m := h.patch(t, f.c, id, mustJSON(t, map[string]any{"line_items": []any{entry}})); code != http.StatusOK {
+		t.Fatalf("PATCH = %d %s", code, m["error"])
+	}
+	if got := f.get2(t, f.c, id).LineItems[0].HSNCode; got != nil {
+		t.Errorf("hsn_code = %q, want null: the entry named the NRS keys", *got)
+	}
+}
+
+func TestEditHandler_IdLessEntryWithoutNRSKeysKeepsTheCarry(t *testing.T) {
+	f := newNRSFixture(t, "NRS-CARRY")
+	h := nrsHTTP{f}
+	id := f.postOneLine(t, h, "NRS-CARRY-1")
+
+	entry := map[string]any{"description": "Widget", "quantity": "1", "unit_price": "100.00", "line_total": "100.00", "line_tax": "7.50"}
+	if code, m := h.patch(t, f.c, id, mustJSON(t, map[string]any{"line_items": []any{entry}})); code != http.StatusOK {
+		t.Fatalf("PATCH = %d %s", code, m["error"])
+	}
+	if got := f.get2(t, f.c, id).LineItems[0].HSNCode; got == nil || *got != "1001" {
+		t.Errorf("hsn_code = %v, want 1001 carried", got)
+	}
+}
+
+func (f nrsFixture) postOneLine(t *testing.T, h nrsHTTP, number string) string {
+	t.Helper()
+	body := map[string]any{
+		"entity_id": f.entityID, "invoice_number": number,
+		"line_items": []any{map[string]any{
+			"description": "Widget", "quantity": "1", "unit_price": "100.00", "line_total": "100.00", "line_tax": "7.50", "hsn_code": "1001",
+		}},
+	}
+	code, m := h.post(t, mustJSON(t, body))
+	if code != http.StatusCreated {
+		t.Fatalf("POST = %d %s", code, m["error"])
+	}
+	return str(t, m["id"])
+}

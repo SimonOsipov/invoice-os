@@ -33,6 +33,11 @@ describe('explain', () => {
     expect(p).not.toHaveProperty('line_items')
   })
 
+  it('fixPatch_headerDateFixIsRfc3339', () => {
+    const p = fixPatch([line(1, 'a')], { field: 'due_date', label: 'Due date', line: null, current: null, value: '2027-02-01' })
+    expect(p).toEqual({ due_date: '2027-02-01T00:00:00Z' })
+  })
+
   it('fixPatch_lineFixKeepsEveryOtherLine', () => {
     const lines = [line(3, 'c'), line(1, 'a'), line(2, 'b', { unit_price: '-5.00' })]
     const p = fixPatch(lines, lineFix(2))

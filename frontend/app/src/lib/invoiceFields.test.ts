@@ -2,8 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { CANON } from '../data'
 import type { Draft } from '../types'
 import { HEADER_FIELDS } from './extractionReview'
-import { EDIT_FIELD_KEYS, type InvoiceEditInput } from './invoices'
+import { DRAFT_NRS_BLANK } from './clients'
+import { EDIT_FIELD_KEYS, LINE_EDIT_FIELDS, type InvoiceEditInput } from './invoices'
 import { labelOf, type ImportKey } from './invoiceFields'
+
+const NRS_HEADER_KEYS = [
+  'invoice_kind', 'tax_currency_code', 'due_date', 'issue_time', 'tax_point_date', 'payment_status',
+  'supplier_email', 'supplier_telephone', 'supplier_street', 'supplier_city', 'supplier_postal_zone', 'supplier_country',
+  'supplier_state', 'supplier_lga', 'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city',
+  'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+]
 
 describe('invoiceFields', () => {
   it('labelOf reads the label of a header and a line field', () => {
@@ -37,16 +45,20 @@ describe('invoiceFields', () => {
     expect(bad).toBeTruthy()
   })
 
-  it('Draft is the five form keys plus items', () => {
-    const ok: Draft = { number: '', buyer: '', buyerTin: '', date: '', currency: '', items: [] }
-    // @ts-expect-error buyerTin missing
-    const missing: Draft = { number: '', buyer: '', date: '', currency: '', items: [] }
+  it('Draft is the five form keys, the twenty-two NRS header keys, plus items', () => {
+    const ok: Draft = { number: '', buyer: '', buyerTin: '', date: '', currency: '', ...DRAFT_NRS_BLANK, items: [] }
+    const { invoice_kind: _kind, ...withoutKind } = DRAFT_NRS_BLANK
+    // @ts-expect-error invoice_kind missing
+    const missing: Draft = { number: '', buyer: '', buyerTin: '', date: '', currency: '', ...withoutKind, items: [] }
     // @ts-expect-error supplier_tin is not a Draft key
-    const extra: Draft = { number: '', buyer: '', buyerTin: '', date: '', currency: '', items: [], supplier_tin: '' }
-    expect([ok, missing, extra]).toHaveLength(3)
+    const extra: Draft = { number: '', buyer: '', buyerTin: '', date: '', currency: '', ...DRAFT_NRS_BLANK, items: [], supplier_tin: '' }
+    // @ts-expect-error a bare LineItem lacks the eight NRS line keys
+    const bareLine: Draft = { ...ok, items: [{ desc: 'x', qty: 1, price: 1 }] }
+    expect([ok, missing, extra, bareLine]).toHaveLength(4)
+    expect(Object.keys(DRAFT_NRS_BLANK)).toStrictEqual(NRS_HEADER_KEYS)
   })
 
-  it('EDIT_FIELD_KEYS is the nine editable header fields in order', () => {
+  it('EDIT_FIELD_KEYS is the nine legacy then the twenty-two NRS header fields in order', () => {
     expect(EDIT_FIELD_KEYS).toStrictEqual([
       'issue_date',
       'supplier_tin',
@@ -57,8 +69,17 @@ describe('invoiceFields', () => {
       'subtotal',
       'vat',
       'total',
+      ...NRS_HEADER_KEYS,
     ])
     expect(EDIT_FIELD_KEYS).not.toContain('invoice_number')
+  })
+
+  it('LINE_EDIT_FIELDS is the five legacy then the nine NRS line fields', () => {
+    expect(LINE_EDIT_FIELDS).toStrictEqual([
+      'description', 'quantity', 'unit_price', 'line_total', 'line_tax',
+      'tax_category', 'hsn_code', 'isic_code', 'product_category', 'service_category',
+      'sellers_item_identification', 'price_unit', 'tax_percent', 'base_quantity',
+    ])
   })
 
   it('InvoiceEditInput takes the edit keys and the number, not a line key', () => {

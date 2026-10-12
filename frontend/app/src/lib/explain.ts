@@ -1,4 +1,4 @@
-import type { InvoiceEditInput, InvoiceLineItem, LineItemEditInput } from './invoices'
+import { editValueToWire, type EditFieldKey, type InvoiceEditInput, type InvoiceLineItem, type LineItemEditInput } from './invoices'
 import type { AuthedFetch } from './portfolio'
 import { EXPLAIN_LABEL, type Violation } from './validationApi'
 
@@ -31,7 +31,10 @@ export function explainViolation(
 
 // A line fix resends every line (with its id) so the PATCH replaces nothing it did not mean to.
 export function fixPatch(lines: readonly InvoiceLineItem[], fix: ExplainFix): InvoiceEditInput | null {
-  if (fix.line === null) return { [fix.field]: fix.value } as InvoiceEditInput
+  if (fix.line === null) {
+    const wire = editValueToWire(fix.field as EditFieldKey, fix.value)
+    return (wire === undefined ? {} : { [fix.field]: wire }) as InvoiceEditInput
+  }
   if (!lines.some((l) => l.line_no === fix.line)) return null
   const line_items = [...lines]
     .sort((a, b) => a.line_no - b.line_no)

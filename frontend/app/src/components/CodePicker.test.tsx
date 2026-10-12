@@ -95,8 +95,41 @@ describe('CodePicker', () => {
     fireEvent.change(input, { target: { value: 'Lagos' } })
     await act(async () => void vi.advanceTimersByTime(250))
     fireEvent.blur(input)
+    await flush()
     expect(input.value).toBe('NG-AB')
     expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('codePicker_blurWithinDebounceCommitsAnExactCode', async () => {
+    const fetch = vi.fn().mockResolvedValue({ codes: [lagos] })
+    const { input, onChange } = mount(fetch)
+    fireEvent.change(input, { target: { value: 'NG-LA' } })
+    fireEvent.blur(input)
+    await flush()
+    expect(qOf(fetch, 0)).toBe('NG-LA')
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('NG-LA')
+    expect(input.value).toBe('NG-LA')
+  })
+
+  it('codePicker_blurWithinDebounceRevertsANonCode', async () => {
+    const fetch = vi.fn().mockResolvedValue({ codes: [lagos] })
+    const { input, onChange } = mount(fetch, 'NG-AB')
+    fireEvent.change(input, { target: { value: 'Lag' } })
+    fireEvent.blur(input)
+    await flush()
+    expect(input.value).toBe('NG-AB')
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('codePicker_blurWithAFailedSearchReverts', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { input, onChange } = mount(vi.fn().mockRejectedValue(new Error('boom')), 'NG-AB')
+    fireEvent.change(input, { target: { value: 'NG-LA' } })
+    fireEvent.blur(input)
+    await flush()
+    expect(input.value).toBe('NG-AB')
+    expect(onChange).not.toHaveBeenCalled()
+    expect(err).not.toHaveBeenCalled()
   })
 
   it('codePicker_blankCommitsBlank', () => {

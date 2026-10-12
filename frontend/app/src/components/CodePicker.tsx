@@ -49,7 +49,13 @@ export function CodePicker({ list, authedFetch, value, onChange, onPick, disable
     onPick?.(entry)
   }
 
-  async function run(q: string) {
+  function revert() {
+    setText(valueRef.current)
+    textRef.current = valueRef.current
+  }
+
+  // Blur with uncommitted text searches at once, so a fast paste then Tab still commits an exact code.
+  async function run(q: string, revertUnmatched = false) {
     const id = ++seq.current
     const base = gatewayBase()
     try {
@@ -60,8 +66,11 @@ export function CodePicker({ list, authedFetch, value, onChange, onPick, disable
       setNotice(codes.length > 0 ? '' : q === '' ? UNAVAILABLE : NO_MATCH)
       const hit = commitCode(textRef.current, codes)
       if (hit) commit(hit)
+      else if (revertUnmatched) revert()
     } catch {
-      if (id === seq.current) setNotice(UNAVAILABLE)
+      if (id !== seq.current) return
+      setNotice(UNAVAILABLE)
+      if (revertUnmatched) revert()
     }
   }
 
@@ -90,8 +99,7 @@ export function CodePicker({ list, authedFetch, value, onChange, onPick, disable
       setText('')
       textRef.current = ''
     } else if (text !== valueRef.current) {
-      setText(valueRef.current)
-      textRef.current = valueRef.current
+      void run(text.trim(), true)
     }
   }
 

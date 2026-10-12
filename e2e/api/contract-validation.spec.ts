@@ -481,7 +481,8 @@ test.describe('golden rules for members (API E2E, over the deployed gateway)', (
     const invoice = await createInvoice(token, {
       entity_id: entity.id,
       invoice_number: `INV-GR-${tin}`,
-      issue_date: '2026-01-01T00:00:00Z',
+      // Today (UTC): the version in force is picked by issue date, and the rail reads it as of today.
+      issue_date: `${new Date().toISOString().slice(0, 10)}T00:00:00Z`,
       supplier_tin: freshTin(),
       supplier_name: 'Acme Nigeria Ltd',
       buyer_tin: '87654321-0002',

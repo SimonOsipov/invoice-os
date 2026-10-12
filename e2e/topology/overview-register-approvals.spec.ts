@@ -20,6 +20,7 @@ const VIOLATIONS = [
   { rule_key: 'no-duplicate-invoice-number', invoices: 12345 }, // longest seeded key: ruleKeyDuplicateInvoiceNumber, internal/importer/service.go
   { rule_key: 'buyer-tin-format', invoices: 3 },
   { rule_key: 'vat-standard-rate', invoices: 1 },
+  { rule_key: 'custom:3f2a0000-0000-4000-8000-000000000001', invoices: 2 }, // the key cell draws "Custom rule"
 ]
 const APPROVALS_LOADING = 'Loading approvals…' // APPROVALS_COPY.loading, frontend/app/src/lib/approvals.ts
 
@@ -446,8 +447,10 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
   const sentence = needs.locator('p')
   const needsCta = needs.getByRole('button')
   const edges = [page.locator('.pf-dash-row-b > div:nth-child(2)'), page.locator('.pf-dash-row-c > div:nth-child(2)'), page.locator('.pf-grid-2 > div:nth-child(2)')]
-  const failureKeys = VIOLATIONS.map((v) => page.locator('.pf-dash-row-c').getByText(v.rule_key, { exact: true }))
+  // The key cell carries the raw key as its title; a custom key's text is the label "Custom rule".
+  const failureKeys = VIOLATIONS.map((v) => page.locator('.pf-dash-row-c').locator(`[title="${v.rule_key}"]`))
   for (const key of failureKeys) await expect(key, 'the injected failure row drew').toBeVisible()
+  await expect(failureKeys[VIOLATIONS.length - 1], 'a custom key reads as "Custom rule"').toHaveText('Custom rule')
 
   const widths = await atWidths(page, 'overview tiles', async () => {
     const problems: string[] = []
@@ -481,6 +484,7 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
         return { lines: tops.size, clipped: el.scrollWidth > el.clientWidth }
       })
       if (lines !== 1) problems.push(`failure key ${i} draws on ${lines} lines`)
+      if (VIOLATIONS[i].rule_key.startsWith('custom:') && clipped) problems.push(`the Custom rule label is clipped in its key cell (failure key ${i})`)
       const count = await cells.last().evaluate((el) => el.scrollWidth - el.clientWidth)
       if (count > 1) problems.push(`failure count ${i} overflows its cell by ${count}px`)
       rects[`failure row ${i}`] = { row: rowBox, cells: cellBoxes, lines, clipped, countOverflow: count }

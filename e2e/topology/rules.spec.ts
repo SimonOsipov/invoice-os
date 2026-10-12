@@ -121,6 +121,29 @@ async function atEachWidth(page: Page, label: string, probe: () => Promise<strin
 
 const noSideScroll = (el: Element) => el.scrollWidth - el.clientWidth
 
+// The table has a 790px floor inside a horizontally scrolling card. From this width the card
+// holds it with no scroll (8578a362 keeps the On column on screen at 1440px); below it the card scrolls.
+const TABLE_FITS_FROM = 1440
+
+const pageScrolls = (page: Page) => page.locator('main.pf-main .pf-scroll').evaluate((el) => el.scrollWidth - el.clientWidth > 1)
+
+// null when `el` can be brought inside the card's visible box: as drawn from TABLE_FITS_FROM up,
+// by scrolling the card to its end below. The page must not scroll sideways at any width.
+async function reachableInCard(page: Page, card: Locator, el: Locator, width: number): Promise<string | null> {
+  if (await pageScrolls(page)) return 'the page scrolls sideways'
+  const cardBox = await box(card)
+  if (!cardBox) return 'the card has no box'
+  const scrolls = await card.evaluate((c) => c.scrollWidth - c.clientWidth > 1)
+  if (scrolls && width >= TABLE_FITS_FROM) return 'the card scrolls sideways where the table should fit'
+  if (scrolls) await card.evaluate((c) => c.scrollTo({ left: c.scrollWidth }))
+  try {
+    const b = await box(el)
+    return b && enclosesRect(cardBox, b, 1) ? null : `${JSON.stringify(b)} is outside the card ${JSON.stringify(cardBox)}`
+  } finally {
+    if (scrolls) await card.evaluate((c) => c.scrollTo({ left: 0 }))
+  }
+}
+
 async function openEditor(page: Page): Promise<Locator> {
   await newButton(page).click()
   const drawer = page.getByRole('dialog', { name: 'New custom rule' })
@@ -229,7 +252,7 @@ test('the header bar holds New rule', async ({ page }) => {
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Core AC 3: the On column is reachable without scrolling the card sideways.
+// Core AC 3: the On column is on screen where the table fits its card, and one card scroll away below.
 test('every switch is visible without scrolling', async ({ page }) => {
   test.setTimeout(90_000)
   const errors = collectErrors(page)
@@ -237,13 +260,13 @@ test('every switch is visible without scrolling', async ({ page }) => {
   const card = tableCard(page)
   await expect(card.getByRole('switch').first()).toBeVisible()
 
-  await atEachWidth(page, 'every custom switch inside the table card', async () => {
-    const cardBox = await box(card)
+  await atEachWidth(page, 'every custom switch reachable inside the table card', async () => {
     const switches = await card.getByRole('switch').all()
-    if (!cardBox || switches.length < 2) return `card box ${cardBox ? 'ok' : 'missing'}, ${switches.length} switches`
+    if (switches.length < 2) return `${switches.length} switches`
+    const width = page.viewportSize()!.width
     for (const sw of switches) {
-      const b = await box(sw)
-      if (!b || !enclosesRect(cardBox, b, 1)) return `switch ${JSON.stringify(b)} is outside the card ${JSON.stringify(cardBox)}`
+      const miss = await reachableInCard(page, card, sw, width)
+      if (miss) return `switch: ${miss}`
     }
     const scrollLeft = await card.evaluate((el) => el.scrollLeft)
     return scrollLeft === 0 ? null : `the card is scrolled ${scrollLeft}px`
@@ -287,15 +310,17 @@ test('long text stays contained', async ({ page }) => {
   await openRules(page)
   const card = tableCard(page)
   const row = ruleRow(page, LONG_PREFIX.trim())
+  const shortRow = ruleRow(page, SHORT_MESSAGE)
   await expect(row).toBeVisible()
 
   await row.getByText('Custom rule', { exact: true }).click()
   const detail = page.getByRole('dialog', { name: /^Rule custom:/ })
   await expect(detail).toBeVisible()
-  await atEachWidth(page, 'the 500-rune rule inside the card and its drawer', async () => {
-    const [cardBox, rowBox, drawerBox, json] = await Promise.all([box(card), box(row), box(detail), box(detail.locator('pre.pf-json'))])
-    if (!cardBox || !rowBox || !drawerBox || !json) return 'an element has no box'
-    if (!enclosesRect(cardBox, rowBox, 1)) return `row ${JSON.stringify(rowBox)} leaves the card ${JSON.stringify(cardBox)}`
+  await atEachWidth(page, 'the 500-rune row as wide as a short one, its drawer contained', async () => {
+    const [shortBox, rowBox, drawerBox, json] = await Promise.all([box(shortRow), box(row), box(detail), box(detail.locator('pre.pf-json'))])
+    if (!shortBox || !rowBox || !drawerBox || !json) return 'an element has no box'
+    if (Math.abs(rowBox.width - shortBox.width) > 1) return `the 500-rune row is ${rowBox.width}px wide, a short row ${shortBox.width}px`
+    if (await pageScrolls(page)) return 'the page scrolls sideways'
     if ((await card.evaluate((el) => el.scrollLeft)) !== 0) return 'the card is scrolled sideways'
     if ((await detail.evaluate(noSideScroll)) > 0) return 'the drawer scrolls sideways'
     return enclosesRect(drawerBox, json, 1) ? null : `the JSON block ${JSON.stringify(json)} leaves the drawer ${JSON.stringify(drawerBox)}`

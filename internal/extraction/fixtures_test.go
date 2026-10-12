@@ -139,6 +139,7 @@ const (
 
 const (
 	fxHelvetica = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+	fxCourier   = "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>"
 
 	// fxImageDraw scales the 4x4 XObject to fill the page.
 	fxImageDraw = "q\n612 0 0 792 0 0 cm\n/Im0 Do\nQ\n"
@@ -216,10 +217,18 @@ type fxLine struct {
 	text string
 }
 
+// fxMono: the header steering marker is drawn in Courier (/F2). Docling inserts spaces into a
+// long proportional-font run, which breaks the marker's payload; fixed pitch keeps it whole.
+func fxMono(text string) bool { return strings.HasPrefix(text, fxAISteeredMarkerPrefix) }
+
 func fxText(lines ...fxLine) []byte {
 	var b bytes.Buffer
 	for _, l := range lines {
-		fmt.Fprintf(&b, "BT\n/F1 %g Tf\n%d %d Td\n(%s) Tj\nET\n", l.size, l.x, l.y, l.text)
+		font := "F1"
+		if fxMono(l.text) {
+			font = "F2"
+		}
+		fmt.Fprintf(&b, "BT\n/%s %g Tf\n%d %d Td\n(%s) Tj\nET\n", font, l.size, l.x, l.y, l.text)
 	}
 	return b.Bytes()
 }
@@ -419,14 +428,23 @@ func fxBuildRichInvoice() []byte {
 // each; .claude/rules/extraction-corpus.md holds the rest.
 
 // fxTextPage is one US-Letter page of text over a single Helvetica.
+// A page with a header marker also carries Courier as /F2.
 func fxTextPage(lines ...fxLine) []byte {
-	return fxAssemble([]fxObject{
+	objs := []fxObject{
 		fxObject("<< /Type /Catalog /Pages 2 0 R >>"),
 		fxObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
 		fxPage(fxFontRes(5), 4),
 		fxStream(fxText(lines...)),
 		fxObject(fxHelvetica),
-	})
+	}
+	for _, l := range lines {
+		if fxMono(l.text) {
+			objs[2] = fxPage("<< /Font << /F1 5 0 R /F2 6 0 R >> >>", 4)
+			objs = append(objs, fxObject(fxCourier))
+			break
+		}
+	}
+	return fxAssemble(objs)
 }
 
 // fxNaira is the naira in a PDF string literal: octal for byte 0xA4, the code both
@@ -4062,6 +4080,24 @@ func TestFixtures_AILinesMarkerFitsThePageWidth(t *testing.T) {
 	}
 }
 
+// fxMarkerMilli is a marker run's advance in 1/1000 em: Courier is 600 a glyph, the lines marker
+// uses the Helvetica table.
+func fxMarkerMilli(t *testing.T, text string) int {
+	t.Helper()
+	if fxMono(text) {
+		return 600 * len([]rune(text))
+	}
+	milli := 0
+	for _, r := range text {
+		w, ok := fxHelveticaWidths[r]
+		if !ok {
+			t.Fatalf("no Helvetica width for %q; the marker alphabet grew and this guard no longer measures it", r)
+		}
+		milli += w
+	}
+	return milli
+}
+
 // TestFixtures_AISteeredMarkerFitsThePageWidth is AILinesMarkerFitsThePageWidth's twin for the
 // header marker: the generator's own marker line must end inside 95% of the page.
 func TestFixtures_AISteeredMarkerFitsThePageWidth(t *testing.T) {
@@ -4071,15 +4107,7 @@ func TestFixtures_AISteeredMarkerFitsThePageWidth(t *testing.T) {
 		t.Fatalf("the generator's last line is not the marker: %q", last.text)
 	}
 
-	milli := 0
-	for _, r := range last.text {
-		w, ok := fxHelveticaWidths[r]
-		if !ok {
-			t.Fatalf("no Helvetica width for %q; the marker alphabet grew and this guard no longer measures it", r)
-		}
-		milli += w
-	}
-	right := float64(last.x) + float64(milli)*last.size/1000
+	right := float64(last.x) + float64(fxMarkerMilli(t, last.text))*last.size/1000
 
 	if limit := float64(fxPageWidthPt) * 0.95; right > limit {
 		t.Errorf("marker of %d chars at %gpt from x=%d ends at %.1fpt, past the %.1fpt limit on a %dpt page: the deployed reader would clip it mid-payload",
@@ -4095,15 +4123,7 @@ func TestFixtures_AINRSMarkersFitThePageWidth(t *testing.T) {
 			continue
 		}
 		markers++
-		milli := 0
-		for _, r := range l.text {
-			w, ok := fxHelveticaWidths[r]
-			if !ok {
-				t.Fatalf("no Helvetica width for %q; the marker alphabet grew and this guard no longer measures it", r)
-			}
-			milli += w
-		}
-		right := float64(l.x) + float64(milli)*l.size/1000
+		right := float64(l.x) + float64(fxMarkerMilli(t, l.text))*l.size/1000
 		if limit := float64(fxPageWidthPt) * 0.95; right > limit {
 			t.Errorf("marker of %d chars at %gpt from x=%d ends at %.1fpt, past the %.1fpt limit on a %dpt page: the deployed reader would clip it mid-payload",
 				len(l.text), l.size, l.x, right, limit, fxPageWidthPt)

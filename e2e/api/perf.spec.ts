@@ -343,6 +343,17 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     })
     expect(status).toBe(401)
   })
+
+  // The check route is S2S-only like the batch route (cmd/validation/main.go RequireGateway).
+  test('PERF-07: a tenant-bearing SPA JWT gets 401 on /api/validation/v1/custom-rules/check', async () => {
+    const token = await login(PERSONAS.A)
+    const { status } = await rawFetch('/api/validation/v1/custom-rules/check', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: {},
+    })
+    expect(status).toBe(401)
+  })
 })
 
 // PERF-08 is deliberately NOT a new test in this file: its Test Specs "Then"

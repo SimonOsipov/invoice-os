@@ -1592,6 +1592,55 @@ export interface AuditLogQuery {
   invoice_id?: string
 }
 
+// ---- custom rules: internal/customrule (Rule, RuleInput), /api/invoice/v1/custom-rules ----
+
+export interface CustomRule {
+  id: string
+  key: string
+  revision: number
+  revision_id: string
+  entity_id: string | null
+  type: string
+  target: string
+  params: unknown
+  severity: 'error' | 'warning'
+  when: string | null
+  message: string
+  enabled: boolean
+  updated_at: string
+  updated_by: string
+}
+
+export interface CustomRuleInput {
+  entity_id: string | null
+  type: string
+  target: string
+  params: unknown
+  severity: 'error' | 'warning'
+  when?: string | null
+  message: string
+  enabled: boolean
+}
+
+export async function listCustomRules(token: string): Promise<CustomRule[]> {
+  const res = await apiFetch<{ custom_rules: CustomRule[] }>(`${apiBase()}/api/invoice/v1/custom-rules`, { token })
+  return res.custom_rules
+}
+
+export function createCustomRule(token: string, body: CustomRuleInput): Promise<CustomRule> {
+  return apiFetch<CustomRule>(`${apiBase()}/api/invoice/v1/custom-rules`, { method: 'POST', body, token })
+}
+
+export function updateCustomRule(token: string, id: string, body: CustomRuleInput): Promise<CustomRule> {
+  return apiFetch<CustomRule>(`${apiBase()}/api/invoice/v1/custom-rules/${id}`, { method: 'PUT', body, token })
+}
+
+// Raw, so the 204's empty body is not parsed; the caller asserts the status.
+export async function deleteCustomRule(token: string, id: string): Promise<number> {
+  const res = await rawFetch(`/api/invoice/v1/custom-rules/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
+  return res.status
+}
+
 // getAuditLog(): GET /v1/audit-log on the invoice binary — the workspace audit reader.
 // `!== undefined` rather than truthiness, so q='' stays sendable and is not silently dropped.
 export function getAuditLog(token: string, query?: AuditLogQuery): Promise<AuditResponse> {

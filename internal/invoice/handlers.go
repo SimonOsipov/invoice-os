@@ -245,11 +245,11 @@ type listResponse struct {
 	Pagination listPagination `json:"pagination"`
 }
 
-// listItem is one GET /v1/invoices row: Invoice embedded, plus five additive
+// listItem is one GET /v1/invoices row: Invoice embedded, plus additive
 // siblings. Invoice itself is NOT widened -- it is shared by Get/Create/Edit,
 // and RuleSetVersion is json:"-" for exactly that reason.
 //
-// No omitempty on any of the five: a nil Approval emits explicit null, the
+// No omitempty on any of them: a nil Approval emits explicit null, the
 // honest answer for an invoice with no approval run, and an omitted permission
 // flag would read undefined in the SPA and fail OPEN
 // (TestListItem_InvoiceKeysUnmovedAndUnrenamed,

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -325,21 +324,21 @@ func TestStoreRowFacts_RulePendingIsConstantInPageSize(t *testing.T) {
 		covered[id] = i%3 == 1
 	}
 	store := NewStore(tracedApp)
+	wantTotal := -1
 	for _, page := range [][]string{ids, ids[1:2], ids[:3]} {
 		rec.reset()
 		_, gate, err := store.RowFacts(f.admin, page)
 		if err != nil {
 			t.Fatalf("RowFacts of %d: %v", len(page), err)
 		}
-		// The demotion read joins custom_rule_revisions too; it is pinned by TestListDemotion_OneStatementPerPage.
-		pendingReads := 0
-		for _, q := range rec.mentioning("custom_rule_revisions") {
-			if !strings.Contains(q, "invoice_status_history") {
-				pendingReads++
-			}
+		// rulesPendingFor's `rechecked_at IS NULL` marks the pending read; the demotion read joins the same table.
+		if n := len(rec.mentioning("rechecked_at IS NULL")); n != 1 {
+			t.Errorf("page of %d issued %d pending-revision statements, want 1", len(page), n)
 		}
-		if n := pendingReads; n != 1 {
-			t.Errorf("page of %d issued %d statements against custom_rule_revisions, want 1", len(page), n)
+		if total := len(rec.mentioning("")); wantTotal < 0 {
+			wantTotal = total
+		} else if total != wantTotal {
+			t.Errorf("page of %d issued %d statements in RowFacts, want %d as for the first page -- a read scales with the page", len(page), total, wantTotal)
 		}
 		sawCovered := false
 		for _, id := range page {

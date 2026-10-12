@@ -629,7 +629,7 @@ export interface Invoice {
 // (BUG-12) ride BOTH wires, each from one gate call; the reject pair stays detail-only
 // (U5a). GetInvoiceResult keeps its OWN copy of the submit pair rather than inheriting:
 // both interfaces extend the bare Invoice, so there is nothing to inherit through.
-// All five are required, not optional: no omitempty on any Go field, so an invoice with
+// All of them are required, not optional: no omitempty on any Go field, so an invoice with
 // no run emits an explicit null (TestListItem_InvoiceKeysUnmovedAndUnrenamed,
 // TestListItem_ApproveFlagsCarryNoOmitempty, TestListHandler_NoActionFlagKeys).
 export interface InvoiceListItem extends Invoice {

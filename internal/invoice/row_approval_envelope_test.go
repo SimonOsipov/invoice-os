@@ -258,15 +258,12 @@ func TestListHandler_ApprovalKeyPresentOnEveryRow(t *testing.T) {
 
 // TestListItem_InvoiceKeysUnmovedAndUnrenamed: the wrapper is ADDITIVE. Marshalling
 // listItem must emit every Invoice key with the same name, the same value and the
-// same POSITION it has when Invoice is marshalled alone, with the three siblings
+// same POSITION it has when Invoice is marshalled alone, with the siblings
 // appended after it IN ORDER -- the declaration-order-is-wire-order rule getResponse's
 // comment states.
 //
-// A09-6 (APPR-12-09) widened the tail from one sibling to three: `approval`, then
-// `can_approve`, then `approve_blocked_reason`. BUG-12-01 widens it to five, appending
-// `can_submit` and `submit_blocked_reason`. The leading-keys check below is
-// deliberately byte-unchanged -- that half is what proves the widening is purely
-// additive rather than a reshuffle.
+// The leading-keys check below stays byte-unchanged as siblings are appended -- that
+// half is what proves a widening is purely additive rather than a reshuffle.
 func TestListItem_InvoiceKeysUnmovedAndUnrenamed(t *testing.T) {
 	inv := populatedInvoice(t, uuid.NewString())
 

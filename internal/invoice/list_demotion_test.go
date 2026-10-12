@@ -202,6 +202,7 @@ func buildDemotionCases(t *testing.T) demotionCases {
 	revalidated := f.validatedOn(t, gate, f.entity, "E15-04-T-REVAL", false)
 	editedAfter := f.validatedOn(t, gate, f.entity, "E15-04-T-EDITED", false)
 	stillFailing := f.validatedOn(t, gate, f.entity, "E15-04-T-STILL", false)
+	reEdited := f.validatedOn(t, gate, f.entity, "E15-04-T-REEDIT", false)
 	byEdit := f.validatedOn(t, gate, f.entity, "E15-04-T-BYEDIT", true) // passes the rule, so only the edit demotes it
 	neverValidated := f.invoice(t, "E15-04-T-NEVER").ID
 
@@ -209,7 +210,7 @@ func buildDemotionCases(t *testing.T) demotionCases {
 	f.must(t, gate)
 	out.rule = wantRuleCause(rule, "email needed")
 	out.ruleID = editedAfter
-	for _, id := range []string{revalidated, editedAfter, stillFailing} {
+	for _, id := range []string{revalidated, editedAfter, stillFailing, reEdited} {
 		if f.status(t, id) != StatusDraft {
 			t.Fatalf("invoice %s not demoted by the rule", id)
 		}
@@ -224,6 +225,20 @@ func buildDemotionCases(t *testing.T) demotionCases {
 	}
 	if got, _, err := gate.Validate(f.member, revalidated); err != nil || got.Status != StatusValidated {
 		t.Fatalf("re-validate %s = %q, %v, want validated", revalidated, got.Status, err)
+	}
+
+	// demoted, re-validated, then edited back to draft: an older caused row, a newer row without a cause
+	if _, err := f.store.Update(f.member, reEdited, UpdateInput{BuyerEmail: strPtr("buyer@example.com")}); err != nil {
+		t.Fatalf("Update %s: %v", reEdited, err)
+	}
+	if got, _, err := gate.Validate(f.member, reEdited); err != nil || got.Status != StatusValidated {
+		t.Fatalf("re-validate %s = %q, %v, want validated", reEdited, got.Status, err)
+	}
+	if _, err := f.store.Edit(f.member, reEdited, EditInput{UpdateInput: UpdateInput{BuyerName: strPtr("Edited Ltd")}}); err != nil {
+		t.Fatalf("Edit %s: %v", reEdited, err)
+	}
+	if last := f.lastHistory(t, reEdited); last.ToStatus != StatusDraft || last.Cause != nil || last.CustomRuleCause != nil {
+		t.Fatalf("edit row of %s = %+v, want validated->draft with no cause", reEdited, last)
 	}
 
 	// validated -> draft by an edit: a history row without a cause
@@ -260,6 +275,7 @@ func buildDemotionCases(t *testing.T) demotionCases {
 		{"demoted then re-validated", revalidated, StatusValidated, false},
 		{"draft never validated", neverValidated, StatusDraft, false},
 		{"validated to draft by an edit", byEdit, StatusDraft, false},
+		{"demoted, re-validated, then edited back to draft", reEdited, StatusDraft, false},
 		{"demoted then edited, still draft", editedAfter, StatusDraft, true},
 		{"demoted, edited, re-validated, still failing (D21)", stillFailing, StatusDraft, true},
 	}
@@ -419,21 +435,25 @@ func TestListDemotion_OneStatementPerPage(t *testing.T) {
 }
 
 // Tenant 2's history rows never read as tenant 1's demotion, at the helper and on the list.
+// Tenant 2's two demotions carry a firm-wide custom rule and a rule-set version.
 func TestListDemotion_DB_NeverReadsAnotherTenant(t *testing.T) {
+	super, _ := dbTestPools(t)
+	bID, bVer := seedBuyerNameVersion(t, super, "3001-06-01") // before the tenants: LIFO cleanup
 	f1 := newCRFixture(t, "ENGI-15-04 xt t1")
 	f2 := newCRFixture(t, "ENGI-15-04 xt t2")
-	demote := func(f crFixture, number, msg string) (string, CustomRuleCause) {
+	demote := func(f crFixture, entity *string, number, msg string) (string, CustomRuleCause) {
 		gate := f.gate(t, start04Wrapped(t, f.app, nil, nil))
 		id := f.validatedOn(t, gate, f.entity, number, false)
-		rule := f.save(t, &f.entity, "error", true, msg)
+		rule := f.save(t, entity, "error", true, msg)
 		f.must(t, gate)
 		if f.status(t, id) != StatusDraft {
 			t.Fatalf("invoice %s not demoted", number)
 		}
 		return id, wantRuleCause(rule, msg)
 	}
-	id1, cause1 := demote(f1, "E15-04-XT1", "tenant 1 rule")
-	id2, _ := demote(f2, "E15-04-XT2", "tenant 2 rule")
+	id1, cause1 := demote(f1, &f1.entity, "E15-04-XT1", "tenant 1 rule")
+	id2, _ := demote(f2, nil, "E15-04-XT2", "tenant 2 firm rule")
+	idV := f2.demotedByVersion(t, bID, bVer, "E15-04-XT2V")
 
 	read := func(ids ...string) map[string]Demotion {
 		t.Helper()
@@ -449,34 +469,42 @@ func TestListDemotion_DB_NeverReadsAnotherTenant(t *testing.T) {
 		return got
 	}
 
-	mixed := read(id1, id2)
+	mixed := read(id1, id2, idV)
 	if d, ok := mixed[id1]; !ok || d.CustomRuleCause == nil || *d.CustomRuleCause != cause1 {
 		t.Fatalf("control: tenant 1's own demotion = %+v (present %v), want %+v", d, ok, cause1)
 	}
-	if _, ok := mixed[id2]; ok || len(mixed) != 1 {
-		t.Errorf("tenant 1 read %d entries for [own, tenant 2's], want only its own: %+v", len(mixed), mixed)
+	if len(mixed) != 1 {
+		t.Errorf("tenant 1 read %d entries for [own, tenant 2's firm rule, tenant 2's version], want only its own: %+v", len(mixed), mixed)
 	}
-	if only := read(id2); len(only) != 0 {
-		t.Errorf("tenant 1 read tenant 2's id: %+v, want an empty map", only)
+	if only := read(id2, idV); len(only) != 0 {
+		t.Errorf("tenant 1 read tenant 2's ids: %+v, want an empty map", only)
+	}
+	list2 := f2.listDemotions(t)
+	if list2[id2].d == nil || list2[idV].d == nil {
+		t.Fatalf("control: tenant 2's own list lacks its demotions (firm rule %s, version %s)", list2[id2].raw, list2[idV].raw)
 	}
 
-	_, gate, err := f1.store.RowFacts(f1.admin, []string{id1, id2})
+	_, gate, err := f1.store.RowFacts(f1.admin, []string{id1, id2, idV})
 	if err != nil {
 		t.Fatalf("RowFacts: %v", err)
 	}
 	if _, ok := gate.Demotion[id1]; !ok {
 		t.Errorf("control: RowFacts has no Demotion for tenant 1's own invoice")
 	}
-	if _, ok := gate.Demotion[id2]; ok {
-		t.Errorf("RowFacts under tenant 1 carries tenant 2's demotion for %s", id2)
+	for _, other := range []string{id2, idV} {
+		if _, ok := gate.Demotion[other]; ok {
+			t.Errorf("RowFacts under tenant 1 carries tenant 2's demotion for %s", other)
+		}
 	}
 
 	list := f1.listDemotions(t)
 	if l, ok := list[id1]; !ok || l.d == nil || l.d.CustomRuleCause == nil || l.d.CustomRuleCause.Message != "tenant 1 rule" {
 		t.Errorf("tenant 1 list row = %+v (present %v), want its own demotion naming %q", l, ok, "tenant 1 rule")
 	}
-	if _, ok := list[id2]; ok {
-		t.Errorf("tenant 1's list carries tenant 2's invoice %s", id2)
+	for _, other := range []string{id2, idV} {
+		if _, ok := list[other]; ok {
+			t.Errorf("tenant 1's list carries tenant 2's invoice %s", other)
+		}
 	}
 }
 
@@ -541,5 +569,121 @@ func TestListHandler_DemotionOnlyOnDraftRowsWithAnEntry(t *testing.T) {
 	}
 	if got[noEntry.ID] != "null" {
 		t.Errorf("draft row with no entry: demotion = %q, want null", got[noEntry.ID])
+	}
+}
+
+// A deleted rule appends a revision; the history row still cites the revision that demoted the draft.
+func TestListDemotion_DB_DeletedRuleKeepsItsDemotion(t *testing.T) {
+	f := newCRFixture(t, "ENGI-15-04 deleted")
+	id, rule := f.demotedByRule(t, "E15-04-DEL")
+	if err := f.rules.Delete(f.admin, rule.ID); err != nil {
+		t.Fatalf("delete rule: %v", err)
+	}
+
+	l, ok := f.listDemotions(t)[id]
+	if !ok {
+		t.Fatalf("invoice %s is not on the list page", id)
+	}
+	want := wantRuleCause(rule, "email needed")
+	if l.d == nil || l.d.CustomRuleCause == nil || *l.d.CustomRuleCause != want || l.d.Cause != nil {
+		t.Fatalf("demotion = %s, want the demoting revision %+v and cause null", l.raw, want)
+	}
+	if last := f.lastHistory(t, id); !reflect.DeepEqual(last.CustomRuleCause, l.d.CustomRuleCause) {
+		t.Errorf("list cause %+v differs from History's %+v", l.d.CustomRuleCause, last.CustomRuleCause)
+	}
+}
+
+// Rows tied on changed_at resolve by id, as History does: the list never contradicts History's last row.
+func TestListDemotion_DB_TiedTimestampsFollowHistoryOrder(t *testing.T) {
+	super, _ := dbTestPools(t)
+	bID, bVer := seedBuyerNameVersion(t, super, "3001-06-01")
+	f := newCRFixture(t, "ENGI-15-04 tie")
+	// seed ties a caused and an uncaused row; the caused row's id sorts last when causedLast.
+	seed := func(causedLast bool) string {
+		low, high := "00000000-"+uuid.NewString()[9:], "ffffffff-"+uuid.NewString()[9:]
+		causedID, otherID := low, high
+		if causedLast {
+			causedID, otherID = high, low
+		}
+		inv := seedInvoiceAtStatus(t, super, f.tenant, f.entity, "E15-04-TIE-"+uuid.NewString(), StatusDraft)
+		for _, row := range []struct {
+			id    string
+			cause any
+		}{{causedID, bID}, {otherID, nil}} {
+			if _, err := super.Exec(context.Background(),
+				`INSERT INTO invoice_status_history (id, tenant_id, invoice_id, from_status, to_status, actor, changed_at, cause_rule_set_version_id)
+				 VALUES ($1, $2, $3, 'validated', 'draft', 'system', '2026-01-01T00:00:00Z', $4)`, row.id, f.tenant, inv, row.cause); err != nil {
+				t.Fatalf("seed tied history row: %v", err)
+			}
+		}
+		return inv
+	}
+	causedLast, causedFirst := seed(true), seed(false)
+
+	list := f.listDemotions(t)
+	for _, c := range []struct {
+		name    string
+		id      string
+		wantSet bool
+	}{{"caused row sorts last", causedLast, true}, {"caused row sorts first", causedFirst, false}} {
+		l, ok := list[c.id]
+		if !ok {
+			t.Fatalf("%s: invoice %s is not on the list page", c.name, c.id)
+		}
+		last := f.lastHistory(t, c.id)
+		if got := last.Cause != nil; got != c.wantSet {
+			t.Fatalf("%s: History's last row cause set = %v, want %v (setup)", c.name, got, c.wantSet)
+		}
+		if got := l.d != nil; got != c.wantSet {
+			t.Errorf("%s: demotion = %s, want set=%v like History", c.name, l.raw, c.wantSet)
+		}
+		if c.wantSet && (l.d == nil || l.d.Cause == nil || l.d.Cause.RuleSetVersion != bVer) {
+			t.Errorf("%s: demotion = %s, want version %d", c.name, l.raw, bVer)
+		}
+	}
+}
+
+// One history row may cite both a version and a custom revision; the list carries both, as History does.
+func TestListDemotion_DB_RowCitingBothCausesCarriesBoth(t *testing.T) {
+	super, _ := dbTestPools(t)
+	bID, bVer := seedBuyerNameVersion(t, super, "3001-06-01")
+	f := newCRFixture(t, "ENGI-15-04 both")
+	rule := f.save(t, &f.entity, "error", true, "email needed")
+	inv := seedInvoiceAtStatus(t, super, f.tenant, f.entity, "E15-04-BOTH", StatusDraft)
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, cause_rule_set_version_id, cause_custom_rule_revision_id)
+		 VALUES ($1, $2, 'validated', 'draft', 'system', $3, $4)`, f.tenant, inv, bID, rule.RevisionID); err != nil {
+		t.Fatalf("seed history row: %v", err)
+	}
+
+	l, ok := f.listDemotions(t)[inv]
+	if !ok || l.d == nil || l.d.Cause == nil || l.d.CustomRuleCause == nil {
+		t.Fatalf("demotion = %s (on page %v), want both causes", l.raw, ok)
+	}
+	if l.d.Cause.RuleSetVersion != bVer || *l.d.CustomRuleCause != wantRuleCause(rule, "email needed") {
+		t.Errorf("demotion = %+v / %+v, want version %d and the rule's revision", l.d.Cause, l.d.CustomRuleCause, bVer)
+	}
+	last := f.lastHistory(t, inv)
+	if !reflect.DeepEqual(last.Cause, l.d.Cause) || !reflect.DeepEqual(last.CustomRuleCause, l.d.CustomRuleCause) {
+		t.Errorf("list causes differ from History's %+v / %+v", last.Cause, last.CustomRuleCause)
+	}
+}
+
+// An empty ask reads nothing, though the tenant holds a demoted invoice; the control proves the fixture is live.
+func TestListDemotion_DB_EmptyPageReadsNothing(t *testing.T) {
+	f := newCRFixture(t, "ENGI-15-04 empty")
+	id, _ := f.demotedByRule(t, "E15-04-EMPTY")
+
+	if _, gate, err := f.store.RowFacts(f.admin, []string{id}); err != nil || len(gate.Demotion) != 1 {
+		t.Fatalf("control: RowFacts([demoted]) = %d entries, %v, want 1", len(gate.Demotion), err)
+	}
+	for name, ids := range map[string][]string{"empty slice": {}, "nil slice": nil} {
+		_, gate, err := f.store.RowFacts(f.admin, ids)
+		if err != nil {
+			t.Fatalf("RowFacts(%s): %v", name, err)
+		}
+		if len(gate.Demotion) != 0 {
+			t.Errorf("RowFacts(%s) carries %d demotions, want none", name, len(gate.Demotion))
+		}
 	}
 }

@@ -1153,6 +1153,16 @@ describe('APPR-12-09 A09-12: the approve pair MOVED to InvoiceRecord, it was not
   })
 })
 
+describe('ENGI-15-04: demotion is a list-only key', () => {
+  it('invoiceDetailRecord_hasNoDemotionKey: readable off InvoiceRecord, a compile error off InvoiceDetailRecord', () => {
+    expect(fieldNamesOf('InvoiceRecord'), 'lost anchor on InvoiceRecord').toContain('demotion')
+    expect(draftInvoice.demotion).toBeNull()
+    const detail = {} as InvoiceDetailRecord
+    // @ts-expect-error demotion is Omitted from InvoiceDetailRecord; tsc fails here if the key leaks back
+    expect(detail.demotion).toBeUndefined()
+  })
+})
+
 describe('violationSummary (AC-2, Stage 2.5)', () => {
   it('SUMMARY-1: unwraps .rules and preserves the server order verbatim, never re-sorted', async () => {
     mockFetchOnce({

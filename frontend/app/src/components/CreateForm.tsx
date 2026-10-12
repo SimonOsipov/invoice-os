@@ -74,7 +74,12 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
   function lookupBuyer() {
     const tin = draft.buyerTin.trim()
     const base = gatewayBase()
-    if (base == null || !FILEABLE_TIN.test(tin) || tin === lastTin.current) return
+    if (base == null || !FILEABLE_TIN.test(tin)) {
+      lookupSeq.current += 1
+      lastTin.current = ''
+      return
+    }
+    if (tin === lastTin.current) return
     lastTin.current = tin
     const seq = ++lookupSeq.current
     findCustomerByTin(ctx.authedFetch, base, tin).then(

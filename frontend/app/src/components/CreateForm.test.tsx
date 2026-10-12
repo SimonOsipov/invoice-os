@@ -172,6 +172,17 @@ describe('CreateForm buyer lookup', () => {
     expect(nameInput().value).toBe('B Buyer')
   })
 
+  it('createForm_answerForATinNoLongerInTheFieldIsIgnored', async () => {
+    let resolveA!: (v: unknown) => void
+    authedFetch.mockImplementation(() => new Promise((r) => (resolveA = r)))
+    mount(blankDraft())
+    await blurTin(TIN_A)
+    await blurTin('1234')
+    await act(async () => resolveA({ customers: [customer(TIN_A, { name: 'A Buyer' })], pagination: { limit: 1, offset: 0, total: 1 } }))
+    expect(tinInput().value).toBe('1234')
+    expect(nameInput().value, 'the buyer of a TIN the user replaced is not filled').toBe('')
+  })
+
   it('createForm_failedLookupChangesNothing', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     authedFetch.mockRejectedValue(new Error('boom'))
@@ -181,6 +192,27 @@ describe('CreateForm buyer lookup', () => {
     expect(nameInput().value).toBe('Typed Buyer')
     expect(byLabel('buyer_email').value).toBe('typed@x.test')
     expect(error).not.toHaveBeenCalled()
+  })
+
+  it('createForm_sameTinDoesNotRefetchButAFailedOneRetries', async () => {
+    authedFetch.mockRejectedValueOnce(new Error('boom')).mockImplementation(async () => ({ customers: [customer(TIN_A)], pagination: { limit: 1, offset: 0, total: 1 } }))
+    mount(blankDraft())
+    await blurTin(TIN_A)
+    await blurTin(TIN_A)
+    expect(authedFetch, 'a failed lookup may be retried').toHaveBeenCalledTimes(2)
+    expect(nameInput().value).toBe('Acme Buyer')
+    fireEvent.blur(tinInput())
+    await flush()
+    expect(authedFetch, 'the same answered TIN is not fetched again').toHaveBeenCalledTimes(2)
+  })
+
+  it('createForm_lookupKeepsTheTypedTinAndTrimsIt', async () => {
+    authedFetch.mockImplementation(async () => ({ customers: [customer('99999999-9999')], pagination: { limit: 1, offset: 0, total: 1 } }))
+    mount(blankDraft())
+    await blurTin(` ${TIN_A} `)
+    expect(authedFetch).toHaveBeenCalledWith(expect.stringContaining(`tin=${TIN_A}&`))
+    expect(nameInput().value).toBe('Acme Buyer')
+    expect(tinInput().value, 'the record never rewrites the typed TIN').toBe(` ${TIN_A} `)
   })
 
   it('createForm_lookupOnlyForAFileableTin', async () => {

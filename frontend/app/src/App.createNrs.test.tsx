@@ -183,3 +183,25 @@ describe('filing', () => {
     expect(lines[1]).toMatchObject({ tax_category: null, line_tax: null, base_quantity: '1' })
   })
 })
+
+describe('supplier pre-fill adversarial', () => {
+  it('app_fileSendsATypedSupplierValueAndNullForABlankOne', async () => {
+    await renderApp()
+    await openForm()
+    fireEvent.change(screen.getByLabelText('Supplier email'), { target: { value: 'typed@co.test' } })
+    fireEvent.change(screen.getByLabelText('Supplier street'), { target: { value: '' } })
+    await act(async () => requireCtx().fileDraft())
+    await waitFor(() => expect(createBodies).toHaveLength(1))
+    expect(createBodies[0]!.supplier_email).toBe('typed@co.test')
+    expect(createBodies[0]!.supplier_street).toBeNull()
+  })
+
+  it('app_aSecondCompanySwitchReseedsFromThatCompanyNotTheTypedValue', async () => {
+    await renderApp()
+    await openForm()
+    fireEvent.change(screen.getByLabelText('Supplier email'), { target: { value: 'typed@co.test' } })
+    await act(async () => requireCtx().switchClient(ENTITY_B))
+    await act(async () => requireCtx().nav('create'))
+    expect(supplierEmail()).toBe('b@co.test')
+  })
+})

@@ -334,3 +334,69 @@ func TestBatch_GoldenAndCustomViolationsAreSorted(t *testing.T) {
 		t.Errorf("order = %v, want %v", batchKeys(body.Results[0].Violations), want)
 	}
 }
+
+func TestBatch_FaultingCustomRuleKeepsItsWarningSeverityAndOtherRulesRun(t *testing.T) {
+	var calls []loadCall
+	body := wantOK(t, runCustomBatch(t, goldenFake(), &calls, map[string]any{
+		"invoices": []any{item("a", "e1")},
+		"custom_rule_sets": map[string]any{"e1": []any{
+			cwire("rev1", "custom:w", TypeCEL, "buyer.email", `{"expr":"invoice.missing.x == 1"}`, "warning", "own"),
+			requiredEmail("rev2", "custom:ok"),
+		}},
+	}))
+	vs := body.Results[0].Violations
+	if got := byKey(vs, "custom:w"); len(got) != 1 || got[0].Severity != "warning" || got[0].Message != customFaultMessage {
+		t.Errorf("faulting warning rule = %+v, want one warning with customFaultMessage", got)
+	}
+	if got := byKey(vs, "custom:ok"); len(got) != 1 || got[0].Message != "email needed" {
+		t.Errorf("sibling rule = %+v, want judged as usual", got)
+	}
+}
+
+func TestBatch_GoldenErrorAndCustomWarningOnTheSameTargetBothReport(t *testing.T) {
+	var calls []loadCall
+	body := wantOK(t, runCustomBatch(t, goldenFake(), &calls, map[string]any{
+		"invoices":         []any{item("a", "e1")},
+		"custom_rule_sets": map[string]any{"e1": []any{cwire("rev1", "custom:n", TypeRequired, "invoice_number", `{}`, "warning", "warn")}},
+	}))
+	vs := body.Results[0].Violations
+	g, c := byKey(vs, "invoice-number-required"), byKey(vs, "custom:n")
+	if len(g) != 1 || g[0].Severity != "error" || len(c) != 1 || c[0].Severity != "warning" || c[0].Path != "invoice_number" {
+		t.Errorf("golden %+v custom %+v, want both reported with their own severity", g, c)
+	}
+}
+
+func TestBatch_ItemsNamingNoSetNeedNoSets(t *testing.T) {
+	for name, sets := range map[string]any{"absent": nil, "empty map": map[string]any{}} {
+		t.Run(name, func(t *testing.T) {
+			var calls []loadCall
+			body := map[string]any{"invoices": []any{item("a")}}
+			if sets != nil {
+				body["custom_rule_sets"] = sets
+			}
+			got := wantOK(t, runCustomBatch(t, goldenFake(), &calls, body))
+			if len(got.Results) != 1 || len(got.Results[0].Violations) == 0 || len(got.Results[0].CustomRuleIDs) != 0 || len(calls) != 1 || len(calls[0].custom) != 0 {
+				t.Errorf("results=%+v calls=%d, want golden violations, no custom ids, one load with no custom rules", got.Results, len(calls))
+			}
+		})
+	}
+}
+
+func TestBatch_ItemNamingASetWithNoSetsMapIs400(t *testing.T) {
+	var calls []loadCall
+	rec := runCustomBatch(t, goldenFake(), &calls, map[string]any{"invoices": []any{item("a", "e1")}})
+	if rec.Code != http.StatusBadRequest || len(calls) != 0 {
+		t.Errorf("got %d with %d loads, want 400 and 0", rec.Code, len(calls))
+	}
+}
+
+func TestBatch_UnusedInvalidSetIs400(t *testing.T) {
+	var calls []loadCall
+	rec := runCustomBatch(t, goldenFake(), &calls, map[string]any{
+		"invoices":         []any{item("a")},
+		"custom_rule_sets": map[string]any{"e1": []any{cwire("rev1", "custom:r", TypeRequired, "x", `{}`, "info", "m")}},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for an invalid set no item names", rec.Code)
+	}
+}

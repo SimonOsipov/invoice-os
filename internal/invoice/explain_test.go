@@ -399,6 +399,22 @@ func TestGuardExplanation_BlankIdentityValueIsNotInvented(t *testing.T) {
 	}
 }
 
+func TestGuardExplanation_PartyContactAndAddressGetNoFix(t *testing.T) {
+	for _, tc := range []struct{ path, field, value string }{
+		{"supplier.email", "supplier_email", "billing@acme.example"},
+		{"buyer.street", "buyer_street", "1 Marina Road"},
+		{"supplier.telephone", "supplier_telephone", "+2348012345678"},
+		{"buyer.postal_zone", "buyer_postal_zone", "100001"},
+	} {
+		payload := explainPayload()
+		payload["buyer"] = map[string]any{"street": "Old Road"}
+		got := guardExplanation(Violation{Message: "m", Path: tc.path}, payload, explainAnswer("Why.", tc.field, tc.value))
+		if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {
+			t.Errorf("%s: status %s, fix %v, want the explanation kept and no fix", tc.path, got.Status, got.Fix)
+		}
+	}
+}
+
 func TestGuardExplanation_CodeValueIsNoFix(t *testing.T) {
 	got := guardExplanation(Violation{Message: "m", Path: "buyer.state"}, explainPayload(), explainAnswer("Why.", "state", "Lagos"))
 	if got.Status != "ok" || got.Explanation == nil || got.Fix != nil {

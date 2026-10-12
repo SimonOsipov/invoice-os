@@ -150,6 +150,14 @@ func explainCitationOK(explanation, message string) bool {
 // explainIdentityField: party identity the model cannot know, so a blank one gets no proposed value.
 var explainIdentityField = map[string]bool{"supplier_tin": true, "buyer_tin": true, "supplier_name": true, "buyer_name": true}
 
+// explainPartyContact: a free-text party field other than tin/name (email, phone, address); the model never proposes a value for it.
+func explainPartyContact(f invoicefields.Field) bool {
+	if f.Line || f.Type != invoicefields.Text || explainIdentityField[f.Key] {
+		return false
+	}
+	return strings.HasPrefix(f.Key, "supplier_") || strings.HasPrefix(f.Key, "buyer_")
+}
+
 func explainValueOK(t invoicefields.Type, value string) bool {
 	switch t {
 	case invoicefields.Money, invoicefields.Quantity, invoicefields.Percent:
@@ -208,7 +216,7 @@ func guardExplanation(v Violation, payload map[string]any, ans map[string]any) E
 		return res
 	}
 	f, _ := explainField(field, line > 0)
-	if !explainValueOK(f.Type, value) {
+	if explainPartyContact(f) || !explainValueOK(f.Type, value) {
 		return res
 	}
 	current := explainCurrent(payload, field, line)

@@ -858,10 +858,11 @@ test('(fixture check) the demotion banner fills its column', async ({ page }) =>
   expect(patched, 'the history response was patched').toBeGreaterThan(0)
   await expect(banner).toContainText('rule set v99')
 
-  // The column detail-kept-banner and stale-verdict sit in: the compliance card's body.
-  const fit = await assertFillsColumn(page, banner, banner.locator('xpath=..'), 'detail-demotion-banner vs its column', 1)
+  // The card body pads 18px a side, so measure against the unpadded violations table in the same column.
+  const violations = page.getByTestId('violations-table')
+  const fit = await assertFillsColumn(page, banner, violations, 'detail-demotion-banner vs its column', 1)
   expect(fit.length, 'the sweep measured every width').toBe(WIDE_WIDTHS.length)
-  const [b, table] = await Promise.all([banner.boundingBox(), page.getByTestId('violations-table').boundingBox()])
+  const [b, table] = await Promise.all([banner.boundingBox(), violations.boundingBox()])
   expect(b && table && b.y + b.height <= table.y + 1, 'the banner sits above the violations table').toBe(true)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
@@ -6113,7 +6114,7 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     const entity = await createEntity(token, { name: `RESKIN2-03 DV-04 ${Date.now()}`, tin: freshTin() })
 
     await dvOpenRules(page, entity.name)
-    await expect(page.locator('.pf-row').filter({ hasText: 'buyer.tin.required' }).first()).toBeVisible()
+    await expect(page.locator('.pf-row').filter({ hasText: 'buyer-tin-required' }).first()).toBeVisible()
     const read = await dvRead(page, { h1: page.getByRole('heading', { level: 1, name: 'Rules', exact: true }) })
     expect(firstFamily(read.targets.h1.style['font-family']), 'Rules h1 family').toBe('Manrope')
     expect(read.targets.h1.style['font-weight'], 'Rules h1 weight').toBe('700')
@@ -6130,8 +6131,8 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     const entity = await createEntity(token, { name: `RESKIN2-03 DV-05 ${Date.now()}`, tin: freshTin() })
 
     await dvOpenRules(page, entity.name)
-    await page.locator('.pf-row').filter({ hasText: 'buyer.tin.required' }).first().click()
-    const dialog = page.getByRole('dialog', { name: 'Rule buyer.tin.required' })
+    await page.locator('.pf-row').filter({ hasText: 'buyer-tin-required' }).first().click()
+    const dialog = page.getByRole('dialog', { name: 'Rule buyer-tin-required' })
     await expect(dialog).toBeVisible()
     const read = await dvRead(
       page,
@@ -6141,7 +6142,7 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
         paramBox: dialog.locator('div.label', { hasText: /^Parameters$/ }).locator('xpath=following-sibling::div[1]/div[1]/div[2]'),
         json: dialog.locator('pre.pf-json'),
         close: dialog.getByRole('button', { name: 'Close' }),
-        key: dialog.getByText('buyer.tin.required', { exact: true }).first(),
+        key: dialog.getByText('buyer-tin-required', { exact: true }).first(),
       },
       { tokens: ['--bg-2', '--fg-2'] },
     )

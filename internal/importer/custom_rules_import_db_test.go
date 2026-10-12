@@ -1,12 +1,15 @@
 package importer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -134,6 +137,9 @@ func TestImport_DB_TwiceChangedInvoicesAreReportedNotValidated(t *testing.T) {
 	for _, e := range res.Errors {
 		if e.Message == unvalidatedMessage {
 			named++
+			if len(e.Rows) == 0 {
+				t.Errorf("unvalidated error names no rows: %+v", e)
+			}
 		}
 	}
 	if named != res.ReadyInvoices || named != 2 {
@@ -152,6 +158,10 @@ func TestSupplyInvoiceNumber_DB_TwiceChangedInvoiceStaysAnUnstampedDraft(t *test
 	f := newTwiceChangedFixture(t, "ENGI-14-05 twice document")
 	doc := docSeedDocument(t, f.super, f.tenantID)
 	docSeedExtraction(t, f.super, f.tenantID, doc, advGateReading("18.75"))
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	got, err := f.svc.SupplyInvoiceNumber(f.c, f.entityID, doc, "ENGI-14-TWICE")
 	if err != nil {
@@ -166,5 +176,9 @@ func TestSupplyInvoiceNumber_DB_TwiceChangedInvoiceStaysAnUnstampedDraft(t *test
 	}
 	if n != 0 {
 		t.Errorf("rule break rows = %d, want 0", n)
+	}
+	// An empty-stamp RecordRuleBreaks is a silent no-op, so the guard shows only in the log.
+	if out := logs.String(); !strings.Contains(out, "left unvalidated, rules changed twice") || strings.Contains(out, "record rule breaks") {
+		t.Errorf("log = %q, want the left-unvalidated warning and no rule-break attempt", out)
 	}
 }

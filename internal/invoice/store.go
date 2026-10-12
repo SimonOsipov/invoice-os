@@ -1785,9 +1785,9 @@ func canRevalidate(s Status) bool { return s == StatusDraft }
 // BatchSubmit hardwires its FROM state to validated, so submittability is
 // the endpoint's own contract, not an edge-table property.
 //
-// It is only HALF the positive predicate. The other half is
+// It is only PART of the positive predicate. Another part is
 // approval.TransmitClear (internal/approval/gate.go), which a validated invoice
-// must also satisfy before it may pass into queued. The two are composed in
+// must also satisfy before it may pass into queued. The parts are composed in
 // submitGate (handlers.go), never here: approval is not a status property, so
 // this stays a pure status literal.
 func canSubmit(s Status) bool { return s == StatusValidated }
@@ -1838,8 +1838,8 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 	return role, nil
 }
 
-// ApprovalFacts is one invoice's approval standing: TransmitClear feeds can_submit,
-// the other three feed can_approve/can_reject.
+// ApprovalFacts is one invoice's approval standing: TransmitClear and RulePending feed
+// can_submit, the other three feed can_approve/can_reject.
 type ApprovalFacts struct {
 	TransmitClear   bool
 	RulePending     bool
@@ -1896,10 +1896,10 @@ type ListGateFacts struct {
 // The returned map is display copy for the approval wire object; ListGateFacts is gate input,
 // never wire copy (TestStoreRowFacts_ReturnsTheArmedStanding).
 //
-// The three gate reads are here rather than inside approval.RowFactsTx so that helper's
+// The gate reads are here rather than inside approval.RowFactsTx so that helper's
 // statement count stays five (TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount);
-// all three are set-shaped, so the whole request stays constant in page size
-// (TestStoreRowFacts_TransmitClearIsConstantInPageSize).
+// all are set-shaped, so the whole request stays constant in page size
+// (TestStoreRowFacts_TransmitClearIsConstantInPageSize, TestStoreRowFacts_RulePendingIsConstantInPageSize).
 func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 	var out map[string]approval.RowFacts
 	var gate ListGateFacts

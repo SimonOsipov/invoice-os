@@ -1,6 +1,7 @@
 package invoice
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
 // submitFlags is one surface's can_submit verdict for one invoice.
@@ -34,9 +37,11 @@ func flagsOfRow(t *testing.T, raw map[string]json.RawMessage, where string) subm
 }
 
 // listFlags reads every row of the admin's list page, keyed by invoice id.
-func (f crFixture) listFlags(t *testing.T) map[string]submitFlags {
+func (f crFixture) listFlags(t *testing.T) map[string]submitFlags { return f.listFlagsAs(t, f.admin) }
+
+func (f crFixture) listFlagsAs(t *testing.T, caller context.Context) map[string]submitFlags {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodGet, "/v1/invoices?limit=200", nil).WithContext(f.admin)
+	r := httptest.NewRequest(http.MethodGet, "/v1/invoices?limit=200", nil).WithContext(caller)
 	rec := httptest.NewRecorder()
 	ListHandler(f.store.List, f.store.RowFacts, nil).ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
@@ -54,8 +59,12 @@ func (f crFixture) listFlags(t *testing.T) map[string]submitFlags {
 }
 
 func (f crFixture) detailFlags(t *testing.T, id string) submitFlags {
+	return f.detailFlagsAs(t, f.admin, id)
+}
+
+func (f crFixture) detailFlagsAs(t *testing.T, caller context.Context, id string) submitFlags {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+id, nil).WithContext(f.admin)
+	r := httptest.NewRequest(http.MethodGet, "/v1/invoices/"+id, nil).WithContext(caller)
 	r.SetPathValue("id", id)
 	rec := httptest.NewRecorder()
 	GetHandler(f.store.Get, f.store.CallerRole, f.store.ApprovalFacts, nil).ServeHTTP(rec, r)
@@ -134,8 +143,79 @@ func TestSubmitGate_DB_UncoveredAndMarkedRevisionsLeaveSubmitOn(t *testing.T) {
 	f.wantSubmit(t, list, onB, true, "B after the re-check marked the revision")
 	f.wantSubmit(t, list, onA, true, "A after the re-check")
 
-	f.save(t, &f.entity, "warning", true, "born marked") // a warning never blocks
+	// A revision that cannot block is born marked: warning, disabled, deleted.
+	f.save(t, &f.entity, "warning", true, "born marked")
 	f.wantSubmit(t, f.listFlags(t), onA, true, "A, warning revision")
+	f.save(t, &f.entity, "error", false, "disabled")
+	f.wantSubmit(t, f.listFlags(t), onA, true, "A, disabled error revision")
+	gone := f.save(t, &f.entity, "error", true, "to be deleted")
+	f.must(t, gate) // the invoice passes the rule: the pass marks it
+	if err := f.rules.Delete(f.admin, gone.ID); err != nil {
+		t.Fatalf("delete rule: %v", err)
+	}
+	f.wantSubmit(t, f.listFlags(t), onA, true, "A, deleted rule")
+}
+
+// Disabling a rule whose blocking revision is still pending does not lift the hold early:
+// the older revision waits for the re-check, as the queue door does.
+func TestSubmitGate_DB_DisablingAPendingRuleHoldsSubmitUntilTheRecheck(t *testing.T) {
+	f := newCRFixture(t, "ENGI-15-03 disable")
+	gate := f.gate(t, start04Wrapped(t, f.app, nil, nil))
+	id := f.validatedOn(t, gate, f.entity, "E15-03-D1", true)
+
+	r := f.save(t, &f.entity, "error", true, "email needed")
+	f.edit(t, r, &f.entity, "error", false)
+	f.wantSubmit(t, f.listFlags(t), id, false, "disabled while the first revision is pending")
+	if _, err := f.store.Transition(f.member, id, StatusQueued); !errors.Is(err, ErrRuleChangePending) {
+		t.Fatalf("Transition(queued) = %v, want ErrRuleChangePending -- the gate must agree with the door", err)
+	}
+
+	f.must(t, gate)
+	f.wantSubmit(t, f.listFlags(t), id, true, "after the re-check marked both revisions")
+}
+
+// The status and role rungs win over a pending revision on the real handlers.
+func TestSubmitGate_DB_StatusAndRoleRungsWinOverAPendingRevision(t *testing.T) {
+	f := newCRFixture(t, "ENGI-15-03 rungs")
+	gate := f.gate(t, start04Wrapped(t, f.app, nil, nil))
+	preparerID := uuid.NewString()
+	seedMembership(t, f.super, f.tenant, preparerID, "preparer")
+	preparer := auth.WithIdentity(context.Background(), auth.Identity{Subject: preparerID, Role: "authenticated", TenantID: f.tenant})
+
+	validated := f.validatedOn(t, gate, f.entity, "E15-03-R-VAL", true)
+	f.save(t, &f.entity, "error", true, "email needed")
+	f.wantSubmit(t, f.listFlags(t), validated, false, "control: the validated invoice is held by the pending revision")
+
+	statuses := []Status{StatusDraft, StatusRejected, StatusQueued, StatusSubmitted, StatusAccepted, StatusFailed}
+	ids := map[Status]string{}
+	for _, s := range statuses {
+		ids[s] = seedInvoiceAtStatus(t, f.super, f.tenant, f.entity, "E15-03-R-"+string(s), s)
+	}
+	list := f.listFlags(t)
+	for _, s := range statuses {
+		row, ok := list[ids[s]]
+		if !ok {
+			t.Fatalf("%s invoice is not on the list page", s)
+		}
+		wantReason := ""
+		if r := submitBlockedReason(s); r != nil {
+			wantReason = *r
+		}
+		for surface, got := range map[string]submitFlags{"list": row, "detail": f.detailFlags(t, ids[s])} {
+			if got.can || got.reason == ruleChangePendingReason || got.reason != wantReason {
+				t.Errorf("%s (%s): can_submit=%v reason=%q, want false with the status reason %q", s, surface, got.can, got.reason, wantReason)
+			}
+		}
+	}
+
+	for surface, got := range map[string]submitFlags{
+		"list":   f.listFlagsAs(t, preparer)[validated],
+		"detail": f.detailFlagsAs(t, preparer, validated),
+	} {
+		if got.can || got.reason != notApproverTransmitReason {
+			t.Errorf("preparer (%s): can_submit=%v reason=%q, want false with the approver sentence", surface, got.can, got.reason)
+		}
+	}
 }
 
 // can_submit must equal "the queue door would not refuse with ErrRuleChangePending".

@@ -616,7 +616,7 @@ func approvalGate(s Status, role string, f ApprovalFacts) (bool, *string) {
 // "never errors" contract -- an error from it fails closed (not-an-approver),
 // never a 5xx.
 //
-// approvalFacts feeds submitGate's third rung. An error from it fails closed --
+// approvalFacts feeds submitGate's last two rungs. An error from it fails closed --
 // the zero ApprovalFacts reads TransmitClear false -- and is logged while the
 // response stays 200 (TestGetHandler_ApprovalFactsErrorFailsClosedNot500). It is
 // logged, unlike callerRole, because a failed approval read has no legitimate
@@ -1037,7 +1037,7 @@ func ListHandler(
 				PendingStepOrd:  f.PendingOrd,
 				CallerHoldsRole: gate.HoldsPendingRole[inv.ID],
 			})
-			// The SAME submitGate GetHandler calls, over the same three inputs.
+			// The SAME submitGate GetHandler calls.
 			// One map lookup: no query enters this loop.
 			row.CanSubmit, row.SubmitBlockedReason = submitGate(inv.Status, gate.CallerRole, gate.TransmitClear[inv.ID], gate.RulePending[inv.ID])
 			rows = append(rows, row)

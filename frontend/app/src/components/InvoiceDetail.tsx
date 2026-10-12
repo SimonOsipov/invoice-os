@@ -38,6 +38,7 @@ import {
   DETAIL_SUBMIT_COPY,
   diffEditInput,
   diffLineItems,
+  editDateError,
   editInvoice,
   failureExplanation,
   formFromInvoice,
@@ -1443,6 +1444,11 @@ function InvoiceEditBody({
         setFormError(`Line ${i + 1}: ${labelOf(blanked)} cannot be cleared once saved. Remove the line and add it again to start it blank.`)
         return
       }
+    }
+    const dateError = editDateError(form)
+    if (dateError) {
+      setFormError(dateError)
+      return
     }
     const patch = diffEditInput(inv, form)
     // Trimmed on both sides: padding, or a legacy untrimmed stored number, is not a rename.

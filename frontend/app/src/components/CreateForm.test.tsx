@@ -107,6 +107,16 @@ describe('CreateForm NRS fields', () => {
     }
   })
 
+  it('createForm_malformedNrsDateDisablesFilingNamingTheField', () => {
+    mount(blankDraft())
+    fireEvent.change(byLabel('due_date'), { target: { value: '30/06/2026' } })
+    const refused = screen.getByRole('button', { name: 'Due date must be a date as YYYY-MM-DD.' }) as HTMLButtonElement
+    expect(refused.disabled).toBe(true)
+    expect(byLabel('due_date').value).toBe('30/06/2026')
+    fireEvent.change(byLabel('due_date'), { target: { value: ' 2026-06-30 ' } })
+    expect((screen.getByRole('button', { name: 'File invoice' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('createForm_carriedModeIsUnchanged', () => {
     const reading = {
       document_id: 'd', extraction_job_id: 'j', issue_date: null, buyer_tin: null, buyer_name: null, currency: 'NGN',

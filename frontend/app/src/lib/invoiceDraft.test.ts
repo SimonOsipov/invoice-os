@@ -443,6 +443,17 @@ describe('fileDraftInvoice: re-entrancy (SUBMIT-3)', () => {
 })
 
 describe('fileDraftGate (GATE-1)', () => {
+  it('refuses a malformed NRS date by its label and accepts a padded valid one', () => {
+    const entity = { id: 'e1', name: 'Acme', tin: '12345678-0001' }
+    for (const bad of ['2026-6-30', '30/06/2026', '2026-02-30']) {
+      expect(fileDraftGate({ ...baseDraft, due_date: bad }, entity)).toEqual({ canFile: false, reason: 'Due date must be a date as YYYY-MM-DD.' })
+      expect(fileDraftGate({ ...baseDraft, tax_point_date: bad }, entity)).toEqual({ canFile: false, reason: 'Tax point date must be a date as YYYY-MM-DD.' })
+    }
+    expect(fileDraftGate({ ...baseDraft, due_date: ' 2026-06-30 ' }, entity)).toEqual({ canFile: true })
+    expect(draftToCreateRequest({ ...baseDraft, due_date: ' 2026-06-30 ', tax_point_date: '  ' }, entity).due_date).toBe('2026-06-30T00:00:00Z')
+    expect(draftToCreateRequest({ ...baseDraft, tax_point_date: '  ' }, entity).tax_point_date).toBeNull()
+  })
+
   it('GATE-1 gates on the resolved entity first, the invoice number second', () => {
     expect(fileDraftGate(baseDraft, null)).toEqual({ canFile: false, reason: 'Filing needs a linked entity' })
     expect(fileDraftGate({ ...baseDraft, number: '' }, baseEntity)).toEqual({

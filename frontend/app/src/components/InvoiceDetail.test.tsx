@@ -7012,6 +7012,23 @@ describe('InvoiceDetail editor: the NRS fields (ENGI-06-04)', () => {
     expect(patchCalls[0]).toEqual({ due_date: null })
   })
 
+  it('invoiceDetail_malformedNrsDateIsRefusedBeforeTheRequest', async () => {
+    const { patchCalls } = await openEditor()
+    fireEvent.change(control('Due date'), { target: { value: '30/06/2026' } })
+    save()
+    expect(await screen.findByText('Due date must be a date as YYYY-MM-DD.')).toBeTruthy()
+    expect((control('Due date') as HTMLInputElement).value).toBe('30/06/2026')
+    expect(patchCalls).toHaveLength(0)
+  })
+
+  it('invoiceDetail_paddedValidNrsDateIsSentAsRfc3339', async () => {
+    const { patchCalls } = await openEditor()
+    fireEvent.change(control('Due date'), { target: { value: ' 2026-06-30 ' } })
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    expect(patchCalls[0]).toEqual({ due_date: '2026-06-30T00:00:00Z' })
+  })
+
   it('invoiceDetail_refusesToBlankASavedLineNrsField', async () => {
     const { patchCalls } = await openEditor()
     const hsn = lineInput(1, 'hsn_code')

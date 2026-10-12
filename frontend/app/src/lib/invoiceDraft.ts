@@ -58,6 +58,7 @@ import { toApiError, type ApiError } from '@invoice-os/api-client'
 import {
   addScaled,
   mulScaled,
+  nrsDateError,
   parseScaled,
   renderScaled,
   type InvoiceCreateInput,
@@ -100,7 +101,8 @@ function nullIfBlank(value: string): string | null {
 
 // A 'YYYY-MM-DD' draft date as RFC3339, like issue_date; blank -> null.
 function dateOrNull(value: string): string | null {
-  return value === '' ? null : `${value}T00:00:00Z`
+  const text = value.trim()
+  return text === '' ? null : `${text}T00:00:00Z`
 }
 
 // quantity x unit_price, EXACT. `null` when either side is non-numeric (String(NaN) ->
@@ -502,5 +504,7 @@ export function fileDraftGate(
 ): { canFile: true } | { canFile: false; reason: string } {
   if (entity === null) return { canFile: false, reason: ENTITY_REQUIRED_REASON }
   if (draft.number === '') return { canFile: false, reason: 'Invoice number is required' }
+  const dateError = nrsDateError('due_date', draft.due_date) ?? nrsDateError('tax_point_date', draft.tax_point_date)
+  if (dateError) return { canFile: false, reason: dateError }
   return { canFile: true }
 }

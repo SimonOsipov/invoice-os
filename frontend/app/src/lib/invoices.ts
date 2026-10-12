@@ -117,7 +117,7 @@ import type { Violation } from './validationApi'
 import type { StatusStyle } from '../types'
 import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
 import { toDateInputValue } from './format'
-import { INVOICE_FIELDS, type EditFieldKey, type LineEditKey } from './invoiceFields'
+import { INVOICE_FIELDS, labelOf, type EditFieldKey, type InvoiceField, type LineEditKey } from './invoiceFields'
 
 export type InvoiceStatus =
   | 'draft'
@@ -1128,6 +1128,29 @@ const LEGACY_EDIT_KEYS: ReadonlySet<EditFieldKey> = new Set([
 const DATE_EDIT_KEYS: ReadonlySet<string> = new Set(
   INVOICE_FIELDS.filter((f) => !f.line && f.edit && f.type === 'date').map((f) => f.key),
 )
+
+// A real calendar day written exactly YYYY-MM-DD.
+function isIsoDay(text: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
+  if (!m) return false
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]))
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3]
+}
+
+// The refusal for a malformed free-text NRS date (blank is fine); issue_date is left to the server.
+export function nrsDateError(key: string, value: string): string | null {
+  const text = value.trim()
+  if (text === '' || key === 'issue_date' || isIsoDay(text)) return null
+  return `${labelOf(key as InvoiceField['key'])} must be a date as YYYY-MM-DD.`
+}
+
+export function editDateError(form: Record<string, string>): string | null {
+  for (const key of DATE_EDIT_KEYS) {
+    const err = nrsDateError(key, form[key] ?? '')
+    if (err) return err
+  }
+  return null
+}
 
 export function formFromInvoice(inv: Pick<InvoiceRecord, EditFieldKey>): EditFormState {
   const form = {} as EditFormState

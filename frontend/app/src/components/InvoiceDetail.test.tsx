@@ -7146,6 +7146,21 @@ describe('InvoiceDetail editor: the NRS fields (ENGI-06-04)', () => {
     expect(control('Buyer LGA').getAttribute('aria-required')).toBe('true')
   })
 
+  it('invoiceDetail_buyerTypeNoteOfAStoredKindNamesTheSameNineRequiredInputs', async () => {
+    await openEditor({ invoice_kind: 'B2B' })
+    expect(screen.getByTestId('buyer-type-note').textContent).toBe('Buyer TIN, name, email and address are required for a B2B or B2G invoice.')
+    const required = ['Buyer TIN', 'Buyer name', 'Buyer email', 'Buyer street', 'Buyer city', 'Buyer postal zone', 'Buyer country', 'Buyer state', 'Buyer LGA']
+    const flagged = ['Buyer TIN', 'Buyer name', 'Buyer email', 'Buyer telephone', 'Buyer street', 'Buyer city', 'Buyer postal zone', 'Buyer country', 'Buyer state', 'Buyer LGA', 'Invoice kind']
+      .filter((label) => control(label).getAttribute('aria-required') === 'true')
+    expect(flagged.sort()).toEqual([...required].sort())
+  })
+
+  it('invoiceDetail_buyerTypeNoteOfAStoredB2CFlagsNoBuyerInput', async () => {
+    await openEditor({ invoice_kind: 'B2C' })
+    expect(screen.getByTestId('buyer-type-note').textContent).toBe('Buyer details are optional for a B2C invoice.')
+    for (const label of ['Buyer TIN', 'Buyer name', 'Buyer email', 'Buyer LGA']) expect(control(label).getAttribute('aria-required'), label).toBeNull()
+  })
+
   it('invoiceDetail_editingALineCodeSendsItWithItsId', async () => {
     const { patchCalls, fetchMock } = await openEditor()
     await answerCodes(fetchMock, [{ code: '9999', label: 'Nine' }])

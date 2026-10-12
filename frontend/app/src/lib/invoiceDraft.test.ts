@@ -914,6 +914,76 @@ describe('draftLineTaxes: largest remainder (AC-1)', () => {
   it('draftLineTaxes_mathsUseThePercentRoundedTo2dp', () => {
     expect(draftLineTaxes([taxed(100000, 'STANDARD_VAT', '7.504')])).toEqual(['7500.00'])
   })
+
+  it('draftLineTaxes_halfUpAtTheKoboTie', () => {
+    // Exact 0.015, 0.045, 0.01425, 0.0135: ties go up, the rest by distance.
+    expect(draftLineTaxes([taxed(0.2)])).toEqual(['0.02'])
+    expect(draftLineTaxes([taxed(0.6)])).toEqual(['0.05'])
+    expect(draftLineTaxes([taxed(0.19)])).toEqual(['0.01'])
+    expect(draftLineTaxes([taxed(0.18)])).toEqual(['0.01'])
+  })
+
+  it('draftLineTaxes_negativeTieRoundsAwayFromZero', () => {
+    expect(draftLineTaxes([taxed(-0.2)])).toEqual(['-0.02'])
+    expect(draftLineTaxes([taxed(-0.6)])).toEqual(['-0.05'])
+    expect(draftLineTaxes([taxed(-0.19)])).toEqual(['-0.01'])
+  })
+
+  it('draftLineTaxes_negativeGroupFloorsTowardMinusInfinity', () => {
+    // Pinned: T = -0.03 splits as -0.01, -0.02, because the floor of -0.015 is -0.02 and the
+    // leftover kobo goes to the lower line.
+    const taxes = draftLineTaxes([taxed(-0.2), taxed(-0.2)])
+
+    expect(taxes).toEqual(['-0.01', '-0.02'])
+    expect(BigInt(taxes[0]!.replace('.', '')) + BigInt(taxes[1]!.replace('.', ''))).toBe(-3n)
+  })
+
+  it('draftLineTaxes_mixedSignsShareOneGroupTotal', () => {
+    // Exact 0.015 and -0.0075; T = round2(0.0075) = 0.01.
+    expect(draftLineTaxes([taxed(0.2), taxed(-0.1)])).toEqual(['0.02', '-0.01'])
+    expect(draftLineTaxes([taxed(100), taxed(-100)])).toEqual(['7.50', '-7.50'])
+  })
+
+  it('draftLineTaxes_zeroAndNegativeQuantitiesAndPrices', () => {
+    const taxes = draftLineTaxes([
+      taxed(50, 'STANDARD_VAT', '7.5', 0),
+      taxed(0),
+      taxed(50, 'STANDARD_VAT', '7.5', -2),
+      taxed(-50, 'STANDARD_VAT', '7.5', -2),
+    ])
+
+    expect(taxes).toEqual(['0.00', '0.00', '-7.50', '7.50'])
+  })
+
+  it('draftLineTaxes_percentRoundsHalfUpAt2dp', () => {
+    // 100000.00 x percent: '7.505' -> 7.51, '7.495' -> 7.50, '0.004' -> 0, '0.005' -> 0.01.
+    expect(draftLineTaxes([taxed(100000, 'STANDARD_VAT', '7.505')])).toEqual(['7510.00'])
+    expect(draftLineTaxes([taxed(100000, 'STANDARD_VAT', '7.495')])).toEqual(['7500.00'])
+    expect(draftLineTaxes([taxed(100000, 'STANDARD_VAT', '0.004')])).toEqual(['0.00'])
+    expect(draftLineTaxes([taxed(100000, 'STANDARD_VAT', '0.005')])).toEqual(['10.00'])
+    expect(draftLineTaxes([taxed(100000, 'STANDARD_VAT', '75e-1')])).toEqual(['7500.00'])
+  })
+
+  it('draftLineTaxes_taxIsTakenOnTheRoundedLineTotal', () => {
+    // Float 1.005 is 1.00499...; the exact line total rounds half-up to 1.01 and the tax follows it.
+    expect(draftLineTaxes([taxed(1.005, 'STANDARD_VAT', '100')])).toEqual(['1.01'])
+    // 0.005 rounds to 0.01 before the 99% rate: 0.0099 -> 0.01, not 0.00495 -> 0.00.
+    expect(draftLineTaxes([taxed(0.005, 'STANDARD_VAT', '99')])).toEqual(['0.01'])
+    // qty x price = 1.005 exactly.
+    expect(draftLineTaxes([taxed(0.335, 'STANDARD_VAT', '100', 3)])).toEqual(['1.01'])
+  })
+
+  it('draftLineTaxes_hugeTieRoundsHalfUpExactly', () => {
+    // 1234567890123420 kobo x 7.5% is exactly 92592591759256.5 kobo; a float product (9.2e17) lands 8 below the tie.
+    expect(draftLineTaxes([taxed(12345678901234.2)])).toEqual(['925925917592.57'])
+  })
+
+  it('draftLineTaxes_exactPastTheFloatRange', () => {
+    // Ten lines of 12345678901234.56: 1.2e16 kobo of base, past 2^53. Exact tax 92592591759259.2 each, T = 925925917592592.
+    const taxes = draftLineTaxes(Array.from({ length: 10 }, () => taxed(12345678901234.56)))
+
+    expect(taxes).toEqual(['925925917592.60', '925925917592.60', ...Array<string>(8).fill('925925917592.59')])
+  })
 })
 
 describe('draftLineTaxes: groups and nulls (AC-2)', () => {
@@ -941,6 +1011,31 @@ describe('draftLineTaxes: groups and nulls (AC-2)', () => {
   it('draftLineTaxes_zeroRate', () => {
     expect(draftLineTaxes([taxed(100, 'ZERO_VAT', '0'), taxed(5.55, 'ZERO_VAT', '0.00')])).toEqual(['0.00', '0.00'])
   })
+
+  it('draftLineTaxes_aPercentThatDoesNotParseGivesNoTax', () => {
+    // Pinned: the field takes a bare decimal, so a typed '7.5%' or '7,5' files no line tax.
+    const taxes = draftLineTaxes(['7.5%', '7,5', '.5', ' 7.5', '7.5 '].map((p) => taxed(100, 'STANDARD_VAT', p)))
+
+    expect(taxes).toEqual([null, null, null, null, null])
+  })
+
+  it('draftLineTaxes_aLineWithoutATotalDoesNotJoinItsGroup', () => {
+    // The unparseable line is not a member: the two valid lines still split T = 0.02.
+    const taxes = draftLineTaxes([
+      taxed(0.1),
+      draftLine({ desc: 'x', qty: 1, price: Number.POSITIVE_INFINITY, tax_category: 'STANDARD_VAT', tax_percent: '7.5' }),
+      taxed(0.1),
+    ])
+
+    expect(taxes).toEqual(['0.01', null, '0.01'])
+  })
+
+  it('draftLineTaxes_oneTaxPerLineAndInInputOrder', () => {
+    const items = [taxed(10), taxed(10, 'ZERO_VAT', '0'), draftLine({ desc: 'x', qty: 1, price: 10 }), taxed(10, 'STANDARD_VAT', '5')]
+
+    expect(draftLineTaxes(items)).toEqual(['0.75', '0.00', null, '0.50'])
+    expect(draftLineTaxes([])).toEqual([])
+  })
 })
 
 describe('draftTotals: category-aware VAT (AC-3)', () => {
@@ -961,6 +1056,44 @@ describe('draftTotals: category-aware VAT (AC-3)', () => {
     const totals = draftTotals([taxed(200), draftLine({ desc: 'x', qty: 1, price: 100 })])
 
     expect(totals).toEqual({ subtotal: '300.00', vat: '15.00', total: '315.00', vatLabel: 'VAT' })
+  })
+
+  it('draftTotals_aCategorisedLineWithoutAPercentFilesNoVat', () => {
+    // Pinned: the label drops to VAT, the line has no tax, and VAT is 0.00 although the flat rate would give 112.50.
+    const totals = draftTotals([taxed(1000, 'STANDARD_VAT', ''), draftLine({ desc: 'x', qty: 1, price: 500 })])
+
+    expect(totals).toEqual({ subtotal: '1500.00', vat: '0.00', total: '1500.00', vatLabel: 'VAT' })
+  })
+
+  it('draftTotals_emptyAndUnparseableLinesStayNull', () => {
+    expect(draftTotals([])).toEqual({ subtotal: null, vat: null, total: null, vatLabel: 'VAT · 7.5%' })
+    const nan = draftLine({ desc: 'x', qty: NaN, price: 1, tax_category: 'STANDARD_VAT', tax_percent: '7.5' })
+    expect(draftTotals([taxed(100), nan])).toEqual({ subtotal: null, vat: null, total: null, vatLabel: 'VAT' })
+  })
+
+  it('draftTotals_categorisedVatEqualsTheSumOfTheWireLineTaxes', () => {
+    const draft: Draft = { ...baseDraft, items: [taxed(0.1), taxed(0.1), taxed(0.1), taxed(33.33, 'ZERO_VAT', '0'), draftLine({ desc: 'x', qty: 2, price: 7.77 })] }
+
+    const wire = draftToCreateRequest(draft, baseEntity)
+    const lineTaxKobo = wire.line_items.reduce((sum, l) => sum + BigInt((l.line_tax ?? '0').replace('.', '')), 0n)
+
+    expect(draftTotals(draft.items)).toEqual({ subtotal: wire.subtotal, vat: wire.vat, total: wire.total, vatLabel: 'VAT' })
+    expect(wire.vat).toBe('0.02')
+    expect(lineTaxKobo).toBe(2n)
+    expect(wire.total).toBe('49.19')
+  })
+
+  it('draftTotals_largeCategorisedTotalsStayExact', () => {
+    const totals = draftTotals(Array.from({ length: 10 }, () => taxed(12345678901234.56)))
+
+    expect(totals).toEqual({ subtotal: '123456789012345.60', vat: '9259259175925.92', total: '132716048188271.52', vatLabel: 'VAT' })
+  })
+
+  it('draftTotals_flatRateRoundsTheDeclaredSubtotalHalfUp', () => {
+    // Exact 0.20 x 0.075 = 0.015 -> 0.02; 0.60 -> 0.045 -> 0.05; negative ties go away from zero.
+    expect(draftTotals([draftLine({ desc: 'x', qty: 1, price: 0.2 })]).vat).toBe('0.02')
+    expect(draftTotals([draftLine({ desc: 'x', qty: 1, price: 0.6 })]).vat).toBe('0.05')
+    expect(draftTotals([draftLine({ desc: 'x', qty: 1, price: -0.2 })]).vat).toBe('-0.02')
   })
 })
 
@@ -1007,6 +1140,36 @@ describe('draftToCreateRequest: NRS keys (AC-4)', () => {
     }
   })
 
+  it('draftToCreateRequest_eachHeaderKeyCarriesItsOwnDraftValueAndNullsWhenBlank', () => {
+    const typed = Object.fromEntries(HEADER_KEYS.map((k) => [k, k.endsWith('_date') ? '2027-01-31' : `v-${k}`]))
+    const wireOf = (draft: Draft) => draftToCreateRequest(draft, baseEntity) as unknown as Record<string, unknown>
+
+    expect(HEADER_KEYS).toHaveLength(22)
+    for (const blank of HEADER_KEYS) {
+      const result = wireOf({ ...baseDraft, ...typed, [blank]: '' })
+      for (const k of HEADER_KEYS) {
+        if (k === blank) expect(result[k], `${k} blank`).toBeNull()
+        else expect(result[k], `${k} while ${blank} is blank`).toBe(k.endsWith('_date') ? '2027-01-31T00:00:00Z' : `v-${k}`)
+      }
+    }
+  })
+
+  it('draftToCreateRequest_eachLineKeyCarriesItsOwnValueAndNullsWhenBlank', () => {
+    const NRS = ['tax_category', 'hsn_code', 'isic_code', 'product_category', 'service_category', 'sellers_item_identification', 'price_unit', 'tax_percent'] as const
+    const typed = Object.fromEntries(NRS.map((k) => [k, k === 'tax_percent' ? '7.5' : `v-${k}`]))
+    const lineOf = (over: Partial<Record<(typeof NRS)[number], string>>) =>
+      draftToCreateRequest({ ...baseDraft, items: [draftLine({ desc: 'x', qty: 1, price: 100, ...typed, ...over })] }, baseEntity).line_items[0]! as unknown as Record<string, unknown>
+
+    expect(NRS).toHaveLength(8)
+    for (const blank of NRS) {
+      const line = lineOf({ [blank]: '' })
+      for (const k of NRS) {
+        if (k === blank) expect(line[k], `${k} blank`).toBeNull()
+        else expect(line[k], `${k} while ${blank} is blank`).toBe(typed[k])
+      }
+    }
+  })
+
   it('draftToCreateRequest_sendsTheNrsLineKeys', () => {
     const draft: Draft = {
       ...baseDraft,
@@ -1048,6 +1211,28 @@ describe('draftToCreateRequest: NRS keys (AC-4)', () => {
     expect(result.vat).toBe('0.02')
     expect(result.total).toBe('0.32')
   })
+
+  it('draftToCreateRequest_lineTotalsRoundHalfUpAndStayExact', () => {
+    const lineTotal = (price: number, qty = 1) =>
+      draftToCreateRequest({ ...baseDraft, items: [draftLine({ desc: 'x', qty, price })] }, baseEntity).line_items[0]!.line_total
+
+    expect(lineTotal(0.005)).toBe('0.01')
+    expect(lineTotal(0.004)).toBe('0.00')
+    expect(lineTotal(-0.005)).toBe('-0.01')
+    expect(lineTotal(1.005)).toBe('1.01')
+    expect(lineTotal(0.1 + 0.2), '0.30000000000000004 as typed').toBe('0.30')
+    expect(lineTotal(0.1, 3)).toBe('0.30')
+    const sum = draftToCreateRequest({ ...baseDraft, items: [draftLine({ desc: 'a', qty: 1, price: 0.1 }), draftLine({ desc: 'b', qty: 1, price: 0.2 })] }, baseEntity)
+    expect([sum.subtotal, sum.vat, sum.total]).toEqual(['0.30', '0.02', '0.32'])
+  })
+
+  it('draftToCreateRequest_aLineTaxIsNullWhenTheLineHasNoTotal', () => {
+    const draft: Draft = { ...baseDraft, items: [draftLine({ desc: 'x', qty: NaN, price: 1, tax_category: 'STANDARD_VAT', tax_percent: '7.5' })] }
+
+    const [line] = draftToCreateRequest(draft, baseEntity).line_items
+
+    expect(line).toMatchObject({ line_total: null, line_tax: null, quantity: 'NaN', tax_category: 'STANDARD_VAT', tax_percent: '7.5' })
+  })
 })
 
 describe('withSupplierDefaults (AC-5)', () => {
@@ -1067,6 +1252,25 @@ describe('withSupplierDefaults (AC-5)', () => {
     expect(filled.supplier_lga).toBe('')
     expect(draft.supplier_street, 'the input draft is not mutated').toBe('')
     expect({ ...filled, supplier_street: '', supplier_country: '' }).toEqual(draft)
+  })
+
+  it('withSupplierDefaults_whitespaceIsContentNotBlank', () => {
+    // Pinned: no trimming anywhere in the mapper, so a typed ' ' is kept and an entity ' ' is copied.
+    const draft: Draft = { ...baseDraft, supplier_email: ' ', supplier_city: '' }
+
+    const filled = withSupplierDefaults(draft, { email: 'co@x', city: '  ', street: '', telephone: undefined })
+
+    expect(filled.supplier_email).toBe(' ')
+    expect(filled.supplier_city).toBe('  ')
+    expect(filled.supplier_street).toBe('')
+    expect(filled.supplier_telephone).toBe('')
+  })
+
+  it('withSupplierDefaults_anEmptyEntityChangesNothingAndNeverTouchesOtherKeys', () => {
+    const draft: Draft = { ...baseDraft, buyer_email: 'b@x', supplier_lga: 'L' }
+
+    expect(withSupplierDefaults(draft, {})).toEqual(draft)
+    expect(withSupplierDefaults(draft, { email: 'co@x', lga: 'Other' })).toEqual({ ...draft, supplier_email: 'co@x' })
   })
 })
 
@@ -1130,6 +1334,48 @@ describe('applyBuyerRecord (AC-6)', () => {
     expect(out.supplier_email).toBe('keep')
     for (const k of BUYER_KEYS) if (k !== 'buyer' && k !== 'buyer_email' && k !== 'buyer_street') expect(out[k], k).toBe(draft[k])
   })
+
+  it('applyBuyerRecord_aNewRecordReplacesTheLastFillAndTheReturnedFillClearsIt', () => {
+    const other: Customer = { ...record, id: 'c-2', name: 'Beta', buyer_type: 'B2B', email: null, state: 'Abia' }
+    const first = applyBuyerRecord({ ...baseDraft, buyerTin: 'typed-tin' }, record, {})
+    const second = applyBuyerRecord(first.draft, other, first.fill)
+    const cleared = applyBuyerRecord(second.draft, null, second.fill)
+
+    expect(second.draft).toMatchObject({ buyer: 'Beta', invoice_kind: 'B2B', buyer_email: '', buyer_state: 'Abia', buyer_street: '1 Main' })
+    expect(second.draft.buyerTin, 'the typed TIN is not replaced by the record TIN').toBe('typed-tin')
+    expect(cleared.draft).toEqual({ ...baseDraft, buyerTin: 'typed-tin', buyer: '', invoice_kind: '', buyer_street: '', buyer_city: '', buyer_postal_zone: '', buyer_country: '', buyer_state: '', buyer_telephone: '', buyer_email: '', buyer_lga: '' })
+    expect(cleared.fill, 'a second no-match has nothing left to clear').toEqual({})
+    expect(applyBuyerRecord({ ...cleared.draft, buyer: 'Typed' }, null, cleared.fill).draft.buyer).toBe('Typed')
+  })
+
+  it('applyBuyerRecord_noMatchWithNoLastFillChangesNothing', () => {
+    const draft: Draft = { ...baseDraft, buyer: 'Typed', buyer_email: 'a@x', invoice_kind: 'B2C' }
+
+    const { draft: out, fill } = applyBuyerRecord(draft, null, {})
+
+    expect(out).toEqual(draft)
+    expect(out).not.toBe(draft)
+    expect(fill).toEqual({})
+  })
+
+  it('applyBuyerRecord_aFillOfBlankNeverClearsATypedValue', () => {
+    // buyer_lga was filled as '': the user then typed 'Ikeja', which differs from the fill, so it stays.
+    const filled = applyBuyerRecord(baseDraft, record, {})
+    const typed: Draft = { ...filled.draft, buyer_lga: 'Ikeja' }
+
+    expect(applyBuyerRecord(typed, null, filled.fill).draft.buyer_lga).toBe('Ikeja')
+  })
+
+  it('applyBuyerRecord_doesNotMutateItsInputs', () => {
+    const draft: Draft = { ...baseDraft, buyer: 'Typed' }
+    const lastFill = { buyer: 'Typed' }
+
+    applyBuyerRecord(draft, record, lastFill)
+    applyBuyerRecord(draft, null, lastFill)
+
+    expect(draft.buyer).toBe('Typed')
+    expect(lastFill).toEqual({ buyer: 'Typed' })
+  })
 })
 
 describe('buyerRequirement (AC-7)', () => {
@@ -1143,5 +1389,10 @@ describe('buyerRequirement (AC-7)', () => {
     }
     expect(buyerRequirement('B2C')).toEqual({ level: 'optional', keys: [] })
     expect(buyerRequirement('')).toEqual({ level: 'choose', keys: [] })
+  })
+
+  it('buyerRequirement_aKindOutsideTheThreeIsChoose', () => {
+    // Pinned: the match is exact, so a stored 'b2b' or ' B2B' reads as not chosen.
+    for (const kind of ['b2b', ' B2B', 'B2B ', 'B2X']) expect(buyerRequirement(kind), kind).toEqual({ level: 'choose', keys: [] })
   })
 })

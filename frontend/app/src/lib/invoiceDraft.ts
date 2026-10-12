@@ -23,7 +23,7 @@
 //   pass-through deliberately (this mapper's own contract, unrelated to the server-side
 //   fix) -- if it ever fails, that is a decision about THIS mapper, not about C7.
 // - `quantity`/`unit_price` cross the wire VERBATIM (typed, user-entered values);
-//   `subtotal`/`vat`/`total`/`line_total` are round2 half-up (DERIVED values) -- see GAP
+//   `subtotal`/`vat`/`total`/`line_total`/`line_tax` are round2 half-up (DERIVED values) -- see GAP
 //   2 in task-278's plan: PG stores these as numeric(14,2)/numeric(14,3) and rounds
 //   anyway, so rounding client-side makes the wire body equal the row that gets stored
 //   and judged. Rounding a user-typed price instead would be a client-side verdict on
@@ -41,7 +41,8 @@
 //   `(3*1000.005).toFixed(2)` gives '3000.01' and exact-without-rounding gives
 //   '3000.015'. `subtotal` is round2 of the EXACT sum of the products, not the sum of the
 //   already-rounded line_totals, so both derive from the same products; `vat` is round2 of
-//   the DECLARED (already-rounded) subtotal x 0.075, and `total` their sum. Do NOT reuse
+//   the DECLARED (already-rounded) subtotal x 0.075 while no line is categorised (else
+//   the sum of the line taxes), and `total` their sum. Do NOT reuse
 //   computedLineSum -- its absent-quantity-weights-1 rule and no-round render belong to
 //   the edit-form hint, not this mapper.
 // - Two edges handled per task-278's plan rather than spec'd: an empty `items` array emits
@@ -75,7 +76,7 @@ import type { Entity } from './portfolio'
 // judges; agreeing with the rule is correct, not a bypass.
 const VAT_RATE: Scaled = { u: 75n, s: 3 }
 
-// Half-up, magnitude away from zero, to exactly 2dp -- the scale every column the four
+// Half-up, magnitude away from zero, to exactly 2dp -- the scale every column the
 // DERIVED fields land in is declared at (numeric(14,2), 20260714103137_invoices.sql:57-59
 // / 20260714105151_line_items.sql:51-54), so the wire body equals the row that gets stored
 // and judged. A value already at or below 2dp is returned untouched; renderScaled pads it.

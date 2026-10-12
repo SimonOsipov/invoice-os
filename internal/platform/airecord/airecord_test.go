@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -50,6 +52,10 @@ func TestRecord_ACallThatSentNothingIsNotRecorded(t *testing.T) {
 	if len(s.got) != 0 || buf.Len() != 0 {
 		t.Errorf("sink calls=%d log=%q, want none", len(s.got), buf.String())
 	}
+	Record(context.Background(), s.sink, logger, Call{Client: "ai", Purpose: "document", Attempts: 0, Outcome: "off"})
+	if len(s.got) != 0 || buf.Len() != 0 {
+		t.Errorf("no identity: sink calls=%d log=%q, want none", len(s.got), buf.String())
+	}
 }
 
 func TestRecord_ARefusedRequestWithNoAttemptIsNotRecorded(t *testing.T) {
@@ -72,6 +78,18 @@ func TestRecord_HandsTheSinkTheCallersTenant(t *testing.T) {
 	want.TenantID = "T1"
 	if s.got[0] != want {
 		t.Errorf("got %+v, want %+v", s.got[0], want)
+	}
+}
+
+func TestCall_HasExactlyTheDesignedFields(t *testing.T) {
+	typ := reflect.TypeOf(Call{})
+	var got []string
+	for i := range typ.NumField() {
+		got = append(got, typ.Field(i).Name)
+	}
+	want := []string{"TenantID", "Client", "Purpose", "Model", "InputTokens", "OutputTokens", "Cost", "LatencyMS", "Attempts", "Outcome"}
+	if !slices.Equal(got, want) {
+		t.Errorf("fields %v, want %v", got, want)
 	}
 }
 

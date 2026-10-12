@@ -214,7 +214,7 @@ func TestBatch_InvalidCustomSetIs400WithNoLoad(t *testing.T) {
 	}{
 		{"unknown set key", []any{item("a", "nope")}, map[string]any{"e1": []any{ok()}}},
 		{"item names a set twice", []any{item("a", "e1", "e1")}, map[string]any{"e1": []any{ok()}}},
-		{"rule id in two sets", []any{item("a", "firm")}, map[string]any{"firm": []any{ok()}, "e1": []any{ok()}}},
+		{"rule id in two sets", []any{item("a", "firm")}, map[string]any{"firm": []any{ok()}, "e1": []any{mod("key", "custom:r2")}}},
 		{"empty set", []any{item("a", "e1")}, map[string]any{"e1": []any{}}},
 		{"golden-looking key", []any{item("a", "e1")}, map[string]any{"e1": []any{mod("key", "supplier-tin-required")}}},
 		{"key without prefix", []any{item("a", "e1")}, map[string]any{"e1": []any{mod("key", "r1")}}},

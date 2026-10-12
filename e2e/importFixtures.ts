@@ -214,6 +214,33 @@ export function nullImportKeys(): Record<string, null> {
   return Object.fromEntries(IMPORT_KEYS.map((k) => [k, null]))
 }
 
+// The header keys the extraction AI answers, mirrored from internal/invoicefields ExtractHeaderKeys(); the answer schema requires every one.
+export const EXTRACT_HEADER_KEYS = [
+  'invoice_number',
+  'issue_date',
+  'supplier_tin',
+  'supplier_name',
+  'buyer_tin',
+  'buyer_name',
+  'currency',
+  'subtotal',
+  'vat',
+  'total',
+  'due_date',
+  'buyer_email',
+  'buyer_telephone',
+  'buyer_street',
+  'buyer_city',
+  'buyer_postal_zone',
+  'buyer_country',
+  'buyer_state',
+  'buyer_lga',
+]
+
+export function nullExtractHeaderKeys(): Record<string, null> {
+  return Object.fromEntries(EXTRACT_HEADER_KEYS.map((k) => [k, null]))
+}
+
 // steerExplainMarker(): the Explain-scoped marker (FakeScope "EXPLAIN" in internal/invoice/handlers_explain.go;
 // scoped spelling per internal/platform/ai/fake.go's markerAnswerPrefixFor). An unscoped steerMarker never steers it.
 export function steerExplainMarker(answer: unknown): string {

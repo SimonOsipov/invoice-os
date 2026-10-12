@@ -53,6 +53,7 @@ import {
   buildHeaderOnlyCsv,
   buildMixedCsv,
   buildSingleInvoiceCsv,
+  nullExtractHeaderKeys,
 } from '../importFixtures'
 
 const { SHARD, PERSONAS } = shardPersonas('import-wizard-2.spec.ts')
@@ -147,15 +148,10 @@ function uniqueAiNrsPdfBytes(): Buffer {
 // No new committed fixture: reuses SCANNED_INVOICE_PDF, uniqueScannedPdfBytes()'s recipe, plus a
 // second trailing comment steering the fake's image-read answer.
 const IMAGE_READ_ANSWER = {
+  ...nullExtractHeaderKeys(),
   invoice_number: 'INV-5520',
   issue_date: '2026-07-14',
-  supplier_tin: null,
-  supplier_name: null,
   buyer_tin: '9999999-1202',
-  buyer_name: null,
-  currency: null,
-  subtotal: null,
-  vat: null,
   total: '1935.00',
 }
 

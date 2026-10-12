@@ -4,8 +4,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 // Generated from internal/invoicefields.ImportKeys() by the invoicefields Go test.
-import { IMPORT_KEYS as LIST_IMPORT_KEYS } from '../frontend/app/src/lib/invoiceFields.gen'
-import { AIR07_ROW3_ANSWER, IMPORT_KEYS, nullImportKeys } from './importFixtures'
+import { IMPORT_KEYS as LIST_IMPORT_KEYS, INVOICE_FIELDS } from '../frontend/app/src/lib/invoiceFields.gen'
+import { AIR07_ROW3_ANSWER, EXTRACT_HEADER_KEYS, IMPORT_KEYS, nullExtractHeaderKeys, nullImportKeys } from './importFixtures'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -39,5 +39,21 @@ describe('IMPORT_KEYS', () => {
     ['api/contract-import.spec.ts', 'AIR07_API_ANSWER'],
   ])('%s %s spreads nullImportKeys()', (file, name) => {
     expect(answerLiteral(file, name)).toContain('...nullImportKeys()')
+  })
+})
+
+describe('EXTRACT_HEADER_KEYS', () => {
+  it('mirrors the extract header keys of the field list, in order', () => {
+    const want = INVOICE_FIELDS.filter((f) => f.extract && !f.line).map((f) => f.key)
+    expect(want.length).toBeGreaterThan(0)
+    expect(EXTRACT_HEADER_KEYS).toEqual(want)
+  })
+
+  it('nullExtractHeaderKeys holds every key as null', () => {
+    expect(Object.keys(nullExtractHeaderKeys())).toEqual(EXTRACT_HEADER_KEYS)
+  })
+
+  it('IMAGE_READ_ANSWER spreads nullExtractHeaderKeys()', () => {
+    expect(answerLiteral('topology/import-wizard-2.spec.ts', 'IMAGE_READ_ANSWER')).toContain('...nullExtractHeaderKeys()')
   })
 })

@@ -392,6 +392,10 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		}, nil
 	}
 	in.ImportBatchID = &batchID
+	if err := s.fillBuyerType(ctx, &in); err != nil {
+		_ = s.batch.Finalize(ctx, batchID, 1, 1, 0, nil, "failed")
+		return BatchResult{}, err
+	}
 
 	// ExistingNumbers only resolves the colliding id for a nicer message in the non-racing
 	// case (D-12) -- Create's own unique-constraint 23505 below is the real guard. Its own
@@ -516,6 +520,9 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 	in.EntityID = entityID
 	in.InvoiceNumber = number
 	in.NumberSupplied = true
+	if err := s.fillBuyerType(ctx, &in); err != nil {
+		return invoice.Invoice{}, err
+	}
 	created, err := s.inv.Create(ctx, in)
 	if err != nil {
 		return invoice.Invoice{}, err
@@ -537,7 +544,15 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 	return got, nil
 }
 
-// fillBuyerType is a Test-Spec stub (ENGI-08-07): the executor implements it.
+// fillBuyerType fills an unprinted buyer type from the tenant's buyer directory (D36).
 func (s *Service) fillBuyerType(ctx context.Context, in *invoice.CreateInput) error {
+	if in.InvoiceKind != nil || in.BuyerTIN == nil || strings.TrimSpace(*in.BuyerTIN) == "" {
+		return nil
+	}
+	bt, err := s.batch.BuyerTypeByTIN(ctx, *in.BuyerTIN)
+	if err != nil {
+		return err
+	}
+	in.InvoiceKind = bt
 	return nil
 }

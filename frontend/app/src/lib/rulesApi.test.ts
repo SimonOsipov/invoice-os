@@ -188,6 +188,7 @@ describe('rulesApi', () => {
       enabled: true,
     })
     expect(expressionRuleInput({ ...s, target: '' }).target).toBe('')
+    expect(expressionRuleInput({ ...s, message: '  m ' }).message).toBe('m')
   })
 
   it('formError_refusesIncompleteForms', () => {

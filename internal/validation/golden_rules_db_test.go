@@ -7,10 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
@@ -192,6 +196,9 @@ func TestGoldenRules_DB_ReadsTheVersionInForce(t *testing.T) {
 func TestGoldenRules_DB_ListsDatedVersionsWithState(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := seedGoldenMember(t, super, goldenTenantOkafor, "admin", "active")
+	// One draft may exist at a time: seal the retired fixture before opening the draft.
+	retiredID, retired := seedVersion(t, super)
+	sealUndated(t, super, retiredID)
 	_, draft := seedVersion(t, super)
 
 	got := readGoldenAsOf(t, ctx, app, goldenPinnedToday)
@@ -217,9 +224,9 @@ func TestGoldenRules_DB_ListsDatedVersionsWithState(t *testing.T) {
 			t.Errorf("v%d = state %q from %q, want a dated in_force, scheduled or superseded version", v.Version, v.State, v.EffectiveFrom)
 		}
 	}
-	for _, absent := range []int{1, 2, 3, draft} {
+	for _, absent := range []int{1, 2, 3, retired, draft} {
 		if listed[absent] {
-			t.Errorf("v%d (undated or open draft) is listed", absent)
+			t.Errorf("v%d (retired or open draft) is listed", absent)
 		}
 	}
 }
@@ -330,5 +337,111 @@ func TestGoldenRules_DB_NoIdentityIsErrNoTenant(t *testing.T) {
 	_, app := dbTestPools(t)
 	if _, err := readGolden(context.Background(), app); !errors.Is(err, db.ErrNoTenant) {
 		t.Errorf("GoldenRules with no identity = %v, want db.ErrNoTenant", err)
+	}
+}
+
+// Temp tables shadow rule_set_versions and rules on this pool only, so no dated version exists.
+func TestGoldenRules_DB_NoDatedVersionIsErrNoActiveRuleSet(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := seedGoldenMember(t, super, goldenTenantOkafor, "admin", "active")
+	if got := mustReadGolden(t, ctx, app); got.Version == 0 {
+		t.Fatal("control: the shared pool finds no version in force")
+	}
+
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+		for _, tbl := range []string{"rule_set_versions", "rules"} {
+			if _, err := c.Exec(ctx, `CREATE TEMP TABLE `+tbl+` (LIKE public.`+tbl+` INCLUDING DEFAULTS)`); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	empty, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(empty.Close)
+
+	if _, err := readGolden(ctx, empty); !errors.Is(err, ErrNoActiveRuleSet) {
+		t.Errorf("GoldenRules with no dated version = %v, want ErrNoActiveRuleSet", err)
+	}
+}
+
+// Real store behind the real handler: the member gate answers on the wire, and no rule carries `enabled`.
+func TestGoldenRulesHandler_DB_MemberGateAndWire(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := GoldenRulesHandler(NewStore(app).GoldenRules, nil)
+
+	rec := doGoldenRules(h, seedGoldenMember(t, super, goldenTenantOkafor, "admin", "active"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("active member: status = %d, want 200 (body=%q)", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Rules []json.RawMessage `json:"rules"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Rules) == 0 {
+		t.Fatal("active member: no rules on the wire")
+	}
+	for i, r := range body.Rules {
+		assertGoldenKeys(t, fmt.Sprintf("rules[%d]", i), r, "key", "type", "target", "params", "severity", "when", "message")
+	}
+
+	for _, status := range []string{"suspended", "invited"} {
+		rec := doGoldenRules(h, seedGoldenMember(t, super, goldenTenantOkafor, "admin", status))
+		var e map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &e)
+		if rec.Code != http.StatusForbidden || e["error"] != db.NotActiveMemberMessage {
+			t.Errorf("%s member: %d %q, want 403 %q", status, rec.Code, rec.Body.String(), db.NotActiveMemberMessage)
+		}
+	}
+	if rec := doGoldenRules(h, context.Background()); rec.Code != http.StatusUnauthorized {
+		t.Errorf("no identity: status = %d, want 401", rec.Code)
+	}
+}
+
+// The version in force today carries no `when`; the one that follows it does.
+func TestGoldenRules_DB_WhenSurvivesForAVersionThatHasOne(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := seedGoldenMember(t, super, goldenTenantOkafor, "admin", "active")
+	const future = "2027-06-01"
+	got := readGoldenAsOf(t, ctx, app, future)
+
+	want := map[string]*string{}
+	rows, err := super.Query(context.Background(),
+		`SELECT key, "when" FROM rules WHERE rule_set_version_id = rule_set_version_for($1::date) AND enabled`, future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	withWhen := 0
+	for rows.Next() {
+		var key string
+		var when *string
+		if err := rows.Scan(&key, &when); err != nil {
+			t.Fatal(err)
+		}
+		want[key] = when
+		if when != nil {
+			withWhen++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if withWhen == 0 || len(got.Rules) != len(want) {
+		t.Fatalf("fixture: %d of %d rules carry a when, got %d rules (want > 0 with a when)", withWhen, len(want), len(got.Rules))
+	}
+	for _, r := range got.Rules {
+		w, ok := want[r.Key]
+		if !ok || (r.When == nil) != (w == nil) || (w != nil && *r.When != *w) {
+			t.Errorf("rule %s when = %v, want %v (listed in the version: %t)", r.Key, r.When, w, ok)
+		}
 	}
 }

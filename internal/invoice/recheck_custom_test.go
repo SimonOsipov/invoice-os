@@ -496,3 +496,100 @@ func TestRechecker_DB_OutageInOneTenantLeavesItPendingAndMarksTheOther(t *testin
 		t.Errorf("tenant 2's revision is still pending after the tick")
 	}
 }
+
+// demotedByRule validates an invoice, saves a failing rule and runs the re-check; it returns the invoice and rule.
+func (f crFixture) demotedByRule(t *testing.T, number string) (string, customrule.Rule) {
+	t.Helper()
+	gate := f.gate(t, start04Wrapped(t, f.app, nil, nil))
+	id := f.validatedOn(t, gate, f.entity, number, false)
+	rule := f.save(t, &f.entity, "error", true, "email needed")
+	f.must(t, gate)
+	if f.status(t, id) != StatusDraft {
+		t.Fatalf("invoice %s not demoted", number)
+	}
+	return id, rule
+}
+
+func TestHistory_CustomRuleDemotionNamesTheRule(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-07 names")
+	id, rule := f.demotedByRule(t, "E14-07-NAMES")
+
+	rows, err := f.store.History(f.member, id)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("History returned %d rows, want 3 (genesis, promotion, demotion)", len(rows))
+	}
+	last := rows[2]
+	want := CustomRuleCause{CustomRuleID: rule.ID, Revision: 1, RevisionID: rule.RevisionID, Key: customrule.Key(rule.ID), Message: "email needed"}
+	if last.CustomRuleCause == nil || *last.CustomRuleCause != want {
+		t.Errorf("demotion CustomRuleCause = %+v, want %+v", last.CustomRuleCause, want)
+	}
+	if last.Cause != nil {
+		t.Errorf("demotion Cause = %+v, want nil", last.Cause)
+	}
+	for i, r := range rows[:2] {
+		if r.Cause != nil || r.CustomRuleCause != nil {
+			t.Errorf("row %d causes = %+v / %+v, want both nil", i, r.Cause, r.CustomRuleCause)
+		}
+	}
+}
+
+func TestHistory_CustomRuleCauseSurvivesAnEdit(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-07 edit")
+	id, rule := f.demotedByRule(t, "E14-07-EDIT")
+	if _, err := f.rules.Update(f.admin, rule.ID, customrule.RuleInput{EntityID: &f.entity, Type: rule.Type, Target: rule.Target,
+		Params: rule.Params, Severity: "error", Message: "email, please", Enabled: true}); err != nil {
+		t.Fatalf("edit rule: %v", err)
+	}
+
+	rows, err := f.store.History(f.member, id)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	got := rows[len(rows)-1].CustomRuleCause
+	if got == nil || got.Revision != 1 || got.RevisionID != rule.RevisionID || got.Message != "email needed" {
+		t.Errorf("after the edit CustomRuleCause = %+v, want revision 1 %s with the old message", got, rule.RevisionID)
+	}
+}
+
+func TestHistoryHandler_CustomRuleCauseWireKeys(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-07 wire")
+	id, _ := f.demotedByRule(t, "E14-07-WIRE")
+
+	r := httptest.NewRequest("GET", "/v1/invoices/"+id+"/history", nil).WithContext(f.member)
+	r.SetPathValue("id", id)
+	rec := httptest.NewRecorder()
+	HistoryHandler(f.store.History, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	var rows []map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for i, row := range rows {
+		raw, ok := row["custom_rule_cause"]
+		if !ok {
+			t.Fatalf("row %d has no custom_rule_cause key", i)
+		}
+		if string(raw) == "null" {
+			continue
+		}
+		var cause map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &cause); err != nil {
+			t.Fatalf("row %d custom_rule_cause: %v", i, err)
+		}
+		keys := make([]string, 0, len(cause))
+		for k := range cause {
+			keys = append(keys, k)
+		}
+		if got := strings.Join(sorted(keys...), ","); got != "custom_rule_id,key,message,revision,revision_id" {
+			t.Errorf("row %d custom_rule_cause keys = %s", i, got)
+		}
+	}
+	if string(rows[2]["custom_rule_cause"]) == "null" || string(rows[0]["custom_rule_cause"]) != "null" {
+		t.Errorf("custom_rule_cause: genesis %s, demotion %s, want null then an object", rows[0]["custom_rule_cause"], rows[2]["custom_rule_cause"])
+	}
+}

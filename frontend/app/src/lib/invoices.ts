@@ -354,6 +354,16 @@ export interface StatusChange {
   changed_at: string
   // The rule-set version behind a re-check demotion; null on every other row. Always present.
   cause: HistoryCause | null
+  // The custom-rule revision behind a custom re-check demotion; null on every other row. Always present.
+  custom_rule_cause: CustomRuleCause | null
+}
+
+export interface CustomRuleCause {
+  custom_rule_id: string
+  revision: number
+  revision_id: string
+  key: string
+  message: string
 }
 
 // effective_from is YYYY-MM-DD, null for an undated version.

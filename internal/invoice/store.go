@@ -117,19 +117,29 @@ func scanLineItem(row scanner, li *LineItem) error {
 const historyColumns = `h.from_status, h.to_status, h.actor, h.changed_at`
 
 // historyCauseColumns come from the LEFT JOIN on the cause version; all NULL for a row with no cause.
-const historyCauseColumns = `v.id::text, v.version, to_char(v.effective_from, 'YYYY-MM-DD')`
+const historyCauseColumns = `v.id::text, v.version, to_char(v.effective_from, 'YYYY-MM-DD'),
+	r.rule_id::text, r.revision, r.id::text, r.message`
 
 func scanStatusChange(row scanner, sc *StatusChange) error {
 	var (
 		causeID   *string
 		causeVer  *int
 		causeDate *string
+		ruleID    *string
+		ruleRev   *int
+		revID     *string
+		ruleMsg   *string
 	)
-	if err := row.Scan(&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt, &causeID, &causeVer, &causeDate); err != nil {
+	if err := row.Scan(&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt, &causeID, &causeVer, &causeDate,
+		&ruleID, &ruleRev, &revID, &ruleMsg); err != nil {
 		return err
 	}
 	if causeID != nil && causeVer != nil {
 		sc.Cause = &HistoryCause{RuleSetVersion: *causeVer, RuleSetVersionID: *causeID, EffectiveFrom: causeDate}
+	}
+	if revID != nil && ruleID != nil && ruleRev != nil && ruleMsg != nil {
+		sc.CustomRuleCause = &CustomRuleCause{CustomRuleID: *ruleID, Revision: *ruleRev, RevisionID: *revID,
+			Key: customrule.Key(*ruleID), Message: *ruleMsg}
 	}
 	return nil
 }
@@ -613,6 +623,7 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 			`SELECT `+historyColumns+`, `+historyCauseColumns+`
 			 FROM invoice_status_history h
 			 LEFT JOIN rule_set_versions v ON v.id = h.cause_rule_set_version_id
+			 LEFT JOIN custom_rule_revisions r ON r.tenant_id = h.tenant_id AND r.id = h.cause_custom_rule_revision_id
 			 WHERE h.invoice_id = $1
 			 ORDER BY h.changed_at ASC, h.id ASC`, id,
 		)

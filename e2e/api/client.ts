@@ -822,6 +822,15 @@ export interface StatusChange {
   actor_kind: string
   changed_at: string
   cause: HistoryCause | null
+  custom_rule_cause: CustomRuleCause | null
+}
+
+export interface CustomRuleCause {
+  custom_rule_id: string
+  revision: number
+  revision_id: string
+  key: string
+  message: string
 }
 
 // effective_from is YYYY-MM-DD, null for an undated version.

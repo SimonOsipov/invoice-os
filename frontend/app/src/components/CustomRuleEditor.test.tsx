@@ -193,6 +193,7 @@ describe('CustomRuleEditor, create', () => {
     fireEvent.click(screen.getByTestId('rule-mode-expression'))
     expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value, 'the guided prefill does not carry over').toBe('')
     expect(options('Target field')[0]).toBe('Whole invoice')
+    select('Target field', 'Buyer email')
     select('Target field', 'Total')
     type('Expression', '!has(invoice.total) || invoice.total < 5.0')
     type('Message', 'Total is too small')
@@ -211,6 +212,30 @@ describe('CustomRuleEditor, create', () => {
       message: 'Total is too small',
       enabled: true,
     })
+  })
+
+  it('a prefixed header field becomes its payload path in an expression rule', async () => {
+    const f = fakeFetch([])
+    await mount(f)
+    await open()
+    fireEvent.click(screen.getByTestId('rule-mode-expression'))
+    select('Target field', 'Buyer email')
+    type('Expression', 'has(invoice.buyer) && has(invoice.buyer.email)')
+    type('Message', 'Buyer needs an email')
+    save()
+    await waitFor(() => expect(writes(f)).toHaveLength(1))
+    expect((bodyOf(f) as CustomRuleInput).target).toBe('buyer.email')
+  })
+
+  it('Warn after Block puts the rule back to a warning', async () => {
+    const f = fakeFetch([])
+    await mount(f)
+    await open()
+    fireEvent.click(screen.getByRole('radio', { name: 'Block submission' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Warn' }))
+    save()
+    await waitFor(() => expect(writes(f)).toHaveLength(1))
+    expect((bodyOf(f) as CustomRuleInput).severity).toBe('warning')
   })
 
   it('the expression tab shows the guard help line', async () => {
@@ -334,7 +359,7 @@ describe('CustomRuleEditor, scope', () => {
     m2.view.unmount()
 
     const inhouse = fakeFetch([])
-    const m3 = await mount(inhouse, { mode: 'inhouse', activeEntity: null, active: { short: 'Acme', initials: 'A', tin: '', entityId: null } })
+    const m3 = await mount(inhouse, { mode: 'inhouse', activeEntity: { id: A, name: 'Adaeze Ventures Ltd' }, active: { short: 'Acme', initials: 'A', tin: '', entityId: null } })
     await open()
     expect(screen.queryByRole('radiogroup', { name: 'Scope' })).toBeNull()
     save()
@@ -456,6 +481,23 @@ describe('CustomRuleEditor, edit', () => {
     await openEdit(GUIDED, f)
     fireEvent.click(screen.getByText('Cancel'))
     expect(screen.queryByRole('dialog')).toBeNull()
+    expect(writes(f)).toHaveLength(0)
+
+    await open()
+    type('Message', 'typed and abandoned')
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await open()
+    expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value, 'a reopened editor starts clean').toBe('Invoice number failed the check')
+    expect(writes(f)).toHaveLength(0)
+  })
+
+  it('an editor open when the viewer stops being an admin goes away', async () => {
+    const f = fakeFetch([])
+    const { ctx, view } = await mount(f)
+    await open()
+    view.rerender(<RulesView ctx={{ ...ctx, members: [{ ...ADMIN[0], role: 'preparer' }] } as unknown as PlatformCtx} />)
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(writes(f)).toHaveLength(0)
   })
 })

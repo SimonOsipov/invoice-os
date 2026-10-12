@@ -353,14 +353,19 @@ describe('RulesView, remove', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  it('a remove drops the row once the refetch no longer holds it', async () => {
+  it('a remove drops the row at once and the refetch agrees', async () => {
     let rules = [FIRM, RA]
+    let reads = 0
+    let release!: () => void
     const f = vi.fn(async (url: string, init?: { method?: string }) => {
       if (init?.method === 'DELETE') {
         rules = [FIRM]
         return undefined
       }
-      if (url.endsWith('/custom-rules')) return { custom_rules: rules }
+      if (url.endsWith('/custom-rules')) {
+        if (++reads === 2) await new Promise<void>((res) => (release = res))
+        return { custom_rules: rules }
+      }
       return goldenPayload()
     })
     await mount(f as unknown as FetchMock, { openRuleKey: RA.key })
@@ -368,6 +373,9 @@ describe('RulesView, remove', () => {
     expect(messages()).toEqual(['message of r-firm', 'message of r-a'])
 
     fireEvent.click(within(screen.getByRole('dialog')).getByText('Remove rule'))
+    await waitFor(() => expect(reads).toBe(2))
+    expect(messages(), 'gone while the refetch is still pending').toEqual(['message of r-firm'])
+    release()
     await waitFor(() => expect(messages()).toEqual(['message of r-firm']))
     expect(screen.getByText('GOLDEN v4 + 1 CUSTOM')).toBeTruthy()
   })

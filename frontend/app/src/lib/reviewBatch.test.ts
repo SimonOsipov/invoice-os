@@ -63,6 +63,7 @@ import {
   fixEditPatch,
   initialReviewFilter,
   isAlreadyImported,
+  isUnvalidatedDraft,
   pagerLabels,
   pagerNav,
   railPills,
@@ -89,6 +90,8 @@ import {
   unreadableCsvAll,
   unreadableRows,
   unreadableRowsAll,
+  unvalidatedDraftCount,
+  unvalidatedDraftNotice,
   verdictPill,
   type AlreadyImportedRowAll,
   type ReviewFilterState,
@@ -3445,5 +3448,26 @@ describe('the document id is display and hand-off only, never a discriminator (E
       expect(body, `${decl} reads the document id — the unit comes from the filename`).not.toContain('document_id')
       expect(body).not.toContain('documentId')
     }
+  })
+})
+
+describe('isUnvalidatedDraft (ENGI-14-05): an entry with an invoice id and no rule key', () => {
+  const draft: RowError = { rows: [3, 4], invoice_id: 'inv-7', message: 'whatever the server words it' }
+
+  it('leaves the unreadable and already-imported channels, and is counted on its own', () => {
+    expect(isUnvalidatedDraft(draft)).toBe(true)
+    expect(unreadableRows([draft])).toEqual([])
+    expect(alreadyImportedRows([draft])).toEqual([])
+    expect(unvalidatedDraftCount([{ errors: [draft, { row: 5, message: 'bad' }] }])).toBe(1)
+  })
+
+  it('does not take a store duplicate (rule key) or an unreadable row (no invoice id)', () => {
+    expect(isUnvalidatedDraft({ row: 5, rule_key: 'duplicate_invoice', invoice_id: 'inv-9', message: 'dup' })).toBe(false)
+    expect(isUnvalidatedDraft({ row: 5, message: 'bad' })).toBe(false)
+  })
+
+  it('words the notice for one and for many', () => {
+    expect(unvalidatedDraftNotice(1)).toBe('1 invoice was created as a draft but not checked, because the rules changed during the import. Validate it again.')
+    expect(unvalidatedDraftNotice(2)).toBe('2 invoices were created as drafts but not checked, because the rules changed during the import. Validate them again.')
   })
 })

@@ -86,6 +86,16 @@ const WIRE_MIRRORS = [
     floor: 3,
   },
   {
+    ts: 'CustomRuleCause',
+    go: 'CustomRuleCause',
+    goPath: 'internal/invoice/invoice.go',
+    goAnchor: 'func (s Status) valid() bool',
+    spaPath: 'frontend/app/src/lib/invoices.ts',
+    spaAnchor: 'export async function getInvoiceHistory(',
+    e2eAnchor: 'export function getInvoiceHistory(',
+    floor: 5,
+  },
+  {
     ts: 'PendingInvite',
     go: 'PendingInvite',
     goPath: 'internal/tenancy/store.go',
@@ -479,6 +489,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual([
       'StatusChange',
       'HistoryCause',
+      'CustomRuleCause',
       'PendingInvite',
       'AuditEvent',
       'ExtractionCandidate',

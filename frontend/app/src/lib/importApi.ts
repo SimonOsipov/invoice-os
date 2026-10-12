@@ -86,7 +86,7 @@ export interface RowError {
   field?: string
   rule_key?: string // set on a store-level duplicate; UI splits those into their own channel, see reviewBatch.ts's isAlreadyImported
   severity?: string
-  invoice_id?: string // resolved id of the colliding invoice; absent when unresolved (racing-INSERT backstop)
+  invoice_id?: string // colliding invoice (absent when unresolved), or, with no rule_key, the draft left unvalidated; see reviewBatch.ts's isUnvalidatedDraft
   message: string // always
 }
 

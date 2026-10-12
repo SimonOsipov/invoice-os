@@ -25,7 +25,7 @@
 // GAPI-12/13/14.
 //
 // GAPI-12/13/14 stand up a REAL in-process 04 (internal/validation's
-// Store.LoadForDates + NewDefaultEngine + BatchValidateHandler,
+// Store.LoadForBatch + NewDefaultEngine + BatchValidateHandler,
 // behind S2SMiddleware, on an httptest.Server) against the SAME shared
 // dev DB the invoice_app pool already points at -- both packages' own
 // dbTestPools helpers read DATABASE_URL/DATABASE_SUPERUSER_URL for the
@@ -88,7 +88,7 @@ func startInProcess04(t *testing.T, app *pgxpool.Pool) *httptest.Server {
 	t.Helper()
 	vstore := validation.NewStore(app)
 	eng := validation.NewDefaultEngine()
-	handler := validation.S2SMiddleware(gapiS2SToken)(validation.BatchValidateHandler(vstore.LoadForDates, eng, nil, nil))
+	handler := validation.S2SMiddleware(gapiS2SToken)(validation.BatchValidateHandler(vstore.LoadForBatch, eng, nil, nil))
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv
@@ -142,6 +142,7 @@ func TestGate_EvaluateCallsValidatorExactlyOnceWithAllItems(t *testing.T) {
 
 	validator := NewValidator(srv.URL, gapiS2SToken, nil)
 	gate := NewGate(nil, validator)
+	gate.customRules = noCustomRules
 
 	items := []EvalItem{
 		{Ref: "a", Invoice: Invoice{InvoiceNumber: "a"}},

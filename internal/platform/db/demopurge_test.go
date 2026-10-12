@@ -230,6 +230,7 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	inviteID := uuid.NewString()
 	lineID := uuid.NewString()
 	historyID := uuid.NewString()
+	revisionID := uuid.NewString()
 	idemKey := "purge-witness-" + uuid.NewString()
 	auditEvent := "purge.witness." + uuid.NewString()[:8]
 	contentHash := strings.Repeat("a", 64)
@@ -300,10 +301,15 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO line_items (id, tenant_id, invoice_id, line_no, description, quantity, unit_price, line_total)
 		 VALUES ($1,$2,$3,1,'witness line',1.000,100.00,100.00)`,
 		lineID, tenantID, invoiceID)
+	crrRequireTable(t, pool)
+	plant("custom_rule_revisions", "id", revisionID,
+		`INSERT INTO custom_rule_revisions (id, tenant_id, rule_id, revision, entity_id, type, target, severity, message, enabled, created_by)
+		 VALUES ($1,$2,$3,1,$4,'required','invoice.number','error','witness',true,'purge-witness')`,
+		revisionID, tenantID, uuid.NewString(), entityID)
 	plant("invoice_status_history", "id", historyID,
-		`INSERT INTO invoice_status_history (id, tenant_id, invoice_id, from_status, to_status, actor)
-		 VALUES ($1,$2,$3,NULL,'draft','purge-witness')`,
-		historyID, tenantID, invoiceID)
+		`INSERT INTO invoice_status_history (id, tenant_id, invoice_id, from_status, to_status, actor, cause_custom_rule_revision_id)
+		 VALUES ($1,$2,$3,NULL,'draft','purge-witness',$4)`,
+		historyID, tenantID, invoiceID, revisionID)
 	plant("submission_jobs", "id", jobID,
 		`INSERT INTO submission_jobs (id, tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state)
 		 VALUES ($1,$2,$3,$4,'mock','v1','accepted')`,

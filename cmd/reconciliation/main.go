@@ -115,6 +115,7 @@ func main() {
 		Logger:  app.Logger,
 	}
 	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, rechecker.RunOnce))
+	app.AddBackgroundWorker(reconciliation.NewSweeper(cfg.Interval, rechecker.RunCustomOnce))
 
 	if err := app.Run(ctx); err != nil {
 		platform.Fatal(app.Logger, "reconciliation: %v", err)

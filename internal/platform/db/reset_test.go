@@ -149,7 +149,7 @@ func TestResetTargetTablesParsedFromResetTables(t *testing.T) {
 		t.Fatalf("parsed %d tables out of reset.go (%v); the parser is broken and every reset assertion below is vacuous",
 			len(resetTargetTables), resetTargetTables)
 	}
-	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs", "customers"} {
+	for _, want := range []string{"invoices", "audit_log", "documents", "approval_runs", "customers", "custom_rule_revisions"} {
 		if !slices.Contains(resetTargetTables, want) {
 			t.Errorf("resetTables does not truncate %q", want)
 		}
@@ -196,6 +196,15 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		tenantID, entityID, strings.Repeat(strings.ReplaceAll(uuid.NewString(), "-", ""), 2), `{"invoice_number":"Invoice No"}`,
 	); err != nil {
 		t.Fatalf("seed import_mappings fixture: %v", err)
+	}
+
+	crrRequireTable(t, pool)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO custom_rule_revisions (tenant_id, rule_id, revision, entity_id, type, target, severity, message, enabled, created_by)
+		 VALUES ($1, $2, 1, $3, 'required', 'invoice.number', 'error', 'reset fixture', true, 'reset-fixture')`,
+		tenantID, uuid.NewString(), entityID,
+	); err != nil {
+		t.Fatalf("seed custom_rule_revisions fixture: %v", err)
 	}
 
 	if _, err := pool.Exec(ctx,
@@ -509,6 +518,9 @@ func TestResetTruncatesEveryConfiguredTable(t *testing.T) {
 	// Named, not parsed: a table dropped from resetTables leaves the loop above.
 	if n := mustCount(t, pool, `SELECT count(*) FROM customers`); n != 0 {
 		t.Errorf("customers rows after Reset = %d, want 0", n)
+	}
+	if n := mustCount(t, pool, `SELECT count(*) FROM custom_rule_revisions`); n != 0 {
+		t.Errorf("custom_rule_revisions rows after Reset = %d, want 0", n)
 	}
 }
 

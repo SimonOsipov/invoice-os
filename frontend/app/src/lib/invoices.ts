@@ -354,6 +354,16 @@ export interface StatusChange {
   changed_at: string
   // The rule-set version behind a re-check demotion; null on every other row. Always present.
   cause: HistoryCause | null
+  // The custom-rule revision behind a custom re-check demotion; null on every other row. Always present.
+  custom_rule_cause: CustomRuleCause | null
+}
+
+export interface CustomRuleCause {
+  custom_rule_id: string
+  revision: number
+  revision_id: string
+  key: string
+  message: string
 }
 
 // effective_from is YYYY-MM-DD, null for an undated version.
@@ -1190,17 +1200,18 @@ export function diffEditInput(original: Pick<InvoiceRecord, EditFieldKey>, form:
   return patch
 }
 
-// not_validated/duplicate_request/awaiting_approval are the three reachable
+// not_validated/duplicate_request/awaiting_approval/rule_change_pending are the four reachable
 // BatchSubmitResultItem.reason values (the batchSubmitReason* consts,
 // internal/invoice/batch_submit.go) -- anything else passes through verbatim rather than
 // being swallowed, so an unknown future reason still surfaces something to the operator.
 // awaiting_approval carries awaitingApprovalReason's bytes verbatim (internal/invoice/handlers.go),
-// pinned both ways. The other two stay SPA copy: the server's not-validated sentence forks by status
+// pinned both ways; rule_change_pending does the same with ruleChangePendingReason. The other two stay SPA copy: the server's not-validated sentence forks by status
 // into three arms while the batch token does not, and duplicate_request has no server sentence at all.
 const SKIP_REASON_LABELS: Record<string, string> = {
   not_validated: 'Not validated — validate it first',
   duplicate_request: 'Already submitted with this request',
   awaiting_approval: 'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+  rule_change_pending: 'A custom rule change is being applied to this invoice — it can be submitted once the change has been checked.',
 }
 
 export function skipReasonLabel(reason: string): string {

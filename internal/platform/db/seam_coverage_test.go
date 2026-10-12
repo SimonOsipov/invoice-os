@@ -196,9 +196,9 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/platform/db/migrate.go"},                                         // goose needs a database/sql handle, which no pgx pool can supply; it runs at boot on the migrator role
 	{file: "internal/platform/db/bootstrap.go"},                                       // boot-time role and password provisioning on a superuser connection, before any request or tenant exists
 	{file: "internal/platform/db/provision.go"},                                       // boot-time readiness probe on the same pre-request phase; it waits for Postgres to speak the wire
-	{file: "internal/validation/store.go", fn: "LoadForDates"},                        // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
+	{file: "internal/validation/store.go", fn: "LoadForBatch"},                        // the S2S peer path, which has no caller identity at all to gate on; func-scoped because internal/validation serves HTTP and its file-mates are gated
 	{file: "internal/importer/backfill.go"},                                           // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
-	{file: "internal/invoice/revalidate.go"},                                          // operator CLI tools/revalidate-invoices and the reconciliation re-check; same shape, same absence of a caller
+	{file: "internal/invoice/revalidate.go"},                                          // operator CLI tools/revalidate-invoices and the reconciliation re-checks (version and custom-rule); same shape, same absence of a caller
 	{file: "internal/reconciliation/sweep.go"},                                        // EnumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
 	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                         // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},         // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
@@ -713,7 +713,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/extraction/worker.go"},                                                // the extraction River worker itself, same shape: the job row carries the tenant
 	{file: "internal/extraction/anchor_store.go"},                                          // the learned-rule read, same shape as store.go: no request path reaches it
 	{file: "internal/importer/backfill.go"},                                                // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
-	{file: "internal/invoice/revalidate.go"},                                               // operator CLI and the reconciliation re-check only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/invoice/revalidate.go"},                                               // operator CLI and the reconciliation re-checks (version and custom-rule) only, and internal/invoice is the largest HTTP-serving package in the tree
 	{file: "internal/tenancy/store.go", fn: "Me"},                                          // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
 	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"},                          // the caller has no membership yet; the seam would refuse before the closure
 	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                           // the token is the only credential and names the invite; there is no caller to gate
@@ -964,6 +964,7 @@ const (
 var scRouteVerdicts = map[string]scRouteVerdict{
 	"/api/":                                               {verdict: scExempt, reason: "the proxy mount, not an endpoint — it forwards to the seven services"},
 	"DELETE /v1/approval-policies/{id}":                   {verdict: scCovered},
+	"DELETE /v1/custom-rules/{id}":                        {verdict: scCovered},
 	"DELETE /v1/invoices/{id}/keep-as-is":                 {verdict: scCovered},
 	"DELETE /v1/invoices/{id}/resolved-outside":           {verdict: scCovered},
 	"DELETE /v1/workflow-roles/{key}":                     {verdict: scCovered},
@@ -981,6 +982,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/audit-log":                                   {verdict: scCovered},
 	"GET /v1/contacts/me":                                 {verdict: scExempt, reason: "reads the caller's own contact by the token's email; contacts carry no tenant"},
 	"GET /v1/code-lists/{list}":                           {verdict: scCovered},
+	"GET /v1/custom-rules":                                {verdict: scCovered},
 	"GET /v1/customers":                                   {verdict: scCovered},
 	"GET /v1/documents/{id}":                              {verdict: scCovered},
 	"GET /v1/documents/{id}/sheet":                        {verdict: scCovered},
@@ -1027,8 +1029,10 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/staff/rules":                                 {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
 	"GET /v1/staff/rule-versions":                         {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
 	"PATCH /v1/staff/rules/{key}":                         {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
+	"POST /v1/custom-rules":                               {verdict: scCovered},
 	"POST /v1/staff/rule-versions/draft":                  {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/staff/rule-versions/draft/rules":            {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
+	"PUT /v1/custom-rules/{id}":                           {verdict: scCovered},
 	"PUT /v1/staff/rule-versions/draft/rules/{key}":       {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
 	"DELETE /v1/staff/rule-versions/draft/rules/{key}":    {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/staff/rule-versions/draft/publish":          {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
@@ -1087,6 +1091,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/invoices/{id}/transitions":                  {verdict: scCovered},
 	"POST /v1/invoices/{id}/validate":                     {verdict: scCovered},
 	"POST /v1/validate/batch":                             {verdict: scExempt, reason: "peer call with no caller identity by construction; the gateway strips any client-supplied X-S2S-Token"},
+	"POST /v1/custom-rules/check":                         {verdict: scExempt, reason: "peer call with no caller identity by construction; the gateway strips any client-supplied X-S2S-Token"},
 	"POST /v1/workflow-roles":                             {verdict: scCovered},
 	"POST /v1/workspaces":                                 {verdict: scExempt, reason: "the caller has no membership yet"},
 	"PUT /v1/approval-policies/{id}/draft":                {verdict: scCovered},

@@ -80,7 +80,7 @@ function detailRecord(): InvoiceDetailRecord {
 }
 
 const HISTORY: StatusChange[] = [
-  { from_status: null, to_status: 'draft', actor: 'c0000000-0000-0000-0000-000000000001', actor_name: 'Chinedu Okafor', actor_kind: 'person', changed_at: '2026-06-12T09:15:00Z', cause: null },
+  { from_status: null, to_status: 'draft', actor: 'c0000000-0000-0000-0000-000000000001', actor_name: 'Chinedu Okafor', actor_kind: 'person', changed_at: '2026-06-12T09:15:00Z', cause: null, custom_rule_cause: null },
 ]
 
 function sourceRecord(): SourceDocumentRecord {

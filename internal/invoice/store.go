@@ -16,6 +16,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/customer"
+	"github.com/SimonOsipov/invoice-os/internal/customrule"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -115,20 +116,30 @@ func scanLineItem(row scanner, li *LineItem) error {
 // which History populates after the scan and no column supplies.
 const historyColumns = `h.from_status, h.to_status, h.actor, h.changed_at`
 
-// historyCauseColumns come from the LEFT JOIN on the cause version; all NULL for a row with no cause.
-const historyCauseColumns = `v.id::text, v.version, to_char(v.effective_from, 'YYYY-MM-DD')`
+// historyCauseColumns come from the LEFT JOINs on the cause version and the custom-rule revision; each group is NULL when its cause is absent.
+const historyCauseColumns = `v.id::text, v.version, to_char(v.effective_from, 'YYYY-MM-DD'),
+	r.rule_id::text, r.revision, r.id::text, r.message`
 
 func scanStatusChange(row scanner, sc *StatusChange) error {
 	var (
 		causeID   *string
 		causeVer  *int
 		causeDate *string
+		ruleID    *string
+		ruleRev   *int
+		revID     *string
+		ruleMsg   *string
 	)
-	if err := row.Scan(&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt, &causeID, &causeVer, &causeDate); err != nil {
+	if err := row.Scan(&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt, &causeID, &causeVer, &causeDate,
+		&ruleID, &ruleRev, &revID, &ruleMsg); err != nil {
 		return err
 	}
 	if causeID != nil && causeVer != nil {
 		sc.Cause = &HistoryCause{RuleSetVersion: *causeVer, RuleSetVersionID: *causeID, EffectiveFrom: causeDate}
+	}
+	if revID != nil && ruleID != nil && ruleRev != nil && ruleMsg != nil {
+		sc.CustomRuleCause = &CustomRuleCause{CustomRuleID: *ruleID, Revision: *ruleRev, RevisionID: *revID,
+			Key: customrule.Key(*ruleID), Message: *ruleMsg}
 	}
 	return nil
 }
@@ -612,6 +623,7 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 			`SELECT `+historyColumns+`, `+historyCauseColumns+`
 			 FROM invoice_status_history h
 			 LEFT JOIN rule_set_versions v ON v.id = h.cause_rule_set_version_id
+			 LEFT JOIN custom_rule_revisions r ON r.tenant_id = h.tenant_id AND r.id = h.cause_custom_rule_revision_id
 			 WHERE h.invoice_id = $1
 			 ORDER BY h.changed_at ASC, h.id ASC`, id,
 		)
@@ -1969,11 +1981,11 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoice, error) {
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var lockedID string
+		var lockedID, entityID string
 		var current Status
 		if err := tx.QueryRow(ctx,
-			`SELECT id, status FROM invoices WHERE id = $1 FOR UPDATE`, id,
-		).Scan(&lockedID, &current); err != nil {
+			`SELECT id, status, entity_id FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&lockedID, &current, &entityID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -1995,6 +2007,13 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 		// canTransition conjunct keeps an illegal edge reading ErrIllegalTransition
 		// (TestTransition_IllegalEdgeIntoQueuedStillReadsIllegal).
 		if target == StatusQueued && canTransition(current, target) {
+			pending, err := rulesPendingFor(ctx, tx, []string{entityID})
+			if err != nil {
+				return err
+			}
+			if pending(entityID) {
+				return ErrRuleChangePending
+			}
 			clear, err := approval.TransmitClearTx(ctx, tx, []string{lockedID})
 			if err != nil {
 				return err
@@ -2071,12 +2090,40 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 // both 23514, which TestTransition_AtomicityRollsBackOnActorCheckFailure and
 // GATE-13 assert via pgCode.
 func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor) (Invoice, error) {
-	return transitionCausedTx(ctx, tx, id, current, target, actor, "")
+	return transitionCausedTx(ctx, tx, id, current, target, actor, demotionCause{})
 }
 
-// transitionCausedTx is transitionTx plus the rule-set version that caused the
-// transition, written to the history row; "" stores NULL.
-func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, causeVersionID string) (Invoice, error) {
+// rulesPendingFor reads, in one statement, the revisions that can block and are not yet
+// re-checked; a firm-wide one (NULL entity) covers every entity (D26).
+func rulesPendingFor(ctx context.Context, tx pgx.Tx, entityIDs []string) (func(entityID string) bool, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT DISTINCT entity_id::text FROM custom_rule_revisions
+		  WHERE rechecked_at IS NULL AND (entity_id IS NULL OR entity_id = ANY($1::uuid[]))`, entityIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	all, covered := false, map[string]bool{}
+	for rows.Next() {
+		var e *string
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		if e == nil {
+			all = true
+		} else {
+			covered[*e] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return func(entityID string) bool { return all || covered[entityID] }, nil
+}
+
+// transitionCausedTx is transitionTx plus what caused the transition, written to the history
+// row: a rule-set version and/or a custom-rule revision; "" stores NULL.
+func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, cause demotionCause) (Invoice, error) {
 	if !canTransition(current, target) {
 		return Invoice{}, ErrIllegalTransition
 	}
@@ -2132,9 +2179,9 @@ func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, targ
 	}
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, cause_rule_set_version_id)
-		 VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid)`,
-		actor.TenantID, id, string(current), string(target), actor.Subject, causeVersionID,
+		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, cause_rule_set_version_id, cause_custom_rule_revision_id)
+		 VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, NULLIF($7, '')::uuid)`,
+		actor.TenantID, id, string(current), string(target), actor.Subject, cause.VersionID, cause.CustomRuleRevisionID,
 	); err != nil {
 		return Invoice{}, err
 	}
@@ -2224,6 +2271,38 @@ func HasBlockingViolation(vs []Violation) bool { return hasBlockingViolation(vs)
 // writes propagate RAW so their SQLSTATE survives (23503 when 04 hands over a
 // phantom rule_set_version_id the FK refuses; 23514 on the actor CHECKs).
 func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, ruleSetVersionID, evaluatedFingerprint string) (Invoice, error) {
+	return s.applyValidation(ctx, id, vs, ruleSetVersionID, nil, evaluatedFingerprint)
+}
+
+// CustomRuleSets is a tenant's current custom rules: firm-wide, and per client entity.
+type CustomRuleSets struct {
+	Firm     []customrule.Rule
+	ByEntity map[string][]customrule.Rule
+}
+
+// CustomRulesFor reads, in one statement, the current rules that judge invoices of entityIDs.
+func (s *Store) CustomRulesFor(ctx context.Context, entityIDs []string) (CustomRuleSets, error) {
+	out := CustomRuleSets{ByEntity: map[string][]customrule.Rule{}}
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rules, err := customrule.CurrentTx(ctx, tx, entityIDs)
+		for _, r := range rules {
+			if r.EntityID == nil {
+				out.Firm = append(out.Firm, r)
+			} else {
+				out.ByEntity[*r.EntityID] = append(out.ByEntity[*r.EntityID], r)
+			}
+		}
+		return err
+	})
+	return out, err
+}
+
+// applyValidation is ApplyValidation with the custom-rule revision ids the verdict ran (D27):
+// it refuses, writing nothing, unless they are exactly the invoice's current rules.
+func (s *Store) applyValidation(ctx context.Context, id string, vs []Violation, ruleSetVersionID string, customIDs []string, evaluatedFingerprint string) (Invoice, error) {
+	if customIDs == nil {
+		customIDs = []string{}
+	}
 	// Normalize the SLICE, then marshal ([violations-write]). Both guards, in
 	// THIS order — normalizing the bytes afterwards would not do: pgx encodes a
 	// nil Go slice as SQL NULL (23502 against `violations jsonb NOT NULL`), but
@@ -2247,6 +2326,12 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 	var inv Invoice
 	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		callerID, _ := auth.IdentityFromContext(ctx)
+
+		// Shared form of the save lock: a custom-rule save either commits before this
+		// reads the current rules, or waits for this commit.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtext($1))`, customrule.SaveLockKey(callerID.TenantID)); err != nil {
+			return err
+		}
 
 		// 1. lock and read the FULL row — the fingerprint needs its content.
 		var locked Invoice
@@ -2284,6 +2369,25 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 			return ErrStaleValidation
 		}
 
+		ran := make(map[string]bool, len(customIDs))
+		for _, rid := range customIDs {
+			ran[rid] = true
+		}
+		current, err := customrule.CurrentTx(ctx, tx, []string{locked.EntityID})
+		if err != nil {
+			return err
+		}
+		// Equality, not a subset: a ran revision that is no longer current (disabled, deleted,
+		// moved or superseded) stamps a verdict nothing would ever re-check.
+		if len(current) != len(ran) {
+			return ErrRulesChanged
+		}
+		for _, r := range current {
+			if !ran[r.RevisionID] {
+				return ErrRulesChanged
+			}
+		}
+
 		// 4. stamp the verdict, blocking or not.
 		if err := scanInvoice(tx.QueryRow(ctx,
 			`UPDATE invoices SET violations = $1, rule_set_version_id = $2, verdict_fingerprint = $3 WHERE id = $4 RETURNING `+invoiceColumns,
@@ -2319,11 +2423,12 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 			outcome = "blocked"
 		}
 		return audit.Record(ctx, tx, callerID.Subject, "invoice.validated", map[string]any{
-			"id":                  id,
-			"rule_set_version_id": ruleSetVersionID,
-			"outcome":             outcome,
-			"violation_count":     len(vs),
-			"invoice_number":      locked.InvoiceNumber,
+			"id":                       id,
+			"rule_set_version_id":      ruleSetVersionID,
+			"outcome":                  outcome,
+			"violation_count":          len(vs),
+			"invoice_number":           locked.InvoiceNumber,
+			"custom_rule_revision_ids": customIDs,
 		})
 	})
 	if err != nil {

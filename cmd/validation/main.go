@@ -4,7 +4,7 @@
 // identity, otherwise 403, and reaches no database. POST /v1/validate/batch
 // is the tenant-free peer surface 03 submits batches to:
 // peer-authenticated via S2S_TOKEN, carrying no identity, loading the rule-set
-// versions for the batch's dates once per batch (LoadForDates).
+// versions for the batch's dates once per batch (LoadForBatch).
 package main
 
 import (
@@ -81,22 +81,25 @@ func main() {
 	// authenticated as a fleet PEER via the shared S2S_TOKEN ([s2s-peer-auth]) and reads no tenant, because
 	// rule evaluation is a pure function of (payload, the rule-set version
 	// in force on its issue date) and there is no tenant-scoped data behind it
-	// ([s2s-identity]). Hence LoadForDates rather than LoadActiveRuleSet: the
+	// ([s2s-identity]). Hence LoadForBatch rather than LoadActiveRuleSet: the
 	// tenant-wrapped loader returns db.ErrNoTenant with no identity in context, so an
 	// identity-less peer call structurally cannot use it.
 	//
 	// S2S_TOKEN is required via mustEnv: an unset var makes platform.Fatal exit at boot
 	// rather than starting this endpoint with an empty token that would admit
 	// every caller. The var is set in the deploy env (M4-04-08, [env-wiring]).
-	// The stateless engine is reused; LoadForDates runs once per batch, inside
+	// The stateless engine is reused; LoadForBatch runs once per batch, inside
 	// the handler, and each item is judged by the version for its own date.
 	app.Mux.Handle("POST /v1/validate/batch", validation.S2SMiddleware(mustEnv("S2S_TOKEN"))(
-		validation.BatchValidateHandler(store.LoadForDates, engine, nil, app.Logger)))
+		validation.BatchValidateHandler(store.LoadForBatch, engine, nil, app.Logger)))
+
+	app.Mux.Handle("POST /v1/custom-rules/check", validation.S2SMiddleware(mustEnv("S2S_TOKEN"))(
+		validation.CheckCustomRuleHandler(engine)))
 
 	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval,
 		codelist.NewSyncer(pool, codelist.DefaultBaseURL, nil, app.Logger).SyncAll))
 
-	app.RequireGateway(mustEnv("GATEWAY_TOKEN"), "POST /v1/validate/batch")
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"), "POST /v1/validate/batch", "POST /v1/custom-rules/check")
 
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "validation: %v", err)

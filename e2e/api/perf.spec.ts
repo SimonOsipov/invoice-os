@@ -285,8 +285,8 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     // through a real membership, so pinning the text would couple this spec to the
     // seed's display_name. actor_kind IS pinned -- 'person' is the whole point.
     expect(history).toEqual([
-      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null },
-      { from_status: 'draft', to_status: 'validated', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null },
+      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null, custom_rule_cause: null },
+      { from_status: 'draft', to_status: 'validated', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null, custom_rule_cause: null },
     ])
 
     // ---- PERF-05 negative: history is a real transition, not an echo ----
@@ -302,7 +302,7 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
     const neverValidatedEntry = body.invoice_violations[1]
     const neverValidatedHistory = await getInvoiceHistory(token, neverValidatedEntry.invoice_id)
     expect(neverValidatedHistory).toEqual([
-      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null },
+      { from_status: null, to_status: 'draft', actor: PERSONAS.A.subject, actor_name: expect.any(String), actor_kind: 'person', changed_at: expect.any(String), cause: null, custom_rule_cause: null },
     ])
   })
 
@@ -337,6 +337,17 @@ test.describe('bulk import+validate — 500-invoice/60s perf gate + Day-60 stamp
   test('PERF-07: a tenant-bearing SPA JWT gets 401 on /api/validation/v1/validate/batch', async () => {
     const token = await login(PERSONAS.A)
     const { status } = await rawFetch('/api/validation/v1/validate/batch', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: {},
+    })
+    expect(status).toBe(401)
+  })
+
+  // The check route is S2S-only like the batch route (cmd/validation/main.go RequireGateway).
+  test('PERF-07: a tenant-bearing SPA JWT gets 401 on /api/validation/v1/custom-rules/check', async () => {
+    const token = await login(PERSONAS.A)
+    const { status } = await rawFetch('/api/validation/v1/custom-rules/check', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: {},

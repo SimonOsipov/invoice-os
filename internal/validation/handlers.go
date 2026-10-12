@@ -57,11 +57,14 @@ const (
 type batchItem struct {
 	Ref     string         `json:"ref"`
 	Invoice map[string]any `json:"invoice"`
+	// CustomRuleSets names the request-level sets that also judge this item.
+	CustomRuleSets []string `json:"custom_rule_sets"`
 }
 
 // batchRequest is the POST /v1/validate/batch request body.
 type batchRequest struct {
-	Invoices []batchItem `json:"invoices"`
+	Invoices       []batchItem                 `json:"invoices"`
+	CustomRuleSets map[string][]customRuleWire `json:"custom_rule_sets"`
 }
 
 // batchItemResult is one item's outcome: its echoed ref + every collected
@@ -72,6 +75,8 @@ type batchItemResult struct {
 	Violations       []Violation `json:"violations"`
 	RuleSetVersion   int         `json:"rule_set_version"`
 	RuleSetVersionID string      `json:"rule_set_version_id"`
+	// CustomRuleIDs are the revision ids evaluated; [] when the item names no set.
+	CustomRuleIDs []string `json:"custom_rule_ids"`
 }
 
 // batchResponse is the POST /v1/validate/batch success body. The top-level
@@ -93,7 +98,7 @@ type batchResponse struct {
 // upstream of here; all tenant-scoped work stays in 03.
 //
 // load is injected so the one-call-per-batch property is provable with a
-// counting fake; main.go binds it to Store.LoadForDates. An item's date is its
+// counting fake; main.go binds it to Store.LoadForBatch. An item's date is its
 // invoice.issue_date when that parses as time.DateOnly, else today in UTC, so
 // an undated item never meets a scheduled version. now nil means time.Now.
 // eng is the shipped, stateless *Engine, reused across every item.
@@ -101,13 +106,14 @@ type batchResponse struct {
 // Order of operations is load-bearing:
 //  1. cap the body (MaxBytesReader) -- but only after S2SMiddleware's 401.
 //  2. decode; an oversized body is a 413, checked BEFORE the generic 400.
-//  3. bound the item count (400 on empty or over-cap) BEFORE loading, so a
-//     junk request never costs a query.
-//  4. load once with the distinct dates; a requested date missing from the
+//  3. bound the item count (400 on empty or over-cap) and validate the custom
+//     rule sets (400) BEFORE loading, so a junk request never costs a query.
+//  4. load once with the distinct dates and the flattened custom rules (the
+//     loader fills their Codes in place); a requested date missing from the
 //     result is a 500 with no partial results.
-//  5. evaluate every item against its date's rule-set, results in REQUEST
-//     order.
-func BatchValidateHandler(load func(ctx context.Context, dates []string) (map[string]RuleSet, error), eng *Engine, now func() time.Time, log *slog.Logger) http.HandlerFunc {
+//  5. evaluate every item against its date's rule-set plus its named custom
+//     sets, results in REQUEST order.
+func BatchValidateHandler(load func(ctx context.Context, dates []string, custom []Rule) (map[string]RuleSet, error), eng *Engine, now func() time.Time, log *slog.Logger) http.HandlerFunc {
 	if now == nil {
 		now = time.Now
 	}
@@ -140,6 +146,12 @@ func BatchValidateHandler(load func(ctx context.Context, dates []string) (map[st
 			return
 		}
 
+		cs, err := newCustomSets(eng, req.CustomRuleSets, req.Invoices)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
 		today := now().UTC().Format(time.DateOnly)
 		dates := make([]string, len(req.Invoices))
 		var distinct []string
@@ -162,7 +174,7 @@ func BatchValidateHandler(load func(ctx context.Context, dates []string) (map[st
 		// ErrNoActiveRuleSet (and ErrEmptyRuleSet, which wraps it) -> 503 via
 		// statusForErr: the gate cannot evaluate, so it refuses -- it never
 		// answers a clean 200 it cannot stand behind.
-		sets, err := load(r.Context(), distinct)
+		sets, err := load(r.Context(), distinct, cs.rules)
 		if err != nil {
 			status, msg := statusForErr(err)
 			if status == http.StatusInternalServerError || errors.Is(err, ErrCodeListMissing) {
@@ -204,8 +216,14 @@ func BatchValidateHandler(load func(ctx context.Context, dates []string) (map[st
 				writeError(w, http.StatusInternalServerError, "internal server error")
 				return
 			}
+			violations := result.Violations
+			custom, ids := cs.evaluate(r.Context(), eng, Payload{"invoice": it.Invoice}, rs, it.CustomRuleSets, log)
+			if len(custom) > 0 {
+				violations = append(violations, custom...)
+				sortViolations(violations)
+			}
 			results = append(results, batchItemResult{
-				Ref: it.Ref, Violations: result.Violations,
+				Ref: it.Ref, Violations: violations, CustomRuleIDs: ids,
 				RuleSetVersion: rs.Version, RuleSetVersionID: rs.ID,
 			})
 		}

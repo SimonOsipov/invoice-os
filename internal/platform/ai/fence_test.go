@@ -46,6 +46,9 @@ func TestAIPackage_StaysInsideTheExtractionFence(t *testing.T) {
 
 	for _, line := range lines {
 		dep := strings.TrimSpace(line)
+		if strings.HasPrefix(dep, "github.com/jackc/pgx") {
+			t.Errorf("internal/platform/ai depends on %s -- only internal/aicalls may reach pgx", dep)
+		}
 		if dep != mod && !strings.HasPrefix(dep, mod+"/") {
 			continue
 		}

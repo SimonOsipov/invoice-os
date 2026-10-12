@@ -261,6 +261,8 @@ func TestWrite_StoresTheCostAsExactNumeric(t *testing.T) {
 		{0, "0"},
 		{1.2e-5, "0.000012"},
 		{0.0014741, "0.0014741"},
+		{0.123456789012345, "0.123456789012345"}, // 15 significant digits survive
+		{1e21, "1000000000000000000000"},
 	}
 	for _, tc := range cases {
 		c := fullCall(t1, uniquePurpose())
@@ -289,7 +291,11 @@ func TestWrite_AFloatSumArtifactIsNotStored(t *testing.T) {
 		name string
 		cost float64
 		want string
-	}{{"two prod costs", sum, "0.0022278"}, {"0.1+0.2", func() float64 { x, y := 0.1, 0.2; return x + y }(), "0.3"}} {
+	}{
+		{"two prod costs", sum, "0.0022278"},
+		{"0.1+0.2", func() float64 { x, y := 0.1, 0.2; return x + y }(), "0.3"},
+		{"0.1+0.7 differs at the 16th digit", func() float64 { x, y := 0.1, 0.7; return x + y }(), "0.8"},
+	} {
 		c := fullCall(t1, uniquePurpose())
 		c.Cost = tc.cost
 		NewRecorder(e.app, logger).write(c)
@@ -304,7 +310,9 @@ func TestWrite_AFloatSumArtifactIsNotStored(t *testing.T) {
 	}
 }
 
-func TestRecord_ReturnsBeforeAHungDatabaseAnswers(t *testing.T) {
+// hungPool returns a pool on a listener that accepts connections and never replies, and the accepted count.
+func hungPool(t *testing.T) (*pgxpool.Pool, func() int) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -340,6 +348,15 @@ func TestRecord_ReturnsBeforeAHungDatabaseAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	return pool, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(conns)
+	}
+}
+
+func TestRecord_ReturnsBeforeAHungDatabaseAnswers(t *testing.T) {
+	pool, accepted := hungPool(t)
 
 	logger, buf := newLogger()
 	rec := NewRecorder(pool, logger)
@@ -358,12 +375,24 @@ func TestRecord_ReturnsBeforeAHungDatabaseAnswers(t *testing.T) {
 	}
 	time.Sleep(150 * time.Millisecond) // a second line would show here
 	wantOneWarn(t, buf, c, "")
-	mu.Lock()
-	n := len(conns)
-	mu.Unlock()
-	if n == 0 {
+	if accepted() == 0 {
 		t.Error("the listener saw no connection: the write never reached the database")
 	}
+}
+
+func TestRecord_AHungDatabaseGivesUpAtTheTwoSecondDefault(t *testing.T) {
+	pool, _ := hungPool(t)
+	logger, buf := newLogger()
+	c := fullCall(uuid.NewString(), uniquePurpose())
+
+	NewRecorder(pool, logger).Record(c)
+
+	time.Sleep(1500 * time.Millisecond)
+	if l := buf.lines(t); len(l) != 0 {
+		t.Fatalf("logged before the 2 s default elapsed: %v", l)
+	}
+	time.Sleep(1500 * time.Millisecond) // t = 3 s
+	wantOneWarn(t, buf, c, "")
 }
 
 func TestWrite_ADownDatabaseLogsOnceAndInsertsNothing(t *testing.T) {
@@ -445,5 +474,70 @@ func TestRecord_LandsOneRowOnAHealthyDatabase(t *testing.T) {
 	}
 	if l := buf.lines(t); len(l) != 0 {
 		t.Errorf("healthy Record logged %v", l)
+	}
+}
+
+func TestRecord_ConcurrentCallsAcrossTwoTenantsEachLandUnderTheirOwnTenant(t *testing.T) {
+	e := newEnv(t)
+	ids := e.tenants(t, 2)
+	logger, buf := newLogger()
+	rec := NewRecorder(e.app, logger)
+	purpose := uniquePurpose()
+	const perTenant = 25
+
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		for range perTenant {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rec.Record(fullCall(id, purpose))
+			}()
+		}
+	}
+	wg.Wait()
+
+	for deadline := time.Now().Add(5 * time.Second); e.total(t, purpose) < 2*perTenant && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	for _, id := range ids {
+		got := e.rows(t, id, purpose)
+		if len(got) != perTenant {
+			t.Errorf("tenant %s sees %d rows, want %d (log: %v)", id, len(got), perTenant, buf.lines(t))
+		}
+		for _, r := range got {
+			if r.TenantID != id {
+				t.Errorf("tenant %s sees a row of tenant %s", id, r.TenantID)
+			}
+		}
+	}
+	if n := e.total(t, purpose); n != 2*perTenant {
+		t.Errorf("%d rows in total, want %d", n, 2*perTenant)
+	}
+	if l := buf.lines(t); len(l) != 0 {
+		t.Errorf("healthy concurrent Records logged %v", l)
+	}
+}
+
+func TestRecord_AfterThePoolClosesLogsOnceAndDoesNotPanic(t *testing.T) {
+	e := newEnv(t)
+	t1 := e.tenants(t, 1)[0]
+	pool, err := pgxpool.New(context.Background(), os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.Close()
+	logger, buf := newLogger()
+	c := fullCall(t1, uniquePurpose())
+
+	NewRecorder(pool, logger).Record(c)
+
+	for deadline := time.Now().Add(2 * time.Second); len(buf.lines(t)) == 0 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	wantOneWarn(t, buf, c, "closed")
+	if n := e.total(t, c.Purpose); n != 0 {
+		t.Errorf("%d rows inserted through a closed pool, want 0", n)
 	}
 }

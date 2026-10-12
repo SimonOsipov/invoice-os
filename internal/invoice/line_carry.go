@@ -7,7 +7,7 @@ import (
 )
 
 // carryNRSLines gives each entry of a line replace the NRS fields it omits. An entry with
-// an id takes them from that stored line; an entry with none and no NRS field of its own takes
+// an id takes them from that stored line; an entry with none that names no NRS field takes
 // them from the first unclaimed stored line with equal legacy content. before is the locked,
 // RLS-filtered line set, so an id outside it (other invoice, other tenant, replaced, malformed,
 // repeated) is ErrUnknownLineID with no existence oracle.
@@ -47,7 +47,7 @@ func carryNRSLines(in []LineItemInput, before []LineItem) ([]LineItemInput, erro
 }
 
 func hasNRS(l LineItemInput) bool {
-	return l.TaxCategory != nil || l.HSNCode != nil || l.ISICCode != nil ||
+	return l.NRSSent || l.TaxCategory != nil || l.HSNCode != nil || l.ISICCode != nil ||
 		l.ProductCategory != nil || l.ServiceCategory != nil ||
 		l.SellersItemIdentification != nil || l.PriceUnit != nil ||
 		l.TaxPercent != nil || l.BaseQuantity != nil

@@ -62,6 +62,36 @@ type lineItemReq struct {
 	PriceUnit                 *string `json:"price_unit"`
 	TaxPercent                *string `json:"tax_percent"`
 	BaseQuantity              *string `json:"base_quantity"`
+
+	// NRSSent: the entry names an NRS key, null included. Set by UnmarshalJSON.
+	NRSSent bool `json:"-"`
+}
+
+var nrsLineWireKeys = [...]string{
+	"tax_category", "hsn_code", "isic_code", "product_category", "service_category",
+	"sellers_item_identification", "price_unit", "tax_percent", "base_quantity",
+}
+
+// UnmarshalJSON records whether the entry names any NRS key: a pointer cannot tell an
+// explicit null from an absent key. Names match case-insensitively, as encoding/json does.
+func (l *lineItemReq) UnmarshalJSON(b []byte) error {
+	type plain lineItemReq
+	if err := json.Unmarshal(b, (*plain)(l)); err != nil {
+		return err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(b, &keys); err != nil {
+		return err
+	}
+	l.NRSSent = false
+	for name := range keys {
+		for _, k := range nrsLineWireKeys {
+			if strings.EqualFold(name, k) {
+				l.NRSSent = true
+			}
+		}
+	}
+	return nil
 }
 
 // createRequest is the POST /v1/invoices wire body (snake_case JSON tags).
@@ -78,8 +108,7 @@ type createRequest struct {
 	VAT           *string       `json:"vat"`
 	Total         *string       `json:"total"`
 	LineItems     []lineItemReq `json:"line_items"`
-	// Appended last so the mirrored SPA/e2e types keep every existing key's
-	// position; absent and explicit null are both "no document"
+	// Absent and explicit null are both "no document"
 	// (TestCreateHandler_SourceDocumentIDAbsentOrNullIsNoDocument).
 	SourceDocumentID *string `json:"source_document_id"`
 
@@ -1222,6 +1251,7 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 					PriceUnit:                 li.PriceUnit,
 					TaxPercent:                li.TaxPercent,
 					BaseQuantity:              li.BaseQuantity,
+					NRSSent:                   li.NRSSent,
 				}
 			}
 			lines = &mapped

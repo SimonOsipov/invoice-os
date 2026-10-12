@@ -15,6 +15,7 @@ import type { AuditEvent, AuditResponse } from '../lib/audit'
 import { createAuthedFetch } from '../lib/authedFetch'
 import { EXPLAIN_COPY, fixPatch, type ExplainFix } from '../lib/explain'
 import { fmtDateTime } from '../lib/format'
+import { labelOf } from '../lib/invoiceFields'
 import {
   DETAIL_SUBMIT_COPY,
   FAILURE_EXPLANATION_FALLBACK,
@@ -289,6 +290,10 @@ function mockDetailFetch(detail: InvoiceDetailRecord, history: StatusChange[] = 
     // Only a fixture carrying a `document` reaches it; every other test stays at zero calls.
     if (method === 'GET' && url.includes('/v1/extractions')) {
       return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve({ jobs: [] }) })
+    }
+    // The NRS code pickers' search, answered empty so it never eats a detailSequence slot.
+    if (method === 'GET' && url.includes('/code-lists/')) {
+      return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve({ codes: [] }) })
     }
     // The activity card's GET .../audit-log, dispatched before the detail-refetch counter
     // like /ubl and /source-document above: the fallback would answer it with an invoice
@@ -4476,6 +4481,7 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
   // The edit form's invoice number cell.
   const EXTR_27_TESTIDS = ['edit-invoice-number']
   const ENGI_17_TESTIDS = ['violation-explain']
+  const ENGI_06_TESTIDS = ['buyer-type-note', 'line-nrs']
 
   // The rail's UBL document card.
   const BUG_18_TESTIDS = [
@@ -4741,11 +4747,11 @@ describe('InvoiceDetail: the untouched surface survives the AUDIT-09 rework (AUD
 
     // Closed-world, and deliberately so: "no card gained a testid" is half of AC-5. A new
     // element on this page must be declared, in one of the three lists above, by whoever adds it.
-    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS, ...ENGI_17_TESTIDS, ...BUG_18_TESTIDS])
+    const declared = new Set([...UNTOUCHED_TESTIDS, ...AUDIT_09_TESTIDS, ...BUG_13_TESTIDS, ...EXTR_27_TESTIDS, ...ENGI_17_TESTIDS, ...ENGI_06_TESTIDS, ...BUG_18_TESTIDS])
     const undeclared = [...seen.keys()].filter((id) => !declared.has(id)).sort()
     expect(
       undeclared,
-      `undeclared testid(s) on the invoice detail page: ${undeclared.map((id) => `${id} (${seen.get(id)})`).join(', ')}. Add each to UNTOUCHED_TESTIDS, AUDIT_09_TESTIDS, BUG_13_TESTIDS, EXTR_27_TESTIDS or BUG_18_TESTIDS.`,
+      `undeclared testid(s) on the invoice detail page: ${undeclared.map((id) => `${id} (${seen.get(id)})`).join(', ')}. Add each to UNTOUCHED_TESTIDS, AUDIT_09_TESTIDS, BUG_13_TESTIDS, EXTR_27_TESTIDS, ENGI_06_TESTIDS or BUG_18_TESTIDS.`,
     ).toEqual([])
   })
 
@@ -5976,7 +5982,15 @@ describe('InvoiceDetail edit form: the invoice number cell', () => {
     expect(grid.style.gridTemplateColumns).toBe('1fr 1fr')
     // DOM order in a two-track grid: cells 2k and 2k+1 share a row.
     const labels = Array.from(grid.children).map((cell) => cell.firstElementChild?.textContent)
-    expect(labels).toEqual(['Invoice number', 'Issue date', 'Supplier name', 'Supplier TIN', 'Buyer name', 'Buyer TIN', 'Subtotal', 'VAT', 'Total', 'Currency'])
+    const expected = ['Invoice number', 'Issue date', 'Supplier name', 'Supplier TIN', 'Buyer name', 'Buyer TIN', 'Subtotal', 'VAT', 'Total', 'Currency']
+    const nrs = [
+      'Tax currency code', 'Due date', 'Issue time', 'Tax point date', 'Payment status',
+      'Supplier email', 'Supplier telephone', 'Supplier street', 'Supplier city', 'Supplier postal zone', 'Supplier country', 'Supplier state', 'Supplier LGA',
+      'Invoice kind', 'Buyer email', 'Buyer telephone', 'Buyer street', 'Buyer city', 'Buyer postal zone', 'Buyer country', 'Buyer state', 'Buyer LGA',
+    ]
+    // Sub-headings and the buyer note carry no label cell; every other cell must be a known field.
+    expect(labels.slice(0, 10)).toEqual(expected)
+    expect(labels.filter((l) => l !== undefined).sort()).toEqual([...expected, ...nrs].sort())
   })
 
   it('EXTR27-D15: a fixed number uses the Supplier TIN read-only recipe and is never disabled', async () => {
@@ -6070,6 +6084,25 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
       expect.soft(row.style.gridTemplateColumns, `line row ${i} shares the header columns`).toBe(header.style.gridTemplateColumns)
     }
     expect(header.style.gridTemplateColumns, 'control: the header has a grid').not.toBe('')
+  })
+
+  it('a line edit re-sends the stored id and keeps the stored NRS values; an added row has no id', async () => {
+    const nrsLine = { ...LINE, hsn_code: '1001', tax_percent: '7.50', isic_code: null }
+    const { patchCalls } = mockDetailFetch(detailRecord({ ...editable, line_items: [nrsLine] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    fireEvent.change(screen.getByDisplayValue('Widget'), { target: { value: 'Widget 2' } })
+    fireEvent.click(screen.getByTestId('line-add'))
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const sent = (patchCalls[0] as { line_items: Array<Record<string, unknown>> }).line_items
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toMatchObject({ id: 'li-1', description: 'Widget 2', hsn_code: '1001', tax_percent: '7.50', isic_code: null })
+    expect(Object.keys(sent[0])).toHaveLength(15)
+    expect(sent[1]).not.toHaveProperty('id')
+    expect(Object.keys(sent[1])).toHaveLength(14)
+    expect(sent[1].hsn_code).toBeNull()
   })
 
   it('the rail may shrink below its content', async () => {
@@ -6356,7 +6389,8 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     expect.soft(screen.getByTestId('edit-cancel').style.height, 'Cancel height').toBe('34px')
 
     const fields = (Array.from(form.querySelectorAll('input')) as HTMLInputElement[]).filter((el) => el.closest('[data-testid="line-row"]') === null)
-    expect(fields, 'control: ten field inputs outside the line table').toHaveLength(10)
+    // 10 legacy inputs plus the 20 NRS header inputs (the other 2 NRS header fields are selects).
+    expect(fields, 'control: thirty field inputs outside the line table').toHaveLength(30)
     expect(fields.filter((el) => el.readOnly), 'control: supplier name and TIN are the read-only pair').toHaveLength(2)
     for (const el of fields) {
       const name = el.readOnly ? `read-only ${el.value}` : `editable ${el.value}`
@@ -6423,7 +6457,7 @@ describe('InvoiceDetail cards, rail and inline edit take the v2 look (RESKIN2-03
     }
     expect.soft(within(head).getByText('Amount').style.textAlign, 'Amount header').toBe('right')
     expect.soft(within(head).getByText('Tax').style.textAlign, 'Tax header').toBe('right')
-    const inputs = Array.from(row.querySelectorAll('input')) as HTMLInputElement[]
+    const inputs = (Array.from(row.querySelectorAll('input')) as HTMLInputElement[]).filter((el) => el.closest('[data-testid="line-nrs"]') === null)
     expect(inputs, 'control: description plus four numeric inputs').toHaveLength(5)
     expect.soft(inputs[0].style.padding, 'description input padding').toBe('0px 10px')
     for (const [i, input] of inputs.entries()) {
@@ -6854,5 +6888,312 @@ describe('InvoiceDetail explain (ENGI-17-05)', () => {
     render(<InvoiceDetail ctx={detailCtx(ID)} />)
     await screen.findByTestId('stale-verdict')
     for (const b of await screen.findAllByTestId('violation-explain')) expect((b as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+describe('InvoiceDetail editor: the NRS fields (ENGI-06-04)', () => {
+  const ID = 'inv-nrs-edit-1'
+  const REFUSED = 'Remove the line and add it again to start it blank.'
+  const nrsLine = (n: number, over: Record<string, unknown> = {}) => ({
+    id: `l${n}`,
+    line_no: n,
+    description: `Item ${n}`,
+    quantity: '1',
+    unit_price: '10.00',
+    line_total: '10.00',
+    line_tax: '0.75',
+    tax_category: 'STANDARD_VAT',
+    hsn_code: `100${n}`,
+    isic_code: null,
+    product_category: 'Goods',
+    service_category: null,
+    sellers_item_identification: `SKU-${n}`,
+    price_unit: 'EA',
+    tax_percent: '7.50',
+    base_quantity: '1',
+    ...over,
+  })
+  const base = { id: ID, status: 'validated' as InvoiceStatus, can_edit: true, line_items: [nrsLine(1), nrsLine(2)] }
+
+  const NRS_HEADER_KEYS = [
+    'invoice_kind', 'tax_currency_code', 'due_date', 'issue_time', 'tax_point_date', 'payment_status',
+    'supplier_email', 'supplier_telephone', 'supplier_street', 'supplier_city', 'supplier_postal_zone', 'supplier_country', 'supplier_state', 'supplier_lga',
+    'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city', 'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+  ] as const
+
+  const control = (label: string) =>
+    within(screen.getByTestId('edit-invoice')).getByText(label, { selector: 'div.label' }).nextElementSibling!.closest('div')!.querySelector('input,select') as HTMLInputElement
+  const lineRow = (n: number) => screen.getAllByTestId('line-row')[n - 1]
+  const lineInput = (n: number, key: string) => lineRow(n).querySelector(`input[data-line-field="${key}"]`) as HTMLInputElement
+  const save = () => fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  async function openEditor(over: Partial<InvoiceDetailRecord> = {}, opts: DetailFetchOptions = {}) {
+    const m = mockDetailFetch(detailRecord({ ...base, ...over }), [], opts)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('edit-toggle'))
+    await screen.findByTestId('edit-invoice')
+    return m
+  }
+
+  it('invoiceDetail_editorSeedsTheNrsHeaderFields', async () => {
+    await openEditor({ buyer_state: 'NG-LA', due_date: '2027-01-31T00:00:00Z' })
+    expect(control('Buyer state').value).toBe('NG-LA')
+    expect(control('Due date').value).toBe('2027-01-31')
+  })
+
+  it('invoiceDetail_nrsHeaderFieldsDisableWhileSaving', async () => {
+    const pending: MockResponse = { ok: true, status: 200, json: () => new Promise(() => {}) }
+    const { patchCalls } = await openEditor({}, { editResponse: pending })
+    fireEvent.change(screen.getByDisplayValue('Beta Ltd'), { target: { value: 'Beta Ltd 2' } })
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    for (const key of NRS_HEADER_KEYS) {
+      const el = within(screen.getByTestId('edit-invoice')).getByText(labelOf(key), { selector: 'div.label' }).nextElementSibling!
+      expect((el.querySelector('input,select') ?? el) as HTMLInputElement, key).toHaveProperty('disabled', true)
+    }
+    expect(LINE_EDIT_FIELDS.slice(5)).toHaveLength(9)
+    for (const key of LINE_EDIT_FIELDS) expect(lineInput(1, key).disabled, key).toBe(true)
+  })
+
+  it('invoiceDetail_legacyLineInputsComeFirst', async () => {
+    await openEditor()
+    const keys = Array.from(lineRow(1).querySelectorAll('input')).map((el) => el.dataset.lineField)
+    expect(keys.slice(0, 5)).toEqual(['description', 'quantity', 'unit_price', 'line_total', 'line_tax'])
+    expect(keys.slice(5)).toEqual(LINE_EDIT_FIELDS.slice(5))
+  })
+
+  it('invoiceDetail_lineLinkFocusesAnNrsField', async () => {
+    const violation = { rule_key: 'line.tax', severity: 'error' as const, message: 'bad', path: 'line_items[2].tax_category' }
+    mockDetailFetch(detailRecord({ ...base, rule_set_version: 3, violations: [violation] }))
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    fireEvent.click(await screen.findByTestId('violation-open-line'))
+    await screen.findByTestId('edit-invoice')
+    expect(document.activeElement).toBe(lineInput(2, 'tax_category'))
+  })
+
+  it('invoiceDetail_saveSendsLineIdsAndNrsFields', async () => {
+    const { patchCalls } = await openEditor()
+    fireEvent.change(lineInput(2, 'description'), { target: { value: 'Item 2 revised' } })
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const { line_no: _a, ...first } = nrsLine(1)
+    const { line_no: _b, ...second } = nrsLine(2, { description: 'Item 2 revised' })
+    expect(patchCalls[0]).toEqual({ line_items: [first, second] })
+  })
+
+  it('invoiceDetail_addedRowHasNoId', async () => {
+    const { patchCalls } = await openEditor()
+    fireEvent.click(screen.getByTestId('line-add'))
+    fireEvent.change(lineInput(3, 'description'), { target: { value: 'Item 3' } })
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const sent = (patchCalls[0] as { line_items: Array<Record<string, unknown>> }).line_items
+    expect(sent).toHaveLength(3)
+    expect(sent[2]).not.toHaveProperty('id')
+    expect(sent[0]).toHaveProperty('id', 'l1')
+  })
+
+  it('invoiceDetail_untouchedNrsSaveSendsNothing', async () => {
+    const { patchCalls } = await openEditor({
+      due_date: '2027-01-31T00:00:00Z',
+      issue_time: '09:05:00',
+      buyer_email: null,
+      line_items: [nrsLine(1), nrsLine(2, { hsn_code: null, tax_percent: null, price_unit: null })],
+    })
+    save()
+    await waitFor(() => expect(screen.queryByTestId('edit-invoice')).toBeNull())
+    expect(patchCalls).toHaveLength(0)
+  })
+
+  it('invoiceDetail_clearedNrsHeaderSendsNull', async () => {
+    const { patchCalls } = await openEditor({ due_date: '2027-01-31T00:00:00Z' })
+    fireEvent.change(control('Due date'), { target: { value: '' } })
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    expect(patchCalls[0]).toEqual({ due_date: null })
+  })
+
+  it('invoiceDetail_malformedNrsDateIsRefusedBeforeTheRequest', async () => {
+    const { patchCalls } = await openEditor()
+    fireEvent.change(control('Due date'), { target: { value: '30/06/2026' } })
+    save()
+    expect(await screen.findByText('Due date must be a date as YYYY-MM-DD.')).toBeTruthy()
+    expect((control('Due date') as HTMLInputElement).value).toBe('30/06/2026')
+    expect(patchCalls).toHaveLength(0)
+    fireEvent.change(control('Due date'), { target: { value: '' } })
+    fireEvent.change(control('Tax point date'), { target: { value: '2026-02-30' } })
+    save()
+    expect(await screen.findByText('Tax point date must be a date as YYYY-MM-DD.')).toBeTruthy()
+    expect((control('Tax point date') as HTMLInputElement).value).toBe('2026-02-30')
+    expect(patchCalls).toHaveLength(0)
+  })
+
+  it('invoiceDetail_paddedValidNrsDateIsSentAsRfc3339', async () => {
+    const { patchCalls } = await openEditor()
+    fireEvent.change(control('Due date'), { target: { value: ' 2026-06-30 ' } })
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    expect(patchCalls[0]).toEqual({ due_date: '2026-06-30T00:00:00Z' })
+  })
+
+  it('invoiceDetail_refusesToBlankASavedLineNrsField', async () => {
+    const { patchCalls } = await openEditor()
+    const hsn = lineInput(1, 'hsn_code')
+    fireEvent.change(hsn, { target: { value: '' } })
+    fireEvent.blur(hsn)
+    save()
+    expect(await screen.findByText(`Line 1: HSN code cannot be cleared once saved. ${REFUSED}`)).toBeTruthy()
+    expect(patchCalls).toHaveLength(0)
+  })
+
+  it('invoiceDetail_removeAndReAddSendsABlankNewRow', async () => {
+    const { patchCalls } = await openEditor()
+    fireEvent.click(within(lineRow(1)).getByTestId('line-remove'))
+    fireEvent.click(screen.getByTestId('line-add'))
+    const legacy = ['description', 'quantity', 'unit_price', 'line_total', 'line_tax'] as const
+    for (const k of legacy) fireEvent.change(lineInput(2, k), { target: { value: nrsLine(1)[k] } })
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const sent = (patchCalls[0] as { line_items: Array<Record<string, unknown>> }).line_items
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toHaveProperty('id', 'l2')
+    expect(sent[1]).not.toHaveProperty('id')
+    expect(sent[1]).toMatchObject({ description: 'Item 1', hsn_code: null, tax_category: null, tax_percent: null, base_quantity: null })
+    expect(Object.keys(sent[1])).toHaveLength(14)
+  })
+
+  it('invoiceDetail_staleLineIdErrorShownVerbatim', async () => {
+    const stale = 'line_items id must name a line of this invoice'
+    await openEditor({}, { editResponse: { ok: false, status: 400, json: () => Promise.resolve({ error: stale }) } })
+    fireEvent.change(lineInput(1, 'description'), { target: { value: 'Changed' } })
+    save()
+    expect(await screen.findByText(stale)).toBeTruthy()
+    expect(screen.getByTestId('edit-invoice')).toBeTruthy()
+  })
+
+  it('invoiceDetail_clearingAPickerThenEnterSavesTheClear', async () => {
+    const { patchCalls } = await openEditor({ buyer_state: 'NG-LA' })
+    fireEvent.change(control('Buyer state'), { target: { value: '' } })
+    fireEvent.submit(screen.getByTestId('edit-invoice'))
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    expect(patchCalls[0]).toEqual({ buyer_state: null })
+  })
+
+  it('invoiceDetail_clearingALinePickerThenEnterIsRefused', async () => {
+    const { patchCalls } = await openEditor()
+    fireEvent.change(lineInput(1, 'hsn_code'), { target: { value: '' } })
+    fireEvent.submit(screen.getByTestId('edit-invoice'))
+    expect(await screen.findByText(`Line 1: HSN code cannot be cleared once saved. ${REFUSED}`)).toBeTruthy()
+    expect(patchCalls).toHaveLength(0)
+  })
+
+  it('invoiceDetail_buyerTypeNote', async () => {
+    await openEditor()
+    const note = () => screen.getByTestId('buyer-type-note').textContent
+    expect(note()).toContain('Choose the buyer type')
+    fireEvent.change(control('Invoice kind'), { target: { value: 'B2C' } })
+    expect(note()).toBe('Buyer details are optional for a B2C invoice.')
+    expect(control('Buyer email').getAttribute('aria-required')).toBeNull()
+    fireEvent.change(control('Invoice kind'), { target: { value: 'B2B' } })
+    expect(note()).toBe('Buyer TIN, name, email and address are required for a B2B or B2G invoice.')
+    for (const label of ['Buyer TIN', 'Buyer name', 'Buyer email', 'Buyer street', 'Buyer city', 'Buyer postal zone', 'Buyer country', 'Buyer state', 'Buyer LGA']) {
+      expect(control(label).getAttribute('aria-required'), label).toBe('true')
+    }
+    expect(control('Buyer telephone').getAttribute('aria-required')).toBeNull()
+  })
+
+  it('invoiceDetail_taxCategoryPickFillsThePercent', async () => {
+    const { fetchMock } = await openEditor()
+    const orig = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      url.includes('/code-lists/')
+        ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ codes: [{ code: 'ZERO_VAT', label: 'Zero rated', percent: '0.0' }] }) })
+        : orig(url, init),
+    )
+    fireEvent.change(lineInput(1, 'tax_category'), { target: { value: 'ZERO_VAT' } })
+    await waitFor(() => expect(lineInput(1, 'tax_percent').value).toBe('0.0'))
+  })
+
+  // The picker commits a typed code only after its debounced search answers.
+  async function settlePick(fetchMock: { mock: { calls: unknown[][] } }, q: string) {
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]).includes(`q=${q}`))).toBe(true))
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+  }
+
+  async function answerCodes(fetchMock: { getMockImplementation(): any; mockImplementation(f: any): any }, codes: Array<Record<string, string>>) {
+    const orig = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      url.includes('/code-lists/') ? Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ codes }) }) : orig(url, init),
+    )
+  }
+
+  it('invoiceDetail_blankedThenRetypedLineFieldIsNotRefused', async () => {
+    const { patchCalls, fetchMock } = await openEditor()
+    await answerCodes(fetchMock, [{ code: '2002', label: 'Two' }])
+    const hsn = lineInput(1, 'hsn_code')
+    fireEvent.change(hsn, { target: { value: '' } })
+    fireEvent.blur(hsn)
+    fireEvent.change(hsn, { target: { value: '2002' } })
+    await settlePick(fetchMock, '2002')
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const sent = (patchCalls[0] as { line_items: Array<Record<string, unknown>> }).line_items
+    expect(sent[0]).toMatchObject({ id: 'l1', hsn_code: '2002' })
+  })
+
+  it('invoiceDetail_refusalNamesTheLineAndTheFieldThatWasBlanked', async () => {
+    const { patchCalls } = await openEditor()
+    const unit = lineInput(2, 'price_unit')
+    fireEvent.change(unit, { target: { value: '' } })
+    fireEvent.blur(unit)
+    save()
+    expect(await screen.findByText(`Line 2: Price unit cannot be cleared once saved. ${REFUSED}`)).toBeTruthy()
+    expect(patchCalls).toHaveLength(0)
+  })
+
+  it('invoiceDetail_aTaxCategoryPickWithoutAPercentKeepsTheTypedPercent', async () => {
+    const { patchCalls, fetchMock } = await openEditor()
+    await answerCodes(fetchMock, [{ code: 'EXEMPT', label: 'Exempt', percent: null as unknown as string }])
+    fireEvent.change(lineInput(1, 'tax_percent'), { target: { value: '5' } })
+    fireEvent.change(lineInput(1, 'tax_category'), { target: { value: 'EXEMPT' } })
+    await settlePick(fetchMock, 'EXEMPT')
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const first = (patchCalls[0] as { line_items: Array<Record<string, unknown>> }).line_items[0]
+    expect(first).toMatchObject({ tax_category: 'EXEMPT', tax_percent: '5' })
+  })
+
+  it('invoiceDetail_buyerTypeNoteRequiresForB2G', async () => {
+    await openEditor()
+    fireEvent.change(control('Invoice kind'), { target: { value: 'B2G' } })
+    expect(screen.getByTestId('buyer-type-note').textContent).toBe('Buyer TIN, name, email and address are required for a B2B or B2G invoice.')
+    expect(control('Buyer LGA').getAttribute('aria-required')).toBe('true')
+  })
+
+  it('invoiceDetail_buyerTypeNoteOfAStoredKindNamesTheSameNineRequiredInputs', async () => {
+    await openEditor({ invoice_kind: 'B2B' })
+    expect(screen.getByTestId('buyer-type-note').textContent).toBe('Buyer TIN, name, email and address are required for a B2B or B2G invoice.')
+    const required = ['Buyer TIN', 'Buyer name', 'Buyer email', 'Buyer street', 'Buyer city', 'Buyer postal zone', 'Buyer country', 'Buyer state', 'Buyer LGA']
+    const flagged = ['Buyer TIN', 'Buyer name', 'Buyer email', 'Buyer telephone', 'Buyer street', 'Buyer city', 'Buyer postal zone', 'Buyer country', 'Buyer state', 'Buyer LGA', 'Invoice kind']
+      .filter((label) => control(label).getAttribute('aria-required') === 'true')
+    expect(flagged.sort()).toEqual([...required].sort())
+  })
+
+  it('invoiceDetail_buyerTypeNoteOfAStoredB2CFlagsNoBuyerInput', async () => {
+    await openEditor({ invoice_kind: 'B2C' })
+    expect(screen.getByTestId('buyer-type-note').textContent).toBe('Buyer details are optional for a B2C invoice.')
+    for (const label of ['Buyer TIN', 'Buyer name', 'Buyer email', 'Buyer LGA']) expect(control(label).getAttribute('aria-required'), label).toBeNull()
+  })
+
+  it('invoiceDetail_editingALineCodeSendsItWithItsId', async () => {
+    const { patchCalls, fetchMock } = await openEditor()
+    await answerCodes(fetchMock, [{ code: '9999', label: 'Nine' }])
+    fireEvent.change(lineInput(2, 'hsn_code'), { target: { value: '9999' } })
+    await settlePick(fetchMock, '9999')
+    save()
+    await waitFor(() => expect(patchCalls).toHaveLength(1))
+    const sent = (patchCalls[0] as { line_items: Array<Record<string, unknown>> }).line_items
+    expect(sent.map((r) => r.id)).toEqual(['l1', 'l2'])
+    expect(sent[1]).toMatchObject({ hsn_code: '9999', description: 'Item 2' })
+    expect(sent[0]).toMatchObject({ hsn_code: '1001' })
   })
 })

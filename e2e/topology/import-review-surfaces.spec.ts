@@ -632,7 +632,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
             return {
               head: [...head.children].map((c) => c.getBoundingClientRect().left),
               rows: rows.map((row) => ({
-                lefts: [...row.children].map((c) => c.getBoundingClientRect().left),
+                lefts: [...row.children].filter((c) => c.getAttribute('data-testid') !== 'draft-line-nrs').map((c) => c.getBoundingClientRect().left),
                 box: rect(row),
                 remove: rect(row.querySelector('button[aria-label^="Remove line"]') as Element),
                 scrollWidth: row.scrollWidth,

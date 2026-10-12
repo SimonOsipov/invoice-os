@@ -239,6 +239,9 @@ type LineItemInput struct {
 	PriceUnit                 *string
 	TaxPercent                *string
 	BaseQuantity              *string
+
+	// NRSSent: the request entry named an NRS key, null included. The carry skips it.
+	NRSSent bool
 }
 
 // TrimmedOrNil is the value trimmed, or nil when it is nil or blank.

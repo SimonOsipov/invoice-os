@@ -38,10 +38,12 @@ import {
   diffEditInput,
   diffLineItems,
   editInvoice,
+  editValueToWire,
   FAILURE_EXPLANATION_FALLBACK,
   FAILURE_KINDS,
   failureExplanation,
   formFromInvoice,
+  LINE_EDIT_FIELDS,
   gateByActiveEntity,
   getInvoice,
   getInvoiceHistory,
@@ -95,6 +97,7 @@ import {
   type RejectionReason,
   type StatusChange,
 } from './invoices'
+import type { LineEditKey } from './invoiceFields'
 // Namespace import, ADDITIONAL to the named import above -- INV-06-T11a below asserts
 // over this whole object with the `in` operator, so it never imports the [isfixable-deleted]
 // export by name and can't fail to compile either before or after that export is removed.
@@ -3906,11 +3909,9 @@ describe('reasonFieldFlags: hostile input (adversarial)', () => {
 // on a real assertion against the [isfixable-deleted] export, which has not yet been
 // removed.
 
-// The five MBS content fields diffLineItems compares -- mirrors the unexported
-// `LineContent` type in invoices.ts (id/line_no deliberately excluded,
-// [fingerprint-excludes-line-ids]); this file can't import that type since it isn't
-// exported, so it's redeclared here structurally over the exported InvoiceLineItem.
-type LineFields = Pick<InvoiceLineItem, 'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax'>
+// The 14 content fields diffLineItems compares (line_no excluded, [fingerprint-excludes-line-ids]),
+// redeclared structurally over the exported InvoiceLineItem.
+type LineFields = Pick<InvoiceLineItem, LineEditKey>
 
 function lineFields(overrides: Partial<LineFields> = {}): LineFields {
   return {
@@ -3919,6 +3920,15 @@ function lineFields(overrides: Partial<LineFields> = {}): LineFields {
     unit_price: '100.00',
     line_total: '200.00',
     line_tax: '15.00',
+    tax_category: null,
+    hsn_code: null,
+    isic_code: null,
+    product_category: null,
+    service_category: null,
+    sellers_item_identification: null,
+    price_unit: null,
+    tax_percent: null,
+    base_quantity: null,
     ...overrides,
   }
 }
@@ -4061,7 +4071,7 @@ describe('diffLineItems (INVED-01-06)', () => {
     expect(diffLineItems(original, edited)).toBeUndefined()
   })
 
-  it('INV-06-T7e: a change in any one of the five line fields is a change', () => {
+  it('INV-06-T7e: a change in any one of the 14 line fields is a change', () => {
     const original: LineFields[] = [lineFields(), lineFields({ description: 'Gadget' })]
     const changes: Record<keyof LineFields, string> = {
       description: 'Other',
@@ -4069,6 +4079,15 @@ describe('diffLineItems (INVED-01-06)', () => {
       unit_price: '9.00',
       line_total: '9.00',
       line_tax: '9.00',
+      tax_category: 'ZERO_VAT',
+      hsn_code: '1001',
+      isic_code: '6201',
+      product_category: 'Goods',
+      service_category: 'Services',
+      sellers_item_identification: 'SKU-9',
+      price_unit: 'KGM',
+      tax_percent: '5',
+      base_quantity: '9',
     }
     for (const field of Object.keys(changes) as (keyof LineFields)[]) {
       const edited = original.map((l, i) => (i === 1 ? { ...l, [field]: changes[field] } : { ...l }))
@@ -4135,20 +4154,114 @@ describe('diffLineItems (INVED-01-06)', () => {
     expect(diffLineItems(original, edited)).toEqual([b, a])
   })
 
-  it('INV-06-T9e: emitted objects carry exactly the five MBS fields, even when edited rows are built by spreading InvoiceLineItem', () => {
-    const original: LineFields[] = [lineFields({ description: 'Old' })]
-    // InvoiceLineItem-typed VARIABLE (not an inline literal) so `id`/`line_no` don't trip
-    // excess-property checking against diffLineItems' Pick<InvoiceLineItem, ...> parameter.
-    const editedWithIds: InvoiceLineItem[] = [
-      { id: 'line-1', line_no: 1, description: 'New', quantity: '2', unit_price: '100.00', line_total: '200.00', line_tax: '15.00' },
+  it('INV-06-T9e: emitted objects carry exactly the 14 fields, plus id exactly when the input row had one', () => {
+    const original: LineFields[] = [lineFields({ description: 'Old' }), lineFields({ description: 'Old 2' })]
+    const edited: Array<LineFields & { id?: string }> = [
+      { ...lineFields({ description: 'New' }), id: 'line-1' },
+      lineFields({ description: 'Added' }),
     ]
 
-    const result = diffLineItems(original, editedWithIds)
+    const result = diffLineItems(original, edited)
 
     expect(result).toBeDefined()
-    for (const row of result ?? []) {
-      expect(Object.keys(row).sort()).toEqual(['description', 'line_tax', 'line_total', 'quantity', 'unit_price'])
+    const fourteen = [...LINE_EDIT_FIELDS].sort()
+    expect(LINE_EDIT_FIELDS).toHaveLength(14)
+    expect(Object.keys(result?.[0] ?? {}).sort()).toEqual([...fourteen, 'id'].sort())
+    expect(Object.keys(result?.[1] ?? {}).sort()).toEqual(fourteen)
+  })
+
+  it('diffLineItems_carriesTheStoredLineId', () => {
+    const stored = [
+      { id: 'l-1', ...lineFields({ description: 'One' }) },
+      { id: 'l-2', ...lineFields({ description: 'Two' }) },
+    ]
+    const edited = [stored[0], { ...stored[1], description: 'Two changed' }]
+
+    expect(diffLineItems(stored, edited)?.map((r) => [r.id, r.description])).toEqual([
+      ['l-1', 'One'],
+      ['l-2', 'Two changed'],
+    ])
+  })
+
+  it('diffLineItems_nrsOnlyChangeIsAChange', () => {
+    const original = [lineFields()]
+    const result = diffLineItems(original, [lineFields({ hsn_code: '1001' })])
+
+    expect(result).toBeDefined()
+    expect(result?.[0].hsn_code).toBe('1001')
+  })
+
+  it('diffLineItems_addedRowHasNoId', () => {
+    const stored = [{ id: 'l-1', ...lineFields() }, { id: 'l-2', ...lineFields({ description: 'Two' }) }]
+    const result = diffLineItems(stored, [...stored, lineFields({ description: 'Three' })])
+
+    expect(result).toHaveLength(3)
+    expect(result?.[0].id).toBe('l-1')
+    expect(result?.[2]).not.toHaveProperty('id')
+  })
+
+  it('diffLineItems: a removed and re-added row with the same content is sent without id and with blank NRS keys', () => {
+    const stored = [{ id: 'l-1', ...lineFields({ hsn_code: '1001' }) }]
+    const result = diffLineItems(stored, [lineFields({ hsn_code: '' })])
+
+    expect(result).toHaveLength(1)
+    expect(result?.[0]).not.toHaveProperty('id')
+    expect(result?.[0].hsn_code).toBeNull()
+  })
+
+  it('diffLineItems_untouchedNrsLinesAreUndefined', () => {
+    const stored = [{ id: 'l-1', ...lineFields({ hsn_code: null, tax_percent: '7.50' }) }]
+    const edited = stored.map((l) => ({ ...l, hsn_code: '' }))
+
+    expect(diffLineItems(stored, edited)).toBeUndefined()
+  })
+})
+
+describe('editValueToWire', () => {
+  it('editValueToWire_nrsDateBecomesRfc3339', () => {
+    expect(editValueToWire('due_date', '2027-01-31')).toBe('2027-01-31T00:00:00Z')
+  })
+
+  it('editValueToWire_blankNrsKeyIsNull', () => {
+    expect(editValueToWire('buyer_email', '')).toBeNull()
+    expect(editValueToWire('due_date', '')).toBeNull()
+  })
+
+  it('editValueToWire_legacyKeysUnchanged', () => {
+    expect(editValueToWire('buyer_name', '')).toBe('')
+    expect(editValueToWire('issue_date', '')).toBeUndefined()
+    expect(editValueToWire('issue_date', '2026-08-15')).toBe('2026-08-15T00:00:00Z')
+  })
+
+  it('editValueToWire: a padded or blank NRS date, a time and a malformed date', () => {
+    expect(editValueToWire('tax_point_date', ' 2027-01-31 ')).toBe('2027-01-31T00:00:00Z')
+    expect(editValueToWire('tax_point_date', '   ')).toBeNull()
+    expect(editValueToWire('issue_date', '   ')).toBeUndefined()
+    expect(editValueToWire('issue_time', '09:05:00')).toBe('09:05:00')
+    expect(editValueToWire('due_date', '31/01/2027')).toBe('31/01/2027')
+    expect(editValueToWire('buyer_name', '2027-01-31')).toBe('2027-01-31')
+  })
+})
+
+describe('diffEditInput: NRS fields', () => {
+  it('diffEditInput_untouchedNrsRecordIsEmpty', () => {
+    const rec: Pick<InvoiceRecord, EditFieldKey> = {
+      ...draftInvoice,
+      due_date: '2027-01-31T00:00:00Z',
+      issue_time: '09:05:00',
+      buyer_email: null,
+      tax_point_date: null,
     }
+
+    expect(formFromInvoice(rec).due_date).toBe('2027-01-31')
+    expect(diffEditInput(rec, formFromInvoice(rec))).toEqual({})
+  })
+
+  it('a cleared NRS field is sent as null and a changed date as RFC3339', () => {
+    const rec: Pick<InvoiceRecord, EditFieldKey> = { ...draftInvoice, due_date: '2027-01-31T00:00:00Z', buyer_email: 'a@b.ng' }
+    const form = { ...formFromInvoice(rec), due_date: '2027-02-01', buyer_email: '' }
+
+    expect(diffEditInput(rec, form)).toEqual({ due_date: '2027-02-01T00:00:00Z', buyer_email: null })
   })
 })
 

@@ -31,6 +31,7 @@
 // review request without a batch id is a compile error).
 import {
   EDIT_FIELD_KEYS,
+  editValueToWire,
   invoiceStatusStyle,
   mbsPathToEditField,
   pruneSelection,
@@ -1342,12 +1343,8 @@ export function canKeepAsIs(reason: string): boolean {
 // opened an editor for cannot appear in the patch even if some unrelated value happens
 // to differ from `original`.
 //
-// issue_date is special-cased identically to InvoiceDetail.tsx: PATCH /v1/invoices/{id}
-// decodes IssueDate into a *time.Time, which only accepts a full RFC3339 string, so a
-// bare "YYYY-MM-DD" is normalized to midnight UTC before it is sent. A cleared ("")
-// issue_date is DROPPED, never sent as "" -- JSON "null" and an absent key both decode to
-// "leave unchanged" ([D9]), so an explicit clear cannot be represented over this PATCH at
-// all, and sending "" would only surface a confusing decode failure.
+// Values go through editValueToWire: a date is sent as RFC3339, a cleared issue_date is
+// dropped, a cleared NRS key is null.
 export function fixEditPatch(
   original: Pick<InvoiceRecord, EditFieldKey>,
   draft: Partial<Record<EditFieldKey, string>>,
@@ -1357,13 +1354,8 @@ export function fixEditPatch(
     const value = draft[key]
     if (value === undefined) continue
     if (value === (original[key] ?? '')) continue
-    if (key === 'issue_date') {
-      const trimmed = value.trim()
-      if (!trimmed) continue
-      patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? `${trimmed}T00:00:00Z` : trimmed
-      continue
-    }
-    patch[key] = value
+    const wire = editValueToWire(key, value)
+    if (wire !== undefined) (patch as Record<string, string | null>)[key] = wire
   }
   return patch
 }

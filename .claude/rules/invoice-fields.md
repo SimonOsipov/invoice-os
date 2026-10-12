@@ -75,8 +75,8 @@ paths:
 - The AI schema requires every import key. Mirror a new key in `IMPORT_KEYS` in `e2e/importFixtures.ts`. The three steered answers spread `nullImportKeys()`.
 - Header extract pins: `TestExtractHeaderKeys_AreTheNineteenInOrder` and `TestHeaderFields_AreTheNineteenInOrder`. The vitest pin is `HEADER_FIELDS is the nineteen extraction header fields in order`.
 - Line extract pins: `TestExtractLineKeys_AreTheTenInOrder` and `TestLineRoles_AreTheTenRoleConstantsInEmitOrder`.
-- Edit pin: `EDIT_FIELD_KEYS is the nine editable header fields in order` in `frontend/app/src/lib/invoiceFields.test.ts`.
-- Form pin: `Draft is the five form keys plus items` in `frontend/app/src/lib/invoiceFields.test.ts`.
+- Edit pin: `EDIT_FIELD_KEYS is the nine legacy then the twenty-two NRS header fields in order` in `frontend/app/src/lib/invoiceFields.test.ts`.
+- Form pin: `Draft is the five form keys, the twenty-two NRS header keys, plus items` in `frontend/app/src/lib/invoiceFields.test.ts`.
 - The Go pins live in `internal/invoicefields/fields_test.go`, `internal/importer/fields_test.go` and `internal/extraction/vocabulary_list_test.go`.
 
 ## Limits

@@ -40,6 +40,15 @@ export function listCustomers(
   return authedFetch<CustomerListResponse>(`${base}/api/invoice/v1/customers?limit=${limit}&offset=${offset}`)
 }
 
+// The directory's filing TIN pattern: 12 digits with a hyphen after the 8th, or RN-<digits>.
+export const FILEABLE_TIN = /^([0-9]{8}-[0-9]{4}|RN-[0-9]+)$/
+
+// The record for an exact TIN, or null when none matches.
+export async function findCustomerByTin(authedFetch: AuthedFetch, base: string, tin: string): Promise<Customer | null> {
+  const res = await authedFetch<CustomerListResponse>(`${base}/api/invoice/v1/customers?tin=${encodeURIComponent(tin)}&limit=1`)
+  return res.customers[0] ?? null
+}
+
 export function updateCustomer(authedFetch: AuthedFetch, base: string, id: string, input: CustomerUpdateInput): Promise<Customer> {
   return authedFetch<Customer>(`${base}/api/invoice/v1/customers/${id}`, { method: 'PATCH', body: input })
 }

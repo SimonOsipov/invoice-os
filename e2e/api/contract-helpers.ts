@@ -3,12 +3,33 @@ import {
   listApprovalPolicies,
   publishApprovalPolicy,
   putApprovalPolicyDraft,
+  searchCodes,
   type ApprovalPoliciesResponse,
   type ApprovalPolicy,
   type ApprovalPolicyDraftInput,
   type ApprovalStep,
   type ApprovalStepInput,
 } from './client'
+
+// internal/invoice/codes.go's codeSearchLists.
+export const CODE_LISTS = ['states', 'lgas', 'hs-codes', 'services-codes', 'invoice-quantity-codes', 'tax-categories']
+
+// A PR environment seeds the lists one after another, about 30 s after boot: wait for all six, not just the first.
+export async function codeListsReady(token: string): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const states = await searchCodes(token, 'states', { q: 'NG-LA' })
+        if (!states.codes.some((c) => c.code === 'NG-LA')) return false
+        for (const list of CODE_LISTS) {
+          if ((await searchCodes(token, list, { limit: 1 })).codes.length === 0) return false
+        }
+        return true
+      },
+      { message: 'the six code lists are seeded', timeout: 120_000 },
+    )
+    .toBe(true)
+}
 
 // The raw result shape rawFetch() returns and every contract assertion consumes.
 export type RawResult = { status: number; body: unknown }

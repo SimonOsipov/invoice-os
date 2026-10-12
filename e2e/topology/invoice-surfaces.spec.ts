@@ -35,7 +35,7 @@ import {
   searchCodes,
   type Persona,
 } from '../api/client'
-import { ensureFirmPolicyActive } from '../api/contract-helpers'
+import { codeListsReady, ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { buildMixedCsv, buildPerfCsv, steerExplainMarker } from '../importFixtures'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
@@ -6303,30 +6303,18 @@ test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({
 })
 
 // ENGI-06 deployed proof: the create form and the editor capture the NRS fields.
-// A PR environment seeds the code lists about 30 s after boot, so each journey waits for them first.
-async function codeListsReady(token: string): Promise<void> {
-  await expect
-    .poll(async () => (await searchCodes(token, 'states', { q: 'NG-LA' })).codes.map((c) => c.code), {
-      message: 'the states code list is seeded',
-      timeout: 120_000,
-    })
-    .toContain('NG-LA')
-}
-
 async function firstCode(token: string, list: string, q = ''): Promise<string> {
   const { codes } = await searchCodes(token, list, { q, limit: 5 })
   expect(codes.length, `${list} holds a code for "${q}"`).toBeGreaterThan(0)
   return codes[0].code
 }
 
-// Types a code into a picker and waits until the picker has committed it: a blur reverts uncommitted text.
-async function pickCode(page: Page, input: Locator, list: string, code: string): Promise<void> {
-  const answered = page.waitForResponse((r) => r.url().includes(`/code-lists/${list}?`) && new URL(r.url()).searchParams.get('q') === code)
+// Types a code into a picker and waits until it committed: the code's datalist option shows once the picker holds it, and a blur reverts uncommitted text.
+async function pickCode(input: Locator, code: string): Promise<void> {
   await input.fill(code)
-  await answered
-  await page.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+  await expect(input.locator(`xpath=following-sibling::datalist/option[@value="${code}"]`)).toBeAttached()
   await input.press('Tab')
-  await expect(input, `${list} pick ${code} survives a blur`).toHaveValue(code)
+  await expect(input, `pick ${code} survives a blur`).toHaveValue(code)
 }
 
 // The editor's header control under a label: the input itself, or the input a picker wraps.
@@ -6334,7 +6322,20 @@ function editorHeader(form: Locator, label: string): Locator {
   return form.locator(`xpath=.//div[normalize-space(text())="${label}"]/following-sibling::*[1]`).locator('xpath=self::input | .//input')
 }
 
-const NRS_LINE_KEYS_E2E = ['tax_category', 'hsn_code', 'isic_code', 'product_category', 'service_category', 'sellers_item_identification', 'price_unit', 'tax_percent', 'base_quantity'] as const
+// The label the refusal names for each saved line NRS field (invoice fields list).
+const NRS_LINE_LABELS = [
+  ['tax_category', 'Tax category'],
+  ['hsn_code', 'HSN code'],
+  ['isic_code', 'ISIC code'],
+  ['product_category', 'Product category'],
+  ['service_category', 'Service category'],
+  ['sellers_item_identification', "Seller's item identification"],
+  ['price_unit', 'Price unit'],
+  ['tax_percent', 'Tax percent'],
+  ['base_quantity', 'Base quantity'],
+] as const
+
+const NRS_LINE_KEYS_E2E = NRS_LINE_LABELS.map(([key]) => key)
 
 type NrsFixture = {
   token: string
@@ -6437,8 +6438,8 @@ test('create surface: a manual invoice files every NRS field, pre-filled from th
   await expect(field('Buyer state')).toHaveValue('NG-LA')
   await expect(field('Buyer LGA')).toHaveValue(fx.lagosLga)
   await field('Buyer email').fill('override@buyer.test')
-  await pickCode(page, field('Buyer state'), 'states', 'NG-AB')
-  await pickCode(page, field('Buyer LGA'), 'lgas', fx.abiaLga)
+  await pickCode(field('Buyer state'), 'NG-AB')
+  await pickCode(field('Buyer LGA'), fx.abiaLga)
 
   // 2 x 500; with no category the VAT is the flat 7.5%.
   await page.getByPlaceholder('Description').fill('Maize sacks')
@@ -6448,10 +6449,10 @@ test('create surface: a manual invoice files every NRS field, pre-filled from th
   await expect(vatLabel).toHaveText('VAT · 7.5%')
   await expect(page.getByTestId('summary-vat')).toHaveText('75.00')
 
-  await pickCode(page, field('Tax category 1'), 'tax-categories', 'STANDARD_VAT')
+  await pickCode(field('Tax category 1'), 'STANDARD_VAT')
   await expect(field('Tax percent 1'), 'the tax-category pick fills its percent').toHaveValue(/^7\.5/)
-  await pickCode(page, field('HSN code 1'), 'hs-codes', fx.hsCode)
-  await pickCode(page, field('Price unit 1'), 'invoice-quantity-codes', fx.unitCode)
+  await pickCode(field('HSN code 1'), fx.hsCode)
+  await pickCode(field('Price unit 1'), fx.unitCode)
   await field('Product category 1').fill('Grain')
   await field("Seller's item identification 1").fill('SKU-ENGI06')
   await expect(field('Base quantity 1')).toHaveValue('1')
@@ -6519,12 +6520,12 @@ test('create surface: a repeat invoice number keeps the NRS values', async ({ pa
   const field = (label: string) => page.getByLabel(label, { exact: true })
   await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
   await field('Buyer email').fill('keep@buyer.test')
-  await pickCode(page, field('Buyer state'), 'states', 'NG-AB')
+  await pickCode(field('Buyer state'), 'NG-AB')
   await page.getByPlaceholder('Description').fill('Kept line')
   await page.locator('main input[type=number]').nth(0).fill('1')
   await page.locator('main input[type=number]').nth(1).fill('200')
-  await pickCode(page, field('Tax category 1'), 'tax-categories', 'STANDARD_VAT')
-  await pickCode(page, field('HSN code 1'), 'hs-codes', fx.hsCode)
+  await pickCode(field('Tax category 1'), 'STANDARD_VAT')
+  await pickCode(field('HSN code 1'), fx.hsCode)
   await field('Product category 1').fill('Kept grain')
 
   const values = () => page.locator('.pf-create-grid').locator('input, select').evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value))
@@ -6607,7 +6608,7 @@ test('detail surface: the editor edits NRS fields and keeps line fields across a
   await expect(rows.nth(0).locator('[data-line-field="hsn_code"]'), 'the editor seeds a line NRS value').toHaveValue(fx.hsCode)
 
   await rows.nth(1).locator('[data-line-field="description"]').fill('Line 2 renamed')
-  await pickCode(page, editorHeader(form, 'Buyer state'), 'states', 'NG-AB')
+  await pickCode(editorHeader(form, 'Buyer state'), 'NG-AB')
   await editorHeader(form, 'Due date').fill('')
   await page.getByRole('button', { name: 'Save changes' }).click()
   await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
@@ -6621,15 +6622,19 @@ test('detail surface: the editor edits NRS fields and keeps line fields across a
     for (const key of NRS_LINE_KEYS_E2E) expect(line[key], `line ${i + 1} keeps ${key}`).toBe(before[i][key])
   }
 
-  // D21: a saved line NRS field cannot be blanked; the refusal sends nothing.
-  await page.getByTestId('edit-toggle').click()
-  const reopened = page.getByTestId('edit-invoice')
-  await reopened.getByTestId('line-row').nth(0).locator('[data-line-field="hsn_code"]').fill('')
-  await page.getByRole('button', { name: 'Save changes' }).click()
+  // D21: a saved line NRS field cannot be blanked, whichever of the nine it is; the refusal sends nothing.
   // frontend/app/src/components/InvoiceDetail.tsx handleSubmit.
-  await expect(reopened).toContainText('Line 1: HSN code cannot be cleared once saved. Remove the line and add it again to start it blank.')
-  await expect(reopened, 'the editor stays open').toBeVisible()
-  expect(patchCalls, 'the refusal sends no PATCH').toHaveLength(1)
+  for (const [key, label] of NRS_LINE_LABELS) {
+    await page.getByTestId('edit-toggle').click()
+    const reopened = page.getByTestId('edit-invoice')
+    await reopened.getByTestId('line-row').nth(0).locator(`[data-line-field="${key}"]`).fill('')
+    await page.getByRole('button', { name: 'Save changes' }).click()
+    await expect(reopened, `blanking ${key} is refused in words`).toContainText(`Line 1: ${label} cannot be cleared once saved. Remove the line and add it again to start it blank.`)
+    await expect(reopened, 'the editor stays open').toBeVisible()
+    await reopened.getByTestId('edit-cancel').click()
+    await expect(reopened).toHaveCount(0)
+  }
+  expect(patchCalls, 'a refusal sends no PATCH').toHaveLength(1)
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
@@ -6702,11 +6707,12 @@ test('create surface: the NRS sections and line sub-rows fit at every wide width
   const summary = page.locator('.pf-create-grid > div').nth(1)
   const row0 = page.getByTestId('draft-line-nrs').nth(0).locator('xpath=..')
   const row1 = page.getByTestId('draft-line-nrs').nth(1).locator('xpath=..')
+  const lineBox = row0.locator('xpath=..')
   const controls = 'input, select, button'
   const sweep = await dvSweepWide(page, async () => {
     const r = await dvRead(
       page,
-      { card, summary, row0, row1 },
+      { card, summary, lineBox, row0, row1 },
       {
         within: {
           cardControls: { of: 'card', sel: 'input, select' },
@@ -6716,12 +6722,13 @@ test('create surface: the NRS sections and line sub-rows fit at every wide width
         },
       },
     )
-    return { card: r.targets.card, summary: r.targets.summary.rect, row0: r.targets.row0.rect, row1: r.targets.row1.rect, within: r.within }
+    return { card: r.targets.card, lineBox: r.targets.lineBox, summary: r.targets.summary.rect, row0: r.targets.row0.rect, row1: r.targets.row1.rect, within: r.within }
   })
   await testInfo.attach('create-nrs-fit.json', { body: JSON.stringify(sweep, null, 2), contentType: 'application/json' })
 
   for (const s of sweep) {
     expect(s.card.scrollWidth, `the create card does not scroll sideways at ${s.width}px`).toBeLessThanOrEqual(s.card.clientWidth)
+    expect(s.lineBox.scrollWidth, `the create line box does not scroll sideways at ${s.width}px`).toBeLessThanOrEqual(s.lineBox.clientWidth)
     expect(rectsOverlap(s.card.rect, s.summary), `the create card and the summary do not overlap at ${s.width}px`).toBe(false)
     expect(s.within.row0Nrs.length, `the first sub-row holds controls at ${s.width}px`).toBeGreaterThan(0)
     for (const [i, c] of s.within.cardControls.entries()) {
@@ -6731,6 +6738,7 @@ test('create surface: the NRS sections and line sub-rows fit at every wide width
       }
     }
     for (const [name, row, list] of [['row0', s.row0, s.within.row0Controls], ['row1', s.row1, s.within.row1Controls]] as const) {
+      expect(enclosesRect(s.lineBox.rect, row, 1), `${name} lies inside the line box at ${s.width}px`).toBe(true)
       expect(list.length, `${name} holds controls at ${s.width}px`).toBeGreaterThan(0)
       for (const [i, c] of list.entries()) {
         expect(enclosesRect(row, c.rect, 1), `${name} control ${i} lies inside its row at ${s.width}px`).toBe(true)

@@ -664,3 +664,30 @@ func TestHistory_OtherTenantsRuleNeverAppearsOnThisHistory(t *testing.T) {
 		t.Errorf("tenant A read tenant B's history")
 	}
 }
+
+// The pass reads R1 (message A) as pending, but the verdict ran R2 (message B): the cause is R2.
+// R2 is marked re-checked by hand so the start-of-pass read sees only R1.
+func TestRecheckCustomRules_CauseIsTheRevisionTheVerdictRan(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-06 ran revision")
+	gate := f.gate(t, start04Wrapped(t, f.app, nil, nil))
+	id := f.validatedOn(t, gate, f.entity, "E14-06-RAN", false)
+	r1 := f.save(t, &f.entity, "error", true, "A")
+	r2, err := f.rules.Update(f.admin, r1.ID, customrule.RuleInput{EntityID: &f.entity, Type: r1.Type, Target: r1.Target,
+		Params: r1.Params, Severity: "error", Message: "B", Enabled: true})
+	if err != nil {
+		t.Fatalf("edit rule: %v", err)
+	}
+	if _, err := f.super.Exec(context.Background(), `UPDATE custom_rule_revisions SET rechecked_at = now() WHERE id = $1`, r2.RevisionID); err != nil {
+		t.Fatalf("mark R2 re-checked: %v", err)
+	}
+
+	f.must(t, gate)
+	rows, err := f.store.History(f.member, id)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	got := rows[len(rows)-1].CustomRuleCause
+	if got == nil || got.Revision != 2 || got.RevisionID != r2.RevisionID || got.Message != "B" {
+		t.Errorf("demotion cause = %+v, want revision 2 (%s), message B", got, r2.RevisionID)
+	}
+}

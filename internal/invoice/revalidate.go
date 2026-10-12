@@ -179,7 +179,7 @@ func revalidateIDs(
 	tenantID string,
 	ids []string,
 	dryRun bool,
-	cause func([]Violation) demotionCause,
+	cause func(vs []Violation, ranIDs []string) (demotionCause, error),
 ) (RevalidateResult, error) {
 	var res RevalidateResult
 	for chunk := range slices.Chunk(ids, revalidateChunkSize) {
@@ -217,7 +217,10 @@ func revalidateIDs(
 			}
 			var c demotionCause
 			if cause != nil {
-				c = cause(vs)
+				var err error
+				if c, err = cause(vs, out.CustomByRef[it.Ref]); err != nil {
+					return RevalidateResult{}, fmt.Errorf("invoice: revalidate: name cause of invoice %s: %w", it.Ref, err)
+				}
 			}
 			demoted, err := demoteRevalidated(ctx, pool, store, tenantID, it.Ref, vs, out.StampByRef[it.Ref].ID, out.CustomByRef[it.Ref], c)
 			if err != nil {
@@ -307,7 +310,7 @@ func RecheckCovered(
 		return RevalidateResult{}, fmt.Errorf("invoice: recheck: list covered invoices: %w", err)
 	}
 	return revalidateIDs(ctx, pool, store, gate, tenantID, ids, false,
-		func([]Violation) demotionCause { return demotionCause{VersionID: v.ID} })
+		func([]Violation, []string) (demotionCause, error) { return demotionCause{VersionID: v.ID}, nil })
 }
 
 // pendingRevision is a custom-rule revision that can block and has not been re-checked.
@@ -385,18 +388,36 @@ func RecheckCustomRules(
 		return RevalidateResult{}, nil
 	}
 
-	// The latest pending revision whose rule is among the blocking violations is the cause; none
-	// means a golden rule blocked it and no custom cause is named.
-	cause := func(vs []Violation) demotionCause {
-		for i := len(pending) - 1; i >= 0; i-- {
-			key := customrule.Key(pending[i].RuleID)
-			for _, v := range vs {
-				if v.Severity == "error" && v.RuleKey == key {
-					return demotionCause{CustomRuleRevisionID: pending[i].ID}
-				}
+	// The latest revision the verdict ran whose rule is among the blocking violations is the cause
+	// (not the pending read above: a newer revision may have been saved since); none means a
+	// golden rule blocked it and no custom cause is named.
+	cause := func(vs []Violation, ranIDs []string) (demotionCause, error) {
+		blocking := map[string]bool{}
+		for _, v := range vs {
+			if v.Severity == "error" {
+				blocking[v.RuleKey] = true
 			}
 		}
-		return demotionCause{}
+		var c demotionCause
+		err := db.WithinTenantTx(ctx, pool, tenantID, func(tx pgx.Tx) error {
+			rows, err := tx.Query(ctx,
+				`SELECT id::text, rule_id::text FROM custom_rule_revisions WHERE id = ANY($1::uuid[]) ORDER BY created_at DESC, id DESC`, ranIDs)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id, ruleID string
+				if err := rows.Scan(&id, &ruleID); err != nil {
+					return err
+				}
+				if c.CustomRuleRevisionID == "" && blocking[customrule.Key(ruleID)] {
+					c.CustomRuleRevisionID = id
+				}
+			}
+			return rows.Err()
+		})
+		return c, err
 	}
 	res, err := revalidateIDs(ctx, pool, store, gate, tenantID, ids, false, cause)
 	res.Pending = len(pending)

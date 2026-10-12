@@ -204,6 +204,7 @@ func main() {
 		platform.Fatal(app.Logger, "invoice: jev: %v", err)
 	}
 	aiRecorder := aicalls.NewRecorder(pool, app.Logger)
+	defer aiRecorder.Wait() // runs before pool.Close
 	aiClient.SetRecorder(aiRecorder.Record)
 	jevClient.SetRecorder(aiRecorder.Record)
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, impStore.SaveMapping, app.Logger))

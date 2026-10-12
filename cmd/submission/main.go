@@ -164,6 +164,7 @@ func main() {
 		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 	aiRecorder := aicalls.NewRecorder(pool, app.Logger)
+	defer aiRecorder.Wait() // runs before pool.Close
 	aiClient.SetRecorder(aiRecorder.Record)
 	jevClient.SetRecorder(aiRecorder.Record)
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),

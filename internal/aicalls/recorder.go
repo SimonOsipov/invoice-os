@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,6 +20,7 @@ type Recorder struct {
 	pool    *pgxpool.Pool
 	logger  *slog.Logger
 	timeout time.Duration
+	wg      sync.WaitGroup
 }
 
 // NewRecorder returns a Recorder with a 2 s write timeout.
@@ -28,7 +30,24 @@ func NewRecorder(pool *pgxpool.Pool, logger *slog.Logger) *Recorder {
 
 // Record writes c in the background, so a slow or down database never delays the AI call.
 // ceiling: one goroutine per call, unbounded; add a bounded queue above ~100 calls/s
-func (r *Recorder) Record(c airecord.Call) { go r.write(c) }
+func (r *Recorder) Record(c airecord.Call) {
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		r.write(c)
+	}()
+}
+
+// Wait blocks until the pending writes finish, at most one write timeout.
+// Call it before the pool closes, or in-flight rows are lost.
+func (r *Recorder) Wait() {
+	done := make(chan struct{})
+	go func() { r.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(r.timeout):
+	}
+}
 
 func (r *Recorder) write(c airecord.Call) {
 	ctx, cancel := context.WithTimeout(context.Background(), r.timeout)

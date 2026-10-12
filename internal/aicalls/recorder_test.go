@@ -541,3 +541,32 @@ func TestRecord_AfterThePoolClosesLogsOnceAndDoesNotPanic(t *testing.T) {
 		t.Errorf("%d rows inserted through a closed pool, want 0", n)
 	}
 }
+
+func TestWait_ReturnsOnlyOnceTheRecordedRowIsPresent(t *testing.T) {
+	e := newEnv(t)
+	t1 := e.tenants(t, 1)[0]
+	logger, buf := newLogger()
+	rec := NewRecorder(e.app, logger)
+	c := fullCall(t1, uniquePurpose())
+
+	rec.Record(c)
+	rec.Wait()
+
+	if n := e.total(t, c.Purpose); n != 1 {
+		t.Fatalf("%d rows right after Wait, want 1 (log: %v)", n, buf.lines(t))
+	}
+}
+
+func TestWait_ReturnsWithinTheTimeoutAgainstAHungDatabase(t *testing.T) {
+	pool, _ := hungPool(t)
+	logger, _ := newLogger()
+	rec := NewRecorder(pool, logger)
+	rec.timeout = 200 * time.Millisecond
+	rec.Record(fullCall(uuid.NewString(), uniquePurpose()))
+
+	start := time.Now()
+	rec.Wait()
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Errorf("Wait took %v, want about the 200ms timeout", d)
+	}
+}

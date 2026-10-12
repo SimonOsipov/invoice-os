@@ -1930,6 +1930,46 @@ func isNewExtractWorkerCall(n ast.Node) bool {
 	return ok && wtCallName(call.Fun) == "newExtractWorker"
 }
 
+// TestSubmissionMain_WaitsForTheAICallRecorderBeforeThePoolCloses: `defer <recorder>.Wait()` sits after `defer pool.Close()`, so it runs first and no
+// in-flight row hits a closed pool.
+func TestSubmissionMain_WaitsForTheAICallRecorderBeforeThePoolCloses(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+	var recVar string
+	var closePos, waitPos token.Pos
+	var waits int
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			if len(x.Rhs) == 1 && len(x.Lhs) == 1 && isSelectorCall(x.Rhs[0], "aicalls", "NewRecorder") {
+				if id, ok := x.Lhs[0].(*ast.Ident); ok {
+					recVar = id.Name
+				}
+			}
+		case *ast.DeferStmt:
+			if isSelectorCall(x.Call, "pool", "Close") {
+				closePos = x.Pos()
+			}
+			if recVar != "" && isSelectorCall(x.Call, recVar, "Wait") {
+				waits++
+				waitPos = x.Pos()
+			}
+		}
+		return true
+	})
+	if recVar == "" || closePos == token.NoPos {
+		t.Fatalf("control: recorder var %q, defer pool.Close at %v -- the walk is broken", recVar, closePos)
+	}
+	if waits != 1 {
+		t.Fatalf("defer %s.Wait() appears %d time(s), want 1", recVar, waits)
+	}
+	if waitPos < closePos {
+		t.Errorf("defer %s.Wait() sits before defer pool.Close(); it would run after the pool closes", recVar)
+	}
+}
+
 func isIdent(e ast.Expr, name string) bool {
 	id, ok := e.(*ast.Ident)
 	return ok && id.Name == name

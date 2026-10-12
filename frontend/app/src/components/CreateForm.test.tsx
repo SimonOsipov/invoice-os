@@ -223,6 +223,12 @@ describe('CreateForm buyer lookup', () => {
 })
 
 describe('CreateForm tax', () => {
+  it('createForm_eachRowShowsItsOwnLineTax', () => {
+    mount(blankDraft({ items: [draftLine({ desc: 'Bolts', qty: 1, price: 1000 }), { ...draftLine({ desc: 'Nuts', qty: 2, price: 5 }), tax_category: 'STANDARD_VAT', tax_percent: '10' }] }))
+    expect((screen.getByLabelText('Line tax 1') as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText('Line tax 2') as HTMLInputElement).value).toBe('1.00')
+  })
+
   it('createForm_taxCategoryPickFillsPercentAndTax', async () => {
     authedFetch.mockImplementation(async (url) =>
       url.includes('/code-lists/tax-categories')

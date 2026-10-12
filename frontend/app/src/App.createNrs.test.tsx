@@ -204,4 +204,23 @@ describe('supplier pre-fill adversarial', () => {
     await act(async () => requireCtx().nav('create'))
     expect(supplierEmail()).toBe('b@co.test')
   })
+
+  it('app_reseedingTheSameCompanyStillPrefills', async () => {
+    await renderApp()
+    await openForm()
+    fireEvent.change(screen.getByLabelText('Supplier email'), { target: { value: 'typed@co.test' } })
+    await act(async () => requireCtx().switchClient(ENTITY_A))
+    await act(async () => requireCtx().nav('create'))
+    expect(supplierEmail()).toBe('a@co.test')
+  })
+
+  it('app_updateDraftFieldsPatchesHeaderKeysAndKeepsTheRest', async () => {
+    await renderApp()
+    await openForm()
+    await act(async () => requireCtx().updateDraftFields({ buyer: 'Patched', buyer_email: 'p@x.test' }))
+    expect(requireCtx().draft.buyer).toBe('Patched')
+    expect(requireCtx().draft.buyer_email).toBe('p@x.test')
+    expect(requireCtx().draft.supplier_email, 'untouched keys stay').toBe('a@co.test')
+    expect(requireCtx().draft.items.length).toBeGreaterThan(0)
+  })
 })

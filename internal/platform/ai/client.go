@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
 )
 
 const (
@@ -64,7 +66,13 @@ type Client struct {
 	cfg    config
 	http   *http.Client
 	logger *slog.Logger
+	// recorder is nil until SetRecorder; Record skips a nil sink.
+	recorder airecord.Sink
 }
+
+// SetRecorder sets the sink that receives each call that sent a request.
+// Call it once at boot, before the first Call.
+func (c *Client) SetRecorder(s airecord.Sink) { c.recorder = s }
 
 func newClient(cfg config, logger *slog.Logger) *Client {
 	return &Client{cfg: cfg, http: &http.Client{}, logger: logger}
@@ -75,7 +83,13 @@ func newClient(cfg config, logger *slog.Logger) *Client {
 func (c *Client) Call(ctx context.Context, req Request) (map[string]any, error) {
 	start := c.cfg.now()
 	r := c.call(ctx, req)
-	c.logCall(ctx, req, r, c.cfg.now().Sub(start))
+	latency := c.cfg.now().Sub(start)
+	c.logCall(ctx, req, r, latency)
+	airecord.Record(ctx, c.recorder, c.logger, airecord.Call{
+		Client: "ai", Purpose: string(req.Purpose), Model: Model,
+		InputTokens: r.usage.PromptTokens, OutputTokens: r.usage.CompletionTokens, Cost: r.usage.Cost,
+		LatencyMS: latency.Milliseconds(), Attempts: r.attempts, Outcome: r.outcome,
+	})
 	return r.answer, r.err
 }
 

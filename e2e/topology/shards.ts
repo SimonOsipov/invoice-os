@@ -82,7 +82,7 @@ export const UNITS: Unit[] = [
   },
   {
     name: 'invoice-surfaces',
-    specs: ['invoice-surfaces.spec.ts'],
+    specs: ['invoice-surfaces.spec.ts', 'rules.spec.ts'],
     tenants: {
       firm: '11111111-1111-1111-1111-00000000e2e2',
       inHouse: '22222222-2222-2222-2222-00000000e2e2',

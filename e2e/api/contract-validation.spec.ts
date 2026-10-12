@@ -10,6 +10,7 @@ import {
   createInvoice,
   deleteCustomRule,
   getAuditLog,
+  getGoldenRules,
   listCustomRules,
   login,
   provisionStaffAccount,
@@ -466,5 +467,47 @@ test.describe('custom rules (API E2E, over the deployed gateway)', () => {
     const row = log.events.find((e) => (e.payload as { rule_id?: string } | null)?.rule_id === rule.id)
     expect(row, 'custom_rule.created row for the new rule').toBeDefined()
     expect(row?.entity_id).toBe(entity.id)
+  })
+})
+
+// internal/validation.GoldenRule's json tags.
+const GOLDEN_RULE_KEYS = ['key', 'type', 'target', 'params', 'severity', 'when', 'message']
+
+test.describe('golden rules for members (API E2E, over the deployed gateway)', () => {
+  test('a member reads the golden set in force', async () => {
+    const token = await login(PERSONAS.A)
+    const tin = freshTin()
+    const entity = await createEntity(token, { name: `ENGI-15 golden ${tin}`, tin })
+    const invoice = await createInvoice(token, {
+      entity_id: entity.id,
+      invoice_number: `INV-GR-${tin}`,
+      issue_date: '2026-01-01T00:00:00Z',
+      supplier_tin: freshTin(),
+      supplier_name: 'Acme Nigeria Ltd',
+      buyer_tin: '87654321-0002',
+      buyer_name: 'Buyer Ltd',
+      currency: 'NGN',
+      subtotal: '1000',
+      vat: '75',
+      total: '1075',
+      line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000' }],
+    })
+    const validated = await validateInvoice(token, invoice.id)
+
+    const golden = await getGoldenRules(token)
+    const inForce = golden.versions.filter((v) => v.state === 'in_force')
+    expect(inForce, 'exactly one version is in force').toHaveLength(1)
+    expect(inForce[0].version, 'the in-force version is the one a fresh validation stamps').toBe(validated.rule_set_version)
+    expect(golden.version).toBe(inForce[0].version)
+    expect(golden.rules.length, 'the rule count the rail states').toBe(inForce[0].rule_count)
+    for (const rule of golden.rules) {
+      expect(Object.keys(rule).sort(), `rule ${rule.key} carries the seven keys`).toEqual([...GOLDEN_RULE_KEYS].sort())
+      expect('enabled' in rule).toBe(false)
+    }
+  })
+
+  test('the golden read needs a session', async () => {
+    const res = await rawFetch('/api/validation/v1/rules')
+    assertErrorEnvelope(res, 401, 'golden rules no token')
   })
 })

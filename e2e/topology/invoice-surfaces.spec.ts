@@ -752,6 +752,121 @@ test('register-disclosure: a blocked draft and a clean draft render differently'
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// D17 fixture checks: no deployed spec can produce a demotion (a version cannot be published in
+// topology, and a custom re-check waits for a 5-minute tick), so page.route patches one real response.
+// These pin the layout of ENGI-15's marker and banner, not the server's demotion contract.
+const FIXTURE_DEMOTION = {
+  rule_set_version: 99,
+  rule_set_version_id: '00000000-0000-4000-8000-000000000099',
+  effective_from: '2027-01-01',
+}
+
+test('(fixture check) the demotion marker stays inside the status cell', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ENGI-15 demotion marker ${Date.now()}`, tin: freshTin() })
+  const number = `INV-ENGI15-DEMOTE-${Date.now()}`
+  const invoice = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(number) })
+  await validateInvoice(token, invoice.id)
+
+  let patched = 0
+  await page.route(/\/api\/invoice\/v1\/invoices(\?[^/]*)?$/, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const response = await route.fetch()
+    const body = (await response.json()) as { invoices: Array<{ id: string; demotion: unknown }> }
+    for (const row of body.invoices) {
+      if (row.id !== invoice.id) continue
+      row.demotion = { changed_at: new Date().toISOString(), cause: FIXTURE_DEMOTION, custom_rule_cause: null }
+      patched++
+    }
+    await route.fulfill({ response, json: body })
+  })
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  const row = page.getByTestId('invoice-row').filter({ hasText: number })
+  const marker = row.getByTestId('invoice-demotion-marker')
+  await expect(marker).toBeVisible()
+  expect(patched, 'the list response was patched').toBeGreaterThan(0)
+  await expect(marker).toHaveText('RULE SET v99')
+  const badge = row.getByTestId('invoice-status-badge')
+  const errorMarker = row.getByTestId('invoice-error-marker')
+  await expect(errorMarker).toBeVisible()
+  const cell = badge.locator('xpath=..')
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect
+        .poll(async () => {
+          await settleAnimations(marker, cell)
+          const [m, c, b, e] = await Promise.all([marker.boundingBox(), cell.boundingBox(), badge.boundingBox(), errorMarker.boundingBox()])
+          if (!m || !c || !b || !e) return 'an element has no box'
+          if (!enclosesRect(c, m, 1)) return `marker ${JSON.stringify(m)} leaves the status cell ${JSON.stringify(c)}`
+          if (rectsOverlap(m, b)) return 'marker overlaps the status badge'
+          if (rectsOverlap(m, e)) return 'marker overlaps the error marker'
+          return 'ok'
+        }, { message: `demotion marker beside badge and error marker at ${width}px`, timeout: 10_000 })
+        .toBe('ok')
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('(fixture check) the demotion banner fills its column', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ENGI-15 demotion banner ${Date.now()}`, tin: freshTin() })
+  const number = `INV-ENGI15-BANNER-${Date.now()}`
+  const invoice = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(number) })
+  await validateInvoice(token, invoice.id)
+
+  let patched = 0
+  await page.route(new RegExp(`/api/invoice/v1/invoices/${invoice.id}/history$`), async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const response = await route.fetch()
+    const history = (await response.json()) as unknown[]
+    history.push({
+      from_status: 'validated',
+      to_status: 'draft',
+      actor: 'system',
+      actor_name: 'System',
+      actor_kind: 'system',
+      changed_at: new Date().toISOString(),
+      cause: FIXTURE_DEMOTION,
+      custom_rule_cause: null,
+    })
+    patched++
+    await route.fulfill({ response, json: history })
+  })
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, number)
+  const banner = page.getByTestId('detail-demotion-banner')
+  await expect(banner).toBeVisible()
+  expect(patched, 'the history response was patched').toBeGreaterThan(0)
+  await expect(banner).toContainText('rule set v99')
+
+  // The column detail-kept-banner and stale-verdict sit in: the compliance card's body.
+  const fit = await assertFillsColumn(page, banner, banner.locator('xpath=..'), 'detail-demotion-banner vs its column', 1)
+  expect(fit.length, 'the sweep measured every width').toBe(WIDE_WIDTHS.length)
+  const [b, table] = await Promise.all([banner.boundingBox(), page.getByTestId('violations-table').boundingBox()])
+  expect(b && table && b.y + b.height <= table.y + 1, 'the banner sits above the violations table').toBe(true)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // The blocked checkbox's reason lives in its `title` and nowhere else. A `title` on a
 // disabled control draws no native tooltip in Chromium, so this asserts only what the
 // row does NOT print -- never that the sentence is visible somewhere else.

@@ -18,6 +18,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/archive"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
+	"github.com/SimonOsipov/invoice-os/internal/customer"
 	"github.com/SimonOsipov/invoice-os/internal/demodocs"
 	"github.com/SimonOsipov/invoice-os/internal/demopolicy"
 	"github.com/SimonOsipov/invoice-os/internal/document"
@@ -85,6 +86,11 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/source-document", invoice.SourceDocumentHandler(store.SourceDocument, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/ubl", invoice.UBLHandler(store.Get, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices", invoice.ListHandler(store.List, store.RowFacts, app.Logger))
+
+	// /v1/customers -- the workspace buyer directory; reached as /api/invoice/v1/customers.
+	customerStore := customer.NewStore(pool)
+	app.Mux.HandleFunc("GET /v1/customers", customer.ListHandler(customerStore.List, app.Logger))
+	app.Mux.HandleFunc("PATCH /v1/customers/{id}", customer.UpdateHandler(customerStore.Update, app.Logger))
 
 	// GET /v1/audit-log -- the workspace audit reader (AUDIT-04). Mounts here rather
 	// than on a new service: the gateway routes on the first segment under /api/, so

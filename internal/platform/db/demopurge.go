@@ -48,6 +48,7 @@ var purgeTables = []string{
 	"invoices",
 	"import_batches",
 	"import_mappings",
+	"customers",
 	"business_entities",
 	"extraction_anchor_rules",
 	"extraction_field_results",

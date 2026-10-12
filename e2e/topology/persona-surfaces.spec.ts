@@ -362,7 +362,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
   await expect(page.getByText('WORKSPACE CONFIGURATION', { exact: true })).toBeVisible()
   await expect(page.getByText('People, roles, integrations, developer access, and signing certificates.', { exact: true })).toBeVisible()
-  for (const tab of ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates']) {
+  for (const tab of ['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates']) {
     await expect(page.getByRole('button', { name: tab, exact: true })).toBeVisible()
   }
 

@@ -44,7 +44,7 @@ func reasonBody(reason string) string {
 }
 
 func TestStaffRulesHandlers_ListMapsNoRuleSetTo503(t *testing.T) {
-	h := StaffListRulesHandler(func(context.Context) (InForceRules, error) { return InForceRules{}, ErrNoActiveRuleSet }, nil)
+	h := StaffListRulesHandler(func(context.Context, *int) (InForceRules, error) { return InForceRules{}, ErrNoActiveRuleSet }, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/staff/rules", nil))
 	if rec.Code != 503 || strings.TrimSpace(rec.Body.String()) != `{"error":"no rule set in force"}` {
@@ -54,12 +54,12 @@ func TestStaffRulesHandlers_ListMapsNoRuleSetTo503(t *testing.T) {
 
 func TestStaffRulesHandlers_ListWireShape(t *testing.T) {
 	id := uuid.New()
-	h := StaffListRulesHandler(func(context.Context) (InForceRules, error) {
-		return InForceRules{RuleSetVersionID: id, Version: 4, Rules: []StaffRule{{Key: "k", Type: "t", Target: "x", Severity: "error", Scope: "document", Message: "m", Enabled: true}}}, nil
+	h := StaffListRulesHandler(func(context.Context, *int) (InForceRules, error) {
+		return InForceRules{RuleSetVersionID: id, Version: 4, Rules: []StaffRule{{Key: "k", Type: "t", Target: "x", Params: json.RawMessage(`{}`), Severity: "error", Scope: "document", Message: "m", Enabled: true}}}, nil
 	}, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/staff/rules", nil))
-	want := fmt.Sprintf(`{"rule_set_version_id":%q,"version":4,"rules":[{"key":"k","type":"t","target":"x","severity":"error","scope":"document","message":"m","enabled":true}]}`, id)
+	want := fmt.Sprintf(`{"rule_set_version_id":%q,"version":4,"rules":[{"key":"k","type":"t","target":"x","params":{},"severity":"error","when":null,"scope":"document","message":"m","enabled":true}]}`, id)
 	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != want {
 		t.Fatalf("got %d %q, want 200 %q", rec.Code, rec.Body.String(), want)
 	}
@@ -180,9 +180,66 @@ func TestStaffRulesHandlers_ErrorMapping(t *testing.T) {
 	}
 	// No version in force is a 503 on the list and a 404 on the switch.
 	list := httptest.NewRecorder()
-	StaffListRulesHandler(func(context.Context) (InForceRules, error) { return InForceRules{}, ErrNoActiveRuleSet }, nil).
+	StaffListRulesHandler(func(context.Context, *int) (InForceRules, error) { return InForceRules{}, ErrNoActiveRuleSet }, nil).
 		ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/v1/staff/rules", nil))
 	if list.Code != 503 {
 		t.Errorf("list with no version in force = %d, want 503", list.Code)
+	}
+}
+
+func TestStaffRulesHandlers_WireCarriesParamsAndWhen(t *testing.T) {
+	h := StaffListRulesHandler(func(context.Context, *int) (InForceRules, error) {
+		return InForceRules{Rules: []StaffRule{{Key: "k", Params: json.RawMessage(`{"min":0}`)}}}, nil
+	}, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/staff/rules", nil))
+	var got struct {
+		Rules []map[string]json.RawMessage `json:"rules"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Rules) != 1 {
+		t.Fatalf("body %q: %v", rec.Body.String(), err)
+	}
+	if p := string(got.Rules[0]["params"]); p != `{"min":0}` {
+		t.Errorf("params = %s, want {\"min\":0}", p)
+	}
+	if w := string(got.Rules[0]["when"]); w != "null" {
+		t.Errorf("when = %s, want null", w)
+	}
+}
+
+func TestStaffRulesHandlers_VersionParam(t *testing.T) {
+	var calls int
+	var arg *int
+	var ret error
+	h := StaffListRulesHandler(func(_ context.Context, v *int) (InForceRules, error) {
+		calls++
+		arg = v
+		return InForceRules{}, ret
+	}, nil)
+	serve := func(query string) *httptest.ResponseRecorder {
+		calls, arg = 0, nil
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/staff/rules"+query, nil))
+		return rec
+	}
+
+	if rec := serve("?version=4"); rec.Code != 200 || arg == nil || *arg != 4 {
+		t.Errorf("?version=4 = %d, arg %v, want 200 and 4", rec.Code, arg)
+	}
+	if rec := serve(""); rec.Code != 200 || arg != nil {
+		t.Errorf("no version = %d, arg %v, want 200 and nil", rec.Code, arg)
+	}
+	if rec := serve("?version=2147483647"); rec.Code != 200 || arg == nil || *arg != 2147483647 {
+		t.Errorf("?version=2147483647 = %d, arg %v, want 200 and 2147483647", rec.Code, arg)
+	}
+	for _, v := range []string{"abc", "0", "-1", "4.5", "2147483648", "99999999999", ""} {
+		rec := serve("?version=" + v)
+		if rec.Code != 400 || strings.TrimSpace(rec.Body.String()) != `{"error":"invalid version"}` || calls != 0 {
+			t.Errorf("?version=%q = %d %q, calls %d, want 400 invalid version, 0 calls", v, rec.Code, rec.Body.String(), calls)
+		}
+	}
+	ret = ErrNoSuchVersion
+	if rec := serve("?version=9"); rec.Code != 404 || strings.TrimSpace(rec.Body.String()) != `{"error":"no such rule-set version"}` {
+		t.Errorf("unknown version = %d %q, want 404 no such rule-set version", rec.Code, rec.Body.String())
 	}
 }

@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
@@ -6,6 +6,8 @@ import { AuditDrawer } from './components/AuditDrawer'
 import { Drawer } from './components/Drawer'
 import { JobDrawer } from './components/JobDrawer'
 import { KillConfirm } from './components/KillConfirm'
+import { CodeListDrawer } from './components/CodeListDrawer'
+import { DraftTestModal } from './components/DraftTestModal'
 import { Modal } from './components/Modal'
 import { PublishModal } from './components/PublishModal'
 import { RuleDrawer } from './components/RuleDrawer'
@@ -13,12 +15,21 @@ import { Sidebar } from './components/Sidebar'
 import { Badge } from './components/StatusBadge'
 import { Toast } from './components/Toast'
 import { TopBar } from './components/TopBar'
-import { AUDIT_ENTRIES, DIFF_ROWS, NAV_ITEMS, SEED_JOBS, SEED_RULES } from './data'
-import type { Env, Screen } from './types'
+import { AUDIT_ENTRIES, NAV_ITEMS, SEED_JOBS } from './data'
+import { toRule, type DiffRow } from './rulesApi'
+import { SEED_RULES } from './rulesFixture'
+import type { CodeListSync, Env, Screen } from './types'
 
 // SSR markup is the oracle: jsdom drops backdrop-filter and Chromium aliases the prefixed one.
 // The resolved look is SUP-01, SUP-02 and SUP-04 (deploy gate).
 const noop = () => {}
+
+const DIFF: DiffRow[] = [
+  { sign: '+', key: 'new.rule', detail: 'required · error · buyer.tin', tag: 'ADDED', kind: 'added' },
+  { sign: '~', key: 'vat.rate', detail: 'params changed', tag: 'CHANGED', kind: 'changed' },
+  { sign: '−', key: 'old.rule', detail: 'range · info', tag: 'REMOVED', kind: 'removed' },
+]
+const publishProps: ComponentProps<typeof PublishModal> = { draftVersion: 5, inForceVersion: 4, rows: DIFF, warnings: [], today: '2026-10-11', busy: false, error: null, onClose: noop, onConfirm: noop }
 
 type Tag = { name: string; attrs: string; text: string }
 const attr = (t: { attrs: string }, name: string) => t.attrs.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1] ?? ''
@@ -229,8 +240,8 @@ describe('v2 shell', () => {
     const badges = withClass(ts, 'mono').filter((t) => /^\d+$/.test(t.text))
     expect(
       badges.map((t) => t.text),
-      'the Submissions and Rules badges',
-    ).toEqual(['2', '3'])
+      'the Submissions badge only',
+    ).toEqual(['2'])
     for (const b of badges) {
       expect.soft(style(b)['border-radius'], `badge ${b.text} radius`).toBe('var(--radius-sm)')
       expect.soft(classes(b), `badge ${b.text} keeps .mono`).toContain('mono')
@@ -288,11 +299,8 @@ describe('v2 shell', () => {
 
   it('SH-07 the modal and drawer bodies carry v2 weights, corners and Q3 text', () => {
     const kill = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'line.qty.range', action: 'disable', busy: false, onClose: noop, onConfirm: noop }))
-    const publish = renderToStaticMarkup(createElement(PublishModal, { onClose: noop, onConfirm: noop }))
-    const rule = (testRan: boolean) =>
-      renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], testRan, onRunTest: noop, busy: false, onKill: noop, onClose: noop }))
-    const idle = rule(false)
-    const ran = rule(true)
+    const publish = renderToStaticMarkup(createElement(PublishModal, publishProps))
+    const idle = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: true, busy: false, onKill: noop, onClose: noop }))
     const job = renderToStaticMarkup(
       createElement(JobDrawer, {
         job: SEED_JOBS[0],
@@ -322,11 +330,6 @@ describe('v2 shell', () => {
     expect(tile, 'one kill icon tile').toHaveLength(1)
     expect.soft(style(tile[0])['border-radius'], 'kill icon tile radius').toBe('var(--radius-md)')
 
-    expect(ran, 'testRan renders the passed text').toContain('Rule passed')
-    const passed = parse(ran).filter((t) => style(t).background === 'var(--status-green-bg)')
-    expect(passed, 'one passed box').toHaveLength(1)
-    expect.soft(style(passed[0])['border-radius'], 'Rule passed box radius').toBe('var(--radius-md)')
-
     const disable = buttonByText(kill, 'Disable rule')
     expect.soft(style(disable).color, 'Disable rule colour').toBe('var(--primary-foreground)')
     expect.soft(style(disable)['border-radius'], 'Disable rule radius').toBe('var(--radius-btn)')
@@ -334,13 +337,6 @@ describe('v2 shell', () => {
     const cancel = buttonByText(job, 'Cancel')
     expect.soft(style(cancel)['border-radius'], 'Cancel radius').toBe('var(--radius-btn)')
     expect.soft(style(cancel)['font-weight'], 'Cancel weight').toBe('600')
-
-    const run = buttonByText(idle, 'Run test')
-    expect(style(run).height, 'Run test keeps its inline height').toBe('28px')
-    expect.soft(classes(run), 'Run test classes').toEqual(expect.arrayContaining(['ops-btn', 'v2-btn', 'v2-btn-primary']))
-    expect.soft(Object.keys(style(run)), 'Run test inline border-radius').not.toContain('border-radius')
-
-    expect.soft(style(withText(parse(idle), 'No test run yet.')).color, 'No test run yet. colour').toBe('var(--fg-3)')
 
     const jobTags = parse(job)
     const steps = jobTags.filter((t) => style(t).width === '11px' && style(t).height === '11px')
@@ -392,18 +388,16 @@ describe('v2 shell', () => {
         onToggleReq: noop, onToggleRes: noop, onClose: noop, onReDrive: noop, onRePoll: noop, onCancel: noop,
       }),
     )
-    const rule = (testRan: boolean) =>
-      renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], testRan, onRunTest: noop, busy: false, onKill: noop, onClose: noop }))
+    const rule = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: true, busy: false, onKill: noop, onClose: noop }))
     const audit = (env: Env) =>
       renderToStaticMarkup(createElement(AuditDrawer, { entry: AUDIT_ENTRIES[0], env, onClose: noop, onCopy: noop, onExport: noop }))
     const drawers = {
       job,
-      'rule idle': rule(false),
-      'rule passed': rule(true),
+      rule,
       'audit sandbox': audit('sandbox'),
       'audit live': audit('live'),
     }
-    const widths = { job: '560px', 'rule idle': '580px', 'rule passed': '580px', 'audit sandbox': '560px', 'audit live': '560px' } as const
+    const widths = { job: '560px', rule: '580px', 'audit sandbox': '560px', 'audit live': '560px' } as const
     for (const [name, html] of Object.entries(drawers)) {
       const ts = parse(html)
       expect(ts.length, `${name}: markup parsed`).toBeGreaterThan(4)
@@ -418,7 +412,8 @@ describe('v2 shell', () => {
       expect.soft(html, `${name}: markup holds oklch`).not.toContain('oklch')
       expect.soft(style(buttonByText(html, ''))['border-radius'], `${name}: close radius`).toBe('var(--radius-btn)')
       const cards = ts.filter((t) => style(t)['border-radius'] === 'var(--radius-md)')
-      expect(cards.length, `${name}: bodies carry md cards`).toBeGreaterThan(0)
+      // The rule drawer's only card was the mock test box; its JSON block takes its corner from CSS.
+      if (name !== 'rule') expect(cards.length, `${name}: bodies carry md cards`).toBeGreaterThan(0)
       expect.soft(
         ts.map((t) => style(t)['border-radius']).filter((v): v is string => v !== undefined && V1_CORNER.test(v)),
         `${name}: v1 corners`,
@@ -434,10 +429,7 @@ describe('v2 shell', () => {
     const retry = parse(job).filter((t) => style(t).padding === '13px 14px')
     expect(retry, 'job: retry and poll cards').toHaveLength(2)
     for (const c of retry) expect.soft(style(c)['border-radius'], 'job card radius').toBe('var(--radius-md)')
-    const testCard = parse(drawers['rule idle']).filter((t) => style(t).overflow === 'hidden' && style(t).background === 'var(--bg-2)')
-    expect(testCard, 'rule: the sample-test card').toHaveLength(1)
-    expect.soft(style(testCard[0])['border-radius'], 'rule test card radius').toBe('var(--radius-md)')
-    const chip = withText(parse(drawers['rule idle']), SEED_RULES[0].type)
+    const chip = withText(parse(drawers.rule), SEED_RULES[0].type)
     expect.soft(style(chip)['border-radius'], 'rule type chip radius').toBe('var(--radius-sm)')
     const hash = parse(drawers['audit sandbox']).filter((t) => style(t).padding === '12px 14px' && style(t).border === '1px solid var(--line-1)')
     expect(hash, 'audit: the hash card').toHaveLength(1)
@@ -451,7 +443,7 @@ describe('v2 shell', () => {
 
     const modals = {
       kill: [renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', action: 'disable', busy: false, onClose: noop, onConfirm: noop })), '440px'],
-      publish: [renderToStaticMarkup(createElement(PublishModal, { onClose: noop, onConfirm: noop })), '560px'],
+      publish: [renderToStaticMarkup(createElement(PublishModal, publishProps)), '560px'],
     } as const
     for (const [name, [html, width]] of Object.entries(modals)) {
       const ts = parse(html)
@@ -473,9 +465,9 @@ describe('v2 shell', () => {
       expect.soft(classes({ attrs: buttonByText(html, 'Cancel').attrs }), `${name}: Cancel classes`).toEqual(expect.arrayContaining(['v2-btn', 'v2-btn-ghost']))
     }
     const signs = parse(modals.publish[0]).filter((t) => style(t).width === '22px' && style(t).height === '22px')
-    expect(signs, 'one sign tile per diff row').toHaveLength(DIFF_ROWS.length)
+    expect(signs, 'one sign tile per diff row').toHaveLength(DIFF.length)
     for (const t of signs) expect.soft(style(t)['border-radius'], 'sign tile radius').toBe('var(--radius-sm)')
-    expect.soft(classes({ attrs: buttonByText(modals.publish[0], 'Publish v9').attrs }), 'Publish v9 classes').toContain('v2-btn-primary')
+    expect.soft(classes({ attrs: buttonByText(modals.publish[0], 'Publish v5').attrs }), 'Publish v5 classes').toContain('v2-btn-primary')
   })
 
   it('SH-10 the badge keeps the sm corner and a round dot, with and without the dot', () => {
@@ -525,9 +517,33 @@ describe('v2 shell', () => {
 
   it('RuleDrawer offers Kill-switch only while the rule is enabled', () => {
     const drawer = (enabled: boolean) =>
-      renderToStaticMarkup(createElement(RuleDrawer, { rule: { ...SEED_RULES[0], enabled }, testRan: false, onRunTest: noop, busy: false, onKill: noop, onClose: noop }))
+      renderToStaticMarkup(createElement(RuleDrawer, { rule: { ...SEED_RULES[0], enabled }, inForce: true, busy: false, onKill: noop, onClose: noop }))
     expect(drawer(true)).toContain('Kill-switch')
     expect(drawer(false)).not.toContain('Kill-switch')
+    const other = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: false, busy: false, onKill: noop, onClose: noop }))
+    expect(other, 'a version not in force offers no Kill-switch').not.toContain('Kill-switch')
+  })
+
+  it('RuleDrawer shows real params and when', () => {
+    const html = renderToStaticMarkup(
+      createElement(RuleDrawer, { rule: { ...SEED_RULES[0], params: { min: 0 }, when: 'has(invoice.x)' }, inForce: true, busy: false, onKill: noop, onClose: noop }),
+    )
+    for (const want of ['Underlying rule JSON', '>Parameters<']) expect(html).toContain(want)
+    for (const label of ['min', 'When']) expect(html, `a ${label} row`).toContain(`>${label}</div>`)
+    expect(html).toContain('<span class="mono">0</span>')
+    expect(html).toContain('<span class="mono">has(invoice.x)</span>')
+    expect(html).toContain('&quot;min&quot;: 0')
+    for (const gone of ['Run test', 'Rule passed', 'Save to draft', 'No test run yet.']) expect(html).not.toContain(gone)
+    const json = html.match(/<pre class="ops-json">([\s\S]*?)<\/pre>/)
+    expect(json, 'the JSON block').not.toBeNull()
+    expect(json![1]).toContain('&quot;when&quot;: &quot;has(invoice.x)&quot;')
+    expect(json![1]).toContain('&quot;min&quot;: 0')
+    const wired = renderToStaticMarkup(createElement(RuleDrawer, { rule: toRule({ key: 'k', type: 'cel', target: 'invoice.total', params: {}, severity: 'warning', when: null, scope: 'document', message: 'm', enabled: true }), inForce: true, busy: false, onKill: noop, onClose: noop }))
+    const wiredJson = wired.match(/<pre class="ops-json">([\s\S]*?)<\/pre>/)![1]
+    for (const want of ['&quot;target&quot;', '&quot;scope&quot;: &quot;document&quot;', '&quot;severity&quot;: &quot;warning&quot;']) expect(wiredJson).toContain(want)
+    expect(wiredJson).not.toContain('&quot;field&quot;')
+    const bare = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: true, busy: false, onKill: noop, onClose: noop }))
+    expect(bare, 'no When row when unset').not.toContain('>When<')
   })
 
   it('TopBar banners no longer call rule switches simulated', () => {
@@ -538,5 +554,105 @@ describe('v2 shell', () => {
     }
     expect(topBar('sandbox')).toContain('CROSS-TENANT · ALL ENTITIES')
     expect(topBar('live')).toContain('CROSS-TENANT · PENDING ACCREDITATION')
+  })
+
+  const sync = (status: string, over: Partial<CodeListSync> = {}): CodeListSync => {
+    const s = { status, synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added: ['A1'], removed: ['R1'], changed: ['C1'], ...over }
+    return { added_count: s.added.length, removed_count: s.removed.length, changed_count: s.changed.length, ...s }
+  }
+  const drawerHtml = (syncs: CodeListSync[] | null) => renderToStaticMarkup(createElement(CodeListDrawer, { list: 'hs-codes', syncs, note: 'Loading…', onClose: noop }))
+
+  it('CodeListDrawer renders each sync', () => {
+    const html = drawerHtml([sync('applied', { synced_at: '2026-10-09T08:15:00Z' }), sync('applied', { synced_at: '2026-10-01T06:00:00Z', added: [] })])
+    expect(html.indexOf('2026-10-09 08:15 UTC')).toBeGreaterThan(-1)
+    expect(html.indexOf('2026-10-09 08:15 UTC')).toBeLessThan(html.indexOf('2026-10-01 06:00 UTC'))
+    for (const caption of ['Added', 'Removed', 'Changed']) expect(html.match(new RegExp(`>${caption} · `, 'g'))).toHaveLength(2)
+    expect(html).toContain('A1')
+    expect(html).toContain('None')
+    expect(html).not.toContain('Would remove')
+    expect(html).not.toContain('--fg-4')
+    expect(html).toContain('width:580px')
+    const big = drawerHtml([sync('applied', { added: Array.from({ length: 200 }, (_, i) => `K${i}`), added_count: 250 })])
+    expect(big).toContain('Added · 250')
+    expect(big).toContain('and 50 more')
+    expect(big).toContain('K199')
+    expect(big).not.toContain('K200')
+    expect(drawerHtml([sync('applied', { added: Array.from({ length: 200 }, (_, i) => `K${i}`) })])).not.toContain('more')
+    expect(drawerHtml([])).toContain('No sync recorded yet.')
+    expect(drawerHtml(null)).toContain('Loading…')
+  })
+
+  it('a held sync says it is held and labels its removed codes Would remove (D32)', () => {
+    const html = drawerHtml([sync('held', { removed: ['HELD-GONE'] }), sync('applied', { removed: ['APPLIED-GONE'] })])
+    expect(html).toMatch(/>Would remove · 1<\/div><div[^>]*>HELD-GONE</)
+    expect(html).toMatch(/>Removed · 1<\/div><div[^>]*>APPLIED-GONE</)
+    expect(html).toContain('HELD')
+    expect(html).toContain('held, not applied')
+    expect(html.match(/>Would remove · /g)).toHaveLength(1)
+    expect(html.match(/>Removed · /g)).toHaveLength(1)
+  })
+
+  it('each category caps at 200 on its own: 201 removed shows 1 more, 200 added shows none', () => {
+    const codes = (n: number, p: string) => Array.from({ length: n }, (_, i) => `${p}${i}`)
+    const html = drawerHtml([sync('applied', { added: codes(200, 'A'), removed: codes(200, 'R'), removed_count: 201, changed: codes(199, 'C') })])
+    expect(html.match(/and \d+ more/g)).toEqual(['and 1 more'])
+    expect(html).toContain('R199')
+    expect(html).not.toContain('R200')
+    expect(html).toContain('A199')
+    expect(html).toContain('C198')
+  })
+
+  it('a held sync with zero removed codes still says held and Would remove · 0', () => {
+    const html = drawerHtml([sync('held', { removed: [] })])
+    expect(html).toContain('held, not applied')
+    expect(html).toMatch(/>Would remove · 0<\/div><div[^>]*>None</)
+    expect(html).not.toContain('>Removed · ')
+  })
+
+  it('an unknown sync status still renders in the drawer (D32)', () => {
+    const html = drawerHtml([sync('released')])
+    expect(html).toContain('RELEASED')
+    expect(html).toContain('>Removed · ')
+    expect(html).toContain('R1')
+  })
+
+  it('DraftTestModal renders both columns and a fault', () => {
+    const v = (rule_key: string) => ({ rule_key, severity: 'error' as const, message: `${rule_key} failed`, path: 'invoice.total' })
+    const res = (error: string | null, draft = [v('a')]) => ({ draft: { rule_set_version: 5, violations: draft, error }, in_force: { rule_set_version: 4, violations: [v('b')] } })
+    const render = (result: ReturnType<typeof res> | null) => renderToStaticMarkup(createElement(DraftTestModal, { result, busy: false, onRun: noop, onClose: noop }))
+    const html = render(res(null))
+    expect(html).toContain('>Draft v5<')
+    expect(html).toContain('>In force v4<')
+    expect(html).toContain('a · error · a failed · invoice.total')
+    expect(html).toContain('b · error · b failed · invoice.total')
+    expect(html).not.toContain('role="alert"')
+    expect(render(res(null, []))).toContain('No violations.')
+    const fault = render(res('the draft does not evaluate: bad cel', []))
+    expect(fault).toContain('role="alert"')
+    expect(fault).toContain('the draft does not evaluate: bad cel')
+    expect(style(parse(fault).find((t) => attr(t, 'role') === 'alert')!).background).toBe('var(--status-red-bg)')
+    expect(render(null), 'no columns before a run').not.toContain('>Draft v')
+    expect(attr(parse(html).find((t) => t.name === 'textarea')!, 'aria-label')).toBe('Sample invoice')
+    expect(classes(buttonByText(html, 'Run test'))).toContain('v2-btn-primary')
+  })
+
+  it('PublishModal markup: min is today, the diff is real, a stale draft shows its lines', () => {
+    const render = (over: Partial<ComponentProps<typeof PublishModal>>) => renderToStaticMarkup(createElement(PublishModal, { ...publishProps, ...over }))
+    const html = render({})
+    expect(attr(parse(html).find((t) => t.name === 'input')!, 'min')).toBe('2026-10-11')
+    expect(html).toContain('Publish draft → v5')
+    expect(html).toContain('1 ADDED · 1 CHANGED · 1 REMOVED')
+    expect(html).not.toContain('v9')
+    for (const [name, over] of [['no date', {}], ['busy', { busy: true }], ['still loading', { rows: null }], ['a read error', { error: 'down', rows: null }]] as const) {
+      expect(buttonByText(render(over), 'Publish v5').attrs, name).toContain('disabled=""')
+    }
+    const loading = render({ rows: null })
+    expect(loading).toContain('Loading diff…')
+    expect(render({ error: 'versions unavailable', rows: null })).toContain('versions unavailable')
+    const warned = render({ warnings: ['v4 took effect after this draft was opened.'] })
+    const box = parse(warned).find((t) => t.text === 'v4 took effect after this draft was opened.')!
+    expect(style(box).background).toBe('var(--status-amber-bg)')
+    expect(style(box).color).toBe('var(--status-amber-text)')
+    expect(warned.indexOf('v4 took effect')).toBeLessThan(warned.indexOf('type="date"'))
   })
 })

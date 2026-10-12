@@ -154,7 +154,7 @@ func TestAuditCompanyFilter_HasExactlyThreeStates(t *testing.T) {
 
 // --- AC #4: ScopeOf and CompanyScope ---------------------------------------------------
 
-// readerFirmWideEvents is this test's own copy of the sixteen firm-wide names (System
+// readerFirmWideEvents is this test's own copy of the seventeen firm-wide names (System
 // Design §2, verbatim, not a prose enumeration).
 // Deliberately a second literal, distinct from reader.go's unexported firmWideEvents:
 // the point of this test is to pin ScopeOf's behavior against the spec, not against
@@ -168,13 +168,14 @@ var readerFirmWideEvents = []string{
 	"workspace.provisioned",
 	"validation.rule.enabled", "validation.rule.disabled",
 	"invitation.sent", "invitation.resent", "invitation.accepted",
+	"customers.customer.updated",
 }
 
 // readerDocumentEvents are the three document.* names the SQL resolver also leaves
 // NULL, but which ScopeOf must classify unattributed, not workspace (D-28).
 var readerDocumentEvents = []string{"document.created", "document.reused", "document.read"}
 
-// AC #4: a set entity_id always wins to company; each of the sixteen firm-wide names
+// AC #4: a set entity_id always wins to company; each of the seventeen firm-wide names
 // with a null entity_id is workspace; each document.* name and an invoice-scoped name
 // with a null entity_id is unattributed.
 func TestAuditScopeOf_ClassifiesAllThreeStates(t *testing.T) {
@@ -200,7 +201,7 @@ func TestAuditScopeOf_ClassifiesAllThreeStates(t *testing.T) {
 		t.Fatal("test table is empty")
 	}
 
-	// population floor: the table must actually exercise all sixteen firm-wide names,
+	// population floor: the table must actually exercise all seventeen firm-wide names,
 	// or a shrinking table would pass by covering fewer than the spec requires.
 	covered := map[string]bool{}
 	for _, c := range cases {
@@ -276,8 +277,19 @@ func TestAuditScopeOf_UnknownEventFallsBackToUnattributedNotWorkspace(t *testing
 	}
 }
 
+// A buyer record belongs to the workspace, not to one company, so its correction event is
+// firm-wide. The unknown-event control proves the fallback alone cannot answer workspace.
+func TestAuditScopeOf_CustomerUpdatedIsWorkspace(t *testing.T) {
+	if got := audit.ScopeOf("customers.customer.updated", nil); got != audit.ScopeWorkspace {
+		t.Errorf("ScopeOf(customers.customer.updated, nil) = %q, want %q", got, audit.ScopeWorkspace)
+	}
+	if got := audit.ScopeOf("customers.customer.unclassified", nil); got != audit.ScopeUnattributed {
+		t.Errorf("control: ScopeOf(unclassified customers event, nil) = %q, want %q", got, audit.ScopeUnattributed)
+	}
+}
+
 // AC #4 drift guard: reuses audit_trigger_test.go's own triggerRuleDPayloads (already
-// DB-pinned at 21 rows by TestAudit_InsertTriggerLeavesWorkspaceEventsNull) instead of
+// DB-pinned at 22 rows by TestAudit_InsertTriggerLeavesWorkspaceEventsNull) instead of
 // a fifth hand-written copy of the list. A rule-D event that is neither firm-wide nor
 // already listed below fails here through ScopeOf's fallback, forcing a human to classify
 // it (D-28's fail-safe intent).
@@ -285,10 +297,10 @@ func TestAuditScopeOf_UnknownEventFallsBackToUnattributedNotWorkspace(t *testing
 // For the five unattributed names this is a DRIFT GUARD, not evidence of their scope:
 // rule 3 answers identically for extraction.succeeded and for an event nobody ever named
 // (TestAuditScopeOf_UnknownEventFallsBackToUnattributedNotWorkspace pins that fallback).
-func TestAuditScopeOf_MatchesTheTwentyOneEventsTheTriggerLeavesNull(t *testing.T) {
+func TestAuditScopeOf_MatchesTheTwentyTwoEventsTheTriggerLeavesNull(t *testing.T) {
 	ruleD := triggerRuleDPayloads(uuid.NewString())
-	if len(ruleD) != 21 {
-		t.Fatalf("rule-D payload map holds %d events, want 21", len(ruleD))
+	if len(ruleD) != 22 {
+		t.Fatalf("rule-D payload map holds %d events, want 22", len(ruleD))
 	}
 
 	// The rule-D names ScopeOf must call unattributed rather than workspace.
@@ -317,12 +329,12 @@ func TestAuditScopeOf_MatchesTheTwentyOneEventsTheTriggerLeavesNull(t *testing.T
 	}
 }
 
-// AC #4: cross-checks the four DB-pinned rule sets (10+7+4+21=42) for pairwise
+// AC #4: cross-checks the four DB-pinned rule sets (10+7+4+22=43) for pairwise
 // disjointness and total. audit_trigger_test.go pins each set's size alone but never
 // cross-checks them — an invariant CompanyScope's three-way split now depends on. Needs
 // no audit package call: it guards the fixture data itself. Disjointness is a real
 // structural property, not a restatement of ScopeOf's fallback.
-func TestAuditScopeOf_RuleSetsAreDisjointAndSumToFortyTwo(t *testing.T) {
+func TestAuditScopeOf_RuleSetsAreDisjointAndSumToFortyThree(t *testing.T) {
 	all := map[string]string{}
 	named := []struct {
 		name   string
@@ -346,18 +358,18 @@ func TestAuditScopeOf_RuleSetsAreDisjointAndSumToFortyTwo(t *testing.T) {
 		}
 		all[e] = "D"
 	}
-	if len(all) != 42 {
-		t.Fatalf("rule sets total %d events, want 42", len(all))
+	if len(all) != 43 {
+		t.Fatalf("rule sets total %d events, want 43", len(all))
 	}
 }
 
-// AC #4: ScopeOf answers workspace for exactly the sixteen firm-wide names and for no
-// other event in the shipped 42-name vocabulary. TestAuditScopeOf_ClassifiesAllThreeStates
-// checks the sixteen one at a time; this is the closed half, and it is the one assertion
+// AC #4: ScopeOf answers workspace for exactly the seventeen firm-wide names and for no
+// other event in the shipped 43-name vocabulary. TestAuditScopeOf_ClassifiesAllThreeStates
+// checks the seventeen one at a time; this is the closed half, and it is the one assertion
 // here that a fallback cannot satisfy — reaching ScopeWorkspace needs a real entry in
 // reader.go's firmWideEvents. It fails if either extraction event is ever filed as
 // firm-wide instead of unattributed.
-func TestAuditScopeOf_WorkspaceAnswerIsExactlyTheSixteenFirmWideNames(t *testing.T) {
+func TestAuditScopeOf_WorkspaceAnswerIsExactlyTheSeventeenFirmWideNames(t *testing.T) {
 	vocabulary := map[string]bool{}
 	for _, set := range [][]string{triggerRuleAEvents, triggerRuleBEvents, triggerRuleCEvents} {
 		for _, e := range set {
@@ -369,16 +381,16 @@ func TestAuditScopeOf_WorkspaceAnswerIsExactlyTheSixteenFirmWideNames(t *testing
 	}
 	// Population floor: a shrunk vocabulary would make the set equality below a claim
 	// about whatever happened to survive.
-	if len(vocabulary) != 42 {
-		t.Fatalf("the four rule sets name %d events, want 42", len(vocabulary))
+	if len(vocabulary) != 43 {
+		t.Fatalf("the four rule sets name %d events, want 43", len(vocabulary))
 	}
 
 	want := map[string]bool{}
 	for _, e := range readerFirmWideEvents {
 		want[e] = true
 	}
-	if len(want) != 16 {
-		t.Fatalf("readerFirmWideEvents holds %d distinct names, want 16", len(want))
+	if len(want) != 17 {
+		t.Fatalf("readerFirmWideEvents holds %d distinct names, want 17", len(want))
 	}
 
 	got := map[string]bool{}
@@ -388,7 +400,7 @@ func TestAuditScopeOf_WorkspaceAnswerIsExactlyTheSixteenFirmWideNames(t *testing
 		}
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ScopeOf answers workspace for %v, want exactly the sixteen firm-wide names %v", got, want)
+		t.Errorf("ScopeOf answers workspace for %v, want exactly the seventeen firm-wide names %v", got, want)
 	}
 }
 

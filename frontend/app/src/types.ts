@@ -9,7 +9,7 @@ import type { CarriedReading, ImportPreview } from './lib/importApi'
 import type { DocumentRowState } from './lib/documentRun'
 import type { ImportRun, PickedFile } from './lib/importRun'
 import type { PickedKind } from './lib/importFlow'
-import type { FormField, ImportKey } from './lib/invoiceFields'
+import type { FormField, ImportKey, LineEditKey } from './lib/invoiceFields'
 // Type-only, mirroring the PickedFile edge above — lib/mappingGroups.ts type-imports
 // `Mapping` from THIS file, so this is a benign type-only cycle (erased at compile,
 // TS1484), same shape as the pre-existing PickedFile/Member edges.
@@ -53,6 +53,14 @@ export type LineItem = {
   price: number
 }
 
+// The 8 NRS line keys a draft line holds; base_quantity is fixed at "1" on the wire.
+export type DraftLineNRSKey = Exclude<
+  LineEditKey,
+  'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax' | 'base_quantity'
+>
+
+export type DraftLine = LineItem & Record<DraftLineNRSKey, string>
+
 export type Invoice = {
   number: string
   buyer: string
@@ -81,10 +89,10 @@ export type Validatable = {
 // POST /v1/invoices body, and nothing else. De-intersected from `Validatable` in
 // INVCR-01-03: while `Draft = Validatable & {…}` the create flow was typed against the
 // mock verdict engine, which is exactly the coupling [server-truth] exists to sever.
-// `buyerAddress`/`wht`/`docType` left with it — `invoices` has no address, WHT or doc-type
-// column and `createRequest` no such field, so each was a value the form collected and
-// silently discarded. `Invoice` (the mock dashboard's row shape) keeps all three.
-export type Draft = { [F in FormField as F['formKey']]: string } & { items: LineItem[] }
+// `wht`/`docType` left with it — `invoices` has no WHT or doc-type column. The buyer
+// address is the structured buyer_street..buyer_lga keys. `Invoice` (the mock dashboard's
+// row shape) keeps `buyerAddress`, `wht` and `docType`.
+export type Draft = { [F in FormField as F['formKey']]: string } & { items: DraftLine[] }
 
 // Static per-company seed config (mirrors `this.CFG` entries). The prototype's raw
 // CFG literal also carries `vd`/`vatd`/`fd`/`pd`/`validated`/`dist`/`docs`/`health`/
@@ -452,6 +460,8 @@ export type PlatformCtx = {
   // Descriptions are strings and qty/price are numbers coerced off the input's text, so
   // this is a separate writer rather than a widened `field` union with a branch inside.
   updateItemDesc: (i: number, desc: string) => void
+  updateItemField: (i: number, key: DraftLineNRSKey, value: string) => void
+  updateDraftFields: (patch: Partial<Omit<Draft, 'items'>>) => void
   addItem: () => void
   removeItem: (i: number) => void
   armField: (k: string) => void

@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import { NOT_ACTIVE_MEMBER_MESSAGE } from './authedFetch'
+import { CODE_LISTS } from './codeLists'
 import { AI_UNAVAILABLE_FIELD, DOCUMENT_TYPE_NOTICE } from './extractionReview'
 import type { DocumentType } from './extractionReview'
 
@@ -685,6 +686,33 @@ describe('wire mirror: Go Invoice, LineItem and TaxSubtotal <-> the e2e read typ
     for (const k of NRS_LINE) expect(go, `Go LineItem lacks ${k}`).toContain(k)
   })
 
+  const SPA_INVOICES = 'frontend/app/src/lib/invoices.ts'
+
+  it('wire mirror: LineItem <-> InvoiceLineItem (SPA)', () => {
+    const go = goStructKeys(repoFile(GO_INVOICE), 'LineItem')
+    const spa = tsInterfaceKeys(repoFile(SPA_INVOICES), 'InvoiceLineItem')
+    expect(go.length, 'Go LineItem under its floor').toBeGreaterThanOrEqual(16)
+    expect(spa.length, 'SPA InvoiceLineItem under its floor').toBeGreaterThanOrEqual(16)
+    expect(keySetDiff(go, spa)).toEqual([])
+  })
+
+  it('wire mirror: lineItemReq <-> LineItemEditInput', () => {
+    const go = goStructKeys(repoFile('internal/invoice/handlers.go'), 'lineItemReq')
+    const spa = tsInterfaceKeys(repoFile(SPA_INVOICES), 'LineItemEditInput')
+    expect(go.length, 'Go lineItemReq under its floor').toBeGreaterThanOrEqual(15)
+    expect(spa.length, 'SPA LineItemEditInput under its floor').toBeGreaterThanOrEqual(15)
+    expect(keySetDiff(go, spa)).toEqual([])
+  })
+
+  it('wire mirror: InvoiceRecord carries the 22 NRS header keys', () => {
+    const spa = tsInterfaceKeys(repoFile(SPA_INVOICES), 'InvoiceRecord')
+    const go = goStructKeys(repoFile(GO_INVOICE), 'Invoice')
+    for (const k of NRS_HEADER) {
+      expect(go, `Go Invoice lacks ${k}`).toContain(k)
+      expect(spa, `SPA InvoiceRecord lacks ${k}`).toContain(k)
+    }
+  })
+
   it('wire mirror: TaxSubtotal <-> InvoiceTaxSubtotal, and GetInvoiceResult carries tax_subtotals', () => {
     const go = goStructKeys(repoFile('internal/invoice/tax_subtotals.go'), 'TaxSubtotal')
     const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'InvoiceTaxSubtotal')
@@ -1350,5 +1378,24 @@ describe('the submit pair is declared once on the SPA invoice mirror (BUG-12)', 
     expect(tsInterfaceKeys(plain, 'Fixture')).toEqual(['a', 'b'])
     // And it still reports a real absence rather than agreeing with everything.
     expect(tsInterfaceKeys('export interface Fixture extends Base {\n  a: string\n}', 'Fixture')).not.toContain('b')
+  })
+})
+
+describe('wire mirror: the code search <-> the SPA and e2e legs', () => {
+  it('wire mirror: CodeEntry <-> CodeEntry <-> CodeEntry', () => {
+    const go = goStructKeys(repoFile('internal/invoice/codes.go'), 'CodeEntry')
+    const spa = tsInterfaceKeys(repoFile('frontend/app/src/lib/codeLists.ts'), 'CodeEntry')
+    const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'CodeEntry')
+    for (const keys of [go, spa, e2e]) expect(keys.length).toBeGreaterThanOrEqual(3)
+    expect(keySetDiff(go, spa), 'Go CodeEntry vs the SPA').toEqual([])
+    expect(keySetDiff(go, e2e), 'Go CodeEntry vs e2e').toEqual([])
+  })
+
+  it('wire mirror: codeSearchLists <-> CODE_LISTS', () => {
+    const src = stripComments(repoFile('internal/invoice/codes.go'))
+    const literal = /var codeSearchLists = \[\]string\{([^}]*)\}/.exec(src)?.[1] ?? ''
+    const names = [...literal.matchAll(/"([^"]+)"/g)].map((m) => m[1])
+    expect(names.length, 'extractor read no Go list names').toBeGreaterThanOrEqual(6)
+    expect(keySetDiff(names, [...CODE_LISTS])).toEqual([])
   })
 })

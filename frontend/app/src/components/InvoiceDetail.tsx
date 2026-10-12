@@ -26,7 +26,8 @@ import {
 } from '../lib/approvals'
 import { fmt, fmtDate, fmtDateTime, fmtPlain } from '../lib/format'
 import { getExtractions, type ExtractionJobsResponse } from '../lib/importApi'
-import type { LineEditKey } from '../lib/invoiceFields'
+import { BUYER_TYPE_NOTE, buyerRequirement } from '../lib/invoiceDraft'
+import { labelOf, type LineEditKey } from '../lib/invoiceFields'
 import { EXPLAIN_COPY } from '../lib/explain'
 import { violationKey, type LineTarget } from '../lib/validationApi'
 import { stripNodes } from '../lib/invoiceStrip'
@@ -37,6 +38,7 @@ import {
   DETAIL_SUBMIT_COPY,
   diffEditInput,
   diffLineItems,
+  editDateError,
   editInvoice,
   failureExplanation,
   formFromInvoice,
@@ -45,6 +47,7 @@ import {
   invoiceStatusStyle,
   isBuyerTinMissing,
   keptAsIs,
+  LINE_EDIT_FIELDS,
   LIVE_POLL_MS,
   newIdempotencyKey,
   reasonFieldFlags,
@@ -73,6 +76,7 @@ import { bulkPhaseReducer, ROW_EXPANSION_COPY, type BulkPhase } from '../lib/rev
 import { getSourceDocument, type SourceDocumentResponse } from '../lib/sourceDocument'
 import { useDocumentVisible, useLiveRefresh } from '../lib/useLiveRefresh'
 import { ExplainPanel } from './ExplainPanel'
+import { NrsFieldControl } from './NrsFieldControl'
 import { ApprovalStateCard } from './ApprovalStateCard'
 import { InvoiceActivityCard } from './InvoiceActivityCard'
 import { SourceDocumentCard } from './SourceDocumentCard'
@@ -112,10 +116,11 @@ export function InvoiceDetail({ ctx }: { ctx: PlatformCtx }) {
 // ladder, zero network when no gateway is configured.
 // One editable line row (INVED-01-07). LineItemEditInput-shaped but with '' where the wire
 // carries null, because a controlled React input holds '' and never null. Deliberately no
-// `id` and no `line_no`: line_no is system-assigned 1..N by array POSITION
+// `line_no`: line_no is system-assigned 1..N by array POSITION
 // ([line-no-by-position], lib/invoices.ts:234-245), so this array's order IS the wire's
-// line ordering, and diffLineItems compares by position over the five content fields only.
-type LineRowState = Record<LineEditKey, string>
+// line ordering, and diffLineItems compares by position over the 14 content fields only.
+// `id` is the stored line's, kept off-screen so a save re-sends it; an added row has none.
+type LineRowState = Record<LineEditKey, string> & { id?: string }
 
 // description / qty / unit / amount / tax / remove, declared once so header and rows cannot drift.
 // Tracks are the prototype's, with a 120px Description floor; the box scrolls sideways only when the floor no longer fits.
@@ -124,14 +129,41 @@ const LINE_EDIT_GRID = 'minmax(120px, 1fr) 64px 110px 110px 100px 28px'
 const EDIT_INPUT = { height: 34, fontSize: 13, padding: '0 10px' } as const
 const LINE_INPUT = { ...EDIT_INPUT, height: 30 } as const
 
+const LEGACY_LINE_KEYS: readonly LineEditKey[] = ['description', 'quantity', 'unit_price', 'line_total', 'line_tax']
+const NRS_LINE_KEYS = LINE_EDIT_FIELDS.filter((k) => !LEGACY_LINE_KEYS.includes(k))
+
+// The 22 NRS header fields in the editor's three groups; buyer type leads the buyer group.
+const NRS_INVOICE_KEYS: readonly EditFieldKey[] = ['tax_currency_code', 'due_date', 'issue_time', 'tax_point_date', 'payment_status']
+const NRS_SUPPLIER_KEYS: readonly EditFieldKey[] = [
+  'supplier_email', 'supplier_telephone', 'supplier_street', 'supplier_city',
+  'supplier_postal_zone', 'supplier_country', 'supplier_state', 'supplier_lga',
+]
+const NRS_BUYER_KEYS: readonly EditFieldKey[] = [
+  'invoice_kind', 'buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city',
+  'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+]
+const MONO_NRS_KEYS: ReadonlySet<EditFieldKey> = new Set(['due_date', 'issue_time', 'tax_point_date'])
+const NRS_PLACEHOLDER: Partial<Record<EditFieldKey, string>> = {
+  due_date: 'YYYY-MM-DD',
+  issue_time: 'HH:MM:SS',
+  tax_point_date: 'YYYY-MM-DD',
+}
+
+// buyerRequirement names Draft keys; the editor's two renamed ones map back.
+const EDIT_KEY_OF_DRAFT: Partial<Record<string, EditFieldKey>> = { buyerTin: 'buyer_tin', buyer: 'buyer_name' }
+const BUYER_REQUIRED_KEYS: ReadonlySet<string> = new Set(
+  buyerRequirement('B2B').keys.map((k) => EDIT_KEY_OF_DRAFT[k] ?? k),
+)
+
 function rowsFromInvoice(inv: Pick<InvoiceRecord, 'line_items'>): LineRowState[] {
   return (inv.line_items ?? []).map((it) => ({
-    description: it.description ?? '',
-    quantity: it.quantity ?? '',
-    unit_price: it.unit_price ?? '',
-    line_total: it.line_total ?? '',
-    line_tax: it.line_tax ?? '',
+    ...(Object.fromEntries(LINE_EDIT_FIELDS.map((k) => [k, it[k] ?? ''])) as LineRowState),
+    id: it.id,
   }))
+}
+
+function blankRow(): LineRowState {
+  return Object.fromEntries(LINE_EDIT_FIELDS.map((k) => [k, ''])) as LineRowState
 }
 
 function LiveInvoiceDetail({ ctx, invoiceId }: { ctx: PlatformCtx; invoiceId: string }) {
@@ -1347,16 +1379,38 @@ function InvoiceEditBody({
     )
   }
 
+  const { level: buyerLevel } = buyerRequirement(form.invoice_kind)
+  const buyerRequired = buyerLevel === 'required'
+  const buyerNote = BUYER_TYPE_NOTE[buyerLevel]
+
+  function nrsHeaderField(key: EditFieldKey) {
+    return (
+      <div key={key}>
+        <div className="label" style={{ marginBottom: 5 }}>{labelOf(key)}</div>
+        <NrsFieldControl
+          fieldKey={key}
+          value={form[key]}
+          onChange={(v) => updateField(key, v)}
+          authedFetch={ctx.authedFetch}
+          disabled={submitting}
+          placeholder={NRS_PLACEHOLDER[key]}
+          aria-required={buyerRequired && BUYER_REQUIRED_KEYS.has(key) ? true : undefined}
+          style={MONO_NRS_KEYS.has(key) ? { ...EDIT_INPUT, fontFamily: 'var(--font-mono)' } : { ...EDIT_INPUT }}
+        />
+      </div>
+    )
+  }
+
   function updateField(field: EditFieldKey, value: string) {
     setForm((f) => ({ ...f, [field]: value }))
   }
 
-  function updateRow(idx: number, field: keyof LineRowState, value: string) {
+  function updateRow(idx: number, field: LineEditKey, value: string) {
     setRows((rs) => rs.map((row, i) => (i === idx ? { ...row, [field]: value } : row)))
   }
 
   function addRow() {
-    setRows((rs) => [...rs, { description: '', quantity: '', unit_price: '', line_total: '', line_tax: '' }])
+    setRows((rs) => [...rs, blankRow()])
   }
 
   function removeRow(idx: number) {
@@ -1383,6 +1437,19 @@ function InvoiceEditBody({
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (submitting) return
+    for (const [i, row] of rows.entries()) {
+      const stored = row.id ? inv.line_items?.find((l) => l.id === row.id) : undefined
+      const blanked = stored && NRS_LINE_KEYS.find((k) => row[k] === '' && (stored[k] ?? '') !== '')
+      if (blanked) {
+        setFormError(`Line ${i + 1}: ${labelOf(blanked)} cannot be cleared once saved. Remove the line and add it again to start it blank.`)
+        return
+      }
+    }
+    const dateError = editDateError(form)
+    if (dateError) {
+      setFormError(dateError)
+      return
+    }
     const patch = diffEditInput(inv, form)
     // Trimmed on both sides: padding, or a legacy untrimmed stored number, is not a rename.
     const typedNumber = number.trim()
@@ -1474,12 +1541,12 @@ function InvoiceEditBody({
           <div>
             <div className="label" style={{ marginBottom: 5 }}>Buyer name</div>
             {fieldFlag('buyer_name')}
-            <input className="pf-input" type="text" value={form.buyer_name} onChange={(e) => updateField('buyer_name', e.target.value)} style={{ ...EDIT_INPUT }} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.buyer_name} onChange={(e) => updateField('buyer_name', e.target.value)} aria-required={buyerRequired ? true : undefined} style={{ ...EDIT_INPUT }} disabled={submitting} />
           </div>
           <div>
             <div className="label" style={{ marginBottom: 5 }}>Buyer TIN</div>
             {fieldFlag('buyer_tin')}
-            <input className="pf-input" type="text" value={form.buyer_tin} onChange={(e) => updateField('buyer_tin', e.target.value)} placeholder="########-####" style={{ ...EDIT_INPUT, fontFamily: 'var(--font-mono)' }} disabled={submitting} />
+            <input className="pf-input" type="text" value={form.buyer_tin} onChange={(e) => updateField('buyer_tin', e.target.value)} aria-required={buyerRequired ? true : undefined} placeholder="########-####" style={{ ...EDIT_INPUT, fontFamily: 'var(--font-mono)' }} disabled={submitting} />
           </div>
           <div>
             <div className="label" style={{ marginBottom: 5 }}>Subtotal</div>
@@ -1513,6 +1580,13 @@ function InvoiceEditBody({
             {fieldFlag('currency')}
             <input className="pf-input" type="text" value={form.currency} onChange={(e) => updateField('currency', e.target.value)} style={{ ...EDIT_INPUT }} disabled={submitting} />
           </div>
+          <div className="label" style={{ gridColumn: '1 / -1' }}>Invoice details</div>
+          {NRS_INVOICE_KEYS.map(nrsHeaderField)}
+          <div className="label" style={{ gridColumn: '1 / -1' }}>Supplier details</div>
+          {NRS_SUPPLIER_KEYS.map(nrsHeaderField)}
+          <div className="label" style={{ gridColumn: '1 / -1' }}>Buyer details</div>
+          <div data-testid="buyer-type-note" style={{ gridColumn: '1 / -1', fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.4 }}>{buyerNote}</div>
+          {NRS_BUYER_KEYS.map(nrsHeaderField)}
         </div>
 
         {/* Line items, editable ([edit-ux], Core AC #2 — the read-only table above has no
@@ -1554,6 +1628,24 @@ function InvoiceEditBody({
                 >
                   {closeGlyph}
                 </button>
+                <div data-testid="line-nrs" style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+                  {NRS_LINE_KEYS.map((key) => (
+                    <div key={key}>
+                      <div className="label" style={{ marginBottom: 3 }}>{labelOf(key)}</div>
+                      <NrsFieldControl
+                        fieldKey={key}
+                        data-line-field={key}
+                        aria-label={labelOf(key)}
+                        value={row[key]}
+                        onChange={(v) => updateRow(i, key, v)}
+                        onPick={key === 'tax_category' ? (entry) => entry.percent != null && updateRow(i, 'tax_percent', entry.percent) : undefined}
+                        authedFetch={ctx.authedFetch}
+                        disabled={submitting}
+                        style={{ ...LINE_INPUT }}
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
             </div>

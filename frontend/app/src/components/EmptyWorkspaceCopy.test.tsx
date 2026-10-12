@@ -5,7 +5,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
-import { emptyClient } from '../lib/clients'
+import { DRAFT_NRS_BLANK, draftLine, emptyClient } from '../lib/clients'
 import type { Mode, PlatformCtx } from '../types'
 import { AddCompanyTask } from './AddCompanyTask'
 import { CreateForm } from './CreateForm'
@@ -136,7 +136,7 @@ describe('emptyClient() in a zero-entity workspace reads mode-neutral on every s
     render(
       <CreateForm
         ctx={baseCtx(mode, {
-          draft: { number: '', items: [{ desc: '', qty: '1', price: '', vat: 'standard' }] },
+          draft: { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [draftLine({ desc: '', qty: 1, price: 0 })] },
           filing: false,
           filingError: null,
           handOffReading: null,

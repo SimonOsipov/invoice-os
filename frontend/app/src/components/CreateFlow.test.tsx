@@ -623,13 +623,11 @@ describe('CreateFlow — a carried reading renders the manual form read-only (EX
     expect(container.textContent).toContain('The rule engine')
     expect(container.textContent).not.toContain(C_CAPTION)
 
-    // Number, date, buyer, TIN, and the one line's three cells: all editable, none carried.
+    // Every input is editable except the line's fixed base quantity and computed tax.
     const inputs = Array.from(container.querySelectorAll('input'))
-    expect(inputs).toHaveLength(7)
-    for (const el of inputs) {
-      expect(el.readOnly).toBe(false)
-      expect(el.hasAttribute('aria-readonly')).toBe(false)
-    }
+    const readOnly = inputs.filter((el) => el.readOnly)
+    expect(readOnly.map((el) => el.getAttribute('aria-label'))).toEqual(['Base quantity 1', 'Line tax 1'])
+    for (const el of inputs.filter((el) => !el.readOnly)) expect(el.hasAttribute('aria-readonly')).toBe(false)
 
     // Blank mode is byte-unchanged: its own placeholder, not the carried "—" cue.
     const dateInput = container.querySelector('input[placeholder="YYYY-MM-DD"]') as HTMLInputElement | null
@@ -842,7 +840,7 @@ describe('CreateFlow — the blank hand-off draft (AUTH-10-07)', () => {
     expect((primary as HTMLButtonElement).disabled).toBe(true)
     const typed = (Array.from(container.querySelectorAll('input')) as HTMLInputElement[]).filter((i) => i.type !== 'number')
     expect(typed.length, 'the form must render text inputs').toBeGreaterThan(0)
-    expect(typed.map((i) => i.value).filter((v) => v !== ''), 'no text input carries a value').toEqual([])
+    expect(typed.map((i) => i.value).filter((v) => v !== ''), 'only the fixed tax currency and base quantity carry a value').toEqual(['NGN', '1'])
     const numbers = (Array.from(container.querySelectorAll('input[type="number"]')) as HTMLInputElement[]).map((i) => i.value)
     expect(numbers, 'one line: qty 1, price 0').toEqual(['1', '0'])
   })

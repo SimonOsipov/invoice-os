@@ -108,8 +108,7 @@ type createRequest struct {
 	VAT           *string       `json:"vat"`
 	Total         *string       `json:"total"`
 	LineItems     []lineItemReq `json:"line_items"`
-	// Appended last so the mirrored SPA/e2e types keep every existing key's
-	// position; absent and explicit null are both "no document"
+	// Absent and explicit null are both "no document"
 	// (TestCreateHandler_SourceDocumentIDAbsentOrNullIsNoDocument).
 	SourceDocumentID *string `json:"source_document_id"`
 

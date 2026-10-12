@@ -460,6 +460,8 @@ export type PlatformCtx = {
   // Descriptions are strings and qty/price are numbers coerced off the input's text, so
   // this is a separate writer rather than a widened `field` union with a branch inside.
   updateItemDesc: (i: number, desc: string) => void
+  updateItemField: (i: number, key: DraftLineNRSKey, value: string) => void
+  updateDraftFields: (patch: Partial<Omit<Draft, 'items'>>) => void
   addItem: () => void
   removeItem: (i: number) => void
   armField: (k: string) => void

@@ -15,7 +15,7 @@ import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-cli
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, draftLine, resolveActiveClient, startingDraft } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
-import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber } from './lib/invoiceDraft'
+import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber, withSupplierDefaults } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { reviewQuery } from './lib/reviewBatch'
 import { parseLocation, reviewNavIds, routePath, routeQuery, routeUrl, type RouteParams } from './lib/route'
@@ -136,6 +136,7 @@ import type {
   ConnectorsState,
   CreateStep,
   Draft,
+  DraftLineNRSKey,
   FieldMapRow,
   Mapping,
   Mode,
@@ -216,6 +217,12 @@ function SuspendedNotice({ onSignOut }: { onSignOut: () => void }) {
 
 // A half-built draft or a selected invoice cannot outlive its screen, so both collapse to
 // the list they came from.
+// A fresh draft with the company's supplier details filled in.
+const seedDraft = (client: Client, entity: Entity | null, handoff: boolean): Draft => {
+  const draft = startingDraft(client, handoff)
+  return entity === null ? draft : withSupplierDefaults(draft, entity)
+}
+
 const carryView = (view: View): View => (view === 'create' || view === 'detail' || view === 'extraction' ? 'invoices' : view)
 
 // `company` is in the union but only in an in-house strip (SettingsView builds it). A firm
@@ -385,7 +392,11 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
   const [view, setView] = useState<View>(bootView)
-  const [draft, setDraft] = useState<Draft>(() => startingDraft(active, session.handoff === true))
+  const [draft, setDraft] = useState<Draft>(() => seedDraft(active, activeEntity, session.handoff === true))
+  // An entity list that resolves after the seed still fills the blank supplier fields.
+  useEffect(() => {
+    if (activeEntity !== null) setDraft((d) => withSupplierDefaults(d, activeEntity))
+  }, [activeEntity?.id])
   // The document that produced no invoice, recorded by enterByHand so the invoice filed
   // instead keeps its provenance; handOffReading is its carried reading, if any. Cleared
   // wherever `draft` is reseeded -- it describes THIS draft, not the session.
@@ -779,7 +790,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     setDetailInvoiceId(null)
     setDetailLine(null)
     setSwitcherOpen(false)
-    setDraft(startingDraft(clients.find((c) => c.entityId === id) ?? active, session.handoff === true))
+    setDraft(seedDraft(clients.find((c) => c.entityId === id) ?? active, entitiesList.find((e) => e.id === id) ?? null, session.handoff === true))
     setHandOffDocumentId(null)
     setHandOffReading(null)
     handOffReadSeq.current += 1
@@ -824,7 +835,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     }
     navigate('create')
     setCreateStep('upload')
-    setDraft(startingDraft(active, session.handoff === true))
+    setDraft(seedDraft(active, activeEntity, session.handoff === true))
     setHandOffDocumentId(null)
     setHandOffReading(null)
     handOffReadSeq.current += 1
@@ -902,6 +913,17 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
       ...d,
       items: d.items.map((it, idx) => (idx === i ? { ...it, desc } : it)),
     }))
+  }
+
+  function updateItemField(i: number, key: DraftLineNRSKey, value: string) {
+    setDraft((d) => ({
+      ...d,
+      items: d.items.map((it, idx) => (idx === i ? { ...it, [key]: value } : it)),
+    }))
+  }
+
+  function updateDraftFields(patch: Partial<Omit<Draft, 'items'>>) {
+    setDraft((d) => ({ ...d, ...patch }))
   }
 
   // A blank line, not a copy of the last one: qty 1 is the only value that cannot silently
@@ -1756,6 +1778,8 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     updateDraft,
     updateItem,
     updateItemDesc,
+    updateItemField,
+    updateDraftFields,
     addItem,
     removeItem,
     armField,

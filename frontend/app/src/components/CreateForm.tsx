@@ -15,27 +15,99 @@
 //    the filed `total` is subtotal + vat with no withholding deduction.
 //
 // Every field on this screen is editable and every one of them is transmitted. Fields with
-// no column behind them (billing address, WHT, document type) were removed outright: a
-// field whose value is silently discarded is the same lie as the mock approve it replaced.
-// `currency` is not a field here — NGN-only is the real currency-allowed rule parameter, so
-// there is nothing to choose.
+// no column behind them (WHT, document type) were removed outright: a field whose value is
+// silently discarded is the same lie as the mock approve it replaced. The buyer address is
+// the structured street..LGA fields. `currency` is not a field here: NGN-only is the real
+// currency-allowed rule parameter, so there is nothing to choose.
 // Carried mode (ctx.handOffReading) is the exception to all of this: the server files the
 // reading, so its values (currency included) are read-only and only the number is typed.
 
-import { fmt } from '../lib/format'
-import { draftTotals, fileDraftGate } from '../lib/invoiceDraft'
+import { gatewayBase } from '@invoice-os/api-client'
+import { useRef } from 'react'
+
 import { plusGlyph, xSmallGlyph } from '../glyphs'
-import type { PlatformCtx } from '../types'
+import { FILEABLE_TIN, findCustomerByTin } from '../lib/buyerDirectory'
+import { fmt } from '../lib/format'
+import {
+  applyBuyerRecord,
+  BUYER_TYPE_NOTE,
+  buyerRequirement,
+  draftLineTaxes,
+  draftTotals,
+  fileDraftGate,
+  type BuyerFill,
+} from '../lib/invoiceDraft'
+import { labelOf, type InvoiceField } from '../lib/invoiceFields'
+import type { Draft, DraftLineNRSKey, PlatformCtx } from '../types'
+import { NrsFieldControl } from './NrsFieldControl'
 
 const ROW_COLS = '1fr 70px 120px 130px 24px'
 
 // A carried null stays value='' and shows the Amount cell's '—' only as a placeholder (EXTR27-C4, EXTR27-C6).
 const dash = (v: string | null) => (v === null ? '—' : undefined)
 
+type HeaderKey = Exclude<keyof Draft, 'items' | 'number' | 'date' | 'currency' | 'buyer' | 'buyerTin'>
+const DETAIL_KEYS: HeaderKey[] = ['due_date', 'issue_time', 'tax_point_date', 'payment_status', 'tax_currency_code']
+const SUPPLIER_KEYS: HeaderKey[] = ['supplier_email', 'supplier_telephone', 'supplier_street', 'supplier_city', 'supplier_postal_zone', 'supplier_country', 'supplier_state', 'supplier_lga']
+const BUYER_KEYS: HeaderKey[] = ['buyer_email', 'buyer_telephone', 'buyer_street', 'buyer_city', 'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga']
+const LINE_KEYS: DraftLineNRSKey[] = ['tax_category', 'tax_percent', 'hsn_code', 'isic_code', 'product_category', 'service_category', 'sellers_item_identification', 'price_unit']
+const PLACEHOLDER: Partial<Record<HeaderKey, string>> = { due_date: 'YYYY-MM-DD', tax_point_date: 'YYYY-MM-DD', issue_time: 'HH:MM:SS' }
+const MONO: Partial<Record<HeaderKey, true>> = { due_date: true, tax_point_date: true, issue_time: true }
+
+const labelStyle = { fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 } as const
+
 export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
   const { active, activeEntity, draft, filing, filingError, handOffReading: reading } = ctx
 
   const totals = draftTotals(draft.items)
+  const lineTaxes = draftLineTaxes(draft.items)
+  const required = buyerRequirement(draft.invoice_kind)
+  const isRequired = (key: string) => (required.keys as readonly string[]).includes(key) || undefined
+
+  // Buyer lookup: the latest draft is read at answer time; only the newest blur may land.
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  const lookupSeq = useRef(0)
+  const lastTin = useRef('')
+  const lastFill = useRef<BuyerFill>({})
+
+  function lookupBuyer() {
+    const tin = draft.buyerTin.trim()
+    const base = gatewayBase()
+    if (base == null || !FILEABLE_TIN.test(tin) || tin === lastTin.current) return
+    lastTin.current = tin
+    const seq = ++lookupSeq.current
+    findCustomerByTin(ctx.authedFetch, base, tin).then(
+      (record) => {
+        if (seq !== lookupSeq.current) return
+        const current = draftRef.current
+        const { draft: next, fill } = applyBuyerRecord(current, record, lastFill.current)
+        lastFill.current = fill
+        const patch: Partial<Omit<Draft, 'items'>> = {}
+        for (const key of Object.keys(next) as (keyof Omit<Draft, 'items'>)[]) if (next[key] !== current[key]) patch[key] = next[key]
+        ctx.updateDraftFields(patch)
+      },
+      () => {
+        if (seq === lookupSeq.current) lastTin.current = ''
+      },
+    )
+  }
+
+  const headerField = (key: HeaderKey) => (
+    <div key={key}>
+      <div style={labelStyle}>{labelOf(key as InvoiceField['key'])}</div>
+      <NrsFieldControl
+        fieldKey={key}
+        value={draft[key]}
+        onChange={(v) => ctx.updateDraft(key, v)}
+        authedFetch={ctx.authedFetch}
+        placeholder={PLACEHOLDER[key]}
+        aria-label={labelOf(key as InvoiceField['key'])}
+        style={MONO[key] ? { fontFamily: 'var(--font-mono)' } : undefined}
+        aria-required={isRequired(key)}
+      />
+    </div>
+  )
 
   // The SAME pure gate App.tsx re-checks before firing the request, so the label and the
   // handler can never disagree about why filing is unavailable. Entity first (an in-house
@@ -98,15 +170,31 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
                 <input data-testid="carried-currency" className="pf-input" value={reading.currency ?? ''} placeholder={dash(reading.currency)} readOnly aria-readonly="true" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} />
               </div>
             )}
+            {reading === null && DETAIL_KEYS.map((key) => headerField(key))}
           </div>
+          {reading === null && (
+            <>
+              <div className="label" style={{ marginBottom: 12 }}>
+                Supplier details
+              </div>
+              <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: '0 0 12px', lineHeight: 1.5 }}>Blank fields use {active.short}&rsquo;s details.</p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 22 }}>{SUPPLIER_KEYS.map((key) => headerField(key))}</div>
+            </>
+          )}
           <div className="label" style={{ marginBottom: 12 }}>
             Buyer details
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 22 }}>
+            {reading === null && (
+              <div style={{ gridColumn: '1 / -1' }}>
+                {headerField('invoice_kind')}
+                <p data-testid="buyer-type-note" style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: '8px 0 0', lineHeight: 1.5 }}>{BUYER_TYPE_NOTE[required.level]}</p>
+              </div>
+            )}
             <div>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer name</div>
               {reading === null ? (
-                <input className="pf-input" value={draft.buyer} onChange={(e) => ctx.updateDraft('buyer', e.target.value)} />
+                <input className="pf-input" value={draft.buyer} onChange={(e) => ctx.updateDraft('buyer', e.target.value)} aria-required={isRequired('buyer')} />
               ) : (
                 <input data-testid="carried-buyer_name" className="pf-input" value={reading.buyer_name ?? ''} placeholder={dash(reading.buyer_name)} readOnly aria-readonly="true" style={{ color: 'var(--fg-3)' }} />
               )}
@@ -114,11 +202,12 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
             <div>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Buyer TIN</div>
               {reading === null ? (
-                <input className="pf-input" value={draft.buyerTin} onChange={(e) => ctx.updateDraft('buyerTin', e.target.value)} placeholder="########-####" style={{ fontFamily: 'var(--font-mono)' }} />
+                <input className="pf-input" value={draft.buyerTin} onChange={(e) => ctx.updateDraft('buyerTin', e.target.value)} onBlur={lookupBuyer} placeholder="########-####" aria-required={isRequired('buyerTin')} style={{ fontFamily: 'var(--font-mono)' }} />
               ) : (
                 <input data-testid="carried-buyer_tin" className="pf-input" value={reading.buyer_tin ?? ''} placeholder={dash(reading.buyer_tin)} readOnly aria-readonly="true" style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} />
               )}
             </div>
+            {reading === null && BUYER_KEYS.map((key) => headerField(key))}
           </div>
           <div className="label" style={{ marginBottom: 12 }}>
             Line items
@@ -155,6 +244,30 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
                     >
                       {xSmallGlyph}
                     </button>
+                    <div data-testid="draft-line-nrs" style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
+                      {LINE_KEYS.map((key) => (
+                        <div key={key}>
+                          <div style={labelStyle}>{labelOf(key)}</div>
+                          <NrsFieldControl
+                            fieldKey={key}
+                            value={it[key]}
+                            onChange={(v) => ctx.updateItemField(i, key, v)}
+                            onPick={key === 'tax_category' ? (entry) => entry.percent !== null && ctx.updateItemField(i, 'tax_percent', entry.percent) : undefined}
+                            authedFetch={ctx.authedFetch}
+                            data-line-field={key}
+                            aria-label={`${labelOf(key)} ${i + 1}`}
+                          />
+                        </div>
+                      ))}
+                      <div>
+                        <div style={labelStyle}>{labelOf('base_quantity')}</div>
+                        <input className="pf-input" value="1" readOnly aria-readonly="true" aria-label={`${labelOf('base_quantity')} ${i + 1}`} style={{ color: 'var(--fg-3)' }} />
+                      </div>
+                      <div>
+                        <div style={labelStyle}>{labelOf('line_tax')}</div>
+                        <input data-testid="draft-line-tax" className="pf-input" value={lineTaxes[i] ?? ''} placeholder="—" readOnly aria-readonly="true" aria-label={`${labelOf('line_tax')} ${i + 1}`} style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }} />
+                      </div>
+                    </div>
                   </div>
                 ))
               : reading.line_items.length === 0
@@ -193,7 +306,7 @@ export function CreateForm({ ctx }: { ctx: PlatformCtx }) {
             )}
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>{reading === null ? 'VAT · 7.5%' : 'VAT'}</span>
+            <span style={{ fontSize: 13, color: 'var(--fg-2)' }}>{reading === null ? totals.vatLabel : 'VAT'}</span>
             {reading === null ? (
               <span data-testid="summary-vat" className="money" style={{ fontSize: 13, fontWeight: 600 }}>{totals.vat ?? '—'}</span>
             ) : (

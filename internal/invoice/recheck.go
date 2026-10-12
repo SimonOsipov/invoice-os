@@ -11,7 +11,7 @@ import (
 )
 
 // Rechecker re-checks, tenant by tenant, the invoices a rule-set version covers once its start
-// date arrives. It lives here, not in internal/reconciliation, so that package never imports
+// date arrives, and the invoices a pending custom-rule revision covers. It lives here, not in internal/reconciliation, so that package never imports
 // internal/invoice (import cycle through internal/approval's tests). Pool must be the invoice_app pool.
 type Rechecker struct {
 	Pool    *pgxpool.Pool

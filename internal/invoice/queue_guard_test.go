@@ -130,3 +130,64 @@ func TestQueueGuard_BatchPendingReadIsConstantInBatchSize(t *testing.T) {
 		}
 	}
 }
+
+func TestQueueGuard_DisabledAndDeletedRevisionsBlockNothing(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-06 guard born marked")
+	gate := f.gate(t, start04Wrapped(t, f.app, nil, nil))
+	ids := make([]string, 3)
+	for i := range ids {
+		ids[i] = f.validatedOn(t, gate, f.entity, "E14-06-QG7-"+uuid.NewString(), true)
+	}
+	disabled := f.save(t, &f.entity, "error", false, "disabled from birth")
+	if _, err := f.store.Transition(f.member, ids[0], StatusQueued); err != nil {
+		t.Errorf("with a disabled revision: %v, want queued", err)
+	}
+	deleted := f.save(t, &f.entity, "error", false, "deleted soon")
+	if err := f.rules.Delete(f.admin, deleted.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if f.pending(t, disabled.RevisionID) || f.pending(t, deleted.RevisionID) {
+		t.Fatalf("a disabled or deleted revision is pending")
+	}
+	if _, err := f.store.Transition(f.member, ids[1], StatusQueued); err != nil {
+		t.Errorf("with a deleted rule's revisions: %v, want queued", err)
+	}
+	f.save(t, &f.entity, "error", true, "enabled error")
+	if _, err := f.store.Transition(f.member, ids[2], StatusQueued); !errors.Is(err, ErrRuleChangePending) {
+		t.Errorf("with an enabled error revision: %v, want ErrRuleChangePending", err)
+	}
+}
+
+func TestQueueGuard_BatchFirmRevisionSkipsEveryClientOfItsTenantOnly(t *testing.T) {
+	f1 := newCRFixture(t, "ENGI-14-06 guard batch firm t1")
+	f2 := newCRFixture(t, "ENGI-14-06 guard batch firm t2")
+	b := f1.otherEntity(t, "client B")
+	gate := f1.gate(t, start04Wrapped(t, f1.app, nil, nil))
+	onA := f1.validatedOn(t, gate, f1.entity, "E14-06-QG8A", true)
+	onB := f1.validatedOn(t, gate, b, "E14-06-QG8B", true)
+	other := f2.validatedOn(t, f2.gate(t, start04Wrapped(t, f2.app, nil, nil)), f2.entity, "E14-06-QG8T2", true)
+	f1.save(t, nil, "error", true, "firm rule")
+
+	res, err := gateSubmitter(t, f1.app).BatchSubmit(f1.member, BatchSubmitInput{InvoiceIDs: []string{onA, onB}, IdempotencyKey: uuid.NewString()})
+	if err != nil {
+		t.Fatalf("BatchSubmit: %v", err)
+	}
+	if len(res.Results) != 2 {
+		t.Fatalf("%d results, want 2", len(res.Results))
+	}
+	for _, it := range res.Results {
+		if it.Enqueued || it.Reason != "rule_change_pending" {
+			t.Errorf("%+v, want skipped with rule_change_pending", it)
+		}
+	}
+	res, err = gateSubmitter(t, f2.app).BatchSubmit(f2.member, BatchSubmitInput{InvoiceIDs: []string{other}, IdempotencyKey: uuid.NewString()})
+	if err != nil || len(res.Results) != 1 || !res.Results[0].Enqueued {
+		t.Errorf("tenant 2 batch = %+v, %v, want enqueued despite tenant 1's firm revision", res, err)
+	}
+
+	f1.must(t, gate)
+	res, err = gateSubmitter(t, f1.app).BatchSubmit(f1.member, BatchSubmitInput{InvoiceIDs: []string{onA, onB}, IdempotencyKey: uuid.NewString()})
+	if err != nil || len(res.Results) != 2 || !res.Results[0].Enqueued || !res.Results[1].Enqueued {
+		t.Errorf("after the pass marked the revision: %+v, %v, want both enqueued", res, err)
+	}
+}

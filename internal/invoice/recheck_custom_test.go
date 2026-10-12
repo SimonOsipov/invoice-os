@@ -387,3 +387,112 @@ func TestRecheckCustomRules_WarningToErrorDemotesAnInvoiceHoldingTheWarning(t *t
 		t.Errorf("status %s cause %v, want draft caused by %s", f.status(t, id), revision, errRev.RevisionID)
 	}
 }
+
+func TestRecheckCustomRules_LatestBlockingRevisionIsTheCause(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-06 latest")
+	gate := f.gate(t, start04Wrapped(t, f.app, nil, nil))
+	id := f.validatedOn(t, gate, f.entity, "E14-06-LATEST", false)
+	r1 := f.save(t, &f.entity, "error", true, "email needed") // fails the invoice
+	r2, err := f.rules.Create(f.admin, customrule.RuleInput{EntityID: &f.entity, Type: "required", Target: "buyer.telephone",
+		Params: json.RawMessage(`{}`), Severity: "error", Message: "phone needed", Enabled: true}) // fails it too, later
+	if err != nil {
+		t.Fatalf("save R2: %v", err)
+	}
+
+	f.must(t, gate)
+	_, revision := f.causes(t, id)
+	if revision == nil || *revision != r2.RevisionID {
+		t.Errorf("cause = %v, want the latest blocking revision %s, not %s", revision, r2.RevisionID, r1.RevisionID)
+	}
+	if f.pending(t, r1.RevisionID) || f.pending(t, r2.RevisionID) {
+		t.Errorf("a revision is still pending after the pass")
+	}
+}
+
+func TestRecheckCustomRules_WarningViolationNamesNoCustomCause(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-06 warning cause")
+	gate := f.gate(t, start04Wrapped(t, f.app, nil, nil))
+	id := f.validatedOn(t, gate, f.entity, "E14-06-WCAUSE", false)
+	rule := f.save(t, &f.entity, "error", true, "email needed") // R1, still pending
+	f.edit(t, rule, &f.entity, "warning", true)                 // the rule now only warns
+	if !f.pending(t, rule.RevisionID) {
+		t.Fatalf("R1 is not pending; the case needs a pending error revision")
+	}
+	if _, err := f.super.Exec(context.Background(), `UPDATE invoices SET vat = '1.00' WHERE id = $1`, id); err != nil {
+		t.Fatalf("break a golden rule: %v", err)
+	}
+
+	f.must(t, gate)
+	if f.status(t, id) != StatusDraft {
+		t.Fatalf("status = %s, want draft (golden block)", f.status(t, id))
+	}
+	if version, revision := f.causes(t, id); version != nil || revision != nil {
+		t.Errorf("causes = %v / %v, want both NULL: the pending revision's rule only warned", version, revision)
+	}
+}
+
+func TestRecheckCustomRules_RepeatPassAddsNoSecondDemotion(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-06 repeat")
+	gate := f.gate(t, start04Wrapped(t, f.app, nil, nil))
+	id := f.validatedOn(t, gate, f.entity, "E14-06-REPEAT", false)
+	f.save(t, &f.entity, "error", true, "email needed")
+	if res := f.must(t, gate); res.Demoted != 1 {
+		t.Fatalf("first pass demoted %d, want 1", res.Demoted)
+	}
+	f.save(t, nil, "error", true, "another pending rule")
+
+	res := f.must(t, gate)
+	if res.Pending != 1 || res.Examined != 0 || res.Demoted != 0 {
+		t.Errorf("second pass = %+v, want pending 1, examined 0, demoted 0", res)
+	}
+	if n := mustCount(t, f.super, `SELECT count(*) FROM invoice_status_history WHERE invoice_id = $1 AND from_status = 'validated' AND to_status = 'draft'`, id); n != 1 {
+		t.Errorf("%d draft history rows, want 1", n)
+	}
+	if n := mustCount(t, f.super,
+		`SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND event = 'invoice.validated' AND payload->>'id' = $2 AND payload->>'outcome' = 'demoted'`,
+		f.tenant, id); n != 1 {
+		t.Errorf("%d demotion audit rows, want 1", n)
+	}
+}
+
+func TestRecheckCustomRules_NothingPendingIsOneQuery(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-06 one query")
+	gate := f.gate(t, start04Wrapped(t, f.app, nil, nil))
+	f.validatedOn(t, gate, f.entity, "E14-06-ONEQ", false)
+	f.save(t, nil, "warning", true, "born marked")
+	traced, rec := tracedAppPool(t)
+
+	rec.reset()
+	if _, err := RecheckCustomRules(context.Background(), traced, f.store, gate, f.tenant); err != nil {
+		t.Fatalf("RecheckCustomRules: %v", err)
+	}
+	if n := len(rec.mentioning("custom_rule_revisions")); n != 1 {
+		t.Errorf("%d statements against custom_rule_revisions, want 1", n)
+	}
+	if got := rec.mentioning("FROM invoices"); len(got) != 0 {
+		t.Errorf("statements against invoices with nothing pending: %v", got)
+	}
+}
+
+func TestRechecker_DB_OutageInOneTenantLeavesItPendingAndMarksTheOther(t *testing.T) {
+	f1 := newCRFixture(t, "ENGI-14-06 outage t1")
+	f2 := newCRFixture(t, "ENGI-14-06 outage t2")
+	id := f1.validatedOn(t, f1.gate(t, start04Wrapped(t, f1.app, nil, nil)), f1.entity, "E14-06-OUT2", false)
+	r1 := f1.save(t, &f1.entity, "error", true, "email needed")
+	r2 := f2.save(t, nil, "error", true, "no invoices to check")
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	t.Cleanup(down.Close)
+	r := &Rechecker{Pool: f1.app, Store: f1.store, Gate: NewGate(f1.store, NewValidator(down.URL, gapiS2SToken, nil)),
+		Tenants: func(context.Context) ([]string, error) { return []string{f1.tenant, f2.tenant}, nil }}
+
+	err := r.RunCustomOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), f1.tenant) || strings.Contains(err.Error(), f2.tenant) {
+		t.Errorf("err = %v, want it to name tenant 1 only", err)
+	}
+	if !f1.pending(t, r1.RevisionID) || f1.status(t, id) != StatusValidated {
+		t.Errorf("tenant 1 after its outage: pending %v status %s, want pending and validated", f1.pending(t, r1.RevisionID), f1.status(t, id))
+	}
+	if f2.pending(t, r2.RevisionID) {
+		t.Errorf("tenant 2's revision is still pending after the tick")
+	}
+}

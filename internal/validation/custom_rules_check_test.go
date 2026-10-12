@@ -2,6 +2,8 @@ package validation
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -207,6 +209,7 @@ func TestCheckCustomRule_FaultNamesTheRootCause(t *testing.T) {
 	}{
 		{"cel", checkBody(TypeCEL, `{"expr":"invoice.total > 5"}`), "the rule does not evaluate: no such key: total"},
 		{"when", when, "the rule does not evaluate: no such key: buyer"},
+		{"cel on the sample only", checkBody(TypeCEL, `{"expr":"has(invoice.buyer) ? invoice.buyer.type == 'B2B' : true"}`), "the rule does not evaluate: no such key: type"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -244,6 +247,49 @@ func TestCheckCustomRule_FaultTextHasNoInternals(t *testing.T) {
 				if strings.Contains(got, bad) {
 					t.Errorf("error %q holds %q", got, bad)
 				}
+			}
+		})
+	}
+}
+
+func TestCheckCustomRule_RefusalTextsAreExact(t *testing.T) {
+	with := func(b map[string]any, k string, v any) map[string]any { b[k] = v; return b }
+	cases := []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{"cel does not compile", checkBody(TypeCEL, `{"expr":"invoice.total >"}`), "params.expr must compile to a boolean expression"},
+		{"cel is not boolean", checkBody(TypeCEL, `{"expr":"invoice.total + 1"}`), "params.expr must compile to a boolean expression"},
+		{"regex does not compile", checkBody(TypeFormat, `{"pattern":"("}`), "params.pattern does not compile"},
+		{"severity info", with(checkBody(TypeRequired, `{}`), "severity", "info"), "severity must be error or warning"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := checkError(t, c.body); got != c.want {
+				t.Errorf("error = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRootCause(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"no wrapper", errors.New("no such key: total"), "no such key: total"},
+		{"prefix on a bare error", errors.New("validation: bare"), "bare"},
+		{"deep chain", fmt.Errorf("validation: a: %w", fmt.Errorf("validation: b: %w", errors.New("c"))), "c"},
+		{"root holds validation: inside", fmt.Errorf("outer: %w", errors.New("no such key: validation: x")), "no such key: validation: x"},
+		{"root with a leading prefix once", fmt.Errorf("w: %w", errors.New("validation: validation: x")), "validation: x"},
+		{"empty text", fmt.Errorf("w: %w", errors.New("")), ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := rootCause(c.err); got != c.want {
+				t.Errorf("rootCause = %q, want %q", got, c.want)
 			}
 		})
 	}

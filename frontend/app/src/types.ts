@@ -521,7 +521,7 @@ export type PlatformCtx = {
   toggleConnector: (id: ConnectorId) => void
   saveConnectorMapping: (id: ConnectorId, rows: FieldMapRow[]) => void
   // Rules screen. There is deliberately no editCustomRule/disableGoldenRule pair:
-  // a tenant may adopt, switch off and remove its OWN rules, and may do nothing at
+  // a tenant may switch off and remove its OWN rules, and may do nothing at
   // all to an inherited one.
   openRule: (key: string) => void
   closeRule: () => void

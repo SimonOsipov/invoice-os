@@ -168,6 +168,31 @@ describe('RulesView, golden set', () => {
     for (const gone of ['Suggested for you', 'NG-MBS', 'v8', 'Add as custom rule']) expect(text).not.toContain(gone)
   })
 
+  it('a row shows the server type, target, severity and message; an empty target reads whole invoice', async () => {
+    await mount(
+      fakeFetch({
+        golden: goldenPayload({ rules: [golden('g-1', { type: 'enum', target: 'currency', severity: 'info' }), golden('g-2', { target: '', severity: 'warning' })] }),
+        custom: [],
+      }),
+    )
+    const cells = (i: number) => [...document.querySelectorAll('.pf-row')[i].children].map((c) => c.textContent)
+    expect(document.querySelectorAll('.pf-row')).toHaveLength(2)
+    expect(cells(0)).toEqual(['g-1', 'enum', 'currency', 'INFO', 'GOLDEN', 'g-1 message', 'LOCKED'])
+    expect(cells(1)).toEqual(['g-2', 'required', 'whole invoice', 'WARN', 'GOLDEN', 'g-2 message', 'LOCKED'])
+  })
+
+  it('the group headers and the rail and table footers read as written', async () => {
+    await mount(fakeFetch())
+    expect(screen.getByText('INHERITED · GOLDEN RULESET v4')).toBeTruthy()
+    expect(screen.getByText('CUSTOM · Adaeze Ventures')).toBeTruthy()
+    expect(screen.getByText('Published and maintained by ASComply. New versions arrive automatically — you never edit these.')).toBeTruthy()
+    const footer = screen.getByText(/^Custom rules evaluate after the golden ruleset/)
+    expect(footer.textContent).toContain('A golden rule can never be disabled or edited.')
+    expect(footer.style.padding).toBe('12px 16px')
+    expect(footer.style.lineHeight).toBe('1.5')
+    expect(footer.style.background).toBe('')
+  })
+
   it('a golden row opens its rule; the switch click does not open the row', async () => {
     const f = fakeFetch()
     const { ctx } = await mount(f)
@@ -188,13 +213,13 @@ describe('RulesView, custom group', () => {
       ['message of r-firm', 'FIRM'],
       ['message of r-a', 'CLIENT'],
     ])
-    a.view.unmount()
-
-    await mount(f, { activeEntity: { id: B, name: 'Bee Ltd' }, active: { short: 'Bee', initials: 'B', tin: '', entityId: B } })
+    a.view.rerender(<RulesView ctx={ctxOf(f, { activeEntity: { id: B, name: 'Bee Ltd' }, active: { short: 'Bee', initials: 'B', tin: '', entityId: B } })} />)
     expect(customRows()).toEqual([
       ['message of r-firm', 'FIRM'],
       ['message of r-b', 'CLIENT'],
     ])
+    expect(screen.getByText('GOLDEN v4 + 2 CUSTOM')).toBeTruthy()
+    expect(reads(f, '/custom-rules'), 'the swap is a filter, not a refetch').toHaveLength(1)
   })
 
   it('an in-house workspace labels every custom rule CUSTOM', async () => {
@@ -210,6 +235,15 @@ describe('RulesView, custom group', () => {
 })
 
 describe('RulesView, switch', () => {
+  it('the switch mirrors the rule: aria-checked, track tone and knob travel follow enabled', async () => {
+    await mount(fakeFetch({ custom: [custom('on', null), custom('off', null, { enabled: false })] }))
+    const on = screen.getByRole('switch', { name: 'Disable custom:on' })
+    const off = screen.getByRole('switch', { name: 'Enable custom:off' })
+    expect([on.getAttribute('aria-checked'), off.getAttribute('aria-checked')]).toEqual(['true', 'false'])
+    expect([on.style.background, off.style.background]).toEqual(['var(--action)', 'var(--line-3)'])
+    expect([(on.firstElementChild as HTMLElement).style.transform, (off.firstElementChild as HTMLElement).style.transform]).toEqual(['translateX(14px)', 'translateX(0)'])
+  })
+
   it('rulesView_switchSendsAFullPutAndWaits', async () => {
     let release!: (r: CustomRule) => void
     const f = fakeFetch({ write: () => new Promise<CustomRule>((res) => (release = res)) })
@@ -305,6 +339,38 @@ describe('RulesView, remove', () => {
     expect(screen.getByText('Custom rule · FIRM-WIDE · runs after the golden ruleset')).toBeTruthy()
   })
 
+  it('a click on a custom row opens its key; no key and an unknown key open no drawer', async () => {
+    const { ctx } = await mount(fakeFetch())
+    fireEvent.click(screen.getByText('message of r-a'))
+    expect(ctx.openRule).toHaveBeenCalledWith(RA.key)
+    expect(screen.getAllByText('LOCKED'), 'control: the view rendered').not.toHaveLength(0)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    cleanup()
+
+    await mount(fakeFetch(), { openRuleKey: 'no.such.rule' })
+    expect(screen.getAllByText('LOCKED'), 'control: the view rendered').not.toHaveLength(0)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('a remove drops the row once the refetch no longer holds it', async () => {
+    let rules = [FIRM, RA]
+    const f = vi.fn(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'DELETE') {
+        rules = [FIRM]
+        return undefined
+      }
+      if (url.endsWith('/custom-rules')) return { custom_rules: rules }
+      return goldenPayload()
+    })
+    await mount(f as unknown as FetchMock, { openRuleKey: RA.key })
+    const messages = () => [...document.querySelectorAll('.pf-row')].slice(3).map((r) => r.children[5].textContent)
+    expect(messages()).toEqual(['message of r-firm', 'message of r-a'])
+
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Remove rule'))
+    await waitFor(() => expect(messages()).toEqual(['message of r-firm']))
+    expect(screen.getByText('GOLDEN v4 + 1 CUSTOM')).toBeTruthy()
+  })
+
   it('a key of another client opens no drawer', async () => {
     await mount(fakeFetch(), { openRuleKey: RB.key })
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -378,9 +444,24 @@ describe('RulesView, load states', () => {
     expect(await screen.findByText(/^INHERITED/)).toBeTruthy()
   })
 
-  it('a failed custom read shows the error too', async () => {
-    render(<RulesView ctx={ctxOf(fakeFetch({ custom: new ApiError('http', 'custom rules are down', 500) }))} />)
+  it('a failed custom read shows the error too; retry refetches only the custom list', async () => {
+    let fail = true
+    const f = vi.fn(async (url: string) => {
+      if (url.endsWith('/custom-rules')) {
+        if (fail) throw new ApiError('http', 'custom rules are down', 500)
+        return { custom_rules: [FIRM] }
+      }
+      return goldenPayload()
+    })
+    render(<RulesView ctx={ctxOf(f)} />)
     expect(await screen.findByText('custom rules are down')).toBeTruthy()
+    expect(screen.queryByText(/^INHERITED/)).toBeNull()
+
+    fail = false
+    fireEvent.click(screen.getByText('Retry'))
+    expect(await screen.findByText(/^INHERITED/)).toBeTruthy()
+    expect(screen.getByText('message of r-firm')).toBeTruthy()
+    expect(f.mock.calls.filter(([u]) => u.endsWith('/api/validation/v1/rules')), 'golden was not refetched').toHaveLength(1)
   })
 
   it('no gateway shows the empty state and fetches nothing', () => {
@@ -427,8 +508,37 @@ describe('RulesView, reskin pins', () => {
     expect(btn.style.cursor).toBe('not-allowed')
   })
 
-  it('the empty custom box keeps its padding', async () => {
+  it('the empty custom box keeps its padding and line height', async () => {
     await mount(fakeFetch({ custom: [] }))
-    expect(screen.getByText(/^No custom rules yet/).style.padding).toBe('18px 16px')
+    const box = screen.getByText(/^No custom rules yet/)
+    expect(box.style.padding).toBe('18px 16px')
+    expect(box.style.lineHeight).toBe('1.55')
+  })
+
+  it('headings carry no inline weight; the header row wraps and its count does not shrink', async () => {
+    await mount(fakeFetch())
+    const h1 = screen.getByRole('heading', { name: 'Rules' })
+    const inForce = screen.getByText('Rules in force')
+    expect(inForce.classList.contains('card-title')).toBe(true)
+    for (const el of [h1, inForce]) {
+      expect(el.style.fontWeight).toBe('')
+      expect(el.style.fontFamily).toBe('')
+    }
+    const row = h1.parentElement!.parentElement!
+    expect(row.style.flexWrap).toBe('wrap')
+    expect(row.style.gap).toBe('20px')
+    expect(h1.parentElement!.style.minWidth).toBe('0')
+    const count = row.lastElementChild as HTMLElement
+    expect(count.textContent).toBe('5 RULES')
+    expect(count.style.flex).toBe('0 0 auto')
+    expect(count.style.letterSpacing).toBe('')
+  })
+
+  it('the version tags are 4px pills and the version row gaps 10px', async () => {
+    await mount(fakeFetch())
+    const tag = screen.getByText('IN USE').parentElement as HTMLElement
+    expect(tag.style.borderRadius).toBe('var(--radius-sm)')
+    expect((tag.parentElement as HTMLElement).style.gap).toBe('10px')
+    expect(screen.getByText('v4').style.flex).toBe('')
   })
 })

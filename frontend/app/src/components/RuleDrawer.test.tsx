@@ -204,6 +204,7 @@ describe('RuleDrawer', () => {
     expect.soft(css(byOwnText(footer, 'OFF')).get('color')).toBe('var(--fg-3)')
     expect.soft(footer.textContent).not.toContain('LIVE')
     expect.soft(footer.textContent).not.toContain('ALWAYS ON')
+    expect([...footer.querySelectorAll('button')].map((b) => b.textContent), 'an off rule keeps Remove').toEqual(['Remove rule'])
   })
 
   it('Remove rule is disabled with the reason for a non-admin, and while its request runs', () => {

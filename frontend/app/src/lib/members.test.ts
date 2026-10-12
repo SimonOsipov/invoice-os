@@ -825,9 +825,8 @@ describe('isProtectedAdmin (T2.40–T2.44, §9)', () => {
 // survived the whole T2 suite. The mutation it kills is named in each spec's comment.
 
 describe('reducer misses — the leaves T2.27 does not reach (QA19–QA20, §15.1)', () => {
-  // AC#6 covers a miss for ALL FIVE reducers, but T2.27 covers `replaceMember` alone. The
-  // superseded rules.ts:253-268 reading (`return rules as CustomRule[]`, the input
-  // REFERENCE) survives the entire T2 suite in the other four. These are the guards.
+  // AC#6 covers a miss for ALL FIVE reducers, but T2.27 covers `replaceMember` alone.
+  // These are the guards for the other four.
 
   it('addMembers allocates a new array even when nothing is added (QA19)', () => {
     const list = firm()

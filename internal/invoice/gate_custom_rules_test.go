@@ -568,3 +568,44 @@ func TestGate_DB_ValidateBatchReevaluatesOnceAndAborts(t *testing.T) {
 	}
 	f2.assertUntouched(t, c.ID)
 }
+
+func TestApplyValidation_DB_RanRevisionNoLongerCurrentIsRefused(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-05 ran not current")
+	rule := f.save(t, nil, "error", true, "firm rule")
+	inv := f.invoice(t, "ENGI-14-05-GONE")
+	got, err := f.store.Get(f.member, inv.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	fp := contentFingerprint(got, got.LineItems)
+	versionID := seedRuleSetVersionID(t, f.super)
+	f.edit(t, rule, nil, "error", false) // disabled after the verdict ran
+
+	blocked := []Violation{{RuleKey: rule.Key, Severity: "error", Message: "firm rule"}}
+	if _, err := f.store.applyValidation(f.member, inv.ID, blocked, versionID, []string{rule.RevisionID}, fp); !errors.Is(err, ErrRulesChanged) {
+		t.Fatalf("applyValidation with a disabled rule's revision = %v, want ErrRulesChanged", err)
+	}
+	f.assertUntouched(t, inv.ID)
+}
+
+func TestGate_DB_RuleDisabledDuringValidationIsReevaluated(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-05 disabled during")
+	rule := f.save(t, nil, "error", true, "firm rule")
+	inv := f.invoice(t, "ENGI-14-05-DISABLED")
+	srv := start04Wrapped(t, f.app, func(call int) {
+		if call == 1 {
+			f.edit(t, rule, nil, "error", false)
+		}
+	}, nil)
+
+	got, _, err := f.gate(t, srv).Validate(f.member, inv.ID)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if n := srv.calls(); n != 2 || got.Status != StatusValidated {
+		t.Errorf("calls = %d, status = %q, want 2 and validated under the rules now in force", n, got.Status)
+	}
+	if _, ok := violationOf(violationsOf(t, got), rule.Key); ok {
+		t.Errorf("violations = %s, want none from the disabled rule", got.Violations)
+	}
+}

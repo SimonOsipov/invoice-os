@@ -2298,7 +2298,7 @@ func (s *Store) CustomRulesFor(ctx context.Context, entityIDs []string) (CustomR
 }
 
 // applyValidation is ApplyValidation with the custom-rule revision ids the verdict ran (D27):
-// it refuses, writing nothing, when a current rule of the invoice's client is not among them.
+// it refuses, writing nothing, unless they are exactly the invoice's current rules.
 func (s *Store) applyValidation(ctx context.Context, id string, vs []Violation, ruleSetVersionID string, customIDs []string, evaluatedFingerprint string) (Invoice, error) {
 	if customIDs == nil {
 		customIDs = []string{}
@@ -2376,6 +2376,11 @@ func (s *Store) applyValidation(ctx context.Context, id string, vs []Violation, 
 		current, err := customrule.CurrentTx(ctx, tx, []string{locked.EntityID})
 		if err != nil {
 			return err
+		}
+		// Equality, not a subset: a ran revision that is no longer current (disabled, deleted,
+		// moved or superseded) stamps a verdict nothing would ever re-check.
+		if len(current) != len(ran) {
+			return ErrRulesChanged
 		}
 		for _, r := range current {
 			if !ran[r.RevisionID] {

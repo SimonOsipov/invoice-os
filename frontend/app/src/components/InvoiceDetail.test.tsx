@@ -7236,6 +7236,20 @@ describe('InvoiceDetail demotion banner and race 409 (ENGI-15-08)', () => {
     expect(screen.queryByTestId('detail-demotion-banner')).toBeNull()
   })
 
+  it('invoiceDetail_demotionBannerKeepsTheWireText', async () => {
+    const message = 'PO \u201cnumber\u201d is "required" & <b>long</b> ' + 'x'.repeat(300)
+    const custom = hist('validated', 'draft', { custom_rule_cause: { custom_rule_id: 'cr-1', revision: 2, revision_id: 'rev-2', key: 'custom:cr-1', message } })
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft' }), [hist(null, 'draft'), hist('draft', 'validated'), custom])
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect((await screen.findByTestId('detail-demotion-banner')).textContent).toBe(`Sent back to draft when the custom rule \u201c${message}\u201d changed.`)
+    cleanup()
+
+    const undated = hist('validated', 'draft', { cause: { ...cause, effective_from: null } })
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft' }), [hist(null, 'draft'), hist('draft', 'validated'), undated])
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    expect((await screen.findByTestId('detail-demotion-banner')).textContent).toBe('Sent back to draft when rule set v5 took effect.')
+  })
+
   // Server sentence: ErrRulesChanged in internal/invoice/handlers.go (409 mapping).
   it('invoiceDetail_revalidateRaceShowsTheServerSentence', async () => {
     const SENTENCE = 'the rules changed during validation; validate again'

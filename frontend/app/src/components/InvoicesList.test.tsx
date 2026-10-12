@@ -2619,6 +2619,33 @@ describe('BUG-17-02 register status markers', () => {
     expect(testids).toEqual(['invoice-status-badge', 'invoice-error-marker', 'invoice-demotion-marker'])
   })
 
+  it('invoicesList_demotionMarkerSurvivesOddWireRows', async () => {
+    const message = 'PO \u201cnumber\u201d is "required" ' + 'x'.repeat(300)
+    const custom = row({
+      id: 'dem-q',
+      invoice_number: 'INV-DEM-Q',
+      status: 'draft',
+      demotion: { changed_at: '2027-01-01T00:00:00Z', cause: null, custom_rule_cause: { custom_rule_id: 'cr-1', revision: 1, revision_id: 'rev-1', key: 'custom:cr-1', message } },
+    })
+    const undated = row({
+      id: 'dem-u',
+      invoice_number: 'INV-DEM-U',
+      status: 'draft',
+      demotion: { changed_at: '2027-01-01T00:00:00Z', cause: { rule_set_version: 5, rule_set_version_id: 'rsv-5', effective_from: null }, custom_rule_cause: null },
+    })
+    const omitted = row({ id: 'dem-o', invoice_number: 'INV-DEM-O', status: 'draft' })
+    delete (omitted as Partial<InvoiceRecord>).demotion
+    mockFetchSequence([listResponse([custom, undated, omitted], { limit: 50, offset: 0, total: 3 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-DEM-O')
+
+    const [rq, ru, ro] = screen.getAllByTestId('invoice-row')
+    expect(within(rq).getByTestId('invoice-demotion-marker').getAttribute('title')).toBe(`Sent back to draft when the custom rule \u201c${message}\u201d changed.`)
+    expect(within(ru).getByTestId('invoice-demotion-marker').getAttribute('title')).toBe('Sent back to draft when rule set v5 took effect.')
+    expect(within(ro).queryByTestId('invoice-demotion-marker')).toBeNull()
+  })
+
   it('registerMarkers_gatesAreUnchanged', async () => {
     const warnOnly = row({
       id: 'reg-warn-1',

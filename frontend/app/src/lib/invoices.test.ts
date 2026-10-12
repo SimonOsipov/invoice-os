@@ -5678,6 +5678,9 @@ describe('demotion (ENGI-15-08, D11)', () => {
     const custom = change(2, 'validated', 'draft', { custom_rule_cause: CUSTOM_CAUSE })
     expect(latestDemotion([genesis, validated, custom], 'draft')).toEqual({ changed_at: at(2), cause: null, custom_rule_cause: CUSTOM_CAUSE })
     expect(latestDemotion([], 'draft')).toBeNull()
+    const laterCustom = change(4, 'validated', 'draft', { custom_rule_cause: CUSTOM_CAUSE })
+    const afterVersion = [genesis, validated, demoted, change(3, 'draft', 'validated'), laterCustom]
+    expect(latestDemotion(afterVersion, 'draft')).toEqual({ changed_at: at(4), cause: null, custom_rule_cause: CUSTOM_CAUSE })
   })
 
   it('latestDemotion_aNonDraftStatusIsNeverDemoted', () => {

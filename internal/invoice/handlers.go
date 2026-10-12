@@ -267,6 +267,7 @@ type listItem struct {
 	ApproveBlockedReason *string            `json:"approve_blocked_reason"`
 	CanSubmit            bool               `json:"can_submit"`
 	SubmitBlockedReason  *string            `json:"submit_blocked_reason"`
+	Demotion             *Demotion          `json:"demotion"`
 }
 
 // --- handlers ----------------------------------------------------------------

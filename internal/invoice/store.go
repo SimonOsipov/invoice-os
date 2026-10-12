@@ -1888,6 +1888,13 @@ type ListGateFacts struct {
 	// TransmitClear is the page's submit verdict. An absent id reads false -- fail closed.
 	TransmitClear map[string]bool
 	RulePending   map[string]bool
+	// Demotion is display copy for the list row, not a gate input.
+	Demotion map[string]Demotion
+}
+
+// latestDemotionsTx is a stub: it reads nothing yet.
+func latestDemotionsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]Demotion, error) {
+	return map[string]Demotion{}, nil
 }
 
 // RowFacts reads the list-row approval standing of a page of invoice ids, plus the

@@ -828,6 +828,18 @@ func TestCheckAI_ADueDateNeedsADueDateLabel(t *testing.T) {
 	}
 }
 
+func TestMergeAI_ADueDateNeedsTheLabelDirectlyBeforeIt(t *testing.T) {
+	pages := onePage(1, tok("Due Date: 14/02/2026  Invoice Date: 15/01/2026", 1, 0.10, 0.20, 0.90, 0.22))
+	if got, ok := checkAI("due_date", "2026-01-15", pages); ok {
+		t.Errorf("checkAI filed the issue date behind an earlier due-date label: %+v", got)
+	}
+
+	got := mergeWith([]FieldResult{mgMissing("due_date")}, map[string]any{"due_date": "2026-01-15"}, pages, nil)
+	if got[0].Value != nil && *got[0].Value == "2026-01-15" {
+		t.Errorf("due_date = %+v, want the issue date refused", got[0])
+	}
+}
+
 func TestMergeAI_ADueDateEchoingTheIssueDateIsRefused(t *testing.T) {
 	pages := onePage(1, tok("Invoice Date: 2026-07-14", 1, 0.10, 0.10, 0.50, 0.12))
 	engine := mgDueDateEngine()

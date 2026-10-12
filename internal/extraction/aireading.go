@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
 )
@@ -239,7 +240,7 @@ func checkAI(field, raw string, pages []TokenPage) (aiReading, bool) {
 
 	if field == "due_date" {
 		for _, occ := range occurrences {
-			if aiDueDateLabel.MatchString(occ.front) {
+			if endsWithLabel(aiDueDateLabel, occ.front) {
 				return aiReading{Value: value, Region: occ.region}, true
 			}
 		}
@@ -247,6 +248,17 @@ func checkAI(field, raw string, pages []TokenPage) (aiReading, bool) {
 	}
 
 	return aiReading{Value: value, Region: occurrences[0].region}, true
+}
+
+// endsWithLabel reports whether re's last match in front has only punctuation after it, so no
+// other label or value sits between the label and the value.
+func endsWithLabel(re *regexp.Regexp, front string) bool {
+	locs := re.FindAllStringIndex(front, -1)
+	if len(locs) == 0 {
+		return false
+	}
+	rest := front[locs[len(locs)-1][1]:]
+	return strings.IndexFunc(rest, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) < 0
 }
 
 // aiOccurrences walks every run of consecutive words inside each token's own line (never joining

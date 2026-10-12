@@ -1673,7 +1673,7 @@ func TestDocumentCreateInput_LinesWithoutAnInvoiceNumberQuarantineWhole(t *testi
 	}
 }
 
-// --- ENGI-08-04: the nine header fields and five line roles -----------------------------
+// --- the nine header fields and five line roles ---
 
 func TestReadingCreateInput_MapsTheNineNewHeaderFields(t *testing.T) {
 	ex := SettledExtraction{Fields: []extractedField{

@@ -446,7 +446,7 @@ func TestAliMergeCell_ANewRoleNotOnThePageIsRefused(t *testing.T) {
 	}
 }
 
-// Pins today's page-wide check (ENGI-08 D33): a category printed on row 1 backs row 2.
+// Pins today's page-wide check: a category printed on row 1 backs row 2.
 func TestAliMergeCell_ANewRolePrintedOnAnotherRowIsAccepted(t *testing.T) {
 	pages := onePage(1,
 		tok("Laptop 1 10.00 Standard", 1, 0.10, 0.10, 0.80, 0.12),

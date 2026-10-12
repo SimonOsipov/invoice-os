@@ -36,7 +36,7 @@ func ValueCheckQuestion(field, value string) jev.Question {
 	}
 }
 
-// valueCheckFields are the 8 header fields Jev was measured on (D10). The supplier pair is
+// valueCheckFields are the 8 header fields Jev was measured on. The supplier pair is
 // absent: invoice.Store overwrites it from the client entity. An AI-only field was never measured.
 var valueCheckFields = []string{"invoice_number", "issue_date", "buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total"}
 

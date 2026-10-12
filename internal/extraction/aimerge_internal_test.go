@@ -711,7 +711,7 @@ func TestMergeAI_TheCheckLeavesEngineDecidedAmountsAlone(t *testing.T) {
 	})
 }
 
-// --- ENGI-08-02: the nine AI-only header fields -------------------------------------------
+// --- the nine AI-only header fields ---
 
 func mgMissing(name string) FieldResult {
 	return FieldResult{Field: Field{Name: name, Reason: ReasonMissing}, Alternatives: []Field{}}
@@ -853,7 +853,7 @@ func TestMergeAI_ADueDateEchoingTheIssueDateIsRefused(t *testing.T) {
 	}
 }
 
-// --- ENGI-08-02 QA: adversarial cover for the nine AI-only fields ------------------------
+// --- adversarial cover for the nine AI-only fields ---
 
 var mgNewFieldPrints = []struct{ field, value, text string }{
 	{"due_date", "2026-08-13", "Due Date: 2026-08-13"},

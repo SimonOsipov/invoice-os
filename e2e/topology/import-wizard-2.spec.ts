@@ -138,7 +138,7 @@ function uniqueAiLinesPdfBytes(): Buffer {
   return Buffer.concat([AI_LINES_PDF, Buffer.from(`%e2e-${crypto.randomUUID()}\n`, 'utf8')])
 }
 
-// ENGI-08-05's deployed fixture (fxE2ECopies): header and lines AI markers on one page. Same recipe.
+// The NRS-fields deployed fixture (fxE2ECopies): header and lines AI markers on one page. Same recipe.
 const AI_NRS_PDF = readFileSync(join(DOCUMENT_FIXTURES, 'ai_nrs_invoice.pdf'))
 
 function uniqueAiNrsPdfBytes(): Buffer {

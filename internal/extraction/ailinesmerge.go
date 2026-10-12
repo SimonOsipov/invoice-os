@@ -59,7 +59,7 @@ func aliRoleReadings(role, raw string) []string {
 		}
 		return out
 	case LineRoleTaxCategory, LineRoleHSNCode, LineRoleISICCode, LineRoleSellersItemID, LineRolePriceUnit:
-		// Whitespace collapsed, case kept: two different codes never read as equal (ENGI-08 D8).
+		// Whitespace collapsed, case kept: two different codes never read as equal.
 		v := strings.Join(strings.Fields(raw), " ")
 		if v == "" || utf8.RuneCountInString(v) > 256 {
 			return nil

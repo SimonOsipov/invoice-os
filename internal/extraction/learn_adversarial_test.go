@@ -1314,7 +1314,7 @@ func TestLearnBoxlessRule_ACurrencyRuleIsLearnableFromANonCurrencyLabel(t *testi
 	}
 }
 
-// --- ENGI-08-02: an AI-only field teaches no rule (D7) ------------------------------------
+// --- an AI-only field teaches no rule ---
 
 func TestLearnRule_RefusesAnAIOnlyField(t *testing.T) {
 	anchor := rvAnchor("a", "Label", 0.10, 0.10, 0.30, 0.13)

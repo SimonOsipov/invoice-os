@@ -235,7 +235,7 @@ func clSeed(t *testing.T, ctx context.Context, number string) clFixture {
 	return clFixture{reqCtx: reqCtx, tenantID: tenantID, documentID: documentID, jobID: jobID, invoiceID: invoiceID}
 }
 
-// --- ENGI-08-02 / D7: an AI-only field teaches no rule ------------------------------------
+// --- an AI-only field teaches no rule ---
 
 func TestRLS_ADueDateCorrectionStoresNoRule(t *testing.T) {
 	ctx := t.Context()

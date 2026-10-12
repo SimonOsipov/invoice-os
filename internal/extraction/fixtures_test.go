@@ -108,7 +108,7 @@ var fxCorpus = []struct {
 	{fxChromeRegisterTwin, fxBuildChromeRegisterTwin},
 	// AIR-03-05's deployed-steering fixture: not corpus_-prefixed, outside every corpus_ ratchet.
 	{fxAISteered, fxBuildAISteeredInvoice},
-	// ENGI-08-05's NRS-fields fixture: outside every corpus_ ratchet.
+	// The NRS-fields fixture: outside every corpus_ ratchet.
 	{fxAINRS, fxBuildAINRSInvoice},
 	// AIR-04-04's deployed-unavailable fixture: outside every corpus_ ratchet.
 	{fxAIUnavailable, fxBuildAIUnavailableInvoice},
@@ -1792,7 +1792,7 @@ func fxBuildAISteeredInvoice() []byte {
 	return fxTextPage(fxAISteeredLines()...)
 }
 
-// --- the NRS-fields fixture (ENGI-08-05) --------------------------------------
+// --- the NRS-fields fixture ---
 
 // fxAINRS: header and lines markers on one page. Each marker carries one value its page never
 // prints (fxAINRSUnprintedState, fxAINRSUnprintedCategory), so the page check must refuse it (AC6).
@@ -4202,7 +4202,7 @@ func TestFixtures_AINRSPrintsEveryValueButTheTwoUnprinted(t *testing.T) {
 }
 
 // TestFixtures_AINRSMergesAsDesigned: the committed page and its decoded markers merge to the
-// designed outcome (D17, AC6).
+// designed outcome.
 func TestFixtures_AINRSMergesAsDesigned(t *testing.T) {
 	header, lines := fxAINRSSteered(t)
 	pages := rvCorpusPages(t, fxAINRS)

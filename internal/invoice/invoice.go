@@ -241,7 +241,7 @@ type LineItemInput struct {
 	BaseQuantity              *string
 }
 
-// TrimmedOrNil is the value trimmed, or nil when it is nil or blank (ENGI-07 D7).
+// TrimmedOrNil is the value trimmed, or nil when it is nil or blank.
 func TrimmedOrNil(v *string) *string {
 	if v == nil {
 		return nil

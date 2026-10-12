@@ -1427,7 +1427,7 @@ func TestRLS_ImportDocumentBatchHasNoHeaderRow(t *testing.T) {
 	}
 }
 
-// --- ENGI-08-04 --------------------------------------------------------------------------
+// --- NRS-field document reading ---
 
 // ndStoredNewFields reads back the new columns of one invoice and its first line.
 func ndStoredNewFields(t *testing.T, super *pgxpool.Pool, invoiceID string) (due, email, state, hsn *string) {

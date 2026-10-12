@@ -86,12 +86,19 @@ func TestCheckCustomRule_InvalidRulesAre422WithAReason(t *testing.T) {
 		{"cel does not compile", checkBody(TypeCEL, `{"expr":"invoice.total >"}`), "params.expr"},
 		{"when does not compile", with(checkBody(TypeRequired, `{}`), "when", "1 +"), "when"},
 		{"regex does not compile", checkBody(TypeFormat, `{"pattern":"("}`), "params.pattern"},
-		{"unknown type", checkBody("nope", `{}`), "type"},
+		{"unknown type", checkBody("nope", `{}`), "unknown rule type"},
 		{"severity info", with(checkBody(TypeRequired, `{}`), "severity", "info"), "severity"},
 		{"empty message", with(checkBody(TypeRequired, `{}`), "message", ""), "message"},
 		{"long message", with(checkBody(TypeRequired, `{}`), "message", strings.Repeat("x", 501)), "message"},
 		{"params not an object", checkBody(TypeRequired, `[]`), "params"},
 		{"unknown list", checkBody(TypeEnum, `{"list":"planets"}`), "params.list"},
+		{"whitespace message", with(checkBody(TypeRequired, `{}`), "message", "   "), "message"},
+		{"message of exactly 501 runes, multibyte", with(checkBody(TypeRequired, `{}`), "message", strings.Repeat("é", 501)), "message"},
+		{"params a string", checkBody(TypeRequired, `"x"`), "params"},
+		{"format without a pattern", checkBody(TypeFormat, `{}`), "params.pattern"},
+		{"cel without an expr", checkBody(TypeCEL, `{}`), "params.expr"},
+		{"empty when", with(checkBody(TypeRequired, `{}`), "when", ""), "when"},
+		{"faults on the sample invoice only", checkBody(TypeCEL, `{"expr":"has(invoice.buyer) ? invoice.buyer.type == 'B2B' : true"}`), "the rule does not evaluate"},
 		{"faults on the empty invoice", checkBody(TypeCEL, `{"expr":"invoice.supplier.tin.size() > 0"}`), "the rule does not evaluate"},
 	}
 	for _, c := range cases {
@@ -108,6 +115,9 @@ func TestCheckCustomRule_InvalidRulesAre422WithAReason(t *testing.T) {
 			}
 			if !strings.Contains(out.Error, c.want) {
 				t.Errorf("error = %q, want it to name %q", out.Error, c.want)
+			}
+			if c.want != "the rule does not evaluate" && strings.Contains(out.Error, "does not evaluate") {
+				t.Errorf("error = %q: a static refusal must come before the probe", out.Error)
 			}
 			for _, leak := range []string{"*validation.", "*json.", "*cel.", "goroutine"} {
 				if strings.Contains(out.Error, leak) {
@@ -134,5 +144,40 @@ func TestCheckCustomRule_MalformedAndOversizedBodies(t *testing.T) {
 	big := `{"message":"` + strings.Repeat("x", 33<<10) + `"}`
 	if rec := postCheck(t, big, h); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("33 KiB: status = %d, want 413", rec.Code)
+	}
+}
+
+func TestCheckCustomRule_AcceptsAMaxLengthMessageAndWarning(t *testing.T) {
+	ok := checkBody(TypeRequired, `{}`)
+	ok["message"] = strings.Repeat("é", 500)
+	ok["severity"] = "warning"
+	if rec := sendCheck(t, ok); rec.Code != http.StatusNoContent {
+		t.Errorf("500-rune warning message: status = %d, want 204 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckCustomRule_BodyCapIs32KiBInclusive(t *testing.T) {
+	h := map[string]string{headerS2SToken: checkToken}
+	pad := func(total int) string {
+		const frame = `{"message":""}`
+		return `{"message":"` + strings.Repeat("x", total-len(frame)) + `"}`
+	}
+	if rec := postCheck(t, pad(32<<10), h); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("exactly 32 KiB: status = %d, want 422 (past the cap, refused by the rule)", rec.Code)
+	}
+	if rec := postCheck(t, pad(32<<10+1), h); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("32 KiB + 1: status = %d, want 413", rec.Code)
+	}
+}
+
+func TestCheckCustomRule_ReasonLeaksNoStack(t *testing.T) {
+	rec := sendCheck(t, checkBody(TypeCEL, `{"expr":"invoice.supplier.tin.size() > 0"}`))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", rec.Code)
+	}
+	for _, leak := range []string{".go:", "goroutine", "panic", "runtime."} {
+		if strings.Contains(rec.Body.String(), leak) {
+			t.Errorf("body %q leaks %q", rec.Body.String(), leak)
+		}
 	}
 }

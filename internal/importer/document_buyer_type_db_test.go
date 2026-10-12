@@ -3,7 +3,6 @@ package importer
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -99,19 +98,11 @@ func btImportDocument(t *testing.T, super, app *pgxpool.Pool, tenantID, entityID
 }
 
 // btFailLookup makes a top-level SELECT on customers that reaches (tenantID, tin) raise, via a RESTRICTIVE policy
-// installed as the migrator; dropped on cleanup. The directory fill after Create is an INSERT and stays unaffected.
-func btFailLookup(t *testing.T, tenantID, tin string) {
+// installed as the superuser (the table owner is not needed); dropped on cleanup. The directory fill after Create
+// is an INSERT and stays unaffected.
+func btFailLookup(t *testing.T, pool *pgxpool.Pool, tenantID, tin string) (drop func()) {
 	t.Helper()
-	url := os.Getenv("DATABASE_MIGRATION_URL")
-	if url == "" {
-		t.Skip("lookup-failure test skipped: set DATABASE_MIGRATION_URL")
-	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, url)
-	if err != nil {
-		t.Fatalf("connect migrator: %v", err)
-	}
-	t.Cleanup(pool.Close)
 	name := "bt_lookup_fail_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
 	for _, q := range []string{
 		fmt.Sprintf(`CREATE FUNCTION %s(t uuid, n text) RETURNS boolean LANGUAGE plpgsql AS $f$
@@ -125,10 +116,12 @@ func btFailLookup(t *testing.T, tenantID, tin string) {
 			t.Fatalf("install lookup-failure policy: %v", err)
 		}
 	}
-	t.Cleanup(func() {
+	drop = func() {
 		_, _ = pool.Exec(context.Background(), fmt.Sprintf(`DROP POLICY IF EXISTS %s ON customers`, name))
 		_, _ = pool.Exec(context.Background(), fmt.Sprintf(`DROP FUNCTION IF EXISTS %s(uuid, text)`, name))
-	})
+	}
+	t.Cleanup(drop)
+	return drop
 }
 
 func TestRLS_ADocumentImportTakesTheBuyerTypeFromTheDirectory(t *testing.T) {
@@ -266,7 +259,7 @@ func TestRLS_ADocumentImportLookupFailureFailsTheBatch(t *testing.T) {
 	const tin = "11111111-0013"
 	btRecord(t, super, tenantID, tin, btPtr(btB2B))
 	documentID := btDocument(t, super, tenantID, tin, "BT-09-INV")
-	btFailLookup(t, tenantID, tin)
+	btFailLookup(t, super, tenantID, tin)
 
 	_, err := newTestService(app).ImportDocument(sxIdentity(context.Background(), tenantID), entityID, documentID)
 	if err == nil || !strings.Contains(err.Error(), btLookupRefused) {
@@ -287,7 +280,7 @@ func TestRLS_ASuppliedNumberLookupFailureFilesNothing(t *testing.T) {
 	const tin = "11111111-0014"
 	btRecord(t, super, tenantID, tin, btPtr(btB2B))
 	documentID := btDocument(t, super, tenantID, tin, "")
-	btFailLookup(t, tenantID, tin)
+	btFailLookup(t, super, tenantID, tin)
 
 	_, err := newTestService(app).SupplyInvoiceNumber(sxIdentity(context.Background(), tenantID), entityID, documentID, "BT-10-INV")
 	if err == nil || !strings.Contains(err.Error(), btLookupRefused) {
@@ -296,4 +289,105 @@ func TestRLS_ASuppliedNumberLookupFailureFilesNothing(t *testing.T) {
 	if n := countInvoicesCitingDocument(t, super, documentID); n != 0 {
 		t.Errorf("invoices citing the document = %d, want 0", n)
 	}
+}
+
+func TestRLS_ABuyerTypeFillSurvivesWhitespaceAroundTheTINOnBothRoutes(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "BT-11 tenant")
+	entityID := seedEntity(t, super, tenantID, "BT-11 entity")
+	const tin = "11111111-0015"
+	btRecord(t, super, tenantID, tin, btPtr(btB2G))
+
+	imported := btDocument(t, super, tenantID, " \t"+tin+"  ", "BT-11-IMP")
+	btWantKind(t, "import, padded TIN", btImportDocument(t, super, app, tenantID, entityID, imported), btB2G)
+
+	supplied := btDocument(t, super, tenantID, "  "+tin+" ", "")
+	if _, err := newTestService(app).SupplyInvoiceNumber(sxIdentity(context.Background(), tenantID), entityID, supplied, "BT-11-SUP"); err != nil {
+		t.Fatalf("SupplyInvoiceNumber: %v", err)
+	}
+	btWantKind(t, "supplied number, padded TIN", btKind(t, super, supplied), btB2G)
+}
+
+// A tenant's own record with no buyer type must not fall through to another tenant's typed record.
+func TestRLS_ARecordWithoutABuyerTypeNeverFallsThroughToAnotherTenantsOnBothRoutes(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA := seedTenant(t, super, "BT-12 tenant A")
+	tenantB := seedTenant(t, super, "BT-12 tenant B")
+	entityA := seedEntity(t, super, tenantA, "BT-12 entity A")
+	const tin = "11111111-0016"
+	btRecord(t, super, tenantA, tin, nil)
+	btRecord(t, super, tenantB, tin, btPtr(btB2G))
+
+	imported := btDocument(t, super, tenantA, tin, "BT-12-IMP")
+	btWantNoKind(t, "import", btImportDocument(t, super, app, tenantA, entityA, imported))
+
+	supplied := btDocument(t, super, tenantA, tin, "")
+	if _, err := newTestService(app).SupplyInvoiceNumber(sxIdentity(context.Background(), tenantA), entityA, supplied, "BT-12-SUP"); err != nil {
+		t.Fatalf("SupplyInvoiceNumber: %v", err)
+	}
+	btWantNoKind(t, "supplied number", btKind(t, super, supplied))
+}
+
+func TestRLS_ABuyerTypeFillNeverFillsALineTaxCategory(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "BT-13 tenant")
+	entityID := seedEntity(t, super, tenantID, "BT-13 entity")
+	const tin = "11111111-0017"
+	btRecord(t, super, tenantID, tin, btPtr(btB2B))
+	values := docCleanValues("BT-13-INV")
+	values["buyer_tin"] = sxPtr(tin)
+	values["line_items[1].description"] = sxPtr("Widget")
+	values["line_items[1].quantity"] = sxPtr("2")
+	values["line_items[1].unit_price"] = sxPtr("500.00")
+	values["line_items[1].line_total"] = sxPtr("1000.00")
+	values["line_items[1].line_tax"] = sxPtr("75.00")
+	documentID := docSeedDocument(t, super, tenantID)
+	docSeedExtraction(t, super, tenantID, documentID, values)
+
+	btWantKind(t, "filled kind", btImportDocument(t, super, app, tenantID, entityID, documentID), btB2B)
+	rows, err := super.Query(context.Background(),
+		`SELECT l.tax_category FROM line_items l JOIN invoices i ON i.id = l.invoice_id WHERE i.source_document_id = $1`, documentID)
+	if err != nil {
+		t.Fatalf("read line tax categories: %v", err)
+	}
+	defer rows.Close()
+	var n int
+	for rows.Next() {
+		var c *string
+		if err := rows.Scan(&c); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		n++
+		if c != nil {
+			t.Errorf("line tax_category = %q, want NULL", *c)
+		}
+	}
+	if n == 0 {
+		t.Fatal("no line items filed, so tax_category was not observed")
+	}
+}
+
+// A lookup failure files nothing, and once the fault clears the same document files normally.
+func TestRLS_ASuppliedNumberRetryAfterALookupFailureFilesOneInvoice(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "BT-14 tenant")
+	entityID := seedEntity(t, super, tenantID, "BT-14 entity")
+	const tin = "11111111-0018"
+	btRecord(t, super, tenantID, tin, btPtr(btB2C))
+	documentID := btDocument(t, super, tenantID, tin, "")
+	drop := btFailLookup(t, super, tenantID, tin)
+	svc := newTestService(app)
+	ctx := sxIdentity(context.Background(), tenantID)
+
+	if _, err := svc.SupplyInvoiceNumber(ctx, entityID, documentID, "BT-14-INV"); err == nil {
+		t.Fatal("SupplyInvoiceNumber with a failing lookup returned no error")
+	}
+	if n := countInvoicesCitingDocument(t, super, documentID); n != 0 {
+		t.Fatalf("invoices after the failure = %d, want 0", n)
+	}
+	drop()
+	if _, err := svc.SupplyInvoiceNumber(ctx, entityID, documentID, "BT-14-INV"); err != nil {
+		t.Fatalf("retry after the fault cleared: %v", err)
+	}
+	btWantKind(t, "retry", btKind(t, super, documentID), btB2C)
 }

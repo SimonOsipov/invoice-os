@@ -865,3 +865,91 @@ func TestInvoiceMain_NamesNoJevVariableAnyOtherWay(t *testing.T) {
 		t.Fatalf("control: %d string literal(s), \"invoice\" seen=%v, jev.FromEnv seen=%v -- the walk is broken", lits, sawInvoice, sawFromEnv)
 	}
 }
+
+// TestInvoiceMain_WiresOneAICallRecorderOntoBothClients: one recorder, built on pool and app.Logger, reaches both clients before
+// a route can reach either client. AST, so reformatting cannot break it.
+func TestInvoiceMain_WiresOneAICallRecorderOntoBothClients(t *testing.T) {
+	_, fd := parseMain(t)
+	mainBody := fd.Body
+	var builds, aiSet, jevSet int
+	var recVar string
+	var setPos []token.Pos
+	ast.Inspect(mainBody, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			if len(x.Rhs) == 1 && len(x.Lhs) == 1 && isSelectorCall(x.Rhs[0], "aicalls", "NewRecorder") {
+				call := x.Rhs[0].(*ast.CallExpr)
+				if len(call.Args) == 2 && isIdent(call.Args[0], "pool") && isSelector(call.Args[1], "app", "Logger") {
+					builds++
+					if id, ok := x.Lhs[0].(*ast.Ident); ok {
+						recVar = id.Name
+					}
+				}
+			}
+		case *ast.CallExpr:
+			sel, ok := x.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "SetRecorder" || len(x.Args) != 1 {
+				return true
+			}
+			recv, ok := sel.X.(*ast.Ident)
+			if !ok || !isSelector(x.Args[0], recVar, "Record") {
+				return true
+			}
+			switch recv.Name {
+			case "aiClient":
+				aiSet++
+				setPos = append(setPos, x.Pos())
+			case "jevClient":
+				jevSet++
+				setPos = append(setPos, x.Pos())
+			}
+		}
+		return true
+	})
+	if builds != 1 || recVar == "" {
+		t.Fatalf("aicalls.NewRecorder(pool, app.Logger) is assigned %d time(s), want exactly 1", builds)
+	}
+	if aiSet != 1 || jevSet != 1 {
+		t.Fatalf("SetRecorder(%s.Record) on aiClient %d time(s), on jevClient %d time(s), want 1 each", recVar, aiSet, jevSet)
+	}
+	first := token.NoPos
+	ast.Inspect(mainBody, func(n ast.Node) bool {
+		if mentionsClientRoute(n) && (first == token.NoPos || n.Pos() < first) {
+			first = n.Pos()
+		}
+		return true
+	})
+	if first == token.NoPos {
+		t.Fatal("control: the first app.Mux.HandleFunc that names a client not found -- the position check below is vacuous")
+	}
+	for _, p := range setPos {
+		if p >= first {
+			t.Errorf("a SetRecorder call sits after the first app.Mux.HandleFunc that names a client; the clients would run unrecorded")
+		}
+	}
+}
+
+// mentionsClientRoute reports an app.Mux.HandleFunc call that names aiClient or jevClient.
+func mentionsClientRoute(n ast.Node) bool {
+	call, ok := n.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "HandleFunc" {
+		return false
+	}
+	named := false
+	ast.Inspect(call, func(m ast.Node) bool {
+		if id, ok := m.(*ast.Ident); ok && (id.Name == "aiClient" || id.Name == "jevClient") {
+			named = true
+		}
+		return !named
+	})
+	return named
+}
+
+func isIdent(e ast.Expr, name string) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == name
+}

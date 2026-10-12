@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
+	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 )
@@ -210,6 +211,39 @@ func TestRLS_ExtractWorkerAsksJevOnceAfterTheDecision(t *testing.T) {
 	}
 	if ids := slices.Sorted(maps.Keys(ctl.reqs[0].Questions)); !slices.Equal(ids, []string{"document_type", "total"}) {
 		t.Errorf("control question ids = %v, want [document_type total]", ids)
+	}
+}
+
+// The fake client is built here, not by fxJevFake, to read the purpose off its own log line.
+func TestRLS_ExtractWorkerRecordsTheJevCallUnderTheJobsTenant(t *testing.T) {
+	ctx := t.Context()
+	t.Setenv(jev.EnvFake, "true")
+	t.Setenv(jev.EnvKey, "")
+	var buf bytes.Buffer
+	client, err := jev.FromEnv(slog.New(slog.NewJSONHandler(&buf, nil)))
+	if err != nil {
+		t.Fatalf("jev.FromEnv: %v", err)
+	}
+	var got []airecord.Call
+	client.SetRecorder(func(c airecord.Call) { got = append(got, c) })
+
+	r := wkRunJev(t, ctx, 954030, []extraction.Page{wjPage()}, wjAI(), client)
+
+	var logged []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if m["msg"] == "jev call" {
+			logged = append(logged, m)
+		}
+	}
+	if len(logged) != 1 || len(got) != 1 {
+		t.Fatalf("jev call log lines %d, recorded calls %d, want 1 each: %+v", len(logged), len(got), got)
+	}
+	if c := got[0]; c.Client != "jev" || c.TenantID != r.tenantID || c.Purpose != logged[0]["purpose"] {
+		t.Errorf("call = client %q tenant %q purpose %q, want jev/%s/%v", c.Client, c.TenantID, c.Purpose, r.tenantID, logged[0]["purpose"])
 	}
 }
 

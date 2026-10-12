@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/aicalls"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -162,6 +163,9 @@ func main() {
 	if err != nil {
 		platform.Fatal(app.Logger, "submission: %v", err)
 	}
+	aiRecorder := aicalls.NewRecorder(pool, app.Logger)
+	aiClient.SetRecorder(aiRecorder.Record)
+	jevClient.SetRecorder(aiRecorder.Record)
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
 		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, aiClient, jevClient,

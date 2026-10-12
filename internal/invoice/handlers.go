@@ -549,6 +549,7 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 // resolveOutsideGate above: a preparer told "re-validate this invoice first"
 // would run a re-validation that still cannot end in a submit.
 //
+// rulePending precedes approvalClear, as in Store.Transition (TestSubmitGate_RungOrder).
 // approvalClear is the LAST rung, after status: an invoice that is not validated
 // has no run to wait on, so the awaiting-approval sentence would be a lie there.
 func submitGate(s Status, role string, approvalClear, rulePending bool) (bool, *string) {
@@ -558,6 +559,10 @@ func submitGate(s Status, role string, approvalClear, rulePending bool) (bool, *
 	}
 	if !canSubmit(s) {
 		return false, submitBlockedReason(s)
+	}
+	if rulePending {
+		r := ruleChangePendingReason
+		return false, &r
 	}
 	if !approvalClear {
 		r := awaitingApprovalReason

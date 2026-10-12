@@ -1866,6 +1866,11 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 			PendingStepOrd:  f.PendingStepOrd,
 			CallerHoldsRole: f.CallerHoldsRole,
 		}
+		pending, err := rulePendingByInvoiceTx(ctx, tx, []string{id})
+		if err != nil {
+			return err
+		}
+		out.RulePending = pending[id]
 		return nil
 	})
 	if err != nil {
@@ -1939,7 +1944,12 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 			transmit[id] = clear[id]
 		}
 
-		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit}
+		pending, err := rulePendingByInvoiceTx(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+
+		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit, RulePending: pending}
 		return nil
 	})
 	if err != nil {
@@ -2121,6 +2131,40 @@ func rulesPendingFor(ctx context.Context, tx pgx.Tx, entityIDs []string) (func(e
 		return nil, err
 	}
 	return func(entityID string) bool { return all || covered[entityID] }, nil
+}
+
+// rulePendingByInvoiceTx maps each visible invoice id to whether a pending custom-rule
+// revision covers it: two statements, whatever len(ids). Ids RLS hides are absent (false).
+func rulePendingByInvoiceTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]bool, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT id::text, entity_id::text FROM invoices WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entityOf := make(map[string]string, len(ids))
+	entityIDs := make([]string, 0, len(ids))
+	for rows.Next() {
+		var id, entityID string
+		if err := rows.Scan(&id, &entityID); err != nil {
+			return nil, err
+		}
+		entityOf[id] = entityID
+		entityIDs = append(entityIDs, entityID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	pending, err := rulesPendingFor(ctx, tx, entityIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(entityOf))
+	for id, entityID := range entityOf {
+		out[id] = pending(entityID)
+	}
+	return out, nil
 }
 
 // transitionCausedTx is transitionTx plus what caused the transition, written to the history

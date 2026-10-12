@@ -405,6 +405,8 @@ func TestGuardExplanation_PartyContactAndAddressGetNoFix(t *testing.T) {
 		{"buyer.street", "buyer_street", "1 Marina Road"},
 		{"supplier.telephone", "supplier_telephone", "+2348012345678"},
 		{"buyer.postal_zone", "buyer_postal_zone", "100001"},
+		{"supplier.city", "supplier_city", "Abuja"},
+		{"buyer.email", "buyer_email", "ap@buyer.example"},
 	} {
 		payload := explainPayload()
 		payload["buyer"] = map[string]any{"street": "Old Road"}

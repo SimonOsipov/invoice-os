@@ -7019,6 +7019,12 @@ describe('InvoiceDetail editor: the NRS fields (ENGI-06-04)', () => {
     expect(await screen.findByText('Due date must be a date as YYYY-MM-DD.')).toBeTruthy()
     expect((control('Due date') as HTMLInputElement).value).toBe('30/06/2026')
     expect(patchCalls).toHaveLength(0)
+    fireEvent.change(control('Due date'), { target: { value: '' } })
+    fireEvent.change(control('Tax point date'), { target: { value: '2026-02-30' } })
+    save()
+    expect(await screen.findByText('Tax point date must be a date as YYYY-MM-DD.')).toBeTruthy()
+    expect((control('Tax point date') as HTMLInputElement).value).toBe('2026-02-30')
+    expect(patchCalls).toHaveLength(0)
   })
 
   it('invoiceDetail_paddedValidNrsDateIsSentAsRfc3339', async () => {

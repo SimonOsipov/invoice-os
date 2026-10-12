@@ -132,6 +132,23 @@ describe('CodePicker', () => {
     expect(err).not.toHaveBeenCalled()
   })
 
+  it('codePicker_staleBlurAnswerDoesNotOverwriteTypingAfterRefocus', async () => {
+    let release: (v: { codes: CodeEntry[] }) => void = () => {}
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((r) => (release = r)))
+      .mockResolvedValue({ codes: [] })
+    const { input, onChange } = mount(fetch, 'NG-AB')
+    fireEvent.change(input, { target: { value: 'Lag' } })
+    fireEvent.blur(input)
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'Lagos' } })
+    release({ codes: [] })
+    await flush()
+    expect(input.value).toBe('Lagos')
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
   it('codePicker_blankCommitsBlank', () => {
     const { input, onChange } = mount(vi.fn().mockResolvedValue({ codes: [] }), 'NG-AB')
     fireEvent.change(input, { target: { value: '' } })

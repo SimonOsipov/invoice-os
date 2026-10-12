@@ -131,6 +131,9 @@ func TestValidator_CustomEchoMismatchIsUpstream(t *testing.T) {
 		{"extra id", named, func(_ int, _ validateBatchRequest, r *validateBatchItemResult) {
 			r.CustomRuleIDs = []string{"r1", "r2", "r3"}
 		}},
+		{"substituted id", named, func(_ int, _ validateBatchRequest, r *validateBatchItemResult) {
+			r.CustomRuleIDs = []string{"r1", "r9"}
+		}},
 		{"missing id", named, func(_ int, _ validateBatchRequest, r *validateBatchItemResult) { r.CustomRuleIDs = []string{"r1"} }},
 		{"repeated id", named, func(_ int, _ validateBatchRequest, r *validateBatchItemResult) {
 			r.CustomRuleIDs = []string{"r1", "r1"}
@@ -198,7 +201,7 @@ func TestValidator_OldServiceStillJudgesItemsWithoutRules(t *testing.T) {
 		t.Fatalf("Validate against a pre-ENGI-14 response: %v", err)
 	}
 	for _, ref := range []string{"a", "b"} {
-		if ids, ok := res.CustomByRef[ref]; !ok || len(ids) != 0 {
+		if ids, ok := res.CustomByRef[ref]; !ok || ids == nil || len(ids) != 0 {
 			t.Errorf("CustomByRef[%s] = %#v, want present and empty", ref, ids)
 		}
 	}

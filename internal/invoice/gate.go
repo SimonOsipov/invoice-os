@@ -5,7 +5,7 @@
 //
 // Gate mirrors internal/importer.Service's shape: a struct over the concrete
 // stores/clients it drives, constructed once at boot in cmd/invoice/main.go.
-// It owns the ORDER of the three steps and nothing else -- the payload mapping
+// It owns the ORDER of the steps -- the payload mapping
 // is payload.go's, the wire contract is validator.go's, the atomicity is
 // Store.ApplyValidation's. It adds no rules of its own.
 //

@@ -445,3 +445,126 @@ func TestApplyValidation_DB_StaleCustomIDsRefused(t *testing.T) {
 		t.Errorf("applyValidation with every current id = %q, %v, want validated", out.Status, err)
 	}
 }
+
+func TestGate_DB_RulesGoOnlyToTheirOwnScope(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-05 scope")
+	other := seedEntity(t, f.super, f.tenant, "other client")
+	firm := f.save(t, nil, "warning", true, "firm")
+	own := f.save(t, &f.entity, "warning", true, "own")
+	theirs := f.save(t, &other, "warning", true, "other client's")
+	gone := f.save(t, &f.entity, "warning", true, "deleted")
+	if err := f.rules.Delete(f.admin, gone.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	off := f.save(t, &f.entity, "warning", false, "disabled")
+
+	srv := start04Wrapped(t, f.app, nil, nil)
+	inv := f.invoice(t, "ENGI-14-05-SCOPE")
+	res, err := f.gate(t, srv).Evaluate(f.member, []EvalItem{{Ref: inv.ID, Invoice: inv}})
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if got := res.CustomByRef[inv.ID]; len(got) == 0 || !reflect.DeepEqual(sorted(got...), sorted(firm.RevisionID, own.RevisionID)) {
+		t.Errorf("custom_rule_ids = %v, want firm + own only", got)
+	}
+	for _, r := range []customrule.Rule{theirs, gone, off} {
+		if strings.Contains(srv.bodies[0], r.RevisionID) {
+			t.Errorf("request carries %q (%s), want it withheld", r.Message, r.RevisionID)
+		}
+	}
+}
+
+func TestGate_DB_FirmOnlyClientOnlyAndNeither(t *testing.T) {
+	cases := []struct {
+		name         string
+		firm, client bool
+	}{{"firm only", true, false}, {"client only", false, true}, {"neither", false, false}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCRFixture(t, "ENGI-14-05 sets "+tc.name)
+			want := []string{}
+			if tc.firm {
+				want = append(want, f.save(t, nil, "warning", true, "firm").RevisionID)
+			}
+			if tc.client {
+				want = append(want, f.save(t, &f.entity, "warning", true, "client").RevisionID)
+			}
+			inv := f.invoice(t, "ENGI-14-05-SETS")
+			got, _, err := f.gate(t, start04Wrapped(t, f.app, nil, nil)).Validate(f.member, inv.ID)
+			if err != nil || got.Status != StatusValidated {
+				t.Fatalf("Validate = %q, %v, want validated", got.Status, err)
+			}
+			if rows := validatedRows(t, f, inv.ID); len(rows) != 1 || !reflect.DeepEqual(rows[0], sorted(want...)) {
+				t.Errorf("audit ids = %v, want one row %v", rows, sorted(want...))
+			}
+		})
+	}
+}
+
+func TestGate_DB_EchoExtraIdWritesNothing(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-05 echo extra")
+	f.save(t, &f.entity, "error", true, "email needed")
+	inv := f.invoice(t, "ENGI-14-05-EXTRA")
+	srv := start04Wrapped(t, f.app, nil, func(resp map[string]any) {
+		for _, r := range resp["results"].([]any) {
+			m := r.(map[string]any)
+			m["custom_rule_ids"] = append(m["custom_rule_ids"].([]any), uuid.NewString())
+		}
+	})
+	if _, _, err := f.gate(t, srv).Validate(f.member, inv.ID); !errors.Is(err, ErrUpstream) {
+		t.Fatalf("err = %v, want ErrUpstream", err)
+	}
+	f.assertUntouched(t, inv.ID)
+}
+
+func TestGate_DB_ReevaluatesOnceThenGivesUp(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-05 once")
+	inv := f.invoice(t, "ENGI-14-05-ONCE")
+	srv := start04Wrapped(t, f.app, func(call int) { f.save(t, &f.entity, "error", true, "race") }, nil)
+	if _, _, err := f.gate(t, srv).Validate(f.member, inv.ID); !errors.Is(err, ErrRulesChanged) {
+		t.Fatalf("err = %v, want ErrRulesChanged", err)
+	}
+	if n := srv.calls(); n != 2 {
+		t.Errorf("validation calls = %d, want exactly 2 (one retry)", n)
+	}
+}
+
+func TestGate_DB_ValidateBatchReevaluatesOnceAndAborts(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-05 batch race")
+	a, b := f.invoice(t, "ENGI-14-05-BA"), f.invoice(t, "ENGI-14-05-BB")
+	var saved customrule.Rule
+	srv := start04Wrapped(t, f.app, func(call int) {
+		if call == 1 {
+			saved = f.save(t, &f.entity, "error", true, "saved mid-batch")
+		}
+	}, nil)
+	out, err := f.gate(t, srv).ValidateBatch(f.member, []Invoice{a, b})
+	if err != nil {
+		t.Fatalf("ValidateBatch: %v", err)
+	}
+	if n := srv.calls(); n != 2 {
+		t.Errorf("validation calls = %d, want 2", n)
+	}
+	if out.WithViolations != 2 || out.Clean != 0 {
+		t.Errorf("outcome with-violations/clean = %d/%d, want 2/0", out.WithViolations, out.Clean)
+	}
+	for _, inv := range []Invoice{a, b} {
+		if _, ok := violationOf(out.ByID[inv.ID], customrule.Key(saved.ID)); !ok {
+			t.Errorf("invoice %s violations = %v, want the mid-batch rule", inv.InvoiceNumber, out.ByID[inv.ID])
+		}
+		if rows := validatedRows(t, f, inv.ID); !reflect.DeepEqual(rows, [][]string{{saved.RevisionID}}) {
+			t.Errorf("invoice %s audit rows = %v, want one naming %s", inv.InvoiceNumber, rows, saved.RevisionID)
+		}
+	}
+
+	f2 := newCRFixture(t, "ENGI-14-05 batch race twice")
+	c := f2.invoice(t, "ENGI-14-05-BC")
+	srv2 := start04Wrapped(t, f2.app, func(int) { f2.save(t, &f2.entity, "error", true, "race") }, nil)
+	if _, err := f2.gate(t, srv2).ValidateBatch(f2.member, []Invoice{c}); !errors.Is(err, ErrRulesChanged) {
+		t.Fatalf("second change: err = %v, want ErrRulesChanged", err)
+	}
+	if n := srv2.calls(); n != 2 {
+		t.Errorf("validation calls = %d, want 2", n)
+	}
+	f2.assertUntouched(t, c.ID)
+}

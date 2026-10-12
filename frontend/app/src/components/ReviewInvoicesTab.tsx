@@ -76,6 +76,7 @@ import { ErrorState, Loading, toApiError, useAsync, type ApiError } from '@invoi
 
 import { searchGlyph } from '../glyphs'
 import type { ImportBatch } from '../lib/importApi'
+import { ruleKeyLabel } from '../lib/rulesApi'
 import {
   listInvoices,
   newIdempotencyKey,
@@ -486,6 +487,7 @@ export function ReviewInvoicesTab({
               <button
                 key={r.ruleKey}
                 data-testid="review-rail-pill"
+                title={r.ruleKey}
                 onClick={() => dispatch({ type: 'rule', ruleKey: r.ruleKey })}
                 aria-pressed={r.active}
                 className="pf-chip mono"
@@ -502,7 +504,7 @@ export function ReviewInvoicesTab({
                   color: r.active ? 'var(--primary-foreground)' : 'var(--fg-2)',
                 }}
               >
-                {r.ruleKey}
+                {ruleKeyLabel(r.ruleKey)}
                 <span style={{ opacity: 0.75 }}>{r.count}</span>
               </button>
             ))}

@@ -382,6 +382,22 @@ export interface Demotion {
   custom_rule_cause: CustomRuleCause | null
 }
 
+// D11: the detail derives the list's server rule from the history it loads (T1: latestDemotion_matchesTheServerRule).
+export function latestDemotion(history: readonly StatusChange[], status: InvoiceStatus): Demotion | null {
+  const last = history[history.length - 1]
+  if (status !== 'draft' || !last || (last.cause == null && last.custom_rule_cause == null)) return null
+  return { changed_at: last.changed_at, cause: last.cause, custom_rule_cause: last.custom_rule_cause }
+}
+
+// effective_from is shown as the wire wrote it: no locale formatting, so no day shift.
+export function demotionSentence(d: Demotion): string {
+  if (d.cause) {
+    const on = d.cause.effective_from ? ` on ${d.cause.effective_from}` : ''
+    return `Sent back to draft when rule set v${d.cause.rule_set_version} took effect${on}.`
+  }
+  return `Sent back to draft when the custom rule \u201c${d.custom_rule_cause?.message ?? ''}\u201d changed.`
+}
+
 // listInvoices's twelve filters (ListFilter, invoice.go:200-217; ListHandler,
 // handlers.go:349-451). All twelve AND together server-side, and EVERY one is optional:
 // an absent option emits NO query param, so `listInvoices(af, base, {})` is byte-identical

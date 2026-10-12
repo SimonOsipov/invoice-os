@@ -34,6 +34,7 @@ import {
   clampFilterText,
   computedLineSum,
   createInvoice,
+  demotionSentence,
   DETAIL_SUBMIT_COPY,
   diffEditInput,
   diffLineItems,
@@ -55,6 +56,7 @@ import {
   isRowSelectable,
   keepInvoiceAsIs,
   keptAsIs,
+  latestDemotion,
   LIVE_POLL_MS,
   listInvoices,
   mbsPathToEditField,
@@ -5619,3 +5621,66 @@ describe('isBuyerTinMissing (task-413, BUG-05-04)', () => {
   })
 })
 
+
+describe('demotion (ENGI-15-08, D11)', () => {
+  const VERSION_CAUSE = { rule_set_version: 5, rule_set_version_id: 'rsv-5', effective_from: '2027-01-01' }
+  const CUSTOM_CAUSE = { custom_rule_id: 'cr-1', revision: 2, revision_id: 'rev-2', key: 'custom:cr-1', message: 'PO required' }
+  const at = (n: number) => `2026-07-01T${String(10 + n).padStart(2, '0')}:00:00Z`
+  function change(n: number, from: InvoiceStatus | null, to: InvoiceStatus, over: Partial<StatusChange> = {}): StatusChange {
+    return { from_status: from, to_status: to, actor: 'a', actor_name: 'A', actor_kind: 'person', changed_at: at(n), cause: null, custom_rule_cause: null, ...over }
+  }
+  const genesis = change(0, null, 'draft')
+  const validated = change(1, 'draft', 'validated')
+  const demoted = change(2, 'validated', 'draft', { cause: VERSION_CAUSE })
+
+  it('demotionSentence_bothCauses', () => {
+    expect(demotionSentence({ changed_at: at(2), cause: VERSION_CAUSE, custom_rule_cause: null })).toBe(
+      'Sent back to draft when rule set v5 took effect on 2027-01-01.',
+    )
+    expect(demotionSentence({ changed_at: at(2), cause: null, custom_rule_cause: CUSTOM_CAUSE })).toBe(
+      'Sent back to draft when the custom rule \u201cPO required\u201d changed.',
+    )
+  })
+
+  it('demotionSentence_undatedVersionOmitsTheDate', () => {
+    const d = { changed_at: at(2), cause: { ...VERSION_CAUSE, effective_from: null }, custom_rule_cause: null }
+    expect(demotionSentence(d)).toBe('Sent back to draft when rule set v5 took effect.')
+  })
+
+  // The seven cases of TestListDemotion_DB_NullUnlessLatestRowIsACausedDemotion
+  // (internal/invoice/list_demotion_test.go, buildDemotionCases), as history fixtures.
+  it('latestDemotion_matchesTheServerRule', () => {
+    const cases: { name: string; history: StatusChange[]; status: InvoiceStatus; want: boolean }[] = [
+      { name: 'version re-check demotion', history: [genesis, validated, demoted], status: 'draft', want: true },
+      { name: 'demoted then re-validated', history: [genesis, validated, demoted, change(3, 'draft', 'validated')], status: 'validated', want: false },
+      { name: 'draft never validated', history: [genesis], status: 'draft', want: false },
+      { name: 'validated to draft by an edit', history: [genesis, validated, change(2, 'validated', 'draft')], status: 'draft', want: false },
+      {
+        name: 'demoted, re-validated, then edited back to draft',
+        history: [genesis, validated, demoted, change(3, 'draft', 'validated'), change(4, 'validated', 'draft')],
+        status: 'draft',
+        want: false,
+      },
+      { name: 'demoted then edited, still draft (no new row)', history: [genesis, validated, demoted], status: 'draft', want: true },
+      { name: 'demoted, edited, re-validated, still failing (D21)', history: [genesis, validated, demoted], status: 'draft', want: true },
+    ]
+    for (const c of cases) {
+      const got = latestDemotion(c.history, c.status)
+      expect(got != null, c.name).toBe(c.want)
+      if (got) {
+        expect(got.cause, c.name).toEqual(VERSION_CAUSE)
+        expect(got.changed_at, c.name).toBe(at(2))
+      }
+    }
+  })
+
+  it('latestDemotion_customCauseAndEmptyHistory', () => {
+    const custom = change(2, 'validated', 'draft', { custom_rule_cause: CUSTOM_CAUSE })
+    expect(latestDemotion([genesis, validated, custom], 'draft')).toEqual({ changed_at: at(2), cause: null, custom_rule_cause: CUSTOM_CAUSE })
+    expect(latestDemotion([], 'draft')).toBeNull()
+  })
+
+  it('latestDemotion_aNonDraftStatusIsNeverDemoted', () => {
+    expect(latestDemotion([genesis, validated, demoted], 'validated')).toBeNull()
+  })
+})

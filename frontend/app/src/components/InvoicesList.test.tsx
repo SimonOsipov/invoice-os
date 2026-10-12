@@ -2578,6 +2578,47 @@ describe('BUG-17-02 register status markers', () => {
     expect(testids).toEqual(['invoice-status-badge', 'invoice-error-marker', 'invoice-resolved-marker'])
   })
 
+  it('invoicesList_demotionMarkerNamesTheCause', async () => {
+    const version = row({
+      id: 'dem-v',
+      invoice_number: 'INV-DEM-V',
+      status: 'draft',
+      demotion: {
+        changed_at: '2027-01-01T00:00:00Z',
+        cause: { rule_set_version: 5, rule_set_version_id: 'rsv-5', effective_from: '2027-01-01' },
+        custom_rule_cause: null,
+      },
+    })
+    const custom = row({
+      id: 'dem-c',
+      invoice_number: 'INV-DEM-C',
+      status: 'draft',
+      violations: [{ rule_key: 'vat-standard-rate', severity: 'error', message: 'bad vat' }],
+      demotion: {
+        changed_at: '2027-01-01T00:00:00Z',
+        cause: null,
+        custom_rule_cause: { custom_rule_id: 'cr-1', revision: 2, revision_id: 'rev-2', key: 'custom:cr-1', message: 'PO required' },
+      },
+    })
+    const none = row({ id: 'dem-n', invoice_number: 'INV-DEM-N', status: 'draft', demotion: null })
+    mockFetchSequence([listResponse([version, custom, none], { limit: 50, offset: 0, total: 3 })])
+
+    render(<InvoicesList ctx={listCtx()} />)
+    await screen.findByText('INV-DEM-V')
+
+    const [rv, rc, rn] = screen.getAllByTestId('invoice-row')
+    const vm = within(rv).getByTestId('invoice-demotion-marker')
+    expect(vm.textContent).toBe('RULE SET v5')
+    expect(vm.getAttribute('title')).toBe('Sent back to draft when rule set v5 took effect on 2027-01-01.')
+    expect(vm.getAttribute('aria-label')).toBe(vm.getAttribute('title'))
+    const cm = within(rc).getByTestId('invoice-demotion-marker')
+    expect(cm.textContent).toBe('CUSTOM RULE')
+    expect(cm.getAttribute('title')).toBe('Sent back to draft when the custom rule \u201cPO required\u201d changed.')
+    expect(within(rn).queryByTestId('invoice-demotion-marker')).toBeNull()
+    const testids = Array.from(rc.children[5].children).map((c) => c.getAttribute('data-testid'))
+    expect(testids).toEqual(['invoice-status-badge', 'invoice-error-marker', 'invoice-demotion-marker'])
+  })
+
   it('registerMarkers_gatesAreUnchanged', async () => {
     const warnOnly = row({
       id: 'reg-warn-1',

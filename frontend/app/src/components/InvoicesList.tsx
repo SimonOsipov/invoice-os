@@ -37,6 +37,7 @@ import { plusGlyph } from '../glyphs'
 import { fmt, fmtDate } from '../lib/format'
 import {
   BUYER_TIN_MISSING,
+  demotionSentence,
   gateByActiveEntity,
   hasBlockingViolation,
   invoiceListIsEmpty,
@@ -73,9 +74,9 @@ const INVOICE_GRID_COLUMNS = '24px 150px 1fr 140px 120px 200px'
 const CHECKBOX_STYLE = { width: 15, height: 15, accentColor: 'var(--action)', margin: 0 } as const
 
 // Same box as the status pill beside it, minus the dot.
-function MarkerPill({ testId, tone, label }: { testId: string; tone: { bg: string; border: string; text: string }; label: string }) {
+function MarkerPill({ testId, tone, label, title }: { testId: string; tone: { bg: string; border: string; text: string }; label: string; title?: string }) {
   return (
-    <span data-testid={testId} style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding: '3px 9px' }}>
+    <span data-testid={testId} title={title} aria-label={title} style={{ display: 'inline-flex', alignItems: 'center', background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 'var(--radius-sm)', padding: '3px 9px' }}>
       <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: tone.text, letterSpacing: '0.04em' }}>
         {label}
       </span>
@@ -646,6 +647,14 @@ export function InvoicesList({ ctx }: { ctx: PlatformCtx }) {
                     </span>
                     {hasBlockingViolation(r) && (
                       <MarkerPill testId="invoice-error-marker" tone={SEVERITY_TONE.error} label={`${errorCount} ERROR${errorCount === 1 ? '' : 'S'}`} />
+                    )}
+                    {r.demotion != null && (
+                      <MarkerPill
+                        testId="invoice-demotion-marker"
+                        tone={SEVERITY_TONE.warning}
+                        label={r.demotion.cause ? `RULE SET v${r.demotion.cause.rule_set_version}` : 'CUSTOM RULE'}
+                        title={demotionSentence(r.demotion)}
+                      />
                     )}
                     {resolvedOutside(r) != null && (
                       <MarkerPill testId="invoice-resolved-marker" tone={SEVERITY_TONE.warning} label="RESOLVED OUTSIDE" />

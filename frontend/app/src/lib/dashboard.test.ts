@@ -340,6 +340,13 @@ describe('scopedBucket', () => {
 // happy-path table doesn't reach. Every test here is mutation-verified to fail if the
 // corresponding behavior regresses (verified manually during QA, not committed).
 
+describe('deslug custom keys (ENGI-15-08, D14)', () => {
+  it('deslug_labelsCustomKeys', () => {
+    expect(deslug('custom:3f2a0000-0000-0000-0000-000000000001')).toBe('Custom rule')
+    expect(deslug('buyer-tin-format')).toBe('Buyer TIN format')
+  })
+})
+
 describe('deslug — QA adversarial', () => {
   it('QA-D1: consecutive separators (double hyphen or double underscore) collapse to a single space', () => {
     // deslug splits on a run of separators (/[-_\s]+/) and drops empty tokens, so a

@@ -7197,3 +7197,54 @@ describe('InvoiceDetail editor: the NRS fields (ENGI-06-04)', () => {
     expect(sent[0]).toMatchObject({ hsn_code: '1001' })
   })
 })
+
+describe('InvoiceDetail demotion banner and race 409 (ENGI-15-08)', () => {
+  const ID = 'inv-demotion-1'
+  const cause = { rule_set_version: 5, rule_set_version_id: 'rsv-5', effective_from: '2027-01-01' }
+  const hist = (from: StatusChange['from_status'], to: StatusChange['to_status'], over: Partial<StatusChange> = {}): StatusChange => ({
+    from_status: from,
+    to_status: to,
+    changed_at: '2027-01-01T00:00:00Z',
+    actor: 'user-1',
+    actor_name: 'User One',
+    actor_kind: 'person',
+    cause: null,
+    custom_rule_cause: null,
+    ...over,
+  })
+  const demotedHistory = [hist(null, 'draft'), hist('draft', 'validated'), hist('validated', 'draft', { cause })]
+
+  it('invoiceDetail_demotionBannerFromHistory', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft' }), demotedHistory)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    const banner = await screen.findByTestId('detail-demotion-banner')
+    expect(banner.textContent).toBe('Sent back to draft when rule set v5 took effect on 2027-01-01.')
+  })
+
+  it('invoiceDetail_noDemotionBannerOutsideDraftOrWithoutACause', async () => {
+    mockDetailFetch(detailRecord({ id: ID, status: 'validated' }), demotedHistory)
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await screen.findByTestId('invoice-status-badge')
+    await waitFor(() => expect(screen.getByTestId('invoice-status-badge').textContent).toContain('VALIDATED'))
+    expect(screen.queryByTestId('detail-demotion-banner')).toBeNull()
+
+    cleanup()
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft' }), [hist(null, 'draft'), hist('draft', 'validated'), hist('validated', 'draft')])
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+    await waitFor(() => expect(screen.getByTestId('invoice-status-badge').textContent).toContain('DRAFT'))
+    expect(screen.queryByTestId('detail-demotion-banner')).toBeNull()
+  })
+
+  // Server sentence: ErrRulesChanged in internal/invoice/handlers.go (409 mapping).
+  it('invoiceDetail_revalidateRaceShowsTheServerSentence', async () => {
+    const SENTENCE = 'the rules changed during validation; validate again'
+    mockDetailFetch(detailRecord({ id: ID, status: 'draft', can_revalidate: true }), [], {
+      revalidateResponse: { ok: false, status: 409, json: () => Promise.resolve({ error: SENTENCE }) },
+    })
+    render(<InvoiceDetail ctx={detailCtx(ID)} />)
+
+    fireEvent.click(await screen.findByTestId('revalidate'))
+    await screen.findByText(SENTENCE)
+  })
+})

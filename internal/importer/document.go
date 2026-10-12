@@ -536,3 +536,8 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 	}
 	return got, nil
 }
+
+// fillBuyerType is a Test-Spec stub (ENGI-08-07): the executor implements it.
+func (s *Service) fillBuyerType(ctx context.Context, in *invoice.CreateInput) error {
+	return nil
+}

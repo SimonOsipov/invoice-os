@@ -335,3 +335,8 @@ func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
 	}
 	return b, nil
 }
+
+// BuyerTypeByTIN is a Test-Spec stub (ENGI-08-07): the executor implements it.
+func (s *Store) BuyerTypeByTIN(ctx context.Context, tin string) (*string, error) {
+	return nil, nil
+}

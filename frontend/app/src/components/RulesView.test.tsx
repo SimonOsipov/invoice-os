@@ -153,6 +153,7 @@ describe('RulesView, golden set', () => {
     const f1 = fakeFetch({ golden: goldenPayload({ rules: [golden('only-golden')] }), custom: [custom('only-custom', null)] })
     const first = await mount(f1)
     expect(rowKeys()).toEqual(['only-golden', 'Custom rule'])
+    expect(document.querySelectorAll('.pf-row')[1].children[0].getAttribute('title'), 'the full key stays reachable').toBe('custom:only-custom')
     expect(screen.getByText('message of only-custom')).toBeTruthy()
     first.view.unmount()
 

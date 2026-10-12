@@ -1747,5 +1747,6 @@ describe('ENGI-15-06: switching client leaves the Rules screen', () => {
     })
     await screen.findByText(/^INHERITED/)
     expect(rulesCalls.sort()).toEqual(['custom', 'custom', 'golden', 'golden'])
+    expect(screen.queryByRole('dialog'), 'coming back does not reopen the old drawer').toBeNull()
   })
 })

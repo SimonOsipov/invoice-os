@@ -291,3 +291,22 @@ func TestCall_RecordsACallerCancelledCall(t *testing.T) {
 		t.Errorf("got %+v", got)
 	}
 }
+
+// A clock that moves on every read exposes a second now() between log and record.
+func TestCall_RecordedLatencyIsTheLoggedLatencyOnAMovingClock(t *testing.T) {
+	srv, _ := okServer(t, validContent)
+	buf := &bytes.Buffer{}
+	var tick atomic.Int64
+	now := func() time.Time { return time.Unix(0, 0).Add(time.Duration(tick.Add(7)) * time.Millisecond) }
+	c := newClient(config{key: "k", endpoint: srv.URL, budget: budget, now: now, sleep: realSleep},
+		slog.New(slog.NewJSONHandler(buf, nil)))
+	spy := &sinkSpy{}
+	c.SetRecorder(spy.sink)
+	if _, err := c.Call(t1Ctx(t.Context()), baseReq()); err != nil {
+		t.Fatal(err)
+	}
+	got := wantOneCall(t, spy)
+	if got.LatencyMS <= 0 || only(t, buf)["latency_ms"] != float64(got.LatencyMS) {
+		t.Errorf("recorded %d, log %v", got.LatencyMS, only(t, buf)["latency_ms"])
+	}
+}

@@ -275,7 +275,7 @@ func TestHistory_ErrorPathsIssueNoResolveQuery(t *testing.T) {
 }
 
 // TestHistory_WireShapeCarriesBothKeysNeverNull marshals what the handler
-// marshals (handlers.go:1235 writeJSON's the []StatusChange verbatim): eight keys
+// marshals (HistoryHandler writeJSONs the []StatusChange verbatim): eight keys
 // per row, actor_name always a non-empty JSON string, actor_kind always one of
 // exactly three values. The Go-side fence under e2e/api/contract-invoice.spec.ts's
 // deployed assertion -- that one cannot run on a PR without the fleet.

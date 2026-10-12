@@ -712,6 +712,7 @@ func TestRLS_CustomRuleRevisionsPurgedWithForeignKeysEnforced(t *testing.T) {
 	ctx := context.Background()
 
 	reseedOnCleanup(t, superDSN)
+	ensureTenant(t, pool, demoTenantID, "Okafor & Partners", "firm") // absent from the CI database
 	entityID, invoiceID, revID, histID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	t.Cleanup(func() {
 		tx, err := pool.Begin(ctx)

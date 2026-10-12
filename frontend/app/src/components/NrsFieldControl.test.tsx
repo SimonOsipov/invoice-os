@@ -27,6 +27,13 @@ describe('NrsFieldControl', () => {
     expect(Array.from(status.options).map((o) => o.value)).toEqual(['', 'Paid', 'PENDING', 'PAID', 'REJECTED', 'PARTIAL'])
     cleanup()
 
+    for (const key of ['invoice_kind', 'payment_status']) {
+      const select = mount(key).querySelector('select')!
+      expect(select.className).toBe('pf-select')
+      expect(select.parentElement!.querySelector('svg'), `${key} draws a chevron`).toBeTruthy()
+      cleanup()
+    }
+
     for (const key of ['buyer_email', 'buyer_country', 'tax_currency_code']) {
       const c = mount(key)
       expect(c.querySelector('select')).toBeNull()

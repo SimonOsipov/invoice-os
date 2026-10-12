@@ -529,7 +529,7 @@ func TestGate_DB_ReevaluatesOnceThenGivesUp(t *testing.T) {
 	}
 }
 
-func TestGate_DB_ValidateBatchReevaluatesOnceAndAborts(t *testing.T) {
+func TestGate_DB_ValidateBatchReevaluatesOnce(t *testing.T) {
 	f := newCRFixture(t, "ENGI-14-05 batch race")
 	a, b := f.invoice(t, "ENGI-14-05-BA"), f.invoice(t, "ENGI-14-05-BB")
 	var saved customrule.Rule
@@ -605,6 +605,44 @@ func TestApplyValidation_DB_RanRevisionNoLongerCurrentIsRefused(t *testing.T) {
 		t.Fatalf("applyValidation with a disabled rule's revision = %v, want ErrRulesChanged", err)
 	}
 	f.assertUntouched(t, inv.ID)
+}
+
+func TestApplyValidation_DB_SameCountDifferentIdsRefused(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-05 swapped ids")
+	f.save(t, nil, "error", true, "firm rule")
+	inv := f.invoice(t, "ENGI-14-05-SWAP")
+	got, err := f.store.Get(f.member, inv.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	fp := contentFingerprint(got, got.LineItems)
+	versionID := seedRuleSetVersionID(t, f.super)
+	if _, err := f.store.applyValidation(f.member, inv.ID, []Violation{}, versionID, []string{uuid.NewString()}, fp); !errors.Is(err, ErrRulesChanged) {
+		t.Fatalf("applyValidation with one unrelated id for one current rule = %v, want ErrRulesChanged", err)
+	}
+	f.assertUntouched(t, inv.ID)
+}
+
+func TestGate_DB_ValidateBatchReportsTheLowestRuleSetVersionAcrossPasses(t *testing.T) {
+	f := newCRFixture(t, "ENGI-14-05 batch version")
+	c := f.invoice(t, "ENGI-14-05-VER")
+	var passes int
+	var second float64
+	srv := start04Wrapped(t, f.app, func(int) { f.save(t, &f.entity, "error", true, "race") }, func(resp map[string]any) {
+		passes++
+		if passes == 1 {
+			resp["rule_set_version"] = resp["rule_set_version"].(float64) + 7
+		} else {
+			second = resp["rule_set_version"].(float64)
+		}
+	})
+	out, err := f.gate(t, srv).ValidateBatch(f.member, []Invoice{c})
+	if err != nil {
+		t.Fatalf("ValidateBatch: %v", err)
+	}
+	if passes != 2 || second == 0 || float64(out.RuleSetVersion) != second {
+		t.Errorf("passes = %d, RuleSetVersion = %d, want the second pass's lower %v", passes, out.RuleSetVersion, second)
+	}
 }
 
 func TestGate_DB_RuleDisabledDuringValidationIsReevaluated(t *testing.T) {

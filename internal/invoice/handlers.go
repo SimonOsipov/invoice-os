@@ -1747,6 +1747,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "invoice is not a draft"
 	case errors.Is(err, ErrStaleValidation):
 		return http.StatusConflict, "invoice changed during validation"
+	case errors.Is(err, ErrRulesChanged):
+		return http.StatusConflict, "the rules changed during validation; validate again"
 	case errors.Is(err, ErrViolationGone):
 		return http.StatusConflict, "the violation is not on this invoice's last validation"
 	case errors.Is(err, ErrVerdictStale):

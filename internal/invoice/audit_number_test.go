@@ -108,7 +108,7 @@ func auditNumberSites() []auditNumberSite {
 		},
 		{
 			label: "validated_via_ApplyValidation", site: "store.go:2030", event: "invoice.validated",
-			baseKeys: []string{"id", "rule_set_version_id", "outcome", "violation_count"},
+			baseKeys: []string{"id", "rule_set_version_id", "outcome", "violation_count", "custom_rule_revision_ids"},
 			drive: func(t *testing.T, super, app *pgxpool.Pool, tenantID, entityID string) string {
 				c, _ := auditNumberIdentity(tenantID)
 				store := NewStore(app)

@@ -142,6 +142,7 @@ func TestGate_EvaluateCallsValidatorExactlyOnceWithAllItems(t *testing.T) {
 
 	validator := NewValidator(srv.URL, gapiS2SToken, nil)
 	gate := NewGate(nil, validator)
+	gate.customRules = noCustomRules
 
 	items := []EvalItem{
 		{Ref: "a", Invoice: Invoice{InvoiceNumber: "a"}},

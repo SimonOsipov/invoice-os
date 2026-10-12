@@ -107,6 +107,20 @@ type Violation struct {
 type ValidateItem struct {
 	Ref     string         `json:"ref"`
 	Invoice map[string]any `json:"invoice"`
+	// CustomRuleSets names the request-level sets that also judge this item.
+	CustomRuleSets []string `json:"custom_rule_sets,omitempty"`
+}
+
+// CustomRule is one custom rule on the batch wire; ID is the revision id the result echoes.
+type CustomRule struct {
+	ID       string          `json:"id"`
+	Key      string          `json:"key"`
+	Type     string          `json:"type"`
+	Target   string          `json:"target"`
+	Params   json.RawMessage `json:"params"`
+	Severity string          `json:"severity"`
+	When     *string         `json:"when"`
+	Message  string          `json:"message"`
 }
 
 // Stamp is the rule-set version that judged one invoice.
@@ -130,6 +144,8 @@ type ValidateResult struct {
 	RuleSetVersion int
 	StampByRef     map[string]Stamp
 	ByRef          map[string][]Violation
+	// CustomByRef holds the custom-rule revision ids each ref was judged by; total, [] when none.
+	CustomByRef map[string][]string
 }
 
 // validateBatchRequest / validateBatchItemResult / validateBatchResponse are
@@ -138,7 +154,8 @@ type ValidateResult struct {
 // response's results is a LIST in request order; ByRef's map is built from it
 // only after the totality check in Validate.
 type validateBatchRequest struct {
-	Invoices []ValidateItem `json:"invoices"`
+	Invoices       []ValidateItem          `json:"invoices"`
+	CustomRuleSets map[string][]CustomRule `json:"custom_rule_sets,omitempty"`
 }
 
 type validateBatchItemResult struct {
@@ -146,6 +163,7 @@ type validateBatchItemResult struct {
 	Violations       []Violation `json:"violations"`
 	RuleSetVersion   int         `json:"rule_set_version"`
 	RuleSetVersionID string      `json:"rule_set_version_id"`
+	CustomRuleIDs    []string    `json:"custom_rule_ids"`
 }
 
 type validateBatchResponse struct {
@@ -193,7 +211,14 @@ func NewValidator(baseURL, s2sToken string, hc *http.Client) *Validator {
 // Sends X-S2S-Token and nothing else identifying: no X-Tenant-ID, no X-User-*.
 // 04's batch surface reads no tenant, so 03 asserts none ([s2s-identity]).
 func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (ValidateResult, error) {
-	body, err := json.Marshal(validateBatchRequest{Invoices: items})
+	return v.ValidateCustom(ctx, items, nil)
+}
+
+// ValidateCustom is Validate with request-level custom rule sets that items name. For an item
+// that names sets, the echoed custom_rule_ids must equal the union of their ids; an item that
+// names none accepts an absent or empty field (a rolling deploy) and refuses any id.
+func (v *Validator) ValidateCustom(ctx context.Context, items []ValidateItem, sets map[string][]CustomRule) (ValidateResult, error) {
+	body, err := json.Marshal(validateBatchRequest{Invoices: items, CustomRuleSets: sets})
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("%w: marshal batch request: %v", ErrUpstream, err)
 	}
@@ -254,7 +279,12 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 
 	byRef := make(map[string][]Violation, len(wire.Results))
 	stamps := make(map[string]Stamp, len(wire.Results))
+	custom := make(map[string][]string, len(wire.Results))
 	for _, r := range wire.Results {
+		if r.CustomRuleIDs == nil {
+			r.CustomRuleIDs = []string{}
+		}
+		custom[r.Ref] = r.CustomRuleIDs
 		// nil -> []Violation{}: a nil Go slice encodes as SQL NULL, and
 		// invoices.violations is jsonb NOT NULL -- M4-04-05's write would raise
 		// 23502 ([violations-write]).
@@ -287,6 +317,30 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 		}
 	}
 
+	// D7: the echo is the proof the custom rules ran; an old service ignores unknown request
+	// fields, so a missing echo for a named set is fail-open and refused.
+	for _, it := range items {
+		want := map[string]bool{}
+		for _, name := range it.CustomRuleSets {
+			for _, r := range sets[name] {
+				want[r.ID] = true
+			}
+		}
+		got := custom[it.Ref]
+		seen := map[string]bool{}
+		for _, id := range got {
+			seen[id] = true
+		}
+		ok := len(got) == len(want) && len(seen) == len(want)
+		for id := range seen {
+			ok = ok && want[id]
+		}
+		if !ok {
+			return ValidateResult{}, fmt.Errorf("%w: ref %q echoed custom rules %v, want %d of its named sets",
+				ErrUpstream, it.Ref, got, len(want))
+		}
+	}
+
 	// A stamp is never guessed: every item carries one, or the response is an outage.
 	for ref, st := range stamps {
 		if st.ID == "" || st.Version < 1 {
@@ -299,6 +353,7 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 		RuleSetVersion: wire.RuleSetVersion,
 		StampByRef:     stamps,
 		ByRef:          byRef,
+		CustomByRef:    custom,
 	}, nil
 }
 

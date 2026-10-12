@@ -16,6 +16,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/customer"
+	"github.com/SimonOsipov/invoice-os/internal/customrule"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -2224,6 +2225,38 @@ func HasBlockingViolation(vs []Violation) bool { return hasBlockingViolation(vs)
 // writes propagate RAW so their SQLSTATE survives (23503 when 04 hands over a
 // phantom rule_set_version_id the FK refuses; 23514 on the actor CHECKs).
 func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, ruleSetVersionID, evaluatedFingerprint string) (Invoice, error) {
+	return s.applyValidation(ctx, id, vs, ruleSetVersionID, nil, evaluatedFingerprint)
+}
+
+// CustomRuleSets is a tenant's current custom rules: firm-wide, and per client entity.
+type CustomRuleSets struct {
+	Firm     []customrule.Rule
+	ByEntity map[string][]customrule.Rule
+}
+
+// CustomRulesFor reads, in one statement, the current rules that judge invoices of entityIDs.
+func (s *Store) CustomRulesFor(ctx context.Context, entityIDs []string) (CustomRuleSets, error) {
+	out := CustomRuleSets{ByEntity: map[string][]customrule.Rule{}}
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rules, err := customrule.CurrentTx(ctx, tx, entityIDs)
+		for _, r := range rules {
+			if r.EntityID == nil {
+				out.Firm = append(out.Firm, r)
+			} else {
+				out.ByEntity[*r.EntityID] = append(out.ByEntity[*r.EntityID], r)
+			}
+		}
+		return err
+	})
+	return out, err
+}
+
+// applyValidation is ApplyValidation with the custom-rule revision ids the verdict ran (D27):
+// it refuses, writing nothing, when a current rule of the invoice's client is not among them.
+func (s *Store) applyValidation(ctx context.Context, id string, vs []Violation, ruleSetVersionID string, customIDs []string, evaluatedFingerprint string) (Invoice, error) {
+	if customIDs == nil {
+		customIDs = []string{}
+	}
 	// Normalize the SLICE, then marshal ([violations-write]). Both guards, in
 	// THIS order — normalizing the bytes afterwards would not do: pgx encodes a
 	// nil Go slice as SQL NULL (23502 against `violations jsonb NOT NULL`), but
@@ -2247,6 +2280,12 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 	var inv Invoice
 	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		callerID, _ := auth.IdentityFromContext(ctx)
+
+		// Shared form of the save lock: a custom-rule save either commits before this
+		// reads the current rules, or waits for this commit.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtext($1))`, customrule.SaveLockKey(callerID.TenantID)); err != nil {
+			return err
+		}
 
 		// 1. lock and read the FULL row — the fingerprint needs its content.
 		var locked Invoice
@@ -2284,6 +2323,20 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 			return ErrStaleValidation
 		}
 
+		ran := make(map[string]bool, len(customIDs))
+		for _, rid := range customIDs {
+			ran[rid] = true
+		}
+		current, err := customrule.CurrentTx(ctx, tx, []string{locked.EntityID})
+		if err != nil {
+			return err
+		}
+		for _, r := range current {
+			if !ran[r.RevisionID] {
+				return ErrRulesChanged
+			}
+		}
+
 		// 4. stamp the verdict, blocking or not.
 		if err := scanInvoice(tx.QueryRow(ctx,
 			`UPDATE invoices SET violations = $1, rule_set_version_id = $2, verdict_fingerprint = $3 WHERE id = $4 RETURNING `+invoiceColumns,
@@ -2319,11 +2372,12 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 			outcome = "blocked"
 		}
 		return audit.Record(ctx, tx, callerID.Subject, "invoice.validated", map[string]any{
-			"id":                  id,
-			"rule_set_version_id": ruleSetVersionID,
-			"outcome":             outcome,
-			"violation_count":     len(vs),
-			"invoice_number":      locked.InvoiceNumber,
+			"id":                       id,
+			"rule_set_version_id":      ruleSetVersionID,
+			"outcome":                  outcome,
+			"violation_count":          len(vs),
+			"invoice_number":           locked.InvoiceNumber,
+			"custom_rule_revision_ids": customIDs,
 		})
 	})
 	if err != nil {

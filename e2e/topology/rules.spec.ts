@@ -94,7 +94,7 @@ async function reopenRules(page: Page): Promise<void> {
 }
 
 const newButton = (page: Page) => page.getByTestId('rules-new')
-const headerBar = (page: Page) => newButton(page).locator('xpath=../..')
+const headerBar = (page: Page) => page.getByText(/^GOLDEN v\d+ \+ \d+ CUSTOM$/).locator('xpath=../..')
 const tableCard = (page: Page) => headerBar(page).locator('xpath=..')
 const ruleRow = (page: Page, text: string) => tableCard(page).locator('.pf-row').filter({ hasText: text })
 
@@ -230,23 +230,34 @@ test('an admin writes, switches, edits and removes a custom rule', async ({ page
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Core AC 2: New rule sits in the header bar, clear of the title pill and the count.
-test('the header bar holds New rule', async ({ page }) => {
+// Core AC 2: New rule is never clipped by a scrolling ancestor and never overlaps its neighbours.
+test('New rule is wholly visible at every width', async ({ page }) => {
   test.setTimeout(90_000)
   const errors = collectErrors(page)
   await openRules(page)
-  const bar = headerBar(page)
-  const pill = bar.getByText(/^GOLDEN v\d+ \+ \d+ CUSTOM$/)
-  const count = bar.getByText(/^\d+ RULES$/)
+  const btn = newButton(page)
+  const count = page.getByText(/^\d+ RULES$/).first()
+  const title = page.getByRole('heading', { name: 'Rules', exact: true })
 
-  await atEachWidth(page, 'New rule inside the header bar', async () => {
-    const [b, btn, p, c] = await Promise.all([box(bar), box(newButton(page)), box(pill), box(count)])
-    if (!b || !btn || !p || !c) return 'an element has no box'
-    if (!enclosesRect(b, btn, 1)) return `New rule ${JSON.stringify(btn)} leaves the bar ${JSON.stringify(b)}`
-    if (rectsOverlap(btn, p)) return 'New rule overlaps the title pill'
-    if (rectsOverlap(btn, c)) return 'New rule overlaps the count'
-    const centerGap = Math.abs(btn.y + btn.height / 2 - (c.y + c.height / 2))
-    return centerGap <= 1 ? null : `New rule is ${centerGap}px off the count's line`
+  // Visible box of the nearest ancestor that clips horizontally; the viewport when none does.
+  const clipBox = () =>
+    btn.evaluate((el): Rect => {
+      for (let n = el.parentElement; n; n = n.parentElement) {
+        if (/auto|scroll|hidden|clip/.test(getComputedStyle(n).overflowX)) {
+          const r = n.getBoundingClientRect()
+          return { x: r.x, y: r.y, width: n.clientWidth, height: r.height }
+        }
+      }
+      return { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight }
+    })
+
+  await atEachWidth(page, 'New rule inside its clipping ancestor', async () => {
+    const [clip, b, c, t] = await Promise.all([clipBox(), box(btn), box(count), box(title)])
+    if (!b || !c || !t) return 'an element has no box'
+    if (!enclosesRect({ ...clip, y: b.y, height: b.height }, b, 0.5)) return `New rule ${JSON.stringify(b)} is clipped by ${JSON.stringify(clip)}`
+    if (rectsOverlap(b, c)) return 'New rule overlaps the count'
+    if (rectsOverlap(b, t)) return 'New rule overlaps the title'
+    return null
   })
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

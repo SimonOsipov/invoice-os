@@ -559,9 +559,11 @@ describe('RulesView, reskin pins', () => {
     expect(row.style.flexWrap).toBe('wrap')
     expect(row.style.gap).toBe('20px')
     expect(h1.parentElement!.style.minWidth).toBe('0')
-    const count = row.lastElementChild as HTMLElement
+    const group = row.lastElementChild as HTMLElement
+    const count = group.lastElementChild as HTMLElement
     expect(count.textContent).toBe('5 RULES')
-    expect(count.style.flex).toBe('0 0 auto')
+    expect(group.contains(screen.getByTestId('rules-new'))).toBe(true)
+    expect(group.style.flex).toBe('0 0 auto')
     expect(count.style.letterSpacing).toBe('')
   })
 

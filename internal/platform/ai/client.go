@@ -85,6 +85,9 @@ func (c *Client) Call(ctx context.Context, req Request) (map[string]any, error) 
 	r := c.call(ctx, req)
 	latency := c.cfg.now().Sub(start)
 	c.logCall(ctx, req, r, latency)
+	if r.unsent {
+		return r.answer, r.err
+	}
 	airecord.Record(ctx, c.recorder, c.logger, airecord.Call{
 		Client: "ai", Purpose: string(req.Purpose), Model: Model,
 		InputTokens: r.usage.PromptTokens, OutputTokens: r.usage.CompletionTokens, Cost: r.usage.Cost,
@@ -106,6 +109,8 @@ type result struct {
 	outcome  string // "ok" | "unavailable" | "refused" | "off" | "fake"
 	attempts int
 	usage    usage
+	// unsent: ctx was done before attempt 1, so no request left; the call is logged but not recorded.
+	unsent bool
 }
 
 // responseEnvelope is OpenRouter's chat-completion response shape.
@@ -147,6 +152,7 @@ func (c *Client) call(ctx context.Context, req Request) result {
 	var last error
 
 	for attempt := 1; ; attempt++ {
+		res.unsent = attempt == 1 && ctx.Err() != nil
 		actx, cancel := context.WithTimeout(ctx, deadline.Sub(c.cfg.now()))
 		status, respBody, postErr := c.post(actx, body)
 		cancel()

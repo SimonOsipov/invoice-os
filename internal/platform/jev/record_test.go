@@ -288,3 +288,30 @@ func TestUsage_HasExactlyItsTwoFields(t *testing.T) {
 		t.Errorf("fields %v, want %v", got, want)
 	}
 }
+
+func TestAsk_ACtxDoneBeforeTheFirstRequestRecordsNothing(t *testing.T) {
+	run := func(withSink bool) (error, map[string]any, *sinkSpy, int32) {
+		ts := newServer(t, statusOnly(http.StatusOK))
+		c, buf, spy := recordClient(ts, withSink)
+		ctx, cancel := context.WithCancel(t1Ctx(t.Context()))
+		cancel()
+		_, err := c.Ask(ctx, noulReq("s"))
+		line := oneLine(t, buf)
+		delete(line, "time")
+		return err, line, spy, ts.hits.Load()
+	}
+	err, l1, spy, hits := run(true)
+	plain, l2, _, _ := run(false)
+	if hits != 0 {
+		t.Errorf("stub saw %d requests, want 0", hits)
+	}
+	if n := len(spy.calls()); n != 0 {
+		t.Errorf("sink got %d calls, want 0: %+v", n, spy.calls())
+	}
+	if !errors.Is(err, context.Canceled) || plain == nil || err.Error() != plain.Error() {
+		t.Errorf("err %v differs from sink-less %v", err, plain)
+	}
+	if !reflect.DeepEqual(l1, l2) {
+		t.Errorf("log lines differ: %v vs %v", l1, l2)
+	}
+}

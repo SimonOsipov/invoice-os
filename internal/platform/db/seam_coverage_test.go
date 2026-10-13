@@ -200,7 +200,6 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/importer/backfill.go"},                                           // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
 	{file: "internal/invoice/revalidate.go"},                                          // operator CLI tools/revalidate-invoices and the reconciliation re-checks (version and custom-rule); same shape, same absence of a caller
 	{file: "internal/reconciliation/sweep.go"},                                        // EnumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
-	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                         // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},         // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"},      // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/account_state_read.go", fn: "GrantAccountStateRead"}, // boot-time grant on the supabase_auth_admin DSN, before any request or tenant exists
@@ -1049,7 +1048,6 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /auth/login":                                    {verdict: scExempt, reason: "unauthenticated by definition; there is no caller yet to hold a membership"},
 	"POST /auth/mock/invitation-token":                    {verdict: scExempt, reason: "mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/mock/member":                              {verdict: scExempt, reason: "mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity"},
-	"POST /auth/mock/staff":                               {verdict: scExempt, reason: "mock builds only; grants staff on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/refresh":                                  {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/register":                                 {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/request-password-reset":                   {verdict: scExempt, reason: "no database; calls GoTrue"},

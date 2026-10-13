@@ -20,7 +20,6 @@ func TestUntaggedGatewayServesNoMintRoutes(t *testing.T) {
 		t.Errorf(`mockIssuerRoutes("development", "true") = (jwks %v, login %v), want (nil, nil) in a build without -tags mockissuer`, jwks, login)
 	}
 	for name, route := range map[string]func(string, *slog.Logger) http.Handler{
-		"mockStaffRoute":           mockStaffRoute,
 		"mockMemberRoute":          mockMemberRoute,
 		"mockInvitationTokenRoute": mockInvitationTokenRoute,
 	} {
@@ -43,7 +42,6 @@ func TestMockIssuerBuildPassesItsTaggedTests(t *testing.T) {
 		"TestTaggedGatewayRegistersMintRoutesOutsideProduction",
 		"TestTaggedMockIssuerRoutesValueDomain",
 		"TestTaggedMockIssuerRoutesKeepTheirWiring",
-		"TestTaggedMockStaffRouteWiresTheGrant",
 		"TestTaggedMockMemberRouteWiresTheGrant",
 		"TestTaggedMockInvitationTokenRouteWiresTheSetter",
 		"TestTaggedMockLoginIgnoresRailwayEnvironmentName",

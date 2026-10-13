@@ -26,7 +26,7 @@ type gotrueClaims struct {
 }
 
 // appMetadata is GoTrue's app_metadata object. Only tenant_id and staff are
-// bound; other keys (provider, providers, rules_role, ...) are ignored.
+// bound; other keys (provider, providers, ...) are ignored.
 type appMetadata struct {
 	TenantID string `json:"tenant_id"`
 	Staff    bool   `json:"staff,omitempty"`

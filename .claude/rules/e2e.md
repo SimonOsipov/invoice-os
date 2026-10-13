@@ -18,7 +18,7 @@ paths:
 - Sign in an app session with `signInAs(page, id, { tenantId })` from `e2e/personaSession.ts`. It admits the e2e member through `ensureMember`.
 - Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
-- Serve `/auth/mock/staff`, `/auth/mock/member` and `/auth/mock/invitation-token` only from the `mockissuer` build. Only `pull_request` stamps that tag.
+- Serve `/auth/mock/member` and `/auth/mock/invitation-token` only from the `mockissuer` build. Only `pull_request` stamps that tag.
 - Never assume an empty table. Smoke, api and topology run in that order against one deployment, with no reset between them.
 - Expect a Playwright retry to rerun a failed test against the rows its first attempt left.
 - Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.

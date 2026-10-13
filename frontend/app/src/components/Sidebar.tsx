@@ -316,7 +316,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
             rel="noopener noreferrer"
             className="pf-signout"
             aria-label="Open the Support Console"
-            title="Open the Support Console"
+            title="Support Console"
             style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 'var(--radius-sm)', cursor: 'pointer', textDecoration: 'none' }}
           >
             <Icon paths={['M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20', 'M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8', 'm4.93 4.93 4.24 4.24', 'm14.83 9.17 4.24-4.24', 'm14.83 14.83 4.24 4.24', 'm9.17 14.83-4.24 4.24']} size={16} />

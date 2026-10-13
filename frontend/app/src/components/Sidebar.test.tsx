@@ -305,6 +305,7 @@ describe('Sidebar footer, the Support Console icon', () => {
     expect(screen.getAllByRole('link', { name: NAME })).toHaveLength(1)
     const a = icon()!
     expect(a.getAttribute('href')).toBe('https://sup.x/?auth=app')
+    expect(a.getAttribute('title')).toBe('Support Console')
     expect(a.getAttribute('target')).toBe('_blank')
     expect(a.getAttribute('rel')).toBe('noopener noreferrer')
     expect(a.nextElementSibling).toBe(screen.getByRole('button', { name: 'Sign out' }))

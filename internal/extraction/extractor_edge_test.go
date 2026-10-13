@@ -285,7 +285,7 @@ func TestNoOtherMigrationRedefinesTheReasonCheck(t *testing.T) {
 	carriers, _ := reasonCheckMigrations(t)
 	want := []string{
 		"20260827100320_extraction_field_results.sql",
-		"20261009133403_extraction_rule_breaks.sql",
+		"20261010090000_extraction_rule_breaks.sql",
 	}
 	if !reflect.DeepEqual(carriers, want) {
 		t.Errorf("the reason_code CHECK set is written in %v, want %v -- "+

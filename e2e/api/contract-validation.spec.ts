@@ -308,7 +308,7 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
     expect(put.body).toEqual({ error: 'no draft' })
   })
 
-  test('the sync log is readable by rules staff', async () => {
+  test('the sync log is readable by a house member', async () => {
     const summary = await get(staff, SYNCS)
     expect(summary.status, 'sync summary').toBe(200)
     const lists = (summary.body as { lists: Array<{ list: string; synced_at: string }> }).lists

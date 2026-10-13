@@ -39,7 +39,7 @@ import (
 )
 
 // witnessTenantID is the throwaway non-demo tenant the survival obligation
-// plants under. Deliberately unlike the four seeded ids so a failure message
+// plants under. Deliberately unlike the seeded ids so a failure message
 // cannot be misread.
 const witnessTenantID = "9d9d9d9d-9d9d-9d9d-9d9d-9d9d9d9d9d9d"
 

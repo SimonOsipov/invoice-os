@@ -31,6 +31,7 @@ var seedTenants = []struct {
 	{"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "Tenant B (dev)", "firm"},
 	{"11111111-1111-1111-1111-111111111111", "Okafor & Partners", "firm"},
 	{"22222222-2222-2222-2222-222222222222", "Honeywell Group", "in_house"},
+	{"a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0", "ASComply (dev)", "firm"},
 }
 
 // seedMemberships mirrors db/seed.dev.sql's fixed membership rows exactly.

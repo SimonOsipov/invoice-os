@@ -43,7 +43,7 @@ func TestShardSeedIsIdempotentAndLeavesTheDemoTenantsUntouched(t *testing.T) {
 		}
 		return m
 	}
-	// Digest of the ordered rows of the four seed.dev.sql tenants, per table.
+	// Digest of the ordered rows of the seed.dev.sql tenants, per table.
 	digests := func() map[string][]string {
 		m := map[string][]string{}
 		for _, tb := range shardSeedTables {

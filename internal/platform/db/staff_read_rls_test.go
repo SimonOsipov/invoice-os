@@ -288,8 +288,8 @@ func collectStaffTenantRows(t *testing.T, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }, member string) []staffTenantRow {
 	t.Helper()
-	rows, err := q.Query(context.Background(),
-		`SELECT id::text, name, kind, created_at FROM public.staff_read_tenants($1::uuid)`, member)
+	// SELECT * scans by position: pins the result column order and count.
+	rows, err := q.Query(context.Background(), `SELECT * FROM public.staff_read_tenants($1::uuid)`, member)
 	if err != nil {
 		t.Fatalf("staff_read_tenants as invoice_app: %v", err)
 	}
@@ -399,6 +399,42 @@ func TestRLS_StaffReadTenantsAdmitsAHouseMemberOfAnyRole(t *testing.T) {
 		if err != nil || n == 0 {
 			t.Errorf("%s house member: %d rows, err %v, want rows and no error", role, n, err)
 		}
+	}
+}
+
+// AC-4. A tenant set on the connection neither narrows a staff read nor admits a customer member.
+func TestRLS_StaffReadTenantsIgnoresTheTenantSetOnTheConnection(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadTenants(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	customer := seedCommittedMembership(t, h.tenantA, "admin", "active")
+
+	var got []staffTenantRow
+	err := db.WithinTenantTx(context.Background(), h.app, h.tenantA, func(tx pgx.Tx) error {
+		got = collectStaffTenantRows(t, tx, staff)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("staff_read_tenants with tenant A set: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, r := range got {
+		seen[r.id] = true
+	}
+	if len(got) == 0 || !seen[h.tenantA] || !seen[h.tenantB] {
+		t.Errorf("staff_read_tenants with tenant A set returned %d rows, tenant A seen = %v, tenant B seen = %v, want both", len(got), seen[h.tenantA], seen[h.tenantB])
+	}
+
+	err = db.WithinTenantTx(context.Background(), h.app, h.tenantA, func(tx pgx.Tx) error {
+		n, callErr := ruleDraftTry(t, tx, `SELECT * FROM public.staff_read_tenants($1::uuid)`, customer)
+		if n != 0 {
+			t.Errorf("refused call returned %d rows", n)
+		}
+		requireNotStaffRefusal(t, "customer member of tenant A with tenant A set", callErr, "staff_read_tenants")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("customer call with tenant A set: %v", err)
 	}
 }
 

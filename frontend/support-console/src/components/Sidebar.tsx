@@ -7,7 +7,6 @@ import type { Screen } from '../types'
 type Props = {
   screen: Screen
   onNavigate: (s: Screen) => void
-  deadLetterCount: number
 }
 
 const navBtnStyle = (active: boolean): CSSProperties => ({
@@ -28,7 +27,7 @@ const navBtnStyle = (active: boolean): CSSProperties => ({
   position: 'relative',
 })
 
-export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
+export function Sidebar({ screen, onNavigate }: Props) {
   return (
     <aside
       className="ops-sidebar asc-dark"
@@ -81,8 +80,6 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
         </div>
         {NAV_ITEMS.map((n) => {
           const active = screen === n.key
-          const badge = n.key === 'submissions' && deadLetterCount ? String(deadLetterCount) : ''
-          const badgeRed = n.key === 'submissions'
           return (
             <button key={n.key} type="button" onClick={() => onNavigate(n.key)} className="ops-nav" style={navBtnStyle(active)}>
               <span style={{ position: 'absolute', left: 0, top: 7, bottom: 7, width: 2, borderRadius: 2, background: active ? 'var(--action)' : 'transparent' }} />
@@ -90,21 +87,6 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
               <span className="ops-nav-label" style={{ flex: 1 }}>
                 {n.label}
               </span>
-              {badge && (
-                <span
-                  className="mono ops-nav-label"
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 700,
-                    background: badgeRed ? 'var(--status-red-bg)' : 'var(--action-tint)',
-                    color: badgeRed ? 'var(--status-red-text)' : 'var(--action)',
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '1px 6px',
-                  }}
-                >
-                  {badge}
-                </span>
-              )}
             </button>
           )
         })}

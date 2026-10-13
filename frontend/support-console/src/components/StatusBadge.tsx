@@ -1,5 +1,5 @@
-import { severityStyle, statusStyle } from '../helpers'
-import type { JobState, Severity } from '../types'
+import { severityStyle } from '../helpers'
+import type { Severity } from '../types'
 
 // The status pill the prototype repeats inline on every table, drawer and list
 // (proto:181, 207, 260, 298, 415, 463). One component instead of nine copies of the same
@@ -23,10 +23,6 @@ export function Badge({ style, dot = false, fontSize = 9.5 }: Props) {
       </span>
     </span>
   )
-}
-
-export function StateBadge({ state, dot = true, fontSize }: { state: JobState; dot?: boolean; fontSize?: number }) {
-  return <Badge style={statusStyle(state)} dot={dot} fontSize={fontSize} />
 }
 
 export function SeverityBadge({ severity }: { severity: Severity }) {

@@ -76,13 +76,7 @@ const scanCorners = (files: Record<string, string>) => {
   }
 }
 
-const FG4_STAYS: [file: string, needle: string][] = [
-  ['components/Submissions.tsx', '{CHEVRON_RIGHT_ICON}'],
-  ['components/Submissions.tsx', 'All tenants <span'],
-  ['components/Submissions.tsx', 'Last 24h <span'],
-  ['components/Submissions.tsx', "=== '—' ? 'var(--fg-4)'"],
-  ['components/Audit.tsx', '{CHEVRON_RIGHT_ICON}'],
-]
+const FG4_STAYS: [file: string, needle: string][] = []
 const scanFg4 = (files: Record<string, string>, stays: [string, string][]) => {
   const lines = Object.entries(files).flatMap(([file, raw]) =>
     stripFile(file, raw)
@@ -248,7 +242,7 @@ describe('v2 entry', () => {
     const scanned = { ...SCAN_FILES, '../index.html': INDEX_HTML }
     const names = Object.keys(scanned)
     expect(names.length, 'owned files scanned').toBeGreaterThanOrEqual(25)
-    for (const f of ['components/Submissions.tsx', 'components/Health.tsx', 'styles/support.css', 'icons.tsx', '../index.html']) {
+    for (const f of ['components/Rules.tsx', 'components/Sidebar.tsx', 'styles/support.css', 'icons.tsx', '../index.html']) {
       expect(names, `${f} is scanned`).toContain(f)
     }
     expect(scanVocabulary(scanned), 'v1 vocabulary (file:line needle)').toEqual([])
@@ -286,5 +280,16 @@ describe('v2 entry', () => {
     expect(lines.length, '--fg-4 lines found').toBeGreaterThanOrEqual(FG4_STAYS.length)
     expect(unmatched, '--fg-4 on enabled text (move to --fg-3)').toEqual([])
     expect(stale, 'stale allowlist needles').toEqual([])
+  })
+
+  it('VE-11 rulesFixture is imported only by tests', () => {
+    const files = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name)] : []))
+    const all = files(HERE).filter((f) => !f.endsWith('v2Entry.test.ts'))
+    const isTest = (f: string) => /\.test\.tsx?$/.test(f)
+    expect(all.length, 'files scanned').toBeGreaterThan(20)
+    const naming = all.filter((f) => !f.endsWith('rulesFixture.ts') && stripComments(read(f)).toLowerCase().includes('rulesfixture'))
+    expect(naming.filter((f) => !isTest(f))).toEqual([])
+    expect(naming.filter(isTest).length).toBeGreaterThan(0)
   })
 })

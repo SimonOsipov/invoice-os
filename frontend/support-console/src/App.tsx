@@ -1,20 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
-import { Submissions } from './components/Submissions'
 import { Rules } from './components/Rules'
-import { Audit } from './components/Audit'
-import { Tenants } from './components/Tenants'
-import { Health } from './components/Health'
-import { JobDrawer } from './components/JobDrawer'
 import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
-import { AuditDrawer } from './components/AuditDrawer'
 import { KillConfirm } from './components/KillConfirm'
 import { PublishModal } from './components/PublishModal'
 import { DraftTestModal } from './components/DraftTestModal'
 import { Toast } from './components/Toast'
-import { AUDIT_ENTRIES, SEED_JOBS } from './data'
 import { gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import {
   addDraftRule,
@@ -39,7 +32,7 @@ import {
 } from './rulesApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, landingBase, signOut } from './auth'
-import type { AuditFilter, DrawerState, Env, JobFilter, Rule, Screen, SubTab, ToastState, ToastTone } from './types'
+import type { DrawerState, Env, Rule, Screen, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.asc-app` — that scope defines the design-system tokens
 // (--action, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label, .mono, .eyebrow)
@@ -54,14 +47,9 @@ export default function App() {
 }
 
 function Console() {
-  // Mirrors the prototype's constructor state (Support Console.dc.html:708).
-  const [screen, setScreen] = useState<Screen>('submissions')
+  const [screen, setScreen] = useState<Screen>('rules')
   const [env, setEnv] = useState<Env>('sandbox')
-  const [filter, setFilter] = useState<JobFilter>('all')
-  const [subTab, setSubTab] = useState<SubTab>('jobs')
   const [drawer, setDrawer] = useState<DrawerState>(null)
-  const [reqOpen, setReqOpen] = useState(true)
-  const [resOpen, setResOpen] = useState(true)
   const [confirmKill, setConfirmKill] = useState<{ key: string; action: 'disable' | 'enable' } | null>(null)
   const [switching, setSwitching] = useState(false)
   const [publish, setPublish] = useState<{ rows: DiffRow[] | null; rules?: { draft: Rule[]; inForce: Rule[] }; error: string | null } | null>(null)
@@ -69,11 +57,6 @@ function Console() {
   const [testResult, setTestResult] = useState<DraftTestResult | null>(null)
   const [draftBusy, setDraftBusy] = useState(false)
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
-  const [auditQuery, setAuditQuery] = useState('')
-  const [auditFilter, setAuditFilter] = useState<AuditFilter>('all')
-  const [tenantQuery, setTenantQuery] = useState('')
-  const [tenantId, setTenantId] = useState('t1')
-  const [jobs, setJobs] = useState(SEED_JOBS)
   const [toast, setToast] = useState<ToastState>(null)
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -117,35 +100,9 @@ function Console() {
     if (expired) void signOut()
   }, [expired])
 
-  const dlCount = jobs.filter((j) => j.state === 'dead-letter').length
-
   const go = (s: Screen) => {
     setScreen(s)
     setDrawer(null)
-  }
-
-  // ---- job actions (proto:1114) ----
-  // Cross-tenant mutations. Nothing reaches the audit log until accreditation (TopBar.tsx),
-  // so the tag names that gate rather than asserting a write happened.
-  const openJob = (id: string) => {
-    setDrawer({ type: 'job', id })
-    setReqOpen(true)
-    setResOpen(true)
-  }
-  const reDriveOne = (id: string) => {
-    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, state: 'queued', lastError: '—' } : j)))
-    setDrawer(null)
-    showToast('Re-drive queued · ' + id, 'AUDIT ON ACCREDITATION')
-  }
-  const reDriveAll = () => {
-    const n = jobs.filter((j) => j.state === 'dead-letter').length
-    setJobs((prev) => prev.map((j) => (j.state === 'dead-letter' ? { ...j, state: 'queued', lastError: '—' } : j)))
-    showToast(`Re-drive queued · ${n} dead-letter ${n === 1 ? 'job' : 'jobs'}`, 'AUDIT ON ACCREDITATION')
-  }
-  const cancelJob = (id: string) => {
-    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, state: 'failed', lastError: 'Cancelled by operator' } : j)))
-    setDrawer(null)
-    showToast('Cancelled · ' + id, 'AUDIT ON ACCREDITATION', 'red')
   }
 
   // ---- rule actions ----
@@ -265,7 +222,6 @@ function Console() {
   }
 
   // ---- resolve open drawer entities ----
-  const drawerJob = drawer?.type === 'job' ? jobs.find((j) => j.id === drawer.id) : undefined
   const drawerRule = drawer?.type === 'rule' ? rules.find((r) => r.key === drawer.id) : undefined
   const onDraft = listState === 'draft'
   const draftEdit = (key: string | null) =>
@@ -277,7 +233,6 @@ function Console() {
           onRemove: () => void (key !== null && removeFromDraft(key)),
         }
       : undefined
-  const drawerAudit = drawer?.type === 'audit' ? AUDIT_ENTRIES.find((a) => a.id === drawer.id) : undefined
 
   return (
     <div
@@ -291,24 +246,11 @@ function Console() {
         overflow: 'hidden',
       }}
     >
-      <Sidebar screen={screen} onNavigate={go} deadLetterCount={dlCount} />
+      <Sidebar screen={screen} onNavigate={go} />
 
       <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <TopBar screen={screen} env={env} onSetEnv={setEnv} />
         <div style={{ flex: 1, overflowY: 'auto' }}>
-          {screen === 'submissions' && (
-            <Submissions
-              jobs={jobs}
-              filter={filter}
-              subTab={subTab}
-              onFilterChange={setFilter}
-              onSubTabChange={setSubTab}
-              onOpenJob={openJob}
-              onReDriveAll={reDriveAll}
-              onReconcile={(id, appLabel) => showToast(`Reconciled ${id} → ${appLabel}`, 'AUDIT ON ACCREDITATION')}
-              onRunSweep={() => showToast('Reconciliation sweep dispatched', 'RECONCILIATION')}
-            />
-          )}
           {screen === 'rules' && (
             <Rules
               rules={rules}
@@ -338,43 +280,8 @@ function Console() {
               }}
             />
           )}
-          {screen === 'audit' && (
-            <Audit
-              query={auditQuery}
-              filter={auditFilter}
-              onQueryChange={setAuditQuery}
-              onFilterChange={setAuditFilter}
-              onOpen={(id) => setDrawer({ type: 'audit', id })}
-            />
-          )}
-          {screen === 'tenants' && (
-            <Tenants
-              query={tenantQuery}
-              tenantId={tenantId}
-              onQueryChange={setTenantQuery}
-              onSelect={setTenantId}
-              onViewJobs={() => go('submissions')}
-              onViewAs={(name) => showToast(`Opened ${name} in read-only view-as`, 'AUDIT ON ACCREDITATION')}
-            />
-          )}
-          {screen === 'health' && <Health deadLetterCount={dlCount} />}
         </div>
       </main>
-
-      {drawerJob && (
-        <JobDrawer
-          job={drawerJob}
-          env={env}
-          reqOpen={reqOpen}
-          resOpen={resOpen}
-          onToggleReq={() => setReqOpen((v) => !v)}
-          onToggleRes={() => setResOpen((v) => !v)}
-          onClose={() => setDrawer(null)}
-          onReDrive={() => reDriveOne(drawerJob.id)}
-          onRePoll={() => showToast('Re-poll dispatched · ' + drawerJob.id, 'POLLING')}
-          onCancel={() => cancelJob(drawerJob.id)}
-        />
-      )}
 
       {codeList !== null && <CodeListDrawer list={codeList} syncs={syncsRead.data} note={readNote(syncsRead)} onClose={() => setDrawer(null)} />}
 
@@ -387,16 +294,6 @@ function Console() {
           draft={draftEdit(drawerRule?.key ?? null)}
           onKill={() => drawerRule && setConfirmKill({ key: drawerRule.key, action: 'disable' })}
           onClose={() => setDrawer(null)}
-        />
-      )}
-
-      {drawerAudit && (
-        <AuditDrawer
-          entry={drawerAudit}
-          env={env}
-          onClose={() => setDrawer(null)}
-          onCopy={() => showToast('Evidence JSON copied to clipboard', 'AUDIT')}
-          onExport={() => showToast('Evidence bundle exported', 'AUDIT')}
         />
       )}
 

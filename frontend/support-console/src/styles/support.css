@@ -70,10 +70,6 @@ body {
 .ops-row:hover {
   background: var(--bg-3);
 }
-.ops-chip {
-  transition: background 120ms, border-color 120ms, color 120ms;
-  cursor: pointer;
-}
 /* No transform on press — the system doesn't squish. The prototype's
    `.ops-btn:active { transform: translateY(1px) }` (proto:31) is deliberately NOT
    carried over: the design-drift handoff calls it out as a P1 defect, and the ops
@@ -154,29 +150,14 @@ pre.ops-json {
   .ops-sidebar .ops-nav {
     justify-content: center;
   }
-  .ops-recon-grid,
-  .ops-rules-grid,
-  .ops-tenants-grid {
+  .ops-rules-grid {
     grid-template-columns: minmax(0, 1fr) !important;
-  }
-  .ops-health-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
 
 @media (max-width: 768px) {
   .ops-header-search {
     display: none !important;
-  }
-  .ops-sub-stats {
-    display: none !important;
-  }
-  .ops-health-grid,
-  .ops-tenant-kpis {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-  .ops-tenant-split {
-    grid-template-columns: minmax(0, 1fr) !important;
   }
   .ops-drawer {
     width: 100vw !important;
@@ -191,9 +172,5 @@ pre.ops-json {
   }
   .ops-screen-pad {
     padding: 18px 14px 40px !important;
-  }
-  .ops-health-grid,
-  .ops-tenant-kpis {
-    grid-template-columns: minmax(0, 1fr) !important;
   }
 }

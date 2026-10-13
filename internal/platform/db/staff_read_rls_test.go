@@ -3,6 +3,7 @@ package db_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
@@ -526,7 +528,7 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 		}
 	}
 
-	// Column sets per table: tenants is SUPP-02's, the other three are SUPP-05-01's.
+	// Column sets per table: tenants is the staff_read_tenants migration's, the other three the tenant-detail migration's.
 	for table, cols := range map[string][]string{
 		"public.tenants":     {"created_at", "id", "kind", "name"},
 		"public.memberships": {"created_at", "display_name", "email", "role", "status", "tenant_id", "user_id"},
@@ -762,7 +764,7 @@ const (
 
 var staffDetailSigs = []string{staffReadActivitySig, staffReadMembersSig, staffReadInvoicesSig}
 
-// requireStaffDetailFunctions fails by name while the SUPP-05-01 migration is not applied.
+// requireStaffDetailFunctions fails by name while the tenant-detail migration is not applied.
 func requireStaffDetailFunctions(t *testing.T) {
 	t.Helper()
 	for _, sig := range staffDetailSigs {
@@ -824,7 +826,12 @@ func seedAuditAt(t *testing.T, tenant string, at time.Time) {
 
 func seedMemberAt(t *testing.T, tenant, role, status string, createdAt time.Time, display, email *string) string {
 	t.Helper()
-	user, id := uuid.NewString(), uuid.NewString()
+	return seedMemberAsUser(t, tenant, uuid.NewString(), role, status, createdAt, display, email)
+}
+
+func seedMemberAsUser(t *testing.T, tenant, user, role, status string, createdAt time.Time, display, email *string) string {
+	t.Helper()
+	id := uuid.NewString()
 	if _, err := h.super.Exec(context.Background(),
 		`INSERT INTO memberships (id, tenant_id, user_id, role, status, display_name, email, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		id, tenant, user, role, status, display, email, createdAt); err != nil {
@@ -1134,7 +1141,7 @@ func staffDetailMigrationVersion(t *testing.T) int64 {
 	return 0
 }
 
-// Rolls back only the detail migration: SUPP-02's footprint must survive its Down.
+// Rolls back only the detail migration: the staff_read_tenants footprint must survive its Down.
 func TestRLS_StaffReadTenantDetailDownAndUp(t *testing.T) {
 	requireHarness(t)
 	version := staffDetailMigrationVersion(t)
@@ -1224,4 +1231,175 @@ func withTenantRows(t *testing.T, tenant, sql string, args ...any) (int, error) 
 		t.Fatalf("WithinTenantTx: %v", err)
 	}
 	return n, callErr
+}
+
+func TestRLS_StaffReadTenantMembersTiesBreakByUserIdAscending(t *testing.T) {
+	requireHarness(t)
+	requireStaffDetailFunctions(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	x := seedDetailTenant(t, "members tie")
+
+	users := make([]string, 6)
+	for i := range users {
+		users[i] = uuid.NewString()
+	}
+	sort.Strings(users)
+	// Largest id first, so heap order is the reverse of the expected order.
+	for i := len(users) - 1; i >= 0; i-- {
+		seedMemberAsUser(t, x, users[i], "preparer", "active", t0, nil, nil)
+	}
+
+	got := collectTenantMembers(t, h.app, staff, x)
+	if len(got) != len(users) {
+		t.Fatalf("staff_read_tenant_members(X) = %d rows, want %d", len(got), len(users))
+	}
+	var ids []string
+	for _, r := range got {
+		ids = append(ids, r.user)
+	}
+	if !reflect.DeepEqual(ids, users) {
+		t.Errorf("members with equal created_at = %v, want ascending user_id %v", ids, users)
+	}
+}
+
+// invoices.status CHECK values: invoice_count must count every one.
+var staffDetailInvoiceStatuses = []string{"draft", "validated", "queued", "submitted", "accepted", "rejected", "failed"}
+
+func TestRLS_StaffReadTenantActivityCountsEveryInvoiceStatusAndKeepsTenantsApart(t *testing.T) {
+	requireHarness(t)
+	requireStaffDetailFunctions(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	all, noisy, inactive := seedDetailTenant(t, "activity all statuses"), seedDetailTenant(t, "activity noisy"), seedDetailTenant(t, "activity inactive only")
+
+	entity := seedEntity(t, all)
+	for i, st := range staffDetailInvoiceStatuses {
+		seedInvoiceAt(t, all, entity, uuid.NewString(), fmt.Sprintf("ALL-%d", i), st, t0)
+	}
+	seedMemberAt(t, all, "admin", "active", t0, nil, nil)
+	seedAuditAt(t, all, t0)
+
+	// A later audit row, more members and more invoices on another tenant must not move the first tenant's numbers.
+	noisyEntity := seedEntity(t, noisy)
+	for i := 0; i < 5; i++ {
+		seedInvoiceAt(t, noisy, noisyEntity, uuid.NewString(), fmt.Sprintf("NOISY-%d", i), "accepted", t0)
+		seedMemberAt(t, noisy, "preparer", "active", t0, nil, nil)
+	}
+	seedAuditAt(t, noisy, t0.Add(time.Hour))
+
+	seedMemberAt(t, inactive, "admin", "invited", t0, nil, nil)
+	seedMemberAt(t, inactive, "admin", "suspended", t0, nil, nil)
+
+	got := collectTenantActivity(t, h.app, staff)
+	byTenant := map[string]tenantActivityRow{}
+	for _, r := range got {
+		byTenant[r.tenant] = r
+	}
+	if r := byTenant[all]; r.active != 1 || r.invoice != int64(len(staffDetailInvoiceStatuses)) || r.last == nil || !r.last.Equal(t0) {
+		t.Errorf("tenant with every invoice status = active %d, invoices %d, last %v, want 1, %d, %v", r.active, r.invoice, r.last, len(staffDetailInvoiceStatuses), t0)
+	}
+	if r := byTenant[noisy]; r.active != 5 || r.invoice != 5 || r.last == nil || !r.last.Equal(t0.Add(time.Hour)) {
+		t.Errorf("noisy tenant = active %d, invoices %d, last %v, want 5, 5, %v", r.active, r.invoice, r.last, t0.Add(time.Hour))
+	}
+	if r, ok := byTenant[inactive]; !ok || r.active != 0 || r.invoice != 0 || r.last != nil {
+		t.Errorf("tenant with only invited and suspended members = %+v (present %v), want one row of 0, 0, NULL", r, ok)
+	}
+}
+
+func TestRLS_StaffReadTenantInvoicesLimitBoundaryAndEmptyTenants(t *testing.T) {
+	requireHarness(t)
+	requireStaffDetailFunctions(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	exact, few, bare := seedDetailTenant(t, "invoices exactly the limit"), seedDetailTenant(t, "invoices few"), seedDetailTenant(t, "invoices none")
+	memberless := seedDetailTenant(t, "members none")
+	seedMemberAt(t, bare, "admin", "active", t0, nil, nil)
+	seedInvoiceAt(t, memberless, seedEntity(t, memberless), uuid.NewString(), "MEMBERLESS-1", "draft", t0)
+
+	for _, c := range []struct {
+		tenant string
+		n      int
+	}{{exact, staffTenantInvoiceLimit}, {few, 3}} {
+		entity := seedEntity(t, c.tenant)
+		for i := 0; i < c.n; i++ {
+			seedInvoiceAt(t, c.tenant, entity, uuid.NewString(), fmt.Sprintf("B-%02d", i), "draft", t0.Add(time.Duration(i)*time.Second))
+		}
+		got := collectTenantInvoices(t, h.app, staff, c.tenant)
+		if len(got) != c.n {
+			t.Fatalf("a tenant with %d invoices returned %d rows, want all %d", c.n, len(got), c.n)
+		}
+		for i, r := range got {
+			if want := fmt.Sprintf("B-%02d", c.n-1-i); r.number != want {
+				t.Errorf("a tenant with %d invoices: row %d = %s, want %s (newest first)", c.n, i, r.number, want)
+			}
+		}
+	}
+
+	if n := len(collectTenantInvoices(t, h.app, staff, bare)); n != 0 {
+		t.Errorf("invoices of a tenant with a member and no invoice = %d rows, want 0", n)
+	}
+	if n := len(collectTenantMembers(t, h.app, staff, memberless)); n != 0 {
+		t.Errorf("members of a tenant with an invoice and no member = %d rows, want 0", n)
+	}
+	if n := len(collectTenantMembers(t, h.app, staff, bare)); n != 1 {
+		t.Errorf("control: members of the tenant with one member = %d rows, want 1", n)
+	}
+	if n := len(collectTenantInvoices(t, h.app, staff, memberless)); n != 1 {
+		t.Errorf("control: invoices of the tenant with one invoice = %d rows, want 1", n)
+	}
+}
+
+// Runtime check of AC-5: the exact column sets are pinned by the catalog test, this reads and writes as staff_reader.
+func TestRLS_StaffReaderReadsOnlyGrantedColumnsAndWritesNothingOnTheDetailTables(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	x := seedDetailTenant(t, "staff reader writes")
+	seedMemberAt(t, x, "admin", "active", t0, nil, nil)
+	seedInvoiceAt(t, x, seedEntity(t, x), uuid.NewString(), "SRW-1", "draft", t0)
+	seedAuditAt(t, x, t0)
+
+	tx := revokeProbeTx(t)
+	txExec(t, tx, `SELECT set_config('app.current_tenant', '', true)`)
+	txExec(t, tx, `SET LOCAL ROLE staff_reader`)
+	for _, table := range []string{"memberships", "invoices", "audit_log"} {
+		if n := mustCount(t, tx, `SELECT count(*) FROM `+table+` WHERE tenant_id = $1`, x); n == 0 {
+			t.Fatalf("control: staff_reader reads no %s row of the seeded tenant", table)
+		}
+	}
+
+	try := func(sql string) (int64, error) {
+		txExec(t, tx, `SAVEPOINT w`)
+		tag, err := tx.Exec(ctx, sql, x)
+		txExec(t, tx, `ROLLBACK TO SAVEPOINT w`)
+		return tag.RowsAffected(), err
+	}
+	for _, c := range []struct{ what, sql string }{
+		{"read memberships.id", `SELECT id FROM memberships WHERE tenant_id = $1`},
+		{"read invoices.entity_id", `SELECT entity_id FROM invoices WHERE tenant_id = $1`},
+		{"read audit_log.actor", `SELECT actor FROM audit_log WHERE tenant_id = $1`},
+	} {
+		_, err := try(c.sql)
+		assertPgRefusal(t, "staff_reader "+c.what, err, sqlstateInsufficientPrivilege, "permission denied for table")
+	}
+	for _, c := range []struct{ what, sql string }{
+		{"INSERT memberships", `INSERT INTO memberships (id, tenant_id, user_id, role, status) VALUES (gen_random_uuid(), $1, gen_random_uuid(), 'admin', 'active')`},
+		{"UPDATE memberships", `UPDATE memberships SET status = 'suspended' WHERE tenant_id = $1`},
+		{"DELETE memberships", `DELETE FROM memberships WHERE tenant_id = $1`},
+		{"UPDATE invoices", `UPDATE invoices SET status = 'failed' WHERE tenant_id = $1`},
+		{"DELETE invoices", `DELETE FROM invoices WHERE tenant_id = $1`},
+		{"INSERT audit_log", `INSERT INTO audit_log (tenant_id, actor, event) VALUES ($1, 'x', 'staff_read.write')`},
+		{"UPDATE audit_log", `UPDATE audit_log SET created_at = now() WHERE tenant_id = $1`},
+		{"DELETE audit_log", `DELETE FROM audit_log WHERE tenant_id = $1`},
+	} {
+		n, err := try(c.sql)
+		if err == nil && n != 0 {
+			t.Errorf("staff_reader %s changed %d rows, want a refusal or 0 rows", c.what, n)
+		}
+		var pgErr *pgconn.PgError
+		if err != nil && (!errors.As(err, &pgErr) || pgErr.Code != sqlstateInsufficientPrivilege) {
+			t.Errorf("staff_reader %s failed with %v, want SQLSTATE %s", c.what, err, sqlstateInsufficientPrivilege)
+		}
+	}
 }

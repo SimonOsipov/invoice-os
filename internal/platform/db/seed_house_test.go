@@ -79,6 +79,32 @@ func devHouseTenantName(t *testing.T, pool *pgxpool.Pool) string {
 	return name
 }
 
+// seededPersonasThatAreStaff returns the seed's c0000000-…001..013 users for whom is_house_member is true.
+func seededPersonasThatAreStaff(t *testing.T, pool *pgxpool.Pool) []string {
+	t.Helper()
+	ctx := context.Background()
+	var staffUsers []string
+	for i := 1; i <= 13; i++ {
+		user := fmt.Sprintf("c0000000-0000-0000-0000-%012d", i)
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		var staff bool
+		if _, err = tx.Exec(ctx, `SET LOCAL ROLE invoice_migrator`); err == nil {
+			err = tx.QueryRow(ctx, `SELECT public.is_house_member($1::uuid)`, user).Scan(&staff)
+		}
+		_ = tx.Rollback(ctx)
+		if err != nil {
+			t.Fatalf("is_house_member(%s): %v", user, err)
+		}
+		if staff {
+			staffUsers = append(staffUsers, user)
+		}
+	}
+	return staffUsers
+}
+
 func TestSeedNamesTheDevHouseCompanyOnAnEmptyTable(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
@@ -140,23 +166,8 @@ func TestSeedMakesNoSeededPersonaStaff(t *testing.T) {
 		t.Fatal("the seed holds no c0000000- memberships, so this test proves nothing")
 	}
 
-	for i := 1; i <= 13; i++ {
-		user := fmt.Sprintf("c0000000-0000-0000-0000-%012d", i)
-		tx, err := pool.Begin(ctx)
-		if err != nil {
-			t.Fatalf("begin: %v", err)
-		}
-		var staff bool
-		if _, err = tx.Exec(ctx, `SET LOCAL ROLE invoice_migrator`); err == nil {
-			err = tx.QueryRow(ctx, `SELECT public.is_house_member($1::uuid)`, user).Scan(&staff)
-		}
-		_ = tx.Rollback(ctx)
-		if err != nil {
-			t.Fatalf("is_house_member(%s): %v", user, err)
-		}
-		if staff {
-			t.Errorf("seeded persona %s is staff", user)
-		}
+	if staff := seededPersonasThatAreStaff(t, pool); len(staff) != 0 {
+		t.Errorf("seeded personas are staff: %v", staff)
 	}
 
 	var inHouse int
@@ -215,5 +226,152 @@ func TestPurgeLeavesTheHouseRowAndItsMembers(t *testing.T) {
 	}
 	if kept != 1 {
 		t.Errorf("house membership rows after the purge = %d, want 1", kept)
+	}
+}
+
+func TestSeedNamesTheHouseWhenTheDevTenantAlreadyExists(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	isolateHouse(t, pool)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO tenants (id, name, kind) VALUES ($1, 'Leftover', 'firm')`, devHouseTenant); err != nil {
+		t.Fatalf("insert the dev tenant: %v", err)
+	}
+	if got := houseRowTenant(t, pool); got != "" {
+		t.Fatalf("house row names %s before the seed, want an empty table", got)
+	}
+
+	if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	if got := houseRowTenant(t, pool); got != devHouseTenant {
+		t.Errorf("house row names %q, want the dev house tenant %s: a tenant without a house row must still be named", got, devHouseTenant)
+	}
+}
+
+func TestSeedTwiceLeavesOneHouseRowOnTheDevTenant(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	isolateHouse(t, pool)
+
+	for i := 0; i < 2; i++ {
+		if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
+			t.Fatalf("Seed run %d: %v", i+1, err)
+		}
+		if n := mustCount(t, pool, `SELECT count(*) FROM public.house_company`); n != 1 {
+			t.Errorf("house rows after seed run %d = %d, want 1", i+1, n)
+		}
+		if got := houseRowTenant(t, pool); got != devHouseTenant {
+			t.Errorf("house row names %q after seed run %d, want %s", got, i+1, devHouseTenant)
+		}
+	}
+}
+
+func TestPurgeKeepsAHouseRowThatNamesAPurgedDemoTenant(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	isolateHouse(t, pool)
+	// Purge empties the demo tenants; reseed them so the dev DB is left as found.
+	t.Cleanup(func() {
+		if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+			t.Errorf("reseed: %v", err)
+		}
+	})
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	const purgedTenant = "11111111-1111-1111-1111-111111111111"
+	if !slices.Contains(db.DemoTenants, purgedTenant) {
+		t.Fatalf("%s is not a demo tenant: the purge never reaches it", purgedTenant)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM public.house_company`); err != nil {
+		t.Fatalf("clear house row: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO public.house_company (tenant_id) VALUES ($1)`, purgedTenant); err != nil {
+		t.Fatalf("set the house row: %v", err)
+	}
+
+	res, err := db.PurgeDemoTenants(ctx, superDSN)
+	if err != nil {
+		t.Fatalf("PurgeDemoTenants: %v", err)
+	}
+	// Pair: the purge deleted rows of the named tenant, so the surviving house row is the exclusion at work.
+	if res.Rows == 0 {
+		t.Fatal("the purge deleted nothing, so this test proves nothing")
+	}
+	if _, listed := res.ByTable["house_company"]; listed {
+		t.Errorf("the purge reports deleting house_company rows: %v", res.ByTable)
+	}
+	if got := houseRowTenant(t, pool); got != purgedTenant {
+		t.Errorf("house row names %q after the purge, want %s", got, purgedTenant)
+	}
+}
+
+func TestProvisionSeedsNoHouseRowInProduction(t *testing.T) {
+	e := newShardEnv(t)
+	isolateHouse(t, e.super)
+
+	cfg := e.prConfig()
+	cfg.Environment = "production"
+	cfg.RailwayEnvironmentName = "production"
+	cfg.ResetFlag = ""
+	if err := db.Provision(context.Background(), cfg); err != nil {
+		t.Fatalf("Provision (production): %v", err)
+	}
+	if got := houseRowTenant(t, e.super); got != "" {
+		t.Errorf("a production boot named a house company: %s", got)
+	}
+	if got := devHouseTenantName(t, e.super); got != "" {
+		t.Errorf("a production boot seeded the dev house tenant %q", got)
+	}
+
+	// Pair: the same config on the allowlisted environment does seed, so the empty table above is the gate.
+	cfg.Environment = "development"
+	if err := db.Provision(context.Background(), cfg); err != nil {
+		t.Fatalf("Provision (development): %v", err)
+	}
+	if got := houseRowTenant(t, e.super); got != devHouseTenant {
+		t.Errorf("a development boot named house %q, want %s", got, devHouseTenant)
+	}
+}
+
+func TestProvisionOnAPREnvironmentKeepsTheHouseRowAndMakesNoShardOrPersonaStaff(t *testing.T) {
+	for _, tc := range []struct {
+		name, preset, want string
+	}{
+		{"empty table", "", devHouseTenant},
+		{"row on another tenant", otherHouseTenant, otherHouseTenant},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newShardEnv(t)
+			isolateHouse(t, e.super)
+			if tc.preset != "" {
+				if _, err := e.super.Exec(context.Background(), `INSERT INTO tenants (id, name) VALUES ($1, 'Tenant A (dev)') ON CONFLICT DO NOTHING`, tc.preset); err != nil {
+					t.Fatalf("ensure tenant: %v", err)
+				}
+				if _, err := e.super.Exec(context.Background(), `INSERT INTO public.house_company (tenant_id) VALUES ($1)`, tc.preset); err != nil {
+					t.Fatalf("set the house row: %v", err)
+				}
+			}
+
+			e.provisionReset(t)
+
+			e.requireAllShardTenants(t, "after a reset-on Provision") // the shard seed ran
+			if got := houseRowTenant(t, e.super); got != tc.want {
+				t.Errorf("house row names %q after the PR boot, want %s", got, tc.want)
+			}
+			if n := mustCount(t, e.super, `SELECT count(*) FROM public.house_company`); n != 1 {
+				t.Errorf("house rows = %d, want 1", n)
+			}
+			if n := mustCount(t, e.super,
+				`SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id::text LIKE 'c0000000-%'`, devHouseTenant); n != 0 {
+				t.Errorf("the dev house tenant holds %d seeded personas, want 0", n)
+			}
+			if tc.preset == "" {
+				if staff := seededPersonasThatAreStaff(t, e.super); len(staff) != 0 {
+					t.Errorf("seeded personas are staff after the PR boot: %v", staff)
+				}
+			}
+		})
 	}
 }

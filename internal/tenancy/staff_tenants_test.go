@@ -208,9 +208,20 @@ func TestStaffTenantsRoute_StaffSeesEveryTenant(t *testing.T) {
 	houseID, subject := houseMember(t, super, "active")
 
 	want := map[string][2]string{inHouse: {"staff-tenants in_house", "in_house"}, firm: {"staff-tenants firm", "firm"}}
+	createdAt := map[string]time.Time{}
+	for id := range want {
+		var c time.Time
+		if err := super.QueryRow(context.Background(), `SELECT created_at FROM tenants WHERE id = $1`, id).Scan(&c); err != nil {
+			t.Fatalf("read created_at of %s: %v", id, err)
+		}
+		createdAt[id] = c
+	}
+	// The tenant header does not scope a staff read: a caller pinned to a customer tenant still sees every tenant.
+	custTenant, _ := customerMember(t, super)
 	for name, c := range map[string]staffCaller{
-		"tenant-bearing staff": {subject: subject, tenant: houseID, staff: true},
-		"tenant-less staff":    {subject: subject, staff: true},
+		"tenant-bearing staff":              {subject: subject, tenant: houseID, staff: true},
+		"tenant-less staff":                 {subject: subject, staff: true},
+		"staff pinned to a customer tenant": {subject: subject, tenant: custTenant, staff: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := rig.get(c)
@@ -245,8 +256,8 @@ func TestStaffTenantsRoute_StaffSeesEveryTenant(t *testing.T) {
 			}
 		})
 	}
-	if got := rig.calls.Load(); got != 2 {
-		t.Errorf("StaffTenants called %d times, want 2", got)
+	if got := rig.calls.Load(); got != 3 {
+		t.Errorf("StaffTenants called %d times, want 3", got)
 	}
 }
 
@@ -268,6 +279,9 @@ func TestStaffTenantsRoute_AForgedStaffHeaderIsRefusedByTheFunction(t *testing.T
 	if got := rig.calls.Load(); got != 2 {
 		t.Errorf("StaffTenants called %d times, want 2: the refusal must come from the function, not the platform", got)
 	}
+	t.Run("staff claim with a subject that is not a uuid", func(t *testing.T) {
+		wantBody(t, rig.get(staffCaller{subject: "not-a-uuid", staff: true}), http.StatusForbidden, forbiddenBody)
+	})
 	if rec := rig.get(staffCaller{subject: houseSubject, staff: true}); rec.Code != http.StatusOK {
 		t.Errorf("house member control = %d %q, want 200", rec.Code, rec.Body.String())
 	}
@@ -399,5 +413,41 @@ func TestStoreStaffTenants_ALostGrantIsAServerError(t *testing.T) {
 	}
 	if got := staffReadError(refused); !errors.Is(got, db.ErrNotStaff) {
 		t.Errorf("staffReadError(the function's refusal) = %v, want db.ErrNotStaff", got)
+	}
+}
+
+func TestStaffReadError_OnlyTheFunctionsOwnRefusalIsNotStaff(t *testing.T) {
+	refusal := "staff_read_tenants: actor is not staff"
+	cases := []struct {
+		name     string
+		err      error
+		notStaff bool
+	}{
+		{"the function's refusal", &pgconn.PgError{Code: "42501", Message: refusal}, true},
+		{"the refusal, wrapped", fmt.Errorf("w: %w", &pgconn.PgError{Code: "42501", Message: refusal}), true},
+		{"a lost function grant", &pgconn.PgError{Code: "42501", Message: "permission denied for function staff_read_tenants"}, false},
+		{"a lost column grant", &pgconn.PgError{Code: "42501", Message: "permission denied for table tenants"}, false},
+		{"the refusal text under another SQLSTATE", &pgconn.PgError{Code: "P0001", Message: refusal}, false},
+		{"the refusal text from a non-database error", errors.New(refusal), false},
+		{"the refusal text with a suffix after it", &pgconn.PgError{Code: "42501", Message: refusal + " (retry)"}, false},
+		{"the refusal text without its separator", &pgconn.PgError{Code: "42501", Message: "actor is not staff"}, false},
+		{"an unrelated error", errors.New("boom"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := staffReadError(tc.err)
+			if got == nil {
+				t.Fatal("staffReadError returned nil for an error")
+			}
+			if errors.Is(got, db.ErrNotStaff) != tc.notStaff {
+				t.Errorf("errors.Is(ErrNotStaff) = %v, want %v (got %v)", !tc.notStaff, tc.notStaff, got)
+			}
+			if !tc.notStaff && !errors.Is(got, tc.err) {
+				t.Errorf("a server fault must keep its cause: %v does not wrap %v", got, tc.err)
+			}
+		})
+	}
+	if got := staffReadError(nil); got != nil {
+		t.Errorf("staffReadError(nil) = %v, want nil", got)
 	}
 }

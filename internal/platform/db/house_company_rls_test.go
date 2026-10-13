@@ -217,8 +217,50 @@ func TestRLS_HouseCompanyRefusesAnUnknownTenant(t *testing.T) {
 
 	refusedBy(t, tx, "tenant that does not exist", "23503", "house_company_tenant_id_fkey",
 		`INSERT INTO public.house_company (tenant_id) VALUES ($1)`, uuid.NewString())
+	refusedBy(t, tx, "null tenant", "23502", "", `INSERT INTO public.house_company (tenant_id) VALUES (NULL)`)
 	if n := mustCount(t, tx, `SELECT count(*) FROM public.house_company`); n != 0 {
-		t.Errorf("house_company rows after the refusal = %d, want 0", n)
+		t.Errorf("house_company rows after the refusals = %d, want 0", n)
+	}
+}
+
+// AC-1. The FK is NO ACTION: a house tenant cannot be deleted from under the row.
+func TestRLS_HouseCompanyBlocksDeletingItsTenant(t *testing.T) {
+	requireHarness(t)
+	requireHouseTable(t)
+	tx := revokeProbeTx(t)
+	tenant := uuid.NewString()
+	txExec(t, tx, `DELETE FROM public.house_company`)
+	txExec(t, tx, `INSERT INTO tenants (id, name) VALUES ($1, 'Doomed house')`, tenant)
+	txExec(t, tx, `INSERT INTO public.house_company (tenant_id) VALUES ($1)`, tenant)
+
+	refusedBy(t, tx, "delete the house tenant", "23503", "house_company_tenant_id_fkey", `DELETE FROM tenants WHERE id = $1`, tenant)
+	if n := mustCount(t, tx, `SELECT count(*) FROM public.house_company WHERE tenant_id = $1`, tenant); n != 1 {
+		t.Errorf("house rows naming the tenant after the refusal = %d, want 1", n)
+	}
+}
+
+// AC-2. Every write verb is refused at the privilege check, for every role but the owner.
+func TestRLS_HouseCompanyIsWritableByNoAppRole(t *testing.T) {
+	requireHarness(t)
+	adoptHouseTenant(t)
+	tx := revokeProbeTx(t)
+
+	stmts := []string{
+		`INSERT INTO public.house_company (singleton, tenant_id) VALUES (false, '` + h.tenantA + `')`,
+		`UPDATE public.house_company SET tenant_id = '` + h.tenantB + `'`,
+		`DELETE FROM public.house_company`,
+	}
+	for _, role := range []string{"invoice_app", "invoice_tenant_reader", "supabase_auth_admin", "auth_hook_reader"} {
+		for _, stmt := range stmts {
+			txExec(t, tx, `SAVEPOINT w`)
+			txExec(t, tx, `SET LOCAL ROLE `+role)
+			_, err := tx.Exec(context.Background(), stmt)
+			txExec(t, tx, `ROLLBACK TO SAVEPOINT w`)
+			assertPgRefusal(t, role+": "+stmt[:6], err, sqlstateInsufficientPrivilege, "permission denied for table house_company")
+		}
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM public.house_company`); n != 1 {
+		t.Errorf("house_company rows after the refused writes = %d, want the one house row", n)
 	}
 }
 
@@ -474,6 +516,22 @@ func TestRLS_CustomAccessTokenHookStripsStaffForACustomerMember(t *testing.T) {
 	if md["tenant_id"] != h.tenantA {
 		t.Errorf("app_metadata.tenant_id = %v, want %s", md["tenant_id"], h.tenantA)
 	}
+
+	// A user with no membership at all, and one in two customer companies, lose the planted keys too.
+	stranger, two := uuid.NewString(), uuid.NewString()
+	seedHookMembership(t, h.tenantA, two, "active")
+	seedHookMembership(t, h.tenantB, two, "active")
+	for name, id := range map[string]string{"no_membership": stranger, "two_customer_memberships": two} {
+		got, in := hookRun(t, auth, id, plantStaffClaims)
+		if _, planted := appMetadataOf(t, in)["staff"]; !planted {
+			t.Fatalf("%s: the input carries no staff claim to strip", name)
+		}
+		md := appMetadataOf(t, got)
+		requireNoKeys(t, md, "staff", "rules_role", "tenant_id")
+		if md["provider"] != "email" {
+			t.Errorf("%s: app_metadata.provider = %v, want email kept", name, md["provider"])
+		}
+	}
 }
 
 // AC-4.
@@ -657,6 +715,20 @@ func TestRLS_HouseCompanyDownRestoresTheRulesRoleHook(t *testing.T) {
 	}
 	if def := hookDef(); !strings.Contains(def, "staff_members") || strings.Contains(def, "is_house_member") {
 		t.Errorf("after the Down the hook body should read staff_members and not call is_house_member:\n%s", def)
+	}
+
+	// The restored body, not just its text: staff_members decides, house membership does not.
+	if md := appMetadataOf(t, mustHookClaims(t, auth, user)); md["staff"] == true {
+		t.Errorf("after the Down: a house member outside staff_members has staff = %v, want absent", md["staff"])
+	}
+	rulesStaff, plainStaff := uuid.NewString(), uuid.NewString()
+	seedRulesStaff(t, rulesStaff)
+	seedStaff(t, plainStaff)
+	if md := appMetadataOf(t, mustHookClaims(t, auth, rulesStaff)); md["staff"] != true || md["rules_role"] != true {
+		t.Errorf("after the Down: staff_members row with rules_role: staff=%v rules_role=%v, want true and true", md["staff"], md["rules_role"])
+	}
+	if md := appMetadataOf(t, mustHookClaims(t, auth, plainStaff)); md["staff"] != true || md["rules_role"] != nil {
+		t.Errorf("after the Down: staff_members row without rules_role: staff=%v rules_role=%v, want true and absent", md["staff"], md["rules_role"])
 	}
 
 	reapply()

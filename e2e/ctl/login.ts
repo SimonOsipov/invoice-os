@@ -150,7 +150,7 @@ export function createStore(root: string): Store {
 }
 
 // Returns only when all 8 succeed; the caller writes the store after, so a failure leaves nothing.
-// ceiling: a retry after a staff failure adds two more staff rows; clean them with the PR environment.
+// ceiling: a retry after a staff failure adds two more staff accounts and house memberships; clean them with the PR environment.
 export async function provisionAll(): Promise<Accounts> {
   const { ensureMember, e2eMember } = await import('../realAccounts')
   const { TENANTS } = await import('../topology/targets')
@@ -167,7 +167,7 @@ export async function provisionAll(): Promise<Accounts> {
     }
   }
   for (const key of ['developer', 'support'] as const) {
-    const { email, password, userId } = await provisionStaffAccount(`ctl-${key}`, randomBytes(16).toString('hex'), { rulesRole: key === 'support' })
+    const { email, password, userId } = await provisionStaffAccount(`ctl-${key}`, randomBytes(16).toString('hex'))
     accounts[key] = { email, password, userId }
   }
   return accounts

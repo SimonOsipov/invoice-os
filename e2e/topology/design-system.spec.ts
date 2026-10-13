@@ -168,7 +168,7 @@ test('ops console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter
 
 test('support console reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter, IBM Plex Mono loaded', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await seedStaffSession(page, 'support', await provisionStaffAccount('design-support', undefined, { rulesRole: true }))
+  await seedStaffSession(page, 'support', await provisionStaffAccount('design-support'))
 
   const p = await probe(page)
   await attachProbe(testInfo, 'support', p)

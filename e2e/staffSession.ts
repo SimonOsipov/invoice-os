@@ -15,11 +15,11 @@ export const CONSOLE_SESSION_KEY: Record<ConsoleTarget, string> = {
 
 export const consoleUrl = (target: ConsoleTarget): string => resolveTarget(DESTINATION_ENV[target])
 
-// One rules-role staff account per Playwright worker (the smoke sweep opens the real Rules screen). No smoke spec signs it out, so the parallel sessions do not interact.
+// One staff account per Playwright worker (the smoke sweep opens the real Rules screen). No smoke spec signs it out, so the parallel sessions do not interact.
 export const test = base.extend<object, { staffAccount: StaffAccount }>({
   staffAccount: [
     async ({}, use) => {
-      await use(await provisionStaffAccount('staff-smoke', undefined, { rulesRole: true }))
+      await use(await provisionStaffAccount('staff-smoke'))
     },
     { scope: 'worker', timeout: 60_000 },
   ],

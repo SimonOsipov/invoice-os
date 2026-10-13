@@ -11,10 +11,13 @@ import (
 
 const staffTenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
-// serveRulesRole runs RequireRulesRole over ctx and reports the response, how often the handler ran, and
+// requireStaffUnderTest is the check the tests drive; SUPP-01-04 points it at RequireStaff.
+var requireStaffUnderTest = RequireRulesRole
+
+// serveStaff runs the staff check over ctx and reports the response, how often the handler ran, and
 // the context the handler saw.
-func serveRulesRole(ctx context.Context) (rec *httptest.ResponseRecorder, ran int, inner context.Context) {
-	h := RequireRulesRole(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func serveStaff(ctx context.Context) (rec *httptest.ResponseRecorder, ran int, inner context.Context) {
+	h := requireStaffUnderTest(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ran++
 		inner = r.Context()
 		w.WriteHeader(http.StatusOK)
@@ -34,8 +37,8 @@ func callerContexts(id Identity) map[string]context.Context {
 	}
 }
 
-func TestRequireRulesRole_RefusesWithoutACaller(t *testing.T) {
-	rec, ran, _ := serveRulesRole(context.Background())
+func TestRequireStaff_RefusesWithoutACaller(t *testing.T) {
+	rec, ran, _ := serveStaff(context.Background())
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
@@ -47,17 +50,15 @@ func TestRequireRulesRole_RefusesWithoutACaller(t *testing.T) {
 	}
 }
 
-func TestRequireRulesRole_RefusesEveryNonRulesCaller(t *testing.T) {
+func TestRequireStaff_RefusesANonStaffCaller(t *testing.T) {
 	ids := map[string]Identity{
-		"customer":                     {Subject: testSubject, Role: "authenticated", TenantID: staffTenant},
-		"customer admin":               {Subject: testSubject, Role: "admin", TenantID: staffTenant},
-		"rules role without staff":     {Subject: testSubject, Role: "authenticated", TenantID: staffTenant, RulesRole: true},
-		"staff without the rules role": {Subject: testSubject, Role: "authenticated", TenantID: staffTenant, Staff: true},
+		"customer":       {Subject: testSubject, Role: "authenticated", TenantID: staffTenant},
+		"customer admin": {Subject: testSubject, Role: "admin", TenantID: staffTenant},
 	}
 	for name, id := range ids {
 		for shape, ctx := range callerContexts(id) {
 			t.Run(fmt.Sprintf("%s/%s", name, shape), func(t *testing.T) {
-				rec, ran, _ := serveRulesRole(ctx)
+				rec, ran, _ := serveStaff(ctx)
 				if rec.Code != http.StatusForbidden {
 					t.Fatalf("status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
 				}
@@ -72,16 +73,17 @@ func TestRequireRulesRole_RefusesEveryNonRulesCaller(t *testing.T) {
 	}
 }
 
-func TestRequireRulesRole_AdmitsAStaffRulesCaller(t *testing.T) {
-	id := Identity{Subject: testSubject, Role: "authenticated", TenantID: staffTenant, Email: "ops@example.test", Staff: true, RulesRole: true}
+// A Staff identity with no other claim is admitted: the check reads Staff and nothing beside it.
+func TestRequireStaff_AdmitsAStaffCaller(t *testing.T) {
+	id := Identity{Subject: testSubject, Role: "authenticated", TenantID: staffTenant, Email: "ops@example.test", Staff: true}
 	for shape, ctx := range callerContexts(id) {
 		t.Run(shape, func(t *testing.T) {
-			rec, ran, inner := serveRulesRole(ctx)
+			rec, ran, inner := serveStaff(ctx)
 			if rec.Code != http.StatusOK || ran != 1 {
 				t.Fatalf("status %d, handler ran %d times, want 200 and 1 (body %q)", rec.Code, ran, rec.Body.String())
 			}
 			got, ok := StaffFromContext(inner)
-			if !ok || got.Subject != testSubject || !got.Staff || !got.RulesRole {
+			if !ok || got.Subject != testSubject || !got.Staff {
 				t.Fatalf("StaffFromContext = %+v (ok %v), want the staff caller %q", got, ok, testSubject)
 			}
 			wantTenant := id.TenantID
@@ -96,11 +98,11 @@ func TestRequireRulesRole_AdmitsAStaffRulesCaller(t *testing.T) {
 }
 
 func TestStaffFromContext_EmptyOutsideTheCheck(t *testing.T) {
-	id := Identity{Subject: testSubject, Role: "authenticated", TenantID: staffTenant, Staff: true, RulesRole: true}
+	id := Identity{Subject: testSubject, Role: "authenticated", TenantID: staffTenant, Staff: true}
 	for shape, ctx := range callerContexts(id) {
 		t.Run(shape, func(t *testing.T) {
 			if got, ok := StaffFromContext(ctx); ok {
-				t.Errorf("StaffFromContext = %+v, want none without RequireRulesRole", got)
+				t.Errorf("StaffFromContext = %+v, want none without RequireStaff", got)
 			}
 		})
 	}
@@ -109,11 +111,11 @@ func TestStaffFromContext_EmptyOutsideTheCheck(t *testing.T) {
 	}
 
 	// Control: the same caller through the check is reported, so the empty results above are the check's doing.
-	_, _, inner := serveRulesRole(WithIdentity(context.Background(), id))
+	_, _, inner := serveStaff(WithIdentity(context.Background(), id))
 	if inner == nil {
 		t.Fatal("control: the staff caller did not reach the handler")
 	}
 	if _, ok := StaffFromContext(inner); !ok {
-		t.Error("control: StaffFromContext reported none behind RequireRulesRole")
+		t.Error("control: StaffFromContext reported none behind RequireStaff")
 	}
 }

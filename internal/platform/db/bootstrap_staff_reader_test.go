@@ -256,6 +256,8 @@ func TestBootstrapSQLStaffReaderIsCreatedWhenAbsent(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
 	sql := readBootstrapSQL(t)
+	// DROP OWNED would erase the staff_read_ functions; the Ups re-run last, after bootstrap recreates the role.
+	rollBackMigrations(t, staffMigrationProvider(t), staffReadMigrationVersions(t)...)
 	t.Cleanup(func() {
 		applyDevBootstrap(t, pool, sql)
 		restoreAuthRoles(t, pool)

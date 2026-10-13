@@ -225,6 +225,11 @@ func mockIssuerStateFaults(filename string, src any) []string {
 			faults = append(faults, fmt.Sprintf("the \"on\" branch does not run %s", want))
 		}
 	}
+	for _, h := range handled {
+		if strings.Contains(h, "/auth/mock/staff") {
+			faults = append(faults, fmt.Sprintf("the \"on\" branch registers a retired staff route: %s", h))
+		}
+	}
 	return faults
 }
 
@@ -264,6 +269,7 @@ func main() {
 		{"a mint route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/login\", login)\n", ""},
 		{"the member route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/member\", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))\n", ""},
 		{"the invitation-token route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/invitation-token\", mockInvitationTokenRoute(provisionCfg.MigrationDSN, app.Logger))\n", ""},
+		{"a retired staff route registered", "\t\tplatform.MockIssuer = \"on\"\n", "\t\tapp.Mux.Handle(\"POST /auth/mock/staff\", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))\n\t\tplatform.MockIssuer = \"on\"\n"},
 		{"a fourth value", "platform.MockIssuer = \"on\"", "platform.MockIssuer = \"on\"\n\t\tplatform.MockIssuer = \"yes\""},
 	} {
 		if !strings.Contains(good, c.find) {

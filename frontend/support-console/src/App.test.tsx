@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StaffGate } from '@invoice-os/console-session'
 
 import App from './App'
-import { NAV_ITEMS } from './data'
+import { NAV_ITEMS } from './nav'
 
 vi.mock('@invoice-os/console-session', () => ({
   StaffGate: function StaffGate({ children }: { children: ReactNode }) {

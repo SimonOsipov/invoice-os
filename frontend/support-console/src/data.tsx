@@ -13,90 +13,9 @@ import type {
   AuditEntry,
   HealthCard,
   Job,
-  NavItem,
   ReconRow,
-  Screen,
   Tenant,
 } from './types'
-
-// ---------- shared glyphs ----------
-
-export const SEARCH_ICON = <Icon paths={['M21 21l-4.35-4.35', 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z']} size={16} />
-export const FILTER_ICON = <Icon paths={['M22 3H2l8 9.46V19l4 2v-8.54L22 3Z']} size={14} />
-export const CHEVRON_RIGHT_ICON = <Icon paths={['m9 18 6-6-6-6']} size={14} />
-export const CLOSE_ICON = <Icon paths={['M18 6 6 18M6 6l12 12']} size={15} />
-export const CHECK_ICON = <Icon paths={['M20 6 9 17l-5-5']} size={16} />
-export const ALERT_ICON = (
-  <Icon paths={['m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z', 'M12 9v4', 'M12 17h.01']} size={18} />
-)
-export const LOCK_ICON = (
-  <Icon paths={['M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Z', 'M7 11V7a5 5 0 0 1 10 0v4']} size={15} />
-)
-export const GLOBE_ICON = (
-  <Icon
-    paths={['M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z', 'M3.6 9h16.8M3.6 15h16.8', 'M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z']}
-    size={16}
-  />
-)
-export const REDRIVE_ICON = (
-  <Icon paths={['M21 2v6h-6', 'M3 12a9 9 0 0 1 15-6.7L21 8', 'M3 22v-6h6', 'M21 12a9 9 0 0 1-15 6.7L3 16']} size={15} />
-)
-export const PUBLISH_ICON = <Icon paths={['M12 19V5', 'm5 12 7-7 7 7']} size={15} />
-export const KILL_ICON = <Icon paths={['M18.36 6.64a9 9 0 1 1-12.73 0', 'M12 2v10']} size={15} />
-export const COPY_ICON = (
-  <Icon
-    paths={[
-      'M20 9H11a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2Z',
-      'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1',
-    ]}
-    size={15}
-  />
-)
-export const EXPORT_ICON = (
-  <Icon paths={['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5', 'M12 15V3']} size={15} />
-)
-export const SANDBOX_ICON = (
-  <Icon paths={['M9 3h6M10 3v6.5L5.5 17a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L14 9.5V3', 'M7.5 14h9']} size={15} />
-)
-export const SIGN_OUT_ICON = <Icon paths={['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4', 'M16 17l5-5-5-5', 'M21 12H9']} size={16} />
-
-// ---------- navigation ----------
-
-// proto:820. Five operations screens — this console has no "Overview": Submissions ops
-// IS the landing screen, because a support engineer arrives here to work a queue.
-export const NAV_ITEMS: NavItem[] = [
-  { key: 'submissions', label: 'Submissions', glyph: <Icon paths={['M3 12h4l2 5 4-12 2 7h6']} size={17} /> },
-  {
-    key: 'rules',
-    label: 'Rules',
-    glyph: <Icon paths={['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']} size={17} />,
-  },
-  { key: 'audit', label: 'Audit', glyph: <Icon paths={['M21 8v13H3V8', 'M1 3h22v5H1z', 'M10 12h4']} size={17} /> },
-  {
-    key: 'tenants',
-    label: 'Tenants',
-    glyph: (
-      <Icon
-        paths={[
-          'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2',
-          'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z',
-          'M22 21v-2a4 4 0 0 0-3-3.87',
-        ]}
-        size={17}
-      />
-    ),
-  },
-  { key: 'health', label: 'System health', glyph: <Icon paths={['M22 12h-4l-3 9L9 3l-3 9H2']} size={17} /> },
-]
-
-// proto:832. The crumb differs from the nav label on three of the five screens.
-export const CRUMB_BY_SCREEN: Record<Screen, string> = {
-  submissions: 'Submissions ops',
-  rules: 'Rules admin',
-  audit: 'Audit & evidence',
-  tenants: 'Tenants',
-  health: 'System health',
-}
 
 // ---------- submissions ----------
 

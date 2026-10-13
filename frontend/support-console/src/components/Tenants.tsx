@@ -1,4 +1,5 @@
-import { SEARCH_ICON, TENANTS } from '../data'
+import { TENANTS } from '../data'
+import { SEARCH_ICON } from '../icons'
 import { StateBadge } from './StatusBadge'
 import type { TenantKpi, TenantMember } from '../types'
 

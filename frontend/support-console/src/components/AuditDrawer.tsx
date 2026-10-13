@@ -1,4 +1,4 @@
-import { COPY_ICON, EXPORT_ICON, LOCK_ICON } from '../data'
+import { COPY_ICON, EXPORT_ICON, LOCK_ICON } from '../icons'
 import { requestJSON } from '../helpers'
 import { Drawer, MetaGrid } from './Drawer'
 import type { AuditEntry, Env } from '../types'

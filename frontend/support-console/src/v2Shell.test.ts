@@ -15,7 +15,8 @@ import { Sidebar } from './components/Sidebar'
 import { Badge } from './components/StatusBadge'
 import { Toast } from './components/Toast'
 import { TopBar } from './components/TopBar'
-import { AUDIT_ENTRIES, NAV_ITEMS, SEED_JOBS } from './data'
+import { AUDIT_ENTRIES, SEED_JOBS } from './data'
+import { NAV_ITEMS } from './nav'
 import { toRule, type DiffRow } from './rulesApi'
 import { SEED_RULES } from './rulesFixture'
 import type { CodeListSync, Env, Screen } from './types'
@@ -554,6 +555,14 @@ describe('v2 shell', () => {
     }
     expect(topBar('sandbox')).toContain('CROSS-TENANT · ALL ENTITIES')
     expect(topBar('live')).toContain('CROSS-TENANT · PENDING ACCREDITATION')
+  })
+
+  it('TopBar names the AI usage screen in its crumb', () => {
+    const crumb = (screen: Screen) => renderToStaticMarkup(createElement(TopBar, { screen, env: 'sandbox', onSetEnv: noop }))
+    withText(parse(crumb('ai')), 'AI usage')
+    const rules = parse(crumb('rules'))
+    withText(rules, 'Rules admin')
+    expect(rules.filter((t) => t.text === 'AI usage')).toHaveLength(0)
   })
 
   const sync = (status: string, over: Partial<CodeListSync> = {}): CodeListSync => {

@@ -1,4 +1,4 @@
-import { ALERT_ICON, CHECK_ICON } from '../data'
+import { ALERT_ICON, CHECK_ICON } from '../icons'
 import type { ToastState } from '../types'
 
 type Props = {

@@ -1,4 +1,5 @@
-import { ALERT_ICON, CHEVRON_RIGHT_ICON, FILTER_ICON, JOB_FILTERS, RECON_ROWS, REDRIVE_ICON } from '../data'
+import { JOB_FILTERS, RECON_ROWS } from '../data'
+import { ALERT_ICON, CHEVRON_RIGHT_ICON, FILTER_ICON, REDRIVE_ICON } from '../icons'
 import { statusStyle } from '../helpers'
 import { StateBadge } from './StatusBadge'
 import type { Job, JobFilter, SubTab } from '../types'

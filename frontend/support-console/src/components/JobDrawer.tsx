@@ -1,4 +1,4 @@
-import { REDRIVE_ICON } from '../data'
+import { REDRIVE_ICON } from '../icons'
 import { requestJSON, responseJSON, sentenceCase, statusStyle } from '../helpers'
 import { Drawer, MetaGrid } from './Drawer'
 import { StateBadge } from './StatusBadge'

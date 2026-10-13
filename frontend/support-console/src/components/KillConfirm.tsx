@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CHECK_ICON, KILL_ICON } from '../data'
+import { CHECK_ICON, KILL_ICON } from '../icons'
 import { reasonValid } from '../rulesApi'
 import { Modal } from './Modal'
 

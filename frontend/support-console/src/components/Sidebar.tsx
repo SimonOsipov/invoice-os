@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
-import { BrandMark } from '../icons'
-import { GLOBE_ICON, NAV_ITEMS, SIGN_OUT_ICON } from '../data'
+import { BrandMark, GLOBE_ICON, SIGN_OUT_ICON } from '../icons'
+import { NAV_ITEMS } from '../nav'
 import { signOut } from '../auth'
 import type { Screen } from '../types'
 

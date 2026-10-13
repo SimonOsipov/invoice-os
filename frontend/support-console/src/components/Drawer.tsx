@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CLOSE_ICON } from '../data'
+import { CLOSE_ICON } from '../icons'
 
 // The right-hand drawer shell. The prototype repeats this scrim + panel + header +
 // footer markup verbatim for all three drawers (proto:456, 535, 574); the only things

@@ -1,4 +1,5 @@
-import { AUDIT_ENTRIES, AUDIT_FILTERS, CHEVRON_RIGHT_ICON, LOCK_ICON, SEARCH_ICON } from '../data'
+import { AUDIT_ENTRIES, AUDIT_FILTERS } from '../data'
+import { CHEVRON_RIGHT_ICON, LOCK_ICON, SEARCH_ICON } from '../icons'
 import type { AuditEntry, AuditFilter } from '../types'
 
 type Props = {

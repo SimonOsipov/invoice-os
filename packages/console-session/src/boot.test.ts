@@ -562,6 +562,18 @@ describe('app-borrowed session (SUPP-11-02)', () => {
     }
   })
 
+  it('boot_handoffAnswerWithANullRefreshTokenFails', async () => {
+    const { boot } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), answer: () => reply(200, { access_token: staffToken('n'), refresh_token: null }) })
+    expect(withOutcome('failed').test(leaveUrl(boot))).toBe(true)
+    expect(store.local.getItem(OPS_KEY)).toBeNull()
+  })
+
+  it('boot_refusedAppHandoffKeepsAStoredBorrowedRecord', async () => {
+    const { boot } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), local: BORROWED, app: APP, answer: () => reply(400, { error: 'invalid or expired code' }) })
+    expect(withOutcome('failed').test(leaveUrl(boot))).toBe(true)
+    expect(store.local.getItem(OPS_KEY)).toBe(BORROWED)
+  })
+
   it('boot_refreshAnswerWithoutARefreshTokenStillFails', async () => {
     const { boot, calls } = await run({ local: OLD_RECORD, answer: () => access(staffToken('r')) })
     expect(withOutcome('failed').test(leaveUrl(boot))).toBe(true)

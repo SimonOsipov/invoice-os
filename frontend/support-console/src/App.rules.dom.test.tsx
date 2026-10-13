@@ -632,6 +632,14 @@ describe('Console draft wiring', () => {
     expect((within(dialog()).getByRole('button', { name: 'Publish v5' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('a 401 on the publish diff read expires the console session', async () => {
+    await openDraftView()
+    read.mockRejectedValue(new ApiError('http', 'expired', 401))
+    fireEvent.click(btn('Publish draft v5'))
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
+    expect(signOut).not.toHaveBeenCalled()
+  })
+
   it('the publish modal shows Loading diff and enables Publish only once both reads resolve', async () => {
     await openDraftView()
     const pending: Array<() => void> = []

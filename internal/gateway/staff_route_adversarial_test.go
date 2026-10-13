@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v4"
+
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -94,18 +96,20 @@ func assertNoHeader(t *testing.T, h http.Header, key string) {
 	}
 }
 
-func assertStaffHeaders(t *testing.T, h http.Header, staff, rules bool) {
+// assertStaffHeaders asserts X-User-Staff and that no X-User-* header beyond the identity four reaches the upstream.
+func assertStaffHeaders(t *testing.T, h http.Header, staff bool) {
 	t.Helper()
-	for _, c := range []struct {
-		key  string
-		want bool
-	}{{wireUserStaff, staff}, {wireUserRulesRole, rules}} {
-		if c.want {
-			if got := h.Values(c.key); !slices.Equal(got, []string{"true"}) {
-				t.Errorf("upstream header %s = %q, want exactly [true]", c.key, got)
-			}
-		} else {
-			assertNoHeader(t, h, c.key)
+	if staff {
+		if got := h.Values(wireUserStaff); !slices.Equal(got, []string{"true"}) {
+			t.Errorf("upstream header %s = %q, want exactly [true]", wireUserStaff, got)
+		}
+	} else {
+		assertNoHeader(t, h, wireUserStaff)
+	}
+	known := []string{headerUserID, headerUserRole, headerUserEmail, headerUserStaff}
+	for k := range h {
+		if strings.HasPrefix(k, "X-User-") && !slices.ContainsFunc(known, func(n string) bool { return http.CanonicalHeaderKey(n) == k }) {
+			t.Errorf("upstream header %s = %q, want only %v", k, h[k], known)
 		}
 	}
 }
@@ -116,8 +120,6 @@ func TestStaffRoute_EveryNonStaffTokenIsRefusedOnEveryService(t *testing.T) {
 		"tenant-bearing customer":  rig.mintOpts(t, auth.MintOptions{TenantID: testTenant}),
 		"tenant-less customer":     rig.mintOpts(t, auth.MintOptions{}),
 		"customer admin":           rig.mintOpts(t, auth.MintOptions{Role: "admin", TenantID: testTenant}),
-		"rules_role only":          rig.mintOpts(t, auth.MintOptions{TenantID: testTenant, RulesRole: true}),
-		"tenant-less rules_role":   rig.mintOpts(t, auth.MintOptions{RulesRole: true}),
 		"service_role":             rig.mintOpts(t, auth.MintOptions{Role: "service_role", TenantID: testTenant}),
 		"tenant-less service_role": rig.mintOpts(t, auth.MintOptions{Role: "service_role"}),
 	}
@@ -314,7 +316,7 @@ func TestStaffRoute_TenantlessStaffReachesTheUpstream(t *testing.T) {
 
 func TestStaffRoute_TenantlessStaffIsRefusedElsewhere(t *testing.T) {
 	rig := newInternalRig(t)
-	tok := rig.mintOpts(t, auth.MintOptions{Staff: true, RulesRole: true})
+	tok := rig.mintOpts(t, auth.MintOptions{Staff: true})
 
 	// Control: the same token is admitted on an exact staff route, so each 403 below is the narrow match.
 	rig.resetAll()
@@ -429,18 +431,15 @@ func TestStaffRoute_TenantBearingStaffReachesBoth(t *testing.T) {
 func TestStaffHeaders_FollowTheToken(t *testing.T) {
 	const normal, staff = "/api/invoice/v1/invoices", "/api/validation/v1/staff/rules"
 	cases := []struct {
-		name         string
-		opts         auth.MintOptions
-		path, svc    string
-		wantS, wantR bool
+		name      string
+		opts      auth.MintOptions
+		path, svc string
+		wantStaff bool
 	}{
-		{"customer", auth.MintOptions{TenantID: testTenant}, normal, "invoice", false, false},
-		{"rules_role without staff", auth.MintOptions{TenantID: testTenant, RulesRole: true}, normal, "invoice", false, false},
-		{"staff on a normal route", auth.MintOptions{TenantID: testTenant, Staff: true}, normal, "invoice", true, false},
-		{"staff on a staff route", auth.MintOptions{TenantID: testTenant, Staff: true}, staff, "validation", true, false},
-		{"staff and rules on a normal route", auth.MintOptions{TenantID: testTenant, Staff: true, RulesRole: true}, normal, "invoice", true, true},
-		{"staff and rules on a staff route", auth.MintOptions{TenantID: testTenant, Staff: true, RulesRole: true}, staff, "validation", true, true},
-		{"tenant-less staff and rules on a staff route", auth.MintOptions{Staff: true, RulesRole: true}, staff, "validation", true, true},
+		{"customer", auth.MintOptions{TenantID: testTenant}, normal, "invoice", false},
+		{"staff on a normal route", auth.MintOptions{TenantID: testTenant, Staff: true}, normal, "invoice", true},
+		{"staff on a staff route", auth.MintOptions{TenantID: testTenant, Staff: true}, staff, "validation", true},
+		{"tenant-less staff on a staff route", auth.MintOptions{Staff: true}, staff, "validation", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -452,7 +451,72 @@ func TestStaffHeaders_FollowTheToken(t *testing.T) {
 			if rec.Code != http.StatusOK || cap.hits != 1 {
 				t.Fatalf("status = %d, hits = %d, want 200 and 1", rec.Code, cap.hits)
 			}
-			assertStaffHeaders(t, cap.header, tc.wantS, tc.wantR)
+			assertStaffHeaders(t, cap.header, tc.wantStaff)
+		})
+	}
+}
+
+// A token that still carries a rules_role key (a mint from before the claim was retired) sends nothing for it,
+// and the key neither grants nor withholds the staff route.
+func TestStaffHeaders_ARulesRoleClaimIsNotForwarded(t *testing.T) {
+	signer := newSidSigner(t)
+	verifier, err := auth.NewVerifier(auth.Config{Issuer: sidIssuer, JWKSURL: signer.url})
+	if err != nil {
+		t.Fatalf("verifier: %v", err)
+	}
+	cap := &capture{}
+	up := httptest.NewServer(recordingUpstream(cap))
+	t.Cleanup(up.Close)
+	u, err := url.Parse(up.URL)
+	if err != nil {
+		t.Fatalf("parse upstream url: %v", err)
+	}
+	gw := Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"validation": u}, GatewayToken: testGatewayToken})
+
+	const normal, staffPath = "/api/validation/v1/rules", "/api/validation/v1/staff/rules"
+	for _, tc := range []struct {
+		name      string
+		meta      map[string]any
+		path      string
+		wantCode  int
+		wantStaff bool
+	}{
+		{"staff and rules_role", map[string]any{"tenant_id": testTenant, "staff": true, "rules_role": true}, normal, 200, true},
+		{"staff and a string rules_role", map[string]any{"tenant_id": testTenant, "staff": true, "rules_role": "x"}, normal, 200, true},
+		{"rules_role without staff", map[string]any{"tenant_id": testTenant, "rules_role": true}, normal, 200, false},
+		{"rules_role without staff, staff route", map[string]any{"tenant_id": testTenant, "rules_role": true}, staffPath, 403, false},
+		{"tenant-less rules_role without staff, staff route", map[string]any{"rules_role": true}, staffPath, 403, false},
+		{"staff false and rules_role, staff route", map[string]any{"tenant_id": testTenant, "staff": false, "rules_role": true}, staffPath, 403, false},
+		{"staff without rules_role, staff route", map[string]any{"tenant_id": testTenant, "staff": true}, staffPath, 200, true},
+		{"tenant-less staff without rules_role, staff route", map[string]any{"staff": true}, staffPath, 200, true},
+		{"tenant-less staff and rules_role false, staff route", map[string]any{"staff": true, "rules_role": false}, staffPath, 200, true},
+		{"string staff, staff route", map[string]any{"tenant_id": testTenant, "staff": "true", "rules_role": true}, staffPath, 401, false},
+		{"string staff, normal route", map[string]any{"tenant_id": testTenant, "staff": "true"}, normal, 401, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			*cap = capture{}
+			now := time.Now()
+			tok := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{
+				"iss": sidIssuer, "sub": testSubject, "aud": "authenticated", "iat": now.Unix(),
+				"exp": now.Add(time.Hour).Unix(), "role": testRole, "app_metadata": tc.meta,
+			})
+			tok.Header["kid"] = signer.kid
+			bearer, err := tok.SignedString(signer.key)
+			if err != nil {
+				t.Fatalf("sign: %v", err)
+			}
+			rec := httptest.NewRecorder()
+			gw.ServeHTTP(rec, request("GET", tc.path, bearer))
+			wantHits := 0
+			if tc.wantCode == http.StatusOK {
+				wantHits = 1
+			}
+			if rec.Code != tc.wantCode || cap.hits != wantHits {
+				t.Fatalf("status = %d, hits = %d, want %d and %d (body %q)", rec.Code, cap.hits, tc.wantCode, wantHits, rec.Body.String())
+			}
+			if wantHits == 1 {
+				assertStaffHeaders(t, cap.header, tc.wantStaff)
+			}
 		})
 	}
 }
@@ -463,37 +527,36 @@ func TestStaffHeaders_ClientCopiesAreOverwritten(t *testing.T) {
 		opts         auth.MintOptions
 		method, path string
 		svc          string
-		wantS, wantR bool
+		wantStaff    bool
 	}{
-		{"customer, normal route", auth.MintOptions{TenantID: testTenant}, "GET", "/api/invoice/v1/invoices", "invoice", false, false},
-		{"tenant-less customer, workspaces", auth.MintOptions{}, "POST", provisioningPath, "tenancy", false, false},
-		{"tenant-less customer, accept", auth.MintOptions{}, "POST", "/api/tenancy/v1/invitations/accept", "tenancy", false, false},
-		{"staff only, staff route", auth.MintOptions{TenantID: testTenant, Staff: true}, "GET", "/api/validation/v1/staff/rules", "validation", true, false},
-		{"staff only, normal route", auth.MintOptions{TenantID: testTenant, Staff: true}, "GET", "/api/invoice/v1/invoices", "invoice", true, false},
-		{"tenant-less staff only, staff route", auth.MintOptions{Staff: true}, "POST", "/api/validation/v1/staff/rules", "validation", true, false},
+		{"customer, normal route", auth.MintOptions{TenantID: testTenant}, "GET", "/api/invoice/v1/invoices", "invoice", false},
+		{"tenant-less customer, workspaces", auth.MintOptions{}, "POST", provisioningPath, "tenancy", false},
+		{"tenant-less customer, accept", auth.MintOptions{}, "POST", "/api/tenancy/v1/invitations/accept", "tenancy", false},
+		{"staff, staff route", auth.MintOptions{TenantID: testTenant, Staff: true}, "GET", "/api/validation/v1/staff/rules", "validation", true},
+		{"staff, normal route", auth.MintOptions{TenantID: testTenant, Staff: true}, "GET", "/api/invoice/v1/invoices", "invoice", true},
+		{"tenant-less staff, staff route", auth.MintOptions{Staff: true}, "POST", "/api/validation/v1/staff/rules", "validation", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tg := setupGateway(t)
 			tc.opts.Subject, tc.opts.Role = testSubject, testRole
 			r := request(tc.method, tc.path, tg.mint(t, tc.opts))
-			for _, k := range []string{wireUserStaff, wireUserRulesRole} {
-				r.Header.Add(k, "true")
-				r.Header.Add(k, "true")
-			}
+			r.Header.Add(wireUserStaff, "true")
+			r.Header.Add(wireUserStaff, "true")
+			r.Header.Set(wireUserRulesRole, "true")
 			rec := httptest.NewRecorder()
 			tg.handler.ServeHTTP(rec, r)
 			cap := tg.caps[tc.svc]
 			if rec.Code != http.StatusOK || cap.hits != 1 {
 				t.Fatalf("status = %d, hits = %d, want 200 and 1", rec.Code, cap.hits)
 			}
-			assertStaffHeaders(t, cap.header, tc.wantS, tc.wantR)
+			assertStaffHeaders(t, cap.header, tc.wantStaff)
 		})
 	}
 }
 
 // The gateway in front of a guarded platform.App: the gateway decides who may enter, the service
-// decides who holds the rules role, and a forged X-User-Rules-Role changes neither.
+// decides who is staff, and a forged X-User-Staff changes neither.
 func TestStaffRoute_GatewayAndServiceTogether(t *testing.T) {
 	tg := setupGateway(t)
 
@@ -529,7 +592,7 @@ func TestStaffRoute_GatewayAndServiceTogether(t *testing.T) {
 	cases := []struct {
 		name        string
 		opts        auth.MintOptions
-		forge       bool // the client sends X-User-Rules-Role: true itself
+		forge       bool // the client sends X-User-Staff: true itself
 		wantStatus  int
 		wantReached int32
 		wantHandled int32
@@ -537,11 +600,9 @@ func TestStaffRoute_GatewayAndServiceTogether(t *testing.T) {
 	}{
 		{"customer", auth.MintOptions{TenantID: testTenant}, false, http.StatusForbidden, 0, 0, `{"error":"forbidden"}`},
 		{"customer with forged staff headers", auth.MintOptions{TenantID: testTenant}, true, http.StatusForbidden, 0, 0, `{"error":"forbidden"}`},
-		{"staff without the rules role", auth.MintOptions{TenantID: testTenant, Staff: true}, false, http.StatusForbidden, 1, 0, `{"error":"forbidden"}`},
-		{"staff with a forged rules-role header", auth.MintOptions{TenantID: testTenant, Staff: true}, true, http.StatusForbidden, 1, 0, `{"error":"forbidden"}`},
-		{"tenant-less staff with a forged rules-role header", auth.MintOptions{Staff: true}, true, http.StatusForbidden, 1, 0, `{"error":"forbidden"}`},
-		{"tenant-less staff with the rules role", auth.MintOptions{Staff: true, RulesRole: true}, false, http.StatusOK, 1, 1, testSubject},
-		{"tenant-bearing staff with the rules role", auth.MintOptions{TenantID: testTenant, Staff: true, RulesRole: true}, false, http.StatusOK, 1, 1, testSubject},
+		{"tenant-bearing staff", auth.MintOptions{TenantID: testTenant, Staff: true}, false, http.StatusOK, 1, 1, testSubject},
+		{"tenant-less staff", auth.MintOptions{Staff: true}, false, http.StatusOK, 1, 1, testSubject},
+		{"tenant-less staff, client also sends the header", auth.MintOptions{Staff: true}, true, http.StatusOK, 1, 1, testSubject},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -550,8 +611,8 @@ func TestStaffRoute_GatewayAndServiceTogether(t *testing.T) {
 			tc.opts.Subject, tc.opts.Role = testSubject, testRole
 			req := request(http.MethodGet, path, tg.mint(t, tc.opts))
 			if tc.forge {
-				req.Header.Set(wireUserRulesRole, "true")
 				req.Header.Set(wireUserStaff, "true")
+				req.Header.Set(wireUserRulesRole, "true")
 			}
 			rec := httptest.NewRecorder()
 			gw.ServeHTTP(rec, req)

@@ -19,7 +19,7 @@ func staffIdentity(t *testing.T, tenant bool) auth.Identity {
 	subject := uuid.NewString()
 	_, cleanup := seedMembership(t, h.tenantA, subject, "admin")
 	t.Cleanup(cleanup)
-	id := auth.Identity{Subject: subject, Role: "authenticated", Staff: true, RulesRole: true}
+	id := auth.Identity{Subject: subject, Role: "authenticated", Staff: true}
 	if tenant {
 		id.TenantID = h.tenantA
 	}
@@ -46,9 +46,9 @@ func TestRLS_WithinStaffTxRefusesWithoutAStaffCaller(t *testing.T) {
 	requireHarness(t)
 	staff := staffIdentity(t, false)
 	ctxs := map[string]context.Context{
-		"plain context":                     context.Background(),
-		"identity set, no rules-role check": auth.WithIdentity(context.Background(), staff),
-		"tenant-less caller, no check":      auth.WithTenantlessCaller(context.Background(), staff),
+		"plain context":                context.Background(),
+		"identity set, no staff check": auth.WithIdentity(context.Background(), staff),
+		"tenant-less caller, no check": auth.WithTenantlessCaller(context.Background(), staff),
 	}
 	for name, ctx := range ctxs {
 		for poolName, pool := range map[string]*pgxpool.Pool{"app pool": h.app, "unreachable pool": unreachablePool(t)} {

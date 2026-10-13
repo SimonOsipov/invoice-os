@@ -193,7 +193,7 @@ export function Rules({ rules, status, errorText, version, state, versions, vers
           </div>
           {status !== 'ready' && (
             <div style={{ padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: 'var(--fg-3)', minWidth: 880 }}>
-              <span>{status === 'loading' ? 'Loading rules…' : status === 'forbidden' ? 'Your account has no rules role.' : errorText}</span>
+              <span>{status === 'loading' ? 'Loading rules…' : status === 'forbidden' ? 'Your account is not ASComply staff.' : errorText}</span>
               {status === 'error' && (
                 <button type="button" onClick={onRetry} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 30 }}>
                   Retry

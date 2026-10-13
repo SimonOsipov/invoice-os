@@ -11,7 +11,7 @@ import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } 
 test.use({ viewport: { width: 1440, height: 900 } })
 
 let staff: Promise<StaffAccount> | undefined
-const staffAccount = (): Promise<StaffAccount> => (staff ??= provisionStaffAccount('reskin-support', undefined, { rulesRole: true }))
+const staffAccount = (): Promise<StaffAccount> => (staff ??= provisionStaffAccount('reskin-support'))
 
 const SHADOW_CARD = 'rgba(40, 83, 52, 0.21) 0px 14px 22px -16px'
 

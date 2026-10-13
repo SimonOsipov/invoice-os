@@ -127,7 +127,7 @@ describe('SourceDocumentRail', () => {
     expect(note).not.toBeNull()
     expect((note?.textContent ?? '').length).toBeGreaterThan(0) // vacuity floor
     expect(note?.textContent).toContain('cannot replace, rename or annotate a source document')
-    // Non-modification only: a gated boot deletes this row on the four demo tenants
+    // Non-modification only: a gated boot deletes this row on the demo tenants
     // and re-inserts it under a new id, so no persistence claim holds for its readers.
     expect(note?.textContent).not.toContain('Stored once')
     expect(note?.textContent).not.toContain('delete')

@@ -258,3 +258,8 @@ func TestMockMemberPostOnly(t *testing.T) {
 		t.Errorf("control: POST = %d with %d grant call(s), want 204 and 1", resp.Code, len(rec.got))
 	}
 }
+
+// padLeft pads body with leading spaces to n bytes; trailing padding is never read.
+func padLeft(body string, n int) string {
+	return strings.Repeat(" ", n-len(body)) + body
+}

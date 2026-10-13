@@ -4,27 +4,65 @@ package validation
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const functionKey = "vat-standard-rate"
 
-// seedRulesStaffRow inserts a rules-role staff row and removes it in t.Cleanup.
-func seedRulesStaffRow(t *testing.T, super *pgxpool.Pool) string {
+// seedHouseMember inserts a membership of the house company for a new user and returns the user.
+// It adopts the committed house row, writes the dev one only when the table is empty, and deletes only its membership.
+func seedHouseMember(t *testing.T, super *pgxpool.Pool, role, status string) string {
 	t.Helper()
-	actor := uuid.NewString()
-	if _, err := super.Exec(context.Background(),
-		`INSERT INTO staff_members (user_id, rules_role) VALUES ($1, true)`, actor); err != nil {
-		t.Fatalf("seed a rules-role staff row: %v", err)
+	ctx := context.Background()
+	readHouse := func() (string, error) {
+		var id string
+		err := super.QueryRow(ctx, `SELECT tenant_id::text FROM public.house_company`).Scan(&id)
+		return id, err
 	}
-	t.Cleanup(func() {
-		_, _ = super.Exec(context.Background(), `DELETE FROM staff_members WHERE user_id = $1`, actor)
-	})
-	return actor
+	house, err := readHouse()
+	if errors.Is(err, pgx.ErrNoRows) {
+		const dev = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
+		if _, err := super.Exec(ctx, `INSERT INTO tenants (id, name) VALUES ($1, 'ASComply (dev)') ON CONFLICT DO NOTHING`, dev); err != nil {
+			t.Fatalf("seed the dev house tenant: %v", err)
+		}
+		if _, err := super.Exec(ctx, `INSERT INTO public.house_company (tenant_id) VALUES ($1) ON CONFLICT DO NOTHING`, dev); err != nil {
+			t.Fatalf("seed the house row: %v", err)
+		}
+		house, err = readHouse()
+	}
+	if err != nil {
+		t.Fatalf("read the house row: %v", err)
+	}
+	return seedMemberOf(t, super, house, role, status)
+}
+
+// seedCustomerMember inserts an active admin of a new customer tenant and returns the user.
+func seedCustomerMember(t *testing.T, super *pgxpool.Pool) string {
+	t.Helper()
+	tenant := uuid.NewString()
+	if _, err := super.Exec(context.Background(), `INSERT INTO tenants (id, name) VALUES ($1, 'Customer (staff test)')`, tenant); err != nil {
+		t.Fatalf("seed a customer tenant: %v", err)
+	}
+	user := seedMemberOf(t, super, tenant, "admin", "active")
+	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant) })
+	return user
+}
+
+func seedMemberOf(t *testing.T, super *pgxpool.Pool, tenant, role, status string) string {
+	t.Helper()
+	user, id := uuid.NewString(), uuid.NewString()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO memberships (id, tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4, $5)`, id, tenant, user, role, status); err != nil {
+		t.Fatalf("seed a %s %s membership: %v", status, role, err)
+	}
+	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM memberships WHERE id = $1`, id) })
+	return user
 }
 
 // switchRuleViaFunction calls set_rule_enabled as invoice_app and returns was_enabled.
@@ -43,7 +81,7 @@ func TestStaffRulesFunction_NextLoadSeesTheSwitch(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
 	seedV5Lists(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	engine := NewDefaultEngine()
 	const key = "supplier-tin-format"
 
@@ -100,7 +138,7 @@ func loadToday(t *testing.T, app *pgxpool.Pool) RuleSet {
 func TestStaffRulesFunction_LeavesAScheduledAndASupersededVersionAlone(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	superseded := ruleRowsOfVersions(t, super, functionKey, 1, 2, 3)
 	if len(superseded) == 0 {
@@ -133,7 +171,7 @@ func TestStaffRulesFunction_LeavesAScheduledAndASupersededVersionAlone(t *testin
 func TestStaffRulesFunction_FlipsASealedVersionAndTouchesNoContent(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	ctx := context.Background()
 
 	var sealed bool
@@ -174,7 +212,7 @@ func TestStaffRulesFunction_FlipsASealedVersionAndTouchesNoContent(t *testing.T)
 func TestStaffRulesFunction_KeyOnlyInAScheduledVersionReturnsZeroRows(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	versionID, _ := seedVersion(t, super)
 	const scheduledOnly = "scheduled-only-qa-rule"

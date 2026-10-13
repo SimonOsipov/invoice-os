@@ -23,16 +23,16 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// staffCtx is the context a handler sees behind auth.RequireRulesRole for subject.
+// staffCtx is the context a handler sees behind auth.RequireStaff for subject.
 func staffCtx(t *testing.T, subject string) context.Context {
 	t.Helper()
 	var ctx context.Context
-	h := auth.RequireRulesRole(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { ctx = r.Context() }))
+	h := auth.RequireStaff(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { ctx = r.Context() }))
 	req := httptest.NewRequest("PATCH", "/v1/staff/rules/x", nil).
-		WithContext(auth.WithIdentity(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", Staff: true, RulesRole: true}))
+		WithContext(auth.WithIdentity(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", Staff: true}))
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if ctx == nil {
-		t.Fatal("RequireRulesRole refused the staff caller")
+		t.Fatal("RequireStaff refused the staff caller")
 	}
 	return ctx
 }
@@ -156,7 +156,7 @@ func TestStaffRules_SwitchOffAndOnChangesTheNextLoad(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
 	seedV5Lists(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	ctx, store := staffCtx(t, actor), NewStore(app)
 	today := todayUTC() // the switch targets the version in force today
 	enabledIn := func() bool {
@@ -193,7 +193,7 @@ func TestStaffRules_SwitchOffAndOnChangesTheNextLoad(t *testing.T) {
 func TestStaffRules_SwitchWritesTheAuditRowInTheSameTx(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	res, err := NewStore(app).SwitchRule(staffCtx(t, actor), functionKey, false, "kill it")
 	if err != nil {
 		t.Fatalf("SwitchRule: %v", err)
@@ -215,7 +215,7 @@ func TestStaffRules_SwitchWritesTheAuditRowInTheSameTx(t *testing.T) {
 func TestStaffRules_AuditFailureRollsTheFlipBack(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	orig := recordStaff
 	t.Cleanup(func() { recordStaff = orig })
 	boom := errors.New("audit down")
@@ -238,7 +238,7 @@ func TestStaffRules_AuditFailureRollsTheFlipBack(t *testing.T) {
 func TestStaffRules_RouteFlipWritesTheAuditRow(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	mux := http.NewServeMux()
 	mux.Handle("PATCH /v1/staff/rules/{key}", StaffSwitchRuleHandler(NewStore(app).SwitchRule, nil))
 	patch := func(body string) *httptest.ResponseRecorder {
@@ -278,7 +278,7 @@ func TestStaffRules_RouteFlipWritesTheAuditRow(t *testing.T) {
 func TestStaffRules_ReEnableWritesAnEnabledAuditRow(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	ctx, store := staffCtx(t, actor), NewStore(app)
 	if _, err := store.SwitchRule(ctx, functionKey, false, "r1"); err != nil {
 		t.Fatal(err)
@@ -298,7 +298,7 @@ func TestStaffRules_ReEnableWritesAnEnabledAuditRow(t *testing.T) {
 func TestStaffRules_ConcurrentSwitchesGiveOneSuccessAndOne409(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	ctx, store := staffCtx(t, actor), NewStore(app)
 	errs := make([]error, 2)
 	start := make(chan struct{})
@@ -335,7 +335,7 @@ func TestStaffRules_ConcurrentSwitchesGiveOneSuccessAndOne409(t *testing.T) {
 func TestStaffRules_UnknownKeyIs404AndNoAuditRow(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	_, err := NewStore(app).SwitchRule(staffCtx(t, actor), "no-such-rule", false, "r")
 	if !errors.Is(err, ErrRuleNotInForce) {
 		t.Fatalf("err = %v, want ErrRuleNotInForce", err)
@@ -351,7 +351,7 @@ func TestStaffRules_UnknownKeyIs404AndNoAuditRow(t *testing.T) {
 func TestStaffRules_SameStateIs409AndNoAuditRow(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	_, err := NewStore(app).SwitchRule(staffCtx(t, actor), functionKey, true, "r")
 	if !errors.Is(err, ErrRuleAlreadyInState) {
 		t.Fatalf("err = %v, want ErrRuleAlreadyInState", err)
@@ -389,23 +389,39 @@ func TestStaffRules_NonUUIDSubjectIs403(t *testing.T) {
 	}
 }
 
-func TestStaffRules_ActorWithoutTheRulesRoleIs403(t *testing.T) {
+func TestStaffRules_ActorWhoIsNotStaffIs403(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
-	actor := uuid.NewString()
-	if _, err := super.Exec(context.Background(), `INSERT INTO staff_members (user_id, rules_role) VALUES ($1, false)`, actor); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM staff_members WHERE user_id = $1`, actor) })
+	store := NewStore(app)
 
-	_, err := NewStore(app).SwitchRule(staffCtx(t, actor), functionKey, false, "r")
-	if !errors.Is(err, db.ErrNotStaff) {
-		t.Fatalf("err = %v, want db.ErrNotStaff (42501 mapped)", err)
-	}
+	control := seedHouseMember(t, super, "reviewer", "active")
 	if !ruleEnabledActive(t, super, functionKey) {
-		t.Error("rules.enabled changed")
+		t.Fatal("fixture: the rule starts disabled")
 	}
-	if n := len(auditRowsOf(t, super, actor)); n != 0 {
-		t.Errorf("%d audit rows, want 0", n)
+	if _, err := store.SwitchRule(staffCtx(t, control), functionKey, false, "control"); err != nil {
+		t.Fatalf("control: an active house member's SwitchRule: %v", err)
+	}
+	if ruleEnabledActive(t, super, functionKey) {
+		t.Fatal("control: the active house member's switch left the rule enabled")
+	}
+	if n := len(auditRowsOf(t, super, control)); n != 1 {
+		t.Fatalf("control: %d audit rows, want 1", n)
+	}
+
+	for name, actor := range map[string]string{
+		"suspended house member": seedHouseMember(t, super, "reviewer", "suspended"),
+		"customer member":        seedCustomerMember(t, super),
+		"no membership":          uuid.NewString(),
+	} {
+		_, err := store.SwitchRule(staffCtx(t, actor), functionKey, true, "r")
+		if !errors.Is(err, db.ErrNotStaff) {
+			t.Errorf("%s: err = %v, want db.ErrNotStaff (42501 mapped)", name, err)
+		}
+		if ruleEnabledActive(t, super, functionKey) {
+			t.Errorf("%s: rules.enabled changed from false", name)
+		}
+		if n := len(auditRowsOf(t, super, actor)); n != 0 {
+			t.Errorf("%s: %d audit rows, want 0", name, n)
+		}
 	}
 }

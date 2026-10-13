@@ -235,7 +235,7 @@ func lockProvisionTail(ctx context.Context, superuserDSN string) (func(), error)
 // never silently skips a reset that should have run.
 //
 // The purge has no such second gate: it is not gated on the environment name,
-// and is narrowed only by the four tenants DemoTenants names (demopurge.go) —
+// and is narrowed only by the tenants DemoTenants names (demopurge.go) —
 // see TestProvisionPurgeRunsAgainstThePersistentEnvironmentName.
 func Provision(ctx context.Context, cfg ProvisionConfig) error {
 	// Set before the early returns below, so "false" is truthful on every path

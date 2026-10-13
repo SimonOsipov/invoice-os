@@ -94,7 +94,7 @@ function Console() {
   const switchable = listState === 'in_force'
   const versionsNote = versionsRead.status === 'error' ? (versionsRead.error?.message ?? 'Versions unavailable') : 'Loading versions…'
   const readNote = (r: { status: string; error: { status: number | null; message: string } | null }): string =>
-    r.status !== 'error' ? 'Loading…' : r.error?.status === 403 ? 'Your account has no rules role.' : (r.error?.message ?? 'Unavailable')
+    r.status !== 'error' ? 'Loading…' : r.error?.status === 403 ? 'Your account is not ASComply staff.' : (r.error?.message ?? 'Unavailable')
   const expired = [rulesRead, versionsRead, codeListsRead, syncsRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void signOut()

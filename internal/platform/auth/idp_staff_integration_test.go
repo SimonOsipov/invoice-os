@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -13,17 +14,15 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// The D13 runbook statements.
+// Runbook statements (Design, Runbook statements); subtask 07 copies them byte for byte.
 const (
-	grantStaffSQL  = `INSERT INTO public.staff_members (user_id) SELECT id FROM auth.users WHERE email = lower('<address>');`
-	removeStaffSQL = `DELETE FROM public.staff_members WHERE user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));`
+	grantHouseStaffSQL   = `INSERT INTO public.memberships (tenant_id, user_id, role, status, email) SELECT h.tenant_id, u.id, 'reviewer', 'active', u.email FROM public.house_company h CROSS JOIN auth.users u WHERE u.email = lower('<address>') ON CONFLICT (tenant_id, user_id) DO UPDATE SET status = 'active';`
+	suspendHouseStaffSQL = `UPDATE public.memberships m SET status = 'suspended' FROM public.house_company h WHERE m.tenant_id = h.tenant_id AND m.user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));`
 
-	// The D18 rules-role statements.
-	grantRulesRoleSQL  = `UPDATE public.staff_members SET rules_role = true WHERE user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));`
-	removeRulesRoleSQL = `UPDATE public.staff_members SET rules_role = false WHERE user_id = (SELECT id FROM auth.users WHERE email = lower('<address>'));`
+	devHouseTenant = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
 )
 
-// runbookFor runs a D13 statement verbatim for an address as the superuser.
+// runbookFor runs a runbook statement verbatim for an address as the superuser.
 func runbookFor(t *testing.T, conn *pgx.Conn, stmt, address string) pgconn.CommandTag {
 	t.Helper()
 	tag, err := conn.Exec(context.Background(), strings.Replace(stmt, "<address>", address, 1))
@@ -33,7 +32,7 @@ func runbookFor(t *testing.T, conn *pgx.Conn, stmt, address string) pgconn.Comma
 	return tag
 }
 
-// runbook runs a D13 statement for u and asserts one row changed.
+// runbook runs a runbook statement for u and asserts one row changed.
 func runbook(t *testing.T, conn *pgx.Conn, stmt string, u idpUser) {
 	t.Helper()
 	if tag := runbookFor(t, conn, stmt, u.email); tag.RowsAffected() != 1 {
@@ -41,13 +40,35 @@ func runbook(t *testing.T, conn *pgx.Conn, stmt string, u idpUser) {
 	}
 }
 
-// grantStaff grants through the runbook and removes the row afterwards (it has no FK to auth.users).
-func grantStaff(t *testing.T, conn *pgx.Conn, u idpUser) {
+// houseTenant adopts the committed house row, writing the dev one only when the table is empty.
+func houseTenant(t *testing.T, conn *pgx.Conn) string {
 	t.Helper()
+	ctx := context.Background()
+	read := func() (string, error) {
+		var id string
+		err := conn.QueryRow(ctx, `SELECT tenant_id::text FROM public.house_company`).Scan(&id)
+		return id, err
+	}
+	id, err := read()
+	if errors.Is(err, pgx.ErrNoRows) {
+		exec(t, conn, `INSERT INTO tenants (id, name) VALUES ($1, 'ASComply (dev)') ON CONFLICT DO NOTHING`, devHouseTenant)
+		exec(t, conn, `INSERT INTO public.house_company (tenant_id) VALUES ($1) ON CONFLICT DO NOTHING`, devHouseTenant)
+		id, err = read()
+	}
+	if err != nil {
+		t.Fatalf("read the house row: %v", err)
+	}
+	return id
+}
+
+// grantHouseStaff runs the runbook grant for u and deletes the membership afterwards.
+func grantHouseStaff(t *testing.T, conn *pgx.Conn, u idpUser) {
+	t.Helper()
+	house := houseTenant(t, conn)
 	t.Cleanup(func() {
-		_, _ = conn.Exec(context.Background(), `DELETE FROM public.staff_members WHERE user_id = $1`, u.id)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM public.memberships WHERE tenant_id = $1 AND user_id = $2`, house, u.id)
 	})
-	runbook(t, conn, grantStaffSQL, u)
+	runbook(t, conn, grantHouseStaffSQL, u)
 }
 
 // staffClaim returns app_metadata.staff and whether the key is present.
@@ -79,9 +100,30 @@ func requireVerifies(t *testing.T, base, label, tok string) {
 	}
 }
 
+func requireTenant(t *testing.T, label, tok string, want bool) {
+	t.Helper()
+	if v, has := appMetadataOf(t, tok)["tenant_id"]; has != want {
+		t.Errorf("%s: app_metadata.tenant_id = %v, want present=%v", label, v, want)
+	}
+}
+
+// verifiedStaff verifies tok against the real provider and asserts Identity.Staff.
+func verifiedStaff(t *testing.T, base, label, tok string, wantStaff bool) auth.Identity {
+	t.Helper()
+	id, err := idpVerifier(t, base).Verify(context.Background(), tok)
+	if err != nil {
+		t.Fatalf("Verify %s: %v", label, err)
+	}
+	if id.Staff != wantStaff {
+		t.Errorf("%s: Identity.Staff = %v, want %v", label, id.Staff, wantStaff)
+	}
+	return id
+}
+
 func TestIdP_RegisteredAccountCarriesNoStaffClaim(t *testing.T) {
 	base := idpURL(t)
 	conn := superConn(t)
+	houseTenant(t, conn) // an absent claim must not be an empty-table artefact
 	u := workspaceUser(t, base)
 	// A claim planted in the provider's own app metadata must not reach the token.
 	exec(t, conn, `UPDATE auth.users SET raw_app_meta_data = raw_app_meta_data || '{"staff": true}'::jsonb WHERE id = $1`, u.id)
@@ -104,23 +146,27 @@ func TestIdP_RegisteredAccountCarriesNoStaffClaim(t *testing.T) {
 	assertSameShape(t, "claims", jwtPart(t, a, 1), fx.DecodedClaims)
 }
 
-func TestIdP_StaffGrantReachesTheNextToken(t *testing.T) {
+func TestIdP_HouseGrantReachesTheNextToken(t *testing.T) {
 	base := idpURL(t)
 	conn := superConn(t)
 	u, other := workspaceUser(t, base), workspaceUser(t, base)
 	h := newRenewal(t, base)
 	a0, r0 := h.session(t, u)
 	requireNoStaff(t, "before the grant", a0)
+	requireTenant(t, "before the grant", a0, true)
 	_, otherR0 := h.session(t, other)
 
-	grantStaff(t, conn, u)
+	grantHouseStaff(t, conn, u)
 
+	// Two active memberships: staff, and no tenant (Core AC 3).
 	a1, _ := h.renewOK(t, "after the grant", r0)
 	requireStaff(t, "refresh after the grant", a1)
+	requireTenant(t, "refresh after the grant", a1, false)
 	requireVerifies(t, base, "refreshed staff token", a1)
 
 	a2, _ := h.session(t, u)
 	requireStaff(t, "sign-in after the grant", a2)
+	requireTenant(t, "sign-in after the grant", a2, false)
 	requireVerifies(t, base, "signed-in staff token", a2)
 
 	o1, _ := h.renewOK(t, "other account after the grant", otherR0)
@@ -129,53 +175,54 @@ func TestIdP_StaffGrantReachesTheNextToken(t *testing.T) {
 	requireNoStaff(t, "other account sign-in", o2)
 }
 
-func TestIdP_StaffGrantStatementMatchesTheAddressInAnyCase(t *testing.T) {
+func TestIdP_HouseGrantStatementMatchesTheAddressInAnyCase(t *testing.T) {
 	base := idpURL(t)
 	conn := superConn(t)
+	house := houseTenant(t, conn)
 	u := workspaceUser(t, base)
-	h := newRenewal(t, base)
-	_, r0 := h.session(t, u)
 
-	if tag := runbookFor(t, conn, grantStaffSQL, "nobody-"+u.id+"@example.test"); tag.RowsAffected() != 0 {
-		t.Fatalf("grant for an unregistered address: %s, want no rows", tag)
-	}
 	mixed := strings.ToUpper(u.email)
 	if mixed == u.email {
 		t.Fatalf("control: %q has no letters to upper-case", u.email)
 	}
 	t.Cleanup(func() {
-		_, _ = conn.Exec(context.Background(), `DELETE FROM public.staff_members WHERE user_id = $1`, u.id)
+		_, _ = conn.Exec(context.Background(), `DELETE FROM public.memberships WHERE tenant_id = $1 AND user_id = $2`, house, u.id)
 	})
-	if tag := runbookFor(t, conn, grantStaffSQL, mixed); tag.RowsAffected() != 1 {
-		t.Fatalf("grant for %q: %s, want one row", mixed, tag)
+	if tag := runbookFor(t, conn, grantHouseStaffSQL, mixed); tag.String() != "INSERT 0 1" {
+		t.Fatalf("grant for %q: %q, want INSERT 0 1", mixed, tag)
+	}
+	if tag := runbookFor(t, conn, grantHouseStaffSQL, "nobody-"+u.id+"@example.test"); tag.String() != "INSERT 0 0" {
+		t.Fatalf("grant for an unregistered address: %q, want INSERT 0 0", tag)
 	}
 
-	a1, _ := h.renewOK(t, "after the mixed-case grant", r0)
-	requireStaff(t, "refresh after the mixed-case grant", a1)
+	a, _ := newRenewal(t, base).session(t, u)
+	requireStaff(t, "sign-in after the mixed-case grant", a)
 }
 
-func TestIdP_StaffRemovalReachesTheNextToken(t *testing.T) {
+func TestIdP_HouseSuspensionReachesTheNextToken(t *testing.T) {
 	base := idpURL(t)
 	conn := superConn(t)
 	u, keep := workspaceUser(t, base), workspaceUser(t, base)
 	h := newRenewal(t, base)
-	grantStaff(t, conn, u)
-	grantStaff(t, conn, keep)
+	grantHouseStaff(t, conn, u)
+	grantHouseStaff(t, conn, keep)
 	a0, r0 := h.session(t, u)
-	requireStaff(t, "before the removal", a0)
+	requireStaff(t, "before the suspension", a0)
 	_, keepR0 := h.session(t, keep)
 
-	runbook(t, conn, removeStaffSQL, u)
+	runbook(t, conn, suspendHouseStaffSQL, u)
 
-	a1, _ := h.renewOK(t, "after the removal", r0)
-	requireNoStaff(t, "refresh after the removal", a1)
-	requireVerifies(t, base, "refreshed token after the removal", a1)
+	// One active membership is left, so the workspace tenant comes back with the staff claim gone.
+	a1, _ := h.renewOK(t, "after the suspension", r0)
+	requireNoStaff(t, "refresh after the suspension", a1)
+	requireTenant(t, "refresh after the suspension", a1, true)
+	requireVerifies(t, base, "refreshed token after the suspension", a1)
 
 	a2, _ := h.session(t, u)
-	requireNoStaff(t, "sign-in after the removal", a2)
-	requireVerifies(t, base, "signed-in token after the removal", a2)
+	requireNoStaff(t, "sign-in after the suspension", a2)
+	requireVerifies(t, base, "signed-in token after the suspension", a2)
 
-	k1, _ := h.renewOK(t, "other staff after the removal", keepR0)
+	k1, _ := h.renewOK(t, "other staff after the suspension", keepR0)
 	requireStaff(t, "other staff refresh", k1)
 }
 
@@ -184,7 +231,7 @@ func TestIdP_StaffClaimSurvivesRenewalPastTheTTL(t *testing.T) {
 	conn := superConn(t)
 	u := signUp(t, conn, base)
 	h := newRenewal(t, base)
-	grantStaff(t, conn, u)
+	grantHouseStaff(t, conn, u)
 	a0, r0 := h.session(t, u)
 	requireStaff(t, "staff session", a0)
 
@@ -209,71 +256,10 @@ func appMetadataOf(t *testing.T, tok string) map[string]any {
 	return am
 }
 
-// requireIdentity verifies tok against the real provider and asserts (Staff, RulesRole).
-func requireIdentity(t *testing.T, base, label, tok string, wantStaff, wantRules bool) auth.Identity {
-	t.Helper()
-	id, err := idpVerifier(t, base).Verify(context.Background(), tok)
-	if err != nil {
-		t.Fatalf("Verify %s: %v", label, err)
-	}
-	if staff, rules := flagsOf(t, id); staff != wantStaff || rules != wantRules {
-		t.Errorf("%s: (Staff, RulesRole) = (%v, %v), want (%v, %v)", label, staff, rules, wantStaff, wantRules)
-	}
-	return id
-}
-
-func TestIdP_RulesRoleGrantReachesTheNextToken(t *testing.T) {
+func TestIdP_CustomerAdminCannotPlantStaff(t *testing.T) {
 	base := idpURL(t)
 	conn := superConn(t)
-	u, other := workspaceUser(t, base), workspaceUser(t, base)
-	h := newRenewal(t, base)
-	// The other account is staff without the rules role: a grant that touched every row would show.
-	grantStaff(t, conn, u)
-	grantStaff(t, conn, other)
-	a0, r0 := h.session(t, u)
-	requireIdentity(t, base, "before the rules grant", a0, true, false)
-	_, otherR0 := h.session(t, other)
-
-	runbook(t, conn, grantRulesRoleSQL, u)
-
-	a1, _ := h.renewOK(t, "after the rules grant", r0)
-	requireIdentity(t, base, "refresh after the rules grant", a1, true, true)
-	a2, _ := h.session(t, u)
-	requireIdentity(t, base, "sign-in after the rules grant", a2, true, true)
-
-	o1, _ := h.renewOK(t, "other account after the rules grant", otherR0)
-	requireIdentity(t, base, "other account refresh", o1, true, false)
-	o2, _ := h.session(t, other)
-	requireIdentity(t, base, "other account sign-in", o2, true, false)
-}
-
-func TestIdP_RulesRoleRemovalReachesTheNextToken(t *testing.T) {
-	base := idpURL(t)
-	conn := superConn(t)
-	u, keep := workspaceUser(t, base), workspaceUser(t, base)
-	h := newRenewal(t, base)
-	for _, x := range []idpUser{u, keep} {
-		grantStaff(t, conn, x)
-		runbook(t, conn, grantRulesRoleSQL, x)
-	}
-	a0, r0 := h.session(t, u)
-	requireIdentity(t, base, "before the rules removal", a0, true, true)
-	_, keepR0 := h.session(t, keep)
-
-	runbook(t, conn, removeRulesRoleSQL, u)
-
-	a1, _ := h.renewOK(t, "after the rules removal", r0)
-	requireIdentity(t, base, "refresh after the rules removal", a1, true, false)
-	a2, _ := h.session(t, u)
-	requireIdentity(t, base, "sign-in after the rules removal", a2, true, false)
-
-	k1, _ := h.renewOK(t, "other account after the rules removal", keepR0)
-	requireIdentity(t, base, "other account refresh", k1, true, true)
-}
-
-func TestIdP_CustomerAdminCannotPlantStaffOrRulesRole(t *testing.T) {
-	base := idpURL(t)
-	conn := superConn(t)
+	houseTenant(t, conn)        // an absent claim must not be an empty-table artefact
 	u := workspaceUser(t, base) // a workspace admin: the customer, not staff
 	h := newRenewal(t, base)
 
@@ -288,7 +274,7 @@ func TestIdP_CustomerAdminCannotPlantStaffOrRulesRole(t *testing.T) {
 	if am["tenant_id"] == nil {
 		t.Error("control: workspace token lost tenant_id")
 	}
-	id := requireIdentity(t, base, "planted exact keys", a1, false, false)
+	id := verifiedStaff(t, base, "planted exact keys", a1, false)
 	if id.TenantID == "" {
 		t.Error("control: verified identity has no tenant")
 	}
@@ -305,37 +291,8 @@ func TestIdP_CustomerAdminCannotPlantStaffOrRulesRole(t *testing.T) {
 			t.Errorf("exact key %q appeared beside the variants as %v", k, v)
 		}
 	}
-	id = requireIdentity(t, base, "planted case-variant keys", a2, false, false)
+	id = verifiedStaff(t, base, "planted case-variant keys", a2, false)
 	if id.TenantID == "" {
 		t.Error("control: verified identity has no tenant")
 	}
 }
-
-func TestIdP_RulesRoleGrantOnANonStaffAccountChangesNothing(t *testing.T) {
-	base := idpURL(t)
-	conn := superConn(t)
-	u := workspaceUser(t, base)
-
-	if tag := runbookFor(t, conn, grantRulesRoleSQL, u.email); tag.String() != "UPDATE 0" {
-		t.Fatalf("rules-role grant on a non-staff account: %q, want UPDATE 0", tag)
-	}
-	var rows int
-	if err := conn.QueryRow(context.Background(), `SELECT count(*) FROM public.staff_members WHERE user_id = $1`, u.id).Scan(&rows); err != nil || rows != 0 {
-		t.Fatalf("staff_members rows for the account = %d (err %v), want 0", rows, err)
-	}
-
-	a, _ := newRenewal(t, base).session(t, u)
-	if v, ok := appMetadataOf(t, a)["rules_role"]; ok {
-		t.Errorf("non-staff token carries rules_role = %v, want absent", v)
-	}
-	requireIdentity(t, base, "non-staff account after the grant", a, false, false)
-
-	// Control: the same statement on a staff account answers UPDATE 1.
-	s := workspaceUser(t, base)
-	grantStaff(t, conn, s)
-	if tag := runbookFor(t, conn, grantRulesRoleSQL, s.email); tag.String() != "UPDATE 1" {
-		t.Errorf("rules-role grant on a staff account: %q, want UPDATE 1", tag)
-	}
-}
-
-func flagsOf(_ *testing.T, id auth.Identity) (bool, bool) { return id.Staff, id.RulesRole }

@@ -32,14 +32,14 @@ var LockProvisionTailForTest = lockProvisionTail
 // a contract with operators and with dev-env.yml, not with any caller in Go.
 var LogPurgeResultForTest = logPurgeResult
 
-// StaffCtxForTest returns the context a handler sees behind RequireRulesRole for id.
+// StaffCtxForTest returns the context a handler sees behind RequireStaff for id.
 func StaffCtxForTest(t *testing.T, id auth.Identity) context.Context {
 	t.Helper()
 	var ctx context.Context
-	h := auth.RequireRulesRole(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { ctx = r.Context() }))
+	h := auth.RequireStaff(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { ctx = r.Context() }))
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/v1/staff/x", nil).WithContext(auth.WithIdentity(context.Background(), id)))
 	if ctx == nil {
-		t.Fatal("RequireRulesRole refused the staff caller")
+		t.Fatal("RequireStaff refused the staff caller")
 	}
 	return ctx
 }

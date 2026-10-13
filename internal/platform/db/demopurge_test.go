@@ -39,7 +39,7 @@ import (
 )
 
 // witnessTenantID is the throwaway non-demo tenant the survival obligation
-// plants under. Deliberately unlike the four seeded ids so a failure message
+// plants under. Deliberately unlike the seeded ids so a failure message
 // cannot be misread.
 const witnessTenantID = "9d9d9d9d-9d9d-9d9d-9d9d-9d9d9d9d9d9d"
 
@@ -421,16 +421,16 @@ func TestPurgeAllowlistMatchesSeedFileTenants(t *testing.T) {
 	}
 }
 
-// TestPurgeAllowlistIsExactlyFourSeedTenants (obligation 1): pins the length
+// TestPurgeAllowlistIsExactlyFiveSeedTenants (obligation 1): pins the length
 // independently, so widening the purge takes two separate literal edits.
-func TestPurgeAllowlistIsExactlyFourSeedTenants(t *testing.T) {
-	if len(db.DemoTenants) != 4 {
-		t.Fatalf("len(db.DemoTenants) = %d, want 4 — widening the purge allowlist must require editing this pin as well as the list itself", len(db.DemoTenants))
+func TestPurgeAllowlistIsExactlyFiveSeedTenants(t *testing.T) {
+	if len(db.DemoTenants) != 5 {
+		t.Fatalf("len(db.DemoTenants) = %d, want 5 — widening the purge allowlist must require editing this pin as well as the list itself", len(db.DemoTenants))
 	}
 	seen := map[string]bool{}
 	for _, id := range db.DemoTenants {
 		if seen[strings.ToLower(id)] {
-			t.Errorf("db.DemoTenants repeats %s — a duplicate hides a missing tenant behind a length that still reads as 4", id)
+			t.Errorf("db.DemoTenants repeats %s — a duplicate hides a missing tenant behind a length that still reads as 5", id)
 		}
 		seen[strings.ToLower(id)] = true
 	}

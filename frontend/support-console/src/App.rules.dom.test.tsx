@@ -130,10 +130,10 @@ describe('Console rules wiring', () => {
     expect(counts()).toEqual([1, 1, 1])
   })
 
-  it('a staff member without the rules role lands on the no-role line', async () => {
+  it('a non-staff account lands on the not-staff line', async () => {
     read.mockRejectedValue(new ApiError('http', 'forbidden', 403))
     render(<App />)
-    expect(await screen.findAllByText('Your account has no rules role.')).not.toHaveLength(0)
+    expect(await screen.findAllByText('Your account is not ASComply staff.')).not.toHaveLength(0)
     expect(screen.queryByRole('switch')).toBeNull()
     expect(signOutConsole).not.toHaveBeenCalled()
   })
@@ -235,19 +235,29 @@ describe('Console rules wiring', () => {
     expect((within(dialog()).getByRole('button', { name: 'Disable rule' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('a 403 on the list shows the no-role line with no switches', async () => {
+  it('a 403 on the list shows the not-staff line with no switches', async () => {
     read.mockRejectedValue(new ApiError('http', 'forbidden', 403))
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
-    expect(await screen.findByText('Your account has no rules role.')).toBeTruthy()
+    expect(await screen.findByText('Your account is not ASComply staff.')).toBeTruthy()
     expect(screen.queryAllByRole('switch')).toHaveLength(0)
+  })
+
+  it('a 500 on the list shows the server text and Retry, not the not-staff line', async () => {
+    read.mockRejectedValue(new ApiError('http', 'db down', 500))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    expect(await screen.findByText('db down')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+    expect(screen.queryByText('Your account is not ASComply staff.')).toBeNull()
+    expect(signOutConsole).not.toHaveBeenCalled()
   })
 
   it('a 401 on the list signs the console out; a 403 does not', async () => {
     read.mockRejectedValue(new ApiError('http', 'expired', 403))
     const { unmount } = render(<App />)
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
-    await screen.findByText('Your account has no rules role.')
+    await screen.findByText('Your account is not ASComply staff.')
     expect(signOutConsole).not.toHaveBeenCalled()
     unmount()
     read.mockRejectedValue(new ApiError('http', 'expired', 401))
@@ -357,21 +367,21 @@ describe('Console code-list wiring', () => {
     expect(summary).toHaveBeenCalledTimes(1)
   })
 
-  it('a 403 on the summary uses the no-role wording', async () => {
+  it('a 403 on the summary uses the not-staff wording', async () => {
     summary.mockRejectedValue(new ApiError('http', 'forbidden', 403))
     render(<App />)
     await openRules()
-    await waitFor(() => expect(screen.getAllByText('Your account has no rules role.').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText('Your account is not ASComply staff.').length).toBeGreaterThan(0))
   })
 
   const syncOf = (added: string[], status = 'applied') => ({ status, synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added, removed: [], changed: [], added_count: added.length, removed_count: 0, changed_count: 0 })
 
-  it('a 500 on the summary shows the server text, not the no-role wording', async () => {
+  it('a 500 on the summary shows the server text, not the not-staff wording', async () => {
     summary.mockRejectedValue(new ApiError('http', 'db down', 500))
     render(<App />)
     await openRules()
     expect(await screen.findByText('db down')).toBeTruthy()
-    expect(screen.queryByText('Your account has no rules role.')).toBeNull()
+    expect(screen.queryByText('Your account is not ASComply staff.')).toBeNull()
     expect(screen.queryByText('No sync recorded yet.')).toBeNull()
   })
 
@@ -382,7 +392,7 @@ describe('Console code-list wiring', () => {
     const row = await screen.findByRole('button', { name: /hs-codes/ })
     syncsRead.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
     fireEvent.click(row)
-    await waitFor(() => expect(dialog().textContent).toContain('Your account has no rules role.'))
+    await waitFor(() => expect(dialog().textContent).toContain('Your account is not ASComply staff.'))
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Close' }))
     syncsRead.mockRejectedValueOnce(new ApiError('http', 'db down', 500))
     fireEvent.click(row)

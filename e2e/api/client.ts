@@ -241,15 +241,6 @@ export interface StaffAccount {
   userId: string
 }
 
-// POST /auth/mock/staff exists only in the mock build, which every PR fork runs.
-export async function provisionStaffAccount(prefix: string, password?: string, opts?: { rulesRole?: boolean }): Promise<StaffAccount> {
-  const account = await registerFresh(prefix, password)
-  const userId = subjectOf((await signInSession(account.email, account.password)).access_token)
-  const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: userId, ...(opts?.rulesRole ? { rules_role: true } : {}) } })
-  if (grant.status !== 204) throw new Error(`staff grant answered ${grant.status}: ${JSON.stringify(grant.body)}`)
-  return { ...account, userId }
-}
-
 export interface MemberGrant {
   user_id: string
   tenant_id: string
@@ -262,6 +253,17 @@ export interface MemberGrant {
 export async function grantMembership(grant: MemberGrant): Promise<void> {
   const res = await rawFetch('/auth/mock/member', { method: 'POST', body: grant })
   if (res.status !== 204) throw new Error(`member grant answered ${res.status}: ${JSON.stringify(res.body)}`)
+}
+
+// Dev house company, db/seed.dev.sql.
+export const HOUSE_TENANT_ID = 'a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0'
+
+// /auth/mock/member exists only in the mock build, which every PR fork runs.
+export async function provisionStaffAccount(prefix: string, password?: string): Promise<StaffAccount> {
+  const account = await registerFresh(prefix, password)
+  const userId = subjectOf((await signInSession(account.email, account.password)).access_token)
+  await grantMembership({ user_id: userId, tenant_id: HOUSE_TENANT_ID, role: 'reviewer', display_name: 'ASComply staff', email: account.email })
+  return { ...account, userId }
 }
 
 // POST /auth/mock/invitation-token (internal/gateway/mockinvitation.go answers 204); mock build only.

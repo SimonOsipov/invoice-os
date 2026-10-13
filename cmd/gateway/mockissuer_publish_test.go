@@ -218,12 +218,16 @@ func mockIssuerStateFaults(filename string, src any) []string {
 		`app.Mux.Handle("GET /.well-known/jwks.json", jwks)`,
 		`app.Mux.Handle("POST /auth/login", login)`,
 		`app.Mux.Handle("OPTIONS /auth/login", login)`,
-		`app.Mux.Handle("POST /auth/mock/staff", mockStaffRoute(provisionCfg.MigrationDSN, app.Logger))`,
 		`app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))`,
 		`app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(provisionCfg.MigrationDSN, app.Logger))`,
 	} {
 		if !slices.Contains(handled, want) {
 			faults = append(faults, fmt.Sprintf("the \"on\" branch does not run %s", want))
+		}
+	}
+	for _, h := range handled {
+		if strings.Contains(h, "/auth/mock/staff") {
+			faults = append(faults, fmt.Sprintf("the \"on\" branch registers a retired staff route: %s", h))
 		}
 	}
 	return faults
@@ -250,7 +254,6 @@ func main() {
 		app.Mux.Handle("GET /.well-known/jwks.json", jwks)
 		app.Mux.Handle("POST /auth/login", login)
 		app.Mux.Handle("OPTIONS /auth/login", login)
-		app.Mux.Handle("POST /auth/mock/staff", mockStaffRoute(provisionCfg.MigrationDSN, app.Logger))
 		app.Mux.Handle("POST /auth/mock/member", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))
 		app.Mux.Handle("POST /auth/mock/invitation-token", mockInvitationTokenRoute(provisionCfg.MigrationDSN, app.Logger))
 		platform.MockIssuer = "on"
@@ -264,9 +267,9 @@ func main() {
 		{"hardcoded environment", `mockIssuerRoutes(os.Getenv("ENVIRONMENT"),`, `mockIssuerRoutes("development",`},
 		{"hardcoded flag", `os.Getenv("GATEWAY_MOCK_ISSUER")`, `"true"`},
 		{"a mint route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/login\", login)\n", ""},
-		{"the staff route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/staff\", mockStaffRoute(provisionCfg.MigrationDSN, app.Logger))\n", ""},
 		{"the member route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/member\", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))\n", ""},
 		{"the invitation-token route missing from the branch", "\t\tapp.Mux.Handle(\"POST /auth/mock/invitation-token\", mockInvitationTokenRoute(provisionCfg.MigrationDSN, app.Logger))\n", ""},
+		{"a retired staff route registered", "\t\tplatform.MockIssuer = \"on\"\n", "\t\tapp.Mux.Handle(\"POST /auth/mock/staff\", mockMemberRoute(provisionCfg.MigrationDSN, app.Logger))\n\t\tplatform.MockIssuer = \"on\"\n"},
 		{"a fourth value", "platform.MockIssuer = \"on\"", "platform.MockIssuer = \"on\"\n\t\tplatform.MockIssuer = \"yes\""},
 	} {
 		if !strings.Contains(good, c.find) {

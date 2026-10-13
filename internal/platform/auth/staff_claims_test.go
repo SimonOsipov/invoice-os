@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,31 +25,32 @@ func verifyAppMeta(t *testing.T, appMeta string) (Identity, error) {
 	return v.Verify(context.Background(), signRawPayload(t, iss, appMetaPayload(appMeta)))
 }
 
-func TestVerify_StaffAndRulesRoleReachTheIdentity(t *testing.T) {
+func TestVerify_StaffReachesTheIdentity(t *testing.T) {
 	iss := mustIssuer(t)
 	v, _ := jwksServer(t, iss)
-	cases := []struct {
-		name                string
-		staff, rules        bool
-		wantStaff, wantRule bool
-	}{
-		{"staff only", true, false, true, false},
-		{"staff and rules role", true, true, true, true},
-	}
-	for _, c := range cases {
+	for _, c := range []struct {
+		name  string
+		staff bool
+	}{{"staff true", true}, {"staff false", false}} {
 		t.Run(c.name, func(t *testing.T) {
-			opts := staffOpts(t, MintOptions{TenantID: "tenant-1", Email: "s@example.test"}, c.staff, c.rules)
-			id, err := v.Verify(context.Background(), mustMint(t, iss, opts))
+			id, err := v.Verify(context.Background(), mustMint(t, iss, MintOptions{TenantID: "tenant-1", Email: "s@example.test", Staff: c.staff}))
 			if err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
-			if staff, rules := flagsOf(t, id); staff != c.wantStaff || rules != c.wantRule {
-				t.Errorf("(Staff, RulesRole) = (%v, %v), want (%v, %v)", staff, rules, c.wantStaff, c.wantRule)
+			if id.Staff != c.staff {
+				t.Errorf("Staff = %v, want %v", id.Staff, c.staff)
 			}
 			if id.TenantID != "tenant-1" || id.Email != "s@example.test" {
 				t.Errorf("tenant/email = %q/%q, want unchanged", id.TenantID, id.Email)
 			}
 		})
+	}
+	// Control: a raw staff:true claim reaches the identity, so the false cases above are not a dead decode.
+	if id, err := verifyAppMeta(t, `{"staff":true}`); err != nil || !id.Staff {
+		t.Errorf("raw staff:true = %+v, %v, want Staff true", id, err)
+	}
+	if id, err := verifyAppMeta(t, `{}`); err != nil || id.Staff {
+		t.Errorf("absent staff = %+v, %v, want Staff false", id, err)
 	}
 }
 
@@ -62,8 +65,8 @@ func TestVerify_NoStaffKeysLeaveTheIdentityUnchanged(t *testing.T) {
 	if want := (Identity{Subject: testSubject, Role: "authenticated", TenantID: "tenant-1", Email: "a@example.test"}); minted != want {
 		t.Errorf("minted identity = %+v, want %+v", minted, want)
 	}
-	if staff, rules := flagsOf(t, minted); staff || rules {
-		t.Errorf("minted: (Staff, RulesRole) = (%v, %v), want (false, false)", staff, rules)
+	if minted.Staff {
+		t.Error("minted: Staff = true, want false")
 	}
 
 	// Extra provider keys and a session id, as real GoTrue sends them.
@@ -76,37 +79,61 @@ func TestVerify_NoStaffKeysLeaveTheIdentityUnchanged(t *testing.T) {
 	if want := (Identity{Subject: testSubject, Role: "authenticated", TenantID: "tenant-2", Email: "b@example.test", SessionID: "sess-1"}); raw != want {
 		t.Errorf("raw identity = %+v, want %+v", raw, want)
 	}
-	if staff, rules := flagsOf(t, raw); staff || rules {
-		t.Errorf("raw: (Staff, RulesRole) = (%v, %v), want (false, false)", staff, rules)
+	if raw.Staff {
+		t.Error("raw: Staff = true, want false")
 	}
 }
 
-func TestVerify_RulesRoleWithoutStaffIsNotARulesRole(t *testing.T) {
-	iss := mustIssuer(t)
-	v, _ := jwksServer(t, iss)
+// A rules_role key of any value or type verifies and changes nothing: Identity carries only Staff and the tenant.
+func TestVerify_RulesRoleKeyIsIgnored(t *testing.T) {
+	for _, c := range []struct {
+		appMeta string
+		tenant  string
+		staff   bool
+	}{
+		{`{"staff":true,"rules_role":"x"}`, "", true},
+		{`{"staff":true,"rules_role":{}}`, "", true},
+		{`{"staff":true,"rules_role":1}`, "", true},
+		{`{"staff":true,"rules_role":[true]}`, "", true},
+		{`{"staff":true,"rules_role":null}`, "", true},
+		{`{"staff":true,"rules_role":true}`, "", true},
+		{`{"staff":true,"rules_role":false}`, "", true},
+		{`{"rules_role":true}`, "", false},
+		{`{"rules_role":"x"}`, "", false},
+		{`{"staff":false,"rules_role":true}`, "", false},
+		{`{"rules_role":{},"tenant_id":"t-1"}`, "t-1", false},
+	} {
+		t.Run(c.appMeta, func(t *testing.T) {
+			id, err := verifyAppMeta(t, c.appMeta)
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			if want := (Identity{Subject: testSubject, Role: "authenticated", TenantID: c.tenant, Staff: c.staff}); id != want {
+				t.Errorf("identity = %+v, want %+v", id, want)
+			}
+		})
+	}
+}
 
-	minted, err := v.Verify(context.Background(), mustMint(t, iss, staffOpts(t, MintOptions{TenantID: "tenant-1"}, false, true)))
-	if err != nil {
-		t.Fatalf("Verify minted: %v", err)
-	}
-	if staff, rules := flagsOf(t, minted); staff || rules {
-		t.Errorf("minted rules_role only: (Staff, RulesRole) = (%v, %v), want (false, false)", staff, rules)
-	}
-
-	// Control: with staff beside it, the same claim counts.
-	both, err := verifyAppMeta(t, `{"staff":true,"rules_role":true}`)
-	if err != nil {
-		t.Fatalf("Verify staff+rules: %v", err)
-	}
-	if staff, rules := flagsOf(t, both); !staff || !rules {
-		t.Errorf("control: (Staff, RulesRole) = (%v, %v), want (true, true)", staff, rules)
+// No runtime path can see a dead field that nothing reads, so the type shapes are pinned by reflection.
+func TestVerify_NoTypeCarriesARulesRoleField(t *testing.T) {
+	for _, typ := range []reflect.Type{reflect.TypeOf(Identity{}), reflect.TypeOf(MintOptions{}), reflect.TypeOf(appMetadata{})} {
+		if typ.NumField() == 0 {
+			t.Fatalf("%s has no fields", typ)
+		}
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			if strings.Contains(strings.ToLower(f.Name), "rulesrole") || strings.Contains(f.Tag.Get("json"), "rules_role") {
+				t.Errorf("%s.%s (json %q) is a rules-role field", typ, f.Name, f.Tag.Get("json"))
+			}
+		}
 	}
 }
 
 func TestVerify_NonBooleanStaffClaimIsRefused(t *testing.T) {
 	// Control first: a boolean in the same slot verifies.
-	if _, err := verifyAppMeta(t, `{"staff":true,"rules_role":true}`); err != nil {
-		t.Fatalf("control: boolean claims refused: %v", err)
+	if _, err := verifyAppMeta(t, `{"staff":true}`); err != nil {
+		t.Fatalf("control: boolean claim refused: %v", err)
 	}
 	cases := []string{
 		`{"staff":"true"}`,
@@ -115,12 +142,6 @@ func TestVerify_NonBooleanStaffClaimIsRefused(t *testing.T) {
 		`{"staff":0}`,
 		`{"staff":{}}`,
 		`{"staff":[true]}`,
-		`{"staff":true,"rules_role":"true"}`,
-		`{"staff":true,"rules_role":1}`,
-		`{"staff":true,"rules_role":{}}`,
-		`{"rules_role":"true"}`,
-		`{"rules_role":1}`,
-		`{"rules_role":{}}`,
 	}
 	for _, appMeta := range cases {
 		t.Run(appMeta, func(t *testing.T) {
@@ -136,64 +157,39 @@ func TestVerify_NonBooleanStaffClaimIsRefused(t *testing.T) {
 }
 
 func TestVerify_NullStaffClaimIsFalse(t *testing.T) {
-	for _, c := range []struct {
-		appMeta   string
-		wantStaff bool
-		wantRules bool
-	}{
-		{`{"staff":null,"rules_role":null}`, false, false},
-		{`{"staff":true,"rules_role":null}`, true, false},
-		{`{"staff":null,"rules_role":true}`, false, false},
-	} {
-		t.Run(c.appMeta, func(t *testing.T) {
-			id, err := verifyAppMeta(t, c.appMeta)
-			if err != nil {
-				t.Fatalf("Verify: %v", err)
-			}
-			if staff, rules := flagsOf(t, id); staff != c.wantStaff || rules != c.wantRules {
-				t.Errorf("(Staff, RulesRole) = (%v, %v), want (%v, %v)", staff, rules, c.wantStaff, c.wantRules)
-			}
-		})
+	id, err := verifyAppMeta(t, `{"staff":null}`)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if id.Staff {
+		t.Error("Staff = true for a null claim, want false")
 	}
 }
 
 func TestVerify_ExplicitFalseStaffClaimIsFalse(t *testing.T) {
-	for _, c := range []struct {
-		appMeta   string
-		wantStaff bool
-	}{
-		{`{"staff":false,"rules_role":false}`, false},
-		{`{"staff":true,"rules_role":false}`, true},
-		{`{"staff":false,"rules_role":true}`, false},
-	} {
-		t.Run(c.appMeta, func(t *testing.T) {
-			id, err := verifyAppMeta(t, c.appMeta)
-			if err != nil {
-				t.Fatalf("Verify: %v", err)
-			}
-			if staff, rules := flagsOf(t, id); staff != c.wantStaff || rules {
-				t.Errorf("(Staff, RulesRole) = (%v, %v), want (%v, false)", staff, rules, c.wantStaff)
-			}
-		})
+	id, err := verifyAppMeta(t, `{"staff":false}`)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if id.Staff {
+		t.Error("Staff = true for an explicit false claim, want false")
 	}
 }
 
 func TestVerify_CaseVariantClaimKeysAreIgnored(t *testing.T) {
 	cases := []struct {
-		appMeta              string
-		wantStaff, wantRules bool
-		wantTenant           string
-		name                 string
+		appMeta    string
+		wantStaff  bool
+		wantTenant string
+		name       string
 	}{
-		{`{"Staff":true,"RULES_ROLE":true}`, false, false, "", "both variants"},
-		{`{"STAFF":true,"rules_role":true}`, false, false, "", "staff variant beside an exact rules_role"},
-		{`{"Staff":true,"rules_role":true}`, false, false, "", "staff variant"},
-		{`{"staff":true,"RULES_ROLE":true}`, true, false, "", "rules_role variant beside an exact staff"},
-		{`{"Tenant_ID":"t-x"}`, false, false, "", "tenant_id variant"},
-		{`{"TENANT_ID":"t-x","staff":true}`, true, false, "", "tenant_id variant beside an exact staff"},
-		{"{\"\u017ftaff\":true,\"rule\u017f_role\":true}", false, false, "", "long-s folds of staff and rules_role"},
-		{`{"staff ":true,"rules_role ":true,"tenant_id ":"t-x"}`, false, false, "", "trailing-space keys"},
-		{`{" staff":true,"tenant_id":"t-1"}`, false, false, "t-1", "leading-space staff beside an exact tenant_id"},
+		{`{"Staff":true}`, false, "", "staff variant"},
+		{`{"STAFF":true}`, false, "", "upper-case staff variant"},
+		{`{"Tenant_ID":"t-x"}`, false, "", "tenant_id variant"},
+		{`{"TENANT_ID":"t-x","staff":true}`, true, "", "tenant_id variant beside an exact staff"},
+		{"{\"\u017ftaff\":true}", false, "", "long-s fold of staff"},
+		{`{"staff ":true,"tenant_id ":"t-x"}`, false, "", "trailing-space keys"},
+		{`{" staff":true,"tenant_id":"t-1"}`, false, "t-1", "leading-space staff beside an exact tenant_id"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -204,8 +200,8 @@ func TestVerify_CaseVariantClaimKeysAreIgnored(t *testing.T) {
 			if id.TenantID != c.wantTenant {
 				t.Errorf("%s: TenantID = %q, want %q", c.appMeta, id.TenantID, c.wantTenant)
 			}
-			if staff, rules := flagsOf(t, id); staff != c.wantStaff || rules != c.wantRules {
-				t.Errorf("%s: (Staff, RulesRole) = (%v, %v), want (%v, %v)", c.appMeta, staff, rules, c.wantStaff, c.wantRules)
+			if id.Staff != c.wantStaff {
+				t.Errorf("%s: Staff = %v, want %v", c.appMeta, id.Staff, c.wantStaff)
 			}
 		})
 	}
@@ -239,8 +235,8 @@ func TestVerify_ExactKeyWinsBesideACaseVariant(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Verify %s: %v", c.appMeta, err)
 		}
-		if staff, _ := flagsOf(t, id); staff != c.wantStaff {
-			t.Errorf("%s: Staff = %v, want %v", c.appMeta, staff, c.wantStaff)
+		if id.Staff != c.wantStaff {
+			t.Errorf("%s: Staff = %v, want %v", c.appMeta, id.Staff, c.wantStaff)
 		}
 	}
 }
@@ -301,7 +297,7 @@ func TestVerify_AppMetadataShapesBehaveAsBefore(t *testing.T) {
 	}
 }
 
-func TestMint_StaffKeysOnlyWhenSet(t *testing.T) {
+func TestMint_StaffKeyOnlyWhenSet(t *testing.T) {
 	iss := mustIssuer(t)
 	appMeta := func(opts MintOptions) map[string]any {
 		t.Helper()
@@ -316,37 +312,17 @@ func TestMint_StaffKeysOnlyWhenSet(t *testing.T) {
 	if plain["tenant_id"] != "tenant-1" {
 		t.Errorf("plain: tenant_id = %v, want tenant-1", plain["tenant_id"])
 	}
-	for _, k := range []string{"staff", "rules_role"} {
-		if _, ok := plain[k]; ok {
-			t.Errorf("plain mock token carries %q, want it absent", k)
+	if _, ok := plain["staff"]; ok {
+		t.Error("plain mock token carries staff, want it absent")
+	}
+
+	staff := appMeta(MintOptions{Staff: true})
+	if staff["staff"] != true {
+		t.Errorf("staff token: staff = %v, want true", staff["staff"])
+	}
+	for name, am := range map[string]map[string]any{"plain": plain, "staff": staff} {
+		if _, ok := am["rules_role"]; ok {
+			t.Errorf("%s token carries rules_role, want it absent", name)
 		}
 	}
-
-	both := appMeta(staffOpts(t, MintOptions{TenantID: "tenant-1"}, true, true))
-	if both["staff"] != true || both["rules_role"] != true {
-		t.Errorf("staff+rules token: staff=%v rules_role=%v, want both true", both["staff"], both["rules_role"])
-	}
-
-	staffOnly := appMeta(staffOpts(t, MintOptions{}, true, false))
-	if staffOnly["staff"] != true {
-		t.Errorf("staff-only token: staff = %v, want true", staffOnly["staff"])
-	}
-	if _, ok := staffOnly["rules_role"]; ok {
-		t.Error("staff-only token carries rules_role, want it absent")
-	}
-
-	rulesOnly := appMeta(staffOpts(t, MintOptions{}, false, true))
-	if rulesOnly["rules_role"] != true {
-		t.Errorf("rules-only token: rules_role = %v, want true", rulesOnly["rules_role"])
-	}
-	if _, ok := rulesOnly["staff"]; ok {
-		t.Error("rules-only token carries staff, want it absent")
-	}
-}
-
-func flagsOf(_ *testing.T, id Identity) (bool, bool) { return id.Staff, id.RulesRole }
-
-func staffOpts(_ *testing.T, o MintOptions, staff, rules bool) MintOptions {
-	o.Staff, o.RulesRole = staff, rules
-	return o
 }

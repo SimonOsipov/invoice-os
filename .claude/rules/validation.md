@@ -12,7 +12,7 @@ paths:
 - Run the owner `UPDATE` of the runbook only as break-glass. It writes no audit row.
 - Write a per-line `cel` rule as `[!has(invoice.<list>) ||] invoice.<list>.all(x, <body on x only>)` with `target` = `<list>`. Any other shape reports one violation at the target, not the line.
 - Register a staff route under `/v1/staff/`.
-- The platform checks the rules role on a staff route. The handler repeats no check.
+- The platform checks the staff claim on a staff route. The handler repeats no check.
 - Open the staff route transaction with `db.WithinStaffTx`.
 - Read the actor with `auth.StaffFromContext`.
 - Give a staff route an `exempt` verdict in `scRouteVerdicts`.

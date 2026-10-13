@@ -276,7 +276,7 @@ func TestStaffVersions_DateBoundariesAroundToday(t *testing.T) {
 	}
 }
 
-func TestStaffVersions_RefusesACallerWithoutTheRulesRole(t *testing.T) {
+func TestStaffVersions_RefusesACallerWithoutStaff(t *testing.T) {
 	_, app := dbTestPools(t)
 	if _, err := NewStore(app).Versions(context.Background()); !errors.Is(err, db.ErrNotStaff) {
 		t.Errorf("Versions without staff identity = %v, want db.ErrNotStaff", err)

@@ -18,8 +18,8 @@
 -- the conflict clause is DO UPDATE so a local `make dev-db` re-run CORRECTS an
 -- already-seeded row's kind (DO NOTHING would leave a stale kind in place).
 -- WARNING: every tenant listed here is one a boot-time purge may wipe.
--- db.PurgeDemoTenants keeps a literal copy of these four ids as its allowlist
--- (internal/platform/db/demopurge.go); adding a fifth tenant here widens what a
+-- db.PurgeDemoTenants keeps a literal copy of these ids as its allowlist
+-- (internal/platform/db/demopurge.go); adding a tenant here widens what a
 -- deploy is allowed to delete, and TestPurgeAllowlistMatchesSeedFileTenants goes
 -- red until a human decides that is intended. That purge deletes leaf-first while
 -- this file inserts parent-first, so the two must never run concurrently.
@@ -27,8 +27,13 @@ INSERT INTO tenants (id, name, kind) VALUES
     ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Tenant A (dev)',    'firm'),
     ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Tenant B (dev)',    'firm'),
     ('11111111-1111-1111-1111-111111111111', 'Okafor & Partners', 'firm'),
-    ('22222222-2222-2222-2222-222222222222', 'Honeywell Group',   'in_house')
+    ('22222222-2222-2222-2222-222222222222', 'Honeywell Group',   'in_house'),
+    ('a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0', 'ASComply (dev)',    'firm')
 ON CONFLICT (id) DO UPDATE SET kind = EXCLUDED.kind;
+
+-- Dev house company, with no seeded members. DO NOTHING: never replaces an existing row.
+INSERT INTO house_company (tenant_id) VALUES ('a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0')
+ON CONFLICT DO NOTHING;
 
 -- Widened demo memberships: identity (display_name/email) + status, carried over
 -- from lib/members.ts's deleted SEED_*_MEMBERS. DO UPDATE (not DO NOTHING)
@@ -125,7 +130,7 @@ ON CONFLICT ON CONSTRAINT workflow_role_members_tenant_role_user_uq DO NOTHING;
 -- (TestSeedFileHasNoDestructiveStatements) -- only CREATE, or REPAIR on a
 -- re-seed. Clearing is mostly no longer this file's problem: db.PurgeDemoTenants
 -- runs immediately before this seed on every gated boot and has already emptied
--- 17 of the four demo tenants' tables, so those upserts land on a clean slate.
+-- 17 of the demo tenants' tables, so those upserts land on a clean slate.
 -- Two caveats: the purge is non-fatal, so a failed one leaves the residue in
 -- place and the boot still reaches this seed; and it deliberately spares
 -- memberships and the three approval-policy tables, whose upserts below are what

@@ -1,7 +1,7 @@
 // The validation RULES contract over the wire, at the raw level (rawFetch) so status and
 // envelope are observable. PATCH /v1/rules/{key} refuses every authenticated caller: 403
 // {error: "rules are managed by ASComply"}, whatever the body. The staff routes
-// (/v1/staff/rules) admit only a rules-role staff token.
+// (/v1/staff/rules) admit only a house member's token.
 import { randomUUID } from 'node:crypto'
 import { test, expect } from '@playwright/test'
 import {
@@ -68,24 +68,21 @@ type StaffRule = { key: string; enabled: boolean }
 
 test.describe('staff rules (API E2E, over the deployed gateway)', () => {
   let customer: string
-  let noRole: string
-  let rulesRole: string
+  let staff: string
 
   test.beforeAll(async () => {
     customer = await login(PERSONAS.A)
-    const plain = await provisionStaffAccount('kill-no-role')
-    noRole = (await signInSession(plain.email, plain.password)).access_token
-    const granted = await provisionStaffAccount('kill-rules', undefined, { rulesRole: true })
-    rulesRole = (await signInSession(granted.email, granted.password)).access_token
+    const granted = await provisionStaffAccount('kill-rules')
+    staff = (await signInSession(granted.email, granted.password)).access_token
   })
 
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` })
   const listRules = async (token: string) => rawFetch(STAFF_RULES, { headers: auth(token) })
   const patchRule = (token: string, key: string, body: unknown) => rawFetch(`${STAFF_RULES}/${key}`, { method: 'PATCH', headers: auth(token), body })
 
-  // Reads the list as the rules-role staff and returns the probe's state; fails clearly when the key is absent.
+  // Reads the list as the house member and returns the probe's state; fails clearly when the key is absent.
   async function probeEnabled(): Promise<boolean> {
-    const res = await listRules(rulesRole)
+    const res = await listRules(staff)
     expect(res.status, 'staff rules list').toBe(200)
     const rules = (res.body as { rules: StaffRule[] }).rules
     const probe = rules.find((r) => r.key === PROBE_RULE)
@@ -95,7 +92,6 @@ test.describe('staff rules (API E2E, over the deployed gateway)', () => {
 
   const refusals: Array<{ name: string; token: () => string }> = [
     { name: 'a customer token', token: () => customer },
-    { name: 'a staff token without the rules role', token: () => noRole },
   ]
 
   for (const who of refusals) {
@@ -106,47 +102,47 @@ test.describe('staff rules (API E2E, over the deployed gateway)', () => {
     })
   }
 
-  test('a rules-role staff member switches a rule off and on', async () => {
+  test('a house member switches a rule off and on', async () => {
     expect(await probeEnabled(), 'probe starts enabled').toBe(true)
     try {
-      const off = await patchRule(rulesRole, PROBE_RULE, { enabled: false, reason: 'e2e kill switch' })
+      const off = await patchRule(staff, PROBE_RULE, { enabled: false, reason: 'e2e kill switch' })
       expect(off.status, 'disable').toBe(200)
       expect(off.body).toMatchObject({ key: PROBE_RULE, enabled: false })
       expect(await probeEnabled(), 'list after disable').toBe(false)
 
-      const again = await patchRule(rulesRole, PROBE_RULE, { enabled: false, reason: 'e2e kill switch' })
+      const again = await patchRule(staff, PROBE_RULE, { enabled: false, reason: 'e2e kill switch' })
       assertErrorEnvelope(again, 409, 'repeat disable')
       expect(again.body).toEqual({ error: ALREADY_DISABLED_MESSAGE })
 
-      const on = await patchRule(rulesRole, PROBE_RULE, { enabled: true, reason: 'e2e restore' })
+      const on = await patchRule(staff, PROBE_RULE, { enabled: true, reason: 'e2e restore' })
       expect(on.status, 'enable').toBe(200)
       expect(on.body).toMatchObject({ key: PROBE_RULE, enabled: true })
       expect(await probeEnabled(), 'list after enable').toBe(true)
-      const repeatOn = await patchRule(rulesRole, PROBE_RULE, { enabled: true, reason: 'e2e repeat' })
+      const repeatOn = await patchRule(staff, PROBE_RULE, { enabled: true, reason: 'e2e repeat' })
       assertErrorEnvelope(repeatOn, 409, 'repeat enable')
       expect(repeatOn.body).toEqual({ error: ALREADY_ENABLED_MESSAGE })
     } finally {
-      if (!(await probeEnabled())) await patchRule(rulesRole, PROBE_RULE, { enabled: true, reason: 'e2e restore' })
+      if (!(await probeEnabled())) await patchRule(staff, PROBE_RULE, { enabled: true, reason: 'e2e restore' })
     }
   })
 
   test('staff switch rejects a missing reason and an unknown key', async () => {
     const before = await probeEnabled()
     try {
-      assertErrorEnvelope(await patchRule(rulesRole, PROBE_RULE, { enabled: false }), 400, 'missing reason')
-      assertErrorEnvelope(await patchRule(rulesRole, PROBE_RULE, { enabled: false, reason: '   ' }), 400, 'blank reason')
-      const unknown = await patchRule(rulesRole, 'no-such-rule', { enabled: false, reason: 'e2e unknown key' })
+      assertErrorEnvelope(await patchRule(staff, PROBE_RULE, { enabled: false }), 400, 'missing reason')
+      assertErrorEnvelope(await patchRule(staff, PROBE_RULE, { enabled: false, reason: '   ' }), 400, 'blank reason')
+      const unknown = await patchRule(staff, 'no-such-rule', { enabled: false, reason: 'e2e unknown key' })
       assertErrorEnvelope(unknown, 404, 'unknown key')
       expect(unknown.body).toEqual({ error: NOT_FOUND_MESSAGE })
       expect(await probeEnabled(), 'rejected requests changed nothing').toBe(before)
     } finally {
-      if (!(await probeEnabled())) await patchRule(rulesRole, PROBE_RULE, { enabled: true, reason: 'e2e restore' })
+      if (!(await probeEnabled())) await patchRule(staff, PROBE_RULE, { enabled: true, reason: 'e2e restore' })
     }
   })
 
-  test('the legacy toggle route refuses a rules-role staff token', async () => {
-    const res = await rawFetch(`/api/validation/v1/rules/${PROBE_RULE}`, { method: 'PATCH', headers: auth(rulesRole), body: { enabled: false } })
-    assertErrorEnvelope(res, 403, 'legacy toggle with a rules-role staff token')
+  test("the legacy toggle route refuses a house member's token", async () => {
+    const res = await rawFetch(`/api/validation/v1/rules/${PROBE_RULE}`, { method: 'PATCH', headers: auth(staff), body: { enabled: false } })
+    assertErrorEnvelope(res, 403, "legacy toggle with a house member's token")
     expect(await probeEnabled(), 'probe still enabled').toBe(true)
   })
 })
@@ -174,15 +170,12 @@ type DeskVersion = { version: number; state: string; rule_count: number }
 
 test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
   let customer: string
-  let noRole: string
-  let rulesRole: string
+  let staff: string
 
   test.beforeAll(async () => {
     customer = await login(PERSONAS.A)
-    const plain = await provisionStaffAccount('desk-no-role')
-    noRole = (await signInSession(plain.email, plain.password)).access_token
-    const granted = await provisionStaffAccount('desk-rules', undefined, { rulesRole: true })
-    rulesRole = (await signInSession(granted.email, granted.password)).access_token
+    const granted = await provisionStaffAccount('desk-rules')
+    staff = (await signInSession(granted.email, granted.password)).access_token
   })
 
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` })
@@ -190,12 +183,12 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
   const send = (token: string, method: string, path: string, body?: unknown) => rawFetch(path, { method, headers: auth(token), body })
 
   async function versions(): Promise<DeskVersion[]> {
-    const res = await get(rulesRole, VERSIONS)
+    const res = await get(staff, VERSIONS)
     expect(res.status, 'versions list').toBe(200)
     return (res.body as { versions: DeskVersion[] }).versions
   }
   const inForce = async (): Promise<number> => {
-    const res = await get(rulesRole, STAFF_RULES)
+    const res = await get(staff, STAFF_RULES)
     expect(res.status, 'rules in force').toBe(200)
     return (res.body as { version: number }).version
   }
@@ -203,7 +196,7 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
   async function draftNumber(): Promise<number> {
     const found = (await versions()).find((v) => v.state === 'draft')
     if (found) return found.version
-    const opened = await send(rulesRole, 'POST', DRAFT)
+    const opened = await send(staff, 'POST', DRAFT)
     expect(opened.status, 'open a draft').toBe(201)
     return (opened.body as { version: number }).version
   }
@@ -223,7 +216,6 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
 
   const refusals: Array<{ name: string; token: () => string }> = [
     { name: 'a customer token', token: () => customer },
-    { name: 'a staff token without the rules role', token: () => noRole },
   ]
 
   for (const who of refusals) {
@@ -254,46 +246,46 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
 
     const other = list.find((v) => v.state !== 'in_force' && v.rule_count > 0)
     expect(other, 'another listed version with rules').toBeDefined()
-    const res = await get(rulesRole, `${STAFF_RULES}?version=${other!.version}`)
+    const res = await get(staff, `${STAFF_RULES}?version=${other!.version}`)
     expect(res.status, 'rules of another version').toBe(200)
     expect(res.body).toMatchObject({ version: other!.version })
     expect((res.body as { rules: StaffRule[] }).rules, 'the list rule_count matches the rules read').toHaveLength(other!.rule_count)
   })
 
-  test('a rules-role staff member drafts and tests a rule', async () => {
+  test('a house member drafts and tests a rule', async () => {
     const draft = await draftNumber()
     const rules = `${DRAFT}/rules`
 
-    const added = await send(rulesRole, 'POST', rules, probeBody(probeKey))
+    const added = await send(staff, 'POST', rules, probeBody(probeKey))
     expect(added.status, 'add the probe').toBe(201)
     expect(added.body).toMatchObject({ key: probeKey, rule_set_version: draft })
-    assertErrorEnvelope(await send(rulesRole, 'POST', rules, probeBody(probeKey)), 409, 'add the probe twice')
+    assertErrorEnvelope(await send(staff, 'POST', rules, probeBody(probeKey)), 409, 'add the probe twice')
 
-    const read = await get(rulesRole, `${STAFF_RULES}?version=${draft}`)
+    const read = await get(staff, `${STAFF_RULES}?version=${draft}`)
     expect(read.status, 'rules of the draft').toBe(200)
     expect((read.body as { rules: StaffRule[] }).rules.map((r) => r.key), 'the draft holds the probe').toContain(probeKey)
 
-    assertErrorEnvelope(await send(rulesRole, 'POST', DRAFT), 409, 'open a second draft')
+    assertErrorEnvelope(await send(staff, 'POST', DRAFT), 409, 'open a second draft')
 
     const sample = SAMPLE_INVOICE
-    const test = await send(rulesRole, 'POST', `${DRAFT}/test`, { invoice: sample })
+    const test = await send(staff, 'POST', `${DRAFT}/test`, { invoice: sample })
     expect(test.status, 'test the draft').toBe(200)
     const sides = test.body as { draft: { error: string | null; violations: Array<{ rule_key: string }> }; in_force: { violations: Array<{ rule_key: string }> } }
     expect(sides.draft.error, 'the draft evaluates').toBeNull()
     expect(sides.draft.violations.map((v) => v.rule_key), 'the probe fires in the draft').toContain(probeKey)
     expect(sides.in_force.violations.map((v) => v.rule_key), 'the probe is absent from the version in force').not.toContain(probeKey)
 
-    const removed = await send(rulesRole, 'DELETE', `${rules}/${probeKey}`)
+    const removed = await send(staff, 'DELETE', `${rules}/${probeKey}`)
     expect(removed.status, 'remove the probe').toBe(200)
     expect(removed.body).toMatchObject({ key: probeKey })
-    expect((await send(rulesRole, 'POST', rules, probeBody(probeKey))).status, 're-add the probe').toBe(201)
+    expect((await send(staff, 'POST', rules, probeBody(probeKey))).status, 're-add the probe').toBe(201)
   })
 
   test('publishing seals the draft with a future start date', async () => {
     const draft = await draftNumber()
     const forceBefore = await inForce()
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
-    const publish = (effective_from: string) => send(rulesRole, 'POST', `${DRAFT}/publish`, { effective_from })
+    const publish = (effective_from: string) => send(staff, 'POST', `${DRAFT}/publish`, { effective_from })
 
     const refused = await publish(yesterday)
     assertErrorEnvelope(refused, 400, 'publish with yesterday')
@@ -311,24 +303,24 @@ test.describe('staff rules desk (API E2E, over the deployed gateway)', () => {
     expect(list.filter((v) => v.state === 'in_force'), 'one version in force').toHaveLength(1)
     expect(await inForce(), 'the version in force is unchanged').toBe(forceBefore)
 
-    const put = await send(rulesRole, 'PUT', `${DRAFT}/rules/${probeKey}`, probePut)
+    const put = await send(staff, 'PUT', `${DRAFT}/rules/${probeKey}`, probePut)
     assertErrorEnvelope(put, 404, 'edit with no draft')
     expect(put.body).toEqual({ error: 'no draft' })
   })
 
-  test('the sync log is readable by rules staff', async () => {
-    const summary = await get(rulesRole, SYNCS)
+  test('the sync log is readable by a house member', async () => {
+    const summary = await get(staff, SYNCS)
     expect(summary.status, 'sync summary').toBe(200)
     const lists = (summary.body as { lists: Array<{ list: string; synced_at: string }> }).lists
     expect(Array.isArray(lists), 'lists is an array').toBe(true)
 
     // The detail route answers for a list with no sync: 200 and an empty array, whatever the log holds.
-    const none = await get(rulesRole, `${SYNCS}?list=e2e-never-synced`)
+    const none = await get(staff, `${SYNCS}?list=e2e-never-synced`)
     expect(none.status, 'detail of an unsynced list').toBe(200)
     expect(none.body).toEqual({ list: 'e2e-never-synced', syncs: [] })
 
     for (const { list, synced_at } of lists) {
-      const detail = await get(rulesRole, `${SYNCS}?list=${encodeURIComponent(list)}`)
+      const detail = await get(staff, `${SYNCS}?list=${encodeURIComponent(list)}`)
       expect(detail.status, `detail of ${list}`).toBe(200)
       const syncs = (detail.body as { syncs: Array<{ synced_at: string; added: unknown; removed: unknown; changed: unknown; added_count: unknown; removed_count: unknown; changed_count: unknown }> }).syncs
       expect(Array.isArray(syncs), `${list} syncs is an array`).toBe(true)

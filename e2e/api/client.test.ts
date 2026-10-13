@@ -705,27 +705,40 @@ describe('provisionStaffAccount', () => {
     vi.stubGlobal('fetch', stub)
     return stub
   }
-  function staffBody(stub: ReturnType<typeof stubGateway>): Record<string, unknown> {
-    const call = stub.mock.calls.find(([url]) => String(url).endsWith('/auth/mock/staff'))
-    return JSON.parse((call?.[1] as unknown as { body: string }).body)
+  function paths(stub: ReturnType<typeof stubGateway>): string[] {
+    return stub.mock.calls.map(([url]) => new URL(String(url)).pathname)
   }
   afterEach(() => vi.unstubAllGlobals())
 
-  it('provisionStaffAccount sends rules_role only when asked', async () => {
-    const { provisionStaffAccount } = await import('./client')
+  it('provisionStaffAccount grants a reviewer membership of the house company', async () => {
+    const { provisionStaffAccount, HOUSE_TENANT_ID } = await import('./client')
+    const stub = stubGateway()
 
-    const plain = stubGateway()
-    await provisionStaffAccount('x')
-    expect(staffBody(plain)).toEqual({ user_id: USER_ID })
+    const account = await provisionStaffAccount('x')
 
-    const ruled = stubGateway()
-    const account = await provisionStaffAccount('x', undefined, { rulesRole: true })
-    expect(staffBody(ruled)).toEqual({ user_id: USER_ID, rules_role: true })
+    const grants = stub.mock.calls.filter(([url]) => String(url).endsWith('/auth/mock/member'))
+    expect(grants).toHaveLength(1)
+    expect(JSON.parse((grants[0][1] as unknown as { body: string }).body)).toEqual({
+      user_id: USER_ID,
+      tenant_id: HOUSE_TENANT_ID,
+      role: 'reviewer',
+      display_name: 'ASComply staff',
+      email: account.email,
+    })
+    expect(paths(stub)).not.toContain('/auth/mock/staff')
     expect(account.userId).toBe(USER_ID)
+  })
 
-    const off = stubGateway()
-    await provisionStaffAccount('x', undefined, { rulesRole: false })
-    expect(staffBody(off)).toEqual({ user_id: USER_ID })
+  it('provisionStaffAccount surfaces a refused grant', async () => {
+    const { provisionStaffAccount } = await import('./client')
+    const stub = vi.fn(async (url: string) => {
+      if (url.endsWith('/auth/register')) return new Response(null, { status: 202 })
+      if (url.endsWith('/auth/exchange')) return new Response(JSON.stringify({ access_token: jwt, refresh_token: 'r' }), { status: 200 })
+      return new Response('{}', { status: 500 })
+    })
+    vi.stubGlobal('fetch', stub)
+
+    await expect(provisionStaffAccount('x')).rejects.toThrow('member grant answered 500')
   })
 })
 

@@ -395,8 +395,14 @@ func TestStaffRules_ActorWhoIsNotStaffIs403(t *testing.T) {
 	store := NewStore(app)
 
 	control := seedHouseMember(t, super, "reviewer", "active")
-	if _, err := store.SwitchRule(staffCtx(t, control), functionKey, true, "control"); err != nil {
+	if !ruleEnabledActive(t, super, functionKey) {
+		t.Fatal("fixture: the rule starts disabled")
+	}
+	if _, err := store.SwitchRule(staffCtx(t, control), functionKey, false, "control"); err != nil {
 		t.Fatalf("control: an active house member's SwitchRule: %v", err)
+	}
+	if ruleEnabledActive(t, super, functionKey) {
+		t.Fatal("control: the active house member's switch left the rule enabled")
 	}
 	if n := len(auditRowsOf(t, super, control)); n != 1 {
 		t.Fatalf("control: %d audit rows, want 1", n)
@@ -407,12 +413,12 @@ func TestStaffRules_ActorWhoIsNotStaffIs403(t *testing.T) {
 		"customer member":        seedCustomerMember(t, super),
 		"no membership":          uuid.NewString(),
 	} {
-		_, err := store.SwitchRule(staffCtx(t, actor), functionKey, false, "r")
+		_, err := store.SwitchRule(staffCtx(t, actor), functionKey, true, "r")
 		if !errors.Is(err, db.ErrNotStaff) {
 			t.Errorf("%s: err = %v, want db.ErrNotStaff (42501 mapped)", name, err)
 		}
-		if !ruleEnabledActive(t, super, functionKey) {
-			t.Errorf("%s: rules.enabled changed", name)
+		if ruleEnabledActive(t, super, functionKey) {
+			t.Errorf("%s: rules.enabled changed from false", name)
 		}
 		if n := len(auditRowsOf(t, super, actor)); n != 0 {
 			t.Errorf("%s: %d audit rows, want 0", name, n)

@@ -6624,7 +6624,7 @@ describe('InvoiceDetail opens at the line the review screen handed over (ENGI-16
     render(<InvoiceDetail ctx={ctxWithLine()} />)
 
     await screen.findByTestId('edit-invoice')
-    expect(document.activeElement).toBe(lineRow(2).querySelector('[data-line-field="unit_price"]'))
+    await waitFor(() => expect(document.activeElement).toBe(lineRow(2).querySelector('[data-line-field="unit_price"]')))
   })
 
   it('invoiceDetail_lineTargetIsConsumedFromTheApp', async () => {

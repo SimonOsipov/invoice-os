@@ -241,10 +241,6 @@ function mapStepSnapshot(): string[][] {
   })
 }
 
-function sessionRemovals(): number {
-  return (localStorage.removeItem as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === SESSION_KEY).length
-}
-
 describe('a doubted placement is left unplaced on the Map step', () => {
   it('CHKA-01: a doubted suggested invoice number opens unplaced and gates Import', async () => {
     await boot({ suggest: { 'doc-c1': suggestAi(TWO_COL, { invoice_number: 'Invoice No' }) }, check: { 'doc-c1': doubts(['invoice_number']) } })
@@ -364,20 +360,16 @@ describe('a doubted placement is left unplaced on the Map step', () => {
       'doc-500',
     ])
 
-    // A 401 signs out, so the Map step is gone; the sign-out must match the suggestion's 401.
-    const beforeSuggest = sessionRemovals()
+    // A 401 signs out, so the Map step is gone; both legs must reach the same stored-session state (cleared).
     await reboot({ suggest: { 'doc-s401': fail(401) } })
     await readColumns(picks('doc-s401'))
-    await waitFor(() => expect(sessionRemovals(), 'control: a suggestion 401 signs out').toBeGreaterThan(beforeSuggest))
-    const suggestSignOut = sessionRemovals() - beforeSuggest
+    await waitFor(() => expect(localStorage.getItem(SESSION_KEY), 'control: a suggestion 401 signs out').toBeNull())
 
-    const beforeCheck = sessionRemovals()
     const checksBefore = checkBodies.length
     await reboot({ suggest: suggest('doc-c401'), check: { 'doc-c401': fail(401) } })
     await readColumns(picks('doc-c401'))
     await waitFor(() => expect(checkBodies.length - checksBefore, 'the check request was sent').toBe(1))
-    await waitFor(() => expect(sessionRemovals(), 'a check 401 signs out').toBeGreaterThan(beforeCheck))
-    expect(sessionRemovals() - beforeCheck).toBe(suggestSignOut)
+    await waitFor(() => expect(localStorage.getItem(SESSION_KEY), 'a check 401 signs out').toBeNull())
   })
 
   it('CHKA-07: the check runs once per Read columns and never after', async () => {

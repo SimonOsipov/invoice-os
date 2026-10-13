@@ -13,6 +13,7 @@
 -- And one NOLOGIN role:
 --   auth_hook_reader       — invoice_migrator may SET ROLE to it but does not inherit it,
 --     so the migrator's own reads stay scoped.
+--   staff_reader           — NOLOGIN owner of the staff_read_* functions; same membership shape.
 --
 -- Why non-superuser + NOBYPASSRLS matters: Row-Level Security is only *enforceable*
 -- if the roles it applies to cannot bypass it and do not own the tables (an owner
@@ -57,6 +58,9 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'auth_hook_reader') THEN
     CREATE ROLE auth_hook_reader NOLOGIN;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'staff_reader') THEN
+    CREATE ROLE staff_reader NOLOGIN;
+  END IF;
 END
 $$;
 
@@ -69,6 +73,7 @@ ALTER ROLE invoice_app           WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB N
 ALTER ROLE invoice_tenant_reader WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE supabase_auth_admin   WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE auth_hook_reader      WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE staff_reader          WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 
 -- 3. Set / rotate passwords, read from four session GUCs the caller sets beforehand
 --    (`ascomply.migrator_password` / `.app_password` / `.reader_password` /
@@ -125,6 +130,8 @@ GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
 GRANT USAGE, CREATE ON SCHEMA public TO auth_hook_reader;
 --    SET without INHERIT: the migrator never inherits the role's cross-tenant read policy.
 GRANT auth_hook_reader TO invoice_migrator WITH INHERIT FALSE, SET TRUE;
+GRANT USAGE, CREATE ON SCHEMA public TO staff_reader;
+GRANT staff_reader TO invoice_migrator WITH INHERIT FALSE, SET TRUE;
 
 --    Lock down the public schema: revoke the ambient CREATE that PUBLIC has by
 --    default (a no-op on PG15+, where PUBLIC already lacks it — kept explicit for

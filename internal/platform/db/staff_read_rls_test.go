@@ -110,7 +110,6 @@ func staffReadCall(fn staffReadFn) string {
 	return fmt.Sprintf("SELECT * FROM public.%s(%s)", pgx.Identifier{fn.name}.Sanitize(), strings.Join(parts, ", "))
 }
 
-// AC-1.
 func TestRLS_EveryStaffReadFunctionIsDefinerOwnedByStaffReader(t *testing.T) {
 	requireHarness(t)
 	fns := requireStaffReadFunctions(t)
@@ -142,7 +141,7 @@ func TestRLS_EveryStaffReadFunctionIsDefinerOwnedByStaffReader(t *testing.T) {
 	}
 }
 
-// AC-1. The empty-set case is the positive half: an empty owned set equals an empty named set.
+// The empty-set case is the positive half: an empty owned set equals an empty named set.
 func TestRLS_StaffReaderOwnsOnlyStaffReadFunctions(t *testing.T) {
 	requireHarness(t)
 	named := requireStaffReadFunctions(t)
@@ -176,7 +175,7 @@ func TestRLS_StaffReaderOwnsOnlyStaffReadFunctions(t *testing.T) {
 	}
 }
 
-// AC-2. The applied body, not the migration text: a later CREATE OR REPLACE supersedes the file.
+// The applied body, not the migration text: a later CREATE OR REPLACE supersedes the file.
 func TestRLS_EveryStaffReadFunctionChecksHouseMembershipFirst(t *testing.T) {
 	requireHarness(t)
 	fns := requireStaffReadFunctions(t)
@@ -200,7 +199,6 @@ func TestRLS_EveryStaffReadFunctionChecksHouseMembershipFirst(t *testing.T) {
 	}
 }
 
-// AC-3.
 func TestRLS_StaffReadTenantsRefusesEveryoneWithNoHouseRow(t *testing.T) {
 	requireHarness(t)
 	requireStaffReadTenants(t)
@@ -228,7 +226,7 @@ func TestRLS_StaffReadTenantsRefusesEveryoneWithNoHouseRow(t *testing.T) {
 	requireNotStaffRefusal(t, "empty house_company", err, "staff_read_tenants")
 }
 
-// AC-3. Every staff_read_ function, so a later function falls under it with no edit.
+// Every staff_read_ function, so a later function falls under it with no edit.
 func TestRLS_EveryStaffReadFunctionRefusesANonStaffActor(t *testing.T) {
 	requireHarness(t)
 	fns := requireStaffReadFunctions(t)
@@ -303,7 +301,7 @@ func collectStaffTenantRows(t *testing.T, q interface {
 	return got
 }
 
-// AC-4. One REPEATABLE READ snapshot: other packages create tenants while this runs.
+// One REPEATABLE READ snapshot: other packages create tenants while this runs.
 func TestRLS_StaffReadTenantsReturnsEveryTenantToAHouseMember(t *testing.T) {
 	requireHarness(t)
 	requireStaffReadTenants(t)
@@ -351,7 +349,7 @@ func TestRLS_StaffReadTenantsReturnsEveryTenantToAHouseMember(t *testing.T) {
 	}
 }
 
-// AC-4. The newer id sorts last by id, so only created_at DESC puts it first. A tie of six is not
+// The newer id sorts last by id, so only created_at DESC puts it first. A tie of six is not
 // ordered by chance: heap order of committed rows is not insertion order, and two rows could match it.
 func TestRLS_StaffReadTenantsOrdersNewestFirstThenById(t *testing.T) {
 	requireHarness(t)
@@ -384,7 +382,7 @@ func TestRLS_StaffReadTenantsOrdersNewestFirstThenById(t *testing.T) {
 	}
 }
 
-// AC-4. No tenant is set on the call, so the role decides nothing.
+// No tenant is set on the call, so the role decides nothing.
 func TestRLS_StaffReadTenantsAdmitsAHouseMemberOfAnyRole(t *testing.T) {
 	requireHarness(t)
 	requireStaffReadTenants(t)
@@ -402,7 +400,7 @@ func TestRLS_StaffReadTenantsAdmitsAHouseMemberOfAnyRole(t *testing.T) {
 	}
 }
 
-// AC-4. A tenant set on the connection neither narrows a staff read nor admits a customer member.
+// A tenant set on the connection neither narrows a staff read nor admits a customer member.
 func TestRLS_StaffReadTenantsIgnoresTheTenantSetOnTheConnection(t *testing.T) {
 	requireHarness(t)
 	requireStaffReadTenants(t)
@@ -485,7 +483,6 @@ func staffReaderPolicies(t *testing.T) map[string][]staffReaderPolicy {
 	return out
 }
 
-// AC-5.
 func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -535,7 +532,6 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 	}
 }
 
-// AC-5.
 func TestRLS_StaffReaderReadsEveryTenantAndWritesNone(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -574,7 +570,7 @@ func sortedCopy(in []string) []string {
 	return out
 }
 
-// AC-7. Passes before the migration too: it pins that the new policy leaves the reader's alone.
+// Passes before the migration too: it pins that the new policy leaves the reader's alone.
 func TestRLS_TenantEnumerateIsUnchanged(t *testing.T) {
 	requireHarness(t)
 	got := collectStrings(t, `SELECT cmd || '/' || roles::text || '/' || qual FROM pg_policies
@@ -602,7 +598,6 @@ var staffReaderSeeds = map[string]struct {
 	}},
 }
 
-// AC-8.
 func TestRLS_AppStaysIsolatedOnEveryStaffReaderTable(t *testing.T) {
 	requireHarness(t)
 	policies := staffReaderPolicies(t)
@@ -648,7 +643,7 @@ func TestRLS_AppStaysIsolatedOnEveryStaffReaderTable(t *testing.T) {
 	}
 }
 
-// AC-10. The house Down drops is_house_member and its Up re-grants invoice_migrator only.
+// The house Down drops is_house_member and its Up re-grants invoice_migrator only.
 func TestRLS_StaffReadSurvivesAHouseCompanyRoundTrip(t *testing.T) {
 	requireHarness(t)
 	house := adoptHouseTenant(t)
@@ -696,7 +691,7 @@ func readStaffReadFootprint(t *testing.T) staffReadFootprint {
 	return f
 }
 
-// AC-9. Rolls back every staff_read_ migration, newest first, so a later one cannot hold the grants under test.
+// Rolls back every staff_read_ migration, newest first, so a later one cannot hold the grants under test.
 func TestRLS_StaffReadTenantsDownAndUp(t *testing.T) {
 	requireHarness(t)
 	versions := staffReadMigrationVersions(t)

@@ -61,5 +61,5 @@ CREATE POLICY invitee_account_state_read ON auth.users FOR SELECT TO auth_hook_r
 - Make `IF NOT public.is_house_member(p_actor)` raising `insufficient_privilege` its first statement.
 - Give `staff_reader` `SELECT` on the columns a function reads and one `FOR SELECT TO staff_reader USING (true)` policy per table. Never a table-level grant.
 - Add each table a staff function reads to the seed map of `TestRLS_AppStaysIsolatedOnEveryStaffReaderTable`.
-- Create `staff_reader` by hand on production before the first migration that names it.
+- Run the `staff_reader` statements of `db/bootstrap.sql` by hand on production before the first migration that names the role.
 - Treat `invoice_migrator` as able to read every column granted to `staff_reader`, in every tenant, through `SET ROLE staff_reader`.

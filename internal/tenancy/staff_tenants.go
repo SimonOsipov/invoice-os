@@ -39,10 +39,10 @@ func (s *Store) StaffTenants(ctx context.Context) ([]StaffTenant, error) {
 	err = db.WithinStaffTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id::text, name, kind, created_at FROM public.staff_read_tenants($1)`, actor)
 		if err != nil {
-			return staffReadError(err)
+			return staffReadError("tenancy: staff list tenants", err)
 		}
 		out, err = pgx.CollectRows(rows, pgx.RowToStructByPos[StaffTenant])
-		return staffReadError(err)
+		return staffReadError("tenancy: staff list tenants", err)
 	})
 	if err != nil {
 		return nil, err
@@ -51,7 +51,7 @@ func (s *Store) StaffTenants(ctx context.Context) ([]StaffTenant, error) {
 }
 
 // staffReadError maps only the function's own refusal to ErrNotStaff; a lost grant is also 42501 and stays a server fault.
-func staffReadError(err error) error {
+func staffReadError(op string, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -59,7 +59,7 @@ func staffReadError(err error) error {
 	if errors.As(err, &pgErr) && pgErr.Code == "42501" && strings.HasSuffix(pgErr.Message, ": actor is not staff") {
 		return db.ErrNotStaff
 	}
-	return fmt.Errorf("tenancy: staff list tenants: %w", err)
+	return fmt.Errorf("%s: %w", op, err)
 }
 
 // StaffTenantsHandler repeats no staff check: auth.RequireStaff runs before it.
@@ -70,7 +70,7 @@ func StaffTenantsHandler(list func(context.Context) ([]StaffTenant, error), log 
 		case errors.Is(err, db.ErrNotStaff):
 			writeError(w, http.StatusForbidden, "forbidden")
 		case err != nil:
-			log.Error("tenancy: staff list tenants", "err", err)
+			log.Error("tenancy: staff tenants response", "err", err)
 			writeError(w, http.StatusInternalServerError, "internal server error")
 		default:
 			if tenants == nil {

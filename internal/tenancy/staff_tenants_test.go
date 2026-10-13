@@ -358,7 +358,7 @@ func TestStaffTenantsHandler_Contract(t *testing.T) {
 			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 				t.Errorf("Content-Type = %q, want application/json", ct)
 			}
-			if logged := strings.Contains(logs.String(), "tenancy: staff list tenants"); logged != tc.wantLog {
+			if logged := strings.Contains(logs.String(), "tenancy: staff tenants response"); logged != tc.wantLog {
 				t.Errorf("logged = %v, want %v (log %q)", logged, tc.wantLog, logs.String())
 			}
 		})
@@ -405,7 +405,7 @@ func TestStoreStaffTenants_ALostGrantIsAServerError(t *testing.T) {
 	if pe := pgErr(lost); pe.Code != "42501" || !strings.Contains(pe.Message, "permission denied") {
 		t.Fatalf("lost grant = %s %q, want 42501 permission denied", pe.Code, pe.Message)
 	}
-	if got := staffReadError(lost); got == nil || errors.Is(got, db.ErrNotStaff) {
+	if got := staffReadError("op", lost); got == nil || errors.Is(got, db.ErrNotStaff) {
 		t.Errorf("staffReadError(lost grant) = %v, want a non-nil error that is not db.ErrNotStaff", got)
 	}
 
@@ -413,7 +413,7 @@ func TestStoreStaffTenants_ALostGrantIsAServerError(t *testing.T) {
 	if pe := pgErr(refused); pe.Code != "42501" || !strings.HasSuffix(pe.Message, ": actor is not staff") {
 		t.Fatalf("stranger = %s %q, want 42501 ...: actor is not staff", pe.Code, pe.Message)
 	}
-	if got := staffReadError(refused); !errors.Is(got, db.ErrNotStaff) {
+	if got := staffReadError("op", refused); !errors.Is(got, db.ErrNotStaff) {
 		t.Errorf("staffReadError(the function's refusal) = %v, want db.ErrNotStaff", got)
 	}
 }
@@ -437,7 +437,7 @@ func TestStaffReadError_OnlyTheFunctionsOwnRefusalIsNotStaff(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := staffReadError(tc.err)
+			got := staffReadError("op", tc.err)
 			if got == nil {
 				t.Fatal("staffReadError returned nil for an error")
 			}
@@ -449,7 +449,7 @@ func TestStaffReadError_OnlyTheFunctionsOwnRefusalIsNotStaff(t *testing.T) {
 			}
 		})
 	}
-	if got := staffReadError(nil); got != nil {
+	if got := staffReadError("op", nil); got != nil {
 		t.Errorf("staffReadError(nil) = %v, want nil", got)
 	}
 }

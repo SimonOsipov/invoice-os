@@ -1,5 +1,5 @@
 -- Staff read tenant rows only through staff_read_* definer functions owned by NOLOGIN staff_reader.
--- ceiling: any invoice_app path can pass a house member's UUID; TestRLS_StaffReadFunctionsAreCalledOnlyInsideWithinStaffTx pins the callers.
+-- ceiling: p_actor is trusted from invoice_app; bind the actor in the DB before a staff_read_ caller outside tenancy ships.
 -- +goose Up
 GRANT SELECT (id, name, kind, created_at) ON public.tenants TO staff_reader;
 CREATE POLICY staff_read_lookup ON public.tenants FOR SELECT TO staff_reader USING (true);

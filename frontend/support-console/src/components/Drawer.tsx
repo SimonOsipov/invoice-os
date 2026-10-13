@@ -1,23 +1,20 @@
 import type { ReactNode } from 'react'
-import { CLOSE_ICON } from '../data'
+import { CLOSE_ICON } from '../icons'
 
-// The right-hand drawer shell. The prototype repeats this scrim + panel + header +
-// footer markup verbatim for all three drawers (proto:456, 535, 574); the only things
-// that vary are the width, the header content and the footer buttons.
+// The right-hand drawer shell: scrim, panel, header and footer. Only the width, the
+// header content and the footer buttons vary.
 
 type Props = {
   /** Rendered in the header, left of the close button. */
   header: ReactNode
   /** Sticky action row at the bottom. Omit for a read-only drawer. */
   footer?: ReactNode
-  /** Full-width strip directly under the header — the audit drawer's immutability note. */
-  banner?: ReactNode
   width?: number
   onClose: () => void
   children: ReactNode
 }
 
-export function Drawer({ header, footer, banner, width = 560, onClose, children }: Props) {
+export function Drawer({ header, footer, width = 560, onClose, children }: Props) {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'color-mix(in srgb, var(--surface) 55%, transparent)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', animation: 'opsFade 160ms ease-out' }} />
@@ -53,8 +50,6 @@ export function Drawer({ header, footer, banner, width = 560, onClose, children 
           </button>
         </div>
 
-        {banner}
-
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px' }}>{children}</div>
 
         {footer && (
@@ -62,21 +57,5 @@ export function Drawer({ header, footer, banner, width = 560, onClose, children 
         )}
       </div>
     </>
-  )
-}
-
-// The 2x2 hairline-separated metadata grid every drawer opens with (proto:472, 550).
-export function MetaGrid({ items }: { items: { label: string; value: ReactNode; mono?: boolean }[] }) {
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: 'var(--line-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: 22 }}>
-      {items.map((it) => (
-        <div key={it.label} style={{ background: 'var(--bg-2)', padding: '12px 14px' }}>
-          <div className="label">{it.label}</div>
-          <div className={it.mono === false ? undefined : 'mono'} style={{ fontSize: 12.5, fontWeight: 600, marginTop: 4 }}>
-            {it.value}
-          </div>
-        </div>
-      ))}
-    </div>
   )
 }

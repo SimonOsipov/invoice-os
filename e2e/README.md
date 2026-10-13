@@ -49,11 +49,11 @@ Covers four SPAs — `landing`, `ops-console`,
 - **Render** (`smoke/apps.ts`, `smoke.spec.ts`): landing and library are opened bare and each console on a
   seeded real staff session (`staffSession.ts`, which needs `GATEWAY_URL`). Each asserts a
   signature element of its main view, failing on any console error or uncaught page error.
-- **Behaviour on backend-less surfaces** (`landing-nav.spec.ts`, `ops-console.spec.ts`,
-  `support-console.spec.ts`): the landing nav's scroll-spy, and functional navigation over
-  what each console is *for*. Both consoles' data is mock with no backend, so these
-  assertions pin fixture behaviour rather than a contract — `.claude/rules/e2e.md` says
-  when that is allowed.
+- **Behaviour on backend-less surfaces** (`landing-nav.spec.ts`, `ops-console.spec.ts`): the
+  landing nav's scroll-spy, and functional navigation over what the ops console is *for*. Its
+  data is mock with no backend, so these assertions pin fixture behaviour rather than a
+  contract — `.claude/rules/e2e.md` says when that is allowed. `support-console.spec.ts` drives
+  the console's real screens.
 - **Boundary matrix** (`persona-boundaries.spec.ts`): every destination visited with
   a `persona` query parameter and no session must bounce the visitor back to the landing page. This drives **all
   three destinations including the app**, which is why smoke needs `APP_URL` too. Every

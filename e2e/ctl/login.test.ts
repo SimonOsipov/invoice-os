@@ -288,6 +288,22 @@ describe('provisionAll', () => {
     expect(accounts.support.email.startsWith('ctl-support-')).toBe(true)
   })
 
+  it('login grants the rules role to the support staff account only', async () => {
+    const L = await load()
+    const gw = stubGateway()
+    process.env.GATEWAY_URL = urls.GATEWAY_URL
+    process.env.APP_URL = urls.APP_URL
+
+    await L.provisionAll()
+
+    const staff = gw.requests.filter((r) => r.path === '/auth/mock/staff')
+    expect(staff).toHaveLength(2)
+    // The stub token gives both accounts one subject, so the ctl order (developer, then support) tells them apart.
+    const [developer, support] = staff.map((r) => r.body)
+    expect(support.rules_role).toBe(true)
+    expect(developer).not.toHaveProperty('rules_role')
+  })
+
   it('a staff password is independent of the email login prints', async () => {
     const L = await load()
     const gw = stubGateway()

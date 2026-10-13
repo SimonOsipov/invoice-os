@@ -2,9 +2,7 @@ import { createElement, type ComponentProps } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
-import { AuditDrawer } from './components/AuditDrawer'
 import { Drawer } from './components/Drawer'
-import { JobDrawer } from './components/JobDrawer'
 import { KillConfirm } from './components/KillConfirm'
 import { CodeListDrawer } from './components/CodeListDrawer'
 import { DraftTestModal } from './components/DraftTestModal'
@@ -15,7 +13,7 @@ import { Sidebar } from './components/Sidebar'
 import { Badge } from './components/StatusBadge'
 import { Toast } from './components/Toast'
 import { TopBar } from './components/TopBar'
-import { AUDIT_ENTRIES, NAV_ITEMS, SEED_JOBS } from './data'
+import { NAV_ITEMS } from './nav'
 import { toRule, type DiffRow } from './rulesApi'
 import { SEED_RULES } from './rulesFixture'
 import type { CodeListSync, Env, Screen } from './types'
@@ -69,7 +67,7 @@ const first = (ts: Tag[], what: string): Tag => {
 
 const ENVS: Env[] = ['sandbox', 'live']
 const topBar = (env: Env) => renderToStaticMarkup(createElement(TopBar, { screen: 'submissions', env, onSetEnv: noop }))
-const sidebar = (screen: Screen) => renderToStaticMarkup(createElement(Sidebar, { screen, onNavigate: noop, deadLetterCount: 2 }))
+const sidebar = (screen: Screen) => renderToStaticMarkup(createElement(Sidebar, { screen, onNavigate: noop }))
 const RADIUS_ALLOWED = ['var(--radius-md)', 'var(--radius-sm)', 'var(--radius-btn)', '50%', '2px']
 const V1_CORNER = /radius-input|radius-xs|^99(px)?$|^999(px)?$/
 
@@ -228,24 +226,25 @@ describe('v2 shell', () => {
       })
     }
 
-    const html = sidebar('submissions')
+    const html = sidebar('rules')
     const ts = parse(html)
     const labels = withClass(ts, 'label')
     expect(
       labels.map((l) => l.text),
-      'the two labels',
-    ).toEqual(['Operations', 'APP backpressure'])
+      'the one label',
+    ).toEqual(['Operations'])
     for (const l of labels) expect.soft(style(l).color, `label "${l.text}"`).toBe('var(--eyebrow-on-dark)')
 
-    const badges = withClass(ts, 'mono').filter((t) => /^\d+$/.test(t.text))
     expect(
-      badges.map((t) => t.text),
-      'the Submissions badge only',
-    ).toEqual(['2'])
-    for (const b of badges) {
-      expect.soft(style(b)['border-radius'], `badge ${b.text} radius`).toBe('var(--radius-sm)')
-      expect.soft(classes(b), `badge ${b.text} keeps .mono`).toContain('mono')
-    }
+      parse(html).filter((t) => /^\d+$/.test(t.text)),
+      'no numeric badge',
+    ).toEqual([])
+
+    const [idleNav] = buttonsOf(sidebar('ai')).filter((b) => classes(b).includes('ops-nav'))
+    const [idleBar, idleIcon] = parse(idleNav.inner)
+    expect.soft(style(idleNav).background, 'idle Rules: background').toBe('transparent')
+    expect.soft(style(idleBar).background, 'idle Rules: bar').toBe('transparent')
+    expect.soft(style(idleIcon).color, 'idle Rules: icon colour').toBe('var(--fg-3)')
 
     const card = ts.filter((t) => style(t).border === '1px solid var(--line-2)' && style(t).padding === '8px 10px')
     expect(card, 'one cross-tenant card').toHaveLength(1)
@@ -255,15 +254,15 @@ describe('v2 shell', () => {
     expect.soft(style(tile[0])['border-radius'], 'globe tile radius').toBe('var(--radius-md)')
     expect.soft(style(withText(ts, 'SUPPORT'))['border-radius'], 'SUPPORT tag radius').toBe('var(--radius-sm)')
 
-    const bp = ts.filter((t) => style(t).border === '1px solid var(--line-1)' && style(t).padding === '11px 12px')
-    expect(bp, 'one backpressure card').toHaveLength(1)
-    expect.soft(style(bp[0])['border-radius'], 'backpressure card radius').toBe('var(--radius-md)')
-    const track = ts.filter((t) => style(t).height === '5px' && style(t).overflow === 'hidden')
-    expect(track, 'one backpressure track').toHaveLength(1)
-    expect.soft(style(track[0])['border-radius'], 'backpressure track radius').toBe('2px')
-    const fill = ts.filter((t) => style(t).width === '82%' && style(t).height === '100%')
-    expect(fill, 'one backpressure fill').toHaveLength(1)
-    expect.soft(style(fill[0])['border-radius'], 'backpressure fill radius').toBe('2px')
+    expect(
+      ts.filter((t) => (style(t).height === '5px' && style(t).overflow === 'hidden') || style(t).width === '82%'),
+      'no backpressure track or fill',
+    ).toEqual([])
+    expect(
+      ts.filter((t) => t.text === 'EI' || t.text.includes('Emeka Iroha') || t.text.includes('SUPPORT ENGINEER')),
+      'no persona avatar, name or role',
+    ).toEqual([])
+    expect(html.match(/backpressure|82%|backoff/gi) ?? [], 'no backpressure text').toEqual([])
 
     const brand = ts.filter((t) => style(t).padding === '16px 16px 14px')
     expect(brand, 'one brand block').toHaveLength(1)
@@ -271,6 +270,11 @@ describe('v2 shell', () => {
     const foot = ts.filter((t) => style(t).padding === '12px' && 'border-top' in style(t))
     expect(foot, 'one sidebar footer').toHaveLength(1)
     expect.soft(style(foot[0])['border-top'], 'footer edge draws --line-1 as the prototype does').toBe('1px solid var(--line-1)')
+    expect.soft(style(foot[0])['justify-content'], 'footer keeps Sign out at the right edge').toBe('flex-end')
+    expect.soft(classes(foot[0]), 'footer row hides with the narrow sidebar').toContain('ops-hide-narrow')
+    const footButtons = buttonsOf(html.slice(html.indexOf(`<div${foot[0].attrs.slice(1)}>`)))
+    expect(footButtons, 'the footer holds one button').toHaveLength(1)
+    expect.soft(attr(footButtons[0], 'aria-label'), 'the footer button is Sign out').toBe('Sign out')
 
     const imgs = ts.filter((t) => t.name === 'img')
     expect(imgs, 'one brand <img').toHaveLength(1)
@@ -278,13 +282,12 @@ describe('v2 shell', () => {
     expect.soft(attr(imgs[0], 'height'), 'mark height').toBe('26')
     expect.soft(style(imgs[0])['border-radius'], 'mark corner').toBe('var(--radius-md)')
 
-    expect.soft(style(withText(ts, 'EI'))['border-radius'], 'avatar corner').toBe('50%')
     const out = buttonsOf(html).filter((b) => attr(b, 'aria-label') === 'Sign out')
     expect(out, 'one Sign out button').toHaveLength(1)
     expect.soft(style(out[0])['border-radius'], 'Sign out radius').toBe('var(--radius-btn)')
 
     const corners = ts.map((t) => style(t)['border-radius']).filter((v): v is string => v !== undefined)
-    expect(corners.length, 'sidebar corners collected').toBeGreaterThan(8)
+    expect(corners.length, 'sidebar corners collected').toBeGreaterThanOrEqual(7)
     expect(V1_CORNER.test('var(--radius-input)') && V1_CORNER.test('99px') && V1_CORNER.test('999px'), 'control: the needle matches v1 corners').toBe(true)
     expect(V1_CORNER.test('var(--radius-md)') || V1_CORNER.test('2px'), 'control: the needle skips v2 corners').toBe(false)
     expect.soft(
@@ -301,20 +304,6 @@ describe('v2 shell', () => {
     const kill = renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'line.qty.range', action: 'disable', busy: false, onClose: noop, onConfirm: noop }))
     const publish = renderToStaticMarkup(createElement(PublishModal, publishProps))
     const idle = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: true, busy: false, onKill: noop, onClose: noop }))
-    const job = renderToStaticMarkup(
-      createElement(JobDrawer, {
-        job: SEED_JOBS[0],
-        env: 'sandbox',
-        reqOpen: true,
-        resOpen: true,
-        onToggleReq: noop,
-        onToggleRes: noop,
-        onClose: noop,
-        onReDrive: noop,
-        onRePoll: noop,
-        onCancel: noop,
-      }),
-    )
 
     for (const [name, html] of [['KillConfirm', kill], ['PublishModal', publish]] as const) {
       const h3 = parse(html).filter((t) => t.name === 'h3')
@@ -334,21 +323,6 @@ describe('v2 shell', () => {
     expect.soft(style(disable).color, 'Disable rule colour').toBe('var(--primary-foreground)')
     expect.soft(style(disable)['border-radius'], 'Disable rule radius').toBe('var(--radius-btn)')
     expect.soft(style(buttonByText(idle, 'Kill-switch'))['border-radius'], 'Kill-switch radius').toBe('var(--radius-btn)')
-    const cancel = buttonByText(job, 'Cancel')
-    expect.soft(style(cancel)['border-radius'], 'Cancel radius').toBe('var(--radius-btn)')
-    expect.soft(style(cancel)['font-weight'], 'Cancel weight').toBe('600')
-
-    const jobTags = parse(job)
-    const steps = jobTags.filter((t) => style(t).width === '11px' && style(t).height === '11px')
-    expect(steps, 'four timeline dots').toHaveLength(4)
-    for (const d of steps) expect.soft(style(d)['border-radius'], 'timeline dot corner').toBe('50%')
-
-    const badge = jobTags.filter((t) => style(t).padding === '2px 8px' && style(t).display === 'inline-flex')
-    expect(badge, 'one state badge in the job header').toHaveLength(1)
-    expect.soft(style(badge[0])['border-radius'], 'badge radius').toBe('var(--radius-sm)')
-    const dots = jobTags.filter((t) => style(t).width === '6px' && style(t).height === '6px')
-    expect(dots.length, 'badge dot present').toBeGreaterThan(0)
-    for (const d of dots) expect.soft(style(d)['border-radius'], 'badge dot corner').toBe('50%')
   })
 
   it('SH-08 header text and the banner tag meet Q3', () => {
@@ -382,22 +356,9 @@ describe('v2 shell', () => {
 
   it('SH-09 every drawer and modal entry point wears the v2 scrim, panel and card corners', () => {
     const SCRIM = 'color-mix(in srgb, var(--surface) 55%, transparent)'
-    const job = renderToStaticMarkup(
-      createElement(JobDrawer, {
-        job: SEED_JOBS[0], env: 'sandbox', reqOpen: true, resOpen: true,
-        onToggleReq: noop, onToggleRes: noop, onClose: noop, onReDrive: noop, onRePoll: noop, onCancel: noop,
-      }),
-    )
     const rule = renderToStaticMarkup(createElement(RuleDrawer, { rule: SEED_RULES[0], inForce: true, busy: false, onKill: noop, onClose: noop }))
-    const audit = (env: Env) =>
-      renderToStaticMarkup(createElement(AuditDrawer, { entry: AUDIT_ENTRIES[0], env, onClose: noop, onCopy: noop, onExport: noop }))
-    const drawers = {
-      job,
-      rule,
-      'audit sandbox': audit('sandbox'),
-      'audit live': audit('live'),
-    }
-    const widths = { job: '560px', rule: '580px', 'audit sandbox': '560px', 'audit live': '560px' } as const
+    const drawers = { rule }
+    const widths = { rule: '580px' } as const
     for (const [name, html] of Object.entries(drawers)) {
       const ts = parse(html)
       expect(ts.length, `${name}: markup parsed`).toBeGreaterThan(4)
@@ -411,35 +372,14 @@ describe('v2 shell', () => {
       expect.soft(Object.keys(style(panel)), `${name}: panel box-shadow`).not.toContain('box-shadow')
       expect.soft(html, `${name}: markup holds oklch`).not.toContain('oklch')
       expect.soft(style(buttonByText(html, ''))['border-radius'], `${name}: close radius`).toBe('var(--radius-btn)')
-      const cards = ts.filter((t) => style(t)['border-radius'] === 'var(--radius-md)')
-      // The rule drawer's only card was the mock test box; its JSON block takes its corner from CSS.
-      if (name !== 'rule') expect(cards.length, `${name}: bodies carry md cards`).toBeGreaterThan(0)
       expect.soft(
         ts.map((t) => style(t)['border-radius']).filter((v): v is string => v !== undefined && V1_CORNER.test(v)),
         `${name}: v1 corners`,
       ).toEqual([])
     }
 
-    const grids = (html: string) => parse(html).filter((t) => style(t).gap === '1px' && style(t).display === 'grid')
-    for (const name of ['job', 'audit sandbox', 'audit live'] as const) {
-      const html = drawers[name]
-      expect(grids(html), `${name}: one meta grid`).toHaveLength(1)
-      expect.soft(style(grids(html)[0])['border-radius'], `${name}: meta grid radius`).toBe('var(--radius-md)')
-    }
-    const retry = parse(job).filter((t) => style(t).padding === '13px 14px')
-    expect(retry, 'job: retry and poll cards').toHaveLength(2)
-    for (const c of retry) expect.soft(style(c)['border-radius'], 'job card radius').toBe('var(--radius-md)')
     const chip = withText(parse(drawers.rule), SEED_RULES[0].type)
     expect.soft(style(chip)['border-radius'], 'rule type chip radius').toBe('var(--radius-sm)')
-    const hash = parse(drawers['audit sandbox']).filter((t) => style(t).padding === '12px 14px' && style(t).border === '1px solid var(--line-1)')
-    expect(hash, 'audit: the hash card').toHaveLength(1)
-    expect.soft(style(hash[0])['border-radius'], 'audit hash card radius').toBe('var(--radius-md)')
-    const banner = parse(drawers['audit live']).filter((t) => style(t).background === 'var(--status-muted-bg)')
-    expect(banner, 'audit: one simulated-entry banner').toHaveLength(1)
-    expect.soft(style(banner[0]).color, 'audit banner colour').toBe('var(--fg-2)')
-    for (const name of ['audit sandbox', 'audit live']) {
-      expect.soft(buttonByText(drawers[name as keyof typeof drawers], 'Copy JSON').attrs, `${name}: Copy JSON is v2-btn-ghost`).toContain('v2-btn-ghost')
-    }
 
     const modals = {
       kill: [renderToStaticMarkup(createElement(KillConfirm, { ruleKey: 'k', action: 'disable', busy: false, onClose: noop, onConfirm: noop })), '440px'],
@@ -470,20 +410,11 @@ describe('v2 shell', () => {
     expect.soft(classes({ attrs: buttonByText(modals.publish[0], 'Publish v5').attrs }), 'Publish v5 classes').toContain('v2-btn-primary')
   })
 
-  it('SH-10 the badge keeps the sm corner and a round dot, with and without the dot', () => {
+  it('SH-10 the badge keeps the sm corner', () => {
     const st = { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'FAILED' }
-    for (const dot of [true, false]) {
-      const ts = parse(renderToStaticMarkup(createElement(Badge, { style: st, dot })))
-      const [badge] = ts
-      expect(style(badge).padding, `dot=${dot}: first element is the badge`).toBe('2px 8px')
-      expect.soft(style(badge)['border-radius'], `dot=${dot}: badge radius`).toBe('var(--radius-sm)')
-      const dots = ts.filter((t) => style(t).width === '6px')
-      expect(dots, `dot=${dot}: dot count`).toHaveLength(dot ? 1 : 0)
-      for (const d of dots) {
-        expect.soft(style(d)['border-radius'], 'dot corner').toBe('50%')
-        expect.soft(style(d).background, 'dot colour follows the state').toBe('var(--status-red-text)')
-      }
-    }
+    const [badge] = parse(renderToStaticMarkup(createElement(Badge, { style: st, fontSize: 9 })))
+    expect(style(badge).padding, 'first element is the badge').toBe('2px 8px')
+    expect.soft(style(badge)['border-radius'], 'badge radius').toBe('var(--radius-sm)')
   })
 
   it('KillConfirm renders a Reason field and a disabled confirm', () => {
@@ -554,6 +485,14 @@ describe('v2 shell', () => {
     }
     expect(topBar('sandbox')).toContain('CROSS-TENANT · ALL ENTITIES')
     expect(topBar('live')).toContain('CROSS-TENANT · PENDING ACCREDITATION')
+  })
+
+  it('TopBar names the AI usage screen in its crumb', () => {
+    const crumb = (screen: Screen) => renderToStaticMarkup(createElement(TopBar, { screen, env: 'sandbox', onSetEnv: noop }))
+    withText(parse(crumb('ai')), 'AI usage')
+    const rules = parse(crumb('rules'))
+    withText(rules, 'Rules admin')
+    expect(rules.filter((t) => t.text === 'AI usage')).toHaveLength(0)
   })
 
   const sync = (status: string, over: Partial<CodeListSync> = {}): CodeListSync => {

@@ -8,13 +8,18 @@ import { expect, type Page, type Request } from '@playwright/test'
 import { DESTINATION_ENV, type Destination, type PersonaId } from './personas'
 import { resolveTarget } from './targets'
 
+// Rules.tsx placeholder-row copy (status loading / forbidden); the error state is the Retry button.
+const RULES_LOADING = 'Loading rules…'
+const RULES_NO_ROLE = 'Your account has no rules role.'
+
 // Each destination's own proof that it actually drew for a signed-in persona — not that the
 // shell HTML was served. All three are verified rendered:
 //   app     -> the green dot the sidebar's user card renders ONLY once /v1/me has resolved
 //              (Sidebar.tsx's identity card), i.e. the
 //              backend round trip completed, not just a mount.
 //   ops     -> the default Overview screen's h1 (ops-console/src/components/Overview.tsx:154)
-//   support -> the default Submissions ops h1 (support-console/src/components/Submissions.tsx:48)
+//   support -> the Rules admin h1, then the loaded list: Rules.tsx draws that h1 while loading and
+//              in the no-role and error states too
 // `timeout` undefined keeps the runner's configured timeout.
 export const DESTINATION_READY: Record<Destination, (page: Page, timeout?: number) => Promise<void>> = {
   app: async (page, timeout) => {
@@ -24,7 +29,10 @@ export const DESTINATION_READY: Record<Destination, (page: Page, timeout?: numbe
     await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible({ timeout })
   },
   support: async (page, timeout) => {
-    await expect(page.getByRole('heading', { level: 1, name: 'Submissions ops' })).toBeVisible({ timeout })
+    await expect(page.getByRole('heading', { level: 1, name: 'Rules admin' })).toBeVisible({ timeout })
+    await expect(page.getByText(RULES_LOADING, { exact: true })).toBeHidden({ timeout })
+    await expect(page.getByText(RULES_NO_ROLE, { exact: true }), 'account has no rules role').toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Retry', exact: true }), 'rules read failed').toHaveCount(0)
   },
 }
 

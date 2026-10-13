@@ -66,7 +66,7 @@ function Console() {
     toastTimer.current = setTimeout(() => setToast(null), 3400)
   }, [])
 
-  // Read when the Rules screen opens, never on console mount. selectedVersion null = the version in force.
+  // selectedVersion null = the version in force.
   const onRules = screen === 'rules'
   const versionsRead = useAsync(fetchVersions, { immediate: onRules, deps: [onRules] })
   const rulesRead = useAsync(() => fetchRules(selectedVersion ?? undefined), { immediate: onRules, deps: [onRules, selectedVersion] })

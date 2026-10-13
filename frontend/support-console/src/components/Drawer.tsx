@@ -9,14 +9,12 @@ type Props = {
   header: ReactNode
   /** Sticky action row at the bottom. Omit for a read-only drawer. */
   footer?: ReactNode
-  /** Full-width strip directly under the header. */
-  banner?: ReactNode
   width?: number
   onClose: () => void
   children: ReactNode
 }
 
-export function Drawer({ header, footer, banner, width = 560, onClose, children }: Props) {
+export function Drawer({ header, footer, width = 560, onClose, children }: Props) {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'color-mix(in srgb, var(--surface) 55%, transparent)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', animation: 'opsFade 160ms ease-out' }} />
@@ -51,8 +49,6 @@ export function Drawer({ header, footer, banner, width = 560, onClose, children 
             {CLOSE_ICON}
           </button>
         </div>
-
-        {banner}
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px' }}>{children}</div>
 

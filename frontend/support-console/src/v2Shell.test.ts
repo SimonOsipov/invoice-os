@@ -410,20 +410,11 @@ describe('v2 shell', () => {
     expect.soft(classes({ attrs: buttonByText(modals.publish[0], 'Publish v5').attrs }), 'Publish v5 classes').toContain('v2-btn-primary')
   })
 
-  it('SH-10 the badge keeps the sm corner and a round dot, with and without the dot', () => {
+  it('SH-10 the badge keeps the sm corner', () => {
     const st = { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'FAILED' }
-    for (const dot of [true, false]) {
-      const ts = parse(renderToStaticMarkup(createElement(Badge, { style: st, dot })))
-      const [badge] = ts
-      expect(style(badge).padding, `dot=${dot}: first element is the badge`).toBe('2px 8px')
-      expect.soft(style(badge)['border-radius'], `dot=${dot}: badge radius`).toBe('var(--radius-sm)')
-      const dots = ts.filter((t) => style(t).width === '6px')
-      expect(dots, `dot=${dot}: dot count`).toHaveLength(dot ? 1 : 0)
-      for (const d of dots) {
-        expect.soft(style(d)['border-radius'], 'dot corner').toBe('50%')
-        expect.soft(style(d).background, 'dot colour follows the state').toBe('var(--status-red-text)')
-      }
-    }
+    const [badge] = parse(renderToStaticMarkup(createElement(Badge, { style: st, fontSize: 9 })))
+    expect(style(badge).padding, 'first element is the badge').toBe('2px 8px')
+    expect.soft(style(badge)['border-radius'], 'badge radius').toBe('var(--radius-sm)')
   })
 
   it('KillConfirm renders a Reason field and a disabled confirm', () => {

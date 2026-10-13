@@ -2125,11 +2125,14 @@ test('deployed app: the support icon sits beside Sign out in the identity card a
     const paint = (loc: Locator) => loc.evaluate((el) => ({ color: getComputedStyle(el).color, background: getComputedStyle(el).backgroundColor }))
     const rest = { icon: await paint(icon), signOut: await paint(signOut) }
     expect(rest.icon, 'icon colours at rest equal Sign out').toEqual(rest.signOut)
+    // .pf-signout transitions color over 120 ms; read only once it has settled.
     await signOut.hover()
-    await expect.poll(() => paint(signOut), { message: 'Sign out hover fill' }).not.toEqual(rest.signOut)
+    await settleAnimations(signOut)
     const signOutHover = await paint(signOut)
+    expect(signOutHover, 'Sign out hover fill differs from rest').not.toEqual(rest.signOut)
     await icon.hover()
-    await expect.poll(() => paint(icon), { message: 'icon hover equals Sign out hover' }).toEqual(signOutHover)
+    await settleAnimations(icon)
+    expect(await paint(icon), 'icon hover equals Sign out hover').toEqual(signOutHover)
     await page.mouse.move(700, 450)
   } finally {
     if (entry) await page.setViewportSize(entry)

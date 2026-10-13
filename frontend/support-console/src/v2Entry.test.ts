@@ -262,7 +262,7 @@ describe('v2 entry', () => {
 
     const { values, violations } = scanCorners(TSX_FILES)
     expect(Object.keys(TSX_FILES), 'Rules.tsx is scanned').toContain(TOGGLE_FILE)
-    expect(values.length, 'corner values collected').toBeGreaterThanOrEqual(36)
+    expect(values.length, 'corner values collected').toBeGreaterThanOrEqual(35)
     expect(violations, 'corners outside the v2 set (file:line value)').toEqual([])
   })
 

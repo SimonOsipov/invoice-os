@@ -58,7 +58,7 @@ const SCREENS: { nav: string; h1: string }[] = [
 ]
 
 // The filter chips, in render order: 'all' plus JOB_FILTER_KEYS (data.tsx:124). These are
-// LABELS, not state keys — `accepted` renders as CLEARED here (helpers.ts:21).
+// LABELS, not state keys — `accepted` renders as CLEARED here (`JOB_STATE_STYLE` in ops-console helpers.ts).
 const CHIP_LABELS = ['ALL', 'QUEUED', 'SUBMITTING', 'PENDING', 'CLEARED', 'REJECTED', 'FAILED', 'DEAD-LETTER']
 
 const sidebar = (page: Page) => page.locator('aside.ops-sidebar')

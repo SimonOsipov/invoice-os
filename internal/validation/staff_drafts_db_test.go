@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -316,6 +317,7 @@ func TestStaffDrafts_EveryWriteIsAudited(t *testing.T) {
 	if rows[4].Payload["effective_from"] != deskFarDate {
 		t.Errorf("published payload = %v", rows[4].Payload)
 	}
+	assertGlobalStaffRows(t, super, actor, rows)
 }
 
 func TestStaffDrafts_AuditFailureRollsBack(t *testing.T) {
@@ -323,7 +325,7 @@ func TestStaffDrafts_AuditFailureRollsBack(t *testing.T) {
 	orig := recordStaff
 	t.Cleanup(func() { recordStaff = orig })
 	boom := errors.New("audit down")
-	recordStaff = func(context.Context, pgx.Tx, uuid.UUID, uuid.UUID, string, any) error { return boom }
+	recordStaff = func(context.Context, pgx.Tx, audit.StaffEvent) error { return boom }
 
 	if _, err := store.OpenDraft(ctx); !errors.Is(err, boom) {
 		t.Fatalf("open err = %v, want the audit error", err)
@@ -337,7 +339,7 @@ func TestStaffDrafts_AuditFailureRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recordStaff = func(context.Context, pgx.Tx, uuid.UUID, uuid.UUID, string, any) error { return boom }
+	recordStaff = func(context.Context, pgx.Tx, audit.StaffEvent) error { return boom }
 	if _, err := store.AddDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "m")); !errors.Is(err, boom) {
 		t.Fatalf("add err = %v, want the audit error", err)
 	}
@@ -348,7 +350,7 @@ func TestStaffDrafts_AuditFailureRollsBack(t *testing.T) {
 	if _, err := store.AddDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "first")); err != nil {
 		t.Fatal(err)
 	}
-	recordStaff = func(context.Context, pgx.Tx, uuid.UUID, uuid.UUID, string, any) error { return boom }
+	recordStaff = func(context.Context, pgx.Tx, audit.StaffEvent) error { return boom }
 	if _, err := store.EditDraftRule(ctx, draftNewKey, requiredRule(t, draftNewKey, "second")); !errors.Is(err, boom) {
 		t.Fatalf("edit err = %v, want the audit error", err)
 	}

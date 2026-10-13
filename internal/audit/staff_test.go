@@ -20,10 +20,12 @@ import (
 type staffRow struct {
 	ID        int64
 	Actor     string
-	Version   string
+	Version   *string
 	Event     string
 	Payload   string
 	CreatedAt time.Time
+	Tenant    *string
+	Subject   *string
 }
 
 // requireStaffTable fails (not skips) when the migration is missing, so a red run names the cause.
@@ -43,7 +45,7 @@ func requireStaffTable(t *testing.T, f *fixture) {
 func staffRows(t *testing.T, f *fixture, actor uuid.UUID) []staffRow {
 	t.Helper()
 	rows, err := f.mig.Query(context.Background(),
-		`SELECT id, actor::text, rule_set_version_id::text, event, payload::text, created_at
+		`SELECT id, actor::text, rule_set_version_id::text, event, payload::text, created_at, tenant_id::text, subject_id::text
 		   FROM public.staff_audit_log WHERE actor = $1 ORDER BY id`, actor.String())
 	if err != nil {
 		t.Fatalf("read staff_audit_log: %v", err)
@@ -83,13 +85,20 @@ func withAppTx(t *testing.T, f *fixture, fn func(tx pgx.Tx) error) error {
 	return tx.Commit(ctx)
 }
 
-func recordStaffCommitted(t *testing.T, f *fixture, actor, version uuid.UUID, event string, payload any) {
+func recordStaffCommitted(t *testing.T, f *fixture, ev audit.StaffEvent) {
 	t.Helper()
 	if err := withAppTx(t, f, func(tx pgx.Tx) error {
-		return audit.RecordStaff(context.Background(), tx, actor, version, event, payload)
+		return audit.RecordStaff(context.Background(), tx, ev)
 	}); err != nil {
 		t.Fatalf("RecordStaff: %v", err)
 	}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return "<NULL>"
+	}
+	return *s
 }
 
 func assertCheckViolation(t *testing.T, err error, constraint string) {
@@ -107,15 +116,15 @@ func TestStaffAudit_RecordStaffInsertsRow(t *testing.T) {
 	requireStaffTable(t, f)
 	actor, version := uuid.New(), uuid.New()
 
-	recordStaffCommitted(t, f, actor, version, "rules.test", map[string]any{"k": "v"})
+	recordStaffCommitted(t, f, audit.StaffEvent{Actor: actor, Event: "rules.test", RuleSetVersionID: version, Payload: map[string]any{"k": "v"}})
 
 	rows := staffRows(t, f, actor)
 	if len(rows) != 1 {
 		t.Fatalf("staff rows for the actor = %d, want 1", len(rows))
 	}
 	r := rows[0]
-	if r.Actor != actor.String() || r.Version != version.String() || r.Event != "rules.test" {
-		t.Errorf("row = actor %s version %s event %q, want %s %s rules.test", r.Actor, r.Version, r.Event, actor, version)
+	if r.Actor != actor.String() || r.Version == nil || *r.Version != version.String() || r.Event != "rules.test" {
+		t.Errorf("row = actor %s version %s event %q, want %s %s rules.test", r.Actor, deref(r.Version), r.Event, actor, version)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(r.Payload), &payload); err != nil || !reflect.DeepEqual(payload, map[string]any{"k": "v"}) {
@@ -135,7 +144,7 @@ func TestStaffAudit_NilPayloadIsEmptyObject(t *testing.T) {
 	requireStaffTable(t, f)
 	actor := uuid.New()
 
-	recordStaffCommitted(t, f, actor, uuid.New(), "rules.test", nil)
+	recordStaffCommitted(t, f, audit.StaffEvent{Actor: actor, Event: "rules.test", RuleSetVersionID: uuid.New()})
 
 	rows := staffRows(t, f, actor)
 	if len(rows) != 1 {
@@ -158,7 +167,7 @@ func TestStaffAudit_UnmarshallablePayloadWritesNothing(t *testing.T) {
 		t.Fatalf("begin app tx: %v", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	recErr := audit.RecordStaff(ctx, tx, actor, version, "rules.test", map[string]any{"c": make(chan int)})
+	recErr := audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: "rules.test", RuleSetVersionID: version, Payload: map[string]any{"c": make(chan int)}})
 	if recErr == nil || !strings.Contains(recErr.Error(), "audit: marshal payload") {
 		t.Errorf("RecordStaff error = %v, want one holding %q", recErr, "audit: marshal payload")
 	}
@@ -173,7 +182,7 @@ func TestStaffAudit_UnmarshallablePayloadWritesNothing(t *testing.T) {
 		t.Errorf("staff rows after the marshal error = %d, want 0", n)
 	}
 
-	recordStaffCommitted(t, f, actor, version, "rules.test", map[string]any{"ok": true})
+	recordStaffCommitted(t, f, audit.StaffEvent{Actor: actor, Event: "rules.test", RuleSetVersionID: version, Payload: map[string]any{"ok": true}})
 	if n := len(staffRows(t, f, actor)); n != 1 {
 		t.Errorf("staff rows after a valid payload for the same actor = %d, want 1", n)
 	}
@@ -187,7 +196,7 @@ func TestStaffAudit_AtomicWithCallerTx(t *testing.T) {
 	rolledBack, committed := uuid.New(), uuid.New()
 
 	err := withAppTx(t, f, func(tx pgx.Tx) error {
-		if e := audit.RecordStaff(ctx, tx, rolledBack, uuid.New(), "rules.test", nil); e != nil {
+		if e := audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: rolledBack, Event: "rules.test", RuleSetVersionID: uuid.New()}); e != nil {
 			return e
 		}
 		return errRollback
@@ -199,7 +208,7 @@ func TestStaffAudit_AtomicWithCallerTx(t *testing.T) {
 		t.Errorf("staff rows after rollback = %d, want 0", n)
 	}
 
-	recordStaffCommitted(t, f, committed, uuid.New(), "rules.test", nil)
+	recordStaffCommitted(t, f, audit.StaffEvent{Actor: committed, Event: "rules.test", RuleSetVersionID: uuid.New()})
 	if n := len(staffRows(t, f, committed)); n != 1 {
 		t.Errorf("staff rows after commit = %d, want 1", n)
 	}
@@ -269,26 +278,21 @@ func TestStaffAudit_ChecksRefuseNilAndBlank(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		nilActor   bool
-		nilVersion bool
 		event      string
 		constraint string
 	}{
-		{"nil_actor", true, false, "rules.test", "staff_audit_actor_set"},
-		{"nil_version", false, true, "rules.test", "staff_audit_version_set"},
-		{"empty_event", false, false, "", "staff_audit_event_length"},
-		{"event_128_chars", false, false, strings.Repeat("e", 128), "staff_audit_event_length"},
-		{"event_128_multibyte_chars", false, false, strings.Repeat("é", 128), "staff_audit_event_length"},
+		{"nil_actor", true, "rules.test", "staff_audit_actor_set"},
+		{"empty_event", false, "", "staff_audit_event_length"},
+		{"event_128_chars", false, strings.Repeat("e", 128), "staff_audit_event_length"},
+		{"event_128_multibyte_chars", false, strings.Repeat("é", 128), "staff_audit_event_length"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			actor, version := uuid.New(), uuid.New()
+			actor := uuid.New()
 			if tc.nilActor {
 				actor = uuid.Nil
 			}
-			if tc.nilVersion {
-				version = uuid.Nil
-			}
 			err := withAppTx(t, f, func(tx pgx.Tx) error {
-				return audit.RecordStaff(ctx, tx, actor, version, tc.event, nil)
+				return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: tc.event, RuleSetVersionID: uuid.New()})
 			})
 			assertCheckViolation(t, err, tc.constraint)
 			if err != nil && !strings.Contains(err.Error(), "audit: record staff event") {
@@ -302,18 +306,76 @@ func TestStaffAudit_ChecksRefuseNilAndBlank(t *testing.T) {
 		})
 	}
 
-	for _, tc := range []struct{ name, event string }{
-		{"event_127_chars", strings.Repeat("e", 127)},
-		{"event_127_multibyte_chars", strings.Repeat("é", 127)},
+	for _, tc := range []struct {
+		name, event string
+		zeroVersion bool
+	}{
+		{"event_127_chars", strings.Repeat("e", 127), false},
+		{"event_127_multibyte_chars", strings.Repeat("é", 127), false},
+		{"zero_version", "rules.test", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			actor := uuid.New()
-			recordStaffCommitted(t, f, actor, uuid.New(), tc.event, nil)
+			actor, version := uuid.New(), uuid.New()
+			if tc.zeroVersion {
+				version = uuid.Nil
+			}
+			recordStaffCommitted(t, f, audit.StaffEvent{Actor: actor, Event: tc.event, RuleSetVersionID: version})
 			rows := staffRows(t, f, actor)
 			if len(rows) != 1 || rows[0].Event != tc.event {
-				t.Errorf("staff rows = %v, want the one 127-character event", rows)
+				t.Errorf("staff rows = %v, want the one accepted event", rows)
 			}
 		})
+	}
+}
+
+func TestStaffAudit_ZeroRuleSetVersionIsStoredAsNull(t *testing.T) {
+	f := requireFixture(t)
+	requireStaffTable(t, f)
+	actor := uuid.New()
+
+	recordStaffCommitted(t, f, audit.StaffEvent{Actor: actor, Event: "rules.test"})
+
+	rows := staffRows(t, f, actor)
+	if len(rows) != 1 {
+		t.Fatalf("staff rows for the actor = %d, want 1", len(rows))
+	}
+	if r := rows[0]; r.Version != nil || r.Tenant != nil || r.Subject != nil {
+		t.Errorf("rule_set_version_id, tenant_id, subject_id = %v, %v, %v, want NULL, NULL, NULL", r.Version, r.Tenant, r.Subject)
+	}
+}
+
+// Removed when RecordStaff writes tenant changes.
+func TestStaffAudit_StubRefusesTenantFields(t *testing.T) {
+	f := requireFixture(t)
+	requireStaffTable(t, f)
+	var calls int
+	audit.SetRecordTenantForTest(t, func(context.Context, pgx.Tx, string, string, any) error {
+		calls++
+		return nil
+	})
+
+	for _, tc := range []struct {
+		name string
+		ev   audit.StaffEvent
+	}{
+		{"tenant_id", audit.StaffEvent{TenantID: uuid.New()}},
+		{"subject_id", audit.StaffEvent{SubjectID: uuid.New()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.ev.Actor, tc.ev.Event = uuid.New(), "rules.test"
+			err := withAppTx(t, f, func(tx pgx.Tx) error {
+				return audit.RecordStaff(context.Background(), tx, tc.ev)
+			})
+			if !errors.Is(err, audit.ErrStaffTenantMismatch) {
+				t.Errorf("err = %v, want ErrStaffTenantMismatch", err)
+			}
+			if n := len(staffRows(t, f, tc.ev.Actor)); n != 0 {
+				t.Errorf("staff rows = %d, want 0", n)
+			}
+		})
+	}
+	if calls != 0 {
+		t.Errorf("recordTenant calls = %d, want 0", calls)
 	}
 }
 
@@ -329,7 +391,7 @@ func TestStaffAudit_TenantTxWritesNoCustomerAuditRow(t *testing.T) {
 		if e := audit.Record(ctx, tx, "actor", customerEvent, nil); e != nil {
 			return e
 		}
-		return audit.RecordStaff(ctx, tx, actor, version, staffEvent, nil)
+		return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: staffEvent, RuleSetVersionID: version})
 	}); err != nil {
 		t.Fatalf("customer audit plus RecordStaff in a tenant tx: %v", err)
 	}

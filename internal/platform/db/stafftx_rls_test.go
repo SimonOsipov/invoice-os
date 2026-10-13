@@ -111,7 +111,7 @@ func TestRLS_WithinStaffTxCommitsAndRollsBack(t *testing.T) {
 	}
 
 	if err := db.WithinStaffTx(ctx, h.app, func(tx pgx.Tx) error {
-		return audit.RecordStaff(ctx, tx, actor, uuid.New(), committed, map[string]string{"k": "v"})
+		return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: committed, RuleSetVersionID: uuid.New(), Payload: map[string]string{"k": "v"}})
 	}); err != nil {
 		t.Fatalf("committing tx: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestRLS_WithinStaffTxCommitsAndRollsBack(t *testing.T) {
 	boom := errors.New("fn failed")
 	inserted := false
 	err := db.WithinStaffTx(ctx, h.app, func(tx pgx.Tx) error {
-		if err := audit.RecordStaff(ctx, tx, actor, uuid.New(), rolledBack, nil); err != nil {
+		if err := audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: rolledBack, RuleSetVersionID: uuid.New()}); err != nil {
 			return err
 		}
 		inserted = true

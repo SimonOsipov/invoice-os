@@ -142,8 +142,9 @@ func TestConsoleHandoff_NonStaffIs403AndStoresNothing(t *testing.T) {
 	rg := newConsoleRig(t, nil)
 	state := randomState(t)
 	cases := map[string]string{
-		"no staff claim": rg.signer.tokenWith(t, subjectS1, sid1, map[string]any{"tenant_id": testTenant}),
-		"staff false":    rg.signer.tokenWith(t, subjectS1, sid1, map[string]any{"tenant_id": testTenant, "staff": false}),
+		"no staff claim":             rg.signer.tokenWith(t, subjectS1, sid1, map[string]any{"tenant_id": testTenant}),
+		"staff false":                rg.signer.tokenWith(t, subjectS1, sid1, map[string]any{"tenant_id": testTenant, "staff": false}),
+		"tenantless, no staff claim": rg.signer.tokenWith(t, subjectS1, sid1, map[string]any{}),
 	}
 	for name, bearer := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -290,6 +291,8 @@ func TestConsoleHandoff_BadRequestsAre400(t *testing.T) {
 		{"42 characters", stateBody(valid[:42]), "state is required"},
 		{"44 characters", stateBody(valid + "A"), "state is required"},
 		{"43 characters, not base64url", stateBody(valid[:42] + "+"), "state is required"},
+		{"43 characters plus a newline", stateBody(valid + "\n"), "state is required"},
+		{"null state", `{"state":null}`, "state is required"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -352,6 +355,18 @@ func TestConsoleHandoff_LogsNoSecret(t *testing.T) {
 	rg := newConsoleRig(t, log)
 	bearer, okState, fullState := rg.staffToken(t, sid1), randomState(t), randomState(t)
 
+	otherKey, err := auth.NewMockIssuer(testIssuer)
+	if err != nil {
+		t.Fatalf("mock issuer: %v", err)
+	}
+	badSig, _ := otherKey.Mint(auth.MintOptions{Subject: testSubject, Staff: true})
+	nonStaff := rg.signer.tokenWith(t, subjectS1, sid1, map[string]any{"tenant_id": testTenant})
+	for _, rejected := range []string{badSig, nonStaff} {
+		if rec := rg.post(rejected, stateBody(okState)); rec.Code == http.StatusOK {
+			t.Fatalf("rejected caller minted a code: %s", rec.Body.String())
+		}
+	}
+
 	code := rg.mint(t, bearer, okState)
 	fillToCap(t, rg.store)
 	assertErrorBody(t, rg.post(bearer, stateBody(fullState)), http.StatusServiceUnavailable, msgConsoleHandoffUnavailable)
@@ -360,9 +375,72 @@ func TestConsoleHandoff_LogsNoSecret(t *testing.T) {
 	if !strings.Contains(out, "level=WARN") {
 		t.Fatalf("log holds no WARN for the full-store 503; nothing to inspect: %q", out)
 	}
-	for name, secret := range map[string]string{"bearer": bearer, "code": code, "ok state": okState, "full-store state": fullState, "escaped bearer": url.QueryEscape(bearer)} {
+	for name, secret := range map[string]string{"bearer": bearer, "code": code, "ok state": okState, "full-store state": fullState, "escaped bearer": url.QueryEscape(bearer), "bad-signature token": badSig, "non-staff token": nonStaff} {
 		if strings.Contains(out, secret) {
 			t.Errorf("log holds the %s %q:\n%s", name, secret, out)
 		}
+	}
+}
+
+func TestConsoleHandoff_MintAnswersOnlyTheCode(t *testing.T) {
+	rg := newConsoleRig(t, nil)
+	bearer := rg.staffToken(t, sid1)
+	rec := rg.post(bearer, stateBody(randomState(t)))
+	var got map[string]any
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+		t.Fatalf("mint = %d %s, want 200 JSON", rec.Code, rec.Body.String())
+	}
+	if _, ok := got["code"]; !ok || len(got) != 1 {
+		t.Errorf("mint body = %s, want exactly one key, code", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), bearer) {
+		t.Error("mint body echoes the bearer")
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store on the answer that carries a code", got)
+	}
+}
+
+func TestConsoleHandoff_EachCodeAnswersWithItsOwnCallersBearer(t *testing.T) {
+	rg := newConsoleRig(t, nil)
+	state := randomState(t)
+	a, b := rg.staffToken(t, sid1), rg.staffToken(t, sid2)
+	codeA, codeB := rg.mint(t, a, state), rg.mint(t, b, state)
+	if codeA == codeB {
+		t.Fatal("two mints returned the same code")
+	}
+	for code, want := range map[string]string{codeA: a, codeB: b} {
+		var got map[string]string
+		rec := rg.redeem(code, state)
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil || got["access_token"] != want {
+			t.Errorf("exchange = %d %s, want the minting caller's bearer", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestConsoleHandoff_AnswerIsTheVerifiedTokenNotTheRawHeader(t *testing.T) {
+	rg := newConsoleRig(t, nil)
+	bearer, state := rg.staffToken(t, sid1), randomState(t)
+	r := httptest.NewRequest(http.MethodPost, "/auth/console-handoff", strings.NewReader(stateBody(state)))
+	r.Header.Set("Authorization", "bearer  "+bearer+"  ")
+	rec := httptest.NewRecorder()
+	rg.handler.ServeHTTP(rec, r)
+	var minted map[string]string
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &minted) != nil {
+		t.Fatalf("mint = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	var got map[string]string
+	if out := rg.redeem(minted["code"], state); json.Unmarshal(out.Body.Bytes(), &got) != nil || got["access_token"] != bearer {
+		t.Errorf("exchange = %s, want exactly the trimmed token the verifier admitted", out.Body.String())
+	}
+}
+
+func TestConsoleHandoff_SessionCheckOutageFailsClosed(t *testing.T) {
+	rg := newConsoleRig(t, nil)
+	rg.user.setAnswer(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
+	before := rg.store.LiveForTest()
+	assertErrorBody(t, rg.post(rg.staffToken(t, sid1), stateBody(randomState(t))), http.StatusServiceUnavailable, msgSessionUnavailable)
+	if got := rg.store.LiveForTest(); got != before {
+		t.Errorf("live codes = %d, want %d: an unchecked session stored a code", got, before)
 	}
 }

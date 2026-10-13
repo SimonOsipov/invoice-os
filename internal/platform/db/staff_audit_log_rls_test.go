@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
@@ -471,12 +472,29 @@ func TestRLS_StaffReadStaffAuditLogExists(t *testing.T) {
 	}
 }
 
+// staffAuditUnpagedFloor is the row count the log must reach so a LIMIT up to it shows in the count.
+const staffAuditUnpagedFloor = 1100
+
+// topUpStaffAuditRows inserts as superuser until the log holds floor rows. The log is append-only: the rows stay.
+func topUpStaffAuditRows(t *testing.T, floor int) {
+	t.Helper()
+	n := mustCount(t, h.super, `SELECT count(*) FROM public.staff_audit_log`)
+	if n >= floor {
+		return
+	}
+	if _, err := h.super.Exec(context.Background(),
+		`INSERT INTO public.staff_audit_log (actor, event) SELECT gen_random_uuid(), 'rules.test' FROM generate_series(1, $1::int)`, floor-n); err != nil {
+		t.Fatalf("top up staff_audit_log to %d rows: %v", floor, err)
+	}
+}
+
 // One REPEATABLE READ snapshot: other tests append rows while this runs.
 func TestRLS_StaffReadStaffAuditLogReturnsEveryRowToAHouseMember(t *testing.T) {
 	requireHarness(t)
 	requireStaffReadStaffAuditLog(t)
 	ctx := context.Background()
 	member := seedHouseMember(t, "reviewer", "active")
+	topUpStaffAuditRows(t, staffAuditUnpagedFloor)
 	ruleActor, tenantActor := uuid.NewString(), uuid.NewString()
 	version, tenant, subject := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	seedStaffAuditRow(t, h.app, ruleActor, "rules.test", version, nil, nil, `{"rule":"r1"}`)
@@ -499,6 +517,9 @@ func TestRLS_StaffReadStaffAuditLogReturnsEveryRowToAHouseMember(t *testing.T) {
 	txExec(t, tx, `SET LOCAL ROLE invoice_app`)
 	got := collectStaffAuditRows(t, tx, member)
 
+	if want < staffAuditUnpagedFloor {
+		t.Fatalf("superuser count(*) = %d, want at least %d: a LIMIT below it would pass unseen", want, staffAuditUnpagedFloor)
+	}
 	if len(got) != want {
 		t.Errorf("staff_read_staff_audit_log returned %d rows, superuser count(*) = %d, want equal", len(got), want)
 	}
@@ -525,20 +546,25 @@ func TestRLS_StaffReadStaffAuditLogReturnsEveryRowToAHouseMember(t *testing.T) {
 }
 
 // The older row takes the highest id, so id DESC alone puts it first and only created_at DESC puts it last.
-// The tied rows are inserted low id first, so heap order and id ASC both put them the wrong way round.
+// Six tied rows go in low id first: with two, dropping the id term can still land on the right order by chance.
 func TestRLS_StaffReadStaffAuditLogOrdersNewestFirstThenByIdDesc(t *testing.T) {
 	requireHarness(t)
 	requireStaffReadStaffAuditLog(t)
 	ctx := context.Background()
 	member := seedHouseMember(t, "preparer", "active")
-	first, second, older := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	var tied []string
+	for range 6 {
+		tied = append(tied, uuid.NewString())
+	}
+	older := uuid.NewString()
 
 	tx, err := h.app.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	seedStaffAuditRow(t, tx, first, "support.test", nil, nil, nil, `{}`)
-	seedStaffAuditRow(t, tx, second, "support.test", nil, nil, nil, `{}`)
+	for _, a := range tied {
+		seedStaffAuditRow(t, tx, a, "support.test", nil, nil, nil, `{}`)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit the tied rows: %v", err)
 	}
@@ -549,22 +575,83 @@ func TestRLS_StaffReadStaffAuditLogOrdersNewestFirstThenByIdDesc(t *testing.T) {
 
 	byActor := map[string]staffAuditRow{}
 	var order []string
+	seeded := map[string]bool{older: true}
+	for _, a := range tied {
+		seeded[a] = true
+	}
 	for _, r := range collectStaffAuditRows(t, h.app, member) {
 		byActor[r.actor] = r
-		if r.actor == first || r.actor == second || r.actor == older {
+		if seeded[r.actor] {
 			order = append(order, r.actor)
 		}
 	}
-	if len(order) != 3 {
-		t.Fatalf("seeded rows in the result = %d, want 3", len(order))
+	if len(order) != len(tied)+1 {
+		t.Fatalf("seeded rows in the result = %d, want %d", len(order), len(tied)+1)
 	}
-	if !byActor[first].createdAt.Equal(byActor[second].createdAt) || byActor[first].id >= byActor[second].id {
-		t.Fatalf("setup: tied rows = %+v and %+v, want equal created_at and the second with the higher id", byActor[first], byActor[second])
+	for i := 1; i < len(tied); i++ {
+		p, c := byActor[tied[i-1]], byActor[tied[i]]
+		if !p.createdAt.Equal(c.createdAt) || p.id >= c.id {
+			t.Fatalf("setup: tied rows %d,%d = %+v and %+v, want equal created_at and the later with the higher id", i-1, i, p, c)
+		}
 	}
-	if byActor[older].id <= byActor[second].id || !byActor[older].createdAt.Before(byActor[first].createdAt) {
-		t.Fatalf("setup: older row = %+v, want the highest id and an earlier created_at than %v", byActor[older], byActor[first].createdAt)
+	if o := byActor[older]; o.id <= byActor[tied[len(tied)-1]].id || !o.createdAt.Before(byActor[tied[0]].createdAt) {
+		t.Fatalf("setup: older row = %+v, want the highest id and an earlier created_at than %v", o, byActor[tied[0]].createdAt)
 	}
-	if want := []string{second, first, older}; !reflect.DeepEqual(order, want) {
+	var want []string
+	for i := len(tied) - 1; i >= 0; i-- {
+		want = append(want, tied[i])
+	}
+	want = append(want, older)
+	if !reflect.DeepEqual(order, want) {
 		t.Errorf("order among the seeded rows = %v, want the tied rows by descending id, then the older row: %v", order, want)
+	}
+}
+
+// The function reads the whole log whatever tenant the connection carries; a direct SELECT stays refused with and without one.
+func TestRLS_StaffReadStaffAuditLogIgnoresTheTenantSetOnTheConnection(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadStaffAuditLog(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	customer := seedCommittedMembership(t, h.tenantA, "admin", "active")
+	actorA, actorB, noTenant := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	seedStaffAuditRow(t, h.app, actorA, "support.test", nil, h.tenantA, nil, `{}`)
+	seedStaffAuditRow(t, h.app, actorB, "support.test", nil, h.tenantB, nil, `{}`)
+	seedStaffAuditRow(t, h.app, noTenant, "rules.test", nil, nil, nil, `{}`)
+
+	err := db.WithinTenantTx(context.Background(), h.app, h.tenantA, func(tx pgx.Tx) error {
+		seen := map[string]bool{}
+		got := collectStaffAuditRows(t, tx, staff)
+		for _, r := range got {
+			seen[r.actor] = true
+		}
+		if len(got) == 0 || !seen[actorA] || !seen[actorB] || !seen[noTenant] {
+			t.Errorf("staff_read_staff_audit_log with tenant A set returned %d rows; tenant A row %v, tenant B row %v, global row %v, want all seen", len(got), seen[actorA], seen[actorB], seen[noTenant])
+		}
+		n, callErr := ruleDraftTry(t, tx, `SELECT id FROM public.staff_audit_log`)
+		if n != 0 || pgCode(callErr) != "42501" {
+			t.Errorf("direct SELECT with tenant A set: %d rows, SQLSTATE %q, want 0 rows and 42501: %v", n, pgCode(callErr), callErr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("staff_read_staff_audit_log with tenant A set: %v", err)
+	}
+
+	for name, pool := range map[string]*pgxpool.Pool{"invoice_app": h.app, "invoice_tenant_reader": h.reader} {
+		if _, err := pool.Exec(context.Background(), `SELECT id FROM public.staff_audit_log`); pgCode(err) != "42501" {
+			t.Errorf("%s direct SELECT with no tenant set: SQLSTATE %q, want 42501: %v", name, pgCode(err), err)
+		}
+	}
+
+	err = db.WithinTenantTx(context.Background(), h.app, h.tenantA, func(tx pgx.Tx) error {
+		n, callErr := ruleDraftTry(t, tx, `SELECT * FROM public.staff_read_staff_audit_log($1::uuid)`, customer)
+		if n != 0 {
+			t.Errorf("refused call returned %d rows", n)
+		}
+		requireNotStaffRefusal(t, "customer member of tenant A with tenant A set", callErr, "staff_read_staff_audit_log")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("customer call with tenant A set: %v", err)
 	}
 }

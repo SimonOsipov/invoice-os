@@ -335,7 +335,7 @@ func TestStoreStaffTenants_RefusesWithoutAStaffCaller(t *testing.T) {
 
 func TestStaffTenantsHandler_Contract(t *testing.T) {
 	created := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
-	one := []StaffTenant{{ID: "t1", Name: "Acme", Kind: "firm", CreatedAt: created}}
+	one := []StaffTenant{{ID: "t1", Name: "Acme", Kind: "firm", CreatedAt: created, Demo: true, ActiveMembers: 2, InvoiceCount: 3}}
 	lostGrant := fmt.Errorf("tenancy: staff list tenants: %w", &pgconn.PgError{Code: "42501", Message: "permission denied for function staff_read_tenants"})
 	cases := []struct {
 		name    string
@@ -347,7 +347,7 @@ func TestStaffTenantsHandler_Contract(t *testing.T) {
 		{"nil list is an empty array", func(context.Context) ([]StaffTenant, error) { return nil, nil }, 200, `{"tenants":[]}`, false},
 		{"empty list is an empty array", func(context.Context) ([]StaffTenant, error) { return []StaffTenant{}, nil }, 200, `{"tenants":[]}`, false},
 		{"one tenant", func(context.Context) ([]StaffTenant, error) { return one, nil }, 200,
-			`{"tenants":[{"id":"t1","name":"Acme","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":false,"active_members":0,"invoice_count":0,"last_activity_at":null}]}`, false},
+			`{"tenants":[{"id":"t1","name":"Acme","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":true,"active_members":2,"invoice_count":3,"last_activity_at":null}]}`, false},
 		{"not staff", func(context.Context) ([]StaffTenant, error) { return nil, db.ErrNotStaff }, 403, forbiddenBody, false},
 		{"wrapped not staff", func(context.Context) ([]StaffTenant, error) { return nil, fmt.Errorf("x: %w", db.ErrNotStaff) }, 403, forbiddenBody, false},
 		{"other error", func(context.Context) ([]StaffTenant, error) { return nil, errors.New("x") }, 500, internalBody, true},

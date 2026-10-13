@@ -22,9 +22,14 @@ type StaffTenant struct {
 	Name      string    `json:"name"`
 	Kind      string    `json:"kind"`
 	CreatedAt time.Time `json:"created_at"`
+	// Demo is true for ids in db.DemoTenants.
+	Demo           bool       `json:"demo"`
+	ActiveMembers  int64      `json:"active_members"`
+	InvoiceCount   int64      `json:"invoice_count"`
+	LastActivityAt *time.Time `json:"last_activity_at"`
 }
 
-// StaffTenants lists every tenant through staff_read_tenants, which refuses a non-house actor.
+// StaffTenants lists every tenant with its counts through the staff_read_ functions, which refuse a non-house actor.
 // ceiling: unpaged list; page it above ~1k tenants
 func (s *Store) StaffTenants(ctx context.Context) ([]StaffTenant, error) {
 	id, ok := auth.StaffFromContext(ctx)
@@ -37,7 +42,11 @@ func (s *Store) StaffTenants(ctx context.Context) ([]StaffTenant, error) {
 	}
 	var out []StaffTenant
 	err = db.WithinStaffTx(ctx, s.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id::text, name, kind, created_at FROM public.staff_read_tenants($1)`, actor)
+		rows, err := tx.Query(ctx, `SELECT t.id::text, t.name, t.kind, t.created_at, t.id::text = ANY($2::text[]),
+			coalesce(a.active_members, 0), coalesce(a.invoice_count, 0), a.last_activity_at
+			FROM public.staff_read_tenants($1) t
+			LEFT JOIN public.staff_read_tenant_activity($1) a ON a.tenant_id = t.id
+			ORDER BY a.last_activity_at DESC NULLS LAST, t.created_at DESC, t.id`, actor, db.DemoTenants)
 		if err != nil {
 			return staffReadError("tenancy: staff list tenants", err)
 		}

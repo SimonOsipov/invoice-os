@@ -344,8 +344,273 @@ func TestStaffAudit_ZeroRuleSetVersionIsStoredAsNull(t *testing.T) {
 	}
 }
 
-// Removed when RecordStaff writes tenant changes.
-func TestStaffAudit_StubRefusesTenantFields(t *testing.T) {
+// auditRow is one audit_log row read inside the tenant's own transaction.
+type auditRow struct {
+	Actor     string
+	Payload   string
+	CreatedAt time.Time
+}
+
+func auditRowsFor(t *testing.T, f *fixture, tenant, event string) []auditRow {
+	t.Helper()
+	var out []auditRow
+	if err := db.WithinTenantTx(context.Background(), f.app, tenant, func(tx pgx.Tx) error {
+		rows, err := tx.Query(context.Background(),
+			`SELECT actor, payload::text, created_at FROM audit_log WHERE event = $1 ORDER BY id`, event)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, pgx.RowToStructByPos[auditRow])
+		return err
+	}); err != nil {
+		t.Fatalf("read audit_log: %v", err)
+	}
+	return out
+}
+
+// supportRowCount counts the tenant's audit_log rows written as the support actor.
+func supportRowCount(t *testing.T, f *fixture, tenant string) int {
+	t.Helper()
+	var n int
+	if err := db.WithinTenantTx(context.Background(), f.app, tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE actor = $1`, audit.SupportActor).Scan(&n)
+	}); err != nil {
+		t.Fatalf("count support rows: %v", err)
+	}
+	return n
+}
+
+func insertKey(ctx context.Context, tx pgx.Tx, tenant, key string) error {
+	_, err := tx.Exec(ctx, `INSERT INTO idempotency_keys (tenant_id, key) VALUES ($1, $2)`, tenant, key)
+	return err
+}
+
+func jsonEq(t *testing.T, got, want string) {
+	t.Helper()
+	var g, w any
+	if err := json.Unmarshal([]byte(got), &g); err != nil || json.Unmarshal([]byte(want), &w) != nil || !reflect.DeepEqual(g, w) {
+		t.Errorf("payload = %s, want %s", got, want)
+	}
+}
+
+// AC-1, AC-2, AC-8.
+func TestStaffAudit_TenantChangeWritesBothRowsInOneTx(t *testing.T) {
+	f := requireFixture(t)
+	requireStaffTable(t, f)
+	ctx := context.Background()
+	tenant, other := uuid.NewString(), uuid.NewString()
+	staff, subject := uuid.New(), uuid.New()
+	event, key := uuid.NewString(), uuid.NewString()
+
+	if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+		if e := insertKey(ctx, tx, tenant, key); e != nil {
+			return e
+		}
+		return audit.RecordStaff(ctx, tx, audit.StaffEvent{
+			Actor: staff, Event: event, TenantID: uuid.MustParse(tenant), SubjectID: subject, Payload: map[string]any{"reason": "r"},
+		})
+	}); err != nil {
+		t.Fatalf("tenant change: %v", err)
+	}
+
+	srows := staffRows(t, f, staff)
+	if len(srows) != 1 {
+		t.Fatalf("staff rows = %d, want 1", len(srows))
+	}
+	s := srows[0]
+	if s.Event != event || s.Actor != staff.String() || s.Version != nil || deref(s.Tenant) != tenant || deref(s.Subject) != subject.String() {
+		t.Errorf("staff row = event %q actor %s version %s tenant %s subject %s, want %q %s <NULL> %s %s",
+			s.Event, s.Actor, deref(s.Version), deref(s.Tenant), deref(s.Subject), event, staff, tenant, subject)
+	}
+	jsonEq(t, s.Payload, `{"reason":"r"}`)
+
+	arows := auditRowsFor(t, f, tenant, event)
+	if len(arows) != 1 {
+		t.Fatalf("audit_log rows in the tenant = %d, want 1", len(arows))
+	}
+	a := arows[0]
+	if a.Actor != audit.SupportActor {
+		t.Errorf("audit_log actor = %q, want %q", a.Actor, audit.SupportActor)
+	}
+	jsonEq(t, a.Payload, `{"reason":"r"}`)
+	if !a.CreatedAt.Equal(s.CreatedAt) {
+		t.Errorf("created_at: audit_log %v, staff_audit_log %v, want equal", a.CreatedAt, s.CreatedAt)
+	}
+	if n := keyCount(t, f.app, tenant, key); n != 1 {
+		t.Errorf("companion key rows = %d, want 1", n)
+	}
+	if n := auditCount(t, f.app, other, event); n != 0 {
+		t.Errorf("another tenant sees %d rows for the event, want 0", n)
+	}
+	// AC-2: the staff UUID reaches the customer's table nowhere.
+	if strings.Contains(a.Actor, staff.String()) || strings.Contains(a.Payload, staff.String()) {
+		t.Errorf("audit_log row %+v holds the staff UUID %s", a, staff)
+	}
+
+	t.Run("zero_subject", func(t *testing.T) {
+		staff, event := uuid.New(), uuid.NewString()
+		if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+			return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: event, TenantID: uuid.MustParse(tenant)})
+		}); err != nil {
+			t.Fatalf("tenant change without a subject: %v", err)
+		}
+		rows := staffRows(t, f, staff)
+		if len(rows) != 1 {
+			t.Fatalf("staff rows = %d, want 1", len(rows))
+		}
+		if rows[0].Subject != nil || deref(rows[0].Tenant) != tenant {
+			t.Errorf("subject, tenant = %s, %s, want <NULL>, %s", deref(rows[0].Subject), deref(rows[0].Tenant), tenant)
+		}
+		if n := auditCount(t, f.app, tenant, event); n != 1 {
+			t.Errorf("audit_log rows = %d, want 1", n)
+		}
+	})
+}
+
+// AC-3. The control commit proves the tenant can take both rows, so the zero counts are the rollback.
+func TestStaffAudit_TenantChangeRollsBackWhenTheStaffWriteFails(t *testing.T) {
+	f := requireFixture(t)
+	requireStaffTable(t, f)
+	ctx := context.Background()
+	tenant, staff, key := uuid.NewString(), uuid.New(), uuid.NewString()
+
+	err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+		if e := insertKey(ctx, tx, tenant, key); e != nil {
+			return e
+		}
+		return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: "", TenantID: uuid.MustParse(tenant)})
+	})
+	assertCheckViolation(t, err, "staff_audit_event_length")
+	if n := len(staffRows(t, f, staff)); n != 0 {
+		t.Errorf("staff rows = %d, want 0", n)
+	}
+	if n := supportRowCount(t, f, tenant); n != 0 {
+		t.Errorf("support audit_log rows = %d, want 0", n)
+	}
+	if n := keyCount(t, f.app, tenant, key); n != 0 {
+		t.Errorf("companion key rows = %d, want 0", n)
+	}
+
+	event := uuid.NewString()
+	if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+		return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: event, TenantID: uuid.MustParse(tenant)})
+	}); err != nil {
+		t.Fatalf("control commit: %v", err)
+	}
+	if n, s := supportRowCount(t, f, tenant), len(staffRows(t, f, staff)); n != 1 || s != 1 {
+		t.Errorf("control rows: support %d staff %d, want 1 and 1", n, s)
+	}
+}
+
+// AC-4.
+func TestStaffAudit_TenantChangeRollsBackWhenTheCustomerWriteFails(t *testing.T) {
+	f := requireFixture(t)
+	requireStaffTable(t, f)
+	ctx := context.Background()
+	tenant := uuid.NewString()
+	boom := errors.New("boom")
+
+	run := func(staff uuid.UUID, event, key string) error {
+		return db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+			if e := insertKey(ctx, tx, tenant, key); e != nil {
+				return e
+			}
+			return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: event, TenantID: uuid.MustParse(tenant)})
+		})
+	}
+
+	t.Run("forced_failure", func(t *testing.T) {
+		audit.SetRecordTenantForTest(t, func(context.Context, pgx.Tx, string, string, any) error { return boom })
+		staff, event, key := uuid.New(), uuid.NewString(), uuid.NewString()
+		if err := run(staff, event, key); !errors.Is(err, boom) {
+			t.Errorf("err = %v, want boom", err)
+		}
+		if n := len(staffRows(t, f, staff)); n != 0 {
+			t.Errorf("staff rows = %d, want 0", n)
+		}
+		if n := auditCount(t, f.app, tenant, event); n != 0 {
+			t.Errorf("audit_log rows = %d, want 0", n)
+		}
+		if n := keyCount(t, f.app, tenant, key); n != 0 {
+			t.Errorf("companion key rows = %d, want 0", n)
+		}
+	})
+
+	t.Run("control_without_the_swap", func(t *testing.T) {
+		staff, event, key := uuid.New(), uuid.NewString(), uuid.NewString()
+		if err := run(staff, event, key); err != nil {
+			t.Fatalf("control run: %v", err)
+		}
+		if n := len(staffRows(t, f, staff)); n != 1 {
+			t.Errorf("staff rows = %d, want 1", n)
+		}
+		if n := auditCount(t, f.app, tenant, event); n != 1 {
+			t.Errorf("audit_log rows = %d, want 1", n)
+		}
+		if n := keyCount(t, f.app, tenant, key); n != 1 {
+			t.Errorf("companion key rows = %d, want 1", n)
+		}
+	})
+}
+
+// AC-5. Tenant B inside a tenant-A tx is the cross-tenant refusal: neither tenant gets a row.
+func TestStaffAudit_TenantMustMatchTheTransaction(t *testing.T) {
+	f := requireFixture(t)
+	requireStaffTable(t, f)
+	ctx := context.Background()
+	a, b := uuid.NewString(), uuid.NewString()
+
+	for _, tc := range []struct {
+		name     string
+		inTenant string // "" runs in a tx with no tenant
+		tenantID string // "" is the zero TenantID
+	}{
+		{"tenant_set_in_a_tx_with_no_tenant", "", a},
+		{"tenant_b_in_a_tx_for_tenant_a", a, b},
+		{"zero_tenant_in_a_tx_for_tenant_a", a, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			staff, event, key := uuid.New(), uuid.NewString(), uuid.NewString()
+			ev := audit.StaffEvent{Actor: staff, Event: event}
+			if tc.tenantID != "" {
+				ev.TenantID = uuid.MustParse(tc.tenantID)
+			}
+			fn := func(tx pgx.Tx) error {
+				if tc.inTenant != "" {
+					if e := insertKey(ctx, tx, tc.inTenant, key); e != nil {
+						return e
+					}
+				}
+				return audit.RecordStaff(ctx, tx, ev)
+			}
+			var err error
+			if tc.inTenant == "" {
+				err = withAppTx(t, f, fn)
+			} else {
+				err = db.WithinTenantTx(ctx, f.app, tc.inTenant, fn)
+			}
+			if !errors.Is(err, audit.ErrStaffTenantMismatch) {
+				t.Errorf("err = %v, want ErrStaffTenantMismatch", err)
+			}
+			if n := len(staffRows(t, f, staff)); n != 0 {
+				t.Errorf("staff rows = %d, want 0", n)
+			}
+			for _, tenant := range []string{a, b} {
+				if n := auditCount(t, f.app, tenant, event); n != 0 {
+					t.Errorf("audit_log rows for tenant %s = %d, want 0", tenant, n)
+				}
+			}
+			if tc.inTenant != "" {
+				if n := keyCount(t, f.app, tc.inTenant, key); n != 0 {
+					t.Errorf("companion key rows = %d, want 0", n)
+				}
+			}
+		})
+	}
+}
+
+// AC-6. TestStaffAudit_TenantChangeRollsBackWhenTheCustomerWriteFails proves the seam is the one RecordStaff calls.
+func TestStaffAudit_GlobalChangeWritesNoTenantRow(t *testing.T) {
 	f := requireFixture(t)
 	requireStaffTable(t, f)
 	var calls int
@@ -353,58 +618,76 @@ func TestStaffAudit_StubRefusesTenantFields(t *testing.T) {
 		calls++
 		return nil
 	})
+	staff, event := uuid.New(), uuid.NewString()
 
-	for _, tc := range []struct {
-		name string
-		ev   audit.StaffEvent
-	}{
-		{"tenant_id", audit.StaffEvent{TenantID: uuid.New()}},
-		{"subject_id", audit.StaffEvent{SubjectID: uuid.New()}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.ev.Actor, tc.ev.Event = uuid.New(), "rules.test"
-			err := withAppTx(t, f, func(tx pgx.Tx) error {
-				return audit.RecordStaff(context.Background(), tx, tc.ev)
-			})
-			if !errors.Is(err, audit.ErrStaffTenantMismatch) {
-				t.Errorf("err = %v, want ErrStaffTenantMismatch", err)
-			}
-			if n := len(staffRows(t, f, tc.ev.Actor)); n != 0 {
-				t.Errorf("staff rows = %d, want 0", n)
-			}
-		})
+	recordStaffCommitted(t, f, audit.StaffEvent{Actor: staff, Event: event})
+
+	rows := staffRows(t, f, staff)
+	if len(rows) != 1 {
+		t.Fatalf("staff rows = %d, want 1", len(rows))
+	}
+	if rows[0].Tenant != nil {
+		t.Errorf("tenant_id = %s, want NULL", deref(rows[0].Tenant))
 	}
 	if calls != 0 {
 		t.Errorf("recordTenant calls = %d, want 0", calls)
 	}
 }
 
-// AC-6. A customer audit row from the same tx is the control: auditCount sees that one and not the staff event.
-func TestStaffAudit_TenantTxWritesNoCustomerAuditRow(t *testing.T) {
+// AC-7.
+func TestStaffAudit_SupportRowReadsAsASComplySupport(t *testing.T) {
 	f := requireFixture(t)
 	requireStaffTable(t, f)
 	ctx := context.Background()
-	tenant, actor, version := uuid.NewString(), uuid.New(), uuid.New()
-	staffEvent, customerEvent := uuid.NewString(), uuid.NewString()
+	tenant, event := uuid.NewString(), uuid.NewString()
 
 	if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
-		if e := audit.Record(ctx, tx, "actor", customerEvent, nil); e != nil {
-			return e
-		}
-		return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: staffEvent, RuleSetVersionID: version})
+		return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: uuid.New(), Event: event, TenantID: uuid.MustParse(tenant), Payload: map[string]any{"reason": "r"}})
 	}); err != nil {
-		t.Fatalf("customer audit plus RecordStaff in a tenant tx: %v", err)
+		t.Fatalf("tenant change: %v", err)
 	}
 
-	if n := auditCount(t, f.app, tenant, customerEvent); n != 1 {
-		t.Fatalf("customer audit rows for the control event = %d, want 1", n)
+	find := func(filter audit.Filter) (audit.Event, bool) {
+		var resp audit.Response
+		if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+			var e error
+			resp, e = audit.Query(ctx, tx, filter)
+			return e
+		}); err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		for _, e := range resp.Events {
+			if e.Event == event {
+				return e, true
+			}
+		}
+		return audit.Event{}, false
 	}
-	if n := auditCount(t, f.app, tenant, staffEvent); n != 0 {
-		t.Errorf("customer audit rows for the staff event = %d, want 0", n)
+
+	e, ok := find(audit.Filter{Limit: 50, Company: audit.AllCompanies()})
+	if !ok {
+		t.Fatal("the support row is not on the tenant's page")
 	}
-	rows := staffRows(t, f, actor)
-	if len(rows) != 1 || rows[0].Event != staffEvent {
-		t.Errorf("staff rows = %v, want one with event %s", rows, staffEvent)
+	if e.Actor != audit.SupportActor || e.ActorName != audit.SupportActor || e.ActorKind != "raw" || e.CompanyScope != audit.ScopeUnattributed {
+		t.Errorf("row = actor %q name %q kind %q scope %q, want %q %q raw unattributed",
+			e.Actor, e.ActorName, e.ActorKind, e.CompanyScope, audit.SupportActor, audit.SupportActor)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		filter audit.Filter
+		want   bool
+	}{
+		{"people", audit.Filter{Limit: 50, Company: audit.AllCompanies(), ActorKind: "people"}, true},
+		{"system", audit.Filter{Limit: 50, Company: audit.AllCompanies(), ActorKind: "system"}, false},
+		{"workspace_only", audit.Filter{Limit: 50, Company: audit.WorkspaceOnly()}, true},
+		{"named_company", audit.Filter{Limit: 50, Company: audit.NamedCompany(uuid.NewString())}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, got := find(tc.filter); got != tc.want {
+				t.Errorf("support row present = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

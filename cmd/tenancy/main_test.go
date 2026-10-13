@@ -216,11 +216,15 @@ func TestTenancyMain_StaffTenantsRouteIsRegistered(t *testing.T) {
 	if got := handlers["GET /v1/me"]; len(got) != 1 || got[0] != "tenancy.MeHandler" {
 		t.Fatalf(`"GET /v1/me" registered with %v, want exactly [tenancy.MeHandler]: the scan reads nothing`, got)
 	}
-	const pattern = "GET /v1/staff/tenants"
-	if got := handlers[pattern]; len(got) != 1 || got[0] != "tenancy.StaffTenantsHandler" {
-		t.Errorf("%q registered with %v, want exactly [tenancy.StaffTenantsHandler]", pattern, got)
-	}
-	if got := loaders[pattern]; len(got) != 1 || got[0] != "store.StaffTenants" {
-		t.Errorf("%q loader = %v, want exactly [store.StaffTenants]", pattern, got)
+	for _, want := range []struct{ pattern, handler, loader string }{
+		{"GET /v1/staff/tenants", "tenancy.StaffTenantsHandler", "store.StaffTenants"},
+		{"GET /v1/staff/tenants/{id}", "tenancy.StaffTenantHandler", "store.StaffTenant"},
+	} {
+		if got := handlers[want.pattern]; len(got) != 1 || got[0] != want.handler {
+			t.Errorf("%q registered with %v, want exactly [%s]", want.pattern, got, want.handler)
+		}
+		if got := loaders[want.pattern]; len(got) != 1 || got[0] != want.loader {
+			t.Errorf("%q loader = %v, want exactly [%s]", want.pattern, got, want.loader)
+		}
 	}
 }

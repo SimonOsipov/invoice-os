@@ -1028,6 +1028,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/invoices/{id}":                             {verdict: scCovered},
 	"PATCH /v1/memberships/{user_id}":                     {verdict: scCovered},
 	"GET /v1/staff/tenants":                               {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/tenants/{id}":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/rules":                                 {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"GET /v1/staff/rule-versions":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PATCH /v1/staff/rules/{key}":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
@@ -3150,6 +3151,7 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_NoCallerOrANonUuidSubjectSendsNoStatement"},                          // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AFailedAuditRollsTheJoinBack"},                                       // the invitee holds no membership before joining
 	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenants_RefusesWithoutAStaffCaller"},                   // the control needs a UUID subject that reaches an unreachable pool; no database row is read
+	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenant_MalformedIdOpensNoTransaction"},                 // the control needs a UUID subject that reaches an unreachable pool; no database row is read
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TwoInvitesJoinOnceUnderRace"},                                        // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_SameInviteTwoConcurrentAcceptsJoinOnce"},                             // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid"},                              // the invitee holds no membership before joining

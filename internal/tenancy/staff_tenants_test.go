@@ -29,7 +29,9 @@ const (
 	staffGatewayToken = "staff-tenants-test-gateway-token"
 	forbiddenBody     = `{"error":"forbidden"}`
 	internalBody      = `{"error":"internal server error"}`
-	devHouseTenant    = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
+	// tenantNotFoundBody is the 404 body of tenancy.go:120 (the "tenant not found" message).
+	tenantNotFoundBody = `{"error":"tenant not found"}`
+	devHouseTenant     = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
 )
 
 var staffTenantKeys = []string{"active_members", "created_at", "demo", "id", "invoice_count", "kind", "last_activity_at", "name"}
@@ -100,8 +102,9 @@ func seedKindedTenant(t *testing.T, super *pgxpool.Pool, name, kind string) stri
 }
 
 type staffRig struct {
-	h     http.Handler
-	calls atomic.Int32 // StaffTenants calls the handler made
+	h           http.Handler
+	calls       atomic.Int32 // StaffTenants calls the handler made
+	detailCalls atomic.Int32 // StaffTenant calls the detail handler made
 }
 
 // newStaffRig serves the route through a gateway-guarded platform.App over the real store.
@@ -117,6 +120,10 @@ func newStaffRig(t *testing.T, store *Store) *staffRig {
 		rig.calls.Add(1)
 		return store.StaffTenants(ctx)
 	}, slog.Default()))
+	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}", StaffTenantHandler(func(ctx context.Context, id string) (StaffTenantDetail, error) {
+		rig.detailCalls.Add(1)
+		return store.StaffTenant(ctx, id)
+	}, slog.Default()))
 	app.RequireGateway(staffGatewayToken)
 	rig.h = app.Handler()
 	return rig
@@ -129,7 +136,15 @@ type staffCaller struct {
 }
 
 func (rig *staffRig) get(c staffCaller) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(http.MethodGet, "/v1/staff/tenants", nil)
+	return rig.getPath("/v1/staff/tenants", c)
+}
+
+func (rig *staffRig) getTenant(id string, c staffCaller) *httptest.ResponseRecorder {
+	return rig.getPath("/v1/staff/tenants/"+id, c)
+}
+
+func (rig *staffRig) getPath(path string, c staffCaller) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodGet, path, nil)
 	r.Header.Set(platform.HeaderGatewayToken, staffGatewayToken)
 	if c.subject != "" {
 		r.Header.Set("X-User-ID", c.subject)
@@ -743,4 +758,509 @@ func TestStaffTenantsRoute_ReadsWriteNoAuditRow(t *testing.T) {
 	if after := count(); after != before {
 		t.Errorf("audit counts (X, house, staff_audit_log by actor) = %v after the reads, want %v", after, before)
 	}
+}
+
+// seedMemberAt inserts a membership with an explicit created_at, so ordering specs control the sort keys.
+func seedMemberAt(t *testing.T, super *pgxpool.Pool, tenant, user, role, status string, name, email *string, at time.Time) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO memberships (tenant_id, user_id, role, status, display_name, email, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		tenant, user, role, status, name, email, at); err != nil {
+		t.Fatalf("seed membership %s: %v", user, err)
+	}
+}
+
+type invoiceSeed struct {
+	number, status string
+	at             time.Time
+}
+
+// seedInvoicesAt commits one entity and the given invoices for tenant, in the given insertion order; it returns their ids.
+func seedInvoicesAt(t *testing.T, super *pgxpool.Pool, tenant string, rows []invoiceSeed) []string {
+	t.Helper()
+	ctx := context.Background()
+	entity := uuid.NewString()
+	if _, err := super.Exec(ctx, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $2, $3)`, entity, tenant, "entity-"+entity[:8]); err != nil {
+		t.Fatalf("seed an entity: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM invoices WHERE tenant_id = $1`, tenant)
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE tenant_id = $1`, tenant)
+	})
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = uuid.NewString()
+		if _, err := super.Exec(ctx,
+			`INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+			ids[i], tenant, entity, r.number, r.status, r.at); err != nil {
+			t.Fatalf("seed invoice %s: %v", r.number, err)
+		}
+	}
+	return ids
+}
+
+func ptr(s string) *string { return &s }
+
+// detailOf decodes a 200 detail body into its three top-level members.
+func detailOf(t *testing.T, rec *httptest.ResponseRecorder) (top map[string]json.RawMessage, tenant map[string]json.RawMessage, members, invoices []map[string]json.RawMessage) {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &top); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	for key, dst := range map[string]any{"tenant": &tenant, "members": &members, "invoices": &invoices} {
+		if err := json.Unmarshal(top[key], dst); err != nil {
+			t.Fatalf("decode %s of %q: %v", key, rec.Body.String(), err)
+		}
+	}
+	return top, tenant, members, invoices
+}
+
+func strField(t *testing.T, row map[string]json.RawMessage, key string) string {
+	t.Helper()
+	var s string
+	if err := json.Unmarshal(row[key], &s); err != nil {
+		t.Fatalf("%s = %s, want a string: %v", key, row[key], err)
+	}
+	return s
+}
+
+func fieldIDs(t *testing.T, rows []map[string]json.RawMessage, key string) []string {
+	t.Helper()
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, strField(t, r, key))
+	}
+	return out
+}
+
+func TestStaffTenantRoute_ReturnsTheTenantMembersAndInvoices(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	_, staff := houseMember(t, super, "active")
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	x := seedKindedTenant(t, super, "staff-tenants detail X "+uuid.NewString()[:8], "in_house")
+
+	// a sorts last by user_id and by role, so neither can stand in for created_at; b and c tie on created_at.
+	ids := []string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
+	slices.Sort(ids)
+	c, b, a := ids[1], ids[0], ids[2]
+	seedMemberAt(t, super, x, c, "preparer", "suspended", ptr("Cy"), nil, t0.Add(time.Minute))
+	seedMemberAt(t, super, x, b, "admin", "invited", nil, ptr("bob@example.test"), t0.Add(time.Minute))
+	seedMemberAt(t, super, x, a, "reviewer", "active", ptr("Ada"), ptr("ada@example.test"), t0)
+	invIDs := seedInvoicesAt(t, super, x, []invoiceSeed{
+		{"INV-A", "draft", t0},
+		{"INV-B", "validated", t0.Add(time.Minute)},
+	})
+	seedAuditAt(t, super, x, t0.Add(2*time.Minute))
+
+	rec := rig.getTenant(x, staffCaller{subject: staff, staff: true})
+	top, tenant, members, invoices := detailOf(t, rec)
+	if got := sortedKeys(top); !slices.Equal(got, []string{"invoices", "members", "tenant"}) {
+		t.Errorf("top-level keys = %v, want invoices, members, tenant", got)
+	}
+
+	// The header is the list element (no concurrent writer on X).
+	listed, ok := tenantsOf(t, rig.get(staffCaller{subject: staff, staff: true}))[x]
+	if !ok {
+		t.Fatalf("the list does not carry X")
+	}
+	if got := sortedKeys(tenant); !slices.Equal(got, staffTenantKeys) {
+		t.Errorf("tenant keys = %v, want %v", got, staffTenantKeys)
+	}
+	for k, want := range listed {
+		if got := string(tenant[k]); got != string(want) {
+			t.Errorf("tenant %s = %s, want the list element's %s", k, got, want)
+		}
+	}
+	for k, want := range map[string]string{"id": `"` + x + `"`, "kind": `"in_house"`, "demo": "false", "active_members": "1", "invoice_count": "2"} {
+		if got := string(tenant[k]); got != want {
+			t.Errorf("tenant %s = %s, want %s", k, got, want)
+		}
+	}
+	if at, err := time.Parse(time.RFC3339Nano, strField(t, tenant, "last_activity_at")); err != nil || !at.Equal(t0.Add(2*time.Minute)) {
+		t.Errorf("tenant last_activity_at = %s, want the audit row at %s", tenant["last_activity_at"], t0.Add(2*time.Minute).Format(time.RFC3339))
+	}
+
+	if len(members) != 3 {
+		t.Fatalf("%d members, want 3: %s", len(members), rec.Body.String())
+	}
+	for i, m := range members {
+		if got := sortedKeys(m); !slices.Equal(got, []string{"display_name", "email", "role", "status", "user_id"}) {
+			t.Errorf("member %d keys = %v, want display_name, email, role, status, user_id", i, got)
+		}
+	}
+	if got := fieldIDs(t, members, "user_id"); !slices.Equal(got, []string{a, b, c}) {
+		t.Errorf("member order = %v, want created_at then user_id: %v", got, []string{a, b, c})
+	}
+	for i, want := range []map[string]string{
+		{"role": `"reviewer"`, "status": `"active"`, "display_name": `"Ada"`, "email": `"ada@example.test"`},
+		{"role": `"admin"`, "status": `"invited"`, "display_name": "null", "email": `"bob@example.test"`},
+		{"role": `"preparer"`, "status": `"suspended"`, "display_name": `"Cy"`, "email": "null"},
+	} {
+		for k, w := range want {
+			if raw, present := members[i][k]; !present || string(raw) != w {
+				t.Errorf("member %d %s = %s (present=%v), want %s", i, k, raw, present, w)
+			}
+		}
+	}
+
+	if len(invoices) != 2 {
+		t.Fatalf("%d invoices, want 2: %s", len(invoices), rec.Body.String())
+	}
+	for i, inv := range invoices {
+		if got := sortedKeys(inv); !slices.Equal(got, []string{"created_at", "id", "invoice_number", "status"}) {
+			t.Errorf("invoice %d keys = %v, want created_at, id, invoice_number, status", i, got)
+		}
+	}
+	if got := fieldIDs(t, invoices, "id"); !slices.Equal(got, []string{invIDs[1], invIDs[0]}) {
+		t.Errorf("invoice order = %v, want newest first: %v", got, []string{invIDs[1], invIDs[0]})
+	}
+	for i, want := range []invoiceSeed{{"INV-B", "validated", t0.Add(time.Minute)}, {"INV-A", "draft", t0}} {
+		if got := strField(t, invoices[i], "invoice_number"); got != want.number {
+			t.Errorf("invoice %d number = %q, want %q", i, got, want.number)
+		}
+		if got := strField(t, invoices[i], "status"); got != want.status {
+			t.Errorf("invoice %d status = %q, want %q", i, got, want.status)
+		}
+		if at, err := time.Parse(time.RFC3339Nano, strField(t, invoices[i], "created_at")); err != nil || !at.Equal(want.at) {
+			t.Errorf("invoice %d created_at = %s, want %s", i, invoices[i]["created_at"], want.at.Format(time.RFC3339))
+		}
+	}
+}
+
+func TestStaffTenantRoute_ReadsOneTenantOnly(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	_, staff := houseMember(t, super, "active")
+	now := time.Now().UTC().Truncate(time.Second)
+	suffix := uuid.NewString()[:8]
+	x := seedTenant(t, super, "staff-tenants only X "+suffix)
+	y := seedTenant(t, super, "staff-tenants only Y "+suffix)
+	mx, my := uuid.NewString(), uuid.NewString()
+	seedMembership(t, super, x, mx, "admin", "active")
+	seedMembership(t, super, y, my, "admin", "active")
+	ix := seedInvoicesAt(t, super, x, []invoiceSeed{{"X-1", "draft", now}})
+	iy := seedInvoicesAt(t, super, y, []invoiceSeed{{"Y-1", "draft", now}})
+
+	// Each side reads its own rows (non-empty) and none of the other's.
+	for name, c := range map[string]struct {
+		id, member, inv, otherMember, otherInv string
+	}{
+		"X": {x, mx, ix[0], my, iy[0]},
+		"Y": {y, my, iy[0], mx, ix[0]},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, tenant, members, invoices := detailOf(t, rig.getTenant(c.id, staffCaller{subject: staff, staff: true}))
+			if got := strField(t, tenant, "id"); got != c.id {
+				t.Errorf("tenant id = %s, want %s", got, c.id)
+			}
+			if got := fieldIDs(t, members, "user_id"); !slices.Equal(got, []string{c.member}) {
+				t.Errorf("members = %v, want only %s (never %s)", got, c.member, c.otherMember)
+			}
+			if got := fieldIDs(t, invoices, "id"); !slices.Equal(got, []string{c.inv}) {
+				t.Errorf("invoices = %v, want only %s (never %s)", got, c.inv, c.otherInv)
+			}
+		})
+	}
+}
+
+// invoices.limit 10 is fixed in staff_read_tenant_invoices (D11).
+func TestStaffTenantRoute_ReturnsTheTenNewestInvoices(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	_, staff := houseMember(t, super, "active")
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	x := seedTenant(t, super, "staff-tenants eleven "+uuid.NewString()[:8])
+
+	// Numbers and offsets are permuted against each other, and inserted out of order, so neither sorts the list.
+	rows := make([]invoiceSeed, 11)
+	for i := range rows {
+		rows[i] = invoiceSeed{fmt.Sprintf("INV-%02d", i), "draft", t0.Add(time.Duration(i*4%11) * time.Second)}
+	}
+	ids := seedInvoicesAt(t, super, x, rows)
+	byAge := make([]int, 11)
+	for i := range byAge {
+		byAge[i] = i
+	}
+	slices.SortFunc(byAge, func(p, q int) int { return rows[q].at.Compare(rows[p].at) })
+	wantIDs := make([]string, 0, 10)
+	for _, i := range byAge[:10] {
+		wantIDs = append(wantIDs, ids[i])
+	}
+	oldest := ids[byAge[10]]
+	if !rows[byAge[10]].at.Equal(t0) {
+		t.Fatalf("control: the oldest seeded invoice is at %s, want T0 %s", rows[byAge[10]].at, t0)
+	}
+
+	_, _, _, invoices := detailOf(t, rig.getTenant(x, staffCaller{subject: staff, staff: true}))
+	got := fieldIDs(t, invoices, "id")
+	if len(got) != 10 {
+		t.Fatalf("%d invoices, want 10", len(got))
+	}
+	if !slices.Equal(got, wantIDs) {
+		t.Errorf("invoices = %v, want the ten newest, newest first: %v", got, wantIDs)
+	}
+	if slices.Contains(got, oldest) {
+		t.Errorf("the oldest invoice %s (T0) is in the list", oldest)
+	}
+}
+
+func TestStaffTenantRoute_EmptyTenantHasEmptyLists(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	_, staff := houseMember(t, super, "active")
+	x := seedTenant(t, super, "staff-tenants empty "+uuid.NewString()[:8])
+
+	rec := rig.getTenant(x, staffCaller{subject: staff, staff: true})
+	top, tenant, _, _ := detailOf(t, rec)
+	if got := strField(t, tenant, "id"); got != x {
+		t.Fatalf("tenant id = %s, want %s", got, x)
+	}
+	for _, k := range []string{"members", "invoices"} {
+		if got := string(top[k]); got != "[]" {
+			t.Errorf("%s = %s, want []", k, got)
+		}
+	}
+	if got := string(tenant["active_members"]) + string(tenant["invoice_count"]); got != "00" {
+		t.Errorf("counts = %s, want 0 and 0", got)
+	}
+}
+
+func TestStaffTenantRoute_UnknownTenantIs404(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	_, staff := houseMember(t, super, "active")
+	x := seedTenant(t, super, "staff-tenants known "+uuid.NewString()[:8])
+	c := staffCaller{subject: staff, staff: true}
+
+	// Control: the route is live and serves a known tenant, so the 404s below are the handler's, not the mux's.
+	if _, tenant, _, _ := detailOf(t, rig.getTenant(x, c)); strField(t, tenant, "id") != x {
+		t.Fatalf("control: the known tenant was not served")
+	}
+	for name, id := range map[string]string{
+		"unknown uuid":    uuid.NewString(),
+		"nil uuid":        "00000000-0000-0000-0000-000000000000",
+		"not a uuid":      "not-a-uuid",
+		"number":          "123",
+		"quote injection": "%27%20OR%201%3D1%20--",
+		"uuid and a tail": x + "x",
+	} {
+		t.Run(name, func(t *testing.T) {
+			wantBody(t, rig.getTenant(id, c), http.StatusNotFound, tenantNotFoundBody)
+		})
+	}
+}
+
+func TestStoreStaffTenant_MalformedIdOpensNoTransaction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, "postgres://invoice_app:x@127.0.0.1:1/invoice_os?sslmode=disable&connect_timeout=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store := NewStore(pool)
+	staff := staffCtx(uuid.NewString())
+
+	for _, id := range []string{"not-a-uuid", "", "123"} {
+		if _, err := store.StaffTenant(staff, id); !errors.Is(err, ErrTenantNotFound) {
+			t.Errorf("id %q: err = %v, want ErrTenantNotFound", id, err)
+		}
+	}
+	// A non-staff caller is refused before the id is read, whatever the id.
+	for _, id := range []string{"not-a-uuid", uuid.NewString()} {
+		if _, err := store.StaffTenant(context.Background(), id); !errors.Is(err, db.ErrNotStaff) {
+			t.Errorf("no staff caller, id %q: err = %v, want db.ErrNotStaff", id, err)
+		}
+		if _, err := store.StaffTenant(staffCtx("not-a-uuid"), id); !errors.Is(err, db.ErrNotStaff) {
+			t.Errorf("non-uuid subject, id %q: err = %v, want db.ErrNotStaff", id, err)
+		}
+	}
+	// Control: a UUID id reaches the pool, so the refusals above are specific.
+	if _, err := store.StaffTenant(staff, uuid.NewString()); err == nil || errors.Is(err, ErrTenantNotFound) || errors.Is(err, db.ErrNotStaff) {
+		t.Errorf("uuid id on an unreachable pool: err = %v, want a connection error", err)
+	}
+	if n := pool.Stat().TotalConns(); n != 0 {
+		t.Errorf("pool opened %d connections, want 0", n)
+	}
+}
+
+func TestStaffTenantRoute_RefusesEveryNonStaffCaller(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	seeded := seedTenant(t, super, "staff-tenants detail refuse "+uuid.NewString()[:8])
+	custTenant, custSubject := customerMember(t, super)
+	houseID, staffSubject := houseMember(t, super, "active")
+
+	// An unknown id is refused alike: a non-staff caller learns nothing about which tenants exist.
+	for _, id := range []string{seeded, custTenant, uuid.NewString()} {
+		for name, c := range map[string]staffCaller{
+			"customer":                     {subject: custSubject, tenant: custTenant},
+			"tenant-less, not staff":       {subject: custSubject},
+			"no identity":                  {},
+			"house member, no staff claim": {subject: staffSubject, tenant: houseID},
+		} {
+			t.Run(name+"/"+id[:8], func(t *testing.T) {
+				wantBody(t, rig.getTenant(id, c), http.StatusForbidden, forbiddenBody)
+			})
+		}
+	}
+	t.Run("staff claim without the gateway token", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/v1/staff/tenants/"+seeded, nil)
+		r.Header.Set("X-User-ID", staffSubject)
+		r.Header.Set("X-User-Role", "authenticated")
+		r.Header.Set("X-User-Staff", "true")
+		rec := httptest.NewRecorder()
+		rig.h.ServeHTTP(rec, r)
+		if rec.Code != http.StatusForbidden && rec.Code != http.StatusUnauthorized {
+			t.Errorf("got %d %q, want a refusal", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), `"members"`) {
+			t.Errorf("a request without the gateway token received the detail: %q", rec.Body.String())
+		}
+	})
+	if got := rig.detailCalls.Load(); got != 0 {
+		t.Errorf("StaffTenant called %d times for non-staff callers, want 0", got)
+	}
+
+	// Control: staff reads the same tenant, so the 403s are not a missing route.
+	_, tenant, _, _ := detailOf(t, rig.getTenant(seeded, staffCaller{subject: staffSubject, staff: true}))
+	if got := strField(t, tenant, "id"); got != seeded {
+		t.Errorf("staff control tenant id = %s, want %s", got, seeded)
+	}
+}
+
+func TestStaffTenantRoute_RefusesAForgedOrSuspendedStaffCaller(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	x := seedTenant(t, super, "staff-tenants detail forged "+uuid.NewString()[:8])
+	custTenant, custSubject := customerMember(t, super)
+	_, suspended := houseMember(t, super, "suspended")
+	_, active := houseMember(t, super, "active")
+
+	for name, c := range map[string]staffCaller{
+		"forged, tenant-bearing": {subject: custSubject, tenant: custTenant, staff: true},
+		"forged, tenant-less":    {subject: custSubject, staff: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			wantBody(t, rig.getTenant(x, c), http.StatusForbidden, forbiddenBody)
+		})
+	}
+	if got := rig.detailCalls.Load(); got != 2 {
+		t.Errorf("StaffTenant called %d times, want 2: the refusal must come from the database, not the platform", got)
+	}
+	t.Run("suspended house member", func(t *testing.T) {
+		wantBody(t, rig.getTenant(x, staffCaller{subject: suspended, staff: true}), http.StatusForbidden, forbiddenBody)
+	})
+	t.Run("staff claim with a subject that is not a uuid", func(t *testing.T) {
+		wantBody(t, rig.getTenant(x, staffCaller{subject: "not-a-uuid", staff: true}), http.StatusForbidden, forbiddenBody)
+	})
+	if rec := rig.getTenant(x, staffCaller{subject: active, staff: true}); rec.Code != http.StatusOK {
+		t.Errorf("active house member control = %d %q, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStaffTenantRoute_ReadsWriteNoAuditRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	houseID, staff := houseMember(t, super, "active")
+	x := seedTenant(t, super, "staff-tenants detail no-audit "+uuid.NewString()[:8])
+	auditAt := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	seedAuditAt(t, super, x, auditAt)
+
+	count := func() [3]int {
+		var n [3]int
+		for i, q := range []struct{ sql, arg string }{
+			{`SELECT count(*) FROM audit_log WHERE tenant_id = $1`, x},
+			{`SELECT count(*) FROM audit_log WHERE tenant_id = $1`, houseID},
+			{`SELECT count(*) FROM public.staff_audit_log WHERE actor = $1`, staff},
+		} {
+			if err := super.QueryRow(context.Background(), q.sql, q.arg).Scan(&n[i]); err != nil {
+				t.Fatalf("count: %v", err)
+			}
+		}
+		return n
+	}
+	before := count()
+	if before[0] != 1 {
+		t.Fatalf("control: X has %d audit rows before the reads, want 1", before[0])
+	}
+	for i := 0; i < 2; i++ {
+		_, tenant, _, _ := detailOf(t, rig.getTenant(x, staffCaller{subject: staff, staff: true}))
+		// Control: the read really ran the activity query over X's audit row.
+		if at, err := time.Parse(time.RFC3339Nano, strField(t, tenant, "last_activity_at")); err != nil || !at.Equal(auditAt) {
+			t.Fatalf("read %d: last_activity_at = %s, want %s", i, tenant["last_activity_at"], auditAt.Format(time.RFC3339))
+		}
+	}
+	if after := count(); after != before {
+		t.Errorf("audit counts (X, house, staff_audit_log by actor) = %v after the reads, want %v", after, before)
+	}
+}
+
+func TestStaffTenantHandler_Contract(t *testing.T) {
+	created := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	header := StaffTenant{ID: "t1", Name: "Acme", Kind: "firm", CreatedAt: created}
+	const headerJSON = `{"id":"t1","name":"Acme","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":false,"active_members":0,"invoice_count":0,"last_activity_at":null}`
+	lostGrant := fmt.Errorf("tenancy: staff read tenant: %w", &pgconn.PgError{Code: "42501", Message: "permission denied for function staff_read_tenant_members"})
+	serve := func(d StaffTenantDetail, err error) func(context.Context, string) (StaffTenantDetail, error) {
+		return func(context.Context, string) (StaffTenantDetail, error) { return d, err }
+	}
+	cases := []struct {
+		name    string
+		get     func(context.Context, string) (StaffTenantDetail, error)
+		status  int
+		body    string
+		wantLog bool
+	}{
+		{"nil slices are empty arrays", serve(StaffTenantDetail{Tenant: header}, nil), 200,
+			`{"tenant":` + headerJSON + `,"members":[],"invoices":[]}`, false},
+		{"empty slices are empty arrays", serve(StaffTenantDetail{Tenant: header, Members: []Membership{}, Invoices: []StaffInvoice{}}, nil), 200,
+			`{"tenant":` + headerJSON + `,"members":[],"invoices":[]}`, false},
+		{"members and invoices", serve(StaffTenantDetail{
+			Tenant:   header,
+			Members:  []Membership{{UserID: "u1", Role: "admin", Status: "active", Email: ptr("a@example.test")}},
+			Invoices: []StaffInvoice{{ID: "i1", InvoiceNumber: "INV-1", Status: "draft", CreatedAt: created}},
+		}, nil), 200,
+			`{"tenant":` + headerJSON + `,"members":[{"user_id":"u1","role":"admin","status":"active","display_name":null,"email":"a@example.test"}],` +
+				`"invoices":[{"id":"i1","invoice_number":"INV-1","status":"draft","created_at":"2026-10-13T12:00:00Z"}]}`, false},
+		{"not staff", serve(StaffTenantDetail{}, db.ErrNotStaff), 403, forbiddenBody, false},
+		{"wrapped not staff", serve(StaffTenantDetail{}, fmt.Errorf("x: %w", db.ErrNotStaff)), 403, forbiddenBody, false},
+		{"tenant not found", serve(StaffTenantDetail{}, ErrTenantNotFound), 404, tenantNotFoundBody, false},
+		{"wrapped tenant not found", serve(StaffTenantDetail{}, fmt.Errorf("x: %w", ErrTenantNotFound)), 404, tenantNotFoundBody, false},
+		{"other error", serve(StaffTenantDetail{}, errors.New("x")), 500, internalBody, true},
+		{"a lost grant is a server error", serve(StaffTenantDetail{}, lostGrant), 500, internalBody, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/v1/staff/tenants/t1", nil)
+			req.SetPathValue("id", "t1")
+			StaffTenantHandler(tc.get, slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, req)
+			wantBody(t, rec, tc.status, tc.body)
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", ct)
+			}
+			if logged := strings.Contains(logs.String(), "tenancy: staff tenant response"); logged != tc.wantLog {
+				t.Errorf("logged = %v, want %v (log %q)", logged, tc.wantLog, logs.String())
+			}
+		})
+	}
+
+	t.Run("the loader receives the path id", func(t *testing.T) {
+		var got string
+		h := StaffTenantHandler(func(_ context.Context, id string) (StaffTenantDetail, error) {
+			got = id
+			return StaffTenantDetail{Tenant: header}, nil
+		}, slog.Default())
+		req := httptest.NewRequest(http.MethodGet, "/v1/staff/tenants/abc", nil)
+		req.SetPathValue("id", "abc")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		if got != "abc" {
+			t.Errorf("loader id = %q, want abc", got)
+		}
+	})
 }

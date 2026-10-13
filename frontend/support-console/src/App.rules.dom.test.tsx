@@ -121,14 +121,21 @@ describe('Console rules wiring', () => {
     await waitFor(() => expect(signOutConsole).toHaveBeenCalledTimes(1))
   })
 
-  it('reads the list when Rules opens and on each re-entry, never on mount', async () => {
+  it('opens on Rules and reads the list, versions and code lists once', async () => {
     render(<App />)
-    expect(read).not.toHaveBeenCalled()
-    await openRules()
-    expect(read).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByRole('button', { name: /^Submissions/ }))
+    await screen.findByRole('switch', { name: 'Disable real.on' })
+    const counts = () => [read.mock.calls.length, versionsRead.mock.calls.length, summary.mock.calls.length]
+    expect(counts()).toEqual([1, 1, 1])
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
-    await waitFor(() => expect(read).toHaveBeenCalledTimes(2))
+    expect(counts()).toEqual([1, 1, 1])
+  })
+
+  it('a staff member without the rules role lands on the no-role line', async () => {
+    read.mockRejectedValue(new ApiError('http', 'forbidden', 403))
+    render(<App />)
+    expect(await screen.findAllByText('Your account has no rules role.')).not.toHaveLength(0)
+    expect(screen.queryByRole('switch')).toBeNull()
+    expect(signOutConsole).not.toHaveBeenCalled()
   })
 
   it('shows the real enabled state and version, and none of the mock keys', async () => {
@@ -344,12 +351,10 @@ describe('Console code-list wiring', () => {
     expect(d.textContent).toContain('GONE')
   })
 
-  it('the panel reads on the Rules screen only and shows the empty state', async () => {
+  it('the code-list panel reads once on open and shows the empty state', async () => {
     render(<App />)
-    expect(summary).not.toHaveBeenCalled()
-    await openRules()
-    expect(summary).toHaveBeenCalledTimes(1)
     expect(await screen.findByText('No sync recorded yet.')).toBeTruthy()
+    expect(summary).toHaveBeenCalledTimes(1)
   })
 
   it('a 403 on the summary uses the no-role wording', async () => {

@@ -1993,7 +1993,7 @@ async function signInThroughLanding(page: Page, target: ConsoleTarget, account: 
 
 test('deployed consoles: a staff session signs in through landing, opens each console and survives a reload, with no token in any URL', async ({ browser }) => {
   test.setTimeout(240_000)
-  const account = await provisionStaffAccount('console-door')
+  const account = await provisionStaffAccount('console-door', undefined, { rulesRole: true })
 
   for (const target of CONSOLE_TARGETS) {
     await test.step(`${target}-console`, async () => {
@@ -2120,7 +2120,7 @@ test('deployed consoles: a hand-written or forged record opens nothing and ends 
 
 test('deployed consoles: a console load renews the stored session and stays in the console', async ({ browser }) => {
   test.setTimeout(240_000)
-  const account = await provisionStaffAccount('console-renew')
+  const account = await provisionStaffAccount('console-renew', undefined, { rulesRole: true })
 
   for (const target of CONSOLE_TARGETS) {
     await test.step(`${target}-console`, async () => {
@@ -2160,7 +2160,7 @@ test('deployed consoles: a console load renews the stored session and stays in t
 
 test('deployed consoles: signing out of the Support Console ends the Ops Console session', async ({ browser }) => {
   test.setTimeout(240_000)
-  const account = await provisionStaffAccount('console-sign-out')
+  const account = await provisionStaffAccount('console-sign-out', undefined, { rulesRole: true })
   const context = await browser.newContext()
   try {
     const ops = await context.newPage()

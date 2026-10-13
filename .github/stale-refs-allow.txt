@@ -77,3 +77,8 @@ resend-verification: gotrue resend failed
 resend-verification: gotrue unreachable
 resend-verification: limit reached
 resend-verification: timing
+
+# --- test-chosen display name (SUPP-04) ----------------------------------
+# auth.spec.ts passes it to provisionRealAccount and reads it back from the card.
+# The test is its own producer; the console fixture only shared the name.
+Ada Nwosu

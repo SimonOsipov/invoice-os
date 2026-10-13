@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { PUBLISH_ICON } from '../data'
+import { PUBLISH_ICON } from '../icons'
 import type { DiffRow } from '../rulesApi'
 import { Fault } from './Fault'
 import { Modal } from './Modal'

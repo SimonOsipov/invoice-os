@@ -43,11 +43,9 @@ export const APPS: AppTarget[] = [
     url: resolveTarget('SUPPORT_CONSOLE_URL'),
     console: 'support',
     assertMainView: async (page) => {
-      // Sidebar brand + the default Submissions ops heading. The cross-tenant strip is
-      // asserted too: it is the one piece of chrome that distinguishes this console from
-      // the tenant-scoped ones, so a build that lost it should fail the smoke test.
+      // Brand, the default Rules admin heading, and the cross-tenant strip that sets this console apart.
       await expect(page.getByText('ASComply').first()).toBeVisible()
-      await expect(page.getByRole('heading', { name: 'Submissions ops' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: 'Rules admin' })).toBeVisible()
       await expect(page.getByText('CROSS-TENANT VIEW')).toBeVisible()
     },
   },

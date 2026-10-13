@@ -250,3 +250,158 @@ func TestMain_IsAncestorFailureExitsTwo(t *testing.T) {
 		t.Fatalf("want exit 2, got %v", err)
 	}
 }
+
+func TestSplit_GroupsEachChangeKind(t *testing.T) {
+	onBase := []string{"migrations/20260101_a.sql", "migrations/20260102_b.sql", "migrations/20260105_x.sql"}
+	onMain := []string{"migrations/20260101_a.sql", "migrations/20260102_b.sql"}
+	changes := []Change{
+		{New: "migrations/20260110_new.sql"},
+		{Old: "migrations/20260105_x.sql", New: "migrations/20260110_x.sql", Exact: true},
+		{Old: "migrations/20260102_b.sql", New: "migrations/20260110_b.sql", Exact: true},
+		{Old: "migrations/20260105_x.sql", New: "migrations/20260111_x.sql"},
+		{Old: "migrations/20260001_gone.sql", New: "migrations/20260112_g.sql", Exact: true},
+		{New: "migrations/20260101_a.sql"},
+	}
+	vsBase, vsMain := Split(changes, onBase, onMain, true)
+	wantBase := []string{
+		"migrations/20260110_new.sql", "migrations/20260110_b.sql",
+		"migrations/20260111_x.sql", "migrations/20260112_g.sql",
+	}
+	if strings.Join(vsBase, ",") != strings.Join(wantBase, ",") {
+		t.Fatalf("vsBase = %v, want %v", vsBase, wantBase)
+	}
+	if len(vsMain) != 1 || vsMain[0] != "migrations/20260110_x.sql" {
+		t.Fatalf("vsMain = %v, want only the exact rename of x", vsMain)
+	}
+	vsBase, vsMain = Split(changes, onBase, onMain, false)
+	if len(vsMain) != 0 || len(vsBase) != 5 {
+		t.Fatalf("exempt=false: vsBase=%v vsMain=%v, want no exemption", vsBase, vsMain)
+	}
+}
+
+const sqlBody = "-- +goose Up\nSELECT 1;\nSELECT 2;\nSELECT 3;\nSELECT 4;\n-- +goose Down\nSELECT 5;\n"
+
+// renameRepo builds main {a, b}, epic {a, b, x, late} and a pr branch off epic.
+// The returned func runs main() in a child process and returns its exit code.
+func renameRepo(t *testing.T) (run func(args ...string) string, write func(name, body string), exit func(head string) int) {
+	t.Helper()
+	if os.Getenv("MIGRATIONORDER_RUN_MAIN") == "4" {
+		os.Args = []string{"migrationorder", "-base", os.Getenv("MO_BASE"), "-head", os.Getenv("MO_HEAD"), "-main", os.Getenv("MO_MAIN")}
+		main()
+		os.Exit(0)
+	}
+	repo := t.TempDir()
+	run = func(args ...string) string {
+		c := exec.Command("git", args...)
+		c.Dir = repo
+		c.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	write = func(name, body string) {
+		if err := os.MkdirAll(filepath.Join(repo, Dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, Dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit := func(msg string) {
+		run("add", "-A")
+		run("commit", "-qm", msg)
+	}
+	run("init", "-q", "-b", "main")
+	write("20260101_a.sql", sqlBody+"-- a\n")
+	write("20260102_b.sql", sqlBody+"-- b\n")
+	commit("main")
+	run("checkout", "-qb", "epic")
+	write("20260105_x.sql", sqlBody+"-- x\n")
+	write("20260301_late.sql", sqlBody+"-- late\n")
+	commit("epic")
+	run("checkout", "-qb", "pr")
+	exit = func(head string) int {
+		cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "MIGRATIONORDER_RUN_MAIN=4", "MO_BASE=epic", "MO_HEAD="+head, "MO_MAIN=main")
+		err := cmd.Run()
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode()
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return 0
+	}
+	return run, write, exit
+}
+
+func renameOnPR(run func(args ...string) string, from, to string) {
+	run("mv", Dir+"/"+from, Dir+"/"+to)
+	run("commit", "-qam", "rename")
+}
+
+func TestMain_RenameOfAnUnmergedMigrationPassesAboveMainNewest(t *testing.T) {
+	run, _, exit := renameRepo(t)
+	renameOnPR(run, "20260105_x.sql", "20260110_x.sql")
+	if got := exit("pr"); got != 0 {
+		t.Fatalf("want exit 0, got %d", got)
+	}
+}
+
+func TestMain_RenameToAtOrBelowMainNewestFails(t *testing.T) {
+	for _, to := range []string{"20260102_x.sql", "20251231_x.sql"} {
+		run, _, exit := renameRepo(t)
+		renameOnPR(run, "20260105_x.sql", to)
+		if got := exit("pr"); got != 1 {
+			t.Fatalf("rename to %s: want exit 1, got %d", to, got)
+		}
+	}
+}
+
+func TestMain_NewFileInTheRenameGapStillFails(t *testing.T) {
+	run, write, exit := renameRepo(t)
+	write("20260110_new.sql", sqlBody+"-- new\n")
+	run("add", "-A")
+	run("commit", "-qm", "new")
+	if got := exit("pr"); got != 1 {
+		t.Fatalf("want exit 1, got %d", got)
+	}
+}
+
+func TestMain_RenameOfAMainMigrationStaysChecked(t *testing.T) {
+	run, _, exit := renameRepo(t)
+	renameOnPR(run, "20260102_b.sql", "20260110_b.sql")
+	if got := exit("pr"); got != 1 {
+		t.Fatalf("want exit 1, got %d", got)
+	}
+}
+
+// git still reports R (similarity under 100) here, so the exemption must key on R100.
+func TestMain_SimilarButChangedRenameStaysChecked(t *testing.T) {
+	run, write, exit := renameRepo(t)
+	write("20260110_x.sql", strings.Replace(sqlBody, "SELECT 3;", "SELECT 33;", 1)+"-- x\n")
+	run("rm", "-q", Dir+"/20260105_x.sql")
+	run("add", "-A")
+	run("commit", "-qm", "rename and edit")
+	if st := run("diff", "-M", "--name-status", "epic", "pr"); !strings.Contains(st, "R0") && !strings.Contains(st, "R9") {
+		t.Fatalf("setup: want a partial-similarity rename, got %q", st)
+	}
+	if got := exit("pr"); got != 1 {
+		t.Fatalf("want exit 1, got %d", got)
+	}
+}
+
+// Head in main (push to main): the rename of a base-only file is not exempt.
+func TestMain_RenameWhenHeadIsInMainIsNotExempt(t *testing.T) {
+	run, _, exit := renameRepo(t)
+	renameOnPR(run, "20260105_x.sql", "20260110_x.sql")
+	run("checkout", "-q", "main")
+	run("merge", "-q", "--no-ff", "pr", "-m", "merge pr")
+	if got := exit("main"); got != 1 {
+		t.Fatalf("want exit 1, got %d", got)
+	}
+}

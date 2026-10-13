@@ -24,10 +24,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "migrationorder: merge-base %s %s: %v\n", *base, *head, err)
 		os.Exit(2)
 	}
-	// --no-renames: a renumbered file must be checked under its new name.
-	added, err := git("diff", "--no-renames", "--diff-filter=A", "--name-only", mergeBase, *head, "--", Dir+"/")
+	// -M finds renames; only R100 is exempt, see Split.
+	diff, err := git("diff", "-M", "--name-status", "--diff-filter=AR", mergeBase, *head, "--", Dir+"/")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: git diff: %v\n", err)
+		os.Exit(2)
+	}
+	changes, err := parseChanges(diff)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
 		os.Exit(2)
 	}
 	// The newest version comes from base itself, not the merge base: the break is a
@@ -44,23 +49,32 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Head already in main (push to main): nothing is "already on main" to skip.
+	// Head already in main (push to main): nothing is "already on main" to skip, no rename is exempt.
+	exempt := true
 	// Exit 1 means not an ancestor; any other failure must not leave the skip on.
 	var ee *exec.ExitError
 	switch err := exec.Command("git", "merge-base", "--is-ancestor", *head, *mainRef).Run(); {
 	case err == nil:
-		onMain = ""
+		onMain, exempt = "", false
 	case errors.As(err, &ee) && ee.ExitCode() == 1:
 	default:
 		fmt.Fprintf(os.Stderr, "migrationorder: git merge-base --is-ancestor %s %s: %v\n", *head, *mainRef, err)
 		os.Exit(2)
 	}
 
-	violations, err := Check(SkipOnMain(lines(added), lines(onMain)), lines(onBase))
+	vsBase, vsMain := Split(changes, lines(onBase), lines(onMain), exempt)
+	violations, err := Check(vsBase, lines(onBase))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
 		os.Exit(2)
 	}
+	// Production has applied main's chain only, so main's newest bounds an exempt rename.
+	more, err := Check(vsMain, lines(onMain))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
+		os.Exit(2)
+	}
+	violations = append(violations, more...)
 	if len(violations) == 0 {
 		fmt.Printf("migrationorder: every file added under %s/ sorts after base's newest migration\n", Dir)
 		return
@@ -75,6 +89,23 @@ func main() {
 func git(args ...string) (string, error) {
 	out, err := exec.Command("git", args...).Output()
 	return strings.TrimSpace(string(out)), err
+}
+
+// parseChanges reads `git diff --name-status` lines: "A\tpath" or "R100\told\tnew".
+func parseChanges(out string) ([]Change, error) {
+	var cs []Change
+	for _, l := range lines(out) {
+		f := strings.Split(l, "\t")
+		switch {
+		case f[0] == "A" && len(f) == 2:
+			cs = append(cs, Change{New: f[1]})
+		case strings.HasPrefix(f[0], "R") && len(f) == 3:
+			cs = append(cs, Change{Old: f[1], New: f[2], Exact: f[0] == "R100"})
+		default:
+			return nil, fmt.Errorf("unexpected git diff line %q", l)
+		}
+	}
+	return cs, nil
 }
 
 func lines(s string) []string {

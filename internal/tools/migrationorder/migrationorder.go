@@ -7,7 +7,9 @@
 // migration merged is the usual cause: its timestamp is older than main's newest.
 //
 // While -head is outside -main (default origin/main), a file already on -main is skipped: main
-// has applied it, so a branch that merged main in did not add it.
+// has applied it, so a branch that merged main in did not add it. An exact rename of a file
+// that -base holds and -main does not is checked against -main's newest only: production has
+// not applied the old name.
 //
 // Usage:
 //
@@ -38,6 +40,39 @@ func SkipOnMain(added, onMain []string) []string {
 		}
 	}
 	return kept
+}
+
+// Change is an added or renamed migration. Old is empty for an add.
+// Exact marks a rename with identical content (git R100).
+type Change struct {
+	Old, New string
+	Exact    bool
+}
+
+// Split sorts changes into files to check against base's newest and exact renames to
+// check against main's newest. Only an exact rename of a path on base and not on main
+// is exempt, and only when exempt is true.
+func Split(changes []Change, onBase, onMain []string, exempt bool) (vsBase, vsMain []string) {
+	base := toSet(onBase)
+	main := toSet(onMain)
+	for _, c := range changes {
+		switch {
+		case main[c.New]:
+		case exempt && c.Exact && c.Old != "" && base[c.Old] && !main[c.Old]:
+			vsMain = append(vsMain, c.New)
+		default:
+			vsBase = append(vsBase, c.New)
+		}
+	}
+	return vsBase, vsMain
+}
+
+func toSet(s []string) map[string]bool {
+	m := make(map[string]bool, len(s))
+	for _, f := range s {
+		m[f] = true
+	}
+	return m
 }
 
 // Violation is an added migration that does not sort after base's newest.

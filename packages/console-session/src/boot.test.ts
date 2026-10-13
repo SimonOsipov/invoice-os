@@ -11,6 +11,7 @@ import {
   customerToken,
   GW,
   installFetch,
+  jwt,
   installStorage,
   LANDING,
   NOW,
@@ -511,6 +512,7 @@ describe('storage that throws (AC-15)', () => {
 
 const appStart = (target: string) => new RegExp(`^${APP}/\\?auth=console&console=${target}&state=([A-Za-z0-9_-]{43})$`)
 const BORROWED = borrowedRaw(OLD_TOKEN)
+const FRONT_DOOR_SUPPORT = /^https:\/\/www\.test\/\?state=[A-Za-z0-9_-]{43}&console=support$/
 const access = (token: string) => reply(200, { access_token: token })
 
 describe('app-borrowed session (SUPP-11-02)', () => {
@@ -570,8 +572,10 @@ describe('app-borrowed session (SUPP-11-02)', () => {
   })
 
   it('boot_authAppWithABorrowedRecordStillBounces', async () => {
-    const { boot } = await run({ search: '?auth=app', target: 'support', app: APP, local: BORROWED })
+    const { boot } = await run({ search: '?auth=app', target: 'support', app: APP, local: BORROWED, state: stateRaw(STATE_A, NOW - 1000) })
     expect(appStart('support').test(leaveUrl(boot))).toBe(true)
+    expect(heldState()).not.toBe(STATE_A)
+    expect(store.local.getItem(OPS_KEY)).toBe(BORROWED)
   })
 
   it('boot_expiredBorrowedRecordIsClearedAndLeavesToLanding', async () => {
@@ -589,6 +593,75 @@ describe('app-borrowed session (SUPP-11-02)', () => {
     const { boot } = await run({ local: BORROWED, state, app: APP, target: 'support' })
     expect(/^https:\/\/www\.test\/\?state=[A-Za-z0-9_-]{43}&console=support$/.test(leaveUrl(boot))).toBe(true)
     expect(store.local.getItem(OPS_KEY)).toBeNull()
+  })
+
+  it('boot_borrowedRecordWithoutAValidExpIsClearedAndLeavesToLanding', async () => {
+    const tokens = [
+      staffToken('exp-now', NOW / 1000),
+      jwt({ sub: 'x', app_metadata: { staff: true } }),
+      jwt({ sub: 'x', exp: String(NOW / 1000 + 3600), app_metadata: { staff: true } }),
+      'not-a-jwt',
+    ]
+    expect(tokens).toHaveLength(4)
+    for (const t of tokens) {
+      const { boot, calls } = await run({ local: borrowedRaw(t), app: APP, target: 'support' })
+      expect(FRONT_DOOR_SUPPORT.test(leaveUrl(boot)), t).toBe(true)
+      expect(store.local.getItem(OPS_KEY), t).toBeNull()
+      expect(calls).toHaveLength(0)
+    }
+  })
+
+  it('boot_borrowedRecordWithAStaleHeldStateStillBouncesAndIsKept', async () => {
+    const { boot } = await run({ local: BORROWED, app: APP, target: 'support', state: stateRaw(STATE_A, NOW - 11 * 60_000) })
+    expect(appStart('support').test(leaveUrl(boot))).toBe(true)
+    expect(store.local.getItem(OPS_KEY)).toBe(BORROWED)
+  })
+
+  it('boot_borrowedRecordWithAHeldStateAndNoAppIsKept', async () => {
+    const { boot } = await run({ local: BORROWED, app: null, target: 'support', state: stateRaw(STATE_A, NOW - 1000) })
+    expect(FRONT_DOOR_SUPPORT.test(leaveUrl(boot))).toBe(true)
+    expect(store.local.getItem(OPS_KEY)).toBe(BORROWED)
+  })
+
+  it('boot_authAppKeepsAnExpiredLandingRecordAndRenewsIt', async () => {
+    const expiredLanding = recordRaw(staffToken('old', NOW / 1000 - 10), 'R-old')
+    const renewed = staffToken('renewed')
+    const { boot, calls } = await run({ search: '?auth=app', target: 'support', app: APP, local: expiredLanding, answer: () => pair(renewed, 'R-new') })
+    expect(boot).toEqual({ kind: 'open', session: { token: renewed, refreshToken: 'R-new' } })
+    expect(calls.map((c) => c.url)).toEqual([REFRESH])
+  })
+
+  it('boot_authAppOnOpsBouncesEvenWithALandingRecord', async () => {
+    const { boot, calls } = await run({ search: '?auth=app', target: 'ops', app: APP, local: OLD_RECORD })
+    expect(appStart('ops').test(leaveUrl(boot))).toBe(true)
+    expect(calls).toHaveLength(0)
+    expect(store.local.getItem(OPS_KEY)).toBe(OLD_RECORD)
+  })
+
+  it('boot_authAppKeptLandingRecordRejectedLeavesToLandingOnce', async () => {
+    const { boot, calls } = await run({ search: '?auth=app', target: 'support', app: APP, local: OLD_RECORD, answer: () => reply(401, { error: 'invalid' }) })
+    expect(FRONT_DOOR_SUPPORT.test(leaveUrl(boot))).toBe(true)
+    expect(calls.map((c) => c.url)).toEqual([REFRESH])
+    expect(store.local.getItem(OPS_KEY)).toBeNull()
+  })
+
+  it('boot_supportAppHandoffWithBothTokensStoresALandingRecordAndBadRefreshFails', async () => {
+    const token = staffToken('both')
+    const ok = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), target: 'support', app: APP, answer: () => pair(token, 'R-both') })
+    expect(ok.boot).toEqual({ kind: 'open', session: { token, refreshToken: 'R-both' } })
+    for (const refresh_token of [null, '']) {
+      const { boot } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), target: 'support', app: APP, answer: () => reply(200, { access_token: token, refresh_token }) })
+      expect(/&console=support&signin=failed$/.test(leaveUrl(boot)), String(refresh_token)).toBe(true)
+      expect(store.local.getItem(OPS_KEY)).toBeNull()
+    }
+  })
+
+  it('boot_supportAppHandoffAnswerWithoutAnAccessTokenFails', async () => {
+    for (const body of [{ refresh_token: 'R' }, {}, { access_token: '' }]) {
+      const { boot } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), target: 'support', app: APP, answer: () => reply(200, body) })
+      expect(/&console=support&signin=failed$/.test(leaveUrl(boot)), JSON.stringify(body)).toBe(true)
+      expect(store.local.getItem(OPS_KEY)).toBeNull()
+    }
   })
 
   it('boot_appHandoffNonStaffStoresNothing', async () => {

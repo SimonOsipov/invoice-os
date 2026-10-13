@@ -24,6 +24,7 @@ paths:
   - "packages/console-session/**"
   - "frontend/app/src/App.tsx"
   - "frontend/app/src/lib/signInState.ts"
+  - "frontend/app/src/lib/consoleHandoff.ts"
   - "frontend/landing/src/App.tsx"
 ---
 # Identity provider
@@ -127,3 +128,4 @@ paths:
 - Open a console only for a session that the gateway has just renewed or exchanged, with `app_metadata.staff` true.
 - Open an app-borrowed console record only after a fresh exchange. The boot keeps it and asks the app for a new code.
 - Send an expired app-borrowed console session back through the app, never to the landing.
+- Answer the app's `?auth=console&console=support&state=<s>` only with a live staff seat. Otherwise take the normal front door.

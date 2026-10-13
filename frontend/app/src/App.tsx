@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
+import { landingBase, signIn, supportBase, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { CREATING_OWN, JoinWorkspace } from './components/JoinWorkspace'
 import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPayload, cardIdentity, isStaffToken } from './lib/session'
@@ -11,6 +11,7 @@ import { consumePendingInvite, holdPendingInvite, peekPendingInvite, readInviteF
 import { consumePendingVerify, gatewayVerifyUrl, holdPendingVerify, holdsPendingVerify, landingVerifyFailedUrl, readVerifyFragment } from './lib/verifyBounce'
 import { AuditExportToast } from './components/AuditExportToast'
 import { HANDOFF_PARAM, InviteRefusedError, createOwnWorkspace, isJoinOffer, isLiveHandoffSession, joinInvite, readHandoffCode, redeemHandoff, type JoinOffer } from './lib/sessionHandoff'
+import { consoleHandoffUrl, readConsoleStart, requestConsoleCode } from './lib/consoleHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
 import { buildClients, draftLine, resolveActiveClient, startingDraft } from './lib/clients'
@@ -1855,6 +1856,9 @@ export default function App() {
     liveHandoff || !gatewayBase() ? null : readHandoffCode(window.location.search),
   )
   const [handoffPending, setHandoffPending] = useState(handoffCode !== null)
+  // The console's `?auth=console` start; `?handoff=` wins. Acts only on a live staff seat (D12).
+  const [consoleStart, setConsoleStart] = useState(() => (handoffCode ? null : readConsoleStart(window.location.search)))
+  const consoleStarted = useRef(false)
   const redeemStarted = useRef(false)
   const [joinOffer, setJoinOffer] = useState<JoinOffer | null>(null)
   const [joining, setJoining] = useState<string | null>(null)
@@ -2039,6 +2043,27 @@ export default function App() {
     }
   }, [])
 
+  // Latched by a ref against StrictMode's double effect.
+  useEffect(() => {
+    if (!consoleStart || !seat || bootRenewing || consoleStarted.current) return
+    consoleStarted.current = true
+    const support = supportBase()
+    const gateway = gatewayBase()
+    if (!support || !gateway || !isStaffToken(seat.token)) {
+      setConsoleStart(null)
+      return
+    }
+    ;(async () => {
+      const token = await freshToken()
+      if (!token) throw new Error('no session token')
+      const code = await requestConsoleCode(gateway, token, consoleStart)
+      window.location.replace(consoleHandoffUrl(support, code))
+    })().catch((e: unknown) => {
+      console.warn('[app] console hand-off failed:', e)
+      setConsoleStart(null)
+    })
+  }, [consoleStart, seat, bootRenewing, freshToken])
+
   // Redeem the code once (the ref survives StrictMode's double effect). No stored
   // state means a code this tab never asked for: no exchange, failure arm.
   useEffect(() => {
@@ -2221,6 +2246,7 @@ export default function App() {
   if (authStart && landingBase()) return null
   if (authVerify && (gatewayBase() || landingBase())) return null
   if (bootRenewing && seat) return <SignInLoading />
+  if (consoleStart && seat) return <SignInLoading />
   if (!seat) {
     if (joinOffer) {
       return (

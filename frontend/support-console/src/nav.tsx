@@ -10,7 +10,6 @@ export const NAV_ITEMS: NavItem[] = [
   },
 ]
 
-// proto:832. The crumb differs from the nav label on three of the five screens.
 export const CRUMB_BY_SCREEN: Record<Screen, string> = {
   submissions: 'Submissions ops',
   rules: 'Rules admin',

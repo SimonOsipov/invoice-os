@@ -58,9 +58,7 @@ const SCREENS: { nav: string; h1: string }[] = [
 ]
 
 // The filter chips, in render order: 'all' plus JOB_FILTER_KEYS (data.tsx:124). These are
-// LABELS, not state keys — `accepted` renders as CLEARED here (helpers.ts:21), where the
-// support console renders the same state ACCEPTED. The two consoles are not symmetric, so
-// nothing in this file may be shared with support-console.spec.ts.
+// LABELS, not state keys — `accepted` renders as CLEARED here (helpers.ts:21).
 const CHIP_LABELS = ['ALL', 'QUEUED', 'SUBMITTING', 'PENDING', 'CLEARED', 'REJECTED', 'FAILED', 'DEAD-LETTER']
 
 const sidebar = (page: Page) => page.locator('aside.ops-sidebar')

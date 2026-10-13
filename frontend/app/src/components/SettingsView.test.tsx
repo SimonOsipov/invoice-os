@@ -123,6 +123,7 @@ describe('Settings > Signing', () => {
 
 // Resolved paint against the prototype Settings view (radius, dots, rows, titles).
 const ENTITY = { id: 'e1', name: 'Honeywell Group', tin: '12345678-0001', sector: 'Food', registration: null, address: '1 Marina Rd', status: 'active', created_at: '2026-01-01T00:00:00.000Z' }
+const NRS_LABELS = ['Email', 'Phone', 'Street', 'City', 'Postal zone', 'Country', 'State', 'LGA']
 const inhouse = (over: Record<string, unknown> = {}) => settingsCtx('company', false, { mode: 'inhouse', ...over })
 const radii = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>('*')].map((e) => e.style.borderRadius).filter(Boolean)
 
@@ -131,7 +132,26 @@ describe('Settings > shell', () => {
     render(<SettingsView ctx={settingsCtx('api', false)} />)
     expect(screen.getByRole('heading', { name: 'Settings' }).style.fontWeight).toBe('')
     const tabs = screen.getAllByRole('button').filter((b) => b.className === 'pf-tab')
-    expect(tabs.map((t) => t.textContent)).toEqual(['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates'])
+    expect(tabs.map((t) => t.textContent)).toEqual(['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates'])
+  })
+
+  it.each([
+    ['firm', () => settingsCtx('buyers', false, { authedFetch: vi.fn().mockResolvedValue({ customers: [], pagination: { limit: 50, offset: 0, total: 0 } }) })],
+    ['in-house', () => inhouse({ settingsTab: 'buyers', authedFetch: vi.fn().mockResolvedValue({ customers: [], pagination: { limit: 50, offset: 0, total: 0 } }) })],
+  ] as const)('%s persona: the buyers tab renders the buyer directory', async (_name, make) => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gateway.test')
+    try {
+      render(<SettingsView ctx={make()} />)
+      expect(await screen.findByText('No buyers yet')).toBeTruthy()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('in-house tab strip lists Buyers after Roles', () => {
+    render(<SettingsView ctx={inhouse()} />)
+    const tabs = screen.getAllByRole('button').filter((b) => b.className === 'pf-tab')
+    expect(tabs.map((t) => t.textContent)).toEqual(['Company', 'Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates'])
   })
 
   it.each(['connectors', 'api', 'signing'] as const)('%s: no 99 or 999 radius anywhere', (tab) => {
@@ -142,6 +162,28 @@ describe('Settings > shell', () => {
 })
 
 describe('Settings > Company card', () => {
+  it('lists the NRS rows with — for unset', () => {
+    render(<SettingsView ctx={inhouse({ activeEntity: { ...ENTITY, state: 'NG-LA' } })} />)
+    const value = (l: string) => screen.getByText(l, { exact: true }).parentElement!.lastElementChild!.textContent
+    expect(value('State')).toBe('NG-LA')
+    for (const l of NRS_LABELS.filter((l) => l !== 'State')) expect(value(l), l).toBe('—')
+  })
+
+  it('each NRS row shows its own entity value', () => {
+    const entity = { ...ENTITY, email: 'a@x.ng', telephone: '080', street: 'S1', city: 'C1', postal_zone: 'P1', country: 'NG', state: 'NG-LA', lga: 'NG-LA-001' }
+    render(<SettingsView ctx={inhouse({ activeEntity: entity })} />)
+    const value = (l: string) => screen.getByText(l, { exact: true }).parentElement!.lastElementChild!.textContent
+    const want: Record<string, string> = { Email: 'a@x.ng', Phone: '080', Street: 'S1', City: 'C1', 'Postal zone': 'P1', Country: 'NG', State: 'NG-LA', LGA: 'NG-LA-001' }
+    expect(Object.keys(want)).toHaveLength(8)
+    for (const [l, v] of Object.entries(want)) expect(value(l), l).toBe(v)
+  })
+
+  it('NRS rows read — when the keys are null or absent', () => {
+    render(<SettingsView ctx={inhouse({ activeEntity: { ...ENTITY, email: null, lga: null } })} />)
+    const value = (l: string) => screen.getByText(l, { exact: true }).parentElement!.lastElementChild!.textContent
+    for (const l of NRS_LABELS) expect(value(l), l).toBe('—')
+  })
+
   it('the header pads 14px 20px with a 15/700 title and a 32-tall ghost Edit company', () => {
     vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
     render(<SettingsView ctx={inhouse({ activeEntity: ENTITY })} />)
@@ -158,15 +200,15 @@ describe('Settings > Company card', () => {
 
   it('rows are 140px 1fr with a divider between them and none under the last; a null value reads —', () => {
     render(<SettingsView ctx={inhouse({ activeEntity: ENTITY })} />)
-    const labels = ['Name', 'TIN', 'Sector', 'Registration', 'Address'].map((l) => screen.getByText(l, { exact: true }))
+    const labels = ['Name', 'TIN', 'Sector', 'Registration', 'Address', ...NRS_LABELS].map((l) => screen.getByText(l, { exact: true }))
     labels.forEach((l) => expect(l.className).toBe('label'))
     const rows = labels.map((l) => l.parentElement as HTMLElement)
     rows.forEach((r) => {
       expect(r.style.gridTemplateColumns).toBe('140px 1fr')
       expect(r.style.padding).toBe('10px 0px')
     })
-    rows.slice(0, 4).forEach((r) => expect(r.style.borderBottom).toBe('1px solid var(--line-1)'))
-    expect(rows[4].style.borderBottom).toMatch(/^(0|0px|none)/)
+    rows.slice(0, 12).forEach((r) => expect(r.style.borderBottom).toBe('1px solid var(--line-1)'))
+    expect(rows[12].style.borderBottom).toMatch(/^(0|0px|none)/)
     expect(rows[3].lastElementChild!.textContent).toBe('—')
     expect(rows[1].lastElementChild!.className).toBe('mono')
     expect((rows[1].lastElementChild as HTMLElement).style.fontSize).toBe('12.5px')

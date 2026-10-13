@@ -1086,6 +1086,9 @@ func TestRLS_RichFixtureFieldNamesMatchTheE2EWireFieldSet(t *testing.T) {
 		// Row 4's Qty and Unit Price are blank in the PDF, so no row is emitted for them.
 		"line_items[4].description", "line_items[4].line_total",
 		"subtotal", "supplier_name", "supplier_tin", "total", "vat",
+		// The nine AI-only header fields: Reconcile emits a missing row for each.
+		"due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
 	}
 	slices.Sort(want)
 

@@ -52,6 +52,7 @@ const DOMAIN_ORDER: AuditDomain[] = [
   'validation',
   'submissions',
   'reconciliation',
+  'customers',
 ]
 
 const DOMAIN_LABELS: Record<AuditDomain, string> = {
@@ -65,6 +66,7 @@ const DOMAIN_LABELS: Record<AuditDomain, string> = {
   validation: 'Validation rules',
   submissions: 'Submissions',
   reconciliation: 'Reconciliation',
+  customers: 'Buyers',
 }
 
 interface EventGroup {

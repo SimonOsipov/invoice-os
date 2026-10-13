@@ -312,6 +312,15 @@ func TestReconcile_IsPermutationInvariantOnEqualInput(t *testing.T) {
 		{Field: extraction.Field{Name: "subtotal", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
 		{Field: extraction.Field{Name: "vat", Value: rcStr("V01"), Reason: extraction.ReasonNone}, Alternatives: []extraction.Field{}},
 		{Field: extraction.Field{Name: "total", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "due_date", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "buyer_email", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "buyer_telephone", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "buyer_street", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "buyer_city", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "buyer_postal_zone", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "buyer_country", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "buyer_state", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
+		{Field: extraction.Field{Name: "buyer_lga", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
 		{Field: extraction.Field{Name: "line_items", Reason: extraction.ReasonMissing}, Alternatives: []extraction.Field{}},
 	}
 

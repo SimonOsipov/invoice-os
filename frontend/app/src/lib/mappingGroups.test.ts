@@ -44,6 +44,7 @@ import {
   checkGroups,
   columnSignature,
   coverageSentence,
+  defaultInvoiceKindFor,
   groupByLayout,
   groupOfFile,
   placementBadge,
@@ -1618,5 +1619,24 @@ describe('applyDoubts and checkGroups — adversarial (QA Mode B)', () => {
     const sent = check.mock.calls[0]![1]
     expect(Object.keys(sent).length, 'control: something was sent').toBeGreaterThan(0)
     expect(sent).toEqual({ invoice_number: 'Invoice No', issue_date: 'Issue Date', vat: 'VAT %' })
+  })
+})
+
+describe('buyer-type default (ENGI-07)', () => {
+  it('defaultInvoiceKindFor returns undefined when invoice_kind is placed', () => {
+    const placed = { ...mkGroup(['f1'], { invoice_number: 'Invoice No', invoice_kind: 'Kind' }), invoiceKind: 'B2B' as const }
+    const unplaced = { ...mkGroup(['f1'], { invoice_number: 'Invoice No' }), invoiceKind: 'B2B' as const }
+    expect(defaultInvoiceKindFor(placed)).toBeUndefined()
+    expect(defaultInvoiceKindFor(unplaced)).toBe('B2B')
+    expect(defaultInvoiceKindFor(mkGroup(['f1'], {}))).toBeUndefined()
+  })
+
+  it('splitOut and returnToAutomatic keep invoiceKind', () => {
+    const group = { ...mkGroup(['f1', 'f2'], { invoice_number: 'Invoice No' }), invoiceKind: 'B2C' as const }
+    const split = splitOut([group], 'f2')
+    expect(split, 'control: the split must produce a second group').toHaveLength(2)
+    expect(split[0].invoiceKind).toBe('B2C')
+    expect(split[1].invoiceKind).toBe('B2C')
+    expect(returnToAutomatic(group).invoiceKind).toBe('B2C')
   })
 })

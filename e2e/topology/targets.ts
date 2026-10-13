@@ -86,13 +86,7 @@ export const FIRM_PERSONA = appPersona('firm')
 // tenant label with the firm's, so "switched" and "did not switch" are distinguishable.
 export const INHOUSE_PERSONA = appPersona('inhouse')
 
-// The seeded, ACTIVE MBS rule-set that the live gateway evaluates (v2 since M4-04-01 --
-// migrations/20260716185106_rule_set_v2.sql). A robust sample of rule keys rather than all
-// 19, plus the rule-set version the engine tags every violation row with, which
-// invoice-surfaces.spec.ts asserts against a live rendered table cell.
-//
-// The version comes from the shared ../rule-set module, NOT a literal here: it is the one
-// place the e2e package names it ([e2e-active-version]).
+// The version that judges the 2026-dated fixtures, plus a sample of its rule keys.
 export const VALIDATION_EXPECTED = {
   ruleSetVersion: ACTIVE_RULE_SET_VERSION,
   sampleRuleKeys: ['supplier-name-required', 'vat-standard-rate', 'currency-allowed'],

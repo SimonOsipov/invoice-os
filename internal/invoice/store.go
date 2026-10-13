@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/actor"
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
+	"github.com/SimonOsipov/invoice-os/internal/customer"
+	"github.com/SimonOsipov/invoice-os/internal/customrule"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -50,7 +53,8 @@ const invoiceColumns = `id, entity_id, import_batch_id, invoice_number, status, 
 	`currency, subtotal::text, vat::text, total::text, ` +
 	`violations, rule_set_version_id, created_at, ` +
 	`irn, csid, qr_payload, rejection_reasons, ` +
-	`kept_as_is_at, kept_as_is_by, kept_as_is_reason, failure_kind`
+	`kept_as_is_at, kept_as_is_by, kept_as_is_reason, failure_kind, ` +
+	`invoice_kind, tax_currency_code, due_date, issue_time::text, tax_point_date, payment_status, supplier_email, supplier_telephone, supplier_street, supplier_city, supplier_postal_zone, supplier_country, supplier_state, supplier_lga, buyer_email, buyer_telephone, buyer_street, buyer_city, buyer_postal_zone, buyer_country, buyer_state, buyer_lga`
 
 func scanInvoice(row scanner, inv *Invoice) error {
 	return row.Scan(
@@ -60,28 +64,89 @@ func scanInvoice(row scanner, inv *Invoice) error {
 		&inv.Violations, &inv.RuleSetVersionID, &inv.CreatedAt,
 		&inv.IRN, &inv.CSID, &inv.QRPayload, &inv.RejectionReasons,
 		&inv.KeptAsIsAt, &inv.KeptAsIsBy, &inv.KeptAsIsReason, &inv.FailureKind,
+		&inv.InvoiceKind,
+		&inv.TaxCurrencyCode,
+		&inv.DueDate,
+		&inv.IssueTime,
+		&inv.TaxPointDate,
+		&inv.PaymentStatus,
+		&inv.SupplierEmail,
+		&inv.SupplierTelephone,
+		&inv.SupplierStreet,
+		&inv.SupplierCity,
+		&inv.SupplierPostalZone,
+		&inv.SupplierCountry,
+		&inv.SupplierState,
+		&inv.SupplierLGA,
+		&inv.BuyerEmail,
+		&inv.BuyerTelephone,
+		&inv.BuyerStreet,
+		&inv.BuyerCity,
+		&inv.BuyerPostalZone,
+		&inv.BuyerCountry,
+		&inv.BuyerState,
+		&inv.BuyerLGA,
 	)
 }
 
 // lineItemColumns is the line_items projection scanned by scanLineItem; the
 // numeric columns are read via ::text ([D13]), same rationale as invoiceColumns.
 const lineItemColumns = `id, line_no, description, ` +
-	`quantity::text, unit_price::text, line_total::text, line_tax::text`
+	`quantity::text, unit_price::text, line_total::text, line_tax::text, ` +
+	`tax_category, hsn_code, isic_code, product_category, service_category, sellers_item_identification, price_unit, tax_percent::text, base_quantity::text`
 
 func scanLineItem(row scanner, li *LineItem) error {
 	return row.Scan(
 		&li.ID, &li.LineNo, &li.Description,
 		&li.Quantity, &li.UnitPrice, &li.LineTotal, &li.LineTax,
+		&li.TaxCategory,
+		&li.HSNCode,
+		&li.ISICCode,
+		&li.ProductCategory,
+		&li.ServiceCategory,
+		&li.SellersItemIdentification,
+		&li.PriceUnit,
+		&li.TaxPercent,
+		&li.BaseQuantity,
 	)
 }
 
 // historyColumns deliberately excludes id/tenant_id/invoice_id (AC #7). It is the
 // SELECT list, not the wire shape: StatusChange also carries ActorName/ActorKind,
 // which History populates after the scan and no column supplies.
-const historyColumns = `from_status, to_status, actor, changed_at`
+const historyColumns = `h.from_status, h.to_status, h.actor, h.changed_at`
+
+// historyCauseColumns come from the LEFT JOINs on the cause version and the custom-rule revision; each group is NULL when its cause is absent.
+const historyCauseColumns = `v.id::text, v.version, to_char(v.effective_from, 'YYYY-MM-DD'),
+	r.rule_id::text, r.revision, r.id::text, r.message`
 
 func scanStatusChange(row scanner, sc *StatusChange) error {
-	return row.Scan(&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt)
+	return scanWithCauses(row, []any{&sc.FromStatus, &sc.ToStatus, &sc.Actor, &sc.ChangedAt}, &sc.Cause, &sc.CustomRuleCause)
+}
+
+// scanWithCauses scans lead followed by historyCauseColumns, leaving an absent cause nil.
+func scanWithCauses(row scanner, lead []any, cause **HistoryCause, custom **CustomRuleCause) error {
+	var (
+		causeID   *string
+		causeVer  *int
+		causeDate *string
+		ruleID    *string
+		ruleRev   *int
+		revID     *string
+		ruleMsg   *string
+	)
+	dest := append(lead, &causeID, &causeVer, &causeDate, &ruleID, &ruleRev, &revID, &ruleMsg)
+	if err := row.Scan(dest...); err != nil {
+		return err
+	}
+	if causeID != nil && causeVer != nil {
+		*cause = &HistoryCause{RuleSetVersion: *causeVer, RuleSetVersionID: *causeID, EffectiveFrom: causeDate}
+	}
+	if revID != nil && ruleID != nil && ruleRev != nil && ruleMsg != nil {
+		*custom = &CustomRuleCause{CustomRuleID: *ruleID, Revision: *ruleRev, RevisionID: *revID,
+			Key: customrule.Key(*ruleID), Message: *ruleMsg}
+	}
+	return nil
 }
 
 // Create inserts one invoice and, in the SAME db.WithinRequestTenantTx closure
@@ -165,9 +230,11 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		// and its no-partial-write sibling) -- no new lookup was introduced.
 		var entityName string
 		var entityTIN *string
+		var contact SupplierContact
 		if err := tx.QueryRow(ctx,
-			`SELECT name, tin FROM business_entities WHERE id = $1`, in.EntityID,
-		).Scan(&entityName, &entityTIN); err != nil {
+			`SELECT name, tin, email, telephone, street, city, postal_zone, country, state, lga FROM business_entities WHERE id = $1`, in.EntityID,
+		).Scan(&entityName, &entityTIN, &contact.Email, &contact.Telephone, &contact.Street, &contact.City,
+			&contact.PostalZone, &contact.Country, &contact.State, &contact.LGA); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrValidation
 			}
@@ -201,25 +268,33 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 		// still violates buyer-tin-format faithfully.
 		in.SupplierTIN = MBSSupplierTIN(entityTIN)
 		in.SupplierName = &entityName
+		DefaultSupplierContact(&in, contact)
 
 		if err := scanInvoice(tx.QueryRow(ctx,
 			`INSERT INTO invoices
 			   (tenant_id, entity_id, invoice_number,
 			    issue_date, supplier_tin, supplier_name, buyer_tin, buyer_name,
-			    currency, subtotal, vat, total, import_batch_id, source_document_id, source_rows)
+			    currency, subtotal, vat, total, import_batch_id, source_document_id, source_rows,
+			    invoice_kind, tax_currency_code, due_date, issue_time, tax_point_date, payment_status, supplier_email, supplier_telephone, supplier_street, supplier_city, supplier_postal_zone, supplier_country, supplier_state, supplier_lga, buyer_email, buyer_telephone, buyer_street, buyer_city, buyer_postal_zone, buyer_country, buyer_state, buyer_lga)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-			         $10::text::numeric, $11::text::numeric, $12::text::numeric, $13, $14, $15)
+			         $10::text::numeric, $11::text::numeric, $12::text::numeric, $13, $14, $15,
+			         $16, $17, $18, $19::text::time, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
 			 RETURNING `+invoiceColumns,
 			id.TenantID, in.EntityID, in.InvoiceNumber,
 			in.IssueDate, in.SupplierTIN, in.SupplierName, in.BuyerTIN, in.BuyerName,
 			in.Currency, in.Subtotal, in.VAT, in.Total, in.ImportBatchID, in.SourceDocumentID, in.SourceRows,
+			in.InvoiceKind, in.TaxCurrencyCode, in.DueDate, in.IssueTime, in.TaxPointDate, in.PaymentStatus, in.SupplierEmail, in.SupplierTelephone, in.SupplierStreet, in.SupplierCity, in.SupplierPostalZone, in.SupplierCountry, in.SupplierState, in.SupplierLGA, in.BuyerEmail, in.BuyerTelephone, in.BuyerStreet, in.BuyerCity, in.BuyerPostalZone, in.BuyerCountry, in.BuyerState, in.BuyerLGA,
 		), &inv); err != nil {
 			switch pgCode(err) {
 			case "23505":
 				return ErrDuplicateNumber
-			case "23503", "22P02":
+			case "23503", "22P02", "22007", "22008", "22021":
 				return ErrValidation
 			}
+			return err
+		}
+
+		if err := customer.FillFromInvoiceTx(ctx, tx, inv.ID); err != nil {
 			return err
 		}
 
@@ -228,14 +303,17 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Invoice, error) {
 			if err := scanLineItem(tx.QueryRow(ctx,
 				`INSERT INTO line_items
 				   (tenant_id, invoice_id, line_no, description,
-				    quantity, unit_price, line_total, line_tax)
+				    quantity, unit_price, line_total, line_tax,
+				    tax_category, hsn_code, isic_code, product_category, service_category, sellers_item_identification, price_unit, tax_percent, base_quantity)
 				 VALUES ($1, $2, $3, $4,
-				         $5::text::numeric, $6::text::numeric, $7::text::numeric, $8::text::numeric)
+				         $5::text::numeric, $6::text::numeric, $7::text::numeric, $8::text::numeric,
+				         $9, $10, $11, $12, $13, $14, $15, $16::text::numeric, $17::text::numeric)
 				 RETURNING `+lineItemColumns,
 				id.TenantID, inv.ID, i+1, li.Description,
 				li.Quantity, li.UnitPrice, li.LineTotal, li.LineTax,
+				li.TaxCategory, li.HSNCode, li.ISICCode, li.ProductCategory, li.ServiceCategory, li.SellersItemIdentification, li.PriceUnit, li.TaxPercent, li.BaseQuantity,
 			), &item); err != nil {
-				if pgCode(err) == "22003" {
+				if code := pgCode(err); code == "22003" || code == "22P02" || code == "22021" {
 					return ErrValidation
 				}
 				return err
@@ -344,6 +422,12 @@ func getTx(ctx context.Context, tx pgx.Tx, id string) (Invoice, error) {
 	if err != nil {
 		return Invoice{}, err
 	}
+
+	var verdictFP *string
+	if err := tx.QueryRow(ctx, `SELECT verdict_fingerprint FROM invoices WHERE id = $1`, inv.ID).Scan(&verdictFP); err != nil {
+		return Invoice{}, err
+	}
+	inv.VerdictStale = verdictFP != nil && *verdictFP != contentFingerprint(inv, lines)
 
 	return inv, nil
 }
@@ -478,8 +562,7 @@ func DemoteApprovalRejectedTx(ctx context.Context, tx pgx.Tx, id, tenantID, subj
 // 22P02 (invalid_text_representation) maps to ErrValidation so a malformed line
 // numeric behaves exactly like a malformed HEADER numeric (updateContentTx) --
 // 400, not a raw 500. Every other SQLSTATE propagates raw so Store.Edit's
-// atomicity specs can still assert on it. Store.Create's raw propagation is
-// Create's own contract and is deliberately left alone.
+// atomicity specs can still assert on it.
 //
 // Known residual, documented rather than defended (D8 / LI-RLS-12): a
 // line_items row whose tenant_id disagrees with its invoice's tenant is
@@ -487,7 +570,11 @@ func DemoteApprovalRejectedTx(ctx context.Context, tx pgx.Tx, id, tenantID, subj
 // that line_no raises 23505 (the unique index is not RLS-filtered), surfacing
 // as a raw 500. Unreachable through the app -- both line writers bind the
 // caller's own tenant_id, so only a direct DB write can plant one.
-func replaceLinesTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string, in []LineItemInput) ([]LineItem, error) {
+func replaceLinesTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string, in []LineItemInput, beforeLines []LineItem) ([]LineItem, error) {
+	in, err := carryNRSLines(in, beforeLines)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM line_items WHERE invoice_id = $1`, invoiceID); err != nil {
 		return nil, err
 	}
@@ -498,14 +585,17 @@ func replaceLinesTx(ctx context.Context, tx pgx.Tx, tenantID, invoiceID string, 
 		if err := scanLineItem(tx.QueryRow(ctx,
 			`INSERT INTO line_items
 			   (tenant_id, invoice_id, line_no, description,
-			    quantity, unit_price, line_total, line_tax)
+			    quantity, unit_price, line_total, line_tax,
+			    tax_category, hsn_code, isic_code, product_category, service_category, sellers_item_identification, price_unit, tax_percent, base_quantity)
 			 VALUES ($1, $2, $3, $4,
-			         $5::text::numeric, $6::text::numeric, $7::text::numeric, $8::text::numeric)
+			         $5::text::numeric, $6::text::numeric, $7::text::numeric, $8::text::numeric,
+			         $9, $10, $11, $12, $13, $14, $15, $16::text::numeric, $17::text::numeric)
 			 RETURNING `+lineItemColumns,
 			tenantID, invoiceID, i+1, li.Description,
 			li.Quantity, li.UnitPrice, li.LineTotal, li.LineTax,
+			li.TaxCategory, li.HSNCode, li.ISICCode, li.ProductCategory, li.ServiceCategory, li.SellersItemIdentification, li.PriceUnit, li.TaxPercent, li.BaseQuantity,
 		), &item); err != nil {
-			if code := pgCode(err); code == "22P02" || code == "22003" {
+			if code := pgCode(err); code == "22P02" || code == "22003" || code == "22021" {
 				return nil, ErrValidation
 			}
 			return nil, err
@@ -535,10 +625,12 @@ func (s *Store) History(ctx context.Context, id string) ([]StatusChange, error) 
 	var result []StatusChange
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT `+historyColumns+`
-			 FROM invoice_status_history
-			 WHERE invoice_id = $1
-			 ORDER BY changed_at ASC, id ASC`, id,
+			`SELECT `+historyColumns+`, `+historyCauseColumns+`
+			 FROM invoice_status_history h
+			 LEFT JOIN rule_set_versions v ON v.id = h.cause_rule_set_version_id
+			 LEFT JOIN custom_rule_revisions r ON r.tenant_id = h.tenant_id AND r.id = h.cause_custom_rule_revision_id
+			 WHERE h.invoice_id = $1
+			 ORDER BY h.changed_at ASC, h.id ASC`, id,
 		)
 		if err != nil {
 			return err
@@ -936,7 +1028,15 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 	// sync if UpdateInput ever gains a field.
 	if in.IssueDate == nil && in.SupplierTIN == nil && in.SupplierName == nil &&
 		in.BuyerTIN == nil && in.BuyerName == nil && in.Currency == nil &&
-		in.Subtotal == nil && in.VAT == nil && in.Total == nil {
+		in.Subtotal == nil && in.VAT == nil && in.Total == nil &&
+		in.InvoiceKind == nil && in.TaxCurrencyCode == nil && in.DueDate == nil &&
+		in.IssueTime == nil && in.TaxPointDate == nil && in.PaymentStatus == nil &&
+		in.SupplierEmail == nil && in.SupplierTelephone == nil && in.SupplierStreet == nil &&
+		in.SupplierCity == nil && in.SupplierPostalZone == nil && in.SupplierCountry == nil &&
+		in.SupplierState == nil && in.SupplierLGA == nil && in.BuyerEmail == nil &&
+		in.BuyerTelephone == nil && in.BuyerStreet == nil && in.BuyerCity == nil &&
+		in.BuyerPostalZone == nil && in.BuyerCountry == nil && in.BuyerState == nil &&
+		in.BuyerLGA == nil {
 		return Invoice{}, fmt.Errorf("%w: no fields to update", ErrValidation)
 	}
 
@@ -964,8 +1064,8 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 }
 
 // headerFieldsPresent reports whether in carries at least one header field --
-// the exact negation of Store.Update's inline all-nil guard, over the same 9
-// UpdateInput fields. Extracted by INVED-01-04 because Store.Edit now needs the
+// the exact negation of Store.Update's inline all-nil guard, over every
+// UpdateInput field. Extracted by INVED-01-04 because Store.Edit now needs the
 // answer TWICE: once in its widened pre-tx guard (a lines-only edit is legal, so
 // "no header fields" alone is no longer a rejection) and once to decide whether
 // to call updateContentTx at all -- that function assumes >= 1 non-nil field and
@@ -973,7 +1073,15 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Invoice,
 func headerFieldsPresent(in UpdateInput) bool {
 	return in.IssueDate != nil || in.SupplierTIN != nil || in.SupplierName != nil ||
 		in.BuyerTIN != nil || in.BuyerName != nil || in.Currency != nil ||
-		in.Subtotal != nil || in.VAT != nil || in.Total != nil
+		in.Subtotal != nil || in.VAT != nil || in.Total != nil ||
+		in.InvoiceKind != nil || in.TaxCurrencyCode != nil || in.DueDate != nil ||
+		in.IssueTime != nil || in.TaxPointDate != nil || in.PaymentStatus != nil ||
+		in.SupplierEmail != nil || in.SupplierTelephone != nil || in.SupplierStreet != nil ||
+		in.SupplierCity != nil || in.SupplierPostalZone != nil || in.SupplierCountry != nil ||
+		in.SupplierState != nil || in.SupplierLGA != nil || in.BuyerEmail != nil ||
+		in.BuyerTelephone != nil || in.BuyerStreet != nil || in.BuyerCity != nil ||
+		in.BuyerPostalZone != nil || in.BuyerCountry != nil || in.BuyerState != nil ||
+		in.BuyerLGA != nil
 }
 
 // strPtrEqual reports whether two possibly-nil *string values represent the
@@ -992,8 +1100,7 @@ func strPtrEqual(a, b *string) bool {
 // updateContentTx is the tx-scoped CONTENT write shared by Store.Update and
 // Store.Edit (M4-05-02 extraction from Store.Update): it builds the dynamic
 // SET clause over in's non-nil fields, runs the UPDATE ... RETURNING, and
-// maps the same errors Update always has (pgx.ErrNoRows -> ErrNotFound,
-// 22P02 -> ErrValidation). It does NO audit write and NO all-nil guard --
+// maps its errors. It does NO audit write and NO all-nil guard --
 // both callers enforce the guard themselves before opening a tx, and each
 // writes its own audit row under its own conditions (Update always; Edit
 // only when the DB-authoritative fingerprint says something really changed).
@@ -1173,12 +1280,46 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 		changedFields = append(changedFields, "supplier_name")
 	}
 
+	putDate := func(col string, p *time.Time) {
+		switch {
+		case p == nil:
+		case p == ClearDate:
+			set(col, text, (*time.Time)(nil))
+		case p.Equal(clearDate):
+			copiedSentinel = col
+		default:
+			set(col, text, *p)
+		}
+	}
+
 	put("buyer_tin", text, in.BuyerTIN)
 	put("buyer_name", text, in.BuyerName)
 	put("currency", text, in.Currency)
 	put("subtotal", numeric, in.Subtotal)
 	put("vat", numeric, in.VAT)
 	put("total", numeric, in.Total)
+	put("invoice_kind", text, in.InvoiceKind)
+	put("tax_currency_code", text, in.TaxCurrencyCode)
+	putDate("due_date", in.DueDate)
+	put("issue_time", "%s = $%d::text::time", in.IssueTime)
+	putDate("tax_point_date", in.TaxPointDate)
+	put("payment_status", text, in.PaymentStatus)
+	put("supplier_email", text, in.SupplierEmail)
+	put("supplier_telephone", text, in.SupplierTelephone)
+	put("supplier_street", text, in.SupplierStreet)
+	put("supplier_city", text, in.SupplierCity)
+	put("supplier_postal_zone", text, in.SupplierPostalZone)
+	put("supplier_country", text, in.SupplierCountry)
+	put("supplier_state", text, in.SupplierState)
+	put("supplier_lga", text, in.SupplierLGA)
+	put("buyer_email", text, in.BuyerEmail)
+	put("buyer_telephone", text, in.BuyerTelephone)
+	put("buyer_street", text, in.BuyerStreet)
+	put("buyer_city", text, in.BuyerCity)
+	put("buyer_postal_zone", text, in.BuyerPostalZone)
+	put("buyer_country", text, in.BuyerCountry)
+	put("buyer_state", text, in.BuyerState)
+	put("buyer_lga", text, in.BuyerLGA)
 
 	if copiedSentinel != "" {
 		return Invoice{}, nil, fmt.Errorf(
@@ -1196,13 +1337,32 @@ func updateContentTx(ctx context.Context, tx pgx.Tx, id string, in UpdateInput) 
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Invoice{}, nil, ErrNotFound
 		}
-		if pgCode(err) == "22P02" {
+		if code := pgCode(err); code == "22P02" || code == "22007" || code == "22008" || code == "22021" {
 			return Invoice{}, nil, ErrValidation
 		}
 		return Invoice{}, nil, err
 	}
 
+	if touchesBuyer(changedFields) {
+		if err := customer.FillFromInvoiceTx(ctx, tx, inv.ID); err != nil {
+			return Invoice{}, nil, err
+		}
+	}
+
 	return inv, changedFields, nil
+}
+
+// buyerFillColumns are the invoice columns the buyer directory fill reads.
+var buyerFillColumns = []string{"buyer_tin", "buyer_name", "invoice_kind", "buyer_email", "buyer_telephone",
+	"buyer_street", "buyer_city", "buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}
+
+func touchesBuyer(changed []string) bool {
+	for _, c := range changed {
+		if slices.Contains(buyerFillColumns, c) {
+			return true
+		}
+	}
+	return false
 }
 
 // Edit is M4-05-02's fix-loop orchestrator (System Design §4; widened by
@@ -1388,7 +1548,7 @@ func editTx(ctx context.Context, tx pgx.Tx, id string, in EditInput) (Invoice, e
 	// beforeLines, which is then post-write by definition.
 	afterLines := beforeLines
 	if in.LineItems != nil {
-		if afterLines, err = replaceLinesTx(ctx, tx, callerID.TenantID, id, *in.LineItems); err != nil {
+		if afterLines, err = replaceLinesTx(ctx, tx, callerID.TenantID, id, *in.LineItems, beforeLines); err != nil {
 			return Invoice{}, err
 		}
 	}
@@ -1630,9 +1790,9 @@ func canRevalidate(s Status) bool { return s == StatusDraft }
 // BatchSubmit hardwires its FROM state to validated, so submittability is
 // the endpoint's own contract, not an edge-table property.
 //
-// It is only HALF the positive predicate. The other half is
+// It is only PART of the positive predicate. Another part is
 // approval.TransmitClear (internal/approval/gate.go), which a validated invoice
-// must also satisfy before it may pass into queued. The two are composed in
+// must also satisfy before it may pass into queued. The parts are composed in
 // submitGate (handlers.go), never here: approval is not a status property, so
 // this stays a pure status literal.
 func canSubmit(s Status) bool { return s == StatusValidated }
@@ -1683,10 +1843,11 @@ func (s *Store) CallerRole(ctx context.Context) (string, error) {
 	return role, nil
 }
 
-// ApprovalFacts is one invoice's approval standing: TransmitClear feeds can_submit,
-// the other three feed can_approve/can_reject.
+// ApprovalFacts is one invoice's approval standing: TransmitClear and RulePending feed
+// can_submit, the other three feed can_approve/can_reject.
 type ApprovalFacts struct {
 	TransmitClear   bool
+	RulePending     bool
 	RunState        string
 	PendingStepOrd  *int
 	CallerHoldsRole bool
@@ -1710,6 +1871,11 @@ func (s *Store) ApprovalFacts(ctx context.Context, id string) (ApprovalFacts, er
 			PendingStepOrd:  f.PendingStepOrd,
 			CallerHoldsRole: f.CallerHoldsRole,
 		}
+		pending, err := rulePendingByInvoiceTx(ctx, tx, []string{id})
+		if err != nil {
+			return err
+		}
+		out.RulePending = pending[id]
 		return nil
 	})
 	if err != nil {
@@ -1726,6 +1892,39 @@ type ListGateFacts struct {
 	HoldsPendingRole map[string]bool
 	// TransmitClear is the page's submit verdict. An absent id reads false -- fail closed.
 	TransmitClear map[string]bool
+	RulePending   map[string]bool
+	// Demotion is display copy for the list row, not a gate input.
+	Demotion map[string]Demotion
+}
+
+// latestDemotionsTx maps each invoice whose latest history row carries a cause to that cause.
+// One statement per page; RLS scopes it.
+func latestDemotionsTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]Demotion, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT DISTINCT ON (h.invoice_id) h.invoice_id::text, h.changed_at, `+historyCauseColumns+`
+		 FROM invoice_status_history h
+		 LEFT JOIN rule_set_versions v ON v.id = h.cause_rule_set_version_id
+		 LEFT JOIN custom_rule_revisions r ON r.tenant_id = h.tenant_id AND r.id = h.cause_custom_rule_revision_id
+		 WHERE h.invoice_id = ANY($1::uuid[])
+		 ORDER BY h.invoice_id, h.changed_at DESC, h.id DESC`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Demotion{}
+	for rows.Next() {
+		var (
+			id string
+			d  Demotion
+		)
+		if err := scanWithCauses(rows, []any{&id, &d.ChangedAt}, &d.Cause, &d.CustomRuleCause); err != nil {
+			return nil, err
+		}
+		if d.Cause != nil || d.CustomRuleCause != nil {
+			out[id] = d
+		}
+	}
+	return out, rows.Err()
 }
 
 // RowFacts reads the list-row approval standing of a page of invoice ids, plus the
@@ -1734,10 +1933,10 @@ type ListGateFacts struct {
 // The returned map is display copy for the approval wire object; ListGateFacts is gate input,
 // never wire copy (TestStoreRowFacts_ReturnsTheArmedStanding).
 //
-// The three gate reads are here rather than inside approval.RowFactsTx so that helper's
+// The gate reads are here rather than inside approval.RowFactsTx so that helper's
 // statement count stays five (TestRowFactsTx_FiveStatementsRegardlessOfRowAndRoleCount);
-// all three are set-shaped, so the whole request stays constant in page size
-// (TestStoreRowFacts_TransmitClearIsConstantInPageSize).
+// all are set-shaped, so the whole request stays constant in page size
+// (TestStoreRowFacts_TransmitClearIsConstantInPageSize, TestStoreRowFacts_RulePendingIsConstantInPageSize).
 func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval.RowFacts, ListGateFacts, error) {
 	var out map[string]approval.RowFacts
 	var gate ListGateFacts
@@ -1782,7 +1981,17 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 			transmit[id] = clear[id]
 		}
 
-		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit}
+		pending, err := rulePendingByInvoiceTx(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+
+		demotion, err := latestDemotionsTx(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+
+		out, gate = facts, ListGateFacts{CallerRole: role, HoldsPendingRole: holds, TransmitClear: transmit, RulePending: pending, Demotion: demotion}
 		return nil
 	})
 	if err != nil {
@@ -1826,11 +2035,11 @@ func (s *Store) RowFacts(ctx context.Context, ids []string) (map[string]approval
 func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoice, error) {
 	var inv Invoice
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var lockedID string
+		var lockedID, entityID string
 		var current Status
 		if err := tx.QueryRow(ctx,
-			`SELECT id, status FROM invoices WHERE id = $1 FOR UPDATE`, id,
-		).Scan(&lockedID, &current); err != nil {
+			`SELECT id, status, entity_id FROM invoices WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&lockedID, &current, &entityID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -1852,6 +2061,13 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 		// canTransition conjunct keeps an illegal edge reading ErrIllegalTransition
 		// (TestTransition_IllegalEdgeIntoQueuedStillReadsIllegal).
 		if target == StatusQueued && canTransition(current, target) {
+			pending, err := rulesPendingFor(ctx, tx, []string{entityID})
+			if err != nil {
+				return err
+			}
+			if pending(entityID) {
+				return ErrRuleChangePending
+			}
 			clear, err := approval.TransmitClearTx(ctx, tx, []string{lockedID})
 			if err != nil {
 				return err
@@ -1928,6 +2144,74 @@ func (s *Store) Transition(ctx context.Context, id string, target Status) (Invoi
 // both 23514, which TestTransition_AtomicityRollsBackOnActorCheckFailure and
 // GATE-13 assert via pgCode.
 func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor) (Invoice, error) {
+	return transitionCausedTx(ctx, tx, id, current, target, actor, demotionCause{})
+}
+
+// rulesPendingFor reads, in one statement, the revisions that can block and are not yet
+// re-checked; a firm-wide one (NULL entity) covers every entity (D26).
+func rulesPendingFor(ctx context.Context, tx pgx.Tx, entityIDs []string) (func(entityID string) bool, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT DISTINCT entity_id::text FROM custom_rule_revisions
+		  WHERE rechecked_at IS NULL AND (entity_id IS NULL OR entity_id = ANY($1::uuid[]))`, entityIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	all, covered := false, map[string]bool{}
+	for rows.Next() {
+		var e *string
+		if err := rows.Scan(&e); err != nil {
+			return nil, err
+		}
+		if e == nil {
+			all = true
+		} else {
+			covered[*e] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return func(entityID string) bool { return all || covered[entityID] }, nil
+}
+
+// rulePendingByInvoiceTx maps each visible invoice id to whether a pending custom-rule
+// revision covers it: two statements, whatever len(ids). Ids RLS hides are absent (false).
+func rulePendingByInvoiceTx(ctx context.Context, tx pgx.Tx, ids []string) (map[string]bool, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT id::text, entity_id::text FROM invoices WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entityOf := make(map[string]string, len(ids))
+	entityIDs := make([]string, 0, len(ids))
+	for rows.Next() {
+		var id, entityID string
+		if err := rows.Scan(&id, &entityID); err != nil {
+			return nil, err
+		}
+		entityOf[id] = entityID
+		entityIDs = append(entityIDs, entityID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	pending, err := rulesPendingFor(ctx, tx, entityIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(entityOf))
+	for id, entityID := range entityOf {
+		out[id] = pending(entityID)
+	}
+	return out, nil
+}
+
+// transitionCausedTx is transitionTx plus what caused the transition, written to the history
+// row: a rule-set version and/or a custom-rule revision; "" stores NULL.
+func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, cause demotionCause) (Invoice, error) {
 	if !canTransition(current, target) {
 		return Invoice{}, ErrIllegalTransition
 	}
@@ -1983,9 +2267,9 @@ func transitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Sta
 	}
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actor.TenantID, id, string(current), string(target), actor.Subject,
+		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, cause_rule_set_version_id, cause_custom_rule_revision_id)
+		 VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, NULLIF($7, '')::uuid)`,
+		actor.TenantID, id, string(current), string(target), actor.Subject, cause.VersionID, cause.CustomRuleRevisionID,
 	); err != nil {
 		return Invoice{}, err
 	}
@@ -2075,6 +2359,38 @@ func HasBlockingViolation(vs []Violation) bool { return hasBlockingViolation(vs)
 // writes propagate RAW so their SQLSTATE survives (23503 when 04 hands over a
 // phantom rule_set_version_id the FK refuses; 23514 on the actor CHECKs).
 func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, ruleSetVersionID, evaluatedFingerprint string) (Invoice, error) {
+	return s.applyValidation(ctx, id, vs, ruleSetVersionID, nil, evaluatedFingerprint)
+}
+
+// CustomRuleSets is a tenant's current custom rules: firm-wide, and per client entity.
+type CustomRuleSets struct {
+	Firm     []customrule.Rule
+	ByEntity map[string][]customrule.Rule
+}
+
+// CustomRulesFor reads, in one statement, the current rules that judge invoices of entityIDs.
+func (s *Store) CustomRulesFor(ctx context.Context, entityIDs []string) (CustomRuleSets, error) {
+	out := CustomRuleSets{ByEntity: map[string][]customrule.Rule{}}
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rules, err := customrule.CurrentTx(ctx, tx, entityIDs)
+		for _, r := range rules {
+			if r.EntityID == nil {
+				out.Firm = append(out.Firm, r)
+			} else {
+				out.ByEntity[*r.EntityID] = append(out.ByEntity[*r.EntityID], r)
+			}
+		}
+		return err
+	})
+	return out, err
+}
+
+// applyValidation is ApplyValidation with the custom-rule revision ids the verdict ran (D27):
+// it refuses, writing nothing, unless they are exactly the invoice's current rules.
+func (s *Store) applyValidation(ctx context.Context, id string, vs []Violation, ruleSetVersionID string, customIDs []string, evaluatedFingerprint string) (Invoice, error) {
+	if customIDs == nil {
+		customIDs = []string{}
+	}
 	// Normalize the SLICE, then marshal ([violations-write]). Both guards, in
 	// THIS order — normalizing the bytes afterwards would not do: pgx encodes a
 	// nil Go slice as SQL NULL (23502 against `violations jsonb NOT NULL`), but
@@ -2098,6 +2414,12 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 	var inv Invoice
 	err = db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		callerID, _ := auth.IdentityFromContext(ctx)
+
+		// Shared form of the save lock: a custom-rule save either commits before this
+		// reads the current rules, or waits for this commit.
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtext($1))`, customrule.SaveLockKey(callerID.TenantID)); err != nil {
+			return err
+		}
 
 		// 1. lock and read the FULL row — the fingerprint needs its content.
 		var locked Invoice
@@ -2135,10 +2457,29 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 			return ErrStaleValidation
 		}
 
+		ran := make(map[string]bool, len(customIDs))
+		for _, rid := range customIDs {
+			ran[rid] = true
+		}
+		current, err := customrule.CurrentTx(ctx, tx, []string{locked.EntityID})
+		if err != nil {
+			return err
+		}
+		// Equality, not a subset: a ran revision that is no longer current (disabled, deleted,
+		// moved or superseded) stamps a verdict nothing would ever re-check.
+		if len(current) != len(ran) {
+			return ErrRulesChanged
+		}
+		for _, r := range current {
+			if !ran[r.RevisionID] {
+				return ErrRulesChanged
+			}
+		}
+
 		// 4. stamp the verdict, blocking or not.
 		if err := scanInvoice(tx.QueryRow(ctx,
-			`UPDATE invoices SET violations = $1, rule_set_version_id = $2 WHERE id = $3 RETURNING `+invoiceColumns,
-			violationsJSON, ruleSetVersionID, id,
+			`UPDATE invoices SET violations = $1, rule_set_version_id = $2, verdict_fingerprint = $3 WHERE id = $4 RETURNING `+invoiceColumns,
+			violationsJSON, ruleSetVersionID, evaluatedFingerprint, id,
 		), &inv); err != nil {
 			return err
 		}
@@ -2170,11 +2511,12 @@ func (s *Store) ApplyValidation(ctx context.Context, id string, vs []Violation, 
 			outcome = "blocked"
 		}
 		return audit.Record(ctx, tx, callerID.Subject, "invoice.validated", map[string]any{
-			"id":                  id,
-			"rule_set_version_id": ruleSetVersionID,
-			"outcome":             outcome,
-			"violation_count":     len(vs),
-			"invoice_number":      locked.InvoiceNumber,
+			"id":                       id,
+			"rule_set_version_id":      ruleSetVersionID,
+			"outcome":                  outcome,
+			"violation_count":          len(vs),
+			"invoice_number":           locked.InvoiceNumber,
+			"custom_rule_revision_ids": customIDs,
 		})
 	})
 	if err != nil {

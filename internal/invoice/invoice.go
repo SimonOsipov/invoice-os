@@ -15,6 +15,7 @@ package invoice
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -61,6 +62,16 @@ type LineItem struct {
 	UnitPrice   *string `json:"unit_price"`
 	LineTotal   *string `json:"line_total"`
 	LineTax     *string `json:"line_tax"`
+
+	TaxCategory               *string `json:"tax_category"`
+	HSNCode                   *string `json:"hsn_code"`
+	ISICCode                  *string `json:"isic_code"`
+	ProductCategory           *string `json:"product_category"`
+	ServiceCategory           *string `json:"service_category"`
+	SellersItemIdentification *string `json:"sellers_item_identification"`
+	PriceUnit                 *string `json:"price_unit"`
+	TaxPercent                *string `json:"tax_percent"`
+	BaseQuantity              *string `json:"base_quantity"`
 }
 
 // Invoice is an invoices row plus its hydrated LineItems (Store.Get only;
@@ -119,6 +130,30 @@ type Invoice struct {
 	// explicit-null rationale as KeptAsIsReason above.
 	FailureKind *string `json:"failure_kind"`
 
+	// NRS header and party fields: explicit null when unset.
+	InvoiceKind        *string    `json:"invoice_kind"`
+	TaxCurrencyCode    *string    `json:"tax_currency_code"`
+	DueDate            *time.Time `json:"due_date"`
+	IssueTime          *string    `json:"issue_time"`
+	TaxPointDate       *time.Time `json:"tax_point_date"`
+	PaymentStatus      *string    `json:"payment_status"`
+	SupplierEmail      *string    `json:"supplier_email"`
+	SupplierTelephone  *string    `json:"supplier_telephone"`
+	SupplierStreet     *string    `json:"supplier_street"`
+	SupplierCity       *string    `json:"supplier_city"`
+	SupplierPostalZone *string    `json:"supplier_postal_zone"`
+	SupplierCountry    *string    `json:"supplier_country"`
+	SupplierState      *string    `json:"supplier_state"`
+	SupplierLGA        *string    `json:"supplier_lga"`
+	BuyerEmail         *string    `json:"buyer_email"`
+	BuyerTelephone     *string    `json:"buyer_telephone"`
+	BuyerStreet        *string    `json:"buyer_street"`
+	BuyerCity          *string    `json:"buyer_city"`
+	BuyerPostalZone    *string    `json:"buyer_postal_zone"`
+	BuyerCountry       *string    `json:"buyer_country"`
+	BuyerState         *string    `json:"buyer_state"`
+	BuyerLGA           *string    `json:"buyer_lga"`
+
 	LineItems []LineItem `json:"line_items,omitempty"`
 
 	// RuleSetVersion is the human-facing integer resolved from
@@ -133,6 +168,10 @@ type Invoice struct {
 	// Edit/Transition/ApplyValidation) leaves it unset.
 	RuleSetVersion *int `json:"-"`
 
+	// VerdictStale: the invoice content changed since the stored verdict was evaluated;
+	// false when the verdict predates the fingerprint. Filled by getTx only.
+	VerdictStale bool `json:"-"`
+
 	// EverSubmitted: some history row left draft/validated; filled by getTx
 	// only. Feeds canCorrectNumber's history-aware half (store.go).
 	EverSubmitted bool `json:"-"`
@@ -142,7 +181,7 @@ type Invoice struct {
 // migrations/20260714111246_invoice_status_history.sql): an immutable,
 // append-only record of a single invoice lifecycle transition, written
 // exactly twice over in store.go -- the genesis row (Store.Create,
-// NULL->'draft') and every subsequent transition (transitionTx). Store.History
+// NULL->'draft') and every subsequent transition (transitionCausedTx). Store.History
 // returns them ordered changed_at ASC, id ASC ([D1]/AC #1).
 //
 // FromStatus/ToStatus are typed Status, the SAME CHECK-constrained domain as
@@ -167,17 +206,72 @@ type StatusChange struct {
 	ActorName  string    `json:"actor_name"`
 	ActorKind  string    `json:"actor_kind"`
 	ChangedAt  time.Time `json:"changed_at"`
+	// Cause is the rule-set version behind a re-check demotion; null on every other row.
+	Cause *HistoryCause `json:"cause"`
+	// CustomRuleCause is the custom-rule revision behind a custom re-check demotion; null on every other row.
+	CustomRuleCause *CustomRuleCause `json:"custom_rule_cause"`
+}
+
+// CustomRuleCause names the rule revision that caused a history row. Key is customrule.Key(CustomRuleID).
+type CustomRuleCause struct {
+	CustomRuleID string `json:"custom_rule_id"`
+	Revision     int    `json:"revision"`
+	RevisionID   string `json:"revision_id"`
+	Key          string `json:"key"`
+	Message      string `json:"message"`
+}
+
+// Demotion is a list row's re-check demotion: the latest history row's cause, set only while the invoice is a draft.
+type Demotion struct {
+	ChangedAt       time.Time        `json:"changed_at"`
+	Cause           *HistoryCause    `json:"cause"`
+	CustomRuleCause *CustomRuleCause `json:"custom_rule_cause"`
+}
+
+// HistoryCause is the rule-set version that caused a history row. EffectiveFrom is
+// YYYY-MM-DD, null for an undated version.
+type HistoryCause struct {
+	RuleSetVersion   int     `json:"rule_set_version"`
+	RuleSetVersionID string  `json:"rule_set_version_id"`
+	EffectiveFrom    *string `json:"effective_from"`
 }
 
 // LineItemInput is one line of Store.Create's CreateInput.LineItems. LineNo
 // is deliberately NOT part of this input — it is system-assigned 1..N by the
 // slice's array position ([D10]), never caller-supplied.
 type LineItemInput struct {
+	// ID is the stored line this entry continues; nil for a new line.
+	ID          *string
 	Description *string
 	Quantity    *string
 	UnitPrice   *string
 	LineTotal   *string
 	LineTax     *string
+
+	TaxCategory               *string
+	HSNCode                   *string
+	ISICCode                  *string
+	ProductCategory           *string
+	ServiceCategory           *string
+	SellersItemIdentification *string
+	PriceUnit                 *string
+	TaxPercent                *string
+	BaseQuantity              *string
+
+	// NRSSent: the request entry named an NRS key, null included. The carry skips it.
+	NRSSent bool
+}
+
+// TrimmedOrNil is the value trimmed, or nil when it is nil or blank.
+func TrimmedOrNil(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	t := strings.TrimSpace(*v)
+	if t == "" {
+		return nil
+	}
+	return &t
 }
 
 // CreateInput is the Store.Create argument. EntityID and InvoiceNumber are
@@ -185,19 +279,41 @@ type LineItemInput struct {
 // that Store.Create persists un-rejected even when negative/NULL/blank
 // (store-invalid-faithfully, AC-6).
 type CreateInput struct {
-	EntityID      string
-	InvoiceNumber string
-	IssueDate     *time.Time
-	SupplierTIN   *string
-	SupplierName  *string
-	BuyerTIN      *string
-	BuyerName     *string
-	Currency      *string
-	Subtotal      *string
-	VAT           *string
-	Total         *string
-	LineItems     []LineItemInput
-	ImportBatchID *string
+	EntityID           string
+	InvoiceNumber      string
+	IssueDate          *time.Time
+	SupplierTIN        *string
+	SupplierName       *string
+	BuyerTIN           *string
+	BuyerName          *string
+	Currency           *string
+	Subtotal           *string
+	VAT                *string
+	Total              *string
+	InvoiceKind        *string
+	TaxCurrencyCode    *string
+	DueDate            *time.Time
+	IssueTime          *string
+	TaxPointDate       *time.Time
+	PaymentStatus      *string
+	SupplierEmail      *string
+	SupplierTelephone  *string
+	SupplierStreet     *string
+	SupplierCity       *string
+	SupplierPostalZone *string
+	SupplierCountry    *string
+	SupplierState      *string
+	SupplierLGA        *string
+	BuyerEmail         *string
+	BuyerTelephone     *string
+	BuyerStreet        *string
+	BuyerCity          *string
+	BuyerPostalZone    *string
+	BuyerCountry       *string
+	BuyerState         *string
+	BuyerLGA           *string
+	LineItems          []LineItemInput
+	ImportBatchID      *string
 	// SourceDocumentID points at the documents row an import read this invoice
 	// out of; nil for a manual create. Deliberately absent from Invoice and
 	// invoiceColumns -- that projection feeds a POSITIONAL scanInvoice and the
@@ -244,9 +360,32 @@ type UpdateInput struct {
 	Subtotal     *string
 	VAT          *string
 	Total        *string
+
+	InvoiceKind        *string
+	TaxCurrencyCode    *string
+	DueDate            *time.Time
+	IssueTime          *string
+	TaxPointDate       *time.Time
+	PaymentStatus      *string
+	SupplierEmail      *string
+	SupplierTelephone  *string
+	SupplierStreet     *string
+	SupplierCity       *string
+	SupplierPostalZone *string
+	SupplierCountry    *string
+	SupplierState      *string
+	SupplierLGA        *string
+	BuyerEmail         *string
+	BuyerTelephone     *string
+	BuyerStreet        *string
+	BuyerCity          *string
+	BuyerPostalZone    *string
+	BuyerCountry       *string
+	BuyerState         *string
+	BuyerLGA           *string
 }
 
-// EditInput is the Store.Edit argument (INVED-01-04): the 9 optional header
+// EditInput is the Store.Edit argument (INVED-01-04): the optional header
 // fields of an embedded UpdateInput, plus the invoice's line items. Edit takes
 // this rather than a widened UpdateInput because updateContentTx is SHARED with
 // Store.Update, which must keep taking a header-only UpdateInput byte-identical
@@ -400,6 +539,12 @@ var (
 	ErrNotDraft        = errors.New("invoice: not draft")
 	ErrStaleValidation = errors.New("invoice: stale validation")
 
+	// ErrRulesChanged: a custom rule was saved after the verdict was computed (D27).
+	ErrRulesChanged = errors.New("invoice: custom rules changed during validation")
+
+	// ErrRuleChangePending: a custom-rule revision covering the invoice is not yet re-checked (D26).
+	ErrRuleChangePending = errors.New("invoice: custom rule change pending")
+
 	// ErrNotFixable is Store.Edit's own precondition sentinel (M4-05-02,
 	// architect [A2]; widened by task-237 to a third status): the edit
 	// surface accepts three fixable statuses -- draft, validated, and
@@ -445,6 +590,15 @@ var (
 	// the number UPDATE, and the canCorrectNumber guard, respectively).
 	ErrNumberTaken = errors.New("invoice: number taken")
 	ErrNumberFixed = errors.New("invoice: number fixed")
+
+	// ErrUnknownLineID: a line_items id that names no line of this invoice.
+	ErrUnknownLineID = errors.New("invoice: unknown line id")
+
+	// ErrViolationGone: an Explain key that is not on the invoice's stored verdict.
+	ErrViolationGone = errors.New("invoice: violation gone")
+
+	// ErrVerdictStale: the invoice changed since its stored verdict, so Explain refuses.
+	ErrVerdictStale = errors.New("invoice: verdict stale")
 )
 
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a

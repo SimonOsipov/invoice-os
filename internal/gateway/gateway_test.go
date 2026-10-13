@@ -962,14 +962,19 @@ func TestProxyPassesAServiceOwn401Through(t *testing.T) {
 	}
 }
 
-// upstreamCount counts what one upstream received: every request, hits on an /internal route, hits on the self-read.
+// upstreamCount counts what one upstream received: every request, hits on an /internal route, hits on a /v1/staff/ route, hits on the self-read.
 type upstreamCount struct {
-	any, internal, selfRead atomic.Int32
+	any, internal, staff, selfRead atomic.Int32
 }
 
-func (c *upstreamCount) reset() { c.any.Store(0); c.internal.Store(0); c.selfRead.Store(0) }
+func (c *upstreamCount) reset() {
+	c.any.Store(0)
+	c.internal.Store(0)
+	c.staff.Store(0)
+	c.selfRead.Store(0)
+}
 
-// countingUpstream serves an /internal route and the self-read from a case-sensitive Go mux, as a context service does.
+// countingUpstream serves an /internal route, a /v1/staff/ route and the self-read from a case-sensitive Go mux, as a context service does.
 func countingUpstream(t *testing.T) (*url.URL, *upstreamCount) {
 	t.Helper()
 	c := &upstreamCount{}
@@ -977,6 +982,7 @@ func countingUpstream(t *testing.T) (*url.URL, *upstreamCount) {
 	internal := func(w http.ResponseWriter, _ *http.Request) { c.internal.Add(1); w.WriteHeader(http.StatusAccepted) }
 	mux.HandleFunc("/internal", internal)
 	mux.HandleFunc("/internal/", internal)
+	mux.HandleFunc("/v1/staff/", func(w http.ResponseWriter, _ *http.Request) { c.staff.Add(1); w.WriteHeader(http.StatusAccepted) })
 	mux.HandleFunc("GET /v1/contacts/me", func(w http.ResponseWriter, _ *http.Request) {
 		c.selfRead.Add(1)
 		_, _ = w.Write([]byte(`{}`))

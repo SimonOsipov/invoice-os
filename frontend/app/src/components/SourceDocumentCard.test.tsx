@@ -46,6 +46,7 @@ function detailRecord(): InvoiceDetailRecord {
     line_items: [],
     rule_set_version: null,
     qr_png_base64: null,
+    verdict_stale: false,
     can_edit: false,
     can_revalidate: false,
     revalidate_blocked_reason: null,
@@ -65,7 +66,7 @@ function detailRecord(): InvoiceDetailRecord {
 }
 
 const HISTORY: StatusChange[] = [
-  { from_status: null, to_status: 'draft', actor: 'c0000000-0000-0000-0000-000000000001', actor_name: 'Chinedu Okafor', actor_kind: 'person', changed_at: '2026-06-12T09:15:00Z' },
+  { from_status: null, to_status: 'draft', actor: 'c0000000-0000-0000-0000-000000000001', actor_name: 'Chinedu Okafor', actor_kind: 'person', changed_at: '2026-06-12T09:15:00Z', cause: null, custom_rule_cause: null },
 ]
 
 function sourceRecord(over: Partial<SourceDocumentRecord> = {}): SourceDocumentRecord {

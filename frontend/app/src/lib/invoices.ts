@@ -117,6 +117,7 @@ import type { Violation } from './validationApi'
 import type { StatusStyle } from '../types'
 import type { AsyncState, AsyncStatus } from '@invoice-os/api-client'
 import { toDateInputValue } from './format'
+import { INVOICE_FIELDS, labelOf, type EditFieldKey, type InvoiceField, type LineEditKey } from './invoiceFields'
 
 export type InvoiceStatus =
   | 'draft'
@@ -138,6 +139,15 @@ export interface InvoiceLineItem {
   unit_price: string | null
   line_total: string | null
   line_tax: string | null
+  tax_category?: string | null
+  hsn_code?: string | null
+  isic_code?: string | null
+  product_category?: string | null
+  service_category?: string | null
+  sellers_item_identification?: string | null
+  price_unit?: string | null
+  tax_percent?: string | null
+  base_quantity?: string | null
 }
 
 // One invoices.rejection_reasons element (internal/submission/result.go:27-31, Reason).
@@ -199,6 +209,28 @@ export interface InvoiceRecord {
   // server always says explicitly, so a missing fixture should be a loud
   // typecheck error, not a silent `undefined`.
   failure_kind: string | null
+  invoice_kind?: string | null
+  tax_currency_code?: string | null
+  due_date?: string | null
+  issue_time?: string | null
+  tax_point_date?: string | null
+  payment_status?: string | null
+  supplier_email?: string | null
+  supplier_telephone?: string | null
+  supplier_street?: string | null
+  supplier_city?: string | null
+  supplier_postal_zone?: string | null
+  supplier_country?: string | null
+  supplier_state?: string | null
+  supplier_lga?: string | null
+  buyer_email?: string | null
+  buyer_telephone?: string | null
+  buyer_street?: string | null
+  buyer_city?: string | null
+  buyer_postal_zone?: string | null
+  buyer_country?: string | null
+  buyer_state?: string | null
+  buyer_lga?: string | null
   line_items?: InvoiceLineItem[]
   rule_set_version: number | null
   // approval (APPR-08-08) -- a LIST-wire key ONLY: Go emits it on listItem, never on
@@ -223,6 +255,8 @@ export interface InvoiceRecord {
   // redeclares. REQUIRED, never `?`, for the same fail-open reason as can_approve.
   can_submit: boolean
   submit_blocked_reason: string | null
+  // demotion -- a LIST-wire key ONLY, like `approval`; InvoiceDetailRecord Omits it.
+  demotion: Demotion | null
 }
 
 // One list row's approval standing, mirroring approval.RowFacts (gate.go) key for key --
@@ -272,9 +306,11 @@ export interface InvoiceApproval {
 // and the rest absent; wireMirrors.test.ts's B12-9b pins the submit pair declared once.
 // `approval` runs the other way -- a list-only key (APPR-08-08), Omitted here so it
 // cannot be read off a detail record at all.
-export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval'> {
+export interface InvoiceDetailRecord extends Omit<InvoiceRecord, 'approval' | 'demotion'> {
   rule_set_version: number | null
   qr_png_base64: string | null
+  // The invoice changed since its stored verdict was evaluated; false for a verdict that predates the fingerprint.
+  verdict_stale: boolean
   can_edit: boolean
   can_revalidate: boolean
   revalidate_blocked_reason: string | null
@@ -318,6 +354,48 @@ export interface StatusChange {
   actor_name: string
   actor_kind: string
   changed_at: string
+  // The rule-set version behind a re-check demotion; null on every other row. Always present.
+  cause: HistoryCause | null
+  // The custom-rule revision behind a custom re-check demotion; null on every other row. Always present.
+  custom_rule_cause: CustomRuleCause | null
+}
+
+export interface CustomRuleCause {
+  custom_rule_id: string
+  revision: number
+  revision_id: string
+  key: string
+  message: string
+}
+
+// effective_from is YYYY-MM-DD, null for an undated version.
+export interface HistoryCause {
+  rule_set_version: number
+  rule_set_version_id: string
+  effective_from: string | null
+}
+
+// A list row's re-check demotion: the latest history row's cause, set only while the invoice is a draft.
+export interface Demotion {
+  changed_at: string
+  cause: HistoryCause | null
+  custom_rule_cause: CustomRuleCause | null
+}
+
+// D11: the detail derives the list's server rule from the history it loads (T1: latestDemotion_matchesTheServerRule).
+export function latestDemotion(history: readonly StatusChange[], status: InvoiceStatus): Demotion | null {
+  const last = history[history.length - 1]
+  if (status !== 'draft' || !last || (last.cause == null && last.custom_rule_cause == null)) return null
+  return { changed_at: last.changed_at, cause: last.cause, custom_rule_cause: last.custom_rule_cause }
+}
+
+// effective_from is shown as the wire wrote it: no locale formatting, so no day shift.
+export function demotionSentence(d: Demotion): string {
+  if (d.cause) {
+    const on = d.cause.effective_from ? ` on ${d.cause.effective_from}` : ''
+    return `Sent back to draft when rule set v${d.cause.rule_set_version} took effect${on}.`
+  }
+  return `Sent back to draft when the custom rule \u201c${d.custom_rule_cause?.message ?? ''}\u201d changed.`
 }
 
 // listInvoices's twelve filters (ListFilter, invoice.go:200-217; ListHandler,
@@ -382,21 +460,31 @@ export function clampFilterText(s: string): string {
   return new TextDecoder().decode(bytes.subarray(0, end))
 }
 
-// One entry of editInvoice's optional `line_items` array (lineItemReq,
-// handlers.go:42-48, INVED-01-05). Five nullable strings -- NO `id` and NO `line_no`:
+// One entry of editInvoice's optional `line_items` array (lineItemReq, INVED-01-05). Fourteen nullable strings and no `line_no`:
 // line_no is system-assigned 1..N by array POSITION ([line-no-by-position]) and a
 // client-supplied one is silently ignored, so this array's order IS the only line
 // ordering the wire carries.
 export interface LineItemEditInput {
+  // The stored line this entry continues; the editor and fixPatch send it, an added row has none.
+  id?: string
   description: string | null
   quantity: string | null
   unit_price: string | null
   line_total: string | null
   line_tax: string | null
+  tax_category?: string | null
+  hsn_code?: string | null
+  isic_code?: string | null
+  product_category?: string | null
+  service_category?: string | null
+  sellers_item_identification?: string | null
+  price_unit?: string | null
+  tax_percent?: string | null
+  base_quantity?: string | null
 }
 
-// editInvoice's PATCH body (editReq, internal/invoice/handlers.go): the 9 optional header
-// fields plus invoice_number, which renames a never-submitted draft. entity_id is not the
+// editInvoice's PATCH body (editReq, internal/invoice/handlers.go): the optional header
+// fields (9 legacy, 22 NRS) plus invoice_number, which renames a never-submitted draft. entity_id is not the
 // edit's job ([D9]). Reuses InvoiceRecord's own field types so the two never drift apart.
 //
 // `line_items` (INVED-01-06) mirrors editReq.LineItems, a POINTER to a slice, so all
@@ -408,16 +496,7 @@ export interface LineItemEditInput {
 export type InvoiceEditInput = Partial<
   Pick<
     InvoiceRecord,
-    | 'issue_date'
-    | 'supplier_tin'
-    | 'supplier_name'
-    | 'buyer_tin'
-    | 'buyer_name'
-    | 'currency'
-    | 'subtotal'
-    | 'vat'
-    | 'total'
-    | 'invoice_number'
+    EditFieldKey | 'invoice_number'
   >
 > & {
   line_items?: LineItemEditInput[]
@@ -435,6 +514,16 @@ export interface LineItemCreateInput {
   unit_price: string | null
   line_total: string | null
   line_tax: string | null
+  id?: string
+  tax_category?: string | null
+  hsn_code?: string | null
+  isic_code?: string | null
+  product_category?: string | null
+  service_category?: string | null
+  sellers_item_identification?: string | null
+  price_unit?: string | null
+  tax_percent?: string | null
+  base_quantity?: string | null
 }
 
 // createInvoice's POST body (handlers.go's `type createRequest`). `entity_id`/
@@ -459,26 +548,37 @@ export interface InvoiceCreateInput {
   // an absent key is "no document", and JSON.stringify drops `undefined`, so nothing
   // crosses the wire when the invoice was typed from scratch.
   source_document_id?: string
+  invoice_kind?: string | null
+  tax_currency_code?: string | null
+  due_date?: string | null
+  issue_time?: string | null
+  tax_point_date?: string | null
+  payment_status?: string | null
+  supplier_email?: string | null
+  supplier_telephone?: string | null
+  supplier_street?: string | null
+  supplier_city?: string | null
+  supplier_postal_zone?: string | null
+  supplier_country?: string | null
+  supplier_state?: string | null
+  supplier_lga?: string | null
+  buyer_email?: string | null
+  buyer_telephone?: string | null
+  buyer_street?: string | null
+  buyer_city?: string | null
+  buyer_postal_zone?: string | null
+  buyer_country?: string | null
+  buyer_state?: string | null
+  buyer_lga?: string | null
 }
 
-// The 9 editable header fields (editReq's header keys, [D9]; the invoice number is edited
-// apart from these, InvoiceEditInput) -- moved here from
-// InvoiceDetail.tsx (M5-09-03, task-253, addendum A2) so mbsPathToEditField and the
-// component share one definition; EditFieldKey travels with the const it's derived
-// from, not alone.
-export const EDIT_FIELD_KEYS = [
-  'issue_date',
-  'supplier_tin',
-  'supplier_name',
-  'buyer_tin',
-  'buyer_name',
-  'currency',
-  'subtotal',
-  'vat',
-  'total',
-] as const
+// The editable header fields (9 legacy, then the 22 NRS ones), from the shared field list;
+// the invoice number is edited apart from these (InvoiceEditInput).
+export const EDIT_FIELD_KEYS: readonly EditFieldKey[] = INVOICE_FIELDS.filter((f) => !f.line && f.edit).map(
+  (f) => f.key as EditFieldKey,
+)
 
-export type EditFieldKey = (typeof EDIT_FIELD_KEYS)[number]
+export type { EditFieldKey }
 
 // One BatchSubmit result item (batch_submit.go:85-91, BatchSubmitResultItem). `status`
 // is a bare string, NOT InvoiceStatus -- batch_submit.go:206-211 hard-codes a
@@ -642,6 +742,7 @@ export async function getInvoice(authedFetch: AuthedFetch, base: string, id: str
     ...res,
     rule_set_version: res.rule_set_version ?? null,
     qr_png_base64: res.qr_png_base64 ?? null,
+    verdict_stale: res.verdict_stale === true,
     can_edit: res.can_edit === true,
     can_revalidate: res.can_revalidate === true,
     revalidate_blocked_reason: res.revalidate_blocked_reason ?? null,
@@ -823,9 +924,9 @@ export function invoiceStatusStyle(status: InvoiceStatus): StatusStyle {
 
 export function verdictStatus(
   staleSinceEdit: boolean,
-  inv: Pick<InvoiceRecord, 'status' | 'rule_set_version_id' | 'violations'>,
+  inv: Pick<InvoiceRecord, 'status' | 'rule_set_version_id' | 'violations'> & { verdict_stale?: boolean },
 ): 'stale' | 'current' {
-  if (staleSinceEdit) return 'stale'
+  if (staleSinceEdit || inv.verdict_stale === true) return 'stale'
   const demotedSinceValidation =
     inv.status === 'draft' && inv.rule_set_version_id != null && !inv.violations.some((v) => v.severity === 'error')
   return demotedSinceValidation ? 'stale' : 'current'
@@ -887,9 +988,10 @@ export function reasonFieldFlags(reasons: RejectionReason[]): Map<EditFieldKey, 
   return flags
 }
 
-// The five MBS content fields of a line, the ONLY thing diffLineItems compares. `id` and
-// `line_no` are deliberately outside this Pick ([fingerprint-excludes-line-ids]).
-type LineContent = Pick<InvoiceLineItem, 'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax'>
+// The 14 content fields of a line, the ONLY thing diffLineItems compares. `line_no` is
+// deliberately outside this Pick ([fingerprint-excludes-line-ids]); `id` rides along only
+// to be re-sent.
+type LineContent = Pick<InvoiceLineItem, LineEditKey> & { id?: string }
 
 // The line half of editInvoice's PATCH body: `undefined` when `edited` is
 // content-identical to `original`, so an untouched line editor sends no `line_items` key
@@ -897,7 +999,7 @@ type LineContent = Pick<InvoiceLineItem, 'description' | 'quantity' | 'unit_pric
 // the key is what keeps that churn off edits that never went near a line. `[]` stays
 // reachable: emptying a 2-line invoice returns [], not undefined.
 //
-// Compares BY POSITION over exactly the five fields above, never `id`, never `line_no`
+// Compares BY POSITION over exactly the 14 fields above, never `id`, never `line_no`
 // (line_no is positional, so a reorder correctly reads as a change). Both sides
 // canonicalize '' -> null before comparing AND in the emitted array: React inputs hold
 // '', never null, so a stored-NULL field seeds the form as ''. Without that
@@ -907,31 +1009,28 @@ type LineContent = Pick<InvoiceLineItem, 'description' | 'quantity' | 'unit_pric
 // emits '' into a numeric column, where `$N::text::numeric` raises 22P02 -> ErrValidation
 // -> a 400 on a no-op save.
 //
-const LINE_EDIT_FIELDS = ['description', 'quantity', 'unit_price', 'line_total', 'line_tax'] as const
+// A changed set re-sends every row, a stored row with its `id` so the server keeps its
+// NRS values; an added row has none.
+export const LINE_EDIT_FIELDS: readonly LineEditKey[] = INVOICE_FIELDS.filter((f) => f.line && f.edit).map(
+  (f) => f.key as LineEditKey,
+)
 
 // '' and null are the SAME absent value on BOTH sides. No trimming: the backend does not
 // trim either, and silently rewriting an operator's content is not this helper's job.
-function canonField(v: string | null): string | null {
+function canonField(v: string | null | undefined): string | null {
   return v == null || v === '' ? null : v
 }
 
 function canonLine(line: LineContent): LineItemEditInput {
-  return {
-    description: canonField(line.description),
-    quantity: canonField(line.quantity),
-    unit_price: canonField(line.unit_price),
-    line_total: canonField(line.line_total),
-    line_tax: canonField(line.line_tax),
-  }
+  const row = Object.fromEntries(LINE_EDIT_FIELDS.map((k) => [k, canonField(line[k])])) as unknown as LineItemEditInput
+  return line.id ? { id: line.id, ...row } : row
 }
 
 export function diffLineItems(
   original: ReadonlyArray<LineContent>,
   edited: ReadonlyArray<LineContent>,
 ): LineItemEditInput[] | undefined {
-  // Fresh objects over the five fields only, so `id`/`line_no` cannot leak onto the wire
-  // even when the caller hands us whole InvoiceLineItem rows -- and so neither input array
-  // nor any of its rows is ever written to.
+  // Fresh objects, so neither input array nor any of its rows is ever written to.
   const next = edited.map(canonLine)
   if (next.length === original.length) {
     const prev = original.map(canonLine)
@@ -1058,51 +1157,86 @@ export function computedLineSum(lines: ReadonlyArray<Pick<InvoiceLineItem, 'quan
 // InvoiceDetail.tsx, task-391, BUG-03-02).
 export type EditFormState = Record<EditFieldKey, string>
 
-export function formFromInvoice(inv: Pick<InvoiceRecord, EditFieldKey>): EditFormState {
-  return {
-    issue_date: toDateInputValue(inv.issue_date),
-    supplier_tin: inv.supplier_tin ?? '',
-    supplier_name: inv.supplier_name ?? '',
-    buyer_tin: inv.buyer_tin ?? '',
-    buyer_name: inv.buyer_name ?? '',
-    currency: inv.currency ?? '',
-    subtotal: inv.subtotal ?? '',
-    vat: inv.vat ?? '',
-    total: inv.total ?? '',
-  }
+const LEGACY_EDIT_KEYS: ReadonlySet<EditFieldKey> = new Set([
+  'issue_date', 'supplier_tin', 'supplier_name', 'buyer_tin', 'buyer_name', 'currency', 'subtotal', 'vat', 'total',
+])
+const DATE_EDIT_KEYS: ReadonlySet<string> = new Set(
+  INVOICE_FIELDS.filter((f) => !f.line && f.edit && f.type === 'date').map((f) => f.key),
+)
+
+// A real calendar day written exactly YYYY-MM-DD.
+function isIsoDay(text: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
+  if (!m) return false
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]))
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3]
 }
 
-// diffEditInput only sends changed fields -- PATCHing all 9 on every submit would silently
-// blank out the ones the user didn't touch. issue_date is special-cased: Go's *time.Time
-// decode rejects a bare date, so a bare YYYY-MM-DD is normalised to midnight UTC, and a
-// cleared date is dropped since PATCH cannot represent an explicit clear.
+// The refusal for a malformed free-text NRS date (blank is fine); issue_date is left to the server.
+export function nrsDateError(key: string, value: string): string | null {
+  const text = value.trim()
+  if (text === '' || key === 'issue_date' || isIsoDay(text)) return null
+  return `${labelOf(key as InvoiceField['key'])} must be a date as YYYY-MM-DD.`
+}
+
+export function editDateError(form: Record<string, string>): string | null {
+  for (const key of DATE_EDIT_KEYS) {
+    const err = nrsDateError(key, form[key] ?? '')
+    if (err) return err
+  }
+  return null
+}
+
+export function formFromInvoice(inv: Pick<InvoiceRecord, EditFieldKey>): EditFormState {
+  const form = {} as EditFormState
+  for (const key of EDIT_FIELD_KEYS) {
+    form[key] = DATE_EDIT_KEYS.has(key) ? toDateInputValue(inv[key]) : (inv[key] ?? '')
+  }
+  return form
+}
+
+// An editor value as its PATCH value; `undefined` means leave the key out. Go's *time.Time
+// decode rejects a bare date, so a date becomes midnight UTC. A blank legacy text key is
+// sent as "" and a blank issue_date is dropped, since PATCH cannot clear it; a blank NRS
+// key is null, which clears it and never stores "".
+export function editValueToWire(key: EditFieldKey, value: string): string | null | undefined {
+  const date = DATE_EDIT_KEYS.has(key)
+  const text = date ? value.trim() : value
+  if (LEGACY_EDIT_KEYS.has(key)) {
+    if (key !== 'issue_date') return value
+    if (!text) return undefined
+  } else if (!text.trim()) {
+    return null
+  }
+  return date && /^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text}T00:00:00Z` : text
+}
+
+// diffEditInput only sends changed fields -- PATCHing all of them on every submit would
+// silently blank out the ones the user didn't touch. A date is compared as its input value.
 export function diffEditInput(original: Pick<InvoiceRecord, EditFieldKey>, form: EditFormState): InvoiceEditInput {
   const patch: InvoiceEditInput = {}
   for (const key of EDIT_FIELD_KEYS) {
-    if (key === 'issue_date') {
-      const value = form.issue_date.trim()
-      if (value === toDateInputValue(original.issue_date).trim()) continue
-      if (!value) continue
-      patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00Z` : value
-      continue
-    }
-    if (form[key] === (original[key] ?? '')) continue
-    patch[key] = form[key]
+    const date = DATE_EDIT_KEYS.has(key)
+    const stored = date ? toDateInputValue(original[key]).trim() : (original[key] ?? '')
+    if ((date ? form[key].trim() : form[key]) === stored) continue
+    const wire = editValueToWire(key, form[key])
+    if (wire !== undefined) (patch as Record<string, string | null>)[key] = wire
   }
   return patch
 }
 
-// not_validated/duplicate_request/awaiting_approval are the three reachable
+// not_validated/duplicate_request/awaiting_approval/rule_change_pending are the four reachable
 // BatchSubmitResultItem.reason values (the batchSubmitReason* consts,
 // internal/invoice/batch_submit.go) -- anything else passes through verbatim rather than
 // being swallowed, so an unknown future reason still surfaces something to the operator.
 // awaiting_approval carries awaitingApprovalReason's bytes verbatim (internal/invoice/handlers.go),
-// pinned both ways. The other two stay SPA copy: the server's not-validated sentence forks by status
+// pinned both ways; rule_change_pending does the same with ruleChangePendingReason. The other two stay SPA copy: the server's not-validated sentence forks by status
 // into three arms while the batch token does not, and duplicate_request has no server sentence at all.
 const SKIP_REASON_LABELS: Record<string, string> = {
   not_validated: 'Not validated — validate it first',
   duplicate_request: 'Already submitted with this request',
   awaiting_approval: 'This invoice is waiting on approval — it can be submitted once an approver approves it.',
+  rule_change_pending: 'A custom rule change is being applied to this invoice — it can be submitted once the change has been checked.',
 }
 
 export function skipReasonLabel(reason: string): string {

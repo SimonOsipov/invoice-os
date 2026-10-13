@@ -1,6 +1,6 @@
 // document_map_test.go: specs for documentCreateInput (EXTR-06-02, task-762). Pure Go, no DB.
 // Authored RED in Mode A against a stub, now green against the real mapper (commit a93a9518);
-// QA added adversarial coverage below the MAP-11 spec section (task-762 Mode B).
+// QA added adversarial coverage below the MAP-10 spec section (task-762 Mode B).
 //
 // Spec-to-test map (Test Specs table, EXTR-06-02 / task-762):
 //
@@ -14,7 +14,6 @@
 //	MAP-08 TestDocumentCreateInput_MoneyFieldsPassThroughVerbatim
 //	MAP-09 TestDocumentCreateInput_AmbiguousInvoiceNumberWithDecidedValueStillWritten
 //	MAP-10 TestDocumentCreateInput_LineItemsComeOnlyFromParsedLineNames
-//	MAP-11 TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder
 //
 // Line-item grouping (retiring D-13):
 //
@@ -23,7 +22,6 @@
 //	TestDocumentCreateInput_NoLineRowsLeavesLineItemsNil
 //	TestDocumentCreateInput_AHoleInTheIndicesClosesInOrdinalTerms
 //	TestDocumentCreateInput_MockDefaultNowProducesFourLines
-//	TestImporterLineRoles_MatchesExtractionLineRoles
 //
 // Every spec below carries at least one POSITIVE expected-value assertion (not just an
 // absent-field check a zero-value stub would satisfy vacuously) -- mutation-confirmed
@@ -535,31 +533,6 @@ func mpValuesIndexKeysFromSource(t *testing.T, src string) []string {
 	return nil
 }
 
-// --- MAP-11: the vocabulary drift guard ---------------------------------------------------
-
-// TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder guards against
-// internal/importer growing its own copy of extraction.HeaderFields (required because
-// document_deps_test.go / SX-09 forbids importing internal/extraction, so nothing compiler-
-// links the two lists) that silently drifts from the real vocabulary.
-func TestDocumentCreateInput_MapperFieldNamesMatchesHeaderFieldsInOrder(t *testing.T) {
-	root := sxDepsRepoRoot(t)
-
-	mapperNames := mpStringSliceVar(t, filepath.Join(root, "internal/importer/document.go"), "mapperFieldNames")
-	extractionNames := mpStringSliceVar(t, filepath.Join(root, "internal/extraction/vocabulary.go"), "HeaderFields")
-
-	// Floor + control needle: an absence scan that silently found zero names on BOTH sides
-	// would report "equal" for the wrong reason. Prove each side actually parsed something.
-	if len(extractionNames) == 0 {
-		t.Fatal("parsed 0 names from internal/extraction/vocabulary.go's HeaderFields -- the parser side of this guard is broken, so the comparison below would be vacuous")
-	}
-	if len(mapperNames) == 0 {
-		t.Fatal("parsed 0 names from internal/importer/document.go's mapperFieldNames -- the mapper's own copy of the vocabulary does not exist yet (expected RED for task-762 Mode A)")
-	}
-	if !slices.Equal(mapperNames, extractionNames) {
-		t.Errorf("mapperFieldNames = %v, want %v (element-for-element, in order, matching extraction.HeaderFields)", mapperNames, extractionNames)
-	}
-}
-
 // --- readingCreateInput: the mapper without the number ----------------------------------
 
 // TestReadingCreateInput_IsTheMapperWithoutTheNumber pins the split: readingCreateInput must
@@ -825,94 +798,6 @@ func TestDocumentCreateInput_AHoleInTheIndicesClosesInOrdinalTerms(t *testing.T)
 	}
 }
 
-// AC-9: internal/importer cannot import internal/extraction (document_deps_test.go), so its
-// line-role list is a local copy -- this reads both sides' Go source and compares them
-// element-for-element, matching MAP-11's vocabulary guard for the header fields.
-func TestImporterLineRoles_MatchesExtractionLineRoles(t *testing.T) {
-	root := sxDepsRepoRoot(t)
-
-	extractionRoles := mpResolvedIdentStringSliceVar(t, filepath.Join(root, "internal/extraction/lineitems.go"), "LineRoles")
-	if len(extractionRoles) != 5 {
-		t.Fatalf("resolved %d name(s) from extraction.LineRoles, want exactly 5 -- the resolver side of this guard is broken, so the comparison below would be vacuous", len(extractionRoles))
-	}
-
-	importerRoles := mpStringSliceVar(t, filepath.Join(root, "internal/importer/document.go"), "mapperLineRoles")
-	if len(importerRoles) == 0 {
-		t.Fatal("parsed 0 names from internal/importer/document.go's mapperLineRoles -- the importer's own local copy of the role list does not exist yet (expected RED in Mode A)")
-	}
-	if !slices.Equal(importerRoles, extractionRoles) {
-		t.Errorf("mapperLineRoles = %v, want %v (element-for-element, in order, matching extraction.LineRoles)", importerRoles, extractionRoles)
-	}
-}
-
-// mpResolvedIdentStringSliceVar is mpStringSliceVar's Ident-resolving sibling: it parses path
-// and returns the elements of the top-level `var name = []string{...}` declaration, resolving
-// each Ident element (e.g. extraction.LineRoles, whose elements are consts, not string
-// literals) to its own top-level `const <Ident> = "<literal>"` declaration in the SAME file.
-// mpStringSliceVar only reads BasicLits and returns nil on a slice of Idents.
-func mpResolvedIdentStringSliceVar(t *testing.T, path, name string) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-
-	consts := make(map[string]string)
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || len(vs.Names) != 1 || len(vs.Values) != 1 {
-				continue
-			}
-			lit, ok := vs.Values[0].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				continue
-			}
-			s, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				continue
-			}
-			consts[vs.Names[0].Name] = s
-		}
-	}
-
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != name || len(vs.Values) != 1 {
-				continue
-			}
-			cl, ok := vs.Values[0].(*ast.CompositeLit)
-			if !ok {
-				continue
-			}
-			var out []string
-			for _, elt := range cl.Elts {
-				id, ok := elt.(*ast.Ident)
-				if !ok {
-					continue
-				}
-				lit, ok := consts[id.Name]
-				if !ok {
-					continue
-				}
-				out = append(out, lit)
-			}
-			return out
-		}
-	}
-	return nil
-}
-
 // --- Adversarial coverage (QA, task-762 Mode B) ------------------------------------------
 
 // TestDocumentCreateInput_DuplicateFieldNameLastWriteWins: two rank-0 rows for the same
@@ -1013,54 +898,13 @@ func TestDocumentCreateInput_SourceDocumentIDIsDocumentIDNotJobID(t *testing.T) 
 	}
 }
 
-// mpStringSliceVar parses path and returns the string-literal elements of the top-level
-// `var name = []string{...}` declaration, or nil when no such var exists.
-func mpStringSliceVar(t *testing.T, path, name string) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.VAR {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != name || len(vs.Values) != 1 {
-				continue
-			}
-			cl, ok := vs.Values[0].(*ast.CompositeLit)
-			if !ok {
-				continue
-			}
-			var out []string
-			for _, elt := range cl.Elts {
-				lit, ok := elt.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				s, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					t.Fatalf("unquote %s literal %s: %v", name, lit.Value, err)
-				}
-				out = append(out, s)
-			}
-			return out
-		}
-	}
-	return nil
-}
-
 // --- EXTR-12-01: the mock's default result, mapped ---------------------------------------
 
 // AC-6/AC-8, and CONFIRMATORY, not red-first: document_deps_test.go fences this package off from
 // internal/extraction, so the field set below is hand-copied and asserting it would pass whatever
 // the mock actually emits. The oracle for the rename is
-// internal/extraction's TestMockExtractor_DefaultResultNamesAreOnTheVocabulary; MAP-11 links
-// HeaderFields to mapperFieldNames, closing the chain to the columns asserted here.
+// internal/extraction's TestMockExtractor_DefaultResultNamesAreOnTheVocabulary; mapperFieldNames
+// derives from the same internal/invoicefields list as HeaderFields.
 //
 // What this adds over MAP-01: the mock's PARTIAL field set, where three readings are flagged and
 // two carry no value at all, still maps every decided value and leaves the absent ones NULL.
@@ -1826,5 +1670,169 @@ func TestDocumentCreateInput_LinesWithoutAnInvoiceNumberQuarantineWhole(t *testi
 	}
 	if !reflect.DeepEqual(got, invoice.CreateInput{}) {
 		t.Errorf("CreateInput = %+v, want the zero value -- a quarantined document carries no lines", got)
+	}
+}
+
+// --- the nine header fields and five line roles ---
+
+func TestReadingCreateInput_MapsTheNineNewHeaderFields(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "due_date", Value: mpPtr("2026-08-13")},
+		{Name: "buyer_email", Value: mpPtr("a@b.ng")},
+		{Name: "buyer_telephone", Value: mpPtr("+2348012345678")},
+		{Name: "buyer_street", Value: mpPtr("1 Marina")},
+		{Name: "buyer_city", Value: mpPtr("Lagos")},
+		{Name: "buyer_postal_zone", Value: mpPtr("100001")},
+		{Name: "buyer_country", Value: mpPtr("NG")},
+		{Name: "buyer_state", Value: mpPtr("Lagos State")},
+		{Name: "buyer_lga", Value: mpPtr("Ikeja")},
+	}}
+	got, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v", rowErr)
+	}
+	if got.DueDate == nil || !got.DueDate.Equal(time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("DueDate = %v, want 2026-08-13 UTC", got.DueDate)
+	}
+	for name, p := range map[string]*string{
+		"buyer_email": got.BuyerEmail, "buyer_telephone": got.BuyerTelephone, "buyer_street": got.BuyerStreet,
+		"buyer_city": got.BuyerCity, "buyer_postal_zone": got.BuyerPostalZone, "buyer_country": got.BuyerCountry,
+		"buyer_state": got.BuyerState, "buyer_lga": got.BuyerLGA,
+	} {
+		var want string
+		for _, f := range ex.Fields {
+			if f.Name == name {
+				want = *f.Value
+			}
+		}
+		if p == nil || *p != want {
+			t.Errorf("%s = %v, want %q", name, p, want)
+		}
+	}
+}
+
+func TestReadingCreateInput_MapsTheFiveNewLineRoles(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "line_items[1].hsn_code", Value: mpPtr("8517")},
+		{Name: "line_items[1].price_unit", Value: mpPtr("per kg")},
+		{Name: "line_items[1].tax_category", Value: mpPtr("Standard")},
+		{Name: "line_items[2].isic_code", Value: mpPtr("4711")},
+		{Name: "line_items[2].sellers_item_identification", Value: mpPtr("SKU-9")},
+	}}
+	got, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr != nil || len(got.LineItems) != 2 {
+		t.Fatalf("rowErr = %+v, lines = %d, want nil and 2", rowErr, len(got.LineItems))
+	}
+	a, b := got.LineItems[0], got.LineItems[1]
+	if a.HSNCode == nil || *a.HSNCode != "8517" || a.PriceUnit == nil || *a.PriceUnit != "per kg" ||
+		a.TaxCategory == nil || *a.TaxCategory != "Standard" || a.ISICCode != nil || a.SellersItemIdentification != nil {
+		t.Errorf("line 1 = %+v", a)
+	}
+	if b.ISICCode == nil || *b.ISICCode != "4711" || b.SellersItemIdentification == nil || *b.SellersItemIdentification != "SKU-9" ||
+		b.HSNCode != nil || b.PriceUnit != nil || b.TaxCategory != nil {
+		t.Errorf("line 2 = %+v", b)
+	}
+}
+
+func TestReadingCreateInput_ANewFieldNotReadStaysNil(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "due_date", Value: nil},
+		{Name: "buyer_city", Value: mpPtr("Lagos")},
+	}}
+	got, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v", rowErr)
+	}
+	if got.BuyerState != nil || got.DueDate != nil {
+		t.Errorf("BuyerState = %v, DueDate = %v, want nil, nil", got.BuyerState, got.DueDate)
+	}
+	if got.BuyerCity == nil {
+		t.Error("BuyerCity = nil, want the control value")
+	}
+}
+
+func TestReadingCreateInput_AnUnparseableDueDateIsARowError(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{{Name: "due_date", Value: mpPtr("13/08/2026")}}}
+	_, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr == nil || rowErr.Field != "due_date" || !strings.Contains(rowErr.Message, "13/08/2026") {
+		t.Errorf("rowErr = %+v, want Field due_date naming the value", rowErr)
+	}
+}
+
+func TestCarriedInput_CarriesTheNewFields(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "invoice_number", Value: nil, Reason: mpPtr("unreadable")},
+		{Name: "issue_date", Value: mpPtr("2026-03-01")},
+		{Name: "total", Value: mpPtr("10.00")},
+		{Name: "buyer_email", Value: mpPtr("a@b.ng")},
+		{Name: "line_items[1].hsn_code", Value: mpPtr("8517")},
+	}}
+	in, ok := carriedInput("d", ex)
+	if !ok {
+		t.Fatal("carriedInput ok = false, want true")
+	}
+	if in.BuyerEmail == nil || *in.BuyerEmail != "a@b.ng" ||
+		len(in.LineItems) != 1 || in.LineItems[0].HSNCode == nil || *in.LineItems[0].HSNCode != "8517" {
+		t.Errorf("carried input = %+v, want BuyerEmail and line 1 HSNCode set", in)
+	}
+}
+
+func TestReadingCreateInput_ABlankNewFieldIsNilNotEmptyText(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "due_date", Value: mpPtr("  ")},
+		{Name: "buyer_email", Value: mpPtr(" ")},
+		{Name: "buyer_state", Value: mpPtr("  ")},
+		{Name: "line_items[1].hsn_code", Value: mpPtr(" ")},
+		{Name: "buyer_city", Value: mpPtr(" Lagos ")},
+		{Name: "line_items[1].price_unit", Value: mpPtr(" kg ")},
+	}}
+	got, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr != nil {
+		t.Fatalf("rowErr = %+v", rowErr)
+	}
+	if got.BuyerCity == nil || *got.BuyerCity != "Lagos" {
+		t.Fatalf("control BuyerCity = %q, want trimmed Lagos", mpShow(got.BuyerCity))
+	}
+	if len(got.LineItems) != 1 {
+		t.Fatalf("lines = %d, want 1", len(got.LineItems))
+	}
+	if pu := got.LineItems[0].PriceUnit; pu == nil || *pu != "kg" {
+		t.Errorf("PriceUnit = %q, want trimmed kg", mpShow(pu))
+	}
+	if got.DueDate != nil || got.BuyerEmail != nil || got.BuyerState != nil || got.LineItems[0].HSNCode != nil {
+		t.Errorf("DueDate=%v BuyerEmail=%q BuyerState=%q HSNCode=%q, want all nil (ENGI-07 D7)",
+			got.DueDate, mpShow(got.BuyerEmail), mpShow(got.BuyerState), mpShow(got.LineItems[0].HSNCode))
+	}
+}
+
+func mpShow(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return *p
+}
+
+func TestReadingCreateInput_SupplierFieldsAreNeverSet(t *testing.T) {
+	ex := SettledExtraction{Fields: []extractedField{
+		{Name: "supplier_email", Value: mpPtr("s@x.ng")}, {Name: "supplier_city", Value: mpPtr("Abuja")},
+		{Name: "buyer_city", Value: mpPtr("Lagos")},
+	}}
+	got, rowErr := readingCreateInput("e", "d", ex)
+	if rowErr != nil || got.BuyerCity == nil {
+		t.Fatalf("rowErr=%+v BuyerCity=%v, want nil and set", rowErr, got.BuyerCity)
+	}
+	if got.SupplierEmail != nil || got.SupplierCity != nil || got.SupplierState != nil || got.SupplierLGA != nil {
+		t.Errorf("supplier address fields were set: %+v", got)
+	}
+}
+
+func TestReadingCreateInput_ADueDateWithPaddingParsesAndAnImpossibleOneRefuses(t *testing.T) {
+	ok, rowErr := readingCreateInput("e", "d", SettledExtraction{Fields: []extractedField{{Name: "due_date", Value: mpPtr(" 2026-08-13 ")}}})
+	if rowErr != nil || ok.DueDate == nil || ok.DueDate.Format("2006-01-02") != "2026-08-13" {
+		t.Fatalf("padded due_date: rowErr=%+v DueDate=%v", rowErr, ok.DueDate)
+	}
+	_, rowErr = readingCreateInput("e", "d", SettledExtraction{Fields: []extractedField{{Name: "due_date", Value: mpPtr("2026-13-01")}}})
+	if rowErr == nil || rowErr.Field != "due_date" {
+		t.Errorf("rowErr = %+v, want a due_date RowError", rowErr)
 	}
 }

@@ -242,10 +242,10 @@ export interface StaffAccount {
 }
 
 // POST /auth/mock/staff exists only in the mock build, which every PR fork runs.
-export async function provisionStaffAccount(prefix: string, password?: string): Promise<StaffAccount> {
+export async function provisionStaffAccount(prefix: string, password?: string, opts?: { rulesRole?: boolean }): Promise<StaffAccount> {
   const account = await registerFresh(prefix, password)
   const userId = subjectOf((await signInSession(account.email, account.password)).access_token)
-  const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: userId } })
+  const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: userId, ...(opts?.rulesRole ? { rules_role: true } : {}) } })
   if (grant.status !== 204) throw new Error(`staff grant answered ${grant.status}: ${JSON.stringify(grant.body)}`)
   return { ...account, userId }
 }
@@ -337,6 +337,14 @@ export interface Entity {
   registration: string | null
   sector: string | null
   address: string | null
+  email: string | null
+  telephone: string | null
+  street: string | null
+  city: string | null
+  postal_zone: string | null
+  country: string | null
+  state: string | null
+  lga: string | null
   status: 'active' | 'archived'
   created_at: string
 }
@@ -352,6 +360,70 @@ export interface ListResponse {
   pagination: Pagination
 }
 
+// Customer mirrors internal/customer/customer.go's Customer struct (buyer directory row).
+export interface Customer {
+  id: string
+  tin: string
+  name: string | null
+  contact_person: string | null
+  buyer_type: string | null
+  email: string | null
+  telephone: string | null
+  street: string | null
+  city: string | null
+  postal_zone: string | null
+  country: string | null
+  state: string | null
+  lga: string | null
+  created_at: string
+}
+
+// listCustomers(): GET /v1/customers; `tin` is ListFilter.TIN, an exact match.
+export function listCustomers(token: string, query?: { tin?: string; limit?: number; offset?: number }): Promise<{ customers: Customer[]; pagination: Pagination }> {
+  const params = new URLSearchParams()
+  if (query?.tin !== undefined) params.set('tin', query.tin)
+  if (query?.limit !== undefined) params.set('limit', String(query.limit))
+  if (query?.offset !== undefined) params.set('offset', String(query.offset))
+  const qs = params.toString()
+  return apiFetch(`${apiBase()}/api/invoice/v1/customers${qs ? `?${qs}` : ''}`, { token })
+}
+
+// CodeEntry mirrors internal/invoice/codes.go's CodeEntry; percent is set only for a numeric tax-categories percent.
+export interface CodeEntry {
+  code: string
+  label: string
+  percent: string | null
+}
+
+// searchCodes(): GET /v1/code-lists/{list}; limit defaults to 20 and clamps to 50.
+export function searchCodes(token: string, list: string, query?: { q?: string; limit?: number }): Promise<{ codes: CodeEntry[] }> {
+  const params = new URLSearchParams()
+  if (query?.q !== undefined) params.set('q', query.q)
+  if (query?.limit !== undefined) params.set('limit', String(query.limit))
+  const qs = params.toString()
+  return apiFetch(`${apiBase()}/api/invoice/v1/code-lists/${list}${qs ? `?${qs}` : ''}`, { token })
+}
+
+// CustomerUpdateInput mirrors internal/customer/customer.go's updateRequest; tin is not editable.
+export interface CustomerUpdateInput {
+  name?: string
+  contact_person?: string
+  buyer_type?: string
+  email?: string
+  telephone?: string
+  street?: string
+  city?: string
+  postal_zone?: string
+  country?: string
+  state?: string
+  lga?: string
+}
+
+// updateCustomer(): PATCH /v1/customers/{id}.
+export function updateCustomer(token: string, id: string, body: CustomerUpdateInput): Promise<Customer> {
+  return apiFetch<Customer>(`${apiBase()}/api/invoice/v1/customers/${id}`, { method: 'PATCH', body, token })
+}
+
 export interface Violation {
   rule_key: string
   severity: string
@@ -365,6 +437,14 @@ export interface EntityInput {
   registration?: string | null
   sector?: string | null
   address?: string | null
+  email?: string | null
+  telephone?: string | null
+  street?: string | null
+  city?: string | null
+  postal_zone?: string | null
+  country?: string | null
+  state?: string | null
+  lga?: string | null
 }
 
 export interface EntityUpdateInput {
@@ -373,6 +453,14 @@ export interface EntityUpdateInput {
   registration?: string | null
   sector?: string | null
   address?: string | null
+  email?: string | null
+  telephone?: string | null
+  street?: string | null
+  city?: string | null
+  postal_zone?: string | null
+  country?: string | null
+  state?: string | null
+  lga?: string | null
 }
 
 export interface ListEntitiesQuery {
@@ -459,6 +547,15 @@ export interface InvoiceLineItem {
   unit_price: string | null
   line_total: string | null
   line_tax: string | null
+  tax_category: string | null
+  hsn_code: string | null
+  isic_code: string | null
+  product_category: string | null
+  service_category: string | null
+  sellers_item_identification: string | null
+  price_unit: string | null
+  tax_percent: string | null
+  base_quantity: string | null
 }
 
 // Invoice mirrors internal/invoice/invoice.go's Invoice struct exactly (M4-04-08,
@@ -498,11 +595,33 @@ export interface Invoice {
   kept_as_is_at: string | null
   kept_as_is_by: string | null
   kept_as_is_reason: string | null
+  invoice_kind: string | null
+  tax_currency_code: string | null
+  due_date: string | null
+  issue_time: string | null
+  tax_point_date: string | null
+  payment_status: string | null
+  supplier_email: string | null
+  supplier_telephone: string | null
+  supplier_street: string | null
+  supplier_city: string | null
+  supplier_postal_zone: string | null
+  supplier_country: string | null
+  supplier_state: string | null
+  supplier_lga: string | null
+  buyer_email: string | null
+  buyer_telephone: string | null
+  buyer_street: string | null
+  buyer_city: string | null
+  buyer_postal_zone: string | null
+  buyer_country: string | null
+  buyer_state: string | null
+  buyer_lga: string | null
   line_items?: InvoiceLineItem[]
 }
 
 // InvoiceListItem mirrors internal/invoice/handlers.go's listItem: Invoice embedded plus
-// FIVE additive siblings. `approval` sits here and NOT on Invoice because Go declares it
+// SIX additive siblings. `approval` sits here and NOT on Invoice because Go declares it
 // on listItem only -- getResponse does not carry it, so a GET-detail consumer reading it
 // off Invoice would get `undefined` where the type promised `InvoiceApproval | null`. Same
 // reason the POST/PATCH/transition responses (all plain Invoice) do not carry it.
@@ -510,7 +629,7 @@ export interface Invoice {
 // (BUG-12) ride BOTH wires, each from one gate call; the reject pair stays detail-only
 // (U5a). GetInvoiceResult keeps its OWN copy of the submit pair rather than inheriting:
 // both interfaces extend the bare Invoice, so there is nothing to inherit through.
-// All five are required, not optional: no omitempty on any Go field, so an invoice with
+// All of them are required, not optional: no omitempty on any Go field, so an invoice with
 // no run emits an explicit null (TestListItem_InvoiceKeysUnmovedAndUnrenamed,
 // TestListItem_ApproveFlagsCarryNoOmitempty, TestListHandler_NoActionFlagKeys).
 export interface InvoiceListItem extends Invoice {
@@ -519,6 +638,7 @@ export interface InvoiceListItem extends Invoice {
   approve_blocked_reason: string | null
   can_submit: boolean
   submit_blocked_reason: string | null
+  demotion: Demotion | null
 }
 
 // Mirrors approval.RowFacts (internal/approval/gate.go) key for key -- its six WIRE keys.
@@ -580,9 +700,20 @@ export function listInvoices(token: string, query?: ListInvoicesQuery): Promise<
 // can_edit, and do not read a validated status as proof it is null.
 // CanViewUBL/UBLBlockedReason (BUG-04-03): same no-omitempty
 // convention; content-derived (ubl.Missing), never status-derived.
+// InvoiceTaxSubtotal mirrors internal/invoice's TaxSubtotal: one tax category's totals.
+export interface InvoiceTaxSubtotal {
+  tax_category: string
+  tax_percent: string | null
+  taxable_amount: string | null
+  tax_amount: string | null
+}
+
 export interface GetInvoiceResult extends Invoice {
+  // Derived from the lines, directly after the Invoice keys; [] when none.
+  tax_subtotals: InvoiceTaxSubtotal[]
   rule_set_version: number | null
   qr_png_base64: string | null
+  verdict_stale: boolean
   can_edit: boolean
   can_revalidate: boolean
   revalidate_blocked_reason: string | null
@@ -624,6 +755,29 @@ export interface InvoiceEditInput {
   vat?: string
   total?: string
   invoice_number?: string
+  // The 22 NRS keys; an explicit null clears the stored value.
+  invoice_kind?: string | null
+  tax_currency_code?: string | null
+  due_date?: string | null
+  issue_time?: string | null
+  tax_point_date?: string | null
+  payment_status?: string | null
+  supplier_email?: string | null
+  supplier_telephone?: string | null
+  supplier_street?: string | null
+  supplier_city?: string | null
+  supplier_postal_zone?: string | null
+  supplier_country?: string | null
+  supplier_state?: string | null
+  supplier_lga?: string | null
+  buyer_email?: string | null
+  buyer_telephone?: string | null
+  buyer_street?: string | null
+  buyer_city?: string | null
+  buyer_postal_zone?: string | null
+  buyer_country?: string | null
+  buyer_state?: string | null
+  buyer_lga?: string | null
   // line_items (INVED-01-08) mirrors editReq.LineItems, a POINTER to a slice on the Go side
   // (editReq.LineItems, `*[]lineItemReq`) -- three states over the wire: the
   // key ABSENT (or `undefined`, which JSON.stringify drops) leaves the stored lines
@@ -632,11 +786,21 @@ export interface InvoiceEditInput {
   // InvoiceCreateLineItem below rather than shared -- the two wire request types
   // (createRequest/editReq) are themselves independent on the Go side.
   line_items?: Array<{
+    id?: string
     description?: string
     quantity?: string
     unit_price?: string
     line_total?: string
     line_tax?: string
+    tax_category?: string
+    hsn_code?: string
+    isic_code?: string
+    product_category?: string
+    service_category?: string
+    sellers_item_identification?: string
+    price_unit?: string
+    tax_percent?: string
+    base_quantity?: string
   }>
 }
 
@@ -658,6 +822,30 @@ export interface StatusChange {
   actor_name: string
   actor_kind: string
   changed_at: string
+  cause: HistoryCause | null
+  custom_rule_cause: CustomRuleCause | null
+}
+
+export interface CustomRuleCause {
+  custom_rule_id: string
+  revision: number
+  revision_id: string
+  key: string
+  message: string
+}
+
+// effective_from is YYYY-MM-DD, null for an undated version.
+export interface HistoryCause {
+  rule_set_version: number
+  rule_set_version_id: string
+  effective_from: string | null
+}
+
+// A list row's re-check demotion: the latest history row's cause, set only while the invoice is a draft.
+export interface Demotion {
+  changed_at: string
+  cause: HistoryCause | null
+  custom_rule_cause: CustomRuleCause | null
 }
 
 // getInvoiceHistory(): GET /v1/invoices/{id}/history (task-160/M4-22-01). The success
@@ -686,6 +874,32 @@ export function validateInvoice(token: string, id: string): Promise<ValidateInvo
   return apiFetch<ValidateInvoiceResult>(`${apiBase()}/api/invoice/v1/invoices/${id}/validate`, { method: 'POST', token })
 }
 
+// ExplainFix mirrors internal/invoice/explain.go's ExplainFix; line is null for a header field.
+export interface ExplainFix {
+  field: string
+  label: string
+  line: number | null
+  current: string | null
+  value: string
+}
+
+// ExplainResult mirrors internal/invoice/explain.go's ExplainResult.
+export interface ExplainResult {
+  status: 'ok' | 'unavailable'
+  explanation: string | null
+  fix: ExplainFix | null
+}
+
+// explainViolation(): POST /v1/invoices/{id}/explain (internal/invoice/handlers_explain.go's
+// ExplainHandler). 404 for a foreign invoice, 409 for a violation not on the stored verdict.
+export function explainViolation(
+  token: string,
+  id: string,
+  body: { rule_key: string; path: string },
+): Promise<ExplainResult> {
+  return apiFetch<ExplainResult>(`${apiBase()}/api/invoice/v1/invoices/${id}/explain`, { method: 'POST', body, token })
+}
+
 // One line of InvoiceCreateInput's line_items. Named rather than inlined so
 // wireMirrors.test.ts's tsInterfaceKeys can read InvoiceCreateInput at all -- its body
 // regex is `[^{}]*`, and a nested object literal makes the whole interface extract to []
@@ -698,6 +912,16 @@ export interface InvoiceCreateLineItem {
   unit_price?: string
   line_total?: string
   line_tax?: string
+  id?: string
+  tax_category?: string
+  hsn_code?: string
+  isic_code?: string
+  product_category?: string
+  service_category?: string
+  sellers_item_identification?: string
+  price_unit?: string
+  tax_percent?: string
+  base_quantity?: string
 }
 
 // InvoiceCreateInput mirrors internal/invoice/handlers.go's createRequest wire body
@@ -722,6 +946,28 @@ export interface InvoiceCreateInput {
   // EXTR-15-06: the document a hand-off was started from; appended last, matching
   // createRequest's own declaration order.
   source_document_id?: string
+  invoice_kind?: string
+  tax_currency_code?: string
+  due_date?: string
+  issue_time?: string
+  tax_point_date?: string
+  payment_status?: string
+  supplier_email?: string
+  supplier_telephone?: string
+  supplier_street?: string
+  supplier_city?: string
+  supplier_postal_zone?: string
+  supplier_country?: string
+  supplier_state?: string
+  supplier_lga?: string
+  buyer_email?: string
+  buyer_telephone?: string
+  buyer_street?: string
+  buyer_city?: string
+  buyer_postal_zone?: string
+  buyer_country?: string
+  buyer_state?: string
+  buyer_lga?: string
 }
 
 // createInvoice(): POST /v1/invoices. Reuses the Invoice interface above -- same
@@ -734,10 +980,16 @@ export function createInvoice(token: string, body: InvoiceCreateInput): Promise<
 // ([upload-once]: preview -> document_id, then import -> id). Raw fetch, not apiFetch --
 // apiFetch always JSON-serializes its body, which cannot carry a multipart file (mirrors
 // contract-import.spec.ts's own local previewFetch/importFetch pair).
-export async function createImportBatch(token: string, entityId: string, invoiceNumber: string): Promise<string> {
+export async function createImportBatch(
+  token: string,
+  entityId: string,
+  invoiceNumber: string,
+  lines: { item: string; qty: string; unitPrice: string }[] = [{ item: 'Item 1', qty: '1', unitPrice: '100.00' }],
+): Promise<string> {
   const csvHeader = 'Invoice No,Issue Date,Buyer TIN,Buyer,Currency,Subtotal,VAT,Total,Item,Qty,Unit Price'
-  const row = [invoiceNumber, '2026-01-15', '87654321-0002', 'Batch Buyer Ltd', 'NGN', '1000.00', '75.00', '1075.00', 'Item 1', '1', '100.00'].join(
-    ',',
+  // One CSV row per line; rows sharing an invoice number group into one invoice.
+  const rows = lines.map((l) =>
+    [invoiceNumber, '2026-01-15', '87654321-0002', 'Batch Buyer Ltd', 'NGN', '1000.00', '75.00', '1075.00', l.item, l.qty, l.unitPrice].join(','),
   )
   const mapping: Record<string, string> = {
     invoice_number: 'Invoice No',
@@ -754,7 +1006,7 @@ export async function createImportBatch(token: string, entityId: string, invoice
   }
 
   const previewForm = new FormData()
-  previewForm.set('file', new Blob([`${csvHeader}\n${row}`], { type: 'text/csv' }), 'import.csv')
+  previewForm.set('file', new Blob([`${csvHeader}\n${rows.join('\n')}`], { type: 'text/csv' }), 'import.csv')
   const preview = await fetch(`${apiBase()}/api/invoice/v1/imports/preview`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
@@ -1348,6 +1600,91 @@ export interface AuditLogQuery {
   invoice_id?: string
 }
 
+// ---- custom rules: internal/customrule (Rule, RuleInput), /api/invoice/v1/custom-rules ----
+
+export interface CustomRule {
+  id: string
+  key: string
+  revision: number
+  revision_id: string
+  entity_id: string | null
+  type: string
+  target: string
+  params: unknown
+  severity: 'error' | 'warning'
+  when: string | null
+  message: string
+  enabled: boolean
+  updated_at: string
+  updated_by: string
+}
+
+// internal/validation/rule.go RuleType constants (TypeFormat is "format/regex").
+export type CustomRuleType = 'required' | 'format/regex' | 'enum' | 'range' | 'tax_math' | 'cross_field' | 'conditional' | 'date' | 'cel'
+
+export interface CustomRuleInput {
+  entity_id: string | null
+  type: CustomRuleType
+  target: string
+  params: unknown
+  severity: 'error' | 'warning'
+  when?: string | null
+  message: string
+  enabled: boolean
+}
+
+export async function listCustomRules(token: string): Promise<CustomRule[]> {
+  const res = await apiFetch<{ custom_rules: CustomRule[] }>(`${apiBase()}/api/invoice/v1/custom-rules`, { token })
+  return res.custom_rules
+}
+
+export function createCustomRule(token: string, body: CustomRuleInput): Promise<CustomRule> {
+  return apiFetch<CustomRule>(`${apiBase()}/api/invoice/v1/custom-rules`, { method: 'POST', body, token })
+}
+
+export function updateCustomRule(token: string, id: string, body: CustomRuleInput): Promise<CustomRule> {
+  return apiFetch<CustomRule>(`${apiBase()}/api/invoice/v1/custom-rules/${id}`, { method: 'PUT', body, token })
+}
+
+// Raw, so the 204's empty body is not parsed; the caller asserts the status.
+export async function deleteCustomRule(token: string, id: string): Promise<number> {
+  const res = await rawFetch(`/api/invoice/v1/custom-rules/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
+  return res.status
+}
+
+// ---- golden rules: internal/validation GoldenRules, /api/validation/v1/rules ----
+
+export interface GoldenRule {
+  key: string
+  type: string
+  target: string
+  params: unknown
+  severity: 'error' | 'warning' | 'info'
+  when: string | null
+  message: string
+}
+
+export interface GoldenVersion {
+  rule_set_version_id: string
+  version: number
+  state: 'in_force' | 'scheduled' | 'superseded'
+  effective_from: string
+  rule_count: number
+}
+
+export interface GoldenRules {
+  today: string
+  versions: GoldenVersion[]
+  rule_set_version_id: string
+  version: number
+  effective_from: string
+  rules: GoldenRule[]
+}
+
+export function getGoldenRules(token: string): Promise<GoldenRules> {
+  return apiFetch<GoldenRules>(`${apiBase()}/api/validation/v1/rules`, { token })
+}
+
 // getAuditLog(): GET /v1/audit-log on the invoice binary — the workspace audit reader.
 // `!== undefined` rather than truthiness, so q='' stays sendable and is not silently dropped.
 export function getAuditLog(token: string, query?: AuditLogQuery): Promise<AuditResponse> {
@@ -1411,7 +1748,7 @@ export interface ExtractionPage {
   height_px: number
 }
 
-export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing'
+export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing' | 'rule_break'
 
 export interface ExtractionCandidate {
   value: string | null
@@ -1424,6 +1761,11 @@ export interface ExtractionCorrected {
   where: string | null
 }
 
+export interface ExtractionRuleBreak {
+  key: string
+  message: string
+}
+
 export interface ExtractionFieldState {
   name: string
   value: string | null
@@ -1431,6 +1773,7 @@ export interface ExtractionFieldState {
   reason: ExtractionReason
   alternatives: ExtractionCandidate[]
   corrected: ExtractionCorrected | null
+  rules: ExtractionRuleBreak[]
 }
 
 export interface ExtractionDocument {
@@ -1504,6 +1847,11 @@ export interface LineItemInput {
   unit_price: string | null
   line_total: string | null
   line_tax: string | null
+  tax_category: string | null
+  hsn_code: string | null
+  isic_code: string | null
+  sellers_item_identification: string | null
+  price_unit: string | null
 }
 
 export interface LineItemsRequest {

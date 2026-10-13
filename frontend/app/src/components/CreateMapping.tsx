@@ -14,12 +14,12 @@
 // The guard below therefore requires `preview` and `mapping`: this screen is reachable
 // only from the import path, which sets both.
 
-import { CANON } from '../data'
+import { CANON, DOC_TYPE_DEFS } from '../data'
 import { recognize } from '../lib/mapping'
 import { previewColumns } from '../lib/importFlow'
-import { coverageSentence, placementBadge, restoredNotice } from '../lib/mappingGroups'
+import { coverageSentence, placementBadge, restoredNotice, type InvoiceKind } from '../lib/mappingGroups'
 import { runFailures, runIsActive } from '../lib/importRun'
-import { gripGlyph, shieldGlyph, tickGlyph13, xSmallGlyph } from '../glyphs'
+import { chevDownGlyph, gripGlyph, shieldGlyph, tickGlyph13, xSmallGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
@@ -222,6 +222,31 @@ export function CreateMapping({ ctx }: { ctx: PlatformCtx }) {
                 </button>
               ))}
             </div>
+          )}
+          {!mapping.invoice_kind && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+              <span className="label">Buyer type for every row</span>
+              <span style={{ position: 'relative', display: 'inline-block' }}>
+                <select
+                  className="pf-select"
+                  data-testid="map-invoice-kind"
+                  value={activeGroup?.invoiceKind ?? ''}
+                  disabled={uploading}
+                  onChange={(e) => activeGroup && ctx.setInvoiceKind(activeGroup.id, (e.target.value || undefined) as InvoiceKind | undefined)}
+                  style={{ height: 30, padding: '0 30px 0 10px', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-1)', fontSize: 12.5, cursor: uploading ? 'not-allowed' : 'pointer' }}
+                >
+                  <option value="">Not set</option>
+                  {DOC_TYPE_DEFS.map(([kind, label]) => (
+                    <option key={kind} value={kind}>
+                      {kind} · {label}
+                    </option>
+                  ))}
+                </select>
+                <span aria-hidden="true" style={{ position: 'absolute', right: 9, top: '50%', transform: 'translateY(-50%)', display: 'inline-flex', color: 'var(--fg-3)', pointerEvents: 'none' }}>
+                  {chevDownGlyph}
+                </span>
+              </span>
+            </label>
           )}
         </div>
       </div>

@@ -30,7 +30,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
         border: 'var(--status-amber-border)',
         text: 'var(--status-amber-text)',
         icon: SANDBOX_ICON,
-        msg: 'Sandbox — operating against simulated clearance. Re-drives and kill-switches affect simulated traffic only.',
+        msg: 'Sandbox — operating against simulated clearance. Re-drives affect simulated traffic only. Rule switches are real and apply to every tenant.',
         tag: 'CROSS-TENANT · ALL ENTITIES',
       }
     : {
@@ -38,7 +38,7 @@ export function TopBar({ screen, env, onSetEnv }: Props) {
         border: 'var(--status-red-border)',
         text: 'var(--status-red-text)',
         icon: ALERT_ICON,
-        msg: 'LIVE — cross-tenant scope. Nothing here reaches production traffic or the audit log until NRS accreditation.',
+        msg: 'LIVE — cross-tenant scope. Re-drives and cancellations reach no production traffic until NRS accreditation. Rule switches are real and audited.',
         tag: 'CROSS-TENANT · PENDING ACCREDITATION',
       }
 

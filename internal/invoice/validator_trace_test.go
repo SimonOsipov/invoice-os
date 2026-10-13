@@ -13,7 +13,7 @@ import (
 
 func TestValidatorTrace_PropagatesToValidation(t *testing.T) {
 	sentrytest.Boot(t, "invoice")
-	body := fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"x","results":[{"ref":"inv-1","violations":[]}]}`, cannedRuleSetVersion)
+	body := fmt.Sprintf(`{"rule_set_version":%[1]d,"rule_set_version_id":"x","results":[{"ref":"inv-1","violations":[],"rule_set_version":%[1]d,"rule_set_version_id":"x"}]}`, cannedRuleSetVersion)
 	stub := sentrytest.NewHeaderStub(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
@@ -48,7 +48,7 @@ func TestValidatorTrace_PropagatesToValidation(t *testing.T) {
 
 func TestValidatorTrace_InjectedClientIsNotTraced(t *testing.T) {
 	sentrytest.Boot(t, "invoice")
-	body := fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"x","results":[{"ref":"inv-1","violations":[]}]}`, cannedRuleSetVersion)
+	body := fmt.Sprintf(`{"rule_set_version":%[1]d,"rule_set_version_id":"x","results":[{"ref":"inv-1","violations":[],"rule_set_version":%[1]d,"rule_set_version_id":"x"}]}`, cannedRuleSetVersion)
 	stub := sentrytest.NewHeaderStub(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(body))
 	})

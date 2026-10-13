@@ -111,26 +111,31 @@ const (
 	ScopeUnattributed CompanyScope = "unattributed"
 )
 
-// firmWideEvents are the sixteen genuinely firm-wide event names — the whole of the
-// Policies (4), Roles (4), Memberships (6) and Validation-rule (2) domains (§2 rule 2).
+// firmWideEvents are the genuinely firm-wide event names (§2 rule 2): the whole of the
+// Policies, Roles, Memberships, Validation-rule, Buyers and Custom-rule domains. A client-scoped
+// custom rule's event carries its entity_id, so only the firm-wide ones read as workspace.
 // Hand-maintained: nothing derives this set from the SQL resolver.
 var firmWideEvents = map[string]struct{}{
-	"approval_policy.created":   {},
-	"approval_policy.updated":   {},
-	"approval_policy.published": {},
-	"approval_policy.deleted":   {},
-	"workflow_role.created":     {},
-	"workflow_role.updated":     {},
-	"workflow_role.deleted":     {},
-	"workflow_role.staffed":     {},
-	"membership.suspended":      {},
-	"membership.reactivated":    {},
-	"workspace.provisioned":     {},
-	"invitation.sent":           {},
-	"invitation.resent":         {},
-	"invitation.accepted":       {},
-	"validation.rule.enabled":   {},
-	"validation.rule.disabled":  {},
+	"approval_policy.created":    {},
+	"approval_policy.updated":    {},
+	"approval_policy.published":  {},
+	"approval_policy.deleted":    {},
+	"workflow_role.created":      {},
+	"workflow_role.updated":      {},
+	"workflow_role.deleted":      {},
+	"workflow_role.staffed":      {},
+	"membership.suspended":       {},
+	"membership.reactivated":     {},
+	"workspace.provisioned":      {},
+	"invitation.sent":            {},
+	"invitation.resent":          {},
+	"invitation.accepted":        {},
+	"validation.rule.enabled":    {},
+	"validation.rule.disabled":   {},
+	"customers.customer.updated": {},
+	"custom_rule.created":        {},
+	"custom_rule.updated":        {},
+	"custom_rule.deleted":        {},
 }
 
 // ScopeOf classifies one event (§2): entity_id set → company; entity_id nil and event in

@@ -296,6 +296,7 @@ func TestRLS_ExtractWorkerWritesReconciledResults(t *testing.T) {
 		want = append(want, f.name)
 		wpAssertRankZero(t, rows, f.name, stPtr(f.value), nil)
 	}
+	want = append(want, t1AIOnlyFields...) // Reconcile writes a missing row for each
 	slices.Sort(want)
 	if got := wpRankZeroNames(rows); !slices.Equal(got, want) {
 		t.Errorf("the job wrote rank-0 rows %v, want %v", got, want)

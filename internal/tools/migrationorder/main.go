@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 func main() {
 	base := flag.String("base", "", "base branch commit the change will land on")
 	head := flag.String("head", "HEAD", "commit holding the change")
+	mainRef := flag.String("main", "origin/main", "ref whose migrations count as already applied")
 	flag.Parse()
 
 	if *base == "" {
@@ -36,7 +38,25 @@ func main() {
 		os.Exit(2)
 	}
 
-	violations, err := Check(lines(added), lines(onBase))
+	onMain, err := git("ls-tree", "--name-only", *mainRef, "--", Dir+"/")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "migrationorder: git ls-tree %s: %v\n", *mainRef, err)
+		os.Exit(2)
+	}
+
+	// Head already in main (push to main): nothing is "already on main" to skip.
+	// Exit 1 means not an ancestor; any other failure must not leave the skip on.
+	var ee *exec.ExitError
+	switch err := exec.Command("git", "merge-base", "--is-ancestor", *head, *mainRef).Run(); {
+	case err == nil:
+		onMain = ""
+	case errors.As(err, &ee) && ee.ExitCode() == 1:
+	default:
+		fmt.Fprintf(os.Stderr, "migrationorder: git merge-base --is-ancestor %s %s: %v\n", *head, *mainRef, err)
+		os.Exit(2)
+	}
+
+	violations, err := Check(SkipOnMain(lines(added), lines(onMain)), lines(onBase))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
 		os.Exit(2)

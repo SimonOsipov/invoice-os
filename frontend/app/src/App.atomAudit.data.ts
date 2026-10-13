@@ -35,7 +35,7 @@ export type AuditedAtom = {
 // (a) actively reset by switchClient (App.tsx#switchClient), directly or via navigate('dashboard');
 // (b) tenant-scoped or otherwise invariant across a company switch, so it cannot go stale.
 // Shape (b): suspended, bootPath/bootSearch, seed, sandbox, connectors,
-// connectorMappings, customRuleStore, policies, members, roles. Named, not indexed --
+// connectorMappings, policies, members, roles. Named, not indexed --
 // inserting a row renumbers an index list and nothing catches it.
 
 // Every route a screen reading an always-mounted atom can be on: the 13 ROUTE_PATHS
@@ -112,7 +112,7 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     resetBySwitchClient: true,
     routes: ['/create'],
     verdict: 'correctly-reset',
-    citation: { text: 'setDraft(startingDraft(clients.find((c) => c.entityId === id) ?? active, session.handoff === true))' },
+    citation: { text: 'setDraft(seedDraft(clients.find((c) => c.entityId === id) ?? active, entitiesList.find((e) => e.id === id) ?? null, session.handoff === true))' },
     note: 'Re-seeded from the incoming company at App.tsx#switchClient. Read by CreateForm at createStep `form`.',
   },
   {
@@ -214,6 +214,16 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     note: 'Cleared at App.tsx#switchClient, but popstate re-derives it from an older /invoices/<id> entry at App.tsx#onPopState. Reaches the screen as ctx.importedInvoiceId, read by InvoiceDetail. Fixed by ROUTE-06-02.',
   },
   {
+    binding: 'detailLine, setDetailLine',
+    name: 'detailLine',
+    kind: 'useState',
+    resetBySwitchClient: true,
+    routes: ['/invoice', '/invoices/<id>'],
+    verdict: 'correctly-reset',
+    citation: { text: 'setDetailLine(line ?? null)' },
+    note: 'One-shot line target from the review Open line button. Cleared at App.tsx#switchClient and App.tsx#onPopState; reaches the screen as ctx.importedInvoiceLine, read once at InvoiceDetail mount.',
+  },
+  {
     binding: 'auditPrefilter, setAuditPrefilter',
     name: 'auditPrefilter',
     kind: 'useState',
@@ -299,15 +309,6 @@ export const AUDITED_ATOMS: readonly AuditedAtom[] = [
     routes: ['/settings', '/settings/<tab>'],
     verdict: 'correctly-reset',
     note: 'Never fetched; keyed by ConnectorId only (App.tsx#saveConnectorMapping), never by entity, so it has no company dimension to go stale.',
-  },
-  {
-    binding: 'customRuleStore, setCustomRuleStore',
-    name: 'customRuleStore',
-    kind: 'useState',
-    resetBySwitchClient: false,
-    routes: ['/rules'],
-    verdict: 'correctly-reset',
-    note: "Invariant by construction: reads and writes both go through customRulesKey(active.entityId), and only the resolved array reaches ctx. Caveat: every entity-less state collapses onto the shared 'workspace' bucket (lib/rules.ts:222-226).",
   },
   {
     binding: 'openRuleKey, setOpenRuleKey',

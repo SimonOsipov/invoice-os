@@ -36,7 +36,7 @@ type candidate struct {
 // here -- a flagged one reaches this func like any other field.
 func LearnRule(field string, region Region, anchors []AnchorObservation) (LearnedRule, bool) {
 	shape, ok := tier1Shape(field)
-	if !ok {
+	if !ok || !tier1Learnable(field) {
 		return LearnedRule{}, false
 	}
 	// The wire's normalisedBox admits a zero-area box and usableBox does not; this is where a
@@ -106,7 +106,7 @@ func LearnRule(field string, region Region, anchors []AnchorObservation) (Learne
 // bare_tin and the pair is refused. Revisit when this path applies anchorOutranked as Resolve does.
 func LearnBoxlessRule(field, value string, tokens []string) (LearnedRule, bool) {
 	shape, ok := tier1Shape(field)
-	if !ok {
+	if !ok || !tier1Learnable(field) {
 		return LearnedRule{}, false
 	}
 
@@ -179,8 +179,8 @@ func readsAs(shape Shape, raw, value string) bool {
 	return false
 }
 
-// tier1Shape is the field gate and the shape lookup in one linear scan: tier1Specs' field set
-// equals HeaderFields, so a miss here is a field no rule can fill.
+// tier1Shape is the shape lookup in one linear scan: tier1Specs' field set equals HeaderFields,
+// so a miss here is a field no shape can read. An AI-only spec has a shape and no rule.
 func tier1Shape(field string) (Shape, bool) {
 	for _, s := range tier1Specs {
 		if s.field == field {
@@ -188,6 +188,16 @@ func tier1Shape(field string) (Shape, bool) {
 		}
 	}
 	return "", false
+}
+
+// tier1Learnable is false for an AI-only spec (label id ""): a correction of it teaches no rule.
+func tier1Learnable(field string) bool {
+	for _, s := range tier1Specs {
+		if s.field == field {
+			return s.labelID != ""
+		}
+	}
+	return false
 }
 
 func anchorRegion(o AnchorObservation) Region {
@@ -372,6 +382,9 @@ const (
 // LearnTypedRule learns from a typed value only when it names one page token, LearnRule derives
 // from that token's box, and the rule alone re-reads the page as exactly that value.
 func LearnTypedRule(field, value string, page TokenPage, anchors []AnchorObservation) (LearnedRule, TypedVerdict) {
+	if !tier1Learnable(field) {
+		return LearnedRule{}, TypedNoToken
+	}
 	// An unknown field or an unreadable value has no reading, so no token carries it.
 	shape, _ := tier1Shape(field)
 	want := shape.Normalize(value)

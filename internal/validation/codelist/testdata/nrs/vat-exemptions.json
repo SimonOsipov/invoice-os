@@ -1,0 +1,40 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "heading_no": "29.15",
+      "harmonized_system_code": "2915.3100",
+      "tariff_category": "MEDICAL, VENTIRINARY AND PHARMACEUTICAL RAW MATERIALS AND PRODUCTS",
+      "tariff": "Ethyl acetate",
+      "description": "Saturated acyclic monocarboxylic acids and their derivatives."
+    },
+    {
+      "heading_no": "29.16",
+      "harmonized_system_code": "2916.3900",
+      "tariff_category": "MEDICAL, VENTIRINARY AND PHARMACEUTICAL RAW MATERIALS AND PRODUCTS",
+      "tariff": "Others",
+      "description": "unsaturated Acyclic monocarboxylic acids"
+    },
+    {
+      "heading_no": "02.04",
+      "harmonized_system_code": "0204.3000",
+      "tariff_category": "BASIC FOOD ITEMS",
+      "tariff": "Boneless",
+      "description": "Other meat of sheep, fresh or chilled"
+    },
+    {
+      "heading_no": "02.04",
+      "harmonized_system_code": "0204.3000",
+      "tariff_category": "BASIC FOOD ITEMS",
+      "tariff": "Carcasses and half-carcasses of lamb, frozen",
+      "description": "Other meat of sheep, fresh or chilled"
+    },
+    {
+      "heading_no": "87.08",
+      "harmonized_system_code": "8708.3900 ",
+      "tariff_category": "COMMERCIAL VEHICLES AND SPARE PARTS",
+      "tariff": "Others ",
+      "description": "Parts and accessories of commercial vehicles. (all tyres and tubes regardless of usage are vatable"
+    }
+  ]
+}

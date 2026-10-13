@@ -203,9 +203,49 @@ export function EntityFormModal({ mode, entity, ctx, base, onClose, onSuccess }:
               <input className="pf-input" value={form.sector} onChange={(e) => updateField('sector', e.target.value)} disabled={submitting} />
             </div>
 
-            <div>
+            <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Address (optional)</div>
               <input className="pf-input" value={form.address} onChange={(e) => updateField('address', e.target.value)} disabled={submitting} />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Email (optional)</div>
+              <input className="pf-input" value={form.email} onChange={(e) => updateField('email', e.target.value)} disabled={submitting} />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Phone (optional)</div>
+              <input className="pf-input" value={form.telephone} onChange={(e) => updateField('telephone', e.target.value)} disabled={submitting} />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Street (optional)</div>
+              <input className="pf-input" value={form.street} onChange={(e) => updateField('street', e.target.value)} disabled={submitting} />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>City (optional)</div>
+              <input className="pf-input" value={form.city} onChange={(e) => updateField('city', e.target.value)} disabled={submitting} />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Postal zone (optional)</div>
+              <input className="pf-input" value={form.postalZone} onChange={(e) => updateField('postalZone', e.target.value)} disabled={submitting} />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>Country (optional)</div>
+              <input className="pf-input" value={form.country} onChange={(e) => updateField('country', e.target.value)} disabled={submitting} placeholder="NG" />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>State (optional)</div>
+              <input className="pf-input" value={form.state} onChange={(e) => updateField('state', e.target.value)} disabled={submitting} placeholder="NG-XX" />
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }}>LGA (optional)</div>
+              <input className="pf-input" value={form.lga} onChange={(e) => updateField('lga', e.target.value)} disabled={submitting} placeholder="NG-XX-XXX" />
             </div>
           </div>
 

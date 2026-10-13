@@ -45,7 +45,5 @@
 // surface which displays the version. Consumers get ADDED to the list above; they are not
 // discovered by search.
 //
-// Currently 4: BUG-05 published v4 -- v3's 19 rules SELECT-copied verbatim, plus
-// buyer-tin-required (required/buyer.tin/error/document, mirroring supplier-tin-required).
-// See migrations/20260806131239_rule_set_v4.sql and internal/validation/rule_set_v4_test.go.
+// The version that judges the 2026-dated e2e fixtures (v4); v5 starts 2027-01-01.
 export const ACTIVE_RULE_SET_VERSION = 4

@@ -29,7 +29,7 @@
 //	IMPV-16 TestServiceImport_AllQuarantinedBatchNullVersionNeverCallsGate
 //
 // IMPV-01..07/12/13/16 are DB-backed (dbTestPools). IMPV-01..07/12 stand up
-// a REAL in-process 04 (internal/validation's Store.LoadActiveRuleSetGlobal
+// a REAL in-process 04 (internal/validation's Store.LoadForBatch
 // + NewDefaultEngine + BatchValidateHandler behind S2SMiddleware, on an
 // httptest.Server) against the live v2 rule set on the shared dev DB --
 // mirroring internal/invoice/gate_test.go's startInProcess04 exactly
@@ -83,7 +83,7 @@ func startInProcess04ForImporter(t *testing.T, app *pgxpool.Pool) *httptest.Serv
 	t.Helper()
 	vstore := validation.NewStore(app)
 	eng := validation.NewDefaultEngine()
-	handler := validation.S2SMiddleware(impvS2SToken)(validation.BatchValidateHandler(vstore.LoadActiveRuleSetGlobal, eng, nil))
+	handler := validation.S2SMiddleware(impvS2SToken)(validation.BatchValidateHandler(vstore.LoadForBatch, eng, nil, nil))
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv
@@ -257,7 +257,7 @@ func runIMPVCleanFile(t *testing.T, dryRun bool) (res BatchResult, super, app *p
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	var err error
-	res, err = svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, impvCleanFileFixture(), dryRun)
+	res, err = svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, impvCleanFileFixture(), dryRun, "")
 	if err != nil {
 		t.Fatalf("Import (dryRun=%v): %v", dryRun, err)
 	}
@@ -281,7 +281,7 @@ func runIMPVConflictMix(t *testing.T) (res BatchResult, super, app *pgxpool.Pool
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
 	var err error
-	res, err = svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, impvConflictMixFixture(), false)
+	res, err = svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, impvConflictMixFixture(), false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -346,11 +346,7 @@ func TestServiceImport_MixedFileCountersAndRuleSetVersion(t *testing.T) {
 	if res.InvoicesWithViolations != 1 {
 		t.Errorf("InvoicesWithViolations = %d, want 1", res.InvoicesWithViolations)
 	}
-	// TRAP FOR THE NEXT PUBLISH: this package has no shared "sanctioned active version"
-	// constant (unlike internal/validation's seed_test.go activeSeedVersion) -- bump this
-	// literal (and handlers_gate_test.go's two matching ones) together on every future
-	// rule-set publish. runIMPVCleanFile drives a REAL gate evaluation, so this literal
-	// is an independent oracle, not a wiring bug -- see IMPV-02's own test purpose above.
+	// v4 judges the fixture: its issue date is 2026-07-01.
 	if res.RuleSetVersion == nil {
 		t.Fatal("RuleSetVersion = nil, want a pointer to 4 -- something WAS evaluated on this non-empty batch")
 	}
@@ -516,7 +512,7 @@ func TestServiceImport_GateValidateBatchCalledExactlyOnceWithAllCreated(t *testi
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	if _, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, ""); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -550,7 +546,7 @@ func TestServiceImport_QuarantinedInvoiceNeverReachesGate(t *testing.T) {
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -602,7 +598,7 @@ func TestServiceImport_ApplyValidationDBFaultAbortsRunNotLaunderedIntoRowErrors(
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
 	if err == nil {
 		t.Fatal("Import: err = nil, want the raw ApplyValidation fault to propagate (never laundered into a fake RowError) [create-error-classification]")
 	}
@@ -650,7 +646,7 @@ func TestServiceImport_ValidatorErrUpstreamAbortsRun(t *testing.T) {
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
 	if err == nil {
 		t.Fatal("Import: err = nil, want ErrUpstream to propagate -- an unreachable 04 is an outage, not \"everything is clean\"")
 	}
@@ -694,7 +690,7 @@ func TestServiceImport_TinLessEntityCleanFileStaysDraftWithSupplierTinRequired(t
 	rows := [][]string{
 		mkRow("IMPV12-CLEAN", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "100.00", "7.50", "107.50", "Item1", "1", "100.00"),
 	}
-	if _, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, ""); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -773,7 +769,7 @@ func TestServiceImport_NoLineRowsMappedStaysDraftViaLineItemsSumSubtotal(t *test
 	rows := [][]string{
 		{"IMPV13-NOLINES", "2026-07-01", "87654321-0002", "Beta Ltd", "NGN", "100.00", "7.50", "107.50"},
 	}
-	if _, err := svc.Import(c, entityID, "", "", 1, impvNoLineMapping, impvNoLineHeader, rows, false); err != nil {
+	if _, err := svc.Import(c, entityID, "", "", 1, impvNoLineMapping, impvNoLineHeader, rows, false, ""); err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 
@@ -857,7 +853,7 @@ func TestServiceImport_AllQuarantinedBatchNullVersionNeverCallsGate(t *testing.T
 			svc := newTestServiceWithGate(app, fg)
 			c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-			res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, impvAllQuarantinedFixture(), tc.dryRun)
+			res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, impvAllQuarantinedFixture(), tc.dryRun, "")
 			if err != nil {
 				t.Fatalf("Import (dryRun=%v): %v", tc.dryRun, err)
 			}
@@ -902,7 +898,7 @@ func runDryRunClean2(t *testing.T, clean2 []invoice.Violation) BatchResult {
 	svc := newTestServiceWithGate(app, fg)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, impvCleanFileFixture(), true)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, impvCleanFileFixture(), true, "")
 	if err != nil {
 		t.Fatalf("dry-run Import: %v", err)
 	}
@@ -981,5 +977,86 @@ func TestServiceImport_DryRunWarningPlusErrorInvoiceCountsViolating(t *testing.T
 	}
 	if !impvHasViolation(clean2.Violations, "advisory-x") || !impvHasViolation(clean2.Violations, "tin-format") {
 		t.Errorf("IMPV-CLEAN-2 Violations = %+v, want advisory-x and tin-format", clean2.Violations)
+	}
+}
+
+// seedDatedRuleSetVersion is internal/invoice/gate_test.go's twin: a sealed
+// version dated from with one disabled rule. Call it before seedTenant so LIFO
+// cleanup deletes the stamped invoices first.
+func seedDatedRuleSetVersion(t *testing.T, super *pgxpool.Pool, from string) (id string, version int) {
+	t.Helper()
+	ctx := context.Background()
+	if err := super.QueryRow(ctx,
+		`INSERT INTO rule_set_versions (version, sealed, notes)
+		 SELECT GREATEST(COALESCE(MAX(version), 0), 950000) + 1, false, 'qa-fixture:internal/importer/service_gate_test.go'
+		 FROM rule_set_versions RETURNING id, version`,
+	).Scan(&id, &version); err != nil {
+		t.Fatalf("seed rule_set_versions: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`INSERT INTO rules (rule_set_version_id, key, type, target, params, severity, message, scope, enabled)
+		 VALUES ($1, 'passes', 'required', 'invoice.invoice_number', '{}'::jsonb, 'error', 'fixture', 'document', false)`, id,
+	); err != nil {
+		t.Fatalf("seed rule: %v", err)
+	}
+	if _, err := super.Exec(ctx,
+		`UPDATE rule_set_versions SET sealed = true, effective_from = $2::date WHERE id = $1`, id, from,
+	); err != nil {
+		t.Fatalf("seal and date version: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		tx, err := super.Begin(ctx)
+		if err != nil {
+			t.Errorf("fixture cleanup: begin: %v", err)
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		for _, q := range []string{
+			`ALTER TABLE rule_set_versions DISABLE TRIGGER USER`,
+			`ALTER TABLE rules DISABLE TRIGGER USER`,
+			`DELETE FROM rule_set_versions WHERE id = '` + id + `'`,
+			`ALTER TABLE rules ENABLE TRIGGER USER`,
+			`ALTER TABLE rule_set_versions ENABLE TRIGGER USER`,
+		} {
+			if _, err := tx.Exec(ctx, q); err != nil {
+				t.Errorf("fixture cleanup: %s: %v", q, err)
+				return
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Errorf("fixture cleanup: commit: %v", err)
+		}
+	})
+	return id, version
+}
+
+func TestImport_ReportStampEqualsGetBatchMin(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	seedDatedRuleSetVersion(t, super, "3001-06-01")
+	tenantID := seedTenant(t, super, "STAMP-MIN tenant")
+	entityID := seedEntityWithTIN(t, super, tenantID, "STAMP-MIN entity", "12345678-0001")
+	srv := startInProcess04ForImporter(t, app)
+	svc := newTestServiceWithGate(app, invoice.NewGate(invoice.NewStore(app), invoice.NewValidator(srv.URL, impvS2SToken, nil)))
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	rows := [][]string{
+		mkRow("MIN-NOW", "2026-09-01", "87654321-0002", "Beta Ltd", "NGN", "250.00", "18.75", "268.75", "Item1", "2", "100.00"),
+		mkRow("MIN-FUT", "3001-07-01", "87654321-0002", "Beta Ltd", "NGN", "250.00", "18.75", "268.75", "Item1", "2", "100.00"),
+	}
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if res.RuleSetVersion == nil || *res.RuleSetVersion != 4 {
+		t.Fatalf("import RuleSetVersion = %v, want 4 (the lowest of v4 and fixture B)", res.RuleSetVersion)
+	}
+	b, err := NewStore(app).GetBatch(c, res.ID)
+	if err != nil {
+		t.Fatalf("GetBatch: %v", err)
+	}
+	if b.RuleSetVersion == nil || *b.RuleSetVersion != *res.RuleSetVersion {
+		t.Errorf("GetBatch RuleSetVersion = %v, want %d (same as the import report)", b.RuleSetVersion, *res.RuleSetVersion)
 	}
 }

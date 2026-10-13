@@ -10,8 +10,8 @@ import { captureDestination } from './lib/deepLink'
 import { SESSION_KEY, serializeSession } from './lib/session'
 import { ensureSignInState, mintSignInState } from './lib/signInState'
 import { holdPendingVerify } from './lib/verifyBounce'
+import { DRAFT_NRS_BLANK, draftLine } from './lib/clients'
 import { EMPTY_BUCKET } from './lib/dashboard'
-import { SUGGESTED_RULES } from './lib/rules'
 import type { PlatformCtx, SignedInUser } from './types'
 
 const LANDING = 'https://landing.example'
@@ -42,12 +42,12 @@ const T2 = jwt(ME.user.id, nowSec() + 7200, { iat: nowSec(), app_metadata: { ten
 
 let capturedCtx: PlatformCtx | undefined
 let seenUsers: PlatformCtx['user'][] = []
-let seenDemoState: { handoff: boolean; connected: number; rules: number }[] = []
+let seenDemoState: { handoff: boolean; connected: number }[] = []
 vi.mock('./components/Sidebar', () => ({
   Sidebar: (p: { ctx: PlatformCtx }) => {
     capturedCtx = p.ctx
     seenUsers.push(p.ctx.user)
-    seenDemoState.push({ handoff: p.ctx.handoff, connected: Object.values(p.ctx.connectors).filter(Boolean).length, rules: p.ctx.customRules.length })
+    seenDemoState.push({ handoff: p.ctx.handoff, connected: Object.values(p.ctx.connectors).filter(Boolean).length })
     return null
   },
 }))
@@ -448,7 +448,6 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
     expect(capturedCtx?.handoff).toBe(true)
     expect(capturedCtx?.connectors).toEqual(NO_CONNECTORS)
-    expect(capturedCtx?.customRules).toEqual([])
   })
 
   // Control: green before and after.
@@ -460,7 +459,6 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
     expect(capturedCtx?.handoff).toBe(false)
     expect(capturedCtx?.connectors.sap).toBe(true)
-    expect(capturedCtx?.customRules).toHaveLength(5)
   })
 
   it("a hand-off workspace's draft carries no demo invoice", async () => {
@@ -488,7 +486,7 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
   describe('the draft reseed paths (AUTH-10-07)', () => {
     const ENTITY_A = 'aaaaaaaa-0000-4000-8000-000000000001'
     const ENTITY_B = 'bbbbbbbb-0000-4000-8000-000000000002'
-    const BLANK = { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', items: [{ desc: '', qty: 1, price: 0 }] }
+    const BLANK = { number: '', buyer: '', buyerTin: '', date: '', currency: 'NGN', ...DRAFT_NRS_BLANK, items: [draftLine({ desc: '', qty: 1, price: 0 })] }
     const personaRecord = () => JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true })
 
     function entityRow(id: string, name: string, tin: string) {
@@ -576,7 +574,6 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await waitForVerifiedWorkspace()
     expect(capturedCtx?.handoff).toBe(true)
     expect(capturedCtx?.connectors).toEqual(NO_CONNECTORS)
-    expect(capturedCtx?.customRules).toEqual([])
   })
 
   it('no render of a hand-off boot shows demo state, stored or redeemed', async () => {
@@ -587,7 +584,7 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
     await settle()
     expect(seenDemoState.length).toBeGreaterThan(0)
-    expect(seenDemoState.filter((r) => r.handoff !== true || r.connected !== 0 || r.rules !== 0)).toEqual([])
+    expect(seenDemoState.filter((r) => r.handoff !== true || r.connected !== 0)).toEqual([])
 
     cleanup()
     seenDemoState = []
@@ -598,7 +595,7 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await waitForVerifiedWorkspace()
     await settle()
     expect(seenDemoState.length).toBeGreaterThan(0)
-    expect(seenDemoState.filter((r) => r.handoff !== true || r.connected !== 0 || r.rules !== 0)).toEqual([])
+    expect(seenDemoState.filter((r) => r.handoff !== true || r.connected !== 0)).toEqual([])
   })
 
   // Control: the same capture reads the demo state on a persona session.
@@ -610,39 +607,7 @@ describe('a hand-off session hides the demo data (AUTH-10-06, F17)', () => {
     await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
     await settle()
     expect(seenDemoState.length).toBeGreaterThan(0)
-    expect(seenDemoState.filter((r) => r.handoff !== false || r.connected !== 2 || r.rules !== 5)).toEqual([])
-  })
-
-  it("a hand-off workspace's stored custom-rules list is its own, never the seed plus a write", async () => {
-    configure()
-    localStorage.setItem(SESSION_KEY, handoffRecord(T, ME))
-    interceptHref()
-    await bootApp()
-    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
-    expect(capturedCtx?.customRules).toEqual([])
-    const adopted = SUGGESTED_RULES[0]
-    await act(async () => {
-      capturedCtx!.addSuggestedRule(adopted)
-    })
-    expect(capturedCtx?.customRules.map((r) => r.key)).toEqual([adopted.key])
-    await act(async () => {
-      capturedCtx!.removeCustomRule(adopted.key)
-    })
-    expect(capturedCtx?.customRules, 'the stored empty list wins; no seed returns').toEqual([])
-  })
-
-  // Control: a persona session writes onto the seed.
-  it("a persona workspace's first write lands on top of the five seeded rules", async () => {
-    configure()
-    localStorage.setItem(SESSION_KEY, JSON.stringify({ v: 1, personaId: 'firm', token: T, me: ME, verified: true }))
-    interceptHref()
-    await bootApp()
-    await waitFor(() => expect(capturedCtx?.user, 'the workspace must mount').toBeDefined())
-    expect(capturedCtx?.customRules).toHaveLength(5)
-    await act(async () => {
-      capturedCtx!.addSuggestedRule(SUGGESTED_RULES[0])
-    })
-    expect(capturedCtx?.customRules).toHaveLength(6)
+    expect(seenDemoState.filter((r) => r.handoff !== false || r.connected !== 2)).toEqual([])
   })
 })
 

@@ -86,7 +86,7 @@ export interface RowError {
   field?: string
   rule_key?: string // set on a store-level duplicate; UI splits those into their own channel, see reviewBatch.ts's isAlreadyImported
   severity?: string
-  invoice_id?: string // resolved id of the colliding invoice; absent when unresolved (racing-INSERT backstop)
+  invoice_id?: string // colliding invoice (absent when unresolved), or, with no rule_key, the draft left unvalidated; see reviewBatch.ts's isUnvalidatedDraft
   message: string // always
 }
 
@@ -201,6 +201,7 @@ export interface CreateImportRequest {
   mapping: Record<string, string> // already null-stripped by toImportMapping (M4-08-03)
   rememberMapping: boolean
   headerRow?: number // absent or 1 sends no part; parseHeaderRow reads "" as row 1
+  defaultInvoiceKind?: 'B2B' | 'B2G' | 'B2C' // absent sends no part
 }
 
 export type UploadPhase =
@@ -359,6 +360,7 @@ export async function createImport(
   // is a free choice that keeps IMPAPI-04/28's exact key list green (IMPAPI-29).
   const headerRow = req.headerRow ?? 1
   if (headerRow > 1) form.append('header_row', String(headerRow))
+  if (req.defaultInvoiceKind) form.append('default_invoice_kind', req.defaultInvoiceKind)
   // No query string is ever appended — dry_run is never sent ([no-dry-run]).
   const raw = await xhrJson(auth, 'POST', base + '/api/invoice/v1/imports', form, onPhase, xhrCtor)
   return normalizeReport(raw)

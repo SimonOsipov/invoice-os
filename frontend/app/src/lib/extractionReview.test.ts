@@ -639,7 +639,18 @@ describe('getExtractionDetail', () => {
 describe('postLineItems', () => {
   it('postLineItems_postsTheWrappedBodyToTheGatewayPath', async () => {
     const lines: LineItemInput[] = [
-      { description: 'Widget', quantity: '2', unit_price: '10.00', line_total: '20.00', line_tax: null },
+      {
+        description: 'Widget',
+        quantity: '2',
+        unit_price: '10.00',
+        line_total: '20.00',
+        line_tax: null,
+        tax_category: null,
+        hsn_code: null,
+        isic_code: null,
+        sellers_item_identification: null,
+        price_unit: null,
+      },
     ]
     const response: LineItemsResponse = { id: 'line-set-1', invoice_id: 'inv-1', lines, created_at: '2026-09-02T00:00:00Z' }
     const authedFetch = vi.fn().mockResolvedValue(response)
@@ -742,8 +753,6 @@ describe('the SourceDocumentStates import closes no cycle', () => {
 
 describe('fieldLabel', () => {
   it('maps the ten header names and falls back to the wire name', () => {
-    // The nine editable ones come from EDIT_FIELD_LABELS (reviewBatch.ts); invoice_number is
-    // not editable (EDIT_FIELD_KEYS is nine wide by [D9]), so this module carries the tenth.
     expect(fieldLabel('invoice_number')).toBe('Invoice number')
     expect(fieldLabel('issue_date')).toBe('Issue date')
     expect(fieldLabel('supplier_tin')).toBe('Supplier TIN')
@@ -761,6 +770,17 @@ describe('fieldLabel', () => {
     // emits a per-row line_items[N].line_total. Neither has a curated label.
     expect(fieldLabel('document_text_layer')).toBe('document_text_layer')
     expect(fieldLabel('line_items[0].line_total')).toBe('line_items[0].line_total')
+  })
+
+  it('names each new header field by its INVOICE_FIELDS label', () => {
+    expect(fieldLabel('due_date')).toBe('Due date')
+    expect(fieldLabel('buyer_postal_zone')).toBe('Buyer postal zone')
+    expect(fieldLabel('buyer_lga')).toBe('Buyer LGA')
+  })
+
+  it('leaves a bare line role unlabelled', () => {
+    expect(fieldLabel('description')).toBe('description')
+    expect(fieldLabel('line_tax')).toBe('line_tax')
   })
 
   it('does not humanise an unmapped name', () => {
@@ -802,6 +822,7 @@ describe('reasonPill', () => {
     expect(pillFor('unreadable', 5)).toBe("COULDN'T READ THIS CLEARLY")
     expect(pillFor('inconsistent', 0)).toBe("DOESN'T ADD UP")
     expect(pillFor('missing', 3)).toBe('NOT FOUND')
+    expect(pillFor('rule_break', 4)).toBe('BREAKS A RULE')
 
     // A clean field has nothing to say, and the cell's one pill slot then falls back to the
     // shipped NO REGION cue.
@@ -811,10 +832,10 @@ describe('reasonPill', () => {
 
 describe('fieldNote', () => {
   it('splits the one inconsistent code three ways', () => {
-    const sum = fieldNote('inconsistent', 'subtotal')
-    const tin = fieldNote('inconsistent', 'supplier_tin')
-    const name = fieldNote('inconsistent', 'supplier_name')
-    const other = fieldNote('inconsistent', 'total')
+    const sum = fieldNote('inconsistent', 'subtotal', [])
+    const tin = fieldNote('inconsistent', 'supplier_tin', [])
+    const name = fieldNote('inconsistent', 'supplier_name', [])
+    const other = fieldNote('inconsistent', 'total', [])
 
     expect(sum).toBe('The line items we read do not add up to this subtotal.')
     expect(tin).toBe(
@@ -833,20 +854,36 @@ describe('fieldNote', () => {
     // The pane-level client-record sentence carries the same guard, for the same reason: the
     // entity match compares supplier_tin and supplier_name, and a third supplier_* field is
     // not the pair it explains. `startsWith('supplier')` passes every other row in this file.
-    expect(fieldNote('inconsistent', 'supplier_address')).toBe(
+    expect(fieldNote('inconsistent', 'supplier_address', [])).toBe(
       'This value disagrees with the other numbers on the document.',
     )
-    expect(fieldNote('inconsistent', 'supplier_address'), 'a prefix match claimed the entity sentence').not.toBe(
-      fieldNote('inconsistent', 'supplier_tin'),
+    expect(fieldNote('inconsistent', 'supplier_address', []), 'a prefix match claimed the entity sentence').not.toBe(
+      fieldNote('inconsistent', 'supplier_tin', []),
     )
   })
 
-  it('returns null for every reason that is not inconsistent', () => {
+  it('returns null for a clean, unreadable, ambiguous or missing field', () => {
     // Keyed on the reason FIRST. A note keyed on the NAME alone renders the subtotal sentence
     // on a clean subtotal, and passes the row above.
     for (const reason of ['', 'unreadable', 'ambiguous', 'missing'] as const) {
-      expect(fieldNote(reason, 'subtotal'), `a "${reason}" subtotal carried a note`).toBeNull()
+      expect(fieldNote(reason, 'subtotal', []), `a "${reason}" subtotal carried a note`).toBeNull()
     }
+  })
+})
+
+describe('fieldNote and rule breaks', () => {
+  const a = { key: 'a', message: 'Total must equal subtotal plus VAT.' }
+  const b = { key: 'b', message: 'VAT must be 16 percent of subtotal.' }
+
+  it('fieldNote states the rule a value breaks', () => {
+    expect(fieldNote('rule_break', 'vat', [a])).toBe(a.message)
+    expect(fieldNote('rule_break', 'vat', [a, b])).toBe(`${a.message} ${b.message}`)
+    expect(fieldNote('rule_break', 'vat', [])).toBeNull()
+  })
+
+  it('fieldNote ignores rules for every other reason', () => {
+    expect(fieldNote('inconsistent', 'subtotal', [a])).toBe('The line items we read do not add up to this subtotal.')
+    expect(fieldNote('', 'vat', [a])).toBeNull()
   })
 })
 
@@ -909,6 +946,7 @@ function mkField(o: Partial<ExtractionFieldState> = {}): ExtractionFieldState {
     reason: '',
     alternatives: [],
     corrected: null,
+    rules: [],
     ...o,
   }
 }

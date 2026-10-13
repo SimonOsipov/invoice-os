@@ -601,3 +601,36 @@ func TestShapeCurrency_WhitespaceAloneIsNotANairaToken(t *testing.T) {
 		wantOne(t, extraction.ShapeCurrency, raw, "NGN")
 	}
 }
+
+func TestShapeEmail_RefusesMalformed(t *testing.T) {
+	long := strings.Repeat("a", 245) + "@b.example" // 255 runes
+	for _, raw := range []string{"", "ap.honeywell.example", "a@@b.example", "a b@c.example", "a@example", "a@.example", "a@example.", "@b.example", long, "a\tb@c.example", "a@b.exa\nmple", "a@b@", "@", "a@.", " "} {
+		if got := extraction.ShapeEmail.Normalize(raw); got != nil {
+			t.Errorf("ShapeEmail.Normalize(%q) = %v, want nil", raw, got)
+		}
+	}
+	atCap := strings.Repeat("a", 244) + "@b.example"          // 254 runes
+	multibyteAtCap := strings.Repeat("é", 244) + "@b.example" // 254 runes, 498 bytes
+	for _, raw := range []string{atCap, multibyteAtCap, "\t a@b.co\n", "a.b+c@d-e.co.ng"} {
+		if got := extraction.ShapeEmail.Normalize(raw); len(got) != 1 || got[0] != strings.TrimSpace(raw) {
+			t.Errorf("ShapeEmail.Normalize(%q) = %v, want the trimmed value", raw, got)
+		}
+	}
+	if got := extraction.ShapeEmail.Normalize(strings.Repeat("é", 245) + "@b.example"); got != nil {
+		t.Errorf("ShapeEmail.Normalize(<255 multibyte runes>) = %v, want nil", got)
+	}
+}
+
+func TestShapePhone_RefusesMalformed(t *testing.T) {
+	for _, raw := range []string{"123456", "1234567890123456", "0801 234 ABCD", "234+801", "", "1234567890" + strings.Repeat("-", 23), "+", "++2348012345", "123456\t7", "123-456-7x", "+234 (0) 801.234-5678 9012", "１２３４５６７８"} {
+		if got := extraction.ShapePhone.Normalize(raw); got != nil {
+			t.Errorf("ShapePhone.Normalize(%q) = %v, want nil", raw, got)
+		}
+	}
+	at32 := "1234567890" + strings.Repeat("-", 22) // 32 runes
+	for _, raw := range []string{"1234567", "123456789012345", at32, "\n+234.801-234 (5678)\t", "+1234567"} {
+		if got := extraction.ShapePhone.Normalize(raw); len(got) != 1 || got[0] != strings.TrimSpace(raw) {
+			t.Errorf("ShapePhone.Normalize(%q) = %v, want the trimmed value", raw, got)
+		}
+	}
+}

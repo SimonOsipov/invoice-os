@@ -1,8 +1,7 @@
 // M4-04-03 (task-109, Test-first: yes) -- Mode A RED DB-backed specs for
 // BatchValidateHandler driven end-to-end against the REAL Store
-// (LoadActiveRuleSetGlobal, currently the QA scaffold in
-// store_qa_scaffold.go) and the REAL validation.Engine (NewDefaultEngine)
-// over the live migrated DB (v4 active, 20 rules). No identity is ever placed
+// (LoadForBatch) and the REAL validation.Engine (NewDefaultEngine)
+// over the live migrated DB (v4 judges the 2026-dated fixtures, 20 rules). No identity is ever placed
 // in the request context here -- that is the whole point of the tenant-free
 // batch endpoint ([s2s-identity]).
 //
@@ -21,6 +20,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 // TestBatch_FullyValidInvoiceZeroViolations (VB-12, [batch-payload-rooting]'s
@@ -54,7 +56,7 @@ func TestBatch_FullyValidInvoiceZeroViolations(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForBatch, eng, nil, nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -96,7 +98,7 @@ func TestBatch_EmptyInvoiceFiresEveryRequired(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForBatch, eng, fixedNow(activeSeedNow), nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -133,7 +135,7 @@ func TestBatch_EmptyInvoiceFiresEveryRequired(t *testing.T) {
 // Captured by QUERY (not hardcoded) -- rule_set_versions.id is DB-generated
 // (gen_random_uuid()), so a literal uuid would only be correct against
 // today's local dev DB, not CI or any other environment (same discipline
-// as store_test.go's TestStore_LoadNoActiveErrors / seedVersion doc
+// as store_test.go's seedVersion doc
 // comments: "restoring by CAPTURED ID rather than by naming a version
 // number is the point").
 func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
@@ -144,9 +146,9 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 	var wantID string
 	var wantVersion int
 	if err := super.QueryRow(context.Background(),
-		`SELECT id, version FROM rule_set_versions WHERE is_active LIMIT 1`,
+		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for($1::date)`, activeSeedDate,
 	).Scan(&wantID, &wantVersion); err != nil {
-		t.Fatalf("read the active rule_set_versions row: %v", err)
+		t.Fatalf("read the rule_set_versions row in force on %s: %v", activeSeedDate, err)
 	}
 
 	reqBody, err := json.Marshal(map[string]any{
@@ -158,7 +160,7 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody)))
 	rec := httptest.NewRecorder()
-	BatchValidateHandler(store.LoadActiveRuleSetGlobal, eng, nil).ServeHTTP(rec, r)
+	BatchValidateHandler(store.LoadForBatch, eng, fixedNow(activeSeedNow), nil).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
@@ -173,5 +175,208 @@ func TestBatch_ResponseRuleSetVersionIDMatchesActiveRow(t *testing.T) {
 	}
 	if body.RuleSetVersion != wantVersion {
 		t.Errorf("response rule_set_version = %d, want %d", body.RuleSetVersion, wantVersion)
+	}
+}
+
+func TestBatch_DB_TwoVersionsInOneBatch(t *testing.T) {
+	super, app := dbTestPools(t)
+	aID, _ := dateFixture(t, super, "3001-01-01", "t-a")
+	bID, _ := dateFixture(t, super, "3001-06-01", "t-b")
+
+	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[
+		{"ref":"a","invoice":{"issue_date":"3001-02-01"}},
+		{"ref":"b","invoice":{"issue_date":"3001-07-01"}}]}`))
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForBatch, NewDefaultEngine(), nil, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeBatch(t, rec)
+	if body.Results[0].RuleSetVersionID != aID || body.Results[1].RuleSetVersionID != bID {
+		t.Errorf("item stamps = %s, %s; want %s, %s",
+			body.Results[0].RuleSetVersionID, body.Results[1].RuleSetVersionID, aID, bID)
+	}
+}
+
+func TestBatch_DB_UndatedInvoiceIgnoresAScheduledVersion(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
+	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format(time.DateOnly)
+	fixtureID, _ := dateFixture(t, super, tomorrow, "t-tomorrow")
+	var todayID string
+	var todayVersion int
+	if err := super.QueryRow(context.Background(),
+		`SELECT id, version FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`).Scan(&todayID, &todayVersion); err != nil {
+		t.Fatalf("read the version in force today: %v", err)
+	}
+
+	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[{"ref":"a","invoice":{}}]}`))
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForBatch, NewDefaultEngine(), nil, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	got := decodeBatch(t, rec).Results[0]
+	if got.RuleSetVersion != todayVersion || got.RuleSetVersionID != todayID || got.RuleSetVersionID == fixtureID {
+		t.Errorf("undated item stamp = v%d %s, want today's v%d %s and not the scheduled fixture %s",
+			got.RuleSetVersion, got.RuleSetVersionID, todayVersion, todayID, fixtureID)
+	}
+}
+
+// Year 0 parses in Go but Postgres rejects it at d::date; the item is judged as undated and the
+// rest of the batch keeps its own version.
+func TestBatch_DB_YearZeroIssueDateIsJudgedAsUndated(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
+	bID, _ := dateFixture(t, super, "3001-06-01", "t-yz")
+	var todayID string
+	if err := super.QueryRow(context.Background(),
+		`SELECT rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`).Scan(&todayID); err != nil {
+		t.Fatalf("read the version in force today: %v", err)
+	}
+
+	r := httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(`{"invoices":[
+		{"ref":"bad","invoice":{"issue_date":"0000-01-01"}},
+		{"ref":"ok","invoice":{"issue_date":"3001-07-01"}}]}`))
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForBatch, NewDefaultEngine(), nil, nil).ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeBatch(t, rec)
+	if body.Results[0].RuleSetVersionID != todayID || body.Results[1].RuleSetVersionID != bID {
+		t.Errorf("item stamps = %s, %s; want %s (today), %s",
+			body.Results[0].RuleSetVersionID, body.Results[1].RuleSetVersionID, todayID, bID)
+	}
+}
+
+// One batch stamps each item with the version in force on its own issue date, across the v4/v5 boundary.
+func TestBatch_DB_V5StampsInvoicesFromItsStartDate(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedV5Lists(t, super)
+
+	dayBefore := v5Invoice("B2B", []map[string]any{v5Line("1", "STANDARD_VAT", 1000, 7.5, 75)})
+	invoiceOf(dayBefore)["issue_date"] = "2026-12-31"
+	// supplier.street is required by v5 only: the same invoice is clean under v4 and fails under v5.
+	noStreet := func(date string) map[string]any {
+		p := v5Invoice("B2B", []map[string]any{v5Line("1", "STANDARD_VAT", 1000, 7.5, 75)})
+		inv := invoiceOf(p)
+		inv["issue_date"] = date
+		delete(v5PartyOf(inv, "supplier"), "street")
+		return inv
+	}
+	reqBody, err := json.Marshal(map[string]any{"invoices": []map[string]any{
+		{"ref": "v4", "invoice": invoiceOf(dayBefore)},
+		{"ref": "v5", "invoice": invoiceOf(v5B2BPayload())},
+		{"ref": "v4-lax", "invoice": noStreet("2026-12-31")},
+		{"ref": "v5-strict", "invoice": noStreet(v5Start)},
+	}})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForBatch, NewDefaultEngine(), nil, nil).
+		ServeHTTP(rec, httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody))))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	body := decodeBatch(t, rec)
+
+	for i, c := range []struct {
+		date    string
+		version int
+	}{{"2026-12-31", 4}, {v5Start, 5}, {"2026-12-31", 4}, {v5Start, 5}} {
+		var wantID string
+		if err := super.QueryRow(context.Background(),
+			`SELECT id FROM rule_set_versions WHERE version = $1 AND id = rule_set_version_for($2::date)`, c.version, c.date).Scan(&wantID); err != nil {
+			t.Fatalf("v%d is not in force on %s: %v", c.version, c.date, err)
+		}
+		got := body.Results[i]
+		if got.RuleSetVersion != c.version || got.RuleSetVersionID != wantID {
+			t.Errorf("item %s stamp = v%d %s, want v%d %s", got.Ref, got.RuleSetVersion, got.RuleSetVersionID, c.version, wantID)
+		}
+		wantViolations := 0
+		if got.Ref == "v5-strict" {
+			wantViolations = 1
+		}
+		if len(got.Violations) != wantViolations {
+			t.Errorf("item %s has violations %+v, want %d", got.Ref, got.Violations, wantViolations)
+		} else if wantViolations == 1 && got.Violations[0].RuleKey != "supplier-street-required" {
+			t.Errorf("item %s violation = %s, want supplier-street-required", got.Ref, got.Violations[0].RuleKey)
+		}
+	}
+}
+
+// customListBatch posts items (each with only issue_date and currency_code) against the real store.
+func customListBatch(t *testing.T, sets map[string]any, codes ...string) batchResponseBody {
+	t.Helper()
+	_, app := dbTestPools(t)
+	items := []any{}
+	for _, c := range codes {
+		items = append(items, map[string]any{
+			"ref": c, "custom_rule_sets": []string{"s"},
+			"invoice": map[string]any{"issue_date": activeSeedDate, "currency_code": c},
+		})
+	}
+	reqBody, err := json.Marshal(map[string]any{"invoices": items, "custom_rule_sets": sets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForBatch, NewDefaultEngine(), nil, nil).
+		ServeHTTP(rec, httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(string(reqBody))))
+	return wantOK(t, rec)
+}
+
+func byKey(vs []Violation, key string) []Violation {
+	var out []Violation
+	for _, v := range vs {
+		if v.RuleKey == key {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func TestBatch_DB_CustomListRuleUsesTheSyncedList(t *testing.T) {
+	super, _ := dbTestPools(t)
+	list := seedCodes(t, super)
+	body := customListBatch(t, map[string]any{"s": []any{
+		cwire("rev1", "custom:list", TypeEnum, "currency_code", `{"list":"`+list+`"}`, "error", "currency not allowed"),
+	}}, testCodes[0], "XXX")
+	if got := byKey(body.Results[0].Violations, "custom:list"); len(got) != 0 {
+		t.Errorf("%s violates: %+v, want it in the synced list", testCodes[0], got)
+	}
+	if got := byKey(body.Results[1].Violations, "custom:list"); len(got) != 1 || got[0].Message != "currency not allowed" {
+		t.Errorf("XXX violations = %+v, want exactly one with the rule's message", got)
+	}
+}
+
+func TestBatch_DB_CustomRuleOnAnUnsyncedListIsAFaultViolation(t *testing.T) {
+	body := customListBatch(t, map[string]any{"s": []any{
+		cwire("rev1", "custom:planets", TypeEnum, "currency_code", `{"list":"planets"}`, "error", "own message"),
+		cwire("rev2", "custom:email", TypeRequired, "buyer.email", `{}`, "warning", "email needed"),
+	}}, "NGN")
+	vs := body.Results[0].Violations
+	if got := byKey(vs, "custom:planets"); len(got) != 1 || got[0].Message != customFaultMessage || got[0].Severity != "error" {
+		t.Errorf("planets violations = %+v, want one fault violation (customFaultMessage, error)", got)
+	}
+	if got := byKey(vs, "custom:email"); len(got) != 1 || got[0].Message != "email needed" {
+		t.Errorf("email violations = %+v, want the valid custom rule judged as usual", got)
+	}
+	if len(goldenOnly(vs)) == 0 {
+		t.Errorf("no golden violations on an almost-empty invoice: the golden rules did not run")
+	}
+}
+
+func TestBatch_DB_GoldenUnsyncedListIsStill503(t *testing.T) {
+	super, app := dbTestPools(t)
+	listRuleVersion(t, super, "3001-01-01", "t-a", "t-"+uuid.NewString())
+	reqBody := `{"invoices":[{"ref":"a","invoice":{"issue_date":"3001-02-01"}}]}`
+	rec := httptest.NewRecorder()
+	BatchValidateHandler(NewStore(app).LoadForBatch, NewDefaultEngine(), nil, nil).
+		ServeHTTP(rec, httptest.NewRequest("POST", "/v1/validate/batch", strings.NewReader(reqBody)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 (body=%s)", rec.Code, rec.Body.String())
 	}
 }

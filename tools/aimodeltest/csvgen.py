@@ -3,7 +3,7 @@
 
 Writes $DATA/layouts.json and one CSV per layout under $DATA/csv/. Header spellings in the
 "software" layouts are modelled on common accounting-software exports; every value is synthetic.
-The answer key follows the importer's 11 fields (frontend/app/src/data.tsx CANON): one row per
+The answer key follows the importer's fields (frontend/app/src/data.tsx CANON): one row per
 invoice line, invoice-level values repeated on every line, and a line total is never a subtotal.
 """
 import csv, datetime as dt, io, json, os, random, re
@@ -11,15 +11,29 @@ import csv, datetime as dt, io, json, os, random, re
 DATA = os.environ["DATA"]
 SEED = int(os.environ.get("SEED", "20260914"))
 FIELDS = ["invoice_number", "issue_date", "buyer_tin", "buyer_name", "currency", "subtotal", "vat",
-          "total", "line_description", "line_quantity", "line_unit_price"]
+          "total", "line_description", "line_quantity", "line_unit_price", "invoice_kind", "tax_currency_code",
+          "due_date", "issue_time", "tax_point_date", "payment_status", "buyer_email", "buyer_telephone",
+          "buyer_street", "buyer_city", "buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+          "line_total", "line_tax", "line_tax_category", "line_hsn_code", "line_isic_code",
+          "line_product_category", "line_service_category", "line_sellers_item_identification",
+          "line_price_unit", "line_tax_percent", "line_base_quantity"]
 FIELD_OF = {"inv_no": "invoice_number", "date": "issue_date", "datetime": "issue_date", "buyer_tin": "buyer_tin",
             "buyer_name": "buyer_name", "currency": "currency", "subtotal": "subtotal", "vat": "vat", "total": "total",
             "line_desc": "line_description", "line_desc2": "line_description", "qty": "line_quantity",
-            "unit_price": "line_unit_price"}
+            "unit_price": "line_unit_price", "due_date": "due_date", "line_total": "line_total", "line_tax": "line_tax",
+            "vat_rate": "line_tax_percent", "email": "buyer_email", "phone": "buyer_telephone",
+            "address": "buyer_street", "tax_code": "line_tax_category", "pay_status": "payment_status",
+            **{k: k for k in ("invoice_kind", "tax_currency_code", "issue_time", "tax_point_date", "buyer_city",
+                              "buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga", "line_hsn_code",
+                              "line_isic_code", "line_product_category", "line_service_category",
+                              "line_sellers_item_identification", "line_price_unit", "line_base_quantity",
+                              "line_tax_category")}}
 KIND_OF = {"invoice_number": "inv_no", "issue_date": "date", "buyer_tin": "buyer_tin", "buyer_name": "buyer_name",
            "currency": "currency", "subtotal": "subtotal", "vat": "vat", "total": "total",
            "line_description": "line_desc", "line_quantity": "qty", "line_unit_price": "unit_price"}
-LINE_KINDS = {"line_desc", "line_desc2", "qty", "unit_price", "line_total", "line_tax"}
+LINE_KINDS = {"line_desc", "line_desc2", "qty", "unit_price", "line_total", "line_tax", "line_tax_category",
+              "line_hsn_code", "line_isic_code", "line_product_category", "line_service_category",
+              "line_sellers_item_identification", "line_price_unit", "line_base_quantity"}
 
 # --- software-style layouts: (header, kind); `single` means one line per invoice ---------------
 SOFTWARE = [
@@ -45,7 +59,7 @@ SOFTWARE = [
                      ("Partner/Tax ID", "buyer_tin"), ("Currency", "currency"), ("Untaxed Amount", "subtotal"),
                      ("Tax", "vat"), ("Total", "total"), ("Invoice lines/Label", "line_desc"),
                      ("Invoice lines/Quantity", "qty"), ("Invoice lines/Unit Price", "unit_price"),
-                     ("Invoice lines/Subtotal", "line_total"), ("Payment Status", "status"), ("Due Date", "due_date"),
+                     ("Invoice lines/Subtotal", "line_total"), ("Payment Status", "pay_status"), ("Due Date", "due_date"),
                      ("Salesperson", "salesperson")]),
     ("tally_register", True, [("Date", "date"), ("Particulars", "buyer_name"), ("Voucher Type", "voucher_type"),
                               ("Voucher No.", "inv_no"), ("Sales Accounts", "subtotal"), ("Output VAT @7.5%", "vat"),
@@ -113,6 +127,53 @@ ITEMS = [("Diesel (litres)", "AGO diesel delivered to site"), ("Cement 50kg", "P
          ("Freight Lagos-Kano", "Road haulage, 20ft container"), ("Laptop repair", "Motherboard replacement"),
          ("Office rent", "Monthly office rent"), ("Security services", "Guard services, monthly"),
          ("Bottled water (carton)", "75cl x 12 carton"), ("Solar panel 300W", "Monocrystalline panel")]
+# NRS columns: header synonyms per new field, as (cell kind, headers). Cells are fixed per buyer or item.
+NRS_SYN = {
+    "invoice_kind": ("invoice_kind", ["Buyer Type", "Customer Type", "Sale Type"]),
+    "tax_currency_code": ("tax_currency_code", ["Tax Currency", "Tax Currency Code", "VAT Currency"]),
+    "due_date": ("due_date", ["Due Date", "Payment Due", "Due On"]),
+    "issue_time": ("issue_time", ["Issue Time", "Invoice Time", "Time"]),
+    "tax_point_date": ("tax_point_date", ["Tax Point Date", "Supply Date", "Date of Supply"]),
+    "payment_status": ("pay_status", ["Payment Status", "Pay Status", "Paid Status"]),
+    "buyer_email": ("email", ["Customer Email", "Buyer Email", "Email"]),
+    "buyer_telephone": ("phone", ["Phone", "Customer Phone", "Buyer Telephone", "Tel"]),
+    "buyer_street": ("address", ["Street", "Bill To Address", "Customer Address", "Address"]),
+    "buyer_city": ("buyer_city", ["City", "Customer City", "Town"]),
+    "buyer_postal_zone": ("buyer_postal_zone", ["Postal Code", "Zip", "Post Code"]),
+    "buyer_country": ("buyer_country", ["Country", "Customer Country"]),
+    "buyer_state": ("buyer_state", ["State", "Customer State"]),
+    "buyer_lga": ("buyer_lga", ["LGA", "Local Government", "Customer LGA"]),
+    "line_total": ("line_total", ["Line Total", "Line Amount", "Item Amount"]),
+    "line_tax": ("line_tax", ["Line Tax", "Item Tax", "Tax on Line"]),
+    "line_tax_category": ("line_tax_category", ["Tax Category", "Tax Type", "Item Tax Category"]),
+    "line_hsn_code": ("line_hsn_code", ["HS Code", "Tariff Code", "HSN"]),
+    "line_isic_code": ("line_isic_code", ["ISIC Code", "Service Code", "Activity Code"]),
+    "line_product_category": ("line_product_category", ["Product Category", "Item Category"]),
+    "line_service_category": ("line_service_category", ["Service Category", "Service Type"]),
+    "line_sellers_item_identification": ("line_sellers_item_identification",
+                                         ["SKU", "Item Code", "Product Code", "Seller Item ID"]),
+    "line_price_unit": ("line_price_unit", ["Unit", "UoM", "Unit of Measure"]),
+    "line_tax_percent": ("vat_rate", ["Tax Rate", "Tax %", "Line Tax %"]),
+    "line_base_quantity": ("line_base_quantity", ["Base Quantity", "Pricing Quantity", "Price Per Qty"]),
+}
+# Per BUYERS entry: (state, LGA, city, postal zone, invoice kind). Per ITEMS entry: (HS, ISIC, price unit, tax category,
+# product category, service category).
+BUYER_NRS = [("NG-LA", "NG-LA-IKE", "Lagos", "100001", "B2B"), ("NG-KN", "NG-KN-NAS", "Kano", "700001", "B2B"),
+             ("NG-DE", "NG-DE-WSO", "Warri", "332001", "B2B"), ("NG-FC", "NG-FC-AML", "Abuja", "900001", "B2G"),
+             ("NG-EN", "NG-EN-ENO", "Enugu", "400001", "B2B"), ("NG-OY", "NG-OY-INO", "Ibadan", "200001", "B2C"),
+             ("NG-RI", "NG-RI-PHA", "Port Harcourt", "500001", "B2B"), ("NG-PL", "NG-PL-JNO", "Jos", "930001", "B2C"),
+             ("NG-CR", "NG-CR-CMU", "Calabar", "540001", "B2C"), ("NG-IM", "NG-IM-OMU", "Owerri", "460001", "B2B"),
+             ("NG-KD", "NG-KD-KNO", "Kaduna", "800001", "B2G"), ("NG-ED", "NG-ED-ORE", "Benin City", "300001", "B2B")]
+ITEM_NRS = [("0101.21", "0111", "LTR", "STANDARD_GST", "Fuel", "Delivery"),
+            ("0101.29", "0112", "KGM", "STANDARD_GST", "Building materials", "Supply"),
+            ("0101.30", "0113", "HUR", "ZERO_GST", "Consulting", "Advisory"),
+            ("0101.21", "0111", "C62", "STANDARD_GST", "Office supplies", "Supply"),
+            ("0101.29", "0112", "MTR", "REDUCED_GST", "Freight", "Haulage"),
+            ("0101.30", "0113", "C62", "STANDARD_GST", "Electronics", "Repair"),
+            ("0101.21", "0111", "MON", "ZERO_GST", "Property", "Rental"),
+            ("0101.29", "0112", "MON", "STANDARD_GST", "Security", "Guarding"),
+            ("0101.30", "0113", "C62", "REDUCED_GST", "Beverages", "Supply"),
+            ("0101.21", "0111", "C62", "STANDARD_GST", "Energy equipment", "Supply")]
 MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 NUMBERING = ["INV-{:05d}", "{:06d}", "SI/2026/{:04d}", "{}", "INV{}", "BILL-2026-{:04d}"]
 
@@ -183,6 +244,8 @@ def invoices(rng, ctx, has_lines, single, want_rows):
 def cell(kind, inv, line, ctx, serial):
     m = lambda x: money(x, ctx["money"])
     d = lambda x: date_s(x, ctx["date"])
+    bn = lambda: BUYER_NRS[BUYERS.index(inv["buyer"])]
+    itn = lambda: ITEM_NRS[ITEMS.index((line["desc"], line["desc2"]))]
     value = {
         "inv_no": lambda: inv["number"], "date": lambda: d(inv["date"]), "datetime": lambda: d(inv["date"]) + " " + inv["time"],
         "due_date": lambda: d(inv["date"] + dt.timedelta(days=30)), "buyer_tin": lambda: inv["tin"],
@@ -199,7 +262,14 @@ def cell(kind, inv, line, ctx, serial):
         "salesperson": lambda: inv["desk"], "branch": lambda: inv["branch"], "memo": lambda: inv["memo"],
         "terms": lambda: "Net 30", "type": lambda: "Invoice", "type_si": lambda: "SI", "voucher_type": lambda: "Sales",
         "tax_code": lambda: "VAT7.5", "internal_id": lambda: inv["internal"], "serial": lambda: str(serial),
-        "pay_method": lambda: inv["pay"],
+        "pay_method": lambda: inv["pay"], "pay_status": lambda: inv["status"],
+        "invoice_kind": lambda: bn()[4], "tax_currency_code": lambda: "NGN", "issue_time": lambda: inv["time"] + ":00",
+        "tax_point_date": lambda: d(inv["date"]), "buyer_city": lambda: bn()[2], "buyer_postal_zone": lambda: bn()[3],
+        "buyer_country": lambda: "NG", "buyer_state": lambda: bn()[0], "buyer_lga": lambda: bn()[1],
+        "line_hsn_code": lambda: itn()[0], "line_isic_code": lambda: itn()[1], "line_price_unit": lambda: itn()[2],
+        "line_tax_category": lambda: itn()[3], "line_product_category": lambda: itn()[4],
+        "line_service_category": lambda: itn()[5], "line_base_quantity": lambda: "1",
+        "line_sellers_item_identification": lambda: f"SKU-{ITEMS.index((line['desc'], line['desc2'])) + 1:03d}",
     }[kind]
     return value()
 
@@ -268,6 +338,21 @@ def composed_columns(rng):
     return out
 
 
+def nrs_columns(rng):
+    cols = composed_columns(rng)
+    seen = {norm(h) for h, _ in cols}
+    have = {FIELD_OF.get(k) for _, k in cols}
+    for f, (kind, headers) in NRS_SYN.items():
+        if rng.random() >= .5 or f in have:
+            continue
+        free = [h for h in headers if norm(h) not in seen]
+        if free:
+            h = rng.choice(free)
+            seen.add(norm(h))
+            cols.insert(rng.randint(0, len(cols)), (h, kind))
+    return cols
+
+
 TITLES = [["Sales Invoice Register"], ["Example Trading Ltd - TIN 12345678-0001"],
           ["Period: 01/01/2026 to 31/08/2026"], ["Generated 2026-09-01 08:14"], []]
 
@@ -284,6 +369,9 @@ def main():
         cols = composed_columns(rng)
         titles = rng.sample(TITLES[:4], rng.randint(1, 3)) + [[]]
         layouts.append(build(rng, f"title_{i + 1:02d}", "structure", cols, False, titles))
+    rng2 = random.Random(SEED + 1)
+    for i in range(24):
+        layouts.append(build(rng2, f"nrs_{i + 1:02d}", "nrs", nrs_columns(rng2), False))
     with open(os.path.join(DATA, "layouts.json"), "w", encoding="utf-8") as fh:
         json.dump(layouts, fh, ensure_ascii=False, indent=1, default=str)
     print(f"{len(layouts)} layouts written to {DATA}")

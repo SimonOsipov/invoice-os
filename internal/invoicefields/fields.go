@@ -1,0 +1,115 @@
+// Package invoicefields is the one list of invoice fields that the import,
+// extraction and SPA field lists derive from.
+package invoicefields
+
+import "strings"
+
+type Type string
+
+const (
+	Text     Type = "text"
+	Date     Type = "date"
+	Money    Type = "money"
+	Quantity Type = "quantity"
+	Code     Type = "code"
+	Time     Type = "time"
+	Percent  Type = "percent"
+)
+
+type Field struct {
+	Key      string // wire key: the invoices or line_items column
+	Label    string
+	Type     Type
+	Line     bool   // a line_items field; else a header field
+	Import   bool   // on the import Map step
+	Required bool   // an import mapping must place it
+	Lead     bool   // one of the original 11 import fields: leads ImportKeys
+	FormKey  string // the create form's Draft key; "" when not on the form
+	Edit     bool   // on the editor
+	Extract  bool   // read from a document
+}
+
+var All = []Field{
+	{Key: "invoice_number", Label: "Invoice number", Type: Text, Import: true, Lead: true, Required: true, FormKey: "number", Extract: true},
+	{Key: "issue_date", Label: "Issue date", Type: Date, Import: true, Lead: true, FormKey: "date", Edit: true, Extract: true},
+	{Key: "supplier_tin", Label: "Supplier TIN", Type: Text, Edit: true, Extract: true},
+	{Key: "supplier_name", Label: "Supplier name", Type: Text, Edit: true, Extract: true},
+	{Key: "buyer_tin", Label: "Buyer TIN", Type: Text, Import: true, Lead: true, FormKey: "buyerTin", Edit: true, Extract: true},
+	{Key: "buyer_name", Label: "Buyer name", Type: Text, Import: true, Lead: true, FormKey: "buyer", Edit: true, Extract: true},
+	{Key: "currency", Label: "Currency", Type: Text, Import: true, Lead: true, FormKey: "currency", Edit: true, Extract: true},
+	{Key: "subtotal", Label: "Subtotal", Type: Money, Import: true, Lead: true, Edit: true, Extract: true},
+	{Key: "vat", Label: "VAT", Type: Money, Import: true, Lead: true, Edit: true, Extract: true},
+	{Key: "total", Label: "Total", Type: Money, Import: true, Lead: true, Edit: true, Extract: true},
+	{Key: "invoice_kind", Label: "Invoice kind", Type: Code, Import: true, FormKey: "invoice_kind", Edit: true},
+	{Key: "tax_currency_code", Label: "Tax currency code", Type: Code, Import: true, FormKey: "tax_currency_code", Edit: true},
+	{Key: "due_date", Label: "Due date", Type: Date, Import: true, FormKey: "due_date", Edit: true, Extract: true},
+	{Key: "issue_time", Label: "Issue time", Type: Time, Import: true, FormKey: "issue_time", Edit: true},
+	{Key: "tax_point_date", Label: "Tax point date", Type: Date, Import: true, FormKey: "tax_point_date", Edit: true},
+	{Key: "payment_status", Label: "Payment status", Type: Text, Import: true, FormKey: "payment_status", Edit: true},
+	{Key: "supplier_email", Label: "Supplier email", Type: Text, FormKey: "supplier_email", Edit: true},
+	{Key: "supplier_telephone", Label: "Supplier telephone", Type: Text, FormKey: "supplier_telephone", Edit: true},
+	{Key: "supplier_street", Label: "Supplier street", Type: Text, FormKey: "supplier_street", Edit: true},
+	{Key: "supplier_city", Label: "Supplier city", Type: Text, FormKey: "supplier_city", Edit: true},
+	{Key: "supplier_postal_zone", Label: "Supplier postal zone", Type: Text, FormKey: "supplier_postal_zone", Edit: true},
+	{Key: "supplier_country", Label: "Supplier country", Type: Code, FormKey: "supplier_country", Edit: true},
+	{Key: "supplier_state", Label: "Supplier state", Type: Code, FormKey: "supplier_state", Edit: true},
+	{Key: "supplier_lga", Label: "Supplier LGA", Type: Code, FormKey: "supplier_lga", Edit: true},
+	{Key: "buyer_email", Label: "Buyer email", Type: Text, Import: true, FormKey: "buyer_email", Edit: true, Extract: true},
+	{Key: "buyer_telephone", Label: "Buyer telephone", Type: Text, Import: true, FormKey: "buyer_telephone", Edit: true, Extract: true},
+	{Key: "buyer_street", Label: "Buyer street", Type: Text, Import: true, FormKey: "buyer_street", Edit: true, Extract: true},
+	{Key: "buyer_city", Label: "Buyer city", Type: Text, Import: true, FormKey: "buyer_city", Edit: true, Extract: true},
+	{Key: "buyer_postal_zone", Label: "Buyer postal zone", Type: Text, Import: true, FormKey: "buyer_postal_zone", Edit: true, Extract: true},
+	{Key: "buyer_country", Label: "Buyer country", Type: Code, Import: true, FormKey: "buyer_country", Edit: true, Extract: true},
+	{Key: "buyer_state", Label: "Buyer state", Type: Code, Import: true, FormKey: "buyer_state", Edit: true, Extract: true},
+	{Key: "buyer_lga", Label: "Buyer LGA", Type: Code, Import: true, FormKey: "buyer_lga", Edit: true, Extract: true},
+	{Key: "description", Label: "Description", Type: Text, Line: true, Import: true, Lead: true, Edit: true, Extract: true},
+	{Key: "quantity", Label: "Quantity", Type: Quantity, Line: true, Import: true, Lead: true, Edit: true, Extract: true},
+	{Key: "unit_price", Label: "Unit price", Type: Money, Line: true, Import: true, Lead: true, Edit: true, Extract: true},
+	{Key: "line_total", Label: "Line total", Type: Money, Line: true, Import: true, Edit: true, Extract: true},
+	{Key: "line_tax", Label: "Line tax", Type: Money, Line: true, Import: true, Edit: true, Extract: true},
+	{Key: "tax_category", Label: "Tax category", Type: Code, Line: true, Import: true, Edit: true, Extract: true},
+	{Key: "hsn_code", Label: "HSN code", Type: Code, Line: true, Import: true, Edit: true, Extract: true},
+	{Key: "isic_code", Label: "ISIC code", Type: Code, Line: true, Import: true, Edit: true, Extract: true},
+	{Key: "product_category", Label: "Product category", Type: Text, Line: true, Import: true, Edit: true},
+	{Key: "service_category", Label: "Service category", Type: Text, Line: true, Import: true, Edit: true},
+	{Key: "sellers_item_identification", Label: "Seller's item identification", Type: Text, Line: true, Import: true, Edit: true, Extract: true},
+	{Key: "price_unit", Label: "Price unit", Type: Code, Line: true, Import: true, Edit: true, Extract: true},
+	{Key: "tax_percent", Label: "Tax percent", Type: Percent, Line: true, Import: true, Edit: true},
+	{Key: "base_quantity", Label: "Base quantity", Type: Quantity, Line: true, Import: true, Edit: true},
+}
+
+// ImportKey is the key on the import Map step: line fields get a "line_" prefix,
+// unless the key already has one.
+func (f Field) ImportKey() string {
+	if f.Line && !strings.HasPrefix(f.Key, "line_") {
+		return "line_" + f.Key
+	}
+	return f.Key
+}
+
+// ImportKeys lists the Lead keys first, then the rest, each in list order.
+func ImportKeys() []string {
+	var keys []string
+	for _, lead := range []bool{true, false} {
+		for _, f := range All {
+			if f.Import && f.Lead == lead {
+				keys = append(keys, f.ImportKey())
+			}
+		}
+	}
+	return keys
+}
+
+func ExtractHeaderKeys() []string { return extractKeys(false) }
+
+func ExtractLineKeys() []string { return extractKeys(true) }
+
+func extractKeys(line bool) []string {
+	var keys []string
+	for _, f := range All {
+		if f.Extract && f.Line == line {
+			keys = append(keys, f.Key)
+		}
+	}
+	return keys
+}

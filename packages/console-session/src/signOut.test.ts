@@ -68,7 +68,6 @@ describe('signOutConsole (AC-12)', () => {
     expect(timeouts).toHaveBeenCalledTimes(1)
     expect(timeouts).toHaveBeenCalledWith(TIMEOUT_MS)
     expect(t.net.calls[0]?.signal).toBe(timeouts.mock.results[0]?.value)
-    // The 204 has no body: read as JSON it would be malformed and warn.
     expect(warn).not.toHaveBeenCalled()
   })
 

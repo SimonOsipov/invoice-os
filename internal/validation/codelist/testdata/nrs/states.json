@@ -1,0 +1,17 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "name": "Abia",
+      "code": "NG-AB"
+    },
+    {
+      "name": "Adamawa",
+      "code": "NG-AD"
+    },
+    {
+      "name": "Akwa Ibom",
+      "code": "NG-AK"
+    }
+  ]
+}

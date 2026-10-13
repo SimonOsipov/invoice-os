@@ -79,6 +79,7 @@ function approvalRow(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
     approve_blocked_reason: null,
     can_submit: false,
     submit_blocked_reason: null,
+    demotion: null,
     approval: {
       run_state: 'open',
       pending_ord: 0,

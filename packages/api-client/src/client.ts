@@ -38,7 +38,8 @@ export function gatewayBase(): string | null {
   return v || null
 }
 
-// Resolves parsed JSON — or the raw body under responseType:'text' — on 2xx; REJECTS with
+// Resolves parsed JSON — or the raw body under responseType:'text' — on 2xx; a 204 resolves
+// undefined, unreported (apiFetch_aNoBody204ResolvesUndefinedAndIsNotReported). REJECTS with
 // ApiError on network / non-2xx / malformed-body.
 export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<T> {
   const headers = new Headers()
@@ -83,6 +84,9 @@ export async function apiFetch<T>(url: string, opts?: ApiFetchOptions): Promise<
     }
     return fail(new ApiError('http', msg, res.status, responseBody))
   }
+
+  // A 204 has no body to parse (DELETE routes); T5 and T10 still bind the read below.
+  if (res.status === 204) return undefined as T
 
   // Stays below the !res.ok branch, and inside the try: T5 fails if it is hoisted, T10 if
   // it is moved out.

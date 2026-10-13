@@ -338,6 +338,15 @@ func TestInvoiceEditFor_ANilValueClearsEveryWritableColumn(t *testing.T) {
 		{"subtotal", func(in invoice.UpdateInput) any { return in.Subtotal }, invoice.ClearText},
 		{"vat", func(in invoice.UpdateInput) any { return in.VAT }, invoice.ClearText},
 		{"total", func(in invoice.UpdateInput) any { return in.Total }, invoice.ClearText},
+		{"due_date", func(in invoice.UpdateInput) any { return in.DueDate }, invoice.ClearDate},
+		{"buyer_email", func(in invoice.UpdateInput) any { return in.BuyerEmail }, invoice.ClearText},
+		{"buyer_telephone", func(in invoice.UpdateInput) any { return in.BuyerTelephone }, invoice.ClearText},
+		{"buyer_street", func(in invoice.UpdateInput) any { return in.BuyerStreet }, invoice.ClearText},
+		{"buyer_city", func(in invoice.UpdateInput) any { return in.BuyerCity }, invoice.ClearText},
+		{"buyer_postal_zone", func(in invoice.UpdateInput) any { return in.BuyerPostalZone }, invoice.ClearText},
+		{"buyer_country", func(in invoice.UpdateInput) any { return in.BuyerCountry }, invoice.ClearText},
+		{"buyer_state", func(in invoice.UpdateInput) any { return in.BuyerState }, invoice.ClearText},
+		{"buyer_lga", func(in invoice.UpdateInput) any { return in.BuyerLGA }, invoice.ClearText},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			in, err := invoiceEditFor(tc.field, nil)
@@ -545,10 +554,50 @@ func fcNonNil(in invoice.UpdateInput) int {
 		in.IssueDate != nil, in.SupplierTIN != nil, in.SupplierName != nil,
 		in.BuyerTIN != nil, in.BuyerName != nil, in.Currency != nil,
 		in.Subtotal != nil, in.VAT != nil, in.Total != nil,
+		in.DueDate != nil, in.BuyerEmail != nil, in.BuyerTelephone != nil, in.BuyerStreet != nil,
+		in.BuyerCity != nil, in.BuyerPostalZone != nil, in.BuyerCountry != nil, in.BuyerState != nil, in.BuyerLGA != nil,
 	} {
 		if set {
 			n++
 		}
 	}
 	return n
+}
+
+func TestInvoiceEditFor_MapsEachNewHeaderField(t *testing.T) {
+	due := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		field, value string
+		read         func(invoice.UpdateInput) any
+		want         any
+	}{
+		{"due_date", "2026-08-13", func(in invoice.UpdateInput) any { return in.DueDate }, &due},
+		{"buyer_email", "a@b.ng", func(in invoice.UpdateInput) any { return in.BuyerEmail }, fcStr("a@b.ng")},
+		{"buyer_telephone", "+2348012345678", func(in invoice.UpdateInput) any { return in.BuyerTelephone }, fcStr("+2348012345678")},
+		{"buyer_street", "1 Marina", func(in invoice.UpdateInput) any { return in.BuyerStreet }, fcStr("1 Marina")},
+		{"buyer_city", "Lagos", func(in invoice.UpdateInput) any { return in.BuyerCity }, fcStr("Lagos")},
+		{"buyer_postal_zone", "100001", func(in invoice.UpdateInput) any { return in.BuyerPostalZone }, fcStr("100001")},
+		{"buyer_country", "NG", func(in invoice.UpdateInput) any { return in.BuyerCountry }, fcStr("NG")},
+		{"buyer_state", "NG-LA", func(in invoice.UpdateInput) any { return in.BuyerState }, fcStr("NG-LA")},
+		{"buyer_lga", "NG-LA-AGE", func(in invoice.UpdateInput) any { return in.BuyerLGA }, fcStr("NG-LA-AGE")},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			in, err := invoiceEditFor(tc.field, fcStr(tc.value))
+			if err != nil {
+				t.Fatalf("%s=%q: %v", tc.field, tc.value, err)
+			}
+			if got := fcShow(tc.read(in.UpdateInput)); got != fcShow(tc.want) {
+				t.Errorf("%s reached the edit as %s, want %s", tc.field, got, fcShow(tc.want))
+			}
+			if n := fcNonNil(in.UpdateInput); n != 1 {
+				t.Errorf("%s built an EditInput with %d non-nil header field(s), want exactly 1", tc.field, n)
+			}
+		})
+	}
+}
+
+func TestInvoiceEditFor_AMalformedDueDateIsRefused(t *testing.T) {
+	if _, err := invoiceEditFor("due_date", fcStr("2026-13-01")); !errors.Is(err, extraction.ErrValueRefused) {
+		t.Errorf("err = %v, want ErrValueRefused", err)
+	}
 }

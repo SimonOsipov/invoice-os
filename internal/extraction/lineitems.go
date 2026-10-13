@@ -15,10 +15,13 @@ const (
 	LineRoleUnitPrice   = "unit_price"
 	LineRoleLineTotal   = "line_total"
 	LineRoleLineTax     = "line_tax" // per-line VAT; distinct from the invoice-level "vat" header field
-)
 
-// LineRoles is one line's cells in emit order: reading order, left to right.
-var LineRoles = []string{LineRoleDescription, LineRoleQuantity, LineRoleUnitPrice, LineRoleLineTotal, LineRoleLineTax}
+	LineRoleTaxCategory   = "tax_category"
+	LineRoleHSNCode       = "hsn_code"
+	LineRoleISICCode      = "isic_code"
+	LineRoleSellersItemID = "sellers_item_identification"
+	LineRolePriceUnit     = "price_unit"
+)
 
 // DocLine is one data row of a reader table, projected onto the invoice's line-item shape.
 type DocLine struct {
@@ -28,8 +31,16 @@ type DocLine struct {
 	UnitPrice   *string
 	LineTotal   *string
 	LineTax     *string
-	Region      *Region            // the line-total cell's region, or nil
-	Regions     map[string]*Region // per-role cell region, keyed by LineRole*; nil-safe to read
+
+	// AI-only roles: the engine table reader fills none of them.
+	TaxCategory *string
+	HSNCode     *string
+	ISICCode    *string
+	SellersItem *string
+	PriceUnit   *string
+
+	Region  *Region            // the line-total cell's region, or nil
+	Regions map[string]*Region // per-role cell region, keyed by LineRole*; nil-safe to read
 }
 
 // Cell returns one role's value, or nil when that cell is absent.
@@ -45,6 +56,16 @@ func (l DocLine) Cell(role string) *string {
 		return l.LineTotal
 	case LineRoleLineTax:
 		return l.LineTax
+	case LineRoleTaxCategory:
+		return l.TaxCategory
+	case LineRoleHSNCode:
+		return l.HSNCode
+	case LineRoleISICCode:
+		return l.ISICCode
+	case LineRoleSellersItemID:
+		return l.SellersItem
+	case LineRolePriceUnit:
+		return l.PriceUnit
 	}
 	return nil
 }
@@ -72,7 +93,7 @@ func LineFieldName(index int, role string) string {
 
 // ParseLineFieldName is LineFieldName's inverse. It mirrors the SPA's own regex
 // (frontend/app/src/lib/lineItems.ts LINE_FIELD_RE): a 1-based index with no leading zero and
-// one of the five roles. The block row "line_items" is not a cell name and does not parse.
+// one of the ten roles. The block row "line_items" is not a cell name and does not parse.
 func ParseLineFieldName(name string) (index int, role string, ok bool) {
 	rest, found := strings.CutPrefix(name, lineFieldPrefix)
 	if !found {

@@ -4,6 +4,7 @@ paths:
   - "internal/tools/idppin/**"
   - "internal/platform/auth/**"
   - ".github/workflows/idp-release-watch.yml"
+  - "internal/gateway/gateway.go"
   - "internal/gateway/register*.go"
   - "internal/gateway/resend_verification*.go"
   - "internal/gateway/password_reset*.go"
@@ -89,10 +90,22 @@ paths:
 - Refuse a join route with 403 for a token with no `session_id`, an unreadable `/user` answer or a null `email_confirmed_at`.
 - Never read `user_metadata` for an email check. Any session holder can write it.
 - Match the tenant-less routes on the escaped path.
+- Accept a tenant-less staff token also on an exact `/api/<service>/v1/staff/` route.
+- Admit that exemption only when `app_metadata.staff` is true.
+- Match the staff exemption on the escaped path, with no dot segment and no `%`.
+- Never admit the bare `/v1/staff` path as a tenant-less route.
+- Treat a `/v1/staff` path as the staff route class. Match it decoded and cleaned.
+- Answer 403 on the staff route class for a token without `staff`.
+- Send `X-User-Staff` and `X-User-Rules-Role` as `true`, or omit them.
+- Read those two headers only on an `App` that called `RequireGateway`.
+- Check the rules role in the platform on every `/v1/staff` path. The service handler checks nothing.
 - Check every session with GoTrue `GET /user` before a request reaches a service. Read `error_code` from a refusal and `email` and `email_confirmed_at` from a 200, within 16 KiB.
 - Answer 503 when the session check cannot reach GoTrue. Never treat that failure as a revoked session.
 - Evict the subject's session-check cache on sign-out.
 - Mint the staff claim from `public.staff_members` in the access-token hook. Never read `user_metadata` for it.
+- Mint `app_metadata.rules_role` from `staff_members.rules_role` in the same hook. Strip an incoming one.
+- Decode `tenant_id`, `staff` and `rules_role` by exact key. A key in another case counts for nothing.
+- Reject a token whose `staff` or `rules_role` is not a boolean.
 - Accept an invite only for the account whose verified email equals the invited address.
 - Answer a join with 404 `this invite is no longer valid` for every unusable invite. Never tell the cases apart.
 - Answer a join with 409 `you already belong to a workspace` for a caller who holds a membership of any status.

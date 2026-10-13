@@ -14,6 +14,17 @@ paths:
   - "internal/notifications/resend.go"
   - "internal/notifications/worker.go"
   - "internal/notifications/store.go"
+  - "internal/platform/ai/**"
+  - "internal/platform/jev/**"
+  - "internal/extraction/aiimage.go"
+  - "internal/extraction/aireading.go"
+  - "internal/extraction/ailines.go"
+  - "internal/extraction/jevcheck.go"
+  - "internal/importer/suggest.go"
+  - "internal/importer/jevcheck.go"
+  - "internal/invoice/explain.go"
+  - "internal/invoice/handlers_explain.go"
+  - "frontend/app/src/components/CreateUpload.tsx"
 ---
 # Privacy page
 
@@ -38,3 +49,25 @@ paths:
 - Say that Open in Platform carries the feature or group. It is a content id, never visitor input.
 - Say that Reject on either site deletes the shared `_ga` cookies. Google's script can re-create them until reload.
 - Name the Library's own "Cookie choices" control at the foot of its sidebar. It brings the notice back.
+
+## AI processing of invoice documents
+
+- Quote the OpenRouter host from `AI_PROVIDER_HOST`. Never retype it.
+- Keep the `Model` prefixes of the AI clients and the vendors named on the page in step. `Privacy.claims.test.tsx` enforces it.
+- Change the page section and `AI_DISCLOSURE` in the same PR as any change to the AI clients' document reading. Disclose the explain call on the page only, never in `AI_DISCLOSURE` and never beside Explain (Q28).
+- Change the explanation section in the same PR as any change to when the explain call runs or what it sends.
+- Make no training, retention, region or deletion claim about OpenRouter, Google or TypeSafe. Wait until one vendor statement backs every provider behind a request.
+- The request sets only `provider.require_parameters`. `data_collection` and `zdr` are unset, so OpenRouter may route to any endpoint of the model.
+- Keep the check date in this file only. The page carries no date.
+- Leave the Jev terms to the user (`openrouter-clients.md`).
+
+## AI provider terms, checked 2026-10-09
+
+Each row holds the URL, one finding and the plan. The PR body holds the full vendor quotes.
+
+| Provider | URL | Finding | Plan |
+|---|---|---|---|
+| OpenRouter | https://openrouter.ai/privacy | Its no-training line covers its own use. Model providers may retain and train. | No claim. |
+| OpenRouter routing | https://openrouter.ai/docs/guides/routing/provider-selection | `data_collection` defaults to `allow`. Our request leaves it unset. | No claim. Only `require_parameters` is set. |
+| Google, Gemini 3.5 Flash Lite | https://ai.google.dev/gemini-api/terms | AI Studio unpaid terms permit product training. Vertex terms do not. | No claim. The serving endpoint is unknown. |
+| TypeSafe, Jev | https://typesafe.ai/legal/privacy-policy | The policy forbids training on Input. It does not name Jev. | No claim. The user decides. |

@@ -1,0 +1,15 @@
+{
+  "invoice": {
+    "invoice_number": "INV-2026-000123",
+    "issue_date": "2026-07-11",
+    "currency": "NGN",
+    "supplier": {"tin": "12345678-0001", "name": "Acme Nigeria Ltd"},
+    "buyer": {"tin": "87654321-0002", "name": "Buyer Ltd"},
+    "subtotal": 1000.0,
+    "vat": 75.0,
+    "total": 1075.0,
+    "line_items": [
+      {"id": "1", "description": "Widget", "quantity": 10.0, "unit_price": 100.0, "line_total": 1000.0}
+    ]
+  }
+}

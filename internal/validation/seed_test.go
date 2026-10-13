@@ -17,9 +17,7 @@
 //
 // IMPORTANT: unlike schema_test.go/store_test.go's fixtures, this suite does
 // NOT seed its own rule_set_versions row -- it asserts the MIGRATED ACTIVE
-// version directly (v2 since M4-04-01; see activeSeedVersion), so it never
-// contends for the partial-unique "one active version" slot other tests'
-// seedVersion(...,true) fixtures occupy transiently. Only TestSeed_KillSwitch mutates shared state (one rule's
+// version directly (v2 since M4-04-01; see activeSeedVersion). Only TestSeed_KillSwitch mutates shared state (one rule's
 // `enabled` column) and restores it in t.Cleanup; every other test in this file is read-only.
 //
 // Coverage (story M3-05 Test Specs):
@@ -60,8 +58,6 @@
 // NOT covered here (belongs to the Execution-stage test reconciliation,
 // which touches schema_test.go/store_test.go directly -- explicitly out of
 // scope for this Mode A RED file, per M3-05-01's Implementation Plan step 3):
-//   - seedVersion(t,super,true)'s deactivate/restore-by-id LIFO fix.
-//   - TestStore_LoadNoActiveErrors's deactivate/restore-by-id fix.
 //   - TestSchema_NoRuleContentShipped's narrowing to exclude the seeded
 //     versions (by their notes marker, not by version number).
 //
@@ -75,15 +71,18 @@ package validation
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
 // newTestIdentity builds a fresh authenticated identity context. rule_set_versions/
@@ -97,42 +96,35 @@ func newTestIdentity() context.Context {
 	})
 }
 
-// activeSeedVersion is the ONE place this package names the migration-seeded
-// ACTIVE rule-set version. INVCR-01-13 (D8, task-289) published v3 (v2's same
-// 19 rules, target filled on 4 keys) and deactivated v2 -- see
-// migrations/20260731090000_rule_set_v3.sql. Previously M4-04-01 published v2
-// (v1's 17 base rules + the 2 line-item rules) and deactivated v1, restoring
-// v1's immutability -- see migrations/20260716185106_rule_set_v2.sql. Every
-// fixture below that needs "the sanctioned active version" resolves it
-// through here or by discovering it from the DB, so the next version publish
-// is a one-line change here rather than a scavenger hunt through scattered
-// literals ([active-version-pinning-is-the-bug]).
+// activeSeedVersion is the version in force on activeSeedDate (v4's start date); the
+// content tests judge it, whatever version today's date selects.
 const activeSeedVersion = 4
 
-// loadActive loads the ACTIVE RuleSet via the real Store -- the shared "DB
-// load" half of this file's DB-load -> engine-evaluate chain (combining
-// store_test.go's load-with-identity pattern with registry_test.go's
-// NewDefaultEngine().Evaluate pattern, per this file's header).
-//
-// It deliberately does NOT assert a version: its callers each test something
-// else entirely (tax-math tolerance, TIN format, the kill-switch...), and a
-// version assertion here would t.Fatalf all of them at this line, BEFORE the
-// assertion each was written to make -- the exact trap the old loadV1's
-// `if rs.Version != 1` sprang on all 23 call sites the moment the active
-// version stopped being literally 1 (RS-V2-15). Which version is active is
-// asserted ONCE, on purpose, by TestSeed_ActiveVersionLoads.
-//
-// If the seed is missing entirely, LoadActiveRuleSet returns
-// ErrNoActiveRuleSet and callers fail here with a message that reads
-// unambiguously as "the seed is not applied yet", not a build/skip/connection
-// fault.
+const activeSeedDate = "2026-08-06"
+
+// activeSeedNow is activeSeedDate as a batch handler's injected clock string (fixedNow).
+const activeSeedNow = activeSeedDate + "T00:00:00Z"
+
+// loadSeedRuleSet loads the version in force on activeSeedDate in the tenant-tx shape of
+// Store.LoadActiveRuleSet, under ctx's identity.
+func loadSeedRuleSet(ctx context.Context, app *pgxpool.Pool) (RuleSet, error) {
+	var rs RuleSet
+	err := db.WithinRequestTenantTx(ctx, app, func(tx pgx.Tx) error {
+		m, err := loadForDatesTx(ctx, tx, []string{activeSeedDate})
+		rs = m[activeSeedDate]
+		return err
+	})
+	return rs, err
+}
+
+// loadActive is loadSeedRuleSet under a fresh identity. It asserts no version:
+// TestSeed_ActiveVersionLoads does.
 func loadActive(t *testing.T, app *pgxpool.Pool) RuleSet {
 	t.Helper()
-	store := NewStore(app)
-	rs, err := store.LoadActiveRuleSet(newTestIdentity())
+	rs, err := loadSeedRuleSet(newTestIdentity(), app)
 	if err != nil {
-		t.Fatalf("LoadActiveRuleSet: %v -- expected the migration-seeded active rule-set, got none "+
-			"(have the migrations been applied via `make migrate-up`?)", err)
+		t.Fatalf("load the rule-set in force on %s: %v -- have the migrations been applied via `make migrate-up`?",
+			activeSeedDate, err)
 	}
 	return rs
 }
@@ -211,22 +203,21 @@ func invoiceOf(p Payload) map[string]any {
 
 // TestSeed_ActiveVersionLoads (Core AC 1 / Test Spec "503 -> live flip" +
 // "Active set loads"): after the seed migration applies, exactly one
-// rule_set_versions row is active and it is version 1; LoadActiveRuleSet
+// rule_set_versions row is in force today and it is version 1; LoadActiveRuleSet
 // materializes it into a RuleSet carrying all 17 seeded rule keys (the
 // pinned rule table in the story's System Design section).
 func TestSeed_ActiveVersionLoads(t *testing.T) {
 	_, app := dbTestPools(t)
 	ctx := context.Background()
 
-	var activeCount int
+	var inForce int
 	if err := app.QueryRow(ctx,
-		`SELECT count(*) FROM rule_set_versions WHERE is_active`,
-	).Scan(&activeCount); err != nil {
-		t.Fatalf("count active rule_set_versions rows: %v", err)
+		`SELECT version FROM rule_set_versions WHERE id = rule_set_version_for($1::date)`, activeSeedDate,
+	).Scan(&inForce); err != nil {
+		t.Fatalf("read the rule_set_versions row in force on %s: %v", activeSeedDate, err)
 	}
-	if activeCount != 1 {
-		t.Fatalf("count(rule_set_versions WHERE is_active) = %d, want exactly 1 -- "+
-			"expected the migration-seeded active rule-set", activeCount)
+	if inForce != activeSeedVersion {
+		t.Fatalf("version in force on %s = %d, want %d -- expected the migration-seeded rule-set", activeSeedDate, inForce, activeSeedVersion)
 	}
 
 	rs := loadActive(t, app)
@@ -586,19 +577,18 @@ func TestSeed_DuplicateLineItemsCEL(t *testing.T) {
 func TestSeed_KillSwitch(t *testing.T) {
 	super, app := dbTestPools(t)
 
-	// Restore on the active version, the row the kill switch writes
-	// (TestRuleSetV2_KillSwitchCleanupTargetsActiveVersion).
+	// Restore the row the kill switch writes (TestRuleSetV2_KillSwitchCleanupTargetsVersionInForce).
 	t.Cleanup(func() {
 		if _, err := super.Exec(context.Background(),
 			`UPDATE rules r SET enabled = true
 			   FROM rule_set_versions v
-			  WHERE r.rule_set_version_id = v.id AND v.is_active AND r.key = 'vat-standard-rate'`,
+			  WHERE r.rule_set_version_id = v.id AND v.id = rule_set_version_for($1::date) AND r.key = 'vat-standard-rate'`, activeSeedDate,
 		); err != nil {
 			t.Errorf("cleanup: restore vat-standard-rate enabled=true: %v", err)
 		}
 	})
 
-	if n := runKillSwitch(t, super, "vat-standard-rate", false); n != 1 {
+	if n := runKillSwitchSeed(t, super, "vat-standard-rate", false); n != 1 {
 		t.Fatalf("kill switch (vat-standard-rate, false) rows = %d, want 1", n)
 	}
 
@@ -759,5 +749,65 @@ func TestSeed_LineItemRulesAtTheActiveVersionAreUnchanged(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotParsed, wantParsed) {
 		t.Errorf("line-items-sum-subtotal params decoded = %v, want %v (byte-identical to the migration's, decode-compared since jsonb reorders/respaces keys)", gotParsed, wantParsed)
+	}
+}
+
+// TestSeed_DemoInvoicesStampedByIssueDateVersion re-runs db/seed.dev.sql in a rolled-back tx
+// beside two dated fixtures that split the demo issue dates (2026-01..06), so a seed that
+// stamps one version for all (the old single-active model) cannot pass.
+func TestSeed_DemoInvoicesStampedByIssueDateVersion(t *testing.T) {
+	super, _ := dbTestPools(t)
+	ctx := context.Background()
+
+	seedSQL, err := os.ReadFile("../../db/seed.dev.sql")
+	if err != nil {
+		t.Fatalf("read db/seed.dev.sql: %v", err)
+	}
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var early, late string
+	for _, f := range []struct {
+		dst  *string
+		from string
+	}{{&early, "2026-03-01"}, {&late, "2026-05-01"}} {
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO rule_set_versions (version, sealed, effective_from, notes)
+			 VALUES ($1, true, $2::date, $3) RETURNING id::text`,
+			nextVersion(), f.from, fixtureNotes).Scan(f.dst); err != nil {
+			t.Fatalf("insert fixture dated %s: %v", f.from, err)
+		}
+	}
+	if _, err := tx.Exec(ctx, string(seedSQL)); err != nil {
+		t.Fatalf("run db/seed.dev.sql: %v", err)
+	}
+
+	var stamped, undated, wrongForDate, wrongSplit, earlyN, lateN int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*),
+		        count(*) FILTER (WHERE issue_date IS NULL),
+		        count(*) FILTER (WHERE rule_set_version_id IS DISTINCT FROM rule_set_version_for(issue_date)),
+		        count(*) FILTER (WHERE rule_set_version_id IS DISTINCT FROM
+		                         CASE WHEN issue_date >= '2026-05-01' THEN $2::uuid ELSE $1::uuid END),
+		        count(*) FILTER (WHERE rule_set_version_id = $1::uuid),
+		        count(*) FILTER (WHERE rule_set_version_id = $2::uuid)
+		   FROM invoices WHERE invoice_number LIKE 'DEMO-%' AND rule_set_version_id IS NOT NULL`,
+		early, late).Scan(&stamped, &undated, &wrongForDate, &wrongSplit, &earlyN, &lateN); err != nil {
+		t.Fatalf("read the stamped demo invoices: %v", err)
+	}
+	if stamped == 0 || undated != 0 {
+		t.Fatalf("stamped demo invoices = %d (without an issue date: %d), want > 0 and none undated", stamped, undated)
+	}
+	if earlyN == 0 || lateN == 0 {
+		t.Errorf("stamped by the early fixture = %d, by the late fixture = %d, want both > 0 (the seed stamps by issue date)", earlyN, lateN)
+	}
+	if wrongForDate != 0 {
+		t.Errorf("%d of %d stamped demo invoices differ from rule_set_version_for(issue_date)", wrongForDate, stamped)
+	}
+	if wrongSplit != 0 {
+		t.Errorf("%d of %d stamped demo invoices are not the early fixture before 2026-05-01 and the late one from then on", wrongSplit, stamped)
 	}
 }

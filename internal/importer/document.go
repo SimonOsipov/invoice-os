@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
+	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -98,20 +100,12 @@ func (s *Store) SettledExtraction(ctx context.Context, documentID string) (Settl
 	return ex, nil
 }
 
-// mapperFieldNames is internal/importer's own copy of extraction.HeaderFields, in the same
-// order -- internal/importer cannot import internal/extraction (document_deps_test.go /
-// SX-09), so nothing compiler-links the two lists; TestDocumentCreateInput_
-// MapperFieldNamesMatchesHeaderFieldsInOrder (MAP-11) is the drift guard.
-var mapperFieldNames = []string{
-	"invoice_number", "issue_date", "supplier_tin", "supplier_name",
-	"buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
-}
+// mapperFieldNames is the extraction header keys of internal/invoicefields (importer cannot
+// import internal/extraction).
+var mapperFieldNames = invoicefields.ExtractHeaderKeys()
 
-// mapperLineRoles is internal/importer's own copy of extraction.LineRoles, in the same order --
-// internal/importer cannot import internal/extraction (document_deps_test.go / SX-09), so
-// nothing compiler-links the two lists; TestImporterLineRoles_MatchesExtractionLineRoles is the
-// drift guard.
-var mapperLineRoles = []string{"description", "quantity", "unit_price", "line_total", "line_tax"}
+// mapperLineRoles is the extraction line keys of internal/invoicefields.
+var mapperLineRoles = invoicefields.ExtractLineKeys()
 
 // lineFieldPrefix is line_items[N].<role>'s opening.
 const lineFieldPrefix = "line_items["
@@ -236,6 +230,18 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 		issueDate = parsed
 	}
 
+	var dueDate *time.Time
+	if v := values["due_date"]; v != nil {
+		parsed, err := parseDate("due_date", *v)
+		if err != nil {
+			return invoice.CreateInput{}, &RowError{
+				Field:   "due_date",
+				Message: fmt.Sprintf("The due date on this document reads %q, which is not a date this importer can read. It accepts dates written as YYYY-MM-DD, such as 2026-03-01. Enter this invoice manually to carry on.", strings.TrimSpace(*v)),
+			}
+		}
+		dueDate = parsed
+	}
+
 	// Group line_items[N].<role> cells by index, then sort NUMERICALLY: SettledExtraction's
 	// ORDER BY created_at, id does not guarantee index order, and Store.Create assigns
 	// line_no = 1..N by array position (D10), so a hole in the indices closes ordinally.
@@ -261,6 +267,16 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 			g.LineTotal = f.Value
 		case "line_tax":
 			g.LineTax = f.Value
+		case "tax_category":
+			g.TaxCategory = invoice.TrimmedOrNil(f.Value)
+		case "hsn_code":
+			g.HSNCode = invoice.TrimmedOrNil(f.Value)
+		case "isic_code":
+			g.ISICCode = invoice.TrimmedOrNil(f.Value)
+		case "sellers_item_identification":
+			g.SellersItemIdentification = invoice.TrimmedOrNil(f.Value)
+		case "price_unit":
+			g.PriceUnit = invoice.TrimmedOrNil(f.Value)
 		}
 	}
 	var lineItems []invoice.LineItemInput
@@ -286,6 +302,15 @@ func readingCreateInput(entityID, documentID string, ex SettledExtraction) (invo
 		Subtotal:         values["subtotal"],
 		VAT:              values["vat"],
 		Total:            values["total"],
+		DueDate:          dueDate,
+		BuyerEmail:       invoice.TrimmedOrNil(values["buyer_email"]),
+		BuyerTelephone:   invoice.TrimmedOrNil(values["buyer_telephone"]),
+		BuyerStreet:      invoice.TrimmedOrNil(values["buyer_street"]),
+		BuyerCity:        invoice.TrimmedOrNil(values["buyer_city"]),
+		BuyerPostalZone:  invoice.TrimmedOrNil(values["buyer_postal_zone"]),
+		BuyerCountry:     invoice.TrimmedOrNil(values["buyer_country"]),
+		BuyerState:       invoice.TrimmedOrNil(values["buyer_state"]),
+		BuyerLGA:         invoice.TrimmedOrNil(values["buyer_lga"]),
 		LineItems:        lineItems,
 		SourceDocumentID: &docID,
 	}, nil
@@ -332,7 +357,8 @@ func carriedReading(documentID, jobID string, in invoice.CreateInput) *CarriedRe
 
 // ImportDocument is the document-import orchestration entrypoint (EXTR-06-03, task-763):
 // read -> map -> mint batch -> dedup precheck -> create -> finalize. rows_total is always 1
-// (D-5, one document = one invoice); no gate runs (RuleSetVersion stays nil, AC #6).
+// (D-5, one document = one invoice). It evaluates and stamps nothing: RuleSetVersion stays nil
+// and the one read-only Evaluate only feeds the rule breaks.
 //
 // SettledExtraction precedes CreateBatch so a document with nothing to import mints no batch
 // (D-10). CreateBatch runs BEFORE the mapper's RowError is checked, so an unreadable
@@ -367,6 +393,10 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		}, nil
 	}
 	in.ImportBatchID = &batchID
+	if err := s.fillBuyerType(ctx, &in); err != nil {
+		_ = s.batch.Finalize(ctx, batchID, 1, 1, 0, nil, "failed")
+		return BatchResult{}, err
+	}
 
 	// ExistingNumbers only resolves the colliding id for a nicer message in the non-racing
 	// case (D-12) -- Create's own unique-constraint 23505 below is the real guard. Its own
@@ -380,7 +410,8 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		return BatchResult{}, err
 	}
 
-	if _, createErr := s.inv.Create(ctx, in); createErr != nil {
+	created, createErr := s.inv.Create(ctx, in)
+	if createErr != nil {
 		msg, isDomainErr := domainCreateErrorMessage(createErr)
 		if !isDomainErr {
 			_ = s.batch.Finalize(ctx, batchID, 1, 1, 0, nil, "failed")
@@ -411,6 +442,8 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 	if err := s.batch.Finalize(ctx, batchID, 1, 1, 0, []RowError{}, "completed"); err != nil {
 		return BatchResult{}, err
 	}
+	// After Finalize: the gate call is a network hop and must not strand the batch in processing.
+	s.recordImportRuleBreaks(ctx, ex, created)
 	return BatchResult{
 		ID:                batchID,
 		Status:            "completed",
@@ -420,6 +453,21 @@ func (s *Service) ImportDocument(ctx context.Context, entityID, documentID strin
 		Errors:            []RowError{},
 		InvoiceViolations: []InvoiceViolations{},
 	}, nil
+}
+
+// recordImportRuleBreaks is best effort: an Evaluate or write failure is logged and the import
+// result stays as it was.
+func (s *Service) recordImportRuleBreaks(ctx context.Context, ex SettledExtraction, created invoice.Invoice) {
+	evalCtx, cancel := context.WithTimeout(ctx, ruleBreakEvaluateTimeout)
+	defer cancel()
+	res, err := s.gate.Evaluate(evalCtx, []invoice.EvalItem{{Ref: created.ID, Invoice: created}})
+	if err != nil {
+		slog.WarnContext(ctx, "importer: evaluate imported invoice", slog.String("invoice_id", created.ID), slog.Any("err", err))
+		return
+	}
+	if err := s.batch.RecordRuleBreaks(ctx, ex.JobID, res.StampByRef[created.ID].ID, ruleBreaks(ex, res.ByRef[created.ID])); err != nil {
+		slog.WarnContext(ctx, "importer: record rule breaks", slog.String("invoice_id", created.ID), slog.Any("err", err))
+	}
 }
 
 // CarriedReading answers nil for anything with nothing to carry, including another tenant's
@@ -473,14 +521,25 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 	in.EntityID = entityID
 	in.InvoiceNumber = number
 	in.NumberSupplied = true
+	if err := s.fillBuyerType(ctx, &in); err != nil {
+		return invoice.Invoice{}, err
+	}
 	created, err := s.inv.Create(ctx, in)
 	if err != nil {
 		return invoice.Invoice{}, err
 	}
 	// An outage is not a verdict: the filed draft keeps its Re-validate.
-	if _, err := s.gate.ValidateBatch(ctx, []invoice.Invoice{created}); err != nil {
+	outcome, err := s.gate.ValidateBatch(ctx, []invoice.Invoice{created})
+	if err != nil {
 		slog.WarnContext(ctx, "importer: validate supplied invoice", slog.String("invoice_id", created.ID), slog.Any("err", err))
 		return created, nil
+	}
+	if slices.Contains(outcome.Unvalidated, created.ID) {
+		slog.WarnContext(ctx, "importer: supplied invoice left unvalidated, rules changed twice", slog.String("invoice_id", created.ID))
+		return created, nil
+	}
+	if err := s.batch.RecordRuleBreaks(ctx, ex.JobID, outcome.StampByID[created.ID].ID, ruleBreaks(ex, outcome.ByID[created.ID])); err != nil {
+		slog.WarnContext(ctx, "importer: record rule breaks", slog.String("invoice_id", created.ID), slog.Any("err", err))
 	}
 	got, err := s.inv.Get(ctx, created.ID)
 	if err != nil {
@@ -488,4 +547,17 @@ func (s *Service) SupplyInvoiceNumber(ctx context.Context, entityID, documentID,
 		return created, nil
 	}
 	return got, nil
+}
+
+// fillBuyerType fills an unprinted buyer type from the tenant's buyer directory.
+func (s *Service) fillBuyerType(ctx context.Context, in *invoice.CreateInput) error {
+	if in.InvoiceKind != nil || in.BuyerTIN == nil || strings.TrimSpace(*in.BuyerTIN) == "" {
+		return nil
+	}
+	bt, err := s.batch.BuyerTypeByTIN(ctx, *in.BuyerTIN)
+	if err != nil {
+		return err
+	}
+	in.InvoiceKind = bt
+	return nil
 }

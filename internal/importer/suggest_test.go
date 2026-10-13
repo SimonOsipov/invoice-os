@@ -98,6 +98,61 @@ func TestMappingPrompt_MatchesTheMeasuredHarness(t *testing.T) {
 	}
 }
 
+// mappingSystem's 11 measured definition lines stay byte-identical.
+var sgMeasuredDefinitions = []string{
+	"- invoice_number: the invoice's own number. Not an order, PO, customer, account, internal record ID or payment reference.",
+	"- issue_date: the date the invoice was issued. Not a due date, delivery date or payment date.",
+	"- buyer_tin: the buyer's (customer's) Tax Identification Number. Not the seller's own TIN or an RC number.",
+	"- buyer_name: the buyer's name. Not a customer code, address, email or phone.",
+	"- currency: the currency code.",
+	"- subtotal: the invoice's amount before VAT. Not a line amount.",
+	"- vat: the invoice's VAT amount. Not a VAT rate or a line's tax.",
+	"- total: the invoice's total including VAT. Not a line amount, amount paid, balance due or amount after withholding tax.",
+	"- line_description: the line's item or service description.",
+	"- line_quantity: the line's quantity.",
+	"- line_unit_price: the line's price per unit. Not a line total.",
+}
+
+func TestMappingSystem_KeepsTheElevenMeasuredDefinitions(t *testing.T) {
+	if len(sgMeasuredDefinitions) != 11 {
+		t.Fatalf("fixture holds %d definitions, want 11", len(sgMeasuredDefinitions))
+	}
+	for _, line := range sgMeasuredDefinitions {
+		if !strings.Contains(mappingSystem, "\n"+line+"\n") {
+			t.Errorf("mappingSystem lost or changed the measured line %q", line)
+		}
+	}
+}
+
+func TestMappingSystem_DefinesEveryImportKeyOnce(t *testing.T) {
+	if len(mappingFields) != 36 {
+		t.Fatalf("mappingFields holds %d keys, want 36", len(mappingFields))
+	}
+	for _, k := range mappingFields {
+		if n := strings.Count(mappingSystem, "\n- "+k+": "); n != 1 {
+			t.Errorf("mappingSystem defines %s %d times, want once", k, n)
+		}
+	}
+}
+
+func TestMappingFields_MatchTheMeasuredHarness(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "tools", "aimodeltest", "csvrun.py"))
+	if err != nil {
+		t.Fatalf("read csvrun.py: %v", err)
+	}
+	m := regexp.MustCompile(`(?s)\nFIELDS = \[(.*?)\]`).FindStringSubmatch(string(src))
+	if m == nil {
+		t.Fatal("FIELDS literal not found in csvrun.py")
+	}
+	var got []string
+	for _, q := range regexp.MustCompile(`"([^"]*)"`).FindAllStringSubmatch(m[1], -1) {
+		got = append(got, q[1])
+	}
+	if !slices.Equal(got, mappingFields) {
+		t.Errorf("csvrun.py FIELDS = %v, want mappingFields %v", got, mappingFields)
+	}
+}
+
 // T23 (NEW). csvrun.py's call: response_format json_schema name, the one value the request
 // envelope carries that no other test reads back from the harness.
 func TestMappingSchemaName_MatchesTheMeasuredHarness(t *testing.T) {
@@ -145,7 +200,7 @@ func TestMappingSystem_SurvivesGofmtAndCarriesNoCurledQuote(t *testing.T) {
 }
 
 // T02 (row 2). AC-3's real oracle: a real *ai.Client in fake mode must accept mappingSchema
-// with no refused outcome, answering all 14 properties as nil.
+// with no refused outcome, answering all 39 properties as nil.
 func TestMappingSchema_IsAcceptedByTheAIClient(t *testing.T) {
 	ans, err, outcome := sgFakeAnswer(t, "Row 1: a,b")
 	if err != nil {
@@ -157,12 +212,12 @@ func TestMappingSchema_IsAcceptedByTheAIClient(t *testing.T) {
 	if outcome != "fake" {
 		t.Errorf("outcome = %q, want %q", outcome, "fake")
 	}
-	if len(ans) != 14 {
-		t.Fatalf("answer has %d key(s), want 14: %v", len(ans), ans)
+	if len(ans) != 39 {
+		t.Fatalf("answer has %d key(s), want 39: %v", len(ans), ans)
 	}
 	want := append(append([]string{}, mappingFields...), "header_row", "date_format", "decimal_separator")
-	if len(want) != 14 {
-		t.Fatalf("fixture builds %d name(s), want 14 -- mappingFields is wrong", len(want))
+	if len(want) != 39 {
+		t.Fatalf("fixture builds %d name(s), want 39 -- mappingFields is wrong", len(want))
 	}
 	for _, k := range want {
 		v, ok := ans[k]

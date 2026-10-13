@@ -1,0 +1,6 @@
+[
+  {"list": "line_items", "n": 2, "field": "", "path": "line_items[2]"},
+  {"list": "line_items", "n": 2, "field": "unit_price", "path": "line_items[2].unit_price"},
+  {"list": "line_items", "n": 12, "field": "hsn_code", "path": "line_items[12].hsn_code"},
+  {"list": "tax_subtotals", "n": 2, "field": "tax_category", "path": "tax_subtotals[2].tax_category"}
+]

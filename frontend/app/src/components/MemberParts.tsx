@@ -32,7 +32,7 @@ import type { Role } from '../lib/roles'
 import { WfSelect, type WfOption } from './WorkflowParts'
 
 /** A native radio painted as the prototype's ring with a 7px dot when checked. */
-const radioPaint = (checked: boolean): CSSProperties => ({
+export const radioPaint = (checked: boolean): CSSProperties => ({
   appearance: 'none',
   WebkitAppearance: 'none',
   flex: 'none',
@@ -173,8 +173,7 @@ export function AmberNote({ children, testId, style }: { children: ReactNode; te
  * alike, so nothing is re-pinned here.
  *
  * NATIVE RADIOS, and the app's first. `frontend/app/src` contains no `type="radio"`, no
- * `role="radio"` and no `radiogroup`; the ARIA-on-button idiom it does have (RulesView.tsx:259,
- * WorkflowParts.tsx:295-299) is for TOGGLES, not for a three-way exclusive choice, and would need
+ * `role="radio"` and no `radiogroup`; the ARIA-on-button idiom it does have (RulesView, WorkflowParts) is for TOGGLES, not for a three-way exclusive choice, and would need
  * hand-rolled arrow-key handling. A real radio group gives roving focus, form semantics and
  * `:checked` for free. The card LOOK follows the app's selected-card idiom
  * (CreateUpload.tsx:178-198); its ARIA does not — that one carries no selected state at all,
@@ -564,8 +563,8 @@ export function MoreMenu({ open, onOpen, onClose, label, items, note }: {
         aria-expanded={open}
         onClick={(e) => {
           // MEMB-01-07 gives the row itself a click that opens the drawer; the two must
-          // never fire together. Same rule, same reason as InvoicesList.tsx:599-603 and
-          // RulesView.tsx:253-267.
+          // never fire together. Same rule, same reason as InvoicesList and
+          // RulesView.
           e.stopPropagation()
           if (open) onClose()
           else onOpen()

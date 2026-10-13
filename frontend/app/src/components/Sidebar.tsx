@@ -101,8 +101,8 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // one answer to "what is this firm called" rather than two that can disagree.
   const firmName = user.verified && user.tenantName ? user.tenantName : orgLabel
   //
-  // NAV_RULES is CLIENT-SCOPED in both modes: custom rules are stored per client
-  // (lib/rules.ts), so in firm mode it belongs in the group that follows the
+  // NAV_RULES is CLIENT-SCOPED in both modes: custom rules are stored per client,
+  // so in firm mode it belongs in the group that follows the
   // switcher, never the firm-wide one. It sits directly after Workflows, which is
   // where the brief places it — see NAV_RULES in glyphs.tsx.
   //

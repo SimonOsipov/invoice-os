@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 
 import { NOT_ACTIVE_MEMBER_MESSAGE } from './authedFetch'
+import { CODE_LISTS } from './codeLists'
 import { AI_UNAVAILABLE_FIELD, DOCUMENT_TYPE_NOTICE } from './extractionReview'
 import type { DocumentType } from './extractionReview'
 
@@ -73,6 +74,36 @@ const WIRE_MIRRORS = [
     spaAnchor: 'export async function getInvoiceHistory(',
     e2eAnchor: 'export function getInvoiceHistory(',
     floor: 6,
+  },
+  {
+    ts: 'HistoryCause',
+    go: 'HistoryCause',
+    goPath: 'internal/invoice/invoice.go',
+    goAnchor: 'func (s Status) valid() bool',
+    spaPath: 'frontend/app/src/lib/invoices.ts',
+    spaAnchor: 'export async function getInvoiceHistory(',
+    e2eAnchor: 'export function getInvoiceHistory(',
+    floor: 3,
+  },
+  {
+    ts: 'CustomRuleCause',
+    go: 'CustomRuleCause',
+    goPath: 'internal/invoice/invoice.go',
+    goAnchor: 'func (s Status) valid() bool',
+    spaPath: 'frontend/app/src/lib/invoices.ts',
+    spaAnchor: 'export async function getInvoiceHistory(',
+    e2eAnchor: 'export function getInvoiceHistory(',
+    floor: 5,
+  },
+  {
+    ts: 'Demotion',
+    go: 'Demotion',
+    goPath: 'internal/invoice/invoice.go',
+    goAnchor: 'func (s Status) valid() bool',
+    spaPath: 'frontend/app/src/lib/invoices.ts',
+    spaAnchor: 'export async function getInvoiceHistory(',
+    e2eAnchor: 'export function getInvoiceHistory(',
+    floor: 3,
   },
   {
     ts: 'PendingInvite',
@@ -163,6 +194,16 @@ const WIRE_MIRRORS = [
     floor: 3,
   },
   {
+    ts: 'ExtractionRuleBreak',
+    go: 'ExtractionRuleBreak',
+    goPath: 'internal/extraction/reader.go',
+    goAnchor: 'func detailRuleBreaksTx(',
+    spaPath: 'frontend/app/src/lib/extractionReview.ts',
+    spaAnchor: 'export function fieldNote(',
+    e2eAnchor: 'export function getExtractionDetail(',
+    floor: 2,
+  },
+  {
     ts: 'ExtractionFieldState',
     go: 'ExtractionFieldState',
     goPath: 'internal/extraction/reader.go',
@@ -170,7 +211,7 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/extractionReview.ts',
     spaAnchor: 'export function scrollRegionIntoView(',
     e2eAnchor: 'export function getExtractionDetail(',
-    floor: 6,
+    floor: 7,
   },
   {
     ts: 'ExtractionRegion',
@@ -213,7 +254,7 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/lineItems.ts',
     spaAnchor: 'export function linesToPost(',
     e2eAnchor: 'export function postLineItems(',
-    floor: 5,
+    floor: 10,
   },
   {
     ts: 'LineItemsRequest',
@@ -235,8 +276,8 @@ const WIRE_MIRRORS = [
     e2eAnchor: 'export function postLineItems(',
     floor: 4,
   },
-  // EXTR-15-06 AC-7 — the create wire, which had no row at all. floor 13 is the shipped 12
-  // plus source_document_id: the three-way equality is set-based and so blind to a key added
+  // EXTR-15-06 AC-7 — the create wire, which had no row at all. floor 35 is the shipped 12,
+  // source_document_id and the 22 NRS keys: the three-way equality is set-based and so blind to a key added
   // to all three legs at once, and the floor is what bites.
   {
     ts: 'InvoiceCreateInput',
@@ -246,7 +287,7 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/invoices.ts',
     spaAnchor: 'export async function createInvoice(',
     e2eAnchor: 'export function createInvoice(',
-    floor: 13,
+    floor: 35,
   },
   // The carried reading and its supply (internal/importer/handlers_document.go).
   {
@@ -341,6 +382,56 @@ const WIRE_MIRRORS = [
     spaAnchor: 'export async function checkMapping(',
     e2eAnchor: 'export function checkMapping(',
     floor: 1,
+  },
+  {
+    ts: 'Customer',
+    go: 'Customer',
+    goPath: 'internal/customer/customer.go',
+    goAnchor: 'func ListHandler(',
+    spaPath: 'frontend/app/src/lib/buyerDirectory.ts',
+    spaAnchor: 'export function listCustomers(',
+    e2eAnchor: 'export function listCustomers(',
+    floor: 14,
+  },
+  {
+    ts: 'GoldenRules',
+    go: 'GoldenRules',
+    goPath: 'internal/validation/golden_rules.go',
+    goAnchor: 'func (s *Store) GoldenRules(',
+    spaPath: 'frontend/app/src/lib/rulesApi.ts',
+    spaAnchor: 'export function getGoldenRules(',
+    e2eAnchor: 'export function getGoldenRules(',
+    floor: 6,
+  },
+  {
+    ts: 'GoldenVersion',
+    go: 'GoldenVersion',
+    goPath: 'internal/validation/golden_rules.go',
+    goAnchor: 'func (s *Store) GoldenRules(',
+    spaPath: 'frontend/app/src/lib/rulesApi.ts',
+    spaAnchor: 'export function getGoldenRules(',
+    e2eAnchor: 'export function getGoldenRules(',
+    floor: 5,
+  },
+  {
+    ts: 'GoldenRule',
+    go: 'GoldenRule',
+    goPath: 'internal/validation/golden_rules.go',
+    goAnchor: 'func (s *Store) GoldenRules(',
+    spaPath: 'frontend/app/src/lib/rulesApi.ts',
+    spaAnchor: 'export function getGoldenRules(',
+    e2eAnchor: 'export function getGoldenRules(',
+    floor: 7,
+  },
+  {
+    ts: 'CustomRule',
+    go: 'Rule',
+    goPath: 'internal/customrule/customrule.go',
+    goAnchor: 'func Key(',
+    spaPath: 'frontend/app/src/lib/rulesApi.ts',
+    spaAnchor: 'export async function listCustomRules(',
+    e2eAnchor: 'export async function listCustomRules(',
+    floor: 14,
   },
 ] as const
 
@@ -447,6 +538,9 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     // mirror nothing runs.
     expect(WIRE_MIRRORS.map((m) => m.ts)).toEqual([
       'StatusChange',
+      'HistoryCause',
+      'CustomRuleCause',
+      'Demotion',
       'PendingInvite',
       'AuditEvent',
       'ExtractionCandidate',
@@ -455,6 +549,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'ExtractionJob',
       'ExtractionDocument',
       'ExtractionPage',
+      'ExtractionRuleBreak',
       'ExtractionFieldState',
       'ExtractionRegion',
       'CorrectionRequest',
@@ -472,6 +567,11 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       'SuggestMapping',
       'CheckMappingRequest',
       'CheckMapping',
+      'Customer',
+      'GoldenRules',
+      'GoldenVersion',
+      'GoldenRule',
+      'CustomRule',
     ])
     expect(MESSAGE_MIRRORS.map((m) => m.go)).toEqual(['NotActiveMemberMessage'])
   })
@@ -505,7 +605,7 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(untagged).not.toMatch(/`json:"[^"]+"`/)
   })
 
-  // T4 — internal/invoice.LineItemInput is a DIFFERENT, five-field type (adds LineTax) with NO
+  // T4 — internal/invoice.LineItemInput is a DIFFERENT, fifteen-field type (ID, the five legacy fields, nine NRS fields) with NO
   // json tags at all -- it is Go-to-Go (Store.Create's input), never marshaled. goStructKeys
   // counts only `json:"…"` matches, so reading it yields 0, not 5. That is the point: a goPath
   // typo pointing this row at invoice.go would not silently agree, it would fail the floor of 4
@@ -516,9 +616,25 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
     expect(row?.goPath).toBe('internal/extraction/handlers_lineitems.go')
 
     const invoiceSrc = repoFile('internal/invoice/invoice.go')
-    expect(invoiceSrc, 'internal/invoice.LineItemInput must still exist, untagged').toContain(
-      'type LineItemInput struct {\n\tDescription *string\n\tQuantity    *string\n\tUnitPrice   *string\n\tLineTotal   *string\n\tLineTax     *string\n}',
-    )
+    const body = /type\s+LineItemInput\s+struct\s*\{([^{}]*)\}/.exec(stripComments(invoiceSrc))?.[1] ?? ''
+    const fields = [...body.matchAll(/^\s*([A-Za-z]\w*)\s+\*string\s*$/gm)].map((m) => m[1])
+    expect(fields, 'internal/invoice.LineItemInput must still exist, untagged, with these fields').toEqual([
+      'ID',
+      'Description',
+      'Quantity',
+      'UnitPrice',
+      'LineTotal',
+      'LineTax',
+      'TaxCategory',
+      'HSNCode',
+      'ISICCode',
+      'ProductCategory',
+      'ServiceCategory',
+      'SellersItemIdentification',
+      'PriceUnit',
+      'TaxPercent',
+      'BaseQuantity',
+    ])
     const invoiceKeys = goStructKeys(invoiceSrc, 'LineItemInput')
     expect(invoiceKeys.length, 'untagged fields must not be readable as wire keys').toBe(0)
   })
@@ -563,6 +679,113 @@ describe('wire mirrors: Go <-> the SPA <-> e2e/api/client.ts (AC-5)', () => {
       expect(keys, `${leg}: extractor read nothing`).toContain('failure_kind')
       expect(keys, `${leg}: ExtractionDetail lacks document_type`).toContain('document_type')
     }
+  })
+})
+
+// lineItemReq has no WIRE_MIRRORS row (a row carries ONE `ts` name and the
+// e2e leg is named InvoiceCreateLineItem), so its three legs are compared here.
+describe('wire mirror: lineItemReq <-> LineItemCreateInput <-> InvoiceCreateLineItem', () => {
+  const GO = 'internal/invoice/handlers.go'
+  const SPA = 'frontend/app/src/lib/invoices.ts'
+  const legs = () => ({
+    go: goStructKeys(repoFile(GO), 'lineItemReq'),
+    spa: tsInterfaceKeys(repoFile(SPA), 'LineItemCreateInput'),
+    e2e: tsInterfaceKeys(repoFile(E2E_CLIENT), 'InvoiceCreateLineItem'),
+  })
+
+  it('wire mirror: lineItemReq <-> LineItemCreateInput <-> InvoiceCreateLineItem', () => {
+    expect(repoFile(GO), `lost anchor on ${GO}`).toContain('type lineItemReq struct')
+    expect(repoFile(SPA), `lost anchor on ${SPA}`).toContain('export interface LineItemCreateInput')
+    expect(repoFile(E2E_CLIENT), `lost anchor on ${E2E_CLIENT}`).toContain('export interface InvoiceCreateLineItem')
+
+    const { go, spa, e2e } = legs()
+    // id + the 5 legacy keys + the 9 NRS line keys.
+    for (const keys of [go, spa, e2e]) expect(keys.length).toBeGreaterThanOrEqual(15)
+    expect(keySetDiff(go, spa), 'Go lineItemReq vs the SPA').toEqual([])
+    expect(keySetDiff(go, e2e), 'Go lineItemReq vs e2e').toEqual([])
+    expect(keySetDiff(spa, e2e), 'the SPA vs e2e').toEqual([])
+    expect(go).toContain('id')
+  })
+
+  it('wire mirror: the line comparator can report a real mismatch', () => {
+    const goFixture = 'type lineItemReq struct {\n\tID *string `json:"id"`\n\tTaxPercent *string `json:"tax_percent"`\n}'
+    const tsMissing = 'export interface LineItemCreateInput {\n  id?: string\n}'
+    expect(keySetDiff(goStructKeys(goFixture, 'lineItemReq'), tsInterfaceKeys(tsMissing, 'LineItemCreateInput'))).toEqual([
+      'tax_percent',
+    ])
+  })
+})
+
+// e2e/api/client.ts's Invoice feeds isolation.spec.ts's INVOICE_KEYS: a key misspelt there
+// is read as undefined before and after a cross-tenant write, and the snapshot stays equal.
+describe('wire mirror: Go Invoice, LineItem and TaxSubtotal <-> the e2e read types', () => {
+  const NRS_HEADER = [
+    'invoice_kind', 'tax_currency_code', 'due_date', 'issue_time', 'tax_point_date', 'payment_status',
+    'supplier_email', 'supplier_telephone', 'supplier_street', 'supplier_city', 'supplier_postal_zone',
+    'supplier_country', 'supplier_state', 'supplier_lga', 'buyer_email', 'buyer_telephone', 'buyer_street',
+    'buyer_city', 'buyer_postal_zone', 'buyer_country', 'buyer_state', 'buyer_lga',
+  ]
+  const NRS_LINE = [
+    'tax_category', 'hsn_code', 'isic_code', 'product_category', 'service_category',
+    'sellers_item_identification', 'price_unit', 'tax_percent', 'base_quantity',
+  ]
+  const GO_INVOICE = 'internal/invoice/invoice.go'
+
+  it('wire mirror: Invoice carries the 22 NRS header keys on both legs and the e2e type names no stray key', () => {
+    const go = goStructKeys(repoFile(GO_INVOICE), 'Invoice')
+    const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'Invoice')
+    expect(go.length, 'Go Invoice under its floor').toBeGreaterThanOrEqual(48)
+    expect(e2e.length, 'e2e Invoice under its floor').toBeGreaterThanOrEqual(47)
+    for (const k of NRS_HEADER) {
+      expect(go, `Go Invoice lacks ${k}`).toContain(k)
+      expect(e2e, `e2e Invoice lacks ${k}`).toContain(k)
+    }
+    expect(e2e.filter((k) => !go.includes(k)), 'e2e Invoice keys the Go Invoice does not send').toEqual([])
+  })
+
+  it('wire mirror: LineItem <-> InvoiceLineItem hold the same keys, the 9 NRS keys among them', () => {
+    const go = goStructKeys(repoFile(GO_INVOICE), 'LineItem')
+    const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'InvoiceLineItem')
+    expect(go.length, 'Go LineItem under its floor').toBeGreaterThanOrEqual(16)
+    expect(e2e.length, 'e2e InvoiceLineItem under its floor').toBeGreaterThanOrEqual(16)
+    expect(keySetDiff(go, e2e)).toEqual([])
+    for (const k of NRS_LINE) expect(go, `Go LineItem lacks ${k}`).toContain(k)
+  })
+
+  const SPA_INVOICES = 'frontend/app/src/lib/invoices.ts'
+
+  it('wire mirror: LineItem <-> InvoiceLineItem (SPA)', () => {
+    const go = goStructKeys(repoFile(GO_INVOICE), 'LineItem')
+    const spa = tsInterfaceKeys(repoFile(SPA_INVOICES), 'InvoiceLineItem')
+    expect(go.length, 'Go LineItem under its floor').toBeGreaterThanOrEqual(16)
+    expect(spa.length, 'SPA InvoiceLineItem under its floor').toBeGreaterThanOrEqual(16)
+    expect(keySetDiff(go, spa)).toEqual([])
+  })
+
+  it('wire mirror: lineItemReq <-> LineItemEditInput', () => {
+    const go = goStructKeys(repoFile('internal/invoice/handlers.go'), 'lineItemReq')
+    const spa = tsInterfaceKeys(repoFile(SPA_INVOICES), 'LineItemEditInput')
+    expect(go.length, 'Go lineItemReq under its floor').toBeGreaterThanOrEqual(15)
+    expect(spa.length, 'SPA LineItemEditInput under its floor').toBeGreaterThanOrEqual(15)
+    expect(keySetDiff(go, spa)).toEqual([])
+  })
+
+  it('wire mirror: InvoiceRecord carries the 22 NRS header keys', () => {
+    const spa = tsInterfaceKeys(repoFile(SPA_INVOICES), 'InvoiceRecord')
+    const go = goStructKeys(repoFile(GO_INVOICE), 'Invoice')
+    for (const k of NRS_HEADER) {
+      expect(go, `Go Invoice lacks ${k}`).toContain(k)
+      expect(spa, `SPA InvoiceRecord lacks ${k}`).toContain(k)
+    }
+  })
+
+  it('wire mirror: TaxSubtotal <-> InvoiceTaxSubtotal, and GetInvoiceResult carries tax_subtotals', () => {
+    const go = goStructKeys(repoFile('internal/invoice/tax_subtotals.go'), 'TaxSubtotal')
+    const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'InvoiceTaxSubtotal')
+    expect(go.length, 'Go TaxSubtotal under its floor').toBeGreaterThanOrEqual(4)
+    expect(keySetDiff(go, e2e)).toEqual([])
+    expect(tsInterfaceKeys(repoFile(E2E_CLIENT), 'GetInvoiceResult')).toContain('tax_subtotals')
+    expect(goStructKeys(repoFile('internal/invoice/handlers.go'), 'getResponse')).toContain('tax_subtotals')
   })
 })
 
@@ -680,9 +903,9 @@ describe('wire mirror: aireading.go’s aiUnavailableField <-> AI_UNAVAILABLE_FI
 // EXTR-12-02 — the reason VOCABULARY mirror.
 //
 // WIRE_MIRRORS compares key sets, so it is blind to a type alias: both copies of
-// `ExtractionReason` could name a different five strings and every row above stays green. The
+// `ExtractionReason` could name a different six strings and every row above stays green. The
 // Go const block is the source and tracks extraction_field_results_reason_code_check, so a
-// fifth code would otherwise reach a TypeScript union that silently rejects it.
+// further code would otherwise reach a TypeScript union that silently rejects it.
 
 const REASON_GO_PATH = 'internal/extraction/extractor.go'
 const REASON_SPA_PATH = 'frontend/app/src/lib/extractionReview.ts'
@@ -702,9 +925,9 @@ function tsUnionMembers(source: string, name: string): string[] {
 describe('wire mirror: extraction Reason <-> both ExtractionReason unions (EXTR-12-02)', () => {
   it('reasonMirror_extractionIsNonVacuousBeforeAnythingIsCompared', () => {
     // Zero hits must never read as agreement: [] equals [] on the row below.
-    expect(goReasonValues(repoFile(REASON_GO_PATH)), `no Reason const in ${REASON_GO_PATH}`).toHaveLength(5)
+    expect(goReasonValues(repoFile(REASON_GO_PATH)), `no Reason const in ${REASON_GO_PATH}`).toHaveLength(6)
     for (const path of [REASON_SPA_PATH, E2E_CLIENT]) {
-      expect(tsUnionMembers(repoFile(path), REASON_TS_NAME), `no ${REASON_TS_NAME} in ${path}`).toHaveLength(5)
+      expect(tsUnionMembers(repoFile(path), REASON_TS_NAME), `no ${REASON_TS_NAME} in ${path}`).toHaveLength(6)
     }
   })
 
@@ -726,70 +949,6 @@ describe('wire mirror: extraction Reason <-> both ExtractionReason unions (EXTR-
     expect(tsUnionMembers(tsFixture, 'R')).toEqual(['', 'even'])
     expect(goReasonValues(goFixture)).not.toEqual(tsUnionMembers(tsFixture, 'R'))
     expect(tsUnionMembers(tsFixture, 'Absent')).toEqual([])
-  })
-})
-
-// EXTR-13-06 — the HeaderFields vocabulary mirror. Three verbatim transcriptions of
-// internal/extraction/vocabulary.go's HeaderFields exist and none was ever compared: the
-// header/line split now depends on this order (extractionReview.ts's vocabularyRank), so a
-// silent drift here misfiles a field into the wrong section rather than merely mislabeling it.
-
-const HEADER_FIELDS_GO_PATH = 'internal/extraction/vocabulary.go'
-const HEADER_FIELDS_SPA_PATH = 'frontend/app/src/lib/extractionReview.ts'
-const HEADER_FIELDS_TEST_PATH = 'frontend/app/src/components/ExtractionFields.test.tsx'
-const HEADER_FIELDS_E2E_PATH = 'e2e/topology/importWizardShared.ts'
-
-// var HeaderFields = []string{...}, quoted strings in declaration order.
-function goHeaderFields(source: string): string[] {
-  const body = /var\s+HeaderFields\s*=\s*\[\]string\{([^}]*)\}/.exec(source)?.[1] ?? ''
-  return [...body.matchAll(/"([^"]*)"/g)].map((m) => m[1])
-}
-
-// Accepts both `export const NAME = [...]` (extractionReview.ts) and a bare
-// `const NAME = [...]` (the two test-file transcriptions), single-quoted members in order.
-function tsStringArrayConst(source: string, name: string): string[] {
-  const body = new RegExp(`(?:export\\s+)?const\\s+${name}\\s*(?::[^=]*)?=\\s*\\[([^\\]]*)\\]`).exec(source)?.[1] ?? ''
-  return [...body.matchAll(/'([^']*)'/g)].map((m) => m[1])
-}
-
-const HEADER_FIELDS_TS_COPIES = [
-  { path: HEADER_FIELDS_SPA_PATH, name: 'HEADER_FIELDS' },
-  { path: HEADER_FIELDS_TEST_PATH, name: 'HEADER_FIELDS' },
-  { path: HEADER_FIELDS_E2E_PATH, name: 'VOCABULARY' },
-]
-
-describe('wire mirror: HeaderFields vocabulary <-> its three TypeScript transcriptions (EXTR-13-06)', () => {
-  it('headerFields_extractionIsNonVacuousBeforeAnythingIsCompared', () => {
-    // A floor of ">0" is the classic escape here: if a rename made every extractor return [],
-    // an order-comparison row would still pass on [] === []. The vocabulary is a fixed 10.
-    expect(goHeaderFields(repoFile(HEADER_FIELDS_GO_PATH)), `no HeaderFields in ${HEADER_FIELDS_GO_PATH}`).toHaveLength(10)
-    for (const { path, name } of HEADER_FIELDS_TS_COPIES) {
-      expect(tsStringArrayConst(repoFile(path), name), `no ${name} in ${path}`).toHaveLength(10)
-    }
-  })
-
-  it('headerFields_theGoSliceEqualsAllThreeTranscriptions', () => {
-    // In order, not as a set: HEADER_FIELDS' contract is the order one Save writes in
-    // (extractionReview.ts's vocabularyRank), which a set comparison cannot see move.
-    const goValues = goHeaderFields(repoFile(HEADER_FIELDS_GO_PATH))
-    for (const { path, name } of HEADER_FIELDS_TS_COPIES) {
-      expect(tsStringArrayConst(repoFile(path), name), `${path} ${name} vs Go, in order`).toEqual(goValues)
-    }
-  })
-
-  it('headerFields_plantedPositiveTheExtractorsCanReportARealMismatch', () => {
-    // Synthetic, in-memory only: reordered AND one member differs ('c' vs 'd').
-    const goFixture = 'var HeaderFields = []string{\n\t"a", "b", "c",\n}'
-    const tsFixture = "const HEADER_FIELDS = [\n  'b',\n  'a',\n  'd',\n]\n"
-
-    const goValues = goHeaderFields(goFixture)
-    const tsValues = tsStringArrayConst(tsFixture, 'HEADER_FIELDS')
-    expect(goValues).toEqual(['a', 'b', 'c'])
-    expect(tsValues).toEqual(['b', 'a', 'd'])
-    expect(goValues, 'the fixtures must actually differ for this test to mean anything').not.toEqual(tsValues)
-
-    // An absent name yields [], not a thrown error and not a false [] === [] agreement.
-    expect(tsStringArrayConst(tsFixture, 'ABSENT')).toEqual([])
   })
 })
 
@@ -853,11 +1012,11 @@ describe('line-items wire types: what a key-set diff cannot see (EXTR-13-06)', (
   })
 
   it('lineItems_theDetectorFindsTheNullableFieldsThatDoExist', () => {
-    // The control for the row below: LineItemInput's five cells ARE '| null'.
+    // The control for the row below: LineItemInput's ten cells ARE '| null'.
     const nullable = tsFieldLines(tsInterfaceBody(repoFile(LINE_ITEMS_SPA_PATH), 'LineItemInput')).filter((l) =>
       l.includes('| null'),
     )
-    expect(nullable, 'the nullability scan finds nothing, so the absence row below is vacuous').toHaveLength(5)
+    expect(nullable, 'the nullability scan finds nothing, so the absence row below is vacuous').toHaveLength(10)
   })
 
   it('lineItems_theLinesFieldIsAnArrayNeverNullOrAbsent', () => {
@@ -1285,5 +1444,24 @@ describe('the submit pair is declared once on the SPA invoice mirror (BUG-12)', 
     expect(tsInterfaceKeys(plain, 'Fixture')).toEqual(['a', 'b'])
     // And it still reports a real absence rather than agreeing with everything.
     expect(tsInterfaceKeys('export interface Fixture extends Base {\n  a: string\n}', 'Fixture')).not.toContain('b')
+  })
+})
+
+describe('wire mirror: the code search <-> the SPA and e2e legs', () => {
+  it('wire mirror: CodeEntry <-> CodeEntry <-> CodeEntry', () => {
+    const go = goStructKeys(repoFile('internal/invoice/codes.go'), 'CodeEntry')
+    const spa = tsInterfaceKeys(repoFile('frontend/app/src/lib/codeLists.ts'), 'CodeEntry')
+    const e2e = tsInterfaceKeys(repoFile(E2E_CLIENT), 'CodeEntry')
+    for (const keys of [go, spa, e2e]) expect(keys.length).toBeGreaterThanOrEqual(3)
+    expect(keySetDiff(go, spa), 'Go CodeEntry vs the SPA').toEqual([])
+    expect(keySetDiff(go, e2e), 'Go CodeEntry vs e2e').toEqual([])
+  })
+
+  it('wire mirror: codeSearchLists <-> CODE_LISTS', () => {
+    const src = stripComments(repoFile('internal/invoice/codes.go'))
+    const literal = /var codeSearchLists = \[\]string\{([^}]*)\}/.exec(src)?.[1] ?? ''
+    const names = [...literal.matchAll(/"([^"]+)"/g)].map((m) => m[1])
+    expect(names.length, 'extractor read no Go list names').toBeGreaterThanOrEqual(6)
+    expect(keySetDiff(names, [...CODE_LISTS])).toEqual([])
   })
 })

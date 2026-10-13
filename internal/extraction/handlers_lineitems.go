@@ -26,6 +26,12 @@ type LineItemInput struct {
 	UnitPrice   *string `json:"unit_price"`
 	LineTotal   *string `json:"line_total"`
 	LineTax     *string `json:"line_tax"`
+
+	TaxCategory               *string `json:"tax_category"`
+	HSNCode                   *string `json:"hsn_code"`
+	ISICCode                  *string `json:"isic_code"`
+	SellersItemIdentification *string `json:"sellers_item_identification"`
+	PriceUnit                 *string `json:"price_unit"`
 }
 
 // cell returns one role's value, or nil when that cell is null. Mirrors DocLine.Cell so the
@@ -42,6 +48,16 @@ func (l LineItemInput) cell(role string) *string {
 		return l.LineTotal
 	case LineRoleLineTax:
 		return l.LineTax
+	case LineRoleTaxCategory:
+		return l.TaxCategory
+	case LineRoleHSNCode:
+		return l.HSNCode
+	case LineRoleISICCode:
+		return l.ISICCode
+	case LineRoleSellersItemID:
+		return l.SellersItemIdentification
+	case LineRolePriceUnit:
+		return l.PriceUnit
 	}
 	return nil
 }
@@ -86,7 +102,7 @@ func normalizeLines(lines []LineItemInput) []LineItemInput {
 
 // canonicalLineJSON is the correction row's value. encoding/json already gives the stable form:
 // struct fields marshal in declaration order and none carries omitempty, so every object emits
-// all five LineItemInput keys, null for an absent cell, and no whitespace.
+// all ten LineItemInput keys, null for an absent cell, and no whitespace.
 // An empty set collapses to "[]", which clears the value CHECK (char_length(value) > 0).
 func canonicalLineJSON(lines []LineItemInput) string {
 	b, err := json.Marshal(normalizeLines(lines))

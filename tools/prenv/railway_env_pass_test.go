@@ -1539,6 +1539,7 @@ func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
 		{"gateway", "CORS_ALLOWED_ORIGINS", afterBadVal, urlLine, ""},
 		{"app", "VITE_GATEWAY_URL", afterBadVal, urlLine, ""},
 		{"app", "VITE_LANDING_URL", afterBadVal, urlLine, ""},
+		{"app", "VITE_SUPPORT_URL", afterBadVal, urlLine, ""},
 		{"landing", "VITE_GATEWAY_URL", afterBadVal, urlLine, ""},
 		{"landing", "VITE_APP_URL", afterBadVal, urlLine, ""},
 		{"landing", "VITE_OPS_URL", afterBadVal, urlLine, ""},
@@ -1548,6 +1549,7 @@ func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
 		{"ops-console", "VITE_LANDING_URL", afterBadVal, urlLine, ""},
 		{"support-console", "VITE_GATEWAY_URL", afterBadVal, urlLine, ""},
 		{"support-console", "VITE_LANDING_URL", afterBadVal, urlLine, ""},
+		{"support-console", "VITE_APP_URL", afterBadVal, urlLine, ""},
 		{"gateway", "RECONCILIATION_URL", afterBadVal, reconLine, ""},
 		{"gateway", "ENVIRONMENT", "production", envLine, "reads 'production'"},
 	}
@@ -1565,7 +1567,7 @@ func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
 			row{sp, "VITE_SENTRY_DSN", afterBadVal, sentryLine, "is SET"},
 			row{sp, "SENTRY_AUTH_TOKEN", afterBadVal, sentryLine, "is SET"})
 	}
-	if len(rows) != 16+6+10+10 {
+	if len(rows) != 18+6+10+10 {
 		t.Fatalf("control: %d rows, want one per verdict", len(rows))
 	}
 	for _, r := range rows {
@@ -1633,6 +1635,8 @@ func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
 		{"gateway", "CORS_ALLOWED_ORIGINS", strings.Join(urls[1:5], ",")},
 		{"app", "VITE_GATEWAY_URL", urls[0]},
 		{"app", "VITE_LIBRARY_URL", urls[5]},
+		{"app", "VITE_SUPPORT_URL", urls[4]},
+		{"support-console", "VITE_APP_URL", urls[1]},
 		{"landing", "VITE_LIBRARY_URL", urls[5]},
 		{"library", "VITE_APP_URL", urls[1]},
 		{"library", "VITE_LANDING_URL", urls[2]},

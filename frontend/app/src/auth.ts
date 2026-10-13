@@ -78,6 +78,12 @@ export const libraryBase = (): string | null => {
   return v || null
 }
 
+// Base URL of the Support Console; null when unset, so the sidebar icon is not rendered.
+export const supportBase = (): string | null => {
+  const v = (import.meta.env.VITE_SUPPORT_URL ?? '').trim().replace(/\/+$/, '')
+  return v || null
+}
+
 export type TenantKind = 'firm' | 'in_house'
 
 export interface Me {

@@ -294,6 +294,68 @@ describe('Sidebar footer, characterization pin', () => {
   })
 })
 
+describe('Sidebar footer, the Support Console icon', () => {
+  const ROLLUP = rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 })
+  const NAME = 'Open the Support Console'
+  const icon = () => screen.queryByRole('link', { name: NAME })
+
+  it('supportIcon_staffSeesTheLinkBeforeSignOut', async () => {
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://sup.x/')
+    await renderSidebar(ROLLUP, sidebarCtx({ staff: true }))
+    expect(screen.getAllByRole('link', { name: NAME })).toHaveLength(1)
+    const a = icon()!
+    expect(a.getAttribute('href')).toBe('https://sup.x/?auth=app')
+    expect(a.getAttribute('title')).toBe('Support Console')
+    expect(a.getAttribute('target')).toBe('_blank')
+    expect(a.getAttribute('rel')).toBe('noopener noreferrer')
+    expect(a.nextElementSibling).toBe(screen.getByRole('button', { name: 'Sign out' }))
+    expect(a.parentElement).toBe(screen.getByTestId('identity-card'))
+  })
+
+  it('supportIcon_matchesTheSignOutButtonBox', async () => {
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://sup.x')
+    await renderSidebar(ROLLUP, sidebarCtx({ staff: true }))
+    const a = icon()!
+    const out = screen.getByRole('button', { name: 'Sign out' })
+    expect([...a.classList]).toEqual(['pf-signout'])
+    expect([...out.classList]).toEqual(['pf-signout'])
+    const decls = (el: HTMLElement) => Object.fromEntries(el.getAttribute('style')!.split(';').map((d) => d.trim()).filter(Boolean).map((d) => d.split(/:\s*/)))
+    expect(decls(a)).toEqual({ ...decls(out), 'text-decoration': 'none' })
+    for (const el of [a, out]) {
+      expect(styleDecl(el, 'color')).toBeNull()
+      expect(styleDecl(el, 'background')).toBeNull()
+      const svg = el.querySelector('svg')!
+      expect([svg.getAttribute('width'), svg.getAttribute('height')]).toEqual(['16', '16'])
+    }
+  })
+
+  it('supportIcon_customerSeesNoLink', async () => {
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://sup.x')
+    await renderSidebar(ROLLUP, sidebarCtx({ staff: false }))
+    expect(icon()).toBeNull()
+    cleanup()
+    await renderSidebar(ROLLUP, sidebarCtx())
+    expect(icon()).toBeNull()
+    expect(screen.getByRole('button', { name: 'Sign out' }), 'the card rendered').not.toBeNull()
+  })
+
+  it('supportIcon_hrefDropsEveryTrailingSlashAndSpace', async () => {
+    vi.stubEnv('VITE_SUPPORT_URL', ' https://sup.x/// ')
+    await renderSidebar(ROLLUP, sidebarCtx({ staff: true }))
+    expect(icon()!.getAttribute('href')).toBe('https://sup.x/?auth=app')
+    expect(icon()!.getAttribute('aria-label')).toBe(NAME)
+  })
+
+  it('supportIcon_unsetUrlHidesIt', async () => {
+    for (const v of ['', '  ', undefined]) {
+      vi.stubEnv('VITE_SUPPORT_URL', v)
+      await renderSidebar(ROLLUP, sidebarCtx({ staff: true }))
+      expect(icon(), JSON.stringify(v)).toBeNull()
+      cleanup()
+    }
+  })
+})
+
 describe('Sidebar footer, the card reads ctx.user (AUTH-09-02)', () => {
   const BADGE = '[title="Tenant verified via /v1/me"]'
   const ROLLUP = rollup({ validated: 1, awaitingApproval: 1, needsAttention: 1 })

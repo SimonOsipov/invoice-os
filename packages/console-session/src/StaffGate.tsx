@@ -19,6 +19,7 @@ export function StaffGate(p: {
   target: ConsoleTarget
   gateway: string | null
   landing: string | null
+  app?: string | null
   children: ReactNode
 }): ReactNode {
   const [boot, setBoot] = useState<ConsoleBoot | null>(null)
@@ -30,14 +31,14 @@ export function StaffGate(p: {
     started.current = true
     const search = window.location.search
     stripOneShotParams()
-    void resolveConsoleBoot({ search, storageKey: p.storageKey, target: p.target, gateway: p.gateway, landing: p.landing }).then((b) => {
+    void resolveConsoleBoot({ search, storageKey: p.storageKey, target: p.target, gateway: p.gateway, landing: p.landing, app: p.app }).then((b) => {
       if (b.kind === 'leave') {
         if (b.replace) window.location.replace(b.url)
         else window.location.href = b.url
       }
       setBoot(b)
     })
-  }, [p.storageKey, p.target, p.gateway, p.landing])
+  }, [p.storageKey, p.target, p.gateway, p.landing, p.app])
 
   return boot?.kind === 'open' ? p.children : null
 }

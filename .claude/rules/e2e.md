@@ -42,5 +42,6 @@ paths:
 - Expect `notifications` to report `contacts` `fake` on a PR and `real` or `off` on the persistent environment.
 - Write the fork's URL variables, `RECONCILIATION_URL` and `GATEWAY_TOKEN`, and reconciliation's `VALIDATION_URL` and `S2S_TOKEN` on each run. A fork never inherits them.
 - Write `VITE_LIBRARY_URL` on `landing` and `app`, and `VITE_APP_URL` and `VITE_LANDING_URL` on `library`, on each fork.
+- Write `VITE_SUPPORT_URL` on `app` and `VITE_APP_URL` on `support-console` on each fork.
 - Expect `library` to be the one SPA with no gateway wiring. A fork writes no `VITE_GATEWAY_URL` on it, and it is no CORS origin.
 - Expect a fork to accept registrations, send no mail and confirm at once. `fork-vars-before-urls` sets `GOTRUE_DISABLE_SIGNUP`, a blank SMTP host and `GOTRUE_MAILER_AUTOCONFIRM`.

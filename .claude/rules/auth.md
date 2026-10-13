@@ -16,6 +16,7 @@ paths:
   - "internal/gateway/refresh*.go"
   - "internal/gateway/session_check*.go"
   - "internal/gateway/handoff*.go"
+  - "internal/gateway/console_handoff*.go"
   - "internal/gateway/invitation*.go"
   - "internal/gateway/freemail*.go"
   - "internal/gateway/mock*.go"
@@ -23,6 +24,7 @@ paths:
   - "packages/console-session/**"
   - "frontend/app/src/App.tsx"
   - "frontend/app/src/lib/signInState.ts"
+  - "frontend/app/src/lib/consoleHandoff.ts"
   - "frontend/landing/src/App.tsx"
 ---
 # Identity provider
@@ -80,6 +82,9 @@ paths:
 - Hand an invitee's session off from `POST /auth/invitation/password` only after the global sign-out, as a password grant with the password just set. Reserve no throttle attempt for it.
 - Carry a hand-off code in the URL, never a token. A code is single use and expires in `HandoffTTL`.
 - Bind a hand-off code to the `state` that minted it.
+- Mint a console hand-off code on `POST /auth/console-handoff` only for a verified, session-checked bearer whose `app_metadata.staff` is true.
+- Store only the caller's access token as that code's answer. Never store a refresh token.
+- Bind that code to the `state` in the request body.
 - Send a sessionless app visit with exactly `?via=library` to `<landing>/?state=<s>&register`. Any other value takes the sign-in path. An earlier front-door case wins: `?auth=start`, a confirm hop, a pending hand-off or a join offer. `frontDoor_authStartWinsOverVia` and `frontDoor_aPendingHandoffWinsOverVia` pin it.
 - Expect `?register` to open the create-an-account modal, or "Book a demo" when `registrationOpen()` is false.
 - Expect landing's `?demo` to open the book-a-demo modal.
@@ -121,3 +126,6 @@ paths:
 - Check the staff claim on the server in any console that reads real data.
 - Fail the console gate closed when `VITE_LANDING_URL` is unset.
 - Open a console only for a session that the gateway has just renewed or exchanged, with `app_metadata.staff` true.
+- Open an app-borrowed console record only after a fresh exchange. The boot asks the app for a new code.
+- Send an expired app-borrowed console session back through the app, never to the landing.
+- Answer the app's `?auth=console&console=support&state=<s>` only with a live staff seat. Otherwise take the normal front door.

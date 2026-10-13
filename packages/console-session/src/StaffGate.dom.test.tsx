@@ -19,9 +19,9 @@ let hrefWrites: string[]
 let replaceWrites: string[]
 let store: ReturnType<typeof installStorage>
 
-function gate(o: { landing?: string | null; gateway?: string | null } = {}) {
+function gate(o: { landing?: string | null; gateway?: string | null; app?: string | null } = {}) {
   return (
-    <StaffGate storageKey={OPS_KEY} target="ops" gateway={o.gateway === undefined ? GW : o.gateway} landing={o.landing === undefined ? LANDING : o.landing}>
+    <StaffGate storageKey={OPS_KEY} target="ops" gateway={o.gateway === undefined ? GW : o.gateway} landing={o.landing === undefined ? LANDING : o.landing} app={o.app}>
       <div>console</div>
     </StaffGate>
   )
@@ -166,5 +166,13 @@ describe('StaffGate (AC-11)', () => {
     await waitFor(() => expect(replaceWrites).toHaveLength(1))
     expect(hrefWrites).toEqual([])
     expect(replaceWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=support&signin=ready$`))
+  })
+
+  it('staffGate_withoutAppTreatsAuthAppAsStart', async () => {
+    window.history.replaceState(null, '', '/?auth=app')
+    render(gate())
+    await waitFor(() => expect(replaceWrites).toHaveLength(1))
+    expect(replaceWrites[0]).toMatch(new RegExp(`^${LANDING}/\\?state=[A-Za-z0-9_-]{43}&console=ops&signin=ready$`))
+    expect(hrefWrites).toEqual([])
   })
 })

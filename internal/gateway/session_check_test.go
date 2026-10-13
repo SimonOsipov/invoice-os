@@ -75,6 +75,12 @@ func newSidSigner(t *testing.T) *sidSigner {
 // token signs a GoTrue-shaped token; an empty sid omits the claim.
 func (s *sidSigner) token(t *testing.T, sub, sid string) string {
 	t.Helper()
+	return s.tokenWith(t, sub, sid, map[string]any{"tenant_id": testTenant})
+}
+
+// tokenWith signs a GoTrue-shaped token whose app_metadata is meta; an empty sid omits the claim.
+func (s *sidSigner) tokenWith(t *testing.T, sub, sid string, meta map[string]any) string {
+	t.Helper()
 	now := time.Now()
 	c := jwt.MapClaims{
 		"iss":          sidIssuer,
@@ -83,7 +89,7 @@ func (s *sidSigner) token(t *testing.T, sub, sid string) string {
 		"iat":          now.Unix(),
 		"exp":          now.Add(time.Hour).Unix(),
 		"role":         testRole,
-		"app_metadata": map[string]any{"tenant_id": testTenant},
+		"app_metadata": meta,
 	}
 	if sid != "" {
 		c["session_id"] = sid

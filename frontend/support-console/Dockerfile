@@ -15,6 +15,8 @@ RUN pnpm install --frozen-lockfile
 # staff gate, and Sign out stays put rather than routing to a hardcoded deploy.
 ARG VITE_LANDING_URL
 ENV VITE_LANDING_URL=$VITE_LANDING_URL
+ARG VITE_APP_URL
+ENV VITE_APP_URL=$VITE_APP_URL
 ARG VITE_GATEWAY_URL
 ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL
 # Empty means Sentry off; `set-sentry-off` blanks it in forks.

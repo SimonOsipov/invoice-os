@@ -55,14 +55,10 @@ func ruleDraftTx(t *testing.T) pgx.Tx {
 	return revokeProbeTx(t)
 }
 
-func ruleDraftSeedStaff(t *testing.T, tx pgx.Tx, rulesRole bool) string {
+// ruleDraftSeedStaff inserts an active reviewer of the house company inside tx.
+func ruleDraftSeedStaff(t *testing.T, tx pgx.Tx) string {
 	t.Helper()
-	actor := uuid.NewString()
-	if _, err := tx.Exec(context.Background(),
-		`INSERT INTO public.staff_members (user_id, rules_role) VALUES ($1, $2)`, actor, rulesRole); err != nil {
-		t.Fatalf("insert a staff row (rules_role %t): %v", rulesRole, err)
-	}
-	return actor
+	return seedMembershipTx(t, tx, adoptHouseTenant(t), "reviewer", "active")
 }
 
 func ruleDraftAsApp(t *testing.T, tx pgx.Tx) {
@@ -154,7 +150,7 @@ func TestRLS_RuleDraftOneDraftIndex(t *testing.T) {
 	}
 
 	tx := ruleDraftTx(t)
-	actor := ruleDraftSeedStaff(t, tx, true)
+	actor := ruleDraftSeedStaff(t, tx)
 	ruleDraftAsApp(t, tx)
 	ruleDraftMustOpen(t, tx, actor)
 
@@ -174,19 +170,15 @@ func TestRLS_RuleDraftOneDraftIndex(t *testing.T) {
 	}
 }
 
-func TestRLS_RuleDraftFunctionsRefuseAnActorWithoutTheRulesRole(t *testing.T) {
+func TestRLS_RuleDraftFunctionsRefuseAnActorWhoIsNotStaff(t *testing.T) {
 	requireHarness(t)
+	house := adoptHouseTenant(t)
 	tx := ruleDraftTx(t)
-	granted := ruleDraftSeedStaff(t, tx, true)
-	plain := ruleDraftSeedStaff(t, tx, false)
-	if n := mustCount(t, tx, `SELECT count(*) FROM public.staff_members WHERE user_id = $1 AND NOT rules_role`, plain); n != 1 {
-		t.Fatalf("the plain staff row is not rules_role false: %d rows", n)
-	}
+	granted := ruleDraftSeedStaff(t, tx)
+	actors := notStaffActors(house, func(tenant, status string) string {
+		return seedMembershipTx(t, tx, tenant, "admin", status)
+	})
 	ruleDraftAsApp(t, tx)
-	actors := []struct {
-		name string
-		id   any
-	}{{"no staff row", uuid.NewString()}, {"rules_role false", plain}, {"NULL actor", nil}}
 
 	refuse := func(phase string) {
 		t.Helper()
@@ -194,9 +186,10 @@ func TestRLS_RuleDraftFunctionsRefuseAnActorWithoutTheRulesRole(t *testing.T) {
 		for _, a := range actors {
 			for _, c := range ruleDraftCalls {
 				n, err := ruleDraftTry(t, tx, c.sql, a.id)
-				if pgErr := ruleDraftPgErr(err); pgErr == nil || pgErr.Code != "42501" {
-					t.Errorf("%s, %s, %s: rows %d, err %v, want SQLSTATE 42501", phase, a.name, c.name, n, err)
+				if n != 0 {
+					t.Errorf("%s, %s, %s: refused call returned %d rows", phase, a.name, c.name, n)
 				}
+				requireNotStaffRefusal(t, phase+", "+a.name+", "+c.name, err, c.name)
 			}
 		}
 		if after := ruleDraftState(t, tx); after != before {
@@ -298,7 +291,7 @@ func TestRLS_RuleDraftOpenIgnoresATempTableShadow(t *testing.T) {
 	maxVersion := mustCount(t, h.super, `SELECT max(version) FROM public.rule_set_versions`)
 
 	tx := ruleDraftTx(t)
-	actor := ruleDraftSeedStaff(t, tx, true)
+	actor := ruleDraftSeedStaff(t, tx)
 	ruleDraftAsApp(t, tx)
 	for _, s := range []string{
 		`CREATE TEMP TABLE rule_set_versions AS SELECT * FROM public.rule_set_versions WHERE version = (SELECT min(version) FROM public.rule_set_versions)`,

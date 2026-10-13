@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pressly/goose/v3"
 )
 
 const devHouseTenant = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
@@ -60,36 +61,54 @@ func adoptHouseTenant(t *testing.T) string {
 	return id
 }
 
-// rollBackHouseCompany runs Migration A's Down. The returned func and t.Cleanup re-apply the Up.
-func rollBackHouseCompany(t *testing.T) (reapply func()) {
+// rollBackMigrations runs the Down of each version in order. reapply and t.Cleanup run the Ups in reverse.
+func rollBackMigrations(t *testing.T, provider *goose.Provider, versions ...int64) (reapply func()) {
 	t.Helper()
 	ctx := context.Background()
-	provider, version := staffMigrationProvider(t), houseMigrationVersion(t)
-	applied := true
+	rolled := 0
 	apply := func() error {
-		if applied {
-			return nil
+		for rolled > 0 {
+			if _, err := provider.ApplyVersion(ctx, versions[rolled-1], true); err != nil {
+				return err
+			}
+			rolled--
 		}
-		if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
-			return err
-		}
-		applied = true
 		return nil
 	}
 	t.Cleanup(func() {
 		if err := apply(); err != nil {
-			t.Errorf("re-apply Migration A: %v", err)
+			t.Errorf("re-apply migrations %v: %v", versions, err)
 		}
 	})
-	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
-		t.Fatalf("roll back Migration A: %v", err)
+	for _, v := range versions {
+		if _, err := provider.ApplyVersion(ctx, v, false); err != nil {
+			t.Fatalf("roll back migration %d: %v", v, err)
+		}
+		rolled++
 	}
-	applied = false
 	return func() {
 		t.Helper()
 		if err := apply(); err != nil {
-			t.Fatalf("re-apply Migration A: %v", err)
+			t.Fatalf("re-apply migrations %v: %v", versions, err)
 		}
+	}
+}
+
+// rollBackHouseCompany rolls Migration B back, then A, and re-applies A, then B.
+// A's Down recreates a SQL hook that reads staff_members, which only B's Down restores.
+func rollBackHouseCompany(t *testing.T) (reapply func()) {
+	t.Helper()
+	return rollBackMigrations(t, staffMigrationProvider(t), staffByHouseMigrationVersion(t), houseMigrationVersion(t))
+}
+
+func requireStaffMembersGone(t *testing.T, when string) {
+	t.Helper()
+	var reg *string
+	if err := h.super.QueryRow(context.Background(), `SELECT to_regclass('public.staff_members')::text`).Scan(&reg); err != nil {
+		t.Fatalf("read to_regclass: %v", err)
+	}
+	if reg != nil {
+		t.Errorf("public.staff_members exists %s, want dropped", when)
 	}
 }
 
@@ -184,6 +203,7 @@ func TestRLS_HouseCompanyStartsEmpty(t *testing.T) {
 	if n := mustCount(t, h.super, `SELECT count(*) FROM public.house_company`); n != 0 {
 		t.Errorf("house_company rows after the Up = %d, want 0: production's row is written by hand", n)
 	}
+	requireStaffMembersGone(t, "after the helper re-applied A and B")
 }
 
 // AC-1.
@@ -722,8 +742,8 @@ func TestRLS_HouseCompanyDownRestoresTheRulesRoleHook(t *testing.T) {
 		t.Errorf("after the Down: a house member outside staff_members has staff = %v, want absent", md["staff"])
 	}
 	rulesStaff, plainStaff := uuid.NewString(), uuid.NewString()
-	seedRulesStaff(t, rulesStaff)
-	seedStaff(t, plainStaff)
+	seedStaffMembersRow(t, rulesStaff, true)
+	seedStaffMembersRow(t, plainStaff, false)
 	if md := appMetadataOf(t, mustHookClaims(t, auth, rulesStaff)); md["staff"] != true || md["rules_role"] != true {
 		t.Errorf("after the Down: staff_members row with rules_role: staff=%v rules_role=%v, want true and true", md["staff"], md["rules_role"])
 	}
@@ -741,6 +761,201 @@ func TestRLS_HouseCompanyDownRestoresTheRulesRoleHook(t *testing.T) {
 	if md := appMetadataOf(t, mustHookClaims(t, auth, user)); md["staff"] != true || md["tenant_id"] != house {
 		t.Errorf("after the Up: app_metadata staff=%v tenant_id=%v, want true and %s", md["staff"], md["tenant_id"], house)
 	}
+	requireStaffMembersGone(t, "after the Up of A and B")
+}
+
+// seedStaffMembersRow writes a legacy staff row while Migration B is rolled back. The cleanup tolerates the table being gone.
+func seedStaffMembersRow(t *testing.T, userID string, rulesRole bool) {
+	t.Helper()
+	if _, err := h.super.Exec(context.Background(),
+		`INSERT INTO public.staff_members (user_id, rules_role) VALUES ($1, $2)`, userID, rulesRole); err != nil {
+		t.Fatalf("seed a staff_members row: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM public.staff_members WHERE user_id = $1`, userID)
+	})
+}
+
+// staffFunctionCalls holds one call of each of the five rule functions with $1 as the actor.
+var staffFunctionCalls = append([]struct{ name, sql string }{
+	{"set_rule_enabled", `SELECT 1 FROM public.set_rule_enabled($1::uuid, 'no-such-rule', true)`},
+}, ruleDraftCalls...)
+
+// AC-1. The active member is the control: with the house row it passes the guard, without it nothing does.
+func TestRLS_StaffFunctionsRefuseEveryoneWithAnEmptyHouseTable(t *testing.T) {
+	requireHarness(t)
+	house := adoptHouseTenant(t)
+	tx := ruleDraftTx(t)
+	member := seedMembershipTx(t, tx, house, "admin", "active")
+	ruleDraftAsApp(t, tx)
+	ruleDraftMustOpen(t, tx, member)
+	if n, err := ruleDraftTry(t, tx, staffFunctionCalls[0].sql, member); err != nil || n != 0 {
+		t.Fatalf("control: set_rule_enabled by the active member: rows %d, err %v, want no error and no rows", n, err)
+	}
+
+	ruleDraftAsOwner(t, tx)
+	txExec(t, tx, `DELETE FROM public.house_company`)
+	if n := mustCount(t, tx, `SELECT count(*) FROM memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active'`, house, member); n != 1 {
+		t.Fatalf("the former house member's membership rows = %d, want 1", n)
+	}
+	ruleDraftAsApp(t, tx)
+
+	before := ruleDraftState(t, tx)
+	for _, c := range staffFunctionCalls {
+		n, err := ruleDraftTry(t, tx, c.sql, member)
+		if n != 0 {
+			t.Errorf("%s: refused call returned %d rows", c.name, n)
+		}
+		requireNotStaffRefusal(t, "empty house_company, "+c.name, err, c.name)
+	}
+	if after := ruleDraftState(t, tx); after != before {
+		t.Error("a refused call changed a version or rule row")
+	}
+}
+
+// AC-2. No tenant is set: the rule functions run on the no-tenant path.
+func TestRLS_StaffFunctionsAdmitAHouseMemberOfAnyRole(t *testing.T) {
+	requireHarness(t)
+	house := adoptHouseTenant(t)
+	requireKeyEnabledInForce(t, killKey)
+	tx := ruleDraftTx(t)
+
+	for _, role := range []string{"admin", "preparer", "reviewer"} {
+		ruleDraftAsOwner(t, tx)
+		member := seedMembershipTx(t, tx, house, role, "active")
+		ruleDraftAsApp(t, tx)
+		var setting string
+		if err := tx.QueryRow(context.Background(), `SELECT coalesce(current_setting('app.current_tenant', true), '')`).Scan(&setting); err != nil || setting != "" {
+			t.Fatalf("%s: app.current_tenant = %q (err %v), want unset", role, setting, err)
+		}
+
+		txExec(t, tx, `SAVEPOINT admitted`)
+		got, err := callSetRuleEnabled(tx, member, killKey, true)
+		if err != nil || len(got) != 1 || !got[0].was {
+			t.Errorf("%s: set_rule_enabled = %+v, err %v, want one row with was_enabled true", role, got, err)
+			txExec(t, tx, `ROLLBACK TO SAVEPOINT admitted`)
+			continue
+		}
+		var opened ruleDraftOpened
+		err = tx.QueryRow(context.Background(), ruleDraftOpenSQL, member).Scan(&opened.id, &opened.version, &opened.from)
+		if err != nil || opened.id == "" {
+			t.Errorf("%s: rule_draft_open = %+v, err %v, want a draft", role, opened, err)
+		}
+		txExec(t, tx, `ROLLBACK TO SAVEPOINT admitted`)
+	}
+}
+
+// AC-3. The empty answer is only meaningful beside a populated one, so house_company is read the same way.
+func TestRLS_StaffMembersIsDropped(t *testing.T) {
+	requireHarness(t)
+	adoptHouseTenant(t)
+
+	requireStaffMembersGone(t, "at head")
+	// table_privileges lists no row for house_company (its grants are column-level), so it has no control.
+	views := map[string]string{
+		"table_privileges":  `SELECT count(*) FROM information_schema.table_privileges WHERE table_schema = 'public' AND table_name = $1`,
+		"column_privileges": `SELECT count(*) FROM information_schema.column_privileges WHERE table_schema = 'public' AND table_name = $1`,
+		"pg_policies":       `SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = $1`,
+		"pg_class":          `SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = $1`,
+	}
+	for name, q := range views {
+		if n := mustCount(t, h.super, q, "staff_members"); n != 0 {
+			t.Errorf("%s holds %d rows for staff_members, want none", name, n)
+		}
+		if n := mustCount(t, h.super, q, "house_company"); n == 0 && name != "table_privileges" {
+			t.Errorf("control: %s holds no rows for house_company, so an empty answer for staff_members proves nothing", name)
+		}
+	}
+}
+
+// AC-4. Drives the shipped Down and Up of Migration B through goose.
+func TestRLS_StaffByHouseMigrationDownRestoresStaffMembers(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	adoptHouseTenant(t)
+	requireStaffMembersGone(t, "before the Down")
+	member := seedHouseMember(t, "reviewer", "active")
+	requireKeyEnabledInForce(t, killKey)
+	sigs := append([]string{setRuleEnabledSig}, ruleDraftSigs...)
+
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), staffByHouseMigrationVersion(t))
+
+	var reg *string
+	if err := h.super.QueryRow(ctx, `SELECT to_regclass('public.staff_members')::text`).Scan(&reg); err != nil || reg == nil {
+		t.Fatalf("after the Down: to_regclass(staff_members) = %v (err %v), want the table", reg, err)
+	}
+	cols := collectStrings(t, `SELECT column_name || '/' || data_type || '/' || is_nullable || '/' || coalesce(column_default, '')
+	    FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'staff_members' ORDER BY column_name`)
+	if want := []string{"created_at/timestamp with time zone/NO/now()", "rules_role/boolean/NO/false", "user_id/uuid/NO/"}; !reflect.DeepEqual(cols, want) {
+		t.Errorf("staff_members columns = %v, want %v", cols, want)
+	}
+	if pk := collectStrings(t, `SELECT a.attname FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY (i.indkey)
+	    WHERE i.indrelid = 'public.staff_members'::regclass AND i.indisprimary`); !reflect.DeepEqual(pk, []string{"user_id"}) {
+		t.Errorf("staff_members primary key = %v, want [user_id]", pk)
+	}
+	var rls, force bool
+	var owner string
+	if err := h.super.QueryRow(ctx, `SELECT relrowsecurity, relforcerowsecurity, pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'public.staff_members'::regclass`).Scan(&rls, &force, &owner); err != nil {
+		t.Fatalf("read staff_members flags: %v", err)
+	}
+	if !rls || force || owner != "invoice_migrator" {
+		t.Errorf("staff_members rls=%v force=%v owner=%q, want true, false, invoice_migrator", rls, force, owner)
+	}
+	if got := collectStrings(t, `SELECT column_name || '/' || privilege_type FROM information_schema.column_privileges
+	    WHERE table_schema = 'public' AND table_name = 'staff_members' AND grantee = 'auth_hook_reader' ORDER BY 1`); !reflect.DeepEqual(got, []string{"rules_role/SELECT", "user_id/SELECT"}) {
+		t.Errorf("auth_hook_reader column privileges on staff_members = %v, want exactly SELECT(rules_role, user_id)", got)
+	}
+	for _, role := range []string{"invoice_app", "invoice_tenant_reader", "supabase_auth_admin", "PUBLIC"} {
+		if n := mustCount(t, h.super, `SELECT (SELECT count(*) FROM information_schema.column_privileges WHERE table_schema = 'public' AND table_name = 'staff_members' AND grantee = $1)
+		    + (SELECT count(*) FROM information_schema.table_privileges WHERE table_schema = 'public' AND table_name = 'staff_members' AND grantee = $1)`, role); n != 0 {
+			t.Errorf("%s holds %d privileges on staff_members, want 0", role, n)
+		}
+	}
+	if got := collectStrings(t, `SELECT policyname || '/' || cmd || '/' || roles::text || '/' || qual FROM pg_policies
+	    WHERE schemaname = 'public' AND tablename = 'staff_members'`); !reflect.DeepEqual(got, []string{"staff_hook_lookup/SELECT/{auth_hook_reader}/true"}) {
+		t.Errorf("staff_members policies = %v, want exactly staff_hook_lookup", got)
+	}
+
+	for _, sig := range sigs {
+		var def string
+		if err := h.super.QueryRow(ctx, `SELECT pg_get_functiondef(to_regprocedure($1))`, sig).Scan(&def); err != nil {
+			t.Errorf("read the body of %s after the Down: %v", sig, err)
+			continue
+		}
+		if !strings.Contains(def, "staff_members") || strings.Contains(def, "is_house_member") {
+			t.Errorf("after the Down %s should read staff_members and not call is_house_member:\n%s", sig, def)
+		}
+	}
+
+	// The restored bodies, not just their text: staff_members decides, house membership does not.
+	_, err := callSetRuleEnabled(h.app, member, killKey, true)
+	if pgErr := ruleDraftPgErr(err); pgErr == nil || pgErr.Code != "42501" || !strings.Contains(pgErr.Message, "rules-role staff member") {
+		t.Errorf("after the Down: an active house member outside staff_members got %v, want 42501 from the staff_members guard", err)
+	}
+	granted, plain := uuid.NewString(), uuid.NewString()
+	seedStaffMembersRow(t, granted, true)
+	seedStaffMembersRow(t, plain, false)
+	if got := mustSwitch(t, h.app, granted, killKey, true); !got.was {
+		t.Errorf("after the Down: a rules-role staff row got %+v, want was_enabled true", got)
+	}
+	_, err = callSetRuleEnabled(h.app, plain, killKey, true)
+	if pgCode(err) != "42501" {
+		t.Errorf("after the Down: a staff row without rules_role got %v, want 42501", err)
+	}
+	tx := ruleDraftTx(t)
+	drafter := uuid.NewString()
+	txExec(t, tx, `INSERT INTO public.staff_members (user_id, rules_role) VALUES ($1, true)`, drafter)
+	ruleDraftAsApp(t, tx)
+	ruleDraftMustOpen(t, tx, drafter)
+	_ = tx.Rollback(ctx)
+
+	reapply()
+	requireStaffMembersGone(t, "after the Up")
+	if got := mustSwitch(t, h.app, member, killKey, true); !got.was {
+		t.Errorf("after the Up: an active house member got %+v, want was_enabled true", got)
+	}
+	_, err = callSetRuleEnabled(h.app, uuid.NewString(), killKey, true)
+	requireNotStaffRefusal(t, "after the Up: no membership", err, "set_rule_enabled")
 }
 
 // AC-10. The U1 statements run verbatim in a rolled-back tx, as the superuser does by hand.

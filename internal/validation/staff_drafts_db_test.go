@@ -42,7 +42,7 @@ func draftSetup(t *testing.T) (super, app *pgxpool.Pool, store *Store, actor str
 	t.Helper()
 	super, app = dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor = seedRulesStaffRow(t, super)
+	actor = seedHouseMember(t, super, "reviewer", "active")
 	return super, app, NewStore(app), actor, staffCtx(t, actor)
 }
 
@@ -462,27 +462,21 @@ func TestStaffDrafts_NonUUIDSubjectIs403(t *testing.T) {
 	}
 }
 
-// A subject with no rules role, or no staff row at all, is refused on all five writes against a live
-// draft: nothing changes and no audit row is written.
-func TestStaffDrafts_NonRulesActorIsNotStaff(t *testing.T) {
-	super, app, store, ruler, rulesCtx := draftSetup(t)
-	draft, err := store.OpenDraft(rulesCtx)
+// A customer member, or a subject with no membership at all, is refused on all five writes against a
+// live draft: nothing changes and no audit row is written.
+func TestStaffDrafts_NonHouseActorIsNotStaff(t *testing.T) {
+	super, app, store, ruler, houseCtx := draftSetup(t)
+	draft, err := store.OpenDraft(houseCtx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revoked := uuid.NewString()
-	if _, err := super.Exec(context.Background(), `INSERT INTO staff_members (user_id, rules_role) VALUES ($1, false)`, revoked); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = super.Exec(context.Background(), `DELETE FROM staff_members WHERE user_id = $1`, revoked)
-	})
+	customer := seedCustomerMember(t, super)
 	before := contentOf(t, super, draft.RuleSetVersionID.String())
 	if len(before) == 0 {
 		t.Fatal("the draft holds no rules")
 	}
 	far, _ := time.Parse("2006-01-02", deskFarDate)
-	for name, actor := range map[string]string{"no rules role": revoked, "no staff row": uuid.NewString()} {
+	for name, actor := range map[string]string{"customer member": customer, "no membership": uuid.NewString()} {
 		ctx := staffCtx(t, actor)
 		s := NewStore(app)
 		for op, err := range map[string]error{
@@ -510,7 +504,7 @@ func TestStaffDrafts_NonRulesActorIsNotStaff(t *testing.T) {
 		t.Error("a refused actor changed or sealed the draft")
 	}
 	if rows := auditRowsOf(t, super, ruler); len(rows) != 1 {
-		t.Errorf("rules actor has %d audit rows, want the draft_opened row only", len(rows))
+		t.Errorf("house actor has %d audit rows, want the draft_opened row only", len(rows))
 	}
 }
 

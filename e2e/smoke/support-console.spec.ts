@@ -3,9 +3,12 @@ import { expect } from '@playwright/test'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession, test } from '../staffSession'
 
-// Console shell smoke on a real staff session. The Rules screen's contract lives in api/contract-validation.spec.ts.
+// Console shell smoke on a real staff session. The Rules and Tenants contracts lives in api/contract-validation.spec.ts.
 // Assert the h1, not the TopBar crumb: they can differ.
-const SCREENS: { nav: string; h1: string }[] = [{ nav: 'Rules', h1: 'Rules admin' }]
+const SCREENS: { nav: string; h1: string }[] = [
+  { nav: 'Rules', h1: 'Rules admin' },
+  { nav: 'Tenants', h1: 'Tenants' },
+]
 
 test('support-console: every screen is reachable from the sidebar and renders its own h1', async ({ page, staffAccount }) => {
   const errors = collectErrors(page)

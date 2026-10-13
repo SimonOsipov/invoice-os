@@ -150,7 +150,8 @@ pre.ops-json {
   .ops-sidebar .ops-nav {
     justify-content: center;
   }
-  .ops-rules-grid {
+  .ops-rules-grid,
+  .ops-tenants-grid {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }

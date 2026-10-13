@@ -2,7 +2,7 @@ import { ApiError } from '@invoice-os/api-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_KEY } from './auth'
-import { fetchStaffTenant, fetchStaffTenants, filterTenants, kindLabel, memberName, type StaffTenant } from './tenantsApi'
+import { detailStatus, fetchStaffTenant, fetchStaffTenants, filterTenants, initials, kindLabel, memberName, type StaffTenant } from './tenantsApi'
 
 const GW = 'https://gw.test'
 const ROUTE = `${GW}/api/tenancy/v1/staff/tenants`
@@ -120,5 +120,28 @@ describe('tenantsApi', () => {
     expect(kindLabel('firm')).toBe('FIRM')
     expect(kindLabel('in_house')).toBe('IN-HOUSE')
     expect(kindLabel('other')).toBe('OTHER')
+  })
+
+  it('initials takes the first letter of the first two words', () => {
+    expect(initials('Okafor & Partners')).toBe('O&')
+    expect(initials('  honeywell  ')).toBe('H')
+    expect(initials('ASComply (dev) Ltd')).toBe('A(')
+    expect(initials('')).toBe('?')
+    expect(initials('   ')).toBe('?')
+  })
+
+  it('detailStatus shows no previous tenant', () => {
+    const detail = { tenant: tenant('X', { id: 'X' }), members: [], invoices: [] }
+    const ready = { status: 'ready', data: detail, error: null }
+    expect(detailStatus(ready, 'Y')).toBe('loading')
+    expect(detailStatus(ready, 'X')).toBe('ready')
+    expect(detailStatus(ready, null)).toBe('none')
+    expect(detailStatus({ status: 'idle', data: null, error: null }, 'X')).toBe('loading')
+    expect(detailStatus({ status: 'loading', data: null, error: null }, 'X')).toBe('loading')
+    const failed = (status: number | null) => ({ status: 'error', data: null, error: { status } })
+    expect(detailStatus(failed(404), 'X')).toBe('not-found')
+    expect(detailStatus(failed(403), 'X')).toBe('forbidden')
+    expect(detailStatus(failed(500), 'X')).toBe('error')
+    expect(detailStatus(failed(null), 'X')).toBe('error')
   })
 })

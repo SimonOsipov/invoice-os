@@ -51,3 +51,20 @@ export const filterTenants = (list: StaffTenant[], query: string): StaffTenant[]
 export const memberName = (m: Pick<StaffMember, 'display_name' | 'email' | 'user_id'>): string => m.display_name || m.email || m.user_id
 
 export const kindLabel = (kind: string): string => (kind === 'firm' ? 'FIRM' : kind === 'in_house' ? 'IN-HOUSE' : kind.toUpperCase())
+
+// First letter of the first two words, upper-case; '?' for an empty name.
+export const initials = (name: string): string =>
+  name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((w) => Array.from(w)[0].toUpperCase()).join('') || '?'
+
+export type DetailStatus = 'none' | 'loading' | 'ready' | 'not-found' | 'forbidden' | 'error'
+
+// Ready only for the selected tenant, so the commit before a new read starts never shows the previous one.
+export const detailStatus = (
+  read: { status: string; data: StaffTenantDetail | null; error: { status: number | null } | null },
+  tenantId: string | null,
+): DetailStatus => {
+  if (tenantId === null) return 'none'
+  if (read.status === 'ready') return read.data?.tenant.id === tenantId ? 'ready' : 'loading'
+  if (read.status !== 'error') return 'loading'
+  return read.error?.status === 404 ? 'not-found' : read.error?.status === 403 ? 'forbidden' : 'error'
+}

@@ -140,6 +140,8 @@ func TestBootstrapSQLStaffReaderCannotLogInEvenWithAPassword(t *testing.T) {
 	}
 
 	applyDevBootstrap(t, pool, sql)
+	// Bootstrap clears the password; set it again so only NOLOGIN can refuse.
+	alterRolePassword(t, pool, staffReaderRole, pw)
 
 	err := attemptLogin(t, loginDSN(t, superDSN, staffReaderRole, pw))
 	if err == nil {
@@ -377,5 +379,32 @@ func TestBootstrapSQLStaffReaderAdminOptionDriftConverges(t *testing.T) {
 	}
 	if got[0].admin {
 		t.Errorf("membership admin=true after bootstrap, want false")
+	}
+}
+
+func TestBootstrapSQLStaffReaderDriftedPasswordIsCleared(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	ensureStaffReaderForDrift(t, pool)
+	t.Cleanup(func() {
+		mustExecSQL(t, pool, `ALTER ROLE staff_reader PASSWORD NULL`)
+		restoreAuthRoles(t, pool)
+		restoreDevDefaultPasswords(t, pool)
+	})
+
+	alterRolePassword(t, pool, staffReaderRole, "staff-drift-"+uuid.NewString())
+	var hasPw bool
+	if err := pool.QueryRow(context.Background(), `SELECT rolpassword IS NOT NULL FROM pg_authid WHERE rolname = 'staff_reader'`).Scan(&hasPw); err != nil || !hasPw {
+		t.Fatalf("pre-mutation did not set a password: has=%v err=%v", hasPw, err)
+	}
+
+	applyDevBootstrap(t, pool, sql)
+
+	if err := pool.QueryRow(context.Background(), `SELECT rolpassword IS NOT NULL FROM pg_authid WHERE rolname = 'staff_reader'`).Scan(&hasPw); err != nil {
+		t.Fatalf("read pg_authid: %v", err)
+	}
+	if hasPw {
+		t.Errorf("staff_reader holds a password after bootstrap, want none")
 	}
 }

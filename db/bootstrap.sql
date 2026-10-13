@@ -73,7 +73,7 @@ ALTER ROLE invoice_app           WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB N
 ALTER ROLE invoice_tenant_reader WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE supabase_auth_admin   WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
 ALTER ROLE auth_hook_reader      WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
-ALTER ROLE staff_reader          WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+ALTER ROLE staff_reader          WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD NULL;
 
 -- 3. Set / rotate passwords, read from four session GUCs the caller sets beforehand
 --    (`ascomply.migrator_password` / `.app_password` / `.reader_password` /
@@ -131,7 +131,7 @@ GRANT USAGE, CREATE ON SCHEMA public TO auth_hook_reader;
 --    SET without INHERIT: the migrator never inherits the role's cross-tenant read policy.
 GRANT auth_hook_reader TO invoice_migrator WITH INHERIT FALSE, SET TRUE;
 GRANT USAGE, CREATE ON SCHEMA public TO staff_reader;
-GRANT staff_reader TO invoice_migrator WITH INHERIT FALSE, SET TRUE;
+GRANT staff_reader TO invoice_migrator WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
 
 --    Lock down the public schema: revoke the ambient CREATE that PUBLIC has by
 --    default (a no-op on PG15+, where PUBLIC already lacks it — kept explicit for

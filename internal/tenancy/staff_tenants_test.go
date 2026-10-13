@@ -712,6 +712,13 @@ func TestStaffTenantsRoute_DemoFollowsDemoTenants(t *testing.T) {
 	if len(wrong) > 0 {
 		t.Errorf("%d tenants outside db.DemoTenants do not read demo = false, e.g. %s", len(wrong), wrong[0])
 	}
+
+	// The detail header carries the same flag.
+	for id, want := range map[string]string{db.DemoTenants[0]: "true", nearMiss: "false", fresh: "false"} {
+		if _, tenant, _, _ := detailOf(t, rig.getTenant(id, staffCaller{subject: staff, staff: true})); string(tenant["demo"]) != want {
+			t.Errorf("detail of %s: demo = %s, want %s", id, tenant["demo"], want)
+		}
+	}
 }
 
 func TestStaffTenantsRoute_ReadsWriteNoAuditRow(t *testing.T) {
@@ -1006,6 +1013,23 @@ func TestStaffTenantRoute_ReturnsTheTenNewestInvoices(t *testing.T) {
 	if slices.Contains(got, oldest) {
 		t.Errorf("the oldest invoice %s (T0) is in the list", oldest)
 	}
+
+	// Exactly 10 invoices: all come back, none dropped at the boundary.
+	ten := seedTenant(t, super, "staff-tenants ten "+uuid.NewString()[:8])
+	tenRows := rows[:10]
+	tenIDs := seedInvoicesAt(t, super, ten, tenRows)
+	_, _, _, tenInvoices := detailOf(t, rig.getTenant(ten, staffCaller{subject: staff, staff: true}))
+	if gotTen := fieldIDs(t, tenInvoices, "id"); len(gotTen) != 10 || !slices.Equal(slices.Sorted(slices.Values(gotTen)), slices.Sorted(slices.Values(tenIDs))) {
+		t.Errorf("a tenant with exactly 10 invoices returned %v, want all of %v", gotTen, tenIDs)
+	}
+
+	// Equal created_at breaks by id ascending.
+	tied := seedTenant(t, super, "staff-tenants tied "+uuid.NewString()[:8])
+	tiedIDs := seedInvoicesAt(t, super, tied, []invoiceSeed{{"T-1", "draft", t0}, {"T-2", "draft", t0}, {"T-3", "draft", t0}})
+	_, _, _, tiedInvoices := detailOf(t, rig.getTenant(tied, staffCaller{subject: staff, staff: true}))
+	if gotTied, want := fieldIDs(t, tiedInvoices, "id"), slices.Sorted(slices.Values(tiedIDs)); !slices.Equal(gotTied, want) {
+		t.Errorf("tied invoices = %v, want id ascending %v", gotTied, want)
+	}
 }
 
 func TestStaffTenantRoute_EmptyTenantHasEmptyLists(t *testing.T) {
@@ -1013,6 +1037,14 @@ func TestStaffTenantRoute_EmptyTenantHasEmptyLists(t *testing.T) {
 	rig := newStaffRig(t, NewStore(app))
 	_, staff := houseMember(t, super, "active")
 	x := seedTenant(t, super, "staff-tenants empty "+uuid.NewString()[:8])
+	// A populated neighbour created after X: an empty X must not borrow its rows.
+	y := seedTenant(t, super, "staff-tenants empty neighbour "+uuid.NewString()[:8])
+	my := uuid.NewString()
+	seedMembership(t, super, y, my, "admin", "active")
+	seedInvoicesAt(t, super, y, []invoiceSeed{{"Y-1", "draft", time.Now().UTC()}})
+	if _, _, ym, yi := detailOf(t, rig.getTenant(y, staffCaller{subject: staff, staff: true})); len(ym) != 1 || len(yi) != 1 {
+		t.Fatalf("control: the neighbour has %d members and %d invoices, want 1 and 1", len(ym), len(yi))
+	}
 
 	rec := rig.getTenant(x, staffCaller{subject: staff, staff: true})
 	top, tenant, _, _ := detailOf(t, rec)
@@ -1051,6 +1083,39 @@ func TestStaffTenantRoute_UnknownTenantIs404(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			wantBody(t, rig.getTenant(id, c), http.StatusNotFound, tenantNotFoundBody)
 		})
+	}
+	t.Run("empty id is no route", func(t *testing.T) {
+		rec := rig.getTenant("", c)
+		if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), `"tenants"`) || strings.Contains(rec.Body.String(), `"members"`) {
+			t.Errorf("got %d %q, want a 404 that is neither the list nor a detail", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// An empty stored name or email is "", not null: the SPA's name ladder tells them apart.
+func TestStaffTenantRoute_EmptyStringsAreNotNull(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	_, staff := houseMember(t, super, "active")
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	x := seedKindedTenant(t, super, "staff-tenants empty strings "+uuid.NewString()[:8], "in_house")
+	empty, null := uuid.NewString(), uuid.NewString()
+	seedMemberAt(t, super, x, empty, "admin", "active", ptr(""), ptr(""), t0)
+	seedMemberAt(t, super, x, null, "preparer", "active", nil, nil, t0.Add(time.Minute))
+
+	_, _, members, _ := detailOf(t, rig.getTenant(x, staffCaller{subject: staff, staff: true}))
+	if len(members) != 2 {
+		t.Fatalf("%d members, want 2", len(members))
+	}
+	for i, want := range []map[string]string{
+		{"user_id": `"` + empty + `"`, "display_name": `""`, "email": `""`},
+		{"user_id": `"` + null + `"`, "display_name": "null", "email": "null"},
+	} {
+		for k, w := range want {
+			if raw := string(members[i][k]); raw != w {
+				t.Errorf("member %d %s = %s, want %s", i, k, raw, w)
+			}
+		}
 	}
 }
 

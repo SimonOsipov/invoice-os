@@ -160,7 +160,7 @@ describe('v2 screens', () => {
 
   it('Rules renders its non-ready states', () => {
     const forbidden = rulesWith({ status: 'forbidden', rules: [], version: null })
-    expect(forbidden).toContain('Your account has no rules role.')
+    expect(forbidden).toContain('Your account is not ASComply staff.')
     expect(forbidden).not.toContain('role="switch"')
     expect(forbidden).toContain('Rules admin')
     const loading = rulesWith({ status: 'loading', rules: [], version: null })
@@ -272,8 +272,8 @@ describe('v2 screens', () => {
     const empty = rulesWith({ codeLists: [] })
     expect(panelRows(empty)).toHaveLength(0)
     expect(empty).toContain('No sync recorded yet.')
-    const loading = rulesWith({ codeLists: null, codeListsNote: 'Your account has no rules role.' })
-    expect(loading).toContain('Your account has no rules role.')
+    const loading = rulesWith({ codeLists: null, codeListsNote: 'Your account is not ASComply staff.' })
+    expect(loading).toContain('Your account is not ASComply staff.')
     expect(loading).not.toContain('No sync recorded yet.')
   })
 

@@ -19,7 +19,7 @@ paths:
 - Read the tenant as `nullif(current_setting('app.current_tenant', true), '')::uuid`. An unset tenant returns zero rows.
 - Never write `SET LOCAL app.current_tenant` by hand. Use `WithinTenantTx` or `WithinRequestTenantTx`.
 - Loop over tenants one at a time for cross-tenant work.
-- Enumerate tenants only through `invoice_tenant_reader`.
+- Enumerate tenants only through `invoice_tenant_reader` or a `staff_read_` function.
 - Install a trusted extension in a migration. Install an untrusted extension in `db/bootstrap.sql`.
 - Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.accept_invitation_by_id` and `public.invitee_account_state` to `invoice_app` only.
 - Grant `auth_hook_reader` SELECT on the `auth.users` columns `email`, `email_confirmed_at` and `is_sso_user` only.
@@ -56,3 +56,10 @@ CREATE POLICY invitee_account_state_read ON auth.users FOR SELECT TO auth_hook_r
 - Key demo fixtures on a literal seeded field: invoice number, entity name or workflow role key.
 - Keep one row at most in `public.house_company`. Insert the production row by hand; the seed never replaces a row.
 - Grant `EXECUTE` on `public.is_house_member` only to a role that owns a staff SQL function. Call it in every staff SQL function.
+- Read tenant rows for staff only through a `public.staff_read_<noun>(p_actor uuid, …)` function.
+- Create each one as `staff_reader`: `SECURITY DEFINER`, `SET search_path = ''`, `REVOKE EXECUTE … FROM PUBLIC`, `GRANT EXECUTE … TO invoice_app`.
+- Make `IF NOT public.is_house_member(p_actor)` raising `insufficient_privilege` its first statement.
+- Give `staff_reader` `SELECT` on the columns a function reads and one `FOR SELECT TO staff_reader USING (true)` policy per table. Never a table-level grant.
+- Add each table a staff function reads to the seed map of `TestRLS_AppStaysIsolatedOnEveryStaffReaderTable`.
+- Create `staff_reader` by hand on production before the first migration that names it.
+- Treat `invoice_migrator` as able to read every column granted to `staff_reader`, in every tenant, through `SET ROLE staff_reader`.

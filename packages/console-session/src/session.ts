@@ -27,7 +27,7 @@ export function isStaffToken(token: string | null): boolean {
   return meta !== null && typeof meta === 'object' && !Array.isArray(meta) && (meta as { staff?: unknown }).staff === true
 }
 
-const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v !== ''
+export const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v !== ''
 
 // Null for absent; null plus one console.warn for anything that is not a v2 record.
 export function parseStoredConsoleSession(raw: string | null, key: string): ConsoleSession | null {

@@ -535,7 +535,7 @@ describe('app-borrowed session (SUPP-11-02)', () => {
 
   it('boot_appHandoffOpensABorrowedStaffSession', async () => {
     const token = staffToken('borrowed')
-    const { boot, calls } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), app: APP, answer: () => access(token) })
+    const { boot, calls } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), target: 'support', app: APP, answer: () => access(token) })
     expect(boot).toEqual({ kind: 'open', session: { token, refreshToken: null } })
     expect(calls.map((c) => c.url)).toEqual([EXCHANGE])
     expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 2, token, from: 'app' })
@@ -543,13 +543,57 @@ describe('app-borrowed session (SUPP-11-02)', () => {
 
   it('boot_appHandoffOverwritesAStoredLandingRecord', async () => {
     const token = staffToken('borrowed')
-    await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), local: OLD_RECORD, answer: () => access(token) })
+    await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), local: OLD_RECORD, target: 'support', app: APP, answer: () => access(token) })
     expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 2, token, from: 'app' })
   })
 
+  it('boot_opsHandoffAnswerWithoutARefreshTokenFails', async () => {
+    for (const o of [{ target: 'ops' as const, app: APP }, { target: 'support' as const, app: null }]) {
+      const { boot } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), ...o, answer: () => access(staffToken('o')) })
+      expect(/&signin=failed$/.test(leaveUrl(boot)), JSON.stringify(o)).toBe(true)
+      expect(store.local.getItem(OPS_KEY)).toBeNull()
+    }
+  })
+
+  it('boot_authAppKeepsAStoredLandingRecord', async () => {
+    const renewed = staffToken('renewed')
+    const { boot, calls } = await run({
+      search: '?auth=app',
+      target: 'support',
+      app: APP,
+      local: OLD_RECORD,
+      answer: () => reply(200, { access_token: renewed, refresh_token: 'R-new' }),
+    })
+    expect(boot).toEqual({ kind: 'open', session: { token: renewed, refreshToken: 'R-new' } })
+    expect(calls.map((c) => c.url)).toEqual([REFRESH])
+    expect(calls[0]!.body).toEqual({ refresh_token: 'R-old' })
+  })
+
+  it('boot_authAppWithABorrowedRecordStillBounces', async () => {
+    const { boot } = await run({ search: '?auth=app', target: 'support', app: APP, local: BORROWED })
+    expect(appStart('support').test(leaveUrl(boot))).toBe(true)
+  })
+
+  it('boot_expiredBorrowedRecordIsClearedAndLeavesToLanding', async () => {
+    const expired = borrowedRaw(staffToken('exp', NOW / 1000 - 10))
+    const { boot, calls } = await run({ local: expired, app: APP, target: 'support' })
+    expect(/^https:\/\/www\.test\/\?state=[A-Za-z0-9_-]{43}&console=support$/.test(leaveUrl(boot))).toBe(true)
+    expect(store.local.getItem(OPS_KEY)).toBeNull()
+    expect(calls).toHaveLength(0)
+  })
+
+  it('boot_borrowedRecordAfterOneBounceIsClearedAndLeavesToLanding', async () => {
+    const first = await run({ local: BORROWED, app: APP, target: 'support' })
+    expect(appStart('support').test(leaveUrl(first.boot))).toBe(true)
+    const state = store.session.getItem(STATE_KEY) ?? undefined
+    const { boot } = await run({ local: BORROWED, state, app: APP, target: 'support' })
+    expect(/^https:\/\/www\.test\/\?state=[A-Za-z0-9_-]{43}&console=support$/.test(leaveUrl(boot))).toBe(true)
+    expect(store.local.getItem(OPS_KEY)).toBeNull()
+  })
+
   it('boot_appHandoffNonStaffStoresNothing', async () => {
-    const { boot } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), answer: () => access(customerToken('c')) })
-    expect(withOutcome('not-staff').test(leaveUrl(boot))).toBe(true)
+    const { boot } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), target: 'support', app: APP, answer: () => access(customerToken('c')) })
+    expect(/&console=support&signin=not-staff$/.test(leaveUrl(boot))).toBe(true)
     expect(store.local.getItem(OPS_KEY)).toBeNull()
     expect(store.local.setItem).not.toHaveBeenCalled()
   })

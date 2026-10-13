@@ -68,6 +68,16 @@ export function mintSignInState(now: number = Date.now()): string {
   return s
 }
 
+// Read-only: the held state when under the TTL, else null.
+export function peekSignInState(now: number = Date.now()): string | null {
+  try {
+    const p = storedState(sessionStorage.getItem(SIGN_IN_STATE_KEY))
+    return p && p.at <= now && now - p.at < SIGN_IN_STATE_TTL_MS ? p.s : null
+  } catch {
+    return null
+  }
+}
+
 // One-shot: removes the key whatever it held, returns the state only when under the TTL.
 export function consumeSignInState(now: number = Date.now()): string | null {
   try {

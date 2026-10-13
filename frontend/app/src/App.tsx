@@ -1856,7 +1856,7 @@ export default function App() {
     liveHandoff || !gatewayBase() ? null : readHandoffCode(window.location.search),
   )
   const [handoffPending, setHandoffPending] = useState(handoffCode !== null)
-  // The console's `?auth=console` start; `?handoff=` wins. Acts only on a live staff seat (D12).
+  // The console's `?auth=console` start; `?handoff=` wins. Acts only on a live staff seat.
   const [consoleStart, setConsoleStart] = useState(() => (handoffCode ? null : readConsoleStart(window.location.search)))
   const consoleStarted = useRef(false)
   const redeemStarted = useRef(false)

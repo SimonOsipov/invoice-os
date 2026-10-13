@@ -14,6 +14,7 @@ import {
   clearSession,
   decodeJwtPayload,
   isHandoffMe,
+  isStaffToken,
   isTokenExpired,
   loadSession,
   parseStoredSession,
@@ -800,5 +801,18 @@ describe('cardIdentity (AUTH-09-02)', () => {
     const me = firmSession().me!
     const session = { ...firmSession(), me: { ...me, user: { ...me.user, display_name: null, email: null } } }
     expect(cardIdentity(session)).toEqual({ name: APP_PERSONAS.firm.name, initials: APP_PERSONAS.firm.initials })
+  })
+})
+
+describe('isStaffToken', () => {
+  const tok = (appMetadata: unknown) => `h.${btoa(JSON.stringify(appMetadata === undefined ? {} : { app_metadata: appMetadata })).replace(/=+$/, '')}.s`
+
+  it('isStaffToken_readsOnlyABooleanTrue', () => {
+    expect(isStaffToken(tok({ staff: true }))).toBe(true)
+    for (const meta of [{ staff: 'true' }, { staff: 1 }, [], 'x', undefined]) {
+      expect(isStaffToken(tok(meta)), JSON.stringify(meta)).toBe(false)
+    }
+    expect(isStaffToken('a.b')).toBe(false)
+    expect(isStaffToken(null)).toBe(false)
   })
 })

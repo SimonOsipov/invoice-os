@@ -127,7 +127,8 @@ async function settle(ms = 30) {
 
 // Matches 5/5 sibling App test files that mount a live session (FD-4 is the row that
 // reaches Workspace); harmless no-op for the other rows.
-vi.mock('./components/Sidebar', () => ({ Sidebar: () => null }))
+// The probe shows `ctx.staff` only; the real icon is pinned in Sidebar.test.tsx.
+vi.mock('./components/Sidebar', () => ({ Sidebar: ({ ctx }: { ctx: { staff: boolean } }) => (ctx.staff ? <a href="#">Open the Support Console</a> : null) }))
 
 beforeEach(() => {
   originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
@@ -331,5 +332,22 @@ describe('front door: a Library visit goes to registration (LIB-06)', () => {
     await settle()
 
     expect(hrefWrites).toEqual([`https://landing.example/?state=${storedSignInState()}&signin=ready`])
+  })
+})
+
+describe('front door: the workspace ctx staff flag', () => {
+  const jwtWith = (appMetadata: unknown) => `h.${btoa(JSON.stringify({ app_metadata: appMetadata })).replace(/=+$/, '')}.s`
+
+  it('workspaceCtx_staffComesFromTheToken', () => {
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://sup.x')
+    stubLocation()
+    localStorage.setItem(SESSION_KEY, serializeSession({ ...SEAT_SESSION, token: jwtWith({ staff: true }) }))
+    render(<App />)
+    expect(screen.queryByRole('link', { name: 'Open the Support Console' })).not.toBeNull()
+    cleanup()
+    localStorage.setItem(SESSION_KEY, serializeSession({ ...SEAT_SESSION, token: jwtWith({ staff: 'true' }) }))
+    render(<App />)
+    expect(workspaceIsRendered()).toBe(true)
+    expect(screen.queryByRole('link', { name: 'Open the Support Console' })).toBeNull()
   })
 })

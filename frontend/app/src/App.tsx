@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { landingBase, signIn, type Persona, type PersonaId, type Session } from './auth'
 import { SignIn, SignInLoading } from './components/SignIn'
 import { CREATING_OWN, JoinWorkspace } from './components/JoinWorkspace'
-import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPayload, cardIdentity } from './lib/session'
+import { resolveBootSession, loadSession, saveSession, clearSession, decodeJwtPayload, cardIdentity, isStaffToken } from './lib/session'
 import { revokeSessions } from './lib/revoke'
 import { createRenewer, isRenewalDue, SessionEndedError, type Renewer } from './lib/renewal'
 import { captureDestination, readDestination, clearDestination } from './lib/deepLink'
@@ -1670,6 +1670,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     // transports can never drift on which session they read.
     getToken: importAuth.getToken,
     handoff: session.handoff === true,
+    staff: isStaffToken(session.token),
     user,
     clients,
     active,

@@ -32,7 +32,7 @@ const (
 	devHouseTenant    = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
 )
 
-var staffTenantKeys = []string{"created_at", "id", "kind", "name"}
+var staffTenantKeys = []string{"active_members", "created_at", "demo", "id", "invoice_count", "kind", "last_activity_at", "name"}
 
 // staffCtx returns the context auth.RequireStaff builds for a staff caller: the key is private to auth.
 func staffCtx(subject string) context.Context {
@@ -250,6 +250,11 @@ func TestStaffTenantsRoute_StaffSeesEveryTenant(t *testing.T) {
 				if name != nk[0] || kind != nk[1] {
 					t.Errorf("tenant %s = name %q kind %q, want %q %q", id, name, kind, nk[0], nk[1])
 				}
+				for k, want := range map[string]string{"active_members": "0", "invoice_count": "0", "last_activity_at": "null", "demo": "false"} {
+					if got := string(row[k]); got != want {
+						t.Errorf("tenant %s %s = %s, want %s", id, k, got, want)
+					}
+				}
 				if at, err := time.Parse(time.RFC3339Nano, created); err != nil {
 					t.Errorf("tenant %s created_at %q is not RFC 3339: %v", id, created, err)
 				} else if !at.Equal(createdAt[id]) {
@@ -342,7 +347,7 @@ func TestStaffTenantsHandler_Contract(t *testing.T) {
 		{"nil list is an empty array", func(context.Context) ([]StaffTenant, error) { return nil, nil }, 200, `{"tenants":[]}`, false},
 		{"empty list is an empty array", func(context.Context) ([]StaffTenant, error) { return []StaffTenant{}, nil }, 200, `{"tenants":[]}`, false},
 		{"one tenant", func(context.Context) ([]StaffTenant, error) { return one, nil }, 200,
-			`{"tenants":[{"id":"t1","name":"Acme","kind":"firm","created_at":"2026-10-13T12:00:00Z"}]}`, false},
+			`{"tenants":[{"id":"t1","name":"Acme","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":false,"active_members":0,"invoice_count":0,"last_activity_at":null}]}`, false},
 		{"not staff", func(context.Context) ([]StaffTenant, error) { return nil, db.ErrNotStaff }, 403, forbiddenBody, false},
 		{"wrapped not staff", func(context.Context) ([]StaffTenant, error) { return nil, fmt.Errorf("x: %w", db.ErrNotStaff) }, 403, forbiddenBody, false},
 		{"other error", func(context.Context) ([]StaffTenant, error) { return nil, errors.New("x") }, 500, internalBody, true},
@@ -451,5 +456,255 @@ func TestStaffReadError_OnlyTheFunctionsOwnRefusalIsNotStaff(t *testing.T) {
 	}
 	if got := staffReadError("op", nil); got != nil {
 		t.Errorf("staffReadError(nil) = %v, want nil", got)
+	}
+}
+
+// seedTenantAt commits a firm tenant created at a fixed time, so ordering specs control created_at.
+func seedTenantAt(t *testing.T, super *pgxpool.Pool, name string, createdAt time.Time) string {
+	t.Helper()
+	id := uuid.NewString()
+	seedTenantRowAt(t, super, id, name, createdAt)
+	return id
+}
+
+func seedTenantRowAt(t *testing.T, super *pgxpool.Pool, id, name string, createdAt time.Time) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO tenants (id, name, kind, created_at) VALUES ($1, $2, 'firm', $3)`, id, name, createdAt); err != nil {
+		t.Fatalf("seed tenant %s: %v", name, err)
+	}
+	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id) })
+}
+
+// seedInvoices adds n invoices; the cleanup runs before the tenant's own (invoices.entity_id is RESTRICT).
+func seedInvoices(t *testing.T, super *pgxpool.Pool, tenant string, n int) {
+	t.Helper()
+	ctx := context.Background()
+	entity := uuid.NewString()
+	if _, err := super.Exec(ctx, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $2, $3)`, entity, tenant, "entity-"+entity[:8]); err != nil {
+		t.Fatalf("seed an entity: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM invoices WHERE tenant_id = $1`, tenant)
+		_, _ = super.Exec(context.Background(), `DELETE FROM business_entities WHERE tenant_id = $1`, tenant)
+	})
+	for i := 0; i < n; i++ {
+		if _, err := super.Exec(ctx,
+			`INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, status) VALUES ($1, $2, $3, $4, 'draft')`,
+			uuid.NewString(), tenant, entity, fmt.Sprintf("ST-%d", i)); err != nil {
+			t.Fatalf("seed invoice %d: %v", i, err)
+		}
+	}
+}
+
+// seedAuditAt appends an audit row; audit_log is append-only, so the row stays.
+func seedAuditAt(t *testing.T, super *pgxpool.Pool, tenant string, at time.Time) {
+	t.Helper()
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO audit_log (tenant_id, actor, event, created_at) VALUES ($1, 'staff-tenants-test', 'staff_tenants.seed', $2)`, tenant, at); err != nil {
+		t.Fatalf("seed an audit row: %v", err)
+	}
+}
+
+// orderedIDs returns the listed ids in served order, restricted to the wanted set.
+func orderedIDs(t *testing.T, rec *httptest.ResponseRecorder, among ...string) []string {
+	t.Helper()
+	var body struct {
+		Tenants []struct {
+			ID string `json:"id"`
+		} `json:"tenants"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode %q: %v", rec.Body.String(), err)
+	}
+	var out []string
+	for _, row := range body.Tenants {
+		if slices.Contains(among, row.ID) {
+			out = append(out, row.ID)
+		}
+	}
+	return out
+}
+
+func TestStaffTenantsRoute_CountsAndLastActivity(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	_, staff := houseMember(t, super, "active")
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+
+	x := seedTenant(t, super, "staff-tenants counts X "+uuid.NewString()[:8])
+	for _, m := range []struct{ role, status string }{{"admin", "active"}, {"reviewer", "active"}, {"preparer", "suspended"}, {"preparer", "invited"}} {
+		seedMembership(t, super, x, uuid.NewString(), m.role, m.status)
+	}
+	seedInvoices(t, super, x, 3)
+	seedAuditAt(t, super, x, t0)
+	seedAuditAt(t, super, x, t0.Add(time.Minute))
+	y := seedTenant(t, super, "staff-tenants counts Y "+uuid.NewString()[:8])
+	// z has different counts: a global count, or a members x invoices join, would leak into x.
+	z := seedTenant(t, super, "staff-tenants counts Z "+uuid.NewString()[:8])
+	seedMembership(t, super, z, uuid.NewString(), "admin", "active")
+	seedInvoices(t, super, z, 1)
+	seedAuditAt(t, super, z, t0.Add(-time.Minute))
+
+	rec := rig.get(staffCaller{subject: staff, staff: true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
+	}
+	got := tenantsOf(t, rec)
+	rowX, okX := got[x]
+	rowY, okY := got[y]
+	rowZ, okZ := got[z]
+	if !okX || !okY || !okZ {
+		t.Fatalf("seeded tenants missing from the list: X=%v Y=%v Z=%v", okX, okY, okZ)
+	}
+
+	wantCounts := func(name string, row map[string]json.RawMessage, active, invoices string) {
+		for k, want := range map[string]string{"active_members": active, "invoice_count": invoices} {
+			if raw, present := row[k]; !present || string(raw) != want {
+				t.Errorf("%s: %s = %s (present=%v), want %s", name, k, raw, present, want)
+			}
+		}
+	}
+	wantCounts("X", rowX, "2", "3")
+	wantCounts("Y", rowY, "0", "0")
+	wantCounts("Z", rowZ, "1", "1")
+	if raw, present := rowY["last_activity_at"]; !present || string(raw) != "null" {
+		t.Errorf("Y: last_activity_at = %s (present=%v), want a present null", raw, present)
+	}
+	for name, c := range map[string]struct {
+		row  map[string]json.RawMessage
+		want time.Time
+	}{"X": {rowX, t0.Add(time.Minute)}, "Z": {rowZ, t0.Add(-time.Minute)}} {
+		var s string
+		if err := json.Unmarshal(c.row["last_activity_at"], &s); err != nil {
+			t.Errorf("%s: last_activity_at = %s, want an RFC 3339 string: %v", name, c.row["last_activity_at"], err)
+			continue
+		}
+		if at, err := time.Parse(time.RFC3339Nano, s); err != nil || !at.Equal(c.want) {
+			t.Errorf("%s: last_activity_at = %q, want %s (the newest audit row)", name, s, c.want.Format(time.RFC3339))
+		}
+	}
+}
+
+func TestStaffTenantsRoute_OrdersByLastActivity(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	_, staff := houseMember(t, super, "active")
+	now := time.Now().UTC().Truncate(time.Second)
+	t0 := now.Add(-time.Hour)
+	suffix := uuid.NewString()[:8]
+
+	// P is the oldest tenant but has the newest activity; R is the newest tenant but has none.
+	p := seedTenantAt(t, super, "staff-tenants order P "+suffix, now.Add(-4*time.Hour))
+	q := seedTenantAt(t, super, "staff-tenants order Q "+suffix, now.Add(-3*time.Hour))
+	s := seedTenantAt(t, super, "staff-tenants order S "+suffix, now.Add(-2*time.Hour))
+	r := seedTenantAt(t, super, "staff-tenants order R "+suffix, now.Add(-30*time.Minute))
+	seedAuditAt(t, super, p, t0.Add(2*time.Minute))
+	seedAuditAt(t, super, q, t0)
+
+	// Equal created_at and no activity: id ascending breaks the tie.
+	tie := now.Add(-5 * time.Hour)
+	u1, u2 := uuid.NewString(), uuid.NewString()
+	if u1 > u2 {
+		u1, u2 = u2, u1
+	}
+	seedTenantRowAt(t, super, u2, "staff-tenants order U2 "+suffix, tie)
+	seedTenantRowAt(t, super, u1, "staff-tenants order U1 "+suffix, tie)
+
+	rec := rig.get(staffCaller{subject: staff, staff: true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
+	}
+	got := orderedIDs(t, rec, p, q, r, s, u1, u2)
+	want := []string{p, q, r, s, u1, u2}
+	if !slices.Equal(got, want) {
+		t.Errorf("order = %v, want P, Q, R, S, U1, U2 = %v", got, want)
+	}
+}
+
+func TestStaffTenantsRoute_DemoFollowsDemoTenants(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	_, staff := houseMember(t, super, "active")
+	fresh := seedTenant(t, super, "staff-tenants fresh "+uuid.NewString()[:8])
+
+	// db.DemoTenants[0]; the cleanup removes the row only when this test created it.
+	demo := db.DemoTenants[0]
+	tag, err := super.Exec(context.Background(), `INSERT INTO tenants (id, name) VALUES ($1, 'staff-tenants demo') ON CONFLICT DO NOTHING`, demo)
+	if err != nil {
+		t.Fatalf("seed the demo tenant: %v", err)
+	}
+	if tag.RowsAffected() == 1 {
+		t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, demo) })
+	}
+
+	rec := rig.get(staffCaller{subject: staff, staff: true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
+	}
+	got := tenantsOf(t, rec)
+	if len(got) == 0 {
+		t.Fatal("the list is empty")
+	}
+	if raw := string(got[demo]["demo"]); raw != "true" {
+		t.Errorf("demo tenant %s demo = %q, want true", demo, raw)
+	}
+	if raw := string(got[fresh]["demo"]); raw != "false" {
+		t.Errorf("fresh tenant demo = %q, want false", raw)
+	}
+	var wrong []string
+	for id, row := range got {
+		if !slices.Contains(db.DemoTenants, id) && string(row["demo"]) != "false" {
+			wrong = append(wrong, id)
+		}
+	}
+	if len(wrong) > 0 {
+		t.Errorf("%d tenants outside db.DemoTenants do not read demo = false, e.g. %s", len(wrong), wrong[0])
+	}
+}
+
+func TestStaffTenantsRoute_ReadsWriteNoAuditRow(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newStaffRig(t, NewStore(app))
+	houseID, staff := houseMember(t, super, "active")
+	x := seedTenant(t, super, "staff-tenants no-audit "+uuid.NewString()[:8])
+	auditAt := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	seedAuditAt(t, super, x, auditAt)
+
+	count := func() [3]int {
+		var n [3]int
+		for i, q := range []struct{ sql, arg string }{
+			{`SELECT count(*) FROM audit_log WHERE tenant_id = $1`, x},
+			{`SELECT count(*) FROM audit_log WHERE tenant_id = $1`, houseID},
+			{`SELECT count(*) FROM public.staff_audit_log WHERE actor = $1`, staff},
+		} {
+			if err := super.QueryRow(context.Background(), q.sql, q.arg).Scan(&n[i]); err != nil {
+				t.Fatalf("count: %v", err)
+			}
+		}
+		return n
+	}
+	before := count()
+	if before[0] != 1 {
+		t.Fatalf("control: X has %d audit rows before the reads, want 1", before[0])
+	}
+	for i := 0; i < 2; i++ {
+		rec := rig.get(staffCaller{subject: staff, staff: true})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("read %d = %d %q, want 200", i, rec.Code, rec.Body.String())
+		}
+		row, ok := tenantsOf(t, rec)[x]
+		if !ok {
+			t.Fatalf("read %d did not list X", i)
+		}
+		// Control: the read really ran the activity query over X's audit row.
+		var last string
+		_ = json.Unmarshal(row["last_activity_at"], &last)
+		if at, err := time.Parse(time.RFC3339Nano, last); err != nil || !at.Equal(auditAt) {
+			t.Fatalf("read %d: X last_activity_at = %s, want %s", i, row["last_activity_at"], auditAt.Format(time.RFC3339))
+		}
+	}
+	if after := count(); after != before {
+		t.Errorf("audit counts (X, house, staff_audit_log by actor) = %v after the reads, want %v", after, before)
 	}
 }

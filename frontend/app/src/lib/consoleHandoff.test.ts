@@ -48,10 +48,22 @@ describe('requestConsoleCode_postsStateWithTheBearer', () => {
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer tok')
   })
 
-  it.each([{}, { code: 'short' }, { code: 7 }, null])('throws malformed for %j', async (body) => {
+  it.each([{}, { code: 'short' }, { code: 7 }, null, { code: 'c'.repeat(44) }, { code: `${'c'.repeat(42)}+` }])('throws malformed for %j', async (body) => {
     stub(body)
     await expect(requestConsoleCode('https://gw.x', 'tok', S)).rejects.toMatchObject({ kind: 'malformed' })
   })
+})
+
+it.each([401, 403, 500])('requestConsoleCode rejects a %i answer', async (status) => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, status, statusText: 'x', json: () => Promise.resolve({ error: 'e' }) })))
+  await expect(requestConsoleCode('https://gw.x', 'tok', S)).rejects.toBeDefined()
+  vi.unstubAllGlobals()
+})
+
+it('requestConsoleCode rejects a network error', async () => {
+  vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('Failed to fetch'))))
+  await expect(requestConsoleCode('https://gw.x', 'tok', S)).rejects.toBeDefined()
+  vi.unstubAllGlobals()
 })
 
 it('consoleHandoffUrl_carriesOnlyTheCode', () => {

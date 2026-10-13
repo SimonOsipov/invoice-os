@@ -377,7 +377,7 @@ describe('front door: ?auth=console forwards a code to the console', () => {
       JSON.stringify({ v: 1, personaId: 'firm', token, me: ME, verified: true, handoff: true, refresh_token: 'R0', received_at: Date.now() }),
     )
 
-  type Answer = { status: number; body: unknown } | 'held'
+  type Answer = { status: number; body: unknown } | 'held' | 'network' | 'badjson'
   function stubHandoff(answer: Answer) {
     const calls: { url: string; init: RequestInit }[] = []
     vi.stubGlobal(
@@ -385,7 +385,11 @@ describe('front door: ?auth=console forwards a code to the console', () => {
       vi.fn((url: string, init: RequestInit) => {
         calls.push({ url, init })
         if (answer === 'held') return new Promise(() => {})
-        if (url !== `${GATEWAY}/auth/console-handoff`) {
+        if (url === `${GATEWAY}/auth/console-handoff` && answer === 'network') return Promise.reject(new TypeError('Failed to fetch'))
+        if (url === `${GATEWAY}/auth/console-handoff` && answer === 'badjson') {
+          return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: () => Promise.reject(new SyntaxError('bad json')) })
+        }
+        if (url !== `${GATEWAY}/auth/console-handoff` || typeof answer === 'string') {
           return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: () => Promise.resolve({}) })
         }
         return Promise.resolve({
@@ -447,6 +451,10 @@ describe('front door: ?auth=console forwards a code to the console', () => {
   it.each([
     ['a 403', { status: 403, body: { error: 'forbidden' } }],
     ['a 200 without a code', { status: 200, body: {} }],
+    ['a 401', { status: 401, body: { error: 'unauthorized' } }],
+    ['a 500', { status: 500, body: { error: 'boom' } }],
+    ['a network error', 'network'],
+    ['malformed JSON', 'badjson'],
   ] as const)('frontDoor_consoleStartRefusalRendersTheWorkspace [%s]', async (_n, answer) => {
     const { hrefWrites } = stubRecordingLocation(QUERY)
     seatWith(STAFF)
@@ -472,9 +480,20 @@ describe('front door: ?auth=console forwards a code to the console', () => {
   it('frontDoor_aHandoffCodeWinsOverConsoleStart', async () => {
     const { hrefWrites } = stubRecordingLocation(`?handoff=${CODE}&auth=console&console=support&state=${STATE}`, '/invoices')
     ensureSignInState()
-    const net = stubHandoff('held')
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    const base = globalThis.fetch as unknown as (u: string, i: RequestInit) => Promise<unknown>
+    const ok = (body: unknown) => Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: () => Promise.resolve(body) })
+    const seen: string[] = []
+    vi.stubGlobal('fetch', (u: string, i: RequestInit) => {
+      seen.push(u)
+      if (u === `${GATEWAY}/auth/exchange`) return ok({ access_token: STAFF, refresh_token: 'R0' })
+      if (u === `${GATEWAY}/api/tenancy/v1/me`) return ok(ME)
+      return base(u, i)
+    })
     const replaceState = vi.spyOn(window.history, 'replaceState')
     await mount()
+    expect(seen).toContain(`${GATEWAY}/auth/exchange`)
+    expect(workspaceIsRendered()).toBe(true)
     expect(net.handoffCalls()).toHaveLength(0)
     expect(hrefWrites).toEqual([])
     expect(replaceState).toHaveBeenCalledWith(null, '', '/invoices')
@@ -490,5 +509,62 @@ describe('front door: ?auth=console forwards a code to the console', () => {
     expect(screen.queryByText('Opening your workspace…')).not.toBeNull()
     expect(workspaceIsRendered()).toBe(false)
     expect(screen.queryByRole('link', { name: 'Open the Support Console' })).toBeNull()
+  })
+  it('frontDoor_consoleStartSuccessLeavesNoTraceOfTheCode', async () => {
+    stubRecordingLocation(QUERY)
+    seatWith(STAFF)
+    stubHandoff({ status: 200, body: { code: CODE } })
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+    const pushState = vi.spyOn(window.history, 'pushState')
+    const spies = (['log', 'info', 'warn', 'error'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    await mount()
+    expect(replaceState.mock.calls.length).toBeGreaterThan(0)
+    for (const c of replaceState.mock.calls) expect(String(c[2])).toBe('/')
+    expect(pushState).not.toHaveBeenCalled()
+    const stored = Object.keys(localStorage).concat(Object.keys(sessionStorage)).map((k) => localStorage.getItem(k) ?? sessionStorage.getItem(k) ?? '')
+    expect(stored.length).toBeGreaterThan(0)
+    expect(stored.filter((v) => v.includes(CODE) || v.includes(STATE))).toEqual([])
+    expect(spies.flatMap((x) => x.mock.calls).filter((c) => JSON.stringify(c).includes(CODE))).toEqual([])
+    replaceState.mockRestore()
+    pushState.mockRestore()
+    spies.forEach((x) => x.mockRestore())
+  })
+
+  it('frontDoor_consoleStartSendsTheCodeOnlyToTheConfiguredConsole', async () => {
+    const { hrefWrites } = stubRecordingLocation(`${QUERY}&target=https://evil.x&next=https://evil.x&redirect=https://evil.x`)
+    seatWith(STAFF)
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    await mount()
+    expect(net.handoffCalls()).toHaveLength(1)
+    expect(hrefWrites).toEqual([`${SUPPORT}/?handoff=${CODE}`])
+    expect(JSON.parse(net.handoffCalls()[0].init.body as string)).toEqual({ state: STATE })
+  })
+
+  it.each([
+    ['console=ops', `?auth=console&console=ops&state=${STATE}`],
+    ['a 42-char state', `?auth=console&console=support&state=${STATE.slice(1)}`],
+    ['no state', '?auth=console&console=support'],
+    ['an oversized state', `?auth=console&console=support&state=${STATE}${STATE}`],
+    ['two states', `${QUERY}&state=${STATE}`],
+    ['?auth=start', `?auth=start&console=support&state=${STATE}`],
+    ['?auth=verify', `?auth=verify&console=support&state=${STATE}`],
+    ['?auth=verify-invite', `?auth=verify-invite&console=support&state=${STATE}`],
+  ])('frontDoor_consoleStartIgnoresAMalformedOrOtherDoor [%s]', async (_n, q) => {
+    const { hrefWrites } = stubRecordingLocation(q)
+    seatWith(STAFF)
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    await mount()
+    expect(net.handoffCalls()).toHaveLength(0)
+    expect(hrefWrites.filter((u) => u.startsWith(SUPPORT))).toEqual([])
+  })
+
+  it('frontDoor_consoleStartDropsTheIntentForANonStaffSeat', async () => {
+    stubRecordingLocation(QUERY)
+    seatWith(jwtWith({}))
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    await mount()
+    expect(net.handoffCalls()).toHaveLength(0)
+    expect(workspaceIsRendered()).toBe(true)
+    expect(screen.queryByText('Opening your workspace…')).toBeNull()
   })
 })

@@ -2,13 +2,17 @@
 // version sorts at or before the newest migration already on the base branch.
 //
 // goose refuses to apply a migration numbered below the database's current
-// version, and per-PR environments migrate a fresh database, so only the
-// production database can see the break. A branch cut before another branch's
-// migration merged is the usual cause: its timestamp is older than main's newest.
+// version. A branch cut before another branch's migration merged is the usual
+// cause: its timestamp is older than main's newest.
+//
+// While -head is outside -main (default origin/main), a file already on -main is skipped: main
+// has applied it, so a branch that merged main in did not add it. An exact rename of a file
+// that -base holds and -main does not is checked against -main's newest only: production has
+// not applied the old name. Exact means equal blob ids, not git's R100.
 //
 // Usage:
 //
-//	go run ./internal/tools/migrationorder -base <rev> [-head HEAD]
+//	go run ./internal/tools/migrationorder -base <rev> [-head HEAD] [-main origin/main]
 package main
 
 import (
@@ -21,6 +25,59 @@ import (
 
 // Dir is the one goose migrations directory; db/ holds bootstrap and seed SQL, not migrations.
 const Dir = "migrations"
+
+// SkipOnMain drops every added file whose path is already in onMain.
+func SkipOnMain(added, onMain []string) []string {
+	have := make(map[string]bool, len(onMain))
+	for _, f := range onMain {
+		have[f] = true
+	}
+	var kept []string
+	for _, f := range added {
+		if !have[f] {
+			kept = append(kept, f)
+		}
+	}
+	return kept
+}
+
+// Change is an added or renamed migration. Old is empty for an add.
+// Exact marks a rename whose old and new blob ids are equal.
+type Change struct {
+	Old, New string
+	Exact    bool
+}
+
+// Split sorts changes into files to check against base's newest and exact renames to
+// check against main's newest. Only an exact rename of a path on base and not on main
+// is exempt, and only when exempt is true.
+func Split(changes []Change, onBase, onMain []string, exempt bool) (vsBase, vsMain []string) {
+	base := toSet(onBase)
+	main := toSet(onMain)
+	var added []string
+	for _, c := range changes {
+		added = append(added, c.New)
+	}
+	kept := toSet(SkipOnMain(added, onMain))
+	for _, c := range changes {
+		switch {
+		case !kept[c.New]:
+		case exempt && c.Exact && c.Old != "" && base[c.Old] && !main[c.Old]:
+			vsMain = append(vsMain, c.New)
+		default:
+			vsBase = append(vsBase, c.New)
+		}
+	}
+	return vsBase, vsMain
+}
+
+func toSet(s []string) map[string]bool {
+	m := make(map[string]bool, len(s))
+	for _, f := range s {
+		m[f] = true
+	}
+	return m
+}
 
 // Violation is an added migration that does not sort after base's newest.
 type Violation struct {

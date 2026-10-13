@@ -711,6 +711,16 @@ func aliEngineRows(entries []aliEngineLineJSON) []DocLine {
 				line.LineTotal = v.Value
 			case LineRoleLineTax:
 				line.LineTax = v.Value
+			case LineRoleTaxCategory:
+				line.TaxCategory = v.Value
+			case LineRoleHSNCode:
+				line.HSNCode = v.Value
+			case LineRoleISICCode:
+				line.ISICCode = v.Value
+			case LineRoleSellersItemID:
+				line.SellersItem = v.Value
+			case LineRolePriceUnit:
+				line.PriceUnit = v.Value
 			}
 		}
 		out = append(out, line)
@@ -810,6 +820,16 @@ func aliDecodeLineRows(rows []map[string]*string) ([]DocLine, error) {
 				line.LineTotal = v
 			case LineRoleLineTax:
 				line.LineTax = v
+			case LineRoleTaxCategory:
+				line.TaxCategory = v
+			case LineRoleHSNCode:
+				line.HSNCode = v
+			case LineRoleISICCode:
+				line.ISICCode = v
+			case LineRoleSellersItemID:
+				line.SellersItem = v
+			case LineRolePriceUnit:
+				line.PriceUnit = v
 			}
 		}
 		out = append(out, line)

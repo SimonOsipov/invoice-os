@@ -42,7 +42,10 @@ import {
   memberships,
   createEntity,
   createInvoice,
+  createCustomRule,
+  deleteCustomRule,
   validateInvoice,
+  explainViolation,
   rawFetch,
   listInvoices,
   getInvoice,
@@ -61,6 +64,7 @@ import {
   type Entity,
 } from './client'
 import { freshTin, freshPolicyName } from './fixtures'
+import { EXPLAIN_UNAVAILABLE_MARKER, steerExplainMarker, steerMarker } from '../importFixtures'
 import { assertErrorEnvelope, ensureFirmPolicyActive } from './contract-helpers'
 
 // cleanInvoiceFields(): own copy (repo convention — no cross-suite imports
@@ -134,6 +138,10 @@ const PREPARER_SUBJECT = 'c0000000-0000-0000-0000-000000000003'
 // is an em dash, U+2014). This is the only layer where that Go const meets a TS literal on
 // bytes a running server emitted — assertErrorEnvelope never looks at the message.
 const NOT_APPROVER_REASON = 'Only an admin or a reviewer can submit an invoice to NRS/MBS — ask an approver on your team.'
+
+// internal/invoice/handlers.go's ruleChangePendingReason, byte for byte (em dash U+2014).
+const RULE_CHANGE_PENDING_REASON =
+  'A custom rule change is being applied to this invoice — it can be submitted once the change has been checked.'
 
 // internal/invoice/handlers.go's awaitingApprovalReason, byte for byte -- submitGate's third
 // rung, fired only once role and status both pass and the run is still open.
@@ -392,9 +400,55 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect(supplierRes.pagination.total, 'pagination.total should be the filtered total, not the tenant-wide total').toBe(1)
     })
 
+    test('list rows carry the demotion key', async () => {
+      const res = await listInvoices(token, { limit: 50 })
+      expect(res.invoices.length, 'the list has rows to check').toBeGreaterThan(0)
+      for (const row of res.invoices) {
+        expect(Object.prototype.hasOwnProperty.call(row, 'demotion'), `row ${row.id} carries the demotion key`).toBe(true)
+        if (row.demotion !== null) {
+          expect(Object.keys(row.demotion).sort()).toEqual(['cause', 'changed_at', 'custom_rule_cause'])
+        }
+      }
+    })
+
     test('list with no auth -> 401 {error: string}', async () => {
       const res = await rawFetch('/api/invoice/v1/invoices')
       assertErrorEnvelope(res, 401, 'list no auth')
+    })
+  })
+
+  // A pending custom revision turns Submit off on the list. The tick marks the revision
+  // after 5 minutes and flips the gate back; the read below follows the save within a second.
+  test.describe('a pending rule change', () => {
+    let ruleId: string | null = null
+    let pendingEntity: Entity
+
+    test.afterAll(async () => {
+      if (ruleId) await deleteCustomRule(token, ruleId).catch(() => undefined)
+    })
+
+    test('a pending rule change turns Submit off', async () => {
+      const tin = freshTin()
+      pendingEntity = await createEntity(token, { name: `ENGI-15 pending ${tin}`, tin })
+      const created = await createInvoice(token, { entity_id: pendingEntity.id, ...cleanInvoiceFields(`INV-PEND-${freshTin()}`) })
+      expect((await validateInvoice(token, created.id)).status).toBe('validated')
+      const before = (await listInvoices(token, { entity_id: pendingEntity.id })).invoices.find((i) => i.id === created.id)
+      expect(before?.submit_blocked_reason, 'no pending change yet').not.toBe(RULE_CHANGE_PENDING_REASON)
+
+      const rule = await createCustomRule(token, {
+        entity_id: pendingEntity.id,
+        type: 'required',
+        target: 'invoice_number',
+        params: {},
+        severity: 'error',
+        message: 'ENGI-15 pending rule',
+        enabled: true,
+      })
+      ruleId = rule.id
+
+      const row = (await listInvoices(token, { entity_id: pendingEntity.id })).invoices.find((i) => i.id === created.id)
+      expect(row?.can_submit).toBe(false)
+      expect(row?.submit_blocked_reason).toBe(RULE_CHANGE_PENDING_REASON)
     })
   })
 
@@ -550,6 +604,31 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect((getBody.submit_blocked_reason as string).length, 'the submit-blocked reason should be non-empty').toBeGreaterThan(0)
     })
 
+    // Path shape is internal/validation/evaluators.go's `%s[%d]` (1-based, list = line_items), ordered as strings.
+    test('a line rule names its lines, and the stored verdict keeps them', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-LINEPATH-${freshTin()}`),
+        subtotal: '88',
+        vat: '6.60',
+        total: '94.60',
+        line_items: [
+          { description: 'Widget A', quantity: '1', unit_price: '100.00', line_total: '100.00' },
+          { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '-5.00' },
+          { description: 'Widget C', quantity: '1', unit_price: '-7.00', line_total: '-7.00' },
+        ],
+      })
+      const validated = await validateInvoice(token, created.id)
+      const stored = await getInvoice(token, created.id)
+
+      for (const [label, violations] of [['validate response', validated.violations], ['GET', stored.violations]] as const) {
+        const linePaths = violations.filter((v) => v.rule_key === 'line-cost-non-negative').map((v) => v.path)
+        expect(linePaths, `${label}: line-cost-non-negative names lines 2 and 3, in that order`).toEqual(['line_items[2]', 'line_items[3]'])
+        const vat = violations.find((v) => v.rule_key === 'vat-standard-rate')
+        if (vat) expect(vat.path, `${label}: a document rule keeps its field path`).toBe('vat')
+      }
+    })
+
     test('validate not-found (random UUID) -> 404 {error: string}', async () => {
       const res = await rawFetch(`/api/invoice/v1/invoices/${crypto.randomUUID()}/validate`, {
         method: 'POST',
@@ -584,6 +663,7 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       expect('from_status' in first, 'a history row should carry from_status (nullable)').toBe(true)
       expect('actor_name' in first, 'a history row should carry actor_name').toBe(true)
       expect('actor_kind' in first, 'a history row should carry actor_kind').toBe(true)
+      expect(first.cause, 'a genesis row carries "cause": null, never a dropped key').toBeNull()
       expect(['person', 'system', 'raw'], 'actor_kind should be one of the three wire values').toContain(first.actor_kind)
     })
 
@@ -1834,6 +1914,263 @@ test.describe('invoice contract (API E2E, over the deployed gateway)', () => {
       } finally {
         await deleteApprovalPolicy(token, policyId)
       }
+    })
+  })
+
+  test.describe('nrs fields', () => {
+    // Values are in stored form (dates RFC3339 midnight, numerics at column scale) so GET equals the input.
+    const NRS_HEADER = {
+      invoice_kind: '380',
+      tax_currency_code: 'NGN',
+      due_date: '2026-02-01T00:00:00Z',
+      issue_time: '09:30:15',
+      tax_point_date: '2026-01-02T00:00:00Z',
+      payment_status: 'PENDING',
+      supplier_email: 'supplier@example.test',
+      supplier_telephone: '+2348000000001',
+      supplier_street: '1 Supplier Road',
+      supplier_city: 'Lagos',
+      supplier_postal_zone: '100001',
+      supplier_country: 'NG',
+      supplier_state: 'NG-LA',
+      supplier_lga: 'Ikeja',
+      buyer_email: 'buyer@example.test',
+      buyer_telephone: '+2348000000002',
+      buyer_street: '2 Buyer Road',
+      buyer_city: 'Abuja',
+      buyer_postal_zone: '900001',
+      buyer_country: 'NG',
+      buyer_state: 'NG-FC',
+      buyer_lga: 'Garki',
+    }
+    const NRS_LINE = {
+      tax_category: 'STANDARD_VAT',
+      hsn_code: '8471.30',
+      isic_code: '4651',
+      product_category: 'Electronics',
+      service_category: 'Retail',
+      sellers_item_identification: 'SKU-1',
+      price_unit: 'KGM',
+      tax_percent: '7.50',
+      base_quantity: '10.000',
+    }
+
+    test('nrs fields: create and read round-trip every field', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-NRS-${freshTin()}`),
+        ...NRS_HEADER,
+        line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000', line_tax: '75', ...NRS_LINE }],
+      })
+      const got = await getInvoice(token, created.id)
+      expect(got, 'GET returns every header and party field as sent').toMatchObject(NRS_HEADER)
+      expect(got.line_items, 'one line').toHaveLength(1)
+      expect(got.line_items![0], 'GET returns every line field as sent').toMatchObject(NRS_LINE)
+    })
+
+    test('nrs fields: a patch of header, party and line fields is read back', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-NRS-${freshTin()}`),
+        ...NRS_HEADER,
+        line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000', line_tax: '75', ...NRS_LINE }],
+      })
+      const lineId = (await getInvoice(token, created.id)).line_items![0].id
+
+      await editInvoice(token, created.id, {
+        payment_status: 'PAID',
+        buyer_lga: 'Wuse',
+        line_items: [{ id: lineId, description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000', line_tax: '75', price_unit: 'LTR' }],
+      })
+      const got = await getInvoice(token, created.id)
+      expect(got.payment_status, 'header field').toBe('PAID')
+      expect(got.buyer_lga, 'party field').toBe('Wuse')
+      expect(got.buyer_city, 'an untouched new key stays').toBe(NRS_HEADER.buyer_city)
+      expect(got.line_items![0].price_unit, 'line field').toBe('LTR')
+    })
+
+    test('nrs fields: tax_subtotals are the per-category sums', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-NRS-${freshTin()}`),
+        line_items: [
+          { description: 'A', quantity: '1', unit_price: '1000', line_total: '1000', line_tax: '75', tax_category: 'STANDARD_VAT', tax_percent: '7.50' },
+          { description: 'B', quantity: '1', unit_price: '500', line_total: '500', line_tax: '37.5', tax_category: 'STANDARD_VAT', tax_percent: '7.50' },
+          { description: 'C', quantity: '1', unit_price: '200', line_total: '200', line_tax: '0', tax_category: 'ZERO_VAT', tax_percent: '0.00' },
+        ],
+      })
+      const got = await getInvoice(token, created.id)
+      expect(got.tax_subtotals, 'one entry per category, in first-line order').toEqual([
+        { tax_category: 'STANDARD_VAT', tax_percent: '7.50', taxable_amount: '1500.00', tax_amount: '112.50' },
+        { tax_category: 'ZERO_VAT', tax_percent: '0.00', taxable_amount: '200.00', tax_amount: '0.00' },
+      ])
+    })
+
+    test('nrs fields: a line edited by id keeps its NRS fields', async () => {
+      const created = await createInvoice(token, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-NRS-${freshTin()}`),
+        line_items: [{ description: 'Widget', quantity: '10', unit_price: '100', line_total: '1000', ...NRS_LINE }],
+      })
+      const line = (await getInvoice(token, created.id)).line_items![0]
+
+      await editInvoice(token, created.id, {
+        line_items: [{ id: line.id, description: 'Widget', quantity: '20', unit_price: '100', line_total: '2000' }],
+      })
+      const after = (await getInvoice(token, created.id)).line_items![0]
+      expect(Number(after.quantity), 'the content change was written').toBe(20)
+      expect(after.tax_category, 'tax_category carried by id').toBe('STANDARD_VAT')
+      expect(after.price_unit, 'price_unit carried by id').toBe('KGM')
+    })
+
+    test('nrs fields: a line id from another invoice is a 400', async () => {
+      const a = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-NRS-${freshTin()}`) })
+      const b = await createInvoice(token, { entity_id: entity.id, ...cleanInvoiceFields(`INV-NRS-${freshTin()}`) })
+      const foreignId = (await getInvoice(token, b.id)).line_items![0].id
+      const before = await getInvoice(token, a.id)
+
+      const res = await rawFetch(`/api/invoice/v1/invoices/${a.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { line_items: [{ id: foreignId, description: 'Stolen', quantity: '1', unit_price: '1', line_total: '1' }] },
+      })
+      assertErrorEnvelope(res, 400, 'a foreign line id')
+      expect((res.body as { error: string }).error).toBe('line_items id must name a line of this invoice')
+      expect((await getInvoice(token, a.id)).line_items, 'invoice A is unchanged').toEqual(before.line_items)
+    })
+
+    test('nrs fields: a malformed issue_time is a 400', async () => {
+      const res = await rawFetch('/api/invoice/v1/invoices', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { entity_id: entity.id, invoice_number: `INV-NRS-${freshTin()}`, issue_time: '25:61' },
+      })
+      assertErrorEnvelope(res, 400, 'a malformed issue_time')
+      expect((res.body as { error: string }).error).toBe('issue_time must be HH:MM:SS')
+    })
+  })
+
+  test.describe('explain', () => {
+    const RULE = 'line-cost-non-negative'
+    const PATH = 'line_items[2]'
+    const ANSWER = {
+      explanation: 'Line 2 has a unit price of -5.00, but a unit price cannot be negative.',
+      fix_field: 'unit_price',
+      fix_value: '5.00',
+    }
+
+    // Three lines, line 2 negative; line 3's description carries the marker the fake AI reads.
+    async function validatedWith(marker: string, tok = token) {
+      const inv = await createInvoice(tok, {
+        entity_id: entity.id,
+        ...cleanInvoiceFields(`INV-EXPLAIN-${freshTin()}`),
+        subtotal: '100',
+        vat: '7.50',
+        total: '107.50',
+        line_items: [
+          { description: 'Widget A', quantity: '1', unit_price: '105.00', line_total: '105.00' },
+          { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '-5.00' },
+          { description: marker, quantity: '1', unit_price: '0.00', line_total: '0.00' },
+        ],
+      })
+      const v = await validateInvoice(tok, inv.id)
+      expect(v.violations.map((x) => x.rule_key), 'setup: the negative line fails its rule').toContain(RULE)
+      return inv
+    }
+
+    test('explain answers a steered line fix, and the fix PATCH keeps the other lines', async () => {
+      const inv = await validatedWith(steerExplainMarker(ANSWER))
+      const res = await explainViolation(token, inv.id, { rule_key: RULE, path: PATH })
+      expect(res.status).toBe('ok')
+      expect(res.explanation).toBe(ANSWER.explanation)
+      expect(res.fix).toMatchObject({ field: 'unit_price', line: 2, current: '-5.00', value: '5.00' })
+
+      const before = (await getInvoice(token, inv.id)).line_items!
+      expect(before).toHaveLength(3)
+      // The body the SPA's fixPatch (frontend/app/src/lib/explain.ts) builds: every line with its id, one value changed.
+      // line_tax is null on a stored line; the client type only models strings, the wire carries null.
+      const line_items = before.map((l) => ({
+        id: l.id,
+        description: l.description!,
+        quantity: l.quantity!,
+        unit_price: l.line_no === 2 ? res.fix!.value : l.unit_price!,
+        line_total: l.line_total!,
+        line_tax: l.line_tax as string,
+      }))
+      await editInvoice(token, inv.id, { line_items })
+
+      const after = await getInvoice(token, inv.id)
+      expect(after.line_items).toHaveLength(3)
+      // Edit re-inserts the lines, so row ids change; every other field must survive.
+      const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+      expect(withoutId(after.line_items![0]), 'line 1 is unchanged').toEqual(withoutId(before[0]))
+      expect(withoutId(after.line_items![2]), 'line 3 is unchanged').toEqual(withoutId(before[2]))
+      expect(Number(after.line_items![1].unit_price)).toBe(5)
+      expect(after.line_items![1].line_no, 'line 2 keeps its position').toBe(before[1].line_no)
+      const { unit_price: _a, ...fixedAfter } = withoutId(after.line_items![1])
+      const { unit_price: _b, ...fixedBefore } = withoutId(before[1])
+      expect(fixedAfter, 'line 2 changes only unit_price').toEqual(fixedBefore)
+      expect(after.status).toBe('draft')
+    })
+
+    test('explain says unavailable when the fake AI fails', async () => {
+      const inv = await validatedWith(EXPLAIN_UNAVAILABLE_MARKER)
+      const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { rule_key: RULE, path: PATH },
+      })
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ status: 'unavailable', explanation: null, fix: null })
+    })
+
+    test('an unscoped AI marker does not steer explain', async () => {
+      const inv = await validatedWith(steerMarker(ANSWER))
+      const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { rule_key: RULE, path: PATH },
+      })
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ status: 'unavailable', explanation: null, fix: null })
+    })
+
+    test("explain on another tenant's invoice is 404", async () => {
+      const inv = await validatedWith(steerExplainMarker(ANSWER))
+      const tokenB = await login(PERSONAS.B)
+      const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tokenB}` },
+        body: { rule_key: RULE, path: PATH },
+      })
+      assertErrorEnvelope(res, 404, "another tenant's invoice")
+    })
+
+    test('explain on a violation not on the verdict is 409', async () => {
+      const inv = await validatedWith(steerExplainMarker(ANSWER))
+      const res = await rawFetch(`/api/invoice/v1/invoices/${inv.id}/explain`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: { rule_key: 'currency-allowed', path: 'currency' },
+      })
+      assertErrorEnvelope(res, 409, 'a violation not on the verdict')
+      // handlers.go statusForErr's ErrViolationGone message
+      expect((res.body as { error: string }).error).toBe("the violation is not on this invoice's last validation")
+    })
+  })
+
+  test.describe('supplier contact defaults', () => {
+    // internal/invoice/supplier_contact.go's DefaultSupplierContact: an absent key takes the company's value, a sent one wins.
+    test('an invoice takes the company supplier contact', async () => {
+      const tin = freshTin()
+      const email = `company-${tin}@example.com`
+      const own = await createEntity(token, { name: `ENGI-05 defaults ${tin}`, tin, email })
+      const fields = cleanInvoiceFields(`INV-ENGI05-DEF-${tin}`)
+      const bare = await createInvoice(token, { entity_id: own.id, ...fields })
+      expect((await getInvoice(token, bare.id)).supplier_email, 'an absent supplier_email takes the company value').toBe(email)
+      const sent = `sent-${tin}@example.com`
+      const withKey = await createInvoice(token, { entity_id: own.id, ...fields, invoice_number: `INV-ENGI05-KEY-${tin}`, supplier_email: sent })
+      expect((await getInvoice(token, withKey.id)).supplier_email, 'a sent supplier_email wins').toBe(sent)
     })
   })
 })

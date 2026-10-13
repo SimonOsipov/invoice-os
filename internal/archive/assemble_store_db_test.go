@@ -232,3 +232,57 @@ func TestStoreAssemble_UsesStoreLevelCap(t *testing.T) {
 		t.Errorf("Store.Assemble(over Store-level cap) wrote %d bytes, want 0", cw.n)
 	}
 }
+
+// TestAssemble_LineItemsCSVReadsTheBundleSnapshot: line_items.csv reads on the
+// assembler's REPEATABLE READ tx, so a line committed after the snapshot is absent.
+func TestAssemble_LineItemsCSVReadsTheBundleSnapshot(t *testing.T) {
+	super := dbSuperPool(t)
+	app, _ := dbAppPoolTraced(t)
+
+	var entityID, invID string
+	tenantID := mustCommitFixture(t, super, func(tx pgx.Tx) string {
+		tid := mustCreateTenant(t, tx, "archive-store-lines-snapshot")
+		entityID = mustCreateEntity(t, tx, tid, "Lines Snapshot Co", "80000030-0001")
+		invID = mustCreateInvoice(t, tx, invoiceFixture{tenantID: tid, entityID: entityID, invoiceNumber: "INV-LINES-SNAP-01"})
+		mustCreateLineItem(t, tx, lineItemFixture{tenantID: tid, invoiceID: invID, lineNo: 1})
+		return tid
+	})
+
+	committed := false
+	sink := &concurrentCommitSink{}
+	sink.commit = func() {
+		ctx := context.Background()
+		tx, err := super.Begin(ctx)
+		if err != nil {
+			t.Errorf("concurrent commit: begin: %v", err)
+			return
+		}
+		mustCreateLineItem(t, tx, lineItemFixture{tenantID: tenantID, invoiceID: invID, lineNo: 2})
+		if err := tx.Commit(ctx); err != nil {
+			t.Errorf("concurrent commit: commit: %v", err)
+			return
+		}
+		committed = true
+	}
+
+	s := NewStore(app)
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: "system", TenantID: tenantID})
+	from := time.Now().Add(-time.Hour)
+	if err := s.Assemble(ctx, Request{EntityID: entityID, From: from, To: from.Add(2 * time.Hour)}, sink, nil); err != nil {
+		t.Fatalf("Store.Assemble: unexpected error: %v", err)
+	}
+	if !committed {
+		t.Fatal("concurrent commit never ran -- the snapshot assertion below proves nothing")
+	}
+
+	zr, err := zip.NewReader(bytes.NewReader(sink.buf.Bytes()), int64(sink.buf.Len()))
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+	if n := csvDataRecordCount(t, zr, "line_items.csv"); n != 1 {
+		t.Errorf("line_items.csv has %d data rows, want 1 (the post-snapshot line must be absent)", n)
+	}
+	if got := manifestOracleCounts(t, zr).LineItems; got != 1 {
+		t.Errorf("manifest counts.line_items = %d, want 1", got)
+	}
+}

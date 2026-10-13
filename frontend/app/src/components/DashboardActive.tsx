@@ -38,6 +38,7 @@ import {
   type Rollup,
 } from '../lib/dashboard'
 import { buildMockPanels } from '../lib/dashboardMock'
+import { ruleKeyLabel } from '../lib/rulesApi'
 import type { PlatformCtx } from '../types'
 
 export function DashboardActive({ ctx }: { ctx: PlatformCtx }) {
@@ -369,7 +370,7 @@ function DashboardTiles({ data, ctx, seed }: { data: Rollup; ctx: PlatformCtx; s
                   </div>
                 </div>
                 <span className="mono" title={f.ruleKey} style={{ fontSize: 11, color: 'var(--fg-3)', flex: 'none', width: 150, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {f.ruleKey}
+                  {ruleKeyLabel(f.ruleKey)}
                 </span>
                 <div style={{ textAlign: 'right', flex: 'none', minWidth: 40, whiteSpace: 'nowrap' }}>
                   <span className="money" style={{ fontSize: 16, fontWeight: 700, color: 'var(--status-red-text)' }}>

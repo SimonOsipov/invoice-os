@@ -1,0 +1,44 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "name": "Afghanistan",
+      "alpha_2": "AF",
+      "alpha_3": "AFG",
+      "country_code": "004",
+      "iso_3166_2": "ISO 3166-2:AF",
+      "region": "Asia",
+      "sub_region": "Southern Asia",
+      "intermediate_region": "",
+      "region_code": "142",
+      "sub_region_code": "034",
+      "intermediate_region_code": ""
+    },
+    {
+      "name": "Åland Islands",
+      "alpha_2": "AX",
+      "alpha_3": "ALA",
+      "country_code": "248",
+      "iso_3166_2": "ISO 3166-2:AX",
+      "region": "Europe",
+      "sub_region": "Northern Europe",
+      "intermediate_region": "",
+      "region_code": "150",
+      "sub_region_code": "154",
+      "intermediate_region_code": ""
+    },
+    {
+      "name": "Albania",
+      "alpha_2": "AL",
+      "alpha_3": "ALB",
+      "country_code": "008",
+      "iso_3166_2": "ISO 3166-2:AL",
+      "region": "Europe",
+      "sub_region": "Southern Europe",
+      "intermediate_region": "",
+      "region_code": "150",
+      "sub_region_code": "039",
+      "intermediate_region_code": ""
+    }
+  ]
+}

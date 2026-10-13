@@ -30,6 +30,8 @@
 // type-level half of cashing 06's un-cashed review-route safety argument (constructing a
 // review request without a batch id is a compile error).
 import {
+  EDIT_FIELD_KEYS,
+  editValueToWire,
   invoiceStatusStyle,
   mbsPathToEditField,
   pruneSelection,
@@ -44,7 +46,8 @@ import {
   type RuleCount,
 } from './invoices'
 import { classifyPickedFile } from './importFlow'
-import { severityStyle, type Severity, type Violation } from './validationApi'
+import { labelOf } from './invoiceFields'
+import { severityStyle, violationLine, type LineTarget, type Severity, type Violation } from './validationApi'
 import { rowErrorRows, type RowError, type ImportBatch, type ImportReport } from './importApi'
 import { reportSummary } from './importReport'
 import { fmtDateTime } from './format'
@@ -101,6 +104,8 @@ function tone(sev: Severity): BadgeTone {
 export function verdictPill(input: VerdictInput): VerdictPill {
   const status = invoiceStatusStyle(input.status)
   const errorCount = input.violations.filter((v) => v.severity === 'error').length
+  // Distinct rule keys: one rule failing on several lines is one failed rule (PILL-L1).
+  const failedRuleCount = new Set(input.violations.filter((v) => v.severity === 'error').map((v) => v.rule_key)).size
   const advisoryCount = input.violations.length - errorCount
 
   // The mark means "kept as-is" only on a draft; on a failed invoice it means resolved outside.
@@ -112,7 +117,7 @@ export function verdictPill(input: VerdictInput): VerdictPill {
   if (errorCount > 0) {
     return {
       status,
-      badges: [{ kind: 'rules-failed', count: errorCount, label: `${errorCount} RULES FAILED`, tone: tone('error') }],
+      badges: [{ kind: 'rules-failed', count: failedRuleCount, label: `${failedRuleCount} RULES FAILED`, tone: tone('error') }],
     }
   }
   if (advisoryCount > 0) {
@@ -146,10 +151,7 @@ export interface ChannelTiles {
   atZero: boolean
 }
 
-// D1: the APP supplies the rule-set NAME, the server supplies the NUMBER. Kept a module
-// constant rather than imported from lib/rules.ts, whose GOLDEN_SET pins a `v8` the server
-// has never emitted -- that is mock data for the Rules screen (which has no endpoint) and
-// importing it here would let a hard-coded version leak into a live surface.
+// D1: the APP supplies the rule-set NAME, the server supplies the NUMBER.
 const RULE_SET_NAME = 'NG-MBS'
 
 // `undefined` is handled alongside `null` on purpose, despite ImportBatch typing this
@@ -269,6 +271,21 @@ export function isAlreadyImported(e: RowError): boolean {
   return e.rule_key != null
 }
 
+// A created draft the gate left unvalidated (rules changed twice during the import): the entry
+// names the invoice and carries no rule key. It exists, so it is not an unreadable row.
+export function isUnvalidatedDraft(e: RowError): boolean {
+  return e.invoice_id != null && !isAlreadyImported(e)
+}
+
+// The one sentence shown for those drafts; count is the number of invoices.
+export function unvalidatedDraftNotice(count: number): string {
+  return `${count === 1 ? '1 invoice was' : `${count} invoices were`} created as ${count === 1 ? 'a draft' : 'drafts'} but not checked, because the rules changed during the import. Validate ${count === 1 ? 'it' : 'them'} again.`
+}
+
+export function unvalidatedDraftCount(batches: Pick<ImportBatch, 'errors'>[]): number {
+  return batches.reduce((sum, b) => sum + b.errors.filter(isUnvalidatedDraft).length, 0)
+}
+
 // Row numbers come off the SHIPPED union reader rowErrorRows, never a local re-read of
 // the row/rows union -- two readers of one union is the drift hazard importReport.ts
 // already names. `rows:[5,6]` is therefore two entries, not one.
@@ -284,7 +301,7 @@ export function isAlreadyImported(e: RowError): boolean {
 // channelTilesAll both count off this expansion, so this one filter corrects both tiles.
 export function unreadableRows(errors: RowError[]): UnreadableRow[] {
   return errors
-    .filter((e) => !isAlreadyImported(e))
+    .filter((e) => !isAlreadyImported(e) && !isUnvalidatedDraft(e))
     .flatMap((e): UnreadableRow[] => {
       const column = e.field ?? '—'
       const rows = rowErrorRows(e)
@@ -1153,6 +1170,8 @@ export function bulkOutcome(
 // `invoice_number`, any APP-only vocabulary) resolves to `null`; the card's own
 // `message` still carries the server's reason in full regardless -- `null` means "no
 // field to flag", never "drop the reason".
+// A `line_items[N]...` path also carries `line` (violationLine): the card links to the
+// invoice editor at that line instead of editing inline.
 
 // `hint` composes expected/actual (D9) as opaque strings, NEVER parsed or reformatted:
 // both are decimal STRINGS end-to-end ([D13]), and re-running them through a numeric
@@ -1165,6 +1184,8 @@ export interface FixCard {
   message: string
   blocking: boolean
   field: EditFieldKey | null
+  // Set for a `line_items[N]...` path; the card offers Open line N instead of an inline editor.
+  line: LineTarget | null
   hint: string | null
 }
 
@@ -1184,6 +1205,7 @@ export function fixCard(v: Violation): FixCard {
     message: v.message,
     blocking: v.severity === 'error',
     field: mbsPathToEditField(v.path),
+    line: violationLine(v.path),
     hint: fixHint(v),
   }
 }
@@ -1193,17 +1215,9 @@ export function fixCard(v: Violation): FixCard {
 // whichever of the 19 rules happens to flag that field and is not the client rule-key map
 // D8 forbids. Kept here rather than duplicated per-card inline, per this file's own
 // [bulk-copy-lives-in-the-lib] convention (see the INVCR-01-11 section header above).
-export const EDIT_FIELD_LABELS: Record<EditFieldKey, string> = {
-  issue_date: 'Issue date',
-  supplier_tin: 'Supplier TIN',
-  supplier_name: 'Supplier name',
-  buyer_tin: 'Buyer TIN',
-  buyer_name: 'Buyer name',
-  currency: 'Currency',
-  subtotal: 'Subtotal',
-  vat: 'VAT',
-  total: 'Total',
-}
+export const EDIT_FIELD_LABELS = Object.fromEntries(
+  EDIT_FIELD_KEYS.map((k) => [k, labelOf(k)]),
+) as Record<EditFieldKey, string>
 
 // §7.3's exact provenance/scope copy (AC-7), verbatim.
 export const ROW_EXPANSION_NOTE = 'Re-validating touches this invoice only — the rest of the import stays as it is.'
@@ -1225,6 +1239,7 @@ export const ROW_EXPANSION_COPY = {
   // must not block the click -- it only explains that clicking now re-checks the
   // invoice as LAST SAVED, not as currently typed.
   unsavedHint: 'You have unsaved changes — save them first, or re-validating will check the invoice as last saved.',
+  openLineUnsaved: 'Save your changes first — opening the line leaves this page.',
   // INVCR-01-15 (D6, task-291): the Keep as-is action, alongside Re-validate --
   // [bulk-copy-lives-in-the-lib] applies to this section exactly as it does to the
   // rest of ROW_EXPANSION_COPY above.
@@ -1340,12 +1355,8 @@ export function canKeepAsIs(reason: string): boolean {
 // opened an editor for cannot appear in the patch even if some unrelated value happens
 // to differ from `original`.
 //
-// issue_date is special-cased identically to InvoiceDetail.tsx: PATCH /v1/invoices/{id}
-// decodes IssueDate into a *time.Time, which only accepts a full RFC3339 string, so a
-// bare "YYYY-MM-DD" is normalized to midnight UTC before it is sent. A cleared ("")
-// issue_date is DROPPED, never sent as "" -- JSON "null" and an absent key both decode to
-// "leave unchanged" ([D9]), so an explicit clear cannot be represented over this PATCH at
-// all, and sending "" would only surface a confusing decode failure.
+// Values go through editValueToWire: a date is sent as RFC3339, a cleared issue_date is
+// dropped, a cleared NRS key is null.
 export function fixEditPatch(
   original: Pick<InvoiceRecord, EditFieldKey>,
   draft: Partial<Record<EditFieldKey, string>>,
@@ -1355,13 +1366,8 @@ export function fixEditPatch(
     const value = draft[key]
     if (value === undefined) continue
     if (value === (original[key] ?? '')) continue
-    if (key === 'issue_date') {
-      const trimmed = value.trim()
-      if (!trimmed) continue
-      patch.issue_date = /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? `${trimmed}T00:00:00Z` : trimmed
-      continue
-    }
-    patch[key] = value
+    const wire = editValueToWire(key, value)
+    if (wire !== undefined) (patch as Record<string, string | null>)[key] = wire
   }
   return patch
 }

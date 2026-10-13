@@ -148,11 +148,18 @@ type ExtractionCorrected struct {
 	Where  *string `json:"where"`
 }
 
+// ExtractionRuleBreak is one validation rule a clean, valued reading violates.
+type ExtractionRuleBreak struct {
+	Key     string `json:"key"`
+	Message string `json:"message"`
+}
+
 // ExtractionFieldState is one decided reading plus the alternatives an ambiguous field kept,
 // with the human layer over both. Region is nil when the extractor could point at nothing.
 // Reason is "" for a clean field and Alternatives is never nil
 // (TestExtractionDetail_AlternativesAreNeverNil). Corrected is nil, never an empty object, for
-// a field no human has touched (TestExtractionDetail_UncorrectedFieldHasNullCorrected).
+// a field no human has touched (TestExtractionDetail_UncorrectedFieldHasNullCorrected). Rules is
+// never nil (TestExtractionDetail_RulesIsNeverNil).
 type ExtractionFieldState struct {
 	Name         string                `json:"name"`
 	Value        *string               `json:"value"`
@@ -160,6 +167,7 @@ type ExtractionFieldState struct {
 	Reason       string                `json:"reason"`
 	Alternatives []ExtractionCandidate `json:"alternatives"`
 	Corrected    *ExtractionCorrected  `json:"corrected"`
+	Rules        []ExtractionRuleBreak `json:"rules"`
 }
 
 // ExtractionDocument is what the document toolbar renders. Filename and ContentType are
@@ -195,7 +203,7 @@ func emptyDetail() ExtractionDetail {
 	return ExtractionDetail{Pages: []ExtractionPage{}, Fields: []ExtractionFieldState{}}
 }
 
-// Detail returns one job with its document, pages and merged fields. All four statements
+// Detail returns one job with its document, pages and merged fields. All five SELECTs
 // share one transaction (TestRLS_ExtractionDetailUsesRequestTxNotTenantTx), and a successful
 // read audits on that same transaction (TestRLS_ExtractionDetailWritesOneDocumentReadAuditRow).
 func (r *Reader) Detail(ctx context.Context, jobID string) (ExtractionDetail, error) {
@@ -205,8 +213,8 @@ func (r *Reader) Detail(ctx context.Context, jobID string) (ExtractionDetail, er
 		if out, err = detailTx(ctx, tx, jobID); err != nil {
 			return err
 		}
-		// A nil recorder writes nothing, which is what lets a bare Reader{Pool} stay at four
-		// statements (TestRLS_ExtractionDetailIssuesNoStatementBeyondBeginSelectCommit).
+		// A nil recorder writes nothing, which is what lets a bare Reader{Pool} stay at five
+		// SELECTs (TestRLS_ExtractionDetailIssuesNoStatementBeyondBeginSelectCommit).
 		// TestSubmissionMain_WiresTheDocumentReadAuditorOntoAReader is what keeps production
 		// from being one.
 		if r.Audit == nil {
@@ -253,13 +261,71 @@ func detailTx(ctx context.Context, tx pgx.Tx, jobID string) (ExtractionDetail, e
 	if out.Fields, err = detailFieldsTx(ctx, tx, jobID); err != nil {
 		return emptyDetail(), err
 	}
-	// Fourth and last, on the same transaction: the human layer laid over the readings above.
+	breaks, err := detailRuleBreaksTx(ctx, tx, jobID)
+	if err != nil {
+		return emptyDetail(), err
+	}
+	out.Fields = applyRuleBreaks(out.Fields, breaks)
+	// Last, on the same transaction: the human layer laid over the readings above.
 	corrections, err := latestCorrectionsPerFieldTx(ctx, tx, jobID)
 	if err != nil {
 		return emptyDetail(), err
 	}
 	out.Fields = mergeCorrections(out.Fields, corrections)
 	return out, nil
+}
+
+// ruleBreakRow is one extraction_rule_breaks row, read in (created_at, field_name, rule_key) order.
+type ruleBreakRow struct {
+	Field string
+	ExtractionRuleBreak
+}
+
+// detailRuleBreaksTx names no tenant_id: the tenant_isolation policy is the only predicate.
+func detailRuleBreaksTx(ctx context.Context, tx pgx.Tx, jobID string) ([]ruleBreakRow, error) {
+	rows, err := tx.Query(ctx,
+		`SELECT field_name, rule_key, message
+		   FROM extraction_rule_breaks
+		  WHERE extraction_job_id = $1
+		  ORDER BY created_at, field_name, rule_key, id`,
+		jobID)
+	if err != nil {
+		return nil, fmt.Errorf("extraction: read rule breaks for job %s: %w", jobID, err)
+	}
+	defer rows.Close()
+
+	var out []ruleBreakRow
+	for rows.Next() {
+		var b ruleBreakRow
+		if err := rows.Scan(&b.Field, &b.Key, &b.Message); err != nil {
+			return nil, fmt.Errorf("extraction: scan rule break for job %s: %w", jobID, err)
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("extraction: read rule breaks for job %s: %w", jobID, err)
+	}
+	return out, nil
+}
+
+// applyRuleBreaks flags a clean, valued field that a stored break names. An extractor reason
+// wins and keeps the field's rules empty.
+func applyRuleBreaks(fields []ExtractionFieldState, breaks []ruleBreakRow) []ExtractionFieldState {
+	byName := map[string]int{}
+	for i, f := range fields {
+		byName[f.Name] = i
+	}
+	out := make([]ExtractionFieldState, len(fields))
+	copy(out, fields)
+	for _, b := range breaks {
+		i, ok := byName[b.Field]
+		if !ok || out[i].Value == nil || (out[i].Reason != "" && out[i].Reason != string(ReasonRuleBreak)) {
+			continue
+		}
+		out[i].Reason = string(ReasonRuleBreak)
+		out[i].Rules = append(out[i].Rules, b.ExtractionRuleBreak)
+	}
+	return out
 }
 
 // mergeCorrections lays the latest correction per field over the decided readings, one entry per
@@ -284,7 +350,7 @@ func mergeCorrections(fields []ExtractionFieldState, corrections []Correction) [
 			continue
 		}
 
-		f := ExtractionFieldState{Name: c.FieldName, Alternatives: []ExtractionCandidate{}}
+		f := ExtractionFieldState{Name: c.FieldName, Alternatives: []ExtractionCandidate{}, Rules: []ExtractionRuleBreak{}}
 		idx, read := byName[c.FieldName]
 		if read {
 			f = out[idx]
@@ -319,6 +385,7 @@ func mergeCorrections(fields []ExtractionFieldState, corrections []Correction) [
 		}
 		f.Reason = ""
 		f.Alternatives = []ExtractionCandidate{}
+		f.Rules = []ExtractionRuleBreak{}
 
 		// "" is no label, not an empty one: the wire key is nullable so subtask 06 never renders a
 		// dangling "Taken from " (TestExtractionDetail_WhereCarriesTheAnchorLabelAndIsNullWithoutOne).
@@ -414,6 +481,7 @@ func expandLineCorrection(fields []ExtractionFieldState, corrections []Correctio
 				Region:       reading.Region,
 				Reason:       "",
 				Alternatives: []ExtractionCandidate{},
+				Rules:        []ExtractionRuleBreak{},
 				Corrected:    &ExtractionCorrected{Method: string(corr.Method), Was: was},
 			})
 		}
@@ -530,6 +598,7 @@ func detailFieldsTx(ctx context.Context, tx pgx.Tx, jobID string) ([]ExtractionF
 			Reason: reason,
 			// Coercion is at construction, not by a tag: a nil slice marshals to null.
 			Alternatives: []ExtractionCandidate{},
+			Rules:        []ExtractionRuleBreak{},
 		})
 	}
 	for _, r := range buf {

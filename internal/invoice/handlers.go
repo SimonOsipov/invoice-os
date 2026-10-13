@@ -13,6 +13,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,49 @@ type lineItemReq struct {
 	UnitPrice   *string `json:"unit_price"`
 	LineTotal   *string `json:"line_total"`
 	LineTax     *string `json:"line_tax"`
+
+	// ID names the stored line a PATCH entry continues; POST ignores it.
+	ID *string `json:"id"`
+
+	TaxCategory               *string `json:"tax_category"`
+	HSNCode                   *string `json:"hsn_code"`
+	ISICCode                  *string `json:"isic_code"`
+	ProductCategory           *string `json:"product_category"`
+	ServiceCategory           *string `json:"service_category"`
+	SellersItemIdentification *string `json:"sellers_item_identification"`
+	PriceUnit                 *string `json:"price_unit"`
+	TaxPercent                *string `json:"tax_percent"`
+	BaseQuantity              *string `json:"base_quantity"`
+
+	// NRSSent: the entry names an NRS key, null included. Set by UnmarshalJSON.
+	NRSSent bool `json:"-"`
+}
+
+var nrsLineWireKeys = [...]string{
+	"tax_category", "hsn_code", "isic_code", "product_category", "service_category",
+	"sellers_item_identification", "price_unit", "tax_percent", "base_quantity",
+}
+
+// UnmarshalJSON records whether the entry names any NRS key: a pointer cannot tell an
+// explicit null from an absent key. Names match case-insensitively, as encoding/json does.
+func (l *lineItemReq) UnmarshalJSON(b []byte) error {
+	type plain lineItemReq
+	if err := json.Unmarshal(b, (*plain)(l)); err != nil {
+		return err
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(b, &keys); err != nil {
+		return err
+	}
+	l.NRSSent = false
+	for name := range keys {
+		for _, k := range nrsLineWireKeys {
+			if strings.EqualFold(name, k) {
+				l.NRSSent = true
+			}
+		}
+	}
+	return nil
 }
 
 // createRequest is the POST /v1/invoices wire body (snake_case JSON tags).
@@ -64,10 +108,32 @@ type createRequest struct {
 	VAT           *string       `json:"vat"`
 	Total         *string       `json:"total"`
 	LineItems     []lineItemReq `json:"line_items"`
-	// Appended last so the mirrored SPA/e2e types keep every existing key's
-	// position; absent and explicit null are both "no document"
+	// Absent and explicit null are both "no document"
 	// (TestCreateHandler_SourceDocumentIDAbsentOrNullIsNoDocument).
 	SourceDocumentID *string `json:"source_document_id"`
+
+	InvoiceKind        *string    `json:"invoice_kind"`
+	TaxCurrencyCode    *string    `json:"tax_currency_code"`
+	DueDate            *time.Time `json:"due_date"`
+	IssueTime          *string    `json:"issue_time"`
+	TaxPointDate       *time.Time `json:"tax_point_date"`
+	PaymentStatus      *string    `json:"payment_status"`
+	SupplierEmail      *string    `json:"supplier_email"`
+	SupplierTelephone  *string    `json:"supplier_telephone"`
+	SupplierStreet     *string    `json:"supplier_street"`
+	SupplierCity       *string    `json:"supplier_city"`
+	SupplierPostalZone *string    `json:"supplier_postal_zone"`
+	SupplierCountry    *string    `json:"supplier_country"`
+	SupplierState      *string    `json:"supplier_state"`
+	SupplierLGA        *string    `json:"supplier_lga"`
+	BuyerEmail         *string    `json:"buyer_email"`
+	BuyerTelephone     *string    `json:"buyer_telephone"`
+	BuyerStreet        *string    `json:"buyer_street"`
+	BuyerCity          *string    `json:"buyer_city"`
+	BuyerPostalZone    *string    `json:"buyer_postal_zone"`
+	BuyerCountry       *string    `json:"buyer_country"`
+	BuyerState         *string    `json:"buyer_state"`
+	BuyerLGA           *string    `json:"buyer_lga"`
 }
 
 // transitionReq is the POST /v1/invoices/{id}/transitions wire body ([D12]:
@@ -75,6 +141,39 @@ type createRequest struct {
 type transitionReq struct {
 	Target string `json:"target"`
 }
+
+// nullable tells an absent key (zero value) from an explicit null, which a
+// plain pointer cannot: both decode to nil.
+type nullable[T any] struct {
+	val  *T
+	null bool
+}
+
+func (n *nullable[T]) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		n.val, n.null = nil, true
+		return nil
+	}
+	n.null = false
+	return json.Unmarshal(b, &n.val)
+}
+
+// update maps absent to nil (leave), null to the clear sentinel, else the value.
+func (n nullable[T]) update(clear *T) *T {
+	if n.null {
+		return clear
+	}
+	return n.val
+}
+
+// issueTimeRE is stricter than Postgres time on purpose: no AM/PM, no fraction, no 24:00:00.
+var issueTimeRE = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$`)
+
+// IssueTimeMsg is the 400 text for a bad issue_time; the importer quarantines with it too.
+const IssueTimeMsg = "issue_time must be HH:MM:SS"
+
+// ValidIssueTime is the one issue_time check, shared by the API and the importer.
+func ValidIssueTime(s string) bool { return issueTimeRE.MatchString(s) }
 
 // editReq is the PATCH /v1/invoices/{id} wire body (M4-05-03, [A1]): the 9
 // optional header MBS-content fields, snake_case tags IDENTICAL to
@@ -101,6 +200,30 @@ type editReq struct {
 	LineItems    *[]lineItemReq `json:"line_items"`
 	// InvoiceNumber: nil leaves the number alone; trimmed by EditHandler.
 	InvoiceNumber *string `json:"invoice_number"`
+
+	// The 22 NRS keys: an explicit null clears the stored value (nullable).
+	InvoiceKind        nullable[string]    `json:"invoice_kind"`
+	TaxCurrencyCode    nullable[string]    `json:"tax_currency_code"`
+	DueDate            nullable[time.Time] `json:"due_date"`
+	IssueTime          nullable[string]    `json:"issue_time"`
+	TaxPointDate       nullable[time.Time] `json:"tax_point_date"`
+	PaymentStatus      nullable[string]    `json:"payment_status"`
+	SupplierEmail      nullable[string]    `json:"supplier_email"`
+	SupplierTelephone  nullable[string]    `json:"supplier_telephone"`
+	SupplierStreet     nullable[string]    `json:"supplier_street"`
+	SupplierCity       nullable[string]    `json:"supplier_city"`
+	SupplierPostalZone nullable[string]    `json:"supplier_postal_zone"`
+	SupplierCountry    nullable[string]    `json:"supplier_country"`
+	SupplierState      nullable[string]    `json:"supplier_state"`
+	SupplierLGA        nullable[string]    `json:"supplier_lga"`
+	BuyerEmail         nullable[string]    `json:"buyer_email"`
+	BuyerTelephone     nullable[string]    `json:"buyer_telephone"`
+	BuyerStreet        nullable[string]    `json:"buyer_street"`
+	BuyerCity          nullable[string]    `json:"buyer_city"`
+	BuyerPostalZone    nullable[string]    `json:"buyer_postal_zone"`
+	BuyerCountry       nullable[string]    `json:"buyer_country"`
+	BuyerState         nullable[string]    `json:"buyer_state"`
+	BuyerLGA           nullable[string]    `json:"buyer_lga"`
 }
 
 // listPagination is the "pagination" object in ListHandler's response
@@ -122,11 +245,11 @@ type listResponse struct {
 	Pagination listPagination `json:"pagination"`
 }
 
-// listItem is one GET /v1/invoices row: Invoice embedded, plus five additive
+// listItem is one GET /v1/invoices row: Invoice embedded, plus additive
 // siblings. Invoice itself is NOT widened -- it is shared by Get/Create/Edit,
 // and RuleSetVersion is json:"-" for exactly that reason.
 //
-// No omitempty on any of the five: a nil Approval emits explicit null, the
+// No omitempty on any of them: a nil Approval emits explicit null, the
 // honest answer for an invoice with no approval run, and an omitted permission
 // flag would read undefined in the SPA and fail OPEN
 // (TestListItem_InvoiceKeysUnmovedAndUnrenamed,
@@ -144,6 +267,7 @@ type listItem struct {
 	ApproveBlockedReason *string            `json:"approve_blocked_reason"`
 	CanSubmit            bool               `json:"can_submit"`
 	SubmitBlockedReason  *string            `json:"submit_blocked_reason"`
+	Demotion             *Demotion          `json:"demotion"`
 }
 
 // --- handlers ----------------------------------------------------------------
@@ -200,14 +324,28 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 			}
 		}
 
+		if req.IssueTime != nil && !ValidIssueTime(*req.IssueTime) {
+			writeError(w, http.StatusBadRequest, IssueTimeMsg)
+			return
+		}
+
 		lineItems := make([]LineItemInput, len(req.LineItems))
 		for i, li := range req.LineItems {
 			lineItems[i] = LineItemInput{
-				Description: li.Description,
-				Quantity:    li.Quantity,
-				UnitPrice:   li.UnitPrice,
-				LineTotal:   li.LineTotal,
-				LineTax:     li.LineTax,
+				Description:               li.Description,
+				Quantity:                  li.Quantity,
+				UnitPrice:                 li.UnitPrice,
+				LineTotal:                 li.LineTotal,
+				LineTax:                   li.LineTax,
+				TaxCategory:               li.TaxCategory,
+				HSNCode:                   li.HSNCode,
+				ISICCode:                  li.ISICCode,
+				ProductCategory:           li.ProductCategory,
+				ServiceCategory:           li.ServiceCategory,
+				SellersItemIdentification: li.SellersItemIdentification,
+				PriceUnit:                 li.PriceUnit,
+				TaxPercent:                li.TaxPercent,
+				BaseQuantity:              li.BaseQuantity,
 			}
 		}
 
@@ -225,7 +363,29 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 			Total:         req.Total,
 			LineItems:     lineItems,
 			// SourceRows stays nil: a hand-typed invoice has no sheet rows.
-			SourceDocumentID: req.SourceDocumentID,
+			SourceDocumentID:   req.SourceDocumentID,
+			InvoiceKind:        req.InvoiceKind,
+			TaxCurrencyCode:    req.TaxCurrencyCode,
+			DueDate:            req.DueDate,
+			IssueTime:          req.IssueTime,
+			TaxPointDate:       req.TaxPointDate,
+			PaymentStatus:      req.PaymentStatus,
+			SupplierEmail:      req.SupplierEmail,
+			SupplierTelephone:  req.SupplierTelephone,
+			SupplierStreet:     req.SupplierStreet,
+			SupplierCity:       req.SupplierCity,
+			SupplierPostalZone: req.SupplierPostalZone,
+			SupplierCountry:    req.SupplierCountry,
+			SupplierState:      req.SupplierState,
+			SupplierLGA:        req.SupplierLGA,
+			BuyerEmail:         req.BuyerEmail,
+			BuyerTelephone:     req.BuyerTelephone,
+			BuyerStreet:        req.BuyerStreet,
+			BuyerCity:          req.BuyerCity,
+			BuyerPostalZone:    req.BuyerPostalZone,
+			BuyerCountry:       req.BuyerCountry,
+			BuyerState:         req.BuyerState,
+			BuyerLGA:           req.BuyerLGA,
 		})
 		if err != nil {
 			status, msg := statusForErr(err)
@@ -284,25 +444,30 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Invoice, er
 // CanCorrectInvoiceNumber/InvoiceNumberBlockedReason follow the same two rules,
 // appended last of all, from canCorrectNumber (store.go). The reason is non-null
 // exactly when CanEdit && !CanCorrectInvoiceNumber.
+//
+// TaxSubtotals sits directly after Invoice: derived from the lines,
+// `[]` when none, never null.
 type getResponse struct {
 	Invoice
-	RuleSetVersion              *int    `json:"rule_set_version"`
-	QRPNGBase64                 *string `json:"qr_png_base64"`
-	CanEdit                     bool    `json:"can_edit"`
-	CanRevalidate               bool    `json:"can_revalidate"`
-	RevalidateBlockedReason     *string `json:"revalidate_blocked_reason"`
-	CanSubmit                   bool    `json:"can_submit"`
-	SubmitBlockedReason         *string `json:"submit_blocked_reason"`
-	CanViewUBL                  bool    `json:"can_view_ubl"`
-	UBLBlockedReason            *string `json:"ubl_blocked_reason"`
-	CanResolveOutside           bool    `json:"can_resolve_outside"`
-	ResolveOutsideBlockedReason *string `json:"resolve_outside_blocked_reason"`
-	CanApprove                  bool    `json:"can_approve"`
-	ApproveBlockedReason        *string `json:"approve_blocked_reason"`
-	CanReject                   bool    `json:"can_reject"`
-	RejectBlockedReason         *string `json:"reject_blocked_reason"`
-	CanCorrectInvoiceNumber     bool    `json:"can_correct_invoice_number"`
-	InvoiceNumberBlockedReason  *string `json:"invoice_number_blocked_reason"`
+	TaxSubtotals                []TaxSubtotal `json:"tax_subtotals"`
+	RuleSetVersion              *int          `json:"rule_set_version"`
+	QRPNGBase64                 *string       `json:"qr_png_base64"`
+	CanEdit                     bool          `json:"can_edit"`
+	CanRevalidate               bool          `json:"can_revalidate"`
+	RevalidateBlockedReason     *string       `json:"revalidate_blocked_reason"`
+	CanSubmit                   bool          `json:"can_submit"`
+	SubmitBlockedReason         *string       `json:"submit_blocked_reason"`
+	CanViewUBL                  bool          `json:"can_view_ubl"`
+	UBLBlockedReason            *string       `json:"ubl_blocked_reason"`
+	CanResolveOutside           bool          `json:"can_resolve_outside"`
+	ResolveOutsideBlockedReason *string       `json:"resolve_outside_blocked_reason"`
+	CanApprove                  bool          `json:"can_approve"`
+	ApproveBlockedReason        *string       `json:"approve_blocked_reason"`
+	CanReject                   bool          `json:"can_reject"`
+	RejectBlockedReason         *string       `json:"reject_blocked_reason"`
+	CanCorrectInvoiceNumber     bool          `json:"can_correct_invoice_number"`
+	InvoiceNumberBlockedReason  *string       `json:"invoice_number_blocked_reason"`
+	VerdictStale                bool          `json:"verdict_stale"`
 }
 
 // revalidateBlockedReason is the SINGLE, status-independent copy for a disabled
@@ -336,6 +501,11 @@ const notApproverTransmitReason = "Only an admin or a reviewer can submit an inv
 // approval" 409, which means the inverse
 // (TestAwaitingApprovalReason_DistinctFromTheApprovalPackageRefusal).
 const awaitingApprovalReason = "This invoice is waiting on approval — it can be submitted once an approver approves it."
+
+// ruleChangePendingReason is the 409 body for a queue door refusing an invoice a pending
+// custom-rule revision covers (D26), and the SPA skip label for the same token
+// (TestRuleChangePendingReason_MatchesTheSPASkipLabel). It promises no duration (D29).
+const ruleChangePendingReason = "A custom rule change is being applied to this invoice — it can be submitted once the change has been checked."
 
 // submitBlockedReason mirrors revalidateBlockedReason's canEdit && !canX gate,
 // but the copy FORKS by status: draft points at a live, enabled Re-validate,
@@ -380,15 +550,20 @@ func resolveOutsideGate(s Status, role string) (bool, *string) {
 // resolveOutsideGate above: a preparer told "re-validate this invoice first"
 // would run a re-validation that still cannot end in a submit.
 //
+// rulePending precedes approvalClear, as in Store.Transition (TestSubmitGate_RungOrder).
 // approvalClear is the LAST rung, after status: an invoice that is not validated
 // has no run to wait on, so the awaiting-approval sentence would be a lie there.
-func submitGate(s Status, role string, approvalClear bool) (bool, *string) {
+func submitGate(s Status, role string, approvalClear, rulePending bool) (bool, *string) {
 	if !isApprover(role) {
 		r := notApproverTransmitReason // a const is not addressable; copy to a local
 		return false, &r
 	}
 	if !canSubmit(s) {
 		return false, submitBlockedReason(s)
+	}
+	if rulePending {
+		r := ruleChangePendingReason
+		return false, &r
 	}
 	if !approvalClear {
 		r := awaitingApprovalReason
@@ -442,7 +617,7 @@ func approvalGate(s Status, role string, f ApprovalFacts) (bool, *string) {
 // "never errors" contract -- an error from it fails closed (not-an-approver),
 // never a 5xx.
 //
-// approvalFacts feeds submitGate's third rung. An error from it fails closed --
+// approvalFacts feeds submitGate's last two rungs. An error from it fails closed --
 // the zero ApprovalFacts reads TransmitClear false -- and is logged while the
 // response stays 200 (TestGetHandler_ApprovalFactsErrorFailsClosedNot500). It is
 // logged, unlike callerRole, because a failed approval read has no legitimate
@@ -510,7 +685,7 @@ func GetHandler(
 		}
 
 		canResolveOutside, resolveOutsideReason := resolveOutsideGate(inv.Status, role)
-		canSubmitInv, submitReason := submitGate(inv.Status, role, facts.TransmitClear)
+		canSubmitInv, submitReason := submitGate(inv.Status, role, facts.TransmitClear, facts.RulePending)
 		// ONE call feeds both pairs, so can_approve and can_reject cannot diverge
 		// (TestApprovalGate_ApproveAndRejectNeverDiverge).
 		canDecide, decideReason := approvalGate(inv.Status, role, facts)
@@ -525,8 +700,13 @@ func GetHandler(
 		// edited back to draft either. The SPA renders Re-validate at every status,
 		// disabled off !can_revalidate ([actions-visibility]), so a null reason means
 		// either the action is permitted (draft) or there is no honest copy for it.
+		subtotals := taxSubtotals(inv.LineItems)
+		if subtotals == nil {
+			subtotals = []TaxSubtotal{}
+		}
 		resp := getResponse{
 			Invoice:                     inv,
+			TaxSubtotals:                subtotals,
 			RuleSetVersion:              inv.RuleSetVersion,
 			QRPNGBase64:                 qrPNGBase64,
 			CanEdit:                     canEdit(inv.Status),
@@ -542,6 +722,7 @@ func GetHandler(
 			CanReject:                   canDecide,
 			RejectBlockedReason:         decideReason,
 			CanCorrectInvoiceNumber:     canCorrectNumber(inv.Status, inv.EverSubmitted),
+			VerdictStale:                inv.VerdictStale,
 		}
 		if resp.CanEdit && !resp.CanRevalidate {
 			reason := revalidateBlockedReason // a const is not addressable; copy to a local
@@ -857,9 +1038,12 @@ func ListHandler(
 				PendingStepOrd:  f.PendingOrd,
 				CallerHoldsRole: gate.HoldsPendingRole[inv.ID],
 			})
-			// The SAME submitGate GetHandler calls, over the same three inputs.
+			// The SAME submitGate GetHandler calls.
 			// One map lookup: no query enters this loop.
-			row.CanSubmit, row.SubmitBlockedReason = submitGate(inv.Status, gate.CallerRole, gate.TransmitClear[inv.ID])
+			row.CanSubmit, row.SubmitBlockedReason = submitGate(inv.Status, gate.CallerRole, gate.TransmitClear[inv.ID], gate.RulePending[inv.ID])
+			if d, ok := gate.Demotion[inv.ID]; ok && inv.Status == StatusDraft {
+				row.Demotion = &d
+			}
 			rows = append(rows, row)
 		}
 
@@ -1045,6 +1229,11 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 			return
 		}
 
+		if t := req.IssueTime.val; t != nil && !ValidIssueTime(*t) {
+			writeError(w, http.StatusBadRequest, IssueTimeMsg)
+			return
+		}
+
 		id := r.PathValue("id")
 
 		// Carry the three line_items states across into EditInput unchanged
@@ -1061,11 +1250,22 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 			mapped := make([]LineItemInput, len(*req.LineItems))
 			for i, li := range *req.LineItems {
 				mapped[i] = LineItemInput{
-					Description: li.Description,
-					Quantity:    li.Quantity,
-					UnitPrice:   li.UnitPrice,
-					LineTotal:   li.LineTotal,
-					LineTax:     li.LineTax,
+					Description:               li.Description,
+					Quantity:                  li.Quantity,
+					UnitPrice:                 li.UnitPrice,
+					LineTotal:                 li.LineTotal,
+					LineTax:                   li.LineTax,
+					ID:                        li.ID,
+					TaxCategory:               li.TaxCategory,
+					HSNCode:                   li.HSNCode,
+					ISICCode:                  li.ISICCode,
+					ProductCategory:           li.ProductCategory,
+					ServiceCategory:           li.ServiceCategory,
+					SellersItemIdentification: li.SellersItemIdentification,
+					PriceUnit:                 li.PriceUnit,
+					TaxPercent:                li.TaxPercent,
+					BaseQuantity:              li.BaseQuantity,
+					NRSSent:                   li.NRSSent,
 				}
 			}
 			lines = &mapped
@@ -1084,15 +1284,37 @@ func EditHandler(edit func(ctx context.Context, id string, in EditInput) (Invoic
 		}
 
 		inv, err := edit(r.Context(), id, EditInput{UpdateInput: UpdateInput{
-			IssueDate:    req.IssueDate,
-			SupplierTIN:  req.SupplierTIN,
-			SupplierName: req.SupplierName,
-			BuyerTIN:     req.BuyerTIN,
-			BuyerName:    req.BuyerName,
-			Currency:     req.Currency,
-			Subtotal:     req.Subtotal,
-			VAT:          req.VAT,
-			Total:        req.Total,
+			IssueDate:          req.IssueDate,
+			SupplierTIN:        req.SupplierTIN,
+			SupplierName:       req.SupplierName,
+			BuyerTIN:           req.BuyerTIN,
+			BuyerName:          req.BuyerName,
+			Currency:           req.Currency,
+			Subtotal:           req.Subtotal,
+			VAT:                req.VAT,
+			Total:              req.Total,
+			InvoiceKind:        req.InvoiceKind.update(ClearText),
+			TaxCurrencyCode:    req.TaxCurrencyCode.update(ClearText),
+			DueDate:            req.DueDate.update(ClearDate),
+			IssueTime:          req.IssueTime.update(ClearText),
+			TaxPointDate:       req.TaxPointDate.update(ClearDate),
+			PaymentStatus:      req.PaymentStatus.update(ClearText),
+			SupplierEmail:      req.SupplierEmail.update(ClearText),
+			SupplierTelephone:  req.SupplierTelephone.update(ClearText),
+			SupplierStreet:     req.SupplierStreet.update(ClearText),
+			SupplierCity:       req.SupplierCity.update(ClearText),
+			SupplierPostalZone: req.SupplierPostalZone.update(ClearText),
+			SupplierCountry:    req.SupplierCountry.update(ClearText),
+			SupplierState:      req.SupplierState.update(ClearText),
+			SupplierLGA:        req.SupplierLGA.update(ClearText),
+			BuyerEmail:         req.BuyerEmail.update(ClearText),
+			BuyerTelephone:     req.BuyerTelephone.update(ClearText),
+			BuyerStreet:        req.BuyerStreet.update(ClearText),
+			BuyerCity:          req.BuyerCity.update(ClearText),
+			BuyerPostalZone:    req.BuyerPostalZone.update(ClearText),
+			BuyerCountry:       req.BuyerCountry.update(ClearText),
+			BuyerState:         req.BuyerState.update(ClearText),
+			BuyerLGA:           req.BuyerLGA.update(ClearText),
 		}, LineItems: lines, InvoiceNumber: invoiceNumber})
 		if err != nil {
 			status, msg := statusForErr(err)
@@ -1553,6 +1775,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrValidation):
 		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, ErrUnknownLineID):
+		return http.StatusBadRequest, "line_items id must name a line of this invoice"
 	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound, "not found"
 	case errors.Is(err, ErrDuplicateNumber):
@@ -1563,10 +1787,18 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusConflict, "illegal transition"
 	case errors.Is(err, ErrAwaitingApproval):
 		return http.StatusConflict, awaitingApprovalReason
+	case errors.Is(err, ErrRuleChangePending):
+		return http.StatusConflict, ruleChangePendingReason
 	case errors.Is(err, ErrNotDraft):
 		return http.StatusConflict, "invoice is not a draft"
 	case errors.Is(err, ErrStaleValidation):
 		return http.StatusConflict, "invoice changed during validation"
+	case errors.Is(err, ErrRulesChanged):
+		return http.StatusConflict, "the rules changed during validation; validate again"
+	case errors.Is(err, ErrViolationGone):
+		return http.StatusConflict, "the violation is not on this invoice's last validation"
+	case errors.Is(err, ErrVerdictStale):
+		return http.StatusConflict, "the invoice changed since its last validation; re-validate it first"
 	case errors.Is(err, ErrNotFixable):
 		return http.StatusConflict, "invoice is not in a fixable state"
 	case errors.Is(err, ErrNumberTaken):

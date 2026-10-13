@@ -40,11 +40,13 @@ func NewMockIssuer(issuer string) (*MockIssuer, error) {
 // MintOptions describes a token to mint. Zero fields take GoTrue-shaped
 // defaults: a random UUID subject, the "authenticated" role, and a one-hour TTL.
 type MintOptions struct {
-	Subject  string
-	Role     string
-	TenantID string
-	Email    string // minted only when non-empty
-	TTL      time.Duration
+	Subject   string
+	Role      string
+	TenantID  string
+	Email     string // minted only when non-empty
+	Staff     bool   // app_metadata.staff, minted only when set
+	RulesRole bool   // app_metadata.rules_role, minted only when set
+	TTL       time.Duration
 }
 
 // Mint returns a signed ES256 JWT carrying the GoTrue claim contract.
@@ -66,7 +68,7 @@ func (m *MockIssuer) Mint(opts MintOptions) (string, error) {
 		IssuedAt:    now.Unix(),
 		ExpiresAt:   now.Add(opts.TTL).Unix(),
 		Role:        opts.Role,
-		AppMetadata: appMetadata{TenantID: opts.TenantID},
+		AppMetadata: appMetadata{TenantID: opts.TenantID, Staff: opts.Staff, RulesRole: opts.RulesRole},
 		Email:       opts.Email,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodES256, claims)

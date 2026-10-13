@@ -6,20 +6,14 @@ import { seedStaffSession, test } from '../staffSession'
 // The Support Console, driven as the cross-tenant operator it is for (PERSONA-01-05,
 // Backlog task-274), on a seeded real staff session (staffSession.ts).
 //
-// MOCK-ONLY, AND THAT LIMITS WHAT A GREEN RUN MEANS. This console's data has no backend: a
-// grep for fetch/XMLHttpRequest/axios/WebSocket across frontend/support-console/src returns
-// nothing, and its only gateway calls are the session's renewal and sign-out
-// (packages/console-session). Every assertion below pins this
-// console's CLIENT-SIDE BEHAVIOUR over the fixtures in src/data.tsx. It is not a contract
-// test and says nothing about any server. Counts are read from the rendered UI rather than
-// hardcoded, so a seed edit does not break these — but the entities are fiction, and when
-// real endpoints land (M7: operator identity + a cross-tenant read path) these specs must
-// be REWRITTEN against real data, not re-baselined.
-//
-// WHY A BROWSER IS THE ONLY HARNESS. Every frontend vitest project runs in `node` with no
-// DOM (frontend/support-console/vitest.config.ts:5), so there is no component-test layer in
-// which a click, a filter or a detail pane could be exercised at all. Same rationale and
-// same suite as smoke/landing-nav.spec.ts and smoke.spec.ts.
+// THE RULES SCREEN IS REAL; THE OTHER SCREENS ARE MOCK. Rules reads the versions list and a version's
+// rules, and switches, drafts, tests and publishes through /v1/staff (staff account with the rules
+// role, staffSession.ts); the sidebar's Rules button carries no badge. Every other screen
+// has no backend call, and the only other gateway calls are the session's renewal and sign-out
+// (packages/console-session). Assertions on those screens pin CLIENT-SIDE BEHAVIOUR over the
+// fixtures in src/data.tsx: not a contract test, and they say nothing about any server. Counts
+// are read from the rendered UI rather than hardcoded. The rules contract lives in
+// api/contract-validation.spec.ts and the switch journey in topology/support-console.spec.ts.
 //
 // PARALLEL-SAFE. Each test seeds its own gateway session for the worker's one staff account,
 // and none signs it out, so smoke's `fullyParallel: true` needs no carve-out here. Every
@@ -71,9 +65,7 @@ const heading = (page: Page) => page.getByRole('heading', { level: 1 })
 const chips = (page: Page) => page.getByRole('main').locator('button.ops-chip')
 const rows = (page: Page) => page.getByRole('main').locator('.ops-row')
 
-// The sidebar's dead-letter badge. Scoped to the Submissions button on purpose: the Rules
-// button carries a `.mono` badge of its own (the learned-rules inbox, Sidebar.tsx:87), so an
-// unscoped badge locator would resolve to two elements. It is not rendered at all when the
+// The sidebar's dead-letter badge, scoped to the Submissions button. It is not rendered at all when the
 // count is zero, which is what makes `toHaveCount(0)` a real post-condition rather than a
 // text comparison. `{ name: 'Submissions' }` matches by substring, so it still finds the
 // button when the badge has widened its accessible name to "Submissions 2".

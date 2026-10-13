@@ -78,6 +78,16 @@ var corpusPinned = []struct {
 			{"subtotal", rcStr("1000.00"), extraction.ReasonNone, nil},
 			{"vat", rcStr("75.00"), extraction.ReasonNone, nil},
 			{"total", rcStr("1075.00"), extraction.ReasonNone, nil},
+			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			{"due_date", nil, extraction.ReasonMissing, nil},
+			{"buyer_email", nil, extraction.ReasonMissing, nil},
+			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
+			{"buyer_street", nil, extraction.ReasonMissing, nil},
+			{"buyer_city", nil, extraction.ReasonMissing, nil},
+			{"buyer_postal_zone", nil, extraction.ReasonMissing, nil},
+			{"buyer_country", nil, extraction.ReasonMissing, nil},
+			{"buyer_state", nil, extraction.ReasonMissing, nil},
+			{"buyer_lga", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -94,6 +104,16 @@ var corpusPinned = []struct {
 			{"subtotal", rcStr("2000.00"), extraction.ReasonNone, nil},
 			{"vat", rcStr("150.00"), extraction.ReasonNone, nil},
 			{"total", rcStr("2150.00"), extraction.ReasonNone, nil},
+			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			{"due_date", nil, extraction.ReasonMissing, nil},
+			{"buyer_email", nil, extraction.ReasonMissing, nil},
+			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
+			{"buyer_street", nil, extraction.ReasonMissing, nil},
+			{"buyer_city", nil, extraction.ReasonMissing, nil},
+			{"buyer_postal_zone", nil, extraction.ReasonMissing, nil},
+			{"buyer_country", nil, extraction.ReasonMissing, nil},
+			{"buyer_state", nil, extraction.ReasonMissing, nil},
+			{"buyer_lga", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -114,6 +134,16 @@ var corpusPinned = []struct {
 			{"subtotal", nil, extraction.ReasonMissing, nil},
 			{"vat", nil, extraction.ReasonMissing, nil},
 			{"total", rcStr("3225.00"), extraction.ReasonNone, nil},
+			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			{"due_date", nil, extraction.ReasonMissing, nil},
+			{"buyer_email", nil, extraction.ReasonMissing, nil},
+			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
+			{"buyer_street", nil, extraction.ReasonMissing, nil},
+			{"buyer_city", nil, extraction.ReasonMissing, nil},
+			{"buyer_postal_zone", nil, extraction.ReasonMissing, nil},
+			{"buyer_country", nil, extraction.ReasonMissing, nil},
+			{"buyer_state", nil, extraction.ReasonMissing, nil},
+			{"buyer_lga", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -132,6 +162,16 @@ var corpusPinned = []struct {
 			{"subtotal", nil, extraction.ReasonMissing, nil},
 			{"vat", nil, extraction.ReasonMissing, nil},
 			{"total", rcStr("6450.00"), extraction.ReasonNone, nil},
+			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			{"due_date", nil, extraction.ReasonMissing, nil},
+			{"buyer_email", nil, extraction.ReasonMissing, nil},
+			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
+			{"buyer_street", nil, extraction.ReasonMissing, nil},
+			{"buyer_city", nil, extraction.ReasonMissing, nil},
+			{"buyer_postal_zone", nil, extraction.ReasonMissing, nil},
+			{"buyer_country", nil, extraction.ReasonMissing, nil},
+			{"buyer_state", nil, extraction.ReasonMissing, nil},
+			{"buyer_lga", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -151,6 +191,16 @@ var corpusPinned = []struct {
 			{"subtotal", nil, extraction.ReasonMissing, nil},
 			{"vat", nil, extraction.ReasonMissing, nil},
 			{"total", rcStr("4300.00"), extraction.ReasonNone, nil},
+			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			{"due_date", nil, extraction.ReasonMissing, nil},
+			{"buyer_email", nil, extraction.ReasonMissing, nil},
+			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
+			{"buyer_street", nil, extraction.ReasonMissing, nil},
+			{"buyer_city", nil, extraction.ReasonMissing, nil},
+			{"buyer_postal_zone", nil, extraction.ReasonMissing, nil},
+			{"buyer_country", nil, extraction.ReasonMissing, nil},
+			{"buyer_state", nil, extraction.ReasonMissing, nil},
+			{"buyer_lga", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -169,6 +219,16 @@ var corpusPinned = []struct {
 			{"subtotal", rcStr("5000.00"), extraction.ReasonNone, nil},
 			{"vat", rcStr("375.00"), extraction.ReasonNone, nil},
 			{"total", rcStr("5375.00"), extraction.ReasonNone, nil},
+			// The nine AI-only fields have no Tier-1 rule: the engine reads none.
+			{"due_date", nil, extraction.ReasonMissing, nil},
+			{"buyer_email", nil, extraction.ReasonMissing, nil},
+			{"buyer_telephone", nil, extraction.ReasonMissing, nil},
+			{"buyer_street", nil, extraction.ReasonMissing, nil},
+			{"buyer_city", nil, extraction.ReasonMissing, nil},
+			{"buyer_postal_zone", nil, extraction.ReasonMissing, nil},
+			{"buyer_country", nil, extraction.ReasonMissing, nil},
+			{"buyer_state", nil, extraction.ReasonMissing, nil},
+			{"buyer_lga", nil, extraction.ReasonMissing, nil},
 			{"line_items", nil, extraction.ReasonMissing, nil},
 		},
 	},
@@ -235,8 +295,8 @@ func corpusFieldShapes(t *testing.T) map[string]extraction.Shape {
 		}
 		out[r.Field] = r.Rule.Shape
 	}
-	if len(out) != len(extraction.HeaderFields) {
-		t.Fatalf("the shipped rules name %d field(s), want %d -- a field with no rule has no shape to check against", len(out), len(extraction.HeaderFields))
+	if len(out) != len(t1LabelledFields()) {
+		t.Fatalf("the shipped rules name %d field(s), want %d -- a field with no rule has no shape to check against", len(out), len(t1LabelledFields()))
 	}
 	return out
 }
@@ -435,7 +495,8 @@ func TestReconcileCorpus_MissingFieldsAreExactlyTheOmittedOnes(t *testing.T) {
 					got = append(got, r.Name)
 				}
 			}
-			gotSorted, wantSorted := slices.Clone(got), slices.Clone(want)
+			// The AI-only fields are missing on every layout: the engine reads none.
+			gotSorted, wantSorted := slices.Clone(got), slices.Concat(want, t1AIOnlyFields)
 			slices.Sort(gotSorted)
 			slices.Sort(wantSorted)
 			if !slices.Equal(gotSorted, wantSorted) {

@@ -17,7 +17,7 @@ import {
   regionPhrase,
 } from '../lib/extractionReview'
 import type { DraftEntries, ExtractionCandidate, ExtractionFieldState } from '../lib/extractionReview'
-import { linesFromFields } from '../lib/lineItems'
+import { LINE_WIRE_ROLES, linesFromFields } from '../lib/lineItems'
 import type { LineRole, LineRow } from '../lib/lineItems'
 import { LineItemGrid } from './LineItemGrid'
 
@@ -43,7 +43,7 @@ const SUPPLIER_FIELDS = ['supplier_tin', 'supplier_name']
 // The line block and its cells belong to LineItemGrid. The block row itself carries no value and
 // no region, so neither surface renders it. EXTR11-E2E-02a and EXTR12-E2E-07 count rendered
 // `extraction-field-*` against the header half of the wire, which is what this keeps true.
-const LINE_FIELD_RE = /^line_items(\[[1-9][0-9]*\]\.(description|quantity|unit_price|line_total|line_tax))?$/
+const LINE_FIELD_RE = new RegExp(`^line_items(\\[[1-9][0-9]*\\]\\.(${LINE_WIRE_ROLES.join('|')}))?$`)
 
 function isHeaderField(name: string): boolean {
   return !LINE_FIELD_RE.test(name)
@@ -328,7 +328,7 @@ export function ExtractionFields({
                 // instead. mock.go gives total, subtotal and buyer_tin no region and a typed
                 // correction leaves the region alone, so the cue outlives the reason otherwise.
                 const settled = correctedMarker(f.corrected, f.region)
-                const note = settled === null ? fieldNote(f.reason, f.name) : null
+                const note = settled === null ? fieldNote(f.reason, f.name, f.rules) : null
                 // One slot, and the reason outranks the region cue.
                 const cue = f.region === null ? NO_REGION : null
                 // The gate is the REASON first -- a field can carry alternatives the extractor

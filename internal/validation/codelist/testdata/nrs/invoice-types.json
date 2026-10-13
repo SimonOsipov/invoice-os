@@ -1,0 +1,17 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "code": "380",
+      "value": "Credit Note"
+    },
+    {
+      "code": "381",
+      "value": "Commercial Invoice"
+    },
+    {
+      "code": "384",
+      "value": "Debit Note"
+    }
+  ]
+}

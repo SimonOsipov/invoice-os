@@ -49,7 +49,10 @@ export interface MappingGroup {
   mapping: Mapping
   restored: RestoredFrom | null
   suggested: SuggestedFrom | null
+  invoiceKind?: InvoiceKind // buyer-type default; per group, not saved with the mapping
 }
+
+export type InvoiceKind = 'B2B' | 'B2G' | 'B2C'
 
 // Walks `previewed` in pick order and buckets by columnSignature, preserving
 // first-appearance order of groups. Each new group's mapping is seeded with the shipped
@@ -104,12 +107,18 @@ export function splitOut(groups: MappingGroup[], fileId: string): MappingGroup[]
     mapping: { ...group.mapping },
     restored: group.restored,
     suggested: group.suggested,
+    invoiceKind: group.invoiceKind,
   }
 
   const next = groups.slice()
   next[idx] = remaining
   next.push(split)
   return next
+}
+
+// The backend rejects a default beside a mapped invoice_kind column, so it is never sent then.
+export function defaultInvoiceKindFor(group: MappingGroup): InvoiceKind | undefined {
+  return group.mapping.invoice_kind ? undefined : group.invoiceKind
 }
 
 // Renders on EVERY group, including a group of one

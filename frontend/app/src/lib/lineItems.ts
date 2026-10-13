@@ -3,20 +3,22 @@
 // grid decides without a DOM lives here, so it has an oracle without one.
 
 import type { ExtractionCandidate, ExtractionFieldState, ExtractionRegion, ExtractionReason } from './extractionReview'
+import { INVOICE_FIELDS, type LineWireRole } from './invoiceFields'
 import { addScaled, mulScaled, parseScaled, renderScaled, type Scaled } from './invoices'
 
-export type LineRole = 'description' | 'quantity' | 'unit_price' | 'line_total'
+export type { LineWireRole }
 
-// The fifth wire role, per-line VAT: read and carried, never rendered as a grid column
-// ([vat-carried-not-rendered]) -- 'vat' is taken by the invoice-level header field.
-export type LineWireRole = LineRole | 'line_tax'
+// line_tax and the five AI-only roles are read and carried, never a grid column
+// ([vat-carried-not-rendered]).
+export type LineRole = Extract<LineWireRole, 'description' | 'quantity' | 'unit_price' | 'line_total'>
 
-// The rendered grid columns: extraction.LineRoles' first four, in its order. A prefix of the
-// wire set below, not a mirror of it.
+// The grid's columns: a literal, since the column choice is the grid's, not the field list's.
 export const LINE_ROLES: readonly LineRole[] = ['description', 'quantity', 'unit_price', 'line_total']
 
-// Mirrors extraction.LineRoles order (lineitems.go): every wire role, line_tax last.
-export const LINE_WIRE_ROLES: readonly LineWireRole[] = ['description', 'quantity', 'unit_price', 'line_total', 'line_tax']
+// Every extracted line role, from the shared field list.
+export const LINE_WIRE_ROLES: readonly LineWireRole[] = INVOICE_FIELDS.filter((f) => f.line && f.extract).map(
+  (f) => f.key as LineWireRole,
+)
 
 // reconcile.go's reconcileTolerance, pinned to the Go literal by a source-reading spec.
 export const LINE_TOLERANCE = '0.01'
@@ -51,6 +53,11 @@ export interface LineItemInput {
   unit_price: string | null
   line_total: string | null
   line_tax: string | null
+  tax_category: string | null
+  hsn_code: string | null
+  isic_code: string | null
+  sellers_item_identification: string | null
+  price_unit: string | null
 }
 
 // -- exact-decimal helpers over invoices.ts's Scaled kit -----------------------------------
@@ -80,7 +87,7 @@ function exceedsTolerance(diff: Scaled): boolean {
 
 // -- field names ----------------------------------------------------------------------------
 
-const LINE_FIELD_RE = /^line_items\[([1-9][0-9]*)\]\.(description|quantity|unit_price|line_total|line_tax)$/
+const LINE_FIELD_RE = new RegExp(`^line_items\\[([1-9][0-9]*)\\]\\.(${LINE_WIRE_ROLES.join('|')})$`)
 
 export function lineFieldName(index: number, role: LineWireRole): string {
   return `line_items[${index}].${role}`
@@ -98,6 +105,13 @@ function blankCell(name: string | null): LineCell {
   return { name, value: '', region: null, reason: '', alternatives: [] }
 }
 
+function blankCells(nameOf: (role: LineWireRole) => string | null): Record<LineWireRole, LineCell> {
+  return Object.fromEntries(LINE_WIRE_ROLES.map((role) => [role, blankCell(nameOf(role))])) as Record<
+    LineWireRole,
+    LineCell
+  >
+}
+
 // The wire arrives lexicographic (reader.go's ORDER BY ties on created_at), so
 // line_items[10].* precedes line_items[2].*. Sort by the parsed numeric index; a hole in the
 // indices closes in ordinal terms only -- a cell's own name is never renumbered.
@@ -111,13 +125,7 @@ export function linesFromFields(fields: readonly ExtractionFieldState[]): LineRo
       const index = parsed.index
       row = {
         key: `i${index}`,
-        cells: {
-          description: blankCell(lineFieldName(index, 'description')),
-          quantity: blankCell(lineFieldName(index, 'quantity')),
-          unit_price: blankCell(lineFieldName(index, 'unit_price')),
-          line_total: blankCell(lineFieldName(index, 'line_total')),
-          line_tax: blankCell(lineFieldName(index, 'line_tax')),
-        },
+        cells: blankCells((role) => lineFieldName(index, role)),
       }
       byIndex.set(index, row)
     }
@@ -199,13 +207,7 @@ export function addRow(rows: readonly LineRow[]): LineRow[] {
     ...rows,
     {
       key: freshKey(rows),
-      cells: {
-        description: blankCell(null),
-        quantity: blankCell(null),
-        unit_price: blankCell(null),
-        line_total: blankCell(null),
-        line_tax: blankCell(null),
-      },
+      cells: blankCells(() => null),
     },
   ]
 }
@@ -227,18 +229,15 @@ function postValue(cell: LineCell): string | null {
 
 export function linesToPost(rows: readonly LineRow[]): LineItemInput[] {
   return rows
-    .map((row) => ({
-      description: postValue(row.cells.description),
-      quantity: postValue(row.cells.quantity),
-      unit_price: postValue(row.cells.unit_price),
-      line_total: postValue(row.cells.line_total),
-      line_tax: postValue(row.cells.line_tax),
-    }))
+    .map(
+      (row) =>
+        Object.fromEntries(LINE_WIRE_ROLES.map((role) => [role, postValue(row.cells[role])])) as unknown as LineItemInput,
+    )
     .filter((line) => LINE_WIRE_ROLES.some((role) => line[role] !== null))
 }
 
 // diffLineItems' shape as a boolean, because Save's `disabled` is what consumes it: positional
-// over all five wire roles, both sides canonicalised, different lengths mean changed.
+// over every wire role, both sides canonicalised, different lengths mean changed.
 export function lineSetChanged(wireRows: readonly LineRow[], draftRows: readonly LineRow[]): boolean {
   if (wireRows.length !== draftRows.length) return true
   return !wireRows.every((wire, i) =>

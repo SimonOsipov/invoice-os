@@ -17,6 +17,8 @@ type Identity struct {
 	TenantID  string // app_metadata.tenant_id: the tenant the caller acts within
 	Email     string // GoTrue "email"; "" when the token carries none
 	SessionID string // GoTrue "session_id"; "" for a mock-issuer token
+	Staff     bool   // app_metadata.staff
+	RulesRole bool   // app_metadata.rules_role, true only together with Staff
 }
 
 type ctxKey int
@@ -24,6 +26,7 @@ type ctxKey int
 const (
 	ctxKeyIdentity ctxKey = iota
 	ctxKeyTenantlessCaller
+	ctxKeyStaff
 )
 
 // WithIdentity returns a context carrying the verified identity. The middleware

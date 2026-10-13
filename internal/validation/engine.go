@@ -3,7 +3,7 @@
 // Core AC #2, #4). It dispatches to whatever Evaluators are registered and
 // whatever GuardFunc is injected -- both get concrete implementations in
 // later subtasks (evaluators: M3-04-03/04; CEL guard backend: M3-04-05).
-// The engine core has NO DB import: LoadActiveRuleSet (the DB "load" stage)
+// The engine core has NO DB import: the DB "load" stage (Store.LoadForBatch, one load per batch)
 // lives one layer up, in the M3-04-06 Store.
 //
 // The exported surface -- the Engine struct's field set, the NewEngine
@@ -79,6 +79,14 @@ func (e *Engine) Evaluate(p Payload, rs RuleSet) (Result, error) {
 		if !ok {
 			return Result{}, fmt.Errorf("validation: unknown rule type %q", rule.Type)
 		}
+		if le, ok := ev.(lineEvaluator); ok {
+			vs, err := le.evalLines(p, rule)
+			if err != nil {
+				return Result{}, err
+			}
+			violations = append(violations, vs...)
+			continue
+		}
 		v, err := ev.Eval(p, rule)
 		if err != nil {
 			return Result{}, err
@@ -88,16 +96,20 @@ func (e *Engine) Evaluate(p Payload, rs RuleSet) (Result, error) {
 		}
 	}
 
-	// aggregate stage: deterministic order -- rule key ascending, then path
-	// ascending (Decision N16 -- stable output for the M3-10 golden suite).
-	sort.Slice(violations, func(i, j int) bool {
-		if violations[i].RuleKey != violations[j].RuleKey {
-			return violations[i].RuleKey < violations[j].RuleKey
-		}
-		return violations[i].Path < violations[j].Path
-	})
+	sortViolations(violations)
 
 	return Result{RuleSetVersion: rs.Version, Violations: violations}, nil
+}
+
+// sortViolations orders by rule key ascending, then path ascending (Decision
+// N16 -- stable output for the M3-10 golden suite).
+func sortViolations(vs []Violation) {
+	sort.Slice(vs, func(i, j int) bool {
+		if vs[i].RuleKey != vs[j].RuleKey {
+			return vs[i].RuleKey < vs[j].RuleKey
+		}
+		return vs[i].Path < vs[j].Path
+	})
 }
 
 // resolvePath resolves a dotted target (e.g. "supplier.tin") against the

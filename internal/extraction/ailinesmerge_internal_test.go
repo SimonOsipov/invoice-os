@@ -6,6 +6,7 @@ package extraction
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -421,5 +422,124 @@ func TestMergeAILines_AnInventedRowFullyRefusedByThePageCheckConsumesNoIndex(t *
 	gadget := findLineRow(t, got, 2, LineRoleDescription)
 	if gadget.Value == nil || *gadget.Value != "Gadget" {
 		t.Errorf("index 2 description = %v, want Gadget renumbered past the refused ghost row", gadget.Value)
+	}
+}
+
+func TestAliMergeCell_ANewRolePrintedOnTheRowIsWrittenTrimmed(t *testing.T) {
+	pages := onePage(1, tok("HS 8471.30", 1, 0.10, 0.10, 0.50, 0.12))
+
+	got := aliMergeCell(LineRoleHSNCode, FieldResult{}, false, aliStr(" 8471.30 "), pages)
+
+	if got == nil || got.Value == nil {
+		t.Fatalf("aliMergeCell = %+v, want a written cell", got)
+	}
+	if *got.Value != "8471.30" || got.Reason != ReasonNone {
+		t.Errorf("cell = %q reason %q, want \"8471.30\" with no reason", *got.Value, got.Reason)
+	}
+}
+
+func TestAliMergeCell_ANewRoleNotOnThePageIsRefused(t *testing.T) {
+	pages := onePage(1, tok("Laptop 1 10.00", 1, 0.10, 0.10, 0.50, 0.12))
+
+	if got := aliMergeCell(LineRoleTaxCategory, FieldResult{}, false, aliStr("Standard"), pages); got != nil {
+		t.Errorf("aliMergeCell = %+v, want nil: no token prints Standard", got)
+	}
+}
+
+// Pins today's page-wide check: a category printed on row 1 backs row 2.
+func TestAliMergeCell_ANewRolePrintedOnAnotherRowIsAccepted(t *testing.T) {
+	pages := onePage(1,
+		tok("Laptop 1 10.00 Standard", 1, 0.10, 0.10, 0.80, 0.12),
+		tok("Consulting 2 20.00", 1, 0.10, 0.20, 0.80, 0.22),
+	)
+
+	got := aliMergeCell(LineRoleTaxCategory, FieldResult{}, false, aliStr("Standard"), pages)
+
+	if got == nil || got.Value == nil || *got.Value != "Standard" {
+		t.Errorf("aliMergeCell = %+v, want Standard written from the page-wide match", got)
+	}
+}
+
+func TestAliRoleReadings_NewRolesCompareCaseSensitively(t *testing.T) {
+	if hasCommonReading(aliRoleReadings(LineRolePriceUnit, "EA"), aliRoleReadings(LineRolePriceUnit, "ea")) {
+		t.Error("price_unit EA and ea share a reading, want none (case-sensitive)")
+	}
+	if !hasCommonReading(aliRoleReadings(LineRoleTaxCategory, "Zero  rated"), aliRoleReadings(LineRoleTaxCategory, "Zero rated")) {
+		t.Error("tax_category \"Zero  rated\" and \"Zero rated\" share no reading, want one (whitespace collapsed)")
+	}
+}
+
+func TestAliRoleReadings_NewRolesBlankOverCapAndCaseEdges(t *testing.T) {
+	for _, role := range LineRoles[5:] {
+		if got := aliRoleReadings(role, "   \t"); got != nil {
+			t.Errorf("%s: blank reads %v, want nil", role, got)
+		}
+		got := aliRoleReadings(role, "  Ab\t Cd ")
+		if len(got) != 1 || got[0] != "Ab Cd" {
+			t.Errorf("%s: readings = %v, want [\"Ab Cd\"] (case kept, whitespace collapsed)", role, got)
+		}
+		cap256 := strings.Repeat("é", 256)
+		if got := aliRoleReadings(role, cap256); len(got) != 1 {
+			t.Errorf("%s: 256 runes (512 bytes) refused, want accepted: rune count, not bytes", role)
+		}
+		if got := aliRoleReadings(role, cap256+"é"); got != nil {
+			t.Errorf("%s: 257 runes accepted, want refused", role)
+		}
+	}
+}
+
+func TestAliMergeCell_ANewRoleBlankAbsentOrOverCapIsNil(t *testing.T) {
+	long := strings.Repeat("A", 257)
+	pages := onePage(1, tok(long, 1, 0.10, 0.10, 0.90, 0.12), tok("HS 8471.30", 1, 0.10, 0.20, 0.50, 0.22))
+	for _, role := range LineRoles[5:] {
+		if got := aliMergeCell(role, FieldResult{}, false, nil, pages); got != nil {
+			t.Errorf("%s: absent AI cell wrote %+v, want nil", role, got)
+		}
+		if got := aliMergeCell(role, FieldResult{}, false, aliStr("  "), pages); got != nil {
+			t.Errorf("%s: blank AI cell wrote %+v, want nil", role, got)
+		}
+		if got := aliMergeCell(role, FieldResult{}, false, aliStr(long), pages); got != nil {
+			t.Errorf("%s: 257-rune value printed on the page was written, want refused (D8 cap)", role)
+		}
+	}
+	if got := aliMergeCell(LineRoleHSNCode, FieldResult{}, false, aliStr("8471.30"), pages); got == nil {
+		t.Error("control: a printed hsn_code was refused")
+	}
+}
+
+func TestMergeAILines_EveryNewRoleIsWrittenOnlyWhenPrinted(t *testing.T) {
+	ai := []AILine{
+		{
+			Description: aliStr("Laptop"), TaxCategory: aliStr(" Standard "), HSNCode: aliStr("8471.30"),
+			ISICCode: aliStr("6201"), SellersItem: aliStr("SKU-9"), PriceUnit: aliStr("pcs"),
+		},
+		{Description: aliStr("Gadget"), TaxCategory: aliStr("Exempt"), PriceUnit: aliStr("kg")},
+	}
+	pages := onePage(1,
+		tok("Laptop", 1, 0.10, 0.10, 0.30, 0.12),
+		tok("Standard 8471.30 6201 SKU-9 pcs", 1, 0.40, 0.10, 0.90, 0.12),
+		tok("Gadget", 1, 0.10, 0.20, 0.30, 0.22),
+	)
+
+	got := mergeAILines(nil, ai, pages)
+
+	want := map[string]string{
+		LineRoleDescription: "Laptop", LineRoleTaxCategory: "Standard", LineRoleHSNCode: "8471.30",
+		LineRoleISICCode: "6201", LineRoleSellersItemID: "SKU-9", LineRolePriceUnit: "pcs",
+	}
+	for role, v := range want {
+		if r := findLineRow(t, got, 1, role); r.Value == nil || *r.Value != v {
+			t.Errorf("line 1 %s = %v, want %q", role, r.Value, v)
+		}
+	}
+	if r := findLineRow(t, got, 2, LineRoleDescription); r.Value == nil || *r.Value != "Gadget" {
+		t.Fatalf("line 2 description = %v, want Gadget", r.Value)
+	}
+	for _, role := range []string{LineRoleTaxCategory, LineRolePriceUnit} {
+		for _, r := range got {
+			if r.Name == LineFieldName(2, role) {
+				t.Errorf("line 2 %s written as %v, but the page prints no such value", role, r.Value)
+			}
+		}
 	}
 }

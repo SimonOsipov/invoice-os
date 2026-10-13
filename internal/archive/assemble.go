@@ -84,6 +84,14 @@ func assemble(ctx context.Context, tx pgx.Tx, r Request, w io.Writer, o assemble
 		return err
 	}
 
+	lineEntry := bw.newCSVEntry("line_items.csv")
+	if err := selectLineItems(ctx, tx, ids, lineEntry); err != nil {
+		return err
+	}
+	if err := bw.finalizeCSV(lineEntry); err != nil {
+		return err
+	}
+
 	histEntry := bw.newCSVEntry("status_history.csv")
 	if err := selectHistory(ctx, tx, ids, histEntry); err != nil {
 		return err

@@ -34,14 +34,17 @@ import {
   clampFilterText,
   computedLineSum,
   createInvoice,
+  demotionSentence,
   DETAIL_SUBMIT_COPY,
   diffEditInput,
   diffLineItems,
   editInvoice,
+  editValueToWire,
   FAILURE_EXPLANATION_FALLBACK,
   FAILURE_KINDS,
   failureExplanation,
   formFromInvoice,
+  LINE_EDIT_FIELDS,
   gateByActiveEntity,
   getInvoice,
   getInvoiceHistory,
@@ -53,6 +56,7 @@ import {
   isRowSelectable,
   keepInvoiceAsIs,
   keptAsIs,
+  latestDemotion,
   LIVE_POLL_MS,
   listInvoices,
   mbsPathToEditField,
@@ -95,6 +99,7 @@ import {
   type RejectionReason,
   type StatusChange,
 } from './invoices'
+import type { LineEditKey } from './invoiceFields'
 // Namespace import, ADDITIONAL to the named import above -- INV-06-T11a below asserts
 // over this whole object with the `in` operator, so it never imports the [isfixable-deleted]
 // export by name and can't fail to compile either before or after that export is removed.
@@ -179,6 +184,7 @@ const draftInvoice: InvoiceRecord = {
   approve_blocked_reason: null,
   can_submit: false,
   submit_blocked_reason: null,
+  demotion: null,
 }
 
 // A row the server would answer `can_submit` on from its status alone. Derived from
@@ -1149,6 +1155,16 @@ describe('APPR-12-09 A09-12: the approve pair MOVED to InvoiceRecord, it was not
   })
 })
 
+describe('ENGI-15-04: demotion is a list-only key', () => {
+  it('invoiceDetailRecord_hasNoDemotionKey: readable off InvoiceRecord, a compile error off InvoiceDetailRecord', () => {
+    expect(fieldNamesOf('InvoiceRecord'), 'lost anchor on InvoiceRecord').toContain('demotion')
+    expect(draftInvoice.demotion).toBeNull()
+    const detail = {} as InvoiceDetailRecord
+    // @ts-expect-error demotion is Omitted from InvoiceDetailRecord; tsc fails here if the key leaks back
+    expect(detail.demotion).toBeUndefined()
+  })
+})
+
 describe('violationSummary (AC-2, Stage 2.5)', () => {
   it('SUMMARY-1: unwraps .rules and preserves the server order verbatim, never re-sorted', async () => {
     mockFetchOnce({
@@ -1234,6 +1250,7 @@ describe('getInvoice', () => {
       rejection_reasons: reasons,
       rule_set_version: 2,
       qr_png_base64: 'aGVsbG8=',
+      verdict_stale: false,
       // accepted: canEdit false, canRevalidate false -> the blocked reason is null (it is
       // non-null EXACTLY when canEdit && !canRevalidate, i.e. validated/rejected).
       // Submit's rule is weaker and does NOT mirror that: submit_blocked_reason != null
@@ -1274,6 +1291,7 @@ describe('getInvoice', () => {
       ...draftInvoice,
       rule_set_version: 2,
       qr_png_base64: 'aGVsbG8=',
+      verdict_stale: false,
       can_edit: true,
       can_revalidate: true,
       revalidate_blocked_reason: null,
@@ -1305,6 +1323,7 @@ describe('getInvoice', () => {
       status: 'validated',
       rule_set_version: 2,
       qr_png_base64: null,
+      verdict_stale: false,
       can_edit: true,
       can_revalidate: false,
       revalidate_blocked_reason: 'Validated invoices cannot be re-validated.',
@@ -1357,6 +1376,7 @@ describe('getInvoice', () => {
       status: 'validated',
       rule_set_version: 2,
       qr_png_base64: null,
+      verdict_stale: false,
       can_edit: true,
       can_revalidate: false,
       revalidate_blocked_reason: null,
@@ -1545,6 +1565,7 @@ describe('getInvoice', () => {
       ...draftInvoice,
       rule_set_version: 2,
       qr_png_base64: null,
+      verdict_stale: false,
       can_edit: true,
       can_revalidate: true,
       revalidate_blocked_reason: null,
@@ -2000,8 +2021,8 @@ describe('getInvoiceUbl (task-400, BUG-04-04)', () => {
 describe('getInvoiceHistory', () => {
   it('I10: the bare StatusChange[] array passes through unchanged; GET .../invoices/{id}/history', async () => {
     const history: StatusChange[] = [
-      { from_status: null, to_status: 'draft', actor: 'system', actor_name: 'System', actor_kind: 'system', changed_at: '2026-07-01T00:00:00Z' },
-      { from_status: 'draft', to_status: 'validated', actor: 'user:u1', actor_name: 'user:u1', actor_kind: 'raw', changed_at: '2026-07-02T00:00:00Z' },
+      { from_status: null, to_status: 'draft', actor: 'system', actor_name: 'System', actor_kind: 'system', changed_at: '2026-07-01T00:00:00Z', cause: null, custom_rule_cause: null },
+      { from_status: 'draft', to_status: 'validated', actor: 'user:u1', actor_name: 'user:u1', actor_kind: 'raw', changed_at: '2026-07-02T00:00:00Z', cause: null, custom_rule_cause: null },
     ]
     const fetchMock = mockFetchOnce({ ok: true, status: 200, json: () => Promise.resolve(history) })
     const af = createAuthedFetch(() => 'tok', vi.fn())
@@ -2118,6 +2139,7 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       status: 'failed',
       rule_set_version: null,
       qr_png_base64: null,
+      verdict_stale: false,
       can_edit: false,
       can_revalidate: false,
       revalidate_blocked_reason: null,
@@ -2263,6 +2285,7 @@ describe('resolveInvoiceOutside / unresolveInvoiceOutside / canResolveOutside / 
       ...listRow,
       rule_set_version: null,
       qr_png_base64: null,
+      verdict_stale: false,
       can_edit: false,
       can_revalidate: false,
       revalidate_blocked_reason: null,
@@ -2498,20 +2521,31 @@ describe('mbsPathToEditField', () => {
 })
 
 describe('skipReasonLabel', () => {
-  it('I-skip-1: skipReasonLabel maps all three reachable reasons and passes others through', () => {
+  it('I-skip-1: skipReasonLabel maps all four reachable reasons and passes others through', () => {
     expect(skipReasonLabel('not_validated')).toBe('Not validated — validate it first')
     expect(skipReasonLabel('duplicate_request')).toBe('Already submitted with this request')
     expect(skipReasonLabel('awaiting_approval')).toBe(
       'This invoice is waiting on approval — it can be submitted once an approver approves it.',
     )
+    expect(skipReasonLabel('rule_change_pending')).toBe(
+      'A custom rule change is being applied to this invoice — it can be submitted once the change has been checked.',
+    )
     expect(skipReasonLabel('wat')).toBe('wat')
 
-    // Three tokens, three distinct non-empty sentences: a map collapsed onto one shared
-    // string would still satisfy the three assertions above once they all name it.
-    const labels = ['not_validated', 'duplicate_request', 'awaiting_approval'].map(skipReasonLabel)
-    expect(labels).toHaveLength(3)
-    expect(labels.filter((l) => l.length > 0)).toHaveLength(3)
-    expect(new Set(labels).size).toBe(3)
+    // Four tokens, four distinct non-empty sentences: a map collapsed onto one shared
+    // string would still satisfy the assertions above once they all name it.
+    const labels = ['not_validated', 'duplicate_request', 'awaiting_approval', 'rule_change_pending'].map(skipReasonLabel)
+    expect(labels).toHaveLength(4)
+    expect(labels.filter((l) => l.length > 0)).toHaveLength(4)
+    expect(new Set(labels).size).toBe(4)
+  })
+
+  // ruleChangePendingReason, internal/invoice/handlers.go; Go half: TestRuleChangePendingReason_MatchesTheSPASkipLabel.
+  it('the rule-change-pending label is the server sentence, byte for byte', () => {
+    expect(skipReasonLabel('rule_change_pending')).toBe(
+      'A custom rule change is being applied to this invoice — it can be submitted once the change has been checked.',
+    )
+    expect(skipReasonLabel('rule_change_pending')).not.toBe(skipReasonLabel('awaiting_approval'))
   })
 
   // The server owns this sentence: awaitingApprovalReason, internal/invoice/handlers.go. Its
@@ -3692,7 +3726,7 @@ describe('mbsPathToEditField: hostile input (adversarial)', () => {
 })
 
 describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regression guard)', () => {
-  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 31 keys mirrored from invoice.go, no more, no fewer', () => {
+  it('SYNC-1: the fixture (typed InvoiceRecord) carries exactly the 32 keys mirrored from invoice.go, no more, no fewer', () => {
     // Independently transcribed from internal/invoice/invoice.go:83-105 (Invoice struct
     // json tags). `expectedKeys` is a plain untyped string[] with no `keyof InvoiceRecord`
     // constraint tying it to the interface (invoices.ts:127-151), so nothing here would
@@ -3744,6 +3778,8 @@ describe('InvoiceRecord: field-by-field sync with invoice.go (adversarial, regre
       // same submitGate call the detail wire already used.
       'can_submit',
       'submit_blocked_reason',
+      // +1 -- demotion is a list-only listItem sibling.
+      'demotion',
       // line_items is optional (LineItems omitempty on List; the fixture omits it, as a
       // list-shaped record legitimately would).
     ]
@@ -3899,11 +3935,9 @@ describe('reasonFieldFlags: hostile input (adversarial)', () => {
 // on a real assertion against the [isfixable-deleted] export, which has not yet been
 // removed.
 
-// The five MBS content fields diffLineItems compares -- mirrors the unexported
-// `LineContent` type in invoices.ts (id/line_no deliberately excluded,
-// [fingerprint-excludes-line-ids]); this file can't import that type since it isn't
-// exported, so it's redeclared here structurally over the exported InvoiceLineItem.
-type LineFields = Pick<InvoiceLineItem, 'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax'>
+// The 14 content fields diffLineItems compares (line_no excluded, [fingerprint-excludes-line-ids]),
+// redeclared structurally over the exported InvoiceLineItem.
+type LineFields = Pick<InvoiceLineItem, LineEditKey>
 
 function lineFields(overrides: Partial<LineFields> = {}): LineFields {
   return {
@@ -3912,6 +3946,15 @@ function lineFields(overrides: Partial<LineFields> = {}): LineFields {
     unit_price: '100.00',
     line_total: '200.00',
     line_tax: '15.00',
+    tax_category: null,
+    hsn_code: null,
+    isic_code: null,
+    product_category: null,
+    service_category: null,
+    sellers_item_identification: null,
+    price_unit: null,
+    tax_percent: null,
+    base_quantity: null,
     ...overrides,
   }
 }
@@ -4054,6 +4097,32 @@ describe('diffLineItems (INVED-01-06)', () => {
     expect(diffLineItems(original, edited)).toBeUndefined()
   })
 
+  it('INV-06-T7e: a change in any one of the 14 line fields is a change', () => {
+    const original: LineFields[] = [lineFields(), lineFields({ description: 'Gadget' })]
+    const changes: Record<keyof LineFields, string> = {
+      description: 'Other',
+      quantity: '9',
+      unit_price: '9.00',
+      line_total: '9.00',
+      line_tax: '9.00',
+      tax_category: 'ZERO_VAT',
+      hsn_code: '1001',
+      isic_code: '6201',
+      product_category: 'Goods',
+      service_category: 'Services',
+      sellers_item_identification: 'SKU-9',
+      price_unit: 'KGM',
+      tax_percent: '5',
+      base_quantity: '9',
+    }
+    for (const field of Object.keys(changes) as (keyof LineFields)[]) {
+      const edited = original.map((l, i) => (i === 1 ? { ...l, [field]: changes[field] } : { ...l }))
+      expect(diffLineItems(original, edited), field).toBeDefined()
+    }
+    const idOnly = original.map((l) => ({ ...l, id: 'x', line_no: 7 }))
+    expect(diffLineItems(original, idOnly)).toBeUndefined()
+  })
+
   it('INV-06-T7c: diffLineItems never mutates either input array, and still returns the correct diff', () => {
     const original: LineFields[] = [lineFields()]
     const edited: LineFields[] = [lineFields({ description: 'Changed' })]
@@ -4111,20 +4180,114 @@ describe('diffLineItems (INVED-01-06)', () => {
     expect(diffLineItems(original, edited)).toEqual([b, a])
   })
 
-  it('INV-06-T9e: emitted objects carry exactly the five MBS fields, even when edited rows are built by spreading InvoiceLineItem', () => {
-    const original: LineFields[] = [lineFields({ description: 'Old' })]
-    // InvoiceLineItem-typed VARIABLE (not an inline literal) so `id`/`line_no` don't trip
-    // excess-property checking against diffLineItems' Pick<InvoiceLineItem, ...> parameter.
-    const editedWithIds: InvoiceLineItem[] = [
-      { id: 'line-1', line_no: 1, description: 'New', quantity: '2', unit_price: '100.00', line_total: '200.00', line_tax: '15.00' },
+  it('INV-06-T9e: emitted objects carry exactly the 14 fields, plus id exactly when the input row had one', () => {
+    const original: LineFields[] = [lineFields({ description: 'Old' }), lineFields({ description: 'Old 2' })]
+    const edited: Array<LineFields & { id?: string }> = [
+      { ...lineFields({ description: 'New' }), id: 'line-1' },
+      lineFields({ description: 'Added' }),
     ]
 
-    const result = diffLineItems(original, editedWithIds)
+    const result = diffLineItems(original, edited)
 
     expect(result).toBeDefined()
-    for (const row of result ?? []) {
-      expect(Object.keys(row).sort()).toEqual(['description', 'line_tax', 'line_total', 'quantity', 'unit_price'])
+    const fourteen = [...LINE_EDIT_FIELDS].sort()
+    expect(LINE_EDIT_FIELDS).toHaveLength(14)
+    expect(Object.keys(result?.[0] ?? {}).sort()).toEqual([...fourteen, 'id'].sort())
+    expect(Object.keys(result?.[1] ?? {}).sort()).toEqual(fourteen)
+  })
+
+  it('diffLineItems_carriesTheStoredLineId', () => {
+    const stored = [
+      { id: 'l-1', ...lineFields({ description: 'One' }) },
+      { id: 'l-2', ...lineFields({ description: 'Two' }) },
+    ]
+    const edited = [stored[0], { ...stored[1], description: 'Two changed' }]
+
+    expect(diffLineItems(stored, edited)?.map((r) => [r.id, r.description])).toEqual([
+      ['l-1', 'One'],
+      ['l-2', 'Two changed'],
+    ])
+  })
+
+  it('diffLineItems_nrsOnlyChangeIsAChange', () => {
+    const original = [lineFields()]
+    const result = diffLineItems(original, [lineFields({ hsn_code: '1001' })])
+
+    expect(result).toBeDefined()
+    expect(result?.[0].hsn_code).toBe('1001')
+  })
+
+  it('diffLineItems_addedRowHasNoId', () => {
+    const stored = [{ id: 'l-1', ...lineFields() }, { id: 'l-2', ...lineFields({ description: 'Two' }) }]
+    const result = diffLineItems(stored, [...stored, lineFields({ description: 'Three' })])
+
+    expect(result).toHaveLength(3)
+    expect(result?.[0].id).toBe('l-1')
+    expect(result?.[2]).not.toHaveProperty('id')
+  })
+
+  it('diffLineItems: a removed and re-added row with the same content is sent without id and with blank NRS keys', () => {
+    const stored = [{ id: 'l-1', ...lineFields({ hsn_code: '1001' }) }]
+    const result = diffLineItems(stored, [lineFields({ hsn_code: '' })])
+
+    expect(result).toHaveLength(1)
+    expect(result?.[0]).not.toHaveProperty('id')
+    expect(result?.[0].hsn_code).toBeNull()
+  })
+
+  it('diffLineItems_untouchedNrsLinesAreUndefined', () => {
+    const stored = [{ id: 'l-1', ...lineFields({ hsn_code: null, tax_percent: '7.50' }) }]
+    const edited = stored.map((l) => ({ ...l, hsn_code: '' }))
+
+    expect(diffLineItems(stored, edited)).toBeUndefined()
+  })
+})
+
+describe('editValueToWire', () => {
+  it('editValueToWire_nrsDateBecomesRfc3339', () => {
+    expect(editValueToWire('due_date', '2027-01-31')).toBe('2027-01-31T00:00:00Z')
+  })
+
+  it('editValueToWire_blankNrsKeyIsNull', () => {
+    expect(editValueToWire('buyer_email', '')).toBeNull()
+    expect(editValueToWire('due_date', '')).toBeNull()
+  })
+
+  it('editValueToWire_legacyKeysUnchanged', () => {
+    expect(editValueToWire('buyer_name', '')).toBe('')
+    expect(editValueToWire('issue_date', '')).toBeUndefined()
+    expect(editValueToWire('issue_date', '2026-08-15')).toBe('2026-08-15T00:00:00Z')
+  })
+
+  it('editValueToWire: a padded or blank NRS date, a time and a malformed date', () => {
+    expect(editValueToWire('tax_point_date', ' 2027-01-31 ')).toBe('2027-01-31T00:00:00Z')
+    expect(editValueToWire('tax_point_date', '   ')).toBeNull()
+    expect(editValueToWire('issue_date', '   ')).toBeUndefined()
+    expect(editValueToWire('issue_time', '09:05:00')).toBe('09:05:00')
+    expect(editValueToWire('due_date', '31/01/2027')).toBe('31/01/2027')
+    expect(editValueToWire('buyer_name', '2027-01-31')).toBe('2027-01-31')
+  })
+})
+
+describe('diffEditInput: NRS fields', () => {
+  it('diffEditInput_untouchedNrsRecordIsEmpty', () => {
+    const rec: Pick<InvoiceRecord, EditFieldKey> = {
+      ...draftInvoice,
+      due_date: '2027-01-31T00:00:00Z',
+      issue_time: '09:05:00',
+      buyer_email: null,
+      tax_point_date: null,
     }
+
+    expect(formFromInvoice(rec).due_date).toBe('2027-01-31')
+    expect(diffEditInput(rec, formFromInvoice(rec))).toEqual({})
+  })
+
+  it('a cleared NRS field is sent as null and a changed date as RFC3339', () => {
+    const rec: Pick<InvoiceRecord, EditFieldKey> = { ...draftInvoice, due_date: '2027-01-31T00:00:00Z', buyer_email: 'a@b.ng' }
+    const form = { ...formFromInvoice(rec), due_date: '2027-02-01', buyer_email: '' }
+
+    expect(diffEditInput(rec, form)).toEqual({ due_date: '2027-02-01T00:00:00Z', buyer_email: null })
   })
 })
 
@@ -5458,3 +5621,69 @@ describe('isBuyerTinMissing (task-413, BUG-05-04)', () => {
   })
 })
 
+
+describe('demotion (ENGI-15-08, D11)', () => {
+  const VERSION_CAUSE = { rule_set_version: 5, rule_set_version_id: 'rsv-5', effective_from: '2027-01-01' }
+  const CUSTOM_CAUSE = { custom_rule_id: 'cr-1', revision: 2, revision_id: 'rev-2', key: 'custom:cr-1', message: 'PO required' }
+  const at = (n: number) => `2026-07-01T${String(10 + n).padStart(2, '0')}:00:00Z`
+  function change(n: number, from: InvoiceStatus | null, to: InvoiceStatus, over: Partial<StatusChange> = {}): StatusChange {
+    return { from_status: from, to_status: to, actor: 'a', actor_name: 'A', actor_kind: 'person', changed_at: at(n), cause: null, custom_rule_cause: null, ...over }
+  }
+  const genesis = change(0, null, 'draft')
+  const validated = change(1, 'draft', 'validated')
+  const demoted = change(2, 'validated', 'draft', { cause: VERSION_CAUSE })
+
+  it('demotionSentence_bothCauses', () => {
+    expect(demotionSentence({ changed_at: at(2), cause: VERSION_CAUSE, custom_rule_cause: null })).toBe(
+      'Sent back to draft when rule set v5 took effect on 2027-01-01.',
+    )
+    expect(demotionSentence({ changed_at: at(2), cause: null, custom_rule_cause: CUSTOM_CAUSE })).toBe(
+      'Sent back to draft when the custom rule \u201cPO required\u201d changed.',
+    )
+  })
+
+  it('demotionSentence_undatedVersionOmitsTheDate', () => {
+    const d = { changed_at: at(2), cause: { ...VERSION_CAUSE, effective_from: null }, custom_rule_cause: null }
+    expect(demotionSentence(d)).toBe('Sent back to draft when rule set v5 took effect.')
+  })
+
+  // The seven cases of TestListDemotion_DB_NullUnlessLatestRowIsACausedDemotion
+  // (internal/invoice/list_demotion_test.go, buildDemotionCases), as history fixtures.
+  it('latestDemotion_matchesTheServerRule', () => {
+    const cases: { name: string; history: StatusChange[]; status: InvoiceStatus; want: boolean }[] = [
+      { name: 'version re-check demotion', history: [genesis, validated, demoted], status: 'draft', want: true },
+      { name: 'demoted then re-validated', history: [genesis, validated, demoted, change(3, 'draft', 'validated')], status: 'validated', want: false },
+      { name: 'draft never validated', history: [genesis], status: 'draft', want: false },
+      { name: 'validated to draft by an edit', history: [genesis, validated, change(2, 'validated', 'draft')], status: 'draft', want: false },
+      {
+        name: 'demoted, re-validated, then edited back to draft',
+        history: [genesis, validated, demoted, change(3, 'draft', 'validated'), change(4, 'validated', 'draft')],
+        status: 'draft',
+        want: false,
+      },
+      { name: 'demoted then edited, still draft (no new row)', history: [genesis, validated, demoted], status: 'draft', want: true },
+      { name: 'demoted, edited, re-validated, still failing (D21)', history: [genesis, validated, demoted], status: 'draft', want: true },
+    ]
+    for (const c of cases) {
+      const got = latestDemotion(c.history, c.status)
+      expect(got != null, c.name).toBe(c.want)
+      if (got) {
+        expect(got.cause, c.name).toEqual(VERSION_CAUSE)
+        expect(got.changed_at, c.name).toBe(at(2))
+      }
+    }
+  })
+
+  it('latestDemotion_customCauseAndEmptyHistory', () => {
+    const custom = change(2, 'validated', 'draft', { custom_rule_cause: CUSTOM_CAUSE })
+    expect(latestDemotion([genesis, validated, custom], 'draft')).toEqual({ changed_at: at(2), cause: null, custom_rule_cause: CUSTOM_CAUSE })
+    expect(latestDemotion([], 'draft')).toBeNull()
+    const laterCustom = change(4, 'validated', 'draft', { custom_rule_cause: CUSTOM_CAUSE })
+    const afterVersion = [genesis, validated, demoted, change(3, 'draft', 'validated'), laterCustom]
+    expect(latestDemotion(afterVersion, 'draft')).toEqual({ changed_at: at(4), cause: null, custom_rule_cause: CUSTOM_CAUSE })
+  })
+
+  it('latestDemotion_aNonDraftStatusIsNeverDemoted', () => {
+    expect(latestDemotion([genesis, validated, demoted], 'validated')).toBeNull()
+  })
+})

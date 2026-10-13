@@ -29,7 +29,7 @@
 //
 // Persona A only, fresh entities only: no cross-tenant writes.
 import { test, expect } from '@playwright/test'
-import { login, createEntity, offboardEntity, listEntities, rawFetch, PERSONAS } from './client'
+import { login, createEntity, getEntity, updateEntity, offboardEntity, listEntities, rawFetch, PERSONAS } from './client'
 import { freshTin } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
@@ -284,6 +284,28 @@ test.describe('portfolio contract (API E2E, over the deployed gateway)', () => {
       const list = await listEntities(token, { q: noMatchToken, limit: 200 })
       expect(list.entities).toEqual([])
       expect(list.pagination.total).toBe(0)
+    })
+  })
+
+  test.describe('company NRS keys', () => {
+    // internal/portfolio/portfolio.go's UpdateInput: the 8 contact and address keys.
+    test('an entity round-trips the NRS keys', async () => {
+      const tin = freshTin()
+      const created = await createEntity(token, { name: `ENGI-05 nrs keys ${tin}`, tin })
+      expect(created.email, 'an entity created without the keys reads them null').toBeNull()
+      const keys = {
+        email: `co-${tin}@example.com`,
+        telephone: '+2348012345678',
+        street: '12 Marina Road',
+        city: 'Lagos',
+        postal_zone: '101233',
+        country: 'NG',
+        state: 'Lagos',
+        lga: 'Lagos Island',
+      }
+      await updateEntity(token, created.id, keys)
+      const got = await getEntity(token, created.id)
+      expect(got).toMatchObject(keys)
     })
   })
 })

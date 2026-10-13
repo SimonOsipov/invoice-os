@@ -59,7 +59,7 @@ func jpAutoEntryIsComplete(entry map[string]string) bool {
 }
 
 // jpLoadLayouts reads $JEV_OUT/layouts.json. Fatal on absence, decode failure, zero layouts, or
-// any layout whose key does not hold all eleven canonicalFields.
+// any layout whose key does not hold every mappingFields key.
 func jpLoadLayouts(t *testing.T, dir string) []jpLayout {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(dir, "layouts.json"))
@@ -75,7 +75,7 @@ func jpLoadLayouts(t *testing.T, dir string) []jpLayout {
 	}
 	for _, l := range layouts {
 		if !jpKeyIsComplete(l.Key) {
-			t.Fatalf("layout %q's key does not hold all eleven canonical fields", l.ID)
+			t.Fatalf("layout %q's key does not hold every mapping field", l.ID)
 		}
 	}
 	return layouts
@@ -83,7 +83,7 @@ func jpLoadLayouts(t *testing.T, dir string) []jpLayout {
 
 // jpAutoSet reads $JEV_OUT/auto_placements.json: layout id -> field -> header, a JSON null
 // decoding to "" (an unplaced field, not an error; CHECK-01-06 §2.1). Fatal only on: file
-// absent, decode failure, an id not in layouts.json, or an entry missing one of the eleven keys
+// absent, decode failure, an id not in layouts.json, or an entry missing one of the mapping fields
 // -- an all-null entry (a layout that placed nothing) is normal output, never fatal.
 func jpAutoSet(t *testing.T, dir string, layouts []jpLayout) map[string]map[string]string {
 	t.Helper()
@@ -104,7 +104,7 @@ func jpAutoSet(t *testing.T, dir string, layouts []jpLayout) map[string]map[stri
 			t.Fatalf("auto_placements.json names layout %q, absent from layouts.json", id)
 		}
 		if !jpAutoEntryIsComplete(entry) {
-			t.Fatalf("auto_placements.json entry %q does not hold all eleven canonical fields", id)
+			t.Fatalf("auto_placements.json entry %q does not hold every mapping field", id)
 		}
 	}
 	return raw
@@ -451,7 +451,7 @@ func TestJevMapping_Measure(t *testing.T) {
 
 func jpKeyPtr(s string) *string { return &s }
 
-// jpFullKey builds an eleven-field Key map, [null] for every field not named in overrides.
+// jpFullKey builds a full Key map, [null] for every field not named in overrides.
 func jpFullKey(overrides map[string][]*string) map[string][]*string {
 	key := make(map[string][]*string, len(mappingFields))
 	for _, f := range mappingFields {
@@ -486,8 +486,8 @@ func jpWriteCSV(t *testing.T, dir, id, content string) {
 }
 
 // jpWriteAutoPlacements writes $JEV_OUT/auto_placements.json, filling every layout's entry out
-// to all eleven canonical fields ("" for anything the caller did not set) -- CHECK-01-06's own
-// shape (AC-2: every layout gets a full eleven-key mapping).
+// to every mapping field ("" for anything the caller did not set) -- CHECK-01-06's own
+// shape (AC-2: every layout gets a full mapping).
 func jpWriteAutoPlacements(t *testing.T, dir string, placements map[string]map[string]string) {
 	t.Helper()
 	full := make(map[string]map[string]string, len(placements))
@@ -1046,7 +1046,7 @@ func TestJevMapping_AutoAndAIAreReportedSeparately(t *testing.T) {
 // Row 15. busy_01 has 3 AUTO placements and 5 AI placements -> exactly 2 requests, one carrying
 // 3 questions, the other 5. quiet_01 has an all-null AUTO entry and 2 AI placements -> exactly 1
 // further request, the AI one -- without this leg an implementation that always calls once per
-// layout per set burns 15 pointless calls on the real 48-layout corpus.
+// layout per set burns 15 pointless calls on the real 72-layout corpus.
 func TestJevMapping_OneLayoutSetProducesOneCall(t *testing.T) {
 	dir := t.TempDir()
 	layouts := []jpLayout{
@@ -1274,10 +1274,10 @@ func TestJevMapping_AnAllNullAutoEntryPlacesNothingAndIsNotAnError(t *testing.T)
 		t.Errorf("full_01[invoice_number] = %q, want %q", got["full_01"]["invoice_number"], "Invoice No")
 	}
 
-	// Control/floor: an entry missing one of the eleven keys is a real malformed artifact, not
+	// Control/floor: an entry missing one mapping field is a real malformed artifact, not
 	// an all-null one -- tested on the pure predicate jpAutoSet's fatal check is built from.
 	if jpAutoEntryIsComplete(map[string]string{"invoice_number": "X"}) {
-		t.Errorf("jpAutoEntryIsComplete must be false for an entry missing 10 of the 11 keys")
+		t.Errorf("jpAutoEntryIsComplete must be false for an entry missing all but one mapping field")
 	}
 	full := map[string]string{}
 	for _, f := range mappingFields {
@@ -1288,10 +1288,10 @@ func TestJevMapping_AnAllNullAutoEntryPlacesNothingAndIsNotAnError(t *testing.T)
 	}
 }
 
-// --- new: the 528-slot invariant (deliberately NOT pinning the 56) -------------------------
+// --- new: the 2592-slot invariant (deliberately NOT pinning the 56) -------------------------
 
-// Row 19. Over the REAL generated corpus: asked + not-asked == 528 (48 layouts x 11 fields) and
-// documents == 48. Deliberately does not pin the 56 placements (a property of the shipped alias
+// Row 19. Over the REAL generated corpus: asked + not-asked == 2592 (72 layouts x 36 fields) and
+// documents == 72. Deliberately does not pin the 56 placements (a property of the shipped alias
 // table, not the generator; CHECK-01-04 D-7 rules against a second corpus ratchet). Gated on
 // JEV_OUT holding a real corpus -- CI's go job has neither python3-generated layouts.json nor a
 // pnpm-built auto_placements.json on hand, so this declines (logs, returns) rather than skips;
@@ -1312,13 +1312,13 @@ func TestJevMapping_TheAutoSetCoversEveryLayoutAndEverySlot(t *testing.T) {
 	}
 
 	layouts := jpLoadLayouts(t, dir)
-	if len(layouts) != 48 {
-		t.Fatalf("layouts.json holds %d layout(s), want 48", len(layouts))
+	if len(layouts) != 72 {
+		t.Fatalf("layouts.json holds %d layout(s), want 72", len(layouts))
 	}
 	auto := jpAutoSet(t, dir, layouts)
 
 	// Count the slots the ARTIFACT carries, never len(layouts) x len(mappingFields): the loop
-	// walks those two and would sum to 528 whatever jpAutoSet returned.
+	// walks those two and would sum to 2592 whatever jpAutoSet returned.
 	asked, notAsked, slots := 0, 0, 0
 	for _, l := range layouts {
 		entry, ok := auto[l.ID]
@@ -1335,14 +1335,14 @@ func TestJevMapping_TheAutoSetCoversEveryLayoutAndEverySlot(t *testing.T) {
 			}
 		}
 	}
-	if slots != 528 {
-		t.Errorf("the AUTO artifact carries %d slot(s), want 528 (48 layouts x 11 fields)", slots)
+	if slots != 2592 {
+		t.Errorf("the AUTO artifact carries %d slot(s), want 2592 (72 layouts x 36 fields)", slots)
 	}
 	if asked+notAsked != slots {
 		t.Errorf("asked(%d) + not-asked(%d) = %d, want every one of the %d slots", asked, notAsked, asked+notAsked, slots)
 	}
 	if asked == 0 {
-		t.Errorf("the AUTO artifact places nothing at all over 48 layouts -- a reader that answered empty strings reads exactly this way")
+		t.Errorf("the AUTO artifact places nothing at all over 72 layouts -- a reader that answered empty strings reads exactly this way")
 	}
 }
 

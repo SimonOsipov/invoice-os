@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/customrule"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 )
 
@@ -106,23 +107,45 @@ type Violation struct {
 type ValidateItem struct {
 	Ref     string         `json:"ref"`
 	Invoice map[string]any `json:"invoice"`
+	// CustomRuleSets names the request-level sets that also judge this item.
+	CustomRuleSets []string `json:"custom_rule_sets,omitempty"`
 }
 
-// ValidateResult is one batch's outcome: the rule-set the whole batch was
-// evaluated against (stamped ONCE per batch -- one load means one version),
-// plus every sent ref's violations.
+// CustomRule is one custom rule on the batch wire; ID is the revision id the result echoes.
+type CustomRule struct {
+	ID       string          `json:"id"`
+	Key      string          `json:"key"`
+	Type     string          `json:"type"`
+	Target   string          `json:"target"`
+	Params   json.RawMessage `json:"params"`
+	Severity string          `json:"severity"`
+	When     *string         `json:"when"`
+	Message  string          `json:"message"`
+}
+
+// Stamp is the rule-set version that judged one invoice.
+type Stamp struct {
+	Version int
+	ID      string
+}
+
+// ValidateResult is one batch's outcome: every sent ref's violations and the
+// version that judged each ref (StampByRef), plus the lowest version in the
+// batch (RuleSetVersion, the import report's stamp).
 //
 // This is an in-process return type, not a wire type -- it carries no json
 // tags because it never crosses the wire (validateBatchResponse below does).
-// ByRef is TOTAL over the sent refs by construction: Validate refuses any
-// response that does not cover them, so a missing key is unrepresentable
-// rather than merely untested. That matters because an absent map key returns
-// nil, which reads to a caller as "no violations" -- i.e. as a clean verdict on
-// an invoice 04 never actually judged. [Stage-1 F5]
+// ByRef and StampByRef are TOTAL over the sent refs by construction: Validate
+// refuses any response that does not cover them, so a missing key is
+// unrepresentable rather than merely untested. That matters because an absent
+// map key returns nil, which reads to a caller as "no violations" -- i.e. as a
+// clean verdict on an invoice 04 never actually judged. [Stage-1 F5]
 type ValidateResult struct {
-	RuleSetVersion   int
-	RuleSetVersionID string
-	ByRef            map[string][]Violation
+	RuleSetVersion int
+	StampByRef     map[string]Stamp
+	ByRef          map[string][]Violation
+	// CustomByRef holds the custom-rule revision ids each ref was judged by; total, [] when none.
+	CustomByRef map[string][]string
 }
 
 // validateBatchRequest / validateBatchItemResult / validateBatchResponse are
@@ -131,12 +154,16 @@ type ValidateResult struct {
 // response's results is a LIST in request order; ByRef's map is built from it
 // only after the totality check in Validate.
 type validateBatchRequest struct {
-	Invoices []ValidateItem `json:"invoices"`
+	Invoices       []ValidateItem          `json:"invoices"`
+	CustomRuleSets map[string][]CustomRule `json:"custom_rule_sets,omitempty"`
 }
 
 type validateBatchItemResult struct {
-	Ref        string      `json:"ref"`
-	Violations []Violation `json:"violations"`
+	Ref              string      `json:"ref"`
+	Violations       []Violation `json:"violations"`
+	RuleSetVersion   int         `json:"rule_set_version"`
+	RuleSetVersionID string      `json:"rule_set_version_id"`
+	CustomRuleIDs    []string    `json:"custom_rule_ids"`
 }
 
 type validateBatchResponse struct {
@@ -169,8 +196,7 @@ func NewValidator(baseURL, s2sToken string, hc *http.Client) *Validator {
 }
 
 // Validate submits items to 04 in one round trip and returns each ref's
-// violations, stamped with the single rule-set they were all evaluated
-// against.
+// violations and the rule-set version that judged it.
 //
 // Errors, never verdicts: a transport failure, a timeout, any non-200 status,
 // an unparseable body, or a response that does not cover every sent ref all
@@ -185,7 +211,14 @@ func NewValidator(baseURL, s2sToken string, hc *http.Client) *Validator {
 // Sends X-S2S-Token and nothing else identifying: no X-Tenant-ID, no X-User-*.
 // 04's batch surface reads no tenant, so 03 asserts none ([s2s-identity]).
 func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (ValidateResult, error) {
-	body, err := json.Marshal(validateBatchRequest{Invoices: items})
+	return v.ValidateCustom(ctx, items, nil)
+}
+
+// ValidateCustom is Validate with request-level custom rule sets that items name. For an item
+// that names sets, the echoed custom_rule_ids must equal the union of their ids; an item that
+// names none accepts an absent or empty field (a rolling deploy) and refuses any id.
+func (v *Validator) ValidateCustom(ctx context.Context, items []ValidateItem, sets map[string][]CustomRule) (ValidateResult, error) {
+	body, err := json.Marshal(validateBatchRequest{Invoices: items, CustomRuleSets: sets})
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("%w: marshal batch request: %v", ErrUpstream, err)
 	}
@@ -245,7 +278,13 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 	}
 
 	byRef := make(map[string][]Violation, len(wire.Results))
+	stamps := make(map[string]Stamp, len(wire.Results))
+	custom := make(map[string][]string, len(wire.Results))
 	for _, r := range wire.Results {
+		if r.CustomRuleIDs == nil {
+			r.CustomRuleIDs = []string{}
+		}
+		custom[r.Ref] = r.CustomRuleIDs
 		// nil -> []Violation{}: a nil Go slice encodes as SQL NULL, and
 		// invoices.violations is jsonb NOT NULL -- M4-04-05's write would raise
 		// 23502 ([violations-write]).
@@ -253,6 +292,7 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 			r.Violations = []Violation{}
 		}
 		byRef[r.Ref] = r.Violations
+		stamps[r.Ref] = Stamp{Version: r.RuleSetVersion, ID: r.RuleSetVersionID}
 	}
 
 	// TOTALITY: the response must cover every sent ref before ByRef is built.
@@ -277,9 +317,80 @@ func (v *Validator) Validate(ctx context.Context, items []ValidateItem) (Validat
 		}
 	}
 
+	// D7: the echo is the proof the custom rules ran; an old service ignores unknown request
+	// fields, so a missing echo for a named set is fail-open and refused.
+	for _, it := range items {
+		want := map[string]bool{}
+		for _, name := range it.CustomRuleSets {
+			for _, r := range sets[name] {
+				want[r.ID] = true
+			}
+		}
+		got := custom[it.Ref]
+		seen := map[string]bool{}
+		for _, id := range got {
+			seen[id] = true
+		}
+		ok := len(got) == len(want) && len(seen) == len(want)
+		for id := range seen {
+			ok = ok && want[id]
+		}
+		if !ok {
+			return ValidateResult{}, fmt.Errorf("%w: ref %q echoed custom rules %v, want %d of its named sets",
+				ErrUpstream, it.Ref, got, len(want))
+		}
+	}
+
+	// A stamp is never guessed: every item carries one, or the response is an outage.
+	for ref, st := range stamps {
+		if st.ID == "" || st.Version < 1 {
+			return ValidateResult{}, fmt.Errorf("%w: batch response stamp for ref %q is invalid (version %d, id %q)",
+				ErrUpstream, ref, st.Version, st.ID)
+		}
+	}
+
 	return ValidateResult{
-		RuleSetVersion:   wire.RuleSetVersion,
-		RuleSetVersionID: wire.RuleSetVersionID,
-		ByRef:            byRef,
+		RuleSetVersion: wire.RuleSetVersion,
+		StampByRef:     stamps,
+		ByRef:          byRef,
+		CustomByRef:    custom,
 	}, nil
+}
+
+// CheckCustomRule asks the validation service whether a rule may be saved: 204 -> nil,
+// 422 -> customrule.InvalidError, anything else -> ErrUpstream.
+func (v *Validator) CheckCustomRule(ctx context.Context, in customrule.CheckInput) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("%w: marshal custom rule check: %v", ErrUpstream, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, v.baseURL+"/v1/custom-rules/check", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("%w: build custom rule check: %v", ErrUpstream, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(headerS2SToken, v.s2sToken)
+	resp, err := v.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: post custom rule check: %v", ErrUpstream, err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode >= http.StatusInternalServerError {
+		platform.ReportedElsewhere(ctx)
+	}
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		return nil
+	case http.StatusUnprocessableEntity:
+		var out struct {
+			Error string `json:"error"`
+		}
+		if json.NewDecoder(resp.Body).Decode(&out) == nil && out.Error != "" {
+			return customrule.InvalidError{Msg: out.Error}
+		}
+	}
+	return fmt.Errorf("%w: validation service returned status %d", ErrUpstream, resp.StatusCode)
 }

@@ -25,6 +25,8 @@ import {
 } from './entityForm'
 import type { Entity } from './portfolio'
 
+const NRS_BLANK = { email: '', telephone: '', street: '', city: '', postalZone: '', country: '', state: '', lga: '' }
+
 function baseEntity(overrides: Partial<Entity> = {}): Entity {
   return {
     id: 'e1',
@@ -72,7 +74,7 @@ describe('validateEntityForm', () => {
   })
 
   it('ADV: both name and tin blank produces both errors (independent object literal, not emptyEntityForm())', () => {
-    const result = validateEntityForm({ name: '', tin: '', registration: '', sector: '', address: '' })
+    const result = validateEntityForm({ name: '', tin: '', registration: '', sector: '', address: '', ...NRS_BLANK })
 
     expect(result.valid).toBe(false)
     expect(result.errors.name).toBeTruthy()
@@ -88,6 +90,7 @@ describe('toEntityInput (create path)', () => {
       registration: '',
       sector: '',
       address: '',
+      ...NRS_BLANK,
     })
 
     expect(result).toEqual({ name: 'Acme', tin: '123' })
@@ -103,6 +106,7 @@ describe('toEntityInput (create path)', () => {
       registration: '',
       sector: '   ',
       address: '',
+      ...NRS_BLANK,
     })
 
     expect(result).toEqual({ name: 'Acme', tin: '0000000000' })
@@ -116,6 +120,7 @@ describe('toEntityInput (create path)', () => {
       registration: ' RC123456 ',
       sector: ' Freight ',
       address: ' 12 Marina Rd, Lagos ',
+      ...NRS_BLANK,
     })
 
     expect(result).toEqual({
@@ -160,6 +165,7 @@ describe('entityFormFrom', () => {
       registration: 'RC123456',
       sector: 'Freight',
       address: '12 Marina Rd, Lagos',
+      ...NRS_BLANK,
     })
   })
 })
@@ -243,7 +249,7 @@ describe('mapSubmitError', () => {
 describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
   it('F9: a cleared optional (sector "Freight" -> "") is sent as {sector:""}, nothing else', () => {
     const original = baseEntity({ name: 'Acme', tin: '0000000000', sector: 'Freight', registration: null, address: null })
-    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: '' }
+    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: '', ...NRS_BLANK }
 
     const result = toEntityUpdateInput(original, state)
 
@@ -252,7 +258,7 @@ describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
 
   it('F10: a changed required field (name) is the only key in the diff; unchanged tin is omitted', () => {
     const original = baseEntity({ name: 'Acme', tin: '0000000000', registration: null, sector: null, address: null })
-    const state: EntityFormState = { name: 'AcmeCorp', tin: '0000000000', registration: '', sector: '', address: '' }
+    const state: EntityFormState = { name: 'AcmeCorp', tin: '0000000000', registration: '', sector: '', address: '', ...NRS_BLANK }
 
     const result = toEntityUpdateInput(original, state)
 
@@ -262,7 +268,7 @@ describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
 
   it('F11: a null optional (sector) and an untouched empty-string form value normalize equal — no spurious clear', () => {
     const original = baseEntity({ name: 'Acme', tin: '0000000000', sector: null, registration: null, address: null })
-    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: '' }
+    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: '', ...NRS_BLANK }
 
     const result = toEntityUpdateInput(original, state)
 
@@ -286,7 +292,7 @@ describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
 
   it('ADV: clearing a previously-set optional (sector) sends {sector:""} — the whole point of fix-now ([A-k])', () => {
     const original = baseEntity({ name: 'Acme', tin: '0000000000', sector: 'Retail', registration: null, address: null })
-    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: '' }
+    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: '', ...NRS_BLANK }
 
     const result = toEntityUpdateInput(original, state)
 
@@ -295,7 +301,7 @@ describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
 
   it('ADV: a whitespace-equivalent name edit is a no-op (trim normalizes both sides, not a spurious diff)', () => {
     const original = baseEntity({ name: 'Acme', tin: '0000000000' })
-    const state: EntityFormState = { name: ' Acme ', tin: '0000000000', registration: '', sector: '', address: '' }
+    const state: EntityFormState = { name: ' Acme ', tin: '0000000000', registration: '', sector: '', address: '', ...NRS_BLANK }
 
     const result = toEntityUpdateInput(original, state)
 
@@ -304,7 +310,7 @@ describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
 
   it('ADV: changing a required field and clearing an optional together produces both keys, cleared one as ""', () => {
     const original = baseEntity({ name: 'Acme', tin: '0000000000', sector: 'Retail', registration: null, address: null })
-    const state: EntityFormState = { name: 'AcmeCorp', tin: '0000000000', registration: '', sector: '', address: '' }
+    const state: EntityFormState = { name: 'AcmeCorp', tin: '0000000000', registration: '', sector: '', address: '', ...NRS_BLANK }
 
     const result = toEntityUpdateInput(original, state)
 
@@ -313,7 +319,7 @@ describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
 
   it('ADV: original optional null + state left at "" (untouched) normalizes equal — not in diff', () => {
     const original = baseEntity({ name: 'Acme', tin: '0000000000', address: null, registration: null, sector: null })
-    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: '' }
+    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: '', ...NRS_BLANK }
 
     const result = toEntityUpdateInput(original, state)
 
@@ -322,7 +328,7 @@ describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
 
   it('ADV: original optional null + state sets a real value produces {field: value}', () => {
     const original = baseEntity({ name: 'Acme', tin: '0000000000', address: null, registration: null, sector: null })
-    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: 'X' }
+    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: '', sector: '', address: 'X', ...NRS_BLANK }
 
     const result = toEntityUpdateInput(original, state)
 
@@ -331,7 +337,7 @@ describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
 
   it('ADV: nothing changed yields a literal empty object (not undefined) — caller can safely check emptiness to skip the PATCH', () => {
     const original = baseEntity({ name: 'Acme', tin: '0000000000', sector: 'Retail', registration: 'RC1', address: 'Lagos' })
-    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: 'RC1', sector: 'Retail', address: 'Lagos' }
+    const state: EntityFormState = { name: 'Acme', tin: '0000000000', registration: 'RC1', sector: 'Retail', address: 'Lagos', ...NRS_BLANK }
 
     const result = toEntityUpdateInput(original, state)
 
@@ -355,10 +361,111 @@ describe('toEntityUpdateInput (edit path, diff-based, [A-k])', () => {
 
   it('ADV (documents current behavior, NOT flagged as a defect — server also blank-checks Name, portfolio.go:310-325): clearing the required name field still slips into the diff as "" because the mapper has no required-field guard; callers must gate with validateEntityForm before calling toEntityUpdateInput', () => {
     const original = baseEntity({ name: 'Acme', tin: '0000000000' })
-    const state: EntityFormState = { name: '', tin: '0000000000', registration: '', sector: '', address: '' }
+    const state: EntityFormState = { name: '', tin: '0000000000', registration: '', sector: '', address: '', ...NRS_BLANK }
 
     const result = toEntityUpdateInput(original, state)
 
     expect(result).toEqual({ name: '' })
+  })
+})
+
+describe('NRS buyer fields', () => {
+  it('toEntityInput omits empty NRS fields and trims the rest', () => {
+    const result = toEntityInput({ ...emptyEntityForm(), name: 'Acme', tin: '0000000000', email: ' a@x.ng ', city: '', lga: '   ' })
+
+    expect(result).toEqual({ name: 'Acme', tin: '0000000000', email: 'a@x.ng' })
+    expect(result).not.toHaveProperty('city')
+    expect(result).not.toHaveProperty('lga')
+  })
+
+  it('toEntityUpdateInput sends a changed NRS field and \'\' for a cleared one', () => {
+    const original = baseEntity({ state: 'NG-LA', lga: 'NG-LA-001' })
+    const state = { ...entityFormFrom(original), state: 'NG-FC', lga: '' }
+
+    expect(toEntityUpdateInput(original, state)).toEqual({ state: 'NG-FC', lga: '' })
+  })
+
+  it('toEntityUpdateInput maps postalZone to postal_zone', () => {
+    const original = baseEntity()
+    const state = { ...entityFormFrom(original), postalZone: '100001' }
+
+    expect(toEntityUpdateInput(original, state)).toEqual({ postal_zone: '100001' })
+  })
+
+  it('an entity with all 8 fields round-trips through entityFormFrom to an empty diff', () => {
+    const entity = baseEntity({
+      email: 'a@x.ng',
+      telephone: '+2348000000000',
+      street: '1 Marina',
+      city: 'Lagos',
+      postal_zone: '100001',
+      country: 'NG',
+      state: 'NG-LA',
+      lga: 'NG-LA-001',
+    })
+
+    expect(entityFormFrom(entity)).toMatchObject({ postalZone: '100001', telephone: '+2348000000000', lga: 'NG-LA-001' })
+    expect(toEntityUpdateInput(entity, entityFormFrom(entity))).toEqual({})
+  })
+})
+
+const NRS_PAIRS = [
+  ['email', 'email'],
+  ['telephone', 'telephone'],
+  ['street', 'street'],
+  ['city', 'city'],
+  ['postalZone', 'postal_zone'],
+  ['country', 'country'],
+  ['state', 'state'],
+  ['lga', 'lga'],
+] as const
+
+describe('NRS buyer fields, one by one', () => {
+  it('covers 8 distinct fields', () => {
+    expect(new Set(NRS_PAIRS.map((p) => p[0])).size).toBe(8)
+  })
+
+  it.each(NRS_PAIRS)('create: %s is trimmed into %s and its siblings are omitted', (formKey, wireKey) => {
+    const result = toEntityInput({ ...emptyEntityForm(), name: 'Acme', tin: '0000000000', [formKey]: `  v-${formKey} ` })
+    expect(result).toEqual({ name: 'Acme', tin: '0000000000', [wireKey]: `v-${formKey}` })
+  })
+
+  it.each(NRS_PAIRS)('create: a whitespace-only %s is omitted', (formKey) => {
+    const result = toEntityInput({ ...emptyEntityForm(), name: 'Acme', tin: '0000000000', [formKey]: '   ' })
+    expect(Object.keys(result).sort()).toEqual(['name', 'tin'])
+  })
+
+  it.each(NRS_PAIRS)('edit: only a changed %s is sent, as %s, trimmed', (formKey, wireKey) => {
+    const original = baseEntity({ [wireKey]: 'old' })
+    const state = { ...entityFormFrom(original), [formKey]: ' new ' }
+    expect(toEntityUpdateInput(original, state)).toEqual({ [wireKey]: 'new' })
+  })
+
+  it.each(NRS_PAIRS)('edit: a cleared %s sends an empty string for %s', (formKey, wireKey) => {
+    const original = baseEntity({ [wireKey]: 'old' })
+    const state = { ...entityFormFrom(original), [formKey]: '' }
+    expect(toEntityUpdateInput(original, state)).toEqual({ [wireKey]: '' })
+  })
+
+  it.each(NRS_PAIRS)('edit: a whitespace-only %s on an unset field is no change', (formKey) => {
+    const original = baseEntity()
+    const state = { ...entityFormFrom(original), [formKey]: '   ' }
+    expect(toEntityUpdateInput(original, state)).toEqual({})
+  })
+
+  it.each(NRS_PAIRS)('edit: an untouched %s is not sent while another field changes', (formKey, wireKey) => {
+    const original = baseEntity({ [wireKey]: 'keep' })
+    const state = { ...entityFormFrom(original), name: 'Renamed' }
+    const diff = toEntityUpdateInput(original, state)
+    expect(diff).toEqual({ name: 'Renamed' })
+    expect(diff).not.toHaveProperty(wireKey)
+    expect(formKey.length).toBeGreaterThan(0)
+  })
+
+  it('an entity with null NRS keys and one missing the keys both form to empty strings', () => {
+    const nulls = baseEntity({ email: null, telephone: null, street: null, city: null, postal_zone: null, country: null, state: null, lga: null })
+    expect(entityFormFrom(nulls)).toMatchObject(NRS_BLANK)
+    expect(entityFormFrom(baseEntity())).toMatchObject(NRS_BLANK)
+    expect(toEntityUpdateInput(nulls, entityFormFrom(nulls))).toEqual({})
   })
 })

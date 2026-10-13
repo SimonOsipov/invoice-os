@@ -49,11 +49,8 @@ export const crosshairGlyph = (
   <Icon paths={['M12 2v4', 'M12 18v4', 'M2 12h4', 'M18 12h4', 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z']} size={16} />
 )
 
-// Rules screen: the lock replaces the toggle on every inherited row, and the star
-// heads the "Suggested for you" card (same glyph the Support Console's learned-rules
-// inbox uses, so the two surfaces read as the same idea).
+// Rules screen: the lock replaces the toggle on every inherited row.
 export const lockGlyph = <Icon paths={['M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2Z', 'M7 11V7a5 5 0 0 1 10 0v4']} size={11} />
-export const sparkGlyph = <Icon paths={['M12 3 14.09 8.26 20 9.27l-4 3.64L17.18 19 12 16.1 6.82 19 8 12.91l-4-3.64 5.91-1.01z']} size={15} />
 
 // Settings › Members: the per-row `⋯` overflow-menu trigger, and the only new icon the
 // members story adds. There was no row menu anywhere in the app before it, so nothing

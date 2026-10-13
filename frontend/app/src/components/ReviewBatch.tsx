@@ -53,6 +53,8 @@ import {
   runUnit,
   TILE_CAPTION_VALID,
   unreadableRowsAll,
+  unvalidatedDraftCount,
+  unvalidatedDraftNotice,
   type FileStripRow,
   type ReviewTab,
   type ReviewUnit,
@@ -249,6 +251,7 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
 
   const rows = unreadableRowsAll(batches)
   const alreadyImportedRows = alreadyImportedRowsAll(batches)
+  const unvalidatedDrafts = unvalidatedDraftCount(batches)
   const tiles = channelTilesAll(batches, { cleanTotal, failingTotal })
   const header = reviewHeaderAll(batches, { allTotal }, unit)
   const tabs = reviewTabs({ invoices: allTotal, unreadable: tiles.frozen.unreadable, alreadyImported: tiles.frozen.alreadyImported }, unit)
@@ -401,6 +404,15 @@ export function ReviewBatch({ ctx }: { ctx: PlatformCtx }) {
           showsSourceFile's own ">1" threshold). Reused, never re-derived, by
           RejectedRun above for the all-rejected multi-file surface. */}
       {files.length > 1 && <FilesStripView files={files} />}
+
+      {unvalidatedDrafts > 0 && (
+        <div
+          data-testid="review-unvalidated-drafts"
+          style={{ padding: '12px 16px', borderRadius: 'var(--radius-md)', background: 'var(--status-muted-bg)', border: '1px solid var(--status-muted-border)', color: 'var(--status-muted-text)', fontSize: 13 }}
+        >
+          {unvalidatedDraftNotice(unvalidatedDrafts)}
+        </div>
+      )}
 
       {/* §7.2 tabs. SettingsView.tsx's precedent: .pf-tab, NOT .pf-btn — the button
           classes force `border-radius` with `!important`.

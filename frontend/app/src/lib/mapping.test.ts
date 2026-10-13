@@ -59,9 +59,10 @@ describe('initMappingFromHeaders', () => {
     expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
   })
 
-  it('leaves exactly the four unrecognised fields to be placed by hand', () => {
+  it('leaves every field without an alias match to be placed by hand', () => {
     const unplaced = Object.keys(initMappingFromHeaders(HEADERS)).filter((k) => !initMappingFromHeaders(HEADERS)[k])
-    expect(unplaced.sort()).toEqual(['buyer_name', 'invoice_number', 'line_description', 'subtotal'])
+    const aliasPlaced = ['issue_date', 'buyer_tin', 'currency', 'vat', 'total', 'line_quantity', 'line_unit_price']
+    expect(unplaced.sort()).toEqual(CANON.map((c) => c.key).filter((k) => !aliasPlaced.includes(k)).sort())
   })
 
   // MAP-01
@@ -83,8 +84,8 @@ describe('initMappingFromHeaders', () => {
     expect(initMappingFromHeaders(HEADERS).invoice_number).toBeNull()
   })
 
-  // MAP-03: an empty header array still returns all 11 CANON keys, all null.
-  it('returns exactly the 11 CANON keys, every value null, for an empty header array', () => {
+  // MAP-03: an empty header array still returns every CANON key, all null.
+  it('returns exactly the CANON keys, every value null, for an empty header array', () => {
     const map = initMappingFromHeaders([])
     expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
     expect(Object.values(map).every((v) => v === null)).toBe(true)
@@ -100,7 +101,7 @@ describe('initMappingFromHeaders', () => {
   })
 
   // MAP-12: duplicate headers resolve to the first occurrence, matching the
-  // server's first-match resolveMapping behaviour; still exactly 11 keys back.
+  // server's first-match resolveMapping behaviour; still every CANON key back.
   it('resolves duplicate headers to the first occurrence', () => {
     const map = initMappingFromHeaders(['VAT', 'VAT', 'Total'])
     expect(map.vat).toBe('VAT')
@@ -130,17 +131,10 @@ describe('restoreMapping', () => {
     const result = restoreMapping(PERF_COLS, saved)
 
     expect(result).toEqual({
+      ...Object.fromEntries(CANON.map((c) => [c.key, null])),
       invoice_number: 'Invoice No',
-      issue_date: null,
-      buyer_tin: null,
-      buyer_name: null,
-      currency: null,
       subtotal: 'Subtotal',
-      vat: null,
       total: 'Total',
-      line_description: null,
-      line_quantity: null,
-      line_unit_price: null,
     })
     expect(Object.keys(result).sort()).toEqual(CANON.map((c) => c.key).sort())
   })
@@ -158,7 +152,7 @@ describe('restoreMapping', () => {
 // QA (M4-08-03): adversarial/edge coverage beyond the architect's MAP-01..14
 // specs. New describe blocks only — nothing above this point is modified.
 describe('initMappingFromHeaders — adversarial edge cases (QA)', () => {
-  it('returns exactly the 11 CANON keys, every value null, when every header is blank', () => {
+  it('returns exactly the CANON keys, every value null, when every header is blank', () => {
     const map = initMappingFromHeaders(['', '', ''])
     expect(Object.keys(map).sort()).toEqual(CANON.map((c) => c.key).sort())
     expect(Object.values(map).every((v) => v === null)).toBe(true)
@@ -229,19 +223,7 @@ describe('toImportMapping', () => {
 
   // MAP-07: a fully-placed mapping round-trips unchanged, and the input is not mutated.
   it('passes through a fully-placed mapping unchanged, without mutating the input', () => {
-    const full: Mapping = {
-      invoice_number: 'Invoice No',
-      issue_date: 'Issue Date',
-      buyer_tin: 'Buyer TIN',
-      buyer_name: 'Customer',
-      currency: 'Currency',
-      subtotal: 'Net',
-      vat: 'VAT',
-      total: 'Total',
-      line_description: 'Item',
-      line_quantity: 'Qty',
-      line_unit_price: 'Unit Price',
-    }
+    const full: Mapping = Object.fromEntries(CANON.map((c) => [c.key, `Col ${c.key}`]))
     const snapshot = { ...full }
     const result = toImportMapping(full)
     expect(Object.keys(result).sort()).toEqual(CANON.map((c) => c.key).sort())

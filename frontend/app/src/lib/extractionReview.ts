@@ -10,7 +10,7 @@ import { isPromiseLike } from './authedFetch'
 import { fmtTimeWAT } from './format'
 import type { LineItemInput } from './lineItems'
 import type { AuthedFetch } from './portfolio'
-import { EDIT_FIELD_LABELS } from './reviewBatch'
+import { INVOICE_FIELDS } from './invoiceFields'
 import { formatBytes, type DocumentBytes } from './sourceDocument'
 
 // internal/extraction/reader.go, ExtractionRegion. Normalised [0,1], TOP-LEFT origin, page
@@ -31,9 +31,9 @@ export interface ExtractionPage {
   height_px: number
 }
 
-// The four reason_code values extraction_field_results' CHECK admits, plus '' for a clean
-// field. A union, not string: the wire cannot carry a fifth code.
-export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing'
+// The reason_code values extraction_field_results' CHECK admits, plus '' for a clean
+// field. A union, not string: the wire cannot carry a code outside the CHECK.
+export type ExtractionReason = '' | 'unreadable' | 'ambiguous' | 'inconsistent' | 'missing' | 'rule_break'
 
 // internal/extraction/reader.go, ExtractionCandidate. One alternative reading; it carries no
 // name, no reason and no alternatives of its own.
@@ -51,6 +51,12 @@ export interface ExtractionCorrected {
   where: string | null
 }
 
+// internal/extraction/reader.go, ExtractionRuleBreak: one validation rule a reading violates.
+export interface ExtractionRuleBreak {
+  key: string
+  message: string
+}
+
 // internal/extraction/reader.go, ExtractionFieldState. region is null when the extractor
 // pointed at nothing. reason, alternatives and corrected are always present — Go has no
 // omitempty here, so no key is optional; corrected is null on a field no human has touched.
@@ -61,6 +67,7 @@ export interface ExtractionFieldState {
   reason: ExtractionReason
   alternatives: ExtractionCandidate[]
   corrected: ExtractionCorrected | null
+  rules: ExtractionRuleBreak[]
 }
 
 // internal/extraction/reader.go, ExtractionDocument. stored_at is RFC3339 text, not a time.
@@ -119,15 +126,16 @@ export interface CorrectedMarker {
   was: string | null
 }
 
-// The extraction vocabulary is ten names wide, the edit form's nine: EDIT_FIELD_KEYS refuses
-// invoice_number ([D9]), so the nine strings stay where they are and this overlay adds the
-// tenth. Anything else -- document_text_layer, a reconciled line row -- renders its wire name.
-const FIELD_LABELS: Record<string, string> = { ...EDIT_FIELD_LABELS, invoice_number: 'Invoice number' }
+// FIELD_LABELS maps each header field key to its label; any other key renders its wire name.
+const FIELD_LABELS: Record<string, string> = Object.fromEntries(
+  INVOICE_FIELDS.filter((f) => !f.line).map((f) => [f.key, f.label]),
+)
 
 const REASON_PILLS: Record<Exclude<ExtractionReason, '' | 'ambiguous'>, string> = {
   unreadable: "COULDN'T READ THIS CLEARLY",
   inconsistent: "DOESN'T ADD UP",
   missing: 'NOT FOUND',
+  rule_break: 'BREAKS A RULE',
 }
 
 // Words keep the design's "TWO"; resolve.go:47 caps a field at 8 candidates, so the numeral is unreachable from a real read.
@@ -171,7 +179,8 @@ export function reasonPill(reason: ExtractionReason, candidateCount: number): st
 }
 
 /** Keyed on the reason first: a clean subtotal carries no note. */
-export function fieldNote(reason: ExtractionReason, name: string): string | null {
+export function fieldNote(reason: ExtractionReason, name: string, rules: ExtractionRuleBreak[]): string | null {
+  if (reason === 'rule_break') return rules.length === 0 ? null : rules.map((r) => r.message).join(' ')
   if (reason !== 'inconsistent') return null
   if (name === 'subtotal') return NOTE_SUBTOTAL
   return SUPPLIER_MISMATCH_FIELDS.includes(name) ? NOTE_SUPPLIER : NOTE_GENERIC
@@ -238,20 +247,8 @@ export interface DraftEntry {
 
 export type DraftEntries = Record<string, DraftEntry>
 
-// internal/extraction/vocabulary.go, HeaderFields -- the order one Save writes in, so the
-// append-only table's seq follows the order the person reads.
-export const HEADER_FIELDS: readonly string[] = [
-  'invoice_number',
-  'issue_date',
-  'supplier_tin',
-  'supplier_name',
-  'buyer_tin',
-  'buyer_name',
-  'currency',
-  'subtotal',
-  'vat',
-  'total',
-]
+// The order one Save writes in, so the append-only table's seq follows the order the person reads.
+export const HEADER_FIELDS: readonly string[] = INVOICE_FIELDS.filter((f) => !f.line && f.extract).map((f) => f.key)
 
 /**
  * The pane's own view of the wire: the shared draft laid over it. A drafted field claims NO

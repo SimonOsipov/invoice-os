@@ -77,6 +77,19 @@ func TestParseRule_RejectsAnUnknownShape(t *testing.T) {
 	}
 }
 
+func TestParseRule_RefusesTheEmailAndPhoneShapes(t *testing.T) {
+	for _, shape := range []Shape{ShapeEmail, ShapePhone} {
+		body := `{"label":"x","relation":{"kind":"right","max_distance":` + fmt.Sprint(tier1MaxDistanceRight) + `},"shape":"` + string(shape) + `"}`
+		r, err := ParseRule([]byte(body))
+		if err == nil || !strings.Contains(err.Error(), "unknown shape") || !strings.Contains(err.Error(), string(shape)) {
+			t.Errorf("ParseRule(%s) error = %v, want an unknown-shape error naming %q", shape, err, shape)
+		}
+		if r != (Rule{}) {
+			t.Errorf("ParseRule(%s) returned %+v on error, want the zero Rule", shape, r)
+		}
+	}
+}
+
 // A-04: a Label RE2 refuses is rejected, wrapping the regexp package's own error, and no
 // failure branch returns a partially-populated Rule.
 func TestParseRule_RejectsAnUncompilablePattern(t *testing.T) {

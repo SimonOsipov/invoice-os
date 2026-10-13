@@ -160,3 +160,58 @@ func TestValidationMain_PatchRulesAnswersEveryForwardedIdentity(t *testing.T) {
 		})
 	}
 }
+
+// Each staff route is registered once (a second owner of a pattern panics ServeMux at boot);
+// other /v1/staff patterns are allowed.
+func TestValidationMain_StaffRoutesAreRegisteredAndToggleStays(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", string(raw), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers := map[string][]string{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		pattern := strings.Trim(lit.Value, `"`)
+		name := "?"
+		if h, ok := call.Args[1].(*ast.CallExpr); ok {
+			if hs, ok := h.Fun.(*ast.SelectorExpr); ok {
+				name = exprName(hs.X) + "." + hs.Sel.Name
+			}
+		}
+		handlers[pattern] = append(handlers[pattern], name)
+		return true
+	})
+	for pattern, want := range map[string]string{
+		"GET /v1/rules":                                    "validation.GoldenRulesHandler",
+		"PATCH /v1/rules/{key}":                            "validation.ToggleHandler",
+		"GET /v1/staff/rules":                              "validation.StaffListRulesHandler",
+		"PATCH /v1/staff/rules/{key}":                      "validation.StaffSwitchRuleHandler",
+		"GET /v1/staff/rule-versions":                      "validation.StaffVersionsHandler",
+		"POST /v1/staff/rule-versions/draft":               "validation.StaffOpenDraftHandler",
+		"POST /v1/staff/rule-versions/draft/rules":         "validation.StaffAddDraftRuleHandler",
+		"PUT /v1/staff/rule-versions/draft/rules/{key}":    "validation.StaffEditDraftRuleHandler",
+		"DELETE /v1/staff/rule-versions/draft/rules/{key}": "validation.StaffRemoveDraftRuleHandler",
+		"POST /v1/staff/rule-versions/draft/publish":       "validation.StaffPublishDraftHandler",
+		"POST /v1/staff/rule-versions/draft/test":          "validation.StaffTestDraftHandler",
+		"GET /v1/staff/code-list-syncs":                    "validation.StaffCodeListSyncsHandler",
+	} {
+		if got := handlers[pattern]; len(got) != 1 || got[0] != want {
+			t.Errorf("%q registered with %v, want exactly [%s]", pattern, got, want)
+		}
+	}
+}

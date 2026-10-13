@@ -2465,6 +2465,11 @@ func TestValidateHandler_TopLevelKeysNotNested(t *testing.T) {
 		// BUG-06-04 (task-386): +1 -- failure_kind joins Invoice as a direct
 		// top-level sibling too, same no-omitempty shape.
 		"failure_kind",
+		// The 22 NRS header and party fields.
+		"invoice_kind", "tax_currency_code", "due_date", "issue_time", "tax_point_date", "payment_status",
+		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
+		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
 	}
 	for _, k := range wantKeys {
 		if _, ok := raw[k]; !ok {
@@ -3101,6 +3106,19 @@ func TestStatusForErr_NumberSentences(t *testing.T) {
 	}
 	if status, msg := statusForErr(ErrDuplicateNumber); status != http.StatusConflict || msg != "duplicate invoice number" {
 		t.Errorf("statusForErr(ErrDuplicateNumber) = (%d, %q), want (409, %q) -- the store-level duplicate sentence, unchanged (PAR-04)", status, msg, "duplicate invoice number")
+	}
+}
+
+// An unknown line id is a 400 with one sentence, whether wrapped or bare, and distinct from ErrValidation's own text.
+func TestStatusForErr_UnknownLineIDIs400WithItsOwnSentence(t *testing.T) {
+	const want = "line_items id must name a line of this invoice"
+	for _, err := range []error{ErrUnknownLineID, fmt.Errorf("edit: %w", ErrUnknownLineID)} {
+		if status, msg := statusForErr(err); status != http.StatusBadRequest || msg != want {
+			t.Errorf("statusForErr(%v) = (%d, %q), want (400, %q)", err, status, msg, want)
+		}
+	}
+	if _, msg := statusForErr(ErrValidation); msg == want {
+		t.Errorf("ErrValidation shares the unknown-line-id sentence %q", want)
 	}
 }
 
@@ -4114,6 +4132,12 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 		"kept_as_is_at", "kept_as_is_by", "kept_as_is_reason",
 		// BUG-06-04 (task-386): failure_kind joins Invoice the same way.
 		"failure_kind",
+		// The 22 NRS header and party fields join Invoice the same way.
+		"invoice_kind", "tax_currency_code", "due_date", "issue_time", "tax_point_date", "payment_status",
+		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
+		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+		"tax_subtotals",
 		"rule_set_version", "qr_png_base64",
 	}
 	// BUG-04-03 (task-399): can_view_ubl/ubl_blocked_reason join the same
@@ -4125,7 +4149,7 @@ func TestGetHandler_ActionFlagsAdditiveKeepAllExistingKeys(t *testing.T) {
 	// the same way, 41 -> 43.
 	newKeys := []string{"can_edit", "can_revalidate", "revalidate_blocked_reason", "can_submit", "submit_blocked_reason", "can_view_ubl", "ubl_blocked_reason", "can_resolve_outside", "resolve_outside_blocked_reason",
 		"can_approve", "approve_blocked_reason", "can_reject", "reject_blocked_reason",
-		"can_correct_invoice_number", "invoice_number_blocked_reason"}
+		"can_correct_invoice_number", "invoice_number_blocked_reason", "verdict_stale"}
 
 	tests := []struct {
 		name              string
@@ -4270,7 +4294,14 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// BUG-06-04 (task-386): failure_kind is declared right after
 		// KeptAsIsReason and before LineItems, so it lands here too.
 		"failure_kind",
+		// The 22 NRS header and party fields, declared before LineItems.
+		"invoice_kind", "tax_currency_code", "due_date", "issue_time", "tax_point_date", "payment_status",
+		"supplier_email", "supplier_telephone", "supplier_street", "supplier_city", "supplier_postal_zone", "supplier_country",
+		"supplier_state", "supplier_lga", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+		"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
 		"line_items",
+		// getResponse's tax_subtotals sits directly after the Invoice keys.
+		"tax_subtotals",
 		// getResponse's own fields, in declaration order -- the action-flag
 		// keys MUST be last (AC #5's additive/position clause): can_submit
 		// appended after revalidate_blocked_reason, submit_blocked_reason
@@ -4289,6 +4320,8 @@ func TestGetHandler_ActionFlagKeysOrderedLast(t *testing.T) {
 		// EXTR-27-01: appended after reject_blocked_reason, so these now land
 		// last of all.
 		"can_correct_invoice_number", "invoice_number_blocked_reason",
+		// ENGI-17: appended after invoice_number_blocked_reason.
+		"verdict_stale",
 	}
 	if !reflect.DeepEqual(got, want2) {
 		t.Errorf("top-level key order =\n%v\nwant\n%v\n(body=%s)", got, want2, rec.Body.String())
@@ -6366,5 +6399,36 @@ func TestCreateHandler_MissingNumberOutranksAMalformedSourceDocumentID(t *testin
 	}
 	if !strings.Contains(resp.Error, "invoice_number") {
 		t.Errorf("error = %q, want a message naming invoice_number", resp.Error)
+	}
+}
+
+func TestIssueTime_OneRegexServesTheAPIAndTheImporter(t *testing.T) {
+	for _, v := range []string{
+		"23:59:59", "00:00:00", "09:05:03", "20:00:00",
+		"25:61", "14:30", "2:30 PM", "9:05:03", "14:30:00.5", "24:00:00", "", " 14:30:00", "23:59:60", "14:60:00",
+	} {
+		create := func(context.Context, CreateInput) (Invoice, error) { return Invoice{ID: "x"}, nil }
+		body := mustJSON(t, map[string]any{"entity_id": uuid.NewString(), "invoice_number": "N", "issue_time": v})
+		rec, _ := doInvoiceCreate(t, create, &nrsIdentity, body)
+		if api := rec.Code == http.StatusCreated; api != ValidIssueTime(v) {
+			t.Errorf("issue_time %q: API accepts = %v, ValidIssueTime = %v", v, api, ValidIssueTime(v))
+		}
+	}
+}
+
+func TestGetHandler_VerdictStaleIsTheStoresFlag(t *testing.T) {
+	id := auth.Identity{Subject: "user-1", Role: "authenticated", TenantID: uuid.NewString()}
+	invoiceID := uuid.NewString()
+	for _, stale := range []bool{true, false} {
+		inv := Invoice{ID: invoiceID, Status: StatusDraft, Violations: json.RawMessage(`[]`), VerdictStale: stale}
+		get := func(ctx context.Context, gotID string) (Invoice, error) { return inv, nil }
+		rec, _ := doInvoiceGet(t, get, &id, invoiceID)
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("stale=%v: status %d err %v body=%s", stale, rec.Code, err, rec.Body.String())
+		}
+		if got, want := string(raw["verdict_stale"]), map[bool]string{true: "true", false: "false"}[stale]; got != want {
+			t.Errorf("verdict_stale = %s, want %s", got, want)
+		}
 	}
 }

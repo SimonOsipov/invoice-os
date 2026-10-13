@@ -163,4 +163,13 @@ describe('useTourSpot', () => {
       delete (document as { fonts?: unknown }).fonts
     }
   })
+
+  it('useTourSpot_withoutDocumentFontsStillMeasures', () => {
+    delete (document as { fonts?: unknown }).fonts
+    const nav = document.createElement('nav')
+    nav.id = 'nav-invoices'
+    document.body.appendChild(nav)
+    render({ i: 0, phase: 'menu' })
+    expect(seen.rect).toEqual({ x: 6, y: 97, w: 275, h: 42 })
+  })
 })

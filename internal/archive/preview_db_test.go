@@ -88,12 +88,12 @@ func previewQuery(r Request) url.Values {
 
 // --- AC-1: counts agree with the download, from three independent oracles ------------
 
-// TestPreview_CountsMatchTheDownloadedBundle (D-48): the fixture's five counts must be
+// TestPreview_CountsMatchTheDownloadedBundle (D-48): the fixture's six counts must be
 // pairwise distinct and non-zero, or a swapped pair is invisible -- asserted first,
 // against the test's OWN expectations, before any fixture is planted.
 func TestPreview_CountsMatchTheDownloadedBundle(t *testing.T) {
-	want := manifestCounts{Invoices: 2, StatusTransitions: 4, Submissions: 3, ExchangeAttempts: 5, BodyFiles: 6}
-	vals := []int{want.Invoices, want.StatusTransitions, want.Submissions, want.ExchangeAttempts, want.BodyFiles}
+	want := manifestCounts{Invoices: 2, LineItems: 7, StatusTransitions: 4, Submissions: 3, ExchangeAttempts: 5, BodyFiles: 6}
+	vals := []int{want.Invoices, want.LineItems, want.StatusTransitions, want.Submissions, want.ExchangeAttempts, want.BodyFiles}
 	seen := map[int]bool{}
 	for _, v := range vals {
 		if v == 0 {
@@ -117,6 +117,12 @@ func TestPreview_CountsMatchTheDownloadedBundle(t *testing.T) {
 			tenantID: tenant, entityID: entity, invoiceNumber: fmt.Sprintf("INV-PC-%d", i),
 			createdAt: from.Add(time.Duration(i) * time.Minute),
 		}))
+	}
+
+	for i, n := range []int{4, 3} {
+		for line := 1; line <= n; line++ {
+			mustCreateLineItem(t, tx, lineItemFixture{tenantID: tenant, invoiceID: invIDs[i], lineNo: line})
+		}
 	}
 
 	// jobInvoice[i] is the invoice jobIDs[i] actually belongs to -- the exchange loop
@@ -151,6 +157,7 @@ func TestPreview_CountsMatchTheDownloadedBundle(t *testing.T) {
 
 	csvOracle := manifestCounts{
 		Invoices:          csvDataRecordCount(t, zr, "invoices.csv"),
+		LineItems:         csvDataRecordCount(t, zr, "line_items.csv"),
 		StatusTransitions: csvDataRecordCount(t, zr, "status_history.csv"),
 		Submissions:       csvDataRecordCount(t, zr, "submissions.csv"),
 		ExchangeAttempts:  csvDataRecordCount(t, zr, "exchange.csv"),

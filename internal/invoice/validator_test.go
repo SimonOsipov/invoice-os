@@ -91,8 +91,8 @@ func TestValidatorClient_BatchDecodesToByRefAndVersion(t *testing.T) {
 		"rule_set_version": %d,
 		"rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 		"results": [
-			{"ref": "inv-1", "violations": []},
-			{"ref": "inv-2", "violations": [
+			{"ref": "inv-1", "violations": [], "rule_set_version": %[1]d, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+			{"ref": "inv-2", "rule_set_version": %[1]d, "rule_set_version_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "violations": [
 				{"rule_key": "line-items-required", "severity": "error", "message": "boom", "path": "line_items"}
 			]}
 		]
@@ -115,8 +115,10 @@ func TestValidatorClient_BatchDecodesToByRefAndVersion(t *testing.T) {
 	if result.RuleSetVersion != 2 {
 		t.Errorf("RuleSetVersion = %d, want 2 -- multi-word snake_case top-level field [Stage-1 F1]", result.RuleSetVersion)
 	}
-	if result.RuleSetVersionID != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
-		t.Errorf("RuleSetVersionID = %q, want the batch uuid -- multi-word snake_case top-level field [Stage-1 F1]", result.RuleSetVersionID)
+	for _, ref := range []string{"inv-1", "inv-2"} {
+		if got := result.StampByRef[ref].ID; got != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+			t.Errorf("StampByRef[%s].ID = %q, want the batch uuid -- multi-word snake_case top-level field [Stage-1 F1]", ref, got)
+		}
 	}
 	wantRefs := []string{"inv-1", "inv-2"}
 	for _, ref := range wantRefs {
@@ -152,7 +154,7 @@ func TestValidatorClient_SendsS2STokenNoIdentityHeaders(t *testing.T) {
 		captured = r.Header.Clone()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"x","results":[{"ref":"inv-1","violations":[]}]}`, cannedRuleSetVersion)))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"rule_set_version":%[1]d,"rule_set_version_id":"x","results":[{"ref":"inv-1","violations":[],"rule_set_version":%[1]d,"rule_set_version_id":"x"}]}`, cannedRuleSetVersion)))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -301,7 +303,7 @@ func TestValidatorClient_TimeoutReturnsErrorNotHang(t *testing.T) {
 // violations decode as null maps to []Violation{}, never nil
 // ([violations-write]).
 func TestValidatorClient_NullViolationsMapsToEmptySlice(t *testing.T) {
-	body := fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","results":[{"ref":"inv-1","violations":null}]}`, cannedRuleSetVersion)
+	body := fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","results":[{"ref":"inv-1","violations":null,"rule_set_version":%d,"rule_set_version_id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}]}`, cannedRuleSetVersion, cannedRuleSetVersion)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
@@ -335,8 +337,10 @@ func TestValidatorClient_RequestBodyPreservesOrderAndShape(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		capturedBody = b
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"x","results":[`+
-			`{"ref":"inv-1","violations":[]},{"ref":"inv-2","violations":[]},{"ref":"inv-3","violations":[]}]}`, cannedRuleSetVersion)))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"rule_set_version":%[1]d,"rule_set_version_id":"x","results":[`+
+			`{"ref":"inv-1","violations":[],"rule_set_version":%[1]d,"rule_set_version_id":"x"},`+
+			`{"ref":"inv-2","violations":[],"rule_set_version":%[1]d,"rule_set_version_id":"x"},`+
+			`{"ref":"inv-3","violations":[],"rule_set_version":%[1]d,"rule_set_version_id":"x"}]}`, cannedRuleSetVersion)))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -532,5 +536,89 @@ func TestViolationWireShapesAgree(t *testing.T) {
 		if !ourTags[tag] {
 			t.Errorf("json tag %q is on validation.Violation but not on invoice.Violation -- the two must agree field for field", tag)
 		}
+	}
+}
+
+// stampServer answers 200 with body for every request.
+func stampServer(t *testing.T, body string) *Validator {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return NewValidator(srv.URL, "tok", nil)
+}
+
+var twoRefs = []ValidateItem{{Ref: "r1", Invoice: map[string]any{}}, {Ref: "r2", Invoice: map[string]any{}}}
+
+func TestValidate_DecodesPerItemStamps(t *testing.T) {
+	v := stampServer(t, fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"id-low","results":[
+		{"ref":"r1","violations":[],"rule_set_version":%d,"rule_set_version_id":"id-low"},
+		{"ref":"r2","violations":[],"rule_set_version":%d,"rule_set_version_id":"id-high"}]}`,
+		cannedRuleSetVersion, cannedRuleSetVersion, cannedRuleSetVersion+3))
+	res, err := v.Validate(context.Background(), twoRefs)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if res.RuleSetVersion != cannedRuleSetVersion {
+		t.Errorf("RuleSetVersion = %d, want the top-level value %d", res.RuleSetVersion, cannedRuleSetVersion)
+	}
+	want := map[string]Stamp{"r1": {cannedRuleSetVersion, "id-low"}, "r2": {cannedRuleSetVersion + 3, "id-high"}}
+	for ref, w := range want {
+		if got := res.StampByRef[ref]; got != w {
+			t.Errorf("StampByRef[%s] = %+v, want %+v", ref, got, w)
+		}
+	}
+}
+
+func TestValidate_NoItemStampsIsErrUpstream(t *testing.T) {
+	v := stampServer(t, fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"id-top","results":[
+		{"ref":"r1","violations":[]},{"ref":"r2","violations":[]}]}`, cannedRuleSetVersion))
+	res, err := v.Validate(context.Background(), twoRefs)
+	if !errors.Is(err, ErrUpstream) {
+		t.Errorf("err = %v, want ErrUpstream -- a top-level stamp never stands in for item stamps", err)
+	}
+	if len(res.StampByRef) != 0 || len(res.ByRef) != 0 {
+		t.Errorf("result = %+v, want none", res)
+	}
+}
+
+func TestValidate_SomeItemsWithoutStampIsErrUpstream(t *testing.T) {
+	for name, second := range map[string]string{
+		"missing":      `{"ref":"r2","violations":[]}`,
+		"zero version": fmt.Sprintf(`{"ref":"r2","violations":[],"rule_set_version":%d,"rule_set_version_id":"id-b"}`, 0),
+		"empty id":     fmt.Sprintf(`{"ref":"r2","violations":[],"rule_set_version":%d,"rule_set_version_id":""}`, cannedRuleSetVersion),
+		"negative":     `{"ref":"r2","violations":[],"rule_set_version":-1,"rule_set_version_id":"id-b"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := stampServer(t, fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"id-top","results":[
+				{"ref":"r1","violations":[],"rule_set_version":%d,"rule_set_version_id":"id-a"},%s]}`,
+				cannedRuleSetVersion, cannedRuleSetVersion, second))
+			if _, err := v.Validate(context.Background(), twoRefs); !errors.Is(err, ErrUpstream) {
+				t.Errorf("err = %v, want ErrUpstream -- a half-stamped response must never be a verdict", err)
+			}
+		})
+	}
+}
+
+func TestValidate_FirstItemUnstampedIsErrUpstream(t *testing.T) {
+	v := stampServer(t, fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"id-top","results":[
+		{"ref":"r1","violations":[]},
+		{"ref":"r2","violations":[],"rule_set_version":%d,"rule_set_version_id":"id-b"}]}`, cannedRuleSetVersion, cannedRuleSetVersion))
+	res, err := v.Validate(context.Background(), twoRefs)
+	if !errors.Is(err, ErrUpstream) {
+		t.Errorf("err = %v, want ErrUpstream", err)
+	}
+	if len(res.StampByRef) != 0 {
+		t.Errorf("StampByRef = %+v, want none", res.StampByRef)
+	}
+}
+
+func TestValidate_NoStampAnywhereIsErrUpstream(t *testing.T) {
+	v := stampServer(t, fmt.Sprintf(`{"rule_set_version":%d,"rule_set_version_id":"","results":[
+		{"ref":"r1","violations":[]},{"ref":"r2","violations":[]}]}`, 0))
+	if _, err := v.Validate(context.Background(), twoRefs); !errors.Is(err, ErrUpstream) {
+		t.Errorf("err = %v, want ErrUpstream", err)
 	}
 }

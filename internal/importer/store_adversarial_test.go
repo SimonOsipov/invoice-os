@@ -176,7 +176,7 @@ func TestStoreEntitySupplier_ReturnsNameAndNonNilTIN(t *testing.T) {
 	store := NewStore(app)
 	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
 
-	name, tin, err := store.EntitySupplier(c, entityID)
+	name, tin, _, err := store.EntitySupplier(c, entityID)
 	if err != nil {
 		t.Fatalf("EntitySupplier: %v", err)
 	}
@@ -252,5 +252,27 @@ func TestStoreFinalize_UnknownIDReturnsNotFoundNoRowsAffected(t *testing.T) {
 	err := store.Finalize(c, uuid.NewString(), 1, 1, 0, nil, "completed")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Finalize(unseeded id) err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStoreEntitySupplier_ReturnsTheContactColumns(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "ES-CONTACT tenant")
+	entityID := seedEntity(t, super, tenantID, "ES-CONTACT entity")
+	if _, err := super.Exec(ctx, `UPDATE business_entities SET telephone = '+2348000000001', lga = 'NG-LA-001' WHERE id = $1`, entityID); err != nil {
+		t.Fatalf("set contact: %v", err)
+	}
+	c := auth.WithIdentity(ctx, auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: tenantID})
+
+	_, _, contact, err := NewStore(app).EntitySupplier(c, entityID)
+	if err != nil {
+		t.Fatalf("EntitySupplier: %v", err)
+	}
+	if contact.Telephone == nil || *contact.Telephone != "+2348000000001" || contact.LGA == nil || *contact.LGA != "NG-LA-001" {
+		t.Errorf("contact telephone/lga = %v/%v, want the set values", contact.Telephone, contact.LGA)
+	}
+	if contact.Email != nil || contact.Street != nil || contact.City != nil || contact.PostalZone != nil || contact.Country != nil || contact.State != nil {
+		t.Errorf("unset contact columns not nil: %+v", contact)
 	}
 }

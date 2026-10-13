@@ -335,7 +335,7 @@ func TestCorpus_LayoutsAreDistinct(t *testing.T) {
 func TestCorpus_EveryExpectedValueAppearsInItsFixture(t *testing.T) {
 	corpusRequireCommitted(t)
 
-	for _, field := range extraction.HeaderFields {
+	for _, field := range t1LabelledFields() {
 		if _, ok := corpusFieldShape[field]; !ok {
 			t.Fatalf("corpusFieldShape has no shape for %q; its expectations would go unchecked", field)
 		}

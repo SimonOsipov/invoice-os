@@ -63,6 +63,7 @@ import {
   fixEditPatch,
   initialReviewFilter,
   isAlreadyImported,
+  isUnvalidatedDraft,
   pagerLabels,
   pagerNav,
   railPills,
@@ -89,6 +90,8 @@ import {
   unreadableCsvAll,
   unreadableRows,
   unreadableRowsAll,
+  unvalidatedDraftCount,
+  unvalidatedDraftNotice,
   verdictPill,
   type AlreadyImportedRowAll,
   type ReviewFilterState,
@@ -129,6 +132,40 @@ describe('verdictPill (AC-5)', () => {
       border: severityStyle('error').border,
       text: severityStyle('error').text,
     })
+  })
+})
+
+describe('verdictPill: RULES FAILED counts distinct rule keys (PILL-L1, PILL-L2)', () => {
+  const lineErrors: Violation[] = [
+    { rule_key: 'line-cost', severity: 'error', message: 'e', path: 'line_items[1]' },
+    { rule_key: 'line-cost', severity: 'error', message: 'e', path: 'line_items[3]' },
+    { rule_key: 'currency-allowed', severity: 'error', message: 'e' },
+  ]
+
+  it('PILL-L1: one rule failing on two lines counts once', () => {
+    const badge = verdictPill({ status: 'validated', violations: lineErrors }).badges[0]
+    expect(badge.kind).toBe('rules-failed')
+    expect(badge.count).toBe(2)
+    expect(badge.label).toBe('2 RULES FAILED')
+  })
+
+  it('PILL-L3: one rule on three lines plus another rule counts 2, and warnings do not add a rule', () => {
+    const violations: Violation[] = [
+      ...[1, 2, 3].map((n) => ({ rule_key: 'line-cost', severity: 'error' as const, message: 'e', path: `line_items[${n}]` })),
+      { rule_key: 'currency-allowed', severity: 'error', message: 'e' },
+      { rule_key: 'tin-format', severity: 'warning', message: 'w' },
+    ]
+    const badge = verdictPill({ status: 'validated', violations }).badges[0]
+    expect(badge.kind).toBe('rules-failed')
+    expect(badge.count).toBe(2)
+    expect(badge.label).toBe('2 RULES FAILED')
+  })
+
+  it('PILL-L2: the kept count still counts blocking violations', () => {
+    const badge = verdictPill({ status: 'draft', violations: lineErrors, kept_as_is_at: '2026-07-30T00:00:00Z' }).badges[0]
+    expect(badge.kind).toBe('kept-invalid')
+    expect(badge.count).toBe(3)
+    expect(badge.label).toBe('KEPT · INVALID')
   })
 })
 
@@ -995,14 +1032,14 @@ describe('unreadableCsvAll: no longer carries duplicate rows (AIMP-10, AC-6)', (
   })
 })
 
-describe('reviewBatch.ts source: the already-imported classifier is the SOLE reader of RowError.rule_key beyond railPills/fixCard (AIMP-11, AC-1 — GAP-2 correction: a comment-immune `.rule_key` property-access scan pinned at 4, not a bare `rule_key` string pinned at 1, which already occurs 5x in comments/railPills/fixCard and could never go green)', () => {
-  it('AIMP-11 (guard): `.rule_key` occurs exactly 4 times in the source — railPills x2, fixCard x1, and one inside the already-imported classifier', () => {
+describe('reviewBatch.ts source: the already-imported classifier is the SOLE reader of RowError.rule_key beyond railPills/fixCard (AIMP-11, AC-1 — GAP-2 correction: a comment-immune `.rule_key` property-access scan pinned at 5, not a bare `rule_key` string pinned at 1, which already occurs 5x in comments/railPills/fixCard and could never go green)', () => {
+  it('AIMP-11 (guard): `.rule_key` occurs exactly 5 times in the source — railPills x2, fixCard x1, the verdictPill distinct-rule count x1, and one inside the already-imported classifier', () => {
     const srcPath = fileURLToPath(new URL('./reviewBatch.ts', import.meta.url))
     const source = readFileSync(srcPath, 'utf8')
 
     const matches = source.match(/\.rule_key\b/g) ?? []
 
-    expect(matches).toHaveLength(4)
+    expect(matches).toHaveLength(5)
   })
 })
 
@@ -1935,6 +1972,18 @@ function mkViolation(overrides: Partial<Violation> = {}): Violation {
 }
 
 describe('fixCard: field targeting is mbsPathToEditField alone — no rule-key map (AC-2, FIX-1..4)', () => {
+  it('FIX-L1: a line path carries its line target', () => {
+    const card = fixCard({ rule_key: 'line-cost', severity: 'error', message: 'm', path: 'line_items[2].unit_price' })
+    expect(card.line).toEqual({ line: 2, field: 'unit_price' })
+    expect(card.field).toBeNull()
+  })
+
+  it('FIX-L2: a non-line path has no line target', () => {
+    for (const path of ['line_items', 'subtotal', undefined]) {
+      expect(fixCard({ rule_key: 'r', severity: 'error', message: 'm', path }).line, String(path)).toBeNull()
+    }
+  })
+
   it("FIX-1: vat-standard-rate (path 'vat', expected '84375') resolves to the vat field and carries the expectation", () => {
     const v = mkViolation({
       rule_key: 'vat-standard-rate',
@@ -2027,8 +2076,8 @@ describe('fixCard: field targeting is mbsPathToEditField alone — no rule-key m
   })
 })
 
-describe('EDIT_FIELD_LABELS: every one of the 9 EDIT_FIELD_KEYS has a human label (AC-2)', () => {
-  it('all nine keys are present, matching InvoiceDetail.tsx\'s own edit-form labels verbatim', () => {
+describe('EDIT_FIELD_LABELS: every one of the 31 EDIT_FIELD_KEYS has a human label (AC-2)', () => {
+  it('all 31 keys are present, matching InvoiceDetail.tsx\'s own edit-form labels verbatim', () => {
     const expected: Record<EditFieldKey, string> = {
       issue_date: 'Issue date',
       supplier_tin: 'Supplier TIN',
@@ -2039,6 +2088,28 @@ describe('EDIT_FIELD_LABELS: every one of the 9 EDIT_FIELD_KEYS has a human labe
       subtotal: 'Subtotal',
       vat: 'VAT',
       total: 'Total',
+      invoice_kind: 'Invoice kind',
+      tax_currency_code: 'Tax currency code',
+      due_date: 'Due date',
+      issue_time: 'Issue time',
+      tax_point_date: 'Tax point date',
+      payment_status: 'Payment status',
+      supplier_email: 'Supplier email',
+      supplier_telephone: 'Supplier telephone',
+      supplier_street: 'Supplier street',
+      supplier_city: 'Supplier city',
+      supplier_postal_zone: 'Supplier postal zone',
+      supplier_country: 'Supplier country',
+      supplier_state: 'Supplier state',
+      supplier_lga: 'Supplier LGA',
+      buyer_email: 'Buyer email',
+      buyer_telephone: 'Buyer telephone',
+      buyer_street: 'Buyer street',
+      buyer_city: 'Buyer city',
+      buyer_postal_zone: 'Buyer postal zone',
+      buyer_country: 'Buyer country',
+      buyer_state: 'Buyer state',
+      buyer_lga: 'Buyer LGA',
     }
 
     expect(EDIT_FIELD_LABELS).toEqual(expected)
@@ -2151,11 +2222,8 @@ describe('rowExpansionView: a clean invoice is the passing line only when a rule
 })
 
 // FIX-9's own "the string v8 appears nowhere in the module" -- scoped to the literal
-// FULL fake label ("NG-MBS v8"), not the bare substring "v8": reviewBatch.ts's own
-// INVCR-01-08-era comment (RULE_SET_NAME's own doc, above) legitimately says `v8` in
-// prose (explaining why lib/rules.ts's GOLDEN_SET is NOT imported here) and a bare-"v8"
-// scan would red on that pre-existing, correct line for the wrong reason. The full label
-// is what a hardcoded fallback would actually emit, and it is genuinely absent today.
+// FULL fake label ("NG-MBS v8"), not the bare substring "v8": the full label is what a
+// hardcoded fallback would actually emit, and it is genuinely absent today.
 describe('reviewBatch.ts source (whole file): the fake "NG-MBS v8" label is never hardcoded (FIX-9b guard)', () => {
   it('FIX-9b: the literal string "NG-MBS v8" appears nowhere in reviewBatch.ts -- the passing line must derive the version from the server, never repeat D1\'s deleted fake', () => {
     const srcPath = fileURLToPath(new URL('./reviewBatch.ts', import.meta.url))
@@ -2334,6 +2402,10 @@ describe("fixEditPatch: only genuinely-changed fields reach the wire — mirrors
 
   it("FIXPATCH-4: a bare YYYY-MM-DD issue_date normalizes to midnight UTC RFC3339, mirroring InvoiceDetail.tsx's own normalization", () => {
     expect(fixEditPatch(original, { issue_date: '2026-08-15' })).toEqual({ issue_date: '2026-08-15T00:00:00Z' })
+  })
+
+  it('fixEditPatch_nrsDateIsRfc3339', () => {
+    expect(fixEditPatch(original, { tax_point_date: '2027-01-05' })).toEqual({ tax_point_date: '2027-01-05T00:00:00Z' })
   })
 
   it('FIXPATCH-5: a cleared issue_date is OMITTED, never sent as "" — the PATCH cannot represent an explicit clear (JSON "null" and an absent key both mean "leave unchanged")', () => {
@@ -3373,5 +3445,26 @@ describe('the document id is display and hand-off only, never a discriminator (E
       expect(body, `${decl} reads the document id — the unit comes from the filename`).not.toContain('document_id')
       expect(body).not.toContain('documentId')
     }
+  })
+})
+
+describe('isUnvalidatedDraft (ENGI-14-05): an entry with an invoice id and no rule key', () => {
+  const draft: RowError = { rows: [3, 4], invoice_id: 'inv-7', message: 'whatever the server words it' }
+
+  it('leaves the unreadable and already-imported channels, and is counted on its own', () => {
+    expect(isUnvalidatedDraft(draft)).toBe(true)
+    expect(unreadableRows([draft])).toEqual([])
+    expect(alreadyImportedRows([draft])).toEqual([])
+    expect(unvalidatedDraftCount([{ errors: [draft, { row: 5, message: 'bad' }] }])).toBe(1)
+  })
+
+  it('does not take a store duplicate (rule key) or an unreadable row (no invoice id)', () => {
+    expect(isUnvalidatedDraft({ row: 5, rule_key: 'duplicate_invoice', invoice_id: 'inv-9', message: 'dup' })).toBe(false)
+    expect(isUnvalidatedDraft({ row: 5, message: 'bad' })).toBe(false)
+  })
+
+  it('words the notice for one and for many', () => {
+    expect(unvalidatedDraftNotice(1)).toBe('1 invoice was created as a draft but not checked, because the rules changed during the import. Validate it again.')
+    expect(unvalidatedDraftNotice(2)).toBe('2 invoices were created as drafts but not checked, because the rules changed during the import. Validate them again.')
   })
 })

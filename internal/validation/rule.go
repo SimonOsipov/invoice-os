@@ -13,7 +13,7 @@
 //
 // Concrete Evaluators (required/format/enum/range/tax_math/cross_field/
 // conditional/date) land in M3-04-03/04; the CEL evaluator + guard backend
-// in M3-04-05; the DB-backed Store (LoadActiveRuleSet) in
+// in M3-04-05; the DB-backed Store in
 // M3-04-06. This subtask's own tests (engine_test.go) exercise the pipeline
 // with fake Evaluators/GuardFunc only.
 package validation
@@ -53,8 +53,8 @@ type Severity string
 
 // Rule is one row of an active RuleSet -- the verbatim shape
 // {key, type, target, params, severity, when, message, scope, enabled} the
-// story's Constraints section pins, and that the M3-04-06 Store's
-// LoadActiveRuleSet materializes from the `rules` table.
+// story's Constraints section pins, and that the Store materializes from the
+// `rules` table.
 type Rule struct {
 	Key    string          `json:"key"`
 	Type   RuleType        `json:"type"`
@@ -66,11 +66,18 @@ type Rule struct {
 	Message  string   `json:"message"`
 	Scope    string   `json:"scope"` // "document" only in v1 (Decision N10)
 	Enabled  bool     `json:"enabled"`
+
+	// Codes is the NRS code list a list-variant enum rule checks against, filled
+	// by the loader. Never on the wire.
+	Codes CodeSet `json:"-"`
 }
 
-// RuleSet is the engine's evaluation input: the active published version's
-// number plus its rules, as returned by the (M3-04-06) Store's
-// LoadActiveRuleSet. Published versions are immutable (story Core AC #1) --
+// CodeSet is the set of codes of one NRS code list.
+type CodeSet map[string]struct{}
+
+// RuleSet is the engine's evaluation input: one published version's
+// number plus its rules, as returned by the Store (LoadForDates, per
+// issue date). Published versions are immutable (story Core AC #1) --
 // a content change always ships as a new RuleSet.Version.
 //
 // ID (M4-04-03, [uuid-stamp]) is the version's rule_set_versions.id (uuid) --
@@ -101,7 +108,7 @@ type Violation struct {
 	RuleKey  string   `json:"rule_key"`
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
-	Path     string   `json:"path,omitempty"` // resolved target
+	Path     string   `json:"path,omitempty"` // target, or <list>[N] for a line
 	Expected *string  `json:"expected,omitempty"`
 	Actual   *string  `json:"actual,omitempty"`
 }
@@ -126,6 +133,12 @@ type Payload = map[string]any
 // (Decision N15: fail loud on a broken rule, don't silently pass).
 type Evaluator interface {
 	Eval(p Payload, r Rule) (*Violation, error)
+}
+
+// lineEvaluator is an optional Evaluator extension: evalLines returns one
+// violation per failing line. The engine prefers it over Eval.
+type lineEvaluator interface {
+	evalLines(p Payload, r Rule) ([]Violation, error)
 }
 
 // GuardFunc evaluates a rule's optional `when` CEL guard at the select

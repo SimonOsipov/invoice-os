@@ -1,8 +1,9 @@
-// The deployed v2 Support Console. The console is mock-backed: this spec pins fixture behaviour and the v2 look, not a contract.
+// The deployed v2 Support Console. The Rules screen reads and switches real rules; every other screen is mock-backed, so those pin fixture behaviour and the v2 look, not a contract.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
+import { randomUUID } from 'node:crypto'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
-import { provisionStaffAccount, type StaffAccount } from '../api/client'
+import { provisionStaffAccount, rawFetch, signInSession, type StaffAccount } from '../api/client'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -10,7 +11,7 @@ import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } 
 test.use({ viewport: { width: 1440, height: 900 } })
 
 let staff: Promise<StaffAccount> | undefined
-const staffAccount = (): Promise<StaffAccount> => (staff ??= provisionStaffAccount('reskin-support'))
+const staffAccount = (): Promise<StaffAccount> => (staff ??= provisionStaffAccount('reskin-support', undefined, { rulesRole: true }))
 
 const SHADOW_CARD = 'rgba(40, 83, 52, 0.21) 0px 14px 22px -16px'
 
@@ -94,6 +95,9 @@ async function boxes<K extends string>(page: Page, named: Record<K, Locator>): P
 }
 
 const within = (outer: Rect, inner: Rect, what: string): string[] => (enclosesRect(outer, inner, 1) ? [] : [`${what}: sticks out`])
+// Sideways only: a tall body scrolls, so a block below the fold is by design.
+const withinX = (outer: Rect, inner: Rect, what: string): string[] =>
+  inner.x >= outer.x - 1 && inner.x + inner.width <= outer.x + outer.width + 1 ? [] : [`${what}: sticks out sideways`]
 const apart = (a: Rect, b: Rect, what: string): string[] => (rectsOverlap(a, b) ? [`${what}: overlap`] : [])
 const leftOf = (a: Rect, b: Rect, what: string): string[] => (a.x + a.width <= b.x + 1 ? [] : [`${what}: not left of`])
 const below = (above: Rect, lower: Rect, what: string): string[] => (lower.y >= above.y + above.height - 1 ? [] : [`${what}: not below`])
@@ -282,7 +286,7 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
     await legible(el, el, `${what} eyebrow`)
   }
   await expectStyles(subm.locator('span.mono'), 'Submissions nav badge', { radius: '4px' })
-  await expectStyles(rulesNav.locator('span.mono'), 'Rules nav badge', { radius: '4px' })
+  await expect(rulesNav.locator('span.mono'), 'the Rules nav holds no badge').toHaveCount(0)
 
   await expect(brand, 'one brand image in the sidebar').toHaveCount(1)
   await expect.poll(() => brand.evaluate((el) => (el as HTMLImageElement).naturalWidth), { message: 'brand image never loaded' }).toBeGreaterThan(0)
@@ -513,10 +517,10 @@ const SCREENS: Screen[] = [
     rowUp: 2,
     reads: async (page, testInfo) => {
       const mn = mainOf(page)
-      const tags = mn.locator('span.mono').filter({ hasText: /^(DRAFT|ACTIVE|ARCHIVED)$/ })
-      await everyStyles(parent(tags), 4, 'version tag', { radius: '4px' })
-      await expectStyles(parent(mn.getByText('Learned rules', { exact: true })).locator('span.mono'), 'learned-rules count', { radius: '4px' })
-      await expectStyles(mn.getByText('EDITING DRAFT v9', { exact: true }), 'EDITING DRAFT v9', { radius: '4px' })
+      await expect(mn.locator('[role="switch"]').first(), 'the rules have loaded').toBeVisible()
+      const tags = mn.locator('span.mono').filter({ hasText: /^(DRAFT|IN FORCE|SCHEDULED|SUPERSEDED|RETIRED)$/ })
+      await everyStyles(parent(tags), 1, 'version tag', { radius: '4px' })
+      await expectStyles(mn.getByText(/^IN FORCE v\d+$/), 'IN FORCE badge', { radius: '4px' })
       const row = mn.locator('.ops-row').first()
       await expectStyles(kid(row, 2), 'type chip', { radius: '4px' })
       await expectStyles(kid(kid(row, 4), 1), 'severity badge', { radius: '4px' })
@@ -527,7 +531,6 @@ const SCREENS: Screen[] = [
         await expectStyles(kid(sw, 1), `switch ${i} knob`, { radius: '50%', 'box-shadow': 'none' })
       }
       await expectStyles(mn.getByText('Rules', { exact: true }), 'Rules table title', { family: 'Manrope', 'font-weight': '700' })
-      await everyStyles(mn.getByRole('button', { name: 'Promote to draft' }), 1, 'Promote to draft', { radius: '7px' })
       await attachShot(page, testInfo, 'rules')
     },
     layout: async (page) => {
@@ -790,26 +793,11 @@ test('SUP-04 rule and audit drawers', async ({ page }, testInfo) => {
   const mn = mainOf(page)
 
   await openScreen(page, 'Rules', 'Rules admin')
+  await expect(mn.locator('[role="switch"]').first()).toBeVisible()
   await mn.locator('.ops-row').first().click()
   const { drawer } = await expectDrawer(page, 'rule drawer')
   await expectStyles(drawer.getByRole('button', { name: 'Kill-switch' }), 'Kill-switch', { radius: '7px' })
-  const run = drawer.getByRole('button', { name: 'Run test' })
-  await expectStyles(run, 'Run test', { radius: '7px', 'background-color': 'rgb(7, 60, 61)' })
-  await expectStyles(drawer.getByText('No test run yet.'), 'no test yet', { color: await resolveColor(drawer, '--fg-3') })
   await attachShot(page, testInfo, 'rule-drawer')
-
-  await run.click()
-  const passed = parent(drawer.getByText('Rule passed'))
-  await expect(passed, 'the Rule passed box').toBeVisible()
-  await expectStyles(passed, 'Rule passed box', { radius: '6px' })
-
-  await drawer.getByRole('button', { name: 'Close' }).click()
-  await expect(drawer).toBeHidden()
-  await mn.locator('.ops-row').filter({ hasText: 'line.qty.range' }).click()
-  await expect(drawer).toBeVisible()
-  await expect(drawer.getByRole('button', { name: 'Kill-switch' }), 'a disabled rule offers no kill-switch').toHaveCount(0)
-  await settle(page, drawer)
-  await attachShot(page, testInfo, 'rule-drawer-disabled')
 
   await drawer.getByRole('button', { name: 'Close' }).click()
   await expect(drawer).toBeHidden()
@@ -825,13 +813,20 @@ test('SUP-04 rule and audit drawers', async ({ page }, testInfo) => {
 test('SUP-04 kill confirm', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
+  const account = await staffAccount()
+  const api = (await signInSession(account.email, account.password)).access_token
+  if (!(await probeEnabled(api))) await rawFetch(`${STAFF_RULES}/${PROBE_RULE}`, { method: 'PATCH', headers: { Authorization: `Bearer ${api}` }, body: { enabled: true, reason: 'e2e restore' } })
 
   await openScreen(page, 'Rules', 'Rules admin')
-  await mainOf(page).locator('[role="switch"]').first().click()
+  const probeSwitch = mainOf(page).locator('.ops-row').filter({ hasText: PROBE_RULE }).getByRole('switch')
+  await expect(probeSwitch).toBeVisible()
+  await expect(probeSwitch).toHaveAttribute('aria-checked', 'true')
+  await probeSwitch.click()
   const dialog = page.getByRole('dialog').filter({ hasText: 'Disable a live rule?' })
   await expectPanel(page, dialog, 'kill confirm')
   await expectStyles(dialog.locator('h3').locator('xpath=preceding-sibling::span[1]'), 'kill icon tile', { radius: '6px' })
-  await expectStyles(parent(dialog.getByText('After NRS accreditation')), 'amber note', { radius: '6px' })
+  await expect(dialog.getByRole('textbox', { name: 'Reason' }), 'the confirm asks for a reason').toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Disable rule' }), 'Disable rule waits for a reason').toBeDisabled()
   await expectStyles(dialog.getByRole('button', { name: 'Disable rule' }), 'Disable rule', { 'background-color': 'rgb(162, 50, 50)', color: 'rgb(255, 255, 255)', radius: '7px' })
   await attachShot(page, testInfo, 'kill-confirm')
 
@@ -841,13 +836,134 @@ test('SUP-04 kill confirm', async ({ page }, testInfo) => {
   noErrors(errors, 'SUP-04 kill confirm')
 })
 
-test('SUP-04 publish modal', async ({ page }, testInfo) => {
+// The probe is a global rule no other spec names (contract-validation.spec.ts).
+const PROBE_RULE = 'no-duplicate-line-items'
+const STAFF_RULES = '/api/validation/v1/staff/rules'
+
+async function probeEnabled(token: string): Promise<boolean> {
+  const res = await rawFetch(STAFF_RULES, { headers: { Authorization: `Bearer ${token}` } })
+  expect(res.status, 'staff rules list').toBe(200)
+  const probe = (res.body as { rules: { key: string; enabled: boolean }[] }).rules.find((r) => r.key === PROBE_RULE)
+  if (!probe) throw new Error(`probe rule ${PROBE_RULE} is not in the version in force`)
+  return probe.enabled
+}
+
+test('SUP-05 kill switch: real rows, reason-gated confirm, switch and restore', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const account = await staffAccount()
+  const api = (await signInSession(account.email, account.password)).access_token
+  const mn = mainOf(page)
+
+  try {
+    await openScreen(page, 'Rules', 'Rules admin')
+    const row = mn.locator('.ops-row').filter({ hasText: PROBE_RULE })
+    const sw = row.getByRole('switch')
+    await expect(sw, 'the probe row has its switch').toBeVisible()
+    await expect(sw).toHaveAttribute('aria-checked', 'true')
+
+    await sw.click()
+    const off = page.getByRole('dialog').filter({ hasText: 'Disable a live rule?' })
+    await expect(off.getByRole('button', { name: 'Disable rule' }), 'confirm waits for a reason').toBeDisabled()
+    await off.getByRole('textbox', { name: 'Reason' }).fill('e2e kill switch')
+    await off.getByRole('button', { name: 'Disable rule' }).click()
+    await expect(sw, 'the switch reads off').toHaveAttribute('aria-checked', 'false')
+    expect(await probeEnabled(api), 'the API agrees the rule is off').toBe(false)
+
+    await expect(sw).toBeEnabled()
+    await sw.click()
+    const on = page.getByRole('dialog').filter({ hasText: 'Enable this rule?' })
+    await expect(on.getByRole('button', { name: 'Enable rule' }), 'confirm waits for a reason').toBeDisabled()
+    await on.getByRole('textbox', { name: 'Reason' }).fill('e2e restore')
+    await on.getByRole('button', { name: 'Enable rule' }).click()
+    await expect(sw, 'the switch reads on').toHaveAttribute('aria-checked', 'true')
+    expect(await probeEnabled(api), 'the API agrees the rule is on').toBe(true)
+  } finally {
+    if (!(await probeEnabled(api))) await rawFetch(`${STAFF_RULES}/${PROBE_RULE}`, { method: 'PATCH', headers: { Authorization: `Bearer ${api}` }, body: { enabled: true, reason: 'e2e restore' } })
+  }
+
+  noErrors(errors, 'SUP-05 kill switch')
+})
+
+test('SUP-05 kill confirm layout', async ({ page }) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
 
   await openScreen(page, 'Rules', 'Rules admin')
-  await mainOf(page).getByRole('button', { name: 'Publish draft' }).click()
-  const dialog = page.getByRole('dialog').filter({ hasText: 'Publish draft → v9' })
+  const sw = mainOf(page).locator('.ops-row').filter({ hasText: PROBE_RULE }).getByRole('switch')
+  await expect(sw).toBeVisible()
+  await sw.click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Disable a live rule?' })
+  await expect(dialog).toBeVisible()
+
+  await atWidths(page, 'SUP-05 kill confirm layout', async () => {
+    const vp = page.viewportSize()!
+    const r = await boxes(page, {
+      dialog,
+      reason: dialog.getByRole('textbox', { name: 'Reason' }),
+      cancel: dialog.getByRole('button', { name: 'Cancel' }),
+      confirm: dialog.getByRole('button', { name: 'Disable rule' }),
+    })
+    return {
+      problems: [
+        ...within({ x: 0, y: 0, width: vp.width, height: vp.height }, r.dialog, 'dialog in the viewport'),
+        ...within(r.dialog, r.reason, 'Reason field in the dialog'),
+        ...apart(r.reason, r.cancel, 'Reason / Cancel'),
+        ...apart(r.reason, r.confirm, 'Reason / confirm'),
+        ...apart(r.cancel, r.confirm, 'Cancel / confirm'),
+      ],
+      rects: r,
+    }
+  })
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dialog, 'Cancel closes the confirm').toBeHidden()
+  noErrors(errors, 'SUP-05 kill confirm layout')
+})
+
+// A draft always exists after this: opened if absent, with a probe rule so the publish diff has a row.
+const STAFF_VERSIONS = '/api/validation/v1/staff/rule-versions'
+const DRAFT_PROBE = 'e2e-desk-probe'
+type StaffVersion = { version: number; state: string }
+
+type ProbeRule = { key: string; message: string; when?: string }
+
+async function ensureDraft(token: string, extra?: ProbeRule): Promise<number> {
+  const headers = { Authorization: `Bearer ${token}` }
+  const findDraft = async (): Promise<StaffVersion | undefined> => {
+    const res = await rawFetch(STAFF_VERSIONS, { headers })
+    expect(res.status, 'staff versions list').toBe(200)
+    return (res.body as { versions: StaffVersion[] }).versions.find((v) => v.state === 'draft')
+  }
+  let draft = await findDraft()
+  if (!draft) {
+    const opened = await rawFetch(`${STAFF_VERSIONS}/draft`, { method: 'POST', headers })
+    expect([201, 409], 'open a draft').toContain(opened.status)
+    draft = await findDraft()
+  }
+  if (!draft) throw new Error('no draft after opening one')
+  const probe: ProbeRule = { key: DRAFT_PROBE, message: 'e2e desk probe' }
+  for (const r of [probe, ...(extra ? [extra] : [])]) {
+    const rule = { type: r.when ? 'cel' : 'required', target: 'invoice.invoice_number', params: r.when ? { expr: 'true' } : {}, severity: 'info', when: r.when ?? null, enabled: false, ...r }
+    const added = await rawFetch(`${STAFF_VERSIONS}/draft/rules`, { method: 'POST', headers, body: rule })
+    expect([201, 409], `add draft rule ${r.key}`).toContain(added.status)
+  }
+  return draft.version
+}
+
+async function staffToken(): Promise<string> {
+  const account = await staffAccount()
+  return (await signInSession(account.email, account.password)).access_token
+}
+
+test('SUP-04 publish modal', async ({ page }, testInfo) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const draft = await ensureDraft(await staffToken())
+
+  await openScreen(page, 'Rules', 'Rules admin')
+  await mainOf(page).getByRole('button', { name: `Publish draft v${draft}` }).click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Publish draft → v' })
   await expectPanel(page, dialog, 'publish modal')
   await everyStyles(dialog.locator('span[style*="width: 22px"]'), 1, 'diff sign tile', { radius: '4px' })
   await attachShot(page, testInfo, 'publish-modal')
@@ -909,4 +1025,433 @@ test('SUP-04 re-drive toast, empty jobs and a clear health card', async ({ page 
   await attachShot(page, testInfo, 'health-clear')
 
   noErrors(errors, 'SUP-04 re-drive')
+})
+
+const RAIL_ROWS = 'button[aria-pressed]'
+const VERSION_TAG = /^(DRAFT|IN FORCE|SCHEDULED|SUPERSEDED|RETIRED)$/
+
+// Chip background and text tokens by tag; the tone is in Rules.tsx VERSION_TONE.
+const TONE_TOKENS: Record<string, [string, string]> = {
+  'IN FORCE': ['--status-green-bg', '--status-green-text'],
+  DRAFT: ['--status-amber-bg', '--status-amber-text'],
+  SUPERSEDED: ['--status-muted-bg', '--status-muted-text'],
+  RETIRED: ['--status-muted-bg', '--status-muted-text'],
+  SCHEDULED: ['--action-tint', '--action'],
+}
+
+test('SUP-06 versions rail layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  await openScreen(page, 'Rules', 'Rules admin')
+  await expect(mainOf(page).locator('[role="switch"]').first()).toBeVisible()
+
+  await atWidths(page, 'SUP-06 versions rail layout', async () => {
+    const mn = mainOf(page)
+    const { card } = await boxes(page, { card: mn.locator('.ops-rules-grid > div:first-child > div:first-child') })
+    const rows = mn.locator(`.ops-rules-grid ${RAIL_ROWS}`)
+    const rowRects = await rectsOf(page, rows, 'rail row')
+    const chips = await rectsOf(page, rows.locator('xpath=./span[2]'), 'tag chip')
+    const texts = await rectsOf(page, rows.locator('xpath=./span[1]'), 'version text')
+    const kids = await gridKids(page, '.ops-rules-grid', 'rules grid')
+    await noSidewaysScroll(page, 'Rules')
+    return {
+      problems: [
+        ...rowRects.flatMap((r, i) => within(card, r, `rail row ${i} in the rail card`)),
+        ...chips.flatMap((c, i) => [...apart(c, texts[i], `tag chip ${i} / version text`), ...within(rowRects[i], c, `tag chip ${i} in its row`)]),
+        ...apart(kids[0], kids[1], 'rail / table columns'),
+      ],
+      rects: { card, rowRects, chips, texts, kids },
+    }
+  })
+
+  noErrors(errors, 'SUP-06 versions rail layout')
+})
+
+test('SUP-06 rules desk paint', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const mn = mainOf(page)
+  await openScreen(page, 'Rules', 'Rules admin')
+  await expect(mn.locator('[role="switch"]').first()).toBeVisible()
+  await settle(page, mn.locator(RAIL_ROWS).first())
+
+  const rows = mn.locator(`.ops-rules-grid ${RAIL_ROWS}`)
+  const seen: string[] = []
+  for (const [i, row] of (await eachOf(rows, 1, 'rail row')).entries()) {
+    const chip = kid(row, 2)
+    const tag = (await kid(chip, 1).innerText()).trim()
+    expect(tag, `rail row ${i} tag`).toMatch(VERSION_TAG)
+    seen.push(tag)
+    const [bg, fg] = TONE_TOKENS[tag]
+    await expectStyles(chip, `${tag} chip`, { 'background-color': await resolveColor(mn, bg) })
+    await expectStyles(kid(chip, 1), `${tag} chip text`, { color: await resolveColor(mn, fg) })
+  }
+  expect(seen, 'one version is in force').toContain('IN FORCE')
+
+  const badgeOf = (tag: string): Locator => mn.getByText(new RegExp(`^${tag} v\\d+$`))
+  const chipPaint = async (row: Locator): Promise<Want> => ({
+    'background-color': (await styles(kid(row, 2), ['background-color']))['background-color'],
+    color: (await styles(kid(kid(row, 2), 1), ['color']))['color'],
+  })
+  const selected = mn.locator(`.ops-rules-grid ${RAIL_ROWS}[aria-pressed="true"]`)
+  await expect(selected, 'one row is selected').toHaveCount(1)
+  await expectStyles(badgeOf('IN FORCE'), 'table badge of the version in force', await chipPaint(selected))
+
+  const other = rows.filter({ hasNotText: 'IN FORCE' }).filter({ hasNotText: '· 0 rules' }).first()
+  await expect(other, 'a version with rules apart from the one in force').toBeVisible()
+  const otherTag = (await kid(kid(other, 2), 1).innerText()).trim()
+  await other.click()
+  await expect(badgeOf(otherTag), 'the table badge follows the selected version').toBeVisible()
+  await expectStyles(badgeOf(otherTag), `table badge of ${otherTag}`, await chipPaint(selected))
+
+  const sw = mn.locator('[role="switch"]').first()
+  await expect(sw, 'every switch is locked off the version in force').toHaveAttribute('title', 'Only the version in force is switched')
+  await expect(sw).toBeDisabled()
+  await expectStyles(sw, 'disabled switch', { opacity: '0.45', cursor: 'not-allowed' })
+
+  noErrors(errors, 'SUP-06 rules desk paint')
+})
+
+test('SUP-06 rule drawer holds long content', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const account = await staffAccount()
+  const api = (await signInSession(account.email, account.password)).access_token
+  const res = await rawFetch(STAFF_RULES, { headers: { Authorization: `Bearer ${api}` } })
+  const rules = (res.body as { rules: { key: string; params: unknown }[] }).rules
+  const longest = rules.reduce((a, b) => (JSON.stringify(b.params).length > JSON.stringify(a.params).length ? b : a))
+
+  const mn = mainOf(page)
+  await openScreen(page, 'Rules', 'Rules admin')
+  await mn.getByText(longest.key, { exact: true }).click()
+  const { drawer } = await expectDrawer(page, 'rule drawer')
+  await noSidewaysScroll(page, 'the rule drawer page')
+  const body = drawer.locator('xpath=./div[2]')
+  const m = await body.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  expect(m.scrollWidth - m.clientWidth, 'the rule drawer body scrolls sideways').toBeLessThanOrEqual(1)
+  const { drawer: dBox, json } = await boxes(page, { drawer, json: drawer.locator('pre.ops-json') })
+  expect(enclosesRect(dBox, json, 1), 'the JSON block sits inside the drawer').toBe(true)
+
+  noErrors(errors, 'SUP-06 rule drawer holds long content')
+})
+
+// Never publishes: the API contract suite owns the one real publish. The draft is global, so a
+// draft left by an earlier run or retry is reused and the unique rule key keeps this run's rows apart.
+test('SUP-06 rules desk: versions, draft edit, test and publish confirm', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const mn = mainOf(page)
+  const key = `e2e-desk-ui-${randomUUID().slice(0, 8)}`
+  await openScreen(page, 'Rules', 'Rules admin')
+  await expect(mn.locator('[role="switch"]').first()).toBeVisible()
+
+  const rows = mn.locator(`.ops-rules-grid ${RAIL_ROWS}`)
+  // A regex: a string hasText is case-insensitive and would match every retired row's "never in force".
+  await expect(rows.filter({ hasText: /IN FORCE/ }), 'one version in force').toHaveCount(1)
+
+  const other = rows.filter({ hasNotText: /IN FORCE|DRAFT/ }).filter({ hasNotText: '· 0 rules' }).first()
+  await other.click()
+  const switches = mn.locator('[role="switch"]')
+  await expect(switches.first(), 'switches are locked off the version in force').toBeDisabled()
+  await expect(switches.last()).toBeDisabled()
+
+  const newDraft = mn.getByRole('button', { name: 'New draft' })
+  if (await newDraft.isEnabled()) await newDraft.click()
+  await rows.filter({ hasText: /DRAFT/ }).click()
+  const addRule = mn.getByRole('button', { name: 'Add rule' })
+  await expect(addRule, 'the draft is selected').toBeVisible()
+
+  await addRule.click()
+  const drawer = page.locator('.ops-drawer')
+  await drawer.getByLabel('Key', { exact: true }).fill(key)
+  await drawer.getByLabel('Severity', { exact: true }).selectOption('info')
+  await drawer.getByLabel('Target', { exact: true }).fill(key.replace(/-/g, '_'))
+  await drawer.getByLabel('Message', { exact: true }).fill('e2e desk journey')
+  await drawer.getByRole('button', { name: 'Save to draft' }).click()
+  await expect(drawer, 'saving closes the drawer').toBeHidden()
+  await expect(mn.getByText(key, { exact: true }), 'the rule is in the draft table').toBeVisible()
+
+  await mn.getByRole('button', { name: 'Test draft' }).click()
+  const testDlg = page.getByRole('dialog').filter({ hasText: 'Sample invoice' })
+  await testDlg.getByRole('button', { name: 'Run test' }).click()
+  const draftCol = parent(testDlg.getByText(/^Draft v\d+$/))
+  const forceCol = parent(testDlg.getByText(/^In force v\d+$/))
+  await expect(draftCol.getByText(key), 'the rule fires in the Draft column').toBeVisible()
+  await expect(forceCol.getByText(key), 'the rule is not in the In force column').toHaveCount(0)
+  await testDlg.getByRole('button', { name: 'Cancel' }).click()
+  await expect(testDlg).toBeHidden()
+
+  await mn.getByRole('button', { name: /^Publish draft v\d+$/ }).click()
+  const publish = page.getByRole('dialog').filter({ hasText: 'Publish draft → v' })
+  const diffRow = parent(parent(publish.getByText(key, { exact: true })))
+  await expect(diffRow, 'the diff lists the rule as added').toContainText('ADDED')
+  await expect(publish.getByLabel('Start date')).toHaveValue('')
+  await expect(publish.getByRole('button', { name: /Publish v\d+$/ }), 'no date, no publish').toBeDisabled()
+  await publish.getByRole('button', { name: 'Cancel' }).click()
+  await expect(publish, 'Cancel closes the modal').toBeHidden()
+
+  noErrors(errors, 'SUP-06 rules desk journey')
+})
+
+const DRAFT_ROW = `.ops-rules-grid ${RAIL_ROWS}`
+
+async function openDraftView(page: Page, token: string, extra?: ProbeRule): Promise<number> {
+  const draft = await ensureDraft(token, extra)
+  await openScreen(page, 'Rules', 'Rules admin')
+  await mainOf(page).locator(DRAFT_ROW).filter({ hasText: /DRAFT/ }).click()
+  await expect(mainOf(page).getByRole('button', { name: 'Add rule' }), 'the draft is selected').toBeVisible()
+  return draft
+}
+
+test('SUP-07 draft controls layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const draft = await openDraftView(page, await staffToken())
+  const mn = mainOf(page)
+
+  await atWidths(page, 'SUP-07 draft controls layout', async () => {
+    const r = await boxes(page, {
+      title: parent(mn.getByRole('heading', { level: 1, name: 'Rules admin' })),
+      newDraft: mn.getByRole('button', { name: 'New draft' }),
+      publish: mn.getByRole('button', { name: `Publish draft v${draft}` }),
+      addRule: mn.getByRole('button', { name: 'Add rule' }),
+      testDraft: mn.getByRole('button', { name: 'Test draft' }),
+      badge: mn.getByText(new RegExp(`^DRAFT v${draft}$`)),
+      count: mn.getByText(/^\d+ RULES$/),
+    })
+    await noSidewaysScroll(page, 'Rules')
+    return {
+      problems: [
+        ...apart(r.newDraft, r.publish, 'New draft / Publish draft'),
+        ...apart(r.title, r.newDraft, 'title block / New draft'),
+        ...apart(r.title, r.publish, 'title block / Publish draft'),
+        ...pairwiseApart([r.addRule, r.testDraft, r.badge, r.count], 'table bar'),
+      ],
+      rects: r,
+    }
+  })
+
+  noErrors(errors, 'SUP-07 draft controls layout')
+})
+
+test('SUP-07 draft drawer layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  await openDraftView(page, await staffToken())
+  const mn = mainOf(page)
+
+  await mn.getByRole('button', { name: 'Add rule' }).click()
+  const { drawer: fresh } = await expectDrawer(page, 'new rule drawer')
+  await atWidths(page, 'SUP-07 draft drawer layout', async () => {
+    const names = ['Key', 'Type', 'Severity', 'Target', 'Params', 'When', 'Message']
+    const r = await boxes(page, { drawer: fresh, ...Object.fromEntries(names.map((n) => [n, parent(fresh.getByLabel(n, { exact: true }))])), enabled: fresh.getByLabel('Enabled'), save: fresh.getByRole('button', { name: 'Save to draft' }) })
+    const fields = [...names.map((n) => r[n as keyof typeof r]), r.enabled]
+    return {
+      problems: [...fields.flatMap((f, i) => within(r.drawer, f, `field ${i} in the drawer`)), ...pairwiseApart(fields, 'fields'), ...within(r.drawer, r.save, 'Save in the drawer')],
+      rects: r,
+    }
+  })
+  await fresh.getByRole('button', { name: 'Close' }).click()
+
+  await mn.getByText(DRAFT_PROBE, { exact: true }).click()
+  const { drawer } = await expectDrawer(page, 'draft rule drawer')
+  await atWidths(page, 'SUP-07 draft drawer footer', async () => {
+    const r = await boxes(page, { drawer, remove: drawer.getByRole('button', { name: /Remove from draft/ }), save: drawer.getByRole('button', { name: 'Save to draft' }) })
+    return { problems: [...within(r.drawer, r.remove, 'Remove in the drawer'), ...within(r.drawer, r.save, 'Save in the drawer'), ...apart(r.remove, r.save, 'Remove / Save')], rects: r }
+  })
+
+  noErrors(errors, 'SUP-07 draft drawer layout')
+})
+
+test('SUP-07 test modal layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  await openDraftView(page, await staffToken())
+
+  await mainOf(page).getByRole('button', { name: 'Test draft' }).click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Sample invoice' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: 'Run test' }).click()
+  const draftHead = dialog.getByText(/^Draft v\d+$/)
+  await expect(draftHead, 'the result columns show').toBeVisible()
+
+  await atWidths(page, 'SUP-07 test modal layout', async () => {
+    const vp = page.viewportSize()!
+    const r = await boxes(page, {
+      dialog,
+      sample: dialog.getByLabel('Sample invoice'),
+      draftCol: parent(draftHead),
+      forceCol: parent(dialog.getByText(/^In force v\d+$/)),
+    })
+    return {
+      problems: [
+        ...within({ x: 0, y: 0, width: vp.width, height: vp.height }, r.dialog, 'dialog in the viewport'),
+        ...within(r.dialog, r.sample, 'textarea in the dialog'),
+        ...apart(r.draftCol, r.forceCol, 'result columns'),
+      ],
+      rects: r,
+    }
+  })
+
+  noErrors(errors, 'SUP-07 test modal layout')
+})
+
+test('SUP-07 publish modal layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const draft = await openDraftView(page, await staffToken())
+
+  await mainOf(page).getByRole('button', { name: `Publish draft v${draft}` }).click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Publish draft → v' })
+  await expect(dialog).toBeVisible()
+
+  await atWidths(page, 'SUP-07 publish modal layout', async () => {
+    const vp = page.viewportSize()!
+    const r = await boxes(page, {
+      dialog,
+      date: parent(dialog.getByLabel('Start date')),
+      cancel: dialog.getByRole('button', { name: 'Cancel' }),
+      publish: dialog.getByRole('button', { name: `Publish v${draft}` }),
+    })
+    return {
+      problems: [
+        ...within({ x: 0, y: 0, width: vp.width, height: vp.height }, r.dialog, 'dialog in the viewport'),
+        ...within(r.dialog, r.date, 'date field in the dialog'),
+        ...apart(r.date, r.cancel, 'date / Cancel'),
+        ...apart(r.date, r.publish, 'date / Publish'),
+        ...apart(r.cancel, r.publish, 'Cancel / Publish'),
+      ],
+      rects: r,
+    }
+  })
+
+  noErrors(errors, 'SUP-07 publish modal layout')
+})
+
+test('SUP-07 desk controls paint', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const draft = await openDraftView(page, await staffToken())
+  const mn = mainOf(page)
+  await settle(page, mn.getByRole('button', { name: 'New draft' }))
+
+  const publish = mn.getByRole('button', { name: `Publish draft v${draft}` })
+  const [radius] = await radii(publish)
+  const { height } = await styles(publish, ['height'])
+  await expectStyles(mn.getByRole('button', { name: 'New draft' }), 'New draft (disabled: a draft exists)', { radius, height, opacity: '0.45', cursor: 'not-allowed' })
+  const testDraft = mn.getByRole('button', { name: 'Test draft' })
+  await expectStyles(mn.getByRole('button', { name: 'Add rule' }), 'Add rule', { radius, height: (await styles(testDraft, ['height']))['height'] })
+
+  await mn.locator(DRAFT_ROW).filter({ hasText: /IN FORCE/ }).click()
+  await mn.locator('[role="switch"]').first().click()
+  const kill = page.getByRole('dialog').filter({ hasText: 'Disable a live rule?' })
+  const [reasonRadius] = await radii(parent(kill.getByRole('textbox', { name: 'Reason' })))
+  await kill.getByRole('button', { name: 'Cancel' }).click()
+  await expect(kill).toBeHidden()
+
+  await publish.click()
+  const dialog = page.getByRole('dialog').filter({ hasText: 'Publish draft → v' })
+  await expect(dialog).toBeVisible()
+  await expectStyles(parent(dialog.getByLabel('Start date')), 'date field wrapper', { radius: reasonRadius })
+
+  noErrors(errors, 'SUP-07 desk controls paint')
+})
+
+test('SUP-07 draft drawer holds long content', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const key = 'e2e-desk-long'
+  await openDraftView(page, await staffToken(), { key, message: 'M'.repeat(500), when: `true${' && true'.repeat(37)}` })
+  const mn = mainOf(page)
+
+  await mn.getByText(key, { exact: true }).click()
+  const { drawer } = await expectDrawer(page, 'draft drawer')
+  await expect(drawer.getByLabel('Message')).toHaveValue('M'.repeat(500))
+  await noSidewaysScroll(page, 'the draft drawer page')
+  const m = await drawer.locator('xpath=./div[2]').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  expect(m.scrollWidth - m.clientWidth, 'the draft drawer body scrolls sideways').toBeLessThanOrEqual(1)
+  const box = await boxes(page, { drawer })
+  for (const name of ['Type', 'Severity', 'Target', 'Params', 'When', 'Message']) {
+    const f = await boxes(page, { f: parent(drawer.getByLabel(name, { exact: true })) })
+    expect(enclosesRect(box.drawer, f.f, 1), `${name} sits inside the drawer`).toBe(true)
+  }
+
+  noErrors(errors, 'SUP-07 draft drawer holds long content')
+})
+
+const STAFF_SYNCS = '/api/validation/v1/staff/code-list-syncs'
+
+test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = await startSupport(page)
+  const readLists = async () => {
+    const res = await rawFetch(STAFF_SYNCS, { headers: { Authorization: `Bearer ${await staffToken()}` } })
+    return (res.body as { lists: { list: string }[] }).lists
+  }
+  let lists = await readLists()
+  for (let i = 0; i < 6 && lists.length === 0; i++) {
+    await page.waitForTimeout(5_000)
+    lists = await readLists()
+  }
+  const mn = mainOf(page)
+  await openScreen(page, 'Rules', 'Rules admin')
+  await expect(mn.locator('[role="switch"]').first()).toBeVisible()
+  const panel = mn.locator('.ops-rules-grid > div:first-child > div:nth-child(2)')
+  await expect(panel.getByText('Code-list syncs', { exact: true })).toBeVisible()
+
+  if (lists.length === 0) {
+    await expect(panel.getByText('No sync recorded yet.'), 'an empty sync log says so').toBeVisible()
+    noErrors(errors, 'SUP-08 code-list panel and drawer layout')
+    test.skip(true, 'no nrs_code_list_syncs rows on this env; the validation boot sync fills them from live NRS')
+  }
+  const rows = panel.locator('button')
+  await expect(rows, 'one panel row per synced list').toHaveCount(lists.length)
+
+  await atWidths(page, 'SUP-08 code-list panel layout', async () => {
+    const { card, versions } = await boxes(page, { card: panel, versions: mn.locator('.ops-rules-grid > div:first-child > div:first-child') })
+    const rowRects = await rectsOf(page, rows, 'panel row')
+    const names = await rectsOf(page, rows.locator('xpath=./span[1]/span[1]'), 'list name')
+    const chips = await rectsOf(page, rows.locator('xpath=./span[1]/span[2]'), 'status chip')
+    const dates = await rectsOf(page, rows.locator('xpath=./span[2]'), 'sync date')
+    const counts = await rectsOf(page, rows.locator('xpath=./span[3]'), 'counts')
+    await noSidewaysScroll(page, 'Rules')
+    return {
+      problems: [
+        ...rowRects.flatMap((r, i) => within(card, r, `panel row ${i} in the panel card`)),
+        ...names.flatMap((n, i) => pairwiseApart([n, chips[i], dates[i], counts[i]], `panel row ${i} parts`)),
+        ...apart(versions, card, 'versions card / panel'),
+        ...(Math.abs(versions.x - card.x) <= 1 ? [] : [`versions card and panel are not left-aligned: ${versions.x} vs ${card.x}`]),
+        ...below(versions, card, 'panel'),
+      ],
+      rects: { card, versions, rowRects, names, chips, dates, counts },
+    }
+  })
+
+  const rail = mn.locator(`.ops-rules-grid ${RAIL_ROWS}[aria-pressed="false"]`).first()
+  await expect(rail, 'a versions-rail row that is not selected').toBeVisible()
+  const row = rows.first()
+  const paint = ['padding', 'background-color']
+  await expectStyles(row, 'panel row paint (D31)', await styles(rail, paint))
+  await expectStyles(kid(kid(row, 1), 2), 'panel status chip', { radius: (await radii(kid(rail, 2)))[0] })
+
+  await row.click()
+  const { drawer } = await expectDrawer(page, 'code-list drawer')
+  await expect(drawer.getByText('CODE LIST', { exact: true })).toBeVisible()
+  await atWidths(page, 'SUP-08 code-list drawer layout', async () => {
+    const d = await boxes(page, { drawer })
+    const blocks = await rectsOf(page, drawer.locator('xpath=./div[2]/div'), 'sync block')
+    const codes = await rectsOf(page, drawer.locator('xpath=./div[2]').locator('div.mono'), 'code block')
+    await noSidewaysScroll(page, 'the code-list drawer page')
+    const m = await drawer.locator('xpath=./div[2]').evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }), undefined, { timeout: 5_000 })
+    return {
+      problems: [
+        ...blocks.flatMap((b, i) => withinX(d.drawer, b, `sync block ${i} in the drawer`)),
+        ...codes.flatMap((c, i) => withinX(d.drawer, c, `code block ${i} in the drawer`)),
+        ...(m.scrollWidth - m.clientWidth <= 1 ? [] : [`the drawer body scrolls sideways: ${m.scrollWidth} vs ${m.clientWidth}`]),
+      ],
+      rects: { drawer: d.drawer, blocks, codes },
+    }
+  })
+
+  noErrors(errors, 'SUP-08 code-list panel and drawer layout')
 })

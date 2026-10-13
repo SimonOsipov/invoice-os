@@ -116,8 +116,8 @@ func TestAliEngineLines_TheRuledWildGoldenGroupsIntoThreeAscendingEntries(t *tes
 // --- AC-2: a present role key means a populated cell -------------------------------------------
 
 func TestAliEngineLines_APresentRoleKeyMeansAPopulatedCell(t *testing.T) {
-	if len(LineRoles) != 5 {
-		t.Fatalf("len(LineRoles) = %d, want 5", len(LineRoles))
+	if len(LineRoles) != 10 {
+		t.Fatalf("len(LineRoles) = %d, want 10", len(LineRoles))
 	}
 	pages := aldWildRuledPages(t)
 	lines := LineItems(pages)

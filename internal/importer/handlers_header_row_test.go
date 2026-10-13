@@ -308,7 +308,7 @@ func TestImport_PassesTheHeaderRowAndItsColumns(t *testing.T) {
 		rows      [][]string
 	}
 	var calls []call
-	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool, defaultInvoiceKind string) (BatchResult, error) {
 		calls = append(calls, call{headerRow, header, rows})
 		return BatchResult{}, nil
 	}
@@ -359,7 +359,7 @@ func TestImport_BadHeaderRowNeverReachesImport(t *testing.T) {
 		t.Run(v, func(t *testing.T) {
 			open := newFakeDocOpen("r.csv", "", []byte(titleCSV))
 			var impCalls int
-			imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+			imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool, defaultInvoiceKind string) (BatchResult, error) {
 				impCalls++
 				return BatchResult{}, nil
 			}
@@ -384,7 +384,7 @@ func TestImport_BadHeaderRowNeverReachesImport(t *testing.T) {
 	t.Run("9", func(t *testing.T) {
 		open := newFakeDocOpen("r.csv", "", []byte(titleCSV))
 		var impCalls int
-		imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+		imp := func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool, defaultInvoiceKind string) (BatchResult, error) {
 			impCalls++
 			return BatchResult{}, nil
 		}

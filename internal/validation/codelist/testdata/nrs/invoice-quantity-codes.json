@@ -1,0 +1,20 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "code": "10",
+      "name": "group",
+      "description": "A unit of count defining the number of groups (group: set of items classified together)."
+    },
+    {
+      "code": "11",
+      "name": "outfit",
+      "description": "A unit of count defining the number of outfits (outfit: a complete set of equipment / materials / objects used for a specific purpose)."
+    },
+    {
+      "code": "13",
+      "name": "ration",
+      "description": "A unit of count defining the number of rations (ration: a single portion of provisions)."
+    }
+  ]
+}

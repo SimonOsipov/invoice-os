@@ -75,7 +75,7 @@ func (a *App) Ready(name string, check ReadyCheck) {
 // request-id, tenant-id and identity run before tracing and recovery so a recovered
 // panic is logged and reported with the request and tenant ids, and so tenant-scoped
 // handlers see the verified caller the gateway injected. Tracing runs before recovery
-// so a recovered 500 reaches the transaction status. The gateway guard (RequireGateway) runs right after request-id. serverError is innermost so it
+// so a recovered 500 reaches the transaction status. The gateway guard (RequireGateway) runs right after request-id. staffMiddleware (the /v1/staff rules-role check) runs inside recovery and the request log. serverError is innermost so it
 // reads the mux's matched pattern.
 func (a *App) Handler() http.Handler {
 	return chain(a.Mux,
@@ -86,6 +86,7 @@ func (a *App) Handler() http.Handler {
 		tracingMiddleware(a.Mux),
 		recoveryMiddleware(a.Logger),
 		requestLogMiddleware(a.Logger),
+		a.staffMiddleware,
 		serverErrorMiddleware,
 	)
 }

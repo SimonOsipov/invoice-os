@@ -16,9 +16,27 @@ type Canonical struct {
 	VAT           *string
 	Total         *string
 	Lines         []CanonicalLine
+
+	InvoiceKind     *string
+	TaxCurrencyCode *string
+	DueDate         *time.Time
+	IssueTime       *string
+	TaxPointDate    *time.Time
+	PaymentStatus   *string
+	TaxSubtotals    []TaxSubtotal
 }
 
-type Party struct{ TIN, Name *string }
+type Party struct {
+	TIN, Name                                           *string
+	Email, Telephone, Street, City, PostalZone, Country *string
+	State, LGA                                          *string
+}
+
+// TaxSubtotal is one tax category's totals, derived from the lines.
+type TaxSubtotal struct {
+	Category                          string
+	Percent, TaxableAmount, TaxAmount *string
+}
 
 type CanonicalLine struct {
 	LineID      string // line_items.id; "" for a not-yet-stored line
@@ -28,6 +46,16 @@ type CanonicalLine struct {
 	UnitPrice   *string
 	LineTotal   *string
 	LineTax     *string
+
+	TaxCategory               *string
+	HSNCode                   *string
+	ISICCode                  *string
+	ProductCategory           *string
+	ServiceCategory           *string
+	SellersItemIdentification *string
+	PriceUnit                 *string
+	TaxPercent                *string
+	BaseQuantity              *string
 }
 
 // Wire is whatever bytes this adapter puts on the wire. Opaque to everything above the seam

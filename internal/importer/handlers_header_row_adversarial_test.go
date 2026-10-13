@@ -31,7 +31,7 @@ type hrCall struct {
 }
 
 func hrRecordingImp(calls *[]hrCall) importFunc {
-	return func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+	return func(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool, defaultInvoiceKind string) (BatchResult, error) {
 		*calls = append(*calls, hrCall{headerRow, header, rows, dryRun})
 		return BatchResult{}, nil
 	}

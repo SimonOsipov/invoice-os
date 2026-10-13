@@ -139,6 +139,7 @@ function mkField(o: Partial<ExtractionFieldState> = {}): ExtractionFieldState {
     reason: '',
     alternatives: [],
     corrected: null,
+    rules: [],
     ...o,
   }
 }
@@ -738,7 +739,7 @@ describe('the state ladder', () => {
 
 describe('the AI-unavailable marker', () => {
   function marker(): ExtractionFieldState {
-    return { name: AI_UNAVAILABLE_FIELD, value: null, region: null, reason: 'unreadable', alternatives: [], corrected: null }
+    return { name: AI_UNAVAILABLE_FIELD, value: null, region: null, reason: 'unreadable', alternatives: [], corrected: null, rules: [] }
   }
 
   it('AIR04-S1: a marker-only job renders the sentence instead of the panes', async () => {
@@ -769,7 +770,7 @@ describe('the AI-unavailable marker', () => {
     ['a marker beside a real field', [marker(), mkField({ name: 'invoice_number' })]],
     [
       'a lone document_text_layer row',
-      [{ name: 'document_text_layer', value: null, region: null, reason: 'unreadable', alternatives: [], corrected: null }],
+      [{ name: 'document_text_layer', value: null, region: null, reason: 'unreadable', alternatives: [], corrected: null, rules: [] }],
     ],
   ] as [string, ExtractionFieldState[]][])('AIR04-S2: %s keeps the panes, not the sentence', async (_label, fields) => {
     render(review({ ctx: serving(mkDetail({ state: 'succeeded', fields })).ctx }))
@@ -3079,6 +3080,7 @@ describe('the document type', () => {
       reason: 'unreadable',
       alternatives: [],
       corrected: null,
+      rules: [],
     }
     render(review({ ctx: serving(mkDetail({ fields: [marker], document_type: 'receipt' })).ctx, onOpenInvoice: () => {} }))
     await flush()

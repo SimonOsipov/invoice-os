@@ -37,8 +37,8 @@ func mockIssuerRoutes(environment, flag string, withCORS func(http.Handler) http
 
 // mockStaffRoute binds the staff grant handler to the owner DSN.
 func mockStaffRoute(dsn string, logger *slog.Logger) http.Handler {
-	return gateway.MockStaffHandler(func(ctx context.Context, userID uuid.UUID) error {
-		return db.GrantStaff(ctx, dsn, userID)
+	return gateway.MockStaffHandler(func(ctx context.Context, userID uuid.UUID, rulesRole bool) error {
+		return db.GrantStaff(ctx, dsn, userID, rulesRole)
 	}, logger)
 }
 

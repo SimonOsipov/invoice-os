@@ -41,7 +41,8 @@ var rvdWireStructs = []struct {
 	{rdReaderSource, "ExtractionPage", []string{"page", "width_px", "height_px"}},
 	{rdReaderSource, "ExtractionCandidate", []string{"value", "region"}},
 	{rdReaderSource, "ExtractionCorrected", []string{"method", "was", "where"}},
-	{rdReaderSource, "ExtractionFieldState", []string{"name", "value", "region", "reason", "alternatives", "corrected"}},
+	{rdReaderSource, "ExtractionRuleBreak", []string{"key", "message"}},
+	{rdReaderSource, "ExtractionFieldState", []string{"name", "value", "region", "reason", "alternatives", "corrected", "rules"}},
 	{rdReaderSource, "ExtractionDocument", []string{"filename", "content_type", "size_bytes", "stored_at"}},
 	// EXTR-15-01 FK-8: failure_kind is pinned immediately after state — the two scalars a
 	// reader consults together — because this list compares declaration ORDER, not a set.
@@ -523,19 +524,26 @@ func TestReaderDetail_LineTaxArrivesAsALineCellNotAHeaderField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", tsxPath, err)
 	}
-	const marker = "const LINE_FIELD_RE = /"
+	// The SPA builds the regex from LINE_WIRE_ROLES; rebuild it from the Go roles.
+	const marker = "const LINE_FIELD_RE = new RegExp(`"
 	idx := strings.Index(string(b), marker)
 	if idx == -1 {
 		t.Fatalf("%s no longer declares LINE_FIELD_RE the way this test expects", tsxPath)
 	}
 	rest := string(b)[idx+len(marker):]
-	end := strings.IndexByte(rest, '/')
+	end := strings.IndexByte(rest, '`')
 	if end == -1 {
-		t.Fatalf("%s: LINE_FIELD_RE's literal has no closing '/' on the same line", tsxPath)
+		t.Fatalf("%s: LINE_FIELD_RE's template literal has no closing backtick", tsxPath)
 	}
-	lineFieldRE, err := regexp.Compile(rest[:end])
+	src := strings.ReplaceAll(rest[:end], "${LINE_WIRE_ROLES.join('|')}", strings.Join(extraction.LineRoles, "|"))
+	lineFieldRE, err := regexp.Compile(strings.ReplaceAll(src, `\\`, `\`))
 	if err != nil {
-		t.Fatalf("compile the extracted LINE_FIELD_RE %q: %v", rest[:end], err)
+		t.Fatalf("compile the extracted LINE_FIELD_RE %q: %v", src, err)
+	}
+	for _, role := range extraction.LineRoles {
+		if n := extraction.LineFieldName(1, role); !lineFieldRE.MatchString(n) {
+			t.Errorf("%s's LINE_FIELD_RE does not match %q -- the cell would render as a header field", tsxPath, n)
+		}
 	}
 	if !lineFieldRE.MatchString(name) {
 		t.Errorf("%s's LINE_FIELD_RE does not match %q -- the line-tax cell would render as a header field", tsxPath, name)

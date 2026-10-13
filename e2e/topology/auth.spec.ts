@@ -1247,7 +1247,6 @@ test('deployed app: a new firm lands on Add your first client, and the import st
 
   await sidebarNav(page).getByRole('button', { name: 'Rules' }).click()
   await expect(page.getByText('No custom rules yet — the golden ruleset alone is running.', { exact: true })).toBeVisible()
-  await expect(page.getByText('No suggestions to show.', { exact: true })).toBeVisible()
   await expect(page.getByText('Derived from')).toHaveCount(0)
 
   await page.locator('header').getByRole('button', { name: 'New invoice' }).click()

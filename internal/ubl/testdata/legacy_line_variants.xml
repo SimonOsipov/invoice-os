@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:CustomizationID>urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0</cbc:CustomizationID>
+  <cbc:ProfileID>urn:fdc:peppol.eu:2017:poacc:billing:01:1.0</cbc:ProfileID>
+  <cbc:ID>INV-2026-0001</cbc:ID>
+  <cbc:IssueDate>2026-08-06</cbc:IssueDate>
+  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
+  <cbc:DocumentCurrencyCode>NGN</cbc:DocumentCurrencyCode>
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyName>
+        <cbc:Name>Acme Supplies Ltd</cbc:Name>
+      </cac:PartyName>
+      <cac:PartyTaxScheme>
+        <cbc:CompanyID>12345678-0001</cbc:CompanyID>
+        <cac:TaxScheme>
+          <cbc:ID>TIN</cbc:ID>
+        </cac:TaxScheme>
+      </cac:PartyTaxScheme>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty>
+    <cac:Party>
+      <cac:PartyName>
+        <cbc:Name>Beta Trading Ltd</cbc:Name>
+      </cac:PartyName>
+      <cac:PartyTaxScheme>
+        <cbc:CompanyID>87654321-0001</cbc:CompanyID>
+        <cac:TaxScheme>
+          <cbc:ID>TIN</cbc:ID>
+        </cac:TaxScheme>
+      </cac:PartyTaxScheme>
+    </cac:Party>
+  </cac:AccountingCustomerParty>
+  <cac:TaxTotal>
+    <cbc:TaxAmount currencyID="NGN">75.00</cbc:TaxAmount>
+  </cac:TaxTotal>
+  <cac:LegalMonetaryTotal>
+    <cbc:LineExtensionAmount currencyID="NGN">1000.00</cbc:LineExtensionAmount>
+    <cbc:TaxExclusiveAmount currencyID="NGN">1000.00</cbc:TaxExclusiveAmount>
+    <cbc:PayableAmount currencyID="NGN">1075.00</cbc:PayableAmount>
+  </cac:LegalMonetaryTotal>
+  <cac:InvoiceLine>
+    <cbc:ID>1</cbc:ID>
+    <cbc:InvoicedQuantity>3.000</cbc:InvoicedQuantity>
+  </cac:InvoiceLine>
+  <cac:InvoiceLine>
+    <cbc:ID>2</cbc:ID>
+    <cac:Item>
+      <cbc:Name>Only desc</cbc:Name>
+    </cac:Item>
+  </cac:InvoiceLine>
+  <cac:InvoiceLine>
+    <cbc:ID>3</cbc:ID>
+    <cac:Price>
+      <cbc:PriceAmount currencyID="NGN">9.99</cbc:PriceAmount>
+    </cac:Price>
+  </cac:InvoiceLine>
+  <cac:InvoiceLine>
+    <cbc:ID>4</cbc:ID>
+    <cac:TaxTotal>
+      <cbc:TaxAmount currencyID="NGN">1.00</cbc:TaxAmount>
+    </cac:TaxTotal>
+  </cac:InvoiceLine>
+  <cac:InvoiceLine>
+    <cbc:ID>5</cbc:ID>
+    <cbc:LineExtensionAmount currencyID="NGN">5.00</cbc:LineExtensionAmount>
+  </cac:InvoiceLine>
+  <cac:InvoiceLine>
+    <cbc:ID>7</cbc:ID>
+    <cbc:InvoicedQuantity></cbc:InvoicedQuantity>
+    <cac:Item>
+      <cbc:Name></cbc:Name>
+    </cac:Item>
+  </cac:InvoiceLine>
+  <cac:InvoiceLine>
+    <cbc:ID>0</cbc:ID>
+  </cac:InvoiceLine>
+</Invoice>

@@ -386,6 +386,28 @@ describe('ReviewInvoicesTab: the review prototype look (RESKIN2-04-04)', () => {
     expect(searchBox.style.borderRadius).toBe('var(--radius-btn)')
   })
 
+  it('reviewInvoicesTab_customKeyRailPillReadsCustomRule', async () => {
+    const key = 'custom:3f2a0000-0000-0000-0000-000000000001'
+    const rows = [row({ id: 'inv-a', invoice_number: 'INV-A' })]
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.includes('/violation-summary')) {
+          return Promise.resolve<MockResponse>({ ok: true, status: 200, json: () => Promise.resolve({ rules: [{ rule_key: key, invoices: 2 }, { rule_key: 'vat-standard-rate', invoices: 1 }] }) })
+        }
+        return Promise.resolve(listResponse(rows, { limit: 50, offset: 0, total: 1 }))
+      }),
+    )
+    renderTab()
+    await screen.findByText('INV-A')
+    const pills = await screen.findAllByTestId('review-rail-pill')
+    expect(pills).toHaveLength(2)
+    const custom = pills.find((p) => p.textContent?.startsWith('Custom rule'))
+    expect(custom?.getAttribute('title')).toBe(key)
+    const golden = pills.find((p) => p.textContent?.startsWith('vat-standard-rate'))
+    expect(golden?.getAttribute('title')).toBe('vat-standard-rate')
+  })
+
   it('the bulk bar follows the review prototype', async () => {
     stubLook()
     renderTab()

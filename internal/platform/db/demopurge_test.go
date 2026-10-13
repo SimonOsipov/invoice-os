@@ -212,10 +212,12 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	extractionJobID := uuid.NewString()
 	fieldResultID := uuid.NewString()
 	correctionID := uuid.NewString()
+	ruleBreakID := uuid.NewString()
 	pageImageID := uuid.NewString()
 	anchorRuleID := uuid.NewString()
 	batchID := uuid.NewString()
 	mappingID := uuid.NewString()
+	customerID := uuid.NewString()
 	invoiceID := uuid.NewString()
 	jobID := uuid.NewString()
 	exchangeID := uuid.NewString()
@@ -228,6 +230,7 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 	inviteID := uuid.NewString()
 	lineID := uuid.NewString()
 	historyID := uuid.NewString()
+	revisionID := uuid.NewString()
 	idemKey := "purge-witness-" + uuid.NewString()
 	auditEvent := "purge.witness." + uuid.NewString()[:8]
 	contentHash := strings.Repeat("a", 64)
@@ -264,6 +267,11 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		     (id, tenant_id, extraction_job_id, field_name, value, method, actor)
 		 VALUES ($1,$2,$3,'total_amount','212.50','typed',$4)`,
 		correctionID, tenantID, extractionJobID, userID)
+	plant("extraction_rule_breaks", "id", ruleBreakID,
+		`INSERT INTO extraction_rule_breaks
+		     (id, tenant_id, extraction_job_id, field_name, rule_set_version_id, rule_key, message)
+		 VALUES ($1,$2,$3,'total_amount',(SELECT id FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)),'vat-standard-rate','witness')`,
+		ruleBreakID, tenantID, extractionJobID)
 	plant("extraction_page_images", "id", pageImageID,
 		`INSERT INTO extraction_page_images
 		     (id, tenant_id, document_id, page_number, width_px, height_px, storage_key)
@@ -282,6 +290,9 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO import_mappings (id, tenant_id, entity_id, column_signature, mapping)
 		 VALUES ($1,$2,$3,$4,$5::jsonb)`,
 		mappingID, tenantID, entityID, contentHash, `{"invoice_number":"Invoice No"}`)
+	plant("customers", "id", customerID,
+		`INSERT INTO customers (id, tenant_id, tin) VALUES ($1,$2,'90000000-0001')`,
+		customerID, tenantID)
 	plant("invoices", "id", invoiceID,
 		`INSERT INTO invoices (id, tenant_id, entity_id, import_batch_id, invoice_number, status, currency, total)
 		 VALUES ($1,$2,$3,$4,'PURGE-WITNESS-1','draft','NGN',100.00)`,
@@ -290,10 +301,15 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO line_items (id, tenant_id, invoice_id, line_no, description, quantity, unit_price, line_total)
 		 VALUES ($1,$2,$3,1,'witness line',1.000,100.00,100.00)`,
 		lineID, tenantID, invoiceID)
+	crrRequireTable(t, pool)
+	plant("custom_rule_revisions", "id", revisionID,
+		`INSERT INTO custom_rule_revisions (id, tenant_id, rule_id, revision, entity_id, type, target, severity, message, enabled, created_by)
+		 VALUES ($1,$2,$3,1,$4,'required','invoice.number','error','witness',true,'purge-witness')`,
+		revisionID, tenantID, uuid.NewString(), entityID)
 	plant("invoice_status_history", "id", historyID,
-		`INSERT INTO invoice_status_history (id, tenant_id, invoice_id, from_status, to_status, actor)
-		 VALUES ($1,$2,$3,NULL,'draft','purge-witness')`,
-		historyID, tenantID, invoiceID)
+		`INSERT INTO invoice_status_history (id, tenant_id, invoice_id, from_status, to_status, actor, cause_custom_rule_revision_id)
+		 VALUES ($1,$2,$3,NULL,'draft','purge-witness',$4)`,
+		historyID, tenantID, invoiceID, revisionID)
 	plant("submission_jobs", "id", jobID,
 		`INSERT INTO submission_jobs (id, tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state)
 		 VALUES ($1,$2,$3,$4,'mock','v1','accepted')`,

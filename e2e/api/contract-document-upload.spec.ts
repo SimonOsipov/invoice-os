@@ -225,7 +225,7 @@ function expectImportReportShape(body: Record<string, unknown>, label: string): 
   // null apart from absent.
   expect(body.delimiter, `${label}: delimiter is an explicit null, never "" and never absent`).toBeNull()
   expect(body.encoding, `${label}: encoding is an explicit null, never "" and never absent`).toBeNull()
-  // No gate runs here, so RuleSetVersion stays nil. toBeNull() rejects a false `0` stamp too.
+  // RuleSetVersion stays nil. toBeNull() rejects a false `0` stamp too.
   expect(body.rule_set_version, `${label}: rule_set_version is null -- not 0, not absent`).toBeNull()
   expect(Array.isArray(body.errors), `${label}: errors marshals as an array, never as null`).toBe(true)
   expect(Array.isArray(body.invoice_violations), `${label}: invoice_violations is an array, never null`).toBe(true)
@@ -282,7 +282,7 @@ test.describe('document pipeline contract (API E2E, over the deployed gateway)',
     expect(body.ready_invoices, 'DOCUP-02: one draft invoice landed').toBe(1)
     expect(body.quarantined_invoices, 'DOCUP-02: a fresh entity cannot collide').toBe(0)
     expect(body.errors, 'DOCUP-02: a clean import reports no row errors').toEqual([])
-    expect(body.invoice_violations, 'DOCUP-02: no gate ran, so there is nothing to violate').toEqual([])
+    expect(body.invoice_violations, 'DOCUP-02: the import reports no violations').toEqual([])
   })
 
   test('DOCUP-03: the 201 body is a whole ImportReport', async () => {
@@ -314,7 +314,7 @@ test.describe('document pipeline contract (API E2E, over the deployed gateway)',
       rows_invalid: 0,
       ready_invoices: 1,
       quarantined_invoices: 0,
-      // Both stay 0: ImportDocument runs no rule gate, so nothing was ever evaluated as clean.
+      // Both stay 0.
       invoices_clean: 0,
       invoices_with_violations: 0,
     })

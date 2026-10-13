@@ -396,7 +396,8 @@ async function settleFrame(page: Page, { width, height }: Frame): Promise<void> 
   await page.evaluate(async () => {
     await document.fonts.ready
     await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
-    window.scrollTo(0, 0)
+    // landing.css sets scroll-behavior: smooth; a smooth scroll back from a focused tab is still moving when rects are read.
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
   })
 }
 

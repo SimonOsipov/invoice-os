@@ -61,10 +61,11 @@ const PERIOD: BundlePeriod = {
   basis: 'invoices.created_at',
 }
 
-// All five counts. The earlier fixture omitted `submissions`, so that row rendered
+// All six counts. The earlier fixture omitted `submissions`, so that row rendered
 // `undefined` and EB-02-4 passed against a broken mapping.
 const COUNTS: BundleCounts = {
   invoices: 507,
+  line_items: 1811,
   status_transitions: 2028,
   submissions: 1204,
   exchange_attempts: 1521,
@@ -239,14 +240,16 @@ describe('evidence-bundle drawer copy', () => {
 
 describe('bundleManifestLines', () => {
   it('EB-02-4 bundleManifestLines_countsComeFromThePreview', () => {
-    expect(Object.keys(COUNTS), 'the fixture must carry all five counts').toHaveLength(5)
+    expect(Object.keys(COUNTS), 'the fixture must carry all six counts').toHaveLength(6)
     expect(Object.values(COUNTS).every((n) => typeof n === 'number')).toBe(true)
 
     const lines = bundleManifestLines(PREVIEW)
-    expect(lines).toHaveLength(7)
+    expect(lines).toHaveLength(8)
+    expect(lines[1]).toEqual({ label: 'Invoice lines (line_items.csv)', value: COUNTS.line_items.toLocaleString('en-NG') })
 
     const expected = [
       COUNTS.invoices,
+      COUNTS.line_items,
       COUNTS.status_transitions,
       COUNTS.submissions,
       COUNTS.exchange_attempts,
@@ -275,10 +278,10 @@ describe('bundleManifestLines', () => {
     expect(assemble, 'assemble.go must still call newCSVEntry').toContain('newCSVEntry')
 
     const csvEntries = [...assemble.matchAll(/newCSVEntry\("([^"]+)"\)/g)].map((m) => m[1])
-    expect(csvEntries, 'the four CSV entries must still be found').toHaveLength(4)
+    expect(csvEntries, 'the five CSV entries must still be found').toHaveLength(5)
 
     const labels = bundleManifestLines(PREVIEW).map((l) => l.label)
-    expect(labels).toHaveLength(7)
+    expect(labels).toHaveLength(8)
     for (const entry of csvEntries) {
       expect(
         labels.some((l) => l.includes(entry)),
@@ -299,20 +302,21 @@ describe('bundleManifestLines', () => {
   })
 
   // QA (Mode B). Zero INVOICES is a refusal, but a period that has invoices and no
-  // submissions is legitimate and must still render all seven rows. Nothing held the
+  // submissions is legitimate and must still render all eight rows. Nothing held the
   // all-zero shape, nor the locale formatter at seven figures.
   it('EB-02-20 bundleManifestLines_zeroAndSevenFigureCountsStillRenderEveryRow', () => {
-    const zero = { invoices: 0, status_transitions: 0, submissions: 0, exchange_attempts: 0, body_files: 0 }
+    const zero = { invoices: 0, line_items: 0, status_transitions: 0, submissions: 0, exchange_attempts: 0, body_files: 0 }
     const zeroLines = bundleManifestLines({ ...PREVIEW, counts: zero })
-    expect(zeroLines).toHaveLength(7)
-    expect(zeroLines.map((l) => l.value)).toEqual(['0', '0', null, '0', '0', '0', null])
+    expect(zeroLines).toHaveLength(8)
+    expect(zeroLines.map((l) => l.value)).toEqual(['0', '0', '0', null, '0', '0', '0', null])
 
     // The realistic case: invoices exist, nothing was ever transmitted.
     const noTransmission = { ...COUNTS, submissions: 0, exchange_attempts: 0, body_files: 0 }
     const partial = bundleManifestLines({ ...PREVIEW, counts: noTransmission })
-    expect(partial).toHaveLength(7)
+    expect(partial).toHaveLength(8)
     expect(partial.map((l) => l.value)).toEqual([
       (507).toLocaleString('en-NG'),
+      (1811).toLocaleString('en-NG'),
       (2028).toLocaleString('en-NG'),
       null,
       '0',
@@ -325,9 +329,9 @@ describe('bundleManifestLines', () => {
     // Node ICU build (format.test.ts:9), so never assert a hardcoded '1,234,567'.
     const big = { ...COUNTS, exchange_attempts: 1234567, submissions: 1000000 }
     const bigLines = bundleManifestLines({ ...PREVIEW, counts: big })
-    expect(bigLines[3].value).toBe((1000000).toLocaleString('en-NG'))
-    expect(bigLines[4].value).toBe((1234567).toLocaleString('en-NG'))
-    expect(bigLines[4].value, 'a seven-figure count must not ship as raw digits').not.toBe('1234567')
+    expect(bigLines[4].value).toBe((1000000).toLocaleString('en-NG'))
+    expect(bigLines[5].value).toBe((1234567).toLocaleString('en-NG'))
+    expect(bigLines[5].value, 'a seven-figure count must not ship as raw digits').not.toBe('1234567')
   })
 
   // QA (Mode B). The label trap the plan named but no spec held: textContent glues a row's

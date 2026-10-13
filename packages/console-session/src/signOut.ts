@@ -9,7 +9,6 @@ export async function signOutConsole(o: { storageKey: string; gateway: string | 
   const session = o.gateway ? loadConsoleSession(o.storageKey) : null
   if (o.gateway && session) {
     try {
-      // 'text': the 204 has no body, which the JSON path reads as malformed.
       await apiFetch<string>(`${o.gateway}/auth/sign-out`, {
         method: 'POST',
         body: { refresh_token: session.refreshToken },

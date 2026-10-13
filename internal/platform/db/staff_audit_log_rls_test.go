@@ -179,6 +179,21 @@ func requireStaffAuditAcceptsAnyChange(t *testing.T) {
 	if v, ten, sub := read(full); v == nil || ten == nil || sub == nil || *v != version || *ten != tenant || *sub != subject {
 		t.Errorf("full row reads version=%v tenant=%v subject=%v, want %s %s %s", v, ten, sub, version, tenant, subject)
 	}
+
+	// The three columns are independent: no pairing rule ties tenant to subject or either to a version.
+	for _, tc := range []struct {
+		name                     string
+		version, tenant, subject any
+	}{
+		{"tenant_only", nil, tenant, nil},
+		{"subject_only", nil, nil, subject},
+		{"version_and_tenant", version, tenant, nil},
+		{"tenant_and_subject", nil, tenant, subject},
+	} {
+		if err := insertStaffAudit(h.app, uuid.NewString(), "support.test", tc.version, tc.tenant, tc.subject); err != nil {
+			t.Errorf("invoice_app INSERT %s: %v, want accepted", tc.name, err)
+		}
+	}
 }
 
 // requireStaffAuditRefusesNilIDs: each nil UUID names its own CHECK, and a valid row beside them is accepted.

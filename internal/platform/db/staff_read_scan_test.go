@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// A staff_read_ function checks only the actor it is handed; WithinStaffTx is what binds the staff role.
+// A staff_read_ function checks only the actor it is handed; WithinStaffTx is what refuses a non-staff caller.
 // It reads string literals only, so a comment naming the function is no caller.
 func TestRLS_StaffReadFunctionsAreCalledOnlyInsideWithinStaffTx(t *testing.T) {
 	root := repoRootDir(t)

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -41,8 +42,12 @@ func collectStrings(t *testing.T, sql string, args ...any) []string {
 	return got
 }
 
+// staffAuditColumns are the eight columns staff_reader may SELECT once the read migration is applied.
+var staffAuditColumns = []string{"actor", "created_at", "event", "id", "payload", "rule_set_version_id", "subject_id", "tenant_id"}
+
 // requireStaffAuditGrantsInsertOnly reads the ACLs: the table has no RLS, so a write grant cannot hide behind a policy.
-func requireStaffAuditGrantsInsertOnly(t *testing.T) {
+// The only column ACLs allowed are staff_reader SELECT on all eight columns (readerCanSelect) or none.
+func requireStaffAuditGrantsInsertOnly(t *testing.T, readerCanSelect bool) {
 	t.Helper()
 	var owner string
 	if err := h.super.QueryRow(context.Background(),
@@ -64,9 +69,16 @@ func requireStaffAuditGrantsInsertOnly(t *testing.T) {
 		[]string{"invoice_app:INSERT"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("table privileges beyond the owner = %v, want %v", got, want)
 	}
-	if n := mustCount(t, h.super,
-		`SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.staff_audit_log'::regclass AND attnum > 0 AND attacl IS NOT NULL`); n != 0 {
-		t.Errorf("columns with their own ACL = %d, want 0", n)
+	wantColumnACLs := []string{}
+	if readerCanSelect {
+		for _, c := range staffAuditColumns {
+			wantColumnACLs = append(wantColumnACLs, c+":staff_reader:SELECT")
+		}
+	}
+	if got := collectStrings(t, `SELECT a.attname || ':' || x.grantee::regrole::text || ':' || x.privilege_type
+	                              FROM pg_attribute a, aclexplode(a.attacl) x
+	                             WHERE a.attrelid = 'public.staff_audit_log'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY 1`); !reflect.DeepEqual(got, wantColumnACLs) {
+		t.Errorf("column ACLs = %v, want %v", got, wantColumnACLs)
 	}
 	// information_schema lists only USAGE for a sequence, so read the ACL: SELECT or UPDATE would hide there.
 	if got, want := collectStrings(t, `SELECT grantee::regrole::text || ':' || privilege_type
@@ -142,7 +154,7 @@ var staffAuditBaseChecks = []string{"staff_audit_actor_set", "staff_audit_event_
 
 func TestRLS_StaffAuditLogGrantsAreInsertOnly(t *testing.T) {
 	requireHarness(t)
-	requireStaffAuditGrantsInsertOnly(t)
+	requireStaffAuditGrantsInsertOnly(t, true)
 	requireStaffAuditColumns(t, "after the migrations", staffAuditAnyChangeColumns)
 }
 
@@ -246,6 +258,7 @@ func TestRLS_StaffAuditLogDownAndUp(t *testing.T) {
 		t.Fatalf("before the Down: table=%d function=%d, want 1 and 1", table, fn)
 	}
 	requireStaffAuditColumns(t, "before the Down", staffAuditAnyChangeColumns)
+	requireStaffAuditReadFootprint(t, "before the Down", true)
 
 	// A change row the Down cannot keep whole: no version, a tenant and a subject.
 	actor := uuid.NewString()
@@ -265,9 +278,11 @@ func TestRLS_StaffAuditLogDownAndUp(t *testing.T) {
 	if n := mustCount(t, h.super, `SELECT count(*) FROM public.staff_audit_log WHERE actor = $1 AND rule_set_version_id IS NULL`, actor); n != 1 {
 		t.Errorf("change row after phase 1 rolled back: %d matches, want 1", n)
 	}
-	requireStaffAuditGrantsInsertOnly(t)
+	requireStaffAuditGrantsInsertOnly(t, false)
+	requireStaffAuditReadFootprint(t, "after phase 1 rolled back", false)
 	reapplyNewer()
 	requireStaffAuditColumns(t, "after phase 1 re-applied", staffAuditAnyChangeColumns)
+	requireStaffAuditReadFootprint(t, "after phase 1 re-applied", true)
 	requireStaffAuditChecks(t, "after phase 1 re-applied", append([]string{"staff_audit_tenant_set", "staff_audit_subject_set"}, staffAuditBaseChecks...)...)
 	var tenant, subject *string
 	if err := h.super.QueryRow(ctx, `SELECT tenant_id::text, subject_id::text FROM public.staff_audit_log WHERE actor = $1`, actor).Scan(&tenant, &subject); err != nil {
@@ -276,7 +291,7 @@ func TestRLS_StaffAuditLogDownAndUp(t *testing.T) {
 	if tenant != nil || subject != nil {
 		t.Errorf("change row after the Down and Up: tenant=%v subject=%v, want both NULL (the Down loses them)", tenant, subject)
 	}
-	requireStaffAuditGrantsInsertOnly(t)
+	requireStaffAuditGrantsInsertOnly(t, true)
 	requireStaffAuditUpBehaviour(t)
 
 	// Both phases: nothing of the table or its function is left, and the Ups rebuild it.
@@ -291,10 +306,12 @@ func TestRLS_StaffAuditLogDownAndUp(t *testing.T) {
 	}
 	requireStaffAuditColumns(t, "after the base re-applied", staffAuditBaseColumns)
 	requireStaffAuditChecks(t, "after the base re-applied", staffAuditBaseChecks...)
-	requireStaffAuditGrantsInsertOnly(t)
+	requireStaffAuditGrantsInsertOnly(t, false)
+	requireStaffAuditReadFootprint(t, "after the base re-applied", false)
 	reapplyNewer()
 	requireStaffAuditColumns(t, "after both phases re-applied", staffAuditAnyChangeColumns)
-	requireStaffAuditGrantsInsertOnly(t)
+	requireStaffAuditGrantsInsertOnly(t, true)
+	requireStaffAuditReadFootprint(t, "after both phases re-applied", true)
 	requireStaffAuditUpBehaviour(t)
 }
 
@@ -370,5 +387,184 @@ func requireStaffAuditUpBehaviour(t *testing.T) {
 			uuid.NewString(), event, uuid.NewString()); err != nil {
 			t.Errorf("127-character event %q after the Up: %v, want accepted", event[:3], err)
 		}
+	}
+}
+
+const staffReadStaffAuditLogSig = "public.staff_read_staff_audit_log(uuid)"
+
+func requireStaffReadStaffAuditLog(t *testing.T) {
+	t.Helper()
+	var reg *string
+	if err := h.super.QueryRow(context.Background(), `SELECT to_regprocedure($1)::text`, staffReadStaffAuditLogSig).Scan(&reg); err != nil {
+		t.Fatalf("read to_regprocedure: %v", err)
+	}
+	if reg == nil {
+		t.Fatalf("function %s not found: the staff_audit_log_read migration is not applied", staffReadStaffAuditLogSig)
+	}
+}
+
+// requireStaffAuditReadFootprint: the function and the eight staff_reader column grants appear and vanish together.
+func requireStaffAuditReadFootprint(t *testing.T, when string, present bool) {
+	t.Helper()
+	var fn bool
+	if err := h.super.QueryRow(context.Background(), `SELECT to_regprocedure($1) IS NOT NULL`, staffReadStaffAuditLogSig).Scan(&fn); err != nil {
+		t.Fatalf("read to_regprocedure: %v", err)
+	}
+	grants := len(staffReaderColumnGrants(t)["public.staff_audit_log"])
+	wantGrants := 0
+	if present {
+		wantGrants = len(staffAuditColumns)
+	}
+	if fn != present || grants != wantGrants {
+		t.Errorf("staff read footprint %s: function=%v staff_reader column grants=%d, want function=%v and %d grants", when, fn, grants, present, wantGrants)
+	}
+}
+
+type staffAuditRow struct {
+	id                       int64
+	actor, event             string
+	version, tenant, subject *string
+	payload                  map[string]any
+	createdAt                time.Time
+}
+
+func collectStaffAuditRows(t *testing.T, q interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, member string) []staffAuditRow {
+	t.Helper()
+	// SELECT * scans by position: pins the result column order and count.
+	rows, err := q.Query(context.Background(), `SELECT * FROM public.staff_read_staff_audit_log($1::uuid)`, member)
+	if err != nil {
+		t.Fatalf("staff_read_staff_audit_log as invoice_app: %v", err)
+	}
+	got, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (staffAuditRow, error) {
+		var x staffAuditRow
+		return x, r.Scan(&x.id, &x.actor, &x.event, &x.version, &x.tenant, &x.subject, &x.payload, &x.createdAt)
+	})
+	if err != nil {
+		t.Fatalf("collect staff_read_staff_audit_log rows: %v", err)
+	}
+	return got
+}
+
+// seedStaffAuditRow commits a row as invoice_app, which cannot read it back: the row is found by its actor.
+func seedStaffAuditRow(t *testing.T, q interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, actor, event string, version, tenant, subject any, payload string) {
+	t.Helper()
+	if _, err := q.Exec(context.Background(),
+		`INSERT INTO public.staff_audit_log (actor, event, rule_set_version_id, tenant_id, subject_id, payload) VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+		actor, event, version, tenant, subject, payload); err != nil {
+		t.Fatalf("seed staff_audit_log row of actor %s: %v", actor, err)
+	}
+}
+
+func TestRLS_StaffReadStaffAuditLogExists(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadStaffAuditLog(t)
+	var found bool
+	for _, fn := range staffReadFunctions(t) {
+		found = found || fn.name == "staff_read_staff_audit_log"
+	}
+	if !found {
+		t.Error("staffReadFunctions lists no staff_read_staff_audit_log, so the generic staff_read_ catalog tests do not cover it")
+	}
+}
+
+// One REPEATABLE READ snapshot: other tests append rows while this runs.
+func TestRLS_StaffReadStaffAuditLogReturnsEveryRowToAHouseMember(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadStaffAuditLog(t)
+	ctx := context.Background()
+	member := seedHouseMember(t, "reviewer", "active")
+	ruleActor, tenantActor := uuid.NewString(), uuid.NewString()
+	version, tenant, subject := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	seedStaffAuditRow(t, h.app, ruleActor, "rules.test", version, nil, nil, `{"rule":"r1"}`)
+	seedStaffAuditRow(t, h.app, tenantActor, "support.test", nil, tenant, subject, `{"note":"n1"}`)
+
+	tx, err := h.super.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	want := mustCount(t, tx, `SELECT count(*) FROM public.staff_audit_log`)
+	var wantRule, wantTenant staffAuditRow
+	for actor, dst := range map[string]*staffAuditRow{ruleActor: &wantRule, tenantActor: &wantTenant} {
+		if err := tx.QueryRow(ctx,
+			`SELECT id, actor::text, event, rule_set_version_id::text, tenant_id::text, subject_id::text, payload, created_at FROM public.staff_audit_log WHERE actor = $1`, actor,
+		).Scan(&dst.id, &dst.actor, &dst.event, &dst.version, &dst.tenant, &dst.subject, &dst.payload, &dst.createdAt); err != nil {
+			t.Fatalf("read the seeded row of actor %s as superuser: %v", actor, err)
+		}
+	}
+	txExec(t, tx, `SET LOCAL ROLE invoice_app`)
+	got := collectStaffAuditRows(t, tx, member)
+
+	if len(got) != want {
+		t.Errorf("staff_read_staff_audit_log returned %d rows, superuser count(*) = %d, want equal", len(got), want)
+	}
+	byActor := map[string]staffAuditRow{}
+	for _, r := range got {
+		byActor[r.actor] = r
+	}
+	for name, w := range map[string]staffAuditRow{"global rule row": wantRule, "tenant row": wantTenant} {
+		r, ok := byActor[w.actor]
+		if !ok {
+			t.Errorf("%s of actor %s is missing from the result", name, w.actor)
+			continue
+		}
+		if !reflect.DeepEqual(r, w) {
+			t.Errorf("%s = %+v, want %+v", name, r, w)
+		}
+	}
+	if r := byActor[ruleActor]; r.version == nil || *r.version != version || r.tenant != nil || r.subject != nil || r.payload["rule"] != "r1" {
+		t.Errorf("global rule row = %+v, want version %s, tenant and subject NULL, payload rule=r1", r, version)
+	}
+	if r := byActor[tenantActor]; r.version != nil || r.tenant == nil || *r.tenant != tenant || r.subject == nil || *r.subject != subject || r.payload["note"] != "n1" {
+		t.Errorf("tenant row = %+v, want version NULL, tenant %s, subject %s, payload note=n1", r, tenant, subject)
+	}
+}
+
+// The older row takes the highest id, so id DESC alone puts it first and only created_at DESC puts it last.
+// The tied rows are inserted low id first, so heap order and id ASC both put them the wrong way round.
+func TestRLS_StaffReadStaffAuditLogOrdersNewestFirstThenByIdDesc(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadStaffAuditLog(t)
+	ctx := context.Background()
+	member := seedHouseMember(t, "preparer", "active")
+	first, second, older := uuid.NewString(), uuid.NewString(), uuid.NewString()
+
+	tx, err := h.app.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	seedStaffAuditRow(t, tx, first, "support.test", nil, nil, nil, `{}`)
+	seedStaffAuditRow(t, tx, second, "support.test", nil, nil, nil, `{}`)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit the tied rows: %v", err)
+	}
+	if _, err := h.super.Exec(ctx,
+		`INSERT INTO public.staff_audit_log (actor, event, created_at) VALUES ($1, 'support.test', now() - interval '1 minute')`, older); err != nil {
+		t.Fatalf("seed the older row: %v", err)
+	}
+
+	byActor := map[string]staffAuditRow{}
+	var order []string
+	for _, r := range collectStaffAuditRows(t, h.app, member) {
+		byActor[r.actor] = r
+		if r.actor == first || r.actor == second || r.actor == older {
+			order = append(order, r.actor)
+		}
+	}
+	if len(order) != 3 {
+		t.Fatalf("seeded rows in the result = %d, want 3", len(order))
+	}
+	if !byActor[first].createdAt.Equal(byActor[second].createdAt) || byActor[first].id >= byActor[second].id {
+		t.Fatalf("setup: tied rows = %+v and %+v, want equal created_at and the second with the higher id", byActor[first], byActor[second])
+	}
+	if byActor[older].id <= byActor[second].id || !byActor[older].createdAt.Before(byActor[first].createdAt) {
+		t.Fatalf("setup: older row = %+v, want the highest id and an earlier created_at than %v", byActor[older], byActor[first].createdAt)
+	}
+	if want := []string{second, first, older}; !reflect.DeepEqual(order, want) {
+		t.Errorf("order among the seeded rows = %v, want the tied rows by descending id, then the older row: %v", order, want)
 	}
 }

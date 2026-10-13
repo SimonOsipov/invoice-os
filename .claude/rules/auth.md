@@ -125,3 +125,5 @@ paths:
 - Check the staff claim on the server in any console that reads real data.
 - Fail the console gate closed when `VITE_LANDING_URL` is unset.
 - Open a console only for a session that the gateway has just renewed or exchanged, with `app_metadata.staff` true.
+- Open an app-borrowed console record only after a fresh exchange. The boot keeps it and asks the app for a new code.
+- Send an expired app-borrowed console session back through the app, never to the landing.

@@ -1,6 +1,7 @@
 export interface ConsoleSession {
   token: string
-  refreshToken: string
+  // null: the access token is borrowed from the app and cannot be renewed here.
+  refreshToken: string | null
 }
 
 export const CONSOLE_SESSION_SCHEMA_VERSION = 2
@@ -34,9 +35,10 @@ export function parseStoredConsoleSession(raw: string | null, key: string): Cons
     return null
   }
   try {
-    const p = JSON.parse(raw) as { v?: unknown; token?: unknown; refresh_token?: unknown } | null
-    if (p != null && p.v === CONSOLE_SESSION_SCHEMA_VERSION && nonEmpty(p.token) && nonEmpty(p.refresh_token)) {
-      return { token: p.token, refreshToken: p.refresh_token }
+    const p = JSON.parse(raw) as { v?: unknown; token?: unknown; refresh_token?: unknown; from?: unknown } | null
+    if (p != null && p.v === CONSOLE_SESSION_SCHEMA_VERSION && nonEmpty(p.token)) {
+      if (nonEmpty(p.refresh_token) && !('from' in p)) return { token: p.token, refreshToken: p.refresh_token }
+      if (!('refresh_token' in p) && p.from === 'app') return { token: p.token, refreshToken: null }
     }
     console.warn(`[console-session] ignoring unusable stored session at "${key}"`)
     return null
@@ -57,7 +59,8 @@ export function loadConsoleSession(key: string): ConsoleSession | null {
 
 export function saveConsoleSession(key: string, s: ConsoleSession): void {
   try {
-    localStorage.setItem(key, JSON.stringify({ v: CONSOLE_SESSION_SCHEMA_VERSION, token: s.token, refresh_token: s.refreshToken }))
+    const rest = s.refreshToken === null ? { from: 'app' } : { refresh_token: s.refreshToken }
+    localStorage.setItem(key, JSON.stringify({ v: CONSOLE_SESSION_SCHEMA_VERSION, token: s.token, ...rest }))
   } catch (e) {
     console.warn(`[console-session] failed to store session at "${key}":`, e)
   }

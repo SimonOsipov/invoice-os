@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resolveConsoleBoot, type ConsoleBoot } from './boot'
 import {
+  APP,
   b64url,
+  borrowedRaw,
   BASE64URL_43_RE,
   type Call,
   CODE,
@@ -57,6 +59,7 @@ interface Setup {
   target?: 'ops' | 'support'
   gateway?: string | null
   landing?: string | null
+  app?: string | null
 }
 
 async function run(o: Setup = {}) {
@@ -71,6 +74,7 @@ async function run(o: Setup = {}) {
     target: o.target ?? 'ops',
     gateway: o.gateway === undefined ? GW : o.gateway,
     landing: o.landing === undefined ? LANDING : o.landing,
+    app: o.app,
     now: NOW,
   })
   return { boot, calls: net.calls }
@@ -186,7 +190,7 @@ describe('hand-off redemption (AC-6, AC-7)', () => {
       ['timeout', timeoutError()],
       ['429', reply(429, { error: 'too many requests' })],
       ['500', reply(500, { error: 'internal' })],
-      ['200 with only an access token', reply(200, { access_token: staffToken('x') })],
+      ['200 with only a refresh token', reply(200, { refresh_token: 'R-x' })],
       ['200 with an empty refresh token', reply(200, { access_token: staffToken('x'), refresh_token: '' })],
       ['200 JSON null', reply(200, null)],
       ['200 non-JSON', new Response('<html>', { status: 200 })],
@@ -502,5 +506,115 @@ describe('storage that throws (AC-15)', () => {
     // ?auth=start with unwritable state storage still leaves.
     boot = await resolveConsoleBoot({ ...base, search: '?auth=start' })
     expect(withOutcome('ready').test(leaveUrl(boot))).toBe(true)
+  })
+})
+
+const appStart = (target: string) => new RegExp(`^${APP}/\\?auth=console&console=${target}&state=([A-Za-z0-9_-]{43})$`)
+const BORROWED = borrowedRaw(OLD_TOKEN)
+const access = (token: string) => reply(200, { access_token: token })
+
+describe('app-borrowed session (SUPP-11-02)', () => {
+  it('boot_authAppLeavesToTheAppWithAFreshState', async () => {
+    const { boot, calls } = await run({ search: '?auth=app', target: 'support', app: APP, state: stateRaw(STATE_A, NOW - 10_000) })
+    expect(boot).toMatchObject({ kind: 'leave', replace: true })
+    const url = leaveUrl(boot)
+    const m = appStart('support').exec(url)
+    expect(m, url).not.toBeNull()
+    expect(m?.[1]).not.toBe(STATE_A)
+    expect(heldBlob()).toEqual({ v: 1, s: m?.[1], at: NOW })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('boot_authAppWithoutAnAppBaseLeavesReady', async () => {
+    for (const app of [null, undefined]) {
+      const { boot } = await run({ search: '?auth=app', app })
+      expect(boot).toMatchObject({ kind: 'leave', replace: true })
+      expect(withOutcome('ready').test(leaveUrl(boot))).toBe(true)
+    }
+  })
+
+  it('boot_appHandoffOpensABorrowedStaffSession', async () => {
+    const token = staffToken('borrowed')
+    const { boot, calls } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), app: APP, answer: () => access(token) })
+    expect(boot).toEqual({ kind: 'open', session: { token, refreshToken: null } })
+    expect(calls.map((c) => c.url)).toEqual([EXCHANGE])
+    expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 2, token, from: 'app' })
+  })
+
+  it('boot_appHandoffOverwritesAStoredLandingRecord', async () => {
+    const token = staffToken('borrowed')
+    await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), local: OLD_RECORD, answer: () => access(token) })
+    expect(JSON.parse(store.local.getItem(OPS_KEY) ?? 'null')).toEqual({ v: 2, token, from: 'app' })
+  })
+
+  it('boot_appHandoffNonStaffStoresNothing', async () => {
+    const { boot } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), answer: () => access(customerToken('c')) })
+    expect(withOutcome('not-staff').test(leaveUrl(boot))).toBe(true)
+    expect(store.local.getItem(OPS_KEY)).toBeNull()
+    expect(store.local.setItem).not.toHaveBeenCalled()
+  })
+
+  it('boot_handoffAnswerWithoutAnAccessTokenFails', async () => {
+    for (const body of [{ refresh_token: 'R' }, {}]) {
+      const { boot } = await run({ search: `?handoff=${CODE}`, state: stateRaw(STATE_A, NOW - 1000), answer: () => reply(200, body) })
+      expect(withOutcome('failed').test(leaveUrl(boot)), JSON.stringify(body)).toBe(true)
+      expect(store.local.getItem(OPS_KEY)).toBeNull()
+    }
+  })
+
+  it('boot_refreshAnswerWithoutARefreshTokenStillFails', async () => {
+    const { boot, calls } = await run({ local: OLD_RECORD, answer: () => access(staffToken('r')) })
+    expect(withOutcome('failed').test(leaveUrl(boot))).toBe(true)
+    expect(calls.map((c) => c.url)).toEqual([REFRESH])
+    expect(store.local.getItem(OPS_KEY)).toBe(OLD_RECORD)
+  })
+
+  it('boot_storedBorrowedRecordBouncesToTheApp', async () => {
+    const { boot, calls } = await run({ local: BORROWED, app: APP, target: 'support' })
+    expect(boot).toMatchObject({ kind: 'leave', replace: true })
+    const m = appStart('support').exec(leaveUrl(boot))
+    expect(m).not.toBeNull()
+    expect(heldState()).toBe(m?.[1])
+    expect(store.local.getItem(OPS_KEY)).toBe(BORROWED)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('boot_secondTabKeepsTheFirstTabsBorrowedRecord', async () => {
+    const t1 = borrowedRaw(staffToken('T1'))
+    await run({ local: t1, app: APP })
+    const tabB = installStorage({ local: { [OPS_KEY]: t1 } })
+    const net = installFetch(() => new Error('unexpected request'))
+    const boot = await resolveConsoleBoot({ search: '', storageKey: OPS_KEY, target: 'ops', gateway: GW, landing: LANDING, app: APP, now: NOW })
+    expect(boot.kind).toBe('leave')
+    expect(tabB.local.getItem(OPS_KEY)).toBe(t1)
+    expect(net.calls).toHaveLength(0)
+  })
+
+  it('boot_storedBorrowedRecordWithoutAnAppLeavesToLanding', async () => {
+    for (const o of [{ app: null }, { app: APP, gateway: null }]) {
+      const { boot, calls } = await run({ local: BORROWED, ...o })
+      expect(FRONT_DOOR.test(leaveUrl(boot)), JSON.stringify(o)).toBe(true)
+      expect(store.local.getItem(OPS_KEY)).toBe(BORROWED)
+      expect(calls).toHaveLength(0)
+    }
+  })
+
+  it('boot_foreignHandoffWithABorrowedRecordBouncesToTheApp', async () => {
+    const { boot, calls } = await run({ search: `?handoff=${CODE}`, local: BORROWED, app: APP })
+    expect(boot).toMatchObject({ kind: 'leave', replace: true })
+    expect(appStart('ops').test(leaveUrl(boot))).toBe(true)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('boot_usedAppHandoffCodeLeavesFailed', async () => {
+    const { boot, calls } = await run({
+      search: `?handoff=${CODE}`,
+      state: stateRaw(STATE_A, NOW - 1000),
+      app: APP,
+      answer: () => reply(400, { error: 'invalid or expired code' }),
+    })
+    expect(withOutcome('failed').test(leaveUrl(boot))).toBe(true)
+    expect(calls).toHaveLength(1)
+    expect(store.local.getItem(OPS_KEY)).toBeNull()
   })
 })

@@ -136,3 +136,29 @@ describe('console session keys (AC-15)', () => {
     expect(local.getItem(OPS_KEY)).toBeNull()
   })
 })
+
+describe('borrowed record (SUPP-11-02)', () => {
+  it('parse_acceptsTheBorrowedShape', () => {
+    expect(parseStoredConsoleSession(JSON.stringify({ v: 2, token: 'T', from: 'app' }), OPS_KEY)).toEqual({ token: 'T', refreshToken: null })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('parse_refusesMixedOrNullBorrowedShapes', () => {
+    for (const rec of [
+      { v: 2, token: 'T', refresh_token: null },
+      { v: 2, token: 'T', refresh_token: 'R', from: 'app' },
+      { v: 2, token: 'T', from: 'landing' },
+      { v: 2, token: '', from: 'app' },
+    ]) {
+      warn.mockClear()
+      expect(parseStoredConsoleSession(JSON.stringify(rec), OPS_KEY), JSON.stringify(rec)).toBeNull()
+      expect(warn).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('save_writesTheBorrowedShape', () => {
+    const { local } = installStorage()
+    saveConsoleSession(OPS_KEY, { token: 'T', refreshToken: null })
+    expect(local.getItem(OPS_KEY)).toBe('{"v":2,"token":"T","from":"app"}')
+  })
+})

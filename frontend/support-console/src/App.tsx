@@ -31,7 +31,7 @@ import {
   type RulesInForce,
 } from './rulesApi'
 import { StaffGate } from '@invoice-os/console-session'
-import { SESSION_KEY, landingBase, signOut } from './auth'
+import { SESSION_KEY, appBase, expireSession, landingBase } from './auth'
 import type { DrawerState, Env, Rule, Screen, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.asc-app` — that scope defines the design-system tokens
@@ -40,7 +40,7 @@ import type { DrawerState, Env, Rule, Screen, ToastState, ToastTone } from './ty
 // with drawers/modals/toast layered on top.
 export default function App() {
   return (
-    <StaffGate storageKey={SESSION_KEY} target="support" gateway={gatewayBase()} landing={landingBase()}>
+    <StaffGate storageKey={SESSION_KEY} target="support" gateway={gatewayBase()} landing={landingBase()} app={appBase()}>
       <Console />
     </StaffGate>
   )
@@ -97,7 +97,7 @@ function Console() {
     r.status !== 'error' ? 'Loading…' : r.error?.status === 403 ? 'Your account is not ASComply staff.' : (r.error?.message ?? 'Unavailable')
   const expired = [rulesRead, versionsRead, codeListsRead, syncsRead].some((r) => r.error?.status === 401)
   useEffect(() => {
-    if (expired) void signOut()
+    if (expired) void expireSession()
   }, [expired])
 
   const go = (s: Screen) => {
@@ -124,7 +124,7 @@ function Console() {
     } catch (e) {
       const err = toApiError(e)
       if (err.status === 401) {
-        void signOut()
+        void expireSession()
         return
       }
       showToast(err.message, '', 'red')
@@ -151,7 +151,7 @@ function Console() {
       return await call()
     } catch (e) {
       const err = toApiError(e)
-      if (err.status === 401) void signOut()
+      if (err.status === 401) void expireSession()
       else showToast(err.message, '', 'red')
       if (err.status === 404 || err.status === 409) reread()
       return undefined
@@ -197,7 +197,7 @@ function Console() {
       (e) => {
         if (id !== publishRead.current) return
         const err = toApiError(e)
-        if (err.status === 401) void signOut()
+        if (err.status === 401) void expireSession()
         else setPublish({ rows: null, error: err.message })
       },
     )

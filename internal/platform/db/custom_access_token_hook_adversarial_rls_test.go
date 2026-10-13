@@ -496,3 +496,8 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		t.Errorf("after Up: function=%d policy=%d privileges=%d, want 1 1 3", fn, policy, privs)
 	}
 }
+
+func rulesRoleMigrationVersion(t *testing.T) int64 {
+	t.Helper()
+	return migrationVersion(t, "*_staff_rules_role.sql")
+}

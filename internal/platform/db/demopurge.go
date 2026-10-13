@@ -1,5 +1,5 @@
 // demopurge.go — the demo-tenant purge primitive. Deletes the four seeded demo
-// tenants' rows from every tenant-owned table except the four purgeExcludedTables
+// tenants' rows from every tenant-owned table except the purgeExcludedTables
 // spares, and reaches no other tenant. Provision (provision.go) calls it on every
 // gated boot, between Reset and Seed.
 package db
@@ -77,6 +77,7 @@ var purgeExcludedTables = []string{
 	"approval_policies",
 	"approval_policy_versions",
 	"approval_policy_steps",
+	"house_company", // one global row naming the staff tenant
 }
 
 // auditLogTable names the replica window by table rather than by position, so

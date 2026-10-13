@@ -554,3 +554,51 @@ func TestRLS_SetRuleEnabledDownAndUp(t *testing.T) {
 		t.Errorf("after the Up: EXECUTE invoice_app = %t, invoice_tenant_reader = %t, want true and false", app, reader)
 	}
 }
+
+// seedStaff inserts a staff_members row as the superuser; the cleanup tolerates a dropped table.
+func seedStaff(t *testing.T, userID string) {
+	t.Helper()
+	if _, err := h.super.Exec(context.Background(),
+		`INSERT INTO public.staff_members (user_id) VALUES ($1)`, userID); err != nil {
+		t.Fatalf("seed staff_members row: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM public.staff_members WHERE user_id = $1`, userID)
+	})
+}
+
+// rulesRoleOf reads the column through to_jsonb, so a missing column is an assertion failure, not a 42703.
+func rulesRoleOf(t *testing.T, userID string) (value, present bool) {
+	t.Helper()
+	var raw []byte
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT to_jsonb(s) -> 'rules_role' FROM public.staff_members s WHERE s.user_id = $1`, userID,
+	).Scan(&raw); err != nil {
+		t.Fatalf("read the staff row of %s: %v", userID, err)
+	}
+	return string(raw) == "true", raw != nil
+}
+
+// requireRulesRoleFalse asserts the staff row exists with an explicit false, the positive half of a negative check.
+func requireRulesRoleFalse(t *testing.T, userID string) {
+	t.Helper()
+	if v, present := rulesRoleOf(t, userID); !present || v {
+		t.Errorf("staff_members.rules_role of %s = (present=%v, value=%v), want present and false", userID, present, v)
+	}
+}
+
+// seedRulesStaff seeds a staff row with rules_role true. A missing column fails the test here and the
+// test goes on, so the hook assertions are still reached.
+func seedRulesStaff(t *testing.T, userID string) {
+	t.Helper()
+	seedStaff(t, userID)
+	_, err := h.super.Exec(context.Background(),
+		`UPDATE public.staff_members SET rules_role = true WHERE user_id = $1`, userID)
+	switch {
+	case err == nil:
+	case pgCode(err) == "42703":
+		t.Errorf("staff_members.rules_role does not exist: %v", err)
+	default:
+		t.Fatalf("set rules_role true: %v", err)
+	}
+}

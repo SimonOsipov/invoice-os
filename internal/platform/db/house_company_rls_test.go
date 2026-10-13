@@ -704,3 +704,29 @@ func TestRLS_HouseRunbookStatementsNameTheHouseCompany(t *testing.T) {
 		t.Errorf("after the runbook: app_metadata.staff = %v, want true", md["staff"])
 	}
 }
+
+// hookRun calls the hook as supabase_auth_admin on a golden-shaped event that edit may change.
+// It returns the output claims and the input claims.
+func hookRun(t *testing.T, auth *pgxpool.Pool, userID string, edit func(claims map[string]any)) (got, in map[string]any) {
+	t.Helper()
+	raw, _ := hookEvent(t, userID)
+	if edit != nil {
+		raw = editEvent(t, raw, func(_, c map[string]any) { edit(c) })
+	}
+	return outputClaims(t, callHook(t, auth, raw)), outputClaims(t, decodeJSON(t, raw))
+}
+
+func appMetadataOf(t *testing.T, claims map[string]any) map[string]any {
+	t.Helper()
+	md, ok := claims["app_metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("claims.app_metadata is not an object: %v", claims)
+	}
+	return md
+}
+
+func mustHookClaims(t *testing.T, auth *pgxpool.Pool, userID string) map[string]any {
+	t.Helper()
+	got, _ := hookRun(t, auth, userID, nil)
+	return got
+}

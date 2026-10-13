@@ -98,7 +98,7 @@ func TestRLS_StaffAuditLogDownAndUp(t *testing.T) {
 	if table, fn := staffAuditObjects(t); table != 1 || fn != 1 {
 		t.Fatalf("before the Down: table=%d function=%d, want 1 and 1", table, fn)
 	}
-	restoreRulesRoleOnCleanup(t, provider, version)
+	restoreMigrationOnCleanup(t, provider, version)
 
 	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
 		t.Fatalf("roll back the staff audit migration: %v", err)

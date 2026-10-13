@@ -382,7 +382,7 @@ type handoff struct {
 
 // handoffHandlers builds the sign-in, exchange, refresh and sign-out handlers against GoTrue at authURL.
 // Sign-out evicts from sessions, the API's own checker.
-// Sign-in, verify, the invitee set-password handler and exchange share one code store: a code minted by any minter is redeemable only through exchange.
+// Every minter and exchange share one code store: a code is redeemable only through exchange.
 // A nil siteURL makes Verify answer 503 (TestRegistrationHandlers_NotConfigured503).
 func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, log *slog.Logger, sink gateway.ContactSink, verifier *auth.Verifier) handoff {
 	store := gateway.NewHandoffStore(gateway.HandoffTTL, time.Now)

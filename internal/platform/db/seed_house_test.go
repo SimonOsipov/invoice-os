@@ -32,6 +32,10 @@ func isolateHouse(t *testing.T, pool *pgxpool.Pool) {
 		t.Fatalf("read dev house tenant: %v", err)
 	}
 	t.Cleanup(func() {
+		// A broken seed leaves personas in the house tenant, and the next isolateHouse cannot delete it.
+		if _, err := pool.Exec(ctx, `DELETE FROM memberships WHERE tenant_id = $1 AND user_id::text LIKE 'c0000000-%'`, devHouseTenant); err != nil {
+			t.Errorf("restore: clear seeded personas from the house tenant: %v", err)
+		}
 		if _, err := pool.Exec(ctx, `DELETE FROM public.house_company`); err != nil {
 			t.Errorf("restore: clear house row: %v", err)
 		}

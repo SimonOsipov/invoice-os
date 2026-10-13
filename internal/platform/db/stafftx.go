@@ -14,7 +14,7 @@ import (
 // ErrNotStaff is returned by WithinStaffTx when the context holds no caller admitted by auth.RequireStaff.
 var ErrNotStaff = errors.New("db: not a checked staff caller")
 
-// WithinStaffTx runs fn in a transaction with no tenant setting, for global staff data.
+// WithinStaffTx runs fn in a transaction with no tenant setting, for global staff data and staff_read_ functions.
 // It refuses with ErrNotStaff before any statement unless auth.StaffFromContext reports a caller.
 func WithinStaffTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
 	if _, ok := auth.StaffFromContext(ctx); !ok {

@@ -26,11 +26,10 @@ import (
 )
 
 const (
-	staffGatewayToken  = "staff-tenants-test-gateway-token"
-	forbiddenBody      = `{"error":"forbidden"}`
-	internalBody       = `{"error":"internal server error"}`
-	unreachableSubject = "11111111-1111-1111-1111-111111111111"
-	devHouseTenant     = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
+	staffGatewayToken = "staff-tenants-test-gateway-token"
+	forbiddenBody     = `{"error":"forbidden"}`
+	internalBody      = `{"error":"internal server error"}`
+	devHouseTenant    = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
 )
 
 var staffTenantKeys = []string{"created_at", "id", "kind", "name"}
@@ -305,7 +304,7 @@ func TestStoreStaffTenants_RefusesWithoutAStaffCaller(t *testing.T) {
 		}
 	}
 	// Control: a UUID subject passes the parse and reaches the pool, so the refusals above are specific.
-	if _, err := store.StaffTenants(staffCtx(unreachableSubject)); err == nil || errors.Is(err, db.ErrNotStaff) {
+	if _, err := store.StaffTenants(staffCtx(uuid.NewString())); err == nil || errors.Is(err, db.ErrNotStaff) {
 		t.Errorf("uuid subject on an unreachable pool: err = %v, want a connection error", err)
 	}
 	if n := pool.Stat().TotalConns(); n != 0 {

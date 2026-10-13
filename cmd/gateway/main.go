@@ -205,7 +205,7 @@ func main() {
 	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
 	app.Mux.Handle("OPTIONS /contacts/demo-request", withCORS(reg.DemoRequest))
 
-	// Public sign-in hand-off, session renewal and sign-out, outside the verifier, in every build.
+	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
 	h := handoffHandlers(probed["auth"], siteURL, sessions, app.Logger, sink, verifier)
 	app.Mux.Handle("POST /auth/verify", h.Verify)
@@ -213,6 +213,8 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/sign-in", withCORS(h.SignIn))
 	app.Mux.Handle("POST /auth/exchange", withCORS(h.Exchange))
 	app.Mux.Handle("OPTIONS /auth/exchange", withCORS(h.Exchange))
+	app.Mux.Handle("POST /auth/console-handoff", withCORS(h.ConsoleHandoff))
+	app.Mux.Handle("OPTIONS /auth/console-handoff", withCORS(h.ConsoleHandoff))
 	app.Mux.Handle("POST /auth/refresh", withCORS(h.Refresh))
 	app.Mux.Handle("OPTIONS /auth/refresh", withCORS(h.Refresh))
 	app.Mux.Handle("POST /auth/sign-out", withCORS(h.SignOut))
@@ -398,7 +400,7 @@ func handoffHandlers(authURL, siteURL *url.URL, sessions *gateway.SessionChecker
 		Verify:   gateway.VerifyHandler(authURL, siteURL, client, log, sink, store),
 
 		InvitationPassword: gateway.InvitationPasswordHandler(authURL, siteURL, client, sessions, throttle, sink, log, store),
-		ConsoleHandoff:     gateway.ConsoleHandoffHandler(store, log), // SUPP-11-01 wraps it in verifier, sessions and RequireStaff
+		ConsoleHandoff:     verifier.Middleware(sessions.Middleware(auth.RequireStaff(gateway.ConsoleHandoffHandler(store, log)))),
 
 		SignInThrottle: throttle,
 	}

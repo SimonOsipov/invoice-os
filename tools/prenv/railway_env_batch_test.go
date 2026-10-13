@@ -534,7 +534,7 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	if ups := s.upserts(t); len(ups) != 1 {
 		t.Errorf("writes = %v, want app.VITE_LANDING_URL only: every other value is already intended", names(ups))
 	}
-	wantHeld := map[string]string{"gateway": "1 of 1", "app": "2 of 3", "landing": "6 of 6", "ops-console": "2 of 2", "support-console": "2 of 2", "library": "2 of 2"}
+	wantHeld := map[string]string{"gateway": "1 of 1", "app": "3 of 4", "landing": "6 of 6", "ops-console": "2 of 2", "support-console": "3 of 3", "library": "2 of 2"}
 	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
 		t.Errorf("held lines = %v, want %v", got, wantHeld)
 	}

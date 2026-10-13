@@ -42,6 +42,7 @@ import (
 
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
+	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
@@ -5093,6 +5094,48 @@ func TestRLS_ExtractWorkerAsksTheAIUnderEachJobsOwnTenant(t *testing.T) {
 		if got := visible(c.other, c.jobID); got != 0 {
 			t.Errorf("%s: the other tenant sees %d row(s), want 0", c.name, got)
 		}
+	}
+}
+
+// wkCalls is a capturing airecord.Sink.
+type wkCalls struct{ got []airecord.Call }
+
+func (c *wkCalls) sink(call airecord.Call) { c.got = append(c.got, call) }
+
+// Two jobs, two tenants, one real fake client: each job's two Calls carry its own tenant.
+func TestRLS_ExtractWorkerRecordsEachAICallUnderItsJobsTenant(t *testing.T) {
+	ctx := t.Context()
+	t.Setenv(ai.EnvFake, "true")
+	t.Setenv(ai.EnvKey, "")
+	client, err := ai.FromEnv(nil)
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+	var rc wkCalls
+	client.SetRecorder(rc.sink)
+	pages := []extraction.Page{{
+		Number: 1, WidthPt: 612, HeightPt: 792,
+		Tokens: []extraction.Token{{Text: "Invoice Number: INV-2200", Region: extraction.Region{Page: 1, X0: 0.1, Y0: 0.1, X1: 0.5, Y1: 0.12}}},
+	}}
+
+	a := wkRunAI(t, ctx, 930040, pages, client)
+	b := wkRunAI(t, ctx, 930041, pages, client)
+
+	var tenants, purposes, outcomes []string
+	for _, c := range rc.got {
+		if c.Client != "ai" {
+			t.Errorf("recorded client %q, want ai", c.Client)
+		}
+		tenants, purposes, outcomes = append(tenants, c.TenantID), append(purposes, c.Purpose), append(outcomes, c.Outcome)
+	}
+	if want := []string{a.tenantID, a.tenantID, b.tenantID, b.tenantID}; !slices.Equal(tenants, want) {
+		t.Errorf("recorded tenants %v, want %v", tenants, want)
+	}
+	if want := []string{"document", "line_items", "document", "line_items"}; !slices.Equal(purposes, want) {
+		t.Errorf("recorded purposes %v, want %v", purposes, want)
+	}
+	if want := []string{"fake", "fake", "fake", "fake"}; !slices.Equal(outcomes, want) {
+		t.Errorf("recorded outcomes %v, want %v", outcomes, want)
 	}
 }
 

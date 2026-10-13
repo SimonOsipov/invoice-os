@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/aicalls"
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/archive"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
@@ -212,6 +213,10 @@ func main() {
 	if err != nil {
 		platform.Fatal(app.Logger, "invoice: jev: %v", err)
 	}
+	aiRecorder := aicalls.NewRecorder(pool, app.Logger)
+	defer aiRecorder.Wait() // runs before pool.Close
+	aiClient.SetRecorder(aiRecorder.Record)
+	jevClient.SetRecorder(aiRecorder.Record)
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, impStore.SaveMapping, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
 	// POST /v1/imports/document -- the document-import route (EXTR-06-06): a stored

@@ -47,7 +47,7 @@ func TestJevPackage_StaysInsideThePlatformFence(t *testing.T) {
 
 	for _, line := range lines {
 		dep := strings.TrimSpace(line)
-		if banned[dep] || strings.HasPrefix(dep, "github.com/getsentry/sentry-go/") {
+		if banned[dep] || strings.HasPrefix(dep, "github.com/getsentry/sentry-go/") || strings.HasPrefix(dep, "github.com/jackc/pgx") {
 			t.Errorf("internal/platform/jev depends on %s -- banned", dep)
 			continue
 		}

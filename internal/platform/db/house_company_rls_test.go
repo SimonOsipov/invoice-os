@@ -813,6 +813,47 @@ func TestRLS_StaffFunctionsRefuseEveryoneWithAnEmptyHouseTable(t *testing.T) {
 	}
 }
 
+// AC-1. Staff follows the house row: repointing it moves the staff set, for every function.
+func TestRLS_StaffFunctionsFollowTheHouseRow(t *testing.T) {
+	requireHarness(t)
+	house := adoptHouseTenant(t)
+	tx := ruleDraftTx(t)
+	other := uuid.NewString()
+	txExec(t, tx, `INSERT INTO tenants (id, name) VALUES ($1, 'Second house (staff test)')`, other)
+	oldStaff := seedMembershipTx(t, tx, house, "reviewer", "active")
+	newStaff := seedMembershipTx(t, tx, other, "reviewer", "active")
+	ruleDraftAsApp(t, tx)
+
+	admitted := func(phase, name string, actor string) {
+		t.Helper()
+		for _, c := range staffFunctionCalls {
+			txExec(t, tx, `SAVEPOINT probe`)
+			if _, err := ruleDraftTry(t, tx, c.sql, actor); err != nil {
+				t.Errorf("%s, %s, %s: err %v, want admitted", phase, name, c.name, err)
+			}
+			txExec(t, tx, `ROLLBACK TO SAVEPOINT probe`)
+		}
+	}
+	refused := func(phase, name string, actor string) {
+		t.Helper()
+		for _, c := range staffFunctionCalls {
+			_, err := ruleDraftTry(t, tx, c.sql, actor)
+			requireNotStaffRefusal(t, phase+", "+name+", "+c.name, err, c.name)
+		}
+	}
+
+	admitted("house row names the first tenant", "its member", oldStaff)
+	refused("house row names the first tenant", "the other tenant's member", newStaff)
+
+	ruleDraftAsOwner(t, tx)
+	if tag := txExec(t, tx, `UPDATE public.house_company SET tenant_id = $1`, other); tag.RowsAffected() != 1 {
+		t.Fatalf("repoint the house row: %d rows, want 1", tag.RowsAffected())
+	}
+	ruleDraftAsApp(t, tx)
+	refused("house row repointed", "the former house's member", oldStaff)
+	admitted("house row repointed", "the new house's member", newStaff)
+}
+
 // AC-2. No tenant is set: the rule functions run on the no-tenant path.
 func TestRLS_StaffFunctionsAdmitAHouseMemberOfAnyRole(t *testing.T) {
 	requireHarness(t)
@@ -942,11 +983,22 @@ func TestRLS_StaffByHouseMigrationDownRestoresStaffMembers(t *testing.T) {
 	if pgCode(err) != "42501" {
 		t.Errorf("after the Down: a staff row without rules_role got %v, want 42501", err)
 	}
+	// All five restored bodies, not just set_rule_enabled: the rules_role flag and staff_members decide.
 	tx := ruleDraftTx(t)
-	drafter := uuid.NewString()
-	txExec(t, tx, `INSERT INTO public.staff_members (user_id, rules_role) VALUES ($1, true)`, drafter)
 	ruleDraftAsApp(t, tx)
-	ruleDraftMustOpen(t, tx, drafter)
+	for _, c := range staffFunctionCalls {
+		txExec(t, tx, `SAVEPOINT restored`)
+		if _, err := ruleDraftTry(t, tx, c.sql, granted); err != nil {
+			t.Errorf("after the Down: %s for a rules-role staff row: %v, want admitted", c.name, err)
+		}
+		txExec(t, tx, `ROLLBACK TO SAVEPOINT restored`)
+		for who, actor := range map[string]string{"a staff row without rules_role": plain, "an active house member outside staff_members": member} {
+			_, err := ruleDraftTry(t, tx, c.sql, actor)
+			if pgErr := ruleDraftPgErr(err); pgErr == nil || pgErr.Code != "42501" || pgErr.Message != c.name+": actor is not a rules-role staff member" {
+				t.Errorf("after the Down: %s for %s: %v, want 42501 from the staff_members guard", c.name, who, err)
+			}
+		}
+	}
 	_ = tx.Rollback(ctx)
 
 	reapply()

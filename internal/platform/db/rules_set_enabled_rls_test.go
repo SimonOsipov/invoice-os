@@ -336,6 +336,7 @@ func TestRLS_SetRuleEnabledExecuteGrants(t *testing.T) {
 		t.Errorf("EXECUTE: invoice_app = %t, invoice_tenant_reader = %t, want true and false", app, reader)
 	}
 
+	requireDefinerOwnedByMigrator(t, setRuleEnabledSig)
 	grantees := collectStrings(t, `SELECT CASE WHEN a.grantee = 0 THEN '=PUBLIC' ELSE a.grantee::regrole::text END
 	                                 FROM pg_proc p, aclexplode(p.proacl) a
 	                                WHERE p.oid = to_regprocedure($1) AND a.privilege_type = 'EXECUTE' ORDER BY 1`, setRuleEnabledSig)
@@ -586,6 +587,20 @@ func seedMembershipTx(t *testing.T, tx pgx.Tx, tenant, role, status string) stri
 		t.Fatalf("reset app.current_tenant: %v", err)
 	}
 	return user
+}
+
+// requireDefinerOwnedByMigrator asserts sig is SECURITY DEFINER and owned by invoice_migrator, the role that may call is_house_member.
+func requireDefinerOwnedByMigrator(t *testing.T, sig string) {
+	t.Helper()
+	var definer bool
+	var owner string
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT prosecdef, pg_get_userbyid(proowner) FROM pg_proc WHERE oid = to_regprocedure($1)`, sig).Scan(&definer, &owner); err != nil {
+		t.Fatalf("read definer flag and owner of %s: %v", sig, err)
+	}
+	if !definer || owner != "invoice_migrator" {
+		t.Errorf("%s security definer = %t, owner = %q, want true and invoice_migrator", sig, definer, owner)
+	}
 }
 
 type notStaffActor struct {

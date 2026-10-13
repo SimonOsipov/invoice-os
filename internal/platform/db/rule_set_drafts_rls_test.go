@@ -226,6 +226,7 @@ func TestRLS_RuleDraftFunctionsExecuteGrants(t *testing.T) {
 		if !app || reader {
 			t.Errorf("%s EXECUTE: invoice_app = %t, invoice_tenant_reader = %t, want true and false", sig, app, reader)
 		}
+		requireDefinerOwnedByMigrator(t, sig)
 		grantees := collectStrings(t, `SELECT CASE WHEN a.grantee = 0 THEN '=PUBLIC' ELSE a.grantee::regrole::text END
 		                                 FROM pg_proc p, aclexplode(p.proacl) a
 		                                WHERE p.oid = to_regprocedure($1) AND a.privilege_type = 'EXECUTE' ORDER BY 1`, sig)

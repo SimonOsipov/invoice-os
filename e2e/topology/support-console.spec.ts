@@ -1,4 +1,4 @@
-// The deployed v2 Support Console. The Rules screen reads and switches real rules; every other screen is mock-backed, so those pin fixture behaviour and the v2 look, not a contract.
+// The deployed v2 Support Console. It has one screen, Rules, which reads and switches real rules.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { randomUUID } from 'node:crypto'
@@ -246,9 +246,14 @@ async function startSupport(page: Page): Promise<string[]> {
   return errors
 }
 
+async function reloadRules(page: Page): Promise<void> {
+  await page.reload()
+  await expect(mainOf(page).getByRole('heading', { level: 1, name: 'Rules admin' })).toBeVisible()
+}
+
 const noErrors = (errors: string[], where: string): void => expect(errors, `console errors on ${where}:\n${errors.join('\n')}`).toEqual([])
 
-test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox banner', async ({ page }, testInfo) => {
+test('SUP-01 shell: sidebar, header, env switch and sandbox banner', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
   const side = aside(page)
@@ -256,13 +261,11 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
   const header = mn.locator('header')
   const banner = mn.locator('header + div')
   const nav = side.locator('nav button.ops-nav')
-  const subm = nav.filter({ hasText: 'Submissions' })
   const rulesNav = nav.filter({ hasText: 'Rules' })
   const brand = side.locator('img')
   const crossCard = side.locator('div.ops-hide-narrow').first()
-  const bpCard = side.locator('nav .ops-hide-narrow > div')
-  const bpTrack = kid(bpCard, 2)
-  const userBlock = side.locator('xpath=./div[last()]')
+  const footer = side.locator('xpath=./div[last()]')
+  const signOut = side.getByRole('button', { name: 'Sign out' })
   const search = header.locator('.ops-header-search')
   const sbx = header.getByRole('button', { name: 'SANDBOX', exact: true })
   const liv = header.getByRole('button', { name: 'LIVE', exact: true })
@@ -273,19 +276,13 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
 
   await expect(side).toHaveClass(/\basc-dark\b/)
   await expectStyles(side, 'aside', { 'background-color': 'rgb(8, 47, 49)', 'border-right-color': 'rgb(22, 71, 66)' })
-  await expectStyles(subm, 'active nav row', { 'background-color': 'rgb(12, 60, 57)', radius: '6px' })
-  await expectStyles(kid(subm, 1), 'active nav bar', { 'background-color': 'rgb(245, 188, 136)', radius: '2px' })
-  await expectStyles(kid(subm, 2), 'active nav icon', { color: 'rgb(245, 188, 136)' })
-  await expectStyles(rulesNav, 'idle nav row', { color: await resolveColor(side, '--fg-2') })
+  await expectStyles(rulesNav, 'active nav row', { 'background-color': 'rgb(12, 60, 57)', radius: '6px' })
+  await expectStyles(kid(rulesNav, 1), 'active nav bar', { 'background-color': 'rgb(245, 188, 136)', radius: '2px' })
+  await expectStyles(kid(rulesNav, 2), 'active nav icon', { color: 'rgb(245, 188, 136)' })
   const eyebrow = await resolveColor(side, '--eyebrow-on-dark')
-  for (const [what, el] of [
-    ['Operations', side.getByText('Operations', { exact: true })],
-    ['APP backpressure', side.getByText('APP backpressure', { exact: true })],
-  ] as const) {
-    await expectStyles(el, `${what} eyebrow`, { color: eyebrow })
-    await legible(el, el, `${what} eyebrow`)
-  }
-  await expectStyles(subm.locator('span.mono'), 'Submissions nav badge', { radius: '4px' })
+  const operations = side.getByText('Operations', { exact: true })
+  await expectStyles(operations, 'Operations eyebrow', { color: eyebrow })
+  await legible(operations, operations, 'Operations eyebrow')
   await expect(rulesNav.locator('span.mono'), 'the Rules nav holds no badge').toHaveCount(0)
 
   await expect(brand, 'one brand image in the sidebar').toHaveCount(1)
@@ -297,11 +294,7 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
 
   await expectStyles(crossCard, 'cross-tenant card', { radius: '6px' })
   await expectStyles(kid(crossCard, 1), 'cross-tenant tile', { radius: '6px' })
-  await expectStyles(bpCard, 'backpressure card', { radius: '6px' })
-  await expectStyles(bpTrack, 'backpressure track', { radius: '2px' })
-  await expectStyles(kid(bpTrack, 1), 'backpressure fill', { radius: '2px' })
-  await expectStyles(kid(userBlock, 1), 'avatar', { radius: '50%' })
-  await expectStyles(side.getByRole('button', { name: 'Sign out' }), 'Sign out', { radius: '7px' })
+  await expectStyles(signOut, 'Sign out', { radius: '7px' })
 
   await expectStyles(header, 'header', { 'background-color': 'rgba(250, 248, 242, 0.95)', 'backdrop-filter': 'blur(18px)', 'border-bottom-color': 'rgb(230, 232, 221)' })
   await expectStyles(search, 'header search', { radius: '7px', 'border-top-color': 'rgb(201, 217, 214)' })
@@ -323,15 +316,15 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
   await expectStyles(tag, 'sandbox banner tag', { 'white-space': 'nowrap', opacity: '1' })
   await legible(tag, banner, 'sandbox banner tag', { opacityOne: true })
 
-  await attachShot(page, testInfo, 'submissions')
+  await attachShot(page, testInfo, 'shell')
 
   await atWidths(page, 'SUP-01 shell layout', async () => {
     const r = await boxes(page, {
       aside: side,
       img: brand,
       wordmark: side.getByText('ASComply', { exact: true }),
-      bpCard,
-      userBlock,
+      footer,
+      signOut,
       header,
       track,
       search,
@@ -343,6 +336,7 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
       liv,
     })
     const navRects = await rectsOf(page, nav, 'nav button')
+    const footerPadRight = await footer.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight))
     await noSidewaysScroll(page, 'SUP-01')
     return {
       problems: [
@@ -350,8 +344,13 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
         ...leftOf(r.img, r.wordmark, 'brand image / wordmark'),
         ...sameCentreY(r.img, r.wordmark, 'brand image / wordmark'),
         ...navRects.flatMap((n, i) => within(r.aside, n, `nav button ${i} in the aside`)),
-        ...below(navRects[navRects.length - 1], r.bpCard, 'backpressure card / last nav button'),
-        ...within(r.aside, r.userBlock, 'user block in the aside'),
+        ...below(navRects[navRects.length - 1], r.footer, 'footer / last nav button'),
+        ...apart(navRects[navRects.length - 1], r.footer, 'last nav button / footer'),
+        ...within(r.footer, r.signOut, 'Sign out in the footer'),
+        ...within(r.aside, r.signOut, 'Sign out in the aside'),
+        ...(near(r.signOut.x + r.signOut.width, r.footer.x + r.footer.width - footerPadRight, 1)
+          ? []
+          : [`Sign out right edge ${r.signOut.x + r.signOut.width} vs footer inner edge ${r.footer.x + r.footer.width - footerPadRight}`]),
         ...within(r.track, r.sbx, 'SANDBOX in the track'),
         ...within(r.track, r.liv, 'LIVE in the track'),
         ...apart(r.sbx, r.liv, 'SANDBOX / LIVE'),
@@ -449,20 +448,6 @@ async function titleBlockRead(page: Page, h1Name: string): Promise<Read> {
   return { problems, rects: { titleBlock: m } }
 }
 
-const CARD = { radius: '6px', 'border-top-width': '1px', 'border-top-style': 'solid', 'border-top-color': 'rgb(220, 231, 228)', 'box-shadow': 'none', 'background-color': 'rgb(255, 255, 255)' }
-const FIGURE = (size: string): Want => ({ family: 'Manrope', 'font-weight': '700', 'font-size': size, 'font-variant-numeric': 'tabular-nums' })
-
-// The focus ring lives on the .ops-field wrapper; the input itself draws none.
-async function expectFieldRing(page: Page, input: Locator, what: string): Promise<void> {
-  const field = parent(input)
-  await expect(field, `${what}: the input sits in an .ops-field wrapper`).toHaveClass(/\bops-field\b/)
-  await input.focus()
-  await settle(page, field)
-  await expectStyles(field, `${what} field`, { 'border-top-color': 'rgb(56, 135, 126)' })
-  expect((await styles(field, ['box-shadow']))['box-shadow'], `${what} field ring`).toContain('rgb(56, 135, 126)')
-  await expectStyles(input, `${what} input`, { 'box-shadow': 'none' })
-}
-
 type Screen = {
   nav: string
   h1: string
@@ -478,39 +463,6 @@ async function gridKids(page: Page, grid: string, what: string): Promise<Rect[]>
 }
 
 const SCREENS: Screen[] = [
-  {
-    nav: 'Submissions',
-    h1: 'Submissions ops',
-    rowUp: 2,
-    reads: async (page) => {
-      const mn = mainOf(page)
-      const stats = mn.locator('.ops-sub-stats > div')
-      await expect(stats, 'stat tiles').toHaveCount(4)
-      await everyStyles(stats, 4, 'stat tile', CARD)
-      await everyStyles(stats.locator('.money'), 4, 'stat figure', FIGURE('20px'))
-      const chips = mn.locator('button.ops-chip')
-      await expect(chips, 'filter chips').toHaveCount(8)
-      await everyStyles(chips, 8, 'chip', { radius: '4px' })
-      for (const [i, chip] of (await chips.all()).entries()) await legible(chip.locator('span'), chip, `chip ${i} count`, { opacityOne: true })
-      const row = mn.locator('.ops-row').first()
-      const badge = kid(kid(row, 4), 1)
-      await expectStyles(badge, 'state badge', { radius: '4px' })
-      await expectStyles(kid(badge, 1), 'state badge dot', { radius: '50%' })
-      await expectStyles(kid(parent(row), 1), 'table head row', { 'background-color': 'rgb(250, 248, 242)' })
-      await expectStyles(mn.getByRole('button', { name: 'Re-drive all' }), 'Re-drive all', { 'background-color': 'rgb(162, 50, 50)', color: 'rgb(255, 255, 255)', radius: '7px' })
-    },
-    layout: async (page) => {
-      const mn = mainOf(page)
-      const tiles = await rectsOf(page, mn.locator('.ops-sub-stats > div'), 'stat tile')
-      const chips = await rectsOf(page, mn.locator('button.ops-chip'), 'chip')
-      const { h1 } = await boxes(page, { h1: mn.getByRole('heading', { level: 1, name: 'Submissions ops' }) })
-      await noSidewaysScroll(page, 'Submissions')
-      return {
-        problems: [...pairwiseApart(tiles, 'stat tiles'), ...sameTops(tiles, 'stat tiles'), ...tiles.flatMap((t, i) => apart(t, h1, `stat tile ${i} / h1`)), ...pairwiseApart(chips, 'chips')],
-        rects: { tiles, chips, h1 },
-      }
-    },
-  },
   {
     nav: 'Rules',
     h1: 'Rules admin',
@@ -539,86 +491,6 @@ const SCREENS: Screen[] = [
       return { problems: [...apart(kids[0], kids[1], 'rules grid columns'), ...sameTops(kids, 'rules grid')], rects: { kids } }
     },
   },
-  {
-    nav: 'Audit',
-    h1: 'Audit & evidence explorer',
-    rowUp: 2,
-    reads: async (page, testInfo) => {
-      const mn = mainOf(page)
-      await expectStyles(parent(mn.getByText('APPEND-ONLY · IMMUTABLE')), 'APPEND-ONLY badge', { radius: '4px' })
-      await everyStyles(mn.locator('button.ops-chip'), 4, 'audit chip', { radius: '4px' })
-      const row = mn.locator('.ops-row').first()
-      await expectStyles(kid(row, 2), 'audit icon tile', { radius: '4px' })
-      await expectStyles(kid(kid(row, 5), 1), 'audit avatar', { radius: '50%' })
-      await attachShot(page, testInfo, 'audit')
-      const input = mn.getByLabel('Filter audit entries')
-      await expectFieldRing(page, input, 'audit')
-      await input.fill('zz-no-match')
-      const none = mn.getByText('No audit entries match this filter.')
-      await expect(none).toBeVisible()
-      await expectStyles(none, 'audit empty text', { color: await resolveColor(mn, '--fg-3') })
-    },
-    layout: async (page) => {
-      await noSidewaysScroll(page, 'Audit')
-      return { problems: [], rects: {} }
-    },
-  },
-  {
-    nav: 'Tenants',
-    h1: 'Tenants & entities',
-    rowUp: 1,
-    reads: async (page, testInfo) => {
-      const mn = mainOf(page)
-      const grid = mn.locator('.ops-tenants-grid')
-      const first = grid.locator('button.ops-nav').first()
-      const detail = grid.locator('xpath=./div[2]')
-      await expectStyles(kid(kid(first, 2), 1), 'tenant row name', { family: 'Manrope' })
-      await expectStyles(kid(first, 1), 'initials tile', { radius: '6px' })
-      await expectStyles(kid(first, 3), 'status dot', { radius: '50%' })
-      await expectStyles(kid(kid(detail, 1), 1), 'detail tile', { radius: '6px' })
-      await expectStyles(mn.locator('h2'), 'tenant h2', { family: 'Manrope', 'font-weight': '700', 'font-size': '19px' })
-      await expectStyles(mn.locator('.ops-tenant-kpis .money').first(), 'first KPI figure', { family: 'Manrope', 'font-weight': '700', 'font-size': '20px' })
-      const members = mn.locator('.ops-tenant-split > div').first().locator('xpath=./div[2]/div')
-      await everyStyles(members.locator('xpath=./span[3]'), 1, 'role tag', { radius: '4px' })
-      await everyStyles(members.locator('xpath=./span[1]'), 1, 'member avatar', { radius: '50%' })
-      await expectStyles(mn.getByRole('button', { name: 'View jobs' }), 'View jobs', { radius: '7px' })
-      await expectStyles(mn.getByRole('button', { name: 'View-as (read-only)' }), 'View-as', { radius: '7px', 'background-color': 'rgb(7, 60, 61)', color: 'rgb(255, 255, 255)' })
-      await attachShot(page, testInfo, 'tenants')
-      const input = mn.getByLabel('Search tenants')
-      await expectFieldRing(page, input, 'tenant search')
-      await input.fill('zz-no-match')
-      const none = mn.getByText('No tenant matches.')
-      await expect(none).toBeVisible()
-      await expectStyles(none, 'tenant empty text', { color: await resolveColor(mn, '--fg-3') })
-    },
-    layout: async (page) => {
-      const kids = await gridKids(page, '.ops-tenants-grid', 'tenants grid')
-      const kpis = await rectsOf(page, mainOf(page).locator('.ops-tenant-kpis > div'), 'KPI cell')
-      await noSidewaysScroll(page, 'Tenants')
-      return {
-        problems: [...apart(kids[0], kids[1], 'tenants grid columns'), ...sameTops(kids, 'tenants grid'), ...pairwiseApart(kpis, 'KPI cells')],
-        rects: { kids, kpis },
-      }
-    },
-  },
-  {
-    nav: 'System health',
-    h1: 'System health',
-    rowUp: 2,
-    reads: async (page, testInfo) => {
-      const cards = mainOf(page).locator('.ops-health-grid > div')
-      await expect(cards, 'health cards').toHaveCount(6)
-      await everyStyles(cards, 6, 'health card', CARD)
-      await everyStyles(cards.locator('.money'), 6, 'health figure', FIGURE('30px'))
-      await everyStyles(cards.locator('xpath=./div[1]/span[2]/span[1]'), 6, 'health status dot', { radius: '50%' })
-      await attachShot(page, testInfo, 'health')
-    },
-    layout: async (page) => {
-      const cards = await rectsOf(page, mainOf(page).locator('.ops-health-grid > div'), 'health card')
-      await noSidewaysScroll(page, 'System health')
-      return { problems: [...pairwiseApart(cards, 'health cards'), ...sameTops(cards.slice(0, 3), 'first three health cards')], rects: { cards } }
-    },
-  },
 ]
 
 for (const s of SCREENS) {
@@ -637,83 +509,6 @@ for (const s of SCREENS) {
     noErrors(errors, `SUP-03 ${s.nav}`)
   })
 }
-
-// Seeded mismatches (RECON_ROWS in the console's data.tsx).
-const RECON_ROW_COUNT = 4
-
-// Every Reconcile whole inside its cell and the card. Empty array = fine.
-// scrolled: below 1440 the card must scroll, and the buttons are read at the scroll end.
-async function reconProblems(card: Locator, reconcile: Locator, scrolled = false): Promise<string[]> {
-  const problems: string[] = []
-  const m = await card.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-  if (scrolled) {
-    if (m.scrollWidth <= m.clientWidth) problems.push(`recon card does not scroll at ${card.page().viewportSize()!.width}`)
-  } else if (m.scrollWidth - m.clientWidth > 1) problems.push(`recon card overflows by ${m.scrollWidth - m.clientWidth}px`)
-  try {
-    if (scrolled) {
-      await card.evaluate((el) => {
-        el.scrollLeft = el.scrollWidth
-      })
-    }
-    const cardBox = await card.boundingBox()
-    const buttons = await reconcile.all()
-    if (!cardBox) return [...problems, 'recon card has no box']
-    if (buttons.length < RECON_ROW_COUNT) problems.push(`Reconcile buttons: ${buttons.length}, want ${RECON_ROW_COUNT}`)
-    const where = scrolled ? ' at the scroll end' : ''
-    for (const [i, btn] of buttons.entries()) {
-      const box = await btn.boundingBox()
-      const cell = await btn.evaluate((el) => {
-        const r = el.parentElement!.getBoundingClientRect()
-        return { x: r.x, y: r.y, width: r.width, height: r.height }
-      })
-      if (!box) problems.push(`Reconcile ${i} has no box`)
-      else problems.push(...within(cell, box, `Reconcile ${i} in its cell${where}`), ...within(cardBox, box, `Reconcile ${i} in the card${where}`))
-    }
-  } finally {
-    if (scrolled) {
-      await card.evaluate((el) => {
-        el.scrollLeft = 0
-      })
-    }
-  }
-  return problems
-}
-
-test('SUP-03 Reconciliation: tables, meter and whole Reconcile buttons at 1440', async ({ page }, testInfo) => {
-  test.setTimeout(120_000)
-  const errors = await startSupport(page)
-  const mn = mainOf(page)
-  await mn.getByRole('button', { name: 'Reconciliation', exact: true }).click()
-  const title = mn.getByText('State mismatches · internal vs APP')
-  await expect(title).toBeVisible()
-  await settle(page, mn)
-
-  await expectStyles(title, 'recon title', { family: 'Manrope', 'font-weight': '700' })
-  const reconcile = mn.getByRole('button', { name: 'Reconcile', exact: true })
-  await everyStyles(reconcile, 4, 'Reconcile', { radius: '7px', 'border-top-color': 'rgb(170, 196, 189)' })
-  await expectStyles(mn.locator('.money').filter({ hasText: /^82$/ }), 'rate figure', { family: 'Manrope', 'font-weight': '700', 'font-size': '30px' })
-  const track = mn.locator('.ops-recon-grid div[style*="height: 6px"]')
-  await expectStyles(track, 'meter track', { radius: '2px' })
-  await expectStyles(kid(track, 1), 'meter fill', { radius: '2px' })
-  await expectStyles(mn.getByRole('button', { name: 'Run sweep now' }), 'Run sweep now', { radius: '7px', 'border-top-color': 'rgb(170, 196, 189)' })
-
-  // First paint at 1440: the card needs no scroll and each Reconcile sits whole in its cell and the card.
-  const card = mn.locator('.ops-recon-grid > div').first()
-  const first = await reconProblems(card, reconcile)
-  expect(first, 'recon card and Reconcile buttons at first paint').toEqual([])
-
-  await attachShot(page, testInfo, 'submissions-recon')
-
-  await atWidths(page, 'SUP-03 Reconciliation layout', async () => {
-    const kids = await gridKids(page, '.ops-recon-grid', 'recon grid')
-    await noSidewaysScroll(page, 'Reconciliation')
-    const width = page.viewportSize()!.width
-    const recon = width >= 1440 ? await reconProblems(card, reconcile) : await reconProblems(card, reconcile, true)
-    return { problems: [...apart(kids[0], kids[1], 'recon grid columns'), ...sameTops(kids, 'recon grid'), ...recon], rects: { kids } }
-  })
-
-  noErrors(errors, 'SUP-03 Reconciliation')
-})
 
 // The drawer, its scrim and its edge: shared by the job, rule and audit drawers.
 async function expectDrawer(page: Page, what: string): Promise<{ drawer: Locator; scrim: Locator }> {
@@ -742,52 +537,7 @@ async function expectPanel(page: Page, dialog: Locator, what: string): Promise<v
   await expectStyles(dialog.locator('h3'), `${what} h3`, { family: 'Manrope', 'font-weight': '700', 'font-size': '17px' })
 }
 
-test('SUP-04 job drawer: chrome, scrim dismissal and the dead-letter state', async ({ page }, testInfo) => {
-  test.setTimeout(120_000)
-  const errors = await startSupport(page)
-  const mn = mainOf(page)
-
-  await mn.locator('.ops-row').first().click()
-  const { drawer, scrim } = await expectDrawer(page, 'job drawer')
-  await expectStyles(drawer.getByRole('button', { name: 'Close' }), 'close button', { radius: '7px' })
-  await expectStyles(drawer.getByRole('button', { name: 'Cancel', exact: true }), 'drawer Cancel', { radius: '7px', 'font-weight': '600' })
-  const badge = parent(drawer.locator('span.mono').filter({ hasText: /^ACCEPTED$/ }))
-  await expectStyles(badge, 'drawer state badge', { radius: '4px' })
-  await expectStyles(kid(badge, 1), 'drawer state dot', { radius: '50%' })
-  await everyStyles(drawer.locator('span[style*="width: 11px"]'), 4, 'timeline dot', { radius: '50%' })
-  await expectStyles(drawer.locator('div[style*="grid-template-columns: 1fr 1fr"]').first(), 'meta grid', { radius: '6px' })
-  await expectStyles(drawer.locator('pre.ops-json').first(), 'json block', { radius: '6px', 'background-color': 'rgb(8, 47, 49)' })
-  await attachShot(page, testInfo, 'job-drawer')
-
-  await scrim.click({ position: { x: 40, y: 300 } })
-  await expect(drawer, 'a scrim click closes the drawer').toBeHidden()
-
-  await mn.locator('.ops-row').filter({ hasText: 'DEAD-LETTER' }).first().click()
-  await expect(drawer).toBeVisible()
-  await expect(drawer.locator('span.mono').filter({ hasText: /^DEAD-LETTER$/ }).first(), 'dead-letter badge in the drawer').toBeVisible()
-  await settle(page, drawer)
-  await attachShot(page, testInfo, 'job-drawer-deadletter')
-
-  noErrors(errors, 'SUP-04 job drawer')
-})
-
-test('SUP-04 red toast: Cancel in the job drawer', async ({ page }) => {
-  test.setTimeout(120_000)
-  const errors = await startSupport(page)
-
-  await mainOf(page).locator('.ops-row').first().click()
-  await page.locator('.ops-drawer').getByRole('button', { name: 'Cancel', exact: true }).click()
-  const toast = page.getByRole('status').filter({ hasText: 'Cancelled · ' })
-  await expect(toast).toBeVisible()
-  // The toast auto-dismisses: one evaluate reads both values.
-  const t = await toast.evaluate((el) => ({ cls: el.className, icon: getComputedStyle(el.firstElementChild!).color }))
-  expect(t.cls, 'red toast class').toMatch(/\basc-dark\b/)
-  expect(sameColor(t.icon, 'rgb(244, 176, 176)'), `red toast icon ${t.icon}`).toBe(true)
-
-  noErrors(errors, 'SUP-04 red toast')
-})
-
-test('SUP-04 rule and audit drawers', async ({ page }, testInfo) => {
+test('SUP-04 rule drawer', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
   const mn = mainOf(page)
@@ -799,15 +549,7 @@ test('SUP-04 rule and audit drawers', async ({ page }, testInfo) => {
   await expectStyles(drawer.getByRole('button', { name: 'Kill-switch' }), 'Kill-switch', { radius: '7px' })
   await attachShot(page, testInfo, 'rule-drawer')
 
-  await drawer.getByRole('button', { name: 'Close' }).click()
-  await expect(drawer).toBeHidden()
-  await openScreen(page, 'Audit', 'Audit & evidence explorer')
-  await mn.locator('.ops-row').first().click()
-  const audit = await expectDrawer(page, 'audit drawer')
-  await expectStyles(kid(audit.drawer, 2), 'audit drawer banner', { 'background-color': 'rgb(239, 246, 244)' })
-  await attachShot(page, testInfo, 'audit-drawer')
-
-  noErrors(errors, 'SUP-04 rule and audit drawers')
+  noErrors(errors, 'SUP-04 rule drawer')
 })
 
 test('SUP-04 kill confirm', async ({ page }, testInfo) => {
@@ -817,7 +559,7 @@ test('SUP-04 kill confirm', async ({ page }, testInfo) => {
   const api = (await signInSession(account.email, account.password)).access_token
   if (!(await probeEnabled(api))) await rawFetch(`${STAFF_RULES}/${PROBE_RULE}`, { method: 'PATCH', headers: { Authorization: `Bearer ${api}` }, body: { enabled: true, reason: 'e2e restore' } })
 
-  await openScreen(page, 'Rules', 'Rules admin')
+  await reloadRules(page)
   const probeSwitch = mainOf(page).locator('.ops-row').filter({ hasText: PROBE_RULE }).getByRole('switch')
   await expect(probeSwitch).toBeVisible()
   await expect(probeSwitch).toHaveAttribute('aria-checked', 'true')
@@ -961,7 +703,7 @@ test('SUP-04 publish modal', async ({ page }, testInfo) => {
   const errors = await startSupport(page)
   const draft = await ensureDraft(await staffToken())
 
-  await openScreen(page, 'Rules', 'Rules admin')
+  await reloadRules(page)
   await mainOf(page).getByRole('button', { name: `Publish draft v${draft}` }).click()
   const dialog = page.getByRole('dialog').filter({ hasText: 'Publish draft → v' })
   await expectPanel(page, dialog, 'publish modal')
@@ -972,59 +714,6 @@ test('SUP-04 publish modal', async ({ page }, testInfo) => {
   await expect(dialog, 'Cancel closes the modal').toBeHidden()
 
   noErrors(errors, 'SUP-04 publish modal')
-})
-
-test('SUP-04 re-drive toast, empty jobs and a clear health card', async ({ page }, testInfo) => {
-  test.setTimeout(120_000)
-  const errors = await startSupport(page)
-  const mn = mainOf(page)
-
-  await mn.getByRole('button', { name: 'Re-drive all' }).click()
-  const toast = page.getByRole('status').filter({ hasText: 'Re-drive queued' })
-  await expect(toast).toBeVisible()
-  // The toast auto-dismisses: one evaluate reads every value before the shot.
-  const t = await toast.evaluate((el) => {
-    const cs = getComputedStyle(el)
-    const icon = getComputedStyle(el.firstElementChild!)
-    const tag = getComputedStyle(el.lastElementChild!)
-    return {
-      cls: el.className,
-      background: cs.backgroundColor,
-      color: cs.color,
-      radii: ['border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius'].map((p) => cs.getPropertyValue(p)),
-      shadow: cs.boxShadow,
-      icon: icon.color,
-      tag: tag.color,
-      tagBorder: tag.borderLeftColor,
-    }
-  })
-  expect(t.cls, 'toast class').toMatch(/\basc-dark\b/)
-  for (const [what, got, want] of [
-    ['background', t.background, 'rgb(8, 47, 49)'],
-    ['colour', t.color, 'rgb(247, 246, 237)'],
-    ['icon', t.icon, 'rgb(159, 200, 191)'],
-    ['tag', t.tag, 'rgb(187, 205, 199)'],
-    ['tag left border', t.tagBorder, 'rgb(22, 71, 66)'],
-  ] as const) {
-    expect(sameColor(got, want), `toast ${what} is ${got}, want ${want}`).toBe(true)
-  }
-  expect(t.radii, 'toast corners').toEqual(['6px', '6px', '6px', '6px'])
-  expect(t.shadow, 'toast shadow').toBe(SHADOW_CARD)
-  await settle(page, toast)
-  await attachShot(page, testInfo, 'redrive-toast')
-
-  await mn.locator('button.ops-chip').filter({ hasText: 'DEAD-LETTER' }).click()
-  const none = mn.getByText('No jobs in this state.')
-  await expect(none).toBeVisible()
-  await expectStyles(none, 'empty jobs text', { color: await resolveColor(mn, '--fg-3') })
-  await attachShot(page, testInfo, 'jobs-empty')
-
-  await openScreen(page, 'System health', 'System health')
-  await expect(mn.locator('.ops-health-grid > div').filter({ hasText: 'Dead-letter' }), 'the Dead-letter card is clear').toContainText('CLEAR')
-  await settle(page, mn)
-  await attachShot(page, testInfo, 'health-clear')
-
-  noErrors(errors, 'SUP-04 re-drive')
 })
 
 const RAIL_ROWS = 'button[aria-pressed]'
@@ -1197,7 +886,7 @@ const DRAFT_ROW = `.ops-rules-grid ${RAIL_ROWS}`
 
 async function openDraftView(page: Page, token: string, extra?: ProbeRule): Promise<number> {
   const draft = await ensureDraft(token, extra)
-  await openScreen(page, 'Rules', 'Rules admin')
+  await reloadRules(page)
   await mainOf(page).locator(DRAFT_ROW).filter({ hasText: /DRAFT/ }).click()
   await expect(mainOf(page).getByRole('button', { name: 'Add rule' }), 'the draft is selected').toBeVisible()
   return draft
@@ -1383,7 +1072,6 @@ const STAFF_SYNCS = '/api/validation/v1/staff/code-list-syncs'
 
 test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
   test.setTimeout(120_000)
-  const errors = await startSupport(page)
   const readLists = async () => {
     const res = await rawFetch(STAFF_SYNCS, { headers: { Authorization: `Bearer ${await staffToken()}` } })
     return (res.body as { lists: { list: string }[] }).lists
@@ -1393,6 +1081,7 @@ test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
     await page.waitForTimeout(5_000)
     lists = await readLists()
   }
+  const errors = await startSupport(page)
   const mn = mainOf(page)
   await openScreen(page, 'Rules', 'Rules admin')
   await expect(mn.locator('[role="switch"]').first()).toBeVisible()

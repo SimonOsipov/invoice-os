@@ -1,13 +1,12 @@
 import type { CSSProperties } from 'react'
-import { BrandMark } from '../icons'
-import { GLOBE_ICON, NAV_ITEMS, SIGN_OUT_ICON } from '../data'
+import { BrandMark, GLOBE_ICON, SIGN_OUT_ICON } from '../icons'
+import { NAV_ITEMS } from '../nav'
 import { signOut } from '../auth'
 import type { Screen } from '../types'
 
 type Props = {
   screen: Screen
   onNavigate: (s: Screen) => void
-  deadLetterCount: number
 }
 
 const navBtnStyle = (active: boolean): CSSProperties => ({
@@ -28,7 +27,7 @@ const navBtnStyle = (active: boolean): CSSProperties => ({
   position: 'relative',
 })
 
-export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
+export function Sidebar({ screen, onNavigate }: Props) {
   return (
     <aside
       className="ops-sidebar asc-dark"
@@ -81,8 +80,6 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
         </div>
         {NAV_ITEMS.map((n) => {
           const active = screen === n.key
-          const badge = n.key === 'submissions' && deadLetterCount ? String(deadLetterCount) : ''
-          const badgeRed = n.key === 'submissions'
           return (
             <button key={n.key} type="button" onClick={() => onNavigate(n.key)} className="ops-nav" style={navBtnStyle(active)}>
               <span style={{ position: 'absolute', left: 0, top: 7, bottom: 7, width: 2, borderRadius: 2, background: active ? 'var(--action)' : 'transparent' }} />
@@ -90,57 +87,12 @@ export function Sidebar({ screen, onNavigate, deadLetterCount }: Props) {
               <span className="ops-nav-label" style={{ flex: 1 }}>
                 {n.label}
               </span>
-              {badge && (
-                <span
-                  className="mono ops-nav-label"
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 700,
-                    background: badgeRed ? 'var(--status-red-bg)' : 'var(--action-tint)',
-                    color: badgeRed ? 'var(--status-red-text)' : 'var(--action)',
-                    borderRadius: 'var(--radius-sm)',
-                    padding: '1px 6px',
-                  }}
-                >
-                  {badge}
-                </span>
-              )}
             </button>
           )
         })}
-        {/* APP backpressure meter (proto:69-78). The developer console's equivalent slot
-            holds a request quota; here it is the shared Access Point rate budget, which is
-            a cross-tenant fact by construction. */}
-        <div className="ops-hide-narrow" style={{ marginTop: 'auto', padding: '12px 8px 4px' }}>
-          <div style={{ border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '11px 12px', background: 'var(--bg-1)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <span className="label" style={{ color: 'var(--eyebrow-on-dark)' }}>APP backpressure</span>
-              <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: 'var(--status-amber-text)' }}>
-                82%
-              </span>
-            </div>
-            <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 2, overflow: 'hidden' }}>
-              <div style={{ width: '82%', height: '100%', background: 'var(--status-amber-text)', borderRadius: 2 }} />
-            </div>
-            <div className="mono" style={{ fontSize: 9.5, color: 'var(--fg-3)', marginTop: 7, letterSpacing: '0.03em' }}>
-              82 / 100 req·s · backoff on
-            </div>
-          </div>
-        </div>
       </nav>
 
-      <div style={{ padding: 12, borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span
-          style={{ flex: 'none', width: 30, height: 30, borderRadius: '50%', background: 'var(--slate-800)', color: 'var(--text-on-dark)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600 }}
-        >
-          EI
-        </span>
-        <div className="ops-nav-label" style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>Emeka Iroha</div>
-          <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', letterSpacing: '0.04em' }}>
-            SUPPORT ENGINEER · L2
-          </div>
-        </div>
+      <div className="ops-hide-narrow" style={{ padding: 12, borderTop: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
         {/* Sign out: clears the session, then leaves (signOutConsole). */}
         <button
           type="button"

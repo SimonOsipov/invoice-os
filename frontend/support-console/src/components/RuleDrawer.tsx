@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { KILL_ICON } from '../data'
+import { KILL_ICON } from '../icons'
 import { draftRuleErrors, EMPTY_FORM, formFromRule, RULE_TYPES, SEVERITIES, type RuleForm } from '../rulesApi'
 import { Drawer } from './Drawer'
 import { Fault } from './Fault'

@@ -1,4 +1,4 @@
-import { PUBLISH_ICON } from '../data'
+import { PUBLISH_ICON } from '../icons'
 import { stateLabel, syncDate, versionMeta, type RuleVersion, type VersionState } from '../rulesApi'
 import { SeverityBadge } from './StatusBadge'
 import { isHeld, SyncChip } from './SyncStatus'

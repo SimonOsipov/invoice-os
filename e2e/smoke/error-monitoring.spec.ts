@@ -89,7 +89,7 @@ const TRACE_HEADERS = {
 
 // The app reads URLSearchParams in a render-time initializer, so throwing there crashes its first render.
 // A console reads it in the async gate, so its crash is armed when the gate stores the renewed session:
-// the console's first render then calls Array.prototype.filter (jobs.filter in each console's App).
+// the console's first render then calls an array method: filter in the ops console's App, find in the support console's.
 // The library has no render-time hook to crash; main.test.tsx (main_startsMonitoringBeforeRenderAndWrapsTheRoot) covers its CrashBoundary.
 for (const target of TARGETS.filter((t) => t.name !== 'landing' && t.name !== 'library')) {
   test(`${target.name}: an induced render crash shows the recovery screen`, async ({ page, staffAccount }, testInfo) => {
@@ -110,7 +110,7 @@ for (const target of TARGETS.filter((t) => t.name !== 'landing' && t.name !== 'l
     // Added after the seed, so the seed's own setItem is the original.
     if (target.console) await seedStaffStorage(page, target.console, staffAccount)
     await page.addInitScript(
-      ({ message, key }) => {
+      ({ message, key, method }) => {
         if (key === null) {
           ;(window as unknown as { URLSearchParams: unknown }).URLSearchParams = function () {
             throw new Error(message)
@@ -121,13 +121,13 @@ for (const target of TARGETS.filter((t) => t.name !== 'landing' && t.name !== 'l
         Storage.prototype.setItem = function (k: string, v: string) {
           setItem.call(this, k, v)
           if (k === key) {
-            Array.prototype.filter = function () {
+            ;(Array.prototype as unknown as Record<string, unknown>)[method] = function () {
               throw new Error(message)
             }
           }
         }
       },
-      { message: CRASH_MESSAGE, key: target.console ? CONSOLE_SESSION_KEY[target.console] : null },
+      { message: CRASH_MESSAGE, key: target.console ? CONSOLE_SESSION_KEY[target.console] : null, method: target.console === 'support' ? 'find' : 'filter' },
     )
 
     await page.goto(url)

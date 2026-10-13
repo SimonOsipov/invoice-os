@@ -10,7 +10,7 @@
 --     — see every tenant row, while invoice_app still sees only its current tenant.
 --     Still NOBYPASSRLS: its reach is exactly what its policies+grants allow, no more.
 --   supabase_auth_admin    — GoTrue's login role; owns schema `auth`, nothing in `public`.
--- And one NOLOGIN role:
+-- And two NOLOGIN roles:
 --   auth_hook_reader       — invoice_migrator may SET ROLE to it but does not inherit it,
 --     so the migrator's own reads stay scoped.
 --   staff_reader           — NOLOGIN owner of the staff_read_* functions; same membership shape.

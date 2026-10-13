@@ -249,3 +249,133 @@ func TestBootstrapSQLStaffReaderSchemaPrivileges(t *testing.T) {
 		}
 	}
 }
+
+func TestBootstrapSQLStaffReaderIsCreatedWhenAbsent(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	t.Cleanup(func() {
+		applyDevBootstrap(t, pool, sql)
+		restoreAuthRoles(t, pool)
+		restoreDevDefaultPasswords(t, pool)
+	})
+
+	if roleExists(t, pool, staffReaderRole) {
+		mustExecSQL(t, pool, `DROP OWNED BY staff_reader`)
+		mustExecSQL(t, pool, `DROP ROLE staff_reader`)
+	}
+	if roleExists(t, pool, staffReaderRole) {
+		t.Fatalf("pre-mutation did not drop %s", staffReaderRole)
+	}
+
+	applyDevBootstrap(t, pool, sql)
+
+	if !roleExists(t, pool, staffReaderRole) {
+		t.Fatalf("role %s not created by bootstrap", staffReaderRole)
+	}
+	if a := readRoleAttrs(t, pool, staffReaderRole); a.canLogin || a.super || a.bypassRLS || a.createDB || a.createRole {
+		t.Errorf("%s created with unsafe attributes: %+v", staffReaderRole, a)
+	}
+	var hasPassword bool
+	if err := pool.QueryRow(context.Background(),
+		`SELECT rolpassword IS NOT NULL FROM pg_authid WHERE rolname = $1`, staffReaderRole,
+	).Scan(&hasPassword); err != nil {
+		t.Fatalf("read pg_authid: %v", err)
+	}
+	if hasPassword {
+		t.Errorf("%s created with a password, want none", staffReaderRole)
+	}
+	if got := staffReaderMemberships(t, pool); len(got) != 1 || got[0].inherit || !got[0].set || got[0].admin {
+		t.Errorf("memberships after create = %+v, want one inherit=false set=true admin=false", got)
+	}
+	for _, priv := range []string{"USAGE", "CREATE"} {
+		if !hasSchemaPrivilege(t, pool, staffReaderRole, priv) {
+			t.Errorf("%s lacks %s on schema public after create", staffReaderRole, priv)
+		}
+	}
+}
+
+func TestBootstrapSQLStaffReaderEachAttributeDriftedAloneIsReasserted(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	ensureStaffReaderForDrift(t, pool)
+	t.Cleanup(func() { restoreAuthRoles(t, pool); restoreDevDefaultPasswords(t, pool) })
+
+	cases := []struct {
+		name  string
+		drift string
+		bad   func(roleAttrs) bool
+	}{
+		{"LOGIN", "LOGIN", func(a roleAttrs) bool { return a.canLogin }},
+		{"SUPERUSER", "SUPERUSER", func(a roleAttrs) bool { return a.super }},
+		{"BYPASSRLS", "BYPASSRLS", func(a roleAttrs) bool { return a.bypassRLS }},
+		{"CREATEDB", "CREATEDB", func(a roleAttrs) bool { return a.createDB }},
+		{"CREATEROLE", "CREATEROLE", func(a roleAttrs) bool { return a.createRole }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mustExecSQL(t, pool, `ALTER ROLE staff_reader WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`)
+			mustExecSQL(t, pool, `ALTER ROLE staff_reader WITH `+c.drift)
+			if !c.bad(readRoleAttrs(t, pool, staffReaderRole)) {
+				t.Fatalf("pre-mutation did not drift %s", c.name)
+			}
+			applyDevBootstrap(t, pool, sql)
+			if a := readRoleAttrs(t, pool, staffReaderRole); a.canLogin || a.super || a.bypassRLS || a.createDB || a.createRole {
+				t.Errorf("%s drift not reasserted: %+v", c.name, a)
+			}
+		})
+	}
+}
+
+func TestBootstrapSQLStaffReaderSchemaPrivilegeDriftedAloneIsReasserted(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	ensureStaffReaderForDrift(t, pool)
+	t.Cleanup(func() { restoreAuthRoles(t, pool); restoreDevDefaultPasswords(t, pool) })
+	revokePublicSchemaUsage(t, pool)
+
+	for _, priv := range []string{"USAGE", "CREATE"} {
+		t.Run(priv, func(t *testing.T) {
+			mustExecSQL(t, pool, `GRANT USAGE, CREATE ON SCHEMA public TO staff_reader`)
+			mustExecSQL(t, pool, `REVOKE `+priv+` ON SCHEMA public FROM staff_reader`)
+			if hasSchemaPrivilege(t, pool, staffReaderRole, priv) {
+				t.Fatalf("pre-mutation left %s on schema public", priv)
+			}
+			applyDevBootstrap(t, pool, sql)
+			for _, p := range []string{"USAGE", "CREATE"} {
+				if !hasSchemaPrivilege(t, pool, staffReaderRole, p) {
+					t.Errorf("%s lacks %s on schema public after bootstrap", staffReaderRole, p)
+				}
+			}
+		})
+	}
+}
+
+func TestBootstrapSQLStaffReaderAdminOptionDriftConverges(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	sql := readBootstrapSQL(t)
+	ensureStaffReaderForDrift(t, pool)
+	t.Cleanup(func() {
+		mustExecSQL(t, pool, `REVOKE staff_reader FROM invoice_migrator`)
+		restoreAuthRoles(t, pool)
+		restoreDevDefaultPasswords(t, pool)
+	})
+
+	mustExecSQL(t, pool, `GRANT staff_reader TO invoice_migrator WITH ADMIN TRUE, INHERIT FALSE, SET TRUE`)
+	if got := staffReaderMemberships(t, pool); len(got) != 1 || !got[0].admin {
+		t.Fatalf("pre-mutation did not drift ADMIN: %+v", got)
+	}
+
+	applyDevBootstrap(t, pool, sql)
+
+	got := staffReaderMemberships(t, pool)
+	if len(got) != 1 {
+		t.Fatalf("%d membership rows after bootstrap, want 1", len(got))
+	}
+	if got[0].admin {
+		t.Errorf("membership admin=true after bootstrap, want false")
+	}
+}

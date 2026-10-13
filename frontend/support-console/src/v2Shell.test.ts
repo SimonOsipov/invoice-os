@@ -231,8 +231,8 @@ describe('v2 shell', () => {
     const labels = withClass(ts, 'label')
     expect(
       labels.map((l) => l.text),
-      'the two labels',
-    ).toEqual(['Operations', 'APP backpressure'])
+      'the one label',
+    ).toEqual(['Operations'])
     for (const l of labels) expect.soft(style(l).color, `label "${l.text}"`).toBe('var(--eyebrow-on-dark)')
 
     expect(
@@ -254,15 +254,14 @@ describe('v2 shell', () => {
     expect.soft(style(tile[0])['border-radius'], 'globe tile radius').toBe('var(--radius-md)')
     expect.soft(style(withText(ts, 'SUPPORT'))['border-radius'], 'SUPPORT tag radius').toBe('var(--radius-sm)')
 
-    const bp = ts.filter((t) => style(t).border === '1px solid var(--line-1)' && style(t).padding === '11px 12px')
-    expect(bp, 'one backpressure card').toHaveLength(1)
-    expect.soft(style(bp[0])['border-radius'], 'backpressure card radius').toBe('var(--radius-md)')
-    const track = ts.filter((t) => style(t).height === '5px' && style(t).overflow === 'hidden')
-    expect(track, 'one backpressure track').toHaveLength(1)
-    expect.soft(style(track[0])['border-radius'], 'backpressure track radius').toBe('2px')
-    const fill = ts.filter((t) => style(t).width === '82%' && style(t).height === '100%')
-    expect(fill, 'one backpressure fill').toHaveLength(1)
-    expect.soft(style(fill[0])['border-radius'], 'backpressure fill radius').toBe('2px')
+    expect(
+      ts.filter((t) => (style(t).height === '5px' && style(t).overflow === 'hidden') || style(t).width === '82%'),
+      'no backpressure track or fill',
+    ).toEqual([])
+    expect(
+      ts.filter((t) => t.text === 'EI' || t.text.includes('Emeka Iroha') || t.text.includes('SUPPORT ENGINEER')),
+      'no persona avatar, name or role',
+    ).toEqual([])
 
     const brand = ts.filter((t) => style(t).padding === '16px 16px 14px')
     expect(brand, 'one brand block').toHaveLength(1)
@@ -270,6 +269,11 @@ describe('v2 shell', () => {
     const foot = ts.filter((t) => style(t).padding === '12px' && 'border-top' in style(t))
     expect(foot, 'one sidebar footer').toHaveLength(1)
     expect.soft(style(foot[0])['border-top'], 'footer edge draws --line-1 as the prototype does').toBe('1px solid var(--line-1)')
+    expect.soft(style(foot[0])['justify-content'], 'footer keeps Sign out at the right edge').toBe('flex-end')
+    expect.soft(classes(foot[0]), 'footer row hides with the narrow sidebar').toContain('ops-hide-narrow')
+    const footButtons = buttonsOf(html.slice(html.indexOf(`<div${foot[0].attrs.slice(1)}>`)))
+    expect(footButtons, 'the footer holds one button').toHaveLength(1)
+    expect.soft(attr(footButtons[0], 'aria-label'), 'the footer button is Sign out').toBe('Sign out')
 
     const imgs = ts.filter((t) => t.name === 'img')
     expect(imgs, 'one brand <img').toHaveLength(1)
@@ -277,13 +281,12 @@ describe('v2 shell', () => {
     expect.soft(attr(imgs[0], 'height'), 'mark height').toBe('26')
     expect.soft(style(imgs[0])['border-radius'], 'mark corner').toBe('var(--radius-md)')
 
-    expect.soft(style(withText(ts, 'EI'))['border-radius'], 'avatar corner').toBe('50%')
     const out = buttonsOf(html).filter((b) => attr(b, 'aria-label') === 'Sign out')
     expect(out, 'one Sign out button').toHaveLength(1)
     expect.soft(style(out[0])['border-radius'], 'Sign out radius').toBe('var(--radius-btn)')
 
     const corners = ts.map((t) => style(t)['border-radius']).filter((v): v is string => v !== undefined)
-    expect(corners.length, 'sidebar corners collected').toBeGreaterThan(8)
+    expect(corners.length, 'sidebar corners collected').toBeGreaterThanOrEqual(7)
     expect(V1_CORNER.test('var(--radius-input)') && V1_CORNER.test('99px') && V1_CORNER.test('999px'), 'control: the needle matches v1 corners').toBe(true)
     expect(V1_CORNER.test('var(--radius-md)') || V1_CORNER.test('2px'), 'control: the needle skips v2 corners').toBe(false)
     expect.soft(

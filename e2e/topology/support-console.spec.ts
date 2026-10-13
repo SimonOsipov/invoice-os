@@ -248,7 +248,7 @@ async function startSupport(page: Page): Promise<string[]> {
 
 const noErrors = (errors: string[], where: string): void => expect(errors, `console errors on ${where}:\n${errors.join('\n')}`).toEqual([])
 
-test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox banner', async ({ page }, testInfo) => {
+test('SUP-01 shell: sidebar, header, env switch and sandbox banner', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
   const side = aside(page)
@@ -256,13 +256,11 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
   const header = mn.locator('header')
   const banner = mn.locator('header + div')
   const nav = side.locator('nav button.ops-nav')
-  const subm = nav.filter({ hasText: 'Submissions' })
   const rulesNav = nav.filter({ hasText: 'Rules' })
   const brand = side.locator('img')
   const crossCard = side.locator('div.ops-hide-narrow').first()
-  const bpCard = side.locator('nav .ops-hide-narrow > div')
-  const bpTrack = kid(bpCard, 2)
-  const userBlock = side.locator('xpath=./div[last()]')
+  const footer = side.locator('xpath=./div[last()]')
+  const signOut = side.getByRole('button', { name: 'Sign out' })
   const search = header.locator('.ops-header-search')
   const sbx = header.getByRole('button', { name: 'SANDBOX', exact: true })
   const liv = header.getByRole('button', { name: 'LIVE', exact: true })
@@ -273,19 +271,13 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
 
   await expect(side).toHaveClass(/\basc-dark\b/)
   await expectStyles(side, 'aside', { 'background-color': 'rgb(8, 47, 49)', 'border-right-color': 'rgb(22, 71, 66)' })
-  await expectStyles(subm, 'active nav row', { 'background-color': 'rgb(12, 60, 57)', radius: '6px' })
-  await expectStyles(kid(subm, 1), 'active nav bar', { 'background-color': 'rgb(245, 188, 136)', radius: '2px' })
-  await expectStyles(kid(subm, 2), 'active nav icon', { color: 'rgb(245, 188, 136)' })
-  await expectStyles(rulesNav, 'idle nav row', { color: await resolveColor(side, '--fg-2') })
+  await expectStyles(rulesNav, 'active nav row', { 'background-color': 'rgb(12, 60, 57)', radius: '6px' })
+  await expectStyles(kid(rulesNav, 1), 'active nav bar', { 'background-color': 'rgb(245, 188, 136)', radius: '2px' })
+  await expectStyles(kid(rulesNav, 2), 'active nav icon', { color: 'rgb(245, 188, 136)' })
   const eyebrow = await resolveColor(side, '--eyebrow-on-dark')
-  for (const [what, el] of [
-    ['Operations', side.getByText('Operations', { exact: true })],
-    ['APP backpressure', side.getByText('APP backpressure', { exact: true })],
-  ] as const) {
-    await expectStyles(el, `${what} eyebrow`, { color: eyebrow })
-    await legible(el, el, `${what} eyebrow`)
-  }
-  await expectStyles(subm.locator('span.mono'), 'Submissions nav badge', { radius: '4px' })
+  const operations = side.getByText('Operations', { exact: true })
+  await expectStyles(operations, 'Operations eyebrow', { color: eyebrow })
+  await legible(operations, operations, 'Operations eyebrow')
   await expect(rulesNav.locator('span.mono'), 'the Rules nav holds no badge').toHaveCount(0)
 
   await expect(brand, 'one brand image in the sidebar').toHaveCount(1)
@@ -297,11 +289,7 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
 
   await expectStyles(crossCard, 'cross-tenant card', { radius: '6px' })
   await expectStyles(kid(crossCard, 1), 'cross-tenant tile', { radius: '6px' })
-  await expectStyles(bpCard, 'backpressure card', { radius: '6px' })
-  await expectStyles(bpTrack, 'backpressure track', { radius: '2px' })
-  await expectStyles(kid(bpTrack, 1), 'backpressure fill', { radius: '2px' })
-  await expectStyles(kid(userBlock, 1), 'avatar', { radius: '50%' })
-  await expectStyles(side.getByRole('button', { name: 'Sign out' }), 'Sign out', { radius: '7px' })
+  await expectStyles(signOut, 'Sign out', { radius: '7px' })
 
   await expectStyles(header, 'header', { 'background-color': 'rgba(250, 248, 242, 0.95)', 'backdrop-filter': 'blur(18px)', 'border-bottom-color': 'rgb(230, 232, 221)' })
   await expectStyles(search, 'header search', { radius: '7px', 'border-top-color': 'rgb(201, 217, 214)' })
@@ -323,15 +311,15 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
   await expectStyles(tag, 'sandbox banner tag', { 'white-space': 'nowrap', opacity: '1' })
   await legible(tag, banner, 'sandbox banner tag', { opacityOne: true })
 
-  await attachShot(page, testInfo, 'submissions')
+  await attachShot(page, testInfo, 'shell')
 
   await atWidths(page, 'SUP-01 shell layout', async () => {
     const r = await boxes(page, {
       aside: side,
       img: brand,
       wordmark: side.getByText('ASComply', { exact: true }),
-      bpCard,
-      userBlock,
+      footer,
+      signOut,
       header,
       track,
       search,
@@ -343,6 +331,7 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
       liv,
     })
     const navRects = await rectsOf(page, nav, 'nav button')
+    const footerPadRight = await footer.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight))
     await noSidewaysScroll(page, 'SUP-01')
     return {
       problems: [
@@ -350,8 +339,13 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
         ...leftOf(r.img, r.wordmark, 'brand image / wordmark'),
         ...sameCentreY(r.img, r.wordmark, 'brand image / wordmark'),
         ...navRects.flatMap((n, i) => within(r.aside, n, `nav button ${i} in the aside`)),
-        ...below(navRects[navRects.length - 1], r.bpCard, 'backpressure card / last nav button'),
-        ...within(r.aside, r.userBlock, 'user block in the aside'),
+        ...below(navRects[navRects.length - 1], r.footer, 'footer / last nav button'),
+        ...apart(navRects[navRects.length - 1], r.footer, 'last nav button / footer'),
+        ...within(r.footer, r.signOut, 'Sign out in the footer'),
+        ...within(r.aside, r.signOut, 'Sign out in the aside'),
+        ...(near(r.signOut.x + r.signOut.width, r.footer.x + r.footer.width - footerPadRight, 1)
+          ? []
+          : [`Sign out right edge ${r.signOut.x + r.signOut.width} vs footer inner edge ${r.footer.x + r.footer.width - footerPadRight}`]),
         ...within(r.track, r.sbx, 'SANDBOX in the track'),
         ...within(r.track, r.liv, 'LIVE in the track'),
         ...apart(r.sbx, r.liv, 'SANDBOX / LIVE'),

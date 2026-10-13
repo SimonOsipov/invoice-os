@@ -335,10 +335,18 @@ describe('Sidebar footer, the Support Console icon', () => {
     cleanup()
     await renderSidebar(ROLLUP, sidebarCtx())
     expect(icon()).toBeNull()
+    expect(screen.getByRole('button', { name: 'Sign out' }), 'the card rendered').not.toBeNull()
+  })
+
+  it('supportIcon_hrefDropsEveryTrailingSlashAndSpace', async () => {
+    vi.stubEnv('VITE_SUPPORT_URL', ' https://sup.x/// ')
+    await renderSidebar(ROLLUP, sidebarCtx({ staff: true }))
+    expect(icon()!.getAttribute('href')).toBe('https://sup.x/?auth=app')
+    expect(icon()!.getAttribute('aria-label')).toBe(NAME)
   })
 
   it('supportIcon_unsetUrlHidesIt', async () => {
-    for (const v of ['', '  ']) {
+    for (const v of ['', '  ', undefined]) {
       vi.stubEnv('VITE_SUPPORT_URL', v)
       await renderSidebar(ROLLUP, sidebarCtx({ staff: true }))
       expect(icon(), JSON.stringify(v)).toBeNull()

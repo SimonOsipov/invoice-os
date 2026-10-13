@@ -809,7 +809,7 @@ describe('isStaffToken', () => {
 
   it('isStaffToken_readsOnlyABooleanTrue', () => {
     expect(isStaffToken(tok({ staff: true }))).toBe(true)
-    for (const meta of [{ staff: 'true' }, { staff: 1 }, [], 'x', undefined]) {
+    for (const meta of [{ staff: 'true' }, { staff: 1 }, { staff: false }, [], 'x', null, undefined]) {
       expect(isStaffToken(tok(meta)), JSON.stringify(meta)).toBe(false)
     }
     expect(isStaffToken('a.b')).toBe(false)

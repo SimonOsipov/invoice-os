@@ -349,5 +349,12 @@ describe('front door: the workspace ctx staff flag', () => {
     render(<App />)
     expect(workspaceIsRendered()).toBe(true)
     expect(screen.queryByRole('link', { name: 'Open the Support Console' })).toBeNull()
+    for (const token of [jwtWith({ staff: false }), jwtWith(undefined), 'tok']) {
+      cleanup()
+      localStorage.setItem(SESSION_KEY, serializeSession({ ...SEAT_SESSION, token }))
+      render(<App />)
+      expect(workspaceIsRendered(), token).toBe(true)
+      expect(screen.queryByRole('link', { name: 'Open the Support Console' }), token).toBeNull()
+    }
   })
 })

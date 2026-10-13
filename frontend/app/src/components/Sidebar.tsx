@@ -138,8 +138,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   let activeNav: string = view === 'create' || view === 'detail' ? 'invoices' : view
 
   // Sign out (M3-07-03). Replaces the old decorative gear: the gear read as
-  // "settings" (already a nav item) and had no handler — this footer slot now holds
-  // one real action. Default/hover color and fill live in `.pf-signout` (platform.css); an
+  // "settings" (already a nav item) and had no handler. Default/hover color and fill live in `.pf-signout` (platform.css); an
   // inline color or background would beat the :hover rule.
   const signOutButton = (
     <button

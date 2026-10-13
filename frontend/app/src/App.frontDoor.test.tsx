@@ -4,6 +4,7 @@
 // STANDALONE arm's own assertions belong to App.suspended.test.tsx; FD-5 does not repeat
 // them beyond this file's own discriminator.
 
+import { StrictMode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -127,7 +128,8 @@ async function settle(ms = 30) {
 
 // Matches 5/5 sibling App test files that mount a live session (FD-4 is the row that
 // reaches Workspace); harmless no-op for the other rows.
-vi.mock('./components/Sidebar', () => ({ Sidebar: () => null }))
+// The probe shows `ctx.staff` only; the real icon is pinned in Sidebar.test.tsx.
+vi.mock('./components/Sidebar', () => ({ Sidebar: ({ ctx }: { ctx: { staff: boolean } }) => (ctx.staff ? <a href="#">Open the Support Console</a> : null) }))
 
 beforeEach(() => {
   originalLocation = Object.getOwnPropertyDescriptor(window, 'location')
@@ -331,5 +333,238 @@ describe('front door: a Library visit goes to registration (LIB-06)', () => {
     await settle()
 
     expect(hrefWrites).toEqual([`https://landing.example/?state=${storedSignInState()}&signin=ready`])
+  })
+})
+
+describe('front door: the workspace ctx staff flag', () => {
+  const jwtWith = (appMetadata: unknown) => `h.${btoa(JSON.stringify({ app_metadata: appMetadata })).replace(/=+$/, '')}.s`
+
+  it('workspaceCtx_staffComesFromTheToken', () => {
+    vi.stubEnv('VITE_SUPPORT_URL', 'https://sup.x')
+    stubLocation()
+    localStorage.setItem(SESSION_KEY, serializeSession({ ...SEAT_SESSION, token: jwtWith({ staff: true }) }))
+    render(<App />)
+    expect(screen.queryByRole('link', { name: 'Open the Support Console' })).not.toBeNull()
+    cleanup()
+    localStorage.setItem(SESSION_KEY, serializeSession({ ...SEAT_SESSION, token: jwtWith({ staff: 'true' }) }))
+    render(<App />)
+    expect(workspaceIsRendered()).toBe(true)
+    expect(screen.queryByRole('link', { name: 'Open the Support Console' })).toBeNull()
+    for (const token of [jwtWith({ staff: false }), jwtWith(undefined), 'tok']) {
+      cleanup()
+      localStorage.setItem(SESSION_KEY, serializeSession({ ...SEAT_SESSION, token }))
+      render(<App />)
+      expect(workspaceIsRendered(), token).toBe(true)
+      expect(screen.queryByRole('link', { name: 'Open the Support Console' }), token).toBeNull()
+    }
+  })
+})
+
+describe('front door: ?auth=console forwards a code to the console', () => {
+  const SUPPORT = 'https://sup.x'
+  const STATE = 'S'.repeat(43)
+  const CODE = 'c'.repeat(43)
+  const QUERY = `?auth=console&console=support&state=${STATE}`
+  const JWT_RE = /eyJ|[\w-]+\.[\w-]+\.[\w-]+/
+  const jwtWith = (appMetadata: unknown) => {
+    const iat = Math.floor(Date.now() / 1000)
+    return `h.${btoa(JSON.stringify({ iat, exp: iat + 3600, app_metadata: appMetadata })).replace(/=+$/, '')}.s`
+  }
+  const STAFF = jwtWith({ staff: true })
+  const seatWith = (token: string) =>
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify({ v: 1, personaId: 'firm', token, me: ME, verified: true, handoff: true, refresh_token: 'R0', received_at: Date.now() }),
+    )
+
+  type Answer = { status: number; body: unknown } | 'held' | 'network' | 'badjson'
+  function stubHandoff(answer: Answer) {
+    const calls: { url: string; init: RequestInit }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init: RequestInit) => {
+        calls.push({ url, init })
+        if (answer === 'held') return new Promise(() => {})
+        if (url === `${GATEWAY}/auth/console-handoff` && answer === 'network') return Promise.reject(new TypeError('Failed to fetch'))
+        if (url === `${GATEWAY}/auth/console-handoff` && answer === 'badjson') {
+          return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: () => Promise.reject(new SyntaxError('bad json')) })
+        }
+        if (url !== `${GATEWAY}/auth/console-handoff` || typeof answer === 'string') {
+          return Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: () => Promise.resolve({}) })
+        }
+        return Promise.resolve({
+          ok: answer.status < 400,
+          status: answer.status,
+          statusText: '',
+          json: () => Promise.resolve(answer.body),
+        })
+      }),
+    )
+    return { handoffCalls: () => calls.filter((c) => c.url === `${GATEWAY}/auth/console-handoff`) }
+  }
+  const mount = async (strict = false) => {
+    await act(async () => {
+      render(strict ? <StrictMode><App /></StrictMode> : <App />)
+    })
+    await settle()
+  }
+  beforeEach(() => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing.example')
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    vi.stubEnv('VITE_SUPPORT_URL', SUPPORT)
+  })
+
+  it('frontDoor_consoleStartForwardsACodeToTheConsole', async () => {
+    const { hrefWrites } = stubRecordingLocation(QUERY)
+    seatWith(STAFF)
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    await mount(true)
+
+    const calls = net.handoffCalls()
+    expect(calls).toHaveLength(1)
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({ state: STATE })
+    expect(new Headers(calls[0].init.headers).get('Authorization')).toBe(`Bearer ${STAFF}`)
+    expect(hrefWrites).toEqual([`${SUPPORT}/?handoff=${CODE}`])
+    expect(hrefWrites.filter((u) => JWT_RE.test(u))).toEqual([])
+  })
+
+  it('frontDoor_consoleStartIgnoredForACustomer', async () => {
+    const { hrefWrites } = stubRecordingLocation(QUERY)
+    seatWith(jwtWith({ staff: false }))
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    await mount()
+    expect(net.handoffCalls()).toHaveLength(0)
+    expect(workspaceIsRendered()).toBe(true)
+    expect(hrefWrites).toEqual([])
+
+    cleanup()
+    vi.unstubAllEnvs()
+    vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
+    seatWith(STAFF)
+    stubRecordingLocation(QUERY)
+    const net2 = stubHandoff({ status: 200, body: { code: CODE } })
+    await mount()
+    expect(net2.handoffCalls()).toHaveLength(0)
+    expect(workspaceIsRendered()).toBe(true)
+  })
+
+  it.each([
+    ['a 403', { status: 403, body: { error: 'forbidden' } }],
+    ['a 200 without a code', { status: 200, body: {} }],
+    ['a 401', { status: 401, body: { error: 'unauthorized' } }],
+    ['a 500', { status: 500, body: { error: 'boom' } }],
+    ['a network error', 'network'],
+    ['malformed JSON', 'badjson'],
+  ] as const)('frontDoor_consoleStartRefusalRendersTheWorkspace [%s]', async (_n, answer) => {
+    const { hrefWrites } = stubRecordingLocation(QUERY)
+    seatWith(STAFF)
+    const net = stubHandoff(answer)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await mount(true)
+
+    expect(net.handoffCalls()).toHaveLength(1)
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('console hand-off failed'))).toHaveLength(1)
+    expect(hrefWrites).toEqual([])
+    expect(workspaceIsRendered()).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('frontDoor_consoleStartWithoutASeatGoesToLanding', async () => {
+    const { hrefWrites } = stubRecordingLocation(QUERY)
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    await mount()
+    expect(hrefWrites).toEqual([`https://landing.example/?state=${storedSignInState()}`])
+    expect(net.handoffCalls()).toHaveLength(0)
+  })
+
+  it('frontDoor_aHandoffCodeWinsOverConsoleStart', async () => {
+    const { hrefWrites } = stubRecordingLocation(`?handoff=${CODE}&auth=console&console=support&state=${STATE}`, '/invoices')
+    ensureSignInState()
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    const base = globalThis.fetch as unknown as (u: string, i: RequestInit) => Promise<unknown>
+    const ok = (body: unknown) => Promise.resolve({ ok: true, status: 200, statusText: 'OK', json: () => Promise.resolve(body) })
+    const seen: string[] = []
+    vi.stubGlobal('fetch', (u: string, i: RequestInit) => {
+      seen.push(u)
+      if (u === `${GATEWAY}/auth/exchange`) return ok({ access_token: STAFF, refresh_token: 'R0' })
+      if (u === `${GATEWAY}/api/tenancy/v1/me`) return ok(ME)
+      return base(u, i)
+    })
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+    await mount()
+    expect(seen).toContain(`${GATEWAY}/auth/exchange`)
+    expect(workspaceIsRendered()).toBe(true)
+    expect(net.handoffCalls()).toHaveLength(0)
+    expect(hrefWrites).toEqual([])
+    expect(replaceState).toHaveBeenCalledWith(null, '', '/invoices')
+    replaceState.mockRestore()
+  })
+
+  it('frontDoor_consoleStartShowsTheLoadingCard', async () => {
+    stubRecordingLocation(QUERY)
+    seatWith(STAFF)
+    const net = stubHandoff('held')
+    await mount()
+    expect(net.handoffCalls()).toHaveLength(1)
+    expect(screen.queryByText('Opening your workspace…')).not.toBeNull()
+    expect(workspaceIsRendered()).toBe(false)
+    expect(screen.queryByRole('link', { name: 'Open the Support Console' })).toBeNull()
+  })
+  it('frontDoor_consoleStartSuccessLeavesNoTraceOfTheCode', async () => {
+    stubRecordingLocation(QUERY)
+    seatWith(STAFF)
+    stubHandoff({ status: 200, body: { code: CODE } })
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+    const pushState = vi.spyOn(window.history, 'pushState')
+    const spies = (['log', 'info', 'warn', 'error'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}))
+    await mount()
+    expect(replaceState.mock.calls.length).toBeGreaterThan(0)
+    for (const c of replaceState.mock.calls) expect(String(c[2])).toBe('/')
+    expect(pushState).not.toHaveBeenCalled()
+    const stored = Object.keys(localStorage).concat(Object.keys(sessionStorage)).map((k) => localStorage.getItem(k) ?? sessionStorage.getItem(k) ?? '')
+    expect(stored.length).toBeGreaterThan(0)
+    expect(stored.filter((v) => v.includes(CODE) || v.includes(STATE))).toEqual([])
+    expect(spies.flatMap((x) => x.mock.calls).filter((c) => JSON.stringify(c).includes(CODE))).toEqual([])
+    replaceState.mockRestore()
+    pushState.mockRestore()
+    spies.forEach((x) => x.mockRestore())
+  })
+
+  it('frontDoor_consoleStartSendsTheCodeOnlyToTheConfiguredConsole', async () => {
+    const { hrefWrites } = stubRecordingLocation(`${QUERY}&target=https://evil.x&next=https://evil.x&redirect=https://evil.x`)
+    seatWith(STAFF)
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    await mount()
+    expect(net.handoffCalls()).toHaveLength(1)
+    expect(hrefWrites).toEqual([`${SUPPORT}/?handoff=${CODE}`])
+    expect(JSON.parse(net.handoffCalls()[0].init.body as string)).toEqual({ state: STATE })
+  })
+
+  it.each([
+    ['console=ops', `?auth=console&console=ops&state=${STATE}`],
+    ['a 42-char state', `?auth=console&console=support&state=${STATE.slice(1)}`],
+    ['no state', '?auth=console&console=support'],
+    ['an oversized state', `?auth=console&console=support&state=${STATE}${STATE}`],
+    ['two states', `${QUERY}&state=${STATE}`],
+    ['?auth=start', `?auth=start&console=support&state=${STATE}`],
+    ['?auth=verify', `?auth=verify&console=support&state=${STATE}`],
+    ['?auth=verify-invite', `?auth=verify-invite&console=support&state=${STATE}`],
+  ])('frontDoor_consoleStartIgnoresAMalformedOrOtherDoor [%s]', async (_n, q) => {
+    const { hrefWrites } = stubRecordingLocation(q)
+    seatWith(STAFF)
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    await mount()
+    expect(net.handoffCalls()).toHaveLength(0)
+    expect(hrefWrites.filter((u) => u.startsWith(SUPPORT))).toEqual([])
+  })
+
+  it('frontDoor_consoleStartDropsTheIntentForANonStaffSeat', async () => {
+    stubRecordingLocation(QUERY)
+    seatWith(jwtWith({}))
+    const net = stubHandoff({ status: 200, body: { code: CODE } })
+    await mount()
+    expect(net.handoffCalls()).toHaveLength(0)
+    expect(workspaceIsRendered()).toBe(true)
+    expect(screen.queryByText('Opening your workspace…')).toBeNull()
   })
 })

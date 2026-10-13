@@ -3,7 +3,7 @@
 // its hardcoded dev-landing fallback is removed.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { landingBase, libraryBase } from './auth'
+import { landingBase, libraryBase, supportBase } from './auth'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -25,5 +25,16 @@ describe('libraryBase', () => {
     expect(libraryBase()).toBeNull()
     vi.unstubAllEnvs()
     expect(libraryBase()).toBeNull()
+  })
+})
+
+describe('supportBase', () => {
+  it('supportBase_trimsAndNullsBlank', () => {
+    vi.stubEnv('VITE_SUPPORT_URL', ' https://sup.x/ ')
+    expect(supportBase()).toBe('https://sup.x')
+    vi.stubEnv('VITE_SUPPORT_URL', '')
+    expect(supportBase()).toBeNull()
+    vi.stubEnv('VITE_SUPPORT_URL', '  ')
+    expect(supportBase()).toBeNull()
   })
 })

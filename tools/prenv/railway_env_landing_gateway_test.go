@@ -146,6 +146,26 @@ func TestReconcileURLVariablesWritesTheLibraryURLs(t *testing.T) {
 	}
 }
 
+func TestReconcileURLVariablesWritesTheConsoleHandoffURLs(t *testing.T) {
+	got := map[string]map[string]string{}
+	for _, c := range reconcileCalls(t) {
+		if got[c.label] == nil {
+			got[c.label] = map[string]string{}
+		}
+		got[c.label][c.name] = c.value
+	}
+	for label, want := range map[string]map[string]string{
+		"app":             {"VITE_SUPPORT_URL": "$support_url"},
+		"support-console": {"VITE_APP_URL": "$app_url", "VITE_LANDING_URL": "$landing_url"}, // VITE_LANDING_URL is the control
+	} {
+		for name, value := range want {
+			if got[label][name] != value {
+				t.Errorf("%s writes %s=%q, want %q", label, name, got[label][name], value)
+			}
+		}
+	}
+}
+
 func TestReconcileURLVariablesKeepsTheLibraryOutOfCORS(t *testing.T) {
 	body := strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n")
 	if !strings.Contains(body, `local origins="$app_url,$landing_url,$ops_url,$support_url"`) {

@@ -705,9 +705,11 @@ function gatedErrors(page: Page, drops: Dropper[]): string[] {
 }
 
 // Origin and path only: a failure message must not print the leaked secret.
-function leakingUrls(urls: string[], ...secrets: string[]): string[] {
+// An undefined secret is dropped: includes(undefined) would match the text "undefined".
+function leakingUrls(urls: string[], ...secrets: (string | undefined)[]): string[] {
+  const defined = secrets.filter((s): s is string => !!s)
   return urls
-    .filter((u) => JWT_IN_URL.test(u) || secrets.some((secret) => u.includes(secret)))
+    .filter((u) => JWT_IN_URL.test(u) || defined.some((secret) => u.includes(secret)))
     .map((u) => {
       const at = new URL(u)
       return at.origin + at.pathname.replace(/eyJ[\w.-]*/g, '<jwt>')
@@ -1956,7 +1958,7 @@ const isRefresh = (r: Request | Response) => r.url() === REFRESH_URL
 const refreshAnswer = (page: Page) => page.waitForResponse((r) => isRefresh(r) && r.request().method() === 'POST')
 
 // The console origin's stored session in this context, or null.
-async function consoleRecord(context: BrowserContext, target: ConsoleTarget): Promise<{ v: number; token: string; refresh_token: string } | null> {
+async function consoleRecord(context: BrowserContext, target: ConsoleTarget): Promise<{ v: number; token: string; refresh_token?: string; from?: 'app' } | null> {
   const { origins } = await context.storageState()
   const entry = origins.find((o) => o.origin === new URL(consoleUrl(target)).origin)?.localStorage.find((e) => e.name === CONSOLE_SESSION_KEY[target])
   return entry ? JSON.parse(entry.value) : null
@@ -2031,6 +2033,130 @@ test('deployed consoles: a staff session signs in through landing, opens each co
       }
     })
   }
+})
+
+const CONSOLE_CODE_RE = /^[A-Za-z0-9_-]{43}$/
+const SUPPORT_ICON = 'Open the Support Console'
+
+// A staff account signed in to the app (a reviewer of the house company), through the real front door.
+async function signInStaffToApp(page: Page): Promise<void> {
+  await passFrontDoor(page, await provisionStaffAccount('support-icon'), '/')
+  await DESTINATION_READY.app(page)
+}
+
+test('deployed app: a staff click on the support icon opens the Support Console signed in, with no password and no token in any URL', async ({ browser }) => {
+  test.setTimeout(240_000)
+  const context = await browser.newContext()
+  try {
+    const page = await context.newPage()
+    const appErrors = gatedErrors(page, [])
+    await signInStaffToApp(page)
+    const appToken = await browserToken(page)
+
+    const urls: string[] = []
+    context.on('request', (r) => urls.push(r.url()))
+    const popupErrors: string[][] = []
+    context.on('page', (p) => popupErrors.push(gatedErrors(p, [])))
+    const [popup] = await Promise.all([context.waitForEvent('page'), page.getByRole('link', { name: SUPPORT_ICON }).click()])
+    await DESTINATION_READY.support(popup)
+
+    const handoff = urls.find((u) => isConsoleHandoff(u, 'support'))
+    expect(handoff, 'the console was opened with a hand-off code').toBeDefined()
+    // internal/gateway HandoffStore: a 43-character code, the same shape as /auth/exchange's.
+    expect(new URL(handoff!).searchParams.get('handoff'), 'the hand-off code').toMatch(CONSOLE_CODE_RE)
+    expect(urls.filter((u) => u.startsWith(LANDING_URL)), 'the journey touched landing').toEqual([])
+    await expect(popup.getByLabel('Password'), 'a password field on the way').toHaveCount(0)
+
+    const stored = await consoleRecord(context, 'support')
+    expect(stored, 'the console stored no session').not.toBeNull()
+    expect(Object.keys(stored!).sort(), 'the borrowed record keys').toEqual(['from', 'token', 'v'])
+    expect([stored!.v, stored!.from], 'the borrowed record version and origin').toEqual([2, 'app'])
+    expect((claimsOf(stored!.token).app_metadata as { staff?: unknown }).staff, 'staff on the stored token').toBe(true)
+
+    const before = urls.length
+    await popup.reload()
+    await DESTINATION_READY.support(popup)
+    expect(urls.slice(before).filter((u) => u.startsWith(LANDING_URL)), 'the reload went through landing').toEqual([])
+    expect(await consoleRecord(context, 'support'), 'the console lost its session on reload').not.toBeNull()
+
+    expect(urls.length, 'no URLs were recorded').toBeGreaterThan(0)
+    expect(leakingUrls(urls, appToken, stored!.token, stored!.refresh_token), 'a token or a JWT appeared in these URLs').toEqual([])
+    expect(appErrors, `console errors on the app tab:\n${appErrors.join('\n')}`).toEqual([])
+    expect(popupErrors.flat(), `console errors on the console tab:\n${popupErrors.flat().join('\n')}`).toEqual([])
+  } finally {
+    await context.close()
+  }
+})
+
+test('deployed app: the support icon sits beside Sign out in the identity card at every wide width', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = gatedErrors(page, [])
+  await signInStaffToApp(page)
+
+  const card = page.getByTestId('identity-card')
+  const name = page.getByTestId('persona-name')
+  const icon = page.getByRole('link', { name: SUPPORT_ICON })
+  const signOut = page.getByRole('button', { name: 'Sign out', exact: true })
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect
+        .poll(
+          async () => {
+            await settleAnimations(card, icon, signOut)
+            const [c, n, i, s] = await Promise.all([card.boundingBox(), name.boundingBox(), icon.boundingBox(), signOut.boundingBox()])
+            if (!c || !n || !i || !s) return 'an element has no box'
+            if (!enclosesRect(c, i, 1) || !enclosesRect(c, s, 1)) return `icon ${JSON.stringify(i)} or Sign out ${JSON.stringify(s)} leaves the card ${JSON.stringify(c)}`
+            if (rectsOverlap(i, n)) return 'icon overlaps the name'
+            if (rectsOverlap(i, s)) return 'icon overlaps Sign out'
+            if (i.x + i.width > s.x) return 'icon is not left of Sign out'
+            if (Math.abs(i.width - s.width) > 1 || Math.abs(i.height - s.height) > 1) return `icon ${i.width}x${i.height} differs from Sign out ${s.width}x${s.height}`
+            if (Math.abs(i.y + i.height / 2 - (s.y + s.height / 2)) > 1) return 'icon and Sign out are not on one row'
+            return 'ok'
+          },
+          { message: `support icon beside Sign out at ${width}px`, timeout: 10_000 },
+        )
+        .toBe('ok')
+      await assertPageDoesNotScrollSideways(page, `app at ${width}px`)
+    }
+
+    await page.setViewportSize({ width: 1440, height: 1080 })
+    const paint = (loc: Locator) => loc.evaluate((el) => ({ color: getComputedStyle(el).color, background: getComputedStyle(el).backgroundColor }))
+    const rest = { icon: await paint(icon), signOut: await paint(signOut) }
+    expect(rest.icon, 'icon colours at rest equal Sign out').toEqual(rest.signOut)
+    // .pf-signout transitions color over 120 ms; read only once it has settled.
+    await signOut.hover()
+    await settleAnimations(signOut)
+    const signOutHover = await paint(signOut)
+    expect(signOutHover, 'Sign out hover fill differs from rest').not.toEqual(rest.signOut)
+    await icon.hover()
+    await settleAnimations(icon)
+    expect(await paint(icon), 'icon hover equals Sign out hover').toEqual(signOutHover)
+    await page.mouse.move(700, 450)
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('deployed app: a customer sees no support icon and the console start asks the gateway for nothing', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = gatedErrors(page, [])
+  await signInAs(page, 'firm')
+  await expect(page.locator(VERIFIED)).toBeAttached()
+  await expect(page.getByRole('button', { name: 'Sign out', exact: true }), 'control: the identity card drew').toBeVisible()
+  await expect(page.getByRole('link', { name: SUPPORT_ICON })).toHaveCount(0)
+
+  const handoffCalls: string[] = []
+  page.on('request', (r) => {
+    if (r.url().includes('/auth/console-handoff')) handoffCalls.push(r.url())
+  })
+  await page.goto(`${APP_URL}/?auth=console&console=support&state=${mintSignInState()}`)
+  await expect(page.locator(VERIFIED)).toBeAttached()
+  await expect.poll(() => new URL(page.url()).search, { message: 'the one-shot query stayed in the address bar' }).toBe('')
+  expect(handoffCalls, 'a customer asked for a console code').toEqual([])
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
 test("deployed consoles: a customer's real session opens neither console and is told why", async ({ browser }) => {

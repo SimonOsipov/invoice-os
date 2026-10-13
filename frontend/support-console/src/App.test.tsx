@@ -12,6 +12,7 @@ vi.mock('@invoice-os/console-session', () => ({
     return children
   },
   signOutConsole: vi.fn(),
+  expireConsole: vi.fn(),
 }))
 
 // the key the console already stores under (moves from session.ts to auth.ts)
@@ -22,6 +23,7 @@ type GateProps = {
   target: string
   gateway: string | null
   landing: string | null
+  app: string | null
   children: ReactElement | ReactElement[]
 }
 
@@ -63,6 +65,14 @@ describe('App', () => {
     expect(unset.type).toBe(StaffGate)
     expect(unset.props.gateway).toBeNull()
     expect(unset.props.landing).toBeNull()
+  })
+
+  it('App_passesTheAppBaseToTheGate', () => {
+    vi.stubEnv('VITE_APP_URL', 'https://app.example/')
+    expect(renderApp().props.app).toBe('https://app.example')
+
+    vi.stubEnv('VITE_APP_URL', '')
+    expect(renderApp().props.app).toBeNull()
   })
 
   it('App_rendersTheSameConsoleWhenTheGateOpens', () => {

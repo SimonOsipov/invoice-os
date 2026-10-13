@@ -251,6 +251,8 @@ export type PlatformCtx = {
   getToken: () => string | null | Promise<string | null>
   // A hand-off session hides demo data.
   handoff: boolean
+  // The token's staff claim: shows the Support Console icon.
+  staff: boolean
   user: SignedInUser
   clients: Client[]
   active: Client

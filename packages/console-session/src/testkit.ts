@@ -3,6 +3,7 @@ import { vi } from 'vitest'
 
 export const GW = 'https://gw.test'
 export const LANDING = 'https://www.test'
+export const APP = 'https://app.test'
 export const OPS_KEY = 'invoice-os.ops-session'
 export const SUPPORT_KEY = 'invoice-os.support-session'
 export const STATE_KEY = 'invoice-os.signInState' // SIGN_IN_STATE_KEY, frontend/app/src/lib/signInState.ts
@@ -27,6 +28,9 @@ export const staffToken = (tag: string, expSec = NOW / 1000 + 3600): string =>
 
 export const customerToken = (tag: string, expSec = NOW / 1000 + 3600): string =>
   jwt({ sub: 'cust-1', exp: expSec, tag, app_metadata: { tenant_id: 'tenant-1' } })
+
+// The stored borrowed record: `{v:2, token, from:"app"}`.
+export const borrowedRaw = (token: string): string => JSON.stringify({ v: 2, token, from: 'app' })
 
 // The stored console record: AC-6 `{v:2, token, refresh_token}`.
 export const recordRaw = (token: string, refresh: string): string => JSON.stringify({ v: 2, token, refresh_token: refresh })
@@ -113,6 +117,7 @@ export const spyTimeouts = () => vi.spyOn(AbortSignal, 'timeout').mockImplementa
 // Node env only: the package writes `window.location.href` and calls `window.location.reload()`.
 export function installWindow(log: string[] = []) {
   const hrefWrites: string[] = []
+  const replaceWrites: string[] = []
   const reload = vi.fn(() => void log.push('reload'))
   vi.stubGlobal('window', {
     location: {
@@ -123,10 +128,14 @@ export function installWindow(log: string[] = []) {
       get href() {
         return ''
       },
+      replace(v: string) {
+        replaceWrites.push(v)
+        log.push('replace')
+      },
       reload,
     },
   })
-  return { hrefWrites, reload }
+  return { hrefWrites, replaceWrites, reload }
 }
 
 export const timeoutError = (): DOMException => new DOMException('The operation timed out', 'TimeoutError')

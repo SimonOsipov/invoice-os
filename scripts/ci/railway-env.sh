@@ -1697,16 +1697,16 @@ reconcile_url_variables() {
   library_id=$(service_id_by_name "$PASS_SETTLE" library "environment $env_id" URL_VARIABLES) || exit 1
 
   pass_plan_add "$gw_id" gateway "" "CORS_ALLOWED_ORIGINS=$origins"
-  pass_plan_add "$app_id" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_LIBRARY_URL=$library_url"
+  pass_plan_add "$app_id" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_LIBRARY_URL=$library_url" "VITE_SUPPORT_URL=$support_url"
   pass_plan_add "$landing_id" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url" "VITE_LIBRARY_URL=$library_url" VITE_REGISTRATION_OPEN=true
   pass_plan_add "$ops_id" ops-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
-  pass_plan_add "$support_id" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
+  pass_plan_add "$support_id" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_APP_URL=$app_url"
   pass_plan_add "$library_id" library "" "VITE_APP_URL=$app_url" "VITE_LANDING_URL=$landing_url"
 }
 
 reconcile_url_variables_verdict() {
   pass_owned_verdict reconcile_url_variables || return 1
-  echo "All 16 environment variables confirmed by independent re-query."
+  echo "All 18 environment variables confirmed by independent re-query."
 }
 
 # cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>

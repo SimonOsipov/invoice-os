@@ -164,6 +164,12 @@ export function decodeJwtPayload(token: string | null): Record<string, unknown> 
   }
 }
 
+// True only for a boolean `app_metadata.staff`; unverified, so it gates UI and never access.
+export function isStaffToken(token: string | null): boolean {
+  const meta = decodeJwtPayload(token)?.app_metadata
+  return meta !== null && typeof meta === 'object' && !Array.isArray(meta) && (meta as Record<string, unknown>).staff === true
+}
+
 // Read a JWT's `exp` WITHOUT verifying the signature. The browser cannot verify one — the
 // gateway is the only authority — so this is a courtesy check, not a security control: it
 // exists so a reload on a token the gateway will certainly reject doesn't boot into the

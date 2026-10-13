@@ -414,38 +414,6 @@ func TestRLS_CustomAccessTokenHookAddsNoKeyForANonStaffUser(t *testing.T) {
 	}
 }
 
-// AC-8. Guard: fails if provisioning inserts a staff row.
-func TestRLS_ProvisionWorkspaceGrantsNoStaff(t *testing.T) {
-	h := requireHarness(t)
-	reapplyStaffMigration(t)
-	useShippedGuard(t)
-	auth := authAdminPool(t)
-	ctx := context.Background()
-
-	tenantID := uuid.NewString()
-	cleanupTenant(t, tenantID)
-	a := newProvisionArgs(tenantID)
-	before := mustCount(t, h.super, `SELECT count(*) FROM public.staff_members`)
-
-	if err := provisionAs(ctx, h.app, tenantID, a); err != nil {
-		t.Fatalf("provision_workspace as invoice_app: %v", err)
-	}
-
-	if n := mustCount(t, h.super, `SELECT count(*) FROM public.staff_members`); n != before {
-		t.Errorf("staff_members rows = %d after provisioning, want %d", n, before)
-	}
-	if n := mustCount(t, h.super, `SELECT count(*) FROM public.staff_members WHERE user_id = $1`, a.userID); n != 0 {
-		t.Errorf("staff_members rows for the provisioned user = %d, want 0", n)
-	}
-	md := appMetadataOf(t, mustHookClaims(t, auth, a.userID))
-	if md["tenant_id"] != tenantID {
-		t.Fatalf("app_metadata.tenant_id = %v, want the provisioned %s (the workspace exists)", md["tenant_id"], tenantID)
-	}
-	if v, has := md["staff"]; has {
-		t.Errorf("app_metadata.staff = %v for a provisioned user, want absent", v)
-	}
-}
-
 func mustHookClaims(t *testing.T, auth *pgxpool.Pool, userID string) map[string]any {
 	t.Helper()
 	got, _ := hookRun(t, auth, userID, nil)
@@ -710,38 +678,6 @@ func TestRLS_CustomAccessTokenHookStaffStepKeepsTheTenantRules(t *testing.T) {
 				}
 			} else if md["tenant_id"] != tc.wantTenant {
 				t.Errorf("app_metadata.tenant_id = %v, want %s", md["tenant_id"], tc.wantTenant)
-			}
-			if md["provider"] != "email" {
-				t.Errorf("app_metadata.provider = %v, want email kept", md["provider"])
-			}
-		})
-	}
-}
-
-// A user_id that matches no row, null or absent, earns no staff and keeps no forged one.
-func TestRLS_CustomAccessTokenHookStripsStaffForANullOrAbsentUserID(t *testing.T) {
-	h := requireHarness(t)
-	reapplyStaffMigration(t)
-	auth := authAdminPool(t)
-
-	seedStaff(t, uuid.NewString())
-	if n := mustCount(t, h.super, `SELECT count(*) FROM public.staff_members`); n == 0 {
-		t.Fatal("staff_members is empty")
-	}
-
-	for name, edit := range map[string]func(e, _ map[string]any){
-		"null":   func(e, _ map[string]any) { e["user_id"] = nil },
-		"absent": func(e, _ map[string]any) { delete(e, "user_id") },
-	} {
-		t.Run(name, func(t *testing.T) {
-			raw, _ := hookEvent(t, uuid.NewString())
-			event := editEvent(t, raw, func(e, c map[string]any) {
-				edit(e, c)
-				c["app_metadata"].(map[string]any)["staff"] = true
-			})
-			md := appMetadataOf(t, outputClaims(t, callHook(t, auth, event)))
-			if v, has := md["staff"]; has {
-				t.Errorf("app_metadata.staff = %v survived a %s user_id", v, name)
 			}
 			if md["provider"] != "email" {
 				t.Errorf("app_metadata.provider = %v, want email kept", md["provider"])

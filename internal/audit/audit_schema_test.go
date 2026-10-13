@@ -457,7 +457,7 @@ func triggerNames(states map[string]string) []string {
 // checks out at fetch-depth 1, where `git diff main...HEAD` exits 128 with "ambiguous argument".
 // This is the shallow-safe form, and it is the idiom requireStoryMigration above already uses.
 const (
-	auditNumberMigrationCount  = 94
+	auditNumberMigrationCount  = 95
 	auditNumberNewestMigration = "20261013131448_staff_read_tenants.sql"
 )
 

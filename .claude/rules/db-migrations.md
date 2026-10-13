@@ -54,3 +54,5 @@ CREATE POLICY invitee_account_state_read ON auth.users FOR SELECT TO auth_hook_r
 - Seed demo documents and approval policies in the invoice service (`internal/demodocs`, `internal/demopolicy`), not in `db/seed.dev.sql`.
 - Treat demo `business_entities` and `invoices` ids as unstable. Each purge and seed cycle mints new ids.
 - Key demo fixtures on a literal seeded field: invoice number, entity name or workflow role key.
+- Keep one row at most in `public.house_company`. Insert the production row by hand; the seed never replaces a row.
+- Grant `EXECUTE` on `public.is_house_member` only to a role that owns a staff SQL function. Call it in every staff SQL function.

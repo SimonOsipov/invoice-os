@@ -250,8 +250,10 @@ func TestStaffTenantsRoute_StaffSeesEveryTenant(t *testing.T) {
 				if name != nk[0] || kind != nk[1] {
 					t.Errorf("tenant %s = name %q kind %q, want %q %q", id, name, kind, nk[0], nk[1])
 				}
-				if _, err := time.Parse(time.RFC3339Nano, created); err != nil {
+				if at, err := time.Parse(time.RFC3339Nano, created); err != nil {
 					t.Errorf("tenant %s created_at %q is not RFC 3339: %v", id, created, err)
+				} else if !at.Equal(createdAt[id]) {
+					t.Errorf("tenant %s created_at = %s, want the row's %s", id, at, createdAt[id])
 				}
 			}
 		})

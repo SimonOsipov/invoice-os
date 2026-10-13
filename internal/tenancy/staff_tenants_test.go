@@ -176,17 +176,34 @@ func TestStaffTenantsRoute_RefusesEveryNonStaffCaller(t *testing.T) {
 	rig := newStaffRig(t, NewStore(app))
 	seeded := seedKindedTenant(t, super, "staff-tenants refuse in_house", "in_house")
 	custTenant, custSubject := customerMember(t, super)
-	_, staffSubject := houseMember(t, super, "active")
+	houseID, staffSubject := houseMember(t, super, "active")
 
 	for name, c := range map[string]staffCaller{
 		"customer":               {subject: custSubject, tenant: custTenant},
 		"tenant-less, not staff": {subject: custSubject},
 		"no identity":            {},
+		// House membership alone grants nothing: the claim comes from the gateway, not from the tenant.
+		"house member, no staff claim":           {subject: staffSubject},
+		"house member with its tenant, no claim": {subject: staffSubject, tenant: houseID},
 	} {
 		t.Run(name, func(t *testing.T) {
 			wantBody(t, rig.get(c), http.StatusForbidden, forbiddenBody)
 		})
 	}
+	t.Run("staff claim without the gateway token", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodGet, "/v1/staff/tenants", nil)
+		r.Header.Set("X-User-ID", staffSubject)
+		r.Header.Set("X-User-Role", "authenticated")
+		r.Header.Set("X-User-Staff", "true")
+		rec := httptest.NewRecorder()
+		rig.h.ServeHTTP(rec, r)
+		if rec.Code != http.StatusForbidden && rec.Code != http.StatusUnauthorized {
+			t.Errorf("got %d %q, want a refusal", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), `"tenants"`) {
+			t.Errorf("a request without the gateway token received the list: %q", rec.Body.String())
+		}
+	})
 	if got := rig.calls.Load(); got != 0 {
 		t.Errorf("StaffTenants called %d times for non-staff callers, want 0", got)
 	}
@@ -337,6 +354,8 @@ func TestStaffTenantsHandler_Contract(t *testing.T) {
 	created := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 	one := []StaffTenant{{ID: "t1", Name: "Acme", Kind: "firm", CreatedAt: created, Demo: true, ActiveMembers: 2, InvoiceCount: 3}}
 	lostGrant := fmt.Errorf("tenancy: staff list tenants: %w", &pgconn.PgError{Code: "42501", Message: "permission denied for function staff_read_tenants"})
+	activity := time.Date(2026, 10, 13, 12, 30, 0, 0, time.UTC)
+	withActivity := []StaffTenant{{ID: "t2", Name: "Beta", Kind: "firm", CreatedAt: created, LastActivityAt: &activity}}
 	cases := []struct {
 		name    string
 		list    func(context.Context) ([]StaffTenant, error)
@@ -348,6 +367,8 @@ func TestStaffTenantsHandler_Contract(t *testing.T) {
 		{"empty list is an empty array", func(context.Context) ([]StaffTenant, error) { return []StaffTenant{}, nil }, 200, `{"tenants":[]}`, false},
 		{"one tenant", func(context.Context) ([]StaffTenant, error) { return one, nil }, 200,
 			`{"tenants":[{"id":"t1","name":"Acme","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":true,"active_members":2,"invoice_count":3,"last_activity_at":null}]}`, false},
+		{"one tenant with activity", func(context.Context) ([]StaffTenant, error) { return withActivity, nil }, 200,
+			`{"tenants":[{"id":"t2","name":"Beta","kind":"firm","created_at":"2026-10-13T12:00:00Z","demo":false,"active_members":0,"invoice_count":0,"last_activity_at":"2026-10-13T12:30:00Z"}]}`, false},
 		{"not staff", func(context.Context) ([]StaffTenant, error) { return nil, db.ErrNotStaff }, 403, forbiddenBody, false},
 		{"wrapped not staff", func(context.Context) ([]StaffTenant, error) { return nil, fmt.Errorf("x: %w", db.ErrNotStaff) }, 403, forbiddenBody, false},
 		{"other error", func(context.Context) ([]StaffTenant, error) { return nil, errors.New("x") }, 500, internalBody, true},
@@ -602,6 +623,12 @@ func TestStaffTenantsRoute_OrdersByLastActivity(t *testing.T) {
 	seedAuditAt(t, super, p, t0.Add(2*time.Minute))
 	seedAuditAt(t, super, q, t0)
 
+	// Equal activity: the newer tenant first. Both sit below Q and above every tenant without activity.
+	vOld := seedTenantAt(t, super, "staff-tenants order V1 "+suffix, now.Add(-6*time.Hour))
+	vNew := seedTenantAt(t, super, "staff-tenants order V2 "+suffix, now.Add(-90*time.Minute))
+	seedAuditAt(t, super, vOld, t0.Add(-10*time.Minute))
+	seedAuditAt(t, super, vNew, t0.Add(-10*time.Minute))
+
 	// Equal created_at and no activity: id ascending breaks the tie.
 	tie := now.Add(-5 * time.Hour)
 	u1, u2 := uuid.NewString(), uuid.NewString()
@@ -615,10 +642,10 @@ func TestStaffTenantsRoute_OrdersByLastActivity(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
 	}
-	got := orderedIDs(t, rec, p, q, r, s, u1, u2)
-	want := []string{p, q, r, s, u1, u2}
+	got := orderedIDs(t, rec, p, q, vNew, vOld, r, s, u1, u2)
+	want := []string{p, q, vNew, vOld, r, s, u1, u2}
 	if !slices.Equal(got, want) {
-		t.Errorf("order = %v, want P, Q, R, S, U1, U2 = %v", got, want)
+		t.Errorf("order = %v, want P, Q, V2, V1, R, S, U1, U2 = %v", got, want)
 	}
 }
 
@@ -628,15 +655,19 @@ func TestStaffTenantsRoute_DemoFollowsDemoTenants(t *testing.T) {
 	_, staff := houseMember(t, super, "active")
 	fresh := seedTenant(t, super, "staff-tenants fresh "+uuid.NewString()[:8])
 
-	// db.DemoTenants[0]; the cleanup removes the row only when this test created it.
-	demo := db.DemoTenants[0]
-	tag, err := super.Exec(context.Background(), `INSERT INTO tenants (id, name) VALUES ($1, 'staff-tenants demo') ON CONFLICT DO NOTHING`, demo)
-	if err != nil {
-		t.Fatalf("seed the demo tenant: %v", err)
+	// Every id in db.DemoTenants; the cleanup removes only the rows this test created.
+	for _, demo := range db.DemoTenants {
+		tag, err := super.Exec(context.Background(), `INSERT INTO tenants (id, name) VALUES ($1, 'staff-tenants demo') ON CONFLICT DO NOTHING`, demo)
+		if err != nil {
+			t.Fatalf("seed the demo tenant %s: %v", demo, err)
+		}
+		if tag.RowsAffected() == 1 {
+			t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, demo) })
+		}
 	}
-	if tag.RowsAffected() == 1 {
-		t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, demo) })
-	}
+	// A near miss: the house id with its last digit changed is not a demo tenant.
+	nearMiss := db.DemoTenants[0][:35] + "b"
+	seedTenantRowAt(t, super, nearMiss, "staff-tenants near miss", time.Now().UTC())
 
 	rec := rig.get(staffCaller{subject: staff, staff: true})
 	if rec.Code != http.StatusOK {
@@ -646,8 +677,13 @@ func TestStaffTenantsRoute_DemoFollowsDemoTenants(t *testing.T) {
 	if len(got) == 0 {
 		t.Fatal("the list is empty")
 	}
-	if raw := string(got[demo]["demo"]); raw != "true" {
-		t.Errorf("demo tenant %s demo = %q, want true", demo, raw)
+	for _, demo := range db.DemoTenants {
+		if raw := string(got[demo]["demo"]); raw != "true" {
+			t.Errorf("demo tenant %s demo = %q, want true", demo, raw)
+		}
+	}
+	if raw := string(got[nearMiss]["demo"]); raw != "false" {
+		t.Errorf("near-miss tenant demo = %q, want false", raw)
 	}
 	if raw := string(got[fresh]["demo"]); raw != "false" {
 		t.Errorf("fresh tenant demo = %q, want false", raw)

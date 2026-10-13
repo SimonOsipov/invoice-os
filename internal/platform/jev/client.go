@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"slices"
 	"time"
+
+	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
 )
 
 const Model = "~typesafe/jev-latest"
@@ -99,7 +101,13 @@ type Client struct {
 	cfg    config
 	http   *http.Client
 	logger *slog.Logger
+	// recorder is nil until SetRecorder; Record skips a nil sink.
+	recorder airecord.Sink
 }
+
+// SetRecorder sets the sink that receives each Ask that sent a request.
+// Call it once at boot, before the first Ask.
+func (c *Client) SetRecorder(s airecord.Sink) { c.recorder = s }
 
 func newClient(cfg config, logger *slog.Logger) *Client {
 	return &Client{cfg: cfg, http: &http.Client{}, logger: logger}
@@ -110,7 +118,16 @@ func newClient(cfg config, logger *slog.Logger) *Client {
 func (c *Client) Ask(ctx context.Context, req Request) (Response, error) {
 	start := c.cfg.now()
 	r := c.call(ctx, req)
-	c.logCall(ctx, req, r, c.cfg.now().Sub(start))
+	latency := c.cfg.now().Sub(start)
+	c.logCall(ctx, req, r, latency)
+	if r.unsent {
+		return r.resp, r.err
+	}
+	airecord.Record(ctx, c.recorder, c.logger, airecord.Call{
+		Client: "jev", Purpose: string(req.Purpose), Model: r.model,
+		InputTokens: r.usage.InputTokens, OutputTokens: r.usage.OutputTokens, Cost: r.cost,
+		LatencyMS: latency.Milliseconds(), Attempts: r.attempts, Outcome: r.outcome,
+	})
 	return r.resp, r.err
 }
 
@@ -122,6 +139,8 @@ type result struct {
 	usage    Usage   // summed over attempts, failed ones included
 	cost     float64 // summed like usage
 	model    string  // the final attempt's answering model, at most maxModelLen bytes
+	// unsent: ctx was done before attempt 1, so no request left; the call is logged but not recorded.
+	unsent bool
 }
 
 // maxModelLen bounds the logged model, which the vendor supplies.
@@ -150,6 +169,7 @@ func (c *Client) call(ctx context.Context, req Request) result {
 	attemptCap := (c.cfg.budget - c.cfg.retryWait) / 2
 
 	for attempt := 1; ; attempt++ {
+		res.unsent = attempt == 1 && ctx.Err() != nil
 		actx, cancel := context.WithTimeout(ctx, min(attemptCap, deadline.Sub(c.cfg.now())))
 		status, respBody, postErr := c.post(actx, body)
 		cancel()

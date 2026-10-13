@@ -723,6 +723,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/tenancy/invite_registration.go", fn: "InvitationPendingForEmail"},     // a gateway-token route; there is no caller to gate
 	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},   // a gateway-token route; the token names the invite and there is no caller to gate
 	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"}, // a gateway-token route; the token names the invite and there is no caller to gate
+	{file: "internal/aicalls/recorder.go", fn: "write"},                                    // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST

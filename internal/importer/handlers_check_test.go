@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/document"
+	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
@@ -334,5 +335,29 @@ func TestCheckMappingHandler_TheFakeDoubtsUnderItsMarkerAndLogsOneLine(t *testin
 	}
 	if strings.Contains(buf.String(), "Invoice No") {
 		t.Errorf("the log carries a header: %s", buf.String())
+	}
+}
+
+func TestCheckMappingHandler_RecordsOneCallUnderTheCallersTenant(t *testing.T) {
+	t.Setenv(jev.EnvFake, "true")
+	t.Setenv(jev.EnvKey, "")
+	client, err := jev.FromEnv(slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+	if err != nil {
+		t.Fatalf("jev.FromEnv: %v", err)
+	}
+	var got []airecord.Call
+	client.SetRecorder(func(c airecord.Call) { got = append(got, c) })
+	id := testIdentity()
+	open := newFakeDocOpen("data.csv", "text/csv", chkCSV(t, []string{"Invoice No", "Total"}, 3))
+
+	rec, raw := doCheckRequest(t, open.fn(), client, nil, &id, checkReqBody(t, open.doc.ID, chkOnePlacement))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, raw)
+	}
+	if len(got) != 1 {
+		t.Fatalf("recorded %d call(s), want 1: %+v", len(got), got)
+	}
+	if c := got[0]; c.Client != "jev" || c.Purpose != "mapping_check" || c.TenantID != id.TenantID {
+		t.Errorf("call = client %q purpose %q tenant %q, want jev/mapping_check/%s", c.Client, c.Purpose, c.TenantID, id.TenantID)
 	}
 }

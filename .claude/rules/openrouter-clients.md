@@ -47,6 +47,10 @@ paths:
 - Write one `ai call` or `jev call` log line per call, on every path. Write it with a background context.
 - Keep prompts, text, fake hints and page bytes out of every log line and error. Do the same for answers, schema names, file names, keys and response bodies.
 - Omit `tenant_id` from the log line when the identity has none. Never log it blank.
+- Hand each call to the recorder with `airecord.Record`, right after `logCall`.
+- Record no call with `attempts` 0. A fake call is recorded.
+- Write the `ai_calls` row in the background. Log a failed write once at WARN and never change the call's result.
+- Store no prompt, answer, schema name or file name in `ai_calls`.
 - Keep `FakeScope` out of the wire request and the log. It must match `^[A-Z]+$`.
 - Send `FakeScope: "LINES"` on the line-item call. Leave the header call unscoped.
 - Send `FakeScope: "EXPLAIN"` on the explain call.

@@ -1,16 +1,15 @@
 import type { ReactNode } from 'react'
 import { CLOSE_ICON } from '../icons'
 
-// The right-hand drawer shell. The prototype repeats this scrim + panel + header +
-// footer markup verbatim for all three drawers (proto:456, 535, 574); the only things
-// that vary are the width, the header content and the footer buttons.
+// The right-hand drawer shell: scrim, panel, header and footer. Only the width, the
+// header content and the footer buttons vary.
 
 type Props = {
   /** Rendered in the header, left of the close button. */
   header: ReactNode
   /** Sticky action row at the bottom. Omit for a read-only drawer. */
   footer?: ReactNode
-  /** Full-width strip directly under the header — the audit drawer's immutability note. */
+  /** Full-width strip directly under the header. */
   banner?: ReactNode
   width?: number
   onClose: () => void

@@ -243,6 +243,16 @@ describe('Console rules wiring', () => {
     expect(screen.queryAllByRole('switch')).toHaveLength(0)
   })
 
+  it('a 500 on the list shows the server text and Retry, not the not-staff line', async () => {
+    read.mockRejectedValue(new ApiError('http', 'db down', 500))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    expect(await screen.findByText('db down')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+    expect(screen.queryByText('Your account is not ASComply staff.')).toBeNull()
+    expect(signOutConsole).not.toHaveBeenCalled()
+  })
+
   it('a 401 on the list signs the console out; a 403 does not', async () => {
     read.mockRejectedValue(new ApiError('http', 'expired', 403))
     const { unmount } = render(<App />)

@@ -49,14 +49,16 @@ func joinMigrationVersion(t *testing.T) (v int64, ok bool) {
 	return migrationVersion(t, "*_invitation_join_by_email.sql"), true
 }
 
-// reapplyHookMigrationOnCleanup rolls the join, staff-by-house, house, rules-role, staff and hook migrations back and forward after the test.
+// reapplyHookMigrationOnCleanup rolls the staff_read_, join, staff-by-house, house, rules-role, staff and hook migrations back and forward after the test.
 // A memberships Down/Up round-trip drops status, which strips auth_hook_reader's column grant.
 // Staff-by-house, house, rules-role then staff Down run first: each restores the earlier body over the function the hook Down drops.
 // Join goes first on the way down and last on the way up: the hook Down revokes its grants.
+// The staff_read_ migrations go before join on the way down and after it on the way up: the house Down drops is_house_member.
 func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 	t.Helper()
 	byHouse, house, rules, staff, hook := staffByHouseMigrationVersion(t), houseMigrationVersion(t), rulesRoleMigrationVersion(t), staffMigrationVersion(t), hookMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
+	staffRead := staffReadMigrationVersions(t)
 	t.Cleanup(func() {
 		ctx := context.Background()
 		type migStep struct {
@@ -80,6 +82,12 @@ func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 			steps = append([]migStep{{"roll back the join migration", join, false}}, steps...)
 			steps = append(steps, migStep{"re-apply the join migration", join, true})
 		}
+		var readDowns, readUps []migStep
+		for i, v := range staffRead {
+			readDowns = append(readDowns, migStep{"roll back a staff_read_ migration", v, false})
+			readUps = append(readUps, migStep{"re-apply a staff_read_ migration", staffRead[len(staffRead)-1-i], true})
+		}
+		steps = append(append(readDowns, steps...), readUps...)
 		for _, step := range steps {
 			if _, err := provider.ApplyVersion(ctx, step.version, step.up); err != nil {
 				t.Errorf("%s: %v", step.what, err)
@@ -381,6 +389,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	ctx := context.Background()
 	byHouse, house, hook, staff, rules := staffByHouseMigrationVersion(t), houseMigrationVersion(t), hookMigrationVersion(t), staffMigrationVersion(t), rulesRoleMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
+	staffRead := staffReadMigrationVersions(t)
 
 	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
 	if err != nil {
@@ -415,6 +424,10 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	}
 
 	byHouseApplied, houseApplied, rulesApplied, staffApplied, hookApplied, joinApplied := true, true, true, true, true, hasJoin
+	readApplied := make([]bool, len(staffRead)) // indexed like staffRead, newest first
+	for i := range readApplied {
+		readApplied[i] = true
+	}
 	t.Cleanup(func() {
 		ctx := context.Background()
 		if !hookApplied {
@@ -450,11 +463,26 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		if hasJoin && !joinApplied {
 			if _, err := provider.ApplyVersion(ctx, join, true); err != nil {
 				t.Errorf("restore the join migration: %v", err)
+				return
+			}
+		}
+		for i := len(staffRead) - 1; i >= 0; i-- {
+			if !readApplied[i] {
+				if _, err := provider.ApplyVersion(ctx, staffRead[i], true); err != nil {
+					t.Errorf("restore a staff_read_ migration: %v", err)
+					return
+				}
 			}
 		}
 	})
 
-	// The join Down runs first: the hook Down revokes the table-level grant it adds columns to.
+	// The staff_read_ Downs run before everything: the house Down drops is_house_member. The join Down follows: the hook Down revokes the table-level grant it adds columns to.
+	for i, v := range staffRead {
+		if _, err := provider.ApplyVersion(ctx, v, false); err != nil {
+			t.Fatalf("roll back a staff_read_ migration: %v", err)
+		}
+		readApplied[i] = false
+	}
 	downs := []struct {
 		what    string
 		version int64
@@ -506,6 +534,12 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 			t.Fatalf("re-apply the join migration: %v", err)
 		}
 		joinApplied = true
+	}
+	for i := len(staffRead) - 1; i >= 0; i-- {
+		if _, err := provider.ApplyVersion(ctx, staffRead[i], true); err != nil {
+			t.Fatalf("re-apply a staff_read_ migration: %v", err)
+		}
+		readApplied[i] = true
 	}
 	if fn, policy, privs := footprint(); fn != 1 || policy != 1 || privs != 3 {
 		t.Errorf("after Up: function=%d policy=%d privileges=%d, want 1 1 3", fn, policy, privs)

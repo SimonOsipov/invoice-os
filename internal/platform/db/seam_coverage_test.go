@@ -206,7 +206,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/notifications/store.go"},                                         // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
 	{file: "internal/notifications/worker.go"},                                        // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
 	{file: "internal/validation/codelist/store.go"},                                   // global NRS reference data written by a schedule; the package serves no HTTP
-	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                    // the staff seam: refuses a caller without auth.StaffFromContext; staff work touches only global tables
+	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                    // the staff seam: refuses a caller without auth.StaffFromContext; staff work reaches tenant rows only through staff_read_ definer functions
 	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
 }
 
@@ -1027,6 +1027,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/entities/{id}":                             {verdict: scCovered},
 	"PATCH /v1/invoices/{id}":                             {verdict: scCovered},
 	"PATCH /v1/memberships/{user_id}":                     {verdict: scCovered},
+	"GET /v1/staff/tenants":                               {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/rules":                                 {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"GET /v1/staff/rule-versions":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PATCH /v1/staff/rules/{key}":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
@@ -3148,6 +3149,7 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TenantBearingCallerSendsNoStatement"},                                // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_NoCallerOrANonUuidSubjectSendsNoStatement"},                          // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AFailedAuditRollsTheJoinBack"},                                       // the invitee holds no membership before joining
+	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenants_RefusesWithoutAStaffCaller"},                   // the control needs a UUID subject that reaches an unreachable pool; no database row is read
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TwoInvitesJoinOnceUnderRace"},                                        // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_SameInviteTwoConcurrentAcceptsJoinOnce"},                             // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid"},                              // the invitee holds no membership before joining

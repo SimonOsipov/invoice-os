@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -160,5 +164,63 @@ func TestInviteSender_EnvironmentNamesThatAreNotAPullRequestFork(t *testing.T) {
 			}
 			assertModeLine(t, logs.String(), c.wantMode)
 		})
+	}
+}
+
+// Nothing in Go reads a mux pattern: a PUT spelling or another handler compiles clean.
+func TestTenancyMain_StaffTenantsRouteIsRegistered(t *testing.T) {
+	raw, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", string(raw), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers := map[string][]string{}
+	loaders := map[string][]string{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		pattern := strings.Trim(lit.Value, `"`)
+		name, loader := "?", "?"
+		if h, ok := call.Args[1].(*ast.CallExpr); ok {
+			if hs, ok := h.Fun.(*ast.SelectorExpr); ok {
+				if x, ok := hs.X.(*ast.Ident); ok {
+					name = x.Name + "." + hs.Sel.Name
+				}
+			}
+			if len(h.Args) > 0 {
+				if ls, ok := h.Args[0].(*ast.SelectorExpr); ok {
+					if x, ok := ls.X.(*ast.Ident); ok {
+						loader = x.Name + "." + ls.Sel.Name
+					}
+				}
+			}
+		}
+		handlers[pattern] = append(handlers[pattern], name)
+		loaders[pattern] = append(loaders[pattern], loader)
+		return true
+	})
+	// Control: the scan sees a route that is registered today.
+	if got := handlers["GET /v1/me"]; len(got) != 1 || got[0] != "tenancy.MeHandler" {
+		t.Fatalf(`"GET /v1/me" registered with %v, want exactly [tenancy.MeHandler]: the scan reads nothing`, got)
+	}
+	const pattern = "GET /v1/staff/tenants"
+	if got := handlers[pattern]; len(got) != 1 || got[0] != "tenancy.StaffTenantsHandler" {
+		t.Errorf("%q registered with %v, want exactly [tenancy.StaffTenantsHandler]", pattern, got)
+	}
+	if got := loaders[pattern]; len(got) != 1 || got[0] != "store.StaffTenants" {
+		t.Errorf("%q loader = %v, want exactly [store.StaffTenants]", pattern, got)
 	}
 }

@@ -94,11 +94,13 @@ func rollBackMigrations(t *testing.T, provider *goose.Provider, versions ...int6
 	}
 }
 
-// rollBackHouseCompany rolls Migration B back, then A, and re-applies A, then B.
+// rollBackHouseCompany rolls every staff_read_ migration back, then Migration B, then A, and re-applies them in reverse.
 // A's Down recreates a SQL hook that reads staff_members, which only B's Down restores.
+// A's Down drops is_house_member and its Up re-grants invoice_migrator only, so the staff_read_ Up must run last.
 func rollBackHouseCompany(t *testing.T) (reapply func()) {
 	t.Helper()
-	return rollBackMigrations(t, staffMigrationProvider(t), staffByHouseMigrationVersion(t), houseMigrationVersion(t))
+	versions := append(staffReadMigrationVersions(t), staffByHouseMigrationVersion(t), houseMigrationVersion(t))
+	return rollBackMigrations(t, staffMigrationProvider(t), versions...)
 }
 
 func requireStaffMembersGone(t *testing.T, when string) {
@@ -404,7 +406,7 @@ func TestRLS_IsHouseMemberIsDefinerOwnedByHookReader(t *testing.T) {
 		t.Error("PUBLIC holds EXECUTE (or proacl is the NULL default), want revoked")
 	}
 	for role, want := range map[string]bool{
-		"invoice_migrator": true, "invoice_app": false, "invoice_tenant_reader": false, "supabase_auth_admin": false,
+		"invoice_migrator": true, "staff_reader": true, "invoice_app": false, "invoice_tenant_reader": false, "supabase_auth_admin": false,
 	} {
 		var has bool
 		if err := h.super.QueryRow(ctx, `SELECT has_function_privilege($1, $2, 'EXECUTE')`, role, sig).Scan(&has); err != nil {

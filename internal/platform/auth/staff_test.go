@@ -11,13 +11,10 @@ import (
 
 const staffTenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
-// requireStaffUnderTest is the check the tests drive; SUPP-01-04 points it at RequireStaff.
-var requireStaffUnderTest = RequireStaff
-
 // serveStaff runs the staff check over ctx and reports the response, how often the handler ran, and
 // the context the handler saw.
 func serveStaff(ctx context.Context) (rec *httptest.ResponseRecorder, ran int, inner context.Context) {
-	h := requireStaffUnderTest(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RequireStaff(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ran++
 		inner = r.Context()
 		w.WriteHeader(http.StatusOK)

@@ -23,7 +23,8 @@ import (
 )
 
 const (
-	wireUserStaff = "X-User-Staff"
+	wireUserStaff     = "X-User-Staff"
+	wireUserRulesRole = "X-User-Rules-Role"
 
 	staffRoute = "/api/{svc}/v1/staff/rules"
 )
@@ -455,7 +456,8 @@ func TestStaffHeaders_FollowTheToken(t *testing.T) {
 	}
 }
 
-// A token that still carries a rules_role key (a mint from before the claim was retired) sends nothing for it.
+// A token that still carries a rules_role key (a mint from before the claim was retired) sends nothing for it,
+// and the key neither grants nor withholds the staff route.
 func TestStaffHeaders_ARulesRoleClaimIsNotForwarded(t *testing.T) {
 	signer := newSidSigner(t)
 	verifier, err := auth.NewVerifier(auth.Config{Issuer: sidIssuer, JWKSURL: signer.url})
@@ -471,14 +473,25 @@ func TestStaffHeaders_ARulesRoleClaimIsNotForwarded(t *testing.T) {
 	}
 	gw := Handler(Options{Verifier: verifier, Sessions: liveSessions(t), Upstreams: map[string]*url.URL{"validation": u}, GatewayToken: testGatewayToken})
 
+	const normal, staffPath = "/api/validation/v1/rules", "/api/validation/v1/staff/rules"
 	for _, tc := range []struct {
 		name      string
 		meta      map[string]any
+		path      string
+		wantCode  int
 		wantStaff bool
 	}{
-		{"staff and rules_role", map[string]any{"tenant_id": testTenant, "staff": true, "rules_role": true}, true},
-		{"staff and a string rules_role", map[string]any{"tenant_id": testTenant, "staff": true, "rules_role": "x"}, true},
-		{"rules_role without staff", map[string]any{"tenant_id": testTenant, "rules_role": true}, false},
+		{"staff and rules_role", map[string]any{"tenant_id": testTenant, "staff": true, "rules_role": true}, normal, 200, true},
+		{"staff and a string rules_role", map[string]any{"tenant_id": testTenant, "staff": true, "rules_role": "x"}, normal, 200, true},
+		{"rules_role without staff", map[string]any{"tenant_id": testTenant, "rules_role": true}, normal, 200, false},
+		{"rules_role without staff, staff route", map[string]any{"tenant_id": testTenant, "rules_role": true}, staffPath, 403, false},
+		{"tenant-less rules_role without staff, staff route", map[string]any{"rules_role": true}, staffPath, 403, false},
+		{"staff false and rules_role, staff route", map[string]any{"tenant_id": testTenant, "staff": false, "rules_role": true}, staffPath, 403, false},
+		{"staff without rules_role, staff route", map[string]any{"tenant_id": testTenant, "staff": true}, staffPath, 200, true},
+		{"tenant-less staff without rules_role, staff route", map[string]any{"staff": true}, staffPath, 200, true},
+		{"tenant-less staff and rules_role false, staff route", map[string]any{"staff": true, "rules_role": false}, staffPath, 200, true},
+		{"string staff, staff route", map[string]any{"tenant_id": testTenant, "staff": "true", "rules_role": true}, staffPath, 401, false},
+		{"string staff, normal route", map[string]any{"tenant_id": testTenant, "staff": "true"}, normal, 401, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			*cap = capture{}
@@ -493,11 +506,17 @@ func TestStaffHeaders_ARulesRoleClaimIsNotForwarded(t *testing.T) {
 				t.Fatalf("sign: %v", err)
 			}
 			rec := httptest.NewRecorder()
-			gw.ServeHTTP(rec, request("GET", "/api/validation/v1/rules", bearer))
-			if rec.Code != http.StatusOK || cap.hits != 1 {
-				t.Fatalf("status = %d, hits = %d, want 200 and 1 (body %q)", rec.Code, cap.hits, rec.Body.String())
+			gw.ServeHTTP(rec, request("GET", tc.path, bearer))
+			wantHits := 0
+			if tc.wantCode == http.StatusOK {
+				wantHits = 1
 			}
-			assertStaffHeaders(t, cap.header, tc.wantStaff)
+			if rec.Code != tc.wantCode || cap.hits != wantHits {
+				t.Fatalf("status = %d, hits = %d, want %d and %d (body %q)", rec.Code, cap.hits, tc.wantCode, wantHits, rec.Body.String())
+			}
+			if wantHits == 1 {
+				assertStaffHeaders(t, cap.header, tc.wantStaff)
+			}
 		})
 	}
 }
@@ -524,6 +543,7 @@ func TestStaffHeaders_ClientCopiesAreOverwritten(t *testing.T) {
 			r := request(tc.method, tc.path, tg.mint(t, tc.opts))
 			r.Header.Add(wireUserStaff, "true")
 			r.Header.Add(wireUserStaff, "true")
+			r.Header.Set(wireUserRulesRole, "true")
 			rec := httptest.NewRecorder()
 			tg.handler.ServeHTTP(rec, r)
 			cap := tg.caps[tc.svc]
@@ -592,6 +612,7 @@ func TestStaffRoute_GatewayAndServiceTogether(t *testing.T) {
 			req := request(http.MethodGet, path, tg.mint(t, tc.opts))
 			if tc.forge {
 				req.Header.Set(wireUserStaff, "true")
+				req.Header.Set(wireUserRulesRole, "true")
 			}
 			rec := httptest.NewRecorder()
 			gw.ServeHTTP(rec, req)

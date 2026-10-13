@@ -83,6 +83,7 @@ type who struct {
 	tenant      bool
 	role        string
 	staff       string // "" = header absent
+	retired     string // X-User-Rules-Role, retired: no value changes the outcome; "" = absent
 	anonymous   bool   // no X-User-ID
 	noGatewayTk bool
 }
@@ -109,6 +110,9 @@ func (w who) request(method, target string) *http.Request {
 	}
 	if w.staff != "" {
 		r.Header.Set(wireStaff, w.staff)
+	}
+	if w.retired != "" {
+		r.Header.Set("X-User-Rules-Role", w.retired)
 	}
 	return r
 }
@@ -157,6 +161,11 @@ func TestStaffClass_PlainRouteIsChecked(t *testing.T) {
 		{"tenant-less caller without the staff header", who{role: "authenticated"}, http.StatusForbidden},
 		{"staff", staffMember, http.StatusOK},
 		{"tenant-less staff", tenantlessStaff, http.StatusOK},
+		{"forged retired header, no staff header", who{tenant: true, role: "authenticated", retired: "true"}, http.StatusForbidden},
+		{"forged retired header, tenant-less, no staff header", who{role: "authenticated", retired: "true"}, http.StatusForbidden},
+		{"forged retired header, staff header false", who{tenant: true, role: "authenticated", staff: "false", retired: "true"}, http.StatusForbidden},
+		{"staff header and a retired header of false", who{tenant: true, role: "authenticated", staff: "true", retired: "false"}, http.StatusOK},
+		{"tenant-less staff header and a retired header of false", who{role: "authenticated", staff: "true", retired: "false"}, http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

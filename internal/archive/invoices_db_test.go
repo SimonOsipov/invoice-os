@@ -713,3 +713,100 @@ func TestRLS_CountInvoicesCannotReachAnotherTenantsEntity(t *testing.T) {
 		t.Errorf("countInvoices(another tenant's entity) = %d, want 0", count)
 	}
 }
+
+var nrsInvoiceColumns = []string{
+	"invoice_kind", "tax_currency_code", "payment_status", "due_date", "tax_point_date", "issue_time",
+	"supplier_email", "supplier_telephone", "supplier_street", "supplier_city",
+	"supplier_postal_zone", "supplier_country", "supplier_state", "supplier_lga",
+	"buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+	"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga",
+}
+
+func TestInvoicesCSVHeader_AppendsTheNRSColumns(t *testing.T) {
+	legacy := []string{
+		"invoice_id", "invoice_number", "status", "issue_date", "currency",
+		"subtotal", "vat", "total", "supplier_tin", "supplier_name", "buyer_tin", "buyer_name",
+		"irn", "csid", "qr_payload", "rejection_reasons", "created_at",
+	}
+	if len(invoicesCSVHeader) != 39 {
+		t.Fatalf("invoicesCSVHeader has %d columns, want 39", len(invoicesCSVHeader))
+	}
+	if !reflect.DeepEqual(invoicesCSVHeader[:17], legacy) {
+		t.Errorf("invoicesCSVHeader[:17] = %v, want %v", invoicesCSVHeader[:17], legacy)
+	}
+	if !reflect.DeepEqual(invoicesCSVHeader[17:], nrsInvoiceColumns) {
+		t.Errorf("invoicesCSVHeader[17:] = %v, want %v", invoicesCSVHeader[17:], nrsInvoiceColumns)
+	}
+}
+
+func TestSelectInvoices_ExportsTheNRSFields(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-nrs")
+	entity := mustCreateEntity(t, tx, tenant, "NRS Co", "20000020-0001")
+	from := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-NRS-01", createdAt: from})
+
+	if _, err := tx.Exec(context.Background(), `
+		UPDATE invoices SET invoice_kind = 'standard', tax_currency_code = 'NGN', payment_status = 'pending',
+		       due_date = '2026-08-01', tax_point_date = '2026-07-31', issue_time = '14:30:00',
+		       supplier_email = 's@x', supplier_telephone = 's-tel', supplier_street = 's-street', supplier_city = 's-city',
+		       supplier_postal_zone = 's-zip', supplier_country = 's-country', supplier_state = 's-state', supplier_lga = 's-lga',
+		       buyer_email = 'b@x', buyer_telephone = 'b-tel', buyer_street = 'b-street', buyer_city = 'b-city',
+		       buyer_postal_zone = 'b-zip', buyer_country = 'b-country', buyer_state = 'b-state', buyer_lga = 'b-lga'
+		 WHERE id = $1`, invID); err != nil {
+		t.Fatalf("set NRS fields: %v", err)
+	}
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if _, err := selectInvoices(context.Background(), tx, Request{EntityID: entity, From: from, To: from.Add(time.Hour)}, w); err != nil {
+		t.Fatalf("selectInvoices: unexpected error: %v", err)
+	}
+	w.Flush()
+	record := findCSVRow(t, buf.Bytes(), invID)
+
+	want := map[string]string{
+		"invoice_kind": "standard", "tax_currency_code": "NGN", "payment_status": "pending",
+		"due_date": "2026-08-01", "tax_point_date": "2026-07-31", "issue_time": "14:30:00",
+		"supplier_email": "s@x", "supplier_telephone": "s-tel", "supplier_street": "s-street", "supplier_city": "s-city",
+		"supplier_postal_zone": "s-zip", "supplier_country": "s-country", "supplier_state": "s-state", "supplier_lga": "s-lga",
+		"buyer_email": "b@x", "buyer_telephone": "b-tel", "buyer_street": "b-street", "buyer_city": "b-city",
+		"buyer_postal_zone": "b-zip", "buyer_country": "b-country", "buyer_state": "b-state", "buyer_lga": "b-lga",
+	}
+	if len(want) != 22 {
+		t.Fatalf("test setup: %d expected cells, want 22", len(want))
+	}
+	for col, v := range want {
+		if got := record[headerIndex(t, col)]; got != v {
+			t.Errorf("%s = %q, want %q", col, got, v)
+		}
+	}
+}
+
+func TestSelectInvoices_NullNRSFieldsWriteEmptyCells(t *testing.T) {
+	super := dbSuperPool(t)
+	tx := beginFixtureTx(t, super)
+	tenant := mustCreateTenant(t, tx, "archive-invoices-nrs-null")
+	entity := mustCreateEntity(t, tx, tenant, "NRS Null Co", "20000021-0001")
+	from := time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	invID := mustCreateInvoice(t, tx, invoiceFixture{tenantID: tenant, entityID: entity, invoiceNumber: "INV-NRS-NULL", createdAt: from})
+
+	actingAs(t, tx, tenant)
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	if _, err := selectInvoices(context.Background(), tx, Request{EntityID: entity, From: from, To: from.Add(time.Hour)}, w); err != nil {
+		t.Fatalf("selectInvoices: unexpected error: %v", err)
+	}
+	w.Flush()
+	record := findCSVRow(t, buf.Bytes(), invID)
+	if len(record) != 39 {
+		t.Fatalf("row length = %d, want 39", len(record))
+	}
+	for _, col := range nrsInvoiceColumns {
+		if got := record[headerIndex(t, col)]; got != "" {
+			t.Errorf("%s = %q, want an empty cell", col, got)
+		}
+	}
+}

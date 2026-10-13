@@ -42,7 +42,7 @@ func TestAILinesSystem_MatchesTheMeasuredHarness(t *testing.T) {
 	}
 }
 
-func TestAILinesSchema_WrapsExactlyTheFiveLineRoles(t *testing.T) {
+func TestAILinesSchema_WrapsExactlyTheLineRoles(t *testing.T) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(aiLinesSchema, &top); err != nil {
 		t.Fatalf("unmarshal schema: %v", err)
@@ -304,6 +304,53 @@ func TestAskAI_AskAILines_ShareOneFailurePolicy(t *testing.T) {
 		lineStub := &recordingAI{enabled: true, answer: lineAnswer, err: c.err}
 		if _, failed := askAILines(context.Background(), lineStub, pages); failed != c.want {
 			t.Errorf("askAILines(err=%v) failed = %v, want %v", c.err, failed, c.want)
+		}
+	}
+}
+
+// The five definitions measured at origin/epic/engi, byte for byte; new lines only append.
+func TestAILinesSystem_KeepsTheFiveMeasuredDefinitions(t *testing.T) {
+	measured := []string{
+		"- description: what the row is for, exactly as printed. When a description is printed over more than one line, join the lines with one space.",
+		"- quantity: the number of units, exactly as printed.",
+		"- unit_price: the price of one unit, as digits with a decimal point and no currency symbol or thousands separators (1250.00).",
+		"- line_total: the row's own amount, same number format.",
+		"- line_tax: the tax amount charged on this row, same number format. A tax rate (7.5%) is not a tax amount; when the row prints only a rate, line_tax is null.",
+	}
+	at := -1
+	for _, line := range measured {
+		i := strings.Index(aiLinesSystem, line+"\n")
+		if i == -1 && strings.HasSuffix(aiLinesSystem, line) {
+			i = len(aiLinesSystem) - len(line)
+		}
+		if i <= at {
+			t.Fatalf("measured definition missing or out of order: %q", line)
+		}
+		at = i
+	}
+	for _, role := range LineRoles {
+		if n := strings.Count(aiLinesSystem, "\n- "+role+": "); n != 1 {
+			t.Errorf("role %q has %d definition line(s), want exactly 1", role, n)
+		}
+	}
+	for _, role := range LineRoles[5:] {
+		if strings.Index(aiLinesSystem, "\n- "+role+": ") < at {
+			t.Errorf("new role %q is defined before a measured line", role)
+		}
+	}
+}
+
+// Pinned surprise: one numeric cell in a new role fails the whole line call, like the five measured roles.
+func TestAskAILines_ANumberInANewRoleFailsTheWholeLineSet(t *testing.T) {
+	pages := onePage(1, tok("Widget", 1, 0.10, 0.10, 0.20, 0.12))
+	for _, role := range LineRoles[5:] {
+		stub := &recordingAI{enabled: true, answer: map[string]any{"line_items": []any{
+			map[string]any{"description": "Good row"},
+			map[string]any{"description": "Widget", role: json.Number("5")},
+		}}}
+		got, failed := askAILines(context.Background(), stub, pages)
+		if got != nil || !failed {
+			t.Errorf("%s: askAILines = %v, %v, want nil, true", role, got, failed)
 		}
 	}
 }

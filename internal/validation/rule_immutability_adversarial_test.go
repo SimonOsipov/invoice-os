@@ -155,7 +155,7 @@ func TestRILAdv_ReparentOutOfSealedRejected(t *testing.T) {
 
 	var uID string
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO rule_set_versions (version, is_active, notes) VALUES ($1, false, $2) RETURNING id`,
+		`INSERT INTO rule_set_versions (version, notes) VALUES ($1, $2) RETURNING id`,
 		nextVersion(), fixtureNotes,
 	).Scan(&uID); err != nil {
 		t.Fatalf("insert throwaway unsealed target version: %v", err)
@@ -248,7 +248,7 @@ func TestRILAdv_PartialSealLifecycleEndToEnd(t *testing.T) {
 
 	var draftID string
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO rule_set_versions (version, is_active, notes) VALUES ($1, false, $2) RETURNING id`,
+		`INSERT INTO rule_set_versions (version, notes) VALUES ($1, $2) RETURNING id`,
 		nextVersion(), fixtureNotes,
 	).Scan(&draftID); err != nil {
 		t.Fatalf("insert draft version: %v", err)

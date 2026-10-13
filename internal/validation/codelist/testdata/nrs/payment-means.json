@@ -1,0 +1,17 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "code": "10",
+      "value": "Cash"
+    },
+    {
+      "code": "20",
+      "value": "Cheque"
+    },
+    {
+      "code": "30",
+      "value": "Credit Transfer"
+    }
+  ]
+}

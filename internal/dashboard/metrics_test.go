@@ -18,15 +18,14 @@ import (
 
 // --- fixture helpers local to this file -------------------------------
 
-// activeRuleSetVersionID looks up the one row rule_set_versions_one_active
-// guarantees exists.
+// activeRuleSetVersionID looks up the rule_set_versions row in force today.
 func activeRuleSetVersionID(t *testing.T, super *pgxpool.Pool) string {
 	t.Helper()
 	var id string
 	if err := super.QueryRow(context.Background(),
-		`SELECT id FROM rule_set_versions WHERE is_active`,
+		`SELECT id FROM rule_set_versions WHERE id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date)`,
 	).Scan(&id); err != nil {
-		t.Fatalf("look up active rule_set_version_id: %v", err)
+		t.Fatalf("look up in-force rule_set_version_id: %v", err)
 	}
 	return id
 }
@@ -541,5 +540,28 @@ func TestMetrics_ReadinessEqualsTotalMinusNeedsAttentionMinusNeverValidated(t *t
 	if got := row.Metrics["readiness"].Num; got != want {
 		t.Errorf("readiness.num = %d, want %d (total %d - needs_attention %d - never_validated %d)",
 			got, want, total, row.NeedsAttention, row.Metrics["never_validated"].Num)
+	}
+}
+
+// A v5-only key lowers exactly its own bar; each of D23's three branches is hit.
+func TestMetrics_V5KeysLowerOnlyTheirOwnBar(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "V5BAR tenant")
+	entityID := seedEntity(t, super, tenantID, "V5BAR entity")
+	for i, c := range []struct{ key, bar string }{
+		{"supplier-email-required", "bar_field_completeness"},
+		{"vat-equals-tax-subtotals", "bar_tax_accuracy"},
+		{"buyer-email-length", "bar_identifiers_format"},
+	} {
+		seedInvoiceWithViolations(t, super, tenantID, entityID, fmt.Sprintf("V5BAR-%d", i), "validated",
+			fmt.Sprintf(`[{"rule_key":%q,"severity":"error","message":"x"}]`, c.key))
+	}
+	seedInvoiceWithViolations(t, super, tenantID, entityID, "V5BAR-clean", "validated", `[]`)
+
+	row := rollupFor(t, app, tenantID).Clients[0]
+	for _, bar := range []string{"bar_field_completeness", "bar_tax_accuracy", "bar_identifiers_format"} {
+		if m := row.Metrics[bar]; m != (Metric{Num: 3, Den: 4}) {
+			t.Errorf("%s = %+v, want {3 4}: exactly one v5 key maps to it", bar, m)
+		}
 	}
 }

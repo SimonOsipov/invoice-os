@@ -55,7 +55,7 @@ func (a *App) gatewayGuard(next http.Handler) http.Handler {
 			return
 		}
 		if a.isOpen(r) {
-			for _, h := range []string{headerTenantID, headerUserID, headerUserRole, headerUserEmail} {
+			for _, h := range []string{headerTenantID, headerUserID, headerUserRole, headerUserEmail, headerUserStaff, headerUserRulesRole} {
 				r.Header.Del(h)
 			}
 			next.ServeHTTP(w, r)

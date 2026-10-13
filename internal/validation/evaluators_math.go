@@ -18,18 +18,12 @@
 // Rule.Target explicitly -- the executor's Eval bodies must not derive Path
 // from Params on their own initiative.
 //
-// NOTE (INVCR-01-13/D8): the constraint above governs the EVALUATOR, not the
-// RULE ROW -- an Eval body here must never compute/derive a Path from Params
-// on its own initiative (e.g. echoing tax_math's `expected` param string back
-// as a Path). It does NOT forbid a rule's author from setting Rule.Target on
-// one of these three types via the DATA (a migration's rules row), which is
-// exactly what rule-set v3 does for vat-standard-rate (target: "vat") and
-// no-duplicate-line-items (target: "line_items") -- neither taxMathEval.Eval
-// nor celEvaluator.Eval reads r.Target at all, so setting it is inert to
-// evaluation and only changes what violation(r) copies into Violation.Path
-// (see migrations/20260731090000_rule_set_v3.sql,
-// TestTaxMathTargetDoesNotChangeEvaluation below, and golden_test.go's
-// TestV3PathIsTheOnlyDelta).
+// NOTE (INVCR-01-13/D8): an Eval body here must not derive a Path from Params. A rule
+// author may set Rule.Target on these types via DATA (rule-set v3 does for
+// vat-standard-rate and no-duplicate-line-items), which only changes what violation(r)
+// copies into Violation.Path. The one exception is a lineEvaluator (cel, and the
+// per-line rule types that follow): its evalLines names the failing line as
+// <list>[N] via linePath.
 //
 // Param shapes (pinned here so the executor's implementation and this RED
 // suite agree byte-for-byte; QA Mode A decision, not yet in the story's Test
@@ -43,6 +37,8 @@
 //     numbers, never paths. Violation iff
 //     abs(expected - base*rate) > tolerance (exact decimal math --
 //     shopspring/decimal per the story's Data Model, to avoid float error).
+//     Per-element mode adds items (array path), rate_by (element field) and
+//     rates ({value: rate}, instead of rate): base/expected resolve inside each element.
 //
 //   - cross_field: {"left": <string path>, "op": "eq|ne|lt|le|gt|ge",
 //     "right": <string path>}. left and right are ALWAYS dotted payload
@@ -83,14 +79,14 @@ import (
 // literal (JSON number) -- see file-header contract.
 //
 // Config faults (=> error, Decision N15): undecodable params; rate a
-// non-number or absent; base/expected param key absent; a negative
+// non-number; base/expected param key absent; a negative
 // tolerance (which would make a zero mismatch on an exactly-correct invoice
 // register as > tolerance and silently flag it). Data faults (=> violation,
 // mirroring rangeEval's non-numeric handling): a base/expected path that is
 // absent or resolves to a non-numeric value.
 type taxMathEval struct{}
 
-func (taxMathEval) Eval(p Payload, r Rule) (*Violation, error) {
+func (taxMathEval) evalHeader(p Payload, r Rule) (*Violation, error) {
 	var params struct {
 		Base      json.RawMessage `json:"base"`
 		Rate      *float64        `json:"rate"`
@@ -139,6 +135,112 @@ func (taxMathEval) Eval(p Payload, r Rule) (*Violation, error) {
 		return violation(r, withExpected(computed.String()), withActual(expected.String())), nil
 	}
 	return nil, nil
+}
+
+func (e taxMathEval) Eval(p Payload, r Rule) (*Violation, error) {
+	vs, err := e.evalLines(p, r)
+	if err != nil || len(vs) == 0 {
+		return nil, err
+	}
+	return &vs[0], nil
+}
+
+// evalLines is the whole rule: without items/rates/rate_by it is the header
+// check; with them it checks every element of the items array at its rate.
+func (e taxMathEval) evalLines(p Payload, r Rule) ([]Violation, error) {
+	var params struct {
+		Items     *string            `json:"items"`
+		RateBy    *string            `json:"rate_by"`
+		Rates     map[string]float64 `json:"rates"`
+		Rate      *float64           `json:"rate"`
+		Base      json.RawMessage    `json:"base"`
+		Expected  json.RawMessage    `json:"expected"`
+		Tolerance float64            `json:"tolerance"`
+	}
+	if err := decodeParams(r.Params, &params); err != nil {
+		return nil, fmt.Errorf("validation: tax_math rule %q params: %w", r.Key, err)
+	}
+	if params.Items == nil && params.RateBy == nil && params.Rates == nil {
+		v, err := e.evalHeader(p, r)
+		if err != nil || v == nil {
+			return nil, err
+		}
+		return []Violation{*v}, nil
+	}
+
+	switch {
+	case params.Rate != nil && params.Rates != nil:
+		return nil, fmt.Errorf("validation: tax_math rule %q has both rate and rates", r.Key)
+	case params.Rate == nil && params.Rates == nil:
+		return nil, fmt.Errorf("validation: tax_math rule %q missing rate or rates", r.Key)
+	case params.Rates != nil && len(params.Rates) == 0:
+		return nil, fmt.Errorf("validation: tax_math rule %q has empty rates", r.Key)
+	case params.Rates != nil && (params.RateBy == nil || *params.RateBy == ""):
+		return nil, fmt.Errorf("validation: tax_math rule %q rates needs rate_by", r.Key)
+	case params.Rates == nil && params.RateBy != nil:
+		return nil, fmt.Errorf("validation: tax_math rule %q rate_by needs rates", r.Key)
+	case params.Items == nil:
+		return nil, fmt.Errorf("validation: tax_math rule %q has rates or rate_by without items", r.Key)
+	case *params.Items == "":
+		return nil, fmt.Errorf("validation: tax_math rule %q has blank items", r.Key)
+	case len(params.Base) == 0:
+		return nil, fmt.Errorf("validation: tax_math rule %q missing base", r.Key)
+	case len(params.Expected) == 0:
+		return nil, fmt.Errorf("validation: tax_math rule %q missing expected", r.Key)
+	case params.Tolerance < 0:
+		return nil, fmt.Errorf("validation: tax_math rule %q tolerance must be non-negative, got %v", r.Key, params.Tolerance)
+	}
+
+	raw, _ := resolvePath(p, *params.Items)
+	elems, _ := raw.([]any)
+	tolerance := decimal.NewFromFloat(params.Tolerance)
+	var out []Violation
+	for i, it := range elems {
+		n := i + 1
+		fail := func(field string, opts ...violationOption) {
+			v := violation(r, opts...)
+			v.Path = linePath(*params.Items, n, field)
+			out = append(out, *v)
+		}
+		el, ok := it.(map[string]any)
+		if !ok {
+			fail("")
+			continue
+		}
+		rate := params.Rate
+		if params.Rates != nil {
+			cat, _ := el[*params.RateBy].(string)
+			rv, rated := params.Rates[cat]
+			if !rated {
+				continue
+			}
+			rate = &rv
+		}
+		ep := Payload{"invoice": el}
+		base, ok := resolveNumericOperand(ep, params.Base)
+		if !ok {
+			fail(operandField(params.Base))
+			continue
+		}
+		expected, ok := resolveNumericOperand(ep, params.Expected)
+		if !ok {
+			fail(operandField(params.Expected))
+			continue
+		}
+		computed := base.Mul(decimal.NewFromFloat(*rate))
+		if expected.Sub(computed).Abs().GreaterThan(tolerance) {
+			fail("", withExpected(computed.String()), withActual(expected.String()))
+		}
+	}
+	return out, nil
+}
+
+// operandField is the element field a failed operand names; a literal
+// operand cannot fail, so it only ever sees a string path.
+func operandField(raw json.RawMessage) string {
+	var path string
+	_ = json.Unmarshal(raw, &path)
+	return path
 }
 
 // resolveNumericOperand resolves a tax_math base/expected operand to an exact
@@ -194,7 +296,18 @@ func resolveNumericOperand(p Payload, raw json.RawMessage) (decimal.Decimal, boo
 // absent or non-numeric expected value.
 type lineSumEval struct{}
 
-func (lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
+func (e lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
+	vs, err := e.evalLines(p, r)
+	if err != nil || len(vs) == 0 {
+		return nil, err
+	}
+	return &vs[0], nil
+}
+
+// evalLines reports each malformed line (first fault of the line) at its own
+// path and compares no sum while any line is malformed; a sum mismatch or a
+// bad expected keeps r.Target.
+func (lineSumEval) evalLines(p Payload, r Rule) ([]Violation, error) {
 	var params struct {
 		Items     string  `json:"items"`
 		Amount    string  `json:"amount"`
@@ -231,41 +344,50 @@ func (lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
 	}
 
 	sum := decimal.Zero
-	for _, it := range items {
+	var bad []Violation
+	for i, it := range items {
+		n := i + 1
+		line := func(field string) {
+			v := violation(r)
+			v.Path = linePath(params.Items, n, field)
+			bad = append(bad, *v)
+		}
 		m, ok := it.(map[string]any)
 		if !ok {
-			return violation(r), nil // a non-object line is malformed data for this rule
+			line("")
+			continue
 		}
-		amountVal, ok := m[params.Amount]
+		amountF, ok := toFloat(m[params.Amount])
 		if !ok {
-			return violation(r), nil // an amount-less line can't reconcile
+			line(params.Amount) // absent is nil, which toFloat rejects
+			continue
 		}
-		amountF, ok := toFloat(amountVal)
-		if !ok {
-			return violation(r), nil
-		}
-		line := decimal.NewFromFloat(amountF)
+		lineAmt := decimal.NewFromFloat(amountF)
 		if params.Quantity != "" {
 			if qtyVal, has := m[params.Quantity]; has {
 				qtyF, ok := toFloat(qtyVal)
 				if !ok {
-					return violation(r), nil
+					line(params.Quantity)
+					continue
 				}
-				line = line.Mul(decimal.NewFromFloat(qtyF))
+				lineAmt = lineAmt.Mul(decimal.NewFromFloat(qtyF))
 			}
 			// quantity field absent on this line -> implicit weight of 1.
 		}
-		sum = sum.Add(line)
+		sum = sum.Add(lineAmt)
+	}
+	if len(bad) > 0 {
+		return bad, nil
 	}
 
 	expectedVal, present := resolvePath(p, params.Expected)
 	if !present {
 		// No natural Expected/Actual: nothing to compare sum against.
-		return violation(r), nil
+		return []Violation{*violation(r)}, nil
 	}
 	expectedF, ok := toFloat(expectedVal)
 	if !ok {
-		return violation(r), nil
+		return []Violation{*violation(r)}, nil
 	}
 	// Hoisted ONCE and reused in both the comparison below and the
 	// violation's Actual, so the reported Actual can never disagree with
@@ -274,7 +396,7 @@ func (lineSumEval) Eval(p Payload, r Rule) (*Violation, error) {
 	if sum.Sub(declared).Abs().GreaterThan(decimal.NewFromFloat(params.Tolerance)) {
 		// Expected = the folded line total (sum); Actual = the declared
 		// "expected"(param) field -- both exact decimal strings ([D13]).
-		return violation(r, withExpected(sum.String()), withActual(declared.String())), nil
+		return []Violation{*violation(r, withExpected(sum.String()), withActual(declared.String()))}, nil
 	}
 	return nil, nil
 }

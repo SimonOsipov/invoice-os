@@ -217,7 +217,7 @@ describe('adversarial: malformed vs http branch-order precedence', () => {
   it('a 2xx response with unparseable JSON is "malformed" (status set)', async () => {
     mockFetchOnce({
       ok: true,
-      status: 204,
+      status: 200,
       json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
     })
 
@@ -225,7 +225,15 @@ describe('adversarial: malformed vs http branch-order precedence', () => {
 
     const apiErr = err as ApiError
     expect(apiErr.kind).toBe('malformed')
-    expect(apiErr.status).toBe(204)
+    expect(apiErr.status).toBe(200)
+  })
+
+  it('a 204 resolves undefined without reading the body (apiFetch_204ResolvesUndefined)', async () => {
+    const json = vi.fn().mockRejectedValue(new SyntaxError('Unexpected end of JSON input'))
+    mockFetchOnce({ ok: true, status: 204, json })
+
+    await expect(apiFetch('/x', { method: 'DELETE' })).resolves.toBeUndefined()
+    expect(json).not.toHaveBeenCalled()
   })
 
   it('a non-2xx response with unparseable JSON is "http", NOT "malformed" (status set)', async () => {

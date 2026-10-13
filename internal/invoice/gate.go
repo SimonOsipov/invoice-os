@@ -5,7 +5,7 @@
 //
 // Gate mirrors internal/importer.Service's shape: a struct over the concrete
 // stores/clients it drives, constructed once at boot in cmd/invoice/main.go.
-// It owns the ORDER of the three steps and nothing else -- the payload mapping
+// It owns the ORDER of the steps -- the payload mapping
 // is payload.go's, the wire contract is validator.go's, the atomicity is
 // Store.ApplyValidation's. It adds no rules of its own.
 //
@@ -39,7 +39,11 @@ package invoice
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
+
+	"github.com/SimonOsipov/invoice-os/internal/customrule"
 )
 
 // Gate orchestrates the validate gate over the store and the 04 client. The
@@ -48,12 +52,17 @@ import (
 type Gate struct {
 	store     *Store
 	validator *Validator
+	// customRules reads the current custom rules once per Evaluate call (D20).
+	customRules func(ctx context.Context, entityIDs []string) (CustomRuleSets, error)
 }
 
 // NewGate wraps the two dependencies the orchestration drives.
 func NewGate(store *Store, v *Validator) *Gate {
-	return &Gate{store: store, validator: v}
+	return &Gate{store: store, validator: v, customRules: store.CustomRulesFor}
 }
+
+// firmSet is the batch key of the firm-wide rules; a client's rules use the entity id.
+const firmSet = "firm"
 
 // EvalItem is one invoice submitted to Evaluate. Ref is caller-chosen and
 // caller-opaque -- 04 echoes it back untouched and never interprets it. The
@@ -67,19 +76,21 @@ type EvalItem struct {
 	Invoice Invoice
 }
 
-// EvalResult is Evaluate's outcome: the single rule-set the WHOLE batch was
-// evaluated against (one load means one version -- stamped once, not per item),
-// plus every sent ref's violations.
+// EvalResult is Evaluate's outcome: every sent ref's violations and the
+// rule-set version that judged it (StampByRef), plus the lowest version in the
+// batch (RuleSetVersion).
 //
-// ByRef is TOTAL over the sent refs, inherited from Validator.Validate's own
-// totality guarantee: it refuses any response that does not cover them. That
-// matters because an absent map key returns nil, which reads to a caller as "no
-// violations" -- i.e. as a clean verdict on an invoice 04 never actually
-// judged.
+// ByRef and StampByRef are TOTAL over the sent refs, inherited from
+// Validator.Validate's own totality guarantee: it refuses any response that
+// does not cover them. That matters because an absent map key returns nil,
+// which reads to a caller as "no violations" -- i.e. as a clean verdict on an
+// invoice 04 never actually judged.
 type EvalResult struct {
-	RuleSetVersion   int
-	RuleSetVersionID string
-	ByRef            map[string][]Violation
+	RuleSetVersion int
+	StampByRef     map[string]Stamp
+	ByRef          map[string][]Violation
+	// CustomByRef holds the custom-rule revision ids each ref was judged by.
+	CustomByRef map[string][]string
 }
 
 // Evaluate maps every item through MBSPayload and submits them to 04 in
@@ -98,20 +109,50 @@ type EvalResult struct {
 // without this guard a caller with nothing to evaluate would get an OUTAGE
 // error. That is reachable: an import whose every row is quarantined creates
 // zero invoices and would hand ValidateBatch an empty slice. NOTE for callers:
-// the short-circuit returns a zero-value RuleSetVersion/RuleSetVersionID --
+// the short-circuit returns a zero-value RuleSetVersion and no stamps --
 // nothing was evaluated, so there is no version to report. Do not stamp a run
 // with version 0.
 func (g *Gate) Evaluate(ctx context.Context, items []EvalItem) (EvalResult, error) {
 	if len(items) == 0 {
-		return EvalResult{ByRef: map[string][]Violation{}}, nil
+		return EvalResult{ByRef: map[string][]Violation{}, StampByRef: map[string]Stamp{}}, nil
+	}
+
+	// One read for the whole batch; a read failure sends nothing (an outage is not a verdict).
+	seen := map[string]bool{}
+	var entityIDs []string
+	for _, it := range items {
+		if e := it.Invoice.EntityID; e != "" && !seen[e] {
+			seen[e] = true
+			entityIDs = append(entityIDs, e)
+		}
+	}
+	sort.Strings(entityIDs)
+	rules, err := g.customRules(ctx, entityIDs)
+	if err != nil {
+		return EvalResult{}, fmt.Errorf("read custom rules: %w", err)
+	}
+	sets := map[string][]CustomRule{}
+	if len(rules.Firm) > 0 {
+		sets[firmSet] = wireRules(rules.Firm)
+	}
+	for _, e := range entityIDs {
+		if len(rules.ByEntity[e]) > 0 {
+			sets[e] = wireRules(rules.ByEntity[e])
+		}
 	}
 
 	vitems := make([]ValidateItem, len(items))
 	for i, it := range items {
 		vitems[i] = ValidateItem{Ref: it.Ref, Invoice: MBSPayload(it.Invoice)}
+		if _, ok := sets[firmSet]; ok {
+			vitems[i].CustomRuleSets = append(vitems[i].CustomRuleSets, firmSet)
+		}
+		if _, ok := sets[it.Invoice.EntityID]; ok {
+			vitems[i].CustomRuleSets = append(vitems[i].CustomRuleSets, it.Invoice.EntityID)
+		}
 	}
 
-	res, err := g.validator.Validate(ctx, vitems)
+	res, err := g.validator.ValidateCustom(ctx, vitems, sets)
 	if err != nil {
 		// ErrUpstream / ErrNoActiveRuleSet propagate WRAPPED AND INTACT, all the
 		// way to statusForErr's 502/503. Never swallowed into an empty result:
@@ -121,10 +162,20 @@ func (g *Gate) Evaluate(ctx context.Context, items []EvalItem) (EvalResult, erro
 	}
 
 	return EvalResult{
-		RuleSetVersion:   res.RuleSetVersion,
-		RuleSetVersionID: res.RuleSetVersionID,
-		ByRef:            res.ByRef,
+		RuleSetVersion: res.RuleSetVersion,
+		StampByRef:     res.StampByRef,
+		ByRef:          res.ByRef,
+		CustomByRef:    res.CustomByRef,
 	}, nil
+}
+
+func wireRules(rs []customrule.Rule) []CustomRule {
+	out := make([]CustomRule, len(rs))
+	for i, r := range rs {
+		out[i] = CustomRule{ID: r.RevisionID, Key: r.Key, Type: r.Type, Target: r.Target, Params: r.Params,
+			Severity: r.Severity, When: r.When, Message: r.Message}
+	}
+	return out
 }
 
 // Validate runs the gate on ONE stored invoice -- the operation POST
@@ -145,11 +196,8 @@ func (g *Gate) Evaluate(ctx context.Context, items []EvalItem) (EvalResult, erro
 // 04 round trip on an invoice the write would refuse anyway (GAPI-11), and it
 // is inherently racy -- the invoice can change status between here and there.
 // That is fine precisely because it is not the check anything relies on.
-// The int return is the evaluated rule-set version (task-161/M4-22-02):
-// EvalResult.RuleSetVersion, handed back to the caller so ValidateHandler can
-// put it on the wire as rule_set_version, alongside the existing
-// RuleSetVersionID stamp. 0 means "nothing was evaluated" (Evaluate's own
-// zero-value convention, this file's header) -- never a real version.
+// The int return is the version that judged this invoice (its own stamp),
+// handed back so ValidateHandler can put it on the wire as rule_set_version.
 func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 	// Get, not List: this is the ONLY call that hydrates line items. See the
 	// file header.
@@ -170,30 +218,34 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 	// invoice changed underneath ([toctou-staleness]).
 	fingerprint := contentFingerprint(inv, inv.LineItems)
 
-	// A batch of one: the same wire contract, client, and endpoint the importer
-	// uses ([batch-of-one]). No second endpoint to keep in sync.
-	res, err := g.Evaluate(ctx, []EvalItem{{Ref: inv.ID, Invoice: inv}})
-	if err != nil {
-		return Invoice{}, 0, err
+	// A rule saved between the evaluation and the write re-evaluates once (D27); a second
+	// change returns ErrRulesChanged.
+	var stamp Stamp
+	for attempt := 0; ; attempt++ {
+		// A batch of one: the same wire contract, client, and endpoint the importer
+		// uses ([batch-of-one]). No second endpoint to keep in sync.
+		res, err := g.Evaluate(ctx, []EvalItem{{Ref: inv.ID, Invoice: inv}})
+		if err != nil {
+			return Invoice{}, 0, err
+		}
+
+		// ByRef is total over the sent refs (Validator.Validate enforces it), so
+		// this key is present by construction -- a nil here would be an absent
+		// verdict masquerading as a clean one.
+		stamp = res.StampByRef[inv.ID]
+		outInv, err := g.store.applyValidation(ctx, inv.ID, res.ByRef[inv.ID], stamp.ID, res.CustomByRef[inv.ID], fingerprint)
+		if errors.Is(err, ErrRulesChanged) && attempt == 0 {
+			continue
+		}
+		// On an apply error outInv is the zero Invoice, but the version
+		// 04 judged this invoice by is still reported.
+		return outInv, stamp.Version, err
 	}
-
-	// ByRef is total over the sent refs (Validator.Validate enforces it), so
-	// this key is present by construction -- a nil here would be an absent
-	// verdict masquerading as a clean one.
-	outInv, err := g.store.ApplyValidation(ctx, inv.ID, res.ByRef[inv.ID], res.RuleSetVersionID, fingerprint)
-
-	// res.RuleSetVersion is the real evaluated version -- Evaluate already
-	// computed it above -- threaded straight through so ValidateHandler can
-	// put it on the wire as rule_set_version (task-161/M4-22-02). On an
-	// ApplyValidation error outInv is the zero Invoice, but res.RuleSetVersion
-	// still reports the version 04 actually evaluated against rather than
-	// papering over it with a stub 0.
-	return outInv, res.RuleSetVersion, err
 }
 
-// BatchOutcome is ValidateBatch's report: the one rule-set the whole batch was
-// evaluated against, the clean/blocked split, and every invoice's violations
-// keyed by id.
+// BatchOutcome is ValidateBatch's report: the lowest rule-set version in the
+// batch (each invoice is stamped with its own), the clean/blocked split, and
+// every invoice's violations keyed by id.
 //
 // Clean and WithViolations are computed HERE, by the same hasBlockingViolation
 // predicate that decided the promotions, rather than left for the caller to
@@ -203,11 +255,14 @@ func (g *Gate) Validate(ctx context.Context, id string) (Invoice, int, error) {
 // still promotes. Counting here is what keeps "clean" and "promoted to
 // validated" the same set by construction.
 type BatchOutcome struct {
-	RuleSetVersion   int
-	RuleSetVersionID string
-	Clean            int
-	WithViolations   int
-	ByID             map[string][]Violation
+	RuleSetVersion int
+	Clean          int
+	WithViolations int
+	StampByID      map[string]Stamp
+	ByID           map[string][]Violation
+	// Unvalidated are the invoices whose rules changed twice during the batch: left as drafts, in
+	// neither Clean nor WithViolations nor the maps above.
+	Unvalidated []string
 }
 
 // ValidateBatch runs the gate over a batch of already-created invoices in ONE
@@ -243,20 +298,59 @@ func (g *Gate) ValidateBatch(ctx context.Context, invs []Invoice) (BatchOutcome,
 	}
 
 	out := BatchOutcome{
-		RuleSetVersion:   res.RuleSetVersion,
-		RuleSetVersionID: res.RuleSetVersionID,
-		ByID:             make(map[string][]Violation, len(invs)),
+		RuleSetVersion: res.RuleSetVersion,
+		StampByID:      make(map[string]Stamp, len(invs)),
+		ByID:           make(map[string][]Violation, len(invs)),
 	}
-	for _, inv := range invs {
+	var changed []Invoice
+	record := func(inv Invoice, res EvalResult) error {
 		vs := res.ByRef[inv.ID]
-		if _, err := g.store.ApplyValidation(ctx, inv.ID, vs, res.RuleSetVersionID, fingerprints[inv.ID]); err != nil {
-			return BatchOutcome{}, fmt.Errorf("apply validation to invoice %s: %w", inv.ID, err)
+		if _, err := g.store.applyValidation(ctx, inv.ID, vs, res.StampByRef[inv.ID].ID, res.CustomByRef[inv.ID], fingerprints[inv.ID]); err != nil {
+			return err
 		}
+		out.StampByID[inv.ID] = res.StampByRef[inv.ID]
 		out.ByID[inv.ID] = vs
 		if hasBlockingViolation(vs) {
 			out.WithViolations++
 		} else {
 			out.Clean++
+		}
+		return nil
+	}
+	for _, inv := range invs {
+		err := record(inv, res)
+		if errors.Is(err, ErrRulesChanged) {
+			changed = append(changed, inv)
+			continue
+		}
+		if err != nil {
+			return BatchOutcome{}, fmt.Errorf("apply validation to invoice %s: %w", inv.ID, err)
+		}
+	}
+	if len(changed) == 0 {
+		return out, nil
+	}
+
+	// D27: re-evaluate the invoices a rule save overtook, once; a second change leaves the invoice a draft (Unvalidated).
+	items = items[:0]
+	for _, inv := range changed {
+		items = append(items, EvalItem{Ref: inv.ID, Invoice: inv})
+	}
+	again, err := g.Evaluate(ctx, items)
+	if err != nil {
+		return BatchOutcome{}, err
+	}
+	if again.RuleSetVersion != 0 && (out.RuleSetVersion == 0 || again.RuleSetVersion < out.RuleSetVersion) {
+		out.RuleSetVersion = again.RuleSetVersion
+	}
+	for _, inv := range changed {
+		err := record(inv, again)
+		if errors.Is(err, ErrRulesChanged) {
+			out.Unvalidated = append(out.Unvalidated, inv.ID)
+			continue
+		}
+		if err != nil {
+			return BatchOutcome{}, fmt.Errorf("apply validation to invoice %s: %w", inv.ID, err)
 		}
 	}
 	return out, nil

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -648,5 +649,75 @@ func TestCallAI_DropsAKeyThatIsNotAHeaderField(t *testing.T) {
 		if _, ok := out[k]; ok {
 			t.Errorf("%q survived callAI; only HeaderFields may", k)
 		}
+	}
+}
+
+// aiMeasuredDefinitions are the ten header definition lines as measured (AIR); the new fields'
+// lines are appended after them and never reword them.
+var aiMeasuredDefinitions = []string{
+	"- invoice_number: the invoice's own number, exactly as printed. Not a purchase order, customer, account, RC or payment reference number.",
+	"- issue_date: the date the invoice was issued, as YYYY-MM-DD. Not a due date, delivery date or billing period.",
+	"- supplier_name: the seller issuing the invoice, exactly as printed.",
+	"- supplier_tin: the seller's Tax Identification Number, exactly as printed.",
+	"- buyer_name: the party being billed, exactly as printed.",
+	"- buyer_tin: the buyer's Tax Identification Number, exactly as printed.",
+	"- currency: the ISO 4217 code of the invoice currency. A printed ₦, N or Naira means NGN.",
+	"- subtotal: the amount before VAT, as digits with a decimal point and no currency symbol or thousands separators (1250000.00).",
+	"- vat: the VAT amount (not the rate), same number format.",
+	"- total: the total amount payable, same number format.",
+}
+
+func TestAIPrompt_KeepsTheTenMeasuredDefinitions(t *testing.T) {
+	at := -1
+	for _, def := range aiMeasuredDefinitions {
+		i := strings.Index(aiSystem, "\n"+def+"\n")
+		if i < 0 && strings.HasSuffix(aiSystem, "\n"+def) {
+			i = len(aiSystem) - len(def) - 1
+		}
+		if i < 0 {
+			t.Errorf("aiSystem lost the measured line %q", def)
+			continue
+		}
+		if i <= at {
+			t.Errorf("measured line %q is out of order", def)
+		}
+		at = i
+	}
+	if first := strings.Index(aiSystem, "\n- due_date:"); first < at {
+		t.Errorf("a new definition precedes the last measured line (at %d, last measured at %d)", first, at)
+	}
+}
+
+func TestAIPrompt_DefinesEveryHeaderFieldOnce(t *testing.T) {
+	var named []string
+	for _, line := range strings.Split(aiSystem, "\n") {
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		key, _, _ := strings.Cut(strings.TrimPrefix(line, "- "), ":")
+		named = append(named, key)
+	}
+	// The measured lines keep their own order (supplier_name before supplier_tin), so compare sorted.
+	slices.Sort(named)
+	if want := slices.Sorted(slices.Values(HeaderFields)); !slices.Equal(named, want) {
+		t.Errorf("aiSystem defines %v, want exactly HeaderFields %v, once each", named, want)
+	}
+}
+
+func TestAIRunPy_FieldsIsExactlyHeaderFields(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "tools", "aimodeltest", "run.py"))
+	if err != nil {
+		t.Fatalf("read run.py: %v", err)
+	}
+	m := regexp.MustCompile(`(?s)\nFIELDS = \[(.*?)\]`).FindStringSubmatch(string(src))
+	if m == nil {
+		t.Fatal("FIELDS literal not found in run.py")
+	}
+	var got []string
+	for _, q := range regexp.MustCompile(`"([a-z_]+)"`).FindAllStringSubmatch(m[1], -1) {
+		got = append(got, q[1])
+	}
+	if !reflect.DeepEqual(got, HeaderFields) {
+		t.Errorf("run.py FIELDS = %v, want HeaderFields %v", got, HeaderFields)
 	}
 }

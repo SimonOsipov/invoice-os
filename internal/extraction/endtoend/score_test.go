@@ -56,8 +56,7 @@ const (
 	ee25IssueDateBefore = 8
 )
 
-// writtenFields is what documentCreateInput actually puts in the invoices row, in
-// mapperFieldNames order (internal/importer/document.go:174-183).
+// writtenFields are the engine-read fields documentCreateInput writes, in mapperFieldNames order.
 var writtenFields = []string{
 	"invoice_number", "issue_date", "buyer_tin", "buyer_name",
 	"currency", "subtotal", "vat", "total",
@@ -67,6 +66,11 @@ var writtenFields = []string{
 // overwrites both from the business entity on every write (internal/invoice/store.go:220-221),
 // so scoring them here would score a value the store discards.
 var entityDerivedFields = []string{"supplier_tin", "supplier_name"}
+
+// aiOnlyFields are written by the importer but read only by the AI: no engine run reads them, so
+// no cell scores them. They are the tier1Specs entries with label id "".
+var aiOnlyFields = []string{"due_date", "buyer_email", "buyer_telephone", "buyer_street", "buyer_city",
+	"buyer_postal_zone", "buyer_country", "buyer_state", "buyer_lga"}
 
 // eeShapeOf is the normaliser each written field's values are compared under.
 var eeShapeOf = map[string]extraction.Shape{
@@ -537,29 +541,47 @@ func eePageTokenReadings(t *testing.T, layout, field string) []string {
 // --- the specs --------------------------------------------------------------
 
 // AC-1. The vocabulary is the mapper's, not a second list that can drift from it. HeaderFields
-// minus entityDerivedFields must be writtenFields exactly, in order.
+// minus entityDerivedFields and aiOnlyFields must be writtenFields exactly, in order.
 func TestEndToEnd_WrittenFieldsMatchTheMapper(t *testing.T) {
 	// Floors first: an empty vocabulary satisfies every quantifier below.
-	if len(extraction.HeaderFields) != 10 {
-		t.Fatalf("extraction.HeaderFields holds %d name(s), want 10 -- the guard below is comparing against the wrong list", len(extraction.HeaderFields))
+	if len(extraction.HeaderFields) != 19 {
+		t.Fatalf("extraction.HeaderFields holds %d name(s), want 19 -- the guard below is comparing against the wrong list", len(extraction.HeaderFields))
 	}
 	if len(writtenFields) != 8 {
 		t.Errorf("writtenFields holds %d name(s), want 8 -- the fields documentCreateInput writes", len(writtenFields))
 	}
-	if len(writtenFields)+len(entityDerivedFields) != len(extraction.HeaderFields) {
-		t.Fatalf("writtenFields (%d) + entityDerivedFields (%d) = %d, want %d -- the two lists do not partition the vocabulary",
-			len(writtenFields), len(entityDerivedFields), len(writtenFields)+len(entityDerivedFields), len(extraction.HeaderFields))
+	if n := len(writtenFields) + len(entityDerivedFields) + len(aiOnlyFields); n != len(extraction.HeaderFields) {
+		t.Fatalf("writtenFields (%d) + entityDerivedFields (%d) + aiOnlyFields (%d) = %d, want %d -- the three lists do not partition the vocabulary",
+			len(writtenFields), len(entityDerivedFields), len(aiOnlyFields), n, len(extraction.HeaderFields))
+	}
+
+	// aiOnlyFields are the fields no shipped Tier-1 rule names: the label-less tier1Specs entries.
+	var unruled []string
+	for _, f := range extraction.HeaderFields {
+		if !slices.ContainsFunc(extraction.Tier1Rules, func(r extraction.Tier1Rule) bool { return r.Field == f }) {
+			unruled = append(unruled, f)
+		}
+	}
+	if !slices.Equal(aiOnlyFields, unruled) {
+		t.Errorf("aiOnlyFields = %v, want the fields with no Tier-1 rule %v", aiOnlyFields, unruled)
 	}
 
 	derived := func(name string) bool { return slices.Contains(entityDerivedFields, name) }
+	aiOnly := func(name string) bool { return slices.Contains(aiOnlyFields, name) }
 
-	var wantWritten, wantDerived []string
+	var wantWritten, wantDerived, wantAIOnly []string
 	for _, f := range extraction.HeaderFields {
-		if derived(f) {
+		switch {
+		case derived(f):
 			wantDerived = append(wantDerived, f)
-			continue
+		case aiOnly(f):
+			wantAIOnly = append(wantAIOnly, f)
+		default:
+			wantWritten = append(wantWritten, f)
 		}
-		wantWritten = append(wantWritten, f)
+	}
+	if !slices.Equal(aiOnlyFields, wantAIOnly) {
+		t.Errorf("aiOnlyFields = %v, want %v -- in HeaderFields order", aiOnlyFields, wantAIOnly)
 	}
 	if !slices.Equal(writtenFields, wantWritten) {
 		t.Errorf("writtenFields = %v, want %v -- HeaderFields minus entityDerivedFields, in HeaderFields order", writtenFields, wantWritten)
@@ -570,7 +592,7 @@ func TestEndToEnd_WrittenFieldsMatchTheMapper(t *testing.T) {
 
 	// No name may sit in both halves, and none may be invented.
 	seen := map[string]int{}
-	for _, f := range slices.Concat(writtenFields, entityDerivedFields) {
+	for _, f := range slices.Concat(writtenFields, entityDerivedFields, aiOnlyFields) {
 		seen[f]++
 		if !slices.Contains(extraction.HeaderFields, f) {
 			t.Errorf("%q is scored but is not in extraction.HeaderFields", f)
@@ -578,12 +600,12 @@ func TestEndToEnd_WrittenFieldsMatchTheMapper(t *testing.T) {
 	}
 	for f, n := range seen {
 		if n != 1 {
-			t.Errorf("%q appears %d times across writtenFields and entityDerivedFields, want once", f, n)
+			t.Errorf("%q appears %d times across writtenFields, entityDerivedFields and aiOnlyFields, want once", f, n)
 		}
 	}
 	for _, f := range extraction.HeaderFields {
 		if seen[f] == 0 {
-			t.Errorf("%q is in extraction.HeaderFields but neither written nor pinned as entity-derived -- the mapper gained a field the score cannot see", f)
+			t.Errorf("%q is in extraction.HeaderFields but in no list (written, entity-derived, AI-only) -- the mapper gained a field the score cannot see", f)
 		}
 	}
 

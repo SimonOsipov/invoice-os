@@ -192,6 +192,20 @@ func auditResolverDefinerName(t *testing.T) string {
 	return definers[len(definers)-1]
 }
 
+var auditResolverStatementRE = regexp.MustCompile(
+	`(?s)CREATE OR REPLACE FUNCTION audit_log_entity_for.*?\$fn\$;`)
+
+// auditResolverStatementOf returns only the resolver's CREATE OR REPLACE statement of a goose
+// section, for a definer that also holds other DDL.
+func auditResolverStatementOf(t *testing.T, name, section string) string {
+	t.Helper()
+	stmt := auditResolverStatementRE.FindString(auditEntitySectionOf(t, name, section))
+	if stmt == "" {
+		t.Fatalf("%s %s: no audit_log_entity_for CREATE OR REPLACE statement", name, section)
+	}
+	return stmt
+}
+
 // auditEntitySection returns one goose section of the story migration, verbatim.
 func auditEntitySection(t *testing.T, section string) string {
 	t.Helper()
@@ -891,14 +905,13 @@ func TestRLS_AuditResolverDefinerIsTheLatestMigration(t *testing.T) {
 	}
 }
 
-// AC-2: the LATEST replacement is reversible. Its Down restores the previously shipped
+// AC-2: the anchor.learned replacement is reversible. Its Down restores the previously shipped
 // body instead of dropping the function, which the write-time trigger calls on every
 // insert. Executed as the migrator in a rolled-back transaction.
 //
-// The target is resolved by content, so this test follows whichever migration currently
-// defines the resolver last. That is Migration B, which adds extraction.anchor.learned and
-// whose Down restores the extraction body -- where extraction.field_corrected IS still
-// attributed. So the event this test watches flip is extraction.anchor.learned, and
+// Migration B adds extraction.anchor.learned and its Down restores the extraction body --
+// where extraction.field_corrected IS still attributed. So the event this test watches
+// flip is extraction.anchor.learned, and
 // extraction.field_corrected, submission.failed and submission.accepted are the three
 // controls: they stay attributed through both bodies, and a dropped or wrong-body Down
 // cannot fake that.
@@ -906,7 +919,9 @@ func TestRLS_AuditResolverReplacementIsReversible(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 
-	definer, backfill := auditResolverDefinerName(t), auditEntityMigrationName(t)
+	// Pinned: the assertions below are about the anchor.learned flip, and a later definer
+	// (custom_rules) also carries DDL that cannot replay.
+	definer, backfill := "20260903055829_audit_log_entity_for_anchor_learned.sql", auditEntityMigrationName(t)
 	if definer == backfill {
 		t.Fatalf("no replacement migration exists: audit_log_entity_for is still defined by %s", backfill)
 	}
@@ -983,7 +998,7 @@ func TestRLS_AuditResolverIsExactlyOneOverloadAtEveryStage(t *testing.T) {
 			"database migrated? (`make migrate-up`)", n)
 	}
 	for _, section := range []string{"Up", "Down"} {
-		if _, err := tx.Exec(ctx, auditEntitySectionOf(t, definer, section)); err != nil {
+		if _, err := tx.Exec(ctx, auditResolverStatementOf(t, definer, section)); err != nil {
 			t.Fatalf("%s body of %s failed: %v", section, definer, err)
 		}
 		if n := overloads(section); n != 1 {

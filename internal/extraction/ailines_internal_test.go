@@ -87,3 +87,33 @@ func aliCheckPartition(t *testing.T, got aliAlignment, nAnswer, nKey int) {
 		t.Errorf("Found()+Misaligned()+len(Invented) = %d, want %d (len(answer))", sum, nAnswer)
 	}
 }
+
+func TestAILineFrom_ReadsEveryLineRole(t *testing.T) {
+	obj := map[string]any{}
+	for _, role := range LineRoles {
+		obj[role] = "v-" + role
+	}
+	line, ok := aiLineFrom(obj)
+	if !ok {
+		t.Fatal("aiLineFrom refused an answer object carrying all ten keys")
+	}
+	for _, role := range LineRoles {
+		if got := line.Cell(role); got == nil || *got != "v-"+role {
+			t.Errorf("Cell(%q) = %v, want %q", role, got, "v-"+role)
+		}
+	}
+}
+
+func TestAILineFrom_ANumberInANewRoleRefusesTheElement(t *testing.T) {
+	elem := map[string]any{
+		"description": "Laptop", "quantity": "1", "unit_price": "10.00", "line_total": "10.00",
+		"line_tax": nil, "hsn_code": 8471.3,
+	}
+	if _, ok := aiLineFrom(elem); ok {
+		t.Error("aiLineFrom accepted a JSON number in hsn_code, want ok false (strict schema)")
+	}
+	elem["hsn_code"] = "8471.30"
+	if _, ok := aiLineFrom(elem); !ok {
+		t.Error("control: the same element with a string hsn_code was refused")
+	}
+}

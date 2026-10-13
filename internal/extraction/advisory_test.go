@@ -450,7 +450,7 @@ func TestAdvisory_TheLabelValueGapsAreRecorded(t *testing.T) {
 
 // --- T-06.7 -------------------------------------------------------------------
 
-// T-06.7: AC-7 -- "BILL TO" decides like "BILLED TO" across all ten header fields.
+// T-06.7: AC-7 -- "BILL TO" decides like "BILLED TO" across the header fields.
 func TestAdvisory_TheLoosenedRegisterDecidesLikeTheExactOne(t *testing.T) {
 	exactPages := rvCorpusPages(t, fxAdvisoryRegister)
 	loosenedPages := advRewriteToken(t, rvCorpusPages(t, fxAdvisoryRegister), "BILLED TO", "BILL TO")

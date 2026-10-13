@@ -19,9 +19,8 @@ export type SubTab = 'jobs' | 'recon'
 
 export type Severity = 'error' | 'warn' | 'info'
 
-// 'global' applies to every tenant; 'tenant-override' means at least one tenant has
-// its own variant. The console renders these as GLOBAL / TENANT (proto:910).
-export type RuleScope = 'global' | 'tenant-override'
+// The wire value (rule.go scope, 'document' in v1); the seed fixture also uses 'global' and 'tenant-override'.
+export type RuleScope = string
 
 export interface Job {
   id: string
@@ -43,6 +42,31 @@ export interface Rule {
   scope: RuleScope
   enabled: boolean
   message: string
+  params: Record<string, unknown>
+  when: string | null
+}
+
+// Wire shapes: internal/validation/staff_codelists.go. status is open: the sync log owns its values.
+export interface CodeListLatest {
+  list: string
+  synced_at: string
+  entry_count: number
+  added_count: number
+  removed_count: number
+  changed_count: number
+  status: string
+}
+export interface CodeListSync {
+  status: string
+  synced_at: string
+  entry_count: number
+  /** At most CODES_SHOWN codes each; the counts are the true totals. */
+  added: string[]
+  removed: string[]
+  changed: string[]
+  added_count: number
+  removed_count: number
+  changed_count: number
 }
 
 export interface ReconRow {
@@ -53,26 +77,6 @@ export interface ReconRow {
   /** What the Access Point reports for the same job. */
   app: JobState
   detail: string
-}
-
-export interface RuleSetVersion {
-  version: string
-  meta: string
-  tag: string
-  kind: 'draft' | 'active' | 'arch'
-}
-
-export interface LearnedRule {
-  key: string
-  source: string
-}
-
-export interface DiffRow {
-  sign: '+' | '~' | '−'
-  key: string
-  detail: string
-  tag: 'ADDED' | 'CHANGED' | 'REMOVED'
-  kind: 'added' | 'changed' | 'removed'
 }
 
 export type AuditTone = 'red' | 'amber' | 'green' | 'teal'
@@ -141,7 +145,7 @@ export interface NavItem {
   glyph: ReactNode
 }
 
-export type DrawerState = { type: 'job'; id: string } | { type: 'audit'; id: string } | { type: 'rule'; id: string } | null
+export type DrawerState = { type: 'code-list'; id: string } | { type: 'job'; id: string } | { type: 'audit'; id: string } | { type: 'rule'; id: string } | { type: 'new-rule' } | null
 
 export type ToastTone = 'ok' | 'red'
 

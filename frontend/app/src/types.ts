@@ -9,10 +9,11 @@ import type { CarriedReading, ImportPreview } from './lib/importApi'
 import type { DocumentRowState } from './lib/documentRun'
 import type { ImportRun, PickedFile } from './lib/importRun'
 import type { PickedKind } from './lib/importFlow'
+import type { FormField, ImportKey, LineEditKey } from './lib/invoiceFields'
 // Type-only, mirroring the PickedFile edge above — lib/mappingGroups.ts type-imports
 // `Mapping` from THIS file, so this is a benign type-only cycle (erased at compile,
 // TS1484), same shape as the pre-existing PickedFile/Member edges.
-import type { MappingGroup } from './lib/mappingGroups'
+import type { InvoiceKind, MappingGroup } from './lib/mappingGroups'
 // Type-only, and it must stay that way: `lib/members.ts` VALUE-imports `./auth` and
 // `./data`, both of which type-import this file, so `Member` closes the loop
 // members -> auth/data -> types -> members. Benign only because every edge in it is
@@ -20,7 +21,6 @@ import type { MappingGroup } from './lib/mappingGroups'
 // (TS1484, from `verbatimModuleSyntax`), NOT the bundler: `vite build` alone erases a
 // value import here and emits a byte-identical bundle.
 import type { Member, MemberStatus } from './lib/members'
-import type { CustomRule, Suggestion } from './lib/rules'
 // Type-only for the reason the `Member` edge above spells out — `lib/roles.ts` type-imports
 // `lib/members.ts`, which closes the same benign compile-erased loop.
 import type { Role } from './lib/roles'
@@ -28,6 +28,7 @@ import type { Role } from './lib/roles'
 // type-imports `View`/`SettingsTab` from this file, so the loop is erased at compile.
 import type { RouteParams } from './lib/route'
 import type { Policy } from './lib/workflows'
+import type { LineTarget } from './lib/validationApi'
 
 export type SectorKey = 'logistics' | 'foods' | 'oilfield' | 'trading' | 'manufacturing' | 'textile'
 
@@ -50,6 +51,14 @@ export type LineItem = {
   qty: number
   price: number
 }
+
+// The 8 NRS line keys a draft line holds; base_quantity is fixed at "1" on the wire.
+export type DraftLineNRSKey = Exclude<
+  LineEditKey,
+  'description' | 'quantity' | 'unit_price' | 'line_total' | 'line_tax' | 'base_quantity'
+>
+
+export type DraftLine = LineItem & Record<DraftLineNRSKey, string>
 
 export type Invoice = {
   number: string
@@ -79,17 +88,10 @@ export type Validatable = {
 // POST /v1/invoices body, and nothing else. De-intersected from `Validatable` in
 // INVCR-01-03: while `Draft = Validatable & {…}` the create flow was typed against the
 // mock verdict engine, which is exactly the coupling [server-truth] exists to sever.
-// `buyerAddress`/`wht`/`docType` left with it — `invoices` has no address, WHT or doc-type
-// column and `createRequest` no such field, so each was a value the form collected and
-// silently discarded. `Invoice` (the mock dashboard's row shape) keeps all three.
-export type Draft = {
-  number: string
-  buyer: string
-  buyerTin: string
-  date: string
-  currency: string
-  items: LineItem[]
-}
+// `wht`/`docType` left with it — `invoices` has no WHT or doc-type column. The buyer
+// address is the structured buyer_street..buyer_lga keys. `Invoice` (the mock dashboard's
+// row shape) keeps `buyerAddress`, `wht` and `docType`.
+export type Draft = { [F in FormField as F['formKey']]: string } & { items: DraftLine[] }
 
 // Static per-company seed config (mirrors `this.CFG` entries). The prototype's raw
 // CFG literal also carries `vd`/`vatd`/`fd`/`pd`/`validated`/`dist`/`docs`/`health`/
@@ -192,7 +194,7 @@ export type CreateStep = 'upload' | 'mapping' | 'form' | 'review' | 'documents'
 
 // A canonical invoice field the Map step places onto a spreadsheet column.
 // `required` marks the fiscal identifier — alias recognition never guesses it; a suggestion or a restore is the only automatic route.
-export type CanonField = { key: string; required?: boolean }
+export type CanonField = { key: ImportKey; required?: boolean }
 
 // canonical field key -> source column header, or null while unplaced
 //
@@ -208,7 +210,7 @@ export type Mapping = Record<string, string | null>
 // to the tab strip conditionally on ctx.mode, it is never in the shared SETTINGS_TABS list
 // (data.tsx). A firm workspace already has a dedicated multi-entity portfolio screen
 // (ClientsView); in-house's is single-entity and lives in Settings instead ([entity-picker]).
-export type SettingsTab = 'members' | 'roles' | 'connectors' | 'api' | 'signing' | 'company'
+export type SettingsTab = 'members' | 'roles' | 'buyers' | 'connectors' | 'api' | 'signing' | 'company'
 
 export type ConnectorId = 'sap' | 'quickbooks' | 'oracle' | 'sage' | 'odoo' | 'dynamics'
 
@@ -307,12 +309,6 @@ export type PlatformCtx = {
   handOffReading: CarriedReading | null
 
   // --- Rules screen ---------------------------------------------------------
-  // The ACTIVE client's custom rules, already resolved out of the per-client store
-  // in App.tsx — components never see the store or the key, so a surface cannot
-  // accidentally render one client's rules under another's name. The golden ruleset
-  // is not here at all: it is inherited, identical for every tenant, and read
-  // straight off lib/rules.ts by the view.
-  customRules: CustomRule[]
   /** Key of the rule whose detail drawer is open, golden or custom. */
   openRuleKey: string | null
 
@@ -430,6 +426,9 @@ export type PlatformCtx = {
   // invoice. Non-null makes InvoiceDetail render its honest placeholder instead of
   // resolving a mock invoice; M4-09 swaps that for a real fetch.
   importedInvoiceId: string | null
+  // One-shot: the line the detail editor opens at; null unless openImportedInvoice passed one.
+  importedInvoiceLine: LineTarget | null
+  consumeImportedInvoiceLine: () => void
   // This atom and the `invoice` param of the current /audit URL are the same fact: every
   // writer moves both, and navigating off Audit clears both.
   auditPrefilter: AuditPrefilter | null
@@ -454,6 +453,8 @@ export type PlatformCtx = {
   // Descriptions are strings and qty/price are numbers coerced off the input's text, so
   // this is a separate writer rather than a widened `field` union with a branch inside.
   updateItemDesc: (i: number, desc: string) => void
+  updateItemField: (i: number, key: DraftLineNRSKey, value: string) => void
+  updateDraftFields: (patch: Partial<Omit<Draft, 'items'>>) => void
   addItem: () => void
   removeItem: (i: number) => void
   armField: (k: string) => void
@@ -490,6 +491,7 @@ export type PlatformCtx = {
   splitOutFile: (fileId: string) => void
   // Reseeds the active group from automatic suggestions and drops both its restored and suggested snapshots; no undo.
   resetGroupToAutomatic: () => void
+  setInvoiceKind: (groupId: string, kind: InvoiceKind | undefined) => void
   backToImport: () => void
   // The review surface's two ways back to the upload step (§7.4's "Import a corrected
   // file", §7.5's "Choose another file"): resetImport THEN backToImport, as one action so
@@ -506,7 +508,7 @@ export type PlatformCtx = {
   // navigation to the real invoice detail. There is deliberately no companion
   // "approve"/"back to results" pair, because there is no step to go back from.
   fileDraft: () => void
-  openImportedInvoice: (id: string) => void
+  openImportedInvoice: (id: string, line?: LineTarget) => void
   // Sets auditPrefilter and navigates to Audit in ONE handler, so no committed render can carry
   // one without the other.
   openAuditForInvoice: (invoiceId: string, invoiceNumber: string | null) => void
@@ -519,13 +521,10 @@ export type PlatformCtx = {
   toggleConnector: (id: ConnectorId) => void
   saveConnectorMapping: (id: ConnectorId, rows: FieldMapRow[]) => void
   // Rules screen. There is deliberately no editCustomRule/disableGoldenRule pair:
-  // a tenant may adopt, switch off and remove its OWN rules, and may do nothing at
+  // a tenant may switch off and remove its OWN rules, and may do nothing at
   // all to an inherited one.
   openRule: (key: string) => void
   closeRule: () => void
-  addSuggestedRule: (s: Suggestion) => void
-  toggleCustomRule: (key: string) => void
-  removeCustomRule: (key: string) => void
   // Workflows screen. `savePolicy` is the ONE write funnel for a policy's contents: the
   // builder composes the next Policy with the pure reducers in lib/workflows.ts and hands
   // the whole object back, so App.tsx never needs to know the node tree's shape. It

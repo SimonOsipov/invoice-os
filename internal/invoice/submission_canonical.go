@@ -34,6 +34,16 @@ func SubmissionCanonical(inv Invoice) submission.Canonical {
 			UnitPrice:   li.UnitPrice,
 			LineTotal:   li.LineTotal,
 			LineTax:     li.LineTax,
+
+			TaxCategory:               li.TaxCategory,
+			HSNCode:                   li.HSNCode,
+			ISICCode:                  li.ISICCode,
+			ProductCategory:           li.ProductCategory,
+			ServiceCategory:           li.ServiceCategory,
+			SellersItemIdentification: li.SellersItemIdentification,
+			PriceUnit:                 li.PriceUnit,
+			TaxPercent:                li.TaxPercent,
+			BaseQuantity:              li.BaseQuantity,
 		})
 	}
 
@@ -44,15 +54,54 @@ func SubmissionCanonical(inv Invoice) submission.Canonical {
 		Supplier: submission.Party{
 			TIN:  inv.SupplierTIN,
 			Name: inv.SupplierName,
+
+			Email:      inv.SupplierEmail,
+			Telephone:  inv.SupplierTelephone,
+			Street:     inv.SupplierStreet,
+			City:       inv.SupplierCity,
+			PostalZone: inv.SupplierPostalZone,
+			Country:    inv.SupplierCountry,
+			State:      inv.SupplierState,
+			LGA:        inv.SupplierLGA,
 		},
 		Buyer: submission.Party{
 			TIN:  inv.BuyerTIN,
 			Name: inv.BuyerName,
+
+			Email:      inv.BuyerEmail,
+			Telephone:  inv.BuyerTelephone,
+			Street:     inv.BuyerStreet,
+			City:       inv.BuyerCity,
+			PostalZone: inv.BuyerPostalZone,
+			Country:    inv.BuyerCountry,
+			State:      inv.BuyerState,
+			LGA:        inv.BuyerLGA,
 		},
 		Currency: inv.Currency,
 		Subtotal: inv.Subtotal,
 		VAT:      inv.VAT,
 		Total:    inv.Total,
 		Lines:    lines,
+
+		InvoiceKind:     inv.InvoiceKind,
+		TaxCurrencyCode: inv.TaxCurrencyCode,
+		DueDate:         inv.DueDate,
+		IssueTime:       inv.IssueTime,
+		TaxPointDate:    inv.TaxPointDate,
+		PaymentStatus:   inv.PaymentStatus,
+		TaxSubtotals:    canonicalTaxSubtotals(taxSubtotals(inv.LineItems)),
 	}
+}
+
+func canonicalTaxSubtotals(in []TaxSubtotal) []submission.TaxSubtotal {
+	var out []submission.TaxSubtotal
+	for _, t := range in {
+		out = append(out, submission.TaxSubtotal{
+			Category:      t.TaxCategory,
+			Percent:       t.TaxPercent,
+			TaxableAmount: t.TaxableAmount,
+			TaxAmount:     t.TaxAmount,
+		})
+	}
+	return out
 }

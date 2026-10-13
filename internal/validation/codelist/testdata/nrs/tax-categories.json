@@ -1,0 +1,20 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "code": "STANDARD_GST",
+      "value": "Standard Goods and Services Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "REDUCED_GST",
+      "value": "Reduced Goods and Services Tax",
+      "percent": "Not Available"
+    },
+    {
+      "code": "ZERO_GST",
+      "value": "Zero Goods and Services Tax",
+      "percent": "Not Available"
+    }
+  ]
+}

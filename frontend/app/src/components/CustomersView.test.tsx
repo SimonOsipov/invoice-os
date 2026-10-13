@@ -66,6 +66,7 @@ function row(over: Partial<InvoiceRecord> = {}): InvoiceRecord {
     approve_blocked_reason: null,
     can_submit: false,
     submit_blocked_reason: null,
+    demotion: null,
     ...over,
   }
 }

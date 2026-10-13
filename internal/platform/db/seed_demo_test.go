@@ -603,7 +603,7 @@ func TestSeedReenablesDisabledRules(t *testing.T) {
 	}
 
 	// Idempotent, and must not trip the same immutability lock either
-	// (sealed rule set — see M4-17/M4-18).
+	// (sealed rule set — see M4-17).
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("second Seed (idempotency): %v", err)
 	}

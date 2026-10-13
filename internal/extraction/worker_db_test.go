@@ -5330,8 +5330,8 @@ func TestRLS_ExtractWorkerReadsANoTextDocumentFromItsPageImages(t *testing.T) {
 	if len(rec.events()) != 1 {
 		t.Fatalf("audit events = %d, want exactly 1", len(rec.events()))
 	}
-	if ev := rec.events()[0]; !ev.Succeeded || ev.FieldCount != 11 {
-		t.Errorf("audit = %+v, want {Succeeded true, FieldCount 11}", ev)
+	if ev := rec.events()[0]; !ev.Succeeded || ev.FieldCount != 20 {
+		t.Errorf("audit = %+v, want {Succeeded true, FieldCount 20}", ev)
 	}
 	if asked, _ := rules.calls(); len(asked) != 0 {
 		t.Errorf("the Rules seam was called %d time(s), want 0: the no-text arm never reaches it", len(asked))

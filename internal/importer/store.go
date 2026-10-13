@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/customer"
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -114,6 +116,28 @@ func (s *Store) CreateBatch(ctx context.Context, entityID, filename, documentID 
 	return id, nil
 }
 
+// RecordRuleBreaks files the rule breaks of one document reading; a repeat of a row is a no-op.
+func (s *Store) RecordRuleBreaks(ctx context.Context, jobID, ruleSetVersionID string, breaks []RuleBreak) error {
+	if len(breaks) == 0 {
+		return nil
+	}
+	return db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		identity, _ := auth.IdentityFromContext(ctx)
+		for _, b := range breaks {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO extraction_rule_breaks
+				   (tenant_id, extraction_job_id, field_name, rule_set_version_id, rule_key, message)
+				 VALUES ($1, $2, $3, $4, $5, $6)
+				 ON CONFLICT (tenant_id, extraction_job_id, field_name, rule_key) DO NOTHING`,
+				identity.TenantID, jobID, b.Field, ruleSetVersionID, b.RuleKey, b.Message,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // Finalize updates one import_batches row's terminal counts/status/errors. A
 // nil errs marshals to the jsonb empty array `[]`, never `null` (init to
 // []RowError{} first). RLS scopes the UPDATE's WHERE to the caller's tenant
@@ -197,24 +221,25 @@ func (s *Store) DocumentHasInvoice(ctx context.Context, documentID string) (bool
 	return has, err
 }
 
-// EntitySupplier returns the (name, tin) of the business_entities row
+// EntitySupplier returns the (name, tin, contact) of the business_entities row
 // identified by entityID, for use as an import batch's supplier defaults
 // ([supplier-from-entity]). tin is nullable and scans into a nil *string
 // when unset. Zero rows under the caller's tenant (RLS-scoped, same as a
 // genuinely nonexistent id) maps to ErrNotFound.
-func (s *Store) EntitySupplier(ctx context.Context, entityID string) (name string, tin *string, err error) {
+func (s *Store) EntitySupplier(ctx context.Context, entityID string) (name string, tin *string, contact invoice.SupplierContact, err error) {
 	txErr := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT name, tin FROM business_entities WHERE id = $1`, entityID,
-		).Scan(&name, &tin)
+			`SELECT name, tin, email, telephone, street, city, postal_zone, country, state, lga FROM business_entities WHERE id = $1`, entityID,
+		).Scan(&name, &tin, &contact.Email, &contact.Telephone, &contact.Street, &contact.City,
+			&contact.PostalZone, &contact.Country, &contact.State, &contact.LGA)
 	})
 	if txErr != nil {
 		if errors.Is(txErr, pgx.ErrNoRows) {
-			return "", nil, ErrNotFound
+			return "", nil, invoice.SupplierContact{}, ErrNotFound
 		}
-		return "", nil, txErr
+		return "", nil, invoice.SupplierContact{}, txErr
 	}
-	return name, tin, nil
+	return name, tin, contact, nil
 }
 
 // Batch is one import_batches row plus its DERIVED rule_set_version
@@ -310,4 +335,19 @@ func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
 		}
 	}
 	return b, nil
+}
+
+// BuyerTypeByTIN is the caller's tenant directory buyer_type for tin; nil when there is no record
+// or it has none.
+func (s *Store) BuyerTypeByTIN(ctx context.Context, tin string) (*string, error) {
+	var bt *string
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		c, err := customer.LookupByTIN(ctx, tx, tin)
+		if err != nil || c == nil {
+			return err
+		}
+		bt = c.BuyerType
+		return nil
+	})
+	return bt, err
 }

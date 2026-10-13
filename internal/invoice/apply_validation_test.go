@@ -59,7 +59,7 @@ import (
 
 // seedRuleSetVersionID returns a real, existing rule_set_versions id -- any
 // row satisfies the invoices.rule_set_version_id FK, so this deliberately
-// does NOT filter by version number or is_active (RS-V2-14 scope: this
+// does NOT filter by version number (RS-V2-14 scope: this
 // package is not allow-listed for a literal `version = N` pin). Mirrors
 // internal/platform/db/invoices_rls_test.go's INV-RLS-14
 // (`SELECT id FROM rule_set_versions LIMIT 1`) verbatim.

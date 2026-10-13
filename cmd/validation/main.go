@@ -4,7 +4,7 @@
 // identity, otherwise 403, and reaches no database. POST /v1/validate/batch
 // is the tenant-free peer surface 03 submits batches to:
 // peer-authenticated via S2S_TOKEN, carrying no identity, loading the rule-set
-// once per batch.
+// versions for the batch's dates once per batch (LoadForBatch).
 package main
 
 import (
@@ -12,10 +12,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/validation"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 func main() {
@@ -54,27 +56,52 @@ func main() {
 	store := validation.NewStore(pool)
 	engine := validation.NewDefaultEngine()
 
-	// 401 without an identity, otherwise 403; rules change only through the operator kill switch.
+	// 401 without an identity, otherwise 403. Staff switch a rule through PATCH /v1/staff/rules/{key};
+	// the owner statement is the break-glass path.
 	app.Mux.HandleFunc("PATCH /v1/rules/{key}", validation.ToggleHandler())
+
+	app.Mux.HandleFunc("GET /v1/rules", validation.GoldenRulesHandler(store.GoldenRules, app.Logger))
+
+	// Staff routes: the platform admits only a rules-role caller.
+	app.Mux.HandleFunc("GET /v1/staff/rules", validation.StaffListRulesHandler(store.RulesOfVersion, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/rule-versions", validation.StaffVersionsHandler(store.Versions, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/code-list-syncs", validation.StaffCodeListSyncsHandler(store.CodeListSyncs, app.Logger))
+	app.Mux.HandleFunc("PATCH /v1/staff/rules/{key}", validation.StaffSwitchRuleHandler(store.SwitchRule, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft", validation.StaffOpenDraftHandler(store.OpenDraft, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/rules", validation.StaffAddDraftRuleHandler(engine, store.AddDraftRule, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/staff/rule-versions/draft/rules/{key}", validation.StaffEditDraftRuleHandler(engine, store.EditDraftRule, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/staff/rule-versions/draft/rules/{key}", validation.StaffRemoveDraftRuleHandler(store.RemoveDraftRule, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/publish", validation.StaffPublishDraftHandler(func(ctx context.Context, from time.Time) (validation.DraftPublished, error) {
+		return store.PublishDraft(ctx, engine, from)
+	}, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/rule-versions/draft/test", validation.StaffTestDraftHandler(func(ctx context.Context, invoice map[string]any) (validation.DraftTestResult, error) {
+		return store.TestDraft(ctx, engine, invoice)
+	}, app.Logger))
 
 	// POST /v1/validate/batch — the tenant-free peer surface 03 (submission)
 	// calls to validate a whole batch in one request. It carries NO identity: it is
 	// authenticated as a fleet PEER via the shared S2S_TOKEN ([s2s-peer-auth]) and reads no tenant, because
-	// rule evaluation is a pure function of (payload, active global rule-set)
-	// and there is no tenant-scoped data behind it ([s2s-identity]). Hence
-	// LoadActiveRuleSetGlobal rather than LoadActiveRuleSet: the tenant-wrapped
-	// loader returns db.ErrNoTenant with no identity in context, so an
+	// rule evaluation is a pure function of (payload, the rule-set version
+	// in force on its issue date) and there is no tenant-scoped data behind it
+	// ([s2s-identity]). Hence LoadForBatch rather than LoadActiveRuleSet: the
+	// tenant-wrapped loader returns db.ErrNoTenant with no identity in context, so an
 	// identity-less peer call structurally cannot use it.
 	//
 	// S2S_TOKEN is required via mustEnv: an unset var makes platform.Fatal exit at boot
 	// rather than starting this endpoint with an empty token that would admit
 	// every caller. The var is set in the deploy env (M4-04-08, [env-wiring]).
-	// The stateless engine is reused; the rule-set is loaded once per batch,
-	// inside the handler.
+	// The stateless engine is reused; LoadForBatch runs once per batch, inside
+	// the handler, and each item is judged by the version for its own date.
 	app.Mux.Handle("POST /v1/validate/batch", validation.S2SMiddleware(mustEnv("S2S_TOKEN"))(
-		validation.BatchValidateHandler(store.LoadActiveRuleSetGlobal, engine, app.Logger)))
+		validation.BatchValidateHandler(store.LoadForBatch, engine, nil, app.Logger)))
 
-	app.RequireGateway(mustEnv("GATEWAY_TOKEN"), "POST /v1/validate/batch")
+	app.Mux.Handle("POST /v1/custom-rules/check", validation.S2SMiddleware(mustEnv("S2S_TOKEN"))(
+		validation.CheckCustomRuleHandler(engine)))
+
+	app.AddBackgroundWorker(codelist.NewWorker(codelist.SyncInterval,
+		codelist.NewSyncer(pool, codelist.DefaultBaseURL, nil, app.Logger).SyncAll))
+
+	app.RequireGateway(mustEnv("GATEWAY_TOKEN"), "POST /v1/validate/batch", "POST /v1/custom-rules/check")
 
 	if err := app.Run(context.Background()); err != nil {
 		platform.Fatal(app.Logger, "validation: %v", err)

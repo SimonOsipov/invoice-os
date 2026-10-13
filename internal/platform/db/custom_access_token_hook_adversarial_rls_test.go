@@ -39,13 +39,13 @@ func joinMigrationVersion(t *testing.T) (v int64, ok bool) {
 	return migrationVersion(t, "*_invitation_join_by_email.sql"), true
 }
 
-// reapplyHookMigrationOnCleanup rolls the join, staff and hook migrations back and forward after the test.
+// reapplyHookMigrationOnCleanup rolls the join, rules-role, staff and hook migrations back and forward after the test.
 // A memberships Down/Up round-trip drops status, which strips auth_hook_reader's column grant.
-// Staff Down runs first: it restores the tenant-only body over the function the hook Down drops.
+// Rules-role then staff Down run first: each restores the earlier body over the function the hook Down drops.
 // Join goes first on the way down and last on the way up: the hook Down revokes its grants.
 func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 	t.Helper()
-	staff, hook := staffMigrationVersion(t), hookMigrationVersion(t)
+	rules, staff, hook := rulesRoleMigrationVersion(t), staffMigrationVersion(t), hookMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
 	t.Cleanup(func() {
 		ctx := context.Background()
@@ -55,10 +55,12 @@ func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 			up      bool
 		}
 		steps := []migStep{
+			{"roll back the rules-role migration", rules, false},
 			{"roll back the staff migration", staff, false},
 			{"roll back the hook migration", hook, false},
 			{"re-apply the hook migration", hook, true},
 			{"re-apply the staff migration", staff, true},
+			{"re-apply the rules-role migration", rules, true},
 		}
 		if hasJoin {
 			steps = append([]migStep{{"roll back the join migration", join, false}}, steps...)
@@ -345,7 +347,7 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate column privileges: %v", err)
 	}
-	if want := map[string]int{"memberships": 5, "staff_members": 1, "invitations": 8, "tenants": 2}; !reflect.DeepEqual(cols, want) {
+	if want := map[string]int{"memberships": 5, "staff_members": 2, "invitations": 8, "tenants": 2}; !reflect.DeepEqual(cols, want) {
 		t.Errorf("auth_hook_reader column privileges per table = %v, want %v", cols, want)
 	}
 
@@ -365,7 +367,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	requireHarness(t)
 	reapplyStaffMigration(t)
 	ctx := context.Background()
-	hook, staff := hookMigrationVersion(t), staffMigrationVersion(t)
+	hook, staff, rules := hookMigrationVersion(t), staffMigrationVersion(t), rulesRoleMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
 
 	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
@@ -400,7 +402,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		t.Fatalf("before Down: function=%d policy=%d privileges=%d, want 1 1 3", fn, policy, privs)
 	}
 
-	staffApplied, hookApplied, joinApplied := true, true, hasJoin
+	rulesApplied, staffApplied, hookApplied, joinApplied := true, true, true, hasJoin
 	t.Cleanup(func() {
 		ctx := context.Background()
 		if !hookApplied {
@@ -412,6 +414,12 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		if !staffApplied {
 			if _, err := provider.ApplyVersion(ctx, staff, true); err != nil {
 				t.Errorf("restore the staff migration: %v", err)
+				return
+			}
+		}
+		if !rulesApplied {
+			if _, err := provider.ApplyVersion(ctx, rules, true); err != nil {
+				t.Errorf("restore the rules-role migration: %v", err)
 				return
 			}
 		}
@@ -429,6 +437,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		up      bool
 		applied *bool
 	}{
+		{"roll back the rules-role migration", rules, false, &rulesApplied},
 		{"roll back the staff migration", staff, false, &staffApplied},
 		{"roll back the hook migration", hook, false, &hookApplied},
 	}
@@ -457,6 +466,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 	}{
 		{"re-apply the hook migration", hook, &hookApplied},
 		{"re-apply the staff migration", staff, &staffApplied},
+		{"re-apply the rules-role migration", rules, &rulesApplied},
 	} {
 		if _, err := provider.ApplyVersion(ctx, step.version, true); err != nil {
 			t.Fatalf("%s: %v", step.what, err)

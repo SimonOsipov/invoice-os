@@ -5,6 +5,7 @@ import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
 
 export const GA_RETENTION_MONTHS = 14
+export const AI_PROVIDER_HOST = 'openrouter.ai'
 export const PROSE_MAX_WIDTH = 720
 export const PRIVACY_CONTACT = 'sam@ascomply.com'
 export const ANALYTICS_DEFAULT_SENTENCE = 'Analytics is off unless you turn it on.'
@@ -217,6 +218,28 @@ export function Privacy() {
           <p style={P}>
             The registration form has the same separate marketing box. Its sentence is stored on our own server, word for
             word, with the time you submitted the form: “{MARKETING_CONSENT_TEXT}”
+          </p>
+
+          <h2 style={H2}>If you upload invoice documents</h2>
+          <p style={P}>
+            This section is separate from the analytics and the demo form above. It is about documents you choose to
+            upload to the signed-in ASComply product. When you upload an invoice document, our server sends its content to
+            an AI provider so that the invoice can be read. That content is the text of the document, or page images when a
+            scanned PDF has no text. For a spreadsheet, it is the column headings and the first few rows.
+          </p>
+          <p style={P}>
+            The provider is OpenRouter ({AI_PROVIDER_HOST}). It passes each request to an AI model made by Google (the
+            Gemini model, not Google Analytics) or by TypeSafe. Your browser sends the document to our server only; our
+            server makes the call to OpenRouter. What OpenRouter, Google and TypeSafe do with what they receive is set by
+            their own terms.
+          </p>
+
+          <h2 style={H2}>If you ask for an explanation</h2>
+          <p style={P}>
+            This is also about the signed-in ASComply product. When you click Explain on a rule that an invoice breaks,
+            our server sends that invoice's details and the rule's result to the same AI provider, so that it can explain
+            the problem in plain words and suggest a correction. Nothing is sent until you click Explain, and a suggested
+            correction is saved only when you accept it.
           </p>
 
           <h2 style={H2}>Error and performance monitoring</h2>

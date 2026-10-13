@@ -24,6 +24,7 @@ export interface BundlePeriod {
 
 export interface BundleCounts {
   invoices: number
+  line_items: number
   status_transitions: number
   submissions: number
   exchange_attempts: number

@@ -22,9 +22,10 @@ export const EVIDENCE_COPY = {
   contentsHeading: 'WHAT THE ZIP CONTAINS',
   filenameLabel: 'File name',
   confirmFooter: 'Nothing downloads until you confirm.',
-  // The seven row labels are the seven real ZIP entry families. No label may begin with
+  // The eight row labels are the eight real ZIP entry families. No label may begin with
   // B/KB/MB/GB: textContent glues the previous row's value to it and false-trips EB-05-3.
   rowInvoices: 'Invoices (invoices.csv)',
+  rowLineItems: 'Invoice lines (line_items.csv)',
   rowStatusTimelines: 'Status timelines (status_history.csv)',
   rowFirsReferences: 'FIRS references — IRN, CSID and QR payload (columns of invoices.csv)',
   rowSubmissions: 'Submissions (submissions.csv)',
@@ -124,6 +125,7 @@ export function bundleManifestLines(preview: EvidenceBundlePreview): BundleManif
   const c = preview.counts
   return [
     { label: EVIDENCE_COPY.rowInvoices, value: num(c.invoices) },
+    { label: EVIDENCE_COPY.rowLineItems, value: num(c.line_items) },
     { label: EVIDENCE_COPY.rowStatusTimelines, value: num(c.status_transitions) },
     { label: EVIDENCE_COPY.rowFirsReferences, value: null },
     { label: EVIDENCE_COPY.rowSubmissions, value: num(c.submissions) },

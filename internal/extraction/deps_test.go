@@ -17,6 +17,7 @@ const (
 	documentPkg   = modulePath + "/internal/document"
 	platformPkg   = modulePath + "/internal/platform"
 	platformPfx   = platformPkg + "/"
+	fieldsPkg     = modulePath + "/internal/invoicefields"
 )
 
 // goListDeps shells go list in this package's directory. "." not a path: a test
@@ -58,14 +59,14 @@ func assertFenced(t fenceT, scan string, lines []string) {
 		if dep != modulePath && !strings.HasPrefix(dep, modulePath+"/") {
 			continue
 		}
-		if dep == platformPkg || strings.HasPrefix(dep, platformPfx) {
+		if dep == platformPkg || strings.HasPrefix(dep, platformPfx) || dep == fieldsPkg {
 			continue
 		}
 		if dep == documentPkg {
 			t.Errorf("%s: internal/extraction depends on %s -- content arrives via the OpenDocument func, and this edge would drag the AWS SDK in with it", scan, dep)
 			continue
 		}
-		t.Errorf("%s: internal/extraction depends on %s -- only internal/platform and internal/platform/* are allowed, and internal/document is the edge this fence exists to stop", scan, dep)
+		t.Errorf("%s: internal/extraction depends on %s -- only internal/platform, internal/platform/* and the leaf internal/invoicefields are allowed, and internal/document is the edge this fence exists to stop", scan, dep)
 	}
 }
 

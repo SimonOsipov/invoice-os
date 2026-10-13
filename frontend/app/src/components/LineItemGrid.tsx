@@ -6,6 +6,7 @@
 import type { CSSProperties } from 'react'
 
 import { reasonPill, regionPhrase } from '../lib/extractionReview'
+import { labelOf } from '../lib/invoiceFields'
 import { LINE_ROLES, cellCandidates, lineSumState, rowArithmetic } from '../lib/lineItems'
 import type { LineRole, LineRow } from '../lib/lineItems'
 
@@ -16,12 +17,7 @@ const EMPTY_CONSEQUENCE = 'An invoice cannot be filed until it has at least one 
 const ADD = 'Add a line'
 const REMOVE = 'Remove'
 
-const ROLE_LABEL: Record<LineRole, string> = {
-  description: 'Description',
-  quantity: 'Quantity',
-  unit_price: 'Unit price',
-  line_total: 'Line total',
-}
+const ROLE_LABEL = Object.fromEntries(LINE_ROLES.map((r) => [r, labelOf(r)])) as Record<LineRole, string>
 
 function sumSentence(sum: string, printed: string | null): string {
   return printed === null

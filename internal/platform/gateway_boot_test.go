@@ -103,6 +103,8 @@ func gwBootEnv(svc string, port int) []string {
 		env = append(env, "VALIDATION_URL=http://127.0.0.1:1", "S2S_TOKEN="+gwS2SToken)
 	case "validation":
 		env = append(env, "S2S_TOKEN="+gwS2SToken)
+	case "reconciliation":
+		env = append(env, "VALIDATION_URL=http://127.0.0.1:1", "S2S_TOKEN="+gwS2SToken)
 	case "submission":
 		env = append(env, docs...)
 		env = append(env, fakes...)
@@ -441,6 +443,28 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 				}
 			})
 
+			t.Run("checks the rules role on the whole staff class", func(t *testing.T) {
+				staff := func(h map[string]string, rules bool) map[string]string {
+					out := gwWith(gwWith(h, "X-Gateway-Token", gwToken), "X-User-Staff", "true")
+					if rules {
+						out["X-User-Rules-Role"] = "true"
+					}
+					return out
+				}
+				for _, target := range []string{"/v1/staff/x", "/v1/staff", "/v1/./staff/x"} {
+					if code, body := p.do(t, "GET", target, "", staff(gwForged(), false)); code != http.StatusForbidden || body != "{\"error\":\"forbidden\"}\n" {
+						t.Errorf("GET %s, staff without the rules role = %d %q, want 403 forbidden", target, code, body)
+					}
+				}
+				if code, body := p.do(t, "GET", "/v1/staff/x", "", map[string]string{"X-Gateway-Token": gwToken}); code != http.StatusForbidden || body != "{\"error\":\"forbidden\"}\n" {
+					t.Errorf("GET /v1/staff/x, token and no caller = %d %q, want 403 forbidden", code, body)
+				}
+				// Control: with the rules role the check admits the request, so the 403s above are the check's.
+				if code, body := p.do(t, "GET", "/v1/staff/x", "", staff(gwForged(), true)); code == http.StatusForbidden || code == http.StatusUnauthorized {
+					t.Errorf("GET /v1/staff/x, staff with the rules role = %d %q, want the check to admit it", code, body)
+				}
+			})
+
 			t.Run("keeps health routes open without the token", func(t *testing.T) {
 				if code, _ := p.do(t, "GET", "/healthz", "", gwForged()); code != http.StatusOK {
 					t.Errorf("GET /healthz, no token = %d, want 200", code)
@@ -556,25 +580,29 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 			}
 			t.Run("peer route stays open to the S2S token alone", func(t *testing.T) {
 				const batch = `{"invoices":[]}`
-				code, _ := p.do(t, "POST", "/v1/validate/batch", batch, map[string]string{"X-S2S-Token": gwS2SToken})
-				if code == http.StatusUnauthorized || code == http.StatusNotFound {
-					t.Errorf("POST /v1/validate/batch, S2S token only = %d, want the route reached", code)
-				}
-				code, body := p.do(t, "POST", "/v1/validate/batch", batch, nil)
-				if code != http.StatusUnauthorized || body != gwUnauthorizedBody {
-					t.Errorf("POST /v1/validate/batch, neither token = %d %q, want 401 %q", code, body, gwUnauthorizedBody)
-				}
-				code, _ = p.do(t, "POST", "/v1/validate/batch", batch, map[string]string{"X-Gateway-Token": gwToken})
-				if code != http.StatusUnauthorized {
-					t.Errorf("POST /v1/validate/batch, gateway token only = %d, want 401 from the S2S check", code)
+				for _, route := range []string{"/v1/validate/batch", "/v1/custom-rules/check"} {
+					code, _ := p.do(t, "POST", route, batch, map[string]string{"X-S2S-Token": gwS2SToken})
+					if code == http.StatusUnauthorized || code == http.StatusNotFound {
+						t.Errorf("POST %s, S2S token only = %d, want the route reached", route, code)
+					}
+					code, body := p.do(t, "POST", route, batch, nil)
+					if code != http.StatusUnauthorized || body != gwUnauthorizedBody {
+						t.Errorf("POST %s, neither token = %d %q, want 401 %q", route, code, body, gwUnauthorizedBody)
+					}
+					code, _ = p.do(t, "POST", route, batch, map[string]string{"X-Gateway-Token": gwToken})
+					if code != http.StatusUnauthorized {
+						t.Errorf("POST %s, gateway token only = %d, want 401 from the S2S check", route, code)
+					}
 				}
 			})
 
 			t.Run("open pattern admits no other route, method or path form", func(t *testing.T) {
 				const batch = `{"invoices":[]}`
 				s2s := map[string]string{"X-S2S-Token": gwS2SToken}
-				if code, _ := p.do(t, "POST", "/v1/validate/batch", batch, s2s); code == http.StatusUnauthorized || code == http.StatusNotFound {
-					t.Fatalf("POST /v1/validate/batch, S2S token only = %d, want the route reached", code)
+				for _, route := range []string{"/v1/validate/batch", "/v1/custom-rules/check"} {
+					if code, _ := p.do(t, "POST", route, batch, s2s); code == http.StatusUnauthorized || code == http.StatusNotFound {
+						t.Fatalf("POST %s, S2S token only = %d, want the route reached", route, code)
+					}
 				}
 				cases := []gwRefusalKey{
 					{"GET", "/v1/validate/batch"},
@@ -582,6 +610,8 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 					{"POST", "/v1/validate/batch/"},
 					{"POST", "/V1/validate/batch"},
 					{"POST", "/v1/validate/batch/extra"},
+					{"GET", "/v1/custom-rules/check"},
+					{"POST", "/v1/custom-rules/check/"},
 					{"PATCH", "/v1/rules/x"},
 					{"GET", "/v1/ping"},
 				}

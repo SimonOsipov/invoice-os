@@ -47,6 +47,7 @@ jobs:
               - 'migrations/**'
               - 'scripts/ci/**'
               - 'packages/design-tokens/v2/assets/**'
+              - 'frontend/app/src/lib/invoiceFields.gen.ts'
               - 'go.mod'
               - 'go.sum'
               - 'Dockerfile'
@@ -696,6 +697,10 @@ jobs:
         # the caller's tenant under RLS and write audit rows in the same tx. Needs
         # DATABASE_URL (app) + DATABASE_SUPERUSER_URL (seed) — both already in this job's env.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/portfolio/...
+      - name: Customer /v1/customers suite (RLS-scoped directory + audit as invoice_app) + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/customer/...
+      - name: Custom-rule store suite (admin-only revisions + audit as invoice_app) + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/customrule/...
       - name: Contact store suite (intake merge + delivery queue as invoice_app) + per-test visibility & skip gate
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/notifications/...
       - name: AI call recorder suite (ai_calls rows land under the call's tenant as invoice_app) + per-test visibility & skip gate

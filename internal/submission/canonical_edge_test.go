@@ -7,6 +7,7 @@ package submission_test
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
@@ -43,7 +44,43 @@ func TestCanonical_MoneyFieldsAreStringPointersNeverNumeric(t *testing.T) {
 	}
 
 	line := reflect.TypeOf(submission.CanonicalLine{})
-	for _, field := range []string{"Quantity", "UnitPrice", "LineTotal", "LineTax"} {
+	for _, field := range []string{"Quantity", "UnitPrice", "LineTotal", "LineTax", "TaxPercent", "BaseQuantity"} {
 		assertStringPointerField(t, line, field)
+	}
+
+	sub := reflect.TypeOf(submission.TaxSubtotal{})
+	for _, field := range []string{"Percent", "TaxableAmount", "TaxAmount"} {
+		assertStringPointerField(t, sub, field)
+	}
+}
+
+func TestCanonical_NoFieldAnywhereIsNumeric(t *testing.T) {
+	seen := map[reflect.Type]bool{}
+	var walk func(typ reflect.Type)
+	walk = func(typ reflect.Type) {
+		for typ.Kind() == reflect.Ptr || typ.Kind() == reflect.Slice {
+			typ = typ.Elem()
+		}
+		if typ.Kind() != reflect.Struct || typ == reflect.TypeOf(time.Time{}) || seen[typ] {
+			return
+		}
+		seen[typ] = true
+		for i := 0; i < typ.NumField(); i++ {
+			f := typ.Field(i)
+			ft := f.Type
+			for ft.Kind() == reflect.Ptr || ft.Kind() == reflect.Slice {
+				ft = ft.Elem()
+			}
+			switch ft.Kind() {
+			case reflect.Float32, reflect.Float64, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+				reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+				t.Errorf("%s.%s is %s: decimals are text, never numeric", typ.Name(), f.Name, ft.Kind())
+			}
+			walk(f.Type)
+		}
+	}
+	walk(reflect.TypeOf(submission.Canonical{}))
+	if len(seen) != 4 {
+		t.Errorf("walked %d struct types, want 4", len(seen))
 	}
 }

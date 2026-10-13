@@ -37,6 +37,14 @@ type Entity struct {
 	Registration *string   `json:"registration"`
 	Sector       *string   `json:"sector"`
 	Address      *string   `json:"address"`
+	Email        *string   `json:"email"`
+	Telephone    *string   `json:"telephone"`
+	Street       *string   `json:"street"`
+	City         *string   `json:"city"`
+	PostalZone   *string   `json:"postal_zone"`
+	Country      *string   `json:"country"`
+	State        *string   `json:"state"`
+	LGA          *string   `json:"lga"`
 	Status       string    `json:"status"` // "active" | "archived"
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -49,6 +57,14 @@ type CreateInput struct {
 	Registration *string
 	Sector       *string
 	Address      *string
+	Email        *string
+	Telephone    *string
+	Street       *string
+	City         *string
+	PostalZone   *string
+	Country      *string
+	State        *string
+	LGA          *string
 }
 
 // UpdateInput is the Store.Update argument (M3-03-04, task-37): a partial
@@ -63,6 +79,14 @@ type UpdateInput struct {
 	Registration *string
 	Sector       *string
 	Address      *string
+	Email        *string
+	Telephone    *string
+	Street       *string
+	City         *string
+	PostalZone   *string
+	Country      *string
+	State        *string
+	LGA          *string
 }
 
 // ListFilter is the Store.List query (M3-03-03, task-36). Status nil means
@@ -101,6 +125,14 @@ type createEntityRequest struct {
 	Registration *string `json:"registration,omitempty"`
 	Sector       *string `json:"sector,omitempty"`
 	Address      *string `json:"address,omitempty"`
+	Email        *string `json:"email,omitempty"`
+	Telephone    *string `json:"telephone,omitempty"`
+	Street       *string `json:"street,omitempty"`
+	City         *string `json:"city,omitempty"`
+	PostalZone   *string `json:"postal_zone,omitempty"`
+	Country      *string `json:"country,omitempty"`
+	State        *string `json:"state,omitempty"`
+	LGA          *string `json:"lga,omitempty"`
 }
 
 // CreateHandler returns POST /v1/entities. It checks the verified identity is
@@ -129,6 +161,14 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Entity, err
 			Registration: req.Registration,
 			Sector:       req.Sector,
 			Address:      req.Address,
+			Email:        req.Email,
+			Telephone:    req.Telephone,
+			Street:       req.Street,
+			City:         req.City,
+			PostalZone:   req.PostalZone,
+			Country:      req.Country,
+			State:        req.State,
+			LGA:          req.LGA,
 		})
 		if err != nil {
 			status, msg := statusForErr(err)
@@ -277,6 +317,14 @@ type updateEntityRequest struct {
 	Registration *string `json:"registration"`
 	Sector       *string `json:"sector"`
 	Address      *string `json:"address"`
+	Email        *string `json:"email"`
+	Telephone    *string `json:"telephone"`
+	Street       *string `json:"street"`
+	City         *string `json:"city"`
+	PostalZone   *string `json:"postal_zone"`
+	Country      *string `json:"country"`
+	State        *string `json:"state"`
+	LGA          *string `json:"lga"`
 }
 
 // UpdateHandler returns PATCH /v1/entities/{id} (M3-03-04, task-37). Same
@@ -299,7 +347,9 @@ func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if req.Name == nil && req.TIN == nil && req.Registration == nil && req.Sector == nil && req.Address == nil {
+		if req.Name == nil && req.TIN == nil && req.Registration == nil && req.Sector == nil && req.Address == nil &&
+			req.Email == nil && req.Telephone == nil && req.Street == nil && req.City == nil &&
+			req.PostalZone == nil && req.Country == nil && req.State == nil && req.LGA == nil {
 			writeError(w, http.StatusBadRequest, "no fields to update")
 			return
 		}
@@ -319,6 +369,14 @@ func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (
 			Registration: req.Registration,
 			Sector:       req.Sector,
 			Address:      req.Address,
+			Email:        req.Email,
+			Telephone:    req.Telephone,
+			Street:       req.Street,
+			City:         req.City,
+			PostalZone:   req.PostalZone,
+			Country:      req.Country,
+			State:        req.State,
+			LGA:          req.LGA,
 		})
 		if err != nil {
 			status, msg := statusForErr(err)

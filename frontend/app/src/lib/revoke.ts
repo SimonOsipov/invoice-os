@@ -3,7 +3,7 @@ import { apiFetch } from '@invoice-os/api-client'
 
 export const REVOKE_TIMEOUT_MS = 5000
 
-// Never rejects. 'text': the 204 has no body, which the JSON path reads as malformed.
+// Never rejects.
 export async function revokeSessions(base: string, refreshToken: string): Promise<'revoked' | 'failed'> {
   try {
     await apiFetch<string>(`${base}/auth/sign-out`, {

@@ -183,9 +183,7 @@ export type InviteOptions =
 
 /**
  * Deliberately minimal (Decision `[email-validation-minimal]`): one `@`, a dot in the
- * domain, no whitespace on either side. Same shape as the pattern rules.ts:189 shows the
- * user as display copy, so what the invite box accepts cannot drift from what the rules
- * screen advertises.
+ * domain, no whitespace on either side.
  */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -241,8 +239,7 @@ export function nameFromEmail(email: string): string {
  * Deliberately a SIBLING rather than a fourth branch inside `classifyInvites`: QA35 pins
  * that function returning `['ok']` for exactly this address, and that spec stays literally
  * true — the classifier still says `ok`, the modal declines to mint. Widening `EMAIL_RE`
- * instead is barred twice over: T2.7/T2.8 pin its accept/reject sets, and Decision
- * `[email-validation-minimal]` keeps it matching the pattern rules.ts:189 advertises.
+ * instead is barred: T2.7/T2.8 pin its accept/reject sets.
  *
  * Not a validator on its own — `'nope'` has a derivable name and is not an address. It is
  * only ever applied ON TOP of an `ok` verdict, so the composition is strictly stricter than
@@ -280,9 +277,8 @@ export function classifyInvites(existing: readonly Member[], addresses: readonly
 
 // Reducers. All three allocate UNCONDITIONALLY (`map` / `filter` / spread), so a miss returns
 // a new array holding the same values rather than the input reference — that is the
-// `replacePolicy`/`removePolicy` form (workflows.ts), picked over rules.ts:253-268's
-// `return rules as CustomRule[]` because the two house precedents disagree and only the
-// always-allocate one satisfies §15.1. Every reducer keys off `id`, never email.
+// `replacePolicy`/`removePolicy` form (workflows.ts), the one that satisfies §15.1.
+// Every reducer keys off `id`, never email.
 
 /** The status write's list patch: the SERVER's row replaces the one it answered for. */
 export function replaceMember(list: readonly Member[], next: Member): Member[] {

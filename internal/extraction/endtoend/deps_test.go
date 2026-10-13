@@ -20,6 +20,7 @@ const (
 	eeDocumentPkg   = eeModulePath + "/internal/document"
 	eePlatformPkg   = eeModulePath + "/internal/platform"
 	eePlatformPfx   = eePlatformPkg + "/"
+	eeFieldsPkg     = eeModulePath + "/internal/invoicefields"
 	eeSelfPkg       = eeExtractionPkg + "/endtoend"
 
 	// A truncated or empty `go list -deps` output must not read as a clean scan.
@@ -104,7 +105,7 @@ func TestEndToEndPackage_DoesNotBreakTheExtractionFence(t *testing.T) {
 			if dep != eeModulePath && !strings.HasPrefix(dep, eeModulePath+"/") {
 				continue
 			}
-			if dep == eePlatformPkg || strings.HasPrefix(dep, eePlatformPfx) {
+			if dep == eePlatformPkg || strings.HasPrefix(dep, eePlatformPfx) || dep == eeFieldsPkg {
 				continue
 			}
 			if dep == eeDocumentPkg {

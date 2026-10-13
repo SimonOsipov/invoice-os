@@ -31,11 +31,13 @@ import {
   getAuditLog,
   getInvoice,
   getInvoiceApproval,
+  editInvoice,
+  searchCodes,
   type Persona,
 } from '../api/client'
-import { ensureFirmPolicyActive } from '../api/contract-helpers'
-import { freshTin } from '../api/fixtures'
-import { buildMixedCsv, buildPerfCsv } from '../importFixtures'
+import { codeListsReady, ensureFirmPolicyActive } from '../api/contract-helpers'
+import { freshBuyerTin, freshTin } from '../api/fixtures'
+import { buildMixedCsv, buildPerfCsv, steerExplainMarker } from '../importFixtures'
 import { approvalRun404Dropper, type Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
 import {
   assertFillsColumn,
@@ -750,6 +752,122 @@ test('register-disclosure: a blocked draft and a clean draft render differently'
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
+// D17 fixture checks: no deployed spec can produce a demotion (a version cannot be published in
+// topology, and a custom re-check waits for a 5-minute tick), so page.route patches one real response.
+// These pin the layout of the marker and banner, not the server's demotion contract.
+const FIXTURE_DEMOTION = {
+  rule_set_version: 99,
+  rule_set_version_id: '00000000-0000-4000-8000-000000000099',
+  effective_from: '2027-01-01',
+}
+
+test('(fixture check) the demotion marker stays inside the status cell', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ENGI-15 demotion marker ${Date.now()}`, tin: freshTin() })
+  const number = `INV-ENGI15-DEMOTE-${Date.now()}`
+  const invoice = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(number) })
+  await validateInvoice(token, invoice.id)
+
+  let patched = 0
+  await page.route(/\/api\/invoice\/v1\/invoices(\?[^/]*)?$/, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const response = await route.fetch()
+    const body = (await response.json()) as { invoices: Array<{ id: string; demotion: unknown }> }
+    for (const row of body.invoices) {
+      if (row.id !== invoice.id) continue
+      row.demotion = { changed_at: new Date().toISOString(), cause: FIXTURE_DEMOTION, custom_rule_cause: null }
+      patched++
+    }
+    await route.fulfill({ response, json: body })
+  })
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  const row = page.getByTestId('invoice-row').filter({ hasText: number })
+  const marker = row.getByTestId('invoice-demotion-marker')
+  await expect(marker).toBeVisible()
+  expect(patched, 'the list response was patched').toBeGreaterThan(0)
+  await expect(marker).toHaveText('RULE SET v99')
+  const badge = row.getByTestId('invoice-status-badge')
+  const errorMarker = row.getByTestId('invoice-error-marker')
+  await expect(errorMarker).toBeVisible()
+  const cell = badge.locator('xpath=..')
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect
+        .poll(async () => {
+          await settleAnimations(marker, cell)
+          const [m, c, b, e] = await Promise.all([marker.boundingBox(), cell.boundingBox(), badge.boundingBox(), errorMarker.boundingBox()])
+          if (!m || !c || !b || !e) return 'an element has no box'
+          if (!enclosesRect(c, m, 1)) return `marker ${JSON.stringify(m)} leaves the status cell ${JSON.stringify(c)}`
+          if (rectsOverlap(m, b)) return 'marker overlaps the status badge'
+          if (rectsOverlap(m, e)) return 'marker overlaps the error marker'
+          return 'ok'
+        }, { message: `demotion marker beside badge and error marker at ${width}px`, timeout: 10_000 })
+        .toBe('ok')
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('(fixture check) the demotion banner fills its column', async ({ page }) => {
+  test.setTimeout(90_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ENGI-15 demotion banner ${Date.now()}`, tin: freshTin() })
+  const number = `INV-ENGI15-BANNER-${Date.now()}`
+  const invoice = await createInvoice(token, { entity_id: entity.id, ...badInvoiceFields(number) })
+  await validateInvoice(token, invoice.id)
+
+  let patched = 0
+  await page.route(new RegExp(`/api/invoice/v1/invoices/${invoice.id}/history$`), async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const response = await route.fetch()
+    const history = (await response.json()) as unknown[]
+    history.push({
+      from_status: 'validated',
+      to_status: 'draft',
+      actor: 'system',
+      actor_name: 'System',
+      actor_kind: 'system',
+      changed_at: new Date().toISOString(),
+      cause: FIXTURE_DEMOTION,
+      custom_rule_cause: null,
+    })
+    patched++
+    await route.fulfill({ response, json: history })
+  })
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, number)
+  const banner = page.getByTestId('detail-demotion-banner')
+  await expect(banner).toBeVisible()
+  expect(patched, 'the history response was patched').toBeGreaterThan(0)
+  await expect(banner).toContainText('rule set v99')
+
+  // The card body pads 18px a side, so measure against the unpadded violations table in the same column.
+  const violations = page.getByTestId('violations-table')
+  const fit = await assertFillsColumn(page, banner, violations, 'detail-demotion-banner vs its column', 1)
+  expect(fit.length, 'the sweep measured every width').toBe(WIDE_WIDTHS.length)
+  const [b, table] = await Promise.all([banner.boundingBox(), violations.boundingBox()])
+  expect(b && table && b.y + b.height <= table.y + 1, 'the banner sits above the violations table').toBe(true)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
 // The blocked checkbox's reason lives in its `title` and nowhere else. A `title` on a
 // disabled control draws no native tooltip in Chromium, so this asserts only what the
 // row does NOT print -- never that the sentence is visible somewhere else.
@@ -1099,7 +1217,7 @@ test('detail surface: violations render against the rule-set version, the fix lo
   // 4th <td>) must render it here, on this LIVE invoice-detail mount of the table, not
   // the em-dash placeholder a blank target would leave.
   const vatRow = violationsTable.locator('tbody tr').filter({ hasText: 'vat-standard-rate' })
-  await expect(vatRow.locator('td').nth(3), 'v3 fills target on vat-standard-rate -- Path must not render the placeholder').not.toHaveText('—')
+  await expect(vatRow.locator('td').nth(3).locator('span').first(), 'v3 fills target on vat-standard-rate -- Path must not render the placeholder').not.toHaveText('—')
 
   await expect(page.getByTestId('invoice-status-badge')).toContainText('DRAFT')
   await expectStripStates(page, { draft: 'current', validated: 'unreached' })
@@ -4235,7 +4353,7 @@ test.describe.serial("detail surface: the compliance card's geometry", () => {
     await expect(row.locator('td').nth(2), 'the Rule key cell must read back the substituted string exactly').toHaveText(
       STUB_VIOLATION.rule_key,
     )
-    await expect(row.locator('td').nth(3), 'the Path cell must read back the substituted string exactly').toHaveText(
+    await expect(row.locator('td').nth(3).locator('span').first(), 'the Path cell must read back the substituted string exactly').toHaveText(
       STUB_VIOLATION.path,
     )
     expect(intercepted(), 'the stub route must have substituted the detail response at least once').toBeGreaterThan(0)
@@ -5996,7 +6114,7 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     const entity = await createEntity(token, { name: `RESKIN2-03 DV-04 ${Date.now()}`, tin: freshTin() })
 
     await dvOpenRules(page, entity.name)
-    await expect(page.locator('.pf-row').filter({ hasText: 'buyer.tin.required' }).first()).toBeVisible()
+    await expect(page.locator('.pf-row').filter({ hasText: 'buyer-tin-required' }).first()).toBeVisible()
     const read = await dvRead(page, { h1: page.getByRole('heading', { level: 1, name: 'Rules', exact: true }) })
     expect(firstFamily(read.targets.h1.style['font-family']), 'Rules h1 family').toBe('Manrope')
     expect(read.targets.h1.style['font-weight'], 'Rules h1 weight').toBe('700')
@@ -6013,8 +6131,8 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
     const entity = await createEntity(token, { name: `RESKIN2-03 DV-05 ${Date.now()}`, tin: freshTin() })
 
     await dvOpenRules(page, entity.name)
-    await page.locator('.pf-row').filter({ hasText: 'buyer.tin.required' }).first().click()
-    const dialog = page.getByRole('dialog', { name: 'Rule buyer.tin.required' })
+    await page.locator('.pf-row').filter({ hasText: 'buyer-tin-required' }).first().click()
+    const dialog = page.getByRole('dialog', { name: 'Rule buyer-tin-required' })
     await expect(dialog).toBeVisible()
     const read = await dvRead(
       page,
@@ -6024,7 +6142,7 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
         paramBox: dialog.locator('div.label', { hasText: /^Parameters$/ }).locator('xpath=following-sibling::div[1]/div[1]/div[2]'),
         json: dialog.locator('pre.pf-json'),
         close: dialog.getByRole('button', { name: 'Close' }),
-        key: dialog.getByText('buyer.tin.required', { exact: true }).first(),
+        key: dialog.getByText('buyer-tin-required', { exact: true }).first(),
       },
       { tokens: ['--bg-2', '--fg-2'] },
     )
@@ -6096,9 +6214,21 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
 
     // The line table box does not scroll sideways at wide widths and every remove button stays inside the form.
     const lineBox = form.getByTestId('line-row').first().locator('xpath=../..')
+    const firstRow = form.getByTestId('line-row').first()
     const sweep = await dvSweepWide(page, async () => {
-      const r = await dvRead(page, { form, lineBox }, { within: { lineRows: { of: 'form', sel: '[data-testid="line-row"]' }, lineRemoves: { of: 'form', sel: '[data-testid="line-remove"]' } } })
-      return { form: r.targets.form.rect, lineBox: r.targets.lineBox, lineRows: r.within.lineRows, lineRemoves: r.within.lineRemoves }
+      const r = await dvRead(
+        page,
+        { form, lineBox, firstRow },
+        {
+          within: {
+            lineRows: { of: 'form', sel: '[data-testid="line-row"]' },
+            lineRemoves: { of: 'form', sel: '[data-testid="line-remove"]' },
+            rowControls: { of: 'firstRow', sel: 'input, select, button' },
+            nrsControls: { of: 'firstRow', sel: '[data-testid="line-nrs"] input' },
+          },
+        },
+      )
+      return { form: r.targets.form.rect, lineBox: r.targets.lineBox, lineRows: r.within.lineRows, lineRemoves: r.within.lineRemoves, row: r.targets.firstRow.rect, rowControls: r.within.rowControls, nrsControls: r.within.nrsControls }
     })
     await testInfo.attach('dv-06-line-fit.json', { body: JSON.stringify(sweep, null, 2), contentType: 'application/json' })
     for (const s of sweep) {
@@ -6107,6 +6237,13 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
       expect(s.lineBox.scrollWidth, `the line table box does not scroll sideways at ${s.width}px`).toBeLessThanOrEqual(s.lineBox.clientWidth)
       for (const [i, remove] of s.lineRemoves.entries()) {
         expect(enclosesRect(s.form, remove.rect, 1), `line-remove ${i} lies inside the edit form at ${s.width}px`).toBe(true)
+      }
+      expect(s.nrsControls.length, `the line row holds NRS controls at ${s.width}px`).toBeGreaterThan(0)
+      for (const [i, control] of s.rowControls.entries()) {
+        expect(enclosesRect(s.row, control.rect, 1), `row control ${i} lies inside its line-row at ${s.width}px`).toBe(true)
+        for (const [j, other] of s.rowControls.entries()) {
+          if (j > i) expect(rectsOverlap(control.rect, other.rect), `row controls ${i} and ${j} do not overlap at ${s.width}px`).toBe(false)
+        }
       }
     }
 
@@ -6135,4 +6272,598 @@ test.describe('RESKIN2-03 v2 detail and rules at 1440', () => {
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })
+})
+
+// Line 2 of 3 carries the negative price, so `Line 2` must land on line-row 2, not the first or last row.
+test('ENGI-16 detail: Line 2 opens the editor on line 2', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ENGI-16 line ${Date.now()}`, tin: freshTin() })
+  const inv = await createInvoice(token, {
+    entity_id: entity.id,
+    ...cleanInvoiceFields(`INV-ENGI16-${Date.now()}`),
+    subtotal: '100',
+    vat: '7.50',
+    total: '107.50',
+    line_items: [
+      { description: 'Widget A', quantity: '1', unit_price: '105.00', line_total: '105.00' },
+      { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '-5.00' },
+      { description: 'Widget C', quantity: '1', unit_price: '0.00', line_total: '0.00' },
+    ],
+  })
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${inv.id}` })
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await page.getByTestId('revalidate').click()
+
+  // 'line-cost-non-negative' is the rule key in internal/validation (migrations/20260715120000_line_rules.sql).
+  const violations = page.getByTestId('violations-table')
+  await expect(violations).toContainText('line-cost-non-negative')
+  const open = violations.getByTestId('violation-open-line')
+  await expect(open).toHaveText('Line 2')
+  await expect(open, 'Line 2 is the one line rule violation').toBeVisible()
+  await expect(violations.getByTestId('violation-open-line')).toHaveCount(1)
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 900 })
+      const cell = open.locator('xpath=ancestor::td[1]')
+      await settleAnimations(cell, open)
+      await expect
+        .poll(async () => enclosesRect((await cell.boundingBox())!, (await open.boundingBox())!, 1), {
+          message: `violation-open-line sits inside its table cell at ${width}px`,
+        })
+        .toBe(true)
+      await assertPageDoesNotScrollSideways(page, `detail at ${width}px`)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  await open.click()
+  await expect(page.getByTestId('edit-invoice')).toBeVisible()
+  // line-cost-non-negative reports the bare path line_items[2], so focus falls to the row's first input.
+  const first = page.getByTestId('line-row').nth(1).locator('[data-line-field="description"]')
+  await expect(first, 'line-row 2 first input takes focus').toBeFocused()
+  await expect(first, 'line-row 2 first input is in the viewport').toBeInViewport()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// The answer's 300-character unbroken token must wrap inside the table (D23); the line fix is the model's to propose.
+test('ENGI-17 detail: Explain proposes a line fix and Accept saves it', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = collectErrors(page)
+
+  const token = await login(PERSONAS.A)
+  const entity = await createEntity(token, { name: `ENGI-17 detail ${Date.now()}`, tin: freshTin() })
+  const marker = steerExplainMarker({
+    explanation: 'Line 2 has a unit price of -5.00, but a unit price cannot be negative. ' + 'x'.repeat(300),
+    fix_field: 'unit_price',
+    fix_value: '5.00',
+  })
+  const inv = await createInvoice(token, {
+    entity_id: entity.id,
+    ...cleanInvoiceFields(`INV-ENGI17-${Date.now()}`),
+    subtotal: '100',
+    vat: '7.50',
+    total: '107.50',
+    line_items: [
+      { description: 'Widget A', quantity: '1', unit_price: '105.00', line_total: '105.00' },
+      { description: 'Widget B', quantity: '1', unit_price: '-5.00', line_total: '-5.00' },
+      { description: marker, quantity: '1', unit_price: '0.00', line_total: '0.00' },
+    ],
+  })
+  const before = (await getInvoice(token, inv.id)).line_items!
+
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/invoices/${inv.id}` })
+  await expect(page.getByTestId('invoice-detail')).toBeVisible()
+  await page.getByTestId('revalidate').click()
+
+  const violations = page.getByTestId('violations-table')
+  const row = violations.locator('tr').filter({ hasText: 'line-cost-non-negative' }).filter({ has: page.getByTestId('violation-explain') })
+  const explain = row.getByTestId('violation-explain')
+  await expect(explain).toBeVisible()
+  await explain.click()
+
+  const panel = violations.getByTestId('explain-panel')
+  await expect(panel.getByTestId('explain-text')).toContainText('cannot be negative')
+  await expect(panel.getByTestId('explain-fix')).toHaveText('Line 2 · Unit price: -5.00 → 5.00')
+
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 900 })
+      const cell = explain.locator('xpath=ancestor::td[1]')
+      await settleAnimations(cell, explain, violations, panel)
+      await expect
+        .poll(async () => enclosesRect((await cell.boundingBox())!, (await explain.boundingBox())!, 1), {
+          message: `violation-explain sits inside its table cell at ${width}px`,
+        })
+        .toBe(true)
+      await expect
+        .poll(async () => enclosesRect((await violations.boundingBox())!, (await panel.boundingBox())!, 1), {
+          message: `explain-panel sits inside violations-table at ${width}px`,
+        })
+        .toBe(true)
+      await assertPageDoesNotScrollSideways(page, `detail at ${width}px`)
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+
+  await panel.getByTestId('explain-accept').click()
+  await expect(page.getByTestId('stale-verdict')).toBeVisible()
+
+  await expect
+    .poll(async () => (await getInvoice(token, inv.id)).line_items![1].unit_price, { message: 'line 2 unit_price saved' })
+    .toMatch(/^5(\.0+)?$/)
+  const after = (await getInvoice(token, inv.id)).line_items!
+  expect(after, 'still three lines').toHaveLength(3)
+  // Edit re-inserts the lines, so row ids change; every other field must survive.
+  const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+  expect(withoutId(after[0]), 'line 1 unchanged').toEqual(withoutId(before[0]))
+  expect(withoutId(after[2]), 'line 3 unchanged').toEqual(withoutId(before[2]))
+
+  await page.getByTestId('revalidate').click()
+  await expect(page.getByTestId('stale-verdict')).toBeHidden()
+  await expect
+    .poll(async () => (await getInvoice(token, inv.id)).violations.map((v) => v.rule_key), { message: 'the negative-line rule clears' })
+    .not.toContain('line-cost-non-negative')
+  await expect(page.getByTestId('violations-table')).not.toContainText('line-cost-non-negative')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ENGI-06 deployed proof: the create form and the editor capture the NRS fields.
+async function firstCode(token: string, list: string, q = ''): Promise<string> {
+  const { codes } = await searchCodes(token, list, { q, limit: 5 })
+  expect(codes.length, `${list} holds a code for "${q}"`).toBeGreaterThan(0)
+  return codes[0].code
+}
+
+// Types a code into a picker and waits until it committed: the code's datalist option shows once the picker holds it, and a blur reverts uncommitted text.
+async function pickCode(input: Locator, code: string): Promise<void> {
+  await input.fill(code)
+  await expect(input.locator(`xpath=following-sibling::datalist/option[@value="${code}"]`)).toBeAttached()
+  await input.press('Tab')
+  await expect(input, `pick ${code} survives a blur`).toHaveValue(code)
+}
+
+// The editor's header control under a label: the input itself, or the input a picker wraps.
+function editorHeader(form: Locator, label: string): Locator {
+  return form.locator(`xpath=.//div[normalize-space(text())="${label}"]/following-sibling::*[1]`).locator('xpath=self::input | .//input')
+}
+
+// The label the refusal names for each saved line NRS field (invoice fields list).
+const NRS_LINE_LABELS = [
+  ['tax_category', 'Tax category'],
+  ['hsn_code', 'HSN code'],
+  ['isic_code', 'ISIC code'],
+  ['product_category', 'Product category'],
+  ['service_category', 'Service category'],
+  ['sellers_item_identification', "Seller's item identification"],
+  ['price_unit', 'Price unit'],
+  ['tax_percent', 'Tax percent'],
+  ['base_quantity', 'Base quantity'],
+] as const
+
+const NRS_LINE_KEYS_E2E = NRS_LINE_LABELS.map(([key]) => key)
+
+type NrsFixture = {
+  token: string
+  entity: Awaited<ReturnType<typeof createEntity>>
+  lagosLga: string
+  abiaLga: string
+  hsCode: string
+  isicCode: string
+  unitCode: string
+}
+
+// A company with the 8 NRS supplier fields, and the code values the journeys pick.
+async function nrsFixture(label: string): Promise<NrsFixture> {
+  const token = await login(PERSONAS.A)
+  await codeListsReady(token)
+  const lagosLga = await firstCode(token, 'lgas', 'NG-LA')
+  const abiaLga = await firstCode(token, 'lgas', 'NG-AB')
+  const entity = await createEntity(token, {
+    name: `ENGI-06 ${label} ${Date.now()}`,
+    tin: freshTin(),
+    email: 'supplier@engi06.test',
+    telephone: '+2348000000006',
+    street: '6 Supplier Road',
+    city: 'Ikeja',
+    postal_zone: '100001',
+    country: 'NG',
+    state: 'NG-LA',
+    lga: lagosLga,
+  })
+  return {
+    token,
+    entity,
+    lagosLga,
+    abiaLga,
+    hsCode: await firstCode(token, 'hs-codes'),
+    isicCode: await firstCode(token, 'services-codes'),
+    unitCode: await firstCode(token, 'invoice-quantity-codes'),
+  }
+}
+
+async function openCreateForm(page: Page, entityName: string): Promise<void> {
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, entityName)
+  await page.locator('header').getByRole('button', { name: 'New invoice' }).click()
+  await page.getByRole('button', { name: 'Skip — enter manually' }).click()
+  await expect(page.getByPlaceholder('INV-0000-00000')).toBeVisible()
+}
+
+const createBuyerName = (page: Page) => page.locator('xpath=//div[normalize-space(text())="Buyer name"]/following-sibling::input')
+
+test('create surface: a manual invoice files every NRS field, pre-filled from the company and the directory', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const fx = await nrsFixture('create')
+  const { token, entity } = fx
+
+  // A filed B2B invoice fills the buyer directory (ENGI-05).
+  const buyerTin = freshBuyerTin()
+  await createInvoice(token, {
+    entity_id: entity.id,
+    invoice_number: `INV-ENGI06-DIR-${Date.now()}`,
+    buyer_tin: buyerTin,
+    buyer_name: 'Directory Buyer Ltd',
+    invoice_kind: 'B2B',
+    buyer_email: 'directory@buyer.test',
+    buyer_telephone: '+2348000000007',
+    buyer_street: '7 Buyer Street',
+    buyer_city: 'Lekki',
+    buyer_postal_zone: '101233',
+    buyer_country: 'NG',
+    buyer_state: 'NG-LA',
+    buyer_lga: fx.lagosLga,
+  })
+
+  await openCreateForm(page, entity.name)
+  const field = (label: string) => page.getByLabel(label, { exact: true })
+
+  // Supplier inputs hold the company's values, not just a note.
+  await expect(field('Supplier email')).toHaveValue('supplier@engi06.test')
+  await expect(field('Supplier telephone')).toHaveValue('+2348000000006')
+  await expect(field('Supplier street')).toHaveValue('6 Supplier Road')
+  await expect(field('Supplier city')).toHaveValue('Ikeja')
+  await expect(field('Supplier postal zone')).toHaveValue('100001')
+  await expect(field('Supplier country')).toHaveValue('NG')
+  await expect(field('Supplier state')).toHaveValue('NG-LA')
+  await expect(field('Supplier LGA')).toHaveValue(fx.lagosLga)
+
+  const invoiceNumber = `INV-ENGI06-CREATE-${Date.now()}`
+  await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
+
+  // The directory fills the buyer on a TIN blur; the buyer email is then overridden.
+  const lookup = page.waitForResponse((r) => r.url().includes('/api/invoice/v1/customers?tin='))
+  await page.getByPlaceholder('########-####').fill(buyerTin)
+  await page.getByPlaceholder('########-####').press('Tab')
+  await lookup
+  await expect(createBuyerName(page)).toHaveValue('Directory Buyer Ltd')
+  await expect(field('Invoice kind')).toHaveValue('B2B')
+  await expect(field('Buyer email')).toHaveValue('directory@buyer.test')
+  await expect(field('Buyer street')).toHaveValue('7 Buyer Street')
+  await expect(field('Buyer state')).toHaveValue('NG-LA')
+  await expect(field('Buyer LGA')).toHaveValue(fx.lagosLga)
+  await field('Buyer email').fill('override@buyer.test')
+  await pickCode(field('Buyer state'), 'NG-AB')
+  await pickCode(field('Buyer LGA'), fx.abiaLga)
+
+  // 2 x 500; with no category the VAT is the flat 7.5%.
+  await page.getByPlaceholder('Description').fill('Maize sacks')
+  await page.locator('main input[type=number]').nth(0).fill('2')
+  await page.locator('main input[type=number]').nth(1).fill('500')
+  const vatLabel = page.getByTestId('summary-vat').locator('xpath=preceding-sibling::span')
+  await expect(vatLabel).toHaveText('VAT · 7.5%')
+  await expect(page.getByTestId('summary-vat')).toHaveText('75.00')
+
+  await pickCode(field('Tax category 1'), 'STANDARD_VAT')
+  await expect(field('Tax percent 1'), 'the tax-category pick fills its percent').toHaveValue(/^7\.5/)
+  await pickCode(field('HSN code 1'), fx.hsCode)
+  await pickCode(field('Price unit 1'), fx.unitCode)
+  await field('Product category 1').fill('Grain')
+  await field("Seller's item identification 1").fill('SKU-ENGI06')
+  await expect(field('Base quantity 1')).toHaveValue('1')
+  await expect(page.getByTestId('draft-line-tax')).toHaveValue('75.00')
+  await expect(vatLabel, 'a categorised line drops the flat-rate label').toHaveText('VAT')
+  await expect(page.getByTestId('summary-vat')).toHaveText('75.00')
+  await expect(page.getByTestId('summary-total')).toHaveText('1075.00')
+
+  const created = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'))
+  await page.getByRole('button', { name: 'File invoice' }).click()
+  const { id } = (await (await created).json()) as { id: string }
+  await expect(page.getByTestId('invoice-detail')).toBeVisible({ timeout: 30_000 })
+
+  const stored = await getInvoice(token, id)
+  expect(stored).toMatchObject({
+    invoice_number: invoiceNumber,
+    invoice_kind: 'B2B',
+    buyer_tin: buyerTin,
+    buyer_name: 'Directory Buyer Ltd',
+    supplier_email: 'supplier@engi06.test',
+    supplier_telephone: '+2348000000006',
+    supplier_street: '6 Supplier Road',
+    supplier_city: 'Ikeja',
+    supplier_postal_zone: '100001',
+    supplier_country: 'NG',
+    supplier_state: 'NG-LA',
+    supplier_lga: fx.lagosLga,
+    buyer_email: 'override@buyer.test',
+    buyer_telephone: '+2348000000007',
+    buyer_street: '7 Buyer Street',
+    buyer_city: 'Lekki',
+    buyer_postal_zone: '101233',
+    buyer_country: 'NG',
+    buyer_state: 'NG-AB',
+    buyer_lga: fx.abiaLga,
+  })
+  // D13: a categorised line makes VAT the sum of the line taxes.
+  expect([stored.subtotal, stored.vat, stored.total].map(Number)).toEqual([1000, 75, 1075])
+  expect(stored.line_items).toHaveLength(1)
+  const line = stored.line_items![0]
+  expect(line).toMatchObject({
+    tax_category: 'STANDARD_VAT',
+    hsn_code: fx.hsCode,
+    price_unit: fx.unitCode,
+    product_category: 'Grain',
+    sellers_item_identification: 'SKU-ENGI06',
+    isic_code: null,
+    service_category: null,
+  })
+  // D12: the line tax is the line's share of the group tax at 7.5%.
+  expect([line.line_total, line.line_tax, line.tax_percent, line.base_quantity].map(Number)).toEqual([1000, 75, 7.5, 1])
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('create surface: a repeat invoice number keeps the NRS values', async ({ page }) => {
+  test.setTimeout(300_000)
+  // The 409 is the premise; the gate expects it from the create route only.
+  const errors = collectErrors(page, expectedStatusDropper(page, 409, /\/api\/invoice\/v1\/invoices$/))
+  const fx = await nrsFixture('repeat')
+  const invoiceNumber = `INV-ENGI06-DUP-${Date.now()}`
+  await createInvoice(fx.token, { entity_id: fx.entity.id, invoice_number: invoiceNumber })
+
+  await openCreateForm(page, fx.entity.name)
+  const field = (label: string) => page.getByLabel(label, { exact: true })
+  await page.getByPlaceholder('INV-0000-00000').fill(invoiceNumber)
+  await field('Buyer email').fill('keep@buyer.test')
+  await pickCode(field('Buyer state'), 'NG-AB')
+  await page.getByPlaceholder('Description').fill('Kept line')
+  await page.locator('main input[type=number]').nth(0).fill('1')
+  await page.locator('main input[type=number]').nth(1).fill('200')
+  await pickCode(field('Tax category 1'), 'STANDARD_VAT')
+  await pickCode(field('HSN code 1'), fx.hsCode)
+  await field('Product category 1').fill('Kept grain')
+
+  const values = () => page.locator('.pf-create-grid').locator('input, select').evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value))
+  const before = await values()
+  expect(before.filter((v) => v !== '').length, 'control: the form holds NRS values to lose').toBeGreaterThan(10)
+
+  const created = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname.endsWith('/api/invoice/v1/invoices'))
+  await page.getByRole('button', { name: 'File invoice' }).click()
+  expect((await created).status()).toBe(409)
+  // internal/invoice/handlers.go statusForErr: the 409 message, shown verbatim.
+  await expect(page.getByText('duplicate invoice number', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('invoice-detail'), 'the form stays; no detail opened').toHaveCount(0)
+  expect(await values(), 'every input keeps its value after the refusal').toEqual(before)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// A two-line draft with the nine NRS values on each line, filed by API.
+function nrsLines(fx: NrsFixture, count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    description: `Line ${i + 1} goods`,
+    quantity: '1',
+    unit_price: '100',
+    line_total: '100',
+    line_tax: '7.50',
+    tax_category: 'STANDARD_VAT',
+    hsn_code: fx.hsCode,
+    isic_code: fx.isicCode,
+    product_category: `Category ${i + 1}`,
+    service_category: `Service ${i + 1}`,
+    sellers_item_identification: `SKU-${i + 1}`,
+    price_unit: fx.unitCode,
+    tax_percent: '7.5',
+    base_quantity: '1',
+  }))
+}
+
+async function openEditor(page: Page, fx: NrsFixture, invoiceNumber: string): Promise<Locator> {
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
+  await selectEntity(page, fx.entity.name)
+  await goToInvoices(page)
+  await openInvoiceRow(page, invoiceNumber)
+  await page.getByTestId('edit-toggle').click()
+  const form = page.getByTestId('edit-invoice')
+  await expect(form).toBeVisible()
+  return form
+}
+
+test('detail surface: the editor edits NRS fields and keeps line fields across a save', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const fx = await nrsFixture('editor')
+  const invoiceNumber = `INV-ENGI06-EDIT-${Date.now()}`
+  const inv = await createInvoice(fx.token, {
+    entity_id: fx.entity.id,
+    invoice_number: invoiceNumber,
+    buyer_tin: freshBuyerTin(),
+    buyer_name: 'Editor Buyer Ltd',
+    invoice_kind: 'B2B',
+    buyer_state: 'NG-LA',
+    due_date: '2026-12-31T00:00:00Z',
+    subtotal: '200',
+    vat: '15',
+    total: '215',
+    line_items: nrsLines(fx, 2),
+  })
+  const before = (await getInvoice(fx.token, inv.id)).line_items!
+  expect(before, 'control: the fixture holds two lines with NRS values').toHaveLength(2)
+  expect(before[0].hsn_code).toBe(fx.hsCode)
+  expect((await getInvoice(fx.token, inv.id)).due_date, 'control: a due date to clear').not.toBeNull()
+
+  const patchCalls: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'PATCH' && new URL(r.url()).pathname.endsWith(`/invoices/${inv.id}`)) patchCalls.push(r.url())
+  })
+
+  const form = await openEditor(page, fx, invoiceNumber)
+  const rows = form.getByTestId('line-row')
+  await expect(rows).toHaveCount(2)
+  await expect(rows.nth(0).locator('[data-line-field="hsn_code"]'), 'the editor seeds a line NRS value').toHaveValue(fx.hsCode)
+
+  await rows.nth(1).locator('[data-line-field="description"]').fill('Line 2 renamed')
+  await pickCode(editorHeader(form, 'Buyer state'), 'NG-AB')
+  await editorHeader(form, 'Due date').fill('')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+  expect(patchCalls, 'one save, one PATCH').toHaveLength(1)
+
+  const after = await getInvoice(fx.token, inv.id)
+  expect(after.buyer_state).toBe('NG-AB')
+  expect(after.due_date, 'a cleared due date is stored as null').toBeNull()
+  expect(after.line_items!.map((l) => l.description)).toEqual(['Line 1 goods', 'Line 2 renamed'])
+  for (const [i, line] of after.line_items!.entries()) {
+    for (const key of NRS_LINE_KEYS_E2E) expect(line[key], `line ${i + 1} keeps ${key}`).toBe(before[i][key])
+  }
+
+  // D21: a saved line NRS field cannot be blanked, whichever of the nine it is; the refusal sends nothing.
+  // frontend/app/src/components/InvoiceDetail.tsx handleSubmit.
+  for (const [key, label] of NRS_LINE_LABELS) {
+    await page.getByTestId('edit-toggle').click()
+    const reopened = page.getByTestId('edit-invoice')
+    await reopened.getByTestId('line-row').nth(0).locator(`[data-line-field="${key}"]`).fill('')
+    await page.getByRole('button', { name: 'Save changes' }).click()
+    await expect(reopened, `blanking ${key} is refused in words`).toContainText(`Line 1: ${label} cannot be cleared once saved. Remove the line and add it again to start it blank.`)
+    await expect(reopened, 'the editor stays open').toBeVisible()
+    await reopened.getByTestId('edit-cancel').click()
+    await expect(reopened).toHaveCount(0)
+  }
+  expect(patchCalls, 'a refusal sends no PATCH').toHaveLength(1)
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('detail surface: remove and re-add starts a line blank', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const fx = await nrsFixture('readd')
+  const invoiceNumber = `INV-ENGI06-READD-${Date.now()}`
+  const inv = await createInvoice(fx.token, { entity_id: fx.entity.id, invoice_number: invoiceNumber, subtotal: '100', vat: '7.50', total: '107.50', line_items: nrsLines(fx, 1) })
+  const [original] = (await getInvoice(fx.token, inv.id)).line_items!
+  expect(original.hsn_code, 'control: the line starts with an HS code').toBe(fx.hsCode)
+
+  const form = await openEditor(page, fx, invoiceNumber)
+  await form.getByTestId('line-remove').click()
+  await form.getByTestId('line-add').click()
+  const row = form.getByTestId('line-row')
+  await expect(row).toHaveCount(1)
+  // The same legacy content as the removed line: the content match must not give the NRS values back.
+  await row.locator('[data-line-field="description"]').fill('Line 1 goods')
+  await row.locator('[data-line-field="quantity"]').fill('1')
+  await row.locator('[data-line-field="unit_price"]').fill('100')
+  await row.locator('[data-line-field="line_total"]').fill('100')
+  await row.locator('[data-line-field="line_tax"]').fill('7.50')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+  await expect(page.getByTestId('edit-invoice')).toHaveCount(0)
+
+  const lines = (await getInvoice(fx.token, inv.id)).line_items!
+  expect(lines).toHaveLength(1)
+  expect(lines[0].description).toBe('Line 1 goods')
+  expect(lines[0].hsn_code, 'a re-added line starts blank').toBeNull()
+  expect(lines[0].tax_category).toBeNull()
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('detail surface: a stale line id is refused in words', async ({ page }) => {
+  test.setTimeout(300_000)
+  const fx = await nrsFixture('stale')
+  const invoiceNumber = `INV-ENGI06-STALE-${Date.now()}`
+  const inv = await createInvoice(fx.token, { entity_id: fx.entity.id, invoice_number: invoiceNumber, line_items: nrsLines(fx, 2) })
+  // The 400 is the premise; the gate expects it from this invoice's PATCH only.
+  const errors = collectErrors(page, expectedStatusDropper(page, 400, new RegExp(`/api/invoice/v1/invoices/${inv.id}$`)))
+
+  const form = await openEditor(page, fx, invoiceNumber)
+  await expect(form.getByTestId('line-row')).toHaveCount(2)
+  // The lines are replaced elsewhere: id-less entries mint new ids.
+  await editInvoice(fx.token, inv.id, { line_items: [{ description: 'Replaced elsewhere', quantity: '1', unit_price: '5', line_total: '5' }] })
+  await form.getByTestId('line-row').nth(0).locator('[data-line-field="description"]').fill('Edited in the stale editor')
+  await page.getByRole('button', { name: 'Save changes' }).click()
+
+  // internal/invoice/handlers.go statusForErr: the 400 message, shown verbatim.
+  await expect(form).toContainText('line_items id must name a line of this invoice')
+  await expect(form, 'the editor stays open').toBeVisible()
+  await expect(form.getByTestId('line-row').nth(0).locator('[data-line-field="description"]'), 'the typed text stays').toHaveValue('Edited in the stale editor')
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('create surface: the NRS sections and line sub-rows fit at every wide width', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+  const fx = await nrsFixture('layout')
+
+  await openCreateForm(page, fx.entity.name)
+  await page.getByRole('button', { name: /Add line/ }).click()
+  await expect(page.getByTestId('draft-line-nrs')).toHaveCount(2)
+
+  const card = page.locator('.pf-create-grid > div').first()
+  const summary = page.locator('.pf-create-grid > div').nth(1)
+  const row0 = page.getByTestId('draft-line-nrs').nth(0).locator('xpath=..')
+  const row1 = page.getByTestId('draft-line-nrs').nth(1).locator('xpath=..')
+  const lineBox = row0.locator('xpath=..')
+  const controls = 'input, select, button'
+  const sweep = await dvSweepWide(page, async () => {
+    const r = await dvRead(
+      page,
+      { card, summary, lineBox, row0, row1 },
+      {
+        within: {
+          cardControls: { of: 'card', sel: 'input, select' },
+          row0Controls: { of: 'row0', sel: controls },
+          row1Controls: { of: 'row1', sel: controls },
+          row0Nrs: { of: 'row0', sel: '[data-testid="draft-line-nrs"] input' },
+        },
+      },
+    )
+    return { card: r.targets.card, lineBox: r.targets.lineBox, summary: r.targets.summary.rect, row0: r.targets.row0.rect, row1: r.targets.row1.rect, within: r.within }
+  })
+  await testInfo.attach('create-nrs-fit.json', { body: JSON.stringify(sweep, null, 2), contentType: 'application/json' })
+
+  for (const s of sweep) {
+    expect(s.card.scrollWidth, `the create card does not scroll sideways at ${s.width}px`).toBeLessThanOrEqual(s.card.clientWidth)
+    expect(s.lineBox.scrollWidth, `the create line box does not scroll sideways at ${s.width}px`).toBeLessThanOrEqual(s.lineBox.clientWidth)
+    expect(rectsOverlap(s.card.rect, s.summary), `the create card and the summary do not overlap at ${s.width}px`).toBe(false)
+    expect(s.within.row0Nrs.length, `the first sub-row holds controls at ${s.width}px`).toBeGreaterThan(0)
+    for (const [i, c] of s.within.cardControls.entries()) {
+      expect(enclosesRect(s.card.rect, c.rect, 1), `card control ${i} lies inside the card at ${s.width}px`).toBe(true)
+      for (const [j, other] of s.within.cardControls.entries()) {
+        if (j > i) expect(rectsOverlap(c.rect, other.rect), `card controls ${i} and ${j} do not overlap at ${s.width}px`).toBe(false)
+      }
+    }
+    for (const [name, row, list] of [['row0', s.row0, s.within.row0Controls], ['row1', s.row1, s.within.row1Controls]] as const) {
+      expect(enclosesRect(s.lineBox.rect, row, 1), `${name} lies inside the line box at ${s.width}px`).toBe(true)
+      expect(list.length, `${name} holds controls at ${s.width}px`).toBeGreaterThan(0)
+      for (const [i, c] of list.entries()) {
+        expect(enclosesRect(row, c.rect, 1), `${name} control ${i} lies inside its row at ${s.width}px`).toBe(true)
+        for (const [j, other] of list.entries()) {
+          if (j > i) expect(rectsOverlap(c.rect, other.rect), `${name} controls ${i} and ${j} do not overlap at ${s.width}px`).toBe(false)
+        }
+      }
+    }
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })

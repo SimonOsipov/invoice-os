@@ -472,7 +472,7 @@ func TestGetBatch_RowsInvalidAgreesWithErrorRowCount(t *testing.T) {
 		mkRow("", "2026-01-10", "T3", "B3", "NGN", "5.00", "0.00", "5.00", "Blank", "1", "5.00"),                 // sheet 5 -- blank invoice number
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -643,7 +643,7 @@ func TestImport_PersistedErrorsRoundTripInvoiceID(t *testing.T) {
 		mkRow("INV-RT-DUP", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item1", "1", "10.00"), // sheet 2
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}

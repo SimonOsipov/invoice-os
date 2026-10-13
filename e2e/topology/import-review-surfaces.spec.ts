@@ -5,14 +5,14 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { test, expect, type Locator, type Page, type Request, type Response, type TestInfo } from '@playwright/test'
-import { login, createEntity, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type Persona } from '../api/client'
+import { login, createEntity, createImportBatch, getInvoice, listInvoices, approveUntilClosed, firmApproverTokens, type ExtractionDetail, type Persona } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { approvalRun404Dropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { GATEWAY_URL, shardTenants } from './targets'
 import { signInAs } from '../personaSession'
-import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv } from '../importFixtures'
+import { buildAir07UnsteeredCsv, buildHeaderOnlyCsv, buildMixedCsv, steerExplainMarker } from '../importFixtures'
 
 const SHARD = shardTenants('import-review-surfaces.spec.ts')
 const GATEWAY_ORIGIN = new URL(GATEWAY_URL).origin
@@ -632,7 +632,7 @@ test.describe('RESKIN2-04 v2 create, progress and review at 1440', () => {
             return {
               head: [...head.children].map((c) => c.getBoundingClientRect().left),
               rows: rows.map((row) => ({
-                lefts: [...row.children].map((c) => c.getBoundingClientRect().left),
+                lefts: [...row.children].filter((c) => c.getAttribute('data-testid') !== 'draft-line-nrs').map((c) => c.getBoundingClientRect().left),
                 box: rect(row),
                 remove: rect(row.querySelector('button[aria-label^="Remove line"]') as Element),
                 scrollWidth: row.scrollWidth,
@@ -1137,6 +1137,175 @@ test.describe('RESKIN2-04 v2 extraction review at 1440', () => {
     } finally {
       await page.unroute(DETAIL_GLOB)
     }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('RX-04: a rule break reads like its inconsistent sibling on the deployed build', async ({ page }) => {
+    test.setTimeout(420_000)
+    const errors = collectErrors(page)
+
+    await extractOneDocument(page, 'ENGI-18 rule break')
+    // Read-side only: total becomes a rule break (extraction.ReasonRuleBreak); subtotal stays inconsistent.
+    const MESSAGE = Array.from({ length: 50 }, (_, i) => `rule${i}`).join(' ').slice(0, 300).trimEnd()
+    const DETAIL_GLOB = /\/api\/submission\/v1\/extractions\/[0-9a-fA-F-]{36}$/
+    await page.route(DETAIL_GLOB, async (route) => {
+      if (route.request().method() !== 'GET') return route.continue()
+      const response = await route.fetch()
+      const body = (await response.json()) as ExtractionDetail
+      const fields = body.fields.map((f) =>
+        f.name === 'total' ? { ...f, reason: 'rule_break', rules: [{ key: 'total_sum', message: MESSAGE }] } : f,
+      )
+      await route.fulfill({ response, json: { ...body, fields } })
+    })
+    try {
+      await openExtractionReview(page)
+
+      const cell = page.getByTestId('extraction-field-total')
+      const pill = cell.getByText('BREAKS A RULE', { exact: true })
+      const sibling = page.getByTestId('extraction-field-subtotal').getByText("DOESN'T ADD UP", { exact: true })
+      await expect(pill, 'the rule break must draw its pill').toBeVisible({ timeout: 60_000 })
+      await expect(sibling, 'the inconsistent sibling must keep its pill').toBeVisible()
+
+      const look = (loc: Locator) =>
+        loc.evaluate((el) => {
+          const cs = getComputedStyle(el)
+          return { color: cs.color, background: cs.backgroundColor, border: cs.borderTopColor, fontSize: cs.fontSize }
+        })
+      expect(await look(pill), 'the rule-break pill is styled apart from its inconsistent sibling').toEqual(await look(sibling))
+
+      const note = cell.getByText(MESSAGE, { exact: true })
+      await expect(note, 'the note must carry the whole rule message').toBeVisible()
+      const noteBox = (await note.boundingBox())!
+      const cellBox = (await cell.boundingBox())!
+      expect(noteBox.x + noteBox.width, 'the note spills out of its cell').toBeLessThanOrEqual(cellBox.x + cellBox.width + 0.5)
+      const scroll = await cell.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+      expect(scroll.scrollWidth, 'the cell scrolls sideways').toBeLessThanOrEqual(scroll.clientWidth)
+
+      expect(await page.getByTestId('extraction-fields').innerText(), 'the raw code reached the screen').not.toContain('rule_break')
+    } finally {
+      await page.unroute(DETAIL_GLOB)
+    }
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
+test.describe('ENGI-16 import review opens the editor at the line', () => {
+  test.use({ viewport: { width: 1440, height: 900 } })
+
+  test('ENGI-16 review: Open line 2 lands on the line in the editor', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `ENGI-16 review ${Date.now()}`, tin: freshTin() })
+    const invoiceNumber = `INV-ENGI16-${Date.now()}`
+    const batchId = await createImportBatch(token, entity.id, invoiceNumber, [
+      { item: 'Widget A', qty: '1', unitPrice: '100.00' },
+      { item: 'Widget B', qty: '1', unitPrice: '-5.00' },
+    ])
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${batchId}/review` })
+    const row = page.getByTestId('review-row').filter({ hasText: invoiceNumber })
+    await expect(row).toBeVisible({ timeout: 60_000 })
+    await row.click()
+
+    const open = page.getByTestId('review-fix-open-line').filter({ hasText: 'Open line 2' })
+    await expect(open).toBeVisible()
+    const card = page.getByTestId('review-fix-card').filter({ has: open })
+
+    const entry = page.viewportSize()
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await page.setViewportSize({ width, height: 900 })
+        await settleAnimations(card, open)
+        await expect
+          .poll(async () => enclosesRect((await card.boundingBox())!, (await open.boundingBox())!, 1), {
+            message: `review-fix-open-line sits inside its review-fix-card at ${width}px`,
+          })
+          .toBe(true)
+        await assertPageDoesNotScrollSideways(page, `review at ${width}px`)
+      }
+    } finally {
+      if (entry) await page.setViewportSize(entry)
+    }
+
+    await open.click()
+    await expect(page, 'Open line 2 leaves the review for the invoice').toHaveURL(/\/invoices\/[0-9a-f-]{36}$/)
+    await expect(page.getByTestId('edit-invoice')).toBeVisible()
+    // line-cost-non-negative reports the bare path line_items[2], so focus falls to the row's first input.
+    const first = page.getByTestId('line-row').nth(1).locator('[data-line-field="description"]')
+    await expect(first, 'line-row 2 first input takes focus').toBeFocused()
+    await expect(first, 'line-row 2 first input is in the viewport').toBeInViewport()
+
+    expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('ENGI-17 review: Explain proposes a line fix and Accept saves it', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = collectErrors(page)
+
+    const token = await login(PERSONAS.A)
+    const entity = await createEntity(token, { name: `ENGI-17 review ${Date.now()}`, tin: freshTin() })
+    const invoiceNumber = `INV-ENGI17-${Date.now()}`
+    const marker = steerExplainMarker({
+      explanation: 'Line 2 has a unit price of -5.00, but a unit price cannot be negative.',
+      fix_field: 'unit_price',
+      fix_value: '5.00',
+    })
+    const batchId = await createImportBatch(token, entity.id, invoiceNumber, [
+      { item: 'Widget A', qty: '1', unitPrice: '100.00' },
+      { item: marker, qty: '1', unitPrice: '-5.00' },
+    ])
+
+    await signInAs(page, 'firm', { tenantId: SHARD.a.id, path: `/imports/${batchId}/review` })
+    const row = page.getByTestId('review-row').filter({ hasText: invoiceNumber })
+    await expect(row).toBeVisible({ timeout: 60_000 })
+    await row.click()
+
+    const open = page.getByTestId('review-fix-open-line').filter({ hasText: 'Open line 2' })
+    const card = page.getByTestId('review-fix-card').filter({ has: open })
+    const explain = card.getByTestId('review-fix-explain')
+    await expect(explain).toBeVisible()
+    await explain.click()
+    const panel = card.getByTestId('explain-panel')
+    await expect(panel.getByTestId('explain-text')).toContainText('cannot be negative')
+
+    const entry = page.viewportSize()
+    try {
+      for (const width of WIDE_WIDTHS) {
+        await page.setViewportSize({ width, height: 900 })
+        await settleAnimations(card, explain, panel)
+        await expect
+          .poll(async () => enclosesRect((await card.boundingBox())!, (await explain.boundingBox())!, 1), {
+            message: `review-fix-explain sits inside its review-fix-card at ${width}px`,
+          })
+          .toBe(true)
+        await expect
+          .poll(async () => enclosesRect((await card.boundingBox())!, (await panel.boundingBox())!, 1), {
+            message: `explain-panel sits inside its review-fix-card at ${width}px`,
+          })
+          .toBe(true)
+        await assertPageDoesNotScrollSideways(page, `review at ${width}px`)
+      }
+    } finally {
+      if (entry) await page.setViewportSize(entry)
+    }
+
+    const found = (await listInvoices(token, { entity_id: entity.id })).invoices.find((i) => i.invoice_number === invoiceNumber)
+    expect(found, 'the import made the invoice').toBeDefined()
+    const before = (await getInvoice(token, found!.id)).line_items!
+
+    await panel.getByTestId('explain-accept').click()
+    await expect
+      .poll(async () => (await getInvoice(token, found!.id)).line_items![1].unit_price, { message: 'line 2 unit_price saved' })
+      .toMatch(/^5(\.0+)?$/)
+    const after = (await getInvoice(token, found!.id)).line_items!
+    expect(after, 'still two lines').toHaveLength(2)
+    // Edit re-inserts the lines, so row ids change; every other field must survive.
+    const withoutId = <T extends { id?: string }>({ id: _id, ...rest }: T) => rest
+    expect(withoutId(after[0]), 'line 1 unchanged').toEqual(withoutId(before[0]))
 
     expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
   })

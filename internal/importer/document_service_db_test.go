@@ -405,7 +405,7 @@ func TestServiceImportDocument_RuleSetVersionMarshalsToNullNotZeroDefault(t *tes
 		t.Fatalf("res.Status = %q, want completed (the clean-path precondition for this spec)", res.Status)
 	}
 	if res.RuleSetVersion != nil {
-		t.Errorf("RuleSetVersion = %v, want nil -- ImportDocument runs no gate (AC #6)", *res.RuleSetVersion)
+		t.Errorf("RuleSetVersion = %v, want nil (AC #6)", *res.RuleSetVersion)
 	}
 	if res.InvoicesClean != 0 || res.InvoicesWithViolations != 0 {
 		t.Errorf("InvoicesClean=%d InvoicesWithViolations=%d, want 0/0 (AC #6)", res.InvoicesClean, res.InvoicesWithViolations)
@@ -1287,7 +1287,7 @@ func e1InvoiceState(t *testing.T, super *pgxpool.Pool, documentID string) (numbe
 	return number, status, ruleSetVersionID
 }
 
-// T20 (E1-AC1, E1-AC2): a flagged number files a draft with no gate call, and the chip's
+// T20 (E1-AC1, E1-AC2): a flagged number files a draft with one read-only Evaluate and no ValidateBatch, and the chip's
 // rename path renames it while it stays a draft.
 func TestRLS_AFlaggedInvoiceNumberImportStaysADraftThatTheChipCanRename(t *testing.T) {
 	super, app := dbTestPools(t)
@@ -1314,8 +1314,8 @@ func TestRLS_AFlaggedInvoiceNumberImportStaysADraftThatTheChipCanRename(t *testi
 	if res.RuleSetVersion != nil {
 		t.Errorf("RuleSetVersion = %v, want nil", *res.RuleSetVersion)
 	}
-	if g.validateBatchCalls != 0 || g.evaluateCalls != 0 {
-		t.Errorf("gate calls ValidateBatch/Evaluate = %d/%d, want 0/0", g.validateBatchCalls, g.evaluateCalls)
+	if g.validateBatchCalls != 0 || g.evaluateCalls != 1 {
+		t.Errorf("gate calls ValidateBatch/Evaluate = %d/%d, want 0/1", g.validateBatchCalls, g.evaluateCalls)
 	}
 	number, status, rsv := e1InvoiceState(t, super, documentID)
 	if number != "INV-E1-01" || status != string(invoice.StatusDraft) || rsv != nil {
@@ -1390,8 +1390,8 @@ func TestRLS_ADocumentImportHoldsEveryDraftWhateverTheReason(t *testing.T) {
 			if res.ReadyInvoices != 1 || res.RuleSetVersion != nil {
 				t.Errorf("ReadyInvoices = %d, RuleSetVersion = %v, want 1 and nil", res.ReadyInvoices, res.RuleSetVersion)
 			}
-			if g.validateBatchCalls != 0 || g.evaluateCalls != 0 {
-				t.Errorf("gate calls ValidateBatch/Evaluate = %d/%d, want 0/0", g.validateBatchCalls, g.evaluateCalls)
+			if g.validateBatchCalls != 0 || g.evaluateCalls != 1 {
+				t.Errorf("gate calls ValidateBatch/Evaluate = %d/%d, want 0/1", g.validateBatchCalls, g.evaluateCalls)
 			}
 			number, status, rsv := e1InvoiceState(t, super, documentID)
 			if number != want || status != string(invoice.StatusDraft) || rsv != nil {
@@ -1424,5 +1424,65 @@ func TestRLS_ImportDocumentBatchHasNoHeaderRow(t *testing.T) {
 	}
 	if headerRow != nil {
 		t.Errorf("header_row = %d, want NULL for a document import", *headerRow)
+	}
+}
+
+// --- NRS-field document reading ---
+
+// ndStoredNewFields reads back the new columns of one invoice and its first line.
+func ndStoredNewFields(t *testing.T, super *pgxpool.Pool, invoiceID string) (due, email, state, hsn *string) {
+	t.Helper()
+	if err := super.QueryRow(context.Background(),
+		`SELECT i.due_date::text, i.buyer_email, i.buyer_state, l.hsn_code
+		   FROM invoices i JOIN line_items l ON l.invoice_id = i.id AND l.line_no = 1
+		  WHERE i.id = $1`, invoiceID).Scan(&due, &email, &state, &hsn); err != nil {
+		t.Fatalf("read new columns: %v", err)
+	}
+	return due, email, state, hsn
+}
+
+func TestRLS_ADocumentImportStoresTheNewFields(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "ND-01 tenant")
+	entityID := seedEntity(t, super, tenantID, "ND-01 entity")
+	documentID := docSeedDocument(t, super, tenantID)
+	values := docCleanValues("ND-01-INV")
+	values["due_date"] = sxPtr("2026-08-13")
+	values["buyer_email"] = sxPtr("buyer@example.ng")
+	values["line_items[1].description"] = sxPtr("Widget")
+	values["line_items[1].hsn_code"] = sxPtr("8471.30")
+	docSeedExtraction(t, super, tenantID, documentID, values)
+
+	if _, err := newTestService(app).ImportDocument(sxIdentity(ctx, tenantID), entityID, documentID); err != nil {
+		t.Fatalf("ImportDocument: %v", err)
+	}
+	due, email, state, hsn := ndStoredNewFields(t, super, invoiceIDByNumber(t, super, entityID, "ND-01-INV"))
+	if due == nil || *due != "2026-08-13" || email == nil || *email != "buyer@example.ng" || hsn == nil || *hsn != "8471.30" {
+		t.Errorf("stored due_date/buyer_email/hsn_code = %v/%v/%v, want 2026-08-13/buyer@example.ng/8471.30", due, email, hsn)
+	}
+	if state != nil {
+		t.Errorf("buyer_state = %q, want NULL (not read)", *state)
+	}
+}
+
+func TestRLS_ASuppliedNumberFilesTheNewFields(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenantID := seedTenant(t, super, "ND-02 tenant")
+	entityID := seedEntity(t, super, tenantID, "ND-02 entity")
+	documentID := docSeedDocument(t, super, tenantID)
+	values := docNoNumberValues()
+	values["due_date"] = sxPtr("2026-08-13")
+	values["line_items[1].description"] = sxPtr("Widget")
+	docSeedExtraction(t, super, tenantID, documentID, values)
+
+	inv, err := newTestServiceWithGate(app, &fakeGate{}).SupplyInvoiceNumber(sxIdentity(ctx, tenantID), entityID, documentID, "ND-02-INV")
+	if err != nil {
+		t.Fatalf("SupplyInvoiceNumber: %v", err)
+	}
+	due, _, _, _ := ndStoredNewFields(t, super, inv.ID)
+	if due == nil || *due != "2026-08-13" {
+		t.Errorf("stored due_date = %v, want 2026-08-13", due)
 	}
 }

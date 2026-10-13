@@ -26,7 +26,12 @@ Each object has exactly these keys. Each value is a string, or null when the row
 - quantity: the number of units, exactly as printed.
 - unit_price: the price of one unit, as digits with a decimal point and no currency symbol or thousands separators (1250.00).
 - line_total: the row's own amount, same number format.
-- line_tax: the tax amount charged on this row, same number format. A tax rate (7.5%) is not a tax amount; when the row prints only a rate, line_tax is null.`
+- line_tax: the tax amount charged on this row, same number format. A tax rate (7.5%) is not a tax amount; when the row prints only a rate, line_tax is null.
+- tax_category: the row's tax category, exactly as printed (Standard, Zero-rated, Exempt). A tax rate or amount is not a category; when the row prints only a rate, tax_category is null.
+- hsn_code: the row's HS goods code, exactly as printed.
+- isic_code: the row's ISIC service code, exactly as printed.
+- sellers_item_identification: the seller's own item code or SKU for the row, exactly as printed. Not an HS or ISIC code.
+- price_unit: the unit the quantity is counted in (kg, pcs, hours), exactly as printed. Not a price.`
 
 // aiLinesSchema is the wrapped array schema run.py's LINES_SCHEMA sends: one line_items
 // property, an array of aiSchemaFor(LineRoles) objects.
@@ -48,7 +53,7 @@ func aiSchemaForLines() json.RawMessage {
 	return b
 }
 
-// AILine is one line_items row the AI answered: the five role cells, nil when the row prints
+// AILine is one line_items row the AI answered: the ten role cells, nil when the row prints
 // no value there -- absent and blank are one state, matching askAI's own blank filter.
 type AILine struct {
 	Description *string
@@ -56,6 +61,12 @@ type AILine struct {
 	UnitPrice   *string
 	LineTotal   *string
 	LineTax     *string
+
+	TaxCategory *string
+	HSNCode     *string
+	ISICCode    *string
+	SellersItem *string
+	PriceUnit   *string
 }
 
 // askAILines asks once for the document's line items. The bool reports a failed call
@@ -125,5 +136,10 @@ func aiLineFrom(elem any) (AILine, bool) {
 		UnitPrice:   cells[LineRoleUnitPrice],
 		LineTotal:   cells[LineRoleLineTotal],
 		LineTax:     cells[LineRoleLineTax],
+		TaxCategory: cells[LineRoleTaxCategory],
+		HSNCode:     cells[LineRoleHSNCode],
+		ISICCode:    cells[LineRoleISICCode],
+		SellersItem: cells[LineRoleSellersItemID],
+		PriceUnit:   cells[LineRolePriceUnit],
 	}, true
 }

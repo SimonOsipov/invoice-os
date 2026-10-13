@@ -94,7 +94,7 @@ func TestReconcile_AFoundTotalIsCountedOnceByTheFlaggedCount(t *testing.T) {
 	without := Reconcile(Input{Candidates: cands})
 	with := Reconcile(Input{Candidates: cands, Pages: pages})
 
-	const wantFloor = 8 // 7 missing header fields (every non-money member) + line_items missing
+	const wantFloor = 17 // 16 missing header fields (every non-money member) + line_items missing
 	if got := flaggedCount(without); got != wantFloor {
 		t.Fatalf("flaggedCount(without Pages) = %d, want %d -- the delta below was measured off a wrong floor", got, wantFloor)
 	}

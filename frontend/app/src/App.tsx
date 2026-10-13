@@ -13,12 +13,13 @@ import { AuditExportToast } from './components/AuditExportToast'
 import { HANDOFF_PARAM, InviteRefusedError, createOwnWorkspace, isJoinOffer, isLiveHandoffSession, joinInvite, readHandoffCode, redeemHandoff, type JoinOffer } from './lib/sessionHandoff'
 import { ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import { isPromiseLike, makeAuthedFetch } from './lib/authedFetch'
-import { buildClients, resolveActiveClient, startingDraft } from './lib/clients'
+import { buildClients, draftLine, resolveActiveClient, startingDraft } from './lib/clients'
 import { clientsViewState, listEntities, shouldFetchEntities, type Entity } from './lib/portfolio'
-import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber } from './lib/invoiceDraft'
+import { fileDraftGate, fileDraftInvoice, fileSuppliedNumber, withSupplierDefaults } from './lib/invoiceDraft'
 import { createInvoice, listInvoices } from './lib/invoices'
 import { reviewQuery } from './lib/reviewBatch'
 import { parseLocation, reviewNavIds, routePath, routeQuery, routeUrl, type RouteParams } from './lib/route'
+import type { LineTarget } from './lib/validationApi'
 import { canSubmitMapping, toImportMapping } from './lib/mapping'
 import { initialConnectors } from './lib/connectors'
 import {
@@ -43,6 +44,7 @@ import type { DocumentRowState } from './lib/documentRun'
 import {
   canSubmitAllMappings,
   checkGroups,
+  defaultInvoiceKindFor,
   groupByLayout,
   groupOfFile,
   rememberMapping,
@@ -50,6 +52,7 @@ import {
   returnToAutomatic,
   splitOut,
   suggestGroups,
+  type InvoiceKind,
   type MappingGroup,
 } from './lib/mappingGroups'
 import {
@@ -77,16 +80,6 @@ import {
   type MemberStatus,
   type MembershipWire,
 } from './lib/members'
-import {
-  addSuggested,
-  customRulesFor,
-  customRulesKey,
-  removeCustom,
-  toggleCustom,
-  type CustomRule,
-  type CustomRuleStore,
-  type Suggestion,
-} from './lib/rules'
 import {
   addRole,
   createStaffedRole,
@@ -133,6 +126,7 @@ import type {
   ConnectorsState,
   CreateStep,
   Draft,
+  DraftLineNRSKey,
   FieldMapRow,
   Mapping,
   Mode,
@@ -209,6 +203,12 @@ function SuspendedNotice({ onSignOut }: { onSignOut: () => void }) {
       </div>
     </div>
   )
+}
+
+// A fresh draft with the company's supplier details filled in.
+const seedDraft = (client: Client, entity: Entity | null, handoff: boolean): Draft => {
+  const draft = startingDraft(client, handoff)
+  return entity === null ? draft : withSupplierDefaults(draft, entity)
 }
 
 // A half-built draft or a selected invoice cannot outlive its screen, so both collapse to
@@ -382,7 +382,11 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // A lazy initializer, not an effect that navigates on mount, for the same StrictMode
   // reason as the block above.
   const [view, setView] = useState<View>(bootView)
-  const [draft, setDraft] = useState<Draft>(() => startingDraft(active, session.handoff === true))
+  const [draft, setDraft] = useState<Draft>(() => seedDraft(active, activeEntity, session.handoff === true))
+  // An entity list that resolves after the seed still fills the blank supplier fields.
+  useEffect(() => {
+    if (activeEntity !== null) setDraft((d) => withSupplierDefaults(d, activeEntity))
+  }, [activeEntity?.id])
   // The document that produced no invoice, recorded by enterByHand so the invoice filed
   // instead keeps its provenance; handOffReading is its carried reading, if any. Cleared
   // wherever `draft` is reseeded -- it describes THIS draft, not the session.
@@ -411,6 +415,8 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   const [detailInvoiceId, setDetailInvoiceId] = useState<string | null>(
     bootView === 'detail' ? seed.invoiceId : null,
   )
+  // One-shot line target for the detail editor; InvoiceDetail reads it once at mount.
+  const [detailLine, setDetailLine] = useState<LineTarget | null>(null)
   // The "Open in Audit ->" hand-off. Both the WRITE and the CLEAR live here: a component
   // that clears the atom it seeds from can re-read the cleared value and drop the filter.
   const [auditPrefilter, setAuditPrefilter] = useState<AuditPrefilter | null>(() =>
@@ -436,15 +442,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // Field-mapping edits live at the workspace, not inside SettingsView, so a saved
   // mapping survives navigating away from Settings and back.
   const [connectorMappings, setConnectorMappings] = useState<ConnectorMappings>({})
-  // Custom validation rules, PER CLIENT (lib/rules.ts). Held here rather than in
-  // RulesView so a client's set survives navigating away and back, and so switching
-  // company genuinely swaps the set instead of carrying one client's rules over to
-  // the next. A client absent from the store has never been edited; only edited
-  // clients get an entry.
-  const [customRuleStore, setCustomRuleStore] = useState<CustomRuleStore>({})
   const [openRuleKey, setOpenRuleKey] = useState<string | null>(null)
-  const rulesKey = customRulesKey(active.entityId)
-  const customRules = customRulesFor(customRuleStore, rulesKey, session.handoff === true)
   // The tenant's approval policies — the `membersAsync` idiom below, verbatim except for
   // the mirror's guard. Per TENANT, so switching company does not swap the set.
   const policiesAsync = useAsync<Policy[]>(
@@ -658,6 +656,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
       const at = parseLocation(path, search)
       setView(availableView(at.view, mode))
       setDetailInvoiceId(at.invoiceId)
+      setDetailLine(null)
       setExtractionJobId(at.jobId)
       setEditingPolicyId(at.policyId)
       // History is one stack across identities, so a Company entry from an earlier in-house
@@ -771,8 +770,9 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     // Stamps the outgoing company for the same reason; benign, /'s clamp is a no-op.
     navigate('dashboard')
     setDetailInvoiceId(null)
+    setDetailLine(null)
     setSwitcherOpen(false)
-    setDraft(startingDraft(clients.find((c) => c.entityId === id) ?? active, session.handoff === true))
+    setDraft(seedDraft(clients.find((c) => c.entityId === id) ?? active, entitiesList.find((e) => e.id === id) ?? null, session.handoff === true))
     setHandOffDocumentId(null)
     setHandOffReading(null)
     handOffReadSeq.current += 1
@@ -817,7 +817,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     }
     navigate('create')
     setCreateStep('upload')
-    setDraft(startingDraft(active, session.handoff === true))
+    setDraft(seedDraft(active, activeEntity, session.handoff === true))
     setHandOffDocumentId(null)
     setHandOffReading(null)
     handOffReadSeq.current += 1
@@ -897,10 +897,21 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     }))
   }
 
+  function updateItemField(i: number, key: DraftLineNRSKey, value: string) {
+    setDraft((d) => ({
+      ...d,
+      items: d.items.map((it, idx) => (idx === i ? { ...it, [key]: value } : it)),
+    }))
+  }
+
+  function updateDraftFields(patch: Partial<Omit<Draft, 'items'>>) {
+    setDraft((d) => ({ ...d, ...patch }))
+  }
+
   // A blank line, not a copy of the last one: qty 1 is the only value that cannot silently
   // multiply a price the operator has not entered yet.
   function addItem() {
-    setDraft((d) => ({ ...d, items: [...d.items, { desc: '', qty: 1, price: 0 }] }))
+    setDraft((d) => ({ ...d, items: [...d.items, draftLine({ desc: '', qty: 1, price: 0 })] }))
   }
 
   // The form disables its remove control at one remaining line, so this never empties the
@@ -1174,6 +1185,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
                 mapping: toImportMapping(group.mapping),
                 rememberMapping: rememberMapping(group),
                 headerRow: group.headerRow,
+                defaultInvoiceKind: defaultInvoiceKindFor(group),
               },
               (phase) => {
                 localRun = runReducer(localRun, { type: 'phase', phase })
@@ -1350,6 +1362,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     setGroups((gs) => splitOut(gs, fileId))
   }
 
+  function setInvoiceKind(groupId: string, kind: InvoiceKind | undefined) {
+    setGroups((gs) => gs.map((g) => (g.id === groupId ? { ...g, invoiceKind: kind } : g)))
+  }
+
   function resetGroupToAutomatic() {
     setGroups((gs) => gs.map((g, i) => (i === groupIndex ? returnToAutomatic(g) : g)))
   }
@@ -1494,9 +1510,10 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
   // the create flow rather than given a variant: "the real detail screen showing the
   // server's own row" IS the whole affirmation that a filing succeeded, and a second route
   // into it is a second thing that can be wrong.
-  function openImportedInvoice(id: string) {
+  function openImportedInvoice(id: string, line?: LineTarget) {
     navigate('detail', { id })
     setDetailInvoiceId(id)
+    setDetailLine(line ?? null)
   }
 
   // Both setters in one handler, so the first render that sees view === 'audit' already
@@ -1541,28 +1558,6 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
 
   function closeRule() {
     setOpenRuleKey(null)
-  }
-
-  // All three custom-rule writers go through the same shape: resolve THIS client's
-  // list, run the pure reducer, store it back under this
-  // client's key. `rulesKey` is captured per render off `active`, so a write can
-  // never land on the company the switcher just left.
-  function updateCustomRules(fn: (rules: CustomRule[]) => CustomRule[]) {
-    setCustomRuleStore((store) => ({ ...store, [rulesKey]: fn(customRulesFor(store, rulesKey, session.handoff === true)) }))
-  }
-
-  function addSuggestedRule(s: Suggestion) {
-    updateCustomRules((rules) => addSuggested(rules, s))
-  }
-
-  function toggleCustomRule(key: string) {
-    updateCustomRules((rules) => toggleCustom(rules, key))
-  }
-
-  function removeCustomRule(key: string) {
-    updateCustomRules((rules) => removeCustom(rules, key))
-    // The drawer is showing the rule that just stopped existing.
-    setOpenRuleKey((k) => (k === key ? null : k))
   }
 
   function openPolicy(id: string) {
@@ -1699,7 +1694,6 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     filing,
     filingError,
     handOffReading,
-    customRules,
     openRuleKey,
     policies,
     policiesState,
@@ -1729,6 +1723,8 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     reviewBatchIds,
     adoptBatchClient,
     importedInvoiceId: detailInvoiceId,
+    importedInvoiceLine: detailLine,
+    consumeImportedInvoiceLine: () => setDetailLine(null),
     auditPrefilter,
     extractionJobId,
     nav,
@@ -1741,6 +1737,8 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     updateDraft,
     updateItem,
     updateItemDesc,
+    updateItemField,
+    updateDraftFields,
     addItem,
     removeItem,
     armField,
@@ -1756,6 +1754,7 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     startDocumentRun,
     splitOutFile,
     resetGroupToAutomatic,
+    setInvoiceKind,
     backToImport,
     restartImport,
     skipUpload,
@@ -1771,9 +1770,6 @@ function Workspace({ session, onSignOut, freshToken, onUnauthorized }: {
     saveConnectorMapping,
     openRule,
     closeRule,
-    addSuggestedRule,
-    toggleCustomRule,
-    removeCustomRule,
     openPolicy,
     closePolicy,
     createPolicy,

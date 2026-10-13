@@ -592,7 +592,7 @@ func TestSubmitGate_RoleBeforeStatus(t *testing.T) {
 	// both wrong answers for a preparer, and both must become the role sentence.
 	for _, s := range []Status{StatusDraft, StatusRejected, StatusQueued, StatusAccepted} {
 		t.Run(string(s), func(t *testing.T) {
-			can, reason := submitGate(s, "preparer", true)
+			can, reason := submitGate(s, "preparer", true, false)
 			if can {
 				t.Error("can = true for a preparer, want false")
 			}
@@ -659,7 +659,7 @@ func TestSubmitGate_AdminAndReviewerUnchanged(t *testing.T) {
 				if !ok {
 					t.Fatalf("no oracle entry for status %q", s)
 				}
-				can, reason := submitGate(s, role, true)
+				can, reason := submitGate(s, role, true, false)
 				assertSubmitGateRow(t, w, can, reason)
 			})
 		}

@@ -472,6 +472,12 @@ func newInvoiceLineItemsApplier(edit invoiceFieldEdit) extraction.ApplyLineItems
 				UnitPrice:   l.UnitPrice,
 				LineTotal:   l.LineTotal,
 				LineTax:     l.LineTax,
+
+				TaxCategory:               invoice.TrimmedOrNil(l.TaxCategory),
+				HSNCode:                   invoice.TrimmedOrNil(l.HSNCode),
+				ISICCode:                  invoice.TrimmedOrNil(l.ISICCode),
+				SellersItemIdentification: invoice.TrimmedOrNil(l.SellersItemIdentification),
+				PriceUnit:                 invoice.TrimmedOrNil(l.PriceUnit),
 			}
 		}
 		inv, err := edit(ctx, tx, documentID, invoice.EditInput{LineItems: &converted})
@@ -491,7 +497,7 @@ func newInvoiceLineItemsApplier(edit invoiceFieldEdit) extraction.ApplyLineItems
 
 // invoiceEditFor puts one corrected value on its own EditInput/UpdateInput member. It lives here
 // because internal/extraction cannot name invoice.EditInput; the handler has already refused
-// every field name this switch does not name, and issue_date arrives normalised to ISO
+// every field name this switch does not name, and issue_date/due_date arrive normalised to ISO
 // (TestNewInvoiceFieldApplier_MapsEachWritableFieldOntoItsColumn).
 //
 // A NIL value is an undo of a field the extractor never read: the column goes back to holding
@@ -500,16 +506,20 @@ func newInvoiceLineItemsApplier(edit invoiceFieldEdit) extraction.ApplyLineItems
 // way -- a number is never NULL -- so a nil there stays ErrValueRefused, unchanged.
 func invoiceEditFor(field string, value *string) (invoice.EditInput, error) {
 	var in invoice.UpdateInput
-	if field == "issue_date" {
+	if field == "issue_date" || field == "due_date" {
+		date := &in.IssueDate
+		if field == "due_date" {
+			date = &in.DueDate
+		}
 		switch {
 		case value == nil:
-			in.IssueDate = invoice.ClearDate
+			*date = invoice.ClearDate
 		default:
 			at, err := time.Parse(time.DateOnly, *value)
 			if err != nil {
-				return invoice.EditInput{}, fmt.Errorf("%w: issue_date %q", extraction.ErrValueRefused, *value)
+				return invoice.EditInput{}, fmt.Errorf("%w: %s %q", extraction.ErrValueRefused, field, *value)
 			}
-			in.IssueDate = &at
+			*date = &at
 		}
 		return invoice.EditInput{UpdateInput: in}, nil
 	}
@@ -538,6 +548,22 @@ func invoiceEditFor(field string, value *string) (invoice.EditInput, error) {
 		column = &in.VAT
 	case "total":
 		column = &in.Total
+	case "buyer_email":
+		column = &in.BuyerEmail
+	case "buyer_telephone":
+		column = &in.BuyerTelephone
+	case "buyer_street":
+		column = &in.BuyerStreet
+	case "buyer_city":
+		column = &in.BuyerCity
+	case "buyer_postal_zone":
+		column = &in.BuyerPostalZone
+	case "buyer_country":
+		column = &in.BuyerCountry
+	case "buyer_state":
+		column = &in.BuyerState
+	case "buyer_lga":
+		column = &in.BuyerLGA
 	default:
 		return invoice.EditInput{}, fmt.Errorf("%w: %q is not an invoice-writable field", extraction.ErrValueRefused, field)
 	}

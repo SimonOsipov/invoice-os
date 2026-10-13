@@ -275,7 +275,7 @@ func TestHistory_ErrorPathsIssueNoResolveQuery(t *testing.T) {
 }
 
 // TestHistory_WireShapeCarriesBothKeysNeverNull marshals what the handler
-// marshals (handlers.go:1235 writeJSON's the []StatusChange verbatim): six keys
+// marshals (HistoryHandler writeJSONs the []StatusChange verbatim): eight keys
 // per row, actor_name always a non-empty JSON string, actor_kind always one of
 // exactly three values. The Go-side fence under e2e/api/contract-invoice.spec.ts's
 // deployed assertion -- that one cannot run on a PR without the fleet.
@@ -307,7 +307,7 @@ func TestHistory_WireShapeCarriesBothKeysNeverNull(t *testing.T) {
 		t.Fatalf("the marshalled body carried %d rows, want 3", len(rows))
 	}
 
-	wantKeys := []string{"from_status", "to_status", "actor", "actor_name", "actor_kind", "changed_at"}
+	wantKeys := []string{"from_status", "to_status", "actor", "actor_name", "actor_kind", "changed_at", "cause", "custom_rule_cause"}
 	for i, row := range rows {
 		if len(row) != len(wantKeys) {
 			t.Errorf("row %d carries %d keys (%v), want exactly %v", i, len(row), row, wantKeys)

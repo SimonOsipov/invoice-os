@@ -1,4 +1,4 @@
-// Human labels for every audit event the Go tree emits: 44 identifiers across 10 domains.
+// Human labels for every audit event the Go tree emits: 48 identifiers across 11 domains.
 // auditVocabulary.test.ts scans audit.Record( call sites, so a new writer without a label
 // here fails the suite rather than rendering a raw identifier at the user.
 //
@@ -16,6 +16,7 @@ export type AuditDomain =
   | 'validation'
   | 'submissions'
   | 'reconciliation'
+  | 'customers'
 
 export type AuditOutcome = 'good' | 'bad' | 'neutral'
 export type AuditTone = 'green' | 'red' | 'amber' | null
@@ -73,6 +74,9 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
 
   'validation.rule.enabled': { label: 'Rule enabled', domain: 'validation' },
   'validation.rule.disabled': { label: 'Rule disabled', domain: 'validation' },
+  'custom_rule.created': { label: 'Custom rule created', domain: 'validation' },
+  'custom_rule.updated': { label: 'Custom rule updated', domain: 'validation' },
+  'custom_rule.deleted': { label: 'Custom rule deleted', domain: 'validation' },
 
   'submission.accepted': { label: 'Transmission accepted', domain: 'submissions', outcome: 'good' },
   'submission.rejected': { label: 'Transmission rejected', domain: 'submissions', outcome: 'bad' },
@@ -80,6 +84,8 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
 
   'reconciliation.drift_detected': { label: 'Drift detected', domain: 'reconciliation', outcome: 'neutral' },
   'reconciliation.auto_fixed': { label: 'Drift auto-corrected', domain: 'reconciliation', outcome: 'good' },
+
+  'customers.customer.updated': { label: 'Buyer updated', domain: 'customers' },
 }
 
 const TONE: Record<AuditOutcome, AuditTone> = { good: 'green', bad: 'red', neutral: 'amber' }

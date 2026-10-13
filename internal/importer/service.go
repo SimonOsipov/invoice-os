@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
+	"github.com/SimonOsipov/invoice-os/internal/invoicefields"
 )
 
 // BatchResult is Import's return shape, whether dry-run or real. For a
@@ -109,25 +110,68 @@ func NewService(batch *Store, inv *invoice.Store, g gate) *Service {
 	return &Service{batch: batch, inv: inv, gate: g}
 }
 
-// numericFields are the 5 canonical fields that get [numeric-normalization]
-// (ASCII grouping commas + surrounding whitespace stripped) before becoming a
-// CreateInput string. Every other canonical field is passed through verbatim.
-var numericFields = map[string]bool{
-	"subtotal":        true,
-	"vat":             true,
-	"total":           true,
-	"line_quantity":   true,
-	"line_unit_price": true,
+func isNumericType(t invoicefields.Type) bool {
+	return t == invoicefields.Money || t == invoicefields.Quantity || t == invoicefields.Percent
 }
 
-// headerFieldOrder is the set of canonical fields that must agree across
-// every row of one invoice_number group ([dedup]) — repeated per-invoice
-// header content, as opposed to per-line content. The order here is the
-// order in-file conflicts are detected in (first disagreeing field wins),
-// matching the Implementation Plan's own field listing.
-var headerFieldOrder = []string{
-	"issue_date", "buyer_tin", "buyer_name", "currency", "subtotal", "vat", "total",
+// numericImportKeys lists the money, quantity and percent import keys in field-list order
+// that pass keep.
+func numericImportKeys(keep func(invoicefields.Field) bool) []string {
+	var keys []string
+	for _, f := range invoicefields.All {
+		if f.Import && isNumericType(f.Type) && keep(f) {
+			keys = append(keys, f.ImportKey())
+		}
+	}
+	return keys
 }
+
+// Scan orders of commaDecimalField (all) and bestEffortBadNumericField (header, then line).
+var (
+	numericOrder       = numericImportKeys(func(invoicefields.Field) bool { return true })
+	headerNumericOrder = numericImportKeys(func(f invoicefields.Field) bool { return !f.Line })
+	lineNumericOrder   = numericImportKeys(func(f invoicefields.Field) bool { return f.Line })
+)
+
+// importFields maps each import key to its field, so cells are read by type.
+var importFields = func() map[string]invoicefields.Field {
+	m := map[string]invoicefields.Field{}
+	for _, f := range invoicefields.All {
+		if f.Import {
+			m[f.ImportKey()] = f
+		}
+	}
+	return m
+}()
+
+// dateOrder is the import Date keys in list order.
+var dateOrder = func() []string {
+	var keys []string
+	for _, f := range invoicefields.All {
+		if f.Import && f.Type == invoicefields.Date {
+			keys = append(keys, f.ImportKey())
+		}
+	}
+	return keys
+}()
+
+// numericRange is the digits a new numeric column holds: numeric(14,2) and numeric(14,3).
+var numericRange = map[string]struct{ intDigits, scale int }{
+	"line_total": {12, 2}, "line_tax": {12, 2}, "line_tax_percent": {12, 2}, "line_base_quantity": {11, 3},
+}
+
+// headerFieldOrder is the import header keys that must agree across every row of one
+// invoice_number group ([dedup]), in the order in-file conflicts are detected (first
+// disagreeing field wins).
+var headerFieldOrder = func() []string {
+	var keys []string
+	for _, f := range invoicefields.All {
+		if f.Import && !f.Line && f.Key != "invoice_number" {
+			keys = append(keys, f.Key)
+		}
+	}
+	return keys
+}()
 
 // decimalNumberRe is a best-effort "does this look like a plain decimal
 // number" check.
@@ -142,26 +186,20 @@ type invoiceGroup struct {
 }
 
 // canonicalFields is the closed set of column keys a mapping is allowed to
-// use -- the 11 fields Import actually understands. A mapping key outside
+// use -- the import fields (invoicefields.ImportKeys). A mapping key outside
 // this set (e.g. a typo like "totla") is rejected in resolveMapping, by
 // exact symmetry with the mapped-header-absent check just below
 // it: [mapping]'s guarantee is that the server structurally cannot mis-map,
 // which requires rejecting an unrecognized KEY just as firmly as it rejects
 // a mapped HEADER string that doesn't exist -- silently ignoring an unknown
 // key would import that canonical field as NULL with no error at all.
-var canonicalFields = map[string]bool{
-	"invoice_number":   true,
-	"issue_date":       true,
-	"buyer_tin":        true,
-	"buyer_name":       true,
-	"currency":         true,
-	"subtotal":         true,
-	"vat":              true,
-	"total":            true,
-	"line_description": true,
-	"line_quantity":    true,
-	"line_unit_price":  true,
-}
+var canonicalFields = func() map[string]bool {
+	m := make(map[string]bool, len(mappingFields))
+	for _, k := range mappingFields {
+		m[k] = true
+	}
+	return m
+}()
 
 // resolveMapping resolves mapping (canonical field -> header string) into
 // canonical field -> column index against header (first match). An
@@ -201,13 +239,40 @@ func normalizeNumeric(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// fieldValue reads field's raw cell from row via colIndex, normalizing it
-// first if field is one of the 5 numeric fields. Returns nil when the field
-// is not mapped at all (colIndex has no entry) or, for a numeric field, when
-// the normalized value is blank (an empty numeric cell means "no value", not
-// a literal empty string that would fail Postgres's ::numeric cast) — a
-// non-numeric field's blank cell is still returned as a pointer to "" (store-invalid-
-// faithfully; a blank string is valid TEXT content).
+// issueTimeShortRe matches the H:MM, HH:MM and H:MM:SS shapes that padIssueTime completes.
+var issueTimeShortRe = regexp.MustCompile(`^([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?$`)
+
+// padIssueTime completes H:MM, HH:MM and H:MM:SS to HH:MM:SS; any other shape is returned as is.
+func padIssueTime(s string) string {
+	m := issueTimeShortRe.FindStringSubmatch(s)
+	if m == nil {
+		return s
+	}
+	sec := m[3]
+	if sec == "" {
+		sec = "00"
+	}
+	return strings.Repeat("0", 2-len(m[1])) + m[1] + ":" + m[2] + ":" + sec
+}
+
+// normalizeCell reads a raw cell by its field's type. Text keeps the raw cell.
+func normalizeCell(field, raw string) string {
+	switch importFields[field].Type {
+	case invoicefields.Money, invoicefields.Quantity:
+		return normalizeNumeric(raw)
+	case invoicefields.Percent:
+		return normalizeNumeric(strings.TrimSuffix(strings.TrimSpace(raw), "%"))
+	case invoicefields.Code, invoicefields.Date:
+		return strings.TrimSpace(raw)
+	case invoicefields.Time:
+		return padIssueTime(strings.TrimSpace(raw))
+	}
+	return raw
+}
+
+// fieldValue reads field's cell from row via colIndex, normalized by type.
+// It returns nil when the field is unmapped or the cell is blank, except for
+// the five original Text keys, which keep a blank cell as "".
 func fieldValue(row []string, colIndex map[string]int, field string) *string {
 	idx, ok := colIndex[field]
 	if !ok {
@@ -217,50 +282,79 @@ func fieldValue(row []string, colIndex map[string]int, field string) *string {
 	if idx < len(row) {
 		v = row[idx]
 	}
-	if numericFields[field] {
-		v = normalizeNumeric(v)
-		if v == "" {
-			return nil
-		}
+	v = normalizeCell(field, v)
+	f := importFields[field]
+	if strings.TrimSpace(v) == "" && !(f.Type == invoicefields.Text && f.Lead) {
+		return nil
 	}
 	return &v
 }
 
-// parseIssueDate parses s (already the raw, un-normalized issue_date cell —
-// issue_date is not one of the 5 numeric fields) as the one canonical
-// YYYY-MM-DD date format this importer accepts. A blank (whitespace-only) s
-// is not an error: it returns (nil, nil), the faithful "they wrote nothing"
-// reading (store-invalid-faithfully). A NON-EMPTY s that fails to parse
-// returns (nil, err) — distinct from blank, so the classify step can tell
-// "wrote nothing" apart from "wrote something we can't understand" and
-// quarantine the latter (Core AC#7: silently NULLing a firm-written but
-// badly-formatted date would be an uncorrected-looking correction, and would
-// launder a "date format wrong" error into a misleading "date missing").
-func parseIssueDate(s string) (*time.Time, error) {
+// parseDate parses s as YYYY-MM-DD. A blank s is (nil, nil); a non-blank one
+// that fails is an error, so classify can quarantine it rather than NULL it.
+func parseDate(field, s string) (*time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, nil
 	}
 	t, err := time.Parse("2006-01-02", s)
 	if err != nil {
-		return nil, fmt.Errorf("issue_date %q is not in YYYY-MM-DD format", s)
+		return nil, fmt.Errorf("%s %q is not in YYYY-MM-DD format", field, s)
 	}
 	return &t, nil
 }
 
-// issueDateParseError reports the parse error (if any) for a group's
-// issue_date value, read off rowIdxs[0]. By the time classify calls this,
-// headerConflictField has already confirmed the group's rows agree on
-// issue_date (it's a header field), so checking the first row once is
-// sufficient. Returns nil when issue_date is unmapped, blank, or parses
-// cleanly.
-func issueDateParseError(rows [][]string, colIndex map[string]int, rowIdxs []int) error {
-	p := fieldValue(rows[rowIdxs[0]], colIndex, "issue_date")
-	if p == nil {
+// parseIssueDate is parseDate for issue_date; the document-reading import calls it too.
+func parseIssueDate(s string) (*time.Time, error) { return parseDate("issue_date", s) }
+
+// dateParseError reports the first import Date field (in dateOrder) whose first-row
+// cell is non-blank and unparseable. headerConflictField has already made the group's
+// header cells agree.
+func dateParseError(rows [][]string, colIndex map[string]int, rowIdxs []int) (string, error) {
+	for _, field := range dateOrder {
+		p := fieldValue(rows[rowIdxs[0]], colIndex, field)
+		if p == nil {
+			continue
+		}
+		if _, err := parseDate(field, *p); err != nil {
+			return field, err
+		}
+	}
+	return "", nil
+}
+
+// issueTimeError reports a non-blank issue_time that fails the API's own check.
+func issueTimeError(rows [][]string, colIndex map[string]int, rowIdxs []int) error {
+	p := fieldValue(rows[rowIdxs[0]], colIndex, "issue_time")
+	if p == nil || invoice.ValidIssueTime(*p) {
 		return nil
 	}
-	_, err := parseIssueDate(*p)
-	return err
+	return errors.New(invoice.IssueTimeMsg)
+}
+
+// exceedsRange reports whether the plain decimal v does not fit numericRange[field].
+// Leading zeros and trailing zero decimals do not count.
+func exceedsRange(field, v string) bool {
+	lim := numericRange[field]
+	whole, frac, _ := strings.Cut(strings.TrimPrefix(v, "-"), ".")
+	return len(strings.TrimLeft(whole, "0")) > lim.intDigits || len(strings.TrimRight(frac, "0")) > lim.scale
+}
+
+// numericRangeField returns the first new numeric line field with a value that
+// overflows its column on any row of the group, or "". It runs after the decimal check.
+func numericRangeField(rows [][]string, colIndex map[string]int, rowIdxs []int) string {
+	for _, field := range lineNumericOrder {
+		idx, ok := colIndex[field]
+		if _, limited := numericRange[field]; !ok || !limited {
+			continue
+		}
+		for _, ri := range rowIdxs {
+			if exceedsRange(field, cellAt(rows[ri], idx, field)) {
+				return field
+			}
+		}
+	}
+	return ""
 }
 
 // sheetRow converts a 0-based rows[] index into its 1-based file row.
@@ -302,30 +396,18 @@ func headerConflictField(rows [][]string, colIndex map[string]int, rowIdxs []int
 	return ""
 }
 
-// cellAt reads row[idx] (or "" if out of range), normalizing it if field is
-// numeric, or trimming surrounding whitespace if field is issue_date — a
-// shared helper for headerConflictField and bestEffortBadNumericField, which
-// both need the raw (not nil-on-blank) normalized string rather than
-// fieldValue's *string/nil-on-blank shape. issue_date's trim mirrors
-// parseIssueDate's own strings.TrimSpace: without it, "2026-01-10" and
-// " 2026-01-10 " in the same group would spuriously conflict in
-// headerConflictField despite parseIssueDate resolving them to the identical
-// stored date.
+// cellAt reads row[idx] (or "" if out of range), normalized by field type. It
+// serves headerConflictField and bestEffortBadNumericField, which need the
+// string even when blank.
 func cellAt(row []string, idx int, field string) string {
 	var v string
 	if idx < len(row) {
 		v = row[idx]
 	}
-	switch {
-	case numericFields[field]:
-		v = normalizeNumeric(v)
-	case field == "issue_date":
-		v = strings.TrimSpace(v)
-	}
-	return v
+	return normalizeCell(field, v)
 }
 
-// bestEffortBadNumericField scans the group's 5 numeric fields (header
+// bestEffortBadNumericField scans the group's numeric fields (header
 // fields off rowIdxs[0], line fields off every row), returning the FIRST
 // whose normalized value doesn't parse as a plain decimal number. It serves
 // two callers: (1) Import's classify step, where it is now authoritative —
@@ -334,16 +416,14 @@ func cellAt(row []string, idx int, field string) string {
 // numeric validity used to be deferred entirely to Postgres's ::numeric cast
 // at Create time, which a dry-run never reaches, so a non-numeric cell (e.g.
 // "N/A") wrongly reported READY in dry-run but quarantined for real. Checking
-// it here, in BOTH dry-run and real, closes that gap — mirroring how
-// issueDateParseError already quarantines a non-empty unparseable issue_date
-// at classify time rather than at Create; (2) Create's error path (Import,
+// it here, in BOTH dry-run and real, closes that gap; (2) Create's error path (Import,
 // below), where it is still a best-effort diagnostic: if Create returns
 // invoice.ErrValidation for a reason THIS scan didn't catch, its SQLSTATE
 // (22P02) doesn't itself disambiguate which column broke, so this gives
 // RowError.Field a best guess. Returns "" if no numeric field is clearly bad.
 func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs []int) string {
 	first := rows[rowIdxs[0]]
-	for _, field := range []string{"subtotal", "vat", "total"} {
+	for _, field := range headerNumericOrder {
 		idx, ok := colIndex[field]
 		if !ok {
 			continue
@@ -353,7 +433,7 @@ func bestEffortBadNumericField(rows [][]string, colIndex map[string]int, rowIdxs
 			return field
 		}
 	}
-	for _, field := range []string{"line_quantity", "line_unit_price"} {
+	for _, field := range lineNumericOrder {
 		idx, ok := colIndex[field]
 		if !ok {
 			continue
@@ -402,7 +482,7 @@ func isCommaDecimal(raw string) bool {
 // on any row of the group, or "". It reads raw cells: normalizeNumeric would
 // turn "12,50" into "1250" and hide it.
 func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) string {
-	for _, field := range []string{"subtotal", "vat", "total", "line_quantity", "line_unit_price"} {
+	for _, field := range numericOrder {
 		idx, ok := colIndex[field]
 		if !ok {
 			continue
@@ -417,25 +497,31 @@ func commaDecimalField(rows [][]string, colIndex map[string]int, rowIdxs []int) 
 }
 
 // buildCreateInput assembles one invoice.CreateInput for a READY group:
-// header fields (issue_date/buyer_tin/buyer_name/currency/subtotal/vat/total)
-// come from the group's first row (they agree across the group, by
+// header fields come from the group's first row (they agree across the group, by
 // classification); line items are one LineItemInput per row, in group (file)
 // order. supplierName/supplierTIN come from EntitySupplier
 // ([supplier-from-entity]); batchID is the ONE minted id for this whole
 // import run — the guardrail is trivially satisfied since Import never
 // accepts a caller-supplied batch id.
-func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, documentID string, headerRow int, supplierName string, supplierTIN *string) invoice.CreateInput {
+func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int, g *invoiceGroup, batchID, documentID string, headerRow int, supplierName string, supplierTIN *string, contact invoice.SupplierContact, defaultInvoiceKind string) invoice.CreateInput {
 	firstRow := rows[g.rowIdxs[0]]
 
-	issueDateStr := ""
-	if p := fieldValue(firstRow, colIndex, "issue_date"); p != nil {
-		issueDateStr = *p
+	// classify (dateParseError) already rejected any unparseable date, so a nil
+	// here is a blank cell.
+	date := func(field string) *time.Time {
+		p := fieldValue(firstRow, colIndex, field)
+		if p == nil {
+			return nil
+		}
+		t, _ := parseDate(field, *p)
+		return t
 	}
-	// classify (issueDateParseError) already rejected any non-empty,
-	// unparseable issue_date for this group before it ever reached
-	// readyGroups, so the error here is always nil — a blank cell (nil,
-	// nil) is the only remaining case, which is the correct NULL.
-	issueDate, _ := parseIssueDate(issueDateStr)
+	issueDate := date("issue_date")
+
+	kind := fieldValue(firstRow, colIndex, "invoice_kind")
+	if _, mapped := colIndex["invoice_kind"]; !mapped && defaultInvoiceKind != "" {
+		kind = &defaultInvoiceKind
+	}
 
 	in := invoice.CreateInput{
 		EntityID:      entityID,
@@ -450,6 +536,21 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 		VAT:           fieldValue(firstRow, colIndex, "vat"),
 		Total:         fieldValue(firstRow, colIndex, "total"),
 		ImportBatchID: &batchID,
+
+		InvoiceKind:     kind,
+		TaxCurrencyCode: fieldValue(firstRow, colIndex, "tax_currency_code"),
+		DueDate:         date("due_date"),
+		IssueTime:       fieldValue(firstRow, colIndex, "issue_time"),
+		TaxPointDate:    date("tax_point_date"),
+		PaymentStatus:   fieldValue(firstRow, colIndex, "payment_status"),
+		BuyerEmail:      fieldValue(firstRow, colIndex, "buyer_email"),
+		BuyerTelephone:  fieldValue(firstRow, colIndex, "buyer_telephone"),
+		BuyerStreet:     fieldValue(firstRow, colIndex, "buyer_street"),
+		BuyerCity:       fieldValue(firstRow, colIndex, "buyer_city"),
+		BuyerPostalZone: fieldValue(firstRow, colIndex, "buyer_postal_zone"),
+		BuyerCountry:    fieldValue(firstRow, colIndex, "buyer_country"),
+		BuyerState:      fieldValue(firstRow, colIndex, "buyer_state"),
+		BuyerLGA:        fieldValue(firstRow, colIndex, "buyer_lga"),
 	}
 	// Nil, not &"": source_document_id is a uuid column, so "" is a 22P02.
 	// SourceRows belongs INSIDE this guard: source_rows without a document
@@ -465,8 +566,21 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 			Description: fieldValue(row, colIndex, "line_description"),
 			Quantity:    fieldValue(row, colIndex, "line_quantity"),
 			UnitPrice:   fieldValue(row, colIndex, "line_unit_price"),
+			LineTotal:   fieldValue(row, colIndex, "line_total"),
+			LineTax:     fieldValue(row, colIndex, "line_tax"),
+
+			TaxCategory:               fieldValue(row, colIndex, "line_tax_category"),
+			HSNCode:                   fieldValue(row, colIndex, "line_hsn_code"),
+			ISICCode:                  fieldValue(row, colIndex, "line_isic_code"),
+			ProductCategory:           fieldValue(row, colIndex, "line_product_category"),
+			ServiceCategory:           fieldValue(row, colIndex, "line_service_category"),
+			SellersItemIdentification: fieldValue(row, colIndex, "line_sellers_item_identification"),
+			PriceUnit:                 fieldValue(row, colIndex, "line_price_unit"),
+			TaxPercent:                fieldValue(row, colIndex, "line_tax_percent"),
+			BaseQuantity:              fieldValue(row, colIndex, "line_base_quantity"),
 		})
 	}
+	invoice.DefaultSupplierContact(&in, contact)
 	return in
 }
 
@@ -490,9 +604,8 @@ func buildCreateInput(entityID string, rows [][]string, colIndex map[string]int,
 // SAME id and fire that rule on every multi-line dry-run invoice.
 //
 // Status/Violations/RuleSetVersionID/CreatedAt are likewise left at their zero
-// value: MBSPayload reads none of them (it projects invoice_number, issue_date,
-// currency, the three money fields, supplier/buyer and line_items only), so a
-// dry-run needs no id and no persisted state to be evaluated faithfully.
+// value: MBSPayload reads none of them, so a dry-run needs no id and no
+// persisted state to be evaluated faithfully.
 //
 // KNOWN INCOMPLETENESS (recorded, deliberately NOT fixed -- Stage-1 F5), the
 // second of two on this path alongside M4-06's store-level duplicate rule,
@@ -530,6 +643,29 @@ func invoiceFromCreateInput(in invoice.CreateInput) invoice.Invoice {
 		Subtotal:      in.Subtotal,
 		VAT:           in.VAT,
 		Total:         in.Total,
+
+		InvoiceKind:        in.InvoiceKind,
+		TaxCurrencyCode:    in.TaxCurrencyCode,
+		DueDate:            in.DueDate,
+		IssueTime:          in.IssueTime,
+		TaxPointDate:       in.TaxPointDate,
+		PaymentStatus:      in.PaymentStatus,
+		SupplierEmail:      in.SupplierEmail,
+		SupplierTelephone:  in.SupplierTelephone,
+		SupplierStreet:     in.SupplierStreet,
+		SupplierCity:       in.SupplierCity,
+		SupplierPostalZone: in.SupplierPostalZone,
+		SupplierCountry:    in.SupplierCountry,
+		SupplierState:      in.SupplierState,
+		SupplierLGA:        in.SupplierLGA,
+		BuyerEmail:         in.BuyerEmail,
+		BuyerTelephone:     in.BuyerTelephone,
+		BuyerStreet:        in.BuyerStreet,
+		BuyerCity:          in.BuyerCity,
+		BuyerPostalZone:    in.BuyerPostalZone,
+		BuyerCountry:       in.BuyerCountry,
+		BuyerState:         in.BuyerState,
+		BuyerLGA:           in.BuyerLGA,
 	}
 	for i, li := range in.LineItems {
 		inv.LineItems = append(inv.LineItems, invoice.LineItem{
@@ -539,6 +675,16 @@ func invoiceFromCreateInput(in invoice.CreateInput) invoice.Invoice {
 			UnitPrice:   li.UnitPrice,
 			LineTotal:   li.LineTotal,
 			LineTax:     li.LineTax,
+
+			TaxCategory:               li.TaxCategory,
+			HSNCode:                   li.HSNCode,
+			ISICCode:                  li.ISICCode,
+			ProductCategory:           li.ProductCategory,
+			ServiceCategory:           li.ServiceCategory,
+			SellersItemIdentification: li.SellersItemIdentification,
+			PriceUnit:                 li.PriceUnit,
+			TaxPercent:                li.TaxPercent,
+			BaseQuantity:              li.BaseQuantity,
 		})
 	}
 	return inv
@@ -611,7 +757,7 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 //     YYYY-MM-DD quarantines it too (RowError.Field "issue_date" -- Core
 //     AC#7: a badly-formatted date must never be silently NULLed, only a
 //     genuinely blank cell reads as NULL); else a non-empty numeric-mapped
-//     cell (subtotal/vat/total/line_quantity/line_unit_price) that doesn't
+//     cell that doesn't
 //     parse as a plain decimal quarantines it too (RowError.Field the
 //     offending field -- Core AC#2: dry-run must report the EXACT same
 //     verdict the real import produces, so numeric validity is checked HERE,
@@ -652,10 +798,13 @@ func domainCreateErrorMessage(createErr error) (msg string, ok bool) {
 //
 // headerRow is the file row the header was read from; every row number counts
 // from it.
-func (s *Service) Import(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool) (BatchResult, error) {
+func (s *Service) Import(ctx context.Context, entityID, filename, documentID string, headerRow int, mapping map[string]string, header []string, rows [][]string, dryRun bool, defaultInvoiceKind string) (BatchResult, error) {
 	colIndex, err := resolveMapping(mapping, header)
 	if err != nil {
 		return BatchResult{}, err
+	}
+	if _, mapped := colIndex["invoice_kind"]; mapped && defaultInvoiceKind != "" {
+		return BatchResult{}, fmt.Errorf("%w: default_invoice_kind cannot be set when invoice_kind is mapped", ErrValidation)
 	}
 
 	groups := map[string]*invoiceGroup{}
@@ -713,11 +862,21 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			invalidRows += len(g.rowIdxs)
 			continue
 		}
-		if dateErr := issueDateParseError(rows, colIndex, g.rowIdxs); dateErr != nil {
+		if field, dateErr := dateParseError(rows, colIndex, g.rowIdxs); dateErr != nil {
 			errorsList = append(errorsList, RowError{
 				Rows:    sheetRows(headerRow, g.rowIdxs),
-				Field:   "issue_date",
+				Field:   field,
 				Message: dateErr.Error(),
+			})
+			quarantinedInvoices++
+			invalidRows += len(g.rowIdxs)
+			continue
+		}
+		if timeErr := issueTimeError(rows, colIndex, g.rowIdxs); timeErr != nil {
+			errorsList = append(errorsList, RowError{
+				Rows:    sheetRows(headerRow, g.rowIdxs),
+				Field:   "issue_time",
+				Message: timeErr.Error(),
 			})
 			quarantinedInvoices++
 			invalidRows += len(g.rowIdxs)
@@ -728,6 +887,17 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 				Rows:    sheetRows(headerRow, g.rowIdxs),
 				Field:   field,
 				Message: fmt.Sprintf("%s is not a valid number", field),
+			})
+			quarantinedInvoices++
+			invalidRows += len(g.rowIdxs)
+			continue
+		}
+		if field := numericRangeField(rows, colIndex, g.rowIdxs); field != "" {
+			lim := numericRange[field]
+			errorsList = append(errorsList, RowError{
+				Rows:    sheetRows(headerRow, g.rowIdxs),
+				Field:   field,
+				Message: fmt.Sprintf("%s must have at most %d digits before the decimal point and %d after", field, lim.intDigits, lim.scale),
 			})
 			quarantinedInvoices++
 			invalidRows += len(g.rowIdxs)
@@ -751,7 +921,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		invalidRows++
 	}
 
-	supplierName, supplierTIN, err := s.batch.EntitySupplier(ctx, entityID)
+	supplierName, supplierTIN, supplierContact, err := s.batch.EntitySupplier(ctx, entityID)
 	if err != nil {
 		return BatchResult{}, err
 	}
@@ -806,7 +976,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 			// batchID is "" -- no batch exists on a dry-run and none is
 			// minted. MBSPayload never reads ImportBatchID, so it cannot
 			// reach 04 or affect a single verdict.
-			in := buildCreateInput(entityID, rows, colIndex, g, "", "", headerRow, supplierName, supplierTIN)
+			in := buildCreateInput(entityID, rows, colIndex, g, "", "", headerRow, supplierName, supplierTIN, supplierContact, defaultInvoiceKind)
 			// Ref is the invoice_number, not an id: no id exists yet
 			// pre-Create. 04 echoes Ref back untouched and never interprets
 			// it, and group numbers are unique by construction (groups is
@@ -891,7 +1061,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 
 	readyCount := 0
 	for _, g := range readyGroups {
-		in := buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, headerRow, supplierName, supplierTIN)
+		in := buildCreateInput(entityID, rows, colIndex, g, batchID, documentID, headerRow, supplierName, supplierTIN, supplierContact, defaultInvoiceKind)
 		inv, createErr := s.inv.Create(ctx, in)
 		if createErr == nil {
 			readyCount++
@@ -984,7 +1154,19 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		// in sync forever.
 		invoicesClean = outcome.Clean
 		invoicesWithViolations = outcome.WithViolations
+		unvalidated := make(map[string]bool, len(outcome.Unvalidated))
+		for _, id := range outcome.Unvalidated {
+			unvalidated[id] = true
+		}
 		for _, c := range created {
+			if unvalidated[c.inv.ID] {
+				errorsList = append(errorsList, RowError{
+					Rows:      sheetRows(headerRow, c.rowIdxs),
+					InvoiceID: c.inv.ID,
+					Message:   unvalidatedMessage,
+				})
+				continue
+			}
 			vs := outcome.ByID[c.inv.ID]
 			if len(vs) == 0 {
 				continue
@@ -1018,3 +1200,7 @@ func (s *Service) Import(ctx context.Context, entityID, filename, documentID str
 		InvoiceViolations:      invoiceViolations,
 	}, nil
 }
+
+// unvalidatedMessage is the row error of an invoice created as a draft whose rules changed twice during the
+// import. It carries the invoice id and no rule key; the SPA tells it from an unreadable row by that.
+const unvalidatedMessage = "invoice created as a draft but not validated: the validation rules changed during the import; validate it again"

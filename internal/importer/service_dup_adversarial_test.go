@@ -48,8 +48,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -231,7 +229,7 @@ func TestServiceImport_RaceBackstopLoserCountersIncrementByExactlyOne(t *testing
 			raceRow := [][]string{
 				mkRow("INV-ADV3-RACE", "2026-01-10", "TIN-RACE", "Racer", "NGN", "100.00", "0.00", "100.00", fmt.Sprintf("RaceItem%d", i), "1", "100.00"),
 			}
-			results[i], errs[i] = svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, raceRow, false)
+			results[i], errs[i] = svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, raceRow, false, "")
 		}(i)
 	}
 	close(start)
@@ -299,11 +297,10 @@ func TestServiceImport_StoreDuplicateNeverReachesGateEvaluation(t *testing.T) {
 
 	fg := &fakeGate{
 		validateBatchResult: invoice.BatchOutcome{
-			RuleSetVersion:   2,
-			RuleSetVersionID: uuid.NewString(),
-			Clean:            1,
-			WithViolations:   0,
-			ByID:             map[string][]invoice.Violation{},
+			RuleSetVersion: 2,
+			Clean:          1,
+			WithViolations: 0,
+			ByID:           map[string][]invoice.Violation{},
 		},
 	}
 	svc := newTestServiceWithGate(app, fg)
@@ -314,7 +311,7 @@ func TestServiceImport_StoreDuplicateNeverReachesGateEvaluation(t *testing.T) {
 		mkRow("INV-ADV4-CLEAN", "2026-01-11", "T2", "B2", "NGN", "20.00", "2.00", "22.00", "CleanItem", "1", "20.00"), // sheet 3
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -379,7 +376,7 @@ func TestServiceImport_NonContiguousMultiRowDuplicateGroupCitesAllRowsSorted(t *
 		mkRow("INV-ADV5-DUP", "2026-01-10", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "DupD", "1", "10.00"),      // sheet 8
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -435,7 +432,7 @@ func TestServiceImport_NoStoreDuplicateNoRuleKeyEntriesEvenAlongsideStructuralQu
 		mkRow("INV-ADV6-CONFLICT", "2026-01-11", "T2", "B2", "NGN", "20.00", "2.00", "99.00", "ItemB", "1", "20.00"), // sheet 4 -- total conflict, no duplicate involved
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -480,7 +477,7 @@ func TestImport_StructuralError_OmitsInvoiceID(t *testing.T) {
 		mkRow("INV-STRUCT", "2026-01-11", "T1", "B1", "NGN", "10.00", "1.00", "11.00", "Item2", "1", "10.00"), // sheet 3 -- issue_date differs
 	}
 
-	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false)
+	res, err := svc.Import(c, entityID, "", "", 1, stdMapping, stdHeader, rows, false, "")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}

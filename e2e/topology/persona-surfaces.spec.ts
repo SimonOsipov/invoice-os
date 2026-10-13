@@ -324,16 +324,15 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   ).toBeVisible()
 
   // --- Rules ----------------------------------------------------------------------------
-  // Pins MOCK FIXTURE BEHAVIOUR (GOLDEN_RULES / GOLDEN_SET, lib/rules.ts), not a backend
-  // contract -- the golden ruleset rendered here is static app data, unrelated to the live
-  // MBS rule set the engine evaluates. [workflows-included]'s trade-off.
+  // The golden set and the custom rules are server reads (GET /v1/rules, /v1/custom-rules).
   await goTo(page, 'Rules')
   await expect(page.getByRole('heading', { level: 1, name: 'Rules', exact: true })).toBeVisible()
-  await expect(page.getByText('Golden ruleset · NG-MBS', { exact: false })).toBeVisible()
+  await expect(page.getByText('Golden ruleset', { exact: true })).toBeVisible()
+  await expect(page.getByText('IN USE', { exact: true })).toBeVisible()
   await expect(page.getByText('INHERITED · GOLDEN RULESET', { exact: false })).toBeVisible()
-  // Golden rules render a LOCK, never a disabled toggle (RulesView.tsx:230-233) -- at least
-  // one row must actually be drawn, so this is a content assertion and not a bare mount.
+  // Golden rows render a LOCK, never a switch -- one drawn row makes this a content assertion.
   await expect(page.getByText('LOCKED', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('NG-MBS', { exact: false })).toHaveCount(0)
 
   // --- Reports --------------------------------------------------------------------------
   // Pins STATIC COPY plus the tenant identity, not the report body: ReportsView forks on
@@ -362,7 +361,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
   await expect(page.getByText('WORKSPACE CONFIGURATION', { exact: true })).toBeVisible()
   await expect(page.getByText('People, roles, integrations, developer access, and signing certificates.', { exact: true })).toBeVisible()
-  for (const tab of ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates']) {
+  for (const tab of ['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates']) {
     await expect(page.getByRole('button', { name: tab, exact: true })).toBeVisible()
   }
 

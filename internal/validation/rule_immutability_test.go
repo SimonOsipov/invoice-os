@@ -461,7 +461,7 @@ func TestRIL06_ReparentIntoSealedRejected(t *testing.T) {
 
 	var uID string
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO rule_set_versions (version, is_active, notes) VALUES ($1, false, $2) RETURNING id`,
+		`INSERT INTO rule_set_versions (version, notes) VALUES ($1, $2) RETURNING id`,
 		nextVersion(), fixtureNotes,
 	).Scan(&uID); err != nil {
 		t.Fatalf("insert throwaway unsealed version: %v", err)
@@ -513,7 +513,7 @@ func TestRIL07_PublishNewVersionFlowAllowed(t *testing.T) {
 
 	var newID string
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO rule_set_versions (version, is_active, notes) VALUES ($1, false, $2) RETURNING id`,
+		`INSERT INTO rule_set_versions (version, notes) VALUES ($1, $2) RETURNING id`,
 		nextVersion(), fixtureNotes,
 	).Scan(&newID); err != nil {
 		t.Fatalf("insert draft version: %v", err)
@@ -615,69 +615,13 @@ func TestRIL09_UnsealRejected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// RIL-10 -- is_active flip still allowed on sealed versions.
-// ---------------------------------------------------------------------
-
-// TestRIL10_IsActiveFlipAllowedOnSealed (RIL-10): the legitimate `is_active`
-// activation flip (deactivate whichever version is currently active, activate
-// v1) must remain legal even though both v1/v2 are sealed -- Guard C's UPDATE
-// branch only rejects an unseal transition, never touches is_active.
-// Rolled-back super tx. Precondition (requireSealed) makes this 42703
-// pre-migration, per the spec's Setup ("sealed v1 (inactive) + v2 (active)").
-//
-// Deactivates `WHERE is_active` rather than hardcoding `WHERE version = 2`:
-// this test only needs "the currently active row" cleared before v1 claims
-// the one-active slot, and whichever sealed version that is (v2, historically
-// -- or v3 since INVCR-01-13, or any future publish) is irrelevant to what
-// RIL-10 actually proves. A hardcoded `version = 2` breaks the moment a THIRD
-// sealed version exists and is active: deactivating an already-inactive v2 is
-// a no-op, so the subsequent activate of v1 then collides with the REAL
-// active row on rule_set_versions_one_active (23505) -- the identical
-// [active-version-pinning-is-the-bug] class rule_set_v2_test.go's RS-V2-10/
-// 12/13 fixtures were reworked to avoid.
-func TestRIL10_IsActiveFlipAllowedOnSealed(t *testing.T) {
-	super, _ := dbTestPools(t)
-	ctx := context.Background()
-
-	tx, err := super.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin super tx: %v", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	requireSealed(t, ctx, tx, 1, true)
-	requireSealed(t, ctx, tx, 2, true)
-
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = false WHERE is_active`); err != nil {
-		t.Fatalf("deactivate the currently active version: %v -- is_active flips must remain legal on a sealed version", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE rule_set_versions SET is_active = true WHERE version = 1`); err != nil {
-		t.Fatalf("activate sealed v1: %v -- is_active flips must remain legal on a sealed version", err)
-	}
-
-	var v1Active, v2Active bool
-	if err := tx.QueryRow(ctx, `SELECT is_active FROM rule_set_versions WHERE version = 1`).Scan(&v1Active); err != nil {
-		t.Fatalf("read v1.is_active: %v", err)
-	}
-	if err := tx.QueryRow(ctx, `SELECT is_active FROM rule_set_versions WHERE version = 2`).Scan(&v2Active); err != nil {
-		t.Fatalf("read v2.is_active: %v", err)
-	}
-	if !v1Active {
-		t.Error("v1.is_active = false after the flip, want true")
-	}
-	if v2Active {
-		t.Error("v2.is_active = true after the flip, want false")
-	}
-}
-
-// ---------------------------------------------------------------------
 // RIL-11 -- seal false->true and true->true (no-op) both allowed.
 // ---------------------------------------------------------------------
 
 // TestRIL11_SealFalseToTrueAndNoOpAllowed (RIL-11): a fresh throwaway
 // version is born unsealed (sealed=false, the default), then sealed
 // (false->true, must succeed), then sealed again (true->true, a no-op, must
-// also succeed -- only true->false is rejected, per Guard C). Rolled-back
+// also succeed -- Guard C rejects only true->false of sealed). Rolled-back
 // super tx. Pre-migration this fails 42703 at the very first `SELECT
 // sealed` (the column does not exist yet to even carry a default).
 func TestRIL11_SealFalseToTrueAndNoOpAllowed(t *testing.T) {
@@ -692,7 +636,7 @@ func TestRIL11_SealFalseToTrueAndNoOpAllowed(t *testing.T) {
 
 	var id string
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO rule_set_versions (version, is_active, notes) VALUES ($1, false, $2) RETURNING id`,
+		`INSERT INTO rule_set_versions (version, notes) VALUES ($1, $2) RETURNING id`,
 		nextVersion(), fixtureNotes,
 	).Scan(&id); err != nil {
 		t.Fatalf("insert throwaway version: %v", err)
@@ -740,14 +684,14 @@ func TestRIL12_KillSwitchProductionPathUnbroken(t *testing.T) {
 	var original bool
 	if err := super.QueryRow(ctx,
 		`SELECT r.enabled FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		 WHERE v.is_active AND r.key = $1`, key,
+		 WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $1`, key,
 	).Scan(&original); err != nil {
 		t.Fatalf("read original enabled for %s: %v", key, err)
 	}
 	t.Cleanup(func() {
 		if _, err := super.Exec(context.Background(),
 			`UPDATE rules r SET enabled = $1 FROM rule_set_versions v
-			 WHERE r.rule_set_version_id = v.id AND v.is_active AND r.key = $2`,
+			 WHERE r.rule_set_version_id = v.id AND v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $2`,
 			original, key,
 		); err != nil {
 			t.Errorf("cleanup: restore %s enabled=%t: %v", key, original, err)
@@ -761,7 +705,7 @@ func TestRIL12_KillSwitchProductionPathUnbroken(t *testing.T) {
 	var afterFlip bool
 	if err := super.QueryRow(ctx,
 		`SELECT r.enabled FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		 WHERE v.is_active AND r.key = $1`, key,
+		 WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $1`, key,
 	).Scan(&afterFlip); err != nil {
 		t.Fatalf("read enabled after first flip: %v", err)
 	}
@@ -775,7 +719,7 @@ func TestRIL12_KillSwitchProductionPathUnbroken(t *testing.T) {
 	var afterRestore bool
 	if err := super.QueryRow(ctx,
 		`SELECT r.enabled FROM rules r JOIN rule_set_versions v ON v.id = r.rule_set_version_id
-		 WHERE v.is_active AND r.key = $1`, key,
+		 WHERE v.id = rule_set_version_for((now() AT TIME ZONE 'UTC')::date) AND r.key = $1`, key,
 	).Scan(&afterRestore); err != nil {
 		t.Fatalf("read enabled after restore flip: %v", err)
 	}

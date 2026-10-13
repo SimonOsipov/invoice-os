@@ -19,6 +19,8 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/archive"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
+	"github.com/SimonOsipov/invoice-os/internal/customer"
+	"github.com/SimonOsipov/invoice-os/internal/customrule"
 	"github.com/SimonOsipov/invoice-os/internal/demodocs"
 	"github.com/SimonOsipov/invoice-os/internal/demopolicy"
 	"github.com/SimonOsipov/invoice-os/internal/document"
@@ -86,6 +88,14 @@ func main() {
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/source-document", invoice.SourceDocumentHandler(store.SourceDocument, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices/{id}/ubl", invoice.UBLHandler(store.Get, app.Logger))
 	app.Mux.HandleFunc("GET /v1/invoices", invoice.ListHandler(store.List, store.RowFacts, app.Logger))
+
+	// /v1/code-lists/{list} -- NRS code search; reached as /api/invoice/v1/code-lists/{list}.
+	app.Mux.HandleFunc("GET /v1/code-lists/{list}", invoice.CodeSearchHandler(store.SearchCodes, app.Logger))
+
+	// /v1/customers -- the workspace buyer directory; reached as /api/invoice/v1/customers.
+	customerStore := customer.NewStore(pool)
+	app.Mux.HandleFunc("GET /v1/customers", customer.ListHandler(customerStore.List, app.Logger))
+	app.Mux.HandleFunc("PATCH /v1/customers/{id}", customer.UpdateHandler(customerStore.Update, app.Logger))
 
 	// GET /v1/audit-log -- the workspace audit reader (AUDIT-04). Mounts here rather
 	// than on a new service: the gateway routes on the first segment under /api/, so
@@ -222,6 +232,7 @@ func main() {
 	// still answers 200 source:"none", never a 5xx (TestSuggestHandler_OffAnswersNoneWithRowOne,
 	// TestSuggestHandler_AValidatedEnvelopeErrorAnswersNoneNotFiveHundred).
 	app.Mux.HandleFunc("POST /v1/imports/suggest-mapping", importer.SuggestMappingHandler(docSvc.Open, impStore.SavedMapping, aiClient, app.Logger))
+	app.Mux.HandleFunc("POST /v1/invoices/{id}/explain", invoice.ExplainHandler(invoice.NewExplainer(store.Get, aiClient).Explain, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/check-mapping", importer.CheckMappingHandler(docSvc.Open, jevClient, app.Logger))
 	// GET /v1/imports/{id} -- the import batch's own read route (INVCR-01-07).
 	// rows_total/rows_valid/rows_invalid/errors/created_at live ONLY on
@@ -243,6 +254,14 @@ func main() {
 	// edge is a cycle (TestDocument_ImportsNoRepoPackage). Go 1.22's {id} wildcard
 	// matches one segment, so /sheet cannot be swallowed by the download route above.
 	app.Mux.HandleFunc("GET /v1/documents/{id}/sheet", importer.SheetHandler(docSvc.Open, app.Logger))
+
+	// /v1/custom-rules -- a workspace's own validation rules; writes are admin-only inside the
+	// store. The check call is injected: customrule must not import invoice.
+	ruleStore := customrule.NewStore(pool, validator.CheckCustomRule)
+	app.Mux.HandleFunc("GET /v1/custom-rules", customrule.ListHandler(ruleStore.List, app.Logger))
+	app.Mux.HandleFunc("POST /v1/custom-rules", customrule.CreateHandler(ruleStore.Create, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/custom-rules/{id}", customrule.UpdateHandler(ruleStore.Update, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/custom-rules/{id}", customrule.DeleteHandler(ruleStore.Delete, app.Logger))
 
 	// /v1/workflow-roles... -- Settings > Roles: the approval seats and who staffs
 	// them. Same invoice_app pool as the invoice store above; the writes are

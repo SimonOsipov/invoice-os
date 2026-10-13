@@ -89,3 +89,96 @@ func StaffTenantsHandler(list func(context.Context) ([]StaffTenant, error), log 
 		}
 	}
 }
+
+type StaffInvoice struct {
+	ID            string    `json:"id"`
+	InvoiceNumber string    `json:"invoice_number"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type StaffTenantDetail struct {
+	Tenant   StaffTenant    `json:"tenant"`
+	Members  []Membership   `json:"members"`
+	Invoices []StaffInvoice `json:"invoices"`
+}
+
+// StaffTenant reads one tenant, its members and its 10 newest invoices. READ COMMITTED: the header counts can trail the lists by one write.
+func (s *Store) StaffTenant(ctx context.Context, id string) (StaffTenantDetail, error) {
+	var out StaffTenantDetail
+	sid, ok := auth.StaffFromContext(ctx)
+	if !ok {
+		return out, db.ErrNotStaff
+	}
+	actor, err := uuid.Parse(sid.Subject)
+	if err != nil {
+		return out, db.ErrNotStaff
+	}
+	tenant, err := uuid.Parse(id)
+	if err != nil {
+		return out, ErrTenantNotFound
+	}
+	err = db.WithinStaffTx(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT t.id::text, t.name, t.kind, t.created_at, t.id::text = ANY($2::text[]),
+			coalesce(a.active_members, 0), coalesce(a.invoice_count, 0), a.last_activity_at
+			FROM public.staff_read_tenants($1) t
+			LEFT JOIN public.staff_read_tenant_activity($1) a ON a.tenant_id = t.id
+			WHERE t.id = $3`, actor, db.DemoTenants, tenant)
+		if err != nil {
+			return staffReadError("tenancy: staff read tenant", err)
+		}
+		header, err := pgx.CollectRows(rows, pgx.RowToStructByPos[StaffTenant])
+		if err != nil {
+			return staffReadError("tenancy: staff read tenant", err)
+		}
+		if len(header) == 0 {
+			return ErrTenantNotFound
+		}
+		out.Tenant = header[0]
+
+		rows, err = tx.Query(ctx, `SELECT user_id::text, role, status, display_name, email
+			FROM public.staff_read_tenant_members($1, $2)`, actor, tenant)
+		if err != nil {
+			return staffReadError("tenancy: staff read tenant", err)
+		}
+		if out.Members, err = pgx.CollectRows(rows, pgx.RowToStructByPos[Membership]); err != nil {
+			return staffReadError("tenancy: staff read tenant", err)
+		}
+
+		rows, err = tx.Query(ctx, `SELECT id::text, invoice_number, status, created_at
+			FROM public.staff_read_tenant_invoices($1, $2)`, actor, tenant)
+		if err != nil {
+			return staffReadError("tenancy: staff read tenant", err)
+		}
+		out.Invoices, err = pgx.CollectRows(rows, pgx.RowToStructByPos[StaffInvoice])
+		return staffReadError("tenancy: staff read tenant", err)
+	})
+	if err != nil {
+		return StaffTenantDetail{}, err
+	}
+	return out, nil
+}
+
+// StaffTenantHandler repeats no staff check: auth.RequireStaff runs before it.
+func StaffTenantHandler(get func(context.Context, string) (StaffTenantDetail, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		detail, err := get(r.Context(), r.PathValue("id"))
+		switch {
+		case errors.Is(err, db.ErrNotStaff):
+			writeError(w, http.StatusForbidden, "forbidden")
+		case errors.Is(err, ErrTenantNotFound):
+			writeError(w, http.StatusNotFound, "tenant not found")
+		case err != nil:
+			log.Error("tenancy: staff tenant response", "err", err)
+			writeError(w, http.StatusInternalServerError, "internal server error")
+		default:
+			if detail.Members == nil {
+				detail.Members = []Membership{}
+			}
+			if detail.Invoices == nil {
+				detail.Invoices = []StaffInvoice{}
+			}
+			writeJSON(w, http.StatusOK, detail)
+		}
+	}
+}

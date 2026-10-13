@@ -29,7 +29,7 @@ const (
 	batchProdAppURL     = "https://app.ascomply.com"
 	batchProdLandingURL = "https://www.ascomply.com"
 
-	batchAllConfirmed = "All 16 environment variables confirmed" // reconcile_url_variables
+	batchAllConfirmed = "All 18 environment variables confirmed" // reconcile_url_variables
 )
 
 // Secret names print `= <redacted>` (Design, "Variable writes").
@@ -53,10 +53,10 @@ func batchExports() string {
 func reconcileIntended() map[string]map[string]string {
 	return map[string]map[string]string{
 		sentrySvcID("gateway"):         {"CORS_ALLOWED_ORIGINS": batchOrigins},
-		sentrySvcID("app"):             {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_LIBRARY_URL": batchLibraryURL},
+		sentrySvcID("app"):             {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_LIBRARY_URL": batchLibraryURL, "VITE_SUPPORT_URL": batchSupportURL},
 		sentrySvcID("landing"):         {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_APP_URL": batchAppURL, "VITE_OPS_URL": batchOpsURL, "VITE_SUPPORT_URL": batchSupportURL, "VITE_LIBRARY_URL": batchLibraryURL, "VITE_REGISTRATION_OPEN": "true"},
 		sentrySvcID("ops-console"):     {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
-		sentrySvcID("support-console"): {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
+		sentrySvcID("support-console"): {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_APP_URL": batchAppURL},
 		sentrySvcID("library"):         {"VITE_APP_URL": batchAppURL, "VITE_LANDING_URL": batchLandingURL},
 	}
 }
@@ -873,6 +873,8 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 		{"library", "VITE_APP_URL"},
 		{"app", "VITE_LIBRARY_URL"},
 		{"landing", "VITE_LIBRARY_URL"},
+		{"app", "VITE_SUPPORT_URL"},
+		{"support-console", "VITE_APP_URL"},
 	} {
 		svc, name := c.svc, c.name
 		t.Run("reconcile-urls "+svc+"."+name, func(t *testing.T) {

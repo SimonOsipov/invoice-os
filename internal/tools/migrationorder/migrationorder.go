@@ -2,14 +2,13 @@
 // version sorts at or before the newest migration already on the base branch.
 //
 // goose refuses to apply a migration numbered below the database's current
-// version, and per-PR environments migrate a fresh database, so only the
-// production database can see the break. A branch cut before another branch's
-// migration merged is the usual cause: its timestamp is older than main's newest.
+// version. A branch cut before another branch's migration merged is the usual
+// cause: its timestamp is older than main's newest.
 //
 // While -head is outside -main (default origin/main), a file already on -main is skipped: main
 // has applied it, so a branch that merged main in did not add it. An exact rename of a file
 // that -base holds and -main does not is checked against -main's newest only: production has
-// not applied the old name.
+// not applied the old name. Exact means equal blob ids, not git's R100.
 //
 // Usage:
 //
@@ -43,7 +42,7 @@ func SkipOnMain(added, onMain []string) []string {
 }
 
 // Change is an added or renamed migration. Old is empty for an add.
-// Exact marks a rename with identical content (git R100).
+// Exact marks a rename whose old and new blob ids are equal.
 type Change struct {
 	Old, New string
 	Exact    bool
@@ -55,9 +54,14 @@ type Change struct {
 func Split(changes []Change, onBase, onMain []string, exempt bool) (vsBase, vsMain []string) {
 	base := toSet(onBase)
 	main := toSet(onMain)
+	var added []string
+	for _, c := range changes {
+		added = append(added, c.New)
+	}
+	kept := toSet(SkipOnMain(added, onMain))
 	for _, c := range changes {
 		switch {
-		case main[c.New]:
+		case !kept[c.New]:
 		case exempt && c.Exact && c.Old != "" && base[c.Old] && !main[c.Old]:
 			vsMain = append(vsMain, c.New)
 		default:

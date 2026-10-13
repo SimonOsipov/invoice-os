@@ -24,8 +24,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "migrationorder: merge-base %s %s: %v\n", *base, *head, err)
 		os.Exit(2)
 	}
-	// -M finds renames; only R100 is exempt, see Split.
-	diff, err := git("diff", "-M", "--name-status", "--diff-filter=AR", mergeBase, *head, "--", Dir+"/")
+	// -M finds renames; only equal blob ids are exempt, see Split. R100 ignores line order.
+	diff, err := git("diff", "-M", "--raw", "--no-abbrev", "--diff-filter=AR", mergeBase, *head, "--", Dir+"/")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "migrationorder: git diff: %v\n", err)
 		os.Exit(2)
@@ -74,14 +74,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "migrationorder: %v\n", err)
 		os.Exit(2)
 	}
-	violations = append(violations, more...)
-	if len(violations) == 0 {
-		fmt.Printf("migrationorder: every file added under %s/ sorts after base's newest migration\n", Dir)
+	if len(violations)+len(more) == 0 {
+		other := "every file"
+		if len(vsMain) > 0 {
+			other = "every other file"
+		}
+		fmt.Printf("migrationorder: %s added under %s/ sorts after base's newest migration\n", other, Dir)
+		if len(vsMain) > 0 {
+			fmt.Printf("migrationorder: %d byte-identical rename(s) of base-only files sort after %s's newest migration instead\n", len(vsMain), *mainRef)
+		}
 		return
 	}
 	for _, v := range violations {
 		fmt.Printf("::error file=%s::%s sorts at or before %s, already on the base branch. goose refuses it on any database that has applied %s. Rename it to a timestamp later than %d.\n",
 			v.File, v.File, v.NewestFile, v.NewestFile, v.Newest)
+	}
+	for _, v := range more {
+		fmt.Printf("::error file=%s::%s is a rename of a base-only file, so it must sort after %s's newest migration, %s. goose refuses it on any database that has applied %s. Rename it to a timestamp later than %d.\n",
+			v.File, v.File, *mainRef, v.NewestFile, v.NewestFile, v.Newest)
 	}
 	os.Exit(1)
 }
@@ -91,16 +101,21 @@ func git(args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// parseChanges reads `git diff --name-status` lines: "A\tpath" or "R100\told\tnew".
+// parseChanges reads `git diff --raw --no-abbrev` lines:
+// ":m1 m2 oldblob newblob A\tpath" or ":m1 m2 oldblob newblob R<score>\told\tnew".
 func parseChanges(out string) ([]Change, error) {
 	var cs []Change
 	for _, l := range lines(out) {
 		f := strings.Split(l, "\t")
-		switch {
-		case f[0] == "A" && len(f) == 2:
+		meta := strings.Fields(f[0])
+		if len(meta) != 5 {
+			return nil, fmt.Errorf("unexpected git diff line %q", l)
+		}
+		switch status := meta[4]; {
+		case status == "A" && len(f) == 2:
 			cs = append(cs, Change{New: f[1]})
-		case strings.HasPrefix(f[0], "R") && len(f) == 3:
-			cs = append(cs, Change{Old: f[1], New: f[2], Exact: f[0] == "R100"})
+		case strings.HasPrefix(status, "R") && len(f) == 3:
+			cs = append(cs, Change{Old: f[1], New: f[2], Exact: meta[2] == meta[3]})
 		default:
 			return nil, fmt.Errorf("unexpected git diff line %q", l)
 		}

@@ -405,3 +405,19 @@ func TestMain_RenameWhenHeadIsInMainIsNotExempt(t *testing.T) {
 		t.Fatalf("want exit 1, got %d", got)
 	}
 }
+
+// git scores a line-reordered rename R100; only equal blobs are byte-identical.
+func TestMain_ReorderedRenameStaysChecked(t *testing.T) {
+	run, write, exit := renameRepo(t)
+	swapped := strings.Replace(sqlBody, "SELECT 1;\nSELECT 2;", "SELECT 2;\nSELECT 1;", 1) + "-- x\n"
+	write("20260110_x.sql", swapped)
+	run("rm", "-q", Dir+"/20260105_x.sql")
+	run("add", "-A")
+	run("commit", "-qm", "rename and swap")
+	if st := run("diff", "-M", "--name-status", "epic", "pr"); !strings.HasPrefix(st, "R100") {
+		t.Fatalf("setup: want git to score R100, got %q", st)
+	}
+	if got := exit("pr"); got != 1 {
+		t.Fatalf("want exit 1, got %d", got)
+	}
+}

@@ -11,7 +11,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
-// ErrNotStaff is returned by WithinStaffTx when the context holds no caller admitted by auth.RequireRulesRole.
+// ErrNotStaff is returned by WithinStaffTx when the context holds no caller admitted by auth.RequireStaff.
 var ErrNotStaff = errors.New("db: not a checked staff caller")
 
 // WithinStaffTx runs fn in a transaction with no tenant setting, for global staff data.

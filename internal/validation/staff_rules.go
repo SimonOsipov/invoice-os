@@ -1,5 +1,5 @@
 // Staff rules routes: GET /v1/staff/rules and PATCH /v1/staff/rules/{key}. The platform
-// admits only a rules-role caller (auth.RequireRulesRole); the handlers repeat no role check.
+// admits only a staff caller (auth.RequireStaff); the handlers repeat no role check.
 package validation
 
 import (

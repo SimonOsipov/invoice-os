@@ -12,7 +12,7 @@ import (
 const staffTenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
 // requireStaffUnderTest is the check the tests drive; SUPP-01-04 points it at RequireStaff.
-var requireStaffUnderTest = RequireRulesRole
+var requireStaffUnderTest = RequireStaff
 
 // serveStaff runs the staff check over ctx and reports the response, how often the handler ran, and
 // the context the handler saw.

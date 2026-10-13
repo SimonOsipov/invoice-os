@@ -1,4 +1,4 @@
-// GET /v1/staff/rule-versions: every rule-set version with its state. The platform admits only a rules-role caller.
+// GET /v1/staff/rule-versions: every rule-set version with its state. The platform admits only a staff caller.
 package validation
 
 import (

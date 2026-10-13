@@ -1,5 +1,5 @@
 // Staff draft routes under /v1/staff/rule-versions/draft: open, add, edit, remove, publish.
-// The platform admits only a rules-role caller. Each write runs a rule_draft_* function and
+// The platform admits only a staff caller. Each write runs a rule_draft_* function and
 // its staff audit row in one WithinStaffTx; this file is the only Go caller of those functions.
 package validation
 

@@ -23,16 +23,16 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// staffCtx is the context a handler sees behind auth.RequireRulesRole for subject.
+// staffCtx is the context a handler sees behind auth.RequireStaff for subject.
 func staffCtx(t *testing.T, subject string) context.Context {
 	t.Helper()
 	var ctx context.Context
-	h := auth.RequireRulesRole(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { ctx = r.Context() }))
+	h := auth.RequireStaff(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { ctx = r.Context() }))
 	req := httptest.NewRequest("PATCH", "/v1/staff/rules/x", nil).
-		WithContext(auth.WithIdentity(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", Staff: true, RulesRole: true}))
+		WithContext(auth.WithIdentity(context.Background(), auth.Identity{Subject: subject, Role: "authenticated", Staff: true}))
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if ctx == nil {
-		t.Fatal("RequireRulesRole refused the staff caller")
+		t.Fatal("RequireStaff refused the staff caller")
 	}
 	return ctx
 }

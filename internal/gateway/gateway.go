@@ -214,6 +214,11 @@ func newReverseProxy(service string, target *url.URL, gatewayToken string, log *
 // own credential.
 func injectIdentity(pr *httputil.ProxyRequest, gatewayToken string) {
 	id, _ := auth.IdentityFromContext(pr.In.Context())
+	for k := range pr.Out.Header {
+		if strings.HasPrefix(k, "X-User-") {
+			pr.Out.Header.Del(k)
+		}
+	}
 	pr.Out.Header.Set(headerTenantID, id.TenantID)
 	pr.Out.Header.Set(headerUserID, id.Subject)
 	pr.Out.Header.Set(headerUserRole, id.Role)

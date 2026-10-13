@@ -262,6 +262,7 @@ describe('v2 shell', () => {
       ts.filter((t) => t.text === 'EI' || t.text.includes('Emeka Iroha') || t.text.includes('SUPPORT ENGINEER')),
       'no persona avatar, name or role',
     ).toEqual([])
+    expect(html.match(/backpressure|82%|backoff/gi) ?? [], 'no backpressure text').toEqual([])
 
     const brand = ts.filter((t) => style(t).padding === '16px 16px 14px')
     expect(brand, 'one brand block').toHaveLength(1)

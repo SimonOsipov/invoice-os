@@ -25,9 +25,7 @@ import { seedStaffSession, test } from '../staffSession'
 // smoke/persona-boundaries.spec.ts (this console refuses every persona param).
 //
 // DELIBERATELY NOT ASSERTED, because a fixture assertion earns its place only if a
-// plausible CODE change can break it: the sidebar operator name (hardcoded in Sidebar.tsx,
-// not read from the session, so it proves nothing about who signed in), the APP
-// backpressure meter (literals), and the health cards' numeric values — the status WORD asserted below is derived from the
+// plausible CODE change can break it: the health cards' numeric values — the status WORD asserted below is derived from the
 // same live count, so nothing is lost.
 
 // ASSERT THE <h1>, NOT THE CRUMB. TopBar renders CRUMB_BY_SCREEN inside <main>

@@ -14,7 +14,7 @@ import { resolveTarget } from './targets'
 //              (Sidebar.tsx's identity card), i.e. the
 //              backend round trip completed, not just a mount.
 //   ops     -> the default Overview screen's h1 (ops-console/src/components/Overview.tsx:154)
-//   support -> the default Submissions ops h1 (support-console/src/components/Submissions.tsx:48)
+//   support -> the default Rules admin h1 (support-console/src/components/Rules.tsx)
 // `timeout` undefined keeps the runner's configured timeout.
 export const DESTINATION_READY: Record<Destination, (page: Page, timeout?: number) => Promise<void>> = {
   app: async (page, timeout) => {
@@ -24,7 +24,7 @@ export const DESTINATION_READY: Record<Destination, (page: Page, timeout?: numbe
     await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible({ timeout })
   },
   support: async (page, timeout) => {
-    await expect(page.getByRole('heading', { level: 1, name: 'Submissions ops' })).toBeVisible({ timeout })
+    await expect(page.getByRole('heading', { level: 1, name: 'Rules admin' })).toBeVisible({ timeout })
   },
 }
 

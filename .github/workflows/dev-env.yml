@@ -26,7 +26,7 @@ name: Dev Env (deploy full fleet + verify)
 # DEMO-04 adds a SECOND destructive step: the demo-tenant purge
 # (internal/platform/db/demopurge.go), between the reset and the seed. It is gated
 # like the seed, by ENVIRONMENT and GATEWAY_DB_BOOTSTRAP (db.BootstrapEnabled),
-# and reaches only the four seeded demo tenants (db.DemoTenants). A fork's gateway
+# and reaches only the seeded demo tenants (db.DemoTenants). A fork's gateway
 # gets ENVIRONMENT=development from fork-vars-after-urls, so it purges.
 # Production's gateway reads ENVIRONMENT=production, set once by hand with
 # railway-env.sh set-production-environment, so it does not.

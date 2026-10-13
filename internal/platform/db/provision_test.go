@@ -279,7 +279,7 @@ func TestProvisionBootstrapFailureShortCircuitsMigrateAndSeed(t *testing.T) {
 // empty schema (roles are NOT dropped — see bootstrap_test.go's header comment
 // on why; Bootstrap's create-or-converge path, exercised here, is exactly what
 // runs the first time against a genuinely fresh DB) → run Provision → roles
-// exist, every migration applied with nothing pending, and the 4 seed tenants
+// exist, every migration applied with nothing pending, and the seed tenants
 // are present.
 func TestProvisionFromEmptyDatabase(t *testing.T) {
 	superDSN, migDSN := requireProvisionDSNs(t)

@@ -45,7 +45,7 @@ var seedMemberships = []struct {
 
 // TestSeedFromEmbeddedIsIdempotent: Test Spec row 7 / AC-7. Calls db.Seed twice
 // against dbsql.FS (the embedded copy of db/seed.dev.sql, never the on-disk
-// file); neither call may error, and each of the 4 seeded tenants + 4 memberships
+// file); neither call may error, and each seeded tenant + membership
 // must appear EXACTLY ONCE with the expected kind/role — proving both idempotency
 // (ON CONFLICT DO UPDATE / DO NOTHING actually holds across a repeated call) and
 // that the embedded file matches the on-disk fixture data, not a stale copy.

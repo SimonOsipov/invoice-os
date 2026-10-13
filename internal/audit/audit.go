@@ -13,7 +13,7 @@
 // tenant diverges — so Record cannot write to the wrong tenant, and a call outside a
 // tenant-scoped tx fails closed (NULL tenant_id fails the WITH CHECK, 42501, no row written).
 //
-// One exception, superuser-only: db.PurgeDemoTenants deletes the four seeded demo tenants'
+// One exception, superuser-only: db.PurgeDemoTenants deletes the seeded demo tenants'
 // rows on every gated gateway boot.
 package audit
 

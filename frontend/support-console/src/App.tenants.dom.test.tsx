@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import { expireSession } from './auth'
+import { fetchJobs } from './jobsApi'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
 import { fetchStaffTenant, fetchStaffTenants, type StaffTenant, type StaffTenantDetail } from './tenantsApi'
 
@@ -31,6 +32,7 @@ vi.mock('./components/Tenants', async (importOriginal) => {
   const m = await importOriginal<typeof import('./components/Tenants')>()
   return { ...m, Tenants: (p: Parameters<typeof m.Tenants>[0]) => (seen.push({ selectedId: p.selectedId, status: p.detailStatus, id: p.detail?.tenant.id }), m.Tenants(p)) }
 })
+vi.mock('./jobsApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./jobsApi')>()), fetchJobs: vi.fn() }))
 vi.mock('./tenantsApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./tenantsApi')>()),
   fetchStaffTenants: vi.fn(),
@@ -42,6 +44,7 @@ const versionsRead = vi.mocked(fetchVersions)
 const summary = vi.mocked(fetchCodeListSummary)
 const list = vi.mocked(fetchStaffTenants)
 const one = vi.mocked(fetchStaffTenant)
+const jobsRead = vi.mocked(fetchJobs)
 
 const tenant = (id: string, name: string): StaffTenant => ({
   id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null,
@@ -60,6 +63,7 @@ beforeEach(() => {
   versionsRead.mockResolvedValue({ today: '2026-10-11', versions: [] })
   summary.mockResolvedValue([])
   list.mockResolvedValue([X, Y, H])
+  jobsRead.mockResolvedValue([])
   one.mockImplementation(async (id) => detail([X, Y, H].find((t) => t.id === id)!, id === 'X' ? ['Ada One', 'Bola Two', 'Chi Three'] : ['Yemi Only']))
 })
 afterEach(() => {
@@ -259,7 +263,7 @@ describe('Console tenants wiring', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
   })
 
-  it('a tenant with no members and no invoices says so, offers no action and no View jobs', async () => {
+  it('a tenant with no members and no invoices says so and offers only View jobs', async () => {
     one.mockResolvedValueOnce({ tenant: X, members: [], invoices: [] })
     render(<App />)
     await openTenants()
@@ -267,9 +271,22 @@ describe('Console tenants wiring', () => {
     fireEvent.click(rowOf('X'))
     await screen.findByText('No members.')
     expect(screen.getByText('No invoices yet.')).toBeTruthy()
-    expect(screen.queryByText('View jobs')).toBeNull()
     const card = screen.getByRole('heading', { level: 2 }).closest('div[style*="overflow"]') as HTMLElement
-    expect(card.querySelectorAll('button')).toHaveLength(0)
+    const buttons = Array.from(card.querySelectorAll('button'))
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].textContent).toBe('View jobs')
+  })
+
+  it('View jobs opens Submissions filtered to the tenant', async () => {
+    render(<App />)
+    await openTenants()
+    await waitRow('X')
+    fireEvent.click(rowOf('X'))
+    fireEvent.click(await screen.findByRole('button', { name: 'View jobs' }))
+    await screen.findByRole('heading', { level: 1, name: 'Submissions ops' })
+    await waitFor(() => expect(jobsRead).toHaveBeenCalledWith(undefined, 'X'))
+    expect((screen.getByLabelText('Tenant') as HTMLSelectElement).value).toBe('X')
+    expect(screen.getByRole('button', { name: 'ALL' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('an empty list shows its line, no rows, no search field and the detail prompt', async () => {

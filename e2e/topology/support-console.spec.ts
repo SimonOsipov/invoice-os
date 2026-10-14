@@ -530,7 +530,7 @@ async function tenantsReads(page: Page, testInfo: TestInfo): Promise<void> {
   await expect(kid(card, 2)).toContainText((await staffAccount()).email)
   await expect(kid(card, 3)).toContainText(detail.invoices.length === 0 ? 'No invoices yet.' : detail.invoices[0].invoice_number)
 
-  await expect(mn.getByRole('button', { name: 'View jobs' }), 'View jobs is gone').toHaveCount(0)
+  await expect(mn.getByRole('button', { name: 'View jobs' }), 'View jobs in the detail header').toBeVisible()
   await expectStyles(parent(demoTag(house)), 'DEMO badge', { radius: '4px' })
   await attachShot(page, testInfo, 'tenants')
 

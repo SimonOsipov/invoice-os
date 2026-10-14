@@ -19,6 +19,7 @@ type Props = {
   detail: StaffTenantDetail | null
   detailErrorText?: string
   onRetryDetail: () => void
+  onViewJobs: (id: string) => void
 }
 
 type Tone = { bg: string; border: string; text: string }
@@ -107,7 +108,7 @@ function TenantList({ status, errorText, tenants, query, selectedId, onSelect, o
   )
 }
 
-function Detail({ status, detail, errorText, onRetry }: { status: DetailStatus; detail: StaffTenantDetail | null; errorText?: string; onRetry: () => void }) {
+function Detail({ status, detail, errorText, onRetry, onViewJobs }: { status: DetailStatus; detail: StaffTenantDetail | null; errorText?: string; onRetry: () => void; onViewJobs: (id: string) => void }) {
   if (status === 'none') return <Note text="Select a tenant to see its members and recent invoices." />
   if (status === 'loading') return <Note text="Loading tenant…" />
   if (status === 'not-found') return <Note text="Tenant not found." />
@@ -133,6 +134,9 @@ function Detail({ status, detail, errorText, onRetry }: { status: DetailStatus; 
             {`${t.active_members} active members · ${t.invoice_count} invoices · ${activity(t)}`}
           </div>
         </div>
+        <button type="button" onClick={() => onViewJobs(t.id)} className="ops-btn v2-btn v2-btn-ghost" style={{ flex: 'none', height: 32, padding: '0 12px', fontSize: 12 }}>
+          View jobs
+        </button>
       </div>
 
       <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--line-1)' }}>
@@ -190,7 +194,7 @@ function Detail({ status, detail, errorText, onRetry }: { status: DetailStatus; 
   )
 }
 
-export function Tenants({ status, errorText, tenants, query, onQueryChange, selectedId, onSelect, onRetry, detailStatus, detail, detailErrorText, onRetryDetail }: Props) {
+export function Tenants({ status, errorText, tenants, query, onQueryChange, selectedId, onSelect, onRetry, detailStatus, detail, detailErrorText, onRetryDetail, onViewJobs }: Props) {
   return (
     <div className="ops-screen-pad">
       <div style={{ marginBottom: 20 }}>
@@ -220,7 +224,7 @@ export function Tenants({ status, errorText, tenants, query, onQueryChange, sele
         </div>
 
         <div style={{ ...CARD, minWidth: 0 }}>
-          <Detail status={detailStatus} detail={detail} errorText={detailErrorText} onRetry={onRetryDetail} />
+          <Detail status={detailStatus} detail={detail} errorText={detailErrorText} onRetry={onRetryDetail} onViewJobs={onViewJobs} />
         </div>
       </div>
     </div>

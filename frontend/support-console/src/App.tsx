@@ -372,6 +372,11 @@ function Console() {
               detail={tenantRead.data}
               detailErrorText={tenantRead.error?.message}
               onRetryDetail={tenantRead.run}
+              onViewJobs={(id) => {
+                setJobTenant(id)
+                setJobState(undefined)
+                go('submissions')
+              }}
             />
           )}
         </div>

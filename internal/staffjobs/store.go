@@ -1,4 +1,4 @@
-// Package staffjobs is the staff Submissions surface: cross-tenant reads of submission_jobs through staff_read_ functions.
+// Package staffjobs is the staff Submissions surface.
 package staffjobs
 
 import (

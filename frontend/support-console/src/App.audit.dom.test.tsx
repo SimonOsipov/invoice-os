@@ -297,6 +297,9 @@ describe('Console audit wiring', () => {
     expect(screen.getByRole('button', { name: 'TENANT LOG' }).getAttribute('aria-pressed')).toBe('false')
     expect(Array.from(changeRows()[0].children).slice(0, 4).map((c) => c.textContent)).toEqual(['2026-10-14 23:30:00 UTC', '5b8f3c1e-0000-4000-8000-0000000000aa', 'tenant.demo_set', 'Okafor & Partners'])
     expect(changeRows()[1].children[3].textContent).toBe('All tenants')
+    const cols = '170px minmax(200px,1fr) minmax(220px,1.3fr) minmax(180px,1fr) 22px'
+    expect(screen.getByText('Staff member').parentElement?.style.gridTemplateColumns).toBe(cols)
+    expect(changeRows().map((r) => r.style.gridTemplateColumns)).toEqual([cols, cols])
   })
 
   it('the change drawer offers the link only for a tenant row', async () => {

@@ -147,6 +147,25 @@ describe('Console audit wiring', () => {
     expect(ids()).toEqual(['b1'])
   })
 
+  // The late success is also hidden by the display's key filter; only a late failure observes the staleness guard.
+  it('a late failed Load more raises no toast and no session expiry after a filter change', async () => {
+    let fail: (e: unknown) => void = () => {}
+    auditRead.mockResolvedValueOnce(page([row('a1')], 'CUR1'))
+    auditRead.mockReturnValueOnce(new Promise<StaffAuditPage>((_, rej) => (fail = rej)))
+    auditRead.mockResolvedValueOnce(page([row('b1')], null))
+    render(<App />)
+    await openAudit()
+    await waitFor(() => expect(ids()).toEqual(['a1']))
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await waitFor(() => expect(auditRead).toHaveBeenCalledTimes(2))
+    typeAndEnter('Event', 'invoice.sent')
+    await waitFor(() => expect(ids()).toEqual(['b1']))
+    fail(new ApiError('http', 'late boom', 500))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.queryByText('late boom')).toBeNull()
+    expect(expireSession).not.toHaveBeenCalled()
+  })
+
   it('a row opens the entry drawer', async () => {
     const payload = { invoice: 'e1', lines: [1, 2], note: null }
     auditRead.mockResolvedValue(page([row('e1', { payload })]))

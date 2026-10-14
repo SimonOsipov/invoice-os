@@ -66,4 +66,29 @@ describe('auditApi', () => {
     expect(goKeys.length).toBeGreaterThanOrEqual(9)
     expect([...tsKeys].sort()).toEqual([...goKeys].sort())
   })
+
+  // Same scan for nullability and the page envelope; a nullable Go key typed non-null reaches the screen as a crash.
+  it('StaffAuditRow, StaffAuditPage and AuditPageInfo agree with the Go structs on keys and nullability', () => {
+    const read = (rel: string) => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))
+    const goFields = (src: string, name: string) => {
+      const body = new RegExp(`type\\s+${name}\\s+struct\\s*\\{([^{}]*)\\}`).exec(src)?.[1] ?? ''
+      return [...body.matchAll(/^\s*\w+\s+(\*?)[\w.[\]]+\s+`json:"([^",]+)[^"]*"/gm)].map((m): [string, boolean] => [m[2], m[1] === '*']).sort()
+    }
+    const tsFields = (src: string, name: string) => {
+      const body = new RegExp(`export interface ${name}\\s*\\{([^{}]*)\\}`).exec(src)?.[1] ?? ''
+      return [...body.matchAll(/^\s*([a-z_]+)\??\s*:\s*(.+)$/gm)].map((m): [string, boolean] => [m[1], /\bnull\b/.test(m[2])]).sort()
+    }
+    const staff = read('../../../internal/audit/staff_read.go')
+    const reader = read('../../../internal/audit/reader.go')
+    const ts = read('./auditApi.ts')
+    const pairs: [Array<[string, boolean]>, Array<[string, boolean]>][] = [
+      [goFields(staff, 'StaffRow'), tsFields(ts, 'StaffAuditRow')],
+      [goFields(staff, 'StaffPage'), tsFields(ts, 'StaffAuditPage')],
+      [goFields(reader, 'PageInfo'), tsFields(ts, 'AuditPageInfo')],
+    ]
+    expect(pairs.map(([g]) => g.length)).toEqual([9, 2, 3])
+    expect(pairs[0][0]).toContainEqual(['tenant_name', true])
+    expect(pairs[2][0]).toContainEqual(['next_cursor', true])
+    for (const [g, t] of pairs) expect(t).toEqual(g)
+  })
 })

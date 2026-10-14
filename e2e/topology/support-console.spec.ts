@@ -651,7 +651,7 @@ const SCREENS: Screen[] = [
   {
     nav: 'Tenants',
     h1: 'Tenants',
-    rowUp: 2,
+    rowUp: 1,
     reads: tenantsReads,
     layout: tenantsLayout,
   },

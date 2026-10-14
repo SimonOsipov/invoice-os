@@ -58,13 +58,14 @@ export const initials = (name: string): string =>
 
 export type DetailStatus = 'none' | 'loading' | 'ready' | 'not-found' | 'forbidden' | 'error'
 
-// Ready only for the selected tenant, so the commit before a new read starts never shows the previous one.
+// Ready and failed states count only for the tenant they belong to (failedId for errors).
 export const detailStatus = (
   read: { status: string; data: StaffTenantDetail | null; error: { status: number | null } | null },
   tenantId: string | null,
+  failedId: string | null,
 ): DetailStatus => {
   if (tenantId === null) return 'none'
   if (read.status === 'ready') return read.data?.tenant.id === tenantId ? 'ready' : 'loading'
-  if (read.status !== 'error') return 'loading'
+  if (read.status !== 'error' || failedId !== tenantId) return 'loading'
   return read.error?.status === 404 ? 'not-found' : read.error?.status === 403 ? 'forbidden' : 'error'
 }

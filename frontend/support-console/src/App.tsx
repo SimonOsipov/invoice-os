@@ -101,7 +101,11 @@ function Console() {
     r.status !== 'error' ? 'Loading…' : r.error?.status === 403 ? 'Your account is not ASComply staff.' : (r.error?.message ?? 'Unavailable')
   const onTenants = screen === 'tenants'
   const tenantsRead = useAsync(fetchStaffTenants, { immediate: onTenants, deps: [onTenants] })
-  const tenantRead = useAsync(() => fetchStaffTenant(tenantId ?? ''), { immediate: onTenants && tenantId !== null, deps: [onTenants, tenantId], isEmpty: () => false })
+  const failedTenantId = useRef<string | null>(null)
+  const tenantRead = useAsync(async () => {
+    const id = tenantId ?? ''
+    try { return await fetchStaffTenant(id) } catch (e) { failedTenantId.current = id; throw e }
+  }, { immediate: onTenants && tenantId !== null, deps: [onTenants, tenantId], isEmpty: () => false })
   const tenantsStatus = tenantsRead.status === 'error' ? (tenantsRead.error?.status === 403 ? 'forbidden' : 'error') : tenantsRead.status === 'ready' || tenantsRead.status === 'empty' ? tenantsRead.status : 'loading'
   const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead].some((r) => r.error?.status === 401)
   useEffect(() => {
@@ -298,7 +302,7 @@ function Console() {
               selectedId={tenantId}
               onSelect={setTenantId}
               onRetry={tenantsRead.run}
-              detailStatus={detailStatus(tenantRead, tenantId)}
+              detailStatus={detailStatus(tenantRead, tenantId, failedTenantId.current)}
               detail={tenantRead.data}
               detailErrorText={tenantRead.error?.message}
               onRetryDetail={tenantRead.run}

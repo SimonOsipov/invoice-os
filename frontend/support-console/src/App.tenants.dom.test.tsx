@@ -138,6 +138,22 @@ describe('Console tenants wiring', () => {
     expect(forY.filter((r) => r.status === 'ready' && r.id !== 'Y')).toEqual([])
   })
 
+  it.each([[500, 'down'], [404, 'tenant not found'], [403, 'forbidden']])('after a %i detail failure for X, no render for Y shows an error state', async (code, msg) => {
+    one.mockRejectedValueOnce(new ApiError('http', msg, code))
+    render(<App />)
+    await openTenants()
+    await waitRow('X')
+    fireEvent.click(rowOf('X'))
+    await waitFor(() => expect(seen.some((r) => r.selectedId === 'X' && ['error', 'not-found', 'forbidden'].includes(r.status))).toBe(true))
+    seen.length = 0
+    one.mockResolvedValueOnce(detail(Y, ['Yemi Only']))
+    fireEvent.click(rowOf('Y'))
+    await screen.findByText('Yemi Only')
+    const forY = seen.filter((r) => r.selectedId === 'Y')
+    expect(forY.length).toBeGreaterThan(0)
+    expect(forY.filter((r) => ['error', 'not-found', 'forbidden'].includes(r.status))).toEqual([])
+  })
+
   it('a failed list read retries; an empty list says so', async () => {
     list.mockRejectedValueOnce(new ApiError('http', 'boom', 500)).mockResolvedValueOnce([])
     render(<App />)

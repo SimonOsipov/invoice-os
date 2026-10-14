@@ -1,8 +1,10 @@
-// The deployed v2 Support Console. Its three screens, Submissions, Rules, Tenants and System health, read real data; Rules also switches real rules.
+// The deployed v2 Support Console. Its screens, Submissions, Rules, Audit, Tenants and System health, read real data; Rules also switches real rules.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
+import { unzipSync } from 'fflate'
 import { apiBase, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, type AuditEvent, type StaffAccount } from '../api/client'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
@@ -645,6 +647,22 @@ const TRUNCATING_CELLS = [1, 5]
 const TRUNCATION = { 'white-space': 'nowrap', overflow: 'hidden', 'text-overflow': 'ellipsis' }
 const ROW_CAP = 20
 
+// One line per cell (1-based) of each row that does not carry the TRUNCATION styles.
+function truncationBad(rows: Locator, cells: number[]): Promise<string[]> {
+  return rows.evaluateAll(
+    (els, args) =>
+      els.flatMap((row, i) =>
+        args.cells.flatMap((n) => {
+          const cs = getComputedStyle(row.children[n - 1])
+          return Object.entries(args.want)
+            .filter(([k, v]) => cs.getPropertyValue(k) !== v)
+            .map(([k, v]) => `row ${i} cell ${n}: ${k} is ${cs.getPropertyValue(k)}, want ${v}`)
+        }),
+      ),
+    { cells, want: TRUNCATION },
+  )
+}
+
 async function submissionsReads(page: Page, testInfo: TestInfo): Promise<void> {
   const rows = jobRows(page)
   await expect(rows.first(), 'the jobs have loaded').toBeVisible()
@@ -659,19 +677,7 @@ async function submissionsReads(page: Page, testInfo: TestInfo): Promise<void> {
     await expect(kid(row, 2), `row ${i} invoice number`).toHaveText(job!.invoice_number)
   }
 
-  const bad = await rows.evaluateAll(
-    (els, args) =>
-      els.flatMap((row, i) =>
-        args.cells.flatMap((n) => {
-          const cs = getComputedStyle(row.children[n - 1])
-          return Object.entries(args.want)
-            .filter(([k, v]) => cs.getPropertyValue(k) !== v)
-            .map(([k, v]) => `row ${i} cell ${n}: ${k} is ${cs.getPropertyValue(k)}, want ${v}`)
-        }),
-      ),
-    { cells: TRUNCATING_CELLS, want: TRUNCATION },
-  )
-  expect(bad, 'every tenant and last-error cell truncates').toEqual([])
+  expect(await truncationBad(rows, TRUNCATING_CELLS), 'every tenant and last-error cell truncates').toEqual([])
   await attachShot(page, testInfo, 'submissions')
 }
 
@@ -847,6 +853,153 @@ async function healthLayout(page: Page): Promise<Read> {
   return { problems, rects: { tiles: tileRects, grid } }
 }
 
+const STAFF_AUDIT = '/api/invoice/v1/staff/audit-log'
+const STAFF_CHANGES = '/api/invoice/v1/staff/staff-audit-log'
+const staffTenantPath = (id: string): string => `/api/invoice/v1/staff/tenants/${id}`
+// StaffRow, StaffChange: internal/audit/staff_read.go.
+type LiveAuditRow = { id: string; tenant_id: string; tenant_name: string | null; event: string }
+type LiveAuditPage = { events: LiveAuditRow[]; page: { has_more: boolean; next_cursor: string | null } }
+type LiveChange = { id: string; actor: string; event: string; tenant_id: string | null; tenant_name: string | null; payload: { reason?: string } | null }
+
+const auditRows = (page: Page): Locator => mainOf(page).locator('button[data-audit-id]')
+// Cells of an audit row: time (1), tenant (2), actor (3), event (4), chevron (5).
+const AUDIT_TRUNCATING_CELLS = [2, 3, 4]
+
+// What the two view chips share with the Submissions state chips (chipStyle in Submissions.tsx).
+const CHIP_PAINT = ['height', 'padding-left', 'padding-right', 'font-family', 'font-size', 'font-weight', 'letter-spacing', 'border-top-left-radius', 'border-top-width', 'border-top-color', 'background-color', 'color']
+
+async function chipPaints(page: Page): Promise<{ on: Record<string, string>; off: Record<string, string> }> {
+  const chips = mainOf(page).locator('button.ops-chip')
+  const on = chips.and(page.locator('[aria-pressed="true"]')).first()
+  const off = chips.and(page.locator('[aria-pressed="false"]')).first()
+  await expect(on).toBeVisible()
+  return { on: await styles(on, CHIP_PAINT), off: await styles(off, CHIP_PAINT) }
+}
+
+// Follows the cursor until every id is found: rows that land between the screen read and this one push them down the list.
+async function liveAuditRows(ids: string[]): Promise<Map<string, LiveAuditRow>> {
+  const found = new Map<string, LiveAuditRow>()
+  let cursor: string | null = null
+  for (let pages = 0; pages < 10 && found.size < ids.length; pages++) {
+    const q = new URLSearchParams({ limit: '100' })
+    if (cursor) q.set('cursor', cursor)
+    const res: LiveAuditPage = await liveStaffGet<LiveAuditPage>(`${STAFF_AUDIT}?${q}`)
+    for (const e of res.events) if (ids.includes(e.id)) found.set(e.id, e)
+    if (!res.page.has_more) break
+    cursor = res.page.next_cursor
+  }
+  return found
+}
+
+async function auditReads(page: Page, testInfo: TestInfo): Promise<void> {
+  const mn = mainOf(page)
+  const rows = auditRows(page)
+  await expect(rows.first(), 'the audit entries have loaded').toBeVisible()
+
+  // Matched by id, not count: the log grows with every spec.
+  const first = (await rows.all()).slice(0, ROW_CAP)
+  expect(first.length, 'audit rows on screen').toBeGreaterThan(0)
+  const ids = await Promise.all(first.map((row) => row.getAttribute('data-audit-id') as Promise<string>))
+  const live = await liveAuditRows(ids)
+  for (const [i, row] of first.entries()) {
+    const hit = live.get(ids[i])
+    expect(hit, `row ${i} is in the live read`).toBeDefined()
+    await expect(kid(row, 2), `row ${i} tenant`).toHaveText(hit!.tenant_name ?? hit!.tenant_id)
+    await expect(kid(row, 4), `row ${i} event`).toHaveText(hit!.event)
+  }
+  expect(await truncationBad(rows, AUDIT_TRUNCATING_CELLS), 'every tenant, actor and event cell truncates').toEqual([])
+
+  const form = mn.locator('form')
+  for (const label of ['From', 'To']) {
+    const input = form.getByLabel(label, { exact: true })
+    await expect(input, `${label} is a date input`).toHaveAttribute('type', 'date')
+  }
+  await expect(form.locator('input[type="date"]'), 'the filter form holds two date inputs').toHaveCount(2)
+
+  const audit = await chipPaints(page)
+  await openScreen(page, 'Submissions', 'Submissions ops')
+  const submissions = await chipPaints(page)
+  expect(audit.on, 'the pressed view chip is painted as the pressed Submissions chip').toEqual(submissions.on)
+  expect(audit.off, 'the idle view chip is painted as an idle Submissions chip').toEqual(submissions.off)
+  await openScreen(page, 'Audit', 'Audit & evidence explorer')
+  await expect(rows.first(), 'the audit entries reload').toBeVisible()
+  await attachShot(page, testInfo, 'audit')
+}
+
+async function auditLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const titleBlock = parent(mn.getByRole('heading', { level: 1, name: 'Audit & evidence explorer' }))
+  const headerRow = parent(titleBlock)
+  const right = kid(headerRow, 2)
+  const chips = mn.locator('button.ops-chip')
+  const chipBar = parent(chips.first())
+  const form = mn.locator('form')
+  const card = parent(auditRows(page).first())
+  const top = await boxes(page, {
+    headerRow,
+    titleBlock,
+    right,
+    pill: kid(right, 1),
+    evidence: mn.getByRole('button', { name: 'Evidence bundle' }),
+    chipBar,
+    form,
+    card,
+    head: kid(card, 1),
+  })
+  const problems = [
+    ...apart(top.titleBlock, top.right, 'title block / right group'),
+    ...within(top.headerRow, top.titleBlock, 'title block in the header row'),
+    ...within(top.headerRow, top.pill, 'pill in the header row'),
+    ...within(top.headerRow, top.evidence, 'Evidence bundle in the header row'),
+    ...apart(top.pill, top.evidence, 'pill / Evidence bundle'),
+    ...sameCentreY(top.pill, top.evidence, 'pill / Evidence bundle'),
+    ...below(top.headerRow, top.chipBar, 'view chips below the header row'),
+    ...below(top.chipBar, top.form, 'filter form below the view chips'),
+    ...below(top.form, top.card, 'card below the filter form'),
+  ]
+
+  const chipRects = await rectsOf(page, chips, 'view chip')
+  problems.push(...sameTops(chipRects, 'view chips'), ...pairwiseApart(chipRects, 'view chips'))
+  for (const [i, c] of chipRects.entries()) problems.push(...below(top.headerRow, c, `view chip ${i}`))
+
+  const controls = await Promise.all([1, 2, 3, 4, 5].map(async (n) => (await boxes(page, { c: kid(form, n) })).c))
+  problems.push(...pairwiseApart(controls, 'filter controls'))
+  for (const [i, c] of controls.entries()) problems.push(...within(top.form, c, `filter control ${i + 1} in the form`))
+
+  const headCells = await childRects(kid(card, 1))
+  const rows = (await auditRows(page).all()).slice(0, ROW_CAP)
+  expect(rows.length, 'audit rows').toBeGreaterThan(0)
+  for (const [i, row] of rows.entries()) {
+    const box = await row.boundingBox()
+    if (!box) throw new Error(`audit row ${i} has no box`)
+    const cells = await childRects(row)
+    problems.push(...within(top.card, box, `row ${i} in the card`), ...pairwiseApart(cells, `row ${i} cells`))
+    for (const [n, c] of cells.entries()) {
+      problems.push(...within(box, c, `row ${i} cell ${n + 1} in its row`))
+      if (!near(c.x, headCells[n].x, 1)) problems.push(`row ${i} cell ${n + 1}: left ${c.x} vs header cell ${headCells[n].x}`)
+    }
+  }
+
+  const more = mn.getByRole('button', { name: 'Load more' })
+  if ((await more.count()) > 0) problems.push(...below(top.card, (await boxes(page, { more })).more, 'Load more below the card'))
+
+  await mn.getByRole('button', { name: 'STAFF CHANGES' }).click()
+  const changeRows = mn.locator('button[data-change-id]')
+  await expect(changeRows.first(), 'the staff changes have loaded').toBeVisible()
+  const staffHead = await childRects(kid(parent(changeRows.first()), 1))
+  for (const [i, row] of (await changeRows.all()).slice(0, ROW_CAP).entries()) {
+    const cells = await childRects(row)
+    problems.push(...pairwiseApart(cells, `staff row ${i} cells`))
+    for (const [n, c] of cells.entries()) {
+      if (!near(c.x, staffHead[n].x, 1)) problems.push(`staff row ${i} cell ${n + 1}: left ${c.x} vs header cell ${staffHead[n].x}`)
+    }
+  }
+  await mn.getByRole('button', { name: 'TENANT LOG' }).click()
+
+  await noSidewaysScroll(page, 'Audit')
+  return { problems, rects: { top, chipRects, controls, headCells, staffHead } }
+}
+
 const SCREENS: Screen[] = [
   {
     nav: 'Submissions',
@@ -882,6 +1035,13 @@ const SCREENS: Screen[] = [
       await noSidewaysScroll(page, 'Rules')
       return { problems: [...apart(kids[0], kids[1], 'rules grid columns'), ...sameTops(kids, 'rules grid')], rects: { kids } }
     },
+  },
+  {
+    nav: 'Audit',
+    h1: 'Audit & evidence explorer',
+    rowUp: 2,
+    reads: auditReads,
+    layout: auditLayout,
   },
   {
     nav: 'Tenants',
@@ -1558,6 +1718,8 @@ test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
 
 // SUP-07: acts on seeded tenant-2222 dead-letter rows (D22) and cancels back to a terminal state in the same spec.
 const SEEDED_DEAD = ['DEMO-2026-7004', 'DEMO-2026-7006']
+// The reason of this run's tenant-2222 cancel, for the Audit test below; unset after a worker restart.
+const cancel2222: { reason?: string } = {}
 // audit.SupportActor, internal/audit/audit.go.
 const SUPPORT_ACTOR = 'ASComply support'
 
@@ -1670,6 +1832,7 @@ test('SUP-07 Submissions: re-drive a seeded dead-letter job, then cancel it', as
     const res = await cancelWhenQueued(api, jobId!, cancelReason)
     expect(res.status, `cancel answered ${JSON.stringify(res.body)}`).toBe(200)
     cancelled = true
+    cancel2222.reason = cancelReason
     const done = (res.body as { job: { state: string; invoice_status: string } }).job
     expect(done.state).toBe('cancelled')
     expect(done.invoice_status).toBe('failed')
@@ -1684,4 +1847,161 @@ test('SUP-07 Submissions: re-drive a seeded dead-letter job, then cancel it', as
   }
 
   noErrors(errors, 'SUP-07 Submissions')
+})
+
+const metaValue = (drawer: Locator, label: string): Locator => drawer.locator('div.label').filter({ hasText: new RegExp(`^${label}$`) }).locator('xpath=following-sibling::div[1]')
+const viewport = (page: Page): Rect => ({ x: 0, y: 0, ...page.viewportSize()! })
+
+// Honeywell Group, the one seeded tenant-2222 company with invoices (db/seed.dev.sql); a spec-made company would sort anywhere.
+const SEED_2222_TIN = '20665510-0001'
+
+// Mirrors dayStart and dayEnd in frontend/support-console/src/auditApi.ts.
+const BUNDLE_FROM = '2020-01-01'
+const BUNDLE_TO = '2035-12-31'
+
+type LivePreview = { entity: { id: string; name: string; tin: string | null }; filename: string; counts: Record<'invoices' | 'line_items' | 'status_transitions' | 'submissions' | 'exchange_attempts' | 'body_files', number> }
+const PREVIEW_CELLS: [string, keyof LivePreview['counts']][] = [
+  ['Invoices', 'invoices'],
+  ['Line items', 'line_items'],
+  ['Status changes', 'status_transitions'],
+  ['Submissions', 'submissions'],
+  ['Exchange attempts', 'exchange_attempts'],
+  ['Body files', 'body_files'],
+]
+
+test('SUP-09 Audit: entry drawer, staff changes, the tenant link and an evidence download', async ({ page }, testInfo) => {
+  test.setTimeout(240_000)
+  const errors = await startSupport(page)
+  const mn = mainOf(page)
+
+  await openScreen(page, 'Audit', 'Audit & evidence explorer')
+  const rows = auditRows(page)
+  await expect(rows.first(), 'the audit entries have loaded').toBeVisible()
+
+  // Entry drawer: the clicked row's own entry.
+  const row = rows.first()
+  const rowEvent = (await kid(row, 4).textContent()) ?? ''
+  const rowTenant = (await kid(row, 2).textContent()) ?? ''
+  await row.click()
+  let { drawer } = await expectDrawer(page, 'entry drawer')
+  await expect(drawer, 'the drawer names the row event').toContainText(rowEvent)
+  await expect(metaValue(drawer, 'Tenant'), 'the drawer tenant is the row tenant').toHaveText(rowTenant)
+  await atWidths(page, 'SUP-09 entry drawer layout', async () => {
+    const body = kid(drawer, 2)
+    const r = await boxes(page, { drawer, meta: kid(body, 1), pre: body.locator('pre') })
+    const cells = await childRects(kid(body, 1))
+    return {
+      problems: [
+        ...within(viewport(page), r.drawer, 'drawer in the viewport'),
+        ...pairwiseApart(cells, 'meta cell'),
+        ...cells.flatMap((c, i) => within(r.meta, c, `meta cell ${i} in the grid`)),
+        ...withinX(r.drawer, r.pre, 'payload in the drawer'),
+      ],
+      rects: r,
+    }
+  })
+  await attachShot(page, testInfo, 'entry-drawer')
+  await drawer.getByRole('button', { name: 'Close' }).click()
+  await expect(drawer, 'Close closes the entry drawer').toBeHidden()
+
+  // Staff changes: the tenant-2222 cancel of the Submissions test.
+  const changes = (await liveStaffGet<{ changes: LiveChange[] }>(STAFF_CHANGES)).changes
+  const change = changes.find((c) => c.event === 'submission.job.cancelled' && c.tenant_id === DEMO_2222_ID && (!cancel2222.reason || c.payload?.reason === cancel2222.reason))
+  expect(change, 'the staff change log holds the tenant-2222 cancel').toBeDefined()
+  await mn.getByRole('button', { name: 'STAFF CHANGES' }).click()
+  const changeRow = mn.locator(`button[data-change-id="${change!.id}"]`)
+  await expect(changeRow, 'the staff changes view lists the cancel').toBeVisible()
+  await expect(kid(changeRow, 2), 'staff member').toHaveText(change!.actor)
+  await expect(kid(changeRow, 3), 'event').toHaveText('submission.job.cancelled')
+  await expect(kid(changeRow, 4), 'tenant').toHaveText(change!.tenant_name ?? DEMO_2222_ID)
+  await changeRow.click()
+  ;({ drawer } = await expectDrawer(page, 'staff change drawer'))
+  const openLog = drawer.getByRole('button', { name: 'Open in tenant log' })
+  await atWidths(page, 'SUP-09 staff change drawer layout', async () => {
+    const body = kid(drawer, 2)
+    const r = await boxes(page, { drawer, meta: kid(body, 1), pre: body.locator('pre'), footer: kid(drawer, 3), openLog })
+    const cells = await childRects(kid(body, 1))
+    return {
+      problems: [
+        ...within(viewport(page), r.drawer, 'drawer in the viewport'),
+        ...pairwiseApart(cells, 'meta cell'),
+        ...cells.flatMap((c, i) => within(r.meta, c, `meta cell ${i} in the grid`)),
+        ...withinX(r.drawer, r.pre, 'payload in the drawer'),
+        ...within(r.drawer, r.footer, 'footer in the drawer'),
+        ...within(r.footer, r.openLog, 'Open in tenant log in the footer'),
+      ],
+      rects: r,
+    }
+  })
+
+  // The tenant link lands on the tenant's own row, written by support.
+  await openLog.click()
+  ;({ drawer } = await expectDrawer(page, 'linked entry drawer'))
+  await expect(drawer, 'the linked entry is the cancel').toContainText('submission.job.cancelled')
+  await expect(metaValue(drawer, 'Actor'), 'the customer sees the support actor').toHaveText(SUPPORT_ACTOR)
+  if (cancel2222.reason) await expect(drawer.locator('pre'), 'the linked entry carries this run reason').toContainText(cancel2222.reason)
+  await expect(mn.locator('select[aria-label="Tenant"]'), 'the link filters to tenant 2222').toHaveValue(DEMO_2222_ID)
+  await drawer.getByRole('button', { name: 'Close' }).click()
+  await expect(drawer).toBeHidden()
+
+  // Evidence bundle: tenant 2222, its seeded company.
+  await mn.getByRole('button', { name: 'Evidence bundle' }).click()
+  ;({ drawer } = await expectDrawer(page, 'evidence drawer'))
+  await drawer.getByLabel('Tenant', { exact: true }).selectOption(DEMO_2222_ID)
+  const entities = (await liveStaffGet<{ entities: { id: string; name: string; tin: string | null }[] }>(`${staffTenantPath(DEMO_2222_ID)}/entities`)).entities
+  expect(entities.length, 'tenant 2222 has a company').toBeGreaterThan(0)
+  const company = entities.find((e) => e.tin === SEED_2222_TIN)
+  expect(company, `tenant 2222 holds the seeded company ${SEED_2222_TIN}`).toBeDefined()
+  await drawer.getByLabel('Company', { exact: true }).selectOption(company!.id)
+  await drawer.getByLabel('From', { exact: true }).fill(BUNDLE_FROM)
+  await drawer.getByLabel('To', { exact: true }).fill(BUNDLE_TO)
+
+  const query = new URLSearchParams({ entity_id: company!.id, from: `${BUNDLE_FROM}T00:00:00.000Z`, to: `${BUNDLE_TO}T23:59:59.999Z` })
+  const live = await liveStaffGet<LivePreview>(`${staffTenantPath(DEMO_2222_ID)}/evidence-bundle/preview?${query}`)
+  expect(live.counts.invoices, `the seeded tenant-2222 company (${company!.name}) holds invoices in the period`).toBeGreaterThan(0)
+  await expect(metaValue(drawer, 'TIN'), 'TIN cell').toHaveText(live.entity.tin ?? '—')
+  for (const [label, key] of PREVIEW_CELLS) await expect(metaValue(drawer, label), `${label} cell`).toHaveText(String(live.counts[key]))
+
+  const download = drawer.getByRole('button', { name: 'Download bundle' })
+  await expect(download).toBeEnabled()
+  await atWidths(page, 'SUP-09 evidence drawer layout', async () => {
+    const body = kid(drawer, 2)
+    const r = await boxes(page, {
+      drawer,
+      tenant: drawer.getByLabel('Tenant', { exact: true }),
+      company: drawer.getByLabel('Company', { exact: true }),
+      from: drawer.getByLabel('From', { exact: true }),
+      to: drawer.getByLabel('To', { exact: true }),
+      meta: kid(body, 4),
+      footer: kid(drawer, 3),
+      download,
+    })
+    const cells = await childRects(kid(body, 4))
+    const fields = [r.tenant, r.company, r.from, r.to]
+    return {
+      problems: [
+        ...within(viewport(page), r.drawer, 'drawer in the viewport'),
+        ...pairwiseApart(fields, 'evidence fields'),
+        ...fields.flatMap((f, i) => within(r.drawer, f, `evidence field ${i} in the drawer`)),
+        ...pairwiseApart(cells, 'meta cell'),
+        ...cells.flatMap((c, i) => within(r.meta, c, `meta cell ${i} in the grid`)),
+        ...within(r.drawer, r.footer, 'footer in the drawer'),
+        ...within(r.footer, r.download, 'Download bundle in the footer'),
+      ],
+      rects: r,
+    }
+  })
+  await attachShot(page, testInfo, 'evidence-drawer')
+
+  const [file] = await Promise.all([page.waitForEvent('download'), download.click()])
+  expect(file.suggestedFilename(), 'download filename').toMatch(/^ASComply_evidence_.+\.zip$/)
+  expect(file.suggestedFilename(), 'the download is named as the preview says').toBe(live.filename)
+  const zip = unzipSync(new Uint8Array(await readFile((await file.path())!)))
+  const manifest = JSON.parse(new TextDecoder().decode(zip['manifest.json'])) as { entity: LivePreview['entity']; counts: LivePreview['counts']; generated_by: unknown }
+  expect(manifest.entity.tin, 'the zip manifest TIN is the preview TIN').toBe(live.entity.tin)
+  expect(manifest.counts, 'the zip manifest counts are the preview counts').toEqual(live.counts)
+  expect(manifest.generated_by, 'the zip is generated by support').toEqual({ name: SUPPORT_ACTOR, kind: 'raw' })
+  await expect(page.getByRole('status').filter({ hasText: 'Bundle downloaded' })).toBeVisible()
+
+  noErrors(errors, 'SUP-09 Audit')
 })

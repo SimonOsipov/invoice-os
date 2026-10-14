@@ -14,6 +14,11 @@ export const NAV_ITEMS: NavItem[] = [
     glyph: <Icon paths={['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']} size={17} />,
   },
   {
+    key: 'audit',
+    label: 'Audit',
+    glyph: <Icon paths={['M21 8v13H3V8', 'M1 3h22v5H1z', 'M10 12h4']} size={17} />,
+  },
+  {
     key: 'tenants',
     label: 'Tenants',
     glyph: <Icon paths={['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']} size={17} />,

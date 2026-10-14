@@ -184,3 +184,24 @@ func TestFleetReader_OwnsItsDeadline(t *testing.T) {
 		t.Fatalf("reader waited %v; it must stop at its own deadline", d)
 	}
 }
+
+type deadlineSeen struct{ deadline time.Time }
+
+func (d *deadlineSeen) RoundTrip(r *http.Request) (*http.Response, error) {
+	d.deadline, _ = r.Context().Deadline()
+	return nil, context.DeadlineExceeded
+}
+
+// main.go builds the reader with NewFleetReader: it must put a FleetTimeout deadline on the request without a client Timeout.
+func TestFleetReader_TheProductionConstructorSetsTheFleetTimeoutDeadline(t *testing.T) {
+	seen := &deadlineSeen{}
+	base, _ := url.Parse("http://gateway.invalid:8080")
+	start := time.Now()
+	_, _ = NewFleetReader(base, &http.Client{Transport: seen})(context.Background())
+	if seen.deadline.IsZero() {
+		t.Fatal("the request carried no deadline")
+	}
+	if got := seen.deadline.Sub(start); got < FleetTimeout-time.Second || got > FleetTimeout+time.Second {
+		t.Errorf("deadline %v after the call began, want about FleetTimeout %v", got, FleetTimeout)
+	}
+}

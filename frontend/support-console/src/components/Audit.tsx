@@ -123,7 +123,7 @@ function ChangeRows({ status, errorText, changes, onRetry, onOpen }: { status: A
   )
 }
 
-function TextFilter({ label, placeholder, value, onApply, width }: { label: string; placeholder: string; value: string; onApply: (v: string) => void; width: number }) {
+export function TextFilter({ label, placeholder, value, onApply, width }: { label: string; placeholder: string; value: string; onApply: (v: string) => void; width: number }) {
   const [draft, setDraft] = useState(value)
   useEffect(() => setDraft(value), [value])
   const apply = () => onApply(draft.trim())
@@ -142,7 +142,7 @@ function TextFilter({ label, placeholder, value, onApply, width }: { label: stri
   )
 }
 
-function DateFilter({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+export function DateFilter({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <div className="ops-input ops-field" style={{ display: 'flex', alignItems: 'center', flex: 'none' }}>
       <input type="date" aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} style={{ ...FIELD_INPUT, flex: 'none' }} />

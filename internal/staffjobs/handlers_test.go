@@ -341,3 +341,105 @@ func TestRedriveHandler_ServerFaultIs500AndLogged(t *testing.T) {
 		t.Errorf("log = %q, want the redrive response op", logs.String())
 	}
 }
+
+func serveCancel(t *testing.T, body string, result Detail, err error) (*httptest.ResponseRecorder, *redriveCall) {
+	t.Helper()
+	call := &redriveCall{}
+	h := CancelHandler(func(_ context.Context, id, reason string) (Detail, error) {
+		call.n++
+		call.id, call.reason = id, reason
+		return result, err
+	}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	req := httptest.NewRequest(http.MethodPost, "/v1/staff/jobs/abc/cancel", strings.NewReader(body))
+	req.SetPathValue("id", "abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec, call
+}
+
+func TestCancelHandler_BodyAndStatusMapping(t *testing.T) {
+	const badReason = `{"error":"reason must be 1 to 500 characters"}`
+	// Success first: the refusals below only mean something if a valid request reaches the store.
+	rec, call := serveCancel(t, `{"reason":"  APP is down "}`, Detail{Job: Job{ID: "abc", State: "cancelled"}}, nil)
+	var ok struct {
+		Job     map[string]json.RawMessage `json:"job"`
+		History []json.RawMessage          `json:"history"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ok); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("success: got %d %q: %v", rec.Code, rec.Body.String(), err)
+	}
+	if call.n != 1 || call.id != "abc" || call.reason != "APP is down" {
+		t.Errorf("cancel call = %+v, want one call with id abc and the trimmed reason", call)
+	}
+	if string(ok.Job["state"]) != `"cancelled"` || string(ok.Job["max_attempts"]) != strconv.Itoa(maxAttempts) || ok.History == nil {
+		t.Errorf("body = %s, want the job with max_attempts and a history array", rec.Body.String())
+	}
+
+	for _, tc := range []struct {
+		name   string
+		body   string
+		status int
+		want   string
+	}{
+		{"empty reason", `{"reason":""}`, 400, badReason},
+		{"blank reason", `{"reason":"   "}`, 400, badReason},
+		{"501 runes", `{"reason":"` + strings.Repeat("é", 501) + `"}`, 400, badReason},
+		{"unknown field", `{"reason":"x","force":true}`, 400, `{"error":"invalid request body"}`},
+		{"9 KiB", `{"reason":"` + strings.Repeat("a", 9<<10) + `"}`, 413, `{"error":"request body too large"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, call := serveCancel(t, tc.body, Detail{}, nil)
+			wantBody(t, rec, tc.status, tc.want)
+			if call.n != 0 {
+				t.Error("a refused body reached cancel")
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		want   string
+	}{
+		{"job state", ErrJobState, 409, "only a queued job can be cancelled"},
+		{"wrapped job state", fmt.Errorf("cancel: %w", ErrJobState), 409, "only a queued job can be cancelled"},
+		{"invoice status", invoice.StatusError{Have: invoice.StatusAccepted}, 409, "the invoice is accepted, not queued"},
+		{"not found", ErrJobNotFound, 404, "job not found"},
+		{"not staff", db.ErrNotStaff, 403, "forbidden"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, call := serveCancel(t, `{"reason":"r"}`, Detail{}, tc.err)
+			wantBody(t, rec, tc.status, `{"error":"`+tc.want+`"}`)
+			if call.n != 1 {
+				t.Errorf("cancel calls = %d, want 1", call.n)
+			}
+		})
+	}
+}
+
+// The jsonb audit payload cannot hold U+0000: a reason with one passed the length check and became a 500.
+func TestReasonRoutes_RefuseAnEmbeddedNulBeforeTheStore(t *testing.T) {
+	routes := map[string]func(t *testing.T, body string) (*httptest.ResponseRecorder, *redriveCall){
+		"redrive": func(t *testing.T, body string) (*httptest.ResponseRecorder, *redriveCall) {
+			return serveRedrive(t, body, Detail{}, nil)
+		},
+		"cancel": func(t *testing.T, body string) (*httptest.ResponseRecorder, *redriveCall) {
+			return serveCancel(t, body, Detail{}, nil)
+		},
+	}
+	for name, serve := range routes {
+		t.Run(name, func(t *testing.T) {
+			if rec, call := serve(t, `{"reason":"a b"}`); rec.Code != http.StatusOK || call.n != 1 {
+				t.Errorf("a plain reason: got %d, %d calls; want 200 and 1 call", rec.Code, call.n)
+			}
+			for _, body := range []string{`{"reason":"a\u0000b"}`, `{"reason":"\u0000"}`, `{"reason":"\u0000x"}`, `{"reason":"x\u0000"}`} {
+				rec, call := serve(t, body)
+				wantBody(t, rec, http.StatusBadRequest, `{"error":"reason must be 1 to 500 characters"}`)
+				if call.n != 0 {
+					t.Errorf("body %s reached the store", body)
+				}
+			}
+		})
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -468,8 +469,13 @@ func TestRLS_RedriveRefusesAResolvedOutsideInvoice(t *testing.T) {
 
 func (r *redriveRig) auditPayloads(t *testing.T, table, tenant string) []map[string]any {
 	t.Helper()
+	return r.auditPayloadsOf(t, table, tenant, "submission.job.redriven")
+}
+
+func (r *redriveRig) auditPayloadsOf(t *testing.T, table, tenant, event string) []map[string]any {
+	t.Helper()
 	rows, err := r.super.Query(context.Background(),
-		`SELECT payload FROM `+table+` WHERE tenant_id = $1 AND event = 'submission.job.redriven'`, tenant)
+		`SELECT payload FROM `+table+` WHERE tenant_id = $1 AND event = $2`, tenant, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -751,5 +757,305 @@ func TestRLS_RedriveHandlerOverTheStoreMapsRealErrors(t *testing.T) {
 	}
 	if got := r.auditPayloads(t, "audit_log", r.tenant); len(got) != 1 || got[0]["reason"] != "APP back up" {
 		t.Errorf("audit_log payloads = %v, want one with the trimmed reason", got)
+	}
+}
+
+// cancelRig is a job at state over a queued invoice, with the River row riverState (empty for none).
+type cancelRig struct{ *redriveRig }
+
+func newCancelRig(t *testing.T, state, riverState string) *cancelRig {
+	t.Helper()
+	r := newRedriveRig(t, state, riverState)
+	if _, err := r.super.Exec(context.Background(), `UPDATE invoices SET status = 'queued', failure_kind = NULL WHERE id = $1`, r.invoice); err != nil {
+		t.Fatal(err)
+	}
+	return &cancelRig{r}
+}
+
+// refusesCancel asserts Cancel fails with want and writes nothing.
+func (r *cancelRig) refusesCancel(t *testing.T, want error) {
+	t.Helper()
+	before := r.state(t)
+	d, err := r.store.Cancel(r.ctx, r.job, "APP is down")
+	if !errors.Is(err, want) {
+		t.Fatalf("Cancel = %v, want %v", err, want)
+	}
+	if d.Job.ID != "" {
+		t.Errorf("a refused Cancel returned the job %+v", d.Job)
+	}
+	if after := r.state(t); after != before {
+		t.Errorf("a refused Cancel wrote:\nbefore %+v\nafter  %+v", before, after)
+	}
+}
+
+func TestRLS_CancelStopsAQueuedJob(t *testing.T) {
+	r := newCancelRig(t, "queued", "scheduled")
+	before := r.state(t)
+	if before.RiverJobID == 0 || before.InvoiceStatus != "queued" {
+		t.Fatalf("setup = %+v, want a queued job on a River row and a queued invoice", before)
+	}
+	if row, ok := r.riverRow(t, before.RiverJobID); !ok || row.State != "scheduled" {
+		t.Fatalf("setup river row = %+v (found %v), want scheduled", row, ok)
+	}
+
+	d, err := r.store.Cancel(r.ctx, r.job, "APP is down")
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	got := r.state(t)
+	if got.JobState != "cancelled" || got.InvoiceStatus != "failed" || got.FailureKind != "" {
+		t.Fatalf("after Cancel = %+v, want job cancelled, invoice failed, no failure_kind", got)
+	}
+	if got.RiverJobID != before.RiverJobID || got.Attempts != before.Attempts {
+		t.Errorf("river_job_id/attempts %d/%d -> %d/%d, want unchanged", before.RiverJobID, before.Attempts, got.RiverJobID, got.Attempts)
+	}
+	if row, ok := r.riverRow(t, before.RiverJobID); !ok || row.State != "cancelled" {
+		t.Errorf("river row = %+v (found %v), want cancelled", row, ok)
+	}
+	if got.StatusHistoryRows != before.StatusHistoryRows+1 {
+		t.Errorf("history rows %d -> %d, want one more", before.StatusHistoryRows, got.StatusHistoryRows)
+	}
+	if d.Job.ID != r.job || d.Job.State != "cancelled" || d.Job.InvoiceStatus != "failed" || len(d.History) == 0 {
+		t.Fatalf("returned detail = %+v, want the cancelled job after commit with a history", d)
+	}
+	last := d.History[len(d.History)-1]
+	if last.FromStatus == nil || *last.FromStatus != "queued" || last.ToStatus != "failed" || last.Actor != audit.SupportActor {
+		t.Errorf("last history step = %+v, want queued -> failed by %q", last, audit.SupportActor)
+	}
+}
+
+func TestRLS_CancelToleratesAMissingRiverJob(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  string // extra job update; empty keeps river_job_id NULL
+	}{
+		{"river_job_id NULL", ""},
+		{"pruned river_job_id", `river_job_id = 987654321`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newCancelRig(t, "queued", "")
+			if tc.set != "" {
+				r.setJob(t, tc.set)
+			}
+			if rows := riverRows(t, r.super, r.tenant); len(rows) != 0 {
+				t.Fatalf("setup river rows = %v, want none", rows)
+			}
+			if _, err := r.store.Cancel(r.ctx, r.job, "APP is down"); err != nil {
+				t.Fatalf("Cancel with a missing River job: %v", err)
+			}
+			if got := r.state(t); got.JobState != "cancelled" || got.InvoiceStatus != "failed" || got.FailureKind != "" {
+				t.Errorf("after Cancel = %+v, want job cancelled, invoice failed, no failure_kind", got)
+			}
+		})
+	}
+}
+
+func TestRLS_CancelRefusesEveryOtherState(t *testing.T) {
+	super, _ := dbPools(t)
+	states := jobStatesOfTheCheck(t, super)
+	seen := map[string]bool{}
+	for _, s := range states {
+		seen[s] = true
+	}
+	if len(states) < 2 || !seen["queued"] || !seen["cancelled"] || !seen["submitting"] {
+		t.Fatalf("states of the CHECK = %v, want the set with queued, submitting and cancelled", states)
+	}
+	for _, state := range states {
+		if state == "queued" {
+			continue
+		}
+		t.Run(state, func(t *testing.T) {
+			r := newCancelRig(t, state, "scheduled")
+			r.refusesCancel(t, ErrJobState)
+		})
+	}
+}
+
+// waitForRowLockWait blocks until a backend waits on a lock in a submission_jobs statement, or until done fires.
+func waitForRowLockWait(t *testing.T, super *pgxpool.Pool, done <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("Cancel returned (%v) without waiting for the row lock the worker holds", err)
+		default:
+		}
+		var waiting int
+		if err := super.QueryRow(context.Background(),
+			`SELECT count(*) FROM pg_stat_activity
+			  WHERE datname = current_database() AND pid <> pg_backend_pid()
+			    AND wait_event_type = 'Lock' AND query LIKE '%submission_jobs%'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("no backend ever waited on the submission_jobs row lock")
+}
+
+func TestRLS_CancelAfterAWorkerTookTheRowIs409(t *testing.T) {
+	r := newCancelRig(t, "queued", "scheduled")
+	before := r.state(t)
+	ctx := context.Background()
+	worker, err := r.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = worker.Rollback(ctx) }()
+	if _, err := worker.Exec(ctx, `UPDATE submission_jobs SET state = 'submitting' WHERE id = $1`, r.job); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.store.Cancel(r.ctx, r.job, "APP is down")
+		done <- err
+	}()
+	waitForRowLockWait(t, r.super, done)
+	if err := worker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrJobState) {
+			t.Fatalf("Cancel = %v, want ErrJobState", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Cancel did not return after the worker committed")
+	}
+	want := before
+	want.JobState = "submitting"
+	if after := r.state(t); after != want {
+		t.Errorf("a refused Cancel wrote:\nwant   %+v\nafter  %+v", want, after)
+	}
+}
+
+func TestRLS_CancelRefusesAnInvoiceThatIsNotQueued(t *testing.T) {
+	r := newCancelRig(t, "queued", "scheduled")
+	if _, err := r.super.Exec(context.Background(), `UPDATE invoices SET status = 'accepted' WHERE id = $1`, r.invoice); err != nil {
+		t.Fatal(err)
+	}
+	before := r.state(t)
+	if before.JobState != "queued" || before.Rivers == "" {
+		t.Fatalf("setup = %+v, want a queued job with its River row", before)
+	}
+	_, err := r.store.Cancel(r.ctx, r.job, "APP is down")
+	var se invoice.StatusError
+	if !errors.As(err, &se) || se.Have != invoice.StatusAccepted {
+		t.Fatalf("Cancel = %v, want invoice.StatusError{Have: accepted}", err)
+	}
+	if after := r.state(t); after != before {
+		t.Errorf("a refused Cancel wrote:\nbefore %+v\nafter  %+v", before, after)
+	}
+}
+
+// countingAdapter counts Submit calls on top of acceptAdapter.
+type countingAdapter struct {
+	acceptAdapter
+	submits atomic.Int32
+}
+
+func (a *countingAdapter) Submit(ctx context.Context, w submission.Wire, key string) (submission.Result, submission.Evidence) {
+	a.submits.Add(1)
+	return a.acceptAdapter.Submit(ctx, w, key)
+}
+
+func TestRLS_CancelledJobShortCircuitsTheWorker(t *testing.T) {
+	r := newCancelRig(t, "queued", "available")
+	riverID := r.state(t).RiverJobID
+	if _, err := r.store.Cancel(r.ctx, r.job, "APP is down"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	before := r.state(t)
+	if before.JobState != "cancelled" {
+		t.Fatalf("after Cancel job = %q, want cancelled", before.JobState)
+	}
+	adapter := &countingAdapter{}
+	sw := &submission.SubmitWorker{
+		Pool: r.app, Adapter: adapter, InvoicePort: invoice.NewStore(r.app),
+		Limiter: submission.NewRateLimiter(), RateLimit: 1000, Logger: slog.Default(),
+	}
+	job := &river.Job[submission.SubmitArgs]{JobRow: &rivertype.JobRow{ID: riverID, Attempt: 1, MaxAttempts: 8}, Args: r.args}
+	if err := sw.Work(context.Background(), job); err != nil {
+		t.Fatalf("Work on the cancelled job: %v", err)
+	}
+	if n := adapter.submits.Load(); n != 0 {
+		t.Errorf("adapter Submit calls = %d, want 0", n)
+	}
+	if after := r.state(t); after != before {
+		t.Errorf("Work changed rows after Cancel:\nbefore %+v\nafter  %+v", before, after)
+	}
+}
+
+func TestRLS_CancelWritesBothAuditRowsInTheSameTx(t *testing.T) {
+	super, _ := dbPools(t)
+	staff := uuid.NewString()
+	seedMembership(t, super, adoptHouseTenant(t, super), staff)
+	r := newCancelRig(t, "queued", "scheduled")
+	r.ctx = staffCtx(staff)
+	if _, err := r.store.Cancel(r.ctx, r.job, "APP is down"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	const event = "submission.job.cancelled"
+	want := map[string]any{"job_id": r.job, "invoice_id": r.invoice, "invoice_number": "RD-" + r.tenant[:8], "reason": "APP is down"}
+	for _, table := range []string{"staff_audit_log", "audit_log"} {
+		rows := r.auditPayloadsOf(t, table, r.tenant, event)
+		if len(rows) != 1 {
+			t.Fatalf("%s has %d %s rows, want 1", table, len(rows), event)
+		}
+		if len(rows[0]) != len(want) {
+			t.Errorf("%s payload = %v, want exactly the keys job_id, invoice_id, invoice_number, reason", table, rows[0])
+		}
+		for k, v := range want {
+			if rows[0][k] != v {
+				t.Errorf("%s payload[%s] = %v, want %v", table, k, rows[0][k], v)
+			}
+		}
+	}
+	var actor uuid.UUID
+	var subject *uuid.UUID
+	if err := super.QueryRow(context.Background(),
+		`SELECT actor, subject_id FROM staff_audit_log WHERE tenant_id = $1 AND event = $2`, r.tenant, event).Scan(&actor, &subject); err != nil {
+		t.Fatal(err)
+	}
+	if actor.String() != staff || subject == nil || subject.String() != r.job {
+		t.Errorf("staff_audit_log actor/subject = %v/%v, want %s/%s", actor, subject, staff, r.job)
+	}
+	var customerActor string
+	if err := super.QueryRow(context.Background(),
+		`SELECT actor FROM audit_log WHERE tenant_id = $1 AND event = $2`, r.tenant, event).Scan(&customerActor); err != nil || customerActor != audit.SupportActor {
+		t.Errorf("audit_log actor = %q (%v), want %q", customerActor, err, audit.SupportActor)
+	}
+	var leaks int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND payload::text LIKE '%' || $2 || '%'`, r.tenant, staff).Scan(&leaks); err != nil || leaks != 0 {
+		t.Errorf("audit_log rows naming the staff uuid = %d (%v), want 0", leaks, err)
+	}
+}
+
+func TestRLS_CancelRollsBackWhenTheAuditWriteFails(t *testing.T) {
+	r := newCancelRig(t, "queued", "scheduled")
+	boom := errors.New("audit down")
+	calls := 0
+	orig := recordStaff
+	t.Cleanup(func() { recordStaff = orig })
+	recordStaff = func(context.Context, pgx.Tx, audit.StaffEvent) error { calls++; return boom }
+	before := r.state(t)
+	if before.JobState != "queued" || before.InvoiceStatus != "queued" {
+		t.Fatalf("setup = %+v, want a queued job and invoice", before)
+	}
+	if _, err := r.store.Cancel(r.ctx, r.job, "APP is down"); !errors.Is(err, boom) {
+		t.Fatalf("Cancel = %v, want the audit error", err)
+	}
+	if calls != 1 {
+		t.Errorf("recordStaff calls = %d, want 1: the audit write must run inside the change", calls)
+	}
+	if after := r.state(t); after != before {
+		t.Errorf("a failed audit write left changes:\nbefore %+v\nafter  %+v", before, after)
+	}
+	if row, ok := r.riverRow(t, before.RiverJobID); !ok || row.State != "scheduled" {
+		t.Errorf("river row = %+v (found %v), want scheduled", row, ok)
 	}
 }

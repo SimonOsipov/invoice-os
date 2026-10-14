@@ -25,7 +25,7 @@ paths:
 - Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.
 - Assert containment or a live-read comparison, never a literal count.
 - Expect specs to leave rows in `auth.users`, `tenants`, `memberships` and `business_entities`. Every run registers a fresh address, so this is harmless.
-- Expect the Support Console Rules and Tenants screens to read real data. They are the console's only screens.
+- Expect the Support Console Rules, Tenants and System health screens to read real data.
 - Expect the app Rules screen to read the golden set and the custom rules from the server.
 - Never publish a rule-set version in a topology spec. The api contract spec publishes only with the start date `3001-01-01`.
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.

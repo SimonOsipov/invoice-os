@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -220,4 +221,35 @@ func TestStaffTotalsHandler_RefusesMalformedValues(t *testing.T) {
 		{"cursor=" + b64(`{"day":"2026-10-01","name":"n","tenant":"x"}`), "cursor is malformed"},
 		{"tenant=nope", "invalid tenant"},
 	})
+}
+
+func TestStaffTotalsHandler_LimitBoundary(t *testing.T) {
+	for query, want := range map[string]int{"limit=100": 100, "limit=101": 100, "limit=1": 1, "limit=9999999999": 100} {
+		s := &spy{}
+		rec := get(StaffTotalsHandler(s.totals, nil), "?"+query)
+		if s.got.Limit != want || !strings.Contains(rec.Body.String(), `"limit":`+strconv.Itoa(want)) {
+			t.Errorf("%s: store limit = %d, body %s, want %d", query, s.got.Limit, rec.Body, want)
+		}
+	}
+}
+
+// Postgres refuses a NUL byte and invalid UTF-8 in text, so they must be a 400 before the store.
+func TestStaffHandlers_RefuseTextThatPostgresRejects(t *testing.T) {
+	nulName := EncodeTotalsCursor(TotalsCursor{Day: "2026-10-01", Name: "a\x00b", Tenant: uuid.NewString()})
+	cases := []struct{ query string }{{"purpose=a%00b"}, {"outcome=a%00b"}, {"purpose=%ff%fe"}, {"outcome=%ff"}}
+	for _, tc := range cases {
+		for name, h := range map[string]func(*spy) http.Handler{
+			"calls":  func(s *spy) http.Handler { return StaffCallsHandler(s.list, nil) },
+			"totals": func(s *spy) http.Handler { return StaffTotalsHandler(s.totals, nil) },
+		} {
+			s := &spy{}
+			if rec := get(h(s), "?"+tc.query); rec.Code != http.StatusBadRequest || s.calls != 0 {
+				t.Errorf("%s %s: got %d, store calls %d, want 400 and no store call", name, tc.query, rec.Code, s.calls)
+			}
+		}
+	}
+	s := &spy{}
+	if rec := get(StaffTotalsHandler(s.totals, nil), "?cursor="+nulName); rec.Code != http.StatusBadRequest || s.calls != 0 {
+		t.Errorf("totals cursor with a NUL name: got %d, store calls %d, want 400 and no store call", rec.Code, s.calls)
+	}
 }

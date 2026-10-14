@@ -406,3 +406,45 @@ func TestStaffCalls_NonHouseActorIsNotStaff(t *testing.T) {
 		}
 	}
 }
+
+// A cost of 18 decimals survives only as a decimal string: float64 would round it.
+func TestStaffReads_CostKeepsEveryDecimal(t *testing.T) {
+	e := newEnv(t)
+	st := NewStore(e.app)
+	ctx := e.staff(t)
+	tenant, day := e.namedTenant(t, "aicalls cost "+uuid.NewString()), farDay()
+	e.insert(t, seed{tenant: tenant, purpose: uniquePurpose(), outcome: "ok", cost: "0.123456789012345678", at: day})
+	e.insert(t, seed{tenant: tenant, purpose: uniquePurpose(), outcome: "ok", cost: "0.000000000000000001", at: day.Add(time.Hour)})
+	calls, err := st.StaffCalls(ctx, Filter{Tenant: tenant, Limit: 10})
+	if err != nil || len(calls.Calls) != 2 {
+		t.Fatalf("StaffCalls = %+v, %v, want 2 rows", calls, err)
+	}
+	if calls.Calls[0].Cost != "0.000000000000000001" || calls.Calls[1].Cost != "0.123456789012345678" {
+		t.Errorf("list costs = %q, %q", calls.Calls[0].Cost, calls.Calls[1].Cost)
+	}
+	totals, err := st.StaffTotals(ctx, Filter{Tenant: tenant, Limit: 10})
+	if err != nil || len(totals.Totals) != 1 || totals.Totals[0].Cost != "0.123456789012345679" {
+		t.Errorf("StaffTotals = %+v, %v, want one group with cost 0.123456789012345679", totals, err)
+	}
+}
+
+// The store clamps its own limit: a caller that skips the handler cannot send a negative or huge p_limit.
+func TestStaffReads_StoreClampsTheLimit(t *testing.T) {
+	e := newEnv(t)
+	st := NewStore(e.app)
+	ctx := e.staff(t)
+	tenant, purpose, day := e.namedTenant(t, "aicalls clamp "+uuid.NewString()), uniquePurpose(), farDay()
+	for i := 0; i < 101; i++ {
+		e.insert(t, seed{tenant: tenant, purpose: purpose, outcome: "ok", at: day.AddDate(0, 0, -i).Add(time.Hour)})
+	}
+	for limit, want := range map[int]int{0: 25, -3: 25, 1: 1, 100: 100, 101: 100, 5000: 100} {
+		c, err := st.StaffCalls(ctx, Filter{Tenant: tenant, Limit: limit})
+		if err != nil || len(c.Calls) != want || c.Page.Limit != want || !c.Page.HasMore {
+			t.Errorf("StaffCalls limit %d: %d rows, page limit %d, more %v, err %v, want %d", limit, len(c.Calls), c.Page.Limit, c.Page.HasMore, err, want)
+		}
+		tp, err := st.StaffTotals(ctx, Filter{Tenant: tenant, Limit: limit})
+		if err != nil || len(tp.Totals) != want || tp.Page.Limit != want || !tp.Page.HasMore {
+			t.Errorf("StaffTotals limit %d: %d rows, page limit %d, more %v, err %v, want %d", limit, len(tp.Totals), tp.Page.Limit, tp.Page.HasMore, err, want)
+		}
+	}
+}

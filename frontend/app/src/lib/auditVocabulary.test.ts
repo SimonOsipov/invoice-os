@@ -7,7 +7,7 @@ import { AUDIT_EVENTS, auditEventView, type AuditDomain } from './auditVocabular
 
 const REPO_ROOT = resolve(__dirname, '../../../..')
 
-// The 48 identifiers this app claims to label. Four families
+// The identifiers this app claims to label. Four families
 // are built from a variable rather than a literal, so a grep for quoted strings undercounts:
 // tenancy/store.go, portfolio/store.go, document/document.go and
 // submission/verdict_audit.go ("submission."+outcome).
@@ -68,7 +68,13 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'custom_rule.updated',
     'custom_rule.deleted',
   ],
-  submissions: ['submission.accepted', 'submission.rejected', 'submission.failed'],
+  submissions: [
+    'submission.accepted',
+    'submission.rejected',
+    'submission.failed',
+    'submission.job.redriven',
+    'submission.job.cancelled',
+  ],
   reconciliation: ['reconciliation.drift_detected', 'reconciliation.auto_fixed'],
   customers: ['customers.customer.updated'],
 }
@@ -76,12 +82,11 @@ const EXPECTED: Record<AuditDomain, string[]> = {
 const ALL = Object.values(EXPECTED).flat()
 
 describe('audit vocabulary', () => {
-  it('auditVocabulary_hasAllFortyEightTypes', () => {
+  it('auditVocabulary_hasEveryType', () => {
     const shipped = Object.keys(AUDIT_EVENTS)
     // An empty collection satisfies every assertion inside a loop, so pin the size first.
     expect(shipped.length).toBeGreaterThan(0)
-    expect(shipped.length).toBe(48)
-    expect(ALL.length).toBe(48)
+    expect(shipped.length).toBe(ALL.length)
     expect(new Set(shipped)).toEqual(new Set(ALL))
   })
 

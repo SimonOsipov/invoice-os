@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react'
-import { CHEVRON_RIGHT_ICON, LOCK_ICON } from '../icons'
+import { CHEVRON_RIGHT_ICON, EXPORT_ICON, LOCK_ICON } from '../icons'
 import { auditStamp, RANGE_REASON, rangeInverted, type AuditFilters, type StaffAuditRow, type StaffChange } from '../auditApi'
 import type { StaffTenant } from '../tenantsApi'
 import { chipStyle } from './Submissions'
@@ -29,6 +29,7 @@ type Props = {
   changesErrorText?: string
   onRetryChanges: () => void
   onOpenChange: (id: string) => void
+  onEvidence: () => void
 }
 
 const AUDIT_COLS = '170px minmax(180px,1fr) minmax(180px,1fr) minmax(200px,1.3fr) 22px'
@@ -148,7 +149,7 @@ function DateFilter({ label, value, onChange }: { label: string; value: string; 
   )
 }
 
-export function Audit({ view, onView, status, errorText, rows, hasMore, moreBusy, onMore, filters, onFilters, tenants, tenantsError, onRetry, onOpen, changes, changesStatus, changesErrorText, onRetryChanges, onOpenChange }: Props) {
+export function Audit({ view, onView, status, errorText, rows, hasMore, moreBusy, onMore, filters, onFilters, tenants, tenantsError, onRetry, onOpen, changes, changesStatus, changesErrorText, onRetryChanges, onOpenChange, onEvidence }: Props) {
   const inverted = rangeInverted(filters)
   return (
     <div className="ops-screen-pad">
@@ -166,6 +167,9 @@ export function Audit({ view, onView, status, errorText, rows, hasMore, moreBusy
               APPEND-ONLY · IMMUTABLE
             </span>
           </span>
+          <button type="button" onClick={onEvidence} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 32, padding: '0 12px', fontSize: 12 }}>
+            {EXPORT_ICON} Evidence bundle
+          </button>
         </div>
       </div>
 

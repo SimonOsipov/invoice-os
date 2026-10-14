@@ -6,6 +6,7 @@ import { Tenants } from './components/Tenants'
 import { Submissions } from './components/Submissions'
 import { Audit, type AuditView } from './components/Audit'
 import { AuditEntryDrawer, StaffChangeDrawer } from './components/AuditDrawer'
+import { EvidenceDrawer, type EvidenceInputs } from './components/EvidenceDrawer'
 import { Health } from './components/Health'
 import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
@@ -38,7 +39,7 @@ import {
   type RulesInForce,
 } from './rulesApi'
 import { cancelJob, fetchJob, fetchJobs, redriveJob, type JobDetail, type JobState, type StaffJob } from './jobsApi'
-import { fetchAuditEvents, fetchStaffChanges, rangeInverted, staffChangeLink, type AuditFilters, type StaffAuditPage, type StaffAuditRow, type StaffChangeLink } from './auditApi'
+import { defaultBundlePeriod, downloadBundle, fetchAuditEvents, fetchBundlePreview, fetchStaffChanges, fetchStaffEntities, rangeInverted, staffChangeLink, type AuditFilters, type StaffAuditPage, type StaffAuditRow, type StaffChangeLink } from './auditApi'
 import { fetchStaffHealth } from './healthApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
@@ -81,6 +82,9 @@ function Console() {
   const [auditMoreKey, setAuditMoreKey] = useState<string | null>(null)
   const [auditFocus, setAuditFocus] = useState<StaffChangeLink | null>(null)
   const focusSeenLoading = useRef(false)
+  const [evidence, setEvidence] = useState<EvidenceInputs>({ tenant: '', entity: '', from: '', to: '' })
+  const [bundleBusy, setBundleBusy] = useState(false)
+  const bundleInFlight = useRef(false)
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showToast = useCallback((msg: string, tag = '', tone: ToastTone = 'ok') => {
@@ -195,6 +199,39 @@ function Console() {
       setAuditMoreKey((k) => (k === sent ? null : k))
     }
   }
+  const onEvidence = drawer?.type === 'evidence'
+  const entitiesRead = useAsync(() => fetchStaffEntities(evidence.tenant), { immediate: onEvidence && !!evidence.tenant, deps: [onEvidence, evidence.tenant], isEmpty: () => false })
+  const previewKey = JSON.stringify(evidence)
+  const previewArmed = onEvidence && !!evidence.tenant && !!evidence.entity && !!evidence.from && !!evidence.to && evidence.from <= evidence.to
+  // Each answer carries the key it was read for, so a preview never outlives the inputs that produced it.
+  const previewRead = useAsync(async () => ({ key: previewKey, res: await fetchBundlePreview(evidence.tenant, { entityId: evidence.entity, from: evidence.from, to: evidence.to }) }), { immediate: previewArmed, deps: [onEvidence, previewKey] })
+  const shownPreview = previewRead.data?.key === previewKey ? previewRead.data.res : null
+  const openEvidence = () => {
+    setEvidence({ tenant: auditFilters.tenant ?? '', entity: '', ...defaultBundlePeriod() })
+    setDrawer({ type: 'evidence' })
+  }
+  const doDownload = async () => {
+    if (!shownPreview || bundleInFlight.current) return
+    bundleInFlight.current = true
+    setBundleBusy(true)
+    try {
+      const { blob, filename } = await downloadBundle(evidence.tenant, { entityId: evidence.entity, from: evidence.from, to: evidence.to }, shownPreview.filename)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast('Bundle downloaded')
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.status === 401) void expireSession()
+      else showToast(err.message, '', 'red')
+    } finally {
+      bundleInFlight.current = false
+      setBundleBusy(false)
+    }
+  }
   const openJob = drawer?.type === 'job' ? drawer.id : null
   const jobRead = useAsync(() => fetchJob(openJob ?? ''), { immediate: openJob !== null, deps: [openJob], isEmpty: () => false })
   const lastJob = useRef<JobDetail | null>(null)
@@ -203,7 +240,7 @@ function Console() {
   const jobDetail = freshJob ?? (jobRead.status === 'loading' && lastJob.current?.job.id === openJob ? lastJob.current : null)
   const jobNote = jobRead.status === 'error' ? { text: jobRead.error?.status === 403 ? 'Your account is not ASComply staff.' : (jobRead.error?.message ?? 'Unavailable'), onRetry: jobRead.run } : { text: 'Loading job…' }
   const jobInFlight = useRef(false)
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead, changesRead].some((r) => r.error?.status === 401)
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -456,6 +493,7 @@ function Console() {
               changesErrorText={changesRead.error?.message}
               onRetryChanges={changesRead.run}
               onOpenChange={(id) => setDrawer({ type: 'staff-change', id })}
+              onEvidence={openEvidence}
             />
           )}
           {screen === 'tenants' && (
@@ -512,6 +550,23 @@ function Console() {
       )}
 
       {openAudit && <AuditEntryDrawer entry={openAudit} onClose={() => setDrawer(null)} />}
+
+      {onEvidence && (
+        <EvidenceDrawer
+          inputs={evidence}
+          onInputs={(patch) => setEvidence((v) => ({ ...v, ...patch }))}
+          tenants={auditTenantsRead.data ?? []}
+          tenantsError={auditTenantsRead.status === 'error' && auditTenantsRead.error?.status !== 401 ? { text: auditTenantsRead.error?.message ?? 'Unavailable', onRetry: auditTenantsRead.run } : undefined}
+          entities={evidence.tenant && entitiesRead.status === 'ready' ? entitiesRead.data : null}
+          entitiesError={evidence.tenant && entitiesRead.status === 'error' && entitiesRead.error?.status !== 401 ? { text: entitiesRead.error?.message ?? 'Unavailable', onRetry: entitiesRead.run } : undefined}
+          preview={shownPreview}
+          previewLoading={previewRead.status === 'loading'}
+          previewError={previewRead.status === 'error' && previewRead.error?.status !== 401 ? { text: previewRead.error?.message ?? 'Unavailable', onRetry: previewRead.run } : undefined}
+          busy={bundleBusy}
+          onDownload={() => void doDownload()}
+          onClose={() => setDrawer(null)}
+        />
+      )}
 
       {openChange && (
         <StaffChangeDrawer

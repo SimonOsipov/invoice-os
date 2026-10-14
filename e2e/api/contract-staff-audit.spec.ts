@@ -21,8 +21,6 @@ const INVALID_TENANT = 'invalid tenant'
 const LIMIT_MESSAGE = 'limit must be >= 1'
 const RANGE_MESSAGE = 'from must not be after to'
 const CURSOR_MESSAGE = 'cursor is malformed'
-// StaffSearchHandler, internal/audit/staff_read.go.
-const QUERY_MESSAGE = 'invalid query string'
 // statusForErr, internal/archive/handlers.go.
 const TENANT_NOT_FOUND = 'tenant not found'
 const ENTITY_NOT_FOUND = 'not found'
@@ -126,7 +124,7 @@ test.describe('staff audit and evidence (API E2E, over the deployed gateway)', (
     await refuse('limit=0', 400, LIMIT_MESSAGE)
     await refuse(`from=${encodeURIComponent('2030-01-02T00:00:00Z')}&to=${encodeURIComponent('2030-01-01T00:00:00Z')}`, 400, RANGE_MESSAGE)
     await refuse('cursor=not-a-cursor', 400, CURSOR_MESSAGE)
-    await refuse('tenant=%zz', 400, QUERY_MESSAGE)
+    // A malformed escape never reaches the handler: the gateway proxy drops it (httputil cleanQueryParams). Its 400 is a Go test.
   })
 
   test('staff evidence: the staff bundle is the tenant admin\'s bundle', async () => {
@@ -175,6 +173,8 @@ test.describe('staff audit and evidence (API E2E, over the deployed gateway)', (
     const mine = (changes.body as { changes: { actor: string }[] }).changes.filter((c) => c.actor === account.userId)
     expect(mine, 'no staff_audit_log row names this staff account').toEqual([])
 
+    const since = await getAuditLog(customer, { from: START })
+    expect(since.events.length, 'the tenant log read returns the spec writes, so an empty support read means something').toBeGreaterThan(0)
     const support = await getAuditLog(customer, { actor: [SUPPORT_ACTOR], from: START })
     expect(support.events, "no support row in the tenant's log since the spec start").toEqual([])
   })

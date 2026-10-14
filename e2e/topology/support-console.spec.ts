@@ -858,6 +858,7 @@ const STAFF_CHANGES = '/api/invoice/v1/staff/staff-audit-log'
 const staffTenantPath = (id: string): string => `/api/invoice/v1/staff/tenants/${id}`
 // StaffRow, StaffChange: internal/audit/staff_read.go.
 type LiveAuditRow = { id: string; tenant_id: string; tenant_name: string | null; event: string }
+type LiveAuditPage = { events: LiveAuditRow[]; page: { has_more: boolean; next_cursor: string | null } }
 type LiveChange = { id: string; actor: string; event: string; tenant_id: string | null; tenant_name: string | null; payload: { reason?: string } | null }
 
 const auditRows = (page: Page): Locator => mainOf(page).locator('button[data-audit-id]')
@@ -875,17 +876,33 @@ async function chipPaints(page: Page): Promise<{ on: Record<string, string>; off
   return { on: await styles(on, CHIP_PAINT), off: await styles(off, CHIP_PAINT) }
 }
 
+// Follows the cursor until every id is found: rows that land between the screen read and this one push them down the list.
+async function liveAuditRows(ids: string[]): Promise<Map<string, LiveAuditRow>> {
+  const found = new Map<string, LiveAuditRow>()
+  let cursor: string | null = null
+  for (let pages = 0; pages < 10 && found.size < ids.length; pages++) {
+    const q = new URLSearchParams({ limit: '100' })
+    if (cursor) q.set('cursor', cursor)
+    const res: LiveAuditPage = await liveStaffGet<LiveAuditPage>(`${STAFF_AUDIT}?${q}`)
+    for (const e of res.events) if (ids.includes(e.id)) found.set(e.id, e)
+    if (!res.page.has_more) break
+    cursor = res.page.next_cursor
+  }
+  return found
+}
+
 async function auditReads(page: Page, testInfo: TestInfo): Promise<void> {
   const mn = mainOf(page)
   const rows = auditRows(page)
   await expect(rows.first(), 'the audit entries have loaded').toBeVisible()
-  const live = (await liveStaffGet<{ events: LiveAuditRow[] }>(`${STAFF_AUDIT}?limit=50`)).events
 
   // Matched by id, not count: the log grows with every spec.
   const first = (await rows.all()).slice(0, ROW_CAP)
+  expect(first.length, 'audit rows on screen').toBeGreaterThan(0)
+  const ids = await Promise.all(first.map((row) => row.getAttribute('data-audit-id') as Promise<string>))
+  const live = await liveAuditRows(ids)
   for (const [i, row] of first.entries()) {
-    const id = await row.getAttribute('data-audit-id')
-    const hit = live.find((e) => e.id === id)
+    const hit = live.get(ids[i])
     expect(hit, `row ${i} is in the live read`).toBeDefined()
     await expect(kid(row, 2), `row ${i} tenant`).toHaveText(hit!.tenant_name ?? hit!.tenant_id)
     await expect(kid(row, 4), `row ${i} event`).toHaveText(hit!.event)
@@ -1822,6 +1839,9 @@ test('SUP-07 Submissions: re-drive a seeded dead-letter job, then cancel it', as
 const metaValue = (drawer: Locator, label: string): Locator => drawer.locator('div.label').filter({ hasText: new RegExp(`^${label}$`) }).locator('xpath=following-sibling::div[1]')
 const viewport = (page: Page): Rect => ({ x: 0, y: 0, ...page.viewportSize()! })
 
+// Honeywell Group, the one seeded tenant-2222 company with invoices (db/seed.dev.sql); a spec-made company would sort anywhere.
+const SEED_2222_TIN = '20665510-0001'
+
 // Mirrors dayStart and dayEnd in frontend/support-console/src/auditApi.ts.
 const BUNDLE_FROM = '2020-01-01'
 const BUNDLE_TO = '2035-12-31'
@@ -1911,20 +1931,21 @@ test('SUP-09 Audit: entry drawer, staff changes, the tenant link and an evidence
   await drawer.getByRole('button', { name: 'Close' }).click()
   await expect(drawer).toBeHidden()
 
-  // Evidence bundle: tenant 2222, its first company.
+  // Evidence bundle: tenant 2222, its seeded company.
   await mn.getByRole('button', { name: 'Evidence bundle' }).click()
   ;({ drawer } = await expectDrawer(page, 'evidence drawer'))
   await drawer.getByLabel('Tenant', { exact: true }).selectOption(DEMO_2222_ID)
-  const entities = (await liveStaffGet<{ entities: { id: string; name: string }[] }>(`${staffTenantPath(DEMO_2222_ID)}/entities`)).entities
+  const entities = (await liveStaffGet<{ entities: { id: string; name: string; tin: string | null }[] }>(`${staffTenantPath(DEMO_2222_ID)}/entities`)).entities
   expect(entities.length, 'tenant 2222 has a company').toBeGreaterThan(0)
-  const company = entities[0]
-  await drawer.getByLabel('Company', { exact: true }).selectOption(company.id)
+  const company = entities.find((e) => e.tin === SEED_2222_TIN)
+  expect(company, `tenant 2222 holds the seeded company ${SEED_2222_TIN}`).toBeDefined()
+  await drawer.getByLabel('Company', { exact: true }).selectOption(company!.id)
   await drawer.getByLabel('From', { exact: true }).fill(BUNDLE_FROM)
   await drawer.getByLabel('To', { exact: true }).fill(BUNDLE_TO)
 
-  const query = new URLSearchParams({ entity_id: company.id, from: `${BUNDLE_FROM}T00:00:00.000Z`, to: `${BUNDLE_TO}T23:59:59.999Z` })
+  const query = new URLSearchParams({ entity_id: company!.id, from: `${BUNDLE_FROM}T00:00:00.000Z`, to: `${BUNDLE_TO}T23:59:59.999Z` })
   const live = await liveStaffGet<LivePreview>(`${staffTenantPath(DEMO_2222_ID)}/evidence-bundle/preview?${query}`)
-  expect(live.counts.invoices, `the first tenant-2222 company (${company.name}) holds invoices in the period`).toBeGreaterThan(0)
+  expect(live.counts.invoices, `the seeded tenant-2222 company (${company!.name}) holds invoices in the period`).toBeGreaterThan(0)
   await expect(metaValue(drawer, 'TIN'), 'TIN cell').toHaveText(live.entity.tin ?? '—')
   for (const [label, key] of PREVIEW_CELLS) await expect(metaValue(drawer, label), `${label} cell`).toHaveText(String(live.counts[key]))
 

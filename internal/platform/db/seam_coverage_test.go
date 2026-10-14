@@ -1049,6 +1049,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /v1/staff/rule-versions/draft/publish":          {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/staff/rule-versions/draft/test":             {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"GET /v1/staff/code-list-syncs":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"GET /v1/staff/audit-log":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/staff-audit-log":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/rules":                                       {verdict: scCovered},
 	"PATCH /v1/rules/{key}":                               {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},
 	"PATCH /v1/workflow-roles/{key}":                      {verdict: scCovered},

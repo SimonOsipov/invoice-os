@@ -82,6 +82,63 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 	}
 }
 
+// The staff audit routes are mounted beside GET /v1/audit-log on the audit staff handlers. AST, so
+// gofmt cannot break the anchor; the control needle proves the walk finds a shipped registration.
+func TestInvoiceMain_RegistersTheStaffAuditRoutes(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/invoice/main.go: %v", err)
+	}
+	want := map[string]string{"GET /v1/staff/audit-log": "StaffSearchHandler", "GET /v1/staff/staff-audit-log": "StaffChangesHandler"}
+	found := map[string]bool{}
+	var control bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) < 2 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		pattern := strings.Trim(lit.Value, `"`)
+		if pattern == "GET /v1/audit-log" {
+			control = true
+		}
+		handler, ok := want[pattern]
+		if !ok {
+			return true
+		}
+		found[pattern] = true
+		hc, ok := call.Args[1].(*ast.CallExpr)
+		if !ok {
+			t.Errorf("%s's second argument is %T, want a call expression", pattern, call.Args[1])
+			return true
+		}
+		hsel, ok := hc.Fun.(*ast.SelectorExpr)
+		if !ok || hsel.Sel.Name != handler {
+			t.Errorf("%s is not served by ....%s(...)", pattern, handler)
+			return true
+		}
+		if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "audit" {
+			t.Errorf("%s's handler is not audit.%s(...)", pattern, handler)
+		}
+		return true
+	})
+	if !control {
+		t.Fatal("control needle: no GET /v1/audit-log registration found -- the AST walk is broken")
+	}
+	for pattern := range want {
+		if !found[pattern] {
+			t.Errorf("no app.Mux.HandleFunc(%q, ...) registration found in cmd/invoice/main.go", pattern)
+		}
+	}
+}
+
 // AST, so gofmt cannot break the anchor. The GET /v1/imports/{id} needle proves the walk
 // finds a shipped registration before a negative result is trusted.
 func TestInvoiceMain_RegistersTheSavedMappingRoute(t *testing.T) {

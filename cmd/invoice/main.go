@@ -101,7 +101,11 @@ func main() {
 	// than on a new service: the gateway routes on the first segment under /api/, so
 	// this is reached as /api/invoice/v1/audit-log with no gateway change. authorize()
 	// requires only a tenant, so every active member of the workspace can read it.
-	app.Mux.HandleFunc("GET /v1/audit-log", audit.ListHandler(audit.NewStore(pool).List, app.Logger))
+	auditStore := audit.NewStore(pool)
+	app.Mux.HandleFunc("GET /v1/audit-log", audit.ListHandler(auditStore.List, app.Logger))
+	// GET /v1/staff/audit-log and /v1/staff/staff-audit-log: staff reads of every tenant's log and of staff changes.
+	app.Mux.HandleFunc("GET /v1/staff/audit-log", audit.StaffSearchHandler(auditStore.StaffSearch, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/staff-audit-log", audit.StaffChangesHandler(auditStore.StaffChanges, app.Logger))
 	// GET /v1/evidence-bundle(...) -- the evidence bundle download (AUDIT-05-08) and
 	// preview (AUDIT-05-09), sharing one Store so both routes agree by construction.
 	// Reached as /api/invoice/v1/evidence-bundle...; no gateway change needed, same

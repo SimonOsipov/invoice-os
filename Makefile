@@ -142,6 +142,7 @@ test-staffjobs: ## Run the staff Submissions store suite against the local dev D
 test-audit: ## Run the M2-10 audit immutability/atomicity suite against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
+	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	go test -p 1 -count=1 ./internal/audit/...
 
 test-reconciliation: ## Run the M5-06 reconciliation sweep suite against the local dev DB (run `make dev-db` first)

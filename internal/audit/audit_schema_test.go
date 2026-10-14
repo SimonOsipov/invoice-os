@@ -462,9 +462,9 @@ const (
 )
 
 // auditReaderFiles is internal/audit's whole non-test surface. AUDIT-11 touches exactly one of
-// them, AUDIT-11-09's filter.go, and adds none.
+// them, AUDIT-11-09's filter.go. SUPP-07 adds staff_read.go.
 var auditReaderFiles = []string{
-	"audit.go", "facets.go", "filter.go", "handlers.go", "reader.go", "store.go",
+	"audit.go", "facets.go", "filter.go", "handlers.go", "reader.go", "staff_read.go", "store.go",
 }
 
 // auditReaderImports is that surface's import set, measured on this branch. It is the half a
@@ -510,10 +510,10 @@ func TestAuditNumber_MigrationInventoryIsPinned(t *testing.T) {
 	}
 }
 
-// Core AC 8: no file under internal/audit/ other than tests and AUDIT-11-09's filter.go moves.
+// Core AC 8: no file under internal/audit/ other than tests, AUDIT-11-09's filter.go and the added staff_read.go moves.
 // The file list catches a new file; the import set catches an existing file widened to reach
 // past the fence. Both read the package itself, so neither needs a main ref (CF-31).
-func TestAuditNumber_ReaderSurfaceIsStillSixFiles(t *testing.T) {
+func TestAuditNumber_ReaderSurfaceIsPinned(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read the package directory: %v", err)

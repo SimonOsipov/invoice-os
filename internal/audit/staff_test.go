@@ -447,6 +447,49 @@ func TestStaffAudit_TenantChangeWritesBothRowsInOneTx(t *testing.T) {
 		t.Errorf("audit_log row %+v holds the staff UUID %s", a, staff)
 	}
 
+	// The staff UUID is in no column of any audit_log row the tenant can read.
+	var leaks int
+	if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE audit_log::text LIKE '%' || $1 || '%'`, staff.String()).Scan(&leaks)
+	}); err != nil {
+		t.Fatalf("scan audit_log for the staff UUID: %v", err)
+	}
+	if leaks != 0 {
+		t.Errorf("audit_log rows holding the staff UUID = %d, want 0", leaks)
+	}
+
+	t.Run("nil_payload_is_an_empty_object_on_both_rows", func(t *testing.T) {
+		staff, event := uuid.New(), uuid.NewString()
+		if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+			return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: event, TenantID: uuid.MustParse(tenant)})
+		}); err != nil {
+			t.Fatalf("tenant change without a payload: %v", err)
+		}
+		srows, arows := staffRows(t, f, staff), auditRowsFor(t, f, tenant, event)
+		if len(srows) != 1 || len(arows) != 1 {
+			t.Fatalf("rows: staff %d audit %d, want 1 and 1", len(srows), len(arows))
+		}
+		jsonEq(t, srows[0].Payload, `{}`)
+		jsonEq(t, arows[0].Payload, `{}`)
+	})
+
+	t.Run("unmarshallable_payload_writes_nothing", func(t *testing.T) {
+		staff, event := uuid.New(), uuid.NewString()
+		err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
+			return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: staff, Event: event, TenantID: uuid.MustParse(tenant), Payload: map[string]any{"c": make(chan int)}})
+		})
+		var unsupported *json.UnsupportedTypeError
+		if !errors.As(err, &unsupported) {
+			t.Errorf("err = %v, want the json marshal error", err)
+		}
+		if n := len(staffRows(t, f, staff)); n != 0 {
+			t.Errorf("staff rows = %d, want 0", n)
+		}
+		if n := auditCount(t, f.app, tenant, event); n != 0 {
+			t.Errorf("audit_log rows = %d, want 0", n)
+		}
+	})
+
 	t.Run("zero_subject", func(t *testing.T) {
 		staff, event := uuid.New(), uuid.NewString()
 		if err := db.WithinTenantTx(ctx, f.app, tenant, func(tx pgx.Tx) error {
@@ -632,6 +675,22 @@ func TestStaffAudit_GlobalChangeWritesNoTenantRow(t *testing.T) {
 	if calls != 0 {
 		t.Errorf("recordTenant calls = %d, want 0", calls)
 	}
+
+	// A pooled connection reads app.current_tenant as '' after a tenant tx, not NULL.
+	t.Run("empty_tenant_setting_is_no_tenant", func(t *testing.T) {
+		staff, event := uuid.New(), uuid.NewString()
+		if err := withAppTx(t, f, func(tx pgx.Tx) error {
+			if _, e := tx.Exec(context.Background(), `SELECT set_config('app.current_tenant', '', true)`); e != nil {
+				return e
+			}
+			return audit.RecordStaff(context.Background(), tx, audit.StaffEvent{Actor: staff, Event: event})
+		}); err != nil {
+			t.Fatalf("global change with an empty tenant setting: %v", err)
+		}
+		if rows := staffRows(t, f, staff); len(rows) != 1 || rows[0].Tenant != nil {
+			t.Errorf("staff rows = %+v, want one with tenant_id NULL", rows)
+		}
+	})
 }
 
 // AC-7.
@@ -668,9 +727,11 @@ func TestStaffAudit_SupportRowReadsAsASComplySupport(t *testing.T) {
 	if !ok {
 		t.Fatal("the support row is not on the tenant's page")
 	}
-	if e.Actor != audit.SupportActor || e.ActorName != audit.SupportActor || e.ActorKind != "raw" || e.CompanyScope != audit.ScopeUnattributed {
+	// The literal, not audit.SupportActor: a renamed constant must fail here.
+	const want = "ASComply support"
+	if e.Actor != want || e.ActorName != want || e.ActorKind != "raw" || e.CompanyScope != audit.ScopeUnattributed {
 		t.Errorf("row = actor %q name %q kind %q scope %q, want %q %q raw unattributed",
-			e.Actor, e.ActorName, e.ActorKind, e.CompanyScope, audit.SupportActor, audit.SupportActor)
+			e.Actor, e.ActorName, e.ActorKind, e.CompanyScope, want, want)
 	}
 
 	for _, tc := range []struct {

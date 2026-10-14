@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -144,7 +145,15 @@ func DecodeTotalsCursor(s string) (TotalsCursor, error) {
 	if _, err := uuid.Parse(c.Tenant); err != nil {
 		return TotalsCursor{}, err
 	}
+	if !postgresText(c.Name) {
+		return TotalsCursor{}, errors.New("aicalls: cursor name is not text")
+	}
 	return c, nil
+}
+
+// postgresText is false for invalid UTF-8 or a NUL rune: Postgres rejects both with 22021.
+func postgresText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsRune(s, 0)
 }
 
 // nilIfEmpty and nilIfZero give the SQL NULL of an absent filter.
@@ -273,8 +282,14 @@ func parseFilter(q url.Values, totals bool) (Filter, string) {
 	if f.Purpose = q.Get("purpose"); len(f.Purpose) > maxFilterLen {
 		return Filter{}, "purpose is too long"
 	}
+	if !postgresText(f.Purpose) {
+		return Filter{}, "purpose is not valid text"
+	}
 	if f.Outcome = q.Get("outcome"); len(f.Outcome) > maxFilterLen {
 		return Filter{}, "outcome is too long"
+	}
+	if !postgresText(f.Outcome) {
+		return Filter{}, "outcome is not valid text"
 	}
 	if raw := q.Get("failed"); raw != "" {
 		b, err := strconv.ParseBool(raw)

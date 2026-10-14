@@ -45,6 +45,12 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 	}
 
 	var foundAuditLog, foundBundle, foundPreview bool
+	staffWant := map[string]string{
+		"GET /v1/staff/tenants/{id}/entities":                "StaffEntitiesHandler",
+		"GET /v1/staff/tenants/{id}/evidence-bundle":         "StaffDownloadHandler",
+		"GET /v1/staff/tenants/{id}/evidence-bundle/preview": "StaffPreviewHandler",
+	}
+	foundStaff := map[string]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -58,7 +64,12 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 		if !ok || lit.Kind != token.STRING {
 			return true
 		}
-		switch strings.Trim(lit.Value, `"`) {
+		pattern := strings.Trim(lit.Value, `"`)
+		if h, ok := staffWant[pattern]; ok {
+			foundStaff[pattern] = true
+			checkHandler(pattern, call, h)
+		}
+		switch pattern {
 		case "GET /v1/audit-log":
 			foundAuditLog = true
 		case "GET /v1/evidence-bundle":
@@ -79,6 +90,11 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 	}
 	if !foundPreview {
 		t.Error(`no app.Mux.HandleFunc("GET /v1/evidence-bundle/preview", archive.PreviewHandler(...)) registration found in cmd/invoice/main.go`)
+	}
+	for pattern, h := range staffWant {
+		if !foundStaff[pattern] {
+			t.Errorf("no app.Mux.HandleFunc(%q, archive.%s(...)) registration found in cmd/invoice/main.go", pattern, h)
+		}
 	}
 }
 

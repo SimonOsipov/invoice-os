@@ -158,3 +158,20 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
+
+// STUBS for the red tests (staff bundle routes); the executor replaces them.
+type (
+	staffEntitiesFn func(ctx context.Context, tenantID string) ([]StaffEntity, error)
+	staffPreviewFn  func(ctx context.Context, tenantID string, r Request) (Preview, error)
+	staffAssembleFn func(ctx context.Context, tenantID string, r Request, w io.Writer, onStart func(filename string)) error
+)
+
+func notImplemented(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusNotImplemented, "not implemented")
+}
+
+func StaffEntitiesHandler(_ staffEntitiesFn, _ *slog.Logger) http.HandlerFunc { return notImplemented }
+
+func StaffPreviewHandler(_ staffPreviewFn, _ *slog.Logger) http.HandlerFunc { return notImplemented }
+
+func StaffDownloadHandler(_ staffAssembleFn, _ *slog.Logger) http.HandlerFunc { return notImplemented }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 )
@@ -16,11 +17,19 @@ const maxFleetBody = 64 << 10
 // FleetReader reads the gateway's fleet roll-up.
 type FleetReader func(context.Context) (gateway.FleetHealth, error)
 
-// NewFleetReader reads base/healthz/fleet; the gateway answers 503 with a body when degraded.
+// NewFleetReader reads base/healthz/fleet with the FleetTimeout deadline.
 func NewFleetReader(base *url.URL, client *http.Client) FleetReader {
+	return NewFleetReaderTimeout(base, client, FleetTimeout)
+}
+
+// NewFleetReaderTimeout reads base/healthz/fleet; the gateway answers 503 with a body when degraded.
+// The reader owns the deadline so a gateway that never answers cannot hang the sampler.
+func NewFleetReaderTimeout(base *url.URL, client *http.Client, timeout time.Duration) FleetReader {
 	target := base.JoinPath("healthz/fleet").String()
 	return func(ctx context.Context) (gateway.FleetHealth, error) {
 		var f gateway.FleetHealth
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return f, err

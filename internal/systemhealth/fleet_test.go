@@ -160,3 +160,27 @@ func TestFleetReader_ReadsTheRealGatewayRollUp(t *testing.T) {
 		})
 	}
 }
+
+func TestFleetReader_OwnsItsDeadline(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	base, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err = NewFleetReaderTimeout(base, &http.Client{}, 100*time.Millisecond)(context.Background())
+	if err == nil {
+		t.Fatal("a gateway that never answers must be an error")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("reader waited %v; it must stop at its own deadline", d)
+	}
+}

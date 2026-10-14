@@ -194,7 +194,7 @@ func main() {
 	app.AddBackgroundWorker(q)
 
 	healthStore := &systemhealth.Store{Pool: pool}
-	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil), Timeout: systemhealth.FleetTimeout})
+	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil)})
 	sampler := &systemhealth.Sampler{Store: healthStore, Fleet: fleet, Now: time.Now, Logger: app.Logger}
 	app.AddBackgroundWorker(codelist.NewWorker(systemhealth.SampleInterval, sampler.Sample))
 	app.Mux.HandleFunc("GET /v1/staff/health", systemhealth.Handler(healthStore.StaffSnapshot, fleet, time.Now, app.Logger))

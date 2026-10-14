@@ -36,6 +36,28 @@ describe('sparkline', () => {
   })
 })
 
+describe('sparkline edges', () => {
+  const coords = (line: string) => [...line.matchAll(/[ML]([\d.]+) ([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])])
+
+  it('draws a flat series without NaN', () => {
+    const { line } = sparkline([3, 3, 3])
+    expect(line).not.toMatch(/NaN|Infinity/)
+    const ys = coords(line).map(([, y]) => y)
+    expect(ys).toHaveLength(3)
+    expect(new Set(ys).size).toBe(1)
+    expect(sparkline([0, 0]).line).not.toMatch(/NaN/)
+  })
+
+  it('spans the full width with two points and puts the larger value higher', () => {
+    const c = coords(sparkline([1, 9]).line)
+    expect(c).toHaveLength(2)
+    expect(c[0][0]).toBe(0)
+    expect(c[1][0]).toBe(220)
+    expect(sparkline([1, 9]).area.endsWith('L220 44 L0 44 Z')).toBe(true)
+    expect(c[1][1]).toBeLessThan(c[0][1])
+  })
+})
+
 describe('healthTone', () => {
   it('maps three tones', () => {
     expect(healthTone('green')).toEqual({ dot: 'var(--status-green-text)', stroke: 'var(--action)', fill: 'var(--action-tint)' })

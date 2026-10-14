@@ -68,4 +68,35 @@ describe('healthApi', () => {
     expect(shortBuild('')).toBe('—')
     expect(shortBuild(undefined)).toBe('—')
   })
+
+  it('fleetSummary edge fleets: empty, all down, unknown with services', () => {
+    expect(fleetSummary({ status: 'ok', services: [] })).toEqual({ up: 0, total: 0, down: [] })
+    const allDown: FleetHealth = { status: 'degraded', services: [{ name: 'a', status: 'down' }, { name: 'b', status: 'down' }] }
+    expect(fleetSummary(allDown)).toEqual({ up: 0, total: 2, down: ['a', 'b'] })
+    expect(fleetSummary({ status: 'unknown', services: [{ name: 'a', status: 'up' }] })).toEqual({ up: 0, total: 0, down: [] })
+  })
+
+  it('series edge inputs: empty, all null, single, zero kept', () => {
+    expect(series([], 'queue_depth')).toEqual([])
+    expect(series([point(null, 1), point(null, 2)], 'services_down')).toEqual([])
+    expect(series([point(0, 4, 3)], 'dead_lettered')).toEqual([3])
+    expect(series([point(0, 0)], 'services_down')).toEqual([0])
+  })
+
+  it('shortBuild leaves a build shorter than seven characters whole', () => {
+    expect(shortBuild('abc')).toBe('abc')
+    expect(shortBuild('1234567')).toBe('1234567')
+    expect(shortBuild('12345678')).toBe('1234567')
+  })
+
+  it('fetchStaffHealth forwards the abort signal and rejects when signed out', async () => {
+    const ac = new AbortController()
+    await fetchStaffHealth(ac.signal)
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+    vi.stubGlobal('localStorage', { getItem: () => null })
+    fetchMock.mockClear()
+    const err = await fetchStaffHealth().catch((e: unknown) => e)
+    expect((err as ApiError).status).toBe(401)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })

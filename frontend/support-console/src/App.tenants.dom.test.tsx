@@ -26,6 +26,11 @@ vi.mock('./rulesApi', async (importOriginal) => ({
   fetchCodeListSyncs: vi.fn(),
   fetchVersions: vi.fn(),
 }))
+const seen: { selectedId: string | null; status: string; id?: string }[] = []
+vi.mock('./components/Tenants', async (importOriginal) => {
+  const m = await importOriginal<typeof import('./components/Tenants')>()
+  return { ...m, Tenants: (p: Parameters<typeof m.Tenants>[0]) => (seen.push({ selectedId: p.selectedId, status: p.detailStatus, id: p.detail?.tenant.id }), m.Tenants(p)) }
+})
 vi.mock('./tenantsApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./tenantsApi')>()),
   fetchStaffTenants: vi.fn(),
@@ -58,6 +63,7 @@ beforeEach(() => {
   one.mockImplementation(async (id) => detail([X, Y, H].find((t) => t.id === id)!, id === 'X' ? ['Ada One', 'Bola Two', 'Chi Three'] : ['Yemi Only']))
 })
 afterEach(() => {
+  seen.length = 0
   cleanup()
   vi.clearAllMocks()
 })
@@ -86,6 +92,7 @@ describe('Console tenants wiring', () => {
     fireEvent.click(rowOf('X'))
     await screen.findByText('Ada One')
     expect(one).toHaveBeenCalledTimes(1)
+    expect(list).toHaveBeenCalledTimes(1)
     expect(one.mock.calls[0][0]).toBe('X')
     expect(rowOf('X').getAttribute('aria-pressed')).toBe('true')
     expect(rowOf('Y').getAttribute('aria-pressed')).toBe('false')
@@ -122,9 +129,13 @@ describe('Console tenants wiring', () => {
     fireEvent.click(rowOf('Y'))
     expect(screen.queryByText('Ada One')).toBeNull()
     expect(screen.getByText('Loading tenant…')).toBeTruthy()
+    expect(one.mock.calls.at(-1)![0]).toBe('Y')
     release(detail(Y, ['Yemi Only']))
     await screen.findByText('Yemi Only')
     expect(screen.queryByText('Loading tenant…')).toBeNull()
+    const forY = seen.filter((r) => r.selectedId === 'Y')
+    expect(forY.length).toBeGreaterThan(0)
+    expect(forY.filter((r) => r.status === 'ready' && r.id !== 'Y')).toEqual([])
   })
 
   it('a failed list read retries; an empty list says so', async () => {
@@ -188,5 +199,54 @@ describe('Console tenants wiring', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Tenants/ }))
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(one).toHaveBeenCalledTimes(2))
+  })
+
+  it('a failed detail read retries and a late reply for an abandoned tenant is dropped', async () => {
+    one.mockRejectedValueOnce(new ApiError('http', 'down', 500))
+    render(<App />)
+    await openTenants()
+    await waitRow('X')
+    fireEvent.click(rowOf('X'))
+    await screen.findByText('down')
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByText('Ada One')
+    expect(one).toHaveBeenCalledTimes(2)
+    expect(one.mock.calls[1][0]).toBe('X')
+
+    let releaseY!: (d: StaffTenantDetail) => void
+    one.mockImplementationOnce(() => new Promise((res) => (releaseY = res)))
+    fireEvent.click(rowOf('Y'))
+    fireEvent.click(rowOf('H'))
+    await screen.findByRole('heading', { level: 2, name: 'Honeywell Ltd' })
+    releaseY(detail(Y, ['Yemi Only']))
+    await Promise.resolve()
+    expect(screen.getByRole('heading', { level: 2, name: 'Honeywell Ltd' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { level: 2, name: 'Yaba Freight' })).toBeNull()
+    expect(rowOf('H').getAttribute('aria-pressed')).toBe('true')
+    expect(rowOf('Y').getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('a tenant with no members and no invoices says so, offers no action and no View jobs', async () => {
+    one.mockResolvedValueOnce({ tenant: X, members: [], invoices: [] })
+    render(<App />)
+    await openTenants()
+    await waitRow('X')
+    fireEvent.click(rowOf('X'))
+    await screen.findByText('No members.')
+    expect(screen.getByText('No invoices yet.')).toBeTruthy()
+    expect(screen.queryByText('View jobs')).toBeNull()
+    const card = screen.getByRole('heading', { level: 2 }).closest('div[style*="overflow"]') as HTMLElement
+    expect(card.querySelectorAll('button')).toHaveLength(0)
+  })
+
+  it('an empty list shows its line, no rows and no search field; a list error keeps the detail prompt', async () => {
+    list.mockResolvedValueOnce([])
+    render(<App />)
+    await openTenants()
+    await screen.findByText('No tenants yet.')
+    expect(document.querySelectorAll('[data-tenant-id]')).toHaveLength(0)
+    expect(screen.queryByLabelText('Search tenants')).toBeNull()
+    expect(screen.getByText('Select a tenant to see its members and recent invoices.')).toBeTruthy()
+    expect(one).not.toHaveBeenCalled()
   })
 })

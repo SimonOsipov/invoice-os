@@ -22,7 +22,7 @@ import (
 // adapter again (T05-12).
 func isTerminalJobState(state string) bool {
 	switch state {
-	case "accepted", "rejected", "failed", "dead_lettered":
+	case "accepted", "rejected", "failed", "dead_lettered", "cancelled":
 		return true
 	}
 	return false

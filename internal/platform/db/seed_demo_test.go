@@ -1257,11 +1257,11 @@ var reservedTINReachableStatus = map[string]string{
 	"99999999-0006": "failed",   // Retryable forever (timeout) -> dead_lettered -> failed
 }
 
-// terminalJobStates is submission_jobs' 4-value terminal subset of its 7-value state
-// CHECK (jobstore.go's isTerminalJobState) -- dead_lettered is terminal and must not be
-// rejected by a check that only knows accepted/rejected/failed.
+// terminalJobStates is the terminal subset of submission_jobs' state CHECK (jobstore.go's
+// isTerminalJobState) -- dead_lettered is terminal and must not be rejected by a check
+// that only knows accepted/rejected/failed.
 var terminalJobStates = map[string]bool{
-	"accepted": true, "rejected": true, "failed": true, "dead_lettered": true,
+	"accepted": true, "rejected": true, "failed": true, "dead_lettered": true, "cancelled": true,
 }
 
 // invoiceOutcomeRow is a seeded invoice's buyer TIN and current status. tenantID is
@@ -1531,10 +1531,10 @@ func TestSeedNeverClaimsUnreachableOutcomeForReservedTIN(t *testing.T) {
 }
 
 // TestSeedSubmissionJobsAreTerminalAndLinkToSeededInvoices: Test Spec rows "jobs are
-// terminal" / "job <-> invoice integrity" (Core AC-6). The state CHECK has SEVEN
-// values; the terminal set is FOUR (jobstore.go's isTerminalJobState) --
-// accepted/rejected/failed/dead_lettered. A job asserting only {accepted,rejected,
-// failed} would reject a legitimately dead-lettered row (Stage-1 correction C4.1).
+// terminal" / "job <-> invoice integrity" (Core AC-6). The terminal set is the subset of
+// the state CHECK that jobstore.go's isTerminalJobState lists. A job asserting only
+// {accepted,rejected,failed} would reject a legitimately dead-lettered row (Stage-1
+// correction C4.1).
 func TestSeedSubmissionJobsAreTerminalAndLinkToSeededInvoices(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)

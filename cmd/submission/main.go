@@ -41,6 +41,8 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/systemhealth"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 func main() {
@@ -49,6 +51,11 @@ func main() {
 	app, err := platform.New("submission")
 	if err != nil {
 		platform.Fatal(slog.Default(), "submission: startup: %v", err)
+	}
+
+	gw, err := gatewayURL(os.Getenv("GATEWAY_URL"))
+	if err != nil {
+		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 
 	ctx := context.Background()
@@ -186,6 +193,12 @@ func main() {
 	sw.Queue, pw.Queue = q, q
 	app.AddBackgroundWorker(q)
 
+	healthStore := &systemhealth.Store{Pool: pool}
+	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil), Timeout: systemhealth.FleetTimeout})
+	sampler := &systemhealth.Sampler{Store: healthStore, Fleet: fleet, Now: time.Now, Logger: app.Logger}
+	app.AddBackgroundWorker(codelist.NewWorker(systemhealth.SampleInterval, sampler.Sample))
+	app.Mux.HandleFunc("GET /v1/staff/health", systemhealth.Handler(healthStore.StaffSnapshot, fleet, time.Now, app.Logger))
+
 	// Stub endpoint — proves routing end to end.
 	app.Mux.HandleFunc("GET /v1/ping", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -236,7 +249,16 @@ func main() {
 }
 
 // gatewayURL parses GATEWAY_URL, the in-network gateway base the fleet reader calls.
-func gatewayURL(raw string) (*url.URL, error) { return nil, errors.New("not implemented") }
+func gatewayURL(raw string) (*url.URL, error) {
+	if raw == "" {
+		return nil, errors.New("GATEWAY_URL is required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("GATEWAY_URL must be an absolute http(s) URL, got %q", raw)
+	}
+	return u, nil
+}
 
 // documents.size_bytes CHECKs <= this (migrations/20260802163544_documents.sql).
 const maxDocumentBytes = 15 << 20

@@ -98,6 +98,12 @@ describe('auditApi', () => {
     expect(staffChangeLink({ ...c, tenant_id: null, tenant_name: null })).toBeNull()
   })
 
+  it('staffChangeLink takes the UTC day of a timestamp with an offset', () => {
+    const c: StaffChange = { id: '1', actor: 'A', event: 'e', rule_set_version_id: null, tenant_id: 'T1', tenant_name: null, subject_id: null, payload: {}, created_at: '2026-10-15T01:30:00+02:00' }
+    expect(staffChangeLink(c)?.day).toBe('2026-10-14')
+    expect(staffChangeLink(c)?.focusAt).toBe('2026-10-15T01:30:00+02:00')
+  })
+
   // Same scans as above for StaffChange; a nullable Go key typed non-null reaches the screen as a crash.
   it('StaffChange keys equal the Go audit.StaffChange json tags', () => {
     const read = (rel: string) => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))

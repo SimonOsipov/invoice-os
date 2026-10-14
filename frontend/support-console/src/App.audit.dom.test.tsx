@@ -322,6 +322,47 @@ describe('Console audit wiring', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  const followLink = async (reread: StaffAuditRow[], over: Partial<StaffChange> = {}) => {
+    changesRead.mockResolvedValue([change('c1', over)])
+    render(<App />)
+    await openStaff()
+    await waitFor(() => expect(changeRows()).toHaveLength(1))
+    auditRead.mockResolvedValueOnce(page(reread))
+    fireEvent.click(changeRows()[0])
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Open in tenant log' }))
+    await waitFor(() => expect(auditRead).toHaveBeenCalledTimes(2))
+  }
+
+  it('Open in tenant log ignores the page held before the re-read', async () => {
+    await followLink([row('e1', { created_at: '2026-10-14T09:12:04Z' })], { event: 'invoice.created', created_at: '2026-10-14T09:12:03.123456Z' })
+    await waitFor(() => expect(ids()).toEqual(['e1']))
+    expect(rows()[0].children[0].textContent).toBe('2026-10-14 09:12:04 UTC')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('Open in tenant log opens only a row that shares tenant, event and time', async () => {
+    const at = '2026-10-14T23:30:00.5Z'
+    await followLink([
+      row('o1', { event: 'invoice.sent', created_at: at }),
+      row('o2', { tenant_id: 'T2', event: 'tenant.demo_set', created_at: at }),
+      row('o3', { event: 'tenant.demo_set', created_at: '2026-10-14T23:30:00.6Z' }),
+    ])
+    await waitFor(() => expect(ids()).toEqual(['o1', 'o2', 'o3']))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('the staff view names a tenant by id when its name is missing', async () => {
+    changesRead.mockResolvedValue([change('c1', { tenant_name: null })])
+    render(<App />)
+    await openStaff()
+    await waitFor(() => expect(changeRows()).toHaveLength(1))
+    expect(changeRows()[0].children[3].textContent).toBe('T1')
+    fireEvent.click(changeRows()[0])
+    const d = await screen.findByRole('dialog')
+    expect(within(d).getByText('Tenant').nextElementSibling?.textContent).toBe('T1')
+    expect(within(d).getByRole('button', { name: 'Open in tenant log' })).toBeTruthy()
+  })
+
   it('staff view empty, forbidden, error and expired', async () => {
     changesRead.mockResolvedValueOnce([])
     render(<App />)

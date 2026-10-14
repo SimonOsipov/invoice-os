@@ -226,7 +226,7 @@ func TestRLS_StaffReadAuditLogCapsTheLimit(t *testing.T) {
 		limit *int
 		want  int
 	}{
-		{"p_limit 1", ip(1), 1}, {"p_limit 3", ip(3), 3}, {"p_limit 100", ip(100), 100},
+		{"p_limit 0", ip(0), 0}, {"p_limit 1", ip(1), 1}, {"p_limit 3", ip(3), 3}, {"p_limit 100", ip(100), 100},
 		{"p_limit 101", ip(101), 101}, {"p_limit 500", ip(500), 101}, {"p_limit NULL", nil, 101},
 	} {
 		got := auditSearch{tenant: sp(x), limit: c.limit}.mustCall(t, h.app, staff)
@@ -329,6 +329,26 @@ func TestRLS_StaffReadAuditLogFiltersNarrowAloneAndCombined(t *testing.T) {
 	}
 	if all := (auditSearch{tenant: sp(a), event: sp(e1)}).mustCall(t, h.app, staff); len(all) != 8 {
 		t.Errorf("tenant A and event 1: %d rows, want 8 (2 actors x 4 times)", len(all))
+	}
+
+	// Event and actor match the stored text exactly: case, prefix, wildcard and quote variants find nothing.
+	for _, c := range []struct {
+		name string
+		args auditSearch
+	}{
+		{"event in upper case", auditSearch{tenant: sp(a), event: sp(strings.ToUpper(e1))}},
+		{"event prefix", auditSearch{tenant: sp(a), event: sp(e1[:len(e1)-1])}},
+		{"event wildcard", auditSearch{tenant: sp(a), event: sp("%")}},
+		{"event quote", auditSearch{tenant: sp(a), event: sp("' OR true --")}},
+		{"actor in upper case", auditSearch{tenant: sp(a), subject: sp(strings.ToUpper(x))}},
+		{"actor prefix", auditSearch{tenant: sp(a), subject: sp(x[:len(x)-1])}},
+		{"actor wildcard", auditSearch{tenant: sp(a), subject: sp("%")}},
+		{"actor trailing space", auditSearch{tenant: sp(a), subject: sp(x + " ")}},
+		{"from after to", auditSearch{tenant: sp(a), from: tp(times[2]), to: tp(times[1])}},
+	} {
+		if got := c.args.mustCall(t, h.app, staff); len(got) != 0 {
+			t.Errorf("%s: %d rows, want 0", c.name, len(got))
+		}
 	}
 }
 

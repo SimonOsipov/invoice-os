@@ -2029,7 +2029,11 @@ func TestSubmissionMain_FatalOnGatewayURLError(t *testing.T) {
 	if len(args) == 1 {
 		getenv, _ = args[0].(*ast.CallExpr)
 	}
-	if getenv == nil || wtCallName(getenv.Fun) != "os.Getenv" || len(getenv.Args) != 1 || wtRender(getenv.Args[0]) != "ast.BasicLit" || getenv.Args[0].(*ast.BasicLit).Value != `"GATEWAY_URL"` {
+	var lit *ast.BasicLit
+	if getenv != nil && wtCallName(getenv.Fun) == "os.Getenv" && len(getenv.Args) == 1 {
+		lit, _ = getenv.Args[0].(*ast.BasicLit)
+	}
+	if lit == nil || lit.Value != `"GATEWAY_URL"` {
 		t.Error(`gatewayURL is not called with os.Getenv("GATEWAY_URL")`)
 	}
 }

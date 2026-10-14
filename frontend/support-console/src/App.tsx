@@ -4,6 +4,8 @@ import { TopBar } from './components/TopBar'
 import { Rules } from './components/Rules'
 import { Tenants } from './components/Tenants'
 import { Submissions } from './components/Submissions'
+import { Audit, type AuditView } from './components/Audit'
+import { AuditEntryDrawer } from './components/AuditDrawer'
 import { Health } from './components/Health'
 import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
@@ -36,6 +38,7 @@ import {
   type RulesInForce,
 } from './rulesApi'
 import { cancelJob, fetchJob, fetchJobs, redriveJob, type JobDetail, type JobState, type StaffJob } from './jobsApi'
+import { fetchAuditEvents, rangeInverted, type AuditFilters, type StaffAuditPage, type StaffAuditRow } from './auditApi'
 import { fetchStaffHealth } from './healthApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
@@ -72,6 +75,10 @@ function Console() {
   const [jobTenant, setJobTenant] = useState('')
   const [confirmJob, setConfirmJob] = useState<JobAction | null>(null)
   const [jobBusy, setJobBusy] = useState(false)
+  const [auditView, setAuditView] = useState<AuditView>('tenant')
+  const [auditFilters, setAuditFilters] = useState<AuditFilters>({})
+  const [auditMore, setAuditMore] = useState<{ key: string; events: StaffAuditRow[]; page: StaffAuditPage['page'] } | null>(null)
+  const [auditMoreKey, setAuditMoreKey] = useState<string | null>(null)
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showToast = useCallback((msg: string, tag = '', tone: ToastTone = 'ok') => {
@@ -128,6 +135,43 @@ function Console() {
   if (jobsRead.data) lastJobs.current = { key: jobsKey, jobs: jobsRead.data }
   const keptJobs = jobsRead.status === 'loading' && lastJobs.current?.key === jobsKey ? lastJobs.current.jobs : null
   const jobsStatus = jobsRead.status === 'error' ? (jobsRead.error?.status === 403 ? 'forbidden' : 'error') : jobsRead.status === 'ready' || keptJobs ? 'ready' : 'loading'
+  const onAudit = screen === 'audit' && auditView === 'tenant'
+  const { tenant: aTenant, event: aEvent, actor: aActor, from: aFrom, to: aTo } = auditFilters
+  const auditRead = useAsync(() => fetchAuditEvents(auditFilters), {
+    immediate: onAudit && !rangeInverted(auditFilters),
+    deps: [onAudit, aTenant, aEvent, aActor, aFrom, aTo],
+    isEmpty: (p) => p.events.length === 0,
+  })
+  const auditTenantsRead = useAsync(fetchStaffTenants, { immediate: screen === 'audit', deps: [screen === 'audit'] })
+  const auditKey = JSON.stringify([onAudit, aTenant, aEvent, aActor, aFrom, aTo])
+  const auditKeyNow = useRef(auditKey)
+  auditKeyNow.current = auditKey
+  useEffect(() => setAuditMore(null), [auditKey])
+  const moreHere = auditMore?.key === auditKey ? auditMore : null
+  const auditRows = [...(auditRead.data?.events ?? []), ...(moreHere?.events ?? [])]
+  const auditPage = moreHere?.page ?? auditRead.data?.page
+  const auditStatus = auditRead.status === 'error' ? (auditRead.error?.status === 403 ? 'forbidden' : 'error') : auditRead.status === 'ready' || auditRead.status === 'empty' ? auditRead.status : 'loading'
+  const openAudit = drawer?.type === 'audit' ? auditRows.find((r) => r.id === drawer.id) : undefined
+  const patchAuditFilters = (patch: AuditFilters) =>
+    setAuditFilters((f) => Object.fromEntries(Object.entries({ ...f, ...patch }).filter(([, v]) => v)) as AuditFilters)
+  const loadMoreAudit = async () => {
+    const cursor = auditPage?.has_more ? auditPage.next_cursor : null
+    const sent = auditKey
+    if (!cursor || auditMoreKey === sent) return
+    setAuditMoreKey(sent)
+    try {
+      const page = await fetchAuditEvents(auditFilters, cursor)
+      if (sent !== auditKeyNow.current) return
+      setAuditMore((m) => ({ key: sent, events: [...(m?.key === sent ? m.events : []), ...page.events], page: page.page }))
+    } catch (e) {
+      if (sent !== auditKeyNow.current) return
+      const err = toApiError(e)
+      if (err.status === 401) void expireSession()
+      else showToast(err.message, '', 'red')
+    } finally {
+      setAuditMoreKey((k) => (k === sent ? null : k))
+    }
+  }
   const openJob = drawer?.type === 'job' ? drawer.id : null
   const jobRead = useAsync(() => fetchJob(openJob ?? ''), { immediate: openJob !== null, deps: [openJob], isEmpty: () => false })
   const lastJob = useRef<JobDetail | null>(null)
@@ -136,7 +180,7 @@ function Console() {
   const jobDetail = freshJob ?? (jobRead.status === 'loading' && lastJob.current?.job.id === openJob ? lastJob.current : null)
   const jobNote = jobRead.status === 'error' ? { text: jobRead.error?.status === 403 ? 'Your account is not ASComply staff.' : (jobRead.error?.message ?? 'Unavailable'), onRetry: jobRead.run } : { text: 'Loading job…' }
   const jobInFlight = useRef(false)
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead].some((r) => r.error?.status === 401)
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -368,6 +412,24 @@ function Console() {
               tenantsError={jobTenantsRead.status === 'error' && jobTenantsRead.error?.status !== 401 ? { text: jobTenantsRead.error?.message ?? 'Unavailable', onRetry: jobTenantsRead.run } : undefined}
             />
           )}
+          {screen === 'audit' && (
+            <Audit
+              view={auditView}
+              onView={setAuditView}
+              status={auditStatus}
+              errorText={auditRead.error?.message}
+              rows={auditRows}
+              hasMore={auditPage?.has_more ?? false}
+              moreBusy={auditMoreKey === auditKey}
+              onMore={() => void loadMoreAudit()}
+              filters={auditFilters}
+              onFilters={patchAuditFilters}
+              tenants={auditTenantsRead.data ?? []}
+              tenantsError={auditTenantsRead.status === 'error' && auditTenantsRead.error?.status !== 401 ? { text: auditTenantsRead.error?.message ?? 'Unavailable', onRetry: auditTenantsRead.run } : undefined}
+              onRetry={auditRead.run}
+              onOpen={(id) => setDrawer({ type: 'audit', id })}
+            />
+          )}
           {screen === 'tenants' && (
             <Tenants
               status={tenantsStatus}
@@ -420,6 +482,8 @@ function Console() {
           }}
         />
       )}
+
+      {openAudit && <AuditEntryDrawer entry={openAudit} onClose={() => setDrawer(null)} />}
 
       {confirmJob && jobDetail && (
         <JobActionConfirm invoiceNumber={jobDetail.job.invoice_number} action={confirmJob} busy={jobBusy} onClose={() => setConfirmJob(null)} onConfirm={(reason) => void doJobAction(reason)} />

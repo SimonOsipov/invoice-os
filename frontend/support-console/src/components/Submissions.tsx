@@ -25,7 +25,7 @@ type Props = {
 const JOB_COLS = 'minmax(220px,1.3fr) 130px 116px 56px minmax(200px,1.2fr) 64px 22px'
 const MIN_WIDTH = 840
 
-const chipStyle = (on: boolean, tone: ReturnType<typeof jobStateStyle> | null): CSSProperties => ({
+export const chipStyle = (on: boolean, tone: ReturnType<typeof jobStateStyle> | null): CSSProperties => ({
   border: `1px solid ${on ? (tone ? tone.border : 'var(--line-3)') : 'var(--line-1)'}`,
   background: on ? (tone ? tone.bg : 'var(--bg-3)') : 'var(--bg-2)',
   color: on ? (tone ? tone.text : 'var(--fg-1)') : 'var(--fg-3)',

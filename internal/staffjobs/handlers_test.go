@@ -5,15 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
@@ -194,5 +197,139 @@ func TestGetHandler_ServerFaultIs500AndLogged(t *testing.T) {
 	wantBody(t, rec, http.StatusInternalServerError, `{"error":"internal server error"}`)
 	if !strings.Contains(logs.String(), "staffjobs: get response") {
 		t.Errorf("log = %q", logs.String())
+	}
+}
+
+type redriveCall struct {
+	n      int
+	id     string
+	reason string
+}
+
+func serveRedrive(t *testing.T, body string, result Detail, err error) (*httptest.ResponseRecorder, *redriveCall) {
+	t.Helper()
+	call := &redriveCall{}
+	h := RedriveHandler(func(_ context.Context, id, reason string) (Detail, error) {
+		call.n++
+		call.id, call.reason = id, reason
+		return result, err
+	}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	req := httptest.NewRequest(http.MethodPost, "/v1/staff/jobs/abc/redrive", strings.NewReader(body))
+	req.SetPathValue("id", "abc")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec, call
+}
+
+func TestRedriveHandler_SuccessReturnsTheDetail(t *testing.T) {
+	rec, call := serveRedrive(t, `{"reason":"  APP back up "}`, Detail{Job: Job{ID: "abc", State: "queued"}}, nil)
+	var body struct {
+		Job     map[string]json.RawMessage `json:"job"`
+		History []json.RawMessage          `json:"history"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("got %d %q: %v", rec.Code, rec.Body.String(), err)
+	}
+	if call.n != 1 || call.id != "abc" || call.reason != "APP back up" {
+		t.Errorf("redrive call = %+v, want one call with id abc and the trimmed reason", call)
+	}
+	if string(body.Job["state"]) != `"queued"` || string(body.Job["max_attempts"]) != strconv.Itoa(maxAttempts) || body.History == nil {
+		t.Errorf("body = %s, want the job with max_attempts and a history array", rec.Body.String())
+	}
+}
+
+func TestRedriveHandler_ConflictsAre409(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		msg  string
+	}{
+		{"job state", ErrJobState, "only a dead_lettered job can be re-driven"},
+		{"acknowledged", ErrAcknowledged, "the Access Point acknowledged this submission; re-sending may file it twice"},
+		{"river duplicate", ErrRiverDuplicate, "another River job already holds this submission"},
+		{"river running", ErrRiverRunning, "the previous River job is still running; retry shortly"},
+		{"resolved outside", invoice.ErrResolvedOutside, "the invoice was resolved outside the system"},
+		{"invoice status", invoice.StatusError{Have: invoice.StatusAccepted}, "the invoice is accepted, not failed"},
+		{"wrapped", fmt.Errorf("redrive: %w", ErrJobState), "only a dead_lettered job can be re-driven"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, call := serveRedrive(t, `{"reason":"r"}`, Detail{}, tc.err)
+			wantBody(t, rec, http.StatusConflict, `{"error":"`+tc.msg+`"}`)
+			if call.n != 1 {
+				t.Errorf("redrive calls = %d, want 1", call.n)
+			}
+		})
+	}
+}
+
+func TestRedriveHandler_ReasonIsRequired(t *testing.T) {
+	for _, reason := range []string{"", "   "} {
+		rec, call := serveRedrive(t, `{"reason":"`+reason+`"}`, Detail{}, nil)
+		wantBody(t, rec, http.StatusBadRequest, `{"error":"reason must be 1 to 500 characters"}`)
+		if call.n != 0 {
+			t.Errorf("reason %q: redrive was called", reason)
+		}
+	}
+	rec, call := serveRedrive(t, `{}`, Detail{}, nil)
+	wantBody(t, rec, http.StatusBadRequest, `{"error":"reason must be 1 to 500 characters"}`)
+	if call.n != 0 {
+		t.Error("a missing reason reached redrive")
+	}
+}
+
+func TestRedriveHandler_ReasonBoundary(t *testing.T) {
+	// "é" is two bytes: 500 runes is 1000 bytes, so a byte count would refuse it.
+	ok := strings.Repeat("é", 500)
+	rec, call := serveRedrive(t, `{"reason":" `+ok+` "}`, Detail{}, nil)
+	if rec.Code != http.StatusOK || call.n != 1 || call.reason != ok || utf8.RuneCountInString(call.reason) != 500 {
+		t.Errorf("500 runes: got %d, calls %d, reason of %d runes; want 200, 1 call with the trimmed reason", rec.Code, call.n, utf8.RuneCountInString(call.reason))
+	}
+	rec, call = serveRedrive(t, `{"reason":"`+ok+`é"}`, Detail{}, nil)
+	wantBody(t, rec, http.StatusBadRequest, `{"error":"reason must be 1 to 500 characters"}`)
+	if call.n != 0 {
+		t.Error("501 runes reached redrive")
+	}
+}
+
+func TestRedriveHandler_UnknownFieldIs400(t *testing.T) {
+	for _, body := range []string{`{"reason":"x","force":true}`, `{"reason":"x"} {"reason":"y"}`, `{"reason":"x"} 1`, `not json`} {
+		rec, call := serveRedrive(t, body, Detail{}, nil)
+		wantBody(t, rec, http.StatusBadRequest, `{"error":"invalid request body"}`)
+		if call.n != 0 {
+			t.Errorf("body %q reached redrive", body)
+		}
+	}
+}
+
+func TestRedriveHandler_OversizeBodyIs413(t *testing.T) {
+	for _, body := range []string{
+		`{"reason":"` + strings.Repeat("a", 9<<10) + `"}`,
+		`{"reason":"r"}` + strings.Repeat(" ", 9<<10) + `{}`,
+	} {
+		rec, call := serveRedrive(t, body, Detail{}, nil)
+		wantBody(t, rec, http.StatusRequestEntityTooLarge, `{"error":"request body too large"}`)
+		if call.n != 0 {
+			t.Error("an oversize body reached redrive")
+		}
+	}
+}
+
+func TestRedriveHandler_NotStaffIs403AndNotFoundIs404(t *testing.T) {
+	rec, _ := serveRedrive(t, `{"reason":"r"}`, Detail{}, db.ErrNotStaff)
+	wantBody(t, rec, http.StatusForbidden, `{"error":"forbidden"}`)
+	rec, _ = serveRedrive(t, `{"reason":"r"}`, Detail{}, ErrJobNotFound)
+	wantBody(t, rec, http.StatusNotFound, `{"error":"job not found"}`)
+}
+
+func TestRedriveHandler_ServerFaultIs500AndLogged(t *testing.T) {
+	var logs bytes.Buffer
+	req := httptest.NewRequest(http.MethodPost, "/v1/staff/jobs/abc/redrive", strings.NewReader(`{"reason":"r"}`))
+	req.SetPathValue("id", "abc")
+	rec := httptest.NewRecorder()
+	RedriveHandler(func(context.Context, string, string) (Detail, error) { return Detail{}, errors.New("boom") },
+		slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, req)
+	wantBody(t, rec, http.StatusInternalServerError, `{"error":"internal server error"}`)
+	if !strings.Contains(logs.String(), "staffjobs: redrive response") {
+		t.Errorf("log = %q, want the redrive response op", logs.String())
 	}
 }

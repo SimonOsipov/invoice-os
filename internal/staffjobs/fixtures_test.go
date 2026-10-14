@@ -12,8 +12,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
+	"github.com/SimonOsipov/invoice-os/internal/submission"
 )
 
 const devHouseTenant = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
@@ -149,4 +152,64 @@ func seedHistory(t *testing.T, super *pgxpool.Pool, tenant, invoice string, from
 		tenant, invoice, from, to, changedAt); err != nil {
 		t.Fatalf("seed history %s: %v", to, err)
 	}
+}
+
+// insertOnlyRiver is a River client with no Workers: it inserts and deletes rows and runs none.
+func insertOnlyRiver(t *testing.T, pool *pgxpool.Pool) *river.Client[pgx.Tx] {
+	t.Helper()
+	rc, err := river.NewClient(riverpgxv5.New(pool), &river.Config{})
+	if err != nil {
+		t.Fatalf("river client: %v", err)
+	}
+	return rc
+}
+
+// seedRedriveJob commits a job at state with 8 attempts, the River row riverID (nil for none) and,
+// when pollRef is set, the poll_ref and next_poll_at the APP acknowledgement leaves. It returns the job id and idempotency key.
+func seedRedriveJob(t *testing.T, super *pgxpool.Pool, tenant, invoice, state string, riverID *int64, pollRef *string) (id, key string) {
+	t.Helper()
+	id = uuid.NewString()
+	key = "redrive-" + id
+	var next *time.Time
+	if pollRef != nil {
+		n := time.Now().UTC().Add(time.Hour)
+		next = &n
+	}
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO submission_jobs (id, tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state, attempts, river_job_id, poll_ref, next_poll_at)
+		 VALUES ($1, $2, $3, $4, 'mock', 'v1', $5, 8, $6, $7, $8)`,
+		id, tenant, invoice, key, state, riverID, pollRef, next); err != nil {
+		t.Fatalf("seed a %s job: %v", state, err)
+	}
+	return id, key
+}
+
+// seedRiverRow inserts a submission_submit row for args through rc, then forces its state.
+// Inserting first gives the row the unique_key a real insert computes.
+func seedRiverRow(t *testing.T, super *pgxpool.Pool, rc *river.Client[pgx.Tx], args submission.SubmitArgs, state string) int64 {
+	t.Helper()
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM river_job WHERE args->>'tenant_id' = $1`, args.TenantID)
+	})
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	res, err := rc.InsertTx(ctx, tx, args, nil)
+	if err != nil || res.UniqueSkippedAsDuplicate {
+		t.Fatalf("seed river row: skipped=%v err=%v", res != nil && res.UniqueSkippedAsDuplicate, err)
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE river_job SET state = $2::river_job_state, attempt = 1,
+		        attempted_at = CASE WHEN $2 IN ('running', 'completed', 'discarded') THEN now() END,
+		        finalized_at = CASE WHEN $2 IN ('completed', 'discarded', 'cancelled') THEN now() END
+		  WHERE id = $1`, res.Job.ID, state); err != nil {
+		t.Fatalf("force river row to %s: %v", state, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return res.Job.ID
 }

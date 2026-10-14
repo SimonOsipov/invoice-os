@@ -1995,8 +1995,9 @@ func TestSubmissionMain_RegistersTheStaffJobsRoutes(t *testing.T) {
 		t.Fatalf("parse cmd/submission/main.go: %v", err)
 	}
 	want := map[string]string{
-		"GET /v1/staff/jobs":      "staffjobs.ListHandler",
-		"GET /v1/staff/jobs/{id}": "staffjobs.GetHandler",
+		"GET /v1/staff/jobs":               "staffjobs.ListHandler",
+		"GET /v1/staff/jobs/{id}":          "staffjobs.GetHandler",
+		"POST /v1/staff/jobs/{id}/redrive": "staffjobs.RedriveHandler",
 	}
 	found := map[string]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {

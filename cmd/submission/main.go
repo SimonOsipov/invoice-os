@@ -229,7 +229,7 @@ func main() {
 		newDocumentStorer(docSvc.Store), newExtractionEnqueuer(pool, q), app.Logger))
 
 	// Staff Submissions reads, reached as /api/submission/v1/staff/jobs…; the staff class gates the path.
-	jobs := staffjobs.NewStore(pool)
+	jobs := staffjobs.NewStore(pool, invStore, q.River())
 	app.Mux.HandleFunc("GET /v1/staff/jobs", staffjobs.ListHandler(jobs.List, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/jobs/{id}", staffjobs.GetHandler(jobs.Get, app.Logger))
 

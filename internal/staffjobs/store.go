@@ -9,7 +9,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/invoice"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -45,10 +47,14 @@ type Detail struct {
 }
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	invoices *invoice.Store
+	river    *river.Client[pgx.Tx]
 }
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func NewStore(pool *pgxpool.Pool, invoices *invoice.Store, rc *river.Client[pgx.Tx]) *Store {
+	return &Store{pool: pool, invoices: invoices, river: rc}
+}
 
 const jobColumns = `id::text, tenant_id::text, tenant_name, invoice_id::text, invoice_number, invoice_status,
 	state, attempts, last_error, acknowledged, created_at, updated_at`

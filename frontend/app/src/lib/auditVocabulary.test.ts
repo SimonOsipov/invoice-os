@@ -206,6 +206,21 @@ describe('audit vocabulary', () => {
     expect(auditEventView('submission.failed').tone).not.toBeNull()
   })
 
+  it('auditVocabulary_supportJobEventsAreLabelledInSubmissionsAsNeutral', () => {
+    for (const [id, label] of [
+      ['submission.job.redriven', 'Re-sent by ASComply support'],
+      ['submission.job.cancelled', 'Cancelled by ASComply support'],
+    ]) {
+      const view = auditEventView(id)
+      expect(view.domain, `${id} must be a labelled submissions event`).toBe('submissions')
+      expect(view.label).toBe(label)
+      expect(AUDIT_EVENTS[id].outcome, `${id} is neither good nor bad news`).toBe('neutral')
+      expect(view.tone).toBe('amber')
+    }
+    // Control: an outcome-bearing sibling keeps its own tone.
+    expect(auditEventView('submission.failed').tone).toBe('red')
+  })
+
   it('auditVocabulary_invitationAcceptedIsLabelledInMemberships', () => {
     const view = auditEventView('invitation.accepted')
     // humanise() answers a null domain for an unknown id, so the domain tells labelled from unknown.

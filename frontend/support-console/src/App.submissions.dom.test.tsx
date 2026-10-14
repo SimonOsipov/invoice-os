@@ -161,12 +161,19 @@ const NRS = 'The Access Point acknowledged this submission. Confirm with NRS bef
 
 describe('Console job drawer', () => {
   it('a row opens the job drawer', async () => {
+    jobRead.mockResolvedValue(detail(job('a', { attempts: 8, max_attempts: 8, created_at: '2026-10-14T05:30:00Z' })))
     const d = await openDrawer('a')
     await within(d).findByText('8 / 8')
     expect(jobRead).toHaveBeenCalledWith('a')
     expect(within(d).getByText('APP timeout')).toBeTruthy()
-    expect(within(d).getByText('Invoice status')).toBeTruthy()
-    expect(within(within(d).getByRole('list', { name: 'Invoice timeline' })).getAllByRole('listitem')).toHaveLength(3)
+    const cell = (label: string) => within(d).getByText(label).nextElementSibling?.textContent
+    expect([cell('Tenant'), cell('Invoice'), cell('Invoice status'), cell('Attempts'), cell('Created'), cell('Updated')]).toEqual([
+      'Okafor & Partners', 'INV-a', 'failed', '8 / 8', '2026-10-14 05:30 UTC', '2026-10-14 08:00 UTC',
+    ])
+    const steps = within(within(d).getByRole('list', { name: 'Invoice timeline' })).getAllByRole('listitem')
+    expect(steps.map((li) => li.textContent)).toEqual([
+      'queuedsystem · 2026-10-14 07:00 UTC', 'queued → submittingsystem · 2026-10-14 07:01 UTC', 'submitting → failedsystem · 2026-10-14 07:02 UTC',
+    ])
   })
 
   it('the drawer offers only the action its state allows', async () => {
@@ -213,11 +220,16 @@ describe('Console job drawer', () => {
   })
 
   it('a successful action toasts and re-reads', async () => {
-    redrive.mockResolvedValue(detail(job('a')))
+    let release: (v: JobDetail) => void = () => {}
+    redrive.mockReturnValue(new Promise<JobDetail>((r) => (release = r)))
     fireEvent.change(await openRedrive(), { target: { value: 'APP back up' } })
     const listCalls = jobsRead.mock.calls.length
     const oneCalls = jobRead.mock.calls.length
     fireEvent.click(confirmBtn())
+    await waitFor(() => expect(confirmBtn().disabled).toBe(true))
+    fireEvent.click(confirmBtn())
+    expect(redrive).toHaveBeenCalledTimes(1)
+    release(detail(job('a')))
     await screen.findByText('Job re-driven')
     await waitFor(() => expect(jobsRead.mock.calls.length).toBe(listCalls + 1))
     await waitFor(() => expect(jobRead.mock.calls.length).toBe(oneCalls + 1))
@@ -227,6 +239,8 @@ describe('Console job drawer', () => {
   it('a refused action shows the server message', async () => {
     cancel.mockRejectedValue(new ApiError('http', 'only a queued job can be cancelled', 409))
     const d = await openDrawer('b')
+    const listCalls = jobsRead.mock.calls.length
+    const oneCalls = jobRead.mock.calls.length
     fireEvent.click(await within(d).findByRole('button', { name: 'Cancel job' }))
     fireEvent.change(await screen.findByLabelText('Reason'), { target: { value: 'duplicate' } })
     const dlg = screen.getAllByRole('dialog').at(-1) as HTMLElement
@@ -234,5 +248,33 @@ describe('Console job drawer', () => {
     await screen.findByText('only a queued job can be cancelled')
     await waitFor(() => expect(screen.queryByLabelText('Reason')).toBeNull())
     expect(within(screen.getByRole('dialog')).getAllByText('INV-b')).toHaveLength(2)
+    await waitFor(() => expect(jobsRead.mock.calls.length).toBe(listCalls + 1))
+    await waitFor(() => expect(jobRead.mock.calls.length).toBe(oneCalls + 1))
+  })
+
+  it('a cancel sends the trimmed reason and toasts; a 404 shows its message and re-reads; a 401 expires the session', async () => {
+    cancel.mockResolvedValueOnce(detail(job('b')))
+    const d = await openDrawer('b')
+    const start = (reason: string) => async () => {
+      fireEvent.click(await within(d).findByRole('button', { name: 'Cancel job' }))
+      fireEvent.change(await screen.findByLabelText('Reason'), { target: { value: reason } })
+      const dlg = screen.getAllByRole('dialog').at(-1) as HTMLElement
+      fireEvent.click(within(dlg).getByRole('button', { name: 'Cancel job' }))
+    }
+    await start('  dup  ')()
+    await screen.findByText('Job cancelled')
+    expect(cancel).toHaveBeenLastCalledWith('b', 'dup')
+    await waitFor(() => expect(screen.queryByLabelText('Reason')).toBeNull())
+
+    cancel.mockRejectedValueOnce(new ApiError('http', 'job not found', 404))
+    const listCalls = jobsRead.mock.calls.length
+    await start('gone')()
+    await screen.findByText('job not found')
+    await waitFor(() => expect(screen.queryByLabelText('Reason')).toBeNull())
+    await waitFor(() => expect(jobsRead.mock.calls.length).toBeGreaterThan(listCalls))
+
+    cancel.mockRejectedValueOnce(new ApiError('http', 'expired', 401))
+    await start('late')()
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
   })
 })

@@ -1368,20 +1368,23 @@ func TestRLS_StaffReadTenantInvoicesLimitBoundaryAndEmptyTenants(t *testing.T) {
 	}
 }
 
-// Runtime check of AC-5: the exact column sets are pinned by the catalog test, this reads and writes as staff_reader.
+// Runtime check of AC-5, the detail tables and (SUPP-06-02) submission_jobs and invoice_status_history: the exact column sets are pinned by the catalog test, this reads and writes as staff_reader.
 func TestRLS_StaffReaderReadsOnlyGrantedColumnsAndWritesNothingOnTheDetailTables(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 	t0 := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
 	x := seedDetailTenant(t, "staff reader writes")
 	seedMemberAt(t, x, "admin", "active", t0, nil, nil)
-	seedInvoiceAt(t, x, seedEntity(t, x), uuid.NewString(), "SRW-1", "draft", t0)
+	srwInvoice := uuid.NewString()
+	seedInvoiceAt(t, x, seedEntity(t, x), srwInvoice, "SRW-1", "draft", t0)
 	seedAuditAt(t, x, t0)
+	seedJobAt(t, x, srwInvoice, "queued", t0, nil, nil)
+	seedHistoryAt(t, x, srwInvoice, nil, "draft", "srw", t0)
 
 	tx := revokeProbeTx(t)
 	txExec(t, tx, `SELECT set_config('app.current_tenant', '', true)`)
 	txExec(t, tx, `SET LOCAL ROLE staff_reader`)
-	for _, table := range []string{"memberships", "invoices", "audit_log"} {
+	for _, table := range []string{"memberships", "invoices", "audit_log", "submission_jobs", "invoice_status_history"} {
 		if n := mustCount(t, tx, `SELECT count(*) FROM `+table+` WHERE tenant_id = $1`, x); n == 0 {
 			t.Fatalf("control: staff_reader reads no %s row of the seeded tenant", table)
 		}
@@ -1397,6 +1400,8 @@ func TestRLS_StaffReaderReadsOnlyGrantedColumnsAndWritesNothingOnTheDetailTables
 		{"read memberships.id", `SELECT id FROM memberships WHERE tenant_id = $1`},
 		{"read invoices.entity_id", `SELECT entity_id FROM invoices WHERE tenant_id = $1`},
 		{"read audit_log.actor", `SELECT actor FROM audit_log WHERE tenant_id = $1`},
+		{"read submission_jobs.idempotency_key", `SELECT idempotency_key FROM submission_jobs WHERE tenant_id = $1`},
+		{"read invoice_status_history.cause_rule_set_version_id", `SELECT cause_rule_set_version_id FROM invoice_status_history WHERE tenant_id = $1`},
 	} {
 		_, err := try(c.sql)
 		assertPgRefusal(t, "staff_reader "+c.what, err, sqlstateInsufficientPrivilege, "permission denied for table")
@@ -1410,6 +1415,12 @@ func TestRLS_StaffReaderReadsOnlyGrantedColumnsAndWritesNothingOnTheDetailTables
 		{"INSERT audit_log", `INSERT INTO audit_log (tenant_id, actor, event) VALUES ($1, 'x', 'staff_read.write')`},
 		{"UPDATE audit_log", `UPDATE audit_log SET created_at = now() WHERE tenant_id = $1`},
 		{"DELETE audit_log", `DELETE FROM audit_log WHERE tenant_id = $1`},
+		{"INSERT submission_jobs", `INSERT INTO submission_jobs (tenant_id, invoice_id, idempotency_key, adapter, adapter_version) VALUES ($1, gen_random_uuid(), 'srw', 'mock', 'v1')`},
+		{"UPDATE submission_jobs", `UPDATE submission_jobs SET state = 'failed' WHERE tenant_id = $1`},
+		{"DELETE submission_jobs", `DELETE FROM submission_jobs WHERE tenant_id = $1`},
+		{"INSERT invoice_status_history", `INSERT INTO invoice_status_history (tenant_id, invoice_id, to_status, actor) VALUES ($1, gen_random_uuid(), 'draft', 'srw')`},
+		{"UPDATE invoice_status_history", `UPDATE invoice_status_history SET to_status = 'failed' WHERE tenant_id = $1`},
+		{"DELETE invoice_status_history", `DELETE FROM invoice_status_history WHERE tenant_id = $1`},
 	} {
 		n, err := try(c.sql)
 		if err == nil && n != 0 {
@@ -1889,5 +1900,49 @@ func TestRLS_StaffReadSubmissionJobsDownAndUp(t *testing.T) {
 	}
 	if !found {
 		t.Error("after the Up: staff_read_submission_jobs does not list the seeded job")
+	}
+}
+
+// Equal sort keys fall back to id ascending, so a read never reshuffles tied rows.
+func TestRLS_StaffReadSubmissionJobsAndHistoryTieBreakByIdAscending(t *testing.T) {
+	requireHarness(t)
+	requireStaffJobFunctions(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	x := seedDetailTenant(t, "tie break")
+	inv := seedJobInvoice(t, x, "TIE-1", "queued")
+	at := jobsFutureBase()
+
+	ids := make([]string, 8)
+	for i := range ids {
+		ids[i] = uuid.NewString()
+	}
+	sort.Strings(ids)
+	// Inserted newest id first, so heap order is the reverse of the expected order.
+	for i := len(ids) - 1; i >= 0; i-- {
+		if _, err := h.super.Exec(context.Background(),
+			`INSERT INTO submission_jobs (id, tenant_id, invoice_id, idempotency_key, adapter, adapter_version, created_at) VALUES ($1, $2, $3, $4, 'mock', 'v1', $5)`,
+			ids[i], x, inv, "tie-"+ids[i], at); err != nil {
+			t.Fatalf("seed tied job %s: %v", ids[i], err)
+		}
+		if _, err := h.super.Exec(context.Background(),
+			`INSERT INTO invoice_status_history (id, tenant_id, invoice_id, to_status, actor, changed_at) VALUES ($1, $2, $3, 'draft', $4, $5)`,
+			ids[i], x, inv, fmt.Sprintf("tie-%d", i), at); err != nil {
+			t.Fatalf("seed tied history row %s: %v", ids[i], err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM submission_jobs WHERE tenant_id = $1`, x)
+	})
+
+	if got := jobIDs(collectStaffJobs(t, h.app, staff, nil, x)); !reflect.DeepEqual(got, ids) {
+		t.Errorf("tied jobs = %v, want id ascending %v", got, ids)
+	}
+	var gotActors, wantActors []string
+	for i, s := range collectStaffSteps(t, h.app, staff, x, inv) {
+		gotActors = append(gotActors, s.actor)
+		wantActors = append(wantActors, fmt.Sprintf("tie-%d", i))
+	}
+	if len(gotActors) != len(ids) || !reflect.DeepEqual(gotActors, wantActors) {
+		t.Errorf("tied history actors = %v, want %d rows in id order %v", gotActors, len(ids), wantActors)
 	}
 }

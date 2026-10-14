@@ -530,12 +530,12 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 		}
 	}
 
-	// Column sets per table: tenants is the staff_read_tenants migration's, the next three the tenant-detail migration's, the last two the submission-jobs migration's.
+	// Column sets per table: tenants is the staff_read_tenants migration's, the next three the tenant-detail migration's, the last two the submission-jobs migration's; audit_log gains id, event, actor and payload from the audit-search migration.
 	for table, cols := range map[string][]string{
 		"public.tenants":                {"created_at", "id", "kind", "name"},
 		"public.memberships":            {"created_at", "display_name", "email", "role", "status", "tenant_id", "user_id"},
 		"public.invoices":               {"created_at", "id", "invoice_number", "status", "tenant_id"},
-		"public.audit_log":              {"created_at", "tenant_id"},
+		"public.audit_log":              {"actor", "created_at", "event", "id", "payload", "tenant_id"},
 		"public.submission_jobs":        {"attempts", "created_at", "id", "invoice_id", "last_error", "poll_ref", "state", "tenant_id", "updated_at"},
 		"public.invoice_status_history": {"actor", "changed_at", "from_status", "id", "invoice_id", "tenant_id", "to_status"},
 	} {
@@ -1159,17 +1159,23 @@ func staffDetailMigrationVersion(t *testing.T) int64 {
 	return 0
 }
 
-// Rolls back only the detail migration: the staff_read_tenants footprint must survive its Down.
+// Rolls back the detail migration and every newer staff_read_ one, newest first: the staff_read_tenants footprint must survive.
 func TestRLS_StaffReadTenantDetailDownAndUp(t *testing.T) {
 	requireHarness(t)
 	version := staffDetailMigrationVersion(t)
+	var versions []int64
+	for _, v := range staffReadMigrationVersions(t) {
+		if v >= version {
+			versions = append(versions, v)
+		}
+	}
 	house := adoptHouseTenant(t)
 	member := seedHouseMember(t, "reviewer", "active")
-	if f, p, g := staffDetailFootprintOf(t); f != 3 || p != 3 || g != 14 {
-		t.Fatalf("before the Down: %d functions, %d staff_read_lookup policies, %d column grants, want 3, 3, 14", f, p, g)
+	if f, p, g := staffDetailFootprintOf(t); f != 3 || p != 3 || g != 18 {
+		t.Fatalf("before the Down: %d functions, %d staff_read_lookup policies, %d column grants, want 3, 3, 18", f, p, g)
 	}
 
-	reapply := rollBackMigrations(t, staffMigrationProvider(t), version)
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), versions...)
 	if f, p, g := staffDetailFootprintOf(t); f != 0 || p != 0 || g != 0 {
 		t.Errorf("after the Down: %d functions, %d staff_read_lookup policies, %d column grants, want 0, 0, 0", f, p, g)
 	}
@@ -1181,8 +1187,8 @@ func TestRLS_StaffReadTenantDetailDownAndUp(t *testing.T) {
 	}
 
 	reapply()
-	if f, p, g := staffDetailFootprintOf(t); f != 3 || p != 3 || g != 14 {
-		t.Errorf("after the Up: %d functions, %d staff_read_lookup policies, %d column grants, want 3, 3, 14", f, p, g)
+	if f, p, g := staffDetailFootprintOf(t); f != 3 || p != 3 || g != 18 {
+		t.Errorf("after the Up: %d functions, %d staff_read_lookup policies, %d column grants, want 3, 3, 18", f, p, g)
 	}
 	var found bool
 	for _, r := range collectTenantMembers(t, h.app, member, house) {
@@ -1399,12 +1405,16 @@ func TestRLS_StaffReaderReadsOnlyGrantedColumnsAndWritesNothingOnTheDetailTables
 	for _, c := range []struct{ what, sql string }{
 		{"read memberships.id", `SELECT id FROM memberships WHERE tenant_id = $1`},
 		{"read invoices.entity_id", `SELECT entity_id FROM invoices WHERE tenant_id = $1`},
-		{"read audit_log.actor", `SELECT actor FROM audit_log WHERE tenant_id = $1`},
+		{"read audit_log.entity_id", `SELECT entity_id FROM audit_log WHERE tenant_id = $1`},
 		{"read submission_jobs.idempotency_key", `SELECT idempotency_key FROM submission_jobs WHERE tenant_id = $1`},
 		{"read invoice_status_history.cause_rule_set_version_id", `SELECT cause_rule_set_version_id FROM invoice_status_history WHERE tenant_id = $1`},
 	} {
 		_, err := try(c.sql)
 		assertPgRefusal(t, "staff_reader "+c.what, err, sqlstateInsufficientPrivilege, "permission denied for table")
+	}
+	// Positive pair of the entity_id refusal: the four columns the audit-search migration grants read fine.
+	if n := mustCount(t, tx, `SELECT count(*) FROM (SELECT id, event, actor, payload FROM audit_log WHERE tenant_id = $1) r`, x); n == 0 {
+		t.Error("staff_reader reads no audit_log row through id, event, actor and payload of the seeded tenant")
 	}
 	for _, c := range []struct{ what, sql string }{
 		{"INSERT memberships", `INSERT INTO memberships (id, tenant_id, user_id, role, status) VALUES (gen_random_uuid(), $1, gen_random_uuid(), 'admin', 'active')`},

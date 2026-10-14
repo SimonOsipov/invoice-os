@@ -88,7 +88,30 @@ type auditSeed struct {
 	at                   time.Time
 }
 
-// seedAuditRow commits one audit row at an explicit time; audit_log is append-only, so the row stays.
+// purgeAuditRows deletes audit_log rows as the superuser; the append-only trigger refuses a plain DELETE, so it runs under 'replica'.
+func purgeAuditRows(t *testing.T, where string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Errorf("purge audit rows: begin: %v", err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+		t.Errorf("purge audit rows: set replica role: %v", err)
+		return
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM audit_log WHERE `+where, args...); err != nil {
+		t.Errorf("purge audit rows: %v", err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Errorf("purge audit rows: commit: %v", err)
+	}
+}
+
+// seedAuditRow commits one audit row at an explicit time and purges it when the test ends.
 func seedAuditRow(t *testing.T, tenant, actor, event string, at time.Time) auditSeed {
 	t.Helper()
 	s := auditSeed{tenant: tenant, actor: actor, event: event, at: at.UTC().Truncate(time.Microsecond)}
@@ -97,6 +120,7 @@ func seedAuditRow(t *testing.T, tenant, actor, event string, at time.Time) audit
 		tenant, actor, event, s.at).Scan(&s.id); err != nil {
 		t.Fatalf("seed an audit row: %v", err)
 	}
+	t.Cleanup(func() { purgeAuditRows(t, `id = $1`, s.id) })
 	return s
 }
 
@@ -209,6 +233,7 @@ func TestRLS_StaffReadAuditLogCapsTheLimit(t *testing.T) {
 		x, time.Now().UTC().Add(-time.Hour)); err != nil {
 		t.Fatalf("seed 105 audit rows: %v", err)
 	}
+	t.Cleanup(func() { purgeAuditRows(t, `tenant_id = $1`, x) })
 	if n := mustCount(t, h.super, `SELECT count(*) FROM audit_log WHERE tenant_id = $1`, x); n != 105 {
 		t.Fatalf("seeded rows = %d, want 105", n)
 	}

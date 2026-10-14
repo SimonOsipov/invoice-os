@@ -39,6 +39,30 @@ func staffSuperPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// staffPurge deletes rows of an append-only log as the superuser; the trigger refuses a plain DELETE, so it runs under 'replica'.
+func staffPurge(t *testing.T, super *pgxpool.Pool, query string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := super.Begin(ctx)
+	if err != nil {
+		t.Errorf("purge: begin: %v", err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
+		t.Errorf("purge: set replica role: %v", err)
+		return
+	}
+	if _, err := tx.Exec(ctx, query, args...); err != nil {
+		t.Errorf("purge %q: %v", query, err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Errorf("purge: commit: %v", err)
+	}
+}
+
+// staffSeedTenant seeds a tenant and purges it, its members and its log rows when the test ends.
 func staffSeedTenant(t *testing.T, super *pgxpool.Pool) string {
 	t.Helper()
 	id := uuid.NewString()
@@ -46,6 +70,15 @@ func staffSeedTenant(t *testing.T, super *pgxpool.Pool) string {
 		`INSERT INTO tenants (id, name, kind) VALUES ($1, $2, 'firm')`, id, "staff-read "+id[:8]); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
+	t.Cleanup(func() {
+		staffPurge(t, super, `DELETE FROM audit_log WHERE tenant_id = $1`, id)
+		staffPurge(t, super, `DELETE FROM staff_audit_log WHERE tenant_id = $1`, id)
+		for _, q := range []string{`DELETE FROM memberships WHERE tenant_id = $1`, `DELETE FROM tenants WHERE id = $1`} {
+			if _, err := super.Exec(context.Background(), q, id); err != nil {
+				t.Errorf("purge %q: %v", q, err)
+			}
+		}
+	})
 	return id
 }
 
@@ -80,6 +113,7 @@ func staffHouseMember(t *testing.T, super *pgxpool.Pool) string {
 	staffSeedMember(t, super, house, subject, nil, nil)
 	t.Cleanup(func() {
 		_, _ = super.Exec(context.Background(), `DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, house, subject)
+		staffPurge(t, super, `DELETE FROM staff_audit_log WHERE actor = $1`, subject)
 	})
 	return subject
 }
@@ -120,11 +154,12 @@ func TestRLS_StaffSearchReadsEveryTenantAndPages(t *testing.T) {
 	f, super := requireFixture(t), staffSuperPool(t)
 	ctx := staffContext(t, staffHouseMember(t, super))
 	a, b := staffSeedTenant(t, super), staffSeedTenant(t, super)
+	worker := "worker-" + uuid.NewString()
 	for range 3 {
-		staffSeedRow(t, f, a, "system", "staff.read.a")
+		staffSeedRow(t, f, a, worker, "staff.read.a")
 	}
 	for range 2 {
-		staffSeedRow(t, f, b, "system", "staff.read.b")
+		staffSeedRow(t, f, b, worker, "staff.read.b")
 	}
 	store := audit.NewStore(f.app)
 
@@ -157,9 +192,13 @@ func TestRLS_StaffSearchReadsEveryTenantAndPages(t *testing.T) {
 		}
 	}
 
-	wide, err := store.StaffSearch(ctx, audit.StaffFilter{Limit: 25})
+	// No tenant, but the actor is this run's: newer rows elsewhere in audit_log cannot push these off the page.
+	wide, err := store.StaffSearch(ctx, audit.StaffFilter{Actor: worker, Limit: 25})
 	if err != nil {
 		t.Fatalf("StaffSearch without a tenant: %v", err)
+	}
+	if len(wide.Events) != 5 {
+		t.Fatalf("tenant-less search by the run's actor = %d rows, want 5", len(wide.Events))
 	}
 	seen := map[string]bool{}
 	for i, r := range wide.Events {
@@ -242,6 +281,7 @@ func TestRLS_StaffChangesListsEveryRowWithTenantNames(t *testing.T) {
 	ctx := staffContext(t, staff)
 	tenant := staffSeedTenant(t, super)
 	actor, version := uuid.New(), uuid.New()
+	t.Cleanup(func() { staffPurge(t, super, `DELETE FROM staff_audit_log WHERE actor = $1`, actor) })
 	globalEvent, tenantEvent := "staff.global."+actor.String(), "staff.tenant."+actor.String()
 
 	if err := withAppTx(t, f, func(tx pgx.Tx) error {

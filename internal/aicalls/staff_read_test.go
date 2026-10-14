@@ -253,3 +253,18 @@ func TestStaffHandlers_RefuseTextThatPostgresRejects(t *testing.T) {
 		t.Errorf("totals cursor with a NUL name: got %d, store calls %d, want 400 and no store call", rec.Code, s.calls)
 	}
 }
+
+func TestStaffHandlers_FilterLimitCountsCharactersNotBytes(t *testing.T) {
+	atLimit := strings.Repeat("é", maxFilterLen)
+	over := atLimit + "é"
+	for _, p := range []string{"purpose", "outcome"} {
+		s := &spy{}
+		if rec := get(StaffCallsHandler(s.list, nil), "?"+p+"="+atLimit); rec.Code != http.StatusOK {
+			t.Errorf("%s of %d characters: status %d, want 200", p, maxFilterLen, rec.Code)
+		}
+		rec := get(StaffCallsHandler(s.list, nil), "?"+p+"="+over)
+		if rec.Code != http.StatusBadRequest || errMsg(rec) != p+" is too long" {
+			t.Errorf("%s of %d characters: %d %q, want 400 too long", p, maxFilterLen+1, rec.Code, errMsg(rec))
+		}
+	}
+}

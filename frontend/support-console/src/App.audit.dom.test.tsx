@@ -497,6 +497,21 @@ describe('Console audit wiring', () => {
       await waitFor(() => expect(previewRead).toHaveBeenCalledTimes(2))
     })
 
+    it('a one-day period is not inverted, and a company without a TIN shows a dash', async () => {
+      previewRead.mockResolvedValue(preview({ entity: { id: 'E2', name: 'Okafor Logistics', tin: null } }))
+      const d = await open()
+      pick(d, 'Tenant', 'T1')
+      await waitFor(() => expect((d.getByLabelText('Company') as HTMLSelectElement).disabled).toBe(false))
+      pick(d, 'Company', 'E2')
+      const cell = (label: string) => d.getAllByText(label, { selector: '.label' }).at(-1)?.nextElementSibling?.textContent
+      await waitFor(() => expect(cell('TIN')).toBe('—'))
+      fireEvent.change(d.getByLabelText('From'), { target: { value: '2026-10-14' } })
+      await waitFor(() => expect(previewRead).toHaveBeenCalledTimes(2))
+      expect(previewRead).toHaveBeenLastCalledWith('T1', { entityId: 'E2', from: '2026-10-14', to: '2026-10-14' })
+      expect(d.queryByText('End date must be on or after the start date.')).toBeNull()
+      await waitFor(() => expect(download_(d).disabled).toBe(false))
+    })
+
     it('a company list with no rows says so', async () => {
       entitiesRead.mockResolvedValue([])
       const d = await open()
@@ -507,8 +522,10 @@ describe('Console audit wiring', () => {
     it("Download follows the app's block order", async () => {
       const d = await open()
       expect(download_(d).disabled).toBe(true)
+      expect(download_(d).style.opacity).toBe('0.45')
       expect(d.getByText('Pick one company to export.')).toBeTruthy()
       await choose(d)
+      expect(download_(d).style.opacity).toBe('')
 
       fireEvent.change(d.getByLabelText('From'), { target: { value: '' } })
       await d.findByText('Pick a period. A custom range needs both a start date and an end date.')

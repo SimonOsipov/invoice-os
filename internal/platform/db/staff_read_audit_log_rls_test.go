@@ -773,7 +773,7 @@ func TestRLS_StaffReadAuditLogDownAndUp(t *testing.T) {
 		t.Errorf("after the Down: footprint = %+v, want no function, no audit_log_created_idx, grants %v and the staff_read_lookup policy kept", f, auditSearchGrantsDown)
 	}
 	if f, p, g := staffDetailFootprintOf(t); f != 3 || p != 3 || g != 14 {
-		t.Errorf("after the Down: SUPP-05 footprint = %d functions, %d policies, %d column grants, want 3, 3, 14", f, p, g)
+		t.Errorf("after the Down: staff audit footprint = %d functions, %d policies, %d column grants, want 3, 3, 14", f, p, g)
 	}
 
 	reapply()

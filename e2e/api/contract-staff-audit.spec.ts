@@ -144,7 +144,8 @@ test.describe('staff audit and evidence (API E2E, over the deployed gateway)', (
     const tenantPreview = await rawFetch(`/api/invoice/v1/evidence-bundle/preview?${bundleQuery(entityA.id)}`, { headers: bearer(customer) })
     expect(staffPreview.status, 'staff preview').toBe(200)
     expect(staffPreview.body, 'the staff preview equals the tenant preview').toEqual(tenantPreview.body)
-    expect((staffPreview.body as Preview).counts.invoices, 'the preview counts the spec invoices').toBe((tenantPreview.body as Preview).counts.invoices)
+    // invoiceIds is what the spec created, not read from either preview.
+    expect((staffPreview.body as Preview).counts.invoices, 'the preview counts the spec invoices').toBe(invoiceIds.length)
 
     const entities = await staffGet(`${tenantPath(PERSONAS.A.tenantId)}/entities`)
     expect(entities.status, 'staff entities').toBe(200)

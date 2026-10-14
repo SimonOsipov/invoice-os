@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"slices"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -483,5 +485,40 @@ func TestStaffReads_TenantAndWindowReachTheFunctions(t *testing.T) {
 		if g.TenantID != a {
 			t.Errorf("totals tenant filter returned tenant %s", g.TenantID)
 		}
+	}
+}
+
+func TestStaffTotals_DayIsISOUnderAnyDateStyle(t *testing.T) {
+	e := newEnv(t)
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("parse DATABASE_URL: %v", err)
+	}
+	cfg.ConnConfig.RuntimeParams["DateStyle"] = "SQL, DMY"
+	dmy, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("DMY pool: %v", err)
+	}
+	t.Cleanup(dmy.Close)
+	st := NewStore(dmy)
+	ctx := e.staff(t)
+	purpose, day := uniquePurpose(), farDay()
+	tenant := e.namedTenant(t, "ds-"+uuid.NewString())
+	for _, d := range []time.Time{day, day.AddDate(0, 0, -1)} {
+		e.insert(t, seed{tenant: tenant, purpose: purpose, outcome: "ok", at: d.Add(time.Hour)})
+	}
+	f := Filter{Purpose: purpose, Limit: 1}
+	p, err := st.StaffTotals(ctx, f)
+	if err != nil || len(p.Totals) != 1 || p.Totals[0].Day != day.Format(dayLayout) || p.Page.NextCursor == nil {
+		t.Fatalf("StaffTotals = %+v, %v, want ISO day %s and a next cursor", p, err, day.Format(dayLayout))
+	}
+	c, err := DecodeTotalsCursor(*p.Page.NextCursor)
+	if err != nil {
+		t.Fatalf("DecodeTotalsCursor: %v", err)
+	}
+	f.TotalsCursor = &c
+	p, err = st.StaffTotals(ctx, f)
+	if err != nil || len(p.Totals) != 1 || p.Totals[0].Day != day.AddDate(0, 0, -1).Format(dayLayout) {
+		t.Fatalf("second page = %+v, %v, want the previous ISO day", p, err)
 	}
 }

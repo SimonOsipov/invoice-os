@@ -25,7 +25,7 @@ import (
 const (
 	defaultLimit = 25
 	maxLimit     = 100
-	maxFilterLen = 64 // the purpose and outcome CHECK lengths
+	maxFilterLen = 64 // characters, matching the purpose and outcome CHECK char_length
 	dayLayout    = "2006-01-02"
 )
 
@@ -241,7 +241,7 @@ func (s *Store) StaffTotals(ctx context.Context, f Filter) (TotalsPage, error) {
 	}
 	totals := []Total{}
 	err = db.WithinStaffTx(ctx, s.pool, func(tx pgx.Tx) error {
-		r, err := tx.Query(ctx, `SELECT day::text, tenant_id::text, tenant_name, calls, input_tokens, output_tokens, cost::text, failed
+		r, err := tx.Query(ctx, `SELECT to_char(day, 'YYYY-MM-DD'), tenant_id::text, tenant_name, calls, input_tokens, output_tokens, cost::text, failed
 			FROM public.staff_read_ai_call_totals($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 			staff, nilIfEmpty(f.Tenant), nilIfEmpty(f.Purpose), nilIfEmpty(f.Outcome),
 			nilIfZero(f.From), nilIfZero(f.To), beforeDay, beforeName, beforeTenant, f.Limit+1)
@@ -279,13 +279,13 @@ func parseFilter(q url.Values, totals bool) (Filter, string) {
 			return Filter{}, "invalid tenant"
 		}
 	}
-	if f.Purpose = q.Get("purpose"); len(f.Purpose) > maxFilterLen {
+	if f.Purpose = q.Get("purpose"); utf8.RuneCountInString(f.Purpose) > maxFilterLen {
 		return Filter{}, "purpose is too long"
 	}
 	if !postgresText(f.Purpose) {
 		return Filter{}, "purpose is not valid text"
 	}
-	if f.Outcome = q.Get("outcome"); len(f.Outcome) > maxFilterLen {
+	if f.Outcome = q.Get("outcome"); utf8.RuneCountInString(f.Outcome) > maxFilterLen {
 		return Filter{}, "outcome is too long"
 	}
 	if !postgresText(f.Outcome) {

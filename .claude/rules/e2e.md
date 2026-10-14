@@ -40,7 +40,7 @@ paths:
 - Prove cross-tenant isolation with mock-issuer tokens for two tenants and `GET /api/tenancy/v1/me`. Both tenants exist in the seed, so RLS is the filter.
 - Expect the fleet roll-up to report `sentry` `off` on a PR and `on` or `off` on the persistent environment. `auth` is exempt.
 - Expect `notifications` to report `contacts` `fake` on a PR and `real` or `off` on the persistent environment.
-- Write the fork's URL variables, `RECONCILIATION_URL` and `GATEWAY_TOKEN`, and reconciliation's `VALIDATION_URL` and `S2S_TOKEN` on each run. A fork never inherits them.
+- Write the fork's URL variables, `RECONCILIATION_URL` and `GATEWAY_TOKEN`, reconciliation's `VALIDATION_URL` and `S2S_TOKEN`, and submission's `GATEWAY_URL` on each run. A fork never inherits them.
 - Write `VITE_LIBRARY_URL` on `landing` and `app`, and `VITE_APP_URL` and `VITE_LANDING_URL` on `library`, on each fork.
 - Write `VITE_SUPPORT_URL` on `app` and `VITE_APP_URL` on `support-console` on each fork.
 - Expect `library` to be the one SPA with no gateway wiring. A fork writes no `VITE_GATEWAY_URL` on it, and it is no CORS origin.

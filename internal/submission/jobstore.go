@@ -17,9 +17,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// isTerminalJobState reports whether state is one submission_jobs never leaves: a
-// crash-replay of an already-finished job must short-circuit before ever reaching the
-// adapter again (T05-12).
+// isTerminalJobState reports whether state is a finished one: a crash-replay of an
+// already-finished job must short-circuit before ever reaching the adapter again (T05-12).
 func isTerminalJobState(state string) bool {
 	switch state {
 	case "accepted", "rejected", "failed", "dead_lettered", "cancelled":

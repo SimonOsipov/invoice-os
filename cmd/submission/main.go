@@ -232,6 +232,7 @@ func main() {
 	jobs := staffjobs.NewStore(pool, invStore, q.River())
 	app.Mux.HandleFunc("GET /v1/staff/jobs", staffjobs.ListHandler(jobs.List, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/jobs/{id}", staffjobs.GetHandler(jobs.Get, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/jobs/{id}/redrive", staffjobs.RedriveHandler(jobs.Redrive, app.Logger))
 
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 

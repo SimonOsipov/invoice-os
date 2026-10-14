@@ -606,6 +606,7 @@ func passHeldStores(t *testing.T, key string, allHeld bool) map[string]map[strin
 		}
 		stores[gtSvcID("reconciliation")]["VALIDATION_URL"] = validationInternalURL
 		stores[gtSvcID("reconciliation")]["S2S_TOKEN"] = validationTokenRef
+		stores[gtSvcID("submission")]["GATEWAY_URL"] = gatewayInternalURL
 	}
 	return stores
 }
@@ -661,7 +662,7 @@ func TestForkPass_AServiceWithNothingToWriteHasNoAlias(t *testing.T) {
 		"portfolio":      {"GATEWAY_TOKEN"},
 		"invoice":        {"GATEWAY_TOKEN"},
 		"validation":     {"GATEWAY_TOKEN"},
-		"submission":     {"GATEWAY_TOKEN"},
+		"submission":     {"GATEWAY_TOKEN", "GATEWAY_URL"},
 		"dashboard":      {"GATEWAY_TOKEN"},
 		"notifications":  {"GATEWAY_TOKEN"},
 		"reconciliation": {"S2S_TOKEN", "VALIDATION_URL"},

@@ -154,6 +154,9 @@ pre.ops-json {
   .ops-tenants-grid {
     grid-template-columns: minmax(0, 1fr) !important;
   }
+  .ops-health-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
 }
 
 @media (max-width: 768px) {
@@ -162,6 +165,9 @@ pre.ops-json {
   }
   .ops-drawer {
     width: 100vw !important;
+  }
+  .ops-health-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
   }
 }
 
@@ -173,5 +179,8 @@ pre.ops-json {
   }
   .ops-screen-pad {
     padding: 18px 14px 40px !important;
+  }
+  .ops-health-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
   }
 }

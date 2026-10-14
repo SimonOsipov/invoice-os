@@ -2,8 +2,12 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
+import { readFileSync } from 'node:fs'
+
+import { Health } from './components/Health'
 import { Rules } from './components/Rules'
 import { Tenants } from './components/Tenants'
+import type { FleetHealth, ServiceHealth, StaffHealth, TrendPoint } from './healthApi'
 import { SEED_RULES } from './rulesFixture'
 import type { RuleVersion } from './rulesApi'
 import type { StaffInvoice, StaffMember, StaffTenant, StaffTenantDetail } from './tenantsApi'
@@ -115,7 +119,21 @@ const TENANTS_PROPS: Parameters<typeof Tenants>[0] = {
 }
 const tenantsWith = (over: Partial<Parameters<typeof Tenants>[0]>) => renderToStaticMarkup(createElement(Tenants, { ...TENANTS_PROPS, ...over }))
 
-const SCREENS = { rules: renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS })), tenants: tenantsWith({}) }
+const svc = (name: string, status: ServiceHealth['status'], build?: string): ServiceHealth => ({ name, status, build })
+const point = (n: number, services_down: number | null, queue_depth: number, dead_lettered: number): TrendPoint => ({ taken_at: `2026-10-14T09:${String(n).padStart(2, '0')}:00Z`, services_down, queue_depth, dead_lettered })
+const DEGRADED: FleetHealth = { status: 'degraded', services: [svc('gateway', 'up', '541ac755c7a1'), svc('docling', 'down', ''), svc('auth', 'down', 'abcdef1234')] }
+const HEALTH: StaffHealth = {
+  checked_at: '2026-10-14T10:05:31Z',
+  fleet: DEGRADED,
+  jobs: { queued: 1, submitting: 1, pending: 1, dead_lettered: 2 },
+  queue_depth: 3,
+  trend: [point(0, null, 1, 0), point(5, 0, 2, 1), point(10, 1, 3, 2)],
+}
+const HEALTH_PROPS: Parameters<typeof Health>[0] = { status: 'ready', data: HEALTH, onRetry: noop }
+const healthWith = (over: Partial<Parameters<typeof Health>[0]>) => renderToStaticMarkup(createElement(Health, { ...HEALTH_PROPS, ...over }))
+const healthData = (over: Partial<StaffHealth>) => healthWith({ data: { ...HEALTH, ...over } })
+
+const SCREENS = { rules: renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS })), tenants: tenantsWith({}), health: healthWith({}) }
 type Screen = keyof typeof SCREENS
 const SCREEN_KEYS = Object.keys(SCREENS) as Screen[]
 const tagsOf = (screen: Screen) => {
@@ -482,5 +500,123 @@ describe('v2 screens', () => {
         expect.soft(wrap.flex, `${label} wrapper`).toBe('none')
       }
     }
+  })
+})
+
+describe('System health markup', () => {
+  const tileOf = (ts: Tag[], key: string) => {
+    const at = ts.findIndex((t) => attr(t, 'data-tile') === key)
+    expect(at, `tile ${key}`).toBeGreaterThan(-1)
+    const next = ts.findIndex((t, i) => i > at && attr(t, 'data-tile') !== '')
+    return ts.slice(at, next === -1 ? undefined : next)
+  }
+  const tilesOf = (html: string) => {
+    const ts = parse(html)
+    return { all: ts, fleet: tileOf(ts, 'fleet'), queue: tileOf(ts, 'queue'), dead: tileOf(ts, 'dead-lettered') }
+  }
+  const texts = (ts: Tag[]) => ts.map((t) => t.text)
+
+  it('Health tiles show fleet, queue depth and dead-lettered', () => {
+    const html = healthWith({})
+    const { all, fleet, queue, dead } = tilesOf(html)
+    expect(all.filter((t) => attr(t, 'data-tile')).map((t) => attr(t, 'data-tile'))).toEqual(['fleet', 'queue', 'dead-lettered'])
+    expect(texts(fleet)).toEqual(expect.arrayContaining(['Fleet', '1/3', 'services up', 'DEGRADED', 'Down: docling, auth']))
+    expect(texts(queue)).toEqual(expect.arrayContaining(['Queue depth', '3', 'jobs']))
+    expect(texts(queue).filter((x) => /^[A-Z]+$/.test(x)), 'queue has no status word').toEqual([])
+    expect(texts(dead)).toEqual(expect.arrayContaining(['Dead-lettered', '2', 'jobs', 'ATTENTION']))
+    for (const gone of ['APP latency', 'APP error rate', 'throughput', 'Recon']) expect(html).not.toContain(gone)
+  })
+
+  it('Health tiles name the healthy and unknown states', () => {
+    const ok = tilesOf(healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('auth', 'up')] }, jobs: { dead_lettered: 0 } }))
+    expect(texts(ok.fleet)).toEqual(expect.arrayContaining(['2/2', 'HEALTHY']))
+    expect(texts(ok.fleet).some((x) => x.startsWith('Down:'))).toBe(false)
+    expect(texts(ok.dead)).toContain('CLEAR')
+    const unknown = tilesOf(healthData({ fleet: { status: 'unknown', services: [] } }))
+    expect(texts(unknown.fleet)).toEqual(expect.arrayContaining(['UNKNOWN', '—']))
+  })
+
+  it('a tile draws a sparkline only from two points', () => {
+    const one = tilesOf(healthData({ trend: [point(0, 0, 1, 0)] }))
+    for (const t of [one.fleet, one.queue, one.dead]) expect(t.some((x) => x.name === 'svg')).toBe(false)
+    expect(texts(one.queue)).toContain('3')
+    const three = tilesOf(healthData({ trend: [point(0, null, 1, 0), point(5, 0, 2, 1), point(10, 1, 3, 2)] }))
+    for (const t of [three.fleet, three.queue, three.dead]) expect(t.filter((x) => x.name === 'svg')).toHaveLength(1)
+    // services_down has 2 non-null points of 3; one non-null point of 2 draws nothing.
+    const sparse = tilesOf(healthData({ trend: [point(0, null, 1, 0), point(5, 0, 2, 1)] }))
+    expect(sparse.fleet.some((x) => x.name === 'svg')).toBe(false)
+    expect(sparse.queue.filter((x) => x.name === 'svg')).toHaveLength(1)
+  })
+
+  it('the Services card lists every service with its build', () => {
+    const ts = parse(healthWith({}))
+    const rows = ts.filter((t) => attr(t, 'data-service'))
+    expect(rows.map((r) => attr(r, 'data-service'))).toEqual(['gateway', 'docling', 'auth'])
+    const after = (name: string) => ts.slice(ts.indexOf(rows.find((r) => attr(r, 'data-service') === name)!))
+    const badgeOf = (name: string, word: string) => {
+      const rowTs = after(name)
+      const label = rowTs.find((t) => t.text === word)!
+      return style(rowTs[rowTs.indexOf(label) - 1])
+    }
+    expect(badgeOf('gateway', 'UP').background).toBe('var(--status-muted-bg)')
+    expect(badgeOf('docling', 'DOWN').background).toBe('var(--status-red-bg)')
+    expect(badgeOf('auth', 'DOWN').background).toBe('var(--status-red-bg)')
+    const builds = ts.filter((t) => t.name === 'span' && ['541ac75', '—', 'abcdef1'].includes(t.text) && style(t).flex === 'none')
+    expect(builds.map((b) => [b.text, attr(b, 'title')])).toEqual([['541ac75', '541ac755c7a1'], ['—', ''], ['abcdef1', 'abcdef1234']])
+    const unknown = healthData({ fleet: { status: 'unknown', services: [] } })
+    expect(unknown).toContain('The gateway roll-up is unavailable.')
+    expect(unknown).not.toContain('data-service')
+  })
+
+  it('the health header carries the check time', () => {
+    const ts = parse(healthWith({}))
+    withText(ts, 'INFRASTRUCTURE')
+    withText(ts, 'System health')
+    withText(ts, 'CHECKED 2026-10-14 10:05 UTC')
+  })
+
+  it('Health renders every state', () => {
+    const loading = healthWith({ status: 'loading', data: null })
+    expect(loading).toContain('Loading system health…')
+    expect(loading).toContain('System health')
+    expect(loading).not.toContain('CHECKED')
+    const forbidden = healthWith({ status: 'forbidden', data: null })
+    expect(forbidden).toContain('Your account is not ASComply staff.')
+    expect(forbidden).not.toContain('Retry')
+    const failed = healthWith({ status: 'error', errorText: 'boom', data: null })
+    expect(failed).toContain('boom')
+    expect(buttonByText(failed, 'Retry').attrs).toContain('v2-btn-ghost')
+  })
+
+  it('the health grid holds three columns and collapses', () => {
+    const grids = withClass(parse(healthWith({})), 'ops-health-grid')
+    expect(grids).toHaveLength(1)
+    expect(style(grids[0])['grid-template-columns']).toBe('repeat(3, minmax(0, 1fr))')
+    const css = readFileSync(new URL('./styles/support.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rule = (width: number) => css.match(new RegExp(`@media \\(max-width: ${width}px\\) \\{([\\s\\S]*?)\\n\\}`, 'i'))![1]
+    const cols = (width: number) => rule(width).match(/\.ops-health-grid\s*\{\s*grid-template-columns:\s*([^;]*);/i)?.[1]
+    expect(cols(1024)).toBe('repeat(2, minmax(0, 1fr)) !important')
+    expect(cols(768)).toBe('repeat(2, minmax(0, 1fr)) !important')
+    expect(cols(480)).toBe('minmax(0, 1fr) !important')
+  })
+
+  it('long names stay on one line', () => {
+    const long = 'x'.repeat(120)
+    const html = healthData({ fleet: { status: 'degraded', services: [svc(long, 'down', 'abcdef1234')] } })
+    const ts = parse(html)
+    const oneLine = { overflow: 'hidden', 'white-space': 'nowrap', 'text-overflow': 'ellipsis' }
+    const name = ts.filter((t) => t.name === 'div' && t.text === long)
+    expect(name).toHaveLength(1)
+    expect(style(name[0])).toMatchObject(oneLine)
+    expect(style(ts[ts.indexOf(name[0]) - 1])['min-width']).toBe('0')
+    const down = ts.filter((t) => t.text === `Down: ${long}`)
+    expect(down).toHaveLength(1)
+    expect(style(down[0])).toMatchObject(oneLine)
+    const tile = ts.find((t) => attr(t, 'data-tile') === 'fleet')!
+    expect(style(tile)['min-width']).toBe('0')
+    const badge = ts.find((t) => t.text === 'DOWN')!
+    expect(style(ts[ts.indexOf(badge) - 2]).flex, 'badge wrapper').toBe('none')
+    const build = ts.find((t) => t.text === 'abcdef1')!
+    expect(style(build).flex).toBe('none')
   })
 })

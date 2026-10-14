@@ -108,7 +108,7 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
   const forA = (): Record<string, string> => ({ tenant: PERSONAS.A.tenantId, from: start })
 
   test.beforeAll(async () => {
-    // ceiling: assumes the runner and gateway clocks agree within 5 s.
+    // ceiling: assumes the runner and gateway clocks agree within 5 s; widen the margin if this spec flakes on a missing row.
     start = new Date(Date.now() - 5_000).toISOString()
     customer = await login(PERSONAS.A)
     const account = await provisionStaffAccount('staff-ai-usage')

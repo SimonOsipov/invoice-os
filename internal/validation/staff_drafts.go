@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -231,8 +232,8 @@ func (s *Store) OpenDraft(ctx context.Context) (DraftOpened, error) {
 		if err != nil {
 			return draftSQLError("open draft", err)
 		}
-		return recordStaff(ctx, tx, actor, res.RuleSetVersionID, "validation.rule_set.draft_opened",
-			map[string]any{"version": res.Version, "from_version": res.FromVersion})
+		return recordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: "validation.rule_set.draft_opened", RuleSetVersionID: res.RuleSetVersionID,
+			Payload: map[string]any{"version": res.Version, "from_version": res.FromVersion}})
 	})
 	if err != nil {
 		return DraftOpened{}, err
@@ -277,8 +278,8 @@ func (s *Store) AddDraftRule(ctx context.Context, key string, r validated) (Draf
 			return ErrRuleInDraft
 		}
 		res = DraftRuleResult{Key: key, RuleSetVersion: p.version, RuleSetVersionID: p.id}
-		return recordStaff(ctx, tx, actor, p.id, "validation.rule_set.rule_added",
-			map[string]any{"version": p.version, "key": key, "rule": r.auditRule()})
+		return recordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: "validation.rule_set.rule_added", RuleSetVersionID: p.id,
+			Payload: map[string]any{"version": p.version, "key": key, "rule": r.auditRule()}})
 	})
 	if err != nil {
 		return DraftRuleResult{}, err
@@ -306,8 +307,8 @@ func (s *Store) EditDraftRule(ctx context.Context, key string, r validated) (Dra
 		if !p.changed {
 			return nil
 		}
-		return recordStaff(ctx, tx, actor, p.id, "validation.rule_set.rule_changed",
-			map[string]any{"version": p.version, "key": key, "rule": r.auditRule()})
+		return recordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: "validation.rule_set.rule_changed", RuleSetVersionID: p.id,
+			Payload: map[string]any{"version": p.version, "key": key, "rule": r.auditRule()}})
 	})
 	if err != nil {
 		return DraftRuleEdited{}, err
@@ -337,8 +338,8 @@ func (s *Store) RemoveDraftRule(ctx context.Context, key string) (DraftRuleResul
 			return ErrRuleNotInDraft
 		}
 		res.Key = key
-		return recordStaff(ctx, tx, actor, res.RuleSetVersionID, "validation.rule_set.rule_removed",
-			map[string]any{"version": res.RuleSetVersion, "key": key})
+		return recordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: "validation.rule_set.rule_removed", RuleSetVersionID: res.RuleSetVersionID,
+			Payload: map[string]any{"version": res.RuleSetVersion, "key": key}})
 	})
 	if err != nil {
 		return DraftRuleResult{}, err
@@ -415,8 +416,8 @@ func (s *Store) PublishDraft(ctx context.Context, eng *Engine, from time.Time) (
 		if err != nil {
 			return draftSQLError("publish draft", err)
 		}
-		return recordStaff(ctx, tx, actor, res.RuleSetVersionID, "validation.rule_set.published",
-			map[string]any{"version": res.Version, "effective_from": date, "rule_count": res.RuleCount})
+		return recordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: "validation.rule_set.published", RuleSetVersionID: res.RuleSetVersionID,
+			Payload: map[string]any{"version": res.Version, "effective_from": date, "rule_count": res.RuleCount}})
 	})
 	if err != nil {
 		return DraftPublished{}, err

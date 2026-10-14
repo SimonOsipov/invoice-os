@@ -14,7 +14,7 @@ paths:
 - Grant the minimum verbs per object.
 - Never use `ALTER DEFAULT PRIVILEGES`.
 - Give the append-only tables `audit_log` and `idempotency_keys` SELECT and INSERT only.
-- Give `staff_audit_log` INSERT only.
+- Give `invoice_app` INSERT only on `staff_audit_log`. Staff read it only through `public.staff_read_staff_audit_log`.
 - Copy the `tenants` template for a new tenant table. Use `ENABLE` and `FORCE ROW LEVEL SECURITY` and a `tenant_isolation` policy.
 - Read the tenant as `nullif(current_setting('app.current_tenant', true), '')::uuid`. An unset tenant returns zero rows.
 - Never write `SET LOCAL app.current_tenant` by hand. Use `WithinTenantTx` or `WithinRequestTenantTx`.
@@ -59,7 +59,8 @@ CREATE POLICY invitee_account_state_read ON auth.users FOR SELECT TO auth_hook_r
 - Read tenant rows for staff only through a `public.staff_read_<noun>(p_actor uuid, …)` function.
 - Create each one as `staff_reader`: `SECURITY DEFINER`, `SET search_path = ''`, `REVOKE EXECUTE … FROM PUBLIC`, `GRANT EXECUTE … TO invoice_app`.
 - Make `IF NOT public.is_house_member(p_actor)` raising `insufficient_privilege` its first statement.
-- Give `staff_reader` `SELECT` on the columns a function reads and one `FOR SELECT TO staff_reader USING (true)` policy per table. Never a table-level grant.
-- Add each table a staff function reads to the seed map of `TestRLS_AppStaysIsolatedOnEveryStaffReaderTable`.
+- Give `staff_reader` `SELECT` on the columns a function reads. Never a table-level grant.
+- Give `staff_reader` one `FOR SELECT TO staff_reader USING (true)` policy on each RLS table it reads. A table without RLS gets no policy.
+- Add each table with a `staff_reader` policy to the seed map of `TestRLS_AppStaysIsolatedOnEveryStaffReaderTable`.
 - Run the `staff_reader` statements of `db/bootstrap.sql` by hand on production before the first migration that names the role.
 - Treat `invoice_migrator` as able to read every column granted to `staff_reader`, in every tenant, through `SET ROLE staff_reader`.

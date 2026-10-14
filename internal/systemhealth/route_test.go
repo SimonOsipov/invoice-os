@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -42,6 +43,11 @@ type healthRig struct {
 // newHealthRig serves the route through a gateway-guarded platform.App over the real store.
 func newHealthRig(t *testing.T, store *Store, fleet gateway.FleetHealth) *healthRig {
 	t.Helper()
+	return newHealthRigWith(t, store, func(context.Context) (gateway.FleetHealth, error) { return fleet, nil }, time.Now)
+}
+
+func newHealthRigWith(t *testing.T, store *Store, fleet FleetReader, now func() time.Time) *healthRig {
+	t.Helper()
 	t.Setenv("SENTRY_DSN", "")
 	app, err := platform.New("submission")
 	if err != nil {
@@ -51,7 +57,7 @@ func newHealthRig(t *testing.T, store *Store, fleet gateway.FleetHealth) *health
 	app.Mux.HandleFunc("GET /v1/staff/health", Handler(func(ctx context.Context, since time.Time) (map[string]int64, []Sample, error) {
 		rig.loads.Add(1)
 		return store.StaffSnapshot(ctx, since)
-	}, func(context.Context) (gateway.FleetHealth, error) { return fleet, nil }, time.Now, slog.Default()))
+	}, fleet, now, slog.Default()))
 	app.RequireGateway(routeGatewayToken)
 	rig.h = app.Handler()
 	return rig
@@ -64,8 +70,15 @@ type healthCaller struct {
 }
 
 func (rig *healthRig) get(c healthCaller) *httptest.ResponseRecorder {
-	r := httptest.NewRequest(http.MethodGet, "/v1/staff/health", nil)
-	r.Header.Set(platform.HeaderGatewayToken, routeGatewayToken)
+	return rig.do(http.MethodGet, routeGatewayToken, c)
+}
+
+// do sends one request; an empty token sends no gateway token header.
+func (rig *healthRig) do(method, token string, c healthCaller) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, "/v1/staff/health", nil)
+	if token != "" {
+		r.Header.Set(platform.HeaderGatewayToken, token)
+	}
 	if c.subject != "" {
 		r.Header.Set("X-User-ID", c.subject)
 		r.Header.Set("X-User-Role", "authenticated")
@@ -247,18 +260,22 @@ func TestStaffHealthRoute_RefusesAForgedOrSuspendedStaffCaller(t *testing.T) {
 	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
 	custSubject := customerMember(t, super)
 	custTenant := memberTenant(t, super, custSubject)
-	suspended := seedMember(t, super, adoptHouseTenant(t, super), "suspended")
+	house := adoptHouseTenant(t, super)
+	suspended := seedMember(t, super, house, "suspended")
+	invited := seedMember(t, super, house, "invited")
 
 	for name, c := range map[string]healthCaller{
-		"customer-only member, tenant-bearing": {subject: custSubject, tenant: custTenant, staff: true},
-		"customer-only member, tenant-less":    {subject: custSubject, staff: true},
-		"suspended house member":               {subject: suspended, staff: true},
-		"unknown subject":                      {subject: uuid.NewString(), staff: true},
+		"customer-only member, tenant-bearing":   {subject: custSubject, tenant: custTenant, staff: true},
+		"customer-only member, tenant-less":      {subject: custSubject, staff: true},
+		"suspended house member":                 {subject: suspended, staff: true},
+		"invited house member":                   {subject: invited, staff: true},
+		"suspended house member, tenant-bearing": {subject: suspended, tenant: house, staff: true},
+		"unknown subject":                        {subject: uuid.NewString(), staff: true},
 	} {
 		t.Run(name, func(t *testing.T) { wantForbidden(t, rig.get(c)) })
 	}
-	if got := rig.loads.Load(); got != 4 {
-		t.Errorf("loader called %d times, want 4: the refusal must come from the database function, not the platform", got)
+	if got := rig.loads.Load(); got != 6 {
+		t.Errorf("loader called %d times, want 6: the refusal must come from the database function, not the platform", got)
 	}
 	if rec := rig.get(healthCaller{subject: houseMember(t, super), staff: true}); rec.Code != http.StatusOK {
 		t.Errorf("house member control = %d %q, want 200", rec.Code, rec.Body.String())
@@ -291,5 +308,157 @@ func TestStaffHealthRoute_WritesNothing(t *testing.T) {
 	}
 	if got := samples(); got != samplesBefore {
 		t.Errorf("health_samples rows: %d -> %d, want unchanged", samplesBefore, got)
+	}
+}
+
+// The gateway token is the only door: a forged staff header from a house member's own subject still gets nothing.
+func TestStaffHealthRoute_RefusesARequestNotFromTheGateway(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+	member := healthCaller{subject: houseMember(t, super), staff: true}
+
+	for name, token := range map[string]string{"no token": "", "wrong token": routeGatewayToken + "x"} {
+		t.Run(name, func(t *testing.T) {
+			rec := rig.do(http.MethodGet, token, member)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("got %d %q, want 401", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if got := rig.loads.Load(); got != 0 {
+		t.Errorf("loader called %d times without the gateway token, want 0", got)
+	}
+	if rec := rig.get(member); rec.Code != http.StatusOK || rig.loads.Load() != 1 {
+		t.Errorf("control with the token = %d %q, loads %d, want 200 and 1", rec.Code, rec.Body.String(), rig.loads.Load())
+	}
+}
+
+// A staff JWT carries the house tenant, so the tenant-bearing house member is the console's real caller.
+func TestStaffHealthRoute_ATenantBearingHouseMemberIsServed(t *testing.T) {
+	super, app := dbTestPools(t)
+	rig := newHealthRig(t, &Store{Pool: app}, routeFleet())
+	house := adoptHouseTenant(t, super)
+	rec := rig.get(healthCaller{subject: seedMember(t, super, house, "active"), tenant: house, staff: true})
+	if rec.Code != http.StatusOK || rig.loads.Load() != 1 {
+		t.Fatalf("got %d %q, loads %d, want 200 and 1", rec.Code, rec.Body.String(), rig.loads.Load())
+	}
+}
+
+// A real fleet reader against each way the gateway can fail: the database parts still arrive.
+func TestStaffHealthRoute_AGatewayOutageStillServesCountsAndTrend(t *testing.T) {
+	super, app := dbTestPools(t)
+	seedDeadLettered(t, super, 3)
+	at := time.Now().UTC().Truncate(time.Microsecond).Add(-5*time.Minute - time.Duration(rand.IntN(1_000_000))*time.Microsecond)
+	if _, err := super.Exec(context.Background(),
+		`INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ($1, 'ok', 0, '{"queued":2}')`, at); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DELETE FROM public.health_samples WHERE taken_at = $1`, at)
+	})
+	member := healthCaller{subject: houseMember(t, super), staff: true}
+
+	serve := func(status int, body string) *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	closed := serve(200, "")
+	closed.Close()
+	servers := map[string]string{
+		"connection refused": closed.URL,
+		"500":                serve(http.StatusInternalServerError, `{"status":"ok","services":[]}`).URL,
+		"200 not json":       serve(http.StatusOK, `<html>`).URL,
+		"200 unknown status": serve(http.StatusOK, `{"status":"weird","services":[]}`).URL,
+	}
+	reader := func(base string) FleetReader {
+		u, _ := url.Parse(base)
+		return NewFleetReader(u, &http.Client{Timeout: 2 * time.Second})
+	}
+	for name, base := range servers {
+		t.Run(name, func(t *testing.T) {
+			rec := newHealthRigWith(t, &Store{Pool: app}, reader(base), time.Now).get(member)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
+			}
+			var body struct {
+				Fleet      json.RawMessage  `json:"fleet"`
+				Jobs       map[string]int64 `json:"jobs"`
+				QueueDepth int64            `json:"queue_depth"`
+				Trend      []struct {
+					TakenAt    time.Time `json:"taken_at"`
+					QueueDepth int64     `json:"queue_depth"`
+				} `json:"trend"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if string(body.Fleet) != `{"status":"unknown","services":[]}` {
+				t.Errorf("fleet = %s, want the unknown roll-up", body.Fleet)
+			}
+			assertFloor(t, body.Jobs)
+			if want := body.Jobs["queued"] + body.Jobs["submitting"] + body.Jobs["pending"]; body.QueueDepth != want {
+				t.Errorf("queue_depth = %d, want %d", body.QueueDepth, want)
+			}
+			found := false
+			for _, p := range body.Trend {
+				if p.TakenAt.Equal(at) {
+					found = p.QueueDepth == 2
+				}
+			}
+			if !found {
+				t.Errorf("the seeded sample is missing from the trend of %d points", len(body.Trend))
+			}
+		})
+	}
+
+	// Control: a degraded roll-up (503 with a body) is data, not an outage.
+	degraded := serve(http.StatusServiceUnavailable, `{"status":"degraded","services":[{"name":"docling","status":"down"}]}`)
+	rec := newHealthRigWith(t, &Store{Pool: app}, reader(degraded.URL), time.Now).get(member)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"degraded"`) {
+		t.Errorf("degraded control = %d %q, want 200 with status degraded", rec.Code, rec.Body.String())
+	}
+}
+
+// The window is checked_at - 7 days, inclusive, to the microsecond.
+func TestStaffHealthRoute_TrendWindowEdgeIsInclusiveToTheMicrosecond(t *testing.T) {
+	super, app := dbTestPools(t)
+	now := time.Now().UTC().Truncate(time.Microsecond).Add(-time.Duration(rand.IntN(1_000_000)) * time.Microsecond)
+	edge := now.Add(-TrendWindow)
+	before, after := edge.Add(-time.Microsecond), edge.Add(time.Microsecond)
+	for _, at := range []time.Time{before, edge, after} {
+		at := at
+		if _, err := super.Exec(context.Background(),
+			`INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ($1, 'ok', 0, '{}')`, at); err != nil {
+			t.Fatalf("seed %v: %v", at, err)
+		}
+		t.Cleanup(func() {
+			_, _ = super.Exec(context.Background(), `DELETE FROM public.health_samples WHERE taken_at = $1`, at)
+		})
+	}
+	rig := newHealthRigWith(t, &Store{Pool: app}, func(context.Context) (gateway.FleetHealth, error) { return routeFleet(), nil }, func() time.Time { return now })
+	rec := rig.get(healthCaller{subject: houseMember(t, super), staff: true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d %q, want 200", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Trend []struct {
+			TakenAt time.Time `json:"taken_at"`
+		} `json:"trend"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var mine []time.Time
+	for _, p := range body.Trend {
+		if p.TakenAt.Equal(before) || p.TakenAt.Equal(edge) || p.TakenAt.Equal(after) {
+			mine = append(mine, p.TakenAt)
+		}
+	}
+	if len(mine) != 2 || !mine[0].Equal(edge) || !mine[1].Equal(after) {
+		t.Errorf("own samples in the trend = %v, want [edge edge+1us]: the sample 1us before the window is out, the one on the edge is in", mine)
 	}
 }

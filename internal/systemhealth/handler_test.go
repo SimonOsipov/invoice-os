@@ -115,10 +115,9 @@ func TestStaffHealthHandler_Contract(t *testing.T) {
 	if err := json.Unmarshal(body["jobs"], &jobs); err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range JobStates {
-		if _, ok := jobs[s]; !ok {
-			t.Errorf("jobs lacks state %q: %v", s, jobs)
-		}
+	wantStates := []string{"accepted", "cancelled", "dead_lettered", "failed", "pending", "queued", "rejected", "submitting"}
+	if got := sortedKeys(jobs); !slices.Equal(got, wantStates) {
+		t.Errorf("jobs keys = %v, want the eight states spelled out: %v", got, wantStates)
 	}
 	if jobs["cancelled"] != 0 || jobs["queued"] != 1 || jobs["pending"] != 2 || jobs["dead_lettered"] != 3 {
 		t.Errorf("jobs = %v", jobs)

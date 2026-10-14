@@ -1,0 +1,62 @@
+package systemhealth
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+
+	"github.com/SimonOsipov/invoice-os/internal/gateway"
+)
+
+const maxFleetBody = 64 << 10
+
+// FleetReader reads the gateway's fleet roll-up.
+type FleetReader func(context.Context) (gateway.FleetHealth, error)
+
+// NewFleetReader reads base/healthz/fleet; the gateway answers 503 with a body when degraded.
+func NewFleetReader(base *url.URL, client *http.Client) FleetReader {
+	target := base.JoinPath("healthz/fleet").String()
+	return func(ctx context.Context) (gateway.FleetHealth, error) {
+		var f gateway.FleetHealth
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return f, err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return f, fmt.Errorf("systemhealth: fleet read: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusServiceUnavailable {
+			return f, fmt.Errorf("systemhealth: fleet read: status %d", resp.StatusCode)
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxFleetBody+1))
+		if err != nil {
+			return f, fmt.Errorf("systemhealth: fleet read: %w", err)
+		}
+		if len(body) > maxFleetBody {
+			return f, fmt.Errorf("systemhealth: fleet read: body over %d bytes", maxFleetBody)
+		}
+		if err := json.Unmarshal(body, &f); err != nil {
+			return gateway.FleetHealth{}, fmt.Errorf("systemhealth: fleet read: %w", err)
+		}
+		if f.Status != "ok" && f.Status != "degraded" {
+			return gateway.FleetHealth{}, fmt.Errorf("systemhealth: fleet read: status %q", f.Status)
+		}
+		return f, nil
+	}
+}
+
+// ServicesDown counts the services that are not up.
+func ServicesDown(f gateway.FleetHealth) int {
+	n := 0
+	for _, s := range f.Services {
+		if s.Status != "up" {
+			n++
+		}
+	}
+	return n
+}

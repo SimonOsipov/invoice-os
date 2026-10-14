@@ -120,7 +120,8 @@ func readReason(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	reason := strings.TrimSpace(req.Reason)
-	if n := utf8.RuneCountInString(reason); n < 1 || n > maxReasonRunes {
+	// jsonb refuses U+0000, so the audit write would fail as a 500.
+	if n := utf8.RuneCountInString(reason); n < 1 || n > maxReasonRunes || strings.ContainsRune(reason, 0) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("reason must be 1 to %d characters", maxReasonRunes))
 		return "", false
 	}

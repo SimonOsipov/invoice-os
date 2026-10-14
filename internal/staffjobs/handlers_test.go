@@ -375,6 +375,17 @@ func TestCancelHandler_BodyAndStatusMapping(t *testing.T) {
 		t.Errorf("body = %s, want the job with max_attempts and a history array", rec.Body.String())
 	}
 
+	// The limits are inclusive: 500 runes and an 8192-byte body pass.
+	rec, call = serveCancel(t, `{"reason":"`+strings.Repeat("é", 500)+`"}`, Detail{}, nil)
+	if rec.Code != http.StatusOK || call.n != 1 || len([]rune(call.reason)) != 500 {
+		t.Errorf("500 runes: got %d, %d calls, %d runes; want 200, 1 call, 500 runes", rec.Code, call.n, len([]rune(call.reason)))
+	}
+	const small = `{"reason":"r"}`
+	rec, call = serveCancel(t, small+strings.Repeat(" ", 8<<10-len(small)), Detail{}, nil)
+	if rec.Code != http.StatusOK || call.n != 1 {
+		t.Errorf("8192-byte body: got %d, %d calls; want 200 and 1 call", rec.Code, call.n)
+	}
+
 	for _, tc := range []struct {
 		name   string
 		body   string
@@ -386,6 +397,11 @@ func TestCancelHandler_BodyAndStatusMapping(t *testing.T) {
 		{"501 runes", `{"reason":"` + strings.Repeat("é", 501) + `"}`, 400, badReason},
 		{"unknown field", `{"reason":"x","force":true}`, 400, `{"error":"invalid request body"}`},
 		{"9 KiB", `{"reason":"` + strings.Repeat("a", 9<<10) + `"}`, 413, `{"error":"request body too large"}`},
+		{"8 KiB and one byte", `{"reason":"r"}` + strings.Repeat(" ", 8<<10-len(`{"reason":"r"}`)+1), 413, `{"error":"request body too large"}`},
+		{"trailing object", `{"reason":"x"} {}`, 400, `{"error":"invalid request body"}`},
+		{"trailing null", `{"reason":"x"} null`, 400, `{"error":"invalid request body"}`},
+		{"empty body", ``, 400, `{"error":"invalid request body"}`},
+		{"not a string", `{"reason":5}`, 400, `{"error":"invalid request body"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec, call := serveCancel(t, tc.body, Detail{}, nil)
@@ -415,6 +431,19 @@ func TestCancelHandler_BodyAndStatusMapping(t *testing.T) {
 				t.Errorf("cancel calls = %d, want 1", call.n)
 			}
 		})
+	}
+}
+
+func TestCancelHandler_ServerFaultIs500AndLogged(t *testing.T) {
+	var logs bytes.Buffer
+	req := httptest.NewRequest(http.MethodPost, "/v1/staff/jobs/abc/cancel", strings.NewReader(`{"reason":"r"}`))
+	req.SetPathValue("id", "abc")
+	rec := httptest.NewRecorder()
+	CancelHandler(func(context.Context, string, string) (Detail, error) { return Detail{}, errors.New("boom") },
+		slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, req)
+	wantBody(t, rec, http.StatusInternalServerError, `{"error":"internal server error"}`)
+	if !strings.Contains(logs.String(), "staffjobs: cancel response") || strings.Contains(rec.Body.String(), "boom") {
+		t.Errorf("log = %q, body = %q; want the cancel response op logged and the cause kept out of the body", logs.String(), rec.Body.String())
 	}
 }
 

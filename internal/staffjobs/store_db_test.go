@@ -933,21 +933,26 @@ func TestRLS_CancelAfterAWorkerTookTheRowIs409(t *testing.T) {
 }
 
 func TestRLS_CancelRefusesAnInvoiceThatIsNotQueued(t *testing.T) {
-	r := newCancelRig(t, "queued", "scheduled")
-	if _, err := r.super.Exec(context.Background(), `UPDATE invoices SET status = 'accepted' WHERE id = $1`, r.invoice); err != nil {
-		t.Fatal(err)
-	}
-	before := r.state(t)
-	if before.JobState != "queued" || before.Rivers == "" {
-		t.Fatalf("setup = %+v, want a queued job with its River row", before)
-	}
-	_, err := r.store.Cancel(r.ctx, r.job, "APP is down")
-	var se invoice.StatusError
-	if !errors.As(err, &se) || se.Have != invoice.StatusAccepted {
-		t.Fatalf("Cancel = %v, want invoice.StatusError{Have: accepted}", err)
-	}
-	if after := r.state(t); after != before {
-		t.Errorf("a refused Cancel wrote:\nbefore %+v\nafter  %+v", before, after)
+	others := []invoice.Status{invoice.StatusDraft, invoice.StatusValidated, invoice.StatusSubmitted, invoice.StatusAccepted, invoice.StatusRejected, invoice.StatusFailed}
+	for _, status := range others {
+		t.Run(string(status), func(t *testing.T) {
+			r := newCancelRig(t, "queued", "scheduled")
+			if _, err := r.super.Exec(context.Background(), `UPDATE invoices SET status = $2 WHERE id = $1`, r.invoice, string(status)); err != nil {
+				t.Fatal(err)
+			}
+			before := r.state(t)
+			if before.JobState != "queued" || before.Rivers == "" {
+				t.Fatalf("setup = %+v, want a queued job with its River row", before)
+			}
+			_, err := r.store.Cancel(r.ctx, r.job, "APP is down")
+			var se invoice.StatusError
+			if !errors.As(err, &se) || se.Have != status {
+				t.Fatalf("Cancel = %v, want invoice.StatusError{Have: %s}", err, status)
+			}
+			if after := r.state(t); after != before {
+				t.Errorf("a refused Cancel wrote:\nbefore %+v\nafter  %+v", before, after)
+			}
+		})
 	}
 }
 
@@ -1057,5 +1062,201 @@ func TestRLS_CancelRollsBackWhenTheAuditWriteFails(t *testing.T) {
 	}
 	if row, ok := r.riverRow(t, before.RiverJobID); !ok || row.State != "scheduled" {
 		t.Errorf("river row = %+v (found %v), want scheduled", row, ok)
+	}
+}
+
+func TestRLS_CancelNonHouseActorIsNotStaff(t *testing.T) {
+	r := newCancelRig(t, "queued", "scheduled")
+	_, other := customerTenant(t, r.super)
+	own := uuid.NewString()
+	seedMembership(t, r.super, r.tenant, own)
+	for name, ctx := range map[string]context.Context{
+		"member of the job's own tenant": staffCtx(own),
+		"member of another customer":     staffCtx(other),
+		"no staff context":               context.Background(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			r.ctx = ctx
+			r.refusesCancel(t, db.ErrNotStaff)
+		})
+	}
+	r.ctx = staffCtx(houseMember(t, r.super))
+	if _, err := r.store.Cancel(r.ctx, r.job, "APP is down"); err != nil {
+		t.Fatalf("a house member's Cancel: %v", err)
+	}
+}
+
+func TestRLS_CancelOfAnotherTenantsJobWritesThatTenant(t *testing.T) {
+	r := newCancelRig(t, "queued", "scheduled")
+	house := adoptHouseTenant(t, r.super)
+	count := func(table, tenant string) int {
+		var n int
+		if err := r.super.QueryRow(context.Background(),
+			`SELECT count(*) FROM `+table+` WHERE tenant_id = $1 AND event = 'submission.job.cancelled'`, tenant).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	houseAudit, houseStaff := count("audit_log", house), count("staff_audit_log", house)
+	if _, err := r.store.Cancel(r.ctx, r.job, "APP is down"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if a, s := count("audit_log", r.tenant), count("staff_audit_log", r.tenant); a != 1 || s != 1 {
+		t.Errorf("the job's tenant has %d audit_log and %d staff_audit_log rows, want 1 and 1", a, s)
+	}
+	if a, s := count("audit_log", house), count("staff_audit_log", house); a != houseAudit || s != houseStaff {
+		t.Errorf("the house tenant's rows audit_log %d -> %d, staff_audit_log %d -> %d, want unchanged", houseAudit, a, houseStaff, s)
+	}
+	var history int
+	if err := r.super.QueryRow(context.Background(),
+		`SELECT count(*) FROM invoice_status_history WHERE tenant_id = $1 AND invoice_id = $2 AND to_status = 'failed'`, r.tenant, r.invoice).Scan(&history); err != nil || history != 1 {
+		t.Errorf("history rows to failed under the job's tenant = %d (%v), want 1", history, err)
+	}
+}
+
+func TestRLS_CancelLeavesAnotherTenantsQueuedJobAlone(t *testing.T) {
+	a := newCancelRig(t, "queued", "scheduled")
+	b := newCancelRig(t, "queued", "scheduled")
+	beforeA, beforeB := a.state(t), b.state(t)
+	if beforeB.JobState != "queued" || beforeB.Rivers == "" || beforeB.RiverJobID == 0 {
+		t.Fatalf("setup of the other tenant = %+v, want a queued job with its River row", beforeB)
+	}
+	if _, err := a.store.Cancel(a.ctx, a.job, "APP is down"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if afterA := a.state(t); afterA == beforeA || afterA.JobState != "cancelled" {
+		t.Fatalf("the cancelled tenant's rows = %+v, want a change to cancelled", afterA)
+	}
+	if afterB := b.state(t); afterB != beforeB {
+		t.Errorf("another tenant's queued job changed:\nbefore %+v\nafter  %+v", beforeB, afterB)
+	}
+	if row, ok := b.riverRow(t, beforeB.RiverJobID); !ok || row.State != "scheduled" {
+		t.Errorf("the other tenant's river row = %+v (found %v), want scheduled", row, ok)
+	}
+}
+
+func TestRLS_CancelOfAnUnknownOrMalformedJobIsNotFoundAndWritesNothing(t *testing.T) {
+	r := newCancelRig(t, "queued", "scheduled")
+	before := r.state(t)
+	for _, id := range []string{uuid.NewString(), "not-a-uuid", ""} {
+		if _, err := r.store.Cancel(r.ctx, id, "APP is down"); !errors.Is(err, ErrJobNotFound) {
+			t.Errorf("Cancel(%q) = %v, want ErrJobNotFound", id, err)
+		}
+	}
+	if after := r.state(t); after != before {
+		t.Errorf("a refused Cancel wrote:\nbefore %+v\nafter  %+v", before, after)
+	}
+}
+
+func TestRLS_CancelWhateverRiverRowTheJobNames(t *testing.T) {
+	// A running row stays running: River only flags it, and the worker then meets the cancelled job.
+	for riverState, want := range map[string]string{
+		"available": "cancelled", "scheduled": "cancelled", "retryable": "cancelled", "pending": "cancelled",
+		"running": "running", "completed": "completed", "discarded": "discarded", "cancelled": "cancelled",
+	} {
+		t.Run(riverState, func(t *testing.T) {
+			r := newCancelRig(t, "queued", riverState)
+			id := r.state(t).RiverJobID
+			if _, err := r.store.Cancel(r.ctx, r.job, "APP is down"); err != nil {
+				t.Fatalf("Cancel over a %s River row: %v", riverState, err)
+			}
+			if got := r.state(t); got.JobState != "cancelled" || got.InvoiceStatus != "failed" || got.RiverJobID != id {
+				t.Errorf("after Cancel = %+v, want job cancelled, invoice failed, river_job_id %d kept", got, id)
+			}
+			if row, ok := r.riverRow(t, id); !ok || row.State != want {
+				t.Errorf("river row = %+v (found %v), want %s", row, ok, want)
+			}
+		})
+	}
+}
+
+func TestRLS_ConcurrentCancelsMakeOneCancellation(t *testing.T) {
+	r := newCancelRig(t, "queued", "scheduled")
+	start := make(chan struct{})
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = r.store.Cancel(r.ctx, r.job, "APP is down")
+		}()
+	}
+	close(start)
+	wg.Wait()
+	wins, refused := 0, 0
+	for _, err := range errs {
+		var se invoice.StatusError
+		switch {
+		case err == nil:
+			wins++
+		case errors.Is(err, ErrJobState), errors.As(err, &se):
+			refused++
+		default:
+			t.Errorf("Cancel = %v, want nil or a 409 refusal", err)
+		}
+	}
+	if wins != 1 || refused != 1 {
+		t.Fatalf("results %v, want one success and one refusal", errs)
+	}
+	got := r.state(t)
+	if got.StaffAuditRows != 1 || got.StatusHistoryRows != 1 {
+		t.Errorf("rows after two Cancels = %+v, want one staff audit row and one history row", got)
+	}
+	if rows := r.auditPayloadsOf(t, "audit_log", r.tenant, "submission.job.cancelled"); len(rows) != 1 {
+		t.Errorf("audit_log has %d submission.job.cancelled rows, want 1", len(rows))
+	}
+}
+
+func TestRLS_CancelHandlerOverTheStoreMapsRealErrors(t *testing.T) {
+	r := newCancelRig(t, "queued", "scheduled")
+	h := CancelHandler(r.store.Cancel, slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
+	post := func(ctx context.Context, id, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/staff/jobs/"+id+"/cancel", strings.NewReader(body)).WithContext(ctx)
+		req.SetPathValue("id", id)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	_, member := customerTenant(t, r.super)
+	before := r.state(t)
+	if rec := post(staffCtx(member), r.job, `{"reason":"r"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("non-house actor: got %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	if rec := post(r.ctx, uuid.NewString(), `{"reason":"r"}`); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown job: got %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if after := r.state(t); after != before {
+		t.Fatalf("a refused Cancel wrote:\nbefore %+v\nafter  %+v", before, after)
+	}
+	if _, err := r.super.Exec(context.Background(), `UPDATE invoices SET status = 'accepted' WHERE id = $1`, r.invoice); err != nil {
+		t.Fatal(err)
+	}
+	before = r.state(t)
+	if rec := post(r.ctx, r.job, `{"reason":"r"}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "the invoice is accepted, not queued") {
+		t.Errorf("accepted invoice: got %d %s, want 409 naming accepted", rec.Code, rec.Body.String())
+	}
+	if after := r.state(t); after != before {
+		t.Fatalf("a refused Cancel wrote:\nbefore %+v\nafter  %+v", before, after)
+	}
+	if _, err := r.super.Exec(context.Background(), `UPDATE invoices SET status = 'queued' WHERE id = $1`, r.invoice); err != nil {
+		t.Fatal(err)
+	}
+	rec := post(r.ctx, r.job, `{"reason":"  APP is down "}`)
+	var body struct {
+		Job struct {
+			State       string `json:"state"`
+			MaxAttempts int    `json:"max_attempts"`
+		} `json:"job"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusOK || body.Job.State != "cancelled" || body.Job.MaxAttempts != maxAttempts {
+		t.Fatalf("success: got %d %s (%v), want 200 with a cancelled job and max_attempts", rec.Code, rec.Body.String(), err)
+	}
+	if got := r.auditPayloadsOf(t, "audit_log", r.tenant, "submission.job.cancelled"); len(got) != 1 || got[0]["reason"] != "APP is down" {
+		t.Errorf("audit_log payloads = %v, want one with the trimmed reason", got)
+	}
+	if rec := post(r.ctx, r.job, `{"reason":"again"}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "only a queued job can be cancelled") {
+		t.Errorf("second cancel: got %d %s, want 409 only a queued job can be cancelled", rec.Code, rec.Body.String())
 	}
 }

@@ -2000,6 +2000,13 @@ func TestSubmissionMain_RegistersTheStaffJobsRoutes(t *testing.T) {
 		"POST /v1/staff/jobs/{id}/redrive": "staffjobs.RedriveHandler",
 		"POST /v1/staff/jobs/{id}/cancel":  "staffjobs.CancelHandler",
 	}
+	// A handler of the right name fed the wrong store method (cancel wired to Redrive) would compile.
+	store := map[string]string{
+		"GET /v1/staff/jobs":               "jobs.List",
+		"GET /v1/staff/jobs/{id}":          "jobs.Get",
+		"POST /v1/staff/jobs/{id}/redrive": "jobs.Redrive",
+		"POST /v1/staff/jobs/{id}/cancel":  "jobs.Cancel",
+	}
 	found := map[string]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
@@ -2026,6 +2033,11 @@ func TestSubmissionMain_RegistersTheStaffJobsRoutes(t *testing.T) {
 		hc, ok := call.Args[1].(*ast.CallExpr)
 		if !ok || wtRender(hc.Fun) != handler {
 			t.Errorf("%s handler = %s, want %s(...)", pattern, wtRender(call.Args[1]), handler)
+		} else if fed := "nothing"; len(hc.Args) == 0 || wtRender(hc.Args[0]) != store[pattern] {
+			if len(hc.Args) > 0 {
+				fed = wtRender(hc.Args[0])
+			}
+			t.Errorf("%s is fed %s, want %s", pattern, fed, store[pattern])
 		}
 		return true
 	})

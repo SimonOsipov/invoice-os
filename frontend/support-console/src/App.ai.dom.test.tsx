@@ -281,6 +281,7 @@ describe('Console AI usage wiring', () => {
     const failed = (r: HTMLElement) => (r.lastElementChild as HTMLElement).style.color
     expect(failed(totalRows()[0])).toBe('var(--status-red-text)')
     expect(failed(totalRows()[1])).not.toBe('var(--status-red-text)')
+    expect(cells(totalRows()[1])).toEqual(['2026-10-14', 'Yaba Freight', '5', '1,000', '0', '$0.0010054', '0'])
   })
 
   it('totals re-read on a filter change and not on an inverted range', async () => {
@@ -369,5 +370,30 @@ describe('Console AI usage wiring', () => {
     totalsRead.mockRejectedValueOnce(new ApiError('http', 'expired', 401))
     await openTotals()
     await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
+  })
+
+  it('totals show Loading while the read is pending', async () => {
+    totalsRead.mockReturnValueOnce(new Promise<AiTotalsPage>(() => {}))
+    render(<App />)
+    await openAi()
+    fireEvent.click(screen.getByRole('button', { name: 'DAILY TOTALS' }))
+    await screen.findByText('Loading AI totals…')
+    expect(totalRows()).toHaveLength(0)
+  })
+
+  it('totals Load more keeps every page across two loads', async () => {
+    totalsRead.mockResolvedValueOnce(totalsPage([total('2026-10-15')], 'TC1'))
+    totalsRead.mockResolvedValueOnce(totalsPage([total('2026-10-14')], 'TC2'))
+    totalsRead.mockResolvedValueOnce(totalsPage([total('2026-10-13')], null))
+    render(<App />)
+    await openAi()
+    fireEvent.click(screen.getByRole('button', { name: 'DAILY TOTALS' }))
+    await waitFor(() => expect(totalKeys()).toEqual(['2026-10-15|T1']))
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await waitFor(() => expect(totalKeys()).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await waitFor(() => expect(totalKeys()).toEqual(['2026-10-15|T1', '2026-10-14|T1', '2026-10-13|T1']))
+    expect(totalsRead.mock.calls.map((c) => c[1])).toEqual([undefined, 'TC1', 'TC2'])
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull()
   })
 })

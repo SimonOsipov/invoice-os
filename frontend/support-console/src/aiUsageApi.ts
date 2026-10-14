@@ -40,6 +40,11 @@ export interface AiTotal {
   cost: string
   failed: number
 }
+// TotalsPage
+export interface AiTotalsPage {
+  totals: AiTotal[]
+  page: AuditPageInfo
+}
 
 /** Each value is empty or set; `from` and `to` are UTC days (`YYYY-MM-DD`). */
 export interface AiFilters {
@@ -60,6 +65,17 @@ export const fetchAiCalls = (filters: AiFilters, failed: boolean, cursor?: strin
   if (filters.to) q.set('to', dayEnd(filters.to))
   if (cursor) q.set('cursor', cursor)
   return request<AiCallsPage>(`${AI_CALLS_PATH}?${q}`, { signal })
+}
+
+export const fetchAiTotals = (filters: AiFilters, cursor?: string, signal?: AbortSignal): Promise<AiTotalsPage> => {
+  const q = new URLSearchParams({ limit: String(PAGE_SIZE) })
+  if (filters.tenant) q.set('tenant', filters.tenant)
+  if (filters.purpose) q.set('purpose', filters.purpose)
+  if (filters.outcome) q.set('outcome', filters.outcome)
+  if (filters.from) q.set('from', dayStart(filters.from))
+  if (filters.to) q.set('to', dayEnd(filters.to))
+  if (cursor) q.set('cursor', cursor)
+  return request<AiTotalsPage>(`${AI_CALLS_PATH}/totals?${q}`, { signal })
 }
 
 export const formatCount = (n: number): string => n.toLocaleString('en-US')

@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
-import { fetchAiCalls, type AiCall, type AiCallsPage } from './aiUsageApi'
+import { fetchAiCalls, fetchAiTotals, type AiCall, type AiCallsPage, type AiTotal, type AiTotalsPage } from './aiUsageApi'
 import { expireSession } from './auth'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
 import { fetchStaffTenants, type StaffTenant } from './tenantsApi'
@@ -28,9 +28,10 @@ vi.mock('./rulesApi', async (importOriginal) => ({
   fetchVersions: vi.fn(),
 }))
 vi.mock('./tenantsApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./tenantsApi')>()), fetchStaffTenants: vi.fn() }))
-vi.mock('./aiUsageApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./aiUsageApi')>()), fetchAiCalls: vi.fn() }))
+vi.mock('./aiUsageApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./aiUsageApi')>()), fetchAiCalls: vi.fn(), fetchAiTotals: vi.fn() }))
 
 const aiRead = vi.mocked(fetchAiCalls)
+const totalsRead = vi.mocked(fetchAiTotals)
 const tenantsRead = vi.mocked(fetchStaffTenants)
 
 const tenant = (id: string, name: string): StaffTenant => ({
@@ -40,6 +41,10 @@ const call = (id: string, over: Partial<AiCall> = {}): AiCall => ({
   id, tenant_id: 'T1', tenant_name: 'Okafor & Partners', created_at: '2026-10-14T09:12:03.123456Z', client: 'ai', purpose: 'document', model: 'google/gemini',
   input_tokens: 3447, output_tokens: 120, cost: '0.0014741', latency_ms: 40000, attempts: 2, outcome: 'ok', ...over,
 })
+const total = (day: string, over: Partial<AiTotal> = {}): AiTotal => ({
+  day, tenant_id: 'T1', tenant_name: 'Okafor & Partners', calls: 2, input_tokens: 1000, output_tokens: 0, cost: '0.0010054', failed: 2, ...over,
+})
+const totalsPage = (totals: AiTotal[], next: string | null = null): AiTotalsPage => ({ totals, page: { limit: 50, has_more: next !== null, next_cursor: next } })
 const page = (calls: AiCall[], next: string | null = null): AiCallsPage => ({ calls, page: { limit: 50, has_more: next !== null, next_cursor: next } })
 
 beforeEach(() => {
@@ -47,6 +52,7 @@ beforeEach(() => {
   vi.mocked(fetchVersions).mockResolvedValue({ today: '2026-10-11', versions: [] })
   vi.mocked(fetchCodeListSummary).mockResolvedValue([])
   tenantsRead.mockResolvedValue([tenant('T1', 'Okafor & Partners'), tenant('T2', 'Yaba Freight')])
+  totalsRead.mockResolvedValue(totalsPage([total('2026-10-15'), total('2026-10-14', { tenant_id: 'T2', tenant_name: 'Yaba Freight', calls: 5, failed: 0 })]))
   aiRead.mockResolvedValue(page([call('c1'), call('c2', { client: 'jev', purpose: 'mapping_check', model: '', outcome: 'unavailable' })]))
 })
 afterEach(() => {
@@ -60,6 +66,8 @@ const openAi = async () => {
 }
 const rows = () => Array.from(document.querySelectorAll<HTMLElement>('[data-call-id]'))
 const ids = () => rows().map((r) => r.dataset.callId)
+const totalRows = () => Array.from(document.querySelectorAll<HTMLElement>('[data-total-key]'))
+const totalKeys = () => totalRows().map((r) => r.dataset.totalKey)
 const cells = (r: HTMLElement) => Array.from(r.children).map((c) => c.textContent)
 const typeAndEnter = (label: string, value: string) => {
   const input = screen.getByLabelText(label)
@@ -255,5 +263,111 @@ describe('Console AI usage wiring', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await screen.findByRole('option', { name: 'Yaba Freight' })
     expect(screen.queryByText('tenants down')).toBeNull()
+  })
+
+  it("DAILY TOTALS lists the server's totals", async () => {
+    render(<App />)
+    await openAi()
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    typeAndEnter('Purpose', 'document')
+    await waitFor(() => expect(aiRead).toHaveBeenCalledTimes(2))
+    fireEvent.click(screen.getByRole('button', { name: 'DAILY TOTALS' }))
+    await waitFor(() => expect(totalRows()).toHaveLength(2))
+    expect(totalsRead).toHaveBeenCalledTimes(1)
+    expect(totalsRead.mock.calls[0]).toEqual([{ purpose: 'document' }])
+    expect(aiRead).toHaveBeenCalledTimes(2)
+    expect(totalKeys()).toEqual(['2026-10-15|T1', '2026-10-14|T2'])
+    expect(cells(totalRows()[0])).toEqual(['2026-10-15', 'Okafor & Partners', '2', '1,000', '0', '$0.0010054', '2'])
+    const failed = (r: HTMLElement) => (r.lastElementChild as HTMLElement).style.color
+    expect(failed(totalRows()[0])).toBe('var(--status-red-text)')
+    expect(failed(totalRows()[1])).not.toBe('var(--status-red-text)')
+  })
+
+  it('totals re-read on a filter change and not on an inverted range', async () => {
+    render(<App />)
+    await openAi()
+    fireEvent.click(screen.getByRole('button', { name: 'DAILY TOTALS' }))
+    await waitFor(() => expect(totalRows()).toHaveLength(2))
+    typeAndEnter('Outcome', 'unavailable')
+    await waitFor(() => expect(totalsRead).toHaveBeenCalledTimes(2))
+    expect(totalsRead.mock.calls[1]).toEqual([{ outcome: 'unavailable' }])
+
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-10-05' } })
+    await waitFor(() => expect(totalsRead).toHaveBeenCalledTimes(3))
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-10-01' } })
+    await screen.findByText('End date must be on or after the start date.')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(totalsRead).toHaveBeenCalledTimes(3)
+    expect(totalRows()).toHaveLength(0)
+  })
+
+  it("totals cells are the server's values, not sums of the call list", async () => {
+    aiRead.mockResolvedValue(page([call('c1', { input_tokens: 7 }), call('c2', { input_tokens: 5 })]))
+    render(<App />)
+    await openAi()
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: 'DAILY TOTALS' }))
+    await waitFor(() => expect(totalRows()).toHaveLength(2))
+    expect(cells(totalRows()[0])).toEqual(['2026-10-15', 'Okafor & Partners', '2', '1,000', '0', '$0.0010054', '2'])
+  })
+
+  it('totals Load more appends, hides at the end and drops a late page', async () => {
+    totalsRead.mockResolvedValueOnce(totalsPage([total('2026-10-15')], 'TC1'))
+    totalsRead.mockResolvedValueOnce(totalsPage([total('2026-10-14')], null))
+    render(<App />)
+    await openAi()
+    fireEvent.click(screen.getByRole('button', { name: 'DAILY TOTALS' }))
+    await waitFor(() => expect(totalKeys()).toEqual(['2026-10-15|T1']))
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await waitFor(() => expect(totalKeys()).toEqual(['2026-10-15|T1', '2026-10-14|T1']))
+    expect(totalsRead.mock.calls[1]).toEqual([{}, 'TC1'])
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull()
+
+    cleanup()
+    vi.clearAllMocks()
+    let release: (p: AiTotalsPage) => void = () => {}
+    totalsRead.mockResolvedValueOnce(totalsPage([total('2026-10-15')], 'TC1'))
+    totalsRead.mockReturnValueOnce(new Promise<AiTotalsPage>((r) => (release = r)))
+    totalsRead.mockResolvedValueOnce(totalsPage([total('2026-09-01')], null))
+    render(<App />)
+    await openAi()
+    fireEvent.click(screen.getByRole('button', { name: 'DAILY TOTALS' }))
+    await waitFor(() => expect(totalKeys()).toEqual(['2026-10-15|T1']))
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await waitFor(() => expect(totalsRead).toHaveBeenCalledTimes(2))
+    typeAndEnter('Purpose', 'document')
+    await waitFor(() => expect(totalKeys()).toEqual(['2026-09-01|T1']))
+    release(totalsPage([total('2026-08-01')], null))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(totalKeys()).toEqual(['2026-09-01|T1'])
+  })
+
+  it('totals empty, forbidden, error and expired', async () => {
+    const openTotals = async () => {
+      render(<App />)
+      await openAi()
+      fireEvent.click(screen.getByRole('button', { name: 'DAILY TOTALS' }))
+    }
+    totalsRead.mockResolvedValueOnce(totalsPage([]))
+    await openTotals()
+    await screen.findByText('No AI calls match these filters.')
+    cleanup()
+
+    totalsRead.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
+    await openTotals()
+    await screen.findByText('Your account is not ASComply staff.')
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    cleanup()
+
+    totalsRead.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    await openTotals()
+    await screen.findByText('boom')
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(totalRows()).toHaveLength(2))
+    cleanup()
+
+    totalsRead.mockRejectedValueOnce(new ApiError('http', 'expired', 401))
+    await openTotals()
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
   })
 })

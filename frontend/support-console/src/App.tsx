@@ -41,7 +41,7 @@ import {
 } from './rulesApi'
 import { cancelJob, fetchJob, fetchJobs, redriveJob, type JobDetail, type JobState, type StaffJob } from './jobsApi'
 import { defaultBundlePeriod, downloadBundle, fetchAuditEvents, fetchBundlePreview, fetchStaffChanges, fetchStaffEntities, rangeInverted, staffChangeLink, type AuditFilters, type StaffAuditPage, type StaffAuditRow, type StaffChangeLink } from './auditApi'
-import { fetchAiCalls, type AiCallsPage, type AiFilters } from './aiUsageApi'
+import { fetchAiCalls, fetchAiTotals, type AiCallsPage, type AiFilters, type AiTotalsPage } from './aiUsageApi'
 import { fetchStaffHealth } from './healthApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
@@ -87,6 +87,8 @@ function Console() {
   const [aiFilters, setAiFilters] = useState<AiFilters>({})
   const [aiMore, setAiMore] = useState<{ key: number; calls: AiCallsPage['calls']; page: AiCallsPage['page'] } | null>(null)
   const [aiMoreKey, setAiMoreKey] = useState<number | null>(null)
+  const [totalsMore, setTotalsMore] = useState<{ key: number; totals: AiTotalsPage['totals']; page: AiTotalsPage['page'] } | null>(null)
+  const [totalsMoreKey, setTotalsMoreKey] = useState<number | null>(null)
   const focusSeenLoading = useRef(false)
   const [evidence, setEvidence] = useState<EvidenceInputs>({ tenant: '', entity: '', from: '', to: '' })
   const [bundleBusy, setBundleBusy] = useState(false)
@@ -204,6 +206,39 @@ function Console() {
       setAiMoreKey((k) => (k === sent ? null : k))
     }
   }
+  const onAiTotals = screen === 'ai' && aiView === 'totals'
+  const totalsRead = useAsync(() => fetchAiTotals(aiFilters), {
+    immediate: onAiTotals && !rangeInverted(aiFilters),
+    deps: [onAiTotals, iTenant, iPurpose, iOutcome, iFrom, iTo],
+    isEmpty: (p) => p.totals.length === 0,
+  })
+  const totalsKey = JSON.stringify([onAiTotals, iTenant, iPurpose, iOutcome, iFrom, iTo])
+  const totalsGen = useRef({ n: 0, key: totalsKey, data: totalsRead.data })
+  if (totalsGen.current.key !== totalsKey || totalsGen.current.data !== totalsRead.data) totalsGen.current = { n: totalsGen.current.n + 1, key: totalsKey, data: totalsRead.data }
+  const totalsToken = totalsGen.current.n
+  useEffect(() => setTotalsMore(null), [totalsToken])
+  const totalsMoreHere = totalsMore?.key === totalsToken ? totalsMore : null
+  const aiTotals = [...(totalsRead.data?.totals ?? []), ...(totalsMoreHere?.totals ?? [])]
+  const totalsPage = totalsMoreHere?.page ?? totalsRead.data?.page
+  const totalsStatus = totalsRead.status === 'error' ? (totalsRead.error?.status === 403 ? 'forbidden' : 'error') : totalsRead.status === 'ready' || totalsRead.status === 'empty' ? totalsRead.status : 'loading'
+  const loadMoreTotals = async () => {
+    const cursor = totalsPage?.has_more ? totalsPage.next_cursor : null
+    const sent = totalsToken
+    if (!cursor || totalsMoreKey === sent) return
+    setTotalsMoreKey(sent)
+    try {
+      const page = await fetchAiTotals(aiFilters, cursor)
+      if (sent !== totalsGen.current.n) return
+      setTotalsMore((m) => ({ key: sent, totals: [...(m?.key === sent ? m.totals : []), ...page.totals], page: page.page }))
+    } catch (e) {
+      if (sent !== totalsGen.current.n) return
+      const err = toApiError(e)
+      if (err.status === 401) void expireSession()
+      else showToast(err.message, '', 'red')
+    } finally {
+      setTotalsMoreKey((k) => (k === sent ? null : k))
+    }
+  }
   const openAudit = drawer?.type === 'audit' ? auditRows.find((r) => r.id === drawer.id) : undefined
   const onStaffChanges = screen === 'audit' && auditView === 'staff'
   const changesRead = useAsync(fetchStaffChanges, { immediate: onStaffChanges, deps: [onStaffChanges] })
@@ -287,7 +322,7 @@ function Console() {
   const jobDetail = freshJob ?? (jobRead.status === 'loading' && lastJob.current?.job.id === openJob ? lastJob.current : null)
   const jobNote = jobRead.status === 'error' ? { text: jobRead.error?.status === 403 ? 'Your account is not ASComply staff.' : (jobRead.error?.message ?? 'Unavailable'), onRetry: jobRead.run } : { text: 'Loading job…' }
   const jobInFlight = useRef(false)
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead, aiRead, aiTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead, aiRead, totalsRead, aiTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -579,13 +614,13 @@ function Console() {
               moreBusy={aiMoreKey === aiToken}
               onMore={() => void loadMoreAi()}
               onRetry={aiRead.run}
-              // The totals view has no read yet.
-              totalsStatus="loading"
-              totals={[]}
-              totalsHasMore={false}
-              totalsMoreBusy={false}
-              onMoreTotals={() => {}}
-              onRetryTotals={() => {}}
+              totalsStatus={totalsStatus}
+              totalsErrorText={totalsRead.error?.message}
+              totals={aiTotals}
+              totalsHasMore={totalsPage?.has_more ?? false}
+              totalsMoreBusy={totalsMoreKey === totalsToken}
+              onMoreTotals={() => void loadMoreTotals()}
+              onRetryTotals={totalsRead.run}
             />
           )}
           {screen === 'health' && <Health status={healthStatus} errorText={healthRead.error?.message} data={healthRead.data ?? null} onRetry={healthRead.run} />}

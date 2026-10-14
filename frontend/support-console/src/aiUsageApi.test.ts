@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fetchAiCalls, formatCost, formatCount, formatLatency, isFailed } from './aiUsageApi'
+import { fetchAiCalls, fetchAiTotals, formatCost, formatCount, formatLatency, isFailed } from './aiUsageApi'
 import { SESSION_KEY } from './auth'
 
 const GW = 'https://gw.test'
@@ -59,6 +59,24 @@ describe('aiUsageApi', () => {
     expect(lastQuery()).not.toHaveProperty('failed')
   })
 
+  it('fetchAiTotals builds the totals query', async () => {
+    await fetchAiTotals({})
+    expect(fetchMock.mock.calls[0][0]).toBe(`${ROUTE}/totals?limit=50`)
+
+    const id = '11111111-1111-1111-1111-111111111111'
+    await fetchAiTotals({ tenant: id, purpose: 'document', outcome: 'unavailable', from: '2026-10-01', to: '2026-10-03' }, 'CUR')
+    expect(lastQuery()).toEqual({
+      limit: '50',
+      tenant: id,
+      purpose: 'document',
+      outcome: 'unavailable',
+      from: '2026-10-01T00:00:00.000Z',
+      to: '2026-10-03T23:59:59.999Z',
+      cursor: 'CUR',
+    })
+    expect(lastQuery()).not.toHaveProperty('failed')
+  })
+
   it("formatters keep the server's digits", () => {
     expect(formatCost('0.0014741')).toBe('$0.0014741')
     expect(formatCost('0')).toBe('$0')
@@ -77,6 +95,14 @@ describe('aiUsageApi', () => {
     expect(goKeys(go, 'NotARealStruct')).toEqual([])
     expect(tsKeys(ts, 'AiCall')).toEqual(goKeys(go, 'Call'))
     expect(tsKeys(ts, 'AiCallsPage')).toEqual(goKeys(go, 'Page'))
+  })
+
+  it('AiTotal keys equal the Go aicalls.Total json tags', () => {
+    const go = read('../../../internal/aicalls/staff_read.go')
+    const ts = read('./aiUsageApi.ts')
+    expect(goKeys(go, 'Total')).toContain('failed')
+    expect(goKeys(go, 'Total').length).toBeGreaterThanOrEqual(8)
     expect(tsKeys(ts, 'AiTotal')).toEqual(goKeys(go, 'Total'))
+    expect(tsKeys(ts, 'AiTotalsPage')).toEqual(goKeys(go, 'TotalsPage'))
   })
 })

@@ -36,6 +36,10 @@ const CALL_COLS = '168px minmax(96px,1.4fr) 40px minmax(96px,1fr) minmax(96px,1.
 // Fixed tracks plus the minimums; fits the 949 px row at a 1280 px window.
 const CALL_MIN_WIDTH = 904
 
+const TOTAL_COLS = '104px minmax(96px,1fr) 64px 96px 96px 96px 64px'
+// Fixed tracks plus the minimum.
+const TOTAL_MIN_WIDTH = 616
+
 const ROW: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: CALL_COLS,
@@ -62,6 +66,16 @@ const HEADS: { label: string; num: boolean }[] = [
   { label: 'Latency', num: true },
   { label: 'Try', num: true },
   { label: 'Outcome', num: false },
+]
+
+const TOTAL_HEADS: { label: string; num: boolean }[] = [
+  { label: 'Day', num: false },
+  { label: 'Tenant', num: false },
+  { label: 'Calls', num: true },
+  { label: 'Tokens in', num: true },
+  { label: 'Tokens out', num: true },
+  { label: 'Cost', num: true },
+  { label: 'Failed', num: true },
 ]
 
 function Rows({ status, errorText, calls, failuresOnly, onRetry }: Pick<Props, 'status' | 'errorText' | 'calls' | 'onRetry'> & { failuresOnly: boolean }) {
@@ -116,7 +130,47 @@ function Rows({ status, errorText, calls, failuresOnly, onRetry }: Pick<Props, '
   )
 }
 
-export function AiUsage({ view, onView, filters, onFilters, tenants, tenantsError, status, errorText, calls, hasMore, moreBusy, onMore, onRetry }: Props) {
+function TotalRows({ status, errorText, totals, onRetry }: { status: AuditStatus; errorText?: string; totals: AiTotal[]; onRetry: () => void }) {
+  if (status === 'loading') return <Note text="Loading AI totals…" />
+  if (status === 'forbidden') return <Note text={STAFF_ONLY} />
+  if (status === 'error') return <Note text={errorText ?? 'Unavailable'} onRetry={onRetry} />
+  if (totals.length === 0) {
+    return (
+      <div className="mono" style={{ padding: '28px 16px', textAlign: 'center', fontSize: 12, color: 'var(--fg-3)' }}>
+        No AI calls match these filters.
+      </div>
+    )
+  }
+  return (
+    <>
+      {totals.map((t) => (
+        <div key={`${t.day}|${t.tenant_id}`} data-total-key={`${t.day}|${t.tenant_id}`} style={{ ...ROW, gridTemplateColumns: TOTAL_COLS, minWidth: TOTAL_MIN_WIDTH }}>
+          <span className="mono" style={{ ...CELL, fontSize: 12 }}>
+            {t.day}
+          </span>
+          <span style={{ ...CELL, fontSize: 13, fontWeight: 500 }}>{t.tenant_name}</span>
+          <span className="mono" style={{ ...NUM, fontSize: 12 }}>
+            {formatCount(t.calls)}
+          </span>
+          <span className="mono" style={{ ...NUM, fontSize: 12 }}>
+            {formatCount(t.input_tokens)}
+          </span>
+          <span className="mono" style={{ ...NUM, fontSize: 12 }}>
+            {formatCount(t.output_tokens)}
+          </span>
+          <span className="mono" style={{ ...NUM, fontSize: 12 }}>
+            {formatCost(t.cost)}
+          </span>
+          <span className="mono" style={{ ...NUM, paddingRight: 0, fontSize: 12, color: t.failed > 0 ? 'var(--status-red-text)' : 'var(--fg-2)' }}>
+            {formatCount(t.failed)}
+          </span>
+        </div>
+      ))}
+    </>
+  )
+}
+
+export function AiUsage({ view, onView, filters, onFilters, tenants, tenantsError, status, errorText, calls, hasMore, moreBusy, onMore, onRetry, totalsStatus, totalsErrorText, totals, totalsHasMore, totalsMoreBusy, onMoreTotals, onRetryTotals }: Props) {
   const inverted = rangeInverted(filters)
   const views: { key: AiView; label: string }[] = [
     { key: 'calls', label: 'CALLS' },
@@ -176,6 +230,28 @@ export function AiUsage({ view, onView, filters, onFilters, tenants, tenantsErro
           {!inverted && hasMore && (
             <div style={{ marginTop: 14 }}>
               <button type="button" onClick={onMore} disabled={moreBusy} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 30, ...(moreBusy ? { opacity: 0.45, cursor: 'not-allowed' } : {}) }}>
+                Load more
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {view === 'totals' && (
+        <>
+          <div style={{ ...CARD, overflowX: 'auto' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: TOTAL_COLS, padding: '10px 16px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)', minWidth: TOTAL_MIN_WIDTH }}>
+              {TOTAL_HEADS.map((h, i) => (
+                <span key={h.label} className="label" style={{ ...(h.num ? { textAlign: 'right' } : {}), paddingRight: i === TOTAL_HEADS.length - 1 ? 0 : 8 }}>
+                  {h.label}
+                </span>
+              ))}
+            </div>
+            {!inverted && <TotalRows status={totalsStatus} errorText={totalsErrorText} totals={totals} onRetry={onRetryTotals} />}
+          </div>
+          {!inverted && totalsHasMore && (
+            <div style={{ marginTop: 14 }}>
+              <button type="button" onClick={onMoreTotals} disabled={totalsMoreBusy} className="ops-btn v2-btn v2-btn-ghost" style={{ height: 30, ...(totalsMoreBusy ? { opacity: 0.45, cursor: 'not-allowed' } : {}) }}>
                 Load more
               </button>
             </div>

@@ -292,7 +292,7 @@ func TestRedriveHandler_ReasonBoundary(t *testing.T) {
 }
 
 func TestRedriveHandler_UnknownFieldIs400(t *testing.T) {
-	for _, body := range []string{`{"reason":"x","force":true}`, `{"reason":"x"} {"reason":"y"}`, `{"reason":"x"} 1`, `not json`} {
+	for _, body := range []string{`{"reason":"x","force":true}`, `{"reason":"x"} {"reason":"y"}`, `{"reason":"x"} 1`, `{"reason":"x"} {}`, `{"reason":"x"} null`, `not json`, ``, `[]`, `{"reason":5}`} {
 		rec, call := serveRedrive(t, body, Detail{}, nil)
 		wantBody(t, rec, http.StatusBadRequest, `{"error":"invalid request body"}`)
 		if call.n != 0 {
@@ -312,6 +312,14 @@ func TestRedriveHandler_OversizeBodyIs413(t *testing.T) {
 			t.Error("an oversize body reached redrive")
 		}
 	}
+	// The limit is 8 KiB exactly: padding to 8192 bytes passes, one more byte is refused.
+	const body = `{"reason":"r"}`
+	rec, call := serveRedrive(t, body+strings.Repeat(" ", 8<<10-len(body)), Detail{}, nil)
+	if rec.Code != http.StatusOK || call.n != 1 {
+		t.Errorf("8192-byte body: got %d, %d calls; want 200 and 1 call", rec.Code, call.n)
+	}
+	rec, _ = serveRedrive(t, body+strings.Repeat(" ", 8<<10-len(body)+1), Detail{}, nil)
+	wantBody(t, rec, http.StatusRequestEntityTooLarge, `{"error":"request body too large"}`)
 }
 
 func TestRedriveHandler_NotStaffIs403AndNotFoundIs404(t *testing.T) {

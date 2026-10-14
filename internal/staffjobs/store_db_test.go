@@ -6,7 +6,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -615,5 +617,139 @@ func TestRLS_ConcurrentRedrivesMakeOneRiverJob(t *testing.T) {
 	if got.AuditRows < 1 || len(r.auditPayloads(t, "audit_log", r.tenant)) != 1 || len(r.auditPayloads(t, "staff_audit_log", r.tenant)) != 1 {
 		t.Errorf("audit rows: audit_log %d, staff_audit_log %d, want 1 and 1 submission.job.redriven",
 			len(r.auditPayloads(t, "audit_log", r.tenant)), len(r.auditPayloads(t, "staff_audit_log", r.tenant)))
+	}
+}
+
+// The two production dead letters were seeded with river_job_id NULL.
+func TestRLS_RedriveWithNoRiverJobIDInsertsAndRefusesPastACompletedHolder(t *testing.T) {
+	r := newRedriveRig(t, "dead_lettered", "")
+	if got := r.state(t); got.RiverJobID != 0 || got.Rivers != "" {
+		t.Fatalf("setup = %+v, want a job with no river_job_id and no River row", got)
+	}
+	holder := seedRiverRow(t, r.super, r.rc, r.args, "completed")
+	r.refuses(t, ErrRiverDuplicate)
+	if _, ok := r.riverRow(t, holder); !ok {
+		t.Error("a refused Redrive deleted a River row it does not own")
+	}
+	if _, err := r.super.Exec(context.Background(), `DELETE FROM river_job WHERE id = $1`, holder); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.store.Redrive(r.ctx, r.job, "APP back up"); err != nil {
+		t.Fatalf("Redrive of a job with no river_job_id: %v", err)
+	}
+	got := r.state(t)
+	if row, ok := r.riverRow(t, got.RiverJobID); got.JobState != "queued" || !ok || row.State != "available" || row.Args != r.args {
+		t.Errorf("after Redrive = %+v, river row %+v (found %v), want a queued job on an available River row with the old args", got, row, ok)
+	}
+}
+
+func TestRLS_RedriveKeepsLastErrorAndLogsTheSupportRequeue(t *testing.T) {
+	r := newRedriveRig(t, "dead_lettered", "discarded")
+	r.setJob(t, `last_error = 'adapter: 503 from the Access Point'`)
+	before := r.state(t)
+	d, err := r.store.Redrive(r.ctx, r.job, "APP back up")
+	if err != nil {
+		t.Fatalf("Redrive: %v", err)
+	}
+	var kept *string
+	if err := r.super.QueryRow(context.Background(), `SELECT last_error FROM submission_jobs WHERE id = $1`, r.job).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept == nil || *kept != "adapter: 503 from the Access Point" || d.Job.LastError == nil || *d.Job.LastError != *kept {
+		t.Errorf("last_error row %v, returned %v; want the old error kept in both", kept, d.Job.LastError)
+	}
+	if after := r.state(t); after.StatusHistoryRows != before.StatusHistoryRows+1 {
+		t.Errorf("history rows %d -> %d, want one more", before.StatusHistoryRows, after.StatusHistoryRows)
+	}
+	last := d.History[len(d.History)-1]
+	if last.FromStatus == nil || *last.FromStatus != "failed" || last.ToStatus != "queued" || last.Actor != audit.SupportActor {
+		t.Errorf("last history step = %+v, want failed -> queued by %q", last, audit.SupportActor)
+	}
+}
+
+func TestRLS_RedriveReplacesWhateverRiverRowTheJobNames(t *testing.T) {
+	for _, state := range []string{"available", "retryable", "scheduled", "pending", "cancelled"} {
+		t.Run(state, func(t *testing.T) {
+			r := newRedriveRig(t, "dead_lettered", state)
+			old := r.state(t).RiverJobID
+			if _, err := r.store.Redrive(r.ctx, r.job, "APP back up"); err != nil {
+				t.Fatalf("Redrive past a %s River row: %v", state, err)
+			}
+			if _, ok := r.riverRow(t, old); ok {
+				t.Errorf("the %s River row %d is still there", state, old)
+			}
+			var live int
+			if err := r.super.QueryRow(context.Background(),
+				`SELECT count(*) FROM river_job WHERE args->>'tenant_id' = $1 AND state = 'available'`, r.tenant).Scan(&live); err != nil || live != 1 {
+				t.Errorf("available River rows = %d (%v), want 1", live, err)
+			}
+		})
+	}
+}
+
+func TestRLS_RedriveOfAnUnknownOrMalformedJobIsNotFoundAndWritesNothing(t *testing.T) {
+	r := newRedriveRig(t, "dead_lettered", "discarded")
+	before := r.state(t)
+	for _, id := range []string{uuid.NewString(), "not-a-uuid", ""} {
+		if _, err := r.store.Redrive(r.ctx, id, "APP back up"); !errors.Is(err, ErrJobNotFound) {
+			t.Errorf("Redrive(%q) = %v, want ErrJobNotFound", id, err)
+		}
+	}
+	if after := r.state(t); after != before {
+		t.Errorf("a refused Redrive wrote:\nbefore %+v\nafter  %+v", before, after)
+	}
+}
+
+func TestRLS_RedriveLeavesAnotherTenantsDeadLetterAlone(t *testing.T) {
+	a := newRedriveRig(t, "dead_lettered", "discarded")
+	b := newRedriveRig(t, "dead_lettered", "discarded")
+	beforeB := b.state(t)
+	if _, err := a.store.Redrive(a.ctx, a.job, "APP back up"); err != nil {
+		t.Fatalf("Redrive: %v", err)
+	}
+	if afterB := b.state(t); afterB != beforeB {
+		t.Errorf("another tenant's dead letter changed:\nbefore %+v\nafter  %+v", beforeB, afterB)
+	}
+}
+
+func TestRLS_RedriveHandlerOverTheStoreMapsRealErrors(t *testing.T) {
+	r := newRedriveRig(t, "dead_lettered", "discarded")
+	h := RedriveHandler(r.store.Redrive, slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
+	post := func(ctx context.Context, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/staff/jobs/"+r.job+"/redrive", strings.NewReader(body)).WithContext(ctx)
+		req.SetPathValue("id", r.job)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	_, member := customerTenant(t, r.super)
+	before := r.state(t)
+	if rec := post(staffCtx(member), `{"reason":"r"}`); rec.Code != http.StatusForbidden {
+		t.Errorf("non-house actor: got %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	if _, err := r.super.Exec(context.Background(), `UPDATE invoices SET status = 'accepted', failure_kind = NULL WHERE id = $1`, r.invoice); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(r.ctx, `{"reason":"r"}`); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "the invoice is accepted, not failed") {
+		t.Errorf("accepted invoice: got %d %s, want 409 naming accepted", rec.Code, rec.Body.String())
+	}
+	if _, err := r.super.Exec(context.Background(), `UPDATE invoices SET status = 'failed', failure_kind = 'never_acknowledged' WHERE id = $1`, r.invoice); err != nil {
+		t.Fatal(err)
+	}
+	if after := r.state(t); after != before {
+		t.Fatalf("a refused Redrive wrote:\nbefore %+v\nafter  %+v", before, after)
+	}
+	rec := post(r.ctx, `{"reason":"  APP back up "}`)
+	var body struct {
+		Job struct {
+			State       string `json:"state"`
+			MaxAttempts int    `json:"max_attempts"`
+		} `json:"job"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusOK || body.Job.State != "queued" || body.Job.MaxAttempts != maxAttempts {
+		t.Fatalf("success: got %d %s (%v), want 200 with a queued job and max_attempts", rec.Code, rec.Body.String(), err)
+	}
+	if got := r.auditPayloads(t, "audit_log", r.tenant); len(got) != 1 || got[0]["reason"] != "APP back up" {
+		t.Errorf("audit_log payloads = %v, want one with the trimmed reason", got)
 	}
 }

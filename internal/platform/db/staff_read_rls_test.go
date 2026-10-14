@@ -534,6 +534,8 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 		"public.memberships": {"created_at", "display_name", "email", "role", "status", "tenant_id", "user_id"},
 		"public.invoices":    {"created_at", "id", "invoice_number", "status", "tenant_id"},
 		"public.audit_log":   {"created_at", "tenant_id"},
+
+		"public.submission_jobs": {"state"},
 	} {
 		var want []string
 		for _, c := range cols {
@@ -553,6 +555,14 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 	}
 	if ps := policies["public.staff_audit_log"]; len(ps) != 0 {
 		t.Errorf("staff_audit_log has staff_reader policies %v, want none", ps)
+	}
+
+	wantHealth := []string{"fleet_status/SELECT", "job_counts/SELECT", "services_down/SELECT", "taken_at/SELECT"}
+	if got := sortedCopy(grants["public.health_samples"]); !reflect.DeepEqual(got, wantHealth) {
+		t.Errorf("staff_reader grants on health_samples = %v, want exactly %v", got, wantHealth)
+	}
+	if ps := policies["public.health_samples"]; len(ps) != 0 {
+		t.Errorf("health_samples has staff_reader policies %v, want none", ps)
 	}
 }
 
@@ -626,6 +636,18 @@ var staffReaderSeeds = map[string]struct {
 	"invoices": {"tenant_id", func(t *testing.T) {
 		entity := seedEntity(t, h.tenantB)
 		seedInvoiceAt(t, h.tenantB, entity, uuid.NewString(), "ISO-"+uuid.NewString()[:8], "draft", time.Now().UTC())
+	}},
+	"submission_jobs": {"tenant_id", func(t *testing.T) {
+		entity := seedEntity(t, h.tenantB)
+		invoice := uuid.NewString()
+		seedInvoiceAt(t, h.tenantB, entity, invoice, "ISO-"+uuid.NewString()[:8], "draft", time.Now().UTC())
+		job := uuid.NewString()
+		if _, err := h.super.Exec(context.Background(),
+			`INSERT INTO submission_jobs (id, tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state)
+			 VALUES ($1, $2, $3, $4, 'mock', 'v1', 'queued')`, job, h.tenantB, invoice, uuid.NewString()); err != nil {
+			t.Fatalf("seed a tenant-B submission job: %v", err)
+		}
+		t.Cleanup(func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM submission_jobs WHERE id = $1`, job) })
 	}},
 	// audit_log is append-only: the row stays.
 	"audit_log": {"tenant_id", func(t *testing.T) {

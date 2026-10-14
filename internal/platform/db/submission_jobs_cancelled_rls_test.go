@@ -1,4 +1,4 @@
-// SUPP-06-01: submission_jobs_state_check admits `cancelled` (migration A) and its Down narrows it back.
+// submission_jobs_state_check admits `cancelled` (migration A) and its Down narrows it back.
 package db_test
 
 import (

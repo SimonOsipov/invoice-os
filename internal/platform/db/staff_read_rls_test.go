@@ -1368,7 +1368,7 @@ func TestRLS_StaffReadTenantInvoicesLimitBoundaryAndEmptyTenants(t *testing.T) {
 	}
 }
 
-// Runtime check of AC-5, the detail tables and (SUPP-06-02) submission_jobs and invoice_status_history: the exact column sets are pinned by the catalog test, this reads and writes as staff_reader.
+// Runtime check of the detail tables, submission_jobs and invoice_status_history: the catalog test pins the column sets, this reads and writes as staff_reader.
 func TestRLS_StaffReaderReadsOnlyGrantedColumnsAndWritesNothingOnTheDetailTables(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -1433,7 +1433,7 @@ func TestRLS_StaffReaderReadsOnlyGrantedColumnsAndWritesNothingOnTheDetailTables
 	}
 }
 
-// SUPP-06-02: staff_read_submission_jobs, staff_read_submission_job and staff_read_invoice_status_history.
+// staff_read_submission_jobs, staff_read_submission_job and staff_read_invoice_status_history.
 
 const (
 	staffReadJobsSig    = "public.staff_read_submission_jobs(uuid, text, uuid)"

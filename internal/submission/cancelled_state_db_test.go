@@ -1,4 +1,4 @@
-// SUPP-06-01: a submit job whose row is `cancelled` is terminal; Work returns before the adapter.
+// a submit job whose row is `cancelled` is terminal; Work returns before the adapter.
 package submission_test
 
 import (

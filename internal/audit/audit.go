@@ -108,10 +108,10 @@ SELECT $1::uuid, $2::text, $3::uuid, $4::uuid, $5::uuid, $6::jsonb
 		return fmt.Errorf("audit: record staff event %q: %w", ev.Event, err)
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrStaffTenantMismatch
+		return fmt.Errorf("audit: record staff event %q: %w", ev.Event, ErrStaffTenantMismatch)
 	}
 	if ev.TenantID != uuid.Nil {
-		return recordTenant(ctx, tx, SupportActor, ev.Event, ev.Payload)
+		return recordTenant(ctx, tx, SupportActor, ev.Event, json.RawMessage(body))
 	}
 	return nil
 }

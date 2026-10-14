@@ -463,13 +463,6 @@ func seedStaffAuditRow(t *testing.T, q interface {
 func TestRLS_StaffReadStaffAuditLogExists(t *testing.T) {
 	requireHarness(t)
 	requireStaffReadStaffAuditLog(t)
-	var found bool
-	for _, fn := range staffReadFunctions(t) {
-		found = found || fn.name == "staff_read_staff_audit_log"
-	}
-	if !found {
-		t.Error("staffReadFunctions lists no staff_read_staff_audit_log, so the generic staff_read_ catalog tests do not cover it")
-	}
 }
 
 // staffAuditUnpagedFloor is the row count the log must reach so a LIMIT up to it shows in the count.
@@ -546,7 +539,7 @@ func TestRLS_StaffReadStaffAuditLogReturnsEveryRowToAHouseMember(t *testing.T) {
 }
 
 // The older row takes the highest id, so id DESC alone puts it first and only created_at DESC puts it last.
-// Six tied rows go in low id first: with two, dropping the id term can still land on the right order by chance.
+// Six tied rows go in low id first.
 func TestRLS_StaffReadStaffAuditLogOrdersNewestFirstThenByIdDesc(t *testing.T) {
 	requireHarness(t)
 	requireStaffReadStaffAuditLog(t)

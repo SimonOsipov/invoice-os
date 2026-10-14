@@ -393,7 +393,6 @@ func jsonEq(t *testing.T, got, want string) {
 	}
 }
 
-// AC-1, AC-2, AC-8.
 func TestStaffAudit_TenantChangeWritesBothRowsInOneTx(t *testing.T) {
 	f := requireFixture(t)
 	requireStaffTable(t, f)
@@ -442,7 +441,7 @@ func TestStaffAudit_TenantChangeWritesBothRowsInOneTx(t *testing.T) {
 	if n := auditCount(t, f.app, other, event); n != 0 {
 		t.Errorf("another tenant sees %d rows for the event, want 0", n)
 	}
-	// AC-2: the staff UUID reaches the customer's table nowhere.
+	// The staff UUID reaches the customer's table nowhere.
 	if strings.Contains(a.Actor, staff.String()) || strings.Contains(a.Payload, staff.String()) {
 		t.Errorf("audit_log row %+v holds the staff UUID %s", a, staff)
 	}
@@ -510,7 +509,7 @@ func TestStaffAudit_TenantChangeWritesBothRowsInOneTx(t *testing.T) {
 	})
 }
 
-// AC-3. The control commit proves the tenant can take both rows, so the zero counts are the rollback.
+// The control commit proves the tenant can take both rows, so the zero counts are the rollback.
 func TestStaffAudit_TenantChangeRollsBackWhenTheStaffWriteFails(t *testing.T) {
 	f := requireFixture(t)
 	requireStaffTable(t, f)
@@ -545,7 +544,6 @@ func TestStaffAudit_TenantChangeRollsBackWhenTheStaffWriteFails(t *testing.T) {
 	}
 }
 
-// AC-4.
 func TestStaffAudit_TenantChangeRollsBackWhenTheCustomerWriteFails(t *testing.T) {
 	f := requireFixture(t)
 	requireStaffTable(t, f)
@@ -596,7 +594,7 @@ func TestStaffAudit_TenantChangeRollsBackWhenTheCustomerWriteFails(t *testing.T)
 	})
 }
 
-// AC-5. Tenant B inside a tenant-A tx is the cross-tenant refusal: neither tenant gets a row.
+// Tenant B inside a tenant-A tx is the cross-tenant refusal: neither tenant gets a row.
 func TestStaffAudit_TenantMustMatchTheTransaction(t *testing.T) {
 	f := requireFixture(t)
 	requireStaffTable(t, f)
@@ -652,7 +650,7 @@ func TestStaffAudit_TenantMustMatchTheTransaction(t *testing.T) {
 	}
 }
 
-// AC-6. TestStaffAudit_TenantChangeRollsBackWhenTheCustomerWriteFails proves the seam is the one RecordStaff calls.
+// TestStaffAudit_TenantChangeRollsBackWhenTheCustomerWriteFails proves the seam is the one RecordStaff calls.
 func TestStaffAudit_GlobalChangeWritesNoTenantRow(t *testing.T) {
 	f := requireFixture(t)
 	requireStaffTable(t, f)
@@ -693,7 +691,6 @@ func TestStaffAudit_GlobalChangeWritesNoTenantRow(t *testing.T) {
 	})
 }
 
-// AC-7.
 func TestStaffAudit_SupportRowReadsAsASComplySupport(t *testing.T) {
 	f := requireFixture(t)
 	requireStaffTable(t, f)
@@ -727,7 +724,7 @@ func TestStaffAudit_SupportRowReadsAsASComplySupport(t *testing.T) {
 	if !ok {
 		t.Fatal("the support row is not on the tenant's page")
 	}
-	// The literal, not audit.SupportActor: a renamed constant must fail here.
+	// The literal, not audit.SupportActor.
 	const want = "ASComply support"
 	if e.Actor != want || e.ActorName != want || e.ActorKind != "raw" || e.CompanyScope != audit.ScopeUnattributed {
 		t.Errorf("row = actor %q name %q kind %q scope %q, want %q %q raw unattributed",

@@ -33,6 +33,7 @@ type Props = {
 }
 
 const AUDIT_COLS = '170px minmax(180px,1fr) minmax(180px,1fr) minmax(200px,1.3fr) 22px'
+const STAFF_COLS = '170px minmax(200px,1fr) minmax(220px,1.3fr) minmax(180px,1fr) 22px'
 const MIN_WIDTH = 760
 
 const ROW: CSSProperties = {
@@ -96,7 +97,7 @@ function ChangeRows({ status, errorText, changes, onRetry, onOpen }: { status: A
   return (
     <>
       {changes.map((c) => (
-        <button key={c.id} type="button" className="ops-row" data-change-id={c.id} style={ROW} onClick={() => onOpen(c.id)}>
+        <button key={c.id} type="button" className="ops-row" data-change-id={c.id} style={{ ...ROW, gridTemplateColumns: STAFF_COLS }} onClick={() => onOpen(c.id)}>
           <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', ...ONE_LINE }}>
             {auditStamp(c.created_at)}
           </span>
@@ -227,7 +228,7 @@ export function Audit({ view, onView, status, errorText, rows, hasMore, moreBusy
 
       {view === 'staff' && (
         <div style={{ ...CARD, overflowX: 'auto' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: AUDIT_COLS, padding: '10px 16px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)', minWidth: MIN_WIDTH }}>
+          <div style={{ display: 'grid', gridTemplateColumns: STAFF_COLS, padding: '10px 16px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)', minWidth: MIN_WIDTH }}>
             <span className="label">Time</span>
             <span className="label">Staff member</span>
             <span className="label">Event</span>

@@ -78,8 +78,8 @@ function Console() {
   const [jobBusy, setJobBusy] = useState(false)
   const [auditView, setAuditView] = useState<AuditView>('tenant')
   const [auditFilters, setAuditFilters] = useState<AuditFilters>({})
-  const [auditMore, setAuditMore] = useState<{ key: string; events: StaffAuditRow[]; page: StaffAuditPage['page'] } | null>(null)
-  const [auditMoreKey, setAuditMoreKey] = useState<string | null>(null)
+  const [auditMore, setAuditMore] = useState<{ key: number; events: StaffAuditRow[]; page: StaffAuditPage['page'] } | null>(null)
+  const [auditMoreKey, setAuditMoreKey] = useState<number | null>(null)
   const [auditFocus, setAuditFocus] = useState<StaffChangeLink | null>(null)
   const focusSeenLoading = useRef(false)
   const [evidence, setEvidence] = useState<EvidenceInputs>({ tenant: '', entity: '', from: '', to: '' })
@@ -150,10 +150,12 @@ function Console() {
   })
   const auditTenantsRead = useAsync(fetchStaffTenants, { immediate: screen === 'audit', deps: [screen === 'audit'] })
   const auditKey = JSON.stringify([onAudit, aTenant, aEvent, aActor, aFrom, aTo])
-  const auditKeyNow = useRef(auditKey)
-  auditKeyNow.current = auditKey
-  useEffect(() => setAuditMore(null), [auditKey])
-  const moreHere = auditMore?.key === auditKey ? auditMore : null
+  // One token per first-page read or filter change; a "Load more" answer from an older token is dropped.
+  const auditGen = useRef({ n: 0, key: auditKey, data: auditRead.data })
+  if (auditGen.current.key !== auditKey || auditGen.current.data !== auditRead.data) auditGen.current = { n: auditGen.current.n + 1, key: auditKey, data: auditRead.data }
+  const auditToken = auditGen.current.n
+  useEffect(() => setAuditMore(null), [auditToken])
+  const moreHere = auditMore?.key === auditToken ? auditMore : null
   const auditRows = [...(auditRead.data?.events ?? []), ...(moreHere?.events ?? [])]
   const auditPage = moreHere?.page ?? auditRead.data?.page
   const auditStatus = auditRead.status === 'error' ? (auditRead.error?.status === 403 ? 'forbidden' : 'error') : auditRead.status === 'ready' || auditRead.status === 'empty' ? auditRead.status : 'loading'
@@ -183,15 +185,15 @@ function Console() {
     setAuditFilters((f) => Object.fromEntries(Object.entries({ ...f, ...patch }).filter(([, v]) => v)) as AuditFilters)
   const loadMoreAudit = async () => {
     const cursor = auditPage?.has_more ? auditPage.next_cursor : null
-    const sent = auditKey
+    const sent = auditToken
     if (!cursor || auditMoreKey === sent) return
     setAuditMoreKey(sent)
     try {
       const page = await fetchAuditEvents(auditFilters, cursor)
-      if (sent !== auditKeyNow.current) return
+      if (sent !== auditGen.current.n) return
       setAuditMore((m) => ({ key: sent, events: [...(m?.key === sent ? m.events : []), ...page.events], page: page.page }))
     } catch (e) {
-      if (sent !== auditKeyNow.current) return
+      if (sent !== auditGen.current.n) return
       const err = toApiError(e)
       if (err.status === 401) void expireSession()
       else showToast(err.message, '', 'red')
@@ -480,7 +482,7 @@ function Console() {
               errorText={auditRead.error?.message}
               rows={auditRows}
               hasMore={auditPage?.has_more ?? false}
-              moreBusy={auditMoreKey === auditKey}
+              moreBusy={auditMoreKey === auditToken}
               onMore={() => void loadMoreAudit()}
               filters={auditFilters}
               onFilters={patchAuditFilters}

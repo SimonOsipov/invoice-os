@@ -744,7 +744,7 @@ var (
 	auditSearchGrantsDown = []string{"created_at/SELECT", "tenant_id/SELECT"}
 )
 
-// Rolls back this migration and any newer staff_read_ one, newest first: SUPP-05's audit_log grants and policy must survive.
+// Rolls back this migration and any newer staff_read_ one, newest first: the audit_log grants and policy must survive.
 func TestRLS_StaffReadAuditLogDownAndUp(t *testing.T) {
 	requireHarness(t)
 	version := staffAuditSearchMigrationVersion(t)

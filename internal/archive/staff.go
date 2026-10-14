@@ -17,9 +17,6 @@ import (
 // ErrTenantNotFound: the path tenant is malformed or not in staff_read_tenants.
 var ErrTenantNotFound = errors.New("archive: tenant not found")
 
-// staffManifestActor is the manifest's generated_by for a staff download.
-var staffManifestActor = manifestActor{Name: audit.SupportActor, Kind: "raw"}
-
 // StaffEntity is one company of a tenant, as the staff list shows it.
 type StaffEntity struct {
 	ID   string  `json:"id"`
@@ -27,9 +24,9 @@ type StaffEntity struct {
 	TIN  *string `json:"tin"`
 }
 
-// withinStaffTenant checks the path tenant through staff_read_tenants in WithinStaffTx, then runs fn in that
+// withinStaffTenant checks the path tenant through staff_read_tenants in WithinStaffTx, then runs fn (with the parsed id) in that
 // tenant's READ ONLY transaction. A malformed id answers ErrTenantNotFound before any tenant transaction.
-func (s *Store) withinStaffTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
+func (s *Store) withinStaffTenant(ctx context.Context, tenantID string, fn func(pgx.Tx, uuid.UUID) error) error {
 	staff, err := db.StaffActor(ctx)
 	if err != nil {
 		return err
@@ -49,13 +46,13 @@ func (s *Store) withinStaffTenant(ctx context.Context, tenantID string, fn func(
 	if !found {
 		return ErrTenantNotFound
 	}
-	return db.WithinTenantTxOpts(ctx, s.pool, id.String(), bundleTxOptions, fn)
+	return db.WithinTenantTxOpts(ctx, s.pool, id.String(), bundleTxOptions, func(tx pgx.Tx) error { return fn(tx, id) })
 }
 
 // StaffEntities lists the tenant's companies by name, then id.
 func (s *Store) StaffEntities(ctx context.Context, tenantID string) ([]StaffEntity, error) {
 	out := []StaffEntity{}
-	err := s.withinStaffTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err := s.withinStaffTenant(ctx, tenantID, func(tx pgx.Tx, _ uuid.UUID) error {
 		rows, err := tx.Query(ctx, `SELECT id::text, name, tin FROM business_entities ORDER BY name, id`)
 		if err != nil {
 			return err
@@ -82,7 +79,7 @@ func (s *Store) StaffEntities(ctx context.Context, tenantID string) ([]StaffEnti
 // StaffPreview is Preview for the path tenant.
 func (s *Store) StaffPreview(ctx context.Context, tenantID string, r Request) (Preview, error) {
 	var p Preview
-	err := s.withinStaffTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err := s.withinStaffTenant(ctx, tenantID, func(tx pgx.Tx, _ uuid.UUID) error {
 		var err error
 		p, err = preview(ctx, tx, r, previewOpts{maxInvoices: s.maxInvoices})
 		return err
@@ -95,13 +92,13 @@ func (s *Store) StaffPreview(ctx context.Context, tenantID string, r Request) (P
 
 // StaffAssemble is Assemble for the path tenant, with generated_by "ASComply support".
 func (s *Store) StaffAssemble(ctx context.Context, tenantID string, r Request, w io.Writer, onStart func(filename string)) error {
-	return s.withinStaffTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	return s.withinStaffTenant(ctx, tenantID, func(tx pgx.Tx, id uuid.UUID) error {
 		return assemble(ctx, tx, r, w, assembleOpts{
-			tenantID:    uuid.MustParse(tenantID).String(), // withinStaffTenant parsed it: spell it canonically
+			tenantID:    id.String(),
+			subject:     audit.SupportActor,
 			maxInvoices: s.maxInvoices,
 			now:         time.Now(),
 			onStart:     onStart,
-			generatedBy: &staffManifestActor,
 		})
 	})
 }

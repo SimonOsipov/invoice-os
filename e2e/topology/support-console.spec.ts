@@ -983,8 +983,21 @@ async function auditLayout(page: Page): Promise<Read> {
   const more = mn.getByRole('button', { name: 'Load more' })
   if ((await more.count()) > 0) problems.push(...below(top.card, (await boxes(page, { more })).more, 'Load more below the card'))
 
+  await mn.getByRole('button', { name: 'STAFF CHANGES' }).click()
+  const changeRows = mn.locator('button[data-change-id]')
+  await expect(changeRows.first(), 'the staff changes have loaded').toBeVisible()
+  const staffHead = await childRects(kid(parent(changeRows.first()), 1))
+  for (const [i, row] of (await changeRows.all()).slice(0, ROW_CAP).entries()) {
+    const cells = await childRects(row)
+    problems.push(...pairwiseApart(cells, `staff row ${i} cells`))
+    for (const [n, c] of cells.entries()) {
+      if (!near(c.x, staffHead[n].x, 1)) problems.push(`staff row ${i} cell ${n + 1}: left ${c.x} vs header cell ${staffHead[n].x}`)
+    }
+  }
+  await mn.getByRole('button', { name: 'TENANT LOG' }).click()
+
   await noSidewaysScroll(page, 'Audit')
-  return { problems, rects: { top, chipRects, controls, headCells } }
+  return { problems, rects: { top, chipRects, controls, headCells, staffHead } }
 }
 
 const SCREENS: Screen[] = [
@@ -1891,7 +1904,7 @@ test('SUP-09 Audit: entry drawer, staff changes, the tenant link and an evidence
   await drawer.getByRole('button', { name: 'Close' }).click()
   await expect(drawer, 'Close closes the entry drawer').toBeHidden()
 
-  // Staff changes: the tenant-2222 cancel of the SUP-07 test.
+  // Staff changes: the tenant-2222 cancel of the Submissions test.
   const changes = (await liveStaffGet<{ changes: LiveChange[] }>(STAFF_CHANGES)).changes
   const change = changes.find((c) => c.event === 'submission.job.cancelled' && c.tenant_id === DEMO_2222_ID && (!cancel2222.reason || c.payload?.reason === cancel2222.reason))
   expect(change, 'the staff change log holds the tenant-2222 cancel').toBeDefined()

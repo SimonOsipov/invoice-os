@@ -156,6 +156,28 @@ describe('Console audit wiring', () => {
     expect(ids()).toEqual(['b1'])
   })
 
+  it('a late Load more page is dropped after the filters return to the same values', async () => {
+    let release: (p: StaffAuditPage) => void = () => {}
+    auditRead.mockResolvedValueOnce(page([row('a1')], 'CUR1'))
+    auditRead.mockReturnValueOnce(new Promise<StaffAuditPage>((r) => (release = r)))
+    auditRead.mockResolvedValueOnce(page([row('b1')], null))
+    auditRead.mockResolvedValueOnce(page([row('a1again')], 'CUR9'))
+    render(<App />)
+    await openAudit()
+    await waitFor(() => expect(ids()).toEqual(['a1']))
+    await screen.findByRole('option', { name: 'Yaba Freight' })
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await waitFor(() => expect(auditRead).toHaveBeenCalledTimes(2))
+    fireEvent.change(screen.getByLabelText('Tenant'), { target: { value: 'T2' } })
+    await waitFor(() => expect(ids()).toEqual(['b1']))
+    fireEvent.change(screen.getByLabelText('Tenant'), { target: { value: '' } })
+    await waitFor(() => expect(ids()).toEqual(['a1again']))
+    release(page([row('late')], null))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(ids()).toEqual(['a1again'])
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeTruthy()
+  })
+
   // The late success is also hidden by the display's key filter; only a late failure observes the staleness guard.
   it('a late failed Load more raises no toast and no session expiry after a filter change', async () => {
     let fail: (e: unknown) => void = () => {}

@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_KEY } from './auth'
@@ -53,5 +57,18 @@ describe('jobsApi', () => {
     const ago = (s: number) => new Date(now - s * 1000).toISOString()
     expect([45, 12 * 60, 5 * 3600, 3 * 86400].map((s) => jobAge(ago(s), now))).toEqual(['45s', '12m', '5h', '3d'])
     expect([59, 60, 3599, 3600, 86399, 86400].map((s) => jobAge(ago(s), now))).toEqual(['59s', '1m', '59m', '1h', '23h', '1d'])
+  })
+
+  // Source scan: a renamed Go json tag is invisible to every runtime test here (the fetch is mocked).
+  it('StaffJob keys equal the Go staffjobs.Job json tags', () => {
+    const go = stripComments(readFileSync(fileURLToPath(new URL('../../../internal/staffjobs/store.go', import.meta.url)), 'utf8'))
+    const goBody = /type\s+Job\s+struct\s*\{([^{}]*)\}/.exec(go)?.[1] ?? ''
+    const goKeys = [...goBody.matchAll(/`json:"([^",]+)[^"]*"/g)].map((m) => m[1])
+    const ts = stripComments(readFileSync(fileURLToPath(new URL('./jobsApi.ts', import.meta.url)), 'utf8'))
+    const tsBody = /export interface StaffJob\s*\{([^{}]*)\}/.exec(ts)?.[1] ?? ''
+    const tsKeys = [...tsBody.matchAll(/^\s*([a-z_]+)\??\s*:/gm)].map((m) => m[1])
+    expect(goKeys).toContain('max_attempts')
+    expect(goKeys.length).toBeGreaterThanOrEqual(13)
+    expect([...tsKeys].sort()).toEqual([...goKeys].sort())
   })
 })

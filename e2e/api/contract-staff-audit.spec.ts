@@ -75,7 +75,8 @@ test.describe('staff audit and evidence (API E2E, over the deployed gateway)', (
 
     const tin = freshTin()
     const name = `Zz SUPP-07 ${tin}`
-    entityA = { id: (await createEntity(customer, { name, tin })).id, name, tin }
+    // portfolio stores the TIN without its hyphen (internal/portfolio/tin.go)
+    entityA = { id: (await createEntity(customer, { name, tin })).id, name, tin: tin.replace('-', '') }
     entityB = (await createEntity(customerB, { name: `Zz SUPP-07 ${freshTin()}`, tin: freshTin() })).id
     for (const n of ['1', '2']) {
       const invoice = await createInvoice(customer, {
@@ -149,7 +150,9 @@ test.describe('staff audit and evidence (API E2E, over the deployed gateway)', (
 
     const entities = await staffGet(`${tenantPath(PERSONAS.A.tenantId)}/entities`)
     expect(entities.status, 'staff entities').toBe(200)
-    expect((entities.body as { entities: { id: string; name: string; tin: string | null }[] }).entities, 'the company list holds the spec entity').toContainEqual({ id: entityA.id, name: entityA.name, tin: entityA.tin })
+    const listed = (entities.body as { entities: { id: string; name: string; tin: string | null }[] }).entities.find((e) => e.id === entityA.id)
+    expect(listed, 'the company list holds the spec entity').toBeDefined()
+    expect(listed, 'the listed company matches the spec entity').toEqual({ id: entityA.id, name: entityA.name, tin: entityA.tin })
 
     const other = async (path: string, message: string) => {
       const res = await staffGet(path)

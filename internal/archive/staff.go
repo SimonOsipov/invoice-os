@@ -96,7 +96,7 @@ func (s *Store) StaffPreview(ctx context.Context, tenantID string, r Request) (P
 func (s *Store) StaffAssemble(ctx context.Context, tenantID string, r Request, w io.Writer, onStart func(filename string)) error {
 	return s.withinStaffTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		return assemble(ctx, tx, r, w, assembleOpts{
-			tenantID:    tenantID,
+			tenantID:    uuid.MustParse(tenantID).String(), // withinStaffTenant parsed it: spell it canonically
 			maxInvoices: s.maxInvoices,
 			now:         time.Now(),
 			onStart:     onStart,

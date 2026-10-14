@@ -260,6 +260,7 @@ describe('Console audit wiring', () => {
     await waitFor(() => expect(rows()).toHaveLength(2))
     fireEvent.click(screen.getByRole('button', { name: 'STAFF CHANGES' }))
   }
+  const settle = () => act(async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0)) })
   const changeRows = () => Array.from(document.querySelectorAll<HTMLElement>('[data-change-id]'))
 
   it('the staff view lists every change', async () => {
@@ -319,6 +320,7 @@ describe('Console audit wiring', () => {
     fireEvent.click(changeRows()[0])
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Open in tenant log' }))
     await waitFor(() => expect(ids()).toEqual(['x1']))
+    await settle()
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
@@ -337,6 +339,7 @@ describe('Console audit wiring', () => {
     await followLink([row('e1', { created_at: '2026-10-14T09:12:04Z' })], { event: 'invoice.created', created_at: '2026-10-14T09:12:03.123456Z' })
     await waitFor(() => expect(ids()).toEqual(['e1']))
     expect(rows()[0].children[0].textContent).toBe('2026-10-14 09:12:04 UTC')
+    await settle()
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
@@ -348,7 +351,7 @@ describe('Console audit wiring', () => {
       row('o3', { event: 'tenant.demo_set', created_at: '2026-10-14T23:30:00.6Z' }),
     ])
     await waitFor(() => expect(ids()).toEqual(['o1', 'o2', 'o3']))
-    await act(async () => {})
+    await settle()
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 

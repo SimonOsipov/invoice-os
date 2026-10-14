@@ -115,6 +115,7 @@ func TestStaffHealthRoute_ReturnsFleetCountsAndDepth(t *testing.T) {
 	seedDeadLettered(t, super, 3)
 	fleet := routeFleet()
 	rig := newHealthRig(t, &Store{Pool: app}, fleet)
+	wantRaw, _ := json.Marshal(fleet) // before serving: the handler shares the fake's slice
 
 	rec := rig.get(healthCaller{subject: houseMember(t, super), staff: true})
 	if rec.Code != http.StatusOK {
@@ -132,7 +133,6 @@ func TestStaffHealthRoute_ReturnsFleetCountsAndDepth(t *testing.T) {
 		t.Errorf("loader called %d times, want 1", got)
 	}
 	var gotFleet, wantFleet any
-	wantRaw, _ := json.Marshal(fleet)
 	if err := json.Unmarshal(body["fleet"], &gotFleet); err != nil {
 		t.Fatal(err)
 	}

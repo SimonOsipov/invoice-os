@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -120,5 +121,42 @@ func TestServicesDown_CountsEveryNonUpService(t *testing.T) {
 	}
 	if got := ServicesDown(mk("up", "up")); got != 0 {
 		t.Errorf("got %d, want 0", got)
+	}
+}
+
+// The reader and the gateway handler share one wire contract: the real handler's own status words and 503 must be accepted.
+func TestFleetReader_ReadsTheRealGatewayRollUp(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(up.Close)
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) }))
+	t.Cleanup(dead.Close)
+	parse := func(s *httptest.Server) *url.URL { u, _ := url.Parse(s.URL); return u }
+
+	for _, tc := range []struct {
+		name      string
+		upstreams map[string]*url.URL
+		status    string
+		down      []string
+	}{
+		{"all up", map[string]*url.URL{"alpha": parse(up)}, "ok", nil},
+		{"one down", map[string]*url.URL{"alpha": parse(up), "beta": parse(dead)}, "degraded", []string{"beta"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := httptest.NewServer(gateway.FleetHealthHandler(tc.upstreams, nil, nil))
+			t.Cleanup(gw.Close)
+			f, err := readServer(t, gw, 5*time.Second)
+			if err != nil {
+				t.Fatalf("read the real roll-up: %v", err)
+			}
+			var down []string
+			for _, s := range f.Services {
+				if s.Status != "up" {
+					down = append(down, s.Name)
+				}
+			}
+			if f.Status != tc.status || len(f.Services) != len(tc.upstreams)+1 || !slices.Equal(down, tc.down) || ServicesDown(f) != len(tc.down) {
+				t.Errorf("status=%q services=%d down=%v, want %q, %d services, down %v", f.Status, len(f.Services), down, tc.status, len(tc.upstreams)+1, tc.down)
+			}
+		})
 	}
 }

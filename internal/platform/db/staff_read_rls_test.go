@@ -167,6 +167,8 @@ func TestRLS_StaffReaderOwnsOnlyStaffReadFunctions(t *testing.T) {
 	}
 	rows.Close()
 
+	// Go byte order, as for namedSigs: the database collation sorts submission_job( after submission_jobs(.
+	sort.Strings(owned)
 	var namedSigs []string
 	for _, fn := range named {
 		namedSigs = append(namedSigs, fn.sig)
@@ -528,12 +530,14 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 		}
 	}
 
-	// Column sets per table: tenants is the staff_read_tenants migration's, the other three the tenant-detail migration's.
+	// Column sets per table: tenants is the staff_read_tenants migration's, the next three the tenant-detail migration's, the last two the submission-jobs migration's.
 	for table, cols := range map[string][]string{
-		"public.tenants":     {"created_at", "id", "kind", "name"},
-		"public.memberships": {"created_at", "display_name", "email", "role", "status", "tenant_id", "user_id"},
-		"public.invoices":    {"created_at", "id", "invoice_number", "status", "tenant_id"},
-		"public.audit_log":   {"created_at", "tenant_id"},
+		"public.tenants":                {"created_at", "id", "kind", "name"},
+		"public.memberships":            {"created_at", "display_name", "email", "role", "status", "tenant_id", "user_id"},
+		"public.invoices":               {"created_at", "id", "invoice_number", "status", "tenant_id"},
+		"public.audit_log":              {"created_at", "tenant_id"},
+		"public.submission_jobs":        {"attempts", "created_at", "id", "invoice_id", "last_error", "poll_ref", "state", "tenant_id", "updated_at"},
+		"public.invoice_status_history": {"actor", "changed_at", "from_status", "id", "invoice_id", "tenant_id", "to_status"},
 	} {
 		var want []string
 		for _, c := range cols {
@@ -626,6 +630,12 @@ var staffReaderSeeds = map[string]struct {
 	"invoices": {"tenant_id", func(t *testing.T) {
 		entity := seedEntity(t, h.tenantB)
 		seedInvoiceAt(t, h.tenantB, entity, uuid.NewString(), "ISO-"+uuid.NewString()[:8], "draft", time.Now().UTC())
+	}},
+	"submission_jobs": {"tenant_id", func(t *testing.T) {
+		seedJobAt(t, h.tenantB, tenantBInvoice(t), "queued", time.Now().UTC(), nil, nil)
+	}},
+	"invoice_status_history": {"tenant_id", func(t *testing.T) {
+		seedHistoryAt(t, h.tenantB, tenantBInvoice(t), strPtr("draft"), "validated", "staff-read-isolation", time.Now().UTC())
 	}},
 	// audit_log is append-only: the row stays.
 	"audit_log": {"tenant_id", func(t *testing.T) {
@@ -1409,5 +1419,475 @@ func TestRLS_StaffReaderReadsOnlyGrantedColumnsAndWritesNothingOnTheDetailTables
 		if err != nil && (!errors.As(err, &pgErr) || pgErr.Code != sqlstateInsufficientPrivilege) {
 			t.Errorf("staff_reader %s failed with %v, want SQLSTATE %s", c.what, err, sqlstateInsufficientPrivilege)
 		}
+	}
+}
+
+// SUPP-06-02: staff_read_submission_jobs, staff_read_submission_job and staff_read_invoice_status_history.
+
+const (
+	staffReadJobsSig    = "public.staff_read_submission_jobs(uuid, text, uuid)"
+	staffReadJobSig     = "public.staff_read_submission_job(uuid, uuid)"
+	staffReadHistorySig = "public.staff_read_invoice_status_history(uuid, uuid, uuid)"
+
+	// staffJobsLimit is the LIMIT in staff_read_submission_jobs; no Go constant carries it yet.
+	staffJobsLimit = 200
+)
+
+var staffJobSigs = []string{staffReadJobsSig, staffReadJobSig, staffReadHistorySig}
+
+// requireStaffJobFunctions fails by name while the submission-jobs migration is not applied.
+func requireStaffJobFunctions(t *testing.T) {
+	t.Helper()
+	for _, sig := range staffJobSigs {
+		var reg *string
+		if err := h.super.QueryRow(context.Background(), `SELECT to_regprocedure($1)::text`, sig).Scan(&reg); err != nil {
+			t.Fatalf("read to_regprocedure %s: %v", sig, err)
+		}
+		if reg == nil {
+			t.Fatalf("function %s not found: the staff_read_submission_jobs migration is not applied", sig)
+		}
+	}
+}
+
+// seedJobAt commits a submission job and deletes it on cleanup, before the invoice it references (RESTRICT).
+func seedJobAt(t *testing.T, tenant, invoice, state string, createdAt time.Time, pollRef, lastError *string) string {
+	t.Helper()
+	id := uuid.NewString()
+	if _, err := h.super.Exec(context.Background(),
+		`INSERT INTO submission_jobs (id, tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state, attempts, last_error, poll_ref, created_at)
+		 VALUES ($1, $2, $3, $4, 'mock', 'v1', $5, 3, $6, $7, $8)`,
+		id, tenant, invoice, "staff-read-"+id, state, lastError, pollRef, createdAt); err != nil {
+		t.Fatalf("seed a %s submission job: %v", state, err)
+	}
+	t.Cleanup(func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM submission_jobs WHERE id = $1`, id) })
+	return id
+}
+
+// seedHistoryAt commits a status-history row; the invoice's cleanup cascades it away.
+func seedHistoryAt(t *testing.T, tenant, invoice string, from *string, to, actor string, changedAt time.Time) {
+	t.Helper()
+	if _, err := h.super.Exec(context.Background(),
+		`INSERT INTO invoice_status_history (tenant_id, invoice_id, from_status, to_status, actor, changed_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+		tenant, invoice, from, to, actor, changedAt); err != nil {
+		t.Fatalf("seed a status-history row %s: %v", actor, err)
+	}
+}
+
+// seedJobInvoice commits an entity and an invoice at status under tenant and returns the invoice id.
+func seedJobInvoice(t *testing.T, tenant, number, status string) string {
+	t.Helper()
+	id := uuid.NewString()
+	seedInvoiceAt(t, tenant, seedEntity(t, tenant), id, number, status, time.Now().UTC().Truncate(time.Second))
+	return id
+}
+
+func tenantBInvoice(t *testing.T) string {
+	t.Helper()
+	return seedJobInvoice(t, h.tenantB, "ISO-"+uuid.NewString()[:8], "draft")
+}
+
+type staffJobRow struct {
+	id, tenant, tenantName, invoice, number, invoiceStatus, state string
+	attempts                                                      int32
+	lastError                                                     *string
+	acknowledged                                                  bool
+	createdAt, updatedAt                                          time.Time
+}
+
+func scanStaffJob(r pgx.CollectableRow) (staffJobRow, error) {
+	var x staffJobRow
+	// Scans by position: pins the result column order and count.
+	return x, r.Scan(&x.id, &x.tenant, &x.tenantName, &x.invoice, &x.number, &x.invoiceStatus,
+		&x.state, &x.attempts, &x.lastError, &x.acknowledged, &x.createdAt, &x.updatedAt)
+}
+
+func collectStaffJobs(t *testing.T, q rowQuerier, actor string, state, tenant any) []staffJobRow {
+	t.Helper()
+	rows, err := q.Query(context.Background(), `SELECT * FROM public.staff_read_submission_jobs($1::uuid, $2::text, $3::uuid)`, actor, state, tenant)
+	if err != nil {
+		t.Fatalf("staff_read_submission_jobs as invoice_app: %v", err)
+	}
+	got, err := pgx.CollectRows(rows, scanStaffJob)
+	if err != nil {
+		t.Fatalf("collect staff_read_submission_jobs rows: %v", err)
+	}
+	return got
+}
+
+func collectStaffJob(t *testing.T, q rowQuerier, actor, id string) []staffJobRow {
+	t.Helper()
+	rows, err := q.Query(context.Background(), `SELECT * FROM public.staff_read_submission_job($1::uuid, $2::uuid)`, actor, id)
+	if err != nil {
+		t.Fatalf("staff_read_submission_job as invoice_app: %v", err)
+	}
+	got, err := pgx.CollectRows(rows, scanStaffJob)
+	if err != nil {
+		t.Fatalf("collect staff_read_submission_job rows: %v", err)
+	}
+	return got
+}
+
+type staffStepRow struct {
+	from      *string
+	to, actor string
+	changedAt time.Time
+}
+
+func collectStaffSteps(t *testing.T, q rowQuerier, actor, tenant, invoice string) []staffStepRow {
+	t.Helper()
+	rows, err := q.Query(context.Background(), `SELECT * FROM public.staff_read_invoice_status_history($1::uuid, $2::uuid, $3::uuid)`, actor, tenant, invoice)
+	if err != nil {
+		t.Fatalf("staff_read_invoice_status_history as invoice_app: %v", err)
+	}
+	got, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (staffStepRow, error) {
+		var x staffStepRow
+		return x, r.Scan(&x.from, &x.to, &x.actor, &x.changedAt)
+	})
+	if err != nil {
+		t.Fatalf("collect staff_read_invoice_status_history rows: %v", err)
+	}
+	return got
+}
+
+// jobsFutureBase is newer than any leftover job row, so the 200 cap keeps the seeded rows.
+func jobsFutureBase() time.Time { return time.Now().UTC().Truncate(time.Second).Add(time.Hour) }
+
+func jobIDs(rows []staffJobRow) []string {
+	ids := []string{}
+	for _, r := range rows {
+		ids = append(ids, r.id)
+	}
+	return ids
+}
+
+func TestRLS_StaffReadSubmissionJobFunctionsExist(t *testing.T) {
+	requireHarness(t)
+	for _, sig := range staffJobSigs {
+		var reg *string
+		if err := h.super.QueryRow(context.Background(), `SELECT to_regprocedure($1)::text`, sig).Scan(&reg); err != nil {
+			t.Fatalf("read to_regprocedure %s: %v", sig, err)
+		}
+		if reg == nil {
+			t.Errorf("function %s not found, want it created by the staff_read_submission_jobs migration", sig)
+		}
+	}
+	// The generic catalog tests iterate every staff_read_ function: they must now see the three.
+	names := map[string]bool{}
+	for _, fn := range staffReadFunctions(t) {
+		names[fn.name] = true
+	}
+	for _, name := range []string{"staff_read_submission_jobs", "staff_read_submission_job", "staff_read_invoice_status_history"} {
+		if !names[name] {
+			t.Errorf("the staff_read_ catalog scan does not see %s", name)
+		}
+	}
+}
+
+func TestRLS_StaffReadSubmissionJobsListsEveryTenantNewestFirst(t *testing.T) {
+	requireHarness(t)
+	requireStaffJobFunctions(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	base := jobsFutureBase()
+	x, y := seedDetailTenant(t, "jobs list x"), seedDetailTenant(t, "jobs list y")
+	invX, invY := seedJobInvoice(t, x, "JOB-X", "failed"), seedJobInvoice(t, y, "JOB-Y", "queued")
+
+	oldX := seedJobAt(t, x, invX, "dead_lettered", base.Add(1*time.Second), nil, strPtr("adapter down"))
+	newY := seedJobAt(t, y, invY, "queued", base.Add(3*time.Second), strPtr("poll-ref-1"), nil)
+	midX := seedJobAt(t, x, invX, "submitting", base.Add(2*time.Second), nil, nil)
+
+	got := collectStaffJobs(t, h.app, staff, nil, nil)
+	if len(got) == 0 {
+		t.Fatal("staff_read_submission_jobs returned no rows to an active house member")
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].createdAt.After(got[i-1].createdAt) {
+			t.Fatalf("row %d (%s) is newer than row %d (%s), want created_at descending", i, got[i].createdAt, i-1, got[i-1].createdAt)
+		}
+	}
+	if want := []string{newY, midX, oldX}; !reflect.DeepEqual(jobIDs(got)[:len(want)], want) {
+		t.Fatalf("first rows = %v, want the seeded jobs of both tenants newest first %v", jobIDs(got), want)
+	}
+
+	byID := map[string]staffJobRow{}
+	for _, r := range got {
+		byID[r.id] = r
+	}
+	for _, c := range []struct {
+		id                                string
+		tenant, name, invoice, number, st string
+		state                             string
+		ack                               bool
+		lastError                         *string
+		at                                time.Time
+	}{
+		{oldX, x, "jobs list x", invX, "JOB-X", "failed", "dead_lettered", false, strPtr("adapter down"), base.Add(1 * time.Second)},
+		{newY, y, "jobs list y", invY, "JOB-Y", "queued", "queued", true, nil, base.Add(3 * time.Second)},
+		{midX, x, "jobs list x", invX, "JOB-X", "failed", "submitting", false, nil, base.Add(2 * time.Second)},
+	} {
+		r := byID[c.id]
+		if r.tenant != c.tenant || r.tenantName != c.name || r.invoice != c.invoice || r.number != c.number || r.invoiceStatus != c.st ||
+			r.state != c.state || r.attempts != 3 || r.acknowledged != c.ack || !r.createdAt.Equal(c.at) || r.updatedAt.IsZero() ||
+			!reflect.DeepEqual(r.lastError, c.lastError) {
+			t.Errorf("job %s = %+v, want tenant %s %q, invoice %s %q %s, state %s, attempts 3, acknowledged %v, last_error %v, created %s",
+				c.id, r, c.tenant, c.name, c.invoice, c.number, c.st, c.state, c.ack, c.lastError, c.at)
+		}
+	}
+}
+
+func TestRLS_StaffReadSubmissionJobsFiltersByStateAndTenant(t *testing.T) {
+	requireHarness(t)
+	requireStaffJobFunctions(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	base := jobsFutureBase()
+	x, y := seedDetailTenant(t, "jobs filter x"), seedDetailTenant(t, "jobs filter y")
+	invX, invY := seedJobInvoice(t, x, "FLT-X", "failed"), seedJobInvoice(t, y, "FLT-Y", "failed")
+
+	deadX := seedJobAt(t, x, invX, "dead_lettered", base.Add(1*time.Second), nil, nil)
+	queuedX := seedJobAt(t, x, invX, "queued", base.Add(2*time.Second), nil, nil)
+	deadY := seedJobAt(t, y, invY, "dead_lettered", base.Add(3*time.Second), nil, nil)
+	queuedY := seedJobAt(t, y, invY, "queued", base.Add(4*time.Second), nil, nil)
+
+	seeded := map[string]bool{deadX: true, queuedX: true, deadY: true, queuedY: true}
+	onlySeeded := func(rows []staffJobRow) []string {
+		ids := []string{}
+		for _, r := range rows {
+			if seeded[r.id] {
+				ids = append(ids, r.id)
+			}
+		}
+		return ids
+	}
+
+	byState := collectStaffJobs(t, h.app, staff, "dead_lettered", nil)
+	if want := []string{deadY, deadX}; !reflect.DeepEqual(onlySeeded(byState), want) {
+		t.Errorf("state filter dead_lettered returned seeded jobs %v, want %v", onlySeeded(byState), want)
+	}
+	for _, r := range byState {
+		if r.state != "dead_lettered" {
+			t.Errorf("state filter dead_lettered returned job %s in state %s", r.id, r.state)
+		}
+	}
+
+	byTenant := collectStaffJobs(t, h.app, staff, nil, x)
+	if want := []string{queuedX, deadX}; !reflect.DeepEqual(jobIDs(byTenant), want) {
+		t.Errorf("tenant filter X returned %v, want exactly %v", jobIDs(byTenant), want)
+	}
+
+	both := collectStaffJobs(t, h.app, staff, "dead_lettered", x)
+	if want := []string{deadX}; !reflect.DeepEqual(jobIDs(both), want) {
+		t.Errorf("state dead_lettered and tenant X returned %v, want exactly %v", jobIDs(both), want)
+	}
+
+	none := collectStaffJobs(t, h.app, staff, "accepted", x)
+	if len(none) != 0 {
+		t.Errorf("state accepted and tenant X returned %v, want no row", jobIDs(none))
+	}
+}
+
+func TestRLS_StaffReadSubmissionJobsCapsAtTwoHundred(t *testing.T) {
+	requireHarness(t)
+	requireStaffJobFunctions(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	base := jobsFutureBase()
+	z := seedDetailTenant(t, "jobs cap")
+	inv := seedJobInvoice(t, z, "CAP-1", "queued")
+
+	n := staffJobsLimit + 1
+	if _, err := h.super.Exec(context.Background(),
+		`INSERT INTO submission_jobs (tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state, created_at)
+		 SELECT $1::uuid, $2::uuid, 'staff-read-cap-' || g, 'mock', 'v1', 'queued', $3::timestamptz + g * interval '1 second'
+		   FROM generate_series(1, $4::int) g`, z, inv, base, n); err != nil {
+		t.Fatalf("seed %d jobs: %v", n, err)
+	}
+	t.Cleanup(func() {
+		_, _ = h.super.Exec(context.Background(), `DELETE FROM submission_jobs WHERE tenant_id = $1`, z)
+	})
+	var oldest, newest string
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT (SELECT id::text FROM submission_jobs WHERE tenant_id = $1 ORDER BY created_at LIMIT 1),
+		        (SELECT id::text FROM submission_jobs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1)`, z).Scan(&oldest, &newest); err != nil {
+		t.Fatalf("read the oldest and newest seeded job: %v", err)
+	}
+
+	for name, got := range map[string][]staffJobRow{
+		"no filter":     collectStaffJobs(t, h.app, staff, nil, nil),
+		"tenant filter": collectStaffJobs(t, h.app, staff, nil, z),
+	} {
+		if len(got) != staffJobsLimit {
+			t.Errorf("%s: %d jobs seeded in one tenant returned %d rows, want %d", name, n, len(got), staffJobsLimit)
+			continue
+		}
+		if got[0].id != newest {
+			t.Errorf("%s: first row = %s, want the newest job %s", name, got[0].id, newest)
+		}
+		for _, id := range jobIDs(got) {
+			if id == oldest {
+				t.Errorf("%s: the oldest job %s is in the capped result, want it cut", name, oldest)
+			}
+		}
+	}
+}
+
+func TestRLS_StaffReadSubmissionJobReturnsOneJobOrNoRow(t *testing.T) {
+	requireHarness(t)
+	requireStaffJobFunctions(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	base := jobsFutureBase()
+	x, y := seedDetailTenant(t, "job one x"), seedDetailTenant(t, "job one y")
+	invX, invY := seedJobInvoice(t, x, "ONE-X", "failed"), seedJobInvoice(t, y, "ONE-Y", "queued")
+	want := seedJobAt(t, x, invX, "dead_lettered", base, strPtr("poll-ref-2"), strPtr("gave up"))
+	other := seedJobAt(t, y, invY, "queued", base.Add(time.Second), nil, nil)
+
+	got := collectStaffJob(t, h.app, staff, want)
+	if len(got) != 1 {
+		t.Fatalf("staff_read_submission_job(%s) = %d rows, want exactly 1", want, len(got))
+	}
+	r := got[0]
+	if r.id != want || r.tenant != x || r.tenantName != "job one x" || r.invoice != invX || r.number != "ONE-X" || r.invoiceStatus != "failed" ||
+		r.state != "dead_lettered" || r.attempts != 3 || !r.acknowledged || !r.createdAt.Equal(base) ||
+		r.lastError == nil || *r.lastError != "gave up" {
+		t.Errorf("staff_read_submission_job = %+v, want job %s of tenant X (%s), dead_lettered, acknowledged, last_error %q", r, want, x, "gave up")
+	}
+	if n := len(collectStaffJob(t, h.app, staff, other)); n != 1 {
+		t.Errorf("control: the job of another tenant returned %d rows, want 1", n)
+	}
+	if n := len(collectStaffJob(t, h.app, staff, uuid.NewString())); n != 0 {
+		t.Errorf("a random job id returned %d rows, want 0", n)
+	}
+}
+
+func TestRLS_StaffReadInvoiceStatusHistoryReadsOneInvoiceOldestFirst(t *testing.T) {
+	requireHarness(t)
+	requireStaffJobFunctions(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	tenantX, tenantOther := seedDetailTenant(t, "history x"), seedDetailTenant(t, "history other")
+	invX, invY := seedJobInvoice(t, tenantX, "HIS-X", "failed"), seedJobInvoice(t, tenantX, "HIS-Y", "validated")
+
+	// Inserted newest first, so heap order is the reverse of the expected order.
+	seedHistoryAt(t, tenantX, invX, strPtr("queued"), "failed", "x-3", t0.Add(3*time.Minute))
+	seedHistoryAt(t, tenantX, invX, strPtr("draft"), "queued", "x-2", t0.Add(2*time.Minute))
+	seedHistoryAt(t, tenantX, invX, nil, "draft", "x-1", t0.Add(1*time.Minute))
+	seedHistoryAt(t, tenantX, invY, nil, "draft", "y-1", t0.Add(1*time.Minute))
+	seedHistoryAt(t, tenantX, invY, strPtr("draft"), "validated", "y-2", t0.Add(2*time.Minute))
+	// X's id filed under another tenant: a dangling cross-tenant row the tenant predicate must keep out.
+	seedHistoryAt(t, tenantOther, invX, nil, "draft", "other-1", t0.Add(4*time.Minute))
+
+	got := collectStaffSteps(t, h.app, staff, tenantX, invX)
+	want := []staffStepRow{
+		{nil, "draft", "x-1", t0.Add(1 * time.Minute)},
+		{strPtr("draft"), "queued", "x-2", t0.Add(2 * time.Minute)},
+		{strPtr("queued"), "failed", "x-3", t0.Add(3 * time.Minute)},
+	}
+	if len(got) == 0 {
+		t.Fatal("staff_read_invoice_status_history returned no rows to an active house member")
+	}
+	for i := range got {
+		got[i].changedAt = got[i].changedAt.UTC()
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("history of invoice X in tenant X =\n%+v\nwant X's three steps oldest first:\n%+v", got, want)
+	}
+
+	if other := collectStaffSteps(t, h.app, staff, tenantOther, invX); len(other) != 1 || other[0].actor != "other-1" {
+		t.Errorf("history of invoice X under the other tenant = %+v, want only its own row other-1", other)
+	}
+	if n := len(collectStaffSteps(t, h.app, staff, tenantX, uuid.NewString())); n != 0 {
+		t.Errorf("history of an unknown invoice returned %d rows, want 0", n)
+	}
+}
+
+type staffJobsFootprint struct{ functions, policies, columnGrants int }
+
+func readStaffJobsFootprint(t *testing.T) staffJobsFootprint {
+	t.Helper()
+	var f staffJobsFootprint
+	if err := h.super.QueryRow(context.Background(), `
+		SELECT (SELECT count(*) FROM unnest($1::text[]) s WHERE to_regprocedure(s) IS NOT NULL),
+		       (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND policyname = 'staff_read_lookup'
+		         AND tablename IN ('submission_jobs', 'invoice_status_history')),
+		       (SELECT count(*) FROM pg_attribute a, aclexplode(a.attacl) x
+		         WHERE a.attrelid IN ('public.submission_jobs'::regclass, 'public.invoice_status_history'::regclass)
+		           AND NOT a.attisdropped AND x.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'staff_reader'))`,
+		staffJobSigs).Scan(&f.functions, &f.policies, &f.columnGrants); err != nil {
+		t.Fatalf("read the staff_read_submission_jobs footprint: %v", err)
+	}
+	return f
+}
+
+// staffJobsMigrationVersion is the one migration that creates staff_read_submission_jobs.
+func staffJobsMigrationVersion(t *testing.T) int64 {
+	t.Helper()
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	if err != nil {
+		t.Fatalf("glob migrations.FS: %v", err)
+	}
+	for _, f := range files {
+		raw, err := fs.ReadFile(migrations.FS, f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		if bytes.Contains(raw, []byte("CREATE FUNCTION public.staff_read_submission_jobs")) {
+			v, err := strconv.ParseInt(strings.SplitN(f, "_", 2)[0], 10, 64)
+			if err != nil {
+				t.Fatalf("parse goose version out of %q: %v", f, err)
+			}
+			return v
+		}
+	}
+	t.Fatal("no migration holds CREATE FUNCTION public.staff_read_submission_jobs")
+	return 0
+}
+
+// Rolls back this migration and any newer staff_read_ one, newest first: the older footprints must survive.
+func TestRLS_StaffReadSubmissionJobsDownAndUp(t *testing.T) {
+	requireHarness(t)
+	version := staffJobsMigrationVersion(t)
+	var versions []int64
+	for _, v := range staffReadMigrationVersions(t) {
+		if v >= version {
+			versions = append(versions, v)
+		}
+	}
+	member := seedHouseMember(t, "reviewer", "active")
+	x := seedDetailTenant(t, "jobs down and up")
+	job := seedJobAt(t, x, seedJobInvoice(t, x, "DU-1", "queued"), "queued", jobsFutureBase(), nil, nil)
+
+	want := staffJobsFootprint{functions: 3, policies: 2, columnGrants: 16}
+	if f := readStaffJobsFootprint(t); f != want {
+		t.Fatalf("before the Down: footprint = %+v, want %+v", f, want)
+	}
+
+	reapply := rollBackMigrations(t, staffMigrationProvider(t), versions...)
+	if f := readStaffJobsFootprint(t); f != (staffJobsFootprint{}) {
+		t.Errorf("after the Down: footprint = %+v, want no function, no policy and no column grant", f)
+	}
+	if f := readStaffReadFootprint(t); !f.function || !f.policy || !f.isHouseMemberExecute || f.tenantColumnGrants != 4 {
+		t.Errorf("after the Down: SUPP-02 footprint = %+v, want staff_read_tenants, its policy, is_house_member EXECUTE and 4 tenants column grants", f)
+	}
+	if f, p, g := staffDetailFootprintOf(t); f != 3 || p != 3 || g != 14 {
+		t.Errorf("after the Down: SUPP-05 footprint = %d functions, %d policies, %d column grants, want 3, 3, 14", f, p, g)
+	}
+	for _, table := range []string{"public.submission_jobs", "public.invoice_status_history"} {
+		var app, reader bool
+		if err := h.super.QueryRow(context.Background(),
+			`SELECT has_table_privilege('invoice_app', $1, 'SELECT'), has_any_column_privilege('staff_reader', $1, 'SELECT')`, table).Scan(&app, &reader); err != nil {
+			t.Fatalf("read privileges on %s: %v", table, err)
+		}
+		if !app || reader {
+			t.Errorf("after the Down: %s invoice_app SELECT = %v, staff_reader column SELECT = %v, want true, false", table, app, reader)
+		}
+	}
+
+	reapply()
+	if f := readStaffJobsFootprint(t); f != want {
+		t.Errorf("after the Up: footprint = %+v, want %+v", f, want)
+	}
+	var found bool
+	for _, r := range collectStaffJobs(t, h.app, member, nil, x) {
+		found = found || r.id == job
+	}
+	if !found {
+		t.Error("after the Up: staff_read_submission_jobs does not list the seeded job")
 	}
 }

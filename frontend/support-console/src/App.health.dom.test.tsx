@@ -62,7 +62,7 @@ afterEach(() => {
 })
 
 const openHealth = async () => {
-  fireEvent.click(screen.getByRole('button', { name: /^System health/ }))
+  fireEvent.click(screen.getByRole('button', { name: /^System health$/ }))
   await screen.findByRole('heading', { level: 1, name: 'System health' })
 }
 

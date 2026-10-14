@@ -592,9 +592,9 @@ describe('System health markup', () => {
     const grids = withClass(parse(healthWith({})), 'ops-health-grid')
     expect(grids).toHaveLength(1)
     expect(style(grids[0])['grid-template-columns']).toBe('repeat(3, minmax(0, 1fr))')
-    const css = readFileSync(new URL('./styles/support.css', import.meta.url), 'utf8')
-    const rule = (width: number) => css.match(new RegExp(`@media \\(max-width: ${width}px\\) \\{([\\s\\S]*?)\\n\\}`))![1]
-    const cols = (width: number) => rule(width).match(/\.ops-health-grid\s*\{\s*grid-template-columns:\s*([^;]*);/)?.[1]
+    const css = readFileSync(new URL('./styles/support.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rule = (width: number) => css.match(new RegExp(`@media \\(max-width: ${width}px\\) \\{([\\s\\S]*?)\\n\\}`, 'i'))![1]
+    const cols = (width: number) => rule(width).match(/\.ops-health-grid\s*\{\s*grid-template-columns:\s*([^;]*);/i)?.[1]
     expect(cols(1024)).toBe('repeat(2, minmax(0, 1fr)) !important')
     expect(cols(768)).toBe('repeat(2, minmax(0, 1fr)) !important')
     expect(cols(480)).toBe('minmax(0, 1fr) !important')

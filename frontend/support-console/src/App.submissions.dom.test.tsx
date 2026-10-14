@@ -236,6 +236,21 @@ describe('Console job drawer', () => {
     expect(screen.queryByLabelText('Reason')).toBeNull()
   })
 
+  it('after a successful action the drawer shows the returned job and the list stays, before any re-read resolves', async () => {
+    redrive.mockResolvedValue(detail(job('a', { state: 'queued', attempts: 0, invoice_status: 'queued' })))
+    const reason = await openRedrive()
+    fireEvent.change(reason, { target: { value: 'APP back up' } })
+    jobRead.mockImplementation(() => new Promise<JobDetail>(() => {}))
+    jobsRead.mockImplementation(() => new Promise<StaffJob[]>(() => {}))
+    fireEvent.click(confirmBtn())
+    await screen.findByText('Job re-driven')
+    const d = screen.getByRole('dialog')
+    expect(within(d).queryByRole('button', { name: /Re-drive/ })).toBeNull()
+    expect(within(d).queryByRole('button', { name: /Cancel job/ })).not.toBeNull()
+    expect(screen.queryByText('Loading jobs…')).toBeNull()
+    expect(rows().length).toBe(2)
+  })
+
   it('a refused action shows the server message', async () => {
     cancel.mockRejectedValue(new ApiError('http', 'only a queued job can be cancelled', 409))
     const d = await openDrawer('b')

@@ -34,7 +34,7 @@ import {
   type RuleVersion,
   type RulesInForce,
 } from './rulesApi'
-import { cancelJob, fetchJob, fetchJobs, redriveJob, type JobDetail, type JobState } from './jobsApi'
+import { cancelJob, fetchJob, fetchJobs, redriveJob, type JobDetail, type JobState, type StaffJob } from './jobsApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, appBase, expireSession, landingBase } from './auth'
@@ -118,7 +118,11 @@ function Console() {
   const onSubmissions = screen === 'submissions'
   const jobsRead = useAsync(() => fetchJobs(jobState, jobTenant || undefined), { immediate: onSubmissions, deps: [onSubmissions, jobState, jobTenant], isEmpty: () => false })
   const jobTenantsRead = useAsync(fetchStaffTenants, { immediate: onSubmissions, deps: [onSubmissions] })
-  const jobsStatus = jobsRead.status === 'error' ? (jobsRead.error?.status === 403 ? 'forbidden' : 'error') : jobsRead.status === 'ready' ? 'ready' : 'loading'
+  const jobsKey = `${jobState}|${jobTenant}`
+  const lastJobs = useRef<{ key: string; jobs: StaffJob[] } | null>(null)
+  if (jobsRead.data) lastJobs.current = { key: jobsKey, jobs: jobsRead.data }
+  const keptJobs = jobsRead.status === 'loading' && lastJobs.current?.key === jobsKey ? lastJobs.current.jobs : null
+  const jobsStatus = jobsRead.status === 'error' ? (jobsRead.error?.status === 403 ? 'forbidden' : 'error') : jobsRead.status === 'ready' || keptJobs ? 'ready' : 'loading'
   const openJob = drawer?.type === 'job' ? drawer.id : null
   const jobRead = useAsync(() => fetchJob(openJob ?? ''), { immediate: openJob !== null, deps: [openJob], isEmpty: () => false })
   const lastJob = useRef<JobDetail | null>(null)
@@ -145,7 +149,8 @@ function Console() {
     jobInFlight.current = true
     setJobBusy(true)
     try {
-      await (action === 'redrive' ? redriveJob : cancelJob)(openJob, reason)
+      const acted = await (action === 'redrive' ? redriveJob : cancelJob)(openJob, reason)
+      lastJob.current = acted
       setConfirmJob(null)
       showToast(action === 'redrive' ? 'Job re-driven' : 'Job cancelled', 'AUDITED')
       jobsRead.run()
@@ -347,7 +352,7 @@ function Console() {
             <Submissions
               status={jobsStatus}
               errorText={jobsRead.error?.message}
-              jobs={jobsRead.data ?? []}
+              jobs={jobsRead.data ?? keptJobs ?? []}
               state={jobState}
               onState={setJobState}
               tenant={jobTenant}

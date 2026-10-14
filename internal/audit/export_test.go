@@ -1,5 +1,12 @@
 package audit
 
+import (
+	"context"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+)
+
 // FilterSQLForTest exposes the pure predicate builder to package audit_test. AC #3 is a
 // claim about generated SQL text, which no behavioural test can make. This file compiles
 // only under `go test`, so the production surface is unchanged.
@@ -17,4 +24,12 @@ func FacetSQLForTest(f Filter, subjects, companies, invoices []string) ([]string
 		return nil, err
 	}
 	return []string{event.sql, actor.sql, company.sql}, nil
+}
+
+// SetRecordTenantForTest swaps the customer-write seam and restores it on cleanup.
+func SetRecordTenantForTest(t testing.TB, fn func(context.Context, pgx.Tx, string, string, any) error) {
+	t.Helper()
+	orig := recordTenant
+	recordTenant = fn
+	t.Cleanup(func() { recordTenant = orig })
 }

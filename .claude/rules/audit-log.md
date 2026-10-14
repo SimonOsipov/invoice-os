@@ -7,7 +7,13 @@ paths:
 # Audit log
 
 - Write `audit_log` rows only through `audit.Record`.
-- Write a staff action only through `audit.RecordStaff`. Never write a staff action to `audit_log`.
+- Write a staff change only through `audit.RecordStaff`, with one `audit.StaffEvent`.
+- Set `TenantID` on a staff change that touches one tenant. Call `RecordStaff` in that tenant's `WithinTenantTx`, from a method with an `scCoreAllowlist` entry. It also writes that tenant's `audit_log` row with the actor `audit.SupportActor`.
+- Put in the payload of a tenant staff change only what the customer may read. Never a staff name, an email or an internal note.
+- Leave `TenantID` zero on a global staff change. Call `RecordStaff` in `WithinStaffTx`. It writes no `audit_log` row.
+- `RecordStaff` refuses a `TenantID` that differs from the transaction's tenant with `ErrStaffTenantMismatch`.
+- Never write a staff member's id to `audit_log`.
+- Link a staff row to its `audit_log` row by `tenant_id`, `event` and `created_at`.
 - Never set `entity_id` or `invoice_id` by hand. A trigger fills `entity_id`. A generated column fills `invoice_id`.
 - Attribute an event by its event name, never by which payload key is present.
 - Order a page by `created_at DESC, id DESC`.

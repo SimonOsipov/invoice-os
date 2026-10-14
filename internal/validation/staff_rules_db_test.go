@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -41,13 +42,15 @@ type auditRow struct {
 	Event   string
 	Version string
 	Payload map[string]any
+	Tenant  *string
+	Subject *string
 }
 
 // auditRowsOf reads the actor's staff_audit_log rows oldest first, as the owner.
 func auditRowsOf(t *testing.T, super *pgxpool.Pool, actor string) []auditRow {
 	t.Helper()
 	rows, err := super.Query(context.Background(),
-		`SELECT event, rule_set_version_id::text, payload::text FROM staff_audit_log WHERE actor = $1 ORDER BY id`, actor)
+		`SELECT event, rule_set_version_id::text, payload::text, tenant_id::text, subject_id::text FROM staff_audit_log WHERE actor = $1 ORDER BY id`, actor)
 	if err != nil {
 		t.Fatalf("read staff_audit_log: %v", err)
 	}
@@ -56,7 +59,7 @@ func auditRowsOf(t *testing.T, super *pgxpool.Pool, actor string) []auditRow {
 	for rows.Next() {
 		var r auditRow
 		var payload string
-		if err := rows.Scan(&r.Event, &r.Version, &payload); err != nil {
+		if err := rows.Scan(&r.Event, &r.Version, &payload, &r.Tenant, &r.Subject); err != nil {
 			t.Fatal(err)
 		}
 		if err := json.Unmarshal([]byte(payload), &r.Payload); err != nil {
@@ -65,6 +68,26 @@ func auditRowsOf(t *testing.T, super *pgxpool.Pool, actor string) []auditRow {
 		out = append(out, r)
 	}
 	return out
+}
+
+// assertGlobalStaffRows fails unless every row is global (NULL tenant and subject) and no audit_log row
+// in any tenant shares an event and created_at with the actor's staff rows.
+func assertGlobalStaffRows(t *testing.T, super *pgxpool.Pool, actor string, rows []auditRow) {
+	t.Helper()
+	for i, r := range rows {
+		if r.Tenant != nil || r.Subject != nil {
+			t.Errorf("row %d tenant_id = %v, subject_id = %v, want NULL, NULL", i, r.Tenant, r.Subject)
+		}
+	}
+	var echoes int
+	if err := super.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log a JOIN staff_audit_log s ON a.event = s.event AND a.created_at = s.created_at WHERE s.actor = $1`,
+		actor).Scan(&echoes); err != nil {
+		t.Fatalf("count audit_log echoes: %v", err)
+	}
+	if echoes != 0 {
+		t.Errorf("%d audit_log rows share an event and created_at with the staff rows, want 0", echoes)
+	}
 }
 
 func versionInForce(t *testing.T, super *pgxpool.Pool) (id string, version int) {
@@ -210,6 +233,7 @@ func TestStaffRules_SwitchWritesTheAuditRowInTheSameTx(t *testing.T) {
 	if r.Payload["key"] != functionKey || r.Payload["enabled"] != false || r.Payload["version"] != float64(ver) || r.Payload["reason"] != "kill it" || len(r.Payload) != 4 {
 		t.Errorf("payload = %v", r.Payload)
 	}
+	assertGlobalStaffRows(t, super, actor, rows)
 }
 
 func TestStaffRules_AuditFailureRollsTheFlipBack(t *testing.T) {
@@ -219,7 +243,7 @@ func TestStaffRules_AuditFailureRollsTheFlipBack(t *testing.T) {
 	orig := recordStaff
 	t.Cleanup(func() { recordStaff = orig })
 	boom := errors.New("audit down")
-	recordStaff = func(context.Context, pgx.Tx, uuid.UUID, uuid.UUID, string, any) error { return boom }
+	recordStaff = func(context.Context, pgx.Tx, audit.StaffEvent) error { return boom }
 
 	_, err := NewStore(app).SwitchRule(staffCtx(t, actor), functionKey, false, "r")
 	if !errors.Is(err, boom) {
@@ -261,7 +285,7 @@ func TestStaffRules_RouteFlipWritesTheAuditRow(t *testing.T) {
 
 	orig := recordStaff
 	t.Cleanup(func() { recordStaff = orig })
-	recordStaff = func(context.Context, pgx.Tx, uuid.UUID, uuid.UUID, string, any) error {
+	recordStaff = func(context.Context, pgx.Tx, audit.StaffEvent) error {
 		return errors.New("audit down")
 	}
 	if rec := patch(`{"enabled":true,"reason":"again"}`); rec.Code != 500 {

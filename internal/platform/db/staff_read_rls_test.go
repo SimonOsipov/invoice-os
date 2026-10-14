@@ -546,6 +546,14 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 			t.Errorf("staff_reader policies on %s = %+v, want exactly staff_read_lookup FOR SELECT TO staff_reader USING (true)", table, ps)
 		}
 	}
+
+	wantAudit := []string{"actor/SELECT", "created_at/SELECT", "event/SELECT", "id/SELECT", "payload/SELECT", "rule_set_version_id/SELECT", "subject_id/SELECT", "tenant_id/SELECT"}
+	if got := sortedCopy(grants["public.staff_audit_log"]); !reflect.DeepEqual(got, wantAudit) {
+		t.Errorf("staff_reader grants on staff_audit_log = %v, want exactly %v", got, wantAudit)
+	}
+	if ps := policies["public.staff_audit_log"]; len(ps) != 0 {
+		t.Errorf("staff_audit_log has staff_reader policies %v, want none", ps)
+	}
 }
 
 func TestRLS_StaffReaderReadsEveryTenantAndWritesNone(t *testing.T) {

@@ -3,6 +3,7 @@ import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { Rules } from './components/Rules'
 import { Tenants } from './components/Tenants'
+import { Health } from './components/Health'
 import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
 import { KillConfirm } from './components/KillConfirm'
@@ -31,6 +32,7 @@ import {
   type RuleVersion,
   type RulesInForce,
 } from './rulesApi'
+import { fetchStaffHealth } from './healthApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, appBase, expireSession, landingBase } from './auth'
@@ -107,7 +109,10 @@ function Console() {
     try { return await fetchStaffTenant(id) } catch (e) { const error = toApiError(e); failedTenants.current.set(error, id); throw error }
   }, { immediate: onTenants && tenantId !== null, deps: [onTenants, tenantId], isEmpty: () => false })
   const tenantsStatus = tenantsRead.status === 'error' ? (tenantsRead.error?.status === 403 ? 'forbidden' : 'error') : tenantsRead.status === 'ready' || tenantsRead.status === 'empty' ? tenantsRead.status : 'loading'
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead].some((r) => r.error?.status === 401)
+  const onHealth = screen === 'health'
+  const healthRead = useAsync(fetchStaffHealth, { immediate: onHealth, deps: [onHealth], isEmpty: () => false })
+  const healthStatus = healthRead.status === 'error' ? (healthRead.error?.status === 403 ? 'forbidden' : 'error') : healthRead.status === 'ready' ? 'ready' : 'loading'
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, healthRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -308,6 +313,7 @@ function Console() {
               onRetryDetail={tenantRead.run}
             />
           )}
+          {screen === 'health' && <Health status={healthStatus} errorText={healthRead.error?.message} data={healthRead.data ?? null} onRetry={healthRead.run} />}
         </div>
       </main>
 

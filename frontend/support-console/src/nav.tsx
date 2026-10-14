@@ -13,6 +13,11 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'Tenants',
     glyph: <Icon paths={['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z', 'M22 21v-2a4 4 0 0 0-3-3.87']} size={17} />,
   },
+  {
+    key: 'health',
+    label: 'System health',
+    glyph: <Icon paths={['M22 12h-4l-3 9L9 3l-3 9H2']} size={17} />,
+  },
 ]
 
 export const CRUMB_BY_SCREEN: Record<Screen, string> = {

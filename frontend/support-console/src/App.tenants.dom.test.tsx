@@ -289,6 +289,25 @@ describe('Console tenants wiring', () => {
     expect(screen.getByRole('button', { name: 'ALL' }).getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('View jobs replaces an earlier state and tenant filter on Submissions', async () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Submissions/ }))
+    await screen.findByRole('heading', { level: 1, name: 'Submissions ops' })
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Yaba Freight' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'FAILED' }))
+    fireEvent.change(screen.getByLabelText('Tenant'), { target: { value: 'Y' } })
+    await waitFor(() => expect(jobsRead).toHaveBeenLastCalledWith('failed', 'Y'))
+    await openTenants()
+    await waitRow('X')
+    fireEvent.click(rowOf('X'))
+    fireEvent.click(await screen.findByRole('button', { name: 'View jobs' }))
+    await screen.findByRole('heading', { level: 1, name: 'Submissions ops' })
+    await waitFor(() => expect(jobsRead).toHaveBeenLastCalledWith(undefined, 'X'))
+    expect((screen.getByLabelText('Tenant') as HTMLSelectElement).value).toBe('X')
+    expect(screen.getByRole('button', { name: 'ALL' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'FAILED' }).getAttribute('aria-pressed')).toBe('false')
+  })
+
   it('an empty list shows its line, no rows, no search field and the detail prompt', async () => {
     list.mockResolvedValueOnce([])
     render(<App />)

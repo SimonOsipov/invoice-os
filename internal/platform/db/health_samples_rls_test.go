@@ -7,7 +7,9 @@ import (
 	"errors"
 	"math/rand/v2"
 	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -547,6 +549,231 @@ func TestRLS_HealthSamplesDownAndUp(t *testing.T) {
 		t.Fatalf("after the Up: staff_read_submission_job_counts: %v", err)
 	}
 	healthDecodeCounts(t, "after the Up: staff_read_submission_job_counts", raw)
+}
+
+// A tenant GUC must not scope the sampler's count, and must still scope a direct read of submission_jobs.
+func TestRLS_SubmissionJobStateCountsIgnoreTheTenantSettingWhileDirectReadsStayScoped(t *testing.T) {
+	requireHarness(t)
+	requireHealthFunctions(t)
+	tx := healthRepeatableReadTx(t)
+	healthSeedJobTx(t, tx, h.tenantA, "queued")
+	healthSeedJobTx(t, tx, h.tenantB, "dead_lettered")
+	total := mustCount(t, tx, `SELECT count(*) FROM submission_jobs`)
+	ownA := mustCount(t, tx, `SELECT count(*) FROM submission_jobs WHERE tenant_id = $1`, h.tenantA)
+	if ownA < 1 || total <= ownA {
+		t.Fatalf("control: tenant A holds %d of %d jobs, want some and fewer than all", ownA, total)
+	}
+	want := healthGroupByState(t, tx)
+
+	txExec(t, tx, `SELECT set_config('app.current_tenant', $1, true)`, h.tenantA)
+	ruleDraftAsApp(t, tx)
+	got := healthCallCounts(t, tx, "submission_job_state_counts() with tenant A set", `SELECT public.submission_job_state_counts()`)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("with tenant A set, submission_job_state_counts() = %v, want every tenant's counts %v", got, want)
+	}
+	if n := mustCount(t, tx, `SELECT count(*) FROM submission_jobs`); n != ownA {
+		t.Errorf("invoice_app with tenant A set reads %d submission_jobs rows, want only tenant A's %d", n, ownA)
+	}
+}
+
+func TestRLS_SubmissionJobStateCountsOfNoJobsIsAnEmptyObject(t *testing.T) {
+	requireHarness(t)
+	requireHealthFunctions(t)
+	tx := healthRepeatableReadTx(t)
+	healthSeedJobTx(t, tx, h.tenantA, "queued")
+	if n := mustCount(t, tx, `SELECT count(*) FROM submission_jobs`); n == 0 {
+		t.Fatal("control: no job to delete")
+	}
+	txExec(t, tx, `DELETE FROM app_exchange`)
+	txExec(t, tx, `DELETE FROM submission_jobs`)
+	txExec(t, tx, `SELECT set_config('app.current_tenant', '', true)`)
+
+	ruleDraftAsApp(t, tx)
+	var raw []byte
+	if err := tx.QueryRow(context.Background(), `SELECT public.submission_job_state_counts()::text`).Scan(&raw); err != nil {
+		t.Fatalf("submission_job_state_counts() over no jobs: %v", err)
+	}
+	if got := strings.ReplaceAll(string(raw), " ", ""); got != "{}" {
+		t.Errorf("submission_job_state_counts() over no jobs = %s, want {}", raw)
+	}
+}
+
+func TestRLS_HealthSamplesTwoWritersKeepOneRow(t *testing.T) {
+	requireHarness(t)
+	requireHealthSamples(t)
+	ctx := context.Background()
+	slots := healthSlots(t, 12)
+	const writers = 8
+	const insert = `INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ($1, 'ok', $2, '{}'::jsonb) ON CONFLICT (taken_at) DO NOTHING`
+
+	for _, slot := range slots {
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		affected := make([]int64, writers)
+		errs := make([]error, writers)
+		for w := 0; w < writers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				tag, err := h.app.Exec(ctx, insert, slot, w)
+				affected[w], errs[w] = tag.RowsAffected(), err
+			}()
+		}
+		close(start)
+		wg.Wait()
+		var sum int64
+		for w := range affected {
+			if errs[w] != nil {
+				t.Fatalf("writer %d: %v", w, errs[w])
+			}
+			sum += affected[w]
+		}
+		if sum != 1 {
+			t.Errorf("slot %s: %d writers stored %d rows between them, want 1", slot.Format(time.RFC3339), writers, sum)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM public.health_samples WHERE taken_at = $1`, slot); n != 1 {
+			t.Errorf("slot %s holds %d rows, want 1", slot.Format(time.RFC3339), n)
+		}
+	}
+
+	// A writer without ON CONFLICT is refused by the key itself.
+	_, err := h.app.Exec(ctx, `INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ($1, 'ok', 0, '{}'::jsonb)`, slots[0])
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		t.Errorf("plain duplicate insert: err = %v, want SQLSTATE 23505", err)
+	}
+}
+
+func TestRLS_HealthSamplesRefuseANullColumn(t *testing.T) {
+	requireHarness(t)
+	requireHealthSamples(t)
+	tx := revokeProbeTx(t)
+	slots := healthSlots(t, 2)
+	for _, c := range []struct{ column, sql string }{
+		{"fleet_status", `INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ($1, NULL, NULL, '{}'::jsonb)`},
+		{"job_counts", `INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ($1, 'ok', 0, NULL)`},
+	} {
+		slot := slots[0]
+		if c.column == "job_counts" {
+			slot = slots[1]
+		}
+		if _, err := tx.Exec(context.Background(), `SAVEPOINT refusal`); err != nil {
+			t.Fatalf("savepoint: %v", err)
+		}
+		_, err := tx.Exec(context.Background(), c.sql, slot)
+		if _, rerr := tx.Exec(context.Background(), `ROLLBACK TO SAVEPOINT refusal`); rerr != nil {
+			t.Fatalf("rollback to savepoint: %v", rerr)
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23502" || pgErr.ColumnName != c.column {
+			t.Errorf("NULL %s: err = %v, want SQLSTATE 23502 on column %s", c.column, err, c.column)
+		}
+	}
+}
+
+// Retention needs DELETE with a taken_at predicate; nothing else may read or rewrite a sample.
+func TestRLS_InvoiceAppCanTrimHealthSamplesButNotReadOrRewriteThem(t *testing.T) {
+	requireHarness(t)
+	requireHealthSamples(t)
+	ctx := context.Background()
+	s := healthSlots(t, 3)
+	for _, slot := range s {
+		healthInsertSample(t, slot, "ok", 0, `{}`)
+	}
+
+	for _, q := range []struct{ what, sql string }{
+		{"UPDATE", `UPDATE public.health_samples SET services_down = 9 WHERE taken_at = $1`},
+		{"UPDATE of the key", `UPDATE public.health_samples SET taken_at = taken_at + interval '1 minute' WHERE taken_at = $1`},
+		{"DELETE by a value column", `DELETE FROM public.health_samples WHERE taken_at = $1 AND fleet_status = 'ok'`},
+		{"INSERT RETURNING a value column", `INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ($1::timestamptz + interval '1 second', 'ok', 0, '{}'::jsonb) RETURNING fleet_status`},
+		{"TRUNCATE", `TRUNCATE public.health_samples`},
+	} {
+		var err error
+		if strings.HasPrefix(q.sql, "TRUNCATE") {
+			_, err = h.app.Exec(ctx, q.sql)
+		} else {
+			_, err = h.app.Exec(ctx, q.sql, s[0])
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Errorf("invoice_app %s: err = %v, want SQLSTATE 42501", q.what, err)
+		}
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM public.health_samples WHERE taken_at = ANY($1)`, s); n != 3 {
+		t.Fatalf("after the refused statements %d of 3 test samples remain, want 3", n)
+	}
+
+	tag, err := h.app.Exec(ctx, `DELETE FROM public.health_samples WHERE taken_at >= $1 AND taken_at < $2`, s[0], s[2])
+	if err != nil {
+		t.Fatalf("invoice_app retention DELETE: %v", err)
+	}
+	if tag.RowsAffected() != 2 {
+		t.Errorf("retention DELETE affected %d rows, want 2 (the two older test slots)", tag.RowsAffected())
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM public.health_samples WHERE taken_at = $1`, s[2]); n != 1 {
+		t.Errorf("the newest test slot was deleted too: %d rows remain, want 1", n)
+	}
+}
+
+// Only the owner and invoice_app may execute the three functions: no other role through a stray grant.
+func TestRLS_HealthFunctionsAreExecutableByTheOwnerAndInvoiceAppOnly(t *testing.T) {
+	requireHarness(t)
+	requireHealthFunctions(t)
+	for _, sig := range healthFunctionSigs {
+		got := collectStrings(t,
+			`SELECT coalesce(r.rolname, 'PUBLIC') FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+			   LEFT JOIN pg_roles r ON r.oid = a.grantee
+			  WHERE p.oid = $1::regprocedure AND a.privilege_type = 'EXECUTE' ORDER BY 1`, sig)
+		var owner string
+		if err := h.super.QueryRow(context.Background(), `SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE oid = $1::regprocedure`, sig).Scan(&owner); err != nil {
+			t.Fatalf("read the owner of %s: %v", sig, err)
+		}
+		want := []string{"invoice_app", owner}
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: EXECUTE grantees = %v, want %v", sig, got, want)
+		}
+	}
+}
+
+func TestRLS_StaffReadHealthSamplesRefusesANonStaffActorEvenWithASample(t *testing.T) {
+	requireHarness(t)
+	requireHealthSamples(t)
+	requireHealthFunctions(t)
+	house := adoptHouseTenant(t)
+	tx := revokeProbeTx(t)
+	slot := healthSlots(t, 1)[0]
+	txExec(t, tx, `INSERT INTO public.health_samples (taken_at, fleet_status, services_down, job_counts) VALUES ($1, 'ok', 0, '{}'::jsonb)`, slot)
+	active := seedMembershipTx(t, tx, house, "reviewer", "active")
+	actors := []struct {
+		name string
+		id   any
+	}{
+		{"customer_active_member", seedMembershipTx(t, tx, h.tenantA, "admin", "active")},
+		{"suspended_house_member", seedMembershipTx(t, tx, house, "reviewer", "suspended")},
+		{"invited_house_member", seedMembershipTx(t, tx, house, "reviewer", "invited")},
+		{"stranger", uuid.NewString()},
+		{"null_actor", nil},
+	}
+	ruleDraftAsApp(t, tx)
+
+	const call = `SELECT * FROM public.staff_read_health_samples($1::uuid, '2000-01-01T00:00Z'::timestamptz)`
+	n, err := ruleDraftTry(t, tx, call, active)
+	if err != nil || n == 0 {
+		t.Fatalf("control: an active house member read %d rows, err = %v, want the seeded sample", n, err)
+	}
+	for _, a := range actors {
+		n, err := ruleDraftTry(t, tx, call, a.id)
+		if n != 0 {
+			t.Errorf("%s: refused call returned %d rows", a.name, n)
+		}
+		requireNotStaffRefusal(t, "staff_read_health_samples as "+a.name, err, "staff_read_health_samples")
+	}
+	for _, a := range actors {
+		_, err := ruleDraftTry(t, tx, `SELECT public.staff_read_submission_job_counts($1::uuid)`, a.id)
+		requireNotStaffRefusal(t, "staff_read_submission_job_counts as "+a.name, err, "staff_read_submission_job_counts")
+	}
 }
 
 func containsAll(have []string, want ...string) bool {

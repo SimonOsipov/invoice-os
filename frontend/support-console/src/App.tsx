@@ -9,7 +9,7 @@ import { KillConfirm } from './components/KillConfirm'
 import { PublishModal } from './components/PublishModal'
 import { DraftTestModal } from './components/DraftTestModal'
 import { Toast } from './components/Toast'
-import { gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
+import { type ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import {
   addDraftRule,
   diffRules,
@@ -101,10 +101,10 @@ function Console() {
     r.status !== 'error' ? 'Loading…' : r.error?.status === 403 ? 'Your account is not ASComply staff.' : (r.error?.message ?? 'Unavailable')
   const onTenants = screen === 'tenants'
   const tenantsRead = useAsync(fetchStaffTenants, { immediate: onTenants, deps: [onTenants] })
-  const failedTenantId = useRef<string | null>(null)
+  const failedTenants = useRef(new WeakMap<ApiError, string>())
   const tenantRead = useAsync(async () => {
     const id = tenantId ?? ''
-    try { return await fetchStaffTenant(id) } catch (e) { failedTenantId.current = id; throw e }
+    try { return await fetchStaffTenant(id) } catch (e) { const error = toApiError(e); failedTenants.current.set(error, id); throw error }
   }, { immediate: onTenants && tenantId !== null, deps: [onTenants, tenantId], isEmpty: () => false })
   const tenantsStatus = tenantsRead.status === 'error' ? (tenantsRead.error?.status === 403 ? 'forbidden' : 'error') : tenantsRead.status === 'ready' || tenantsRead.status === 'empty' ? tenantsRead.status : 'loading'
   const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead].some((r) => r.error?.status === 401)
@@ -302,7 +302,7 @@ function Console() {
               selectedId={tenantId}
               onSelect={setTenantId}
               onRetry={tenantsRead.run}
-              detailStatus={detailStatus(tenantRead, tenantId, failedTenantId.current)}
+              detailStatus={detailStatus(tenantRead, tenantId, (tenantRead.error && failedTenants.current.get(tenantRead.error)) || null)}
               detail={tenantRead.data}
               detailErrorText={tenantRead.error?.message}
               onRetryDetail={tenantRead.run}

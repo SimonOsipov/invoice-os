@@ -242,6 +242,23 @@ describe('Console tenants wiring', () => {
     expect(rowOf('Y').getAttribute('aria-pressed')).toBe('false')
   })
 
+  it('a late failure for an abandoned tenant never hides the current tenant error', async () => {
+    let failX!: (e: Error) => void
+    one.mockImplementationOnce(() => new Promise((_, rej) => (failX = rej)))
+    render(<App />)
+    await openTenants()
+    await waitRow('X')
+    fireEvent.click(rowOf('X'))
+    one.mockRejectedValueOnce(new ApiError('http', 'y down', 500))
+    fireEvent.click(rowOf('Y'))
+    await screen.findByText('y down')
+    failX(new ApiError('http', 'x down', 500))
+    await new Promise((r) => setTimeout(r, 20))
+    fireEvent.change(screen.getByLabelText('Search tenants'), { target: { value: 'a' } })
+    expect(screen.getByText('y down')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+  })
+
   it('a tenant with no members and no invoices says so, offers no action and no View jobs', async () => {
     one.mockResolvedValueOnce({ tenant: X, members: [], invoices: [] })
     render(<App />)

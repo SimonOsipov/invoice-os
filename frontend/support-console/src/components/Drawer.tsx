@@ -59,3 +59,19 @@ export function Drawer({ header, footer, width = 560, onClose, children }: Props
     </>
   )
 }
+
+// The 2-column hairline-separated metadata grid a drawer opens with.
+export function MetaGrid({ items }: { items: { label: string; value: ReactNode; mono?: boolean }[] }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: 'var(--line-1)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: 22 }}>
+      {items.map((it) => (
+        <div key={it.label} style={{ background: 'var(--bg-2)', padding: '12px 14px', minWidth: 0 }}>
+          <div className="label">{it.label}</div>
+          <div className={it.mono === false ? undefined : 'mono'} style={{ fontSize: 12.5, fontWeight: 600, marginTop: 4, overflowWrap: 'anywhere' }}>
+            {it.value}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}

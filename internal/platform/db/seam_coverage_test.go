@@ -713,6 +713,8 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/extraction/anchor_store.go"},                                          // the learned-rule read, same shape as store.go: no request path reaches it
 	{file: "internal/importer/backfill.go"},                                                // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
 	{file: "internal/invoice/revalidate.go"},                                               // operator CLI and the reconciliation re-checks (version and custom-rule) only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/staffjobs/store.go", fn: "Redrive"},                                   // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
+	{file: "internal/staffjobs/store.go", fn: "Cancel"},                                    // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
 	{file: "internal/tenancy/store.go", fn: "Me"},                                          // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
 	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"},                          // the caller has no membership yet; the seam would refuse before the closure
 	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                           // the token is the only credential and names the invite; there is no caller to gate
@@ -1029,6 +1031,10 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/memberships/{user_id}":                     {verdict: scCovered},
 	"GET /v1/staff/tenants":                               {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/tenants/{id}":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/jobs":                                  {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/jobs/{id}":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"POST /v1/staff/jobs/{id}/redrive":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
+	"POST /v1/staff/jobs/{id}/cancel":                     {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
 	"GET /v1/staff/rules":                                 {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"GET /v1/staff/rule-versions":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PATCH /v1/staff/rules/{key}":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},

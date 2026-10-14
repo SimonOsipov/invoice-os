@@ -39,6 +39,7 @@ export function BrandMark({ size = 26 }: { size?: number }) {
 
 // Shared glyphs.
 export const SEARCH_ICON = <Icon paths={['M21 21l-4.35-4.35', 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z']} size={16} />
+export const CHEVRON_RIGHT_ICON = <Icon paths={['m9 18 6-6-6-6']} size={14} />
 export const CLOSE_ICON = <Icon paths={['M18 6 6 18M6 6l12 12']} size={15} />
 export const CHECK_ICON = <Icon paths={['M20 6 9 17l-5-5']} size={16} />
 export const ALERT_ICON = (
@@ -49,6 +50,9 @@ export const GLOBE_ICON = (
     paths={['M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z', 'M3.6 9h16.8M3.6 15h16.8', 'M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z']}
     size={16}
   />
+)
+export const REDRIVE_ICON = (
+  <Icon paths={['M21 2v6h-6', 'M3 12a9 9 0 0 1 15-6.7L21 8', 'M3 22v-6h6', 'M21 12a9 9 0 0 1-15 6.7L3 16']} size={15} />
 )
 export const PUBLISH_ICON = <Icon paths={['M12 19V5', 'm5 12 7-7 7 7']} size={15} />
 export const KILL_ICON = <Icon paths={['M18.36 6.64a9 9 0 1 1-12.73 0', 'M12 2v10']} size={15} />

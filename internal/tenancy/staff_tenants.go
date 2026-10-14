@@ -3,17 +3,13 @@ package tenancy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -32,13 +28,9 @@ type StaffTenant struct {
 // StaffTenants lists every tenant with its counts through the staff_read_ functions, which refuse a non-house actor.
 // ceiling: unpaged list; page it above ~1k tenants
 func (s *Store) StaffTenants(ctx context.Context) ([]StaffTenant, error) {
-	id, ok := auth.StaffFromContext(ctx)
-	if !ok {
-		return nil, db.ErrNotStaff
-	}
-	actor, err := uuid.Parse(id.Subject)
+	actor, err := db.StaffActor(ctx)
 	if err != nil {
-		return nil, db.ErrNotStaff
+		return nil, err
 	}
 	var out []StaffTenant
 	err = db.WithinStaffTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -48,27 +40,15 @@ func (s *Store) StaffTenants(ctx context.Context) ([]StaffTenant, error) {
 			LEFT JOIN public.staff_read_tenant_activity($1) a ON a.tenant_id = t.id
 			ORDER BY a.last_activity_at DESC NULLS LAST, t.created_at DESC, t.id`, actor, db.DemoTenants)
 		if err != nil {
-			return staffReadError("tenancy: staff list tenants", err)
+			return db.StaffReadError("tenancy: staff list tenants", err)
 		}
 		out, err = pgx.CollectRows(rows, pgx.RowToStructByPos[StaffTenant])
-		return staffReadError("tenancy: staff list tenants", err)
+		return db.StaffReadError("tenancy: staff list tenants", err)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
-}
-
-// staffReadError maps only the function's own refusal to ErrNotStaff; a lost grant is also 42501 and stays a server fault.
-func staffReadError(op string, err error) error {
-	if err == nil {
-		return nil
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "42501" && strings.HasSuffix(pgErr.Message, ": actor is not staff") {
-		return db.ErrNotStaff
-	}
-	return fmt.Errorf("%s: %w", op, err)
 }
 
 // StaffTenantsHandler repeats no staff check: auth.RequireStaff runs before it.
@@ -106,13 +86,9 @@ type StaffTenantDetail struct {
 // StaffTenant reads one tenant, its members and its 10 newest invoices. READ COMMITTED: the header counts can trail the lists by one write.
 func (s *Store) StaffTenant(ctx context.Context, id string) (StaffTenantDetail, error) {
 	var out StaffTenantDetail
-	sid, ok := auth.StaffFromContext(ctx)
-	if !ok {
-		return out, db.ErrNotStaff
-	}
-	actor, err := uuid.Parse(sid.Subject)
+	actor, err := db.StaffActor(ctx)
 	if err != nil {
-		return out, db.ErrNotStaff
+		return out, err
 	}
 	tenant, err := uuid.Parse(id)
 	if err != nil {
@@ -125,11 +101,11 @@ func (s *Store) StaffTenant(ctx context.Context, id string) (StaffTenantDetail, 
 			LEFT JOIN public.staff_read_tenant_activity($1) a ON a.tenant_id = t.id
 			WHERE t.id = $3`, actor, db.DemoTenants, tenant)
 		if err != nil {
-			return staffReadError("tenancy: staff read tenant", err)
+			return db.StaffReadError("tenancy: staff read tenant", err)
 		}
 		header, err := pgx.CollectRows(rows, pgx.RowToStructByPos[StaffTenant])
 		if err != nil {
-			return staffReadError("tenancy: staff read tenant", err)
+			return db.StaffReadError("tenancy: staff read tenant", err)
 		}
 		if len(header) == 0 {
 			return ErrTenantNotFound
@@ -139,19 +115,19 @@ func (s *Store) StaffTenant(ctx context.Context, id string) (StaffTenantDetail, 
 		rows, err = tx.Query(ctx, `SELECT user_id::text, role, status, display_name, email
 			FROM public.staff_read_tenant_members($1, $2)`, actor, tenant)
 		if err != nil {
-			return staffReadError("tenancy: staff read tenant", err)
+			return db.StaffReadError("tenancy: staff read tenant", err)
 		}
 		if out.Members, err = pgx.CollectRows(rows, pgx.RowToStructByPos[Membership]); err != nil {
-			return staffReadError("tenancy: staff read tenant", err)
+			return db.StaffReadError("tenancy: staff read tenant", err)
 		}
 
 		rows, err = tx.Query(ctx, `SELECT id::text, invoice_number, status, created_at
 			FROM public.staff_read_tenant_invoices($1, $2)`, actor, tenant)
 		if err != nil {
-			return staffReadError("tenancy: staff read tenant", err)
+			return db.StaffReadError("tenancy: staff read tenant", err)
 		}
 		out.Invoices, err = pgx.CollectRows(rows, pgx.RowToStructByPos[StaffInvoice])
-		return staffReadError("tenancy: staff read tenant", err)
+		return db.StaffReadError("tenancy: staff read tenant", err)
 	})
 	if err != nil {
 		return StaffTenantDetail{}, err

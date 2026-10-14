@@ -111,6 +111,7 @@ const TENANTS_PROPS: Parameters<typeof Tenants>[0] = {
   detailStatus: 'ready',
   detail: DETAIL,
   onRetryDetail: noop,
+  onViewJobs: noop,
 }
 const tenantsWith = (over: Partial<Parameters<typeof Tenants>[0]>) => renderToStaticMarkup(createElement(Tenants, { ...TENANTS_PROPS, ...over }))
 
@@ -435,11 +436,10 @@ describe('v2 screens', () => {
     expect(tenantsWith({ status: 'ready', tenants: [T1], query: 'zzz' })).toContain('No tenant matches.')
   })
 
-  it('the tenant detail offers no action', () => {
-    const html = SCREENS.tenants
-    expect(html).not.toContain('View jobs')
-    const detail = html.slice(html.indexOf('<h2'))
-    expect(detail).not.toContain('<button')
+  it('the tenant detail offers View jobs as its only action', () => {
+    const detail = SCREENS.tenants.slice(SCREENS.tenants.indexOf('<h2'))
+    expect(detail.match(/<button\b/g)).toHaveLength(1)
+    expect(detail).toMatch(/<button\b[^>]*>View jobs<\/button>/)
   })
 
   it('the tenants grid holds two columns', () => {

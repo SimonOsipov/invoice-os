@@ -1,9 +1,9 @@
-// The deployed v2 Support Console. Its two screens, Rules and Tenants, read real data; Rules also switches real rules.
+// The deployed v2 Support Console. Its three screens, Submissions, Rules and Tenants, read real data; Rules also switches real rules.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { randomUUID } from 'node:crypto'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
-import { HOUSE_TENANT_ID, provisionStaffAccount, rawFetch, signInSession, type StaffAccount } from '../api/client'
+import { getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, type AuditEvent, type StaffAccount } from '../api/client'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -454,6 +454,8 @@ type Screen = {
   rowUp: number
   reads: (page: Page, testInfo: TestInfo) => Promise<void>
   layout: (page: Page) => Promise<Read>
+  /** Runs last: it may leave the screen. */
+  after?: (page: Page) => Promise<void>
 }
 
 async function gridKids(page: Page, grid: string, what: string): Promise<Rect[]> {
@@ -530,7 +532,6 @@ async function tenantsReads(page: Page, testInfo: TestInfo): Promise<void> {
   await expect(kid(card, 2)).toContainText((await staffAccount()).email)
   await expect(kid(card, 3)).toContainText(detail.invoices.length === 0 ? 'No invoices yet.' : detail.invoices[0].invoice_number)
 
-  await expect(mn.getByRole('button', { name: 'View jobs' }), 'View jobs is gone').toHaveCount(0)
   await expectStyles(parent(demoTag(house)), 'DEMO badge', { radius: '4px' })
   await attachShot(page, testInfo, 'tenants')
 
@@ -586,9 +587,12 @@ async function tenantsLayout(page: Page): Promise<Read> {
   )
 
   const card = mn.locator('.ops-tenants-grid > div:nth-child(2)')
-  const parts = await boxes(page, { card, header: kid(card, 1), members: kid(card, 2), invoices: kid(card, 3) })
+  const parts = await boxes(page, { card, header: kid(card, 1), text: kid(kid(card, 1), 2), viewJobs: kid(card, 1).getByRole('button', { name: 'View jobs' }), members: kid(card, 2), invoices: kid(card, 3) })
   problems.push(
     ...within(parts.card, parts.header, 'detail header in the detail card'),
+    ...within(parts.header, parts.viewJobs, 'View jobs in the detail header'),
+    ...leftOf(parts.text, parts.viewJobs, 'detail text block / View jobs'),
+    ...apart(parts.text, parts.viewJobs, 'detail text block / View jobs'),
     ...within(parts.card, parts.members, 'Members in the detail card'),
     ...within(parts.card, parts.invoices, 'Recent invoices in the detail card'),
     ...below(parts.members, parts.invoices, 'Recent invoices under Members'),
@@ -619,7 +623,115 @@ async function tenantsLayout(page: Page): Promise<Read> {
   return { problems, rects: { kids, rowParts, parts } }
 }
 
+const STAFF_JOBS = '/api/submission/v1/staff/jobs'
+// StaffJob in frontend/support-console/src/jobsApi.ts.
+type LiveJob = { id: string; tenant_name: string; invoice_number: string }
+
+// Rects of an element's children, in one read.
+function childRects(loc: Locator): Promise<Rect[]> {
+  return loc.evaluate((el) =>
+    [...el.children].map((c) => {
+      const r = c.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    }),
+  )
+}
+
+const jobRows = (page: Page): Locator => mainOf(page).locator('button[data-job-id]')
+// The tenant (1) and last-error (5) cells of a row; D27.
+const TRUNCATING_CELLS = [1, 5]
+const TRUNCATION = { 'white-space': 'nowrap', overflow: 'hidden', 'text-overflow': 'ellipsis' }
+const ROW_CAP = 20
+
+async function submissionsReads(page: Page, testInfo: TestInfo): Promise<void> {
+  const rows = jobRows(page)
+  await expect(rows.first(), 'the jobs have loaded').toBeVisible()
+  const live = (await liveStaffGet<{ jobs: LiveJob[] }>(STAFF_JOBS)).jobs
+
+  const first = (await rows.all()).slice(0, ROW_CAP)
+  for (const [i, row] of first.entries()) {
+    const id = await row.getAttribute('data-job-id')
+    const job = live.find((j) => j.id === id)
+    expect(job, `row ${i} is in the live read`).toBeDefined()
+    await expect(kid(row, 1), `row ${i} tenant`).toHaveText(job!.tenant_name)
+    await expect(kid(row, 2), `row ${i} invoice number`).toHaveText(job!.invoice_number)
+  }
+
+  const bad = await rows.evaluateAll(
+    (els, args) =>
+      els.flatMap((row, i) =>
+        args.cells.flatMap((n) => {
+          const cs = getComputedStyle(row.children[n - 1])
+          return Object.entries(args.want)
+            .filter(([k, v]) => cs.getPropertyValue(k) !== v)
+            .map(([k, v]) => `row ${i} cell ${n}: ${k} is ${cs.getPropertyValue(k)}, want ${v}`)
+        }),
+      ),
+    { cells: TRUNCATING_CELLS, want: TRUNCATION },
+  )
+  expect(bad, 'every tenant and last-error cell truncates').toEqual([])
+  await attachShot(page, testInfo, 'submissions')
+}
+
+async function submissionsLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const filterBar = parent(mn.getByRole('button', { name: 'ALL', exact: true }))
+  const chips = filterBar.locator('button.ops-chip')
+  const card = mn.locator('.ops-screen-pad > div:last-child')
+  const head = kid(card, 1)
+  const top = await boxes(page, { titleBlock: parent(mn.getByRole('heading', { level: 1, name: 'Submissions ops' })), filterBar, select: filterBar.locator('select'), card, head })
+  const problems = [
+    ...below(top.titleBlock, top.filterBar, 'filter bar below the header row'),
+    ...below(top.filterBar, top.card, 'table card below the filter bar'),
+    ...within(top.filterBar, top.select, 'tenant select in the filter bar'),
+  ]
+
+  const chipRects = await rectsOf(page, chips, 'state chip')
+  problems.push(...sameTops(chipRects, 'state chips'), ...pairwiseApart([...chipRects, top.select], 'state chips and tenant select'))
+  for (const [i, c] of chipRects.entries()) problems.push(...within(top.filterBar, c, `chip ${i} in the filter bar`))
+
+  const headCells = await childRects(head)
+  const rows = (await jobRows(page).all()).slice(0, ROW_CAP)
+  expect(rows.length, 'job rows').toBeGreaterThan(0)
+  for (const [i, row] of rows.entries()) {
+    const box = await row.boundingBox()
+    if (!box) throw new Error(`job row ${i} has no box`)
+    const cells = await childRects(row)
+    problems.push(...within(top.card, box, `row ${i} in the card`), ...pairwiseApart(cells, `row ${i} cells`))
+    for (const [n, c] of cells.entries()) {
+      problems.push(...within(box, c, `row ${i} cell ${n + 1} in its row`))
+      if (!near(c.x, headCells[n].x, 1)) problems.push(`row ${i} cell ${n + 1}: left ${c.x} vs header cell ${headCells[n].x}`)
+    }
+  }
+
+  await noSidewaysScroll(page, 'Submissions')
+  return { problems, rects: { top, chipRects, headCells } }
+}
+
+// The house tenant is selected: View jobs opens Submissions with that tenant preset and no state filter.
+async function viewJobsLands(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const request = page.waitForRequest((r) => r.url().includes('/staff/jobs') && r.url().includes(`tenant=${HOUSE_TENANT_ID}`))
+  await mn.getByRole('button', { name: 'View jobs' }).click()
+  await request
+  await expect(mn.getByRole('heading', { level: 1, name: 'Submissions ops' })).toBeVisible()
+  await expect(mn.locator('select[aria-label="Tenant"]'), 'the tenant select shows the house tenant').toHaveValue(HOUSE_TENANT_ID)
+  await expect(mn.getByRole('button', { name: 'ALL', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(mn.getByText('Loading jobs…')).toHaveCount(0)
+  const live = (await liveStaffGet<{ jobs: LiveJob[] }>(`${STAFF_JOBS}?tenant=${HOUSE_TENANT_ID}`)).jobs
+  await expect(jobRows(page), 'the list is the live house-tenant read').toHaveCount(live.length)
+  if (live.length === 0) await expect(mn.getByText('No jobs in this state.')).toBeVisible()
+  else await expect(jobRows(page).filter({ hasNotText: HOUSE_NAME }), "only the house tenant's jobs are listed").toHaveCount(0)
+}
+
 const SCREENS: Screen[] = [
+  {
+    nav: 'Submissions',
+    h1: 'Submissions ops',
+    rowUp: 1,
+    reads: submissionsReads,
+    layout: submissionsLayout,
+  },
   {
     nav: 'Rules',
     h1: 'Rules admin',
@@ -654,6 +766,7 @@ const SCREENS: Screen[] = [
     rowUp: 1,
     reads: tenantsReads,
     layout: tenantsLayout,
+    after: viewJobsLands,
   },
 ]
 
@@ -669,6 +782,7 @@ for (const s of SCREENS) {
 
     await atWidths(page, `SUP-03 ${s.nav} title block`, () => titleBlockRead(page, s.h1))
     await atWidths(page, `SUP-03 ${s.nav} layout`, () => s.layout(page))
+    await s.after?.(page)
 
     noErrors(errors, `SUP-03 ${s.nav}`)
   })
@@ -1307,4 +1421,134 @@ test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
   })
 
   noErrors(errors, 'SUP-08 code-list panel and drawer layout')
+})
+
+// SUP-07: acts on seeded tenant-2222 dead-letter rows (D22) and cancels back to a terminal state in the same spec.
+const SEEDED_DEAD = ['DEMO-2026-7004', 'DEMO-2026-7006']
+// audit.SupportActor, internal/audit/audit.go.
+const SUPPORT_ACTOR = 'ASComply support'
+
+async function cancelWhenQueued(token: string, id: string, reason: string): Promise<{ status: number; body: unknown }> {
+  let res: { status: number; body: unknown } = { status: 0, body: undefined }
+  await expect
+    .poll(
+      async () => {
+        res = await rawFetch(`${STAFF_JOBS}/${id}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: { reason } })
+        return res.status
+      },
+      { message: 'cancel answers something other than 409', timeout: 60_000, intervals: [500, 1000, 2000] },
+    )
+    .not.toBe(409)
+  return res
+}
+
+// The tenant's member-visible audit row that carries `reason`.
+async function auditRowFor(event: string, reason: string): Promise<AuditEvent> {
+  const token = await login(PERSONAS.B)
+  let row: AuditEvent | undefined
+  await expect
+    .poll(
+      async () => {
+        row = (await getAuditLog(token, { event: [event] })).events.find((e) => (e.payload as { reason?: string } | null)?.reason === reason)
+        return row !== undefined
+      },
+      { message: `the tenant audit log holds ${event} with the reason`, timeout: 15_000 },
+    )
+    .toBe(true)
+  return row!
+}
+
+test('SUP-07 Submissions: re-drive a seeded dead-letter job, then cancel it', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = await startSupport(page)
+  const mn = mainOf(page)
+  const api = await staffToken()
+  const redriveReason = `e2e re-drive ${randomUUID()}`
+  const cancelReason = `e2e cancel ${randomUUID()}`
+  let jobId: string | null = null
+  let cancelled = false
+  let redriveSent = false
+
+  try {
+    await openScreen(page, 'Submissions', 'Submissions ops')
+    await mn.getByRole('button', { name: 'DEAD-LETTER', exact: true }).click()
+    const listed = page.waitForResponse((r) => r.url().includes('/staff/jobs?') && r.url().includes('state=dead_lettered') && r.url().includes(`tenant=${DEMO_2222_ID}`))
+    await mn.locator('select[aria-label="Tenant"]').selectOption(DEMO_2222_ID)
+    await listed
+    await expect(mn.getByRole('button', { name: 'DEAD-LETTER', exact: true })).toHaveAttribute('aria-pressed', 'true')
+
+    const seededRow = (n: string): Locator => jobRows(page).filter({ hasText: n })
+    await expect.poll(async () => (await seededRow(SEEDED_DEAD[0]).count()) + (await seededRow(SEEDED_DEAD[1]).count()), { message: 'a seeded dead-letter job is listed' }).toBeGreaterThan(0)
+    const number = (await seededRow(SEEDED_DEAD[0]).count()) > 0 ? SEEDED_DEAD[0] : SEEDED_DEAD[1]
+    const row = seededRow(number)
+    jobId = await row.getAttribute('data-job-id')
+    expect(jobId, 'the row names its job').toBeTruthy()
+    await row.click()
+
+    const { drawer } = await expectDrawer(page, 'job drawer')
+    const redrive = drawer.getByRole('button', { name: 'Re-drive', exact: true })
+    await expect(redrive).toBeVisible()
+    await atWidths(page, 'SUP-07 job drawer layout', async () => {
+      const meta = kid(kid(drawer, 2), 1)
+      const footer = kid(drawer, 3)
+      const r = await boxes(page, { drawer, meta, footer, redrive })
+      const cells = await childRects(meta)
+      return {
+        problems: [...within(r.footer, r.redrive, 'Re-drive in the drawer footer'), ...within(r.drawer, r.footer, 'footer in the drawer'), ...pairwiseApart(cells, 'meta cell'), ...cells.flatMap((c, i) => within(r.meta, c, `meta cell ${i} in the grid`))],
+        rects: r,
+      }
+    })
+    await attachShot(page, testInfo, 'job-drawer')
+
+    await redrive.click()
+    const dialog = page.getByRole('dialog').filter({ hasText: `Re-drive ${number}?` })
+    await expectPanel(page, dialog, 're-drive confirm')
+    const confirm = dialog.getByRole('button', { name: 'Re-drive job' })
+    await expect(confirm, 'Re-drive job waits for a reason').toBeDisabled()
+    const reasonBox = dialog.getByRole('textbox', { name: 'Reason' })
+    await atWidths(page, 'SUP-07 re-drive confirm layout', async () => {
+      const vp = page.viewportSize()!
+      const r = await boxes(page, { dialog, footer: kid(dialog, 2), reason: reasonBox, back: dialog.getByRole('button', { name: 'Back' }), confirm })
+      return {
+        problems: [
+          ...within({ x: 0, y: 0, width: vp.width, height: vp.height }, r.dialog, 'dialog in the viewport'),
+          ...within(r.dialog, r.reason, 'Reason field in the dialog'),
+          ...within(r.footer, r.back, 'Back in the footer'),
+          ...within(r.footer, r.confirm, 'Re-drive job in the footer'),
+          ...apart(r.back, r.confirm, 'Back / Re-drive job'),
+          ...apart(r.reason, r.footer, 'Reason / footer'),
+        ],
+        rects: r,
+      }
+    })
+
+    await reasonBox.fill(redriveReason)
+    redriveSent = true
+    await confirm.click()
+    await expect(page.getByRole('status').filter({ hasText: 'Job re-driven' }), 'the re-drive toast').toBeVisible()
+
+    await expect
+      .poll(async () => (await liveStaffGet<{ job: { state: string } }>(`${STAFF_JOBS}/${jobId}`)).job.state, { message: 'a fresh staff read no longer shows dead_lettered' })
+      .not.toBe('dead_lettered')
+
+    const redriven = await auditRowFor('submission.job.redriven', redriveReason)
+    expect(redriven.actor, 'the customer sees the support actor').toBe(SUPPORT_ACTOR)
+
+    const res = await cancelWhenQueued(api, jobId!, cancelReason)
+    expect(res.status, `cancel answered ${JSON.stringify(res.body)}`).toBe(200)
+    cancelled = true
+    const done = (res.body as { job: { state: string; invoice_status: string } }).job
+    expect(done.state).toBe('cancelled')
+    expect(done.invoice_status).toBe('failed')
+    const fresh = (await liveStaffGet<{ job: { state: string; invoice_status: string } }>(`${STAFF_JOBS}/${jobId}`)).job
+    expect([fresh.state, fresh.invoice_status], 'a fresh read agrees').toEqual(['cancelled', 'failed'])
+
+    const cancelRow = await auditRowFor('submission.job.cancelled', cancelReason)
+    expect(cancelRow.actor, 'the customer sees the support actor').toBe(SUPPORT_ACTOR)
+  } finally {
+    // Leave no `queued` row for later serial-lane specs; before the re-drive a cancel would 409 for the whole window.
+    if (jobId && redriveSent && !cancelled) await cancelWhenQueued(api, jobId, cancelReason).catch(() => undefined)
+  }
+
+  noErrors(errors, 'SUP-07 Submissions')
 })

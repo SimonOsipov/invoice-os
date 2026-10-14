@@ -28,6 +28,8 @@ type assembleOpts struct {
 	// check and resolveGeneratedBy, so the caller never arms response headers
 	// before those can still fail. Nil is a no-op.
 	onStart func(filename string)
+	// generatedBy, when non-nil, replaces the subject lookup (a staff caller is no member of the tenant).
+	generatedBy *manifestActor
 }
 
 // TooManyInvoicesError refuses a bundle before the first byte (D-35). A struct,
@@ -64,8 +66,10 @@ func assemble(ctx context.Context, tx pgx.Tx, r Request, w io.Writer, o assemble
 		return &TooManyInvoicesError{Count: count, Limit: o.maxInvoices}
 	}
 
-	generatedBy, err := resolveGeneratedBy(ctx, tx, o.subject)
-	if err != nil {
+	var generatedBy manifestActor
+	if o.generatedBy != nil {
+		generatedBy = *o.generatedBy
+	} else if generatedBy, err = resolveGeneratedBy(ctx, tx, o.subject); err != nil {
 		return err
 	}
 

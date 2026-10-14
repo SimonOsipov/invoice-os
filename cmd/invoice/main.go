@@ -114,6 +114,10 @@ func main() {
 	bundleStore := archive.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/evidence-bundle", archive.DownloadHandler(bundleStore.Assemble, app.Logger))
 	app.Mux.HandleFunc("GET /v1/evidence-bundle/preview", archive.PreviewHandler(bundleStore.Preview, app.Logger))
+	// GET /v1/staff/tenants/{id}/...: staff reads of one tenant's companies and evidence bundle.
+	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/entities", archive.StaffEntitiesHandler(bundleStore.StaffEntities, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/evidence-bundle", archive.StaffDownloadHandler(bundleStore.StaffAssemble, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/evidence-bundle/preview", archive.StaffPreviewHandler(bundleStore.StaffPreview, app.Logger))
 	// GET /v1/invoices/violation-summary -- the review screen's failing-rules
 	// rail (INVCR-01-07): one row per rule_key over ONE import batch, so the
 	// rail is derived from the whole batch instead of the 50 rows on the

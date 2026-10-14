@@ -248,3 +248,26 @@ func TestStaffDownloadHandler_ErrorAfterTheFirstByteAppendsNoJSON(t *testing.T) 
 		t.Errorf("body %q holds a JSON error after the first byte", rec.Body.String())
 	}
 }
+
+// A malformed escape in the query is a 400 before the store, not a dropped parameter.
+func TestStaffHandlers_MalformedQueryStringIsA400(t *testing.T) {
+	calls := 0
+	handlers := map[string]http.HandlerFunc{
+		"download": StaffDownloadHandler(func(context.Context, string, Request, io.Writer, func(string)) error { calls++; return nil }, slog.Default()),
+		"preview":  StaffPreviewHandler(func(context.Context, string, Request) (Preview, error) { calls++; return Preview{}, nil }, slog.Default()),
+	}
+	for name, h := range handlers {
+		t.Run(name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/v1/staff/tenants/"+staffPathTenant+"/evidence-bundle?"+validQuery().Encode()+"&junk=%zz", nil)
+			r.SetPathValue("id", staffPathTenant)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, r)
+			if rec.Code != http.StatusBadRequest || strings.TrimSpace(rec.Body.String()) != `{"error":"invalid query string"}` {
+				t.Errorf("answer = %d %q, want 400 invalid query string", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if calls != 0 {
+		t.Errorf("store called %d time(s), want 0", calls)
+	}
+}

@@ -224,8 +224,8 @@ func TestRLS_StaffAssembleEqualsTheTenantBundle(t *testing.T) {
 	if err := json.Unmarshal(tBody["manifest.json"], &tenantDoc); err != nil {
 		t.Fatalf("unmarshal tenant manifest: %v", err)
 	}
-	if tenantDoc.GeneratedBy == doc.GeneratedBy {
-		t.Errorf("tenant generated_by = %+v equals the staff one; the comparison would hide nothing", tenantDoc.GeneratedBy)
+	if tenantDoc.GeneratedBy.Name != "Admin equal" || tenantDoc.GeneratedBy.Kind == doc.GeneratedBy.Kind {
+		t.Errorf("tenant generated_by = %+v, want the member's own label (Admin equal), not the staff actor", tenantDoc.GeneratedBy)
 	}
 }
 
@@ -526,4 +526,27 @@ func (r *sqlRecorder) setConfigAfterReadOnlyBegin() bool {
 		}
 	}
 	return begin >= 0 && set > begin
+}
+
+// A path tenant id in a non-canonical spelling reaches the same tenant, and the manifest names it canonically.
+func TestRLS_StaffAssembleSpellsTheTenantCanonically(t *testing.T) {
+	r := newStaffRig(t)
+	fx := plantBundleTenant(t, r.super, "spelling", "INV-STAFF-SP", 1)
+
+	for name, id := range map[string]string{
+		"upper case": strings.ToUpper(fx.tenant),
+		"braced":     "{" + fx.tenant + "}",
+		"no hyphens": strings.ReplaceAll(fx.tenant, "-", ""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, body := zipEntries(t, r.assemble(t, id, fx.req))
+			var doc manifestDoc
+			if err := json.Unmarshal(body["manifest.json"], &doc); err != nil {
+				t.Fatalf("unmarshal manifest: %v", err)
+			}
+			if doc.TenantID != fx.tenant {
+				t.Errorf("manifest tenant_id = %q for path %q, want the canonical %q", doc.TenantID, id, fx.tenant)
+			}
+		})
+	}
 }

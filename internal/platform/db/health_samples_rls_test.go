@@ -402,6 +402,9 @@ func healthPolicies(t *testing.T, role, table string) []string {
 		  WHERE schemaname || '.' || tablename = $2 AND $1 = ANY (roles) ORDER BY 1`, role, table)
 }
 
+// The staff_read_submission_jobs migration's grants; the health_samples migration adds none.
+var staffReaderJobGrants = []string{"attempts/SELECT", "created_at/SELECT", "id/SELECT", "invoice_id/SELECT", "last_error/SELECT", "poll_ref/SELECT", "state/SELECT", "tenant_id/SELECT", "updated_at/SELECT"}
+
 func TestRLS_HealthSamplesPrivileges(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
@@ -431,7 +434,7 @@ func TestRLS_HealthSamplesPrivileges(t *testing.T) {
 	check("auth_hook_reader policies on submission_jobs", healthPolicies(t, "auth_hook_reader", jobs),
 		[]string{"health_sample_count/SELECT/true/{auth_hook_reader}"})
 	check("staff_reader table privileges on submission_jobs", healthTableGrants(t, "staff_reader", jobs), nil)
-	check("staff_reader column privileges on submission_jobs", healthColumnGrants(t, "staff_reader", jobs), []string{"state/SELECT"})
+	check("staff_reader column privileges on submission_jobs", healthColumnGrants(t, "staff_reader", jobs), staffReaderJobGrants)
 	check("staff_reader policies on submission_jobs", healthPolicies(t, "staff_reader", jobs),
 		[]string{"staff_read_lookup/SELECT/true/{staff_reader}"})
 	check("staff_reader table privileges on health_samples", healthTableGrants(t, "staff_reader", healthSamplesTable), nil)
@@ -525,16 +528,16 @@ func TestRLS_HealthSamplesDownAndUp(t *testing.T) {
 	member := seedHouseMember(t, "reviewer", "active")
 
 	before := readHealthFootprint(t)
-	if !before.table || before.functions != 3 || before.staffJobGrants != 1 || before.hookJobGrants != 1 || !before.appHealthInsertable ||
+	if !before.table || before.functions != 3 || before.staffJobGrants != len(staffReaderJobGrants) || before.hookJobGrants != 1 || !before.appHealthInsertable ||
 		!containsAll(before.jobPolicies, "health_sample_count", "staff_read_lookup", "tenant_isolation") {
-		t.Fatalf("before the Down: footprint = %+v, want the table, 3 functions, both policies beside tenant_isolation, one column grant each, invoice_app INSERT", before)
+		t.Fatalf("before the Down: footprint = %+v, want the table, 3 functions, both policies beside tenant_isolation, the staff_reader column grants, one auth_hook_reader grant, invoice_app INSERT", before)
 	}
 
 	reapply := rollBackMigrations(t, staffMigrationProvider(t), version)
 	after := readHealthFootprint(t)
-	if after.table || after.functions != 0 || after.staffJobGrants != 0 || after.hookJobGrants != 0 || after.appHealthInsertable ||
-		!reflect.DeepEqual(after.jobPolicies, []string{"tenant_isolation"}) {
-		t.Errorf("after the Down: footprint = %+v, want no table, no function, no grant, submission_jobs policies = [tenant_isolation]", after)
+	if after.table || after.functions != 0 || after.staffJobGrants != len(staffReaderJobGrants) || after.hookJobGrants != 0 || after.appHealthInsertable ||
+		!reflect.DeepEqual(after.jobPolicies, []string{"staff_read_lookup", "tenant_isolation"}) {
+		t.Errorf("after the Down: footprint = %+v, want no table, no function, no auth_hook_reader grant, the staff_reader grants and staff_read_lookup left, submission_jobs policies = [staff_read_lookup tenant_isolation]", after)
 	}
 	if got := collectStaffTenantRows(t, h.app, member); len(got) == 0 {
 		t.Error("after the Down: staff_read_tenants returned no rows to an active house member")

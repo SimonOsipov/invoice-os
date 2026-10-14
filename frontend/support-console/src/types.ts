@@ -54,7 +54,7 @@ export interface NavItem {
   glyph: ReactNode
 }
 
-export type DrawerState = { type: 'code-list'; id: string } | { type: 'rule'; id: string } | { type: 'new-rule' } | null
+export type DrawerState = { type: 'code-list'; id: string } | { type: 'rule'; id: string } | { type: 'new-rule' } | { type: 'job'; id: string } | null
 
 export type ToastTone = 'ok' | 'red'
 

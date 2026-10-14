@@ -446,52 +446,16 @@ func TestStoreStaffTenants_ALostGrantIsAServerError(t *testing.T) {
 	if pe := pgErr(lost); pe.Code != "42501" || !strings.Contains(pe.Message, "permission denied") {
 		t.Fatalf("lost grant = %s %q, want 42501 permission denied", pe.Code, pe.Message)
 	}
-	if got := staffReadError("op", lost); got == nil || errors.Is(got, db.ErrNotStaff) {
-		t.Errorf("staffReadError(lost grant) = %v, want a non-nil error that is not db.ErrNotStaff", got)
+	if got := db.StaffReadError("op", lost); got == nil || errors.Is(got, db.ErrNotStaff) {
+		t.Errorf("db.StaffReadError(lost grant) = %v, want a non-nil error that is not db.ErrNotStaff", got)
 	}
 
 	refused := call(false, strangerSubject)
 	if pe := pgErr(refused); pe.Code != "42501" || !strings.HasSuffix(pe.Message, ": actor is not staff") {
 		t.Fatalf("stranger = %s %q, want 42501 ...: actor is not staff", pe.Code, pe.Message)
 	}
-	if got := staffReadError("op", refused); !errors.Is(got, db.ErrNotStaff) {
-		t.Errorf("staffReadError(the function's refusal) = %v, want db.ErrNotStaff", got)
-	}
-}
-
-func TestStaffReadError_OnlyTheFunctionsOwnRefusalIsNotStaff(t *testing.T) {
-	refusal := "staff_read_tenants: actor is not staff"
-	cases := []struct {
-		name     string
-		err      error
-		notStaff bool
-	}{
-		{"the function's refusal", &pgconn.PgError{Code: "42501", Message: refusal}, true},
-		{"the refusal, wrapped", fmt.Errorf("w: %w", &pgconn.PgError{Code: "42501", Message: refusal}), true},
-		{"a lost function grant", &pgconn.PgError{Code: "42501", Message: "permission denied for function staff_read_tenants"}, false},
-		{"a lost column grant", &pgconn.PgError{Code: "42501", Message: "permission denied for table tenants"}, false},
-		{"the refusal text under another SQLSTATE", &pgconn.PgError{Code: "P0001", Message: refusal}, false},
-		{"the refusal text from a non-database error", errors.New(refusal), false},
-		{"the refusal text with a suffix after it", &pgconn.PgError{Code: "42501", Message: refusal + " (retry)"}, false},
-		{"the refusal text without its separator", &pgconn.PgError{Code: "42501", Message: "actor is not staff"}, false},
-		{"an unrelated error", errors.New("boom"), false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := staffReadError("op", tc.err)
-			if got == nil {
-				t.Fatal("staffReadError returned nil for an error")
-			}
-			if errors.Is(got, db.ErrNotStaff) != tc.notStaff {
-				t.Errorf("errors.Is(ErrNotStaff) = %v, want %v (got %v)", !tc.notStaff, tc.notStaff, got)
-			}
-			if !tc.notStaff && !errors.Is(got, tc.err) {
-				t.Errorf("a server fault must keep its cause: %v does not wrap %v", got, tc.err)
-			}
-		})
-	}
-	if got := staffReadError("op", nil); got != nil {
-		t.Errorf("staffReadError(nil) = %v, want nil", got)
+	if got := db.StaffReadError("op", refused); !errors.Is(got, db.ErrNotStaff) {
+		t.Errorf("db.StaffReadError(the function's refusal) = %v, want db.ErrNotStaff", got)
 	}
 }
 

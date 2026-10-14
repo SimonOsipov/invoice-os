@@ -40,6 +40,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
+	"github.com/SimonOsipov/invoice-os/internal/staffjobs"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
 	"github.com/SimonOsipov/invoice-os/internal/systemhealth"
 	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
@@ -240,6 +241,13 @@ func main() {
 	// direction; recovery is EXTR-17's (internal/extraction/enqueue.go).
 	app.Mux.HandleFunc("POST /v1/documents", extraction.UploadHandler(
 		newDocumentStorer(docSvc.Store), newExtractionEnqueuer(pool, q), app.Logger))
+
+	// Staff Submissions reads, reached as /api/submission/v1/staff/jobs…; the staff class gates the path.
+	jobs := staffjobs.NewStore(pool, invStore, q.River())
+	app.Mux.HandleFunc("GET /v1/staff/jobs", staffjobs.ListHandler(jobs.List, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/jobs/{id}", staffjobs.GetHandler(jobs.Get, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/jobs/{id}/redrive", staffjobs.RedriveHandler(jobs.Redrive, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/jobs/{id}/cancel", staffjobs.CancelHandler(jobs.Cancel, app.Logger))
 
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 

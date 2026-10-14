@@ -81,6 +81,8 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'submission.accepted': { label: 'Transmission accepted', domain: 'submissions', outcome: 'good' },
   'submission.rejected': { label: 'Transmission rejected', domain: 'submissions', outcome: 'bad' },
   'submission.failed': { label: 'Transmission failed', domain: 'submissions', outcome: 'bad' },
+  'submission.job.redriven': { label: 'Re-sent by ASComply support', domain: 'submissions', outcome: 'neutral' },
+  'submission.job.cancelled': { label: 'Cancelled by ASComply support', domain: 'submissions', outcome: 'neutral' },
 
   'reconciliation.drift_detected': { label: 'Drift detected', domain: 'reconciliation', outcome: 'neutral' },
   'reconciliation.auto_fixed': { label: 'Drift auto-corrected', domain: 'reconciliation', outcome: 'good' },

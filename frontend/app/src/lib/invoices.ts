@@ -1254,8 +1254,8 @@ export interface FailureExplanation {
   nextStep: string
 }
 
-// Must never promise notification (M5-08 is unbuilt) or offer recovery (`failed` is
-// terminal) -- both are invisible from the code, so they earn this one comment.
+// Must never promise notification (M5-08 is unbuilt) or offer recovery (no customer
+// action leaves `failed`) -- both are invisible from the code, so they earn this one comment.
 const FAILURE_EXPLANATIONS = {
   payload_not_built: {
     headline: 'We could not prepare this invoice for filing.',

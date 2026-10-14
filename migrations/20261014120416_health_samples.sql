@@ -26,8 +26,6 @@ REVOKE EXECUTE ON FUNCTION public.submission_job_state_counts() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.submission_job_state_counts() TO invoice_app;
 RESET ROLE;
 
-GRANT SELECT (state) ON public.submission_jobs TO staff_reader;
-CREATE POLICY staff_read_lookup ON public.submission_jobs FOR SELECT TO staff_reader USING (true);
 GRANT SELECT (taken_at, fleet_status, services_down, job_counts) ON public.health_samples TO staff_reader;
 
 -- Created as the owner, so the owner's REVOKE and GRANT stand.
@@ -66,9 +64,6 @@ SET LOCAL ROLE staff_reader;
 DROP FUNCTION public.staff_read_health_samples(uuid, timestamptz);
 DROP FUNCTION public.staff_read_submission_job_counts(uuid);
 RESET ROLE;
-DROP POLICY staff_read_lookup ON public.submission_jobs;
--- A table-level REVOKE also removes the column grants.
-REVOKE SELECT ON public.submission_jobs FROM staff_reader;
 SET LOCAL ROLE auth_hook_reader;
 DROP FUNCTION public.submission_job_state_counts();
 RESET ROLE;

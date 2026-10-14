@@ -2,6 +2,7 @@
 paths:
   - "internal/audit/**"
   - "internal/actor/**"
+  - "internal/staffjobs/**"
   - "migrations/*audit_log*"
 ---
 # Audit log
@@ -13,6 +14,7 @@ paths:
 - Leave `TenantID` zero on a global staff change. Call `RecordStaff` in `WithinStaffTx`. It writes no `audit_log` row.
 - `RecordStaff` refuses a `TenantID` that differs from the transaction's tenant with `ErrStaffTenantMismatch`.
 - Never write a staff member's id to `audit_log`.
+- Write `submission.job.redriven` and `submission.job.cancelled` only from `internal/staffjobs`, with payload `job_id`, `invoice_id`, `invoice_number` and `reason`.
 - Link a staff row to its `audit_log` row by `tenant_id`, `event` and `created_at`.
 - Never set `entity_id` or `invoice_id` by hand. A trigger fills `entity_id`. A generated column fills `invoice_id`.
 - Attribute an event by its event name, never by which payload key is present.

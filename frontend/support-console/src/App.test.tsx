@@ -85,7 +85,7 @@ describe('App', () => {
     expect(html).toContain('<aside')
     expect(html).toContain('<main')
     expect(html).toMatch(/<h1[^>]*>Rules admin<\/h1>/)
-    expect(NAV_ITEMS.map((n) => n.key)).toEqual(['rules', 'tenants', 'health'])
+    expect(NAV_ITEMS.map((n) => n.key)).toEqual(['submissions', 'rules', 'tenants', 'health'])
     for (const n of NAV_ITEMS) expect(html, `nav item ${n.label}`).toContain(n.label)
     expect(html.match(/aria-label="Sign out"/g)).toHaveLength(1)
   })

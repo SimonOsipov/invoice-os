@@ -6,6 +6,7 @@ import { seedStaffSession, test } from '../staffSession'
 // Console shell smoke on a real staff session. The Rules screen's contract lives in api/contract-validation.spec.ts.
 // Assert the h1, not the TopBar crumb: they can differ.
 const SCREENS: { nav: string; h1: string }[] = [
+  { nav: 'Submissions', h1: 'Submissions ops' },
   { nav: 'Rules', h1: 'Rules admin' },
   { nav: 'Tenants', h1: 'Tenants' },
   { nav: 'System health', h1: 'System health' },

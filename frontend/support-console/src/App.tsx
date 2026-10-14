@@ -3,10 +3,13 @@ import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { Rules } from './components/Rules'
 import { Tenants } from './components/Tenants'
+import { Submissions } from './components/Submissions'
 import { Health } from './components/Health'
 import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
 import { KillConfirm } from './components/KillConfirm'
+import { JobDrawer } from './components/JobDrawer'
+import { JobActionConfirm, type JobAction } from './components/JobActionConfirm'
 import { PublishModal } from './components/PublishModal'
 import { DraftTestModal } from './components/DraftTestModal'
 import { Toast } from './components/Toast'
@@ -32,6 +35,7 @@ import {
   type RuleVersion,
   type RulesInForce,
 } from './rulesApi'
+import { cancelJob, fetchJob, fetchJobs, redriveJob, type JobDetail, type JobState, type StaffJob } from './jobsApi'
 import { fetchStaffHealth } from './healthApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
@@ -64,6 +68,10 @@ function Console() {
   const [toast, setToast] = useState<ToastState>(null)
   const [tenantQuery, setTenantQuery] = useState('')
   const [tenantId, setTenantId] = useState<string | null>(null)
+  const [jobState, setJobState] = useState<JobState | undefined>(undefined)
+  const [jobTenant, setJobTenant] = useState('')
+  const [confirmJob, setConfirmJob] = useState<JobAction | null>(null)
+  const [jobBusy, setJobBusy] = useState(false)
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showToast = useCallback((msg: string, tag = '', tone: ToastTone = 'ok') => {
@@ -112,7 +120,23 @@ function Console() {
   const onHealth = screen === 'health'
   const healthRead = useAsync(fetchStaffHealth, { immediate: onHealth, deps: [onHealth], isEmpty: () => false })
   const healthStatus = healthRead.status === 'error' ? (healthRead.error?.status === 403 ? 'forbidden' : 'error') : healthRead.status === 'ready' ? 'ready' : 'loading'
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, healthRead].some((r) => r.error?.status === 401)
+  const onSubmissions = screen === 'submissions'
+  const jobsRead = useAsync(() => fetchJobs(jobState, jobTenant || undefined), { immediate: onSubmissions, deps: [onSubmissions, jobState, jobTenant], isEmpty: () => false })
+  const jobTenantsRead = useAsync(fetchStaffTenants, { immediate: onSubmissions, deps: [onSubmissions] })
+  const jobsKey = `${jobState}|${jobTenant}`
+  const lastJobs = useRef<{ key: string; jobs: StaffJob[] } | null>(null)
+  if (jobsRead.data) lastJobs.current = { key: jobsKey, jobs: jobsRead.data }
+  const keptJobs = jobsRead.status === 'loading' && lastJobs.current?.key === jobsKey ? lastJobs.current.jobs : null
+  const jobsStatus = jobsRead.status === 'error' ? (jobsRead.error?.status === 403 ? 'forbidden' : 'error') : jobsRead.status === 'ready' || keptJobs ? 'ready' : 'loading'
+  const openJob = drawer?.type === 'job' ? drawer.id : null
+  const jobRead = useAsync(() => fetchJob(openJob ?? ''), { immediate: openJob !== null, deps: [openJob], isEmpty: () => false })
+  const lastJob = useRef<JobDetail | null>(null)
+  const freshJob = jobRead.data?.job.id === openJob ? jobRead.data : null
+  if (freshJob) lastJob.current = freshJob
+  const jobDetail = freshJob ?? (jobRead.status === 'loading' && lastJob.current?.job.id === openJob ? lastJob.current : null)
+  const jobNote = jobRead.status === 'error' ? { text: jobRead.error?.status === 403 ? 'Your account is not ASComply staff.' : (jobRead.error?.message ?? 'Unavailable'), onRetry: jobRead.run } : { text: 'Loading job…' }
+  const jobInFlight = useRef(false)
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -120,6 +144,38 @@ function Console() {
   const go = (s: Screen) => {
     setScreen(s)
     setDrawer(null)
+    setConfirmJob(null)
+  }
+
+  // ---- job actions: one request at a time; a 404 or 409 re-reads what the server now holds ----
+  const doJobAction = async (reason: string) => {
+    if (!confirmJob || !openJob || jobInFlight.current) return
+    const action = confirmJob
+    jobInFlight.current = true
+    setJobBusy(true)
+    try {
+      const acted = await (action === 'redrive' ? redriveJob : cancelJob)(openJob, reason)
+      lastJob.current = acted
+      setConfirmJob(null)
+      showToast(action === 'redrive' ? 'Job re-driven' : 'Job cancelled', 'AUDITED')
+      jobsRead.run()
+      jobRead.run()
+    } catch (e) {
+      const err = toApiError(e)
+      if (err.status === 401) {
+        void expireSession()
+        return
+      }
+      showToast(err.message, '', 'red')
+      if (err.status === 404 || err.status === 409) {
+        setConfirmJob(null)
+        jobsRead.run()
+        jobRead.run()
+      }
+    } finally {
+      jobInFlight.current = false
+      setJobBusy(false)
+    }
   }
 
   // ---- rule actions ----
@@ -297,6 +353,21 @@ function Console() {
               }}
             />
           )}
+          {screen === 'submissions' && (
+            <Submissions
+              status={jobsStatus}
+              errorText={jobsRead.error?.message}
+              jobs={jobsRead.data ?? keptJobs ?? []}
+              state={jobState}
+              onState={setJobState}
+              tenant={jobTenant}
+              onTenant={setJobTenant}
+              tenants={jobTenantsRead.data ?? []}
+              onRetry={jobsRead.run}
+              onOpen={(id) => setDrawer({ type: 'job', id })}
+              tenantsError={jobTenantsRead.status === 'error' && jobTenantsRead.error?.status !== 401 ? { text: jobTenantsRead.error?.message ?? 'Unavailable', onRetry: jobTenantsRead.run } : undefined}
+            />
+          )}
           {screen === 'tenants' && (
             <Tenants
               status={tenantsStatus}
@@ -311,6 +382,11 @@ function Console() {
               detail={tenantRead.data}
               detailErrorText={tenantRead.error?.message}
               onRetryDetail={tenantRead.run}
+              onViewJobs={(id) => {
+                setJobTenant(id)
+                setJobState(undefined)
+                go('submissions')
+              }}
             />
           )}
           {screen === 'health' && <Health status={healthStatus} errorText={healthRead.error?.message} data={healthRead.data ?? null} onRetry={healthRead.run} />}
@@ -329,6 +405,24 @@ function Console() {
           onKill={() => drawerRule && setConfirmKill({ key: drawerRule.key, action: 'disable' })}
           onClose={() => setDrawer(null)}
         />
+      )}
+
+      {openJob !== null && (
+        <JobDrawer
+          detail={jobDetail}
+          note={jobNote}
+          busy={jobBusy}
+          onRedrive={() => setConfirmJob('redrive')}
+          onCancel={() => setConfirmJob('cancel')}
+          onClose={() => {
+            setDrawer(null)
+            setConfirmJob(null)
+          }}
+        />
+      )}
+
+      {confirmJob && jobDetail && (
+        <JobActionConfirm invoiceNumber={jobDetail.job.invoice_number} action={confirmJob} busy={jobBusy} onClose={() => setConfirmJob(null)} onConfirm={(reason) => void doJobAction(reason)} />
       )}
 
       {confirmKill && (

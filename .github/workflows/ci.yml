@@ -905,6 +905,8 @@ jobs:
         # -run filter, so new tests in ./internal/submission are picked up automatically;
         # each DB-backed test self-skips without its DATABASE_* URLs.
         run: scripts/ci/rls-test-gate.sh -count=1 ./internal/submission/...
+      - name: Run the staff jobs store suite (staff_read_ functions as invoice_app) + per-test visibility & skip gate
+        run: scripts/ci/rls-test-gate.sh -count=1 ./internal/staffjobs/...
       - name: Run the reconciliation sweep suite (as invoice_app + invoice_tenant_reader) + per-test visibility & skip gate
         # M5-06: proves the "who watches the watcher" sweep (Scan/ReArmPoll/audit +
         # SweepOnce's per-tenant orchestration) against a real Postgres. Needs all four

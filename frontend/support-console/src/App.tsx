@@ -3,6 +3,7 @@ import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { Rules } from './components/Rules'
 import { Tenants } from './components/Tenants'
+import { Submissions } from './components/Submissions'
 import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
 import { KillConfirm } from './components/KillConfirm'
@@ -31,6 +32,7 @@ import {
   type RuleVersion,
   type RulesInForce,
 } from './rulesApi'
+import { fetchJobs, type JobState } from './jobsApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, appBase, expireSession, landingBase } from './auth'
@@ -62,6 +64,8 @@ function Console() {
   const [toast, setToast] = useState<ToastState>(null)
   const [tenantQuery, setTenantQuery] = useState('')
   const [tenantId, setTenantId] = useState<string | null>(null)
+  const [jobState, setJobState] = useState<JobState | undefined>(undefined)
+  const [jobTenant, setJobTenant] = useState('')
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showToast = useCallback((msg: string, tag = '', tone: ToastTone = 'ok') => {
@@ -107,7 +111,11 @@ function Console() {
     try { return await fetchStaffTenant(id) } catch (e) { const error = toApiError(e); failedTenants.current.set(error, id); throw error }
   }, { immediate: onTenants && tenantId !== null, deps: [onTenants, tenantId], isEmpty: () => false })
   const tenantsStatus = tenantsRead.status === 'error' ? (tenantsRead.error?.status === 403 ? 'forbidden' : 'error') : tenantsRead.status === 'ready' || tenantsRead.status === 'empty' ? tenantsRead.status : 'loading'
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead].some((r) => r.error?.status === 401)
+  const onSubmissions = screen === 'submissions'
+  const jobsRead = useAsync(() => fetchJobs(jobState, jobTenant || undefined), { immediate: onSubmissions, deps: [onSubmissions, jobState, jobTenant], isEmpty: () => false })
+  const jobTenantsRead = useAsync(fetchStaffTenants, { immediate: onSubmissions, deps: [onSubmissions] })
+  const jobsStatus = jobsRead.status === 'error' ? (jobsRead.error?.status === 403 ? 'forbidden' : 'error') : jobsRead.status === 'ready' ? 'ready' : 'loading'
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -290,6 +298,19 @@ function Console() {
                 setTestResult(null)
                 setTestOpen(true)
               }}
+            />
+          )}
+          {screen === 'submissions' && (
+            <Submissions
+              status={jobsStatus}
+              errorText={jobsRead.error?.message}
+              jobs={jobsRead.data ?? []}
+              state={jobState}
+              onState={setJobState}
+              tenant={jobTenant}
+              onTenant={setJobTenant}
+              tenants={jobTenantsRead.data ?? []}
+              onRetry={jobsRead.run}
             />
           )}
           {screen === 'tenants' && (

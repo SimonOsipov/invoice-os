@@ -4,6 +4,11 @@ import type { NavItem, Screen } from './types'
 // Each live screen adds its entry.
 export const NAV_ITEMS: NavItem[] = [
   {
+    key: 'submissions',
+    label: 'Submissions',
+    glyph: <Icon paths={['M3 12h4l2 5 4-12 2 7h6']} size={17} />,
+  },
+  {
     key: 'rules',
     label: 'Rules',
     glyph: <Icon paths={['m9 12 2 2 4-4', 'M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9Z']} size={17} />,

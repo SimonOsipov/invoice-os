@@ -34,10 +34,10 @@ const ROLE_TONE: Record<string, Tone> = {
 // The app's member tones (frontend/app/src/components/MemberParts.tsx).
 const STATUS_TONE: Record<StaffMember['status'], Tone> = { active: MUTED, invited: AMBER, suspended: RED }
 
-const ONE_LINE: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
-const CARD: CSSProperties = { border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', background: 'var(--bg-2)' }
+export const ONE_LINE: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
+export const CARD: CSSProperties = { border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', overflow: 'hidden', background: 'var(--bg-2)' }
 const NOTE: CSSProperties = { padding: '14px 16px', fontSize: 13, color: 'var(--fg-3)' }
-const STAFF_ONLY = 'Your account is not ASComply staff.'
+export const STAFF_ONLY = 'Your account is not ASComply staff.'
 
 const Chip = ({ tone, label }: { tone: Tone; label: string }) => (
   <span style={{ flex: 'none', display: 'inline-flex' }}>
@@ -51,7 +51,7 @@ const Retry = ({ onClick }: { onClick: () => void }) => (
   </button>
 )
 
-const Note = ({ text, onRetry }: { text: string; onRetry?: () => void }) => (
+export const Note = ({ text, onRetry }: { text: string; onRetry?: () => void }) => (
   <div style={{ ...NOTE, display: 'flex', alignItems: 'center', gap: 12 }}>
     <span>{text}</span>
     {onRetry && <Retry onClick={onRetry} />}

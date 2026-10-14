@@ -3501,7 +3501,7 @@ cmd_fork_vars_before_urls() {
     echo "::error::usage: railway-env.sh fork-vars-before-urls <environment-id>"
     exit 2
   fi
-  fork_pass "$env_id" fork_auth gateway_token reconciliation_validation
+  fork_pass "$env_id" fork_auth gateway_token reconciliation_validation submission_gateway
 }
 
 # cmd_set_production_gateway_token <environment-id>
@@ -3777,6 +3777,29 @@ reconciliation_validation() {
 reconciliation_validation_verdict() {
   pass_owned_verdict reconciliation_validation || return 1
   echo "reconciliation.VALIDATION_URL and reconciliation.S2S_TOKEN confirmed in environment $PASS_ENV."
+}
+
+# --- The fork submission's GATEWAY_URL ---------------------------------------
+
+GATEWAY_INTERNAL_URL="http://gateway.railway.internal:8080"
+
+submission_gateway_check() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to set GATEWAY_URL in the persistent environment ($1). Its submission variables are the user's; no CI path may write them."
+    exit 1
+  fi
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}GATEWAY_URL"
+}
+
+submission_gateway() {
+  local id
+  id=$(service_id_by_name "$PASS_SETTLE" submission "environment $1" GATEWAY_URL) || exit 1
+  pass_plan_add "$id" submission "" "GATEWAY_URL=$GATEWAY_INTERNAL_URL"
+}
+
+submission_gateway_verdict() {
+  pass_owned_verdict submission_gateway || return 1
+  echo "submission.GATEWAY_URL confirmed in environment $PASS_ENV."
 }
 
 # cmd_set_fork_reconciliation_url <environment-id>

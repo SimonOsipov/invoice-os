@@ -108,7 +108,7 @@ func gwBootEnv(svc string, port int) []string {
 	case "submission":
 		env = append(env, docs...)
 		env = append(env, fakes...)
-		env = append(env, "APP_ADAPTER=mock", "EXTRACTOR=mock")
+		env = append(env, "APP_ADAPTER=mock", "EXTRACTOR=mock", "GATEWAY_URL=http://127.0.0.1:1")
 	}
 	return env
 }

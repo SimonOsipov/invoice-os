@@ -1,9 +1,9 @@
-// The deployed v2 Support Console. Its three screens, Submissions, Rules and Tenants, read real data; Rules also switches real rules.
+// The deployed v2 Support Console. Its three screens, Submissions, Rules, Tenants and System health, read real data; Rules also switches real rules.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { randomUUID } from 'node:crypto'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
-import { getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, type AuditEvent, type StaffAccount } from '../api/client'
+import { apiBase, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, type AuditEvent, type StaffAccount } from '../api/client'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -452,7 +452,9 @@ type Screen = {
   nav: string
   h1: string
   rowUp: number
-  reads: (page: Page, testInfo: TestInfo) => Promise<void>
+  // Runs before the nav click; its result reaches `reads` as `armed`.
+  arm?: (page: Page) => Promise<unknown>
+  reads: (page: Page, testInfo: TestInfo, armed?: unknown) => Promise<void>
   layout: (page: Page) => Promise<Read>
   /** Runs last: it may leave the screen. */
   after?: (page: Page) => Promise<void>
@@ -724,6 +726,127 @@ async function viewJobsLands(page: Page): Promise<void> {
   else await expect(jobRows(page).filter({ hasNotText: HOUSE_NAME }), "only the house tenant's jobs are listed").toHaveCount(0)
 }
 
+const STAFF_HEALTH = '/api/submission/v1/staff/health'
+// internal/systemhealth JobStates
+const JOB_STATES = ['queued', 'submitting', 'pending', 'accepted', 'rejected', 'failed', 'dead_lettered', 'cancelled']
+
+type SeenService = { name: string; status: string; build?: string }
+type SeenHealth = {
+  fleet: { status: string; services: SeenService[] }
+  jobs: Record<string, number>
+  queue_depth: number
+  trend: { services_down: number | null; queue_depth: number; dead_lettered: number }[]
+}
+
+// Armed before the nav click: the screen's own read is the comparison, so a shard moving the queue cannot race it.
+const armHealth = (page: Page): Promise<SeenHealth> =>
+  page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === STAFF_HEALTH, { timeout: 30_000 }).then((r) => r.json() as Promise<SeenHealth>)
+
+const shortOf = (build?: string): string => (build ? build.slice(0, 7) : '—')
+const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'queue_depth' | 'dead_lettered'): number => trend.filter((p) => p[key] !== null).length
+
+async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Promise<void> {
+  const mn = mainOf(page)
+  const seen = await (armed as Promise<SeenHealth>)
+  const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
+  await expect(tile('fleet'), 'the health tiles have loaded').toBeVisible()
+
+  const known = seen.fleet.status !== 'unknown'
+  const up = seen.fleet.services.filter((s) => s.status === 'up').length
+  await expect(tile('fleet').locator('.money')).toHaveText(known ? `${up}/${seen.fleet.services.length}` : '—')
+  await expect(tile('queue').locator('.money')).toHaveText(String(seen.queue_depth))
+  await expect(tile('dead-lettered').locator('.money')).toHaveText(String(seen.jobs.dead_lettered ?? 0))
+  const fleetWord = { ok: 'HEALTHY', degraded: 'DEGRADED', unknown: 'UNKNOWN' }[seen.fleet.status as 'ok' | 'degraded' | 'unknown']
+  await expect(tile('fleet').getByText(fleetWord, { exact: true }), 'fleet status word').toHaveCount(1)
+  await expect(tile('dead-lettered').getByText((seen.jobs.dead_lettered ?? 0) > 0 ? 'ATTENTION' : 'CLEAR', { exact: true }), 'dead-lettered status word').toHaveCount(1)
+
+  if (known) {
+    expect(seen.fleet.services.length, 'the fleet read names services').toBeGreaterThan(0)
+    for (const s of seen.fleet.services) {
+      const row = mn.locator(`[data-service="${s.name}"]`)
+      await expect(kid(row, 3), `${s.name} build`).toHaveText(shortOf(s.build))
+      await expect(kid(row, 2), `${s.name} badge`).toHaveText(s.status === 'up' ? 'UP' : 'DOWN')
+    }
+  }
+  await expect(mn.locator('[data-service]'), 'one row per service').toHaveCount(known ? seen.fleet.services.length : 0)
+
+  const series: [string, 'services_down' | 'queue_depth' | 'dead_lettered'][] = [
+    ['fleet', 'services_down'],
+    ['queue', 'queue_depth'],
+    ['dead-lettered', 'dead_lettered'],
+  ]
+  for (const [key, field] of series) await expect(tile(key).locator('svg'), `${key} sparkline`).toHaveCount(nonNull(seen.trend, field) >= 2 ? 1 : 0)
+
+  // Stable parts only: a failed gateway probe empties a build, and a read can be unknown with no services.
+  const live = await liveStaffGet<SeenHealth>(STAFF_HEALTH)
+  if (known && live.fleet.status !== 'unknown') {
+    const names = (h: SeenHealth): string[] => h.fleet.services.map((s) => s.name).sort()
+    expect(names(live).length, 'live fleet names services').toBeGreaterThan(0)
+    expect(names(live), 'live fleet service names equal the screen read').toEqual(names(seen))
+    const liveBuilds = new Map(live.fleet.services.map((s) => [s.name, s]))
+    const both = seen.fleet.services.filter((s) => s.status === 'up' && s.build && liveBuilds.get(s.name)?.status === 'up' && liveBuilds.get(s.name)?.build)
+    expect(both.length, 'services up with a build in both reads').toBeGreaterThan(0)
+    for (const s of both) expect(liveBuilds.get(s.name)?.build, `${s.name} live build equals the screen read`).toBe(s.build)
+  }
+  expect(Object.keys(live.jobs).sort(), 'live job state keys').toEqual(Object.keys(seen.jobs).sort())
+  expect(Object.keys(seen.jobs).sort(), 'job state keys are the systemhealth.JobStates').toEqual([...JOB_STATES].sort())
+
+  await expect(mn.getByText(/APP latency|APP error rate|throughput|Recon backlog/i), 'no unmeasured tile').toHaveCount(0)
+  await expectStyles(parent(mn.locator('[data-service]').first().getByText(/^(UP|DOWN)$/)), 'service badge', { radius: '4px' })
+
+  // Core AC 2: the public fleet route still answers without a token and grants the console no CORS.
+  const fleet = await page.request.get(`${apiBase()}/healthz/fleet`, { headers: { Origin: new URL(page.url()).origin } })
+  expect([200, 503], '/healthz/fleet status').toContain(fleet.status())
+  expect(Array.isArray((await fleet.json()).services), '/healthz/fleet carries services').toBe(true)
+  expect(fleet.headers()['access-control-allow-origin'], '/healthz/fleet CORS header').toBeUndefined()
+
+  await attachShot(page, testInfo, 'health')
+}
+
+async function healthLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const tiles = mn.locator('.ops-health-grid > div')
+  const n = await tiles.count()
+  expect(n, 'health tiles').toBe(3)
+  const tileRects = await rectsOf(page, tiles, 'health tile')
+  const problems = [...pairwiseApart(tileRects, 'health tiles'), ...sameTops(tileRects, 'health tiles')]
+
+  for (let i = 0; i < n; i++) {
+    const t = tiles.nth(i)
+    const head = kid(t, 1)
+    const word = kid(head, 2)
+    const hasWord = (await word.count()) > 0
+    if (i !== 1) expect(hasWord, `tile ${i} has a status word`).toBe(true)
+    const svg = t.locator('svg')
+    const hasSvg = (await svg.count()) > 0
+    const r = await boxes(page, { tile: t, label: kid(head, 1), value: kid(t, 2) })
+    problems.push(...within(r.tile, r.label, `tile ${i} label`), ...within(r.tile, r.value, `tile ${i} value row`))
+    if (hasWord) {
+      const w = (await boxes(page, { word }))['word']
+      problems.push(...within(r.tile, w, `tile ${i} status word`), ...apart(r.label, w, `tile ${i} label / status word`))
+    }
+    if (hasSvg) {
+      const v = (await boxes(page, { svg }))['svg']
+      problems.push(...within(r.tile, v, `tile ${i} sparkline`), ...below(r.value, v, `tile ${i} sparkline under the value row`))
+    }
+  }
+
+  const grid = await boxes(page, { grid: mn.locator('.ops-health-grid'), card: mn.locator('.ops-health-grid + div') })
+  problems.push(...below(grid.grid, grid.card, 'Services card under the grid'))
+
+  const rows = mn.locator('[data-service]')
+  const nRows = Math.min(await rows.count(), 20)
+  if (nRows === 0) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'no rows only when the roll-up is unavailable').toHaveCount(1)
+  for (let i = 0; i < nRows; i++) {
+    const row = rows.nth(i)
+    const p = await boxes(page, { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3) })
+    problems.push(...within(grid.card, p.row, `service row ${i} in the Services card`), ...within(p.row, p.name, `service ${i} name`), ...within(p.row, p.badge, `service ${i} badge`), ...within(p.row, p.build, `service ${i} build`), ...pairwiseApart([p.name, p.badge, p.build], `service ${i} name, badge, build`))
+  }
+
+  await noSidewaysScroll(page, 'System health')
+  return { problems, rects: { tiles: tileRects, grid } }
+}
+
 const SCREENS: Screen[] = [
   {
     nav: 'Submissions',
@@ -768,17 +891,27 @@ const SCREENS: Screen[] = [
     layout: tenantsLayout,
     after: viewJobsLands,
   },
+  {
+    nav: 'System health',
+    h1: 'System health',
+    rowUp: 2,
+    arm: armHealth,
+    reads: healthReads,
+    layout: healthLayout,
+  },
 ]
 
 for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
     test.setTimeout(120_000)
     const errors = await startSupport(page)
+    const armed = s.arm?.(page)
+    armed?.catch(() => {}) // a timeout surfaces where `reads` awaits it, not as an unhandled rejection
     await openScreen(page, s.nav, s.h1)
     await settle(page, mainOf(page))
 
     await expectHeader(page, s.nav, s.h1, s.rowUp)
-    await s.reads(page, testInfo)
+    await s.reads(page, testInfo, armed)
 
     await atWidths(page, `SUP-03 ${s.nav} title block`, () => titleBlockRead(page, s.h1))
     await atWidths(page, `SUP-03 ${s.nav} layout`, () => s.layout(page))

@@ -448,3 +448,40 @@ func TestStaffReads_StoreClampsTheLimit(t *testing.T) {
 		}
 	}
 }
+
+// The handler hands tenant, from and to to the store; each must reach the SQL function.
+func TestStaffReads_TenantAndWindowReachTheFunctions(t *testing.T) {
+	e := newEnv(t)
+	st := NewStore(e.app)
+	ctx := e.staff(t)
+	purpose, day := uniquePurpose(), farDay()
+	a, b := e.namedTenant(t, "aicalls win A "+uuid.NewString()), e.namedTenant(t, "aicalls win B "+uuid.NewString())
+	for _, tenant := range []string{a, b} {
+		for i := 0; i < 3; i++ {
+			e.insert(t, seed{tenant: tenant, purpose: purpose, outcome: "ok", at: day.AddDate(0, 0, -i).Add(time.Hour)})
+		}
+	}
+	from, to := day.AddDate(0, 0, -1), day.AddDate(0, 0, -1).Add(2*time.Hour)
+	c, err := st.StaffCalls(ctx, Filter{Purpose: purpose, From: from, Limit: 100})
+	if err != nil || len(c.Calls) != 4 {
+		t.Errorf("calls from: %d rows, %v, want 4", len(c.Calls), err)
+	}
+	if c, err = st.StaffCalls(ctx, Filter{Purpose: purpose, To: to, Limit: 100}); err != nil || len(c.Calls) != 4 {
+		t.Errorf("calls to: %d rows, %v, want 4", len(c.Calls), err)
+	}
+	tp, err := st.StaffTotals(ctx, Filter{Purpose: purpose, From: from, Limit: 100})
+	if err != nil || len(tp.Totals) != 4 {
+		t.Errorf("totals from: %d groups, %v, want 4", len(tp.Totals), err)
+	}
+	if tp, err = st.StaffTotals(ctx, Filter{Purpose: purpose, To: to, Limit: 100}); err != nil || len(tp.Totals) != 4 {
+		t.Errorf("totals to: %d groups, %v, want 4", len(tp.Totals), err)
+	}
+	if tp, err = st.StaffTotals(ctx, Filter{Purpose: purpose, Tenant: a, Limit: 100}); err != nil || len(tp.Totals) != 3 {
+		t.Errorf("totals tenant: %d groups, %v, want 3", len(tp.Totals), err)
+	}
+	for _, g := range tp.Totals {
+		if g.TenantID != a {
+			t.Errorf("totals tenant filter returned tenant %s", g.TenantID)
+		}
+	}
+}

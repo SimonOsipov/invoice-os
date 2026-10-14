@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,29 @@ var (
 
 // recordStaff is a var so a test can force an audit failure.
 var recordStaff = audit.RecordStaff
+
+// readAfterCommit is a var so a test can force the post-commit read to fail.
+var readAfterCommit = (*Store).Get
+
+// committed returns the job as read after a commit. A failed read never fails the action:
+// it answers from what the write knows (before plus the new state and one history step).
+func (s *Store) committed(ctx context.Context, before Detail, state, invoiceStatus string, attempts *int) Detail {
+	d, err := readAfterCommit(s, ctx, before.Job.ID)
+	if err == nil {
+		return d
+	}
+	slog.ErrorContext(ctx, "staffjobs: re-read after commit", "job_id", before.Job.ID, "err", err)
+	d = Detail{Job: before.Job, History: append([]Step(nil), before.History...)}
+	d.Job.State, d.Job.InvoiceStatus = state, invoiceStatus
+	if attempts != nil {
+		d.Job.Attempts = *attempts
+	}
+	from := before.Job.InvoiceStatus
+	now := time.Now().UTC()
+	d.Job.UpdatedAt = now
+	d.History = append(d.History, Step{FromStatus: &from, ToStatus: invoiceStatus, Actor: audit.SupportActor, ChangedAt: now})
+	return d
+}
 
 // Job is the staff_read_submission_job(s) row. MaxAttempts is not a column; the handlers fill it.
 type Job struct {
@@ -212,7 +236,8 @@ func (s *Store) Redrive(ctx context.Context, id, reason string) (Detail, error) 
 	if err != nil {
 		return Detail{}, err
 	}
-	return s.Get(ctx, id)
+	zero := 0
+	return s.committed(ctx, before, "queued", "queued", &zero), nil
 }
 
 // Cancel stops a queued job and fails its invoice. reason is already trimmed.
@@ -272,5 +297,5 @@ func (s *Store) Cancel(ctx context.Context, id, reason string) (Detail, error) {
 	if err != nil {
 		return Detail{}, err
 	}
-	return s.Get(ctx, id)
+	return s.committed(ctx, before, "cancelled", "failed", nil), nil
 }

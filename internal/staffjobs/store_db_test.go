@@ -1260,3 +1260,54 @@ func TestRLS_CancelHandlerOverTheStoreMapsRealErrors(t *testing.T) {
 		t.Errorf("second cancel: got %d %s, want 409 only a queued job can be cancelled", rec.Code, rec.Body.String())
 	}
 }
+
+func TestRLS_CommittedActionsAnswer200WhenThePostCommitReadFails(t *testing.T) {
+	orig := readAfterCommit
+	t.Cleanup(func() { readAfterCommit = orig })
+	for _, tc := range []struct {
+		name, op, wantState, wantInvoice string
+		rig                              func(*testing.T) *redriveRig
+	}{
+		{"redrive", "redrive", "queued", "queued", func(t *testing.T) *redriveRig { return newRedriveRig(t, "dead_lettered", "discarded") }},
+		{"cancel", "cancel", "cancelled", "failed", func(t *testing.T) *redriveRig { return newCancelRig(t, "queued", "scheduled").redriveRig }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := tc.rig(t)
+			calls := 0
+			readAfterCommit = func(s *Store, ctx context.Context, id string) (Detail, error) {
+				calls++
+				if calls > 1 {
+					return Detail{}, errors.New("read down")
+				}
+				return orig(s, ctx, id)
+			}
+			log := slog.New(slog.NewTextHandler(&strings.Builder{}, nil))
+			h := RedriveHandler(r.store.Redrive, log)
+			if tc.op == "cancel" {
+				h = CancelHandler(r.store.Cancel, log)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/v1/staff/jobs/"+r.job+"/"+tc.op, strings.NewReader(`{"reason":"r"}`)).WithContext(r.ctx)
+			req.SetPathValue("id", r.job)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			var body Detail
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusOK ||
+				body.Job.State != tc.wantState || body.Job.InvoiceStatus != tc.wantInvoice {
+				t.Fatalf("got %d %s (%v), want 200 with job %s / invoice %s", rec.Code, rec.Body.String(), err, tc.wantState, tc.wantInvoice)
+			}
+			if got := r.state(t); got.JobState != tc.wantState {
+				t.Errorf("job state = %q, want the committed %q", got.JobState, tc.wantState)
+			}
+			event := "submission.job.redriven"
+			if tc.op == "cancel" {
+				event = "submission.job.cancelled"
+			}
+			for _, table := range []string{"staff_audit_log", "audit_log"} {
+				var n int
+				if err := r.super.QueryRow(context.Background(), `SELECT count(*) FROM `+table+` WHERE tenant_id = $1 AND event = $2`, r.tenant, event).Scan(&n); err != nil || n != 1 {
+					t.Errorf("%s %s rows = %d (%v), want 1", table, event, n, err)
+				}
+			}
+		})
+	}
+}

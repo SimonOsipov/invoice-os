@@ -1052,6 +1052,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/staff/code-list-syncs":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"GET /v1/staff/audit-log":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/staff-audit-log":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/ai-calls":                              {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/ai-calls/totals":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
 	"GET /v1/staff/tenants/{id}/entities":                 {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
 	"GET /v1/staff/tenants/{id}/evidence-bundle":          {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
 	"GET /v1/staff/tenants/{id}/evidence-bundle/preview":  {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},

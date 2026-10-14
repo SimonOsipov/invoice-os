@@ -627,6 +627,131 @@ func mustDay(t *testing.T, s string) time.Time {
 	return d
 }
 
+func TestRLS_StaffReadAICallsOutcomeAndPurposeAreExactMatches(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadAICalls(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	x := seedDetailTenant(t, freshName("ai exact"))
+	base := staffAIFarBase()
+	purpose := freshName("staff-exact")
+	outcomes := []string{"ok", "OK", "okay", "refused", "skipped_refused"}
+	var mine []staffAISeed
+	for i, o := range outcomes {
+		mine = append(mine, seedStaffAICall(t, staffAIRow(x, purpose, o, base.Add(time.Duration(i)*time.Second))))
+	}
+	// Same tenant, purposes that share a prefix or differ by case: a loose purpose match would list them.
+	seedStaffAICall(t, staffAIRow(x, purpose+"2", "ok", base.Add(10*time.Second)))
+	seedStaffAICall(t, staffAIRow(x, strings.ToUpper(purpose), "ok", base.Add(11*time.Second)))
+
+	if got, want := staffAIRowIDs(staffAICallsArgs{tenant: sp(x), purpose: sp(purpose)}.mustCall(t, h.app, staff)), staffAINewestFirst(mine); !reflect.DeepEqual(got, want) {
+		t.Errorf("p_purpose %q: rows = %v, want its five rows %v", purpose, got, want)
+	}
+	if got := (staffAITotalsArgs{tenant: sp(x), purpose: sp(purpose)}).mustCall(t, h.app, staff); len(got) != 1 || got[0].calls != 5 || got[0].failed != 4 {
+		t.Errorf("totals for p_purpose %q = %+v, want one group of 5 calls, 4 failed (OK is not ok)", purpose, got)
+	}
+	for _, o := range outcomes {
+		want := staffAIRowIDs(nil)
+		for _, s := range mine {
+			if s.outcome == o {
+				want = append(want, s.id)
+			}
+		}
+		if len(want) != 1 {
+			t.Fatalf("outcome %q: fixture holds %d rows, want 1", o, len(want))
+		}
+		if got := staffAIRowIDs(staffAICallsArgs{tenant: sp(x), purpose: sp(purpose), outcome: sp(o)}.mustCall(t, h.app, staff)); !reflect.DeepEqual(got, want) {
+			t.Errorf("p_outcome %q: rows = %v, want exactly %v", o, got, want)
+		}
+		if got := (staffAITotalsArgs{tenant: sp(x), purpose: sp(purpose), outcome: sp(o)}).mustCall(t, h.app, staff); len(got) != 1 || got[0].calls != 1 {
+			t.Errorf("totals for p_outcome %q = %+v, want one group of 1 call", o, got)
+		}
+	}
+}
+
+func TestRLS_StaffReadAICallTotalsSumsEveryRowOfAGroup(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadAICalls(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	x := seedDetailTenant(t, freshName("ai sums"))
+	purpose := freshName("staff-sums")
+	day := staffAIFarDay()
+	// Distinct values per row, tokens past int32: a max, a min, an average or a 32-bit sum gives a different total.
+	for i, r := range []struct {
+		outcome, cost string
+		in, out       int64
+	}{
+		{"ok", "0.0001", 2000000000, 3},
+		{"unavailable", "0.00025", 2000000000, 5},
+		{"ok", "0.0003", 7, 11},
+	} {
+		s := staffAIRow(x, purpose, r.outcome, day.Add(time.Duration(i+1)*time.Hour))
+		s.cost, s.in, s.out = r.cost, r.in, r.out
+		seedStaffAICall(t, s)
+	}
+	want := []staffAITotalRow{{day: staffAIDay(day), tenant: x, tenantName: "", cost: "0.00065", calls: 3, in: 4000000007, out: 19, failed: 1}}
+	got := staffAITotalsArgs{tenant: sp(x), purpose: sp(purpose)}.mustCall(t, h.app, staff)
+	if len(got) != 1 {
+		t.Fatalf("groups = %+v, want one", got)
+	}
+	want[0].tenantName = got[0].tenantName
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("group = %+v, want %+v", got, want)
+	}
+}
+
+func TestRLS_StaffReadAICallTotalsBoundsAreInclusive(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadAICalls(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	x := seedDetailTenant(t, freshName("ai bounds"))
+	purpose := freshName("staff-bounds")
+	from := staffAIFarBase()
+	to := from.Add(time.Hour)
+	// One microsecond outside each bound, and exactly on each; the rows may span two UTC days, so the oracle sums calls.
+	for _, at := range []time.Time{from.Add(-time.Microsecond), from, to, to.Add(time.Microsecond)} {
+		seedStaffAICall(t, staffAIRow(x, purpose, "ok", at))
+	}
+	callsOf := func(rows []staffAITotalRow) int64 {
+		var n int64
+		for _, r := range rows {
+			n += r.calls
+		}
+		return n
+	}
+	for _, c := range []struct {
+		name     string
+		from, to *time.Time
+		want     int64
+	}{
+		{"from and to", tp(from), tp(to), 2}, {"from alone", tp(to), nil, 2}, {"to alone", nil, tp(from), 2}, {"neither", nil, nil, 4},
+	} {
+		got := staffAITotalsArgs{tenant: sp(x), purpose: sp(purpose), from: c.from, to: c.to}.mustCall(t, h.app, staff)
+		if n := callsOf(got); n != c.want {
+			t.Errorf("%s: %d calls in %+v, want %d (bounds inclusive)", c.name, n, got, c.want)
+		}
+	}
+}
+
+func TestRLS_StaffReadAICallTotalsDayIsUTCWhateverTheSessionZone(t *testing.T) {
+	requireHarness(t)
+	requireStaffReadAICalls(t)
+	staff := seedHouseMember(t, "reviewer", "active")
+	f := seedStaffAITotalsFixture(t)
+	d, pd := staffAIDay(f.day), staffAIDay(f.prevDay)
+	for _, zone := range []string{"Pacific/Kiritimati", "America/Los_Angeles"} {
+		tx, err := h.app.Begin(context.Background())
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		txExec(t, tx, `SELECT set_config('TimeZone', $1, true)`, zone)
+		got := staffAITotalsArgs{tenant: sp(f.a)}.mustCall(t, tx, staff)
+		_ = tx.Rollback(context.Background())
+		if len(got) != 2 || got[0].day != d || got[0].calls != 2 || got[1].day != pd || got[1].calls != 1 {
+			t.Errorf("session zone %s: groups = %+v, want %s with 2 calls then %s with 1 (UTC days)", zone, got, d, pd)
+		}
+	}
+}
+
 func TestRLS_StaffReaderWritesNothingOnAICalls(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()

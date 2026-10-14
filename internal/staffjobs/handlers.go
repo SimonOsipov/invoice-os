@@ -167,6 +167,37 @@ func RedriveHandler(redrive func(ctx context.Context, id, reason string) (Detail
 	}
 }
 
+// CancelHandler repeats no staff check: auth.RequireStaff runs before it.
+func CancelHandler(cancel func(ctx context.Context, id, reason string) (Detail, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		reason, ok := readReason(w, r)
+		if !ok {
+			return
+		}
+		detail, err := cancel(r.Context(), r.PathValue("id"), reason)
+		var st invoice.StatusError
+		switch {
+		case errors.Is(err, db.ErrNotStaff):
+			writeError(w, http.StatusForbidden, "forbidden")
+		case errors.Is(err, ErrJobNotFound):
+			writeError(w, http.StatusNotFound, "job not found")
+		case errors.Is(err, ErrJobState):
+			writeError(w, http.StatusConflict, "only a queued job can be cancelled")
+		case errors.As(err, &st):
+			writeError(w, http.StatusConflict, fmt.Sprintf("the invoice is %s, not queued", st.Have))
+		case err != nil:
+			log.Error("staffjobs: cancel response", "err", err)
+			writeError(w, http.StatusInternalServerError, "internal server error")
+		default:
+			detail.Job.MaxAttempts = maxAttempts
+			if detail.History == nil {
+				detail.History = []Step{}
+			}
+			writeJSON(w, http.StatusOK, detail)
+		}
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

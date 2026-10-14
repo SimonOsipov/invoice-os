@@ -214,3 +214,63 @@ func (s *Store) Redrive(ctx context.Context, id, reason string) (Detail, error) 
 	}
 	return s.Get(ctx, id)
 }
+
+// Cancel stops a queued job and fails its invoice. reason is already trimmed.
+func (s *Store) Cancel(ctx context.Context, id, reason string) (Detail, error) {
+	actor, err := db.StaffActor(ctx)
+	if err != nil {
+		return Detail{}, err
+	}
+	before, err := s.Get(ctx, id)
+	if err != nil {
+		return Detail{}, err
+	}
+	job := before.Job
+	err = db.WithinTenantTx(ctx, s.pool, job.TenantID, func(tx pgx.Tx) error {
+		var tenantID, invoiceID, state string
+		var riverJobID *int64
+		if err := tx.QueryRow(ctx, `SELECT tenant_id::text, invoice_id::text, state, river_job_id
+			FROM submission_jobs WHERE id = $1 FOR UPDATE`, job.ID).
+			Scan(&tenantID, &invoiceID, &state, &riverJobID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrJobNotFound
+			}
+			return fmt.Errorf("staffjobs: lock job: %w", err)
+		}
+		if state != "queued" {
+			return ErrJobState
+		}
+		if _, err := tx.Exec(ctx, `UPDATE submission_jobs SET state = 'cancelled' WHERE id = $1`, job.ID); err != nil {
+			return fmt.Errorf("staffjobs: cancel job: %w", err)
+		}
+		if err := s.invoices.CancelQueuedTx(ctx, tx, invoiceID, tenantID); err != nil {
+			return err
+		}
+		if riverJobID != nil {
+			if _, err := s.river.JobCancelTx(ctx, tx, *riverJobID); err != nil && !errors.Is(err, rivertype.ErrNotFound) {
+				return fmt.Errorf("staffjobs: cancel River job: %w", err)
+			}
+		}
+		tenantUUID, err := uuid.Parse(tenantID)
+		if err != nil {
+			return fmt.Errorf("staffjobs: job tenant: %w", err)
+		}
+		jobUUID, err := uuid.Parse(job.ID)
+		if err != nil {
+			return fmt.Errorf("staffjobs: job id: %w", err)
+		}
+		return recordStaff(ctx, tx, audit.StaffEvent{
+			Actor:     actor,
+			Event:     "submission.job.cancelled",
+			TenantID:  tenantUUID,
+			SubjectID: jobUUID,
+			Payload: map[string]string{
+				"job_id": job.ID, "invoice_id": invoiceID, "invoice_number": job.InvoiceNumber, "reason": reason,
+			},
+		})
+	})
+	if err != nil {
+		return Detail{}, err
+	}
+	return s.Get(ctx, id)
+}

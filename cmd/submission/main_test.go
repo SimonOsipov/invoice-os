@@ -1998,6 +1998,7 @@ func TestSubmissionMain_RegistersTheStaffJobsRoutes(t *testing.T) {
 		"GET /v1/staff/jobs":               "staffjobs.ListHandler",
 		"GET /v1/staff/jobs/{id}":          "staffjobs.GetHandler",
 		"POST /v1/staff/jobs/{id}/redrive": "staffjobs.RedriveHandler",
+		"POST /v1/staff/jobs/{id}/cancel":  "staffjobs.CancelHandler",
 	}
 	found := map[string]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {

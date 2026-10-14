@@ -1552,7 +1552,7 @@ func TestSeedSubmissionJobsAreTerminalAndLinkToSeededInvoices(t *testing.T) {
 	}
 	for _, j := range jobs {
 		if !terminalJobStates[j.state] {
-			t.Errorf("%s: submission_jobs.state = %q, want one of accepted/rejected/failed/dead_lettered (terminal) -- a live queued/submitting/pending job polls forever", j.invoiceNumber, j.state)
+			t.Errorf("%s: submission_jobs.state = %q, want a terminal state (terminalJobStates) -- a live queued/submitting/pending job polls forever", j.invoiceNumber, j.state)
 		}
 		if j.attempts < 1 {
 			t.Errorf("%s: submission_jobs.attempts = %d, want >= 1 -- a terminal job made at least one real attempt", j.invoiceNumber, j.attempts)

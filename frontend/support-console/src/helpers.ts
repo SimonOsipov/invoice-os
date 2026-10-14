@@ -19,3 +19,32 @@ const SEVERITY: Record<Severity, StatusStyle> = {
 export function severityStyle(severity: Severity): StatusStyle {
   return SEVERITY[severity]
 }
+
+// Sparkline paths in a fixed 220x44 box; the range floors at 1 so a flat series draws.
+export const SPARK_WIDTH = 220
+export const SPARK_HEIGHT = 44
+
+export function sparkline(points: number[]): { line: string; area: string } {
+  if (points.length < 2) {
+    return { line: '', area: '' }
+  }
+  const max = Math.max(...points)
+  const min = Math.min(...points)
+  const range = max - min || 1
+  const step = SPARK_WIDTH / (points.length - 1)
+  const xy = points.map((p, i) => [i * step, SPARK_HEIGHT - 4 - ((p - min) / range) * (SPARK_HEIGHT - 10)] as const)
+  const line = xy.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ')
+  const area = `${line} L${SPARK_WIDTH} ${SPARK_HEIGHT} L0 ${SPARK_HEIGHT} Z`
+  return { line, area }
+}
+
+// Dot, stroke and fill derive from one tone so a tile cannot mix them.
+export function healthTone(tone: 'green' | 'amber' | 'red'): { dot: string; stroke: string; fill: string } {
+  if (tone === 'amber') {
+    return { dot: 'var(--status-amber-text)', stroke: 'var(--status-amber-text)', fill: 'var(--status-amber-bg)' }
+  }
+  if (tone === 'red') {
+    return { dot: 'var(--status-red-text)', stroke: 'var(--status-red-text)', fill: 'var(--status-red-bg)' }
+  }
+  return { dot: 'var(--status-green-text)', stroke: 'var(--action)', fill: 'var(--action-tint)' }
+}

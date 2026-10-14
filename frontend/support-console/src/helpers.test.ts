@@ -1,7 +1,7 @@
 // Specs for the pure presentation helpers: token NAMES only, never literals.
 import { describe, expect, it } from 'vitest'
 
-import { severityStyle } from './helpers'
+import { healthTone, SPARK_HEIGHT, SPARK_WIDTH, severityStyle, sparkline } from './helpers'
 import type { Severity } from './types'
 
 const ALL_SEVERITIES: Severity[] = ['error', 'warn', 'info']
@@ -15,5 +15,31 @@ describe('severityStyle', () => {
         expect(v, `severity ${s}`).toMatch(/^var\(--[a-z0-9-]+\)$/)
       }
     }
+  })
+})
+
+describe('sparkline', () => {
+  it('draws nothing under two points', () => {
+    expect(sparkline([])).toEqual({ line: '', area: '' })
+    expect(sparkline([5])).toEqual({ line: '', area: '' })
+    const { line, area } = sparkline([1, 2, 3])
+    expect(line).toMatch(/^M[\d.]+ [\d.]+ L[\d.]+ [\d.]+ L[\d.]+ [\d.]+$/)
+    const nums = [...line.matchAll(/[ML]([\d.]+) ([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])])
+    expect(nums).toHaveLength(3)
+    for (const [x, y] of nums) {
+      expect(x).toBeGreaterThanOrEqual(0)
+      expect(x).toBeLessThanOrEqual(SPARK_WIDTH)
+      expect(y).toBeGreaterThanOrEqual(0)
+      expect(y).toBeLessThanOrEqual(SPARK_HEIGHT)
+    }
+    expect(area).toBe(`${line} L${SPARK_WIDTH} ${SPARK_HEIGHT} L0 ${SPARK_HEIGHT} Z`)
+  })
+})
+
+describe('healthTone', () => {
+  it('maps three tones', () => {
+    expect(healthTone('green')).toEqual({ dot: 'var(--status-green-text)', stroke: 'var(--action)', fill: 'var(--action-tint)' })
+    expect(healthTone('amber')).toEqual({ dot: 'var(--status-amber-text)', stroke: 'var(--status-amber-text)', fill: 'var(--status-amber-bg)' })
+    expect(healthTone('red')).toEqual({ dot: 'var(--status-red-text)', stroke: 'var(--status-red-text)', fill: 'var(--status-red-bg)' })
   })
 })

@@ -1988,3 +1988,48 @@ func isSelectorCall(e ast.Expr, pkg, name string) bool {
 	call, ok := e.(*ast.CallExpr)
 	return ok && isSelector(call.Fun, pkg, name)
 }
+
+func TestSubmissionMain_RegistersTheStaffJobsRoutes(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+	want := map[string]string{
+		"GET /v1/staff/jobs":      "staffjobs.ListHandler",
+		"GET /v1/staff/jobs/{id}": "staffjobs.GetHandler",
+	}
+	found := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) < 2 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		pattern := strings.Trim(lit.Value, `"`)
+		handler, ok := want[pattern]
+		if !ok {
+			return true
+		}
+		found[pattern] = true
+		if got := wtRender(sel.X); got != "app.Mux" {
+			t.Errorf("%s is registered on %s, want app.Mux", pattern, got)
+		}
+		hc, ok := call.Args[1].(*ast.CallExpr)
+		if !ok || wtRender(hc.Fun) != handler {
+			t.Errorf("%s handler = %s, want %s(...)", pattern, wtRender(call.Args[1]), handler)
+		}
+		return true
+	})
+	for pattern := range want {
+		if !found[pattern] {
+			t.Errorf("main.go registers no %s", pattern)
+		}
+	}
+}

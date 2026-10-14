@@ -53,6 +53,7 @@ func main() {
 
 	// GET /v1/staff/tenants — every tenant, for staff; the staff check is in platform.App.
 	app.Mux.HandleFunc("GET /v1/staff/tenants", tenancy.StaffTenantsHandler(store.StaffTenants, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}", tenancy.StaffTenantHandler(store.StaffTenant, app.Logger))
 
 	// GET /v1/memberships — the caller's tenant's membership list, resolved under
 	// RLS. Reached via the gateway as /api/tenancy/v1/memberships.

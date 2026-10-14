@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 import { Rules } from './components/Rules'
+import { Tenants } from './components/Tenants'
 import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
 import { KillConfirm } from './components/KillConfirm'
 import { PublishModal } from './components/PublishModal'
 import { DraftTestModal } from './components/DraftTestModal'
 import { Toast } from './components/Toast'
-import { gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
+import { type ApiError, gatewayBase, toApiError, useAsync } from '@invoice-os/api-client'
 import {
   addDraftRule,
   diffRules,
@@ -30,6 +31,7 @@ import {
   type RuleVersion,
   type RulesInForce,
 } from './rulesApi'
+import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, appBase, expireSession, landingBase } from './auth'
 import type { DrawerState, Env, Rule, Screen, ToastState, ToastTone } from './types'
@@ -58,6 +60,8 @@ function Console() {
   const [draftBusy, setDraftBusy] = useState(false)
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
   const [toast, setToast] = useState<ToastState>(null)
+  const [tenantQuery, setTenantQuery] = useState('')
+  const [tenantId, setTenantId] = useState<string | null>(null)
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showToast = useCallback((msg: string, tag = '', tone: ToastTone = 'ok') => {
@@ -95,7 +99,15 @@ function Console() {
   const versionsNote = versionsRead.status === 'error' ? (versionsRead.error?.message ?? 'Versions unavailable') : 'Loading versions…'
   const readNote = (r: { status: string; error: { status: number | null; message: string } | null }): string =>
     r.status !== 'error' ? 'Loading…' : r.error?.status === 403 ? 'Your account is not ASComply staff.' : (r.error?.message ?? 'Unavailable')
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead].some((r) => r.error?.status === 401)
+  const onTenants = screen === 'tenants'
+  const tenantsRead = useAsync(fetchStaffTenants, { immediate: onTenants, deps: [onTenants] })
+  const failedTenants = useRef(new WeakMap<ApiError, string>())
+  const tenantRead = useAsync(async () => {
+    const id = tenantId ?? ''
+    try { return await fetchStaffTenant(id) } catch (e) { const error = toApiError(e); failedTenants.current.set(error, id); throw error }
+  }, { immediate: onTenants && tenantId !== null, deps: [onTenants, tenantId], isEmpty: () => false })
+  const tenantsStatus = tenantsRead.status === 'error' ? (tenantsRead.error?.status === 403 ? 'forbidden' : 'error') : tenantsRead.status === 'ready' || tenantsRead.status === 'empty' ? tenantsRead.status : 'loading'
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -278,6 +290,22 @@ function Console() {
                 setTestResult(null)
                 setTestOpen(true)
               }}
+            />
+          )}
+          {screen === 'tenants' && (
+            <Tenants
+              status={tenantsStatus}
+              errorText={tenantsRead.error?.message}
+              tenants={tenantsRead.data ?? []}
+              query={tenantQuery}
+              onQueryChange={setTenantQuery}
+              selectedId={tenantId}
+              onSelect={setTenantId}
+              onRetry={tenantsRead.run}
+              detailStatus={detailStatus(tenantRead, tenantId, (tenantRead.error && failedTenants.current.get(tenantRead.error)) || null)}
+              detail={tenantRead.data}
+              detailErrorText={tenantRead.error?.message}
+              onRetryDetail={tenantRead.run}
             />
           )}
         </div>

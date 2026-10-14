@@ -156,6 +156,48 @@ func TestStaffRoute_EveryNonStaffTokenIsRefusedOnEveryService(t *testing.T) {
 	}
 }
 
+// The tenancy staff list and detail routes sit behind the staff class; only a staff token reaches the upstream.
+func TestStaffRoute_TenancyTenantRoutesRefuseACustomerToken(t *testing.T) {
+	rig := newInternalRig(t)
+	paths := []string{"/api/tenancy/v1/staff/tenants", "/api/tenancy/v1/staff/tenants/5b1f7f0e-0c0e-4a52-9f0e-3f6a2d1b9c11"}
+	customers := map[string]string{
+		"tenant-bearing customer": rig.mintOpts(t, auth.MintOptions{TenantID: testTenant}),
+		"tenant-less customer":    rig.mintOpts(t, auth.MintOptions{}),
+	}
+	for name, tok := range customers {
+		for _, p := range paths {
+			t.Run(name+p, func(t *testing.T) {
+				rig.resetAll()
+				status, body, _ := rig.rawBody(t, http.MethodGet, p, tok)
+				if status != http.StatusForbidden || body != `{"error":"forbidden"}` {
+					t.Errorf("GET %s answered %d %q, want 403 {\"error\":\"forbidden\"}", p, status, body)
+				}
+				if n := rig.total(func(c *upstreamCount) int32 { return c.any.Load() }); n != 0 {
+					t.Errorf("GET %s reached an upstream %d times, want 0", p, n)
+				}
+			})
+		}
+	}
+
+	// Control: a staff token reaches the tenancy upstream on both paths, so the zero counts above are not vacuous.
+	for name, tok := range map[string]string{
+		"tenant-less staff":    rig.mintOpts(t, auth.MintOptions{Staff: true}),
+		"tenant-bearing staff": rig.mintOpts(t, auth.MintOptions{TenantID: testTenant, Staff: true}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig.resetAll()
+			for _, p := range paths {
+				if status, _, _ := rig.rawBody(t, http.MethodGet, p, tok); status != http.StatusAccepted {
+					t.Errorf("GET %s answered %d, want the upstream's 202", p, status)
+				}
+			}
+			if n := rig.counts["tenancy"].staff.Load(); n != 2 {
+				t.Errorf("the tenancy upstream saw %d staff hits, want 2", n)
+			}
+		})
+	}
+}
+
 func TestStaffRoute_BareStaffSegmentIsRefused(t *testing.T) {
 	rig := newInternalRig(t)
 	tok := rig.mintOpts(t, auth.MintOptions{TenantID: testTenant})

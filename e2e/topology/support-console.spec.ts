@@ -1,9 +1,9 @@
-// The deployed v2 Support Console. It has one screen, Rules, which reads and switches real rules.
+// The deployed v2 Support Console. Its two screens, Rules and Tenants, read real data; Rules also switches real rules.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { randomUUID } from 'node:crypto'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
-import { provisionStaffAccount, rawFetch, signInSession, type StaffAccount } from '../api/client'
+import { HOUSE_TENANT_ID, provisionStaffAccount, rawFetch, signInSession, type StaffAccount } from '../api/client'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -462,6 +462,163 @@ async function gridKids(page: Page, grid: string, what: string): Promise<Rect[]>
   return rs
 }
 
+const STAFF_TENANTS = '/api/tenancy/v1/staff/tenants'
+// db.DemoTenants: the seeded 2222 in-house tenant (the house tenant is HOUSE_TENANT_ID).
+const DEMO_2222_ID = '22222222-2222-2222-2222-222222222222'
+const HOUSE_NAME = 'ASComply (dev)'
+
+type LiveTenant = { id: string; name: string; kind: string; demo: boolean; active_members: number; invoice_count: number }
+type LiveDetail = { members: { email: string | null }[]; invoices: { invoice_number: string }[] }
+
+async function liveStaffGet<T>(path: string): Promise<T> {
+  const res = await rawFetch(path, { headers: { Authorization: `Bearer ${await staffToken()}` } })
+  expect(res.status, `GET ${path}`).toBe(200)
+  return res.body as T
+}
+
+const tenantRow = (page: Page, id: string): Locator => mainOf(page).locator(`button[data-tenant-id="${id}"]`)
+// Same text as kindLabel in frontend/support-console/src/tenantsApi.ts.
+const kindText = (kind: string): string => (kind === 'firm' ? 'FIRM' : kind === 'in_house' ? 'IN-HOUSE' : kind.toUpperCase())
+
+// Rects of the first `cap` matches: the shared DB list grows with every run.
+async function rectsOfFirst(page: Page, loc: Locator, cap: number, what: string): Promise<Rect[]> {
+  await settle(page, loc.first())
+  const n = Math.min(await loc.count(), cap)
+  expect(n, `${what}: none found`).toBeGreaterThan(0)
+  const out: Rect[] = []
+  for (let i = 0; i < n; i++) {
+    const box = await loc.nth(i).boundingBox()
+    if (!box) throw new Error(`${what} #${i} has no box`)
+    out.push(box)
+  }
+  return out
+}
+
+async function tenantsReads(page: Page, testInfo: TestInfo): Promise<void> {
+  const mn = mainOf(page)
+  const live = (await liveStaffGet<{ tenants: LiveTenant[] }>(STAFF_TENANTS)).tenants
+  const house = tenantRow(page, HOUSE_TENANT_ID)
+  const demo2222 = tenantRow(page, DEMO_2222_ID)
+  await expect(house, 'the house tenant row has loaded').toBeVisible()
+  await expect(demo2222).toBeVisible()
+
+  const demoTag = (row: Locator): Locator => row.getByText('DEMO', { exact: true })
+  await expect(demoTag(house)).toBeVisible()
+  await expect(demoTag(demo2222)).toBeVisible()
+  const plain = live.find((t) => !t.demo)
+  expect(plain, 'the live read holds a non-demo tenant').toBeDefined()
+  const plainRow = tenantRow(page, plain!.id)
+  await expect(plainRow).toBeVisible()
+  await expect(demoTag(plainRow)).toHaveCount(0)
+
+  const row2222 = live.find((t) => t.id === DEMO_2222_ID)
+  expect(row2222, 'the live read holds the 2222 tenant').toBeDefined()
+  const line = `${kindText(row2222!.kind)} · ${row2222!.active_members} active · ${row2222!.invoice_count} invoices`
+  await expect(demo2222.getByText(line, { exact: true })).toBeVisible()
+
+  const search = mn.getByLabel('Search tenants')
+  await search.fill(HOUSE_NAME)
+  await expect(house).toBeVisible()
+  await expect(demo2222).toHaveCount(0)
+  await search.fill('')
+  await expect(demo2222).toBeVisible()
+
+  const detail = await liveStaffGet<LiveDetail>(`${STAFF_TENANTS}/${HOUSE_TENANT_ID}`)
+  await house.click()
+  await expect(mn.getByRole('heading', { level: 2, name: HOUSE_NAME })).toBeVisible()
+  const card = mn.locator('.ops-tenants-grid > div:nth-child(2)')
+  await expect(kid(card, 2)).toContainText((await staffAccount()).email)
+  await expect(kid(card, 3)).toContainText(detail.invoices.length === 0 ? 'No invoices yet.' : detail.invoices[0].invoice_number)
+
+  await expect(mn.getByRole('button', { name: 'View jobs' }), 'View jobs is gone').toHaveCount(0)
+  await expectStyles(parent(demoTag(house)), 'DEMO badge', { radius: '4px' })
+  await attachShot(page, testInfo, 'tenants')
+
+  await narrowCollapse(page)
+}
+
+// ceiling: one narrow width below the 1024px rule, not swept; sweep it if the breakpoint moves.
+async function narrowCollapse(page: Page): Promise<void> {
+  const entry = page.viewportSize()
+  try {
+    await page.setViewportSize({ width: 1000, height: 1080 })
+    await expect
+      .poll(
+        async () => {
+          try {
+            const kids = await gridKids(page, '.ops-tenants-grid', 'tenants grid')
+            return below(kids[0], kids[1], 'tenants detail under the list')
+          } catch (err) {
+            return [`read threw: ${String((err as Error).message).split('\n')[0]}`]
+          }
+        },
+        { message: 'the tenants grid collapses to one column', timeout: 10_000 },
+      )
+      .toEqual([])
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+}
+
+async function tenantsLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const kids = await gridKids(page, '.ops-tenants-grid', 'tenants grid')
+  const [listCol, detailCol] = kids
+  const problems = [...apart(listCol, detailCol, 'tenants grid columns'), ...sameTops(kids, 'tenants grid')]
+
+  const top = await boxes(page, { search: mn.getByLabel('Search tenants').locator('xpath=..'), list: mn.locator('.ops-tenants-grid > div:first-child > div:nth-child(2)') })
+  problems.push(...within(listCol, top.search, 'search field in the list column'), ...below(top.search, top.list, 'list card below the search field'), ...within(listCol, top.list, 'list card in the list column'))
+
+  const rowRects = await rectsOfFirst(page, mn.locator('button[data-tenant-id]'), 20, 'tenant row')
+  for (const [i, r] of rowRects.entries()) problems.push(...within(top.list, r, `row ${i} in the list card`))
+
+  // The house row is DEMO: its badge and text lines stay inside the row and the badge clears the name.
+  const house = tenantRow(page, HOUSE_TENANT_ID)
+  const text = kid(house, 2)
+  const nameRow = kid(text, 1)
+  const rowParts = await boxes(page, { row: house, name: kid(nameRow, 1), badge: kid(nameRow, 2), line2: kid(text, 2), line3: kid(text, 3) })
+  problems.push(
+    ...within(rowParts.row, rowParts.name, 'row name'),
+    ...within(rowParts.row, rowParts.badge, 'DEMO badge in its row'),
+    ...apart(rowParts.name, rowParts.badge, 'DEMO badge and name'),
+    ...within(rowParts.row, rowParts.line2, 'row counts line'),
+    ...within(rowParts.row, rowParts.line3, 'row activity line'),
+  )
+
+  const card = mn.locator('.ops-tenants-grid > div:nth-child(2)')
+  const parts = await boxes(page, { card, header: kid(card, 1), members: kid(card, 2), invoices: kid(card, 3) })
+  problems.push(
+    ...within(parts.card, parts.header, 'detail header in the detail card'),
+    ...within(parts.card, parts.members, 'Members in the detail card'),
+    ...within(parts.card, parts.invoices, 'Recent invoices in the detail card'),
+    ...below(parts.members, parts.invoices, 'Recent invoices under Members'),
+  )
+
+  const memberRows = kid(kid(card, 2), 2).locator('xpath=./div')
+  const nMembers = Math.min(await memberRows.count(), 10)
+  expect(nMembers, 'member rows').toBeGreaterThan(0)
+  for (let i = 0; i < nMembers; i++) {
+    const r = memberRows.nth(i)
+    const m = await boxes(page, { row: r, block: kid(r, 2), role: kid(r, 3), status: kid(r, 4) })
+    problems.push(
+      ...within(m.row, m.role, `member ${i} role chip in its row`),
+      ...within(m.row, m.status, `member ${i} status badge in its row`),
+      ...within(m.row, m.block, `member ${i} name block in its row`),
+      ...pairwiseApart([m.block, m.role, m.status], `member ${i} block, role, status`),
+    )
+  }
+
+  const invRows = kid(kid(card, 3), 2).locator('xpath=./div')
+  for (let i = 0, n = Math.min(await invRows.count(), 10); i < n; i++) {
+    const r = invRows.nth(i)
+    const v = await boxes(page, { row: r, number: kid(r, 1), status: kid(r, 2) })
+    problems.push(...within(v.row, v.number, `invoice ${i} number in its row`), ...within(v.row, v.status, `invoice ${i} status in its row`), ...apart(v.number, v.status, `invoice ${i} number and status`))
+  }
+
+  await noSidewaysScroll(page, 'Tenants')
+  return { problems, rects: { kids, rowParts, parts } }
+}
+
 const SCREENS: Screen[] = [
   {
     nav: 'Rules',
@@ -490,6 +647,13 @@ const SCREENS: Screen[] = [
       await noSidewaysScroll(page, 'Rules')
       return { problems: [...apart(kids[0], kids[1], 'rules grid columns'), ...sameTops(kids, 'rules grid')], rects: { kids } }
     },
+  },
+  {
+    nav: 'Tenants',
+    h1: 'Tenants',
+    rowUp: 1,
+    reads: tenantsReads,
+    layout: tenantsLayout,
   },
 ]
 

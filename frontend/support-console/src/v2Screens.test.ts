@@ -3,8 +3,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { Rules } from './components/Rules'
+import { Tenants } from './components/Tenants'
 import { SEED_RULES } from './rulesFixture'
 import type { RuleVersion } from './rulesApi'
+import type { StaffInvoice, StaffMember, StaffTenant, StaffTenantDetail } from './tenantsApi'
 import type { CodeListLatest } from './types'
 
 // SSR markup is the oracle for inline values; the resolved look is SUP-03 (deploy gate).
@@ -85,7 +87,34 @@ const RULES_PROPS: Parameters<typeof Rules>[0] = {
 }
 const rulesWith = (over: Partial<Parameters<typeof Rules>[0]>) => renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS, ...over }))
 
-const SCREENS = { rules: renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS })) }
+const tenant = (id: string, name: string, over: Partial<StaffTenant> = {}): StaffTenant => ({
+  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 0, invoice_count: 0, last_activity_at: null, ...over,
+})
+const T1 = tenant('t1', 'Okafor & Partners', { demo: true, active_members: 5, invoice_count: 31, last_activity_at: '2026-09-23T11:35:00Z' })
+const T2 = tenant('t2', 'In-house Co', { kind: 'in_house' })
+const member = (user_id: string, role: string, status: StaffMember['status'], display_name: string | null, email: string | null): StaffMember => ({ user_id, role, status, display_name, email })
+const MEMBERS = [
+  member('u1', 'admin', 'active', 'Ada Okafor', 'ada@x.test'),
+  member('u2', 'reviewer', 'invited', null, 'rev@x.test'),
+  member('u3', 'preparer', 'suspended', 'Pat Preparer', null),
+]
+const invoice = (n: string): StaffInvoice => ({ id: n, invoice_number: n, status: 'validated', created_at: '2026-10-13T08:00:00Z' })
+const DETAIL: StaffTenantDetail = { tenant: T2, members: MEMBERS, invoices: [invoice('INV-1009')] }
+const TENANTS_PROPS: Parameters<typeof Tenants>[0] = {
+  status: 'ready',
+  tenants: [T1, T2],
+  query: '',
+  onQueryChange: noop,
+  selectedId: 't2',
+  onSelect: noop,
+  onRetry: noop,
+  detailStatus: 'ready',
+  detail: DETAIL,
+  onRetryDetail: noop,
+}
+const tenantsWith = (over: Partial<Parameters<typeof Tenants>[0]>) => renderToStaticMarkup(createElement(Tenants, { ...TENANTS_PROPS, ...over }))
+
+const SCREENS = { rules: renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS })), tenants: tenantsWith({}) }
 type Screen = keyof typeof SCREENS
 const SCREEN_KEYS = Object.keys(SCREENS) as Screen[]
 const tagsOf = (screen: Screen) => {
@@ -322,5 +351,136 @@ describe('v2 screens', () => {
     expect(rows[0][2]).toContain('QUARANTINED')
     expect(rows[0][2]).toContain('var(--status-muted-bg)')
     expect(rows[0][2]).toContain('+3 −1 ~0')
+  })
+
+  // Tenants: rows are the buttons that carry data-tenant-id.
+  const tenantRows = (html: string) => [...html.matchAll(/<button\b([^>]*data-tenant-id[^>]*)>([\s\S]*?)<\/button>/g)]
+  const rowText = (inner: string) => decode(inner.replace(/<[^>]*>/g, '|')).split('|').filter(Boolean)
+
+  it('Tenants rows show kind, counts, last activity and the demo badge', () => {
+    const rows = tenantRows(tenantsWith({}))
+    expect(rows).toHaveLength(2)
+    expect(rows[0][1]).toContain('data-tenant-id="t1"')
+    expect(rowText(rows[0][2])).toEqual(expect.arrayContaining(['DEMO', 'FIRM · 5 active · 31 invoices', 'last activity 2026-09-23 11:35 UTC']))
+    expect(rowText(rows[1][2])).not.toContain('DEMO')
+    expect(rowText(rows[1][2])).toEqual(expect.arrayContaining(['IN-HOUSE · 0 active · 0 invoices', 'no activity']))
+  })
+
+  it('the DEMO badge and the cards wear v2 corners', () => {
+    const ts = parsed(SCREENS.tenants, 'tenants')
+    const demo = ts.filter((t) => t.text === 'DEMO')
+    expect(demo.length).toBeGreaterThan(0)
+    for (const d of demo) expect.soft(style(ts[ts.indexOf(d) - 1])['border-radius'], 'DEMO badge corner').toBe('var(--radius-sm)')
+    const cards = ts.filter((t) => style(t).border === '1px solid var(--line-1)' && style(t).background === 'var(--bg-2)')
+    expect(cards, 'list and detail cards').toHaveLength(2)
+    for (const c of cards) expect.soft(style(c)['border-radius'], 'card corner').toBe('var(--radius-md)')
+    expect(ts.filter((t) => 'box-shadow' in style(t)).map((t) => t.name), 'no inline shadow').toEqual([])
+  })
+
+  it('the selected row wears the prototype selection paint', () => {
+    const rows = tenantRows(tenantsWith({ selectedId: 't2' }))
+    const at = (i: number) => style({ attrs: ` ${rows[i][1]}` })
+    expect(attr({ attrs: ` ${rows[1][1]}` }, 'aria-pressed')).toBe('true')
+    expect(attr({ attrs: ` ${rows[0][1]}` }, 'aria-pressed')).toBe('false')
+    expect([at(1).background, at(0).background]).toEqual(['var(--bg-3)', 'var(--bg-2)'])
+    expect(classes({ attrs: ` ${rows[0][1]}` })).toContain('ops-nav')
+    for (const r of rows) {
+      const tile = r[2].match(/<span style="([^"]*)">([^<]*)<\/span>/)!
+      expect([style({ attrs: ` style="${tile[1]}"` }).width, style({ attrs: ` style="${tile[1]}"` }).height]).toEqual(['30px', '30px'])
+    }
+  })
+
+  it('member rows carry an initials circle and the role tone', () => {
+    const html = tenantsWith({})
+    const circles = [...html.matchAll(/<span style="([^"]*width:26px[^"]*)">([^<]*)<\/span>/g)]
+    expect(circles.map((c) => c[2])).toEqual(['AO', 'R', 'PP'])
+    for (const c of circles) expect(style({ attrs: ` style="${c[1]}"` })).toMatchObject({ width: '26px', height: '26px', 'border-radius': '50%' })
+    const chip = (label: string) => style({ attrs: ` style="${html.match(new RegExp(`<span class="mono" style="([^"]*)">${label}</span>`))![1]}"` }).background
+    expect([chip('ADMIN'), chip('REVIEWER'), chip('PREPARER')]).toEqual(['var(--action-tint)', 'var(--status-amber-bg)', 'var(--status-muted-bg)'])
+  })
+
+  it('member status badges use the app member tones', () => {
+    const html = tenantsWith({})
+    const bg = (label: string) => html.match(new RegExp(`<span style="[^"]*background:([^;"]*)[^"]*"><span class="mono"[^>]*>${label}</span>`))![1]
+    expect([bg('ACTIVE'), bg('INVITED'), bg('SUSPENDED')]).toEqual(['var(--status-muted-bg)', 'var(--status-amber-bg)', 'var(--status-red-bg)'])
+  })
+
+  it('Tenants renders every list and detail state', () => {
+    const lists = {
+      loading: 'Loading tenants…',
+      empty: 'No tenants yet.',
+      forbidden: 'Your account is not ASComply staff.',
+      error: 'boom',
+    } as const
+    for (const [status, copy] of Object.entries(lists) as [keyof typeof lists, string][]) {
+      const html = tenantsWith({ status, tenants: [], errorText: 'boom' })
+      expect(html, `list ${status}`).toContain(copy)
+      expect(html.includes('>Retry<'), `list ${status} Retry`).toBe(status === 'error')
+    }
+    const details = {
+      none: 'Select a tenant to see its members and recent invoices.',
+      loading: 'Loading tenant…',
+      'not-found': 'Tenant not found.',
+      forbidden: 'Your account is not ASComply staff.',
+      error: 'down',
+    } as const
+    for (const [detailStatus, copy] of Object.entries(details) as [keyof typeof details, string][]) {
+      const html = tenantsWith({ detailStatus, detail: null, detailErrorText: 'down' })
+      expect(html, `detail ${detailStatus}`).toContain(copy)
+      expect(html.includes('>Retry<'), `detail ${detailStatus} Retry`).toBe(detailStatus === 'error')
+    }
+    const bare = tenantsWith({ detail: { tenant: T2, members: [], invoices: [] } })
+    expect(bare).toContain('No members.')
+    expect(bare).toContain('No invoices yet.')
+    expect(tenantsWith({ status: 'ready', tenants: [T1], query: 'zzz' })).toContain('No tenant matches.')
+  })
+
+  it('the tenant detail offers no action', () => {
+    const html = SCREENS.tenants
+    expect(html).not.toContain('View jobs')
+    const detail = html.slice(html.indexOf('<h2'))
+    expect(detail).not.toContain('<button')
+  })
+
+  it('the tenants grid holds two columns', () => {
+    const grid = withClass(tagsOf('tenants'), 'ops-tenants-grid')
+    expect(grid).toHaveLength(1)
+    expect(style(grid[0])['grid-template-columns']).toBe('320px minmax(0,1fr)')
+  })
+
+  it('long names, emails and invoice numbers stay on one line inside their rows', () => {
+    const long = 'x'.repeat(120)
+    const html = tenantsWith({
+      tenants: [tenant('t2', long, { demo: true })],
+      detail: { tenant: tenant('t2', long, { demo: true }), members: [member('u1', 'admin', 'active', long, `${long}@x.test`)], invoices: [invoice(long)] },
+    })
+    const ts = parse(html)
+    const oneLine = { overflow: 'hidden', 'white-space': 'nowrap', 'text-overflow': 'ellipsis' }
+    const hits = (name: string, text: string) => ts.filter((t) => t.name === name && t.text === text)
+    const h2 = hits('h2', long)
+    const memberName = hits('div', long)
+    const email = hits('div', `${long}@x.test`)
+    const number = ts.filter((t) => t.name === 'span' && t.text === long && style(t)['font-size'] === '11.5px')
+    for (const [what, found] of [['h2', h2], ['member name', memberName], ['email', email], ['invoice number', number]] as const) {
+      expect(found, `${what} found`).toHaveLength(1)
+      expect.soft(style(found[0]), `${what} one line`).toMatchObject(oneLine)
+    }
+    // Each ellipsis element sits in a flex block that can shrink.
+    const before = (tag: Tag) => ts[ts.indexOf(tag) - 1]
+    expect.soft(style(before(h2[0]))['min-width'], 'h2 name row').toBe('0')
+    expect.soft(style(before(memberName[0]))['min-width'], 'member name block').toBe('0')
+    expect.soft(html, 'email shares the name block').toMatch(new RegExp(`min-width:0"><div[^>]*>${long}</div><div[^>]*>${long}@x.test</div>`))
+    expect.soft(style(before(number[0]))['min-width'], 'invoice row').toBe('0')
+    // Chips and badges: every wrapper of a label holds flex:none.
+    for (const label of ['DEMO', 'ADMIN', 'ACTIVE', 'VALIDATED']) {
+      const labels = ts.filter((t) => t.text === label)
+      expect(labels.length, label).toBeGreaterThan(0)
+      for (const l of labels) {
+        const i = ts.indexOf(l)
+        const own = style(l)
+        const wrap = own.flex === 'none' ? own : style(ts[i - 1].name === 'span' && style(ts[i - 1])['border-radius'] ? ts[i - 2] : ts[i - 1])
+        expect.soft(wrap.flex, `${label} wrapper`).toBe('none')
+      }
+    }
   })
 })

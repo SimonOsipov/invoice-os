@@ -5,7 +5,7 @@ import "time"
 
 const (
 	SampleInterval = 5 * time.Minute
-	TrendWindow    = 7 * 24 * time.Hour
+	TrendWindow    = 7 * 24 * time.Hour // ceiling: ~170 KB uncompressed at 2,016 samples; aggregate per hour if the window grows
 	FleetTimeout   = 15 * time.Second
 	FleetUnknown   = "unknown"
 )

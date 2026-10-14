@@ -15,6 +15,7 @@ import (
 const maxFleetBody = 64 << 10
 
 // FleetReader reads the gateway's fleet roll-up.
+// ceiling: cmd/submission links internal/gateway for FleetHealth; move it to a leaf package if binary size grows
 type FleetReader func(context.Context) (gateway.FleetHealth, error)
 
 // NewFleetReader reads base/healthz/fleet with the FleetTimeout deadline.

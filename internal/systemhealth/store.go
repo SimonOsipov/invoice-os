@@ -82,6 +82,7 @@ func (s *Store) StaffSnapshot(ctx context.Context, since time.Time) (map[string]
 	return jobs, samples, nil
 }
 
+// ceiling: copy of staffReadError in internal/tenancy/staff_tenants.go; consolidate after the epic merges
 // staffReadError maps only the function's own refusal to ErrNotStaff; a lost grant is also 42501 and stays a server fault.
 func staffReadError(op string, err error) error {
 	if err == nil {

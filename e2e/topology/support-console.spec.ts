@@ -672,10 +672,17 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   ]
   for (const [key, field] of series) await expect(tile(key).locator('svg'), `${key} sparkline`).toHaveCount(nonNull(seen.trend, field) >= 2 ? 1 : 0)
 
-  // Stable within one deployment: names, builds and state keys, never counts.
+  // Stable parts only: a failed gateway probe empties a build, and a read can be unknown with no services.
   const live = await liveStaffGet<SeenHealth>(STAFF_HEALTH)
-  const stable = (h: SeenHealth): string[] => h.fleet.services.map((s) => `${s.name}:${s.build ?? ''}`).sort()
-  expect(stable(live), 'live fleet services and builds equal the screen read').toEqual(stable(seen))
+  if (known && live.fleet.status !== 'unknown') {
+    const names = (h: SeenHealth): string[] => h.fleet.services.map((s) => s.name).sort()
+    expect(names(live).length, 'live fleet names services').toBeGreaterThan(0)
+    expect(names(live), 'live fleet service names equal the screen read').toEqual(names(seen))
+    const liveBuilds = new Map(live.fleet.services.map((s) => [s.name, s]))
+    const both = seen.fleet.services.filter((s) => s.status === 'up' && s.build && liveBuilds.get(s.name)?.status === 'up' && liveBuilds.get(s.name)?.build)
+    expect(both.length, 'services up with a build in both reads').toBeGreaterThan(0)
+    for (const s of both) expect(liveBuilds.get(s.name)?.build, `${s.name} live build equals the screen read`).toBe(s.build)
+  }
   expect(Object.keys(live.jobs).sort(), 'live job state keys').toEqual(Object.keys(seen.jobs).sort())
   expect(Object.keys(seen.jobs).sort(), 'job state keys are the systemhealth.JobStates').toEqual([...JOB_STATES].sort())
 

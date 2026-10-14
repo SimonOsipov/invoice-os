@@ -224,6 +224,7 @@ func TestRLS_SubmissionJobStateCountsCountEveryTenant(t *testing.T) {
 
 	healthSeedJobTx(t, tx, h.tenantA, "queued")
 	healthSeedJobTx(t, tx, h.tenantB, "dead_lettered")
+	healthSeedJobTx(t, tx, h.tenantB, "cancelled")
 	txExec(t, tx, `SELECT set_config('app.current_tenant', '', true)`)
 
 	ruleDraftAsApp(t, tx)
@@ -231,8 +232,8 @@ func TestRLS_SubmissionJobStateCountsCountEveryTenant(t *testing.T) {
 	ruleDraftAsOwner(t, tx)
 	want := healthGroupByState(t, tx)
 
-	if got["queued"] < 1 || got["dead_lettered"] < 1 {
-		t.Errorf("counts = %v, want queued and dead_lettered each >= 1 (tenant A's and tenant B's seeded jobs)", got)
+	if got["queued"] < 1 || got["dead_lettered"] < 1 || got["cancelled"] < 1 {
+		t.Errorf("counts = %v, want queued, dead_lettered and cancelled each >= 1 (tenant A's and tenant B's seeded jobs)", got)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("submission_job_state_counts() = %v, superuser GROUP BY state in the same snapshot = %v, want equal", got, want)
@@ -297,13 +298,14 @@ func TestRLS_StaffReadSubmissionJobCountsMatchesTheSamplerCount(t *testing.T) {
 	member := seedMembershipTx(t, tx, house, "reviewer", "active")
 	healthSeedJobTx(t, tx, h.tenantA, "queued")
 	healthSeedJobTx(t, tx, h.tenantB, "dead_lettered")
+	healthSeedJobTx(t, tx, h.tenantB, "cancelled")
 
 	ruleDraftAsApp(t, tx)
 	sampler := healthCallCounts(t, tx, "submission_job_state_counts()", `SELECT public.submission_job_state_counts()`)
 	staff := healthCallCounts(t, tx, "staff_read_submission_job_counts(house member)", `SELECT public.staff_read_submission_job_counts($1::uuid)`, member)
 
-	if sampler["queued"] < 1 || sampler["dead_lettered"] < 1 {
-		t.Errorf("sampler counts = %v, want queued and dead_lettered each >= 1", sampler)
+	if sampler["queued"] < 1 || sampler["dead_lettered"] < 1 || sampler["cancelled"] < 1 {
+		t.Errorf("sampler counts = %v, want queued, dead_lettered and cancelled each >= 1", sampler)
 	}
 	if !reflect.DeepEqual(staff, sampler) {
 		t.Errorf("staff_read_submission_job_counts = %v, submission_job_state_counts() = %v, want equal", staff, sampler)

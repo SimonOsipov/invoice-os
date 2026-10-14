@@ -64,8 +64,12 @@ func testSlot(t *testing.T, super *pgxpool.Pool, era int, offsetSlots int) time.
 	return slot
 }
 
-// seedDeadLettered seeds n dead_lettered jobs in a fresh tenant of their own.
 func seedDeadLettered(t *testing.T, super *pgxpool.Pool, n int) {
+	seedJobs(t, super, "dead_lettered", n)
+}
+
+// seedJobs seeds n jobs in the given state in a fresh tenant of their own.
+func seedJobs(t *testing.T, super *pgxpool.Pool, state string, n int) {
 	t.Helper()
 	ctx := context.Background()
 	tenant := uuid.NewString()
@@ -90,7 +94,7 @@ func seedDeadLettered(t *testing.T, super *pgxpool.Pool, n int) {
 			t.Fatalf("seed invoice: %v", err)
 		}
 		if _, err := super.Exec(ctx, `INSERT INTO submission_jobs (tenant_id, invoice_id, idempotency_key, adapter, adapter_version, state)
-			VALUES ($1, $2, $3, 'mock', 'v1', 'dead_lettered')`, tenant, inv, uuid.NewString()); err != nil {
+			VALUES ($1, $2, $3, 'mock', 'v1', $4)`, tenant, inv, uuid.NewString(), state); err != nil {
 			t.Fatalf("seed job: %v", err)
 		}
 	}
@@ -197,6 +201,7 @@ func assertFloor(t *testing.T, counts map[string]int64) {
 func TestStore_RecordWritesTheCountsOnce(t *testing.T) {
 	super, app := dbTestPools(t)
 	seedDeadLettered(t, super, 3)
+	seedJobs(t, super, "cancelled", 2)
 	s := &Store{Pool: app}
 	slot := testSlot(t, super, 2001, 0)
 	zero := 0
@@ -213,6 +218,9 @@ func TestStore_RecordWritesTheCountsOnce(t *testing.T) {
 		t.Fatalf("row = %+v (found %v), want ok,0", r, ok)
 	}
 	assertFloor(t, r.counts)
+	if r.counts["cancelled"] < 2 {
+		t.Errorf("stored cancelled = %d, want >= 2 (the sampler counts the state, it does not zero-fill it)", r.counts["cancelled"])
+	}
 }
 
 func TestStore_RecordDeletesSamplesOlderThanTheWindow(t *testing.T) {
@@ -270,6 +278,7 @@ func TestStore_StaffSnapshotRefusesANonStaffCaller(t *testing.T) {
 func TestStore_StaffSnapshotReadsCountsAndWindow(t *testing.T) {
 	super, app := dbTestPools(t)
 	seedDeadLettered(t, super, 3)
+	seedJobs(t, super, "cancelled", 2)
 	base := testSlot(t, super, 2003, 0)
 	s0, s1, s2 := base, base.Add(SampleInterval), base.Add(2*SampleInterval)
 	for _, at := range []time.Time{s1, s2} {
@@ -301,6 +310,9 @@ func TestStore_StaffSnapshotReadsCountsAndWindow(t *testing.T) {
 		}
 	}
 	assertFloor(t, Counts(jobs))
+	if jobs["cancelled"] < 2 {
+		t.Errorf("staff live cancelled = %d, want >= 2", jobs["cancelled"])
+	}
 	var mine []Sample
 	for i, sm := range samples {
 		if i > 0 && sm.TakenAt.Before(samples[i-1].TakenAt) {
@@ -320,4 +332,7 @@ func TestStore_StaffSnapshotReadsCountsAndWindow(t *testing.T) {
 		t.Errorf("sample s2 = %+v, want unknown,NULL", mine[1])
 	}
 	assertFloor(t, mine[0].JobCounts)
+	if mine[0].JobCounts["cancelled"] < 2 {
+		t.Errorf("staff sample cancelled = %d, want >= 2", mine[0].JobCounts["cancelled"])
+	}
 }

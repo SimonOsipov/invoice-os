@@ -77,6 +77,7 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
   let start: string
   let aiId: string
   let jevId: string
+  let aiCreated: string
 
   const staffGet = (path: string) => rawFetch(path, { headers: bearer(staff) })
 
@@ -124,7 +125,9 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
       .poll(
         async () => {
           const found = (await calls({ ...forA(), limit: String(MAX_LIMIT) })).calls
-          aiId = found.find((c) => c.client === 'ai' && c.purpose === AI_PURPOSE)?.id ?? ''
+          const ai = found.find((c) => c.client === 'ai' && c.purpose === AI_PURPOSE)
+          aiId = ai?.id ?? ''
+          aiCreated = ai?.created_at ?? ''
           jevId = found.find((c) => c.client === 'jev' && c.purpose === JEV_PURPOSE)?.id ?? ''
           return aiId !== '' && jevId !== ''
         },
@@ -179,7 +182,8 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
   })
 
   test('staff ai totals equal the call list they summarise', async () => {
-    const dayStart = Math.floor(Date.now() / DAY_MS) * DAY_MS
+    // The spec's own row names the UTC day: a run that crosses midnight must not read the wrong one.
+    const dayStart = Math.floor(Date.parse(aiCreated) / DAY_MS) * DAY_MS
     const today = new Date(dayStart).toISOString().slice(0, 10)
     const todayQuery = { tenant: PERSONAS.A.tenantId, from: new Date(dayStart).toISOString(), to: new Date(dayStart + DAY_MS - 1).toISOString() }
 

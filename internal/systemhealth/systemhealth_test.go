@@ -3,7 +3,11 @@ package systemhealth
 import "testing"
 
 func TestCounts_ZeroFillsEveryStateAndKeepsOthers(t *testing.T) {
-	got := Counts(map[string]int64{"accepted": 2, "weird": 1})
+	raw := map[string]int64{"accepted": 2, "weird": 1}
+	got := Counts(raw)
+	if len(raw) != 2 {
+		t.Errorf("input mutated: %v", raw)
+	}
 	for _, s := range JobStates {
 		if _, ok := got[s]; !ok {
 			t.Errorf("state %q missing", s)
@@ -21,5 +25,12 @@ func TestQueueDepth_SumsTheThreeLiveStates(t *testing.T) {
 	}
 	if got := QueueDepth(all); got != 3 {
 		t.Errorf("QueueDepth = %d, want 3", got)
+	}
+	weighted := map[string]int64{}
+	for i, s := range JobStates {
+		weighted[s] = 1 << i
+	}
+	if got := QueueDepth(weighted); got != 1+2+4 {
+		t.Errorf("QueueDepth with distinct weights = %d, want 7", got)
 	}
 }

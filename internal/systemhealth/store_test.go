@@ -219,7 +219,8 @@ func TestStore_RecordDeletesSamplesOlderThanTheWindow(t *testing.T) {
 	super, app := dbTestPools(t)
 	s := &Store{Pool: app}
 	slot := testSlot(t, super, 2002, 0)
-	old, edge := slot.Add(-TrendWindow-SampleInterval), slot.Add(-TrendWindow)
+	week := 7 * 24 * time.Hour
+	old, edge := slot.Add(-week-5*time.Minute), slot.Add(-week)
 	zero := 0
 	for _, at := range []time.Time{old, edge} {
 		at := at
@@ -249,24 +250,43 @@ func TestStore_StaffSnapshotRefusesANonStaffCaller(t *testing.T) {
 	if _, _, err := (&Store{Pool: unreachablePool(t)}).StaffSnapshot(context.Background(), time.Now()); !errors.Is(err, db.ErrNotStaff) {
 		t.Errorf("plain context: err = %v, want ErrNotStaff before any statement", err)
 	}
+	if _, _, err := (&Store{Pool: unreachablePool(t)}).StaffSnapshot(staffCtx("not-a-uuid"), time.Now()); !errors.Is(err, db.ErrNotStaff) {
+		t.Errorf("non-uuid subject: err = %v, want ErrNotStaff before any statement", err)
+	}
 	super, app := dbTestPools(t)
-	ctx := staffCtx(customerMember(t, super))
-	if _, _, err := (&Store{Pool: app}).StaffSnapshot(ctx, time.Now()); !errors.Is(err, db.ErrNotStaff) {
-		t.Errorf("customer member: err = %v, want ErrNotStaff", err)
+	house := adoptHouseTenant(t, super)
+	for name, subject := range map[string]string{
+		"customer member":        customerMember(t, super),
+		"invited house member":   seedMember(t, super, house, "invited"),
+		"suspended house member": seedMember(t, super, house, "suspended"),
+		"unknown subject":        uuid.NewString(),
+	} {
+		if _, _, err := (&Store{Pool: app}).StaffSnapshot(staffCtx(subject), time.Now()); !errors.Is(err, db.ErrNotStaff) {
+			t.Errorf("%s: err = %v, want ErrNotStaff", name, err)
+		}
 	}
 }
 
 func TestStore_StaffSnapshotReadsCountsAndWindow(t *testing.T) {
 	super, app := dbTestPools(t)
 	seedDeadLettered(t, super, 3)
-	s0, s1 := testSlot(t, super, 2003, 0), testSlot(t, super, 2003, 2000)
-	if s0.After(s1) {
-		s0, s1 = s1, s0
+	base := testSlot(t, super, 2003, 0)
+	s0, s1, s2 := base, base.Add(SampleInterval), base.Add(2*SampleInterval)
+	for _, at := range []time.Time{s1, s2} {
+		at := at
+		t.Cleanup(func() {
+			_, _ = super.Exec(context.Background(), `DELETE FROM public.health_samples WHERE taken_at = $1`, at)
+		})
 	}
 	zero := 0
 	st := &Store{Pool: app}
-	for _, at := range []time.Time{s1, s0} {
-		if _, err := st.Record(context.Background(), at, "ok", &zero); err != nil {
+	// recorded out of order and with a different status per slot, so order and columns are observable
+	for _, r := range []struct {
+		at     time.Time
+		status string
+		down   *int
+	}{{s2, "unknown", nil}, {s0, "ok", &zero}, {s1, "ok", &zero}} {
+		if _, err := st.Record(context.Background(), r.at, r.status, r.down); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -281,16 +301,23 @@ func TestStore_StaffSnapshotReadsCountsAndWindow(t *testing.T) {
 		}
 	}
 	assertFloor(t, Counts(jobs))
-	var mine []time.Time
+	var mine []Sample
 	for i, sm := range samples {
 		if i > 0 && sm.TakenAt.Before(samples[i-1].TakenAt) {
 			t.Fatalf("samples not ascending at %d", i)
 		}
-		if sm.TakenAt.Equal(s0) || sm.TakenAt.Equal(s1) {
-			mine = append(mine, sm.TakenAt)
+		if !sm.TakenAt.Before(base) && !sm.TakenAt.After(s2) {
+			mine = append(mine, sm)
 		}
 	}
-	if len(mine) != 1 || !mine[0].Equal(s1) {
-		t.Errorf("own slots in result = %v, want [%v]", mine, s1)
+	if len(mine) != 2 || !mine[0].TakenAt.Equal(s1) || !mine[1].TakenAt.Equal(s2) {
+		t.Fatalf("own slots in result = %v, want [%v %v]", mine, s1, s2)
 	}
+	if mine[0].FleetStatus != "ok" || mine[0].ServicesDown == nil || *mine[0].ServicesDown != 0 {
+		t.Errorf("sample s1 = %+v, want ok,0", mine[0])
+	}
+	if mine[1].FleetStatus != "unknown" || mine[1].ServicesDown != nil {
+		t.Errorf("sample s2 = %+v, want unknown,NULL", mine[1])
+	}
+	assertFloor(t, mine[0].JobCounts)
 }

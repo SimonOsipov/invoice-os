@@ -89,6 +89,21 @@ func TestFleetReader_RefusesEveryOtherAnswer(t *testing.T) {
 	}
 }
 
+func TestFleetReader_BodyLimitIsExactly64KiB(t *testing.T) {
+	const doc = `{"status":"ok","services":[]}`
+	pad := func(n int) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(doc + strings.Repeat(" ", n-len(doc))))
+		}
+	}
+	if f, err := readFrom(t, pad(maxFleetBody), time.Second); err != nil || f.Status != "ok" {
+		t.Errorf("body of exactly 64 KiB: %v, %q; want ok", err, f.Status)
+	}
+	if _, err := readFrom(t, pad(maxFleetBody+1), time.Second); err == nil {
+		t.Error("valid JSON one byte over 64 KiB: want an error")
+	}
+}
+
 func TestServicesDown_CountsEveryNonUpService(t *testing.T) {
 	mk := func(statuses ...string) gateway.FleetHealth {
 		var f gateway.FleetHealth
@@ -99,6 +114,9 @@ func TestServicesDown_CountsEveryNonUpService(t *testing.T) {
 	}
 	if got := ServicesDown(mk("up", "down", "up", "down")); got != 2 {
 		t.Errorf("got %d, want 2", got)
+	}
+	if got := ServicesDown(mk("up", "unknown", "")); got != 2 {
+		t.Errorf("non-up, non-down statuses: got %d, want 2", got)
 	}
 	if got := ServicesDown(mk("up", "up")); got != 0 {
 		t.Errorf("got %d, want 0", got)

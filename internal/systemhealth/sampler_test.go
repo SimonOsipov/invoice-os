@@ -5,9 +5,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/url"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/gateway"
 	"github.com/SimonOsipov/invoice-os/internal/platform/sentrytest"
@@ -91,6 +97,33 @@ func brokenSampler(t *testing.T) *Sampler {
 func TestSampler_ReturnsAStoreError(t *testing.T) {
 	if err := brokenSampler(t).Sample(context.Background()); err == nil {
 		t.Fatal("want a store error")
+	}
+}
+
+func TestSampler_ReturnsAnErrorWhenTheTableIsMissing(t *testing.T) {
+	super, _ := dbTestPools(t)
+	name := "systemhealth_empty_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	if _, err := super.Exec(context.Background(), `CREATE DATABASE `+name); err != nil {
+		t.Fatalf("create database: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = super.Exec(context.Background(), `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`)
+	})
+	u, err := url.Parse(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Path = "/" + name
+	pool, err := pgxpool.New(context.Background(), u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var logs bytes.Buffer
+	s := &Sampler{Store: &Store{Pool: pool}, Fleet: fakeFleet("ok", 0, nil), Logger: slog.New(slog.NewTextHandler(&logs, nil)), Now: time.Now}
+	err = s.Sample(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "health_samples") {
+		t.Fatalf("Sample on a database without the table = %v, want an error naming health_samples", err)
 	}
 }
 

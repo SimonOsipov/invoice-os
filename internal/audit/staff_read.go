@@ -216,7 +216,13 @@ func StaffSearchHandler(search func(context.Context, StaffFilter) (StaffPage, er
 		log = slog.Default()
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		f, msg := parseStaffFilter(r.URL.Query())
+		// URL.Query drops a malformed escape silently, which would widen the search.
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid query string")
+			return
+		}
+		f, msg := parseStaffFilter(query)
 		if msg != "" {
 			writeError(w, http.StatusBadRequest, msg)
 			return

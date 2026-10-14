@@ -212,3 +212,15 @@ func TestStaffChangesHandler_RowWireShape(t *testing.T) {
 		t.Errorf("tenant row = %v, want tenant t1/Acme and a null version", tr)
 	}
 }
+
+func TestStaffSearchHandler_RefusesMalformedEscapes(t *testing.T) {
+	for _, query := range []string{"cursor=%%%", "tenant=%zz", "limit=%zz"} {
+		spy := &staffSpy{}
+		rec := staffGet(audit.StaffSearchHandler(spy.search, nil), "?"+query)
+		var body map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusBadRequest || body["error"] != "invalid query string" || spy.calls != 0 {
+			t.Errorf("%s: got %d %s, store calls %d; want 400 invalid query string, no store call", query, rec.Code, rec.Body, spy.calls)
+		}
+	}
+}

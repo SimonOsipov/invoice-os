@@ -3,7 +3,6 @@ import { request } from './api'
 const JOBS_PATH = '/api/submission/v1/staff/jobs'
 
 // Wire shape: internal/staffjobs/store.go.
-// Job
 export interface StaffJob {
   id: string
   tenant_id: string
@@ -20,6 +19,18 @@ export interface StaffJob {
   updated_at: string
 }
 
+export interface JobStep {
+  from_status: string | null
+  to_status: string
+  actor: string
+  changed_at: string
+}
+
+export interface JobDetail {
+  job: StaffJob
+  history: JobStep[]
+}
+
 // jobStates in internal/staffjobs/handlers.go (the submission_jobs_state_check set).
 export const JOB_STATES = ['queued', 'submitting', 'pending', 'accepted', 'rejected', 'failed', 'dead_lettered', 'cancelled'] as const
 export type JobState = (typeof JOB_STATES)[number]
@@ -31,6 +42,14 @@ export const fetchJobs = async (state?: JobState, tenant?: string, signal?: Abor
   const qs = q.toString()
   return (await request<{ jobs: StaffJob[] }>(qs ? `${JOBS_PATH}?${qs}` : JOBS_PATH, { signal })).jobs
 }
+
+const jobPath = (id: string): string => `${JOBS_PATH}/${encodeURIComponent(id)}`
+
+export const fetchJob = (id: string, signal?: AbortSignal): Promise<JobDetail> => request<JobDetail>(jobPath(id), { signal })
+
+export const redriveJob = (id: string, reason: string): Promise<JobDetail> => request<JobDetail>(`${jobPath(id)}/redrive`, { method: 'POST', body: { reason } })
+
+export const cancelJob = (id: string, reason: string): Promise<JobDetail> => request<JobDetail>(`${jobPath(id)}/cancel`, { method: 'POST', body: { reason } })
 
 export interface JobStyle {
   bg: string

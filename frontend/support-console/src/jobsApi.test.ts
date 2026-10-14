@@ -5,7 +5,7 @@ import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_KEY } from './auth'
-import { fetchJobs, JOB_STATES, jobAge, jobStateStyle } from './jobsApi'
+import { cancelJob, fetchJob, fetchJobs, JOB_STATES, jobAge, jobStateStyle, redriveJob } from './jobsApi'
 
 const GW = 'https://gw.test'
 const ROUTE = `${GW}/api/submission/v1/staff/jobs`
@@ -31,6 +31,18 @@ describe('jobsApi', () => {
     await fetchJobs('queued', undefined)
     await fetchJobs('dead_lettered', id)
     expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([ROUTE, `${ROUTE}?state=queued`, `${ROUTE}?state=dead_lettered&tenant=${id}`])
+  })
+
+  it('fetchJob reads one job; redriveJob and cancelJob post the reason', async () => {
+    const id = '22222222-2222-2222-2222-222222222222'
+    await fetchJob(id)
+    await redriveJob(id, 'x')
+    await cancelJob(id, 'x')
+    expect(fetchMock.mock.calls.map((c) => [c[0], c[1].method ?? 'GET', c[1].body ?? null])).toEqual([
+      [`${ROUTE}/${id}`, 'GET', null],
+      [`${ROUTE}/${id}/redrive`, 'POST', '{"reason":"x"}'],
+      [`${ROUTE}/${id}/cancel`, 'POST', '{"reason":"x"}'],
+    ])
   })
 
   it('every job state has a label and a tone', () => {

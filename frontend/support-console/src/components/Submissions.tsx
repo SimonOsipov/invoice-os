@@ -17,6 +17,9 @@ type Props = {
   onTenant: (id: string) => void
   tenants: StaffTenant[]
   onRetry: () => void
+  onOpen: (id: string) => void
+  /** Set when the tenant select's own read failed; the Tenants screen shows a failed read the same way. */
+  tenantsError?: { text: string; onRetry: () => void }
 }
 
 const JOB_COLS = 'minmax(220px,1.3fr) 130px 116px 56px minmax(200px,1.2fr) 64px 22px'
@@ -53,7 +56,7 @@ const ROW: CSSProperties = {
   alignItems: 'center',
 }
 
-function Rows({ status, errorText, jobs, onRetry }: Pick<Props, 'status' | 'errorText' | 'jobs' | 'onRetry'>) {
+function Rows({ status, errorText, jobs, onRetry, onOpen }: Pick<Props, 'status' | 'errorText' | 'jobs' | 'onRetry' | 'onOpen'>) {
   if (status === 'loading') return <Note text="Loading jobs…" />
   if (status === 'forbidden') return <Note text={STAFF_ONLY} />
   if (status === 'error') return <Note text={errorText ?? 'Unavailable'} onRetry={onRetry} />
@@ -68,7 +71,7 @@ function Rows({ status, errorText, jobs, onRetry }: Pick<Props, 'status' | 'erro
   return (
     <>
       {jobs.map((j) => (
-        <button key={j.id} type="button" className="ops-row" data-job-id={j.id} style={ROW}>
+        <button key={j.id} type="button" className="ops-row" data-job-id={j.id} style={ROW} onClick={() => onOpen(j.id)}>
           <span style={{ fontSize: 13, fontWeight: 500, paddingRight: 12, ...ONE_LINE }}>{j.tenant_name}</span>
           <span className="mono" style={{ fontSize: 12, color: 'var(--fg-2)', ...ONE_LINE }}>
             {j.invoice_number}
@@ -92,7 +95,7 @@ function Rows({ status, errorText, jobs, onRetry }: Pick<Props, 'status' | 'erro
   )
 }
 
-export function Submissions({ status, errorText, jobs, state, onState, tenant, onTenant, tenants, onRetry }: Props) {
+export function Submissions({ status, errorText, jobs, state, onState, tenant, onTenant, tenants, onRetry, onOpen, tenantsError }: Props) {
   return (
     <div className="ops-screen-pad">
       <div style={{ marginBottom: 20 }}>
@@ -123,6 +126,7 @@ export function Submissions({ status, errorText, jobs, state, onState, tenant, o
           ))}
         </select>
       </div>
+      {tenantsError && <Note text={tenantsError.text} onRetry={tenantsError.onRetry} />}
 
       <div style={{ ...CARD, overflowX: 'auto' }}>
         <div style={{ display: 'grid', gridTemplateColumns: JOB_COLS, padding: '10px 16px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)', minWidth: MIN_WIDTH }}>
@@ -136,7 +140,7 @@ export function Submissions({ status, errorText, jobs, state, onState, tenant, o
           <span className="label">Age</span>
           <span />
         </div>
-        <Rows status={status} errorText={errorText} jobs={jobs} onRetry={onRetry} />
+        <Rows status={status} errorText={errorText} jobs={jobs} onRetry={onRetry} onOpen={onOpen} />
       </div>
     </div>
   )

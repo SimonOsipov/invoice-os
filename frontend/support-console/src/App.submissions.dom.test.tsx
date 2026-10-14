@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import { expireSession } from './auth'
-import { fetchJobs, type StaffJob } from './jobsApi'
+import { cancelJob, fetchJob, fetchJobs, JOB_STATES, redriveJob, type JobDetail, type StaffJob } from './jobsApi'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
 import { fetchStaffTenants, type StaffTenant } from './tenantsApi'
 
@@ -28,10 +28,13 @@ vi.mock('./rulesApi', async (importOriginal) => ({
   fetchVersions: vi.fn(),
 }))
 vi.mock('./tenantsApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./tenantsApi')>()), fetchStaffTenants: vi.fn() }))
-vi.mock('./jobsApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./jobsApi')>()), fetchJobs: vi.fn() }))
+vi.mock('./jobsApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./jobsApi')>()), fetchJobs: vi.fn(), fetchJob: vi.fn(), redriveJob: vi.fn(), cancelJob: vi.fn() }))
 
 const jobsRead = vi.mocked(fetchJobs)
 const tenantsRead = vi.mocked(fetchStaffTenants)
+const jobRead = vi.mocked(fetchJob)
+const redrive = vi.mocked(redriveJob)
+const cancel = vi.mocked(cancelJob)
 
 const tenant = (id: string, name: string): StaffTenant => ({
   id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null,
@@ -42,7 +45,17 @@ const job = (id: string, over: Partial<StaffJob> = {}): StaffJob => ({
   created_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString(), updated_at: '2026-10-14T08:00:00Z', ...over,
 })
 
+const detail = (j: StaffJob): JobDetail => ({
+  job: j,
+  history: [
+    { from_status: null, to_status: 'queued', actor: 'system', changed_at: '2026-10-14T07:00:00Z' },
+    { from_status: 'queued', to_status: 'submitting', actor: 'system', changed_at: '2026-10-14T07:01:00Z' },
+    { from_status: 'submitting', to_status: 'failed', actor: 'system', changed_at: '2026-10-14T07:02:00Z' },
+  ],
+})
+
 beforeEach(() => {
+  jobRead.mockImplementation(async (id) => detail(id === 'a' ? job('a', { attempts: 8, max_attempts: 8 }) : job('b', { state: 'queued', attempts: 0, last_error: null })))
   vi.mocked(fetchRules).mockResolvedValue({ version: 7, rules: [] })
   vi.mocked(fetchVersions).mockResolvedValue({ today: '2026-10-11', versions: [] })
   vi.mocked(fetchCodeListSummary).mockResolvedValue([])
@@ -124,5 +137,102 @@ describe('Console submissions wiring', () => {
     render(<App />)
     await openSubmissions()
     await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
+  })
+
+  it('a tenant-select load failure shows the error with a retry', async () => {
+    tenantsRead.mockRejectedValueOnce(new ApiError('http', 'tenants down', 500))
+    render(<App />)
+    await openSubmissions()
+    await screen.findByText('tenants down')
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByRole('option', { name: 'Yaba Freight' })
+    expect(screen.queryByText('tenants down')).toBeNull()
+  })
+})
+
+const openDrawer = async (id: string) => {
+  render(<App />)
+  await openSubmissions()
+  await waitFor(() => expect(rows()).toHaveLength(2))
+  fireEvent.click(rows().find((r) => r.dataset.jobId === id) as HTMLElement)
+  return screen.findByRole('dialog')
+}
+const NRS = 'The Access Point acknowledged this submission. Confirm with NRS before re-sending.'
+
+describe('Console job drawer', () => {
+  it('a row opens the job drawer', async () => {
+    const d = await openDrawer('a')
+    await within(d).findByText('8 / 8')
+    expect(jobRead).toHaveBeenCalledWith('a')
+    expect(within(d).getByText('APP timeout')).toBeTruthy()
+    expect(within(d).getByText('Invoice status')).toBeTruthy()
+    expect(within(within(d).getByRole('list', { name: 'Invoice timeline' })).getAllByRole('listitem')).toHaveLength(3)
+  })
+
+  it('the drawer offers only the action its state allows', async () => {
+    const want = (state: string, ack: boolean): [string[], boolean] =>
+      state === 'dead_lettered' ? (ack ? [[], true] : [['Re-drive'], false]) : state === 'queued' ? [['Cancel job'], false] : [[], false]
+    for (const state of JOB_STATES) {
+      for (const ack of state === 'dead_lettered' ? [false, true] : [false]) {
+        jobRead.mockResolvedValue(detail(job('a', { state, acknowledged: ack })))
+        const d = await openDrawer('a')
+        await within(d).findByText('APP timeout')
+        const [buttons, nrs] = want(state, ack)
+        expect(within(d).queryAllByRole('button').map((b) => b.textContent?.trim()).filter((t) => t === 'Re-drive' || t === 'Cancel job'), `${state} ${ack}`).toEqual(buttons)
+        expect(within(d).queryByText(NRS) !== null, `${state} ${ack} NRS`).toBe(nrs)
+        cleanup()
+      }
+    }
+  })
+
+  const openRedrive = async () => {
+    const d = await openDrawer('a')
+    fireEvent.click(await within(d).findByRole('button', { name: /Re-drive/ }))
+    return screen.findByLabelText('Reason')
+  }
+  const confirmBtn = () => screen.getByRole('button', { name: 'Re-drive job' }) as HTMLButtonElement
+
+  it('the confirm blocks until the reason is valid', async () => {
+    const reason = await openRedrive()
+    expect(confirmBtn().disabled).toBe(true)
+    fireEvent.change(reason, { target: { value: '  ' } })
+    expect(confirmBtn().disabled).toBe(true)
+    fireEvent.change(reason, { target: { value: 'x'.repeat(501) } })
+    expect(confirmBtn().disabled).toBe(true)
+    fireEvent.change(reason, { target: { value: 'x' } })
+    expect(confirmBtn().disabled).toBe(false)
+    expect(screen.getByText('The customer sees this reason in their audit log, from ASComply support. Leave out names, emails and internal notes.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Back' })).toBeTruthy()
+  })
+
+  it('the confirm sends the trimmed reason', async () => {
+    redrive.mockResolvedValue(detail(job('a')))
+    fireEvent.change(await openRedrive(), { target: { value: '  APP back up  ' } })
+    fireEvent.click(confirmBtn())
+    await waitFor(() => expect(redrive).toHaveBeenCalledWith('a', 'APP back up'))
+  })
+
+  it('a successful action toasts and re-reads', async () => {
+    redrive.mockResolvedValue(detail(job('a')))
+    fireEvent.change(await openRedrive(), { target: { value: 'APP back up' } })
+    const listCalls = jobsRead.mock.calls.length
+    const oneCalls = jobRead.mock.calls.length
+    fireEvent.click(confirmBtn())
+    await screen.findByText('Job re-driven')
+    await waitFor(() => expect(jobsRead.mock.calls.length).toBe(listCalls + 1))
+    await waitFor(() => expect(jobRead.mock.calls.length).toBe(oneCalls + 1))
+    expect(screen.queryByLabelText('Reason')).toBeNull()
+  })
+
+  it('a refused action shows the server message', async () => {
+    cancel.mockRejectedValue(new ApiError('http', 'only a queued job can be cancelled', 409))
+    const d = await openDrawer('b')
+    fireEvent.click(await within(d).findByRole('button', { name: 'Cancel job' }))
+    fireEvent.change(await screen.findByLabelText('Reason'), { target: { value: 'duplicate' } })
+    const dlg = screen.getAllByRole('dialog').at(-1) as HTMLElement
+    fireEvent.click(within(dlg).getByRole('button', { name: 'Cancel job' }))
+    await screen.findByText('only a queued job can be cancelled')
+    await waitFor(() => expect(screen.queryByLabelText('Reason')).toBeNull())
+    expect(within(screen.getByRole('dialog')).getAllByText('INV-b')).toHaveLength(2)
   })
 })

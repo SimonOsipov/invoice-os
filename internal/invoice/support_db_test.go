@@ -213,3 +213,49 @@ func TestTransition_CustomerRouteStillRefusesFailedToQueued(t *testing.T) {
 		t.Errorf("status = %q, want failed", got.status)
 	}
 }
+
+func TestSupportTransitions_RefuseAnUnknownMalformedOrOtherTenantInvoice(t *testing.T) {
+	f := newSupportFix(t, "SUPP-06-04 lookup")
+	other := newSupportFix(t, "SUPP-06-04 lookup other")
+	foreign := seedInvoiceAtStatus(t, other.super, other.tenantID, other.entityID, "SUPP-06-04-FOREIGN", StatusFailed)
+	foreignQueued := seedInvoiceAtStatus(t, other.super, other.tenantID, other.entityID, "SUPP-06-04-FOREIGN-Q", StatusQueued)
+	calls := map[string]func(ctx context.Context, tx pgx.Tx, id string) error{
+		"requeue": func(ctx context.Context, tx pgx.Tx, id string) error {
+			return f.store.RequeueFailedTx(ctx, tx, id, f.tenantID)
+		},
+		"cancel": func(ctx context.Context, tx pgx.Tx, id string) error {
+			return f.store.CancelQueuedTx(ctx, tx, id, f.tenantID)
+		},
+	}
+	cases := []struct {
+		name string
+		id   func(call string) string
+		want error
+	}{
+		{"unknown", func(string) string { return "00000000-0000-0000-0000-000000000000" }, ErrNotFound},
+		{"malformed", func(string) string { return "not-a-uuid" }, ErrValidation},
+		{"other tenant", func(call string) string {
+			if call == "requeue" {
+				return foreign
+			}
+			return foreignQueued
+		}, ErrNotFound},
+	}
+	for call, fn := range calls {
+		for _, c := range cases {
+			t.Run(call+"/"+c.name, func(t *testing.T) {
+				id := c.id(call)
+				err := f.run(t, func(ctx context.Context, tx pgx.Tx) error { return fn(ctx, tx, id) })
+				if !errors.Is(err, c.want) {
+					t.Fatalf("err = %v, want %v", err, c.want)
+				}
+			})
+		}
+	}
+	if got := other.read(t, foreign); got.status != "failed" {
+		t.Errorf("other tenant's invoice moved to %q", got.status)
+	}
+	if got := other.read(t, foreignQueued); got.status != "queued" {
+		t.Errorf("other tenant's queued invoice moved to %q", got.status)
+	}
+}

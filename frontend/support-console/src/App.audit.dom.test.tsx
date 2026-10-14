@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { ApiError } from '@invoice-os/api-client'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -348,6 +348,7 @@ describe('Console audit wiring', () => {
       row('o3', { event: 'tenant.demo_set', created_at: '2026-10-14T23:30:00.6Z' }),
     ])
     await waitFor(() => expect(ids()).toEqual(['o1', 'o2', 'o3']))
+    await act(async () => {})
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 

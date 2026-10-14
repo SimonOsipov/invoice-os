@@ -5,7 +5,7 @@ import { Rules } from './components/Rules'
 import { Tenants } from './components/Tenants'
 import { Submissions } from './components/Submissions'
 import { Audit, type AuditView } from './components/Audit'
-import { AuditEntryDrawer } from './components/AuditDrawer'
+import { AuditEntryDrawer, StaffChangeDrawer } from './components/AuditDrawer'
 import { Health } from './components/Health'
 import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
@@ -38,7 +38,7 @@ import {
   type RulesInForce,
 } from './rulesApi'
 import { cancelJob, fetchJob, fetchJobs, redriveJob, type JobDetail, type JobState, type StaffJob } from './jobsApi'
-import { fetchAuditEvents, rangeInverted, type AuditFilters, type StaffAuditPage, type StaffAuditRow } from './auditApi'
+import { fetchAuditEvents, fetchStaffChanges, rangeInverted, staffChangeLink, type AuditFilters, type StaffAuditPage, type StaffAuditRow, type StaffChangeLink } from './auditApi'
 import { fetchStaffHealth } from './healthApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
@@ -79,6 +79,8 @@ function Console() {
   const [auditFilters, setAuditFilters] = useState<AuditFilters>({})
   const [auditMore, setAuditMore] = useState<{ key: string; events: StaffAuditRow[]; page: StaffAuditPage['page'] } | null>(null)
   const [auditMoreKey, setAuditMoreKey] = useState<string | null>(null)
+  const [auditFocus, setAuditFocus] = useState<StaffChangeLink | null>(null)
+  const focusSeenLoading = useRef(false)
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const showToast = useCallback((msg: string, tag = '', tone: ToastTone = 'ok') => {
@@ -152,6 +154,27 @@ function Console() {
   const auditPage = moreHere?.page ?? auditRead.data?.page
   const auditStatus = auditRead.status === 'error' ? (auditRead.error?.status === 403 ? 'forbidden' : 'error') : auditRead.status === 'ready' || auditRead.status === 'empty' ? auditRead.status : 'loading'
   const openAudit = drawer?.type === 'audit' ? auditRows.find((r) => r.id === drawer.id) : undefined
+  const onStaffChanges = screen === 'audit' && auditView === 'staff'
+  const changesRead = useAsync(fetchStaffChanges, { immediate: onStaffChanges, deps: [onStaffChanges] })
+  const changesStatus = changesRead.status === 'error' ? (changesRead.error?.status === 403 ? 'forbidden' : 'error') : changesRead.status === 'ready' || changesRead.status === 'empty' ? changesRead.status : 'loading'
+  const openChange = drawer?.type === 'staff-change' ? changesRead.data?.find((c) => c.id === drawer.id) : undefined
+  const openTenantLog = (link: StaffChangeLink) => {
+    setAuditFilters({ tenant: link.tenant, event: link.event, from: link.day, to: link.day })
+    setAuditView('tenant')
+    setDrawer(null)
+    focusSeenLoading.current = false
+    setAuditFocus(link)
+  }
+  // Opens the entry that matches the link once the re-read lands; the stale page of the render before the read starts is skipped.
+  useEffect(() => {
+    if (!auditFocus) return
+    if (auditStatus === 'loading') focusSeenLoading.current = true
+    if (!focusSeenLoading.current || auditStatus === 'loading') return
+    setAuditFocus(null)
+    // ceiling: matches on the first page only; past 50 same-event rows that day the filtered list shows without a drawer
+    const hit = auditRows.find((r) => r.tenant_id === auditFocus.tenant && r.event === auditFocus.event && r.created_at === auditFocus.focusAt)
+    if (hit) setDrawer({ type: 'audit', id: hit.id })
+  }, [auditFocus, auditStatus, auditRows])
   const patchAuditFilters = (patch: AuditFilters) =>
     setAuditFilters((f) => Object.fromEntries(Object.entries({ ...f, ...patch }).filter(([, v]) => v)) as AuditFilters)
   const loadMoreAudit = async () => {
@@ -180,7 +203,7 @@ function Console() {
   const jobDetail = freshJob ?? (jobRead.status === 'loading' && lastJob.current?.job.id === openJob ? lastJob.current : null)
   const jobNote = jobRead.status === 'error' ? { text: jobRead.error?.status === 403 ? 'Your account is not ASComply staff.' : (jobRead.error?.message ?? 'Unavailable'), onRetry: jobRead.run } : { text: 'Loading job…' }
   const jobInFlight = useRef(false)
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead].some((r) => r.error?.status === 401)
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead, changesRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -428,6 +451,11 @@ function Console() {
               tenantsError={auditTenantsRead.status === 'error' && auditTenantsRead.error?.status !== 401 ? { text: auditTenantsRead.error?.message ?? 'Unavailable', onRetry: auditTenantsRead.run } : undefined}
               onRetry={auditRead.run}
               onOpen={(id) => setDrawer({ type: 'audit', id })}
+              changes={changesRead.data ?? []}
+              changesStatus={changesStatus}
+              changesErrorText={changesRead.error?.message}
+              onRetryChanges={changesRead.run}
+              onOpenChange={(id) => setDrawer({ type: 'staff-change', id })}
             />
           )}
           {screen === 'tenants' && (
@@ -484,6 +512,17 @@ function Console() {
       )}
 
       {openAudit && <AuditEntryDrawer entry={openAudit} onClose={() => setDrawer(null)} />}
+
+      {openChange && (
+        <StaffChangeDrawer
+          change={openChange}
+          onClose={() => setDrawer(null)}
+          onOpenTenantLog={() => {
+            const link = staffChangeLink(openChange)
+            if (link) openTenantLog(link)
+          }}
+        />
+      )}
 
       {confirmJob && jobDetail && (
         <JobActionConfirm invoiceNumber={jobDetail.job.invoice_number} action={confirmJob} busy={jobBusy} onClose={() => setConfirmJob(null)} onConfirm={(reason) => void doJobAction(reason)} />

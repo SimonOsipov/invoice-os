@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
-import { fetchAuditEvents, type StaffAuditPage, type StaffAuditRow } from './auditApi'
+import { fetchAuditEvents, fetchStaffChanges, type StaffAuditPage, type StaffAuditRow, type StaffChange } from './auditApi'
 import { expireSession } from './auth'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
 import { fetchStaffTenants, type StaffTenant } from './tenantsApi'
@@ -28,10 +28,11 @@ vi.mock('./rulesApi', async (importOriginal) => ({
   fetchVersions: vi.fn(),
 }))
 vi.mock('./tenantsApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./tenantsApi')>()), fetchStaffTenants: vi.fn() }))
-vi.mock('./auditApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./auditApi')>()), fetchAuditEvents: vi.fn() }))
+vi.mock('./auditApi', async (importOriginal) => ({ ...(await importOriginal<typeof import('./auditApi')>()), fetchAuditEvents: vi.fn(), fetchStaffChanges: vi.fn() }))
 
 const auditRead = vi.mocked(fetchAuditEvents)
 const tenantsRead = vi.mocked(fetchStaffTenants)
+const changesRead = vi.mocked(fetchStaffChanges)
 
 const tenant = (id: string, name: string): StaffTenant => ({
   id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 1, invoice_count: 2, last_activity_at: null,
@@ -40,6 +41,10 @@ const row = (id: string, over: Partial<StaffAuditRow> = {}): StaffAuditRow => ({
   id, tenant_id: 'T1', tenant_name: 'Okafor & Partners', created_at: '2026-10-14T09:12:03.123456Z', event: 'invoice.created',
   actor: '5b8f3c1e-0000-4000-8000-000000000001', actor_name: 'Ada Obi', actor_kind: 'person', payload: { invoice: id, lines: [1, 2] }, ...over,
 })
+const change = (id: string, over: Partial<StaffChange> = {}): StaffChange => ({
+  id, actor: '5b8f3c1e-0000-4000-8000-0000000000aa', event: 'tenant.demo_set', rule_set_version_id: null, tenant_id: 'T1', tenant_name: 'Okafor & Partners',
+  subject_id: 'S1', payload: { demo: true }, created_at: '2026-10-14T23:30:00.5Z', ...over,
+})
 const page = (events: StaffAuditRow[], next: string | null = null): StaffAuditPage => ({ events, page: { limit: 50, has_more: next !== null, next_cursor: next } })
 
 beforeEach(() => {
@@ -47,6 +52,7 @@ beforeEach(() => {
   vi.mocked(fetchVersions).mockResolvedValue({ today: '2026-10-11', versions: [] })
   vi.mocked(fetchCodeListSummary).mockResolvedValue([])
   tenantsRead.mockResolvedValue([tenant('T1', 'Okafor & Partners'), tenant('T2', 'Yaba Freight')])
+  changesRead.mockResolvedValue([change('c1'), change('c2', { event: 'rules.published', tenant_id: null, tenant_name: null, subject_id: null, rule_set_version_id: 'V9' })])
   auditRead.mockResolvedValue(page([row('e1'), row('e2', { event: 'invoice.sent', actor: 'system', actor_name: 'System', actor_kind: 'system' })]))
 })
 afterEach(() => {
@@ -247,5 +253,99 @@ describe('Console audit wiring', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await screen.findByRole('option', { name: 'Yaba Freight' })
     expect(screen.queryByText('tenants down')).toBeNull()
+  })
+
+  const openStaff = async () => {
+    await openAudit()
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: 'STAFF CHANGES' }))
+  }
+  const changeRows = () => Array.from(document.querySelectorAll<HTMLElement>('[data-change-id]'))
+
+  it('the staff view lists every change', async () => {
+    render(<App />)
+    await openStaff()
+    await waitFor(() => expect(changeRows()).toHaveLength(2))
+    expect(changesRead).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'STAFF CHANGES' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'TENANT LOG' }).getAttribute('aria-pressed')).toBe('false')
+    expect(Array.from(changeRows()[0].children).slice(0, 4).map((c) => c.textContent)).toEqual(['2026-10-14 23:30:00 UTC', '5b8f3c1e-0000-4000-8000-0000000000aa', 'tenant.demo_set', 'Okafor & Partners'])
+    expect(changeRows()[1].children[3].textContent).toBe('All tenants')
+  })
+
+  it('the change drawer offers the link only for a tenant row', async () => {
+    render(<App />)
+    await openStaff()
+    await waitFor(() => expect(changeRows()).toHaveLength(2))
+    fireEvent.click(changeRows()[0])
+    let d = await screen.findByRole('dialog')
+    expect(within(d).getByRole('button', { name: 'Open in tenant log' })).toBeTruthy()
+    const cell = (label: string) => within(d).getByText(label).nextElementSibling?.textContent
+    expect([cell('Staff member'), cell('Tenant'), cell('Subject'), cell('Rule set version'), cell('Time')]).toEqual([
+      '5b8f3c1e-0000-4000-8000-0000000000aa', 'Okafor & Partners', 'S1', '—', '2026-10-14 23:30:00 UTC',
+    ])
+    expect(d.querySelector('pre')?.textContent).toBe(JSON.stringify({ demo: true }, null, 2))
+    cleanup()
+
+    render(<App />)
+    await openStaff()
+    await waitFor(() => expect(changeRows()).toHaveLength(2))
+    fireEvent.click(changeRows()[1])
+    d = await screen.findByRole('dialog')
+    expect(within(d).queryByRole('button', { name: 'Open in tenant log' })).toBeNull()
+    expect(within(d).getByText('Rule set version').nextElementSibling?.textContent).toBe('V9')
+    expect(within(d).getByText('Tenant').nextElementSibling?.textContent).toBe('All tenants')
+  })
+
+  it('Open in tenant log lands on the matching row', async () => {
+    render(<App />)
+    await openStaff()
+    await waitFor(() => expect(changeRows()).toHaveLength(2))
+    auditRead.mockResolvedValueOnce(page([row('x1', { event: 'tenant.demo_set', created_at: '2026-10-14T23:30:00.1Z' }), row('x2', { event: 'tenant.demo_set', created_at: '2026-10-14T23:30:00.5Z' })]))
+    fireEvent.click(changeRows()[0])
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Open in tenant log' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'TENANT LOG' }).getAttribute('aria-pressed')).toBe('true'))
+    await waitFor(() => expect(auditRead).toHaveBeenCalledTimes(2))
+    expect(auditRead.mock.calls[1][0]).toEqual({ tenant: 'T1', event: 'tenant.demo_set', from: '2026-10-14', to: '2026-10-14' })
+    const d = await screen.findByRole('dialog')
+    expect(within(d).getByText('#x2 · 2026-10-14 23:30:00 UTC')).toBeTruthy()
+  })
+
+  it('Open in tenant log with no match keeps the list', async () => {
+    render(<App />)
+    await openStaff()
+    await waitFor(() => expect(changeRows()).toHaveLength(2))
+    auditRead.mockResolvedValueOnce(page([row('x1', { event: 'tenant.demo_set', created_at: '2026-10-14T23:30:00.1Z' })]))
+    fireEvent.click(changeRows()[0])
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Open in tenant log' }))
+    await waitFor(() => expect(ids()).toEqual(['x1']))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('staff view empty, forbidden, error and expired', async () => {
+    changesRead.mockResolvedValueOnce([])
+    render(<App />)
+    await openStaff()
+    await screen.findByText('No staff changes yet.')
+    cleanup()
+
+    changesRead.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
+    render(<App />)
+    await openStaff()
+    await screen.findByText('Your account is not ASComply staff.')
+    cleanup()
+
+    changesRead.mockRejectedValueOnce(new ApiError('http', 'boom', 500))
+    render(<App />)
+    await openStaff()
+    await screen.findByText('boom')
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(changeRows()).toHaveLength(2))
+    cleanup()
+
+    changesRead.mockRejectedValueOnce(new ApiError('http', 'expired', 401))
+    render(<App />)
+    await openStaff()
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
   })
 })

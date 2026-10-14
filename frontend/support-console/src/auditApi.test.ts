@@ -5,7 +5,7 @@ import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_KEY } from './auth'
-import { auditStamp, fetchAuditEvents, utcDay } from './auditApi'
+import { auditStamp, fetchAuditEvents, staffChangeLink, utcDay, type StaffChange } from './auditApi'
 
 const GW = 'https://gw.test'
 const ROUTE = `${GW}/api/invoice/v1/staff/audit-log`
@@ -90,5 +90,23 @@ describe('auditApi', () => {
     expect(pairs[0][0]).toContainEqual(['tenant_name', true])
     expect(pairs[2][0]).toContainEqual(['next_cursor', true])
     for (const [g, t] of pairs) expect(t).toEqual(g)
+  })
+
+  it('staffChangeLink maps a tenant row and refuses a global one', () => {
+    const c: StaffChange = { id: '1', actor: 'A', event: 'tenant.demo_set', rule_set_version_id: null, tenant_id: 'T1', tenant_name: 'N', subject_id: null, payload: {}, created_at: '2026-10-14T23:30:00Z' }
+    expect(staffChangeLink(c)).toEqual({ tenant: 'T1', event: 'tenant.demo_set', day: '2026-10-14', focusAt: '2026-10-14T23:30:00Z' })
+    expect(staffChangeLink({ ...c, tenant_id: null, tenant_name: null })).toBeNull()
+  })
+
+  // Same scans as above for StaffChange; a nullable Go key typed non-null reaches the screen as a crash.
+  it('StaffChange keys equal the Go audit.StaffChange json tags', () => {
+    const read = (rel: string) => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))
+    const goBody = new RegExp('type\\s+StaffChange\\s+struct\\s*\\{([^{}]*)\\}').exec(read('../../../internal/audit/staff_read.go'))?.[1] ?? ''
+    const go = [...goBody.matchAll(/^\s*\w+\s+(\*?)[\w.[\]]+\s+`json:"([^",]+)[^"]*"/gm)].map((m): [string, boolean] => [m[2], m[1] === '*']).sort()
+    const tsBody = /export interface StaffChange\s*\{([^{}]*)\}/.exec(read('./auditApi.ts'))?.[1] ?? ''
+    const ts = [...tsBody.matchAll(/^\s*([a-z_]+)\??\s*:\s*(.+)$/gm)].map((m): [string, boolean] => [m[1], /\bnull\b/.test(m[2])]).sort()
+    expect(go).toContainEqual(['rule_set_version_id', true])
+    expect(go.length).toBeGreaterThanOrEqual(9)
+    expect(ts).toEqual(go)
   })
 })

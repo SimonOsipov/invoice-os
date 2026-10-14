@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { CHEVRON_RIGHT_ICON, LOCK_ICON } from '../icons'
-import { auditStamp, RANGE_REASON, rangeInverted, type AuditFilters, type StaffAuditRow } from '../auditApi'
+import { auditStamp, RANGE_REASON, rangeInverted, type AuditFilters, type StaffAuditRow, type StaffChange } from '../auditApi'
 import type { StaffTenant } from '../tenantsApi'
 import { chipStyle } from './Submissions'
 import { CARD, Note, ONE_LINE, STAFF_ONLY } from './Tenants'
@@ -24,6 +24,11 @@ type Props = {
   tenantsError?: { text: string; onRetry: () => void }
   onRetry: () => void
   onOpen: (id: string) => void
+  changes: StaffChange[]
+  changesStatus: AuditStatus
+  changesErrorText?: string
+  onRetryChanges: () => void
+  onOpenChange: (id: string) => void
 }
 
 const AUDIT_COLS = '170px minmax(180px,1fr) minmax(180px,1fr) minmax(200px,1.3fr) 22px'
@@ -82,6 +87,40 @@ function Rows({ status, errorText, rows, onRetry, onOpen }: Pick<Props, 'status'
   )
 }
 
+function ChangeRows({ status, errorText, changes, onRetry, onOpen }: { status: AuditStatus; errorText?: string; changes: StaffChange[]; onRetry: () => void; onOpen: (id: string) => void }) {
+  if (status === 'loading') return <Note text="Loading staff changes…" />
+  if (status === 'forbidden') return <Note text={STAFF_ONLY} />
+  if (status === 'error') return <Note text={errorText ?? 'Unavailable'} onRetry={onRetry} />
+  if (changes.length === 0) return <Note text="No staff changes yet." />
+  return (
+    <>
+      {changes.map((c) => (
+        <button key={c.id} type="button" className="ops-row" data-change-id={c.id} style={ROW} onClick={() => onOpen(c.id)}>
+          <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)', ...ONE_LINE }}>
+            {auditStamp(c.created_at)}
+          </span>
+          <span className="mono" style={{ fontSize: 11, paddingRight: 12, minWidth: 0, ...ONE_LINE }}>
+            {c.actor}
+          </span>
+          <span className="mono" style={{ fontSize: 12, paddingRight: 12, minWidth: 0, ...ONE_LINE }}>
+            {c.event}
+          </span>
+          {c.tenant_id === null ? (
+            <span style={{ fontSize: 13, color: 'var(--fg-2)', paddingRight: 12, minWidth: 0, ...ONE_LINE }}>All tenants</span>
+          ) : c.tenant_name === null ? (
+            <span className="mono" style={{ fontSize: 11, paddingRight: 12, minWidth: 0, ...ONE_LINE }}>
+              {c.tenant_id}
+            </span>
+          ) : (
+            <span style={{ fontSize: 13, fontWeight: 500, paddingRight: 12, minWidth: 0, ...ONE_LINE }}>{c.tenant_name}</span>
+          )}
+          <span style={{ display: 'inline-flex', color: 'var(--fg-3)' }}>{CHEVRON_RIGHT_ICON}</span>
+        </button>
+      ))}
+    </>
+  )
+}
+
 function TextFilter({ label, placeholder, value, onApply, width }: { label: string; placeholder: string; value: string; onApply: (v: string) => void; width: number }) {
   const [draft, setDraft] = useState(value)
   useEffect(() => setDraft(value), [value])
@@ -109,7 +148,7 @@ function DateFilter({ label, value, onChange }: { label: string; value: string; 
   )
 }
 
-export function Audit({ view, onView, status, errorText, rows, hasMore, moreBusy, onMore, filters, onFilters, tenants, tenantsError, onRetry, onOpen }: Props) {
+export function Audit({ view, onView, status, errorText, rows, hasMore, moreBusy, onMore, filters, onFilters, tenants, tenantsError, onRetry, onOpen, changes, changesStatus, changesErrorText, onRetryChanges, onOpenChange }: Props) {
   const inverted = rangeInverted(filters)
   return (
     <div className="ops-screen-pad">
@@ -180,6 +219,19 @@ export function Audit({ view, onView, status, errorText, rows, hasMore, moreBusy
             </div>
           )}
         </>
+      )}
+
+      {view === 'staff' && (
+        <div style={{ ...CARD, overflowX: 'auto' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: AUDIT_COLS, padding: '10px 16px', background: 'var(--bg-1)', borderBottom: '1px solid var(--line-1)', minWidth: MIN_WIDTH }}>
+            <span className="label">Time</span>
+            <span className="label">Staff member</span>
+            <span className="label">Event</span>
+            <span className="label">Tenant</span>
+            <span />
+          </div>
+          <ChangeRows status={changesStatus} errorText={changesErrorText} changes={changes} onRetry={onRetryChanges} onOpen={onOpenChange} />
+        </div>
       )}
     </div>
   )

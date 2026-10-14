@@ -1,6 +1,7 @@
 import { request } from './api'
 
 const AUDIT_PATH = '/api/invoice/v1/staff/audit-log'
+const CHANGES_PATH = '/api/invoice/v1/staff/staff-audit-log'
 const PAGE_SIZE = 50
 
 // Wire shapes: internal/audit/staff_read.go.
@@ -27,6 +28,19 @@ export interface AuditPageInfo {
 export interface StaffAuditPage {
   events: StaffAuditRow[]
   page: AuditPageInfo
+}
+
+// StaffChange
+export interface StaffChange {
+  id: string
+  actor: string
+  event: string
+  rule_set_version_id: string | null
+  tenant_id: string | null
+  tenant_name: string | null
+  subject_id: string | null
+  payload: unknown
+  created_at: string
 }
 
 /** Each value is empty or set; `from` and `to` are UTC days (`YYYY-MM-DD`). */
@@ -66,3 +80,16 @@ export const fetchAuditEvents = (filters: AuditFilters, cursor?: string, signal?
   if (cursor) q.set('cursor', cursor)
   return request<StaffAuditPage>(`${AUDIT_PATH}?${q}`, { signal })
 }
+
+export const fetchStaffChanges = async (signal?: AbortSignal): Promise<StaffChange[]> => (await request<{ changes: StaffChange[] }>(CHANGES_PATH, { signal })).changes
+
+export interface StaffChangeLink {
+  tenant: string
+  event: string
+  day: string
+  focusAt: string
+}
+
+/** The tenant log row that shares a tenant change's tenant, event and `created_at`; null for a global change. */
+export const staffChangeLink = (c: StaffChange): StaffChangeLink | null =>
+  c.tenant_id ? { tenant: c.tenant_id, event: c.event, day: utcDay(c.created_at), focusAt: c.created_at } : null

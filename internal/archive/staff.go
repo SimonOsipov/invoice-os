@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -17,7 +18,7 @@ import (
 var ErrTenantNotFound = errors.New("archive: tenant not found")
 
 // staffManifestActor is the manifest's generated_by for a staff download.
-var staffManifestActor = manifestActor{Name: "ASComply support", Kind: "raw"}
+var staffManifestActor = manifestActor{Name: audit.SupportActor, Kind: "raw"}
 
 // StaffEntity is one company of a tenant, as the staff list shows it.
 type StaffEntity struct {

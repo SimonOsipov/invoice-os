@@ -30,5 +30,5 @@ paths:
 - Declare no `Content-Length`. Let `net/http` frame the body.
 - Expose `Content-Disposition` to browsers through the gateway CORS expose header.
 - Run `ANALYZE` as the owner or the superuser before you measure a plan. `invoice_app` cannot analyze.
-- Build a staff bundle, preview or company list only through `withinStaffTenant`. It checks the path tenant with `staff_read_tenants` in `WithinStaffTx`, then reads in that tenant's `WithinTenantTxOpts` with `bundleTxOptions`.
-- Write `staffManifestActor` as the `generated_by` of a staff bundle. Its name equals `audit.SupportActor`, `ASComply support`.
+- Build a staff bundle, preview or company list only through `withinStaffTenant`. It checks the path tenant with `staff_read_tenants` in `WithinStaffTx`. Then it reads in that tenant's `WithinTenantTxOpts` with `bundleTxOptions`.
+- Write `staffManifestActor` as the `generated_by` of a staff bundle. Its name is `audit.SupportActor`.

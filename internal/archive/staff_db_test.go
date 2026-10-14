@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
@@ -213,8 +214,8 @@ func TestRLS_StaffAssembleEqualsTheTenantBundle(t *testing.T) {
 	if err := json.Unmarshal(body["manifest.json"], &doc); err != nil {
 		t.Fatalf("unmarshal staff manifest: %v", err)
 	}
-	if doc.GeneratedBy != (manifestActor{Name: "ASComply support", Kind: "raw"}) {
-		t.Errorf("staff generated_by = %+v, want {ASComply support raw}", doc.GeneratedBy)
+	if doc.GeneratedBy != (manifestActor{Name: audit.SupportActor, Kind: "raw"}) {
+		t.Errorf("staff generated_by = %+v, want {audit.SupportActor raw}", doc.GeneratedBy)
 	}
 	if doc.TenantID != fx.tenant {
 		t.Errorf("staff manifest tenant_id = %q, want %q", doc.TenantID, fx.tenant)

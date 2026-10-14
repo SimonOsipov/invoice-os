@@ -127,11 +127,12 @@ func TestSubmissionGatewayPass_FailsLoudly(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		names string // the shared unreadable-service error names the service, not the variable
+		why   string // the step's own error, not the verdict that would follow it anyway
 		setup func(t *testing.T, s authShim)
 	}{
-		{"write refused", "GATEWAY_URL", func(t *testing.T, s authShim) { s.failAlias(t, submissionSvcID, "abort") }},
-		{"transport failure on the re-read", "submission", func(t *testing.T, s authShim) { s.plantReadBad(t, "after", submissionSvcID, "error") }},
-		{"re-read absent", "GATEWAY_URL", func(t *testing.T, s authShim) { s.bendReRead(t, submissionSvcID, `del(.GATEWAY_URL)`) }},
+		{"write refused", "GATEWAY_URL", "batched variable write", func(t *testing.T, s authShim) { s.failAlias(t, submissionSvcID, "abort") }},
+		{"transport failure on the re-read", "submission", "written but not confirmed", func(t *testing.T, s authShim) { s.plantReadBad(t, "after", submissionSvcID, "error") }},
+		{"re-read absent", "GATEWAY_URL", "", func(t *testing.T, s authShim) { s.bendReRead(t, submissionSvcID, `del(.GATEWAY_URL)`) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newSubmissionShim(t, nil)
@@ -145,6 +146,9 @@ func TestSubmissionGatewayPass_FailsLoudly(t *testing.T) {
 			}
 			if e := errorLines(out); !strings.Contains(e, "submission") || !strings.Contains(e, c.names) {
 				t.Errorf("no ::error:: line names submission and %s; output = %q", c.names, out)
+			}
+			if !strings.Contains(errorLines(out), c.why) {
+				t.Errorf("no ::error:: line carries %q; output = %q", c.why, out)
 			}
 			for _, l := range confirmedLines(out) {
 				if strings.Contains(l, "submission.GATEWAY_URL") {

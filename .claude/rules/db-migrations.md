@@ -14,7 +14,7 @@ paths:
 - Grant the minimum verbs per object.
 - Never use `ALTER DEFAULT PRIVILEGES`.
 - Give the append-only tables `audit_log` and `idempotency_keys` SELECT and INSERT only.
-- Give `invoice_app` INSERT only on `staff_audit_log`.
+- Give `invoice_app` INSERT only on `staff_audit_log`. Staff read it only through `public.staff_read_staff_audit_log`.
 - Copy the `tenants` template for a new tenant table. Use `ENABLE` and `FORCE ROW LEVEL SECURITY` and a `tenant_isolation` policy.
 - Read the tenant as `nullif(current_setting('app.current_tenant', true), '')::uuid`. An unset tenant returns zero rows.
 - Never write `SET LOCAL app.current_tenant` by hand. Use `WithinTenantTx` or `WithinRequestTenantTx`.

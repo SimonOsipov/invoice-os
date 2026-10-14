@@ -531,7 +531,7 @@ func TestAuditNumber_ReaderSurfaceIsPinned(t *testing.T) {
 	}
 	sort.Strings(files)
 	if strings.Join(files, ",") != strings.Join(auditReaderFiles, ",") {
-		t.Errorf("internal/audit non-test files = [%s], want [%s] -- AUDIT-11 adds none and removes none",
+		t.Errorf("internal/audit non-test files = [%s], want [%s]",
 			strings.Join(files, ","), strings.Join(auditReaderFiles, ","))
 	}
 

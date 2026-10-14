@@ -2,11 +2,14 @@ package audit_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -363,5 +366,159 @@ func TestRLS_StaffReadsWriteNoAuditRow(t *testing.T) {
 	}
 	if staffRows != 0 || tenantRows != 0 {
 		t.Errorf("reads wrote %d staff_audit_log and %d audit_log rows, want none", staffRows, tenantRows)
+	}
+}
+
+func TestRLS_StaffSearchAppliesEventActorAndInclusiveRange(t *testing.T) {
+	f, super := requireFixture(t), staffSuperPool(t)
+	ctx := staffContext(t, staffHouseMember(t, super))
+	tenant := staffSeedTenant(t, super)
+	ev, worker := "staff.filter."+uuid.NewString(), "worker-"+uuid.NewString()
+	staffSeedRow(t, f, tenant, "system", ev+".a")
+	staffSeedRow(t, f, tenant, worker, ev+".b")
+	staffSeedRow(t, f, tenant, worker, ev+".a")
+	store := audit.NewStore(f.app)
+	search := func(name string, filter audit.StaffFilter) []audit.StaffRow {
+		t.Helper()
+		filter.Tenant, filter.Limit = tenant, 25
+		p, err := store.StaffSearch(ctx, filter)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return p.Events
+	}
+
+	all := search("all", audit.StaffFilter{})
+	if len(all) != 3 {
+		t.Fatalf("tenant holds %d rows, want 3", len(all))
+	}
+	if rows := search("event", audit.StaffFilter{Event: ev + ".a"}); len(rows) != 2 {
+		t.Errorf("event filter returned %d rows, want 2", len(rows))
+	}
+	if rows := search("actor", audit.StaffFilter{Actor: worker}); len(rows) != 2 {
+		t.Errorf("actor filter returned %d rows, want 2", len(rows))
+	}
+	if rows := search("event and actor", audit.StaffFilter{Event: ev + ".a", Actor: worker}); len(rows) != 1 || rows[0].Actor != worker || rows[0].Event != ev+".a" {
+		t.Errorf("event and actor filter returned %+v, want the one worker row of .a", rows)
+	}
+
+	newest, middle, oldest := all[0], all[1], all[2]
+	if !(newest.CreatedAt.After(middle.CreatedAt) && middle.CreatedAt.After(oldest.CreatedAt)) {
+		t.Fatal("the three rows share a created_at: the range probes below prove nothing")
+	}
+	one := func(name string, rows []audit.StaffRow, want audit.StaffRow) {
+		t.Helper()
+		if len(rows) != 1 || rows[0].ID != want.ID {
+			t.Errorf("%s returned %v, want only row %s", name, staffEventIDs(audit.StaffPage{Events: rows}), want.ID)
+		}
+	}
+	one("from = to = the middle instant", search("both", audit.StaffFilter{From: middle.CreatedAt, To: middle.CreatedAt}), middle)
+	one("from just after the middle", search("from", audit.StaffFilter{From: middle.CreatedAt.Add(time.Microsecond)}), newest)
+	one("to just before the middle", search("to", audit.StaffFilter{To: middle.CreatedAt.Add(-time.Microsecond)}), oldest)
+}
+
+func TestRLS_StaffSearchReturnsThePayloadAndBreaksTiesOnID(t *testing.T) {
+	f, super := requireFixture(t), staffSuperPool(t)
+	ctx := staffContext(t, staffHouseMember(t, super))
+	tenant := staffSeedTenant(t, super)
+	event := "staff.tie." + uuid.NewString()
+	if err := db.WithinTenantTx(context.Background(), f.app, tenant, func(tx pgx.Tx) error {
+		for i := range 3 {
+			if err := audit.Record(context.Background(), tx, "system", event, map[string]any{"n": i}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed three rows in one transaction: %v", err)
+	}
+	store := audit.NewStore(f.app)
+
+	var seen []string
+	var cursor *audit.Cursor
+	for page := 0; page < 3; page++ {
+		p, err := store.StaffSearch(ctx, audit.StaffFilter{Tenant: tenant, Limit: 1, Cursor: cursor})
+		if err != nil || len(p.Events) != 1 {
+			t.Fatalf("page %d = %d rows, err %v; want 1", page, len(p.Events), err)
+		}
+		row := p.Events[0]
+		var payload map[string]any
+		if err := json.Unmarshal(row.Payload, &payload); err != nil || payload["n"] == nil {
+			t.Errorf("page %d payload = %s (%v), want the stored object", page, row.Payload, err)
+		}
+		seen = append(seen, row.ID)
+		if wantMore := page < 2; p.Page.HasMore != wantMore {
+			t.Fatalf("page %d has_more = %v, want %v", page, p.Page.HasMore, wantMore)
+		}
+		if p.Page.NextCursor == nil {
+			break
+		}
+		c, err := audit.DecodeCursor(*p.Page.NextCursor)
+		if err != nil {
+			t.Fatalf("decode cursor: %v", err)
+		}
+		if cursor != nil && !c.CreatedAt.Equal(cursor.CreatedAt) {
+			t.Fatal("the rows do not share a created_at: the tie-break is not exercised")
+		}
+		cursor = &c
+	}
+	ids := make([]int, len(seen))
+	for i, id := range seen {
+		ids[i], _ = strconv.Atoi(id)
+	}
+	if len(ids) != 3 || ids[0] <= ids[1] || ids[1] <= ids[2] {
+		t.Errorf("walk saw ids %v, want three distinct ids strictly descending (ties break on id DESC)", ids)
+	}
+}
+
+// RequireStaff is the gate platform.App puts on every /v1/staff path.
+func TestRLS_StaffAuditRoutesThroughTheStaffGate(t *testing.T) {
+	f, super := requireFixture(t), staffSuperPool(t)
+	house := staffHouseMember(t, super)
+	tenant := staffSeedTenant(t, super)
+	customer := uuid.NewString()
+	staffSeedMember(t, super, tenant, customer, nil, nil)
+	event := "staff.http." + uuid.NewString()
+	staffSeedRow(t, f, tenant, "system", event)
+
+	store := audit.NewStore(f.app)
+	routes := map[string]http.Handler{
+		"/v1/staff/audit-log?tenant=" + tenant + "&event=" + event: auth.RequireStaff(audit.StaffSearchHandler(store.StaffSearch, nil)),
+		"/v1/staff/staff-audit-log":                                auth.RequireStaff(audit.StaffChangesHandler(store.StaffChanges, nil)),
+	}
+	serve := func(h http.Handler, target string, id auth.Identity) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		h.ServeHTTP(rec, req.WithContext(auth.WithTenantlessCaller(context.Background(), id)))
+		return rec
+	}
+	for target, h := range routes {
+		rec := serve(h, target, auth.Identity{Subject: customer, Role: "authenticated", TenantID: tenant})
+		if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), event) {
+			t.Errorf("%s as a customer = %d %s, want 403 and no row", target, rec.Code, rec.Body)
+		}
+		rec = serve(h, target, auth.Identity{Subject: house, Role: "authenticated", Staff: true})
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s as house staff = %d %s, want 200", target, rec.Code, rec.Body)
+		}
+	}
+	rec := serve(routes["/v1/staff/audit-log?tenant="+tenant+"&event="+event], "/v1/staff/audit-log?tenant="+tenant+"&event="+event,
+		auth.Identity{Subject: house, Role: "authenticated", Staff: true})
+	var body struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Events) != 1 || body.Events[0]["tenant_id"] != tenant ||
+		body.Events[0]["tenant_name"] == nil || body.Events[0]["actor_kind"] != "system" || body.Events[0]["payload"] == nil {
+		t.Errorf("staff search body = %s (%v), want one row of the tenant with name, kind and payload", rec.Body, err)
+	}
+
+	// A staff flag on a non-house subject still gets the store's 403: the gate is not the only guard.
+	rec = httptest.NewRecorder()
+	h := audit.StaffChangesHandler(store.StaffChanges, nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/staff/staff-audit-log", nil)
+	ctx := auth.WithTenantlessCaller(context.Background(), auth.Identity{Subject: customer, Role: "authenticated", Staff: true})
+	auth.RequireStaff(h).ServeHTTP(rec, req.WithContext(ctx))
+	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), event) {
+		t.Errorf("staff flag on a customer member = %d %s, want 403 from the read function", rec.Code, rec.Body)
 	}
 }

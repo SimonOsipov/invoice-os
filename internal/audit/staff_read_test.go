@@ -2,11 +2,13 @@ package audit_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +85,9 @@ func TestStaffSearchHandler_RefusesMalformedValues(t *testing.T) {
 		{"limit=-3", "limit must be >= 1"},
 		{"limit=x", "limit must be an integer"},
 		{"cursor=%25%25%25", "cursor is malformed"},
+		{"cursor=not-a-cursor", "cursor is malformed"},
+		{"cursor=" + base64.RawURLEncoding.EncodeToString([]byte("yesterday|7")), "cursor is malformed"},
+		{"cursor=" + base64.RawURLEncoding.EncodeToString([]byte("2026-10-01T00:00:00Z|x")), "cursor is malformed"},
 	} {
 		spy := &staffSpy{}
 		rec := staffGet(audit.StaffSearchHandler(spy.search, nil), "?"+tc.query)
@@ -135,5 +140,75 @@ func TestStaffChangesHandler_StatusMapping(t *testing.T) {
 		if rec.Code != tc.code || strings.TrimSpace(rec.Body.String()) != tc.body {
 			t.Errorf("err %v: got %d %s, want %d %s", tc.err, rec.Code, rec.Body, tc.code, tc.body)
 		}
+	}
+}
+
+func TestStaffSearchHandler_AcceptsTheBoundaryValues(t *testing.T) {
+	at := "2026-10-01T00:00:00Z"
+	for _, query := range []string{"event=" + strings.Repeat("x", 200), "actor=" + strings.Repeat("x", 200), "from=" + at + "&to=" + at} {
+		spy := &staffSpy{}
+		rec := staffGet(audit.StaffSearchHandler(spy.search, nil), "?"+query)
+		if rec.Code != http.StatusOK || spy.calls != 1 {
+			t.Errorf("%.40s: got %d with %d store calls, want 200 and 1", query, rec.Code, spy.calls)
+		}
+	}
+}
+
+func TestStaffSearchHandler_RowWireShape(t *testing.T) {
+	name := "Acme"
+	spy := &staffSpy{page: audit.StaffPage{Events: []audit.StaffRow{{
+		ID: "9", TenantID: "t1", TenantName: &name, CreatedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+		Event: "e", Actor: "system", ActorName: "System", ActorKind: "system", Payload: json.RawMessage(`{"k":1}`),
+	}}}}
+	rec := staffGet(audit.StaffSearchHandler(spy.search, nil), "?limit=10")
+	var body struct {
+		Events []map[string]any `json:"events"`
+		Page   map[string]any   `json:"page"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Events) != 1 {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	want := map[string]any{"id": "9", "tenant_id": "t1", "tenant_name": "Acme", "created_at": "2026-10-01T00:00:00Z", "event": "e",
+		"actor": "system", "actor_name": "System", "actor_kind": "system", "payload": map[string]any{"k": float64(1)}}
+	if len(body.Events[0]) != len(want) {
+		t.Errorf("row keys = %v, want exactly %d", body.Events[0], len(want))
+	}
+	for k, v := range want {
+		if !reflect.DeepEqual(body.Events[0][k], v) {
+			t.Errorf("row[%q] = %v, want %v", k, body.Events[0][k], v)
+		}
+	}
+	if body.Page["limit"] != float64(10) {
+		t.Errorf("page.limit = %v, want the parsed 10 whatever the store reports", body.Page["limit"])
+	}
+}
+
+func TestStaffChangesHandler_RowWireShape(t *testing.T) {
+	tenant, name, version := "t1", "Acme", "v1"
+	h := audit.StaffChangesHandler(func(context.Context) ([]audit.StaffChange, error) {
+		return []audit.StaffChange{
+			{ID: "1", Actor: "a", Event: "rules.published", RuleSetVersionID: &version, Payload: json.RawMessage(`{}`)},
+			{ID: "2", Actor: "a", Event: "kill", TenantID: &tenant, TenantName: &name, Payload: json.RawMessage(`{}`)},
+		}, nil
+	}, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/staff/staff-audit-log", nil))
+	var body struct {
+		Changes []map[string]any `json:"changes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Changes) != 2 {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	for _, k := range []string{"id", "actor", "event", "rule_set_version_id", "tenant_id", "tenant_name", "subject_id", "payload", "created_at"} {
+		if _, ok := body.Changes[0][k]; !ok {
+			t.Errorf("global change lacks key %q: %v", k, body.Changes[0])
+		}
+	}
+	g, tr := body.Changes[0], body.Changes[1]
+	if g["tenant_id"] != nil || g["tenant_name"] != nil || g["rule_set_version_id"] != "v1" {
+		t.Errorf("global row = %v, want null tenant and version v1", g)
+	}
+	if tr["tenant_id"] != "t1" || tr["tenant_name"] != "Acme" || tr["rule_set_version_id"] != nil {
+		t.Errorf("tenant row = %v, want tenant t1/Acme and a null version", tr)
 	}
 }

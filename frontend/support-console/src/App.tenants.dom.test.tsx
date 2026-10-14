@@ -239,7 +239,7 @@ describe('Console tenants wiring', () => {
     expect(card.querySelectorAll('button')).toHaveLength(0)
   })
 
-  it('an empty list shows its line, no rows and no search field; a list error keeps the detail prompt', async () => {
+  it('an empty list shows its line, no rows, no search field and the detail prompt', async () => {
     list.mockResolvedValueOnce([])
     render(<App />)
     await openTenants()

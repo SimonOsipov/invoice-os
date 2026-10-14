@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -233,6 +234,9 @@ func main() {
 		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 }
+
+// gatewayURL parses GATEWAY_URL, the in-network gateway base the fleet reader calls.
+func gatewayURL(raw string) (*url.URL, error) { return nil, errors.New("not implemented") }
 
 // documents.size_bytes CHECKs <= this (migrations/20260802163544_documents.sql).
 const maxDocumentBytes = 15 << 20

@@ -1988,3 +1988,140 @@ func isSelectorCall(e ast.Expr, pkg, name string) bool {
 	call, ok := e.(*ast.CallExpr)
 	return ok && isSelector(call.Fun, pkg, name)
 }
+
+func TestGatewayURL_RequiresAnAbsoluteHTTPURL(t *testing.T) {
+	for _, raw := range []string{"", "gateway.railway.internal:8080", "ftp://x", "http://"} {
+		u, err := gatewayURL(raw)
+		if err == nil || u != nil {
+			t.Errorf("gatewayURL(%q) = %v, %v; want nil and an error", raw, u, err)
+			continue
+		}
+		if raw == "" && !strings.Contains(err.Error(), "GATEWAY_URL is required") {
+			t.Errorf("gatewayURL(%q) error = %q, want it to say GATEWAY_URL is required", raw, err)
+		}
+	}
+	for _, raw := range []string{"http://gateway.railway.internal:8080", "https://gateway.example.com"} {
+		u, err := gatewayURL(raw)
+		if err != nil || u == nil || u.String() != raw {
+			t.Errorf("gatewayURL(%q) = %v, %v; want the URL and no error", raw, u, err)
+		}
+	}
+}
+
+// The matcher is the one TestSubmissionMain_FatalOnDocumentConfigError uses.
+func TestSubmissionMain_FatalOnGatewayURLError(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+	if calls, fatal := wtFatalAfter(t, f, "submission.MockConfigFromEnv"); calls != 1 || !fatal {
+		t.Fatalf("the matcher found %d unconditional submission.MockConfigFromEnv call(s), fatal=%v, want 1 and true -- it can no longer recognise a known-good boot fatal, so the findings below mean nothing", calls, fatal)
+	}
+	calls, fatal := wtFatalAfter(t, f, "gatewayURL")
+	if calls != 1 {
+		t.Fatalf("main() assigns from gatewayURL %d time(s) at the top level, want 1: GATEWAY_URL is required at every boot", calls)
+	}
+	if !fatal {
+		t.Error("the statement after gatewayURL is not an error check that calls platform.Fatal: a missing or malformed GATEWAY_URL must refuse to boot")
+	}
+	_, args := wtOneCall(t, f, "gatewayURL")
+	var getenv *ast.CallExpr
+	if len(args) == 1 {
+		getenv, _ = args[0].(*ast.CallExpr)
+	}
+	if getenv == nil || wtCallName(getenv.Fun) != "os.Getenv" || len(getenv.Args) != 1 || wtRender(getenv.Args[0]) != "ast.BasicLit" || getenv.Args[0].(*ast.BasicLit).Value != `"GATEWAY_URL"` {
+		t.Error(`gatewayURL is not called with os.Getenv("GATEWAY_URL")`)
+	}
+}
+
+func TestSubmissionMain_RegistersTheStaffHealthRouteAndSampler(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+	var healthRoutes, workers, sampleWorkers int
+	var healthOnAppMux, healthHandlerOK, intervalOK, controlQueue bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch {
+		case sel.Sel.Name == "HandleFunc" && len(call.Args) == 2:
+			if lit, ok := call.Args[0].(*ast.BasicLit); ok && strings.Trim(lit.Value, `"`) == "GET /v1/staff/health" {
+				healthRoutes++
+				healthOnAppMux = wtRender(sel.X) == "app.Mux"
+				h, ok := call.Args[1].(*ast.CallExpr)
+				healthHandlerOK = ok && wtCallName(h.Fun) == "systemhealth.Handler"
+			}
+		case sel.Sel.Name == "AddBackgroundWorker" && len(call.Args) == 1:
+			workers++
+			if id, ok := call.Args[0].(*ast.Ident); ok && id.Name == "q" {
+				controlQueue = true
+			}
+			if w, ok := call.Args[0].(*ast.CallExpr); ok && wtCallName(w.Fun) == "codelist.NewWorker" {
+				sampleWorkers++
+				intervalOK = len(w.Args) == 2 && isSelector(w.Args[0], "systemhealth", "SampleInterval")
+			}
+		}
+		return true
+	})
+	if !controlQueue {
+		t.Fatal("control needle: no app.AddBackgroundWorker(q) found -- the AST walk is broken, so the counts below are vacuous")
+	}
+	if healthRoutes != 1 {
+		t.Fatalf(`app.Mux.HandleFunc("GET /v1/staff/health", ...) registered %d time(s), want exactly 1`, healthRoutes)
+	}
+	if !healthOnAppMux {
+		t.Error("GET /v1/staff/health is not registered on app.Mux -- only app.Mux is served")
+	}
+	if !healthHandlerOK {
+		t.Error("GET /v1/staff/health's handler is not a systemhealth.Handler(...) call")
+	}
+	if sampleWorkers != 1 || workers != 2 {
+		t.Errorf("AddBackgroundWorker calls = %d (codelist.NewWorker: %d), want the queue and exactly one codelist.NewWorker sampler", workers, sampleWorkers)
+	}
+	if !intervalOK {
+		t.Error("the sampler worker is not codelist.NewWorker(systemhealth.SampleInterval, <fn>)")
+	}
+}
+
+func TestSubmissionMain_GatewayURLFatalSitsBeforeThePool(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/submission/main.go: %v", err)
+	}
+	pos := map[string]token.Pos{}
+	for _, stmt := range wtMainBody(t, f) {
+		ast.Inspect(stmt, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := wtCallName(call.Fun)
+			switch {
+			case name == "platform.New" || name == "gatewayURL":
+				if _, seen := pos[name]; !seen {
+					pos[name] = call.Pos()
+				}
+			case name == "os.Getenv" && len(call.Args) == 1:
+				if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Value == `"DATABASE_URL"` {
+					pos["DATABASE_URL"] = call.Pos()
+				}
+			}
+			return true
+		})
+	}
+	for _, name := range []string{"platform.New", "gatewayURL", "DATABASE_URL"} {
+		if pos[name] == token.NoPos {
+			t.Fatalf("main() has no %s call: the order below cannot be read", name)
+		}
+	}
+	if !(pos["platform.New"] < pos["gatewayURL"] && pos["gatewayURL"] < pos["DATABASE_URL"]) {
+		t.Errorf("order is platform.New@%d gatewayURL@%d DATABASE_URL@%d, want platform.New < gatewayURL < DATABASE_URL: the GATEWAY_TOKEN refusal stays first and no database is contacted before the GATEWAY_URL refusal", pos["platform.New"], pos["gatewayURL"], pos["DATABASE_URL"])
+	}
+}

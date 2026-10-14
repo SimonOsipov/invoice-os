@@ -29,7 +29,7 @@ const (
 	staffGatewayToken = "staff-tenants-test-gateway-token"
 	forbiddenBody     = `{"error":"forbidden"}`
 	internalBody      = `{"error":"internal server error"}`
-	// tenantNotFoundBody is the 404 body of tenancy.go:120 (the "tenant not found" message).
+	// tenantNotFoundBody is the 404 body the tenancy handlers write for ErrTenantNotFound.
 	tenantNotFoundBody = `{"error":"tenant not found"}`
 	devHouseTenant     = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
 )

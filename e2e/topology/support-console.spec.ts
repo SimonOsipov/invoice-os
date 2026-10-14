@@ -651,9 +651,17 @@ async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Pro
   await expect(tile('fleet').locator('.money')).toHaveText(known ? `${up}/${seen.fleet.services.length}` : '—')
   await expect(tile('queue').locator('.money')).toHaveText(String(seen.queue_depth))
   await expect(tile('dead-lettered').locator('.money')).toHaveText(String(seen.jobs.dead_lettered ?? 0))
+  const fleetWord = { ok: 'HEALTHY', degraded: 'DEGRADED', unknown: 'UNKNOWN' }[seen.fleet.status as 'ok' | 'degraded' | 'unknown']
+  await expect(tile('fleet').getByText(fleetWord, { exact: true }), 'fleet status word').toHaveCount(1)
+  await expect(tile('dead-lettered').getByText((seen.jobs.dead_lettered ?? 0) > 0 ? 'ATTENTION' : 'CLEAR', { exact: true }), 'dead-lettered status word').toHaveCount(1)
 
   if (known) {
-    for (const s of seen.fleet.services) await expect(kid(mn.locator(`[data-service="${s.name}"]`), 3), `${s.name} build`).toHaveText(shortOf(s.build))
+    expect(seen.fleet.services.length, 'the fleet read names services').toBeGreaterThan(0)
+    for (const s of seen.fleet.services) {
+      const row = mn.locator(`[data-service="${s.name}"]`)
+      await expect(kid(row, 3), `${s.name} build`).toHaveText(shortOf(s.build))
+      await expect(kid(row, 2), `${s.name} badge`).toHaveText(s.status === 'up' ? 'UP' : 'DOWN')
+    }
   }
   await expect(mn.locator('[data-service]'), 'one row per service').toHaveCount(known ? seen.fleet.services.length : 0)
 
@@ -696,6 +704,7 @@ async function healthLayout(page: Page): Promise<Read> {
     const head = kid(t, 1)
     const word = kid(head, 2)
     const hasWord = (await word.count()) > 0
+    if (i !== 1) expect(hasWord, `tile ${i} has a status word`).toBe(true)
     const svg = t.locator('svg')
     const hasSvg = (await svg.count()) > 0
     const r = await boxes(page, { tile: t, label: kid(head, 1), value: kid(t, 2) })
@@ -715,6 +724,7 @@ async function healthLayout(page: Page): Promise<Read> {
 
   const rows = mn.locator('[data-service]')
   const nRows = Math.min(await rows.count(), 20)
+  if (nRows === 0) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'no rows only when the roll-up is unavailable').toHaveCount(1)
   for (let i = 0; i < nRows; i++) {
     const row = rows.nth(i)
     const p = await boxes(page, { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3) })
@@ -776,6 +786,7 @@ for (const s of SCREENS) {
     test.setTimeout(120_000)
     const errors = await startSupport(page)
     const armed = s.arm?.(page)
+    armed?.catch(() => {}) // a timeout surfaces where `reads` awaits it, not as an unhandled rejection
     await openScreen(page, s.nav, s.h1)
     await settle(page, mainOf(page))
 

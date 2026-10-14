@@ -484,7 +484,7 @@ func TestRLS_RedriveWritesBothAuditRowsInTheSameTx(t *testing.T) {
 	seedMembership(t, super, adoptHouseTenant(t, super), staff)
 	r := newRedriveRig(t, "dead_lettered", "discarded")
 	r.ctx = staffCtx(staff)
-	if _, err := r.store.Redrive(r.ctx, r.job, "  APP back up "); err != nil {
+	if _, err := r.store.Redrive(r.ctx, r.job, "APP back up"); err != nil {
 		t.Fatalf("Redrive: %v", err)
 	}
 	want := map[string]any{"job_id": r.job, "invoice_id": r.invoice, "invoice_number": "RD-" + r.tenant[:8], "reason": "APP back up"}

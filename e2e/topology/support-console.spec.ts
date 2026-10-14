@@ -718,7 +718,10 @@ async function viewJobsLands(page: Page): Promise<void> {
   await expect(mn.locator('select[aria-label="Tenant"]'), 'the tenant select shows the house tenant').toHaveValue(HOUSE_TENANT_ID)
   await expect(mn.getByRole('button', { name: 'ALL', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(mn.getByText('Loading jobs…')).toHaveCount(0)
-  await expect(jobRows(page).filter({ hasNotText: HOUSE_NAME }), 'only the house tenant\'s jobs are listed').toHaveCount(0)
+  const live = (await liveStaffGet<{ jobs: LiveJob[] }>(`${STAFF_JOBS}?tenant=${HOUSE_TENANT_ID}`)).jobs
+  await expect(jobRows(page), 'the list is the live house-tenant read').toHaveCount(live.length)
+  if (live.length === 0) await expect(mn.getByText('No jobs in this state.')).toBeVisible()
+  else await expect(jobRows(page).filter({ hasNotText: HOUSE_NAME }), "only the house tenant's jobs are listed").toHaveCount(0)
 }
 
 const SCREENS: Screen[] = [
@@ -1464,6 +1467,7 @@ test('SUP-07 Submissions: re-drive a seeded dead-letter job, then cancel it', as
   const cancelReason = `e2e cancel ${randomUUID()}`
   let jobId: string | null = null
   let cancelled = false
+  let redriveSent = false
 
   try {
     await openScreen(page, 'Submissions', 'Submissions ops')
@@ -1519,6 +1523,7 @@ test('SUP-07 Submissions: re-drive a seeded dead-letter job, then cancel it', as
     })
 
     await reasonBox.fill(redriveReason)
+    redriveSent = true
     await confirm.click()
     await expect(page.getByRole('status').filter({ hasText: 'Job re-driven' }), 'the re-drive toast').toBeVisible()
 
@@ -1541,8 +1546,8 @@ test('SUP-07 Submissions: re-drive a seeded dead-letter job, then cancel it', as
     const cancelRow = await auditRowFor('submission.job.cancelled', cancelReason)
     expect(cancelRow.actor, 'the customer sees the support actor').toBe(SUPPORT_ACTOR)
   } finally {
-    // Leave no `queued` row for later serial-lane specs.
-    if (jobId && !cancelled) await cancelWhenQueued(api, jobId, cancelReason).catch(() => undefined)
+    // Leave no `queued` row for later serial-lane specs; before the re-drive a cancel would 409 for the whole window.
+    if (jobId && redriveSent && !cancelled) await cancelWhenQueued(api, jobId, cancelReason).catch(() => undefined)
   }
 
   noErrors(errors, 'SUP-07 Submissions')

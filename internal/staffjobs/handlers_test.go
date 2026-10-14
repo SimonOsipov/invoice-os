@@ -145,3 +145,54 @@ func TestGetHandler_CarriesMaxAttemptsAndHistory(t *testing.T) {
 		t.Errorf("history = %v, want an empty array", body.History)
 	}
 }
+
+func TestListHandler_EveryJobCarriesMaxAttempts(t *testing.T) {
+	rec := serveList(t, "/v1/staff/jobs?state=cancelled&state=queued", func(_ context.Context, s *string, _ *uuid.UUID) ([]Job, error) {
+		if s == nil || *s != "cancelled" {
+			t.Errorf("state = %v, want cancelled", s)
+		}
+		return []Job{{ID: "a"}, {ID: "b"}}, nil
+	})
+	var body struct {
+		Jobs []struct {
+			MaxAttempts int `json:"max_attempts"`
+		} `json:"jobs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("got %d %q: %v", rec.Code, rec.Body.String(), err)
+	}
+	if len(body.Jobs) != 2 {
+		t.Fatalf("jobs = %d, want 2", len(body.Jobs))
+	}
+	want := submission.SubmitArgs{}.InsertOpts().MaxAttempts
+	for i, j := range body.Jobs {
+		if j.MaxAttempts != want || want == 0 {
+			t.Errorf("job %d max_attempts = %d, want %d", i, j.MaxAttempts, want)
+		}
+	}
+}
+
+func TestListHandler_EmptyFiltersAreAbsent(t *testing.T) {
+	var s *string
+	var tn *uuid.UUID
+	serveList(t, "/v1/staff/jobs?state=&tenant=", func(_ context.Context, st *string, t2 *uuid.UUID) ([]Job, error) {
+		s, tn = st, t2
+		return nil, nil
+	})
+	if s != nil || tn != nil {
+		t.Errorf("empty filters = %v, %v, want nil, nil", s, tn)
+	}
+}
+
+func TestGetHandler_ServerFaultIs500AndLogged(t *testing.T) {
+	var logs bytes.Buffer
+	req := httptest.NewRequest(http.MethodGet, "/v1/staff/jobs/abc", nil)
+	req.SetPathValue("id", "abc")
+	rec := httptest.NewRecorder()
+	GetHandler(func(context.Context, string) (Detail, error) { return Detail{}, errors.New("boom") },
+		slog.New(slog.NewTextHandler(&logs, nil))).ServeHTTP(rec, req)
+	wantBody(t, rec, http.StatusInternalServerError, `{"error":"internal server error"}`)
+	if !strings.Contains(logs.String(), "staffjobs: get response") {
+		t.Errorf("log = %q", logs.String())
+	}
+}

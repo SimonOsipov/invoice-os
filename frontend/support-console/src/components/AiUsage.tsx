@@ -32,9 +32,9 @@ type Props = {
   onRetryTotals: () => void
 }
 
-const CALL_COLS = '168px minmax(96px,1.4fr) 40px minmax(96px,1fr) minmax(96px,1.4fr) 64px 56px 84px 72px 36px minmax(96px,1fr)'
+const CALL_COLS = '168px minmax(96px,1.4fr) 56px minmax(96px,1fr) minmax(96px,1.4fr) 64px 56px 84px 72px 36px minmax(96px,1fr)'
 // Fixed tracks plus the minimums; fits the 949 px row at a 1280 px window.
-const CALL_MIN_WIDTH = 904
+const CALL_MIN_WIDTH = 920
 
 const TOTAL_COLS = '104px minmax(96px,1fr) 64px 96px 96px 96px 64px'
 // Fixed tracks plus the minimum.

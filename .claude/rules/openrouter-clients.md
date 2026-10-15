@@ -88,5 +88,6 @@ paths:
 - Flag a doubted field with a reason in `applyValueCheck`. Never rewrite its value.
 - Run the live probe before you merge a Jev client change: `JEV_PROBE=1 OPENROUTER_API_KEY=<key> go test -count=1 -v -run '^TestJevLiveProbe$' ./internal/platform/jev/liveprobe`.
 - Treat the Jev model alias as moving. Record the answering release from the `model` log key.
+- Count a call as failed when its outcome is not `ok`. A `fake` row counts as failed.
 - Re-measure a Jev threshold on real documents before you trust it in production.
 - Leave the Jev data terms to the user. They are unresolved, and nothing enforces zero data retention per call.

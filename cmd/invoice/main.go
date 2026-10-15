@@ -225,6 +225,9 @@ func main() {
 	defer aiRecorder.Wait() // runs before pool.Close
 	aiClient.SetRecorder(aiRecorder.Record)
 	jevClient.SetRecorder(aiRecorder.Record)
+	aiCallStore := aicalls.NewStore(pool)
+	app.Mux.HandleFunc("GET /v1/staff/ai-calls", aicalls.StaffCallsHandler(aiCallStore.StaffCalls, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/ai-calls/totals", aicalls.StaffTotalsHandler(aiCallStore.StaffTotals, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, impStore.SaveMapping, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
 	// POST /v1/imports/document -- the document-import route (EXTR-06-06): a stored

@@ -1,4 +1,4 @@
-// The deployed v2 Support Console. Its screens, Submissions, Rules, Audit, Tenants and System health, read real data; Rules also switches real rules.
+// The deployed v2 Support Console. Its screens, Submissions, Rules, Audit, Tenants, System health and AI usage, read real data; Rules also switches real rules.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { randomUUID } from 'node:crypto'
@@ -1000,6 +1000,189 @@ async function auditLayout(page: Page): Promise<Read> {
   return { problems, rects: { top, chipRects, controls, headCells, staffHead } }
 }
 
+const STAFF_AI_CALLS = '/api/invoice/v1/staff/ai-calls'
+const STAFF_AI_TOTALS = `${STAFF_AI_CALLS}/totals`
+type LiveAiCall = { id: string; tenant_name: string; client: string; purpose: string; outcome: string }
+type LiveAiTotal = { day: string; tenant_id: string; calls: number; cost: string; failed: number }
+type LiveAiPage<K extends string, R> = { page: { has_more: boolean; next_cursor: string | null } } & Record<K, R[]>
+
+const aiCallRows = (page: Page): Locator => mainOf(page).locator('div[data-call-id]')
+const aiTotalRows = (page: Page): Locator => mainOf(page).locator('div[data-total-key]')
+// Cells of a call row: time 1, tenant 2, client 3, purpose 4, model 5, in 6, out 7, cost 8, latency 9, try 10, outcome 11.
+const AI_TRUNCATING_CELLS = [2, 4, 5, 11]
+// Cells of a totals row: day 1, tenant 2, calls 3, tokens in 4, tokens out 5, cost 6, failed 7.
+// Every button the screen may hold: the three view chips, Load more and a failed read's Retry.
+const AI_BUTTONS = ['CALLS', 'FAILURES', 'DAILY TOTALS', 'Load more', 'Retry']
+
+// Follows the cursor until every key is found: rows that land between the screen read and this one push them down the list.
+async function liveAiRows<K extends string, R>(path: string, key: K, keyOf: (r: R) => string, keys: string[], extra = ''): Promise<Map<string, R>> {
+  const found = new Map<string, R>()
+  let cursor: string | null = null
+  for (let pages = 0; pages < 10 && found.size < keys.length; pages++) {
+    const q = new URLSearchParams(extra)
+    q.set('limit', '100')
+    if (cursor) q.set('cursor', cursor)
+    const res: LiveAiPage<K, R> = await liveStaffGet<LiveAiPage<K, R>>(`${path}?${q}`)
+    for (const r of res[key]) if (keys.includes(keyOf(r))) found.set(keyOf(r), r)
+    if (!res.page.has_more) break
+    cursor = res.page.next_cursor
+  }
+  return found
+}
+
+// The screen is read-only: no switch or input beyond the five filters, and no button outside the allowlist.
+async function aiControlsRead(page: Page, what: string): Promise<void> {
+  const mn = mainOf(page)
+  await expect(mn.locator('[role="switch"], input[type="checkbox"], input[type="range"], input[type="number"]'), `${what}: no switch, checkbox, range or number input`).toHaveCount(0)
+  // The screen's own content: the TopBar's Sandbox/Live switch is console-wide, not an AI control.
+  const names = (await mn.locator('.ops-screen-pad').getByRole('button').allTextContents()).map((t) => t.trim())
+  expect(names, `${what}: the view chips are in scope`).toEqual(expect.arrayContaining(['CALLS', 'FAILURES', 'DAILY TOTALS']))
+  expect(names.filter((n) => !AI_BUTTONS.includes(n)), `${what}: buttons outside the allowlist`).toEqual([])
+}
+
+async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
+  const mn = mainOf(page)
+  const calls = aiCallRows(page)
+  await expect(calls.first(), 'the AI calls have loaded').toBeVisible()
+
+  // Matched by id, not count: the table grows with every spec.
+  const first = (await calls.all()).slice(0, ROW_CAP)
+  const ids = await Promise.all(first.map((row) => row.getAttribute('data-call-id') as Promise<string>))
+  const live = await liveAiRows<'calls', LiveAiCall>(STAFF_AI_CALLS, 'calls', (c) => c.id, ids)
+  for (const [i, row] of first.entries()) {
+    const hit = live.get(ids[i])
+    expect(hit, `row ${i} is in the live read`).toBeDefined()
+    await expect(kid(row, 2), `row ${i} tenant`).toHaveText(hit!.tenant_name)
+    await expect(kid(row, 3), `row ${i} client`).toHaveText(hit!.client)
+    await expect(kid(row, 4), `row ${i} purpose`).toHaveText(hit!.purpose)
+    await expect(kid(row, 11), `row ${i} outcome`).toHaveText(hit!.outcome)
+  }
+  expect(await truncationBad(calls, AI_TRUNCATING_CELLS), 'every tenant, purpose, model and outcome cell truncates').toEqual([])
+  await aiControlsRead(page, 'CALLS')
+
+  await mn.getByRole('button', { name: 'FAILURES' }).click()
+  await expect(mn.getByRole('button', { name: 'FAILURES' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(calls.first(), 'the failed calls have loaded').toBeVisible()
+  const failedRows = (await calls.all()).slice(0, ROW_CAP)
+  const failedIds = await Promise.all(failedRows.map((row) => row.getAttribute('data-call-id') as Promise<string>))
+  const liveFailed = await liveAiRows<'calls', LiveAiCall>(STAFF_AI_CALLS, 'calls', (c) => c.id, failedIds, 'failed=true')
+  for (const [i, row] of failedRows.entries()) {
+    await expect(kid(row, 11), `failure ${i} outcome is not ok`).not.toHaveText('ok')
+    expect(liveFailed.has(failedIds[i]), `failure ${i} is in a live failed=true read`).toBe(true)
+  }
+  await aiControlsRead(page, 'FAILURES')
+
+  await mn.getByRole('button', { name: 'DAILY TOTALS' }).click()
+  const totals = aiTotalRows(page)
+  await expect(totals.first(), 'the daily totals have loaded').toBeVisible()
+  const firstTotals = (await totals.all()).slice(0, ROW_CAP)
+  const keys = await Promise.all(firstTotals.map((row) => row.getAttribute('data-total-key') as Promise<string>))
+  const liveTotals = await liveAiRows<'totals', LiveAiTotal>(STAFF_AI_TOTALS, 'totals', (t) => `${t.day}|${t.tenant_id}`, keys)
+  for (const [i, row] of firstTotals.entries()) {
+    const hit = liveTotals.get(keys[i])
+    expect(hit, `total ${i} is in the live read`).toBeDefined()
+    await expect(kid(row, 3), `total ${i} calls`).toHaveText(hit!.calls.toLocaleString('en-US'))
+    await expect(kid(row, 6), `total ${i} cost`).toHaveText(`$${hit!.cost}`)
+    await expect(kid(row, 7), `total ${i} failed`).toHaveText(hit!.failed.toLocaleString('en-US'))
+  }
+  await aiControlsRead(page, 'DAILY TOTALS')
+
+  await mn.getByRole('button', { name: 'CALLS' }).click()
+  await expect(calls.first()).toBeVisible()
+  const ai = await chipPaints(page)
+  await openScreen(page, 'Submissions', 'Submissions ops')
+  const submissions = await chipPaints(page)
+  expect(ai.on, 'the pressed view chip is painted as the pressed Submissions chip').toEqual(submissions.on)
+  expect(ai.off, 'the idle view chip is painted as an idle Submissions chip').toEqual(submissions.off)
+  await openScreen(page, 'AI usage', 'AI usage')
+  await mn.getByRole('button', { name: 'CALLS' }).click()
+  await expect(calls.first(), 'the AI calls reload').toBeVisible()
+  await attachShot(page, testInfo, 'ai-usage')
+}
+
+// Cells whose text must sit inside the cell: the header cells, and a row's cells at the fixed-width tracks.
+async function textOverflows(cells: Locator, only: number[] | undefined, what: string): Promise<string[]> {
+  const found = await cells.evaluateAll(
+    (els, keep) =>
+      els.flatMap((el, n) => {
+        if (keep && !keep.includes(n)) return []
+        const cs = getComputedStyle(el)
+        const box = el.getBoundingClientRect()
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        const t = range.getBoundingClientRect()
+        const inner = { left: box.left + parseFloat(cs.paddingLeft), right: box.right - parseFloat(cs.paddingRight) }
+        const out = el.scrollWidth > el.clientWidth + 1 || t.left < inner.left - 0.5 || t.right > inner.right + 0.5
+        return out ? [`${n + 1} "${el.textContent}": text ${t.left.toFixed(1)}..${t.right.toFixed(1)} vs cell ${inner.left.toFixed(1)}..${inner.right.toFixed(1)}`] : []
+      }),
+    only,
+  )
+  return found.map((f) => `${what}: cell ${f} overflows`)
+}
+
+// The header, chips, form and one card with its rows, in one settled read.
+async function aiCardRead(page: Page, rows: Locator, what: string, fixed: number[]): Promise<{ problems: string[]; rects: Record<string, unknown> }> {
+  const mn = mainOf(page)
+  const chips = mn.locator('button.ops-chip')
+  const form = mn.locator('form')
+  const card = parent(rows.first())
+  const top = await boxes(page, {
+    titleBlock: parent(mn.getByRole('heading', { level: 1, name: 'AI usage' })),
+    chipBar: parent(chips.first()),
+    form,
+    card,
+  })
+  const problems = [...below(top.titleBlock, top.chipBar, `${what}: chips below the header block`), ...below(top.chipBar, top.form, `${what}: form below the chips`), ...below(top.form, top.card, `${what}: card below the form`)]
+
+  const chipRects = await rectsOf(page, chips, 'view chip')
+  problems.push(...sameTops(chipRects, `${what}: view chips`), ...pairwiseApart(chipRects, `${what}: view chips`))
+
+  const controls = await Promise.all([1, 2, 3, 4, 5].map(async (n) => (await boxes(page, { c: kid(form, n) })).c))
+  problems.push(...pairwiseApart(controls, `${what}: filter controls`))
+  for (const [i, c] of controls.entries()) problems.push(...within(top.form, c, `${what}: filter control ${i + 1} in the form`))
+
+  const fit = await card.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  if (fit.scrollWidth > fit.clientWidth + 1) problems.push(`${what}: the card scrolls sideways (${fit.scrollWidth} vs ${fit.clientWidth})`)
+
+  const headCells = await childRects(kid(card, 1))
+  const shown = (await rows.all()).slice(0, ROW_CAP)
+  for (const [i, row] of shown.entries()) {
+    const box = await row.boundingBox()
+    if (!box) throw new Error(`${what} row ${i} has no box`)
+    const cells = await childRects(row)
+    problems.push(...within(top.card, box, `${what}: row ${i} in the card`), ...pairwiseApart(cells, `${what}: row ${i} cells`))
+    for (const [n, c] of cells.entries()) {
+      problems.push(...within(box, c, `${what}: row ${i} cell ${n + 1} in its row`))
+      if (!near(c.x, headCells[n].x, 1)) problems.push(`${what}: row ${i} cell ${n + 1}: left ${c.x} vs header cell ${headCells[n].x}`)
+    }
+  }
+
+  const headSpans = kid(card, 1).locator('> *')
+  expect(await headSpans.count(), `${what}: header cells`).toBeGreaterThan(0)
+  expect(await rows.first().locator('> *').count(), `${what}: first row cells`).toBeGreaterThan(0)
+  problems.push(...(await textOverflows(headSpans, undefined, `${what} header`)), ...(await textOverflows(rows.first().locator('> *'), fixed, `${what} row 0`)))
+
+  const more = mn.getByRole('button', { name: 'Load more' })
+  if ((await more.count()) > 0) problems.push(...below(top.card, (await boxes(page, { more })).more, `${what}: Load more below the card`))
+  return { problems, rects: { top, chipRects, controls, headCells } }
+}
+
+async function aiUsageLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  // A poll retry starts from whichever view the last read left.
+  await mn.getByRole('button', { name: 'CALLS' }).click()
+  await expect(aiCallRows(page).first()).toBeVisible()
+  const calls = await aiCardRead(page, aiCallRows(page), 'calls', [0, 2, 5, 6, 7, 8, 9])
+
+  await mn.getByRole('button', { name: 'DAILY TOTALS' }).click()
+  await expect(aiTotalRows(page).first()).toBeVisible()
+  const totals = await aiCardRead(page, aiTotalRows(page), 'totals', [0, 2, 3, 4, 5, 6])
+  await mn.getByRole('button', { name: 'CALLS' }).click()
+
+  await noSidewaysScroll(page, 'AI usage')
+  return { problems: [...calls.problems, ...totals.problems], rects: { calls: calls.rects, totals: totals.rects } }
+}
+
 const SCREENS: Screen[] = [
   {
     nav: 'Submissions',
@@ -1058,6 +1241,13 @@ const SCREENS: Screen[] = [
     arm: armHealth,
     reads: healthReads,
     layout: healthLayout,
+  },
+  {
+    nav: 'AI usage',
+    h1: 'AI usage',
+    rowUp: 1,
+    reads: aiUsageReads,
+    layout: aiUsageLayout,
   },
 ]
 

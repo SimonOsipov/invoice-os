@@ -11,6 +11,7 @@ const SCREENS: { nav: string; h1: string }[] = [
   { nav: 'Audit', h1: 'Audit & evidence explorer' },
   { nav: 'Tenants', h1: 'Tenants' },
   { nav: 'System health', h1: 'System health' },
+  { nav: 'AI usage', h1: 'AI usage' },
 ]
 
 test('support-console: every screen is reachable from the sidebar and renders its own h1', async ({ page, staffAccount }) => {

@@ -4,9 +4,11 @@ import { describe, expect, it } from 'vitest'
 
 import { readFileSync } from 'node:fs'
 
+import { AiUsage } from './components/AiUsage'
 import { Health } from './components/Health'
 import { Rules } from './components/Rules'
 import { Tenants } from './components/Tenants'
+import type { AiCall } from './aiUsageApi'
 import type { FleetHealth, ServiceHealth, StaffHealth, TrendPoint } from './healthApi'
 import { SEED_RULES } from './rulesFixture'
 import type { RuleVersion } from './rulesApi'
@@ -133,7 +135,32 @@ const HEALTH_PROPS: Parameters<typeof Health>[0] = { status: 'ready', data: HEAL
 const healthWith = (over: Partial<Parameters<typeof Health>[0]>) => renderToStaticMarkup(createElement(Health, { ...HEALTH_PROPS, ...over }))
 const healthData = (over: Partial<StaffHealth>) => healthWith({ data: { ...HEALTH, ...over } })
 
-const SCREENS = { rules: renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS })), tenants: tenantsWith({}), health: healthWith({}) }
+const aiCall = (id: string, over: Partial<AiCall> = {}): AiCall => ({
+  id, tenant_id: 't1', tenant_name: 'Okafor & Partners', created_at: '2026-10-14T09:12:03.123456Z', client: 'ai', purpose: 'document', model: 'x/y',
+  input_tokens: 3447, output_tokens: 120, cost: '0.0014741', latency_ms: 1200, attempts: 1, outcome: 'ok', ...over,
+})
+const AI_PROPS: Parameters<typeof AiUsage>[0] = {
+  view: 'calls',
+  onView: noop,
+  filters: {},
+  onFilters: noop,
+  tenants: [],
+  status: 'ready',
+  calls: [aiCall('c1'), aiCall('c2', { outcome: 'unavailable' })],
+  hasMore: false,
+  moreBusy: false,
+  onMore: noop,
+  onRetry: noop,
+  totalsStatus: 'ready',
+  totals: [],
+  totalsHasMore: false,
+  totalsMoreBusy: false,
+  onMoreTotals: noop,
+  onRetryTotals: noop,
+}
+const aiWith = (over: Partial<Parameters<typeof AiUsage>[0]>) => renderToStaticMarkup(createElement(AiUsage, { ...AI_PROPS, ...over }))
+
+const SCREENS = { rules: renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS })), tenants: tenantsWith({}), health: healthWith({}), ai: aiWith({}) }
 type Screen = keyof typeof SCREENS
 const SCREEN_KEYS = Object.keys(SCREENS) as Screen[]
 const tagsOf = (screen: Screen) => {

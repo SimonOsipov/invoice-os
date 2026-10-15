@@ -16,6 +16,7 @@ paths:
 - Give the append-only tables `audit_log` and `idempotency_keys` SELECT and INSERT only.
 - Give `invoice_app` INSERT only on `staff_audit_log`. Staff read it only through `public.staff_read_staff_audit_log`.
 - Give `invoice_app` INSERT, DELETE and `SELECT (taken_at)` on `health_samples`. Staff read it only through `public.staff_read_health_samples`.
+- Give `invoice_app` SELECT and INSERT only on `ai_calls`. Staff read it only through `public.staff_read_ai_calls` and `public.staff_read_ai_call_totals`.
 - Treat `submission_job_state_counts` as callable by every `invoice_app` service. It returns per-state counts only.
 - Copy the `tenants` template for a new tenant table. Use `ENABLE` and `FORCE ROW LEVEL SECURITY` and a `tenant_isolation` policy.
 - Read the tenant as `nullif(current_setting('app.current_tenant', true), '')::uuid`. An unset tenant returns zero rows.

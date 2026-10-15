@@ -530,7 +530,7 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 		}
 	}
 
-	// Column sets per table: tenants is the staff_read_tenants migration's, the next three the tenant-detail migration's, the last two the submission-jobs migration's; audit_log gains id, event, actor and payload from the audit-search migration.
+	// Column sets per table: tenants is the staff_read_tenants migration's, the next three the tenant-detail migration's, the last two the submission-jobs migration's; audit_log gains id, event, actor and payload from the audit-search migration. ai_calls is the staff_read_ai_calls migration's.
 	for table, cols := range map[string][]string{
 		"public.tenants":                {"created_at", "id", "kind", "name"},
 		"public.memberships":            {"created_at", "display_name", "email", "role", "status", "tenant_id", "user_id"},
@@ -538,6 +538,7 @@ func TestRLS_StaffReaderPrivilegesAreSelectColumnsWithAPolicy(t *testing.T) {
 		"public.audit_log":              {"actor", "created_at", "event", "id", "payload", "tenant_id"},
 		"public.submission_jobs":        {"attempts", "created_at", "id", "invoice_id", "last_error", "poll_ref", "state", "tenant_id", "updated_at"},
 		"public.invoice_status_history": {"actor", "changed_at", "from_status", "id", "invoice_id", "tenant_id", "to_status"},
+		"public.ai_calls":               {"attempts", "client", "cost", "created_at", "id", "input_tokens", "latency_ms", "model", "outcome", "output_tokens", "purpose", "tenant_id"},
 	} {
 		var want []string
 		for _, c := range cols {
@@ -644,6 +645,15 @@ var staffReaderSeeds = map[string]struct {
 	}},
 	"invoice_status_history": {"tenant_id", func(t *testing.T) {
 		seedHistoryAt(t, h.tenantB, tenantBInvoice(t), strPtr("draft"), "validated", "staff-read-isolation", time.Now().UTC())
+	}},
+	"ai_calls": {"tenant_id", func(t *testing.T) {
+		var id string
+		if err := h.super.QueryRow(context.Background(),
+			`INSERT INTO ai_calls (tenant_id, client, purpose, model, input_tokens, output_tokens, cost, latency_ms, attempts, outcome)
+			 VALUES ($1, 'ai', 'staff-read-isolation', '', 0, 0, 0, 0, 1, 'ok') RETURNING id::text`, h.tenantB).Scan(&id); err != nil {
+			t.Fatalf("seed a tenant-B ai_calls row: %v", err)
+		}
+		t.Cleanup(func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM ai_calls WHERE id = $1`, id) })
 	}},
 	// audit_log is append-only: the row stays.
 	"audit_log": {"tenant_id", func(t *testing.T) {

@@ -8,6 +8,7 @@ import { Audit, type AuditView } from './components/Audit'
 import { AuditEntryDrawer, StaffChangeDrawer } from './components/AuditDrawer'
 import { EvidenceDrawer, type EvidenceInputs } from './components/EvidenceDrawer'
 import { Health } from './components/Health'
+import { AiUsage, type AiView } from './components/AiUsage'
 import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
 import { KillConfirm } from './components/KillConfirm'
@@ -40,6 +41,7 @@ import {
 } from './rulesApi'
 import { cancelJob, fetchJob, fetchJobs, redriveJob, type JobDetail, type JobState, type StaffJob } from './jobsApi'
 import { defaultBundlePeriod, downloadBundle, fetchAuditEvents, fetchBundlePreview, fetchStaffChanges, fetchStaffEntities, rangeInverted, staffChangeLink, type AuditFilters, type StaffAuditPage, type StaffAuditRow, type StaffChangeLink } from './auditApi'
+import { fetchAiCalls, fetchAiTotals, type AiCallsPage, type AiFilters, type AiTotalsPage } from './aiUsageApi'
 import { fetchStaffHealth } from './healthApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
@@ -81,6 +83,12 @@ function Console() {
   const [auditMore, setAuditMore] = useState<{ key: number; events: StaffAuditRow[]; page: StaffAuditPage['page'] } | null>(null)
   const [auditMoreKey, setAuditMoreKey] = useState<number | null>(null)
   const [auditFocus, setAuditFocus] = useState<StaffChangeLink | null>(null)
+  const [aiView, setAiView] = useState<AiView>('calls')
+  const [aiFilters, setAiFilters] = useState<AiFilters>({})
+  const [aiMore, setAiMore] = useState<{ key: number; calls: AiCallsPage['calls']; page: AiCallsPage['page'] } | null>(null)
+  const [aiMoreKey, setAiMoreKey] = useState<number | null>(null)
+  const [totalsMore, setTotalsMore] = useState<{ key: number; totals: AiTotalsPage['totals']; page: AiTotalsPage['page'] } | null>(null)
+  const [totalsMoreKey, setTotalsMoreKey] = useState<number | null>(null)
   const focusSeenLoading = useRef(false)
   const [evidence, setEvidence] = useState<EvidenceInputs>({ tenant: '', entity: '', from: '', to: '' })
   const [bundleBusy, setBundleBusy] = useState(false)
@@ -159,6 +167,78 @@ function Console() {
   const auditRows = [...(auditRead.data?.events ?? []), ...(moreHere?.events ?? [])]
   const auditPage = moreHere?.page ?? auditRead.data?.page
   const auditStatus = auditRead.status === 'error' ? (auditRead.error?.status === 403 ? 'forbidden' : 'error') : auditRead.status === 'ready' || auditRead.status === 'empty' ? auditRead.status : 'loading'
+  const onAiCalls = screen === 'ai' && aiView !== 'totals'
+  const aiFailed = aiView === 'failures'
+  const { tenant: iTenant, purpose: iPurpose, outcome: iOutcome, from: iFrom, to: iTo } = aiFilters
+  const aiRead = useAsync(() => fetchAiCalls(aiFilters, aiFailed), {
+    immediate: onAiCalls && !rangeInverted(aiFilters),
+    deps: [onAiCalls, aiFailed, iTenant, iPurpose, iOutcome, iFrom, iTo],
+    isEmpty: (p) => p.calls.length === 0,
+  })
+  const aiTenantsRead = useAsync(fetchStaffTenants, { immediate: screen === 'ai', deps: [screen === 'ai'] })
+  const aiKey = JSON.stringify([onAiCalls, aiFailed, iTenant, iPurpose, iOutcome, iFrom, iTo])
+  // Same token scheme as the audit paging above.
+  const aiGen = useRef({ n: 0, key: aiKey, data: aiRead.data })
+  if (aiGen.current.key !== aiKey || aiGen.current.data !== aiRead.data) aiGen.current = { n: aiGen.current.n + 1, key: aiKey, data: aiRead.data }
+  const aiToken = aiGen.current.n
+  useEffect(() => setAiMore(null), [aiToken])
+  const aiMoreHere = aiMore?.key === aiToken ? aiMore : null
+  const aiCalls = [...(aiRead.data?.calls ?? []), ...(aiMoreHere?.calls ?? [])]
+  const aiPage = aiMoreHere?.page ?? aiRead.data?.page
+  const aiStatus = aiRead.status === 'error' ? (aiRead.error?.status === 403 ? 'forbidden' : 'error') : aiRead.status === 'ready' || aiRead.status === 'empty' ? aiRead.status : 'loading'
+  const patchAiFilters = (patch: AiFilters) =>
+    setAiFilters((f) => Object.fromEntries(Object.entries({ ...f, ...patch }).filter(([, v]) => v)) as AiFilters)
+  const loadMoreAi = async () => {
+    const cursor = aiPage?.has_more ? aiPage.next_cursor : null
+    const sent = aiToken
+    if (!cursor || aiMoreKey === sent) return
+    setAiMoreKey(sent)
+    try {
+      const page = await fetchAiCalls(aiFilters, aiFailed, cursor)
+      if (sent !== aiGen.current.n) return
+      setAiMore((m) => ({ key: sent, calls: [...(m?.key === sent ? m.calls : []), ...page.calls], page: page.page }))
+    } catch (e) {
+      if (sent !== aiGen.current.n) return
+      const err = toApiError(e)
+      if (err.status === 401) void expireSession()
+      else showToast(err.message, '', 'red')
+    } finally {
+      setAiMoreKey((k) => (k === sent ? null : k))
+    }
+  }
+  const onAiTotals = screen === 'ai' && aiView === 'totals'
+  const totalsRead = useAsync(() => fetchAiTotals(aiFilters), {
+    immediate: onAiTotals && !rangeInverted(aiFilters),
+    deps: [onAiTotals, iTenant, iPurpose, iOutcome, iFrom, iTo],
+    isEmpty: (p) => p.totals.length === 0,
+  })
+  const totalsKey = JSON.stringify([onAiTotals, iTenant, iPurpose, iOutcome, iFrom, iTo])
+  const totalsGen = useRef({ n: 0, key: totalsKey, data: totalsRead.data })
+  if (totalsGen.current.key !== totalsKey || totalsGen.current.data !== totalsRead.data) totalsGen.current = { n: totalsGen.current.n + 1, key: totalsKey, data: totalsRead.data }
+  const totalsToken = totalsGen.current.n
+  useEffect(() => setTotalsMore(null), [totalsToken])
+  const totalsMoreHere = totalsMore?.key === totalsToken ? totalsMore : null
+  const aiTotals = [...(totalsRead.data?.totals ?? []), ...(totalsMoreHere?.totals ?? [])]
+  const totalsPage = totalsMoreHere?.page ?? totalsRead.data?.page
+  const totalsStatus = totalsRead.status === 'error' ? (totalsRead.error?.status === 403 ? 'forbidden' : 'error') : totalsRead.status === 'ready' || totalsRead.status === 'empty' ? totalsRead.status : 'loading'
+  const loadMoreTotals = async () => {
+    const cursor = totalsPage?.has_more ? totalsPage.next_cursor : null
+    const sent = totalsToken
+    if (!cursor || totalsMoreKey === sent) return
+    setTotalsMoreKey(sent)
+    try {
+      const page = await fetchAiTotals(aiFilters, cursor)
+      if (sent !== totalsGen.current.n) return
+      setTotalsMore((m) => ({ key: sent, totals: [...(m?.key === sent ? m.totals : []), ...page.totals], page: page.page }))
+    } catch (e) {
+      if (sent !== totalsGen.current.n) return
+      const err = toApiError(e)
+      if (err.status === 401) void expireSession()
+      else showToast(err.message, '', 'red')
+    } finally {
+      setTotalsMoreKey((k) => (k === sent ? null : k))
+    }
+  }
   const openAudit = drawer?.type === 'audit' ? auditRows.find((r) => r.id === drawer.id) : undefined
   const onStaffChanges = screen === 'audit' && auditView === 'staff'
   const changesRead = useAsync(fetchStaffChanges, { immediate: onStaffChanges, deps: [onStaffChanges] })
@@ -242,7 +322,7 @@ function Console() {
   const jobDetail = freshJob ?? (jobRead.status === 'loading' && lastJob.current?.job.id === openJob ? lastJob.current : null)
   const jobNote = jobRead.status === 'error' ? { text: jobRead.error?.status === 403 ? 'Your account is not ASComply staff.' : (jobRead.error?.message ?? 'Unavailable'), onRetry: jobRead.run } : { text: 'Loading job…' }
   const jobInFlight = useRef(false)
-  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
+  const expired = [rulesRead, versionsRead, codeListsRead, syncsRead, tenantsRead, tenantRead, jobsRead, jobTenantsRead, jobRead, healthRead, auditRead, auditTenantsRead, aiRead, totalsRead, aiTenantsRead, changesRead, entitiesRead, previewRead].some((r) => r.error?.status === 401)
   useEffect(() => {
     if (expired) void expireSession()
   }, [expired])
@@ -517,6 +597,30 @@ function Console() {
                 setJobState(undefined)
                 go('submissions')
               }}
+            />
+          )}
+          {screen === 'ai' && (
+            <AiUsage
+              view={aiView}
+              onView={setAiView}
+              filters={aiFilters}
+              onFilters={patchAiFilters}
+              tenants={aiTenantsRead.data ?? []}
+              tenantsError={aiTenantsRead.status === 'error' && aiTenantsRead.error?.status !== 401 ? { text: aiTenantsRead.error?.message ?? 'Unavailable', onRetry: aiTenantsRead.run } : undefined}
+              status={aiStatus}
+              errorText={aiRead.error?.message}
+              calls={aiCalls}
+              hasMore={aiPage?.has_more ?? false}
+              moreBusy={aiMoreKey === aiToken}
+              onMore={() => void loadMoreAi()}
+              onRetry={aiRead.run}
+              totalsStatus={totalsStatus}
+              totalsErrorText={totalsRead.error?.message}
+              totals={aiTotals}
+              totalsHasMore={totalsPage?.has_more ?? false}
+              totalsMoreBusy={totalsMoreKey === totalsToken}
+              onMoreTotals={() => void loadMoreTotals()}
+              onRetryTotals={totalsRead.run}
             />
           )}
           {screen === 'health' && <Health status={healthStatus} errorText={healthRead.error?.message} data={healthRead.data ?? null} onRetry={healthRead.run} />}

@@ -2,15 +2,18 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
-import { Audit } from './components/Audit'
+import { readFileSync } from 'node:fs'
+
+import { AiUsage } from './components/AiUsage'
 import { Health } from './components/Health'
 import { Rules } from './components/Rules'
-import { Submissions } from './components/Submissions'
 import { Tenants } from './components/Tenants'
-import { AUDIT_ENTRIES, AUDIT_FILTERS, JOB_FILTERS, RECON_ROWS, SEED_JOBS, TENANTS, healthCards } from './data'
+import type { AiCall } from './aiUsageApi'
+import type { FleetHealth, ServiceHealth, StaffHealth, TrendPoint } from './healthApi'
 import { SEED_RULES } from './rulesFixture'
 import type { RuleVersion } from './rulesApi'
-import type { AuditFilter, CodeListLatest, Job } from './types'
+import type { StaffInvoice, StaffMember, StaffTenant, StaffTenantDetail } from './tenantsApi'
+import type { CodeListLatest } from './types'
 
 // SSR markup is the oracle for inline values; the resolved look is SUP-03 (deploy gate).
 const noop = () => {}
@@ -49,22 +52,6 @@ const buttonByText = (html: string, text: string) => {
   expect(hit, `exactly one button "${text}"`).toHaveLength(1)
   return hit[0]
 }
-// The tag before a label tag holds the figure of its tile.
-const figureBefore = (ts: Tag[], label: string) => ts[ts.indexOf(withText(ts, label)) - 1]
-
-const submissions = (subTab: 'jobs' | 'recon', jobs: Job[] = SEED_JOBS) =>
-  renderToStaticMarkup(
-    createElement(Submissions, { jobs, filter: 'all', subTab, onFilterChange: noop, onSubTabChange: noop, onOpenJob: noop, onReDriveAll: noop, onReconcile: noop, onRunSweep: noop }),
-  )
-const audit = (query = '', filter: AuditFilter = 'all') =>
-  renderToStaticMarkup(createElement(Audit, { query, filter, onQueryChange: noop, onFilterChange: noop, onOpen: noop }))
-const tenants = (query = '', tenantId = 't1') =>
-  renderToStaticMarkup(createElement(Tenants, { query, tenantId, onQueryChange: noop, onSelect: noop, onViewJobs: noop, onViewAs: noop }))
-const healthHtml = (deadLetterCount: number) => renderToStaticMarkup(createElement(Health, { deadLetterCount }))
-const submissionsFiltered = (filter: Parameters<typeof Submissions>[0]['filter'], jobs: Job[] = SEED_JOBS) =>
-  renderToStaticMarkup(
-    createElement(Submissions, { jobs, filter, subTab: 'jobs', onFilterChange: noop, onSubTabChange: noop, onOpenJob: noop, onReDriveAll: noop, onReconcile: noop, onRunSweep: noop }),
-  )
 
 const ver = (version: number, state: RuleVersion['state'], effective_from: string | null = '2026-01-01'): RuleVersion => ({ rule_set_version_id: `id${version}`, version, state, effective_from, opened_at: null, rule_count: 2 })
 const VERSIONS: RuleVersion[] = [ver(9, 'draft', null), ver(8, 'in_force'), ver(7, 'scheduled'), ver(6, 'superseded'), ver(3, 'retired', null)]
@@ -106,14 +93,74 @@ const RULES_PROPS: Parameters<typeof Rules>[0] = {
 }
 const rulesWith = (over: Partial<Parameters<typeof Rules>[0]>) => renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS, ...over }))
 
-const SCREENS = {
-  submissions: submissions('jobs'),
-  rules: renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS })),
-  audit: audit(),
-  tenants: tenants(),
-  health: healthHtml(2),
+const tenant = (id: string, name: string, over: Partial<StaffTenant> = {}): StaffTenant => ({
+  id, name, kind: 'firm', created_at: '2026-07-18T09:00:00Z', demo: false, active_members: 0, invoice_count: 0, last_activity_at: null, ...over,
+})
+const T1 = tenant('t1', 'Okafor & Partners', { demo: true, active_members: 5, invoice_count: 31, last_activity_at: '2026-09-23T11:35:00Z' })
+const T2 = tenant('t2', 'In-house Co', { kind: 'in_house' })
+const member = (user_id: string, role: string, status: StaffMember['status'], display_name: string | null, email: string | null): StaffMember => ({ user_id, role, status, display_name, email })
+const MEMBERS = [
+  member('u1', 'admin', 'active', 'Ada Okafor', 'ada@x.test'),
+  member('u2', 'reviewer', 'invited', null, 'rev@x.test'),
+  member('u3', 'preparer', 'suspended', 'Pat Preparer', null),
+]
+const invoice = (n: string): StaffInvoice => ({ id: n, invoice_number: n, status: 'validated', created_at: '2026-10-13T08:00:00Z' })
+const DETAIL: StaffTenantDetail = { tenant: T2, members: MEMBERS, invoices: [invoice('INV-1009')] }
+const TENANTS_PROPS: Parameters<typeof Tenants>[0] = {
+  status: 'ready',
+  tenants: [T1, T2],
+  query: '',
+  onQueryChange: noop,
+  selectedId: 't2',
+  onSelect: noop,
+  onRetry: noop,
+  detailStatus: 'ready',
+  detail: DETAIL,
+  onRetryDetail: noop,
+  onViewJobs: noop,
 }
-const RECON = submissions('recon')
+const tenantsWith = (over: Partial<Parameters<typeof Tenants>[0]>) => renderToStaticMarkup(createElement(Tenants, { ...TENANTS_PROPS, ...over }))
+
+const svc = (name: string, status: ServiceHealth['status'], build?: string): ServiceHealth => ({ name, status, build })
+const point = (n: number, services_down: number | null, queue_depth: number, dead_lettered: number): TrendPoint => ({ taken_at: `2026-10-14T09:${String(n).padStart(2, '0')}:00Z`, services_down, queue_depth, dead_lettered })
+const DEGRADED: FleetHealth = { status: 'degraded', services: [svc('gateway', 'up', '541ac755c7a1'), svc('docling', 'down', ''), svc('auth', 'down', 'abcdef1234')] }
+const HEALTH: StaffHealth = {
+  checked_at: '2026-10-14T10:05:31Z',
+  fleet: DEGRADED,
+  jobs: { queued: 1, submitting: 1, pending: 1, dead_lettered: 2 },
+  queue_depth: 3,
+  trend: [point(0, null, 1, 0), point(5, 0, 2, 1), point(10, 1, 3, 2)],
+}
+const HEALTH_PROPS: Parameters<typeof Health>[0] = { status: 'ready', data: HEALTH, onRetry: noop }
+const healthWith = (over: Partial<Parameters<typeof Health>[0]>) => renderToStaticMarkup(createElement(Health, { ...HEALTH_PROPS, ...over }))
+const healthData = (over: Partial<StaffHealth>) => healthWith({ data: { ...HEALTH, ...over } })
+
+const aiCall = (id: string, over: Partial<AiCall> = {}): AiCall => ({
+  id, tenant_id: 't1', tenant_name: 'Okafor & Partners', created_at: '2026-10-14T09:12:03.123456Z', client: 'ai', purpose: 'document', model: 'x/y',
+  input_tokens: 3447, output_tokens: 120, cost: '0.0014741', latency_ms: 1200, attempts: 1, outcome: 'ok', ...over,
+})
+const AI_PROPS: Parameters<typeof AiUsage>[0] = {
+  view: 'calls',
+  onView: noop,
+  filters: {},
+  onFilters: noop,
+  tenants: [],
+  status: 'ready',
+  calls: [aiCall('c1'), aiCall('c2', { outcome: 'unavailable' })],
+  hasMore: false,
+  moreBusy: false,
+  onMore: noop,
+  onRetry: noop,
+  totalsStatus: 'ready',
+  totals: [],
+  totalsHasMore: false,
+  totalsMoreBusy: false,
+  onMoreTotals: noop,
+  onRetryTotals: noop,
+}
+const aiWith = (over: Partial<Parameters<typeof AiUsage>[0]>) => renderToStaticMarkup(createElement(AiUsage, { ...AI_PROPS, ...over }))
+
+const SCREENS = { rules: renderToStaticMarkup(createElement(Rules, { ...RULES_PROPS })), tenants: tenantsWith({}), health: healthWith({}), ai: aiWith({}) }
 type Screen = keyof typeof SCREENS
 const SCREEN_KEYS = Object.keys(SCREENS) as Screen[]
 const tagsOf = (screen: Screen) => {
@@ -125,19 +172,6 @@ const parsed = (html: string, at: string) => {
   const ts = parse(html)
   expect(ts.length, `${at}: markup parsed`).toBeGreaterThan(10)
   return ts
-}
-const reconTags = () => {
-  const ts = parse(RECON)
-  expect(ts.length, 'recon: markup parsed').toBeGreaterThan(10)
-  return ts
-}
-
-const expectFigure = (t: Tag, size: string, at: string) => {
-  const s = style(t)
-  expect.soft(classes(t), `${at}: class list`).toContain('money')
-  expect.soft(classes(t), `${at}: no mono`).not.toContain('mono')
-  expect.soft([s['font-size'], s['font-weight']], `${at}: size and weight`).toEqual([size, '700'])
-  expect.soft(Object.keys(s), `${at}: the .money class sets the tracking`).not.toContain('letter-spacing')
 }
 
 describe('v2 screens', () => {
@@ -159,71 +193,16 @@ describe('v2 screens', () => {
       expect.soft(Object.keys(h1), `${screen}: h1 inline weight and tracking (the layer sets them)`).not.toContain('font-weight')
       expect.soft(Object.keys(h1), `${screen}: h1 inline tracking`).not.toContain('letter-spacing')
     }
-
-    const h2s = tagsOf('tenants').filter((t) => t.name === 'h2')
-    expect(h2s, 'tenant detail h2').toHaveLength(1)
-    expect(h2s[0].text).toBe(TENANTS[0].name)
-    expect.soft(style(h2s[0])['font-size'], 'h2 size').toBe('19px')
-    expect.soft(Object.keys(style(h2s[0])), 'h2 inline weight and tracking').not.toContain('font-weight')
-    expect.soft(Object.keys(style(h2s[0])), 'h2 inline tracking').not.toContain('letter-spacing')
   })
 
   it('SC-02 titles and figures', () => {
-    const titles: [string, Tag][] = [
-      ['Rules', withText(tagsOf('rules'), 'Rules')],
-      ['State mismatches', withText(reconTags(), 'State mismatches · internal vs APP')],
-    ]
-    for (const [name, t] of titles) {
-      const s = style(t)
-      expect.soft(s['font-family'], `${name}: family`).toBe('var(--font-display)')
-      expect.soft(s['font-weight'], `${name}: weight`).toBe('700')
-      expect.soft(s['letter-spacing'], `${name}: tracking`).toBe('var(--tracking-card)')
-    }
-
-    const subStats = tagsOf('submissions')
-    for (const label of ['In flight', 'Accepted 24h', 'Rejected', 'Dead-letter']) expectFigure(figureBefore(subStats, label), '20px', `sub-stat ${label}`)
-
-    const kpis = tagsOf('tenants')
-    expect(TENANTS[0].kpis, 'tenant KPIs').toHaveLength(4)
-    for (const k of TENANTS[0].kpis) expectFigure(figureBefore(kpis, k.label), '20px', `KPI ${k.label}`)
-
-    const health = tagsOf('health').filter((t) => style(t)['font-size'] === '30px')
-    expect(health, 'health figures').toHaveLength(6)
-    health.forEach((t, i) => expectFigure(t, '30px', `health figure #${i}`))
-    expectFigure(withText(reconTags(), '82'), '30px', 'rate figure')
-
-    for (const t of TENANTS) {
-      const ts = parsed(tenants('', t.id), `tenant ${t.id}`)
-      expect(t.kpis, `${t.id}: KPIs`).toHaveLength(4)
-      for (const k of t.kpis) expectFigure(figureBefore(ts, k.label), '20px', `${t.id} KPI ${k.label}`)
-      const h2 = ts.filter((x) => x.name === 'h2')
-      expect(h2, `${t.id}: one h2`).toHaveLength(1)
-      expect.soft([h2[0].text, style(h2[0])['font-size']], `${t.id}: h2 name and size`).toEqual([t.name, '19px'])
-      expect.soft(Object.keys(style(h2[0])).filter((k) => k === 'font-weight' || k === 'letter-spacing'), `${t.id}: h2 inline weight and tracking`).toEqual([])
-    }
-    for (const n of [0, 1, 37]) {
-      const figs = parsed(healthHtml(n), `health ${n}`).filter((t) => style(t)['font-size'] === '30px')
-      expect(figs, `health ${n}: figures`).toHaveLength(6)
-      figs.forEach((t, i) => expectFigure(t, '30px', `health ${n} figure #${i}`))
-      expect(figs[healthCards(n).findIndex((c) => c.label === 'Dead-letter')].text, `health ${n}: the Dead-letter figure reads the count`).toBe(String(n))
-    }
-
-    const tins = tagsOf('tenants').filter((t) => TENANTS.some((x) => x.tin === t.text))
-    expect(tins.length, 'tenant TIN spans').toBeGreaterThanOrEqual(TENANTS.length)
-    for (const t of tins) expect.soft(classes(t), `TIN ${t.text} keeps mono`).toContain('mono')
-    const ids = subStats.filter((t) => SEED_JOBS.some((j) => j.id === t.text))
-    expect(ids, 'one job ID span per job').toHaveLength(SEED_JOBS.length)
-    for (const t of ids) expect.soft(classes(t), `job ID ${t.text} keeps mono`).toContain('mono')
+    const s = style(withText(tagsOf('rules'), 'Rules'))
+    expect.soft(s['font-family'], 'Rules: family').toBe('var(--font-display)')
+    expect.soft(s['font-weight'], 'Rules: weight').toBe('700')
+    expect.soft(s['letter-spacing'], 'Rules: tracking').toBe('var(--tracking-card)')
   })
 
   it('SC-03 screen corners', () => {
-    const sub = tagsOf('submissions')
-    const chips = [...withClass(sub, 'ops-chip'), ...withClass(tagsOf('audit'), 'ops-chip')]
-    expect(withClass(sub, 'ops-chip'), 'Submissions chips').toHaveLength(JOB_FILTERS.length)
-    expect(withClass(tagsOf('audit'), 'ops-chip'), 'Audit chips').toHaveLength(AUDIT_FILTERS.length)
-    expect(chips.every((c) => c.name === 'button')).toBe(true)
-    for (const c of chips) expect.soft(style(c)['border-radius'], 'chip corner').toBe('var(--radius-sm)')
-
     const rules = tagsOf('rules')
     const pills = rules.flatMap((t, i) => (['DRAFT', 'IN FORCE', 'SCHEDULED', 'SUPERSEDED', 'RETIRED'].includes(t.text) && classes(t).includes('mono') ? [rules[i - 1]] : []))
     expect(pills, 'version tags').toHaveLength(VERSIONS.length)
@@ -242,201 +221,21 @@ describe('v2 screens', () => {
       expect.soft(Object.keys(style(k)), 'knob has no shadow').not.toContain('box-shadow')
     }
 
-    const avatars = [...tagsOf('audit'), ...tagsOf('tenants')].filter((t) => style(t).background === 'var(--slate-800)')
-    expect(avatars, 'audit and member avatars').toHaveLength(AUDIT_ENTRIES.length + TENANTS[0].members.length)
-    for (const a of avatars) expect.soft(style(a)['border-radius'], 'avatar corner').toBe('50%')
-    const dots = [...tagsOf('tenants'), ...tagsOf('health')].filter((t) => style(t).width === '7px' && style(t).height === '7px')
-    expect(dots, 'tenant and health status dots').toHaveLength(TENANTS.length + 6)
-    for (const d of dots) expect.soft(style(d)['border-radius'], 'status dot corner').toBe('50%')
-
-    const ten = tagsOf('tenants')
-    const rowTiles = ten.filter((t) => style(t).width === '30px' && style(t).height === '30px')
-    expect(rowTiles, 'tenant row initials tiles').toHaveLength(TENANTS.length)
-    const detailTiles = ten.filter((t) => style(t).width === '48px' && style(t).height === '48px')
-    expect(detailTiles, 'tenant detail initials tile').toHaveLength(1)
-    for (const t of [...rowTiles, ...detailTiles]) expect.soft(style(t)['border-radius'], 'initials tile corner').toBe('var(--radius-md)')
-
-    const tracks = reconTags().flatMap((t, i, all) => (style(t).height === '6px' && style(t).overflow === 'hidden' ? [[t, all[i + 1]]] : []))
-    expect(tracks, 'meter track and fill').toHaveLength(1)
-    for (const [track, fill] of tracks) {
-      expect.soft(style(track)['border-radius'], 'meter track corner').toBe('2px')
-      expect.soft([style(fill).width, style(fill)['border-radius']], 'meter fill (the next tag) width and corner').toEqual(['82%', '2px'])
-    }
-    // The active chip is read too: every filter value, every chip.
-    for (const k of JOB_FILTERS) {
-      const cs = withClass(parsed(submissionsFiltered(k), `submissions ${k}`), 'ops-chip')
-      expect(cs, `${k}: chips`).toHaveLength(JOB_FILTERS.length)
-      expect(cs.filter((c) => attr(c, 'aria-pressed') === 'true'), `${k}: one active chip`).toHaveLength(1)
-      for (const c of cs) expect.soft(style(c)['border-radius'], `${k}: chip corner`).toBe('var(--radius-sm)')
-    }
-    for (const f of AUDIT_FILTERS) {
-      const cs = withClass(parsed(audit('', f.key), `audit ${f.key}`), 'ops-chip')
-      expect(cs, `${f.key}: audit chips`).toHaveLength(AUDIT_FILTERS.length)
-      expect(cs.filter((c) => attr(c, 'aria-pressed') === 'true'), `${f.key}: one active audit chip`).toHaveLength(1)
-      for (const c of cs) expect.soft(style(c)['border-radius'], `${f.key}: audit chip corner`).toBe('var(--radius-sm)')
-    }
-
-    // The remaining chips and badges of the Shared rules table.
     const typeChips = rules.filter((t) => classes(t).includes('mono') && style(t)['justify-self'] === 'start')
     expect(typeChips, 'rule type chips').toHaveLength(SEED_RULES.length)
     for (const c of typeChips) expect.soft(style(c)['border-radius'], `type chip ${c.text} corner`).toBe('var(--radius-sm)')
-    const aud = tagsOf('audit')
-    const appendOnly = aud.filter((t) => style(t).background === 'var(--status-muted-bg)')
-    expect(appendOnly, 'APPEND-ONLY badge').toHaveLength(1)
-    expect.soft([style(appendOnly[0])['border-radius'], style(appendOnly[0]).color], 'APPEND-ONLY corner and colour (D-16)').toEqual(['var(--radius-sm)', 'var(--fg-2)'])
-    const glyphTiles = aud.filter((t) => style(t).width === '22px' && style(t).display === 'inline-flex')
-    expect(glyphTiles, 'audit glyph tiles').toHaveLength(AUDIT_ENTRIES.length)
-    for (const g of glyphTiles) expect.soft(style(g)['border-radius'], 'audit glyph tile corner').toBe('var(--radius-sm)')
-    for (const t of TENANTS) {
-      const roleTags = parsed(tenants('', t.id), `tenant ${t.id}`).filter((x) => classes(x).includes('mono') && x.attrs.includes('border-radius:var(--radius-sm)') && t.members.some((m) => m.role.toUpperCase() === x.text))
-      expect(roleTags, `${t.id}: role tags`).toHaveLength(t.members.length)
-    }
 
-    // Cards, tables and tiles: v2 corner, no shadow, on every screen and tab.
-    const surfaces: [string, string][] = [...SCREEN_KEYS.map((k) => [k, SCREENS[k]] as [string, string]), ['recon', RECON], ['tenant t3', tenants('', 't3')], ['health clear', healthHtml(0)]]
-    const floors: Record<string, number> = { submissions: 5, rules: 2, audit: 1, tenants: 2, health: 6, recon: 4 }
-    for (const [name, html] of surfaces) {
-      const ts = parsed(html, name)
-      const cards = ts.filter((t) => style(t).border === '1px solid var(--line-1)' && style(t).background === 'var(--bg-2)' && !classes(t).includes('ops-chip'))
-      expect(cards.length, `${name}: cards found`).toBeGreaterThanOrEqual(floors[name.split(' ')[0]] ?? 1)
-      for (const c of cards) expect.soft(style(c)['border-radius'], `${name}: card corner`).toBe('var(--radius-md)')
-      expect.soft(ts.filter((t) => 'box-shadow' in style(t)).map((t) => t.name), `${name}: no inline shadow`).toEqual([])
-    }
-  })
-
-  it('SC-04 screen buttons, rows and fields', () => {
-    const ten = SCREENS.tenants
-    expect.soft(classes(buttonByText(ten, 'View jobs')), 'View jobs classes').toEqual(['ops-btn', 'v2-btn', 'v2-btn-ghost'])
-    expect.soft(classes(buttonByText(ten, 'View-as (read-only)')), 'View-as classes').toEqual(['ops-btn', 'v2-btn', 'v2-btn-primary'])
-    for (const text of ['View jobs', 'View-as (read-only)']) {
-      expect.soft(Object.keys(style(buttonByText(ten, text))), `${text}: the v2-btn class owns the corner`).not.toContain('border-radius')
-    }
-    expect.soft(classes(buttonByText(RECON, 'Run sweep now')), 'Run sweep now classes').toEqual(['ops-btn', 'v2-btn', 'v2-btn-ghost'])
-
-    const redrive = style(buttonByText(SCREENS.submissions, 'Re-drive all'))
-    expect.soft([redrive.color, redrive['border-radius']], 'Re-drive all').toEqual(['var(--primary-foreground)', 'var(--radius-btn)'])
-
-    const reconcile = buttonsByText(RECON, 'Reconcile')
-    expect(reconcile, 'one Reconcile per mismatch').toHaveLength(RECON_ROWS.length)
-    for (const b of reconcile) {
-      const s = style(b)
-      expect.soft([s.border, s['border-radius']], `${b.text}: outline border and corner`).toEqual(['1px solid var(--button-outline-border)', 'var(--radius-btn)'])
-    }
-
-    for (const [html, text] of [[SCREENS.submissions, 'Jobs'], [RECON, 'Reconciliation']] as const) {
-      expect.soft(classes(buttonByText(html, text)), `sub-tab ${text}`).toContain('ops-tab')
-    }
-
-    const rows = buttonsOf(ten).filter((b) => classes(b).includes('ops-nav'))
-    expect(rows, 'tenant row buttons').toHaveLength(TENANTS.length)
-    for (const b of rows) {
-      const s = style(b)
-      expect.soft([s['font-family'], s.color], 'tenant row font and colour').toEqual(['var(--font-sans)', 'var(--fg-1)'])
-    }
-
-    for (const t of TENANTS) {
-      const navs = buttonsOf(tenants('', t.id)).filter((b) => classes(b).includes('ops-nav'))
-      const pressed = navs.filter((b) => attr(b, 'aria-pressed') === 'true')
-      expect(pressed, `${t.id}: one selected row`).toHaveLength(1)
-      expect.soft([pressed[0].text.includes(t.name), style(pressed[0]).background], `${t.id}: the selected row and its fill`).toEqual([true, 'var(--bg-3)'])
-    }
-
-    for (const screen of ['audit', 'tenants'] as const) {
-      const fields = withClass(tagsOf(screen), 'ops-input')
-      expect(fields, `${screen}: one search wrapper`).toHaveLength(1)
-      expect.soft(classes(fields[0]), `${screen}: search wrapper classes`).toEqual(['ops-input', 'ops-field'])
-    }
-    const noDeadLetter = SEED_JOBS.filter((j) => j.state !== 'dead-letter')
-    expect(noDeadLetter.length, 'jobs without a dead-letter').toBeGreaterThan(0)
-    expect(buttonsOf(submissionsFiltered('all', noDeadLetter)).some((b) => b.text === 'Re-drive all'), 'no dead-letter, no Re-drive all').toBe(false)
-    expect(buttonsOf(SCREENS.submissions).some((b) => b.text === 'Re-drive all'), 'control: dead-letter jobs show Re-drive all').toBe(true)
-
-    // Icon wrappers draw inline-flex, as the prototype does (D-16).
-    for (const screen of ['audit', 'tenants'] as const) {
-      const ts = tagsOf(screen)
-      const at = ts.indexOf(withClass(ts, 'ops-input')[0])
-      expect.soft([ts[at + 1].name, style(ts[at + 1]).display, style(ts[at + 1]).color, ts[at + 2].name], `${screen}: search icon wrapper`).toEqual(['span', 'inline-flex', 'var(--fg-3)', 'svg'])
-    }
-    for (const [screen, count] of [['submissions', SEED_JOBS.length], ['audit', AUDIT_ENTRIES.length]] as const) {
-      const ts = tagsOf(screen)
-      const chevrons = ts.filter((t, i) => style(t).color === 'var(--fg-4)' && ts[i + 1]?.name === 'svg')
-      expect(chevrons, `${screen}: row chevrons`).toHaveLength(count)
-      for (const c of chevrons) expect.soft(style(c).display, `${screen}: chevron wrapper`).toBe('inline-flex')
-    }
-  })
-
-  it('SC-05 enabled text meets Q3', () => {
-    const empty: [string, string][] = [
-      [submissions('jobs', []), 'No jobs in this state.'],
-      [audit('zz-no-match'), 'No audit entries match this filter.'],
-      [tenants('zz-no-match'), 'No tenant matches.'],
-    ]
-    for (const [html, text] of empty) {
-      expect.soft(style(withText(parse(html), text)).color, `"${text}" colour`).toBe('var(--fg-3)')
-    }
-
-    const ts = tagsOf('submissions')
-    const counts = ts.flatMap((t, i) => (classes(t).includes('ops-chip') ? [ts[i + 1]] : []))
-    expect(counts, 'one count span per chip').toHaveLength(JOB_FILTERS.length)
-    for (const c of counts) expect.soft(Object.keys(style(c)), `chip count ${c.text}: opacity`).not.toContain('opacity')
-    const none = SEED_JOBS.filter((j) => j.state !== 'dead-letter')
-    const filtered: [string, string][] = [
-      [submissionsFiltered('dead-letter', none), 'No jobs in this state.'],
-      [audit('zz-no-match', 'rule'), 'No audit entries match this filter.'],
-    ]
-    for (const [html, text] of filtered) expect.soft(style(withText(parse(html), text)).color, `"${text}" under a filter`).toBe('var(--fg-3)')
-    expect(parse(SCREENS.submissions).some((t) => t.text === 'No jobs in this state.'), 'control: the seed jobs show no empty state').toBe(false)
-    expect(parse(SCREENS.tenants).some((t) => t.text === 'No tenant matches.'), 'control: the seed tenants show no empty state').toBe(false)
-  })
-
-  it('SC-06 the smoke locators keep their classes', () => {
-    const sub = tagsOf('submissions')
-    expect(withClass(sub, 'ops-sub-stats'), 'sub-stats row').toHaveLength(1)
-    expect(withClass(sub, 'ops-chip'), 'Submissions chips').toHaveLength(8)
-    expect(withClass(sub, 'ops-row').length, 'job rows').toBeGreaterThanOrEqual(1)
-    expect(withClass(tagsOf('health'), 'ops-health-grid'), 'health grid').toHaveLength(1)
-    const rows = buttonsOf(SCREENS.tenants).filter((b) => classes(b).includes('ops-nav'))
-    expect(rows.length, 'tenant rows').toBeGreaterThanOrEqual(1)
-    const tins = tagsOf('tenants').filter((t) => t.text === TENANTS[0].tin)
-    expect(tins.length, 'TIN spans').toBeGreaterThanOrEqual(1)
-    for (const t of tins) expect.soft(classes(t), 'TIN span is mono').toContain('mono')
-
-    // The smoke spec reads `.ops-sub-stats > div` filtered by "Dead-letter", then `.money`, in strict mode.
-    const label = sub.indexOf(withText(sub, 'Dead-letter'))
-    const tile = sub.slice(label - 2, label + 1)
-    expect(tile.map((t) => t.name), 'tile, figure, label').toEqual(['div', 'div', 'div'])
-    expect(withClass(tile, 'money'), 'the Dead-letter tile holds exactly one .money').toHaveLength(1)
-    expect(classes(tile[1]), 'the figure is the .money').toContain('money')
-    // Zero dead-letter jobs: the tile still holds exactly one .money, reading 0.
-    const zero = parsed(submissionsFiltered('all', SEED_JOBS.filter((j) => j.state !== 'dead-letter')), 'no dead-letter')
-    const zeroAt = zero.indexOf(withText(zero, 'Dead-letter'))
-    const zeroTile = zero.slice(zeroAt - 2, zeroAt + 1)
-    expect(withClass(zeroTile, 'money'), 'zero: one .money in the tile').toHaveLength(1)
-    expect(zeroTile[1].text, 'zero: the figure reads 0').toBe('0')
-  })
-
-  it('SC-07 the recon title, header and every row hold the 800px floor; the jobs table keeps 1040px', () => {
-    const floor = (html: string, cols: string, at: string) => {
-      const rows = parsed(html, at).filter((t) => style(t)['grid-template-columns']?.startsWith(cols))
-      expect(rows.length, `${at}: rows found`).toBeGreaterThan(0)
-      return rows
-    }
-    const recon = floor(RECON, '140px minmax(120px,1fr)', 'recon')
-    expect(recon, 'recon: the header row and one row per mismatch').toHaveLength(RECON_ROWS.length + 1)
-    for (const r of recon) expect.soft(style(r)['min-width'], 'recon row floor').toBe('800px')
-
-    const ts = reconTags()
-    const titleRow = ts[ts.indexOf(withText(ts, 'State mismatches · internal vs APP')) - 1]
-    expect.soft(style(titleRow)['min-width'], 'recon title row floor').toBe('800px')
-
-    const jobs = floor(SCREENS.submissions, '150px minmax(220px,1.3fr)', 'jobs')
-    expect(jobs, 'jobs: the header row and one row per job').toHaveLength(SEED_JOBS.length + 1)
-    for (const r of jobs) expect.soft(style(r)['min-width'], 'jobs row floor').toBe('1040px')
+    // Cards: v2 corner, no shadow.
+    const ts = parsed(SCREENS.rules, 'rules')
+    const cards = ts.filter((t) => style(t).border === '1px solid var(--line-1)' && style(t).background === 'var(--bg-2)')
+    expect(cards.length, 'rules: cards found').toBeGreaterThanOrEqual(2)
+    for (const c of cards) expect.soft(style(c)['border-radius'], 'rules: card corner').toBe('var(--radius-md)')
+    expect.soft(ts.filter((t) => 'box-shadow' in style(t)).map((t) => t.name), 'rules: no inline shadow').toEqual([])
   })
 
   it('Rules renders its non-ready states', () => {
     const forbidden = rulesWith({ status: 'forbidden', rules: [], version: null })
-    expect(forbidden).toContain('Your account has no rules role.')
+    expect(forbidden).toContain('Your account is not ASComply staff.')
     expect(forbidden).not.toContain('role="switch"')
     expect(forbidden).toContain('Rules admin')
     const loading = rulesWith({ status: 'loading', rules: [], version: null })
@@ -548,8 +347,8 @@ describe('v2 screens', () => {
     const empty = rulesWith({ codeLists: [] })
     expect(panelRows(empty)).toHaveLength(0)
     expect(empty).toContain('No sync recorded yet.')
-    const loading = rulesWith({ codeLists: null, codeListsNote: 'Your account has no rules role.' })
-    expect(loading).toContain('Your account has no rules role.')
+    const loading = rulesWith({ codeLists: null, codeListsNote: 'Your account is not ASComply staff.' })
+    expect(loading).toContain('Your account is not ASComply staff.')
     expect(loading).not.toContain('No sync recorded yet.')
   })
 
@@ -598,5 +397,253 @@ describe('v2 screens', () => {
     expect(rows[0][2]).toContain('QUARANTINED')
     expect(rows[0][2]).toContain('var(--status-muted-bg)')
     expect(rows[0][2]).toContain('+3 −1 ~0')
+  })
+
+  // Tenants: rows are the buttons that carry data-tenant-id.
+  const tenantRows = (html: string) => [...html.matchAll(/<button\b([^>]*data-tenant-id[^>]*)>([\s\S]*?)<\/button>/g)]
+  const rowText = (inner: string) => decode(inner.replace(/<[^>]*>/g, '|')).split('|').filter(Boolean)
+
+  it('Tenants rows show kind, counts, last activity and the demo badge', () => {
+    const rows = tenantRows(tenantsWith({}))
+    expect(rows).toHaveLength(2)
+    expect(rows[0][1]).toContain('data-tenant-id="t1"')
+    expect(rowText(rows[0][2])).toEqual(expect.arrayContaining(['DEMO', 'FIRM · 5 active · 31 invoices', 'last activity 2026-09-23 11:35 UTC']))
+    expect(rowText(rows[1][2])).not.toContain('DEMO')
+    expect(rowText(rows[1][2])).toEqual(expect.arrayContaining(['IN-HOUSE · 0 active · 0 invoices', 'no activity']))
+  })
+
+  it('the DEMO badge and the cards wear v2 corners', () => {
+    const ts = parsed(SCREENS.tenants, 'tenants')
+    const demo = ts.filter((t) => t.text === 'DEMO')
+    expect(demo.length).toBeGreaterThan(0)
+    for (const d of demo) expect.soft(style(ts[ts.indexOf(d) - 1])['border-radius'], 'DEMO badge corner').toBe('var(--radius-sm)')
+    const cards = ts.filter((t) => style(t).border === '1px solid var(--line-1)' && style(t).background === 'var(--bg-2)')
+    expect(cards, 'list and detail cards').toHaveLength(2)
+    for (const c of cards) expect.soft(style(c)['border-radius'], 'card corner').toBe('var(--radius-md)')
+    expect(ts.filter((t) => 'box-shadow' in style(t)).map((t) => t.name), 'no inline shadow').toEqual([])
+  })
+
+  it('the selected row wears the prototype selection paint', () => {
+    const rows = tenantRows(tenantsWith({ selectedId: 't2' }))
+    const at = (i: number) => style({ attrs: ` ${rows[i][1]}` })
+    expect(attr({ attrs: ` ${rows[1][1]}` }, 'aria-pressed')).toBe('true')
+    expect(attr({ attrs: ` ${rows[0][1]}` }, 'aria-pressed')).toBe('false')
+    expect([at(1).background, at(0).background]).toEqual(['var(--bg-3)', 'var(--bg-2)'])
+    expect(classes({ attrs: ` ${rows[0][1]}` })).toContain('ops-nav')
+    for (const r of rows) {
+      const tile = r[2].match(/<span style="([^"]*)">([^<]*)<\/span>/)!
+      expect([style({ attrs: ` style="${tile[1]}"` }).width, style({ attrs: ` style="${tile[1]}"` }).height]).toEqual(['30px', '30px'])
+    }
+  })
+
+  it('member rows carry an initials circle and the role tone', () => {
+    const html = tenantsWith({})
+    const circles = [...html.matchAll(/<span style="([^"]*width:26px[^"]*)">([^<]*)<\/span>/g)]
+    expect(circles.map((c) => c[2])).toEqual(['AO', 'R', 'PP'])
+    for (const c of circles) expect(style({ attrs: ` style="${c[1]}"` })).toMatchObject({ width: '26px', height: '26px', 'border-radius': '50%' })
+    const chip = (label: string) => style({ attrs: ` style="${html.match(new RegExp(`<span class="mono" style="([^"]*)">${label}</span>`))![1]}"` }).background
+    expect([chip('ADMIN'), chip('REVIEWER'), chip('PREPARER')]).toEqual(['var(--action-tint)', 'var(--status-amber-bg)', 'var(--status-muted-bg)'])
+  })
+
+  it('member status badges use the app member tones', () => {
+    const html = tenantsWith({})
+    const bg = (label: string) => html.match(new RegExp(`<span style="[^"]*background:([^;"]*)[^"]*"><span class="mono"[^>]*>${label}</span>`))![1]
+    expect([bg('ACTIVE'), bg('INVITED'), bg('SUSPENDED')]).toEqual(['var(--status-muted-bg)', 'var(--status-amber-bg)', 'var(--status-red-bg)'])
+  })
+
+  it('Tenants renders every list and detail state', () => {
+    const lists = {
+      loading: 'Loading tenants…',
+      empty: 'No tenants yet.',
+      forbidden: 'Your account is not ASComply staff.',
+      error: 'boom',
+    } as const
+    for (const [status, copy] of Object.entries(lists) as [keyof typeof lists, string][]) {
+      const html = tenantsWith({ status, tenants: [], errorText: 'boom' })
+      expect(html, `list ${status}`).toContain(copy)
+      expect(html.includes('>Retry<'), `list ${status} Retry`).toBe(status === 'error')
+    }
+    const details = {
+      none: 'Select a tenant to see its members and recent invoices.',
+      loading: 'Loading tenant…',
+      'not-found': 'Tenant not found.',
+      forbidden: 'Your account is not ASComply staff.',
+      error: 'down',
+    } as const
+    for (const [detailStatus, copy] of Object.entries(details) as [keyof typeof details, string][]) {
+      const html = tenantsWith({ detailStatus, detail: null, detailErrorText: 'down' })
+      expect(html, `detail ${detailStatus}`).toContain(copy)
+      expect(html.includes('>Retry<'), `detail ${detailStatus} Retry`).toBe(detailStatus === 'error')
+    }
+    const bare = tenantsWith({ detail: { tenant: T2, members: [], invoices: [] } })
+    expect(bare).toContain('No members.')
+    expect(bare).toContain('No invoices yet.')
+    expect(tenantsWith({ status: 'ready', tenants: [T1], query: 'zzz' })).toContain('No tenant matches.')
+  })
+
+  it('the tenant detail offers View jobs as its only action', () => {
+    const detail = SCREENS.tenants.slice(SCREENS.tenants.indexOf('<h2'))
+    expect(detail.match(/<button\b/g)).toHaveLength(1)
+    expect(detail).toMatch(/<button\b[^>]*>View jobs<\/button>/)
+  })
+
+  it('the tenants grid holds two columns', () => {
+    const grid = withClass(tagsOf('tenants'), 'ops-tenants-grid')
+    expect(grid).toHaveLength(1)
+    expect(style(grid[0])['grid-template-columns']).toBe('320px minmax(0,1fr)')
+  })
+
+  it('long names, emails and invoice numbers stay on one line inside their rows', () => {
+    const long = 'x'.repeat(120)
+    const html = tenantsWith({
+      tenants: [tenant('t2', long, { demo: true })],
+      detail: { tenant: tenant('t2', long, { demo: true }), members: [member('u1', 'admin', 'active', long, `${long}@x.test`)], invoices: [invoice(long)] },
+    })
+    const ts = parse(html)
+    const oneLine = { overflow: 'hidden', 'white-space': 'nowrap', 'text-overflow': 'ellipsis' }
+    const hits = (name: string, text: string) => ts.filter((t) => t.name === name && t.text === text)
+    const h2 = hits('h2', long)
+    const memberName = hits('div', long)
+    const email = hits('div', `${long}@x.test`)
+    const number = ts.filter((t) => t.name === 'span' && t.text === long && style(t)['font-size'] === '11.5px')
+    for (const [what, found] of [['h2', h2], ['member name', memberName], ['email', email], ['invoice number', number]] as const) {
+      expect(found, `${what} found`).toHaveLength(1)
+      expect.soft(style(found[0]), `${what} one line`).toMatchObject(oneLine)
+    }
+    // Each ellipsis element sits in a flex block that can shrink.
+    const before = (tag: Tag) => ts[ts.indexOf(tag) - 1]
+    expect.soft(style(before(h2[0]))['min-width'], 'h2 name row').toBe('0')
+    expect.soft(style(before(memberName[0]))['min-width'], 'member name block').toBe('0')
+    expect.soft(html, 'email shares the name block').toMatch(new RegExp(`min-width:0"><div[^>]*>${long}</div><div[^>]*>${long}@x.test</div>`))
+    expect.soft(style(before(number[0]))['min-width'], 'invoice row').toBe('0')
+    // Chips and badges: every wrapper of a label holds flex:none.
+    for (const label of ['DEMO', 'ADMIN', 'ACTIVE', 'VALIDATED']) {
+      const labels = ts.filter((t) => t.text === label)
+      expect(labels.length, label).toBeGreaterThan(0)
+      for (const l of labels) {
+        const i = ts.indexOf(l)
+        const own = style(l)
+        const wrap = own.flex === 'none' ? own : style(ts[i - 1].name === 'span' && style(ts[i - 1])['border-radius'] ? ts[i - 2] : ts[i - 1])
+        expect.soft(wrap.flex, `${label} wrapper`).toBe('none')
+      }
+    }
+  })
+})
+
+describe('System health markup', () => {
+  const tileOf = (ts: Tag[], key: string) => {
+    const at = ts.findIndex((t) => attr(t, 'data-tile') === key)
+    expect(at, `tile ${key}`).toBeGreaterThan(-1)
+    const next = ts.findIndex((t, i) => i > at && attr(t, 'data-tile') !== '')
+    return ts.slice(at, next === -1 ? undefined : next)
+  }
+  const tilesOf = (html: string) => {
+    const ts = parse(html)
+    return { all: ts, fleet: tileOf(ts, 'fleet'), queue: tileOf(ts, 'queue'), dead: tileOf(ts, 'dead-lettered') }
+  }
+  const texts = (ts: Tag[]) => ts.map((t) => t.text)
+
+  it('Health tiles show fleet, queue depth and dead-lettered', () => {
+    const html = healthWith({})
+    const { all, fleet, queue, dead } = tilesOf(html)
+    expect(all.filter((t) => attr(t, 'data-tile')).map((t) => attr(t, 'data-tile'))).toEqual(['fleet', 'queue', 'dead-lettered'])
+    expect(texts(fleet)).toEqual(expect.arrayContaining(['Fleet', '1/3', 'services up', 'DEGRADED', 'Down: docling, auth']))
+    expect(texts(queue)).toEqual(expect.arrayContaining(['Queue depth', '3', 'jobs']))
+    expect(texts(queue).filter((x) => /^[A-Z]+$/.test(x)), 'queue has no status word').toEqual([])
+    expect(texts(dead)).toEqual(expect.arrayContaining(['Dead-lettered', '2', 'jobs', 'ATTENTION']))
+    for (const gone of ['APP latency', 'APP error rate', 'throughput', 'Recon']) expect(html).not.toContain(gone)
+  })
+
+  it('Health tiles name the healthy and unknown states', () => {
+    const ok = tilesOf(healthData({ fleet: { status: 'ok', services: [svc('gateway', 'up'), svc('auth', 'up')] }, jobs: { dead_lettered: 0 } }))
+    expect(texts(ok.fleet)).toEqual(expect.arrayContaining(['2/2', 'HEALTHY']))
+    expect(texts(ok.fleet).some((x) => x.startsWith('Down:'))).toBe(false)
+    expect(texts(ok.dead)).toContain('CLEAR')
+    const unknown = tilesOf(healthData({ fleet: { status: 'unknown', services: [] } }))
+    expect(texts(unknown.fleet)).toEqual(expect.arrayContaining(['UNKNOWN', '—']))
+  })
+
+  it('a tile draws a sparkline only from two points', () => {
+    const one = tilesOf(healthData({ trend: [point(0, 0, 1, 0)] }))
+    for (const t of [one.fleet, one.queue, one.dead]) expect(t.some((x) => x.name === 'svg')).toBe(false)
+    expect(texts(one.queue)).toContain('3')
+    const three = tilesOf(healthData({ trend: [point(0, null, 1, 0), point(5, 0, 2, 1), point(10, 1, 3, 2)] }))
+    for (const t of [three.fleet, three.queue, three.dead]) expect(t.filter((x) => x.name === 'svg')).toHaveLength(1)
+    // services_down has 2 non-null points of 3; one non-null point of 2 draws nothing.
+    const sparse = tilesOf(healthData({ trend: [point(0, null, 1, 0), point(5, 0, 2, 1)] }))
+    expect(sparse.fleet.some((x) => x.name === 'svg')).toBe(false)
+    expect(sparse.queue.filter((x) => x.name === 'svg')).toHaveLength(1)
+  })
+
+  it('the Services card lists every service with its build', () => {
+    const ts = parse(healthWith({}))
+    const rows = ts.filter((t) => attr(t, 'data-service'))
+    expect(rows.map((r) => attr(r, 'data-service'))).toEqual(['gateway', 'docling', 'auth'])
+    const after = (name: string) => ts.slice(ts.indexOf(rows.find((r) => attr(r, 'data-service') === name)!))
+    const badgeOf = (name: string, word: string) => {
+      const rowTs = after(name)
+      const label = rowTs.find((t) => t.text === word)!
+      return style(rowTs[rowTs.indexOf(label) - 1])
+    }
+    expect(badgeOf('gateway', 'UP').background).toBe('var(--status-muted-bg)')
+    expect(badgeOf('docling', 'DOWN').background).toBe('var(--status-red-bg)')
+    expect(badgeOf('auth', 'DOWN').background).toBe('var(--status-red-bg)')
+    const builds = ts.filter((t) => t.name === 'span' && ['541ac75', '—', 'abcdef1'].includes(t.text) && style(t).flex === 'none')
+    expect(builds.map((b) => [b.text, attr(b, 'title')])).toEqual([['541ac75', '541ac755c7a1'], ['—', ''], ['abcdef1', 'abcdef1234']])
+    const unknown = healthData({ fleet: { status: 'unknown', services: [] } })
+    expect(unknown).toContain('The gateway roll-up is unavailable.')
+    expect(unknown).not.toContain('data-service')
+  })
+
+  it('the health header carries the check time', () => {
+    const ts = parse(healthWith({}))
+    withText(ts, 'INFRASTRUCTURE')
+    withText(ts, 'System health')
+    withText(ts, 'CHECKED 2026-10-14 10:05 UTC')
+  })
+
+  it('Health renders every state', () => {
+    const loading = healthWith({ status: 'loading', data: null })
+    expect(loading).toContain('Loading system health…')
+    expect(loading).toContain('System health')
+    expect(loading).not.toContain('CHECKED')
+    const forbidden = healthWith({ status: 'forbidden', data: null })
+    expect(forbidden).toContain('Your account is not ASComply staff.')
+    expect(forbidden).not.toContain('Retry')
+    const failed = healthWith({ status: 'error', errorText: 'boom', data: null })
+    expect(failed).toContain('boom')
+    expect(buttonByText(failed, 'Retry').attrs).toContain('v2-btn-ghost')
+  })
+
+  it('the health grid holds three columns and collapses', () => {
+    const grids = withClass(parse(healthWith({})), 'ops-health-grid')
+    expect(grids).toHaveLength(1)
+    expect(style(grids[0])['grid-template-columns']).toBe('repeat(3, minmax(0, 1fr))')
+    const css = readFileSync(new URL('./styles/support.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const rule = (width: number) => css.match(new RegExp(`@media \\(max-width: ${width}px\\) \\{([\\s\\S]*?)\\n\\}`, 'i'))![1]
+    const cols = (width: number) => rule(width).match(/\.ops-health-grid\s*\{\s*grid-template-columns:\s*([^;]*);/i)?.[1]
+    expect(cols(1024)).toBe('repeat(2, minmax(0, 1fr)) !important')
+    expect(cols(768)).toBe('repeat(2, minmax(0, 1fr)) !important')
+    expect(cols(480)).toBe('minmax(0, 1fr) !important')
+  })
+
+  it('long names stay on one line', () => {
+    const long = 'x'.repeat(120)
+    const html = healthData({ fleet: { status: 'degraded', services: [svc(long, 'down', 'abcdef1234')] } })
+    const ts = parse(html)
+    const oneLine = { overflow: 'hidden', 'white-space': 'nowrap', 'text-overflow': 'ellipsis' }
+    const name = ts.filter((t) => t.name === 'div' && t.text === long)
+    expect(name).toHaveLength(1)
+    expect(style(name[0])).toMatchObject(oneLine)
+    expect(style(ts[ts.indexOf(name[0]) - 1])['min-width']).toBe('0')
+    const down = ts.filter((t) => t.text === `Down: ${long}`)
+    expect(down).toHaveLength(1)
+    expect(style(down[0])).toMatchObject(oneLine)
+    const tile = ts.find((t) => attr(t, 'data-tile') === 'fleet')!
+    expect(style(tile)['min-width']).toBe('0')
+    const badge = ts.find((t) => t.text === 'DOWN')!
+    expect(style(ts[ts.indexOf(badge) - 2]).flex, 'badge wrapper').toBe('none')
+    const build = ts.find((t) => t.text === 'abcdef1')!
+    expect(style(build).flex).toBe('none')
   })
 })

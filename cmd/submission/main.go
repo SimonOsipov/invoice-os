@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/aicalls"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
 	"github.com/SimonOsipov/invoice-os/internal/document"
 	"github.com/SimonOsipov/invoice-os/internal/extraction"
@@ -38,7 +40,10 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/jev"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
+	"github.com/SimonOsipov/invoice-os/internal/staffjobs"
 	"github.com/SimonOsipov/invoice-os/internal/submission"
+	"github.com/SimonOsipov/invoice-os/internal/systemhealth"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 func main() {
@@ -47,6 +52,11 @@ func main() {
 	app, err := platform.New("submission")
 	if err != nil {
 		platform.Fatal(slog.Default(), "submission: startup: %v", err)
+	}
+
+	gw, err := gatewayURL(os.Getenv("GATEWAY_URL"))
+	if err != nil {
+		platform.Fatal(app.Logger, "submission: %v", err)
 	}
 
 	ctx := context.Background()
@@ -162,6 +172,10 @@ func main() {
 	if err != nil {
 		platform.Fatal(app.Logger, "submission: %v", err)
 	}
+	aiRecorder := aicalls.NewRecorder(pool, app.Logger)
+	defer aiRecorder.Wait() // runs before pool.Close
+	aiClient.SetRecorder(aiRecorder.Record)
+	jevClient.SetRecorder(aiRecorder.Record)
 	ew := newExtractWorker(pool, extractor, newDocumentOpener(docSvc.Open),
 		&extraction.PageStore{Reader: extraction.NewPDFiumReader(), Sink: newPageSink(docObjects)},
 		newExtractionAuditor(), textReader, (&extraction.Store{Pool: pool}).AnchorRulesFor, aiClient, jevClient,
@@ -179,6 +193,12 @@ func main() {
 	}
 	sw.Queue, pw.Queue = q, q
 	app.AddBackgroundWorker(q)
+
+	healthStore := &systemhealth.Store{Pool: pool}
+	fleet := systemhealth.NewFleetReader(gw, &http.Client{Transport: platform.TraceTransport(nil)})
+	sampler := &systemhealth.Sampler{Store: healthStore, Fleet: fleet, Now: time.Now, Logger: app.Logger}
+	app.AddBackgroundWorker(codelist.NewWorker(systemhealth.SampleInterval, sampler.Sample))
+	app.Mux.HandleFunc("GET /v1/staff/health", systemhealth.Handler(healthStore.StaffSnapshot, fleet, time.Now, app.Logger))
 
 	// Stub endpoint — proves routing end to end.
 	app.Mux.HandleFunc("GET /v1/ping", func(w http.ResponseWriter, _ *http.Request) {
@@ -222,11 +242,30 @@ func main() {
 	app.Mux.HandleFunc("POST /v1/documents", extraction.UploadHandler(
 		newDocumentStorer(docSvc.Store), newExtractionEnqueuer(pool, q), app.Logger))
 
+	// Staff Submissions reads, reached as /api/submission/v1/staff/jobs…; the staff class gates the path.
+	jobs := staffjobs.NewStore(pool, invStore, q.River())
+	app.Mux.HandleFunc("GET /v1/staff/jobs", staffjobs.ListHandler(jobs.List, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/jobs/{id}", staffjobs.GetHandler(jobs.Get, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/jobs/{id}/redrive", staffjobs.RedriveHandler(jobs.Redrive, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/jobs/{id}/cancel", staffjobs.CancelHandler(jobs.Cancel, app.Logger))
+
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 
 	if err := app.Run(ctx); err != nil {
 		platform.Fatal(app.Logger, "submission: %v", err)
 	}
+}
+
+// gatewayURL parses GATEWAY_URL, the in-network gateway base the fleet reader calls.
+func gatewayURL(raw string) (*url.URL, error) {
+	if raw == "" {
+		return nil, errors.New("GATEWAY_URL is required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("GATEWAY_URL must be an absolute http(s) URL, got %q", raw)
+	}
+	return u, nil
 }
 
 // documents.size_bytes CHECKs <= this (migrations/20260802163544_documents.sql).

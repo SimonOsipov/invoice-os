@@ -13,13 +13,14 @@
 // tenant diverges — so Record cannot write to the wrong tenant, and a call outside a
 // tenant-scoped tx fails closed (NULL tenant_id fails the WITH CHECK, 42501, no row written).
 //
-// One exception, superuser-only: db.PurgeDemoTenants deletes the four seeded demo tenants'
+// One exception, superuser-only: db.PurgeDemoTenants deletes the seeded demo tenants'
 // rows on every gated gateway boot.
 package audit
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -61,22 +62,56 @@ func Record(ctx context.Context, tx pgx.Tx, actor, event string, payload any) er
 	return nil
 }
 
-// RecordStaff appends one staff action to the global staff_audit_log on tx, the caller's
-// transaction, so the row commits or rolls back with the change it records. A nil payload is
-// stored as {}.
-func RecordStaff(ctx context.Context, tx pgx.Tx, actor, ruleSetVersionID uuid.UUID, event string, payload any) error {
+// SupportActor is the audit_log.actor of every staff row a customer sees.
+const SupportActor = "ASComply support"
+
+// ErrStaffTenantMismatch is returned when a staff event's tenant does not match the transaction's.
+var ErrStaffTenantMismatch = errors.New("audit: staff event tenant does not match the transaction's tenant")
+
+// recordTenant is a var so a test can force the customer write to fail.
+var recordTenant = Record
+
+// StaffEvent is one staff change. A zero UUID field is stored as NULL; a zero TenantID is a global change.
+type StaffEvent struct {
+	Actor            uuid.UUID // the staff member; written to staff_audit_log only
+	Event            string
+	RuleSetVersionID uuid.UUID // rule events only
+	TenantID         uuid.UUID // must equal the transaction's tenant; zero when it has none
+	SubjectID        uuid.UUID // the tenant-side row the change touched
+	Payload          any
+}
+
+// RecordStaff appends one staff action to staff_audit_log on tx. A global change (zero TenantID)
+// needs a tx with no tenant; a tenant change needs that tenant's tx and also writes the customer's audit_log row.
+// A TenantID that differs from the tx's tenant, in either direction, returns ErrStaffTenantMismatch.
+func RecordStaff(ctx context.Context, tx pgx.Tx, ev StaffEvent) error {
 	body := []byte("{}")
-	if payload != nil {
-		b, err := json.Marshal(payload)
+	if ev.Payload != nil {
+		b, err := json.Marshal(ev.Payload)
 		if err != nil {
 			return fmt.Errorf("audit: marshal payload: %w", err)
 		}
 		body = b
 	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO public.staff_audit_log (actor, event, rule_set_version_id, payload) VALUES ($1, $2, $3, $4)`,
-		actor, event, ruleSetVersionID, string(body)); err != nil {
-		return fmt.Errorf("audit: record staff event %q: %w", event, err)
+	nullable := func(id uuid.UUID) any {
+		if id == uuid.Nil {
+			return nil
+		}
+		return id
+	}
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO public.staff_audit_log (actor, event, rule_set_version_id, tenant_id, subject_id, payload)
+SELECT $1::uuid, $2::text, $3::uuid, $4::uuid, $5::uuid, $6::jsonb
+ WHERE nullif(current_setting('app.current_tenant', true), '')::uuid IS NOT DISTINCT FROM $4::uuid`,
+		ev.Actor, ev.Event, nullable(ev.RuleSetVersionID), nullable(ev.TenantID), nullable(ev.SubjectID), string(body))
+	if err != nil {
+		return fmt.Errorf("audit: record staff event %q: %w", ev.Event, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("audit: record staff event %q: %w", ev.Event, ErrStaffTenantMismatch)
+	}
+	if ev.TenantID != uuid.Nil {
+		return recordTenant(ctx, tx, SupportActor, ev.Event, json.RawMessage(body))
 	}
 	return nil
 }

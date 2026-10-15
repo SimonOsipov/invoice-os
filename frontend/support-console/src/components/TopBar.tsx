@@ -1,4 +1,5 @@
-import { ALERT_ICON, CRUMB_BY_SCREEN, SANDBOX_ICON, SEARCH_ICON } from '../data'
+import { ALERT_ICON, SANDBOX_ICON, SEARCH_ICON } from '../icons'
+import { CRUMB_BY_SCREEN } from '../nav'
 import type { Env, Screen } from '../types'
 
 type Props = {

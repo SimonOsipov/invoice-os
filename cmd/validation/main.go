@@ -62,7 +62,7 @@ func main() {
 
 	app.Mux.HandleFunc("GET /v1/rules", validation.GoldenRulesHandler(store.GoldenRules, app.Logger))
 
-	// Staff routes: the platform admits only a rules-role caller.
+	// Staff routes: the platform admits only a staff caller.
 	app.Mux.HandleFunc("GET /v1/staff/rules", validation.StaffListRulesHandler(store.RulesOfVersion, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/rule-versions", validation.StaffVersionsHandler(store.Versions, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/code-list-syncs", validation.StaffCodeListSyncsHandler(store.CodeListSyncs, app.Logger))

@@ -4,7 +4,7 @@
 // sign-in is throttled per address, and the session check's cost is measured.
 // Forks auto-confirm, so a fresh registration signs in at once.
 import { test, expect } from '@playwright/test'
-import { claimsOf, exchangeCode, mintSignInState, provisionRealAccount, rawFetch, registerFresh, signInForCode, signInSession, subjectOf } from './client'
+import { claimsOf, exchangeCode, grantMembership, HOUSE_TENANT_ID, mintSignInState, provisionRealAccount, provisionStaffAccount, rawFetch, registerFresh, signInForCode, signInSession, subjectOf } from './client'
 import { assertErrorEnvelope } from './contract-helpers'
 import { resolveTarget } from '../targets'
 
@@ -153,7 +153,47 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
     expect([unknown.status(), await unknown.json()], 'sign-out with an unknown refresh token').toEqual([401, { error: INVALID_REFRESH }])
   })
 
-  test('a provisioned account has no staff claim; the mock grant puts it on the next sign-in and the next refresh', async () => {
+  test('console hand-off: a staff session mints a one-time code for its own token; a customer gets 403', async () => {
+    const staff = await provisionStaffAccount('console-handoff')
+    const customer = await provisionRealAccount('console-handoff-customer')
+    const staffToken = (await signInSession(staff.email, staff.password)).access_token
+    const customerToken = (await signInSession(customer.email, customer.password)).access_token
+    const state = mintSignInState()
+    const mint = (token: string) => rawFetch('/auth/console-handoff', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: { state } })
+
+    const refused = await mint(customerToken)
+    assertErrorEnvelope(refused, 403, 'a customer bearer')
+    expect(errorOf(refused)).toBe(FORBIDDEN)
+
+    const minted = await mint(staffToken)
+    expect(minted.status, JSON.stringify(minted.body)).toBe(200)
+    expect(Object.keys(minted.body as object), 'the console hand-off answer carries the code only').toEqual(['code'])
+    const { code } = minted.body as { code: string }
+    expect(code).toMatch(CODE_RE)
+
+    const first = await rawFetch('/auth/exchange', { method: 'POST', body: { code, state } })
+    expect(first.status, JSON.stringify(first.body)).toBe(200)
+    expect(first.body, 'the exchange answer is the staff bearer, with no refresh token').toEqual({ access_token: staffToken })
+
+    const second = await rawFetch('/auth/exchange', { method: 'POST', body: { code, state } })
+    assertErrorEnvelope(second, 400, 'second redemption')
+    expect(errorOf(second)).toBe(INVALID_CODE)
+  })
+
+  test('console hand-off: no bearer and a bad state are refused', async () => {
+    const staff = await provisionStaffAccount('console-handoff-refusal')
+    const staffToken = (await signInSession(staff.email, staff.password)).access_token
+
+    const anonymous = await rawFetch('/auth/console-handoff', { method: 'POST', body: { state: mintSignInState() } })
+    assertErrorEnvelope(anonymous, 401, 'no bearer')
+
+    // One character short of the 43 that mintSignInState yields.
+    const short = await rawFetch('/auth/console-handoff', { method: 'POST', headers: { Authorization: `Bearer ${staffToken}` }, body: { state: mintSignInState().slice(0, 42) } })
+    assertErrorEnvelope(short, 400, 'a 42-character state')
+    expect(errorOf(short)).toBe(STATE_REQUIRED)
+  })
+
+  test('a customer granted a house membership is staff with no tenant on the next sign-in and refresh', async () => {
     const { email, password } = await provisionRealAccount('staff-claim')
     const before = await signInSession(email, password)
     const beforeMeta = claimsOf(before.access_token).app_metadata as { tenant_id?: unknown; staff?: unknown } | undefined
@@ -161,16 +201,23 @@ test.describe('sign-in hand-off (API E2E, over the deployed gateway)', () => {
     expect(beforeMeta?.tenant_id, 'the tenant claim on a provisioned account').toBeTruthy()
     expect(beforeMeta?.staff, 'staff on a customer token').toBeUndefined()
 
-    const grant = await rawFetch('/auth/mock/staff', { method: 'POST', body: { user_id: subjectOf(before.access_token) } })
-    expect(grant.status, JSON.stringify(grant.body)).toBe(204)
+    // Stands in for the runbook grant statement; the app invite refuses an identity that holds a membership.
+    await grantMembership({ user_id: subjectOf(before.access_token), tenant_id: HOUSE_TENANT_ID, role: 'reviewer', display_name: 'ASComply staff', email })
 
     const after = await signInSession(email, password)
-    expect((claimsOf(after.access_token).app_metadata as { staff?: unknown }).staff, 'staff on a sign-in after the grant').toBe(true)
+    const afterMeta = claimsOf(after.access_token).app_metadata as { staff?: unknown; tenant_id?: unknown }
+    expect(afterMeta.staff, 'staff on a sign-in after the grant').toBe(true)
+    expect(afterMeta.tenant_id, 'tenant on a staff sign-in').toBeUndefined()
 
     const renewed = await rawFetch('/auth/refresh', { method: 'POST', body: { refresh_token: before.refresh_token } })
     expect(renewed.status, JSON.stringify(renewed.body)).toBe(200)
     const renewedToken = (renewed.body as { access_token: string }).access_token
-    expect((claimsOf(renewedToken).app_metadata as { staff?: unknown }).staff, 'staff on a refresh of the earlier session').toBe(true)
+    const renewedMeta = claimsOf(renewedToken).app_metadata as { staff?: unknown; tenant_id?: unknown }
+    expect(renewedMeta.staff, 'staff on a refresh of the earlier session').toBe(true)
+    expect(renewedMeta.tenant_id, 'tenant on a staff refresh').toBeUndefined()
+
+    const versions = await rawFetch('/api/validation/v1/staff/rule-versions', { headers: { Authorization: `Bearer ${renewedToken}` } })
+    expect(versions.status, JSON.stringify(versions.body)).toBe(200)
   })
 
   // The first call after sign-in misses the session cache, the second hits it. Timings are

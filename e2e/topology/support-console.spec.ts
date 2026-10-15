@@ -1,9 +1,11 @@
-// The deployed v2 Support Console. The Rules screen reads and switches real rules; every other screen is mock-backed, so those pin fixture behaviour and the v2 look, not a contract.
+// The deployed v2 Support Console. Its screens, Submissions, Rules, Audit, Tenants, System health and AI usage, read real data; Rules also switches real rules.
 // Resolved values are read at 1440; layout claims assert a relationship at every wide width.
 // Screenshots are attached for the reviewer and never asserted.
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
-import { provisionStaffAccount, rawFetch, signInSession, type StaffAccount } from '../api/client'
+import { unzipSync } from 'fflate'
+import { apiBase, getAuditLog, HOUSE_TENANT_ID, login, PERSONAS, provisionStaffAccount, rawFetch, signInSession, type AuditEvent, type StaffAccount } from '../api/client'
 import { collectErrors } from '../personaSession'
 import { seedStaffSession } from '../staffSession'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -11,7 +13,7 @@ import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } 
 test.use({ viewport: { width: 1440, height: 900 } })
 
 let staff: Promise<StaffAccount> | undefined
-const staffAccount = (): Promise<StaffAccount> => (staff ??= provisionStaffAccount('reskin-support', undefined, { rulesRole: true }))
+const staffAccount = (): Promise<StaffAccount> => (staff ??= provisionStaffAccount('reskin-support'))
 
 const SHADOW_CARD = 'rgba(40, 83, 52, 0.21) 0px 14px 22px -16px'
 
@@ -246,9 +248,14 @@ async function startSupport(page: Page): Promise<string[]> {
   return errors
 }
 
+async function reloadRules(page: Page): Promise<void> {
+  await page.reload()
+  await expect(mainOf(page).getByRole('heading', { level: 1, name: 'Rules admin' })).toBeVisible()
+}
+
 const noErrors = (errors: string[], where: string): void => expect(errors, `console errors on ${where}:\n${errors.join('\n')}`).toEqual([])
 
-test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox banner', async ({ page }, testInfo) => {
+test('SUP-01 shell: sidebar, header, env switch and sandbox banner', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
   const side = aside(page)
@@ -256,13 +263,11 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
   const header = mn.locator('header')
   const banner = mn.locator('header + div')
   const nav = side.locator('nav button.ops-nav')
-  const subm = nav.filter({ hasText: 'Submissions' })
   const rulesNav = nav.filter({ hasText: 'Rules' })
   const brand = side.locator('img')
   const crossCard = side.locator('div.ops-hide-narrow').first()
-  const bpCard = side.locator('nav .ops-hide-narrow > div')
-  const bpTrack = kid(bpCard, 2)
-  const userBlock = side.locator('xpath=./div[last()]')
+  const footer = side.locator('xpath=./div[last()]')
+  const signOut = side.getByRole('button', { name: 'Sign out' })
   const search = header.locator('.ops-header-search')
   const sbx = header.getByRole('button', { name: 'SANDBOX', exact: true })
   const liv = header.getByRole('button', { name: 'LIVE', exact: true })
@@ -273,19 +278,13 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
 
   await expect(side).toHaveClass(/\basc-dark\b/)
   await expectStyles(side, 'aside', { 'background-color': 'rgb(8, 47, 49)', 'border-right-color': 'rgb(22, 71, 66)' })
-  await expectStyles(subm, 'active nav row', { 'background-color': 'rgb(12, 60, 57)', radius: '6px' })
-  await expectStyles(kid(subm, 1), 'active nav bar', { 'background-color': 'rgb(245, 188, 136)', radius: '2px' })
-  await expectStyles(kid(subm, 2), 'active nav icon', { color: 'rgb(245, 188, 136)' })
-  await expectStyles(rulesNav, 'idle nav row', { color: await resolveColor(side, '--fg-2') })
+  await expectStyles(rulesNav, 'active nav row', { 'background-color': 'rgb(12, 60, 57)', radius: '6px' })
+  await expectStyles(kid(rulesNav, 1), 'active nav bar', { 'background-color': 'rgb(245, 188, 136)', radius: '2px' })
+  await expectStyles(kid(rulesNav, 2), 'active nav icon', { color: 'rgb(245, 188, 136)' })
   const eyebrow = await resolveColor(side, '--eyebrow-on-dark')
-  for (const [what, el] of [
-    ['Operations', side.getByText('Operations', { exact: true })],
-    ['APP backpressure', side.getByText('APP backpressure', { exact: true })],
-  ] as const) {
-    await expectStyles(el, `${what} eyebrow`, { color: eyebrow })
-    await legible(el, el, `${what} eyebrow`)
-  }
-  await expectStyles(subm.locator('span.mono'), 'Submissions nav badge', { radius: '4px' })
+  const operations = side.getByText('Operations', { exact: true })
+  await expectStyles(operations, 'Operations eyebrow', { color: eyebrow })
+  await legible(operations, operations, 'Operations eyebrow')
   await expect(rulesNav.locator('span.mono'), 'the Rules nav holds no badge').toHaveCount(0)
 
   await expect(brand, 'one brand image in the sidebar').toHaveCount(1)
@@ -297,11 +296,7 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
 
   await expectStyles(crossCard, 'cross-tenant card', { radius: '6px' })
   await expectStyles(kid(crossCard, 1), 'cross-tenant tile', { radius: '6px' })
-  await expectStyles(bpCard, 'backpressure card', { radius: '6px' })
-  await expectStyles(bpTrack, 'backpressure track', { radius: '2px' })
-  await expectStyles(kid(bpTrack, 1), 'backpressure fill', { radius: '2px' })
-  await expectStyles(kid(userBlock, 1), 'avatar', { radius: '50%' })
-  await expectStyles(side.getByRole('button', { name: 'Sign out' }), 'Sign out', { radius: '7px' })
+  await expectStyles(signOut, 'Sign out', { radius: '7px' })
 
   await expectStyles(header, 'header', { 'background-color': 'rgba(250, 248, 242, 0.95)', 'backdrop-filter': 'blur(18px)', 'border-bottom-color': 'rgb(230, 232, 221)' })
   await expectStyles(search, 'header search', { radius: '7px', 'border-top-color': 'rgb(201, 217, 214)' })
@@ -323,15 +318,15 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
   await expectStyles(tag, 'sandbox banner tag', { 'white-space': 'nowrap', opacity: '1' })
   await legible(tag, banner, 'sandbox banner tag', { opacityOne: true })
 
-  await attachShot(page, testInfo, 'submissions')
+  await attachShot(page, testInfo, 'shell')
 
   await atWidths(page, 'SUP-01 shell layout', async () => {
     const r = await boxes(page, {
       aside: side,
       img: brand,
       wordmark: side.getByText('ASComply', { exact: true }),
-      bpCard,
-      userBlock,
+      footer,
+      signOut,
       header,
       track,
       search,
@@ -343,6 +338,7 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
       liv,
     })
     const navRects = await rectsOf(page, nav, 'nav button')
+    const footerPadRight = await footer.evaluate((el) => parseFloat(getComputedStyle(el).paddingRight))
     await noSidewaysScroll(page, 'SUP-01')
     return {
       problems: [
@@ -350,8 +346,13 @@ test('SUP-01 shell and Submissions: sidebar, header, env switch and sandbox bann
         ...leftOf(r.img, r.wordmark, 'brand image / wordmark'),
         ...sameCentreY(r.img, r.wordmark, 'brand image / wordmark'),
         ...navRects.flatMap((n, i) => within(r.aside, n, `nav button ${i} in the aside`)),
-        ...below(navRects[navRects.length - 1], r.bpCard, 'backpressure card / last nav button'),
-        ...within(r.aside, r.userBlock, 'user block in the aside'),
+        ...below(navRects[navRects.length - 1], r.footer, 'footer / last nav button'),
+        ...apart(navRects[navRects.length - 1], r.footer, 'last nav button / footer'),
+        ...within(r.footer, r.signOut, 'Sign out in the footer'),
+        ...within(r.aside, r.signOut, 'Sign out in the aside'),
+        ...(near(r.signOut.x + r.signOut.width, r.footer.x + r.footer.width - footerPadRight, 1)
+          ? []
+          : [`Sign out right edge ${r.signOut.x + r.signOut.width} vs footer inner edge ${r.footer.x + r.footer.width - footerPadRight}`]),
         ...within(r.track, r.sbx, 'SANDBOX in the track'),
         ...within(r.track, r.liv, 'LIVE in the track'),
         ...apart(r.sbx, r.liv, 'SANDBOX / LIVE'),
@@ -449,26 +450,16 @@ async function titleBlockRead(page: Page, h1Name: string): Promise<Read> {
   return { problems, rects: { titleBlock: m } }
 }
 
-const CARD = { radius: '6px', 'border-top-width': '1px', 'border-top-style': 'solid', 'border-top-color': 'rgb(220, 231, 228)', 'box-shadow': 'none', 'background-color': 'rgb(255, 255, 255)' }
-const FIGURE = (size: string): Want => ({ family: 'Manrope', 'font-weight': '700', 'font-size': size, 'font-variant-numeric': 'tabular-nums' })
-
-// The focus ring lives on the .ops-field wrapper; the input itself draws none.
-async function expectFieldRing(page: Page, input: Locator, what: string): Promise<void> {
-  const field = parent(input)
-  await expect(field, `${what}: the input sits in an .ops-field wrapper`).toHaveClass(/\bops-field\b/)
-  await input.focus()
-  await settle(page, field)
-  await expectStyles(field, `${what} field`, { 'border-top-color': 'rgb(56, 135, 126)' })
-  expect((await styles(field, ['box-shadow']))['box-shadow'], `${what} field ring`).toContain('rgb(56, 135, 126)')
-  await expectStyles(input, `${what} input`, { 'box-shadow': 'none' })
-}
-
 type Screen = {
   nav: string
   h1: string
   rowUp: number
-  reads: (page: Page, testInfo: TestInfo) => Promise<void>
+  // Runs before the nav click; its result reaches `reads` as `armed`.
+  arm?: (page: Page) => Promise<unknown>
+  reads: (page: Page, testInfo: TestInfo, armed?: unknown) => Promise<void>
   layout: (page: Page) => Promise<Read>
+  /** Runs last: it may leave the screen. */
+  after?: (page: Page) => Promise<void>
 }
 
 async function gridKids(page: Page, grid: string, what: string): Promise<Rect[]> {
@@ -477,39 +468,728 @@ async function gridKids(page: Page, grid: string, what: string): Promise<Rect[]>
   return rs
 }
 
+const STAFF_TENANTS = '/api/tenancy/v1/staff/tenants'
+// db.DemoTenants: the seeded 2222 in-house tenant (the house tenant is HOUSE_TENANT_ID).
+const DEMO_2222_ID = '22222222-2222-2222-2222-222222222222'
+const HOUSE_NAME = 'ASComply (dev)'
+
+type LiveTenant = { id: string; name: string; kind: string; demo: boolean; active_members: number; invoice_count: number }
+type LiveDetail = { members: { email: string | null }[]; invoices: { invoice_number: string }[] }
+
+async function liveStaffGet<T>(path: string): Promise<T> {
+  const res = await rawFetch(path, { headers: { Authorization: `Bearer ${await staffToken()}` } })
+  expect(res.status, `GET ${path}`).toBe(200)
+  return res.body as T
+}
+
+const tenantRow = (page: Page, id: string): Locator => mainOf(page).locator(`button[data-tenant-id="${id}"]`)
+// Same text as kindLabel in frontend/support-console/src/tenantsApi.ts.
+const kindText = (kind: string): string => (kind === 'firm' ? 'FIRM' : kind === 'in_house' ? 'IN-HOUSE' : kind.toUpperCase())
+
+// Rects of the first `cap` matches: the shared DB list grows with every run.
+async function rectsOfFirst(page: Page, loc: Locator, cap: number, what: string): Promise<Rect[]> {
+  await settle(page, loc.first())
+  const n = Math.min(await loc.count(), cap)
+  expect(n, `${what}: none found`).toBeGreaterThan(0)
+  const out: Rect[] = []
+  for (let i = 0; i < n; i++) {
+    const box = await loc.nth(i).boundingBox()
+    if (!box) throw new Error(`${what} #${i} has no box`)
+    out.push(box)
+  }
+  return out
+}
+
+async function tenantsReads(page: Page, testInfo: TestInfo): Promise<void> {
+  const mn = mainOf(page)
+  const live = (await liveStaffGet<{ tenants: LiveTenant[] }>(STAFF_TENANTS)).tenants
+  const house = tenantRow(page, HOUSE_TENANT_ID)
+  const demo2222 = tenantRow(page, DEMO_2222_ID)
+  await expect(house, 'the house tenant row has loaded').toBeVisible()
+  await expect(demo2222).toBeVisible()
+
+  const demoTag = (row: Locator): Locator => row.getByText('DEMO', { exact: true })
+  await expect(demoTag(house)).toBeVisible()
+  await expect(demoTag(demo2222)).toBeVisible()
+  const plain = live.find((t) => !t.demo)
+  expect(plain, 'the live read holds a non-demo tenant').toBeDefined()
+  const plainRow = tenantRow(page, plain!.id)
+  await expect(plainRow).toBeVisible()
+  await expect(demoTag(plainRow)).toHaveCount(0)
+
+  const row2222 = live.find((t) => t.id === DEMO_2222_ID)
+  expect(row2222, 'the live read holds the 2222 tenant').toBeDefined()
+  const line = `${kindText(row2222!.kind)} · ${row2222!.active_members} active · ${row2222!.invoice_count} invoices`
+  await expect(demo2222.getByText(line, { exact: true })).toBeVisible()
+
+  const search = mn.getByLabel('Search tenants')
+  await search.fill(HOUSE_NAME)
+  await expect(house).toBeVisible()
+  await expect(demo2222).toHaveCount(0)
+  await search.fill('')
+  await expect(demo2222).toBeVisible()
+
+  const detail = await liveStaffGet<LiveDetail>(`${STAFF_TENANTS}/${HOUSE_TENANT_ID}`)
+  await house.click()
+  await expect(mn.getByRole('heading', { level: 2, name: HOUSE_NAME })).toBeVisible()
+  const card = mn.locator('.ops-tenants-grid > div:nth-child(2)')
+  await expect(kid(card, 2)).toContainText((await staffAccount()).email)
+  await expect(kid(card, 3)).toContainText(detail.invoices.length === 0 ? 'No invoices yet.' : detail.invoices[0].invoice_number)
+
+  await expectStyles(parent(demoTag(house)), 'DEMO badge', { radius: '4px' })
+  await attachShot(page, testInfo, 'tenants')
+
+  await narrowCollapse(page)
+}
+
+// ceiling: one narrow width below the 1024px rule, not swept; sweep it if the breakpoint moves.
+async function narrowCollapse(page: Page): Promise<void> {
+  const entry = page.viewportSize()
+  try {
+    await page.setViewportSize({ width: 1000, height: 1080 })
+    await expect
+      .poll(
+        async () => {
+          try {
+            const kids = await gridKids(page, '.ops-tenants-grid', 'tenants grid')
+            return below(kids[0], kids[1], 'tenants detail under the list')
+          } catch (err) {
+            return [`read threw: ${String((err as Error).message).split('\n')[0]}`]
+          }
+        },
+        { message: 'the tenants grid collapses to one column', timeout: 10_000 },
+      )
+      .toEqual([])
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+}
+
+async function tenantsLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const kids = await gridKids(page, '.ops-tenants-grid', 'tenants grid')
+  const [listCol, detailCol] = kids
+  const problems = [...apart(listCol, detailCol, 'tenants grid columns'), ...sameTops(kids, 'tenants grid')]
+
+  const top = await boxes(page, { search: mn.getByLabel('Search tenants').locator('xpath=..'), list: mn.locator('.ops-tenants-grid > div:first-child > div:nth-child(2)') })
+  problems.push(...within(listCol, top.search, 'search field in the list column'), ...below(top.search, top.list, 'list card below the search field'), ...within(listCol, top.list, 'list card in the list column'))
+
+  const rowRects = await rectsOfFirst(page, mn.locator('button[data-tenant-id]'), 20, 'tenant row')
+  for (const [i, r] of rowRects.entries()) problems.push(...within(top.list, r, `row ${i} in the list card`))
+
+  // The house row is DEMO: its badge and text lines stay inside the row and the badge clears the name.
+  const house = tenantRow(page, HOUSE_TENANT_ID)
+  const text = kid(house, 2)
+  const nameRow = kid(text, 1)
+  const rowParts = await boxes(page, { row: house, name: kid(nameRow, 1), badge: kid(nameRow, 2), line2: kid(text, 2), line3: kid(text, 3) })
+  problems.push(
+    ...within(rowParts.row, rowParts.name, 'row name'),
+    ...within(rowParts.row, rowParts.badge, 'DEMO badge in its row'),
+    ...apart(rowParts.name, rowParts.badge, 'DEMO badge and name'),
+    ...within(rowParts.row, rowParts.line2, 'row counts line'),
+    ...within(rowParts.row, rowParts.line3, 'row activity line'),
+  )
+
+  const card = mn.locator('.ops-tenants-grid > div:nth-child(2)')
+  const parts = await boxes(page, { card, header: kid(card, 1), text: kid(kid(card, 1), 2), viewJobs: kid(card, 1).getByRole('button', { name: 'View jobs' }), members: kid(card, 2), invoices: kid(card, 3) })
+  problems.push(
+    ...within(parts.card, parts.header, 'detail header in the detail card'),
+    ...within(parts.header, parts.viewJobs, 'View jobs in the detail header'),
+    ...leftOf(parts.text, parts.viewJobs, 'detail text block / View jobs'),
+    ...apart(parts.text, parts.viewJobs, 'detail text block / View jobs'),
+    ...within(parts.card, parts.members, 'Members in the detail card'),
+    ...within(parts.card, parts.invoices, 'Recent invoices in the detail card'),
+    ...below(parts.members, parts.invoices, 'Recent invoices under Members'),
+  )
+
+  const memberRows = kid(kid(card, 2), 2).locator('xpath=./div')
+  const nMembers = Math.min(await memberRows.count(), 10)
+  expect(nMembers, 'member rows').toBeGreaterThan(0)
+  for (let i = 0; i < nMembers; i++) {
+    const r = memberRows.nth(i)
+    const m = await boxes(page, { row: r, block: kid(r, 2), role: kid(r, 3), status: kid(r, 4) })
+    problems.push(
+      ...within(m.row, m.role, `member ${i} role chip in its row`),
+      ...within(m.row, m.status, `member ${i} status badge in its row`),
+      ...within(m.row, m.block, `member ${i} name block in its row`),
+      ...pairwiseApart([m.block, m.role, m.status], `member ${i} block, role, status`),
+    )
+  }
+
+  const invRows = kid(kid(card, 3), 2).locator('xpath=./div')
+  for (let i = 0, n = Math.min(await invRows.count(), 10); i < n; i++) {
+    const r = invRows.nth(i)
+    const v = await boxes(page, { row: r, number: kid(r, 1), status: kid(r, 2) })
+    problems.push(...within(v.row, v.number, `invoice ${i} number in its row`), ...within(v.row, v.status, `invoice ${i} status in its row`), ...apart(v.number, v.status, `invoice ${i} number and status`))
+  }
+
+  await noSidewaysScroll(page, 'Tenants')
+  return { problems, rects: { kids, rowParts, parts } }
+}
+
+const STAFF_JOBS = '/api/submission/v1/staff/jobs'
+// StaffJob in frontend/support-console/src/jobsApi.ts.
+type LiveJob = { id: string; tenant_name: string; invoice_number: string }
+
+// Rects of an element's children, in one read.
+function childRects(loc: Locator): Promise<Rect[]> {
+  return loc.evaluate((el) =>
+    [...el.children].map((c) => {
+      const r = c.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    }),
+  )
+}
+
+const jobRows = (page: Page): Locator => mainOf(page).locator('button[data-job-id]')
+// The tenant (1) and last-error (5) cells of a row; D27.
+const TRUNCATING_CELLS = [1, 5]
+const TRUNCATION = { 'white-space': 'nowrap', overflow: 'hidden', 'text-overflow': 'ellipsis' }
+const ROW_CAP = 20
+
+// One line per cell (1-based) of each row that does not carry the TRUNCATION styles.
+function truncationBad(rows: Locator, cells: number[]): Promise<string[]> {
+  return rows.evaluateAll(
+    (els, args) =>
+      els.flatMap((row, i) =>
+        args.cells.flatMap((n) => {
+          const cs = getComputedStyle(row.children[n - 1])
+          return Object.entries(args.want)
+            .filter(([k, v]) => cs.getPropertyValue(k) !== v)
+            .map(([k, v]) => `row ${i} cell ${n}: ${k} is ${cs.getPropertyValue(k)}, want ${v}`)
+        }),
+      ),
+    { cells, want: TRUNCATION },
+  )
+}
+
+async function submissionsReads(page: Page, testInfo: TestInfo): Promise<void> {
+  const rows = jobRows(page)
+  await expect(rows.first(), 'the jobs have loaded').toBeVisible()
+  const live = (await liveStaffGet<{ jobs: LiveJob[] }>(STAFF_JOBS)).jobs
+
+  const first = (await rows.all()).slice(0, ROW_CAP)
+  for (const [i, row] of first.entries()) {
+    const id = await row.getAttribute('data-job-id')
+    const job = live.find((j) => j.id === id)
+    expect(job, `row ${i} is in the live read`).toBeDefined()
+    await expect(kid(row, 1), `row ${i} tenant`).toHaveText(job!.tenant_name)
+    await expect(kid(row, 2), `row ${i} invoice number`).toHaveText(job!.invoice_number)
+  }
+
+  expect(await truncationBad(rows, TRUNCATING_CELLS), 'every tenant and last-error cell truncates').toEqual([])
+  await attachShot(page, testInfo, 'submissions')
+}
+
+async function submissionsLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const filterBar = parent(mn.getByRole('button', { name: 'ALL', exact: true }))
+  const chips = filterBar.locator('button.ops-chip')
+  const card = mn.locator('.ops-screen-pad > div:last-child')
+  const head = kid(card, 1)
+  const top = await boxes(page, { titleBlock: parent(mn.getByRole('heading', { level: 1, name: 'Submissions ops' })), filterBar, select: filterBar.locator('select'), card, head })
+  const problems = [
+    ...below(top.titleBlock, top.filterBar, 'filter bar below the header row'),
+    ...below(top.filterBar, top.card, 'table card below the filter bar'),
+    ...within(top.filterBar, top.select, 'tenant select in the filter bar'),
+  ]
+
+  const chipRects = await rectsOf(page, chips, 'state chip')
+  problems.push(...sameTops(chipRects, 'state chips'), ...pairwiseApart([...chipRects, top.select], 'state chips and tenant select'))
+  for (const [i, c] of chipRects.entries()) problems.push(...within(top.filterBar, c, `chip ${i} in the filter bar`))
+
+  const headCells = await childRects(head)
+  const rows = (await jobRows(page).all()).slice(0, ROW_CAP)
+  expect(rows.length, 'job rows').toBeGreaterThan(0)
+  for (const [i, row] of rows.entries()) {
+    const box = await row.boundingBox()
+    if (!box) throw new Error(`job row ${i} has no box`)
+    const cells = await childRects(row)
+    problems.push(...within(top.card, box, `row ${i} in the card`), ...pairwiseApart(cells, `row ${i} cells`))
+    for (const [n, c] of cells.entries()) {
+      problems.push(...within(box, c, `row ${i} cell ${n + 1} in its row`))
+      if (!near(c.x, headCells[n].x, 1)) problems.push(`row ${i} cell ${n + 1}: left ${c.x} vs header cell ${headCells[n].x}`)
+    }
+  }
+
+  await noSidewaysScroll(page, 'Submissions')
+  return { problems, rects: { top, chipRects, headCells } }
+}
+
+// The house tenant is selected: View jobs opens Submissions with that tenant preset and no state filter.
+async function viewJobsLands(page: Page): Promise<void> {
+  const mn = mainOf(page)
+  const request = page.waitForRequest((r) => r.url().includes('/staff/jobs') && r.url().includes(`tenant=${HOUSE_TENANT_ID}`))
+  await mn.getByRole('button', { name: 'View jobs' }).click()
+  await request
+  await expect(mn.getByRole('heading', { level: 1, name: 'Submissions ops' })).toBeVisible()
+  await expect(mn.locator('select[aria-label="Tenant"]'), 'the tenant select shows the house tenant').toHaveValue(HOUSE_TENANT_ID)
+  await expect(mn.getByRole('button', { name: 'ALL', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(mn.getByText('Loading jobs…')).toHaveCount(0)
+  const live = (await liveStaffGet<{ jobs: LiveJob[] }>(`${STAFF_JOBS}?tenant=${HOUSE_TENANT_ID}`)).jobs
+  await expect(jobRows(page), 'the list is the live house-tenant read').toHaveCount(live.length)
+  if (live.length === 0) await expect(mn.getByText('No jobs in this state.')).toBeVisible()
+  else await expect(jobRows(page).filter({ hasNotText: HOUSE_NAME }), "only the house tenant's jobs are listed").toHaveCount(0)
+}
+
+const STAFF_HEALTH = '/api/submission/v1/staff/health'
+// internal/systemhealth JobStates
+const JOB_STATES = ['queued', 'submitting', 'pending', 'accepted', 'rejected', 'failed', 'dead_lettered', 'cancelled']
+
+type SeenService = { name: string; status: string; build?: string }
+type SeenHealth = {
+  fleet: { status: string; services: SeenService[] }
+  jobs: Record<string, number>
+  queue_depth: number
+  trend: { services_down: number | null; queue_depth: number; dead_lettered: number }[]
+}
+
+// Armed before the nav click: the screen's own read is the comparison, so a shard moving the queue cannot race it.
+const armHealth = (page: Page): Promise<SeenHealth> =>
+  page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname === STAFF_HEALTH, { timeout: 30_000 }).then((r) => r.json() as Promise<SeenHealth>)
+
+const shortOf = (build?: string): string => (build ? build.slice(0, 7) : '—')
+const nonNull = (trend: SeenHealth['trend'], key: 'services_down' | 'queue_depth' | 'dead_lettered'): number => trend.filter((p) => p[key] !== null).length
+
+async function healthReads(page: Page, testInfo: TestInfo, armed?: unknown): Promise<void> {
+  const mn = mainOf(page)
+  const seen = await (armed as Promise<SeenHealth>)
+  const tile = (key: string): Locator => mn.locator(`[data-tile="${key}"]`)
+  await expect(tile('fleet'), 'the health tiles have loaded').toBeVisible()
+
+  const known = seen.fleet.status !== 'unknown'
+  const up = seen.fleet.services.filter((s) => s.status === 'up').length
+  await expect(tile('fleet').locator('.money')).toHaveText(known ? `${up}/${seen.fleet.services.length}` : '—')
+  await expect(tile('queue').locator('.money')).toHaveText(String(seen.queue_depth))
+  await expect(tile('dead-lettered').locator('.money')).toHaveText(String(seen.jobs.dead_lettered ?? 0))
+  const fleetWord = { ok: 'HEALTHY', degraded: 'DEGRADED', unknown: 'UNKNOWN' }[seen.fleet.status as 'ok' | 'degraded' | 'unknown']
+  await expect(tile('fleet').getByText(fleetWord, { exact: true }), 'fleet status word').toHaveCount(1)
+  await expect(tile('dead-lettered').getByText((seen.jobs.dead_lettered ?? 0) > 0 ? 'ATTENTION' : 'CLEAR', { exact: true }), 'dead-lettered status word').toHaveCount(1)
+
+  if (known) {
+    expect(seen.fleet.services.length, 'the fleet read names services').toBeGreaterThan(0)
+    for (const s of seen.fleet.services) {
+      const row = mn.locator(`[data-service="${s.name}"]`)
+      await expect(kid(row, 3), `${s.name} build`).toHaveText(shortOf(s.build))
+      await expect(kid(row, 2), `${s.name} badge`).toHaveText(s.status === 'up' ? 'UP' : 'DOWN')
+    }
+  }
+  await expect(mn.locator('[data-service]'), 'one row per service').toHaveCount(known ? seen.fleet.services.length : 0)
+
+  const series: [string, 'services_down' | 'queue_depth' | 'dead_lettered'][] = [
+    ['fleet', 'services_down'],
+    ['queue', 'queue_depth'],
+    ['dead-lettered', 'dead_lettered'],
+  ]
+  for (const [key, field] of series) await expect(tile(key).locator('svg'), `${key} sparkline`).toHaveCount(nonNull(seen.trend, field) >= 2 ? 1 : 0)
+
+  // Stable parts only: a failed gateway probe empties a build, and a read can be unknown with no services.
+  const live = await liveStaffGet<SeenHealth>(STAFF_HEALTH)
+  if (known && live.fleet.status !== 'unknown') {
+    const names = (h: SeenHealth): string[] => h.fleet.services.map((s) => s.name).sort()
+    expect(names(live).length, 'live fleet names services').toBeGreaterThan(0)
+    expect(names(live), 'live fleet service names equal the screen read').toEqual(names(seen))
+    const liveBuilds = new Map(live.fleet.services.map((s) => [s.name, s]))
+    const both = seen.fleet.services.filter((s) => s.status === 'up' && s.build && liveBuilds.get(s.name)?.status === 'up' && liveBuilds.get(s.name)?.build)
+    expect(both.length, 'services up with a build in both reads').toBeGreaterThan(0)
+    for (const s of both) expect(liveBuilds.get(s.name)?.build, `${s.name} live build equals the screen read`).toBe(s.build)
+  }
+  expect(Object.keys(live.jobs).sort(), 'live job state keys').toEqual(Object.keys(seen.jobs).sort())
+  expect(Object.keys(seen.jobs).sort(), 'job state keys are the systemhealth.JobStates').toEqual([...JOB_STATES].sort())
+
+  await expect(mn.getByText(/APP latency|APP error rate|throughput|Recon backlog/i), 'no unmeasured tile').toHaveCount(0)
+  await expectStyles(parent(mn.locator('[data-service]').first().getByText(/^(UP|DOWN)$/)), 'service badge', { radius: '4px' })
+
+  // Core AC 2: the public fleet route still answers without a token and grants the console no CORS.
+  const fleet = await page.request.get(`${apiBase()}/healthz/fleet`, { headers: { Origin: new URL(page.url()).origin } })
+  expect([200, 503], '/healthz/fleet status').toContain(fleet.status())
+  expect(Array.isArray((await fleet.json()).services), '/healthz/fleet carries services').toBe(true)
+  expect(fleet.headers()['access-control-allow-origin'], '/healthz/fleet CORS header').toBeUndefined()
+
+  await attachShot(page, testInfo, 'health')
+}
+
+async function healthLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const tiles = mn.locator('.ops-health-grid > div')
+  const n = await tiles.count()
+  expect(n, 'health tiles').toBe(3)
+  const tileRects = await rectsOf(page, tiles, 'health tile')
+  const problems = [...pairwiseApart(tileRects, 'health tiles'), ...sameTops(tileRects, 'health tiles')]
+
+  for (let i = 0; i < n; i++) {
+    const t = tiles.nth(i)
+    const head = kid(t, 1)
+    const word = kid(head, 2)
+    const hasWord = (await word.count()) > 0
+    if (i !== 1) expect(hasWord, `tile ${i} has a status word`).toBe(true)
+    const svg = t.locator('svg')
+    const hasSvg = (await svg.count()) > 0
+    const r = await boxes(page, { tile: t, label: kid(head, 1), value: kid(t, 2) })
+    problems.push(...within(r.tile, r.label, `tile ${i} label`), ...within(r.tile, r.value, `tile ${i} value row`))
+    if (hasWord) {
+      const w = (await boxes(page, { word }))['word']
+      problems.push(...within(r.tile, w, `tile ${i} status word`), ...apart(r.label, w, `tile ${i} label / status word`))
+    }
+    if (hasSvg) {
+      const v = (await boxes(page, { svg }))['svg']
+      problems.push(...within(r.tile, v, `tile ${i} sparkline`), ...below(r.value, v, `tile ${i} sparkline under the value row`))
+    }
+  }
+
+  const grid = await boxes(page, { grid: mn.locator('.ops-health-grid'), card: mn.locator('.ops-health-grid + div') })
+  problems.push(...below(grid.grid, grid.card, 'Services card under the grid'))
+
+  const rows = mn.locator('[data-service]')
+  const nRows = Math.min(await rows.count(), 20)
+  if (nRows === 0) await expect(mn.getByText('The gateway roll-up is unavailable.'), 'no rows only when the roll-up is unavailable').toHaveCount(1)
+  for (let i = 0; i < nRows; i++) {
+    const row = rows.nth(i)
+    const p = await boxes(page, { row, name: kid(row, 1), badge: kid(row, 2), build: kid(row, 3) })
+    problems.push(...within(grid.card, p.row, `service row ${i} in the Services card`), ...within(p.row, p.name, `service ${i} name`), ...within(p.row, p.badge, `service ${i} badge`), ...within(p.row, p.build, `service ${i} build`), ...pairwiseApart([p.name, p.badge, p.build], `service ${i} name, badge, build`))
+  }
+
+  await noSidewaysScroll(page, 'System health')
+  return { problems, rects: { tiles: tileRects, grid } }
+}
+
+const STAFF_AUDIT = '/api/invoice/v1/staff/audit-log'
+const STAFF_CHANGES = '/api/invoice/v1/staff/staff-audit-log'
+const staffTenantPath = (id: string): string => `/api/invoice/v1/staff/tenants/${id}`
+// StaffRow, StaffChange: internal/audit/staff_read.go.
+type LiveAuditRow = { id: string; tenant_id: string; tenant_name: string | null; event: string }
+type LiveAuditPage = { events: LiveAuditRow[]; page: { has_more: boolean; next_cursor: string | null } }
+type LiveChange = { id: string; actor: string; event: string; tenant_id: string | null; tenant_name: string | null; payload: { reason?: string } | null }
+
+const auditRows = (page: Page): Locator => mainOf(page).locator('button[data-audit-id]')
+// Cells of an audit row: time (1), tenant (2), actor (3), event (4), chevron (5).
+const AUDIT_TRUNCATING_CELLS = [2, 3, 4]
+
+// What the two view chips share with the Submissions state chips (chipStyle in Submissions.tsx).
+const CHIP_PAINT = ['height', 'padding-left', 'padding-right', 'font-family', 'font-size', 'font-weight', 'letter-spacing', 'border-top-left-radius', 'border-top-width', 'border-top-color', 'background-color', 'color']
+
+async function chipPaints(page: Page): Promise<{ on: Record<string, string>; off: Record<string, string> }> {
+  const chips = mainOf(page).locator('button.ops-chip')
+  const on = chips.and(page.locator('[aria-pressed="true"]')).first()
+  const off = chips.and(page.locator('[aria-pressed="false"]')).first()
+  await expect(on).toBeVisible()
+  return { on: await styles(on, CHIP_PAINT), off: await styles(off, CHIP_PAINT) }
+}
+
+// Follows the cursor until every id is found: rows that land between the screen read and this one push them down the list.
+async function liveAuditRows(ids: string[]): Promise<Map<string, LiveAuditRow>> {
+  const found = new Map<string, LiveAuditRow>()
+  let cursor: string | null = null
+  for (let pages = 0; pages < 10 && found.size < ids.length; pages++) {
+    const q = new URLSearchParams({ limit: '100' })
+    if (cursor) q.set('cursor', cursor)
+    const res: LiveAuditPage = await liveStaffGet<LiveAuditPage>(`${STAFF_AUDIT}?${q}`)
+    for (const e of res.events) if (ids.includes(e.id)) found.set(e.id, e)
+    if (!res.page.has_more) break
+    cursor = res.page.next_cursor
+  }
+  return found
+}
+
+async function auditReads(page: Page, testInfo: TestInfo): Promise<void> {
+  const mn = mainOf(page)
+  const rows = auditRows(page)
+  await expect(rows.first(), 'the audit entries have loaded').toBeVisible()
+
+  // Matched by id, not count: the log grows with every spec.
+  const first = (await rows.all()).slice(0, ROW_CAP)
+  expect(first.length, 'audit rows on screen').toBeGreaterThan(0)
+  const ids = await Promise.all(first.map((row) => row.getAttribute('data-audit-id') as Promise<string>))
+  const live = await liveAuditRows(ids)
+  for (const [i, row] of first.entries()) {
+    const hit = live.get(ids[i])
+    expect(hit, `row ${i} is in the live read`).toBeDefined()
+    await expect(kid(row, 2), `row ${i} tenant`).toHaveText(hit!.tenant_name ?? hit!.tenant_id)
+    await expect(kid(row, 4), `row ${i} event`).toHaveText(hit!.event)
+  }
+  expect(await truncationBad(rows, AUDIT_TRUNCATING_CELLS), 'every tenant, actor and event cell truncates').toEqual([])
+
+  const form = mn.locator('form')
+  for (const label of ['From', 'To']) {
+    const input = form.getByLabel(label, { exact: true })
+    await expect(input, `${label} is a date input`).toHaveAttribute('type', 'date')
+  }
+  await expect(form.locator('input[type="date"]'), 'the filter form holds two date inputs').toHaveCount(2)
+
+  const audit = await chipPaints(page)
+  await openScreen(page, 'Submissions', 'Submissions ops')
+  const submissions = await chipPaints(page)
+  expect(audit.on, 'the pressed view chip is painted as the pressed Submissions chip').toEqual(submissions.on)
+  expect(audit.off, 'the idle view chip is painted as an idle Submissions chip').toEqual(submissions.off)
+  await openScreen(page, 'Audit', 'Audit & evidence explorer')
+  await expect(rows.first(), 'the audit entries reload').toBeVisible()
+  await attachShot(page, testInfo, 'audit')
+}
+
+async function auditLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  const titleBlock = parent(mn.getByRole('heading', { level: 1, name: 'Audit & evidence explorer' }))
+  const headerRow = parent(titleBlock)
+  const right = kid(headerRow, 2)
+  const chips = mn.locator('button.ops-chip')
+  const chipBar = parent(chips.first())
+  const form = mn.locator('form')
+  const card = parent(auditRows(page).first())
+  const top = await boxes(page, {
+    headerRow,
+    titleBlock,
+    right,
+    pill: kid(right, 1),
+    evidence: mn.getByRole('button', { name: 'Evidence bundle' }),
+    chipBar,
+    form,
+    card,
+    head: kid(card, 1),
+  })
+  const problems = [
+    ...apart(top.titleBlock, top.right, 'title block / right group'),
+    ...within(top.headerRow, top.titleBlock, 'title block in the header row'),
+    ...within(top.headerRow, top.pill, 'pill in the header row'),
+    ...within(top.headerRow, top.evidence, 'Evidence bundle in the header row'),
+    ...apart(top.pill, top.evidence, 'pill / Evidence bundle'),
+    ...sameCentreY(top.pill, top.evidence, 'pill / Evidence bundle'),
+    ...below(top.headerRow, top.chipBar, 'view chips below the header row'),
+    ...below(top.chipBar, top.form, 'filter form below the view chips'),
+    ...below(top.form, top.card, 'card below the filter form'),
+  ]
+
+  const chipRects = await rectsOf(page, chips, 'view chip')
+  problems.push(...sameTops(chipRects, 'view chips'), ...pairwiseApart(chipRects, 'view chips'))
+  for (const [i, c] of chipRects.entries()) problems.push(...below(top.headerRow, c, `view chip ${i}`))
+
+  const controls = await Promise.all([1, 2, 3, 4, 5].map(async (n) => (await boxes(page, { c: kid(form, n) })).c))
+  problems.push(...pairwiseApart(controls, 'filter controls'))
+  for (const [i, c] of controls.entries()) problems.push(...within(top.form, c, `filter control ${i + 1} in the form`))
+
+  const headCells = await childRects(kid(card, 1))
+  const rows = (await auditRows(page).all()).slice(0, ROW_CAP)
+  expect(rows.length, 'audit rows').toBeGreaterThan(0)
+  for (const [i, row] of rows.entries()) {
+    const box = await row.boundingBox()
+    if (!box) throw new Error(`audit row ${i} has no box`)
+    const cells = await childRects(row)
+    problems.push(...within(top.card, box, `row ${i} in the card`), ...pairwiseApart(cells, `row ${i} cells`))
+    for (const [n, c] of cells.entries()) {
+      problems.push(...within(box, c, `row ${i} cell ${n + 1} in its row`))
+      if (!near(c.x, headCells[n].x, 1)) problems.push(`row ${i} cell ${n + 1}: left ${c.x} vs header cell ${headCells[n].x}`)
+    }
+  }
+
+  const more = mn.getByRole('button', { name: 'Load more' })
+  if ((await more.count()) > 0) problems.push(...below(top.card, (await boxes(page, { more })).more, 'Load more below the card'))
+
+  await mn.getByRole('button', { name: 'STAFF CHANGES' }).click()
+  const changeRows = mn.locator('button[data-change-id]')
+  await expect(changeRows.first(), 'the staff changes have loaded').toBeVisible()
+  const staffHead = await childRects(kid(parent(changeRows.first()), 1))
+  for (const [i, row] of (await changeRows.all()).slice(0, ROW_CAP).entries()) {
+    const cells = await childRects(row)
+    problems.push(...pairwiseApart(cells, `staff row ${i} cells`))
+    for (const [n, c] of cells.entries()) {
+      if (!near(c.x, staffHead[n].x, 1)) problems.push(`staff row ${i} cell ${n + 1}: left ${c.x} vs header cell ${staffHead[n].x}`)
+    }
+  }
+  await mn.getByRole('button', { name: 'TENANT LOG' }).click()
+
+  await noSidewaysScroll(page, 'Audit')
+  return { problems, rects: { top, chipRects, controls, headCells, staffHead } }
+}
+
+const STAFF_AI_CALLS = '/api/invoice/v1/staff/ai-calls'
+const STAFF_AI_TOTALS = `${STAFF_AI_CALLS}/totals`
+type LiveAiCall = { id: string; tenant_name: string; client: string; purpose: string; outcome: string }
+type LiveAiTotal = { day: string; tenant_id: string; calls: number; cost: string; failed: number }
+type LiveAiPage<K extends string, R> = { page: { has_more: boolean; next_cursor: string | null } } & Record<K, R[]>
+
+const aiCallRows = (page: Page): Locator => mainOf(page).locator('div[data-call-id]')
+const aiTotalRows = (page: Page): Locator => mainOf(page).locator('div[data-total-key]')
+// Cells of a call row: time 1, tenant 2, client 3, purpose 4, model 5, in 6, out 7, cost 8, latency 9, try 10, outcome 11.
+const AI_TRUNCATING_CELLS = [2, 4, 5, 11]
+// Cells of a totals row: day 1, tenant 2, calls 3, tokens in 4, tokens out 5, cost 6, failed 7.
+// Every button the screen may hold: the three view chips, Load more and a failed read's Retry.
+const AI_BUTTONS = ['CALLS', 'FAILURES', 'DAILY TOTALS', 'Load more', 'Retry']
+
+// Follows the cursor until every key is found: rows that land between the screen read and this one push them down the list.
+async function liveAiRows<K extends string, R>(path: string, key: K, keyOf: (r: R) => string, keys: string[], extra = ''): Promise<Map<string, R>> {
+  const found = new Map<string, R>()
+  let cursor: string | null = null
+  for (let pages = 0; pages < 10 && found.size < keys.length; pages++) {
+    const q = new URLSearchParams(extra)
+    q.set('limit', '100')
+    if (cursor) q.set('cursor', cursor)
+    const res: LiveAiPage<K, R> = await liveStaffGet<LiveAiPage<K, R>>(`${path}?${q}`)
+    for (const r of res[key]) if (keys.includes(keyOf(r))) found.set(keyOf(r), r)
+    if (!res.page.has_more) break
+    cursor = res.page.next_cursor
+  }
+  return found
+}
+
+// The screen is read-only: no switch or input beyond the five filters, and no button outside the allowlist.
+async function aiControlsRead(page: Page, what: string): Promise<void> {
+  const mn = mainOf(page)
+  await expect(mn.locator('[role="switch"], input[type="checkbox"], input[type="range"], input[type="number"]'), `${what}: no switch, checkbox, range or number input`).toHaveCount(0)
+  // The screen's own content: the TopBar's Sandbox/Live switch is console-wide, not an AI control.
+  const names = (await mn.locator('.ops-screen-pad').getByRole('button').allTextContents()).map((t) => t.trim())
+  expect(names, `${what}: the view chips are in scope`).toEqual(expect.arrayContaining(['CALLS', 'FAILURES', 'DAILY TOTALS']))
+  expect(names.filter((n) => !AI_BUTTONS.includes(n)), `${what}: buttons outside the allowlist`).toEqual([])
+}
+
+async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
+  const mn = mainOf(page)
+  const calls = aiCallRows(page)
+  await expect(calls.first(), 'the AI calls have loaded').toBeVisible()
+
+  // Matched by id, not count: the table grows with every spec.
+  const first = (await calls.all()).slice(0, ROW_CAP)
+  const ids = await Promise.all(first.map((row) => row.getAttribute('data-call-id') as Promise<string>))
+  const live = await liveAiRows<'calls', LiveAiCall>(STAFF_AI_CALLS, 'calls', (c) => c.id, ids)
+  for (const [i, row] of first.entries()) {
+    const hit = live.get(ids[i])
+    expect(hit, `row ${i} is in the live read`).toBeDefined()
+    await expect(kid(row, 2), `row ${i} tenant`).toHaveText(hit!.tenant_name)
+    await expect(kid(row, 3), `row ${i} client`).toHaveText(hit!.client)
+    await expect(kid(row, 4), `row ${i} purpose`).toHaveText(hit!.purpose)
+    await expect(kid(row, 11), `row ${i} outcome`).toHaveText(hit!.outcome)
+  }
+  expect(await truncationBad(calls, AI_TRUNCATING_CELLS), 'every tenant, purpose, model and outcome cell truncates').toEqual([])
+  await aiControlsRead(page, 'CALLS')
+
+  await mn.getByRole('button', { name: 'FAILURES' }).click()
+  await expect(mn.getByRole('button', { name: 'FAILURES' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(calls.first(), 'the failed calls have loaded').toBeVisible()
+  const failedRows = (await calls.all()).slice(0, ROW_CAP)
+  const failedIds = await Promise.all(failedRows.map((row) => row.getAttribute('data-call-id') as Promise<string>))
+  const liveFailed = await liveAiRows<'calls', LiveAiCall>(STAFF_AI_CALLS, 'calls', (c) => c.id, failedIds, 'failed=true')
+  for (const [i, row] of failedRows.entries()) {
+    await expect(kid(row, 11), `failure ${i} outcome is not ok`).not.toHaveText('ok')
+    expect(liveFailed.has(failedIds[i]), `failure ${i} is in a live failed=true read`).toBe(true)
+  }
+  await aiControlsRead(page, 'FAILURES')
+
+  await mn.getByRole('button', { name: 'DAILY TOTALS' }).click()
+  const totals = aiTotalRows(page)
+  await expect(totals.first(), 'the daily totals have loaded').toBeVisible()
+  const firstTotals = (await totals.all()).slice(0, ROW_CAP)
+  const keys = await Promise.all(firstTotals.map((row) => row.getAttribute('data-total-key') as Promise<string>))
+  const liveTotals = await liveAiRows<'totals', LiveAiTotal>(STAFF_AI_TOTALS, 'totals', (t) => `${t.day}|${t.tenant_id}`, keys)
+  for (const [i, row] of firstTotals.entries()) {
+    const hit = liveTotals.get(keys[i])
+    expect(hit, `total ${i} is in the live read`).toBeDefined()
+    await expect(kid(row, 3), `total ${i} calls`).toHaveText(hit!.calls.toLocaleString('en-US'))
+    await expect(kid(row, 6), `total ${i} cost`).toHaveText(`$${hit!.cost}`)
+    await expect(kid(row, 7), `total ${i} failed`).toHaveText(hit!.failed.toLocaleString('en-US'))
+  }
+  await aiControlsRead(page, 'DAILY TOTALS')
+
+  await mn.getByRole('button', { name: 'CALLS' }).click()
+  await expect(calls.first()).toBeVisible()
+  const ai = await chipPaints(page)
+  await openScreen(page, 'Submissions', 'Submissions ops')
+  const submissions = await chipPaints(page)
+  expect(ai.on, 'the pressed view chip is painted as the pressed Submissions chip').toEqual(submissions.on)
+  expect(ai.off, 'the idle view chip is painted as an idle Submissions chip').toEqual(submissions.off)
+  await openScreen(page, 'AI usage', 'AI usage')
+  await mn.getByRole('button', { name: 'CALLS' }).click()
+  await expect(calls.first(), 'the AI calls reload').toBeVisible()
+  await attachShot(page, testInfo, 'ai-usage')
+}
+
+// Cells whose text must sit inside the cell: the header cells, and a row's cells at the fixed-width tracks.
+async function textOverflows(cells: Locator, only: number[] | undefined, what: string): Promise<string[]> {
+  const found = await cells.evaluateAll(
+    (els, keep) =>
+      els.flatMap((el, n) => {
+        if (keep && !keep.includes(n)) return []
+        const cs = getComputedStyle(el)
+        const box = el.getBoundingClientRect()
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        const t = range.getBoundingClientRect()
+        const inner = { left: box.left + parseFloat(cs.paddingLeft), right: box.right - parseFloat(cs.paddingRight) }
+        const out = el.scrollWidth > el.clientWidth + 1 || t.left < inner.left - 0.5 || t.right > inner.right + 0.5
+        return out ? [`${n + 1} "${el.textContent}": text ${t.left.toFixed(1)}..${t.right.toFixed(1)} vs cell ${inner.left.toFixed(1)}..${inner.right.toFixed(1)}`] : []
+      }),
+    only,
+  )
+  return found.map((f) => `${what}: cell ${f} overflows`)
+}
+
+// The header, chips, form and one card with its rows, in one settled read.
+async function aiCardRead(page: Page, rows: Locator, what: string, fixed: number[]): Promise<{ problems: string[]; rects: Record<string, unknown> }> {
+  const mn = mainOf(page)
+  const chips = mn.locator('button.ops-chip')
+  const form = mn.locator('form')
+  const card = parent(rows.first())
+  const top = await boxes(page, {
+    titleBlock: parent(mn.getByRole('heading', { level: 1, name: 'AI usage' })),
+    chipBar: parent(chips.first()),
+    form,
+    card,
+  })
+  const problems = [...below(top.titleBlock, top.chipBar, `${what}: chips below the header block`), ...below(top.chipBar, top.form, `${what}: form below the chips`), ...below(top.form, top.card, `${what}: card below the form`)]
+
+  const chipRects = await rectsOf(page, chips, 'view chip')
+  problems.push(...sameTops(chipRects, `${what}: view chips`), ...pairwiseApart(chipRects, `${what}: view chips`))
+
+  const controls = await Promise.all([1, 2, 3, 4, 5].map(async (n) => (await boxes(page, { c: kid(form, n) })).c))
+  problems.push(...pairwiseApart(controls, `${what}: filter controls`))
+  for (const [i, c] of controls.entries()) problems.push(...within(top.form, c, `${what}: filter control ${i + 1} in the form`))
+
+  const fit = await card.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+  if (fit.scrollWidth > fit.clientWidth + 1) problems.push(`${what}: the card scrolls sideways (${fit.scrollWidth} vs ${fit.clientWidth})`)
+
+  const headCells = await childRects(kid(card, 1))
+  const shown = (await rows.all()).slice(0, ROW_CAP)
+  for (const [i, row] of shown.entries()) {
+    const box = await row.boundingBox()
+    if (!box) throw new Error(`${what} row ${i} has no box`)
+    const cells = await childRects(row)
+    problems.push(...within(top.card, box, `${what}: row ${i} in the card`), ...pairwiseApart(cells, `${what}: row ${i} cells`))
+    for (const [n, c] of cells.entries()) {
+      problems.push(...within(box, c, `${what}: row ${i} cell ${n + 1} in its row`))
+      if (!near(c.x, headCells[n].x, 1)) problems.push(`${what}: row ${i} cell ${n + 1}: left ${c.x} vs header cell ${headCells[n].x}`)
+    }
+  }
+
+  const headSpans = kid(card, 1).locator('> *')
+  expect(await headSpans.count(), `${what}: header cells`).toBeGreaterThan(0)
+  expect(await rows.first().locator('> *').count(), `${what}: first row cells`).toBeGreaterThan(0)
+  problems.push(...(await textOverflows(headSpans, undefined, `${what} header`)), ...(await textOverflows(rows.first().locator('> *'), fixed, `${what} row 0`)))
+
+  const more = mn.getByRole('button', { name: 'Load more' })
+  if ((await more.count()) > 0) problems.push(...below(top.card, (await boxes(page, { more })).more, `${what}: Load more below the card`))
+  return { problems, rects: { top, chipRects, controls, headCells } }
+}
+
+async function aiUsageLayout(page: Page): Promise<Read> {
+  const mn = mainOf(page)
+  // A poll retry starts from whichever view the last read left.
+  await mn.getByRole('button', { name: 'CALLS' }).click()
+  await expect(aiCallRows(page).first()).toBeVisible()
+  const calls = await aiCardRead(page, aiCallRows(page), 'calls', [0, 2, 5, 6, 7, 8, 9])
+
+  await mn.getByRole('button', { name: 'DAILY TOTALS' }).click()
+  await expect(aiTotalRows(page).first()).toBeVisible()
+  const totals = await aiCardRead(page, aiTotalRows(page), 'totals', [0, 2, 3, 4, 5, 6])
+  await mn.getByRole('button', { name: 'CALLS' }).click()
+
+  await noSidewaysScroll(page, 'AI usage')
+  return { problems: [...calls.problems, ...totals.problems], rects: { calls: calls.rects, totals: totals.rects } }
+}
+
 const SCREENS: Screen[] = [
   {
     nav: 'Submissions',
     h1: 'Submissions ops',
-    rowUp: 2,
-    reads: async (page) => {
-      const mn = mainOf(page)
-      const stats = mn.locator('.ops-sub-stats > div')
-      await expect(stats, 'stat tiles').toHaveCount(4)
-      await everyStyles(stats, 4, 'stat tile', CARD)
-      await everyStyles(stats.locator('.money'), 4, 'stat figure', FIGURE('20px'))
-      const chips = mn.locator('button.ops-chip')
-      await expect(chips, 'filter chips').toHaveCount(8)
-      await everyStyles(chips, 8, 'chip', { radius: '4px' })
-      for (const [i, chip] of (await chips.all()).entries()) await legible(chip.locator('span'), chip, `chip ${i} count`, { opacityOne: true })
-      const row = mn.locator('.ops-row').first()
-      const badge = kid(kid(row, 4), 1)
-      await expectStyles(badge, 'state badge', { radius: '4px' })
-      await expectStyles(kid(badge, 1), 'state badge dot', { radius: '50%' })
-      await expectStyles(kid(parent(row), 1), 'table head row', { 'background-color': 'rgb(250, 248, 242)' })
-      await expectStyles(mn.getByRole('button', { name: 'Re-drive all' }), 'Re-drive all', { 'background-color': 'rgb(162, 50, 50)', color: 'rgb(255, 255, 255)', radius: '7px' })
-    },
-    layout: async (page) => {
-      const mn = mainOf(page)
-      const tiles = await rectsOf(page, mn.locator('.ops-sub-stats > div'), 'stat tile')
-      const chips = await rectsOf(page, mn.locator('button.ops-chip'), 'chip')
-      const { h1 } = await boxes(page, { h1: mn.getByRole('heading', { level: 1, name: 'Submissions ops' }) })
-      await noSidewaysScroll(page, 'Submissions')
-      return {
-        problems: [...pairwiseApart(tiles, 'stat tiles'), ...sameTops(tiles, 'stat tiles'), ...tiles.flatMap((t, i) => apart(t, h1, `stat tile ${i} / h1`)), ...pairwiseApart(chips, 'chips')],
-        rects: { tiles, chips, h1 },
-      }
-    },
+    rowUp: 1,
+    reads: submissionsReads,
+    layout: submissionsLayout,
   },
   {
     nav: 'Rules',
@@ -543,81 +1223,31 @@ const SCREENS: Screen[] = [
     nav: 'Audit',
     h1: 'Audit & evidence explorer',
     rowUp: 2,
-    reads: async (page, testInfo) => {
-      const mn = mainOf(page)
-      await expectStyles(parent(mn.getByText('APPEND-ONLY · IMMUTABLE')), 'APPEND-ONLY badge', { radius: '4px' })
-      await everyStyles(mn.locator('button.ops-chip'), 4, 'audit chip', { radius: '4px' })
-      const row = mn.locator('.ops-row').first()
-      await expectStyles(kid(row, 2), 'audit icon tile', { radius: '4px' })
-      await expectStyles(kid(kid(row, 5), 1), 'audit avatar', { radius: '50%' })
-      await attachShot(page, testInfo, 'audit')
-      const input = mn.getByLabel('Filter audit entries')
-      await expectFieldRing(page, input, 'audit')
-      await input.fill('zz-no-match')
-      const none = mn.getByText('No audit entries match this filter.')
-      await expect(none).toBeVisible()
-      await expectStyles(none, 'audit empty text', { color: await resolveColor(mn, '--fg-3') })
-    },
-    layout: async (page) => {
-      await noSidewaysScroll(page, 'Audit')
-      return { problems: [], rects: {} }
-    },
+    reads: auditReads,
+    layout: auditLayout,
   },
   {
     nav: 'Tenants',
-    h1: 'Tenants & entities',
+    h1: 'Tenants',
     rowUp: 1,
-    reads: async (page, testInfo) => {
-      const mn = mainOf(page)
-      const grid = mn.locator('.ops-tenants-grid')
-      const first = grid.locator('button.ops-nav').first()
-      const detail = grid.locator('xpath=./div[2]')
-      await expectStyles(kid(kid(first, 2), 1), 'tenant row name', { family: 'Manrope' })
-      await expectStyles(kid(first, 1), 'initials tile', { radius: '6px' })
-      await expectStyles(kid(first, 3), 'status dot', { radius: '50%' })
-      await expectStyles(kid(kid(detail, 1), 1), 'detail tile', { radius: '6px' })
-      await expectStyles(mn.locator('h2'), 'tenant h2', { family: 'Manrope', 'font-weight': '700', 'font-size': '19px' })
-      await expectStyles(mn.locator('.ops-tenant-kpis .money').first(), 'first KPI figure', { family: 'Manrope', 'font-weight': '700', 'font-size': '20px' })
-      const members = mn.locator('.ops-tenant-split > div').first().locator('xpath=./div[2]/div')
-      await everyStyles(members.locator('xpath=./span[3]'), 1, 'role tag', { radius: '4px' })
-      await everyStyles(members.locator('xpath=./span[1]'), 1, 'member avatar', { radius: '50%' })
-      await expectStyles(mn.getByRole('button', { name: 'View jobs' }), 'View jobs', { radius: '7px' })
-      await expectStyles(mn.getByRole('button', { name: 'View-as (read-only)' }), 'View-as', { radius: '7px', 'background-color': 'rgb(7, 60, 61)', color: 'rgb(255, 255, 255)' })
-      await attachShot(page, testInfo, 'tenants')
-      const input = mn.getByLabel('Search tenants')
-      await expectFieldRing(page, input, 'tenant search')
-      await input.fill('zz-no-match')
-      const none = mn.getByText('No tenant matches.')
-      await expect(none).toBeVisible()
-      await expectStyles(none, 'tenant empty text', { color: await resolveColor(mn, '--fg-3') })
-    },
-    layout: async (page) => {
-      const kids = await gridKids(page, '.ops-tenants-grid', 'tenants grid')
-      const kpis = await rectsOf(page, mainOf(page).locator('.ops-tenant-kpis > div'), 'KPI cell')
-      await noSidewaysScroll(page, 'Tenants')
-      return {
-        problems: [...apart(kids[0], kids[1], 'tenants grid columns'), ...sameTops(kids, 'tenants grid'), ...pairwiseApart(kpis, 'KPI cells')],
-        rects: { kids, kpis },
-      }
-    },
+    reads: tenantsReads,
+    layout: tenantsLayout,
+    after: viewJobsLands,
   },
   {
     nav: 'System health',
     h1: 'System health',
     rowUp: 2,
-    reads: async (page, testInfo) => {
-      const cards = mainOf(page).locator('.ops-health-grid > div')
-      await expect(cards, 'health cards').toHaveCount(6)
-      await everyStyles(cards, 6, 'health card', CARD)
-      await everyStyles(cards.locator('.money'), 6, 'health figure', FIGURE('30px'))
-      await everyStyles(cards.locator('xpath=./div[1]/span[2]/span[1]'), 6, 'health status dot', { radius: '50%' })
-      await attachShot(page, testInfo, 'health')
-    },
-    layout: async (page) => {
-      const cards = await rectsOf(page, mainOf(page).locator('.ops-health-grid > div'), 'health card')
-      await noSidewaysScroll(page, 'System health')
-      return { problems: [...pairwiseApart(cards, 'health cards'), ...sameTops(cards.slice(0, 3), 'first three health cards')], rects: { cards } }
-    },
+    arm: armHealth,
+    reads: healthReads,
+    layout: healthLayout,
+  },
+  {
+    nav: 'AI usage',
+    h1: 'AI usage',
+    rowUp: 1,
+    reads: aiUsageReads,
+    layout: aiUsageLayout,
   },
 ]
 
@@ -625,95 +1255,21 @@ for (const s of SCREENS) {
   test(`SUP-03 ${s.nav}: v2 header, eyebrow clearances and screen reads`, async ({ page }, testInfo) => {
     test.setTimeout(120_000)
     const errors = await startSupport(page)
+    const armed = s.arm?.(page)
+    armed?.catch(() => {}) // a timeout surfaces where `reads` awaits it, not as an unhandled rejection
     await openScreen(page, s.nav, s.h1)
     await settle(page, mainOf(page))
 
     await expectHeader(page, s.nav, s.h1, s.rowUp)
-    await s.reads(page, testInfo)
+    await s.reads(page, testInfo, armed)
 
     await atWidths(page, `SUP-03 ${s.nav} title block`, () => titleBlockRead(page, s.h1))
     await atWidths(page, `SUP-03 ${s.nav} layout`, () => s.layout(page))
+    await s.after?.(page)
 
     noErrors(errors, `SUP-03 ${s.nav}`)
   })
 }
-
-// Seeded mismatches (RECON_ROWS in the console's data.tsx).
-const RECON_ROW_COUNT = 4
-
-// Every Reconcile whole inside its cell and the card. Empty array = fine.
-// scrolled: below 1440 the card must scroll, and the buttons are read at the scroll end.
-async function reconProblems(card: Locator, reconcile: Locator, scrolled = false): Promise<string[]> {
-  const problems: string[] = []
-  const m = await card.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
-  if (scrolled) {
-    if (m.scrollWidth <= m.clientWidth) problems.push(`recon card does not scroll at ${card.page().viewportSize()!.width}`)
-  } else if (m.scrollWidth - m.clientWidth > 1) problems.push(`recon card overflows by ${m.scrollWidth - m.clientWidth}px`)
-  try {
-    if (scrolled) {
-      await card.evaluate((el) => {
-        el.scrollLeft = el.scrollWidth
-      })
-    }
-    const cardBox = await card.boundingBox()
-    const buttons = await reconcile.all()
-    if (!cardBox) return [...problems, 'recon card has no box']
-    if (buttons.length < RECON_ROW_COUNT) problems.push(`Reconcile buttons: ${buttons.length}, want ${RECON_ROW_COUNT}`)
-    const where = scrolled ? ' at the scroll end' : ''
-    for (const [i, btn] of buttons.entries()) {
-      const box = await btn.boundingBox()
-      const cell = await btn.evaluate((el) => {
-        const r = el.parentElement!.getBoundingClientRect()
-        return { x: r.x, y: r.y, width: r.width, height: r.height }
-      })
-      if (!box) problems.push(`Reconcile ${i} has no box`)
-      else problems.push(...within(cell, box, `Reconcile ${i} in its cell${where}`), ...within(cardBox, box, `Reconcile ${i} in the card${where}`))
-    }
-  } finally {
-    if (scrolled) {
-      await card.evaluate((el) => {
-        el.scrollLeft = 0
-      })
-    }
-  }
-  return problems
-}
-
-test('SUP-03 Reconciliation: tables, meter and whole Reconcile buttons at 1440', async ({ page }, testInfo) => {
-  test.setTimeout(120_000)
-  const errors = await startSupport(page)
-  const mn = mainOf(page)
-  await mn.getByRole('button', { name: 'Reconciliation', exact: true }).click()
-  const title = mn.getByText('State mismatches · internal vs APP')
-  await expect(title).toBeVisible()
-  await settle(page, mn)
-
-  await expectStyles(title, 'recon title', { family: 'Manrope', 'font-weight': '700' })
-  const reconcile = mn.getByRole('button', { name: 'Reconcile', exact: true })
-  await everyStyles(reconcile, 4, 'Reconcile', { radius: '7px', 'border-top-color': 'rgb(170, 196, 189)' })
-  await expectStyles(mn.locator('.money').filter({ hasText: /^82$/ }), 'rate figure', { family: 'Manrope', 'font-weight': '700', 'font-size': '30px' })
-  const track = mn.locator('.ops-recon-grid div[style*="height: 6px"]')
-  await expectStyles(track, 'meter track', { radius: '2px' })
-  await expectStyles(kid(track, 1), 'meter fill', { radius: '2px' })
-  await expectStyles(mn.getByRole('button', { name: 'Run sweep now' }), 'Run sweep now', { radius: '7px', 'border-top-color': 'rgb(170, 196, 189)' })
-
-  // First paint at 1440: the card needs no scroll and each Reconcile sits whole in its cell and the card.
-  const card = mn.locator('.ops-recon-grid > div').first()
-  const first = await reconProblems(card, reconcile)
-  expect(first, 'recon card and Reconcile buttons at first paint').toEqual([])
-
-  await attachShot(page, testInfo, 'submissions-recon')
-
-  await atWidths(page, 'SUP-03 Reconciliation layout', async () => {
-    const kids = await gridKids(page, '.ops-recon-grid', 'recon grid')
-    await noSidewaysScroll(page, 'Reconciliation')
-    const width = page.viewportSize()!.width
-    const recon = width >= 1440 ? await reconProblems(card, reconcile) : await reconProblems(card, reconcile, true)
-    return { problems: [...apart(kids[0], kids[1], 'recon grid columns'), ...sameTops(kids, 'recon grid'), ...recon], rects: { kids } }
-  })
-
-  noErrors(errors, 'SUP-03 Reconciliation')
-})
 
 // The drawer, its scrim and its edge: shared by the job, rule and audit drawers.
 async function expectDrawer(page: Page, what: string): Promise<{ drawer: Locator; scrim: Locator }> {
@@ -742,52 +1298,7 @@ async function expectPanel(page: Page, dialog: Locator, what: string): Promise<v
   await expectStyles(dialog.locator('h3'), `${what} h3`, { family: 'Manrope', 'font-weight': '700', 'font-size': '17px' })
 }
 
-test('SUP-04 job drawer: chrome, scrim dismissal and the dead-letter state', async ({ page }, testInfo) => {
-  test.setTimeout(120_000)
-  const errors = await startSupport(page)
-  const mn = mainOf(page)
-
-  await mn.locator('.ops-row').first().click()
-  const { drawer, scrim } = await expectDrawer(page, 'job drawer')
-  await expectStyles(drawer.getByRole('button', { name: 'Close' }), 'close button', { radius: '7px' })
-  await expectStyles(drawer.getByRole('button', { name: 'Cancel', exact: true }), 'drawer Cancel', { radius: '7px', 'font-weight': '600' })
-  const badge = parent(drawer.locator('span.mono').filter({ hasText: /^ACCEPTED$/ }))
-  await expectStyles(badge, 'drawer state badge', { radius: '4px' })
-  await expectStyles(kid(badge, 1), 'drawer state dot', { radius: '50%' })
-  await everyStyles(drawer.locator('span[style*="width: 11px"]'), 4, 'timeline dot', { radius: '50%' })
-  await expectStyles(drawer.locator('div[style*="grid-template-columns: 1fr 1fr"]').first(), 'meta grid', { radius: '6px' })
-  await expectStyles(drawer.locator('pre.ops-json').first(), 'json block', { radius: '6px', 'background-color': 'rgb(8, 47, 49)' })
-  await attachShot(page, testInfo, 'job-drawer')
-
-  await scrim.click({ position: { x: 40, y: 300 } })
-  await expect(drawer, 'a scrim click closes the drawer').toBeHidden()
-
-  await mn.locator('.ops-row').filter({ hasText: 'DEAD-LETTER' }).first().click()
-  await expect(drawer).toBeVisible()
-  await expect(drawer.locator('span.mono').filter({ hasText: /^DEAD-LETTER$/ }).first(), 'dead-letter badge in the drawer').toBeVisible()
-  await settle(page, drawer)
-  await attachShot(page, testInfo, 'job-drawer-deadletter')
-
-  noErrors(errors, 'SUP-04 job drawer')
-})
-
-test('SUP-04 red toast: Cancel in the job drawer', async ({ page }) => {
-  test.setTimeout(120_000)
-  const errors = await startSupport(page)
-
-  await mainOf(page).locator('.ops-row').first().click()
-  await page.locator('.ops-drawer').getByRole('button', { name: 'Cancel', exact: true }).click()
-  const toast = page.getByRole('status').filter({ hasText: 'Cancelled · ' })
-  await expect(toast).toBeVisible()
-  // The toast auto-dismisses: one evaluate reads both values.
-  const t = await toast.evaluate((el) => ({ cls: el.className, icon: getComputedStyle(el.firstElementChild!).color }))
-  expect(t.cls, 'red toast class').toMatch(/\basc-dark\b/)
-  expect(sameColor(t.icon, 'rgb(244, 176, 176)'), `red toast icon ${t.icon}`).toBe(true)
-
-  noErrors(errors, 'SUP-04 red toast')
-})
-
-test('SUP-04 rule and audit drawers', async ({ page }, testInfo) => {
+test('SUP-04 rule drawer', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = await startSupport(page)
   const mn = mainOf(page)
@@ -799,15 +1310,7 @@ test('SUP-04 rule and audit drawers', async ({ page }, testInfo) => {
   await expectStyles(drawer.getByRole('button', { name: 'Kill-switch' }), 'Kill-switch', { radius: '7px' })
   await attachShot(page, testInfo, 'rule-drawer')
 
-  await drawer.getByRole('button', { name: 'Close' }).click()
-  await expect(drawer).toBeHidden()
-  await openScreen(page, 'Audit', 'Audit & evidence explorer')
-  await mn.locator('.ops-row').first().click()
-  const audit = await expectDrawer(page, 'audit drawer')
-  await expectStyles(kid(audit.drawer, 2), 'audit drawer banner', { 'background-color': 'rgb(239, 246, 244)' })
-  await attachShot(page, testInfo, 'audit-drawer')
-
-  noErrors(errors, 'SUP-04 rule and audit drawers')
+  noErrors(errors, 'SUP-04 rule drawer')
 })
 
 test('SUP-04 kill confirm', async ({ page }, testInfo) => {
@@ -817,7 +1320,7 @@ test('SUP-04 kill confirm', async ({ page }, testInfo) => {
   const api = (await signInSession(account.email, account.password)).access_token
   if (!(await probeEnabled(api))) await rawFetch(`${STAFF_RULES}/${PROBE_RULE}`, { method: 'PATCH', headers: { Authorization: `Bearer ${api}` }, body: { enabled: true, reason: 'e2e restore' } })
 
-  await openScreen(page, 'Rules', 'Rules admin')
+  await reloadRules(page)
   const probeSwitch = mainOf(page).locator('.ops-row').filter({ hasText: PROBE_RULE }).getByRole('switch')
   await expect(probeSwitch).toBeVisible()
   await expect(probeSwitch).toHaveAttribute('aria-checked', 'true')
@@ -961,7 +1464,7 @@ test('SUP-04 publish modal', async ({ page }, testInfo) => {
   const errors = await startSupport(page)
   const draft = await ensureDraft(await staffToken())
 
-  await openScreen(page, 'Rules', 'Rules admin')
+  await reloadRules(page)
   await mainOf(page).getByRole('button', { name: `Publish draft v${draft}` }).click()
   const dialog = page.getByRole('dialog').filter({ hasText: 'Publish draft → v' })
   await expectPanel(page, dialog, 'publish modal')
@@ -972,59 +1475,6 @@ test('SUP-04 publish modal', async ({ page }, testInfo) => {
   await expect(dialog, 'Cancel closes the modal').toBeHidden()
 
   noErrors(errors, 'SUP-04 publish modal')
-})
-
-test('SUP-04 re-drive toast, empty jobs and a clear health card', async ({ page }, testInfo) => {
-  test.setTimeout(120_000)
-  const errors = await startSupport(page)
-  const mn = mainOf(page)
-
-  await mn.getByRole('button', { name: 'Re-drive all' }).click()
-  const toast = page.getByRole('status').filter({ hasText: 'Re-drive queued' })
-  await expect(toast).toBeVisible()
-  // The toast auto-dismisses: one evaluate reads every value before the shot.
-  const t = await toast.evaluate((el) => {
-    const cs = getComputedStyle(el)
-    const icon = getComputedStyle(el.firstElementChild!)
-    const tag = getComputedStyle(el.lastElementChild!)
-    return {
-      cls: el.className,
-      background: cs.backgroundColor,
-      color: cs.color,
-      radii: ['border-top-left-radius', 'border-top-right-radius', 'border-bottom-right-radius', 'border-bottom-left-radius'].map((p) => cs.getPropertyValue(p)),
-      shadow: cs.boxShadow,
-      icon: icon.color,
-      tag: tag.color,
-      tagBorder: tag.borderLeftColor,
-    }
-  })
-  expect(t.cls, 'toast class').toMatch(/\basc-dark\b/)
-  for (const [what, got, want] of [
-    ['background', t.background, 'rgb(8, 47, 49)'],
-    ['colour', t.color, 'rgb(247, 246, 237)'],
-    ['icon', t.icon, 'rgb(159, 200, 191)'],
-    ['tag', t.tag, 'rgb(187, 205, 199)'],
-    ['tag left border', t.tagBorder, 'rgb(22, 71, 66)'],
-  ] as const) {
-    expect(sameColor(got, want), `toast ${what} is ${got}, want ${want}`).toBe(true)
-  }
-  expect(t.radii, 'toast corners').toEqual(['6px', '6px', '6px', '6px'])
-  expect(t.shadow, 'toast shadow').toBe(SHADOW_CARD)
-  await settle(page, toast)
-  await attachShot(page, testInfo, 'redrive-toast')
-
-  await mn.locator('button.ops-chip').filter({ hasText: 'DEAD-LETTER' }).click()
-  const none = mn.getByText('No jobs in this state.')
-  await expect(none).toBeVisible()
-  await expectStyles(none, 'empty jobs text', { color: await resolveColor(mn, '--fg-3') })
-  await attachShot(page, testInfo, 'jobs-empty')
-
-  await openScreen(page, 'System health', 'System health')
-  await expect(mn.locator('.ops-health-grid > div').filter({ hasText: 'Dead-letter' }), 'the Dead-letter card is clear').toContainText('CLEAR')
-  await settle(page, mn)
-  await attachShot(page, testInfo, 'health-clear')
-
-  noErrors(errors, 'SUP-04 re-drive')
 })
 
 const RAIL_ROWS = 'button[aria-pressed]'
@@ -1197,7 +1647,7 @@ const DRAFT_ROW = `.ops-rules-grid ${RAIL_ROWS}`
 
 async function openDraftView(page: Page, token: string, extra?: ProbeRule): Promise<number> {
   const draft = await ensureDraft(token, extra)
-  await openScreen(page, 'Rules', 'Rules admin')
+  await reloadRules(page)
   await mainOf(page).locator(DRAFT_ROW).filter({ hasText: /DRAFT/ }).click()
   await expect(mainOf(page).getByRole('button', { name: 'Add rule' }), 'the draft is selected').toBeVisible()
   return draft
@@ -1383,7 +1833,6 @@ const STAFF_SYNCS = '/api/validation/v1/staff/code-list-syncs'
 
 test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
   test.setTimeout(120_000)
-  const errors = await startSupport(page)
   const readLists = async () => {
     const res = await rawFetch(STAFF_SYNCS, { headers: { Authorization: `Bearer ${await staffToken()}` } })
     return (res.body as { lists: { list: string }[] }).lists
@@ -1393,6 +1842,7 @@ test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
     await page.waitForTimeout(5_000)
     lists = await readLists()
   }
+  const errors = await startSupport(page)
   const mn = mainOf(page)
   await openScreen(page, 'Rules', 'Rules admin')
   await expect(mn.locator('[role="switch"]').first()).toBeVisible()
@@ -1454,4 +1904,294 @@ test('SUP-08 code-list panel and drawer layout', async ({ page }) => {
   })
 
   noErrors(errors, 'SUP-08 code-list panel and drawer layout')
+})
+
+// SUP-07: acts on seeded tenant-2222 dead-letter rows (D22) and cancels back to a terminal state in the same spec.
+const SEEDED_DEAD = ['DEMO-2026-7004', 'DEMO-2026-7006']
+// The reason of this run's tenant-2222 cancel, for the Audit test below; unset after a worker restart.
+const cancel2222: { reason?: string } = {}
+// audit.SupportActor, internal/audit/audit.go.
+const SUPPORT_ACTOR = 'ASComply support'
+
+async function cancelWhenQueued(token: string, id: string, reason: string): Promise<{ status: number; body: unknown }> {
+  let res: { status: number; body: unknown } = { status: 0, body: undefined }
+  await expect
+    .poll(
+      async () => {
+        res = await rawFetch(`${STAFF_JOBS}/${id}/cancel`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: { reason } })
+        return res.status
+      },
+      { message: 'cancel answers something other than 409', timeout: 60_000, intervals: [500, 1000, 2000] },
+    )
+    .not.toBe(409)
+  return res
+}
+
+// The tenant's member-visible audit row that carries `reason`.
+async function auditRowFor(event: string, reason: string): Promise<AuditEvent> {
+  const token = await login(PERSONAS.B)
+  let row: AuditEvent | undefined
+  await expect
+    .poll(
+      async () => {
+        row = (await getAuditLog(token, { event: [event] })).events.find((e) => (e.payload as { reason?: string } | null)?.reason === reason)
+        return row !== undefined
+      },
+      { message: `the tenant audit log holds ${event} with the reason`, timeout: 15_000 },
+    )
+    .toBe(true)
+  return row!
+}
+
+test('SUP-07 Submissions: re-drive a seeded dead-letter job, then cancel it', async ({ page }, testInfo) => {
+  test.setTimeout(180_000)
+  const errors = await startSupport(page)
+  const mn = mainOf(page)
+  const api = await staffToken()
+  const redriveReason = `e2e re-drive ${randomUUID()}`
+  const cancelReason = `e2e cancel ${randomUUID()}`
+  let jobId: string | null = null
+  let cancelled = false
+  let redriveSent = false
+
+  try {
+    await openScreen(page, 'Submissions', 'Submissions ops')
+    await mn.getByRole('button', { name: 'DEAD-LETTER', exact: true }).click()
+    const listed = page.waitForResponse((r) => r.url().includes('/staff/jobs?') && r.url().includes('state=dead_lettered') && r.url().includes(`tenant=${DEMO_2222_ID}`))
+    await mn.locator('select[aria-label="Tenant"]').selectOption(DEMO_2222_ID)
+    await listed
+    await expect(mn.getByRole('button', { name: 'DEAD-LETTER', exact: true })).toHaveAttribute('aria-pressed', 'true')
+
+    const seededRow = (n: string): Locator => jobRows(page).filter({ hasText: n })
+    await expect.poll(async () => (await seededRow(SEEDED_DEAD[0]).count()) + (await seededRow(SEEDED_DEAD[1]).count()), { message: 'a seeded dead-letter job is listed' }).toBeGreaterThan(0)
+    const number = (await seededRow(SEEDED_DEAD[0]).count()) > 0 ? SEEDED_DEAD[0] : SEEDED_DEAD[1]
+    const row = seededRow(number)
+    jobId = await row.getAttribute('data-job-id')
+    expect(jobId, 'the row names its job').toBeTruthy()
+    await row.click()
+
+    const { drawer } = await expectDrawer(page, 'job drawer')
+    const redrive = drawer.getByRole('button', { name: 'Re-drive', exact: true })
+    await expect(redrive).toBeVisible()
+    await atWidths(page, 'SUP-07 job drawer layout', async () => {
+      const meta = kid(kid(drawer, 2), 1)
+      const footer = kid(drawer, 3)
+      const r = await boxes(page, { drawer, meta, footer, redrive })
+      const cells = await childRects(meta)
+      return {
+        problems: [...within(r.footer, r.redrive, 'Re-drive in the drawer footer'), ...within(r.drawer, r.footer, 'footer in the drawer'), ...pairwiseApart(cells, 'meta cell'), ...cells.flatMap((c, i) => within(r.meta, c, `meta cell ${i} in the grid`))],
+        rects: r,
+      }
+    })
+    await attachShot(page, testInfo, 'job-drawer')
+
+    await redrive.click()
+    const dialog = page.getByRole('dialog').filter({ hasText: `Re-drive ${number}?` })
+    await expectPanel(page, dialog, 're-drive confirm')
+    const confirm = dialog.getByRole('button', { name: 'Re-drive job' })
+    await expect(confirm, 'Re-drive job waits for a reason').toBeDisabled()
+    const reasonBox = dialog.getByRole('textbox', { name: 'Reason' })
+    await atWidths(page, 'SUP-07 re-drive confirm layout', async () => {
+      const vp = page.viewportSize()!
+      const r = await boxes(page, { dialog, footer: kid(dialog, 2), reason: reasonBox, back: dialog.getByRole('button', { name: 'Back' }), confirm })
+      return {
+        problems: [
+          ...within({ x: 0, y: 0, width: vp.width, height: vp.height }, r.dialog, 'dialog in the viewport'),
+          ...within(r.dialog, r.reason, 'Reason field in the dialog'),
+          ...within(r.footer, r.back, 'Back in the footer'),
+          ...within(r.footer, r.confirm, 'Re-drive job in the footer'),
+          ...apart(r.back, r.confirm, 'Back / Re-drive job'),
+          ...apart(r.reason, r.footer, 'Reason / footer'),
+        ],
+        rects: r,
+      }
+    })
+
+    await reasonBox.fill(redriveReason)
+    redriveSent = true
+    await confirm.click()
+    await expect(page.getByRole('status').filter({ hasText: 'Job re-driven' }), 'the re-drive toast').toBeVisible()
+
+    await expect
+      .poll(async () => (await liveStaffGet<{ job: { state: string } }>(`${STAFF_JOBS}/${jobId}`)).job.state, { message: 'a fresh staff read no longer shows dead_lettered' })
+      .not.toBe('dead_lettered')
+
+    const redriven = await auditRowFor('submission.job.redriven', redriveReason)
+    expect(redriven.actor, 'the customer sees the support actor').toBe(SUPPORT_ACTOR)
+
+    const res = await cancelWhenQueued(api, jobId!, cancelReason)
+    expect(res.status, `cancel answered ${JSON.stringify(res.body)}`).toBe(200)
+    cancelled = true
+    cancel2222.reason = cancelReason
+    const done = (res.body as { job: { state: string; invoice_status: string } }).job
+    expect(done.state).toBe('cancelled')
+    expect(done.invoice_status).toBe('failed')
+    const fresh = (await liveStaffGet<{ job: { state: string; invoice_status: string } }>(`${STAFF_JOBS}/${jobId}`)).job
+    expect([fresh.state, fresh.invoice_status], 'a fresh read agrees').toEqual(['cancelled', 'failed'])
+
+    const cancelRow = await auditRowFor('submission.job.cancelled', cancelReason)
+    expect(cancelRow.actor, 'the customer sees the support actor').toBe(SUPPORT_ACTOR)
+  } finally {
+    // Leave no `queued` row for later serial-lane specs; before the re-drive a cancel would 409 for the whole window.
+    if (jobId && redriveSent && !cancelled) await cancelWhenQueued(api, jobId, cancelReason).catch(() => undefined)
+  }
+
+  noErrors(errors, 'SUP-07 Submissions')
+})
+
+const metaValue = (drawer: Locator, label: string): Locator => drawer.locator('div.label').filter({ hasText: new RegExp(`^${label}$`) }).locator('xpath=following-sibling::div[1]')
+const viewport = (page: Page): Rect => ({ x: 0, y: 0, ...page.viewportSize()! })
+
+// Honeywell Group, the one seeded tenant-2222 company with invoices (db/seed.dev.sql); a spec-made company would sort anywhere.
+const SEED_2222_TIN = '20665510-0001'
+
+// Mirrors dayStart and dayEnd in frontend/support-console/src/auditApi.ts.
+const BUNDLE_FROM = '2020-01-01'
+const BUNDLE_TO = '2035-12-31'
+
+type LivePreview = { entity: { id: string; name: string; tin: string | null }; filename: string; counts: Record<'invoices' | 'line_items' | 'status_transitions' | 'submissions' | 'exchange_attempts' | 'body_files', number> }
+const PREVIEW_CELLS: [string, keyof LivePreview['counts']][] = [
+  ['Invoices', 'invoices'],
+  ['Line items', 'line_items'],
+  ['Status changes', 'status_transitions'],
+  ['Submissions', 'submissions'],
+  ['Exchange attempts', 'exchange_attempts'],
+  ['Body files', 'body_files'],
+]
+
+test('SUP-09 Audit: entry drawer, staff changes, the tenant link and an evidence download', async ({ page }, testInfo) => {
+  test.setTimeout(240_000)
+  const errors = await startSupport(page)
+  const mn = mainOf(page)
+
+  await openScreen(page, 'Audit', 'Audit & evidence explorer')
+  const rows = auditRows(page)
+  await expect(rows.first(), 'the audit entries have loaded').toBeVisible()
+
+  // Entry drawer: the clicked row's own entry.
+  const row = rows.first()
+  const rowEvent = (await kid(row, 4).textContent()) ?? ''
+  const rowTenant = (await kid(row, 2).textContent()) ?? ''
+  await row.click()
+  let { drawer } = await expectDrawer(page, 'entry drawer')
+  await expect(drawer, 'the drawer names the row event').toContainText(rowEvent)
+  await expect(metaValue(drawer, 'Tenant'), 'the drawer tenant is the row tenant').toHaveText(rowTenant)
+  await atWidths(page, 'SUP-09 entry drawer layout', async () => {
+    const body = kid(drawer, 2)
+    const r = await boxes(page, { drawer, meta: kid(body, 1), pre: body.locator('pre') })
+    const cells = await childRects(kid(body, 1))
+    return {
+      problems: [
+        ...within(viewport(page), r.drawer, 'drawer in the viewport'),
+        ...pairwiseApart(cells, 'meta cell'),
+        ...cells.flatMap((c, i) => within(r.meta, c, `meta cell ${i} in the grid`)),
+        ...withinX(r.drawer, r.pre, 'payload in the drawer'),
+      ],
+      rects: r,
+    }
+  })
+  await attachShot(page, testInfo, 'entry-drawer')
+  await drawer.getByRole('button', { name: 'Close' }).click()
+  await expect(drawer, 'Close closes the entry drawer').toBeHidden()
+
+  // Staff changes: the tenant-2222 cancel of the Submissions test.
+  const changes = (await liveStaffGet<{ changes: LiveChange[] }>(STAFF_CHANGES)).changes
+  const change = changes.find((c) => c.event === 'submission.job.cancelled' && c.tenant_id === DEMO_2222_ID && (!cancel2222.reason || c.payload?.reason === cancel2222.reason))
+  expect(change, 'the staff change log holds the tenant-2222 cancel').toBeDefined()
+  await mn.getByRole('button', { name: 'STAFF CHANGES' }).click()
+  const changeRow = mn.locator(`button[data-change-id="${change!.id}"]`)
+  await expect(changeRow, 'the staff changes view lists the cancel').toBeVisible()
+  await expect(kid(changeRow, 2), 'staff member').toHaveText(change!.actor)
+  await expect(kid(changeRow, 3), 'event').toHaveText('submission.job.cancelled')
+  await expect(kid(changeRow, 4), 'tenant').toHaveText(change!.tenant_name ?? DEMO_2222_ID)
+  await changeRow.click()
+  ;({ drawer } = await expectDrawer(page, 'staff change drawer'))
+  const openLog = drawer.getByRole('button', { name: 'Open in tenant log' })
+  await atWidths(page, 'SUP-09 staff change drawer layout', async () => {
+    const body = kid(drawer, 2)
+    const r = await boxes(page, { drawer, meta: kid(body, 1), pre: body.locator('pre'), footer: kid(drawer, 3), openLog })
+    const cells = await childRects(kid(body, 1))
+    return {
+      problems: [
+        ...within(viewport(page), r.drawer, 'drawer in the viewport'),
+        ...pairwiseApart(cells, 'meta cell'),
+        ...cells.flatMap((c, i) => within(r.meta, c, `meta cell ${i} in the grid`)),
+        ...withinX(r.drawer, r.pre, 'payload in the drawer'),
+        ...within(r.drawer, r.footer, 'footer in the drawer'),
+        ...within(r.footer, r.openLog, 'Open in tenant log in the footer'),
+      ],
+      rects: r,
+    }
+  })
+
+  // The tenant link lands on the tenant's own row, written by support.
+  await openLog.click()
+  ;({ drawer } = await expectDrawer(page, 'linked entry drawer'))
+  await expect(drawer, 'the linked entry is the cancel').toContainText('submission.job.cancelled')
+  await expect(metaValue(drawer, 'Actor'), 'the customer sees the support actor').toHaveText(SUPPORT_ACTOR)
+  if (cancel2222.reason) await expect(drawer.locator('pre'), 'the linked entry carries this run reason').toContainText(cancel2222.reason)
+  await expect(mn.locator('select[aria-label="Tenant"]'), 'the link filters to tenant 2222').toHaveValue(DEMO_2222_ID)
+  await drawer.getByRole('button', { name: 'Close' }).click()
+  await expect(drawer).toBeHidden()
+
+  // Evidence bundle: tenant 2222, its seeded company.
+  await mn.getByRole('button', { name: 'Evidence bundle' }).click()
+  ;({ drawer } = await expectDrawer(page, 'evidence drawer'))
+  await drawer.getByLabel('Tenant', { exact: true }).selectOption(DEMO_2222_ID)
+  const entities = (await liveStaffGet<{ entities: { id: string; name: string; tin: string | null }[] }>(`${staffTenantPath(DEMO_2222_ID)}/entities`)).entities
+  expect(entities.length, 'tenant 2222 has a company').toBeGreaterThan(0)
+  const company = entities.find((e) => e.tin === SEED_2222_TIN)
+  expect(company, `tenant 2222 holds the seeded company ${SEED_2222_TIN}`).toBeDefined()
+  await drawer.getByLabel('Company', { exact: true }).selectOption(company!.id)
+  await drawer.getByLabel('From', { exact: true }).fill(BUNDLE_FROM)
+  await drawer.getByLabel('To', { exact: true }).fill(BUNDLE_TO)
+
+  const query = new URLSearchParams({ entity_id: company!.id, from: `${BUNDLE_FROM}T00:00:00.000Z`, to: `${BUNDLE_TO}T23:59:59.999Z` })
+  const live = await liveStaffGet<LivePreview>(`${staffTenantPath(DEMO_2222_ID)}/evidence-bundle/preview?${query}`)
+  expect(live.counts.invoices, `the seeded tenant-2222 company (${company!.name}) holds invoices in the period`).toBeGreaterThan(0)
+  await expect(metaValue(drawer, 'TIN'), 'TIN cell').toHaveText(live.entity.tin ?? '—')
+  for (const [label, key] of PREVIEW_CELLS) await expect(metaValue(drawer, label), `${label} cell`).toHaveText(String(live.counts[key]))
+
+  const download = drawer.getByRole('button', { name: 'Download bundle' })
+  await expect(download).toBeEnabled()
+  await atWidths(page, 'SUP-09 evidence drawer layout', async () => {
+    const body = kid(drawer, 2)
+    const r = await boxes(page, {
+      drawer,
+      tenant: drawer.getByLabel('Tenant', { exact: true }),
+      company: drawer.getByLabel('Company', { exact: true }),
+      from: drawer.getByLabel('From', { exact: true }),
+      to: drawer.getByLabel('To', { exact: true }),
+      meta: kid(body, 4),
+      footer: kid(drawer, 3),
+      download,
+    })
+    const cells = await childRects(kid(body, 4))
+    const fields = [r.tenant, r.company, r.from, r.to]
+    return {
+      problems: [
+        ...within(viewport(page), r.drawer, 'drawer in the viewport'),
+        ...pairwiseApart(fields, 'evidence fields'),
+        ...fields.flatMap((f, i) => within(r.drawer, f, `evidence field ${i} in the drawer`)),
+        ...pairwiseApart(cells, 'meta cell'),
+        ...cells.flatMap((c, i) => within(r.meta, c, `meta cell ${i} in the grid`)),
+        ...within(r.drawer, r.footer, 'footer in the drawer'),
+        ...within(r.footer, r.download, 'Download bundle in the footer'),
+      ],
+      rects: r,
+    }
+  })
+  await attachShot(page, testInfo, 'evidence-drawer')
+
+  const [file] = await Promise.all([page.waitForEvent('download'), download.click()])
+  expect(file.suggestedFilename(), 'download filename').toMatch(/^ASComply_evidence_.+\.zip$/)
+  expect(file.suggestedFilename(), 'the download is named as the preview says').toBe(live.filename)
+  const zip = unzipSync(new Uint8Array(await readFile((await file.path())!)))
+  const manifest = JSON.parse(new TextDecoder().decode(zip['manifest.json'])) as { entity: LivePreview['entity']; counts: LivePreview['counts']; generated_by: unknown }
+  expect(manifest.entity.tin, 'the zip manifest TIN is the preview TIN').toBe(live.entity.tin)
+  expect(manifest.counts, 'the zip manifest counts are the preview counts').toEqual(live.counts)
+  expect(manifest.generated_by, 'the zip is generated by support').toEqual({ name: SUPPORT_ACTOR, kind: 'raw' })
+  await expect(page.getByRole('status').filter({ hasText: 'Bundle downloaded' })).toBeVisible()
+
+  noErrors(errors, 'SUP-09 Audit')
 })

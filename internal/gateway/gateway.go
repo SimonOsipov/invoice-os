@@ -31,10 +31,9 @@ const (
 	headerUserID    = "X-User-ID"
 	headerUserRole  = "X-User-Role"
 	headerUserEmail = "X-User-Email"
-	// headerUserStaff and headerUserRulesRole are "true" or absent, from the token's Identity.
-	headerUserStaff     = "X-User-Staff"
-	headerUserRulesRole = "X-User-Rules-Role"
-	headerRequestID     = "X-Request-ID"
+	// headerUserStaff is "true" or absent, from the token's Identity.
+	headerUserStaff = "X-User-Staff"
+	headerRequestID = "X-Request-ID"
 	// headerS2SToken is 04's service-to-service peer credential
 	// (internal/validation/s2s.go). The gateway never mints it and never
 	// forwards a client-supplied one -- see injectIdentity.
@@ -215,12 +214,16 @@ func newReverseProxy(service string, target *url.URL, gatewayToken string, log *
 // own credential.
 func injectIdentity(pr *httputil.ProxyRequest, gatewayToken string) {
 	id, _ := auth.IdentityFromContext(pr.In.Context())
+	for k := range pr.Out.Header {
+		if strings.HasPrefix(k, "X-User-") {
+			pr.Out.Header.Del(k)
+		}
+	}
 	pr.Out.Header.Set(headerTenantID, id.TenantID)
 	pr.Out.Header.Set(headerUserID, id.Subject)
 	pr.Out.Header.Set(headerUserRole, id.Role)
 	pr.Out.Header.Set(headerUserEmail, id.Email)
 	setFlag(pr.Out.Header, headerUserStaff, id.Staff)
-	setFlag(pr.Out.Header, headerUserRulesRole, id.RulesRole)
 	pr.Out.Header.Del(headerS2SToken)
 	pr.Out.Header.Set(platform.HeaderGatewayToken, gatewayToken)
 	if rid := platform.RequestIDFromContext(pr.In.Context()); rid != "" {

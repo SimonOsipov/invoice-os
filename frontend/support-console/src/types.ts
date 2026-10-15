@@ -4,35 +4,14 @@
 
 import type { ReactNode } from 'react'
 
-export type Screen = 'submissions' | 'rules' | 'audit' | 'tenants' | 'health'
+export type Screen = 'submissions' | 'rules' | 'audit' | 'tenants' | 'health' | 'ai'
 
 export type Env = 'sandbox' | 'live'
-
-// The submission-pipeline states the console can display. Ordered as the filter
-// chips are (proto:866): the chip row is the canonical enumeration, and `JobFilter`
-// is this plus the 'all' pseudo-state.
-export type JobState = 'queued' | 'submitting' | 'pending' | 'accepted' | 'rejected' | 'failed' | 'dead-letter'
-
-export type JobFilter = 'all' | JobState
-
-export type SubTab = 'jobs' | 'recon'
 
 export type Severity = 'error' | 'warn' | 'info'
 
 // The wire value (rule.go scope, 'document' in v1); the seed fixture also uses 'global' and 'tenant-override'.
 export type RuleScope = string
-
-export interface Job {
-  id: string
-  tenant: string
-  tin: string
-  invoice: string
-  state: JobState
-  attempts: number
-  lastError: string
-  age: string
-  app: string
-}
 
 export interface Rule {
   key: string
@@ -69,83 +48,13 @@ export interface CodeListSync {
   changed_count: number
 }
 
-export interface ReconRow {
-  id: string
-  tenant: string
-  /** What our own submission_jobs row says. */
-  internal: JobState
-  /** What the Access Point reports for the same job. */
-  app: JobState
-  detail: string
-}
-
-export type AuditTone = 'red' | 'amber' | 'green' | 'teal'
-
-export type AuditObjectType = 'submission' | 'rule' | 'state'
-
-export interface AuditEntry {
-  id: string
-  ts: string
-  action: string
-  object: string
-  objectType: AuditObjectType
-  tenant: string
-  /** Display name of who acted — a person, or the literal 'system'. */
-  actor: string
-  /** Two-letter avatar initials for `actor` ('SY' for system events). */
-  who: string
-  tone: AuditTone
-  glyph: ReactNode
-}
-
-export type AuditFilter = 'all' | AuditObjectType
-
-export interface TenantMember {
-  name: string
-  initials: string
-  role: 'admin' | 'preparer' | 'reviewer'
-}
-
-export interface TenantKpi {
-  label: string
-  value: string
-  tone?: 'green' | 'amber' | 'red'
-}
-
-export interface TenantRecent {
-  invoice: string
-  state: JobState
-  age: string
-}
-
-export interface Tenant {
-  id: string
-  name: string
-  initials: string
-  tin: string
-  status: 'ok' | 'warn' | 'red'
-  entityCount: string
-  kpis: TenantKpi[]
-  members: TenantMember[]
-  recent: TenantRecent[]
-}
-
-export interface HealthCard {
-  label: string
-  value: string
-  unit: string
-  status: string
-  tone: 'green' | 'amber' | 'red'
-  points: number[]
-}
-
 export interface NavItem {
   key: Screen
   label: string
   glyph: ReactNode
 }
 
-export type DrawerState = { type: 'code-list'; id: string } | { type: 'job'; id: string } | { type: 'audit'; id: string } | { type: 'rule'; id: string } | { type: 'new-rule' } | null
+export type DrawerState = { type: 'code-list'; id: string } | { type: 'rule'; id: string } | { type: 'new-rule' } | { type: 'job'; id: string } | { type: 'audit'; id: string } | { type: 'staff-change'; id: string } | { type: 'evidence' } | null
 
 export type ToastTone = 'ok' | 'red'
 

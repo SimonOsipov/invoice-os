@@ -108,7 +108,7 @@ func gwBootEnv(svc string, port int) []string {
 	case "submission":
 		env = append(env, docs...)
 		env = append(env, fakes...)
-		env = append(env, "APP_ADAPTER=mock", "EXTRACTOR=mock")
+		env = append(env, "APP_ADAPTER=mock", "EXTRACTOR=mock", "GATEWAY_URL=http://127.0.0.1:1")
 	}
 	return env
 }
@@ -443,25 +443,21 @@ func TestRLS_EveryContextServiceRefusesAForgedRequest(t *testing.T) {
 				}
 			})
 
-			t.Run("checks the rules role on the whole staff class", func(t *testing.T) {
-				staff := func(h map[string]string, rules bool) map[string]string {
-					out := gwWith(gwWith(h, "X-Gateway-Token", gwToken), "X-User-Staff", "true")
-					if rules {
-						out["X-User-Rules-Role"] = "true"
-					}
-					return out
+			t.Run("checks the staff claim on the whole staff class", func(t *testing.T) {
+				staff := func(h map[string]string) map[string]string {
+					return gwWith(gwWith(h, "X-Gateway-Token", gwToken), "X-User-Staff", "true")
 				}
+				forbidden := "{\"error\":\"forbidden\"}\n"
 				for _, target := range []string{"/v1/staff/x", "/v1/staff", "/v1/./staff/x"} {
-					if code, body := p.do(t, "GET", target, "", staff(gwForged(), false)); code != http.StatusForbidden || body != "{\"error\":\"forbidden\"}\n" {
-						t.Errorf("GET %s, staff without the rules role = %d %q, want 403 forbidden", target, code, body)
+					if code, body := p.do(t, "GET", target, "", gwWith(gwForged(), "X-Gateway-Token", gwToken)); code != http.StatusForbidden || body != forbidden {
+						t.Errorf("GET %s, no staff header = %d %q, want 403 forbidden", target, code, body)
+					}
+					if code, body := p.do(t, "GET", target, "", staff(gwForged())); code == http.StatusForbidden || code == http.StatusUnauthorized {
+						t.Errorf("GET %s, staff header only = %d %q, want the check to admit it", target, code, body)
 					}
 				}
-				if code, body := p.do(t, "GET", "/v1/staff/x", "", map[string]string{"X-Gateway-Token": gwToken}); code != http.StatusForbidden || body != "{\"error\":\"forbidden\"}\n" {
+				if code, body := p.do(t, "GET", "/v1/staff/x", "", map[string]string{"X-Gateway-Token": gwToken}); code != http.StatusForbidden || body != forbidden {
 					t.Errorf("GET /v1/staff/x, token and no caller = %d %q, want 403 forbidden", code, body)
-				}
-				// Control: with the rules role the check admits the request, so the 403s above are the check's.
-				if code, body := p.do(t, "GET", "/v1/staff/x", "", staff(gwForged(), true)); code == http.StatusForbidden || code == http.StatusUnauthorized {
-					t.Errorf("GET /v1/staff/x, staff with the rules role = %d %q, want the check to admit it", code, body)
 				}
 			})
 

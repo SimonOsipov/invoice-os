@@ -15,8 +15,7 @@ import (
 )
 
 const (
-	wireStaff     = "X-User-Staff"
-	wireRulesRole = "X-User-Rules-Role"
+	wireStaff = "X-User-Staff"
 
 	forbiddenBody = `{"error":"forbidden"}`
 )
@@ -84,7 +83,7 @@ type who struct {
 	tenant      bool
 	role        string
 	staff       string // "" = header absent
-	rulesRole   string // "" = header absent
+	retired     string // X-User-Rules-Role, retired: no value changes the outcome; "" = absent
 	anonymous   bool   // no X-User-ID
 	noGatewayTk bool
 }
@@ -92,11 +91,8 @@ type who struct {
 var (
 	customer        = who{tenant: true, role: "authenticated"}
 	customerAdmin   = who{tenant: true, role: "admin"}
-	staffOnly       = who{tenant: true, role: "authenticated", staff: "true"}
-	staffRules      = who{tenant: true, role: "authenticated", staff: "true", rulesRole: "true"}
-	tenantlessSR    = who{role: "authenticated", staff: "true", rulesRole: "true"}
-	tenantlessSO    = who{role: "authenticated", staff: "true"}
-	rulesHeaderOnly = who{tenant: true, role: "authenticated", rulesRole: "true"}
+	staffMember     = who{tenant: true, role: "authenticated", staff: "true"}
+	tenantlessStaff = who{role: "authenticated", staff: "true"}
 )
 
 func (w who) request(method, target string) *http.Request {
@@ -115,8 +111,8 @@ func (w who) request(method, target string) *http.Request {
 	if w.staff != "" {
 		r.Header.Set(wireStaff, w.staff)
 	}
-	if w.rulesRole != "" {
-		r.Header.Set(wireRulesRole, w.rulesRole)
+	if w.retired != "" {
+		r.Header.Set("X-User-Rules-Role", w.retired)
 	}
 	return r
 }
@@ -161,11 +157,15 @@ func TestStaffClass_PlainRouteIsChecked(t *testing.T) {
 	}{
 		{"customer", customer, http.StatusForbidden},
 		{"customer admin", customerAdmin, http.StatusForbidden},
-		{"rules header without staff", rulesHeaderOnly, http.StatusForbidden},
-		{"staff without rules role", staffOnly, http.StatusForbidden},
-		{"tenant-less staff without rules role", tenantlessSO, http.StatusForbidden},
-		{"staff with rules role", staffRules, http.StatusOK},
-		{"tenant-less staff with rules role", tenantlessSR, http.StatusOK},
+		{"staff header false", who{tenant: true, role: "authenticated", staff: "false"}, http.StatusForbidden},
+		{"tenant-less caller without the staff header", who{role: "authenticated"}, http.StatusForbidden},
+		{"staff", staffMember, http.StatusOK},
+		{"tenant-less staff", tenantlessStaff, http.StatusOK},
+		{"forged retired header, no staff header", who{tenant: true, role: "authenticated", retired: "true"}, http.StatusForbidden},
+		{"forged retired header, tenant-less, no staff header", who{role: "authenticated", retired: "true"}, http.StatusForbidden},
+		{"forged retired header, staff header false", who{tenant: true, role: "authenticated", staff: "false", retired: "true"}, http.StatusForbidden},
+		{"staff header and a retired header of false", who{tenant: true, role: "authenticated", staff: "true", retired: "false"}, http.StatusOK},
+		{"tenant-less staff header and a retired header of false", who{role: "authenticated", staff: "true", retired: "false"}, http.StatusOK},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -207,7 +207,7 @@ func TestStaffClass_NoCallerIsForbidden(t *testing.T) {
 
 func TestStaffClass_MalformedUserIDIsForbiddenNot401(t *testing.T) {
 	rig := newStaffRig(t, true)
-	r := staffRules.request(http.MethodGet, "/v1/staff/x")
+	r := staffMember.request(http.MethodGet, "/v1/staff/x")
 	r.Header.Set(headerUserID, "not-a-uuid")
 	rec := rig.serve(r)
 	if rec.Code != http.StatusForbidden {
@@ -220,39 +220,43 @@ func TestStaffClass_MalformedUserIDIsForbiddenNot401(t *testing.T) {
 }
 
 func TestStaffClass_VariantsAreChecked(t *testing.T) {
-	variants := []string{
-		"/v1/staff",
-		"/v1/%73taff/x",
-		"/v1/./staff/x",
-		"/v1//staff/x",
-		"/v1/x/../staff/x",
-		"/v1/staff/../staff/x",
-		"/v1/staff/..",
-		"/v1/staff/../ping",
-		"/v1/staff%2Fx",
-		"/v1/staff/no-such-route",
+	variants := []struct {
+		target  string
+		reaches bool // a staff caller gets to a handler; the others are cleaned or unrouted after the check
+	}{
+		{"/v1/staff", true},
+		{"/v1/%73taff/x", true},
+		{"/v1/./staff/x", false},
+		{"/v1//staff/x", false},
+		{"/v1/x/../staff/x", false},
+		{"/v1/staff/../staff/x", false},
+		{"/v1/staff/..", false},
+		{"/v1/staff/../ping", false},
+		{"/v1/staff%2Fx", false},
+		{"/v1/staff/no-such-route", false},
 	}
-	for _, target := range variants {
-		t.Run(target, func(t *testing.T) {
+	for _, v := range variants {
+		t.Run(v.target, func(t *testing.T) {
 			rig := newStaffRig(t, true)
-			rec := rig.serve(staffOnly.request(http.MethodGet, target))
+			rec := rig.serve(customer.request(http.MethodGet, v.target))
 			if rec.Code != http.StatusForbidden {
-				t.Errorf("staff without rules role: status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
+				t.Errorf("customer: status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
 			}
-			assertBody(t, rec, target, forbiddenBody)
+			assertBody(t, rec, v.target, forbiddenBody)
 			if n := rig.staff.count(); n != 0 {
-				t.Errorf("handler ran %d times for a staff caller without the rules role, want 0", n)
+				t.Errorf("handler ran %d times for a customer, want 0", n)
+			}
+
+			// A staff caller passes the check: no 403, and a routed variant reaches the handler.
+			rig = newStaffRig(t, true)
+			rec = rig.serve(staffMember.request(http.MethodGet, v.target))
+			if rec.Code == http.StatusForbidden {
+				t.Errorf("staff: status = 403 (body %q), want the check to admit it", rec.Body.String())
+			}
+			if want := map[bool]int{true: 1, false: 0}[v.reaches]; rig.staff.count() != want {
+				t.Errorf("staff: handler ran %d times, want %d (status %d)", rig.staff.count(), want, rec.Code)
 			}
 		})
-	}
-
-	// Control: the encoded and bare forms reach a handler for a rules-role caller,
-	// so the zero counts above come from the check and not from a dead route.
-	for _, target := range []string{"/v1/%73taff/x", "/v1/staff"} {
-		rig := newStaffRig(t, true)
-		if rec := rig.serve(staffRules.request(http.MethodGet, target)); rec.Code != http.StatusOK || rig.staff.count() != 1 {
-			t.Errorf("control %s: status %d, handler ran %d times, want 200 and 1", target, rec.Code, rig.staff.count())
-		}
 	}
 }
 
@@ -261,7 +265,7 @@ func TestStaffClass_VariantsAreChecked(t *testing.T) {
 func TestStaffClass_OpenRouteSpoofIsNotAStaffCaller(t *testing.T) {
 	rig := newStaffRig(t, false)
 	rig.app.RequireGateway(guardToken, "GET /v1/staff/x")
-	spoof := staffRules
+	spoof := staffMember
 	spoof.noGatewayTk = true
 
 	rec := rig.serve(spoof.request(http.MethodGet, "/v1/staff/x"))
@@ -273,7 +277,7 @@ func TestStaffClass_OpenRouteSpoofIsNotAStaffCaller(t *testing.T) {
 	}
 
 	// Control: the same caller with the gateway token reaches the handler.
-	if rec := rig.serve(staffRules.request(http.MethodGet, "/v1/staff/x")); rec.Code != http.StatusOK || rig.staff.count() != 1 {
+	if rec := rig.serve(staffMember.request(http.MethodGet, "/v1/staff/x")); rec.Code != http.StatusOK || rig.staff.count() != 1 {
 		t.Errorf("control: status %d, handler ran %d times, want 200 and 1", rec.Code, rig.staff.count())
 	}
 }
@@ -305,7 +309,7 @@ func TestStaffClass_OtherPathsAreNotChecked(t *testing.T) {
 
 func TestStaffClass_RefusalIsRequestLogged(t *testing.T) {
 	rig := newStaffRig(t, true)
-	rec := rig.serve(staffOnly.request(http.MethodGet, "/v1/staff/x"))
+	rec := rig.serve(customer.request(http.MethodGet, "/v1/staff/x"))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
@@ -319,19 +323,19 @@ func TestStaffClass_RefusalIsRequestLogged(t *testing.T) {
 	}
 }
 
-// A staff handler's panic is recovered as a 500. A caller without the rules role never reaches
-// the panic, so the 500 is the rules-role caller's and the 403 is the check's.
+// A staff handler's panic is recovered as a 500. A customer never reaches the panic, so the 500
+// is the staff caller's and the 403 is the check's.
 func TestStaffClass_PanicIsRecovered(t *testing.T) {
 	rig := newStaffRig(t, true)
-	rec := rig.serve(staffOnly.request(http.MethodGet, "/v1/staff/boom"))
+	rec := rig.serve(customer.request(http.MethodGet, "/v1/staff/boom"))
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("staff without rules role: status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
+		t.Fatalf("customer: status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
 	}
 	if strings.Contains(rig.log.String(), "panic recovered") {
 		t.Fatalf("the refused caller reached the panicking handler:\n%s", rig.log.String())
 	}
 
-	rec = rig.serve(staffRules.request(http.MethodGet, "/v1/staff/boom"))
+	rec = rig.serve(staffMember.request(http.MethodGet, "/v1/staff/boom"))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (body %q)", rec.Code, rec.Body.String())
 	}

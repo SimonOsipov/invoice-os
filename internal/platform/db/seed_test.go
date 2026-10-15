@@ -31,6 +31,7 @@ var seedTenants = []struct {
 	{"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "Tenant B (dev)", "firm"},
 	{"11111111-1111-1111-1111-111111111111", "Okafor & Partners", "firm"},
 	{"22222222-2222-2222-2222-222222222222", "Honeywell Group", "in_house"},
+	{"a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0", "ASComply (dev)", "firm"},
 }
 
 // seedMemberships mirrors db/seed.dev.sql's fixed membership rows exactly.
@@ -45,7 +46,7 @@ var seedMemberships = []struct {
 
 // TestSeedFromEmbeddedIsIdempotent: Test Spec row 7 / AC-7. Calls db.Seed twice
 // against dbsql.FS (the embedded copy of db/seed.dev.sql, never the on-disk
-// file); neither call may error, and each of the 4 seeded tenants + 4 memberships
+// file); neither call may error, and each seeded tenant + membership
 // must appear EXACTLY ONCE with the expected kind/role — proving both idempotency
 // (ON CONFLICT DO UPDATE / DO NOTHING actually holds across a repeated call) and
 // that the embedded file matches the on-disk fixture data, not a stale copy.

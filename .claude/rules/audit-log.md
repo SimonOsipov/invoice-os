@@ -2,16 +2,26 @@
 paths:
   - "internal/audit/**"
   - "internal/actor/**"
+  - "internal/staffjobs/**"
   - "migrations/*audit_log*"
 ---
 # Audit log
 
 - Write `audit_log` rows only through `audit.Record`.
-- Write a staff action only through `audit.RecordStaff`. Never write a staff action to `audit_log`.
+- Write a staff change only through `audit.RecordStaff`, with one `audit.StaffEvent`.
+- Set `TenantID` on a staff change that touches one tenant. Call `RecordStaff` in that tenant's `WithinTenantTx`, from a method with an `scCoreAllowlist` entry. It also writes that tenant's `audit_log` row with the actor `audit.SupportActor`.
+- Put in the payload of a tenant staff change only what the customer may read. Never a staff name, an email or an internal note.
+- Leave `TenantID` zero on a global staff change. Call `RecordStaff` in `WithinStaffTx`. It writes no `audit_log` row.
+- `RecordStaff` refuses a `TenantID` that differs from the transaction's tenant with `ErrStaffTenantMismatch`.
+- Never write a staff member's id to `audit_log`.
+- Write `submission.job.redriven` and `submission.job.cancelled` only from `internal/staffjobs`, with payload `job_id`, `invoice_id`, `invoice_number` and `reason`.
+- Link a staff row to its `audit_log` row by `tenant_id`, `event` and `created_at`.
 - Never set `entity_id` or `invoice_id` by hand. A trigger fills `entity_id`. A generated column fills `invoice_id`.
 - Attribute an event by its event name, never by which payload key is present.
 - Order a page by `created_at DESC, id DESC`.
 - Filter on `created_at`, `event`, `actor`, `entity_id` or `invoice_id`. Each leads an index after `tenant_id`.
+- A staff search with no tenant reads `audit_log_created_idx` (`created_at DESC, id DESC`).
+- Read `audit_log` across tenants only through `public.staff_read_audit_log`. It names an actor from the row tenant's `memberships` by exact text. It never calls `actor.Resolve`.
 - Free-text search is the one predicate no index serves. The date range is its only bound.
 - Run the page, the count, the facets and the empty probe in one transaction.
 - Read a NULL `entity_id` as workspace-level or unattributed. Never render it as unknown.

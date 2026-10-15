@@ -9,7 +9,7 @@
 //
 // The tenant allowlist is the safety boundary, not the environment. ENVIRONMENT
 // reads "development" on production and forks verbatim,
-// so gating on it would be fail-open; gating on the four fixed uuids
+// so gating on it would be fail-open; gating on the fixed uuids
 // db/seed.dev.sql creates cannot reach a real tenant's data wherever it runs.
 package demodocs
 
@@ -32,14 +32,15 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// DemoTenants are the only tenants this package will ever touch — the four
-// db/seed.dev.sql creates. Not a parameter: a caller-supplied tenant is what
+// DemoTenants are the only tenants this package will ever touch — the
+// db/seed.dev.sql tenants. Not a parameter: a caller-supplied tenant is what
 // would make "seed a synthetic document onto real invoices" representable.
 var DemoTenants = []string{
 	"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 	"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 	"11111111-1111-1111-1111-111111111111",
 	"22222222-2222-2222-2222-222222222222",
+	"a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0",
 }
 
 // csvHeader matches e2e/importFixtures.ts PERF_HEADER — the importer's
@@ -172,7 +173,7 @@ const personaPrefix = "c0000000-0000-0000-0000-"
 
 // tenantAdmin returns an active admin member's subject, or "" when the tenant
 // has none — an absent demo tenant is skipped, not an error, because
-// db/seed.dev.sql creates all four but only populates some.
+// db/seed.dev.sql creates them all but only populates some.
 //
 // status = 'active' is load-bearing, not tidiness: seedTenant runs as this
 // subject through the gated WithinRequestTenantTx, which refuses a suspended or

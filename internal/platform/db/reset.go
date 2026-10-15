@@ -22,7 +22,7 @@
 // The paragraph above still describes Reset exactly, but Reset is no longer the
 // only boot-time destruction here: DEMO-04's demo-tenant purge (demopurge.go)
 // runs from the same seam, gated like Seed on ENVIRONMENT, not on the Railway
-// name. It is narrowed by allowlist instead — only the four tenants DemoTenants
+// name. It is narrowed by allowlist instead — only the tenants DemoTenants
 // names, and db.Seed restores them in the same call.
 package db
 
@@ -264,7 +264,7 @@ func ResetEnabled(environment, flag string) bool {
 //	invitations               tenant and membership at runtime, but each is
 //	                          keyed to one identity and never collides with
 //	                          the fixtures. seed.dev.sql UPSERTs (ON CONFLICT DO UPDATE / DO
-//	                          NOTHING) the 4 fixture tenants + 4 memberships
+//	                          NOTHING) the fixture tenants + memberships
 //	                          regardless of what Reset does, so leaving them
 //	                          untouched and letting Seed reconcile them is
 //	                          simpler and avoids having to also enumerate

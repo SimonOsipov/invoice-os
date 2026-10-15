@@ -200,15 +200,15 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/importer/backfill.go"},                                           // operator CLI tools/backfill-source-rows; it carries a job tenant and never a request identity
 	{file: "internal/invoice/revalidate.go"},                                          // operator CLI tools/revalidate-invoices and the reconciliation re-checks (version and custom-rule); same shape, same absence of a caller
 	{file: "internal/reconciliation/sweep.go"},                                        // EnumerateTenants reads tenants as invoice_tenant_reader with no GUC set, which a tenant-scoped tx cannot express
-	{file: "internal/platform/db/staff.go", fn: "GrantStaff"},                         // mock builds only: the E2E fork grants staff on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/membership_grant.go", fn: "GrantMembership"},         // mock builds only: the E2E fork grants a membership on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/invitation_token.go", fn: "SetInvitationToken"},      // mock builds only: the E2E fork replaces a pending invite's token hash on the owner DSN; no caller identity exists
 	{file: "internal/platform/db/account_state_read.go", fn: "GrantAccountStateRead"}, // boot-time grant on the supabase_auth_admin DSN, before any request or tenant exists
 	{file: "internal/notifications/store.go"},                                         // contacts carry no tenant, so no tenant seam can scope them; the store opens its transactions on the pool
 	{file: "internal/notifications/worker.go"},                                        // a River job carries no caller identity and no tenant, and contacts are not tenant data; the worker reads and updates them on the pool
 	{file: "internal/validation/codelist/store.go"},                                   // global NRS reference data written by a schedule; the package serves no HTTP
-	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                    // the staff seam: refuses a caller without auth.StaffFromContext; staff work touches only global tables
+	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                    // the staff seam: refuses a caller without auth.StaffFromContext; staff work reaches tenant rows only through staff_read_ definer functions
 	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
+	{file: "internal/systemhealth/store.go", fn: "Record"},                            // a scheduled global sample with no caller identity; the package serves HTTP, so the exemption is func-scoped
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,
@@ -714,6 +714,8 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/extraction/anchor_store.go"},                                          // the learned-rule read, same shape as store.go: no request path reaches it
 	{file: "internal/importer/backfill.go"},                                                // operator CLI only, and internal/importer DOES serve HTTP, so a package exemption would un-gate the import handlers
 	{file: "internal/invoice/revalidate.go"},                                               // operator CLI and the reconciliation re-checks (version and custom-rule) only, and internal/invoice is the largest HTTP-serving package in the tree
+	{file: "internal/staffjobs/store.go", fn: "Redrive"},                                   // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
+	{file: "internal/staffjobs/store.go", fn: "Cancel"},                                    // staff write: the job's tenant comes from a staff_read_ function in db.WithinStaffTx; the request carries no tenant
 	{file: "internal/tenancy/store.go", fn: "Me"},                                          // a deliberate HTTP-path exemption, as is ProvisionWorkspace; func-scoped because ListMemberships and SetMembershipStatus share this file and ARE gated
 	{file: "internal/tenancy/store.go", fn: "ProvisionWorkspace"},                          // the caller has no membership yet; the seam would refuse before the closure
 	{file: "internal/tenancy/store.go", fn: "PreviewInvitation"},                           // the token is the only credential and names the invite; there is no caller to gate
@@ -724,6 +726,8 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/tenancy/invite_registration.go", fn: "InvitationPendingForEmail"},     // a gateway-token route; there is no caller to gate
 	{file: "internal/tenancy/invite_registration.go", fn: "ClaimInvitationRegistration"},   // a gateway-token route; the token names the invite and there is no caller to gate
 	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"}, // a gateway-token route; the token names the invite and there is no caller to gate
+	{file: "internal/aicalls/recorder.go", fn: "write"},                                    // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
+	{file: "internal/archive/staff.go", fn: "withinStaffTenant"},                           // staff read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; READ ONLY tenant tx
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST
@@ -1010,6 +1014,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/ping":                                        {verdict: scExempt, reason: "a liveness echo; it opens no transaction and reads no table"},
 	"GET /v1/rollup":                                      {verdict: scCovered},
 	"GET /v1/workflow-roles":                              {verdict: scCovered},
+	"OPTIONS /auth/console-handoff":                       {verdict: scExempt, reason: "no database; in-process code store"},
 	"OPTIONS /auth/exchange":                              {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /auth/invitation":                            {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /auth/invitation/register":                   {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
@@ -1026,21 +1031,36 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PATCH /v1/entities/{id}":                             {verdict: scCovered},
 	"PATCH /v1/invoices/{id}":                             {verdict: scCovered},
 	"PATCH /v1/memberships/{user_id}":                     {verdict: scCovered},
-	"GET /v1/staff/rules":                                 {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
-	"GET /v1/staff/rule-versions":                         {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
-	"PATCH /v1/staff/rules/{key}":                         {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
+	"GET /v1/staff/health":                                {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/tenants":                               {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/tenants/{id}":                          {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/jobs":                                  {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/jobs/{id}":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"POST /v1/staff/jobs/{id}/redrive":                    {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
+	"POST /v1/staff/jobs/{id}/cancel":                     {verdict: scExempt, reason: "staff route: staff check in platform.App; the job's tenant from a staff_read_ function, writes in that tenant's WithinTenantTx"},
+	"GET /v1/staff/rules":                                 {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"GET /v1/staff/rule-versions":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"PATCH /v1/staff/rules/{key}":                         {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/custom-rules":                               {verdict: scCovered},
-	"POST /v1/staff/rule-versions/draft":                  {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
-	"POST /v1/staff/rule-versions/draft/rules":            {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
+	"POST /v1/staff/rule-versions/draft":                  {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"POST /v1/staff/rule-versions/draft/rules":            {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PUT /v1/custom-rules/{id}":                           {verdict: scCovered},
-	"PUT /v1/staff/rule-versions/draft/rules/{key}":       {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
-	"DELETE /v1/staff/rule-versions/draft/rules/{key}":    {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
-	"POST /v1/staff/rule-versions/draft/publish":          {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
-	"POST /v1/staff/rule-versions/draft/test":             {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
-	"GET /v1/staff/code-list-syncs":                       {verdict: scExempt, reason: "staff route: rules-role check in platform.App; global tables through db.WithinStaffTx"},
+	"PUT /v1/staff/rule-versions/draft/rules/{key}":       {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"DELETE /v1/staff/rule-versions/draft/rules/{key}":    {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"POST /v1/staff/rule-versions/draft/publish":          {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"POST /v1/staff/rule-versions/draft/test":             {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"GET /v1/staff/code-list-syncs":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"GET /v1/staff/audit-log":                             {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/staff-audit-log":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/ai-calls":                              {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/ai-calls/totals":                       {verdict: scExempt, reason: "staff route: staff check in platform.App; tenant rows only through a staff_read_ function in db.WithinStaffTx"},
+	"GET /v1/staff/tenants/{id}/entities":                 {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
+	"GET /v1/staff/tenants/{id}/evidence-bundle":          {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
+	"GET /v1/staff/tenants/{id}/evidence-bundle/preview":  {verdict: scExempt, reason: "staff route: staff check in platform.App; the path tenant checked by a staff_read_ function in db.WithinStaffTx, read in that tenant's READ ONLY WithinTenantTxOpts"},
 	"GET /v1/rules":                                       {verdict: scCovered},
 	"PATCH /v1/rules/{key}":                               {verdict: scExempt, reason: "refuses every caller with 403 and reaches no database"},
 	"PATCH /v1/workflow-roles/{key}":                      {verdict: scCovered},
+	"POST /auth/console-handoff":                          {verdict: scExempt, reason: "no database; in-process code store"},
 	"POST /auth/exchange":                                 {verdict: scExempt, reason: "no database; in-process code store"},
 	"POST /auth/invitation":                               {verdict: scExempt, reason: "no database; asks tenancy"},
 	"POST /auth/invitation/password":                      {verdict: scExempt, reason: "no database; calls GoTrue"},
@@ -1049,7 +1069,6 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /auth/login":                                    {verdict: scExempt, reason: "unauthenticated by definition; there is no caller yet to hold a membership"},
 	"POST /auth/mock/invitation-token":                    {verdict: scExempt, reason: "mock builds only; replaces a pending invite's token hash on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/mock/member":                              {verdict: scExempt, reason: "mock builds only; grants a tenant membership on the owner DSN for the E2E fork, with no caller identity"},
-	"POST /auth/mock/staff":                               {verdict: scExempt, reason: "mock builds only; grants staff on the owner DSN for the E2E fork, with no caller identity"},
 	"POST /auth/refresh":                                  {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/register":                                 {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/request-password-reset":                   {verdict: scExempt, reason: "no database; calls GoTrue"},
@@ -3147,6 +3166,8 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TenantBearingCallerSendsNoStatement"},                                // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_NoCallerOrANonUuidSubjectSendsNoStatement"},                          // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AFailedAuditRollsTheJoinBack"},                                       // the invitee holds no membership before joining
+	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenants_RefusesWithoutAStaffCaller"},                   // the control needs a UUID subject that reaches an unreachable pool; no database row is read
+	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenant_MalformedIdOpensNoTransaction"},                 // the control needs a UUID subject that reaches an unreachable pool; no database row is read
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TwoInvitesJoinOnceUnderRace"},                                        // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_SameInviteTwoConcurrentAcceptsJoinOnce"},                             // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid"},                              // the invitee holds no membership before joining

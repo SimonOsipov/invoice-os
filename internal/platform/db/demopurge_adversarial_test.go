@@ -167,7 +167,7 @@ func TestPurgeScopeHoldsAgainstNearMissTenantIDs(t *testing.T) {
 			t.Fatalf("purgeWithin over an upper-cased allowlist: %v", err)
 		}
 		if after := countLettered(); after != 0 {
-			t.Errorf("an upper-cased allowlist left %d row(s) of %s, want 0 — the scope would be comparing text, so the four literals' casing silently decides what a deploy deletes", after, lettered)
+			t.Errorf("an upper-cased allowlist left %d row(s) of %s, want 0 — the scope would be comparing text, so the literals' casing silently decides what a deploy deletes", after, lettered)
 		}
 	})
 }

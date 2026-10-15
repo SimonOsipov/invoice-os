@@ -19,7 +19,7 @@ func staffIdentity(t *testing.T, tenant bool) auth.Identity {
 	subject := uuid.NewString()
 	_, cleanup := seedMembership(t, h.tenantA, subject, "admin")
 	t.Cleanup(cleanup)
-	id := auth.Identity{Subject: subject, Role: "authenticated", Staff: true, RulesRole: true}
+	id := auth.Identity{Subject: subject, Role: "authenticated", Staff: true}
 	if tenant {
 		id.TenantID = h.tenantA
 	}
@@ -46,9 +46,9 @@ func TestRLS_WithinStaffTxRefusesWithoutAStaffCaller(t *testing.T) {
 	requireHarness(t)
 	staff := staffIdentity(t, false)
 	ctxs := map[string]context.Context{
-		"plain context":                     context.Background(),
-		"identity set, no rules-role check": auth.WithIdentity(context.Background(), staff),
-		"tenant-less caller, no check":      auth.WithTenantlessCaller(context.Background(), staff),
+		"plain context":                context.Background(),
+		"identity set, no staff check": auth.WithIdentity(context.Background(), staff),
+		"tenant-less caller, no check": auth.WithTenantlessCaller(context.Background(), staff),
 	}
 	for name, ctx := range ctxs {
 		for poolName, pool := range map[string]*pgxpool.Pool{"app pool": h.app, "unreachable pool": unreachablePool(t)} {
@@ -111,7 +111,7 @@ func TestRLS_WithinStaffTxCommitsAndRollsBack(t *testing.T) {
 	}
 
 	if err := db.WithinStaffTx(ctx, h.app, func(tx pgx.Tx) error {
-		return audit.RecordStaff(ctx, tx, actor, uuid.New(), committed, map[string]string{"k": "v"})
+		return audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: committed, RuleSetVersionID: uuid.New(), Payload: map[string]string{"k": "v"}})
 	}); err != nil {
 		t.Fatalf("committing tx: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestRLS_WithinStaffTxCommitsAndRollsBack(t *testing.T) {
 	boom := errors.New("fn failed")
 	inserted := false
 	err := db.WithinStaffTx(ctx, h.app, func(tx pgx.Tx) error {
-		if err := audit.RecordStaff(ctx, tx, actor, uuid.New(), rolledBack, nil); err != nil {
+		if err := audit.RecordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: rolledBack, RuleSetVersionID: uuid.New()}); err != nil {
 			return err
 		}
 		inserted = true

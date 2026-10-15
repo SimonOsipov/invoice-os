@@ -5,13 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StaffGate } from '@invoice-os/console-session'
 
 import App from './App'
-import { NAV_ITEMS } from './data'
+import { NAV_ITEMS } from './nav'
 
 vi.mock('@invoice-os/console-session', () => ({
   StaffGate: function StaffGate({ children }: { children: ReactNode }) {
     return children
   },
   signOutConsole: vi.fn(),
+  expireConsole: vi.fn(),
 }))
 
 // the key the console already stores under (moves from session.ts to auth.ts)
@@ -22,6 +23,7 @@ type GateProps = {
   target: string
   gateway: string | null
   landing: string | null
+  app: string | null
   children: ReactElement | ReactElement[]
 }
 
@@ -65,6 +67,14 @@ describe('App', () => {
     expect(unset.props.landing).toBeNull()
   })
 
+  it('App_passesTheAppBaseToTheGate', () => {
+    vi.stubEnv('VITE_APP_URL', 'https://app.example/')
+    expect(renderApp().props.app).toBe('https://app.example')
+
+    vi.stubEnv('VITE_APP_URL', '')
+    expect(renderApp().props.app).toBeNull()
+  })
+
   it('App_rendersTheSameConsoleWhenTheGateOpens', () => {
     // React hoists the logo preload <link> ahead of the root.
     const html = renderToStaticMarkup(<App />).replace(/^(<link[^>]*>)+/, '').replaceAll('&amp;', '&')
@@ -74,8 +84,8 @@ describe('App', () => {
     expect(html.match(/class="asc-app"/g)).toHaveLength(1)
     expect(html).toContain('<aside')
     expect(html).toContain('<main')
-    expect(html).toMatch(/<h1[^>]*>Submissions ops<\/h1>/)
-    expect(NAV_ITEMS.length).toBeGreaterThan(0)
+    expect(html).toMatch(/<h1[^>]*>Rules admin<\/h1>/)
+    expect(NAV_ITEMS.map((n) => n.key)).toEqual(['submissions', 'rules', 'audit', 'tenants', 'health', 'ai'])
     for (const n of NAV_ITEMS) expect(html, `nav item ${n.label}`).toContain(n.label)
     expect(html.match(/aria-label="Sign out"/g)).toHaveLength(1)
   })

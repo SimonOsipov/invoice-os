@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/ai"
+	"github.com/SimonOsipov/invoice-os/internal/platform/airecord"
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
 
@@ -435,5 +436,58 @@ d,e
 	}
 	if resp.Source != "none" {
 		t.Errorf("source = %q, want %q", resp.Source, "none")
+	}
+}
+
+// recordedCalls is a capturing airecord.Sink.
+type recordedCalls struct{ got []airecord.Call }
+
+func (r *recordedCalls) sink(c airecord.Call) { r.got = append(r.got, c) }
+
+func fakeAIWithSink(t *testing.T, sink airecord.Sink) *ai.Client {
+	t.Helper()
+	t.Setenv(ai.EnvFake, "true")
+	t.Setenv(ai.EnvKey, "")
+	client, err := ai.FromEnv(slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+	if err != nil {
+		t.Fatalf("ai.FromEnv: %v", err)
+	}
+	client.SetRecorder(sink)
+	return client
+}
+
+func TestSuggestHandler_RecordsOneCallUnderTheCallersTenant(t *testing.T) {
+	id := testIdentity()
+	var rc recordedCalls
+	client := fakeAIWithSink(t, rc.sink)
+	open := newFakeDocOpen("data.csv", "text/csv", csvBody(t, []string{"Inv No", "Total"}, [][]string{{"INV-1", "100"}}))
+
+	rec, raw := doSuggestRequest(t, open.fn(), (&lookupSpy{}).fn(), client, nil, &id, suggestReqBody(uuid.NewString(), open.doc.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, raw)
+	}
+	if len(rc.got) != 1 {
+		t.Fatalf("recorded %d call(s), want 1: %+v", len(rc.got), rc.got)
+	}
+	if c := rc.got[0]; c.Client != "ai" || c.Purpose != string(ai.PurposeSpreadsheet) || c.TenantID != id.TenantID {
+		t.Errorf("call = client %q purpose %q tenant %q, want ai/%s/%s", c.Client, c.Purpose, c.TenantID, ai.PurposeSpreadsheet, id.TenantID)
+	}
+}
+
+func TestSuggestHandler_AnEmptyHeaderRecordsNothing(t *testing.T) {
+	id := testIdentity()
+	var rc recordedCalls
+	client := fakeAIWithSink(t, rc.sink)
+	open := newFakeDocOpen("empty.csv", "text/csv", nil)
+
+	rec, raw := doSuggestRequest(t, open.fn(), (&lookupSpy{}).fn(), client, nil, &id, suggestReqBody(uuid.NewString(), open.doc.ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, raw)
+	}
+	if resp := mustDecodeSuggest(t, raw); resp.Source != "none" {
+		t.Fatalf("source = %q, want none -- the control for the empty-header path", resp.Source)
+	}
+	if len(rc.got) != 0 {
+		t.Errorf("recorded %d call(s), want 0: %+v", len(rc.got), rc.got)
 	}
 }

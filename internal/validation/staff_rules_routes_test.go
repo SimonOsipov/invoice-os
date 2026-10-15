@@ -1,4 +1,4 @@
-// The real staff handlers behind a gateway-guarded platform.App: the platform, not the handler, refuses non-rules callers.
+// The real staff handlers behind a gateway-guarded platform.App: the platform, not the handler, refuses non-staff callers.
 package validation
 
 import (
@@ -94,7 +94,7 @@ func newRoutesRig(t *testing.T) *routesRig {
 }
 
 type caller struct {
-	tenant, staff, rulesRole, anonymous bool
+	tenant, staff, anonymous bool
 }
 
 func (rig *routesRig) do(c caller, method, path, body string) *httptest.ResponseRecorder {
@@ -109,39 +109,39 @@ func (rig *routesRig) do(c caller, method, path, body string) *httptest.Response
 		if c.staff {
 			r.Header.Set("X-User-Staff", "true")
 		}
-		if c.rulesRole {
-			r.Header.Set("X-User-Rules-Role", "true")
-		}
 	}
 	rec := httptest.NewRecorder()
 	rig.h.ServeHTTP(rec, r)
 	return rec
 }
 
-func TestStaffRulesRoutes_RefuseEveryNonRulesCaller(t *testing.T) {
+type staffRequest struct{ method, path, body string }
+
+// staffRequests is one request per route registered at cmd/validation/main.go, then two query variants.
+var staffRequests = []staffRequest{
+	{"GET", "/v1/staff/rules", ""},
+	{"GET", "/v1/staff/rule-versions", ""},
+	{"GET", "/v1/staff/code-list-syncs", ""},
+	{"PATCH", "/v1/staff/rules/vat-standard-rate", switchBody},
+	{"POST", "/v1/staff/rule-versions/draft", ""},
+	{"POST", "/v1/staff/rule-versions/draft/rules", `{"key":"k",` + ruleBody[1:]},
+	{"PUT", "/v1/staff/rule-versions/draft/rules/k", ruleBody},
+	{"DELETE", "/v1/staff/rule-versions/draft/rules/k", ""},
+	{"POST", "/v1/staff/rule-versions/draft/publish", `{"effective_from":"3001-01-01"}`},
+	{"POST", "/v1/staff/rule-versions/draft/test", `{"invoice":{}}`},
+	{"GET", "/v1/staff/rules?version=4", ""},
+	{"GET", "/v1/staff/code-list-syncs?list=hs-codes", ""},
+}
+
+func TestStaffRulesRoutes_RefuseEveryNonStaffCaller(t *testing.T) {
 	for name, c := range map[string]caller{
-		"customer":                   {tenant: true},
-		"staff without rules role":   {tenant: true, staff: true},
-		"tenant-less staff, no role": {staff: true},
-		"rules header without staff": {tenant: true, rulesRole: true},
-		"no identity":                {anonymous: true},
+		"customer":               {tenant: true},
+		"tenant-less, not staff": {},
+		"no identity":            {anonymous: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rig := newRoutesRig(t)
-			for _, req := range []struct{ method, path, body string }{
-				{"GET", "/v1/staff/rules", ""},
-				{"GET", "/v1/staff/rules?version=4", ""},
-				{"GET", "/v1/staff/rule-versions", ""},
-				{"PATCH", "/v1/staff/rules/vat-standard-rate", switchBody},
-				{"POST", "/v1/staff/rule-versions/draft", ""},
-				{"POST", "/v1/staff/rule-versions/draft/rules", `{"key":"k",` + ruleBody[1:]},
-				{"PUT", "/v1/staff/rule-versions/draft/rules/k", ruleBody},
-				{"DELETE", "/v1/staff/rule-versions/draft/rules/k", ""},
-				{"POST", "/v1/staff/rule-versions/draft/publish", `{"effective_from":"3001-01-01"}`},
-				{"POST", "/v1/staff/rule-versions/draft/test", `{"invoice":{}}`},
-				{"GET", "/v1/staff/code-list-syncs", ""},
-				{"GET", "/v1/staff/code-list-syncs?list=hs-codes", ""},
-			} {
+			for _, req := range staffRequests {
 				rec := rig.do(c, req.method, req.path, req.body)
 				if rec.Code != 403 {
 					t.Errorf("%s %s = %d (%s), want 403", req.method, req.path, rec.Code, rec.Body.String())
@@ -152,49 +152,33 @@ func TestStaffRulesRoutes_RefuseEveryNonRulesCaller(t *testing.T) {
 			}
 		})
 	}
+}
 
-	t.Run("control: rules-role staff reaches both handlers", func(t *testing.T) {
-		if bindCodeListSyncsHandler == nil {
-			t.Fatal("StaffCodeListSyncsHandler does not exist: bindCodeListSyncsHandler is not assigned")
-		}
-		rig := newRoutesRig(t)
-		for _, c := range []caller{{tenant: true, staff: true, rulesRole: true}, {staff: true, rulesRole: true}} {
-			if rec := rig.do(c, "GET", "/v1/staff/rules", ""); rec.Code != 200 {
-				t.Errorf("GET = %d (%s), want 200", rec.Code, rec.Body.String())
-			}
-			for _, path := range []string{"/v1/staff/rules?version=4", "/v1/staff/rule-versions", "/v1/staff/code-list-syncs", "/v1/staff/code-list-syncs?list=hs-codes"} {
-				if rec := rig.do(c, "GET", path, ""); rec.Code != 200 {
-					t.Errorf("GET %s = %d (%s), want 200", path, rec.Code, rec.Body.String())
-				}
-			}
-			if rec := rig.do(c, "PATCH", "/v1/staff/rules/vat-standard-rate", switchBody); rec.Code != 200 {
-				t.Errorf("PATCH = %d (%s), want 200", rec.Code, rec.Body.String())
-			}
-			for _, req := range []struct{ method, path, body string }{
-				{"POST", "/v1/staff/rule-versions/draft", ""},
-				{"POST", "/v1/staff/rule-versions/draft/rules", `{"key":"k",` + ruleBody[1:]},
-				{"PUT", "/v1/staff/rule-versions/draft/rules/k", ruleBody},
-				{"DELETE", "/v1/staff/rule-versions/draft/rules/k", ""},
-				{"POST", "/v1/staff/rule-versions/draft/publish", `{"effective_from":"3001-01-01"}`},
-				{"POST", "/v1/staff/rule-versions/draft/test", `{"invoice":{}}`},
-			} {
-				if rec := rig.do(c, req.method, req.path, req.body); rec.Code/100 != 2 {
-					t.Errorf("%s %s = %d (%s), want 2xx", req.method, req.path, rec.Code, rec.Body.String())
-				}
+// A staff caller sends no rules header: every one of the 10 routes runs its handler.
+func TestStaffRulesRoutes_StaffReachesEveryRoute(t *testing.T) {
+	if bindCodeListSyncsHandler == nil {
+		t.Fatal("StaffCodeListSyncsHandler does not exist: bindCodeListSyncsHandler is not assigned")
+	}
+	rig := newRoutesRig(t)
+	for name, c := range map[string]caller{"tenant-bearing staff": {tenant: true, staff: true}, "tenant-less staff": {staff: true}} {
+		for _, req := range staffRequests {
+			rec := rig.do(c, req.method, req.path, req.body)
+			if rec.Code == 403 || rec.Code/100 != 2 {
+				t.Errorf("%s: %s %s = %d (%s), want 2xx from the handler", name, req.method, req.path, rec.Code, rec.Body.String())
 			}
 		}
-		if rig.lists.Load() != 4 || rig.switches.Load() != 2 || rig.versions.Load() != 2 || rig.drafts.Load() != 12 || rig.syncs.Load() != 4 {
-			t.Errorf("handler calls: list %d, switch %d, versions %d, drafts %d, syncs %d, want 4, 2, 2, 12 and 4", rig.lists.Load(), rig.switches.Load(), rig.versions.Load(), rig.drafts.Load(), rig.syncs.Load())
-		}
-		if got, _ := rig.actor.Load().(string); got != routesSubject {
-			t.Errorf("StaffFromContext subject = %q, want %q", got, routesSubject)
-		}
-	})
+	}
+	if rig.lists.Load() != 4 || rig.switches.Load() != 2 || rig.versions.Load() != 2 || rig.drafts.Load() != 12 || rig.syncs.Load() != 4 {
+		t.Errorf("handler calls: list %d, switch %d, versions %d, drafts %d, syncs %d, want 4, 2, 2, 12 and 4", rig.lists.Load(), rig.switches.Load(), rig.versions.Load(), rig.drafts.Load(), rig.syncs.Load())
+	}
+	if got, _ := rig.actor.Load().(string); got != routesSubject {
+		t.Errorf("StaffFromContext subject = %q, want %q", got, routesSubject)
+	}
 }
 
 func TestStaffRulesRoutes_ToggleHandlerStaysForStaffToo(t *testing.T) {
 	rig := newRoutesRig(t)
-	rec := rig.do(caller{tenant: true, staff: true, rulesRole: true}, "PATCH", "/v1/rules/vat-standard-rate", switchBody)
+	rec := rig.do(caller{tenant: true, staff: true}, "PATCH", "/v1/rules/vat-standard-rate", switchBody)
 	if rec.Code != 403 || strings.TrimSpace(rec.Body.String()) != `{"error":"`+rulesManagedMessage+`"}` {
 		t.Fatalf("got %d %q, want 403 %q", rec.Code, rec.Body.String(), rulesManagedMessage)
 	}

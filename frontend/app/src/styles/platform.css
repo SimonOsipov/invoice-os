@@ -138,12 +138,13 @@ body {
 .pf-btn {
   transition: background 120ms ease-out;
 }
-.pf-signout {
+/* `.asc-app` lifts specificity over `.asc-app a { color: inherit }` (app-layer.css) for the anchor. */
+.asc-app .pf-signout {
   color: var(--fg-3);
   background: transparent;
   transition: color 120ms ease-out;
 }
-.pf-signout:hover {
+.asc-app .pf-signout:hover {
   color: var(--fg-1);
   background: var(--bg-3);
 }

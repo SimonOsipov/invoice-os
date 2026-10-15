@@ -14,18 +14,22 @@ paths:
 - Grant the minimum verbs per object.
 - Never use `ALTER DEFAULT PRIVILEGES`.
 - Give the append-only tables `audit_log` and `idempotency_keys` SELECT and INSERT only.
-- Give `staff_audit_log` INSERT only.
+- Give `invoice_app` INSERT only on `staff_audit_log`. Staff read it only through `public.staff_read_staff_audit_log`.
+- Give `invoice_app` INSERT, DELETE and `SELECT (taken_at)` on `health_samples`. Staff read it only through `public.staff_read_health_samples`.
+- Give `invoice_app` SELECT and INSERT only on `ai_calls`. Staff read it only through `public.staff_read_ai_calls` and `public.staff_read_ai_call_totals`.
+- Treat `submission_job_state_counts` as callable by every `invoice_app` service. It returns per-state counts only.
 - Copy the `tenants` template for a new tenant table. Use `ENABLE` and `FORCE ROW LEVEL SECURITY` and a `tenant_isolation` policy.
 - Read the tenant as `nullif(current_setting('app.current_tenant', true), '')::uuid`. An unset tenant returns zero rows.
 - Never write `SET LOCAL app.current_tenant` by hand. Use `WithinTenantTx` or `WithinRequestTenantTx`.
 - Loop over tenants one at a time for cross-tenant work.
-- Enumerate tenants only through `invoice_tenant_reader`.
+- Enumerate tenants only through `invoice_tenant_reader` or a `staff_read_` function.
 - Install a trusted extension in a migration. Install an untrusted extension in `db/bootstrap.sql`.
 - Grant `EXECUTE` on `public.invitation_by_token`, `public.pending_invites_for_email`, `public.accept_invitation_by_id` and `public.invitee_account_state` to `invoice_app` only.
 - Grant `auth_hook_reader` SELECT on the `auth.users` columns `email`, `email_confirmed_at` and `is_sso_user` only.
 - Never grant `auth_hook_reader` a table-level privilege on `auth.users`.
 - Treat `invitee_account_state` as callable by every `invoice_app` service for any address.
 - Treat `invoice_migrator` as able to read `email`, `email_confirmed_at` and `is_sso_user` of every `auth.users` row through `SET ROLE auth_hook_reader`.
+- Treat `invoice_migrator` as able to read `submission_jobs.state` of every tenant through `SET ROLE auth_hook_reader`.
 - Return no rows from `pending_invites_for_email` for a user id that holds a membership of any status.
 - Refuse `accept_invitation_by_id` in this order: GUC mismatch `42501`, not valid `invitation_not_valid`, already a member `one_workspace_per_identity`.
 - Name a new migration with a current timestamp.
@@ -54,3 +58,13 @@ CREATE POLICY invitee_account_state_read ON auth.users FOR SELECT TO auth_hook_r
 - Seed demo documents and approval policies in the invoice service (`internal/demodocs`, `internal/demopolicy`), not in `db/seed.dev.sql`.
 - Treat demo `business_entities` and `invoices` ids as unstable. Each purge and seed cycle mints new ids.
 - Key demo fixtures on a literal seeded field: invoice number, entity name or workflow role key.
+- Keep one row at most in `public.house_company`. Insert the production row by hand; the seed never replaces a row.
+- Grant `EXECUTE` on `public.is_house_member` only to a role that owns a staff SQL function. Call it in every staff SQL function.
+- Read tenant rows for staff only through a `public.staff_read_<noun>(p_actor uuid, …)` function.
+- Create each one as `staff_reader`: `SECURITY DEFINER`, `SET search_path = ''`, `REVOKE EXECUTE … FROM PUBLIC`, `GRANT EXECUTE … TO invoice_app`.
+- Make `IF NOT public.is_house_member(p_actor)` raising `insufficient_privilege` its first statement.
+- Give `staff_reader` `SELECT` on the columns a function reads. Never a table-level grant.
+- Give `staff_reader` one `FOR SELECT TO staff_reader USING (true)` policy on each RLS table it reads. A table without RLS gets no policy.
+- Add each table with a `staff_reader` policy to the seed map of `TestRLS_AppStaysIsolatedOnEveryStaffReaderTable`.
+- Run the `staff_reader` statements of `db/bootstrap.sql` by hand on production before the first migration that names the role.
+- Treat `invoice_migrator` as able to read every column granted to `staff_reader`, in every tenant, through `SET ROLE staff_reader`.

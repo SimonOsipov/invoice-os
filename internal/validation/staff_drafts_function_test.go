@@ -378,7 +378,7 @@ func inForceAt(t *testing.T, super *pgxpool.Pool, day string) string {
 func TestStaffDraftsFunction_OpenCopiesTheVersionInForce(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	inForceID, inForceNo := versionInForce(t, super)
 	want := contentOf(t, super, inForceID)
@@ -422,7 +422,7 @@ func TestStaffDraftsFunction_OpenCopiesADisabledRuleDisabled(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
 	restoreRulesOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	inForceID, _ := versionInForce(t, super)
 	if !ruleEnabledActive(t, super, deskDisabledKey) || !ruleEnabledActive(t, super, deskInForceKey) {
@@ -454,7 +454,7 @@ func TestStaffDraftsFunction_OpenCopiesADisabledRuleDisabled(t *testing.T) {
 func TestStaffDraftsFunction_ConcurrentOpensLeaveOneDraft(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	if n := unsealedCount(t, super); n != 0 {
 		t.Fatalf("%d unsealed versions before the opens, want 0", n)
 	}
@@ -499,7 +499,7 @@ func TestStaffDraftsFunction_ConcurrentOpensLeaveOneDraft(t *testing.T) {
 func TestStaffDraftsFunction_PutAddsChangesAndNoOps(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	draft := mustDeskOpen(t, app, actor)
 	r := deskTestRule(deskNewKey, "first")
@@ -559,7 +559,7 @@ func TestStaffDraftsFunction_PutAddsChangesAndNoOps(t *testing.T) {
 func TestStaffDraftsFunction_NoDraftReturnsZeroRows(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	if n := unsealedCount(t, super); n != 0 {
 		t.Fatalf("%d unsealed versions, want 0: the test cannot discriminate", n)
 	}
@@ -605,7 +605,7 @@ func TestStaffDraftsFunction_NoDraftReturnsZeroRows(t *testing.T) {
 func TestStaffDraftsFunction_RemoveDeletesOnlyFromTheDraft(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	inForceID, _ := versionInForce(t, super)
 	draft := mustDeskOpen(t, app, actor)
@@ -638,7 +638,7 @@ func TestStaffDraftsFunction_RemoveDeletesOnlyFromTheDraft(t *testing.T) {
 func TestStaffDraftsFunction_PublishSealsAndDatesInOneStatement(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	draft := mustDeskOpen(t, app, actor)
 	rules := ruleCountOf(t, super, draft.id)
@@ -669,7 +669,7 @@ func TestStaffDraftsFunction_PublishSealsAndDatesInOneStatement(t *testing.T) {
 func TestStaffDraftsFunction_PublishRefusesAPastDateAndAnEmptyDraft(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	draft := mustDeskOpen(t, app, actor)
 	keys := ruleKeysOf(t, super, draft.id)
@@ -725,7 +725,7 @@ func TestStaffDraftsFunction_PublishRefusesAPastDateAndAnEmptyDraft(t *testing.T
 func TestStaffDraftsFunction_PublishedTodayIsInForce(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	today := dbDay(t, super, 0)
 
 	before := inForceAt(t, super, today)
@@ -752,7 +752,7 @@ func TestStaffDraftsFunction_PublishedTodayIsInForce(t *testing.T) {
 func TestStaffDraftsFunction_PublishedLaterIsScheduled(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	today := dbDay(t, super, 0)
 
 	before := inForceAt(t, super, today)
@@ -770,7 +770,7 @@ func TestStaffDraftsFunction_PublishedLaterIsScheduled(t *testing.T) {
 func TestStaffDraftsFunction_PublishedVersionIsImmutable(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	ctx := context.Background()
 
 	draft := mustDeskOpen(t, app, actor)
@@ -812,7 +812,7 @@ func TestStaffDraftsFunction_PublishedVersionIsImmutable(t *testing.T) {
 func TestStaffDraftsFunction_OtherVersionsUntouched(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	before := deskSnapshot(t, super)
 	if len(before) == 0 {
@@ -854,7 +854,7 @@ func otherRulesDigest(t *testing.T, super *pgxpool.Pool, versionID, key string) 
 func TestStaffDraftsFunction_PutDetectsEveryColumnChange(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	draft := mustDeskOpen(t, app, actor)
 	base := deskTestRule(deskNewKey, "base")
@@ -901,7 +901,7 @@ func TestStaffDraftsFunction_PutDetectsEveryColumnChange(t *testing.T) {
 func TestStaffDraftsFunction_PublishDateIsUTCInAnySessionTimeZone(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	ctx := context.Background()
 
 	utcDay := dbDay(t, super, 0)
@@ -955,7 +955,7 @@ func TestStaffDraftsFunction_PublishDateIsUTCInAnySessionTimeZone(t *testing.T) 
 func TestStaffDraftsFunction_ReopenAfterPublishCopiesThePublishedVersion(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	opener, editor, publisher := seedRulesStaffRow(t, super), seedRulesStaffRow(t, super), seedRulesStaffRow(t, super)
+	opener, editor, publisher := seedHouseMember(t, super, "reviewer", "active"), seedHouseMember(t, super, "reviewer", "active"), seedHouseMember(t, super, "reviewer", "active")
 	today := dbDay(t, super, 0)
 	_, inForceNo := versionInForce(t, super)
 
@@ -995,7 +995,7 @@ func TestStaffDraftsFunction_ReopenAfterPublishCopiesThePublishedVersion(t *test
 func TestStaffDraftsFunction_EachCallWaitsForTheDraftLockAfterTheActorCheck(t *testing.T) {
 	super, app := dbTestPools(t)
 	removeDeskVersionsOnCleanup(t, super)
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 	stranger := uuid.NewString()
 	ctx := context.Background()
 	if n := unsealedCount(t, super); n != 0 {

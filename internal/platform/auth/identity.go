@@ -18,7 +18,6 @@ type Identity struct {
 	Email     string // GoTrue "email"; "" when the token carries none
 	SessionID string // GoTrue "session_id"; "" for a mock-issuer token
 	Staff     bool   // app_metadata.staff
-	RulesRole bool   // app_metadata.rules_role, true only together with Staff
 }
 
 type ctxKey int

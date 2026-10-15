@@ -36,6 +36,7 @@ package db_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io/fs"
 	"os"
 	"reflect"
@@ -697,4 +698,28 @@ func TestRLS_MembershipsStatusVocabularyRejectsCaseAndEmpty(t *testing.T) {
 			}
 		})
 	}
+}
+
+func staffMigrationProvider(t *testing.T) *goose.Provider {
+	t.Helper()
+	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
+	if err != nil {
+		t.Fatalf("open migrator connection: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
+	if err != nil {
+		t.Fatalf("build migration provider: %v", err)
+	}
+	return provider
+}
+
+// restoreMigrationOnCleanup re-applies the migration at version after a test that rolled it back.
+func restoreMigrationOnCleanup(t *testing.T, provider *goose.Provider, version int64) {
+	t.Helper()
+	t.Cleanup(func() {
+		if _, err := provider.ApplyVersion(context.Background(), version, true); err != nil && !errors.Is(err, goose.ErrAlreadyApplied) {
+			t.Errorf("restore migration %d: %v", version, err)
+		}
+	})
 }

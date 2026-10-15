@@ -272,7 +272,7 @@ func TestGoldenRules_DB_SwitchedOffRuleIsAbsent(t *testing.T) {
 	super, app := dbTestPools(t)
 	restoreRulesOnCleanup(t, super)
 	ctx := seedGoldenMember(t, super, goldenTenantOkafor, "admin", "active")
-	actor := seedRulesStaffRow(t, super)
+	actor := seedHouseMember(t, super, "reviewer", "active")
 
 	before := mustReadGolden(t, ctx, app)
 	if !before.hasRule(functionKey) || len(before.Rules) == 0 {

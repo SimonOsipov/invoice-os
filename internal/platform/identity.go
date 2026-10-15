@@ -20,8 +20,7 @@ const (
 	headerUserRole  = "X-User-Role"
 	headerUserEmail = "X-User-Email"
 
-	headerUserStaff     = "X-User-Staff"
-	headerUserRulesRole = "X-User-Rules-Role"
+	headerUserStaff = "X-User-Staff"
 )
 
 // identityMiddleware reconstructs the caller Identity from the trusted headers the
@@ -68,12 +67,11 @@ func identityMiddleware(next http.Handler) http.Handler {
 }
 
 // staffMiddleware reads the staff headers into the caller identityMiddleware stored, then runs
-// auth.RequireRulesRole on every /v1/staff path. It reads the headers only on an App that called
+// auth.RequireStaff on every /v1/staff path. It reads the headers only on an App that called
 // RequireGateway: the guard admits a request only with the gateway token or strips both headers.
 // The path is checked decoded and cleaned, before the mux redirects an unclean one.
-// ceiling: every /v1/staff/ route needs the rules role; split by sub-path when a second staff role exists.
 func (a *App) staffMiddleware(next http.Handler) http.Handler {
-	checked := auth.RequireRulesRole(next)
+	checked := auth.RequireStaff(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.gatewayToken != "" {
 			r = r.WithContext(withStaffHeaders(r.Context(), r.Header))
@@ -92,13 +90,12 @@ func inStaffClass(p string) bool {
 
 func withStaffHeaders(ctx context.Context, h http.Header) context.Context {
 	staff := h.Get(headerUserStaff) == "true"
-	rules := staff && h.Get(headerUserRulesRole) == "true"
 	if id, ok := auth.IdentityFromContext(ctx); ok {
-		id.Staff, id.RulesRole = staff, rules
+		id.Staff = staff
 		return auth.WithIdentity(ctx, id)
 	}
 	if id, ok := auth.TenantlessCallerFromContext(ctx); ok {
-		id.Staff, id.RulesRole = staff, rules
+		id.Staff = staff
 		return auth.WithTenantlessCaller(ctx, id)
 	}
 	return ctx

@@ -36,3 +36,16 @@ func (c *SessionChecker) FillForTest(n int, sub string) {
 		c.entries[fmt.Sprintf("fill-%d", i)] = sessionEntry{subject: sub, live: true, checkedAt: at}
 	}
 }
+
+// LiveForTest reports how many codes the store holds that are not yet expired.
+func (s *HandoffStore) LiveForTest() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now, n := s.now(), 0
+	for _, e := range s.entries {
+		if now.Before(e.expiresAt) {
+			n++
+		}
+	}
+	return n
+}

@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/url"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -141,6 +142,10 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.Is(err, ErrEntityNotFound):
 		return http.StatusNotFound, "not found"
+	case errors.Is(err, ErrTenantNotFound):
+		return http.StatusNotFound, "tenant not found"
+	case errors.Is(err, db.ErrNotStaff):
+		return http.StatusForbidden, "forbidden"
 	case errors.As(err, &tooMany):
 		return http.StatusBadRequest,
 			fmt.Sprintf("%d invoices exceeds the bundle limit of %d", tooMany.Count, tooMany.Limit)
@@ -157,4 +162,91 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// staffEntitiesFn, staffPreviewFn and staffAssembleFn are the Store methods the staff handlers consume.
+type (
+	staffEntitiesFn func(ctx context.Context, tenantID string) ([]StaffEntity, error)
+	staffPreviewFn  func(ctx context.Context, tenantID string, r Request) (Preview, error)
+	staffAssembleFn func(ctx context.Context, tenantID string, r Request, w io.Writer, onStart func(filename string)) error
+)
+
+// parseStaffRequest parses the query as the tenant routes do, but fails a malformed escape instead of dropping it.
+func parseStaffRequest(r *http.Request) (Request, string) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return Request{}, "invalid query string"
+	}
+	return parseRequest(query)
+}
+
+// writeStaffErr answers a store error; auth.RequireStaff runs before the staff handlers.
+func writeStaffErr(w http.ResponseWriter, r *http.Request, log *slog.Logger, op string, err error) {
+	status, body := statusForErr(err)
+	if status == http.StatusInternalServerError {
+		log.ErrorContext(r.Context(), op, slog.Any("err", err))
+	}
+	writeError(w, status, body)
+}
+
+// StaffEntitiesHandler returns GET /v1/staff/tenants/{id}/entities.
+func StaffEntitiesHandler(list staffEntitiesFn, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		entities, err := list(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeStaffErr(w, r, log, "archive: staff entities", err)
+			return
+		}
+		if entities == nil {
+			entities = []StaffEntity{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"entities": entities})
+	}
+}
+
+// StaffPreviewHandler returns GET /v1/staff/tenants/{id}/evidence-bundle/preview.
+func StaffPreviewHandler(preview staffPreviewFn, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, msg := parseStaffRequest(r)
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+		p, err := preview(r.Context(), r.PathValue("id"), req)
+		if err != nil {
+			writeStaffErr(w, r, log, "archive: staff preview", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+	}
+}
+
+// StaffDownloadHandler returns GET /v1/staff/tenants/{id}/evidence-bundle.
+func StaffDownloadHandler(assemble staffAssembleFn, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, msg := parseStaffRequest(r)
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+		sink := &bundleSink{w: w}
+		err := assemble(r.Context(), r.PathValue("id"), req, sink, sink.setFilename)
+		if err == nil {
+			return
+		}
+		if sink.wrote {
+			log.ErrorContext(r.Context(), "archive: bundle abandoned mid-stream", slog.Any("err", err))
+			return
+		}
+		writeStaffErr(w, r, log, "archive: staff assemble", err)
+	}
 }

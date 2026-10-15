@@ -1,5 +1,5 @@
 // Staff rules routes: GET /v1/staff/rules and PATCH /v1/staff/rules/{key}. The platform
-// admits only a rules-role caller (auth.RequireRulesRole); the handlers repeat no role check.
+// admits only a staff caller (auth.RequireStaff); the handlers repeat no role check.
 package validation
 
 import (
@@ -149,9 +149,8 @@ func (s *Store) SwitchRule(ctx context.Context, key string, enabled bool, reason
 		if was == enabled {
 			return ErrRuleAlreadyInState
 		}
-		return recordStaff(ctx, tx, actor, res.RuleSetVersionID, event, map[string]any{
-			"key": key, "enabled": enabled, "version": res.RuleSetVersion, "reason": reason,
-		})
+		return recordStaff(ctx, tx, audit.StaffEvent{Actor: actor, Event: event, RuleSetVersionID: res.RuleSetVersionID,
+			Payload: map[string]any{"key": key, "enabled": enabled, "version": res.RuleSetVersion, "reason": reason}})
 	})
 	if err != nil {
 		return SwitchResult{}, err

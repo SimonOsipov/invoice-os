@@ -1402,7 +1402,7 @@ func mustExecSQL(t *testing.T, pool *pgxpool.Pool, stmt string) {
 	}
 }
 
-// restoreAuthRoles puts both roles back to the bootstrap baseline after a test elevates or strips them.
+// restoreAuthRoles puts the auth roles and staff_reader back to the bootstrap baseline after a test elevates or strips them.
 func restoreAuthRoles(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
@@ -1420,6 +1420,13 @@ func restoreAuthRoles(t *testing.T, pool *pgxpool.Pool) {
 			`ALTER ROLE auth_hook_reader WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`,
 			`GRANT USAGE, CREATE ON SCHEMA public TO auth_hook_reader`,
 			`GRANT auth_hook_reader TO invoice_migrator WITH INHERIT FALSE, SET TRUE`,
+		)
+	}
+	if roleExists(t, pool, staffReaderRole) {
+		stmts = append(stmts,
+			`ALTER ROLE staff_reader WITH NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE`,
+			`GRANT USAGE, CREATE ON SCHEMA public TO staff_reader`,
+			`GRANT staff_reader TO invoice_migrator WITH INHERIT FALSE, SET TRUE`,
 		)
 	}
 	for _, stmt := range stmts {

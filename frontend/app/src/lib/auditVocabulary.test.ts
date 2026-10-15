@@ -7,7 +7,7 @@ import { AUDIT_EVENTS, auditEventView, type AuditDomain } from './auditVocabular
 
 const REPO_ROOT = resolve(__dirname, '../../../..')
 
-// The 48 identifiers this app claims to label. Four families
+// The identifiers this app claims to label. Four families
 // are built from a variable rather than a literal, so a grep for quoted strings undercounts:
 // tenancy/store.go, portfolio/store.go, document/document.go and
 // submission/verdict_audit.go ("submission."+outcome).
@@ -68,7 +68,13 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'custom_rule.updated',
     'custom_rule.deleted',
   ],
-  submissions: ['submission.accepted', 'submission.rejected', 'submission.failed'],
+  submissions: [
+    'submission.accepted',
+    'submission.rejected',
+    'submission.failed',
+    'submission.job.redriven',
+    'submission.job.cancelled',
+  ],
   reconciliation: ['reconciliation.drift_detected', 'reconciliation.auto_fixed'],
   customers: ['customers.customer.updated'],
 }
@@ -76,12 +82,11 @@ const EXPECTED: Record<AuditDomain, string[]> = {
 const ALL = Object.values(EXPECTED).flat()
 
 describe('audit vocabulary', () => {
-  it('auditVocabulary_hasAllFortyEightTypes', () => {
+  it('auditVocabulary_hasEveryType', () => {
     const shipped = Object.keys(AUDIT_EVENTS)
     // An empty collection satisfies every assertion inside a loop, so pin the size first.
     expect(shipped.length).toBeGreaterThan(0)
-    expect(shipped.length).toBe(48)
-    expect(ALL.length).toBe(48)
+    expect(shipped.length).toBe(ALL.length)
     expect(new Set(shipped)).toEqual(new Set(ALL))
   })
 
@@ -199,6 +204,21 @@ describe('audit vocabulary', () => {
     expect(view.tone).toBeNull()
     // Control: the same view function answers a tone for an outcome-bearing event.
     expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary_supportJobEventsAreLabelledInSubmissionsAsNeutral', () => {
+    for (const [id, label] of [
+      ['submission.job.redriven', 'Re-sent by ASComply support'],
+      ['submission.job.cancelled', 'Cancelled by ASComply support'],
+    ]) {
+      const view = auditEventView(id)
+      expect(view.domain, `${id} must be a labelled submissions event`).toBe('submissions')
+      expect(view.label).toBe(label)
+      expect(AUDIT_EVENTS[id].outcome, `${id} is neither good nor bad news`).toBe('neutral')
+      expect(view.tone).toBe('amber')
+    }
+    // Control: an outcome-bearing sibling keeps its own tone.
+    expect(auditEventView('submission.failed').tone).toBe('red')
   })
 
   it('auditVocabulary_invitationAcceptedIsLabelledInMemberships', () => {

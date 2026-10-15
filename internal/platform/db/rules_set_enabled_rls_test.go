@@ -4,6 +4,7 @@ package db_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SimonOsipov/invoice-os/migrations"
 )
@@ -159,8 +161,7 @@ func requireRulesUnchanged(t *testing.T, want map[string]bool, what string) {
 func TestRLS_SetRuleEnabledFlipsTheRuleInForce(t *testing.T) {
 	requireHarness(t)
 	restoreRulesEnabledOnCleanup(t)
-	actor := uuid.NewString()
-	seedRulesStaff(t, actor)
+	actor := seedHouseMember(t, "reviewer", "active")
 	ver := requireKeyEnabledInForce(t, killKey)
 	verNo := versionNumberOf(t, ver)
 
@@ -186,8 +187,7 @@ func TestRLS_SetRuleEnabledIgnoresATempTableShadow(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 	restoreRulesEnabledOnCleanup(t)
-	actor := uuid.NewString()
-	seedRulesStaff(t, actor)
+	actor := seedHouseMember(t, "reviewer", "active")
 	ver := requireKeyEnabledInForce(t, killKey)
 
 	var v1 string
@@ -246,8 +246,7 @@ func TestRLS_SetRuleEnabledLeavesTheAppWithoutUpdate(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 	restoreRulesEnabledOnCleanup(t)
-	actor := uuid.NewString()
-	seedRulesStaff(t, actor)
+	actor := seedHouseMember(t, "reviewer", "active")
 	requireKeyEnabledInForce(t, killKey)
 
 	mustSwitch(t, h.app, actor, killKey, false)
@@ -268,37 +267,36 @@ func TestRLS_SetRuleEnabledLeavesTheAppWithoutUpdate(t *testing.T) {
 	}
 }
 
-func TestRLS_SetRuleEnabledRefusesAnActorWithoutTheRulesRole(t *testing.T) {
+func TestRLS_SetRuleEnabledRefusesAnActorWhoIsNotStaff(t *testing.T) {
 	requireHarness(t)
 	snap := restoreRulesEnabledOnCleanup(t)
 	requireKeyEnabledInForce(t, killKey)
+	house := adoptHouseTenant(t)
 
-	plain := uuid.NewString()
-	seedStaff(t, plain)
-	requireRulesRoleFalse(t, plain)
-	granted := uuid.NewString()
-	seedRulesStaff(t, granted)
-
-	for name, actor := range map[string]any{"no staff row": uuid.NewString(), "rules_role false": plain, "NULL actor": nil} {
-		got, err := callSetRuleEnabled(h.app, actor, killKey, false)
-		if pgCode(err) != "42501" {
-			t.Errorf("%s: SQLSTATE %q, want 42501 (err %v, rows %v)", name, pgCode(err), err, got)
+	actors := notStaffActors(house, func(tenant, status string) string {
+		return seedCommittedMembership(t, tenant, "admin", status)
+	})
+	for _, a := range actors {
+		got, err := callSetRuleEnabled(h.app, a.id, killKey, false)
+		requireNotStaffRefusal(t, a.name, err, "set_rule_enabled")
+		if len(got) != 0 {
+			t.Errorf("%s: refused call returned rows %v", a.name, got)
 		}
-		requireRulesUnchanged(t, snap, name)
+		requireRulesUnchanged(t, snap, a.name)
 	}
 
-	if got := mustSwitch(t, h.app, granted, killKey, false); !got.was {
-		t.Errorf("control: a rules-role actor got %+v, want was_enabled true", got)
+	control := seedHouseMember(t, "reviewer", "active")
+	if got := mustSwitch(t, h.app, control, killKey, false); !got.was {
+		t.Errorf("control: an active house member got %+v, want was_enabled true", got)
 	}
 }
 
-// the role is read on every call, so a revoke between two calls of one tx refuses the second.
-func TestRLS_SetRuleEnabledRefusesAnActorRevokedMidSession(t *testing.T) {
+// membership is read on every call, so a suspension between two calls of one tx refuses the second.
+func TestRLS_SetRuleEnabledRefusesAnActorSuspendedMidSession(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 	restoreRulesEnabledOnCleanup(t)
-	actor := uuid.NewString()
-	seedRulesStaff(t, actor)
+	actor := seedHouseMember(t, "reviewer", "active")
 	ver := requireKeyEnabledInForce(t, killKey)
 
 	tx, err := h.app.Begin(ctx)
@@ -307,13 +305,11 @@ func TestRLS_SetRuleEnabledRefusesAnActorRevokedMidSession(t *testing.T) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	mustSwitch(t, tx, actor, killKey, false)
-	if _, err := h.super.Exec(ctx, `UPDATE public.staff_members SET rules_role = false WHERE user_id = $1`, actor); err != nil {
-		t.Fatalf("revoke the rules role: %v", err)
+	if _, err := h.super.Exec(ctx, `UPDATE memberships SET status = 'suspended' WHERE user_id = $1`, actor); err != nil {
+		t.Fatalf("suspend the house member: %v", err)
 	}
 	_, err = callSetRuleEnabled(tx, actor, killKey, true)
-	if pgCode(err) != "42501" {
-		t.Errorf("call after the revoke: SQLSTATE %q, want 42501: %v", pgCode(err), err)
-	}
+	requireNotStaffRefusal(t, "call after the suspension", err, "set_rule_enabled")
 	_ = tx.Rollback(ctx)
 	if !ruleEnabledAt(t, ver, killKey) {
 		t.Error("the rolled-back tx left the rule disabled")
@@ -340,6 +336,7 @@ func TestRLS_SetRuleEnabledExecuteGrants(t *testing.T) {
 		t.Errorf("EXECUTE: invoice_app = %t, invoice_tenant_reader = %t, want true and false", app, reader)
 	}
 
+	requireDefinerOwnedByMigrator(t, setRuleEnabledSig)
 	grantees := collectStrings(t, `SELECT CASE WHEN a.grantee = 0 THEN '=PUBLIC' ELSE a.grantee::regrole::text END
 	                                 FROM pg_proc p, aclexplode(p.proacl) a
 	                                WHERE p.oid = to_regprocedure($1) AND a.privilege_type = 'EXECUTE' ORDER BY 1`, setRuleEnabledSig)
@@ -359,8 +356,7 @@ func TestRLS_SetRuleEnabledExecuteGrants(t *testing.T) {
 func TestRLS_SetRuleEnabledUnknownKeyAndNoOp(t *testing.T) {
 	requireHarness(t)
 	snap := restoreRulesEnabledOnCleanup(t)
-	actor := uuid.NewString()
-	seedRulesStaff(t, actor)
+	actor := seedHouseMember(t, "reviewer", "active")
 	ver := requireKeyEnabledInForce(t, killKey)
 
 	got, err := callSetRuleEnabled(h.app, actor, "no-such-rule", false)
@@ -418,14 +414,12 @@ func TestRLS_SetRuleEnabledNoVersionInForceReturnsZeroRows(t *testing.T) {
 	snap := restoreRulesEnabledOnCleanup(t)
 	requireKeyEnabledInForce(t, killKey)
 
+	house := adoptHouseTenant(t)
 	tx := revokeProbeTx(t)
-	actor := uuid.NewString()
+	actor := seedMembershipTx(t, tx, house, "reviewer", "active")
 	if _, err := tx.Exec(ctx,
 		`CREATE OR REPLACE FUNCTION public.rule_set_version_for(d date) RETURNS uuid LANGUAGE sql STABLE STRICT AS 'SELECT NULL::uuid'`); err != nil {
 		t.Fatalf("replace rule_set_version_for: %v", err)
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO public.staff_members (user_id, rules_role) VALUES ($1, true)`, actor); err != nil {
-		t.Fatalf("insert a rules-role staff row: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE invoice_app`); err != nil {
 		t.Fatalf("SET LOCAL ROLE invoice_app: %v", err)
@@ -450,8 +444,7 @@ func TestRLS_SetRuleEnabledSerialisesConcurrentFlips(t *testing.T) {
 	requireHarness(t)
 	ctx := context.Background()
 	restoreRulesEnabledOnCleanup(t)
-	actor := uuid.NewString()
-	seedRulesStaff(t, actor)
+	actor := seedHouseMember(t, "reviewer", "active")
 	requireKeyEnabledInForce(t, killKey)
 
 	txA, err := h.app.Begin(ctx)
@@ -552,5 +545,89 @@ func TestRLS_SetRuleEnabledDownAndUp(t *testing.T) {
 	}
 	if !app || reader {
 		t.Errorf("after the Up: EXECUTE invoice_app = %t, invoice_tenant_reader = %t, want true and false", app, reader)
+	}
+}
+
+// execer is the write surface shared by pgx.Tx and *pgxpool.Pool.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func insertMembership(t *testing.T, q execer, tenant, role, status string) (user, id string) {
+	t.Helper()
+	user, id = uuid.NewString(), uuid.NewString()
+	if _, err := q.Exec(context.Background(),
+		`INSERT INTO memberships (id, tenant_id, user_id, role, status) VALUES ($1, $2, $3, $4, $5)`,
+		id, tenant, user, role, status); err != nil {
+		t.Fatalf("seed a %s %s membership: %v", status, role, err)
+	}
+	return user, id
+}
+
+// seedCommittedMembership commits a membership for a new user. Cleanup deletes only that row.
+func seedCommittedMembership(t *testing.T, tenant, role, status string) string {
+	t.Helper()
+	user, id := insertMembership(t, h.super, tenant, role, status)
+	t.Cleanup(func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM memberships WHERE id = $1`, id) })
+	return user
+}
+
+// seedHouseMember commits a house membership for a new user, adopting the existing house row.
+func seedHouseMember(t *testing.T, role, status string) string {
+	t.Helper()
+	return seedCommittedMembership(t, adoptHouseTenant(t), role, status)
+}
+
+// seedMembershipTx inserts a membership in the test's rolled-back superuser tx and clears app.current_tenant,
+// so the later call as invoice_app runs the no-tenant path.
+func seedMembershipTx(t *testing.T, tx pgx.Tx, tenant, role, status string) string {
+	t.Helper()
+	user, _ := insertMembership(t, tx, tenant, role, status)
+	if _, err := tx.Exec(context.Background(), `SELECT set_config('app.current_tenant', '', true)`); err != nil {
+		t.Fatalf("reset app.current_tenant: %v", err)
+	}
+	return user
+}
+
+// requireDefinerOwnedByMigrator asserts sig is SECURITY DEFINER and owned by invoice_migrator, the role that may call is_house_member.
+func requireDefinerOwnedByMigrator(t *testing.T, sig string) {
+	t.Helper()
+	var definer bool
+	var owner string
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT prosecdef, pg_get_userbyid(proowner) FROM pg_proc WHERE oid = to_regprocedure($1)`, sig).Scan(&definer, &owner); err != nil {
+		t.Fatalf("read definer flag and owner of %s: %v", sig, err)
+	}
+	if !definer || owner != "invoice_migrator" {
+		t.Errorf("%s security definer = %t, owner = %q, want true and invoice_migrator", sig, definer, owner)
+	}
+}
+
+type notStaffActor struct {
+	name string
+	id   any
+}
+
+// notStaffActors holds one actor of each kind the five rule functions refuse. ins seeds a membership and returns its user.
+func notStaffActors(house string, ins func(tenant, status string) string) []notStaffActor {
+	return []notStaffActor{
+		{"no membership", uuid.NewString()},
+		{"customer-only member", ins(h.tenantA, "active")},
+		{"suspended house member", ins(house, "suspended")},
+		{"invited house member", ins(house, "invited")},
+		{"NULL actor", nil},
+	}
+}
+
+// requireNotStaffRefusal names the clause: 42501 from the staff guard, not from a missing grant.
+func requireNotStaffRefusal(t *testing.T, what string, err error, fn string) {
+	t.Helper()
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		t.Errorf("%s: want SQLSTATE 42501 %q, got %v", what, fn+": actor is not staff", err)
+		return
+	}
+	if pgErr.Code != "42501" || pgErr.Message != fn+": actor is not staff" {
+		t.Errorf("%s: want SQLSTATE 42501 %q, got %s %q", what, fn+": actor is not staff", pgErr.Code, pgErr.Message)
 	}
 }

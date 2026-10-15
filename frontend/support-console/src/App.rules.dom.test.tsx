@@ -6,13 +6,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App'
 import { KillConfirm } from './components/KillConfirm'
-import { signOutConsole } from '@invoice-os/console-session'
+import { expireSession, signOut } from './auth'
 import { SAMPLE_INVOICE, addDraftRule, editDraftRule, fetchCodeListSummary, fetchCodeListSyncs, fetchRules, fetchVersions, openDraft, publishDraft, removeDraftRule, switchRule, testDraft, type RuleVersion } from './rulesApi'
 import type { Rule } from './types'
 
 vi.mock('@invoice-os/console-session', () => ({
   StaffGate: ({ children }: { children: ReactNode }) => children,
   signOutConsole: vi.fn(),
+  expireConsole: vi.fn(),
+}))
+vi.mock('./auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./auth')>()),
+  expireSession: vi.fn(),
+  signOut: vi.fn(),
 }))
 vi.mock('./rulesApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./rulesApi')>()),
@@ -114,21 +120,29 @@ describe('Console rules wiring', () => {
     expect(screen.getByText('IN FORCE v7')).toBeTruthy()
   })
 
-  it('a 401 on the versions read signs the console out', async () => {
+  it('a 401 on the versions read expires the console session', async () => {
     versionsRead.mockRejectedValue(new ApiError('http', 'expired', 401))
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
-    await waitFor(() => expect(signOutConsole).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
+    expect(signOut).not.toHaveBeenCalled()
   })
 
-  it('reads the list when Rules opens and on each re-entry, never on mount', async () => {
+  it('opens on Rules and reads the list, versions and code lists once', async () => {
     render(<App />)
-    expect(read).not.toHaveBeenCalled()
-    await openRules()
-    expect(read).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByRole('button', { name: /^Submissions/ }))
+    await screen.findByRole('switch', { name: 'Disable real.on' })
+    const counts = () => [read.mock.calls.length, versionsRead.mock.calls.length, summary.mock.calls.length]
+    expect(counts()).toEqual([1, 1, 1])
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
-    await waitFor(() => expect(read).toHaveBeenCalledTimes(2))
+    expect(counts()).toEqual([1, 1, 1])
+  })
+
+  it('a non-staff account lands on the not-staff line', async () => {
+    read.mockRejectedValue(new ApiError('http', 'forbidden', 403))
+    render(<App />)
+    expect(await screen.findAllByText('Your account is not ASComply staff.')).not.toHaveLength(0)
+    expect(screen.queryByRole('switch')).toBeNull()
+    expect(expireSession).not.toHaveBeenCalled()
   })
 
   it('shows the real enabled state and version, and none of the mock keys', async () => {
@@ -228,25 +242,35 @@ describe('Console rules wiring', () => {
     expect((within(dialog()).getByRole('button', { name: 'Disable rule' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('a 403 on the list shows the no-role line with no switches', async () => {
+  it('a 403 on the list shows the not-staff line with no switches', async () => {
     read.mockRejectedValue(new ApiError('http', 'forbidden', 403))
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
-    expect(await screen.findByText('Your account has no rules role.')).toBeTruthy()
+    expect(await screen.findByText('Your account is not ASComply staff.')).toBeTruthy()
     expect(screen.queryAllByRole('switch')).toHaveLength(0)
+  })
+
+  it('a 500 on the list shows the server text and Retry, not the not-staff line', async () => {
+    read.mockRejectedValue(new ApiError('http', 'db down', 500))
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
+    expect(await screen.findByText('db down')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
+    expect(screen.queryByText('Your account is not ASComply staff.')).toBeNull()
+    expect(expireSession).not.toHaveBeenCalled()
   })
 
   it('a 401 on the list signs the console out; a 403 does not', async () => {
     read.mockRejectedValue(new ApiError('http', 'expired', 403))
     const { unmount } = render(<App />)
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
-    await screen.findByText('Your account has no rules role.')
-    expect(signOutConsole).not.toHaveBeenCalled()
+    await screen.findByText('Your account is not ASComply staff.')
+    expect(expireSession).not.toHaveBeenCalled()
     unmount()
     read.mockRejectedValue(new ApiError('http', 'expired', 401))
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
-    await waitFor(() => expect(signOutConsole).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
   })
 
   it('a 401 on the switch signs the console out without a red toast', async () => {
@@ -256,7 +280,7 @@ describe('Console rules wiring', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Disable real.on' }))
     reason('r')
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Disable rule' }))
-    await waitFor(() => expect(signOutConsole).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
     expect(screen.queryByRole('status')).toBeNull()
   })
 
@@ -344,29 +368,27 @@ describe('Console code-list wiring', () => {
     expect(d.textContent).toContain('GONE')
   })
 
-  it('the panel reads on the Rules screen only and shows the empty state', async () => {
+  it('the code-list panel reads once on open and shows the empty state', async () => {
     render(<App />)
-    expect(summary).not.toHaveBeenCalled()
-    await openRules()
-    expect(summary).toHaveBeenCalledTimes(1)
     expect(await screen.findByText('No sync recorded yet.')).toBeTruthy()
+    expect(summary).toHaveBeenCalledTimes(1)
   })
 
-  it('a 403 on the summary uses the no-role wording', async () => {
+  it('a 403 on the summary uses the not-staff wording', async () => {
     summary.mockRejectedValue(new ApiError('http', 'forbidden', 403))
     render(<App />)
     await openRules()
-    await waitFor(() => expect(screen.getAllByText('Your account has no rules role.').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getAllByText('Your account is not ASComply staff.').length).toBeGreaterThan(0))
   })
 
   const syncOf = (added: string[], status = 'applied') => ({ status, synced_at: '2026-10-09T08:15:00Z', entry_count: 9, added, removed: [], changed: [], added_count: added.length, removed_count: 0, changed_count: 0 })
 
-  it('a 500 on the summary shows the server text, not the no-role wording', async () => {
+  it('a 500 on the summary shows the server text, not the not-staff wording', async () => {
     summary.mockRejectedValue(new ApiError('http', 'db down', 500))
     render(<App />)
     await openRules()
     expect(await screen.findByText('db down')).toBeTruthy()
-    expect(screen.queryByText('Your account has no rules role.')).toBeNull()
+    expect(screen.queryByText('Your account is not ASComply staff.')).toBeNull()
     expect(screen.queryByText('No sync recorded yet.')).toBeNull()
   })
 
@@ -377,7 +399,7 @@ describe('Console code-list wiring', () => {
     const row = await screen.findByRole('button', { name: /hs-codes/ })
     syncsRead.mockRejectedValueOnce(new ApiError('http', 'forbidden', 403))
     fireEvent.click(row)
-    await waitFor(() => expect(dialog().textContent).toContain('Your account has no rules role.'))
+    await waitFor(() => expect(dialog().textContent).toContain('Your account is not ASComply staff.'))
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Close' }))
     syncsRead.mockRejectedValueOnce(new ApiError('http', 'db down', 500))
     fireEvent.click(row)
@@ -394,7 +416,7 @@ describe('Console code-list wiring', () => {
     render(<App />)
     await openRules()
     fireEvent.click(await screen.findByRole('button', { name: /hs-codes/ }))
-    await waitFor(() => expect(vi.mocked(signOutConsole)).toHaveBeenCalled())
+    await waitFor(() => expect(vi.mocked(expireSession)).toHaveBeenCalled())
   })
 
   it('a late reply for a closed list does not paint on the next list', async () => {
@@ -610,6 +632,14 @@ describe('Console draft wiring', () => {
     expect((within(dialog()).getByRole('button', { name: 'Publish v5' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('a 401 on the publish diff read expires the console session', async () => {
+    await openDraftView()
+    read.mockRejectedValue(new ApiError('http', 'expired', 401))
+    fireEvent.click(btn('Publish draft v5'))
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
+    expect(signOut).not.toHaveBeenCalled()
+  })
+
   it('the publish modal shows Loading diff and enables Publish only once both reads resolve', async () => {
     await openDraftView()
     const pending: Array<() => void> = []
@@ -754,7 +784,7 @@ describe('Console draft wiring', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Rules/ }))
     await screen.findByRole('switch', { name: 'Disable real-on' })
     fireEvent.click(btn('New draft'))
-    await waitFor(() => expect(signOutConsole).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(expireSession).toHaveBeenCalledTimes(1))
     expect(screen.queryByRole('status')).toBeNull()
   })
 

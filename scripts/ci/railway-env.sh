@@ -1697,16 +1697,16 @@ reconcile_url_variables() {
   library_id=$(service_id_by_name "$PASS_SETTLE" library "environment $env_id" URL_VARIABLES) || exit 1
 
   pass_plan_add "$gw_id" gateway "" "CORS_ALLOWED_ORIGINS=$origins"
-  pass_plan_add "$app_id" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_LIBRARY_URL=$library_url"
+  pass_plan_add "$app_id" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_LIBRARY_URL=$library_url" "VITE_SUPPORT_URL=$support_url"
   pass_plan_add "$landing_id" landing "" "VITE_GATEWAY_URL=$gateway_url" "VITE_APP_URL=$app_url" "VITE_OPS_URL=$ops_url" "VITE_SUPPORT_URL=$support_url" "VITE_LIBRARY_URL=$library_url" VITE_REGISTRATION_OPEN=true
   pass_plan_add "$ops_id" ops-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
-  pass_plan_add "$support_id" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
+  pass_plan_add "$support_id" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_APP_URL=$app_url"
   pass_plan_add "$library_id" library "" "VITE_APP_URL=$app_url" "VITE_LANDING_URL=$landing_url"
 }
 
 reconcile_url_variables_verdict() {
   pass_owned_verdict reconcile_url_variables || return 1
-  echo "All 16 environment variables confirmed by independent re-query."
+  echo "All 18 environment variables confirmed by independent re-query."
 }
 
 # cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>
@@ -3501,7 +3501,7 @@ cmd_fork_vars_before_urls() {
     echo "::error::usage: railway-env.sh fork-vars-before-urls <environment-id>"
     exit 2
   fi
-  fork_pass "$env_id" fork_auth gateway_token reconciliation_validation
+  fork_pass "$env_id" fork_auth gateway_token reconciliation_validation submission_gateway
 }
 
 # cmd_set_production_gateway_token <environment-id>
@@ -3777,6 +3777,29 @@ reconciliation_validation() {
 reconciliation_validation_verdict() {
   pass_owned_verdict reconciliation_validation || return 1
   echo "reconciliation.VALIDATION_URL and reconciliation.S2S_TOKEN confirmed in environment $PASS_ENV."
+}
+
+# --- The fork submission's GATEWAY_URL ---------------------------------------
+
+GATEWAY_INTERNAL_URL="http://gateway.railway.internal:8080"
+
+submission_gateway_check() {
+  if [ "$1" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to set GATEWAY_URL in the persistent environment ($1). Its submission variables are the user's; no CI path may write them."
+    exit 1
+  fi
+  PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}GATEWAY_URL"
+}
+
+submission_gateway() {
+  local id
+  id=$(service_id_by_name "$PASS_SETTLE" submission "environment $1" GATEWAY_URL) || exit 1
+  pass_plan_add "$id" submission "" "GATEWAY_URL=$GATEWAY_INTERNAL_URL"
+}
+
+submission_gateway_verdict() {
+  pass_owned_verdict submission_gateway || return 1
+  echo "submission.GATEWAY_URL confirmed in environment $PASS_ENV."
 }
 
 # cmd_set_fork_reconciliation_url <environment-id>

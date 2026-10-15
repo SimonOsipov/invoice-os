@@ -17,14 +17,15 @@ paths:
 - Keep a spec on `serial-lane` while it needs the seeded tenants 1111 and 2222. A shard gets its own tenant pair from `db/seed.e2e-shards.sql`.
 - Sign in an app session with `signInAs(page, id, { tenantId })` from `e2e/personaSession.ts`. It admits the e2e member through `ensureMember`.
 - Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token.
+- A staff account is an active `reviewer` of the seeded house company `ASComply (dev)`. `provisionStaffAccount` grants it through `/auth/mock/member`.
 - Open a console with a staff session from `provisionStaffAccount` and `seedStaffSession`.
-- Serve `/auth/mock/staff`, `/auth/mock/member` and `/auth/mock/invitation-token` only from the `mockissuer` build. Only `pull_request` stamps that tag.
+- Serve `/auth/mock/member` and `/auth/mock/invitation-token` only from the `mockissuer` build. Only `pull_request` stamps that tag.
 - Never assume an empty table. Smoke, api and topology run in that order against one deployment, with no reset between them.
 - Expect a Playwright retry to rerun a failed test against the rows its first attempt left.
 - Create per-run-unique data, such as fresh TINs and random UUIDs. Act only on rows the spec created.
 - Assert containment or a live-read comparison, never a literal count.
-- Expect specs to leave rows in `auth.users`, `staff_members`, `tenants`, `memberships` and `business_entities`. Every run registers a fresh address, so this is harmless.
-- Expect the Support Console Rules screen to read real versions, rules and code-list syncs. The other console screens hold mock data.
+- Expect specs to leave rows in `auth.users`, `tenants`, `memberships` and `business_entities`. Every run registers a fresh address, so this is harmless.
+- Expect the Support Console Submissions, Rules, Audit, Tenants, System health and AI usage screens to read real data. They are the console's only screens.
 - Expect the app Rules screen to read the golden set and the custom rules from the server.
 - Never publish a rule-set version in a topology spec. The api contract spec publishes only with the start date `3001-01-01`.
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
@@ -39,7 +40,8 @@ paths:
 - Prove cross-tenant isolation with mock-issuer tokens for two tenants and `GET /api/tenancy/v1/me`. Both tenants exist in the seed, so RLS is the filter.
 - Expect the fleet roll-up to report `sentry` `off` on a PR and `on` or `off` on the persistent environment. `auth` is exempt.
 - Expect `notifications` to report `contacts` `fake` on a PR and `real` or `off` on the persistent environment.
-- Write the fork's URL variables, `RECONCILIATION_URL` and `GATEWAY_TOKEN`, and reconciliation's `VALIDATION_URL` and `S2S_TOKEN` on each run. A fork never inherits them.
+- Write the fork's URL variables, `RECONCILIATION_URL` and `GATEWAY_TOKEN`, reconciliation's `VALIDATION_URL` and `S2S_TOKEN`, and submission's `GATEWAY_URL` on each run. A fork never inherits them.
 - Write `VITE_LIBRARY_URL` on `landing` and `app`, and `VITE_APP_URL` and `VITE_LANDING_URL` on `library`, on each fork.
+- Write `VITE_SUPPORT_URL` on `app` and `VITE_APP_URL` on `support-console` on each fork.
 - Expect `library` to be the one SPA with no gateway wiring. A fork writes no `VITE_GATEWAY_URL` on it, and it is no CORS origin.
 - Expect a fork to accept registrations, send no mail and confirm at once. `fork-vars-before-urls` sets `GOTRUE_DISABLE_SIGNUP`, a blank SMTP host and `GOTRUE_MAILER_AUTOCONFIRM`.

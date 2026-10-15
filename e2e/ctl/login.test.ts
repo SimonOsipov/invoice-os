@@ -152,10 +152,10 @@ const meOk = (role: string): Answer => ({ status: 200, body: { tenant: { id: TEN
 const FORBIDDEN: Answer = { status: 403, body: { error: 'no active membership' } }
 
 // Stubs the gateway at global fetch; every request lands on `log` as "METHOD /path".
-function stubGateway(opts: { log?: string[]; me?: Answer[]; signIn?: Answer; staff?: Answer[] } = {}): Gateway {
+function stubGateway(opts: { log?: string[]; me?: Answer[]; signIn?: Answer; failMemberGrantAt?: number } = {}): Gateway {
   const gw: Gateway = { requests: [] }
   const me = [...(opts.me ?? [meOk('admin')])]
-  const staff = [...(opts.staff ?? [{ status: 204 }])]
+  let memberGrants = 0
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
@@ -172,9 +172,7 @@ function stubGateway(opts: { log?: string[]; me?: Answer[]; signIn?: Answer; sta
         case '/auth/exchange':
           return answer({ status: 200, body: { access_token: ACCESS_TOKEN, refresh_token: 'refresh-1' } })
         case '/auth/mock/member':
-          return answer({ status: 204 })
-        case '/auth/mock/staff':
-          return answer(staff.length > 1 ? staff.shift()! : staff[0])
+          return answer(++memberGrants === opts.failMemberGrantAt ? { status: 500, body: { error: 'boom' } } : { status: 204 })
         case '/api/tenancy/v1/me':
           return answer(me.length > 1 ? me.shift()! : me[0])
         default:
@@ -268,16 +266,21 @@ describe('provisionAll', () => {
     process.env.GATEWAY_URL = urls.GATEWAY_URL
     process.env.APP_URL = urls.APP_URL
     const { TENANTS } = await import('../topology/targets')
+    const { HOUSE_TENANT_ID } = await import('../api/client')
 
     const accounts = await L.provisionAll()
 
     expect(Object.keys(accounts).sort()).toEqual(SORTED_KEYS)
     expect([...L.ACCOUNT_KEYS].sort()).toEqual(SORTED_KEYS)
     const members = grants(gw)
-    expect(members).toHaveLength(6)
+    expect(members).toHaveLength(8)
+    const customer = members.filter((m) => m.body.tenant_id !== HOUSE_TENANT_ID)
     const want = [TENANTS.a.id, TENANTS.b.id].flatMap((t) => ['admin', 'preparer', 'reviewer'].map((r) => `${t}:${r}`))
-    expect(new Set(members.map((m) => `${m.body.tenant_id}:${m.body.role}`))).toEqual(new Set(want))
-    expect(gw.requests.filter((r) => r.path === '/auth/mock/staff')).toHaveLength(2)
+    expect(new Set(customer.map((m) => `${m.body.tenant_id}:${m.body.role}`))).toEqual(new Set(want))
+    const house = members.filter((m) => m.body.tenant_id === HOUSE_TENANT_ID)
+    expect(house).toHaveLength(2)
+    expect(house.map((m) => m.body.role)).toEqual(['reviewer', 'reviewer'])
+    expect(gw.requests.filter((r) => r.path === '/auth/mock/staff')).toHaveLength(0)
     for (const k of KEYS) {
       expect(accounts[k].email, k).toEqual(expect.any(String))
       expect(accounts[k].password.length, k).toBeGreaterThan(0)
@@ -312,12 +315,12 @@ describe('provisionAll', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'ctl-login-'))
     roots.push(root)
     const calls: string[] = []
-    const gw = stubGateway({ staff: [{ status: 204 }, { status: 500, body: { error: 'boom' } }] })
+    const gw = stubGateway({ failMemberGrantAt: 8 })
     const deps = makeDeps(L, root, calls, { provisionAll: L.provisionAll })
 
     const err = await refused(L.login(req('firm', 'reviewer'), deps))
 
-    expect(err.message).toMatch(/staff grant/i)
+    expect(err.message).toMatch(/member grant/i)
     expect(grants(gw).length, 'the member grants ran before the failure').toBeGreaterThan(0)
     expect(existsSync(accountsFile(root))).toBe(false)
   })
@@ -329,7 +332,7 @@ describe('provisionAll', () => {
     process.env.APP_URL = urls.APP_URL
     const accounts = await L.provisionAll()
     const before = grants(gw).length
-    expect(before).toBe(6)
+    expect(before).toBe(8)
 
     await L.regrant('firm-reviewer', accounts['firm-reviewer'])
 
@@ -722,7 +725,7 @@ describe('credentialsValid', () => {
   })
 })
 
-const WRITE_PATHS = ['/auth/register', '/auth/mock/member', '/auth/mock/staff']
+const WRITE_PATHS = ['/auth/register', '/auth/mock/member']
 const writes = (gw: Gateway) => gw.requests.filter((r) => r.method === 'POST' && WRITE_PATHS.includes(r.path))
 
 describe('gatewayWrites against the requests the gateway saw (D31)', () => {

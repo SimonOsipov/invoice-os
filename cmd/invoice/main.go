@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/SimonOsipov/invoice-os/internal/aicalls"
 	"github.com/SimonOsipov/invoice-os/internal/approval"
 	"github.com/SimonOsipov/invoice-os/internal/archive"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
@@ -100,7 +101,11 @@ func main() {
 	// than on a new service: the gateway routes on the first segment under /api/, so
 	// this is reached as /api/invoice/v1/audit-log with no gateway change. authorize()
 	// requires only a tenant, so every active member of the workspace can read it.
-	app.Mux.HandleFunc("GET /v1/audit-log", audit.ListHandler(audit.NewStore(pool).List, app.Logger))
+	auditStore := audit.NewStore(pool)
+	app.Mux.HandleFunc("GET /v1/audit-log", audit.ListHandler(auditStore.List, app.Logger))
+	// GET /v1/staff/audit-log and /v1/staff/staff-audit-log: staff reads of every tenant's log and of staff changes.
+	app.Mux.HandleFunc("GET /v1/staff/audit-log", audit.StaffSearchHandler(auditStore.StaffSearch, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/staff-audit-log", audit.StaffChangesHandler(auditStore.StaffChanges, app.Logger))
 	// GET /v1/evidence-bundle(...) -- the evidence bundle download (AUDIT-05-08) and
 	// preview (AUDIT-05-09), sharing one Store so both routes agree by construction.
 	// Reached as /api/invoice/v1/evidence-bundle...; no gateway change needed, same
@@ -109,6 +114,10 @@ func main() {
 	bundleStore := archive.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/evidence-bundle", archive.DownloadHandler(bundleStore.Assemble, app.Logger))
 	app.Mux.HandleFunc("GET /v1/evidence-bundle/preview", archive.PreviewHandler(bundleStore.Preview, app.Logger))
+	// GET /v1/staff/tenants/{id}/...: staff reads of one tenant's companies and evidence bundle.
+	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/entities", archive.StaffEntitiesHandler(bundleStore.StaffEntities, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/evidence-bundle", archive.StaffDownloadHandler(bundleStore.StaffAssemble, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/evidence-bundle/preview", archive.StaffPreviewHandler(bundleStore.StaffPreview, app.Logger))
 	// GET /v1/invoices/violation-summary -- the review screen's failing-rules
 	// rail (INVCR-01-07): one row per rule_key over ONE import batch, so the
 	// rail is derived from the whole batch instead of the 50 rows on the
@@ -212,6 +221,13 @@ func main() {
 	if err != nil {
 		platform.Fatal(app.Logger, "invoice: jev: %v", err)
 	}
+	aiRecorder := aicalls.NewRecorder(pool, app.Logger)
+	defer aiRecorder.Wait() // runs before pool.Close
+	aiClient.SetRecorder(aiRecorder.Record)
+	jevClient.SetRecorder(aiRecorder.Record)
+	aiCallStore := aicalls.NewStore(pool)
+	app.Mux.HandleFunc("GET /v1/staff/ai-calls", aicalls.StaffCallsHandler(aiCallStore.StaffCalls, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/ai-calls/totals", aicalls.StaffTotalsHandler(aiCallStore.StaffTotals, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports", importer.CreateHandler(impSvc.Import, docSvc.Open, impStore.SaveMapping, app.Logger))
 	app.Mux.HandleFunc("POST /v1/imports/preview", importer.PreviewHandler(docSvc.Store, app.Logger))
 	// POST /v1/imports/document -- the document-import route (EXTR-06-06): a stored

@@ -1,5 +1,5 @@
-// demopurge.go — the demo-tenant purge primitive. Deletes the four seeded demo
-// tenants' rows from every tenant-owned table except the four purgeExcludedTables
+// demopurge.go — the demo-tenant purge primitive. Deletes the five seeded demo
+// tenants' rows from every tenant-owned table except the seven purgeExcludedTables
 // spares, and reaches no other tenant. Provision (provision.go) calls it on every
 // gated boot, between Reset and Seed.
 package db
@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// DemoTenants is the purge allowlist — the four tenants db/seed.dev.sql creates.
+// DemoTenants is the purge allowlist — the tenants db/seed.dev.sql creates.
 // A literal, never derived from the seed at runtime: derivation would let a
 // tenant added to that file silently widen a destructive purge.
 // TestPurgeAllowlistMatchesSeedFileTenants compares the two in both directions.
@@ -22,6 +22,7 @@ var DemoTenants = []string{
 	"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 	"11111111-1111-1111-1111-111111111111",
 	"22222222-2222-2222-2222-222222222222",
+	"a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0",
 }
 
 // purgeTables is the delete order, leaf-first, so every FK-bearing delete
@@ -69,14 +70,17 @@ var purgeTables = []string{
 // purgeExcludedTables carries tenant_id but is deliberately never purged:
 // memberships' provision_workspace INSERT creates a new tenant, never a demo one, and internal/demopolicy rebuilds the
 // approval-policy tables for the two persona tenants only, so purging them
-// would leave the other two with no policy and nothing to restore it. Together
-// with purgeTables it must equal the live schema's tenant_id-bearing set
+// would leave the other two with no policy and nothing to restore it. ai_calls is a usage
+// record, never demo state. Together with purgeTables it must equal the live schema's tenant_id-bearing set
 // (TestPurgeTableListCoversEveryTenantOwnedTable).
 var purgeExcludedTables = []string{
 	"memberships",
 	"approval_policies",
 	"approval_policy_versions",
 	"approval_policy_steps",
+	"ai_calls",
+	"house_company",   // one global row naming the staff tenant
+	"staff_audit_log", // append-only staff record; tenant_id names the tenant a change touched
 }
 
 // auditLogTable names the replica window by table rather than by position, so
@@ -171,7 +175,7 @@ func purgeStmt(table string) string {
 	return fmt.Sprintf("DELETE FROM %s WHERE tenant_id = ANY($1)", table)
 }
 
-// PurgeDemoTenants deletes the four DemoTenants' rows from every purgeTables
+// PurgeDemoTenants deletes the DemoTenants' rows from every purgeTables
 // table on a dedicated superuser connection, in one transaction.
 //
 // It deletes leaf-first while db/seed.dev.sql inserts parent-first, so a caller

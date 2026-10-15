@@ -14,11 +14,6 @@ func mockIssuerRoutes(environment, flag string, withCORS func(http.Handler) http
 	return nil, nil
 }
 
-// mockStaffRoute never serves: this build carries no staff grant code.
-func mockStaffRoute(dsn string, logger *slog.Logger) http.Handler {
-	return http.NotFoundHandler()
-}
-
 // mockMemberRoute never serves: this build carries no membership grant code.
 func mockMemberRoute(dsn string, logger *slog.Logger) http.Handler {
 	return http.NotFoundHandler()

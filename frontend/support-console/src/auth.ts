@@ -1,5 +1,5 @@
 import { gatewayBase } from '@invoice-os/api-client'
-import { signOutConsole } from '@invoice-os/console-session'
+import { expireConsole, signOutConsole } from '@invoice-os/console-session'
 
 export const SESSION_KEY = 'invoice-os.support-session'
 
@@ -17,4 +17,13 @@ export const landingBase = (): string | null => {
   return v || null
 }
 
+// Base URL of the app, where a borrowed console session is renewed; null when unset (VITE_APP_URL).
+export const appBase = (): string | null => {
+  const v = (import.meta.env.VITE_APP_URL ?? '').trim().replace(/\/+$/, '')
+  return v || null
+}
+
 export const signOut = () => signOutConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase() })
+
+export const expireSession = () =>
+  expireConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase(), app: appBase(), target: 'support' })

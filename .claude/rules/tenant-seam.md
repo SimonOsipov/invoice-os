@@ -9,8 +9,10 @@ paths:
 
 - Reach tenant data in a request through `WithinRequestTenantTx` or `WithinRequestTenantTxOpts`.
 - Acquire no database handle outside the seam. A bypass needs an `scPoolAllowlist` entry with a reason.
-- Reach global staff data in a request through `WithinStaffTx`.
+- Reach global staff data, and tenant rows through a `staff_read_` function, in a request through `WithinStaffTx`. It refuses a non-staff caller with `ErrNotStaff` and binds no role.
+- Write the `staff_read_` SQL literal inside the `WithinStaffTx` closure. `TestRLS_StaffReadFunctionsAreCalledOnlyInsideWithinStaffTx` fails otherwise.
 - Call `WithinTenantTx` only from a worker, a boot-time seeder, an operator CLI or an exempt method. Each needs an `scCoreAllowlist` entry with a reason.
+- Give a staff route that reads one tenant through `WithinTenantTxOpts` a func-scoped `scCoreAllowlist` entry, as `withinStaffTenant` has.
 - These `tenancy.Store` methods skip the gate: `Me`, `ProvisionWorkspace`, `AcceptInvitation`, `AcceptInvitationByID`, `MyPendingInvitations`, `PreviewInvitation`, `InvitationPendingForEmail`, `ClaimInvitationRegistration` and `ReleaseInvitationRegistration`.
 - Call `invitee_account_state` only through `accountState` in `internal/tenancy/store.go`.
 - Call `accountState` only from `PreviewInvitation` and `ListInvitations`, with an address read from an `invitations` row in the same transaction. `TestInviteeAccountStateCalledOnlyByTheStore` fails otherwise.

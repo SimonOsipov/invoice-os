@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { consumeSignInState, ensureSignInState, landingSignInUrl, mintSignInState, readHandoffCode } from './state'
-import { BASE64URL_43_RE, CODE, installStorage, LANDING, NOW, STATE_A, STATE_B, STATE_KEY, stateRaw, throwingStorage } from './testkit'
+import { appStartUrl, consumeSignInState, ensureSignInState, landingSignInUrl, mintSignInState, readHandoffCode } from './state'
+import { APP, BASE64URL_43_RE, CODE, installStorage, LANDING, NOW, STATE_A, STATE_B, STATE_KEY, stateRaw, throwingStorage } from './testkit'
 
 const TTL_MS = 600_000 // SIGN_IN_STATE_TTL_MS: 10 min (D24; frontend/app/src/lib/signInState.ts)
 const REUSE_MS = 60_000 // SIGN_IN_STATE_REUSE_MS (D24; same file)
@@ -183,5 +183,13 @@ describe('sign-in state storage (AC-15)', () => {
         expect(warn, `${name}: consume warns once`).toHaveBeenCalledTimes(1)
       }
     }
+  })
+})
+
+describe('appStartUrl', () => {
+  it('appStartUrl_carriesTargetAndState', () => {
+    expect(appStartUrl(APP, STATE_A, 'support')).toBe(`${APP}/?auth=console&console=support&state=${STATE_A}`)
+    expect(appStartUrl(APP, STATE_A, 'ops')).toBe(`${APP}/?auth=console&console=ops&state=${STATE_A}`)
+    expect(appStartUrl(APP, STATE_A, 'ops')).not.toMatch(/token|code|handoff/)
   })
 })

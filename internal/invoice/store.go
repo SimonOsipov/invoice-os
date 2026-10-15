@@ -1703,7 +1703,8 @@ func (s *Store) EditBySourceDocumentTx(ctx context.Context, tx pgx.Tx, documentI
 // rejected is therefore no longer a terminal, gaining exactly ONE outgoing
 // edge. 11 edges total; accepted and failed remain the only true terminals.
 // [failed-invoices] deliberately excludes failed->queued: a dead-lettered
-// invoice is never auto-retried back into the queue.
+// invoice is never auto-retried back into the queue; support re-queues a failed
+// invoice through RequeueFailedTx (support.go).
 var legalTransitions = map[Status][]Status{
 	StatusDraft:     {StatusValidated},
 	StatusValidated: {StatusQueued, StatusDraft},
@@ -2215,7 +2216,13 @@ func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, targ
 	if !canTransition(current, target) {
 		return Invoice{}, ErrIllegalTransition
 	}
+	return applyTransitionTx(ctx, tx, id, current, target, actor, cause)
+}
 
+// applyTransitionTx writes the status change, its history row and the
+// invoice.transitioned audit row. It does not check legalTransitions; the
+// caller does (transitionCausedTx) or owns an edge outside it (support.go).
+func applyTransitionTx(ctx context.Context, tx pgx.Tx, id string, current, target Status, actor Actor, cause demotionCause) (Invoice, error) {
 	// [reason-lifecycle] (M5-09-02/task-255, reversing M5-05's wipe-on-
 	// demotion): accepted is the only status whose entry clears
 	// rejection_reasons, and this is the ONLY place that still does so, now
@@ -2256,6 +2263,8 @@ func transitionCausedTx(ctx context.Context, tx pgx.Tx, id string, current, targ
 		setClause = "status = $1, rejection_reasons = '[]'"
 	case StatusValidated:
 		setClause = "status = $1, kept_as_is_at = NULL, kept_as_is_by = NULL, kept_as_is_reason = NULL"
+	case StatusQueued:
+		setClause = "status = $1, failure_kind = NULL"
 	}
 
 	var inv Invoice

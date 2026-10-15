@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { signOutConsole } from './signOut'
+import { expireConsole, signOutConsole } from './signOut'
 import {
+  APP,
+  borrowedRaw,
+  BASE64URL_43_RE,
   GW,
   installFetch,
   installStorage,
@@ -12,6 +15,7 @@ import {
   reply,
   spyTimeouts,
   staffToken,
+  STATE_KEY,
   SUPPORT_KEY,
   throwingStorage,
   timeoutError,
@@ -155,5 +159,45 @@ describe('signOutConsole edges (AC-12)', () => {
     expect(t.net.calls).toHaveLength(0)
     expect(t.win.hrefWrites).toEqual([LANDING])
     expect(warn.mock.calls.length).toBeGreaterThan(0)
+  })
+})
+
+describe('borrowed session (SUPP-11-02)', () => {
+  const BORROWED = borrowedRaw(staffToken('borrowed'))
+  const o = { storageKey: OPS_KEY, gateway: GW, landing: LANDING }
+
+  it('signOut_borrowedSessionSendsNoRevoke', async () => {
+    const t = setup(BORROWED, () => reply(204))
+    await signOutConsole(o)
+    expect(t.net.calls).toHaveLength(0)
+    expect(t.store.local.getItem(OPS_KEY)).toBeNull()
+    expect(t.win.hrefWrites).toEqual([LANDING])
+  })
+
+  it('expire_borrowedSessionLeavesThroughTheApp', async () => {
+    const t = setup(BORROWED, () => reply(204))
+    await expireConsole({ ...o, app: APP, target: 'support' })
+    expect(t.net.calls).toHaveLength(0)
+    expect(t.win.replaceWrites).toHaveLength(1)
+    const m = new RegExp(`^${APP}/\\?auth=console&console=support&state=(.+)$`).exec(t.win.replaceWrites[0] ?? '')
+    expect(m?.[1]).toMatch(BASE64URL_43_RE)
+    expect(JSON.parse(t.store.session.getItem(STATE_KEY) ?? 'null')).toMatchObject({ s: m?.[1] })
+    expect(t.store.local.getItem(OPS_KEY)).toBe(BORROWED)
+    expect(t.win.hrefWrites).toEqual([])
+  })
+
+  it('expire_landingSessionSignsOutAsToday', async () => {
+    const landing = setup(RECORD, () => reply(204))
+    await expireConsole({ ...o, app: APP, target: 'support' })
+    expect(landing.net.calls.map((c) => c.body)).toEqual([{ refresh_token: 'R-stored' }])
+    expect(landing.store.local.getItem(OPS_KEY)).toBeNull()
+    expect(landing.win.hrefWrites).toEqual([LANDING])
+    expect(landing.win.replaceWrites).toEqual([])
+
+    const noApp = setup(BORROWED, () => reply(204))
+    await expireConsole({ ...o, app: null, target: 'support' })
+    expect(noApp.net.calls).toHaveLength(0)
+    expect(noApp.store.local.getItem(OPS_KEY)).toBeNull()
+    expect(noApp.win.hrefWrites).toEqual([LANDING])
   })
 })

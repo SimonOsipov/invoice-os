@@ -20,7 +20,7 @@ function buttons(node: ReactNode, out: ButtonEl[] = []): ButtonEl[] {
 
 describe('Sidebar', () => {
   it('Sidebar_signOutButtonKeepsItsAttributesAndIsWiredToSignOut', () => {
-    const all = buttons(Sidebar({ screen: 'submissions', onNavigate: () => undefined, deadLetterCount: 0 }))
+    const all = buttons(Sidebar({ screen: 'rules', onNavigate: () => undefined }))
     expect(all.length, 'sidebar buttons').toBeGreaterThan(1)
 
     const wired = all.filter((b) => b.props.onClick === signOut)

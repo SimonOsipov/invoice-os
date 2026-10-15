@@ -100,7 +100,7 @@ func SignInHandler(authURL *url.URL, client *http.Client, store *HandoffStore, t
 	})
 }
 
-// ExchangeHandler answers POST /auth/exchange by redeeming a code for its stored {access_token, refresh_token} answer.
+// ExchangeHandler answers POST /auth/exchange by redeeming a code for its stored answer.
 func ExchangeHandler(store *HandoffStore) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !postOnly(w, r) {

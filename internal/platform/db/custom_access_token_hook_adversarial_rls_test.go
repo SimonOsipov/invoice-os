@@ -20,6 +20,16 @@ func hookMigrationVersion(t *testing.T) int64 {
 	return migrationVersion(t, "*_custom_access_token_hook.sql")
 }
 
+func houseMigrationVersion(t *testing.T) int64 {
+	t.Helper()
+	return migrationVersion(t, "*_house_company.sql")
+}
+
+func staffByHouseMigrationVersion(t *testing.T) int64 {
+	t.Helper()
+	return migrationVersion(t, "*_staff_by_house_membership.sql")
+}
+
 func staffMigrationVersion(t *testing.T) int64 {
 	t.Helper()
 	return migrationVersion(t, "*_staff_members.sql")
@@ -39,14 +49,16 @@ func joinMigrationVersion(t *testing.T) (v int64, ok bool) {
 	return migrationVersion(t, "*_invitation_join_by_email.sql"), true
 }
 
-// reapplyHookMigrationOnCleanup rolls the join, rules-role, staff and hook migrations back and forward after the test.
+// reapplyHookMigrationOnCleanup rolls the staff_read_, join, staff-by-house, house, rules-role, staff and hook migrations back and forward after the test.
 // A memberships Down/Up round-trip drops status, which strips auth_hook_reader's column grant.
-// Rules-role then staff Down run first: each restores the earlier body over the function the hook Down drops.
+// Staff-by-house, house, rules-role then staff Down run first: each restores the earlier body over the function the hook Down drops.
 // Join goes first on the way down and last on the way up: the hook Down revokes its grants.
+// The staff_read_ migrations go before join on the way down and after it on the way up: the house Down drops is_house_member.
 func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 	t.Helper()
-	rules, staff, hook := rulesRoleMigrationVersion(t), staffMigrationVersion(t), hookMigrationVersion(t)
+	byHouse, house, rules, staff, hook := staffByHouseMigrationVersion(t), houseMigrationVersion(t), rulesRoleMigrationVersion(t), staffMigrationVersion(t), hookMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
+	staffRead := staffReadMigrationVersions(t)
 	t.Cleanup(func() {
 		ctx := context.Background()
 		type migStep struct {
@@ -55,17 +67,27 @@ func reapplyHookMigrationOnCleanup(t *testing.T, provider *goose.Provider) {
 			up      bool
 		}
 		steps := []migStep{
+			{"roll back the staff-by-house migration", byHouse, false},
+			{"roll back the house migration", house, false},
 			{"roll back the rules-role migration", rules, false},
 			{"roll back the staff migration", staff, false},
 			{"roll back the hook migration", hook, false},
 			{"re-apply the hook migration", hook, true},
 			{"re-apply the staff migration", staff, true},
 			{"re-apply the rules-role migration", rules, true},
+			{"re-apply the house migration", house, true},
+			{"re-apply the staff-by-house migration", byHouse, true},
 		}
 		if hasJoin {
 			steps = append([]migStep{{"roll back the join migration", join, false}}, steps...)
 			steps = append(steps, migStep{"re-apply the join migration", join, true})
 		}
+		var readDowns, readUps []migStep
+		for i, v := range staffRead {
+			readDowns = append(readDowns, migStep{"roll back a staff_read_ migration", v, false})
+			readUps = append(readUps, migStep{"re-apply a staff_read_ migration", staffRead[len(staffRead)-1-i], true})
+		}
+		steps = append(append(readDowns, steps...), readUps...)
 		for _, step := range steps {
 			if _, err := provider.ApplyVersion(ctx, step.version, step.up); err != nil {
 				t.Errorf("%s: %v", step.what, err)
@@ -315,7 +337,6 @@ func TestRLS_AuthAdminCannotSetRoleToAuthHookReader(t *testing.T) {
 // STABLE plus an owner with no write privilege anywhere: the hook cannot write.
 func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 	requireHarness(t)
-	reapplyStaffMigration(t)
 	ctx := context.Background()
 
 	var volatility string
@@ -347,7 +368,7 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate column privileges: %v", err)
 	}
-	if want := map[string]int{"memberships": 5, "staff_members": 2, "invitations": 8, "tenants": 2}; !reflect.DeepEqual(cols, want) {
+	if want := map[string]int{"memberships": 5, "house_company": 1, "invitations": 8, "tenants": 2, "submission_jobs": 1}; !reflect.DeepEqual(cols, want) {
 		t.Errorf("auth_hook_reader column privileges per table = %v, want %v", cols, want)
 	}
 
@@ -362,13 +383,13 @@ func TestRLS_CustomAccessTokenHookIsStableAndItsOwnerCannotWrite(t *testing.T) {
 	}
 }
 
-// Drives the shipped Downs and Ups through goose, staff first on the way down (D23).
+// Drives the shipped Downs and Ups through goose, staff-by-house then house first on the way down (D23).
 func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.T) {
 	requireHarness(t)
-	reapplyStaffMigration(t)
 	ctx := context.Background()
-	hook, staff, rules := hookMigrationVersion(t), staffMigrationVersion(t), rulesRoleMigrationVersion(t)
+	byHouse, house, hook, staff, rules := staffByHouseMigrationVersion(t), houseMigrationVersion(t), hookMigrationVersion(t), staffMigrationVersion(t), rulesRoleMigrationVersion(t)
 	join, hasJoin := joinMigrationVersion(t)
+	staffRead := staffReadMigrationVersions(t)
 
 	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
 	if err != nil {
@@ -380,7 +401,7 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		t.Fatalf("build migration provider: %v", err)
 	}
 
-	// Counts the hook's own memberships columns: staff_members' grant and the join-by-email
+	// Counts the hook's own memberships columns: the join-by-email
 	// columns (display_name, email) belong to other migrations.
 	footprint := func() (fn, policy, privs int) {
 		t.Helper()
@@ -402,7 +423,11 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		t.Fatalf("before Down: function=%d policy=%d privileges=%d, want 1 1 3", fn, policy, privs)
 	}
 
-	rulesApplied, staffApplied, hookApplied, joinApplied := true, true, true, hasJoin
+	byHouseApplied, houseApplied, rulesApplied, staffApplied, hookApplied, joinApplied := true, true, true, true, true, hasJoin
+	readApplied := make([]bool, len(staffRead)) // indexed like staffRead, newest first
+	for i := range readApplied {
+		readApplied[i] = true
+	}
 	t.Cleanup(func() {
 		ctx := context.Background()
 		if !hookApplied {
@@ -423,20 +448,49 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 				return
 			}
 		}
+		if !houseApplied {
+			if _, err := provider.ApplyVersion(ctx, house, true); err != nil {
+				t.Errorf("restore the house migration: %v", err)
+				return
+			}
+		}
+		if !byHouseApplied {
+			if _, err := provider.ApplyVersion(ctx, byHouse, true); err != nil {
+				t.Errorf("restore the staff-by-house migration: %v", err)
+				return
+			}
+		}
 		if hasJoin && !joinApplied {
 			if _, err := provider.ApplyVersion(ctx, join, true); err != nil {
 				t.Errorf("restore the join migration: %v", err)
+				return
+			}
+		}
+		for i := len(staffRead) - 1; i >= 0; i-- {
+			if !readApplied[i] {
+				if _, err := provider.ApplyVersion(ctx, staffRead[i], true); err != nil {
+					t.Errorf("restore a staff_read_ migration: %v", err)
+					return
+				}
 			}
 		}
 	})
 
-	// The join Down runs first: the hook Down revokes the table-level grant it adds columns to.
+	// The staff_read_ Downs run before everything: the house Down drops is_house_member. The join Down follows: the hook Down revokes the table-level grant it adds columns to.
+	for i, v := range staffRead {
+		if _, err := provider.ApplyVersion(ctx, v, false); err != nil {
+			t.Fatalf("roll back a staff_read_ migration: %v", err)
+		}
+		readApplied[i] = false
+	}
 	downs := []struct {
 		what    string
 		version int64
 		up      bool
 		applied *bool
 	}{
+		{"roll back the staff-by-house migration", byHouse, false, &byHouseApplied},
+		{"roll back the house migration", house, false, &houseApplied},
 		{"roll back the rules-role migration", rules, false, &rulesApplied},
 		{"roll back the staff migration", staff, false, &staffApplied},
 		{"roll back the hook migration", hook, false, &hookApplied},
@@ -467,6 +521,8 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		{"re-apply the hook migration", hook, &hookApplied},
 		{"re-apply the staff migration", staff, &staffApplied},
 		{"re-apply the rules-role migration", rules, &rulesApplied},
+		{"re-apply the house migration", house, &houseApplied},
+		{"re-apply the staff-by-house migration", byHouse, &byHouseApplied},
 	} {
 		if _, err := provider.ApplyVersion(ctx, step.version, true); err != nil {
 			t.Fatalf("%s: %v", step.what, err)
@@ -479,7 +535,18 @@ func TestRLS_CustomAccessTokenHookDownRemovesFunctionPolicyAndGrants(t *testing.
 		}
 		joinApplied = true
 	}
+	for i := len(staffRead) - 1; i >= 0; i-- {
+		if _, err := provider.ApplyVersion(ctx, staffRead[i], true); err != nil {
+			t.Fatalf("re-apply a staff_read_ migration: %v", err)
+		}
+		readApplied[i] = true
+	}
 	if fn, policy, privs := footprint(); fn != 1 || policy != 1 || privs != 3 {
 		t.Errorf("after Up: function=%d policy=%d privileges=%d, want 1 1 3", fn, policy, privs)
 	}
+}
+
+func rulesRoleMigrationVersion(t *testing.T) int64 {
+	t.Helper()
+	return migrationVersion(t, "*_staff_rules_role.sql")
 }

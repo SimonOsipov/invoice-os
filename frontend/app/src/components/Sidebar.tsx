@@ -12,8 +12,9 @@
 
 import { Fragment } from 'react'
 import { gatewayBase, useAsync } from '@invoice-os/api-client'
-import { libraryBase } from '../auth'
+import { libraryBase, supportBase } from '../auth'
 import { BrandMark, Icon } from '../icons'
+import { consoleStartUrl } from '../lib/consoleHandoff'
 import { entityHealth, getRollup, scopedBucket, type Rollup } from '../lib/dashboard'
 import { visibleEntityIds } from '../lib/portfolio'
 import {
@@ -49,6 +50,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // until 'ready', the same neutral posture as ClientsView's HealthCell.
   const base = gatewayBase()
   const libraryUrl = libraryBase()
+  const supportUrl = ctx.staff ? supportBase() : null
   const rollup = useAsync<Rollup>(
     () => (base ? getRollup(ctx.authedFetch, base) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },
@@ -136,8 +138,7 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   let activeNav: string = view === 'create' || view === 'detail' ? 'invoices' : view
 
   // Sign out (M3-07-03). Replaces the old decorative gear: the gear read as
-  // "settings" (already a nav item) and had no handler — this footer slot now holds
-  // one real action. Default/hover color and fill live in `.pf-signout` (platform.css); an
+  // "settings" (already a nav item) and had no handler. Default/hover color and fill live in `.pf-signout` (platform.css); an
   // inline color or background would beat the :hover rule.
   const signOutButton = (
     <button
@@ -308,6 +309,19 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
             )}
           </div>
         </div>
+        {supportUrl && (
+          <a
+            href={consoleStartUrl(supportUrl)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="pf-signout"
+            aria-label="Open the Support Console"
+            title="Support Console"
+            style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 'var(--radius-sm)', cursor: 'pointer', textDecoration: 'none' }}
+          >
+            <Icon paths={['M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20', 'M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8', 'm4.93 4.93 4.24 4.24', 'm14.83 9.17 4.24-4.24', 'm14.83 14.83 4.24 4.24', 'm9.17 14.83-4.24 4.24']} size={16} />
+          </a>
+        )}
         {signOutButton}
       </div>
     </aside>

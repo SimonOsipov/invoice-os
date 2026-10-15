@@ -13,6 +13,8 @@ interface ImportMetaEnv {
   readonly VITE_LANDING_URL?: string
   // Base URL of the Feature library; unset hides the sidebar link (see `libraryBase()` in auth.ts).
   readonly VITE_LIBRARY_URL?: string
+  // Base URL of the Support Console; unset hides the staff icon (see `supportBase()` in auth.ts).
+  readonly VITE_SUPPORT_URL?: string
   readonly VITE_SENTRY_DSN?: string
   readonly VITE_SENTRY_TEST_DIGEST?: string
   readonly VITE_RAILWAY_GIT_COMMIT_SHA?: string

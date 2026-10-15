@@ -1034,7 +1034,9 @@ async function liveAiRows<K extends string, R>(path: string, key: K, keyOf: (r: 
 async function aiControlsRead(page: Page, what: string): Promise<void> {
   const mn = mainOf(page)
   await expect(mn.locator('[role="switch"], input[type="checkbox"], input[type="range"], input[type="number"]'), `${what}: no switch, checkbox, range or number input`).toHaveCount(0)
-  const names = (await mn.getByRole('button').allTextContents()).map((t) => t.trim())
+  // The screen's own content: the TopBar's Sandbox/Live switch is console-wide, not an AI control.
+  const names = (await mn.locator('.ops-screen-pad').getByRole('button').allTextContents()).map((t) => t.trim())
+  expect(names, `${what}: the view chips are in scope`).toEqual(expect.arrayContaining(['CALLS', 'FAILURES', 'DAILY TOTALS']))
   expect(names.filter((n) => !AI_BUTTONS.includes(n)), `${what}: buttons outside the allowlist`).toEqual([])
 }
 

@@ -207,7 +207,7 @@ test.describe('staff AI usage (API E2E, over the deployed gateway)', () => {
     expect(sumEquals(row!.cost, list.map((c) => c.cost)), 'cost equals the summed list').toBe(true)
     expect(row!.failed, 'failed equals the non-ok rows').toBe(list.filter((c) => c.outcome !== 'ok').length)
 
-    const yesterday = await totals({ ...todayQuery, to: new Date(dayStart - 1).toISOString(), limit: String(MAX_LIMIT) })
+    const yesterday = await totals({ tenant: PERSONAS.A.tenantId, from: new Date(dayStart - DAY_MS).toISOString(), to: new Date(dayStart - 1).toISOString(), limit: String(MAX_LIMIT) })
     expect(yesterday.totals.map((t) => t.day), 'a read ending yesterday holds no row for today').not.toContain(today)
 
     const week = { tenant: PERSONAS.A.tenantId, from: new Date(dayStart - 7 * DAY_MS).toISOString() }

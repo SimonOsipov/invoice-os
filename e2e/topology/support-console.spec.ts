@@ -1100,8 +1100,28 @@ async function aiUsageReads(page: Page, testInfo: TestInfo): Promise<void> {
   await attachShot(page, testInfo, 'ai-usage')
 }
 
+// Cells whose text must sit inside the cell: the header cells, and a row's cells at the fixed-width tracks.
+async function textOverflows(cells: Locator, only: number[] | undefined, what: string): Promise<string[]> {
+  const found = await cells.evaluateAll(
+    (els, keep) =>
+      els.flatMap((el, n) => {
+        if (keep && !keep.includes(n)) return []
+        const cs = getComputedStyle(el)
+        const box = el.getBoundingClientRect()
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        const t = range.getBoundingClientRect()
+        const inner = { left: box.left + parseFloat(cs.paddingLeft), right: box.right - parseFloat(cs.paddingRight) }
+        const out = el.scrollWidth > el.clientWidth + 1 || t.left < inner.left - 0.5 || t.right > inner.right + 0.5
+        return out ? [`${n + 1} "${el.textContent}": text ${t.left.toFixed(1)}..${t.right.toFixed(1)} vs cell ${inner.left.toFixed(1)}..${inner.right.toFixed(1)}`] : []
+      }),
+    only,
+  )
+  return found.map((f) => `${what}: cell ${f} overflows`)
+}
+
 // The header, chips, form and one card with its rows, in one settled read.
-async function aiCardRead(page: Page, rows: Locator, what: string): Promise<{ problems: string[]; rects: Record<string, unknown> }> {
+async function aiCardRead(page: Page, rows: Locator, what: string, fixed: number[]): Promise<{ problems: string[]; rects: Record<string, unknown> }> {
   const mn = mainOf(page)
   const chips = mn.locator('button.ops-chip')
   const form = mn.locator('form')
@@ -1137,6 +1157,11 @@ async function aiCardRead(page: Page, rows: Locator, what: string): Promise<{ pr
     }
   }
 
+  const headSpans = kid(card, 1).locator('> *')
+  expect(await headSpans.count(), `${what}: header cells`).toBeGreaterThan(0)
+  expect(await rows.first().locator('> *').count(), `${what}: first row cells`).toBeGreaterThan(0)
+  problems.push(...(await textOverflows(headSpans, undefined, `${what} header`)), ...(await textOverflows(rows.first().locator('> *'), fixed, `${what} row 0`)))
+
   const more = mn.getByRole('button', { name: 'Load more' })
   if ((await more.count()) > 0) problems.push(...below(top.card, (await boxes(page, { more })).more, `${what}: Load more below the card`))
   return { problems, rects: { top, chipRects, controls, headCells } }
@@ -1147,11 +1172,11 @@ async function aiUsageLayout(page: Page): Promise<Read> {
   // A poll retry starts from whichever view the last read left.
   await mn.getByRole('button', { name: 'CALLS' }).click()
   await expect(aiCallRows(page).first()).toBeVisible()
-  const calls = await aiCardRead(page, aiCallRows(page), 'calls')
+  const calls = await aiCardRead(page, aiCallRows(page), 'calls', [0, 2, 5, 6, 7, 8, 9])
 
   await mn.getByRole('button', { name: 'DAILY TOTALS' }).click()
   await expect(aiTotalRows(page).first()).toBeVisible()
-  const totals = await aiCardRead(page, aiTotalRows(page), 'totals')
+  const totals = await aiCardRead(page, aiTotalRows(page), 'totals', [0, 2, 3, 4, 5, 6])
   await mn.getByRole('button', { name: 'CALLS' }).click()
 
   await noSidewaysScroll(page, 'AI usage')

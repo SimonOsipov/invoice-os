@@ -220,4 +220,90 @@ func TestStoreSetStatus_AuditFailureRollsBackTheMove(t *testing.T) {
 	if n := len(auditRows(t, super, tenantA, archivedEvent)); n != 0 {
 		t.Errorf("archived audit rows after failed audit = %d, want 0", n)
 	}
+
+	archived := seedCustomer(t, super, tenantA, seed{TIN: tin2, Status: "archived"})
+	if _, err := store.SetStatus(badCtx, archived, customer.StatusActive); err == nil {
+		t.Fatal("restore with an audit-failing actor succeeded, want an error")
+	}
+	if st := rowStatus(t, super, archived); st != "archived" {
+		t.Errorf("status after failed restore audit = %q, want archived (rolled back)", st)
+	}
+	if n := len(auditRows(t, super, tenantA, restoredEvent)); n != 0 {
+		t.Errorf("restored audit rows after failed audit = %d, want 0", n)
+	}
+}
+
+func TestStoreSetStatus_ArchiveRestoreArchiveWritesThreeRowsInOrder(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer status order")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1})
+
+	for _, target := range []string{customer.StatusArchived, customer.StatusActive, customer.StatusArchived} {
+		if _, err := store.SetStatus(ctxA, id, target); err != nil {
+			t.Fatalf("SetStatus %s: %v", target, err)
+		}
+	}
+	rows, err := super.Query(context.Background(),
+		`SELECT event FROM audit_log WHERE tenant_id = $1 AND event IN ($2, $3) ORDER BY id`, tenantA, archivedEvent, restoredEvent)
+	if err != nil {
+		t.Fatalf("read audit_log: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var ev string
+		if err := rows.Scan(&ev); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, ev)
+	}
+	if want := []string{archivedEvent, restoredEvent, archivedEvent}; !reflect.DeepEqual(got, want) {
+		t.Errorf("audit events in order = %v, want %v", got, want)
+	}
+}
+
+func TestStoreSetStatus_ConcurrentPatchAndArchiveBothLand(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer patch vs archive")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1})
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	var archiveErr, patchErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		_, archiveErr = store.SetStatus(ctxA, id, customer.StatusArchived)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		email := "race@x.ng"
+		_, patchErr = store.Update(ctxA, id, customer.UpdateInput{Email: &email})
+	}()
+	close(start)
+	wg.Wait()
+
+	if archiveErr != nil || patchErr != nil {
+		t.Fatalf("archive err = %v, patch err = %v, want both nil", archiveErr, patchErr)
+	}
+	if st := rowStatus(t, super, id); st != "archived" {
+		t.Errorf("status = %q, want archived", st)
+	}
+	var email *string
+	if err := super.QueryRow(context.Background(), `SELECT email FROM customers WHERE id = $1`, id).Scan(&email); err != nil {
+		t.Fatalf("read email: %v", err)
+	}
+	if email == nil || *email != "race@x.ng" {
+		t.Errorf("email = %v, want race@x.ng (the PATCH survived the archive)", email)
+	}
+	if n := len(auditRows(t, super, tenantA, archivedEvent)); n != 1 {
+		t.Errorf("archived rows = %d, want 1", n)
+	}
+	if n := len(auditRows(t, super, tenantA, updatedEvent)); n != 1 {
+		t.Errorf("updated rows = %d, want 1", n)
+	}
 }

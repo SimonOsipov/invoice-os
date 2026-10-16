@@ -571,7 +571,7 @@ func TestStoreCreate_ConcurrentCreatesOfOneTINMakeOneRecord(t *testing.T) {
 
 // --- edge: both CHECKs failing, and size ------------------------------------
 
-// With both bad, the TIN message wins (Core AC 2); the store sets buyer_type after the insert.
+// With both bad, the TIN message wins (Core AC 2); the store checks the TIN before it writes.
 func TestCreateHandler_BadTINAndBadBuyerTypeAnswersOne400AndWritesNothing(t *testing.T) {
 	super, app := dbTestPools(t)
 	h := newMux(customer.NewStore(app))
@@ -594,6 +594,24 @@ func TestCreateHandler_BadTINAndBadBuyerTypeAnswersOne400AndWritesNothing(t *tes
 	}
 	if n := countAll(t, super, tenantA); n != 0 {
 		t.Errorf("customers rows after the buyer-type 400 = %d, want 0", n)
+	}
+}
+
+// The TIN regex alone decides: no write happens, so no CHECK order is involved.
+func TestCreateHandler_UnfileableTINWinsOverBadBuyerTypeBeforeAnyWrite(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create regex first")
+
+	for _, tin := range []string{"RN-", " 12345678 ", "12345678-00001"} {
+		rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+tin+`","buyer_type":"nope"}`)
+		wantStatus(t, rec, http.StatusBadRequest)
+		if got := errorBody(t, rec); got != msgTINFormat {
+			t.Errorf("tin %q: error = %q, want %q", tin, got, msgTINFormat)
+		}
+	}
+	if n := countAll(t, super, tenantA); n != 0 {
+		t.Errorf("customers rows = %d, want 0", n)
 	}
 }
 

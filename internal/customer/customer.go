@@ -112,8 +112,8 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Customer, int, 
 		}
 		query := r.URL.Query()
 
-		status := query.Get("status")
-		if status != "" && status != "active" && status != "archived" {
+		wantStatus := query.Get("status")
+		if wantStatus != "" && wantStatus != StatusActive && wantStatus != StatusArchived {
 			writeError(w, http.StatusBadRequest, `status must be "active" or "archived"`)
 			return
 		}
@@ -148,7 +148,7 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Customer, int, 
 			return
 		}
 
-		filter := ListFilter{TIN: query.Get("tin"), Status: status, Limit: limit, Offset: offset}
+		filter := ListFilter{TIN: query.Get("tin"), Status: wantStatus, Limit: limit, Offset: offset}
 		items, total, err := list(r.Context(), filter)
 		if err != nil {
 			status, msg := statusForErr(err)

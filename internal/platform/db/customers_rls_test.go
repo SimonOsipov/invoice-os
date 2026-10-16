@@ -965,7 +965,7 @@ func TestRLS_CustomersStatusMigrationDownDropsOnlyTheColumn(t *testing.T) {
 	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
 		t.Fatalf("re-apply the customer_status migration: %v", err)
 	}
-	// Pin status itself: a baseline read from the live DB would repeat a mutated Up.
+	// status is pinned literally; colsUp is read from the live DB.
 	wantUp := map[string]string{}
 	for name, desc := range colsUp {
 		wantUp[name] = desc

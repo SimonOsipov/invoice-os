@@ -3,6 +3,7 @@ package customer
 import (
 	"context"
 	"errors"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
+
+var fileableTINRe = regexp.MustCompile(fileableTIN)
 
 const columns = `id, tin, name, contact_person, buyer_type, email, telephone, street, city, postal_zone, country, state, lga, status, created_at`
 
@@ -142,7 +145,7 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Customer
 }
 
 // Create inserts an active record. Only non-blank fields are stored and marked in edited_fields,
-// so the invoice fill can still fill the rest. The TIN format is left to the CHECK.
+// so the invoice fill can still fill the rest.
 func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
 	cols := []struct {
 		name string
@@ -159,11 +162,14 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
 		if in.TIN == nil || strings.TrimSpace(*in.TIN) == "" {
 			return errTINRequired
 		}
+		tin := strings.TrimSpace(*in.TIN)
+		if !fileableTINRe.MatchString(tin) { // before any write, so the TIN message wins over a bad buyer_type
+			return errTINFormat
+		}
 		names := []string{"tenant_id", "tin"}
 		holders := []string{"$1::uuid", "$2"}
-		args := []any{caller.TenantID, strings.TrimSpace(*in.TIN)}
+		args := []any{caller.TenantID, tin}
 		set := []string{}
-		buyerType := ""
 		for _, c := range cols {
 			if c.val == nil {
 				continue
@@ -173,10 +179,6 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
 				continue
 			}
 			set = append(set, c.name)
-			if c.name == "buyer_type" {
-				buyerType = t
-				continue
-			}
 			args = append(args, t)
 			names = append(names, c.name)
 			holders = append(holders, "$"+itoa(len(args)))
@@ -197,22 +199,13 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
 					return ErrDuplicateTIN
 				case pgErr.Code == "23514" && pgErr.TableName == "customers" && pgErr.ConstraintName == "customers_tin_check":
 					return errTINFormat
+				case pgErr.Code == "23514" && pgErr.TableName == "customers" && pgErr.ConstraintName == "customers_buyer_type_check":
+					return errBuyerType
 				case pgErr.Code == "54000": // TIN past the unique index's row limit; no other column is indexed
 					return errTINFormat
 				}
 			}
 			return err
-		}
-		if buyerType != "" {
-			// Set after the insert so a bad TIN is reported before a bad buyer_type (CHECKs fire in name order).
-			c, err = scan(tx.QueryRow(ctx, "UPDATE customers SET buyer_type = $1 WHERE id = $2::uuid RETURNING "+columns, buyerType, c.ID))
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == "customers_buyer_type_check" {
-				return errBuyerType
-			}
-			if err != nil {
-				return err
-			}
 		}
 		out = c
 		return audit.Record(ctx, tx, caller.Subject, "customers.customer.created", map[string]any{

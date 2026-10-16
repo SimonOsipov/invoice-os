@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
@@ -300,6 +300,49 @@ describe('CustomersView: the record list', () => {
     render(<CustomersView ctx={ctxFor('firm', 'ent-1', 'Acme Advisory')} />)
 
     expect(await screen.findByText('Acme Advisory · Customer records, tax IDs & billing history')).toBeTruthy()
+  })
+})
+
+describe('CustomersView: edit', () => {
+  it('CU-21 a row click opens the editor for that row, not another', async () => {
+    mockApi({
+      customers: () => recordsPage([record({ id: 'a', name: 'First Co' }), record({ id: 'b', tin: '20000000-0002', name: 'Second Co' })]),
+      invoices: () => invoicesPage([]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Second Co')
+
+    fireEvent.click(rows()[1])
+
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit customer' }))
+    expect(dialog.getByText('20000000-0002')).toBeTruthy()
+    expect((dialog.getByLabelText('Name') as HTMLInputElement).value).toBe('Second Co')
+  })
+
+  it('CU-22 a preparer can open and save; the records page refetches', async () => {
+    const patches: unknown[] = []
+    const { customerCalls, invoiceCalls, fetchMock } = mockApi({ customers: () => recordsPage([record({ id: 'a' })]), invoices: () => invoicesPage([]) })
+    const routed = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation(((url: string, init?: { method?: string; body?: unknown }) => {
+      if (init?.method === 'PATCH') {
+        patches.push({ url, body: JSON.parse(String(init.body)) })
+        return Promise.resolve(ok(record({ id: 'a', email: 'new@x.ng' })))
+      }
+      return routed(url)
+    }) as typeof routed)
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    const [recordsBefore, invoicesBefore] = [customerCalls().length, invoiceCalls().length]
+
+    fireEvent.click(rows()[0])
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit customer' }))
+    fireEvent.change(dialog.getByLabelText('Email'), { target: { value: 'new@x.ng' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(patches).toEqual([{ url: 'https://gw/api/invoice/v1/customers/a', body: { email: 'new@x.ng' } }])
+    await waitFor(() => expect(customerCalls().length).toBe(recordsBefore + 1))
+    expect(invoiceCalls().length, 'the invoice fetch does not rerun').toBe(invoicesBefore)
   })
 })
 

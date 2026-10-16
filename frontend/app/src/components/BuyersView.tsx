@@ -5,7 +5,7 @@ import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice
 
 import { listCustomers, type Customer, type CustomerListResponse } from '../lib/buyerDirectory'
 import type { PlatformCtx } from '../types'
-import { BuyerFormModal } from './BuyerFormModal'
+import { CustomerFormModal } from './CustomerFormModal'
 import { Pager } from './Pager'
 
 const PAGE_SIZE = 50
@@ -64,7 +64,7 @@ export function BuyersView({ ctx }: { ctx: PlatformCtx }) {
       )}
 
       {editing && base != null && (
-        <BuyerFormModal
+        <CustomerFormModal
           customer={editing}
           ctx={ctx}
           base={base}

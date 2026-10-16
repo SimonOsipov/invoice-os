@@ -1399,27 +1399,31 @@ test.describe('Buyers directory and company fields', () => {
 
   const buyerRow = (page: Page, tin: string) => page.locator('.pf-list-row', { hasText: tin })
 
-  test('ST-15 Settings > Buyers: a member corrects the buyer an invoice filled', async ({ page }) => {
+  test('ST-15 Customers: a member corrects the customer an invoice filled', async ({ page }) => {
     test.setTimeout(120_000)
     const errors = gatedErrors(page, [])
-    await signInAtFrontDoor(page, firm, '/settings/buyers')
-    await expect(page, 'the deep link did not open Buyers').toHaveURL(/\/settings\/buyers$/)
+    await signInAtFrontDoor(page, firm, '/customers')
+    await expect(page, 'the deep link did not open Customers').toHaveURL(/\/customers$/)
     const row = buyerRow(page, BUYER_TIN)
-    await expect(row, 'the buyer the invoice filled is not listed').toBeVisible({ timeout: 20_000 })
-    await expect(row).toContainText('before@buyer.example.com')
+    await expect(row, 'the customer the invoice filled is not listed').toBeVisible({ timeout: 20_000 })
 
     await row.click()
-    const dialog = page.getByRole('dialog', { name: 'Edit buyer', exact: true })
+    const dialog = page.getByRole('dialog', { name: 'Edit customer', exact: true })
     await expect(dialog).toBeVisible()
-    const fixed = `fixed-${BUYER_TIN}@buyer.example.com`
-    await dialog.getByLabel('Email', { exact: true }).fill(fixed)
+    const fixedName = `Fixed ${BUYER_TIN}`
+    const fixedEmail = `fixed-${BUYER_TIN}@buyer.example.com`
+    await dialog.getByLabel('Name', { exact: true }).fill(fixedName)
+    await dialog.getByLabel('Email', { exact: true }).fill(fixedEmail)
     await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
-    await expect(dialog, 'the buyer modal never closed after Save').toHaveCount(0)
-    await expect(buyerRow(page, BUYER_TIN)).toContainText(fixed)
+    await expect(dialog, 'the customer modal never closed after Save').toHaveCount(0)
+    await expect(buyerRow(page, BUYER_TIN)).toContainText(fixedName)
 
     await page.reload()
-    await expect(buyerRow(page, BUYER_TIN), 'the correction did not survive a reload').toContainText(fixed, { timeout: 20_000 })
-    expect((await listCustomers(firmToken, { tin: BUYER_TIN })).customers[0]?.email, 'the API holds the correction').toBe(fixed)
+    await expect(buyerRow(page, BUYER_TIN), 'the correction did not survive a reload').toContainText(fixedName, { timeout: 20_000 })
+    await buyerRow(page, BUYER_TIN).click()
+    await expect(page.getByRole('dialog', { name: 'Edit customer', exact: true }).getByLabel('Email', { exact: true }), 'the reopened dialog lost the Email').toHaveValue(fixedEmail)
+    const held = (await listCustomers(firmToken, { tin: BUYER_TIN })).customers[0]
+    expect({ name: held?.name, email: held?.email }, 'the API holds the correction').toEqual({ name: fixedName, email: fixedEmail })
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 
@@ -1505,7 +1509,7 @@ test.describe('Buyers directory and company fields', () => {
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 
-  test('ST-18 the company and buyer modals keep Save on screen at 1280x900', async ({ page }, testInfo) => {
+  test('ST-18 the company and customer modals keep Save on screen at 1280x900', async ({ page }, testInfo) => {
     test.setTimeout(120_000)
     const errors = gatedErrors(page, [])
     await page.setViewportSize({ width: 1280, height: 900 })
@@ -1536,9 +1540,9 @@ test.describe('Buyers directory and company fields', () => {
     await expect(page.getByRole('dialog', { name: 'Edit company', exact: true }).locator('input'), 'the company form is 13 inputs').toHaveCount(13)
     await saveStaysOnScreen('Edit company')
 
-    await signInAtFrontDoor(page, firm, '/settings/buyers')
+    await signInAtFrontDoor(page, firm, '/customers')
     await buyerRow(page, BUYER_TIN).click()
-    await saveStaysOnScreen('Edit buyer')
+    await saveStaysOnScreen('Edit customer')
 
     await attachJson(testInfo, 'st-18-measurements', reads)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

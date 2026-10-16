@@ -5,12 +5,13 @@ import { useState } from 'react'
 
 import { ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
-import { FILEABLE_TIN, listCustomers, type CustomerListResponse } from '../lib/buyerDirectory'
+import { FILEABLE_TIN, listCustomers, type Customer, type CustomerListResponse } from '../lib/buyerDirectory'
 import { fmt } from '../lib/format'
 import { aggregateCustomers, customerName, initials } from '../lib/customers'
 import { fetchAllInvoices, type AllInvoices } from '../lib/invoices'
 import { docGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
+import { CustomerFormModal } from './CustomerFormModal'
 import { Pager } from './Pager'
 
 const PAGE_SIZE = 50
@@ -23,6 +24,7 @@ const NEEDS_TIN_CHIP = { bg: 'var(--status-red-bg)', border: 'var(--status-red-b
 export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const [offset, setOffset] = useState(0)
+  const [editing, setEditing] = useState<Customer | null>(null)
 
   const records = useAsync<CustomerListResponse>(
     () => (base ? listCustomers(ctx.authedFetch, base, { limit: PAGE_SIZE, offset }) : Promise.reject(new Error('no gateway configured'))),
@@ -50,6 +52,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
     const name = customerName(r.name, agg?.name)
     const fileable = FILEABLE_TIN.test(r.tin)
     return {
+      record: r,
       id: r.id,
       name,
       initials: initials(name) || '—',
@@ -98,7 +101,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
               <span className="label">Tax status</span>
             </div>
             {customers.map((c) => (
-              <div key={c.id} className="pf-list-row" style={{ display: 'grid', gridTemplateColumns: GRID_COLUMNS, gap: 14, padding: '13px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
+              <div key={c.id} onClick={() => setEditing(c.record)} className="pf-row pf-list-row" style={{ display: 'grid', gridTemplateColumns: GRID_COLUMNS, gap: 14, padding: '13px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
                   <span style={{ flex: 'none', width: 30, height: 30, borderRadius: '50%', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{c.initials}</span>
                   <span style={{ ...CELL, fontSize: 13.5, fontWeight: 500 }}>{c.name}</span>
@@ -132,6 +135,19 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
             <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
           </button>
         </div>
+      )}
+
+      {editing && base != null && (
+        <CustomerFormModal
+          customer={editing}
+          ctx={ctx}
+          base={base}
+          onClose={() => setEditing(null)}
+          onSuccess={() => {
+            records.run()
+            setEditing(null)
+          }}
+        />
       )}
     </div>
   )

@@ -1356,9 +1356,10 @@ test('ST-14 no Settings tab scrolls sideways and the roster fills the tab column
 
 // --- Customers and the company fields ------------------------------------------------------------------
 // Each account is a fresh tenant, so its directory holds only the rows below.
-test.describe('Customers directory and company fields', () => {
+test.describe('Customers screen and company fields', () => {
   const BUYER_TIN = freshBuyerTin()
   const LONG_TIN = freshBuyerTin()
+  const INHOUSE_TIN = freshBuyerTin()
   const RN_TIN = `RN-${'7'.repeat(24)}`
   const LONG_NAME = `Long ${'N'.repeat(115)}`
   const LONG_EMAIL = `${'e'.repeat(108)}@example.com`
@@ -1386,10 +1387,14 @@ test.describe('Customers directory and company fields', () => {
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${LONG_TIN}`, buyer_tin: LONG_TIN, buyer_name: LONG_NAME, buyer_email: LONG_EMAIL, invoice_kind: 'B2B' })
       await createInvoice(token, { ...base, invoice_number: `INV-CUST02-${RN_TIN.slice(3, 11)}`, buyer_tin: RN_TIN, buyer_name: 'RN Buyer', invoice_kind: 'B2B' })
     }
+    else {
+      await createInvoice(token, { entity_id: created.id, ...cleanInvoiceFields(''), invoice_number: `INV-CUST02-${INHOUSE_TIN}`, buyer_tin: INHOUSE_TIN, buyer_name: 'Buyer Ltd', buyer_email: 'before@buyer.example.com', invoice_kind: 'B2B' })
+    }
     return token
   }
 
   let firmToken = ''
+  let inhouseToken = ''
   let firmEntityName = ''
 
   test.beforeAll(async () => {
@@ -1397,43 +1402,63 @@ test.describe('Customers directory and company fields', () => {
     firm = await provisionRealAccount('buyers-firm', 'firm')
     inhouse = await provisionRealAccount('buyers-inhouse', 'in_house')
     firmToken = await seedTenant(firm, 'ENGI-05 firm')
-    await seedTenant(inhouse, 'ENGI-05 company')
+    inhouseToken = await seedTenant(inhouse, 'ENGI-05 company')
   })
 
   const buyerRow = (page: Page, tin: string) => page.locator('.pf-list-row', { hasText: tin })
 
-  test('ST-15 Customers: a member corrects the customer an invoice filled', async ({ page }) => {
+  for (const persona of ['firm', 'inhouse'] as const) {
+    test(`ST-15 Customers: a member corrects the customer an invoice filled (${persona})`, async ({ page }) => {
+      test.setTimeout(120_000)
+      const isFirm = persona === 'firm'
+      const account = isFirm ? firm : inhouse
+      const tin = isFirm ? BUYER_TIN : INHOUSE_TIN
+      const token = isFirm ? firmToken : inhouseToken
+      const errors = gatedErrors(page, [])
+      await signInAtFrontDoor(page, account, '/customers')
+      await expect(page, 'the deep link did not open Customers').toHaveURL(/\/customers$/)
+      const row = buyerRow(page, tin)
+      await expect(row, 'the customer the invoice filled is not listed').toBeVisible({ timeout: 20_000 })
+
+      await row.click()
+      const dialog = page.getByRole('dialog', { name: 'Edit customer', exact: true })
+      await expect(dialog).toBeVisible()
+      const fixedName = `Fixed ${tin}`
+      const fixedEmail = `fixed-${tin}@buyer.example.com`
+      await dialog.getByLabel('Name', { exact: true }).fill(fixedName)
+      await dialog.getByLabel('Email', { exact: true }).fill(fixedEmail)
+      await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+      await expect(dialog, 'the customer modal never closed after Save').toHaveCount(0)
+      await expect(buyerRow(page, tin)).toContainText(fixedName)
+
+      await page.reload()
+      await expect(buyerRow(page, tin), 'the correction did not survive a reload').toContainText(fixedName, { timeout: 20_000 })
+      await buyerRow(page, tin).click()
+      await expect(page.getByRole('dialog', { name: 'Edit customer', exact: true }).getByLabel('Email', { exact: true }), 'the reopened dialog lost the Email').toHaveValue(fixedEmail)
+      const held = (await listCustomers(token, { tin })).customers[0]
+      expect({ name: held?.name, email: held?.email }, 'the API holds the correction').toEqual({ name: fixedName, email: fixedEmail })
+
+      if (isFirm) {
+        // Reports names its top customers from the same record.
+        await navButton(page, /^Reports/).click()
+        await selectEntity(page, firmEntityName)
+        const topCard = page.locator('xpath=//span[contains(@class,"card-title") and normalize-space(text())="Top customers by value"]/ancestor::div[2]')
+        await expect(topCard, 'Reports did not show the corrected Name').toContainText(fixedName, { timeout: 20_000 })
+        await expect(topCard).not.toContainText('Buyer Ltd')
+      }
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+  }
+
+  test('ST-20 /settings/buyers lands on /customers for both personas', async ({ page }) => {
     test.setTimeout(120_000)
     const errors = gatedErrors(page, [])
-    await signInAtFrontDoor(page, firm, '/customers')
-    await expect(page, 'the deep link did not open Customers').toHaveURL(/\/customers$/)
-    const row = buyerRow(page, BUYER_TIN)
-    await expect(row, 'the customer the invoice filled is not listed').toBeVisible({ timeout: 20_000 })
-
-    await row.click()
-    const dialog = page.getByRole('dialog', { name: 'Edit customer', exact: true })
-    await expect(dialog).toBeVisible()
-    const fixedName = `Fixed ${BUYER_TIN}`
-    const fixedEmail = `fixed-${BUYER_TIN}@buyer.example.com`
-    await dialog.getByLabel('Name', { exact: true }).fill(fixedName)
-    await dialog.getByLabel('Email', { exact: true }).fill(fixedEmail)
-    await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
-    await expect(dialog, 'the customer modal never closed after Save').toHaveCount(0)
-    await expect(buyerRow(page, BUYER_TIN)).toContainText(fixedName)
-
-    await page.reload()
-    await expect(buyerRow(page, BUYER_TIN), 'the correction did not survive a reload').toContainText(fixedName, { timeout: 20_000 })
-    await buyerRow(page, BUYER_TIN).click()
-    await expect(page.getByRole('dialog', { name: 'Edit customer', exact: true }).getByLabel('Email', { exact: true }), 'the reopened dialog lost the Email').toHaveValue(fixedEmail)
-    const held = (await listCustomers(firmToken, { tin: BUYER_TIN })).customers[0]
-    expect({ name: held?.name, email: held?.email }, 'the API holds the correction').toEqual({ name: fixedName, email: fixedEmail })
-
-    // Reports names its top customers from the same record.
-    await navButton(page, /^Reports/).click()
-    await selectEntity(page, firmEntityName)
-    const topCard = page.locator('xpath=//span[contains(@class,"card-title") and normalize-space(text())="Top customers by value"]/ancestor::div[2]')
-    await expect(topCard, 'Reports did not show the corrected Name').toContainText(fixedName, { timeout: 20_000 })
-    await expect(topCard).not.toContainText('Buyer Ltd')
+    for (const [persona, account, tin] of [['firm', firm, BUYER_TIN], ['inhouse', inhouse, INHOUSE_TIN]] as const) {
+      await signInAtFrontDoor(page, account, '/settings/buyers')
+      await expect(page, `${persona}: /settings/buyers did not land on /customers`).toHaveURL(/\/customers$/)
+      await expect(page.getByRole('heading', { name: 'Customers', exact: true }), `${persona} has no Customers heading`).toBeVisible()
+      await expect(buyerRow(page, tin), `${persona}: the account's own customer is not listed`).toBeVisible({ timeout: 20_000 })
+    }
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 

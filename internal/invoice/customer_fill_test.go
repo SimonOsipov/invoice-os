@@ -814,3 +814,28 @@ func TestFill_ConcurrentSavesForOneTINDoNotDeadlockOrDuplicate(t *testing.T) {
 		}
 	}
 }
+
+func TestFill_ArchivedRecordStillFillsAndStaysArchived(t *testing.T) {
+	f := newNRSFixture(t, "CF-ARCH")
+	f.create(t, "CF-AR-A", CreateInput{BuyerTIN: strPtr(cfTIN)})
+	id := cfMust(t, f.super, f.tenantID, cfTIN).ID
+	cfCorrect(t, f, id, customer.UpdateInput{Email: strPtr("fixed@x.ng")})
+	if _, err := customer.NewStore(f.app).SetStatus(f.c, id, customer.StatusArchived); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+	f.create(t, "CF-AR-B", CreateInput{BuyerTIN: strPtr(cfTIN), BuyerCity: strPtr("Abuja"), BuyerEmail: strPtr("new@x.ng")})
+
+	r := cfMust(t, f.super, f.tenantID, cfTIN)
+	if cfV(r.City) != "Abuja" {
+		t.Errorf("city = %s, want Abuja (an unedited field fills)", cfV(r.City))
+	}
+	if cfV(r.Email) != "fixed@x.ng" {
+		t.Errorf("email = %s, want fixed@x.ng (the edited field is kept)", cfV(r.Email))
+	}
+	if st := mustCount(t, f.super, `SELECT count(*) FROM customers WHERE id = $1 AND status = 'archived'`, id); st != 1 {
+		t.Errorf("archived rows for the record = %d, want 1 (stays archived)", st)
+	}
+	if n := cfCount(t, f.super, f.tenantID); n != 1 {
+		t.Errorf("customers rows = %d, want 1", n)
+	}
+}

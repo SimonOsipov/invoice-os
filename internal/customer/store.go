@@ -225,6 +225,43 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
 	return out, nil
 }
 
+// SetStatus moves a record to target. A move to the current status is ErrRedundantTransition,
+// decided under the row lock before any write, so it changes nothing and writes no audit row.
+func (s *Store) SetStatus(ctx context.Context, id, target string) (Customer, error) {
+	var out Customer
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+		var current string
+		if err := tx.QueryRow(ctx, "SELECT status FROM customers WHERE id = $1::text::uuid FOR UPDATE", id).Scan(&current); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.Is(err, pgx.ErrNoRows) || (errors.As(err, &pgErr) && pgErr.Code == "22P02") {
+				return ErrNotFound
+			}
+			return err
+		}
+		if current == target {
+			return ErrRedundantTransition
+		}
+		c, err := scan(tx.QueryRow(ctx, "UPDATE customers SET status = $1 WHERE id = $2::text::uuid RETURNING "+columns, target, id))
+		if err != nil {
+			return err
+		}
+		out = c
+		if target == StatusArchived {
+			return audit.Record(ctx, tx, caller.Subject, "customers.customer.archived", map[string]any{
+				"id": c.ID, "from": current, "to": target,
+			})
+		}
+		return audit.Record(ctx, tx, caller.Subject, "customers.customer.restored", map[string]any{
+			"id": c.ID, "from": current, "to": target,
+		})
+	})
+	if err != nil {
+		return Customer{}, err
+	}
+	return out, nil
+}
+
 // LookupByTIN runs in the caller's tenant tx; nil, nil when no active record matches.
 func LookupByTIN(ctx context.Context, tx pgx.Tx, tin string) (*Customer, error) {
 	c, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM customers WHERE tin = $1 AND status = 'active'", strings.TrimSpace(tin)))

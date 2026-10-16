@@ -157,3 +157,37 @@ func TestRLS_CustomerCreateIgnoresAForgedTenantID(t *testing.T) {
 		t.Errorf("created audit rows in tenant B = %d, want 0", n)
 	}
 }
+
+func TestRLS_CustomerStatusMovesNeverCrossTenants(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer status move A")
+	tenantB, _, _ := seedTenantWithAdmin(t, super, "customer status move B")
+	bActive := seedCustomer(t, super, tenantB, seed{TIN: tin1})
+	bArchived := seedCustomer(t, super, tenantB, seed{TIN: tin2, Status: "archived"})
+	aID := seedCustomer(t, super, tenantA, seed{TIN: tin1})
+
+	wantStatus(t, do(t, h, ctxA, http.MethodPost, "/v1/customers/"+bActive+"/archive", ""), http.StatusNotFound)
+	wantStatus(t, do(t, h, ctxA, http.MethodPost, "/v1/customers/"+bArchived+"/restore", ""), http.StatusNotFound)
+	if st := rowStatus(t, super, bActive); st != "active" {
+		t.Errorf("B's active record status = %q, want active", st)
+	}
+	if st := rowStatus(t, super, bArchived); st != "archived" {
+		t.Errorf("B's archived record status = %q, want archived", st)
+	}
+	for name, tenant := range map[string]string{"A": tenantA, "B": tenantB} {
+		for _, ev := range []string{archivedEvent, restoredEvent} {
+			if n := len(auditRows(t, super, tenant, ev)); n != 0 {
+				t.Errorf("%s rows in tenant %s after cross-tenant moves = %d, want 0", ev, name, n)
+			}
+		}
+	}
+
+	wantStatus(t, do(t, h, ctxA, http.MethodPost, "/v1/customers/"+aID+"/archive", ""), http.StatusOK)
+	if n := len(auditRows(t, super, tenantA, archivedEvent)); n != 1 {
+		t.Errorf("control: archived rows in tenant A = %d, want 1", n)
+	}
+	if n := len(auditRows(t, super, tenantB, archivedEvent)); n != 0 {
+		t.Errorf("archived rows in tenant B after A's own archive = %d, want 0", n)
+	}
+}

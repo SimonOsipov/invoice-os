@@ -18,7 +18,13 @@ var (
 	ErrValidation = errors.New("customer: validation")
 	ErrNotFound   = errors.New("customer: not found")
 
-	ErrDuplicateTIN = errors.New("customer: duplicate tin")
+	ErrDuplicateTIN        = errors.New("customer: duplicate tin")
+	ErrRedundantTransition = errors.New("customer: redundant transition")
+)
+
+const (
+	StatusActive   = "active"
+	StatusArchived = "archived"
 )
 
 // validationError is an ErrValidation whose text is the 400 message.
@@ -239,6 +245,29 @@ func CreateHandler(create func(ctx context.Context, in CreateInput) (Customer, e
 	}
 }
 
+// SetStatusHandler serves POST /v1/customers/{id}/archive and /restore; the target is bound by the setStatus closure.
+func SetStatusHandler(setStatus func(ctx context.Context, id string) (Customer, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		c, err := setStatus(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "customer: set customer status", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+	}
+}
+
 func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
@@ -251,6 +280,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusNotFound, "not found"
 	case errors.Is(err, ErrDuplicateTIN):
 		return http.StatusConflict, "duplicate tin"
+	case errors.Is(err, ErrRedundantTransition):
+		return http.StatusConflict, "redundant transition"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

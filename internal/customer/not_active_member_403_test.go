@@ -31,6 +31,8 @@ func TestCustomers_NotActiveMemberIs403(t *testing.T) {
 			{http.MethodGet, "/v1/customers", ""},
 			{http.MethodPatch, "/v1/customers/" + id, `{"email":"new@x.ng"}`},
 			{http.MethodPost, "/v1/customers", `{"tin":"` + tin2 + `","email":"new@x.ng"}`},
+			{http.MethodPost, "/v1/customers/" + id + "/archive", ""},
+			{http.MethodPost, "/v1/customers/" + id + "/restore", ""},
 		} {
 			rec := do(t, h, ctx, tc.method, tc.target, tc.body)
 			if rec.Code != http.StatusForbidden {
@@ -48,6 +50,9 @@ func TestCustomers_NotActiveMemberIs403(t *testing.T) {
 	}
 	if n := len(auditRows(t, super, tenantA, updatedEvent)); n != 0 {
 		t.Errorf("audit rows after refused PATCHes = %d, want 0", n)
+	}
+	if st := rowStatus(t, super, id); st != "active" {
+		t.Errorf("status after refused archive/restore = %q, want active", st)
 	}
 	if n := countTIN(t, super, tenantA, tin2); n != 0 {
 		t.Errorf("rows for the refused POST's TIN = %d, want 0", n)

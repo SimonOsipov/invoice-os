@@ -188,6 +188,12 @@ func newMux(store *customer.Store) http.Handler {
 	mux.HandleFunc("GET /v1/customers", customer.ListHandler(store.List, nil))
 	mux.HandleFunc("PATCH /v1/customers/{id}", customer.UpdateHandler(store.Update, nil))
 	mux.HandleFunc("POST /v1/customers", customer.CreateHandler(store.Create, nil))
+	mux.HandleFunc("POST /v1/customers/{id}/archive", customer.SetStatusHandler(func(ctx context.Context, id string) (customer.Customer, error) {
+		return store.SetStatus(ctx, id, customer.StatusArchived)
+	}, nil))
+	mux.HandleFunc("POST /v1/customers/{id}/restore", customer.SetStatusHandler(func(ctx context.Context, id string) (customer.Customer, error) {
+		return store.SetStatus(ctx, id, customer.StatusActive)
+	}, nil))
 	return mux
 }
 
@@ -629,11 +635,19 @@ func TestHandlers_NoIdentityIs401(t *testing.T) {
 		return customer.Customer{}, nil
 	}
 	mux.HandleFunc("POST /v1/customers", customer.CreateHandler(create, nil))
+	setStatus := func(context.Context, string) (customer.Customer, error) {
+		called = true
+		return customer.Customer{}, nil
+	}
+	mux.HandleFunc("POST /v1/customers/{id}/archive", customer.SetStatusHandler(setStatus, nil))
+	mux.HandleFunc("POST /v1/customers/{id}/restore", customer.SetStatusHandler(setStatus, nil))
 
 	for _, tc := range []struct{ method, target, body string }{
 		{http.MethodGet, "/v1/customers", ""},
 		{http.MethodPatch, "/v1/customers/" + uuid.NewString(), `{"email":"a@x.ng"}`},
 		{http.MethodPost, "/v1/customers", `{"tin":"` + tin1 + `"}`},
+		{http.MethodPost, "/v1/customers/" + uuid.NewString() + "/archive", ""},
+		{http.MethodPost, "/v1/customers/" + uuid.NewString() + "/restore", ""},
 	} {
 		rec := do(t, mux, context.Background(), tc.method, tc.target, tc.body)
 		if rec.Code != http.StatusUnauthorized {

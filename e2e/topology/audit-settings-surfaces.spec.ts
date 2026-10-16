@@ -1344,7 +1344,7 @@ test('ST-14 no Settings tab scrolls sideways and the roster fills the tab column
   await openMembers(page)
   const fit = await assertFillsColumn(page, tid(page, 'members-table'), tabStrip(page), 'members table')
   const scroll: Record<string, unknown> = { members: await assertPageDoesNotScrollSideways(page, 'Members') }
-  for (const [label, id] of [['Roles', 'roles'], ['ERP connectors', 'connectors'], ['API & webhooks', 'api'], ['Signing & certificates', 'signing'], ['Buyers', 'buyers']] as const) {
+  for (const [label, id] of [['Roles', 'roles'], ['ERP connectors', 'connectors'], ['API & webhooks', 'api'], ['Signing & certificates', 'signing']] as const) {
     await openTab(page, label, id)
     await settle(page, main(page))
     scroll[id] = await assertPageDoesNotScrollSideways(page, label)
@@ -1353,7 +1353,7 @@ test('ST-14 no Settings tab scrolls sideways and the roster fills the tab column
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-// --- Settings > Buyers and the company fields ------------------------------------------------------------------
+// --- Customers and the company fields ------------------------------------------------------------------
 // Each account is a fresh tenant, so its directory holds only the rows below.
 test.describe('Buyers directory and company fields', () => {
   const BUYER_TIN = freshBuyerTin()
@@ -1432,12 +1432,12 @@ test.describe('Buyers directory and company fields', () => {
     const errors = gatedErrors(page, [])
     const measured: Record<string, unknown> = {}
     for (const [persona, account] of [['firm', firm], ['inhouse', inhouse]] as const) {
-      await signInAtFrontDoor(page, account, '/settings/buyers')
-      await expect(settingsTab(page, 'Buyers'), `${persona} has no Buyers tab`).toBeVisible()
-      const strip = settingsTab(page, 'Buyers').locator('xpath=..')
+      await signInAtFrontDoor(page, account, '/settings/members')
+      await expect(settingsTab(page, 'Members'), `${persona} has no Members tab`).toBeVisible()
+      const strip = settingsTab(page, 'Members').locator('xpath=..')
       const tabs = strip.getByRole('button')
       const count = await tabs.count()
-      expect(count, `${persona} strip holds the Buyers tab and at least one other`).toBeGreaterThanOrEqual(2)
+      expect(count, `${persona} strip holds the Members tab and at least one other`).toBeGreaterThanOrEqual(2)
       await settle(page, main(page))
       measured[persona] = await sweep(page, `${persona} settings tab strip`, async () => {
         const named: Named = { strip }

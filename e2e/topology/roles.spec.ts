@@ -329,7 +329,7 @@ const DELETED_ROLE_LINE = 'Role no longer exists'
 // The Settings tab strip, in render order. In-house prepends its own Company tab ahead of
 // the shared list, so the two differ by that one entry — and Roles sits directly after
 // Members in both.
-const FIRM_SETTINGS_TABS = ['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates']
+const FIRM_SETTINGS_TABS = ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates']
 const INHOUSE_SETTINGS_TABS = ['Company', ...FIRM_SETTINGS_TABS]
 
 // sidebar/navButton/goTo: file-local copies of persona-surfaces.spec.ts's, this package's

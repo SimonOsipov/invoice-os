@@ -70,7 +70,6 @@ export function parseRoute(pathname: string): Route | null {
 const SETTINGS_TAB_TABLE: Record<SettingsTab, true> = {
   members: true,
   roles: true,
-  buyers: true,
   connectors: true,
   api: true,
   signing: true,
@@ -184,7 +183,8 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
       view = 'create'
       reviewBatchIds = ids
     }
-    if (normalized.startsWith('/settings/')) {
+    if (normalized === '/settings/buyers') view = 'customers' // Buyers tab moved to Customers (CUST-02 D16)
+    else if (normalized.startsWith('/settings/')) {
       const seg = normalized.slice('/settings/'.length)
       if (seg.length > 0 && !/[/?#]/.test(seg)) {
         view = 'settings'

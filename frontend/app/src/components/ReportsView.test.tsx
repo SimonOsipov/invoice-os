@@ -12,9 +12,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
 import { AGGREGATE_MAX_PAGES, AGGREGATE_PAGE_SIZE } from '../lib/invoices'
+import type { Customer, CustomerListResponse } from '../lib/buyerDirectory'
 import type { InvoiceListResponse, InvoiceRecord } from '../lib/invoices'
 import type { Counts, Metrics, Rollup, RollupClient } from '../lib/dashboard'
 import type { PlatformCtx } from '../types'
+import { CustomersView } from './CustomersView'
 import { EXPORTS_BLOCKED_REASON, EXPORTS_BLOCKED_REASON_ID, ReportsView } from './ReportsView'
 
 interface MockResponse {
@@ -46,11 +48,20 @@ function isRollupUrl(url: string): boolean {
   return new URL(url).pathname.endsWith('/rollup')
 }
 
-function mockFetch(invoiceResponses: MockResponse[], rollup: Rollup = ZERO_ROLLUP) {
+function isCustomersUrl(url: string): boolean {
+  return new URL(url).pathname.endsWith('/v1/customers')
+}
+
+// The top-customers record lookup: no record for any TIN unless a test supplies a handler.
+type CustomersHandler = (url: string) => MockResponse
+const NO_RECORDS: CustomersHandler = () => ({ ok: true, status: 200, json: () => Promise.resolve({ customers: [], pagination: { limit: 1, offset: 0, total: 0 } }) })
+
+function mockFetch(invoiceResponses: MockResponse[], rollup: Rollup = ZERO_ROLLUP, customers: CustomersHandler = NO_RECORDS) {
   const queue = [...invoiceResponses]
   const rollupResponse: MockResponse = { ok: true, status: 200, json: () => Promise.resolve(rollup) }
   const fetchMock = vi.fn((url: string) => {
     if (isRollupUrl(url)) return Promise.resolve(rollupResponse)
+    if (isCustomersUrl(url)) return Promise.resolve(customers(url))
     const next = queue.shift()
     if (!next) throw new Error(`ReportsView test: unexpected extra invoices fetch ${url}`)
     return Promise.resolve(next)
@@ -61,7 +72,7 @@ function mockFetch(invoiceResponses: MockResponse[], rollup: Rollup = ZERO_ROLLU
 
 // The invoices-only call URLs, in request order -- excludes the interleaved rollup call.
 function invoiceCallUrls(fetchMock: ReturnType<typeof mockFetch>): string[] {
-  return fetchMock.mock.calls.map((c) => c[0] as string).filter((url) => !isRollupUrl(url))
+  return fetchMock.mock.calls.map((c) => c[0] as string).filter((url) => !isRollupUrl(url) && !isCustomersUrl(url))
 }
 
 function listResponse(invoices: InvoiceRecord[], pagination: { limit: number; offset: number; total: number }): MockResponse {
@@ -490,6 +501,7 @@ function mockFetchRollupError(invoiceResponses: MockResponse[]) {
   const queue = [...invoiceResponses]
   const fetchMock = vi.fn((url: string) => {
     if (isRollupUrl(url)) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'rollup unavailable' }) })
+    if (isCustomersUrl(url)) return Promise.resolve(NO_RECORDS(url))
     const next = queue.shift()
     if (!next) throw new Error(`ReportsView test: unexpected extra invoices fetch ${url}`)
     return Promise.resolve(next)
@@ -787,7 +799,7 @@ describe('ReportsView: the v2 tax report (RESKIN2-05-02)', () => {
   it('RP-15 a loading rollup draws an inline spinner row, not the shared Loading block', async () => {
     const invoices = [listResponse([row({ id: 'inv-l', buyer_tin: tinFor(3), buyer_name: 'Loading Buyer' })], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })]
     const queue = [...invoices]
-    vi.stubGlobal('fetch', vi.fn((url: string) => (isRollupUrl(url) ? new Promise(() => {}) : Promise.resolve(queue.shift()))))
+    vi.stubGlobal('fetch', vi.fn((url: string) => (isRollupUrl(url) ? new Promise(() => {}) : isCustomersUrl(url) ? Promise.resolve(NO_RECORDS(url)) : Promise.resolve(queue.shift()))))
     const { container } = render(<ReportsView ctx={reportsCtx()} />)
 
     await screen.findByText('Loading validation summary…')
@@ -863,5 +875,120 @@ describe('ReportsView: the v2 tax report (RESKIN2-05-02)', () => {
       expect(glyph.querySelector('svg'), 'the first cell holds the cross glyph').not.toBeNull()
       expect(glyph.style.display).toBe('inline-flex')
     }
+  })
+})
+
+const T = '20000000-0001'
+const onePage = (rows: InvoiceRecord[]) => listResponse(rows, { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: rows.length })
+
+function record(over: Partial<Customer> = {}): Customer {
+  return {
+    id: 'c1',
+    tin: T,
+    name: 'Rec Ltd',
+    contact_person: null,
+    buyer_type: 'B2B',
+    email: null,
+    telephone: null,
+    street: null,
+    city: null,
+    postal_zone: null,
+    country: null,
+    state: null,
+    lga: null,
+    created_at: '2026-07-01T00:00:00Z',
+    ...over,
+  }
+}
+
+function recordsResponse(customers: Customer[]): MockResponse {
+  const body: CustomerListResponse = { customers, pagination: { limit: 50, offset: 0, total: customers.length } }
+  return { ok: true, status: 200, json: () => Promise.resolve(body) }
+}
+
+const customerCallUrls = (fetchMock: ReturnType<typeof mockFetch>) => fetchMock.mock.calls.map((c) => c[0] as string).filter(isCustomersUrl)
+
+describe('ReportsView: top customers take the record name (CUST-02-05, AC 7, D17, D18)', () => {
+  it('RP-10 a top customer takes the record name', async () => {
+    mockFetch([onePage([row({ buyer_tin: T, buyer_name: 'Inv Ltd' })])], ZERO_ROLLUP, () => recordsResponse([record()]))
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await vi.waitFor(() => expect(topCustomerNames(container)[0]).toBe('Rec Ltd'))
+  })
+
+  it('RP-11 a TIN with no record keeps the invoice name', async () => {
+    const fetchMock = mockFetch([onePage([row({ buyer_tin: T, buyer_name: 'Inv Ltd' })])])
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await vi.waitFor(() => expect(customerCallUrls(fetchMock)).toHaveLength(1))
+    expect(topCustomerNames(container)[0]).toBe('Inv Ltd')
+  })
+
+  it('RP-11b a record with no name keeps the invoice name', async () => {
+    const fetchMock = mockFetch([onePage([row({ buyer_tin: T, buyer_name: 'Inv Ltd' })])], ZERO_ROLLUP, () => recordsResponse([record({ name: null })]))
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await vi.waitFor(() => expect(customerCallUrls(fetchMock)).toHaveLength(1))
+    expect(topCustomerNames(container)[0]).toBe('Inv Ltd')
+  })
+
+  it('RP-12 a failed lookup keeps invoice names and shows no error', async () => {
+    const down: MockResponse = { ok: false, status: 503, json: () => Promise.resolve({ error: 'down' }) }
+    const fetchMock = mockFetch([onePage([row({ buyer_tin: T, buyer_name: 'Inv Ltd' })])], ZERO_ROLLUP, () => down)
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await vi.waitFor(() => expect(customerCallUrls(fetchMock)).toHaveLength(1))
+    await screen.findByText('Inv Ltd')
+    const title = Array.from(container.querySelectorAll('span.card-title')).find((x) => x.textContent === 'Top customers by value')
+    expect(title?.parentElement?.parentElement?.textContent).not.toContain('Something went wrong')
+  })
+
+  it('RP-13 a no-TIN bucket is never looked up', async () => {
+    const fetchMock = mockFetch([onePage([row({ buyer_tin: null, buyer_name: 'No Tin Ltd' })])])
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await vi.waitFor(() => expect(topCustomerNames(container)[0]).toBe('No Tin Ltd'))
+    expect(customerCallUrls(fetchMock)).toEqual([])
+  })
+
+  it('RP-14 two no-TIN buckets render two rows without a key warning', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockFetch([onePage([row({ id: 'a', buyer_tin: null, buyer_name: 'First Ltd' }), row({ id: 'b', buyer_tin: null, buyer_name: 'Second Ltd' })])])
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await vi.waitFor(() => expect(topCustomerNames(container).sort()).toEqual(['First Ltd', 'Second Ltd']))
+    expect(errSpy.mock.calls.filter((c) => String(c[0]).includes('same key'))).toEqual([])
+    errSpy.mockRestore()
+  })
+
+  it('RP-14b two TINs sharing one buyer name render two rows without a key warning', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockFetch([onePage([row({ id: 'a', buyer_tin: T, buyer_name: 'Twin Ltd' }), row({ id: 'b', buyer_tin: '20000000-0002', buyer_name: 'Twin Ltd' })])])
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await vi.waitFor(() => expect(topCustomerNames(container)).toEqual(['Twin Ltd', 'Twin Ltd']))
+    expect(errSpy.mock.calls.filter((c) => String(c[0]).includes('same key'))).toEqual([])
+    errSpy.mockRestore()
+  })
+
+  it('RP-15 one buyer shows the same record name on Customers and Reports', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      const path = new URL(url).pathname
+      if (path.endsWith('/rollup')) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ZERO_ROLLUP) })
+      if (path.endsWith('/v1/customers')) return Promise.resolve(recordsResponse([record()]))
+      if (path.endsWith('/v1/invoices')) return Promise.resolve(onePage([row({ buyer_tin: T, buyer_name: 'Inv Ltd' })]))
+      throw new Error(`unrouted ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const ctx = { ...reportsCtx(), user: { tenantName: null } } as unknown as PlatformCtx
+
+    const customers = render(<CustomersView ctx={ctx} />)
+    await customers.findByText('Rec Ltd')
+    expect(customers.queryByText('Inv Ltd')).toBeNull()
+    customers.unmount()
+
+    const reports = render(<ReportsView ctx={ctx} />)
+    await vi.waitFor(() => expect(topCustomerNames(reports.container)[0]).toBe('Rec Ltd'))
+    expect(reports.queryByText('Inv Ltd')).toBeNull()
   })
 })

@@ -8,6 +8,7 @@ import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { signInAs, signInAtFrontDoor } from '../personaSession'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertFillsColumn, assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { selectEntity } from './importWizardShared'
 import { APP_URL } from './targets'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -1379,6 +1380,7 @@ test.describe('Buyers directory and company fields', () => {
     const tin = freshTin()
     const created = await createEntity(token, { name: `${name} ${tin}`, tin, ...(account === inhouse ? COMPANY_KEYS : {}) })
     if (account === firm) {
+      firmEntityName = created.name
       const base = { entity_id: created.id, ...cleanInvoiceFields('') }
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${BUYER_TIN}`, buyer_tin: BUYER_TIN, buyer_name: 'Buyer Ltd', buyer_email: 'before@buyer.example.com', invoice_kind: 'B2B' })
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${LONG_TIN}`, buyer_tin: LONG_TIN, buyer_name: LONG_NAME, buyer_email: LONG_EMAIL, invoice_kind: 'B2B' })
@@ -1388,6 +1390,7 @@ test.describe('Buyers directory and company fields', () => {
   }
 
   let firmToken = ''
+  let firmEntityName = ''
 
   test.beforeAll(async () => {
     test.setTimeout(120_000)
@@ -1424,6 +1427,13 @@ test.describe('Buyers directory and company fields', () => {
     await expect(page.getByRole('dialog', { name: 'Edit customer', exact: true }).getByLabel('Email', { exact: true }), 'the reopened dialog lost the Email').toHaveValue(fixedEmail)
     const held = (await listCustomers(firmToken, { tin: BUYER_TIN })).customers[0]
     expect({ name: held?.name, email: held?.email }, 'the API holds the correction').toEqual({ name: fixedName, email: fixedEmail })
+
+    // Reports names its top customers from the same record.
+    await navButton(page, /^Reports/).click()
+    await selectEntity(page, firmEntityName)
+    const topCard = page.locator('xpath=//span[contains(@class,"card-title") and normalize-space(text())="Top customers by value"]/ancestor::div[2]')
+    await expect(topCard, 'Reports did not show the corrected Name').toContainText(fixedName, { timeout: 20_000 })
+    await expect(topCard).not.toContainText('Buyer Ltd')
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 

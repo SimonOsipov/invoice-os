@@ -1,7 +1,7 @@
 import { ApiError } from '@invoice-os/api-client'
 import { describe, expect, it, vi } from 'vitest'
 
-import { buyerFormFrom, listCustomers, mapCorrectionError, toCustomerUpdateInput, updateCustomer, type Customer } from './buyerDirectory'
+import { buyerFormFrom, listCustomers, mapCorrectionError, recordNamesByTin, toCustomerUpdateInput, updateCustomer, type Customer } from './buyerDirectory'
 
 const BASE = 'https://gateway.test'
 
@@ -55,5 +55,27 @@ describe('buyerDirectory', () => {
     expect(mapCorrectionError(new ApiError('http', 'unauthorized', 401))).toBeNull()
     expect(mapCorrectionError(new ApiError('http', 'not found', 404))).toBe(generic)
     expect(mapCorrectionError(new TypeError('Failed to fetch'))).toBe(generic)
+  })
+})
+
+describe('recordNamesByTin', () => {
+  it('recordNamesByTin looks up only distinct fileable TINs', async () => {
+    const af = vi.fn().mockResolvedValue({ customers: [], pagination: { limit: 1, offset: 0, total: 0 } })
+    await recordNamesByTin(af, BASE, ['20000000-0001', '20000000-0001', '', 'BAD', 'RN-9'])
+    expect(af.mock.calls.map((c) => c[0])).toEqual([
+      `${BASE}/api/invoice/v1/customers?tin=20000000-0001&limit=1`,
+      `${BASE}/api/invoice/v1/customers?tin=RN-9&limit=1`,
+    ])
+  })
+
+  it('recordNamesByTin maps named records and skips a missing or unnamed one', async () => {
+    const byTin: Record<string, Customer[]> = {
+      'RN-1': [{ ...CUSTOMER, tin: 'RN-1', name: 'Rec A' }],
+      'RN-2': [],
+      'RN-3': [{ ...CUSTOMER, tin: 'RN-3', name: null }],
+    }
+    const af = vi.fn().mockImplementation((url: string) => Promise.resolve({ customers: byTin[new URL(url).searchParams.get('tin') ?? ''], pagination: { limit: 1, offset: 0, total: 1 } }))
+    const names = await recordNamesByTin(af, BASE, ['RN-1', 'RN-2', 'RN-3'])
+    expect(Object.fromEntries(names)).toEqual({ 'RN-1': 'Rec A' })
   })
 })

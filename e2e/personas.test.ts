@@ -47,7 +47,7 @@ const EXPECTED_NAV_ONLY = new Set<string>([
   'firm:NAV_RULES', // Core AC 2 scopes the sweep to in-house; the firm side is finding F-D
 ])
 
-// The 8 in-house cells (Core AC 2, including inhouse:NAV_APPROVALS -> Core AC 3 and
+// The 9 in-house cells (Core AC 2, including inhouse:NAV_APPROVALS -> Core AC 3 and
 // inhouse:NAV_WORKFLOWS -> Core AC 4) plus firm:NAV_WORKFLOWS (Core AC 4). Given exactly
 // two grades and G6a's set equality, this set is LOGICALLY REDUNDANT: every cell not in
 // EXPECTED_NAV_ONLY must already be graded 'drives'. It is kept for two reasons that are
@@ -432,7 +432,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     ])
 
     // Vacuity first, so a broken extraction diagnoses itself before the coverage diff does.
-    // APPR-12-05 (task-530): firm 10 + in-house 8 = 18 distinct rendered pairs.
+    // APPR-12-05 (task-530): firm 10 + in-house 9 = 19 distinct rendered pairs.
     expect(firm.length, 'firm nav items (vacuity guard)').toBeGreaterThanOrEqual(10)
     expect(inhouse.length, 'in-house nav items (vacuity guard)').toBeGreaterThanOrEqual(8)
     expect(rendered.size, 'rendered (surface, persona) pairs (vacuity guard)').toBeGreaterThanOrEqual(18)

@@ -114,6 +114,8 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // firm-wide dataset as the switched-to client's. This is a deliberate deviation from
   // the prototype, whose `clientScoped` array includes `workflows`.
   //
+  // NAV_CUSTOMERS is FIRM-WIDE: it lists workspace records, not the active client's.
+  //
   // NAV_APPROVALS is client-scoped too, because the rule keys on what the ROWS are
   // scoped to, not on what drives them: the queue lists INVOICES, and those are
   // client-scoped, even though a firm-wide policy decides what enters it. Its SLOT
@@ -122,15 +124,15 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // asserts each roster as an exact ordered list.
   const navGroups: { key: string; label: string; scope: string; items: SidebarNavItem[] }[] = isFirm
     ? [
-        { key: 'client', label: active.short, scope: 'CLIENT', items: [NAV_DASHBOARD, invoicesItem, approvalsItem, NAV_RULES, NAV_CUSTOMERS, NAV_REPORTS] },
-        { key: 'firm', label: firmName, scope: 'FIRM-WIDE', items: [NAV_WORKFLOWS, NAV_CLIENTS, NAV_AUDIT, NAV_SETTINGS] },
+        { key: 'client', label: active.short, scope: 'CLIENT', items: [NAV_DASHBOARD, invoicesItem, approvalsItem, NAV_RULES, NAV_REPORTS] },
+        { key: 'firm', label: firmName, scope: 'FIRM-WIDE', items: [NAV_WORKFLOWS, NAV_CLIENTS, NAV_CUSTOMERS, NAV_AUDIT, NAV_SETTINGS] },
       ]
     : [
         {
           key: 'workspace',
           label: 'Workspace',
           scope: active.short,
-          items: [NAV_DASHBOARD, invoicesItem, NAV_WORKFLOWS, NAV_RULES, approvalsItem, NAV_REPORTS, NAV_AUDIT, NAV_SETTINGS],
+          items: [NAV_DASHBOARD, invoicesItem, NAV_WORKFLOWS, NAV_RULES, approvalsItem, NAV_CUSTOMERS, NAV_REPORTS, NAV_AUDIT, NAV_SETTINGS],
         },
       ]
   // `let`, never `const`: e2e/personas.test.ts G3 slices this file between the

@@ -141,6 +141,7 @@ describe('CustomersView: no KPI card row', () => {
 
 describe('CustomersView: the record list', () => {
   it('CU-09 one row per record, keyed by id, six columns', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     mockApi({
       customers: () => recordsPage([record({ id: 'a', name: 'Alpha' }), record({ id: 'b', tin: '20000000-0002', name: null }), record({ id: 'c', tin: '20000000-0003', name: 'Alpha' })]),
       invoices: () => invoicesPage([]),
@@ -154,6 +155,9 @@ describe('CustomersView: the record list', () => {
     expect(cells(rows()[0])[0]).toBe('AAlpha')
     expect(cells(rows()[1])[0], 'a nameless record reads a dash').toBe('——')
     expect(cells(rows()[2])[0], 'two records sharing a name render two rows').toBe('AAlpha')
+    expect(Array.from(rows()).map((r) => cells(r)[1]), 'TIN comes from the record').toEqual(['20000000-0001', '20000000-0002', '20000000-0003'])
+    expect(consoleError.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('same key')), 'no duplicate React key').toEqual([])
+    consoleError.mockRestore()
   })
 
   it('CU-10 the record name wins over the invoice name', async () => {

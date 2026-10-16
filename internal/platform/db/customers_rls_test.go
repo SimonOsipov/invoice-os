@@ -885,7 +885,7 @@ func TestRLS_CustomersStatusMigrationDownDropsOnlyTheColumn(t *testing.T) {
 	}
 	var wantCons []string
 	for _, c := range consUp {
-		if c != "customers_status_check" {
+		if c != "customers_status_check" && c != "customers_status_not_null" {
 			wantCons = append(wantCons, c)
 		}
 	}

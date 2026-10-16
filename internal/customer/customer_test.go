@@ -823,6 +823,25 @@ func TestStoreList_StatusFilter(t *testing.T) {
 	}
 }
 
+func TestStoreList_StatusFilterTotalIgnoresPaging(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer status paging")
+	seedCustomer(t, super, tenantA, seed{TIN: tin1, Name: ptr("A")})
+	b := seedCustomer(t, super, tenantA, seed{TIN: tin2, Name: ptr("B"), Status: "archived"})
+	seedCustomer(t, super, tenantA, seed{TIN: tin3, Name: ptr("C")})
+	d := seedCustomer(t, super, tenantA, seed{TIN: "12345678-0004", Name: ptr("D"), Status: "archived"})
+
+	got, total, err := store.List(ctxA, customer.ListFilter{Status: "archived", Limit: 1, Offset: 1})
+	if err != nil || total != 2 || !reflect.DeepEqual(ids(got), []string{d}) {
+		t.Errorf("archived page 2 = %v total %d err %v, want [%s] total 2", ids(got), total, err, d)
+	}
+	got, total, err = store.List(ctxA, customer.ListFilter{Status: "archived", Limit: 1})
+	if err != nil || total != 2 || !reflect.DeepEqual(ids(got), []string{b}) {
+		t.Errorf("archived page 1 = %v total %d err %v, want [%s] total 2", ids(got), total, err, b)
+	}
+}
+
 func TestStoreList_StatusAndTINCombine(t *testing.T) {
 	super, app := dbTestPools(t)
 	store := customer.NewStore(app)
@@ -863,6 +882,36 @@ func TestListHandler_UnknownStatusIs400(t *testing.T) {
 	wantStatus(t, do(t, mux, ctx, http.MethodGet, "/v1/customers?status=", ""), http.StatusOK)
 	if !called {
 		t.Error("control: empty status did not reach the list function")
+	}
+}
+
+func TestListHandler_RepeatedStatusUsesTheFirst(t *testing.T) {
+	var got customer.ListFilter
+	list := func(_ context.Context, f customer.ListFilter) ([]customer.Customer, int, error) {
+		got = f
+		return nil, 0, nil
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/customers", customer.ListHandler(list, nil))
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString()})
+
+	wantStatus(t, do(t, mux, ctx, http.MethodGet, "/v1/customers?status=archived&status=active", ""), http.StatusOK)
+	if got.Status != "archived" {
+		t.Errorf("filter status = %q, want archived (the first value)", got.Status)
+	}
+	wantStatus(t, do(t, mux, ctx, http.MethodGet, "/v1/customers?status=archived&status=deleted", ""), http.StatusOK)
+}
+
+func TestUpdateHandler_NullStatusIsNotPatchable(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer status null")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1, Status: "archived"})
+
+	rec := do(t, h, ctxA, http.MethodPatch, "/v1/customers/"+id, `{"status":null}`)
+	wantStatus(t, rec, http.StatusBadRequest)
+	if st := rowStatus(t, super, id); st != "archived" {
+		t.Errorf("status after PATCH null = %q, want archived", st)
 	}
 }
 

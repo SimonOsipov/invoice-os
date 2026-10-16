@@ -428,6 +428,26 @@ export function updateCustomer(token: string, id: string, body: CustomerUpdateIn
   return apiFetch<Customer>(`${apiBase()}/api/invoice/v1/customers/${id}`, { method: 'PATCH', body, token })
 }
 
+// CustomerCreateInput mirrors internal/customer's create request: tin plus the editable keys.
+export interface CustomerCreateInput extends CustomerUpdateInput {
+  tin: string
+}
+
+// createCustomer(): POST /v1/customers.
+export function createCustomer(token: string, body: CustomerCreateInput): Promise<Customer> {
+  return apiFetch<Customer>(`${apiBase()}/api/invoice/v1/customers`, { method: 'POST', body, token })
+}
+
+// archiveCustomer(): POST /v1/customers/{id}/archive.
+export function archiveCustomer(token: string, id: string): Promise<Customer> {
+  return apiFetch<Customer>(`${apiBase()}/api/invoice/v1/customers/${id}/archive`, { method: 'POST', token })
+}
+
+// restoreCustomer(): POST /v1/customers/{id}/restore.
+export function restoreCustomer(token: string, id: string): Promise<Customer> {
+  return apiFetch<Customer>(`${apiBase()}/api/invoice/v1/customers/${id}/restore`, { method: 'POST', token })
+}
+
 export interface Violation {
   rule_key: string
   severity: string

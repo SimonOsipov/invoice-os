@@ -55,6 +55,10 @@ func main() {
 	flag.Var(&tenants, "tenant", "tenant uuid to backfill; repeat the flag for several")
 	dryRun := flag.Bool("dry-run", true, "report without writing; pass --dry-run=false WITH the '=' (the space-separated form silently leaves it true)")
 	flag.Parse()
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "backfill-customers: unexpected argument %q (flags after it were ignored; write --dry-run=false with '=')\n", flag.Arg(0))
+		os.Exit(1)
+	}
 
 	if err := run(context.Background(), tenants, *dryRun); err != nil {
 		fmt.Fprintf(os.Stderr, "backfill-customers: %v\n", err)
@@ -132,6 +136,10 @@ func report(w io.Writer, tenantID string, dryRun bool, res customer.BackfillResu
 		if c.Existing {
 			verb = "-> kept"
 		}
-		fmt.Fprintf(w, "    - %s: %s %s %q\n", c.TIN, strings.Join(names, " | "), verb, c.Chosen)
+		chosen := fmt.Sprintf("%q", c.Chosen)
+		if c.Existing && c.Chosen == "" {
+			chosen = "(record has no name)"
+		}
+		fmt.Fprintf(w, "    - %s: %s %s %s\n", c.TIN, strings.Join(names, " | "), verb, chosen)
 	}
 }

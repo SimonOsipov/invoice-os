@@ -3,7 +3,7 @@
 // random per-run TINs and the spec acts only on those.
 import { randomUUID } from 'node:crypto'
 import { test, expect } from '@playwright/test'
-import { archiveCustomer, createCustomer, createEntity, createInvoice, getAuditLog, listCustomers, login, rawFetch, restoreCustomer, updateCustomer, PERSONAS, type Customer, type Entity } from './client'
+import { createCustomer, createEntity, createInvoice, getAuditLog, listCustomers, login, rawFetch, updateCustomer, PERSONAS, type Customer, type Entity } from './client'
 import { freshBuyerTin, freshTin } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
@@ -126,7 +126,9 @@ test.describe('buyer directory contract (API E2E, over the deployed gateway)', (
   test('a member creates a customer by hand', async () => {
     const tin = freshBuyerTin()
     const email = `hand-${tin}@example.com`
-    const created = await createCustomer(token, { tin, name: `Hand ${tin}`, email })
+    const res = await rawFetch('/api/invoice/v1/customers', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: { tin, name: `Hand ${tin}`, email } })
+    expect(res.status, 'a create answers 201').toBe(201)
+    const created = res.body as Customer
     expect(created).toMatchObject({ tin, name: `Hand ${tin}`, email, status: 'active' })
     const { customers } = await listCustomers(token, { tin })
     expect(customers.map((c) => c.id)).toEqual([created.id])
@@ -156,15 +158,20 @@ test.describe('buyer directory contract (API E2E, over the deployed gateway)', (
     const record = await createCustomer(token, { tin, name: `Cycle ${tin}` })
     const ids = async (status: 'active' | 'archived') => (await listCustomers(token, { tin, status })).customers.map((c) => c.id)
 
-    expect((await archiveCustomer(token, record.id)).status).toBe('archived')
+    const move = (verb: 'archive' | 'restore') => rawFetch(`/api/invoice/v1/customers/${record.id}/${verb}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+    const archived = await move('archive')
+    expect(archived.status, 'archive answers 200').toBe(200)
+    expect((archived.body as Customer).status).toBe('archived')
     expect(await ids('archived')).toContain(record.id)
     expect(await ids('active')).not.toContain(record.id)
 
-    const again = await rawFetch(`/api/invoice/v1/customers/${record.id}/archive`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+    const again = await move('archive')
     assertErrorEnvelope(again, 409, 'archive twice')
     expect((again.body as { error: string }).error).toBe(REDUNDANT_TRANSITION)
 
-    expect((await restoreCustomer(token, record.id)).status).toBe('active')
+    const restored = await move('restore')
+    expect(restored.status, 'restore answers 200').toBe(200)
+    expect((restored.body as Customer).status).toBe('active')
     expect(await ids('active')).toContain(record.id)
     expect(await ids('archived')).not.toContain(record.id)
   })

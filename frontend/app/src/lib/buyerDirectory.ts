@@ -52,7 +52,7 @@ export async function findCustomerByTin(authedFetch: AuthedFetch, base: string, 
 // Named records for the distinct fileable TINs; an empty `tin` would list the whole directory.
 export async function recordNamesByTin(authedFetch: AuthedFetch, base: string, tins: string[]): Promise<Map<string, string>> {
   const fileable = [...new Set(tins)].filter((t) => FILEABLE_TIN.test(t))
-  const found = await Promise.all(fileable.map((t) => findCustomerByTin(authedFetch, base, t)))
+  const found = await Promise.all(fileable.map((t) => findCustomerByTin(authedFetch, base, t).catch(() => null)))
   const names = new Map<string, string>()
   found.forEach((c, i) => {
     if (c?.name != null) names.set(fileable[i], c.name)

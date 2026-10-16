@@ -434,8 +434,8 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     // Vacuity first, so a broken extraction diagnoses itself before the coverage diff does.
     // APPR-12-05 (task-530): firm 10 + in-house 9 = 19 distinct rendered pairs.
     expect(firm.length, 'firm nav items (vacuity guard)').toBeGreaterThanOrEqual(10)
-    expect(inhouse.length, 'in-house nav items (vacuity guard)').toBeGreaterThanOrEqual(8)
-    expect(rendered.size, 'rendered (surface, persona) pairs (vacuity guard)').toBeGreaterThanOrEqual(18)
+    expect(inhouse.length, 'in-house nav items (vacuity guard)').toBeGreaterThanOrEqual(9)
+    expect(rendered.size, 'rendered (surface, persona) pairs (vacuity guard)').toBeGreaterThanOrEqual(19)
 
     // Flattened over ALL FOUR personas (not just the two app ones): a stray cell filed
     // against `developer`/`support` -- which render no sidebar at all -- must surface as an
@@ -672,7 +672,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     ])
 
     const cells = PERSONA_IDS.flatMap((id) => PERSONAS[id].coverage ?? [])
-    expect(cells.length, 'coverage cells across all four personas (vacuity guard)').toBe(18)
+    expect(cells.length, 'coverage cells across all four personas (vacuity guard)').toBe(19)
 
     // The fork's own vocabulary, in either half of the map. `Import` is deliberately absent
     // from this list: the wizard has always been reached from Invoices, and no surface is

@@ -207,10 +207,13 @@ func main() {
 		app.Logger.Error("invoice: demo approval policy", "error", err,
 			"outcome", res.Note, "backlog_found", res.BacklogFound, "runs_armed", res.RunsArmed)
 	}
-	if err := customer.SeedDemo(seedCtx, pool, os.Getenv("RAILWAY_ENVIRONMENT_NAME"), app.Logger); err != nil {
+	cancelSeed()
+	// Own deadline: demopolicy.Seed may have spent all of seedCtx.
+	custCtx, cancelCust := context.WithTimeout(context.Background(), 2*time.Minute)
+	if err := customer.SeedDemo(custCtx, pool, os.Getenv("RAILWAY_ENVIRONMENT_NAME"), app.Logger); err != nil {
 		app.Logger.Error("invoice: demo customers", "error", err)
 	}
-	cancelSeed()
+	cancelCust()
 	impStore := importer.NewStore(pool)
 	impSvc := importer.NewService(impStore, store, gate)
 	// aiClient is off when OPENROUTER_API_KEY is unset: FromEnv never exits, only an

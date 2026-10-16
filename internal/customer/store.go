@@ -3,6 +3,7 @@ package customer
 import (
 	"context"
 	"errors"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -140,9 +141,72 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Customer
 	return out, nil
 }
 
-// Create is a stub until CUST-01-04 is implemented.
+// Create inserts an active record. Only non-blank fields are stored and marked in edited_fields,
+// so the invoice fill can still fill the rest. The TIN format is left to the CHECK.
 func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
-	return Customer{}, errors.New("customer: create not implemented")
+	cols := []struct {
+		name string
+		val  *string
+	}{
+		{"name", in.Fields.Name}, {"contact_person", in.Fields.ContactPerson}, {"buyer_type", in.Fields.BuyerType},
+		{"email", in.Fields.Email}, {"telephone", in.Fields.Telephone}, {"street", in.Fields.Street},
+		{"city", in.Fields.City}, {"postal_zone", in.Fields.PostalZone}, {"country", in.Fields.Country},
+		{"state", in.Fields.State}, {"lga", in.Fields.LGA},
+	}
+	var out Customer
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+		if in.TIN == nil || strings.TrimSpace(*in.TIN) == "" {
+			return errTINRequired
+		}
+		names := []string{"tenant_id", "tin"}
+		holders := []string{"$1::uuid", "$2"}
+		args := []any{caller.TenantID, strings.TrimSpace(*in.TIN)}
+		set := []string{}
+		for _, c := range cols {
+			if c.val == nil {
+				continue
+			}
+			t := strings.TrimSpace(*c.val)
+			if t == "" {
+				continue
+			}
+			args = append(args, t)
+			names = append(names, c.name)
+			holders = append(holders, "$"+itoa(len(args)))
+			set = append(set, c.name)
+		}
+		sort.Strings(set)
+		args = append(args, set)
+		names = append(names, "edited_fields")
+		holders = append(holders, "$"+itoa(len(args))+"::text[]")
+
+		c, err := scan(tx.QueryRow(ctx,
+			"INSERT INTO customers ("+strings.Join(names, ", ")+") VALUES ("+strings.Join(holders, ", ")+") RETURNING "+columns,
+			args...))
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				switch {
+				case pgErr.Code == "23505" && pgErr.ConstraintName == "customers_tenant_tin_uq":
+					return ErrDuplicateTIN
+				case pgErr.Code == "23514" && pgErr.TableName == "customers" && pgErr.ConstraintName == "customers_tin_check":
+					return errTINFormat
+				case pgErr.Code == "23514" && pgErr.TableName == "customers" && pgErr.ConstraintName == "customers_buyer_type_check":
+					return errBuyerType
+				}
+			}
+			return err
+		}
+		out = c
+		return audit.Record(ctx, tx, caller.Subject, "customers.customer.created", map[string]any{
+			"id": c.ID, "tin": c.TIN, "fields": set,
+		})
+	})
+	if err != nil {
+		return Customer{}, err
+	}
+	return out, nil
 }
 
 // LookupByTIN runs in the caller's tenant tx; nil, nil when no active record matches.

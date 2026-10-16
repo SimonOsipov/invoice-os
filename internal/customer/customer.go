@@ -206,10 +206,36 @@ func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (
 	}
 }
 
-// CreateHandler serves POST /v1/customers.
+type createRequest struct {
+	TIN *string `json:"tin"`
+	updateRequest
+}
+
+// CreateHandler serves POST /v1/customers. Unknown keys, status included, are ignored.
 func CreateHandler(create func(ctx context.Context, in CreateInput) (Customer, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeError(w, http.StatusNotImplemented, "not implemented")
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req createRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		c, err := create(r.Context(), CreateInput{TIN: req.TIN, Fields: UpdateInput(req.updateRequest)})
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "customer: create customer", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusCreated, c)
 	}
 }
 
@@ -223,6 +249,8 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound, "not found"
+	case errors.Is(err, ErrDuplicateTIN):
+		return http.StatusConflict, "duplicate tin"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

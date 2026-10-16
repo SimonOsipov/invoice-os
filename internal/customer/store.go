@@ -163,6 +163,7 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
 		holders := []string{"$1::uuid", "$2"}
 		args := []any{caller.TenantID, strings.TrimSpace(*in.TIN)}
 		set := []string{}
+		buyerType := ""
 		for _, c := range cols {
 			if c.val == nil {
 				continue
@@ -171,10 +172,14 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
 			if t == "" {
 				continue
 			}
+			set = append(set, c.name)
+			if c.name == "buyer_type" {
+				buyerType = t
+				continue
+			}
 			args = append(args, t)
 			names = append(names, c.name)
 			holders = append(holders, "$"+itoa(len(args)))
-			set = append(set, c.name)
 		}
 		sort.Strings(set)
 		args = append(args, set)
@@ -192,11 +197,22 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
 					return ErrDuplicateTIN
 				case pgErr.Code == "23514" && pgErr.TableName == "customers" && pgErr.ConstraintName == "customers_tin_check":
 					return errTINFormat
-				case pgErr.Code == "23514" && pgErr.TableName == "customers" && pgErr.ConstraintName == "customers_buyer_type_check":
-					return errBuyerType
+				case pgErr.Code == "54000": // TIN past the unique index's row limit; no other column is indexed
+					return errTINFormat
 				}
 			}
 			return err
+		}
+		if buyerType != "" {
+			// Set after the insert so a bad TIN is reported before a bad buyer_type (CHECKs fire in name order).
+			c, err = scan(tx.QueryRow(ctx, "UPDATE customers SET buyer_type = $1 WHERE id = $2::uuid RETURNING "+columns, buyerType, c.ID))
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == "customers_buyer_type_check" {
+				return errBuyerType
+			}
+			if err != nil {
+				return err
+			}
 		}
 		out = c
 		return audit.Record(ctx, tx, caller.Subject, "customers.customer.created", map[string]any{

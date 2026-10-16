@@ -571,8 +571,7 @@ func TestStoreCreate_ConcurrentCreatesOfOneTINMakeOneRecord(t *testing.T) {
 
 // --- edge: both CHECKs failing, and size ------------------------------------
 
-// Postgres evaluates CHECKs in constraint-name order, so customers_buyer_type_check is reported
-// before customers_tin_check: with both bad, the buyer-type message wins.
+// With both bad, the TIN message wins (Core AC 2); the store sets buyer_type after the insert.
 func TestCreateHandler_BadTINAndBadBuyerTypeAnswersOne400AndWritesNothing(t *testing.T) {
 	super, app := dbTestPools(t)
 	h := newMux(customer.NewStore(app))
@@ -580,18 +579,21 @@ func TestCreateHandler_BadTINAndBadBuyerTypeAnswersOne400AndWritesNothing(t *tes
 
 	rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"12345678","buyer_type":"b2b"}`)
 	wantStatus(t, rec, http.StatusBadRequest)
-	if got := errorBody(t, rec); got != msgBuyerType {
-		t.Errorf("error = %q, want %q (the first failing CHECK by name)", got, msgBuyerType)
+	if got := errorBody(t, rec); got != msgTINFormat {
+		t.Errorf("error = %q, want %q (the TIN message wins)", got, msgTINFormat)
 	}
 	if n := countAll(t, super, tenantA); n != 0 {
 		t.Errorf("customers rows = %d, want 0", n)
 	}
 
-	// Fixing the buyer type surfaces the TIN message: the second fault was not lost.
-	rec = do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"12345678","buyer_type":"B2B"}`)
+	// Fixing the TIN surfaces the buyer-type message: the second fault was not lost.
+	rec = do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+tin1+`","buyer_type":"b2b"}`)
 	wantStatus(t, rec, http.StatusBadRequest)
-	if got := errorBody(t, rec); got != msgTINFormat {
-		t.Errorf("error = %q, want %q", got, msgTINFormat)
+	if got := errorBody(t, rec); got != msgBuyerType {
+		t.Errorf("error = %q, want %q", got, msgBuyerType)
+	}
+	if n := countAll(t, super, tenantA); n != 0 {
+		t.Errorf("customers rows after the buyer-type 400 = %d, want 0", n)
 	}
 }
 

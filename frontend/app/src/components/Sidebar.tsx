@@ -114,14 +114,14 @@ export function Sidebar({ ctx }: { ctx: PlatformCtx }) {
   // firm-wide dataset as the switched-to client's. This is a deliberate deviation from
   // the prototype, whose `clientScoped` array includes `workflows`.
   //
-  // NAV_CUSTOMERS is FIRM-WIDE: it lists workspace records, not the active client's.
-  //
-  // NAV_APPROVALS is client-scoped too, because the rule keys on what the ROWS are
+  // NAV_APPROVALS is client-scoped, because the rule keys on what the ROWS are
   // scoped to, not on what drives them: the queue lists INVOICES, and those are
   // client-scoped, even though a firm-wide policy decides what enters it. Its SLOT
   // deliberately differs by mode — firm puts it directly after Invoices, in-house keeps
   // the prototype's slot after Rules. Do not "align" the two: persona-surfaces.spec.ts
   // asserts each roster as an exact ordered list.
+  //
+  // NAV_CUSTOMERS is FIRM-WIDE: it lists workspace records, not the active client's.
   const navGroups: { key: string; label: string; scope: string; items: SidebarNavItem[] }[] = isFirm
     ? [
         { key: 'client', label: active.short, scope: 'CLIENT', items: [NAV_DASHBOARD, invoicesItem, approvalsItem, NAV_RULES, NAV_REPORTS] },

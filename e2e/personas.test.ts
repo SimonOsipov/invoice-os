@@ -432,7 +432,7 @@ describe('personas.ts registry, sign-in seam, and guards (PERSONA-01-01, task-27
     ])
 
     // Vacuity first, so a broken extraction diagnoses itself before the coverage diff does.
-    // APPR-12-05 (task-530): firm 10 + in-house 9 = 19 distinct rendered pairs.
+    // Firm 10 + in-house 9 = 19 distinct rendered pairs.
     expect(firm.length, 'firm nav items (vacuity guard)').toBeGreaterThanOrEqual(10)
     expect(inhouse.length, 'in-house nav items (vacuity guard)').toBeGreaterThanOrEqual(9)
     expect(rendered.size, 'rendered (surface, persona) pairs (vacuity guard)').toBeGreaterThanOrEqual(19)

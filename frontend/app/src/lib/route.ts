@@ -183,7 +183,7 @@ export function parseLocation(pathname: string, search: string): ParsedLocation 
       view = 'create'
       reviewBatchIds = ids
     }
-    if (normalized === '/settings/buyers') view = 'customers' // Buyers tab moved to Customers (CUST-02 D16)
+    if (normalized === '/settings/buyers') view = 'customers' // the old Buyers tab lives on Customers
     else if (normalized.startsWith('/settings/')) {
       const seg = normalized.slice('/settings/'.length)
       if (seg.length > 0 && !/[/?#]/.test(seg)) {

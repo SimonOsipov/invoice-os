@@ -217,7 +217,7 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
 }
 
 // The two rosters, derived from Sidebar.tsx's navGroups x glyphs.tsx (each NavDef's
-// label). Firm mode splits into a CLIENT group of 6 and a FIRM-WIDE group of 4;
+// label). Firm mode splits into a CLIENT group and a FIRM-WIDE group;
 // sidebarRoster() flattens both in DOM order, which is the right shape for the claim being
 // made -- the grouping is presentation, the ROSTER is which surfaces this persona has.
 const FIRM_ROSTER = ['Overview', 'Invoices', 'Approvals', 'Rules', 'Reports', 'Workflows', 'Clients', 'Customers', 'Audit', 'Settings']

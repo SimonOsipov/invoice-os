@@ -117,7 +117,7 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
     specToken: 'INHOUSE_PERSONA',
     tenantName: 'Honeywell Group',
     // ALL NINE of the in-house sidebar's surfaces, every one DRIVEN (rendered content
-    // asserted, not a mount) by persona-surfaces.spec.ts -- eight by PERSONA-01-03's sweep and CUST-02-04's,
+    // asserted, not a mount) by persona-surfaces.spec.ts -- eight by the sweep,
     // and NAV_WORKFLOWS by the Workflows block inside that same sweep. That cell points HERE
     // and not at topology/workflows.spec.ts, which never signs in as in-house: filing it
     // there would claim coverage that file does not provide, which is the exact bookkeeping

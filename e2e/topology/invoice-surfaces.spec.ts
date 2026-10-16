@@ -2831,7 +2831,7 @@ test('register: a search query is a working deep link', async ({ page }) => {
 })
 
 // Customers counts every buyer's invoices from the whole invoice set across every client
-// (BUG-01-08's whole-set claim, kept). A fresh firm account keeps the record list to this
+// (the whole-set claim). A fresh firm account keeps the record list to this
 // spec's own two buyers; the pager is not under test here.
 function customersFields(invoiceNumber: string, buyerTin: string, buyerName: string) {
   return { ...cleanInvoiceFields(invoiceNumber), buyer_tin: buyerTin, buyer_name: buyerName }

@@ -1,7 +1,7 @@
 // Customers: the workspace's customer records (GET /v1/customers, paged), with Invoices and
 // Total billed counted from the whole invoice set and joined by trimmed TIN.
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -46,7 +46,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
   const empty = !errored && !loading && (base == null || records.status === 'empty')
   const ready = !errored && !loading && records.data != null && invoices.data != null
 
-  const byTin = new Map(aggregateCustomers(invoices.data?.invoices ?? []).map((o) => [o.tin, o]))
+  const byTin = useMemo(() => new Map(aggregateCustomers(invoices.data?.invoices ?? []).map((o) => [o.tin, o])), [invoices.data])
   const customers = (records.data?.customers ?? []).map((r) => {
     const agg = byTin.get(r.tin)
     const name = customerName(r.name, agg?.name)

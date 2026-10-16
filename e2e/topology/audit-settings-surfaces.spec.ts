@@ -357,14 +357,14 @@ test('AE-02 the five filter popovers carry the card shadow, 6px corners and stay
     reads.push({ id, shadow, corners, box })
     if (id === 'event') {
       await attachShot(page, testInfo, 'audit-event-popover')
-      // The 11th domain group (customers, drawn as Buyers) scrolls into the panel and its heading clears the All/Clear buttons.
+      // The 11th domain group (customers) scrolls into the panel and its heading clears the All/Clear buttons.
       const heading = tid(page, 'audit-event-group-customers-heading')
       await heading.scrollIntoViewIfNeeded()
       const { rects, problems } = await boxes({ panel, heading, all: tid(page, 'audit-event-group-customers-all'), clear: tid(page, 'audit-event-group-customers-clear') })
       inside(rects, 'panel', ['heading', 'all', 'clear'], problems)
       noOverlap(rects, ['heading', 'all', 'clear'], problems)
-      expect(problems, 'the Buyers event group').toEqual([])
-      reads.push({ id: 'event-buyers-group', rects })
+      expect(problems, 'the Customers event group').toEqual([])
+      reads.push({ id: 'event-customers-group', rects })
     }
     await page.keyboard.press('Escape')
     await expect(panel, `the ${id} popover never closed`).toHaveCount(0)
@@ -1356,7 +1356,7 @@ test('ST-14 no Settings tab scrolls sideways and the roster fills the tab column
 
 // --- Customers and the company fields ------------------------------------------------------------------
 // Each account is a fresh tenant, so its directory holds only the rows below.
-test.describe('Buyers directory and company fields', () => {
+test.describe('Customers directory and company fields', () => {
   const BUYER_TIN = freshBuyerTin()
   const LONG_TIN = freshBuyerTin()
   const RN_TIN = `RN-${'7'.repeat(24)}`

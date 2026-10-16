@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/pressly/goose/v3"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
@@ -697,6 +698,7 @@ func TestRLS_CustomersMigrationDownDropsExactlyItsObjects(t *testing.T) {
 	}
 
 	provider := staffMigrationProvider(t)
+	csHealStatusOnCleanup(t, provider, migrationVersion(t, "*_customer_status.sql"))
 	t.Cleanup(func() {
 		if _, err := provider.Up(context.Background()); err != nil {
 			t.Errorf("restore the buyer_directory schema after the Down/Up round-trip: %v", err)
@@ -742,6 +744,34 @@ func csHasStatusColumn(t *testing.T) bool {
 	return mustCount(t, h.super,
 		`SELECT count(*) FROM information_schema.columns
 		  WHERE table_schema = 'public' AND table_name = 'customers' AND column_name = 'status'`) == 1
+}
+
+// csHealStatusOnCleanup runs last (register it before any rollback). A red test must not leave
+// the column and the goose ledger row disagreeing, which would fail every later test on the shared DB.
+func csHealStatusOnCleanup(t *testing.T, provider *goose.Provider, version int64) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx := context.Background()
+		var applied bool
+		if err := h.super.QueryRow(ctx,
+			`SELECT coalesce((SELECT is_applied FROM goose_db_version WHERE version_id = $1 ORDER BY id DESC LIMIT 1), false)`,
+			version).Scan(&applied); err != nil {
+			t.Errorf("read the customer_status ledger row: %v", err)
+			return
+		}
+		if applied && csHasStatusColumn(t) {
+			return
+		}
+		if _, err := h.super.Exec(ctx, `ALTER TABLE customers DROP COLUMN IF EXISTS status`); err != nil {
+			t.Errorf("drop a stray customers.status: %v", err)
+		}
+		if _, err := h.super.Exec(ctx, `DELETE FROM goose_db_version WHERE version_id = $1`, version); err != nil {
+			t.Errorf("clear the customer_status ledger row: %v", err)
+		}
+		if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+			t.Errorf("heal customers.status: %v", err)
+		}
+	})
 }
 
 // csColumns reads customers' columns as name -> "udt/nullable/default", so a changed column shows in a diff.
@@ -857,6 +887,7 @@ func TestRLS_CustomersStatusMigrationBackfillsActive(t *testing.T) {
 	h := requireHarness(t)
 	requireCustomersTable(t)
 	provider := staffMigrationProvider(t)
+	csHealStatusOnCleanup(t, provider, migrationVersion(t, "*_customer_status.sql"))
 	reapply := rollBackMigrations(t, provider, migrationVersion(t, "*_customer_status.sql"))
 
 	id := seedCustomer(t, h.tenantA, "12345678-0001")
@@ -896,6 +927,7 @@ func TestRLS_CustomersStatusMigrationDownDropsOnlyTheColumn(t *testing.T) {
 	requireCustomersTable(t)
 	provider := staffMigrationProvider(t)
 	version := migrationVersion(t, "*_customer_status.sql")
+	csHealStatusOnCleanup(t, provider, version)
 	restoreMigrationOnCleanup(t, provider, version)
 	ctx := context.Background()
 
@@ -933,10 +965,18 @@ func TestRLS_CustomersStatusMigrationDownDropsOnlyTheColumn(t *testing.T) {
 	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
 		t.Fatalf("re-apply the customer_status migration: %v", err)
 	}
-	if got := csColumns(t); !reflect.DeepEqual(got, colsUp) {
-		t.Errorf("customers columns after Up, Down, Up = %v, want %v", got, colsUp)
+	// Pin status itself: a baseline read from the live DB would repeat a mutated Up.
+	wantUp := map[string]string{}
+	for name, desc := range colsUp {
+		wantUp[name] = desc
 	}
-	if got := csConstraintNames(t); !reflect.DeepEqual(got, consUp) {
-		t.Errorf("customers constraints after Up, Down, Up = %v, want %v", got, consUp)
+	wantUp["status"] = "text/NO/'active'::text"
+	if got := csColumns(t); !reflect.DeepEqual(got, wantUp) {
+		t.Errorf("customers columns after Up, Down, Up = %v, want %v", got, wantUp)
+	}
+	wantConsUp := append(append([]string{}, wantCons...), "customers_status_check", "customers_status_not_null")
+	sort.Strings(wantConsUp)
+	if got := csConstraintNames(t); !reflect.DeepEqual(got, wantConsUp) {
+		t.Errorf("customers constraints after Up, Down, Up = %v, want %v", got, wantConsUp)
 	}
 }

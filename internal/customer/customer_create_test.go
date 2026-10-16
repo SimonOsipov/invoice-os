@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -172,10 +174,19 @@ func TestCreateHandler_IgnoresStatusInTheBody(t *testing.T) {
 	h := newMux(customer.NewStore(app))
 	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create status key")
 
-	rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+tin1+`","status":"archived","nonsense":"x"}`)
+	rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+tin1+`","status":"archived","nonsense":"x",
+		"id":"00000000-0000-0000-0000-000000000001","created_at":"2000-01-01T00:00:00Z","edited_fields":["tin","lga"]}`)
 	wantStatus(t, rec, http.StatusCreated)
-	if st := rowStatus(t, super, idFor(t, super, tenantA, tin1)); st != "active" {
+	id := idFor(t, super, tenantA, tin1)
+	if st := rowStatus(t, super, id); st != "active" {
 		t.Errorf("stored status = %q, want active (a create is always active)", st)
+	}
+	r := readRow(t, super, id)
+	if id == "00000000-0000-0000-0000-000000000001" || len(r.Edited) != 0 {
+		t.Errorf("stored id %q edited_fields %v, want a generated id and none edited (server-owned keys are ignored)", id, r.Edited)
+	}
+	if c := decodeCustomer(t, rec.Body.Bytes()); c.CreatedAt.Year() < 2026 {
+		t.Errorf("created_at = %v, want the server's now()", c.CreatedAt)
 	}
 }
 
@@ -250,7 +261,9 @@ func TestCreateHandler_UnfileableTINIs400WithTheTINMessage(t *testing.T) {
 	h := newMux(customer.NewStore(app))
 	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create tin format")
 
-	bad := []string{"12345678", "123456780001", "rn-12", "RN-", "12345678-00012", "1234567-0001"}
+	bad := []string{"12345678", "123456780001", "rn-12", "RN-", "12345678-00012", "1234567-0001",
+		"1234 5678-0001", "12345678- 0001", "12345678-0001 0002", "RN-12 3",
+		"１２３４５６７８-０００１", "12345678\u20130001", strings.Repeat("9", 10_000)}
 	for _, tin := range bad {
 		rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", createBody(tin))
 		if rec.Code != http.StatusBadRequest {
@@ -305,7 +318,7 @@ func TestCreateHandler_MalformedBodyIs400(t *testing.T) {
 	mux.HandleFunc("POST /v1/customers", customer.CreateHandler(create, nil))
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated"})
 
-	for _, body := range []string{`{`, `[]`} {
+	for _, body := range []string{`{`, `[]`, ``, `{"tin":12345678}`, `{"tin":"` + tin1 + `","name":5}`, `{"tin":"` + tin1 + `","email":["a"]}`} {
 		rec := do(t, mux, ctx, http.MethodPost, "/v1/customers", body)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("POST %s = %d, want 400 (body %q)", body, rec.Code, rec.Body.String())
@@ -335,8 +348,9 @@ func TestCreateHandler_HeldTINIs409(t *testing.T) {
 	archivedID := seedCustomer(t, super, tenantA, seed{TIN: tin2, Name: ptr("Held Archived"), Status: "archived"})
 	before := map[string]string{activeID: rowJSON(t, super, activeID), archivedID: rowJSON(t, super, archivedID)}
 
-	for _, tin := range []string{tin1, tin2} {
-		rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+tin+`","name":"Newcomer","email":"n@x.ng"}`)
+	for _, tin := range []string{tin1, tin2, " " + tin1 + "\t", "\n" + tin2 + " "} {
+		quoted, _ := json.Marshal(tin)
+		rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":`+string(quoted)+`,"name":"Newcomer","email":"n@x.ng"}`)
 		if rec.Code != http.StatusConflict {
 			t.Errorf("POST held tin %s = %d, want 409 (body %q)", tin, rec.Code, rec.Body.String())
 			continue
@@ -365,12 +379,22 @@ func TestCreateHandler_HeldTINIs409(t *testing.T) {
 func raceHeldInsert(t *testing.T, super, app *pgxpool.Pool, ctx context.Context, tin string, attempt func()) bool {
 	t.Helper()
 	caller, _ := auth.IdentityFromContext(ctx)
+	return raceHeldTx(t, super, app, ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO customers (tenant_id, tin, name) VALUES ($1::uuid, $2, 'Fill Racer')`, caller.TenantID, tin)
+		return err
+	}, attempt)
+}
+
+// raceHeldTx runs hold in an open tenant tx, starts attempt, waits until the attempt blocks
+// on a lock, then commits hold. It returns whether the wait happened.
+func raceHeldTx(t *testing.T, super, app *pgxpool.Pool, ctx context.Context, hold func(pgx.Tx) error, attempt func()) bool {
+	t.Helper()
 	held, release := make(chan struct{}), make(chan struct{})
 	holdDone := make(chan error, 1)
 	go func() {
 		holdDone <- db.WithinRequestTenantTx(ctx, app, func(tx pgx.Tx) error {
-			if _, err := tx.Exec(ctx,
-				`INSERT INTO customers (tenant_id, tin, name) VALUES ($1::uuid, $2, 'Fill Racer')`, caller.TenantID, tin); err != nil {
+			if err := hold(tx); err != nil {
 				return err
 			}
 			close(held)
@@ -467,6 +491,159 @@ func TestStoreCreate_RacingFillInsertIs409(t *testing.T) {
 	}
 	if n := len(auditRows(t, super, tenantA, createdEvent)); n != 0 {
 		t.Errorf("created audit rows after the lost races = %d, want 0", n)
+	}
+}
+
+func TestStoreCreate_RacingAnArchiveOfTheSameTINIs409(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create vs archive")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1, Name: ptr("Held Active")})
+
+	var createErr error
+	blocked := raceHeldTx(t, super, app, ctxA, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctxA, `UPDATE customers SET status = 'archived' WHERE id = $1::uuid`, id)
+		return err
+	}, func() {
+		_, createErr = store.Create(ctxA, customer.CreateInput{TIN: ptr(tin1), Fields: customer.UpdateInput{Name: ptr("Racer")}})
+	})
+	if !blocked {
+		t.Error("Store.Create never waited on the uncommitted archive: the race was not exercised")
+	}
+	if !errors.Is(createErr, customer.ErrDuplicateTIN) {
+		t.Errorf("Store.Create after the archive committed = %v, want ErrDuplicateTIN", createErr)
+	}
+	if st := rowStatus(t, super, id); st != "archived" {
+		t.Errorf("status = %q, want archived (the held tx committed)", st)
+	}
+	if n := countTIN(t, super, tenantA, tin1); n != 1 {
+		t.Errorf("rows for %s = %d, want 1", tin1, n)
+	}
+	if got := strVal(readRow(t, super, id).Name); got != "Held Active" {
+		t.Errorf("name = %q, want Held Active (the create wrote nothing)", got)
+	}
+	if n := len(auditRows(t, super, tenantA, createdEvent)); n != 0 {
+		t.Errorf("created audit rows after the lost race = %d, want 0", n)
+	}
+}
+
+func TestStoreCreate_ConcurrentCreatesOfOneTINMakeOneRecord(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create concurrent")
+
+	const n = 8
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = store.Create(ctxA, customer.CreateInput{TIN: ptr(tin1), Fields: customer.UpdateInput{Name: ptr("Racer")}})
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	won, lost := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, customer.ErrDuplicateTIN):
+			lost++
+		default:
+			t.Errorf("a concurrent Create = %v, want nil or ErrDuplicateTIN", err)
+		}
+	}
+	if won != 1 || lost != n-1 {
+		t.Errorf("winners/losers = %d/%d, want 1/%d", won, lost, n-1)
+	}
+	if got := countTIN(t, super, tenantA, tin1); got != 1 {
+		t.Errorf("rows for %s = %d, want 1", tin1, got)
+	}
+	if got := len(auditRows(t, super, tenantA, createdEvent)); got != 1 {
+		t.Errorf("created audit rows = %d, want 1", got)
+	}
+}
+
+// --- edge: both CHECKs failing, and size ------------------------------------
+
+// Postgres evaluates CHECKs in constraint-name order, so customers_buyer_type_check is reported
+// before customers_tin_check: with both bad, the buyer-type message wins.
+func TestCreateHandler_BadTINAndBadBuyerTypeAnswersOne400AndWritesNothing(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create both bad")
+
+	rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"12345678","buyer_type":"b2b"}`)
+	wantStatus(t, rec, http.StatusBadRequest)
+	if got := errorBody(t, rec); got != msgBuyerType {
+		t.Errorf("error = %q, want %q (the first failing CHECK by name)", got, msgBuyerType)
+	}
+	if n := countAll(t, super, tenantA); n != 0 {
+		t.Errorf("customers rows = %d, want 0", n)
+	}
+
+	// Fixing the buyer type surfaces the TIN message: the second fault was not lost.
+	rec = do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"12345678","buyer_type":"B2B"}`)
+	wantStatus(t, rec, http.StatusBadRequest)
+	if got := errorBody(t, rec); got != msgTINFormat {
+		t.Errorf("error = %q, want %q", got, msgTINFormat)
+	}
+}
+
+func TestCreateHandler_TenKilobyteFields(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create big")
+	big := strings.Repeat("x", 10_000)
+
+	rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+big+`","name":"N"}`)
+	wantStatus(t, rec, http.StatusBadRequest)
+	if got := errorBody(t, rec); got != msgTINFormat {
+		t.Errorf("10 kB tin error = %q, want %q", got, msgTINFormat)
+	}
+	rec = do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+tin2+`","buyer_type":"`+big+`"}`)
+	wantStatus(t, rec, http.StatusBadRequest)
+	if got := errorBody(t, rec); got != msgBuyerType {
+		t.Errorf("10 kB buyer_type error = %q, want %q", got, msgBuyerType)
+	}
+	if n := countAll(t, super, tenantA); n != 0 {
+		t.Fatalf("customers rows after the rejected POSTs = %d, want 0", n)
+	}
+
+	rec = do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+tin1+`","name":"`+big+`","street":"`+big+`","lga":"`+big+`"}`)
+	wantStatus(t, rec, http.StatusCreated)
+	r := readRow(t, super, idFor(t, super, tenantA, tin1))
+	if strVal(r.Name) != big || strVal(r.Street) != big || strVal(r.LGA) != big {
+		t.Errorf("stored name/street/lga lengths = %d/%d/%d, want 10000 each", len(strVal(r.Name)), len(strVal(r.Street)), len(strVal(r.LGA)))
+	}
+	rows := auditRows(t, super, tenantA, createdEvent)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %d, want 1", len(rows))
+	}
+	if strings.Contains(rows[0].Raw, big) {
+		t.Error("audit payload carries a 10 kB value; field names only")
+	}
+}
+
+// A TIN past the unique index's row limit (~2.7 kB, incompressible) passes the regex; it must not be a 5xx.
+func TestCreateHandler_VeryLongRNTINIsNotA500(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	_, _, ctxA := seedTenantWithAdmin(t, super, "customer create long rn")
+
+	var b strings.Builder
+	rng := rand.New(rand.NewSource(1))
+	for i := 0; i < 10_000; i++ {
+		b.WriteByte(byte('0' + rng.Intn(10)))
+	}
+	rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"RN-`+b.String()+`"}`)
+	if rec.Code >= 500 {
+		t.Errorf("POST a 10 kB RN- TIN = %d (%q), want a 201 or a 4xx, never a 5xx", rec.Code, rec.Body.String())
 	}
 }
 

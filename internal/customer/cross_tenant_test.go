@@ -137,3 +137,23 @@ func TestRLS_CustomerCreateNeverCrossesTenants(t *testing.T) {
 		t.Errorf("control: created audit rows in tenant A = %d, want 1", n)
 	}
 }
+
+func TestRLS_CustomerCreateIgnoresAForgedTenantID(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create forged A")
+	tenantB, _, _ := seedTenantWithAdmin(t, super, "customer create forged B")
+
+	rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+tin2+`","name":"Forger","tenant_id":"`+tenantB+`"}`)
+	wantStatus(t, rec, http.StatusCreated)
+
+	if n := countTIN(t, super, tenantA, tin2); n != 1 {
+		t.Errorf("A's rows for %s = %d, want 1 (the record lands in the caller's tenant)", tin2, n)
+	}
+	if n := countAll(t, super, tenantB); n != 0 {
+		t.Errorf("B's rows = %d, want 0 (the forged tenant_id was ignored)", n)
+	}
+	if n := len(auditRows(t, super, tenantB, createdEvent)); n != 0 {
+		t.Errorf("created audit rows in tenant B = %d, want 0", n)
+	}
+}

@@ -18,7 +18,7 @@ import (
 
 const columns = `id, tin, name, contact_person, buyer_type, email, telephone, street, city, postal_zone, country, state, lga, status, created_at`
 
-// Store reads and corrects customers as the invoice_app role; RLS scopes every query.
+// Store runs as the invoice_app role; RLS scopes every query.
 type Store struct {
 	pool *pgxpool.Pool
 }

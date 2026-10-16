@@ -640,6 +640,28 @@ func TestRLS_CustomersAppUpdatesOnlyItsOwnRows(t *testing.T) {
 
 	err = csAsApp(h.tenantA, `UPDATE customers SET buyer_type = 'B2X' WHERE id = $1`, rowA)
 	csAssertPGCode(t, err, "23514", "customers_buyer_type_check", "an update to an invalid buyer_type")
+
+	setStatus := func(tenant, id, status string) (int64, error) {
+		var n int64
+		err := db.WithinTenantTx(ctx, h.app, tenant, func(tx pgx.Tx) error {
+			tag, e := tx.Exec(ctx, `UPDATE customers SET status = $1 WHERE id = $2`, status, id)
+			n = tag.RowsAffected()
+			return e
+		})
+		return n, err
+	}
+	n, err = setStatus(h.tenantA, rowA, "archived")
+	if err != nil || n != 1 || csStatusOf(t, rowA) != "archived" {
+		t.Errorf("tenant A archiving its own row: affected %d, err %v, status %q, want 1, nil, archived", n, err, csStatusOf(t, rowA))
+	}
+	n, err = setStatus(h.tenantA, rowB, "archived")
+	if err != nil || n != 0 || csStatusOf(t, rowB) != "active" {
+		t.Errorf("tenant A archiving B's row: affected %d, err %v, status %q, want 0, nil, active", n, err, csStatusOf(t, rowB))
+	}
+	_, err = setStatus(h.tenantA, rowA, "deleted")
+	csAssertPGCode(t, err, "23514", "customers_status_check", "an update to an invalid status")
+	err = csAsApp(h.tenantA, `UPDATE customers SET status = NULL WHERE id = $1`, rowA)
+	csAssertPGCode(t, err, "23502", "", "an update of status to NULL")
 }
 
 func TestRLS_CustomersEditedFieldsAndCreatedAtNotNull(t *testing.T) {
@@ -851,6 +873,21 @@ func TestRLS_CustomersStatusMigrationBackfillsActive(t *testing.T) {
 	}
 	if nullable != "NO" {
 		t.Errorf("customers.status is_nullable = %q, want NO", nullable)
+	}
+
+	// The re-applied Up, not the already-migrated schema, must carry the CHECK and the default.
+	tenant := csFreshTenant(t)
+	fresh := uuid.NewString()
+	if err := csAsApp(tenant, `INSERT INTO customers (id, tenant_id, tin) VALUES ($1, $2, '12345678-0002')`, fresh, tenant); err != nil {
+		t.Fatalf("insert naming only tenant_id and tin after the re-Up: %v", err)
+	}
+	if got := csStatusOf(t, fresh); got != "active" {
+		t.Errorf("status of a row inserted after the re-Up = %q, want active", got)
+	}
+	err := csAsApp(tenant, `INSERT INTO customers (id, tenant_id, tin, status) VALUES ($1, $2, '12345678-0003', 'deleted')`, uuid.NewString(), tenant)
+	csAssertPGCode(t, err, "23514", "customers_status_check", "an insert with status deleted after the re-Up")
+	if err := csAsApp(tenant, `INSERT INTO customers (id, tenant_id, tin, status) VALUES ($1, $2, '12345678-0004', 'archived')`, uuid.NewString(), tenant); err != nil {
+		t.Errorf("insert with status archived after the re-Up: %v, want accepted", err)
 	}
 }
 

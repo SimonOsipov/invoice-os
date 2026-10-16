@@ -728,6 +728,7 @@ var scCoreAllowlist = []scCoreExemption{
 	{file: "internal/tenancy/invite_registration.go", fn: "ReleaseInvitationRegistration"}, // a gateway-token route; the token names the invite and there is no caller to gate
 	{file: "internal/aicalls/recorder.go", fn: "write"},                                    // a background usage row written after the AI call returned; the tenant is the identity the call ran under, and no request context is left to gate
 	{file: "internal/archive/staff.go", fn: "withinStaffTenant"},                           // staff read: the path tenant is checked by a staff_read_ function in db.WithinStaffTx; READ ONLY tenant tx
+	{file: "internal/customer/backfill.go", fn: "Backfill"},                                // operator CLI and the demo-seed boot step only; internal/customer serves HTTP, so a package exemption would un-gate the customer handlers
 }
 
 // scCoreSite is one call of the ungated core, attributed to the INNERMOST

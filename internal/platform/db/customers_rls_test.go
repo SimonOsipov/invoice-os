@@ -6,9 +6,7 @@ package db_test
 
 import (
 	"context"
-	"database/sql"
 	"io/fs"
-	"os"
 	"reflect"
 	"sort"
 	"strconv"
@@ -17,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/pressly/goose/v3"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/migrations"
@@ -544,6 +541,7 @@ func TestRLS_CustomersColumnsTypesAndDefaults(t *testing.T) {
 		"lga":            {"text", "YES", ""},
 		"edited_fields":  {"_text", "NO", "'{}'::text[]"},
 		"created_at":     {"timestamptz", "NO", "now()"},
+		"status":         {"text", "NO", "'active'::text"},
 	}
 	rows, err := h.super.Query(context.Background(),
 		`SELECT column_name, udt_name, is_nullable, coalesce(column_default, '')
@@ -676,15 +674,7 @@ func TestRLS_CustomersMigrationDownDropsExactlyItsObjects(t *testing.T) {
 		t.Fatalf("parse goose version out of %q: %v", matches[0], err)
 	}
 
-	sqlDB, err := sql.Open("pgx", os.Getenv("DATABASE_MIGRATION_URL"))
-	if err != nil {
-		t.Fatalf("open migrator connection: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.FS)
-	if err != nil {
-		t.Fatalf("build migration provider: %v", err)
-	}
+	provider := staffMigrationProvider(t)
 	t.Cleanup(func() {
 		if _, err := provider.Up(context.Background()); err != nil {
 			t.Errorf("restore the buyer_directory schema after the Down/Up round-trip: %v", err)
@@ -709,18 +699,207 @@ func TestRLS_CustomersMigrationDownDropsExactlyItsObjects(t *testing.T) {
 	if !has || nrs != len(nrsCols) || otherBefore == 0 {
 		t.Fatalf("before Down: customers %v, NRS columns %d, other columns %d, want true, %d, >0", has, nrs, otherBefore, len(nrsCols))
 	}
-	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
-		t.Fatalf("roll back the buyer_directory migration: %v", err)
-	}
+	// The status migration alters customers, so it rolls back first and re-applies last.
+	reapply := rollBackMigrations(t, provider, migrationVersion(t, "*_customer_status.sql"), version)
 	has, nrs, other := state()
 	if has || nrs != 0 || other != otherBefore {
 		t.Errorf("after Down: customers %v, NRS columns %d, other columns %d, want false, 0, %d", has, nrs, other, otherBefore)
 	}
-	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
-		t.Fatalf("re-apply the buyer_directory migration: %v", err)
-	}
+	reapply()
 	has, nrs, other = state()
 	if !has || nrs != len(nrsCols) || other != otherBefore {
 		t.Errorf("after re-Up: customers %v, NRS columns %d, other columns %d, want true, %d, %d", has, nrs, other, len(nrsCols), otherBefore)
+	}
+	if !csHasStatusColumn(t) {
+		t.Error("customers.status is absent after the buyer_directory round-trip, want present")
+	}
+}
+
+func csHasStatusColumn(t *testing.T) bool {
+	t.Helper()
+	return mustCount(t, h.super,
+		`SELECT count(*) FROM information_schema.columns
+		  WHERE table_schema = 'public' AND table_name = 'customers' AND column_name = 'status'`) == 1
+}
+
+// csColumns reads customers' columns as name -> "udt/nullable/default", so a changed column shows in a diff.
+func csColumns(t *testing.T) map[string]string {
+	t.Helper()
+	rows, err := h.super.Query(context.Background(),
+		`SELECT column_name, udt_name || '/' || is_nullable || '/' || coalesce(column_default, '')
+		   FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'customers'`)
+	if err != nil {
+		t.Fatalf("read customers columns: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var name, desc string
+		if e := rows.Scan(&name, &desc); e != nil {
+			t.Fatalf("scan customers column: %v", e)
+		}
+		got[name] = desc
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate customers columns: %v", e)
+	}
+	if len(got) == 0 {
+		t.Fatal("customers has no columns")
+	}
+	return got
+}
+
+func csConstraintNames(t *testing.T) []string {
+	t.Helper()
+	rows, err := h.super.Query(context.Background(),
+		`SELECT conname FROM pg_constraint WHERE conrelid = 'public.customers'::regclass ORDER BY conname`)
+	if err != nil {
+		t.Fatalf("read customers constraints: %v", err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var n string
+		if e := rows.Scan(&n); e != nil {
+			t.Fatalf("scan constraint name: %v", e)
+		}
+		names = append(names, n)
+	}
+	if e := rows.Err(); e != nil {
+		t.Fatalf("iterate constraint names: %v", e)
+	}
+	if len(names) == 0 {
+		t.Fatal("customers has no constraints")
+	}
+	return names
+}
+
+func csStatusOf(t *testing.T, id string) string {
+	t.Helper()
+	var status string
+	if err := h.super.QueryRow(context.Background(), `SELECT status FROM customers WHERE id = $1`, id).Scan(&status); err != nil {
+		t.Fatalf("read customers.status for %s: %v", id, err)
+	}
+	return status
+}
+
+// csFreshTenant returns a throwaway tenant whose customers die with it (ON DELETE CASCADE).
+func csFreshTenant(t *testing.T) string {
+	t.Helper()
+	id := uuid.NewString()
+	if _, err := h.super.Exec(context.Background(), `INSERT INTO tenants (id, name) VALUES ($1, 'customers status probe')`, id); err != nil {
+		t.Fatalf("seed throwaway tenant: %v", err)
+	}
+	t.Cleanup(func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, id) })
+	return id
+}
+
+func TestRLS_CustomersStatusChecked(t *testing.T) {
+	h := requireHarness(t)
+	requireCustomersTable(t)
+	tenant := csFreshTenant(t)
+
+	insert := func(status, tin string) error {
+		return csAsApp(tenant, `INSERT INTO customers (id, tenant_id, tin, status) VALUES ($1, $2, $3, $4)`,
+			uuid.NewString(), tenant, tin, status)
+	}
+	for i, status := range []string{"archived", "active"} {
+		if err := insert(status, "12345678-000"+strconv.Itoa(i+1)); err != nil {
+			t.Fatalf("insert with status %q: %v, want accepted", status, err)
+		}
+	}
+	if n := mustCount(t, h.super, `SELECT count(*) FROM customers WHERE tenant_id = $1 AND status IN ('active', 'archived')`, tenant); n != 2 {
+		t.Fatalf("customers stored with status active/archived = %d, want 2", n)
+	}
+	for i, status := range []string{"deleted", "", "Archived"} {
+		err := insert(status, "12345678-001"+strconv.Itoa(i))
+		csAssertPGCode(t, err, "23514", "customers_status_check", "an insert with status "+strconv.Quote(status))
+	}
+}
+
+func TestRLS_CustomersStatusDefaultsToActive(t *testing.T) {
+	requireHarness(t)
+	requireCustomersTable(t)
+	tenant := csFreshTenant(t)
+
+	id := uuid.NewString()
+	if err := csAsApp(tenant, `INSERT INTO customers (id, tenant_id, tin) VALUES ($1, $2, '12345678-0001')`, id, tenant); err != nil {
+		t.Fatalf("insert naming only tenant_id and tin: %v", err)
+	}
+	if got := csStatusOf(t, id); got != "active" {
+		t.Errorf("status of a row inserted without one = %q, want active", got)
+	}
+}
+
+func TestRLS_CustomersStatusMigrationBackfillsActive(t *testing.T) {
+	h := requireHarness(t)
+	requireCustomersTable(t)
+	provider := staffMigrationProvider(t)
+	reapply := rollBackMigrations(t, provider, migrationVersion(t, "*_customer_status.sql"))
+
+	id := seedCustomer(t, h.tenantA, "12345678-0001")
+	reapply()
+
+	if got := csStatusOf(t, id); got != "active" {
+		t.Errorf("status of a row that predates the migration = %q, want active", got)
+	}
+	var nullable string
+	if err := h.super.QueryRow(context.Background(),
+		`SELECT is_nullable FROM information_schema.columns
+		  WHERE table_schema = 'public' AND table_name = 'customers' AND column_name = 'status'`).Scan(&nullable); err != nil {
+		t.Fatalf("read customers.status is_nullable: %v", err)
+	}
+	if nullable != "NO" {
+		t.Errorf("customers.status is_nullable = %q, want NO", nullable)
+	}
+}
+
+func TestRLS_CustomersStatusMigrationDownDropsOnlyTheColumn(t *testing.T) {
+	requireHarness(t)
+	requireCustomersTable(t)
+	provider := staffMigrationProvider(t)
+	version := migrationVersion(t, "*_customer_status.sql")
+	restoreMigrationOnCleanup(t, provider, version)
+	ctx := context.Background()
+
+	if !csHasStatusColumn(t) {
+		t.Fatal("customers.status is absent before the Down, want present")
+	}
+	colsUp := csColumns(t)
+	consUp := csConstraintNames(t)
+
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatalf("roll back the customer_status migration: %v", err)
+	}
+	colsDown := csColumns(t)
+	if _, ok := colsDown["status"]; ok {
+		t.Error("customers.status still exists after the Down, want dropped")
+	}
+	if len(colsDown) != len(colsUp)-1 {
+		t.Errorf("customers has %d columns after the Down, want %d", len(colsDown), len(colsUp)-1)
+	}
+	for name, desc := range colsDown {
+		if colsUp[name] != desc {
+			t.Errorf("column %s is %q after the Down, want %q", name, desc, colsUp[name])
+		}
+	}
+	var wantCons []string
+	for _, c := range consUp {
+		if c != "customers_status_check" {
+			wantCons = append(wantCons, c)
+		}
+	}
+	if got := csConstraintNames(t); !reflect.DeepEqual(got, wantCons) {
+		t.Errorf("customers constraints after the Down = %v, want %v", got, wantCons)
+	}
+
+	if _, err := provider.ApplyVersion(ctx, version, true); err != nil {
+		t.Fatalf("re-apply the customer_status migration: %v", err)
+	}
+	if got := csColumns(t); !reflect.DeepEqual(got, colsUp) {
+		t.Errorf("customers columns after Up, Down, Up = %v, want %v", got, colsUp)
+	}
+	if got := csConstraintNames(t); !reflect.DeepEqual(got, consUp) {
+		t.Errorf("customers constraints after Up, Down, Up = %v, want %v", got, consUp)
 	}
 }

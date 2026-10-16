@@ -632,11 +632,11 @@ func TestCreateHandler_TenKilobyteFields(t *testing.T) {
 	}
 }
 
-// A TIN past the unique index's row limit (~2.7 kB, incompressible) passes the regex; it must not be a 5xx.
-func TestCreateHandler_VeryLongRNTINIsNotA500(t *testing.T) {
+// A TIN past the unique index's row limit (~2.7 kB, incompressible) passes the regex; it is a 400, not a 500.
+func TestCreateHandler_VeryLongRNTINIs400WithTheTINMessage(t *testing.T) {
 	super, app := dbTestPools(t)
 	h := newMux(customer.NewStore(app))
-	_, _, ctxA := seedTenantWithAdmin(t, super, "customer create long rn")
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create long rn")
 
 	var b strings.Builder
 	rng := rand.New(rand.NewSource(1))
@@ -644,8 +644,43 @@ func TestCreateHandler_VeryLongRNTINIsNotA500(t *testing.T) {
 		b.WriteByte(byte('0' + rng.Intn(10)))
 	}
 	rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"RN-`+b.String()+`"}`)
-	if rec.Code >= 500 {
-		t.Errorf("POST a 10 kB RN- TIN = %d (%q), want a 201 or a 4xx, never a 5xx", rec.Code, rec.Body.String())
+	wantStatus(t, rec, http.StatusBadRequest)
+	if got := errorBody(t, rec); got != msgTINFormat {
+		t.Errorf("error = %q, want %q", got, msgTINFormat)
+	}
+	if n := countAll(t, super, tenantA); n != 0 {
+		t.Errorf("customers rows after the rejected POST = %d, want 0", n)
+	}
+}
+
+func TestCreateHandler_BuyerTypeIsSetOnTheNewRowOnly(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create buyer type scope")
+	g := seedCustomer(t, super, tenantA, seed{TIN: tin2, BuyerType: ptr("B2G")})
+	n := seedCustomer(t, super, tenantA, seed{TIN: tin3})
+	before := map[string]string{g: rowJSON(t, super, g), n: rowJSON(t, super, n)}
+
+	rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+tin1+`","buyer_type":"B2B","name":"New"}`)
+	wantStatus(t, rec, http.StatusCreated)
+	got := decodeCustomer(t, rec.Body.Bytes())
+	if got.ID == g || got.ID == n || strVal(got.BuyerType) != "B2B" || strVal(got.Name) != "New" || got.TIN != tin1 {
+		t.Errorf("response = id %s tin %s buyer_type %q name %q, want the new row with B2B/New", got.ID, got.TIN, strVal(got.BuyerType), strVal(got.Name))
+	}
+	if r := readRow(t, super, got.ID); strVal(r.BuyerType) != "B2B" || !reflect.DeepEqual(r.Edited, []string{"buyer_type", "name"}) {
+		t.Errorf("stored buyer_type %q edited_fields %v, want B2B and [buyer_type name]", strVal(r.BuyerType), r.Edited)
+	}
+	for id, want := range before {
+		if after := rowJSON(t, super, id); after != want {
+			t.Errorf("row %s after the create = %s, want unchanged %s", id, after, want)
+		}
+	}
+	rows := auditRows(t, super, tenantA, createdEvent)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %d, want 1", len(rows))
+	}
+	if f, _ := rows[0].Payload["fields"].([]any); len(f) != 2 || f[0] != "buyer_type" || f[1] != "name" {
+		t.Errorf("audit fields = %v, want [buyer_type name]", rows[0].Payload["fields"])
 	}
 }
 

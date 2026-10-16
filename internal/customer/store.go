@@ -140,6 +140,11 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Customer
 	return out, nil
 }
 
+// Create is a stub until CUST-01-04 is implemented.
+func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
+	return Customer{}, errors.New("customer: create not implemented")
+}
+
 // LookupByTIN runs in the caller's tenant tx; nil, nil when no active record matches.
 func LookupByTIN(ctx context.Context, tx pgx.Tx, tin string) (*Customer, error) {
 	c, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM customers WHERE tin = $1 AND status = 'active'", strings.TrimSpace(tin)))

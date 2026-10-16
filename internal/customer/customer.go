@@ -17,6 +17,8 @@ import (
 var (
 	ErrValidation = errors.New("customer: validation")
 	ErrNotFound   = errors.New("customer: not found")
+
+	ErrDuplicateTIN = errors.New("customer: duplicate tin")
 )
 
 // validationError is an ErrValidation whose text is the 400 message.
@@ -28,6 +30,9 @@ func (e validationError) Is(target error) bool { return target == ErrValidation 
 const (
 	errNoFields  = validationError("no fields to update")
 	errBuyerType = validationError("buyer_type must be B2B, B2G or B2C")
+
+	errTINRequired = validationError("tin is required")
+	errTINFormat   = validationError("tin must be NNNNNNNN-NNNN or RN- followed by digits")
 )
 
 // Customer is a customers row. edited_fields is not on the wire.
@@ -70,6 +75,12 @@ type UpdateInput struct {
 	Country       *string
 	State         *string
 	LGA           *string
+}
+
+// CreateInput is the Store.Create argument; Fields follow UpdateInput's nil rule.
+type CreateInput struct {
+	TIN    *string
+	Fields UpdateInput
 }
 
 type listPagination struct {
@@ -192,6 +203,13 @@ func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (
 			return
 		}
 		writeJSON(w, http.StatusOK, c)
+	}
+}
+
+// CreateHandler serves POST /v1/customers.
+func CreateHandler(create func(ctx context.Context, in CreateInput) (Customer, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotImplemented, "not implemented")
 	}
 }
 

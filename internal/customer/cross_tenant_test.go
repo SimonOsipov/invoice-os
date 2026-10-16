@@ -105,3 +105,35 @@ func TestRLS_StatusFilterNeverCrossesTenants(t *testing.T) {
 		t.Errorf("B's status = %q, want archived (untouched)", st)
 	}
 }
+
+func TestRLS_CustomerCreateNeverCrossesTenants(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create cross A")
+	tenantB, _, _ := seedTenantWithAdmin(t, super, "customer create cross B")
+	bID := seedCustomer(t, super, tenantB, seed{TIN: tin1, Name: ptr("B Ltd"), Edited: []string{"state"}})
+	before := rowJSON(t, super, bID)
+
+	rec := do(t, h, ctxA, http.MethodPost, "/v1/customers", `{"tin":"`+tin1+`","name":"A Ltd"}`)
+	wantStatus(t, rec, http.StatusCreated)
+
+	got := decodeCustomer(t, rec.Body.Bytes())
+	if got.ID == bID {
+		t.Errorf("A's create returned B's id %s", bID)
+	}
+	if n := countTIN(t, super, tenantA, tin1); n != 1 {
+		t.Fatalf("A's rows for %s = %d, want 1", tin1, n)
+	}
+	if tenant := rowTenant(t, super, idFor(t, super, tenantA, tin1)); tenant != tenantA {
+		t.Errorf("A's row tenant_id = %q, want %q", tenant, tenantA)
+	}
+	if after := rowJSON(t, super, bID); after != before {
+		t.Errorf("B's row after A's create = %s, want unchanged %s", after, before)
+	}
+	if n := len(auditRows(t, super, tenantB, createdEvent)); n != 0 {
+		t.Errorf("created audit rows in tenant B = %d, want 0", n)
+	}
+	if n := len(auditRows(t, super, tenantA, createdEvent)); n != 1 {
+		t.Errorf("control: created audit rows in tenant A = %d, want 1", n)
+	}
+}

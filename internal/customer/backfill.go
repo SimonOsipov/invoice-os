@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
@@ -179,4 +182,28 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, tenantID string, dryRun b
 		return BackfillResult{}, err
 	}
 	return res, nil
+}
+
+// SeedDemo backfills every db.DemoTenants tenant at boot, except on the hosted posture,
+// where it returns before touching pool. A failed tenant does not stop the others.
+func SeedDemo(ctx context.Context, pool *pgxpool.Pool, railwayEnvironmentName string, logger *slog.Logger) error {
+	if platform.Posture(railwayEnvironmentName) == platform.PostureHosted {
+		return nil
+	}
+	var failed []string
+	for _, tenantID := range db.DemoTenants {
+		res, err := Backfill(ctx, pool, tenantID, false)
+		if logger != nil {
+			logger.Info("customer: demo backfill", "tenant", tenantID,
+				"created", res.Created, "existing", res.Existing, "error", err)
+		}
+		if err != nil {
+			failed = append(failed, tenantID)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("customer: demo backfill failed for %d of %d tenants: %s",
+			len(failed), len(db.DemoTenants), strings.Join(failed, ", "))
+	}
+	return nil
 }

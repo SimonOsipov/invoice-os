@@ -817,3 +817,10 @@ func TestBackfill_NearMissTINsAreSkippedWithTheirRawValue(t *testing.T) {
 		t.Errorf("records = %v, Created %d; want only %s", bfTINs(recs), res.Created, tin1)
 	}
 }
+
+// A nil pool proves the hosted gate makes no database call: a regression panics in WithinTenantTx.
+func TestSeedDemo_HostedPostureWritesNothing(t *testing.T) {
+	if err := customer.SeedDemo(context.Background(), nil, "production", nil); err != nil {
+		t.Errorf("SeedDemo on the hosted posture = %v, want nil", err)
+	}
+}

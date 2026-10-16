@@ -909,14 +909,14 @@ function recordsResponse(customers: Customer[]): MockResponse {
 const customerCallUrls = (fetchMock: ReturnType<typeof mockFetch>) => fetchMock.mock.calls.map((c) => c[0] as string).filter(isCustomersUrl)
 
 describe('ReportsView: top customers take the record name (CUST-02-05, AC 7, D17, D18)', () => {
-  it('RP-10 a top customer takes the record name', async () => {
+  it('CRP-10 a top customer takes the record name', async () => {
     mockFetch([onePage([row({ buyer_tin: T, buyer_name: 'Inv Ltd' })])], ZERO_ROLLUP, () => recordsResponse([record()]))
     const { container } = render(<ReportsView ctx={reportsCtx()} />)
 
     await vi.waitFor(() => expect(topCustomerNames(container)[0]).toBe('Rec Ltd'))
   })
 
-  it('RP-11 a TIN with no record keeps the invoice name', async () => {
+  it('CRP-11 a TIN with no record keeps the invoice name', async () => {
     const fetchMock = mockFetch([onePage([row({ buyer_tin: T, buyer_name: 'Inv Ltd' })])])
     const { container } = render(<ReportsView ctx={reportsCtx()} />)
 
@@ -924,7 +924,7 @@ describe('ReportsView: top customers take the record name (CUST-02-05, AC 7, D17
     expect(topCustomerNames(container)[0]).toBe('Inv Ltd')
   })
 
-  it('RP-11b a record with no name keeps the invoice name', async () => {
+  it('CRP-11b a record with no name keeps the invoice name', async () => {
     const fetchMock = mockFetch([onePage([row({ buyer_tin: T, buyer_name: 'Inv Ltd' })])], ZERO_ROLLUP, () => recordsResponse([record({ name: null })]))
     const { container } = render(<ReportsView ctx={reportsCtx()} />)
 
@@ -932,7 +932,7 @@ describe('ReportsView: top customers take the record name (CUST-02-05, AC 7, D17
     expect(topCustomerNames(container)[0]).toBe('Inv Ltd')
   })
 
-  it('RP-12 a failed lookup keeps invoice names and shows no error', async () => {
+  it('CRP-12 a failed lookup keeps invoice names and shows no error', async () => {
     const down: MockResponse = { ok: false, status: 503, json: () => Promise.resolve({ error: 'down' }) }
     const fetchMock = mockFetch([onePage([row({ buyer_tin: T, buyer_name: 'Inv Ltd' })])], ZERO_ROLLUP, () => down)
     const { container } = render(<ReportsView ctx={reportsCtx()} />)
@@ -943,7 +943,20 @@ describe('ReportsView: top customers take the record name (CUST-02-05, AC 7, D17
     expect(title?.parentElement?.parentElement?.textContent).not.toContain('Something went wrong')
   })
 
-  it('RP-13 a no-TIN bucket is never looked up', async () => {
+  it('CRP-12b one failed lookup leaves the other top rows on their record names', async () => {
+    const T2 = '20000000-0002'
+    const fetchMock = mockFetch(
+      [onePage([row({ id: 'a', buyer_tin: T, buyer_name: 'Inv A', total: '2000.00' }), row({ id: 'b', buyer_tin: T2, buyer_name: 'Inv B', total: '1000.00' })])],
+      ZERO_ROLLUP,
+      (url) => (new URL(url).searchParams.get('tin') === T ? { ok: false, status: 503, json: () => Promise.resolve({ error: 'down' }) } : recordsResponse([record({ tin: T2, name: 'Rec B' })])),
+    )
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await vi.waitFor(() => expect(customerCallUrls(fetchMock)).toHaveLength(2))
+    await vi.waitFor(() => expect(topCustomerNames(container)).toEqual(['Inv A', 'Rec B']))
+  })
+
+  it('CRP-13 a no-TIN bucket is never looked up', async () => {
     const fetchMock = mockFetch([onePage([row({ buyer_tin: null, buyer_name: 'No Tin Ltd' })])])
     const { container } = render(<ReportsView ctx={reportsCtx()} />)
 
@@ -951,7 +964,24 @@ describe('ReportsView: top customers take the record name (CUST-02-05, AC 7, D17
     expect(customerCallUrls(fetchMock)).toEqual([])
   })
 
-  it('RP-14 two no-TIN buckets render two rows without a key warning', async () => {
+  it('CRP-13b a no-TIN bucket beside a TIN bucket is skipped while the TIN is looked up', async () => {
+    const fetchMock = mockFetch([onePage([row({ id: 'a', buyer_tin: T, buyer_name: 'Inv A', total: '2000.00' }), row({ id: 'b', buyer_tin: null, buyer_name: 'No Tin Ltd', total: '1000.00' })])])
+    render(<ReportsView ctx={reportsCtx()} />)
+
+    await vi.waitFor(() => expect(customerCallUrls(fetchMock)).toHaveLength(1))
+    expect(customerCallUrls(fetchMock)[0]).toContain(`tin=${T}`)
+  })
+
+  it('CRP-13c only the top five TINs are looked up', async () => {
+    const rows = [1, 2, 3, 4, 5, 6].map((n) => row({ id: `r${n}`, buyer_tin: `2000000${n}-0001`, buyer_name: `Buyer ${n}`, total: `${(7 - n) * 1000}.00` }))
+    const fetchMock = mockFetch([onePage(rows)])
+    const { container } = render(<ReportsView ctx={reportsCtx()} />)
+
+    await vi.waitFor(() => expect(customerCallUrls(fetchMock)).toHaveLength(5))
+    expect(topCustomerNames(container)).toHaveLength(5)
+  })
+
+  it('CRP-14 two no-TIN buckets render two rows without a key warning', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     mockFetch([onePage([row({ id: 'a', buyer_tin: null, buyer_name: 'First Ltd' }), row({ id: 'b', buyer_tin: null, buyer_name: 'Second Ltd' })])])
     const { container } = render(<ReportsView ctx={reportsCtx()} />)
@@ -961,7 +991,7 @@ describe('ReportsView: top customers take the record name (CUST-02-05, AC 7, D17
     errSpy.mockRestore()
   })
 
-  it('RP-14b two TINs sharing one buyer name render two rows without a key warning', async () => {
+  it('CRP-14b two TINs sharing one buyer name render two rows without a key warning', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     mockFetch([onePage([row({ id: 'a', buyer_tin: T, buyer_name: 'Twin Ltd' }), row({ id: 'b', buyer_tin: '20000000-0002', buyer_name: 'Twin Ltd' })])])
     const { container } = render(<ReportsView ctx={reportsCtx()} />)
@@ -971,7 +1001,7 @@ describe('ReportsView: top customers take the record name (CUST-02-05, AC 7, D17
     errSpy.mockRestore()
   })
 
-  it('RP-15 one buyer shows the same record name on Customers and Reports', async () => {
+  it('CRP-15 one buyer shows the same record name on Customers and Reports', async () => {
     const fetchMock = vi.fn((url: string) => {
       const path = new URL(url).pathname
       if (path.endsWith('/rollup')) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ZERO_ROLLUP) })

@@ -78,4 +78,14 @@ describe('recordNamesByTin', () => {
     const names = await recordNamesByTin(af, BASE, ['RN-1', 'RN-2', 'RN-3'])
     expect(Object.fromEntries(names)).toEqual({ 'RN-1': 'Rec A' })
   })
+
+  it('recordNamesByTin keeps the other names when one lookup rejects', async () => {
+    const af = vi.fn().mockImplementation((url: string) =>
+      new URL(url).searchParams.get('tin') === 'RN-1'
+        ? Promise.reject(new Error('down'))
+        : Promise.resolve({ customers: [{ ...CUSTOMER, tin: 'RN-2', name: 'Rec B' }], pagination: { limit: 1, offset: 0, total: 1 } }),
+    )
+    const names = await recordNamesByTin(af, BASE, ['RN-1', 'RN-2'])
+    expect(Object.fromEntries(names)).toEqual({ 'RN-2': 'Rec B' })
+  })
 })

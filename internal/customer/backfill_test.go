@@ -3,10 +3,15 @@ package customer_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"reflect"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SimonOsipov/invoice-os/internal/customer"
@@ -18,6 +23,9 @@ type bfInv struct {
 	Number                       string
 	At                           time.Time
 	TIN, Name, Email, City, Kind *string
+	Phone, Street, Postal        *string
+	Country, State, LGA          *string
+	ID                           string // empty takes the column default
 }
 
 var bfBase = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -30,9 +38,11 @@ func bfInsert(t *testing.T, super *pgxpool.Pool, tenantID, entityID string, invs
 	t.Helper()
 	for _, in := range invs {
 		if _, err := super.Exec(context.Background(),
-			`INSERT INTO invoices (tenant_id, entity_id, invoice_number, created_at, buyer_tin, buyer_name, buyer_email, buyer_city, invoice_kind)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			tenantID, entityID, in.Number, in.At, in.TIN, in.Name, in.Email, in.City, in.Kind); err != nil {
+			`INSERT INTO invoices (id, tenant_id, entity_id, invoice_number, created_at, buyer_tin, buyer_name, buyer_email, buyer_city, invoice_kind,
+				buyer_telephone, buyer_street, buyer_postal_zone, buyer_country, buyer_state, buyer_lga)
+			 VALUES (coalesce(nullif($1, '')::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+			in.ID, tenantID, entityID, in.Number, in.At, in.TIN, in.Name, in.Email, in.City, in.Kind,
+			in.Phone, in.Street, in.Postal, in.Country, in.State, in.LGA); err != nil {
 			t.Fatalf("insert invoice %s: %v", in.Number, err)
 		}
 	}
@@ -584,5 +594,223 @@ func TestRLS_CustomerBackfillDoesNotCrossTenants(t *testing.T) {
 	bfWant(t, "B's name", recsB[tin1].Name, "B Ltd")
 	if after := bfSnapshot(t, super, tenantA); !reflect.DeepEqual(snapA, after) {
 		t.Errorf("tenant A's record changed by B's run: before %v, after %v", snapA, after)
+	}
+}
+
+func TestBackfill_EveryColumnComesFromItsOwnInvoiceField(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant, entity := bfTenant(t, super, "bf columns")
+	bfInsert(t, super, tenant, entity,
+		bfInv{Number: "F-1", At: bfAt(1), TIN: ptr(tin1), Name: ptr("old name"), Kind: ptr("B2B"), Email: ptr("old email"),
+			Phone: ptr("old phone"), Street: ptr("old street"), City: ptr("old city"), Postal: ptr("old postal"),
+			Country: ptr("old country"), State: ptr("old state"), LGA: ptr("old lga")},
+		bfInv{Number: "F-2", At: bfAt(2), TIN: ptr(tin1), Name: ptr(" "), Kind: ptr(" "), Email: ptr(" "),
+			Phone: ptr(" "), Street: ptr(" "), City: ptr(" "), Postal: ptr(" "),
+			Country: ptr(" "), State: ptr(" "), LGA: ptr(" ")},
+		bfInv{Number: "F-3", At: bfAt(3), TIN: ptr(tin1), Name: ptr(" new name "), Kind: ptr("B2C"), Email: ptr("new email"),
+			Phone: ptr("new phone"), Street: ptr("new street"), City: ptr("new city"), Postal: ptr("new postal"),
+			Country: ptr("new country"), State: ptr("new state")})
+
+	bfRun(t, app, tenant, false)
+
+	r, ok := bfRecords(t, super, tenant)[tin1]
+	if !ok {
+		t.Fatalf("no record for %s", tin1)
+	}
+	for _, c := range []struct {
+		col  string
+		got  *string
+		want string
+	}{
+		{"name", r.Name, "new name"}, {"buyer_type", r.BuyerType, "B2C"}, {"email", r.Email, "new email"},
+		{"telephone", r.Telephone, "new phone"}, {"street", r.Street, "new street"}, {"city", r.City, "new city"},
+		{"postal_zone", r.PostalZone, "new postal"}, {"country", r.Country, "new country"},
+		{"state", r.State, "new state"}, {"lga", r.LGA, "old lga"},
+	} {
+		bfWant(t, c.col, c.got, c.want)
+	}
+	bfWantNull(t, "contact_person", r.ContactPerson)
+}
+
+func TestBackfill_BuyerTypeAcceptsExactlyB2BB2GB2C(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant, entity := bfTenant(t, super, "bf kinds")
+	tins := []string{tin1, tin2, tin3, tin4}
+	kinds := []string{"B2B", "B2G", "B2C", "B2X"}
+	for i, k := range kinds {
+		bfInsert(t, super, tenant, entity, bfInv{Number: "KD-" + k, At: bfAt(i + 1), TIN: ptr(tins[i]), Kind: ptr(k)})
+	}
+
+	bfRun(t, app, tenant, false)
+
+	recs := bfRecords(t, super, tenant)
+	if len(recs) != 4 {
+		t.Fatalf("records = %v, want 4", bfTINs(recs))
+	}
+	bfWant(t, "B2B", recs[tin1].BuyerType, "B2B")
+	bfWant(t, "B2G", recs[tin2].BuyerType, "B2G")
+	bfWant(t, "B2C", recs[tin3].BuyerType, "B2C")
+	bfWantNull(t, "B2X", recs[tin4].BuyerType)
+}
+
+func TestBackfill_EqualCreatedAtTakesTheNewerID(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant, entity := bfTenant(t, super, "bf tie")
+	bfInsert(t, super, tenant, entity,
+		bfInv{Number: "TI-1", At: bfAt(1), ID: "00000000-0000-4000-8000-000000000002", TIN: ptr(tin1), Name: ptr("Higher Id Ltd")},
+		bfInv{Number: "TI-2", At: bfAt(1), ID: "00000000-0000-4000-8000-000000000001", TIN: ptr(tin1), Name: ptr("Lower Id Ltd")})
+
+	res := bfRun(t, app, tenant, false)
+
+	bfWant(t, "name", bfRecords(t, super, tenant)[tin1].Name, "Higher Id Ltd")
+	if len(res.Collisions) != 1 || res.Collisions[0].Chosen != "Higher Id Ltd" {
+		t.Errorf("Collisions = %+v, want one choosing Higher Id Ltd", res.Collisions)
+	}
+}
+
+func TestBackfill_CollisionNamesSortByByteOrder(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant, entity := bfTenant(t, super, "bf name sort")
+	bfInsert(t, super, tenant, entity,
+		bfInv{Number: "NS-1", At: bfAt(1), TIN: ptr(tin1), Name: ptr("a Ltd")},
+		bfInv{Number: "NS-2", At: bfAt(2), TIN: ptr(tin1), Name: ptr("B Ltd")})
+
+	res := bfRun(t, app, tenant, true)
+
+	if len(res.Collisions) != 1 || !reflect.DeepEqual(res.Collisions[0].Names, []string{"B Ltd", "a Ltd"}) {
+		t.Errorf("Collisions = %+v, want one with Names [B Ltd a Ltd]", res.Collisions)
+	}
+}
+
+func TestBackfill_CollisionsFollowTINOrderNotInsertOrder(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant, entity := bfTenant(t, super, "bf tin order")
+	tins := []string{tin4, tin2, tin3, tin1}
+	for i, tin := range tins {
+		bfInsert(t, super, tenant, entity,
+			bfInv{Number: "TO-" + tin + "-a", At: bfAt(2 * i), TIN: ptr(tin), Name: ptr("X Ltd")},
+			bfInv{Number: "TO-" + tin + "-b", At: bfAt(2*i + 1), TIN: ptr(tin), Name: ptr("Y Ltd")})
+	}
+
+	res := bfRun(t, app, tenant, true)
+
+	var got []string
+	for _, c := range res.Collisions {
+		got = append(got, c.TIN)
+	}
+	want := append([]string(nil), tins...)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("collision TINs = %v, want ascending %v", got, want)
+	}
+}
+
+func TestBackfill_TINWithNoNameStillGetsARecord(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant, entity := bfTenant(t, super, "bf no name")
+	bfInsert(t, super, tenant, entity,
+		bfInv{Number: "NN-1", At: bfAt(1), TIN: ptr(tin1), Name: ptr("  ")},
+		bfInv{Number: "NN-2", At: bfAt(2), TIN: ptr(tin1)})
+
+	res := bfRun(t, app, tenant, false)
+
+	if res.Created != 1 || len(res.Collisions) != 0 {
+		t.Errorf("Created %d, Collisions %+v; want 1 and none", res.Created, res.Collisions)
+	}
+	r, ok := bfRecords(t, super, tenant)[tin1]
+	if !ok {
+		t.Fatalf("no record for %s", tin1)
+	}
+	bfWantNull(t, "name", r.Name)
+}
+
+func TestRLS_CustomerBackfillIgnoresAnotherTenantsRecord(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA, entityA := bfTenant(t, super, "bf other rec A")
+	tenantB, _ := bfTenant(t, super, "bf other rec B")
+	seedCustomer(t, super, tenantB, seed{TIN: tin1, Name: ptr("B Typed")})
+	bfInsert(t, super, tenantA, entityA, bfInv{Number: "OR-1", At: bfAt(1), TIN: ptr(tin1), Name: ptr("A Ltd")})
+
+	res := bfRun(t, app, tenantA, false)
+
+	if res.Created != 1 || res.Existing != 0 {
+		t.Errorf("Created %d, Existing %d; want 1, 0 (tenant B's record is not tenant A's)", res.Created, res.Existing)
+	}
+	bfWant(t, "A's name", bfRecords(t, super, tenantA)[tin1].Name, "A Ltd")
+	bfWant(t, "B's name", bfRecords(t, super, tenantB)[tin1].Name, "B Typed")
+}
+
+// A BYPASSRLS role that is not a superuser must be refused too.
+func TestRLS_CustomerBackfillRefusesANonSuperuserBypassRLSRole(t *testing.T) {
+	super, app := dbTestPools(t)
+	ctx := context.Background()
+	tenant, entity := bfTenant(t, super, "bf bypass")
+	bfInsert(t, super, tenant, entity, bfInv{Number: "BY-1", At: bfAt(1), TIN: ptr(tin1)})
+
+	role := "bf_bypass_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	if _, err := super.Exec(ctx, `CREATE ROLE `+role+` LOGIN BYPASSRLS PASSWORD 'bf-pass'`); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	t.Cleanup(func() { _, _ = super.Exec(ctx, `DROP ROLE `+role) })
+	var isSuper, bypass bool
+	if err := super.QueryRow(ctx, `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = $1`, role).Scan(&isSuper, &bypass); err != nil {
+		t.Fatalf("read role: %v", err)
+	}
+	if isSuper || !bypass {
+		t.Fatalf("control: role rolsuper=%v rolbypassrls=%v, want false, true", isSuper, bypass)
+	}
+	if _, err := super.Exec(ctx, `GRANT invoice_app TO `+role); err != nil {
+		t.Fatalf("grant invoice_app: %v", err)
+	}
+
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_SUPERUSER_URL"))
+	if err != nil {
+		t.Fatalf("parse superuser url: %v", err)
+	}
+	cfg.ConnConfig.User, cfg.ConnConfig.Password = role, "bf-pass"
+	bypassPool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("connect as %s: %v", role, err)
+	}
+	t.Cleanup(bypassPool.Close)
+
+	res, err := customer.Backfill(ctx, bypassPool, tenant, false)
+
+	if !errors.Is(err, customer.ErrBackfillPrivilegedRole) {
+		t.Errorf("Backfill over a BYPASSRLS pool = %v, want ErrBackfillPrivilegedRole", err)
+	}
+	if !reflect.DeepEqual(res, customer.BackfillResult{}) {
+		t.Errorf("result on refusal = %+v, want the zero value", res)
+	}
+	if n := bfCount(t, super, bfCountCustomers, tenant); n != 0 {
+		t.Errorf("customers after the refusal = %d, want 0", n)
+	}
+	if dry := bfRun(t, app, tenant, true); dry.Created != 1 {
+		t.Errorf("control: invoice_app dry run Created = %d, want 1", dry.Created)
+	}
+}
+
+func TestBackfill_NearMissTINsAreSkippedWithTheirRawValue(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant, entity := bfTenant(t, super, "bf near miss")
+	raw := []string{"x" + tin1, tin1 + "x", tin1 + "9", "RN-12a", "rn-123", " 12345678 "}
+	var invs []bfInv
+	for i, tin := range raw {
+		invs = append(invs, bfInv{Number: fmt.Sprintf("NM-%d", i), At: bfAt(i), TIN: ptr(tin)})
+	}
+	invs = append(invs, bfInv{Number: "NM-ok", At: bfAt(9), TIN: ptr(tin1)})
+	bfInsert(t, super, tenant, entity, invs...)
+
+	res := bfRun(t, app, tenant, false)
+
+	var want []customer.SkippedInvoice
+	for i, tin := range raw {
+		want = append(want, customer.SkippedInvoice{InvoiceNumber: fmt.Sprintf("NM-%d", i), TIN: tin})
+	}
+	if !reflect.DeepEqual(res.Skipped, want) {
+		t.Errorf("Skipped = %+v, want %+v", res.Skipped, want)
+	}
+	if recs := bfRecords(t, super, tenant); len(recs) != 1 || res.Created != 1 {
+		t.Errorf("records = %v, Created %d; want only %s", bfTINs(recs), res.Created, tin1)
 	}
 }

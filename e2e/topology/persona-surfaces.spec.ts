@@ -373,7 +373,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
     await expect(page.getByRole('button', { name: tab, exact: true })).toBeVisible()
   }
 
-  // The ninth in-house surface, Approvals, is swept by Test 2 below -- it needs its own
+  // Approvals is swept by Test 2 below -- it needs its own
   // fixtures and its own live-read oracle, and folding it in here would bury the one
   // assertion this story's AC 3 actually turns on.
 

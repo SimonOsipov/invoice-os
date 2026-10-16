@@ -149,18 +149,21 @@ func bfTINs(m map[string]row) []string {
 func TestBackfill_CreatesOneRecordPerFileableTIN(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenant, entity := bfTenant(t, super, "bf create")
-	padded := " " + tin1 + " "
+	padded, padded2 := " "+tin1+" ", " "+tin2+" "
 	bfInsert(t, super, tenant, entity,
 		bfInv{Number: "C-1", At: bfAt(1), TIN: &padded},
 		bfInv{Number: "C-2", At: bfAt(2), TIN: &padded},
 		bfInv{Number: "C-3", At: bfAt(3), TIN: ptr(tin1)},
-		bfInv{Number: "C-4", At: bfAt(4), TIN: ptr(tin2)})
+		bfInv{Number: "C-4", At: bfAt(4), TIN: &padded2})
 
 	res := bfRun(t, app, tenant, false)
 
 	if res.InvoicesRead != 4 || res.TINs != 2 || res.Created != 2 || res.Existing != 0 {
 		t.Errorf("result = InvoicesRead %d, TINs %d, Created %d, Existing %d; want 4, 2, 2, 0",
 			res.InvoicesRead, res.TINs, res.Created, res.Existing)
+	}
+	if len(res.Skipped) != 0 {
+		t.Errorf("Skipped = %+v, want none: a padded TIN is fileable", res.Skipped)
 	}
 	recs := bfRecords(t, super, tenant)
 	if len(recs) != 2 {

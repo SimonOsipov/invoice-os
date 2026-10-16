@@ -313,17 +313,18 @@ test('PW-02 Clients header row fits at every wide width', async ({ page }, testI
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-test('PW-03 Customers at 1440: heading, table, buyer chip, avatar', async ({ page }, testInfo) => {
+test('PW-03 Customers at 1440: heading, table, tax chip, avatar', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   const api = trackApi(page)
   await openFirm(page, api)
-  await openNav(page, /^Customers/, 'Customers & vendors')
-  const row = page.locator('.pf-list-row').filter({ hasText: 'Buyer Ltd' })
-  await expect(row, 'the created invoice\'s buyer never reached the table').toBeVisible()
+  await openNav(page, /^Customers/, 'Customers')
+  // The first record: the tenant's records sort by name, so a named row can sit past page 1.
+  const row = page.locator('.pf-list-row').first()
+  await expect(row, 'the customer table drew no row').toBeVisible()
   await api.quiet('Customers')
   await settle(page, main(page), row)
 
-  const h1 = await styles(h1Of(page, 'Customers & vendors'), ['font-family', 'font-weight'])
+  const h1 = await styles(h1Of(page, 'Customers'), ['font-family', 'font-weight'])
   expect(firstFamily(h1['font-family']), 'h1 first family').toBe('Manrope')
   expect(h1['font-weight'], 'h1 weight').toBe('700')
 
@@ -332,7 +333,7 @@ test('PW-03 Customers at 1440: heading, table, buyer chip, avatar', async ({ pag
   expect(await border(table), 'customers table border').toBe(`1px solid ${LINE_1}`)
   expect((await styles(table, ['box-shadow']))['box-shadow'], 'customers table shadow').toBe('none')
 
-  const chip = row.getByText(/^(VALID|NEEDS TIN)$/)
+  const chip = row.getByText('VALID', { exact: true })
   await expect(chip, 'tax status chip count').toHaveCount(1)
   expect(await chip.locator('*').count(), 'tax status chip has a child element').toBe(0)
   const chipCorners = await expectCorners(chip, '4px', 'tax status chip')
@@ -739,6 +740,9 @@ const matchers = {
   clients: (u: URL) => u.pathname === '/api/portfolio/v1/entities' && u.searchParams.get('limit') === '200' && !u.searchParams.has('status'),
   invoices: (u: URL) =>
     u.pathname === '/api/invoice/v1/invoices' && u.searchParams.get('offset') === '0' && u.searchParams.get('limit') === '200' && u.searchParams.get('entity_id') === entity.id,
+  customers: (u: URL) => u.pathname === '/api/invoice/v1/customers' && u.searchParams.get('offset') === '0' && u.searchParams.get('limit') === '50',
+  workspaceInvoices: (u: URL) =>
+    u.pathname === '/api/invoice/v1/invoices' && u.searchParams.get('offset') === '0' && u.searchParams.get('limit') === '200' && !u.searchParams.has('entity_id'),
   rollup: (u: URL) => u.pathname === '/api/dashboard/v1/rollup',
   policies: (u: URL) => u.pathname === '/api/invoice/v1/approval-policies',
 }
@@ -756,14 +760,15 @@ type StateCase = {
 
 const withTotal = (body: Record<string, unknown>, total: number) => ({ ...body, pagination: { ...(body.pagination as object), total } })
 const TRUNCATED_COPY = new RegExp(`^Showing \\d+ of ${TRUNCATING_TOTAL} invoices — refine your search to see the rest\\.$`)
+const CUSTOMERS_TRUNCATED_COPY = new RegExp(`^Invoices and Total billed count the newest \\d+ of ${TRUNCATING_TOTAL} invoices\\.$`)
 
 const STATE_CASES: StateCase[] = [
   { name: 'Clients loading', screen: 'Clients', kind: 'loading', match: 'clients', copy: 'Loading entities…' },
   { name: 'Clients error', screen: 'Clients', kind: 'error', match: 'clients', copy: 'Something went wrong' },
   { name: 'Clients empty', screen: 'Clients', kind: 'empty', match: 'clients', copy: 'No entities yet', reshape: (b) => ({ ...withTotal(b, 0), entities: [] }) },
-  { name: 'Customers loading', screen: 'Customers', kind: 'loading', match: 'invoices', copy: 'Loading customers…' },
-  { name: 'Customers error', screen: 'Customers', kind: 'error', match: 'invoices', copy: 'Something went wrong' },
-  { name: 'Customers truncated', screen: 'Customers', kind: 'truncated', match: 'invoices', copy: TRUNCATED_COPY, copyTestId: 'customers-truncated-notice', reshape: (b) => withTotal(b, TRUNCATING_TOTAL) },
+  { name: 'Customers loading', screen: 'Customers', kind: 'loading', match: 'customers', copy: 'Loading customers…' },
+  { name: 'Customers error', screen: 'Customers', kind: 'error', match: 'customers', copy: 'Something went wrong' },
+  { name: 'Customers truncated', screen: 'Customers', kind: 'truncated', match: 'workspaceInvoices', copy: CUSTOMERS_TRUNCATED_COPY, copyTestId: 'customers-truncated-notice', reshape: (b) => withTotal(b, TRUNCATING_TOTAL) },
   { name: 'Reports loading', screen: 'Reports', kind: 'loading', match: 'invoices', copy: 'Loading reports…' },
   { name: 'Reports error', screen: 'Reports', kind: 'error', match: 'invoices', copy: 'Something went wrong' },
   { name: 'Reports truncated', screen: 'Reports', kind: 'truncated', match: 'invoices', copy: TRUNCATED_COPY, copyTestId: 'reports-truncated-notice', reshape: (b) => withTotal(b, TRUNCATING_TOTAL) },
@@ -776,7 +781,7 @@ const STATE_CASES: StateCase[] = [
 
 const SCREEN_NAV: Record<StateCase['screen'], { nav: RegExp; heading: string }> = {
   Clients: { nav: /^Clients/, heading: 'Client portfolio' },
-  Customers: { nav: /^Customers/, heading: 'Customers & vendors' },
+  Customers: { nav: /^Customers/, heading: 'Customers' },
   Reports: { nav: /^Reports/, heading: 'Reports & analytics' },
   Workflows: { nav: /^Workflows/, heading: 'Approval policies' },
 }

@@ -1358,6 +1358,7 @@ test('ST-14 no Settings tab scrolls sideways and the roster fills the tab column
 test.describe('Buyers directory and company fields', () => {
   const BUYER_TIN = freshBuyerTin()
   const LONG_TIN = freshBuyerTin()
+  const RN_TIN = `RN-${'7'.repeat(24)}`
   const LONG_NAME = `Long ${'N'.repeat(115)}`
   const LONG_EMAIL = `${'e'.repeat(108)}@example.com`
   const COMPANY_KEYS = {
@@ -1381,6 +1382,7 @@ test.describe('Buyers directory and company fields', () => {
       const base = { entity_id: created.id, ...cleanInvoiceFields('') }
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${BUYER_TIN}`, buyer_tin: BUYER_TIN, buyer_name: 'Buyer Ltd', buyer_email: 'before@buyer.example.com', invoice_kind: 'B2B' })
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${LONG_TIN}`, buyer_tin: LONG_TIN, buyer_name: LONG_NAME, buyer_email: LONG_EMAIL, invoice_kind: 'B2B' })
+      await createInvoice(token, { ...base, invoice_number: `INV-CUST02-${RN_TIN.slice(3, 11)}`, buyer_tin: RN_TIN, buyer_name: 'RN Buyer', invoice_kind: 'B2B' })
     }
     return token
   }
@@ -1450,24 +1452,32 @@ test.describe('Buyers directory and company fields', () => {
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 
-  test('ST-17 the buyers list columns align and do not overlap at every wide width', async ({ page }, testInfo) => {
+  test('ST-17 the Customers list columns align, clip and do not overlap at every wide width', async ({ page }, testInfo) => {
     test.setTimeout(120_000)
     const errors = gatedErrors(page, [])
-    await signInAtFrontDoor(page, firm, '/settings/buyers')
-    await expect(buyerRow(page, LONG_TIN), 'the 120-character buyer is not listed').toBeVisible({ timeout: 20_000 })
+    await signInAtFrontDoor(page, firm, '/customers')
+    await expect(buyerRow(page, LONG_TIN), 'the 120-character customer is not listed').toBeVisible({ timeout: 20_000 })
     await expect(buyerRow(page, BUYER_TIN)).toBeVisible()
+    const rnRow = buyerRow(page, RN_TIN)
+    await expect(rnRow, 'the RN- customer is not listed').toBeVisible()
+    await expect(rnRow.getByText('VALID', { exact: true }), 'an RN- TIN reads exactly VALID').toBeVisible()
     await settle(page, main(page))
     const head = page.locator('.pf-list-head')
     const card = head.locator('xpath=..')
-    const measured = await sweep(page, 'Buyers list', async () => {
+    const measured = await sweep(page, 'Customers list', async () => {
       const cells = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } }))
-      const headCells = await cells(head.locator(':scope > span'))
+      // Text fits its cell: the fixed tracks and the header never clip; the Customer and TIN cells clip with an ellipsis.
+      const fits = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => el.scrollWidth <= el.clientWidth + 1))
+      const clips = (loc: Locator) => loc.evaluate((el) => { const cs = getComputedStyle(el); return cs.overflow === 'hidden' && cs.textOverflow === 'ellipsis' })
+      const headSpans = head.locator(':scope > span')
+      const headCells = await cells(headSpans)
       const rows = page.locator('.pf-list-row')
       const n = await rows.count()
       const problems: string[] = []
       const { rects, problems: boxProblems } = await boxes({ card })
       problems.push(...boxProblems)
-      if (n < 2) problems.push(`the list drew ${n} rows, want at least the 2 buyers`)
+      if (n < 3) problems.push(`the list drew ${n} rows, want at least the 3 customers`)
+      ;(await fits(headSpans)).forEach((f, k) => { if (!f) problems.push(`header cell ${k} text sticks out of its cell`) })
       const rowRects: Rect[] = []
       for (let i = 0; i < n; i++) {
         const row = rows.nth(i)
@@ -1475,18 +1485,22 @@ test.describe('Buyers directory and company fields', () => {
         if (!rowBox) { problems.push(`row ${i} has no box`); continue }
         rowRects.push(rowBox)
         if (rects.card && !enclosesRect(rects.card, rowBox, 1)) problems.push(`row ${i} sticks out of the list card`)
-        const rowCells = await cells(row.locator(':scope > span'))
+        const rowSpans = row.locator(':scope > span')
+        const rowCells = await cells(rowSpans)
         if (rowCells.length !== headCells.length) problems.push(`row ${i} has ${rowCells.length} cells, the header ${headCells.length}`)
         rowCells.forEach((c, k) => {
           if (headCells[k] && Math.abs(c.x - headCells[k].x) > 1) problems.push(`row ${i} cell ${k} is not under its header cell`)
           if (c.x + c.width > rowBox.x + rowBox.width + 1) problems.push(`row ${i} cell ${k} sticks out of its row`)
           if (k > 0 && rectsOverlap(rowCells[k - 1], c)) problems.push(`row ${i} cells ${k - 1} and ${k} overlap`)
         })
+        if (!(await clips(rowSpans.nth(0).locator(':scope > span').last()))) problems.push(`row ${i} Customer name does not clip with an ellipsis`)
+        if (!(await clips(rowSpans.nth(1)))) problems.push(`row ${i} TIN does not clip with an ellipsis`)
+        ;(await fits(row.locator(':scope > span:nth-child(n+3)'))).forEach((f) => { if (!f) problems.push(`row ${i} fixed-track text sticks out of its cell`) })
       }
       for (let k = 1; k < headCells.length; k++) if (rectsOverlap(headCells[k - 1], headCells[k])) problems.push(`header cells ${k - 1} and ${k} overlap`)
       return { problems, rects: { ...rects, headCells, rowRects } }
     })
-    await attachShot(page, testInfo, 'settings-buyers')
+    await attachShot(page, testInfo, 'customers')
     await attachJson(testInfo, 'st-17-measurements', measured)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })

@@ -279,7 +279,7 @@ func TestAuditScopeOf_UnknownEventFallsBackToUnattributedNotWorkspace(t *testing
 	}
 }
 
-// A buyer record belongs to the workspace, not to one company, so its correction event is
+// A buyer record belongs to the workspace, not to one company, so its events are
 // firm-wide. The unknown-event control proves the fallback alone cannot answer workspace.
 func TestAuditScopeOf_CustomerEventsAreWorkspace(t *testing.T) {
 	for _, e := range []string{

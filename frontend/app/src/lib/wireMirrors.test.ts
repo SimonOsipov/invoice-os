@@ -391,7 +391,7 @@ const WIRE_MIRRORS = [
     spaPath: 'frontend/app/src/lib/buyerDirectory.ts',
     spaAnchor: 'export function listCustomers(',
     e2eAnchor: 'export function listCustomers(',
-    floor: 14,
+    floor: 15,
   },
   {
     ts: 'GoldenRules',

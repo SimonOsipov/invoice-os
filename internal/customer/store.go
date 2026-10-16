@@ -15,7 +15,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-const columns = `id, tin, name, contact_person, buyer_type, email, telephone, street, city, postal_zone, country, state, lga, created_at`
+const columns = `id, tin, name, contact_person, buyer_type, email, telephone, street, city, postal_zone, country, state, lga, status, created_at`
 
 // Store reads and corrects customers as the invoice_app role; RLS scopes every query.
 type Store struct {
@@ -29,7 +29,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 func scan(row pgx.Row) (Customer, error) {
 	var c Customer
 	err := row.Scan(&c.ID, &c.TIN, &c.Name, &c.ContactPerson, &c.BuyerType, &c.Email, &c.Telephone,
-		&c.Street, &c.City, &c.PostalZone, &c.Country, &c.State, &c.LGA, &c.CreatedAt)
+		&c.Street, &c.City, &c.PostalZone, &c.Country, &c.State, &c.LGA, &c.Status, &c.CreatedAt)
 	return c, err
 }
 
@@ -38,11 +38,19 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Customer, int, error)
 	items := []Customer{}
 	var total int
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		where := ""
+		var conds []string
 		var args []any
 		if tin := strings.TrimSpace(f.TIN); tin != "" {
-			where = " WHERE tin = $1"
 			args = append(args, tin)
+			conds = append(conds, "tin = $"+itoa(len(args)))
+		}
+		if f.Status != "" {
+			args = append(args, f.Status)
+			conds = append(conds, "status = $"+itoa(len(args)))
+		}
+		where := ""
+		if len(conds) > 0 {
+			where = " WHERE " + strings.Join(conds, " AND ")
 		}
 		if err := tx.QueryRow(ctx, "SELECT count(*) FROM customers"+where, args...).Scan(&total); err != nil {
 			return err
@@ -132,9 +140,9 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Customer
 	return out, nil
 }
 
-// LookupByTIN runs in the caller's tenant tx; nil, nil when no record matches.
+// LookupByTIN runs in the caller's tenant tx; nil, nil when no active record matches.
 func LookupByTIN(ctx context.Context, tx pgx.Tx, tin string) (*Customer, error) {
-	c, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM customers WHERE tin = $1", strings.TrimSpace(tin)))
+	c, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM customers WHERE tin = $1 AND status = 'active'", strings.TrimSpace(tin)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

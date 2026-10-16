@@ -377,13 +377,15 @@ export interface Customer {
   country: string | null
   state: string | null
   lga: string | null
+  status: 'active' | 'archived'
   created_at: string
 }
 
 // listCustomers(): GET /v1/customers; `tin` is ListFilter.TIN, an exact match.
-export function listCustomers(token: string, query?: { tin?: string; limit?: number; offset?: number }): Promise<{ customers: Customer[]; pagination: Pagination }> {
+export function listCustomers(token: string, query?: { tin?: string; status?: 'active' | 'archived'; limit?: number; offset?: number }): Promise<{ customers: Customer[]; pagination: Pagination }> {
   const params = new URLSearchParams()
   if (query?.tin !== undefined) params.set('tin', query.tin)
+  if (query?.status !== undefined) params.set('status', query.status)
   if (query?.limit !== undefined) params.set('limit', String(query.limit))
   if (query?.offset !== undefined) params.set('offset', String(query.offset))
   const qs = params.toString()

@@ -45,12 +45,14 @@ type Customer struct {
 	Country       *string   `json:"country"`
 	State         *string   `json:"state"`
 	LGA           *string   `json:"lga"`
+	Status        string    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
 // ListFilter is the Store.List query. TIN matches exactly after a trim.
 type ListFilter struct {
 	TIN    string
+	Status string // "" lists both; otherwise "active" or "archived"
 	Limit  int
 	Offset int
 }
@@ -93,6 +95,12 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Customer, int, 
 		}
 		query := r.URL.Query()
 
+		status := query.Get("status")
+		if status != "" && status != "active" && status != "archived" {
+			writeError(w, http.StatusBadRequest, `status must be "active" or "archived"`)
+			return
+		}
+
 		limit := 50
 		if raw := query.Get("limit"); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -123,7 +131,7 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Customer, int, 
 			return
 		}
 
-		filter := ListFilter{TIN: query.Get("tin"), Limit: limit, Offset: offset}
+		filter := ListFilter{TIN: query.Get("tin"), Status: status, Limit: limit, Offset: offset}
 		items, total, err := list(r.Context(), filter)
 		if err != nil {
 			status, msg := statusForErr(err)

@@ -85,3 +85,23 @@ func TestStoreList_TINFilterNeverCrossesTenants(t *testing.T) {
 		t.Errorf("List tin=%s (held only by B) as A = %v total %d err %v, want none", tin2, tins(got), total, err)
 	}
 }
+
+func TestRLS_StatusFilterNeverCrossesTenants(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer status cross A")
+	tenantB, _, _ := seedTenantWithAdmin(t, super, "customer status cross B")
+	aID := seedCustomer(t, super, tenantA, seed{TIN: tin1, Status: "archived"})
+	bID := seedCustomer(t, super, tenantB, seed{TIN: tin1, Status: "archived"})
+
+	got, total, err := store.List(ctxA, customer.ListFilter{Status: "archived", Limit: 50})
+	if err != nil {
+		t.Fatalf("List archived as A: %v", err)
+	}
+	if total != 1 || !reflect.DeepEqual(ids(got), []string{aID}) {
+		t.Errorf("List archived as A = ids %v total %d, want [%s] total 1", ids(got), total, aID)
+	}
+	if st := rowStatus(t, super, bID); st != "archived" {
+		t.Errorf("B's status = %q, want archived (untouched)", st)
+	}
+}

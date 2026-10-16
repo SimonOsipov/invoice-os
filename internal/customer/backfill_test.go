@@ -501,6 +501,22 @@ func TestBackfill_ExistingRecordCollisionReportsTheRecordName(t *testing.T) {
 	}
 }
 
+func TestBackfill_ExistingRecordWithNoNameCollisionHasEmptyChosen(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenant, entity := bfTenant(t, super, "bf existing nameless")
+	seedCustomer(t, super, tenant, seed{TIN: tin1})
+	bfInsert(t, super, tenant, entity,
+		bfInv{Number: "N-1", At: bfAt(1), TIN: ptr(tin1), Name: ptr("A Ltd")},
+		bfInv{Number: "N-2", At: bfAt(2), TIN: ptr(tin1), Name: ptr("B Ltd")})
+
+	res := bfRun(t, app, tenant, false)
+
+	want := []customer.Collision{{TIN: tin1, Names: []string{"A Ltd", "B Ltd"}, Chosen: "", Existing: true}}
+	if !reflect.DeepEqual(res.Collisions, want) {
+		t.Errorf("Collisions = %+v, want %+v", res.Collisions, want)
+	}
+}
+
 func TestBackfill_SecondRunIsANoOp(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenant, entity := bfTenant(t, super, "bf second run")

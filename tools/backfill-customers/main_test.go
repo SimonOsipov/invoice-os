@@ -234,3 +234,22 @@ func TestMain_NoTenantAndNonUUIDTenantExitNonZero(t *testing.T) {
 		t.Errorf("non-uuid: code=%d out=%q, want a flag-parse failure before any run", code, out)
 	}
 }
+
+func TestMain_StrayPositionalArgumentExitsOneBeforeAnyRun(t *testing.T) {
+	const dsn = "postgres://invoice_app:x@127.0.0.1:1/x?sslmode=disable&connect_timeout=1"
+	out, errOut, code := runMain(t, dsn, "--tenant "+tenantA+" --dry-run false --tenant "+tenantB)
+	if code != 1 || out != "" || !strings.Contains(errOut, `"false"`) {
+		t.Errorf("stray arg: code=%d out=%q err=%q, want exit 1, no run, stderr naming \"false\"", code, out, errOut)
+	}
+}
+
+func TestReport_ExistingRecordWithNoNameSaysSo(t *testing.T) {
+	var buf bytes.Buffer
+	report(&buf, tenantA, false, customer.BackfillResult{
+		Collisions: []customer.Collision{{TIN: "tin3", Names: []string{"E", "F"}, Existing: true}},
+	})
+	got := buf.String()
+	if strings.Contains(got, `kept ""`) || !strings.Contains(got, "kept (record has no name)") {
+		t.Errorf("report = %q, want 'kept (record has no name)' and no empty quotes", got)
+	}
+}

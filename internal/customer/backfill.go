@@ -25,7 +25,7 @@ type SkippedInvoice struct{ InvoiceNumber, TIN string }
 type Collision struct {
 	TIN      string
 	Names    []string // every distinct trimmed non-blank name, sorted
-	Chosen   string   // newest name; for an existing record, the record's current name
+	Chosen   string   // newest name; for an existing record, its current name ("" when it has none)
 	Existing bool     // the TIN already had a record, left as it was
 }
 

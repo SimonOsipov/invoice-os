@@ -12,6 +12,13 @@ const NO_FIELDS = 'no fields to update'
 const BUYER_TYPE = 'buyer_type must be B2B, B2G or B2C'
 const LIMIT_MIN = 'limit must be >= 1'
 
+// Buyer TINs of db/seed.dev.sql per tenant; customer.SeedDemo files one record each at invoice boot.
+// 99999999-000x are left out: E2E saves fill them.
+const SEEDED_1111 = ['20011122-0001', '20022233-0002', '20033344-0003', '20044455-0004', '20055566-0005', '20066677-0006', '20077788-0007', '20088800-0010', '20088899-0008', '20099900-0009']
+const SEEDED_2222 = ['20011122-0001', '20022233-0002', '20044455-0004', '20055566-0005']
+// The malformed buyer TIN of DEMO-2026-6003; it is not fileable (customer.fileableTIN).
+const MALFORMED_TIN = '12345678'
+
 test.describe('buyer directory contract (API E2E, over the deployed gateway)', () => {
   let token: string
   let entity: Entity
@@ -96,5 +103,18 @@ test.describe('buyer directory contract (API E2E, over the deployed gateway)', (
     assertErrorEnvelope(res, 404, "another tenant's record")
     const [after] = (await listCustomers(token, { tin })).customers
     expect(after.name, "tenant 2222 must not change tenant 1111's record").toBe(record.name)
+  })
+
+  test('the seeded buyers have one record per tenant, the malformed TIN none', async () => {
+    const tokenB = await login(PERSONAS.B)
+    for (const [who, tk, tins] of [['1111', token, SEEDED_1111], ['2222', tokenB, SEEDED_2222]] as const) {
+      for (const tin of tins) {
+        const { customers } = await listCustomers(tk, { tin })
+        expect(customers, `tenant ${who} must hold exactly one record for seeded TIN ${tin}`).toHaveLength(1)
+        expect(customers[0].tin).toBe(tin)
+      }
+    }
+    const { customers } = await listCustomers(token, { tin: MALFORMED_TIN })
+    expect(customers, 'a malformed buyer TIN files no record').toHaveLength(0)
   })
 })

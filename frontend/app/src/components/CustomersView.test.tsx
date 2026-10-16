@@ -267,6 +267,10 @@ describe('CustomersView: the record list', () => {
     expect(paramsOf(customerCalls()[1]).get('offset')).toBe('50')
     expect(screen.getByTestId('customers-pager')).toBeTruthy()
 
+    fireEvent.click(await screen.findByRole('button', { name: /Previous/ }))
+    await waitFor(() => expect(customerCalls()).toHaveLength(3))
+    expect(paramsOf(customerCalls()[2]).get('offset')).toBe('0')
+
     cleanup()
     mockApi({ customers: () => recordsPage([record()], 50), invoices: () => invoicesPage([]) })
     render(<CustomersView ctx={ctxFor()} />)

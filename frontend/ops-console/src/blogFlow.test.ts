@@ -3,7 +3,7 @@ import { renewConsoleSession } from '@invoice-os/console-session'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_KEY } from './auth'
-import type { Post } from './blogApi'
+import type { Author, Category, Post } from './blogApi'
 import { loadBlog, pinPost, pinThenRefresh } from './blogFlow'
 import { withSession } from './session'
 
@@ -50,8 +50,11 @@ const reads = (o: Partial<Parameters<typeof loadBlog>[0]> = {}) => ({
 
 describe('loadBlog', () => {
   it('reads posts, categories and authors into a ready state', async () => {
-    const d = reads()
-    expect(await loadBlog(d)).toEqual({ status: 'ready', posts: POSTS, cats: [], authors: [] })
+    const cats = [{ id: 'c1' }] as Category[]
+    const authors = [{ user_id: 'u1' }] as Author[]
+    const d = reads({ fetchCategories: vi.fn().mockResolvedValue(cats), fetchAuthors: vi.fn().mockResolvedValue(authors) })
+    expect(await loadBlog(d)).toEqual({ status: 'ready', posts: POSTS, cats, authors })
+    expect(d.fetchAuthors).toHaveBeenCalledTimes(1)
     expect(d.expire).not.toHaveBeenCalled()
   })
 

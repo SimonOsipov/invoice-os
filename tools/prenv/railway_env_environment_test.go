@@ -94,6 +94,7 @@ func stripHashComments(lines []string) []string {
 }
 
 func TestSetForkEnvironmentRefusesThePersistentEnvironment(t *testing.T) {
+	t.Parallel()
 	shim := newCurlShim(t)
 	stdout, stderr, code := runSetForkEnvironment(t, shim,
 		"export RAILWAY_DEV_ENVIRONMENT_ID="+persistentEnvironmentID+"\n", persistentEnvironmentID)
@@ -115,6 +116,7 @@ func TestSetForkEnvironmentRefusesThePersistentEnvironment(t *testing.T) {
 }
 
 func TestSetForkEnvironmentUsageExitsTwo(t *testing.T) {
+	t.Parallel()
 	shim := newCurlShim(t)
 	stdout, stderr, code := runSetForkEnvironment(t, shim, "")
 	out := stdout + stderr
@@ -214,6 +216,7 @@ func setServiceVarsReReadFaults(code, authRead string) []string {
 }
 
 func TestEnvironmentVerdictTellsAbsentFromEmpty(t *testing.T) {
+	t.Parallel()
 	script := "set -euo pipefail\n" + shellFunctionSource(t, "environment_verdict") +
 		"rc=0\nenvironment_verdict \"$1\" development || rc=$?\nexit \"$rc\"\n"
 
@@ -311,6 +314,7 @@ func selfTestFixtureFaults(lines []string) []string {
 }
 
 func TestSetForkEnvironmentSelfTestNeverPrintsASecretValue(t *testing.T) {
+	t.Parallel()
 	shim := newCurlShim(t)
 	stdout, stderr, code := runSetForkEnvironment(t, shim, "", "--self-test")
 	if code != 0 {
@@ -342,6 +346,7 @@ func TestSetForkEnvironmentSelfTestNeverPrintsASecretValue(t *testing.T) {
 }
 
 func TestSetForkEnvironmentSelfTestCallsNoNetwork(t *testing.T) {
+	t.Parallel()
 	shim := newCurlShim(t)
 	stdout, stderr, code := runSetForkEnvironment(t, shim, "", "--self-test")
 	out := stdout + stderr
@@ -364,6 +369,7 @@ func codeAndCommentCounts(src, needle string) (inCode, inComments int) {
 }
 
 func TestReconcileForkRecordsNoEnvironment(t *testing.T) {
+	t.Parallel()
 	needle := "record_environment" + "_variable"
 
 	if c, k := codeAndCommentCounts("  ensure_bucket \"$env_id\"\n  "+needle+" \"$env_id\"\n", needle); c != 1 || k != 0 {
@@ -444,6 +450,7 @@ func assertBreaklistFindsNothing(t *testing.T, pattern, planted, control string,
 }
 
 func TestNoFileCallsTheForkENVIRONMENTDecorative(t *testing.T) {
+	t.Parallel()
 	pattern := `(?i)decorative` + ` in a`
 	planted := "### `ENVIRONMENT` is " + "decorative" + " in a fork\n"
 	assertBreaklistFindsNothing(t, pattern, planted, "RAILWAY_ENVIRONMENT_NAME", "cmd/", "internal/")
@@ -451,6 +458,7 @@ func TestNoFileCallsTheForkENVIRONMENTDecorative(t *testing.T) {
 
 // A rule file holding the phrase fails the guard: the whole-repo walk skips .claude/.
 func TestNoFileCallsTheForkENVIRONMENTDecorative_SeesARuleFile(t *testing.T) {
+	// serial: plants a file in the repo tree that a parallel scanner would read
 	plant := filepath.Join(repoRoot(t), ".claude", "rules", "zz-plant-decorative.md")
 	if err := os.WriteFile(plant, []byte("### `ENVIRONMENT` is "+"decorative"+" in a fork\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -773,6 +781,7 @@ func requireForkPassControl(t *testing.T) {
 }
 
 func TestDevEnvYmlWiresTheForkPassesIntoPrepareEnv(t *testing.T) {
+	t.Parallel()
 	devEnv := readWorkflow(t, "dev-env.yml")
 	var prep *workflowJob
 	for _, job := range workflowJobsOf(devEnv) {
@@ -808,6 +817,7 @@ func TestDevEnvYmlWiresTheForkPassesIntoPrepareEnv(t *testing.T) {
 }
 
 func TestDevEnvYmlStampsTheMockIssuerOnPullRequestsOnly(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, yaml string
 		bad        bool
@@ -857,6 +867,7 @@ func forkSelfTestJobFaults(yaml string) []string {
 }
 
 func TestRailwayInvariantsYmlWiresSetForkEnvironmentSelfTest(t *testing.T) {
+	t.Parallel()
 	const aiJob = "  ai-fake-self-test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Run set-ai-fake --self-test\n        run: bash scripts/ci/railway-env.sh set-ai-fake --self-test\n"
 	const forkRun = "        run: " + forkSelfTestRunCmd + "\n"
 	const forkJob = "  fork-environment-self-test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - name: Run set-fork-environment --self-test\n" + forkRun
@@ -932,6 +943,7 @@ func goPathsFilter(ciYAML string) []string {
 var deployWorkflows = []string{".github/workflows/dev-env.yml", ".github/workflows/railway-invariants.yml"}
 
 func TestCIGoFilterCoversTheDeployWorkflows(t *testing.T) {
+	t.Parallel()
 	missing := func(yaml string) []string {
 		items := goPathsFilter(yaml)
 		var out []string
@@ -992,7 +1004,9 @@ func runSetProductionEnvironment(t *testing.T, prelude, exports string, args ...
 }
 
 func TestSetProductionEnvironmentRefusesAnyOtherEnvironment(t *testing.T) {
+	t.Parallel()
 	t.Run("another environment id", func(t *testing.T) {
+		t.Parallel()
 		shim := newCurlShim(t)
 		stdout, stderr, code := runSetProductionEnvironment(t, shim.prelude,
 			"export RAILWAY_DEV_ENVIRONMENT_ID="+persistentEnvironmentID+"\n", "pr-fork-id")
@@ -1014,6 +1028,7 @@ func TestSetProductionEnvironmentRefusesAnyOtherEnvironment(t *testing.T) {
 	})
 
 	t.Run("no argument", func(t *testing.T) {
+		t.Parallel()
 		shim := newCurlShim(t)
 		stdout, stderr, code := runSetProductionEnvironment(t, shim.prelude, "")
 		out := stdout + stderr
@@ -1067,6 +1082,7 @@ func errorLines(out string) string {
 }
 
 func TestSetProductionEnvironmentReportsEmptyAndAbsentApart(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, reRead string
 		code         int
@@ -1208,6 +1224,7 @@ const (
 )
 
 func TestSetProductionEnvironmentWritesOnlyTheGateway(t *testing.T) {
+	t.Parallel()
 	good := prodBodyUsage + "  require_source_env\n" + prodBodyCompare + "  require_env\n" + prodBodySettle +
 		forkBodyResolve + prodBodyUpsert + prodBodyReRead + prodBodyVerdict
 	fixtures := []struct{ name, body string }{
@@ -1247,6 +1264,7 @@ func TestSetProductionEnvironmentWritesOnlyTheGateway(t *testing.T) {
 }
 
 func TestSetProductionEnvironmentRefusesAnUnmatchedGateway(t *testing.T) {
+	t.Parallel()
 	responses := productionRailway(productionVariables(`,"ENVIRONMENT":"production"`))
 	responses["settle"] = forkSettle()
 	shim := newRailwayShim(t, responses)
@@ -1297,7 +1315,9 @@ func workflowsNaming(t *testing.T, dir, needle string) (hits []string, read int)
 }
 
 func TestNoWorkflowRunsSetProductionEnvironment(t *testing.T) {
+	t.Parallel()
 	t.Run("planted fixture", func(t *testing.T) {
+		t.Parallel()
 		dir := t.TempDir()
 		runs := "on: push\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bash scripts/ci/railway-env.sh " + productionNeedle + " \"$ENV_ID\"\n"
 		for name, body := range map[string]string{"runs.yml": runs, "commented.yml": commentOut(runs)} {

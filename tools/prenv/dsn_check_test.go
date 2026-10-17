@@ -157,6 +157,7 @@ func assertNoSentinel(t *testing.T, stdout, stderr string) {
 // an empty password indistinguishable from a healthy one, so the check cannot
 // fail).
 func TestDSNCheckFlagsVerbatimIncidentDSN(t *testing.T) {
+	t.Parallel()
 	m := healthyMap()
 	m["gateway"]["DATABASE_MIGRATION_URL"] = incidentDSN
 
@@ -197,6 +198,7 @@ func TestDSNCheckFlagsVerbatimIncidentDSN(t *testing.T) {
 //
 // KILLS: reason-collapse.
 func TestDSNCheckDistinguishesDanglingReferenceFromEmptyPassword(t *testing.T) {
+	t.Parallel()
 	empty := healthyMap()
 	empty["gateway"]["DATABASE_MIGRATION_URL"] = incidentDSN
 	emptyOut, emptyErr, emptyCode := runDSNCheck(t, empty)
@@ -234,6 +236,7 @@ func TestDSNCheckDistinguishesDanglingReferenceFromEmptyPassword(t *testing.T) {
 //
 // KILLS: M-invert (an inverted predicate flags all nine healthy entries).
 func TestDSNCheckPassesFullyHealthyFleet(t *testing.T) {
+	t.Parallel()
 	m := healthyMap()
 	if got := len(m); got != 8 {
 		t.Fatalf("fixture has %d services, want 8 (gateway + 7 context services)", got)
@@ -275,6 +278,7 @@ func TestDSNCheckPassesFullyHealthyFleet(t *testing.T) {
 //
 // KILLS: naive string-split implementations.
 func TestDSNCheckAcceptsPercentEncodedPassword(t *testing.T) {
+	t.Parallel()
 	const encoded = "p%40ss%2Fword"
 	const dsn = "postgresql://invoice_app:" + encoded + "@" + railwayHost
 
@@ -316,6 +320,7 @@ func TestDSNCheckAcceptsPercentEncodedPassword(t *testing.T) {
 //
 // KILLS: M-empty, present-only-checking.
 func TestDSNCheckFlagsMissingRequiredVariable(t *testing.T) {
+	t.Parallel()
 	m := healthyMap()
 	delete(m["invoice"], "DATABASE_URL")
 
@@ -335,6 +340,7 @@ func TestDSNCheckFlagsMissingRequiredVariable(t *testing.T) {
 // notifications.DATABASE_URL is required and must be valid: cmd/notifications/main.go exits at boot
 // without it, and the DSN check names the defect sooner than the fleet gate.
 func TestDSNCheckNotificationsDatabaseURLIsRequired(t *testing.T) {
+	t.Parallel()
 	t.Run("absent is an offender", func(t *testing.T) {
 		m := healthyMap()
 		delete(m["notifications"], "DATABASE_URL")
@@ -375,6 +381,7 @@ func TestDSNCheckNotificationsDatabaseURLIsRequired(t *testing.T) {
 //
 // KILLS: superuser -> required.
 func TestDSNCheckAllowsAbsentGatewaySuperuserURL(t *testing.T) {
+	t.Parallel()
 	m := healthyMap()
 	delete(m["gateway"], "DATABASE_SUPERUSER_URL")
 
@@ -395,6 +402,7 @@ func TestDSNCheckAllowsAbsentGatewaySuperuserURL(t *testing.T) {
 // KILLS: M-first (a check that returns on the first hit reports one of these
 // three and exits).
 func TestDSNCheckReportsEveryOffenderNotJustTheFirst(t *testing.T) {
+	t.Parallel()
 	m := healthyMap()
 	m["gateway"]["DATABASE_MIGRATION_URL"] = incidentDSN // empty password
 	m["tenancy"]["DATABASE_URL"] = danglingDSN           // unrendered reference
@@ -433,6 +441,7 @@ func TestDSNCheckReportsEveryOffenderNotJustTheFirst(t *testing.T) {
 //
 // KILLS: M-swallow.
 func TestDSNCheckRejectsMalformedInputDistinguishably(t *testing.T) {
+	t.Parallel()
 	malformedOut, malformedErr, malformedCode := runDSNCheckRaw(t, "{")
 	if malformedCode == 0 {
 		t.Errorf("exit code = 0 on malformed stdin, want non-zero: unparseable input means the fleet's DSN health is UNKNOWN, which is not the same as clean")
@@ -455,6 +464,7 @@ func TestDSNCheckRejectsMalformedInputDistinguishably(t *testing.T) {
 //
 // KILLS: M-mask, and any debug-echo of the rendered map.
 func TestDSNCheckNeverEchoesACredential(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		desc string
 		mut  func(dsnMap)

@@ -184,7 +184,9 @@ func requireEachReRead(t *testing.T, s authShim) {
 }
 
 func TestSetForkGatewayToken_Guards(t *testing.T) {
+	t.Parallel()
 	t.Run("control: a pr fork is written", func(t *testing.T) {
+		t.Parallel()
 		s := newGTForkShim(t, nil)
 		if out, code := runForkGT(t, s); code != 0 || len(s.mutations(t)) == 0 {
 			t.Fatalf("control: exit %d and %d mutation(s), want exit 0 after at least one write; output = %q", code, len(s.mutations(t)), out)
@@ -193,6 +195,7 @@ func TestSetForkGatewayToken_Guards(t *testing.T) {
 
 	for _, sub := range []string{"set-fork-gateway-token", "set-fork-auth", passSub} {
 		t.Run("no id: "+sub, func(t *testing.T) {
+			t.Parallel()
 			s := newGTForkShim(t, nil)
 			stdout, stderr, code := s.run(t, "", sub)
 			out := stdout + stderr
@@ -213,6 +216,7 @@ func TestSetForkGatewayToken_Guards(t *testing.T) {
 	}
 
 	t.Run("the persistent id", func(t *testing.T) {
+		t.Parallel()
 		for _, token := range []bool{true, false} {
 			s := newGTForkShim(t, nil)
 			stdout, stderr, code := s.run(t, forkExports(token, true, true), "set-fork-gateway-token", persistentEnvironmentID)
@@ -234,6 +238,7 @@ func TestSetForkGatewayToken_Guards(t *testing.T) {
 	})
 
 	t.Run("a non-ephemeral id", func(t *testing.T) {
+		t.Parallel()
 		s := newGTForkShim(t, map[string]string{"envList": authEnvList(false)})
 		stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-fork-gateway-token", authStaleEnvID)
 		out := stdout + stderr
@@ -253,6 +258,7 @@ func TestSetForkGatewayToken_Guards(t *testing.T) {
 }
 
 func TestSetForkGatewayToken_WritesOneFreshValueToTheEight(t *testing.T) {
+	t.Parallel()
 	s := newGTForkShim(t, nil)
 	out, code := runForkGT(t, s)
 	if code != 0 {
@@ -276,6 +282,7 @@ func TestSetForkGatewayToken_WritesOneFreshValueToTheEight(t *testing.T) {
 	})
 
 	t.Run(passSub+" writes one value per run, fresh every run", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		var tokens [2]string
 		for i := range tokens {
@@ -303,6 +310,7 @@ func TestSetForkGatewayToken_WritesOneFreshValueToTheEight(t *testing.T) {
 }
 
 func TestSetForkGatewayToken_NeverPrintsTheValue(t *testing.T) {
+	t.Parallel()
 	s := newGTForkShim(t, nil)
 	out, code := runForkGT(t, s)
 	if code != 0 {
@@ -318,6 +326,7 @@ func TestSetForkGatewayToken_NeverPrintsTheValue(t *testing.T) {
 }
 
 func TestSetForkGatewayToken_MissingServiceFails(t *testing.T) {
+	t.Parallel()
 	runners := []struct {
 		sub string
 		mk  func(t *testing.T, settle string) authShim
@@ -364,6 +373,7 @@ func TestSetForkGatewayToken_MissingServiceFails(t *testing.T) {
 }
 
 func TestSetForkGatewayToken_ReReadMismatchFails(t *testing.T) {
+	t.Parallel()
 	for _, svc := range gatewayTokenTargets(t) {
 		for _, c := range []struct{ name, bend string }{
 			{"differs", `.GATEWAY_TOKEN = "` + gtBentToken + `"`},
@@ -374,6 +384,7 @@ func TestSetForkGatewayToken_ReReadMismatchFails(t *testing.T) {
 				continue
 			}
 			t.Run(svc+" "+c.name, func(t *testing.T) {
+				t.Parallel()
 				s := newGTForkShim(t, nil)
 				s.bendRead(t, gtSvcID(svc), c.bend)
 				out, code := runForkGT(t, s)
@@ -391,6 +402,7 @@ func TestSetForkGatewayToken_ReReadMismatchFails(t *testing.T) {
 }
 
 func TestGatewayTokenServicesMatchTheRoutedFleet(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile(railwayEnvScript(t))
 	if err != nil {
 		t.Fatal(err)
@@ -412,9 +424,11 @@ func TestGatewayTokenServicesMatchTheRoutedFleet(t *testing.T) {
 }
 
 func TestSetProductionGatewayToken_RefusesAForkID(t *testing.T) {
+	t.Parallel()
 	const usage = "usage: railway-env.sh set-production-gateway-token <environment-id>"
 
 	t.Run("control: the persistent id is written", func(t *testing.T) {
+		t.Parallel()
 		s := newGTProdShim(t, func(string) (string, bool) { return "", false })
 		if out, code := runProdGT(t, s); code != 0 || len(s.mutations(t)) == 0 {
 			t.Fatalf("control: exit %d and %d mutation(s), want exit 0 after at least one write; output = %q", code, len(s.mutations(t)), out)
@@ -422,6 +436,7 @@ func TestSetProductionGatewayToken_RefusesAForkID(t *testing.T) {
 	})
 
 	t.Run("a fork id", func(t *testing.T) {
+		t.Parallel()
 		for _, token := range []bool{true, false} {
 			s := newGTProdShim(t, func(string) (string, bool) { return "", false })
 			stdout, stderr, code := s.run(t, forkExports(token, true, true), "set-production-gateway-token", authForkEnvID)
@@ -443,6 +458,7 @@ func TestSetProductionGatewayToken_RefusesAForkID(t *testing.T) {
 	})
 
 	t.Run("no id", func(t *testing.T) {
+		t.Parallel()
 		s := newGTProdShim(t, func(string) (string, bool) { return "", false })
 		stdout, stderr, code := s.run(t, "", "set-production-gateway-token")
 		out := stdout + stderr
@@ -456,6 +472,7 @@ func TestSetProductionGatewayToken_RefusesAForkID(t *testing.T) {
 }
 
 func TestSetProductionGatewayToken_WritesWhenAllAbsent(t *testing.T) {
+	t.Parallel()
 	absent := func(svc string) (string, bool) {
 		if svc == "tenancy" || svc == "dashboard" {
 			return "", true
@@ -488,6 +505,7 @@ func TestSetProductionGatewayToken_WritesWhenAllAbsent(t *testing.T) {
 }
 
 func TestSetProductionGatewayToken_NoOpWhenAllEqual(t *testing.T) {
+	t.Parallel()
 	s := newGTProdShim(t, func(string) (string, bool) { return gtProdToken, true })
 	out, code := runProdGT(t, s)
 	if code != 0 {
@@ -515,6 +533,7 @@ func TestSetProductionGatewayToken_NoOpWhenAllEqual(t *testing.T) {
 }
 
 func TestSetProductionGatewayToken_RefusesAPartialOrMixedSet(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		token     func(svc string) (string, bool)
@@ -538,6 +557,7 @@ func TestSetProductionGatewayToken_RefusesAPartialOrMixedSet(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newGTProdShim(t, c.token)
 			out, code := runProdGT(t, s)
 			if code != 1 {

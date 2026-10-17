@@ -57,6 +57,7 @@ import (
 //
 // KILLS: M-prefix, and any narrowing of the prefix list.
 func TestEverySeverityTableRowSurvivesTheShellPrefixFilter(t *testing.T) {
+	t.Parallel()
 	prefixes := shellDSNVarPrefixes(t)
 
 	if len(DSNRequirements) == 0 {
@@ -159,6 +160,7 @@ func shellDSNVarPrefixes(t *testing.T) []string {
 //
 // KILLS: M-buildmsg, and any change that swallows a build failure.
 func TestAssertDBDSNsReportsABuildFailureAsCheckDidNotRun(t *testing.T) {
+	t.Parallel()
 	// Non-vacuity precondition: this map is clean on a working toolchain.
 	if _, _, code := runSelfTest(t, healthyMap(), nil); code != 0 {
 		t.Fatalf("the healthy map does not pass on an unmodified toolchain (exit %d) -- the build-failure assertions below would be meaningless", code)

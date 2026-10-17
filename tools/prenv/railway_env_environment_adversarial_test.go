@@ -168,6 +168,7 @@ func forkSettle(extra ...string) string {
 var upsertEcho = regexp.MustCompile(`(?m)^[ \t]+\S+\.\S+ = .*$`)
 
 func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
+	t.Parallel()
 	// The shim answers every read alike, so a value that is not intended is written and re-read.
 	full := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead"}
 	cases := []struct {
@@ -190,6 +191,7 @@ func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			responses := forkRailway()
 			for op, body := range c.override {
 				responses[op] = body
@@ -255,6 +257,7 @@ func TestSetForkEnvironmentAgainstAScriptedRailway(t *testing.T) {
 }
 
 func TestSetForkEnvironmentRefusesBeforeAnyRailwayCall(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, exports, arg string
 		code               int
@@ -268,6 +271,7 @@ func TestSetForkEnvironmentRefusesBeforeAnyRailwayCall(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			shim := newRailwayShim(t, forkRailway())
 			out, code := shim.run(t, c.exports, c.arg)
 			if code != c.code {
@@ -285,6 +289,7 @@ func TestSetForkEnvironmentRefusesBeforeAnyRailwayCall(t *testing.T) {
 }
 
 func TestEnvironmentVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
+	t.Parallel()
 	script := "set -euo pipefail\n" + shellFunctionSource(t, "environment_verdict") +
 		"rc=0\nenvironment_verdict \"$1\" \"$2\" || rc=$?\nexit \"$rc\"\n"
 	vars := func(fields string) string { return `{"data":{"variables":{` + forkEnvSecretSibling + fields + `}}}` }
@@ -359,6 +364,7 @@ func environmentSelfTestWith(t *testing.T, override string) (string, int) {
 }
 
 func TestEnvironmentSelfTestNegativeControlsAreLive(t *testing.T) {
+	t.Parallel()
 	t.Run("the real verdict passes", func(t *testing.T) {
 		out, code := environmentSelfTestWith(t, "")
 		if code != 0 || !strings.Contains(out, "7 fixtures passed") || strings.Contains(out, "FAILED") {
@@ -414,6 +420,7 @@ func TestEnvironmentSelfTestNegativeControlsAreLive(t *testing.T) {
 }
 
 func TestEnvironmentSelfTestPrintedCountMatchesItsFixtures(t *testing.T) {
+	t.Parallel()
 	body := strings.Join(stripHashComments(shellFunctionBody(t, "environment_self_test")), "\n")
 	calls := len(regexp.MustCompile(`(?m)^\s*env_expect\s+E\d+\s`).FindAllString(body, -1))
 	inline := len(regexp.MustCompile(`(?m)^\s*if \[ "\$msg_`).FindAllString(body, -1))
@@ -443,6 +450,7 @@ func TestEnvironmentSelfTestPrintedCountMatchesItsFixtures(t *testing.T) {
 }
 
 func TestRailwayEnvGenericUsageNamesSetForkEnvironment(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runBashScript(t, "bash '"+railwayEnvScript(t)+"' no-such-subcommand\n")
 	out := stdout + stderr
 	if code != 2 || !strings.Contains(out, "set-ai-fake <environment-id|--self-test>") {

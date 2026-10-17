@@ -126,6 +126,7 @@ func badSelfTestMap() dsnMap {
 //
 // KILLS: M-selftest0.
 func TestAssertDBDSNsSelfTestFailsOnBadMap(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runSelfTest(t, badSelfTestMap(), nil)
 
 	if code == 0 {
@@ -149,6 +150,7 @@ func TestAssertDBDSNsSelfTestFailsOnBadMap(t *testing.T) {
 //
 // KILLS: M-mask / credential echo at the wiring layer.
 func TestAssertDBDSNsSelfTestNeverEchoesACredential(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runSelfTest(t, badSelfTestMap(), nil)
 
 	if code == 0 {
@@ -175,6 +177,7 @@ func TestAssertDBDSNsSelfTestNeverEchoesACredential(t *testing.T) {
 //
 // KILLS: inverted self-test.
 func TestAssertDBDSNsSelfTestPassesOnGoodMap(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runSelfTest(t, healthyMap(), nil)
 
 	if code != 0 {
@@ -197,6 +200,7 @@ func TestAssertDBDSNsSelfTestPassesOnGoodMap(t *testing.T) {
 //
 // KILLS: require_env moved ahead of the short-circuit.
 func TestAssertDBDSNsSelfTestNeedsNoToken(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runSelfTest(t, healthyMap(), nil, "RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID")
 
 	if code != 0 {
@@ -223,6 +227,7 @@ func TestAssertDBDSNsSelfTestNeedsNoToken(t *testing.T) {
 // are opaque tokens, not URLs, so a KindOpaque that forgot to skip the URL
 // checks fails here with five DefectNoPassword offenders.
 func TestAssertDBDSNsSelfTestCoversDocumentVars(t *testing.T) {
+	t.Parallel()
 	t.Run("document-vars-clean", func(t *testing.T) {
 		requireDocumentRows(t, "invoice")
 
@@ -280,6 +285,7 @@ func TestAssertDBDSNsSelfTestCoversDocumentVars(t *testing.T) {
 //
 // KILLS: M-hardcode.
 func TestRailwayEnvScriptHardcodesNoServiceUUIDs(t *testing.T) {
+	t.Parallel()
 	path := railwayEnvScript(t)
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -309,6 +315,7 @@ func TestRailwayEnvScriptHardcodesNoServiceUUIDs(t *testing.T) {
 //
 // KILLS: M-echo.
 func TestAssertDBDSNsSelfTestDoesNotLeakIntoGitHubFiles(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	outPath := filepath.Join(dir, "github_output")
 	envPath := filepath.Join(dir, "github_env")
@@ -517,6 +524,7 @@ func requireTwoCalls(t *testing.T, f dsnFleet, env string) {
 }
 
 func TestAssertDBDSNs_ReadsAnEnvironmentInTwoCalls(t *testing.T) {
+	t.Parallel()
 	f := newDSNFleet(t, healthyMap())
 	out, code := f.run(t, dsnForkEnv)
 	if code != 0 {
@@ -526,6 +534,7 @@ func TestAssertDBDSNs_ReadsAnEnvironmentInTwoCalls(t *testing.T) {
 }
 
 func TestAssertDBDSNs_SourceOnlyReadsThePersistentEnvironmentInTwoCalls(t *testing.T) {
+	t.Parallel()
 	f := newDSNFleet(t, healthyMap())
 	out, code := f.run(t, "--source-only")
 	if code != 0 {
@@ -535,6 +544,7 @@ func TestAssertDBDSNs_SourceOnlyReadsThePersistentEnvironmentInTwoCalls(t *testi
 }
 
 func TestAssertDBDSNs_BatchedReadFeedsTheSameVerdict(t *testing.T) {
+	t.Parallel()
 	m := healthyMap()
 	m["tenancy"]["DATABASE_URL"] = "postgresql://invoice_app:@" + railwayHost
 	f := newDSNFleet(t, m)
@@ -555,6 +565,7 @@ func TestAssertDBDSNs_BatchedReadFeedsTheSameVerdict(t *testing.T) {
 }
 
 func TestAssertDBDSNs_HealthyBatchedReadPasses(t *testing.T) {
+	t.Parallel()
 	f := newDSNFleet(t, healthyMap())
 	out, code := f.run(t, dsnForkEnv)
 
@@ -611,6 +622,7 @@ func namesService(out, svc string) bool {
 }
 
 func TestAssertDBDSNs_BatchedReadGraphQLErrorFailsBeforeTheCheck(t *testing.T) {
+	t.Parallel()
 	const needle = "n33dle-railway-message"
 	errBody := func(paths ...string) string {
 		var es []string
@@ -712,6 +724,7 @@ func TestAssertDBDSNs_BatchedReadGraphQLErrorFailsBeforeTheCheck(t *testing.T) {
 }
 
 func TestAssertDBDSNs_MissingAliasFailsNamingTheService(t *testing.T) {
+	t.Parallel()
 	const target, bystander = "portfolio", "gateway"
 	cases := []struct {
 		name  string
@@ -760,6 +773,7 @@ func TestAssertDBDSNs_MissingAliasFailsNamingTheService(t *testing.T) {
 }
 
 func TestAssertDBDSNs_NoValueOnArgvOrInOutput(t *testing.T) {
+	t.Parallel()
 	const needle = "n33dle-dsn-password-7f3a"
 	withNeedle := func() dsnMap {
 		m := dsnMap{}
@@ -813,6 +827,7 @@ func TestAssertDBDSNs_NoValueOnArgvOrInOutput(t *testing.T) {
 }
 
 func TestAssertDBDSNs_UnusableBatchedResponseFailsBeforeTheCheck(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, body string }{
 		{"a 200 that is not JSON", "<html>bad gateway</html>"},
 		{"an empty 200", ""},
@@ -839,6 +854,7 @@ func TestAssertDBDSNs_UnusableBatchedResponseFailsBeforeTheCheck(t *testing.T) {
 }
 
 func TestAssertDBDSNs_ExtraAliasInDataIsIgnored(t *testing.T) {
+	t.Parallel()
 	const needle = "n33dle-extra-alias"
 	f := newDSNFleet(t, healthyMap())
 	data := map[string]any{}
@@ -867,6 +883,7 @@ func TestAssertDBDSNs_ExtraAliasInDataIsIgnored(t *testing.T) {
 }
 
 func TestAssertDBDSNs_BatchedReadTransportFailureNamesTheEnvironment(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		faults []string
@@ -911,6 +928,7 @@ func TestAssertDBDSNs_BatchedReadTransportFailureNamesTheEnvironment(t *testing.
 }
 
 func TestAssertDBDSNs_NoInstanceFailsBeforeAnyRead(t *testing.T) {
+	t.Parallel()
 	f := newDSNFleet(t, healthyMap())
 	writeFile(t, filepath.Join(f.dir, "settle.json"), forkSettleOf(nil))
 	out, code := f.run(t, dsnForkEnv)

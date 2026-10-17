@@ -134,6 +134,7 @@ func (s ciShim) wantCalls(t *testing.T, want int) {
 }
 
 func TestAwaitCI_SuccessExitsZero(t *testing.T) {
+	t.Parallel()
 	s := newCIShim(t)
 	s.seq(t, ciResp(ciRun("completed", "success", "2026-09-30T10:00:00Z")))
 	out, code := s.run(t, s.defaultEnv(), ciSHA)
@@ -152,8 +153,10 @@ func TestAwaitCI_SuccessExitsZero(t *testing.T) {
 }
 
 func TestAwaitCI_FailsOnEveryNonSuccessConclusion(t *testing.T) {
+	t.Parallel()
 	for _, c := range ciNonSuccess {
 		t.Run(c, func(t *testing.T) {
+			t.Parallel()
 			s := newCIShim(t)
 			s.seq(t, ciResp(ciRun("completed", c, "2026-09-30T10:00:00Z")))
 			out, code := s.run(t, s.defaultEnv(), ciSHA)
@@ -174,6 +177,7 @@ func TestAwaitCI_FailsOnEveryNonSuccessConclusion(t *testing.T) {
 }
 
 func TestAwaitCI_PollsUntilCompleted(t *testing.T) {
+	t.Parallel()
 	s := newCIShim(t)
 	s.seq(t,
 		ciResp(ciRun("in_progress", "", "2026-09-30T10:00:00Z")),
@@ -199,6 +203,7 @@ func TestAwaitCI_PollsUntilCompleted(t *testing.T) {
 }
 
 func TestAwaitCI_NoCheckRunYetKeepsPolling(t *testing.T) {
+	t.Parallel()
 	s := newCIShim(t)
 	s.seq(t, `{"check_runs":[]}`, ciResp(ciRun("completed", "success", "2026-09-30T10:00:00Z")))
 	out, code := s.run(t, s.defaultEnv(), ciSHA)
@@ -213,6 +218,7 @@ func TestAwaitCI_NoCheckRunYetKeepsPolling(t *testing.T) {
 }
 
 func TestAwaitCI_APIErrorKeepsPolling(t *testing.T) {
+	t.Parallel()
 	s := newCIShim(t)
 	s.seq(t, "EXIT1", ciResp(ciRun("completed", "success", "2026-09-30T10:00:00Z")))
 	out, code := s.run(t, s.defaultEnv(), ciSHA)
@@ -227,6 +233,7 @@ func TestAwaitCI_APIErrorKeepsPolling(t *testing.T) {
 }
 
 func TestAwaitCI_CompletedWithoutConclusionKeepsPolling(t *testing.T) {
+	t.Parallel()
 	s := newCIShim(t)
 	s.seq(t,
 		ciResp(ciRun("completed", "", "2026-09-30T10:00:00Z")),
@@ -245,6 +252,7 @@ func TestAwaitCI_CompletedWithoutConclusionKeepsPolling(t *testing.T) {
 
 // The array order differs from the start order, so neither first nor last in the array wins.
 func TestAwaitCI_ReadsTheLatestCheckRun(t *testing.T) {
+	t.Parallel()
 	const early, late = "2026-09-30T10:00:00Z", "2026-09-30T10:05:00Z"
 	for _, c := range []struct {
 		name     string
@@ -258,6 +266,7 @@ func TestAwaitCI_ReadsTheLatestCheckRun(t *testing.T) {
 		{"failure is later, failure listed first", []string{ciRun("completed", "failure", late), ciRun("completed", "success", early)}, 1, "failure"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newCIShim(t)
 			s.seq(t, ciResp(c.runs...))
 			out, code := s.run(t, s.defaultEnv(), ciSHA)
@@ -272,6 +281,7 @@ func TestAwaitCI_ReadsTheLatestCheckRun(t *testing.T) {
 }
 
 func TestAwaitCI_TimesOutAfterBudget(t *testing.T) {
+	t.Parallel()
 	s := newCIShim(t)
 	s.always(t, ciResp(ciRun("in_progress", "", "2026-09-30T10:00:00Z")))
 	out, code := s.run(t, s.defaultEnv(), ciSHA)
@@ -297,6 +307,7 @@ func TestAwaitCI_TimesOutAfterBudget(t *testing.T) {
 }
 
 func TestAwaitCI_QueriesTheCICheckOnTheGivenSHA(t *testing.T) {
+	t.Parallel()
 	s := newCIShim(t)
 	s.seq(t, ciResp(ciRun("completed", "success", "2026-09-30T10:00:00Z")))
 	out, code := s.run(t, strings.Replace(s.defaultEnv(), "REPO=o/r", "REPO=acme/ledger", 1), ciSHA)
@@ -314,6 +325,7 @@ func TestAwaitCI_QueriesTheCICheckOnTheGivenSHA(t *testing.T) {
 }
 
 func TestAwaitCI_UsageErrors(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name string
 		env  func(s ciShim) string
@@ -325,6 +337,7 @@ func TestAwaitCI_UsageErrors(t *testing.T) {
 		{"REPO empty", func(s ciShim) string { return "export REPO= GH_TOKEN=fake GITHUB_OUTPUT='" + s.out + "'\n" }, []string{ciSHA}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newCIShim(t)
 			s.seq(t, ciResp(ciRun("completed", "success", "2026-09-30T10:00:00Z")))
 			out, code := s.run(t, c.env(s), c.args...)
@@ -344,6 +357,7 @@ func TestAwaitCI_UsageErrors(t *testing.T) {
 }
 
 func TestAwaitCI_NoGithubOutputStillDecides(t *testing.T) {
+	t.Parallel()
 	env := func(s ciShim) string { return "unset GITHUB_OUTPUT\nexport REPO=o/r GH_TOKEN=fake\n" }
 
 	s := newCIShim(t)
@@ -370,6 +384,7 @@ func TestAwaitCI_NoGithubOutputStillDecides(t *testing.T) {
 // The older run is green and the newer one is not decided: neither status nor conclusion may
 // come from the older run, and a queued run never decides even when it carries a conclusion.
 func TestAwaitCI_ANonCompletedLatestRunNeverDecides(t *testing.T) {
+	t.Parallel()
 	const early, late = "2026-09-30T10:00:00Z", "2026-09-30T10:05:00Z"
 	for _, c := range []struct {
 		name       string
@@ -381,6 +396,7 @@ func TestAwaitCI_ANonCompletedLatestRunNeverDecides(t *testing.T) {
 		{"queued with a conclusion", ciRun("queued", "failure", late), 0, "success"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newCIShim(t)
 			s.seq(t,
 				ciResp(ciRun("completed", "success", early), c.first),
@@ -400,8 +416,10 @@ func TestAwaitCI_ANonCompletedLatestRunNeverDecides(t *testing.T) {
 }
 
 func TestAwaitCI_ConclusionMatchIsExact(t *testing.T) {
+	t.Parallel()
 	for _, c := range []string{"Success", "SUCCESS"} {
 		t.Run(c, func(t *testing.T) {
+			t.Parallel()
 			s := newCIShim(t)
 			s.seq(t, ciResp(ciRun("completed", c, "2026-09-30T10:00:00Z")))
 			out, code := s.run(t, s.defaultEnv(), ciSHA)
@@ -418,6 +436,7 @@ func TestAwaitCI_ConclusionMatchIsExact(t *testing.T) {
 }
 
 func TestAwaitCI_VerdictOnTheLastPollCounts(t *testing.T) {
+	t.Parallel()
 	s := newCIShim(t)
 	pending := ciResp(ciRun("in_progress", "", "2026-09-30T10:00:00Z"))
 	lines := make([]string, 0, 80)
@@ -435,6 +454,7 @@ func TestAwaitCI_VerdictOnTheLastPollCounts(t *testing.T) {
 }
 
 func TestAwaitCI_AppendsToGithubOutput(t *testing.T) {
+	t.Parallel()
 	const early = "2026-09-30T10:00:00Z"
 	for _, c := range []struct {
 		name string
@@ -446,6 +466,7 @@ func TestAwaitCI_AppendsToGithubOutput(t *testing.T) {
 		{"timeout leaves it as it was", func(s ciShim, t *testing.T) { s.always(t, ciResp(ciRun("queued", "", early))) }, []string{"prior=1"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newCIShim(t)
 			writeFile(t, s.out, "prior=1\n")
 			c.seed(s, t)
@@ -458,6 +479,7 @@ func TestAwaitCI_AppendsToGithubOutput(t *testing.T) {
 
 // A body that is not JSON, or JSON of the wrong shape, is an API error: no verdict yet.
 func TestAwaitCI_MalformedAnswerKeepsPolling(t *testing.T) {
+	t.Parallel()
 	ok := ciResp(ciRun("completed", "success", "2026-09-30T10:00:00Z"))
 	for _, c := range []struct{ name, answer string }{
 		{"html with exit 0", "<html>502 Bad Gateway</html>"},

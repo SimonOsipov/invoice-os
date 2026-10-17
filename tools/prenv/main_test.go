@@ -69,6 +69,7 @@ func runCLI(t *testing.T, args ...string) (stdout, stderr string, exitCode int) 
 // prints exactly the environment name plus a newline to stdout, nothing to
 // stderr, and exits 0.
 func TestCLINameSuccess(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runCLI(t, "name", "42")
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
@@ -85,6 +86,7 @@ func TestCLINameSuccess(t *testing.T) {
 // name prints exactly the PR number plus a newline to stdout, nothing to
 // stderr, and exits 0.
 func TestCLIParseSuccess(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		want string
@@ -115,6 +117,7 @@ func TestCLIParseSuccess(t *testing.T) {
 // actually matters to a caller capturing stdout as data — stdout must stay
 // completely empty; every diagnostic goes to stderr only.
 func TestCLICalledWrongExitsTwoWithCleanStdout(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		desc string
 		args []string
@@ -153,6 +156,7 @@ func TestCLICalledWrongExitsTwoWithCleanStdout(t *testing.T) {
 // tell "skip this, it's not a PR env" from "prenv itself is broken" without
 // parsing stderr text. stdout must stay empty here too.
 func TestCLIParseNotAPREnvironmentExitsOneWithCleanStdout(t *testing.T) {
+	t.Parallel()
 	names := []string{"development", "production", "staging", "pr-01", ""}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
@@ -187,6 +191,7 @@ func TestCLIParseNotAPREnvironmentExitsOneWithCleanStdout(t *testing.T) {
 // per-environment outcome (every open PR, every run), and stderr noise
 // would bury real failures.
 func TestCLISweepDecideExitContract(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		ghJSON     string
@@ -228,6 +233,7 @@ func TestCLISweepDecideExitContract(t *testing.T) {
 // ParseBool/Atoi cases print a sweep-decide-specific diagnostic. Verified
 // by hand at implementation time -- no case reaches the catch-all.
 func TestCLISweepDecideCalledWrongExitsTwoWithCleanStdout(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		desc string
 		args []string
@@ -267,6 +273,7 @@ func TestCLISweepDecideCalledWrongExitsTwoWithCleanStdout(t *testing.T) {
 // process boundary the sweeper actually crosses, not just the pure Go
 // functions in isolation.
 func TestCLISweepDecideNeverReapsOnGhFailure(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		ghJSON string

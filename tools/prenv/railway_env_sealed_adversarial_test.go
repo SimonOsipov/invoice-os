@@ -9,6 +9,7 @@ import (
 
 // The count in the refusal is the offenders', not every sealed variable's.
 func TestAuditSealed_OffenderCountExcludesTheAllowlisted(t *testing.T) {
+	t.Parallel()
 	nodes := []string{plainOn("PORT", sealedAuthID)}
 	for _, n := range sealedAllowlist {
 		nodes = append(nodes, sealedOn(n, sealedAuthID))
@@ -24,6 +25,7 @@ func TestAuditSealed_OffenderCountExcludesTheAllowlisted(t *testing.T) {
 
 // Two instances named auth resolve no id; the audit refuses rather than picks one.
 func TestAuditSealed_DuplicateAuthServiceFailsClosed(t *testing.T) {
+	t.Parallel()
 	instances := append(sourceInstances(), instance("svc-auth-twin", "auth"))
 	stdout, out, code := runAudit(t, newSealedShim(t, instances, sealedOn("GOTRUE_JWT_KEYS", sealedAuthID)))
 	if code != 1 {
@@ -39,6 +41,7 @@ func TestAuditSealed_DuplicateAuthServiceFailsClosed(t *testing.T) {
 
 // The clean line counts the sealed variables it allowed out of the total.
 func TestAuditSealed_CleanLineCountsTheAllowed(t *testing.T) {
+	t.Parallel()
 	nodes := []string{plainOn("PORT", sealedAuthID), plainOn("ENVIRONMENT", sealedGatewayID),
 		sealedOn("GOTRUE_JWT_KEYS", sealedAuthID), sealedOn("GOTRUE_SMTP_PASS", sealedAuthID)}
 	stdout, out, code := runAudit(t, newSealedShim(t, sourceInstances(), nodes...))
@@ -50,6 +53,7 @@ func TestAuditSealed_CleanLineCountsTheAllowed(t *testing.T) {
 
 // The shim answers any query shape, so only the query text shows auth can be resolved.
 func TestAuditSealed_QuerySelectsTheServiceInstances(t *testing.T) {
+	t.Parallel()
 	q := sealedAuditQuery(t)
 	re := regexp.MustCompile(`serviceInstances\s*\{\s*edges\s*\{\s*node\s*\{\s*serviceId\s+serviceName\s*\}`)
 	if !re.MatchString(q) {
@@ -60,6 +64,7 @@ func TestAuditSealed_QuerySelectsTheServiceInstances(t *testing.T) {
 // With any variable sealed, every service the allowlist names must resolve to exactly one
 // instance, whichever sealed variable it is.
 func TestAuditSealed_MissingTenancyServiceFailsClosed(t *testing.T) {
+	t.Parallel()
 	base := []string{instance(sealedGatewayID, "gateway"), instance(sealedAuthID, "auth"), instance(sealedAdminID, "auth-admin")}
 	withTenancy := func(extra ...string) []string { return append(slices.Clone(base), extra...) }
 	cases := []struct {
@@ -75,6 +80,7 @@ func TestAuditSealed_MissingTenancyServiceFailsClosed(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			stdout, out, code := runAudit(t, newSealedShim(t, c.instances, c.sealed))
 			if code != 1 {
 				t.Errorf("exit %d, want 1; output = %q", code, out)
@@ -88,6 +94,7 @@ func TestAuditSealed_MissingTenancyServiceFailsClosed(t *testing.T) {
 		})
 	}
 	t.Run("auth is named first when both are missing", func(t *testing.T) {
+		t.Parallel()
 		stdout, out, code := runAudit(t, newSealedShim(t, []string{instance(sealedGatewayID, "gateway")}, sealedOn("RESEND_SENDING_KEY", sealedTenancyID)))
 		e := errorLines(out)
 		if code != 1 || !strings.Contains(e, "without the `auth` service") || strings.Contains(e, "`tenancy`") {
@@ -105,8 +112,10 @@ func TestAuditSealed_MissingTenancyServiceFailsClosed(t *testing.T) {
 
 // Beside the allowed key, a prefix or case match on the name would also hide the offender.
 func TestAuditSealed_TenancyNameLookalikesFail(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"RESEND_SENDING_KEY_2", "resend_sending_key", "RESEND_API_KEY"} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			_, out, code := runAudit(t, newSealedShim(t, sourceInstances(),
 				sealedOn("RESEND_SENDING_KEY", sealedTenancyID), sealedOn(name, sealedTenancyID)))
 			requireRefused(t, out, code, name+"@"+sealedTenancyID)

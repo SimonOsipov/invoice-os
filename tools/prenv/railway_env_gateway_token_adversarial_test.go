@@ -39,6 +39,7 @@ func gtStored(t *testing.T, s authShim, svc string) (string, bool) {
 func gtAbsent(string) (string, bool) { return "", false }
 
 func TestSetGatewayToken_RefusesAnUnusableGeneratedValue(t *testing.T) {
+	t.Parallel()
 	const wantsNothingWritten = "a bad generator must stop the command before any write"
 	badGenerators := []struct{ name, body string }{
 		{"openssl exits 1 with no output", `exit 1`},
@@ -93,6 +94,7 @@ func TestSetGatewayToken_RefusesAnUnusableGeneratedValue(t *testing.T) {
 }
 
 func TestSetGatewayToken_TheValueIsOnNoProcessArgv(t *testing.T) {
+	t.Parallel()
 	for _, r := range []struct {
 		name string
 		make func() authShim
@@ -126,6 +128,7 @@ func TestSetGatewayToken_TheValueIsOnNoProcessArgv(t *testing.T) {
 
 // One alias of the batched write fails: the aliases before it landed, it and the later ones did not.
 func TestSetForkGatewayToken_PartialWriteFailure(t *testing.T) {
+	t.Parallel()
 	s := newGTForkShim(t, nil)
 	s.failAlias(t, gtSvcID("invoice"), "abort")
 	out, code := runForkGT(t, s)
@@ -172,6 +175,7 @@ func TestSetForkGatewayToken_PartialWriteFailure(t *testing.T) {
 }
 
 func TestSetProductionGatewayToken_PartialWriteFailureIsNotSilent(t *testing.T) {
+	t.Parallel()
 	s := newGTProdShim(t, gtAbsent)
 	writeFile(t, filepath.Join(s.dir, "faults-varCollectionUpsert"), "ok ok ok gqlerr")
 	out, code := runProdGT(t, s)
@@ -199,6 +203,7 @@ func TestSetProductionGatewayToken_PartialWriteFailureIsNotSilent(t *testing.T) 
 }
 
 func TestSetProductionGatewayToken_UnreadableMapRefusesBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
 	for _, bad := range gatewayTokenTargets(t) {
 		for _, c := range []struct {
 			name  string
@@ -208,6 +213,7 @@ func TestSetProductionGatewayToken_UnreadableMapRefusesBeforeAnyWrite(t *testing
 			{"the rest hold one value", func(string) (string, bool) { return gtProdToken, true }},
 		} {
 			t.Run(bad+" unreadable, "+c.name, func(t *testing.T) {
+				t.Parallel()
 				s := newGTProdShim(t, c.token)
 				s.bendRead(t, gtSvcID(bad), `"not an object"`)
 				out, code := runProdGT(t, s)
@@ -232,6 +238,7 @@ func TestSetProductionGatewayToken_UnreadableMapRefusesBeforeAnyWrite(t *testing
 }
 
 func TestSetProductionGatewayToken_MixedSetsAreRefusedWhateverTheMajority(t *testing.T) {
+	t.Parallel()
 	split := func(vOn ...string) func(string) (string, bool) {
 		return func(svc string) (string, bool) {
 			if slices.Contains(vOn, svc) {
@@ -296,6 +303,7 @@ func TestSetProductionGatewayToken_MixedSetsAreRefusedWhateverTheMajority(t *tes
 }
 
 func TestSetProductionGatewayToken_ASecondRunAfterAWriteIsANoOp(t *testing.T) {
+	t.Parallel()
 	s := newGTProdShim(t, gtAbsent)
 	if out, code := runProdGT(t, s); code != 0 {
 		t.Fatalf("first run: exit %d, want 0; output = %q", code, out)
@@ -317,6 +325,7 @@ func TestSetProductionGatewayToken_ASecondRunAfterAWriteIsANoOp(t *testing.T) {
 }
 
 func TestAuditSealed_GatewayTokenMustStayUnsealed(t *testing.T) {
+	t.Parallel()
 	var plain []string
 	for _, svc := range []string{sealedGatewayID, sealedAuthID, sealedAdminID} {
 		plain = append(plain, plainOn("GATEWAY_TOKEN", svc))
@@ -329,6 +338,7 @@ func TestAuditSealed_GatewayTokenMustStayUnsealed(t *testing.T) {
 	}
 
 	t.Run("a sealed GATEWAY_TOKEN fails the audit, on auth too", func(t *testing.T) {
+		t.Parallel()
 		s := newSealedShim(t, sourceInstances(), sealedOn("GATEWAY_TOKEN", sealedGatewayID), sealedOn("GATEWAY_TOKEN", sealedAuthID))
 		_, out, code := runAudit(t, s)
 		requireRefused(t, out, code, "GATEWAY_TOKEN@"+sealedGatewayID, "GATEWAY_TOKEN@"+sealedAuthID)
@@ -352,6 +362,7 @@ func jobList(j workflowJob, key string) []string {
 }
 
 func TestEveryGatewayTokenServiceIsRedeployedAfterTheForkWrite(t *testing.T) {
+	t.Parallel()
 	jobs := workflowJobsOf(readWorkflow(t, "dev-env.yml"))
 	deployed := map[string]string{}
 	deployJobs := 0
@@ -390,6 +401,7 @@ func TestEveryGatewayTokenServiceIsRedeployedAfterTheForkWrite(t *testing.T) {
 }
 
 func TestDeployGatewayRequiresPrepareEnvSuccess(t *testing.T) {
+	t.Parallel()
 	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
 		if j.name != "deploy-gateway" {
 			continue

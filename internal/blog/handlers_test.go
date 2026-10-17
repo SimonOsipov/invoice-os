@@ -231,6 +231,53 @@ func jpegBytes(n int) []byte {
 
 var pngMagic = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D}
 
+func TestGetCoverHandler_ServesTheStoredBytes(t *testing.T) {
+	img := jpegBytes(32)
+	var gotID string
+	h := GetCoverHandler(func(_ context.Context, id string) (string, []byte, error) {
+		gotID = id
+		return "image/jpeg", img, nil
+	}, discard)
+	rec := serve(h, "GET", "post-1", "/c", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body.String())
+	}
+	for k, want := range map[string]string{"Content-Type": "image/jpeg", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"} {
+		if got := rec.Header().Get(k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+	if !bytes.Equal(rec.Body.Bytes(), img) || len(img) != 32 {
+		t.Errorf("body = %d bytes, want the %d stored bytes", rec.Body.Len(), len(img))
+	}
+	if gotID != "post-1" {
+		t.Errorf("store got id %q, want post-1", gotID)
+	}
+}
+
+func TestGetCoverHandler_ServesPNGWithItsType(t *testing.T) {
+	h := GetCoverHandler(func(context.Context, string) (string, []byte, error) { return "image/png", pngMagic, nil }, discard)
+	rec := serve(h, "GET", "p", "/c", "")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" {
+		t.Errorf("= %d type %q, want 200 image/png", rec.Code, rec.Header().Get("Content-Type"))
+	}
+}
+
+func TestGetCoverHandler_NoCoverIs404(t *testing.T) {
+	h := GetCoverHandler(func(context.Context, string) (string, []byte, error) { return "", nil, ErrCoverNotFound }, discard)
+	wantJSON(t, serve(h, "GET", "p", "/c", ""), http.StatusNotFound, errBody("no such cover"))
+}
+
+func TestGetCoverHandler_UnknownPostIs404(t *testing.T) {
+	h := GetCoverHandler(func(context.Context, string) (string, []byte, error) { return "", nil, ErrPostNotFound }, discard)
+	wantJSON(t, serve(h, "GET", "p", "/c", ""), http.StatusNotFound, errBody("no such post"))
+}
+
+func TestGetCoverHandler_StoreFailureIs500(t *testing.T) {
+	h := GetCoverHandler(func(context.Context, string) (string, []byte, error) { return "", nil, errors.New("boom") }, discard)
+	wantJSON(t, serve(h, "GET", "p", "/c", ""), http.StatusInternalServerError, errBody("internal error"))
+}
+
 func TestCoverHandler_AcceptsJPEGAndPNG(t *testing.T) {
 	f := &coverFake{}
 	h := SetCoverHandler(f.set, discard)
@@ -421,12 +468,15 @@ func allHandlers() []handlerCase {
 		{"RemoveCover", "DELETE", "", "/x", func(e error, l *slog.Logger) http.HandlerFunc {
 			return RemoveCoverHandler(func(context.Context, string) error { return e }, l)
 		}},
+		{"GetCover", "GET", "", "/x", func(e error, l *slog.Logger) http.HandlerFunc {
+			return GetCoverHandler(func(context.Context, string) (string, []byte, error) { return "image/png", pngMagic, e }, l)
+		}},
 	}
 }
 
 func TestHandlers_MapNotStaffAndUnknownErrors(t *testing.T) {
-	if n := len(allHandlers()); n != 13 {
-		t.Fatalf("%d handler cases, want 13", n)
+	if n := len(allHandlers()); n != 14 {
+		t.Fatalf("%d handler cases, want 14", n)
 	}
 	for _, c := range allHandlers() {
 		t.Run(c.name, func(t *testing.T) {
@@ -578,6 +628,9 @@ func TestHandlers_AnswerJSON(t *testing.T) {
 			r := serve(c.build(err, discard), c.method, "i", c.target, c.body)
 			if r.Body.Len() == 0 {
 				continue // 204
+			}
+			if c.name == "GetCover" && err == nil {
+				continue // the image itself
 			}
 			if ct := r.Header().Get("Content-Type"); ct != "application/json" {
 				t.Errorf("%s err=%v: Content-Type %q, want application/json", c.name, err, ct)

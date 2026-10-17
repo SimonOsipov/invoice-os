@@ -352,3 +352,8 @@ func SetCoverHandler(set func(ctx context.Context, id, contentType string, bytes
 		writeJSON(w, http.StatusOK, c)
 	}
 }
+
+// GetCoverHandler is a red-phase stub; the implementation replaces it.
+func GetCoverHandler(get func(ctx context.Context, id string) (string, []byte, error), log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotImplemented) }
+}

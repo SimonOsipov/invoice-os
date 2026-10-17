@@ -383,3 +383,8 @@ func (s *Store) RemoveCover(ctx context.Context, id string) error {
 			Payload: map[string]any{"id": id, "content_type": ct}})
 	})
 }
+
+// GetCover is a red-phase stub; the implementation replaces it.
+func (s *Store) GetCover(ctx context.Context, id string) (string, []byte, error) {
+	return "", nil, errors.New("not implemented")
+}

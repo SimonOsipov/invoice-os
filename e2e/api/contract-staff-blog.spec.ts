@@ -1,5 +1,5 @@
 // The staff blog contract over the wire: categories, posts, pin and cover behave as specified, the 409, 415 and 422
-// refusals answer, the seeded posts are listed, and a customer token is refused on all 13 routes. The spec removes
+// refusals answer, the seeded posts are listed, and a customer token is refused on all 14 routes. The spec removes
 // what it creates and restores the featured post.
 import { test, expect } from '@playwright/test'
 import { login, provisionStaffAccount, rawFetch, signInSession, apiBase, PERSONAS } from './client'
@@ -31,6 +31,19 @@ const GIF_BYTES = Uint8Array.from(Buffer.from('GIF89a'))
 type Category = { id: string; name: string; post_count: number }
 type Post = { id: string; category_id: string | null; status: string; featured: boolean; author_name: string | null; cover: { content_type: string } | null }
 type Author = { user_id: string; display_name: string | null; email: string | null }
+
+// rawFetch parses every answer as JSON, so a cover read goes through a bare fetch as well.
+async function getCover(token: string, id: string): Promise<{ status: number; type: string | null; bytes: Uint8Array; body: unknown }> {
+  const res = await fetch(`${apiBase()}${BASE}/posts/${id}/cover`, { headers: { Authorization: `Bearer ${token}` } })
+  const raw = new Uint8Array(await res.arrayBuffer())
+  let body: unknown
+  try {
+    body = JSON.parse(new TextDecoder().decode(raw))
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, type: res.headers.get('content-type'), bytes: raw, body }
+}
 
 // rawFetch JSON-encodes every body, so a cover goes through a bare fetch (previewFetch in contract-import.spec.ts does the same).
 async function putCover(token: string, id: string, bytes: Uint8Array<ArrayBuffer>): Promise<RawResult> {
@@ -112,6 +125,7 @@ test.describe('staff blog (API E2E, over the deployed gateway)', () => {
       ['DELETE', `/posts/${post}`],
       ['PUT', `/posts/${post}/featured`, { featured: false }],
       ['DELETE', `/posts/${post}/cover`],
+      ['GET', `/posts/${post}/cover`],
     ]
     for (const [method, path, body] of routes) {
       const res = await rawFetch(`${BASE}${path}`, { method, headers: auth(customer), body })
@@ -202,6 +216,10 @@ test.describe('staff blog (API E2E, over the deployed gateway)', () => {
     expect(cover.status, 'put a PNG cover').toBe(200)
     expect((cover.body as { content_type: string }).content_type).toBe('image/png')
     expect((await listPosts()).find((p) => p.id === id)?.cover?.content_type, 'the listing carries the cover').toBe('image/png')
+    const read = await getCover(staff, id)
+    expect(read.status, 'read the saved cover').toBe(200)
+    expect(read.type, 'the cover content type').toBe('image/png')
+    expect(Buffer.from(read.bytes).equals(Buffer.from(PNG_1X1)), 'the cover bytes round trip').toBe(true)
 
     const gif = await putCover(staff, id, GIF_BYTES)
     assertErrorEnvelope(gif, 415, 'GIF cover')
@@ -210,6 +228,8 @@ test.describe('staff blog (API E2E, over the deployed gateway)', () => {
     const removed = await send('DELETE', `/posts/${id}/cover`)
     expect(removed.status, 'remove the cover').toBe(204)
     expect((await listPosts()).find((p) => p.id === id)?.cover, 'the cover is gone').toBeNull()
+    const gone = await getCover(staff, id)
+    assertErrorEnvelope({ status: gone.status, body: gone.body }, 404, 'GET the removed cover')
   })
 
   test('staff blog: the PR env lists the seeded posts as published', async () => {

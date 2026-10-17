@@ -40,3 +40,4 @@ func (queryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.Trac
 	}
 	span.Finish()
 }
+// probe: FAST-06 AC-2

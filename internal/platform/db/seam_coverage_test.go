@@ -209,6 +209,7 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                    // the staff seam: refuses a caller without auth.StaffFromContext; staff work reaches tenant rows only through staff_read_ definer functions
 	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
 	{file: "internal/systemhealth/store.go", fn: "Record"},                            // a scheduled global sample with no caller identity; the package serves HTTP, so the exemption is func-scoped
+	{file: "internal/blog/public.go", fn: "readPublic"},                               // anonymous blog read: no caller to gate; global published content only, in a READ ONLY transaction
 }
 
 // scPoolSite is one direct pool call: recv is the pool-typed name it was made on,

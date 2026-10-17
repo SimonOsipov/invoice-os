@@ -5729,7 +5729,7 @@ func TestViolationSummaryHandler_RulesIsEmptyArrayNotNull(t *testing.T) {
 // TestRoutes_BothResolveInBothDirections (spec 14, task-283 R6): Go 1.22+
 // net/http.ServeMux resolves by PATTERN SPECIFICITY, not registration order
 // -- a literal segment ("violation-summary") always beats a wildcard
-// ({id}), in EITHER registration order (go.mod is go 1.26.4; empirically
+// ({id}), in EITHER registration order (empirically
 // verified live both ways -- the older "register the literal BEFORE {id}"
 // wording is obsolete). This test drives a real *http.ServeMux, built in
 // BOTH registration orders, for BOTH request directions each time, and

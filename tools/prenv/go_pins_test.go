@@ -112,3 +112,7 @@ func TestGoPins_CommentedFromIgnored(t *testing.T) {
 		t.Errorf("goPinProblems = %q, want none", p)
 	}
 }
+
+func TestGoPins_LowercaseFromParsed(t *testing.T) {
+	wantGoPinProblem(t, pinGoMod, "from golang:1.26.8-alpine\n", "differ")
+}

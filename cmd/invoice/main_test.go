@@ -1123,3 +1123,71 @@ func isIdent(e ast.Expr, name string) bool {
 	id, ok := e.(*ast.Ident)
 	return ok && id.Name == name
 }
+
+// main() cannot run in a test, so the archive/restore target wiring is read from the AST: a swapped
+// target would archive on /restore. The exact "POST ..." patterns also rule out a GET or trailing-slash alias.
+func TestInvoiceMain_WiresCustomerArchiveAndRestoreToTheirTargets(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/invoice/main.go: %v", err)
+	}
+	want := map[string]string{
+		"POST /v1/customers/{id}/archive": "StatusArchived",
+		"POST /v1/customers/{id}/restore": "StatusActive",
+	}
+	found := map[string]bool{}
+	var control bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) < 2 {
+			return true
+		}
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		pattern := strings.Trim(lit.Value, `"`)
+		if pattern == "POST /v1/customers" {
+			control = true
+		}
+		target, ok := want[pattern]
+		if !ok {
+			return true
+		}
+		found[pattern] = true
+		handler, ok := call.Args[1].(*ast.CallExpr)
+		if !ok {
+			t.Errorf("%s's second argument is %T, want a call expression", pattern, call.Args[1])
+			return true
+		}
+		if hs, isSel := handler.Fun.(*ast.SelectorExpr); !isSel || hs.Sel.Name != "SetStatusHandler" {
+			t.Errorf("%s is not served by customer.SetStatusHandler(...)", pattern)
+			return true
+		}
+		var got []string
+		ast.Inspect(handler.Args[0], func(m ast.Node) bool {
+			if s, ok := m.(*ast.SelectorExpr); ok {
+				if p, ok := s.X.(*ast.Ident); ok && p.Name == "customer" && strings.HasPrefix(s.Sel.Name, "Status") {
+					got = append(got, s.Sel.Name)
+				}
+			}
+			return true
+		})
+		if !slices.Equal(got, []string{target}) {
+			t.Errorf("%s binds customer.Status* = %v, want [%s]", pattern, got, target)
+		}
+		return true
+	})
+	if !control {
+		t.Fatal("control needle: no POST /v1/customers registration found -- the AST walk is broken, so the assertions below are vacuous")
+	}
+	for pattern := range want {
+		if !found[pattern] {
+			t.Errorf("no HandleFunc(%q, ...) registration in cmd/invoice/main.go", pattern)
+		}
+	}
+}

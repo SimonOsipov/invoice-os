@@ -95,6 +95,13 @@ func main() {
 	// /v1/customers -- the workspace buyer directory; reached as /api/invoice/v1/customers.
 	customerStore := customer.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/customers", customer.ListHandler(customerStore.List, app.Logger))
+	app.Mux.HandleFunc("POST /v1/customers", customer.CreateHandler(customerStore.Create, app.Logger))
+	app.Mux.HandleFunc("POST /v1/customers/{id}/archive", customer.SetStatusHandler(func(ctx context.Context, id string) (customer.Customer, error) {
+		return customerStore.SetStatus(ctx, id, customer.StatusArchived)
+	}, app.Logger))
+	app.Mux.HandleFunc("POST /v1/customers/{id}/restore", customer.SetStatusHandler(func(ctx context.Context, id string) (customer.Customer, error) {
+		return customerStore.SetStatus(ctx, id, customer.StatusActive)
+	}, app.Logger))
 	app.Mux.HandleFunc("PATCH /v1/customers/{id}", customer.UpdateHandler(customerStore.Update, app.Logger))
 
 	// GET /v1/audit-log -- the workspace audit reader (AUDIT-04). Mounts here rather

@@ -337,7 +337,7 @@ func (s *Store) GetBatch(ctx context.Context, id string) (Batch, error) {
 	return b, nil
 }
 
-// BuyerTypeByTIN is the caller's tenant directory buyer_type for tin; nil when there is no record
+// BuyerTypeByTIN is the caller's tenant directory buyer_type for tin; nil when there is no active record
 // or it has none.
 func (s *Store) BuyerTypeByTIN(ctx context.Context, tin string) (*string, error) {
 	var bt *string

@@ -483,8 +483,12 @@ func TestSmallBodyHandlers_RefuseMalformedJSON(t *testing.T) {
 }
 
 func TestFeaturedHandler_RefusesNonBooleans(t *testing.T) {
-	n := 0
-	h := SetFeaturedHandler(func(context.Context, string, bool) (FeaturedResult, error) { n++; return FeaturedResult{}, nil }, discard)
+	n, flag := 0, true
+	h := SetFeaturedHandler(func(_ context.Context, _ string, f bool) (FeaturedResult, error) {
+		n++
+		flag = f
+		return FeaturedResult{Featured: f}, nil
+	}, discard)
 	for _, body := range []string{`{"featured":null}`, `{"featured":"yes"}`, `{"featured":1}`} {
 		if rec := serve(h, "PUT", "p", "/f", body); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s = %d, want 400", body, rec.Code)
@@ -494,8 +498,8 @@ func TestFeaturedHandler_RefusesNonBooleans(t *testing.T) {
 		t.Errorf("store called %d times", n)
 	}
 	wantJSON(t, serve(h, "PUT", "p", "/f", `{"featured":false}`), http.StatusOK, `{"id":"","featured":false,"unpinned":null}`)
-	if n != 1 {
-		t.Errorf("featured false must reach the store once, got %d", n)
+	if n != 1 || flag {
+		t.Errorf("featured false must reach the store once as false, got %d calls, flag %v", n, flag)
 	}
 }
 
@@ -641,8 +645,9 @@ func TestCoverHandler_RefusesAndMapsEdges(t *testing.T) {
 	rq := httptest.NewRequest("PUT", "/c", failingReader{})
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, rq)
-	if rr.Code != http.StatusBadRequest || f.calls != 1 {
-		t.Errorf("read error = %d, store calls %d (want 400, the earlier 404 only)", rr.Code, f.calls)
+	wantJSON(t, rr, http.StatusBadRequest, errBody("invalid request body"))
+	if f.calls != 1 {
+		t.Errorf("store calls %d after a read error, want the earlier 404 only", f.calls)
 	}
 }
 

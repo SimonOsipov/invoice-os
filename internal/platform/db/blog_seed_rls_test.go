@@ -74,7 +74,7 @@ func blogSeedMigration(t *testing.T) string {
 	return string(b)
 }
 
-// stripSQLComments drops -- and /* */ comments and leaves quoted strings (with ” escapes) intact.
+// stripSQLComments drops -- and /* */ comments and leaves quoted strings (with doubled-quote escapes) intact.
 func stripSQLComments(s string) string {
 	var out strings.Builder
 	for i := 0; i < len(s); {

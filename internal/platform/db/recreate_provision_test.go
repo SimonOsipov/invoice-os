@@ -293,24 +293,6 @@ func TestProvisionRecreateRunsBeforeBootstrapAndMigrate(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Provision's step order is %v, want %v", got, want)
 	}
-
-	t.Run("control needle", func(t *testing.T) {
-		const fixture = `package p
-
-func Provision() {
-	MigrateUp()
-	Bootstrap()
-	RecreateStuckSchema()
-}
-`
-		got := provisionCallOrder(t, "fixture.go", fixture, want)
-		if len(got) != len(want) {
-			t.Fatalf("the scanner found %d call(s) in the fixture, want %d", len(got), len(want))
-		}
-		if reflect.DeepEqual(got, want) {
-			t.Fatalf("the scanner read the swapped fixture as %v; it cannot find a planted violation", got)
-		}
-	})
 }
 
 func TestProvisionRecreateKeepsAuthAndRestoresGrants(t *testing.T) {

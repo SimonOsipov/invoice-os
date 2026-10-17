@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/url"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/pressly/goose/v3"
 
 	dbsql "github.com/SimonOsipov/invoice-os/db"
@@ -90,16 +93,42 @@ func bootstrapAndMigrate(t *testing.T, superDSN, migDSN string, fsys fs.FS) {
 }
 
 func fsWithout(fsys fs.FS, name string) fstest.MapFS {
+	requireNotNewest(fsys, name)
 	return copyFS(fsys, func(n string) (string, bool) { return n, n != name })
 }
 
 func fsRenamed(fsys fs.FS, oldName, newName string) fstest.MapFS {
+	requireFile(fsys, oldName)
 	return copyFS(fsys, func(n string) (string, bool) {
 		if n == oldName {
 			return newName, true
 		}
 		return n, true
 	})
+}
+
+// requireFile panics when a fixture's named migration is gone, so a later
+// squash or rename fails here instead of leaving a drift fixture with no drift.
+func requireFile(fsys fs.FS, name string) {
+	if _, err := fs.Stat(fsys, name); err != nil {
+		panic(fmt.Sprintf("fixture migration %s is missing from the FS: %v", name, err))
+	}
+}
+
+// requireNotNewest also panics when name is the newest file: dropping it
+// leaves no applied version above a gap, so it is not out of order.
+func requireNotNewest(fsys fs.FS, name string) {
+	requireFile(fsys, name)
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		panic(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".sql") && e.Name() > name {
+			return
+		}
+	}
+	panic(fmt.Sprintf("fixture migration %s is the newest file; dropping it is not out of order", name))
 }
 
 func copyFS(fsys fs.FS, f func(name string) (string, bool)) fstest.MapFS {
@@ -527,5 +556,46 @@ func TestProvisionScratchDBUsesDevPasswords(t *testing.T) {
 	}
 	if err := attemptLogin(t, baseMig); err != nil {
 		t.Errorf("invoice_migrator login on the shared DSN failed after a scratch Bootstrap: %v", err)
+	}
+}
+
+func TestProvisionRecreateLockTimeoutFailsBounded(t *testing.T) {
+	superDSN, _ := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
+	ctx := context.Background()
+	holder, err := pgx.Connect(ctx, superDSN)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer holder.Close(ctx)
+	tx, err := holder.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `LOCK TABLE public.goose_db_version IN ACCESS SHARE MODE`); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	start := time.Now()
+	got, err := recreate(t, superDSN, migrations.FS, nil)
+	var pgErr *pgconn.PgError
+	if err == nil || got || !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+		t.Fatalf("RecreateStuckSchema = %v, %v, want false and a 55P03 lock timeout", got, err)
+	}
+	if d := time.Since(start); d > 20*time.Second {
+		t.Errorf("took %s, want under 20s", d)
+	}
+	_ = tx.Rollback(ctx)
+	if !ledgerExists(t, superDSN) {
+		t.Error("public was dropped despite the lock timeout")
+	}
+	probe, err := pgx.Connect(ctx, superDSN)
+	if err != nil {
+		t.Fatalf("connect probe: %v", err)
+	}
+	defer probe.Close(ctx)
+	var ok bool
+	if err := probe.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, db.BootstrapAdvisoryLockKey).Scan(&ok); err != nil || !ok {
+		t.Errorf("advisory lock not free (ok=%v, err=%v)", ok, err)
 	}
 }

@@ -497,7 +497,7 @@ test('deployed app: every top-level path cold-boots to its own screen', async ({
     { path: '/invoices', heading: 'Invoices' },
     { path: '/approvals', heading: 'Approvals' },
     { path: '/rules', heading: 'Rules' },
-    { path: '/customers', heading: 'Customers & vendors' },
+    { path: '/customers', heading: 'Customers' },
     { path: '/reports', heading: 'Reports & analytics' },
     { path: '/workflows', heading: 'Approval policies' },
     { path: '/clients', heading: 'Client portfolio' },

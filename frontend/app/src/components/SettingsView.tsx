@@ -35,7 +35,6 @@ import { EntityFormModal } from './EntityFormModal'
 import { FieldMappingModal } from './FieldMappingModal'
 import type { Entity } from '../lib/portfolio'
 import { MembersView } from './MembersView'
-import { BuyersView } from './BuyersView'
 import { RolesView } from './RolesView'
 import type { ConnectorId, PlatformCtx, SettingsTab } from '../types'
 
@@ -187,9 +186,6 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
 
       {/* Roles */}
       {settingsTab === 'roles' && <RolesView ctx={ctx} />}
-
-      {/* Buyers */}
-      {settingsTab === 'buyers' && <BuyersView ctx={ctx} />}
 
       {/* Connector detail — replaces the list while a connector is open */}
       {settingsTab === 'connectors' && openDef && (

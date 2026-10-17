@@ -29,7 +29,8 @@ import { ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-clie
 
 import { EXPORTS_LIST } from '../data'
 import { fmt, fmtShort } from '../lib/format'
-import { aggregateCustomers } from '../lib/customers'
+import { recordNamesByTin } from '../lib/buyerDirectory'
+import { aggregateCustomers, customerName } from '../lib/customers'
 import { dashboardViewState, getRollup, metricCount, scopedBucket, topFailures, type Rollup } from '../lib/dashboard'
 import { allInvoicesIsEmpty, fetchAllInvoices, gateByActiveEntity, invoicesViewState, shouldFetchInvoices, type AllInvoices } from '../lib/invoices'
 import { crossGlyph, docGlyph, downloadGlyph, plusGlyph } from '../glyphs'
@@ -112,7 +113,19 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
     { label: 'Invoices in period', value: String(rows.length), color: 'var(--fg-1)' },
   ]
   const tcMax = Math.max(1, ...custList.map((o) => o.totalNum))
-  const topCustomers = custList.slice(0, 5).map((o) => ({ name: o.name, total: fmt(o.totalNum), bar: Math.round((o.totalNum / tcMax) * 100) + '%' }))
+  const topFive = custList.slice(0, 5)
+  // Record names for the top five; until they land, or if the lookup fails, rows keep the invoice name.
+  const topTinsKey = topFive.map((o) => o.tin).join(',')
+  const names = useAsync<Map<string, string>>(
+    () => (base ? recordNamesByTin(ctx.authedFetch, base, topTinsKey.split(',')) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: base != null && topTinsKey !== '', deps: [topTinsKey] },
+  )
+  const topCustomers = topFive.map((o) => ({
+    key: o.tin || 'name:' + o.name,
+    name: customerName(names.data?.get(o.tin), o.name),
+    total: fmt(o.totalNum),
+    bar: Math.round((o.totalNum / tcMax) * 100) + '%',
+  }))
 
   // scopedBucket/topFailures ([dashboard-scope-per-client]) — the SAME helpers
   // DashboardActive.tsx renders its needs-attention KPI and top-failures panel from, not
@@ -205,7 +218,7 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
               </div>
               <div style={{ padding: '6px 20px 12px' }}>
                 {topCustomers.map((t) => (
-                  <div key={t.name} style={{ padding: '11px 0', borderBottom: '1px solid var(--line-1)' }}>
+                  <div key={t.key} style={{ padding: '11px 0', borderBottom: '1px solid var(--line-1)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 7 }}>
                       <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</span>
                       <span className="money" style={{ fontSize: 13, fontWeight: 600, flex: 'none' }}>{t.total}</span>

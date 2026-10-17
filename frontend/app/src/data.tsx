@@ -243,7 +243,6 @@ export const CONNECTOR_TAX_CODES: { code: string; desc: string; rate: string }[]
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'members', label: 'Members' },
   { id: 'roles', label: 'Roles' },
-  { id: 'buyers', label: 'Buyers' },
   { id: 'connectors', label: 'ERP connectors' },
   { id: 'api', label: 'API & webhooks' },
   { id: 'signing', label: 'Signing & certificates' },

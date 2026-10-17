@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { Customer } from '../lib/buyerDirectory'
 import type { PlatformCtx } from '../types'
-import { BuyerFormModal } from './BuyerFormModal'
+import { CustomerFormModal } from './CustomerFormModal'
 
 const CUSTOMER: Customer = {
   id: 'c1',
@@ -28,21 +28,21 @@ const CUSTOMER: Customer = {
 function mount(authedFetch = vi.fn()) {
   const onClose = vi.fn()
   const onSuccess = vi.fn()
-  render(<BuyerFormModal customer={CUSTOMER} ctx={{ authedFetch } as unknown as PlatformCtx} base="https://gateway.test" onClose={onClose} onSuccess={onSuccess} />)
+  render(<CustomerFormModal customer={CUSTOMER} ctx={{ authedFetch } as unknown as PlatformCtx} base="https://gateway.test" onClose={onClose} onSuccess={onSuccess} />)
   return { authedFetch, onClose, onSuccess }
 }
 
 const save = () => fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
 const editEmail = () => fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'b@x.ng' } })
 
-describe('BuyerFormModal', () => {
+describe('CustomerFormModal', () => {
   afterEach(cleanup)
 
   it('shows the TIN as text, not an input', () => {
     mount()
     expect(screen.getByText(CUSTOMER.tin)).toBeTruthy()
     expect(screen.queryByDisplayValue(CUSTOMER.tin)).toBeNull()
-    expect(screen.getByRole('dialog', { name: 'Edit buyer' })).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: 'Edit customer' })).toBeTruthy()
   })
 
   it('closes without a request when nothing changed', () => {
@@ -97,7 +97,7 @@ describe('BuyerFormModal', () => {
   it('a 404 and a network error show the generic message', async () => {
     for (const err of [new ApiError('http', 'not found', 404), new TypeError('Failed to fetch')]) {
       const { unmount } = (() => {
-        const r = render(<BuyerFormModal customer={CUSTOMER} ctx={{ authedFetch: vi.fn().mockRejectedValue(err) } as unknown as PlatformCtx} base="https://gateway.test" onClose={vi.fn()} onSuccess={vi.fn()} />)
+        const r = render(<CustomerFormModal customer={CUSTOMER} ctx={{ authedFetch: vi.fn().mockRejectedValue(err) } as unknown as PlatformCtx} base="https://gateway.test" onClose={vi.fn()} onSuccess={vi.fn()} />)
         return r
       })()
       editEmail()
@@ -142,11 +142,11 @@ const EDITABLE: Array<[label: string, wire: string]> = [
   ['LGA', 'lga'],
 ]
 
-describe('BuyerFormModal per-field diff', () => {
+describe('CustomerFormModal per-field diff', () => {
   afterEach(cleanup)
 
   function open(authedFetch = vi.fn().mockResolvedValue(FILLED)) {
-    render(<BuyerFormModal customer={FILLED} ctx={{ authedFetch } as unknown as PlatformCtx} base="https://gateway.test" onClose={vi.fn()} onSuccess={vi.fn()} />)
+    render(<CustomerFormModal customer={FILLED} ctx={{ authedFetch } as unknown as PlatformCtx} base="https://gateway.test" onClose={vi.fn()} onSuccess={vi.fn()} />)
     return authedFetch
   }
 

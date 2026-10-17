@@ -245,7 +245,7 @@ const DOMAIN_HEADING_TEXT: Record<AuditDomain, string> = {
   validation: 'Validation rules',
   submissions: 'Submissions',
   reconciliation: 'Reconciliation',
-  customers: 'Buyers',
+  customers: 'Customers',
 }
 
 function idsInDomain(domain: AuditDomain): string[] {

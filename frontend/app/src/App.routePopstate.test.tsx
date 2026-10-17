@@ -240,6 +240,23 @@ describe('AC-3: the handler performs no history write', () => {
   })
 })
 
+describe('CUST-02 D16: an old /settings/buyers history entry renders Customers', () => {
+  it('popstate_anOldSettingsBuyersEntryRendersCustomers', async () => {
+    await bootAt('/invoices')
+    window.history.replaceState(null, '', '/settings/buyers')
+    const pushSpy = vi.spyOn(window.history, 'pushState')
+    const replaceSpy = vi.spyOn(window.history, 'replaceState')
+    await act(async () => {
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    expect(requireCtx().view).toBe('customers')
+    expect(pushSpy).not.toHaveBeenCalled()
+    expect(replaceSpy, 'the handler writes no URL for the old entry').not.toHaveBeenCalled()
+    expect(window.location.pathname).toBe('/settings/buyers')
+  })
+})
+
 describe('AC-4: exactly one listener is registered, and it is removed on unmount', () => {
   it('popstate_exactlyOneListenerIsRegisteredAndItIsRemovedOnUnmount', async () => {
     const addSpy = vi.spyOn(window, 'addEventListener')

@@ -178,8 +178,8 @@ describe('emptyClient() in a zero-entity workspace reads mode-neutral on every s
 
   it.each(MODES)('CustomersView subtitle and empty copy (%s)', async (mode) => {
     render(<CustomersView ctx={baseCtx(mode)} />)
-    await screen.findByText(/Customers appear automatically as you create invoices for your company\./)
-    expectEmptyWorkspaceCopy(['No company yet · buyer master data'])
+    await screen.findByText('Customers are added when you save an invoice with a buyer TIN.')
+    expectEmptyWorkspaceCopy(['Customer records, tax IDs & billing history'])
   })
 
   it.each(MODES)('ReportsView subtitle and empty copy (%s)', async (mode) => {

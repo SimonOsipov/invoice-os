@@ -12,7 +12,7 @@ import {
 } from '../lib/buyerDirectory'
 import type { PlatformCtx } from '../types'
 
-const TITLE = 'Edit buyer'
+const TITLE = 'Edit customer'
 
 const TEXT_FIELDS: Array<{ key: Exclude<keyof BuyerFormState, 'buyerType'>; label: string }> = [
   { key: 'name', label: 'Name' },
@@ -29,7 +29,7 @@ const TEXT_FIELDS: Array<{ key: Exclude<keyof BuyerFormState, 'buyerType'>; labe
 
 const LABEL: React.CSSProperties = { fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }
 
-export function BuyerFormModal({ customer, ctx, base, onClose, onSuccess }: { customer: Customer; ctx: PlatformCtx; base: string; onClose: () => void; onSuccess: () => void }) {
+export function CustomerFormModal({ customer, ctx, base, onClose, onSuccess }: { customer: Customer; ctx: PlatformCtx; base: string; onClose: () => void; onSuccess: () => void }) {
   const [form, setForm] = useState<BuyerFormState>(() => buyerFormFrom(customer))
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)

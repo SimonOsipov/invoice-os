@@ -27,7 +27,7 @@
 // Approvals badge, the Overview KPI), and (2) containment of rows this test itself created.
 // A hardcoded '3' would pass on a clean fixture and fail the moment anything ran first.
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { createEntity, createInvoice, getInvoice, listInvoices, listWorkflowRoles, login, rollup, signInSession, staffWorkflowRole, subjectOf, validateInvoice, PERSONAS } from '../api/client'
+import { createEntity, createInvoice, getInvoice, listCustomers, listInvoices, listWorkflowRoles, login, rollup, signInSession, staffWorkflowRole, subjectOf, validateInvoice, PERSONAS } from '../api/client'
 import { ensureFirmPolicyActive } from '../api/contract-helpers'
 import { freshTin } from '../api/fixtures'
 import { browserToken, collectErrors, sidebarRoster, signInAs } from '../personaSession'
@@ -217,11 +217,11 @@ async function selectEntity(page: Page, entityName: string): Promise<void> {
 }
 
 // The two rosters, derived from Sidebar.tsx's navGroups x glyphs.tsx (each NavDef's
-// label). Firm mode splits into a CLIENT group of 6 and a FIRM-WIDE group of 4;
+// label). Firm mode splits into a CLIENT group and a FIRM-WIDE group;
 // sidebarRoster() flattens both in DOM order, which is the right shape for the claim being
 // made -- the grouping is presentation, the ROSTER is which surfaces this persona has.
-const FIRM_ROSTER = ['Overview', 'Invoices', 'Approvals', 'Rules', 'Customers', 'Reports', 'Workflows', 'Clients', 'Audit', 'Settings']
-const INHOUSE_ROSTER = ['Overview', 'Invoices', 'Workflows', 'Rules', 'Approvals', 'Reports', 'Audit', 'Settings']
+const FIRM_ROSTER = ['Overview', 'Invoices', 'Approvals', 'Rules', 'Reports', 'Workflows', 'Clients', 'Customers', 'Audit', 'Settings']
+const INHOUSE_ROSTER = ['Overview', 'Invoices', 'Workflows', 'Rules', 'Approvals', 'Customers', 'Reports', 'Audit', 'Settings']
 
 // ---------------------------------------------------------------------------------------
 // Test 1 -- the in-house sidebar sweep (Core AC 2, AC 8)
@@ -334,6 +334,14 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   await expect(page.getByText('LOCKED', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('NG-MBS', { exact: false })).toHaveCount(0)
 
+  // --- Customers ------------------------------------------------------------------------
+  // Live-read oracle: the first record of the same page the screen opens on is in a row.
+  const customers = await listCustomers(token, { limit: 50, offset: 0 })
+  expect(customers.pagination.total, 'the tenant must hold customer records to list').toBeGreaterThan(0)
+  await goTo(page, 'Customers')
+  await expect(page.getByRole('heading', { level: 1, name: 'Customers', exact: true })).toBeVisible()
+  await expect(page.locator('.pf-list-row').filter({ hasText: customers.customers[0].tin }).first()).toBeVisible()
+
   // --- Reports --------------------------------------------------------------------------
   // Pins STATIC COPY plus the tenant identity, not the report body: ReportsView forks on
   // rows.length (an empty-state branch at :140), so asserting the body would make this
@@ -361,11 +369,11 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
   await expect(page.getByRole('heading', { level: 1, name: 'Settings', exact: true })).toBeVisible()
   await expect(page.getByText('WORKSPACE CONFIGURATION', { exact: true })).toBeVisible()
   await expect(page.getByText('People, roles, integrations, developer access, and signing certificates.', { exact: true })).toBeVisible()
-  for (const tab of ['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates']) {
+  for (const tab of ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates']) {
     await expect(page.getByRole('button', { name: tab, exact: true })).toBeVisible()
   }
 
-  // The eighth in-house surface, Approvals, is swept by Test 2 below -- it needs its own
+  // Approvals is swept by Test 2 below -- it needs its own
   // fixtures and its own live-read oracle, and folding it in here would bury the one
   // assertion this story's AC 3 actually turns on.
 
@@ -455,7 +463,7 @@ test('Approvals: the in-house badge equals the live awaiting-approval count, and
 // Test 3 -- the sidebar roster, per persona (Core AC 7, clause 1)
 // ---------------------------------------------------------------------------------------
 // EXACT ORDERED equality, never toContain: presence, absence AND slot are pinned in one
-// shot. The firm has Clients and Customers; in-house has neither. Both carry Approvals
+// shot. The firm has Clients; in-house has not. Both have Customers, in different slots. Both carry Approvals
 // since APPR-12-05, but in DIFFERENT slots -- firm directly after Invoices, in-house after
 // Rules -- which only an ordered assertion can hold (see Sidebar.tsx's placement-rule
 // comment on why the two deliberately diverge). A nav item silently vanishing for one
@@ -635,8 +643,8 @@ test('entity scoping: in-house Invoices is tenant-wide, firm Invoices follows th
 // ---------------------------------------------------------------------------------------
 // Sidebar.tsx wraps each nav glyph in an UNSIZED span, so a glyph's own width leaks into
 // where its label starts. Scope choice: FIRM_ROSTER, which spans BOTH firm nav groups
-// (CLIENT: Overview/Invoices/Approvals/Rules/Customers/Reports, FIRM-WIDE:
-// Workflows/Clients/Settings) -- required, not incidental: NAV_CLIENTS (the
+// (CLIENT: Overview/Invoices/Approvals/Rules/Reports, FIRM-WIDE:
+// Workflows/Clients/Customers/Audit/Settings) -- required, not incidental: NAV_CLIENTS (the
 // 14px forked glyph) lives in FIRM-WIDE, so scoping to the CLIENT group alone would miss
 // the reported defect.
 //

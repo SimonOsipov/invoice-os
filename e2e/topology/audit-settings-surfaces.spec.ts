@@ -8,6 +8,7 @@ import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { signInAs, signInAtFrontDoor } from '../personaSession'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertFillsColumn, assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { selectEntity } from './importWizardShared'
 import { APP_URL } from './targets'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -356,14 +357,14 @@ test('AE-02 the five filter popovers carry the card shadow, 6px corners and stay
     reads.push({ id, shadow, corners, box })
     if (id === 'event') {
       await attachShot(page, testInfo, 'audit-event-popover')
-      // The 11th domain group (customers, drawn as Buyers) scrolls into the panel and its heading clears the All/Clear buttons.
+      // The 11th domain group (customers) scrolls into the panel and its heading clears the All/Clear buttons.
       const heading = tid(page, 'audit-event-group-customers-heading')
       await heading.scrollIntoViewIfNeeded()
       const { rects, problems } = await boxes({ panel, heading, all: tid(page, 'audit-event-group-customers-all'), clear: tid(page, 'audit-event-group-customers-clear') })
       inside(rects, 'panel', ['heading', 'all', 'clear'], problems)
       noOverlap(rects, ['heading', 'all', 'clear'], problems)
-      expect(problems, 'the Buyers event group').toEqual([])
-      reads.push({ id: 'event-buyers-group', rects })
+      expect(problems, 'the Customers event group').toEqual([])
+      reads.push({ id: 'event-customers-group', rects })
     }
     await page.keyboard.press('Escape')
     await expect(panel, `the ${id} popover never closed`).toHaveCount(0)
@@ -1344,7 +1345,7 @@ test('ST-14 no Settings tab scrolls sideways and the roster fills the tab column
   await openMembers(page)
   const fit = await assertFillsColumn(page, tid(page, 'members-table'), tabStrip(page), 'members table')
   const scroll: Record<string, unknown> = { members: await assertPageDoesNotScrollSideways(page, 'Members') }
-  for (const [label, id] of [['Roles', 'roles'], ['ERP connectors', 'connectors'], ['API & webhooks', 'api'], ['Signing & certificates', 'signing'], ['Buyers', 'buyers']] as const) {
+  for (const [label, id] of [['Roles', 'roles'], ['ERP connectors', 'connectors'], ['API & webhooks', 'api'], ['Signing & certificates', 'signing']] as const) {
     await openTab(page, label, id)
     await settle(page, main(page))
     scroll[id] = await assertPageDoesNotScrollSideways(page, label)
@@ -1353,11 +1354,13 @@ test('ST-14 no Settings tab scrolls sideways and the roster fills the tab column
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-// --- Settings > Buyers and the company fields ------------------------------------------------------------------
+// --- Customers and the company fields ------------------------------------------------------------------
 // Each account is a fresh tenant, so its directory holds only the rows below.
-test.describe('Buyers directory and company fields', () => {
+test.describe('Customers screen and company fields', () => {
   const BUYER_TIN = freshBuyerTin()
   const LONG_TIN = freshBuyerTin()
+  const INHOUSE_TIN = freshBuyerTin()
+  const RN_TIN = `RN-${'7'.repeat(24)}`
   const LONG_NAME = `Long ${'N'.repeat(115)}`
   const LONG_EMAIL = `${'e'.repeat(108)}@example.com`
   const COMPANY_KEYS = {
@@ -1378,46 +1381,88 @@ test.describe('Buyers directory and company fields', () => {
     const tin = freshTin()
     const created = await createEntity(token, { name: `${name} ${tin}`, tin, ...(account === inhouse ? COMPANY_KEYS : {}) })
     if (account === firm) {
+      firmEntityName = created.name
       const base = { entity_id: created.id, ...cleanInvoiceFields('') }
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${BUYER_TIN}`, buyer_tin: BUYER_TIN, buyer_name: 'Buyer Ltd', buyer_email: 'before@buyer.example.com', invoice_kind: 'B2B' })
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${LONG_TIN}`, buyer_tin: LONG_TIN, buyer_name: LONG_NAME, buyer_email: LONG_EMAIL, invoice_kind: 'B2B' })
+      await createInvoice(token, { ...base, invoice_number: `INV-CUST02-${RN_TIN.slice(3, 11)}`, buyer_tin: RN_TIN, buyer_name: 'RN Buyer', invoice_kind: 'B2B' })
+    }
+    else {
+      await createInvoice(token, { entity_id: created.id, ...cleanInvoiceFields(''), invoice_number: `INV-CUST02-${INHOUSE_TIN}`, buyer_tin: INHOUSE_TIN, buyer_name: 'Buyer Ltd', buyer_email: 'before@buyer.example.com', invoice_kind: 'B2B' })
     }
     return token
   }
 
   let firmToken = ''
+  let inhouseToken = ''
+  let firmEntityName = ''
 
   test.beforeAll(async () => {
     test.setTimeout(120_000)
     firm = await provisionRealAccount('buyers-firm', 'firm')
     inhouse = await provisionRealAccount('buyers-inhouse', 'in_house')
     firmToken = await seedTenant(firm, 'ENGI-05 firm')
-    await seedTenant(inhouse, 'ENGI-05 company')
+    inhouseToken = await seedTenant(inhouse, 'ENGI-05 company')
   })
 
   const buyerRow = (page: Page, tin: string) => page.locator('.pf-list-row', { hasText: tin })
 
-  test('ST-15 Settings > Buyers: a member corrects the buyer an invoice filled', async ({ page }) => {
+  for (const persona of ['firm', 'inhouse'] as const) {
+    test(`ST-15 Customers: a member corrects the customer an invoice filled (${persona})`, async ({ page }) => {
+      test.setTimeout(120_000)
+      const isFirm = persona === 'firm'
+      const account = isFirm ? firm : inhouse
+      const tin = isFirm ? BUYER_TIN : INHOUSE_TIN
+      const token = isFirm ? firmToken : inhouseToken
+      const errors = gatedErrors(page, [])
+      await signInAtFrontDoor(page, account, '/customers')
+      await expect(page, 'the deep link did not open Customers').toHaveURL(/\/customers$/)
+      const row = buyerRow(page, tin)
+      await expect(row, 'the customer the invoice filled is not listed').toBeVisible({ timeout: 20_000 })
+
+      await row.click()
+      const dialog = page.getByRole('dialog', { name: 'Edit customer', exact: true })
+      await expect(dialog).toBeVisible()
+      const fixedName = `Fixed ${tin}`
+      const fixedEmail = `fixed-${tin}@buyer.example.com`
+      await dialog.getByLabel('Name', { exact: true }).fill(fixedName)
+      await dialog.getByLabel('Email', { exact: true }).fill(fixedEmail)
+      await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+      await expect(dialog, 'the customer modal never closed after Save').toHaveCount(0)
+      await expect(buyerRow(page, tin)).toContainText(fixedName)
+
+      await page.reload()
+      await expect(buyerRow(page, tin), 'the correction did not survive a reload').toContainText(fixedName, { timeout: 20_000 })
+      await buyerRow(page, tin).click()
+      const reopened = page.getByRole('dialog', { name: 'Edit customer', exact: true })
+      await expect(reopened.getByLabel('Email', { exact: true }), 'the reopened dialog lost the Email').toHaveValue(fixedEmail)
+      await reopened.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(reopened, 'the reopened customer modal never closed').toHaveCount(0)
+      const held = (await listCustomers(token, { tin })).customers[0]
+      expect({ name: held?.name, email: held?.email }, 'the API holds the correction').toEqual({ name: fixedName, email: fixedEmail })
+
+      if (isFirm) {
+        // Reports names its top customers from the same record.
+        await selectEntity(page, firmEntityName)
+        await navButton(page, /^Reports/).click()
+        await expect(page.getByRole('heading', { level: 1, name: 'Reports & analytics', exact: true })).toBeVisible()
+        const topCard = page.locator('xpath=//span[contains(@class,"card-title") and normalize-space(text())="Top customers by value"]/ancestor::div[2]')
+        await expect(topCard, 'Reports did not show the corrected Name').toContainText(fixedName, { timeout: 20_000 })
+        await expect(topCard).not.toContainText('Buyer Ltd')
+      }
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+  }
+
+  test('ST-20 /settings/buyers lands on /customers for both personas', async ({ page }) => {
     test.setTimeout(120_000)
     const errors = gatedErrors(page, [])
-    await signInAtFrontDoor(page, firm, '/settings/buyers')
-    await expect(page, 'the deep link did not open Buyers').toHaveURL(/\/settings\/buyers$/)
-    const row = buyerRow(page, BUYER_TIN)
-    await expect(row, 'the buyer the invoice filled is not listed').toBeVisible({ timeout: 20_000 })
-    await expect(row).toContainText('before@buyer.example.com')
-
-    await row.click()
-    const dialog = page.getByRole('dialog', { name: 'Edit buyer', exact: true })
-    await expect(dialog).toBeVisible()
-    const fixed = `fixed-${BUYER_TIN}@buyer.example.com`
-    await dialog.getByLabel('Email', { exact: true }).fill(fixed)
-    await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
-    await expect(dialog, 'the buyer modal never closed after Save').toHaveCount(0)
-    await expect(buyerRow(page, BUYER_TIN)).toContainText(fixed)
-
-    await page.reload()
-    await expect(buyerRow(page, BUYER_TIN), 'the correction did not survive a reload').toContainText(fixed, { timeout: 20_000 })
-    expect((await listCustomers(firmToken, { tin: BUYER_TIN })).customers[0]?.email, 'the API holds the correction').toBe(fixed)
+    for (const [persona, account, tin] of [['firm', firm, BUYER_TIN], ['inhouse', inhouse, INHOUSE_TIN]] as const) {
+      await signInAtFrontDoor(page, account, '/settings/buyers')
+      await expect(page, `${persona}: /settings/buyers did not land on /customers`).toHaveURL(/\/customers$/)
+      await expect(page.getByRole('heading', { name: 'Customers', exact: true }), `${persona} has no Customers heading`).toBeVisible()
+      await expect(buyerRow(page, tin), `${persona}: the account's own customer is not listed`).toBeVisible({ timeout: 20_000 })
+    }
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 
@@ -1426,12 +1471,12 @@ test.describe('Buyers directory and company fields', () => {
     const errors = gatedErrors(page, [])
     const measured: Record<string, unknown> = {}
     for (const [persona, account] of [['firm', firm], ['inhouse', inhouse]] as const) {
-      await signInAtFrontDoor(page, account, '/settings/buyers')
-      await expect(settingsTab(page, 'Buyers'), `${persona} has no Buyers tab`).toBeVisible()
-      const strip = settingsTab(page, 'Buyers').locator('xpath=..')
+      await signInAtFrontDoor(page, account, '/settings/members')
+      await expect(settingsTab(page, 'Members'), `${persona} has no Members tab`).toBeVisible()
+      const strip = settingsTab(page, 'Members').locator('xpath=..')
       const tabs = strip.getByRole('button')
       const count = await tabs.count()
-      expect(count, `${persona} strip holds the Buyers tab and at least one other`).toBeGreaterThanOrEqual(2)
+      expect(count, `${persona} strip holds the Members tab and at least one other`).toBeGreaterThanOrEqual(2)
       await settle(page, main(page))
       measured[persona] = await sweep(page, `${persona} settings tab strip`, async () => {
         const named: Named = { strip }
@@ -1450,24 +1495,32 @@ test.describe('Buyers directory and company fields', () => {
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 
-  test('ST-17 the buyers list columns align and do not overlap at every wide width', async ({ page }, testInfo) => {
+  test('ST-17 the Customers list columns align, clip and do not overlap at every wide width', async ({ page }, testInfo) => {
     test.setTimeout(120_000)
     const errors = gatedErrors(page, [])
-    await signInAtFrontDoor(page, firm, '/settings/buyers')
-    await expect(buyerRow(page, LONG_TIN), 'the 120-character buyer is not listed').toBeVisible({ timeout: 20_000 })
+    await signInAtFrontDoor(page, firm, '/customers')
+    await expect(buyerRow(page, LONG_TIN), 'the 120-character customer is not listed').toBeVisible({ timeout: 20_000 })
     await expect(buyerRow(page, BUYER_TIN)).toBeVisible()
+    const rnRow = buyerRow(page, RN_TIN)
+    await expect(rnRow, 'the RN- customer is not listed').toBeVisible()
+    await expect(rnRow.getByText('VALID', { exact: true }), 'an RN- TIN reads exactly VALID').toBeVisible()
     await settle(page, main(page))
     const head = page.locator('.pf-list-head')
     const card = head.locator('xpath=..')
-    const measured = await sweep(page, 'Buyers list', async () => {
+    const measured = await sweep(page, 'Customers list', async () => {
       const cells = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } }))
-      const headCells = await cells(head.locator(':scope > span'))
+      // Text fits its cell: the fixed tracks and the header never clip; the Customer and TIN cells clip with an ellipsis.
+      const fits = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => el.scrollWidth <= el.clientWidth + 1))
+      const clips = (loc: Locator) => loc.evaluate((el) => { const cs = getComputedStyle(el); return cs.overflow === 'hidden' && cs.textOverflow === 'ellipsis' })
+      const headSpans = head.locator(':scope > span')
+      const headCells = await cells(headSpans)
       const rows = page.locator('.pf-list-row')
       const n = await rows.count()
       const problems: string[] = []
       const { rects, problems: boxProblems } = await boxes({ card })
       problems.push(...boxProblems)
-      if (n < 2) problems.push(`the list drew ${n} rows, want at least the 2 buyers`)
+      if (n < 3) problems.push(`the list drew ${n} rows, want at least the 3 customers`)
+      ;(await fits(headSpans)).forEach((f, k) => { if (!f) problems.push(`header cell ${k} text sticks out of its cell`) })
       const rowRects: Rect[] = []
       for (let i = 0; i < n; i++) {
         const row = rows.nth(i)
@@ -1475,23 +1528,27 @@ test.describe('Buyers directory and company fields', () => {
         if (!rowBox) { problems.push(`row ${i} has no box`); continue }
         rowRects.push(rowBox)
         if (rects.card && !enclosesRect(rects.card, rowBox, 1)) problems.push(`row ${i} sticks out of the list card`)
-        const rowCells = await cells(row.locator(':scope > span'))
+        const rowSpans = row.locator(':scope > span')
+        const rowCells = await cells(rowSpans)
         if (rowCells.length !== headCells.length) problems.push(`row ${i} has ${rowCells.length} cells, the header ${headCells.length}`)
         rowCells.forEach((c, k) => {
           if (headCells[k] && Math.abs(c.x - headCells[k].x) > 1) problems.push(`row ${i} cell ${k} is not under its header cell`)
           if (c.x + c.width > rowBox.x + rowBox.width + 1) problems.push(`row ${i} cell ${k} sticks out of its row`)
           if (k > 0 && rectsOverlap(rowCells[k - 1], c)) problems.push(`row ${i} cells ${k - 1} and ${k} overlap`)
         })
+        if (!(await clips(rowSpans.nth(0).locator(':scope > span').last()))) problems.push(`row ${i} Customer name does not clip with an ellipsis`)
+        if (!(await clips(rowSpans.nth(1)))) problems.push(`row ${i} TIN does not clip with an ellipsis`)
+        ;(await fits(row.locator(':scope > span:nth-child(n+3)'))).forEach((f) => { if (!f) problems.push(`row ${i} fixed-track text sticks out of its cell`) })
       }
       for (let k = 1; k < headCells.length; k++) if (rectsOverlap(headCells[k - 1], headCells[k])) problems.push(`header cells ${k - 1} and ${k} overlap`)
       return { problems, rects: { ...rects, headCells, rowRects } }
     })
-    await attachShot(page, testInfo, 'settings-buyers')
+    await attachShot(page, testInfo, 'customers')
     await attachJson(testInfo, 'st-17-measurements', measured)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 
-  test('ST-18 the company and buyer modals keep Save on screen at 1280x900', async ({ page }, testInfo) => {
+  test('ST-18 the company and customer modals keep Save on screen at 1280x900', async ({ page }, testInfo) => {
     test.setTimeout(120_000)
     const errors = gatedErrors(page, [])
     await page.setViewportSize({ width: 1280, height: 900 })
@@ -1522,9 +1579,9 @@ test.describe('Buyers directory and company fields', () => {
     await expect(page.getByRole('dialog', { name: 'Edit company', exact: true }).locator('input'), 'the company form is 13 inputs').toHaveCount(13)
     await saveStaysOnScreen('Edit company')
 
-    await signInAtFrontDoor(page, firm, '/settings/buyers')
+    await signInAtFrontDoor(page, firm, '/customers')
     await buyerRow(page, BUYER_TIN).click()
-    await saveStaysOnScreen('Edit buyer')
+    await saveStaysOnScreen('Edit customer')
 
     await attachJson(testInfo, 'st-18-measurements', reads)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

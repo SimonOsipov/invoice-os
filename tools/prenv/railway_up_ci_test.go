@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -140,10 +139,9 @@ func (s upStub) run(t *testing.T, svc string) (string, int) {
 	if !s.noOutput {
 		cmd.Env = append(cmd.Env, "GITHUB_OUTPUT="+s.outputPath())
 	}
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
 	code := 0
-	if err := cmd.Run(); err != nil {
+	buf, _, err := runToFiles(t, cmd, true)
+	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if !ok {
 			t.Fatalf("harness: running railway-up-ci.sh: %v", err)
@@ -151,9 +149,9 @@ func (s upStub) run(t *testing.T, svc string) (string, int) {
 		code = exitErr.ExitCode()
 	}
 	if len(s.railwayCalls(t)) == 0 {
-		t.Fatalf("harness: the railway stub never ran; exit %d, output:\n%s", code, buf.String())
+		t.Fatalf("harness: the railway stub never ran; exit %d, output:\n%s", code, buf)
 	}
-	return buf.String(), code
+	return buf, code
 }
 
 // calls returns the call log: one `railway [arg]...` or `sleep <args>` line per call, in order.

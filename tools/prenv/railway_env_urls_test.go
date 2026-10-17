@@ -942,8 +942,8 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 				cmd.Env = append(cmd.Env, v+"=")
 			}
 		}
-		out, err := cmd.CombinedOutput()
-		return string(out), err
+		out, _, err := runToFiles(t, cmd, true)
+		return out, err
 	}
 	if out, err := guard(""); err != nil {
 		t.Errorf("all nine set: guard failed: %v %q", err, out)

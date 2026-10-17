@@ -290,3 +290,37 @@ func TestCLISweepDecideNeverReapsOnGhFailure(t *testing.T) {
 		})
 	}
 }
+
+// runToFiles runs cmd with stdout and stderr in regular files (one file when merge is set).
+// A file, not a pipe: bash 3.2 on macOS fails an echo with EINTR when a pipe write blocks.
+func runToFiles(t *testing.T, cmd *exec.Cmd, merge bool) (stdout, stderr string, err error) {
+	t.Helper()
+	dir := t.TempDir()
+	outF, ferr := os.Create(filepath.Join(dir, "stdout"))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	defer outF.Close()
+	errF := outF
+	if !merge {
+		if errF, ferr = os.Create(filepath.Join(dir, "stderr")); ferr != nil {
+			t.Fatal(ferr)
+		}
+		defer errF.Close()
+	}
+	cmd.Stdout, cmd.Stderr = outF, errF
+	err = cmd.Run()
+	o, rerr := os.ReadFile(outF.Name())
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	stdout = string(o)
+	if !merge {
+		e, rerr := os.ReadFile(errF.Name())
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		stderr = string(e)
+	}
+	return stdout, stderr, err
+}

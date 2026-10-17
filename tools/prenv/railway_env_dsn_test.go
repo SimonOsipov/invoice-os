@@ -27,7 +27,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -94,17 +93,15 @@ func runSelfTest(t *testing.T, m dsnMap, extraEnv []string, unsetVars ...string)
 	}
 	cmd.Env = append(env, extraEnv...)
 
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
+	stdout, stderr, err = runToFiles(t, cmd, false)
+	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if !ok {
 			t.Fatalf("failed to run railway-env.sh: %v", err)
 		}
 		exitCode = exitErr.ExitCode()
 	}
-	return outBuf.String(), errBuf.String(), exitCode
+	return stdout, stderr, exitCode
 }
 
 // badSelfTestMap is the shared bad fixture: the verbatim M4-22 incident DSN

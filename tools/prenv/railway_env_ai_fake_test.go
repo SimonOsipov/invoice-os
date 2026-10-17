@@ -8,7 +8,6 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,17 +48,15 @@ func runAIFakeCmd(t *testing.T, args []string, extraEnv []string, unsetVars ...s
 	}
 	cmd.Env = append(env, extraEnv...)
 
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
+	stdout, stderr, err := runToFiles(t, cmd, false)
+	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if !ok {
 			t.Fatalf("failed to run railway-env.sh: %v", err)
 		}
 		exitCode = exitErr.ExitCode()
 	}
-	return outBuf.String(), errBuf.String(), exitCode
+	return stdout, stderr, exitCode
 }
 
 var aiFakeFixtureCountPattern = regexp.MustCompile(`AI fake self-test: (\d+) fixtures passed`)
@@ -405,17 +402,15 @@ func runBashScript(t *testing.T, script string, args ...string) (stdout, stderr 
 	}
 	cmd.Env = filtered
 
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
+	stdout, stderr, err := runToFiles(t, cmd, false)
+	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if !ok {
 			t.Fatalf("running a bash snippet: %v", err)
 		}
 		exitCode = exitErr.ExitCode()
 	}
-	return outBuf.String(), errBuf.String(), exitCode
+	return stdout, stderr, exitCode
 }
 
 const verdictDriver = `

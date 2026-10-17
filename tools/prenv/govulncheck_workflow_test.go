@@ -18,6 +18,8 @@ var (
 	govulncheckJSONRE = regexp.MustCompile(`(^|\s)--?(json\b|format(\s+|=)(json|sarif|openvex|sbom)\b)`)
 )
 
+var unquote = strings.NewReplacer(`"`, "", "'", "")
+
 func govulncheckProblems(ciYAML string) []string {
 	var job, ci *workflowJob
 	jobs := workflowJobsOf(ciYAML)
@@ -47,7 +49,13 @@ func govulncheckProblems(ciYAML string) []string {
 	}
 	var run string
 	for _, s := range job.steps() {
+		if _, ok := s.keys["if"]; ok {
+			problems = append(problems, "govulncheck has a step-level if:")
+		}
 		run += s.keys["run"] + "\n"
+	}
+	if slices.ContainsFunc(job.lines, func(l string) bool { return strings.HasPrefix(strings.TrimSpace(l), "go-version:") }) {
+		problems = append(problems, "govulncheck sets go-version beside go-version-file")
 	}
 	if first, _, _ := strings.Cut(strings.TrimSpace(run), "\n"); first != "go version" {
 		problems = append(problems, "govulncheck run lacks go version as its first line")
@@ -61,7 +69,7 @@ func govulncheckProblems(ciYAML string) []string {
 	if cmd == "" {
 		problems = append(problems, "govulncheck is not pinned to @vX.Y.Z")
 	} else {
-		if govulncheckJSONRE.MatchString(cmd) {
+		if govulncheckJSONRE.MatchString(unquote.Replace(cmd)) {
 			problems = append(problems, "govulncheck uses -json or -format json|sarif|openvex|sbom (exit 0 on a finding)")
 		}
 		scan, _, swallowed := strings.Cut(cmd, "||")
@@ -186,7 +194,7 @@ func TestCIGovulncheck_NoSetupGoFileFails(t *testing.T) {
 	if start < 0 || end < start {
 		t.Fatal("govulncheck job block not found")
 	}
-	job := mutateOnce(t, yml[start:end], "go-version-file: go.mod", "go-version: "+"1.26.9")
+	job := mutateOnce(t, yml[start:end], "go-version-file: go.mod", "go-version: stable")
 	requireProblem(t, yml[:start]+job+yml[end:], "go-version-file")
 }
 
@@ -231,4 +239,25 @@ func TestCIGovulncheck_MissingJobFails(t *testing.T) {
 func TestCIGovulncheck_CommentedCommandFails(t *testing.T) {
 	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), govulncheckCmd, "# "+govulncheckCmd)
 	requireProblem(t, yml, "not pinned")
+}
+
+func TestCIGovulncheck_StepIfFails(t *testing.T) {
+	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), "      - name: Scan for reachable vulnerabilities\n",
+		"      - name: Scan for reachable vulnerabilities\n        if: github.event_name == 'push'\n")
+	requireProblem(t, yml, "step-level if:")
+}
+
+// setup-go ignores go-version-file when go-version is also set.
+func TestCIGovulncheck_GoVersionBesideFileFails(t *testing.T) {
+	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), "          go-version-file: go.mod\n      # Pinned: a scanner",
+		"          go-version-file: go.mod\n          go-version: stable\n      # Pinned: a scanner")
+	requireProblem(t, yml, "go-version beside")
+}
+
+func TestCIGovulncheck_QuotedFormatFails(t *testing.T) {
+	for _, format := range []string{`-format "json"`, `-format 'sarif'`, `-format="json"`} {
+		yml := mutateOnce(t, readWorkflow(t, "ci.yml"), govulncheckCmd,
+			"go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 "+format+" ./...")
+		requireProblem(t, yml, "-json or -format")
+	}
 }

@@ -265,7 +265,11 @@ func TestGetCoverHandler_ServesPNGWithItsType(t *testing.T) {
 
 func TestGetCoverHandler_NoCoverIs404(t *testing.T) {
 	h := GetCoverHandler(func(context.Context, string) (string, []byte, error) { return "", nil, ErrCoverNotFound }, discard)
-	wantJSON(t, serve(h, "GET", "p", "/c", ""), http.StatusNotFound, errBody("no such cover"))
+	rec := serve(h, "GET", "p", "/c", "")
+	wantJSON(t, rec, http.StatusNotFound, errBody("no such cover"))
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
 }
 
 func TestGetCoverHandler_UnknownPostIs404(t *testing.T) {
@@ -592,9 +596,15 @@ func TestHandlers_PassTheIDAndQueryVerbatim(t *testing.T) {
 		"RemoveCover": {func() http.HandlerFunc {
 			return RemoveCoverHandler(func(_ context.Context, id string) error { rec(id); return nil }, discard)
 		}, "DELETE", ``},
+		"GetCover": {func() http.HandlerFunc {
+			return GetCoverHandler(func(_ context.Context, id string) (string, []byte, error) {
+				rec(id)
+				return "image/png", pngMagic, nil
+			}, discard)
+		}, "GET", ``},
 	}
-	if len(build) != 8 {
-		t.Fatalf("%d id-taking handlers, want 8", len(build))
+	if len(build) != 9 {
+		t.Fatalf("%d id-taking handlers, want 9", len(build))
 	}
 	for name, c := range build {
 		for _, id := range ids {

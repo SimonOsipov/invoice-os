@@ -1253,8 +1253,9 @@ describe('RESEND-07-04', () => {
       clickResendOn(inviteRows()[0])
       await screen.findByTestId('members-flash')
 
-      const timer = timeouts.mock.calls.find((c) => c[1] === 3000)
-      expect(timer, 'the flash arms a 3000 ms timer').toBeTruthy()
+      const armed = () => timeouts.mock.calls.find((c) => c[1] === 3000)
+      await waitFor(() => expect(armed(), 'the flash arms a 3000 ms timer').toBeTruthy())
+      const timer = armed()
       act(() => (timer![0] as () => void)())
       expect(screen.queryByTestId('members-flash')).toBeNull()
       timeouts.mockRestore()

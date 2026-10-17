@@ -22,6 +22,7 @@ import type { DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone 
 // .mono) that every screen relies on. It's a full-height app shell: a fixed
 // sidebar + a scrolling main column, with drawers/modals/toast layered on top.
 export default function App() {
+  if (landingBase() === null) return null
   return (
     <StaffGate storageKey={SESSION_KEY} target="ops" gateway={gatewayBase()} landing={landingBase()}>
       <Console />

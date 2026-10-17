@@ -7,11 +7,13 @@ import { StaffGate } from '@invoice-os/console-session'
 import App from './App'
 import { NAV_ITEMS } from './data'
 
-vi.mock('@invoice-os/console-session', () => ({
+vi.mock('@invoice-os/console-session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
   StaffGate: function StaffGate({ children }: { children: ReactNode }) {
     return children
   },
   signOutConsole: vi.fn(),
+  expireConsole: vi.fn(),
 }))
 
 // the key the console already stores under (moves from session.ts to auth.ts)

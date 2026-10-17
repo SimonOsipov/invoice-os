@@ -1,5 +1,5 @@
 import { gatewayBase } from '@invoice-os/api-client'
-import { signOutConsole } from '@invoice-os/console-session'
+import { expireConsole, signOutConsole } from '@invoice-os/console-session'
 
 export const SESSION_KEY = 'invoice-os.ops-session'
 
@@ -19,4 +19,5 @@ export const landingBase = (): string | null => {
 
 export const signOut = () => signOutConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase() })
 
-export const expireSession = (): void => undefined
+export const expireSession = () =>
+  expireConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase(), app: null, target: 'ops' })

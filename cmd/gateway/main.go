@@ -365,6 +365,11 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 	}
 }
 
+// blogHandlers is a stub: the real wiring lands with the implementation.
+func blogHandlers(notifications *url.URL, gatewayToken string, log *slog.Logger) gateway.BlogRoutes {
+	return gateway.BlogHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, nil, false, log)
+}
+
 // resetPasswordHandler builds the reset-form handler; a nil authURL or siteURL makes it answer 503.
 func resetPasswordHandler(authURL, siteURL *url.URL, sessions *gateway.SessionChecker, signIn *gateway.SignInThrottle, log *slog.Logger) http.Handler {
 	client := &http.Client{

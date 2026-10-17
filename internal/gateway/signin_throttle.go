@@ -79,6 +79,9 @@ func (t *SignInThrottle) Reserve(email string) bool {
 	return true
 }
 
+// ReserveOrAdmit is a stub: it refuses every key until the implementation lands.
+func (t *SignInThrottle) ReserveOrAdmit(key string) bool { return false }
+
 // sweep drops expired keys; the caller holds t.mu.
 func (t *SignInThrottle) sweep(now time.Time) {
 	t.sweeps++

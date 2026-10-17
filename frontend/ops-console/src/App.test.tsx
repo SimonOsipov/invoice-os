@@ -7,6 +7,7 @@ import { StaffGate } from '@invoice-os/console-session'
 import App from './App'
 import { TopBar } from './components/TopBar'
 import { NAV_ITEMS } from './data'
+import { GLYPHS } from './glyphs'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
@@ -102,5 +103,14 @@ describe('App', () => {
   it('the Blog crumb is Blog', () => {
     const html = renderToStaticMarkup(<TopBar screen="blog" env="sandbox" onSetEnv={() => undefined} />)
     expect(html).toContain('>Blog<')
+  })
+
+  it('the Blog nav row carries the file-text glyph at size 17', () => {
+    const blog = NAV_ITEMS.find((n) => n.key === 'blog')
+    expect(blog).toBeDefined()
+    const html = renderToStaticMarkup(<>{blog!.glyph}</>)
+    expect(html).toContain('width="17"')
+    expect(html).toContain('height="17"')
+    expect(html).toContain(GLYPHS['file-text'][0])
   })
 })

@@ -28,4 +28,11 @@ describe('GLYPHS', () => {
   it('the blog glyphs exist', () => {
     for (const name of NON_CATEGORY) expect(glyphs[name]?.length, name).toBeGreaterThan(0)
   })
+
+  it('holds exactly the 30 planned glyphs, each a list of non-empty path strings', () => {
+    expect(Object.keys(glyphs)).toHaveLength(serverIcons().length + NON_CATEGORY.length)
+    for (const [name, paths] of Object.entries(glyphs)) {
+      for (const d of paths) expect(d.trim().length, `${name} path`).toBeGreaterThan(0)
+    }
+  })
 })

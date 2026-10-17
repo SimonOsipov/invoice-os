@@ -1,5 +1,14 @@
-import { describe, expect, it } from 'vitest'
-import { collectFlaky, formatFlakySummary, shortenPath, type TestLike } from './flakyReporter'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import FlakyReporter, {
+  collectFlaky,
+  formatFlakySummary,
+  REPO_ROOT,
+  shortenPath,
+  type TestLike,
+} from './flakyReporter'
 
 /**
  * The fixtures below are the three outcomes Playwright 1.61 actually produces,
@@ -23,13 +32,16 @@ describe('collectFlaky', () => {
       test('expected', 'always passes', 10, 1),
       test('unexpected', 'always fails', 20, 2),
       test('skipped', 'skipped', 30, 0),
-    ])
+    ], '/repo')
     expect(got).toEqual([
       {
         file: '/repo/e2e/topology/invoice-surfaces.spec.ts',
         line: 1099,
         title: 'a failed invoice is an honest dead end',
         attempts: 2,
+        repoFile: 'e2e/topology/invoice-surfaces.spec.ts',
+        titlePath: ['a failed invoice is an honest dead end'],
+        error: '',
       },
     ])
   })
@@ -40,9 +52,93 @@ describe('collectFlaky', () => {
 
   it('does not throw when a test carries no location or results', () => {
     const bare: TestLike = { outcome: () => 'flaky', titlePath: () => ['x'] }
-    expect(collectFlaky([bare])).toEqual([
-      { file: '<unknown>', line: 0, title: 'x', attempts: 0 },
+    expect(collectFlaky([bare], '/repo')).toEqual([
+      {
+        file: '<unknown>',
+        line: 0,
+        title: 'x',
+        attempts: 0,
+        repoFile: '<unknown>',
+        titlePath: ['x'],
+        error: '',
+      },
     ])
+  })
+
+  const flakyAt = (
+    titlePath: string[],
+    results: { error?: { message?: string } }[] | undefined,
+    file = '/repo/e2e/topology/x.spec.ts',
+  ): TestLike => ({
+    outcome: () => 'flaky',
+    titlePath: () => titlePath,
+    location: { file, line: 58 },
+    results,
+  })
+  const head = ['', 'serial-lane', 'x.spec.ts']
+
+  it('writes the repo-relative file, the title path and the first-attempt error', () => {
+    const t = flakyAt([...head, 'session', 'signs out'], [
+      { error: { message: '\u001b[31mError: boom\u001b[39m\n  at y' } },
+      {},
+    ])
+    expect(collectFlaky([t], '/repo')).toEqual([
+      {
+        file: '/repo/e2e/topology/x.spec.ts',
+        line: 58,
+        title: 'signs out',
+        attempts: 2,
+        repoFile: 'e2e/topology/x.spec.ts',
+        titlePath: ['session', 'signs out'],
+        error: 'Error: boom',
+      },
+    ])
+  })
+
+  it('same last title under two describes gives two title paths', () => {
+    const got = collectFlaky(
+      [flakyAt([...head, 'A', 'saves'], [{}, {}]), flakyAt([...head, 'B', 'saves'], [{}, {}])],
+      '/repo',
+    )
+    expect(got.map((r) => r.titlePath)).toEqual([['A', 'saves'], ['B', 'saves']])
+    expect(got[0].title).toBe(got[1].title)
+  })
+
+  it('first error line skips blank lines and is cut to 300 characters', () => {
+    const message = '\n\n' + 'x'.repeat(400) + '\nmore'
+    const [row] = collectFlaky([flakyAt(['t'], [{ error: { message } }, {}])], '/repo')
+    expect(row.error).toBe('x'.repeat(300))
+  })
+
+  it('no first-attempt error gives an empty error', () => {
+    expect(collectFlaky([flakyAt(['t'], [{}, {}])], '/repo')[0].error).toBe('')
+  })
+
+  it('a blank or ANSI-only first-attempt message gives an empty error', () => {
+    for (const message of ['  \n\t', '\u001b[31m\u001b[39m']) {
+      expect(collectFlaky([flakyAt(['t'], [{ error: { message } }, {}])], '/repo')[0].error).toBe('')
+    }
+  })
+
+  it('error comes from the first attempt, not a later one', () => {
+    const later = { error: { message: 'Error: second' } }
+    const [a] = collectFlaky([flakyAt(['t'], [{ error: { message: 'Error: first' } }, later])], '/repo')
+    const [b] = collectFlaky([flakyAt(['t'], [{}, later])], '/repo')
+    expect(a.error).toBe('Error: first')
+    expect(b.error).toBe('')
+  })
+
+  it('empty results give attempts 0 and an empty error', () => {
+    const [row] = collectFlaky([flakyAt(['t'], [])], '/repo')
+    expect(row.attempts).toBe(0)
+    expect(row.error).toBe('')
+  })
+
+  it('CRLF line breaks leave no carriage return', () => {
+    const message = 'Error: boom\r\n  at y'
+    expect(collectFlaky([flakyAt(['t'], [{ error: { message } }, {}])], '/repo')[0].error).toBe(
+      'Error: boom',
+    )
   })
 
   it('orders by file then line so the table is stable across runs', () => {
@@ -99,5 +195,42 @@ describe('shortenPath', () => {
 
   it('leaves an already-relative path alone', () => {
     expect(shortenPath('topology/roles.spec.ts')).toBe('topology/roles.spec.ts')
+  })
+})
+
+describe('FlakyReporter', () => {
+  const saved = {
+    FLAKY_JSON_DIR: process.env.FLAKY_JSON_DIR,
+    GITHUB_STEP_SUMMARY: process.env.GITHUB_STEP_SUMMARY,
+  }
+  let dir = ''
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+    if (dir) rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('onEnd writes the new fields to <label>.json', () => {
+    dir = mkdtempSync(join(tmpdir(), 'flaky-reporter-'))
+    process.env.FLAKY_JSON_DIR = dir
+    delete process.env.GITHUB_STEP_SUMMARY
+    const t: TestLike = {
+      outcome: () => 'flaky',
+      titlePath: () => ['', 'serial-lane', 'x.spec.ts', 'session', 'signs out'],
+      location: { file: join(REPO_ROOT, 'e2e/topology/x.spec.ts'), line: 58 },
+      results: [{ error: { message: 'Error: boom\n  at y' } }, {}],
+    }
+    const reporter = new FlakyReporter({ label: 'topology' })
+    reporter.onBegin({} as never, { allTests: () => [t] } as never)
+    reporter.onEnd()
+    const rows = JSON.parse(readFileSync(join(dir, 'topology.json'), 'utf8'))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      repoFile: 'e2e/topology/x.spec.ts',
+      titlePath: ['session', 'signs out'],
+      error: 'Error: boom',
+    })
   })
 })

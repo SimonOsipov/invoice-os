@@ -690,6 +690,68 @@ describe('CustomersView: archive and restore', () => {
     expect(screen.getByRole('button', { name: 'Confirm restore' })).toBeTruthy()
     expect(screen.queryByText(NOTICE)).toBeNull()
   })
+
+  it('CU-35b a restored row that stays on All is no longer armed', async () => {
+    let restored = false
+    mockApi({
+      customers: () => recordsPage([record({ id: 'B', status: restored ? 'active' : 'archived' })]),
+      invoices: () => invoicesPage([]),
+      transition: () => {
+        restored = true
+        return ok(record({ id: 'B' }))
+      },
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'All' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm restore' }))
+
+    expect(await screen.findByRole('button', { name: 'Archive' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Confirm archive' })).toBeNull()
+  })
+
+  it('CU-37 a failure that is not an ApiError shows the generic message inline', async () => {
+    mockApi({
+      customers: () => recordsPage([record({ id: 'A' })]),
+      invoices: () => invoicesPage([]),
+    })
+    const base = ctxFor()
+    const real = base.authedFetch
+    const ctx = { ...base, authedFetch: ((url: string, opts?: { method?: string }) => (opts?.method === 'POST' ? Promise.reject(new Error('session ended')) : real(url, opts))) as typeof real }
+    render(<CustomersView ctx={ctx} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }))
+
+    expect(await screen.findByText('Something went wrong. Please try again.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy()
+  })
+
+  it('CU-37b a later page emptied to total 0 shows the empty card and never a negative offset', async () => {
+    let emptied = false
+    const { customerCalls } = mockApi({
+      customers: (url) => {
+        const off = Number(paramsOf(url).get('offset'))
+        if (emptied) return recordsPage([], 0, off)
+        return off === 50 ? recordsPage([record({ id: 'Z', name: 'Zed' })], 51, 50) : recordsPage([record({ id: 'F' })], 51, 0)
+      },
+      invoices: () => invoicesPage([]),
+      transition: () => {
+        emptied = true
+        return ok(record({ id: 'Z', status: 'archived' }))
+      },
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Next/ }))
+    await screen.findByText('Zed')
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }))
+
+    await screen.findByText('No customers yet')
+    await new Promise((r) => setTimeout(r, 30))
+    const offsets = customerCalls().map((u) => Number(paramsOf(u).get('offset')))
+    expect(offsets.length).toBeGreaterThan(0)
+    expect(offsets.every((o) => o >= 0)).toBe(true)
+  })
 })
 
 describe('CustomersView: the status chips', () => {

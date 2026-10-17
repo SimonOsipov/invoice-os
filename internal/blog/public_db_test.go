@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"reflect"
 	"slices"
 	"strconv"
@@ -456,12 +457,180 @@ func TestPublic_ReadPublicRefusesAWrite(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("a read in readPublic must succeed: %v", err)
 	}
+	for name, stmt := range map[string]string{
+		"update": `UPDATE public.blog_posts SET title = title WHERE false`,
+		"insert": `INSERT INTO public.blog_categories (id, name, headline, intro, icon, tone, position) SELECT 'x', 'x', 'x', 'x', 'x', 1, 1 WHERE false`,
+		"delete": `DELETE FROM public.blog_post_covers WHERE false`,
+	} {
+		err := f.s.readPublic(bg, func(tx pgx.Tx) error {
+			_, err := tx.Exec(bg, stmt)
+			return err
+		})
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "25006" {
+			t.Errorf("%s in readPublic: err = %v, want SQLSTATE 25006 (read_only_sql_transaction)", name, err)
+		}
+	}
+}
+
+func TestPublic_LagosMidnightDecidesVisibilityOnTheStorePath(t *testing.T) {
+	f := newPubFx(t)
+	id := "m-" + f.r
+	f.seedPost(t, seedSpec{id: id, status: "published", date: day(1)})
+	f.seedCover(t, id, []byte("img"))
+	version := f.coverVersion(t, id)
+	before := time.Date(pubDay.Year(), pubDay.Month(), pubDay.Day(), 22, 59, 59, 0, time.UTC)
+	at := before.Add(time.Second)
+	for _, c := range []struct {
+		name    string
+		now     time.Time
+		visible bool
+	}{{"22:59:59Z is still the day before in Lagos", before, false}, {"23:00:00Z is the post's date in Lagos", at, true}} {
+		today := LagosDate(c.now)
+		_, errPost := f.s.PublicPost(bg, id, today)
+		_, _, errCover := f.s.PublicCover(bg, id, version, today)
+		_, listed := f.posts(t, today)[id]
+		cats, err := f.s.PublicCategories(bg, today)
+		if err != nil {
+			t.Fatal(err)
+		}
+		i := slices.IndexFunc(cats, func(c Category) bool { return c.ID == f.cat })
+		if i < 0 {
+			t.Fatalf("own category is not listed")
+		}
+		wantCount := 0
+		if c.visible {
+			wantCount = 1
+		}
+		if (errPost == nil) != c.visible || (errCover == nil) != c.visible || listed != c.visible || cats[i].PostCount != wantCount {
+			t.Errorf("%s: post err=%v cover err=%v listed=%v count=%d; want visible=%v", c.name, errPost, errCover, listed, cats[i].PostCount, c.visible)
+		}
+	}
+}
+
+func TestPublic_APinnedFuturePostIsNotListed(t *testing.T) {
+	super, _ := dbPools(t)
+	pinState(t, super)
+	f := newPubFx(t)
+	vis, future := "v-"+f.r, "f-"+f.r
+	f.seedPost(t, seedSpec{id: vis, status: "published", date: day(-1)})
+	f.seedPost(t, seedSpec{id: future, status: "published", date: day(1)})
+	if _, err := f.super.Exec(bg, `UPDATE public.blog_posts SET featured = true WHERE id = $1`, future); err != nil {
+		t.Fatal(err)
+	}
+	idx := f.posts(t, day(0))
+	if _, ok := idx[vis]; !ok {
+		t.Fatalf("visible post %s is not listed", vis)
+	}
+	if _, ok := idx[future]; ok {
+		t.Errorf("pinned future post %s is listed", future)
+	}
+	if _, err := f.s.PublicPost(bg, future, day(0)); !errors.Is(err, ErrPostNotFound) {
+		t.Errorf("pinned future post by id: err = %v, want ErrPostNotFound", err)
+	}
+	for _, p := range mustPosts(t, f, day(0)) {
+		if p.Featured {
+			t.Errorf("%s is Featured while the pin is hidden", p.ID)
+		}
+	}
+}
+
+func mustPosts(t *testing.T, f pubFx, today string) []PublicPost {
+	t.Helper()
+	got, err := f.s.PublicPosts(bg, today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestPublic_CategoryCountsStayWithinTheirCategory(t *testing.T) {
+	f := newPubFx(t)
+	other := "o-" + f.r
+	seedCategory(t, f.super, other, "Other "+f.r, maxPosition(t, f.super)+1)
+	own := func(id string) seedSpec { return seedSpec{id: id + "-" + f.r, status: "published", date: day(-1)} }
+	f.seedPost(t, own("a1"))
+	f.seedPost(t, own("a2"))
+	f.seedPost(t, seedSpec{id: "a3-" + f.r, status: "draft", date: day(-1)})
+	for _, sp := range []seedSpec{own("b1"), {id: "b2-" + f.r, status: "published", date: day(2)}, {id: "b3-" + f.r, status: "draft", date: day(-1)}} {
+		f.seedPost(t, sp)
+		if _, err := f.super.Exec(bg, `UPDATE public.blog_posts SET category_id = $2 WHERE id = $1`, sp.id, other); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cats, err := f.s.PublicCategories(bg, day(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := map[string]int{}
+	for _, c := range cats {
+		count[c.ID] = c.PostCount
+	}
+	if _, ok := count[other]; !ok || count[f.cat] != 2 || count[other] != 1 {
+		t.Errorf("counts = own %d, other %d (listed %v); want 2 and 1", count[f.cat], count[other], ok)
+	}
+}
+
+func TestPublic_CoverVersionMustMatchExactly(t *testing.T) {
+	f := newPubFx(t)
+	a, b, bare := "a-"+f.r, "b-"+f.r, "n-"+f.r
+	for _, id := range []string{a, b, bare} {
+		f.seedPost(t, seedSpec{id: id, status: "published", date: day(-1)})
+	}
+	if _, err := f.super.Exec(bg, `INSERT INTO public.blog_post_covers (post_id, content_type, bytes) VALUES ($1, 'image/jpeg', $2)`, a, []byte("jpeg-a")); err != nil {
+		t.Fatal(err)
+	}
+	f.seedCover(t, b, []byte("png-b"))
+	va := f.coverVersion(t, a)
+	if ct, got, err := f.s.PublicCover(bg, a, va, day(0)); err != nil || ct != "image/jpeg" || string(got) != "jpeg-a" {
+		t.Fatalf("the exact version must read the stored type and bytes: %q %q %v", ct, got, err)
+	}
+	for name, c := range map[string]struct {
+		id string
+		v  int64
+	}{
+		"one microsecond older": {a, va - 1}, "one microsecond newer": {a, va + 1},
+		"zero": {a, 0}, "negative": {a, -va}, "max int64": {a, math.MaxInt64},
+		"another post's version": {a, f.coverVersion(t, b)},
+		"a post with no cover":   {bare, va},
+	} {
+		if _, got, err := f.s.PublicCover(bg, c.id, c.v, day(0)); !errors.Is(err, ErrPostNotFound) || got != nil {
+			t.Errorf("%s: bytes=%q err=%v; want ErrPostNotFound and no bytes", name, got, err)
+		}
+	}
+}
+
+func TestPublic_AMalformedTodayFailsClosed(t *testing.T) {
+	f := newPubFx(t)
+	id := "p-" + f.r
+	f.seedPost(t, seedSpec{id: id, status: "published", date: day(-1)})
+	f.seedCover(t, id, []byte("img"))
+	if _, err := f.s.PublicPost(bg, id, day(0)); err != nil {
+		t.Fatalf("a well-formed today must read: %v", err)
+	}
+	for _, today := range []string{"", "not-a-date", "2030-13-45"} {
+		posts, errList := f.s.PublicPosts(bg, today)
+		_, errOne := f.s.PublicPost(bg, id, today)
+		_, _, errCover := f.s.PublicCover(bg, id, f.coverVersion(t, id), today)
+		cats, errCats := f.s.PublicCategories(bg, today)
+		if errList == nil || errOne == nil || errCover == nil || errCats == nil || len(posts) != 0 || len(cats) != 0 {
+			t.Errorf("today %q: errors %v %v %v %v, rows %d %d; want four errors and no rows", today, errList, errOne, errCover, errCats, len(posts), len(cats))
+		}
+	}
+}
+
+func TestPublic_ReadPublicSeesNoTenantRows(t *testing.T) {
+	f := newPubFx(t)
+	subject, _ := staffActor(t, f.super)
+	var asOwner int
+	if err := f.super.QueryRow(bg, `SELECT count(*) FROM memberships WHERE user_id = $1`, subject).Scan(&asOwner); err != nil || asOwner != 1 {
+		t.Fatalf("control: the owner sees %d memberships (err %v), want 1", asOwner, err)
+	}
+	var seen int
 	err := f.s.readPublic(bg, func(tx pgx.Tx) error {
-		_, err := tx.Exec(bg, `UPDATE public.blog_posts SET title = title WHERE false`)
-		return err
+		return tx.QueryRow(bg, `SELECT (SELECT count(*) FROM memberships) + (SELECT count(*) FROM tenants)`).Scan(&seen)
 	})
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "25006" {
-		t.Errorf("write in readPublic: err = %v, want SQLSTATE 25006 (read_only_sql_transaction)", err)
+	if err != nil || seen != 0 {
+		t.Errorf("readPublic saw %d tenant rows (err %v), want 0", seen, err)
 	}
 }

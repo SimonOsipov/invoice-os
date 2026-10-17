@@ -1621,7 +1621,12 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
   // Fix the field the server flagged, save.
   await expect(fixInput).toHaveValue('0.00')
   await fixInput.fill('75.00')
+  // The input shows the draft at once; the server's answer is the saved value.
+  const patched = page.waitForResponse(
+    (r) => r.request().method() === 'PATCH' && /\/api\/invoice\/v1\/invoices\/[^/]+$/.test(new URL(r.url()).pathname),
+  )
   await page.getByTestId('review-fix-save').click()
+  expect((await patched).ok(), 'the fix is stored before Re-validate').toBe(true)
   await expect(fixInput, 'the panel re-fetches the saved value').toHaveValue('75.00')
 
   // Re-validate -- the verdict pill moves. ReviewInvoicesTab is entirely server-filtered

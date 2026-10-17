@@ -231,6 +231,15 @@ describe('archived key', () => {
 })
 
 describe('stories', () => {
+  it('an archived key with two archived stories links the highest number', () => {
+    put(archiveDir, 'BUG-12 low.md', openStory(KEY, 'Done', [evidenceRow(50)]))
+    put(archiveDir, 'BUG-20 high.md', openStory(KEY, 'Done', [evidenceRow(60)]))
+    go({ runs: [run(200, [flaky()])] })
+    const { text } = read(bugDir, 'BUG-21 ')
+    expect(text).toContain('[[BUG-20 high]]')
+    expect(text).not.toContain('[[BUG-12 low]]')
+  })
+
   it('a story with no flaky_key is never matched or changed', () => {
     const hand = '---\nstatus: Ready\n---\n\n# BUG-30 hand written\n'
     put(bugDir, 'BUG-30 hand written.md', hand)
@@ -271,7 +280,25 @@ describe('same last title, different title paths', () => {
   })
 })
 
+describe('same title path, different spec files', () => {
+  it('two stories, one per spec file', () => {
+    go({ runs: [run(100, [flaky(), flaky({ repoFile: 'e2e/topology/y.spec.ts' })])] })
+    const names = readdirSync(bugDir).sort()
+    expect(names).toHaveLength(2)
+    const keys = names.map((n) => /^flaky_key: (.*)$/m.exec(readFileSync(join(bugDir, n), 'utf8'))![1])
+    expect(new Set(keys).size).toBe(2)
+  })
+})
+
 describe('one key in two runs', () => {
+  it('a key repeated inside one run attempt is one row', () => {
+    const r = run(100, [flaky()])
+    r.artifacts.push({ name: 'flaky-results-topology-a-1', created_at: '2026-10-12T14:00:00Z', files: { 'topology.json': JSON.stringify([flaky()]) } })
+    go({ runs: [r] })
+    const rows = read(bugDir, 'BUG-1 ').text.split('\n').filter((l) => l.includes('/100/attempts/1)'))
+    expect(rows).toHaveLength(1)
+  })
+
   it('one story with two rows', () => {
     go({ runs: [run(100, [flaky()], { artAt: '2026-10-13T00:00:00Z' }), run(200, [flaky()], { artAt: '2026-10-12T00:00:00Z' })] })
     expect(readdirSync(bugDir)).toHaveLength(1)
@@ -355,7 +382,9 @@ describe('dry run', () => {
     expect(text).toContain('would write BUG-39 ')
     expect(text).toContain('# BUG-39 signs out passes only on retry')
     expect(text).toContain('would update BUG-38 ')
-    expect(text).toContain('/200/attempts/1)')
+    const upd = text.indexOf('would update BUG-38 ')
+    const planned = text.slice(upd, text.indexOf('would write BUG-39 ')).split('\n')
+    expect(planned.some((l) => l.startsWith('| [200 attempt 1]'))).toBe(true)
     expect(snapshot(vault)).toEqual(before)
   })
 })

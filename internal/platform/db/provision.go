@@ -1,5 +1,5 @@
 // provision.go — the gateway boot-time provisioning sequence (M4-21-04,
-// task-128): bootstrap → migrate → reset (PR environments only) → purge →
+// task-128): recreate stuck schema (previews only) → bootstrap → migrate → reset (PR environments only) → purge →
 // seed, gated by BootstrapEnabled and all complete before the gateway's
 // listener opens (so a green /healthz continues to mean "fully provisioned" —
 // the purge excepted, being non-fatal, a failed one greens identically).
@@ -200,7 +200,8 @@ func lockProvisionTail(ctx context.Context, superuserDSN string) (func(), error)
 	}, nil
 }
 
-// Provision runs the gateway's boot-time provisioning sequence: bootstrap
+// Provision runs the gateway's boot-time provisioning sequence: recreate stuck
+// schema (previews only, when ResetWillRun) → bootstrap
 // (gated by BootstrapEnabled) → migrate (unconditional — the existing
 // gateway-as-migrator behavior, unchanged) → reset (gated by ResetEnabled,
 // PR-environments only — persona-handoff-fix, Decision [pr-only-reset]) →
@@ -272,6 +273,13 @@ func Provision(ctx context.Context, cfg ProvisionConfig) error {
 	}
 
 	if enabled {
+		// Previews only: a ledger that disagrees with the files would fail MigrateUp.
+		if cfg.ResetWillRun() {
+			if _, err := RecreateStuckSchema(ctx, cfg.SuperuserDSN, cfg.MigrationsFS, cfg.Logger); err != nil {
+				return fmt.Errorf("db: provision: recreate stuck schema: %w", err)
+			}
+		}
+
 		if err := Bootstrap(ctx, cfg.SuperuserDSN, cfg.Passwords, cfg.BootstrapFS); err != nil {
 			return fmt.Errorf("db: provision: bootstrap: %w", err)
 		}

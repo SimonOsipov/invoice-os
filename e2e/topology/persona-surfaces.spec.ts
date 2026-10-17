@@ -336,7 +336,7 @@ test('in-house sweep: every sidebar surface renders real content for the in-hous
 
   // --- Customers ------------------------------------------------------------------------
   // Live-read oracle: the first record of the same page the screen opens on is in a row.
-  const customers = await listCustomers(token, { limit: 50, offset: 0 })
+  const customers = await listCustomers(token, { limit: 50, offset: 0, status: 'active' })
   expect(customers.pagination.total, 'the tenant must hold customer records to list').toBeGreaterThan(0)
   await goTo(page, 'Customers')
   await expect(page.getByRole('heading', { level: 1, name: 'Customers', exact: true })).toBeVisible()

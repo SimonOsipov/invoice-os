@@ -188,7 +188,7 @@ export interface ArchiveAction {
 // Pure arm/confirm/disclosure decision for the per-row action ([archive-arms-then-confirms]).
 // `notice` fires only when armed on the entity that is the currently-open workspace, since
 // neither action ever switches the user away from it ([archiving-the-open-client-keeps-you-there]).
-export function archiveActionFor(entity: Entity, activeEntityId: string | null, armed: boolean): ArchiveAction {
+export function archiveActionFor(entity: Pick<Entity, 'id' | 'status'>, activeEntityId: string | null, armed: boolean): ArchiveAction {
   const notice = armed && entity.id === activeEntityId ? "You'll stay in this workspace after this." : null
   switch (entity.status) {
     case 'active':

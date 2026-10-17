@@ -3,7 +3,7 @@
 // Layout claims assert a relationship; screenshots are attached for the reviewer and never asserted.
 // States the seed cannot reach are driven with page.route, each stub scoped to its own URL. No stub is a write.
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
-import { createEntity, createInvoice, listCustomers, login, PERSONAS, provisionRealAccount, signInSession, type RealAccount } from '../api/client'
+import { archiveCustomer, createCustomer, createEntity, createInvoice, grantMembership, listCustomers, login, me, PERSONAS, provisionRealAccount, registerFresh, signInSession, subjectOf, type RealAccount } from '../api/client'
 import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { signInAs, signInAtFrontDoor } from '../personaSession'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
@@ -196,16 +196,17 @@ function insideX(rects: Record<string, Rect>, outer: string, names: string[], pr
   }
 }
 
-// Runs `read` at every WIDE_WIDTHS width, polling until it reports no problem; restores the entry viewport.
+// Runs `read` at every width (default WIDE_WIDTHS), polling until it reports no problem; restores the entry viewport.
 async function sweep(
   page: Page,
   label: string,
   read: () => Promise<{ problems: string[]; rects: Record<string, unknown> }>,
+  widths: readonly number[] = WIDE_WIDTHS,
 ): Promise<Record<string, unknown>[]> {
   const entry = page.viewportSize()
   const measured: Record<string, unknown>[] = []
   try {
-    for (const width of WIDE_WIDTHS) {
+    for (const width of widths) {
       await page.setViewportSize({ width, height: 900 })
       await expect.poll(async () => (await read()).problems, { message: `${label} at ${width}px`, timeout: 10_000 }).toEqual([])
       measured.push({ width, ...(await read()).rects })
@@ -1361,6 +1362,7 @@ test.describe('Customers screen and company fields', () => {
   const LONG_TIN = freshBuyerTin()
   const INHOUSE_TIN = freshBuyerTin()
   const RN_TIN = `RN-${'7'.repeat(24)}`
+  const ARCHIVED_TIN = freshBuyerTin()
   const LONG_NAME = `Long ${'N'.repeat(115)}`
   const LONG_EMAIL = `${'e'.repeat(108)}@example.com`
   const COMPANY_KEYS = {
@@ -1375,6 +1377,7 @@ test.describe('Customers screen and company fields', () => {
   }
   let firm: RealAccount
   let inhouse: RealAccount
+  let preparer: RealAccount
 
   async function seedTenant(account: RealAccount, name: string): Promise<string> {
     const token = (await signInSession(account.email, account.password)).access_token
@@ -1382,10 +1385,13 @@ test.describe('Customers screen and company fields', () => {
     const created = await createEntity(token, { name: `${name} ${tin}`, tin, ...(account === inhouse ? COMPANY_KEYS : {}) })
     if (account === firm) {
       firmEntityName = created.name
+      firmEntityId = created.id
       const base = { entity_id: created.id, ...cleanInvoiceFields('') }
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${BUYER_TIN}`, buyer_tin: BUYER_TIN, buyer_name: 'Buyer Ltd', buyer_email: 'before@buyer.example.com', invoice_kind: 'B2B' })
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${LONG_TIN}`, buyer_tin: LONG_TIN, buyer_name: LONG_NAME, buyer_email: LONG_EMAIL, invoice_kind: 'B2B' })
       await createInvoice(token, { ...base, invoice_number: `INV-CUST02-${RN_TIN.slice(3, 11)}`, buyer_tin: RN_TIN, buyer_name: 'RN Buyer', invoice_kind: 'B2B' })
+      const archived = await createCustomer(token, { tin: ARCHIVED_TIN, name: `Archived ${'A'.repeat(111)}` })
+      await archiveCustomer(token, archived.id)
     }
     else {
       await createInvoice(token, { entity_id: created.id, ...cleanInvoiceFields(''), invoice_number: `INV-CUST02-${INHOUSE_TIN}`, buyer_tin: INHOUSE_TIN, buyer_name: 'Buyer Ltd', buyer_email: 'before@buyer.example.com', invoice_kind: 'B2B' })
@@ -1396,6 +1402,7 @@ test.describe('Customers screen and company fields', () => {
   let firmToken = ''
   let inhouseToken = ''
   let firmEntityName = ''
+  let firmEntityId = ''
 
   test.beforeAll(async () => {
     test.setTimeout(120_000)
@@ -1403,6 +1410,11 @@ test.describe('Customers screen and company fields', () => {
     inhouse = await provisionRealAccount('buyers-inhouse', 'in_house')
     firmToken = await seedTenant(firm, 'ENGI-05 firm')
     inhouseToken = await seedTenant(inhouse, 'ENGI-05 company')
+    // A preparer of the firm's tenant (auth.spec.ts workspaceWithMember).
+    const member = await registerFresh('buyers-preparer')
+    const userId = subjectOf((await signInSession(member.email, member.password)).access_token)
+    await grantMembership({ user_id: userId, tenant_id: (await me(firmToken)).tenant.id, role: 'preparer', display_name: 'Customers E2E', email: member.email })
+    preparer = { ...member, workspaceName: firm.workspaceName, displayName: 'Customers E2E' }
   })
 
   const buyerRow = (page: Page, tin: string) => page.locator('.pf-list-row', { hasText: tin })
@@ -1466,6 +1478,68 @@ test.describe('Customers screen and company fields', () => {
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 
+  // CustomersView.tsx ARCHIVE_NOTICE
+  const ARCHIVE_NOTICE = 'Leaves the Active list and the invoice prefill. Invoices that name it still save.'
+  // frontend/app/src/lib/buyerDirectory.ts DUPLICATE_TIN_ERROR
+  const DUPLICATE_TIN = 'A customer with this TIN already exists'
+
+  test('ST-21 a preparer adds, archives and restores a customer; a later invoice keeps the typed name', async ({ page }) => {
+    test.setTimeout(180_000)
+    const tin = freshBuyerTin()
+    const typed = `Typed ${tin}`
+    const errors = gatedErrors(page, [expectedStatusDropper(page, 409, /\/api\/invoice\/v1\/customers$/)])
+    await signInAtFrontDoor(page, preparer, '/customers')
+    await expect(page.getByRole('heading', { name: 'Customers', exact: true })).toBeVisible()
+    const addCustomer = async () => {
+      await page.getByRole('button', { name: 'Add customer', exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: 'Add customer', exact: true })
+      await expect(dialog).toBeVisible()
+      await dialog.getByLabel('TIN', { exact: true }).fill(tin)
+      return dialog
+    }
+
+    const dialog = await addCustomer()
+    await dialog.getByLabel('Name', { exact: true }).fill(typed)
+    await dialog.getByLabel('Email', { exact: true }).fill(`typed-${tin}@buyer.example.com`)
+    await dialog.getByRole('button', { name: 'Add customer', exact: true }).click()
+    await expect(dialog, 'the Add customer dialog never closed').toHaveCount(0)
+    await expect(buyerRow(page, tin), 'the added row does not show the typed name').toContainText(typed, { timeout: 20_000 })
+
+    const again = await addCustomer()
+    await again.getByRole('button', { name: 'Add customer', exact: true }).click()
+    await expect(again.getByText(DUPLICATE_TIN, { exact: true })).toBeVisible()
+    await again.getByRole('button', { name: 'Open customer', exact: true }).click()
+    const edit = page.getByRole('dialog', { name: 'Edit customer', exact: true })
+    await expect(edit).toBeVisible()
+    await expect(edit).toContainText(tin)
+    await edit.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(edit).toHaveCount(0)
+
+    await buyerRow(page, tin).getByRole('button', { name: 'Archive', exact: true }).click()
+    await expect(buyerRow(page, tin).getByText(ARCHIVE_NOTICE, { exact: true })).toBeVisible()
+    await buyerRow(page, tin).getByRole('button', { name: 'Confirm archive', exact: true }).click()
+    await expect(buyerRow(page, tin), 'the archived row stays on Active').toHaveCount(0, { timeout: 20_000 })
+    await page.getByRole('button', { name: 'Archived', exact: true }).click()
+    await expect(buyerRow(page, tin).getByText('ARCHIVED', { exact: true })).toBeVisible({ timeout: 20_000 })
+
+    await buyerRow(page, tin).getByRole('button', { name: 'Restore', exact: true }).click()
+    await buyerRow(page, tin).getByRole('button', { name: 'Confirm restore', exact: true }).click()
+    await expect(buyerRow(page, tin), 'the restored row stays on Archived').toHaveCount(0, { timeout: 20_000 })
+    await page.getByRole('button', { name: 'Active', exact: true }).click()
+    await expect(buyerRow(page, tin)).toBeVisible({ timeout: 20_000 })
+    await expect(buyerRow(page, tin).getByText('ARCHIVED', { exact: true })).toHaveCount(0)
+    expect((await listCustomers(firmToken, { tin })).customers[0]?.status, 'the API holds the restored status').toBe('active')
+
+    // An invoice's buyer name never overwrites a typed one.
+    await createInvoice(firmToken, { entity_id: firmEntityId, ...cleanInvoiceFields(''), invoice_number: `INV-CUST03-${tin}`, buyer_tin: tin, buyer_name: 'Invoice Name', invoice_kind: 'B2B' })
+    await page.reload()
+    await expect(buyerRow(page, tin).locator('.money.mono'), 'the row does not count the later invoice').toHaveText('1', { timeout: 20_000 })
+    await expect(buyerRow(page, tin)).toContainText(typed, { timeout: 20_000 })
+    await expect(buyerRow(page, tin)).not.toContainText('Invoice Name')
+    expect((await listCustomers(firmToken, { tin })).customers[0]?.name, 'the API holds the typed name').toBe(typed)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
   test('ST-16 the settings tab strip encloses every tab at every wide width', async ({ page }, testInfo) => {
     test.setTimeout(180_000)
     const errors = gatedErrors(page, [])
@@ -1504,10 +1578,13 @@ test.describe('Customers screen and company fields', () => {
     const rnRow = buyerRow(page, RN_TIN)
     await expect(rnRow, 'the RN- customer is not listed').toBeVisible()
     await expect(rnRow.getByText('VALID', { exact: true }), 'an RN- TIN reads exactly VALID').toBeVisible()
+    await expect(buyerRow(page, ARCHIVED_TIN), 'Active lists an archived customer').toHaveCount(0)
     await settle(page, main(page))
     const head = page.locator('.pf-list-head')
     const card = head.locator('xpath=..')
-    const measured = await sweep(page, 'Customers list', async () => {
+    // 1263 stands in for WIDE_WIDTHS' 1280 minus a 17px classic scrollbar.
+    const CUSTOMERS_WIDTHS = [...WIDE_WIDTHS, 1263]
+    const columns = (all: boolean, armedTin?: string) => async () => {
       const cells = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } }))
       // Text fits its cell: the fixed tracks and the header never clip; the Customer and TIN cells clip with an ellipsis.
       const fits = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => el.scrollWidth <= el.clientWidth + 1))
@@ -1519,9 +1596,10 @@ test.describe('Customers screen and company fields', () => {
       const problems: string[] = []
       const { rects, problems: boxProblems } = await boxes({ card })
       problems.push(...boxProblems)
-      if (n < 3) problems.push(`the list drew ${n} rows, want at least the 3 customers`)
+      if (n < (all ? 4 : 3)) problems.push(`the list drew ${n} rows, want at least the ${all ? 4 : 3} customers`)
       ;(await fits(headSpans)).forEach((f, k) => { if (!f) problems.push(`header cell ${k} text sticks out of its cell`) })
       const rowRects: Rect[] = []
+      let pills = 0
       for (let i = 0; i < n; i++) {
         const row = rows.nth(i)
         const rowBox = await row.boundingBox()
@@ -1536,15 +1614,55 @@ test.describe('Customers screen and company fields', () => {
           if (c.x + c.width > rowBox.x + rowBox.width + 1) problems.push(`row ${i} cell ${k} sticks out of its row`)
           if (k > 0 && rectsOverlap(rowCells[k - 1], c)) problems.push(`row ${i} cells ${k - 1} and ${k} overlap`)
         })
-        if (!(await clips(rowSpans.nth(0).locator(':scope > span').last()))) problems.push(`row ${i} Customer name does not clip with an ellipsis`)
+        const nameCell = rowSpans.nth(0).locator(':scope > span')
+        if (!(await clips(nameCell.nth(1)))) problems.push(`row ${i} Customer name does not clip with an ellipsis`)
+        const archivedRow = (await row.innerText()).includes('ARCHIVED')
+        if ((await nameCell.count()) !== (archivedRow ? 3 : 2)) problems.push(`row ${i} Customer cell holds ${await nameCell.count()} spans, archived=${archivedRow}`)
+        if (archivedRow) {
+          pills++
+          const [avatar, name, pill] = await cells(nameCell)
+          if (!enclosesRect(rowCells[0], pill, 1)) problems.push(`row ${i} ARCHIVED pill sticks out of the Customer cell`)
+          if (rectsOverlap(avatar, pill) || rectsOverlap(name, pill)) problems.push(`row ${i} ARCHIVED pill overlaps the avatar or the name`)
+        }
         if (!(await clips(rowSpans.nth(1)))) problems.push(`row ${i} TIN does not clip with an ellipsis`)
+        // Only a 13-char TIN must fit 120px; the 27-char RN- TIN ellipsis-clips by design.
+        if ((await row.innerText()).includes(BUYER_TIN) && !(await fits(rowSpans.nth(1)))[0]) problems.push(`row ${i} TIN text sticks out of its cell`)
+        const actionCell = rowCells[6]
+        const button = await rowSpans.nth(6).locator('button').boundingBox()
+        if (!button || !actionCell || !enclosesRect(actionCell, button, 1)) problems.push(`row ${i} Action button leaves its cell`)
+        if (button && rects.card && !enclosesRect(rects.card, button, 1)) problems.push(`row ${i} Action button leaves the list card`)
+        if (armedTin && (await row.innerText()).includes(armedTin)) {
+          const line = await rowSpans.nth(6).locator('button + span').boundingBox()
+          const lineFits = (await fits(rowSpans.nth(6).locator('button + span')))[0]
+          if (!line || !button || !actionCell) problems.push(`row ${i} armed row lacks its button or line`)
+          else {
+            if (!enclosesRect(actionCell, line, 1) || !enclosesRect(rowBox, line, 1)) problems.push(`row ${i} archive line leaves the Action cell or the row`)
+            if (!enclosesRect(rowBox, button, 1)) problems.push(`row ${i} armed button leaves the row`)
+            if (!lineFits) problems.push(`row ${i} archive line is wider than its cell`)
+            rowCells.slice(0, 6).forEach((c, k) => { if (rectsOverlap(c, line) || rectsOverlap(c, button)) problems.push(`row ${i} armed button or line overlaps cell ${k}`) })
+          }
+        }
         ;(await fits(row.locator(':scope > span:nth-child(n+3)'))).forEach((f) => { if (!f) problems.push(`row ${i} fixed-track text sticks out of its cell`) })
       }
+      if (all && pills === 0) problems.push('All drew no ARCHIVED pill')
+      if (!all && pills > 0) problems.push('Active drew an ARCHIVED pill')
       for (let k = 1; k < headCells.length; k++) if (rectsOverlap(headCells[k - 1], headCells[k])) problems.push(`header cells ${k - 1} and ${k} overlap`)
       return { problems, rects: { ...rects, headCells, rowRects } }
-    })
+    }
+    const measured = await sweep(page, 'Customers list (Active)', columns(false), CUSTOMERS_WIDTHS)
+    // One click only arms; the reload leaves the record active.
+    await buyerRow(page, BUYER_TIN).getByRole('button', { name: 'Archive', exact: true }).click()
+    await expect(buyerRow(page, BUYER_TIN).getByRole('button', { name: 'Confirm archive', exact: true })).toBeVisible()
+    const measuredArmed = await sweep(page, 'Customers list (armed)', columns(false, BUYER_TIN), CUSTOMERS_WIDTHS)
+    await page.reload()
+    await expect(buyerRow(page, BUYER_TIN).getByRole('button', { name: 'Archive', exact: true }), 'the armed click changed the record').toBeVisible({ timeout: 20_000 })
+    await settle(page, main(page))
+    await page.getByRole('button', { name: 'All', exact: true }).click()
+    await expect(buyerRow(page, ARCHIVED_TIN), 'All does not list the archived customer').toBeVisible({ timeout: 20_000 })
+    await settle(page, main(page))
+    const measuredAll = await sweep(page, 'Customers list (All)', columns(true), CUSTOMERS_WIDTHS)
     await attachShot(page, testInfo, 'customers')
-    await attachJson(testInfo, 'st-17-measurements', measured)
+    await attachJson(testInfo, 'st-17-measurements', { active: measured, armed: measuredArmed, all: measuredAll })
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 
@@ -1555,11 +1673,11 @@ test.describe('Customers screen and company fields', () => {
     const viewport: Rect = { x: 0, y: 0, width: 1280, height: 900 }
     const reads: Record<string, unknown> = {}
 
-    async function saveStaysOnScreen(name: string): Promise<void> {
+    async function saveStaysOnScreen(name: string, submitLabel = 'Save changes'): Promise<void> {
       const dialog = page.getByRole('dialog', { name, exact: true })
       await expect(dialog, `${name} never opened`).toBeVisible()
       await settle(page, dialog)
-      const save = dialog.getByRole('button', { name: 'Save changes', exact: true })
+      const save = dialog.getByRole('button', { name: submitLabel, exact: true })
       const { rects, problems } = await boxes({ dialog, save })
       inside(rects, 'dialog', ['save'], problems)
       if (rects.dialog && !enclosesRect(viewport, rects.dialog, 1)) problems.push('the dialog leaves the viewport')
@@ -1582,6 +1700,9 @@ test.describe('Customers screen and company fields', () => {
     await signInAtFrontDoor(page, firm, '/customers')
     await buyerRow(page, BUYER_TIN).click()
     await saveStaysOnScreen('Edit customer')
+
+    await page.getByRole('button', { name: 'Add customer', exact: true }).click()
+    await saveStaysOnScreen('Add customer', 'Add customer')
 
     await attachJson(testInfo, 'st-18-measurements', reads)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

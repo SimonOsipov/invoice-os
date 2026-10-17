@@ -204,6 +204,14 @@ func main() {
 	app.Mux.Handle("OPTIONS /auth/invitation/resend", withCORS(inviteResend))
 	app.Mux.Handle("POST /contacts/demo-request", withCORS(reg.DemoRequest))
 	app.Mux.Handle("OPTIONS /contacts/demo-request", withCORS(reg.DemoRequest))
+	blogRead := blogHandlers(routed["notifications"], gatewayToken, app.Logger)
+	app.Mux.Handle("GET /blog/categories", withCORS(blogRead.Categories))
+	app.Mux.Handle("OPTIONS /blog/categories", withCORS(blogRead.Categories))
+	app.Mux.Handle("GET /blog/posts", withCORS(blogRead.Posts))
+	app.Mux.Handle("OPTIONS /blog/posts", withCORS(blogRead.Posts))
+	app.Mux.Handle("GET /blog/posts/{slug}", withCORS(blogRead.Post))
+	app.Mux.Handle("OPTIONS /blog/posts/{slug}", withCORS(blogRead.Post))
+	app.Mux.Handle("GET /blog/covers/{id}/{version}", blogRead.Cover)
 
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
@@ -363,6 +371,13 @@ func registrationHandlers(authURL, siteURL *url.URL, minResponse time.Duration, 
 		RequestPasswordReset: gateway.RequestPasswordResetHandler(authURL, client, minResponse, perAddress, perIP, enforce, log),
 		DemoRequest:          gateway.DemoRequestHandler(sink, demoPerIP, enforce, log),
 	}
+}
+
+// blogHandlers builds the public blog reads; the limit logs only on a PR fork, as the demo route does.
+func blogHandlers(notifications *url.URL, gatewayToken string, log *slog.Logger) gateway.BlogRoutes {
+	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	perIP := gateway.NewSignInThrottle("blog-read", gateway.BlogReadPerIP, gateway.BlogReadMaxKeys, gateway.BlogReadWindow, time.Now)
+	return gateway.BlogHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, perIP, enforce, log)
 }
 
 // resetPasswordHandler builds the reset-form handler; a nil authURL or siteURL makes it answer 503.

@@ -3,7 +3,7 @@
 // Layout claims assert a relationship; screenshots are attached for the reviewer and never asserted.
 // States the seed cannot reach are driven with page.route, each stub scoped to its own URL. No stub is a write.
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
-import { archiveCustomer, createCustomer, createEntity, createInvoice, listCustomers, login, PERSONAS, provisionRealAccount, signInSession, type RealAccount } from '../api/client'
+import { archiveCustomer, createCustomer, createEntity, createInvoice, grantMembership, listCustomers, login, me, PERSONAS, provisionRealAccount, registerFresh, signInSession, subjectOf, type RealAccount } from '../api/client'
 import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { signInAs, signInAtFrontDoor } from '../personaSession'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
@@ -1377,6 +1377,7 @@ test.describe('Customers screen and company fields', () => {
   }
   let firm: RealAccount
   let inhouse: RealAccount
+  let preparer: RealAccount
 
   async function seedTenant(account: RealAccount, name: string): Promise<string> {
     const token = (await signInSession(account.email, account.password)).access_token
@@ -1384,6 +1385,7 @@ test.describe('Customers screen and company fields', () => {
     const created = await createEntity(token, { name: `${name} ${tin}`, tin, ...(account === inhouse ? COMPANY_KEYS : {}) })
     if (account === firm) {
       firmEntityName = created.name
+      firmEntityId = created.id
       const base = { entity_id: created.id, ...cleanInvoiceFields('') }
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${BUYER_TIN}`, buyer_tin: BUYER_TIN, buyer_name: 'Buyer Ltd', buyer_email: 'before@buyer.example.com', invoice_kind: 'B2B' })
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${LONG_TIN}`, buyer_tin: LONG_TIN, buyer_name: LONG_NAME, buyer_email: LONG_EMAIL, invoice_kind: 'B2B' })
@@ -1400,6 +1402,7 @@ test.describe('Customers screen and company fields', () => {
   let firmToken = ''
   let inhouseToken = ''
   let firmEntityName = ''
+  let firmEntityId = ''
 
   test.beforeAll(async () => {
     test.setTimeout(120_000)
@@ -1407,6 +1410,11 @@ test.describe('Customers screen and company fields', () => {
     inhouse = await provisionRealAccount('buyers-inhouse', 'in_house')
     firmToken = await seedTenant(firm, 'ENGI-05 firm')
     inhouseToken = await seedTenant(inhouse, 'ENGI-05 company')
+    // A preparer of the firm's tenant (auth.spec.ts workspaceWithMember).
+    const member = await registerFresh('buyers-preparer')
+    const userId = subjectOf((await signInSession(member.email, member.password)).access_token)
+    await grantMembership({ user_id: userId, tenant_id: (await me(firmToken)).tenant.id, role: 'preparer', display_name: 'Customers E2E', email: member.email })
+    preparer = { ...member, workspaceName: firm.workspaceName, displayName: 'Customers E2E' }
   })
 
   const buyerRow = (page: Page, tin: string) => page.locator('.pf-list-row', { hasText: tin })
@@ -1467,6 +1475,67 @@ test.describe('Customers screen and company fields', () => {
       await expect(page.getByRole('heading', { name: 'Customers', exact: true }), `${persona} has no Customers heading`).toBeVisible()
       await expect(buyerRow(page, tin), `${persona}: the account's own customer is not listed`).toBeVisible({ timeout: 20_000 })
     }
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  // CustomersView.tsx ARCHIVE_NOTICE
+  const ARCHIVE_NOTICE = 'Leaves the Active list and the invoice prefill. Invoices that name it still save.'
+  // frontend/app/src/lib/buyerDirectory.ts DUPLICATE_TIN_ERROR
+  const DUPLICATE_TIN = 'A customer with this TIN already exists'
+
+  test('ST-21 a preparer adds, archives and restores a customer; a later invoice keeps the typed name', async ({ page }) => {
+    test.setTimeout(180_000)
+    const tin = freshBuyerTin()
+    const typed = `Typed ${tin}`
+    const errors = gatedErrors(page, [expectedStatusDropper(page, 409, /\/api\/invoice\/v1\/customers$/)])
+    await signInAtFrontDoor(page, preparer, '/customers')
+    await expect(page.getByRole('heading', { name: 'Customers', exact: true })).toBeVisible()
+    const addCustomer = async () => {
+      await page.getByRole('button', { name: 'Add customer', exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: 'Add customer', exact: true })
+      await expect(dialog).toBeVisible()
+      await dialog.getByLabel('TIN', { exact: true }).fill(tin)
+      return dialog
+    }
+
+    const dialog = await addCustomer()
+    await dialog.getByLabel('Name', { exact: true }).fill(typed)
+    await dialog.getByLabel('Email', { exact: true }).fill(`typed-${tin}@buyer.example.com`)
+    await dialog.getByRole('button', { name: 'Add customer', exact: true }).click()
+    await expect(dialog, 'the Add customer dialog never closed').toHaveCount(0)
+    await expect(buyerRow(page, tin), 'the added row does not show the typed name').toContainText(typed, { timeout: 20_000 })
+
+    const again = await addCustomer()
+    await again.getByRole('button', { name: 'Add customer', exact: true }).click()
+    await expect(again.getByText(DUPLICATE_TIN, { exact: true })).toBeVisible()
+    await again.getByRole('button', { name: 'Open customer', exact: true }).click()
+    const edit = page.getByRole('dialog', { name: 'Edit customer', exact: true })
+    await expect(edit).toBeVisible()
+    await expect(edit).toContainText(tin)
+    await edit.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(edit).toHaveCount(0)
+
+    await buyerRow(page, tin).getByRole('button', { name: 'Archive', exact: true }).click()
+    await expect(buyerRow(page, tin).getByText(ARCHIVE_NOTICE, { exact: true })).toBeVisible()
+    await buyerRow(page, tin).getByRole('button', { name: 'Confirm archive', exact: true }).click()
+    await expect(buyerRow(page, tin), 'the archived row stays on Active').toHaveCount(0, { timeout: 20_000 })
+    await page.getByRole('button', { name: 'Archived', exact: true }).click()
+    await expect(buyerRow(page, tin).getByText('ARCHIVED', { exact: true })).toBeVisible({ timeout: 20_000 })
+
+    await buyerRow(page, tin).getByRole('button', { name: 'Restore', exact: true }).click()
+    await buyerRow(page, tin).getByRole('button', { name: 'Confirm restore', exact: true }).click()
+    await expect(buyerRow(page, tin), 'the restored row stays on Archived').toHaveCount(0, { timeout: 20_000 })
+    await page.getByRole('button', { name: 'Active', exact: true }).click()
+    await expect(buyerRow(page, tin)).toBeVisible({ timeout: 20_000 })
+    await expect(buyerRow(page, tin).getByText('ARCHIVED', { exact: true })).toHaveCount(0)
+    expect((await listCustomers(firmToken, { tin })).customers[0]?.status, 'the API holds the restored status').toBe('active')
+
+    // CUST-01 AC 4: an invoice's buyer name never overwrites a typed one.
+    await createInvoice(firmToken, { entity_id: firmEntityId, ...cleanInvoiceFields(''), invoice_number: `INV-CUST03-${tin}`, buyer_tin: tin, buyer_name: 'Invoice Name', invoice_kind: 'B2B' })
+    await page.reload()
+    await expect(buyerRow(page, tin)).toContainText(typed, { timeout: 20_000 })
+    await expect(buyerRow(page, tin)).not.toContainText('Invoice Name')
+    expect((await listCustomers(firmToken, { tin })).customers[0]?.name, 'the API holds the typed name').toBe(typed)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 

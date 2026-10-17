@@ -161,7 +161,13 @@ export function CustomerFormModal({ mode, customer, ctx, base, onClose, onSucces
                     aria-label="TIN"
                     className="pf-input"
                     value={tin}
-                    onChange={(e) => setTin(e.target.value)}
+                    onChange={(e) => {
+                      setTin(e.target.value)
+                      if (duplicateTin != null) {
+                        setDuplicateTin(null)
+                        setTinError(null)
+                      }
+                    }}
                     disabled={submitting}
                     placeholder="########-####"
                     aria-describedby="customer-tin-hint"

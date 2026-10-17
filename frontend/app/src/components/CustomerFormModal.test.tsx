@@ -294,9 +294,19 @@ describe('CustomerFormModal create mode', () => {
   it('CFM-07 a double submit posts once', () => {
     const { authedFetch } = mountCreate(vi.fn().mockReturnValue(new Promise(() => {})))
     typeTin('RN-1')
-    const btn = screen.getByRole('button', { name: 'Add customer' })
-    fireEvent.click(btn)
-    fireEvent.click(btn)
+    const form = screen.getByRole('dialog').querySelector('form') as HTMLFormElement
+    fireEvent.submit(form)
+    fireEvent.submit(form)
     expect(authedFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('CFM-08 editing the TIN after a 409 clears the message and the Open customer offer', async () => {
+    mountCreate(vi.fn().mockRejectedValue(http(409, 'duplicate tin')))
+    typeTin('RN-7')
+    add()
+    expect(await screen.findByText('A customer with this TIN already exists')).toBeTruthy()
+    typeTin('RN-8')
+    expect(screen.queryByText('A customer with this TIN already exists')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Open customer' })).toBeNull()
   })
 })

@@ -157,6 +157,11 @@ test.describe('staff blog (API E2E, over the deployed gateway)', () => {
     expect(del.status, 'delete A with a target').toBe(200)
     expect(del.body).toEqual({ moved_posts: 1, move_to: catB.id })
     expect((await listPosts()).find((p) => p.id === movedPost)?.category_id, 'the post moved to B').toBe(catB.id)
+
+    const delPost = await send('DELETE', `/posts/${movedPost}`)
+    expect(delPost.status, 'delete the post').toBe(204)
+    expect((await listPosts()).map((p) => p.id), 'the deleted post is gone').not.toContain(movedPost)
+    assertErrorEnvelope(await send('DELETE', `/posts/${movedPost}`), 404, 'delete the post again')
   })
 
   test('staff blog: a post saves as a draft, refuses an incomplete publish, then publishes', async () => {

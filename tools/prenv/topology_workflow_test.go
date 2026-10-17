@@ -2,6 +2,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -17,12 +18,19 @@ func TestDevEnvTopologyStartsOnlyAfterAGreenE2E(t *testing.T) {
 			t.Errorf("topology if %q lacks %q", cond, want)
 		}
 	}
-	if strings.Contains(cond, "'failure'") {
-		t.Errorf("topology if %q must not start on a failed e2e", cond)
+	if n := strings.Count(cond, "needs.e2e.result"); n != 1 {
+		t.Errorf("topology if %q reads needs.e2e.result %d times, want once", cond, n)
+	}
+	if strings.Contains(cond, "||") {
+		t.Errorf("topology if %q must not widen the e2e condition with ||", cond)
 	}
 	needs, _ := jobKey(j, "needs")
-	if !strings.Contains(needs, "e2e") {
-		t.Errorf("topology needs %q lacks e2e", needs)
+	var ids []string
+	for _, id := range strings.Split(strings.Trim(needs, "[]"), ",") {
+		ids = append(ids, strings.TrimSpace(id))
+	}
+	if !slices.Contains(ids, "e2e") {
+		t.Errorf("topology needs %q lacks the job e2e", needs)
 	}
 }
 

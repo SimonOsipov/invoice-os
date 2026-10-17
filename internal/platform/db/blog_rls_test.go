@@ -816,7 +816,7 @@ func TestRLS_BlogMigrationDownLeavesNoObjectAndUpRestoresThem(t *testing.T) {
 	requireBlogTables(t)
 	requireBlogAuthors(t)
 	ctx := context.Background()
-	matches, err := fs.Glob(migrations.FS, "*_blog.sql")
+	matches, err := fs.Glob(migrations.FS, "[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_blog.sql")
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("blog migration files = %v, err = %v, want exactly 1", matches, err)
 	}

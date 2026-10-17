@@ -1443,8 +1443,9 @@ test.describe('Customers screen and company fields', () => {
 
       if (isFirm) {
         // Reports names its top customers from the same record.
-        await navButton(page, /^Reports/).click()
         await selectEntity(page, firmEntityName)
+        await navButton(page, /^Reports/).click()
+        await expect(page.getByRole('heading', { level: 1, name: 'Reports & analytics', exact: true })).toBeVisible()
         const topCard = page.locator('xpath=//span[contains(@class,"card-title") and normalize-space(text())="Top customers by value"]/ancestor::div[2]')
         await expect(topCard, 'Reports did not show the corrected Name').toContainText(fixedName, { timeout: 20_000 })
         await expect(topCard).not.toContainText('Buyer Ltd')

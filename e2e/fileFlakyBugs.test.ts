@@ -338,6 +338,8 @@ describe('stories', () => {
     const row = flaky({ titlePath: ['session', 'says "hi" \\ bye'], title: 'says "hi" \\ bye' })
     go({ runs: [run(100, [row])] })
     expect(readdirSync(bugDir)).toHaveLength(1)
+    const key = `${row.repoFile} › session › says "hi" \\ bye`
+    expect(read(bugDir, 'BUG-1 ').text.split('\n')).toContain(`flaky_key: ${JSON.stringify(key)}`)
     out.length = 0
     const { text } = go({ runs: [run(100, [row]), run(200, [row])] })
     expect(text).toContain('updated BUG-1 ')

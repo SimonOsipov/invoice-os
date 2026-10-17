@@ -8,6 +8,7 @@ import (
 )
 
 func TestDevEnvTopologyStartsOnlyAfterAGreenE2E(t *testing.T) {
+	t.Parallel()
 	j := devEnvJob(t, "topology")
 	cond, ok := jobKey(j, "if")
 	if !ok {
@@ -35,6 +36,7 @@ func TestDevEnvTopologyStartsOnlyAfterAGreenE2E(t *testing.T) {
 }
 
 func TestDevEnvTopologyKeepsSiblingShardsRunning(t *testing.T) {
+	t.Parallel()
 	block := strings.Join(blockLines(devEnvJob(t, "topology").lines, 4, "strategy"), "\n")
 	for _, want := range []string{"fail-fast: false", "shard: ${{ fromJSON(needs.e2e.outputs.shards) }}"} {
 		if !strings.Contains(block, want) {
@@ -47,6 +49,7 @@ func TestDevEnvTopologyKeepsSiblingShardsRunning(t *testing.T) {
 }
 
 func TestDevEnvTopologyReportStepsRunAfterAStoppedShard(t *testing.T) {
+	t.Parallel()
 	steps := devEnvJob(t, "topology").steps()
 	find := func(name string) workflowStep {
 		var got []workflowStep
@@ -71,6 +74,7 @@ func TestDevEnvTopologyReportStepsRunAfterAStoppedShard(t *testing.T) {
 }
 
 func TestDevEnvGateStillReadsTheE2EAndTopologyResults(t *testing.T) {
+	t.Parallel()
 	j := devEnvJob(t, "e2e-gate")
 	needs, _ := jobKey(j, "needs")
 	for _, want := range []string{"e2e", "topology"} {

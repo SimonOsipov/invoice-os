@@ -186,7 +186,7 @@ func TestCIGovulncheck_NoSetupGoFileFails(t *testing.T) {
 	if start < 0 || end < start {
 		t.Fatal("govulncheck job block not found")
 	}
-	job := mutateOnce(t, yml[start:end], "go-version-file: go.mod", "go-version: 1.26.9")
+	job := mutateOnce(t, yml[start:end], "go-version-file: go.mod", "go-version: "+"1.26.9")
 	requireProblem(t, yml[:start]+job+yml[end:], "go-version-file")
 }
 

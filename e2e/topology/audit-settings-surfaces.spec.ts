@@ -196,16 +196,17 @@ function insideX(rects: Record<string, Rect>, outer: string, names: string[], pr
   }
 }
 
-// Runs `read` at every WIDE_WIDTHS width, polling until it reports no problem; restores the entry viewport.
+// Runs `read` at every width (default WIDE_WIDTHS), polling until it reports no problem; restores the entry viewport.
 async function sweep(
   page: Page,
   label: string,
   read: () => Promise<{ problems: string[]; rects: Record<string, unknown> }>,
+  widths: readonly number[] = WIDE_WIDTHS,
 ): Promise<Record<string, unknown>[]> {
   const entry = page.viewportSize()
   const measured: Record<string, unknown>[] = []
   try {
-    for (const width of WIDE_WIDTHS) {
+    for (const width of widths) {
       await page.setViewportSize({ width, height: 900 })
       await expect.poll(async () => (await read()).problems, { message: `${label} at ${width}px`, timeout: 10_000 }).toEqual([])
       measured.push({ width, ...(await read()).rects })
@@ -1511,7 +1512,9 @@ test.describe('Customers screen and company fields', () => {
     await settle(page, main(page))
     const head = page.locator('.pf-list-head')
     const card = head.locator('xpath=..')
-    const columns = (all: boolean) => async () => {
+    // 1263 stands in for WIDE_WIDTHS' 1280 minus a 17px classic scrollbar (CUST-03 D30).
+    const CUSTOMERS_WIDTHS = [...WIDE_WIDTHS, 1263]
+    const columns = (all: boolean, armedTin?: string) => async () => {
       const cells = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } }))
       // Text fits its cell: the fixed tracks and the header never clip; the Customer and TIN cells clip with an ellipsis.
       const fits = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => el.scrollWidth <= el.clientWidth + 1))
@@ -1552,6 +1555,22 @@ test.describe('Customers screen and company fields', () => {
           if (rectsOverlap(avatar, pill) || rectsOverlap(name, pill)) problems.push(`row ${i} ARCHIVED pill overlaps the avatar or the name`)
         }
         if (!(await clips(rowSpans.nth(1)))) problems.push(`row ${i} TIN does not clip with an ellipsis`)
+        if (!(await fits(rowSpans.nth(1)))[0]) problems.push(`row ${i} TIN text sticks out of its cell`)
+        const actionCell = rowCells[6]
+        const button = await rowSpans.nth(6).locator('button').boundingBox()
+        if (!button || !actionCell || !enclosesRect(actionCell, button, 1)) problems.push(`row ${i} Action button leaves its cell`)
+        if (button && rects.card && !enclosesRect(rects.card, button, 1)) problems.push(`row ${i} Action button leaves the list card`)
+        if (armedTin && (await row.innerText()).includes(armedTin)) {
+          const line = await rowSpans.nth(6).locator('button + span').boundingBox()
+          const lineFits = (await fits(rowSpans.nth(6).locator('button + span')))[0]
+          if (!line || !button || !actionCell) problems.push(`row ${i} armed row lacks its button or line`)
+          else {
+            if (!enclosesRect(actionCell, line, 1) || !enclosesRect(rowBox, line, 1)) problems.push(`row ${i} archive line leaves the Action cell or the row`)
+            if (!enclosesRect(rowBox, button, 1)) problems.push(`row ${i} armed button leaves the row`)
+            if (!lineFits) problems.push(`row ${i} archive line is wider than its cell`)
+            rowCells.slice(0, 6).forEach((c, k) => { if (rectsOverlap(c, line) || rectsOverlap(c, button)) problems.push(`row ${i} armed button or line overlaps cell ${k}`) })
+          }
+        }
         ;(await fits(row.locator(':scope > span:nth-child(n+3)'))).forEach((f) => { if (!f) problems.push(`row ${i} fixed-track text sticks out of its cell`) })
       }
       if (all && pills === 0) problems.push('All drew no ARCHIVED pill')
@@ -1559,13 +1578,20 @@ test.describe('Customers screen and company fields', () => {
       for (let k = 1; k < headCells.length; k++) if (rectsOverlap(headCells[k - 1], headCells[k])) problems.push(`header cells ${k - 1} and ${k} overlap`)
       return { problems, rects: { ...rects, headCells, rowRects } }
     }
-    const measured = await sweep(page, 'Customers list (Active)', columns(false))
+    const measured = await sweep(page, 'Customers list (Active)', columns(false), CUSTOMERS_WIDTHS)
+    // One click only arms; the reload leaves the record active.
+    await buyerRow(page, BUYER_TIN).getByRole('button', { name: 'Archive', exact: true }).click()
+    await expect(buyerRow(page, BUYER_TIN).getByRole('button', { name: 'Confirm archive', exact: true })).toBeVisible()
+    const measuredArmed = await sweep(page, 'Customers list (armed)', columns(false, BUYER_TIN), CUSTOMERS_WIDTHS)
+    await page.reload()
+    await expect(buyerRow(page, BUYER_TIN).getByRole('button', { name: 'Archive', exact: true }), 'the armed click changed the record').toBeVisible({ timeout: 20_000 })
+    await settle(page, main(page))
     await page.getByRole('button', { name: 'All', exact: true }).click()
     await expect(buyerRow(page, ARCHIVED_TIN), 'All does not list the archived customer').toBeVisible({ timeout: 20_000 })
     await settle(page, main(page))
-    const measuredAll = await sweep(page, 'Customers list (All)', columns(true))
+    const measuredAll = await sweep(page, 'Customers list (All)', columns(true), CUSTOMERS_WIDTHS)
     await attachShot(page, testInfo, 'customers')
-    await attachJson(testInfo, 'st-17-measurements', { active: measured, all: measuredAll })
+    await attachJson(testInfo, 'st-17-measurements', { active: measured, armed: measuredArmed, all: measuredAll })
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 

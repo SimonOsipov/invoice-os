@@ -2,6 +2,7 @@ import { ApiError } from '@invoice-os/api-client'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  archiveCustomer,
   buyerFormFrom,
   createCustomer,
   emptyBuyerForm,
@@ -10,6 +11,7 @@ import {
   mapCorrectionError,
   mapCreateError,
   recordNamesByTin,
+  restoreCustomer,
   toCustomerCreateInput,
   toCustomerUpdateInput,
   updateCustomer,
@@ -142,6 +144,16 @@ describe('buyerDirectory create', () => {
       `${BASE}/api/invoice/v1/customers?limit=50&offset=0`,
       `${BASE}/api/invoice/v1/customers?limit=50&offset=0&status=active`,
       `${BASE}/api/invoice/v1/customers?limit=50&offset=0&tin=RN-1`,
+    ])
+  })
+
+  it('archiveCustomer and restoreCustomer post their routes', async () => {
+    const af = vi.fn().mockResolvedValue({})
+    await archiveCustomer(af, BASE, 'c1')
+    await restoreCustomer(af, BASE, 'c1')
+    expect(af.mock.calls).toEqual([
+      [`${BASE}/api/invoice/v1/customers/c1/archive`, { method: 'POST' }],
+      [`${BASE}/api/invoice/v1/customers/c1/restore`, { method: 'POST' }],
     ])
   })
 })

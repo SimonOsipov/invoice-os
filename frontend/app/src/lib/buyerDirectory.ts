@@ -50,6 +50,14 @@ export function createCustomer(authedFetch: AuthedFetch, base: string, input: Cu
   return authedFetch<Customer>(`${base}/api/invoice/v1/customers`, { method: 'POST', body: input })
 }
 
+export function archiveCustomer(authedFetch: AuthedFetch, base: string, id: string): Promise<Customer> {
+  return authedFetch<Customer>(`${base}/api/invoice/v1/customers/${id}/archive`, { method: 'POST' })
+}
+
+export function restoreCustomer(authedFetch: AuthedFetch, base: string, id: string): Promise<Customer> {
+  return authedFetch<Customer>(`${base}/api/invoice/v1/customers/${id}/restore`, { method: 'POST' })
+}
+
 // The directory's filing TIN pattern: 12 digits with a hyphen after the 8th, or RN-<digits>.
 export const FILEABLE_TIN = /^([0-9]{8}-[0-9]{4}|RN-[0-9]+)$/
 

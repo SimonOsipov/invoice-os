@@ -3,20 +3,21 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
-import { FILEABLE_TIN, listCustomers, type Customer, type CustomerListResponse } from '../lib/buyerDirectory'
+import { archiveCustomer, FILEABLE_TIN, listCustomers, restoreCustomer, type Customer, type CustomerListResponse } from '../lib/buyerDirectory'
 import { fmt } from '../lib/format'
 import { aggregateCustomers, customerName, initials } from '../lib/customers'
 import { fetchAllInvoices, type AllInvoices } from '../lib/invoices'
-import { entityStatusParam, entityStatusStyle, type EntityFilterPos } from '../lib/portfolio'
+import { archiveActionFor, entityStatusParam, entityStatusStyle, type ArchiveAction, type EntityFilterPos } from '../lib/portfolio'
 import { docGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 import { CustomerFormModal } from './CustomerFormModal'
 import { Pager } from './Pager'
 
 const PAGE_SIZE = 50
-const GRID_COLUMNS = 'minmax(160px, 1.6fr) 140px 70px 70px 140px 104px'
+const GRID_COLUMNS = 'minmax(160px, 1.6fr) 120px 70px 70px 140px 104px 140px'
+const ARCHIVE_NOTICE = 'Leaves the Active list and the invoice prefill. Invoices that name it still save.'
 const CELL: React.CSSProperties = { minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 
 const VALID_CHIP = { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'VALID' }
@@ -74,6 +75,39 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
     setPos(p)
     setOffset(0)
   }
+  const [armedId, setArmedId] = useState<string | null>(null)
+  const [archivingId, setArchivingId] = useState<string | null>(null)
+  const [archiveError, setArchiveError] = useState<{ id: string; message: string } | null>(null)
+
+  // A later page emptied by archive/restore (or an outside change) steps to the last page.
+  const recordsTotal = records.data?.pagination.total ?? 0
+  const recordsEmptyPage = records.data != null && records.data.customers.length === 0
+  useEffect(() => {
+    if (recordsEmptyPage && recordsTotal > 0 && offset > 0) setOffset(Math.floor((recordsTotal - 1) / PAGE_SIZE) * PAGE_SIZE)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [records.data])
+
+  async function handleArchiveClick(id: string, action: ArchiveAction) {
+    if (base == null || archivingId === id) return
+    if (!action.confirming) {
+      setArmedId(id)
+      setArchiveError(null)
+      return
+    }
+    setArchivingId(id)
+    try {
+      if (action.kind === 'offboard') await archiveCustomer(ctx.authedFetch, base, id)
+      else await restoreCustomer(ctx.authedFetch, base, id)
+      setArmedId(null)
+      setArchiveError(null)
+      records.run()
+    } catch (err) {
+      setArmedId(null)
+      setArchiveError({ id, message: err instanceof ApiError ? err.message : 'Something went wrong. Please try again.' })
+    } finally {
+      setArchivingId(null)
+    }
+  }
   const ready = !errored && !loading && records.data != null && invoices.data != null
 
   const byTin = useMemo(() => new Map(aggregateCustomers(invoices.data?.invoices ?? []).map((o) => [o.tin, o])), [invoices.data])
@@ -93,6 +127,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
       total: fmt(agg?.totalNum ?? 0),
       st: fileable ? VALID_CHIP : NEEDS_TIN_CHIP,
       archived: r.status === 'archived',
+      action: archiveActionFor(r, null, armedId === r.id),
     }
   })
 
@@ -166,6 +201,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
               <span className="label" style={{ textAlign: 'right' }}>Invoices</span>
               <span className="label" style={{ textAlign: 'right' }}>Total billed</span>
               <span className="label">Tax status</span>
+              <span className="label">Action</span>
             </div>
             {customers.map((c) => (
               <div key={c.id} onClick={() => setModal({ mode: 'edit', customer: c.record })} className="pf-row pf-list-row" style={{ display: 'grid', gridTemplateColumns: GRID_COLUMNS, gap: 14, padding: '13px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
@@ -186,6 +222,22 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
                   <span className="mono" style={chipStyle(c.st)}>
                     {c.st.label}
                   </span>
+                </span>
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
+                  <button
+                    type="button"
+                    onClick={(ev) => {
+                      ev.stopPropagation() // the row's own onClick opens the edit form
+                      void handleArchiveClick(c.id, c.action)
+                    }}
+                    disabled={archivingId === c.id}
+                    className="v2-btn v2-btn-ghost pf-btn"
+                    style={{ height: 30, padding: '0 12px', fontSize: 12.5, color: c.action.confirming ? 'var(--status-red-text)' : 'var(--fg-1)' }}
+                  >
+                    {c.action.label}
+                  </button>
+                  {c.action.confirming && c.action.kind === 'offboard' && <span style={{ fontSize: 11.5, lineHeight: 1.4, color: 'var(--fg-3)' }}>{ARCHIVE_NOTICE}</span>}
+                  {archiveError?.id === c.id && <span style={{ fontSize: 11.5, lineHeight: 1.4, color: 'var(--status-red-text)' }}>{archiveError.message}</span>}
                 </span>
               </div>
             ))}

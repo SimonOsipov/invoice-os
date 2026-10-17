@@ -558,9 +558,9 @@ interface ArchiveAction {
   confirming: boolean
   notice: string | null
 }
-type ArchiveActionForFn = (entity: Entity, activeEntityId: string | null, armed: boolean) => ArchiveAction
+type ArchiveActionForFn = (entity: Pick<Entity, 'id' | 'status'>, activeEntityId: string | null, armed: boolean) => ArchiveAction
 
-function archiveActionForUnderTest(entity: Entity, activeEntityId: string | null, armed: boolean): ArchiveAction {
+function archiveActionForUnderTest(entity: Pick<Entity, 'id' | 'status'>, activeEntityId: string | null, armed: boolean): ArchiveAction {
   const fn = portfolioNS.archiveActionFor as ArchiveActionForFn | undefined
   expect(fn, 'archiveActionFor is not exported by portfolio.ts yet').toBeDefined()
   return fn!(entity, activeEntityId, armed)
@@ -648,5 +648,16 @@ describe('archiveActionFor discloses the open-client consequence only when armed
   it('not armed, and a different entity than the open one -> notice is null', () => {
     const result = archiveActionForUnderTest(archivedEntity, activeEntity.id, false)
     expect(result.notice).toBeNull()
+  })
+})
+
+describe('archiveActionFor labels a customer record as it labels an entity', () => {
+  it('maps status and armed to the four labels with a null notice', () => {
+    const active = { id: 'c1', status: 'active' as const }
+    const archived = { id: 'c2', status: 'archived' as const }
+    expect(archiveActionForUnderTest(active, null, false)).toEqual({ label: 'Archive', kind: 'offboard', confirming: false, notice: null })
+    expect(archiveActionForUnderTest(active, null, true)).toEqual({ label: 'Confirm archive', kind: 'offboard', confirming: true, notice: null })
+    expect(archiveActionForUnderTest(archived, null, false)).toEqual({ label: 'Restore', kind: 'onboard', confirming: false, notice: null })
+    expect(archiveActionForUnderTest(archived, null, true)).toEqual({ label: 'Confirm restore', kind: 'onboard', confirming: true, notice: null })
   })
 })

@@ -90,12 +90,14 @@ function invoicesPage(invoices: InvoiceRecord[], total = invoices.length, offset
 type Handler = (url: string) => MockResponse | Promise<MockResponse>
 
 // Routes by method and path, never by call order: the screen fires both reads at mount.
-function mockApi(handlers: { customers?: Handler; invoices?: Handler; createCustomer?: Handler }) {
+function mockApi(handlers: { customers?: Handler; invoices?: Handler; createCustomer?: Handler; transition?: Handler }) {
   const fetchMock = vi.fn((url: string, init?: { method?: string }) => {
     const path = new URL(url).pathname
     const method = init?.method ?? 'GET'
     const h =
-      method === 'POST' && path.endsWith('/v1/customers')
+      method === 'POST' && /\/(archive|restore)$/.test(path)
+        ? handlers.transition
+        : method === 'POST' && path.endsWith('/v1/customers')
         ? handlers.createCustomer
         : method === 'GET' && path.endsWith('/v1/customers')
           ? handlers.customers
@@ -149,7 +151,7 @@ describe('CustomersView: no KPI card row', () => {
 })
 
 describe('CustomersView: the record list', () => {
-  it('CU-09 one row per record, keyed by id, six columns', async () => {
+  it('CU-09 one row per record, keyed by id, seven columns', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     mockApi({
       customers: () => recordsPage([record({ id: 'a', name: 'Alpha' }), record({ id: 'b', tin: '20000000-0002', name: null }), record({ id: 'c', tin: '20000000-0003', name: 'Alpha' })]),
@@ -159,8 +161,9 @@ describe('CustomersView: the record list', () => {
     await screen.findByText('Customer')
 
     const head = document.querySelector('.pf-list-head') as HTMLElement
-    expect(cells(head)).toEqual(['Customer', 'TIN', 'Type', 'Invoices', 'Total billed', 'Tax status'])
+    expect(cells(head)).toEqual(['Customer', 'TIN', 'Type', 'Invoices', 'Total billed', 'Tax status', 'Action'])
     expect(rows()).toHaveLength(3)
+    expect(Array.from(rows()).map((r) => r.children.length)).toEqual([7, 7, 7])
     expect(cells(rows()[0])[0]).toBe('AAlpha')
     expect(cells(rows()[1])[0], 'a nameless record reads a dash').toBe('——')
     expect(cells(rows()[2])[0], 'two records sharing a name render two rows').toBe('AAlpha')
@@ -510,6 +513,185 @@ describe('CustomersView: add', () => {
   })
 })
 
+const NOTICE = 'Leaves the Active list and the invoice prefill. Invoices that name it still save.'
+const posts = (fetchMock: ReturnType<typeof mockApi>['fetchMock']) => fetchMock.mock.calls.filter((c) => c[1]?.method === 'POST').map((c) => new URL(c[0] as string).pathname)
+
+describe('CustomersView: archive and restore', () => {
+  it('CU-34 Archive arms on the first click and posts archive on the second', async () => {
+    const { fetchMock } = mockApi({ customers: () => recordsPage([record({ id: 'A' })]), invoices: () => invoicesPage([]), transition: () => ok(record({ id: 'A', status: 'archived' })) })
+    render(<CustomersView ctx={ctxFor()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive' }))
+
+    const armed = screen.getByRole('button', { name: 'Confirm archive' })
+    expect(armed.style.color).toBe('var(--status-red-text)')
+    expect(posts(fetchMock)).toEqual([])
+    fireEvent.click(armed)
+    await waitFor(() => expect(posts(fetchMock)).toEqual(['/api/invoice/v1/customers/A/archive']))
+  })
+
+  it('CU-35 Restore on an archived row arms, then posts restore, never archive', async () => {
+    const { fetchMock } = mockApi({ customers: () => recordsPage([record({ id: 'B', status: 'archived' })]), invoices: () => invoicesPage([]), transition: () => ok(record({ id: 'B' })) })
+    render(<CustomersView ctx={ctxFor()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore' }))
+    expect(posts(fetchMock)).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm restore' }))
+    await waitFor(() => expect(posts(fetchMock)).toEqual(['/api/invoice/v1/customers/B/restore']))
+  })
+
+  it('CU-36 the action never opens the edit form', async () => {
+    mockApi({ customers: () => recordsPage([record({ id: 'A' })]), invoices: () => invoicesPage([]) })
+    render(<CustomersView ctx={ctxFor()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('CU-37a on success the records page refetches and the row leaves Active', async () => {
+    let archived = false
+    const { customerCalls, invoiceCalls } = mockApi({
+      customers: () => recordsPage(archived ? [record({ id: 'B', tin: '20000000-0002', name: 'Beta' })] : [record({ id: 'A' }), record({ id: 'B', tin: '20000000-0002', name: 'Beta' })]),
+      invoices: () => invoicesPage([]),
+      transition: () => {
+        archived = true
+        return ok(record({ id: 'A', status: 'archived' }))
+      },
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    const [recordsBefore, invoicesBefore] = [customerCalls().length, invoiceCalls().length]
+    fireEvent.click(screen.getAllByRole('button', { name: 'Archive' })[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }))
+
+    await waitFor(() => expect(screen.queryByText('Alpha Traders')).toBeNull())
+    expect(customerCalls().length).toBe(recordsBefore + 1)
+    expect(invoiceCalls().length, 'the invoice fetch does not rerun').toBe(invoicesBefore)
+    expect(screen.queryByText('redundant transition')).toBeNull()
+  })
+
+  it('CU-37b archiving the last row of a later page steps to the last page', async () => {
+    let archived = false
+    const { customerCalls } = mockApi({
+      customers: (url) => {
+        const off = Number(paramsOf(url).get('offset'))
+        if (off === 100) return archived ? recordsPage([], 100, 100) : recordsPage([record({ id: 'Z', name: 'Zed' })], 101, 100)
+        if (off === 50) return recordsPage([record({ id: 'Y50', tin: '20000000-0050', name: 'Yankee' })], archived ? 100 : 101, 50)
+        return recordsPage([record({ id: 'F' })], archived ? 100 : 101, 0)
+      },
+      invoices: () => invoicesPage([]),
+      transition: () => {
+        archived = true
+        return ok(record({ id: 'Z', status: 'archived' }))
+      },
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Next/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Next/ }))
+    await screen.findByText('Zed')
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }))
+
+    await screen.findByText('Yankee')
+    const last = customerCalls().at(-1)!
+    expect(paramsOf(last).get('offset')).toBe('50')
+    expect(screen.getByTestId('customers-pager')).toBeTruthy()
+  })
+
+  it('CU-37b boundary: offset 0 and total 0 shows the empty card and no further GET', async () => {
+    const { customerCalls } = mockApi({ customers: () => recordsPage([], 0, 0), invoices: () => invoicesPage([]) })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('No customers yet')
+    const before = customerCalls().length
+    await new Promise((r) => setTimeout(r, 30))
+    expect(customerCalls().length).toBe(before)
+  })
+
+  it('CU-37c restoring the last row of a later Archived page steps back', async () => {
+    let restored = false
+    const { customerCalls } = mockApi({
+      customers: (url) => {
+        const p = paramsOf(url)
+        if (p.get('status') === 'archived' && Number(p.get('offset')) === 50) return restored ? recordsPage([], 50, 50) : recordsPage([record({ id: 'Y', name: 'Yank', status: 'archived' })], 51, 50)
+        if (p.get('status') === 'archived') return recordsPage([record({ id: 'X', name: 'Xray', status: 'archived' })], restored ? 50 : 51, 0)
+        return recordsPage([record()])
+      },
+      invoices: () => invoicesPage([]),
+      transition: () => {
+        restored = true
+        return ok(record({ id: 'Y' }))
+      },
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Archived' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Next/ }))
+    await screen.findByText('Yank')
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm restore' }))
+
+    await screen.findByText('Xray')
+    const last = customerCalls().at(-1)!
+    expect(paramsOf(last).get('status')).toBe('archived')
+    expect(paramsOf(last).get('offset')).toBe('0')
+    expect(screen.queryByTestId('customers-pager')).toBeNull()
+  })
+
+  it('CU-37 a 409 shows the server message inline on that row only', async () => {
+    mockApi({
+      customers: () => recordsPage([record({ id: 'A' }), record({ id: 'B', tin: '20000000-0002', name: 'Beta' })]),
+      invoices: () => invoicesPage([]),
+      transition: () => ({ ok: false, status: 409, json: () => Promise.resolve({ error: 'redundant transition' }) }),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Archive' })[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }))
+
+    const msg = await screen.findByText('redundant transition')
+    expect(msg.style.color).toBe('var(--status-red-text)')
+    expect(screen.getAllByText('redundant transition')).toHaveLength(1)
+    expect(within(rows()[0] as HTMLElement).getByText('redundant transition')).toBe(msg)
+    expect(screen.getAllByRole('button', { name: 'Archive' })).toHaveLength(2)
+  })
+
+  it('CU-38 a fast double click on confirm posts once', async () => {
+    let release!: () => void
+    const { fetchMock } = mockApi({
+      customers: () => recordsPage([record({ id: 'A' })]),
+      invoices: () => invoicesPage([]),
+      transition: () => ok(record({ id: 'A', status: 'archived' })),
+    })
+    const routed = fetchMock.getMockImplementation()!
+    const gate = new Promise<void>((r) => (release = r))
+    fetchMock.mockImplementation(((url: string, init?: { method?: string }) => (init?.method === 'POST' ? gate.then(() => routed(url, init)) : routed(url, init))) as typeof routed)
+    render(<CustomersView ctx={ctxFor()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive' }))
+    const confirm = screen.getByRole('button', { name: 'Confirm archive' })
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+    release()
+    await waitFor(() => expect(posts(fetchMock)).toHaveLength(1))
+  })
+
+  it('CU-39 the armed archive says what archiving does; nothing else does', async () => {
+    mockApi({
+      customers: () => recordsPage([record({ id: 'A' }), record({ id: 'B', tin: '20000000-0002', name: 'Beta', status: 'archived' })]),
+      invoices: () => invoicesPage([]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    expect(screen.queryByText(NOTICE)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    const line = screen.getByText(NOTICE)
+    expect(line.style.fontSize).toBe('11.5px')
+    expect(line.style.color).toBe('var(--fg-3)')
+    expect(within(rows()[0] as HTMLElement).getByText(NOTICE)).toBe(line)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }))
+    expect(screen.getByRole('button', { name: 'Confirm restore' })).toBeTruthy()
+    expect(screen.queryByText(NOTICE)).toBeNull()
+  })
+})
+
 describe('CustomersView: the status chips', () => {
   const chip = (name: string) => screen.getByRole('button', { name })
 
@@ -716,7 +898,7 @@ describe('CustomersView: states', () => {
     expect(notice.style.marginBottom).toBe('16px')
     expect(notice.style.borderRadius).toBe('var(--radius-md)')
     const head = screen.getByText('Tax status').parentElement as HTMLElement
-    expect(head.style.gridTemplateColumns).toBe('minmax(160px, 1.6fr) 140px 70px 70px 140px 104px')
+    expect(head.style.gridTemplateColumns).toBe('minmax(160px, 1.6fr) 120px 70px 70px 140px 104px 140px')
     expect(head.style.padding).toBe('11px 18px')
   })
 

@@ -8,6 +8,8 @@ import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { resolveTarget } from '../targets'
 import { APP_URL, GATEWAY_URL } from './targets'
+test('FAST-01 probe: fails once, passes on retry', async ({}, ti) => { if (ti.retry === 0) throw new Error('probe: first attempt') })
+test('FAST-01 probe: real failure', async () => { throw new Error('probe: delete this commit') })
 
 test.use({ viewport: { width: 1440, height: 900 } })
 

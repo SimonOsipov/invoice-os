@@ -43,3 +43,9 @@ func StaffCtxForTest(t *testing.T, id auth.Identity) context.Context {
 	}
 	return ctx
 }
+
+// LedgerDriftForTest exposes ledgerDrift's verdict without exporting the helper.
+func LedgerDriftForTest(files, applied []int64) (missing, orphans []int64, stuck bool) {
+	missing, orphans = ledgerDrift(files, applied)
+	return missing, orphans, len(missing) > 0 || len(orphans) > 0
+}

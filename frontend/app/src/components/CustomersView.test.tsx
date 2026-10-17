@@ -426,6 +426,7 @@ describe('CustomersView: add', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Edit customer' })
     expect(within(dialog).getByText('RN-77')).toBeTruthy()
+    expect((within(dialog).getByLabelText('Name') as HTMLInputElement).value, 'the edit form is filled from the held record').toBe('Held Co')
     expect(screen.queryByRole('dialog', { name: 'Add customer' })).toBeNull()
     expect(lookups).toHaveLength(1)
     const q = paramsOf(lookups[0])

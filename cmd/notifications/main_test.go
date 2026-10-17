@@ -908,21 +908,32 @@ func TestNotificationsMain_RegistersTheBlogRoutes(t *testing.T) {
 			return true
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "HandleFunc" || len(call.Args) < 2 {
+		if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") || len(call.Args) < 2 {
 			return true
 		}
+		// A blog handler outside the table sits outside the /v1/staff class: no staff check guards it.
+		mentionsBlog := false
+		ast.Inspect(call.Args[1], func(m ast.Node) bool {
+			if id, ok := m.(*ast.Ident); ok && (id.Name == "blog" || id.Name == "blogStore") {
+				mentionsBlog = true
+			}
+			return true
+		})
 		lit, ok := call.Args[0].(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
+			if mentionsBlog {
+				t.Errorf("a blog handler is registered under a non-literal pattern at %d", call.Pos())
+			}
 			return true
 		}
 		scanned++
-		pattern := strings.Trim(lit.Value, `"`)
+		pattern := strings.Trim(lit.Value, "\"`")
 		if pattern == "GET /v1/contacts/me" {
 			control = true
 		}
 		exp, ok := want[pattern]
 		if !ok {
-			if strings.Contains(pattern, "/v1/staff/blog") {
+			if strings.Contains(pattern, "/v1/staff/blog") || mentionsBlog {
 				t.Errorf("%q is registered; it is not a route of the blog Route wiring table", pattern)
 			}
 			return true

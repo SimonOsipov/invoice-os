@@ -214,6 +214,16 @@ describe('sourcedConsoleError', () => {
     expect(sourcedConsoleError(T401, '', ['404 GET https://gw.test/a'])).toContain('401 responses: none seen')
   })
 
+  it('prints origin and path only, for the location url and the listed responses', () => {
+    const out = sourcedConsoleError(T401, 'https://gw.test/auth/v1/verify?token=eyJabc.def.ghi#x=eyJabc.def.ghi', [
+      '401 GET https://gw.test/auth/v1/verify?token=eyJabc.def.ghi',
+    ])
+    expect(out).toContain('url: https://gw.test/auth/v1/verify;')
+    expect(out).toContain('401 GET https://gw.test/auth/v1/verify]')
+    expect(out).not.toContain('token')
+    expect(out).not.toContain('eyJ')
+  })
+
   it('leaves a text with no url and no status unchanged', () => {
     expect(sourcedConsoleError('Uncaught TypeError: x', '', [])).toBe('Uncaught TypeError: x')
   })
@@ -267,6 +277,26 @@ describe('collectSourcedErrors', () => {
     f.consoleMsg('error', T401)
     f.response(404, 'https://gw.test/a')
     expect(f.errors[0]).toContain('none seen')
+  })
+
+  it('does not list a response that arrived after the entry console line', () => {
+    const f = fake()
+    f.response(401, 'https://gw.test/v1/me')
+    f.consoleMsg('error', T401)
+    f.response(401, 'https://gw.test/auth/sign-out')
+    f.consoleMsg('error', T401)
+    expect(f.errors[0]).toContain('https://gw.test/v1/me')
+    expect(f.errors[0]).not.toContain('/auth/sign-out')
+    expect(f.errors[1]).toContain('https://gw.test/auth/sign-out')
+  })
+
+  it('fills a none-seen entry once, not with responses after the first', () => {
+    const f = fake()
+    f.consoleMsg('error', T401)
+    f.response(401, 'https://gw.test/v1/me')
+    f.response(401, 'https://gw.test/auth/sign-out')
+    expect(f.errors[0]).toContain('https://gw.test/v1/me')
+    expect(f.errors[0]).not.toContain('/auth/sign-out')
   })
 
   it('returns an empty array when nothing errs', () => {

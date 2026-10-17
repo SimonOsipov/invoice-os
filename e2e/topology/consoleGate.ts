@@ -67,36 +67,55 @@ export function notFoundIdDropper(page: Page, ids: string[]): Dropper {
   return expected404Dropper(page, new RegExp(`/api/invoice/v1/invoices/(?:${alternation})(?:[/?]|$)`))
 }
 
+// Origin and path only: a URL's query or fragment can carry a token, and these strings reach CI logs.
+function originAndPath(url: string): string {
+  return url.replace(/[?#].*$/, '').replace(/eyJ[\w.-]*/g, '<jwt>')
+}
+
 // Names the source of a console error: the message's location url plus, for a
 // `status of NNN` line, the recorded non-2xx responses of that status ("<status> <METHOD> <url>").
 export function sourcedConsoleError(text: string, locationUrl: string, failed: string[]): string {
   const parts: string[] = []
-  if (locationUrl !== '') parts.push(`url: ${locationUrl}`)
+  if (locationUrl !== '') parts.push(`url: ${originAndPath(locationUrl)}`)
   const status = /status of (\d{3})/.exec(text)?.[1]
   if (status) {
-    const seen = failed.filter((f) => f.startsWith(`${status} `))
+    const seen = failed
+      .filter((f) => f.startsWith(`${status} `))
+      .map((f) => {
+        const at = f.lastIndexOf(' ')
+        return f.slice(0, at + 1) + originAndPath(f.slice(at + 1))
+      })
     parts.push(`${status} responses: ${seen.length > 0 ? seen.join(', ') : 'none seen'}`)
   }
   return parts.length > 0 ? `${text} [${parts.join('; ')}]` : text
 }
 
-// Console/pageerror collector whose console errors carry their source. A response can land
-// after its console line, so each failing response rebuilds the stored entries.
+// Console/pageerror collector whose console errors carry their source. An entry lists the
+// responses of its status seen up to its console line; a later response only fills an
+// entry of that status that still reads `none seen`.
 export function collectSourcedErrors(page: Page, extra?: Dropper): string[] {
   const errors: string[] = []
   const failed: string[] = []
-  const consoleEntries: { index: number; text: string; url: string }[] = []
+  const unfilled: { index: number; status: string; text: string; url: string }[] = []
   page.on('response', (res) => {
     if (res.status() < 400) return
     failed.push(`${res.status()} ${res.request().method()} ${res.url()}`)
-    for (const e of consoleEntries) errors[e.index] = sourcedConsoleError(e.text, e.url, failed)
+    for (let i = unfilled.length - 1; i >= 0; i--) {
+      const e = unfilled[i]
+      if (e.status !== String(res.status())) continue
+      errors[e.index] = sourcedConsoleError(e.text, e.url, failed)
+      unfilled.splice(i, 1)
+    }
   })
   page.on('console', (msg) => {
     if (msg.type() !== 'error') return
     const text = msg.text()
     const url = msg.location().url
     if (extra?.(text, url)) return
-    consoleEntries.push({ index: errors.length, text, url })
+    const status = /status of (\d{3})/.exec(text)?.[1]
+    if (status && !failed.some((f) => f.startsWith(`${status} `))) {
+      unfilled.push({ index: errors.length, status, text, url })
+    }
     errors.push(sourcedConsoleError(text, url, failed))
   })
   page.on('pageerror', (err) => {

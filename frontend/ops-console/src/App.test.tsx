@@ -38,6 +38,7 @@ describe('App', () => {
   afterEach(() => vi.unstubAllEnvs())
 
   it('App_wrapsTheConsoleInTheSharedStaffGate', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://land.example/')
     const el = renderApp()
 
     expect(el.type).toBe(StaffGate)
@@ -58,14 +59,22 @@ describe('App', () => {
     expect(set.props.landing).toBe('https://land.example')
 
     vi.stubEnv('VITE_GATEWAY_URL', '')
-    vi.stubEnv('VITE_LANDING_URL', '')
     const unset = renderApp()
     expect(unset.type).toBe(StaffGate)
     expect(unset.props.gateway).toBeNull()
-    expect(unset.props.landing).toBeNull()
+    expect(unset.props.landing).toBe('https://land.example')
+  })
+
+  it('the console renders nothing without a landing URL', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://land.example/')
+    expect(renderToStaticMarkup(<App />)).toContain('asc-app')
+
+    vi.stubEnv('VITE_LANDING_URL', '')
+    expect(renderToStaticMarkup(<App />)).toBe('')
   })
 
   it('App_rendersTheSameConsoleWhenTheGateOpens', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://land.example/')
     // React hoists the logo preload <link> ahead of the root.
     const html = renderToStaticMarkup(<App />).replace(/^(<link[^>]*>)+/, '').replaceAll('&amp;', '&')
 

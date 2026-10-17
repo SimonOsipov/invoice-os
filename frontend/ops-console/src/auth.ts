@@ -18,3 +18,5 @@ export const landingBase = (): string | null => {
 }
 
 export const signOut = () => signOutConsole({ storageKey: SESSION_KEY, gateway: gatewayBase(), landing: landingBase() })
+
+export const expireSession = (): void => undefined

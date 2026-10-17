@@ -16,6 +16,10 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	dbsql "github.com/SimonOsipov/invoice-os/db"
 	db "github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -131,5 +135,156 @@ func TestSeedConcurrentInvocationIsSafeWithoutALock(t *testing.T) {
 		if err != nil {
 			t.Errorf("concurrent Seed call returned an error — expected ON CONFLICT to make this always safe with no lock: %v", err)
 		}
+	}
+}
+
+type seedPostState struct {
+	id, status         string
+	authorID, authorNm *string
+	updatedAt          time.Time
+}
+
+const seedHouseTenant = "a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0"
+
+func readSeedPosts(t *testing.T, pool *pgxpool.Pool) map[string]seedPostState {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT id, status, author_id::text, author_name, updated_at FROM public.blog_posts WHERE id = ANY($1)`, blogSeedIDs())
+	if err != nil {
+		t.Fatalf("read seeded posts: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]seedPostState{}
+	for rows.Next() {
+		var p seedPostState
+		if err := rows.Scan(&p.id, &p.status, &p.authorID, &p.authorNm, &p.updatedAt); err != nil {
+			t.Fatalf("scan seeded post: %v", err)
+		}
+		got[p.id] = p
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read seeded posts: %v", err)
+	}
+	return got
+}
+
+// guardBlogSeedRows snapshots the 20 seeded posts and the seed author's membership, and restores them at cleanup.
+func guardBlogSeedRows(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	before := readSeedPosts(t, pool)
+	if len(before) != len(blogSeedPosts) {
+		t.Fatalf("seeded posts found = %d, want %d: the seed migration is not applied", len(before), len(blogSeedPosts))
+	}
+	var role, name, email, status string
+	err := pool.QueryRow(ctx, `SELECT role, coalesce(display_name, ''), coalesce(email, ''), status FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		seedHouseTenant, blogSeedUser).Scan(&role, &name, &email, &status)
+	hadMember := err == nil
+	if err != nil && err != pgx.ErrNoRows {
+		t.Fatalf("read the seed author membership: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, p := range before {
+			if _, err := pool.Exec(ctx, `UPDATE public.blog_posts SET status = $2, author_id = $3::uuid, author_name = $4, updated_at = $5 WHERE id = $1`,
+				p.id, p.status, p.authorID, p.authorNm, p.updatedAt); err != nil {
+				t.Errorf("restore post %s: %v", p.id, err)
+			}
+		}
+		if !hadMember {
+			if _, err := pool.Exec(ctx, `DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, seedHouseTenant, blogSeedUser); err != nil {
+				t.Errorf("remove the seed author membership: %v", err)
+			}
+			return
+		}
+		if _, err := pool.Exec(ctx, `UPDATE memberships SET role = $3, display_name = $4, email = $5, status = $6 WHERE tenant_id = $1 AND user_id = $2`,
+			seedHouseTenant, blogSeedUser, role, name, email, status); err != nil {
+			t.Errorf("restore the seed author membership: %v", err)
+		}
+	})
+}
+
+func TestSeedBlogPostsArePublishedWithTheSeedAuthor(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	guardBlogSeedRows(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	posts := readSeedPosts(t, pool)
+	if len(posts) != len(blogSeedPosts) {
+		t.Fatalf("seeded posts found = %d, want %d", len(posts), len(blogSeedPosts))
+	}
+	for id, p := range posts {
+		if p.status != "published" || p.authorID == nil || *p.authorID != blogSeedUser || p.authorNm == nil || *p.authorNm != blogSeedName {
+			t.Errorf("post %s after Seed: status %q author_id %v author_name %v, want published %s %q", id, p.status, p.authorID, p.authorNm, blogSeedUser, blogSeedName)
+		}
+	}
+
+	var role, name, email, status string
+	if err := pool.QueryRow(ctx, `SELECT role, display_name, email, status FROM memberships WHERE tenant_id = $1 AND user_id = $2`,
+		seedHouseTenant, blogSeedUser).Scan(&role, &name, &email, &status); err != nil {
+		t.Fatalf("read the seed author membership: %v", err)
+	}
+	if role != "reviewer" || name != blogSeedName || email != "blog-seed@ascomply.invalid" || status != "active" {
+		t.Errorf("seed author membership = %s %q %q %s, want reviewer %q blog-seed@ascomply.invalid active", role, name, email, status, blogSeedName)
+	}
+	var house string
+	if err := pool.QueryRow(ctx, `SELECT tenant_id::text FROM public.house_company`).Scan(&house); err != nil {
+		t.Fatalf("read the house row: %v", err)
+	}
+	if house != seedHouseTenant {
+		t.Logf("house tenant is %s, not the dev tenant: is_house_member not asserted", house)
+		return
+	}
+	var isHouse bool
+	if err := pool.QueryRow(ctx, `SELECT public.is_house_member($1::uuid)`, blogSeedUser).Scan(&isHouse); err != nil {
+		t.Fatalf("call is_house_member: %v", err)
+	}
+	if !isHouse {
+		t.Error("is_house_member(seed author) = false, want true")
+	}
+}
+
+func TestSeedBlogKeepsAStaffUnpublishedPost(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	guardBlogSeedRows(t, pool)
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("first Seed: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE public.blog_posts SET status = 'draft' WHERE id = 'what-changes'`); err != nil {
+		t.Fatalf("set what-changes back to draft: %v", err)
+	}
+	before := readSeedPosts(t, pool)
+	published := 0
+	for id, p := range before {
+		if id != "what-changes" && p.status == "published" {
+			published++
+		}
+	}
+	if published != len(blogSeedPosts)-1 {
+		t.Fatalf("published seeded posts after the first Seed = %d, want %d", published, len(blogSeedPosts)-1)
+	}
+	if wc := before["what-changes"]; wc.status != "draft" || wc.authorID == nil || *wc.authorID != blogSeedUser {
+		t.Fatalf("what-changes before the second Seed = %+v, want a draft that keeps its author", wc)
+	}
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("second Seed: %v", err)
+	}
+	after := readSeedPosts(t, pool)
+	for id, want := range before {
+		got := after[id]
+		if got.status != want.status || !got.updatedAt.Equal(want.updatedAt) || (got.authorID == nil) != (want.authorID == nil) ||
+			(got.authorID != nil && *got.authorID != *want.authorID) {
+			t.Errorf("post %s changed on the second Seed: before %+v, after %+v", id, want, got)
+		}
+	}
+	if after["what-changes"].status != "draft" {
+		t.Errorf("what-changes after the second Seed = %q, want draft", after["what-changes"].status)
 	}
 }

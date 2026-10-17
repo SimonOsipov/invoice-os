@@ -450,6 +450,40 @@ describe('CustomersView: add', () => {
     }
   })
 
+  it('CU-28 Open customer on an archived record selects Archived', async () => {
+    const { customerCalls } = await openWith409()
+    const listCalls = () => customerCalls().filter((u) => !paramsOf(u).get('tin'))
+    expect(paramsOf(listCalls()[0]).get('status')).toBe('active')
+    fireEvent.click(await screen.findByRole('button', { name: 'Open customer' }))
+
+    await screen.findByRole('dialog', { name: 'Edit customer' })
+    await waitFor(() => expect(listCalls()).toHaveLength(2))
+    const q = paramsOf(listCalls()[1])
+    expect([q.get('status'), q.get('offset')]).toEqual(['archived', '0'])
+    expect(screen.getByRole('button', { name: 'Archived' }).style.background).toBe('var(--action)')
+  })
+
+  it('CU-26b a create on the Archived chip selects Active', async () => {
+    const { customerCalls } = mockApi({
+      customers: () => recordsPage([record()]),
+      invoices: () => invoicesPage([]),
+      createCustomer: () => ({ ok: true, status: 201, json: () => Promise.resolve(record({ id: 'n', tin: 'RN-5' })) }),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    fireEvent.click(screen.getByRole('button', { name: 'Archived' }))
+    await waitFor(() => expect(customerCalls()).toHaveLength(2))
+
+    fireEvent.click(addButton())
+    fireEvent.change(screen.getByRole('textbox', { name: 'TIN' }), { target: { value: 'RN-5' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add customer' }))
+
+    await waitFor(() => expect(customerCalls()).toHaveLength(3))
+    const q = paramsOf(customerCalls()[2])
+    expect([q.get('status'), q.get('offset')]).toEqual(['active', '0'])
+    expect(screen.getByRole('button', { name: 'Active' }).style.background).toBe('var(--action)')
+  })
+
   it('CU-29 a saved customer refetches the records page and closes the form', async () => {
     const created = record({ id: 'n', tin: 'RN-5', name: 'New Co' })
     let saved = false
@@ -473,6 +507,123 @@ describe('CustomersView: add', () => {
     expect(await screen.findByText('New Co')).toBeTruthy()
     expect(customerCalls().length).toBe(recordsBefore + 1)
     expect(invoiceCalls().length, 'the invoice fetch does not rerun').toBe(invoicesBefore)
+  })
+})
+
+describe('CustomersView: the status chips', () => {
+  const chip = (name: string) => screen.getByRole('button', { name })
+
+  it('CU-30 Active is the default and the first request carries status=active', async () => {
+    const { customerCalls } = mockApi({ customers: () => recordsPage([record()]), invoices: () => invoicesPage([]) })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+
+    expect(chip('Active').style.background).toBe('var(--action)')
+    expect(chip('All').style.background).not.toBe('var(--action)')
+    expect(chip('Archived').style.background).not.toBe('var(--action)')
+    expect(paramsOf(customerCalls()[0]).get('status')).toBe('active')
+  })
+
+  it('CU-31 each chip requests its own status and resets the page', async () => {
+    const { customerCalls } = mockApi({
+      customers: (url) => recordsPage([record()], 51, Number(paramsOf(url).get('offset'))),
+      invoices: () => invoicesPage([]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Next/ }))
+    await waitFor(() => expect(customerCalls()).toHaveLength(2))
+    expect(paramsOf(customerCalls()[1]).get('offset')).toBe('50')
+
+    fireEvent.click(chip('Archived'))
+    await waitFor(() => expect(customerCalls()).toHaveLength(3))
+    expect([paramsOf(customerCalls()[2]).get('status'), paramsOf(customerCalls()[2]).get('offset')]).toEqual(['archived', '0'])
+
+    fireEvent.click(chip('All'))
+    await waitFor(() => expect(customerCalls()).toHaveLength(4))
+    expect([paramsOf(customerCalls()[3]).has('status'), paramsOf(customerCalls()[3]).get('offset')]).toEqual([false, '0'])
+  })
+
+  it('CU-32 an archived row says ARCHIVED, an active row says nothing', async () => {
+    mockApi({
+      customers: () => recordsPage([record({ id: 'a', name: 'Active Co' }), record({ id: 'b', tin: '20000000-0002', name: 'Old Co', status: 'archived' })]),
+      invoices: () => invoicesPage([]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Old Co')
+    fireEvent.click(chip('All'))
+    await waitFor(() => expect(screen.queryByText('Loading customers…')).toBeNull())
+
+    const [a, b] = Array.from(rows()).map((r) => r.children[0] as HTMLElement)
+    const pill = within(b).getByText('ARCHIVED', { exact: true })
+    expect(pill.style.color).toBe('var(--status-muted-text)')
+    expect(pill.style.borderRadius).toBe('var(--radius-sm)')
+    expect(pill.parentElement).toBe(b)
+    expect(within(a).queryByText('ARCHIVED')).toBeNull()
+    expect(screen.queryByText('ACTIVE')).toBeNull()
+  })
+
+  const probeCalls = (urls: string[]) => urls.filter((u) => paramsOf(u).get('limit') === '1' && paramsOf(u).get('status') === 'archived')
+
+  it('CU-33a Archived with no rows shows the filter copy; All with none shows No customers yet', async () => {
+    const { customerCalls } = mockApi({
+      customers: (url) => (paramsOf(url).get('status') === 'active' ? recordsPage([record()]) : recordsPage([])),
+      invoices: () => invoicesPage([]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+
+    fireEvent.click(chip('Archived'))
+    expect(await screen.findByText('No customers match this filter')).toBeTruthy()
+    expect(screen.getByText('Try a different status filter.')).toBeTruthy()
+    expect(screen.queryByText('No customers yet')).toBeNull()
+
+    fireEvent.click(chip('All'))
+    expect(await screen.findByText('No customers yet')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'New invoice' })).toBeTruthy()
+    expect(probeCalls(customerCalls()), 'no probe on Archived or All').toHaveLength(0)
+  })
+
+  it('CU-33b Active empty with archived records says No active customers', async () => {
+    const { customerCalls } = mockApi({
+      customers: (url) => (paramsOf(url).get('status') === 'archived' ? recordsPage([record({ status: 'archived' })], 1) : recordsPage([])),
+      invoices: () => invoicesPage([]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+
+    expect(await screen.findByText('No active customers')).toBeTruthy()
+    expect(screen.getByText('Archived customers are under the Archived filter.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'New invoice' })).toBeTruthy()
+    expect(screen.queryByText('No customers yet')).toBeNull()
+    const probe = probeCalls(customerCalls())
+    expect(probe).toHaveLength(1)
+    expect(paramsOf(probe[0]).get('offset')).toBe('0')
+  })
+
+  it("CU-33c a failed probe falls back to CUST-02's card", async () => {
+    mockApi({
+      customers: (url) => (paramsOf(url).get('status') === 'archived' ? down : recordsPage([])),
+      invoices: () => invoicesPage([]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+
+    expect(await screen.findByText('No customers yet')).toBeTruthy()
+    expect(screen.getByText('Customers are added when you save an invoice with a buyer TIN.')).toBeTruthy()
+    expect(screen.queryByText('Something went wrong')).toBeNull()
+    expect(screen.queryByText('No active customers')).toBeNull()
+  })
+
+  it('CU-33d the probe runs only on an empty Active page (boundary)', async () => {
+    const { customerCalls } = mockApi({ customers: () => recordsPage([record()]), invoices: () => invoicesPage([]) })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    expect(probeCalls(customerCalls())).toHaveLength(0)
+    cleanup()
+
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    const { fetchMock } = mockApi({})
+    render(<CustomersView ctx={ctxFor()} />)
+    expect(screen.getByText('No customers yet')).toBeTruthy()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

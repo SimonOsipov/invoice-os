@@ -350,8 +350,7 @@ test('PW-03 Customers at 1440: heading, table, tax chip, avatar', async ({ page 
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
-// Header cluster button names; CUST-03-02 adds the chips.
-const CUSTOMERS_HEADER_BUTTONS = ['Add customer']
+const CUSTOMERS_HEADER_BUTTONS = ['All', 'Active', 'Archived', 'Add customer']
 
 test('PW-11 Customers header row fits at every wide width', async ({ page }, testInfo) => {
   const errors = collectErrors(page)

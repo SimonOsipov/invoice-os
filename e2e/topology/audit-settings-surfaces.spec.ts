@@ -3,7 +3,7 @@
 // Layout claims assert a relationship; screenshots are attached for the reviewer and never asserted.
 // States the seed cannot reach are driven with page.route, each stub scoped to its own URL. No stub is a write.
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
-import { createEntity, createInvoice, listCustomers, login, PERSONAS, provisionRealAccount, signInSession, type RealAccount } from '../api/client'
+import { archiveCustomer, createCustomer, createEntity, createInvoice, listCustomers, login, PERSONAS, provisionRealAccount, signInSession, type RealAccount } from '../api/client'
 import { freshBuyerTin, freshTin } from '../api/fixtures'
 import { signInAs, signInAtFrontDoor } from '../personaSession'
 import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
@@ -1361,6 +1361,7 @@ test.describe('Customers screen and company fields', () => {
   const LONG_TIN = freshBuyerTin()
   const INHOUSE_TIN = freshBuyerTin()
   const RN_TIN = `RN-${'7'.repeat(24)}`
+  const ARCHIVED_TIN = freshBuyerTin()
   const LONG_NAME = `Long ${'N'.repeat(115)}`
   const LONG_EMAIL = `${'e'.repeat(108)}@example.com`
   const COMPANY_KEYS = {
@@ -1386,6 +1387,8 @@ test.describe('Customers screen and company fields', () => {
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${BUYER_TIN}`, buyer_tin: BUYER_TIN, buyer_name: 'Buyer Ltd', buyer_email: 'before@buyer.example.com', invoice_kind: 'B2B' })
       await createInvoice(token, { ...base, invoice_number: `INV-ENGI05-${LONG_TIN}`, buyer_tin: LONG_TIN, buyer_name: LONG_NAME, buyer_email: LONG_EMAIL, invoice_kind: 'B2B' })
       await createInvoice(token, { ...base, invoice_number: `INV-CUST02-${RN_TIN.slice(3, 11)}`, buyer_tin: RN_TIN, buyer_name: 'RN Buyer', invoice_kind: 'B2B' })
+      const archived = await createCustomer(token, { tin: ARCHIVED_TIN, name: `Archived ${'A'.repeat(111)}` })
+      await archiveCustomer(token, archived.id)
     }
     else {
       await createInvoice(token, { entity_id: created.id, ...cleanInvoiceFields(''), invoice_number: `INV-CUST02-${INHOUSE_TIN}`, buyer_tin: INHOUSE_TIN, buyer_name: 'Buyer Ltd', buyer_email: 'before@buyer.example.com', invoice_kind: 'B2B' })
@@ -1504,10 +1507,11 @@ test.describe('Customers screen and company fields', () => {
     const rnRow = buyerRow(page, RN_TIN)
     await expect(rnRow, 'the RN- customer is not listed').toBeVisible()
     await expect(rnRow.getByText('VALID', { exact: true }), 'an RN- TIN reads exactly VALID').toBeVisible()
+    await expect(buyerRow(page, ARCHIVED_TIN), 'Active lists an archived customer').toHaveCount(0)
     await settle(page, main(page))
     const head = page.locator('.pf-list-head')
     const card = head.locator('xpath=..')
-    const measured = await sweep(page, 'Customers list', async () => {
+    const columns = (all: boolean) => async () => {
       const cells = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } }))
       // Text fits its cell: the fixed tracks and the header never clip; the Customer and TIN cells clip with an ellipsis.
       const fits = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => el.scrollWidth <= el.clientWidth + 1))
@@ -1519,9 +1523,10 @@ test.describe('Customers screen and company fields', () => {
       const problems: string[] = []
       const { rects, problems: boxProblems } = await boxes({ card })
       problems.push(...boxProblems)
-      if (n < 3) problems.push(`the list drew ${n} rows, want at least the 3 customers`)
+      if (n < (all ? 4 : 3)) problems.push(`the list drew ${n} rows, want at least the ${all ? 4 : 3} customers`)
       ;(await fits(headSpans)).forEach((f, k) => { if (!f) problems.push(`header cell ${k} text sticks out of its cell`) })
       const rowRects: Rect[] = []
+      let pills = 0
       for (let i = 0; i < n; i++) {
         const row = rows.nth(i)
         const rowBox = await row.boundingBox()
@@ -1536,15 +1541,31 @@ test.describe('Customers screen and company fields', () => {
           if (c.x + c.width > rowBox.x + rowBox.width + 1) problems.push(`row ${i} cell ${k} sticks out of its row`)
           if (k > 0 && rectsOverlap(rowCells[k - 1], c)) problems.push(`row ${i} cells ${k - 1} and ${k} overlap`)
         })
-        if (!(await clips(rowSpans.nth(0).locator(':scope > span').last()))) problems.push(`row ${i} Customer name does not clip with an ellipsis`)
+        const nameCell = rowSpans.nth(0).locator(':scope > span')
+        if (!(await clips(nameCell.nth(1)))) problems.push(`row ${i} Customer name does not clip with an ellipsis`)
+        const archivedRow = (await row.innerText()).includes('ARCHIVED')
+        if ((await nameCell.count()) !== (archivedRow ? 3 : 2)) problems.push(`row ${i} Customer cell holds ${await nameCell.count()} spans, archived=${archivedRow}`)
+        if (archivedRow) {
+          pills++
+          const [avatar, name, pill] = await cells(nameCell)
+          if (!enclosesRect(rowCells[0], pill, 1)) problems.push(`row ${i} ARCHIVED pill sticks out of the Customer cell`)
+          if (rectsOverlap(avatar, pill) || rectsOverlap(name, pill)) problems.push(`row ${i} ARCHIVED pill overlaps the avatar or the name`)
+        }
         if (!(await clips(rowSpans.nth(1)))) problems.push(`row ${i} TIN does not clip with an ellipsis`)
         ;(await fits(row.locator(':scope > span:nth-child(n+3)'))).forEach((f) => { if (!f) problems.push(`row ${i} fixed-track text sticks out of its cell`) })
       }
+      if (all && pills === 0) problems.push('All drew no ARCHIVED pill')
+      if (!all && pills > 0) problems.push('Active drew an ARCHIVED pill')
       for (let k = 1; k < headCells.length; k++) if (rectsOverlap(headCells[k - 1], headCells[k])) problems.push(`header cells ${k - 1} and ${k} overlap`)
       return { problems, rects: { ...rects, headCells, rowRects } }
-    })
+    }
+    const measured = await sweep(page, 'Customers list (Active)', columns(false))
+    await page.getByRole('button', { name: 'All', exact: true }).click()
+    await expect(buyerRow(page, ARCHIVED_TIN), 'All does not list the archived customer').toBeVisible({ timeout: 20_000 })
+    await settle(page, main(page))
+    const measuredAll = await sweep(page, 'Customers list (All)', columns(true))
     await attachShot(page, testInfo, 'customers')
-    await attachJson(testInfo, 'st-17-measurements', measured)
+    await attachJson(testInfo, 'st-17-measurements', { active: measured, all: measuredAll })
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 

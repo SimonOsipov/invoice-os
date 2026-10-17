@@ -1,14 +1,15 @@
 // Customers: the workspace's customer records (GET /v1/customers, paged), with Invoices and
 // Total billed counted from the whole invoice set and joined by trimmed TIN.
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
-import { ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
+import { EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
 import { FILEABLE_TIN, listCustomers, type Customer, type CustomerListResponse } from '../lib/buyerDirectory'
 import { fmt } from '../lib/format'
 import { aggregateCustomers, customerName, initials } from '../lib/customers'
 import { fetchAllInvoices, type AllInvoices } from '../lib/invoices'
+import { entityStatusParam, entityStatusStyle, type EntityFilterPos } from '../lib/portfolio'
 import { docGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 import { CustomerFormModal } from './CustomerFormModal'
@@ -20,23 +21,46 @@ const CELL: React.CSSProperties = { minWidth: 0, whiteSpace: 'nowrap', overflow:
 
 const VALID_CHIP = { bg: 'var(--status-green-bg)', border: 'var(--status-green-border)', text: 'var(--status-green-text)', label: 'VALID' }
 const NEEDS_TIN_CHIP = { bg: 'var(--status-red-bg)', border: 'var(--status-red-border)', text: 'var(--status-red-text)', label: 'NEEDS TIN' }
+const ARCHIVED_CHIP = entityStatusStyle('archived')
+
+const FILTER_POSITIONS: Array<{ pos: EntityFilterPos; label: string }> = [
+  { pos: 'all', label: 'All' },
+  { pos: 'active', label: 'Active' },
+  { pos: 'archived', label: 'Archived' },
+]
+
+function chipStyle(c: { bg: string; border: string; text: string }): React.CSSProperties {
+  return { display: 'inline-flex', fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', color: c.text, background: c.bg, border: `1px solid ${c.border}`, borderRadius: 'var(--radius-sm)', padding: '3px 9px' }
+}
 
 export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const [offset, setOffset] = useState(0)
+  const [pos, setPos] = useState<EntityFilterPos>('active')
   const [modal, setModal] = useState<{ mode: 'create' } | { mode: 'edit'; customer: Customer } | null>(null)
 
   const records = useAsync<CustomerListResponse>(
-    () => (base ? listCustomers(ctx.authedFetch, base, { limit: PAGE_SIZE, offset }) : Promise.reject(new Error('no gateway configured'))),
-    { isEmpty: (r) => r.pagination.total === 0, immediate: base != null, deps: [offset] },
+    () => (base ? listCustomers(ctx.authedFetch, base, { limit: PAGE_SIZE, offset, status: entityStatusParam(pos) }) : Promise.reject(new Error('no gateway configured'))),
+    { isEmpty: (r) => r.pagination.total === 0, immediate: base != null, deps: [offset, pos] },
   )
+  // Probe for archived records behind an empty Active page, so the empty card does not lie.
+  const probe = useAsync<CustomerListResponse>(
+    () => (base ? listCustomers(ctx.authedFetch, base, { limit: 1, offset: 0, status: 'archived' }) : Promise.reject(new Error('no gateway configured'))),
+    { immediate: false },
+  )
+  const probing = base != null && pos === 'active' && records.status === 'empty'
+  useEffect(() => {
+    if (probing) probe.run()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [probing])
   // Workspace-wide (no entity_id) and no isEmpty: records with zero invoices still render.
   const invoices = useAsync<AllInvoices>(
     () => (base ? fetchAllInvoices(ctx.authedFetch, base, {}) : Promise.reject(new Error('no gateway configured'))),
     { immediate: base != null },
   )
 
-  const loading = records.status === 'loading' || invoices.status === 'loading'
+  const probePending = probing && (probe.status === 'idle' || probe.status === 'loading')
+  const loading = records.status === 'loading' || invoices.status === 'loading' || probePending
   const errored = records.status === 'error' || invoices.status === 'error'
   const error = records.error ?? invoices.error
   const retry = () => {
@@ -44,6 +68,12 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
     if (invoices.status === 'error') invoices.run()
   }
   const empty = !errored && !loading && (base == null || records.status === 'empty')
+  const filteredEmpty = empty && base != null && pos === 'archived'
+  const noActive = empty && probing && (probe.data?.pagination?.total ?? 0) > 0
+  const changePos = (p: EntityFilterPos) => {
+    setPos(p)
+    setOffset(0)
+  }
   const ready = !errored && !loading && records.data != null && invoices.data != null
 
   const byTin = useMemo(() => new Map(aggregateCustomers(invoices.data?.invoices ?? []).map((o) => [o.tin, o])), [invoices.data])
@@ -62,6 +92,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
       count: String(agg?.count ?? 0),
       total: fmt(agg?.totalNum ?? 0),
       st: fileable ? VALID_CHIP : NEEDS_TIN_CHIP,
+      archived: r.status === 'archived',
     }
   })
 
@@ -71,6 +102,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
     const res = await listCustomers(ctx.authedFetch, base, { limit: 1, offset: 0, tin })
     const held = res.customers[0]
     if (!held) throw new Error('no customer holds this TIN')
+    if (held.status === 'archived') changePos('archived')
     setModal({ mode: 'edit', customer: held })
   }
 
@@ -86,7 +118,26 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
             {ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''}Customer records, tax IDs &amp; billing history
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {FILTER_POSITIONS.map(({ pos: p, label }) => (
+            <button
+              key={p}
+              onClick={() => changePos(p)}
+              className="pf-chip"
+              style={{
+                height: 30,
+                padding: '0 12px',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 12.5,
+                fontWeight: 500,
+                border: `1px solid ${pos === p ? 'var(--action)' : 'var(--line-2)'}`,
+                background: pos === p ? 'var(--action)' : 'var(--bg-2)',
+                color: pos === p ? 'var(--primary-foreground)' : 'var(--fg-2)',
+              }}
+            >
+              {label}
+            </button>
+          ))}
           <button onClick={() => setModal({ mode: 'create' })} disabled={base == null} className="v2-btn v2-btn-primary pf-btn">
             <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add customer
           </button>
@@ -121,13 +172,18 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
                 <span style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
                   <span style={{ flex: 'none', width: 30, height: 30, borderRadius: '50%', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{c.initials}</span>
                   <span style={{ ...CELL, fontSize: 13.5, fontWeight: 500 }}>{c.name}</span>
+                  {c.archived && (
+                    <span className="mono" style={{ ...chipStyle(ARCHIVED_CHIP), flex: 'none' }}>
+                      {ARCHIVED_CHIP.label}
+                    </span>
+                  )}
                 </span>
                 <span className="mono" style={{ ...CELL, fontSize: 12, color: c.tinColor }}>{c.tin}</span>
                 <span style={{ ...CELL, fontSize: 13, color: 'var(--fg-2)' }}>{c.type}</span>
                 <span className="money mono" style={{ ...CELL, fontSize: 13, textAlign: 'right' }}>{c.count}</span>
                 <span className="money" style={{ ...CELL, fontSize: 13.5, fontWeight: 600, textAlign: 'right' }}>{c.total}</span>
                 <span>
-                  <span className="mono" style={{ display: 'inline-flex', fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', color: c.st.text, background: c.st.bg, border: `1px solid ${c.st.border}`, borderRadius: 'var(--radius-sm)', padding: '3px 9px' }}>
+                  <span className="mono" style={chipStyle(c.st)}>
                     {c.st.label}
                   </span>
                 </span>
@@ -142,11 +198,13 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {empty && (
+      {filteredEmpty && <EmptyState title="No customers match this filter" message="Try a different status filter." />}
+
+      {empty && !filteredEmpty && (
         <div style={{ background: 'var(--bg-2)', border: '1px dashed var(--line-3)', borderRadius: 'var(--radius-md)', padding: 56, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
           <span style={{ width: 44, height: 44, borderRadius: 'var(--radius-md)', background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'grid', placeItems: 'center', marginBottom: 14 }}>{docGlyph}</span>
-          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>No customers yet</div>
-          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: '0 0 20px', maxWidth: 320 }}>Customers are added when you save an invoice with a buyer TIN.</p>
+          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>{noActive ? 'No active customers' : 'No customers yet'}</div>
+          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: '0 0 20px', maxWidth: 320 }}>{noActive ? 'Archived customers are under the Archived filter.' : 'Customers are added when you save an invoice with a buyer TIN.'}</p>
           <button onClick={ctx.openCreate} className="v2-btn v2-btn-primary pf-btn">
             <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> New invoice
           </button>
@@ -162,7 +220,9 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
           base={base}
           onClose={() => setModal(null)}
           onSuccess={() => {
-            records.run()
+            // A new record is active: leave Archived (the pos change refetches).
+            if (modal.mode === 'create' && pos === 'archived') changePos('active')
+            else records.run()
             setModal(null)
           }}
           onOpenExisting={openExisting}

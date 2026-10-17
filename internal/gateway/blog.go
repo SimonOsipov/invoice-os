@@ -152,11 +152,12 @@ func (b *blogReader) handler(json, listRoute bool, target func(*http.Request) ([
 			b.unavailable(w, r, resp.StatusCode)
 		default:
 			body, err := io.ReadAll(io.LimitReader(resp.Body, maxBlogBodyBytes+1))
-			if err != nil || len(body) > maxBlogBodyBytes {
+			ct := resp.Header.Get("Content-Type")
+			if err != nil || len(body) > maxBlogBodyBytes || ct == "" {
 				b.unavailable(w, r, resp.StatusCode)
 				return
 			}
-			h.Set("Content-Type", resp.Header.Get("Content-Type"))
+			h.Set("Content-Type", ct)
 			if json {
 				h.Set("Cache-Control", blogShortCache)
 			} else {

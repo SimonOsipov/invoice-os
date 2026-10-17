@@ -240,9 +240,10 @@ describe('collectSourcedErrors', () => {
   it('records a console error with its url and the 401 response seen before it', () => {
     const f = fake()
     f.response(401, 'https://gw.test/v1/me')
-    f.consoleMsg('error', T401)
+    f.consoleMsg('error', T401, 'https://gw.test/api/x')
     expect(f.errors).toHaveLength(1)
     expect(f.errors[0]).toContain('https://gw.test/v1/me')
+    expect(f.errors[0]).toContain('url: https://gw.test/api/x')
   })
 
   it('ignores non-error console messages and keeps the pageerror format', () => {

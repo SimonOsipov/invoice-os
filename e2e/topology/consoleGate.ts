@@ -20,8 +20,8 @@ import type { Page } from '@playwright/test'
 // property that matters — this narrows the gate, it does not switch it off.
 // A deliberate 409 in an oracle (a taken invoice number) uses the same two signals.
 //
-// `portfolio.spec.ts` and `personaSession.ts` hold their own `collectErrors` copies and
-// do not need this yet; they can call it if they ever open a detail page.
+// `portfolio.spec.ts` holds its own `collectErrors` copy and does not need this yet; it can
+// call it if it ever opens a detail page.
 const APPROVAL_RUN_URL = /\/api\/invoice\/v1\/invoices\/[^/]+\/approval$/
 
 export type Dropper = (text: string, url: string | undefined) => boolean

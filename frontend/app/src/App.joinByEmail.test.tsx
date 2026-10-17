@@ -128,6 +128,7 @@ async function boot(): Promise<string[]> {
 }
 
 const joinScreen = () => waitFor(() => expect(screen.getByTestId('join-screen')).toBeTruthy())
+const storedSession = () => JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null')
 const posts = (suffix: string) => calls.filter((c) => c.method === 'POST' && c.url.endsWith(suffix))
 
 describe('the Join screen in the app', () => {
@@ -149,9 +150,9 @@ describe('the Join screen in the app', () => {
     await waitFor(() => expect(ctx?.user).toBeDefined())
     expect(ctx?.user).toMatchObject({ tenantName: 'Obi Partners', verified: true })
     expect(posts('/invitations/inv-1/accept')).toHaveLength(1)
-    const stored = JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null')
-    expect(stored.token).toBe(T2)
-    expect(stored.refresh_token).toBe('R1')
+    // passive effect: the session is saved after the seat commits
+    await waitFor(() => expect(storedSession()?.token).toBe(T2))
+    expect(storedSession().refresh_token).toBe('R1')
     expect(screen.queryByTestId('join-screen')).toBeNull()
   })
 

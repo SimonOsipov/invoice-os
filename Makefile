@@ -47,7 +47,7 @@ GOOSE_MIGRATE := GOOSE_DRIVER=postgres GOOSE_MIGRATION_DIR=$(MIGRATIONS_DIR) \
 	GOOSE_DBSTRING="$(DATABASE_MIGRATION_URL)" $(GOOSE)
 
 .DEFAULT_GOAL := help
-.PHONY: help fmt-check db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-staffjobs test-audit test-reconciliation test-approvals test-actor test-invoice test-customer test-archive test-idp
+.PHONY: help fmt-check db-bootstrap dev-db dev-db-down dev-db-reset migrate-up migrate-down migrate-reset migrate-status migrate-create test-rls test-queue test-staffjobs test-blog test-audit test-reconciliation test-approvals test-actor test-invoice test-customer test-archive test-idp
 
 help: ## List the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -138,6 +138,12 @@ test-staffjobs: ## Run the staff Submissions store suite against the local dev D
 	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
 	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
 	go test -p 1 -count=1 ./internal/staffjobs/...
+
+test-blog: ## Run the blog store suite against the local dev DB (run `make dev-db` first)
+	DATABASE_URL="$(DEV_DB_APP_URL)" \
+	DATABASE_MIGRATION_URL="$(DEV_DB_MIGRATION_URL)" \
+	DATABASE_SUPERUSER_URL="$(DEV_DB_SUPERUSER_URL)" \
+	go test -p 1 -count=1 ./internal/blog/...
 
 test-audit: ## Run the M2-10 audit immutability/atomicity suite against the local dev DB (run `make dev-db` first)
 	DATABASE_URL="$(DEV_DB_APP_URL)" \

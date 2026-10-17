@@ -200,9 +200,14 @@ func (s *Store) savePost(ctx context.Context, id string, in PostInput) (Post, er
 			}
 			if !found {
 				add("author_id", MsgAuthorNotStaff)
-			} else if authorName = name; authorName == nil {
-				team := TeamAuthorName
-				authorName = &team
+			} else {
+				// uuid.Parse accepts forms ::uuid rejects (urn:uuid:, braces); store the canonical one.
+				canon := author.String()
+				in.AuthorID = &canon
+				if authorName = name; authorName == nil {
+					team := TeamAuthorName
+					authorName = &team
+				}
 			}
 		}
 		if len(f) > 0 {

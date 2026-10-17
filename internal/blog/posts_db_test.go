@@ -348,6 +348,18 @@ func TestPosts_StaffAuthorStoresTheDisplayName(t *testing.T) {
 	}
 }
 
+func TestPosts_NonCanonicalAuthorIDIsStoredCanonical(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	a := houseMember(t, f.super, adoptHouseTenant(t, f.super), "active", ptr("Writer "+f.r), "writer-"+f.r+"@ascomply.invalid")
+	for name, form := range map[string]string{"urn": "urn:uuid:" + a, "braces": "{" + a + "}"} {
+		p := mustCreate(t, f.s, ctx, f.pubIn("Form "+name+" "+f.r, form))
+		if p.AuthorID == nil || *p.AuthorID != a {
+			t.Errorf("%s: author_id = %v, want %s", form, p.AuthorID, a)
+		}
+	}
+}
+
 func TestPosts_AuthorsListsHouseMembers(t *testing.T) {
 	f := newPostFx(t)
 	_, ctx := staffActor(t, f.super)

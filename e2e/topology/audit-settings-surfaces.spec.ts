@@ -1533,6 +1533,7 @@ test.describe('Customers screen and company fields', () => {
     // CUST-01 AC 4: an invoice's buyer name never overwrites a typed one.
     await createInvoice(firmToken, { entity_id: firmEntityId, ...cleanInvoiceFields(''), invoice_number: `INV-CUST03-${tin}`, buyer_tin: tin, buyer_name: 'Invoice Name', invoice_kind: 'B2B' })
     await page.reload()
+    await expect(buyerRow(page, tin).locator('.money.mono'), 'the row does not count the later invoice').toHaveText('1', { timeout: 20_000 })
     await expect(buyerRow(page, tin)).toContainText(typed, { timeout: 20_000 })
     await expect(buyerRow(page, tin)).not.toContainText('Invoice Name')
     expect((await listCustomers(firmToken, { tin })).customers[0]?.name, 'the API holds the typed name').toBe(typed)

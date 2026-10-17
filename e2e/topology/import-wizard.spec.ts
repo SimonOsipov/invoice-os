@@ -1631,6 +1631,7 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
   expect(patched.ok(), 'the fix is stored before Re-validate').toBe(true)
   // internal/invoice/invoice.go Invoice.VAT (json "vat"): the edit handler answers the stored invoice.
   expect(((await patched.json()) as { vat: string | null }).vat, 'the server stored 75.00').toBe('75.00')
+  await expect(fixInput, 'the input keeps 75.00').toHaveValue('75.00')
 
   // Re-validate -- the verdict pill moves. ReviewInvoicesTab is entirely server-filtered
   // ([filters-are-server-side], its own file header) -- the fixed invoice no longer

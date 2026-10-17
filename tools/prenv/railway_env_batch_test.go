@@ -462,8 +462,8 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 		t.Fatalf("exit %d, want 0; output = %q", code, out)
 	}
 	ws := collectionWrites(t, s)
-	if len(ws) != 16 {
-		t.Errorf("%d write input(s) %v, want 16: one per Sentry service", len(ws), writeNames(ws))
+	if len(ws) != 15 {
+		t.Errorf("%d write input(s) %v, want 15: one per Sentry service but the blog, whose references are deleted", len(ws), writeNames(ws))
 	}
 	if n := opCount(t, s, "varsWrite"); n != 1 {
 		t.Errorf("%d varsWrite call(s), want 1: every Sentry service in one request", n)
@@ -479,6 +479,7 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 		want[sentrySvcID(sp)] = []string{"SENTRY_AUTH_TOKEN", "VITE_SENTRY_DSN"}
 	}
 	want[sentrySvcID("landing")] = []string{"VITE_SENTRY_DSN"}
+	delete(want, sentrySvcID("blog"))
 
 	seen := map[string]int{}
 	for _, w := range ws {

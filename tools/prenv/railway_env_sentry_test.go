@@ -237,8 +237,12 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 				if slices.Contains(sentrySPAs, svc) {
 					name = "VITE_SENTRY_DSN"
 				}
-				if !strings.Contains(out, svc+"."+name+" is empty") {
-					t.Errorf("%s did not pass its verdict (no %q line); output = %q", svc, svc+"."+name+" is empty", out)
+				state := " is empty"
+				if svc == "blog" {
+					state = " is absent" // its references were deleted
+				}
+				if !strings.Contains(out, svc+"."+name+state) {
+					t.Errorf("%s did not pass its verdict (no %q line); output = %q", svc, svc+"."+name+state, out)
 				}
 			}
 			singleReRead(t, s, "landing")
@@ -348,6 +352,9 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 		want = append(want, authUpsert{sentrySvcID(b), "SENTRY_DSN", ""})
 	}
 	for _, sp := range sentrySPAs {
+		if sp == "blog" {
+			continue // holds references: deleted, not blanked
+		}
 		for _, n := range sentrySPANames {
 			want = append(want, authUpsert{sentrySvcID(sp), n, ""})
 		}
@@ -385,7 +392,7 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 	}
 
 	// One write of every service, then one re-read of the same services.
-	if want, got := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead"}, operations(calls); !slices.Equal(got, want) {
+	if want, got := []string{"envList", "settle", "varsRead", "varsWrite", "varsDelete", "varsRead"}, operations(calls); !slices.Equal(got, want) {
 		t.Errorf("Railway calls = %v, want %v", got, want)
 	}
 	reread, _ := reReads(calls)
@@ -399,6 +406,10 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 		t.Errorf("re-reads = %v, want one per service %v", reread, all)
 	}
 
+	if got, want := sentryDeletes(calls), []string{"svc-blog.SENTRY_AUTH_TOKEN@" + forkEnvID, "svc-blog.VITE_SENTRY_DSN@" + forkEnvID}; !slices.Equal(got, want) {
+		t.Errorf("variableDelete inputs = %v, want exactly %v", got, want)
+	}
+
 	if !sentryConfirmed(out) {
 		t.Errorf("no confirmation line names the fork and all three variables; output = %q", out)
 	}
@@ -407,6 +418,110 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 	if err != nil || !strings.Contains(string(raw), sentryDBSentinel) {
 		t.Errorf("control: gateway's store no longer holds the DATABASE_URL needle (%v), so its absence from output proves nothing", err)
 	}
+}
+
+// sentryDeletes lists "<service>.<NAME>@<environment>" for every variableDelete input, sorted.
+func sentryDeletes(calls []railwayCall) []string {
+	var out []string
+	for _, c := range calls {
+		if !strings.Contains(c.Query, "variableDelete(") {
+			continue
+		}
+		for k, v := range c.Variables {
+			in, _ := v.(map[string]any)
+			if in == nil || !strings.HasPrefix(k, "d") {
+				continue
+			}
+			out = append(out, in["serviceId"].(string)+"."+in["name"].(string)+"@"+in["environmentId"].(string))
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Railway keeps a reference when "" is written over it (keepref-on-blank in the shim).
+func TestSetSentryOffDeletesInheritedReferences(t *testing.T) {
+	run := func(t *testing.T, mutate func(s authShim)) (authShim, string, int) {
+		t.Helper()
+		s := newAuthShim(t, map[string]string{"envList": sentryEnvList(true, true), "settle": sentrySettle("")}, sentryStores())
+		writeFile(t, filepath.Join(s.dir, "keepref-on-blank"), "")
+		if mutate != nil {
+			mutate(s)
+		}
+		stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-sentry-off", forkEnvID)
+		return s, stdout + stderr, code
+	}
+
+	t.Run("references are deleted and literals blanked", func(t *testing.T) {
+		s, out, code := run(t, nil)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, out)
+		}
+		checkBlanked(t, s, out)
+		for _, n := range []string{sentryBlogDSNRef, sentryBlogTokenRef, sentryDSNSentinel, sentryTokenSentinel} {
+			if strings.Contains(out, n) {
+				t.Errorf("output leaks %q; output = %q", n, out)
+			}
+		}
+	})
+
+	t.Run("a reference that survives the delete fails the verdict by name", func(t *testing.T) {
+		s, out, code := run(t, func(s authShim) {
+			s.bendRead(t, sentrySvcID("blog"), `.VITE_SENTRY_DSN = "`+sentryBlogDSNRef+`"`)
+		})
+		if code != 1 {
+			t.Fatalf("exit %d, want 1; output = %q", code, out)
+		}
+		refusesAsSet(t, out, "blog.VITE_SENTRY_DSN")
+		if sentryConfirmed(out) {
+			t.Errorf("a surviving reference printed the confirmation line; output = %q", out)
+		}
+		if strings.Contains(out, sentryBlogDSNRef) {
+			t.Errorf("output leaks the reference; output = %q", out)
+		}
+		if n := opCount(t, s, "varsDelete"); n != 1 {
+			t.Errorf("varsDelete calls = %d, want 1", n)
+		}
+	})
+
+	t.Run("a failed delete exits 1 with no re-read and no value", func(t *testing.T) {
+		s, out, code := run(t, func(s authShim) {
+			writeFile(t, filepath.Join(s.dir, "delete-VITE_SENTRY_DSN.fail"), "curl: (22) The requested URL returned error: 400")
+		})
+		if code != 1 {
+			t.Fatalf("exit %d, want 1; output = %q", code, out)
+		}
+		if !strings.Contains(errorLines(out), "blog.VITE_SENTRY_DSN") {
+			t.Errorf("no ::error:: line names blog.VITE_SENTRY_DSN; output = %q", out)
+		}
+		if ids, _ := reReads(s.calls(t)); len(ids) != 0 {
+			t.Errorf("a failed delete was followed by re-reads %v", ids)
+		}
+		if strings.Contains(out, sentryBlogDSNRef) {
+			t.Errorf("output leaks the reference; output = %q", out)
+		}
+	})
+
+	t.Run("the persistent environment refuses before any call", func(t *testing.T) {
+		s := newAuthShim(t, map[string]string{"envList": sentryEnvList(true, true), "settle": sentrySettle("")}, sentryStores())
+		_, _, code := s.run(t, forkExports(true, true, true), "set-sentry-off", persistentEnvironmentID)
+		if code != 1 {
+			t.Fatalf("exit %d, want 1", code)
+		}
+		if calls := s.calls(t); len(calls) != 0 {
+			t.Errorf("the refusal reached Railway: %v", operations(calls))
+		}
+		// pass_delete_refs carries its own guard; drive it directly.
+		script := "set -euo pipefail\nRAILWAY_DEV_ENVIRONMENT_ID=" + persistentEnvironmentID + "\n" +
+			shellFunctionSource(t, "pass_delete_refs") + "pass_delete_refs " + persistentEnvironmentID + "\n"
+		stdout, stderr, c := runBashScript(t, s.prelude+script)
+		if c != 1 || !strings.Contains(errorLines(stdout+stderr), persistentEnvironmentID) {
+			t.Errorf("pass_delete_refs exit %d, output = %q", c, stdout+stderr)
+		}
+		if calls := s.calls(t); len(calls) != 0 {
+			t.Errorf("pass_delete_refs reached Railway: %v", operations(calls))
+		}
+	})
 }
 
 func TestSetSentryOffUsageExitsTwo(t *testing.T) {

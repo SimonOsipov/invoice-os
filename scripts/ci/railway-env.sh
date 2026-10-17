@@ -2993,7 +2993,7 @@ auth_refuse_persistent() {
 # (resolves services, calls pass_plan_add) and NAME_verdict (runs on the final maps).
 
 PASS_ENV="" PASS_NOT_SET="" PASS_ENVS="" PASS_SETTLE="" PASS_PLAN='[]' PASS_DIFFS='[]' PASS_FINAL=""
-PASS_OWNER="" PASS_OWNED='[]'
+PASS_OWNER="" PASS_OWNED='[]' PASS_DELETE_REFS="" PASS_DELS='[]'
 PASS_IDS=() PASS_LABELS=()
 
 # pass_plan_add <svc-id> <label> "<secret names>" NAME=VALUE...: merges into the service's entry
@@ -3087,13 +3087,39 @@ pass_write_failed() {
   fi
 }
 
+# pass_delete_refs <env-id>: deletes each PASS_DELS variable in one batched mutation.
+# Railway keeps a reference when "" is written over it, so only a delete clears it.
+pass_delete_refs() {
+  local env_id="$1" decl="" fields="" q body i j=0 names
+  if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
+    echo "::error::Refusing to delete variables in the persistent environment ($env_id)."
+    exit 1
+  fi
+  names=$(printf '%s' "$PASS_DELS" | jq -r --argjson l "$(printf '%s' "$PASS_PLAN" | jq -c 'map(.label)')" '[.[] | "\($l[.i]).\(.name)"] | join(" ")')
+  for i in $(seq 0 $(($(printf '%s' "$PASS_DELS" | jq length) - 1))); do
+    decl="$decl${decl:+, }\$d$j: VariableDeleteInput!"
+    fields="$fields
+  d$j: variableDelete(input: \$d$j)"
+    j=$((j + 1))
+  done
+  q="mutation varsDelete($decl) {$fields
+}"
+  body=$(printf '%s\n%s' "$PASS_DELS" "$PASS_PLAN" | jq -sc --arg q "$q" --arg p "$RAILWAY_PROJECT_ID" --arg e "$env_id" '
+    .[1] as $plan | {query: $q, variables: ([.[0] | to_entries[] | {("d\(.key)"): {projectId: $p, environmentId: $e, serviceId: $plan[.value.i].id, name: .value.name}}] | add)}')
+  if ! GQL_MAX_TIME=$BATCH_MAX_TIME graphql_try "$body" "deleting the reference variables $names in environment $env_id"; then
+    echo "::error::The batched variable delete in environment $PASS_ENV failed for $names ($(pass_write_detail "")). Value not printed."
+    exit 1
+  fi
+  for i in $names; do echo "  $i deleted (inherited reference)"; done
+}
+
 # fork_pass <env-id> <contributor>...
 # envList and settle once, one batched read, one batched write of the names that differ (absent
 # differs from ""), one batched re-read, then every contributor's verdicts on the final maps.
 fork_pass() {
   local env_id="$1" c i j n total held q decl fields idx body names bad=0 widx=()
   shift
-  PASS_ENV="$env_id" PASS_NOT_SET="" PASS_PLAN='[]' PASS_OWNED='[]'
+  PASS_ENV="$env_id" PASS_NOT_SET="" PASS_PLAN='[]' PASS_OWNED='[]' PASS_DELETE_REFS="" PASS_DELS='[]'
 
   require_source_env
   for c in "$@"; do "${c}_check" "$env_id"; done
@@ -3117,14 +3143,18 @@ fork_pass() {
   fi
   PASS_FINAL="$GQL_RESPONSE"
 
-  PASS_DIFFS=$(printf '%s\n%s' "$PASS_FINAL" "$PASS_PLAN" | jq -sc '
-    .[0].data as $d | .[1] | to_entries | map(.key as $i | .value.vars | with_entries(
-      select(.key as $k | ($d["s\($i)"] | has($k) | not) or $d["s\($i)"][$k] != .value)))')
-  while IFS=$'\t' read -r i total j; do
-    held=$((total - j))
+  PASS_DELS=$(printf '%s\n%s' "$PASS_FINAL" "$PASS_PLAN" | jq -sc --arg names "$PASS_DELETE_REFS" '
+    .[0].data as $d | ($names | split(" ")) as $n | .[1] | to_entries | map(.key as $i | .value.vars | to_entries[]
+      | select(.value == "" and (.key | IN($n[])) and (($d["s\($i)"][.key] // null) | type == "string" and test("^\\s*\\$\\{\\{.*\\}\\}\\s*$")))
+      | {i: $i, name: .key})')
+  PASS_DIFFS=$(printf '%s\n%s\n%s' "$PASS_FINAL" "$PASS_PLAN" "$PASS_DELS" | jq -sc '
+    .[0].data as $d | .[2] as $x | .[1] | to_entries | map(.key as $i | .value.vars | with_entries(
+      select(.key as $k | ([$x[] | select(.i == $i and .name == $k)] | length) == 0 and (($d["s\($i)"] | has($k) | not) or $d["s\($i)"][$k] != .value))))')
+  while IFS=$'\t' read -r i total j dn; do
+    held=$((total - j - dn))
     [ "$held" = 0 ] || echo "  ${PASS_LABELS[$i]}: $held of $total already hold the intended value — not written."
     [ "$j" = 0 ] || widx+=("$i")
-  done < <(printf '%s\n%s' "$PASS_DIFFS" "$PASS_PLAN" | jq -sr '.[0] as $d | .[1] | to_entries[] | "\(.key)\t\(.value.vars | length)\t\($d[.key] | length)"')
+  done < <(printf '%s\n%s\n%s' "$PASS_DIFFS" "$PASS_PLAN" "$PASS_DELS" | jq -sr '.[0] as $d | .[2] as $x | .[1] | to_entries[] | .key as $i | "\($i)\t\(.value.vars | length)\t\($d[$i] | length)\t\([$x[] | select(.i == $i)] | length)"')
 
   if [ "${#widx[@]}" -gt 0 ]; then
     decl="" fields="" names="" j=0
@@ -3149,6 +3179,11 @@ fork_pass() {
       printf '%s\n%s' "$PASS_DIFFS" "$PASS_PLAN" | jq -rs --argjson i "$i" \
         '.[1][$i] as $e | .[0][$i] | to_entries[] | "  \($e.label).\(.key) = \(if (.key | IN($e.secrets[])) then "<redacted>" else .value end)"'
     done
+  fi
+
+  if [ "$(printf '%s' "$PASS_DELS" | jq length)" != 0 ]; then pass_delete_refs "$env_id"; fi
+
+  if [ "${#widx[@]}" -gt 0 ] || [ "$(printf '%s' "$PASS_DELS" | jq length)" != 0 ]; then
     if ! read_vars_batch "$env_id" unrendered "re-reading the variables of $n services in environment $env_id" "${PASS_IDS[@]}"; then
       pass_read_failed " The variables were written but not confirmed."
       exit 1
@@ -3688,9 +3723,11 @@ sentry_off_check() {
 }
 
 # sentry_off: SO_IDS holds the backends' ids, then the SPAs'.
+# A reference-valued name is deleted, not blanked (pass_delete_refs).
 sentry_off() {
   local svc id
   SO_IDS=()
+  PASS_DELETE_REFS="$SENTRY_SECRET_NAMES"
   for svc in "${SENTRY_BACKENDS[@]}"; do
     id=$(service_id_by_name "$PASS_SETTLE" "$svc" "environment $1" SENTRY) || exit 1
     SO_IDS+=("$id")

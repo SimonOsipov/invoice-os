@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net"
 	"net/http"
@@ -871,5 +874,108 @@ func TestNotificationsMain_FakeModeCompletesADemoDealJob(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The staff blog routes decide who may write posts. AST over the registration calls, so a comment
+// or gofmt cannot satisfy it; a mis-bound method (SetCover on the featured route) fails by pattern.
+func TestNotificationsMain_RegistersTheBlogRoutes(t *testing.T) {
+	want := map[string][2]string{
+		"GET /v1/staff/blog/categories":            {"ListCategoriesHandler", "ListCategories"},
+		"POST /v1/staff/blog/categories":           {"AddCategoryHandler", "AddCategory"},
+		"PUT /v1/staff/blog/categories/{id}":       {"UpdateCategoryHandler", "UpdateCategory"},
+		"POST /v1/staff/blog/categories/{id}/move": {"MoveCategoryHandler", "MoveCategory"},
+		"DELETE /v1/staff/blog/categories/{id}":    {"DeleteCategoryHandler", "DeleteCategory"},
+		"GET /v1/staff/blog/authors":               {"AuthorsHandler", "Authors"},
+		"GET /v1/staff/blog/posts":                 {"ListPostsHandler", "ListPosts"},
+		"POST /v1/staff/blog/posts":                {"CreatePostHandler", "CreatePost"},
+		"PUT /v1/staff/blog/posts/{id}":            {"UpdatePostHandler", "UpdatePost"},
+		"DELETE /v1/staff/blog/posts/{id}":         {"DeletePostHandler", "DeletePost"},
+		"PUT /v1/staff/blog/posts/{id}/featured":   {"SetFeaturedHandler", "SetFeatured"},
+		"PUT /v1/staff/blog/posts/{id}/cover":      {"SetCoverHandler", "SetCover"},
+		"DELETE /v1/staff/blog/posts/{id}/cover":   {"RemoveCoverHandler", "RemoveCover"},
+	}
+	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse cmd/notifications/main.go: %v", err)
+	}
+	found := map[string]int{}
+	var scanned int
+	var control bool
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") || len(call.Args) < 2 {
+			return true
+		}
+		// A blog handler outside the table sits outside the /v1/staff class: no staff check guards it.
+		mentionsBlog := false
+		ast.Inspect(call.Args[1], func(m ast.Node) bool {
+			if id, ok := m.(*ast.Ident); ok && (id.Name == "blog" || id.Name == "blogStore") {
+				mentionsBlog = true
+			}
+			return true
+		})
+		lit, ok := call.Args[0].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			if mentionsBlog {
+				t.Errorf("a blog handler is registered under a non-literal pattern at %d", call.Pos())
+			}
+			return true
+		}
+		scanned++
+		pattern := strings.Trim(lit.Value, "\"`")
+		if pattern == "GET /v1/contacts/me" {
+			control = true
+		}
+		exp, ok := want[pattern]
+		if !ok {
+			if strings.Contains(pattern, "/v1/staff/blog") || mentionsBlog {
+				t.Errorf("%q is registered; it is not a route of the blog Route wiring table", pattern)
+			}
+			return true
+		}
+		found[pattern]++
+		hc, ok := call.Args[1].(*ast.CallExpr)
+		if !ok {
+			t.Errorf("%s's second argument is %T, want a call expression", pattern, call.Args[1])
+			return true
+		}
+		hsel, ok := hc.Fun.(*ast.SelectorExpr)
+		if !ok {
+			t.Errorf("%s is not served by blog.%s(...)", pattern, exp[0])
+			return true
+		}
+		if pkg, ok := hsel.X.(*ast.Ident); !ok || pkg.Name != "blog" || hsel.Sel.Name != exp[0] {
+			t.Errorf("%s is not served by blog.%s(...)", pattern, exp[0])
+		}
+		if len(hc.Args) == 0 {
+			t.Errorf("%s: blog.%s has no store method argument", pattern, exp[0])
+			return true
+		}
+		msel, ok := hc.Args[0].(*ast.SelectorExpr)
+		if !ok {
+			t.Errorf("%s: first handler argument is %T, want blogStore.%s", pattern, hc.Args[0], exp[1])
+			return true
+		}
+		if recv, ok := msel.X.(*ast.Ident); !ok || recv.Name != "blogStore" || msel.Sel.Name != exp[1] {
+			t.Errorf("%s is not bound to blogStore.%s", pattern, exp[1])
+		}
+		return true
+	})
+	if scanned == 0 || !control {
+		t.Fatalf("control needle: scanned %d HandleFunc calls, GET /v1/contacts/me found=%v -- the AST walk is broken", scanned, control)
+	}
+	for pattern := range want {
+		switch found[pattern] {
+		case 1:
+		case 0:
+			t.Errorf("no app.Mux.HandleFunc(%q, ...) registration found in cmd/notifications/main.go", pattern)
+		default:
+			t.Errorf("%q is registered %d times", pattern, found[pattern])
+		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/blog"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
@@ -65,6 +66,21 @@ func main() {
 	app.Mux.HandleFunc("POST /internal/contacts/registrants", notifications.RegistrantsHandler(store, app.Logger))
 	app.Mux.HandleFunc("POST /internal/contacts/demo-requests", notifications.DemoRequestsHandler(store, app.Logger))
 	app.Mux.HandleFunc("GET /v1/contacts/me", notifications.MeHandler(store, app.Logger))
+
+	blogStore := blog.NewStore(pool)
+	app.Mux.HandleFunc("GET /v1/staff/blog/categories", blog.ListCategoriesHandler(blogStore.ListCategories, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/blog/categories", blog.AddCategoryHandler(blogStore.AddCategory, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/staff/blog/categories/{id}", blog.UpdateCategoryHandler(blogStore.UpdateCategory, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/blog/categories/{id}/move", blog.MoveCategoryHandler(blogStore.MoveCategory, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/staff/blog/categories/{id}", blog.DeleteCategoryHandler(blogStore.DeleteCategory, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/blog/authors", blog.AuthorsHandler(blogStore.Authors, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/blog/posts", blog.ListPostsHandler(blogStore.ListPosts, app.Logger))
+	app.Mux.HandleFunc("POST /v1/staff/blog/posts", blog.CreatePostHandler(blogStore.CreatePost, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/staff/blog/posts/{id}", blog.UpdatePostHandler(blogStore.UpdatePost, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/staff/blog/posts/{id}", blog.DeletePostHandler(blogStore.DeletePost, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/staff/blog/posts/{id}/featured", blog.SetFeaturedHandler(blogStore.SetFeatured, app.Logger))
+	app.Mux.HandleFunc("PUT /v1/staff/blog/posts/{id}/cover", blog.SetCoverHandler(blogStore.SetCover, app.Logger))
+	app.Mux.HandleFunc("DELETE /v1/staff/blog/posts/{id}/cover", blog.RemoveCoverHandler(blogStore.RemoveCover, app.Logger))
 
 	// Stub endpoint — proves the service builds, boots, and routes end to end.
 	app.Mux.HandleFunc("GET /v1/ping", func(w http.ResponseWriter, _ *http.Request) {

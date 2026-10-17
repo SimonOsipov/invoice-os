@@ -112,6 +112,8 @@ GATEWAY_URL=... APP_URL=... LANDING_URL=... pnpm --filter @invoice-os/e2e test:t
 Without `--project` the command runs every unit, all on its one worker, one after another.
 Add `--project=serial-lane` (or another unit name) after `test:topology` to run one, as CI does.
 
+CI sets `maxFailures: 1`, so a shard stops at the first test whose retry also failed; a local run has no limit.
+
 **There is no fleet-health gate in this suite.** The only fleet-health assertion in the
 package is `api/perf.spec.ts`'s PERF-06: `GET /healthz/fleet` returns 200 with
 `status: "ok"` and every entry in `services` reporting `up`. It iterates whatever the

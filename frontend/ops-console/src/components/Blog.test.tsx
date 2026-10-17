@@ -2,8 +2,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactElement, ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
+import { editorOf, newDraft, type Draft } from '../blog'
 import type { Category, Post } from '../blogApi'
 import type { BlogFilters } from '../types'
+import { BlogEditor } from './BlogEditor'
 import { BlogList, type BlogState } from './BlogList'
 
 const FILTERS: BlogFilters = { tab: 'posts', q: '', status: 'all', cat: 'all' }
@@ -175,5 +177,90 @@ describe('BlogList handlers', () => {
     const html = render(ready([post()]))
     expect(html).toContain('border-bottom:2px solid var(--tab-border)')
     expect(html).toMatch(/background:var\(--sage-panel\);color:var\(--tab-active-text\)[^"]*border-bottom:2px solid var\(--tab-active-border\)/)
+  })
+})
+
+describe('BlogEditor', () => {
+  const draft = (o: Partial<Draft> = {}): Draft => ({ ...newDraft([CAT], [], null, '2026-10-18'), ...o })
+  const renderEditor = (d: Draft, coverUrl: string | null = null, dirty = false) =>
+    renderToStaticMarkup(<BlogEditor editor={{ ...editorOf(d), dirty }} cats={[CAT]} authors={[]} coverUrl={coverUrl} onField={() => {}} onCover={() => {}} onBack={() => {}} />)
+
+  it('the fields render the prototype copy', () => {
+    const html = renderEditor(draft())
+    for (const t of [
+      'Post details',
+      '>Title<',
+      'placeholder="What structured e-invoicing changes for…"',
+      '>Summary<',
+      '0 / 220',
+      '>Category<',
+      '>Author<',
+      '>Publish date<',
+      'Upload a cover image',
+      'JPG or PNG, landscape. Without one, the category placeholder is used.',
+      'Pin as featured post',
+      'The newest published post leads the blog home unless one is pinned.',
+      'All posts',
+      'NOT SAVED YET',
+      'DRAFT',
+    ])
+      expect(html).toContain(t)
+    expect(html).toMatch(/<input type="date"[^>]*value="2026-10-18"/)
+    expect(html).toMatch(/role="switch" aria-checked="false"/)
+    expect(html).toContain('minmax(0, 1fr) minmax(0, 1fr)')
+  })
+
+  it('the action bar names the save state in amber when dirty and an existing post is saved', () => {
+    expect(renderEditor(draft({ id: 'p' }))).toContain('ALL CHANGES SAVED')
+    const html = renderEditor(draft({ id: 'p' }), null, true)
+    expect(html).toMatch(/color:var\(--status-amber-text\)[^>]*>UNSAVED CHANGES</)
+  })
+
+  it('the summary counter turns destructive above 220 and the featured switch follows the flag', () => {
+    expect(renderEditor(draft({ summary: 'a'.repeat(221) }))).toMatch(/color:var\(--destructive\)[^>]*>221 \/ 220</)
+    expect(renderEditor(draft({ summary: 'a'.repeat(220) }))).toMatch(/color:var\(--fg-3\)[^>]*>220 \/ 220</)
+    const on = renderEditor(draft({ featured: true }))
+    expect(on).toContain('aria-checked="true"')
+    expect(on).toContain('Shows first on the blog home once published. Saving replaces the current pin.')
+  })
+
+  it('a new cover shows Replace and Remove and no upload prompt', () => {
+    const html = renderEditor(draft({ cover: { kind: 'new', dataUrl: 'data:image/jpeg;base64,/9j/' } }))
+    expect(html).toContain('role="img" aria-label="Cover image"')
+    expect(html).toContain('background-image:url(&quot;data:image/jpeg;base64,/9j/&quot;)')
+    expect(html).toMatch(/Replace<input type="file" accept="image\/\*"/)
+    expect(html).toContain('>Remove<')
+    expect(html).not.toContain('Upload a cover image')
+  })
+
+  it('a saved cover whose bytes failed to load keeps Replace and Remove', () => {
+    const html = renderEditor(draft({ cover: { kind: 'saved' } }))
+    expect(html).toContain('background-image:none')
+    expect(html).toContain('Replace')
+    expect(html).toContain('>Remove<')
+    expect(html).not.toContain('Upload a cover image')
+    expect(renderEditor(draft({ cover: { kind: 'saved' } }), 'blob:abc')).toContain('background-image:url(&quot;blob:abc&quot;)')
+  })
+
+  it('a field error colours the border and prints the message', () => {
+    const e = { ...editorOf(draft()), errors: { title: 'Add a title' } }
+    const html = renderToStaticMarkup(<BlogEditor editor={e} cats={[CAT]} authors={[]} coverUrl={null} onField={() => {}} onCover={() => {}} onBack={() => {}} />)
+    expect(html).toContain('border:1px solid var(--destructive)')
+    expect(html).toContain('Add a title')
+  })
+
+  it('Back, Remove and the switch call their handlers', () => {
+    const onBack = vi.fn()
+    const onField = vi.fn()
+    const t = BlogEditor({ editor: editorOf(draft({ cover: { kind: 'saved' } })), cats: [CAT], authors: [], coverUrl: null, onField, onCover: () => {}, onBack }) as ReactElement
+    const [back] = find(t, (e) => e.type === 'button' && text(e.props.children).includes('All posts'))
+    ;(back.props.onClick as () => void)()
+    expect(onBack).toHaveBeenCalledTimes(1)
+    const [rm] = find(t, (e) => e.type === 'button' && text(e.props.children) === 'Remove')
+    ;(rm.props.onClick as () => void)()
+    expect(onField).toHaveBeenLastCalledWith({ cover: { kind: 'none' } })
+    const [sw] = find(t, (e) => e.type === 'button' && e.props.role === 'switch')
+    ;(sw.props.onClick as () => void)()
+    expect(onField).toHaveBeenLastCalledWith({ featured: true })
   })
 })

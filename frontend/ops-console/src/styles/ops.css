@@ -185,3 +185,9 @@ pre.ops-json {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }
+.blog-back:hover {
+  color: var(--teal);
+}
+.blog-drop:hover {
+  border-color: var(--primary);
+}

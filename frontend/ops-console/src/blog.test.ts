@@ -1,7 +1,30 @@
 import { describe, expect, it } from 'vitest'
 
-import { bDate, catFilterOptions, listRows, pinToast, statusChips, subtitle, tabs } from './blog'
-import type { Category, Post } from './blogApi'
+import {
+  authorOptions,
+  bDate,
+  catFilterOptions,
+  categoryOptions,
+  coverCss,
+  dataUrlToBytes,
+  dekCount,
+  draftFromPost,
+  editorOf,
+  fitWidth,
+  isImageType,
+  listRows,
+  newDraft,
+  pinHelp,
+  pinToast,
+  saveState,
+  setField,
+  statusChips,
+  subOf,
+  subtitle,
+  tabs,
+  today,
+} from './blog'
+import type { Author, Category, Post } from './blogApi'
 import type { BlogFilters } from './types'
 
 const post = (o: Partial<Post> = {}): Post => ({
@@ -99,5 +122,148 @@ describe('blog list view', () => {
   it('pinToast names both directions', () => {
     expect(pinToast(false)).toBe('Pinned as the featured post')
     expect(pinToast(true)).toBe('Unpinned. The newest post leads the blog home')
+  })
+})
+
+const author = (user_id: string, o: Partial<Author> = {}): Author => ({ user_id, display_name: null, email: null, ...o })
+
+describe('newDraft', () => {
+  it('takes the first category, today and the signed-in author', () => {
+    const d = newDraft([cat('a'), cat('b')], [author('S', { display_name: 'Sam' }), author('T')], 'S', '2026-10-18')
+    expect(d).toMatchObject({ id: '', category_id: 'a', publish_date: '2026-10-18', author_id: 'S', status: 'draft', featured: false, cover: { kind: 'none' }, serverHasCover: false })
+    expect(d.body).toEqual([{ u: expect.any(String), type: 'p', text: '' }])
+  })
+
+  it('leaves the author empty when the member is not in the list', () => {
+    expect(newDraft([cat('a')], [author('T')], 'S', '2026-10-18').author_id).toBeNull()
+    expect(newDraft([cat('a')], [author('T')], null, '2026-10-18').author_id).toBeNull()
+    expect(newDraft([], [], 'S', '2026-10-18').category_id).toBeNull()
+  })
+})
+
+describe('draftFromPost', () => {
+  const p = post({ id: 'x', cover: { content_type: 'image/jpeg', size_bytes: 1, updated_at: '' }, body: [{ type: 'p', text: 'a' }, { type: 'ul', items: ['i'] }, { type: 'h', text: 'h' }], author_name: 'Ann' })
+
+  it('keys every block and keeps the cover kind', () => {
+    const d = draftFromPost(p)
+    expect(new Set(d.body.map((b) => b.u)).size).toBe(3)
+    expect(d.cover).toEqual({ kind: 'saved' })
+    expect(d.serverHasCover).toBe(true)
+    expect(d).toMatchObject({ id: 'x', author_name: 'Ann' })
+  })
+
+  it('copies the body, and a post without a cover has none', () => {
+    const d = draftFromPost(p)
+    d.body[1].items!.push('more')
+    expect(p.body[1].items).toEqual(['i'])
+    expect(draftFromPost(post()).cover).toEqual({ kind: 'none' })
+    expect(draftFromPost(post()).serverHasCover).toBe(false)
+  })
+})
+
+describe('setField', () => {
+  it("marks dirty and clears that field's error only", () => {
+    const s = { ...editorOf(newDraft([], [], null, 'd')), errors: { title: 'x', summary: 'y' }, confirm: 'leave' as const }
+    const n = setField(s, { title: 'T' })
+    expect(n).toMatchObject({ dirty: true, errors: { summary: 'y' }, confirm: null })
+    expect(n.draft.title).toBe('T')
+    expect(s.dirty).toBe(false)
+  })
+
+  it('maps a draft key to its error key', () => {
+    const s = { ...editorOf(newDraft([], [], null, 'd')), errors: { category: 'c', date: 'd', author: 'a', body: 'b' } }
+    expect(setField(s, { category_id: 'z' }).errors).toEqual({ date: 'd', author: 'a', body: 'b' })
+    expect(setField(s, { publish_date: null, author_id: 'q' }).errors).toEqual({ category: 'c', body: 'b' })
+  })
+})
+
+describe('saveState', () => {
+  it('names the three states', () => {
+    expect(saveState(true, 'x')).toEqual({ label: 'UNSAVED CHANGES', color: 'var(--status-amber-text)' })
+    expect(saveState(false, 'p')).toEqual({ label: 'ALL CHANGES SAVED', color: 'var(--fg-3)' })
+    expect(saveState(false, '')).toEqual({ label: 'NOT SAVED YET', color: 'var(--fg-3)' })
+  })
+})
+
+describe('dekCount', () => {
+  it('turns red above 220', () => {
+    expect(dekCount('a'.repeat(220))).toEqual({ text: '220 / 220', over220: false })
+    expect(dekCount('a'.repeat(221))).toEqual({ text: '221 / 220', over220: true })
+    expect(dekCount('')).toEqual({ text: '0 / 220', over220: false })
+  })
+})
+
+describe('authorOptions', () => {
+  it('labels by name, then email, and keeps a stored outsider', () => {
+    const o = authorOptions([author('1', { display_name: 'named', email: 'n@x' }), author('2', { email: 'e@x' })], { author_id: 'X', author_name: 'Old Name' })
+    expect(o).toEqual([
+      { value: '1', label: 'named' },
+      { value: '2', label: 'e@x' },
+      { value: 'X', label: 'Old Name' },
+    ])
+  })
+
+  it('an outsider without a stored name shows its id; a listed author adds nothing', () => {
+    expect(authorOptions([], { author_id: 'X', author_name: null })).toEqual([{ value: 'X', label: 'X' }])
+    expect(authorOptions([author('1')], { author_id: '1', author_name: null })).toEqual([{ value: '1', label: '1' }])
+  })
+
+  it('a null author leads with —', () => {
+    expect(authorOptions([author('1', { display_name: 'A' })], { author_id: null, author_name: null })[0]).toEqual({ value: '', label: '—' })
+  })
+
+  it('no authors leaves only —', () => {
+    expect(authorOptions([], { author_id: null, author_name: null })).toEqual([{ value: '', label: '—' }])
+  })
+})
+
+describe('categoryOptions', () => {
+  it('leads with — only for a null category', () => {
+    expect(categoryOptions([cat('a')], { category_id: null })).toEqual([{ value: '', label: '—' }, { value: 'a', label: 'A' }])
+    expect(categoryOptions([cat('a')], { category_id: 'a' })).toEqual([{ value: 'a', label: 'A' }])
+  })
+})
+
+describe('pinHelp', () => {
+  it('follows the flag', () => {
+    expect(pinHelp(true)).toBe('Shows first on the blog home once published. Saving replaces the current pin.')
+    expect(pinHelp(false)).toBe('The newest published post leads the blog home unless one is pinned.')
+  })
+})
+
+describe('cover helpers', () => {
+  it('fitWidth caps the width at 1600 and keeps the ratio', () => {
+    expect(fitWidth(2000, 1000)).toEqual({ width: 1600, height: 800 })
+    expect(fitWidth(1200, 900)).toEqual({ width: 1200, height: 900 })
+    expect(fitWidth(3201, 1000)).toEqual({ width: 1600, height: 500 })
+  })
+
+  it('isImageType accepts image types only', () => {
+    for (const t of ['image/png', 'image/jpeg']) expect(isImageType(t)).toBe(true)
+    for (const t of ['text/plain', '', 'application/pdf', 'ximage/png']) expect(isImageType(t)).toBe(false)
+  })
+
+  it('dataUrlToBytes decodes base64', () => {
+    expect([...dataUrlToBytes('data:image/jpeg;base64,/9j/')]).toEqual([0xff, 0xd8, 0xff])
+  })
+
+  it('coverCss shows a new cover, a loaded saved cover, else none', () => {
+    expect(coverCss({ kind: 'new', dataUrl: 'data:x' }, 'blob:s')).toBe('url("data:x")')
+    expect(coverCss({ kind: 'saved' }, 'blob:s')).toBe('url("blob:s")')
+    expect(coverCss({ kind: 'saved' }, null)).toBe('none')
+    expect(coverCss({ kind: 'none' }, 'blob:s')).toBe('none')
+  })
+})
+
+describe('today and subOf', () => {
+  it('today is the local date, zero padded', () => {
+    expect(today(new Date(2026, 0, 5, 23, 59))).toBe('2026-01-05')
+  })
+
+  it('subOf reads a string sub only', () => {
+    expect(subOf({ sub: 'u1' })).toBe('u1')
+    expect(subOf({ sub: 5 })).toBeNull()
+    expect(subOf({ sub: '' })).toBeNull()
+    expect(subOf(null)).toBeNull()
   })
 })

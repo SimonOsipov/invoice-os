@@ -178,8 +178,8 @@ async function boxList(page: Page, loc: Locator, what: string, min: number): Pro
 }
 
 // The shell scrolls inside the parent of `.ops-screen-pad`, so the app's `.pf-scroll` helper does not apply.
-async function noSidewaysScroll(page: Page, label: string): Promise<string[]> {
-  const over = await page.locator('.ops-screen-pad').evaluate((el) => {
+async function noSidewaysScroll(page: Page, label: string, inside: Locator = page.locator('.ops-screen-pad')): Promise<string[]> {
+  const over = await inside.evaluate((el) => {
     const p = el.parentElement as HTMLElement
     return p.scrollWidth - p.clientWidth
   })
@@ -891,5 +891,42 @@ test('OPS-05 blog list: header, filters and table hold together at every wide wi
     return { problems, rects: { ...r, head, rows } }
   })
   await attachJson(testInfo, 'ops-05-blog-list', { widths })
+  expect(errors, errorsOf(errors)).toEqual([])
+})
+
+test('OPS-05 blog editor: the two panes fill the main column side by side at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInOps(page)
+  await navButton(page, /^Blog/).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Blog', exact: true }), 'Blog drew no h1').toBeVisible()
+  await page.getByRole('button', { name: 'New post' }).click()
+  const editor = page.locator('[data-blog-editor]')
+  await expect(editor, 'New post opened no editor').toBeVisible()
+  await settle(page, editor)
+
+  const scroller = editor.locator('xpath=..')
+  const panes = page.locator('[data-bscroll]')
+  const fields = editor.locator('[data-blog-fields]')
+  const widths = await atWidths(page, 'OPS-05 blog editor', async () => {
+    const r = await boxes(page, { main: page.locator('main'), form: panes.nth(0), preview: panes.nth(1) })
+    const banner_ = await boxes(page, { banner: banner(page) })
+    const cells = await boxList(page, fields.locator('> label'), 'field cell', 3)
+    const problems = [
+      ...leftOf(r.form, r.preview, 'form pane / preview pane'),
+      ...sameTop([r.form, r.preview], 'panes'),
+      ...apart(r.form, r.preview, 'form pane / preview pane'),
+      ...within(r.main, r.form, 'form pane in main column'),
+      ...within(r.main, r.preview, 'preview pane in main column'),
+      ...below(banner_.banner, r.form, 'form pane / env banner'),
+      ...below(banner_.banner, r.preview, 'preview pane / env banner'),
+      ...allApart(cells, 'Category / Author / Publish date'),
+    ]
+    const sc = await scroller.evaluate((el) => ({ overflowY: getComputedStyle(el).overflowY, over: el.scrollHeight - el.clientHeight }))
+    if (sc.overflowY !== 'auto') problems.push(`main column scroller overflow-y is ${sc.overflowY}`)
+    if (sc.over > 1) problems.push(`main column scrolls by ${sc.over}px`)
+    problems.push(...(await noSidewaysScroll(page, 'blog editor', editor)))
+    return { problems, rects: { ...r, ...banner_, cells } }
+  })
+  await attachJson(testInfo, 'ops-05-blog-editor', { widths })
   expect(errors, errorsOf(errors)).toEqual([])
 })

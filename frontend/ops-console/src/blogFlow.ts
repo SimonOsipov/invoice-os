@@ -1,5 +1,5 @@
 import { ApiError } from '@invoice-os/api-client'
-import { pinToast } from './blog'
+import { COVER_QUALITY, fitWidth, isImageType, pinToast } from './blog'
 import type { Author, Category, FeaturedResult, Post } from './blogApi'
 import type { BlogState } from './components/BlogList'
 
@@ -53,5 +53,51 @@ export async function pinThenRefresh(d: PinFlowDeps, post: Post): Promise<{ outc
     return { outcome, after: { kind: 'posts', posts: await d.fetchPosts() } }
   } catch (e) {
     return { outcome, after: { kind: 'state', state: readFailure(e, d.expire) } }
+  }
+}
+
+export const BAD_IMAGE = 'Choose a JPG or PNG image'
+
+export type CoverPickDeps = {
+  readAsDataUrl: (file: Blob) => Promise<string>
+  loadImage: (src: string) => Promise<{ width: number; height: number }>
+  toJpeg: (image: { width: number; height: number }, width: number, height: number, quality: number) => string
+}
+
+export type CoverPick = { kind: 'ignore' } | { kind: 'rejected'; toast: string } | { kind: 'ready'; dataUrl: string }
+
+export async function pickCover(d: CoverPickDeps, file: Blob | null | undefined): Promise<CoverPick> {
+  if (!file) return { kind: 'ignore' }
+  if (!isImageType(file.type)) return { kind: 'rejected', toast: BAD_IMAGE }
+  try {
+    const img = await d.loadImage(await d.readAsDataUrl(file))
+    if (!(img.width > 0 && img.height > 0)) throw new Error('empty image')
+    const { width, height } = fitWidth(img.width, img.height)
+    return { kind: 'ready', dataUrl: d.toJpeg(img, width, height, COVER_QUALITY) }
+  } catch {
+    return { kind: 'rejected', toast: BAD_IMAGE }
+  }
+}
+
+export type CoverHandle = { url: string; release: () => void }
+
+// Fetches a saved cover; `onUrl(null)` on failure. The returned stop releases the URL, also when the fetch lands late.
+export function trackCover(d: { fetchCoverUrl: (id: string) => Promise<CoverHandle> }, id: string, onUrl: (url: string | null) => void): () => void {
+  let live = true
+  let handle: CoverHandle | null = null
+  d.fetchCoverUrl(id).then(
+    (h) => {
+      if (!live) return h.release()
+      handle = h
+      onUrl(h.url)
+    },
+    () => {
+      if (live) onUrl(null)
+    },
+  )
+  return () => {
+    live = false
+    handle?.release()
+    handle = null
   }
 }

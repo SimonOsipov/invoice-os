@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SESSION_KEY } from './auth'
 import type { Author, Category, Post } from './blogApi'
-import { loadBlog, pinPost, pinThenRefresh } from './blogFlow'
+import { BAD_IMAGE, loadBlog, pickCover, pinPost, pinThenRefresh, trackCover, type CoverPickDeps } from './blogFlow'
 import { withSession } from './session'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
@@ -151,5 +151,88 @@ describe('pinThenRefresh', () => {
     const e = pinDeps({ fetchPosts: vi.fn().mockRejectedValue(http(401, 'Unauthorized')) })
     expect((await pinThenRefresh(e, post(false))).after).toEqual({ kind: 'state', state: { status: 'error', message: 'Unauthorized' } })
     expect(e.expire).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('pickCover', () => {
+  const png = new Blob(['x'], { type: 'image/png' })
+  const deps = (o: Partial<CoverPickDeps> = {}): CoverPickDeps => ({
+    readAsDataUrl: vi.fn().mockResolvedValue('data:image/png;base64,AA=='),
+    loadImage: vi.fn().mockResolvedValue({ width: 2000, height: 1000 }),
+    toJpeg: vi.fn().mockReturnValue('data:image/jpeg;base64,/9j/'),
+    ...o,
+  })
+
+  it('no file does nothing', async () => {
+    const d = deps()
+    expect(await pickCover(d, undefined)).toEqual({ kind: 'ignore' })
+    expect(await pickCover(d, null)).toEqual({ kind: 'ignore' })
+    expect(d.readAsDataUrl).not.toHaveBeenCalled()
+  })
+
+  it('a non-image is rejected before it is read', async () => {
+    const d = deps()
+    expect(await pickCover(d, new Blob(['x'], { type: 'text/plain' }))).toEqual({ kind: 'rejected', toast: BAD_IMAGE })
+    expect(BAD_IMAGE).toBe('Choose a JPG or PNG image')
+    expect(d.readAsDataUrl).not.toHaveBeenCalled()
+  })
+
+  it('draws at the fitted size with quality 0.82 and returns the data URL', async () => {
+    const d = deps()
+    expect(await pickCover(d, png)).toEqual({ kind: 'ready', dataUrl: 'data:image/jpeg;base64,/9j/' })
+    expect(d.loadImage).toHaveBeenCalledWith('data:image/png;base64,AA==')
+    expect(d.toJpeg).toHaveBeenCalledWith({ width: 2000, height: 1000 }, 1600, 800, 0.82)
+  })
+
+  it('an unreadable file, an undecodable image and an empty image are rejected', async () => {
+    const bad = { kind: 'rejected', toast: BAD_IMAGE }
+    expect(await pickCover(deps({ readAsDataUrl: vi.fn().mockRejectedValue(new Error('io')) }), png)).toEqual(bad)
+    expect(await pickCover(deps({ loadImage: vi.fn().mockRejectedValue(new Error('decode')) }), png)).toEqual(bad)
+    expect(await pickCover(deps({ loadImage: vi.fn().mockResolvedValue({ width: 0, height: 0 }) }), png)).toEqual(bad)
+    expect(await pickCover(deps({ toJpeg: vi.fn().mockImplementation(() => { throw new Error('canvas') }) }), png)).toEqual(bad)
+  })
+})
+
+describe('trackCover', () => {
+  const handle = () => ({ url: 'blob:1', release: vi.fn() })
+
+  it('reports the URL and releases it on stop, once', async () => {
+    const h = handle()
+    const onUrl = vi.fn()
+    const stop = trackCover({ fetchCoverUrl: vi.fn().mockResolvedValue(h) }, 'p1', onUrl)
+    await Promise.resolve()
+    expect(onUrl).toHaveBeenCalledWith('blob:1')
+    stop()
+    stop()
+    expect(h.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('a fetch that lands after stop is released and never reported', async () => {
+    const h = handle()
+    let land!: (v: typeof h) => void
+    const onUrl = vi.fn()
+    const stop = trackCover({ fetchCoverUrl: () => new Promise((r) => (land = r)) }, 'p1', onUrl)
+    stop()
+    land(h)
+    await Promise.resolve()
+    expect(h.release).toHaveBeenCalledTimes(1)
+    expect(onUrl).not.toHaveBeenCalled()
+  })
+
+  it('a failed fetch reports null', async () => {
+    const onUrl = vi.fn()
+    trackCover({ fetchCoverUrl: vi.fn().mockRejectedValue(new ApiError('http', 'no such cover', 404)) }, 'p1', onUrl)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(onUrl).toHaveBeenCalledWith(null)
+  })
+
+  it('a failure after stop reports nothing', async () => {
+    const onUrl = vi.fn()
+    const stop = trackCover({ fetchCoverUrl: vi.fn().mockRejectedValue(new Error('x')) }, 'p1', onUrl)
+    stop()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(onUrl).not.toHaveBeenCalled()
   })
 })

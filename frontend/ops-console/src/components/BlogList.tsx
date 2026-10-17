@@ -25,7 +25,7 @@ const GRID = 'minmax(280px, 1fr) 190px 130px 110px 108px 40px'
 const ELLIPSIS: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
 const NOTE: CSSProperties = { border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', background: 'var(--bg-2)', padding: '14px 16px', fontSize: 13, color: 'var(--fg-3)' }
 
-const G = ({ name, size }: { name: GlyphName; size: number }) => <Icon paths={GLYPHS[name]} size={size} />
+export const G = ({ name, size }: { name: GlyphName; size: number }) => <Icon paths={GLYPHS[name]} size={size} />
 
 function Note({ text, onRetry }: { text: string; onRetry?: () => void }) {
   return (

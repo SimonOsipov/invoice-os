@@ -1,8 +1,13 @@
+import { decodeJwtPayload, loadConsoleSession } from '@invoice-os/console-session'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAuthors, fetchCategories, fetchPosts, setFeatured, type Post } from '../blogApi'
-import { loadBlog, pinThenRefresh } from '../blogFlow'
+import { SESSION_KEY } from '../auth'
+import { draftFromPost, editorOf, newDraft, setField, subOf, today, type Draft, type EditorState } from '../blog'
+import { fetchAuthors, fetchCategories, fetchCoverUrl, fetchPosts, setFeatured, type Post } from '../blogApi'
+import { loadBlog, pickCover, pinThenRefresh, trackCover } from '../blogFlow'
+import { browserCoverDeps } from '../coverImage'
 import { expireOnce, withSession } from '../session'
 import type { BlogFilters, ToastTone } from '../types'
+import { BlogEditor } from './BlogEditor'
 import { BlogList, type BlogState } from './BlogList'
 
 type Props = {
@@ -56,5 +61,54 @@ export function Blog({ filters, onFilters, onToast }: Props) {
     }
   }
 
-  return <BlogList state={state} filters={filters} onFilters={onFilters} onRetry={() => void load()} onPin={(p) => void onPin(p)} />
+  const [editor, setEditor] = useState<EditorState | null>(null)
+  const [coverUrl, setCoverUrl] = useState<string | null>(null)
+  const openSeq = useRef(0)
+  const open = (draft: Draft) => {
+    openSeq.current++
+    setEditor(editorOf(draft))
+  }
+  const onNew = () => {
+    if (state.status !== 'ready') return
+    open(newDraft(state.cats, state.authors, subOf(decodeJwtPayload(loadConsoleSession(SESSION_KEY)?.token ?? null)), today()))
+  }
+  const onBack = () => {
+    openSeq.current++
+    setEditor(null)
+  }
+
+  const editing = editor !== null
+  useEffect(() => {
+    if (editing) document.querySelectorAll('[data-bscroll]').forEach((el) => (el.scrollTop = 0))
+  }, [editing])
+
+  const savedId = editor?.draft.cover.kind === 'saved' ? editor.draft.id : null
+  useEffect(() => {
+    setCoverUrl(null)
+    return savedId ? trackCover({ fetchCoverUrl: (id) => withSession(() => fetchCoverUrl(id)) }, savedId, setCoverUrl) : undefined
+  }, [savedId])
+
+  const onCover = async (file: File | null) => {
+    const seq = openSeq.current
+    const pick = await pickCover(browserCoverDeps, file)
+    if (!alive.current || seq !== openSeq.current) return
+    if (pick.kind === 'rejected') onToast(pick.toast, 'BLOG', 'red')
+    else if (pick.kind === 'ready') setEditor((e) => (e ? setField(e, { cover: { kind: 'new', dataUrl: pick.dataUrl } }) : e))
+  }
+
+  if (editor && state.status === 'ready') {
+    return (
+      <BlogEditor
+        editor={editor}
+        cats={state.cats}
+        authors={state.authors}
+        coverUrl={coverUrl}
+        onField={(patch) => setEditor((e) => (e ? setField(e, patch) : e))}
+        onCover={(f) => void onCover(f)}
+        onBack={onBack}
+      />
+    )
+  }
+
+  return <BlogList state={state} filters={filters} onFilters={onFilters} onRetry={() => void load()} onPin={(p) => void onPin(p)} onNew={onNew} onOpen={(p) => open(draftFromPost(p))} />
 }

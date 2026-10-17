@@ -170,9 +170,9 @@ describe('mergeGateVerdict', () => {
 
   it('fails on failure and on cancelled', () => {
     for (const e2eResult of ['failure', 'cancelled']) {
-      const v = mergeGateVerdict(input({ e2eResult }))
+      const v = mergeGateVerdict(input({ e2eResult, topologyResult: 'skipped' }))
       expect(v.pass, e2eResult).toBe(false)
-      expect(v.reason, e2eResult).toContain(e2eResult)
+      expect(v.reason, e2eResult).toBe(`E2E concluded '${e2eResult}'`)
     }
   })
 
@@ -408,17 +408,20 @@ describe('mergeGate CLI', () => {
     expect(out).toContain('::error::draft PRs run no E2E')
   })
 
-  it('script exits 1 on a skipped E2E and names it', () => {
-    const { code, out } = cli({
+  it('script exits 1 on a skipped or failed E2E and names it', () => {
+    const env = {
       CHANGES_RESULT: 'success',
       E2E_RELEVANT: 'true',
       PR_DRAFT: 'false',
-      E2E_RESULT: 'skipped',
       CI_RESULT: 'success',
-      TOPOLOGY_RESULT: 'success',
-    })
-    expect(code).toBe(1)
-    expect(out).toContain("::error::E2E concluded 'skipped'")
+    }
+    const skipped = cli({ ...env, E2E_RESULT: 'skipped', TOPOLOGY_RESULT: 'success' })
+    expect(skipped.code).toBe(1)
+    expect(skipped.out).toContain("::error::E2E concluded 'skipped'")
+    const failed = cli({ ...env, E2E_RESULT: 'failure', TOPOLOGY_RESULT: 'skipped' })
+    expect(failed.code).toBe(1)
+    expect(failed.out).toContain("::error::E2E concluded 'failure'")
+    expect(failed.out).not.toContain('topology shards concluded')
   })
 
   it('script exits 1 when CI did not succeed', () => {

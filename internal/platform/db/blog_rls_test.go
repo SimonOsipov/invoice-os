@@ -6,6 +6,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"reflect"
 	"slices"
 	"sort"
@@ -16,6 +17,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/SimonOsipov/invoice-os/migrations"
 )
 
 const (
@@ -342,6 +345,16 @@ func TestRLS_BlogPublishedPostIsComplete(t *testing.T) {
 		c.edit(&r)
 		blogWantRefused(t, "publish with "+c.name, r.insert(), "23514", "blog_posts_published_complete")
 	}
+
+	ctx := context.Background()
+	_, err := h.super.Exec(ctx, `UPDATE public.blog_posts SET status = 'published' WHERE id = $1`, blank.id)
+	blogWantRefused(t, "publish an empty draft", err, "23514", "blog_posts_published_complete")
+	_, err = h.super.Exec(ctx, `UPDATE public.blog_posts SET summary = '' WHERE id = $1`, prefix+"-ok")
+	blogWantRefused(t, "blank the summary of a published post", err, "23514", "blog_posts_published_complete")
+	_, err = h.super.Exec(ctx, `UPDATE public.blog_posts SET status = 'draft', summary = '' WHERE id = $1`, prefix+"-ok")
+	if err != nil {
+		t.Errorf("unpublish and blank the summary in one UPDATE: %v", err)
+	}
 }
 
 func TestRLS_BlogPostRefusesBlankTitleAndUnknownStatus(t *testing.T) {
@@ -361,6 +374,10 @@ func TestRLS_BlogPostRefusesBlankTitleAndUnknownStatus(t *testing.T) {
 	idOnly := ok
 	idOnly.id, idOnly.authorID = prefix+"-pair", uuid.NewString()
 	blogWantRefused(t, "author_id without author_name", idOnly.insert(), "23514", "blog_posts_author_pair")
+
+	nameOnly := ok
+	nameOnly.id, nameOnly.authorName = prefix+"-pair2", "Someone"
+	blogWantRefused(t, "author_name without author_id", nameOnly.insert(), "23514", "blog_posts_author_pair")
 }
 
 func TestRLS_BlogCoverTypeAndCap(t *testing.T) {
@@ -388,6 +405,29 @@ func TestRLS_BlogCoverTypeAndCap(t *testing.T) {
 	}
 	if n := blogCount(t, `SELECT count(*) FROM public.blog_post_covers WHERE post_id = $1`, post.id); n != 0 {
 		t.Errorf("cover rows after the post was deleted = %d, want 0 (ON DELETE CASCADE)", n)
+	}
+}
+
+func TestRLS_BlogCoverIsOnePerPostAndEditsStayInBounds(t *testing.T) {
+	prefix := blogScope(t)
+	ctx := context.Background()
+	post := blogPostRow{id: prefix + "-p", title: "Cover", status: "draft", body: "[]"}
+	blogMustPost(t, post)
+	_, err := h.super.Exec(ctx, `INSERT INTO public.blog_post_covers (post_id, content_type, bytes) VALUES ($1, 'image/png', '\x01')`, prefix+"-missing")
+	blogWantRefused(t, "cover of an unknown post", err, "23503", "")
+	if _, err := h.super.Exec(ctx, `INSERT INTO public.blog_post_covers (post_id, content_type, bytes) VALUES ($1, 'image/png', '\x01')`, post.id); err != nil {
+		t.Fatalf("insert a 1-byte png cover: %v", err)
+	}
+	_, err = h.super.Exec(ctx, `INSERT INTO public.blog_post_covers (post_id, content_type, bytes) VALUES ($1, 'image/jpeg', '\x01')`, post.id)
+	blogWantRefused(t, "a second cover for one post", err, "23505", "blog_post_covers_pkey")
+	_, err = h.super.Exec(ctx, `UPDATE public.blog_post_covers SET content_type = 'image/webp' WHERE post_id = $1`, post.id)
+	blogWantRefused(t, "update to image/webp", err, "23514", "")
+	_, err = h.super.Exec(ctx, `UPDATE public.blog_post_covers SET bytes = ''::bytea WHERE post_id = $1`, post.id)
+	blogWantRefused(t, "update to 0 bytes", err, "23514", "")
+	_, err = h.super.Exec(ctx, `UPDATE public.blog_post_covers SET bytes = $2 WHERE post_id = $1`, post.id, make([]byte, blogMaxCover+1))
+	blogWantRefused(t, "update to one byte over the cap", err, "23514", "")
+	if _, err := h.super.Exec(ctx, `UPDATE public.blog_post_covers SET content_type = 'image/jpeg', bytes = $2 WHERE post_id = $1`, post.id, make([]byte, blogMaxCover)); err != nil {
+		t.Errorf("replace the cover with a jpeg of exactly %d bytes: %v", blogMaxCover, err)
 	}
 }
 
@@ -452,6 +492,7 @@ func TestRLS_BlogAuthorsAreActiveHouseMembers(t *testing.T) {
 	amy := blogSeedMember(t, house, "active", blogStr("Amy "+r), "amy-"+r+"@ascomply.invalid")
 	nameless := blogSeedMember(t, house, "active", blogStr("  "), "blank-"+r+"@ascomply.invalid")
 	suspended := blogSeedMember(t, house, "suspended", blogStr("Sus "+r), "sus-"+r+"@ascomply.invalid")
+	invited := blogSeedMember(t, house, "invited", blogStr("Inv "+r), "inv-"+r+"@ascomply.invalid")
 	other := blogSeedMember(t, h.tenantA, "active", blogStr("Other "+r), "other-"+r+"@ascomply.invalid")
 
 	got, err := blogCallAuthors(actor)
@@ -465,8 +506,8 @@ func TestRLS_BlogAuthorsAreActiveHouseMembers(t *testing.T) {
 		if slices.Contains([]string{zed, amy, nameless}, a.id) {
 			order = append(order, a.id)
 		}
-		if a.id == suspended || a.id == other {
-			t.Errorf("author list holds %s, a suspended or other-tenant member", a.id)
+		if a.id == suspended || a.id == invited || a.id == other {
+			t.Errorf("author list holds %s, a suspended, invited or other-tenant member", a.id)
 		}
 	}
 	if want := []string{amy, zed, nameless}; !slices.Equal(order, want) {
@@ -548,5 +589,257 @@ func TestRLS_BlogAuthorsFunctionIsAStaffReader(t *testing.T) {
 		  WHERE p.oid = to_regprocedure($1) AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'`, blogAuthorsSig)
 	if public != 0 {
 		t.Errorf("PUBLIC holds EXECUTE on %s, want none", blogAuthorsSig)
+	}
+	rows, err := h.super.Query(ctx,
+		`SELECT pg_get_userbyid(a.grantee) FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid = to_regprocedure($1) ORDER BY 1`, blogAuthorsSig)
+	if err != nil {
+		t.Fatalf("read the function ACL: %v", err)
+	}
+	grantees, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("scan the function ACL: %v", err)
+	}
+	if want := []string{"invoice_app", "staff_reader"}; !slices.Equal(grantees, want) {
+		t.Errorf("EXECUTE grantees = %q, want %q", grantees, want)
+	}
+}
+
+func TestRLS_BlogAuthorsRefuseEveryActorThatIsNotAnActiveHouseMember(t *testing.T) {
+	requireHarness(t)
+	requireBlogAuthors(t)
+	house := adoptHouseTenant(t)
+	if rows, err := blogCallAuthors(seedCommittedMembership(t, house, "reviewer", "active")); err != nil || len(rows) == 0 {
+		t.Fatalf("active house actor: rows = %d, err = %v, want at least the actor", len(rows), err)
+	}
+	actors := map[string]any{
+		"active member of another tenant": seedCommittedMembership(t, h.tenantA, "reviewer", "active"),
+		"suspended house member":          seedCommittedMembership(t, house, "reviewer", "suspended"),
+		"invited house member":            seedCommittedMembership(t, house, "reviewer", "invited"),
+		"NULL actor":                      nil,
+	}
+	for what, actor := range actors {
+		_, err := blogCallAuthors(actor)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+			t.Errorf("%s: got %v, want SQLSTATE 42501", what, err)
+		}
+	}
+}
+
+func TestRLS_BlogAuthorsAreOrderedByNameThenNamelessByEmail(t *testing.T) {
+	requireHarness(t)
+	requireBlogAuthors(t)
+	house := adoptHouseTenant(t)
+	r := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	mail := func(p string) string { return p + "-" + r + "@ascomply.invalid" }
+	actor := seedCommittedMembership(t, house, "reviewer", "active")
+	// Nameless: NULL, empty and blank names, emails out of seeding order. Named: one padded name, two with the same name.
+	nlZ := blogSeedMember(t, house, "active", nil, mail("z"))
+	nlA := blogSeedMember(t, house, "active", blogStr(""), mail("a"))
+	nlM := blogSeedMember(t, house, "active", blogStr("  "), mail("m"))
+	sameZ := blogSeedMember(t, house, "active", blogStr("Same "+r), mail("zz"))
+	sameB := blogSeedMember(t, house, "active", blogStr("Same "+r), mail("bb"))
+	padded := blogSeedMember(t, house, "active", blogStr("  Aaa "+r+"  "), mail("pad"))
+
+	got, err := blogCallAuthors(actor)
+	if err != nil {
+		t.Fatalf("call as an active house actor: %v", err)
+	}
+	seeded := []string{padded, sameB, sameZ, nlA, nlM, nlZ}
+	var order []string
+	byID := map[string]blogAuthor{}
+	for _, a := range got {
+		byID[a.id] = a
+		if slices.Contains(seeded, a.id) {
+			order = append(order, a.id)
+		}
+	}
+	if !slices.Equal(order, seeded) {
+		t.Fatalf("seeded authors in list order = %v, want %v (named by name then email, then nameless by email)", order, seeded)
+	}
+	if n := byID[padded]; n.name == nil || *n.name != "Aaa "+r {
+		t.Errorf("padded name came back as %v, want %q (trimmed)", n.name, "Aaa "+r)
+	}
+	for _, id := range []string{nlA, nlM, nlZ} {
+		if byID[id].name != nil {
+			t.Errorf("nameless member %s has name %q, want NULL", id, *byID[id].name)
+		}
+	}
+}
+
+func TestRLS_BlogAuthorsListEachPersonOnceFromTheirOldestActiveMembership(t *testing.T) {
+	requireHarness(t)
+	requireBlogAuthors(t)
+	house := adoptHouseTenant(t)
+	r := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	actor := seedCommittedMembership(t, house, "reviewer", "active")
+	// Also in tenant A, older and active: the older row names the person (D-26).
+	both := blogSeedMember(t, house, "active", blogStr("Newer "+r), "newer-"+r+"@ascomply.invalid")
+	// Also in tenant A, older but suspended: the active house row names the person.
+	oldSuspended := blogSeedMember(t, house, "active", blogStr("House "+r), "house-"+r+"@ascomply.invalid")
+	older := func(user, status, name string) {
+		t.Helper()
+		id := uuid.NewString()
+		if _, err := h.super.Exec(context.Background(),
+			`INSERT INTO memberships (id, tenant_id, user_id, role, status, display_name, email, created_at)
+			 VALUES ($1, $2, $3, 'reviewer', $4, $5, $6, now() - interval '30 days')`,
+			id, h.tenantA, user, status, name, strings.ToLower(name)+"@ascomply.invalid"); err != nil {
+			t.Fatalf("seed an older %s membership: %v", status, err)
+		}
+		t.Cleanup(func() { _, _ = h.super.Exec(context.Background(), `DELETE FROM memberships WHERE id = $1`, id) })
+	}
+	older(both, "active", "Older"+r)
+	older(oldSuspended, "suspended", "Gone"+r)
+
+	got, err := blogCallAuthors(actor)
+	if err != nil {
+		t.Fatalf("call as an active house actor: %v", err)
+	}
+	rows := map[string][]blogAuthor{}
+	for _, a := range got {
+		rows[a.id] = append(rows[a.id], a)
+	}
+	if len(rows[both]) != 1 || rows[both][0].name == nil || *rows[both][0].name != "Older"+r {
+		t.Errorf("person with two active memberships = %+v, want one row named %q", rows[both], "Older"+r)
+	}
+	if len(rows[oldSuspended]) != 1 || rows[oldSuspended][0].name == nil || *rows[oldSuspended][0].name != "House "+r {
+		t.Errorf("person with an older suspended membership = %+v, want one row named %q", rows[oldSuspended], "House "+r)
+	}
+}
+
+func TestRLS_BlogAppRoleReadsAndWritesAllThreeTables(t *testing.T) {
+	prefix := blogScope(t)
+	ctx := context.Background()
+	cat, post := prefix+"-c", prefix+"-p"
+	steps := []struct {
+		what, sql string
+		args      []any
+	}{
+		{"insert category", `INSERT INTO public.blog_categories (id, name, headline, icon, tone, position)
+			VALUES ($1, 'App ' || $1, 'h', 'package', 1, (SELECT coalesce(max(position), 0) + 1 FROM public.blog_categories))`, []any{cat}},
+		{"insert post", `INSERT INTO public.blog_posts (id, title, category_id) VALUES ($1, 't', $2)`, []any{post, cat}},
+		{"insert cover", `INSERT INTO public.blog_post_covers (post_id, content_type, bytes) VALUES ($1, 'image/png', '\x01')`, []any{post}},
+		{"update category", `UPDATE public.blog_categories SET tone = 2 WHERE id = $1`, []any{cat}},
+		{"update post", `UPDATE public.blog_posts SET title = 'u', updated_at = now() WHERE id = $1`, []any{post}},
+		{"update cover", `UPDATE public.blog_post_covers SET content_type = 'image/jpeg' WHERE post_id = $1`, []any{post}},
+		{"delete cover", `DELETE FROM public.blog_post_covers WHERE post_id = $1`, []any{post}},
+		{"delete post", `DELETE FROM public.blog_posts WHERE id = $1`, []any{post}},
+		{"delete category", `DELETE FROM public.blog_categories WHERE id = $1`, []any{cat}},
+	}
+	for i, s := range steps {
+		if i == 6 {
+			for tbl, id := range map[string]string{"blog_categories": cat, "blog_posts": post, "blog_post_covers": post} {
+				col := map[string]string{"blog_post_covers": "post_id"}[tbl]
+				if col == "" {
+					col = "id"
+				}
+				var n int
+				if err := h.app.QueryRow(ctx, `SELECT count(*) FROM public.`+tbl+` WHERE `+col+` = $1`, id).Scan(&n); err != nil || n != 1 {
+					t.Errorf("invoice_app read-back of %s = %d, err = %v, want 1 (no RLS)", tbl, n, err)
+				}
+			}
+		}
+		tag, err := h.app.Exec(ctx, s.sql, s.args...)
+		if err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("invoice_app %s: rows = %d, err = %v", s.what, tag.RowsAffected(), err)
+		}
+	}
+}
+
+func TestRLS_BlogRowShapeCHECKsAndKeys(t *testing.T) {
+	prefix := blogScope(t)
+	ctx := context.Background()
+	blogMustCategory(t, prefix+"-c", "Shape "+prefix)
+
+	slugOK := strings.Repeat("a", 80)
+	for _, id := range []string{"a", "a-1-b", slugOK} {
+		if err := blogInsertCategory(id, "Slug "+id, "package", 0); err != nil {
+			t.Errorf("category id %q refused: %v", id, err)
+		}
+		_, _ = h.super.Exec(ctx, `DELETE FROM public.blog_categories WHERE id = $1`, id)
+	}
+	for _, id := range []string{"", "Upper", "under_score", "sp ace", "a/b", "ab\n", slugOK + "a"} {
+		blogWantRefused(t, "category id "+strconv.Quote(id), blogInsertCategory(id, "Slug bad", "package", 0), "23514", "blog_categories_id_check")
+		bad := blogPostRow{id: id, title: "t", status: "draft", body: "[]"}
+		blogWantRefused(t, "post id "+strconv.Quote(id), bad.insert(), "23514", "blog_posts_id_check")
+	}
+	if err := (blogPostRow{id: slugOK, title: "t", status: "draft", body: "[]"}).insert(); err != nil {
+		t.Errorf("post id of 80 chars refused: %v", err)
+	}
+	_, _ = h.super.Exec(ctx, `DELETE FROM public.blog_posts WHERE id = $1`, slugOK)
+
+	blogWantRefused(t, "blank category name", blogInsertCategory(prefix+"-blank", "  ", "package", 0), "23514", "blog_categories_name_check")
+	blogWantRefused(t, "duplicate category id", blogInsertCategory(prefix+"-c", "Shape other "+prefix, "package", 0), "23505", "blog_categories_pkey")
+	_, err := h.super.Exec(ctx, `INSERT INTO public.blog_categories (id, name, headline, icon, tone, position)
+		SELECT $1, 'Same position ' || $1, 'h', 'package', 0, position FROM public.blog_categories WHERE id = $2`, prefix+"-dup", prefix+"-c")
+	blogWantRefused(t, "insert at a taken position", err, "23505", "blog_categories_position_key")
+
+	for _, body := range []string{`{}`, `"text"`, `null`, `1`} {
+		r := blogPostRow{id: prefix + "-b", title: "t", status: "draft", body: body}
+		blogWantRefused(t, "body "+body, r.insert(), "23514", "blog_posts_body_check")
+	}
+	unknown := blogPostRow{id: prefix + "-u", category: prefix + "-nope", title: "t", status: "draft", body: "[]"}
+	blogWantRefused(t, "post in an unknown category", unknown.insert(), "23503", "blog_posts_category_id_fkey")
+	dup := blogPostRow{id: prefix + "-d", title: "t", status: "draft", body: "[]"}
+	blogMustPost(t, dup)
+	blogWantRefused(t, "duplicate post id", dup.insert(), "23505", "blog_posts_pkey")
+
+	var idx string
+	if err := h.super.QueryRow(ctx, `SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'blog_posts_category_idx'`).Scan(&idx); err != nil {
+		t.Fatalf("read blog_posts_category_idx: %v", err)
+	}
+	if !strings.Contains(idx, "(category_id)") {
+		t.Errorf("blog_posts_category_idx = %q, want an index on (category_id)", idx)
+	}
+}
+
+// Runs the real Down then Up of the blog migration in a rolled-back tx, so no seeded blog row is lost.
+func TestRLS_BlogMigrationDownLeavesNoObjectAndUpRestoresThem(t *testing.T) {
+	requireHarness(t)
+	requireBlogTables(t)
+	requireBlogAuthors(t)
+	ctx := context.Background()
+	matches, err := fs.Glob(migrations.FS, "*_blog.sql")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("blog migration files = %v, err = %v, want exactly 1", matches, err)
+	}
+	raw, err := fs.ReadFile(migrations.FS, matches[0])
+	if err != nil {
+		t.Fatalf("read %s: %v", matches[0], err)
+	}
+	up, down, ok := strings.Cut(string(raw), "-- +goose Down")
+	if !ok || !strings.Contains(up, "-- +goose Up") {
+		t.Fatalf("%s has no Up and Down sections", matches[0])
+	}
+	objects := func(tx pgx.Tx) int {
+		t.Helper()
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'blog\_%')
+			+ (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'staff_read_blog_authors')
+			+ (SELECT count(*) FROM pg_type WHERE typnamespace = 'public'::regnamespace AND typname LIKE 'blog\_%' AND typtype <> 'c' AND typelem = 0)`).Scan(&n); err != nil {
+			t.Fatalf("count blog objects: %v", err)
+		}
+		return n
+	}
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if n := objects(tx); n == 0 {
+		t.Fatal("no blog object before the Down: the count query matches nothing")
+	}
+	if _, err := tx.Exec(ctx, down); err != nil {
+		t.Fatalf("run the Down: %v", err)
+	}
+	if n := objects(tx); n != 0 {
+		t.Errorf("blog objects after the Down = %d, want 0", n)
+	}
+	if _, err := tx.Exec(ctx, up); err != nil {
+		t.Fatalf("run the Up again after the Down: %v", err)
+	}
+	if n := objects(tx); n == 0 {
+		t.Error("no blog object after Down then Up")
 	}
 }

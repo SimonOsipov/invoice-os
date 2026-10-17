@@ -350,6 +350,37 @@ test('PW-03 Customers at 1440: heading, table, tax chip, avatar', async ({ page 
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
+// Header cluster button names; CUST-03-02 adds the chips.
+const CUSTOMERS_HEADER_BUTTONS = ['Add customer']
+
+test('PW-11 Customers header row fits at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  const api = trackApi(page)
+  await openFirm(page, api)
+  await openNav(page, /^Customers/, 'Customers')
+  const h1 = h1Of(page, 'Customers')
+  const named: Named = {
+    header: h1.locator('xpath=../..'),
+    titles: h1.locator('xpath=..'),
+    ...Object.fromEntries(CUSTOMERS_HEADER_BUTTONS.map((n) => [n, main(page).getByRole('button', { name: n, exact: true })])),
+  }
+  await expect(named['Add customer'], 'the header never drew').toBeVisible()
+  const controls = CUSTOMERS_HEADER_BUTTONS
+  const measured = await sweepWide(page, 'Customers header', async () => {
+    await settle(page, ...Object.values(named))
+    const { rects, problems } = await boxes(named)
+    inside(rects, 'header', controls, problems)
+    noOverlap(rects, controls, problems)
+    for (const c of controls) noOverlap(rects, [c, 'titles'], problems)
+    const centres = controls.filter((c) => rects[c]).map((c) => centreY(rects[c]))
+    if (Math.max(...centres) - Math.min(...centres) > 1) problems.push(`the controls do not share a vertical centre (${centres.join(', ')})`)
+    return { problems, rects }
+  })
+  await attachJson(testInfo, 'pw-11-measurements', measured)
+  await attachShot(page, testInfo, 'customers-header')
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
 async function openReports(page: Page): Promise<void> {
   const api = trackApi(page)
   await openFirm(page, api)

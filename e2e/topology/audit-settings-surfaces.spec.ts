@@ -1555,11 +1555,11 @@ test.describe('Customers screen and company fields', () => {
     const viewport: Rect = { x: 0, y: 0, width: 1280, height: 900 }
     const reads: Record<string, unknown> = {}
 
-    async function saveStaysOnScreen(name: string): Promise<void> {
+    async function saveStaysOnScreen(name: string, submitLabel = 'Save changes'): Promise<void> {
       const dialog = page.getByRole('dialog', { name, exact: true })
       await expect(dialog, `${name} never opened`).toBeVisible()
       await settle(page, dialog)
-      const save = dialog.getByRole('button', { name: 'Save changes', exact: true })
+      const save = dialog.getByRole('button', { name: submitLabel, exact: true })
       const { rects, problems } = await boxes({ dialog, save })
       inside(rects, 'dialog', ['save'], problems)
       if (rects.dialog && !enclosesRect(viewport, rects.dialog, 1)) problems.push('the dialog leaves the viewport')
@@ -1582,6 +1582,9 @@ test.describe('Customers screen and company fields', () => {
     await signInAtFrontDoor(page, firm, '/customers')
     await buyerRow(page, BUYER_TIN).click()
     await saveStaysOnScreen('Edit customer')
+
+    await page.getByRole('button', { name: 'Add customer', exact: true }).click()
+    await saveStaysOnScreen('Add customer', 'Add customer')
 
     await attachJson(testInfo, 'st-18-measurements', reads)
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

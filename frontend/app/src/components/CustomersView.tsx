@@ -24,7 +24,7 @@ const NEEDS_TIN_CHIP = { bg: 'var(--status-red-bg)', border: 'var(--status-red-b
 export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
   const base = gatewayBase()
   const [offset, setOffset] = useState(0)
-  const [editing, setEditing] = useState<Customer | null>(null)
+  const [modal, setModal] = useState<{ mode: 'create' } | { mode: 'edit'; customer: Customer } | null>(null)
 
   const records = useAsync<CustomerListResponse>(
     () => (base ? listCustomers(ctx.authedFetch, base, { limit: PAGE_SIZE, offset }) : Promise.reject(new Error('no gateway configured'))),
@@ -65,16 +65,32 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
     }
   })
 
+  // Rejects on a failed lookup or no record, so the create form shows its banner.
+  async function openExisting(tin: string) {
+    if (base == null) throw new Error('no gateway configured')
+    const res = await listCustomers(ctx.authedFetch, base, { limit: 1, offset: 0, tin })
+    const held = res.customers[0]
+    if (!held) throw new Error('no customer holds this TIN')
+    setModal({ mode: 'edit', customer: held })
+  }
+
   return (
     <div style={{ padding: '30px 36px 56px' }}>
-      <div style={{ marginBottom: 22 }}>
-        <div className="eyebrow" style={{ marginBottom: 10 }}>
-          TRADING PARTNERS
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 22 }}>
+        <div>
+          <div className="eyebrow" style={{ marginBottom: 10 }}>
+            TRADING PARTNERS
+          </div>
+          <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Customers</h1>
+          <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
+            {ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''}Customer records, tax IDs &amp; billing history
+          </p>
         </div>
-        <h1 style={{ fontSize: 26, letterSpacing: '-0.025em', margin: '0 0 4px' }}>Customers</h1>
-        <p style={{ fontSize: 14, color: 'var(--fg-3)', margin: 0 }}>
-          {ctx.user.tenantName ? `${ctx.user.tenantName} · ` : ''}Customer records, tax IDs &amp; billing history
-        </p>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
+          <button onClick={() => setModal({ mode: 'create' })} disabled={base == null} className="v2-btn v2-btn-primary pf-btn">
+            <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add customer
+          </button>
+        </div>
       </div>
 
       {errored && error && <ErrorState error={error} onRetry={retry} />}
@@ -101,7 +117,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
               <span className="label">Tax status</span>
             </div>
             {customers.map((c) => (
-              <div key={c.id} onClick={() => setEditing(c.record)} className="pf-row pf-list-row" style={{ display: 'grid', gridTemplateColumns: GRID_COLUMNS, gap: 14, padding: '13px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
+              <div key={c.id} onClick={() => setModal({ mode: 'edit', customer: c.record })} className="pf-row pf-list-row" style={{ display: 'grid', gridTemplateColumns: GRID_COLUMNS, gap: 14, padding: '13px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0 }}>
                   <span style={{ flex: 'none', width: 30, height: 30, borderRadius: '50%', background: 'var(--action-tint)', color: 'var(--action)', display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 700 }}>{c.initials}</span>
                   <span style={{ ...CELL, fontSize: 13.5, fontWeight: 500 }}>{c.name}</span>
@@ -137,16 +153,19 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
         </div>
       )}
 
-      {editing && base != null && (
+      {modal && base != null && (
         <CustomerFormModal
-          customer={editing}
+          key={modal.mode}
+          mode={modal.mode}
+          customer={modal.mode === 'edit' ? modal.customer : undefined}
           ctx={ctx}
           base={base}
-          onClose={() => setEditing(null)}
+          onClose={() => setModal(null)}
           onSuccess={() => {
             records.run()
-            setEditing(null)
+            setModal(null)
           }}
+          onOpenExisting={openExisting}
         />
       )}
     </div>

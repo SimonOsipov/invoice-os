@@ -89,16 +89,24 @@ function invoicesPage(invoices: InvoiceRecord[], total = invoices.length, offset
 
 type Handler = (url: string) => MockResponse | Promise<MockResponse>
 
-// Routes by path, never by call order: the screen fires both reads at mount.
-function mockApi(handlers: { customers?: Handler; invoices?: Handler }) {
-  const fetchMock = vi.fn((url: string) => {
+// Routes by method and path, never by call order: the screen fires both reads at mount.
+function mockApi(handlers: { customers?: Handler; invoices?: Handler; createCustomer?: Handler }) {
+  const fetchMock = vi.fn((url: string, init?: { method?: string }) => {
     const path = new URL(url).pathname
-    const h = path.endsWith('/v1/customers') ? handlers.customers : path.endsWith('/v1/invoices') ? handlers.invoices : undefined
-    if (!h) throw new Error(`unrouted ${url}`)
+    const method = init?.method ?? 'GET'
+    const h =
+      method === 'POST' && path.endsWith('/v1/customers')
+        ? handlers.createCustomer
+        : method === 'GET' && path.endsWith('/v1/customers')
+          ? handlers.customers
+          : method === 'GET' && path.endsWith('/v1/invoices')
+            ? handlers.invoices
+            : undefined
+    if (!h) throw new Error(`unrouted ${method} ${url}`)
     return Promise.resolve(h(url))
   })
   vi.stubGlobal('fetch', fetchMock)
-  const calls = (suffix: string) => fetchMock.mock.calls.map((c) => c[0] as string).filter((u) => new URL(u).pathname.endsWith(suffix))
+  const calls = (suffix: string) => fetchMock.mock.calls.filter((c) => c[1]?.method !== 'POST').map((c) => c[0] as string).filter((u) => new URL(u).pathname.endsWith(suffix))
   return { fetchMock, customerCalls: () => calls('/v1/customers'), invoiceCalls: () => calls('/v1/invoices') }
 }
 
@@ -347,6 +355,122 @@ describe('CustomersView: edit', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(patches).toEqual([{ url: 'https://gw/api/invoice/v1/customers/a', body: { email: 'new@x.ng' } }])
     await waitFor(() => expect(customerCalls().length).toBe(recordsBefore + 1))
+    expect(invoiceCalls().length, 'the invoice fetch does not rerun').toBe(invoicesBefore)
+  })
+})
+
+describe('CustomersView: add', () => {
+  const addButton = () => screen.getByRole('button', { name: 'Add customer' }) as HTMLButtonElement
+
+  it('CU-25 Add customer opens an empty create form', async () => {
+    const { fetchMock } = mockApi({
+      customers: () => recordsPage([record({ id: 'a' }), record({ id: 'b', tin: '20000000-0002', name: 'Beta' })]),
+      invoices: () => invoicesPage([]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Beta')
+    const before = fetchMock.mock.calls.length
+
+    fireEvent.click(addButton())
+
+    const dialog = within(screen.getByRole('dialog', { name: 'Add customer' }))
+    expect((dialog.getByRole('textbox', { name: 'TIN' }) as HTMLInputElement).value).toBe('')
+    const inputs = Array.from(document.querySelectorAll('[role="dialog"] input')) as HTMLInputElement[]
+    expect(inputs).toHaveLength(11)
+    for (const i of inputs) expect(i.value, i.getAttribute('aria-label') ?? '').toBe('')
+    expect((dialog.getByLabelText('Buyer type') as HTMLSelectElement).value).toBe('')
+    expect(fetchMock.mock.calls.length, 'no request beyond the two reads').toBe(before)
+  })
+
+  it('CU-26 Add customer shows for every member and is disabled without a gateway', async () => {
+    mockApi({ customers: () => recordsPage([record()]), invoices: () => invoicesPage([]) })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    expect(addButton().disabled).toBe(false)
+    cleanup()
+
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    const { fetchMock } = mockApi({})
+    render(<CustomersView ctx={ctxFor()} />)
+    expect(addButton().disabled).toBe(true)
+    fireEvent.click(addButton())
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  async function openWith409() {
+    const held = record({ id: 'h', tin: 'RN-77', name: 'Held Co', status: 'archived' })
+    const lookups: string[] = []
+    const api = mockApi({
+      customers: (url) => {
+        if (paramsOf(url).get('tin')) {
+          lookups.push(url)
+          return recordsPage([held])
+        }
+        return recordsPage([record()])
+      },
+      invoices: () => invoicesPage([]),
+      createCustomer: () => ({ ok: false, status: 409, json: () => Promise.resolve({ error: 'duplicate tin' }) }),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    fireEvent.click(addButton())
+    fireEvent.change(screen.getByRole('textbox', { name: 'TIN' }), { target: { value: 'RN-77' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add customer' }))
+    return { ...api, lookups }
+  }
+
+  it('CU-27 Open customer opens Edit customer on the held record', async () => {
+    const { lookups } = await openWith409()
+    fireEvent.click(await screen.findByRole('button', { name: 'Open customer' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Edit customer' })
+    expect(within(dialog).getByText('RN-77')).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: 'Add customer' })).toBeNull()
+    expect(lookups).toHaveLength(1)
+    const q = paramsOf(lookups[0])
+    expect([q.get('limit'), q.get('offset'), q.get('tin'), q.has('status')]).toEqual(['1', '0', 'RN-77', false])
+  })
+
+  it('CU-27b a failed or empty lookup keeps the create form with the generic banner', async () => {
+    const { fetchMock } = await openWith409()
+    const routed = fetchMock.getMockImplementation()!
+    let answer: MockResponse = down
+    fetchMock.mockImplementation(((url: string, init?: { method?: string }) =>
+      new URL(url).searchParams.get('tin') ? Promise.resolve(answer) : routed(url, init)) as typeof routed)
+
+    for (const a of [down, recordsPage([])]) {
+      answer = a
+      fireEvent.click(await screen.findByRole('button', { name: 'Open customer' }))
+      expect(await screen.findByText('Something went wrong. Please try again.')).toBeTruthy()
+      expect(screen.getByRole('dialog', { name: 'Add customer' })).toBeTruthy()
+      expect(screen.queryByRole('dialog', { name: 'Edit customer' })).toBeNull()
+      await waitFor(() => expect((screen.getByRole('button', { name: 'Open customer' }) as HTMLButtonElement).disabled).toBe(false))
+    }
+  })
+
+  it('CU-29 a saved customer refetches the records page and closes the form', async () => {
+    const created = record({ id: 'n', tin: 'RN-5', name: 'New Co' })
+    let saved = false
+    const { customerCalls, invoiceCalls } = mockApi({
+      customers: () => recordsPage(saved ? [record(), created] : [record()]),
+      invoices: () => invoicesPage([]),
+      createCustomer: () => {
+        saved = true
+        return { ok: true, status: 201, json: () => Promise.resolve(created) }
+      },
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    const [recordsBefore, invoicesBefore] = [customerCalls().length, invoiceCalls().length]
+
+    fireEvent.click(addButton())
+    fireEvent.change(screen.getByRole('textbox', { name: 'TIN' }), { target: { value: 'RN-5' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add customer' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(await screen.findByText('New Co')).toBeTruthy()
+    expect(customerCalls().length).toBe(recordsBefore + 1)
     expect(invoiceCalls().length, 'the invoice fetch does not rerun').toBe(invoicesBefore)
   })
 })

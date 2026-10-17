@@ -1,7 +1,20 @@
 import { ApiError } from '@invoice-os/api-client'
 import { describe, expect, it, vi } from 'vitest'
 
-import { buyerFormFrom, findCustomerByTin, listCustomers, mapCorrectionError, recordNamesByTin, toCustomerUpdateInput, updateCustomer, type Customer } from './buyerDirectory'
+import {
+  buyerFormFrom,
+  createCustomer,
+  emptyBuyerForm,
+  findCustomerByTin,
+  listCustomers,
+  mapCorrectionError,
+  mapCreateError,
+  recordNamesByTin,
+  toCustomerCreateInput,
+  toCustomerUpdateInput,
+  updateCustomer,
+  type Customer,
+} from './buyerDirectory'
 
 const BASE = 'https://gateway.test'
 
@@ -94,5 +107,41 @@ describe('recordNamesByTin', () => {
     )
     const names = await recordNamesByTin(af, BASE, ['RN-1', 'RN-2'])
     expect(Object.fromEntries(names)).toEqual({ 'RN-2': 'Rec B' })
+  })
+})
+
+describe('buyerDirectory create', () => {
+  it('toCustomerCreateInput trims, keeps the hyphen and omits blank fields', () => {
+    const form = { ...emptyBuyerForm(), name: '  Acme ', email: '', city: '  ' }
+    expect(toCustomerCreateInput(' 12345678-0001 ', form)).toEqual({ tin: '12345678-0001', name: 'Acme' })
+  })
+
+  it('mapCreateError maps each status to its field and copy', () => {
+    const http = (status: number, msg: string) => new ApiError('http', msg, status)
+    expect(mapCreateError(http(400, 'tin is required'))).toEqual({ field: 'tin', message: 'tin is required' })
+    expect(mapCreateError(http(400, 'buyer_type must be B2B, B2G or B2C'))).toEqual({ field: 'buyerType', message: 'buyer_type must be B2B, B2G or B2C' })
+    expect(mapCreateError(http(400, 'invalid request body'))).toEqual({ message: 'invalid request body' })
+    expect(mapCreateError(http(409, 'duplicate tin'))).toEqual({ field: 'tin', message: 'A customer with this TIN already exists', duplicate: true })
+    expect(mapCreateError(http(401, 'unauthorized'))).toBeNull()
+    expect(mapCreateError(http(500, 'internal'))).toEqual({ message: 'Something went wrong. Please try again.' })
+    expect(mapCreateError(new TypeError('Failed to fetch'))).toEqual({ message: 'Something went wrong. Please try again.' })
+  })
+
+  it('createCustomer posts the body to /v1/customers', async () => {
+    const af = vi.fn().mockResolvedValue(CUSTOMER)
+    await createCustomer(af, BASE, { tin: 'RN-1', name: 'Acme' })
+    expect(af).toHaveBeenCalledWith(`${BASE}/api/invoice/v1/customers`, { method: 'POST', body: { tin: 'RN-1', name: 'Acme' } })
+  })
+
+  it('listCustomers adds status and tin only when given', async () => {
+    const af = vi.fn().mockResolvedValue({ customers: [], pagination: { limit: 50, offset: 0, total: 0 } })
+    await listCustomers(af, BASE, { limit: 50, offset: 0 })
+    await listCustomers(af, BASE, { limit: 50, offset: 0, status: 'active' })
+    await listCustomers(af, BASE, { limit: 50, offset: 0, tin: 'RN-1' })
+    expect(af.mock.calls.map((c) => c[0])).toEqual([
+      `${BASE}/api/invoice/v1/customers?limit=50&offset=0`,
+      `${BASE}/api/invoice/v1/customers?limit=50&offset=0&status=active`,
+      `${BASE}/api/invoice/v1/customers?limit=50&offset=0&tin=RN-1`,
+    ])
   })
 })

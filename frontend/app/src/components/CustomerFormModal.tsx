@@ -4,7 +4,16 @@ import { chevDownGlyph, closeGlyph } from '../glyphs'
 import {
   BUYER_TYPES,
   buyerFormFrom,
+  createCustomer,
+  CUSTOMER_TIN_HINT,
+  emptyBuyerForm,
+  FILEABLE_TIN,
+  GENERIC_ERROR,
   mapCorrectionError,
+  mapCreateError,
+  TIN_REQUIRED,
+  TIN_SHAPE_ERROR,
+  toCustomerCreateInput,
   toCustomerUpdateInput,
   updateCustomer,
   type BuyerFormState,
@@ -12,7 +21,6 @@ import {
 } from '../lib/buyerDirectory'
 import type { PlatformCtx } from '../types'
 
-const TITLE = 'Edit customer'
 
 const TEXT_FIELDS: Array<{ key: Exclude<keyof BuyerFormState, 'buyerType'>; label: string }> = [
   { key: 'name', label: 'Name' },
@@ -29,10 +37,39 @@ const TEXT_FIELDS: Array<{ key: Exclude<keyof BuyerFormState, 'buyerType'>; labe
 
 const LABEL: React.CSSProperties = { fontSize: 12, color: 'var(--fg-2)', marginBottom: 6 }
 
-export function CustomerFormModal({ customer, ctx, base, onClose, onSuccess }: { customer: Customer; ctx: PlatformCtx; base: string; onClose: () => void; onSuccess: () => void }) {
-  const [form, setForm] = useState<BuyerFormState>(() => buyerFormFrom(customer))
+const FIELD_ERROR: React.CSSProperties = { marginTop: 6, fontSize: 11.5, color: 'var(--status-red-text)' }
+
+export interface CustomerFormModalProps {
+  mode: 'create' | 'edit'
+  customer?: Customer
+  ctx: PlatformCtx
+  base: string
+  onClose: () => void
+  onSuccess: () => void
+  onOpenExisting?: (tin: string) => Promise<void>
+}
+
+export function CustomerFormModal({ mode, customer, ctx, base, onClose, onSuccess, onOpenExisting }: CustomerFormModalProps) {
+  const [form, setForm] = useState<BuyerFormState>(() => (mode === 'edit' && customer ? buyerFormFrom(customer) : emptyBuyerForm()))
+  const [tin, setTin] = useState('')
+  const [tinError, setTinError] = useState<string | null>(null)
+  const [buyerTypeError, setBuyerTypeError] = useState<string | null>(null)
+  const [duplicateTin, setDuplicateTin] = useState<string | null>(null)
+  const [opening, setOpening] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const title = mode === 'create' ? 'Add customer' : 'Edit customer'
+
+  async function openExisting() {
+    if (opening || !onOpenExisting || duplicateTin == null) return
+    setOpening(true)
+    try {
+      await onOpenExisting(duplicateTin)
+    } catch {
+      setFormError(GENERIC_ERROR)
+      setOpening(false)
+    }
+  }
 
   function updateField(field: keyof BuyerFormState, value: string) {
     setForm((f) => ({ ...f, [field]: value }))
@@ -42,6 +79,31 @@ export function CustomerFormModal({ customer, ctx, base, onClose, onSuccess }: {
     e.preventDefault()
     if (submitting) return
     setFormError(null)
+    if (mode === 'create') {
+      const trimmed = tin.trim()
+      setTinError(null)
+      setBuyerTypeError(null)
+      setDuplicateTin(null)
+      if (!FILEABLE_TIN.test(trimmed)) {
+        setTinError(trimmed === '' ? TIN_REQUIRED : TIN_SHAPE_ERROR)
+        return
+      }
+      setSubmitting(true)
+      try {
+        await createCustomer(ctx.authedFetch, base, toCustomerCreateInput(trimmed, form))
+        onSuccess()
+      } catch (err) {
+        const mapped = mapCreateError(err)
+        if (mapped?.field === 'tin') setTinError(mapped.message)
+        else if (mapped?.field === 'buyerType') setBuyerTypeError(mapped.message)
+        else if (mapped) setFormError(mapped.message)
+        if (mapped?.duplicate) setDuplicateTin(trimmed)
+      } finally {
+        setSubmitting(false)
+      }
+      return
+    }
+    if (!customer) return
     const diff = toCustomerUpdateInput(customer, form)
     if (Object.keys(diff).length === 0) {
       onClose() // the server answers an empty PATCH with 400
@@ -67,11 +129,11 @@ export function CustomerFormModal({ customer, ctx, base, onClose, onSuccess }: {
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label={TITLE}
+        aria-label={title}
         style={{ width: 480, maxWidth: '100%', maxHeight: '100%', background: 'var(--bg-2)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-card)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
       >
         <div style={{ flex: 'none', padding: '16px 20px', borderBottom: '1px solid var(--line-1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div className="card-title">{TITLE}</div>
+          <div className="card-title">{title}</div>
           <button
             type="button"
             onClick={onClose}
@@ -93,7 +155,29 @@ export function CustomerFormModal({ customer, ctx, base, onClose, onSuccess }: {
 
             <div style={{ marginBottom: 14 }}>
               <div style={LABEL}>TIN</div>
-              <div className="mono" style={{ fontSize: 13 }}>{customer.tin}</div>
+              {mode === 'create' ? (
+                <>
+                  <input
+                    aria-label="TIN"
+                    className="pf-input"
+                    value={tin}
+                    onChange={(e) => setTin(e.target.value)}
+                    disabled={submitting}
+                    placeholder="########-####"
+                    aria-describedby="customer-tin-hint"
+                    style={{ fontFamily: 'var(--font-mono)' }}
+                  />
+                  <div id="customer-tin-hint" style={{ marginTop: 6, fontSize: 11.5, color: 'var(--fg-3)', lineHeight: 1.5 }}>{CUSTOMER_TIN_HINT}</div>
+                  {tinError && <div style={FIELD_ERROR}>{tinError}</div>}
+                  {duplicateTin != null && onOpenExisting && (
+                    <button type="button" onClick={openExisting} disabled={opening} className="v2-btn v2-btn-ghost pf-btn" style={{ marginTop: 8, height: 30, fontSize: 12.5 }}>
+                      Open customer
+                    </button>
+                  )}
+                </>
+              ) : (
+                <div className="mono" style={{ fontSize: 13 }}>{customer?.tin}</div>
+              )}
             </div>
 
             {TEXT_FIELDS.slice(0, 2).map(({ key, label }) => (
@@ -116,6 +200,7 @@ export function CustomerFormModal({ customer, ctx, base, onClose, onSuccess }: {
                   {chevDownGlyph}
                 </span>
               </span>
+              {buyerTypeError && <div style={FIELD_ERROR}>{buyerTypeError}</div>}
             </div>
 
             {TEXT_FIELDS.slice(2).map(({ key, label }, i, rest) => (
@@ -131,7 +216,7 @@ export function CustomerFormModal({ customer, ctx, base, onClose, onSuccess }: {
               Cancel
             </button>
             <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary pf-btn" style={{ height: 36, fontSize: 13 }}>
-              {submitting ? 'Saving…' : 'Save changes'}
+              {submitting ? 'Saving…' : mode === 'create' ? 'Add customer' : 'Save changes'}
             </button>
           </div>
         </form>

@@ -228,6 +228,7 @@ func TestProvisionRecreateLedgerDrift(t *testing.T) {
 		{"rename to an older version", []int64{1, 2, 4, 5}, []int64{1, 3, 4, 5}, []int64{2}, []int64{3}, true},
 		{"normal pending file above the max", []int64{1, 2, 3}, []int64{1, 2}, nil, nil, false},
 		{"fork shape, orphan from production and no pending file", []int64{1, 2, 3}, []int64{1, 2, 3, 7}, nil, []int64{7}, true},
+		{"several orphans come back ascending", []int64{1}, []int64{9, 1, 7, 8, 6, 5, 4}, nil, []int64{4, 5, 6, 7, 8, 9}, true},
 		{"empty ledger", []int64{1, 2}, nil, nil, nil, false},
 		{"versions 0 and -1 ignored", []int64{1, 2}, []int64{0, -1, 1, 2}, nil, nil, false},
 		{"ledger of only 0 and -1", []int64{1, 2}, []int64{0, -1}, nil, nil, false},
@@ -247,9 +248,14 @@ func TestProvisionRecreateOutOfOrderFile(t *testing.T) {
 	superDSN, _ := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
 	execSuper(t, superDSN, `CREATE TABLE public.fast03_canary (id int)`)
 	addCanary(t, superDSN, "auth")
+	execSuper(t, superDSN, `CREATE SCHEMA fast03_other`)
+	addCanary(t, superDSN, "fast03_other")
 
 	mustRecreate(t, superDSN, migrations.FS, true)
 
+	if n := canaryRows(t, superDSN, "fast03_other"); n != 1 {
+		t.Errorf("non-public schema canary rows = %d, want 1", n)
+	}
 	if rel, rtn := publicObjectCounts(t, superDSN); rel != 0 || rtn != 0 {
 		t.Errorf("public holds %d relations and %d routines, want 0 and 0", rel, rtn)
 	}
@@ -480,6 +486,20 @@ func TestProvisionRecreateReleasesLockAndConnection(t *testing.T) {
 			t.Errorf("%s: advisory lock not free (ok=%v, err=%v)", label, ok, err)
 		}
 	}
+
+	if got, err := recreate(t, superDSN, fstest.MapFS{}, nil); err == nil || got {
+		t.Fatalf("empty migration set: got %v, %v, want false and an error", got, err)
+	}
+	check("after an empty-migration-set refusal")
+
+	execSuper(t, superDSN, `CREATE SCHEMA fast03_guard`)
+	execSuper(t, superDSN, `CREATE FUNCTION fast03_guard.deny() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'fast03 guard'; END $$`)
+	execSuper(t, superDSN, `CREATE EVENT TRIGGER fast03_deny ON ddl_command_start WHEN TAG IN ('CREATE SCHEMA') EXECUTE FUNCTION fast03_guard.deny()`)
+	if got, err := recreate(t, superDSN, migrations.FS, nil); err == nil || got {
+		t.Fatalf("DDL failure: got %v, %v, want false and an error", got, err)
+	}
+	check("after a DDL failure")
+	execSuper(t, superDSN, `DROP EVENT TRIGGER fast03_deny`)
 
 	mustRecreate(t, superDSN, migrations.FS, true)
 	check("after a stuck recreate")

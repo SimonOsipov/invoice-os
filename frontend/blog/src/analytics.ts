@@ -6,8 +6,8 @@ import { clearGaCookies } from '../../landing/src/gaCookies'
 import type { ConsentChoice } from '../../landing/src/components/CookieNotice'
 import { BLOG_HOSTNAMES } from '../../landing/src/hubspot'
 
-export { CookieNotice, type ConsentChoice } from '../../landing/src/components/CookieNotice'
-export { readConsent, type ConsentRecord } from '../../landing/src/consent'
+export { CookieNotice } from '../../landing/src/components/CookieNotice'
+export { readConsent } from '../../landing/src/consent'
 export { PRODUCTION_HOSTNAMES } from '../../landing/src/hubspot'
 export { trackBlogPageView } from '../../landing/src/analytics'
 

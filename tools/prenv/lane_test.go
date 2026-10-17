@@ -75,10 +75,7 @@ if [ -f "$dir/$key.out" ]; then cat "$dir/$key.out"; exit 0; fi
 echo "gh stub: no answer for $key" >&2
 exit 97
 `
-	writeFile(t, filepath.Join(dir, "gh"), gh)
-	if err := os.Chmod(filepath.Join(dir, "gh"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "gh"), gh)
 	return laneGH{dir: dir}
 }
 

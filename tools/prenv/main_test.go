@@ -36,6 +36,11 @@ func TestMain(m *testing.M) {
 		panic("building prenv for CLI tests failed: " + err.Error() + "\n" + string(out))
 	}
 
+	shimTrampoline = filepath.Join(dir, "shim-trampoline")
+	if err := os.WriteFile(shimTrampoline, []byte("#!/bin/sh\nexec /bin/sh \"$0.body\" \"$@\"\n"), 0o555); err != nil {
+		panic(err)
+	}
+
 	os.Exit(m.Run())
 }
 

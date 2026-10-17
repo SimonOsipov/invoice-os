@@ -37,9 +37,7 @@ if [ "$line" = EXIT1 ]; then echo "gh: HTTP 502" >&2; exit 1; fi
 case "$line" in EXIT1:*) printf '%s\n' "${line#EXIT1:}"; echo "gh: HTTP 502" >&2; exit 1;; esac
 printf '%s\n' "$line"
 `
-	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "gh"), stub)
 	writeSleepStub(t, dir)
 	return ciShim{dir: dir, out: filepath.Join(t.TempDir(), "out")}
 }

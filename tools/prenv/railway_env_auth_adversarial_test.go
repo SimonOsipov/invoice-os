@@ -21,10 +21,7 @@ func jqArgvLog(t *testing.T, s authShim) string {
 		t.Fatal(err)
 	}
 	log := filepath.Join(s.dir, "jq-argv.log")
-	writeFile(t, filepath.Join(s.dir, "jq"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '"+log+"'\nexec '"+real+"' \"$@\"\n")
-	if err := os.Chmod(filepath.Join(s.dir, "jq"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "jq"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '"+log+"'\nexec '"+real+"' \"$@\"\n")
 	return log
 }
 
@@ -229,10 +226,7 @@ func TestSetForkAuth_AnInvalidGeneratedKeyFails(t *testing.T) {
 	fake := "#!/bin/sh\nif [ \"$1\" = jwk-es256 ]; then echo '[]'; exit 0; fi\nexec '" + binPath + "' \"$@\"\n"
 	goShim := "#!/bin/sh\nout=''\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=\"$2\"; shift; done\n" +
 		"cat > \"$out\" <<'FAKE'\n" + fake + "FAKE\nchmod +x \"$out\"\n"
-	writeFile(t, filepath.Join(s.dir, "go"), goShim)
-	if err := os.Chmod(filepath.Join(s.dir, "go"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "go"), goShim)
 	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
 	out := stdout + stderr
 	if got := oneUpsert(t, s.upserts(t), authForkAuthID, "GOTRUE_JWT_KEYS"); got != "[]" {
@@ -370,10 +364,7 @@ func TestSetProductionAuth_PreMergeCallsOnlySettleWriteAndReRead(t *testing.T) {
 
 func TestSetForkAuth_PrenvBuildFailureWritesNothing(t *testing.T) {
 	s := newForkAuthShim(t, freshJWK(t))
-	writeFile(t, filepath.Join(s.dir, "go"), "#!/bin/sh\necho 'go: planted build failure' >&2\nexit 1\n")
-	if err := os.Chmod(filepath.Join(s.dir, "go"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "go"), "#!/bin/sh\necho 'go: planted build failure' >&2\nexit 1\n")
 	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
 	out := stdout + stderr
 	if code != 1 || !strings.Contains(errorLines(out), "Could not build tools/prenv") {

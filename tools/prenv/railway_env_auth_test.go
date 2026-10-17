@@ -263,9 +263,7 @@ case "$q" in
     echo '{"errors":[{"message":"unrouted"}]}' ;;
 esac
 `
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), shim)
 	writeSleepStub(t, dir)
 	return s
 }

@@ -45,9 +45,7 @@ op=$(printf '%s' "$data" | jq -r '.query | capture("^\\s*(query|mutation)\\s+(?<
 f='` + dir + `'/"$op".json
 if [ -f "$f" ]; then cat "$f"; else echo '{"errors":[{"message":"unrouted"}]}'; fi
 `
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), shim)
 	writeSleepStub(t, dir)
 	return s
 }
@@ -56,9 +54,7 @@ if [ -f "$f" ]; then cat "$f"; else echo '{"errors":[{"message":"unrouted"}]}'; 
 func writeSleepStub(t *testing.T, dir string) {
 	t.Helper()
 	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + filepath.Join(dir, "sleep.log") + "'\n"
-	if err := os.WriteFile(filepath.Join(dir, "sleep"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "sleep"), stub)
 }
 
 // sleeps lists every sleep argument the scripts passed, in order.

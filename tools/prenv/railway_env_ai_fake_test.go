@@ -327,9 +327,7 @@ func TestSetAIFakeSelfTestCallsNoNetwork(t *testing.T) {
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "curl-calls")
 	shim := "#!/bin/sh\necho called >> '" + calls + "'\necho '{\"data\":{\"environments\":{\"edges\":[]}}}'\n"
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
-		t.Fatalf("writing the curl shim: %v", err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), shim)
 	path := "PATH=" + dir + ":" + os.Getenv("PATH")
 	railway := []string{"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID"}
 

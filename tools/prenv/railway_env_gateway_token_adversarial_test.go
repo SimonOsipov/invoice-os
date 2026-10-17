@@ -18,9 +18,7 @@ var gtGoodValue = strings.Repeat("ab12cd34ef56", 5) + "ab12"
 // withOpenssl puts an openssl on PATH, ahead of the real one, that runs body.
 func withOpenssl(t *testing.T, s authShim, body string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(s.dir, "openssl"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "openssl"), "#!/bin/sh\n"+body+"\n")
 }
 
 // gtStored reads the GATEWAY_TOKEN the shim holds for svc ("" and false when absent).

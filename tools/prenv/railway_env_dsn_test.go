@@ -418,10 +418,7 @@ func newDSNFleet(t *testing.T, m dsnMap) dsnFleet {
 		"  chmod +x \"$out\"; exit 0\n" +
 		"fi\n" +
 		"exec '" + realGo + "' \"$@\"\n"
-	writeFile(t, filepath.Join(s.dir, "go"), stub)
-	if err := os.Chmod(filepath.Join(s.dir, "go"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "go"), stub)
 	return dsnFleet{s, order, all}
 }
 

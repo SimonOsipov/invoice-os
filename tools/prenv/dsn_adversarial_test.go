@@ -166,9 +166,7 @@ func TestAssertDBDSNsReportsABuildFailureAsCheckDidNotRun(t *testing.T) {
 
 	shimDir := t.TempDir()
 	shim := filepath.Join(shimDir, "go")
-	if err := os.WriteFile(shim, []byte("#!/bin/sh\necho 'simulated compile failure' >&2\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("writing the go shim: %v", err)
-	}
+	writeShim(t, shim, "#!/bin/sh\necho 'simulated compile failure' >&2\nexit 1\n")
 
 	// PATH is dropped from the inherited environment and reassembled, rather
 	// than appended to: duplicate PATH entries in execve are resolved by libc

@@ -104,9 +104,7 @@ exit 0
 printf 'sleep %s\n' "$*" >> '` + dir + `/calls.log'
 `
 	for name, body := range map[string]string{"railway": railway, "sleep": sleep} {
-		if err := os.WriteFile(filepath.Join(s.bin, name), []byte(body), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeShim(t, filepath.Join(s.bin, name), body)
 	}
 	return s
 }

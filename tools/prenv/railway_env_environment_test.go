@@ -35,9 +35,7 @@ func newCurlShim(t *testing.T) curlShim {
 	dir := t.TempDir()
 	s := curlShim{dir: dir, prelude: "export PATH='" + dir + "':\"$PATH\"\n", log: filepath.Join(dir, "curl-calls")}
 	body := "#!/bin/sh\necho \"$*\" >> '" + s.log + "'\necho '{\"data\":{}}'\n"
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(body), 0o755); err != nil {
-		t.Fatalf("writing the curl shim: %v", err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), body)
 	return s
 }
 

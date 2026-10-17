@@ -71,9 +71,7 @@ fi
 [ -n "$out" ] || printf '%s\n' "$body"
 exit 0
 `
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), stub)
 	writeSleepStub(t, dir)
 	s := spaShim{dir: dir, prelude: "export PATH='" + dir + "':\"$PATH\"\n"}
 	for _, u := range spaURLs {

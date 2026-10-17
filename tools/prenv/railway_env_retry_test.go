@@ -1230,10 +1230,7 @@ func TestRailwayAPI_AStaleWaitIsNotReusedByANewCall(t *testing.T) {
 	s := newAuthShim(t, map[string]string{"envList": envListWithout()}, nil)
 	// The first sleep removes the headers: the second call's 429 carries none.
 	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + filepath.Join(s.dir, "sleep.log") + "'\nrm -f '" + filepath.Join(s.dir, "hdr.txt") + "'\n"
-	writeFile(t, filepath.Join(s.dir, "sleep"), stub)
-	if err := os.Chmod(filepath.Join(s.dir, "sleep"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "sleep"), stub)
 	setFaults(t, s, "envList", "429")
 	setFaults(t, s, "createPrEnvironment", "429")
 	plantRateLimitHeaders(t, s, "retry-after: 5")
@@ -1963,9 +1960,7 @@ func TestRailwayAPI_ErrorSafeFlagIsPerCall(t *testing.T) {
 		"hdr=''; while [ $# -gt 0 ]; do [ \"$1\" = -D ] && hdr=\"$2\"; shift; done\ncat > /dev/null\n" +
 		"if [ $n = 1 ]; then printf 'HTTP/2 429\\r\\nretry-after: 601\\r\\n\\r\\n' > \"$hdr\"; echo 'curl: (22) The requested URL returned error: 429' >&2; exit 22; fi\n" +
 		"printf '{\"errors\":[{\"message\":\"" + needle + "\"}]}'; echo 'curl: (22) The requested URL returned error: 400' >&2; exit 22\n"
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), stub)
 	script := strings.Replace(transportScript(t, dir), "graphql_try \"$(cat '"+filepath.Join(dir, "body")+"')\" 'sending the test body'\nprintf '%s' \"$GQL_RESPONSE\"\n", "", 1) +
 		"graphql_try \"$(cat '" + filepath.Join(dir, "body") + "')\" 'first' || true\nprintf 'first safe=%s\\n' \"$GQL_ERROR_SAFE\"\n" +
 		"graphql_try \"$(cat '" + filepath.Join(dir, "body") + "')\" 'second' || true\nprintf 'second safe=%s\\n%s\\n' \"$GQL_ERROR_SAFE\" \"$GQL_ERROR\"\n"
@@ -1995,9 +1990,7 @@ func TestRailwayAPI_BodyReachesCurlThroughAPipe(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "body"), body)
 	stub := "#!/bin/sh\nif [ -p /dev/stdin ]; then echo pipe; else echo file; fi > '" + filepath.Join(dir, "stdin.kind") + "'\n" +
 		"cat > '" + filepath.Join(dir, "stdin.body") + "'\necho '{\"data\":{\"ok\":true}}'\n"
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), stub)
 	stdout, stderr, code := runBashScript(t, transportScript(t, dir))
 
 	if code != 0 || stdout != `{"data":{"ok":true}}` {
@@ -2014,9 +2007,7 @@ func TestRailwayAPI_BodyReachesCurlThroughAPipe(t *testing.T) {
 func TestRailwayAPI_CurlThatNeverReadsStdinStillSucceeds(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "body"), largeSecretBody())
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte("#!/bin/sh\necho '{\"data\":{\"ok\":true}}'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), "#!/bin/sh\necho '{\"data\":{\"ok\":true}}'\n")
 	stdout, stderr, code := runBashScript(t, transportScript(t, dir))
 
 	if code != 0 || stdout != `{"data":{"ok":true}}` {
@@ -2055,9 +2046,7 @@ func TestBucketConfirm_HTTP4xxNotAuthorizedEndsThePoll(t *testing.T) {
 func fixNow(t *testing.T, s authShim, epoch int64) {
 	t.Helper()
 	body := "#!/bin/sh\nif [ \"$*\" = '+%s' ]; then echo " + strconv.FormatInt(epoch, 10) + "; exit 0; fi\nexec /bin/date \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(s.dir, "date"), []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "date"), body)
 }
 
 func TestRailwayAPI_RateLimitResetWaitIsRoundedUp(t *testing.T) {

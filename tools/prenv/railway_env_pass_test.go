@@ -617,10 +617,7 @@ func withFixedKey(t *testing.T, s authShim, key string) {
 	fake := "#!/bin/sh\nif [ \"$1\" = jwk-es256 ]; then printf '%s' '" + key + "'; exit 0; fi\nexec '" + binPath + "' \"$@\"\n"
 	goShim := "#!/bin/sh\nout=''\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=\"$2\"; shift; done\n" +
 		"cat > \"$out\" <<'FAKE'\n" + fake + "FAKE\nchmod +x \"$out\"\n"
-	writeFile(t, filepath.Join(s.dir, "go"), goShim)
-	if err := os.Chmod(filepath.Join(s.dir, "go"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "go"), goShim)
 }
 
 // Under /bin/bash (3.2 on macOS) an empty array expansion is unbound under set -u.

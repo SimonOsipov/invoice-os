@@ -1,11 +1,13 @@
 package blog
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -332,6 +334,72 @@ func TestPublicHandlers_TodayIsTheLagosDateNotUTC(t *testing.T) {
 			serveMux(c, c.build(f, discard), nil)
 			if len(f.todays) != 1 || f.todays[0] != "2026-10-18" {
 				t.Errorf("today = %v, want [2026-10-18]", f.todays)
+			}
+		})
+	}
+}
+
+func TestPublicCoverHandler_VersionShapes(t *testing.T) {
+	c := publicCases()[3]
+	for _, v := range []string{"%205", "5%20", "1.5", "0x10", "1e3", "9223372036854775808", "%D9%A3"} {
+		f := &publicFake{ctype: "image/png", bytes: []byte("x")}
+		bad := c
+		bad.target = "/internal/blog/covers/p1/" + v
+		rec := serveMux(bad, c.build(f, discard), nil)
+		if rec.Code != http.StatusNotFound || rec.Body.String() != notFoundBody || f.calls != 0 {
+			t.Errorf("version %q = %d %q with %d store calls, want 404 %q and 0", v, rec.Code, rec.Body.String(), f.calls, notFoundBody)
+		}
+	}
+	for v, want := range map[string]int64{"0": 0, "9223372036854775807": 9223372036854775807} {
+		f := &publicFake{ctype: "image/png", bytes: []byte("x")}
+		ok := c
+		ok.target = "/internal/blog/covers/p1/" + v
+		rec := serveMux(ok, c.build(f, discard), nil)
+		if rec.Code != http.StatusOK || f.version != want {
+			t.Errorf("version %q = %d, store version %d, want 200 and %d", v, rec.Code, f.version, want)
+		}
+	}
+}
+
+func TestPublicHandlers_HEADServesNoBodyAndOneStoreCall(t *testing.T) {
+	for _, c := range publicCases() {
+		t.Run(c.name, func(t *testing.T) {
+			f := &publicFake{ctype: "image/png", bytes: []byte("x")}
+			rec := serveMux(c, c.build(f, discard), func(r *http.Request) { r.Method = http.MethodHead })
+			if rec.Code != http.StatusOK || f.calls != 1 {
+				t.Errorf("HEAD = %d with %d store calls, want 200 and 1", rec.Code, f.calls)
+			}
+		})
+	}
+}
+
+// A real server canonicalises header keys; every spelling of X-User-ID must still reach the check.
+func TestPublicHandlers_ProxiedRequestOverTheWireIs404(t *testing.T) {
+	for _, c := range publicCases() {
+		t.Run(c.name, func(t *testing.T) {
+			f := &publicFake{ctype: "image/png", bytes: []byte("x")}
+			m := http.NewServeMux()
+			m.HandleFunc(c.pattern, c.build(f, discard))
+			srv := httptest.NewServer(m)
+			defer srv.Close()
+			for _, line := range []string{"X-User-ID: ", "x-user-id: u", "X-USER-ID: u", "X-User-Id: u"} {
+				conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _ = conn.Write([]byte("GET " + c.target + " HTTP/1.1\r\nHost: x\r\n" + line + "\r\nConnection: close\r\n\r\n"))
+				resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				conn.Close()
+				if resp.StatusCode != http.StatusNotFound {
+					t.Errorf("header %q = %d, want 404", line, resp.StatusCode)
+				}
+			}
+			if f.calls != 0 {
+				t.Errorf("store called %d times, want 0", f.calls)
 			}
 		})
 	}

@@ -63,6 +63,10 @@ func TestPublicRoutes_RefuseACallWithoutTheGatewayToken(t *testing.T) {
 		if rec := getPublic(h, p, nil); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s without token = %d (%s), want 401", p, rec.Code, rec.Body.String())
 		}
+		wrong := func(r *http.Request) { r.Header.Set(platform.HeaderGatewayToken, routesToken+"x") }
+		if rec := getPublic(h, p, wrong); rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s with a wrong token = %d (%s), want 401", p, rec.Code, rec.Body.String())
+		}
 	}
 	if f.calls != served {
 		t.Errorf("%d store calls after the refused calls, want 0", f.calls-served)
@@ -78,6 +82,22 @@ func TestPublicRoutes_AnswerAGatewayCallWithNoIdentity(t *testing.T) {
 		if f.calls != i+1 {
 			t.Errorf("after %s: %d store calls, want %d", p, f.calls, i+1)
 		}
+	}
+}
+
+func TestPublicRoutes_TenantHeaderWithoutUserIsServed(t *testing.T) {
+	h, f := newPublicRig(t)
+	for _, p := range publicPaths {
+		rec := getPublic(h, p, func(r *http.Request) {
+			withToken(r)
+			r.Header.Set("X-Tenant-ID", uuid.NewString())
+		})
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s with only X-Tenant-ID = %d (%s), want 200", p, rec.Code, rec.Body.String())
+		}
+	}
+	if f.calls != len(publicPaths) {
+		t.Errorf("%d store calls, want %d", f.calls, len(publicPaths))
 	}
 }
 

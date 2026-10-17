@@ -45,7 +45,13 @@ const run = (
         ],
 })
 
-type World = { runs: FakeRun[]; failPrView?: boolean; failDownload?: number }
+type World = {
+  runs: FakeRun[]
+  failPrView?: boolean
+  failDownload?: number
+  mergedAt?: string | null
+  closedAt?: string | null
+}
 
 function fakeGh(w: World): Deps & { calls: string[] } {
   const calls: string[] = []
@@ -56,7 +62,12 @@ function fakeGh(w: World): Deps & { calls: string[] } {
       calls.push(args.join(' '))
       if (args[0] === 'pr') {
         if (w.failPrView) throw new Error('gh pr view: HTTP 502 from fake')
-        return JSON.stringify({ headRefName: 'feature/x', createdAt: '2026-10-01T00:00:00Z' })
+        return JSON.stringify({
+          headRefName: 'feature/x',
+          createdAt: '2026-10-01T00:00:00Z',
+          mergedAt: w.mergedAt ?? null,
+          closedAt: w.closedAt ?? null,
+        })
       }
       if (args[0] === 'api') {
         const path = args.find((a) => a.startsWith('repos/'))!
@@ -142,6 +153,7 @@ describe('new key', () => {
     for (const line of ['status: Planned', 'depends: []', 'base: main', 'layer: e2e', 'size: S', `flaky_key: ${JSON.stringify(KEY)}`])
       expect(front.split('\n')).toContain(line)
     expect(body).toContain('e2e/topology/x.spec.ts:58')
+    expect(body).not.toContain('flakyGate')
     expect(body).toContain(`](${REPO_URL}/100/attempts/1)`)
     expect(body).toContain('| 2026-10-12 | #460 | smoke | 58 | 2 | Error: boom |')
     expect(text).toContain('wrote BUG-38 ')
@@ -220,6 +232,31 @@ describe('open key', () => {
   })
 })
 
+describe('Evidence section shapes', () => {
+  const head = '| Run | Date | PR | Suite | Line | Attempts | First-attempt error |'
+  it('an Evidence heading with no table rows gets the table inside it', () => {
+    const before = `---\nstatus: Planned\nflaky_key: ${JSON.stringify(KEY)}\n---\n\n## Evidence\n\nNone yet.\n\n## Cause\n\nUnknown.\n`
+    put(bugDir, 'BUG-38 s.md', before)
+    go({ runs: [run(200, [flaky()])] })
+    const after = readFileSync(join(bugDir, 'BUG-38 s.md'), 'utf8')
+    expect(after.match(/^## Evidence\s*$/gm)).toHaveLength(1)
+    const lines = after.split('\n')
+    const h = lines.indexOf(head)
+    expect(h).toBeGreaterThan(lines.indexOf('## Evidence'))
+    expect(h).toBeLessThan(lines.indexOf('## Cause'))
+    expect(lines[h + 2]).toContain('/200/attempts/1')
+  })
+
+  it('rows never land in the table of a ### subsection', () => {
+    const before = openStory(KEY, 'Building', [evidenceRow(100)], `\n### Older\n\n${head}\n|---|---|---|---|---|---|---|\n${evidenceRow(1)}\n`)
+    put(bugDir, 'BUG-38 s.md', before)
+    go({ runs: [run(200, [flaky()])] })
+    const lines = readFileSync(join(bugDir, 'BUG-38 s.md'), 'utf8').split('\n')
+    expect(lines.findIndex((l) => l.includes('/200/attempts/1'))).toBe(lines.findIndex((l) => l.includes('/100/attempts/1')) + 1)
+    expect(lines.findIndex((l) => l.includes('/200/attempts/1'))).toBeLessThan(lines.indexOf('### Older'))
+  })
+})
+
 describe('archived key', () => {
   it('writes a new story that links the archived one', () => {
     const archived = openStory(KEY, 'Done', [evidenceRow(50)])
@@ -230,7 +267,56 @@ describe('archived key', () => {
   })
 })
 
+describe('archived runs', () => {
+  const archivedName = 'BUG-12 x passes only on retry.md'
+  it('writes no story when every run is already in the archived story', () => {
+    const archived = openStory(KEY, 'Done', [evidenceRow(200)])
+    put(archiveDir, archivedName, archived)
+    const before = snapshot(vault)
+    const { code, text } = go({ runs: [run(200, [flaky()])] })
+    expect(code).toBe(0)
+    expect(snapshot(vault)).toEqual(before)
+    expect(text).toContain('unchanged BUG-12 ')
+    expect(text).toContain(archivedName)
+  })
+
+  it('a new story lists only the runs the archived story lacks', () => {
+    put(archiveDir, archivedName, openStory(KEY, 'Done', [evidenceRow(200)]))
+    go({ runs: [run(200, [flaky()]), run(300, [flaky()])] })
+    const { text } = read(bugDir, 'BUG-13 ')
+    expect(text).toContain('/300/attempts/1)')
+    expect(text).not.toContain('/200/attempts/1)')
+  })
+})
+
 describe('stories', () => {
+  const withKeyLine = (line: string) => openStory(KEY, 'Building', [evidenceRow(100)]).replace(/^flaky_key: .*$/m, line)
+  const appended = (name: string) => readFileSync(join(bugDir, name), 'utf8').includes('/200/attempts/1)')
+
+  it('an unquoted flaky_key matches', () => {
+    put(bugDir, 'BUG-50 s.md', withKeyLine(`flaky_key: ${KEY}`))
+    go({ runs: [run(200, [flaky()])] })
+    expect(readdirSync(bugDir)).toHaveLength(1)
+    expect(appended('BUG-50 s.md')).toBe(true)
+  })
+
+  it('a single-quoted flaky_key matches', () => {
+    put(bugDir, 'BUG-50 s.md', withKeyLine(`flaky_key: '${KEY}'`))
+    go({ runs: [run(200, [flaky()])] })
+    expect(readdirSync(bugDir)).toHaveLength(1)
+    expect(appended('BUG-50 s.md')).toBe(true)
+  })
+
+  it('a flaky_key JSON cannot read is kept raw, never an exit 1', () => {
+    put(bugDir, 'BUG-60 t.md', withKeyLine('flaky_key: "broken \\q'))
+    put(bugDir, 'BUG-61 u.md', withKeyLine('flaky_key:'))
+    const { code } = go({ runs: [run(200, [flaky()])] })
+    expect(code).toBe(0)
+    expect(appended('BUG-60 t.md')).toBe(false)
+    expect(appended('BUG-61 u.md')).toBe(false)
+    expect(read(bugDir, 'BUG-62 ').text).toContain('/200/attempts/1)')
+  })
+
   it('an archived key with two archived stories links the highest number', () => {
     put(archiveDir, 'BUG-12 low.md', openStory(KEY, 'Done', [evidenceRow(50)]))
     put(archiveDir, 'BUG-20 high.md', openStory(KEY, 'Done', [evidenceRow(60)]))
@@ -329,6 +415,15 @@ describe('artifacts', () => {
     expect(text).toContain('no retry-pass')
   })
 
+  it('counts expired flaky artifacts in the summary and per run', () => {
+    const expired = run(100, [flaky()])
+    expired.artifacts[0]!.expired = true
+    const { code, text } = go({ runs: [run(200, null), expired] })
+    expect(code).toBe(0)
+    expect(text).toContain(`expired flaky artifacts: 1 in ${REPO_URL}/100`)
+    expect(text).toContain('(2 runs read); 1 flaky artifacts expired; wrote nothing')
+  })
+
   it('suite and attempt come from the artifact', () => {
     go({ runs: [run(100, [flaky()], { name: 'flaky-results-topology-serial-lane-2', file: 'topology.json' })] })
     const { text } = read(bugDir, 'BUG-1 ')
@@ -356,6 +451,19 @@ describe('runs', () => {
     const { text } = go({ runs: [run(100, [flaky()], { runAt: '2026-09-30T23:59:59Z' })] })
     expect(readdirSync(bugDir)).toEqual([])
     expect(text).toContain('no retry-pass')
+  })
+
+  it('ignores a run created after the PR merged', () => {
+    const { text } = go({ mergedAt: '2026-10-11T00:00:00Z', runs: [run(100, [flaky()], { runAt: '2026-10-12T00:00:00Z' })] })
+    expect(readdirSync(bugDir)).toEqual([])
+    expect(text).toContain('no retry-pass')
+  })
+
+  it('an unmerged closed PR ends at closedAt; an open PR has no upper bound', () => {
+    go({ closedAt: '2026-10-11T00:00:00Z', runs: [run(100, [flaky()], { runAt: '2026-10-12T00:00:00Z' })] })
+    expect(readdirSync(bugDir)).toEqual([])
+    go({ runs: [run(100, [flaky()], { runAt: '2026-10-12T00:00:00Z' })] })
+    expect(readdirSync(bugDir)).toHaveLength(1)
   })
 })
 

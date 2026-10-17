@@ -56,6 +56,20 @@ export function storyKey(row: Pick<FlakyRow, 'repoFile' | 'titlePath'>): string 
   return [row.repoFile, ...row.titlePath].join(' › ')
 }
 
+/** parseKey reads a flaky_key value as JSON, single-quoted YAML or bare text; unreadable text is kept raw. */
+function parseKey(raw: string | undefined): string | undefined {
+  if (!raw) return undefined
+  try {
+    const v: unknown = JSON.parse(raw)
+    if (typeof v === 'string') return v
+  } catch {
+    // not JSON: fall through to YAML forms
+  }
+  if (raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")) return raw.slice(1, -1).replace(/''/g, "'")
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) return raw.slice(1, -1)
+  return raw
+}
+
 /** readStories reads every .md in dir; a missing dir reads as empty. */
 export function readStories(dir: string): Story[] {
   if (!existsSync(dir)) return []
@@ -65,13 +79,13 @@ export function readStories(dir: string): Story[] {
     .map((name) => {
       const text = readFileSync(join(dir, name), 'utf8')
       const front = /^---\n([\s\S]*?)\n---/.exec(text)?.[1] ?? ''
-      const raw = /^flaky_key: (".*")\s*$/m.exec(front)?.[1]
+      const raw = /^flaky_key:[ \t]*(.*?)[ \t]*$/m.exec(front)?.[1]
       const num = /^BUG-(\d+)\b/.exec(name)?.[1]
       return {
         path: join(dir, name),
         name,
         number: num === undefined ? undefined : Number(num),
-        key: raw === undefined ? undefined : (JSON.parse(raw) as string),
+        key: parseKey(raw),
         text,
       }
     })
@@ -91,19 +105,24 @@ function rowLine(r: Row, pr: number): string {
 
 const byDate = (a: Row, b: Row) => (a.date === b.date ? (a.url < b.url ? -1 : 1) : a.date < b.date ? -1 : 1)
 
-/** appendRows inserts rows after the last Evidence table row, else adds the section at the end. */
+/** appendRows inserts rows after the last Evidence table row; an Evidence section without rows gets the table, a missing one is added at the end. */
 function appendRows(text: string, rows: string[]): string {
   const lines = text.split('\n')
   const head = lines.findIndex((l) => /^##\s+Evidence\s*$/.test(l))
   if (head >= 0) {
     let last = -1
-    for (let i = head + 1; i < lines.length && !/^#{1,2}\s/.test(lines[i]!); i++) {
-      if (lines[i]!.startsWith('|')) last = i
+    let end = head + 1
+    while (end < lines.length && !/^#{1,6}\s/.test(lines[end]!)) {
+      if (lines[end]!.startsWith('|')) last = end
+      end++
     }
     if (last >= 0) {
       lines.splice(last + 1, 0, ...rows)
       return lines.join('\n')
     }
+    while (end > head + 1 && lines[end - 1] === '') end--
+    lines.splice(end, 0, '', ...TABLE_HEAD, ...rows)
+    return lines.join('\n')
   }
   const body = text.endsWith('\n') ? text : `${text}\n`
   return `${body}\n## Evidence\n\n${[...TABLE_HEAD, ...rows].join('\n')}\n`
@@ -129,7 +148,7 @@ flaky_key: ${JSON.stringify(storyKey(first))}
 
 ## Objective
 
-The E2E spec \`${spec}\` (\`${first.repoFile}:${first.line}\`) failed its first attempt and passed on retry in the Dev Env runs below. The flakyGate did not fail it, because the PR did not change the spec file.${link}
+The E2E spec \`${spec}\` (\`${first.repoFile}:${first.line}\`) failed its first attempt and passed on retry in the Dev Env runs below.${link}
 
 ## Evidence
 
@@ -159,18 +178,30 @@ export function planWrites(rows: readonly Row[], bug: readonly Story[], archive:
       const lines = fresh.map((r) => rowLine(r, pr))
       return { kind: 'update', label, path: open.path, text: appendRows(open.text, lines), rows: lines }
     }
-    const made = newStory(next, group, highest(archive, key), pr)
+    const archived = highest(archive, key)
+    const listed = archive.filter((s) => s.key === key).map((s) => s.text)
+    const fresh = group.filter((r) => !listed.some((t) => t.includes(`${r.url})`)))
+    if (archived && fresh.length === 0) {
+      const label = `${archived.number === undefined ? archived.name : `BUG-${archived.number}`} (archived)`
+      return { kind: 'unchanged', label, path: archived.path, text: archived.text, rows: [] }
+    }
+    const made = newStory(next, fresh, archived, pr)
     return { kind: 'write', label: `BUG-${next++}`, path: join(bugDir, made.name), text: made.text, rows: [] }
   })
 }
 
 type ArtifactInfo = { name: string; created_at: string; expired: boolean }
 
-function readRows(gh: Deps['gh'], pr: number, tmp: string): { rows: Row[]; runs: number } {
-  const { headRefName, createdAt } = JSON.parse(gh(['pr', 'view', String(pr), '--json', 'headRefName,createdAt'])) as {
-    headRefName: string
-    createdAt: string
-  }
+type Read = { rows: Row[]; runs: number; expired: { url: string; count: number }[] }
+
+function readRows(gh: Deps['gh'], pr: number, tmp: string): Read {
+  const view = JSON.parse(
+    gh(['pr', 'view', String(pr), '--json', 'headRefName,createdAt,mergedAt,closedAt']),
+  ) as { headRefName: string; createdAt: string; mergedAt?: string | null; closedAt?: string | null }
+  const { headRefName, createdAt } = view
+  // gh reports an unset time as null or year 0001
+  const set = (t?: string | null) => (t && !t.startsWith('0001') ? t : undefined)
+  const until = set(view.mergedAt) ?? set(view.closedAt)
   const runs = jsonLines<{ id: number; created_at: string; html_url: string }>(
     gh([
       'api',
@@ -179,8 +210,9 @@ function readRows(gh: Deps['gh'], pr: number, tmp: string): { rows: Row[]; runs:
       '--jq',
       '.workflow_runs[] | {id, created_at, html_url}',
     ]),
-  ).filter((r) => r.created_at >= createdAt)
+  ).filter((r) => r.created_at >= createdAt && (until === undefined || r.created_at <= until))
   const rows: Row[] = []
+  const expired: Read['expired'] = []
   for (const run of runs) {
     const artifacts = jsonLines<ArtifactInfo>(
       gh([
@@ -193,7 +225,13 @@ function readRows(gh: Deps['gh'], pr: number, tmp: string): { rows: Row[]; runs:
     )
     for (const art of artifacts) {
       const m = ARTIFACT.exec(art.name)
-      if (!m || art.expired) continue
+      if (!m) continue
+      if (art.expired) {
+        const e = expired.find((x) => x.url === run.html_url)
+        if (e) e.count++
+        else expired.push({ url: run.html_url, count: 1 })
+        continue
+      }
       const dir = join(tmp, String(run.id), art.name)
       gh(['run', 'download', String(run.id), '-n', art.name, '-D', dir])
       for (const file of readdirSync(dir).filter((n) => n.endsWith('.json')).sort()) {
@@ -210,7 +248,7 @@ function readRows(gh: Deps['gh'], pr: number, tmp: string): { rows: Row[]; runs:
       }
     }
   }
-  return { rows, runs: runs.length }
+  return { rows, runs: runs.length, expired }
 }
 
 export function main(argv: string[], deps: Deps = { gh: ghDefault }): number {
@@ -227,9 +265,13 @@ export function main(argv: string[], deps: Deps = { gh: ghDefault }): number {
   }
   const tmp = mkdtempSync(join(tmpdir(), 'flaky-file-'))
   try {
-    const { rows, runs } = readRows(deps.gh, pr, tmp)
+    const { rows, runs, expired } = readRows(deps.gh, pr, tmp)
+    for (const e of expired) console.log(`expired flaky artifacts: ${e.count} in ${e.url}`)
     if (rows.length === 0) {
-      console.log(`no retry-pass in the Dev Env runs of PR #${pr} (${runs} runs read); wrote nothing`)
+      const n = expired.reduce((t, e) => t + e.count, 0)
+      console.log(
+        `no retry-pass in the Dev Env runs of PR #${pr} (${runs} runs read)${n > 0 ? `; ${n} flaky artifacts expired` : ''}; wrote nothing`,
+      )
       return 0
     }
     const archiveDir = join(dirname(bugDir), 'Archive', basename(bugDir))

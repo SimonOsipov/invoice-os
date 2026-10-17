@@ -184,6 +184,12 @@ describe('pickCover', () => {
     expect(d.toJpeg).toHaveBeenCalledWith({ width: 2000, height: 1000 }, 1600, 800, 0.82)
   })
 
+  it('a small image keeps its size and a png type is read, never upscaled', async () => {
+    const d = deps({ loadImage: vi.fn().mockResolvedValue({ width: 800, height: 600 }) })
+    await pickCover(d, png)
+    expect(d.toJpeg).toHaveBeenCalledWith({ width: 800, height: 600 }, 800, 600, 0.82)
+  })
+
   it('an unreadable file, an undecodable image and an empty image are rejected', async () => {
     const bad = { kind: 'rejected', toast: BAD_IMAGE }
     expect(await pickCover(deps({ readAsDataUrl: vi.fn().mockRejectedValue(new Error('io')) }), png)).toEqual(bad)
@@ -199,7 +205,7 @@ describe('trackCover', () => {
   it('reports the URL and releases it on stop, once', async () => {
     const h = handle()
     const onUrl = vi.fn()
-    const stop = trackCover({ fetchCoverUrl: vi.fn().mockResolvedValue(h) }, 'p1', onUrl)
+    const stop = trackCover({ fetchCoverUrl: vi.fn().mockResolvedValue(h), expire: vi.fn() }, 'p1', onUrl)
     await Promise.resolve()
     expect(onUrl).toHaveBeenCalledWith('blob:1')
     stop()
@@ -211,7 +217,7 @@ describe('trackCover', () => {
     const h = handle()
     let land!: (v: typeof h) => void
     const onUrl = vi.fn()
-    const stop = trackCover({ fetchCoverUrl: () => new Promise((r) => (land = r)) }, 'p1', onUrl)
+    const stop = trackCover({ fetchCoverUrl: () => new Promise((r) => (land = r)), expire: vi.fn() }, 'p1', onUrl)
     stop()
     land(h)
     await Promise.resolve()
@@ -221,7 +227,7 @@ describe('trackCover', () => {
 
   it('a failed fetch reports null', async () => {
     const onUrl = vi.fn()
-    trackCover({ fetchCoverUrl: vi.fn().mockRejectedValue(new ApiError('http', 'no such cover', 404)) }, 'p1', onUrl)
+    trackCover({ fetchCoverUrl: vi.fn().mockRejectedValue(new ApiError('http', 'no such cover', 404)), expire: vi.fn() }, 'p1', onUrl)
     await Promise.resolve()
     await Promise.resolve()
     expect(onUrl).toHaveBeenCalledWith(null)
@@ -229,10 +235,40 @@ describe('trackCover', () => {
 
   it('a failure after stop reports nothing', async () => {
     const onUrl = vi.fn()
-    const stop = trackCover({ fetchCoverUrl: vi.fn().mockRejectedValue(new Error('x')) }, 'p1', onUrl)
+    const stop = trackCover({ fetchCoverUrl: vi.fn().mockRejectedValue(new Error('x')), expire: vi.fn() }, 'p1', onUrl)
     stop()
     await Promise.resolve()
     await Promise.resolve()
+    expect(onUrl).not.toHaveBeenCalled()
+  })
+
+  it('a 404 does not expire the session', async () => {
+    const expire = vi.fn()
+    trackCover({ fetchCoverUrl: vi.fn().mockRejectedValue(new ApiError('http', 'gone', 404)), expire }, 'p1', vi.fn())
+    await new Promise((r) => setTimeout(r))
+    expect(expire).not.toHaveBeenCalled()
+  })
+
+  it('a 401 that survives a refused renewal expires the session once', async () => {
+    const expire = vi.fn()
+    const onUrl = vi.fn()
+    const call = vi.fn().mockRejectedValue(new ApiError('http', 'Unauthorized', 401))
+    trackCover({ fetchCoverUrl: () => withSession(call), expire }, 'p1', onUrl)
+    await new Promise((r) => setTimeout(r))
+    expect(call).toHaveBeenCalledTimes(1)
+    expect(expire).toHaveBeenCalledTimes(1)
+    expect(onUrl).toHaveBeenCalledWith(null)
+  })
+
+  it('a 401 lands after stop still expires the session and reports nothing', async () => {
+    const expire = vi.fn()
+    const onUrl = vi.fn()
+    let fail!: (e: unknown) => void
+    const stop = trackCover({ fetchCoverUrl: () => new Promise((_, r) => (fail = r)), expire }, 'p1', onUrl)
+    stop()
+    fail(new ApiError('http', 'Unauthorized', 401))
+    await new Promise((r) => setTimeout(r))
+    expect(expire).toHaveBeenCalledTimes(1)
     expect(onUrl).not.toHaveBeenCalled()
   })
 })

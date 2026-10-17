@@ -177,6 +177,20 @@ describe('setField', () => {
   })
 })
 
+describe('setField patches', () => {
+  const s = { ...editorOf(newDraft([], [], null, 'd')), errors: { title: 't', summary: 's', body: 'b' }, confirm: 'delete' as const }
+
+  it('a patch with several keys clears each of them and keeps the rest', () => {
+    expect(setField(s, { title: 'T', summary: 'S' }).errors).toEqual({ body: 'b' })
+  })
+
+  it('a field with no error leaves every error and still marks dirty and drops the confirm', () => {
+    const n = setField(s, { featured: true, cover: { kind: 'none' } })
+    expect(n).toMatchObject({ dirty: true, errors: { title: 't', summary: 's', body: 'b' }, confirm: null })
+    expect(n.draft.featured).toBe(true)
+  })
+})
+
 describe('saveState', () => {
   it('names the three states', () => {
     expect(saveState(true, 'x')).toEqual({ label: 'UNSAVED CHANGES', color: 'var(--status-amber-text)' })

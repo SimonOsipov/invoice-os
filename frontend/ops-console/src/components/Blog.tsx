@@ -85,7 +85,7 @@ export function Blog({ filters, onFilters, onToast }: Props) {
   const savedId = editor?.draft.cover.kind === 'saved' ? editor.draft.id : null
   useEffect(() => {
     setCoverUrl(null)
-    return savedId ? trackCover({ fetchCoverUrl: (id) => withSession(() => fetchCoverUrl(id)) }, savedId, setCoverUrl) : undefined
+    return savedId ? trackCover({ fetchCoverUrl: (id) => withSession(() => fetchCoverUrl(id)), expire: expireOnce }, savedId, setCoverUrl) : undefined
   }, [savedId])
 
   const onCover = async (file: File | null) => {

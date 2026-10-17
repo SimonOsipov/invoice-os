@@ -263,4 +263,17 @@ describe('BlogEditor', () => {
     ;(sw.props.onClick as () => void)()
     expect(onField).toHaveBeenLastCalledWith({ featured: true })
   })
+
+  it('picking a file hands it on and empties the input; cancelling hands on null', () => {
+    const onCover = vi.fn()
+    const t = BlogEditor({ editor: editorOf(draft()), cats: [CAT], authors: [], coverUrl: null, onField: () => {}, onCover, onBack: () => {} }) as ReactElement
+    const [input] = find(t, (e) => e.type === 'input' && e.props.type === 'file')
+    const f = new Blob(['x'], { type: 'image/png' }) as File
+    const target = { files: [f], value: 'C:\\fakepath\\a.png' }
+    ;(input.props.onChange as (e: unknown) => void)({ target })
+    expect(onCover).toHaveBeenLastCalledWith(f)
+    expect(target.value).toBe('')
+    ;(input.props.onChange as (e: unknown) => void)({ target: { files: [], value: '' } })
+    expect(onCover).toHaveBeenLastCalledWith(null)
+  })
 })

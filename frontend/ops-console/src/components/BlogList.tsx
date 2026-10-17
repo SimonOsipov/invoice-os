@@ -78,7 +78,7 @@ export function BlogList({ state, filters, onFilters, onRetry, onPin, onNew, onO
       {state.status === 'error' && <Note text={state.message} onRetry={onRetry} />}
       {ready && (
         <>
-          <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--sage-card-border)', marginBottom: 18 }}>
+          <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--tab-border)', marginBottom: 18 }}>
             {tabs(ready.posts, ready.cats, filters.tab).map((t) => (
               <button
                 key={t.key}
@@ -95,9 +95,9 @@ export function BlogList({ state, filters, onFilters, onRetry, onPin, onNew, onO
                   fontFamily: 'var(--font-sans)',
                   fontSize: 13.5,
                   fontWeight: 700,
-                  background: t.active ? 'var(--sage)' : 'transparent',
-                  color: t.active ? 'var(--link)' : 'var(--fg-3)',
-                  borderBottom: `2px solid ${t.active ? 'var(--link)' : 'transparent'}`,
+                  background: t.active ? 'var(--sage-panel)' : 'transparent',
+                  color: t.active ? 'var(--tab-active-text)' : 'var(--fg-3)',
+                  borderBottom: `2px solid ${t.active ? 'var(--tab-active-border)' : 'transparent'}`,
                   borderRadius: '6px 6px 0 0',
                 }}
               >

@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import type { ReactElement, ReactNode } from 'react'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { Category, Post } from '../blogApi'
 import type { BlogFilters } from '../types'
@@ -111,5 +112,68 @@ describe('BlogList', () => {
     const html = render(ready([post()]), { ...FILTERS, tab: 'cats' })
     expect(html).toContain('Categories')
     expect(html).not.toContain('data-blog-table')
+  })
+})
+
+// BlogList holds no hooks: calling it yields the element tree, whose handlers run in node.
+type El = ReactElement<{ children?: ReactNode; [k: string]: unknown }>
+const find = (n: ReactNode, pred: (e: El) => boolean, out: El[] = []): El[] => {
+  if (Array.isArray(n)) n.forEach((c) => find(c, pred, out))
+  else if (n && typeof n === 'object' && 'props' in n) {
+    const e = n as El
+    if (pred(e)) out.push(e)
+    find(e.props.children, pred, out)
+  }
+  return out
+}
+const tree = (state: BlogState, o: Partial<Parameters<typeof BlogList>[0]> = {}, filters = FILTERS) =>
+  BlogList({ state, filters, onFilters: () => {}, onRetry: () => {}, onPin: () => {}, ...o }) as ReactNode
+const text = (n: ReactNode): string =>
+  Array.isArray(n) ? n.map(text).join('') : typeof n === 'string' || typeof n === 'number' ? String(n) : n && typeof n === 'object' && 'props' in n ? text((n as El).props.children) : ''
+
+describe('BlogList handlers', () => {
+  it('a row pin stops propagation and pins that post', () => {
+    const onPin = vi.fn()
+    const onOpen = vi.fn()
+    const p = post({ id: 'p9' })
+    const t = tree(ready([p]), { onPin, onOpen })
+    const [btn] = find(t, (e) => e.type === 'button' && e.props.title === 'Pin as featured post')
+    expect(btn).toBeDefined()
+    const stop = vi.fn()
+    ;(btn.props.onClick as (e: unknown) => void)({ stopPropagation: stop })
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(onPin).toHaveBeenCalledWith(p)
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('Clear filters resets the query, status and category', () => {
+    const onFilters = vi.fn()
+    const t = tree(ready([post()]), { onFilters }, { ...FILTERS, q: 'zzz', status: 'draft', cat: 'c1' })
+    const [clear] = find(t, (e) => e.type === 'button' && text(e.props.children) === 'Clear filters')
+    ;(clear.props.onClick as () => void)()
+    expect(onFilters).toHaveBeenCalledWith({ tab: 'posts', q: '', status: 'all', cat: 'all' })
+  })
+
+  it('a chip sets the status, a tab sets the tab and Retry re-reads', () => {
+    const onFilters = vi.fn()
+    const onRetry = vi.fn()
+    const t = tree(ready([post()]), { onFilters })
+    const chips = find(t, (e) => e.type === 'button' && e.props.className === 'ops-chip')
+    expect(chips.map((c) => text(c.props.children).replace(/\d+$/, ''))).toEqual(['ALL', 'PUBLISHED', 'DRAFTS'])
+    ;(chips[2].props.onClick as () => void)()
+    expect(onFilters).toHaveBeenLastCalledWith({ ...FILTERS, status: 'draft' })
+    const [cats] = find(t, (e) => e.type === 'button' && text(e.props.children).includes('Categories'))
+    ;(cats.props.onClick as () => void)()
+    expect(onFilters).toHaveBeenLastCalledWith({ ...FILTERS, tab: 'cats' })
+    const [note] = find(tree({ status: 'error', message: 'boom' }, { onRetry }), (e) => e.props.text === 'boom')
+    const [retry] = find((note.type as (p: unknown) => ReactNode)(note.props), (e) => e.type === 'button' && text(e.props.children) === 'Retry')
+    ;(retry.props.onClick as () => void)()
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it('the tab strip uses the tab tokens', () => {
+    const html = render(ready([post()]))
+    expect(html).toContain('border-bottom:2px solid var(--tab-border)')
+    expect(html).toMatch(/background:var\(--sage-panel\);color:var\(--tab-active-text\)[^"]*border-bottom:2px solid var\(--tab-active-border\)/)
   })
 })

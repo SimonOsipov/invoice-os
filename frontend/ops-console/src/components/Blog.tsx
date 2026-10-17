@@ -1,7 +1,6 @@
-import { ApiError } from '@invoice-os/api-client'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchAuthors, fetchCategories, fetchPosts, setFeatured, type Post } from '../blogApi'
-import { pinPost } from '../blogFlow'
+import { loadBlog, pinThenRefresh } from '../blogFlow'
 import { expireOnce, withSession } from '../session'
 import type { BlogFilters, ToastTone } from '../types'
 import { BlogList, type BlogState } from './BlogList'
@@ -13,12 +12,6 @@ type Props = {
 }
 
 const STAFF_ONLY = 'Your account is not ASComply staff.'
-
-function failure(e: unknown): BlogState {
-  if (e instanceof ApiError && e.status === 401) expireOnce()
-  if (e instanceof ApiError && e.status === 403) return { status: 'forbidden' }
-  return { status: 'error', message: e instanceof Error ? e.message : 'Could not load posts' }
-}
 
 export function Blog({ filters, onFilters, onToast }: Props) {
   const [state, setState] = useState<BlogState>({ status: 'loading' })
@@ -32,16 +25,13 @@ export function Blog({ filters, onFilters, onToast }: Props) {
 
   const load = useCallback(async () => {
     setState({ status: 'loading' })
-    try {
-      const [posts, cats, authors] = await Promise.all([
-        withSession(fetchPosts),
-        withSession(fetchCategories),
-        withSession(fetchAuthors),
-      ])
-      if (alive.current) setState({ status: 'ready', posts, cats, authors })
-    } catch (e) {
-      if (alive.current) setState(failure(e))
-    }
+    const next = await loadBlog({
+      fetchPosts: () => withSession(fetchPosts),
+      fetchCategories: () => withSession(fetchCategories),
+      fetchAuthors: () => withSession(fetchAuthors),
+      expire: expireOnce,
+    })
+    if (alive.current) setState(next)
   }, [])
   useEffect(() => {
     void load()
@@ -52,17 +42,15 @@ export function Blog({ filters, onFilters, onToast }: Props) {
     if (pinning.current) return
     pinning.current = true
     try {
-      const out = await pinPost({ setFeatured: (id, f) => withSession(() => setFeatured(id, f)) }, post)
+      const { outcome, after } = await pinThenRefresh(
+        { setFeatured: (id, f) => withSession(() => setFeatured(id, f)), fetchPosts: () => withSession(fetchPosts), expire: expireOnce },
+        post,
+      )
       if (!alive.current) return
-      if (out.kind === 'expired') return expireOnce()
-      if (out.kind === 'done') onToast(out.toast, 'BLOG')
-      else onToast(out.kind === 'forbidden' ? STAFF_ONLY : out.message, 'BLOG', 'red')
-      try {
-        const posts = await withSession(fetchPosts)
-        if (alive.current) setState((s) => (s.status === 'ready' ? { ...s, posts } : s))
-      } catch (e) {
-        if (alive.current) setState(failure(e))
-      }
+      if (outcome.kind === 'done') onToast(outcome.toast, 'BLOG')
+      else if (outcome.kind !== 'expired') onToast(outcome.kind === 'forbidden' ? STAFF_ONLY : outcome.message, 'BLOG', 'red')
+      if (after.kind === 'posts') setState((s) => (s.status === 'ready' ? { ...s, posts: after.posts } : s))
+      else if (after.kind === 'state') setState(after.state)
     } finally {
       pinning.current = false
     }

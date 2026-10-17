@@ -256,7 +256,14 @@ func TestSeedBlogKeepsAStaffUnpublishedPost(t *testing.T) {
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("first Seed: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE public.blog_posts SET status = 'draft' WHERE id = 'what-changes'`); err != nil {
+	var title string
+	if err := pool.QueryRow(ctx, `SELECT title FROM public.blog_posts WHERE id = 'what-changes'`).Scan(&title); err != nil {
+		t.Fatalf("read the what-changes title: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `UPDATE public.blog_posts SET title = $1 WHERE id = 'what-changes'`, title)
+	})
+	if _, err := pool.Exec(ctx, `UPDATE public.blog_posts SET status = 'draft', title = 'Staff edited title' WHERE id = 'what-changes'`); err != nil {
 		t.Fatalf("set what-changes back to draft: %v", err)
 	}
 	before := readSeedPosts(t, pool)
@@ -286,5 +293,37 @@ func TestSeedBlogKeepsAStaffUnpublishedPost(t *testing.T) {
 	}
 	if after["what-changes"].status != "draft" {
 		t.Errorf("what-changes after the second Seed = %q, want draft", after["what-changes"].status)
+	}
+	var kept string
+	if err := pool.QueryRow(ctx, `SELECT title FROM public.blog_posts WHERE id = 'what-changes'`).Scan(&kept); err != nil || kept != "Staff edited title" {
+		t.Errorf("what-changes title after the second Seed = %q (err %v), want the staff edit", kept, err)
+	}
+}
+
+// A complete authorless draft that is not one of the 20 seed ids stays a draft: the publish UPDATE is keyed on the seed ids.
+func TestSeedBlogLeavesAStaffMadeDraftAlone(t *testing.T) {
+	superDSN := requireSuperuserDSN(t)
+	pool := bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	guardBlogSeedRows(t, pool)
+	if _, err := pool.Exec(ctx, `INSERT INTO public.blog_posts (id, category_id, publish_date, title, summary, body)
+		VALUES ('qa-staff-draft', 'product', '2026-10-01', 'QA staff draft', 'Complete enough to publish.', '[{"type":"p","text":"x"}]')`); err != nil {
+		t.Fatalf("plant a staff draft: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM public.blog_posts WHERE id = 'qa-staff-draft'`) })
+
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	var status string
+	var author *string
+	if err := pool.QueryRow(ctx, `SELECT status, author_id::text FROM public.blog_posts WHERE id = 'qa-staff-draft'`).Scan(&status, &author); err != nil {
+		t.Fatalf("read the staff draft: %v", err)
+	}
+	if status != "draft" || author != nil {
+		t.Errorf("staff draft after Seed: status %q author %v, want draft with no author", status, author)
+	}
+	if n := len(readSeedPosts(t, pool)); n != len(blogSeedPosts) {
+		t.Errorf("seeded posts after Seed = %d, want %d", n, len(blogSeedPosts))
 	}
 }

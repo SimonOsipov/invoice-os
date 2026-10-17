@@ -362,3 +362,58 @@ func TestRLS_BlogSeedKeepsApostrophesAndCallouts(t *testing.T) {
 		t.Errorf("firm-portfolio first block text = %q, want it to contain %q", first.Text, "each client's invoice checks")
 	}
 }
+
+// Down removes only the seed ids and Up restores them as authorless drafts; a staff-made category and post survive.
+// Runs in a rolled-back tx, so the seeded rows are untouched.
+func TestRLS_BlogSeedMigrationDownKeepsStaffRowsAndUpRestoresTheSeed(t *testing.T) {
+	requireHarness(t)
+	requireBlogTables(t)
+	ctx := context.Background()
+	up, down, ok := strings.Cut(blogSeedMigration(t), "-- +goose Down")
+	if !ok || !strings.Contains(up, "-- +goose Up") {
+		t.Fatal("seed migration has no Up and Down sections")
+	}
+	tx, err := h.super.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, q := range []string{
+		`INSERT INTO public.blog_categories (id, name, headline, intro, icon, tone, position) VALUES ('qa-staff-cat', 'QA staff category', '', '', 'package', 0, 99)`,
+		`INSERT INTO public.blog_posts (id, category_id, title) VALUES ('qa-staff-post', 'qa-staff-cat', 'QA staff post')`,
+	} {
+		if _, err := tx.Exec(ctx, q); err != nil {
+			t.Fatalf("plant a staff row: %v", err)
+		}
+	}
+	count := func() (seedPosts, seedCats, staffPosts, staffCats, authored int) {
+		t.Helper()
+		if err := tx.QueryRow(ctx, `SELECT
+			(SELECT count(*) FROM public.blog_posts WHERE id = ANY($1)),
+			(SELECT count(*) FROM public.blog_categories WHERE id = ANY($2)),
+			(SELECT count(*) FROM public.blog_posts WHERE id = 'qa-staff-post'),
+			(SELECT count(*) FROM public.blog_categories WHERE id = 'qa-staff-cat'),
+			(SELECT count(*) FROM public.blog_posts WHERE id = ANY($1) AND (author_id IS NOT NULL OR status <> 'draft' OR featured))`,
+			blogSeedIDs(), []string{"product", "regulation", "customers", "company", "partners", "engineering"}).
+			Scan(&seedPosts, &seedCats, &staffPosts, &staffCats, &authored); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		return
+	}
+	if sp, sc, stp, stc, _ := count(); sp != 20 || sc != 6 || stp != 1 || stc != 1 {
+		t.Fatalf("before Down: seed posts %d, seed categories %d, staff post %d, staff category %d, want 20 6 1 1", sp, sc, stp, stc)
+	}
+	// The staff post sits in the staff category, so Down's category delete never meets a foreign key.
+	if _, err := tx.Exec(ctx, down); err != nil {
+		t.Fatalf("run the Down: %v", err)
+	}
+	if sp, sc, stp, stc, _ := count(); sp != 0 || sc != 0 || stp != 1 || stc != 1 {
+		t.Errorf("after Down: seed posts %d, seed categories %d, staff post %d, staff category %d, want 0 0 1 1", sp, sc, stp, stc)
+	}
+	if _, err := tx.Exec(ctx, up); err != nil {
+		t.Fatalf("run the Up again: %v", err)
+	}
+	if sp, sc, stp, stc, authored := count(); sp != 20 || sc != 6 || stp != 1 || stc != 1 || authored != 0 {
+		t.Errorf("after Up: seed posts %d, seed categories %d, staff post %d, staff category %d, authored/published/featured %d, want 20 6 1 1 0", sp, sc, stp, stc, authored)
+	}
+}

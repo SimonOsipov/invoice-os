@@ -715,9 +715,15 @@ func TestBlogRead_LimitWarnIsAtMostOncePerMinute(t *testing.T) {
 	if n := len(rig.warns(msg)); n != 1 {
 		t.Fatalf("WARNs after the first refusal = %d, want 1", n)
 	}
+	// The capture log blocks after 32 WARNs, so assert before the burst can reach that.
 	for i := range 50 {
 		if rec := rig.get(blogPaths[i%len(blogPaths)], blogIP); rec.Code != http.StatusTooManyRequests {
 			t.Fatalf("refusal %d = %d, want 429", i+2, rec.Code)
+		}
+		if i == 19 {
+			if n := len(rig.warns(msg)); n != 1 {
+				t.Fatalf("WARNs after 21 refusals in one minute = %d, want 1", n)
+			}
 		}
 	}
 	if n := len(rig.warns(msg)); n != 1 {

@@ -214,6 +214,22 @@ func TestProvisionRecreateNeverRunsOutsideAPreview(t *testing.T) {
 		{"reset flag 1", "development", "true", "pr-452", "1"},
 		{"bootstrap flag empty", "development", "", "pr-452", "true"},
 		{"environment production", "production", "true", "production", "true"},
+		{"environment production with a preview railway name", "production", "true", "pr-452", "true"},
+		{"environment staging", "staging", "true", "pr-452", "true"},
+		{"environment Development", "Development", "true", "pr-452", "true"},
+		{"environment trailing space", "development ", "true", "pr-452", "true"},
+		{"environment empty", "", "true", "pr-452", "true"},
+		{"railway name Production", "development", "true", "Production", "true"},
+		{"railway name PR-452", "development", "true", "PR-452", "true"},
+		{"railway name pr-452x", "development", "true", "pr-452x", "true"},
+		{"railway name xpr-452", "development", "true", "xpr-452", "true"},
+		{"railway name pr- with no number", "development", "true", "pr-", "true"},
+		{"railway name trailing space", "development", "true", "pr-452 ", "true"},
+		{"railway name leading space", "development", "true", " pr-452", "true"},
+		{"railway name trailing newline", "development", "true", "pr-452\n", "true"},
+		{"reset flag True", "development", "true", "pr-452", "True"},
+		{"reset flag trailing space", "development", "true", "pr-452", "true "},
+		{"bootstrap flag True", "development", "True", "pr-452", "true"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -241,16 +257,25 @@ func TestProvisionRecreateNeverRunsOutsideAPreview(t *testing.T) {
 		})
 	}
 
-	t.Run("control: pr-452 with every gate on recreates", func(t *testing.T) {
-		superDSN, migDSN := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
-		addCanary(t, superDSN, "public")
+	previews := []struct{ name, env, railway string }{
+		{"control: pr-452 with every gate on recreates", "development", "pr-452"},
+		{"repo-qualified preview name recreates", "development", "invoice-os-pr-452"},
+		{"environment named like a preview recreates", "pr-452", "pr-452"},
+	}
+	for _, c := range previews {
+		t.Run(c.name, func(t *testing.T) {
+			superDSN, migDSN := migratedScratchDB(t, fsWithout(migrations.FS, outOfOrderFile))
+			addCanary(t, superDSN, "public")
+			cfg := recreateConfig(superDSN, migDSN, migrations.FS, nil)
+			cfg.Environment, cfg.RailwayEnvironmentName = c.env, c.railway
 
-		mustProvision(t, "control", recreateConfig(superDSN, migDSN, migrations.FS, nil))
+			mustProvision(t, c.name, cfg)
 
-		if canaryExists(t, superDSN) {
-			t.Error("canary table survived; the table above cannot tell a drop from no drop")
-		}
-	})
+			if canaryExists(t, superDSN) {
+				t.Error("canary table survived; the table above cannot tell a drop from no drop")
+			}
+		})
+	}
 }
 
 func TestProvisionRecreateRunsBeforeBootstrapAndMigrate(t *testing.T) {
@@ -296,6 +321,7 @@ func TestProvisionRecreateKeepsAuthAndRestoresGrants(t *testing.T) {
 	const hook = `public.custom_access_token_hook(jsonb)`
 	aclBefore := scalarSuper[string](t, superDSN, `SELECT nspacl::text FROM pg_namespace WHERE nspname = 'public'`)
 	addCanary(t, superDSN, "auth")
+	addCanary(t, superDSN, "public")
 	execSuper(t, superDSN, `INSERT INTO tenants (id, name) VALUES ($1, 'fast03 non-demo tenant')`, nonDemoTenant)
 	if n := scalarSuper[int](t, superDSN, `SELECT count(*) FROM tenants WHERE id = $1`, nonDemoTenant); n != 1 {
 		t.Fatalf("non-demo tenant rows before = %d, want 1", n)
@@ -306,6 +332,9 @@ func TestProvisionRecreateKeepsAuthAndRestoresGrants(t *testing.T) {
 
 	if n := canaryRows(t, superDSN, "auth"); n != 1 {
 		t.Errorf("auth canary rows = %d, want 1", n)
+	}
+	if canaryExists(t, superDSN) {
+		t.Error("public canary table survived; Reset never drops a table, so only the recreate removes it")
 	}
 	if aclAfter := scalarSuper[string](t, superDSN, `SELECT nspacl::text FROM pg_namespace WHERE nspname = 'public'`); aclAfter != aclBefore {
 		t.Errorf("public nspacl = %s, want %s", aclAfter, aclBefore)

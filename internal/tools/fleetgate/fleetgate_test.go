@@ -411,8 +411,26 @@ func TestDevEnv_EveryDeployedSPAIsDiscoveredAndAwaited(t *testing.T) {
 	}
 	prepare := strings.Join(lines[pStart:pEnd], "\n")
 
+	e2eStart, e2eEnd := -1, -1
+	for i, l := range lines {
+		if strings.TrimRight(l, " \t\r") == "  e2e:" {
+			e2eStart, e2eEnd = jobBounds(lines, i)
+		}
+	}
+	if e2eStart < 0 {
+		t.Fatalf("%s: no `e2e:` job", devEnvRel)
+	}
+	e2e := strings.Join(lines[e2eStart:e2eEnd], "\n")
+
 	for _, spa := range spas {
 		key := spaURLKey(spa)
+		out := strings.ToLower(key)
+		if !strings.Contains(e2e, "\n      "+out+": ${{ steps.urls.outputs."+out+" }}") {
+			t.Errorf("%s: the e2e job publishes no `%s` output for the `%s` SPA -- topology gets an empty URL", devEnvRel, out, spa)
+		}
+		if !strings.Contains(e2e, `echo "`+out+`=$`+key+`"`) {
+			t.Errorf("%s: the e2e step `Publish the SPA URLs` does not write %s -- the output stays empty", devEnvRel, out)
+		}
 		if !strings.Contains(prepare, "\n      "+strings.ToLower(key)+": ") {
 			t.Errorf("%s: prepare-env publishes no `%s` output for the `%s` SPA", devEnvRel, strings.ToLower(key), spa)
 		}

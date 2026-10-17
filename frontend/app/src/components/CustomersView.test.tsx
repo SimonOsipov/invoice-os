@@ -624,6 +624,32 @@ describe('CustomersView: the status chips', () => {
     render(<CustomersView ctx={ctxFor()} />)
     expect(screen.getByText('No customers yet')).toBeTruthy()
     expect(fetchMock).not.toHaveBeenCalled()
+
+    fireEvent.click(chip('Archived'))
+    expect(screen.getByText('No customers yet')).toBeTruthy()
+    expect(screen.queryByText('No customers match this filter')).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('CU-33e the screen shows Loading, not the empty card, while the probe is in flight', async () => {
+    let release: (r: MockResponse) => void = () => {}
+    const held = new Promise<MockResponse>((resolve) => {
+      release = resolve
+    })
+    const { customerCalls } = mockApi({
+      customers: (url) => (paramsOf(url).get('status') === 'archived' ? held : recordsPage([])),
+      invoices: () => invoicesPage([]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+
+    await waitFor(() => expect(probeCalls(customerCalls())).toHaveLength(1))
+    expect(screen.getByText('Loading customers…')).toBeTruthy()
+    expect(screen.queryByText('No customers yet')).toBeNull()
+    expect(screen.queryByText('No active customers')).toBeNull()
+
+    release(recordsPage([record({ status: 'archived' })], 1))
+    expect(await screen.findByText('No active customers')).toBeTruthy()
+    expect(screen.queryByText('Loading customers…')).toBeNull()
   })
 })
 

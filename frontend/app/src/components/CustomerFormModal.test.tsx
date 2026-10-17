@@ -21,6 +21,7 @@ const CUSTOMER: Customer = {
   country: null,
   state: null,
   lga: null,
+  status: 'active',
   created_at: '2026-01-01T00:00:00Z',
 }
 

@@ -3,6 +3,8 @@ package customer
 import (
 	"context"
 	"errors"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -15,9 +17,11 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-const columns = `id, tin, name, contact_person, buyer_type, email, telephone, street, city, postal_zone, country, state, lga, created_at`
+var fileableTINRe = regexp.MustCompile(fileableTIN)
 
-// Store reads and corrects customers as the invoice_app role; RLS scopes every query.
+const columns = `id, tin, name, contact_person, buyer_type, email, telephone, street, city, postal_zone, country, state, lga, status, created_at`
+
+// Store runs as the invoice_app role; RLS scopes every query.
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -29,7 +33,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 func scan(row pgx.Row) (Customer, error) {
 	var c Customer
 	err := row.Scan(&c.ID, &c.TIN, &c.Name, &c.ContactPerson, &c.BuyerType, &c.Email, &c.Telephone,
-		&c.Street, &c.City, &c.PostalZone, &c.Country, &c.State, &c.LGA, &c.CreatedAt)
+		&c.Street, &c.City, &c.PostalZone, &c.Country, &c.State, &c.LGA, &c.Status, &c.CreatedAt)
 	return c, err
 }
 
@@ -38,11 +42,19 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Customer, int, error)
 	items := []Customer{}
 	var total int
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		where := ""
+		var conds []string
 		var args []any
 		if tin := strings.TrimSpace(f.TIN); tin != "" {
-			where = " WHERE tin = $1"
 			args = append(args, tin)
+			conds = append(conds, "tin = $"+itoa(len(args)))
+		}
+		if f.Status != "" {
+			args = append(args, f.Status)
+			conds = append(conds, "status = $"+itoa(len(args)))
+		}
+		where := ""
+		if len(conds) > 0 {
+			where = " WHERE " + strings.Join(conds, " AND ")
 		}
 		if err := tx.QueryRow(ctx, "SELECT count(*) FROM customers"+where, args...).Scan(&total); err != nil {
 			return err
@@ -132,9 +144,120 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Customer
 	return out, nil
 }
 
-// LookupByTIN runs in the caller's tenant tx; nil, nil when no record matches.
+// Create inserts an active record. Only non-blank fields are stored and marked in edited_fields,
+// so the invoice fill can still fill the rest.
+func (s *Store) Create(ctx context.Context, in CreateInput) (Customer, error) {
+	cols := []struct {
+		name string
+		val  *string
+	}{
+		{"name", in.Fields.Name}, {"contact_person", in.Fields.ContactPerson}, {"buyer_type", in.Fields.BuyerType},
+		{"email", in.Fields.Email}, {"telephone", in.Fields.Telephone}, {"street", in.Fields.Street},
+		{"city", in.Fields.City}, {"postal_zone", in.Fields.PostalZone}, {"country", in.Fields.Country},
+		{"state", in.Fields.State}, {"lga", in.Fields.LGA},
+	}
+	var out Customer
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+		if in.TIN == nil || strings.TrimSpace(*in.TIN) == "" {
+			return errTINRequired
+		}
+		tin := strings.TrimSpace(*in.TIN)
+		if !fileableTINRe.MatchString(tin) { // before any write, so the TIN message wins over a bad buyer_type
+			return errTINFormat
+		}
+		names := []string{"tenant_id", "tin"}
+		holders := []string{"$1::uuid", "$2"}
+		args := []any{caller.TenantID, tin}
+		set := []string{}
+		for _, c := range cols {
+			if c.val == nil {
+				continue
+			}
+			t := strings.TrimSpace(*c.val)
+			if t == "" {
+				continue
+			}
+			set = append(set, c.name)
+			args = append(args, t)
+			names = append(names, c.name)
+			holders = append(holders, "$"+itoa(len(args)))
+		}
+		sort.Strings(set)
+		args = append(args, set)
+		names = append(names, "edited_fields")
+		holders = append(holders, "$"+itoa(len(args))+"::text[]")
+
+		c, err := scan(tx.QueryRow(ctx,
+			"INSERT INTO customers ("+strings.Join(names, ", ")+") VALUES ("+strings.Join(holders, ", ")+") RETURNING "+columns,
+			args...))
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) {
+				switch {
+				case pgErr.Code == "23505" && pgErr.ConstraintName == "customers_tenant_tin_uq":
+					return ErrDuplicateTIN
+				case pgErr.Code == "23514" && pgErr.TableName == "customers" && pgErr.ConstraintName == "customers_tin_check":
+					return errTINFormat
+				case pgErr.Code == "23514" && pgErr.TableName == "customers" && pgErr.ConstraintName == "customers_buyer_type_check":
+					return errBuyerType
+				case pgErr.Code == "54000": // TIN past the unique index's row limit; no other column is indexed
+					return errTINFormat
+				}
+			}
+			return err
+		}
+		out = c
+		return audit.Record(ctx, tx, caller.Subject, "customers.customer.created", map[string]any{
+			"id": c.ID, "tin": c.TIN, "fields": set,
+		})
+	})
+	if err != nil {
+		return Customer{}, err
+	}
+	return out, nil
+}
+
+// SetStatus moves a record to target. A move to the current status is ErrRedundantTransition,
+// decided under the row lock before any write, so it changes nothing and writes no audit row.
+func (s *Store) SetStatus(ctx context.Context, id, target string) (Customer, error) {
+	var out Customer
+	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+		var current string
+		if err := tx.QueryRow(ctx, "SELECT status FROM customers WHERE id = $1::text::uuid FOR UPDATE", id).Scan(&current); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.Is(err, pgx.ErrNoRows) || (errors.As(err, &pgErr) && pgErr.Code == "22P02") {
+				return ErrNotFound
+			}
+			return err
+		}
+		if current == target {
+			return ErrRedundantTransition
+		}
+		c, err := scan(tx.QueryRow(ctx, "UPDATE customers SET status = $1 WHERE id = $2::text::uuid RETURNING "+columns, target, id))
+		if err != nil {
+			return err
+		}
+		out = c
+		if target == StatusArchived {
+			return audit.Record(ctx, tx, caller.Subject, "customers.customer.archived", map[string]any{
+				"id": c.ID, "from": current, "to": target,
+			})
+		}
+		return audit.Record(ctx, tx, caller.Subject, "customers.customer.restored", map[string]any{
+			"id": c.ID, "from": current, "to": target,
+		})
+	})
+	if err != nil {
+		return Customer{}, err
+	}
+	return out, nil
+}
+
+// LookupByTIN runs in the caller's tenant tx; nil, nil when no active record matches.
 func LookupByTIN(ctx context.Context, tx pgx.Tx, tin string) (*Customer, error) {
-	c, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM customers WHERE tin = $1", strings.TrimSpace(tin)))
+	c, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM customers WHERE tin = $1 AND status = 'active'", strings.TrimSpace(tin)))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

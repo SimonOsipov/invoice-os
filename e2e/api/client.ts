@@ -377,13 +377,15 @@ export interface Customer {
   country: string | null
   state: string | null
   lga: string | null
+  status: 'active' | 'archived'
   created_at: string
 }
 
 // listCustomers(): GET /v1/customers; `tin` is ListFilter.TIN, an exact match.
-export function listCustomers(token: string, query?: { tin?: string; limit?: number; offset?: number }): Promise<{ customers: Customer[]; pagination: Pagination }> {
+export function listCustomers(token: string, query?: { tin?: string; status?: 'active' | 'archived'; limit?: number; offset?: number }): Promise<{ customers: Customer[]; pagination: Pagination }> {
   const params = new URLSearchParams()
   if (query?.tin !== undefined) params.set('tin', query.tin)
+  if (query?.status !== undefined) params.set('status', query.status)
   if (query?.limit !== undefined) params.set('limit', String(query.limit))
   if (query?.offset !== undefined) params.set('offset', String(query.offset))
   const qs = params.toString()
@@ -424,6 +426,26 @@ export interface CustomerUpdateInput {
 // updateCustomer(): PATCH /v1/customers/{id}.
 export function updateCustomer(token: string, id: string, body: CustomerUpdateInput): Promise<Customer> {
   return apiFetch<Customer>(`${apiBase()}/api/invoice/v1/customers/${id}`, { method: 'PATCH', body, token })
+}
+
+// CustomerCreateInput mirrors internal/customer's create request: tin plus the editable keys.
+export interface CustomerCreateInput extends CustomerUpdateInput {
+  tin: string
+}
+
+// createCustomer(): POST /v1/customers.
+export function createCustomer(token: string, body: CustomerCreateInput): Promise<Customer> {
+  return apiFetch<Customer>(`${apiBase()}/api/invoice/v1/customers`, { method: 'POST', body, token })
+}
+
+// archiveCustomer(): POST /v1/customers/{id}/archive.
+export function archiveCustomer(token: string, id: string): Promise<Customer> {
+  return apiFetch<Customer>(`${apiBase()}/api/invoice/v1/customers/${id}/archive`, { method: 'POST', token })
+}
+
+// restoreCustomer(): POST /v1/customers/{id}/restore.
+export function restoreCustomer(token: string, id: string): Promise<Customer> {
+  return apiFetch<Customer>(`${apiBase()}/api/invoice/v1/customers/${id}/restore`, { method: 'POST', token })
 }
 
 export interface Violation {

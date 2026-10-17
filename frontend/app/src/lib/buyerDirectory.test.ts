@@ -1,7 +1,7 @@
 import { ApiError } from '@invoice-os/api-client'
 import { describe, expect, it, vi } from 'vitest'
 
-import { buyerFormFrom, listCustomers, mapCorrectionError, recordNamesByTin, toCustomerUpdateInput, updateCustomer, type Customer } from './buyerDirectory'
+import { buyerFormFrom, findCustomerByTin, listCustomers, mapCorrectionError, recordNamesByTin, toCustomerUpdateInput, updateCustomer, type Customer } from './buyerDirectory'
 
 const BASE = 'https://gateway.test'
 
@@ -19,6 +19,7 @@ const CUSTOMER: Customer = {
   country: null,
   state: null,
   lga: null,
+  status: 'active',
   created_at: '2026-01-01T00:00:00Z',
 }
 
@@ -28,6 +29,12 @@ describe('buyerDirectory', () => {
     await listCustomers(af, BASE, { limit: 50, offset: 50 })
     expect(af).toHaveBeenCalledTimes(1)
     expect(af).toHaveBeenCalledWith(`${BASE}/api/invoice/v1/customers?limit=50&offset=50`)
+  })
+
+  it('findCustomerByTin asks only for active records', async () => {
+    const af = vi.fn().mockResolvedValue({ customers: [CUSTOMER], pagination: { limit: 1, offset: 0, total: 1 } })
+    await findCustomerByTin(af, BASE, '12345678-0001')
+    expect(af).toHaveBeenCalledWith(`${BASE}/api/invoice/v1/customers?tin=12345678-0001&status=active&limit=1`)
   })
 
   it('updateCustomer PATCHes the customer by id', async () => {
@@ -63,8 +70,8 @@ describe('recordNamesByTin', () => {
     const af = vi.fn().mockResolvedValue({ customers: [], pagination: { limit: 1, offset: 0, total: 0 } })
     await recordNamesByTin(af, BASE, ['20000000-0001', '20000000-0001', '', 'BAD', 'RN-9'])
     expect(af.mock.calls.map((c) => c[0])).toEqual([
-      `${BASE}/api/invoice/v1/customers?tin=20000000-0001&limit=1`,
-      `${BASE}/api/invoice/v1/customers?tin=RN-9&limit=1`,
+      `${BASE}/api/invoice/v1/customers?tin=20000000-0001&status=active&limit=1`,
+      `${BASE}/api/invoice/v1/customers?tin=RN-9&status=active&limit=1`,
     ])
   })
 

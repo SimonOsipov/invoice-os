@@ -20,6 +20,7 @@ export interface Customer {
   country: string | null
   state: string | null
   lga: string | null
+  status: 'active' | 'archived'
   created_at: string
 }
 
@@ -30,7 +31,7 @@ export interface CustomerListResponse {
 
 export type CustomerUpdateInput = Partial<Record<EditableKey, string>>
 
-type EditableKey = Exclude<keyof Customer, 'id' | 'tin' | 'created_at'>
+type EditableKey = Exclude<keyof Customer, 'id' | 'tin' | 'status' | 'created_at'>
 
 export function listCustomers(
   authedFetch: AuthedFetch,
@@ -43,9 +44,9 @@ export function listCustomers(
 // The directory's filing TIN pattern: 12 digits with a hyphen after the 8th, or RN-<digits>.
 export const FILEABLE_TIN = /^([0-9]{8}-[0-9]{4}|RN-[0-9]+)$/
 
-// The record for an exact TIN, or null when none matches.
+// The active record for an exact TIN, or null when none matches.
 export async function findCustomerByTin(authedFetch: AuthedFetch, base: string, tin: string): Promise<Customer | null> {
-  const res = await authedFetch<CustomerListResponse>(`${base}/api/invoice/v1/customers?tin=${encodeURIComponent(tin)}&limit=1`)
+  const res = await authedFetch<CustomerListResponse>(`${base}/api/invoice/v1/customers?tin=${encodeURIComponent(tin)}&status=active&limit=1`)
   return res.customers[0] ?? null
 }
 

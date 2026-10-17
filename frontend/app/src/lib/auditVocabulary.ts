@@ -88,6 +88,9 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'reconciliation.auto_fixed': { label: 'Drift auto-corrected', domain: 'reconciliation', outcome: 'good' },
 
   'customers.customer.updated': { label: 'Customer updated', domain: 'customers' },
+  'customers.customer.created': { label: 'Customer added', domain: 'customers' },
+  'customers.customer.archived': { label: 'Customer archived', domain: 'customers' },
+  'customers.customer.restored': { label: 'Customer restored', domain: 'customers' },
 }
 
 const TONE: Record<AuditOutcome, AuditTone> = { good: 'green', bad: 'red', neutral: 'amber' }

@@ -170,6 +170,40 @@ func TestFill_MemberCorrectionIsNeverOverwritten(t *testing.T) {
 	}
 }
 
+// cfHandCreate makes the record through customer.Store.Create, as POST /v1/customers does.
+func cfHandCreate(t *testing.T, f nrsFixture, in customer.CreateInput) {
+	t.Helper()
+	if _, err := customer.NewStore(f.app).Create(f.c, in); err != nil {
+		t.Fatalf("customer.Store.Create: %v", err)
+	}
+}
+
+func TestFill_HandCreatedRecordKeepsWhatThePersonTyped(t *testing.T) {
+	f := newNRSFixture(t, "CF-HC1")
+	cfHandCreate(t, f, customer.CreateInput{TIN: strPtr(cfTIN), Fields: customer.UpdateInput{Name: strPtr("Typed Ltd"), Email: strPtr("typed@x.ng")}})
+	f.create(t, "CF-HC1", CreateInput{BuyerTIN: strPtr(cfTIN), BuyerName: strPtr("Invoice Ltd"), BuyerEmail: strPtr("inv@x.ng"), BuyerCity: strPtr("Abuja")})
+	r := cfMust(t, f.super, f.tenantID, cfTIN)
+	if cfV(r.City) != "Abuja" {
+		t.Errorf("control: city = %s, want Abuja (the fill ran)", cfV(r.City))
+	}
+	if cfV(r.Name) != "Typed Ltd" || cfV(r.Email) != "typed@x.ng" {
+		t.Errorf("name/email = %s/%s, want Typed Ltd/typed@x.ng (what the person typed)", cfV(r.Name), cfV(r.Email))
+	}
+}
+
+func TestFill_AFieldLeftBlankOnCreateIsFilled(t *testing.T) {
+	f := newNRSFixture(t, "CF-HC2")
+	cfHandCreate(t, f, customer.CreateInput{TIN: strPtr(cfTIN), Fields: customer.UpdateInput{Name: strPtr("Typed Ltd"), City: strPtr("")}})
+	f.create(t, "CF-HC2", CreateInput{BuyerTIN: strPtr(cfTIN), BuyerName: strPtr("Invoice Ltd"), BuyerCity: strPtr("Abuja")})
+	r := cfMust(t, f.super, f.tenantID, cfTIN)
+	if cfV(r.City) != "Abuja" {
+		t.Errorf("city = %s, want Abuja (left blank on create, so the fill fills it)", cfV(r.City))
+	}
+	if cfV(r.Name) != "Typed Ltd" {
+		t.Errorf("name = %s, want Typed Ltd (typed on create)", cfV(r.Name))
+	}
+}
+
 func TestFill_OlderInvoiceReSavedKeepsTheCorrection(t *testing.T) {
 	f := newNRSFixture(t, "CF-05")
 	inv1 := f.create(t, "CF-5A", CreateInput{BuyerTIN: strPtr(cfTIN), BuyerName: strPtr("Original Ltd"), BuyerEmail: strPtr("a@x.ng")})
@@ -778,5 +812,30 @@ func TestFill_ConcurrentSavesForOneTINDoNotDeadlockOrDuplicate(t *testing.T) {
 		if got := cfV(cfMust(t, f.super, f.tenantID, home).City); got != "Fixed" {
 			t.Errorf("round %d: home city = %s, want Fixed (the member's correction survives the fills)", round, got)
 		}
+	}
+}
+
+func TestFill_ArchivedRecordStillFillsAndStaysArchived(t *testing.T) {
+	f := newNRSFixture(t, "CF-ARCH")
+	f.create(t, "CF-AR-A", CreateInput{BuyerTIN: strPtr(cfTIN)})
+	id := cfMust(t, f.super, f.tenantID, cfTIN).ID
+	cfCorrect(t, f, id, customer.UpdateInput{Email: strPtr("fixed@x.ng")})
+	if _, err := customer.NewStore(f.app).SetStatus(f.c, id, customer.StatusArchived); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+	f.create(t, "CF-AR-B", CreateInput{BuyerTIN: strPtr(cfTIN), BuyerCity: strPtr("Abuja"), BuyerEmail: strPtr("new@x.ng")})
+
+	r := cfMust(t, f.super, f.tenantID, cfTIN)
+	if cfV(r.City) != "Abuja" {
+		t.Errorf("city = %s, want Abuja (an unedited field fills)", cfV(r.City))
+	}
+	if cfV(r.Email) != "fixed@x.ng" {
+		t.Errorf("email = %s, want fixed@x.ng (the edited field is kept)", cfV(r.Email))
+	}
+	if st := mustCount(t, f.super, `SELECT count(*) FROM customers WHERE id = $1 AND status = 'archived'`, id); st != 1 {
+		t.Errorf("archived rows for the record = %d, want 1 (stays archived)", st)
+	}
+	if n := cfCount(t, f.super, f.tenantID); n != 1 {
+		t.Errorf("customers rows = %d, want 1", n)
 	}
 }

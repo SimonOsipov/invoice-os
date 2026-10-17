@@ -29,7 +29,7 @@ function customer(tin: string, over: Partial<Customer> = {}): Customer {
   return {
     id: `c-${tin}`, tin, name: 'Acme Buyer', contact_person: null, buyer_type: 'B2B', email: 'buy@acme.test',
     telephone: '0800', street: '1 Main', city: 'Ikeja', postal_zone: '100001', country: 'NG', state: 'NG-LA',
-    lga: 'NG-LA-IK', created_at: '2026-01-01T00:00:00Z', ...over,
+    lga: 'NG-LA-IK', status: 'active', created_at: '2026-01-01T00:00:00Z', ...over,
   }
 }
 
@@ -145,7 +145,7 @@ describe('CreateForm buyer lookup', () => {
     authedFetch.mockImplementation(async () => ({ customers: [customer(TIN_A)], pagination: { limit: 1, offset: 0, total: 1 } }))
     mount(blankDraft())
     await blurTin(TIN_A)
-    expect(authedFetch).toHaveBeenCalledWith(`https://gateway.test/api/invoice/v1/customers?tin=${TIN_A}&limit=1`)
+    expect(authedFetch).toHaveBeenCalledWith(`https://gateway.test/api/invoice/v1/customers?tin=${TIN_A}&status=active&limit=1`)
     expect(nameInput().value).toBe('Acme Buyer')
     expect(byLabel('invoice_kind').value).toBe('B2B')
     expect(byLabel('buyer_email').value).toBe('buy@acme.test')

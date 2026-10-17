@@ -96,6 +96,7 @@ type seed struct {
 	Name, BuyerType, Email, Telephone, City *string
 	State                                   *string
 	Edited                                  []string
+	Status                                  string // "" keeps the column default
 }
 
 func seedCustomer(t *testing.T, super *pgxpool.Pool, tenantID string, s seed) string {
@@ -106,9 +107,9 @@ func seedCustomer(t *testing.T, super *pgxpool.Pool, tenantID string, s seed) st
 	}
 	var id string
 	if err := super.QueryRow(context.Background(),
-		`INSERT INTO customers (tenant_id, tin, name, buyer_type, email, telephone, city, state, edited_fields)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-		tenantID, s.TIN, s.Name, s.BuyerType, s.Email, s.Telephone, s.City, s.State, edited).Scan(&id); err != nil {
+		`INSERT INTO customers (tenant_id, tin, name, buyer_type, email, telephone, city, state, edited_fields, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE(NULLIF($10, ''), 'active')) RETURNING id`,
+		tenantID, s.TIN, s.Name, s.BuyerType, s.Email, s.Telephone, s.City, s.State, edited, s.Status).Scan(&id); err != nil {
 		t.Fatalf("seed customers row %q: %v", s.TIN, err)
 	}
 	return id
@@ -131,6 +132,15 @@ func readRow(t *testing.T, super *pgxpool.Pool, id string) row {
 		t.Fatalf("read customers row %s: %v", id, err)
 	}
 	return r
+}
+
+func rowStatus(t *testing.T, super *pgxpool.Pool, id string) string {
+	t.Helper()
+	var st string
+	if err := super.QueryRow(context.Background(), `SELECT status FROM customers WHERE id = $1`, id).Scan(&st); err != nil {
+		t.Fatalf("read customers status %s: %v", id, err)
+	}
+	return st
 }
 
 func strVal(p *string) string {
@@ -177,6 +187,13 @@ func newMux(store *customer.Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/customers", customer.ListHandler(store.List, nil))
 	mux.HandleFunc("PATCH /v1/customers/{id}", customer.UpdateHandler(store.Update, nil))
+	mux.HandleFunc("POST /v1/customers", customer.CreateHandler(store.Create, nil))
+	mux.HandleFunc("POST /v1/customers/{id}/archive", customer.SetStatusHandler(func(ctx context.Context, id string) (customer.Customer, error) {
+		return store.SetStatus(ctx, id, customer.StatusArchived)
+	}, nil))
+	mux.HandleFunc("POST /v1/customers/{id}/restore", customer.SetStatusHandler(func(ctx context.Context, id string) (customer.Customer, error) {
+		return store.SetStatus(ctx, id, customer.StatusActive)
+	}, nil))
 	return mux
 }
 
@@ -331,7 +348,7 @@ func TestListHandler_PaginationEnvelope(t *testing.T) {
 		t.Errorf("pagination = %+v, want {limit 1 offset 1 total 3}", body.Pagination)
 	}
 	wantKeys := []string{"city", "contact_person", "country", "created_at", "email", "id", "lga", "name",
-		"buyer_type", "postal_zone", "state", "street", "telephone", "tin"}
+		"buyer_type", "postal_zone", "state", "status", "street", "telephone", "tin"}
 	sort.Strings(wantKeys)
 	var gotKeys []string
 	for k := range body.Customers[0] {
@@ -613,10 +630,24 @@ func TestHandlers_NoIdentityIs401(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/customers", customer.ListHandler(list, nil))
 	mux.HandleFunc("PATCH /v1/customers/{id}", customer.UpdateHandler(update, nil))
+	create := func(context.Context, customer.CreateInput) (customer.Customer, error) {
+		called = true
+		return customer.Customer{}, nil
+	}
+	mux.HandleFunc("POST /v1/customers", customer.CreateHandler(create, nil))
+	setStatus := func(context.Context, string) (customer.Customer, error) {
+		called = true
+		return customer.Customer{}, nil
+	}
+	mux.HandleFunc("POST /v1/customers/{id}/archive", customer.SetStatusHandler(setStatus, nil))
+	mux.HandleFunc("POST /v1/customers/{id}/restore", customer.SetStatusHandler(setStatus, nil))
 
 	for _, tc := range []struct{ method, target, body string }{
 		{http.MethodGet, "/v1/customers", ""},
 		{http.MethodPatch, "/v1/customers/" + uuid.NewString(), `{"email":"a@x.ng"}`},
+		{http.MethodPost, "/v1/customers", `{"tin":"` + tin1 + `"}`},
+		{http.MethodPost, "/v1/customers/" + uuid.NewString() + "/archive", ""},
+		{http.MethodPost, "/v1/customers/" + uuid.NewString() + "/restore", ""},
 	} {
 		rec := do(t, mux, context.Background(), tc.method, tc.target, tc.body)
 		if rec.Code != http.StatusUnauthorized {
@@ -711,6 +742,217 @@ func TestUpdateHandler_NoCorrectableFieldIs400(t *testing.T) {
 	r = readRow(t, super, id)
 	if r.TIN != tin1 || strVal(r.Name) != "Changed" || !reflect.DeepEqual(r.Edited, []string{"name"}) {
 		t.Errorf("control: row = tin %q name %q edited %v, want %s Changed [name]", r.TIN, strVal(r.Name), r.Edited, tin1)
+	}
+}
+
+func TestListHandler_EveryRowCarriesItsStatus(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer wire status")
+	seedCustomer(t, super, tenantA, seed{TIN: tin1})
+	seedCustomer(t, super, tenantA, seed{TIN: tin2, Status: "archived"})
+
+	rec := do(t, h, ctxA, http.MethodGet, "/v1/customers", "")
+	wantStatus(t, rec, http.StatusOK)
+	var resp struct {
+		Customers []customer.Customer `json:"customers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := map[string]string{}
+	for _, c := range resp.Customers {
+		got[c.TIN] = c.Status
+	}
+	if want := map[string]string{tin1: "active", tin2: "archived"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("status by tin = %v, want %v", got, want)
+	}
+}
+
+func TestUpdateHandler_StatusIsNotPatchable(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer status patch")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1, Status: "archived"})
+
+	rec := do(t, h, ctxA, http.MethodPatch, "/v1/customers/"+id, `{"status":"active"}`)
+	wantStatus(t, rec, http.StatusBadRequest)
+	if got := errorBody(t, rec); got != "no fields to update" {
+		t.Errorf("PATCH status alone error = %q, want %q", got, "no fields to update")
+	}
+	if st := rowStatus(t, super, id); st != "archived" {
+		t.Errorf("status after rejected PATCH = %q, want archived", st)
+	}
+	if n := len(auditRows(t, super, tenantA, updatedEvent)); n != 0 {
+		t.Errorf("audit rows after rejected PATCH = %d, want 0", n)
+	}
+
+	rec = do(t, h, ctxA, http.MethodPatch, "/v1/customers/"+id, `{"status":"active","name":"X"}`)
+	wantStatus(t, rec, http.StatusOK)
+	r := readRow(t, super, id)
+	if strVal(r.Name) != "X" || !reflect.DeepEqual(r.Edited, []string{"name"}) {
+		t.Errorf("row = name %q edited %v, want X [name]", strVal(r.Name), r.Edited)
+	}
+	if st := rowStatus(t, super, id); st != "archived" {
+		t.Errorf("status after PATCH with a name = %q, want archived", st)
+	}
+}
+
+func TestUpdateHandler_ArchivedRecordIsCorrectable(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer archived correct")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1, Status: "archived"})
+
+	rec := do(t, h, ctxA, http.MethodPatch, "/v1/customers/"+id, `{"email":"new@x.ng"}`)
+	wantStatus(t, rec, http.StatusOK)
+	var got customer.Customer
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if strVal(got.Email) != "new@x.ng" || got.Status != "archived" {
+		t.Errorf("response email %q status %q, want new@x.ng archived", strVal(got.Email), got.Status)
+	}
+	r := readRow(t, super, id)
+	if strVal(r.Email) != "new@x.ng" || !reflect.DeepEqual(r.Edited, []string{"email"}) || rowStatus(t, super, id) != "archived" {
+		t.Errorf("row = email %q edited %v status %q, want new@x.ng [email] archived", strVal(r.Email), r.Edited, rowStatus(t, super, id))
+	}
+	if n := len(auditRows(t, super, tenantA, updatedEvent)); n != 1 {
+		t.Errorf("customers.customer.updated rows = %d, want 1", n)
+	}
+}
+
+func TestStoreList_StatusFilter(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer status filter")
+	a := seedCustomer(t, super, tenantA, seed{TIN: tin1, Name: ptr("A")})
+	b := seedCustomer(t, super, tenantA, seed{TIN: tin2, Name: ptr("B"), Status: "archived"})
+	c := seedCustomer(t, super, tenantA, seed{TIN: tin3, Name: ptr("C")})
+
+	for _, tc := range []struct {
+		status string
+		want   []string
+	}{{"active", []string{a, c}}, {"archived", []string{b}}, {"", []string{a, b, c}}} {
+		got, total, err := store.List(ctxA, customer.ListFilter{Status: tc.status, Limit: 50})
+		if err != nil {
+			t.Fatalf("List status %q: %v", tc.status, err)
+		}
+		if total != len(tc.want) || !reflect.DeepEqual(ids(got), tc.want) {
+			t.Errorf("List status %q = ids %v total %d, want %v total %d", tc.status, ids(got), total, tc.want, len(tc.want))
+		}
+	}
+}
+
+func TestStoreList_StatusFilterTotalIgnoresPaging(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer status paging")
+	seedCustomer(t, super, tenantA, seed{TIN: tin1, Name: ptr("A")})
+	b := seedCustomer(t, super, tenantA, seed{TIN: tin2, Name: ptr("B"), Status: "archived"})
+	seedCustomer(t, super, tenantA, seed{TIN: tin3, Name: ptr("C")})
+	d := seedCustomer(t, super, tenantA, seed{TIN: "12345678-0004", Name: ptr("D"), Status: "archived"})
+
+	got, total, err := store.List(ctxA, customer.ListFilter{Status: "archived", Limit: 1, Offset: 1})
+	if err != nil || total != 2 || !reflect.DeepEqual(ids(got), []string{d}) {
+		t.Errorf("archived page 2 = %v total %d err %v, want [%s] total 2", ids(got), total, err, d)
+	}
+	got, total, err = store.List(ctxA, customer.ListFilter{Status: "archived", Limit: 1})
+	if err != nil || total != 2 || !reflect.DeepEqual(ids(got), []string{b}) {
+		t.Errorf("archived page 1 = %v total %d err %v, want [%s] total 2", ids(got), total, err, b)
+	}
+}
+
+func TestStoreList_StatusAndTINCombine(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer status tin")
+	arch := seedCustomer(t, super, tenantA, seed{TIN: tin1, Status: "archived"})
+	seedCustomer(t, super, tenantA, seed{TIN: tin2})
+
+	got, total, err := store.List(ctxA, customer.ListFilter{TIN: tin1, Status: "active", Limit: 50})
+	if err != nil || total != 0 || len(got) != 0 {
+		t.Errorf("List active+tin1 = %v total %d err %v, want empty total 0", ids(got), total, err)
+	}
+	got, total, err = store.List(ctxA, customer.ListFilter{TIN: tin1, Status: "archived", Limit: 50})
+	if err != nil || total != 1 || !reflect.DeepEqual(ids(got), []string{arch}) {
+		t.Errorf("List archived+tin1 = %v total %d err %v, want [%s] total 1", ids(got), total, err, arch)
+	}
+}
+
+func TestListHandler_UnknownStatusIs400(t *testing.T) {
+	called := false
+	list := func(context.Context, customer.ListFilter) ([]customer.Customer, int, error) {
+		called = true
+		return nil, 0, nil
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/customers", customer.ListHandler(list, nil))
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString()})
+
+	for _, q := range []string{"deleted", "ACTIVE", "archived,active"} {
+		rec := do(t, mux, ctx, http.MethodGet, "/v1/customers?status="+q, "")
+		wantStatus(t, rec, http.StatusBadRequest)
+		if got := errorBody(t, rec); got != `status must be "active" or "archived"` {
+			t.Errorf("?status=%s error = %q", q, got)
+		}
+	}
+	if called {
+		t.Error("the list function ran for an unknown status")
+	}
+	wantStatus(t, do(t, mux, ctx, http.MethodGet, "/v1/customers?status=", ""), http.StatusOK)
+	if !called {
+		t.Error("control: empty status did not reach the list function")
+	}
+}
+
+func TestListHandler_RepeatedStatusUsesTheFirst(t *testing.T) {
+	var got customer.ListFilter
+	list := func(_ context.Context, f customer.ListFilter) ([]customer.Customer, int, error) {
+		got = f
+		return nil, 0, nil
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/customers", customer.ListHandler(list, nil))
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString()})
+
+	wantStatus(t, do(t, mux, ctx, http.MethodGet, "/v1/customers?status=archived&status=active", ""), http.StatusOK)
+	if got.Status != "archived" {
+		t.Errorf("filter status = %q, want archived (the first value)", got.Status)
+	}
+	wantStatus(t, do(t, mux, ctx, http.MethodGet, "/v1/customers?status=archived&status=deleted", ""), http.StatusOK)
+}
+
+func TestUpdateHandler_NullStatusIsNotPatchable(t *testing.T) {
+	super, app := dbTestPools(t)
+	h := newMux(customer.NewStore(app))
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer status null")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1, Status: "archived"})
+
+	rec := do(t, h, ctxA, http.MethodPatch, "/v1/customers/"+id, `{"status":null}`)
+	wantStatus(t, rec, http.StatusBadRequest)
+	if st := rowStatus(t, super, id); st != "archived" {
+		t.Errorf("status after PATCH null = %q, want archived", st)
+	}
+}
+
+func TestLookupByTIN_ArchivedIsNil(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer lookup archived")
+	id := seedCustomer(t, super, tenantA, seed{TIN: tin1})
+	set := func(st string) {
+		if _, err := super.Exec(context.Background(), `UPDATE customers SET status = $1 WHERE id = $2`, st, id); err != nil {
+			t.Fatalf("set status %s: %v", st, err)
+		}
+	}
+
+	set("archived")
+	if got, err := lookup(t, app, ctxA, tin1); err != nil || got != nil {
+		t.Errorf("LookupByTIN(archived) = %v, %v, want nil, nil", got, err)
+	}
+	set("active")
+	if got, err := lookup(t, app, ctxA, tin1); err != nil || got == nil || got.ID != id {
+		t.Errorf("LookupByTIN(active again) = %v, %v, want the record", got, err)
 	}
 }
 

@@ -24,7 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// The 21 attributable events, by rule, plus the 22 workspace-level ones.
+// The 21 attributable events, by rule, plus the 25 workspace-level ones.
 var (
 	triggerRuleAEvents = []string{ // bare `id`, looked up through invoices
 		"invoice.created",
@@ -68,28 +68,31 @@ var (
 func triggerRuleDPayloads(invoiceID string) map[string]map[string]any {
 	policyID, userID, docID, invitationID := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
 	return map[string]map[string]any{
-		"approval_policy.created":    {"policy_id": policyID},
-		"approval_policy.updated":    {"policy_id": policyID},
-		"approval_policy.published":  {"policy_id": policyID},
-		"approval_policy.deleted":    {"policy_id": policyID},
-		"workflow_role.created":      {"key": "approver"},
-		"workflow_role.updated":      {"key": "approver"},
-		"workflow_role.deleted":      {"key": "approver"},
-		"workflow_role.staffed":      {"key": "approver"},
-		"document.created":           {"id": invoiceID},
-		"document.read":              {"id": invoiceID},
-		"document.reused":            {"id": invoiceID},
-		"extraction.succeeded":       {"document_id": docID, "invoice_id": invoiceID},
-		"extraction.failed":          {"document_id": docID, "id": invoiceID},
-		"membership.suspended":       {"user_id": userID},
-		"membership.reactivated":     {"user_id": userID},
-		"workspace.provisioned":      {"tenant_id": uuid.NewString(), "user_id": userID},
-		"validation.rule.enabled":    {"key": "buyer-tin-present"},
-		"validation.rule.disabled":   {"key": "buyer-tin-present"},
-		"invitation.sent":            {"invitation_id": invitationID, "role": "preparer"},
-		"invitation.resent":          {"invitation_id": invitationID, "role": "preparer", "counted": true},
-		"invitation.accepted":        {"invitation_id": invitationID, "role": "preparer"},
-		"customers.customer.updated": {"id": uuid.NewString(), "tin": "12345678-0001", "fields": []string{"email"}},
+		"approval_policy.created":     {"policy_id": policyID},
+		"approval_policy.updated":     {"policy_id": policyID},
+		"approval_policy.published":   {"policy_id": policyID},
+		"approval_policy.deleted":     {"policy_id": policyID},
+		"workflow_role.created":       {"key": "approver"},
+		"workflow_role.updated":       {"key": "approver"},
+		"workflow_role.deleted":       {"key": "approver"},
+		"workflow_role.staffed":       {"key": "approver"},
+		"document.created":            {"id": invoiceID},
+		"document.read":               {"id": invoiceID},
+		"document.reused":             {"id": invoiceID},
+		"extraction.succeeded":        {"document_id": docID, "invoice_id": invoiceID},
+		"extraction.failed":           {"document_id": docID, "id": invoiceID},
+		"membership.suspended":        {"user_id": userID},
+		"membership.reactivated":      {"user_id": userID},
+		"workspace.provisioned":       {"tenant_id": uuid.NewString(), "user_id": userID},
+		"validation.rule.enabled":     {"key": "buyer-tin-present"},
+		"validation.rule.disabled":    {"key": "buyer-tin-present"},
+		"invitation.sent":             {"invitation_id": invitationID, "role": "preparer"},
+		"invitation.resent":           {"invitation_id": invitationID, "role": "preparer", "counted": true},
+		"invitation.accepted":         {"invitation_id": invitationID, "role": "preparer"},
+		"customers.customer.updated":  {"id": uuid.NewString(), "tin": "12345678-0001", "fields": []string{"email"}},
+		"customers.customer.created":  {"id": uuid.NewString(), "tin": "12345678-0001", "fields": []string{"name"}},
+		"customers.customer.archived": {"id": uuid.NewString(), "from": "active", "to": "archived"},
+		"customers.customer.restored": {"id": uuid.NewString(), "from": "archived", "to": "active"},
 	}
 }
 
@@ -159,7 +162,7 @@ func TestAudit_InsertTriggerResolvesPortfolioEventsFromTheirOwnPayload(t *testin
 	}
 }
 
-// AC-13: the 22 workspace-level events stay NULL even when their payload holds a real
+// AC-13: the 25 workspace-level events stay NULL even when their payload holds a real
 // invoice id. The rule-A row in the same test is the positive control.
 //
 // For the two extraction.* names this is a DRIFT GUARD, not proof of their scope: the
@@ -171,8 +174,8 @@ func TestAudit_InsertTriggerLeavesWorkspaceEventsNull(t *testing.T) {
 	fx := seedTriggerFixture(t, f)
 
 	ruleD := triggerRuleDPayloads(fx.invoice)
-	if len(ruleD) != 22 {
-		t.Fatalf("rule-D payload map holds %d events, want 22", len(ruleD))
+	if len(ruleD) != 25 {
+		t.Fatalf("rule-D payload map holds %d events, want 25", len(ruleD))
 	}
 	for event, payload := range ruleD {
 		recordAudit(t, f, fx.tenant, event, payload)

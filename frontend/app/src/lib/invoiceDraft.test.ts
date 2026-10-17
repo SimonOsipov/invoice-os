@@ -1305,6 +1305,7 @@ describe('applyBuyerRecord (AC-6)', () => {
     country: 'NG',
     state: 'Lagos',
     lga: null,
+    status: 'active',
     created_at: '2026-10-01T00:00:00Z',
   }
 

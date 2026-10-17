@@ -896,6 +896,7 @@ function record(over: Partial<Customer> = {}): Customer {
     country: null,
     state: null,
     lga: null,
+    status: 'active',
     created_at: '2026-07-01T00:00:00Z',
     ...over,
   }

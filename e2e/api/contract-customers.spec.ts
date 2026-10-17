@@ -3,7 +3,7 @@
 // random per-run TINs and the spec acts only on those.
 import { randomUUID } from 'node:crypto'
 import { test, expect } from '@playwright/test'
-import { createEntity, createInvoice, getAuditLog, listCustomers, login, rawFetch, updateCustomer, PERSONAS, type Customer, type Entity } from './client'
+import { createCustomer, createEntity, createInvoice, getAuditLog, listCustomers, login, rawFetch, updateCustomer, PERSONAS, type Customer, type Entity } from './client'
 import { freshBuyerTin, freshTin } from './fixtures'
 import { assertErrorEnvelope } from './contract-helpers'
 
@@ -11,6 +11,11 @@ import { assertErrorEnvelope } from './contract-helpers'
 const NO_FIELDS = 'no fields to update'
 const BUYER_TYPE = 'buyer_type must be B2B, B2G or B2C'
 const LIMIT_MIN = 'limit must be >= 1'
+// customer.statusForErr (ErrDuplicateTIN, ErrRedundantTransition), customer.errTINFormat, and the list handler's status message.
+const DUPLICATE_TIN = 'duplicate tin'
+const REDUNDANT_TRANSITION = 'redundant transition'
+const TIN_FORMAT = 'tin must be NNNNNNNN-NNNN or RN- followed by digits'
+const STATUS_MSG = 'status must be "active" or "archived"'
 
 // Buyer TINs of db/seed.dev.sql per tenant; customer.SeedDemo files one record each at invoice boot.
 // 99999999-000x are left out: E2E saves fill them.
@@ -116,5 +121,64 @@ test.describe('buyer directory contract (API E2E, over the deployed gateway)', (
     }
     const { customers } = await listCustomers(token, { tin: MALFORMED_TIN })
     expect(customers, 'a malformed buyer TIN files no record').toHaveLength(0)
+  })
+
+  test('a member creates a customer by hand', async () => {
+    const tin = freshBuyerTin()
+    const email = `hand-${tin}@example.com`
+    const res = await rawFetch('/api/invoice/v1/customers', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: { tin, name: `Hand ${tin}`, email } })
+    expect(res.status, 'a create answers 201').toBe(201)
+    const created = res.body as Customer
+    expect(created).toMatchObject({ tin, name: `Hand ${tin}`, email, status: 'active' })
+    const { customers } = await listCustomers(token, { tin })
+    expect(customers.map((c) => c.id)).toEqual([created.id])
+
+    const audit = await getAuditLog(token, { event: ['customers.customer.created'], limit: 200 })
+    const row = audit.events.find((e) => (e.payload as { tin?: string } | null)?.tin === tin)
+    expect(row, `no customers.customer.created audit row carries tin ${tin}`).toBeDefined()
+  })
+
+  test('a held or unfileable TIN is refused', async () => {
+    const tin = freshBuyerTin()
+    const auth = { Authorization: `Bearer ${token}` }
+    const post = (body: unknown) => rawFetch('/api/invoice/v1/customers', { method: 'POST', headers: auth, body })
+    await createCustomer(token, { tin, name: `Held ${tin}` })
+
+    const dup = await post({ tin, name: 'Again' })
+    assertErrorEnvelope(dup, 409, 'POST a held TIN')
+    expect((dup.body as { error: string }).error).toBe(DUPLICATE_TIN)
+
+    const bad = await post({ tin: MALFORMED_TIN, name: 'Bad' })
+    assertErrorEnvelope(bad, 400, 'POST an unfileable TIN')
+    expect((bad.body as { error: string }).error).toBe(TIN_FORMAT)
+  })
+
+  test('archive and restore move the status', async () => {
+    const tin = freshBuyerTin()
+    const record = await createCustomer(token, { tin, name: `Cycle ${tin}` })
+    const ids = async (status: 'active' | 'archived') => (await listCustomers(token, { tin, status })).customers.map((c) => c.id)
+
+    const move = (verb: 'archive' | 'restore') => rawFetch(`/api/invoice/v1/customers/${record.id}/${verb}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+    const archived = await move('archive')
+    expect(archived.status, 'archive answers 200').toBe(200)
+    expect((archived.body as Customer).status).toBe('archived')
+    expect(await ids('archived')).toContain(record.id)
+    expect(await ids('active')).not.toContain(record.id)
+
+    const again = await move('archive')
+    assertErrorEnvelope(again, 409, 'archive twice')
+    expect((again.body as { error: string }).error).toBe(REDUNDANT_TRANSITION)
+
+    const restored = await move('restore')
+    expect(restored.status, 'restore answers 200').toBe(200)
+    expect((restored.body as Customer).status).toBe('active')
+    expect(await ids('active')).toContain(record.id)
+    expect(await ids('archived')).not.toContain(record.id)
+  })
+
+  test('an unknown status is 400', async () => {
+    const res = await rawFetch('/api/invoice/v1/customers?status=deleted', { headers: { Authorization: `Bearer ${token}` } })
+    assertErrorEnvelope(res, 400, 'GET status=deleted')
+    expect((res.body as { error: string }).error).toBe(STATUS_MSG)
   })
 })

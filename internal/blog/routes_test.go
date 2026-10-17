@@ -159,3 +159,54 @@ func TestBlogRoutes_StaffHeaderWithoutGatewayTokenIsRefused(t *testing.T) {
 		t.Errorf("%d handlers ran, want 0", n)
 	}
 }
+
+func TestBlogRoutes_StaffWrongMethodAndOddPathsReachNoHandler(t *testing.T) {
+	rig := newRoutesRig(t)
+	for _, c := range []struct {
+		method, path string
+		want         int
+	}{
+		{"PATCH", "/v1/staff/blog/posts/p", 405},
+		{"POST", "/v1/staff/blog/authors", 405},
+		{"DELETE", "/v1/staff/blog/categories", 405},
+		{"GET", "/v1/staff/blog/posts/p/cover", 405},
+		{"PUT", "/v1/staff/blog/posts/a/b", 404},
+		{"GET", "/v1/staff/blog/unknown", 404},
+	} {
+		r := httptest.NewRequest(c.method, c.path, strings.NewReader("{}"))
+		r.Header.Set(platform.HeaderGatewayToken, routesToken)
+		r.Header.Set("X-User-ID", routesUser)
+		r.Header.Set("X-User-Role", "authenticated")
+		r.Header.Set("X-User-Staff", "true")
+		rec := httptest.NewRecorder()
+		rig.h.ServeHTTP(rec, r)
+		if rec.Code != c.want {
+			t.Errorf("%s %s = %d, want %d", c.method, c.path, rec.Code, c.want)
+		}
+	}
+	if n := rig.calls.Load(); n != 0 {
+		t.Errorf("%d handlers ran, want 0", n)
+	}
+}
+
+func TestBlogRoutes_EncodedIDsReachTheStoreDecoded(t *testing.T) {
+	var got []string
+	m := http.NewServeMux()
+	m.HandleFunc("DELETE /v1/staff/blog/posts/{id}", DeletePostHandler(func(_ context.Context, id string) error { got = append(got, id); return nil }, discard))
+	for _, p := range []string{"a%2Fb", "%C3%BCber", "x%20y"} {
+		rec := httptest.NewRecorder()
+		m.ServeHTTP(rec, httptest.NewRequest("DELETE", "/v1/staff/blog/posts/"+p, nil))
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("%s = %d, want 204", p, rec.Code)
+		}
+	}
+	want := []string{"a/b", "über", "x y"}
+	if len(got) != len(want) {
+		t.Fatalf("store saw %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("id %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

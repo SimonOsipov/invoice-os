@@ -74,6 +74,10 @@ func TestPostHandlers_RefuseMalformedBodies(t *testing.T) {
 		"publish_date month": `{"title":"T","status":"draft","publish_date":"2026-13-01"}`,
 		"publish_date shape": `{"title":"T","status":"draft","publish_date":"1 Jan 2026"}`,
 		"block video":        `{"title":"T","status":"draft","body":[{"type":"video","text":"x"}]}`,
+		"empty body":         ``,
+		"status Draft":       `{"title":"T","status":"Draft"}`,
+		"publish_date feb30": `{"title":"T","status":"draft","publish_date":"2026-02-30"}`,
+		"publish_date short": `{"title":"T","status":"draft","publish_date":"2026-3-1"}`,
 	}
 	for name, body := range bodies {
 		for _, method := range []string{http.MethodPost, http.MethodPut} {
@@ -106,6 +110,17 @@ func TestPostHandlers_CapTheBody(t *testing.T) {
 	under := `{"title":"T","status":"draft","summary":"` + strings.Repeat("a", maxPostBodyBytes-1000) + `"}`
 	if rec := serve(CreatePostHandler(f.create, discard), "POST", "", "/p", under); rec.Code != http.StatusCreated {
 		t.Errorf("under cap = %d (%s), want 201", rec.Code, rec.Body.String())
+	}
+	head, tail := `{"title":"T","status":"draft","summary":"`, `"}`
+	exact := head + strings.Repeat("a", maxPostBodyBytes-len(head)-len(tail)) + tail
+	if len(exact) != maxPostBodyBytes {
+		t.Fatalf("fixture is %d bytes, want %d", len(exact), maxPostBodyBytes)
+	}
+	if rec := serve(CreatePostHandler(f.create, discard), "POST", "", "/p", exact); rec.Code != http.StatusCreated {
+		t.Errorf("exactly at cap = %d (%s), want 201", rec.Code, rec.Body.String())
+	}
+	if rec := serve(CreatePostHandler(f.create, discard), "POST", "", "/p", exact+" "); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("cap+1 = %d, want 413", rec.Code)
 	}
 }
 
@@ -423,5 +438,227 @@ func TestHandlers_MapNotStaffAndUnknownErrors(t *testing.T) {
 				t.Errorf("log = %q, want one error line naming the cause", logs.String())
 			}
 		})
+	}
+}
+
+func TestSmallBodyHandlers_RefuseMalformedJSON(t *testing.T) {
+	bodies := []string{``, `{`, `null1`, `{"direction":"up","x":1}`, `{"direction":"up"}{}`, `[]`}
+	cases := map[string]func(*int) http.HandlerFunc{
+		"AddCategory": func(n *int) http.HandlerFunc {
+			return AddCategoryHandler(func(context.Context, CategoryInput) (Category, error) { *n++; return Category{}, nil }, discard)
+		},
+		"UpdateCategory": func(n *int) http.HandlerFunc {
+			return UpdateCategoryHandler(func(context.Context, string, CategoryInput) (Category, error) { *n++; return Category{}, nil }, discard)
+		},
+		"MoveCategory": func(n *int) http.HandlerFunc {
+			return MoveCategoryHandler(func(context.Context, string, string) (bool, []Category, error) { *n++; return false, nil, nil }, discard)
+		},
+		"SetFeatured": func(n *int) http.HandlerFunc {
+			return SetFeaturedHandler(func(context.Context, string, bool) (FeaturedResult, error) { *n++; return FeaturedResult{}, nil }, discard)
+		},
+	}
+	if len(cases) != 4 {
+		t.Fatalf("%d handlers, want 4", len(cases))
+	}
+	for name, build := range cases {
+		for _, body := range bodies {
+			n := 0
+			rec := serve(build(&n), "POST", "i", "/x", body)
+			if rec.Code != http.StatusBadRequest || n != 0 {
+				t.Errorf("%s %q = %d, store calls %d; want 400 and 0", name, body, rec.Code, n)
+			}
+		}
+	}
+	// exact and cap+1 for the small cap
+	n := 0
+	h := cases["SetFeatured"](&n)
+	pad := maxSmallBodyBytes - len(`{"featured":true}`)
+	exact := `{"featured":true}` + strings.Repeat(" ", pad)
+	if rec := serve(h, "PUT", "i", "/x", exact); rec.Code != http.StatusOK {
+		t.Errorf("exactly at small cap = %d, want 200", rec.Code)
+	}
+	if rec := serve(h, "PUT", "i", "/x", exact+" "); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("small cap+1 = %d, want 413", rec.Code)
+	}
+}
+
+func TestFeaturedHandler_RefusesNonBooleans(t *testing.T) {
+	n := 0
+	h := SetFeaturedHandler(func(context.Context, string, bool) (FeaturedResult, error) { n++; return FeaturedResult{}, nil }, discard)
+	for _, body := range []string{`{"featured":null}`, `{"featured":"yes"}`, `{"featured":1}`} {
+		if rec := serve(h, "PUT", "p", "/f", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", body, rec.Code)
+		}
+	}
+	if n != 0 {
+		t.Errorf("store called %d times", n)
+	}
+	wantJSON(t, serve(h, "PUT", "p", "/f", `{"featured":false}`), http.StatusOK, `{"id":"","featured":false,"unpinned":null}`)
+	if n != 1 {
+		t.Errorf("featured false must reach the store once, got %d", n)
+	}
+}
+
+func TestHandlers_PassTheIDAndQueryVerbatim(t *testing.T) {
+	ids := []string{"über-ñ", "a/b", "x y", "", "../p"}
+	var got string
+	rec := func(id string) { got = id }
+	build := map[string]struct {
+		h      func() http.HandlerFunc
+		method string
+		body   string
+	}{
+		"UpdateCategory": {func() http.HandlerFunc {
+			return UpdateCategoryHandler(func(_ context.Context, id string, _ CategoryInput) (Category, error) { rec(id); return Category{}, nil }, discard)
+		}, "PUT", `{"name":"N","icon":"globe","tone":1}`},
+		"MoveCategory": {func() http.HandlerFunc {
+			return MoveCategoryHandler(func(_ context.Context, id, _ string) (bool, []Category, error) { rec(id); return false, nil, nil }, discard)
+		}, "POST", `{"direction":"up"}`},
+		"DeleteCategory": {func() http.HandlerFunc {
+			return DeleteCategoryHandler(func(_ context.Context, id string, _ *string) (DeleteResult, error) {
+				rec(id)
+				return DeleteResult{}, nil
+			}, discard)
+		}, "DELETE", ``},
+		"UpdatePost": {func() http.HandlerFunc {
+			return UpdatePostHandler(func(_ context.Context, id string, _ PostInput) (Post, error) { rec(id); return Post{}, nil }, discard)
+		}, "PUT", `{"title":"T","status":"draft"}`},
+		"DeletePost": {func() http.HandlerFunc {
+			return DeletePostHandler(func(_ context.Context, id string) error { rec(id); return nil }, discard)
+		}, "DELETE", ``},
+		"SetFeatured": {func() http.HandlerFunc {
+			return SetFeaturedHandler(func(_ context.Context, id string, _ bool) (FeaturedResult, error) {
+				rec(id)
+				return FeaturedResult{}, nil
+			}, discard)
+		}, "PUT", `{"featured":true}`},
+		"SetCover": {func() http.HandlerFunc {
+			return SetCoverHandler(func(_ context.Context, id, _ string, _ []byte) (Cover, error) { rec(id); return Cover{}, nil }, discard)
+		}, "PUT", string(jpegBytes(16))},
+		"RemoveCover": {func() http.HandlerFunc {
+			return RemoveCoverHandler(func(_ context.Context, id string) error { rec(id); return nil }, discard)
+		}, "DELETE", ``},
+	}
+	if len(build) != 8 {
+		t.Fatalf("%d id-taking handlers, want 8", len(build))
+	}
+	for name, c := range build {
+		for _, id := range ids {
+			got = "unset"
+			if r := serve(c.h(), c.method, id, "/x", c.body); r.Code >= 400 {
+				t.Errorf("%s id %q = %d", name, id, r.Code)
+			}
+			if got != id {
+				t.Errorf("%s: store got id %q, want %q", name, got, id)
+			}
+		}
+	}
+	var gotMove *string
+	del := DeleteCategoryHandler(func(_ context.Context, _ string, mv *string) (DeleteResult, error) {
+		gotMove = mv
+		return DeleteResult{}, nil
+	}, discard)
+	serve(del, "DELETE", "a", "/c/a?move_to=", "")
+	if gotMove != nil {
+		t.Errorf("empty move_to reached the store as %q, want nil", *gotMove)
+	}
+	serve(del, "DELETE", "a", "/c/a?move_to=%C3%BCber", "")
+	if gotMove == nil || *gotMove != "über" {
+		t.Errorf("move_to = %v, want über", gotMove)
+	}
+}
+
+func TestHandlers_AnswerJSON(t *testing.T) {
+	for _, c := range allHandlers() {
+		for _, err := range []error{nil, db.ErrNotStaff} {
+			r := serve(c.build(err, discard), c.method, "i", c.target, c.body)
+			if r.Body.Len() == 0 {
+				continue // 204
+			}
+			if ct := r.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("%s err=%v: Content-Type %q, want application/json", c.name, err, ct)
+			}
+		}
+	}
+}
+
+func TestListPostsHandler_WireCarriesNoAuthorEmail(t *testing.T) {
+	h := ListPostsHandler(func(context.Context) ([]Post, error) {
+		return []Post{{ID: "p", AuthorName: ptr("Ada"), PostInput: PostInput{Title: "T", AuthorID: ptr("u-1")}}}, nil
+	}, discard)
+	r := serve(h, "GET", "", "/p", "")
+	var body struct {
+		Posts []map[string]any `json:"posts"`
+	}
+	if err := json.Unmarshal(r.Body.Bytes(), &body); err != nil || len(body.Posts) != 1 {
+		t.Fatalf("body %s err %v", r.Body.String(), err)
+	}
+	if _, has := body.Posts[0]["author_name"]; !has {
+		t.Error("post wire lacks author_name")
+	}
+	if strings.Contains(strings.ToLower(r.Body.String()), "email") {
+		t.Errorf("post wire mentions email: %s", r.Body.String())
+	}
+}
+
+func TestAuthorsHandler_NamedAuthorKeepsTheName(t *testing.T) {
+	h := AuthorsHandler(func(context.Context) ([]Author, error) {
+		return []Author{{UserID: "u-1", DisplayName: ptr("Ada"), Email: ptr("a@x.invalid")}, {UserID: "u-2"}}, nil
+	}, discard)
+	wantJSON(t, serve(h, "GET", "", "/a", ""), http.StatusOK,
+		`{"authors":[{"user_id":"u-1","display_name":"Ada","email":"a@x.invalid"},{"user_id":"u-2","display_name":null,"email":null}]}`)
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("reset") }
+
+func TestCoverHandler_RefusesAndMapsEdges(t *testing.T) {
+	f := &coverFake{}
+	h := SetCoverHandler(f.set, discard)
+	req := httptest.NewRequest("PUT", "/c", bytes.NewReader(pngMagic))
+	req.Header.Set("Content-Type", "image/jpeg")
+	req.SetPathValue("id", "p")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || f.ct != "image/png" {
+		t.Errorf("png body with a jpeg header = %d type %q, want 200 image/png", rec.Code, f.ct)
+	}
+	f.calls = 0
+	for name, body := range map[string]string{"html": "<html><body>x</body></html>", "text": "hello", "webp": "RIFF\x00\x00\x00\x00WEBPVP8 ", "pdf": "%PDF-1.4"} {
+		if r := serve(h, "PUT", "p", "/c", body); r.Code != http.StatusUnsupportedMediaType {
+			t.Errorf("%s = %d, want 415", name, r.Code)
+		}
+	}
+	big := "GIF89a" + strings.Repeat("x", MaxCoverBytes)
+	wantJSON(t, serve(h, "PUT", "p", "/c", big), http.StatusRequestEntityTooLarge, errBody(MsgCoverTooLarge))
+	if f.calls != 0 {
+		t.Error("store was called")
+	}
+	f.err = ErrPostNotFound
+	wantJSON(t, serve(h, "PUT", "p", "/c", string(jpegBytes(16))), http.StatusNotFound, errBody("no such post"))
+	f.err = nil
+	rq := httptest.NewRequest("PUT", "/c", failingReader{})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, rq)
+	if rr.Code != http.StatusBadRequest || f.calls != 1 {
+		t.Errorf("read error = %d, store calls %d (want 400, the earlier 404 only)", rr.Code, f.calls)
+	}
+}
+
+func TestCheck_IsIdempotentOnItsOutput(t *testing.T) {
+	in := PostInput{Title: "  T  ", Summary: " s ", Status: "draft", Body: []Block{{Type: "p", Text: " x "}}}
+	once, fe := CheckPost(in)
+	if fe != nil {
+		t.Fatal(fe)
+	}
+	twice, fe := CheckPost(once)
+	if fe != nil || !reflect.DeepEqual(once, twice) {
+		t.Errorf("CheckPost is not idempotent: %+v then %+v (%v)", once, twice, fe)
+	}
+	c, fe := CheckCategory(CategoryInput{Name: " N ", Icon: "globe", Tone: 1})
+	c2, fe2 := CheckCategory(c)
+	if fe != nil || fe2 != nil || c != c2 {
+		t.Errorf("CheckCategory is not idempotent: %+v then %+v", c, c2)
 	}
 }

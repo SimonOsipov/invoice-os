@@ -17,6 +17,9 @@
 
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { stripVTControlCharacters } from 'node:util'
+import { repoRelative } from './flakyGate'
 import type { FullConfig, Reporter, Suite, TestCase } from '@playwright/test/reporter'
 
 export type FlakySpec = {
@@ -26,12 +29,24 @@ export type FlakySpec = {
   attempts: number
 }
 
+/** What the reporter writes per flaky test; the gate reads only the FlakySpec part. */
+export type FlakyRow = FlakySpec & { repoFile: string; titlePath: string[]; error: string }
+
+export const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
+
 /** The subset of Playwright's TestCase this reporter reads. */
 export type TestLike = {
   outcome(): string
   titlePath(): string[]
   location?: { file: string; line: number }
-  results?: unknown[]
+  results?: { error?: { message?: string } }[]
+}
+
+function firstErrorLine(message: string | undefined): string {
+  const line = stripVTControlCharacters(message ?? '')
+    .split(/\r?\n/)
+    .find((l) => l.trim() !== '')
+  return (line ?? '').slice(0, 300)
 }
 
 /**
@@ -42,16 +57,24 @@ export type TestLike = {
  * `results.length > 1` instead would also catch a test that failed every attempt,
  * and that one already fails the job loudly.
  */
-export function collectFlaky(tests: readonly TestLike[]): FlakySpec[] {
-  const out: FlakySpec[] = []
+export function collectFlaky(tests: readonly TestLike[], repoRoot = REPO_ROOT): FlakyRow[] {
+  const out: FlakyRow[] = []
   for (const t of tests) {
     if (t.outcome() !== 'flaky') continue
     const path = t.titlePath().filter(Boolean)
+    const title = path[path.length - 1] ?? '<untitled>'
+    // Playwright's path is [root, project, file, ...describes, test]; drop the first three.
+    const rest = t.titlePath().slice(3)
+    const titlePath = rest.length > 0 ? rest : [title]
+    const file = t.location?.file
     out.push({
-      file: t.location?.file ?? '<unknown>',
+      file: file ?? '<unknown>',
       line: t.location?.line ?? 0,
-      title: path[path.length - 1] ?? '<untitled>',
+      title,
       attempts: Array.isArray(t.results) ? t.results.length : 0,
+      repoFile: file ? repoRelative(file, repoRoot) : '<unknown>',
+      titlePath,
+      error: firstErrorLine(t.results?.[0]?.error?.message),
     })
   }
   return out.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line)

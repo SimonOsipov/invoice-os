@@ -90,6 +90,9 @@ func TestCategories_AddSlugsTheNameAndAppends(t *testing.T) {
 	if b := mustAdd(t, s, ctx, "R and D "+r); b.ID != "r-and-d-"+r+"-2" {
 		t.Errorf("second id = %q, want r-and-d-%s-2", b.ID, r)
 	}
+	if c := mustAdd(t, s, ctx, "R & D "+r); c.ID != "r-and-d-"+r+"-3" {
+		t.Errorf("third id = %q, want r-and-d-%s-3", c.ID, r)
+	}
 }
 
 func TestCategories_DuplicateNameIgnoringCaseIsTaken(t *testing.T) {
@@ -142,6 +145,7 @@ func TestCategories_MoveSwapsWithTheNeighbour(t *testing.T) {
 	actor, ctx := staffActor(t, super)
 	r := uniq(t, super)
 	s := NewStore(app)
+	mustAdd(t, s, ctx, "W "+r)
 	x, y, z := mustAdd(t, s, ctx, "X "+r), mustAdd(t, s, ctx, "Y "+r), mustAdd(t, s, ctx, "Z "+r)
 	tail := func() []string { ids := categoryIDs(t, s, ctx); return ids[len(ids)-3:] }
 
@@ -162,11 +166,11 @@ func TestCategories_MoveSwapsWithTheNeighbour(t *testing.T) {
 		t.Errorf("after down = %v", got)
 	}
 	rows := auditRowsOf(t, super, actor)
-	if n := len(rows); n != 5 || rows[3].Event != EventCategoryMoved || rows[4].Event != EventCategoryMoved {
+	if n := len(rows); n != 6 || rows[4].Event != EventCategoryMoved || rows[5].Event != EventCategoryMoved {
 		t.Fatalf("audit = %+v", rows)
 	}
-	if rows[3].Payload["swapped_with"] != x.ID || rows[3].Payload["direction"] != "up" || rows[4].Payload["swapped_with"] != x.ID {
-		t.Errorf("move payloads = %v, %v", rows[3].Payload, rows[4].Payload)
+	if rows[4].Payload["swapped_with"] != x.ID || rows[4].Payload["direction"] != "up" || rows[5].Payload["swapped_with"] != x.ID {
+		t.Errorf("move payloads = %v, %v", rows[4].Payload, rows[5].Payload)
 	}
 }
 
@@ -191,6 +195,18 @@ func TestCategories_MoveAtTheEdgeIsANoOp(t *testing.T) {
 	}
 	if _, _, err := s.MoveCategory(ctx, last.ID, "sideways"); !errors.Is(err, ErrDirection) {
 		t.Errorf("bad direction err = %v", err)
+	}
+	first := categoryIDs(t, s, ctx)[0]
+	posBefore := categoryPosition(t, super, first)
+	moved, cats, err := s.MoveCategory(ctx, first, "up")
+	if err != nil || moved {
+		t.Fatalf("move first up = %v, %v, want false", moved, err)
+	}
+	if len(cats) == 0 || cats[0].ID != first || categoryPosition(t, super, first) != posBefore {
+		t.Errorf("top moved: %v", cats)
+	}
+	if n := len(auditRowsOf(t, super, actor)); n != nAudit {
+		t.Errorf("%d audit rows after top no-op, want %d", n, nAudit)
 	}
 }
 
@@ -336,6 +352,20 @@ func TestCategories_NonStaffContextIsRefused(t *testing.T) {
 	if err := super.QueryRow(context.Background(), `SELECT count(*) FROM public.blog_categories WHERE name = $1`, "Refused "+r).Scan(&n); err != nil || n != 0 {
 		t.Errorf("%d categories written, err %v", n, err)
 	}
+	st := NewStore(app)
+	bg := context.Background()
+	if _, err := st.ListCategories(bg); !errors.Is(err, db.ErrNotStaff) {
+		t.Errorf("list err = %v", err)
+	}
+	if _, err := st.UpdateCategory(bg, "x", catIn("x "+r)); !errors.Is(err, db.ErrNotStaff) {
+		t.Errorf("update err = %v", err)
+	}
+	if _, _, err := st.MoveCategory(bg, "x", "up"); !errors.Is(err, db.ErrNotStaff) {
+		t.Errorf("move err = %v", err)
+	}
+	if _, err := st.DeleteCategory(bg, "x", nil); !errors.Is(err, db.ErrNotStaff) {
+		t.Errorf("delete err = %v", err)
+	}
 }
 
 func TestCategories_ListIsOrderedWithPostCounts(t *testing.T) {
@@ -433,5 +463,118 @@ func TestCategories_GoRulesMatchTheDBChecks(t *testing.T) {
 		case !ok && (!errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != "blog_categories_tone_check"):
 			t.Errorf("tone %d err = %v, want 23514 blog_categories_tone_check", tone, err)
 		}
+	}
+}
+
+func TestCategories_AuditFailureRollsBackEveryWrite(t *testing.T) {
+	super, app := dbPools(t)
+	actor, ctx := staffActor(t, super)
+	r := uniq(t, super)
+	s := NewStore(app)
+	a, b := mustAdd(t, s, ctx, "A "+r), mustAdd(t, s, ctx, "B "+r)
+	seedPost(t, super, "p-"+r, a.ID, "draft")
+	orderBefore, nAudit := categoryIDs(t, s, ctx), len(auditRowsOf(t, super, actor))
+
+	orig := recordStaff
+	t.Cleanup(func() { recordStaff = orig })
+	boom := errors.New("audit down")
+	recordStaff = func(context.Context, pgx.Tx, audit.StaffEvent) error { return boom }
+
+	if _, err := s.UpdateCategory(ctx, a.ID, catIn("Renamed "+r)); !errors.Is(err, boom) {
+		t.Errorf("update err = %v", err)
+	}
+	if _, _, err := s.MoveCategory(ctx, a.ID, "down"); !errors.Is(err, boom) {
+		t.Errorf("move err = %v", err)
+	}
+	if _, err := s.DeleteCategory(ctx, a.ID, &b.ID); !errors.Is(err, boom) {
+		t.Errorf("delete err = %v", err)
+	}
+	recordStaff = orig
+
+	if !slices.Equal(orderBefore, categoryIDs(t, s, ctx)) {
+		t.Error("order or membership changed")
+	}
+	cats, _ := s.ListCategories(ctx)
+	for _, c := range cats {
+		if c.ID == a.ID && (c.Name != "A "+r || c.PostCount != 1) {
+			t.Errorf("category A = %+v, want unchanged", c)
+		}
+	}
+	if c := postCategory(t, super, "p-"+r); c != a.ID {
+		t.Errorf("post moved to %q despite the rollback", c)
+	}
+	if n := len(auditRowsOf(t, super, actor)); n != nAudit {
+		t.Errorf("%d audit rows, want %d", n, nAudit)
+	}
+}
+
+func TestCategories_ConcurrentSameSlugAddsGetDistinctIDs(t *testing.T) {
+	super, app := dbPools(t)
+	_, ctx := staffActor(t, super)
+	r := uniq(t, super)
+	s := NewStore(app)
+	var wg sync.WaitGroup
+	got := make([]Category, 2)
+	errs := make([]error, 2)
+	for i, name := range []string{"R&D " + r, "R and D " + r} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got[i], errs[i] = s.AddCategory(ctx, catIn(name))
+		}()
+	}
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("errs = %v", errs)
+	}
+	ids := []string{got[0].ID, got[1].ID}
+	slices.Sort(ids)
+	if ids[0] != "r-and-d-"+r || ids[1] != "r-and-d-"+r+"-2" {
+		t.Errorf("ids = %v", ids)
+	}
+}
+
+func TestCategories_ConcurrentSameNameAddsOneWins(t *testing.T) {
+	super, app := dbPools(t)
+	_, ctx := staffActor(t, super)
+	r := uniq(t, super)
+	s := NewStore(app)
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, name := range []string{"Same " + r, "SAME " + r} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = s.AddCategory(ctx, catIn(name))
+		}()
+	}
+	wg.Wait()
+	ok, taken := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			ok++
+		case errors.Is(err, ErrCategoryNameTaken):
+			taken++
+		}
+	}
+	if ok != 1 || taken != 1 {
+		t.Errorf("errs = %v, want one success and one ErrCategoryNameTaken", errs)
+	}
+}
+
+func TestCategories_DeleteEmptyCategoryToItselfOrUnknownTargetSucceeds(t *testing.T) {
+	super, app := dbPools(t)
+	_, ctx := staffActor(t, super)
+	r := uniq(t, super)
+	s := NewStore(app)
+	c, d := mustAdd(t, s, ctx, "C "+r), mustAdd(t, s, ctx, "D "+r)
+	mustAdd(t, s, ctx, "E "+r)
+	nope := "nope"
+	if res, err := s.DeleteCategory(ctx, c.ID, &c.ID); err != nil || res.MovedPosts != 0 || res.MoveTo != nil {
+		t.Errorf("itself: %+v, %v", res, err)
+	}
+	if res, err := s.DeleteCategory(ctx, d.ID, &nope); err != nil || res.MovedPosts != 0 || res.MoveTo != nil {
+		t.Errorf("unknown: %+v, %v", res, err)
 	}
 }

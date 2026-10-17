@@ -26,7 +26,7 @@ const (
 	fleetJobName   = "Fleet /healthz gate (all 10 backends green)"
 )
 
-// releaseNeeds is the eight-job set the release job waits on.
+// releaseNeeds is the job set the release job waits on.
 var releaseNeeds = []string{"deploy-slot", "prepare-env", "deploy-gateway", "health-gate", "deploy-context", "deploy-spas", "fleet-gate", "deploy-library", "deploy-blog"}
 
 func devEnvJob(t *testing.T, id string) workflowJob {

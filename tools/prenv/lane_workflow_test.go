@@ -165,6 +165,9 @@ func TestCIRollupRequiresTheBlogJob(t *testing.T) {
 	if !strings.Contains(run, guard) {
 		t.Errorf("ci run lacks the failure-or-cancelled exit for needs.blog.result:\n%s", run)
 	}
+	if !strings.Contains(run, `echo "blog:          ${{ needs.blog.result }}"`) {
+		t.Errorf("ci run does not echo needs.blog.result:\n%s", run)
+	}
 }
 
 func TestCIRollupRequiresTheLibraryJob(t *testing.T) {

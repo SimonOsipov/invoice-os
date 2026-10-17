@@ -180,5 +180,5 @@ ctl measure 'h1' --props font-size --session s1
 ## How CI runs them
 
 `dev-env.yml`'s `e2e` job runs **smoke → api**, in that order, on pull requests only. The
-`topology` job runs after it (`needs: e2e`), one matrix leg per unit, in parallel.
+`topology` job runs after it (`needs: e2e`), one matrix leg per unit, in parallel, and only when `e2e` succeeded.
 **The api → topology ordering is load-bearing**: the two share one deployed database.

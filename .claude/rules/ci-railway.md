@@ -61,3 +61,4 @@ paths:
 - After a dispatch or a rollback, a library-only push leaves the fleet as it is. Dispatch Dev Env on `main` to reconverge it.
 - Run "Gate on the account-mail templates" on `pull_request` and `push`, not `workflow_dispatch`. A project token cannot read variables.
 - Roll back the gateway and every guarded service together. A split rollback logs `request refused: no gateway token`.
+- Start the `topology` job only when the `e2e` job succeeded. A red smoke or api suite skips topology and fails the gate.

@@ -236,7 +236,9 @@ describe('ctl entry under node', () => {
       const early = ['realAccounts', 'api/client', 'topology/targets', 'personaSession', 'staffSession'].filter(has)
       for (const name of ${JSON.stringify(URL_VARS)}) process.env[name] = 'https://dummy.invalid'
       for (const f of ['ctl/browserSession', 'personaSession', 'staffSession', 'realAccounts']) exportsOf[f.split('/').pop() + '.ts'] = Object.keys(await import('./' + f + '.ts'))
-      console.log(JSON.stringify({ early, exportsOf }))`
+      const ps = await import('./personaSession.ts')
+      const signIn = await ps.signInAs({}, 'bogus').then(() => 'resolved', (e) => String(e.message))
+      console.log(JSON.stringify({ early, exportsOf, signIn }))`
     const r = spawnSync(process.execPath, ['--import', './ctl/tsResolve.mjs', '--input-type=module', '-e', script], { cwd: E2E_DIR, env, encoding: 'utf8' })
     expect(r.status, r.stderr).toBe(0)
     const out = JSON.parse(r.stdout.trim().split('\n').pop() as string)
@@ -245,6 +247,8 @@ describe('ctl entry under node', () => {
     expect(out.early).toEqual([])
     // browserSession drives the front door and the handoff check that personaSession must export.
     expect(out.exportsOf['personaSession.ts']).toEqual(expect.arrayContaining(['passFrontDoor', 'expectHandoffSession']))
+    // Outside a Playwright test the shard guard stays silent: signInAs reaches its own persona check.
+    expect(out.signIn).toBe('signInAs: persona "bogus" has no e2e member')
   })
 
   it('main loads a command module only when that command runs', () => {

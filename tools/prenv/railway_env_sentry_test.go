@@ -2,6 +2,7 @@
 package main
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -441,15 +442,19 @@ func sentryDeletes(calls []railwayCall) []string {
 
 // Railway keeps a reference when "" is written over it (keepref-on-blank in the shim).
 func TestSetSentryOffDeletesInheritedReferences(t *testing.T) {
-	run := func(t *testing.T, mutate func(s authShim)) (authShim, string, int) {
+	runWith := func(t *testing.T, stores map[string]map[string]string, mutate func(s authShim)) (authShim, string, int) {
 		t.Helper()
-		s := newAuthShim(t, map[string]string{"envList": sentryEnvList(true, true), "settle": sentrySettle("")}, sentryStores())
+		s := newAuthShim(t, map[string]string{"envList": sentryEnvList(true, true), "settle": sentrySettle("")}, stores)
 		writeFile(t, filepath.Join(s.dir, "keepref-on-blank"), "")
 		if mutate != nil {
 			mutate(s)
 		}
 		stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-sentry-off", forkEnvID)
 		return s, stdout + stderr, code
+	}
+	run := func(t *testing.T, mutate func(s authShim)) (authShim, string, int) {
+		t.Helper()
+		return runWith(t, sentryStores(), mutate)
 	}
 
 	t.Run("references are deleted and literals blanked", func(t *testing.T) {
@@ -462,6 +467,68 @@ func TestSetSentryOffDeletesInheritedReferences(t *testing.T) {
 			if strings.Contains(out, n) {
 				t.Errorf("output leaks %q; output = %q", n, out)
 			}
+		}
+	})
+
+	t.Run("every name on any service is deleted when a reference, a literal beside it is blanked", func(t *testing.T) {
+		stores := sentryStores()
+		stores[sentrySvcID("gateway")]["SENTRY_DSN"] = sentryReference
+		stores[sentrySvcID("app")]["VITE_SENTRY_DSN"] = sentryBlogDSNRef
+		s, out, code := runWith(t, stores, nil)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, out)
+		}
+		want := []string{
+			"svc-app.VITE_SENTRY_DSN@" + forkEnvID, "svc-blog.SENTRY_AUTH_TOKEN@" + forkEnvID,
+			"svc-blog.VITE_SENTRY_DSN@" + forkEnvID, "svc-gateway.SENTRY_DSN@" + forkEnvID,
+		}
+		if got := sentryDeletes(s.calls(t)); !slices.Equal(got, want) {
+			t.Errorf("variableDelete inputs = %v, want exactly %v", got, want)
+		}
+		app := writesTo(collectionWrites(t, s), sentrySvcID("app"))
+		if len(app) != 1 || !maps.Equal(app[0].Vars, map[string]string{"SENTRY_AUTH_TOKEN": ""}) {
+			t.Errorf("app writes = %v, want one write blanking only its literal SENTRY_AUTH_TOKEN", writeNames(app))
+		}
+		if gw := writesTo(collectionWrites(t, s), sentrySvcID("gateway")); len(gw) != 0 {
+			t.Errorf("gateway's reference was also written: %v", writeNames(gw))
+		}
+		if strings.Contains(out, sentryReference) || strings.Contains(out, sentryBlogDSNRef) {
+			t.Errorf("output leaks a reference; output = %q", out)
+		}
+	})
+
+	t.Run("a delete alone needs no write and still one re-read", func(t *testing.T) {
+		stores := sentryStores()
+		for _, b := range sentryBackends {
+			stores[sentrySvcID(b)]["SENTRY_DSN"] = ""
+		}
+		for _, sp := range sentrySPAs {
+			if sp != "blog" {
+				stores[sentrySvcID(sp)]["VITE_SENTRY_DSN"], stores[sentrySvcID(sp)]["SENTRY_AUTH_TOKEN"] = "", ""
+			}
+		}
+		s, out, code := runWith(t, stores, nil)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, out)
+		}
+		if got, want := operations(s.calls(t)), []string{"envList", "settle", "varsRead", "varsDelete", "varsRead"}; !slices.Equal(got, want) {
+			t.Errorf("Railway calls = %v, want %v", got, want)
+		}
+		if !sentryConfirmed(out) {
+			t.Errorf("no confirmation line; output = %q", out)
+		}
+	})
+
+	t.Run("literals only: no delete call", func(t *testing.T) {
+		stores := sentryStores()
+		stores[sentrySvcID("blog")]["VITE_SENTRY_DSN"] = sentryDSNSentinel
+		stores[sentrySvcID("blog")]["SENTRY_AUTH_TOKEN"] = sentryTokenSentinel
+		s, out, code := runWith(t, stores, nil)
+		if code != 0 {
+			t.Fatalf("exit %d, want 0; output = %q", code, out)
+		}
+		if n := opCount(t, s, "varsDelete"); n != 0 {
+			t.Errorf("%d varsDelete call(s), want 0: nothing holds a reference", n)
 		}
 	})
 

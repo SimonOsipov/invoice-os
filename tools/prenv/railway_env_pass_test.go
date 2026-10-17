@@ -1186,6 +1186,26 @@ func TestForkVarsAfterURLs_InheritedReferencesAddOneDelete(t *testing.T) {
 	if got := operations(s.calls(t)); !slices.Equal(got, want) {
 		t.Errorf("Railway calls = %v, want %v", got, want)
 	}
+	if h, ok := heldLines(out)["blog"]; ok {
+		t.Errorf("blog held line = %q, want none: its URL differs and its references are deleted, not held", h)
+	}
+}
+
+// A deleted name is neither held nor written: blog holds 1 of 3, not 3 of 3.
+func TestForkVarsAfterURLs_DeletedNamesAreNotCountedAsHeld(t *testing.T) {
+	stores := afterProdStores()
+	stores[sentrySvcID("blog")]["VITE_LANDING_URL"] = batchLandingURL
+	s := newAfterShim(t, stores)
+	out, code := runAfter(t, s)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	if got, want := heldLines(out)["blog"], "1 of 3"; got != want {
+		t.Errorf("blog held line = %q, want %q", got, want)
+	}
+	if bw := writesTo(collectionWrites(t, s), sentrySvcID("blog")); len(bw) != 0 {
+		t.Errorf("blog was written %v, want none: its URL holds and its references are deleted", writeNames(bw))
+	}
 }
 
 func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {

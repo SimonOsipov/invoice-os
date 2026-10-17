@@ -55,7 +55,7 @@ func govulncheckProblems(ciYAML string) []string {
 		run += s.keys["run"] + "\n"
 	}
 	if slices.ContainsFunc(job.lines, func(l string) bool { return strings.HasPrefix(strings.TrimSpace(l), "go-version:") }) {
-		problems = append(problems, "govulncheck sets go-version beside go-version-file")
+		problems = append(problems, "govulncheck sets go-version beside the version file")
 	}
 	if first, _, _ := strings.Cut(strings.TrimSpace(run), "\n"); first != "go version" {
 		problems = append(problems, "govulncheck run lacks go version as its first line")
@@ -251,7 +251,7 @@ func TestCIGovulncheck_StepIfFails(t *testing.T) {
 func TestCIGovulncheck_GoVersionBesideFileFails(t *testing.T) {
 	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), "          go-version-file: go.mod\n      # Pinned: a scanner",
 		"          go-version-file: go.mod\n          go-version: stable\n      # Pinned: a scanner")
-	requireProblem(t, yml, "go-version beside")
+	requireProblem(t, yml, "sets go-version")
 }
 
 func TestCIGovulncheck_QuotedFormatFails(t *testing.T) {
@@ -260,4 +260,12 @@ func TestCIGovulncheck_QuotedFormatFails(t *testing.T) {
 			"go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 "+format+" ./...")
 		requireProblem(t, yml, "-json or -format")
 	}
+}
+
+func TestCIGovulncheck_RollupGuardInWrongJobFails(t *testing.T) {
+	const moved = "          if [ \"${{ needs.govulncheck.result }}\" != \"success\" ]; then\n" +
+		"            echo \"::error::govulncheck job failed\"; exit 1\n          fi\n"
+	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), "          # Unconditional, so a skip would read like a clean scan.\n"+moved, "")
+	yml = mutateOnce(t, yml, "          "+govulncheckCmd+"\n", "          "+govulncheckCmd+"\n"+moved)
+	requireProblem(t, yml, "rollup lacks")
 }

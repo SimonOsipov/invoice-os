@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -107,16 +109,42 @@ func (f *fakeGoTrue) Calls() []gotrueCall {
 	return slices.Clone(f.calls)
 }
 
-// closedURL is an address nothing listens on.
+// deadAddr is a privileged port: bind(0) never hands it out, so nothing answers on it.
+const deadAddr = "127.0.0.1:1"
+
+// closedURL is an address that refuses connections.
 func closedURL(t *testing.T) *url.URL {
 	t.Helper()
-	srv := httptest.NewServer(http.NotFoundHandler())
-	u, err := url.Parse(srv.URL)
-	if err != nil {
-		t.Fatalf("parse url: %v", err)
+	c, err := net.DialTimeout("tcp", deadAddr, time.Second)
+	if err == nil {
+		_ = c.Close()
 	}
-	srv.Close()
-	return u
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("dial %s = %v, want connection refused", deadAddr, err)
+	}
+	return &url.URL{Scheme: "http", Host: deadAddr}
+}
+
+func TestClosedURL_ReturnsAFreshRefusingURL(t *testing.T) {
+	a, b := closedURL(t), closedURL(t)
+	if a == b {
+		t.Fatal("closedURL returned the same pointer twice")
+	}
+	a.User = url.UserPassword("u", "p")
+	if b.User != nil {
+		t.Fatalf("second URL carries a User: %v", b.User)
+	}
+	c := &http.Client{Timeout: time.Second}
+	for _, u := range []*url.URL{a, b} {
+		resp, err := c.Get(u.String())
+		if err == nil {
+			_ = resp.Body.Close()
+			t.Fatalf("GET %s answered %d, want connection refused", u.Host, resp.StatusCode)
+		}
+		if !errors.Is(err, syscall.ECONNREFUSED) {
+			t.Fatalf("GET %s = %v, want connection refused", u.Host, err)
+		}
+	}
 }
 
 func testClient() *http.Client {

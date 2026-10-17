@@ -52,7 +52,7 @@ paths:
 - Give a PR the library lane when every changed path is under `frontend/library/`. `scripts/ci/lane.sh` decides.
 - Give a PR the blog lane when every changed path is under `frontend/blog/`.
 - Give a PR that touches both prefixes, or any other path, the full lane.
-- On the library lane, CI runs the `Library` job in place of `Frontend`. On the blog lane, it runs the `Blog` job.
+- On the library lane, CI runs the `Library` job in place of `Frontend`. On the blog lane, CI runs the `Blog` job in place of `Frontend`.
 - On a small lane, Dev Env prepares no fork and runs no E2E.
 - Keep the small lanes to `frontend/library/` and `frontend/blog/`. `TestLane_OnlyANamedPackageTakesTheSmallLane` fails when another package takes one.
 - On a `main` push, deploy only the library when every path since the last full deploy is under `frontend/library/`.

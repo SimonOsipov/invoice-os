@@ -3,6 +3,8 @@
 // Token and corner reads are value reads (no pixel diff); layout claims assert the relationship.
 // Screenshots are attached for the reviewer and never asserted.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
+import { createEntity, getAuditLog, login } from '../api/client'
+import { freshTin } from '../api/fixtures'
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
@@ -575,10 +577,17 @@ test('AS-08 the suspended card: radius and Sign out corner', async ({ page }, te
 
 test('AS-11 entity modal, filter popover and pager', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
+  // The Audit filter bar renders only once the log holds an event; the e2e4 seed writes none. Creating an entity
+  // writes `portfolio.entity.created` in the same transaction (internal/portfolio/store.go). Skipped when a retry finds one.
+  const token = await login({ ...SHARD.a, tenantId: SHARD.a.id })
+  if ((await getAuditLog(token, { limit: 1 })).log_is_empty) {
+    await createEntity(token, { name: `Zulu AS-11 audit ${freshTin()}`, tin: freshTin() })
+  }
+  expect((await getAuditLog(token, { limit: 1 })).total, 'the shard firm audit log holds an event before Audit opens').toBeGreaterThan(0)
   await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   await openNav(page, navButton(page, /^Clients/))
-  const add = page.getByRole('button', { name: /Add client/ })
+  const add =page.getByRole('button', { name: /Add client/ })
   await expect(add, 'Add client is disabled until the client list resolves').toBeEnabled()
   await add.click()
   const panel = page.getByRole('dialog')

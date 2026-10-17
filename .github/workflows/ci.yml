@@ -997,7 +997,7 @@ jobs:
   frontend:
     name: Frontend
     needs: changes
-    if: needs.changes.outputs.frontend == 'true' && needs.changes.outputs.lane != 'library'
+    if: needs.changes.outputs.frontend == 'true' && needs.changes.outputs.lane != 'library' && needs.changes.outputs.lane != 'blog'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1060,6 +1060,30 @@ jobs:
         run: pnpm --filter @invoice-os/library test
       - name: Build (library)
         run: pnpm --filter @invoice-os/library build
+      - name: Unit tests (monitoring)
+        run: pnpm --filter @invoice-os/monitoring test
+      - name: Unit tests (e2e seams)
+        run: pnpm --filter @invoice-os/e2e test:unit
+
+  # Small lane: a blog-only PR runs this in place of Frontend.
+  blog:
+    name: Blog
+    needs: changes
+    if: needs.changes.outputs.lane == 'blog'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Unit tests (blog)
+        run: pnpm --filter @invoice-os/blog test
+      - name: Build (blog)
+        run: pnpm --filter @invoice-os/blog build
       - name: Unit tests (monitoring)
         run: pnpm --filter @invoice-os/monitoring test
       - name: Unit tests (e2e seams)
@@ -1264,7 +1288,7 @@ jobs:
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, library, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite]
+    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1282,6 +1306,7 @@ jobs:
           echo "audit:         ${{ needs.audit.result }}"
           echo "frontend:      ${{ needs.frontend.result }}"
           echo "library:       ${{ needs.library.result }}"
+          echo "blog:          ${{ needs.blog.result }}"
           echo "clean-clone:   ${{ needs.clean-clone.result }}"
           echo "stale-refs:    ${{ needs.stale-refs.result }}"
           echo "migration-order: ${{ needs.migration-order.result }}"
@@ -1322,6 +1347,9 @@ jobs:
           fi
           if [ "${{ needs.library.result }}" = "failure" ] || [ "${{ needs.library.result }}" = "cancelled" ]; then
             echo "::error::Library job failed"; exit 1
+          fi
+          if [ "${{ needs.blog.result }}" = "failure" ] || [ "${{ needs.blog.result }}" = "cancelled" ]; then
+            echo "::error::Blog job failed"; exit 1
           fi
           # clean-clone is unconditional (no path filter) — it must actually pass,
           # never merely skip.

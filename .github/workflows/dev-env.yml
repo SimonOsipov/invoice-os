@@ -537,6 +537,7 @@ jobs:
     if: >-
       ( !cancelled() || github.event_name != 'pull_request' ) &&
       needs.changes.outputs.scope != 'library' &&
+      needs.changes.outputs.scope != 'blog' &&
       needs.prepare-env.result == 'success' &&
       ( github.event_name == 'workflow_dispatch' ||
         ( github.event_name == 'push' && needs.await-ci.result == 'success' ) ||
@@ -998,10 +999,32 @@ jobs:
         run: sh scripts/ci/railway-up-ci.sh library
         timeout-minutes: 15
 
+  # Small lane: a blog-only push deploys just the blog; the fleet chain above skips.
+  deploy-blog:
+    name: Deploy blog (small lane) → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
+    needs: [changes, await-ci, prepare-env]
+    if: >-
+      github.event_name == 'push' &&
+      needs.changes.outputs.scope == 'blog' &&
+      needs.await-ci.result == 'success' &&
+      needs.prepare-env.result == 'success'
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:4.66.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp the build sha into the upload
+        run: sh scripts/ci/stamp-build-sha.sh "${{ github.sha }}"
+      - name: railway up blog (push — account token)
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
+        run: sh scripts/ci/railway-up-ci.sh blog
+        timeout-minutes: 15
+
   # Frees this run's deploy slot once the deploy chain ends, pass or fail.
   deploy-slot-release:
     name: Release deploy slot
-    needs: [deploy-slot, prepare-env, deploy-gateway, health-gate, deploy-context, deploy-spas, fleet-gate, deploy-library]
+    needs: [deploy-slot, prepare-env, deploy-gateway, health-gate, deploy-context, deploy-spas, fleet-gate, deploy-library, deploy-blog]
     if: always() && needs.deploy-slot.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1045,6 +1068,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LIBRARY_URL"
+
+  # Small lane: the blog's build verdict; the SPA build gate skips with the fleet chain.
+  blog-build-gate:
+    name: Blog build gate (small lane)
+    needs: [deploy-blog, prepare-env]
+    if: needs.deploy-blog.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_BUILD: ${{ github.sha }}
+      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$BLOG_URL"
 
   # 7. Post-deploy verification (b), once the fleet is green and the SPAs are
   #    deployed: smoke (landing, library, blog and both consoles render) and api (typed contract

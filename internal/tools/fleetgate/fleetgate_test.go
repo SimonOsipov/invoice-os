@@ -362,15 +362,18 @@ func TestDevEnv_EveryDeployedSPAIsDiscoveredAndAwaited(t *testing.T) {
 	spas := matrixList(t, content, "deploy-spas")
 	lines := strings.Split(content, "\n")
 
-	// The small lane's library-build-gate awaits only the library, so it is exempt from the every-SPA rule.
-	var waits, libraryWaits []int
+	// The small lanes' library-build-gate and blog-build-gate await only their own SPA, so they are exempt from the every-SPA rule.
+	var waits, libraryWaits, blogWaits []int
 	for i, l := range lines {
 		l = trailingYAMLComment.ReplaceAllString(l, "")
 		if strings.Contains(l, "wait-spa-builds.sh") && strings.Contains(l, "$EXPECTED_BUILD") {
 			lines[i] = l
-			if s, _ := jobBounds(lines, i); strings.TrimRight(lines[s], " \t\r") == "  library-build-gate:" {
+			switch s, _ := jobBounds(lines, i); strings.TrimRight(lines[s], " \t\r") {
+			case "  library-build-gate:":
 				libraryWaits = append(libraryWaits, i)
-			} else {
+			case "  blog-build-gate:":
+				blogWaits = append(blogWaits, i)
+			default:
 				waits = append(waits, i)
 			}
 		}
@@ -398,6 +401,16 @@ func TestDevEnv_EveryDeployedSPAIsDiscoveredAndAwaited(t *testing.T) {
 	}
 	if ls, le := jobBounds(lines, lw); !regexp.MustCompile(`(?m)^      LIBRARY_URL: `).MatchString(strings.Join(lines[ls:le], "\n")) {
 		t.Errorf("%s:%d: library-build-gate does not set LIBRARY_URL in its env", devEnvRel, lw+1)
+	}
+	if len(blogWaits) != 1 {
+		t.Fatalf("%s: %d wait-spa-builds.sh call(s) in blog-build-gate, want exactly 1", devEnvRel, len(blogWaits))
+	}
+	bw := blogWaits[0]
+	if !strings.Contains(lines[bw], `"$BLOG_URL"`) {
+		t.Errorf("%s:%d: the blog-build-gate wait is not passed \"$BLOG_URL\"", devEnvRel, bw+1)
+	}
+	if bs, be := jobBounds(lines, bw); !regexp.MustCompile(`(?m)^      BLOG_URL: `).MatchString(strings.Join(lines[bs:be], "\n")) {
+		t.Errorf("%s:%d: blog-build-gate does not set BLOG_URL in its env", devEnvRel, bw+1)
 	}
 
 	pStart, pEnd := -1, -1

@@ -27,7 +27,7 @@ const (
 )
 
 // releaseNeeds is the eight-job set the release job waits on.
-var releaseNeeds = []string{"deploy-slot", "prepare-env", "deploy-gateway", "health-gate", "deploy-context", "deploy-spas", "fleet-gate", "deploy-library"}
+var releaseNeeds = []string{"deploy-slot", "prepare-env", "deploy-gateway", "health-gate", "deploy-context", "deploy-spas", "fleet-gate", "deploy-library", "deploy-blog"}
 
 func devEnvJob(t *testing.T, id string) workflowJob {
 	t.Helper()

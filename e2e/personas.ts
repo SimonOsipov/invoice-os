@@ -31,7 +31,7 @@ export interface SurfaceDef {
 }
 
 // The COMPLETE catalogue of app-SPA nav surfaces: every constant reachable from
-// Sidebar.tsx's navGroups (10 firm-mode items + 8 in-house), paired with the label
+// Sidebar.tsx's navGroups (10 firm-mode items + 9 in-house), paired with the label
 // glyphs.tsx renders for it (:63-110). Complete from this subtask onward, which is what lets
 // personas.test.ts's G3 assert equality against the live Sidebar rather than containment.
 //
@@ -116,8 +116,8 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
     id: 'inhouse',
     specToken: 'INHOUSE_PERSONA',
     tenantName: 'Honeywell Group',
-    // ALL EIGHT of the in-house sidebar's surfaces, every one DRIVEN (rendered content
-    // asserted, not a mount) by persona-surfaces.spec.ts -- seven by PERSONA-01-03's sweep,
+    // ALL NINE of the in-house sidebar's surfaces, every one DRIVEN (rendered content
+    // asserted, not a mount) by persona-surfaces.spec.ts -- eight by the sweep,
     // and NAV_WORKFLOWS by the Workflows block inside that same sweep. That cell points HERE
     // and not at topology/workflows.spec.ts, which never signs in as in-house: filing it
     // there would claim coverage that file does not provide, which is the exact bookkeeping
@@ -136,6 +136,7 @@ export const PERSONAS: Record<PersonaId, PersonaDef> = {
       { navConst: 'NAV_WORKFLOWS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_RULES', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_APPROVALS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
+      { navConst: 'NAV_CUSTOMERS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       { navConst: 'NAV_REPORTS', grade: 'drives', coveredBy: 'e2e/topology/persona-surfaces.spec.ts' },
       // nav-only until audit.spec.ts drives it -- same reasoning as the firm cell above.
       { navConst: 'NAV_AUDIT', grade: 'drives', coveredBy: 'e2e/topology/audit.spec.ts' },

@@ -459,7 +459,7 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
   const report: Record<string, unknown>[] = []
   let chipTotal = 0
 
-  for (const [persona, floor] of [['firm', 10], ['inhouse', 8]] as const) {
+  for (const [persona, floor] of [['firm', 10], ['inhouse', 9]] as const) {
     await test.step(`${persona} nav sweep`, async () => {
       await signInAs(page, persona)
       const nav = navButtons(page)

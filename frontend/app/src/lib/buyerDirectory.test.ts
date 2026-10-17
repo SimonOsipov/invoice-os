@@ -1,7 +1,22 @@
 import { ApiError } from '@invoice-os/api-client'
 import { describe, expect, it, vi } from 'vitest'
 
-import { buyerFormFrom, listCustomers, mapCorrectionError, toCustomerUpdateInput, updateCustomer, type Customer } from './buyerDirectory'
+import {
+  archiveCustomer,
+  buyerFormFrom,
+  createCustomer,
+  emptyBuyerForm,
+  findCustomerByTin,
+  listCustomers,
+  mapCorrectionError,
+  mapCreateError,
+  recordNamesByTin,
+  restoreCustomer,
+  toCustomerCreateInput,
+  toCustomerUpdateInput,
+  updateCustomer,
+  type Customer,
+} from './buyerDirectory'
 
 const BASE = 'https://gateway.test'
 
@@ -19,6 +34,7 @@ const CUSTOMER: Customer = {
   country: null,
   state: null,
   lga: null,
+  status: 'active',
   created_at: '2026-01-01T00:00:00Z',
 }
 
@@ -28,6 +44,12 @@ describe('buyerDirectory', () => {
     await listCustomers(af, BASE, { limit: 50, offset: 50 })
     expect(af).toHaveBeenCalledTimes(1)
     expect(af).toHaveBeenCalledWith(`${BASE}/api/invoice/v1/customers?limit=50&offset=50`)
+  })
+
+  it('findCustomerByTin asks only for active records', async () => {
+    const af = vi.fn().mockResolvedValue({ customers: [CUSTOMER], pagination: { limit: 1, offset: 0, total: 1 } })
+    await findCustomerByTin(af, BASE, '12345678-0001')
+    expect(af).toHaveBeenCalledWith(`${BASE}/api/invoice/v1/customers?tin=12345678-0001&status=active&limit=1`)
   })
 
   it('updateCustomer PATCHes the customer by id', async () => {
@@ -55,5 +77,83 @@ describe('buyerDirectory', () => {
     expect(mapCorrectionError(new ApiError('http', 'unauthorized', 401))).toBeNull()
     expect(mapCorrectionError(new ApiError('http', 'not found', 404))).toBe(generic)
     expect(mapCorrectionError(new TypeError('Failed to fetch'))).toBe(generic)
+  })
+})
+
+describe('recordNamesByTin', () => {
+  it('recordNamesByTin looks up only distinct fileable TINs', async () => {
+    const af = vi.fn().mockResolvedValue({ customers: [], pagination: { limit: 1, offset: 0, total: 0 } })
+    await recordNamesByTin(af, BASE, ['20000000-0001', '20000000-0001', '', 'BAD', 'RN-9'])
+    expect(af.mock.calls.map((c) => c[0])).toEqual([
+      `${BASE}/api/invoice/v1/customers?tin=20000000-0001&status=active&limit=1`,
+      `${BASE}/api/invoice/v1/customers?tin=RN-9&status=active&limit=1`,
+    ])
+  })
+
+  it('recordNamesByTin maps named records and skips a missing or unnamed one', async () => {
+    const byTin: Record<string, Customer[]> = {
+      'RN-1': [{ ...CUSTOMER, tin: 'RN-1', name: 'Rec A' }],
+      'RN-2': [],
+      'RN-3': [{ ...CUSTOMER, tin: 'RN-3', name: null }],
+    }
+    const af = vi.fn().mockImplementation((url: string) => Promise.resolve({ customers: byTin[new URL(url).searchParams.get('tin') ?? ''], pagination: { limit: 1, offset: 0, total: 1 } }))
+    const names = await recordNamesByTin(af, BASE, ['RN-1', 'RN-2', 'RN-3'])
+    expect(Object.fromEntries(names)).toEqual({ 'RN-1': 'Rec A' })
+  })
+
+  it('recordNamesByTin keeps the other names when one lookup rejects', async () => {
+    const af = vi.fn().mockImplementation((url: string) =>
+      new URL(url).searchParams.get('tin') === 'RN-1'
+        ? Promise.reject(new Error('down'))
+        : Promise.resolve({ customers: [{ ...CUSTOMER, tin: 'RN-2', name: 'Rec B' }], pagination: { limit: 1, offset: 0, total: 1 } }),
+    )
+    const names = await recordNamesByTin(af, BASE, ['RN-1', 'RN-2'])
+    expect(Object.fromEntries(names)).toEqual({ 'RN-2': 'Rec B' })
+  })
+})
+
+describe('buyerDirectory create', () => {
+  it('toCustomerCreateInput trims, keeps the hyphen and omits blank fields', () => {
+    const form = { ...emptyBuyerForm(), name: '  Acme ', email: '', city: '  ' }
+    expect(toCustomerCreateInput(' 12345678-0001 ', form)).toEqual({ tin: '12345678-0001', name: 'Acme' })
+  })
+
+  it('mapCreateError maps each status to its field and copy', () => {
+    const http = (status: number, msg: string) => new ApiError('http', msg, status)
+    expect(mapCreateError(http(400, 'tin is required'))).toEqual({ field: 'tin', message: 'tin is required' })
+    expect(mapCreateError(http(400, 'buyer_type must be B2B, B2G or B2C'))).toEqual({ field: 'buyerType', message: 'buyer_type must be B2B, B2G or B2C' })
+    expect(mapCreateError(http(400, 'invalid request body'))).toEqual({ message: 'invalid request body' })
+    expect(mapCreateError(http(409, 'duplicate tin'))).toEqual({ field: 'tin', message: 'A customer with this TIN already exists', duplicate: true })
+    expect(mapCreateError(http(401, 'unauthorized'))).toBeNull()
+    expect(mapCreateError(http(500, 'internal'))).toEqual({ message: 'Something went wrong. Please try again.' })
+    expect(mapCreateError(new TypeError('Failed to fetch'))).toEqual({ message: 'Something went wrong. Please try again.' })
+  })
+
+  it('createCustomer posts the body to /v1/customers', async () => {
+    const af = vi.fn().mockResolvedValue(CUSTOMER)
+    await createCustomer(af, BASE, { tin: 'RN-1', name: 'Acme' })
+    expect(af).toHaveBeenCalledWith(`${BASE}/api/invoice/v1/customers`, { method: 'POST', body: { tin: 'RN-1', name: 'Acme' } })
+  })
+
+  it('listCustomers adds status and tin only when given', async () => {
+    const af = vi.fn().mockResolvedValue({ customers: [], pagination: { limit: 50, offset: 0, total: 0 } })
+    await listCustomers(af, BASE, { limit: 50, offset: 0 })
+    await listCustomers(af, BASE, { limit: 50, offset: 0, status: 'active' })
+    await listCustomers(af, BASE, { limit: 50, offset: 0, tin: 'RN-1' })
+    expect(af.mock.calls.map((c) => c[0])).toEqual([
+      `${BASE}/api/invoice/v1/customers?limit=50&offset=0`,
+      `${BASE}/api/invoice/v1/customers?limit=50&offset=0&status=active`,
+      `${BASE}/api/invoice/v1/customers?limit=50&offset=0&tin=RN-1`,
+    ])
+  })
+
+  it('archiveCustomer and restoreCustomer post their routes', async () => {
+    const af = vi.fn().mockResolvedValue({})
+    await archiveCustomer(af, BASE, 'c1')
+    await restoreCustomer(af, BASE, 'c1')
+    expect(af.mock.calls).toEqual([
+      [`${BASE}/api/invoice/v1/customers/c1/archive`, { method: 'POST' }],
+      [`${BASE}/api/invoice/v1/customers/c1/restore`, { method: 'POST' }],
+    ])
   })
 })

@@ -35,9 +35,9 @@ const ALL_VIEWS = [
   'extraction',
 ] as const
 
-// types.ts — seven members. The strip SettingsView renders is the *available* set and is
+// types.ts — six members. The strip SettingsView renders is the *available* set and is
 // one shorter in a firm workspace; this is the addressable set.
-const ALL_SETTINGS_TABS = ['members', 'roles', 'buyers', 'connectors', 'api', 'signing', 'company'] as const
+const ALL_SETTINGS_TABS = ['members', 'roles', 'connectors', 'api', 'signing', 'company'] as const
 
 // A well-formed id and its upper-case twin: parse must preserve case, not normalise it.
 const UUID = 'a1b2c3d4-e5f6-47a8-89ab-cdef01234567'
@@ -213,19 +213,19 @@ describe('routeUrl — serialise', () => {
   })
 
   it('routeUrl_alwaysNamesTheSettingsTabIncludingTheDefault', () => {
-    expect(ALL_SETTINGS_TABS.length).toBe(7)
+    expect(ALL_SETTINGS_TABS.length).toBe(6)
     expect(routeUrl('settings')).toBe('/settings/members')
     expect(routeUrl('settings', { settingsTab: 'members' })).toBe('/settings/members')
     expect(routeUrl('settings', { settingsTab: undefined })).toBe('/settings/members')
     for (const t of ALL_SETTINGS_TABS) {
       expect(routeUrl('settings', { settingsTab: t }), `${t} is addressable`).toBe(`/settings/${t}`)
     }
-    // Floor: the seven are not six defaults plus members -- members is one of the seven.
+    // Floor: the six are not five defaults plus members -- members is one of the six.
     const nonDefault = ALL_SETTINGS_TABS.filter((t) => t !== 'members')
-    expect(nonDefault.length).toBe(6)
+    expect(nonDefault.length).toBe(5)
   })
 
-  // ALL_SETTINGS_TABS is a local literal, so the `.length === 7` floor above asserts it
+  // ALL_SETTINGS_TABS is a local literal, so the `.length === 6` floor above asserts it
   // against itself: a new tab added to types.ts would leave every tab loop in this file
   // one short and silent. ROUTE_PATHS has such an anchor already
   // (routeTable_isTotalOverTheThirteenViews); the tab set had none.
@@ -236,7 +236,7 @@ describe('routeUrl — serialise', () => {
     expect(line, 'types.ts no longer declares `export type SettingsTab =` on one line').toBeTruthy()
     const shipped = (line ?? '').match(/'[a-z]+'/g)?.map((m) => m.slice(1, -1)) ?? []
     // Needle: a regex that matched nothing would make the set comparison below vacuous.
-    expect(shipped.length, 'the union scan matched no member -- it would prove nothing').toBe(7)
+    expect(shipped.length, 'the union scan matched no member -- it would prove nothing').toBe(6)
     expect(shipped.sort(), 'the shipped union and this file\'s table must name the same tabs').toEqual(
       [...ALL_SETTINGS_TABS].sort(),
     )
@@ -333,9 +333,10 @@ describe('parseLocation — the inverse of routeUrl', () => {
     expect(parseLocation('/audit', '?q=acme').q).toBe('')
   })
 
-  it('parseLocation_readsSettingsBuyersAsTheBuyersTab', () => {
-    expect(parseLocation('/settings/buyers', '')).toMatchObject({ view: 'settings', settingsTab: 'buyers' })
-    expect(routeUrl('settings', { settingsTab: 'buyers' })).toBe('/settings/buyers')
+  it('parseLocation_redirectsSettingsBuyersToCustomers', () => {
+    for (const pathname of ['/settings/buyers', '/settings/buyers/']) {
+      expect(parseLocation(pathname, ''), pathname).toMatchObject({ view: 'customers', settingsTab: 'members' })
+    }
   })
 
   it('parseLocation_fallsBackToMembersForAnUnknownTab', () => {
@@ -345,10 +346,11 @@ describe('parseLocation — the inverse of routeUrl', () => {
       '/settings/',
       '/settings/nonsense',
       '/settings/MEMBERS',
+      '/settings/BUYERS',
       '/settings/constructor',
       '/settings/toString',
     ]
-    expect(unknown.length).toBe(6)
+    expect(unknown.length).toBe(7)
     for (const pathname of unknown) {
       const parsed = parseLocation(pathname, '')
       expect(parsed.view, pathname).toBe('settings')
@@ -356,8 +358,8 @@ describe('parseLocation — the inverse of routeUrl', () => {
     }
     // Control needles: every real tab resolves to itself through the codec.
     expect(parseLocation('/settings/roles', '').settingsTab).toBe('roles')
-    expect(parseLocation('/settings/buyers', '').settingsTab).toBe('buyers')
-    expect(ALL_SETTINGS_TABS.length).toBe(7)
+    expect(parseLocation('/settings/connectors', '').settingsTab).toBe('connectors')
+    expect(ALL_SETTINGS_TABS.length).toBe(6)
     for (const t of ALL_SETTINGS_TABS) {
       const [pathname, search] = splitUrl(routeUrl('settings', { settingsTab: t }))
       expect(parseLocation(pathname, search).settingsTab, t).toBe(t)

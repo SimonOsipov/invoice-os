@@ -135,6 +135,21 @@ func TestRLS_ADocumentImportTakesTheBuyerTypeFromTheDirectory(t *testing.T) {
 	btWantKind(t, "tenant A's own record", btImportDocument(t, super, app, tenantID, entityID, documentID), btB2G)
 }
 
+func TestRLS_ADocumentImportIgnoresAnArchivedRecordsBuyerType(t *testing.T) {
+	super, app := dbTestPools(t)
+	tenantID := seedTenant(t, super, "BT-archived tenant")
+	entityID := seedEntity(t, super, tenantID, "BT-archived entity")
+	const tin = "11111111-0009"
+	btRecord(t, super, tenantID, tin, btPtr(btB2G))
+	if _, err := super.Exec(context.Background(),
+		`UPDATE customers SET status = 'archived' WHERE tenant_id = $1 AND tin = $2`, tenantID, tin); err != nil {
+		t.Fatalf("archive record: %v", err)
+	}
+	documentID := btDocument(t, super, tenantID, tin, "BT-ARCH-INV")
+
+	btWantNoKind(t, "archived record", btImportDocument(t, super, app, tenantID, entityID, documentID))
+}
+
 func TestRLS_ADocumentImportCopiesEachBuyerTypeAsIs(t *testing.T) {
 	super, app := dbTestPools(t)
 	tenantID := seedTenant(t, super, "BT-02 tenant")

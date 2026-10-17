@@ -330,16 +330,16 @@ describe('ROUTE-04-02 AC-1: the settings tab seeds from the path segment', () =>
   })
 })
 
-describe('ENGI-05-07: /settings/buyers is addressable for both personas', () => {
-  it('boot_settingsBuyersDeepLinkKeepsTheTabForFirmAndInhouse', async () => {
+describe('CUST-02: /settings/buyers lands on Customers for both personas', () => {
+  it('boot_settingsBuyersLandsOnCustomersForFirmAndInhouse', async () => {
     await bootAt('/settings/buyers')
-    expect(requireCtx().settingsTab, 'firm must not fall back to members').toBe('buyers')
-    expect(window.location.pathname).toBe('/settings/buyers')
+    expect(requireCtx().view).toBe('customers')
+    expect(window.location.pathname).toBe('/customers')
     cleanup()
     capturedCtx = undefined
     await bootAt('/settings/buyers', { persona: APP_PERSONAS.inhouse })
-    expect(requireCtx().settingsTab, 'in-house must keep buyers').toBe('buyers')
-    expect(window.location.pathname).toBe('/settings/buyers')
+    expect(requireCtx().view).toBe('customers')
+    expect(window.location.pathname).toBe('/customers')
   })
 })
 
@@ -676,7 +676,6 @@ describe('ROUTE-04-06 AC-1: a firm-mode /settings/company falls back identically
   const SETTINGS_TAB_LABELS = new Set([
     'Members',
     'Roles',
-    'Buyers',
     'ERP connectors',
     'API & webhooks',
     'Signing & certificates',
@@ -712,7 +711,7 @@ describe('ROUTE-04-06 AC-1: a firm-mode /settings/company falls back identically
       view: 'settings',
       settingsTab: 'members',
       alignedUrl: '/settings/members',
-      stripLabels: ['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates'],
+      stripLabels: ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates'],
     })
   })
 })
@@ -791,7 +790,7 @@ describe('ROUTE-04-06 AC-3: a stale Company entry left behind by an earlier sess
       'a stale Company entry from an earlier in-house session must be clamped for the firm workspace it resurfaces under',
     ).toBe('members')
 
-    const FIRM_TAB_LABELS = ['Members', 'Roles', 'Buyers', 'ERP connectors', 'API & webhooks', 'Signing & certificates']
+    const FIRM_TAB_LABELS = ['Members', 'Roles', 'ERP connectors', 'API & webhooks', 'Signing & certificates']
     const stripTabs = Array.from(document.querySelectorAll('.pf-tab')).filter((el) =>
       FIRM_TAB_LABELS.includes(el.textContent ?? ''),
     )

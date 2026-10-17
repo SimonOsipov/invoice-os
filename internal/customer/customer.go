@@ -17,6 +17,14 @@ import (
 var (
 	ErrValidation = errors.New("customer: validation")
 	ErrNotFound   = errors.New("customer: not found")
+
+	ErrDuplicateTIN        = errors.New("customer: duplicate tin")
+	ErrRedundantTransition = errors.New("customer: redundant transition")
+)
+
+const (
+	StatusActive   = "active"
+	StatusArchived = "archived"
 )
 
 // validationError is an ErrValidation whose text is the 400 message.
@@ -28,6 +36,9 @@ func (e validationError) Is(target error) bool { return target == ErrValidation 
 const (
 	errNoFields  = validationError("no fields to update")
 	errBuyerType = validationError("buyer_type must be B2B, B2G or B2C")
+
+	errTINRequired = validationError("tin is required")
+	errTINFormat   = validationError("tin must be NNNNNNNN-NNNN or RN- followed by digits")
 )
 
 // Customer is a customers row. edited_fields is not on the wire.
@@ -45,12 +56,14 @@ type Customer struct {
 	Country       *string   `json:"country"`
 	State         *string   `json:"state"`
 	LGA           *string   `json:"lga"`
+	Status        string    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
 // ListFilter is the Store.List query. TIN matches exactly after a trim.
 type ListFilter struct {
 	TIN    string
+	Status string // "" lists both; otherwise "active" or "archived"
 	Limit  int
 	Offset int
 }
@@ -68,6 +81,12 @@ type UpdateInput struct {
 	Country       *string
 	State         *string
 	LGA           *string
+}
+
+// CreateInput is the Store.Create argument; Fields follow UpdateInput's nil rule.
+type CreateInput struct {
+	TIN    *string
+	Fields UpdateInput
 }
 
 type listPagination struct {
@@ -92,6 +111,12 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Customer, int, 
 			return
 		}
 		query := r.URL.Query()
+
+		wantStatus := query.Get("status")
+		if wantStatus != "" && wantStatus != StatusActive && wantStatus != StatusArchived {
+			writeError(w, http.StatusBadRequest, `status must be "active" or "archived"`)
+			return
+		}
 
 		limit := 50
 		if raw := query.Get("limit"); raw != "" {
@@ -123,7 +148,7 @@ func ListHandler(list func(ctx context.Context, f ListFilter) ([]Customer, int, 
 			return
 		}
 
-		filter := ListFilter{TIN: query.Get("tin"), Limit: limit, Offset: offset}
+		filter := ListFilter{TIN: query.Get("tin"), Status: wantStatus, Limit: limit, Offset: offset}
 		items, total, err := list(r.Context(), filter)
 		if err != nil {
 			status, msg := statusForErr(err)
@@ -187,6 +212,62 @@ func UpdateHandler(update func(ctx context.Context, id string, in UpdateInput) (
 	}
 }
 
+type createRequest struct {
+	TIN *string `json:"tin"`
+	updateRequest
+}
+
+// CreateHandler serves POST /v1/customers. Unknown keys, status included, are ignored.
+func CreateHandler(create func(ctx context.Context, in CreateInput) (Customer, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req createRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		c, err := create(r.Context(), CreateInput{TIN: req.TIN, Fields: UpdateInput(req.updateRequest)})
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "customer: create customer", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusCreated, c)
+	}
+}
+
+// SetStatusHandler serves POST /v1/customers/{id}/archive and /restore; the target is bound by the setStatus closure.
+func SetStatusHandler(setStatus func(ctx context.Context, id string) (Customer, error), log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		c, err := setStatus(r.Context(), r.PathValue("id"))
+		if err != nil {
+			status, msg := statusForErr(err)
+			if status == http.StatusInternalServerError {
+				log.ErrorContext(r.Context(), "customer: set customer status", slog.Any("err", err))
+			}
+			writeError(w, status, msg)
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+	}
+}
+
 func statusForErr(err error) (status int, msg string) {
 	switch {
 	case errors.Is(err, db.ErrNoTenant):
@@ -197,6 +278,10 @@ func statusForErr(err error) (status int, msg string) {
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, ErrNotFound):
 		return http.StatusNotFound, "not found"
+	case errors.Is(err, ErrDuplicateTIN):
+		return http.StatusConflict, "duplicate tin"
+	case errors.Is(err, ErrRedundantTransition):
+		return http.StatusConflict, "redundant transition"
 	default:
 		return http.StatusInternalServerError, "internal server error"
 	}

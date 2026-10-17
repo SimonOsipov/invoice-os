@@ -76,7 +76,12 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'submission.job.cancelled',
   ],
   reconciliation: ['reconciliation.drift_detected', 'reconciliation.auto_fixed'],
-  customers: ['customers.customer.updated'],
+  customers: [
+    'customers.customer.updated',
+    'customers.customer.created',
+    'customers.customer.archived',
+    'customers.customer.restored',
+  ],
 }
 
 const ALL = Object.values(EXPECTED).flat()
@@ -196,12 +201,27 @@ describe('audit vocabulary', () => {
     expect(auditEventView('submission.failed').tone).not.toBeNull()
   })
 
-  it('auditVocabulary_buyerUpdatedIsLabelledInCustomers', () => {
+  it('auditVocabulary_customerUpdatedIsLabelledInCustomers', () => {
     const view = auditEventView('customers.customer.updated')
     // humanise() answers a null domain for an unknown id, so the domain tells labelled from unknown.
     expect(view.domain).toBe('customers')
-    expect(view.label).toBe('Buyer updated')
+    expect(view.label).toBe('Customer updated')
     expect(view.tone).toBeNull()
+    // Control: the same view function answers a tone for an outcome-bearing event.
+    expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary_customerMovesAreLabelledInCustomers', () => {
+    for (const [id, label] of [
+      ['customers.customer.created', 'Customer added'],
+      ['customers.customer.archived', 'Customer archived'],
+      ['customers.customer.restored', 'Customer restored'],
+    ]) {
+      const view = auditEventView(id)
+      expect(view.domain, `${id} must be a labelled customers event`).toBe('customers')
+      expect(view.label).toBe(label)
+      expect(view.tone).toBeNull()
+    }
     // Control: the same view function answers a tone for an outcome-bearing event.
     expect(auditEventView('submission.failed').tone).not.toBeNull()
   })

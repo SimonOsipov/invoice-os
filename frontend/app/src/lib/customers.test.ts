@@ -4,7 +4,7 @@
 // this is a fresh suite pinning the new behavior rather than an update to an existing one.
 import { describe, expect, it } from 'vitest'
 
-import { aggregateCustomers, initials } from './customers'
+import { aggregateCustomers, customerName, initials } from './customers'
 import type { InvoiceRecord } from './invoices'
 
 function invoiceRecord(overrides: Partial<InvoiceRecord> = {}): InvoiceRecord {
@@ -59,7 +59,7 @@ describe('aggregateCustomers', () => {
     const result = aggregateCustomers(rows)
 
     expect(result).toHaveLength(1)
-    expect(result[0]).toMatchObject({ name: 'Beta Traders', tin: '20000000-0001', count: 2, totalNum: 1575, valid: true, last: '2026-06-15' })
+    expect(result[0]).toMatchObject({ name: 'Beta Traders', tin: '20000000-0001', count: 2, totalNum: 1575, last: '2026-06-15' })
   })
 
   it('two rows with the SAME buyer_tin but different buyer_name still merge under one customer, keyed on TIN (the domain identifier)', () => {
@@ -95,7 +95,7 @@ describe('aggregateCustomers', () => {
     expect(result[0]).toMatchObject({ count: 2, totalNum: 300 })
   })
 
-  it('a null buyer_tin AND null buyer_name is invalid and merges into one "—" bucket', () => {
+  it('a null buyer_tin AND null buyer_name merges into one "—" bucket', () => {
     const rows = [
       invoiceRecord({ id: 'a', buyer_tin: null, buyer_name: null }),
       invoiceRecord({ id: 'b', buyer_tin: null, buyer_name: null }),
@@ -104,19 +104,19 @@ describe('aggregateCustomers', () => {
     const result = aggregateCustomers(rows)
 
     expect(result).toHaveLength(1)
-    expect(result[0]).toMatchObject({ name: '—', tin: '', valid: false, count: 2 })
+    expect(result[0]).toMatchObject({ name: '—', tin: '', count: 2 })
   })
 
-  it('a TIN matching the backend format (8 digits, hyphen, 4 digits) is valid', () => {
-    const result = aggregateCustomers([invoiceRecord({ buyer_tin: '20000000-0001' })])
+  it('aggregateCustomers keys on the trimmed TIN', () => {
+    const rows = [
+      invoiceRecord({ id: 'a', buyer_tin: ' 20000000-0001', buyer_name: 'Beta Traders' }),
+      invoiceRecord({ id: 'b', buyer_tin: '20000000-0001', buyer_name: 'Beta Traders' }),
+    ]
 
-    expect(result[0].valid).toBe(true)
-  })
+    const result = aggregateCustomers(rows)
 
-  it('a TIN NOT matching the backend format is invalid, and the invalid tin string is kept verbatim', () => {
-    const result = aggregateCustomers([invoiceRecord({ buyer_tin: '12345' })])
-
-    expect(result[0]).toMatchObject({ valid: false, tin: '12345' })
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ tin: '20000000-0001', count: 2 })
   })
 
   it('total sums Number(total) across a customer\'s rows; a null total contributes 0', () => {
@@ -200,5 +200,13 @@ describe('initials', () => {
 
   it('strips non-letter characters before splitting on spaces', () => {
     expect(initials('—')).toBe('')
+  })
+})
+
+describe('customerName', () => {
+  it('customerName prefers the record, then the invoice, then —', () => {
+    expect(customerName('R', 'I')).toBe('R')
+    expect(customerName(null, 'I')).toBe('I')
+    expect(customerName(undefined, undefined)).toBe('—')
   })
 })

@@ -32,6 +32,8 @@ import {
   getInvoice,
   getInvoiceApproval,
   editInvoice,
+  provisionRealAccount,
+  signInSession,
   searchCodes,
   type Persona,
 } from '../api/client'
@@ -51,7 +53,7 @@ import {
   WIDE_WIDTHS,
   type Rect,
 } from './layout'
-import { browserToken, signInAs } from '../personaSession'
+import { browserToken, signInAs, signInAtFrontDoor } from '../personaSession'
 import { e2eMember } from '../realAccounts'
 import { APP_URL, shardTenants, VALIDATION_EXPECTED } from './targets'
 
@@ -2828,46 +2830,48 @@ test('register: a search query is a working deep link', async ({ page }) => {
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
 })
 
-// task-334 (BUG-01-08): the Customers screen used to aggregate only the server's DEFAULT
-// (unpaged) page -- limit=50 -- so a client past 50 buyers silently dropped the rest
-// (the real production symptom this fixes: 47 of 256 buyers shown). Deliberately NOT
-// cleanInvoiceFields' shared buyer_tin: each invoice here gets its OWN distinct buyer, so
-// aggregateCustomers produces one row per invoice, never merging two into one.
+// Customers counts every buyer's invoices from the whole invoice set across every client
+// (the whole-set claim). A fresh firm account keeps the record list to this
+// spec's own two buyers; the pager is not under test here.
 function customersFields(invoiceNumber: string, buyerTin: string, buyerName: string) {
   return { ...cleanInvoiceFields(invoiceNumber), buyer_tin: buyerTin, buyer_name: buyerName }
 }
 
-test('customers-whole-set: every buyer appears and no KPI cards render', async ({ page }) => {
-  test.setTimeout(120_000)
+test('customers-whole-set: every buyer\'s invoices count across the whole set and every client', async ({ page }) => {
+  test.setTimeout(180_000)
   const errors = collectErrors(page)
 
-  const token = await login(PERSONAS.A)
-  const entity = await createEntity(token, { name: `BUG-01-08 customers ${Date.now()}`, tin: freshTin() })
-
-  // Mirrors buildAnchoredPage's own anchor idiom above: created FIRST, sequentially, so
-  // `ORDER BY created_at DESC` sorts it OLDEST -- exactly the row a default (unpaged)
-  // listInvoices call used to drop once a client passed 50 buyers.
-  const BULK_COUNT = 50
+  const account = await provisionRealAccount('customers-whole', 'firm')
+  const token = (await signInSession(account.email, account.password)).access_token
   const stamp = Date.now()
-  const anchorName = `BUG-01-08 Anchor Buyer ${stamp}`
-  await createInvoice(token, { entity_id: entity.id, ...customersFields(`INV-BUG0108-ANCHOR-${stamp}`, freshTin(), anchorName) })
+  const [clientA, clientB] = await Promise.all(
+    [0, 1].map((i) => createEntity(token, { name: `CUST-02 client ${i} ${stamp}`, tin: freshTin() })),
+  )
+  const tinX = freshBuyerTin()
+  const tinY = freshBuyerTin()
+  const nameX = `CUST-02 Buyer X ${stamp}`
+  const nameY = `CUST-02 Buyer Y ${stamp}`
+  const Y_COUNT = 50
+
+  // X's first invoice is created first, so it is the oldest of the set.
+  await createInvoice(token, { entity_id: clientA.id, ...customersFields(`INV-CUST02-X1-${stamp}`, tinX, nameX) })
   await Promise.all(
-    Array.from({ length: BULK_COUNT }, (_, i) =>
-      createInvoice(token, { entity_id: entity.id, ...customersFields(`INV-BUG0108-BULK-${i}-${stamp}`, freshTin(), `BUG-01-08 Buyer ${i} ${stamp}`) }),
+    Array.from({ length: Y_COUNT }, (_, i) =>
+      createInvoice(token, { entity_id: clientB.id, ...customersFields(`INV-CUST02-Y${i}-${stamp}`, tinY, nameY) }),
     ),
   )
+  await createInvoice(token, { entity_id: clientB.id, ...customersFields(`INV-CUST02-X2-${stamp}`, tinX, nameX) })
 
-  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
-  await selectEntity(page, entity.name)
+  await signInAtFrontDoor(page, account, '/')
   await page.getByRole('button', { name: /Customers/ }).click()
   await expect(page, 'inline nav to Customers did not update the URL').toHaveURL(/\/customers$/)
-  await expect(page.getByRole('heading', { name: 'Customers & vendors' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Customers', exact: true })).toBeVisible()
 
-  await expect(
-    page.getByText(anchorName),
-    'a 50-row default-limit fetch would have dropped the oldest buyer -- proves the whole set was fetched',
-  ).toBeVisible()
-  await expect(page.locator('.pf-list-row')).toHaveCount(BULK_COUNT + 1)
+  const rowX = page.locator('.pf-list-row', { hasText: tinX })
+  const rowY = page.locator('.pf-list-row', { hasText: tinY })
+  const invoicesCell = (row: Locator) => row.locator(':scope > span').nth(3)
+  await expect(invoicesCell(rowX), 'X has one invoice on each client: the count spans clients and the oldest invoice').toHaveText('2')
+  await expect(invoicesCell(rowY)).toHaveText(String(Y_COUNT))
   await expect(page.locator('.pf-grid-4'), 'no KPI card row').toHaveCount(0)
   await expect(page.getByText('Valid TINs')).toHaveCount(0)
 

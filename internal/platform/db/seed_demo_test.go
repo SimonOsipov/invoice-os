@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	dbsql "github.com/SimonOsipov/invoice-os/db"
+	"github.com/SimonOsipov/invoice-os/internal/customer"
 	db "github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/qrcode"
 	"github.com/SimonOsipov/invoice-os/internal/reconciliation"
@@ -4943,5 +4944,170 @@ func TestSeedEverySeededPolicyStepKeyExists(t *testing.T) {
 		if got != 1 {
 			t.Errorf("in-house tenant: count(workflow_roles WHERE key=%q) = %d, want exactly 1 -- SEED_INHOUSE_POLICIES names this key in an approval step", key, got)
 		}
+	}
+}
+
+// seedDemoCustomersSetup clears the demo tenants' buyer records, reseeds, and returns both pools.
+func seedDemoCustomersSetup(t *testing.T) (super, app *pgxpool.Pool) {
+	t.Helper()
+	superDSN := requireSuperuserDSN(t)
+	appDSN := requireAppDSN(t)
+	super = bootstrapSuperuserPool(t, superDSN)
+	ctx := context.Background()
+	if _, err := super.Exec(ctx, `DELETE FROM customers WHERE tenant_id = ANY($1::uuid[])`, db.DemoTenants); err != nil {
+		t.Fatalf("clear demo customers: %v", err)
+	}
+	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	app, err := pgxpool.New(ctx, appDSN)
+	if err != nil {
+		t.Fatalf("connect app pool: %v", err)
+	}
+	t.Cleanup(app.Close)
+	return super, app
+}
+
+// demoCustomerRecords maps tin to name for a tenant's records.
+func demoCustomerRecords(t *testing.T, super *pgxpool.Pool, tenantID string) map[string]string {
+	t.Helper()
+	rows, err := super.Query(context.Background(), `SELECT tin, name FROM customers WHERE tenant_id = $1`, tenantID)
+	if err != nil {
+		t.Fatalf("list customers: %v", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var tin, name string
+		if err := rows.Scan(&tin, &name); err != nil {
+			t.Fatalf("scan customers: %v", err)
+		}
+		out[tin] = name
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate customers: %v", err)
+	}
+	return out
+}
+
+// customer.fileableTIN is unexported; keep this literal equal to it.
+const demoFileableTIN = `^([0-9]{8}-[0-9]{4}|RN-[0-9]+)$`
+
+func TestSeedDemoCustomers_OneRecordPerFileableBuyerTIN(t *testing.T) {
+	for _, tc := range []struct{ name, posture string }{
+		{"local", ""},
+		{"preview", "invoice-os-pr-12"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			super, app := seedDemoCustomersSetup(t)
+			if err := customer.SeedDemo(context.Background(), app, tc.posture, nil); err != nil {
+				t.Fatalf("SeedDemo: %v", err)
+			}
+			for tenantID, want := range map[string]int{demoTenantID: 13, honeywellTenantID: 9} {
+				got := demoCustomerRecords(t, super, tenantID)
+				if len(got) != want {
+					t.Errorf("tenant %s holds %d records, want %d", tenantID, len(got), want)
+				}
+				rows, err := super.Query(context.Background(),
+					`SELECT DISTINCT btrim(buyer_tin), buyer_name FROM invoices WHERE tenant_id = $1 AND btrim(buyer_tin) ~ $2`,
+					tenantID, demoFileableTIN)
+				if err != nil {
+					t.Fatalf("query invoices: %v", err)
+				}
+				wantTINs := map[string]string{}
+				for rows.Next() {
+					var tin, name string
+					if err := rows.Scan(&tin, &name); err != nil {
+						t.Fatalf("scan: %v", err)
+					}
+					wantTINs[tin] = name
+				}
+				rows.Close()
+				if len(wantTINs) != len(got) {
+					t.Errorf("tenant %s: %d invoice TIN/name pairs, %d records (one name per TIN is pinned by TestSeedOneBuyerNamePerBuyerTIN)", tenantID, len(wantTINs), len(got))
+				}
+				for tin, name := range wantTINs {
+					if gn, ok := got[tin]; !ok || gn != name {
+						t.Errorf("tenant %s TIN %s: record name %q (present=%v), want %q", tenantID, tin, gn, ok, name)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSeedDemoCustomers_FailedTenantsAreNamedAndWriteNothing(t *testing.T) {
+	super, _ := seedDemoCustomersSetup(t)
+	// A superuser pool is refused by Backfill, so every tenant fails.
+	err := customer.SeedDemo(context.Background(), super, "", nil)
+	if err == nil {
+		t.Fatal("SeedDemo over a superuser pool = nil, want an error")
+	}
+	for _, id := range db.DemoTenants {
+		if !strings.Contains(err.Error(), id) {
+			t.Errorf("error %q does not name tenant %s", err, id)
+		}
+	}
+	var n int
+	if e := super.QueryRow(context.Background(), `SELECT count(*) FROM customers WHERE tenant_id = ANY($1::uuid[])`, db.DemoTenants).Scan(&n); e != nil {
+		t.Fatalf("count: %v", e)
+	}
+	if n != 0 {
+		t.Errorf("customers over the demo tenants = %d, want 0", n)
+	}
+}
+
+func TestSeedDemoCustomers_MalformedTINGetsNoRecord(t *testing.T) {
+	super, app := seedDemoCustomersSetup(t)
+	if err := customer.SeedDemo(context.Background(), app, "", nil); err != nil {
+		t.Fatalf("SeedDemo: %v", err)
+	}
+	ctx := context.Background()
+	var inv, rec int
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM invoices WHERE invoice_number = 'DEMO-2026-6003' AND buyer_tin = '12345678'`).Scan(&inv); err != nil {
+		t.Fatalf("control: %v", err)
+	}
+	if inv != 1 {
+		t.Fatalf("control invoice DEMO-2026-6003 with buyer_tin 12345678 count = %d, want 1", inv)
+	}
+	if err := super.QueryRow(ctx, `SELECT count(*) FROM customers WHERE tin = '12345678' AND tenant_id = ANY($1::uuid[])`, db.DemoTenants).Scan(&rec); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if rec != 0 {
+		t.Errorf("records holding 12345678 = %d, want 0", rec)
+	}
+}
+
+func TestSeedDemoCustomers_SecondRunChangesNothing(t *testing.T) {
+	super, app := seedDemoCustomersSetup(t)
+	ctx := context.Background()
+	snap := func() []string {
+		rows, err := super.Query(ctx, `SELECT xmin::text || ' ' || to_jsonb(c)::text FROM customers c WHERE tenant_id = ANY($1::uuid[]) ORDER BY tenant_id, tin`, db.DemoTenants)
+		if err != nil {
+			t.Fatalf("snapshot: %v", err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	if err := customer.SeedDemo(ctx, app, "", nil); err != nil {
+		t.Fatalf("first SeedDemo: %v", err)
+	}
+	first := snap()
+	if len(first) == 0 {
+		t.Fatal("first run filed no records")
+	}
+	if err := customer.SeedDemo(ctx, app, "", nil); err != nil {
+		t.Fatalf("second SeedDemo: %v", err)
+	}
+	if !reflect.DeepEqual(first, snap()) {
+		t.Errorf("second SeedDemo changed the customers rows")
 	}
 }

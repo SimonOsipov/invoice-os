@@ -49,6 +49,7 @@ describe('blog package', () => {
   it('seam_noSecondCopyOfTheConsentOrTagCode', () => {
     const needle = /asc_consent|googletagmanager|dataLayer|\b_ga\b/
     const others = srcFiles().filter((f) => relative(HERE, f) !== 'analytics.ts')
+    expect(others.length).toBeGreaterThan(3)
     expect(others.filter((f) => needle.test(stripComments(read(f)))).map((f) => relative(HERE, f))).toEqual([])
     // Control: the scan matches the landing's own tag code.
     expect(needle.test(read(join(HERE, '../../landing/src/analytics.ts')))).toBe(true)

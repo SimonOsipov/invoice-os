@@ -11,7 +11,7 @@ paths:
 ---
 # Landing analytics
 
-- Ship GA4 on the public landing page and the public Feature Library only. Never add GA to the app or the consoles.
+- Ship GA4 on the public landing page and the public Feature Library. Never add GA to the app or the consoles.
 - Load the `gtag.js` tag only when `shouldLoadTag` holds: a production hostname, granted analytics consent and a baked measurement id.
 - Match the landing hostname exactly against `PRODUCTION_HOSTNAMES` in `hubspot.ts`. That gate does not depend on the measurement id.
 - Keep `CONSENT_DEFAULT_ANALYTICS` false. A visitor with no stored record loads no tag.
@@ -32,7 +32,7 @@ paths:
 - Gate the library tag on `LIBRARY_HOSTNAMES` in `hubspot.ts`. A fork of either host sends nothing.
 - Keep the library senders in `frontend/landing/src/analytics.ts`. `frontend/library/src/analytics.ts` binds them to the library host.
 - Store the consent choice in the `asc_consent` cookie on `SHARED_COOKIE_DOMAIN` on a production host. Keep it in `localStorage` on any other host. Move an older `localStorage` record into the cookie. Keep the record with the later `ts`.
-- Leave `cookie_domain` out of the `gtag('config')` call. GA4's default then shares `_ga` on `SHARED_COOKIE_DOMAIN` across both sites. A Reject on either site expires `_ga` on every parent domain of its host.
+- Leave `cookie_domain` out of the `gtag('config')` call. GA4's default then shares `_ga` on `SHARED_COOKIE_DOMAIN` across sites. A Reject expires `_ga` on every parent domain of its host.
 - Send the library `page_view` by hand through `trackLibraryPageView`, once per later path change. The first view comes from `gtag('config')`.
 - Keep GA4 history-event page views off in the web stream, or each navigation counts twice.
 - Send `demo_open` from the library with `cta_location` `library`. Send `tour_start` with no parameter.

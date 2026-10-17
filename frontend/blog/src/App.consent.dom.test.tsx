@@ -156,6 +156,48 @@ describe('blog consent', () => {
     expect(record().analytics).toBe(false)
   })
 
+  it('CO-07 an Accept from another tab closes the notice and loads the tag once', async () => {
+    await mount()
+    expect(notices()).toHaveLength(1)
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(notices()).toHaveLength(0)
+    expect(document.querySelectorAll(TAG)).toHaveLength(1)
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    click(byText('Cookie choices'))
+    expect(document.querySelectorAll(TAG)).toHaveLength(1)
+  })
+
+  it('CO-08 a Reject from another tab expires _ga on every blog domain form and sends nothing', async () => {
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    const m = await mount()
+    expect(m.analytics.bootBlogAnalytics()).toBe(true)
+    document.cookie = '_ga=x'
+    const writes = spyWrites()
+    document.cookie = `${KEY}=${encodeURIComponent(DENY)}; Domain=ascomply.com; Path=/; Secure`
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    const exp = writes.filter((w) => w.startsWith('_ga=; Max-Age=0'))
+    expect(exp.filter((w) => !w.includes('domain='))).toHaveLength(1)
+    expect(exp.filter((w) => w.includes('domain=')).map((w) => w.split('domain=')[1]).sort()).toEqual(
+      ['.ascomply.com', '.blog.ascomply.com', 'ascomply.com', 'blog.ascomply.com'],
+    )
+    click(byText('Subscribe'))
+    const events = ((window as TestWindow).dataLayer ?? []).map((a) => Array.from(a)).filter((e) => e[0] === 'event')
+    expect(events).toEqual([])
+  })
+
+  it('CO-09 a hidden tab keeps its notice until it is visible', async () => {
+    await mount()
+    document.cookie = `${KEY}=${encodeURIComponent(GRANT)}; Domain=ascomply.com; Path=/; Secure`
+    const state = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(notices()).toHaveLength(1)
+    expect(document.querySelectorAll(TAG)).toHaveLength(0)
+    state.mockReturnValue('visible')
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    expect(notices()).toHaveLength(0)
+  })
+
   it('CSS-01 the app renders the cookie-notice slice', async () => {
     await mount()
     const styles = container.querySelectorAll('style')

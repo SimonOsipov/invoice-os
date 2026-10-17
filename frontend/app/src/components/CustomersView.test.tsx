@@ -696,6 +696,7 @@ describe('CustomersView: archive and restore', () => {
     expect(await screen.findByText('redundant transition')).toBeTruthy()
     await waitFor(() => expect(customerCalls()).toHaveLength(2))
     expect(await screen.findByText('ARCHIVED', { exact: true })).toBeTruthy()
+    expect(screen.getByText('redundant transition')).toBeTruthy()
   })
 
   it('CU-37e a 401 on archive shows nothing inline', async () => {

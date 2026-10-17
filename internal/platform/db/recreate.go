@@ -69,8 +69,8 @@ func RecreateStuckSchema(ctx context.Context, superuserDSN string, fsys fs.FS, l
 		return false, fmt.Errorf("db: recreate: read goose_db_version: %w", err)
 	}
 
-	missing, orphans := ledgerDrift(files, applied)
-	if len(missing) == 0 && len(orphans) == 0 {
+	missing, orphans, stuck := ledgerDrift(files, applied)
+	if !stuck {
 		return false, nil
 	}
 
@@ -78,6 +78,7 @@ func RecreateStuckSchema(ctx context.Context, superuserDSN string, fsys fs.FS, l
 		"missing", missing, "orphans", orphans)
 
 	for _, stmt := range []string{
+		`SET LOCAL lock_timeout = '15s'`,
 		`DROP SCHEMA public CASCADE`,
 		`CREATE SCHEMA public AUTHORIZATION pg_database_owner`,
 		`COMMENT ON SCHEMA public IS 'standard public schema'`,
@@ -95,9 +96,9 @@ func RecreateStuckSchema(ctx context.Context, superuserDSN string, fsys fs.FS, l
 
 // ledgerDrift applies goose's out-of-order rule: missing holds files with no
 // ledger row below the highest ledger version (orphans count toward it),
-// orphans holds ledger versions with no file. Both are ascending; versions
-// of 0 or less are ignored.
-func ledgerDrift(files, applied []int64) (missing, orphans []int64) {
+// orphans holds ledger versions with no file; stuck is true when either is
+// non-empty. Both are ascending; versions of 0 or less are ignored.
+func ledgerDrift(files, applied []int64) (missing, orphans []int64, stuck bool) {
 	var maxApplied int64
 	appliedSet := map[int64]bool{}
 	for _, v := range applied {
@@ -121,7 +122,7 @@ func ledgerDrift(files, applied []int64) (missing, orphans []int64) {
 	}
 	slices.Sort(missing)
 	slices.Sort(orphans)
-	return missing, orphans
+	return missing, orphans, len(missing) > 0 || len(orphans) > 0
 }
 
 func fileVersions(fsys fs.FS) ([]int64, error) {

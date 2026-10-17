@@ -196,7 +196,8 @@ func guardBlogSeedRows(t *testing.T, pool *pgxpool.Pool) {
 			}
 			return
 		}
-		if _, err := pool.Exec(ctx, `UPDATE memberships SET role = $3, display_name = $4, email = $5, status = $6 WHERE tenant_id = $1 AND user_id = $2`,
+		if _, err := pool.Exec(ctx, `INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status) VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = $3, display_name = $4, email = $5, status = $6`,
 			seedHouseTenant, blogSeedUser, role, name, email, status); err != nil {
 			t.Errorf("restore the seed author membership: %v", err)
 		}
@@ -215,6 +216,11 @@ func TestSeedBlogPostsArePublishedWithTheSeedAuthor(t *testing.T) {
 	if _, err := pool.Exec(ctx, `DELETE FROM memberships WHERE user_id = $1`, blogSeedUser); err != nil {
 		t.Fatalf("remove the seed author membership: %v", err)
 	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, `DELETE FROM memberships WHERE user_id = $1 AND tenant_id <> $2`, blogSeedUser, seedHouseTenant); err != nil {
+			t.Errorf("remove a stray seed author membership: %v", err)
+		}
+	})
 
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("Seed: %v", err)

@@ -615,6 +615,45 @@ func TestCreateHandler_UnfileableTINWinsOverBadBuyerTypeBeforeAnyWrite(t *testin
 	}
 }
 
+// The Go pre-check and the customers_tin_check CHECK must accept the same TINs.
+func TestStoreCreate_TINPreCheckAgreesWithTheCHECK(t *testing.T) {
+	super, app := dbTestPools(t)
+	store := customer.NewStore(app)
+	tenantA, _, ctxA := seedTenantWithAdmin(t, super, "customer create regex agree")
+
+	corpus := []string{"12345678-0001", "RN-1", "RN-0123456789012", "12345678", "12345678-", "12345678-00012", "1234567-0001",
+		"rn-1", "RN-", "RN-1a", "RN--1", "12345678 -0001", "12345678\n-0001", "x12345678-0001", "12345678-0001x",
+		"１２３４５６７８-０００１", "RN-١٢٣", "12345678\u20130001", "RN-1\u200b", "\t RN-77 \n"}
+	accepted, refused := 0, 0
+	for i, raw := range corpus {
+		dbOK := func() bool {
+			tx, err := super.Begin(context.Background())
+			if err != nil {
+				t.Fatalf("begin: %v", err)
+			}
+			defer func() { _ = tx.Rollback(context.Background()) }()
+			_, err = tx.Exec(context.Background(), `INSERT INTO customers (tenant_id, tin) VALUES ($1::uuid, $2)`, tenantA, strings.TrimSpace(raw))
+			return err == nil
+		}()
+		_, err := store.Create(ctxA, customer.CreateInput{TIN: ptr(raw)})
+		goOK := err == nil
+		if !goOK && !errors.Is(err, customer.ErrValidation) {
+			t.Errorf("corpus[%d] %q: Create = %v, want nil or a validation error", i, raw, err)
+		}
+		if goOK != dbOK {
+			t.Errorf("corpus[%d] %q: Create accepted = %v, CHECK accepted = %v", i, raw, goOK, dbOK)
+		}
+		if dbOK {
+			accepted++
+		} else {
+			refused++
+		}
+	}
+	if accepted < 4 || refused < 10 {
+		t.Errorf("corpus accepted/refused = %d/%d, want both classes well represented", accepted, refused)
+	}
+}
+
 func TestCreateHandler_TenKilobyteFields(t *testing.T) {
 	super, app := dbTestPools(t)
 	h := newMux(customer.NewStore(app))

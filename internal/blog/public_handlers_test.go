@@ -320,3 +320,19 @@ func TestPublicHandlers_StoreFailureIs500(t *testing.T) {
 		})
 	}
 }
+
+func TestPublicHandlers_TodayIsTheLagosDateNotUTC(t *testing.T) {
+	// 23:30 UTC on the 17th is already the 18th in Lagos (UTC+1).
+	orig := now
+	now = func() time.Time { return time.Date(2026, 10, 17, 23, 30, 0, 0, time.UTC) }
+	t.Cleanup(func() { now = orig })
+	for _, c := range publicCases() {
+		t.Run(c.name, func(t *testing.T) {
+			f := &publicFake{ctype: "image/png", bytes: []byte("x")}
+			serveMux(c, c.build(f, discard), nil)
+			if len(f.todays) != 1 || f.todays[0] != "2026-10-18" {
+				t.Errorf("today = %v, want [2026-10-18]", f.todays)
+			}
+		})
+	}
+}

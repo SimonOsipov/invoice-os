@@ -7,7 +7,11 @@ import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import { resolveTarget } from '../targets'
-import { APP_URL, GATEWAY_URL } from './targets'
+import { APP_URL, GATEWAY_URL, shardTenants } from './targets'
+
+const SHARD = shardTenants('app-shell.spec.ts')
+const tenantOf = (p: 'firm' | 'inhouse') => (p === 'firm' ? SHARD.a.id : SHARD.b.id)
+test.beforeAll(() => { expect(test.info().project.name, 'app-shell.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -158,7 +162,7 @@ async function readAside(page: Page): Promise<Record<string, unknown>> {
 
 test('AS-01 firm shell at 1440: aside, header, switch, colour fixes', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await settle(page, aside(page), page.locator('main.pf-main'))
   const measured: Record<string, unknown> = { aside: await readAside(page) }
 
@@ -226,7 +230,7 @@ test('AS-01 firm shell at 1440: aside, header, switch, colour fixes', async ({ p
 
 test('AS-02 in-house shell at 1440: aside, active row, no ERP chip under hand-off', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'inhouse')
+  await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
   await settle(page, aside(page), page.locator('main.pf-main'))
   const measured = await readAside(page)
 
@@ -243,7 +247,7 @@ test('AS-02 in-house shell at 1440: aside, active row, no ERP chip under hand-of
 
 test('AS-03 header row fits at every wide width', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const header = page.locator('main.pf-main > header')
   const parts: Record<string, Locator> = {
     crumb: header.locator('> div').first(),
@@ -304,7 +308,7 @@ test('AS-LIB the Feature library link sits between the nav and the identity card
   const measured: Record<string, unknown>[] = []
   try {
     for (const persona of ['firm', 'inhouse'] as const) {
-      await signInAs(page, persona)
+      await signInAs(page, persona, { tenantId: tenantOf(persona) })
       const link = aside(page).getByRole('link', { name: 'Feature library' })
       const nav = aside(page).locator('nav.pf-nav-list')
       const card = page.getByTestId('identity-card')
@@ -341,7 +345,7 @@ test('AS-LIB the Feature library link sits between the nav and the identity card
 
 test('AS-04 environment banner: sandbox rendered, live by probe', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await settle(page, page.locator('main.pf-main'))
 
   const banner = page.getByTestId('env-banner')
@@ -369,7 +373,7 @@ test('AS-04 environment banner: sandbox rendered, live by probe', async ({ page 
 
 test('AS-05 headings: Manrope 700 on a probe h1, Manrope on the dashboard h1, Plex Mono loaded', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   await expect(page.locator('main.pf-main .pf-scroll h1:visible').first(), 'the dashboard drew no h1').toBeVisible()
   await settle(page, page.locator('main.pf-main'))
 
@@ -461,7 +465,7 @@ test('AS-06 every nav destination of both modes: no sideways scroll, no unresolv
 
   for (const [persona, floor] of [['firm', 10], ['inhouse', 9]] as const) {
     await test.step(`${persona} nav sweep`, async () => {
-      await signInAs(page, persona)
+      await signInAs(page, persona, { tenantId: tenantOf(persona) })
       const nav = navButtons(page)
       const count = await nav.count()
       expect(count, `${persona} nav destinations`).toBeGreaterThanOrEqual(floor)
@@ -512,7 +516,7 @@ test('AS-07 the held sign-in card: radius, fill, border, no shadow', async ({ pa
     await route.continue().catch(() => {}) // the app aborts /me at 15s; a late continue then throws
   })
 
-  const signing = signInAs(page, 'firm')
+  const signing = signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const signed = signing.then(() => null, (e: unknown) => e)
   let shot: Buffer | undefined
   let reading: Record<string, string> = {}
@@ -544,7 +548,7 @@ test('AS-07 the held sign-in card: radius, fill, border, no shadow', async ({ pa
 
 test('AS-08 the suspended card: radius and Sign out corner', async ({ page }, testInfo) => {
   const errors = gatedErrors(page, [expectedStatusDropper(page, 403, /\/api\//)])
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   // The app calls the gateway cross-origin: pass the preflight through, answer the real request with the 403.
   const origin = new URL(APP_URL).origin
@@ -571,7 +575,7 @@ test('AS-08 the suspended card: radius and Sign out corner', async ({ page }, te
 
 test('AS-11 entity modal, filter popover and pager', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   await openNav(page, navButton(page, /^Clients/))
   const add = page.getByRole('button', { name: /Add client/ })

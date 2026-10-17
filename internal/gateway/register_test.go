@@ -130,6 +130,9 @@ func TestClosedURL_ReturnsAFreshRefusingURL(t *testing.T) {
 	if a == b {
 		t.Fatal("closedURL returned the same pointer twice")
 	}
+	if got := b.String(); got != "http://127.0.0.1:1" {
+		t.Fatalf("closedURL = %s, want http://127.0.0.1:1", got)
+	}
 	a.User = url.UserPassword("u", "p")
 	if b.User != nil {
 		t.Fatalf("second URL carries a User: %v", b.User)

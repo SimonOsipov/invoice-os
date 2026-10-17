@@ -208,6 +208,13 @@ func TestSeedBlogPostsArePublishedWithTheSeedAuthor(t *testing.T) {
 	pool := bootstrapSuperuserPool(t, superDSN)
 	ctx := context.Background()
 	guardBlogSeedRows(t, pool)
+	// Start from the migration's state, so a member left by an earlier Seed cannot satisfy the asserts.
+	if _, err := pool.Exec(ctx, `UPDATE public.blog_posts SET status = 'draft', author_id = NULL, author_name = NULL WHERE id = ANY($1)`, blogSeedIDs()); err != nil {
+		t.Fatalf("reset the seed posts: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM memberships WHERE user_id = $1`, blogSeedUser); err != nil {
+		t.Fatalf("remove the seed author membership: %v", err)
+	}
 
 	if err := db.Seed(ctx, superDSN, dbsql.FS); err != nil {
 		t.Fatalf("Seed: %v", err)

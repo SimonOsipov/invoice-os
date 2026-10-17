@@ -38,7 +38,7 @@ ON CONFLICT DO NOTHING;
 -- Seed author: a house member with no sign-in, so dev and PR envs show published posts.
 INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status) VALUES
     ('a5c0a5c0-a5c0-a5c0-a5c0-a5c0a5c0a5c0', 'b1000000-0000-0000-0000-000000000001', 'reviewer', 'ASComply Editorial', 'blog-seed@ascomply.invalid', 'active')
-ON CONFLICT (tenant_id, user_id) DO UPDATE SET display_name = EXCLUDED.display_name, status = EXCLUDED.status;
+ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role, display_name = EXCLUDED.display_name, email = EXCLUDED.email, status = EXCLUDED.status;
 
 -- Authorless drafts only: a post a staff member unpublished keeps its author and stays a draft.
 UPDATE blog_posts SET status = 'published', author_id = 'b1000000-0000-0000-0000-000000000001',

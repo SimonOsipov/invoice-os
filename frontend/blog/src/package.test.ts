@@ -32,4 +32,28 @@ describe('blog package', () => {
     expect(specs.filter(({ f }) => f.endsWith('main.tsx')).map(({ s }) => s)).toContain('./instrument')
     expect(specs.filter(({ s }) => s.includes('library/'))).toEqual([])
   })
+
+  it('dockerfile_bakesEveryViteVarTheBlogReadsBeforeTheBuild', () => {
+    const files = readdirSync(HERE, { recursive: true, encoding: 'utf8' })
+      .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f) && !/\.d\.ts$/.test(f))
+      .map((f) => join(HERE, f))
+    const read_ = new Set(
+      files.flatMap((f) => [...stripComments(read(f)).matchAll(/import\.meta\.env\.(VITE_[A-Z0-9_]+)/g)].map((m) => m[1])),
+    )
+    // Control: the scan sees the var links.ts reads.
+    expect(read_.has('VITE_LANDING_URL')).toBe(true)
+
+    const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
+    const build = lines.findIndex((l) => /^RUN pnpm --filter/.test(l))
+    expect(build).toBeGreaterThan(-1)
+    // GA4 is read by the analytics module of a later subtask; its pair ships with the image now.
+    for (const v of new Set([...read_, 'VITE_GA_MEASUREMENT_ID'])) {
+      const arg = lines.indexOf(`ARG ${v}`)
+      const env = lines.indexOf(`ENV ${v}=$${v}`)
+      expect(arg, `ARG ${v}`).toBeGreaterThan(-1)
+      expect(env, `ENV ${v}`).toBeGreaterThan(arg)
+      expect(env, `${v} before the build RUN`).toBeLessThan(build)
+    }
+    expect(lines.filter((l) => /VITE_APP_URL|VITE_GATEWAY_URL/.test(l))).toEqual([])
+  })
 })

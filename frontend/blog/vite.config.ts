@@ -3,9 +3,11 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { sentryVitePlugin } from '@sentry/vite-plugin'
 import { sourcemapUploadOptions } from '../../packages/monitoring/src/upload'
+import { cookieNoticeDefine } from './src/cookieNoticeCss'
 
 export default defineConfig({
   plugins: [react(), sentryVitePlugin(sourcemapUploadOptions(fileURLToPath(new URL('.', import.meta.url))))],
+  define: cookieNoticeDefine(),
   // Maps go to Sentry, never to browsers.
   build: { sourcemap: 'hidden' },
   // Favicons come from the design-tokens package, as in the other SPAs.

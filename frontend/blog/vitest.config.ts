@@ -1,5 +1,10 @@
 import { defineConfig } from 'vitest/config'
+import { cookieNoticeDefine } from './src/cookieNoticeCss'
 
 export default defineConfig({
-  test: { environment: 'node' },
+  define: cookieNoticeDefine(),
+  test: {
+    environment: 'node',
+    setupFiles: ['../landing/src/consentCookie.test.util.ts'],
+  },
 })

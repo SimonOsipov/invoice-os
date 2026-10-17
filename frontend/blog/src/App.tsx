@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Header } from './components/Header'
 import { Sidebar } from './components/Sidebar'
+import { chooseConsent, CookieNotice, readConsent, syncBlogConsent, trackBlogPageView } from './analytics'
+import { privacyHref } from './links'
 import { blogPath, parseBlogPath, type Route } from './route'
 
 const toTop = () => {
@@ -13,6 +15,19 @@ const HOME: Route = { view: 'home' }
 
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseBlogPath(window.location.pathname))
+
+  const [consent, setConsent] = useState(() => readConsent())
+  const [reopened, setReopened] = useState(false)
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      const next = syncBlogConsent()
+      if (next) setConsent(next)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [])
 
   useEffect(() => {
     const onPop = () => {
@@ -32,6 +47,15 @@ export function App() {
     toTop()
   }, [])
 
+  // The first path is reported by config; later changes by path only (not StrictMode, re-clicks or corrections).
+  const path = blogPath(route)
+  const viewed = useRef(path)
+  useEffect(() => {
+    if (path === viewed.current) return
+    viewed.current = path
+    trackBlogPageView()
+  }, [path])
+
   return (
     <div
       className="asc-app"
@@ -45,10 +69,28 @@ export function App() {
         overflow: 'hidden',
       }}
     >
-      <Sidebar route={route} onHome={() => navigate(HOME)} onSubscribe={() => navigate({ view: 'subscribe' })} />
+      <Sidebar route={route} onHome={() => navigate(HOME)} onSubscribe={() => navigate({ view: 'subscribe' })}
+        onCookieChoices={() => {
+          const next = syncBlogConsent()
+          if (next) setConsent(next)
+          setReopened(true)
+        }}
+      />
       <main id="blog-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}>
         <Header route={route} onNavigate={navigate} />
+        {(consent === null || reopened) && (
+          <CookieNotice
+            current={consent}
+            suppressed={false}
+            privacyHref={privacyHref()}
+            onChoose={(c) => {
+              setConsent(chooseConsent(c))
+              setReopened(false)
+            }}
+          />
+        )}
       </main>
+      <style>{__COOKIE_NOTICE_CSS__}</style>
     </div>
   )
 }

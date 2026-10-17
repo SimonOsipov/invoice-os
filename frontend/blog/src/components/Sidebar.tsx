@@ -8,9 +8,10 @@ type SidebarProps = {
   route: Route
   onHome: () => void
   onSubscribe: () => void
+  onCookieChoices: () => void
 }
 
-export function Sidebar({ route, onHome, onSubscribe }: SidebarProps) {
+export function Sidebar({ route, onHome, onSubscribe, onCookieChoices }: SidebarProps) {
   const home = route.view === 'home'
   return (
     <aside
@@ -134,6 +135,23 @@ export function Sidebar({ route, onHome, onSubscribe }: SidebarProps) {
         <Button variant="outlineDark" size="sm" href={landingHref()} style={{ width: '100%' }}>
           Go to ascomply.com
         </Button>
+        <button
+          type="button"
+          className="blog-cookie-choices"
+          onClick={onCookieChoices}
+          style={{
+            display: 'block',
+            marginTop: 12,
+            background: 'none',
+            border: 0,
+            padding: 0,
+            cursor: 'pointer',
+            fontSize: 13,
+            color: 'var(--fg-3)',
+          }}
+        >
+          Cookie choices
+        </button>
       </div>
     </aside>
   )

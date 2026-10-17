@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { readFileSync, readdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -13,6 +13,11 @@ const sideEffectImports = (src: string) =>
   [...stripComments(src).matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)].map((m) => m[1])
 const importSpecifiers = (src: string) =>
   [...stripComments(src).matchAll(/(?:\bfrom|\bimport)\s*\(?\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
+
+const srcFiles = () =>
+  readdirSync(HERE, { recursive: true, encoding: 'utf8' })
+    .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f) && !/\.d\.ts$/.test(f))
+    .map((f) => join(HERE, f))
 
 describe('blog package', () => {
   it('main_importsV2TokensInTheSupportConsoleOrder', () => {
@@ -31,6 +36,32 @@ describe('blog package', () => {
     // Control: the scan reads main.tsx and sees its `./instrument` import.
     expect(specs.filter(({ f }) => f.endsWith('main.tsx')).map(({ s }) => s)).toContain('./instrument')
     expect(specs.filter(({ s }) => s.includes('library/'))).toEqual([])
+  })
+
+  it('seam_onlyAnalyticsImportsLandingSource', () => {
+    const importers = srcFiles()
+      .filter((f) => importSpecifiers(read(f)).some((s) => s.includes('landing/')))
+      .map((f) => relative(HERE, f))
+    expect(importers).toEqual(['analytics.ts'])
+    expect(importSpecifiers(read(join(HERE, 'analytics.ts'))).filter((s) => s.includes('landing/')).length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('seam_noSecondCopyOfTheConsentOrTagCode', () => {
+    const needle = /asc_consent|googletagmanager|dataLayer|\b_ga\b/
+    const others = srcFiles().filter((f) => relative(HERE, f) !== 'analytics.ts')
+    expect(others.filter((f) => needle.test(stripComments(read(f)))).map((f) => relative(HERE, f))).toEqual([])
+    // Control: the scan matches the landing's own tag code.
+    expect(needle.test(read(join(HERE, '../../landing/src/analytics.ts')))).toBe(true)
+  })
+
+  it('dockerfile_bakesTheGaMeasurementId', () => {
+    const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
+    const from = lines.findIndex((l) => /AS build$/.test(l))
+    const build = lines.findIndex((l) => l === 'RUN pnpm --filter @invoice-os/blog build')
+    const arg = lines.indexOf('ARG VITE_GA_MEASUREMENT_ID')
+    expect(lines.indexOf('ENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID')).toBeGreaterThan(arg)
+    expect(arg).toBeGreaterThan(from)
+    expect(lines.indexOf('ENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID')).toBeLessThan(build)
   })
 
   it('dockerfile_bakesEveryViteVarTheBlogReadsBeforeTheBuild', () => {

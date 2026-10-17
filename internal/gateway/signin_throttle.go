@@ -45,8 +45,12 @@ func NewSignInThrottle(name string, max, maxKeys int, window time.Duration, now 
 func signInKey(email string) string { return strings.ToLower(strings.TrimSpace(email)) }
 
 // Reserve counts one attempt for email; false means refuse before GoTrue.
-func (t *SignInThrottle) Reserve(email string) bool {
-	key := signInKey(email)
+func (t *SignInThrottle) Reserve(email string) bool { return t.reserve(signInKey(email), false) }
+
+// ReserveOrAdmit counts one request for key as given. A key not held is admitted uncounted when the map is full.
+func (t *SignInThrottle) ReserveOrAdmit(key string) bool { return t.reserve(key, true) }
+
+func (t *SignInThrottle) reserve(key string, admitWhenFull bool) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
@@ -61,11 +65,15 @@ func (t *SignInThrottle) Reserve(email string) bool {
 		}
 		// ceiling: fails closed at maxKeys (~30 MB); a flood of new addresses blocks new sign-ins until keys expire.
 		if len(t.counts) >= t.maxKeys {
+			verb := "refusing new addresses"
+			if admitWhenFull {
+				verb = "admitting new keys"
+			}
 			if now.Sub(t.lastWarn) >= time.Minute {
 				t.lastWarn = now
-				slog.Default().Warn(t.name+" throttle full; refusing new addresses", slog.Int("keys", len(t.counts)))
+				slog.Default().Warn(t.name+" throttle full; "+verb, slog.Int("keys", len(t.counts)))
 			}
-			return false
+			return admitWhenFull
 		}
 	}
 	if !held || !now.Before(c.start.Add(t.window)) {
@@ -78,9 +86,6 @@ func (t *SignInThrottle) Reserve(email string) bool {
 	t.counts[key] = c
 	return true
 }
-
-// ReserveOrAdmit is a stub: it refuses every key until the implementation lands.
-func (t *SignInThrottle) ReserveOrAdmit(key string) bool { return false }
 
 // sweep drops expired keys; the caller holds t.mu.
 func (t *SignInThrottle) sweep(now time.Time) {

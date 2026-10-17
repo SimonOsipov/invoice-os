@@ -1434,7 +1434,10 @@ test.describe('Customers screen and company fields', () => {
       await page.reload()
       await expect(buyerRow(page, tin), 'the correction did not survive a reload').toContainText(fixedName, { timeout: 20_000 })
       await buyerRow(page, tin).click()
-      await expect(page.getByRole('dialog', { name: 'Edit customer', exact: true }).getByLabel('Email', { exact: true }), 'the reopened dialog lost the Email').toHaveValue(fixedEmail)
+      const reopened = page.getByRole('dialog', { name: 'Edit customer', exact: true })
+      await expect(reopened.getByLabel('Email', { exact: true }), 'the reopened dialog lost the Email').toHaveValue(fixedEmail)
+      await reopened.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(reopened, 'the reopened customer modal never closed').toHaveCount(0)
       const held = (await listCustomers(token, { tin })).customers[0]
       expect({ name: held?.name, email: held?.email }, 'the API holds the correction').toEqual({ name: fixedName, email: fixedEmail })
 

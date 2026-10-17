@@ -1,4 +1,4 @@
-import { ApiError, gatewayBase, reportApiFailure } from '@invoice-os/api-client'
+import { ApiError, gatewayBase, readBody, reportApiFailure } from '@invoice-os/api-client'
 import { loadConsoleSession } from '@invoice-os/console-session'
 import { request } from './api'
 import { SESSION_KEY } from './auth'
@@ -75,14 +75,15 @@ export const setFeatured = (id: string, featured: boolean): Promise<FeaturedResu
   request<FeaturedResult>(`${postPath(id)}/featured`, { method: 'PUT', body: { featured } })
 export const removeCover = (id: string): Promise<void> => request<void>(`${postPath(id)}/cover`, { method: 'DELETE' })
 
+const coverUrl = (id: string) => `${gatewayBase()}${postPath(id)}/cover`
+
 // Bare fetch: the cover body is bytes both ways, which `request` would send and parse as JSON.
 async function coverFetch(id: string, init: RequestInit): Promise<Response> {
-  const base = gatewayBase()
-  if (!base) throw new ApiError('network', 'Gateway URL is not configured')
+  if (!gatewayBase()) throw new ApiError('network', 'Gateway URL is not configured')
   const token = loadConsoleSession(SESSION_KEY)?.token
   if (!token) throw new ApiError('http', 'Not signed in', 401)
   const method = init.method ?? 'GET'
-  const url = `${base}${postPath(id)}/cover`
+  const url = coverUrl(id)
   let res: Response
   try {
     res = await fetch(url, { ...init, headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${token}` } })
@@ -108,12 +109,12 @@ async function coverFetch(id: string, init: RequestInit): Promise<Response> {
 
 export async function putCover(id: string, bytes: Uint8Array): Promise<Cover> {
   const res = await coverFetch(id, { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: bytes as BodyInit })
-  return res.json() as Promise<Cover>
+  return readBody(() => res.json() as Promise<Cover>, { method: 'PUT', url: coverUrl(id) })
 }
 
 export async function fetchCoverUrl(id: string): Promise<{ url: string; release: () => void }> {
   const res = await coverFetch(id, {})
-  const url = URL.createObjectURL(await res.blob())
+  const url = URL.createObjectURL(await readBody(() => res.blob(), { method: 'GET', url: coverUrl(id) }))
   let released = false
   return {
     url,

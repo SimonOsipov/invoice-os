@@ -4,10 +4,12 @@ import { fileURLToPath } from 'node:url'
 import { ApiError } from '@invoice-os/api-client'
 import { stripComments } from '@invoice-os/api-client/strip-comments'
 import { expireConsole } from '@invoice-os/console-session'
+import { captureApiFailure } from '@invoice-os/monitoring/report'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { request } from './api'
 import { expireSession, SESSION_KEY } from './auth'
+import { withSession } from './session'
 import {
   createPost,
   deletePost,
@@ -27,6 +29,7 @@ vi.mock('@invoice-os/console-session', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
   expireConsole: vi.fn(),
 }))
+vi.mock('@invoice-os/monitoring/report', () => ({ captureApiFailure: vi.fn() }))
 
 const GW = 'https://gw.test'
 const LANDING = 'https://www.test'
@@ -68,6 +71,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   vi.mocked(expireConsole).mockClear()
+  vi.mocked(captureApiFailure).mockClear()
 })
 
 describe('request', () => {
@@ -212,9 +216,85 @@ describe('putCover', () => {
     expect(err).toMatchObject({ kind: 'http', status: 413, message: 'Choose an image of 2 MB or less', body: { error: 'Choose an image of 2 MB or less' } })
   })
 
-  it('putCover: no token is a 401 and sends nothing', async () => {
+  it('putCover: no token is a 401 and sends nothing (fetchCoverUrl too)', async () => {
     storeSession(null)
     await expect(putCover('p1', BYTES)).rejects.toMatchObject({ kind: 'http', status: 401, message: 'Not signed in' })
+    await expect(fetchCoverUrl('p1')).rejects.toMatchObject({ kind: 'http', status: 401, message: 'Not signed in' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('cover transport failures', () => {
+  const BYTES = new Uint8Array([1, 2, 3])
+  const calls: Array<[string, string, () => Promise<unknown>]> = [
+    ['putCover', 'PUT', () => putCover('p1', BYTES)],
+    ['fetchCoverUrl', 'GET', () => fetchCoverUrl('p1')],
+  ]
+
+  for (const [name, method, run] of calls) {
+    it(`cover failures: ${name} reports a network failure and rethrows the same error`, async () => {
+      const boom = new TypeError('Failed to fetch')
+      fetchMock.mockRejectedValueOnce(boom)
+      await expect(run()).rejects.toBe(boom)
+      expect(captureApiFailure).toHaveBeenCalledTimes(1)
+      expect(captureApiFailure).toHaveBeenCalledWith({ kind: 'network', status: null, method, url: `${ROUTE}/posts/p1/cover`, error: boom })
+    })
+
+    it(`cover failures: ${name} reports a 5xx with its status`, async () => {
+      fetchMock.mockResolvedValueOnce(json({ error: 'db down' }, 503))
+      await expect(run()).rejects.toMatchObject({ kind: 'http', status: 503, message: 'db down' })
+      expect(captureApiFailure).toHaveBeenCalledTimes(1)
+      expect(captureApiFailure).toHaveBeenCalledWith(expect.objectContaining({ kind: 'http', status: 503, method, url: `${ROUTE}/posts/p1/cover` }))
+    })
+
+    it(`cover failures: ${name} does not report a 4xx the editor shows itself`, async () => {
+      fetchMock.mockResolvedValueOnce(json({ error: 'no such cover' }, 404))
+      await expect(run()).rejects.toMatchObject({ status: 404 })
+      expect(captureApiFailure).not.toHaveBeenCalled()
+    })
+
+    it(`cover failures: ${name} falls back to the status text when the error body is not JSON`, async () => {
+      fetchMock.mockResolvedValueOnce(new Response('<html>bad gateway</html>', { status: 502, statusText: 'Bad Gateway' }))
+      const err = await run().then(
+        () => null,
+        (e: unknown) => e,
+      )
+      expect(err).toBeInstanceOf(ApiError)
+      expect(err).toMatchObject({ kind: 'http', status: 502, message: 'Bad Gateway' })
+    })
+
+    it(`cover failures: ${name} carries a 401 and does not report it`, async () => {
+      fetchMock.mockResolvedValueOnce(json({ error: 'expired' }, 401))
+      await expect(run()).rejects.toMatchObject({ kind: 'http', status: 401 })
+      expect(captureApiFailure).not.toHaveBeenCalled()
+    })
+  }
+
+  it('cover failures: a body that dies mid-read is reported and creates no object URL', async () => {
+    const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:never')
+    const boom = new TypeError('terminated')
+    const res = new Response('x', { status: 200 })
+    vi.spyOn(res, 'blob').mockRejectedValue(boom)
+    fetchMock.mockResolvedValueOnce(res)
+    await expect(fetchCoverUrl('p1')).rejects.toBe(boom)
+    expect(create).not.toHaveBeenCalled()
+    expect(captureApiFailure).toHaveBeenCalledTimes(1)
+    expect(captureApiFailure).toHaveBeenCalledWith(expect.objectContaining({ kind: 'network', method: 'GET', error: boom }))
+  })
+
+  it('cover failures: a putCover answer that dies mid-read is reported', async () => {
+    const boom = new TypeError('terminated')
+    const res = new Response('{}', { status: 200 })
+    vi.spyOn(res, 'json').mockRejectedValue(boom)
+    fetchMock.mockResolvedValueOnce(res)
+    await expect(putCover('p1', BYTES)).rejects.toBe(boom)
+    expect(captureApiFailure).toHaveBeenCalledTimes(1)
+    expect(captureApiFailure).toHaveBeenCalledWith(expect.objectContaining({ kind: 'network', method: 'PUT', error: boom }))
+  })
+
+  it('cover failures: a gateway-less console sends nothing from either cover call', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', '')
+    for (const [, , run] of calls) await expect(run()).rejects.toMatchObject({ kind: 'network' })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
@@ -230,6 +310,8 @@ describe('fetchCoverUrl', () => {
     expect(headers.get('Authorization')).toBe('Bearer T')
     expect(r).toMatchObject({ url: 'blob:cover-1' })
     expect(create).toHaveBeenCalledTimes(1)
+    const blob = create.mock.calls[0][0] as Blob
+    expect(Array.from(new Uint8Array(await blob.arrayBuffer()))).toEqual([1, 2, 3])
     expect(revoke).not.toHaveBeenCalled()
     r.release()
     r.release()
@@ -256,5 +338,73 @@ describe('fieldErrorsOf', () => {
     expect(fieldErrorsOf(new ApiError('http', 'bad', 400, { error: 'bad', fields }))).toBeNull()
     expect(fieldErrorsOf(new ApiError('http', 'bad', 422, { error: 'bad' }))).toBeNull()
     expect(fieldErrorsOf(new Error('boom'))).toBeNull()
+  })
+
+  it('fieldErrorsOf: refuses a 422 whose fields is not an object', () => {
+    expect(fieldErrorsOf(new ApiError('http', 'bad', 422, { error: 'bad', fields: { title: 'x' } }))).not.toBeNull()
+    for (const fields of [['title'], 'title', null, 7]) {
+      expect(fieldErrorsOf(new ApiError('http', 'bad', 422, { error: 'bad', fields })), JSON.stringify(fields)).toBeNull()
+    }
+    expect(fieldErrorsOf(new ApiError('http', 'bad', 422))).toBeNull()
+    expect(fieldErrorsOf(new ApiError('network', 'bad', 422, { fields: { title: 'x' } }))).not.toBeNull()
+    expect(fieldErrorsOf(undefined)).toBeNull()
+    const lookalike = Object.assign(new Error('bad'), { status: 422, body: { fields: { title: 'x' } } })
+    expect(fieldErrorsOf(lookalike)).toBeNull()
+  })
+})
+
+describe('blog calls through withSession', () => {
+  const b64url = (o: unknown) => btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const STAFF = `${b64url({ alg: 'RS256' })}.${b64url({ sub: 's1', app_metadata: { staff: true } })}.c2ln`
+  let stored: string | null
+  const bearer = (c: unknown[]) => new Headers((c[1] as RequestInit).headers).get('Authorization')
+
+  beforeEach(() => {
+    stored = JSON.stringify({ v: 2, token: 'OLD', refresh_token: 'R' })
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k === SESSION_KEY ? stored : null),
+      setItem: (k: string, v: string) => {
+        if (k === SESSION_KEY) stored = v
+      },
+    })
+  })
+
+  const answer = (refresh: Response | (() => Response)) =>
+    fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
+      if (url === `${GW}/auth/refresh`) return typeof refresh === 'function' ? refresh() : refresh
+      return new Headers(init.headers).get('Authorization') === 'Bearer OLD' ? json({ error: 'expired' }, 401) : json({ posts: [], categories: [], authors: [] }, 200)
+    })
+
+  it('withSession: an expired token is renewed over the wire and the retry carries the new token', async () => {
+    fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
+      if (url === `${GW}/auth/refresh`) return json({ access_token: STAFF, refresh_token: 'R2' })
+      return new Headers(init.headers).get('Authorization') === 'Bearer OLD' ? json({ error: 'expired' }, 401) : json({ id: 'p9' }, 201)
+    })
+    await expect(withSession(() => createPost(INPUT))).resolves.toEqual({ id: 'p9' })
+    const urls = fetchMock.mock.calls.map((c) => c[0])
+    expect(urls).toEqual([`${ROUTE}/posts`, `${GW}/auth/refresh`, `${ROUTE}/posts`])
+    expect(bearer(fetchMock.mock.calls[0])).toBe('Bearer OLD')
+    expect(bearer(fetchMock.mock.calls[2])).toBe(`Bearer ${STAFF}`)
+    expect(JSON.parse(stored ?? '')).toEqual({ v: 2, token: STAFF, refresh_token: 'R2' })
+  })
+
+  it('withSession: parallel blog reads send one refresh', async () => {
+    answer(() => json({ access_token: STAFF, refresh_token: 'R2' }))
+    await expect(Promise.all([withSession(fetchPosts), withSession(fetchCategories), withSession(fetchAuthors)])).resolves.toHaveLength(3)
+    expect(fetchMock.mock.calls.filter((c) => c[0] === `${GW}/auth/refresh`)).toHaveLength(1)
+  })
+
+  it('withSession: a refused refresh leaves the stored session alone and surfaces the 401', async () => {
+    const before = stored
+    answer(() => json({ error: 'revoked' }, 401))
+    await expect(withSession(() => createPost(INPUT))).rejects.toMatchObject({ kind: 'http', status: 401, message: 'expired' })
+    expect(stored).toBe(before)
+    expect(fetchMock.mock.calls.filter((c) => c[0] === `${ROUTE}/posts`)).toHaveLength(1)
+  })
+
+  it('withSession: a 403 is the staff-only refusal and never renews', async () => {
+    fetchMock.mockImplementation(async () => json({ error: 'Staff only' }, 403))
+    await expect(withSession(() => createPost(INPUT))).rejects.toMatchObject({ kind: 'http', status: 403, message: 'Staff only' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

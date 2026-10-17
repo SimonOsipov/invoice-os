@@ -71,8 +71,10 @@ describe('App', () => {
     vi.stubEnv('VITE_LANDING_URL', 'https://land.example/')
     expect(renderToStaticMarkup(<App />)).toContain('asc-app')
 
-    vi.stubEnv('VITE_LANDING_URL', '')
-    expect(renderToStaticMarkup(<App />)).toBe('')
+    for (const unset of ['', '   ', '/', undefined]) {
+      vi.stubEnv('VITE_LANDING_URL', unset)
+      expect(renderToStaticMarkup(<App />), JSON.stringify(unset)).toBe('')
+    }
   })
 
   it('App_rendersTheSameConsoleWhenTheGateOpens', () => {

@@ -6,9 +6,7 @@ import { seedStaffSession, test } from '../staffSession'
 // The Ops Console, driven as the integration developer it is for (PERSONA-01-05, Backlog
 // task-274), on a seeded real staff session (staffSession.ts).
 //
-// MOCK-ONLY, AND THAT LIMITS WHAT A GREEN RUN MEANS. This console's data has no backend: a
-// grep for fetch/XMLHttpRequest/axios/WebSocket across frontend/ops-console/src returns nothing,
-// and its only gateway calls are the session's renewal and sign-out (packages/console-session).
+// MOCK-ONLY, AND THAT LIMITS WHAT A GREEN RUN MEANS. This console's data has no backend.
 // Every assertion below pins this console's CLIENT-SIDE BEHAVIOUR over the fixtures
 // in src/data.tsx. It is not a contract test and says nothing about any server. Counts are
 // read from the rendered UI rather than hardcoded, so a seed edit does not break these —

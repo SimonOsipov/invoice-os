@@ -33,7 +33,7 @@ const (
 
 // The four trees the detection command walks:
 //
-//	grep -rnE '\b(15|16)\b' \
+//	grep -rnE '\b(16|17)\b' \
 //	  .github/workflows scripts/ci internal/tools \
 //	  | grep -iE 'service'
 //
@@ -44,13 +44,13 @@ var scanTrees = []string{".github/workflows", "scripts/ci", "internal/tools"}
 // The two halves of that command, kept on separate lines so neither line is
 // itself a hit.
 var (
-	countRe   = regexp.MustCompile(`\b(15|16)\b`)
+	countRe   = regexp.MustCompile(`\b(16|17)\b`)
 	subjectRe = regexp.MustCompile(`(?i)service`)
 )
 
-// Population floors: the measured population (5 hits across 1 file), this gate's own source excluded.
+// Population floors: the measured population (4 hits across 1 file), this gate's own source excluded.
 const (
-	minHits  = 5
+	minHits  = 4
 	minFiles = 1
 )
 
@@ -324,6 +324,16 @@ func TestDevEnv_ExpectedJSONNamesEveryDeployedService(t *testing.T) {
 	if contains(ctx, "library") {
 		t.Errorf("%s: the deploy-context matrix names `library` -- it is a static front end, not a backend", devEnvRel)
 	}
+
+	if !contains(expected, "blog") {
+		t.Errorf("%s: expected_json omits `blog` -- the blog can vanish from the environment and the fleet gate stays green", devEnvRel)
+	}
+	if !contains(spas, "blog") {
+		t.Errorf("%s: the deploy-spas matrix omits `blog` -- nothing ships the blog SPA", devEnvRel)
+	}
+	if contains(ctx, "blog") {
+		t.Errorf("%s: the deploy-context matrix names `blog` -- it is a static front end, not a backend", devEnvRel)
+	}
 }
 
 // spaURLKey maps a deploy-spas name to its URL variable: library -> LIBRARY_URL.
@@ -449,12 +459,16 @@ func TestFleetGate_EveryCountSiteAgreesWithExpectedJSON(t *testing.T) {
 		t.Errorf("%s: expected_json omits `library`, so want=%d is the pre-library fleet -- agreement with it is not evidence", devEnvRel, want)
 	}
 
+	if !contains(expected, "blog") {
+		t.Errorf("%s: expected_json omits `blog`, so want=%d is the pre-blog fleet -- agreement with it is not evidence", devEnvRel, want)
+	}
+
 	hits := scanRepo(t)
 	if len(hits) == 0 {
 		t.Fatalf("the scan found no fleet-count site at all -- the detection pattern or the trees have drifted, and a clean run means nothing")
 	}
 
-	// A count wrapped before its subject word ("all 16" / "services") escapes the line scan.
+	// A count wrapped before its subject word ("all N" / "services") escapes the line scan.
 	wrapped := 0
 	lines := strings.Split(content, "\n")
 	for i := 0; i+1 < len(lines); i++ {
@@ -579,10 +593,10 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	// this file carries both a count and the subject word, which would make
 	// the fixture a hit in the real scan.
 	const subject = "service"
-	write("quiet.md", "a count of 15 with no subject word\n"+
+	write("quiet.md", "a count of 16 with no subject word\n"+
 		"the subject word alone: "+subject+", no count\n")
 	write("stale.md", "nothing on this line\n"+
-		"all 15 of them, one per "+subject+"\n")
+		"all 16 of them, one per "+subject+"\n")
 
 	hits, err := scanUnder(root, []string{"notes"})
 	if err != nil {
@@ -595,8 +609,8 @@ func TestFleetGate_FindsAPlantedControlNeedle(t *testing.T) {
 	if got.File != "notes/stale.md" || got.Line != 2 {
 		t.Errorf("control needle reported at %s:%d, planted at notes/stale.md:2", got.File, got.Line)
 	}
-	if len(got.Counts) != 1 || got.Counts[0] != 15 {
-		t.Errorf("control needle read as %v, planted as [15]", got.Counts)
+	if len(got.Counts) != 1 || got.Counts[0] != 16 {
+		t.Errorf("control needle read as %v, planted as [16]", got.Counts)
 	}
 }
 
@@ -622,7 +636,7 @@ func TestFleetGate_AllowlistFaultsFireOnAPlantedTree(t *testing.T) {
 	// Spliced, as in TestFleetGate_FindsAPlantedControlNeedle, so no line of
 	// this file is itself a hit.
 	const subject = "service"
-	line := "all 15 of them, one per " + subject
+	line := "all 16 of them, one per " + subject
 	body := line + " CARVE\n" + line + " WIDE\n" + line + " WIDE\n" + line + "\n" + line + "\n" + line + "\n"
 	if err := os.WriteFile(filepath.Join(tree, "a.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)

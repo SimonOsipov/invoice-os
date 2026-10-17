@@ -18,13 +18,15 @@ const (
 	sentryTokenSentinel = "sntrys_planted_source_auth_token"
 	sentryDBSentinel    = "postgresql://invoice_app:planted-db-password@h:5432/railway"
 	sentryReference     = "${{shared.SENTRY_DSN}}"
+	sentryBlogDSNRef    = "${{library.VITE_SENTRY_DSN}}"
+	sentryBlogTokenRef  = "${{library.SENTRY_AUTH_TOKEN}}"
 
 	sentrySelfTestClosing = "Sentry-off self-test: all fixtures passed, no token read, no network call."
 )
 
 var (
 	sentryBackends = []string{"gateway", "tenancy", "portfolio", "invoice", "validation", "submission", "dashboard", "notifications", "reconciliation", "docling"}
-	sentrySPAs     = []string{"landing", "app", "ops-console", "support-console", "library"}
+	sentrySPAs     = []string{"landing", "app", "ops-console", "support-console", "library", "blog"}
 	sentrySPANames = []string{"VITE_SENTRY_DSN", "SENTRY_AUTH_TOKEN"}
 
 	// SENTRY_DSN not as the tail of VITE_SENTRY_DSN.
@@ -74,6 +76,9 @@ func sentryStores() map[string]map[string]string {
 			"DATABASE_URL":      sentryDBSentinel,
 		}
 	}
+	// The blog holds reference variables, not literals; the blank must still be written.
+	stores[sentrySvcID("blog")]["VITE_SENTRY_DSN"] = sentryBlogDSNRef
+	stores[sentrySvcID("blog")]["SENTRY_AUTH_TOKEN"] = sentryBlogTokenRef
 	return stores
 }
 
@@ -224,7 +229,7 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 			refusesAsSet(t, out, "landing.SENTRY_AUTH_TOKEN")
 			ids, _ := reReads(s.calls(t))
 			// Every verdict runs on the one re-read: the services before landing and the SPAs after it.
-			for _, svc := range slices.Concat(sentryBackends, []string{"app", "ops-console", "support-console", "library"}) {
+			for _, svc := range slices.Concat(sentryBackends, []string{"app", "ops-console", "support-console", "library", "blog"}) {
 				if !slices.Contains(ids, sentrySvcID(svc)) {
 					t.Errorf("%s was never re-read; re-reads = %v", svc, ids)
 				}
@@ -256,6 +261,12 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 		}},
 		{name: "vite_dsn_survives_on_library", bend: map[string]string{"library": `.VITE_SENTRY_DSN = "` + sentryDSNSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) {
 			refusesAsSet(t, out, "library.VITE_SENTRY_DSN")
+			if sentryConfirmed(out) {
+				t.Errorf("a refused re-read printed the confirmation line; output = %q", out)
+			}
+		}},
+		{name: "vite_dsn_survives_on_blog", bend: map[string]string{"blog": `.VITE_SENTRY_DSN = "` + sentryDSNSentinel + `"`}, code: 1, check: func(t *testing.T, s authShim, out string) {
+			refusesAsSet(t, out, "blog.VITE_SENTRY_DSN")
 			if sentryConfirmed(out) {
 				t.Errorf("a refused re-read printed the confirmation line; output = %q", out)
 			}
@@ -384,7 +395,7 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 	}
 	slices.Sort(reread)
 	slices.Sort(all)
-	if len(all) != 15 || !slices.Equal(reread, all) {
+	if len(all) != 16 || !slices.Equal(reread, all) {
 		t.Errorf("re-reads = %v, want one per service %v", reread, all)
 	}
 

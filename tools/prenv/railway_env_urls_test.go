@@ -875,7 +875,7 @@ func jobEnv(j workflowJob) map[string]string {
 	return out
 }
 
-// The topology job takes the library URL and the baked-URL oracles, and its guard step refuses each empty.
+// The topology job takes the library and blog URLs and the baked-URL oracles, and its guard step refuses each empty.
 func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 	var job *workflowJob
 	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
@@ -889,6 +889,7 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 	env := jobEnv(*job)
 	for k, want := range map[string]string{
 		"LIBRARY_URL":       "${{ needs.e2e.outputs.library_url }}",
+		"BLOG_URL":          "${{ needs.e2e.outputs.blog_url }}",
 		"BAKED_APP_URL":     "${{ needs.prepare-env.outputs.app_url }}",
 		"BAKED_LANDING_URL": "${{ needs.prepare-env.outputs.landing_url }}",
 		"BAKED_LIBRARY_URL": "${{ needs.prepare-env.outputs.library_url }}",
@@ -907,7 +908,7 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 	if run == "" {
 		t.Fatal("control: topology has no step with id targets")
 	}
-	vars := []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BAKED_APP_URL", "BAKED_LANDING_URL", "BAKED_LIBRARY_URL"}
+	vars := []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BLOG_URL", "BAKED_APP_URL", "BAKED_LANDING_URL", "BAKED_LIBRARY_URL"}
 	guard := func(empty string) (string, error) {
 		cmd := exec.Command("bash", "-c", run)
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
@@ -922,7 +923,7 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 		return string(out), err
 	}
 	if out, err := guard(""); err != nil {
-		t.Errorf("all nine set: guard failed: %v %q", err, out)
+		t.Errorf("all ten set: guard failed: %v %q", err, out)
 	}
 	for _, v := range vars {
 		out, err := guard(v)

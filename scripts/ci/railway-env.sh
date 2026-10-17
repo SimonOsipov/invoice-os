@@ -1680,7 +1680,7 @@ reconcile_url_variables_check() {
 reconcile_url_variables() {
   local env_id="$1" gateway_url="$PASS_GATEWAY_URL" app_url="$PASS_APP_URL" landing_url="$PASS_LANDING_URL"
   local ops_url="$PASS_OPS_URL" support_url="$PASS_SUPPORT_URL" library_url="$PASS_LIBRARY_URL"
-  local gw_id app_id landing_id ops_id support_id library_id
+  local gw_id app_id landing_id ops_id support_id library_id blog_id
   # Every browser origin that calls the gateway. Omitting one does not fail loudly — the
   # SPA renders and its fetches are refused by CORS at runtime — so a new SPA MUST be
   # added here in the same change that creates it.
@@ -1697,6 +1697,7 @@ reconcile_url_variables() {
   ops_id=$(service_id_by_name "$PASS_SETTLE" ops-console "environment $env_id" URL_VARIABLES) || exit 1
   support_id=$(service_id_by_name "$PASS_SETTLE" support-console "environment $env_id" URL_VARIABLES) || exit 1
   library_id=$(service_id_by_name "$PASS_SETTLE" library "environment $env_id" URL_VARIABLES) || exit 1
+  blog_id=$(service_id_by_name "$PASS_SETTLE" blog "environment $env_id" URL_VARIABLES) || exit 1
 
   pass_plan_add "$gw_id" gateway "" "CORS_ALLOWED_ORIGINS=$origins"
   pass_plan_add "$app_id" app "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_LIBRARY_URL=$library_url" "VITE_SUPPORT_URL=$support_url"
@@ -1704,11 +1705,12 @@ reconcile_url_variables() {
   pass_plan_add "$ops_id" ops-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
   pass_plan_add "$support_id" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_APP_URL=$app_url"
   pass_plan_add "$library_id" library "" "VITE_APP_URL=$app_url" "VITE_LANDING_URL=$landing_url"
+  pass_plan_add "$blog_id" blog "" "VITE_LANDING_URL=$landing_url"
 }
 
 reconcile_url_variables_verdict() {
   pass_owned_verdict reconcile_url_variables || return 1
-  echo "All 18 environment variables confirmed by independent re-query."
+  echo "All 19 environment variables confirmed by independent re-query."
 }
 
 # cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>
@@ -1783,7 +1785,7 @@ wait_for_postgres() {
 
 # MEASURED: Postgres in a fresh fork has latestDeployment == NONE. Nothing in
 # this repo has ever deployed Postgres (the `railway up` matrices are gateway +
-# 7 contexts + 3 SPAs, and the Watch-Paths assertion excludes it); it works in
+# 10 contexts + 6 SPAs, and the Watch-Paths assertion excludes it); it works in
 # `development` only because it has been running there since M1. So a fork needs
 # an EXPLICIT deploy, and this is where it happens.
 #
@@ -3589,7 +3591,7 @@ cmd_set_production_gateway_token() {
 # Sentry quota from every PR (TestSentryOffListsMatchTheDeployedFleet pins the lists).
 
 SENTRY_BACKENDS=(gateway tenancy portfolio invoice validation submission dashboard notifications reconciliation docling)
-SENTRY_SPAS=(landing app ops-console support-console library)
+SENTRY_SPAS=(landing app ops-console support-console library blog)
 
 # sentry_verdict <variables-response-json> <service> <NAME>...
 # Pure. Passes only when every name is absent or exactly "". Prints no value.

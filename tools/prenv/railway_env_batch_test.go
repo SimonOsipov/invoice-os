@@ -29,15 +29,15 @@ const (
 	batchProdAppURL     = "https://app.ascomply.com"
 	batchProdLandingURL = "https://www.ascomply.com"
 
-	batchAllConfirmed = "All 18 environment variables confirmed" // reconcile_url_variables
+	batchAllConfirmed = "All 19 environment variables confirmed" // reconcile_url_variables
 )
 
 // Secret names print `= <redacted>` (Design, "Variable writes").
 var (
 	forkAuthSecrets    = map[string][]string{"auth": {"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET"}, "gateway": {"AUTH_ADMIN_PASSWORD"}}
 	sentrySecretNames  = []string{"SENTRY_DSN", "VITE_SENTRY_DSN", "SENTRY_AUTH_TOKEN"}
-	batchSvcIDExports  = map[string]string{"RAILWAY_SVC_GATEWAY_ID": "gateway", "RAILWAY_SVC_APP_ID": "app", "RAILWAY_SVC_LANDING_ID": "landing", "RAILWAY_SVC_OPS_CONSOLE_ID": "ops-console", "RAILWAY_SVC_SUPPORT_CONSOLE_ID": "support-console", "RAILWAY_SVC_LIBRARY_ID": "library", "RAILWAY_SVC_POSTGRES_ID": "Postgres"}
-	reconcileURLLabels = []string{"gateway", "app", "landing", "ops-console", "support-console", "library"}
+	batchSvcIDExports  = map[string]string{"RAILWAY_SVC_GATEWAY_ID": "gateway", "RAILWAY_SVC_APP_ID": "app", "RAILWAY_SVC_LANDING_ID": "landing", "RAILWAY_SVC_OPS_CONSOLE_ID": "ops-console", "RAILWAY_SVC_SUPPORT_CONSOLE_ID": "support-console", "RAILWAY_SVC_LIBRARY_ID": "library", "RAILWAY_SVC_BLOG_ID": "blog", "RAILWAY_SVC_POSTGRES_ID": "Postgres"}
+	reconcileURLLabels = []string{"gateway", "app", "landing", "ops-console", "support-console", "library", "blog"}
 )
 
 func batchExports() string {
@@ -58,6 +58,7 @@ func reconcileIntended() map[string]map[string]string {
 		sentrySvcID("ops-console"):     {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 		sentrySvcID("support-console"): {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_APP_URL": batchAppURL},
 		sentrySvcID("library"):         {"VITE_APP_URL": batchAppURL, "VITE_LANDING_URL": batchLandingURL},
+		sentrySvcID("blog"):            {"VITE_LANDING_URL": batchLandingURL},
 	}
 }
 
@@ -295,7 +296,7 @@ func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
 	}
 	slices.Sort(read)
 	slices.Sort(all)
-	if len(all) != 15 || !slices.Equal(read, all) {
+	if len(all) != 16 || !slices.Equal(read, all) {
 		t.Errorf("variable reads = %v, want exactly one per service %v", read, all)
 	}
 	if e := upsertEcho.FindAllString(out, -1); len(e) != 0 {
@@ -461,8 +462,8 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 		t.Fatalf("exit %d, want 0; output = %q", code, out)
 	}
 	ws := collectionWrites(t, s)
-	if len(ws) != 15 {
-		t.Errorf("%d write input(s) %v, want 15: one per Sentry service", len(ws), writeNames(ws))
+	if len(ws) != 16 {
+		t.Errorf("%d write input(s) %v, want 16: one per Sentry service", len(ws), writeNames(ws))
 	}
 	if n := opCount(t, s, "varsWrite"); n != 1 {
 		t.Errorf("%d varsWrite call(s), want 1: every Sentry service in one request", n)
@@ -534,7 +535,7 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	if ups := s.upserts(t); len(ups) != 1 {
 		t.Errorf("writes = %v, want app.VITE_LANDING_URL only: every other value is already intended", names(ups))
 	}
-	wantHeld := map[string]string{"gateway": "1 of 1", "app": "3 of 4", "landing": "6 of 6", "ops-console": "2 of 2", "support-console": "3 of 3", "library": "2 of 2"}
+	wantHeld := map[string]string{"gateway": "1 of 1", "app": "3 of 4", "landing": "6 of 6", "ops-console": "2 of 2", "support-console": "3 of 3", "library": "2 of 2", "blog": "1 of 1"}
 	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
 		t.Errorf("held lines = %v, want %v", got, wantHeld)
 	}
@@ -871,6 +872,7 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 		{"support-console", "VITE_GATEWAY_URL"},
 		{"library", "VITE_LANDING_URL"},
 		{"library", "VITE_APP_URL"},
+		{"blog", "VITE_LANDING_URL"},
 		{"app", "VITE_LIBRARY_URL"},
 		{"landing", "VITE_LIBRARY_URL"},
 		{"app", "VITE_SUPPORT_URL"},

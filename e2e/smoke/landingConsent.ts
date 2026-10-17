@@ -62,7 +62,7 @@ export function isStubbedHost(rawUrl: string): boolean {
  */
 export async function routeProductionHosts(
   context: BrowserContext,
-  targets: { landing: string; library: string },
+  targets: { landing: string; library: string; blog?: string },
 ): Promise<void> {
   const forward = (origin: string) => async (route: Route) => {
     const { pathname, search } = new URL(route.request().url())
@@ -70,6 +70,7 @@ export async function routeProductionHosts(
   }
   await context.route('https://www.ascomply.com/**', forward(targets.landing))
   await context.route('https://library.ascomply.com/**', forward(targets.library))
+  if (targets.blog) await context.route('https://blog.ascomply.com/**', forward(targets.blog))
   // CORS headers: a cross-origin Sentry POST answered without them logs a console error.
   await context.route((url) => isStubbedHost(url.href), (route) =>
     route.fulfill({

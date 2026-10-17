@@ -15,8 +15,8 @@ import {
   type ServiceLabel,
 } from './railway'
 
-const LABELS: ServiceLabel[] = ['gateway', 'app', 'landing', 'ops-console', 'support-console', 'library']
-const URL_KEYS = ['GATEWAY_URL', 'APP_URL', 'LANDING_URL', 'OPS_CONSOLE_URL', 'SUPPORT_CONSOLE_URL', 'LIBRARY_URL']
+const LABELS: ServiceLabel[] = ['gateway', 'app', 'landing', 'ops-console', 'support-console', 'library', 'blog']
+const URL_KEYS = ['GATEWAY_URL', 'APP_URL', 'LANDING_URL', 'OPS_CONSOLE_URL', 'SUPPORT_CONSOLE_URL', 'LIBRARY_URL', 'BLOG_URL']
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const uuid = (n: number | string) => `00000000-0000-4000-8000-00000000000${n}`
 const GRAPHQL = 'https://backboard.railway.com/graphql/v2'
@@ -31,13 +31,14 @@ const YAML_KEYS = [
   `  RAILWAY_SVC_OPS_CONSOLE_ID: ${uuid(5)}`,
   `  RAILWAY_SVC_SUPPORT_CONSOLE_ID: ${uuid(6)}`,
   `  RAILWAY_SVC_LIBRARY_ID: ${uuid('a')}`,
+  `  RAILWAY_SVC_BLOG_ID: ${uuid('b')}`,
   `  RAILWAY_SVC_POSTGRES_ID: ${uuid(8)}`,
 ]
 const yamlOf = (lines: string[]) => ['env:', '  CI: true', ...lines, '  OTHER: x'].join('\n') + '\n'
 
 const IDS: RailwayIds = {
   projectId: uuid(1),
-  services: { gateway: uuid(2), app: uuid(3), landing: uuid(4), 'ops-console': uuid(5), 'support-console': uuid(6), library: uuid('a') },
+  services: { gateway: uuid(2), app: uuid(3), landing: uuid(4), 'ops-console': uuid(5), 'support-console': uuid(6), library: uuid('a'), blog: uuid('b') },
 }
 
 type Domains = { custom: { domain: string }[] | null; service: { domain: string }[] }
@@ -139,7 +140,7 @@ afterEach(() => {
 })
 
 describe('readRailwayIds', () => {
-  it('readRailwayIds reads the seven listed keys and ignores others', () => {
+  it('readRailwayIds reads the eight listed keys and ignores others', () => {
     const ids = readRailwayIds(yamlOf(YAML_KEYS))
     expect(ids.projectId).toBe(uuid(1))
     expect(ids.services).toEqual({
@@ -149,6 +150,7 @@ describe('readRailwayIds', () => {
       'ops-console': uuid(5),
       'support-console': uuid(6),
       library: uuid('a'),
+      blog: uuid('b'),
     })
     const dump = JSON.stringify(ids)
     expect(dump).not.toContain(uuid(7))
@@ -159,14 +161,14 @@ describe('readRailwayIds', () => {
     expect(JSON.stringify(withComment)).not.toContain(uuid(9))
   })
 
-  it('the real dev-env.yml carries all seven keys', () => {
+  it('the real dev-env.yml carries all eight keys', () => {
     const text = readFileSync(fileURLToPath(new URL('../../.github/workflows/dev-env.yml', import.meta.url)), 'utf8')
     const ids = readRailwayIds(text)
     expect(ids.projectId).toMatch(UUID)
     const values = LABELS.map((l) => ids.services[l])
-    expect(values).toHaveLength(6)
+    expect(values).toHaveLength(7)
     for (const v of values) expect(v).toMatch(UUID)
-    expect(new Set(values).size).toBe(6)
+    expect(new Set(values).size).toBe(7)
   })
 
   it('readRailwayIds names a missing key', () => {
@@ -178,9 +180,9 @@ describe('readRailwayIds', () => {
     expect(thrown(() => readRailwayIds(yamlOf(commentedOnly))).message).toContain('RAILWAY_SVC_APP_ID')
   })
 
-  it('every one of the seven keys is required and named when absent', () => {
+  it('every one of the eight keys is required and named when absent', () => {
     const keys = YAML_KEYS.map((l) => l.trim().split(':')[0]).filter((k) => !/DEV_ENVIRONMENT|POSTGRES/.test(k))
-    expect(keys).toHaveLength(7)
+    expect(keys).toHaveLength(8)
     for (const key of keys) {
       const without = YAML_KEYS.filter((l) => !l.includes(`${key}:`))
       expect(without, key).toHaveLength(YAML_KEYS.length - 1)
@@ -192,6 +194,12 @@ describe('readRailwayIds', () => {
     const without = YAML_KEYS.filter((l) => !l.includes('RAILWAY_SVC_LIBRARY_ID'))
     expect(thrown(() => readRailwayIds(yamlOf(without))).message).toContain('RAILWAY_SVC_LIBRARY_ID')
     expect(readRailwayIds(yamlOf(YAML_KEYS)).services.library).toBe(uuid('a'))
+  })
+
+  it('readRailwayIds names a missing blog key', () => {
+    const without = YAML_KEYS.filter((l) => !l.includes('RAILWAY_SVC_BLOG_ID'))
+    expect(thrown(() => readRailwayIds(yamlOf(without))).message).toContain('RAILWAY_SVC_BLOG_ID')
+    expect(readRailwayIds(yamlOf(YAML_KEYS)).services.blog).toBe(uuid('b'))
   })
 
   it('a malformed uuid value for a listed key is refused, not read', () => {
@@ -265,7 +273,7 @@ describe('isDark', () => {
 })
 
 describe('resolveEnv', () => {
-  it('resolveEnv returns the six URLs Railway names', async () => {
+  it('resolveEnv returns the seven URLs Railway names', async () => {
     const fake = fakeRailway({
       envs: [
         { id: 'env-348', name: 'pr-348', isEphemeral: true },
@@ -281,7 +289,7 @@ describe('resolveEnv', () => {
     expect(r.urls.GATEWAY_URL).toBe('https://gateway.up.railway.app')
     expect(r.dark).toEqual([])
     const gql = fake.graphql()
-    expect(gql.length).toBeGreaterThanOrEqual(6)
+    expect(gql.length).toBeGreaterThanOrEqual(7)
     for (const c of gql) {
       expect(c.url).toBe(GRAPHQL)
       expect(c.method).toBe('POST')
@@ -326,7 +334,7 @@ describe('resolveEnv', () => {
   it('an Application-not-found 404 is dark, by name', async () => {
     fakeRailway({ probes: { landing: { status: 404, body: APP_NOT_FOUND } } })
     const r = await resolveEnv('pr-348', { token: 'tok', ids: IDS })
-    expect(Object.keys(r.urls)).toHaveLength(6)
+    expect(Object.keys(r.urls)).toHaveLength(7)
     expect(r.dark).toEqual(['landing'])
   })
 
@@ -334,7 +342,7 @@ describe('resolveEnv', () => {
     const fake = fakeRailway()
     await resolveEnv('pr-348', { token: 'tok', ids: IDS })
     const probes = fake.probes()
-    expect(probes).toHaveLength(6)
+    expect(probes).toHaveLength(7)
     for (const c of probes) expect(c.method).toBe('GET')
     expect(probes.map((c) => c.url).sort()).toEqual(
       [
@@ -344,6 +352,7 @@ describe('resolveEnv', () => {
         'https://ops-console.up.railway.app/health',
         'https://support-console.up.railway.app/health',
         'https://library.up.railway.app/health',
+        'https://blog.up.railway.app/health',
       ].sort(),
     )
   })
@@ -393,7 +402,7 @@ describe('resolveEnv requests', () => {
     expect(list[0].query).toContain('isEphemeral')
     expect(list[0].variables).toEqual({ p: IDS.projectId })
     const domains = bodies.filter((b) => b.query.includes('domains('))
-    expect(domains).toHaveLength(6)
+    expect(domains).toHaveLength(7)
     for (const d of domains) {
       expect(d.query).toContain('customDomains')
       expect(d.query).toContain('serviceDomains')
@@ -420,7 +429,7 @@ describe('resolveEnv requests', () => {
   it('the token goes to Railway only, never to a probed host', async () => {
     const fake = fakeRailway()
     await resolveEnv('pr-348', { token: 'tok', ids: IDS })
-    expect(fake.probes()).toHaveLength(6)
+    expect(fake.probes()).toHaveLength(7)
     for (const c of fake.probes()) {
       expect(c.auth, c.url).toBeNull()
       expect(new Headers(c.init?.headers).has('cookie')).toBe(false)
@@ -434,7 +443,7 @@ describe('resolveEnv requests', () => {
     const fake = fakeRailway()
     await resolveEnv('pr-348', { token: 'tok', ids: IDS })
     expect(spy).toHaveBeenCalledWith(20_000)
-    expect(spy).toHaveBeenCalledTimes(6)
+    expect(spy).toHaveBeenCalledTimes(7)
     for (const c of fake.probes()) expect(c.init?.signal).toBeInstanceOf(AbortSignal)
     spy.mockRestore()
   })
@@ -449,12 +458,14 @@ describe('resolveEnv failures', () => {
         'ops-console': { custom: [{ domain: 'ops.example.com' }, { domain: 'ops2.example.com' }], service: [{ domain: 'ops.up.railway.app' }] },
         'support-console': { custom: [], service: [{ domain: 'first.up.railway.app' }, { domain: 'second.up.railway.app' }] },
         library: { custom: [], service: [{ domain: 'first.up.railway.app' }, { domain: 'second.up.railway.app' }] },
+        blog: { custom: [], service: [{ domain: 'blog-first.up.railway.app' }, { domain: 'blog-second.up.railway.app' }] },
       },
     })
     const r = await resolve()
     expect(r.urls.OPS_CONSOLE_URL).toBe('https://ops.example.com')
     expect(r.urls.SUPPORT_CONSOLE_URL).toBe('https://first.up.railway.app')
     expect(r.urls.LIBRARY_URL).toBe('https://first.up.railway.app')
+    expect(r.urls.BLOG_URL).toBe('https://blog-first.up.railway.app')
   })
 
   it('a domains reply with no domains object, an absent customDomains or an empty domain is refused naming the service', async () => {
@@ -576,8 +587,8 @@ describe('resolveEnv probes', () => {
     for (const [what, make] of Object.entries(failures)) {
       const fake = fakeRailway({ override: (url) => (url.startsWith('https://backboard.railway.com/') ? undefined : make()) })
       const r = await resolve()
-      expect(fake.probes(), what).toHaveLength(6)
-      expect(Object.keys(r.urls), what).toHaveLength(6)
+      expect(fake.probes(), what).toHaveLength(7)
+      expect(Object.keys(r.urls), what).toHaveLength(7)
       expect(r.dark, what).toEqual([])
     }
   })
@@ -600,6 +611,13 @@ describe('resolveEnv probes', () => {
     expect(r.urls.LIBRARY_URL).toBe('https://library.up.railway.app')
   })
 
+  it('a dark blog domain is listed under dark', async () => {
+    fakeRailway({ probes: { blog: { status: 404, body: APP_NOT_FOUND } } })
+    const r = await resolve()
+    expect(r.dark).toEqual(['blog'])
+    expect(r.urls.BLOG_URL).toBe('https://blog.up.railway.app')
+  })
+
   it('every dark service is listed, in service order, and a dark gateway counts', async () => {
     fakeRailway({
       probes: {
@@ -610,7 +628,7 @@ describe('resolveEnv probes', () => {
     })
     const r = await resolve()
     expect(r.dark).toEqual(['gateway', 'app', 'support-console'])
-    expect(Object.keys(r.urls)).toHaveLength(6)
+    expect(Object.keys(r.urls)).toHaveLength(7)
   })
 })
 
@@ -634,14 +652,14 @@ describe('envCommand', () => {
 
   it('env prints env, environmentId, urls and dark', async () => {
     const ids = realIds()
-    expect(Object.values(ids.services)).toHaveLength(6)
+    expect(Object.values(ids.services)).toHaveLength(7)
     const fake = fakeRailway({ ids, envs: [{ id: 'env-348', name: 'pr-348', isEphemeral: true }] })
     const r = (await envCommand(['pr-348'], {})) as { env: string; environmentId: string; urls: Record<string, string>; dark: string[] }
     expect(r.env).toBe('pr-348')
     expect(r.environmentId).toBe('env-348')
     expect(Object.keys(r.urls).sort()).toEqual([...URL_KEYS].sort())
     expect(r.dark).toEqual([])
-    expect(fake.graphql().length).toBeGreaterThanOrEqual(6)
+    expect(fake.graphql().length).toBeGreaterThanOrEqual(7)
     for (const c of fake.graphql()) expect(c.auth).toBe('Bearer tok')
   })
 
@@ -755,7 +773,7 @@ describe('envCommand', () => {
     expect(r.stdout).toBe('')
     const out = JSON.parse(r.stderr)
     expect(out.dark).toEqual(['app', 'landing'])
-    expect(Object.keys(out.urls)).toHaveLength(6)
+    expect(Object.keys(out.urls)).toHaveLength(7)
     expect(out.hint.length).toBeGreaterThan(0)
   })
 })
@@ -809,7 +827,7 @@ describe('ctl env under node', () => {
     const out = JSON.parse(r.stdout.trim().split('\n').pop() as string)
     expect(out.stderr).toBe('')
     expect(out.code).toBe(0)
-    expect(out.services).toBe(6)
-    expect(Object.keys(JSON.parse(out.stdout).urls)).toHaveLength(6)
+    expect(out.services).toBe(7)
+    expect(Object.keys(JSON.parse(out.stdout).urls)).toHaveLength(7)
   })
 })

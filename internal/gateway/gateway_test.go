@@ -135,6 +135,14 @@ func TestUnauthenticated(t *testing.T) {
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401", rec.Code)
 			}
+			// The blog's public paths are not open under /api/.
+			for _, p := range []string{"/api/blog/posts", "/api/notifications/internal/blog/posts"} {
+				blog := httptest.NewRecorder()
+				tg.handler.ServeHTTP(blog, request("GET", p, bearer))
+				if blog.Code != http.StatusUnauthorized {
+					t.Errorf("GET %s = %d, want 401", p, blog.Code)
+				}
+			}
 			if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
 				t.Errorf("WWW-Authenticate = %q, want %q", got, "Bearer")
 			}

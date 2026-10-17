@@ -1017,20 +1017,18 @@ func TestBlogRead_PathTraversalNeverReachesUpstream(t *testing.T) {
 func TestBlogRead_UpstreamSlowerThanTheGatewayTimeoutIs502(t *testing.T) {
 	t.Parallel()
 	rig := newBlogRig(t, blogCfg{})
-	release := make(chan struct{})
-	defer close(release)
 	rig.up.setAnswer(func(w http.ResponseWriter, r *http.Request) {
 		select {
-		case <-release:
-		case <-time.After(blogReadTimeout + 3*time.Second):
+		case <-time.After(8 * time.Second):
 		case <-r.Context().Done():
+			return
 		}
 		blogDefaultAnswer(w, r)
 	})
 	start := time.Now()
 	rec := rig.get("/blog/posts", blogIP)
 	requireJSONError(t, rec, http.StatusBadGateway, "blog is unavailable")
-	if took := time.Since(start); took > blogReadTimeout+2*time.Second {
-		t.Errorf("the gateway waited %v for a stalled upstream, want about %v", took, blogReadTimeout)
+	if took := time.Since(start); took > 7*time.Second {
+		t.Errorf("the gateway waited %v for a stalled upstream, want about 5s", took)
 	}
 }

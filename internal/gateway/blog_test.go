@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -815,7 +816,7 @@ func TestBlogRead_UpstreamHeadersOtherThanContentTypeAreNotPassedThrough(t *test
 	}
 }
 
-func TestBlogRead_UpstreamWithoutContentTypeDoesNotSendAnEmptyOne(t *testing.T) {
+func TestBlogRead_UpstreamWithoutContentTypeIs502(t *testing.T) {
 	for _, path := range blogPaths {
 		t.Run(path, func(t *testing.T) {
 			rig := newBlogRig(t, blogCfg{})
@@ -830,10 +831,15 @@ func TestBlogRead_UpstreamWithoutContentTypeDoesNotSendAnEmptyOne(t *testing.T) 
 				t.Fatal(err)
 			}
 			defer resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				if vals, present := resp.Header["Content-Type"]; present && len(vals) == 1 && vals[0] == "" {
-					t.Errorf("200 with an empty Content-Type header: %q", vals)
-				}
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusBadGateway || strings.TrimSpace(string(body)) != `{"error":"blog is unavailable"}` {
+				t.Fatalf("GET %s = %d %q, want 502 blog is unavailable", path, resp.StatusCode, body)
+			}
+			if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+				t.Errorf("Cache-Control = %q, want no-store", got)
+			}
+			if ws := rig.warns("blog-read: upstream failed"); len(ws) != 1 {
+				t.Errorf("upstream-failed WARNs = %d, want 1", len(ws))
 			}
 		})
 	}

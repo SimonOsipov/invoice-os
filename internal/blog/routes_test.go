@@ -25,7 +25,6 @@ type blogRoute struct {
 	success int
 }
 
-// blogRoutes mirrors the Route wiring table of BLOG-01.
 var blogRoutes = []blogRoute{
 	{"GET /v1/staff/blog/categories", "/v1/staff/blog/categories", "", 200},
 	{"POST /v1/staff/blog/categories", "/v1/staff/blog/categories", `{"name":"N","icon":"globe","tone":1}`, 201},

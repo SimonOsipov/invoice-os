@@ -1625,7 +1625,8 @@ test.describe('Customers screen and company fields', () => {
           if (rectsOverlap(avatar, pill) || rectsOverlap(name, pill)) problems.push(`row ${i} ARCHIVED pill overlaps the avatar or the name`)
         }
         if (!(await clips(rowSpans.nth(1)))) problems.push(`row ${i} TIN does not clip with an ellipsis`)
-        if (!(await fits(rowSpans.nth(1)))[0]) problems.push(`row ${i} TIN text sticks out of its cell`)
+        // Only a 13-char TIN must fit 120px; the 27-char RN- TIN ellipsis-clips by design.
+        if ((await row.innerText()).includes(BUYER_TIN) && !(await fits(rowSpans.nth(1)))[0]) problems.push(`row ${i} TIN text sticks out of its cell`)
         const actionCell = rowCells[6]
         const button = await rowSpans.nth(6).locator('button').boundingBox()
         if (!button || !actionCell || !enclosesRect(actionCell, button, 1)) problems.push(`row ${i} Action button leaves its cell`)

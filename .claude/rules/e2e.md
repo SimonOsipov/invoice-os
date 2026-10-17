@@ -45,3 +45,4 @@ paths:
 - Write `VITE_SUPPORT_URL` on `app` and `VITE_APP_URL` on `support-console` on each fork.
 - Expect `library` to be the one SPA with no gateway wiring. A fork writes no `VITE_GATEWAY_URL` on it, and it is no CORS origin.
 - Expect a fork to accept registrations, send no mail and confirm at once. `fork-vars-before-urls` sets `GOTRUE_DISABLE_SIGNUP`, a blank SMTP host and `GOTRUE_MAILER_AUTOCONFIRM`.
+- Expect a CI topology shard to stop at its first failed test, retry included. The `list` reporter prints later tests as "did not run"; the html and json reports mark them `skipped`. A retry-pass does not stop it.

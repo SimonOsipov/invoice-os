@@ -1159,13 +1159,30 @@ func requireConfirmed(t *testing.T, out string, lines ...string) {
 	}
 }
 
+// A literal-valued blog needs no delete, so the pass makes no varsDelete call.
 func TestForkVarsAfterURLs_FreshForkMakesFiveCalls(t *testing.T) {
-	s := newAfterShim(t, afterProdStores())
+	stores := afterProdStores()
+	stores[sentrySvcID("blog")]["VITE_SENTRY_DSN"] = sentryDSNSentinel
+	stores[sentrySvcID("blog")]["SENTRY_AUTH_TOKEN"] = sentryTokenSentinel
+	s := newAfterShim(t, stores)
 	out, code := runAfter(t, s)
 	if code != 0 {
 		t.Errorf("exit %d, want 0; output = %q", code, clip(out))
 	}
 	want := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead"}
+	if got := operations(s.calls(t)); !slices.Equal(got, want) {
+		t.Errorf("Railway calls = %v, want %v", got, want)
+	}
+}
+
+// The blog's inherited references take one batched delete between the write and the one re-read.
+func TestForkVarsAfterURLs_InheritedReferencesAddOneDelete(t *testing.T) {
+	s := newAfterShim(t, afterProdStores())
+	out, code := runAfter(t, s)
+	if code != 0 {
+		t.Errorf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	want := []string{"envList", "settle", "varsRead", "varsWrite", "varsDelete", "varsRead"}
 	if got := operations(s.calls(t)); !slices.Equal(got, want) {
 		t.Errorf("Railway calls = %v, want %v", got, want)
 	}
@@ -1576,7 +1593,7 @@ func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
 			s := newAfterShim(t, afterProdStores())
 			s.bendReRead(t, sentrySvcID(r.svc), `.`+r.name+` = "`+r.bad+`"`)
 			out, code := runAfter(t, s)
-			if want := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead"}; !slices.Equal(operations(s.calls(t)), want) {
+			if want := []string{"envList", "settle", "varsRead", "varsWrite", "varsDelete", "varsRead"}; !slices.Equal(operations(s.calls(t)), want) {
 				t.Fatalf("Railway calls = %v, want %v: the bend is on the re-read", operations(s.calls(t)), want)
 			}
 			if code != 1 {

@@ -1036,6 +1036,34 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 			}
 		}
 	}
+	// deleted: the blog's inherited reference is deleted; the request names the variable and carries no value.
+	deleted := func(t *testing.T, s authShim, out, label, name string) {
+		t.Helper()
+		if !strings.Contains(out, "  "+label+"."+name+" deleted (inherited reference)") {
+			t.Errorf("no deleted line for %s.%s", label, name)
+		}
+		n := 0
+		for _, c := range s.calls(t) {
+			if !strings.Contains(c.Query, "variableDelete(") {
+				continue
+			}
+			for k, v := range c.Variables {
+				in, _ := v.(map[string]any)
+				if in == nil || in["name"] != name || in["serviceId"] != sentrySvcID(label) {
+					continue
+				}
+				n++
+				for f := range in {
+					if !slices.Contains([]string{"projectId", "environmentId", "serviceId", "name"}, f) {
+						t.Errorf("delete input %s carries field %q, want no value", k, f)
+					}
+				}
+			}
+		}
+		if n != 1 {
+			t.Errorf("%d delete request(s) for %s.%s, want 1", n, label, name)
+		}
+	}
 	redacted := func(t *testing.T, out, label, name string) {
 		t.Helper()
 		lines := echoLines(out, label, name)
@@ -1129,9 +1157,11 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 			t.Fatalf("exit %d, want 0; output = %q", code, out)
 		}
 		scan(t, s, jqLog, out, map[string]string{
-			"the inherited DSN":        sentryDSNSentinel,
-			"the inherited auth token": sentryTokenSentinel,
-			"the sibling DATABASE_URL": sentryDBSentinel,
+			"the inherited DSN":          sentryDSNSentinel,
+			"the inherited auth token":   sentryTokenSentinel,
+			"the sibling DATABASE_URL":   sentryDBSentinel,
+			"the blog's DSN reference":   sentryBlogDSNRef,
+			"the blog's token reference": sentryBlogTokenRef,
 		})
 		if strings.Contains(out, forkToken) {
 			t.Error("the output carries the API token")
@@ -1141,6 +1171,10 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 		}
 		for _, sp := range sentrySPAs {
 			for _, n := range sentrySPANames {
+				if sp == "blog" {
+					deleted(t, s, out, sp, n)
+					continue
+				}
 				redacted(t, out, sp, n)
 			}
 		}
@@ -1167,6 +1201,10 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 		}
 		for _, sp := range sentrySPAs {
 			for _, n := range sentrySPANames {
+				if sp == "blog" {
+					deleted(t, s, out, sp, n)
+					continue
+				}
 				redacted(t, out, sp, n)
 			}
 		}

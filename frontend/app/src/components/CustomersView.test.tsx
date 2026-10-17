@@ -453,6 +453,31 @@ describe('CustomersView: add', () => {
     }
   })
 
+  it('CU-27c Cancel is blocked while Open customer is looking up, so no Edit form opens after', async () => {
+    let release: (r: MockResponse) => void = () => {}
+    const held = new Promise<MockResponse>((resolve) => {
+      release = resolve
+    })
+    mockApi({
+      customers: (url) => (paramsOf(url).get('tin') ? held : recordsPage([record()])),
+      invoices: () => invoicesPage([]),
+      createCustomer: () => ({ ok: false, status: 409, json: () => Promise.resolve({ error: 'duplicate tin' }) }),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    fireEvent.click(addButton())
+    fireEvent.change(screen.getByRole('textbox', { name: 'TIN' }), { target: { value: 'RN-77' } })
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add customer' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open customer' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.getByRole('dialog', { name: 'Add customer' })).toBeTruthy()
+
+    release(recordsPage([record({ id: 'h', tin: 'RN-77', name: 'Held Co' })]))
+    expect(await screen.findByRole('dialog', { name: 'Edit customer' })).toBeTruthy()
+  })
+
   it('CU-28 Open customer on an archived record selects Archived', async () => {
     const { customerCalls } = await openWith409()
     const listCalls = () => customerCalls().filter((u) => !paramsOf(u).get('tin'))
@@ -650,6 +675,43 @@ describe('CustomersView: archive and restore', () => {
     expect(screen.getAllByText('redundant transition')).toHaveLength(1)
     expect(within(rows()[0] as HTMLElement).getByText('redundant transition')).toBe(msg)
     expect(screen.getAllByRole('button', { name: 'Archive' })).toHaveLength(2)
+  })
+
+  it('CU-37d a failed transition refetches the records page so the row shows its true status', async () => {
+    let archived = false
+    const { customerCalls } = mockApi({
+      customers: () => recordsPage([record({ id: 'A', status: archived ? 'archived' : 'active' })]),
+      invoices: () => invoicesPage([]),
+      transition: () => {
+        archived = true
+        return { ok: false, status: 409, json: () => Promise.resolve({ error: 'redundant transition' }) }
+      },
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    expect(customerCalls()).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }))
+
+    expect(await screen.findByText('redundant transition')).toBeTruthy()
+    await waitFor(() => expect(customerCalls()).toHaveLength(2))
+    expect(await screen.findByText('ARCHIVED', { exact: true })).toBeTruthy()
+  })
+
+  it('CU-37e a 401 on archive shows nothing inline', async () => {
+    const { fetchMock } = mockApi({
+      customers: () => recordsPage([record({ id: 'A' })]),
+      invoices: () => invoicesPage([]),
+      transition: () => ({ ok: false, status: 401, json: () => Promise.resolve({ error: 'unauthorized' }) }),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    await screen.findByText('Alpha Traders')
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }))
+
+    await waitFor(() => expect(posts(fetchMock)).toHaveLength(1))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Archive' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(screen.queryByText(/unauthorized|Something went wrong/)).toBeNull()
   })
 
   it('CU-38 a fast double click on confirm posts once', async () => {
@@ -894,6 +956,31 @@ describe('CustomersView: the status chips', () => {
     release(recordsPage([record({ status: 'archived' })], 1))
     expect(await screen.findByText('No active customers')).toBeTruthy()
     expect(screen.queryByText('Loading customers…')).toBeNull()
+  })
+
+  it('CU-33f a stale probe result never flashes the wrong empty card when Active empties again', async () => {
+    let archivedTotal = 0
+    mockApi({
+      customers: (url) => {
+        const q = paramsOf(url)
+        if (q.get('status') === 'archived') return recordsPage(archivedTotal ? [record({ status: 'archived' })] : [], archivedTotal)
+        return q.get('status') === 'active' ? recordsPage([]) : recordsPage([record()])
+      },
+      invoices: () => invoicesPage([]),
+    })
+    render(<CustomersView ctx={ctxFor()} />)
+    expect(await screen.findByText('No customers yet')).toBeTruthy()
+    fireEvent.click(chip('All'))
+    await screen.findByText('Alpha Traders')
+
+    archivedTotal = 1
+    const shown: string[] = []
+    const watch = new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) => shown.push(n.textContent ?? ''))))
+    watch.observe(document.body, { childList: true, subtree: true })
+    fireEvent.click(chip('Active'))
+    expect(await screen.findByText('No active customers')).toBeTruthy()
+    watch.disconnect()
+    expect(shown.filter((t) => t.includes('No customers yet'))).toEqual([])
   })
 })
 

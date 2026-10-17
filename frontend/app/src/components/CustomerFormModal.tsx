@@ -122,7 +122,7 @@ export function CustomerFormModal({ mode, customer, ctx, base, onClose, onSucces
 
   return (
     <div
-      onClick={() => { if (!submitting) onClose() }}
+      onClick={() => { if (!submitting && !opening) onClose() }}
       style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'color-mix(in srgb, var(--surface) 55%, transparent)', backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40, animation: 'popIn 140ms ease-out' }}
     >
       <div
@@ -137,6 +137,7 @@ export function CustomerFormModal({ mode, customer, ctx, base, onClose, onSucces
           <button
             type="button"
             onClick={onClose}
+            disabled={opening}
             className="pf-btn"
             aria-label="Close"
             style={{ width: 34, height: 34, borderRadius: 'var(--radius-md)', border: '1px solid var(--line-2)', background: 'var(--bg-2)', color: 'var(--fg-2)', cursor: 'pointer', display: 'grid', placeItems: 'center' }}
@@ -218,7 +219,7 @@ export function CustomerFormModal({ mode, customer, ctx, base, onClose, onSucces
           </div>
 
           <div style={{ flex: 'none', display: 'flex', justifyContent: 'flex-end', gap: 9, padding: '14px 20px', borderTop: '1px solid var(--line-1)' }}>
-            <button type="button" onClick={onClose} disabled={submitting} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, fontSize: 13 }}>
+            <button type="button" onClick={onClose} disabled={submitting || opening} className="v2-btn v2-btn-ghost pf-btn" style={{ height: 36, fontSize: 13 }}>
               Cancel
             </button>
             <button type="submit" disabled={submitting} className="v2-btn v2-btn-primary pf-btn" style={{ height: 36, fontSize: 13 }}>

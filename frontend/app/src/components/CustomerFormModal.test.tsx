@@ -273,6 +273,17 @@ describe('CustomerFormModal create mode', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: 'Open customer' }) as HTMLButtonElement).disabled).toBe(false))
   })
 
+  it('CFM-05c Cancel, Close and the backdrop do nothing while Open customer is pending', async () => {
+    const { onClose } = mountCreate(vi.fn().mockRejectedValue(http(409, 'duplicate tin')), vi.fn().mockReturnValue(new Promise(() => {})))
+    typeTin('RN-7')
+    add()
+    fireEvent.click(await screen.findByRole('button', { name: 'Open customer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('dialog').parentElement as HTMLElement)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('CFM-06 401 shows nothing; 500, 403 and network show the generic banner', async () => {
     for (const err of [http(500, 'internal'), http(403, 'forbidden'), new TypeError('Failed to fetch')]) {
       const { authedFetch } = mountCreate(vi.fn().mockRejectedValue(err))

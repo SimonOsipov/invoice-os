@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
-import { archiveCustomer, FILEABLE_TIN, listCustomers, restoreCustomer, type Customer, type CustomerListResponse } from '../lib/buyerDirectory'
+import { archiveCustomer, FILEABLE_TIN, GENERIC_ERROR, listCustomers, restoreCustomer, type Customer, type CustomerListResponse } from '../lib/buyerDirectory'
 import { fmt } from '../lib/format'
 import { aggregateCustomers, customerName, initials } from '../lib/customers'
 import { fetchAllInvoices, type AllInvoices } from '../lib/invoices'
@@ -50,8 +50,11 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
     { immediate: false },
   )
   const probing = base != null && pos === 'active' && records.status === 'empty'
+  // The probe result is stale until it has run for this empty Active page.
+  const [probeStarted, setProbeStarted] = useState(false)
   useEffect(() => {
     if (probing) probe.run()
+    setProbeStarted(probing)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [probing])
   // Workspace-wide (no entity_id) and no isEmpty: records with zero invoices still render.
@@ -60,7 +63,7 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
     { immediate: base != null },
   )
 
-  const probePending = probing && (probe.status === 'idle' || probe.status === 'loading')
+  const probePending = probing && (!probeStarted || probe.status === 'idle' || probe.status === 'loading')
   const loading = records.status === 'loading' || invoices.status === 'loading' || probePending
   const errored = records.status === 'error' || invoices.status === 'error'
   const error = records.error ?? invoices.error
@@ -103,7 +106,11 @@ export function CustomersView({ ctx }: { ctx: PlatformCtx }) {
       records.run()
     } catch (err) {
       setArmedId(null)
-      setArchiveError({ id, message: err instanceof ApiError ? err.message : 'Something went wrong. Please try again.' })
+      // Refetch so a row changed elsewhere (409) shows its true status.
+      // A 401 shows nothing: authedFetch is already signing out.
+      const message = err instanceof ApiError ? err.message : GENERIC_ERROR
+      setArchiveError(err instanceof ApiError && err.status === 401 ? null : { id, message })
+      records.run()
     } finally {
       setArchivingId(null)
     }

@@ -1530,7 +1530,7 @@ test.describe('Customers screen and company fields', () => {
     await expect(buyerRow(page, tin).getByText('ARCHIVED', { exact: true })).toHaveCount(0)
     expect((await listCustomers(firmToken, { tin })).customers[0]?.status, 'the API holds the restored status').toBe('active')
 
-    // CUST-01 AC 4: an invoice's buyer name never overwrites a typed one.
+    // An invoice's buyer name never overwrites a typed one.
     await createInvoice(firmToken, { entity_id: firmEntityId, ...cleanInvoiceFields(''), invoice_number: `INV-CUST03-${tin}`, buyer_tin: tin, buyer_name: 'Invoice Name', invoice_kind: 'B2B' })
     await page.reload()
     await expect(buyerRow(page, tin).locator('.money.mono'), 'the row does not count the later invoice').toHaveText('1', { timeout: 20_000 })
@@ -1582,7 +1582,7 @@ test.describe('Customers screen and company fields', () => {
     await settle(page, main(page))
     const head = page.locator('.pf-list-head')
     const card = head.locator('xpath=..')
-    // 1263 stands in for WIDE_WIDTHS' 1280 minus a 17px classic scrollbar (CUST-03 D30).
+    // 1263 stands in for WIDE_WIDTHS' 1280 minus a 17px classic scrollbar.
     const CUSTOMERS_WIDTHS = [...WIDE_WIDTHS, 1263]
     const columns = (all: boolean, armedTin?: string) => async () => {
       const cells = (loc: Locator) => loc.evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } }))

@@ -70,6 +70,9 @@ func TestDevEnvGateStillReadsTheE2EAndTopologyResults(t *testing.T) {
 			t.Errorf("e2e-gate needs %q lacks %q", needs, want)
 		}
 	}
+	if cond, _ := jobKey(j, "if"); !strings.HasPrefix(cond, "always()") {
+		t.Errorf("e2e-gate if = %q, want prefix always()", cond)
+	}
 	for _, s := range j.steps() {
 		if !strings.Contains(s.keys["run"], "node e2e/mergeGate.ts") {
 			continue

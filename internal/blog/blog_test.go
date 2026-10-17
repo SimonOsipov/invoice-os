@@ -17,6 +17,11 @@ func TestSlug_PortsThePrototype(t *testing.T) {
 		{"R&D", "r-and-d"},
 		{"  --Hello--  ", "hello"},
 		{"!!!", "post"},
+		{"", "post"},
+		{"日本語", "post"},
+		{"Café Ünïcode", "caf-n-code"},
+		{"a & b", "a-and-b"},
+		{"UPPER_case.Mix", "upper-case-mix"},
 		{"Ägypten 2026", "gypten-2026"},
 		{long, strings.ReplaceAll(strings.TrimSpace(long), " ", "-")[:MaxSlugLen]},
 	} {
@@ -30,6 +35,26 @@ func TestSlug_CutsAfterTrimLikeThePrototype(t *testing.T) {
 	got := Slug(strings.Repeat("a", MaxSlugLen-1) + " b")
 	if len(got) != MaxSlugLen || !strings.HasSuffix(got, "-") {
 		t.Errorf("got %q (len %d), want length 64 ending in -", got, len(got))
+	}
+}
+
+func TestSlug_OutputIsAlwaysASCIIAtMostTheCap(t *testing.T) {
+	got := Slug(strings.Repeat("é", 100) + strings.Repeat("a", 80))
+	if got == "" || len(got) != MaxSlugLen || strings.Trim(got, "a") != "" {
+		t.Errorf("got %q", got)
+	}
+	if got := Slug(strings.Repeat("a", MaxSlugLen+1)); len(got) != MaxSlugLen {
+		t.Errorf("65 bytes: len %d", len(got))
+	}
+	if got := Slug(strings.Repeat("a", MaxSlugLen)); len(got) != MaxSlugLen {
+		t.Errorf("64 bytes: len %d", len(got))
+	}
+	for _, in := range []string{"İstanbul", "Kelvin K sign", "日本語 2026 日本語"} {
+		for _, r := range Slug(in) {
+			if r > 127 {
+				t.Errorf("Slug(%q) = %q holds a non-ASCII rune", in, Slug(in))
+			}
+		}
 	}
 }
 
@@ -60,6 +85,18 @@ func TestUniqueID_ReservedPostIDsAreTaken(t *testing.T) {
 		if got := PostID(title, none); got != want {
 			t.Errorf("PostID(%q) = %q, want %q", title, got, want)
 		}
+	}
+}
+
+func TestPostID_ReservedIDsCollideWithTakenToo(t *testing.T) {
+	taken := func(id string) bool { return id == "subscribe-2" || id == "category-2" || id == "x" }
+	for title, want := range map[string]string{"Subscribe": "subscribe-3", "CATEGORY": "category-3", "x": "x-2", "!!!": "post"} {
+		if got := PostID(title, taken); got != want {
+			t.Errorf("PostID(%q) = %q, want %q", title, got, want)
+		}
+	}
+	if UniqueID("subscribe", func(string) bool { return false }) != "subscribe" {
+		t.Error("UniqueID alone must not know the reserved ids")
 	}
 }
 
@@ -103,6 +140,10 @@ func TestCleanBody_KeepsOnlyTheTypesFields(t *testing.T) {
 	if string(b) != `[{"type":"p","text":"hi"}]` {
 		t.Errorf("got %s", b)
 	}
+	raw, _ := json.Marshal(Block{Type: "h", Text: "hi", Items: []string{"z"}, Who: "w", Title: "t", Kind: "k", Demo: "d"})
+	if string(raw) != `{"type":"h","text":"hi"}` {
+		t.Errorf("marshal of an unclean block: %s", raw)
+	}
 }
 
 func TestValidateBlocks_RefusesUnknownShapes(t *testing.T) {
@@ -132,6 +173,12 @@ func TestCheckPost_TrimsTitleAndSummary(t *testing.T) {
 	got, fe := CheckPost(PostInput{Status: "draft", Title: "  Hello ", Summary: " Dek "})
 	if fe != nil || got.Title != "Hello" || got.Summary != "Dek" {
 		t.Errorf("got %+v, %v", got, fe)
+	}
+}
+
+func TestCheckPost_OnlyPublishedStatusPublishes(t *testing.T) {
+	if _, fe := CheckPost(PostInput{Status: "", Title: "T"}); fe != nil {
+		t.Errorf("status \"\" must not demand publish fields: %+v", fe)
 	}
 }
 
@@ -235,5 +282,194 @@ func TestSaveEvent_ByTransition(t *testing.T) {
 		if got := SaveEvent(c.was, c.now); got != c.want {
 			t.Errorf("%q->%q: got %q, want %q", c.was, c.now, got, c.want)
 		}
+	}
+}
+
+func TestCleanBody_EdgeBlocks(t *testing.T) {
+	got := CleanBody([]Block{
+		{Type: "p", Title: "title only"},
+		{Type: "h", Text: "\t\n "},
+		{Type: "quote", Text: " q ", Who: " w "},
+		{Type: "note", Kind: "deadline", Title: " n ", Text: " t "},
+		{Type: "note", Kind: "deadline"},
+		{Type: "demo"},
+		{Type: "video", Text: " v "},
+		{Type: "ul"},
+	})
+	want := []Block{
+		{Type: "quote", Text: "q", Who: "w"},
+		{Type: "note", Kind: "deadline", Title: "n", Text: "t"},
+		{Type: "demo"},
+		{Type: "video", Text: "v"},
+	}
+	if len(got) == 0 || !reflect.DeepEqual(got, want) {
+		t.Errorf("got %#v\nwant %#v", got, want)
+	}
+}
+
+func TestBlock_JSONRoundTripKeepsEachShape(t *testing.T) {
+	in := `[{"type":"p","text":"a"},{"type":"h","text":"b"},{"type":"ul","items":["c"]},` +
+		`{"type":"note","text":"e","kind":"product","title":"d"},{"type":"quote","text":"f","who":"g"},{"type":"demo","demo":"approval"}]`
+	var body []Block
+	if err := json.Unmarshal([]byte(in), &body); err != nil || len(body) != 6 {
+		t.Fatalf("unmarshal: %v %d", err, len(body))
+	}
+	if out, _ := json.Marshal(body); string(out) != in {
+		t.Errorf("got %s", out)
+	}
+	if out, _ := json.Marshal(Block{Type: "ul"}); string(out) != `{"type":"ul","items":[]}` {
+		t.Errorf("empty ul: %s", out)
+	}
+}
+
+func TestValidateBlocks_UnknownShapeEdges(t *testing.T) {
+	if err := ValidateBlocks(nil); err != nil {
+		t.Errorf("nil body: %v", err)
+	}
+	for _, b := range []Block{{Type: ""}, {Type: "P"}, {Type: "note", Kind: "Deadline"}, {Type: "demo", Demo: ""}} {
+		if err := ValidateBlocks([]Block{{Type: "p"}, b}); err == nil || !strings.Contains(err.Error(), "block 1") {
+			t.Errorf("%+v: %v", b, err)
+		}
+	}
+	for _, k := range NoteKinds {
+		if err := ValidateBlocks([]Block{{Type: "note", Kind: k}}); err != nil {
+			t.Errorf("kind %s: %v", k, err)
+		}
+	}
+	for _, d := range Demos {
+		if err := ValidateBlocks([]Block{{Type: "demo", Demo: d}}); err != nil {
+			t.Errorf("demo %s: %v", d, err)
+		}
+	}
+}
+
+func TestCheckPost_WhitespaceAndNilFieldsOnPublish(t *testing.T) {
+	full := PostInput{
+		Status: "published", Title: "T", Summary: "S", CategoryID: sp("c"), PublishDate: sp("2026-01-02"),
+		AuthorID: sp("u"), Body: []Block{{Type: "p", Text: "x"}},
+	}
+	if got, fe := CheckPost(full); fe != nil || len(got.Body) != 1 {
+		t.Fatalf("complete post: %+v %v", got, fe)
+	}
+	for field, mod := range map[string]func(*PostInput){
+		"title":        func(p *PostInput) { p.Title = " \t" },
+		"summary":      func(p *PostInput) { p.Summary = "  " },
+		"category_id":  func(p *PostInput) { p.CategoryID = sp("  ") },
+		"publish_date": func(p *PostInput) { p.PublishDate = nil },
+		"author_id":    func(p *PostInput) { p.AuthorID = sp(" ") },
+		"body":         func(p *PostInput) { p.Body = nil },
+	} {
+		in := full
+		mod(&in)
+		_, fe := CheckPost(in)
+		if fe == nil || len(fe.Fields) != 1 || fe.Fields[field] == "" || fe.Summary != MsgFixToPublish {
+			t.Errorf("%s: %+v", field, fe)
+		}
+	}
+}
+
+func TestCheckPost_DraftIgnoresPublishFieldsAndCleansBody(t *testing.T) {
+	got, fe := CheckPost(PostInput{Status: "draft", Title: "T", Body: []Block{{Type: "p", Text: " "}, {Type: "p", Text: " k "}}})
+	if fe != nil || !reflect.DeepEqual(got.Body, []Block{{Type: "p", Text: "k"}}) {
+		t.Errorf("got %+v %v", got, fe)
+	}
+	got, _ = CheckPost(PostInput{Status: "draft", Title: "T"})
+	if got.Body == nil {
+		t.Error("body must be a non-nil slice")
+	}
+}
+
+func TestCheckCategory_EdgesAndSummary(t *testing.T) {
+	ok := CategoryInput{Name: "N", Icon: "package", Tone: 0}
+	for _, tone := range []int{0, 5} {
+		in := ok
+		in.Tone = tone
+		if _, fe := CheckCategory(in); fe != nil {
+			t.Errorf("tone %d: %+v", tone, fe)
+		}
+	}
+	for _, ic := range Icons {
+		in := ok
+		in.Icon = " " + ic + " "
+		if got, fe := CheckCategory(in); fe != nil || got.Icon != ic {
+			t.Errorf("icon %q: %+v %v", ic, got, fe)
+		}
+	}
+	if len(Icons) != 16 {
+		t.Fatalf("icons: %d", len(Icons))
+	}
+	_, fe := CheckCategory(CategoryInput{Name: "  ", Icon: "x", Tone: 9})
+	want := map[string]string{"name": MsgCategoryName, "icon": MsgIcon, "tone": MsgTone}
+	if fe == nil || !reflect.DeepEqual(fe.Fields, want) || fe.Summary != MsgCategoryName {
+		t.Errorf("all bad: %+v", fe)
+	}
+	got, _ := CheckCategory(CategoryInput{Name: "N", Headline: " H ", Intro: " i ", Icon: "clock", Tone: 1})
+	if got.Headline != "H" || got.Intro != "i" {
+		t.Errorf("trim: %+v", got)
+	}
+}
+
+func TestFieldErrors_ErrorIsTheSummary(t *testing.T) {
+	var err error = &FieldErrors{Fields: map[string]string{"a": "b"}, Summary: "sum"}
+	if err.Error() != "sum" {
+		t.Errorf("got %q", err.Error())
+	}
+}
+
+func TestCheckCategoryDelete_OnlyCategoryWinsAndNoPostsNeedNoMove(t *testing.T) {
+	b := "b"
+	if err := CheckCategoryDelete(2, 0, &b, false, "a"); err != nil {
+		t.Errorf("no posts, unknown move_to: %v", err)
+	}
+	if err := CheckCategoryDelete(2, 0, nil, false, "a"); err != nil {
+		t.Errorf("no posts: %v", err)
+	}
+	if err := CheckCategoryDelete(1, 0, nil, false, "a"); !errors.Is(err, ErrOnlyCategory) {
+		t.Errorf("only: %v", err)
+	}
+}
+
+func TestDesignValues_ConstantsMessagesEvents(t *testing.T) {
+	if MaxSlugLen != 64 || MaxCoverBytes != 2097152 || maxPostBodyBytes != 262144 || maxSmallBodyBytes != 8192 ||
+		ToneCount != 6 || TeamAuthorName != "ASComply team" {
+		t.Error("numeric or byline constant drifted from the Design")
+	}
+	lists := map[string][2][]string{
+		"icons": {Icons, {"package", "landmark", "building-2", "megaphone", "handshake", "code-xml", "globe", "sparkles",
+			"shield-check", "file-check", "chart-column", "workflow", "plug", "archive", "key-round", "clock"}},
+		"kinds": {NoteKinds, {"regulation", "deadline", "product"}},
+		"demos": {Demos, {"import", "approval", "clearance"}},
+		"rsvd":  {reservedPostIDs, {"subscribe", "category"}},
+	}
+	for n, l := range lists {
+		if !reflect.DeepEqual(l[0], l[1]) {
+			t.Errorf("%s: %v", n, l[0])
+		}
+	}
+	for got, want := range map[string]string{
+		MsgTitle: "Add a title.", MsgSummary: "Add a summary. It shows on cards and under the title.",
+		MsgCategory: "Choose a category.", MsgDate: "Choose a publish date.",
+		MsgBody: "Add at least one block with content.", MsgAuthor: "Choose an author.",
+		MsgAuthorNotStaff: "Choose an ASComply staff member as the author.",
+		MsgFixToPublish:   "Fix the highlighted fields to publish", MsgTitleToSave: "Add a title to save the draft",
+		MsgCategoryName: "Add a name.", MsgCategoryNameTaken: "A category with this name already exists.",
+		MsgOnlyCategory: "This is the only category. Add another before deleting it.",
+		MsgMoveTo:       "Choose a category to move its posts to.", MsgIcon: "Choose an icon.",
+		MsgTone: "Choose a cover tone.", MsgCoverType: "Choose a JPG or PNG image",
+		MsgCoverTooLarge: "Choose an image of 2 MB or less",
+		EventPostCreated: "blog.post.created", EventPostUpdated: "blog.post.updated",
+		EventPostPublished: "blog.post.published", EventPostUnpublished: "blog.post.unpublished",
+		EventPostDeleted: "blog.post.deleted", EventPostPinned: "blog.post.pinned",
+		EventPostUnpinned: "blog.post.unpinned", EventPostCoverSet: "blog.post.cover_set",
+		EventPostCoverRemoved: "blog.post.cover_removed", EventCategoryAdded: "blog.category.added",
+		EventCategoryUpdated: "blog.category.updated", EventCategoryMoved: "blog.category.moved",
+		EventCategoryDeleted: "blog.category.deleted",
+	} {
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	}
+	if ErrCategoryNameTaken.Error() != MsgCategoryNameTaken || ErrOnlyCategory.Error() != MsgOnlyCategory {
+		t.Error("error text must be the message")
 	}
 }

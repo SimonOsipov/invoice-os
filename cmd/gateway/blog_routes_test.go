@@ -336,3 +336,25 @@ func TestBlogHandlers_HaveTheirOwnBucket(t *testing.T) {
 		t.Errorf("demo request after the blog budget is spent = %d, want 202", rec.Code)
 	}
 }
+
+func TestBlogRoutes_VaryOriginIsNamedOnceBehindCORS(t *testing.T) {
+	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+	mux, _ := blogMux(t, slog.New(slog.DiscardHandler))
+	for _, p := range []string{"/blog/categories", "/blog/posts", "/blog/posts/abc", "/blog/posts/Bad_Slug"} {
+		rec := blogGet(mux, p, "203.0.113.7:4000", blogAllowedOrigin)
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != blogAllowedOrigin {
+			t.Fatalf("GET %s: control Access-Control-Allow-Origin = %q, want the grant", p, got)
+		}
+		n := 0
+		for _, v := range rec.Header().Values("Vary") {
+			for _, tok := range strings.Split(v, ",") {
+				if strings.EqualFold(strings.TrimSpace(tok), "Origin") {
+					n++
+				}
+			}
+		}
+		if n != 1 {
+			t.Errorf("GET %s: Vary %v names Origin %d times, want once", p, rec.Header().Values("Vary"), n)
+		}
+	}
+}

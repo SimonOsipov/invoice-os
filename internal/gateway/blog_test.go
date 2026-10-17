@@ -776,3 +776,255 @@ func TestBlogRead_HeadIsARead(t *testing.T) {
 		t.Errorf("upstream calls = %d for one HEAD, want at most 1", n)
 	}
 }
+
+func TestBlogRead_UpstreamHeadersOtherThanContentTypeAreNotPassedThrough(t *testing.T) {
+	for _, path := range blogPaths {
+		t.Run(path, func(t *testing.T) {
+			rig := newBlogRig(t, blogCfg{})
+			rig.up.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+				blogDefaultAnswer(w, r)
+				w.Header().Set("Set-Cookie", "session=stolen; Path=/")
+				w.Header().Set("Server", "notifications/1.2")
+				w.Header().Set("X-Internal-Host", "notifications.railway.internal")
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				w.Header().Set("Content-Disposition", "attachment")
+				w.Header().Set("Cache-Control", "private, max-age=1")
+			})
+			rec := rig.get(path, blogIP)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d, want 200", path, rec.Code)
+			}
+			for _, h := range []string{"Set-Cookie", "Server", "X-Internal-Host", "Access-Control-Allow-Origin", "Content-Disposition"} {
+				if got := rec.Header().Values(h); len(got) != 0 {
+					t.Errorf("%s reached the caller: %v", h, got)
+				}
+			}
+			if got := rec.Header().Get("Cache-Control"); strings.Contains(got, "private") {
+				t.Errorf("Cache-Control = %q, want the gateway's own value, not the upstream's", got)
+			}
+			if rec.Header().Get("Content-Type") == "" {
+				t.Error("the control header Content-Type is missing")
+			}
+		})
+	}
+}
+
+func TestBlogRead_UpstreamWithoutContentTypeDoesNotSendAnEmptyOne(t *testing.T) {
+	for _, path := range blogPaths {
+		t.Run(path, func(t *testing.T) {
+			rig := newBlogRig(t, blogCfg{})
+			rig.up.setAnswer(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header()["Content-Type"] = nil
+				_, _ = w.Write(blogCoverBytes)
+			})
+			srv := httptest.NewServer(rig.mux)
+			defer srv.Close()
+			resp, err := http.Get(srv.URL + path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				if vals, present := resp.Header["Content-Type"]; present && len(vals) == 1 && vals[0] == "" {
+					t.Errorf("200 with an empty Content-Type header: %q", vals)
+				}
+			}
+		})
+	}
+}
+
+func TestBlogRead_HeadOnACover(t *testing.T) {
+	rig := newBlogRig(t, blogCfg{})
+	rec := rig.do(http.MethodHead, "/blog/covers/abc/17", blogIP)
+	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+		t.Fatalf("HEAD cover = %d with %d body bytes, want 200 and none", rec.Code, rec.Body.Len())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Errorf("HEAD cover Cache-Control = %q", got)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/jpeg" {
+		t.Errorf("HEAD cover Content-Type = %q", got)
+	}
+	if c := rig.up.last(t); c.method != http.MethodGet {
+		t.Errorf("upstream saw %s, want GET", c.method)
+	}
+	// A HEAD on a stale version is the uniform 404, as the GET is.
+	rig.up.setAnswer(blogAnswers(http.StatusNotFound, "text/plain", "gone"))
+	head := rig.do(http.MethodHead, "/blog/covers/abc/17", blogIP)
+	get := rig.get("/blog/covers/abc/17", blogIP)
+	if head.Code != http.StatusNotFound || get.Code != http.StatusNotFound {
+		t.Fatalf("HEAD/GET on a stale cover = %d/%d, want 404/404", head.Code, get.Code)
+	}
+	if !reflect.DeepEqual(snapshotBlog(head).header, snapshotBlog(get).header) {
+		t.Errorf("HEAD 404 headers %v differ from the GET's %v", head.Header(), get.Header())
+	}
+}
+
+func TestBlogRead_VaryOriginIsOnEveryJSONAnswer(t *testing.T) {
+	vary := func(t *testing.T, what string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		n := 0
+		for _, v := range rec.Header().Values("Vary") {
+			for tok := range strings.SplitSeq(v, ",") {
+				if strings.EqualFold(strings.TrimSpace(tok), "Origin") {
+					n++
+				}
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s (%d): Vary %v names Origin %d times, want once", what, rec.Code, rec.Header().Values("Vary"), n)
+		}
+	}
+	for _, path := range []string{"/blog/categories", "/blog/posts", "/blog/posts/abc"} {
+		for name, answer := range map[string]http.HandlerFunc{
+			"200": nil,
+			"404": blogAnswers(http.StatusNotFound, "application/json", `{}`),
+			"500": blogAnswers(http.StatusInternalServerError, "application/json", `{}`),
+		} {
+			rig := newBlogRig(t, blogCfg{})
+			if answer != nil {
+				rig.up.setAnswer(answer)
+			}
+			vary(t, "upstream "+name+" "+path, rig.get(path, blogIP))
+		}
+		rig := newBlogRig(t, blogCfg{max: 1})
+		rig.get(path, blogIP)
+		rec := rig.get(path, blogIP)
+		if rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("second request on %s = %d, want 429", path, rec.Code)
+		}
+		vary(t, "429 "+path, rec)
+	}
+	rig := newBlogRig(t, blogCfg{})
+	rec := rig.get("/blog/posts/Bad_Slug", blogIP)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("malformed slug = %d, want 404", rec.Code)
+	}
+	vary(t, "malformed slug", rec)
+}
+
+func TestBlogRead_ClientKeyFollowsClientKeyRules(t *testing.T) {
+	type hit struct{ remote, realIP, xff string }
+	// each case: requests that must share one budget of 3, then a request that must not share it.
+	cases := []struct {
+		name   string
+		shared []hit
+		other  hit
+	}{
+		{"X-Real-IP keys, the peer does not", []hit{{"10.0.0.1:1", "203.0.113.7", ""}, {"10.0.0.2:1", "203.0.113.7", ""}, {"10.0.0.3:1", "203.0.113.7", ""}}, hit{"10.0.0.1:1", "198.51.100.9", ""}},
+		{"a rotating X-Forwarded-For does not evade", []hit{{"203.0.113.7:1", "", "1.1.1.1"}, {"203.0.113.7:2", "", "2.2.2.2"}, {"203.0.113.7:3", "", "3.3.3.3"}}, hit{"198.51.100.9:1", "", "1.1.1.1"}},
+		{"X-Forwarded-For does not override X-Real-IP", []hit{{"10.0.0.1:1", "203.0.113.7", "9.9.9.1"}, {"10.0.0.1:1", "203.0.113.7", "9.9.9.2"}, {"10.0.0.1:1", "203.0.113.7", "9.9.9.3"}}, hit{"10.0.0.1:1", "198.51.100.9", "9.9.9.1"}},
+		{"no X-Real-IP: the peer address, port ignored", []hit{{"203.0.113.7:1", "", ""}, {"203.0.113.7:2", "", ""}, {"203.0.113.7:3", "", ""}}, hit{"203.0.113.8:1", "", ""}},
+		{"an unparsable X-Real-IP falls back to the peer", []hit{{"203.0.113.7:1", "not-an-ip", ""}, {"203.0.113.7:2", "garbage", ""}, {"203.0.113.7:3", "", ""}}, hit{"203.0.113.8:1", "not-an-ip", ""}},
+		{"an IPv4-mapped IPv6 address is the IPv4 address", []hit{{"10.0.0.1:1", "203.0.113.7", ""}, {"10.0.0.1:1", "::ffff:203.0.113.7", ""}, {"[::ffff:203.0.113.7]:1", "", ""}}, hit{"10.0.0.1:1", "203.0.113.8", ""}},
+		{"X-Real-IP IPv6 is keyed by its /64", []hit{{"10.0.0.1:1", "2001:db8:0:1::1", ""}, {"10.0.0.1:1", "2001:db8:0:1:ffff::2", ""}, {"10.0.0.1:1", "2001:db8:0:1::3", ""}}, hit{"10.0.0.1:1", "2001:db8:0:2::1", ""}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rig := newBlogRig(t, blogCfg{max: 3})
+			do := func(h hit) int {
+				req := httptest.NewRequest(http.MethodGet, "/blog/posts", nil)
+				req.RemoteAddr = h.remote
+				if h.realIP != "" {
+					req.Header.Set("X-Real-IP", h.realIP)
+				}
+				if h.xff != "" {
+					req.Header.Set("X-Forwarded-For", h.xff)
+				}
+				rec := httptest.NewRecorder()
+				rig.mux.ServeHTTP(rec, req)
+				return rec.Code
+			}
+			for i, h := range c.shared {
+				if got := do(h); got != http.StatusOK {
+					t.Fatalf("shared request %d = %d, want 200", i+1, got)
+				}
+			}
+			if got := do(c.shared[0]); got != http.StatusTooManyRequests {
+				t.Errorf("4th request of the shared budget = %d, want 429", got)
+			}
+			if got := do(c.other); got != http.StatusOK {
+				t.Errorf("a different client = %d, want 200", got)
+			}
+		})
+	}
+}
+
+func TestBlogRead_LimitRefusalLogsNoIP(t *testing.T) {
+	for _, ip := range []string{"203.0.113.7", "2001:db8:abcd:1::77"} {
+		rig := newBlogRig(t, blogCfg{max: 1})
+		do := func() *httptest.ResponseRecorder {
+			req := httptest.NewRequest(http.MethodGet, "/blog/posts", nil)
+			req.RemoteAddr = "[2001:db8:ffff::9]:5000"
+			req.Header.Set("X-Real-IP", ip)
+			rec := httptest.NewRecorder()
+			rig.mux.ServeHTTP(rec, req)
+			return rec
+		}
+		do()
+		rec := do()
+		if rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("%s: second request = %d, want 429", ip, rec.Code)
+		}
+		ws := rig.warns("blog-read: limit reached")
+		if len(ws) != 1 || ws[0].attrs["key_source"] != "header" || ws[0].attrs["enforced"] != "true" {
+			t.Fatalf("%s: limit WARNs = %v, want one with key_source=header enforced=true", ip, ws)
+		}
+		for _, needle := range []string{ip, "203.0.113", "2001:db8"} {
+			for _, l := range rig.logs.all() {
+				if strings.Contains(l.text, needle) {
+					t.Errorf("%s: a log line holds %q: %s", ip, needle, l.text)
+				}
+			}
+			if strings.Contains(rec.Body.String(), needle) {
+				t.Errorf("%s: the 429 body holds %q", ip, needle)
+			}
+		}
+	}
+}
+
+func TestBlogRead_PathTraversalNeverReachesUpstream(t *testing.T) {
+	rig := newBlogRig(t, blogCfg{})
+	for _, p := range []string{
+		"/blog/posts/..", "/blog/posts/../categories", "/blog/posts/%2e%2e", "/blog/posts/%2e%2e%2fcategories",
+		"/blog/posts/..%2f..%2fv1%2fstaff", "/blog/posts/abc/..", "/blog/posts/abc/../../x", "/blog/posts/.%2e/",
+		"/blog/covers/../x/1", "/blog/covers/abc/..", "/blog/covers/abc/%2e%2e", "/blog/covers/%2e%2e/1",
+		"/blog/covers/abc/1/../2", "/blog/posts/abc%00/", "/blog/posts/abc%3Fx=1", "/blog/posts/abc%23",
+	} {
+		rec := rig.get(p, blogIP)
+		if rec.Code == http.StatusOK || rec.Code >= 500 {
+			t.Errorf("GET %s = %d, want a 404 or a redirect to the cleaned path", p, rec.Code)
+		}
+	}
+	if n := rig.up.count(); n != 0 {
+		var paths []string
+		for _, c := range rig.up.calls {
+			paths = append(paths, c.path)
+		}
+		t.Fatalf("upstream calls = %d (%v) after traversal paths, want 0", n, paths)
+	}
+	if rec := rig.get("/blog/posts/abc", blogIP); rec.Code != http.StatusOK {
+		t.Errorf("control GET /blog/posts/abc = %d, want 200", rec.Code)
+	}
+}
+
+func TestBlogRead_UpstreamSlowerThanTheGatewayTimeoutIs502(t *testing.T) {
+	t.Parallel()
+	rig := newBlogRig(t, blogCfg{})
+	release := make(chan struct{})
+	defer close(release)
+	rig.up.setAnswer(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-time.After(blogReadTimeout + 3*time.Second):
+		case <-r.Context().Done():
+		}
+		blogDefaultAnswer(w, r)
+	})
+	start := time.Now()
+	rec := rig.get("/blog/posts", blogIP)
+	requireJSONError(t, rec, http.StatusBadGateway, "blog is unavailable")
+	if took := time.Since(start); took > blogReadTimeout+2*time.Second {
+		t.Errorf("the gateway waited %v for a stalled upstream, want about %v", took, blogReadTimeout)
+	}
+}

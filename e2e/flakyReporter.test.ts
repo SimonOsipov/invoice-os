@@ -120,6 +120,14 @@ describe('collectFlaky', () => {
     }
   })
 
+  it('error comes from the first attempt, not a later one', () => {
+    const later = { error: { message: 'Error: second' } }
+    const [a] = collectFlaky([flakyAt(['t'], [{ error: { message: 'Error: first' } }, later])], '/repo')
+    const [b] = collectFlaky([flakyAt(['t'], [{}, later])], '/repo')
+    expect(a.error).toBe('Error: first')
+    expect(b.error).toBe('')
+  })
+
   it('empty results give attempts 0 and an empty error', () => {
     const [row] = collectFlaky([flakyAt(['t'], [])], '/repo')
     expect(row.attempts).toBe(0)

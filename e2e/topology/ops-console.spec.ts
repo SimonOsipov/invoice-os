@@ -841,3 +841,55 @@ test('OPS-04 toast: the Rotate-key toast on --surface with the card shadow', asy
   await attachShot(page, testInfo, 'toast')
   expect(errors, errorsOf(errors)).toEqual([])
 })
+
+// ---------------------------------------------------------------- OPS-05
+// Fixture-free: reads whatever posts the PR environment holds.
+
+test('OPS-05 blog list: header, filters and table hold together at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInOps(page)
+  await navButton(page, /^Blog/).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Blog', exact: true }), 'Blog drew no h1').toBeVisible()
+  await expect(firstRow(page), 'the Blog list drew no post row').toBeVisible({ timeout: 15_000 })
+  await settle(page, pad(page))
+
+  const table = page.locator('[data-blog-table]')
+  const cells = (row: Locator) => row.locator('xpath=./*')
+  const widths = await atWidths(page, 'OPS-05 blog list', async () => {
+    const r = await boxes(page, {
+      title: pad(page).getByRole('heading', { level: 1, name: 'Blog', exact: true }).locator('xpath=..'),
+      view: page.getByRole('link', { name: 'View blog' }),
+      add: page.getByRole('button', { name: 'New post' }),
+      select: page.getByLabel('Category', { exact: true }),
+      search: page.locator('div.ops-input').filter({ has: page.getByPlaceholder('Search titles and summaries…') }),
+    })
+    const problems = [
+      ...leftOf(r.title, r.view, 'title block / View blog'),
+      ...leftOf(r.view, r.add, 'View blog / New post'),
+      ...allApart([r.title, r.view, r.add], 'header'),
+      ...leftOf(r.select, r.search, 'category select / search'),
+      ...sameCentre(r.select, r.search, 'category select / search'),
+      ...apart(r.select, r.search, 'category select / search'),
+    ]
+
+    const head = await boxList(page, cells(table.locator('> div').first()), 'header label', 6)
+    const rowCount = Math.min(3, await page.locator('.ops-row').count())
+    const rows: Rect[][] = []
+    for (let i = 0; i < rowCount; i++) {
+      const row = page.locator('.ops-row').nth(i)
+      const cs = await boxList(page, cells(row), `row ${i} cell`, 6)
+      rows.push(cs)
+      cs.slice(0, 5).forEach((c, k) => problems.push(...sameLeft(c, head[k], `row ${i} cell ${k} / header label`)))
+      problems.push(...within(head[5], cs[5], `row ${i} pin button / Pin cell`))
+      const lines = await boxList(page, cells(row).first().locator('> span'), `row ${i} Post line`, 2)
+      lines.forEach((l, k) => problems.push(...within(cs[0], l, `row ${i} Post line ${k} / Post cell`)))
+    }
+
+    const over = await table.evaluate((el) => el.scrollWidth - el.clientWidth)
+    if (over > 1) problems.push(`table frame scrolls sideways by ${over}px`)
+    problems.push(...(await noSidewaysScroll(page, 'blog list')))
+    return { problems, rects: { ...r, head, rows } }
+  })
+  await attachJson(testInfo, 'ops-05-blog-list', { widths })
+  expect(errors, errorsOf(errors)).toEqual([])
+})

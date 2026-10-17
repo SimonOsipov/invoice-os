@@ -6,9 +6,9 @@ import { seedStaffSession, test } from '../staffSession'
 // The Ops Console, driven as the integration developer it is for (PERSONA-01-05, Backlog
 // task-274), on a seeded real staff session (staffSession.ts).
 //
-// MOCK-ONLY, AND THAT LIMITS WHAT A GREEN RUN MEANS. This console's data has no backend.
-// Every assertion below pins this console's CLIENT-SIDE BEHAVIOUR over the fixtures
-// in src/data.tsx. It is not a contract test and says nothing about any server. Counts are
+// The Blog screen reads real data through the gateway; every other screen is fixture-only.
+// Assertions on those pin this console's CLIENT-SIDE BEHAVIOUR over the fixtures in
+// src/data.tsx. They are not a contract test and say nothing about any server. Counts are
 // read from the rendered UI rather than hardcoded, so a seed edit does not break these —
 // but the entities are fiction, and when real endpoints land (M7: operator identity + a
 // cross-tenant read path) these specs must be REWRITTEN against real data, not
@@ -51,6 +51,7 @@ const SCREENS: { nav: string; h1: string }[] = [
   { nav: 'Evidence', h1: 'Compliance evidence' },
   { nav: 'API & webhooks', h1: 'API & webhooks' },
   { nav: 'Usage & billing', h1: 'Usage & billing' },
+  { nav: 'Blog', h1: 'Blog' },
   { nav: 'Status', h1: 'API status' },
   { nav: 'Overview', h1: 'Overview' },
 ]
@@ -99,7 +100,7 @@ test('ops-console: every screen is reachable from the sidebar and renders its ow
   const errors = collectErrors(page)
   await seedStaffSession(page, 'ops', staffAccount)
 
-  // A seventh screen must turn this red rather than being silently skipped by the loop.
+  // An eighth screen must turn this red rather than being silently skipped by the loop.
   await expect(navButtons(page)).toHaveCount(SCREENS.length)
 
   for (const screen of SCREENS) {

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StaffGate } from '@invoice-os/console-session'
 
 import App from './App'
+import { TopBar } from './components/TopBar'
 import { NAV_ITEMS } from './data'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
@@ -91,5 +92,15 @@ describe('App', () => {
     expect(NAV_ITEMS.length).toBeGreaterThan(0)
     for (const n of NAV_ITEMS) expect(html, `nav item ${n.label}`).toContain(n.label)
     expect(html.match(/aria-label="Sign out"/g)).toHaveLength(1)
+  })
+
+  it('NAV_ITEMS puts Blog between Usage & billing and Status', () => {
+    expect(NAV_ITEMS.map((n) => n.key)).toEqual(['overview', 'submissions', 'evidence', 'api', 'billing', 'blog', 'status'])
+    expect(NAV_ITEMS.find((n) => n.key === 'blog')?.label).toBe('Blog')
+  })
+
+  it('the Blog crumb is Blog', () => {
+    const html = renderToStaticMarkup(<TopBar screen="blog" env="sandbox" onSetEnv={() => undefined} />)
+    expect(html).toContain('>Blog<')
   })
 })

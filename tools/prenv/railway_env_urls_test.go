@@ -30,6 +30,7 @@ var urlsServices = []urlsService{
 	{"ops-console", "RAILWAY_SVC_OPS_CONSOLE_ID", "ops_console_url", "svc-ops-console-urls", nil, []string{"ops-console-pr-7.up.railway.app"}},
 	{"support-console", "RAILWAY_SVC_SUPPORT_CONSOLE_ID", "support_console_url", "svc-support-console-urls", nil, []string{"support-console-pr-7.up.railway.app"}},
 	{"library", "RAILWAY_SVC_LIBRARY_ID", "library_url", "svc-library-urls", nil, []string{"library-pr-7.up.railway.app"}},
+	{"blog", "RAILWAY_SVC_BLOG_ID", "blog_url", "svc-blog-urls", nil, []string{"blog-pr-7.up.railway.app"}},
 }
 
 const urlsProjectToken = "tok-project-sentinel-not-real"
@@ -138,7 +139,7 @@ func requireURLsRefused(t *testing.T, stdout, stderr string, code int) {
 
 var urlsAliasField = regexp.MustCompile(`(\w+)\s*:\s*domains\(([^)]*)\)`)
 
-func TestDiscoverURLs_OneRequestForSixDomains(t *testing.T) {
+func TestDiscoverURLs_OneRequestForSevenDomains(t *testing.T) {
 	s := newURLsShim(t, nil)
 	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 	if code != 0 {
@@ -166,8 +167,8 @@ func TestDiscoverURLs_OneRequestForSixDomains(t *testing.T) {
 		}
 	}
 	fields := urlsAliasField.FindAllStringSubmatch(c.Query, -1)
-	if len(fields) != 6 {
-		t.Fatalf("the query has %d aliased domains(...) fields, want 6:\n%s", len(fields), c.Query)
+	if len(fields) != 7 {
+		t.Fatalf("the query has %d aliased domains(...) fields, want 7:\n%s", len(fields), c.Query)
 	}
 	seenAlias, seenVar := map[string]bool{}, map[string]bool{}
 	for _, f := range fields {
@@ -182,8 +183,8 @@ func TestDiscoverURLs_OneRequestForSixDomains(t *testing.T) {
 		}
 		seenAlias[f[1]], seenVar[m[1]] = true, true
 	}
-	if len(seenVar) != 6 {
-		t.Errorf("the 6 fields read %d distinct service variables, want 6", len(seenVar))
+	if len(seenVar) != 7 {
+		t.Errorf("the 7 fields read %d distinct service variables, want 7", len(seenVar))
 	}
 }
 
@@ -235,7 +236,7 @@ func TestDiscoverURLs_NullCustomDomainsRefuses(t *testing.T) {
 	}
 }
 
-func TestDiscoverURLs_PrintsExactlySixOutputLines(t *testing.T) {
+func TestDiscoverURLs_PrintsExactlySevenOutputLines(t *testing.T) {
 	s := newURLsShim(t, nil)
 	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 	if code != 0 {
@@ -299,8 +300,8 @@ func TestDiscoverURLs_GraphQLErrorEmptyStdout(t *testing.T) {
 		{"errors beside a complete data", beside(""), nil, true},
 		{"a path names the service of the alias", beside(`"s2"`), []int{2}, false},
 		{"two aliased errors name both services", beside(`"s0"`, `"s4"`), []int{0, 4}, false},
-		{"the last alias names the library", beside(`"s5"`), []int{5}, false},
-		{"an alias past the request names the environment", beside(`"s6"`), nil, true},
+		{"the last alias names the blog", beside(`"s6"`), []int{6}, false},
+		{"an alias past the request names the environment", beside(`"s7"`), nil, true},
 		{"a path that is no alias names the environment", beside(`"domains"`), nil, true},
 		{"an in-range and an out-of-range alias name only the real service", beside(`"s1"`, `"s9"`), []int{1}, false},
 	} {
@@ -423,7 +424,7 @@ func wrapData(d map[string]string, backwards bool) string {
 	return `{"data":{` + strings.Join(parts, ",") + `}}`
 }
 
-// goodAliases is the six aliases s0..s5 in urlsServices order; override[i] replaces alias i.
+// goodAliases is the seven aliases s0..s6 in urlsServices order; override[i] replaces alias i.
 func goodAliases(t *testing.T, override map[int]string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -440,7 +441,7 @@ func goodAliases(t *testing.T, override map[int]string) map[string]string {
 func TestDiscoverURLs_VerbatimResponses(t *testing.T) {
 	gen := func(i int) []string { return urlsServices[i].generated }
 	extra := goodAliases(t, nil)
-	extra["s6"] = domainsJSON(t, []string{"stray.ascomply.test"}, nil)
+	extra["s7"] = domainsJSON(t, []string{"stray.ascomply.test"}, nil)
 	extra["s99"] = `null`
 	extra["gateway"] = domainsJSON(t, []string{"named-alias.ascomply.test"}, nil)
 	cases := []struct {
@@ -514,7 +515,7 @@ func TestDiscoverURLs_UnusableResponseRefuses(t *testing.T) {
 		{"data a string", func(*testing.T) string { return `{"data":"oops"}` }},
 		{"a top-level array", func(*testing.T) string { return `[]` }},
 		{"the first alias is missing", func(t *testing.T) string { return wrapData(without(t, "s0"), false) }},
-		{"the last alias is missing", func(t *testing.T) string { return wrapData(without(t, "s5"), false) }},
+		{"the last alias is missing", func(t *testing.T) string { return wrapData(without(t, "s6"), false) }},
 		{"an alias is an empty object", func(t *testing.T) string {
 			d := good(t)
 			d["s3"] = `{}`
@@ -735,7 +736,7 @@ func jobOutputs(j workflowJob) map[string]string {
 	return out
 }
 
-func TestDevEnvYmlURLsStepWritesTheSixOutputs(t *testing.T) {
+func TestDevEnvYmlURLsStepWritesTheSevenOutputs(t *testing.T) {
 	yml := readWorkflow(t, "dev-env.yml")
 	var prep *workflowJob
 	for _, j := range workflowJobsOf(yml) {
@@ -846,6 +847,9 @@ func TestDevEnvYmlURLsStepWritesTheSixOutputs(t *testing.T) {
 		if want := "${{ needs.prepare-env.outputs.library_url }}"; env["LIBRARY_URL"] != want {
 			t.Errorf("job %s env LIBRARY_URL = %q, want %q", name, env["LIBRARY_URL"], want)
 		}
+		if want := "${{ needs.prepare-env.outputs.blog_url }}"; env["BLOG_URL"] != want {
+			t.Errorf("job %s env BLOG_URL = %q, want %q", name, env["BLOG_URL"], want)
+		}
 	}
 }
 
@@ -871,7 +875,7 @@ func jobEnv(j workflowJob) map[string]string {
 	return out
 }
 
-// The topology job takes the library URL and the baked-URL oracles, and its guard step refuses each empty.
+// The topology job takes the library and blog URLs and the baked-URL oracles, and its guard step refuses each empty.
 func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 	var job *workflowJob
 	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
@@ -885,6 +889,7 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 	env := jobEnv(*job)
 	for k, want := range map[string]string{
 		"LIBRARY_URL":       "${{ needs.e2e.outputs.library_url }}",
+		"BLOG_URL":          "${{ needs.e2e.outputs.blog_url }}",
 		"BAKED_APP_URL":     "${{ needs.prepare-env.outputs.app_url }}",
 		"BAKED_LANDING_URL": "${{ needs.prepare-env.outputs.landing_url }}",
 		"BAKED_LIBRARY_URL": "${{ needs.prepare-env.outputs.library_url }}",
@@ -903,7 +908,7 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 	if run == "" {
 		t.Fatal("control: topology has no step with id targets")
 	}
-	vars := []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BAKED_APP_URL", "BAKED_LANDING_URL", "BAKED_LIBRARY_URL"}
+	vars := []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BLOG_URL", "BAKED_APP_URL", "BAKED_LANDING_URL", "BAKED_LIBRARY_URL"}
 	guard := func(empty string) (string, error) {
 		cmd := exec.Command("bash", "-c", run)
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
@@ -918,7 +923,7 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 		return string(out), err
 	}
 	if out, err := guard(""); err != nil {
-		t.Errorf("all nine set: guard failed: %v %q", err, out)
+		t.Errorf("all ten set: guard failed: %v %q", err, out)
 	}
 	for _, v := range vars {
 		out, err := guard(v)

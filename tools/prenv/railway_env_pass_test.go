@@ -1061,7 +1061,7 @@ var afterConfirmations = []string{
 	"gateway ENVIRONMENT=development confirmed",
 }
 
-// afterFleet is the 16 services fork-vars-after-urls reads: auth and the 15 Sentry services.
+// afterFleet is the 17 services fork-vars-after-urls reads: auth and the 16 Sentry services.
 func afterFleet() []string { return slices.Concat([]string{"auth"}, sentryBackends, sentrySPAs) }
 
 func afterIDs() []string {
@@ -1159,8 +1159,12 @@ func requireConfirmed(t *testing.T, out string, lines ...string) {
 	}
 }
 
+// A literal-valued blog needs no delete, so the pass makes no varsDelete call.
 func TestForkVarsAfterURLs_FreshForkMakesFiveCalls(t *testing.T) {
-	s := newAfterShim(t, afterProdStores())
+	stores := afterProdStores()
+	stores[sentrySvcID("blog")]["VITE_SENTRY_DSN"] = sentryDSNSentinel
+	stores[sentrySvcID("blog")]["SENTRY_AUTH_TOKEN"] = sentryTokenSentinel
+	s := newAfterShim(t, stores)
 	out, code := runAfter(t, s)
 	if code != 0 {
 		t.Errorf("exit %d, want 0; output = %q", code, clip(out))
@@ -1171,10 +1175,43 @@ func TestForkVarsAfterURLs_FreshForkMakesFiveCalls(t *testing.T) {
 	}
 }
 
+// The blog's inherited references take one batched delete between the write and the one re-read.
+func TestForkVarsAfterURLs_InheritedReferencesAddOneDelete(t *testing.T) {
+	s := newAfterShim(t, afterProdStores())
+	out, code := runAfter(t, s)
+	if code != 0 {
+		t.Errorf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	want := []string{"envList", "settle", "varsRead", "varsWrite", "varsDelete", "varsRead"}
+	if got := operations(s.calls(t)); !slices.Equal(got, want) {
+		t.Errorf("Railway calls = %v, want %v", got, want)
+	}
+	if h, ok := heldLines(out)["blog"]; ok {
+		t.Errorf("blog held line = %q, want none: its URL differs and its references are deleted, not held", h)
+	}
+}
+
+// A deleted name is neither held nor written: blog holds 1 of 3, not 3 of 3.
+func TestForkVarsAfterURLs_DeletedNamesAreNotCountedAsHeld(t *testing.T) {
+	stores := afterProdStores()
+	stores[sentrySvcID("blog")]["VITE_LANDING_URL"] = batchLandingURL
+	s := newAfterShim(t, stores)
+	out, code := runAfter(t, s)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
+	}
+	if got, want := heldLines(out)["blog"], "1 of 3"; got != want {
+		t.Errorf("blog held line = %q, want %q", got, want)
+	}
+	if bw := writesTo(collectionWrites(t, s), sentrySvcID("blog")); len(bw) != 0 {
+		t.Errorf("blog was written %v, want none: its URL holds and its references are deleted", writeNames(bw))
+	}
+}
+
 func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {
 	intended := afterIntended()
-	if len(intended) != 16 {
-		t.Fatalf("control: the settled fork has %d services, want 16", len(intended))
+	if len(intended) != 17 {
+		t.Fatalf("control: the settled fork has %d services, want 17", len(intended))
 	}
 	s := newAfterShim(t, intended)
 	out, code := runAfter(t, s)
@@ -1185,8 +1222,8 @@ func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {
 		t.Errorf("Railway calls = %v, want %v: nothing differs, so no write and no re-read", got, want)
 	}
 	held := heldLines(out)
-	if len(held) != 16 {
-		t.Errorf("%d held lines, want 16 (one per service); held = %v", len(held), held)
+	if len(held) != 17 {
+		t.Errorf("%d held lines, want 17 (one per service); held = %v", len(held), held)
 	}
 	for _, n := range afterFleet() {
 		want := strconv.Itoa(len(intended[sentrySvcID(n)]))
@@ -1211,12 +1248,12 @@ func TestForkVarsAfterURLs_ReadCoversEveryServiceOnce(t *testing.T) {
 		t.Fatalf("%d varsRead calls, want 2: the read and the re-read", len(reads))
 	}
 	want := afterIDs()
-	if len(want) != 16 {
-		t.Fatalf("control: the expected service set has %d ids, want 16", len(want))
+	if len(want) != 17 {
+		t.Fatalf("control: the expected service set has %d ids, want 17", len(want))
 	}
 	for i, c := range reads {
 		got := readServices(c)
-		if len(got) != 16 || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+		if len(got) != 17 || !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
 			t.Errorf("varsRead %d asks for %v, want each of %v exactly once (gateway once)", i+1, got, want)
 		}
 		if !regexp.MustCompile(`unrendered:\s*true`).MatchString(c.Query) {
@@ -1568,7 +1605,7 @@ func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
 			row{sp, "VITE_SENTRY_DSN", afterBadVal, sentryLine, "is SET"},
 			row{sp, "SENTRY_AUTH_TOKEN", afterBadVal, sentryLine, "is SET"})
 	}
-	if len(rows) != 18+6+10+10 {
+	if len(rows) != 18+6+10+12 {
 		t.Fatalf("control: %d rows, want one per verdict", len(rows))
 	}
 	for _, r := range rows {
@@ -1576,7 +1613,7 @@ func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
 			s := newAfterShim(t, afterProdStores())
 			s.bendReRead(t, sentrySvcID(r.svc), `.`+r.name+` = "`+r.bad+`"`)
 			out, code := runAfter(t, s)
-			if want := []string{"envList", "settle", "varsRead", "varsWrite", "varsRead"}; !slices.Equal(operations(s.calls(t)), want) {
+			if want := []string{"envList", "settle", "varsRead", "varsWrite", "varsDelete", "varsRead"}; !slices.Equal(operations(s.calls(t)), want) {
 				t.Fatalf("Railway calls = %v, want %v: the bend is on the re-read", operations(s.calls(t)), want)
 			}
 			if code != 1 {
@@ -1641,6 +1678,7 @@ func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
 		{"landing", "VITE_LIBRARY_URL", urls[5]},
 		{"library", "VITE_APP_URL", urls[1]},
 		{"library", "VITE_LANDING_URL", urls[2]},
+		{"blog", "VITE_LANDING_URL", urls[2]},
 		{"landing", "VITE_SUPPORT_URL", urls[4]},
 		{"landing", "VITE_OPS_URL", urls[3]},
 		{"ops-console", "VITE_LANDING_URL", urls[2]},
@@ -1671,8 +1709,8 @@ func TestForkVarsAfterURLs_FatalRateLimitNamesItsWait(t *testing.T) {
 		}
 		requireWaitNamed(t, out, `429`, `\b601\b`, `\b600\b`)
 		ws := passWrites(t, s)
-		if len(ws) < 16 {
-			t.Fatalf("control: the write carries %d service(s), want 16", len(ws))
+		if len(ws) < 17 {
+			t.Fatalf("control: the write carries %d service(s), want 17", len(ws))
 		}
 		line := requireNamedIn(t, errorLines(out), "The batched variable write", "failed for")
 		for _, w := range ws {

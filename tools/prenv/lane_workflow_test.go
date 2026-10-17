@@ -61,7 +61,7 @@ func TestCIChangesPublishesThePRLane(t *testing.T) {
 
 func TestCILibraryJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 	fe := ciJob(t, "frontend")
-	const feWant = "needs.changes.outputs.frontend == 'true' && needs.changes.outputs.lane != 'library'"
+	const feWant = "needs.changes.outputs.frontend == 'true' && needs.changes.outputs.lane != 'library' && needs.changes.outputs.lane != 'blog'"
 	if feIf, _ := jobKey(fe, "if"); feIf != feWant {
 		t.Errorf("frontend if = %q, want %q", feIf, feWant)
 	}
@@ -102,6 +102,71 @@ func TestCILibraryJobReplacesFrontendOnTheSmallLane(t *testing.T) {
 		if !slices.Contains(runs, want) {
 			t.Errorf("library steps lack %q; runs = %v", want, runs)
 		}
+	}
+}
+
+func TestCIBlogJobReplacesFrontendOnTheSmallLane(t *testing.T) {
+	fe := ciJob(t, "frontend")
+	const feWant = "needs.changes.outputs.frontend == 'true' && needs.changes.outputs.lane != 'library' && needs.changes.outputs.lane != 'blog'"
+	if feIf, _ := jobKey(fe, "if"); feIf != feWant {
+		t.Errorf("frontend if = %q, want %q", feIf, feWant)
+	}
+	j := ciJob(t, "blog")
+	if v, _ := jobKey(j, "name"); v != "Blog" {
+		t.Errorf("blog name = %q, want Blog", v)
+	}
+	if got := jobList(j, "needs"); got != nil {
+		t.Errorf("blog needs list = %v, want the scalar form", got)
+	}
+	if v, _ := jobKey(j, "needs"); v != "changes" {
+		t.Errorf("blog needs = %q, want changes", v)
+	}
+	if v, _ := jobKey(j, "if"); v != "needs.changes.outputs.lane == 'blog'" {
+		t.Errorf("blog if = %q", v)
+	}
+	var runs []string
+	steps := j.steps()
+	if len(steps) == 0 {
+		t.Fatal("blog job has no steps")
+	}
+	for _, s := range steps {
+		for _, k := range []string{"if", "continue-on-error"} {
+			if v, ok := s.keys[k]; ok {
+				t.Errorf("blog step %v has %s: %q, want none", s.keys, k, v)
+			}
+		}
+		if r := s.keys["run"]; r != "" {
+			runs = append(runs, r)
+		}
+	}
+	for _, want := range []string{
+		"pnpm --filter @invoice-os/blog test",
+		"pnpm --filter @invoice-os/blog build",
+		"pnpm --filter @invoice-os/monitoring test",
+		"pnpm --filter @invoice-os/e2e test:unit",
+	} {
+		if !slices.Contains(runs, want) {
+			t.Errorf("blog steps lack %q; runs = %v", want, runs)
+		}
+	}
+}
+
+func TestCIRollupRequiresTheBlogJob(t *testing.T) {
+	ci := ciJob(t, "ci")
+	if !slices.Contains(jobList(ci, "needs"), "blog") {
+		t.Errorf("ci needs = %v, want blog in it", jobList(ci, "needs"))
+	}
+	var run string
+	for _, s := range ci.steps() {
+		run += s.keys["run"] + "\n"
+	}
+	const guard = `if [ "${{ needs.blog.result }}" = "failure" ] || [ "${{ needs.blog.result }}" = "cancelled" ]; then` +
+		"\n" + `echo "::error::Blog job failed"; exit 1` + "\n" + "fi"
+	if !strings.Contains(run, guard) {
+		t.Errorf("ci run lacks the failure-or-cancelled exit for needs.blog.result:\n%s", run)
+	}
+	if !strings.Contains(run, `echo "blog:          ${{ needs.blog.result }}"`) {
+		t.Errorf("ci run does not echo needs.blog.result:\n%s", run)
 	}
 }
 
@@ -272,6 +337,82 @@ func TestDevEnvLibraryScopeSkipsTheFleetChain(t *testing.T) {
 		if !slices.Contains(jobList(devEnvJob(t, job), "needs"), dep) {
 			t.Errorf("%s needs = %v, want %s: the library scope would not skip it", job, jobList(devEnvJob(t, job), "needs"), dep)
 		}
+	}
+}
+
+func TestDevEnvBlogScopeSkipsTheFleetChain(t *testing.T) {
+	gw := devEnvJob(t, "deploy-gateway")
+	cond, _ := jobKey(gw, "if")
+	for _, want := range []string{"needs.changes.outputs.scope != 'blog'", "needs.changes.outputs.scope != 'library'"} {
+		if !strings.Contains(cond, want) {
+			t.Errorf("deploy-gateway if: %q lacks %q", cond, want)
+		}
+	}
+	for job, dep := range map[string]string{
+		"health-gate": "deploy-gateway", "deploy-context": "health-gate", "deploy-spas": "health-gate",
+		"fleet-gate": "deploy-context", "spa-build-gate": "deploy-spas",
+	} {
+		if !slices.Contains(jobList(devEnvJob(t, job), "needs"), dep) {
+			t.Errorf("%s needs = %v, want %s: the blog scope would not skip it", job, jobList(devEnvJob(t, job), "needs"), dep)
+		}
+	}
+}
+
+func TestDevEnvDeployBlogDeploysOnlyTheBlog(t *testing.T) {
+	j := devEnvJob(t, "deploy-blog")
+	cond, _ := jobKey(j, "if")
+	for _, want := range []string{
+		"github.event_name == 'push'", "needs.changes.outputs.scope == 'blog'",
+		"needs.await-ci.result == 'success'", "needs.prepare-env.result == 'success'",
+	} {
+		if !strings.Contains(cond, want) {
+			t.Errorf("deploy-blog if: %q lacks %q", cond, want)
+		}
+	}
+	for _, dep := range []string{"changes", "await-ci", "prepare-env"} {
+		if !slices.Contains(jobList(j, "needs"), dep) {
+			t.Errorf("deploy-blog needs = %v, want %s", jobList(j, "needs"), dep)
+		}
+	}
+	if name, _ := jobKey(j, "name"); name != "Deploy blog (small lane) → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}" {
+		t.Errorf("deploy-blog name = %q", name)
+	}
+	var ups []string
+	var upEnv map[string]string
+	for _, s := range j.steps() {
+		if strings.Contains(s.keys["run"], "railway-up-ci.sh") {
+			ups = append(ups, s.keys["run"])
+			upEnv = s.env
+		}
+	}
+	if len(ups) != 1 || ups[0] != "sh scripts/ci/railway-up-ci.sh blog" {
+		t.Errorf("deploy-blog railway-up-ci.sh calls = %v, want exactly one with blog", ups)
+	}
+	if upEnv["RAILWAY_API_TOKEN"] != "${{ secrets.RAILWAY_API_TOKEN }}" || upEnv["RAILWAY_ENVIRONMENT"] != "${{ needs.prepare-env.outputs.environment }}" {
+		t.Errorf("deploy-blog railway up env = %v", upEnv)
+	}
+}
+
+func TestDevEnvBlogBuildGateChecksTheBlogBuild(t *testing.T) {
+	j := devEnvJob(t, "blog-build-gate")
+	if !slices.Contains(jobList(j, "needs"), "deploy-blog") {
+		t.Errorf("blog-build-gate needs = %v, want deploy-blog", jobList(j, "needs"))
+	}
+	var waits []string
+	for _, s := range j.steps() {
+		if strings.Contains(s.keys["run"], "wait-spa-builds.sh") {
+			waits = append(waits, s.keys["run"])
+		}
+	}
+	if len(waits) != 1 || waits[0] != `bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$BLOG_URL"` {
+		t.Errorf("blog-build-gate waits = %v", waits)
+	}
+	if cond, _ := jobKey(j, "if"); cond != "needs.deploy-blog.result == 'success'" {
+		t.Errorf("blog-build-gate if: %q, want it to run only after a successful deploy-blog", cond)
+	}
+	env := jobEnv(j)
+	if env["EXPECTED_BUILD"] != "${{ github.sha }}" || env["BLOG_URL"] != "${{ needs.prepare-env.outputs.blog_url }}" {
+		t.Errorf("blog-build-gate env = %v", env)
 	}
 }
 

@@ -8,12 +8,12 @@ const codeLines = (dockerfile: string) =>
   dockerfile.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'))
 
 // Monitored SPAs that never call the gateway, so their image bakes no VITE_GATEWAY_URL.
-const NO_GATEWAY = ['library']
+const NO_GATEWAY = ['library', 'blog']
 
 describe('dockerfiles', () => {
   it('dockerfiles_everyMonitoredSpaBakesTheDsnAndReleaseFallback', () => {
     const monitored = monitoredSpas()
-    expect(monitored).toEqual(['app', 'landing', 'library', 'ops-console', 'support-console'])
+    expect(monitored).toEqual(['app', 'blog', 'landing', 'library', 'ops-console', 'support-console'])
 
     // Control: the line finder sees a pre-existing app ARG, so a miss below is a real miss.
     const appLines = codeLines(readFileSync(join(FRONTEND, 'app/Dockerfile'), 'utf8'))
@@ -79,9 +79,19 @@ describe('dockerfiles', () => {
     expect(swap(library, 'x')).toEqual(swap(landing, 'x'))
   })
 
+  it('dockerfiles_theBlogRailwayJsonIsLandingsButForTheDockerfilePath', () => {
+    const read = (n: string) => JSON.parse(readFileSync(join(FRONTEND, n, 'railway.json'), 'utf8'))
+    const landing = read('landing')
+    expect(landing.build.dockerfilePath).toBe('frontend/landing/Dockerfile')
+    const blog = read('blog')
+    expect(blog.build.dockerfilePath).toBe('frontend/blog/Dockerfile')
+    const swap = (j: { build: object }, dockerfilePath: string) => ({ ...j, build: { ...j.build, dockerfilePath } })
+    expect(swap(blog, 'x')).toEqual(swap(landing, 'x'))
+  })
+
   it('dockerfiles_theAuthTokenReachesOnlyTheBuildStage', () => {
     const monitored = monitoredSpas()
-    expect(monitored).toEqual(['app', 'landing', 'library', 'ops-console', 'support-console'])
+    expect(monitored).toEqual(['app', 'blog', 'landing', 'library', 'ops-console', 'support-console'])
 
     for (const name of monitored) {
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))

@@ -66,7 +66,10 @@ func TestSPAListsMatchTheDeployedFleet(t *testing.T) {
 			t.Errorf("control: %s does not use %s", fn, idVar("landing"))
 		}
 	}
-	if labels := localLabels(body("cmd_discover_urls")); !slices.Contains(labels, "library") {
-		t.Errorf("discover-urls labels %v do not hold `library`", labels)
+	labels := localLabels(body("cmd_discover_urls"))
+	for _, spa := range spas {
+		if !slices.Contains(labels, spa) {
+			t.Errorf("discover-urls labels %v do not hold `%s`", labels, spa)
+		}
 	}
 }

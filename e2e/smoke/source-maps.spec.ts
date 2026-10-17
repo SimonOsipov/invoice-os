@@ -9,6 +9,7 @@ const TARGETS = [
   { name: 'ops-console', env: 'OPS_CONSOLE_URL' },
   { name: 'support-console', env: 'SUPPORT_CONSOLE_URL' },
   { name: 'library', env: 'LIBRARY_URL' },
+  { name: 'blog', env: 'BLOG_URL' },
 ]
 
 const SCRIPT_REF = /(?:src|href)="(\/assets\/[^"]+\.js)"/g

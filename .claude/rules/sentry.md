@@ -15,7 +15,8 @@ paths:
 - Set the Sentry variables in the Railway production environment only.
 - Never seal a Sentry variable. A sealed variable does not fork, and `audit-sealed-variables` fails every PR run.
 - Never write a Sentry variable through `upsert_variable`. It echoes values.
-- Blank every Sentry DSN in PR forks with `set-sentry-off`. `fleet-gate` then sees `sentry` `off`.
+- Clear every Sentry variable in PR forks with `set-sentry-off`. `fleet-gate` then sees `sentry` `off`.
+- Expect `set-sentry-off` to delete a variable that holds a reference. Railway keeps a reference over `""`. `TestSetSentryOffDeletesInheritedReferences` pins it.
 - Exempt only `auth` from the Sentry fleet gate. GoTrue has no Sentry SDK.
 - Keep the test-event fingerprint `["sentry-test-event", <service>]`. A repeat joins the same issue.
 - Fire `SENTRY_TEST_EVENT` only on exactly the value `true`. `1`, `True` and `yes` do nothing.

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -81,7 +82,7 @@ func TestReconcileURLVariablesSetsAndVerifiesLandingGateway(t *testing.T) {
 
 // Every label's plan line names the id of the service of that name.
 func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
-	known := map[string]bool{"gateway": true, "app": true, "landing": true, "ops-console": true, "support-console": true, "library": true}
+	known := map[string]bool{"gateway": true, "app": true, "landing": true, "ops-console": true, "support-console": true, "library": true, "blog": true}
 	resolved := map[string]string{}
 	for _, m := range serviceIDByName.FindAllStringSubmatch(strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n"), -1) {
 		resolved[m[1]] = m[2]
@@ -108,7 +109,7 @@ func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 	if landingLines == 0 {
 		t.Fatalf("control: no landing-labelled call parsed")
 	}
-	if len(resolved) < 6 {
+	if len(resolved) < 7 {
 		t.Fatalf("control: %d service ids resolved by name in reconcile_url_variables (%v), want one per service", len(resolved), resolved)
 	}
 
@@ -146,6 +147,22 @@ func TestReconcileURLVariablesWritesTheLibraryURLs(t *testing.T) {
 	}
 }
 
+func TestReconcileURLVariablesWritesTheBlogURLs(t *testing.T) {
+	got := map[string]map[string]string{}
+	for _, c := range reconcileCalls(t) {
+		if got[c.label] == nil {
+			got[c.label] = map[string]string{}
+		}
+		got[c.label][c.name] = c.value
+	}
+	if want := map[string]string{"VITE_LANDING_URL": "$landing_url"}; !reflect.DeepEqual(got["blog"], want) {
+		t.Errorf("blog row = %v, want exactly %v", got["blog"], want)
+	}
+	if len(got["library"]) != 2 {
+		t.Errorf("control: library row = %v, want its two variables", got["library"])
+	}
+}
+
 func TestReconcileURLVariablesWritesTheConsoleHandoffURLs(t *testing.T) {
 	got := map[string]map[string]string{}
 	for _, c := range reconcileCalls(t) {
@@ -178,6 +195,9 @@ func TestReconcileURLVariablesKeepsTheLibraryOutOfCORS(t *testing.T) {
 		}
 		if strings.Contains(c.value, "library") {
 			t.Errorf("gateway write %s=%s names the library URL", c.name, c.value)
+		}
+		if strings.Contains(c.value, "blog") {
+			t.Errorf("gateway write %s=%s names the blog URL", c.name, c.value)
 		}
 		if c.name == "CORS_ALLOWED_ORIGINS" && c.value == "$origins" {
 			cors++

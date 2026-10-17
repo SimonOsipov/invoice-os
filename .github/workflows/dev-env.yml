@@ -121,6 +121,7 @@ env:
   RAILWAY_SVC_OPS_CONSOLE_ID: 00df2247-ee57-4722-a663-c7d3a29e2cdd
   RAILWAY_SVC_SUPPORT_CONSOLE_ID: 33a90fdc-a812-4807-837c-9c62593d6f41
   RAILWAY_SVC_LIBRARY_ID: 0308aa95-0ec1-4616-a6fe-647f1374686b
+  RAILWAY_SVC_BLOG_ID: 90f24d72-f522-4e9f-a93d-2b75f50f8f32
   # M4-21-10: the Postgres service id — same stable-resource-id pattern as above. No CI job resolves
   # a DSN with it anymore (M4-22-08); railway-env.sh still uses it for the Postgres volume.
   RAILWAY_SVC_POSTGRES_ID: 98723af0-50ca-42a4-a56a-3e0438b9ce8a
@@ -321,6 +322,7 @@ jobs:
       ops_console_url: ${{ steps.urls.outputs.ops_console_url }}
       support_console_url: ${{ steps.urls.outputs.support_console_url }}
       library_url: ${{ steps.urls.outputs.library_url }}
+      blog_url: ${{ steps.urls.outputs.blog_url }}
     steps:
       - uses: actions/checkout@v4
       # Still required: `prenv name` is the ONLY environment-name constructor in
@@ -371,7 +373,7 @@ jobs:
 
       # --- STEP SEAM (M4-23-04) ---------------------------------------------
       # Fork reconciliation is inserted HERE, between `resolve` and `urls`, as a
-      # pure insertion: `urls` DISCOVERS the 6 public domains and fails if any is
+      # pure insertion: `urls` DISCOVERS the 7 public domains and fails if any is
       # missing, so anything that has to make them exist must run before it and
       # after the environment exists. Do not merge these into either neighbour.
       #
@@ -1024,6 +1026,7 @@ jobs:
       OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
       SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
       LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
+      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
     steps:
       - uses: actions/checkout@v4
       - name: Wait for SPA /health on the commit under test
@@ -1075,6 +1078,7 @@ jobs:
       OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
       SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
       LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
+      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
     outputs:
       shards: ${{ steps.shards.outputs.shards }}
       app_url: ${{ steps.urls.outputs.app_url }}

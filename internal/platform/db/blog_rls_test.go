@@ -189,6 +189,16 @@ func TestRLS_BlogGrantsAreTheFourVerbs(t *testing.T) {
 				t.Errorf("invoice_app %s on %s = %t, want %t", priv, tbl, got, want)
 			}
 		}
+		if n := blogCount(t, `SELECT count(*) FROM pg_class c, aclexplode(c.relacl) a WHERE c.oid = to_regclass($1) AND a.grantee = 'invoice_app'::regrole`, "public."+tbl); n != 4 {
+			t.Errorf("invoice_app ACL entries on %s = %d, want 4", tbl, n)
+		}
+		// PUBLIC (grantee 0) and every other role count here; the owner's own entry does not.
+		if n := blogCount(t, `SELECT count(*) FROM pg_class c, aclexplode(c.relacl) a WHERE c.oid = to_regclass($1) AND a.grantee NOT IN (c.relowner, 'invoice_app'::regrole)`, "public."+tbl); n != 0 {
+			t.Errorf("%d ACL entries on %s go to a role other than the owner and invoice_app, want 0", n, tbl)
+		}
+		if n := blogCount(t, `SELECT count(*) FROM pg_attribute WHERE attrelid = to_regclass($1) AND attacl IS NOT NULL`, "public."+tbl); n != 0 {
+			t.Errorf("%s holds %d column-level grants, want 0", tbl, n)
+		}
 	}
 }
 
@@ -367,9 +377,11 @@ func TestRLS_BlogPostRefusesBlankTitleAndUnknownStatus(t *testing.T) {
 	blank.id, blank.title = prefix+"-blank", "  "
 	blogWantRefused(t, "blank title", blank.insert(), "23514", "")
 
-	status := ok
-	status.id, status.status = prefix+"-status", "archived"
-	blogWantRefused(t, "status archived", status.insert(), "23514", "")
+	// A complete row, so blog_posts_published_complete cannot be the refusing constraint.
+	blogMustCategory(t, prefix+"-c", "Status "+prefix)
+	status := blogComplete(prefix+"-status", prefix+"-c")
+	status.status = "archived"
+	blogWantRefused(t, "status archived", status.insert(), "23514", "blog_posts_status_check")
 
 	idOnly := ok
 	idOnly.id, idOnly.authorID = prefix+"-pair", uuid.NewString()
@@ -675,8 +687,9 @@ func TestRLS_BlogAuthorsListEachPersonOnceFromTheirOldestActiveMembership(t *tes
 	actor := seedCommittedMembership(t, house, "reviewer", "active")
 	// Also in tenant A, older and active: the older row names the person (D-26).
 	both := blogSeedMember(t, house, "active", blogStr("Newer "+r), "newer-"+r+"@ascomply.invalid")
-	// Also in tenant A, older but suspended: the active house row names the person.
+	// Also in tenant A, older but suspended or invited: the active house row names the person.
 	oldSuspended := blogSeedMember(t, house, "active", blogStr("House "+r), "house-"+r+"@ascomply.invalid")
+	oldInvited := blogSeedMember(t, house, "active", blogStr("Home "+r), "home-"+r+"@ascomply.invalid")
 	older := func(user, status, name string) {
 		t.Helper()
 		id := uuid.NewString()
@@ -690,6 +703,7 @@ func TestRLS_BlogAuthorsListEachPersonOnceFromTheirOldestActiveMembership(t *tes
 	}
 	older(both, "active", "Older"+r)
 	older(oldSuspended, "suspended", "Gone"+r)
+	older(oldInvited, "invited", "Pending"+r)
 
 	got, err := blogCallAuthors(actor)
 	if err != nil {
@@ -704,6 +718,9 @@ func TestRLS_BlogAuthorsListEachPersonOnceFromTheirOldestActiveMembership(t *tes
 	}
 	if len(rows[oldSuspended]) != 1 || rows[oldSuspended][0].name == nil || *rows[oldSuspended][0].name != "House "+r {
 		t.Errorf("person with an older suspended membership = %+v, want one row named %q", rows[oldSuspended], "House "+r)
+	}
+	if len(rows[oldInvited]) != 1 || rows[oldInvited][0].name == nil || *rows[oldInvited][0].name != "Home "+r {
+		t.Errorf("person with an older invited membership = %+v, want one row named %q", rows[oldInvited], "Home "+r)
 	}
 }
 

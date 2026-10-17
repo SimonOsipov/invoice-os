@@ -1321,7 +1321,7 @@ func TestRouter_InternalPathRawRequestLinesNeverReachUpstream(t *testing.T) {
 }
 
 // Near misses of the internal segment still proxy: only a path that resolves to "internal" first is refused.
-// Each request must reach the upstream once and never its /internal route, with and without the mux's cleaning (CONNECT).
+// GET reaches the upstream once, never its /internal route. CONNECT skips the mux's cleaning, but ReverseProxy refuses it (Go 1.26.9).
 func TestRouter_InternalNearMissesStillProxy(t *testing.T) {
 	rig := newInternalRig(t)
 	token := rig.tg.validToken(t)
@@ -1339,9 +1339,17 @@ func TestRouter_InternalNearMissesStillProxy(t *testing.T) {
 		for _, target := range targets {
 			t.Run(method+" "+target, func(t *testing.T) {
 				c.reset()
-				rig.rawDo(t, method, target, token)
-				if c.any.Load() != 1 || c.internal.Load() != 0 {
-					t.Errorf("upstream saw %d requests and %d /internal hits, want 1 and 0", c.any.Load(), c.internal.Load())
+				status, _ := rig.rawDo(t, method, target, token)
+				wantAny := int32(1)
+				if method == http.MethodConnect {
+					// ReverseProxy refuses CONNECT (502 via the gateway's error handler); the guard's refusal would be 404.
+					wantAny = 0
+					if status != http.StatusBadGateway {
+						t.Errorf("answered %d, want 502 from the proxy", status)
+					}
+				}
+				if c.any.Load() != wantAny || c.internal.Load() != 0 {
+					t.Errorf("upstream saw %d requests and %d /internal hits, want %d and 0", c.any.Load(), c.internal.Load(), wantAny)
 				}
 			})
 		}

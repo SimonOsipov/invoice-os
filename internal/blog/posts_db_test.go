@@ -178,10 +178,22 @@ func TestPosts_CreateCollisionAppendsAndSkipsReserved(t *testing.T) {
 	f := newPostFx(t)
 	_, ctx := staffActor(t, f.super)
 	seedPost(t, f.super, "dup-"+f.r, f.cat, "draft")
-	if p := mustCreate(t, f.s, ctx, draftIn("Dup "+f.r)); p.ID != "dup-"+f.r+"-2" {
-		t.Errorf("id = %q, want dup-%s-2", p.ID, f.r)
+	for _, want := range []string{"dup-" + f.r + "-2", "dup-" + f.r + "-3"} {
+		if p := mustCreate(t, f.s, ctx, draftIn("Dup "+f.r)); p.ID != want {
+			t.Errorf("id = %q, want %s", p.ID, want)
+		}
 	}
-	t.Cleanup(func() { _, _ = f.super.Exec(bg, `DELETE FROM public.blog_posts WHERE id LIKE 'subscribe-%'`) })
+	long := f.r + " " + strings.Repeat("b", 100)
+	first := mustCreate(t, f.s, ctx, draftIn(long))
+	if len(first.ID) != MaxSlugLen || !strings.HasPrefix(first.ID, f.r+"-b") {
+		t.Errorf("long id = %q (%d), want %d chars starting %s-b", first.ID, len(first.ID), MaxSlugLen, f.r)
+	}
+	if again := mustCreate(t, f.s, ctx, draftIn(long)); again.ID != first.ID+"-2" {
+		t.Errorf("second long id = %q, want %s-2", again.ID, first.ID)
+	}
+	t.Cleanup(func() {
+		_, _ = f.super.Exec(bg, `DELETE FROM public.blog_posts WHERE id = 'subscribe' OR id LIKE 'subscribe-%'`)
+	})
 	if p := mustCreate(t, f.s, ctx, draftIn("Subscribe")); p.ID == "subscribe" {
 		t.Errorf("id = %q, a reserved id", p.ID)
 	}
@@ -674,6 +686,9 @@ func TestPosts_DeleteRemovesPostAndCover(t *testing.T) {
 	if _, err := f.s.SetCover(ctx, id, "image/png", []byte{1, 2}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := f.super.Exec(bg, `UPDATE public.blog_posts SET title = $2 WHERE id = $1`, id, "Title "+f.r); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.s.DeletePost(ctx, id); err != nil {
 		t.Fatal(err)
 	}
@@ -681,7 +696,7 @@ func TestPosts_DeleteRemovesPostAndCover(t *testing.T) {
 		t.Errorf("%d rows left", n)
 	}
 	rows := auditRowsOf(t, f.super, actor)
-	wantRow(t, rows[len(rows)-1], EventPostDeleted, map[string]any{"id": id, "title": id, "status": "draft"})
+	wantRow(t, rows[len(rows)-1], EventPostDeleted, map[string]any{"id": id, "title": "Title " + f.r, "status": "draft"})
 	if err := f.s.DeletePost(ctx, id); !errors.Is(err, ErrPostNotFound) {
 		t.Errorf("second delete = %v, want ErrPostNotFound", err)
 	}
@@ -789,5 +804,185 @@ func TestPosts_AuditRowsAreGlobal(t *testing.T) {
 	}
 	if n := count(t, f.super, `SELECT count(*) FROM audit_log a JOIN staff_audit_log s ON a.event = s.event AND a.created_at = s.created_at WHERE s.actor = $1`, actor); n != 0 {
 		t.Errorf("%d audit_log echoes, want 0", n)
+	}
+}
+
+func TestPosts_PublishMissingEachFieldIsA422(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	a := houseMember(t, f.super, adoptHouseTenant(t, f.super), "active", ptr("Writer "+f.r), "w-"+f.r+"@ascomply.invalid")
+	cases := []struct {
+		field, msg string
+		blank      func(*PostInput)
+	}{
+		{"title", MsgTitle, func(in *PostInput) { in.Title = " " }},
+		{"summary", MsgSummary, func(in *PostInput) { in.Summary = " " }},
+		{"category_id", MsgCategory, func(in *PostInput) { in.CategoryID = nil }},
+		{"publish_date", MsgDate, func(in *PostInput) { in.PublishDate = ptr(" ") }},
+		{"author_id", MsgAuthor, func(in *PostInput) { in.AuthorID = nil }},
+		{"body", MsgBody, func(in *PostInput) { in.Body = []Block{{Type: "p", Text: " "}} }},
+	}
+	for _, c := range cases {
+		in := f.pubIn("Miss "+c.field+" "+f.r, a)
+		c.blank(&in)
+		_, err := f.s.CreatePost(ctx, in)
+		var fe *FieldErrors
+		if !errors.As(err, &fe) {
+			t.Fatalf("%s: err = %v, want *FieldErrors", c.field, err)
+		}
+		if !reflect.DeepEqual(fe.Fields, map[string]string{c.field: c.msg}) || fe.Summary != MsgFixToPublish {
+			t.Errorf("%s: fields = %v summary = %q", c.field, fe.Fields, fe.Summary)
+		}
+		if n := count(t, f.super, `SELECT count(*) FROM public.blog_posts WHERE id LIKE $1`, "miss-"+c.field+"-"+f.r+"%"); n != 0 {
+			t.Errorf("%s: %d rows stored", c.field, n)
+		}
+	}
+}
+
+func TestPosts_UnknownCategoryAndAuthorReportBoth(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	in := f.pubIn("Both "+f.r, uuid.NewString())
+	in.CategoryID = ptr("nope-" + f.r)
+	_, err := f.s.CreatePost(ctx, in)
+	want := map[string]string{"category_id": MsgCategory, "author_id": MsgAuthorNotStaff}
+	if got := fieldErrs(t, err); !reflect.DeepEqual(got, want) {
+		t.Errorf("fields = %v, want %v", got, want)
+	}
+}
+
+func TestPosts_UpdateClearsTheAuthor(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	a := houseMember(t, f.super, adoptHouseTenant(t, f.super), "active", ptr("Writer "+f.r), "w-"+f.r+"@ascomply.invalid")
+	in := f.pubIn("Clear "+f.r, a)
+	p := mustCreate(t, f.s, ctx, in)
+	if p.AuthorID == nil || p.AuthorName == nil {
+		t.Fatalf("author not stored: %+v", p)
+	}
+	in.Status, in.AuthorID = "draft", nil
+	got, err := f.s.UpdatePost(ctx, p.ID, in)
+	if err != nil || got.AuthorID != nil || got.AuthorName != nil {
+		t.Errorf("update = %+v, %v; want no author", got, err)
+	}
+}
+
+func TestPosts_CreateFeaturedWithNoPinWritesOnePinRow(t *testing.T) {
+	super, _ := dbPools(t)
+	pinState(t, super)
+	f := newPostFx(t)
+	actor, ctx := staffActor(t, f.super)
+	in := draftIn("Solo " + f.r)
+	in.Featured = true
+	p := mustCreate(t, f.s, ctx, in)
+	if _, err := f.s.UpdatePost(ctx, p.ID, in); err != nil {
+		t.Fatal(err)
+	}
+	if got := events(auditRowsOf(t, f.super, actor)); !slices.Equal(got, []string{EventPostCreated, EventPostPinned, EventPostUpdated}) {
+		t.Errorf("events = %v, want created, pinned, updated (a kept pin writes no pin row)", got)
+	}
+	if ids := featuredIDs(t, f.super); !slices.Equal(ids, []string{p.ID}) {
+		t.Errorf("featured = %v, want %s", ids, p.ID)
+	}
+}
+
+func TestPosts_DeletingTheFeaturedPostLeavesNoPin(t *testing.T) {
+	super, _ := dbPools(t)
+	pinState(t, super)
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	in := draftIn("Gone " + f.r)
+	in.Featured = true
+	p := mustCreate(t, f.s, ctx, in)
+	if err := f.s.DeletePost(ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ids := featuredIDs(t, f.super); len(ids) != 0 {
+		t.Errorf("featured = %v, want none", ids)
+	}
+	q := mustCreate(t, f.s, ctx, in)
+	if ids := featuredIDs(t, f.super); !slices.Equal(ids, []string{q.ID}) {
+		t.Errorf("pin after delete = %v, want %s", ids, q.ID)
+	}
+}
+
+// failAuditAt lets the first n-1 audit writes pass and fails the nth.
+func failAuditAt(t *testing.T, n int) error {
+	t.Helper()
+	orig := recordStaff
+	boom := errors.New("audit down")
+	calls := 0
+	recordStaff = func(ctx context.Context, tx pgx.Tx, e audit.StaffEvent) error {
+		if calls++; calls == n {
+			return boom
+		}
+		return orig(ctx, tx, e)
+	}
+	t.Cleanup(func() { recordStaff = orig })
+	return boom
+}
+
+func TestPosts_APinFailingMidwayKeepsTheOldPin(t *testing.T) {
+	super, _ := dbPools(t)
+	pinState(t, super)
+	f := newPostFx(t)
+	actor, ctx := staffActor(t, f.super)
+	seedPost(t, f.super, "p-"+f.r, f.cat, "draft")
+	seedPost(t, f.super, "q-"+f.r, f.cat, "draft")
+	if _, err := f.super.Exec(bg, `UPDATE public.blog_posts SET featured = true WHERE id = $1`, "p-"+f.r); err != nil {
+		t.Fatal(err)
+	}
+	keptP := func(label string) {
+		t.Helper()
+		if ids := featuredIDs(t, f.super); !slices.Equal(ids, []string{"p-" + f.r}) {
+			t.Errorf("%s: featured = %v, want P kept", label, ids)
+		}
+	}
+	// SetFeatured writes unpinned (1), pinned (2); a featured create writes created (1), unpinned (2), pinned (3).
+	for _, n := range []int{1, 2} {
+		boom := failAuditAt(t, n)
+		if _, err := f.s.SetFeatured(ctx, "q-"+f.r, true); !errors.Is(err, boom) {
+			t.Fatalf("pin, audit write %d: err = %v, want the audit failure", n, err)
+		}
+		keptP("pin")
+		recordStaff = audit.RecordStaff
+	}
+	for _, n := range []int{2, 3} {
+		failAuditAt(t, n)
+		in := draftIn("Newer " + f.r)
+		in.Featured = true
+		if _, err := f.s.CreatePost(ctx, in); err == nil {
+			t.Fatalf("create, audit write %d succeeded, want the audit failure", n)
+		}
+		keptP("create")
+		if c := count(t, f.super, `SELECT count(*) FROM public.blog_posts WHERE title = $1`, in.Title); c != 0 {
+			t.Errorf("failed create kept %d rows", c)
+		}
+		recordStaff = audit.RecordStaff
+	}
+	if rows := auditRowsOf(t, f.super, actor); len(rows) != 0 {
+		t.Errorf("audit rows = %v, want none", events(rows))
+	}
+}
+
+func TestPosts_RemoveCoverAndUpdateRollBackOnAuditFailure(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	seedPost(t, f.super, "p-"+f.r, f.cat, "draft")
+	if _, err := f.s.SetCover(ctx, "p-"+f.r, "image/png", []byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	boom := failAudit(t)
+	if err := f.s.RemoveCover(ctx, "p-"+f.r); !errors.Is(err, boom) {
+		t.Errorf("remove err = %v", err)
+	}
+	if n := count(t, f.super, `SELECT count(*) FROM public.blog_post_covers WHERE post_id = $1`, "p-"+f.r); n != 1 {
+		t.Errorf("cover rows = %d, want the cover kept", n)
+	}
+	if _, err := f.s.UpdatePost(ctx, "p-"+f.r, draftIn("Renamed "+f.r)); !errors.Is(err, boom) {
+		t.Errorf("update err = %v", err)
+	}
+	if n := count(t, f.super, `SELECT count(*) FROM public.blog_posts WHERE id = $1 AND title = $1`, "p-"+f.r); n != 1 {
+		t.Errorf("update kept despite the audit failure")
 	}
 }

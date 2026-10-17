@@ -384,7 +384,25 @@ func (s *Store) RemoveCover(ctx context.Context, id string) error {
 	})
 }
 
-// GetCover is a red-phase stub; the implementation replaces it.
+// GetCover returns the cover's content type and bytes; a read, so no lock and no audit row.
 func (s *Store) GetCover(ctx context.Context, id string) (string, []byte, error) {
-	return "", nil, errors.New("not implemented")
+	if _, err := db.StaffActor(ctx); err != nil {
+		return "", nil, err
+	}
+	var ct *string
+	var b []byte
+	err := db.WithinStaffTx(ctx, s.pool, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT c.content_type, c.bytes FROM public.blog_posts p
+			LEFT JOIN public.blog_post_covers c ON c.post_id = p.id WHERE p.id = $1`, id).Scan(&ct, &b)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil, ErrPostNotFound
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	if ct == nil {
+		return "", nil, ErrCoverNotFound
+	}
+	return *ct, b, nil
 }

@@ -80,6 +80,7 @@ func main() {
 	app.Mux.HandleFunc("DELETE /v1/staff/blog/posts/{id}", blog.DeletePostHandler(blogStore.DeletePost, app.Logger))
 	app.Mux.HandleFunc("PUT /v1/staff/blog/posts/{id}/featured", blog.SetFeaturedHandler(blogStore.SetFeatured, app.Logger))
 	app.Mux.HandleFunc("PUT /v1/staff/blog/posts/{id}/cover", blog.SetCoverHandler(blogStore.SetCover, app.Logger))
+	app.Mux.HandleFunc("GET /v1/staff/blog/posts/{id}/cover", blog.GetCoverHandler(blogStore.GetCover, app.Logger))
 	app.Mux.HandleFunc("DELETE /v1/staff/blog/posts/{id}/cover", blog.RemoveCoverHandler(blogStore.RemoveCover, app.Logger))
 
 	// Stub endpoint — proves the service builds, boots, and routes end to end.

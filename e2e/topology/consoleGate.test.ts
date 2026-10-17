@@ -5,7 +5,13 @@
 // is arithmetic, and lives here.
 import { describe, expect, it } from 'vitest'
 
-import { approvalRun404Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
+import {
+  approvalRun404Dropper,
+  collectSourcedErrors,
+  expectedStatusDropper,
+  notFoundIdDropper,
+  sourcedConsoleError,
+} from './consoleGate'
 
 const APPROVAL_404 = 'Failed to load resource: the server responded with a status of 404 ()'
 const APPROVAL_URL = 'https://gw.test/api/invoice/v1/invoices/9f1c7e2a-0000-0000-0000-000000000001/approval'
@@ -181,5 +187,90 @@ describe('expectedStatusDropper (EXTR27-G1..G3)', () => {
     respond(409, SUPPLY_URL)
     expect(dropper(CONFLICT_409, '')).toBe(true)
     expect(dropper(CONFLICT_409, undefined), 'the budget is exactly one').toBe(false)
+  })
+})
+
+describe('sourcedConsoleError', () => {
+  const T401 = 'Failed to load resource: the server responded with a status of 401 ()'
+
+  it('appends the location url', () => {
+    const out = sourcedConsoleError(T401, 'https://gw.test/api/x', [])
+    expect(out.startsWith(T401)).toBe(true)
+    expect(out).toContain('url: https://gw.test/api/x')
+  })
+
+  it('lists the responses of the status the text names', () => {
+    const out = sourcedConsoleError(T401, '', [
+      '401 POST https://gw.test/auth/sign-out',
+      '404 GET https://gw.test/a',
+      '401 GET https://gw.test/v1/me',
+    ])
+    expect(out).toContain('401 POST https://gw.test/auth/sign-out')
+    expect(out).toContain('401 GET https://gw.test/v1/me')
+    expect(out).not.toContain('404 GET')
+  })
+
+  it('says none seen when no response matches', () => {
+    expect(sourcedConsoleError(T401, '', ['404 GET https://gw.test/a'])).toContain('401 responses: none seen')
+  })
+
+  it('leaves a text with no url and no status unchanged', () => {
+    expect(sourcedConsoleError('Uncaught TypeError: x', '', [])).toBe('Uncaught TypeError: x')
+  })
+})
+
+describe('collectSourcedErrors', () => {
+  const T401 = 'Failed to load resource: the server responded with a status of 401 ()'
+  type Listener = (arg: unknown) => void
+
+  function fake() {
+    const listeners: Record<string, Listener[]> = {}
+    const page = { on: (event: string, fn: Listener) => (listeners[event] ??= []).push(fn) }
+    const emit = (event: string, arg: unknown) => listeners[event]?.forEach((fn) => fn(arg))
+    return {
+      errors: collectSourcedErrors(page as unknown as Parameters<typeof collectSourcedErrors>[0]),
+      response: (status: number, url: string) =>
+        emit('response', { status: () => status, url: () => url, request: () => ({ method: () => 'GET' }) }),
+      consoleMsg: (type: string, text: string, url = '') =>
+        emit('console', { type: () => type, text: () => text, location: () => ({ url }) }),
+      pageError: (message: string) => emit('pageerror', { message }),
+    }
+  }
+
+  it('records a console error with its url and the 401 response seen before it', () => {
+    const f = fake()
+    f.response(401, 'https://gw.test/v1/me')
+    f.consoleMsg('error', T401)
+    expect(f.errors).toHaveLength(1)
+    expect(f.errors[0]).toContain('https://gw.test/v1/me')
+  })
+
+  it('ignores non-error console messages and keeps the pageerror format', () => {
+    const f = fake()
+    f.consoleMsg('warning', 'careful')
+    f.pageError('boom')
+    expect(f.errors).toEqual(['pageerror: boom'])
+  })
+
+  it('rewrites a none-seen entry when its response arrives late', () => {
+    const f = fake()
+    f.consoleMsg('error', T401)
+    expect(f.errors[0]).toContain('none seen')
+    f.response(401, 'https://gw.test/auth/sign-out')
+    expect(f.errors[0]).toContain('https://gw.test/auth/sign-out')
+    expect(f.errors[0]).not.toContain('none seen')
+  })
+
+  it('leaves an entry of another status alone when a response arrives late', () => {
+    const f = fake()
+    f.consoleMsg('error', T401)
+    f.response(404, 'https://gw.test/a')
+    expect(f.errors[0]).toContain('none seen')
+  })
+
+  it('returns an empty array when nothing errs', () => {
+    const f = fake()
+    f.response(200, 'https://gw.test/ok')
+    expect(f.errors).toEqual([])
   })
 })

@@ -61,7 +61,7 @@ export function CustomerFormModal({ mode, customer, ctx, base, onClose, onSucces
   const title = mode === 'create' ? 'Add customer' : 'Edit customer'
 
   async function openExisting() {
-    if (opening || !onOpenExisting || duplicateTin == null) return
+    if (!onOpenExisting || duplicateTin == null) return
     setOpening(true)
     try {
       await onOpenExisting(duplicateTin)

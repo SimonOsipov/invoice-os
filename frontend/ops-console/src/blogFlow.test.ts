@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 
 import { SESSION_KEY } from './auth'
 import type { Author, Category, Post } from './blogApi'
-import { editorOf, newCatForm, newDraft, saveState, type CatForm, type CatUi, type Draft, type EditorState } from './blog'
+import { deleteView, editorOf, newCatForm, newDraft, saveState, type CatForm, type CatUi, type Draft, type EditorState } from './blog'
 import { applyCatMove, applyCatRefresh, applyCatRemove, applyCatSave, applyRemove, applySave, BAD_IMAGE, COVER_TOO_LARGE, keepOnExpire, keepThenExpire, catsAfterRemove, loadBlog, moveCategoryFlow, postsAfterCatRemove, removeCategory, saveCategory, pickCover, pinPost, pinThenRefresh, postsAfterRemove, refreshCategories, removePost, savePost, singleFlight, STAFF_ONLY, trackCover, type CatRemoveOutcome, type CoverPickDeps, type SaveDeps } from './blogFlow'
 import { withSession } from './session'
 
@@ -722,16 +722,38 @@ describe('category move and refresh', () => {
     expect(applyCatMove({ kind: 'failed', message: 'no such category', status: 404 })).toMatchObject({ toast: 'no such category', tone: 'red', reread: true })
   })
 
-  it('refreshCategories and applyCatRefresh', async () => {
-    const ok = await refreshCategories({ fetchCategories: vi.fn().mockResolvedValue([a]) })
-    expect(ok).toEqual({ kind: 'cats', cats: [a] })
-    expect(applyCatRefresh(ok)).toMatchObject({ cats: [a], toast: null, expire: false })
-    const gone = await refreshCategories({ fetchCategories: vi.fn().mockRejectedValue(http(401)) })
+  it('refreshCategories and applyCatRefresh re-read both lists', async () => {
+    const pa = { id: 'p', category_id: 'x' } as Post
+    const both = { fetchCategories: vi.fn().mockResolvedValue([a]), fetchPosts: vi.fn().mockResolvedValue([pa]) }
+    const ok = await refreshCategories(both)
+    expect(ok).toEqual({ kind: 'lists', cats: [a], posts: [pa], error: undefined })
+    expect(applyCatRefresh(ok)).toMatchObject({ cats: [a], posts: [pa], toast: null, expire: false })
+    const gone = await refreshCategories({ ...both, fetchCategories: vi.fn().mockRejectedValue(http(401)) })
     expect(gone).toEqual({ kind: 'expired' })
     expect(applyCatRefresh(gone).expire).toBe(true)
-    const boom = applyCatRefresh(await refreshCategories({ fetchCategories: vi.fn().mockRejectedValue(http(500, 'internal error')) }))
+    expect(await refreshCategories({ ...both, fetchPosts: vi.fn().mockRejectedValue(http(403)) })).toEqual({ kind: 'forbidden' })
+    const boom = applyCatRefresh(await refreshCategories({ fetchCategories: vi.fn().mockRejectedValue(http(500, 'internal error')), fetchPosts: vi.fn().mockRejectedValue(http(500, 'internal error')) }))
     expect(boom).toMatchObject({ toast: 'internal error', tone: 'red', reread: false })
     expect(boom.cats).toBeUndefined()
+  })
+
+  it('a re-read updates posts so the delete confirm flips from no posts to move its N posts', async () => {
+    const cats = [a, { ...a, id: 'b' }]
+    expect(deleteView(cats, [], a.id)).toMatchObject({ kind: 'empty' })
+    const fresh = [{ id: 'p1', category_id: a.id }, { id: 'p2', category_id: a.id }] as Post[]
+    const applied = applyCatRefresh(await refreshCategories({ fetchCategories: vi.fn().mockResolvedValue(cats), fetchPosts: vi.fn().mockResolvedValue(fresh) }))
+    expect(deleteView(applied.cats!, applied.posts!, a.id)).toMatchObject({ kind: 'withposts', text: `Delete ${a.name} and move its 2 posts to:` })
+  })
+
+  it('a failed posts fetch keeps the fresh categories and shows the failure, and the reverse', async () => {
+    const lists = [a]
+    const noPosts = applyCatRefresh(await refreshCategories({ fetchCategories: vi.fn().mockResolvedValue(lists), fetchPosts: vi.fn().mockRejectedValue(http(500, 'posts down')) }))
+    expect(noPosts).toMatchObject({ cats: lists, toast: 'posts down', tone: 'red' })
+    expect(noPosts.posts).toBeUndefined()
+    const posts = [{ id: 'p' }] as Post[]
+    const noCats = applyCatRefresh(await refreshCategories({ fetchCategories: vi.fn().mockRejectedValue(http(500, 'cats down')), fetchPosts: vi.fn().mockResolvedValue(posts) }))
+    expect(noCats).toMatchObject({ posts, toast: 'cats down' })
+    expect(noCats.cats).toBeUndefined()
   })
 })
 

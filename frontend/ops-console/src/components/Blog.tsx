@@ -56,14 +56,14 @@ export function Blog({ filters, onFilters, onToast }: Props) {
 
   const [catUi, setCatUi] = useState<CatUi>({ form: null, del: null })
   const applyCats = (a: ReturnType<typeof applyCatMove>) => {
-    const { cats } = a
-    if (cats) setState((s) => (s.status === 'ready' ? { ...s, cats } : s))
+    const { cats, posts } = a
+    if (cats || posts) setState((s) => (s.status === 'ready' ? { ...s, cats: cats ?? s.cats, posts: posts ?? s.posts } : s))
     if (a.toast) onToast(a.toast, 'BLOG', a.tone)
     if (a.expire) expireOnce()
   }
   const reloadCats = (queue = false) =>
     (queue ? flight.after : flight)(async () => {
-      const a = applyCatRefresh(await refreshCategories({ fetchCategories: () => withSession(fetchCategories) }))
+      const a = applyCatRefresh(await refreshCategories({ fetchCategories: () => withSession(fetchCategories), fetchPosts: () => withSession(fetchPosts) }))
       if (alive.current) applyCats(a)
     })
   const onMoveCat = async (id: string, direction: 'up' | 'down') => {

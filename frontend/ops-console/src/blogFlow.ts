@@ -286,19 +286,20 @@ export async function moveCategoryFlow(deps: { moveCategory: (id: string, direct
   }
 }
 
-export type CatRefreshOutcome = { kind: 'cats'; cats: Category[] } | Exclude<CatMoveOutcome, { kind: 'moved' }>
+export type CatRefreshOutcome = { kind: 'cats'; cats: Category[] } | { kind: 'lists'; cats?: Category[]; posts?: Post[]; error?: string } | Exclude<CatMoveOutcome, { kind: 'moved' }>
 
-export async function refreshCategories(deps: { fetchCategories: () => Promise<Category[]> }): Promise<CatRefreshOutcome> {
-  try {
-    return { kind: 'cats', cats: await deps.fetchCategories() }
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 401) return { kind: 'expired' }
-    if (e instanceof ApiError && e.status === 403) return { kind: 'forbidden' }
-    return { kind: 'failed', message: e instanceof Error ? e.message : 'Could not load the categories' }
-  }
+// Re-reads both lists: the counts come from the posts. One failed fetch keeps the other's fresh list.
+export async function refreshCategories(deps: { fetchCategories: () => Promise<Category[]>; fetchPosts: () => Promise<Post[]> }): Promise<CatRefreshOutcome> {
+  const [c, p] = await Promise.allSettled([deps.fetchCategories(), deps.fetchPosts()])
+  const failures = [c, p].flatMap((r) => (r.status === 'rejected' ? [r.reason] : []))
+  if (failures.some((e) => statusOf(e) === 401)) return { kind: 'expired' }
+  if (failures.some((e) => statusOf(e) === 403)) return { kind: 'forbidden' }
+  const error = failures.length ? (failures[0] instanceof Error ? failures[0].message : 'Could not load the categories') : undefined
+  if (failures.length === 2) return { kind: 'failed', message: error! }
+  return { kind: 'lists', cats: c.status === 'fulfilled' ? c.value : undefined, posts: p.status === 'fulfilled' ? p.value : undefined, error }
 }
 
-export type AppliedCats = { cats?: Category[]; toast: string | null; tone: ToastTone; expire: boolean; reread: boolean }
+export type AppliedCats = { cats?: Category[]; posts?: Post[]; toast: string | null; tone: ToastTone; expire: boolean; reread: boolean }
 
 export function applyCatMove(o: CatMoveOutcome | CatRefreshOutcome): AppliedCats {
   const base: AppliedCats = { toast: null, tone: 'red', expire: false, reread: false }
@@ -306,6 +307,8 @@ export function applyCatMove(o: CatMoveOutcome | CatRefreshOutcome): AppliedCats
     case 'moved':
     case 'cats':
       return { ...base, cats: o.cats }
+    case 'lists':
+      return { ...base, cats: o.cats, posts: o.posts, toast: o.error ?? null }
     case 'expired':
       return { ...base, expire: true }
     case 'forbidden':

@@ -1721,6 +1721,31 @@ test.describe('OPS-06 blog categories', () => {
     await expect(catRow(page, nameA), 'the row did not count the new post').toContainText(/\b1 post\b/)
     expect(catReads.length, 'the count came from a categories re-read').toBe(readsBefore)
 
+    // 8b: a post another staff member wrote. The refused delete re-reads both lists, so the next confirm offers the move.
+    const isRead = (path: string) => (r: { url(): string; request(): { method(): string } }) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith(path)
+    const other = await rawFetch(`${BLOG}/posts`, { method: 'POST', headers: bearer(token), body: { title: `e2e cat other ${hex}`, category_id: b.id, status: 'draft', body: [] } })
+    expect(other.status, 'create the other staff post in B').toBe(201)
+    const otherId = (other.body as { id: string }).id
+    own.posts.push(otherId)
+    await rowButton(catRow(page, nameB), 'Delete').click()
+    await expect(confirm.getByText(`Delete ${nameB}? It has no posts.`, { exact: true }), 'B confirm should still say no posts').toBeVisible()
+    const rereadCats = page.waitForResponse(isRead('/staff/blog/categories'))
+    const rereadPosts = page.waitForResponse(isRead('/staff/blog/posts'))
+    const refused = page.waitForResponse((r) => r.request().method() === 'DELETE' && /\/categories\/[^/]+$/.test(r.url()))
+    await confirm.getByRole('button', { name: 'Delete category', exact: true }).click()
+    expect((await refused).status(), 'the delete of a category with posts was not refused').toBe(422)
+    await Promise.all([rereadCats, rereadPosts])
+    await rowButton(catRow(page, nameB), 'Delete').click()
+    await expect(confirm.getByText(`Delete ${nameB} and move its 1 post to:`, { exact: true }), 'the re-read did not reach the confirm').toBeVisible()
+    await confirm.getByRole('button', { name: 'Cancel', exact: true }).click()
+    expect((await rawFetch(`${BLOG}/posts/${otherId}`, { method: 'DELETE', headers: bearer(token) })).status, 'delete the other staff post').toBeLessThan(300)
+    const backPosts = page.waitForResponse(isRead('/staff/blog/posts'))
+    await pad(page).getByRole('button', { name: /Posts/ }).click()
+    await expect(page.locator('[data-blog-table]'), 'the Posts tab drew no table').toBeVisible()
+    await pad(page).getByRole('button', { name: /Categories/ }).click()
+    await backPosts
+    await expect(catRow(page, nameB), 'B still counts the deleted post').toContainText(/\b0 posts\b/)
+
     // 9
     await rowButton(catRow(page, nameA), 'Delete').click()
     await expect(confirm.getByText(`Delete ${nameA} and move its 1 post to:`, { exact: true }), 'no move-its-post confirm text').toBeVisible()

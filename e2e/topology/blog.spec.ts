@@ -498,6 +498,7 @@ test.describe('blog routes', () => {
   // Seeded on forks (migrations/20261017135635_seed_blog.sql); the blog server answers 2xx for these.
   const COLD: [string, string[]][] = [
     ['/subscribe', ['Blog', 'Subscribe']],
+    ['/subscribe/confirm', ['Blog', 'Subscribe']],
     ['/category/regulation', ['Blog']],
     ['/what-changes', ['Blog', 'Regulation & FIRS news', WHAT_CHANGES]],
   ]

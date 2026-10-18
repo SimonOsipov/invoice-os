@@ -35,6 +35,7 @@ input::placeholder { color: var(--muted-foreground); }
 .blog-chip:hover { background: var(--muted) !important; }
 .blog-clear:hover { color: var(--ink) !important; }
 .blog-cookie-choices:hover { color: var(--action) !important; }
+.blog-field:focus { border-color: var(--ring) !important; box-shadow: 0 0 0 2px var(--ring); }
 
 @media (max-width: 767px) {
   .asc-app { flex-direction: column !important; height: auto !important; min-height: 100vh; overflow: visible !important; }

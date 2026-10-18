@@ -208,6 +208,8 @@ var scPoolAllowlist = []scPoolExemption{
 	{file: "internal/validation/codelist/store.go"},                                   // global NRS reference data written by a schedule; the package serves no HTTP
 	{file: "internal/platform/db/stafftx.go", fn: "WithinStaffTx"},                    // the staff seam: refuses a caller without auth.StaffFromContext; staff work reaches tenant rows only through staff_read_ definer functions
 	{file: "internal/notifications/deal.go"},                                          // a River job carries no caller identity and no tenant; the job only takes an advisory lock on the pool
+	{file: "internal/notifications/newsletter_worker.go"},                             // a River job carries no caller identity and no tenant; subscribers are not tenant data, and the worker reads and updates them on the pool
+	{file: "internal/notifications/newsletter.go"},                                    // subscription requests and subscribers carry no tenant; the store and the hourly purge run on the pool with no caller identity
 	{file: "internal/systemhealth/store.go", fn: "Record"},                            // a scheduled global sample with no caller identity; the package serves HTTP, so the exemption is func-scoped
 	{file: "internal/blog/public.go", fn: "readPublic"},                               // anonymous blog read: no caller to gate; global published content only, in a READ ONLY transaction
 }
@@ -1037,6 +1039,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"OPTIONS /blog/categories":                            {verdict: scExempt, reason: "the CORS preflight for the GET route of this path; same absence of a caller"},
 	"OPTIONS /blog/posts":                                 {verdict: scExempt, reason: "the CORS preflight for the GET route of this path; same absence of a caller"},
 	"OPTIONS /blog/posts/{slug}":                          {verdict: scExempt, reason: "the CORS preflight for the GET route of this path; same absence of a caller"},
+	"OPTIONS /blog/subscriptions":                         {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
+	"OPTIONS /blog/subscriptions/confirm":                 {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"OPTIONS /contacts/demo-request":                      {verdict: scExempt, reason: "the CORS preflight for the POST route of this path; same absence of a caller"},
 	"PATCH /v1/customers/{id}":                            {verdict: scCovered},
 	"PATCH /v1/entities/{id}":                             {verdict: scCovered},
@@ -1106,6 +1110,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"POST /auth/sign-out":                                 {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /auth/verify":                                   {verdict: scExempt, reason: "no database; calls GoTrue"},
 	"POST /contacts/demo-request":                         {verdict: scExempt, reason: "no database; hands the form to notifications"},
+	"POST /blog/subscriptions":                            {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
+	"POST /blog/subscriptions/confirm":                    {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"POST /internal/contacts/demo-requests":               {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /internal/contacts/registrants":                 {verdict: scExempt, reason: "gateway-token call with no caller; contacts carry no tenant, so a membership has nothing to gate"},
 	"POST /internal/invitations/preview":                  {verdict: scExempt, reason: "no caller; the token names the invite"},
@@ -1116,6 +1122,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /internal/blog/posts":                            {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404"},
 	"GET /internal/blog/posts/{id}":                       {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404"},
 	"GET /internal/blog/covers/{id}/{version}":            {verdict: scExempt, reason: "gateway-token call with no caller; published blog content only, in a READ ONLY transaction; a request carrying X-User-ID is refused 404"},
+	"POST /internal/blog/subscriptions":                   {verdict: scExempt, reason: "gateway-token call with no caller; subscribers carry no tenant; a request carrying X-User-ID is refused 404"},
+	"POST /internal/blog/subscriptions/confirm":           {verdict: scExempt, reason: "gateway-token call with no caller; subscribers carry no tenant; a request carrying X-User-ID is refused 404"},
 	"POST /v1/approval-policies":                          {verdict: scCovered},
 	"POST /v1/approval-policies/{id}/publish":             {verdict: scCovered},
 	"POST /v1/documents":                                  {verdict: scCovered},

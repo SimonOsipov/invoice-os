@@ -8,6 +8,7 @@ export type BlogState = { status: 'loading' } | { status: 'ready'; data: BlogDat
 export type View =
   | { kind: 'home' }
   | { kind: 'subscribe' }
+  | { kind: 'confirm' }
   | { kind: 'category'; cat: Category }
   | { kind: 'post'; post: Post; cat: Category | undefined }
   | { kind: 'search'; q: string }
@@ -117,10 +118,10 @@ export const scrollTargetTop = (scrollTop: number, elTop: number, scrollerTop: n
 
 export const coverUrl = (path: string): string => (gatewayBase() ?? '') + path
 
-// Subscribe needs no data, so it shows while the load runs or fails.
+// Confirm needs no data, so it shows while the load runs or fails; subscribe waits for the categories.
 export function resolveView(route: Route, q: string, blog: BlogState): View {
   const searching = q.trim() !== ''
-  if (route.view === 'subscribe' && !searching) return { kind: 'subscribe' }
+  if (route.view === 'confirm' && !searching) return { kind: 'confirm' }
   if (blog.status === 'failed') return { kind: 'failed' }
   if (blog.status === 'loading') return { kind: 'loading' }
   if (searching) return { kind: 'search', q }
@@ -130,6 +131,8 @@ export function resolveView(route: Route, q: string, blog: BlogState): View {
       return { kind: 'home' }
     case 'subscribe':
       return { kind: 'subscribe' }
+    case 'confirm':
+      return { kind: 'confirm' }
     case 'missing':
       return { kind: 'missing' }
     case 'category': {
@@ -150,6 +153,8 @@ export function crumbsFor(view: View, navigate: (r: Route) => void): Crumb[] {
       return [blog(), { label: 'Search' }]
     case 'subscribe':
       return [blog(), { label: 'Subscribe' }]
+    case 'confirm':
+      return [blog(), { label: 'Subscribe', go: () => navigate({ view: 'subscribe' }) }]
     case 'category':
       return [blog(), { label: view.cat.name }]
     case 'post': {

@@ -4,6 +4,10 @@ import { blogPath, parseBlogPath, type Route } from './route'
 describe('route', () => {
   it('parse_rootIsHome', () => expect(parseBlogPath('/')).toEqual({ view: 'home' }))
   it('parse_subscribeIsSubscribe', () => expect(parseBlogPath('/subscribe')).toEqual({ view: 'subscribe' }))
+  it('parse_subscribeConfirmIsConfirm', () => {
+    expect(parseBlogPath('/subscribe/confirm')).toEqual({ view: 'confirm' })
+    expect(parseBlogPath('/subscribe/confirm/')).toEqual({ view: 'confirm' })
+  })
   it('parse_categoryIdOpensTheCategory', () =>
     expect(parseBlogPath('/category/compliance')).toEqual({ view: 'category', id: 'compliance' }))
   it('parse_oneSegmentIsAPost', () =>
@@ -29,6 +33,7 @@ describe('route', () => {
     const routes: Route[] = [
       { view: 'home' },
       { view: 'subscribe' },
+      { view: 'confirm' },
       { view: 'category', id: 'compliance' },
       { view: 'post', slug: 'einvoicing-2026' },
     ]

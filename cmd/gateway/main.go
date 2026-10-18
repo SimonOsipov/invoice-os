@@ -214,6 +214,11 @@ func main() {
 	app.Mux.Handle("GET /blog/covers/{id}/{version}", blogRead.Cover)
 	app.Mux.Handle("GET /blog/posts/", withCORS(blogRead.NotFound))
 	app.Mux.Handle("GET /blog/covers/", blogRead.NotFound)
+	blogSubscribe := blogSubscribeHandlers(routed["notifications"], gatewayToken, registerMinResponse, app.Logger)
+	app.Mux.Handle("POST /blog/subscriptions", withCORS(blogSubscribe.Subscribe))
+	app.Mux.Handle("OPTIONS /blog/subscriptions", withCORS(blogSubscribe.Subscribe))
+	app.Mux.Handle("POST /blog/subscriptions/confirm", withCORS(blogSubscribe.Confirm))
+	app.Mux.Handle("OPTIONS /blog/subscriptions/confirm", withCORS(blogSubscribe.Confirm))
 
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.
@@ -380,6 +385,15 @@ func blogHandlers(notifications *url.URL, gatewayToken string, log *slog.Logger)
 	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
 	perIP := gateway.NewSignInThrottle("blog-read", gateway.BlogReadPerIP, gateway.BlogReadMaxKeys, gateway.BlogReadWindow, time.Now)
 	return gateway.BlogHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, perIP, enforce, log)
+}
+
+// blogSubscribeHandlers builds the public newsletter routes; the caps log and admit on a PR fork, as the demo route does.
+func blogSubscribeHandlers(notifications *url.URL, gatewayToken string, minResponse time.Duration, log *slog.Logger) gateway.BlogSubscribeRoutes {
+	enforce := platform.Posture(os.Getenv("RAILWAY_ENVIRONMENT_NAME")) != platform.PosturePreview
+	perIP := gateway.NewSignInThrottle("blog-subscribe-ip", gateway.BlogSubscribePerIP, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
+	perEmail := gateway.NewSignInThrottle("blog-subscribe-email", gateway.BlogSubscribePerEmail, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
+	confirmPerIP := gateway.NewSignInThrottle("blog-confirm-ip", gateway.BlogConfirmPerIP, gateway.BlogSubscribeMaxKeys, gateway.BlogSubscribeWindow, time.Now)
+	return gateway.BlogSubscribeHandlers(notifications, &http.Client{Transport: platform.TraceTransport(nil)}, gatewayToken, minResponse, perIP, perEmail, confirmPerIP, enforce, log)
 }
 
 // resetPasswordHandler builds the reset-form handler; a nil authURL or siteURL makes it answer 503.

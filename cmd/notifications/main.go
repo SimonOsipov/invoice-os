@@ -7,14 +7,17 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/riverqueue/river"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/blog"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 	"github.com/SimonOsipov/invoice-os/internal/platform"
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 	"github.com/SimonOsipov/invoice-os/internal/platform/queue"
+	"github.com/SimonOsipov/invoice-os/internal/validation/codelist"
 )
 
 const (
@@ -36,6 +39,10 @@ func main() {
 		platform.Fatal(app.Logger, "notifications: %v", err)
 	}
 	platform.Contacts = string(mode)
+	nl, err := newsletterClients(os.Getenv, os.Getenv("RAILWAY_ENVIRONMENT_NAME"), mode, realTransport())
+	if err != nil {
+		platform.Fatal(app.Logger, "notifications: %v", err)
+	}
 
 	pool, err := db.NewPool(ctx, mustEnv("DATABASE_URL"))
 	if err != nil {
@@ -51,6 +58,9 @@ func main() {
 			Pool: pool, HubSpot: hubspot, Resend: resend, Mode: mode, Logger: app.Logger,
 		})
 		river.AddWorker(workers, &notifications.DemoDealWorker{Pool: pool, HubSpot: hubspot, Logger: app.Logger})
+		if nl.Enabled {
+			river.AddWorker(workers, &notifications.BlogSyncWorker{Pool: pool, Resend: nl.Resend, Mode: nl.Mode, Logger: app.Logger})
+		}
 		qcfg.Workers = workers
 		qcfg.Queues = map[string]river.QueueConfig{notifications.QueueContacts: {MaxWorkers: 2}}
 	}
@@ -66,6 +76,10 @@ func main() {
 	app.Mux.HandleFunc("POST /internal/contacts/registrants", notifications.RegistrantsHandler(store, app.Logger))
 	app.Mux.HandleFunc("POST /internal/contacts/demo-requests", notifications.DemoRequestsHandler(store, app.Logger))
 	app.Mux.HandleFunc("GET /v1/contacts/me", notifications.MeHandler(store, app.Logger))
+
+	newsletterStore := notifications.NewNewsletterStore(pool, q.River())
+	newsletter := notifications.Newsletter{Store: newsletterStore, Sender: nl.Sender, Resend: nl.Resend, Enabled: nl.Enabled}
+	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, newsletterStore.PurgeExpired))
 
 	blogStore := blog.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/staff/blog/categories", blog.ListCategoriesHandler(blogStore.ListCategories, app.Logger))
@@ -93,6 +107,8 @@ func main() {
 	app.Mux.HandleFunc("GET /internal/blog/posts", blog.PublicPostsHandler(blogStore.PublicPosts, app.Logger))
 	app.Mux.HandleFunc("GET /internal/blog/posts/{id}", blog.PublicPostHandler(blogStore.PublicPost, app.Logger))
 	app.Mux.HandleFunc("GET /internal/blog/covers/{id}/{version}", blog.PublicCoverHandler(blogStore.PublicCover, app.Logger))
+	app.Mux.HandleFunc("POST /internal/blog/subscriptions", notifications.SubscribeHandler(newsletter, app.Logger))
+	app.Mux.HandleFunc("POST /internal/blog/subscriptions/confirm", notifications.ConfirmHandler(newsletter, app.Logger))
 
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 
@@ -127,4 +143,32 @@ func deliveryClients(getenv func(string) string, railwayEnvName string, transpor
 		return mode, notifications.NewHubSpot(hubspotBaseURL, keys, hc), notifications.NewResend(resendBaseURL, keys, hc), nil
 	}
 	return mode, nil, nil, nil
+}
+
+// newsletterWiring is the blog subscription setup. Enabled needs a newsletter mode and a mail
+// sender that are both on; otherwise both routes answer 503 and the service still boots.
+type newsletterWiring struct {
+	Mode     notifications.Mode
+	MailMode accountmail.Mode
+	Sender   accountmail.Sender
+	Resend   notifications.BlogResendClient
+	Enabled  bool
+}
+
+func newsletterClients(getenv func(string) string, railwayEnvName string, contacts notifications.Mode, transport http.RoundTripper) (newsletterWiring, error) {
+	posture := platform.Posture(railwayEnvName)
+	mode, keys, err := notifications.NewsletterModeFromEnv(getenv, posture, contacts)
+	if err != nil {
+		return newsletterWiring{}, err
+	}
+	mailMode, mailKey := accountmail.ModeFromEnv(getenv, posture == platform.PosturePreview)
+	w := newsletterWiring{Mode: mode, MailMode: mailMode, Sender: accountmail.NewSender(mailMode, mailKey, transport)}
+	switch mode {
+	case notifications.ModeFake:
+		w.Resend = notifications.FakeBlogResend{}
+	case notifications.ModeReal:
+		w.Resend = notifications.NewBlogResend(resendBaseURL, getenv("RESEND_API_KEY"), keys, notifications.NewHTTPClient(transport))
+	}
+	w.Enabled = mode != notifications.ModeOff && mailMode != accountmail.ModeOff
+	return w, nil
 }

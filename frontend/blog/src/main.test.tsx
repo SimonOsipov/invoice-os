@@ -5,13 +5,18 @@ import { CrashBoundary } from '@invoice-os/monitoring'
 
 const h = vi.hoisted(() => {
   const render = vi.fn()
-  return { render, boot: vi.fn(), initMonitoring: vi.fn(), createRoot: vi.fn(() => ({ render })), initsBeforeMark: -1 }
+  return { render, boot: vi.fn(), initMonitoring: vi.fn(), createRoot: vi.fn(() => ({ render })), initsBeforeMark: -1, initsBeforeCapture: -1 }
 })
 
 vi.mock('@invoice-os/monitoring', () => ({
   initMonitoring: h.initMonitoring,
   CrashBoundary: () => null,
 }))
+// Evaluated when main.tsx imports ./confirmLink: counts inits that ran before the capture.
+vi.mock('./confirmLink', () => {
+  h.initsBeforeCapture = h.initMonitoring.mock.calls.length
+  return { confirmToken: () => null }
+})
 vi.mock('./analytics', () => ({ bootBlogAnalytics: h.boot }))
 vi.mock('react-dom/client', () => ({ createRoot: h.createRoot }))
 // Evaluated when main.tsx's own import runs: counts inits that ran before it.
@@ -42,5 +47,12 @@ describe('main', () => {
     expect(boundary.props.brand.props.src).toBe('mark-stub.png')
     // Imports evaluate in order: init must already have run when main.tsx's later imports load.
     expect(h.initsBeforeMark).toBe(1)
+  })
+
+  it('main_capturesTheTokenBeforeMonitoringStarts', async () => {
+    vi.stubGlobal('document', { getElementById: () => ({}) })
+    await import('./main')
+    expect(h.initsBeforeCapture).toBe(0)
+    expect(h.initMonitoring).toHaveBeenCalledTimes(1)
   })
 })

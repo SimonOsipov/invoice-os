@@ -15,6 +15,7 @@ paths:
 - Add each new topology spec file to a unit in `e2e/topology/shards.ts`. `shards.test.ts` fails on a spec in no unit.
 - Run `library.spec.ts` in the `library` unit. It reads the public Library and uses no tenant.
 - Run `blog.spec.ts` in the `blog` unit. It reads the public blog and uses no tenant.
+- Run `blog-subscribe.spec.ts` in the `blog` unit. It submits the newsletter form to the fork gateway and uses no tenant.
 - Keep a spec on `serial-lane` while it needs the seeded tenants 1111 and 2222. A shard gets its own tenant pair from `db/seed.e2e-shards.sql`.
 - Sign in an app session with `signInAs(page, id, { tenantId })` from `e2e/personaSession.ts`. It admits the e2e member through `ensureMember`.
 - Set an invitation token with `setInvitationToken`, or invite with `inviteWithToken`. A fork captures mail, so a spec cannot read a real token.
@@ -31,7 +32,7 @@ paths:
 - Never publish a rule-set version in a topology spec. The api contract spec publishes only with the start date `3001-01-01`.
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
 - Test the `library` SPA for render and consent only. It is static content with no backend.
-- Test the `blog` SPA for render, layout and consent. It reads published posts from the gateway's public blog routes.
+- Test the `blog` SPA for render, layout and consent. It reads published posts from the gateway's public blog routes and its newsletter form posts to the gateway's public subscribe routes.
 - Cover the blog's crawler HTML, sitemap and robots in `e2e/api/contract-blog-crawler.spec.ts`.
 - Cover the library consent notice, the stored answer, the privacy link and the production-host-only tag in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent in `e2e/smoke/blog-consent.spec.ts`.

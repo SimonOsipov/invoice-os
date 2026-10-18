@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PRODUCTION_HOSTNAMES } from './analytics'
-import { landingHref, privacyHref } from './links'
+import { demoHref, landingHref, privacyHref } from './links'
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -19,6 +19,13 @@ describe('links', () => {
     expect(privacyHref()).toBe('https://landing-pr-1.up.railway.app/privacy')
     vi.stubEnv('VITE_LANDING_URL', '')
     expect(privacyHref()).toBe(`https://${PRODUCTION_HOSTNAMES[0]}/privacy`)
+  })
+
+  it('links_demoHrefIsTheLandingDeepLink', () => {
+    vi.stubEnv('VITE_LANDING_URL', 'https://landing-pr-1.up.railway.app/')
+    expect(demoHref()).toBe('https://landing-pr-1.up.railway.app/?demo')
+    vi.stubEnv('VITE_LANDING_URL', '')
+    expect(demoHref()).toBe(`https://${PRODUCTION_HOSTNAMES[0]}/?demo`)
   })
 
   it('links_fallbackFollowsTheFirstProductionHostname', async () => {

@@ -1225,6 +1225,7 @@ func TestForkVarsAfterURLs_InheritedReferencesAddOneDelete(t *testing.T) {
 // A deleted name is neither held nor written: blog holds 2 of 4, not 4 of 4.
 func TestForkVarsAfterURLs_DeletedNamesAreNotCountedAsHeld(t *testing.T) {
 	stores := afterProdStores()
+	stores[sentrySvcID("blog")]["VITE_GATEWAY_URL"] = batchGatewayURL
 	stores[sentrySvcID("blog")]["VITE_LANDING_URL"] = batchLandingURL
 	stores[sentrySvcID("blog")]["VITE_GATEWAY_URL"] = batchGatewayURL
 	s := newAfterShim(t, stores)

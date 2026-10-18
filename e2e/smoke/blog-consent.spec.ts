@@ -14,6 +14,7 @@ const BLOG_PRODUCTION_HOST = 'blog.ascomply.com' // retyped from BLOG_HOSTNAMES 
 const EXPECT_TAG = BLOG_HOST === BLOG_PRODUCTION_HOST
 const LANDING_URL = resolveTarget('LANDING_URL')
 const LIBRARY_URL = resolveTarget('LIBRARY_URL') // routeProductionHosts routes it too
+const GATEWAY_URL = resolveTarget('GATEWAY_URL')
 const GA_ID = /G-[A-Z0-9]{6,}/
 const SLACK_PX = 0.5 // sub-pixel rounding only
 
@@ -132,6 +133,22 @@ for (const width of WIDE_WIDTHS) {
     expect(rectsOverlap(box, aside), 'the notice overlaps the sidebar').toBe(false)
   })
 
+  test(`blog consent: the spacer lets the band clear the notice (${width})`, async ({ page }) => {
+    await setWidth(page, width)
+    await openBlog(page)
+    const heading = page.getByRole('heading', { level: 2, name: /New posts in your inbox\./ })
+    await expect(heading).toHaveCount(1)
+    await expect(page.locator('#blog-main button').first(), 'no band card rendered').toBeVisible()
+    const main = page.locator('#blog-main')
+    await main.evaluate((el) => el.scrollTo({ top: el.scrollHeight, behavior: 'instant' }))
+    await expect
+      .poll(() => main.evaluate((el) => Math.round(el.scrollHeight - el.clientHeight - el.scrollTop)))
+      .toBeLessThanOrEqual(1)
+    const h = await rectOf(heading, 'the newsletter band heading')
+    const n = await rectOf(notice(page), 'the cookie notice')
+    expect(h.y + h.height, `the band heading (bottom ${h.y + h.height}) sits under the notice (top ${n.y})`).toBeLessThanOrEqual(n.y + SLACK_PX)
+  })
+
   test(`blog consent: Cookie choices sits in the sidebar footer (${width})`, async ({ page }) => {
     await setWidth(page, width)
     await seedConsent(page, true)
@@ -152,6 +169,25 @@ for (const width of WIDE_WIDTHS) {
   })
 }
 
+// The phone card sits 12px above the viewport bottom; the band must reserve card plus inset.
+const PHONE_INSET_PX = 12
+for (const width of [390, 375]) {
+  test(`blog consent: on a phone the spacer reserves the notice band (${width})`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 })
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+    await openBlog(page)
+    await expect(page.getByRole('heading', { level: 2, name: /New posts in your inbox\./ })).toHaveCount(1)
+    await expect(page.locator('#blog-main button').first(), 'no band card rendered').toBeVisible()
+    const box = await rectOf(notice(page), 'the cookie notice')
+    expect(enclosesRect({ x: 0, y: 0, width, height: 844 }, box, SLACK_PX), `the notice leaves the ${width}x844 viewport`).toBe(true)
+    const spacer = await rectOf(page.locator('.cn-spacer'), 'the scroll spacer')
+    expect(
+      spacer.height,
+      `the spacer reserves ${spacer.height}px but the notice covers ${box.height + PHONE_INSET_PX}px`,
+    ).toBeGreaterThanOrEqual(box.height + PHONE_INSET_PX)
+  })
+}
+
 // Shared choice, under the production hostnames served by the fork (E2E rules: no real GA or Sentry).
 const WWW = 'https://www.ascomply.com'
 const BLOG = 'https://blog.ascomply.com'
@@ -160,7 +196,7 @@ const COOKIE_NAME = 'asc_consent'
 const routedTest = test.extend<{ routed: Page }>({
   routed: async ({ browser }, use) => {
     const context = await browser.newContext()
-    await routeProductionHosts(context, { landing: LANDING_URL, library: LIBRARY_URL, blog: BLOG_URL })
+    await routeProductionHosts(context, { landing: LANDING_URL, library: LIBRARY_URL, blog: BLOG_URL, gateway: GATEWAY_URL })
     await use(await context.newPage())
     // in-flight route.fetch calls reject once the context closes
     await context.unrouteAll({ behavior: 'ignoreErrors' })
@@ -180,6 +216,7 @@ async function openWww(page: Page): Promise<void> {
 async function openRoutedBlog(page: Page): Promise<void> {
   await page.goto(`${BLOG}/`)
   await expect(breadcrumb(page)).toBeVisible()
+  await expect(page.locator('#blog-main button').first(), 'no home card rendered').toBeVisible()
 }
 
 /** SC-00: a mismatch means the routing failed, not the consent code. */

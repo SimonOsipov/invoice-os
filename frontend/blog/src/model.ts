@@ -1,0 +1,163 @@
+import { gatewayBase } from '@invoice-os/api-client/client'
+import type { Block, BlogData, Category, Post } from './data'
+import type { GlyphName } from './icons'
+import type { Route } from './route'
+
+export type BlogState = { status: 'loading' } | { status: 'ready'; data: BlogData } | { status: 'failed' }
+
+export type View =
+  | { kind: 'home' }
+  | { kind: 'subscribe' }
+  | { kind: 'category'; cat: Category }
+  | { kind: 'post'; post: Post; cat: Category | undefined }
+  | { kind: 'search'; q: string }
+  | { kind: 'missing' }
+  | { kind: 'loading' }
+  | { kind: 'failed' }
+
+export type Crumb = { label: string; go?: () => void }
+
+type Tone = { bg: string; fg: string; tile: string }
+
+// Verbatim from the prototype's blog-data.js TONES.
+export const TONES: readonly Tone[] = [
+  { bg: 'var(--sage)', fg: 'var(--primary)', tile: 'var(--card)' },
+  { bg: 'var(--surface)', fg: 'var(--accent)', tile: 'var(--surface-panel)' },
+  { bg: 'var(--peach-band)', fg: 'var(--primary)', tile: 'var(--card)' },
+  { bg: 'var(--mint-soft)', fg: 'var(--teal)', tile: 'var(--card)' },
+  { bg: 'var(--surface-2, var(--surface))', fg: 'var(--surface-foreground)', tile: 'var(--surface-panel)' },
+  { bg: 'var(--muted)', fg: 'var(--primary)', tile: 'var(--card)' },
+]
+
+type NoteKind = { label: string; icon: GlyphName; bg: string; bd: string; tileBg: string; labelColor: string }
+
+export const NOTE_KINDS: Record<string, NoteKind> = {
+  regulation: { label: 'Regulation note', icon: 'landmark', bg: 'var(--sage-card)', bd: 'var(--border)', tileBg: 'var(--sage-panel)', labelColor: 'var(--step-label)' },
+  deadline: { label: 'Deadline', icon: 'calendar-clock', bg: 'var(--peach-tint)', bd: 'var(--status-amber-border)', tileBg: 'var(--card)', labelColor: 'var(--status-amber-text)' },
+  product: { label: 'Availability', icon: 'circle-check', bg: 'var(--mint-soft)', bd: 'var(--border)', tileBg: 'var(--card)', labelColor: 'var(--teal)' },
+}
+
+export const noteKindOf = (kind: string): NoteKind => NOTE_KINDS[kind] ?? NOTE_KINDS.regulation
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+export function fmtDate(d: string): string {
+  const [y, m, day] = d.split('-')
+  return `${+day} ${MONTHS[+m - 1]} ${y}`
+}
+
+export const postsOf = (data: BlogData, catId: string): Post[] => data.posts.filter((p) => p.category_id === catId)
+
+export const catOf = (data: BlogData, id: string): Category | undefined => data.categories.find((c) => c.id === id)
+
+export function featuredOf(posts: Post[]): { post: Post; label: 'Featured' | 'Latest' } | null {
+  const pinned = posts.find((p) => p.featured)
+  if (pinned) return { post: pinned, label: 'Featured' }
+  return posts.length > 0 ? { post: posts[0], label: 'Latest' } : null
+}
+
+export function bandsOf(data: BlogData) {
+  return data.categories
+    .map((cat) => ({ cat, all: postsOf(data, cat.id) }))
+    .filter((b) => b.all.length > 0)
+    .map(({ cat, all }, i) => ({
+      cat,
+      bg: i % 2 === 0 ? 'var(--sage)' : 'var(--background)',
+      cardBd: i % 2 === 0 ? 'var(--sage-border, #cedac7)' : 'var(--border)',
+      allLabel: `All ${all.length} posts`,
+      posts: all.slice(0, 3),
+    }))
+}
+
+const blockText = (b: Block): string => {
+  const text = 'text' in b ? b.text : ''
+  const title = 'title' in b ? b.title : ''
+  const items = 'items' in b ? b.items.join(' ') : ''
+  return `${text} ${title} ${items}`
+}
+
+export function searchPosts(data: BlogData, q: string): Post[] {
+  const needle = q.trim().toLowerCase()
+  return data.posts.filter((p) => {
+    const hay = [p.title, p.summary, catOf(data, p.category_id)?.name ?? '', ...p.body.map(blockText)].join(' ')
+    return hay.toLowerCase().includes(needle)
+  })
+}
+
+export function resultsTitle(n: number, q: string): string {
+  const t = q.trim()
+  if (n === 0) return `Nothing found for “${t}”`
+  return `${n} ${n === 1 ? 'post matches' : 'posts match'} “${t}”`
+}
+
+export function placeholderOf(cat: Category | undefined): Tone & { icon: GlyphName } {
+  if (!cat) return { bg: 'var(--muted)', fg: 'var(--primary)', tile: 'var(--card)', icon: 'file-text' }
+  return { ...TONES[cat.tone % TONES.length], icon: cat.icon }
+}
+
+export type TocEntry = { i: number; num: string; text: string }
+
+export function tocOf(blocks: Block[]): TocEntry[] {
+  const heads = blocks.flatMap((b) => (b.type === 'h' ? [b.text] : []))
+  return heads.map((text, i) => ({ i, num: String(i + 1).padStart(2, '0'), text }))
+}
+
+// The last section whose top is at or above the line; 0 when none is.
+export function activeSection(tops: number[], line: number): number {
+  let a = 0
+  tops.forEach((t, i) => {
+    if (t <= line) a = i
+  })
+  return a
+}
+
+// The heading lands 28 px under the header (92 under the 64 px wide header).
+export const scrollTargetTop = (scrollTop: number, elTop: number, scrollerTop: number, offset = 92): number =>
+  scrollTop + elTop - scrollerTop - offset
+
+export const coverUrl = (path: string): string => (gatewayBase() ?? '') + path
+
+// Subscribe needs no data, so it shows while the load runs or fails.
+export function resolveView(route: Route, q: string, blog: BlogState): View {
+  const searching = q.trim() !== ''
+  if (route.view === 'subscribe' && !searching) return { kind: 'subscribe' }
+  if (blog.status === 'failed') return { kind: 'failed' }
+  if (blog.status === 'loading') return { kind: 'loading' }
+  if (searching) return { kind: 'search', q }
+  const { data } = blog
+  switch (route.view) {
+    case 'home':
+      return { kind: 'home' }
+    case 'subscribe':
+      return { kind: 'subscribe' }
+    case 'missing':
+      return { kind: 'missing' }
+    case 'category': {
+      const cat = catOf(data, route.id)
+      return cat ? { kind: 'category', cat } : { kind: 'missing' }
+    }
+    case 'post': {
+      const post = data.posts.find((p) => p.id === route.slug)
+      return post ? { kind: 'post', post, cat: catOf(data, post.category_id) } : { kind: 'missing' }
+    }
+  }
+}
+
+export function crumbsFor(view: View, navigate: (r: Route) => void): Crumb[] {
+  const blog = (): Crumb => ({ label: 'Blog', go: () => navigate({ view: 'home' }) })
+  switch (view.kind) {
+    case 'search':
+      return [blog(), { label: 'Search' }]
+    case 'subscribe':
+      return [blog(), { label: 'Subscribe' }]
+    case 'category':
+      return [blog(), { label: view.cat.name }]
+    case 'post': {
+      const { cat, post } = view
+      if (!cat) return [blog(), { label: post.title }]
+      return [blog(), { label: cat.name, go: () => navigate({ view: 'category', id: cat.id }) }, { label: post.title }]
+    }
+    default:
+      return [blog()]
+  }
+}

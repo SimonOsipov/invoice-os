@@ -7,7 +7,7 @@
 // taking it all as props, and its docblock says why.
 //
 // The roster table, the member drawer and the role modal share these. Several of the
-// drawer's — `RoleCards`, `ClientAccessPicker`, `DepartmentField` — now mount read-only,
+// drawer's — `RoleCards`, `DepartmentField` — now mount read-only,
 // so each takes its writer callback as OPTIONAL rather than growing a `disabled` prop the
 // other call sites would never set.
 

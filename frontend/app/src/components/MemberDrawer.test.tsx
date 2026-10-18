@@ -697,6 +697,31 @@ describe('FIRMS-02-05: the drawer edits client access', () => {
     expect(setMemberClients).toHaveBeenCalledTimes(2)
   })
 
+  it('a change dropped while a write is in flight remounts the picker on the stored set', async () => {
+    const entities = [entity('e1', 'Alpha Ltd'), entity('e2', 'Beta Ltd'), entity('e3', 'Gamma Ltd')]
+    let release: () => void = () => {}
+    const setMemberClients = vi.fn()
+    function Harness() {
+      const [access, setAccess] = useState<'all' | string[]>([])
+      setMemberClients.mockImplementation(
+        (_id: string, next: 'all' | string[]) => new Promise<void>((resolve) => { release = () => { setAccess(next); resolve() } }),
+      )
+      const ctx = drawerCtx({ members: [member({ id: 'u2', clientAccess: access })], setMemberClients, entities })
+      return <MemberDrawer ctx={ctx} memberId="u2" onClose={vi.fn()} onStatus={vi.fn()} statusError={null} />
+    }
+    render(<Harness />)
+
+    tick(1)
+    tick(0)
+    expect(setMemberClients).toHaveBeenCalledTimes(1)
+    release()
+    await waitFor(() => expect(screen.getByTestId('drawer-scope-all').closest('fieldset')?.hasAttribute('disabled')).toBe(false))
+    expect(ticks()).toEqual([false, true, false])
+
+    tick(2)
+    expect(setMemberClients).toHaveBeenLastCalledWith('u2', ['e2', 'e3'])
+  })
+
   it("a refused write shows the server's reason and restores the stored set", async () => {
     const setMemberClients = vi.fn().mockRejectedValueOnce(new ApiError('http', REFUSED, 403)).mockResolvedValue(undefined)
     mount(setMemberClients)

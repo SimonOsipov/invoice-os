@@ -626,7 +626,7 @@ func TestRLS_ClientAccessCascades(t *testing.T) {
 	}
 }
 
-// AC6: the shipped Down removes the objects and the shipped Up applies again over its result.
+// The shipped Down removes the objects and the shipped Up applies again over its result.
 // Runs on the migrator inside a transaction that is always rolled back.
 func TestRLS_ClientAccessDownThenUpRoundTrips(t *testing.T) {
 	h := requireHarness(t)

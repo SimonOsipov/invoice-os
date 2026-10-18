@@ -15,7 +15,7 @@
 // component's oracle is a screenshot — the one gate a fluent paraphrase walks through
 // (§15.8).
 
-import { useId, useState, type ReactNode } from 'react'
+import { useId, useRef, useState, type ReactNode } from 'react'
 
 import { ErrorState, Loading, toApiError } from '@invoice-os/api-client'
 import { closeGlyph } from '../glyphs'
@@ -101,10 +101,11 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
   const [roleError, setRoleError] = useState<{ id: string; message: string } | null>(null)
 
   // Client access write. `pickerKey` remounts the picker (it seeds from `value` once) so it
-  // shows the stored set after a refusal or an "all" write, never ticks the server deleted.
+  // shows the stored set after a refusal, a dropped change or an "all" write, never ticks the server deleted.
   const [clientsPending, setClientsPending] = useState(false)
   const [clientsError, setClientsError] = useState<string | null>(null)
   const [pickerKey, setPickerKey] = useState(0)
+  const dropped = useRef(false)
 
   // Resolved from the CURRENT list on every render, never captured: `isProtectedAdmin` does
   // no identity lookup and answers `true` for a detached row (members.test.ts), so a stale
@@ -163,23 +164,27 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
   }
 
   async function changeClients(next: 'all' | string[]) {
-    if (clientsPending) return
+    if (clientsPending) {
+      dropped.current = true
+      return
+    }
     setClientsError(null)
     setClientsPending(true)
     try {
       await ctx.setMemberClients(memberId, next)
-      if (next === 'all') setPickerKey((k) => k + 1)
+      if (next === 'all' || dropped.current) setPickerKey((k) => k + 1)
     } catch (err: unknown) {
       setClientsError(toApiError(err).message)
       setPickerKey((k) => k + 1)
     } finally {
+      dropped.current = false
       setClientsPending(false)
     }
   }
 
   const clientsLanded = ctx.entitiesState === 'ready' || ctx.entitiesState === 'empty'
   const storedClients = row.clientAccess ?? []
-  // `null`: the server withheld this row's set from a non-admin viewer (D12/D36).
+  // `null`: the server withheld this row's set from a non-admin viewer.
   const clientsUnreadable = row.clientAccess == null
 
   return (
@@ -278,7 +283,7 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
                         onChange={changeClients}
                       />
                     ) : ctx.entitiesState === 'error' ? (
-                      ctx.entitiesError && <ErrorState error={ctx.entitiesError} onRetry={ctx.refetchEntities} />
+                      <ErrorState error={ctx.entitiesError ?? toApiError(new Error('Could not load clients.'))} onRetry={ctx.refetchEntities} />
                     ) : (
                       <Loading label="Loading clients…" />
                     )}

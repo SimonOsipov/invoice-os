@@ -1458,7 +1458,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
 })
 
 // ---------------------------------------------------------------------------------------
-// Test 5 -- an admin gives a member clients in the drawer (FIRMS-02), on the firm tenant
+// Test 5 -- an admin gives a member clients in the drawer, on the firm tenant
 // ---------------------------------------------------------------------------------------
 // frontend/app/src/lib/members.ts: ADMIN_ALL_CLIENTS.
 const ADMIN_ALL_CLIENTS_COPY = 'An admin sees every client.'
@@ -1526,7 +1526,7 @@ test('firm Settings: an admin gives a member clients in the drawer and they surv
     await reopen()
     await expect(line()).toHaveText('2 clients')
 
-    // L6 (D21): the client-access line sits in the Access role cell, below the role label, clear of Workflow roles.
+    // L6: the client-access line sits in the Access role cell, below the role label, clear of Workflow roles.
     const cells = rowCells(page, preparer.displayName)
     const l6 = await atEachWidth(page, async (width) => {
       const prepRow = memberRow(page, preparer.displayName)

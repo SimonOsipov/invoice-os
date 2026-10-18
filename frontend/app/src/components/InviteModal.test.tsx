@@ -132,6 +132,17 @@ describe('InviteModal client access', () => {
     ).toEqual([true, false])
   })
 
+  it('InviteModal: a failed clients load shows the error with retry, and Send stays enabled', async () => {
+    const onRetryClients = vi.fn()
+    const { user } = renderModal({ clients: [], clientsState: 'error', clientsError: null, onRetryClients })
+    await addChips(user, 'a@x.ng')
+    expect(screen.queryByTestId('invite-scope-all')).toBeNull()
+    expect(screen.getByText('Could not load clients.')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: /retry|try again/i }))
+    expect(onRetryClients).toHaveBeenCalledTimes(1)
+    expect(send().disabled).toBe(false)
+  })
+
   it('InviteModal: in-house shows no picker', async () => {
     const { user, onSend } = renderModal({ mode: 'inhouse' })
     expect(screen.queryByTestId('invite-scope-all')).toBeNull()

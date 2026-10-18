@@ -47,7 +47,7 @@ export type Member = {
   role: AccessRole
   status: MemberStatus
   isYou: boolean
-  /** Optional so fixtures need no edit (D33). `null` = unknown to this viewer: no roster line. */
+  /** Optional so fixtures need no edit `null` = unknown to this viewer: no roster line. */
   clientAccess?: 'all' | readonly string[] | null
 }
 
@@ -168,8 +168,7 @@ export function activeAdmins(list: readonly Member[]): Member[] {
 export type InviteVerdict = 'ok' | 'member' | 'invited' | 'malformed'
 
 /**
- * Discriminated on `mode`, so the fork is a compile-time fact and a firm invite's
- * `clientAccess` is REQUIRED rather than optional. `Member` itself carries neither field —
+ * Discriminated on `mode`, so the fork is a compile-time fact. `Member` itself carries neither field —
  * this is the argument an invite would take, not the row it would produce.
  */
 export type InviteOptions =

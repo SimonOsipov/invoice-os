@@ -204,7 +204,7 @@ export function InviteModal({ existing, mode, clients, clientsState, clientsErro
               ) : clientsLanded ? (
                 <ClientAccessPicker key={role} idPrefix="invite" value={access} clients={clients} onChange={setAccess} />
               ) : clientsState === 'error' ? (
-                clientsError && <ErrorState error={clientsError} onRetry={onRetryClients} />
+                <ErrorState error={clientsError ?? toApiError(new Error('Could not load clients.'))} onRetry={onRetryClients} />
               ) : (
                 <Loading label="Loading clients…" />
               )}

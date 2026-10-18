@@ -36,16 +36,19 @@ var invoicesCSVHeader = []string{
 const invoicesScope = `
   FROM invoices WHERE entity_id = $1 AND created_at >= $2 AND created_at <= $3`
 
-// date and time columns need an explicit ::text cast — pgx errors scanning them into
-// *string without it. numeric and jsonb scan into *string/string fine, no cast needed.
-const selectInvoicesSQL = `
-SELECT id, invoice_number, status, issue_date::text, currency, subtotal, vat, total,
+// invoicesColumns: the SELECT list shared by the bundle and the register. date and
+// time columns need an explicit ::text cast -- pgx errors scanning them into *string
+// without it. numeric and jsonb scan into *string/string fine, no cast needed.
+const invoicesColumns = `id, invoice_number, status, issue_date::text, currency, subtotal, vat, total,
        supplier_tin, supplier_name, buyer_tin, buyer_name, irn, csid, qr_payload, rejection_reasons, created_at,
        invoice_kind, tax_currency_code, payment_status, due_date::text, tax_point_date::text, issue_time::text,
        supplier_email, supplier_telephone, supplier_street, supplier_city,
        supplier_postal_zone, supplier_country, supplier_state, supplier_lga,
        buyer_email, buyer_telephone, buyer_street, buyer_city,
-       buyer_postal_zone, buyer_country, buyer_state, buyer_lga` +
+       buyer_postal_zone, buyer_country, buyer_state, buyer_lga`
+
+const selectInvoicesSQL = `
+SELECT ` + invoicesColumns +
 	invoicesScope + ` ORDER BY created_at, id`
 
 // selectInvoiceIDsSQL: no ORDER BY -- order cannot change a row set or a count
@@ -65,7 +68,13 @@ func selectInvoices(ctx context.Context, tx pgx.Tx, r Request, w csvWriter) ([]s
 	if err := w.Write(invoicesCSVHeader); err != nil {
 		return nil, fmt.Errorf("archive: write invoices.csv header: %w", err)
 	}
-	rows, err := tx.Query(ctx, selectInvoicesSQL, canonical, r.From, r.To)
+	return writeInvoiceRows(ctx, tx, selectInvoicesSQL, []any{canonical, r.From, r.To}, w)
+}
+
+// writeInvoiceRows runs a query selecting invoicesColumns and writes each row as an
+// invoices.csv record; it returns the invoice ids in row order.
+func writeInvoiceRows(ctx context.Context, tx pgx.Tx, sql string, args []any, w csvWriter) ([]string, error) {
+	rows, err := tx.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("archive: select invoices: %w", err)
 	}

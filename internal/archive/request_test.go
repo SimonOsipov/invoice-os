@@ -190,6 +190,9 @@ func TestArchivePackage_ImportsOnlyStdlibAndUUID(t *testing.T) {
 		"golang.org/x/sync", "gopkg.in/yaml.v3",
 		// The queue's River error reporter pulls sentry-go in.
 		"github.com/getsentry/sentry-go", "golang.org/x/sys",
+		// The invoice register writes XLSX through excelize and its dependency tree.
+		"github.com/xuri", "github.com/richardlehane", "github.com/tiendc/go-deepcopy",
+		"golang.org/x/crypto", "golang.org/x/net",
 	}
 	isStdlibOrAllowed := func(imp string) bool {
 		if allowedExact[imp] || imp == selfPath {

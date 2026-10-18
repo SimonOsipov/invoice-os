@@ -96,7 +96,7 @@ export function Header({ crumbs, q, onQ }: HeaderProps) {
             color: 'var(--ink)',
           }}
         />
-        {q !== '' && (
+        {q.trim() !== '' && (
           <button
             type="button"
             className="blog-clear"

@@ -32,7 +32,7 @@ export function Button({ variant = 'primary', size = 'md', arrow, href, disabled
   }
   return (
     <button type="button" className={className} disabled={disabled} onClick={onClick} style={style}>
-      {children}
+      {content}
     </button>
   )
 }

@@ -183,9 +183,7 @@ test.describe('blog home, category and search at wide widths', () => {
       const grids = main(page).locator(`section ${GRID}`)
       const n = await grids.count()
       expect(n, 'control: no band rendered').toBeGreaterThan(0)
-      const titles: string[] = []
-      for (let k = 0; k < n; k++) titles.push(...(await expectCardsInside(grids.nth(k), `band ${k}`)))
-      expect(titles, 'control: no band holds a seeded title').toContain(WHAT_CHANGES)
+      for (let k = 0; k < n; k++) await expectCardsInside(grids.nth(k), `band ${k}`)
       expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
     })
 

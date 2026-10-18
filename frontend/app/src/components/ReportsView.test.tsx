@@ -431,6 +431,10 @@ describe('ReportsView: export card', () => {
     vi.setSystemTime(new Date(2026, 9, 18, 12))
     try {
       await renderReady()
+      const from = screen.getByLabelText('From') as HTMLInputElement
+      expect(from).toBe(screen.getByTestId('register-period-from'))
+      expect(from.type).toBe('date')
+      expect((screen.getByLabelText('To') as HTMLInputElement).type).toBe('date')
       expect((screen.getByTestId('register-period-from') as HTMLInputElement).value).toBe('2026-09-01')
       expect((screen.getByTestId('register-period-to') as HTMLInputElement).value).toBe('2026-09-30')
     } finally {
@@ -496,7 +500,7 @@ describe('ReportsView: export card', () => {
 
   it('in-house downloads the one company', async () => {
     stubSave()
-    const { fetchMock } = await renderReady(reportsCtx('co-1', { mode: 'inhouse' }), () => Promise.resolve(registerResponse()))
+    const { fetchMock } = await renderReady(reportsCtx('other', { mode: 'inhouse', activeEntity: { id: 'co-1', name: 'Acme' } }), () => Promise.resolve(registerResponse()))
     fireEvent.click(registerButton())
     await waitFor(() => expect(fetchMock.mock.calls.some((c) => isRegisterUrl(c[0] as string))).toBe(true))
     const url = fetchMock.mock.calls.map((c) => c[0] as string).find(isRegisterUrl)!
@@ -574,6 +578,90 @@ describe('ReportsView: export card', () => {
     expect(signal?.aborted).toBe(true)
     await act(async () => {})
     expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('the next click clears the error line', async () => {
+    stubSave()
+    let calls = 0
+    await renderReady(reportsCtx(), () => Promise.resolve(++calls === 1 ? failResponse(400, { error: OVER_CAP_SENTENCE }) : registerResponse()))
+    fireEvent.click(registerButton())
+    await screen.findByTestId('invoice-register-error')
+    fireEvent.click(registerButton())
+    await waitFor(() => expect(calls).toBe(2))
+    await waitFor(() => expect(screen.queryByTestId('invoice-register-error')).toBeNull())
+  })
+
+  it('a period change mid-flight keeps the click-time period and stays busy', async () => {
+    const save = stubSave()
+    let resolve!: (v: unknown) => void
+    const { fetchMock } = await renderReady(reportsCtx(), () => new Promise((r) => (resolve = r)))
+    fireEvent.change(screen.getByTestId('register-period-from'), { target: { value: '2026-09-02' } })
+    fireEvent.click(registerButton())
+    await waitFor(() => expect(registerButton().getAttribute('aria-busy')).toBe('true'))
+    fireEvent.change(screen.getByTestId('register-period-from'), { target: { value: '2026-09-05' } })
+    expect(registerButton().disabled).toBe(true)
+    await act(async () => resolve(registerResponse()))
+    await waitFor(() => expect(save.click).toHaveBeenCalledTimes(1))
+    const url = fetchMock.mock.calls.map((c) => c[0] as string).find(isRegisterUrl)!
+    expect(urlParams(url).get('from')).toBe('2026-09-02')
+    await waitFor(() => expect(registerButton().disabled).toBe(false))
+  })
+
+  it('the enable rule: equal dates enable, a cleared side disables', async () => {
+    await renderReady()
+    fireEvent.change(screen.getByTestId('register-period-to'), { target: { value: '2026-09-01' } })
+    expect(registerButton().disabled).toBe(false)
+    fireEvent.change(screen.getByTestId('register-period-to'), { target: { value: '' } })
+    expect(registerButton().disabled).toBe(true)
+    expect(screen.getByTestId('invoice-register-reason').textContent).toBe('Pick a start date on or before the end date.')
+    fireEvent.change(screen.getByTestId('register-period-to'), { target: { value: '2026-09-30' } })
+    fireEvent.change(screen.getByTestId('register-period-from'), { target: { value: '' } })
+    expect(registerButton().disabled).toBe(true)
+  })
+
+  it('no client wins over an inverted period, and the chips stay fg-4 while disabled', async () => {
+    await renderReady(reportsCtx('ent-1', { activeEntity: null }))
+    fireEvent.change(screen.getByTestId('register-period-from'), { target: { value: '2999-01-01' } })
+    expect(screen.getByTestId('invoice-register-reason').textContent).toBe('Pick a client to export its register.')
+    expect(registerButton().disabled).toBe(true)
+    for (const { name } of EXPORT_BUTTONS) {
+      const chip = screen.getByRole('button', { name: new RegExp(name) }).querySelector('span.mono') as HTMLElement
+      expect(chip.style.color, name).toBe('var(--fg-4)')
+      expect(chip.style.borderRadius, name).toBe('var(--radius-sm)')
+    }
+  })
+
+  it('the register button shares the siblings class and height; enabled drops the dimming, disabled takes the full recipe', async () => {
+    const { unmount } = await renderReady()
+    const sibling = screen.getByRole('button', { name: /VAT return/ }) as HTMLButtonElement
+    const on = registerButton()
+    expect(on.className).toBe('v2-btn v2-btn-ghost pf-btn')
+    expect(on.className).toBe(sibling.className)
+    expect(on.style.height).toBe('38px')
+    expect(on.style.height).toBe(sibling.style.height)
+    expect(on.style.opacity).toBe('')
+    expect(on.style.cursor).toBe('')
+    expect(on.style.background).toBe('')
+    unmount()
+
+    await renderReady(reportsCtx('ent-1', { activeEntity: null }))
+    const off = registerButton()
+    const blocked = screen.getByRole('button', { name: /VAT return/ }) as HTMLButtonElement
+    expect(off.style.cssText).toBe(blocked.style.cssText)
+    expect(off.style.filter).toBe('none')
+    expect(off.style.background).toBe('transparent')
+  })
+
+  it('a download that lands after unmount saves nothing', async () => {
+    const save = stubSave()
+    let resolve!: (v: unknown) => void
+    const { unmount } = await renderReady(reportsCtx(), () => new Promise((r) => (resolve = r)))
+    fireEvent.click(registerButton())
+    await waitFor(() => expect(resolve).toBeTypeOf('function'))
+    unmount()
+    await act(async () => resolve(registerResponse()))
+    expect(save.create).not.toHaveBeenCalled()
+    expect(save.click).not.toHaveBeenCalled()
   })
 
   it('the three blocked buttons keep the disabled recipe and the shared reason', async () => {

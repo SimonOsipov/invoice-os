@@ -60,6 +60,7 @@ describe('Confirm', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(byText('Confirm subscription')).toBeTruthy()
     expect(text()).toContain('Confirm your subscription.')
+    expect(text()).toContain('Click the button to start getting the posts you chose.')
   })
 
   it('confirm_clickPostsTokenOnce', async () => {
@@ -79,6 +80,7 @@ describe('Confirm', () => {
     await mount()
     await clickAsync(byText('Confirm subscription')!)
     expect(text()).toContain('You are subscribed.')
+    expect(text()).toContain('Your topics and frequency are saved. Every email has a one-click unsubscribe.')
     expect(byText('Confirm subscription')).toBeUndefined()
     expect(sessionStorage.getItem(KEY)).toBeNull()
     await clickAsync(byText('Back to the blog')!)
@@ -101,6 +103,7 @@ describe('Confirm', () => {
     await mount()
     await clickAsync(byText('Confirm subscription')!)
     expect(text()).toContain(GONE)
+    expect(text()).toContain('Confirmation links work once and expire after 48 hours. If you already confirmed, you are subscribed.')
     expect(byText('Confirm subscription')).toBeUndefined()
     expect(byText('Back to the blog')).toBeTruthy()
     await clickAsync(byText('Subscribe again')!)
@@ -142,5 +145,21 @@ describe('Confirm', () => {
     await new Promise((r) => setTimeout(r, 0))
     process.off('unhandledRejection', unhandled)
     expect(unhandled).not.toHaveBeenCalled()
+  })
+
+  it('confirm_retryThenSuccess', async () => {
+    fetchMock.mockImplementationOnce(async () => reply(502, {})())
+    await mount()
+    await clickAsync(byText('Confirm subscription')!)
+    expect(text()).toContain(RETRY)
+    // Hold the second request open: the failure line must already be gone while it runs.
+    let release!: () => void
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => (release = () => r(reply(200, {})()))))
+    await clickAsync(byText('Confirm subscription')!)
+    expect(text()).not.toContain(RETRY)
+    expect(byText('Confirm subscription')?.disabled).toBe(true)
+    await act(async () => release())
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(text()).toContain('You are subscribed.')
   })
 })

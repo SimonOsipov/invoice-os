@@ -65,11 +65,13 @@ describe('captureConfirmToken', () => {
 
   it('capture_otherPathIsUntouched', async () => {
     const { captureConfirmToken } = await load()
-    const storage = fakeStorage()
-    const replaceState = vi.fn()
-    expect(captureConfirmToken({ pathname: '/', search: `?token=${T}`, hash: '' }, { replaceState }, storage)).toBeNull()
-    expect(replaceState).not.toHaveBeenCalled()
-    expect(storage.setItem).not.toHaveBeenCalled()
+    for (const pathname of ['/', '/subscribe', '/subscribe/x']) {
+      const storage = fakeStorage()
+      const replaceState = vi.fn()
+      expect(captureConfirmToken({ pathname, search: `?token=${T}`, hash: '' }, { replaceState }, storage), pathname).toBeNull()
+      expect(replaceState, pathname).not.toHaveBeenCalled()
+      expect(storage.setItem, pathname).not.toHaveBeenCalled()
+    }
   })
 
   it('capture_trailingSlashPathCaptures', async () => {
@@ -77,6 +79,20 @@ describe('captureConfirmToken', () => {
     const replaceState = vi.fn()
     expect(captureConfirmToken({ pathname: `${PATH}/`, search: `?token=${T}`, hash: '' }, { replaceState }, fakeStorage())).toBe(T)
     expect(replaceState).toHaveBeenCalledWith(null, '', `${PATH}/`)
+  })
+
+  it('capture_invalidStoredTokenIsNull', async () => {
+    const { captureConfirmToken } = await load()
+    for (const bad of ['short', `${STORED}x`, `${STORED.slice(1)}!`]) {
+      expect(captureConfirmToken({ pathname: PATH, search: '', hash: '' }, { replaceState: vi.fn() }, fakeStorage(bad)), bad).toBeNull()
+    }
+  })
+
+  it('capture_freshTokenWinsOverStored', async () => {
+    const { captureConfirmToken } = await load()
+    const storage = fakeStorage(STORED)
+    expect(captureConfirmToken({ pathname: PATH, search: `?token=${T}`, hash: '' }, { replaceState: vi.fn() }, storage)).toBe(T)
+    expect(storage.map.get(KEY)).toBe(T)
   })
 
   it('capture_storageThrowsStillStrips', async () => {

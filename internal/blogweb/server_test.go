@@ -446,16 +446,42 @@ func TestServer_SubscribeTrailingSlashAndOverlongIDsAndStaticHeaders(t *testing.
 
 func TestServer_AClientThatLeavesDuringARefreshDoesNotTakeTheSiteDown(t *testing.T) {
 	r := newRig(t)
-	if w := r.do("GET", "/p"); w.Code != 200 {
-		t.Fatal(w.Code)
-	}
-	r.c.add(60 * time.Second)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	r.g.set(func() { r.g.hang = 100 * time.Millisecond })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
 	req := httptest.NewRequest("GET", "https://blog.example/p", nil).WithContext(ctx)
 	r.h.ServeHTTP(httptest.NewRecorder(), req)
+	r.g.set(func() { r.g.hang = 0 })
 	r.c.add(time.Second)
 	if w := r.do("GET", "/p"); w.Code != 200 {
-		t.Errorf("next visitor after a cancelled request: %d, want 200", w.Code)
+		t.Errorf("next visitor after a client left mid-refresh: %d, want 200", w.Code)
+	}
+}
+
+func TestServer_AWaiterThatLeavesReturnsAtOnceAndLeavesTheSharedStateAlone(t *testing.T) {
+	r := newRig(t)
+	r.g.set(func() {
+		r.g.hang, r.g.catCC, r.g.postCC = 100*time.Millisecond, "public, max-age=3", "public, max-age=3"
+	})
+	var wg sync.WaitGroup
+	var holder int
+	wg.Add(1)
+	go func() { defer wg.Done(); holder = r.do("GET", "/p").Code }()
+	time.Sleep(30 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	r.h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "https://blog.example/p", nil).WithContext(ctx))
+	if d := time.Since(start); d > 120*time.Millisecond {
+		t.Errorf("a cancelled waiter took %v; the refresh holds the lock for about 200ms", d)
+	}
+	wg.Wait()
+	if holder != 200 {
+		t.Errorf("the request that held the lock: %d", holder)
+	}
+	r.g.set(func() { r.g.hang = 0 })
+	r.c.add(4 * time.Second)
+	if w := r.do("GET", "/p"); w.Code != 200 {
+		t.Errorf("after the snapshot went stale: %d, a leaving waiter must not set a back-off", w.Code)
 	}
 }

@@ -135,9 +135,9 @@ test.describe('invoice register (API E2E, over the deployed gateway)', () => {
     const mine = events.filter((e) => e.entity_id === entityId)
     expect(mine.length, 'an invoice_register.exported row for the entity').toBeGreaterThan(0)
     expect(
-      mine.some((e) => JSON.stringify(e.payload) === JSON.stringify({ entity_id: entityId, from: FROM, to: TO, row_count: 2 })),
-      `payloads: ${JSON.stringify(mine.map((e) => e.payload))}`,
-    ).toBe(true)
+      mine.map((e) => e.payload),
+      'a row with this client, period and row count',
+    ).toContainEqual({ entity_id: entityId, from: FROM, to: TO, row_count: 2 })
   })
 
   test('refusals: 401, 400, 400, 404', async () => {

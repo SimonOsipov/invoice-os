@@ -1079,7 +1079,9 @@ test('ST-07 Reports exports are dimmed, not-allowed and unfilled', async ({ page
     expect(paint, 'export paint').toEqual({ opacity: '0.45', cursor: 'not-allowed', 'background-color': 'rgba(0, 0, 0, 0)' })
     reads.push(paint)
   }
-  const register = await styles(page.getByRole('button', { name: /^Invoice register/ }), ['opacity', 'cursor'])
+  const registerButton = page.getByRole('button', { name: /^Invoice register/ })
+  await expect(registerButton, 'the Invoice register button never enabled (no active client resolved)').toBeEnabled()
+  const register = await styles(registerButton, ['opacity', 'cursor'])
   expect(register, 'the live Invoice register button is neither dimmed nor not-allowed').toEqual({ opacity: '1', cursor: 'pointer' })
   await attachJson(testInfo, 'st-07-measurements', { reads, register })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])

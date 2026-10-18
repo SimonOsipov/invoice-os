@@ -130,6 +130,7 @@ var firmWideEvents = map[string]struct{}{
 	"invitation.sent":             {},
 	"invitation.resent":           {},
 	"invitation.accepted":         {},
+	"invitation.revoked":          {},
 	"validation.rule.enabled":     {},
 	"validation.rule.disabled":    {},
 	"customers.customer.updated":  {},

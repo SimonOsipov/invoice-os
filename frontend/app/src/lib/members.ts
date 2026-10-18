@@ -2,8 +2,8 @@
 //
 // Identity, access role and status are SERVER truth, read through `listMembers` and written
 // through `setMembershipStatus`. Pending invites are server truth too (`listInvitations`,
-// `sendInvitations`, `resendInvitation`). Remove, department, per-person client access, invite
-// link and revoke have no endpoint behind them; `MEMBER_UNBACKED` says so in one sentence each.
+// `sendInvitations`, `resendInvitation`, `revokeInvitation`). Remove, role, department and
+// per-person client access have no endpoint behind them; `MEMBER_UNBACKED` says so in one sentence each.
 //
 // This module is a function of a PERSON. Anything that is really a function of the ROLE LIST
 // — who holds a seat, what a policy step resolves to, how a workspace's coverage reads —
@@ -584,15 +584,13 @@ export const ABSENT_LABEL = '—'
  * server-stated: what is missing, not an apology or a promise.
  */
 export const MEMBER_UNBACKED: Record<
-  'remove' | 'role' | 'department' | 'clientAccess' | 'inviteLink' | 'revokeInvite',
+  'remove' | 'role' | 'department' | 'clientAccess',
   string
 > = {
   remove: 'Deleting a membership locks that person out on their next request, and nothing undoes it. That decision has not been taken.',
   role: 'The membership endpoint writes status only. Changing someone\'s access role has no server call behind it.',
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
   clientAccess: 'Client access is not stored per person — everyone in this workspace sees the same clients.',
-  inviteLink: 'The invite link exists only in the email. The server keeps only a hash of it.',
-  revokeInvite: 'There is no way to revoke an invite yet. An unused invite expires 7 days after it was sent.',
 }
 
 // ---------------------------------------------------------------------------
@@ -629,6 +627,19 @@ export async function sendInvitations(
 export function resendInvitation(f: AuthedFetch, base: string, id: string): Promise<InvitationWire> {
   return f<InvitationWire>(`${base}/api/tenancy/v1/invitations/${id}/resend`, { method: 'POST' })
 }
+
+export function revokeInvitation(f: AuthedFetch, base: string, id: string): Promise<{ id: string; status: 'revoked' }> {
+  return f<{ id: string; status: 'revoked' }>(`${base}/api/tenancy/v1/invitations/${id}/revoke`, { method: 'POST' })
+}
+
+/** Drops one invite by id; always allocates. */
+export function removeInvite(list: readonly PendingInvite[], id: string): PendingInvite[] {
+  return list.filter((i) => i.id !== id)
+}
+
+export const REVOKE_CONFIRM = 'Revoke this invite? The link in the email stops working at once.'
+export const REVOKE_KEEP = 'Keep invite'
+export const REVOKE_CONFIRMED = 'Revoke invite'
 
 /** `role` is verbatim, like `toMember`. */
 export function toPendingInvite(w: InvitationWire): PendingInvite {

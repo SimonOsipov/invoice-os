@@ -225,6 +225,35 @@ func (s *Store) ResendInvitation(ctx context.Context, id string) (IssuedInvite, 
 	return inv, nil
 }
 
+// RevokeInvitation withdraws a pending invite. Not counted against the daily send limit.
+func (s *Store) RevokeInvitation(ctx context.Context, id string) error {
+	return db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
+		caller, _ := auth.IdentityFromContext(ctx)
+		if _, err := requireInviteAdmin(ctx, tx, caller.Subject); err != nil {
+			return err
+		}
+		var status, role string
+		if err := tx.QueryRow(ctx,
+			`SELECT status, role FROM invitations WHERE id = $1 FOR UPDATE`, id,
+		).Scan(&status, &role); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrInvitationNotFound
+			}
+			return err
+		}
+		if status != "pending" {
+			return ErrInvitationNotPending
+		}
+		if _, err := tx.Exec(ctx, `UPDATE invitations SET status = 'revoked' WHERE id = $1`, id); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, caller.Subject, "invitation.revoked", map[string]any{
+			"invitation_id": id,
+			"role":          role,
+		})
+	})
+}
+
 // ListInvitations returns the tenant's pending invites that carry a token.
 func (s *Store) ListInvitations(ctx context.Context) ([]Invitation, error) {
 	out := []Invitation{}

@@ -352,6 +352,12 @@ func TestAccept_AnotherAddressIsRefused(t *testing.T) {
 // failAcceptAudit makes the tenant's invitation.accepted insert raise; the returned func drops the trigger.
 func failAcceptAudit(t *testing.T, super *pgxpool.Pool, tenant string) (drop func()) {
 	t.Helper()
+	return failAudit(t, super, tenant, "invitation.accepted")
+}
+
+// failAudit makes the tenant's insert of one audit event raise; the returned func drops the trigger.
+func failAudit(t *testing.T, super *pgxpool.Pool, tenant, event string) (drop func()) {
+	t.Helper()
 	ctx := context.Background()
 	name := "accept_audit_fail_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	if _, err := super.Exec(ctx,
@@ -362,7 +368,7 @@ func failAcceptAudit(t *testing.T, super *pgxpool.Pool, tenant string) (drop fun
 	t.Cleanup(func() { _, _ = super.Exec(context.Background(), `DROP FUNCTION IF EXISTS `+name+`() CASCADE`) })
 	if _, err := super.Exec(ctx,
 		`CREATE TRIGGER `+name+` BEFORE INSERT ON audit_log FOR EACH ROW
-		 WHEN (NEW.tenant_id = `+quoteLiteral(tenant)+`::uuid AND NEW.event = 'invitation.accepted') EXECUTE FUNCTION `+name+`()`); err != nil {
+		 WHEN (NEW.tenant_id = `+quoteLiteral(tenant)+`::uuid AND NEW.event = `+quoteLiteral(event)+`) EXECUTE FUNCTION `+name+`()`); err != nil {
 		t.Fatalf("create the forced-failure trigger: %v", err)
 	}
 	return func() {
@@ -626,5 +632,110 @@ func TestAccept_AMalformedTokenOrSubjectSendsNoStatement(t *testing.T) {
 				t.Errorf("sent %d statements, want none", n)
 			}
 		})
+	}
+}
+
+func TestInvitations_RevokedLinkIsDeadOnEveryPath(t *testing.T) {
+	w := newAcceptWorld(t, "reviewer")
+	live := mustIssue(t, w.adminCtx(), w.store, []string{"second@obi.test"}, "preparer")[0]
+	user := uuid.NewString()
+	invitee := tenantless(user, inviteeAddr)
+
+	// Controls: before the revoke every path works, so a refusal afterwards is the revoke's doing.
+	if _, err := w.store.PreviewInvitation(context.Background(), w.invite.Token); err != nil {
+		t.Fatalf("control: preview of the invite before the revoke: %v", err)
+	}
+	if _, err := w.store.PreviewInvitation(context.Background(), live.Token); err != nil {
+		t.Fatalf("control: preview of the second invite: %v", err)
+	}
+	if _, first, err := w.store.ClaimInvitationRegistration(context.Background(), live.Token); err != nil || !first {
+		t.Fatalf("control: claim of the second invite = first %v, err %v; want first, nil", first, err)
+	}
+	if got, err := w.store.MyPendingInvitations(invitee); err != nil || len(got) != 1 || got[0].ID != w.invite.ID {
+		t.Fatalf("control: MyPendingInvitations = %+v, %v; want the one invite", got, err)
+	}
+
+	if err := w.store.RevokeInvitation(w.adminCtx(), w.invite.ID); err != nil {
+		t.Fatalf("RevokeInvitation: %v", err)
+	}
+
+	if _, err := w.store.PreviewInvitation(context.Background(), w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
+		t.Errorf("PreviewInvitation err = %v, want ErrInvitationNotValid", err)
+	}
+	if _, _, _, err := w.store.AcceptInvitation(invitee, w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
+		t.Errorf("AcceptInvitation err = %v, want ErrInvitationNotValid", err)
+	}
+	if _, _, _, err := w.store.AcceptInvitationByID(invitee, w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+		t.Errorf("AcceptInvitationByID err = %v, want ErrInvitationNotValid", err)
+	}
+	if _, _, err := w.store.ClaimInvitationRegistration(context.Background(), w.invite.Token); !errors.Is(err, ErrInvitationNotValid) {
+		t.Errorf("ClaimInvitationRegistration err = %v, want ErrInvitationNotValid", err)
+	}
+	if got, err := w.store.MyPendingInvitations(invitee); err != nil || len(got) != 0 {
+		t.Errorf("MyPendingInvitations = %+v, %v; want empty", got, err)
+	}
+	if got := len(membersOf(t, w.super, user)); got != 0 {
+		t.Errorf("memberships of the invitee = %d, want 0", got)
+	}
+	if n := len(acceptedAudits(t, w.super, w.tenant)); n != 0 {
+		t.Errorf("invitation.accepted rows = %d, want 0", n)
+	}
+	requireStatus(t, w, "revoked")
+}
+
+func TestInvitations_RevokeTouchesOnlyInvitationsMembershipsAndAudit(t *testing.T) {
+	w := newInvWorld(t, "Revoke Trace Tenant", "Ada Obi")
+	store, tr := tracedStore(t)
+	issued := mustIssue(t, w.adminCtx(), w.store, []string{inviteeAddr}, "reviewer")[0]
+	if _, first, err := store.ClaimInvitationRegistration(context.Background(), issued.Token); err != nil || !first {
+		t.Fatalf("claim: first %v, err %v; want first, nil", first, err)
+	}
+	var claimed []byte
+	readClaim := func() {
+		t.Helper()
+		if err := w.super.QueryRow(context.Background(),
+			`SELECT registered_token_hash FROM invitations WHERE id = $1`, issued.ID).Scan(&claimed); err != nil {
+			t.Fatalf("read registered_token_hash: %v", err)
+		}
+	}
+	readClaim()
+	if len(claimed) == 0 {
+		t.Fatal("control: the claim stored no registered_token_hash")
+	}
+	stored := claimed
+	mark := tr.count()
+
+	if err := store.RevokeInvitation(w.adminCtx(), issued.ID); err != nil {
+		t.Fatalf("RevokeInvitation: %v", err)
+	}
+
+	tr.mu.Lock()
+	stmts := append([]tracedStmt(nil), tr.stmts[mark:]...)
+	tr.mu.Unlock()
+	if len(stmts) < 3 {
+		t.Fatalf("traced %d statements for the revoke, want at least 3 (the pool is not being observed)", len(stmts))
+	}
+	sawUpdate := false
+	for _, st := range stmts {
+		low := strings.Join(strings.Fields(strings.ToLower(st.sql)), " ")
+		if strings.Contains(low, "auth.") {
+			t.Errorf("a revoke statement names an auth relation: %s", st.sql)
+		}
+		if strings.Contains(low, "delete") {
+			t.Errorf("a revoke statement deletes: %s", st.sql)
+		}
+		if strings.Contains(low, "update invitations") {
+			sawUpdate = true
+		}
+	}
+	if !sawUpdate {
+		t.Error("no revoke statement updates invitations")
+	}
+	readClaim()
+	if string(claimed) != string(stored) {
+		t.Errorf("registered_token_hash = %x, want the stored claim %x left in place", claimed, stored)
+	}
+	if rows := invRows(t, w.super, w.tenant, "id = $2", issued.ID); len(rows) != 1 || rows[0].Status != "revoked" {
+		t.Errorf("rows = %+v, want one with status revoked", rows)
 	}
 }

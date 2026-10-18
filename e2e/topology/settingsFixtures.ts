@@ -93,8 +93,6 @@ export const UNBACKED = {
   role: "The membership endpoint writes status only. Changing someone's access role has no server call behind it.",
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
   clientAccess: 'Client access is not stored per person — everyone in this workspace sees the same clients.',
-  inviteLink: 'The invite link exists only in the email. The server keeps only a hash of it.',
-  revokeInvite: 'There is no way to revoke an invite yet. An unused invite expires 7 days after it was sent.',
 } as const
 
 /** Invitee account-state labels, transcribed from inviteAccountLine in frontend/app/src/lib/members.ts. */

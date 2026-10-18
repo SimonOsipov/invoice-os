@@ -1207,22 +1207,13 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   expect(listed, 'the server-refused address is not listed').not.toContain(refused)
   expect(listed, 'the malformed address is not listed').not.toContain(malformed)
 
-  // --- the row's menu: Resend is live, the other two say why they are not --------------------
+  // --- the row's menu: Resend and Revoke are live, no Copy link --------------------
   await row.getByTestId('member-menu-trigger').click()
   await expect(menu).toBeVisible()
   await expect(menu.getByRole('button', { name: 'Resend invite', exact: true })).toBeEnabled()
-  await expectDisabledWithReason(
-    menu.getByRole('button', { name: 'Copy invite link', exact: true }),
-    menu.getByTestId('member-menu-reason').filter({ hasText: UNBACKED.inviteLink }),
-    UNBACKED.inviteLink,
-    'Copy invite link',
-  )
-  await expectDisabledWithReason(
-    menu.getByRole('button', { name: 'Revoke invite', exact: true }),
-    menu.getByTestId('member-menu-reason').filter({ hasText: UNBACKED.revokeInvite }),
-    UNBACKED.revokeInvite,
-    'Revoke invite',
-  )
+  await expect(menu.getByRole('button', { name: 'Revoke invite', exact: true })).toBeEnabled()
+  await expect(menu.getByRole('button', { name: 'Copy invite link' })).toHaveCount(0)
+  await expect(menu.getByTestId('member-menu-reason')).toHaveCount(0)
 
   // L2: the open pending-row menu fits inside the table's scroller and makes it scroll no further.
   const l2 = await atEachWidth(page, async (width) => {
@@ -1341,6 +1332,36 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   expect(l4.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
   await testInfo.attach('members-top-bar-fit.json', { body: JSON.stringify(l4, null, 2), contentType: 'application/json' })
 
+  // --- revoke: the menu asks first, Keep sends nothing, confirm sends one POST ----------------
+  const revokePosts: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && /\/api\/tenancy\/v1\/invitations\/[^/]+\/revoke$/.test(r.url())) revokePosts.push(r.url())
+  })
+  const strip = page.getByTestId('invite-revoke-confirm')
+  const openRevoke = async () => {
+    await longRow.getByTestId('member-menu-trigger').click()
+    await expect(menu.getByRole('button', { name: 'Revoke invite', exact: true })).toBeEnabled()
+    await expect(menu.getByRole('button', { name: 'Copy invite link' })).toHaveCount(0)
+    await menu.getByRole('button', { name: 'Revoke invite', exact: true }).click()
+    await expect(strip).toBeVisible()
+  }
+  await openRevoke()
+  expect(revokePosts, 'the strip asks before any revoke is sent').toHaveLength(0)
+  await page.getByTestId('invite-revoke-keep').click()
+  await expect(strip).toHaveCount(0)
+  await expect(longRow, 'Keep invite leaves the row').toHaveCount(1)
+  expect(revokePosts, 'Keep invite sends no revoke').toHaveLength(0)
+
+  await openRevoke()
+  const revoked = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && /\/api\/tenancy\/v1\/invitations\/[^/]+\/revoke$/.test(r.url()),
+  )
+  await page.getByTestId('invite-revoke-confirmed').click()
+  expect((await revoked).status(), 'the revoke answers 200').toBe(200)
+  await expect(longRow, 'a revoked invite leaves the table').toHaveCount(0)
+  expect(revokePosts, 'confirming sends exactly one revoke').toHaveLength(1)
+  expect((await liveInvites()).map((i) => i.email), 'the server no longer lists the revoked address').not.toContain(long)
+
   // --- the invitee's account state: a confirmed invitee, then a faked `unconfirmed` row ------
   // A registered address reads `confirmed` once the fork's grant lands. Account values: Invitation.Account, internal/tenancy/invitations.go.
   const registered = (await registerFresh('invite-ui-account')).email
@@ -1363,7 +1384,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   await accountRow.getByTestId('member-menu-trigger').click()
   await expect(menu.getByTestId('member-menu-state')).toHaveText(INVITE_ACCOUNT_LABELS.confirmed)
   await expect(menu.getByRole('button', { name: 'Resend invite', exact: true })).toBeEnabled()
-  await expect(menu.getByTestId('member-menu-reason')).toHaveCount(2)
+  await expect(menu.getByTestId('member-menu-reason')).toHaveCount(0)
   await accountRow.getByTestId('member-menu-trigger').click()
   await expect(menu).toBeHidden()
 

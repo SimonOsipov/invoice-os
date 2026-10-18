@@ -164,8 +164,8 @@ func TestExtraction_FieldCorrectedIsNotInTheWorkspaceVocabulary(t *testing.T) {
 	if len(ruleD) < 15 {
 		t.Fatalf("rule-D payload map holds %d events, want at least 15", len(ruleD))
 	}
-	if len(readerFirmWideEvents) != 23 || len(readerDocumentEvents) != 3 {
-		t.Fatalf("ScopeOf fixtures hold %d firm-wide and %d document events, want 23 and 3",
+	if len(readerFirmWideEvents) != 24 || len(readerDocumentEvents) != 3 {
+		t.Fatalf("ScopeOf fixtures hold %d firm-wide and %d document events, want 24 and 3",
 			len(readerFirmWideEvents), len(readerDocumentEvents))
 	}
 

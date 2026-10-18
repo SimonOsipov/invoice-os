@@ -61,6 +61,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'invitation.sent',
     'invitation.resent',
     'invitation.accepted',
+    'invitation.revoked',
   ],
   validation: [
     'validation.rule.enabled',
@@ -159,6 +160,7 @@ describe('audit vocabulary', () => {
       'invitation.sent',
       'invitation.resent',
       'invitation.accepted',
+      'invitation.revoked',
       'custom_rule.created',
       'custom_rule.updated',
       'custom_rule.deleted',
@@ -256,6 +258,7 @@ describe('audit vocabulary', () => {
     for (const [id, label] of [
       ['invitation.sent', 'Invite sent'],
       ['invitation.resent', 'Invite resent'],
+      ['invitation.revoked', 'Invite revoked'],
     ]) {
       const view = auditEventView(id)
       // humanise() answers a null domain for an unknown id, so the domain tells labelled from unknown.
@@ -270,7 +273,8 @@ describe('audit vocabulary', () => {
       'invitation.Sent',
       'invitation.sent ',
       'invitation.resend',
-      'invitation.revoked',
+      'invitation.Revoked',
+      'invitation.revoked ',
       'invitation.Accepted',
       'invitation.accepted ',
       'invitation.accept',
@@ -278,7 +282,7 @@ describe('audit vocabulary', () => {
       const near = auditEventView(id)
       expect(near.domain, `${id} must not resolve to a labelled event`).toBeNull()
       expect(near.label).not.toBe(id)
-      expect(near.label).not.toMatch(/^Invite (sent|resent|accepted)$/)
+      expect(near.label).not.toMatch(/^Invite (sent|resent|accepted|revoked)$/)
       expect(near.tone).toBeNull()
     }
   })

@@ -221,7 +221,6 @@ describe('v2 entry', () => {
     ['components/ApiWebhooks.tsx', "=== '—' ? 'var(--fg-4)'"],
     ['helpers.ts', "done ? 'var(--fg-2)' : 'var(--fg-4)'"],
     ['components/BlogList.tsx', "featured ? 'var(--primary-foreground)' : 'var(--fg-4)'"],
-    ['components/BlogEditor.tsx', "fontSize: 10, color: 'var(--fg-4)'"],
   ]
 
   it('VE-09 --fg-4 stays only on the decorative uses', () => {

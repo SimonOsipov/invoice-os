@@ -268,7 +268,7 @@ function BlockCard({ block: b, i, n, onMove, onRemove, onPatch }: CardProps) {
   return (
     <div style={{ border: '1px solid var(--line-1)', borderRadius: 6, background: 'var(--bg-2)', overflow: 'hidden', animation: 'opsPop 200ms var(--ease-out)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px 8px 14px', background: 'var(--bg-3)', borderBottom: '1px solid var(--line-1)' }}>
-        <span className="mono" style={{ fontSize: 10, color: 'var(--fg-4)' }}>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
           {v.num}
         </span>
         <span className="mono" style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--fg-2)' }}>

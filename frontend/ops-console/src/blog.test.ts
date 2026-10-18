@@ -473,6 +473,28 @@ describe('previewModel', () => {
     expect(none.catName).toBe('No category')
   })
 
+  it('the tone index wraps at six and an unknown icon falls back', () => {
+    const tone = (t: number, icon = 'landmark') => previewModel(draft(), [cat('c1', { tone: t, icon })], A, []).tone
+    expect([0, 5, 6, 11, 14].map((t) => TONES.indexOf(tone(t)))).toEqual([0, 5, 0, 5, 2])
+    expect(previewModel(draft(), [cat('c1', { icon: 'no-such-glyph' })], A, []).icon).toBe('file-text')
+  })
+
+  it('an author gone from the list with no stored name adds no byline', () => {
+    expect(model({ author_id: 'gone', author_name: null }).meta).toBe('4 Oct 2026')
+  })
+
+  it('taken ids may be any iterable and a saved id ignores them', () => {
+    expect(previewModel(draft({ title: 'Dup' }), C, A, new Set(['dup'])).url).toBe('blog.ascomply.com/dup-2')
+    expect(previewModel(draft({ id: 'dup', title: 'Dup' }), C, A, new Set(['dup'])).url).toBe('blog.ascomply.com/dup')
+  })
+
+  it('building the preview leaves the draft body untouched', () => {
+    const body = blk({ type: 'p', text: '  x  ' }, { type: 'ul', items: [' a ', ''] })
+    const before = JSON.stringify(body)
+    model({ body })
+    expect(JSON.stringify(body)).toBe(before)
+  })
+
   it('empty text falls back to the placeholders and mutes the title', () => {
     const m = model({ title: '  ', summary: ' ' })
     expect([m.title, m.titleMuted, m.dek]).toEqual(['Untitled post', true, 'Your summary appears here.'])

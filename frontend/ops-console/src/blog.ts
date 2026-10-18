@@ -309,14 +309,14 @@ export function cleanBody(body: Block[]): Block[] {
       const items = (b.items ?? []).map((x) => x.trim()).filter(Boolean)
       if (items.length) c.items = items
     } else if (b.type === 'note') {
-      if (b.kind) c.kind = b.kind
+      c.kind = b.kind ?? ''
       c.title = (b.title ?? '').trim()
       c.text = (b.text ?? '').trim()
     } else if (b.type === 'quote') {
       c.text = (b.text ?? '').trim()
       c.who = (b.who ?? '').trim()
     } else if (b.type === 'demo') {
-      if (b.demo) c.demo = b.demo
+      c.demo = b.demo ?? ''
     } else {
       c.text = (b.text ?? '').trim()
     }

@@ -895,6 +895,10 @@ func TestNotificationsMain_RegistersTheBlogRoutes(t *testing.T) {
 		"PUT /v1/staff/blog/posts/{id}/cover":      {"SetCoverHandler", "SetCover"},
 		"DELETE /v1/staff/blog/posts/{id}/cover":   {"RemoveCoverHandler", "RemoveCover"},
 		"GET /v1/staff/blog/posts/{id}/cover":      {"GetCoverHandler", "GetCover"},
+		"GET /internal/blog/categories":            {"PublicCategoriesHandler", "PublicCategories"},
+		"GET /internal/blog/posts":                 {"PublicPostsHandler", "PublicPosts"},
+		"GET /internal/blog/posts/{id}":            {"PublicPostHandler", "PublicPost"},
+		"GET /internal/blog/covers/{id}/{version}": {"PublicCoverHandler", "PublicCover"},
 	}
 	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
 	if err != nil {

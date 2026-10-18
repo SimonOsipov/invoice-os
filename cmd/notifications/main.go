@@ -89,6 +89,11 @@ func main() {
 		_, _ = w.Write([]byte(`{"service":"notifications","status":"ok"}`))
 	})
 
+	app.Mux.HandleFunc("GET /internal/blog/categories", blog.PublicCategoriesHandler(blogStore.PublicCategories, app.Logger))
+	app.Mux.HandleFunc("GET /internal/blog/posts", blog.PublicPostsHandler(blogStore.PublicPosts, app.Logger))
+	app.Mux.HandleFunc("GET /internal/blog/posts/{id}", blog.PublicPostHandler(blogStore.PublicPost, app.Logger))
+	app.Mux.HandleFunc("GET /internal/blog/covers/{id}/{version}", blog.PublicCoverHandler(blogStore.PublicCover, app.Logger))
+
 	app.RequireGateway(mustEnv("GATEWAY_TOKEN"))
 
 	if err := app.Run(ctx); err != nil {

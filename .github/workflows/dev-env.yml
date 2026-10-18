@@ -515,7 +515,8 @@ jobs:
           OPS_CONSOLE_URL: ${{ steps.urls.outputs.ops_console_url }}
           SUPPORT_CONSOLE_URL: ${{ steps.urls.outputs.support_console_url }}
           LIBRARY_URL: ${{ steps.urls.outputs.library_url }}
-        run: bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL"
+          BLOG_URL: ${{ steps.urls.outputs.blog_url }}
+        run: bash scripts/ci/railway-env.sh fork-vars-after-urls "$ENV_ID" "$GATEWAY_URL" "$APP_URL" "$LANDING_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL" "$BLOG_URL"
 
       # The call log lives in $RUNNER_TEMP, which the runner sets for every step.
       - name: Report Railway API calls

@@ -1141,7 +1141,7 @@ func afterShimIn(t *testing.T, skip string, extra ...string) authShim {
 }
 
 func afterArgs() []string {
-	return append([]string{forkEnvID}, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL)
+	return append([]string{forkEnvID}, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL, batchBlogURL)
 }
 
 func runAfter(t *testing.T, s authShim) (out string, code int) {
@@ -1536,7 +1536,7 @@ func TestForkVarsAfterURLs_UsageAndLandingURLRefuseBeforeAnyCall(t *testing.T) {
 		{"an empty gateway URL", append([]string{forkEnvID, ""}, urls[1:]...), 2, "usage: railway-env.sh " + afterSub},
 		{"an empty support URL", append([]string{forkEnvID}, append(slices.Clone(urls[:4]), "")...), 2, "usage: railway-env.sh " + afterSub},
 		{"an empty environment id", append([]string{""}, urls...), 2, "usage: railway-env.sh " + afterSub},
-		{"a seventh argument", append(append([]string{forkEnvID}, urls...), "https://extra"), 2, "usage: railway-env.sh " + afterSub},
+		{"a ninth argument", append(append([]string{forkEnvID}, urls...), "https://extra"), 2, "usage: railway-env.sh " + afterSub},
 		{"an uppercase HTTPS landing URL", append([]string{forkEnvID, urls[0], urls[1], "HTTPS://LANDING.example"}, urls[3:]...), 1, "https://"},
 		{"an http landing URL", append([]string{forkEnvID, urls[0], urls[1], "http://x"}, urls[3:]...), 1, "https://"},
 		{"a bare https:// landing URL", append([]string{forkEnvID, urls[0], urls[1], "https://"}, urls[3:]...), 1, "https://"},
@@ -1655,6 +1655,7 @@ func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
 		"https://ops-console-pr-9.up.railway.app:8443/",
 		"https://support-console-pr-9.up.railway.app/x?y=1&z=%7E",
 		"https://Library-pr-9.up.railway.app:8444/",
+		"https://Blog-pr-9.up.railway.app:8445/",
 	}
 	s := newAfterShim(t, afterProdStores())
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), afterSub, append([]string{forkEnvID}, urls...)...)
@@ -1670,7 +1671,7 @@ func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
 	for _, c := range []struct{ svc, name, want string }{
 		{"auth", "GOTRUE_SITE_URL", urls[2]},
 		{"gateway", "AUTH_SITE_URL", urls[2]},
-		{"gateway", "CORS_ALLOWED_ORIGINS", strings.Join(urls[1:5], ",")},
+		{"gateway", "CORS_ALLOWED_ORIGINS", strings.Join(append(append([]string{}, urls[1:5]...), urls[6]), ",")},
 		{"app", "VITE_GATEWAY_URL", urls[0]},
 		{"app", "VITE_LIBRARY_URL", urls[5]},
 		{"app", "VITE_SUPPORT_URL", urls[4]},

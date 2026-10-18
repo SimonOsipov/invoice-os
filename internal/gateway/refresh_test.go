@@ -143,8 +143,8 @@ func TestRefresh_GoTrueErrorMapping(t *testing.T) {
 		requireRefusal(t, doRefresh(newRefresh(closed, log), refreshBody(refreshR0)), http.StatusBadGateway, msgRefreshUnavailable)
 		// The transport error names the address it could not reach.
 		var line struct{ Level, Error string }
-		if err := json.Unmarshal(buf.Bytes(), &line); err != nil || line.Level != "WARN" || !strings.Contains(line.Error, closed.Host) {
-			t.Errorf("unreachable must log one WARN line whose error names %s: %q", closed.Host, buf.String())
+		if err := json.Unmarshal(buf.Bytes(), &line); err != nil || line.Level != "WARN" || !strings.Contains(line.Error, closed.Host+": connect:") {
+			t.Errorf("unreachable must log one WARN line whose error dials %s: %q", closed.Host, buf.String())
 		}
 	})
 }

@@ -6,6 +6,10 @@ import { seedConsent } from '../smoke/landingConsent'
 import { seedStaffSession } from '../staffSession'
 import { resolveTarget } from '../targets'
 import { enclosesRect, rectsOverlap, WIDE_WIDTHS, type Rect } from './layout'
+import { shardTenants } from './targets'
+
+const SHARD = shardTenants('design-system.spec.ts')
+test.beforeAll(() => { expect(test.info().project.name, 'design-system.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
 
 const LANDING_URL = resolveTarget('LANDING_URL')
 
@@ -130,7 +134,7 @@ for (const path of ['/', '/privacy']) {
 
 test('app (firm) reads v2: Manrope h1 and ground, #f5bc88, no Fraunces or Inter, IBM Plex Mono loaded', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   const p = await probe(page)
   await attachProbe(testInfo, 'firm', p)

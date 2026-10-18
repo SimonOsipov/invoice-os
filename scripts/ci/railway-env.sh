@@ -1327,7 +1327,7 @@ settle_fork() {
   present=$(echo "$GQL_RESPONSE" | jq -r '.data.environment.serviceInstances.edges[]?.node.serviceId')
   for v in "$RAILWAY_SVC_GATEWAY_ID" "$RAILWAY_SVC_APP_ID" "$RAILWAY_SVC_LANDING_ID" \
            "$RAILWAY_SVC_OPS_CONSOLE_ID" "$RAILWAY_SVC_SUPPORT_CONSOLE_ID" "$RAILWAY_SVC_LIBRARY_ID" "$RAILWAY_SVC_BLOG_ID" "$RAILWAY_SVC_POSTGRES_ID"; do
-    if ! echo "$present" | grep -qx "$v"; then missing="$missing $v"; fi
+    if ! grep -qx "$v" <<<"$present"; then missing="$missing $v"; fi
   done
   if [ -n "$missing" ]; then
     echo "::error::Environment $env_id is missing service instance(s):$missing. This is NOT evidence that the development environment drifted; the Watch-Paths assertion would misreport an unmaterialised fork as exactly that."
@@ -2510,7 +2510,7 @@ ai_expect_pass() {
     echo "::error::self-test $id FAILED: expected exit 0, got exit $rc and '$out'"
     failures=$((failures + 1)); return 0
   fi
-  if [ -n "$needle" ] && printf '%s' "$out" | grep -qF -- "$needle"; then
+  if [ -n "$needle" ] && grep -qF -- "$needle" <<<"$out"; then
     echo "::error::self-test $id FAILED: the output leaked a fixture value"
     failures=$((failures + 1)); return 0
   fi
@@ -2524,7 +2524,7 @@ ai_expect_refusal() {
     echo "::error::self-test $id FAILED: expected a refusal, got exit 0 and '$out'"
     failures=$((failures + 1)); return 0
   fi
-  if [ -n "$needle" ] && printf '%s' "$out" | grep -qF -- "$needle"; then
+  if [ -n "$needle" ] && grep -qF -- "$needle" <<<"$out"; then
     echo "::error::self-test $id FAILED: the refusal leaked a fixture value"
     failures=$((failures + 1)); return 0
   fi
@@ -3670,7 +3670,7 @@ sentry_expect() {
     echo "::error::self-test $id FAILED: expected $want, got exit $rc and '$out'"
     failures=$((failures + 1)); return 0
   fi
-  if [ -n "$needle" ] && printf '%s' "$out" | grep -qF -- "$needle"; then
+  if [ -n "$needle" ] && grep -qF -- "$needle" <<<"$out"; then
     echo "::error::self-test $id FAILED: the output leaked a fixture value"
     failures=$((failures + 1)); return 0
   fi

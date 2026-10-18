@@ -86,6 +86,7 @@ func sorted(s []string) []string {
 }
 
 func TestDevEnvDeploySlotJobRunsTheScript(t *testing.T) {
+	t.Parallel()
 	j := devEnvJob(t, slotJobID)
 	if v, _ := jobKey(j, "name"); v != slotJobName {
 		t.Errorf("deploy-slot name = %q, want %q", v, slotJobName)
@@ -142,6 +143,7 @@ func TestDevEnvDeploySlotJobRunsTheScript(t *testing.T) {
 }
 
 func TestDevEnvDeploySlotSkipsDraftsAndIrrelevantRuns(t *testing.T) {
+	t.Parallel()
 	cond, ok := jobKey(devEnvJob(t, slotJobID), "if")
 	if !ok {
 		t.Fatal("deploy-slot has no if:")
@@ -157,6 +159,7 @@ func TestDevEnvDeploySlotSkipsDraftsAndIrrelevantRuns(t *testing.T) {
 }
 
 func TestPrepareEnvRequiresTheDeploySlot(t *testing.T) {
+	t.Parallel()
 	j := devEnvJob(t, "prepare-env")
 	needs := jobList(j, "needs")
 	for _, want := range []string{"deploy-slot", "changes"} {
@@ -170,6 +173,7 @@ func TestPrepareEnvRequiresTheDeploySlot(t *testing.T) {
 }
 
 func TestDeploySlotReleaseNeedsTheWholeDeployChain(t *testing.T) {
+	t.Parallel()
 	j := devEnvJob(t, releaseJobID)
 	if v, _ := jobKey(j, "name"); v != releaseJobName {
 		t.Errorf("name = %q, want %q", v, releaseJobName)
@@ -186,6 +190,7 @@ func TestDeploySlotReleaseNeedsTheWholeDeployChain(t *testing.T) {
 }
 
 func TestNoJobWaitsOnTheSlotRelease(t *testing.T) {
+	t.Parallel()
 	seen := map[string]bool{}
 	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
 		seen[j.name] = true
@@ -201,6 +206,7 @@ func TestNoJobWaitsOnTheSlotRelease(t *testing.T) {
 }
 
 func TestDeploySlotJobsHoldNoRailwayCredential(t *testing.T) {
+	t.Parallel()
 	for _, id := range []string{slotJobID, releaseJobID} {
 		j := devEnvJob(t, id)
 		if len(j.lines) == 0 {
@@ -218,6 +224,7 @@ func TestDeploySlotJobsHoldNoRailwayCredential(t *testing.T) {
 }
 
 func TestDeploySlotTimeoutBoundsTheWait(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "ci", "deploy-slot.sh"))
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +255,7 @@ func TestDeploySlotTimeoutBoundsTheWait(t *testing.T) {
 }
 
 func TestDeploySlotPermissions(t *testing.T) {
+	t.Parallel()
 	slot := blockLines(devEnvJob(t, slotJobID).lines, 4, "permissions")
 	if !slices.Equal(sorted(slot), []string{"actions: read", "contents: read"}) {
 		t.Errorf("deploy-slot permissions = %v, want actions: read + contents: read", slot)
@@ -262,6 +270,7 @@ func TestDeploySlotPermissions(t *testing.T) {
 }
 
 func TestDeploySlotReleaseWaitsForEveryJobThatDeploys(t *testing.T) {
+	t.Parallel()
 	needs := jobList(devEnvJob(t, releaseJobID), "needs")
 	deployers := 0
 	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
@@ -284,6 +293,7 @@ func TestDeploySlotReleaseWaitsForEveryJobThatDeploys(t *testing.T) {
 }
 
 func TestDeploySlotAndPrepareEnvShareTheRelevanceGate(t *testing.T) {
+	t.Parallel()
 	slot, _ := jobKey(devEnvJob(t, slotJobID), "if")
 	prep, _ := jobKey(devEnvJob(t, "prepare-env"), "if")
 	if slot == "" || prep == "" {

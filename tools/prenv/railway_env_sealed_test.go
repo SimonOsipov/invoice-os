@@ -122,6 +122,7 @@ func requireAllowed(t *testing.T, stdout, out string, code int, allowed ...strin
 }
 
 func TestAuditSealed_NoneSealedPasses(t *testing.T) {
+	t.Parallel()
 	var nodes []string
 	for i := 0; len(nodes) < 30; i++ {
 		svc := []string{sealedAuthID, sealedGatewayID, sealedAdminID}[i%3]
@@ -143,8 +144,10 @@ func TestAuditSealed_NoneSealedPasses(t *testing.T) {
 }
 
 func TestAuditSealed_AllowlistOnAuthPasses(t *testing.T) {
+	t.Parallel()
 	for _, set := range [][]string{sealedAllowlist[:1], sealedAllowlist[:2], sealedAllowlist} {
 		t.Run(strings.Join(set, "+"), func(t *testing.T) {
+			t.Parallel()
 			nodes := []string{plainOn("PORT", sealedAuthID), plainOn("ENVIRONMENT", sealedGatewayID)}
 			for _, n := range set {
 				nodes = append(nodes, sealedOn(n, sealedAuthID))
@@ -162,6 +165,7 @@ func TestAuditSealed_AllowlistOnAuthPasses(t *testing.T) {
 }
 
 func TestAuditSealed_SendingKeyOnTenancyPasses(t *testing.T) {
+	t.Parallel()
 	plain := []string{plainOn("PORT", sealedAuthID), plainOn("ENVIRONMENT", sealedGatewayID), plainOn("PORT", sealedTenancyID)}
 	t.Run("alone", func(t *testing.T) {
 		nodes := append([]string{sealedOn("RESEND_SENDING_KEY", sealedTenancyID)}, plain...)
@@ -180,6 +184,7 @@ func TestAuditSealed_SendingKeyOnTenancyPasses(t *testing.T) {
 		requireAllowed(t, stdout, out, code, append(slices.Clone(sealedAllowlist), tenancyAllowlist...)...)
 	})
 	t.Run("auth names sealed, tenancy key unsealed", func(t *testing.T) {
+		t.Parallel()
 		var nodes []string
 		for _, n := range sealedAllowlist {
 			nodes = append(nodes, sealedOn(n, sealedAuthID))
@@ -192,6 +197,7 @@ func TestAuditSealed_SendingKeyOnTenancyPasses(t *testing.T) {
 		}
 	})
 	t.Run("unsealed on tenancy is not listed as sealed", func(t *testing.T) {
+		t.Parallel()
 		stdout, out, code := runAudit(t, newSealedShim(t, sourceInstances(), plainOn("RESEND_SENDING_KEY", sealedTenancyID)))
 		requireAllowed(t, stdout, out, code)
 		if strings.Contains(stdout, "RESEND_SENDING_KEY") {
@@ -203,6 +209,7 @@ func TestAuditSealed_SendingKeyOnTenancyPasses(t *testing.T) {
 // Each case runs alone and beside the allowed tenancy key: beside it, a name-only or
 // tenancy-wide allow would also hide the offender.
 func TestAuditSealed_SendingKeyElsewhereFails(t *testing.T) {
+	t.Parallel()
 	const notificationsID = "svc-notifications-source"
 	cases := []struct {
 		name string
@@ -234,6 +241,7 @@ func TestAuditSealed_SendingKeyElsewhereFails(t *testing.T) {
 }
 
 func TestAuditSealed_FourthNameOnAuthFails(t *testing.T) {
+	t.Parallel()
 	stdout, out, code := runAudit(t, newSealedShim(t, sourceInstances(),
 		sealedOn("GOTRUE_JWT_KEYS", sealedAuthID), sealedOn("GOTRUE_SITE_URL", sealedAuthID)))
 	requireRefused(t, out, code, "GOTRUE_SITE_URL@"+sealedAuthID)
@@ -243,6 +251,7 @@ func TestAuditSealed_FourthNameOnAuthFails(t *testing.T) {
 }
 
 func TestAuditSealed_AllowlistedNameOnOtherServiceFails(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		nodes []string
@@ -257,6 +266,7 @@ func TestAuditSealed_AllowlistedNameOnOtherServiceFails(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			_, out, code := runAudit(t, newSealedShim(t, sourceInstances(), c.nodes...))
 			requireRefused(t, out, code, c.want...)
 		})
@@ -265,11 +275,14 @@ func TestAuditSealed_AllowlistedNameOnOtherServiceFails(t *testing.T) {
 
 // Boundary: a null serviceId is not auth's.
 func TestAuditSealed_AllowlistedNameEnvironmentScopedFails(t *testing.T) {
+	t.Parallel()
 	t.Run("alone", func(t *testing.T) {
+		t.Parallel()
 		_, out, code := runAudit(t, newSealedShim(t, sourceInstances(), sealedOn("GOTRUE_JWT_SECRET", "")))
 		requireRefused(t, out, code, "GOTRUE_JWT_SECRET@"+envScoped)
 	})
 	t.Run("mixed with the same name on auth", func(t *testing.T) {
+		t.Parallel()
 		_, out, code := runAudit(t, newSealedShim(t, sourceInstances(),
 			sealedOn("GOTRUE_JWT_SECRET", sealedAuthID), sealedOn("GOTRUE_JWT_SECRET", "")))
 		requireRefused(t, out, code, "GOTRUE_JWT_SECRET@"+envScoped)
@@ -279,11 +292,13 @@ func TestAuditSealed_AllowlistedNameEnvironmentScopedFails(t *testing.T) {
 // A near-miss sits beside a real allowlisted name, so a loose match and a
 // blanket refusal both fail here.
 func TestAuditSealed_NameMatchIsExact(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{
 		"gotrue_jwt_keys", "Gotrue_Jwt_Secret", "GOTRUE_JWT_KEYS_OLD", "X_GOTRUE_JWT_KEYS",
 		"GOTRUE_JWT_KEY", "GOTRUE_SMTP_PAS", "GOTRUE.JWT.KEYS", "GOTRUE_JWT_KEYSGOTRUE_JWT_SECRET",
 	} {
 		t.Run(variant, func(t *testing.T) {
+			t.Parallel()
 			_, out, code := runAudit(t, newSealedShim(t, sourceInstances(),
 				sealedOn(variant, sealedAuthID), sealedOn("GOTRUE_JWT_SECRET", sealedAuthID)))
 			requireRefused(t, out, code, variant+"@"+sealedAuthID)
@@ -293,6 +308,7 @@ func TestAuditSealed_NameMatchIsExact(t *testing.T) {
 
 // The allowlist does not mask any other sealed variable in the same response.
 func TestAuditSealed_MixedSetFailsOnTheOffendersAlone(t *testing.T) {
+	t.Parallel()
 	nodes := []string{plainOn("PORT", sealedAuthID)}
 	for _, n := range sealedAllowlist {
 		nodes = append(nodes, sealedOn(n, sealedAuthID))
@@ -304,6 +320,7 @@ func TestAuditSealed_MixedSetFailsOnTheOffendersAlone(t *testing.T) {
 
 // Sealed variables outside the allowlist fail exactly as before the allowlist existed.
 func TestAuditSealed_OtherServicesRefusalUnchanged(t *testing.T) {
+	t.Parallel()
 	_, out, code := runAudit(t, newSealedShim(t, sourceInstances(),
 		plainOn("PORT", sealedAuthID), sealedOn("GEMINI_API_KEY", sealedGatewayID), sealedOn("JEV_API_KEY", "")))
 	requireRefused(t, out, code, "GEMINI_API_KEY@"+sealedGatewayID, "JEV_API_KEY@"+envScoped)
@@ -313,6 +330,7 @@ func TestAuditSealed_OtherServicesRefusalUnchanged(t *testing.T) {
 }
 
 func TestAuditSealed_MissingAuthServiceFailsClosed(t *testing.T) {
+	t.Parallel()
 	noAuth := [][]string{
 		{instance(sealedGatewayID, "gateway"), instance(sealedAdminID, "auth-admin")},
 		{instance(sealedGatewayID, "gateway"), instance(sealedAuthID, "Auth")},
@@ -320,6 +338,7 @@ func TestAuditSealed_MissingAuthServiceFailsClosed(t *testing.T) {
 	}
 	for i, instances := range noAuth {
 		t.Run([]string{"auth absent", "only a case variant of auth", "no instances"}[i], func(t *testing.T) {
+			t.Parallel()
 			stdout, out, code := runAudit(t, newSealedShim(t, instances, sealedOn("GOTRUE_JWT_KEYS", sealedAuthID)))
 			if code != 1 {
 				t.Errorf("exit %d, want 1; output = %q", code, out)
@@ -339,6 +358,7 @@ func TestAuditSealed_MissingAuthServiceFailsClosed(t *testing.T) {
 }
 
 func TestAuditSealed_NullEnvironmentFails(t *testing.T) {
+	t.Parallel()
 	s := newAuthShim(t, map[string]string{
 		"sealed": `{"data":{"environment":null}}`,
 		"settle": `{"data":{"environment":null}}`,
@@ -364,6 +384,7 @@ func sealedAuditQuery(t *testing.T) string {
 }
 
 func TestAuditSealed_QuerySelectsNoValue(t *testing.T) {
+	t.Parallel()
 	q := sealedAuditQuery(t)
 	for _, f := range []string{"name", "isSealed", "serviceId"} {
 		if !regexp.MustCompile(`\b` + f + `\b`).MatchString(q) {
@@ -382,6 +403,7 @@ var (
 
 // Every shim fixture that seals a variable gives it no value key.
 func TestSealedFixturesCarryNoValue(t *testing.T) {
+	t.Parallel()
 	files, err := filepath.Glob("*_test.go")
 	if err != nil {
 		t.Fatal(err)

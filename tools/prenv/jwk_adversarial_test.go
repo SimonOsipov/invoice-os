@@ -40,6 +40,7 @@ func assertNoKeyInOutput(t *testing.T, stdout, stderr string, secrets ...string)
 }
 
 func TestJWKCheckRefusesKeysGoTrueCannotSignWith(t *testing.T) {
+	t.Parallel()
 	good := fixtureJWK(t, "5f0c6b1e-3a2d-4c1b-9e8f-7a6b5c4d3e2f")
 	other := fixtureJWK(t, "0b9e8d7c-6f5a-4e3d-8c2b-1a0f9e8d7c6b")
 	secrets := []string{good["d"].(string), other["d"].(string)}
@@ -89,6 +90,7 @@ func TestJWKCheckRefusesKeysGoTrueCannotSignWith(t *testing.T) {
 // GoTrue picks the signing key by key_ops and republishes every public key with use "sig",
 // so a stray use member changes nothing it does; jwk-check agrees.
 func TestJWKCheckAcceptsAStrayUseMemberAsGoTrueDoes(t *testing.T) {
+	t.Parallel()
 	good := fixtureJWK(t, "5f0c6b1e-3a2d-4c1b-9e8f-7a6b5c4d3e2f")
 	for _, use := range []string{"sig", "enc"} {
 		t.Run(use, func(t *testing.T) {
@@ -103,6 +105,7 @@ func TestJWKCheckAcceptsAStrayUseMemberAsGoTrueDoes(t *testing.T) {
 }
 
 func TestJWKCheckHugeOrBinaryInputIsRefusedQuietly(t *testing.T) {
+	t.Parallel()
 	d := fixtureJWK(t, "5f0c6b1e-3a2d-4c1b-9e8f-7a6b5c4d3e2f")["d"].(string)
 	noise := make([]byte, 64<<10)
 	if _, err := rand.Read(noise); err != nil {
@@ -136,6 +139,7 @@ func TestJWKCheckHugeOrBinaryInputIsRefusedQuietly(t *testing.T) {
 
 // RFC 7517 member names are case-sensitive, and so is GoTrue's parser: "D" leaves it a public-only key.
 func TestJWKCheckMemberNamesAreCaseSensitive(t *testing.T) {
+	t.Parallel()
 	good := fixtureJWK(t, "5f0c6b1e-3a2d-4c1b-9e8f-7a6b5c4d3e2f")
 	d := good["d"].(string)
 	if _, _, code := runJWKCheck(t, mustJSON(t, []any{good})); code != 0 {

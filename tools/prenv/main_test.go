@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -36,7 +37,32 @@ func TestMain(m *testing.M) {
 		panic("building prenv for CLI tests failed: " + err.Error() + "\n" + string(out))
 	}
 
+	shimTrampoline = filepath.Join(dir, "shim-trampoline")
+	if err := os.WriteFile(shimTrampoline, []byte("#!/bin/sh\nexec /bin/sh \"$0.body\" \"$@\"\n"), 0o555); err != nil {
+		panic(err)
+	}
+	warmShimTrampoline(dir)
+
 	os.Exit(m.Run())
+}
+
+// warmShimTrampoline execs the trampoline once so the macOS first-exec delay lands before the parallel tests.
+func warmShimTrampoline(dir string) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	warm := filepath.Join(dir, "warm")
+	if err := os.WriteFile(warm+".body", nil, 0o644); err != nil {
+		panic(err)
+	}
+	if err := os.Symlink(shimTrampoline, warm); err != nil {
+		panic(err)
+	}
+	if err := exec.Command(warm).Run(); err != nil {
+		panic("warming the shim trampoline failed: " + err.Error())
+	}
+	os.Remove(warm)
+	os.Remove(warm + ".body")
 }
 
 // runCLI execs the built prenv binary with args and returns its stdout,
@@ -64,6 +90,7 @@ func runCLI(t *testing.T, args ...string) (stdout, stderr string, exitCode int) 
 // prints exactly the environment name plus a newline to stdout, nothing to
 // stderr, and exits 0.
 func TestCLINameSuccess(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runCLI(t, "name", "42")
 	if code != 0 {
 		t.Errorf("exit code = %d, want 0", code)
@@ -80,6 +107,7 @@ func TestCLINameSuccess(t *testing.T) {
 // name prints exactly the PR number plus a newline to stdout, nothing to
 // stderr, and exits 0.
 func TestCLIParseSuccess(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		want string
@@ -110,6 +138,7 @@ func TestCLIParseSuccess(t *testing.T) {
 // actually matters to a caller capturing stdout as data — stdout must stay
 // completely empty; every diagnostic goes to stderr only.
 func TestCLICalledWrongExitsTwoWithCleanStdout(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		desc string
 		args []string
@@ -148,6 +177,7 @@ func TestCLICalledWrongExitsTwoWithCleanStdout(t *testing.T) {
 // tell "skip this, it's not a PR env" from "prenv itself is broken" without
 // parsing stderr text. stdout must stay empty here too.
 func TestCLIParseNotAPREnvironmentExitsOneWithCleanStdout(t *testing.T) {
+	t.Parallel()
 	names := []string{"development", "production", "staging", "pr-01", ""}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
@@ -182,6 +212,7 @@ func TestCLIParseNotAPREnvironmentExitsOneWithCleanStdout(t *testing.T) {
 // per-environment outcome (every open PR, every run), and stderr noise
 // would bury real failures.
 func TestCLISweepDecideExitContract(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name       string
 		ghJSON     string
@@ -223,6 +254,7 @@ func TestCLISweepDecideExitContract(t *testing.T) {
 // ParseBool/Atoi cases print a sweep-decide-specific diagnostic. Verified
 // by hand at implementation time -- no case reaches the catch-all.
 func TestCLISweepDecideCalledWrongExitsTwoWithCleanStdout(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		desc string
 		args []string
@@ -262,6 +294,7 @@ func TestCLISweepDecideCalledWrongExitsTwoWithCleanStdout(t *testing.T) {
 // process boundary the sweeper actually crosses, not just the pure Go
 // functions in isolation.
 func TestCLISweepDecideNeverReapsOnGhFailure(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		ghJSON string
@@ -277,4 +310,38 @@ func TestCLISweepDecideNeverReapsOnGhFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// runToFiles runs cmd with stdout and stderr in regular files (one file when merge is set).
+// A file, not a pipe: bash 3.2 on macOS fails an echo with EINTR when a pipe write blocks.
+func runToFiles(t *testing.T, cmd *exec.Cmd, merge bool) (stdout, stderr string, err error) {
+	t.Helper()
+	dir := t.TempDir()
+	outF, ferr := os.Create(filepath.Join(dir, "stdout"))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	defer outF.Close()
+	errF := outF
+	if !merge {
+		if errF, ferr = os.Create(filepath.Join(dir, "stderr")); ferr != nil {
+			t.Fatal(ferr)
+		}
+		defer errF.Close()
+	}
+	cmd.Stdout, cmd.Stderr = outF, errF
+	err = cmd.Run()
+	o, rerr := os.ReadFile(outF.Name())
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	stdout = string(o)
+	if !merge {
+		e, rerr := os.ReadFile(errF.Name())
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		stderr = string(e)
+	}
+	return stdout, stderr, err
 }

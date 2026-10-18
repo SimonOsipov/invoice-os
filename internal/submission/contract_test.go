@@ -52,7 +52,7 @@ import (
 )
 
 // ContractT is the slice of *testing.T the suite needs. *testing.T satisfies it (confirmed on
-// this toolchain, Go 1.26.4: func (c *common) Helper() and func (c *common) Errorf(format
+// this toolchain: func (c *common) Helper() and func (c *common) Errorf(format
 // string, args ...any) are both on *testing.T's method set). M5-02-07's recorder substitutes a
 // narrow double for it -- [suite-takes-a-narrow-t] -- which is only possible because
 // RunAdapterContract, CheckResult and CheckEvidence never reach for t.Run (whose callback is

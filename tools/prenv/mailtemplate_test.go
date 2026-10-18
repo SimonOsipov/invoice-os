@@ -137,6 +137,7 @@ func wantOK(t *testing.T, code int, out, url string) {
 
 // AC 1.
 func TestMailTemplateCheck_RealTemplatePasses(t *testing.T) {
+	t.Parallel()
 	src, err := accountmail.Template("confirmation")
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +160,7 @@ func TestMailTemplateCheck_RealTemplatePasses(t *testing.T) {
 
 // AC 2.
 func TestMailTemplateCheck_SPAFails(t *testing.T) {
+	t.Parallel()
 	srv := htmlServer(t, mailSPA)
 	code, out := runMailCheck(t, srv.Client(), srv.URL)
 
@@ -170,6 +172,7 @@ func TestMailTemplateCheck_SPAFails(t *testing.T) {
 
 // AC 3.
 func TestMailTemplateCheck_Non200Fails(t *testing.T) {
+	t.Parallel()
 	srv := mailServer(t, http.StatusNotFound, "text/html", mailMinimalTemplate)
 	code, out := runMailCheck(t, srv.Client(), srv.URL)
 
@@ -181,6 +184,7 @@ func TestMailTemplateCheck_Non200Fails(t *testing.T) {
 
 // AC 3.
 func TestMailTemplateCheck_ParseErrorFails(t *testing.T) {
+	t.Parallel()
 	srv := htmlServer(t, `{{ .ConfirmationURL`)
 	code, out := runMailCheck(t, srv.Client(), srv.URL)
 
@@ -194,6 +198,7 @@ func TestMailTemplateCheck_ParseErrorFails(t *testing.T) {
 // renders empty), so the rows use bodies that do: `len 3` always, `len .Data.registration`
 // only when the answers are absent.
 func TestMailTemplateCheck_ExecuteErrorFails(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"always":                   `{{ .ConfirmationURL }}{{ len 3 }}`,
 		"only without the answers": `{{ .ConfirmationURL }}{{ len .Data.registration }}`,
@@ -228,6 +233,7 @@ func padded(t *testing.T, n int) string {
 
 // AC 3, boundary: GoTrue's LimitReader reads exactly TemplateMaxSize bytes.
 func TestMailTemplateCheck_OversizeFails(t *testing.T) {
+	t.Parallel()
 	t.Run("exactly the limit passes", func(t *testing.T) {
 		srv := htmlServer(t, padded(t, goTrueTemplateMaxSize))
 		code, out := runMailCheck(t, srv.Client(), srv.URL)
@@ -246,6 +252,7 @@ func TestMailTemplateCheck_OversizeFails(t *testing.T) {
 
 // AC 4.
 func TestMailTemplateCheck_ImageRules(t *testing.T) {
+	t.Parallel()
 	imgs := newImageServer(t)
 	plain := mailServer(t, http.StatusOK, "image/png", string(pngBytes))
 	cases := []struct {
@@ -282,6 +289,7 @@ func TestMailTemplateCheck_ImageRules(t *testing.T) {
 
 // AC 5.
 func TestMailTemplateCheck_MalformedCallExits2(t *testing.T) {
+	t.Parallel()
 	for name, urls := range map[string][]string{
 		"no argument":      nil,
 		"ftp scheme":       {"ftp://x"},
@@ -306,6 +314,7 @@ func (f failTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // AC 5, through the built binary: the call reaches RunMailTemplateCheck, not the unknown-subcommand path.
 func TestMailTemplateCheck_CLI(t *testing.T) {
+	t.Parallel()
 	t.Run("usage names both subcommands", func(t *testing.T) {
 		_, stderr, _ := runCLI(t)
 		for _, sub := range []string{"mail-template-check", "mail-logo-check"} {
@@ -342,6 +351,7 @@ func TestMailTemplateCheck_CLI(t *testing.T) {
 
 // AC 1 and 3 (mixed): one failure fails the run, and every URL still gets its line.
 func TestMailTemplateCheck_OneFailureFailsTheRun(t *testing.T) {
+	t.Parallel()
 	good := htmlServer(t, mailMinimalTemplate)
 	spa := htmlServer(t, mailSPA)
 	code, out := runMailCheck(t, good.Client(), good.URL, spa.URL)
@@ -363,6 +373,7 @@ func TestMailTemplateCheck_OneFailureFailsTheRun(t *testing.T) {
 
 // AC 11: html/template writes the & of the sample URL as &amp;; the check compares the unescaped output.
 func TestMailTemplateCheck_ConfirmationURLWithAmpersand(t *testing.T) {
+	t.Parallel()
 	escaped := strings.ReplaceAll(mailSampleURL, "&", "&amp;")
 	i := strings.Index(mailSampleURL, "&")
 	if escaped == mailSampleURL {
@@ -393,6 +404,7 @@ func runLogoCheck(t *testing.T, client *http.Client, url string) (int, string) {
 
 // AC 9.
 func TestMailLogoCheck_ImageRules(t *testing.T) {
+	t.Parallel()
 	imgs := newImageServer(t)
 	plain := mailServer(t, http.StatusOK, "image/png", string(pngBytes))
 	cases := []struct {

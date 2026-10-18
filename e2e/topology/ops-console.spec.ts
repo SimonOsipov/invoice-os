@@ -1094,6 +1094,21 @@ const bar = (page: Page) => page.locator('[data-blog-editor]')
 const editorLeft = (page: Page) => page.locator('[data-bscroll]').first()
 const editorPreview = (page: Page) => page.locator('[data-bscroll]').nth(1)
 const toastOf = (page: Page, text: string) => page.getByText(text, { exact: true })
+// The toast's icon takes --status-red-text for the red tone and --teal-300 otherwise; read in one evaluate, as the toast times out.
+async function expectRedToast(page: Page, text: string): Promise<void> {
+  const toast = toastOf(page, text)
+  await expect(toast, `no "${text}" toast`).toBeVisible()
+  const tone = await toast.evaluate((el) => {
+    const root = el.parentElement!
+    const probe = document.createElement('span')
+    probe.style.color = 'var(--status-red-text)'
+    root.appendChild(probe)
+    const red = getComputedStyle(probe).color
+    probe.remove()
+    return { icon: getComputedStyle(root.firstElementChild as Element).color, red }
+  })
+  expect(tone.icon, `the "${text}" toast is not red`).toBe(tone.red)
+}
 const titleInput = (page: Page) => page.getByPlaceholder(/^What structured e-invoicing changes for/)
 const summaryInput = (page: Page) => page.getByPlaceholder(/^One or two sentences\./)
 
@@ -1149,7 +1164,7 @@ test.describe('OPS-06 blog writes', () => {
     await page.getByRole('button', { name: 'Publish', exact: true }).click()
     const empty = 'Add a summary. It shows on cards and under the title.'
     await expect(page.getByText(empty, { exact: true }), 'the 422 marked no Summary message').toBeVisible()
-    await expect(toastOf(page, 'Fix the highlighted fields to publish')).toBeVisible()
+    await expectRedToast(page, 'Fix the highlighted fields to publish')
     await expect(summaryInput(page), 'Summary border (--destructive)').toHaveCSS('border-top-color', await resolveColor(bar(page), '--destructive'))
 
     await summaryInput(page).fill(summary)
@@ -1175,10 +1190,10 @@ test.describe('OPS-06 blog writes', () => {
     const file = left.locator('input[type=file]')
     const bad = toastOf(page, BAD_IMAGE)
     await file.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') })
-    await expect(bad, 'a text file drew no image toast').toBeVisible()
+    await expectRedToast(page, BAD_IMAGE)
     await expect(bad).toBeHidden({ timeout: 6_000 })
     await file.setInputFiles({ name: 'broken.png', mimeType: 'image/png', buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(32)]) })
-    await expect(bad, 'a corrupt PNG drew no image toast').toBeVisible()
+    await expectRedToast(page, BAD_IMAGE)
     await expect(left.getByRole('img', { name: 'Cover image' }), 'a rejected file left a thumbnail').toHaveCount(0)
     const png = await page.evaluate(() => {
       const c = document.createElement('canvas')
@@ -1262,14 +1277,15 @@ test.describe('OPS-06 blog writes', () => {
       refused = true
       return fulfillStatus(route, 401, { error: 'unauthorized' })
     })
-    const stored = () => page.evaluate((key) => (JSON.parse(localStorage.getItem(key) ?? 'null') as { token?: string } | null)?.token ?? null, CONSOLE_SESSION_KEY.ops)
+    // The whole record: the refresh token rotates on every renewal, while an access token minted in the same second can repeat.
+    const stored = () => page.evaluate((key) => localStorage.getItem(key), CONSOLE_SESSION_KEY.ops)
     const before = await stored()
     expect(before, 'no stored session before the save').not.toBeNull()
     await page.getByRole('button', { name: 'Save draft', exact: true }).click()
     await expect(toastOf(page, 'Draft saved')).toBeVisible()
     expect(refused, 'the first save was never refused').toBe(true)
     expect(new URL(page.url()).origin, 'the console left the ops origin').toBe(new URL(consoleUrl('ops')).origin)
-    expect(await stored(), 'the stored token was not renewed').not.toBe(before)
+    expect(await stored(), 'the stored session was not renewed').not.toBe(before)
     expect(await page.evaluate((key) => localStorage.getItem(key), KEPT_KEY), 'a kept copy was stored').toBeNull()
     expect(errors, errorsOf(errors)).toEqual([])
   })
@@ -1330,7 +1346,7 @@ test.describe('OPS-06 blog writes', () => {
     await titleInput(page).fill(title)
     await page.route(BLOG_POSTS, (route) => (route.request().method() === 'POST' ? fulfillStatus(route, 500, { error: 'internal error' }) : route.fallback()))
     await page.getByRole('button', { name: 'Save draft', exact: true }).click()
-    await expect(toastOf(page, 'internal error')).toBeVisible()
+    await expectRedToast(page, 'internal error')
     await expect(bar(page).getByText('UNSAVED CHANGES', { exact: true })).toBeVisible()
     expect((await serverPosts(await staffToken())).some((p) => p.title === title), 'the failed save created a post').toBe(false)
     expect(errors, errorsOf(errors)).toEqual([])

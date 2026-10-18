@@ -165,7 +165,7 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 // and writes a
 // "portfolio.entity.updated" audit row in the same transaction (M3-03-04,
 // task-37). Only an active admin may call it: anyone else gets
-// ErrNotPermitted before any validation. An all-nil in is then rejected as
+// ErrNotPermitted. An all-nil in is then rejected as
 // ErrValidation (a no-op UPDATE is forbidden). A non-nil in.TIN is re-validated via
 // ValidateTIN and the canonical form (not the raw input) is what gets
 // persisted. The SET clause only ever touches the provided fields -- status

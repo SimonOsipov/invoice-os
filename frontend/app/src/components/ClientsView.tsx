@@ -126,9 +126,8 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   )
   const filteredState = base == null ? 'idle' : filtered.status
   const access = companySetupAccess(ctx.membersState, ctx.members)
-  // Only a known non-admin is blocked; loading/error keep today's controls (D10).
+  // Only a known non-admin is blocked; loading/error keep today's controls.
   const adminOnly = access === 'wait'
-  const canChange = !adminOnly
   const noteId = useId()
   const noClients = access === 'wait' ? NO_COMPANY_COPY : { title: 'No entities yet', message: 'Add your first business entity to get started.' }
   const rows = filtered.data?.entities ?? []
@@ -226,11 +225,11 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
           {(access === 'add' || adminOnly) && (
             <button
               onClick={() => setModal({ mode: 'create' })}
-              disabled={base == null || !canChange}
+              disabled={base == null || adminOnly}
               title={adminOnly ? CLIENT_ADMIN_ONLY : undefined}
               aria-describedby={adminOnly ? noteId : undefined}
               className="v2-btn v2-btn-primary pf-btn"
-              style={base == null || !canChange ? DISABLED : undefined}
+              style={base == null || adminOnly ? DISABLED : undefined}
             >
               <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add client
             </button>
@@ -302,11 +301,11 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                       ev.stopPropagation() // the row's own onClick opens the edit modal (AC #6)
                       void handleArchiveClick(e, action)
                     }}
-                    disabled={archivingId === e.id || !canChange}
+                    disabled={archivingId === e.id || adminOnly}
                     title={adminOnly ? CLIENT_ADMIN_ONLY : undefined}
                     aria-describedby={adminOnly ? noteId : undefined}
                     className="v2-btn v2-btn-ghost pf-btn"
-                    style={{ height: 30, padding: '0 12px', fontSize: 12.5, color: action.confirming ? 'var(--status-red-text)' : 'var(--fg-1)', ...(canChange ? null : DISABLED) }}
+                    style={{ height: 30, padding: '0 12px', fontSize: 12.5, color: action.confirming ? 'var(--status-red-text)' : 'var(--fg-1)', ...(adminOnly ? DISABLED : null) }}
                   >
                     {action.label}
                   </button>

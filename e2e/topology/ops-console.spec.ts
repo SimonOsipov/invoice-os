@@ -178,8 +178,8 @@ async function boxList(page: Page, loc: Locator, what: string, min: number): Pro
 }
 
 // The shell scrolls inside the parent of `.ops-screen-pad`, so the app's `.pf-scroll` helper does not apply.
-async function noSidewaysScroll(page: Page, label: string): Promise<string[]> {
-  const over = await page.locator('.ops-screen-pad').evaluate((el) => {
+async function noSidewaysScroll(page: Page, label: string, inside: Locator = page.locator('.ops-screen-pad')): Promise<string[]> {
+  const over = await inside.evaluate((el) => {
     const p = el.parentElement as HTMLElement
     return p.scrollWidth - p.clientWidth
   })
@@ -370,7 +370,7 @@ test('OPS-01 shell at 1440: aside, header, env switch, banner', async ({ page },
       word: aside(page).getByText('ASComply', { exact: true }),
       quota: aside(page).getByText('Requests this month', { exact: true }).locator('xpath=../..'),
     })
-    const navs = await boxList(page, aside(page).locator('nav button.ops-nav'), 'nav button', 6)
+    const navs = await boxList(page, aside(page).locator('nav button.ops-nav'), 'nav button', 7)
     const problems = [
       ...within(r.track, r.sandbox, 'SANDBOX in track'),
       ...within(r.track, r.live, 'LIVE in track'),
@@ -839,5 +839,187 @@ test('OPS-04 toast: the Rotate-key toast on --surface with the card shadow', asy
   await settle(page, msg.locator('xpath=..'))
   await attachJson(testInfo, 'ops-04-toast', read)
   await attachShot(page, testInfo, 'toast')
+  expect(errors, errorsOf(errors)).toEqual([])
+})
+
+// ---------------------------------------------------------------- OPS-05
+// Fixture-free: reads whatever posts the PR environment holds.
+
+test('OPS-05 blog list: header, filters and table hold together at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInOps(page)
+  await navButton(page, /^Blog/).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Blog', exact: true }), 'Blog drew no h1').toBeVisible()
+  await expect(firstRow(page), 'the Blog list drew no post row').toBeVisible({ timeout: 15_000 })
+  await settle(page, pad(page))
+
+  const table = page.locator('[data-blog-table]')
+  const cells = (row: Locator) => row.locator('xpath=./*')
+  const widths = await atWidths(page, 'OPS-05 blog list', async () => {
+    const r = await boxes(page, {
+      title: pad(page).getByRole('heading', { level: 1, name: 'Blog', exact: true }).locator('xpath=..'),
+      view: page.getByRole('link', { name: 'View blog' }),
+      add: page.getByRole('button', { name: 'New post' }),
+      select: page.getByLabel('Category', { exact: true }),
+      search: page.locator('div.ops-input').filter({ has: page.getByPlaceholder('Search titles and summaries…') }),
+    })
+    const problems = [
+      ...leftOf(r.title, r.view, 'title block / View blog'),
+      ...leftOf(r.view, r.add, 'View blog / New post'),
+      ...allApart([r.title, r.view, r.add], 'header'),
+      ...leftOf(r.select, r.search, 'category select / search'),
+      ...sameCentre(r.select, r.search, 'category select / search'),
+      ...apart(r.select, r.search, 'category select / search'),
+    ]
+
+    const head = await boxList(page, cells(table.locator('> div').first()), 'header label', 6)
+    const rowCount = Math.min(3, await page.locator('.ops-row').count())
+    const rows: Rect[][] = []
+    for (let i = 0; i < rowCount; i++) {
+      const row = page.locator('.ops-row').nth(i)
+      const cs = await boxList(page, cells(row), `row ${i} cell`, 6)
+      rows.push(cs)
+      cs.slice(0, 5).forEach((c, k) => problems.push(...sameLeft(c, head[k], `row ${i} cell ${k} / header label`)))
+      problems.push(...within(head[5], cs[5], `row ${i} pin button / Pin cell`))
+      const lines = await boxList(page, cells(row).first().locator('> span'), `row ${i} Post line`, 2)
+      lines.forEach((l, k) => problems.push(...within(cs[0], l, `row ${i} Post line ${k} / Post cell`)))
+    }
+
+    const over = await table.evaluate((el) => el.scrollWidth - el.clientWidth)
+    if (over > 1) problems.push(`table frame scrolls sideways by ${over}px`)
+    problems.push(...(await noSidewaysScroll(page, 'blog list')))
+    return { problems, rects: { ...r, head, rows } }
+  })
+  await attachJson(testInfo, 'ops-05-blog-list', { widths })
+  expect(errors, errorsOf(errors)).toEqual([])
+})
+
+test('OPS-05 blog editor: the two panes fill the main column side by side at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInOps(page)
+  await navButton(page, /^Blog/).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Blog', exact: true }), 'Blog drew no h1').toBeVisible()
+  await page.getByRole('button', { name: 'New post' }).click()
+  const editor = page.locator('[data-blog-editor]')
+  await expect(editor, 'New post opened no editor').toBeVisible()
+  await settle(page, editor)
+
+  const scroller = editor.locator('xpath=..')
+  const panes = page.locator('[data-bscroll]')
+  const fields = editor.locator('[data-blog-fields]')
+  const widths = await atWidths(page, 'OPS-05 blog editor', async () => {
+    const r = await boxes(page, { main: page.locator('main'), form: panes.nth(0), preview: panes.nth(1) })
+    const banner_ = await boxes(page, { banner: banner(page) })
+    const cells = await boxList(page, fields.locator('> label'), 'field cell', 3)
+    const problems = [
+      ...leftOf(r.form, r.preview, 'form pane / preview pane'),
+      ...sameTop([r.form, r.preview], 'panes'),
+      ...apart(r.form, r.preview, 'form pane / preview pane'),
+      ...within(r.main, r.form, 'form pane in main column'),
+      ...within(r.main, r.preview, 'preview pane in main column'),
+      ...below(banner_.banner, r.form, 'form pane / env banner'),
+      ...below(banner_.banner, r.preview, 'preview pane / env banner'),
+      ...allApart(cells, 'Category / Author / Publish date'),
+    ]
+    const sc = await scroller.evaluate((el) => ({ overflowY: getComputedStyle(el).overflowY, over: el.scrollHeight - el.clientHeight }))
+    if (sc.overflowY !== 'auto') problems.push(`main column scroller overflow-y is ${sc.overflowY}`)
+    if (sc.over > 1) problems.push(`main column scrolls by ${sc.over}px`)
+    problems.push(...(await noSidewaysScroll(page, 'blog editor', editor)))
+    return { problems, rects: { ...r, ...banner_, cells } }
+  })
+  await attachJson(testInfo, 'ops-05-blog-editor', { widths })
+  expect(errors, errorsOf(errors)).toEqual([])
+})
+
+test('OPS-05 blog preview: the article and the card fit the preview pane at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInOps(page)
+  await navButton(page, /^Blog/).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Blog', exact: true }), 'Blog drew no h1').toBeVisible()
+  await page.getByRole('button', { name: 'New post' }).click()
+  const editor = page.locator('[data-blog-editor]')
+  await expect(editor, 'New post opened no editor').toBeVisible()
+  await page.getByPlaceholder('Write a paragraph…').fill('A paragraph that the preview shows under both headings.')
+  for (const text of ['What the mandate changes for invoicing teams', 'How to prepare before the deadline']) {
+    await editor.getByRole('button', { name: 'Heading', exact: true }).click()
+    await page.getByPlaceholder('Section heading').last().fill(text)
+  }
+  await settle(page, editor)
+
+  const pane = page.locator('[data-bscroll]').nth(1)
+  const entries = pane.locator('[data-preview-toc-entry]')
+  const widths = await atWidths(page, 'OPS-05 blog preview article', async () => {
+    const r = await boxes(page, { pane, cover: pane.locator('[data-preview-cover]') })
+    const toc = await boxList(page, entries, 'TOC entry', 2)
+    const problems = [...within(r.pane, r.cover, 'cover box in preview pane'), ...toc.flatMap((t, i) => within(r.pane, t, `TOC entry ${i} in preview pane`))]
+    return { problems, rects: { ...r, toc } }
+  })
+
+  await pane.getByRole('button', { name: 'Card', exact: true }).click()
+  const card = pane.locator('[data-preview-card]')
+  await expect(card, 'the Card tab drew no card').toBeVisible()
+  await settle(page, card)
+  const cardWidths = await atWidths(page, 'OPS-05 blog preview card', async () => {
+    const r = await boxes(page, { pane, card })
+    return { problems: within(r.pane, r.card, 'card in preview pane'), rects: r }
+  })
+  await attachJson(testInfo, 'ops-05-blog-preview', { widths, cardWidths })
+  expect(errors, errorsOf(errors)).toEqual([])
+})
+
+test('OPS-05 blog action bar: actions stay inside the bar at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInOps(page)
+  await navButton(page, /^Blog/).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Blog', exact: true }), 'Blog drew no h1').toBeVisible()
+  await page.getByRole('button', { name: 'New post' }).click()
+  const editor = page.locator('[data-blog-editor]')
+  await expect(editor, 'New post opened no editor').toBeVisible()
+  await page.getByPlaceholder('What structured e-invoicing changes for…').fill('Action bar probe, never saved')
+  const bar = editor.locator('xpath=./div[1]')
+  await expect(bar.getByText('UNSAVED CHANGES', { exact: true }), 'typing a title left the editor clean').toBeVisible()
+  await settle(page, editor)
+
+  const widths = await atWidths(page, 'OPS-05 blog action bar', async () => {
+    const r = await boxes(page, {
+      bar,
+      save: bar.getByRole('button', { name: 'Save draft', exact: true }),
+      publish: bar.getByRole('button', { name: 'Publish', exact: true }),
+      badge: bar.getByText('DRAFT', { exact: true }),
+      state: bar.getByText('UNSAVED CHANGES', { exact: true }),
+    })
+    const problems = [
+      ...within(r.bar, r.save, 'Save draft in the bar'),
+      ...within(r.bar, r.publish, 'Publish in the bar'),
+      ...apart(r.save, r.publish, 'Save draft / Publish'),
+      ...apart(r.save, r.badge, 'Save draft / status badge'),
+      ...apart(r.publish, r.badge, 'Publish / status badge'),
+      ...apart(r.save, r.state, 'Save draft / save state'),
+      ...apart(r.publish, r.state, 'Publish / save state'),
+    ]
+    return { problems, rects: r }
+  })
+
+  await editor.getByRole('button', { name: 'All posts' }).click()
+  const prompt = bar.getByText('You have unsaved changes.', { exact: true })
+  await expect(prompt, 'Back with unsaved changes asked nothing').toBeVisible()
+  const leaveWidths = await atWidths(page, 'OPS-05 blog leave confirm', async () => {
+    const r = await boxes(page, {
+      bar,
+      prompt,
+      keep: bar.getByRole('button', { name: 'Keep editing', exact: true }),
+      discard: bar.getByRole('button', { name: 'Discard changes', exact: true }),
+      badge: bar.getByText('DRAFT', { exact: true }),
+      state: bar.getByText('UNSAVED CHANGES', { exact: true }),
+    })
+    const problems = [
+      ...within(r.bar, r.prompt, 'leave prompt in the bar'),
+      ...within(r.bar, r.keep, 'Keep editing in the bar'),
+      ...within(r.bar, r.discard, 'Discard changes in the bar'),
+      ...allApart([r.prompt, r.keep, r.discard, r.badge, r.state], 'leave confirm / badge / save state'),
+    ]
+    return { problems, rects: r }
+  })
+  await attachJson(testInfo, 'ops-05-blog-action-bar', { widths, leaveWidths })
   expect(errors, errorsOf(errors)).toEqual([])
 })

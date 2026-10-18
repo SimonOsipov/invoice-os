@@ -6,7 +6,7 @@
 import markUrl from '@invoice-os/design-tokens/v2/assets/mark.png'
 
 type IconProps = {
-  paths: string[]
+  paths: readonly string[]
   size?: number
   strokeWidth?: number
 }

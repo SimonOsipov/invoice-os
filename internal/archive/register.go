@@ -239,6 +239,10 @@ func registerStatusForErr(err error) (int, string) {
 	var tooMany *TooManyInvoicesError
 	var tooLong *CellTooLongError
 	switch {
+	case errors.Is(err, db.ErrNoTenant):
+		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, db.ErrNotActiveMember):
+		return http.StatusForbidden, db.NotActiveMemberMessage
 	case errors.As(err, &tooMany):
 		return http.StatusBadRequest,
 			fmt.Sprintf("%d invoices exceeds the register limit of %d", tooMany.Count, tooMany.Limit)

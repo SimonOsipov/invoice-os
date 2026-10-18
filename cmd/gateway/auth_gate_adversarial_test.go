@@ -72,6 +72,7 @@ func forkPassArgFaults(steps [][]string) []string {
 		{"OPS_CONSOLE_URL", "ops_console_url"},
 		{"SUPPORT_CONSOLE_URL", "support_console_url"},
 		{"LIBRARY_URL", "library_url"},
+		{"BLOG_URL", "blog_url"},
 	}
 	wantAfter := []string{envID}
 	for _, u := range urlEnv {

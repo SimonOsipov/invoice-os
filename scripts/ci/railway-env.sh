@@ -6,7 +6,7 @@
 #                            reconcile-fork <environment-id>|
 #                            verify-spa-domains <environment-id|--self-test>|
 #                            verify-gateway-domain <environment-id>|
-#                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops> <support> <library>|
+#                            reconcile-urls <environment-id> <gateway> <app> <landing> <ops> <support> <library> <blog>|
 #                            set-ai-fake <environment-id|--self-test>|
 #                            set-fork-environment <environment-id|--self-test>|
 #                            set-production-environment <environment-id>|
@@ -15,7 +15,7 @@
 #                            set-production-auth <--pre-merge|--post-merge> <environment-id>|
 #                            set-fork-gateway-token <environment-id>|
 #                            fork-vars-before-urls <environment-id>|
-#                            fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>|
+#                            fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url> <blog-url>|
 #                            set-production-gateway-token <environment-id>|
 #                            set-sentry-off <environment-id|--self-test>|
 #                            set-fork-reconciliation-url <environment-id>|
@@ -1676,15 +1676,15 @@ reconcile_url_variables_check() {
   PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}URL_VARIABLES"
 }
 
-# Reads PASS_GATEWAY_URL, PASS_APP_URL, PASS_LANDING_URL, PASS_OPS_URL, PASS_SUPPORT_URL and PASS_LIBRARY_URL.
+# Reads PASS_GATEWAY_URL, PASS_APP_URL, PASS_LANDING_URL, PASS_OPS_URL, PASS_SUPPORT_URL, PASS_LIBRARY_URL and PASS_BLOG_URL.
 reconcile_url_variables() {
   local env_id="$1" gateway_url="$PASS_GATEWAY_URL" app_url="$PASS_APP_URL" landing_url="$PASS_LANDING_URL"
-  local ops_url="$PASS_OPS_URL" support_url="$PASS_SUPPORT_URL" library_url="$PASS_LIBRARY_URL"
+  local ops_url="$PASS_OPS_URL" support_url="$PASS_SUPPORT_URL" library_url="$PASS_LIBRARY_URL" blog_url="$PASS_BLOG_URL"
   local gw_id app_id landing_id ops_id support_id library_id blog_id
   # Every browser origin that calls the gateway. Omitting one does not fail loudly — the
   # SPA renders and its fetches are refused by CORS at runtime — so a new SPA MUST be
   # added here in the same change that creates it.
-  local origins="$app_url,$landing_url,$ops_url,$support_url"
+  local origins="$app_url,$landing_url,$ops_url,$support_url,$blog_url"
 
   if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
     echo "::error::Refusing to rewrite URL variables in the persistent development environment ($env_id)."
@@ -1713,13 +1713,13 @@ reconcile_url_variables_verdict() {
   echo "All 19 environment variables confirmed by independent re-query."
 }
 
-# cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>
+# cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url> <blog-url>
 cmd_reconcile_urls() {
-  if [ "$#" -ne 7 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ] || [ -z "$7" ]; then
-    echo "::error::usage: railway-env.sh reconcile-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>"
+  if [ "$#" -ne 8 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ] || [ -z "$7" ] || [ -z "$8" ]; then
+    echo "::error::usage: railway-env.sh reconcile-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url> <blog-url>"
     exit 2
   fi
-  PASS_GATEWAY_URL="$2" PASS_APP_URL="$3" PASS_LANDING_URL="$4" PASS_OPS_URL="$5" PASS_SUPPORT_URL="$6" PASS_LIBRARY_URL="$7"
+  PASS_GATEWAY_URL="$2" PASS_APP_URL="$3" PASS_LANDING_URL="$4" PASS_OPS_URL="$5" PASS_SUPPORT_URL="$6" PASS_LIBRARY_URL="$7" PASS_BLOG_URL="$8"
   fork_pass "$1" reconcile_url_variables
 }
 
@@ -3855,13 +3855,13 @@ cmd_set_fork_reconciliation_url() {
   fork_pass "$env_id" reconciliation_url
 }
 
-# cmd_fork_vars_after_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>
+# cmd_fork_vars_after_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url> <blog-url>
 cmd_fork_vars_after_urls() {
-  if [ "$#" -ne 7 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ] || [ -z "$7" ]; then
-    echo "::error::usage: railway-env.sh fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>"
+  if [ "$#" -ne 8 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ] || [ -z "$5" ] || [ -z "$6" ] || [ -z "$7" ] || [ -z "$8" ]; then
+    echo "::error::usage: railway-env.sh fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url> <blog-url>"
     exit 2
   fi
-  PASS_GATEWAY_URL="$2" PASS_APP_URL="$3" PASS_LANDING_URL="$4" PASS_OPS_URL="$5" PASS_SUPPORT_URL="$6" PASS_LIBRARY_URL="$7"
+  PASS_GATEWAY_URL="$2" PASS_APP_URL="$3" PASS_LANDING_URL="$4" PASS_OPS_URL="$5" PASS_SUPPORT_URL="$6" PASS_LIBRARY_URL="$7" PASS_BLOG_URL="$8"
   fork_pass "$1" auth_site reconcile_url_variables ai_fake sentry_off reconciliation_url fork_environment
 }
 
@@ -4119,7 +4119,7 @@ case "${1:-}" in
   check-mail-templates)      cmd_check_mail_templates "${2:-}" ;;
   report-api-calls)          cmd_report_api_calls ;;
   *)
-    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops> <support> <library>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|fork-vars-before-urls <environment-id>|fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|discover-urls <environment-id>|query <context>|wait-deployment <label> <deployment-id>|check-mail-templates <environment-id>|report-api-calls>"
+    echo "::error::usage: railway-env.sh <assert-project-settings|disable-pr-environments|ensure-environment <name>|audit-sealed-variables|assert-db-dsns <environment-id|--source-only|--self-test>|select-domain [--self-test]|reconcile-fork <environment-id>|reconcile-urls <environment-id> <gateway> <app> <landing> <ops> <support> <library> <blog>|set-ai-fake <environment-id|--self-test>|set-fork-environment <environment-id|--self-test>|set-production-environment <environment-id> (by hand, once, never from a workflow)|set-fork-auth <environment-id|--self-test>|set-fork-auth-site <environment-id> <landing-url>|set-production-auth <--pre-merge|--post-merge> <environment-id> (by hand, once, never from a workflow)|set-fork-gateway-token <environment-id>|fork-vars-before-urls <environment-id>|fork-vars-after-urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url> <blog-url>|set-production-gateway-token <environment-id> (by hand, once, never from a workflow)|set-sentry-off <environment-id|--self-test>|set-fork-reconciliation-url <environment-id>|delete-environment <name>|list-environments|discover-urls <environment-id>|query <context>|wait-deployment <label> <deployment-id>|check-mail-templates <environment-id>|report-api-calls>"
     exit 2
     ;;
 esac

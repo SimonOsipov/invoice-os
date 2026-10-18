@@ -22,8 +22,9 @@ const (
 	batchOpsURL     = "https://ops-console-pr-900.up.railway.app"
 	batchSupportURL = "https://support-console-pr-900.up.railway.app"
 	batchLibraryURL = "https://library-pr-900.up.railway.app"
-	// reconcile_url_variables: origins="$app_url,$landing_url,$ops_url,$support_url".
-	batchOrigins = batchAppURL + "," + batchLandingURL + "," + batchOpsURL + "," + batchSupportURL
+	batchBlogURL    = "https://blog-pr-900.up.railway.app"
+	// reconcile_url_variables: origins="$app_url,$landing_url,$ops_url,$support_url,$blog_url".
+	batchOrigins = batchAppURL + "," + batchLandingURL + "," + batchOpsURL + "," + batchSupportURL + "," + batchBlogURL
 
 	// What a fork inherits from production.
 	batchProdAppURL     = "https://app.ascomply.com"
@@ -75,7 +76,7 @@ func reconcileStale() map[string]map[string]string {
 
 func runReconcileURLs(t *testing.T, s authShim) (stdout, stderr string, code int) {
 	t.Helper()
-	return s.run(t, batchExports(), "reconcile-urls", forkEnvID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL)
+	return s.run(t, batchExports(), "reconcile-urls", forkEnvID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL, batchBlogURL)
 }
 
 // fleetShim lists every Sentry service (gateway, submission, invoice among them) in forkEnvID.
@@ -579,10 +580,37 @@ func TestReconcileURLs_WritesTheRegistrationFlag(t *testing.T) {
 	}
 }
 
+// A fork that inherited production's origins gets the blog URL last, and never the library URL.
+func TestReconcileURLsWritesTheBlogOriginOnTheFork(t *testing.T) {
+	gw := sentrySvcID("gateway")
+	stores := reconcileIntended()
+	stores[gw]["CORS_ALLOWED_ORIGINS"] = batchProdAppURL
+	s := fleetShim(t, stores)
+	stdout, stderr, code := runReconcileURLs(t, s)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; output = %q", code, stdout+stderr)
+	}
+	got := oneUpsert(t, s.upserts(t), gw, "CORS_ALLOWED_ORIGINS")
+	if !strings.HasSuffix(got, ","+batchBlogURL) || strings.Contains(got, "library") {
+		t.Errorf("gateway CORS_ALLOWED_ORIGINS = %q, want it to end with ,%s and omit the library URL", got, batchBlogURL)
+	}
+	if got != batchOrigins {
+		t.Errorf("gateway CORS_ALLOWED_ORIGINS = %q, want %q", got, batchOrigins)
+	}
+	if n := len(s.upserts(t)); n == 0 {
+		t.Fatal("control: the stale fork produced no upserts")
+	}
+	for _, svc := range []string{"blog", "library"} {
+		if v := upsertsOf(s.upserts(t), sentrySvcID(svc), "VITE_GATEWAY_URL"); len(v) != 0 {
+			t.Errorf("%s was given VITE_GATEWAY_URL = %q; the SPA has no gateway wiring", svc, v[0].Value)
+		}
+	}
+}
+
 // guard, passes at HEAD: the flag write must not widen the refusal of the persistent environment.
 func TestReconcileURLs_RefusesThePersistentEnvironment(t *testing.T) {
 	s := fleetShim(t, reconcileIntended())
-	stdout, stderr, code := s.run(t, batchExports(), "reconcile-urls", persistentEnvironmentID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL)
+	stdout, stderr, code := s.run(t, batchExports(), "reconcile-urls", persistentEnvironmentID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL, batchBlogURL)
 	out := stdout + stderr
 	if code != 1 {
 		t.Errorf("exit %d, want 1; output = %q", code, out)

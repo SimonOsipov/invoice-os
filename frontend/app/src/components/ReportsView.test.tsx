@@ -382,7 +382,9 @@ describe('ReportsView: export card', () => {
   const populated = () => [row({ id: 'inv-r', buyer_tin: tinFor(1), buyer_name: 'Ready Buyer' })]
 
   async function renderReady(ctx: PlatformCtx = reportsCtx(), register?: RegisterHandler) {
-    const fetchMock = mockFetch([listResponse(populated(), { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })], ZERO_ROLLUP, NO_RECORDS, register)
+    const page = listResponse(populated(), { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })
+    // the second page serves the refetch after a client switch
+    const fetchMock = mockFetch([page, page], ZERO_ROLLUP, NO_RECORDS, register)
     const view = render(<ReportsView ctx={ctx} />)
     await screen.findByText('Ready Buyer')
     return { fetchMock, ...view }
@@ -578,6 +580,32 @@ describe('ReportsView: export card', () => {
     expect(signal?.aborted).toBe(true)
     await act(async () => {})
     expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('a client switch mid-download saves nothing and frees the button', async () => {
+    const save = stubSave()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let resolve!: (v: unknown) => void
+    const { rerender } = await renderReady(reportsCtx(), () => new Promise((r) => (resolve = r)))
+    fireEvent.click(registerButton())
+    await waitFor(() => expect(registerButton().getAttribute('aria-busy')).toBe('true'))
+    rerender(<ReportsView ctx={reportsCtx('ent-2', { activeEntity: { id: 'ent-2', name: 'Beta Co' } })} />)
+    await act(async () => resolve(registerResponse()))
+    await waitFor(() => registerButton())
+    expect(save.click).not.toHaveBeenCalled()
+    expect(registerButton().disabled).toBe(false)
+    expect(registerButton().getAttribute('aria-busy')).toBeNull()
+    expect(screen.queryByTestId('invoice-register-error')).toBeNull()
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('an error for one client is cleared by switching to another', async () => {
+    const { rerender } = await renderReady(reportsCtx(), () => Promise.resolve(failResponse(400, { error: OVER_CAP_SENTENCE })))
+    fireEvent.click(registerButton())
+    await screen.findByTestId('invoice-register-error')
+    rerender(<ReportsView ctx={reportsCtx('ent-2', { activeEntity: { id: 'ent-2', name: 'Beta Co' } })} />)
+    await waitFor(() => registerButton())
+    expect(screen.queryByTestId('invoice-register-error')).toBeNull()
   })
 
   it('the next click clears the error line', async () => {

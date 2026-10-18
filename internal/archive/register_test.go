@@ -91,6 +91,24 @@ func TestXLSXRows_RefusesACellOverTheXLSXLimit(t *testing.T) {
 	}
 }
 
+func TestXLSXRows_OversizedInvoiceNumberIsIdentifiedByID(t *testing.T) {
+	r := rec39(strings.Repeat("n", excelize.TotalCellChars+1), headerIndex(t, "invoice_number"), "")
+	r[1] = strings.Repeat("n", excelize.TotalCellChars+1)
+	r[0] = "inv-id-1"
+	_, _, err := writeThroughXLSXRows(t, r)
+
+	var tooLong *CellTooLongError
+	if !errors.As(err, &tooLong) {
+		t.Fatalf("Write error = %v, want *CellTooLongError", err)
+	}
+	if tooLong.InvoiceNumber != "inv-id-1" || tooLong.Column != "invoice_number" {
+		t.Errorf("CellTooLongError = %+v, want inv-id-1 / invoice_number", tooLong)
+	}
+	if len(err.Error()) > 200 {
+		t.Errorf("message length = %d, want short", len(err.Error()))
+	}
+}
+
 func TestXLSXRows_WritesACellAtExactlyTheLimitWhole(t *testing.T) {
 	col := headerIndex(t, "supplier_street")
 	exact := strings.Repeat("a", excelize.TotalCellChars-2) + "\U0001F600"

@@ -62,7 +62,7 @@ func parseRequest(query url.Values) (Request, string) {
 }
 
 // entitySlug slugs name, falling back to fallbackID when nothing alphanumeric
-// survives the slug (AC-4).
+// survives the slug.
 func entitySlug(name, fallbackID string) string {
 	slug := strings.Trim(slugRunPattern.ReplaceAllString(name, "-"), "-")
 	if slug == "" {

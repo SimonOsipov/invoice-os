@@ -30,7 +30,7 @@ const selectRegisterSQL = "SELECT " + invoicesColumns + registerScope + " ORDER 
 
 const countRegisterSQL = "SELECT count(*)" + registerScope
 
-// registerTxOptions: read-write, because the audit row commits with the read (DJ1).
+// registerTxOptions: read-write, because the audit row commits with the read.
 var registerTxOptions = pgx.TxOptions{IsoLevel: pgx.RepeatableRead}
 
 // CellTooLongError refuses a register holding a cell that XLSX would silently cut.
@@ -44,7 +44,15 @@ func (e *CellTooLongError) Error() string {
 		e.InvoiceNumber, e.Column, excelize.TotalCellChars)
 }
 
-// xlsxRows adapts a stream writer to csvWriter. Every cell is a string (D3).
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
+}
+
+// xlsxRows adapts a stream writer to csvWriter. Every cell is a string.
 type xlsxRows struct {
 	sw  *excelize.StreamWriter
 	row int
@@ -53,9 +61,12 @@ type xlsxRows struct {
 func (x *xlsxRows) Write(record []string) error {
 	cells := make([]any, len(record))
 	for i, v := range record {
-		if len(v) > excelize.TotalCellChars && len(utf16.Encode([]rune(v))) > excelize.TotalCellChars {
+		if len(v) > excelize.TotalCellChars && utf16Len(v) > excelize.TotalCellChars {
 			e := &CellTooLongError{Column: invoicesCSVHeader[i]}
-			if len(record) > 1 {
+			switch {
+			case i == 1 && len(record) > 0:
+				e.InvoiceNumber = record[0]
+			case len(record) > 1:
 				e.InvoiceNumber = record[1]
 			}
 			return e
@@ -143,7 +154,7 @@ func registerFilename(entityName string, r Request) string {
 }
 
 // Register writes the client's invoice register to w. The workbook is built and the
-// audit row committed before onStart fires and before the first byte (D7).
+// audit row committed before onStart fires and before the first byte.
 func (s *Store) Register(ctx context.Context, r Request, w io.Writer, onStart func(filename string)) error {
 	id, ok := auth.IdentityFromContext(ctx)
 	if !ok {

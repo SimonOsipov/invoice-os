@@ -1,4 +1,4 @@
-// FIRMS-05: GET /v1/invoice-register over the deployed gateway (internal/archive/register.go).
+// GET /v1/invoice-register over the deployed gateway (internal/archive/register.go).
 // Own fetch and own XLSX read: client.ts is unchanged. The entity name carries `Zz ` so it never sorts
 // ahead of the seeded default client (see evidence-bundle.spec.ts). Every entity here is private to
 // the spec, so exact row counts are deterministic.

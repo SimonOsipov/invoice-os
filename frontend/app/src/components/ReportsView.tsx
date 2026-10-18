@@ -157,7 +157,16 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   const [registerBusy, setRegisterBusy] = useState(false)
   const [registerError, setRegisterError] = useState<string | null>(null)
   const downloadRef = useRef<AbortController | null>(null)
-  useEffect(() => () => downloadRef.current?.abort(), [])
+  const registerEntityId = ctx.activeEntity?.id
+  // A download belongs to the client it started for: a switch or unmount drops it.
+  useEffect(
+    () => () => {
+      downloadRef.current?.abort()
+      setRegisterBusy(false)
+      setRegisterError(null)
+    },
+    [registerEntityId],
+  )
 
   // The card reads nothing from list.data, so it needs no `fresh` row gate beyond the
   // envelope being the current entity's.

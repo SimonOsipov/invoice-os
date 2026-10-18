@@ -90,7 +90,9 @@ test.describe('public blog (API E2E, over the deployed gateway)', () => {
   const listed = async (): Promise<PublicPost[]> => {
     const res = await pub('/blog/posts')
     expect(res.status, 'GET /blog/posts').toBe(200)
-    return (JSON.parse(res.text) as { posts: PublicPost[] }).posts
+    const posts = (JSON.parse(res.text) as { posts: PublicPost[] }).posts
+    expect(posts.length, 'the list is not empty, so an absence check can fail').toBeGreaterThan(0)
+    return posts
   }
 
   test.beforeAll(async () => {
@@ -137,6 +139,7 @@ test.describe('public blog (API E2E, over the deployed gateway)', () => {
       expect(res.headers.get('cache-control'), `cache of ${slug}`).toBe(SHORT_CACHE)
       answers.push(res)
     }
+    expect(answers[0].text, 'the 404 carries a body').toContain('not found')
     expect(answers[1].text, 'future matches draft').toBe(answers[0].text)
     expect(answers[2].text, 'unknown matches draft').toBe(answers[0].text)
     const ids = (await listed()).map((p) => p.id)
@@ -173,7 +176,7 @@ test.describe('public blog (API E2E, over the deployed gateway)', () => {
     const id = await makePost(catB, 'cover', VISIBLE_DATE)
     await putCover(id, PNG_1X1)
     const first = (await listed()).find((p) => p.id === id)?.cover
-    expect(first, 'the list carries a cover path').toBeTruthy()
+    expect(first, 'the list carries a cover path').toContain(`/blog/covers/${id}/`)
     const a = await pub(first!)
     expect(a.status, 'GET cover').toBe(200)
     expect(a.headers.get('content-type')).toBe('image/png')
@@ -182,7 +185,7 @@ test.describe('public blog (API E2E, over the deployed gateway)', () => {
 
     await putCover(id, PNG_1X1_B)
     const second = (await listed()).find((p) => p.id === id)?.cover
-    expect(second, 'a new path after the replace').toBeTruthy()
+    expect(second, 'a new path after the replace').toContain(`/blog/covers/${id}/`)
     expect(second).not.toBe(first)
     const b = await pub(second!)
     expect(b.status, 'GET new cover').toBe(200)
@@ -203,7 +206,13 @@ test.describe('public blog (API E2E, over the deployed gateway)', () => {
     expect(pre.status, 'preflight').toBe(204)
     expect(pre.headers.get('access-control-allow-origin')).toBe(origin)
     const other = await pub('/blog/posts', { headers: { Origin: 'https://not-an-origin.example' } })
+    expect(other.status, 'another origin still reads').toBe(200)
     expect(other.headers.get('access-control-allow-origin'), 'another origin').toBeNull()
+    const otherPre = await pub('/blog/posts', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://not-an-origin.example', 'Access-Control-Request-Method': 'GET' },
+    })
+    expect(otherPre.headers.get('access-control-allow-origin'), 'another origin preflight').toBeNull()
   })
 
   test('public blog: a publish shows and an unpublish hides on the next read', async () => {
@@ -219,6 +228,9 @@ test.describe('public blog (API E2E, over the deployed gateway)', () => {
 
   test('public blog: /api/ stays closed to anonymous callers', async () => {
     expect((await pub('/api/notifications/v1/ping')).status).toBe(401)
-    expect((await pub('/api/notifications/internal/blog/posts')).status).toBe(404)
+    // The verifier runs before the router: anonymous gets 401 on internal; the 404 needs a valid token.
+    expect((await pub('/api/notifications/internal/blog/posts')).status, 'anonymous internal').toBe(401)
+    const withToken = await rawFetch('/api/notifications/internal/blog/posts', { headers: { Authorization: `Bearer ${staff}` } })
+    expect(withToken.status, 'internal with a staff token').toBe(404)
   })
 })

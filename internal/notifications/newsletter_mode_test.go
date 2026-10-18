@@ -46,8 +46,8 @@ func TestNewsletterMode_PartialKeysNameTheMissingVariable(t *testing.T) {
 			if err == nil {
 				t.Fatal("err = nil, want a boot error")
 			}
-			if !strings.Contains(err.Error(), c.missing) {
-				t.Errorf("error %q does not name %s", err, c.missing)
+			if !strings.Contains(err.Error(), "missing "+c.missing) {
+				t.Errorf("error %q does not say missing %s", err, c.missing)
 			}
 			if strings.Contains(err.Error(), c.value) {
 				t.Errorf("error %q carries the value of %s", err, c.set)

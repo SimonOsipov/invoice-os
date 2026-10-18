@@ -3,11 +3,13 @@ package notifications
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -237,5 +239,108 @@ func TestBlogResend_EmailPathSegmentIsPathEscaped(t *testing.T) {
 		if !strings.HasPrefix(u.Path, "/contacts/"+email) {
 			t.Errorf("%s decoded path = %q, want it to decode back to the email", s.label(), u.Path)
 		}
+	}
+}
+
+func TestBlogResend_EveryStepFailureStopsTheChainWithItsStatus(t *testing.T) {
+	steps := []struct {
+		name  string
+		get   int
+		match func(seenReq) bool
+		after []string
+	}{
+		{"lookup", 0, func(s seenReq) bool { return s.Method == http.MethodGet }, nil},
+		{"create", 404, func(s seenReq) bool { return s.Method == http.MethodPost && s.path() == "/contacts" }, []string{"GET", "POST"}},
+		{"update", 200, func(s seenReq) bool { return s.Method == http.MethodPatch && s.path() == "/contacts/"+adaEmail }, []string{"GET", "PATCH"}},
+		{"segment", 200, func(s seenReq) bool { return strings.Contains(s.path(), "/segments/") }, []string{"GET", "PATCH", "POST"}},
+		{"topic", 200, func(s seenReq) bool { return strings.HasSuffix(s.path(), "/topics") }, []string{"GET", "PATCH", "POST", "PATCH"}},
+	}
+	for _, st := range steps {
+		for _, status := range []int{401, 422, 429, 500, 503} {
+			t.Run(fmt.Sprintf("%s %d", st.name, status), func(t *testing.T) {
+				v := newVendor(t, func(s seenReq) (int, string) {
+					if st.match(s) {
+						return status, `{}`
+					}
+					if s.Method == http.MethodGet {
+						return st.get, `{"unsubscribed":false}`
+					}
+					return 200, `{}`
+				})
+				err := blogResendAt(v).SyncBlog(t.Context(), blogSub(adaEmail))
+				var de *DeliveryError
+				if !errors.As(err, &de) || de.Status != status {
+					t.Fatalf("err = %v, want *DeliveryError{Status:%d}", err, status)
+				}
+				wantN := len(st.after)
+				if st.name == "lookup" {
+					wantN = 1
+				}
+				calls := v.calls()
+				if len(calls) == 0 || len(calls) != wantN {
+					t.Fatalf("requests = %v, want %d and the chain stopped at %s", v.labels(), wantN, st.name)
+				}
+			})
+		}
+	}
+}
+
+func TestBlogResend_TimeoutIsADeliveryErrorWithNoStatus(t *testing.T) {
+	v := newVendor(t, func(seenReq) (int, string) { return hangStatus, "" })
+	r := NewBlogResend(v.srv.URL, "rs-key", BlogKeys{TopicID: blogTopic, SegmentID: blogSegment}, &http.Client{Timeout: 100 * time.Millisecond})
+	err := r.SyncBlog(t.Context(), blogSub(adaEmail))
+	var de *DeliveryError
+	if !errors.As(err, &de) || de.Status != 0 {
+		t.Fatalf("SyncBlog err = %v, want *DeliveryError{Status:0}", err)
+	}
+	if _, err := r.ContactUnsubscribed(t.Context(), adaEmail); !errors.As(err, &de) || de.Status != 0 {
+		t.Fatalf("ContactUnsubscribed err = %v, want *DeliveryError{Status:0}", err)
+	}
+	if n := len(v.calls()); n != 2 {
+		t.Errorf("requests = %v, want one GET per call", v.labels())
+	}
+}
+
+func TestBlogResend_UpdateSendsTheSamePropertiesAndSegmentBodyIsAnObject(t *testing.T) {
+	v := newVendor(t, blogReplies(200, `{"unsubscribed":false}`))
+	if err := NewBlogResend(v.srv.URL+"/", "rs-key", BlogKeys{TopicID: blogTopic, SegmentID: blogSegment}, nil).SyncBlog(t.Context(), blogSub(adaEmail)); err != nil {
+		t.Fatalf("SyncBlog() err = %v", err)
+	}
+	calls := v.calls()
+	if len(calls) != 4 {
+		t.Fatalf("requests = %v, want 4 (a trailing slash on the base URL must not double up)", v.labels())
+	}
+	wantProps := map[string]any{"blog_categories": ",a,b,", "blog_frequency": "weekly"}
+	if got := decodeBody(t, calls[1])["properties"]; !reflect.DeepEqual(got, wantProps) {
+		t.Errorf("patch properties = %v, want %v", got, wantProps)
+	}
+	if got := decodeBody(t, calls[2]); len(got) != 0 {
+		t.Errorf("segment body = %v, want {}", got)
+	}
+	for _, c := range calls[1:] {
+		if c.CType != "application/json" {
+			t.Errorf("%s Content-Type = %q", c.label(), c.CType)
+		}
+	}
+}
+
+func TestBlogResend_ContactUnsubscribedErrorsOnAuthFailureAndGarbage(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		status       int
+		body         string
+		wantDelivery int
+	}{
+		{"401", 401, `{}`, 401},
+		{"200 with garbage", 200, `not json`, 200},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			v := newVendor(t, blogReplies(c.status, c.body))
+			got, err := blogResendAt(v).ContactUnsubscribed(t.Context(), adaEmail)
+			var de *DeliveryError
+			if !errors.As(err, &de) || de.Status != c.wantDelivery || got {
+				t.Fatalf("got (%v, %v), want (false, *DeliveryError{%d})", got, err, c.wantDelivery)
+			}
+		})
 	}
 }

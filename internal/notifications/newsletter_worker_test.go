@@ -240,6 +240,9 @@ func TestBlogSync_FakeModeRecordsFake(t *testing.T) {
 	if row := r.row(t, email); row.DeliveredAt == nil || row.Mode == nil || *row.Mode != "fake" {
 		t.Errorf("row = %+v, want delivered with mode fake", row)
 	}
+	if unsub, err := (FakeBlogResend{}).ContactUnsubscribed(context.Background(), email); unsub || err != nil {
+		t.Errorf("FakeBlogResend.ContactUnsubscribed = (%v, %v), want (false, nil)", unsub, err)
+	}
 	if ft.hits != 0 {
 		t.Errorf("fake mode made %d HTTP calls", ft.hits)
 	}

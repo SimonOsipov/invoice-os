@@ -188,4 +188,76 @@ describe('article', () => {
     await mount('/sage-rules', dataWith(H, { category_id: 'gone' }))
     expect(article().querySelector('button.blog-back')).toBeNull()
   })
+  it('AR-13 a demo and an unknown block render nothing', async () => {
+    const body = [
+      { type: 'p', text: 'Only paragraph.' },
+      { type: 'demo', demo: 'import' },
+      { type: 'chart', text: 'ghost' },
+    ] as unknown as Block[]
+    await mount('/sage-rules', dataWith(body))
+    const blocks = article().querySelectorAll(':scope > div:nth-of-type(3) > div:first-child > div')
+    expect(blocks).toHaveLength(3)
+    expect([...blocks].map((b) => b.childElementCount)).toEqual([1, 0, 0])
+    expect(article().textContent).not.toContain('ghost')
+  })
+
+  it('AR-14 a TOC click targets the heading offset by 92 under the scroller top', async () => {
+    await mount('/sage-rules', dataWith(H))
+    const spy = stubScrolls(true)
+    const m = q('#blog-main')
+    m.scrollTop = 1000
+    stubTop(m, 64)
+    stubTop(q('#sec-1'), 500)
+    click(tocButtons()[1])
+    expect(spy.mock.calls[0][0]).toEqual({ top: 1344, behavior: 'smooth' })
+  })
+
+  it('AR-15 the active line sits 120 below the scroller top, and the active row is inked and teal', async () => {
+    await mount('/sage-rules', dataWith(H))
+    stubScrolls(true)
+    stubTop(q('#blog-main'), 64)
+    stubTop(q('#sec-0'), -200)
+    stubTop(q('#sec-1'), 150)
+    act(() => q('#blog-main').dispatchEvent(new Event('scroll')))
+    const [a, b] = tocButtons()
+    expect(b.style.color).toBe('var(--ink)')
+    expect(b.querySelector<HTMLElement>('span.mono')!.style.color).toBe('var(--teal)')
+    expect(a.style.color).toBe('var(--text-copy)')
+    expect(a.querySelector<HTMLElement>('span.mono')!.style.color).toBe('var(--step-label)')
+    stubTop(q('#sec-1'), 185)
+    act(() => q('#blog-main').dispatchEvent(new Event('scroll')))
+    expect(tocButtons()[1].style.color).toBe('var(--text-copy)')
+  })
+
+  it('AR-16 opening another post resets the active section to the first', async () => {
+    const two: Post = { ...TEST_DATA.posts[1], body: H }
+    const data: BlogData = { ...dataWith(H), posts: [...dataWith(H).posts.filter((p) => p.id !== 'tin-checks'), two] }
+    await mount('/sage-rules', data)
+    stubScrolls(true)
+    stubTop(q('#blog-main'), 0)
+    stubTop(q('#sec-0'), -200)
+    stubTop(q('#sec-1'), 80)
+    act(() => q('#blog-main').dispatchEvent(new Event('scroll')))
+    expect(tocButtons()[1].style.color).toBe('var(--ink)')
+    act(() => {
+      window.history.pushState(null, '', '/tin-checks')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(article().querySelector('h1')!.textContent).toBe('TIN checks explained')
+    expect(tocButtons()[0].style.color).toBe('var(--ink)')
+    expect(tocButtons()[1].style.color).toBe('var(--text-copy)')
+  })
+
+  it('AR-17 the cover box shows the image, or the category tone and icon without one', async () => {
+    vi.stubEnv('VITE_GATEWAY_URL', 'https://gw.test')
+    await mount('/sage-rules', dataWith(H, { cover: '/blog/covers/p/1' }))
+    expect(article().querySelector('img[alt="Cover image"]')).not.toBeNull()
+    act(() => root.unmount())
+    container.remove()
+    await mount('/sage-rules', dataWith(H))
+    expect(article().querySelector('img')).toBeNull()
+    const box = article().querySelector<HTMLElement>('div[style*="aspect-ratio"]')!
+    expect(box.querySelector('svg')).not.toBeNull()
+    expect(box.querySelector<HTMLElement>(':scope > div')!.style.background).toBe('var(--sage)')
+  })
 })

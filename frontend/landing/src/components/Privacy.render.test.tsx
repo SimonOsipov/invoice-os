@@ -790,5 +790,8 @@ describe('the Library shares the landing\'s choice', () => {
       .map((m) => text(m[1]))
       .find((t) => t.includes('These two are set by Google, not by our own code'))
     expect(cookies).toContain('until then your cookie list for this site holds neither of them')
+    const body = text(html)
+    expect(body).toContain('to measure how people use this marketing site, our Feature Library and our Blog')
+    expect(body).toContain('It runs on this public site, on our public Feature Library and on our public Blog only.')
   })
 })

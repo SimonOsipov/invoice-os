@@ -27,6 +27,7 @@ import {
   confirmStoresConfirmedAt,
   confirmationMailGoesThroughResend,
   newsletterCodeNamesHubSpot,
+  newsletterGoFiles,
   newsletterIntakeFields,
   newsletterPendingHours,
   newsletterResendPropertyKeys,
@@ -627,6 +628,7 @@ describe('BLOG-10: the Blog section matches the newsletter code', () => {
   })
 
   it('PB-05 no newsletter code names HubSpot, and the section names it only in a negation', () => {
+    expect(newsletterGoFiles(), 'population: every newsletter*.go is scanned').toEqual(['newsletter.go', 'newsletter_handlers.go', 'newsletter_mode.go', 'newsletter_resend.go', 'newsletter_worker.go'])
     expect(workerNamesHubSpot(), 'control: worker.go names HubSpot').toBe(true)
     expect(newsletterCodeNamesHubSpot()).toBe(false)
     const named = blogText().split(/(?<=[.!?])\s+/).filter((s) => s.includes('HubSpot'))

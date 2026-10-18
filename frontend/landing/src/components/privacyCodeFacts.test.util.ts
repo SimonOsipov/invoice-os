@@ -96,11 +96,13 @@ export function aiModelVendors(): string[] {
 }
 
 // Non-test newsletter*.go files of internal/notifications, comments stripped, joined.
-function newsletterGo(): string {
-  const dir = 'internal/notifications'
-  const files = readdirSync(join(REPO, dir)).filter((f) => /^newsletter.*\.go$/.test(f) && !f.endsWith('_test.go'))
+export function newsletterGoFiles(): string[] {
+  const files = readdirSync(join(REPO, 'internal/notifications')).filter((f) => /^newsletter.*\.go$/.test(f) && !f.endsWith('_test.go'))
   if (files.length === 0) throw new Error('privacyCodeFacts: no newsletter*.go found')
-  return files.map((f) => readSource(`${dir}/${f}`)).join('\n')
+  return files.sort()
+}
+function newsletterGo(): string {
+  return newsletterGoFiles().map((f) => readSource(`internal/notifications/${f}`)).join('\n')
 }
 
 // Hours a pending blog request lives (newsletter.go Subscribe).

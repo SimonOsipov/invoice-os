@@ -230,3 +230,39 @@ func TestSource_RequestsTheTwoPublicRoutesWithoutOrigin(t *testing.T) {
 		}
 	}
 }
+
+func TestSource_AValidBodyOverTheCapIsRefusedAndOneAtTheCapIsRead(t *testing.T) {
+	pad := func(n int) func(string) []byte {
+		return func(string) []byte {
+			head, tail := `{"categories":[],"posts":[],"pad":"`, `"}`
+			return []byte(head + strings.Repeat("a", n-len(head)-len(tail)) + tail)
+		}
+	}
+	g, c := newGateway(t), newClock()
+	g.body = pad(maxUpstreamBytes)
+	s, _ := newSource(t, g, c)
+	if _, err := s.Get(context.Background()); err != nil {
+		t.Errorf("body of exactly maxUpstreamBytes: %v", err)
+	}
+	g, c = newGateway(t), newClock()
+	g.body = pad(maxUpstreamBytes + 1)
+	s, _ = newSource(t, g, c)
+	if _, err := s.Get(context.Background()); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("valid JSON one byte over the cap: %v", err)
+	}
+}
+
+func TestSource_AHungUpstreamIsCutAtTheUpstreamTimeout(t *testing.T) {
+	t.Parallel()
+	g, c := newGateway(t), newClock()
+	g.hang = upstreamTimeout + 1500*time.Millisecond
+	u, _ := url.Parse(g.URL)
+	s := NewSource(u, &http.Client{}, c.now, slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+	start := time.Now()
+	if _, err := s.Get(context.Background()); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err %v", err)
+	}
+	if d := time.Since(start); d > upstreamTimeout+1200*time.Millisecond {
+		t.Errorf("waited %v, want about %v", d, upstreamTimeout)
+	}
+}

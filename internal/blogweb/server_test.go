@@ -415,3 +415,30 @@ func TestServer_HostIsEscapedInEveryGeneratedDocument(t *testing.T) {
 		}
 	}
 }
+
+func TestServer_SubscribeTrailingSlashAndOverlongIDsAndStaticHeaders(t *testing.T) {
+	r := newRig(t)
+	for p, canon := range map[string]string{"/subscribe/": "/subscribe", "/subscribe/confirm/": "/subscribe/confirm"} {
+		w := r.do("GET", p)
+		if w.Code != 200 {
+			t.Errorf("%s: %d", p, w.Code)
+		}
+		has(t, w.Body.String(), `<link rel="canonical" href="https://blog.example`+canon+`">`)
+	}
+	long := strings.Repeat("a", 81)
+	r.g.set(func() {
+		r.g.cats = append(r.g.cats, Category{ID: long, Name: "Long"})
+		r.g.posts = []Post{{ID: long, CategoryID: "a", PublishDate: "2026-10-01"}}
+	})
+	r.c.add(time.Minute)
+	for _, p := range []string{"/" + long, "/category/" + long} {
+		if w := r.do("GET", p); w.Code != 404 {
+			t.Errorf("%s: %d, want 404 for an id over 80 characters", p[:12], w.Code)
+		}
+	}
+	for _, p := range []string{"/assets/app.js", "/favicon.ico", "/build.txt"} {
+		if cc := r.do("GET", p).Header().Get("Cache-Control"); cc != "" {
+			t.Errorf("%s: Cache-Control %q, Caddy sent none", p, cc)
+		}
+	}
+}

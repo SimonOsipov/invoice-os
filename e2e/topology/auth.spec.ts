@@ -1294,7 +1294,7 @@ async function expectWaitingOverview(page: Page): Promise<void> {
   await expect(page.getByTestId('add-company-task')).toHaveCount(0)
 }
 
-test('deployed app: a firm Preparer of a workspace with no company sees no add control, is refused by the server, and sees the company once it exists', async ({ page }) => {
+test('deployed app: a firm Preparer of a workspace with no company sees no add control on Overview and Upload, a disabled Add client on Clients, is refused by the server, and sees the company once it exists', async ({ page }) => {
   test.setTimeout(240_000)
   const { owner, ownerToken, member } = await workspaceWithMember('role-firm-prep', 'firm', 'preparer')
   const errors = collectErrors(page)
@@ -1310,7 +1310,8 @@ test('deployed app: a firm Preparer of a workspace with no company sees no add c
   await sidebarNav(page).getByRole('button', { name: 'Clients' }).click()
   await expect(page.getByRole('heading', { level: 1, name: 'Client portfolio', exact: true })).toBeVisible()
   await expect(page.getByText(NO_COMPANY, { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Add client' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Add client' })).toBeDisabled()
+  await expect(page.getByText('Only an admin can change a client.', { exact: true })).toBeVisible()
 
   const refused = await rawFetch('/api/portfolio/v1/entities', {
     method: 'POST',

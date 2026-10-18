@@ -1,5 +1,5 @@
 import { ApiError } from '@invoice-os/api-client'
-import { catDeleteToast, catFormError, catSaveToast, COVER_QUALITY, dataUrlToBytes, errorsFrom422, fitWidth, isImageType, partialEditor, pinToast, saveToast, savedEditor, toCategoryInput, toPostInput, type CatForm, type CatUi, type Draft, type EditorState } from './blog'
+import { catDeleteToast, catPostCount, catFormError, catSaveToast, COVER_QUALITY, dataUrlToBytes, errorsFrom422, fitWidth, isImageType, partialEditor, pinToast, saveToast, savedEditor, toCategoryInput, toPostInput, type CatForm, type CatUi, type Draft, type EditorState } from './blog'
 import { fieldErrorsOf, type Author, type Category, type CategoryInput, type Cover, type DeleteResult, type FeaturedResult, type MoveResult, type Post, type PostInput } from './blogApi'
 import type { BlogState } from './components/BlogList'
 import type { BlogFilters, ToastTone } from './types'
@@ -358,13 +358,14 @@ export type CatRemoveOutcome =
 export async function removeCategory(
   deps: { deleteCategory: (id: string, moveTo: string | null) => Promise<DeleteResult>; fetchCategories: () => Promise<Category[]>; fetchPosts: () => Promise<Post[]> },
   cats: Category[],
+  posts: Post[],
   id: string,
   moveTo: string | null,
 ): Promise<CatRemoveOutcome> {
   const cat = cats.find((c) => c.id === id)
   let res: DeleteResult
   try {
-    res = await deps.deleteCategory(id, cat && cat.post_count > 0 ? moveTo : null)
+    res = await deps.deleteCategory(id, cat && catPostCount(posts, id) > 0 ? moveTo : null)
   } catch (e) {
     if (statusOf(e) === 401) return { kind: 'expired' }
     if (statusOf(e) === 403) return { kind: 'forbidden' }

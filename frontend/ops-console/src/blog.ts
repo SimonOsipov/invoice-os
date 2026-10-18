@@ -541,13 +541,16 @@ export const postCount = (n: number): string => n + (n === 1 ? ' post' : ' posts
 
 export type CatRow = { cat: Category; num: string; icon: GlyphName; tone: Tone; count: string; upOpacity: number; downOpacity: number }
 
-export const catRows = (cats: Category[]): CatRow[] =>
+// Posts per category come from the loaded posts list, so a post saved or moved shows at once.
+export const catPostCount = (posts: Post[], id: string): number => posts.filter((p) => p.category_id === id).length
+
+export const catRows = (cats: Category[], posts: Post[]): CatRow[] =>
   cats.map((cat, i) => ({
     cat,
     num: String(i + 1).padStart(2, '0'),
     icon: iconOf(cat.icon),
     tone: TONES[cat.tone % 6],
-    count: postCount(cat.post_count),
+    count: postCount(catPostCount(posts, cat.id)),
     upOpacity: i === 0 ? 0.35 : 1,
     downOpacity: i === cats.length - 1 ? 0.35 : 1,
   }))
@@ -579,13 +582,14 @@ export type DeleteView =
   | { kind: 'empty'; text: string }
   | { kind: 'withposts'; text: string; options: { id: string; name: string }[]; defaultMoveTo: string }
 
-export function deleteView(cats: Category[], id: string): DeleteView | null {
+export function deleteView(cats: Category[], posts: Post[], id: string): DeleteView | null {
   const c = cats.find((x) => x.id === id)
   if (!c) return null
   if (cats.length === 1) return { kind: 'only', text: 'This is the only category. Add another before deleting it.' }
-  if (c.post_count === 0) return { kind: 'empty', text: `Delete ${c.name}? It has no posts.` }
+  const n = catPostCount(posts, id)
+  if (n === 0) return { kind: 'empty', text: `Delete ${c.name}? It has no posts.` }
   const options = cats.filter((x) => x.id !== id).map((x) => ({ id: x.id, name: x.name }))
-  return { kind: 'withposts', text: `Delete ${c.name} and move its ${postCount(c.post_count)} to:`, options, defaultMoveTo: options[0].id }
+  return { kind: 'withposts', text: `Delete ${c.name} and move its ${postCount(n)} to:`, options, defaultMoveTo: options[0].id }
 }
 
 export const catSaveToast = (isNew: boolean): string => (isNew ? 'Category added' : 'Category updated')

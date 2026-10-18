@@ -112,6 +112,7 @@ export function Blog({ filters, onFilters, onToast }: Props) {
       const o = await removeCategory(
         { deleteCategory: (id, to) => withSession(() => deleteCategory(id, to)), fetchCategories: () => withSession(fetchCategories), fetchPosts: () => withSession(fetchPosts) },
         s.cats,
+        s.posts,
         del.id,
         del.moveTo,
       )
@@ -282,13 +283,14 @@ export function Blog({ filters, onFilters, onToast }: Props) {
     state.status === 'ready' ? (
       <BlogCategories
         cats={state.cats}
+        posts={state.posts}
         onMove={(id, d) => void onMoveCat(id, d)}
         form={catUi.form}
         del={catUi.del}
         onAdd={() => setCatUi({ form: newCatForm(state.cats), del: null })}
         onEdit={(c) => setCatUi({ form: catFormFrom(c), del: null })}
         onDelete={(c) => {
-          const v = deleteView(state.cats, c.id)
+          const v = deleteView(state.cats, state.posts, c.id)
           setCatUi({ form: null, del: { id: c.id, moveTo: v?.kind === 'withposts' ? v.defaultMoveTo : null } })
         }}
         onField={(patch) => setCatUi((u) => (u.form ? { ...u, form: setCatField(u.form, patch) } : u))}

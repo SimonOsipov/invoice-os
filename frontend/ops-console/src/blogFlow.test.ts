@@ -805,26 +805,35 @@ describe('category save and delete', () => {
   })
 
   it('removeCategory moves the posts to the target and names the count', async () => {
-    const cats = [cat('a', { post_count: 2 }), cat('b')]
+    const cats = [cat('a'), cat('b')]
     const deleteCategory = vi.fn().mockResolvedValue({ moved_posts: 2, move_to: 'b' })
     const fetchCategories = vi.fn().mockResolvedValue([cat('b', { post_count: 2 })])
     const fetchPosts = vi.fn().mockResolvedValue([])
-    const o = await removeCategory({ deleteCategory, fetchCategories, fetchPosts }, cats, 'a', 'b')
+    const o = await removeCategory({ deleteCategory, fetchCategories, fetchPosts }, cats, [{ id: 'p1', category_id: 'a' }, { id: 'p2', category_id: 'a' }] as Post[], 'a', 'b')
     expect(deleteCategory).toHaveBeenCalledWith('a', 'b')
     expect(o).toEqual({ kind: 'done', toast: 'A deleted. 2 posts moved to B', move_to: 'b', cats: [cat('b', { post_count: 2 })], posts: [] })
     expect(fetchCategories).toHaveBeenCalledTimes(1)
     expect(fetchPosts).toHaveBeenCalledTimes(1)
   })
 
+  it('removeCategory sends a target from the loaded posts, not from the category count', async () => {
+    const deleteCategory = vi.fn().mockResolvedValue({ moved_posts: 1, move_to: 'b' })
+    const deps = { deleteCategory, fetchCategories: vi.fn().mockResolvedValue([]), fetchPosts: vi.fn().mockResolvedValue([]) }
+    await removeCategory(deps, [cat('a', { post_count: 0 }), cat('b')], [{ id: 'p', category_id: 'a' }] as Post[], 'a', 'b')
+    expect(deleteCategory).toHaveBeenLastCalledWith('a', 'b')
+    await removeCategory(deps, [cat('a', { post_count: 5 }), cat('b')], [], 'a', 'b')
+    expect(deleteCategory).toHaveBeenLastCalledWith('a', null)
+  })
+
   it('removeCategory sends no target for an empty category', async () => {
     const deleteCategory = vi.fn().mockResolvedValue({ moved_posts: 0, move_to: null })
-    const o = await removeCategory({ deleteCategory, fetchCategories: vi.fn().mockResolvedValue([]), fetchPosts: vi.fn().mockResolvedValue([]) }, [cat('a'), cat('b')], 'a', 'b')
+    const o = await removeCategory({ deleteCategory, fetchCategories: vi.fn().mockResolvedValue([]), fetchPosts: vi.fn().mockResolvedValue([]) }, [cat('a'), cat('b')], [], 'a', 'b')
     expect(deleteCategory).toHaveBeenCalledWith('a', null)
     expect(o).toMatchObject({ kind: 'done', toast: 'A deleted' })
   })
 
   it('removeCategory maps 401, 403, 409, 422 and 5xx', async () => {
-    const run = (e: unknown) => removeCategory({ deleteCategory: vi.fn().mockRejectedValue(e), fetchCategories: vi.fn(), fetchPosts: vi.fn() }, [cat('a'), cat('b')], 'a', null)
+    const run = (e: unknown) => removeCategory({ deleteCategory: vi.fn().mockRejectedValue(e), fetchCategories: vi.fn(), fetchPosts: vi.fn() }, [cat('a'), cat('b')], [], 'a', null)
     expect(await run(http(401))).toEqual({ kind: 'expired' })
     expect(await run(http(403))).toEqual({ kind: 'forbidden' })
     const only = 'This is the only category. Add another before deleting it.'
@@ -837,7 +846,7 @@ describe('category save and delete', () => {
 
   it('removeCategory: a failed re-read keeps the delete', async () => {
     const deleteCategory = vi.fn().mockResolvedValue({ moved_posts: 0, move_to: null })
-    const o = await removeCategory({ deleteCategory, fetchCategories: vi.fn().mockResolvedValue([]), fetchPosts: vi.fn().mockRejectedValue(http(500, 'internal error')) }, [cat('a'), cat('b')], 'a', null)
+    const o = await removeCategory({ deleteCategory, fetchCategories: vi.fn().mockResolvedValue([]), fetchPosts: vi.fn().mockRejectedValue(http(500, 'internal error')) }, [cat('a'), cat('b')], [], 'a', null)
     expect(o).toMatchObject({ kind: 'done', rereadError: 'internal error' })
     expect(o).not.toHaveProperty('cats')
     expect(o).not.toHaveProperty('posts')

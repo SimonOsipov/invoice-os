@@ -568,14 +568,16 @@ describe('BlogEditor action bar', () => {
 
 describe('BlogCategories', () => {
   const cat = (o: Partial<Category> = {}): Category => ({ ...CAT, ...o })
-  const renderCats = (cats: Category[]) => renderToStaticMarkup(<BlogCategories cats={cats} onMove={() => {}} />)
+  const inCat = (id: string, n: number): Post[] => Array.from({ length: n }, (_, i) => post({ id: `${id}${i}`, category_id: id }))
+  const twoPosts = [...inCat('a', 1), ...inCat('b', 2)]
+  const renderCats = (cats: Category[], posts: Post[] = twoPosts) => renderToStaticMarkup(<BlogCategories cats={cats} posts={posts} onMove={() => {}} />)
   const renderTab = (cats: Category[], tab: BlogFilters['tab'] = 'cats') =>
     renderToStaticMarkup(
-      <BlogList state={{ status: 'ready', posts: [post()], cats, authors: [] }} filters={{ ...FILTERS, tab }} onFilters={() => {}} onRetry={() => {}} onPin={() => {}} categories={<BlogCategories cats={cats} onMove={() => {}} />} />,
+      <BlogList state={{ status: 'ready', posts: [post()], cats, authors: [] }} filters={{ ...FILTERS, tab }} onFilters={() => {}} onRetry={() => {}} onPin={() => {}} categories={<BlogCategories cats={cats} posts={twoPosts} onMove={() => {}} />} />,
     )
-  const two = [cat({ id: 'a', name: 'Alpha', headline: 'Alpha headline', post_count: 1 }), cat({ id: 'b', name: 'Beta', headline: 'Beta headline', post_count: 2 })]
+  const two = [cat({ id: 'a', name: 'Alpha', headline: 'Alpha headline', }), cat({ id: 'b', name: 'Beta', headline: 'Beta headline' })]
   const buttons = (cats: Category[], onMove = vi.fn()) => {
-    const t = BlogCategories({ cats, onMove }) as ReactNode
+    const t = BlogCategories({ cats, posts: twoPosts, onMove }) as ReactNode
     const named = (n: string) => find(t, (e) => e.type === 'button' && e.props['aria-label'] === n)
     return { up: named('Move up'), down: named('Move down'), onMove }
   }
@@ -634,8 +636,8 @@ describe('BlogCategories', () => {
     expect(onMove).toHaveBeenLastCalledWith('b', 'down')
   })
 
-  const withForm = (cats: Category[], form: CatForm | null) => renderToStaticMarkup(<BlogCategories cats={cats} onMove={() => {}} form={form} />)
-  const withDel = (cats: Category[], del: CatDel) => renderToStaticMarkup(<BlogCategories cats={cats} onMove={() => {}} del={del} />)
+  const withForm = (cats: Category[], form: CatForm | null) => renderToStaticMarkup(<BlogCategories cats={cats} posts={twoPosts} onMove={() => {}} form={form} />)
+  const withDel = (cats: Category[], del: CatDel, posts: Post[] = twoPosts) => renderToStaticMarkup(<BlogCategories cats={cats} posts={posts} onMove={() => {}} del={del} />)
   const btn = (html: string, label: string) => html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`, 'g')) ?? []
 
   it('an unbroken long name breaks inside the name cell', () => {
@@ -689,12 +691,13 @@ describe('BlogCategories', () => {
   })
 
   it('the delete confirm has three states', () => {
-    const cats = [cat({ id: 'a', name: 'Alpha', post_count: 0 }), cat({ id: 'b', name: 'Beta', post_count: 3 }), cat({ id: 'c', name: 'Gamma' })]
-    const empty = withDel(cats, { id: 'a', moveTo: null })
+    const cats = [cat({ id: 'a', name: 'Alpha' }), cat({ id: 'b', name: 'Beta' }), cat({ id: 'c', name: 'Gamma' })]
+    const three = inCat('b', 3)
+    const empty = withDel(cats, { id: 'a', moveTo: null }, three)
     expect(empty).toContain('Delete Alpha? It has no posts.')
     expect(empty).toContain('Delete category')
     expect(empty).not.toContain('<select')
-    const some = withDel(cats, { id: 'b', moveTo: 'c' })
+    const some = withDel(cats, { id: 'b', moveTo: 'c' }, three)
     expect(some).toContain('Delete Beta and move its 3 posts to:')
     const sel = some.match(/<select[\s\S]*?<\/select>/)![0]
     expect(sel).toContain('>Alpha<')
@@ -703,7 +706,7 @@ describe('BlogCategories', () => {
     expect(sel).toMatch(/<option value="c" selected/)
     expect(some).toContain('Delete category')
     for (const n of [0, 2]) {
-      const only = withDel([cat({ id: 'a', post_count: n })], { id: 'a', moveTo: null })
+      const only = withDel([cat({ id: 'a' })], { id: 'a', moveTo: null }, inCat('a', n))
       expect(only).toContain('This is the only category. Add another before deleting it.')
       expect(only).toContain('>Cancel<')
       expect(only).not.toContain('Delete category')

@@ -69,6 +69,7 @@ import {
 import type { Author, Block, Category, Post } from './blogApi'
 import type { BlogFilters } from './types'
 
+const inCat = (id: string, n: number): Post[] => Array.from({ length: n }, (_, i) => post({ id: `${id}${i}`, category_id: id }))
 const post = (o: Partial<Post> = {}): Post => ({
   id: 'p',
   category_id: null,
@@ -705,7 +706,7 @@ describe('category rules', () => {
   })
 
   it('catRows numbers, colours and counts each row', () => {
-    const rows = catRows([cat('a', { tone: 0, post_count: 4 }), cat('b', { tone: 8, post_count: 1 }), cat('c', { icon: 'rocket', post_count: 0 })])
+    const rows = catRows([cat('a', { tone: 0 }), cat('b', { tone: 8 }), cat('c', { icon: 'rocket' })], [...inCat('a', 4), ...inCat('b', 1)])
     expect(rows.map((r) => r.num)).toEqual(['01', '02', '03'])
     expect(rows[1].tone).toBe(TONES[2])
     expect(rows[0].tone).toBe(TONES[0])
@@ -714,10 +715,25 @@ describe('category rules', () => {
     expect(rows.map((r) => r.count)).toEqual(['4 posts', '1 post', '0 posts'])
   })
 
+  it('the row count and the delete confirm follow state.posts with no categories re-read', () => {
+    const cats = [cat('a', { name: 'a' }), cat('b', { name: 'b' })]
+    const count = (posts: Post[]) => catRows(cats, posts)[0].count
+    expect(count([])).toBe('0 posts')
+    expect(deleteView(cats, [], 'a')).toMatchObject({ kind: 'empty' })
+    const saved = inCat('a', 1)
+    expect(count(saved)).toBe('1 post')
+    expect(deleteView(cats, saved, 'a')).toMatchObject({ kind: 'withposts', text: 'Delete a and move its 1 post to:' })
+    const moved = saved.map((p) => ({ ...p, category_id: 'b' }))
+    expect(count(moved)).toBe('0 posts')
+    expect(catRows(cats, moved)[1].count).toBe('1 post')
+    expect(deleteView(cats, moved, 'a')).toMatchObject({ kind: 'empty' })
+    expect(count([])).toBe('0 posts')
+  })
+
   it('catRows dims the first up and the last down', () => {
-    const three = catRows([cat('a'), cat('b'), cat('c')]).map((r) => [r.upOpacity, r.downOpacity])
+    const three = catRows([cat('a'), cat('b'), cat('c')], []).map((r) => [r.upOpacity, r.downOpacity])
     expect(three).toEqual([[0.35, 1], [1, 1], [1, 0.35]])
-    expect(catRows([cat('a')]).map((r) => [r.upOpacity, r.downOpacity])).toEqual([[0.35, 0.35]])
+    expect(catRows([cat('a')], []).map((r) => [r.upOpacity, r.downOpacity])).toEqual([[0.35, 0.35]])
   })
 
   it('catMoveTarget returns the neighbour move and null at the edges', () => {
@@ -763,16 +779,16 @@ describe('category rules', () => {
 
   it('deleteView covers only, empty and withposts in that order', () => {
     const only = 'This is the only category. Add another before deleting it.'
-    expect(deleteView([cat('a', { post_count: 3 })], 'a')).toEqual({ kind: 'only', text: only })
-    expect(deleteView([cat('a', { post_count: 0 })], 'a')).toEqual({ kind: 'only', text: only })
-    expect(deleteView([cat('a', { name: 'a' }), cat('b')], 'a')).toEqual({ kind: 'empty', text: 'Delete a? It has no posts.' })
-    expect(deleteView([cat('a', { name: 'a', post_count: 3 }), cat('b', { name: 'b' }), cat('c', { name: 'c' })], 'a')).toEqual({
+    expect(deleteView([cat('a')], inCat('a', 3), 'a')).toEqual({ kind: 'only', text: only })
+    expect(deleteView([cat('a')], [], 'a')).toEqual({ kind: 'only', text: only })
+    expect(deleteView([cat('a', { name: 'a' }), cat('b')], [], 'a')).toEqual({ kind: 'empty', text: 'Delete a? It has no posts.' })
+    expect(deleteView([cat('a', { name: 'a' }), cat('b', { name: 'b' }), cat('c', { name: 'c' })], inCat('a', 3), 'a')).toEqual({
       kind: 'withposts',
       text: 'Delete a and move its 3 posts to:',
       options: [{ id: 'b', name: 'b' }, { id: 'c', name: 'c' }],
       defaultMoveTo: 'b',
     })
-    expect(deleteView([cat('a', { name: 'a', post_count: 1 }), cat('b')], 'a')?.text).toBe('Delete a and move its 1 post to:')
+    expect(deleteView([cat('a', { name: 'a' }), cat('b')], inCat('a', 1), 'a')?.text).toBe('Delete a and move its 1 post to:')
   })
 
   it('catSaveToast names add and update', () => {

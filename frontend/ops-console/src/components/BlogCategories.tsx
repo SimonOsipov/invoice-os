@@ -1,10 +1,11 @@
 import type { CSSProperties } from 'react'
 import { CATEGORY_ICONS, catMoveTarget, catRows, deleteView, TONES, type CatDel, type CatForm } from '../blog'
-import type { Category } from '../blogApi'
+import type { Category, Post } from '../blogApi'
 import { G } from './BlogList'
 
 type Props = {
   cats: Category[]
+  posts: Post[]
   onMove: (id: string, direction: 'up' | 'down') => void
   onAdd?: () => void
   onEdit?: (cat: Category) => void
@@ -126,8 +127,8 @@ function CatFormCard({ form, onField, onSubmit, onCancel }: FormProps) {
   )
 }
 
-function CatConfirm({ cats, del, onMoveTo, onCancel, onConfirm }: { cats: Category[]; del: CatDel; onMoveTo?: (id: string) => void; onCancel?: () => void; onConfirm?: () => void }) {
-  const view = deleteView(cats, del.id)
+function CatConfirm({ cats, posts, del, onMoveTo, onCancel, onConfirm }: { cats: Category[]; posts: Post[]; del: CatDel; onMoveTo?: (id: string) => void; onCancel?: () => void; onConfirm?: () => void }) {
+  const view = deleteView(cats, posts, del.id)
   if (!view) return null
   return (
     <div data-cat-confirm style={{ border: '1px solid var(--status-red-border)', borderRadius: 6, background: 'var(--status-red-bg)', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -153,7 +154,7 @@ function CatConfirm({ cats, del, onMoveTo, onCancel, onConfirm }: { cats: Catego
   )
 }
 
-export function BlogCategories({ cats, onMove, onAdd, onEdit, onDelete, form, del, onField, onSubmit, onCancelForm, onMoveTo, onCancelDel, onConfirmDel }: Props) {
+export function BlogCategories({ cats, posts, onMove, onAdd, onEdit, onDelete, form, del, onField, onSubmit, onCancelForm, onMoveTo, onCancelDel, onConfirmDel }: Props) {
   const move = (i: number, d: -1 | 1) => {
     const t = catMoveTarget(cats, i, d)
     if (t) onMove(t.id, t.direction)
@@ -168,7 +169,7 @@ export function BlogCategories({ cats, onMove, onAdd, onEdit, onDelete, form, de
         </button>
       </div>
       <div data-blog-cats style={{ border: '1px solid var(--line-1)', borderRadius: 6, background: 'var(--bg-2)', overflow: 'hidden' }}>
-        {catRows(cats).map((r, i) => (
+        {catRows(cats, posts).map((r, i) => (
           <div key={r.cat.id} data-cat-row style={{ borderBottom: '1px solid var(--line-1)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px' }}>
               <span className="mono" style={{ flex: 'none', width: 20, fontSize: 11, color: 'var(--fg-3)' }}>
@@ -206,7 +207,7 @@ export function BlogCategories({ cats, onMove, onAdd, onEdit, onDelete, form, de
             )}
             {del?.id === r.cat.id && (
               <div style={PANEL}>
-                <CatConfirm cats={cats} del={del} onMoveTo={onMoveTo} onCancel={onCancelDel} onConfirm={onConfirmDel} />
+                <CatConfirm cats={cats} posts={posts} del={del} onMoveTo={onMoveTo} onCancel={onCancelDel} onConfirm={onConfirmDel} />
               </div>
             )}
           </div>

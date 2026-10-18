@@ -1594,13 +1594,6 @@ test.describe('OPS-06 blog categories', () => {
     const text = (await pad(page).getByRole('button', { name: /Categories/ }).textContent()) ?? ''
     return Number(/(\d+)\s*$/.exec(text)?.[1])
   }
-  // The tab re-reads on open: leave and return.
-  const reopenTab = async (page: Page): Promise<void> => {
-    await pad(page).getByRole('button', { name: /Posts/ }).click()
-    await expect(page.locator('[data-blog-table]'), 'the Posts tab drew no table').toBeVisible()
-    await pad(page).getByRole('button', { name: /Categories/ }).click()
-    await expect(page.locator('[data-blog-cats]'), 'the Categories tab drew no list').toBeVisible()
-  }
   const isMove = (res: { url(): string; request(): { method(): string } }) => res.request().method() === 'POST' && /\/categories\/[^/]+\/move$/.test(res.url())
 
   test('OPS-06 blog categories: add → refuse blank and duplicate → edit → move → delete with posts moved → delete empty', async ({ page }) => {
@@ -1705,13 +1698,28 @@ test.describe('OPS-06 blog categories', () => {
     await expect.poll(() => uiOrder(page, nameA, nameB), 'B did not move back below A').toEqual([nameA, nameB])
     expect(await serverOrder(token, a.id, b.id), 'the server did not move B back below A').toEqual([a.id, b.id])
 
-    // 8
-    const draft = await rawFetch(`${BLOG}/posts`, { method: 'POST', headers: bearer(token), body: { title: `e2e cat post ${hex}`, category_id: a.id, status: 'draft', body: [] } })
-    expect(draft.status, 'create the draft post in A').toBe(201)
-    const postId = (draft.body as { id: string }).id
+    // 8: the QA path. A post written from the Categories tab shows in the row count with no categories re-read.
+    const postTitle = `e2e cat post ${hex}`
+    const catReads: string[] = []
+    page.on('request', (req) => {
+      if (req.method() === 'GET' && new URL(req.url()).pathname.endsWith('/staff/blog/categories')) catReads.push(req.url())
+    })
+    await expect(catRow(page, nameA), 'A starts with no posts').toContainText(/\b0 posts\b/)
+    const readsBefore = catReads.length
+    await page.getByRole('button', { name: 'New post' }).click()
+    await expect(titleInput(page), 'New post opened no editor').toBeVisible()
+    await titleInput(page).fill(postTitle)
+    await page.getByLabel('Category', { exact: true }).selectOption({ label: nameA })
+    const createdPost = page.waitForResponse((r) => r.request().method() === 'POST' && BLOG_POSTS.test(r.url()))
+    await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+    const made = await createdPost
+    expect(made.status(), 'create the draft post in A').toBe(201)
+    const postId = ((await made.json()) as { id: string }).id
     own.posts.push(postId)
-    await reopenTab(page)
-    await expect(catRow(page, nameA), 'the re-read did not show the post count of A').toContainText(/\b1 post\b/)
+    await bar(page).getByRole('button', { name: 'All posts' }).click()
+    await expect(page.locator('[data-blog-cats]'), 'All posts did not return to the Categories tab').toBeVisible()
+    await expect(catRow(page, nameA), 'the row did not count the new post').toContainText(/\b1 post\b/)
+    expect(catReads.length, 'the count came from a categories re-read').toBe(readsBefore)
 
     // 9
     await rowButton(catRow(page, nameA), 'Delete').click()
@@ -1725,8 +1733,15 @@ test.describe('OPS-06 blog categories', () => {
     expect(posts.posts.find((p) => p.id === postId)?.category_id, 'the post did not move to B').toBe(b.id)
 
     // 10
-    expect((await rawFetch(`${BLOG}/posts/${postId}`, { method: 'DELETE', headers: bearer(token) })).status, 'delete the post').toBeLessThan(300)
-    await reopenTab(page)
+    await pad(page).getByRole('button', { name: /Posts/ }).click()
+    await page.getByLabel('Search posts').fill(postTitle)
+    await page.locator('.ops-row').filter({ hasText: postTitle }).click()
+    await bar(page).getByRole('button', { name: 'Delete', exact: true }).click()
+    await bar(page).getByRole('button', { name: 'Delete post', exact: true }).click()
+    await expect(toastOf(page, 'Post deleted')).toBeVisible()
+    await expect(page.locator('[data-blog-table]'), 'Delete post did not return to the list').toBeVisible()
+    await pad(page).getByRole('button', { name: /Categories/ }).click()
+    await expect(page.locator('[data-blog-cats]'), 'the Categories tab drew no list').toBeVisible()
     await rowButton(catRow(page, nameB), 'Delete').click()
     await expect(confirm.getByText(`Delete ${nameB}? It has no posts.`, { exact: true }), 'no empty-category confirm text').toBeVisible()
     await confirm.getByRole('button', { name: 'Delete category', exact: true }).click()

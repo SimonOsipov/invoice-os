@@ -25,10 +25,11 @@ async function prepare(page: Page): Promise<void> {
   })
 }
 
-function collectErrors(page: Page): string[] {
+// expectedUrl: the one resource a test requests knowing it answers an error status.
+function collectErrors(page: Page, expectedUrl?: string): string[] {
   const errors: string[] = []
   page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text())
+    if (msg.type() === 'error' && msg.location().url !== expectedUrl) errors.push(msg.text())
   })
   page.on('pageerror', (err) => {
     errors.push(`pageerror: ${err.message}`)
@@ -173,9 +174,10 @@ test.describe('blog routes', () => {
   })
 
   test('blog routes: an unknown slug answers 404 and still boots the SPA', async ({ page }) => {
-    const errors = collectErrors(page)
+    const url = `${BLOG_URL}/no-such-post-${crypto.randomUUID().slice(0, 8)}`
+    const errors = collectErrors(page, url)
     await prepare(page)
-    const response = await page.goto(`${BLOG_URL}/no-such-post-${crypto.randomUUID().slice(0, 8)}`)
+    const response = await page.goto(url)
     expect(response?.status(), 'status of an unknown slug').toBe(404)
     await expect(main(page), '#blog-main never rendered').toBeVisible()
     await expect(header(page), '#blog-header never rendered').toBeVisible()

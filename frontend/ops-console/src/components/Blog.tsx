@@ -68,7 +68,7 @@ export function Blog({ filters, onFilters, onToast }: Props) {
     })
   const onMoveCat = async (id: string, direction: 'up' | 'down') => {
     let reread = false
-    await flight(async () => {
+    await flight.user(async () => {
       const a = applyCatMove(await moveCategoryFlow({ moveCategory: (i, d) => withSession(() => moveCategory(i, d)) }, id, direction))
       if (!alive.current) return
       applyCats(a)
@@ -87,7 +87,7 @@ export function Blog({ filters, onFilters, onToast }: Props) {
   }
   const onCatSave = async () => {
     let reread = false
-    await flight(async () => {
+    await flight.user(async () => {
       const form = catUiRef.current.form
       if (!form) return
       const o = await saveCategory(
@@ -105,7 +105,7 @@ export function Blog({ filters, onFilters, onToast }: Props) {
   }
   const onCatDelete = async () => {
     let reread = false
-    await flight(async () => {
+    await flight.user(async () => {
       const del = catUiRef.current.del
       const s = stateRef.current
       if (!del || s.status !== 'ready') return

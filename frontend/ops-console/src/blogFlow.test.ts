@@ -554,6 +554,43 @@ describe('singleFlight', () => {
     expect(mid).toHaveBeenCalledTimes(1)
   })
 
+  it('user waits for a running background refresh, then runs once', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    const refresh = run.after(() => new Promise<void>((r) => (release = r)))
+    const save = vi.fn(async () => {})
+    const p = run.user(save)
+    await Promise.resolve()
+    expect(save).not.toHaveBeenCalled()
+    release()
+    await refresh
+    await p
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('user runs after the refresh even when another refresh is queued behind it', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    void run.after(() => new Promise<void>((r) => (release = r)))
+    await run.after(async () => {})
+    const del = vi.fn(async () => {})
+    const p = run.user(del)
+    release()
+    await p
+    expect(del).toHaveBeenCalledTimes(1)
+  })
+
+  it('user is still dropped while another user action runs', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    const first = run.user(() => new Promise<void>((r) => (release = r)))
+    const second = vi.fn(async () => {})
+    await run.user(second)
+    expect(second).not.toHaveBeenCalled()
+    release()
+    await first
+  })
+
   it('after runs once the running action ends, and runs at once when idle', async () => {
     const run = singleFlight()
     let release: () => void = () => {}

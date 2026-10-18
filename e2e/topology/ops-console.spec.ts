@@ -1575,7 +1575,9 @@ test.describe('OPS-06 blog categories', () => {
     await signInOps(page)
     await navButton(page, /^Blog/).click()
     await expect(page.locator('[data-blog-table]'), 'the Blog list never finished loading').toBeVisible({ timeout: 15_000 })
+    const refreshed = page.waitForResponse((r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/staff/blog/categories'), { timeout: 15_000 })
     await pad(page).getByRole('button', { name: /Categories/ }).click()
+    await refreshed
     await expect(page.locator('[data-blog-cats]'), 'the Categories tab drew no list').toBeVisible({ timeout: 15_000 })
   }
   const catRow = (page: Page, name: string) => page.locator('[data-cat-row]').filter({ has: page.getByText(name, { exact: true }) })

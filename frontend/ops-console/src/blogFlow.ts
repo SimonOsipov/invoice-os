@@ -111,27 +111,42 @@ export function trackCover(d: { fetchCoverUrl: (id: string) => Promise<CoverHand
 
 export const STAFF_ONLY = 'Your account is not ASComply staff.'
 
-// Runs one action at a time; a call made while one runs is ignored. `.after` runs now, or once the running action ends.
+// Runs one action at a time; a call made while one runs is ignored. `.after` runs now, or once the running action ends, as a background read. `.user` waits out a running background read, then runs.
 export function singleFlight() {
   let busy = false
+  let bg = false
+  let current: Promise<void> = Promise.resolve()
   let pending: (() => Promise<void>) | null = null
+  const go = (fn: () => Promise<void>, background: boolean): Promise<void> => {
+    busy = true
+    bg = background
+    const p = (async () => {
+      try {
+        await fn()
+      } finally {
+        busy = false
+        bg = false
+        const next = pending
+        pending = null
+        if (next) void go(next, true).catch(() => {})
+      }
+    })()
+    current = p.catch(() => {})
+    return p
+  }
   const run = async (fn: () => Promise<void>): Promise<void> => {
     if (busy) return
-    busy = true
-    try {
-      await fn()
-    } finally {
-      busy = false
-      const next = pending
-      pending = null
-      if (next) void run(next).catch(() => {})
-    }
+    await go(fn, false)
   }
   const after = async (fn: () => Promise<void>): Promise<void> => {
     if (busy) pending = fn
-    else await run(fn)
+    else await go(fn, true)
   }
-  return Object.assign(run, { after })
+  const user = async (fn: () => Promise<void>): Promise<void> => {
+    while (busy && bg) await current
+    await run(fn)
+  }
+  return Object.assign(run, { after, user })
 }
 
 export type SaveDeps = {

@@ -1,7 +1,10 @@
 // The blog /subscribe page layout on the PR fork. Each case asserts a relationship, never a raw dimension.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { resolveTarget } from '../targets'
+import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { enclosesRect, PHONE_WIDTHS, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
+import { GATEWAY_URL } from './targets'
 
 const BLOG_URL = resolveTarget('BLOG_URL')
 const SLACK_PX = 0.5 // sub-pixel rounding only
@@ -13,10 +16,10 @@ async function prepare(page: Page): Promise<void> {
   })
 }
 
-function collectErrors(page: Page): string[] {
+function collectErrors(page: Page, drop?: Dropper): string[] {
   const errors: string[] = []
   page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text())
+    if (msg.type() === 'error' && !drop?.(msg.text(), msg.location().url)) errors.push(msg.text())
   })
   page.on('pageerror', (err) => {
     errors.push(`pageerror: ${err.message}`)
@@ -155,3 +158,94 @@ for (const width of PHONE_WIDTHS) {
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 }
+
+const subscribeButton = (page: Page) => main(page).getByRole('button', { name: 'Subscribe', exact: true })
+const isSubscribePost = (url: string) => /\/blog\/subscriptions$/.test(url)
+
+test('blog subscribe: a valid submit reaches the fork gateway and shows the done state', async ({ page }) => {
+  const errors = collectErrors(page)
+  await prepare(page)
+  await visit(page, WIDE_WIDTHS[0])
+  const email = `blog-e2e-${randomUUID().slice(0, 8)}@corp.example`
+  const n = await chips(page).count()
+  expect(n, 'no topic chip rendered').toBeGreaterThan(0)
+  await main(page).getByLabel('Work email').fill(email)
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => r.request().method() === 'POST' && isSubscribePost(r.url())),
+    subscribeButton(page).click(),
+  ])
+  expect(res.status(), 'subscribe answers 202 (http.StatusAccepted)').toBe(202)
+  await expect(main(page).getByText('Check your inbox.')).toBeVisible()
+  await expect(main(page)).toContainText(email)
+  await expect(main(page)).toContainText(`across ${n} ${n === 1 ? 'topic' : 'topics'}`)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('blog subscribe: validation messages', async ({ page }) => {
+  const errors = collectErrors(page)
+  const posts: string[] = []
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && isSubscribePost(r.url())) posts.push(r.url())
+  })
+  await prepare(page)
+  await visit(page, WIDE_WIDTHS[0])
+  const field = main(page).getByLabel('Work email')
+  await subscribeButton(page).click()
+  await expect(main(page).getByText('Enter your work email.')).toBeVisible()
+  await field.fill('a@b')
+  await expect(main(page).getByText('Enter a valid email address, such as name@company.com.')).toBeVisible()
+  await field.fill('blog-e2e-novalidate@corp.example')
+  const n = await chips(page).count()
+  for (let k = 0; k < n; k++) await chips(page).nth(k).click()
+  await subscribeButton(page).click()
+  await expect(main(page).getByText('Choose at least one topic.')).toBeVisible()
+  expect(posts, 'a rejected form must not POST').toEqual([])
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('blog subscribe: topics are the live categories', async ({ page }) => {
+  const errors = collectErrors(page)
+  const live = (await (await fetch(`${GATEWAY_URL}/blog/categories`)).json()) as { categories: { name: string }[] }
+  expect(live.categories.length, 'the gateway lists no category').toBeGreaterThan(0)
+  await prepare(page)
+  await visit(page, WIDE_WIDTHS[0])
+  await expect.poll(() => chips(page).count()).toBe(live.categories.length)
+  const names = (await chips(page).allTextContents()).map((t) => t.trim())
+  expect(names).toEqual(live.categories.map((c) => c.name))
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+// 43 URL-safe chars (blogConfirmTokenRE in internal/gateway/blog_subscribe.go), never issued.
+const unknownToken = () => randomBytes(32).toString('base64url')
+const CONFIRM_POST = /\/blog\/subscriptions\/confirm$/
+
+test('blog confirm: an unknown token shows the expired state', async ({ page }) => {
+  const errors = collectErrors(page, expectedStatusDropper(page, 410, CONFIRM_POST)) // http.StatusGone
+  await prepare(page)
+  const token = unknownToken()
+  expect(token).toHaveLength(43)
+  await page.goto(`${BLOG_URL}/subscribe/confirm?token=${token}`)
+  await expect(page, 'the token stays in the address bar').not.toHaveURL(/token=/)
+  const [res] = await Promise.all([
+    page.waitForResponse((r) => CONFIRM_POST.test(r.url())),
+    main(page).getByRole('button', { name: 'Confirm subscription' }).click(),
+  ])
+  expect(res.status(), 'an unknown token answers 410 (http.StatusGone)').toBe(410)
+  await expect(main(page).getByText('This link has expired or was already used.')).toBeVisible()
+  await expect(main(page).getByRole('button', { name: 'Subscribe again' })).toBeVisible()
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('blog confirm: loading the link sends nothing', async ({ page }) => {
+  const errors = collectErrors(page)
+  const seen: string[] = []
+  page.on('request', (r) => {
+    if (CONFIRM_POST.test(r.url())) seen.push(r.url())
+  })
+  await prepare(page)
+  await page.goto(`${BLOG_URL}/subscribe/confirm?token=${unknownToken()}`)
+  await expect(main(page).getByRole('button', { name: 'Confirm subscription' })).toBeVisible()
+  await page.waitForLoadState('networkidle')
+  expect(seen, 'the confirm POST fired before the click').toEqual([])
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})

@@ -739,6 +739,38 @@ describe('FIRMS-02-05: the drawer edits client access', () => {
     expect(screen.getByTestId('drawer-client-empty').textContent).toBe('This workspace has no clients yet.')
   })
 
+  it('a member whose access the viewer cannot read gets no picker that claims a set', () => {
+    const setMemberClients = vi.fn()
+    mount(setMemberClients, [], { members: [member({ id: 'u2', clientAccess: null })] })
+
+    expect(screen.getByText('Client access')).toBeTruthy()
+    expect(screen.queryByTestId('drawer-scope-selected')).toBeNull()
+    expect(screen.queryAllByTestId('drawer-client-row')).toHaveLength(0)
+    expect(setMemberClients).not.toHaveBeenCalled()
+  })
+
+  it("the picker's search narrows the shown rows only and the count reads against the roster", () => {
+    const setMemberClients = vi.fn()
+    mount(setMemberClients, ['e1'], { entities: [entity('e1', 'Alpha Ltd'), entity('e2', 'Beta Ltd'), entity('e3', 'Gamma Ltd')] })
+    const search = screen.getByTestId('drawer-client-search') as HTMLInputElement
+    const count = () => screen.getByTestId('drawer-client-count').textContent
+
+    expect(screen.getAllByTestId('drawer-client-row')).toHaveLength(3)
+    expect(count()).toBe('1 of 3 selected')
+
+    fireEvent.change(search, { target: { value: 'beta' } })
+    expect(screen.getAllByTestId('drawer-client-row').map((r) => r.textContent)).toEqual(['Beta Ltd'])
+    expect(count()).toBe('1 of 3 selected')
+
+    fireEvent.change(search, { target: { value: 'zzz' } })
+    expect(screen.queryAllByTestId('drawer-client-row')).toHaveLength(0)
+    expect(screen.getByTestId('drawer-client-empty').textContent).toBe('No clients match this search.')
+
+    fireEvent.change(search, { target: { value: '' } })
+    expect(ticks()).toEqual([true, false, false])
+    expect(setMemberClients).not.toHaveBeenCalled()
+  })
+
   it('lists an archived client the member already holds, ticked', () => {
     mount(vi.fn(), ['e3'], { entities: [entity('e1', 'Alpha Ltd'), entity('e3', 'Old Ltd', 'archived'), entity('e4', 'Gone Ltd', 'archived')] })
     expect(screen.getAllByTestId('drawer-client-row').map((r) => r.textContent)).toEqual(['Alpha Ltd', 'Old Ltd'])

@@ -3162,6 +3162,7 @@ var scSweepSubjectAllowlist = []scSweepSubjectExemption{
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ConcurrentAcceptsOfOneTokenJoinOnce"},                            // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount"},         // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ATokenJoinsOnlyItsOwnTenant"},                                    // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestInvitations_RevokedLinkIsDeadOnEveryPath"},                              // the invitee holds no membership in the invite's tenant
 	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMalformedTokenOrSubjectSendsNoStatement"},                       // the invitee holds no membership in the invite's tenant before accepting
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptByIdJoinsWithTheInvitedRole"},                                  // the invitee holds no membership before joining
 	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListNamesEveryWorkspaceThatInvitedTheAddress"},                       // the invitee holds no membership before joining

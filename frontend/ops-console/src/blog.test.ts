@@ -757,6 +757,8 @@ describe('category rules', () => {
     expect(catFormError(new ApiError('http', 'boom', 500))).toBeNull()
     expect(catFormError(new ApiError('http', 'no', 403))).toBeNull()
     expect(catFormError(new ApiError('http', 'bad', 422, { error: 'bad' }))).toBeNull()
+    expect(catFormError(new ApiError('http', 'Summary.', 422, { error: 'Summary.', fields: { name: 'Name msg.' } }))).toBe('Name msg.')
+    expect(catFormError(new ApiError('http', 'Summary.', 422, { error: 'Summary.', fields: { headline: 'Too long.' } }))).toBe('Summary.')
   })
 
   it('deleteView covers only, empty and withposts in that order', () => {

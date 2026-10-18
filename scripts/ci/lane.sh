@@ -14,6 +14,8 @@ SHARED_WITH_BLOG=(
   frontend/library/src/timing.ts
   frontend/library/src/types.ts
 )
+# Inputs of cmd/blog: a change needs the fork build and the crawler e2e, so it takes the full lane.
+BLOG_SERVER_INPUTS=(frontend/blog/Dockerfile frontend/blog/Dockerfile.dockerignore frontend/blog/index.html)
 GATEWAY_JOB_PREFIX='Deploy gateway '
 FLEET_GATE_JOB_PREFIX='Fleet /healthz gate'
 SPA_GATE_JOB_PREFIX='SPA build gate'
@@ -35,11 +37,11 @@ emit() {
 
 # classify: paths on stdin; a small lane only when a path is read, every path starts with that one lane's prefix and none is in SHARED_WITH_BLOG.
 classify() {
-  local path this shared seen=0 lane=""
+  local path shared this seen=0 lane=""
   while IFS= read -r path || [ -n "$path" ]; do
     [ -n "$path" ] || continue
     seen=1
-    for shared in "${SHARED_WITH_BLOG[@]}"; do
+    for shared in "${SHARED_WITH_BLOG[@]}" "${BLOG_SERVER_INPUTS[@]}"; do
       if [ "$path" = "$shared" ]; then echo full; return 0; fi
     done
     case "$path" in

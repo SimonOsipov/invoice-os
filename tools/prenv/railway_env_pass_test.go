@@ -1227,6 +1227,7 @@ func TestForkVarsAfterURLs_DeletedNamesAreNotCountedAsHeld(t *testing.T) {
 	stores := afterProdStores()
 	stores[sentrySvcID("blog")]["VITE_GATEWAY_URL"] = batchGatewayURL
 	stores[sentrySvcID("blog")]["VITE_LANDING_URL"] = batchLandingURL
+	stores[sentrySvcID("blog")]["VITE_GATEWAY_URL"] = batchGatewayURL
 	s := newAfterShim(t, stores)
 	out, code := runAfter(t, s)
 	if code != 0 {

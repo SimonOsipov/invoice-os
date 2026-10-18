@@ -11,6 +11,11 @@
       "want": "category-2"
     },
     {
+      "title": "Health",
+      "taken": [],
+      "want": "health-2"
+    },
+    {
       "title": "Subscribe",
       "taken": [
         "subscribe-2"

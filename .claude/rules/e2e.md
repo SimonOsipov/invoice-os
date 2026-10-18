@@ -32,6 +32,7 @@ paths:
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
 - Test the `library` SPA for render and consent only. It is static content with no backend.
 - Test the `blog` SPA for render, layout and consent. It reads published posts from the gateway's public blog routes.
+- Cover the blog's crawler HTML, sitemap and robots in `e2e/api/contract-blog-crawler.spec.ts`.
 - Cover the library consent notice, the stored answer, the privacy link and the production-host-only tag in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent in `e2e/smoke/blog-consent.spec.ts`.
 - Never publish a policy in a topology spec. A topology spec may restore the tenant's own seeded policy through `ensureFirmPolicyActive`.

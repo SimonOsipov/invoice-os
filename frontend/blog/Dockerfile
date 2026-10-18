@@ -25,9 +25,21 @@ ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA
 ARG SENTRY_AUTH_TOKEN
 RUN pnpm --filter @invoice-os/blog build
 
-# ---- Serve: Caddy static server with SPA fallback + /health ----
-FROM caddy:2-alpine AS serve
-COPY Caddyfile /etc/caddy/Caddyfile
+# ---- Server: the blog binary, built from the root go.mod ----
+FROM mirror.gcr.io/library/golang:1.26.9-alpine AS server
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY cmd/blog cmd/blog
+COPY internal/blogweb internal/blogweb
+COPY internal/platform internal/platform
+RUN CGO_ENABLED=0 go build -o /out/blog ./cmd/blog
+
+# ---- Serve: the blog binary over the built SPA ----
+FROM gcr.io/distroless/static-debian12:nonroot AS serve
+COPY --from=server /out/blog /blog
 COPY --from=build /repo/frontend/blog/dist /srv
 # The commit under test, served at /build.txt for the deploy gate.
 COPY --from=build /repo/internal/platform/buildsha.txt /srv/build.txt
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/blog"]

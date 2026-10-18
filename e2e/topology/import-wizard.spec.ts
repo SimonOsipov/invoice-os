@@ -1621,8 +1621,17 @@ test('INVCR-E2E-1 firm: mixed import -> filter by rule -> expand -> fix -> re-va
   // Fix the field the server flagged, save.
   await expect(fixInput).toHaveValue('0.00')
   await fixInput.fill('75.00')
-  await page.getByTestId('review-fix-save').click()
-  await expect(fixInput, 'the panel re-fetches the saved value').toHaveValue('75.00')
+  // The input shows the draft at once, so only the PATCH answer proves the server stored it.
+  const [patched] = await Promise.all([
+    page.waitForResponse(
+      (r) => r.request().method() === 'PATCH' && /\/api\/invoice\/v1\/invoices\/[^/]+$/.test(new URL(r.url()).pathname),
+    ),
+    page.getByTestId('review-fix-save').click(),
+  ])
+  expect(patched.ok(), 'the fix is stored before Re-validate').toBe(true)
+  // internal/invoice/invoice.go Invoice.VAT (json "vat"): the edit handler answers the stored invoice.
+  expect(((await patched.json()) as { vat: string | null }).vat, 'the server stored 75.00').toBe('75.00')
+  await expect(fixInput, 'the input keeps 75.00').toHaveValue('75.00')
 
   // Re-validate -- the verdict pill moves. ReviewInvoicesTab is entirely server-filtered
   // ([filters-are-server-side], its own file header) -- the fixed invoice no longer

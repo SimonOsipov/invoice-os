@@ -60,8 +60,9 @@ describe('sidebar', () => {
   })
 
   it('VW-02 the current category is highlighted, also on its post', async () => {
+    await mount('/category/c1')
     for (const path of ['/category/c1', '/sage-rules']) {
-      await remount(path)
+      if (path !== '/category/c1') await remount(path)
       expect(row('Regulation').getAttribute('aria-current'), path).toBe('true')
       expect(row('Regulation').style.fontWeight, path).toBe('700')
       expect(row('Regulation').style.background, path).toBe('var(--surface-panel)')

@@ -33,7 +33,7 @@ export const UNITS: Unit[] = [
       'auth.spec.ts':
         'Tests the real sign-in front door and stored-session rules, which the SPA binds to the seeded tenants 1111 / 2222 (the e2e members it signs in as).',
       'isolation.spec.ts':
-        'Asserts the exact seeded membership subsets (firm: 6 seeded members, plus the e2e member of each role that exists) and tenant identities of 1111 and 2222.',
+        'Asserts the exact seeded membership subsets (firm: 7 seeded members, plus the e2e member of each role that exists) and tenant identities of 1111 and 2222.',
       'persona-surfaces.spec.ts':
         "Builds the in-house approval queue and badge on the active policy `internal/demopolicy` seeds only on 1111 / 2222. Needs 2222's seeded `Honeywell Group` entity as its first client (the subtitle assertion).",
       'portfolio-workflow-surfaces.spec.ts':

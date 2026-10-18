@@ -21,15 +21,16 @@ SELECT m.shard_id, t.name, t.kind
 FROM shard_map m JOIN tenants t ON t.id = m.source_id
 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, kind = EXCLUDED.kind;
 
-INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status)
-SELECT m.shard_id, s.user_id, s.role, s.display_name, s.email, s.status
+INSERT INTO memberships (tenant_id, user_id, role, display_name, email, status, all_clients)
+SELECT m.shard_id, s.user_id, s.role, s.display_name, s.email, s.status, s.all_clients
 FROM shard_map m JOIN memberships s ON s.tenant_id = m.source_id
 WHERE s.user_id::text LIKE 'c0000000-0000-0000-0000-%' -- seeded personas only; e2e-granted members stay on 1111 / 2222
 ON CONFLICT (tenant_id, user_id) DO UPDATE SET
     role         = EXCLUDED.role,
     display_name = EXCLUDED.display_name,
     email        = EXCLUDED.email,
-    status       = EXCLUDED.status;
+    status       = EXCLUDED.status,
+    all_clients  = EXCLUDED.all_clients;
 
 -- New ids; created_at copied so ListRoles' order matches the source.
 INSERT INTO workflow_roles (tenant_id, key, title, description, created_at)
@@ -104,6 +105,17 @@ JOIN business_entities e ON e.tenant_id = m.source_id
  AND e.name = CASE WHEN m.is_firm THEN 'Adeyemi & Sons Trading Ltd' ELSE 'Honeywell Group' END
 ON CONFLICT (tenant_id, tin) WHERE tin IS NOT NULL
     DO UPDATE SET name = EXCLUDED.name, sector = EXCLUDED.sector, status = EXCLUDED.status;
+
+-- Seeded personas' client sets, mapped source entity -> shard entity by TIN. A shard
+-- holds one entity, so a source row for any other TIN has no target and is skipped.
+INSERT INTO membership_clients (tenant_id, user_id, entity_id)
+SELECT m.shard_id, mc.user_id, se.id
+FROM shard_map m
+JOIN membership_clients mc ON mc.tenant_id = m.source_id
+JOIN business_entities oe ON oe.tenant_id = m.source_id AND oe.id = mc.entity_id
+JOIN business_entities se ON se.tenant_id = m.shard_id AND se.tin = oe.tin
+WHERE mc.user_id::text LIKE 'c0000000-0000-0000-0000-%'
+ON CONFLICT ON CONSTRAINT membership_clients_pk DO NOTHING;
 
 -- Firm shards: a copy of 1111's DEMO-2026-1004. Children follow only the ids the
 -- invoice insert returns, so a re-run inserts nothing.

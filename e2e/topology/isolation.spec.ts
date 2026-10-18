@@ -96,7 +96,7 @@ test('cross-tenant isolation: each tenant token lists exactly its own members th
   const aUserIds = a.memberships.map((m) => m.user_id).sort()
   const bUserIds = b.memberships.map((m) => m.user_id).sort()
 
-  // Positive: the seeded subset is exactly the 6 firm / 7 in-house seeded members; any other
+  // Positive: the seeded subset is exactly the 7 firm / 7 in-house seeded members; any other
   // member must be one of the tenant's e2e role accounts (realAccounts.ts).
   expect(aUserIds.filter(isSeededMember)).toEqual([...TENANTS.a.members].sort())
   expect(bUserIds.filter(isSeededMember)).toEqual([...TENANTS.b.members].sort())

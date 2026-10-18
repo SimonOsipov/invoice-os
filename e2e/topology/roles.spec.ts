@@ -285,12 +285,13 @@ interface SeedRosterCell {
 
 // `rosterRoleCell` unions every seat a member holds regardless of approver eligibility, so
 // this is unaffected by the APPR-04-02 predicate — re-derived and confirmed unchanged, not
-// assumed so. …0007 Halima Yusuf is the em-dash case: seeded, suspended, and staffed into no
-// role at all. She is READ-ONLY to every spec — nothing may PATCH her.
+// assumed so. …0007 Halima Yusuf (suspended) and …0014 Amaka Eze (active) are the em-dash
+// cases: seeded and staffed into no role at all. Both are READ-ONLY to every spec — nothing may PATCH them.
 const FIRM_ROSTER_CELLS: readonly SeedRosterCell[] = [
   { member: 'Musa Danjuma', text: 'Engagement Manager +1', tooltip: 'Engagement Manager\nSenior Manager' },
   { member: 'Chiamaka Nwosu', text: 'Tax Reviewer', tooltip: 'Tax Reviewer' },
   { member: 'Halima Yusuf', text: '—', tooltip: '' },
+  { member: 'Amaka Eze', text: '—', tooltip: '' },
 ]
 
 // One entry: every seeded in-house member is staffed into some role, so this mode has no

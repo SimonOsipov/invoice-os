@@ -23,6 +23,7 @@ var shardSeedTables = []struct{ table, tenantCol string }{
 	{"approval_policy_versions", "tenant_id"},
 	{"approval_policy_steps", "tenant_id"},
 	{"business_entities", "tenant_id"},
+	{"membership_clients", "tenant_id"},
 	{"invoices", "tenant_id"},
 	{"line_items", "tenant_id"},
 	{"invoice_status_history", "tenant_id"},

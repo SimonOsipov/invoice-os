@@ -95,7 +95,7 @@ test.describe('cross-tenant isolation (API E2E, over the deployed gateway)', () 
     const userIdsA = membersA.map((m) => m.user_id).sort()
     const userIdsB = membersB.map((m) => m.user_id).sort()
 
-    // Positive: the seeded subset is exactly the tenant's seeded members (A: 6, B: 7); any other
+    // Positive: the seeded subset is exactly the tenant's seeded members (A: 7, B: 7); any other
     // member must be one of the tenant's e2e role accounts (realAccounts.ts).
     expect(userIdsA.filter(isSeededMember)).toEqual([...TENANTS.a.members].sort())
     expect(userIdsB.filter(isSeededMember)).toEqual([...TENANTS.b.members].sort())

@@ -164,7 +164,7 @@ var readerFirmWideEvents = []string{
 	"approval_policy.published", "approval_policy.deleted",
 	"workflow_role.created", "workflow_role.updated",
 	"workflow_role.deleted", "workflow_role.staffed",
-	"membership.suspended", "membership.reactivated",
+	"membership.suspended", "membership.reactivated", "membership.client_access_set",
 	"workspace.provisioned",
 	"validation.rule.enabled", "validation.rule.disabled",
 	"invitation.sent", "invitation.resent", "invitation.accepted", "invitation.revoked",
@@ -288,6 +288,25 @@ func TestAuditScopeOf_InvitationRevokedIsWorkspace(t *testing.T) {
 	}
 }
 
+// A client-access change is a workspace act: its payload names a real client but entity_id stays NULL.
+func TestAuditScopeOf_ClientAccessSetIsWorkspace(t *testing.T) {
+	if got := audit.ScopeOf("some.unclassified", nil); got != audit.ScopeUnattributed {
+		t.Fatalf("control: ScopeOf(unclassified, nil) = %q, want %q", got, audit.ScopeUnattributed)
+	}
+	if got := audit.ScopeOf("membership.client_access_set", nil); got != audit.ScopeWorkspace {
+		t.Errorf("ScopeOf(membership.client_access_set, nil) = %q, want %q", got, audit.ScopeWorkspace)
+	}
+	entity := uuid.NewString()
+	if got := audit.ScopeOf("membership.client_access_set", &entity); got != audit.ScopeCompany {
+		t.Errorf("ScopeOf(membership.client_access_set, entity) = %q, want %q", got, audit.ScopeCompany)
+	}
+	for _, near := range []string{"membership.Client_access_set", "membership.client_access_set "} {
+		if got := audit.ScopeOf(near, nil); got != audit.ScopeUnattributed {
+			t.Errorf("ScopeOf(%q, nil) = %q, want %q", near, got, audit.ScopeUnattributed)
+		}
+	}
+}
+
 // AC #4: an event in neither the firm-wide set nor a known invoice-scoped/document
 // list falls back to unattributed, never workspace — the fail-safe direction (D-28):
 // an event nobody classified must read "we do not know", not "this was firm-wide".
@@ -315,7 +334,7 @@ func TestAuditScopeOf_CustomerEventsAreWorkspace(t *testing.T) {
 }
 
 // AC #4 drift guard: reuses audit_trigger_test.go's own triggerRuleDPayloads (already
-// DB-pinned at 26 rows by TestAudit_InsertTriggerLeavesWorkspaceEventsNull) instead of
+// DB-pinned at 27 rows by TestAudit_InsertTriggerLeavesWorkspaceEventsNull) instead of
 // a fifth hand-written copy of the list. A rule-D event that is neither firm-wide nor
 // already listed below fails here through ScopeOf's fallback, forcing a human to classify
 // it (D-28's fail-safe intent).
@@ -323,10 +342,10 @@ func TestAuditScopeOf_CustomerEventsAreWorkspace(t *testing.T) {
 // For the five unattributed names this is a DRIFT GUARD, not evidence of their scope:
 // rule 3 answers identically for extraction.succeeded and for an event nobody ever named
 // (TestAuditScopeOf_UnknownEventFallsBackToUnattributedNotWorkspace pins that fallback).
-func TestAuditScopeOf_MatchesTheTwentySixEventsTheTriggerLeavesNull(t *testing.T) {
+func TestAuditScopeOf_MatchesTheTwentySevenEventsTheTriggerLeavesNull(t *testing.T) {
 	ruleD := triggerRuleDPayloads(uuid.NewString())
-	if len(ruleD) != 26 {
-		t.Fatalf("rule-D payload map holds %d events, want 26", len(ruleD))
+	if len(ruleD) != 27 {
+		t.Fatalf("rule-D payload map holds %d events, want 27", len(ruleD))
 	}
 
 	// The rule-D names ScopeOf must call unattributed rather than workspace.
@@ -355,12 +374,12 @@ func TestAuditScopeOf_MatchesTheTwentySixEventsTheTriggerLeavesNull(t *testing.T
 	}
 }
 
-// AC #4: cross-checks the four DB-pinned rule sets (10+7+4+4+26=51) for pairwise
+// AC #4: cross-checks the four DB-pinned rule sets (10+7+4+4+27=52) for pairwise
 // disjointness and total. audit_trigger_test.go pins each set's size alone but never
 // cross-checks them — an invariant CompanyScope's three-way split now depends on. Needs
 // no audit package call: it guards the fixture data itself. Disjointness is a real
 // structural property, not a restatement of ScopeOf's fallback.
-func TestAuditScopeOf_RuleSetsAreDisjointAndSumToFiftyOne(t *testing.T) {
+func TestAuditScopeOf_RuleSetsAreDisjointAndSumToFiftyTwo(t *testing.T) {
 	all := map[string]string{}
 	named := []struct {
 		name   string
@@ -385,13 +404,13 @@ func TestAuditScopeOf_RuleSetsAreDisjointAndSumToFiftyOne(t *testing.T) {
 		}
 		all[e] = "D"
 	}
-	if len(all) != 51 {
-		t.Fatalf("rule sets total %d events, want 51", len(all))
+	if len(all) != 52 {
+		t.Fatalf("rule sets total %d events, want 52", len(all))
 	}
 }
 
 // AC #4: ScopeOf answers workspace for exactly the firm-wide names and for no
-// other event in the shipped 51-name vocabulary. TestAuditScopeOf_ClassifiesAllThreeStates
+// other event in the shipped 52-name vocabulary. TestAuditScopeOf_ClassifiesAllThreeStates
 // checks the names one at a time; this is the closed half, and it is the one assertion
 // here that a fallback cannot satisfy — reaching ScopeWorkspace needs a real entry in
 // reader.go's firmWideEvents. It fails if either extraction event is ever filed as
@@ -408,16 +427,16 @@ func TestAuditScopeOf_WorkspaceAnswerIsExactlyTheFirmWideNames(t *testing.T) {
 	}
 	// Population floor: a shrunk vocabulary would make the set equality below a claim
 	// about whatever happened to survive.
-	if len(vocabulary) != 51 {
-		t.Fatalf("the rule sets name %d events, want 51", len(vocabulary))
+	if len(vocabulary) != 52 {
+		t.Fatalf("the rule sets name %d events, want 52", len(vocabulary))
 	}
 
 	want := map[string]bool{}
 	for _, e := range readerFirmWideEvents {
 		want[e] = true
 	}
-	if len(want) != 24 {
-		t.Fatalf("readerFirmWideEvents holds %d distinct names, want 24", len(want))
+	if len(want) != 25 {
+		t.Fatalf("readerFirmWideEvents holds %d distinct names, want 25", len(want))
 	}
 
 	got := map[string]bool{}

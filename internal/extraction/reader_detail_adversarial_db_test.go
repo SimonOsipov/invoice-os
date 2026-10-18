@@ -905,13 +905,17 @@ func TestExtractionDetail_AnAlternativeDoesNotAttachAcrossJobs(t *testing.T) {
 	ctx := t.Context()
 	r := rdReader(t)
 
-	ctxA, tenantA, docA := rdTenant(t, ctx, "active")
+	ctxA, tenantA, _ := rdTenant(t, ctx, "active")
+	// stored_at holds "0.83": a bare-substring scan of the marshalled detail trips on it.
+	docA := rvdSeedDocumentMeta(t, ctx, tenantA, nil, nil, 1024, strings.Repeat("c", 64),
+		time.Date(2026, 10, 10, 2, 36, 10, 830000000, time.UTC))
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	jobA := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 	jobOther := rdSeedJob(t, ctx, tenantA, docA, "succeeded", now, nil)
 
 	rvdSeedField(t, ctx, tenantA, jobA, "invoice_number", rvdStr("A-DECIDED"), nil, 0, nil, now)
 	altBox := &rvdBox{Page: 1, X0: 0.81, Y0: 0.82, X1: 0.83, Y1: 0.84}
+	boxNeedles := []string{`"x0":0.81`, `"y0":0.82`, `"x1":0.83`, `"y1":0.84`}
 	rvdSeedField(t, ctx, tenantA, jobOther, "invoice_number", rvdStr("OTHER-DECIDED"), nil, 0, rvdStr("ambiguous"), now)
 	rvdSeedField(t, ctx, tenantA, jobOther, "invoice_number", rvdStr("OTHER-ALT-1"), altBox, 1, nil, now)
 
@@ -924,6 +928,17 @@ func TestExtractionDetail_AnAlternativeDoesNotAttachAcrossJobs(t *testing.T) {
 	if len(other.Fields) != 1 || len(other.Fields[0].Alternatives) != 1 {
 		t.Fatalf("the neighbouring job gave %d field(s) with %v alternative(s); the fixture must hold one",
 			len(other.Fields), rvdAlternativeCounts(other.Fields))
+	}
+
+	// Control: the anchored box needles match a real leak, so the scan below is not vacuous.
+	ob, err := json.Marshal(other)
+	if err != nil {
+		t.Fatalf("marshal the neighbouring detail: %v", err)
+	}
+	for _, needle := range boxNeedles {
+		if !strings.Contains(string(ob), needle) {
+			t.Fatalf("the neighbouring job marshals to\n  %s\nwithout %s, so the leak scan below proves nothing", ob, needle)
+		}
 	}
 
 	got, err := r.Detail(ctxA, jobA)
@@ -943,7 +958,7 @@ func TestExtractionDetail_AnAlternativeDoesNotAttachAcrossJobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal the detail: %v", err)
 	}
-	for _, needle := range []string{"OTHER-DECIDED", "OTHER-ALT-1", "0.81", "0.82", "0.83", "0.84"} {
+	for _, needle := range append([]string{"OTHER-DECIDED", "OTHER-ALT-1"}, boxNeedles...) {
 		if strings.Contains(string(b), needle) {
 			t.Errorf("job %s marshals to\n  %s\nwhich carries %s from job %s", jobA, b, needle, jobOther)
 		}

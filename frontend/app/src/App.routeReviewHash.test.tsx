@@ -334,8 +334,11 @@ describe('AC-4: entering review from a run rewrites the entry, never pushes', ()
 
     await waitFor(() => expect(requireCtx().createStep, 'the run never landed on review').toBe('review'))
     expect(requireCtx().reviewBatchIds, 'entering review must seed the batch id the run created').toEqual([BATCH_ID])
-    expect(window.location.pathname, 'entering review must rewrite the URL to the review path').toBe(
-      `/imports/${BATCH_ID}/review`,
+    // The URL is written by a passive effect after the createStep commit.
+    await waitFor(() =>
+      expect(window.location.pathname, 'entering review must rewrite the URL to the review path').toBe(
+        `/imports/${BATCH_ID}/review`,
+      ),
     )
     expect(
       window.history.length,

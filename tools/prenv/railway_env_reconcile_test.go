@@ -43,6 +43,7 @@ func reconcileURLVariablesBody(t *testing.T) string {
 //
 // KILLS: a variable added while the closing line's literal count is left unchanged.
 func TestConfirmedVariableCountMatchesUpserts(t *testing.T) {
+	t.Parallel()
 	// reconcileCalls is fatal below 9 pairs (vacuity guard).
 	upsertCount := len(reconcileCalls(t))
 
@@ -73,6 +74,7 @@ func TestConfirmedVariableCountMatchesUpserts(t *testing.T) {
 // KILLS: a restructure that drops (or reorders past) this guard, which would re-open
 // rewriting production's URL variables from a PR-environment run.
 func TestReconcileURLVariablesRefusesThePersistentEnvironment(t *testing.T) {
+	t.Parallel()
 	body := reconcileURLVariablesBody(t)
 
 	const refusalBlock = `if [ "$env_id" = "$RAILWAY_DEV_ENVIRONMENT_ID" ]; then
@@ -89,6 +91,7 @@ func TestReconcileURLVariablesRefusesThePersistentEnvironment(t *testing.T) {
 // in its Dockerfile. KILLS the silent gap where Railway holds the variable and the re-read
 // passes, but no build arg carries it into `vite build`.
 func TestEveryAppViteVariableHasADockerfileArg(t *testing.T) {
+	t.Parallel()
 	names := make(map[string]bool)
 	matches := 0
 	for _, c := range reconcileCalls(t) {
@@ -108,6 +111,7 @@ func TestEveryAppViteVariableHasADockerfileArg(t *testing.T) {
 // Without it the guards above are inert on exactly the edit they guard: a scripts-only
 // commit matches no filter, the Go job is skipped, and `go test ./...` never runs.
 func TestCIYmlGoFilterReachesScriptsCI(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(repoRoot(t), ".github", "workflows", "ci.yml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -158,6 +162,7 @@ func assertViteArgsBeforeBuild(t *testing.T, service string, names map[string]bo
 
 // Sibling of TestEveryAppViteVariableHasADockerfileArg for the landing service.
 func TestEveryLandingViteVariableHasADockerfileArg(t *testing.T) {
+	t.Parallel()
 	// Bash names are case-sensitive, so the match is too.
 	names := make(map[string]bool)
 	for _, c := range reconcileCalls(t) {
@@ -175,6 +180,7 @@ func TestEveryLandingViteVariableHasADockerfileArg(t *testing.T) {
 
 // Sibling of TestEveryLandingViteVariableHasADockerfileArg for the library service.
 func TestEveryLibraryViteVariableHasADockerfileArg(t *testing.T) {
+	t.Parallel()
 	names := make(map[string]bool)
 	for _, c := range reconcileCalls(t) {
 		if c.label == "library" && strings.HasPrefix(c.name, "VITE_") {
@@ -205,6 +211,7 @@ func TestEveryBlogViteVariableHasADockerfileArg(t *testing.T) {
 }
 
 func TestLandingDependsOnAPIClient(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	path := filepath.Join(root, "frontend", "landing", "package.json")
 	raw, err := os.ReadFile(path)

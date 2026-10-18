@@ -47,6 +47,9 @@ paths:
 - Tolerate a lost status poll only after Railway accepted the deploy and a later check decides that service.
 - Hold at most two PR runs of `dev-env.yml` in the deploy chain. `scripts/ci/deploy-slot.sh` enforces it.
 - Let a push or dispatch run take a slot without waiting. A PR wait over 2400 s fails the job.
+- Create every PATH shim in a `tools/prenv` test with `writeShim`. A freshly written executable costs about 0.8 s on its first exec on macOS; `writeShim` avoids it there.
+- Start each `tools/prenv` test with `t.Parallel()`. Keep a test serial only when it calls `t.Setenv`, assigns a package-level variable, writes into the repo tree or asserts a real-clock window, and say why in a `// serial:` line.
+- Run a bash script from a `tools/prenv` test through `runToFiles`, not a pipe. Under parallel load `/bin/bash` 3.2 fails an `echo` on a blocked pipe with EINTR.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database reset runs only when the gateway deploys.
 - Run `spa-build-gate` on a full-scope push and dispatch. Each SPA must serve `/health` and a `/build.txt` that names the commit.
 - Give a PR the library lane when every changed path is under `frontend/library/` and none is in `SHARED_WITH_BLOG` in `scripts/ci/lane.sh`.
@@ -68,3 +71,5 @@ paths:
 - After a dispatch or a rollback, a small-lane push leaves the fleet as it is. Dispatch Dev Env on `main` to reconverge it.
 - Run "Gate on the account-mail templates" on `pull_request` and `push`, not `workflow_dispatch`. A project token cannot read variables.
 - Roll back the gateway and every guarded service together. A split rollback logs `request refused: no gateway token`.
+- Start the `topology` job only when the `e2e` job succeeded. A red `e2e` job (smoke, api or its retry-pass check) skips topology and fails the gate.
+- Feed `grep -q` and `head -n 1` a here-string, never a pipe, in a script under `pipefail`. The writer of the pipe gets SIGPIPE when the reader exits early, and the pipeline fails.

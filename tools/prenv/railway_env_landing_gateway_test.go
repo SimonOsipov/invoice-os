@@ -59,6 +59,7 @@ func reconcileCalls(t *testing.T) []reconcileCall {
 }
 
 func TestReconcileURLVariablesSetsAndVerifiesLandingGateway(t *testing.T) {
+	t.Parallel()
 	var app, landing *reconcileCall
 	for _, c := range reconcileCalls(t) {
 		if c.name != "VITE_GATEWAY_URL" {
@@ -82,6 +83,7 @@ func TestReconcileURLVariablesSetsAndVerifiesLandingGateway(t *testing.T) {
 
 // Every label's plan line names the id of the service of that name.
 func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
+	t.Parallel()
 	known := map[string]bool{"gateway": true, "app": true, "landing": true, "ops-console": true, "support-console": true, "library": true, "blog": true}
 	resolved := map[string]string{}
 	for _, m := range serviceIDByName.FindAllStringSubmatch(strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n"), -1) {
@@ -124,6 +126,7 @@ func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 }
 
 func TestReconcileURLVariablesWritesTheLibraryURLs(t *testing.T) {
+	t.Parallel()
 	got := map[string]map[string]string{}
 	for _, c := range reconcileCalls(t) {
 		if got[c.label] == nil {
@@ -164,6 +167,7 @@ func TestReconcileURLVariablesWritesTheBlogURLs(t *testing.T) {
 }
 
 func TestReconcileURLVariablesWritesTheConsoleHandoffURLs(t *testing.T) {
+	t.Parallel()
 	got := map[string]map[string]string{}
 	for _, c := range reconcileCalls(t) {
 		if got[c.label] == nil {
@@ -184,6 +188,7 @@ func TestReconcileURLVariablesWritesTheConsoleHandoffURLs(t *testing.T) {
 }
 
 func TestReconcileURLVariablesPutsTheBlogInCORS(t *testing.T) {
+	t.Parallel()
 	body := strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n")
 	if !strings.Contains(body, `local origins="$app_url,$landing_url,$ops_url,$support_url,$blog_url"`) {
 		t.Errorf("origins is not exactly $app_url,$landing_url,$ops_url,$support_url,$blog_url")
@@ -266,6 +271,7 @@ func forkAuthVarsHolder(t *testing.T) string {
 // Runtime oracles for the write and the read-back: TestSetForkAuth_AutoconfirmsOnAuthOnly and
 // TestSetForkAuth_AutoconfirmReReadMismatchFails.
 func TestSetForkAuthAutoconfirms(t *testing.T) {
+	t.Parallel()
 	const entry = "GOTRUE_MAILER_AUTOCONFIRM=true"
 	const needle = "GOTRUE_MAILER_AUTOCONFIRM"
 

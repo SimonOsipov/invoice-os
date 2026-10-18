@@ -38,11 +38,13 @@ var (
 		{"11111111-1111-1111-1111-00000000e2e1", firmSource, "Okafor & Partners", "firm"},
 		{"11111111-1111-1111-1111-00000000e2e2", firmSource, "Okafor & Partners", "firm"},
 		{"11111111-1111-1111-1111-00000000e2e3", firmSource, "Okafor & Partners", "firm"},
+		{"11111111-1111-1111-1111-00000000e2e4", firmSource, "Okafor & Partners", "firm"},
 	}
 	inhouseShards = []shardTenant{
 		{"22222222-2222-2222-2222-00000000e2e1", inhouseSource, "Honeywell Group", "in_house"},
 		{"22222222-2222-2222-2222-00000000e2e2", inhouseSource, "Honeywell Group", "in_house"},
 		{"22222222-2222-2222-2222-00000000e2e3", inhouseSource, "Honeywell Group", "in_house"},
+		{"22222222-2222-2222-2222-00000000e2e4", inhouseSource, "Honeywell Group", "in_house"},
 	}
 	allShards = slices.Concat(firmShards, inhouseShards)
 )

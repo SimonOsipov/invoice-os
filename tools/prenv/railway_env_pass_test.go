@@ -217,6 +217,7 @@ func requireNamedIn(t *testing.T, text string, words ...string) string {
 }
 
 func TestForkVarsBeforeURLs_FreshForkMakesFiveCalls(t *testing.T) {
+	t.Parallel()
 	s := newPassShim(t, nil, nil)
 	out, code := runPass(t, s)
 	if code != 0 {
@@ -234,6 +235,7 @@ func TestForkVarsBeforeURLs_FreshForkMakesFiveCalls(t *testing.T) {
 }
 
 func TestForkPass_OneGuardReadPerPassWhateverTheContributorCount(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		sub  string
 		shim func(t *testing.T) authShim
@@ -258,6 +260,7 @@ func TestForkPass_OneGuardReadPerPassWhateverTheContributorCount(t *testing.T) {
 }
 
 func TestForkVarsBeforeURLs_ReadCoversTheTenServicesOnce(t *testing.T) {
+	t.Parallel()
 	s := newPassShim(t, nil, nil)
 	if out, code := runPass(t, s); code != 0 {
 		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
@@ -282,6 +285,7 @@ func TestForkVarsBeforeURLs_ReadCoversTheTenServicesOnce(t *testing.T) {
 }
 
 func TestForkVarsBeforeURLs_WritesOnlyTheNamesThatDiffer(t *testing.T) {
+	t.Parallel()
 	auth := passAuthInherited(t)
 	delete(auth, "API_EXTERNAL_URL")
 	auth["PORT"] = "8080"
@@ -311,6 +315,7 @@ func TestForkVarsBeforeURLs_WritesOnlyTheNamesThatDiffer(t *testing.T) {
 }
 
 func TestForkVarsBeforeURLs_AbsentNameDiffersFromEmpty(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		hold   bool
@@ -320,6 +325,7 @@ func TestForkVarsBeforeURLs_AbsentNameDiffersFromEmpty(t *testing.T) {
 		{"control: a name that already holds the empty string is not written", true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			auth := passAuthInherited(t)
 			delete(auth, "GOTRUE_SMTP_HOST")
 			if c.hold {
@@ -345,6 +351,7 @@ func TestForkVarsBeforeURLs_AbsentNameDiffersFromEmpty(t *testing.T) {
 // The first read passes (auth holds PORT) and PORT is not written, so only a verdict fed the
 // re-read can see the bend.
 func TestForkVarsBeforeURLs_VerdictsReadTheReRead(t *testing.T) {
+	t.Parallel()
 	auth := passAuthInherited(t)
 	auth["PORT"] = "8080"
 	t.Run("control: the same run without the bend confirms", func(t *testing.T) {
@@ -376,9 +383,11 @@ func TestForkVarsBeforeURLs_VerdictsReadTheReRead(t *testing.T) {
 // Every bend below acts on a read sent after the write, on a name the pass writes (or, for the
 // gateway pair, one that differs), so only a verdict fed the re-read can see it.
 func TestForkVarsBeforeURLs_ReReadDropsTheGatewayToken(t *testing.T) {
+	t.Parallel()
 	const bent = "PLANTED-BENT-REREAD-VALUE"
 	other := freshJWK(t)
 	t.Run("control: no bend confirms both contributors", func(t *testing.T) {
+		t.Parallel()
 		out, code := runPass(t, newPassShim(t, nil, nil))
 		if code != 0 || !strings.Contains(out, passAuthConfirmed) || !strings.Contains(out, passTokenConfirmed) {
 			t.Errorf("exit %d and output %q, want exit 0 with both confirmation lines", code, clip(out))
@@ -397,6 +406,7 @@ func TestForkVarsBeforeURLs_ReReadDropsTheGatewayToken(t *testing.T) {
 		{"gateway reads another AUTH_URL", "gateway", `.AUTH_URL = "http://` + bent + `"`, "gateway.AUTH_URL", "", passAuthConfirmed},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newPassShim(t, nil, nil)
 			s.bendReRead(t, gtSvcID(c.svc), c.filter)
 			out, code := runPass(t, s)
@@ -424,6 +434,7 @@ func TestForkVarsBeforeURLs_ReReadDropsTheGatewayToken(t *testing.T) {
 }
 
 func TestForkVarsBeforeURLs_EveryContributorReportsItsFailure(t *testing.T) {
+	t.Parallel()
 	s := newPassShim(t, nil, nil)
 	s.bendReRead(t, gtSvcID("auth"), `.GOTRUE_JWT_SECRET = "PLANTED-BENT-REREAD-VALUE"`)
 	s.bendReRead(t, gtSvcID("tenancy"), `del(.GATEWAY_TOKEN)`)
@@ -444,6 +455,7 @@ func TestForkVarsBeforeURLs_EveryContributorReportsItsFailure(t *testing.T) {
 }
 
 func TestForkPass_FailedReadsFailBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
 	envOnly := func(t *testing.T, s authShim) {
 		t.Helper()
 		if ops := operations(s.calls(t)); len(ops) == 0 || ops[0] != "envList" {
@@ -516,6 +528,7 @@ func TestForkPass_FailedReadsFailBeforeAnyWrite(t *testing.T) {
 		})
 	}
 	t.Run("a 429 over the job's 600 s total on the first read names the total", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		setFaults(t, s, "varsRead", "429")
 		plantRateLimitHeaders(t, s, "retry-after: 30")
@@ -530,6 +543,7 @@ func TestForkPass_FailedReadsFailBeforeAnyWrite(t *testing.T) {
 		requireWaitNamed(t, out, `429`, `\b590\b`, `\b600\b`)
 	})
 	t.Run("control: no fault writes once", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		if out, code := runPass(t, s); code != 0 || opCount(t, s, "varsWrite") != 1 {
 			t.Errorf("exit %d with %d varsWrite call(s), want exit 0 and 1; output = %q", code, opCount(t, s, "varsWrite"), clip(out))
@@ -538,6 +552,7 @@ func TestForkPass_FailedReadsFailBeforeAnyWrite(t *testing.T) {
 }
 
 func TestForkPass_FailedReReadConfirmsNothing(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		plant  func(t *testing.T, s authShim)
@@ -553,6 +568,7 @@ func TestForkPass_FailedReReadConfirmsNothing(t *testing.T) {
 		{"the re-read answers a GraphQL error with no alias", func(t *testing.T, s authShim) { setFaults(t, s, "varsRead", "ok", "gqlerr") }, authForkEnvID, "written but not confirmed"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newPassShim(t, nil, nil)
 			c.plant(t, s)
 			out, code := runPass(t, s)
@@ -617,14 +633,12 @@ func withFixedKey(t *testing.T, s authShim, key string) {
 	fake := "#!/bin/sh\nif [ \"$1\" = jwk-es256 ]; then printf '%s' '" + key + "'; exit 0; fi\nexec '" + binPath + "' \"$@\"\n"
 	goShim := "#!/bin/sh\nout=''\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=\"$2\"; shift; done\n" +
 		"cat > \"$out\" <<'FAKE'\n" + fake + "FAKE\nchmod +x \"$out\"\n"
-	writeFile(t, filepath.Join(s.dir, "go"), goShim)
-	if err := os.Chmod(filepath.Join(s.dir, "go"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "go"), goShim)
 }
 
 // Under /bin/bash (3.2 on macOS) an empty array expansion is unbound under set -u.
 func TestForkPass_AServiceWithNothingToWriteHasNoAlias(t *testing.T) {
+	t.Parallel()
 	const bash = "/bin/bash"
 	if _, err := os.Stat(bash); err != nil {
 		t.Skip("no /bin/bash")
@@ -768,13 +782,16 @@ func requireAliasFailureReportFor(t *testing.T, s authShim, out string, code int
 }
 
 func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
+	t.Parallel()
 	t.Run("abort: data is null and the later aliases are not applied", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		s.failAlias(t, gtSvcID("gateway"), "abort")
 		out, code := runPass(t, s)
 		requireAliasFailureReport(t, s, out, code, "gateway")
 	})
 	t.Run("the message echoes an input value", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		s.failAlias(t, gtSvcID("gateway"), "abort")
 		writeFile(t, filepath.Join(s.dir, "aliasfail.message"), `Variable "$i1" got invalid value "`+passEchoNeedle+`"`)
@@ -790,6 +807,7 @@ func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
 	for _, mode := range []string{"abort", "null"} {
 		for _, c := range []struct{ svc, at string }{{"auth", "first"}, {"validation", "middle"}, {"reconciliation", "last"}} {
 			t.Run(mode+"/"+c.at+" alias fails", func(t *testing.T) {
+				t.Parallel()
 				s := newPassShim(t, nil, nil)
 				s.failAlias(t, gtSvcID(c.svc), mode)
 				out, code := runPass(t, s)
@@ -806,6 +824,7 @@ func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
 		}
 	}
 	t.Run("an alias past a service with nothing to write names its own service", func(t *testing.T) {
+		t.Parallel()
 		stores := passStores(t, passAuthInherited(t))
 		stores[gtSvcID("tenancy")]["GATEWAY_TOKEN"] = gtGoodValue
 		s := newAuthShim(t, map[string]string{"envList": authEnvList(true), "settle": gtSettle(t)}, stores)
@@ -818,6 +837,7 @@ func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
 		requireAliasFailureReport(t, s, out, code, "portfolio")
 	})
 	t.Run("a valid alias beside an out-of-range one names only the valid one", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		s.plantWriteReply(t, writeErrors(`"path":["s2"],`, `"path":["s10"],`))
 		out, code := runPass(t, s)
@@ -827,6 +847,7 @@ func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
 		}
 	})
 	t.Run("two aliases fail: both are named, neither is listed as not confirmed", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		s.plantWriteReply(t, writeErrors(`"path":["s1"],`, `"path":["s4"],`))
 		out, code := runPass(t, s)
@@ -851,6 +872,7 @@ func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
 		}
 	})
 	t.Run("a 200 with no errors and false for one alias is not confirmed by the re-read", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		s.plantWriteReply(t, `{"data":{"s0":true,"s1":true,"s2":false,"s3":true,"s4":true,"s5":true,"s6":true,"s7":true,"s8":true,"s9":true}}`)
 		out, code := runPass(t, s)
@@ -872,6 +894,7 @@ func TestForkPass_OneAliasFailingNamesItsServiceAndNames(t *testing.T) {
 }
 
 func TestForkPass_OneAliasFailingWithTheOthersApplied(t *testing.T) {
+	t.Parallel()
 	s := newPassShim(t, nil, nil)
 	s.failAlias(t, gtSvcID("gateway"), "null")
 	out, code := runPass(t, s)
@@ -879,6 +902,7 @@ func TestForkPass_OneAliasFailingWithTheOthersApplied(t *testing.T) {
 }
 
 func TestForkPass_WriteErrorWithNoPathNamesEveryService(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name  string
 		plant func(t *testing.T, s authShim)
@@ -897,6 +921,7 @@ func TestForkPass_WriteErrorWithNoPathNamesEveryService(t *testing.T) {
 		{"a numeric path", func(t *testing.T, s authShim) { s.plantWriteReply(t, writeErrors(`"path":[1],`)) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newPassShim(t, nil, nil)
 			c.plant(t, s)
 			out, code := runPass(t, s)
@@ -930,6 +955,7 @@ func TestForkPass_WriteErrorWithNoPathNamesEveryService(t *testing.T) {
 }
 
 func TestForkPass_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
+	t.Parallel()
 	s := newPassShim(t, nil, nil)
 	setFaults(t, s, "varsWrite", "timeout", "timeout", "timeout")
 	out, code := runPass(t, s)
@@ -960,6 +986,7 @@ func TestForkPass_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 	}
 
 	t.Run("a 429 waits Retry-After, resends the write once and confirms", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		setFaults(t, s, "varsWrite", "429")
 		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: 30\r\n\r\n")
@@ -975,6 +1002,7 @@ func TestForkPass_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 		}
 	})
 	t.Run("a 429 that asks for more than 600 s fails the step and names the services", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		setFaults(t, s, "varsWrite", "429")
 		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: 601\r\n\r\n")
@@ -998,6 +1026,7 @@ func TestForkPass_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 		requireWaitNamed(t, out, `429`, `\b601\b`, `\b600\b`)
 	})
 	t.Run("a second 429 fails the step and names the wait", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		setFaults(t, s, "varsWrite", "429", "429")
 		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: 30\r\n\r\n")
@@ -1016,6 +1045,7 @@ func TestForkPass_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 	})
 	for _, fault := range []string{"503", "timeout"} {
 		t.Run(fault+" then success resends the same write once and confirms", func(t *testing.T) {
+			t.Parallel()
 			s := newPassShim(t, nil, nil)
 			setFaults(t, s, "varsWrite", fault)
 			out, code := runPass(t, s)
@@ -1161,6 +1191,7 @@ func requireConfirmed(t *testing.T, out string, lines ...string) {
 
 // A literal-valued blog needs no delete, so the pass makes no varsDelete call.
 func TestForkVarsAfterURLs_FreshForkMakesFiveCalls(t *testing.T) {
+	t.Parallel()
 	stores := afterProdStores()
 	stores[sentrySvcID("blog")]["VITE_SENTRY_DSN"] = sentryDSNSentinel
 	stores[sentrySvcID("blog")]["SENTRY_AUTH_TOKEN"] = sentryTokenSentinel
@@ -1210,6 +1241,7 @@ func TestForkVarsAfterURLs_DeletedNamesAreNotCountedAsHeld(t *testing.T) {
 }
 
 func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {
+	t.Parallel()
 	intended := afterIntended()
 	if len(intended) != 17 {
 		t.Fatalf("control: the settled fork has %d services, want 17", len(intended))
@@ -1240,6 +1272,7 @@ func TestForkVarsAfterURLs_SettledForkMakesThreeCalls(t *testing.T) {
 }
 
 func TestForkVarsAfterURLs_ReadCoversEveryServiceOnce(t *testing.T) {
+	t.Parallel()
 	s := newAfterShim(t, afterProdStores())
 	if out, code := runAfter(t, s); code != 0 {
 		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
@@ -1264,6 +1297,7 @@ func TestForkVarsAfterURLs_ReadCoversEveryServiceOnce(t *testing.T) {
 }
 
 func TestForkVarsAfterURLs_GatewayGetsEveryContributorsNamesInOneAlias(t *testing.T) {
+	t.Parallel()
 	gw := sentrySvcID("gateway")
 	for _, c := range []struct {
 		name  string
@@ -1296,6 +1330,7 @@ func TestForkVarsAfterURLs_GatewayGetsEveryContributorsNamesInOneAlias(t *testin
 }
 
 func TestForkVarsAfterURLs_PrintsEveryConfirmationLine(t *testing.T) {
+	t.Parallel()
 	s := newAfterShim(t, afterProdStores())
 	out, code := runAfter(t, s)
 	if code != 0 {
@@ -1312,6 +1347,7 @@ func TestForkVarsAfterURLs_PrintsEveryConfirmationLine(t *testing.T) {
 // docling already holds a blank DSN, so the first read passes and nothing is written for it:
 // only a verdict fed the re-read sees the bend.
 func TestForkVarsAfterURLs_OneVerdictFailingFailsTheStep(t *testing.T) {
+	t.Parallel()
 	doc := sentrySvcID("docling")
 	build := func(t *testing.T) authShim {
 		stores := afterProdStores()
@@ -1357,6 +1393,7 @@ func TestForkVarsAfterURLs_OneVerdictFailingFailsTheStep(t *testing.T) {
 
 // submission holds the fake values and a blank key, so the first read passes and nothing is written for it.
 func TestForkVarsAfterURLs_AIKeyVerdictReadsTheReRead(t *testing.T) {
+	t.Parallel()
 	sub := sentrySvcID("submission")
 	build := func(t *testing.T) authShim {
 		stores := afterProdStores()
@@ -1394,6 +1431,7 @@ func TestForkVarsAfterURLs_AIKeyVerdictReadsTheReRead(t *testing.T) {
 }
 
 func TestForkVarsAfterURLs_AIFakeWritesItsThreeNames(t *testing.T) {
+	t.Parallel()
 	s := newAfterShim(t, afterProdStores())
 	if out, code := runAfter(t, s); code != 0 {
 		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
@@ -1421,6 +1459,7 @@ func TestForkVarsAfterURLs_AIFakeWritesItsThreeNames(t *testing.T) {
 }
 
 func TestForkVarsAfterURLs_SetForkEnvironmentWritesOnlyENVIRONMENT(t *testing.T) {
+	t.Parallel()
 	gw := sentrySvcID("gateway")
 	s := fleetShim(t, map[string]map[string]string{gw: {"ENVIRONMENT": "production", "DATABASE_URL": sentryDBSentinel}})
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-fork-environment", forkEnvID)
@@ -1445,6 +1484,7 @@ func TestForkVarsAfterURLs_SetForkEnvironmentWritesOnlyENVIRONMENT(t *testing.T)
 
 // Under /bin/bash (3.2 on macOS) an empty array expansion is unbound under set -u.
 func TestForkVarsAfterURLs_ASettledServiceHasNoAlias(t *testing.T) {
+	t.Parallel()
 	const bash = "/bin/bash"
 	if _, err := os.Stat(bash); err != nil {
 		t.Skip("no /bin/bash")
@@ -1478,9 +1518,11 @@ func TestForkVarsAfterURLs_ASettledServiceHasNoAlias(t *testing.T) {
 
 // auth heads the write, gateway carries every contributor's names in one alias, landing is mid-list, docling ends it.
 func TestForkVarsAfterURLs_OneAliasFailingNamesItsService(t *testing.T) {
+	t.Parallel()
 	for _, svc := range []string{"auth", "gateway", "landing", "docling"} {
 		for _, mode := range []string{"abort", "null"} {
 			t.Run(svc+"/"+mode, func(t *testing.T) {
+				t.Parallel()
 				id := sentrySvcID(svc)
 				s := newAfterShim(t, afterProdStores())
 				s.failAlias(t, id, mode)
@@ -1509,6 +1551,7 @@ func TestForkVarsAfterURLs_OneAliasFailingNamesItsService(t *testing.T) {
 }
 
 func TestForkVarsAfterURLs_RefusesThePersistentEnvironment(t *testing.T) {
+	t.Parallel()
 	s := newAfterShim(t, afterProdStores())
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), afterSub, append([]string{persistentEnvironmentID}, afterArgs()[1:]...)...)
 	out := stdout + stderr
@@ -1525,6 +1568,7 @@ func TestForkVarsAfterURLs_RefusesThePersistentEnvironment(t *testing.T) {
 }
 
 func TestForkVarsAfterURLs_UsageAndLandingURLRefuseBeforeAnyCall(t *testing.T) {
+	t.Parallel()
 	urls := afterArgs()[1:]
 	for _, c := range []struct {
 		name string
@@ -1543,6 +1587,7 @@ func TestForkVarsAfterURLs_UsageAndLandingURLRefuseBeforeAnyCall(t *testing.T) {
 		{"a bare https:// landing URL", append([]string{forkEnvID, urls[0], urls[1], "https://"}, urls[3:]...), 1, "https://"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newAfterShim(t, afterProdStores())
 			stdout, stderr, code := s.run(t, forkExports(true, true, true), afterSub, c.args...)
 			out := stdout + stderr
@@ -1563,6 +1608,7 @@ func TestForkVarsAfterURLs_UsageAndLandingURLRefuseBeforeAnyCall(t *testing.T) {
 // Each row bends one name on the re-read only. Every row writes first, so the bend is seen by the
 // verdict alone; drops are the contributor lines the failed verdict must not print.
 func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
+	t.Parallel()
 	const (
 		siteLines  = "auth.GOTRUE_SITE_URL confirmed in environment|gateway.AUTH_SITE_URL confirmed in environment"
 		urlLine    = batchAllConfirmed
@@ -1611,6 +1657,7 @@ func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
 	}
 	for _, r := range rows {
 		t.Run(r.svc+"."+r.name, func(t *testing.T) {
+			t.Parallel()
 			s := newAfterShim(t, afterProdStores())
 			s.bendReRead(t, sentrySvcID(r.svc), `.`+r.name+` = "`+r.bad+`"`)
 			out, code := runAfter(t, s)
@@ -1649,6 +1696,7 @@ func TestForkVarsAfterURLs_EveryVerdictReadsTheReRead(t *testing.T) {
 
 // Values are written as given: no trailing slash is trimmed and no case folded, and the CORS list joins them as given.
 func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
+	t.Parallel()
 	urls := []string{
 		"https://Gateway-PR-9.UP.Railway.App/",
 		"https://app-pr-9.up.railway.app/",
@@ -1696,6 +1744,7 @@ func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
 
 // The first read passes for every service but one, so only the write-failure or re-read-failure path can fail.
 func TestForkVarsAfterURLs_FatalRateLimitNamesItsWait(t *testing.T) {
+	t.Parallel()
 	hdr := func(t *testing.T, s authShim, after string) {
 		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nretry-after: "+after+"\r\n\r\n")
 		for _, op := range []string{"varsRead", "varsWrite"} {
@@ -1825,6 +1874,7 @@ func runVariant(t *testing.T, s authShim, script, a, b string, contributors ...s
 // The design says a pass merges contributors into a service's entry and does not say what a name planned
 // twice means. Two values for one name must fail the step, not let the last writer win unnoticed.
 func TestForkPass_TwoContributorsPlanningOneNameDiffer(t *testing.T) {
+	t.Parallel()
 	script := passVariantScript(t, dupContributors)
 	gw := sentrySvcID("gateway")
 	t.Run("the same value is written once and both confirm", func(t *testing.T) {
@@ -1858,6 +1908,7 @@ func TestForkPass_TwoContributorsPlanningOneNameDiffer(t *testing.T) {
 // pass_owned_verdict feeds a contributor's names through a tab-separated list: spaces, "=", backslashes,
 // tabs and newlines must survive it.
 func TestForkPass_OwnedVerdictComparesTheValueAsWritten(t *testing.T) {
+	t.Parallel()
 	script := passVariantScript(t, dupContributors)
 	for _, c := range []struct{ name, value string }{
 		{"leading and trailing spaces", "  https://a  "},
@@ -1894,6 +1945,7 @@ func TestForkPass_OwnedVerdictComparesTheValueAsWritten(t *testing.T) {
 // The re-read bent to a value that is nearly the written one must fail: the comparison stays exact
 // where it now carries backslashes, newlines and empty values.
 func TestForkPass_OwnedVerdictFailsWhenTheReReadDiffers(t *testing.T) {
+	t.Parallel()
 	script := passVariantScript(t, dupContributors)
 	const different, empty = "reads a different value after the write", "is empty after the write"
 	for _, c := range []struct{ name, written, reRead, verdict string }{

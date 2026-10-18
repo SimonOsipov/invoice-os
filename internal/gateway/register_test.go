@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -107,16 +109,20 @@ func (f *fakeGoTrue) Calls() []gotrueCall {
 	return slices.Clone(f.calls)
 }
 
-// closedURL is an address nothing listens on.
+// deadAddr is port 1: bind(0) never hands it out and unprivileged processes cannot bind it.
+const deadAddr = "127.0.0.1:1"
+
+// closedURL is an address that refuses connections.
 func closedURL(t *testing.T) *url.URL {
 	t.Helper()
-	srv := httptest.NewServer(http.NotFoundHandler())
-	u, err := url.Parse(srv.URL)
-	if err != nil {
-		t.Fatalf("parse url: %v", err)
+	c, err := net.DialTimeout("tcp", deadAddr, time.Second)
+	if err == nil {
+		_ = c.Close()
 	}
-	srv.Close()
-	return u
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("dial %s = %v, want connection refused", deadAddr, err)
+	}
+	return &url.URL{Scheme: "http", Host: deadAddr}
 }
 
 func testClient() *http.Client {

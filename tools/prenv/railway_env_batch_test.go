@@ -272,6 +272,7 @@ func readsPerService(calls []railwayCall) map[string]int {
 }
 
 func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
+	t.Parallel()
 	s := fleetShim(t, sentrySteadyStores())
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-sentry-off", forkEnvID)
 	out := stdout + stderr
@@ -319,6 +320,7 @@ func TestSetSentryOff_SteadyStateWritesNothing(t *testing.T) {
 }
 
 func TestReconcileURLs_SteadyStateMakesThreeCalls(t *testing.T) {
+	t.Parallel()
 	s := fleetShim(t, reconcileIntended())
 	stdout, stderr, code := runReconcileURLs(t, s)
 	out := stdout + stderr
@@ -375,6 +377,7 @@ func TestReconcileURLs_SteadyStateMakesThreeCalls(t *testing.T) {
 
 // Steady state for the single-service commands: one read per service, no write, a held line each.
 func TestSetServiceVars_SteadyStateWritesNothing(t *testing.T) {
+	t.Parallel()
 	gw, sub, inv := sentrySvcID("gateway"), sentrySvcID("submission"), sentrySvcID("invoice")
 	aiSteady := map[string]string{"AI_FAKE": "true", "JEV_FAKE": "true", "OPENROUTER_API_KEY": ""}
 	cases := []struct {
@@ -453,6 +456,7 @@ func TestSetServiceVars_SteadyStateWritesNothing(t *testing.T) {
 }
 
 func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
+	t.Parallel()
 	stores := sentryStores()
 	// landing's token is already blank, so its write carries VITE_SENTRY_DSN only.
 	stores[sentrySvcID("landing")]["SENTRY_AUTH_TOKEN"] = ""
@@ -518,6 +522,7 @@ func TestSetSentryOff_InheritedValuesOneWritePerService(t *testing.T) {
 }
 
 func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
+	t.Parallel()
 	stores := reconcileIntended()
 	stores[sentrySvcID("app")]["VITE_LANDING_URL"] = batchProdLandingURL
 	s := fleetShim(t, stores)
@@ -548,6 +553,7 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 
 // The flag is a build-time switch the fork never inherits: absent or not exactly "true" is rewritten.
 func TestReconcileURLs_WritesTheRegistrationFlag(t *testing.T) {
+	t.Parallel()
 	landing := sentrySvcID("landing")
 	for _, stale := range []string{"", "false", "TRUE"} {
 		t.Run("stale="+stale, func(t *testing.T) {
@@ -607,6 +613,7 @@ func TestReconcileURLsWritesTheBlogOriginOnTheFork(t *testing.T) {
 
 // guard, passes at HEAD: the flag write must not widen the refusal of the persistent environment.
 func TestReconcileURLs_RefusesThePersistentEnvironment(t *testing.T) {
+	t.Parallel()
 	s := fleetShim(t, reconcileIntended())
 	stdout, stderr, code := s.run(t, batchExports(), "reconcile-urls", persistentEnvironmentID, batchGatewayURL, batchAppURL, batchLandingURL, batchOpsURL, batchSupportURL, batchLibraryURL, batchBlogURL)
 	out := stdout + stderr
@@ -626,6 +633,7 @@ func TestReconcileURLs_RefusesThePersistentEnvironment(t *testing.T) {
 
 // reconcile-urls read no environment list before the shared pass: a non-ephemeral id still got its writes.
 func TestReconcileURLs_RefusesANonEphemeralEnvironment(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, envList, says string
 	}{
@@ -633,6 +641,7 @@ func TestReconcileURLs_RefusesANonEphemeralEnvironment(t *testing.T) {
 		{"an id the project does not own", sentryEnvList(true, false), "No environment with id " + forkEnvID},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newAuthShim(t, map[string]string{"envList": c.envList, "settle": sentrySettle("")}, reconcileStale())
 			stdout, stderr, code := runReconcileURLs(t, s)
 			out := stdout + stderr
@@ -654,6 +663,7 @@ func TestReconcileURLs_RefusesANonEphemeralEnvironment(t *testing.T) {
 
 // A stale or absent value is rewritten to the fork URL and re-read; the consoles' VITE_GATEWAY_URL may be absent.
 func TestSetServiceVars_StaleValueIsRewritten(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		svc, name, want string
 		stale           string // "" deletes the name from the store
@@ -695,6 +705,7 @@ func TestSetServiceVars_StaleValueIsRewritten(t *testing.T) {
 
 // guard, passes at HEAD (set-ai-fake). set-fork-auth's absent GOTRUE_SMTP_HOST: TestSetForkAuth_BlanksForkSMTP.
 func TestSetServiceVars_AbsentIsNotEmpty(t *testing.T) {
+	t.Parallel()
 	t.Run("set-ai-fake", func(t *testing.T) {
 		sub, inv := sentrySvcID("submission"), sentrySvcID("invoice")
 		s := fleetShim(t, map[string]map[string]string{
@@ -752,6 +763,7 @@ func TestSetServiceVars_AbsentIsNotEmpty(t *testing.T) {
 
 // guard, passes at HEAD
 func TestSetServiceVars_EveryWriteTargetsTheForkOnly(t *testing.T) {
+	t.Parallel()
 	gw := sentrySvcID("gateway")
 	cases := []struct {
 		name string
@@ -832,6 +844,7 @@ func TestSetServiceVars_EveryWriteTargetsTheForkOnly(t *testing.T) {
 
 // guard, passes at HEAD
 func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
+	t.Parallel()
 	t.Run("set-fork-environment", func(t *testing.T) {
 		gw := sentrySvcID("gateway")
 		s := fleetShim(t, map[string]map[string]string{gw: {"ENVIRONMENT": "production"}})
@@ -930,6 +943,7 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 }
 
 func TestSetServiceVars_UnreadableMapWritesNothing(t *testing.T) {
+	t.Parallel()
 	gw := sentrySvcID("gateway")
 	for _, c := range []struct {
 		name  string
@@ -965,6 +979,7 @@ func TestSetServiceVars_UnreadableMapWritesNothing(t *testing.T) {
 }
 
 func TestSetForkAuth_FreshSecretsAlwaysWritten(t *testing.T) {
+	t.Parallel()
 	s, _ := runForkAuthOK(t, freshJWK(t))
 	first := map[string]string{}
 	for label, ns := range forkAuthSecrets {
@@ -1010,6 +1025,7 @@ func TestSetForkAuth_FreshSecretsAlwaysWritten(t *testing.T) {
 	}
 
 	t.Run(passSub, func(t *testing.T) {
+		t.Parallel()
 		src := passAuthInherited(t)
 		s := newPassShim(t, maps.Clone(src), nil)
 		secrets := map[string][]string{"auth": {"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET"}, "gateway": {"AUTH_ADMIN_PASSWORD"}}
@@ -1045,6 +1061,7 @@ func TestSetForkAuth_FreshSecretsAlwaysWritten(t *testing.T) {
 
 // guard, passes at HEAD
 func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
+	t.Parallel()
 	scan := func(t *testing.T, s authShim, jqLog, out string, needles map[string]string) {
 		t.Helper()
 		curlArgv, jqArgv := s.argv(t), readLog(t, jqLog)
@@ -1239,6 +1256,7 @@ func TestSetServiceVars_SecretsNeverOnArgvOrInOutput(t *testing.T) {
 }
 
 func TestSetServiceVars_CollectionWriteTimeoutRetries(t *testing.T) {
+	t.Parallel()
 	stores := reconcileIntended()
 	stores[sentrySvcID("app")]["VITE_LANDING_URL"] = batchProdLandingURL
 	s := fleetShim(t, stores)
@@ -1267,6 +1285,7 @@ func TestSetServiceVars_CollectionWriteTimeoutRetries(t *testing.T) {
 
 // NAME=VALUE splits at the first "=" only.
 func TestSetServiceVars_ValueKeepsEveryEqualsSign(t *testing.T) {
+	t.Parallel()
 	const url = "https://landing-pr-7.up.railway.app/?a=b=c"
 	s := newForkSiteShim(t)
 	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth-site", authForkEnvID, url)

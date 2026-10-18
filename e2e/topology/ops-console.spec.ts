@@ -10,6 +10,8 @@ import { resolveTarget } from '../targets'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
+test.beforeAll(() => { expect(test.info().project.name, 'ops-console.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
+
 test.use({ viewport: { width: 1440, height: 900 } })
 
 let staff: Promise<StaffAccount> | undefined

@@ -1064,6 +1064,20 @@ test.describe('OPS-05 blog categories fixture', () => {
     const form = page.locator('[data-cat-form]')
     const confirm = page.locator('[data-cat-confirm]')
 
+    const nameWidths = await atWidths(page, 'OPS-05 blog category long name', async () => {
+      const [, , name, count] = await boxList(page, row.locator('xpath=./div[1]/*'), 'long-named row cell', 5)
+      const nameLine = row.locator('xpath=./div[1]/*[3]/div').first()
+      const lines = await boxList(page, row.locator('xpath=./div[1]/*[3]/div'), 'long name line', 2)
+      const overflow = await nameLine.evaluate((el) => el.scrollWidth - el.clientWidth)
+      const problems = [
+        ...leftOf(name, count, 'name cell / count'),
+        ...lines.flatMap((l, k) => within(name, l, `name line ${k} / name cell`)),
+        ...(overflow <= 1 ? [] : [`the long name overflows its line by ${overflow}px`]),
+        ...(await noSidewaysScroll(page, 'long-named category row')),
+      ]
+      return { problems, rects: { name, count, lines } }
+    })
+
     const formProblems = async (host: Locator, hostLabel: string, submit: string): Promise<{ problems: string[]; rects: Record<string, unknown> }> => {
       const r = await boxes(page, {
         host,
@@ -1132,7 +1146,7 @@ test.describe('OPS-05 blog categories fixture', () => {
     await form.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(form, 'Cancel left the add form open').toHaveCount(0)
 
-    await attachJson(testInfo, 'ops-05-blog-categories-form', { confirmWidths, editWidths, addWidths })
+    await attachJson(testInfo, 'ops-05-blog-categories-form', { nameWidths, confirmWidths, editWidths, addWidths })
     expect(errors, errorsOf(errors)).toEqual([])
   })
 })

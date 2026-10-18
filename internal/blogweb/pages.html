@@ -1,0 +1,45 @@
+{{define "head"}}<title>{{.Title}}</title>
+<meta name="description" content="{{.Description}}">
+<link rel="canonical" href="{{.Canonical}}">
+{{if .NoIndex}}<meta name="robots" content="noindex">
+{{end}}{{with .Post}}<meta property="og:title" content="{{.Title}}">
+<meta property="og:description" content="{{.Summary}}">
+<meta property="og:type" content="article">
+{{end}}{{if .Image}}<meta property="og:image" content="{{.Image}}">
+{{end}}<style>#root>[data-crawl]{display:none}</style>
+<noscript><style>#root>[data-crawl]{display:block}</style></noscript>
+{{end}}
+
+{{define "card"}}<article><h2><a href="/{{.ID}}">{{.Title}}</a></h2><p>{{.Summary}}</p><p>{{with .AuthorName}}{{.}} · {{end}}<time datetime="{{.PublishDate}}">{{date .PublishDate}}</time></p></article>{{end}}
+
+{{define "home"}}<h1>{{.Heading}}</h1>
+{{if .Categories}}<nav>{{range .Categories}}<a href="/category/{{.ID}}">{{.Name}}</a> {{end}}</nav>
+{{end}}{{range .Posts}}{{template "card" .}}
+{{end}}{{end}}
+
+{{define "category"}}<p><a href="/">Home</a></p>
+<h1>{{.Category.Name}}</h1>
+{{with .Category.Intro}}<p>{{.}}</p>
+{{end}}{{range .Posts}}{{template "card" .}}
+{{end}}{{end}}
+
+{{define "post"}}<p><a href="/">Home</a>{{with .Category}} · <a href="/category/{{.ID}}">{{.Name}}</a>{{end}}</p>
+<article>
+<h1>{{.Post.Title}}</h1>
+<p>{{with .Post.AuthorName}}{{.}} · {{end}}<time datetime="{{.Post.PublishDate}}">{{date .Post.PublishDate}}</time></p>
+<p>{{.Post.Summary}}</p>
+{{range .Post.Body}}{{if eq .Type "p"}}<p>{{.Text}}</p>
+{{else if eq .Type "h"}}<h2>{{.Text}}</h2>
+{{else if eq .Type "ul"}}<ul>{{range .Items}}<li>{{.}}</li>{{end}}</ul>
+{{else if eq .Type "note"}}<aside><p><strong>{{.Title}}</strong></p><p>{{.Text}}</p></aside>
+{{else if eq .Type "quote"}}<blockquote><p>{{.Text}}</p><footer>{{.Who}}</footer></blockquote>
+{{end}}{{end}}</article>
+{{end}}
+
+{{define "subscribe"}}<p><a href="/">Home</a></p>
+<h1>Subscribe</h1>
+{{end}}
+
+{{define "notfound"}}<h1>Not found</h1>
+<p><a href="/">Home</a></p>
+{{end}}

@@ -912,8 +912,8 @@ func TestAccept_AReplayedLinkLeavesTheMembersSetAlone(t *testing.T) {
 	}
 	w.requireStored(t, "after the replay by token", user, false, e2)
 
-	if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, inviteeAddr), w.invite.ID); err == nil {
-		t.Error("replay by id succeeded, want a refusal")
+	if _, _, _, err := w.store.AcceptInvitationByID(tenantless(user, inviteeAddr), w.invite.ID); !errors.Is(err, ErrInvitationNotValid) {
+		t.Errorf("replay by id err = %v, want ErrInvitationNotValid", err)
 	}
 	w.requireStored(t, "after the replay by id", user, false, e2)
 }

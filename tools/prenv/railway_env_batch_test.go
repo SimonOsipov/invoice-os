@@ -30,7 +30,7 @@ const (
 	batchProdAppURL     = "https://app.ascomply.com"
 	batchProdLandingURL = "https://www.ascomply.com"
 
-	batchAllConfirmed = "All 19 environment variables confirmed" // reconcile_url_variables
+	batchAllConfirmed = "All 20 environment variables confirmed" // reconcile_url_variables
 )
 
 // Secret names print `= <redacted>` (Design, "Variable writes").
@@ -59,7 +59,7 @@ func reconcileIntended() map[string]map[string]string {
 		sentrySvcID("ops-console"):     {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 		sentrySvcID("support-console"): {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_APP_URL": batchAppURL},
 		sentrySvcID("library"):         {"VITE_APP_URL": batchAppURL, "VITE_LANDING_URL": batchLandingURL},
-		sentrySvcID("blog"):            {"VITE_LANDING_URL": batchLandingURL},
+		sentrySvcID("blog"):            {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 	}
 }
 
@@ -537,7 +537,7 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	if ups := s.upserts(t); len(ups) != 1 {
 		t.Errorf("writes = %v, want app.VITE_LANDING_URL only: every other value is already intended", names(ups))
 	}
-	wantHeld := map[string]string{"gateway": "1 of 1", "app": "3 of 4", "landing": "6 of 6", "ops-console": "2 of 2", "support-console": "3 of 3", "library": "2 of 2", "blog": "1 of 1"}
+	wantHeld := map[string]string{"gateway": "1 of 1", "app": "3 of 4", "landing": "6 of 6", "ops-console": "2 of 2", "support-console": "3 of 3", "library": "2 of 2", "blog": "2 of 2"}
 	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
 		t.Errorf("held lines = %v, want %v", got, wantHeld)
 	}
@@ -600,10 +600,8 @@ func TestReconcileURLsWritesTheBlogOriginOnTheFork(t *testing.T) {
 	if n := len(s.upserts(t)); n == 0 {
 		t.Fatal("control: the stale fork produced no upserts")
 	}
-	for _, svc := range []string{"blog", "library"} {
-		if v := upsertsOf(s.upserts(t), sentrySvcID(svc), "VITE_GATEWAY_URL"); len(v) != 0 {
-			t.Errorf("%s was given VITE_GATEWAY_URL = %q; the SPA has no gateway wiring", svc, v[0].Value)
-		}
+	if v := upsertsOf(s.upserts(t), sentrySvcID("library"), "VITE_GATEWAY_URL"); len(v) != 0 {
+		t.Errorf("library was given VITE_GATEWAY_URL = %q; the SPA has no gateway wiring", v[0].Value)
 	}
 }
 
@@ -901,6 +899,7 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 		{"support-console", "VITE_GATEWAY_URL"},
 		{"library", "VITE_LANDING_URL"},
 		{"library", "VITE_APP_URL"},
+		{"blog", "VITE_GATEWAY_URL"},
 		{"blog", "VITE_LANDING_URL"},
 		{"app", "VITE_LIBRARY_URL"},
 		{"landing", "VITE_LIBRARY_URL"},

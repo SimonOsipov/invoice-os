@@ -118,8 +118,8 @@ func TestReconcileURLVariablesGatewayURLNotOnOtherServices(t *testing.T) {
 		got = append(got, l)
 	}
 	sort.Strings(got)
-	if strings.Join(got, ",") != "app,landing,ops-console,support-console" {
-		t.Errorf("pass_plan_add writes VITE_GATEWAY_URL on %v, want exactly [app landing ops-console support-console]", got)
+	if strings.Join(got, ",") != "app,blog,landing,ops-console,support-console" {
+		t.Errorf("pass_plan_add writes VITE_GATEWAY_URL on %v, want exactly [app blog landing ops-console support-console]", got)
 	}
 }
 
@@ -155,7 +155,7 @@ func TestReconcileURLVariablesWritesTheBlogURLs(t *testing.T) {
 		}
 		got[c.label][c.name] = c.value
 	}
-	if want := map[string]string{"VITE_LANDING_URL": "$landing_url"}; !reflect.DeepEqual(got["blog"], want) {
+	if want := map[string]string{"VITE_GATEWAY_URL": "$gateway_url", "VITE_LANDING_URL": "$landing_url"}; !reflect.DeepEqual(got["blog"], want) {
 		t.Errorf("blog row = %v, want exactly %v", got["blog"], want)
 	}
 	if len(got["library"]) != 2 {

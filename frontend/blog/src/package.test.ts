@@ -78,14 +78,14 @@ describe('blog package', () => {
     const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
     const build = lines.findIndex((l) => /^RUN pnpm --filter/.test(l))
     expect(build).toBeGreaterThan(-1)
-    // GA4 is read by the analytics module of a later subtask; its pair ships with the image now.
-    for (const v of new Set([...read_, 'VITE_GA_MEASUREMENT_ID'])) {
+    // GA4 and the gateway URL are read by modules of later subtasks; their pairs ship with the image now.
+    for (const v of new Set([...read_, 'VITE_GA_MEASUREMENT_ID', 'VITE_GATEWAY_URL'])) {
       const arg = lines.indexOf(`ARG ${v}`)
       const env = lines.indexOf(`ENV ${v}=$${v}`)
       expect(arg, `ARG ${v}`).toBeGreaterThan(-1)
       expect(env, `ENV ${v}`).toBeGreaterThan(arg)
       expect(env, `${v} before the build RUN`).toBeLessThan(build)
     }
-    expect(lines.filter((l) => /VITE_APP_URL|VITE_GATEWAY_URL/.test(l))).toEqual([])
+    expect(lines.filter((l) => /VITE_APP_URL/.test(l))).toEqual([])
   })
 })

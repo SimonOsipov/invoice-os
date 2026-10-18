@@ -8,7 +8,7 @@ const codeLines = (dockerfile: string) =>
   dockerfile.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'))
 
 // Monitored SPAs that never call the gateway, so their image bakes no VITE_GATEWAY_URL.
-const NO_GATEWAY = ['library', 'blog']
+const NO_GATEWAY = ['library']
 
 describe('dockerfiles', () => {
   it('dockerfiles_everyMonitoredSpaBakesTheDsnAndReleaseFallback', () => {

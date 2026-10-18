@@ -10,6 +10,8 @@ RUN pnpm install --frozen-lockfile
 # Vite bakes VITE_* at build time; Railway passes service variables as build args.
 ARG VITE_LANDING_URL
 ENV VITE_LANDING_URL=$VITE_LANDING_URL
+ARG VITE_GATEWAY_URL
+ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL
 # Empty Sentry DSN means Sentry off.
 ARG VITE_SENTRY_DSN
 ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN

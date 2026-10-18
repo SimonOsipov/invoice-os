@@ -47,5 +47,5 @@ paths:
 - Write `VITE_LIBRARY_URL` on `landing` and `app`, and `VITE_APP_URL` and `VITE_LANDING_URL` on `library`, on each fork.
 - Write `VITE_LANDING_URL` on `blog` on each fork.
 - Write `VITE_SUPPORT_URL` on `app` and `VITE_APP_URL` on `support-console` on each fork.
-- Expect `library` and `blog` to be the SPAs with no gateway wiring. A fork writes no `VITE_GATEWAY_URL` on either, and neither is a CORS origin.
+- Expect `library` and `blog` to get no `VITE_GATEWAY_URL` on a fork. The blog URL is a CORS origin; the library URL is not.
 - Expect a fork to accept registrations, send no mail and confirm at once. `fork-vars-before-urls` sets `GOTRUE_DISABLE_SIGNUP`, a blank SMTP host and `GOTRUE_MAILER_AUTOCONFIRM`.

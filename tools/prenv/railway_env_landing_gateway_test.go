@@ -183,10 +183,10 @@ func TestReconcileURLVariablesWritesTheConsoleHandoffURLs(t *testing.T) {
 	}
 }
 
-func TestReconcileURLVariablesKeepsTheLibraryOutOfCORS(t *testing.T) {
+func TestReconcileURLVariablesPutsTheBlogInCORS(t *testing.T) {
 	body := strings.Join(stripHashComments(strings.Split(reconcileURLVariablesBody(t), "\n")), "\n")
-	if !strings.Contains(body, `local origins="$app_url,$landing_url,$ops_url,$support_url"`) {
-		t.Errorf("origins is not exactly $app_url,$landing_url,$ops_url,$support_url")
+	if !strings.Contains(body, `local origins="$app_url,$landing_url,$ops_url,$support_url,$blog_url"`) {
+		t.Errorf("origins is not exactly $app_url,$landing_url,$ops_url,$support_url,$blog_url")
 	}
 	cors := 0
 	for _, c := range reconcileCalls(t) {
@@ -196,7 +196,7 @@ func TestReconcileURLVariablesKeepsTheLibraryOutOfCORS(t *testing.T) {
 		if strings.Contains(c.value, "library") {
 			t.Errorf("gateway write %s=%s names the library URL", c.name, c.value)
 		}
-		if strings.Contains(c.value, "blog") {
+		if strings.Contains(c.value, "blog") && c.name != "CORS_ALLOWED_ORIGINS" {
 			t.Errorf("gateway write %s=%s names the blog URL", c.name, c.value)
 		}
 		if c.name == "CORS_ALLOWED_ORIGINS" && c.value == "$origins" {

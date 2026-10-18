@@ -2,10 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactElement, ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { editorOf, newDraft, previewModel, type Draft, type DraftBlock } from '../blog'
+import { editorOf, newDraft, previewModel, TONES, type Draft, type DraftBlock } from '../blog'
 import type { Block, Category, Post } from '../blogApi'
 import { GLYPHS } from '../glyphs'
 import type { BlogFilters } from '../types'
+import { BlogCategories } from './BlogCategories'
 import { BlogEditor } from './BlogEditor'
 import { BlogList, type BlogState } from './BlogList'
 import { BlogPreview } from './BlogPreview'
@@ -562,5 +563,77 @@ describe('BlogEditor action bar', () => {
     const l = BlogEditor(props({ confirm: 'leave' })) as ReactElement
     ;(find(l, (e) => e.type === 'button' && text(e.props.children) === 'Discard changes')[0].props.onClick as () => void)()
     expect(cb.onDiscard).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('BlogCategories', () => {
+  const cat = (o: Partial<Category> = {}): Category => ({ ...CAT, ...o })
+  const renderCats = (cats: Category[]) => renderToStaticMarkup(<BlogCategories cats={cats} onMove={() => {}} />)
+  const renderTab = (cats: Category[], tab: BlogFilters['tab'] = 'cats') =>
+    renderToStaticMarkup(
+      <BlogList state={{ status: 'ready', posts: [post()], cats, authors: [] }} filters={{ ...FILTERS, tab }} onFilters={() => {}} onRetry={() => {}} onPin={() => {}} categories={<BlogCategories cats={cats} onMove={() => {}} />} />,
+    )
+  const two = [cat({ id: 'a', name: 'Alpha', headline: 'Alpha headline', post_count: 1 }), cat({ id: 'b', name: 'Beta', headline: 'Beta headline', post_count: 2 })]
+  const buttons = (cats: Category[], onMove = vi.fn()) => {
+    const t = BlogCategories({ cats, onMove }) as ReactNode
+    const named = (n: string) => find(t, (e) => e.type === 'button' && e.props['aria-label'] === n)
+    return { up: named('Move up'), down: named('Move down'), onMove }
+  }
+
+  it('the Categories tab renders the note, Add category and every row', () => {
+    const html = renderTab(two)
+    expect(html).toContain('The order here is the order of the bands on the blog home and in its sidebar.')
+    expect(html).toMatch(/<button[^>]*class="v2-btn v2-btn-ghost"[^>]*>(?:(?!<\/button>).)*Add category<\/button>/)
+    for (const t of ['Alpha', 'Alpha headline', 'Beta', 'Beta headline', '>01<', '>02<', '1 post<', '2 posts<']) expect(html).toContain(t)
+    expect(html).toContain('data-cat-head')
+    expect(html).toContain('data-blog-cats')
+    expect(html.match(/data-cat-row/g)).toHaveLength(2)
+    expect(html).not.toContain('Search titles and summaries…')
+  })
+
+  it('a row draws the glyph on its tone colour', () => {
+    const html = renderCats([cat({ tone: 3, icon: 'globe' })])
+    const tile = html.match(/<span style="([^"]*)"><svg[\s\S]*?<\/svg><\/span>/)![0]
+    expect(tile).toContain(`background:${TONES[3].bg}`)
+    expect(tile).toContain(`color:${TONES[3].fg}`)
+    const d = [...tile.matchAll(/ d="([^"]*)"/g)].map((m) => m[1])
+    expect(d).toEqual(GLYPHS.globe)
+  })
+
+  it('a row has the four labelled buttons', () => {
+    const html = renderCats([cat()])
+    for (const l of ['Move up', 'Move down', 'Edit', 'Delete']) expect(html).toContain(`aria-label="${l}"`)
+    expect(html.match(/<button[^>]*aria-label="Delete"[^>]*>/)![0]).toContain('color:var(--destructive)')
+  })
+
+  it('the first up and the last down are dimmed', () => {
+    const html = renderCats([cat({ id: 'a' }), cat({ id: 'b' }), cat({ id: 'c' })])
+    const op = (l: string) => [...html.matchAll(new RegExp(`<button[^>]*aria-label="${l}"[^>]*>`, 'g'))].map((m) => m[0].includes('opacity:0.35'))
+    expect(op('Move up')).toEqual([true, false, false])
+    expect(op('Move down')).toEqual([false, false, true])
+  })
+
+  it('a long headline stays inside the name cell', () => {
+    const html = renderCats([cat({ headline: 'H'.repeat(200) })])
+    const line = html.match(new RegExp(`<div style="([^"]*)">${'H'.repeat(200)}</div>`))![1]
+    for (const p of ['white-space:nowrap', 'overflow:hidden', 'text-overflow:ellipsis']) expect(line).toContain(p)
+    expect(html).toMatch(/<div style="[^"]*min-width:0[^"]*"><div[^>]*>Compliance<\/div>/)
+  })
+
+  it('a dimmed edge button calls nothing, an inner one moves', () => {
+    const { up, down, onMove } = buttons([cat({ id: 'a' }), cat({ id: 'b' }), cat({ id: 'c' })])
+    ;(up[0].props.onClick as () => void)()
+    ;(down[2].props.onClick as () => void)()
+    expect(onMove).not.toHaveBeenCalled()
+    ;(up[1].props.onClick as () => void)()
+    expect(onMove).toHaveBeenLastCalledWith('b', 'up')
+    ;(down[1].props.onClick as () => void)()
+    expect(onMove).toHaveBeenLastCalledWith('b', 'down')
+  })
+
+  it('the Posts tab ignores the categories slot', () => {
+    const html = renderTab(two, 'posts')
+    expect(html).not.toContain('The order here is the order of the bands')
+    expect(html).toContain('data-blog-table')
   })
 })

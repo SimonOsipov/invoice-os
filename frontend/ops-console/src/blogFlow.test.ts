@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { SESSION_KEY } from './auth'
 import type { Author, Category, Post } from './blogApi'
 import { editorOf, newDraft, saveState, type Draft, type EditorState } from './blog'
-import { applyRemove, applySave, BAD_IMAGE, COVER_TOO_LARGE, keepOnExpire, keepThenExpire, loadBlog, pickCover, pinPost, pinThenRefresh, postsAfterRemove, removePost, savePost, singleFlight, STAFF_ONLY, trackCover, type CoverPickDeps, type SaveDeps } from './blogFlow'
+import { applyCatMove, applyCatRefresh, applyRemove, applySave, BAD_IMAGE, COVER_TOO_LARGE, keepOnExpire, keepThenExpire, loadBlog, moveCategoryFlow, pickCover, pinPost, pinThenRefresh, postsAfterRemove, refreshCategories, removePost, savePost, singleFlight, STAFF_ONLY, trackCover, type CoverPickDeps, type SaveDeps } from './blogFlow'
 import { withSession } from './session'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
@@ -560,5 +560,45 @@ describe('singleFlight', () => {
     const again = vi.fn(async () => {})
     await run(again)
     expect(again).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('category move and refresh', () => {
+  const a = { id: 'a' } as Category
+  const b = { id: 'b' } as Category
+
+  it('moveCategoryFlow returns the server order', async () => {
+    const moveCategory = vi.fn().mockResolvedValue({ moved: true, categories: [b, a] })
+    expect(await moveCategoryFlow({ moveCategory }, 'a', 'up')).toEqual({ kind: 'moved', cats: [b, a] })
+    expect(moveCategory).toHaveBeenCalledTimes(1)
+    expect(moveCategory).toHaveBeenCalledWith('a', 'up')
+  })
+
+  it('moveCategoryFlow maps 401, 403 and other failures', async () => {
+    const run = (e: unknown) => moveCategoryFlow({ moveCategory: vi.fn().mockRejectedValue(e) }, 'a', 'down')
+    expect(await run(http(401))).toEqual({ kind: 'expired' })
+    expect(await run(http(403))).toEqual({ kind: 'forbidden' })
+    expect(await run(http(500, 'internal error'))).toEqual({ kind: 'failed', message: 'internal error', status: 500 })
+    expect(await run(new TypeError('Failed to fetch'))).toEqual({ kind: 'failed', message: 'Failed to fetch', status: undefined })
+  })
+
+  it('applyCatMove applies each outcome', () => {
+    expect(applyCatMove({ kind: 'moved', cats: [b, a] })).toEqual({ cats: [b, a], toast: null, tone: 'red', expire: false, reread: false })
+    expect(applyCatMove({ kind: 'expired' })).toMatchObject({ expire: true, toast: null })
+    expect(applyCatMove({ kind: 'forbidden' })).toMatchObject({ toast: 'Your account is not ASComply staff.', tone: 'red', expire: false })
+    expect(applyCatMove({ kind: 'failed', message: 'internal error', status: 500 })).toMatchObject({ toast: 'internal error', tone: 'red', reread: false })
+    expect(applyCatMove({ kind: 'failed', message: 'no such category', status: 404 })).toMatchObject({ toast: 'no such category', tone: 'red', reread: true })
+  })
+
+  it('refreshCategories and applyCatRefresh', async () => {
+    const ok = await refreshCategories({ fetchCategories: vi.fn().mockResolvedValue([a]) })
+    expect(ok).toEqual({ kind: 'cats', cats: [a] })
+    expect(applyCatRefresh(ok)).toMatchObject({ cats: [a], toast: null, expire: false })
+    const gone = await refreshCategories({ fetchCategories: vi.fn().mockRejectedValue(http(401)) })
+    expect(gone).toEqual({ kind: 'expired' })
+    expect(applyCatRefresh(gone).expire).toBe(true)
+    const boom = applyCatRefresh(await refreshCategories({ fetchCategories: vi.fn().mockRejectedValue(http(500, 'internal error')) }))
+    expect(boom).toMatchObject({ toast: 'internal error', tone: 'red', reread: false })
+    expect(boom.cats).toBeUndefined()
   })
 })

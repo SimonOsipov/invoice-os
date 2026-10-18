@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { addBlock, askLeave, coverCss, draftFromPost, editorOf, moveBlock, newDraft, patchBlock, previewModel, removeBlock, setConfirm, setField, setPreview, takeKept, today, writeKept, type BlockType, type Draft, type EditorState } from '../blog'
-import { createPost, deletePost, fetchAuthors, fetchCategories, fetchCoverUrl, fetchPosts, putCover, removeCover, setFeatured, updatePost, type Post } from '../blogApi'
-import { applyRemove, applySave, keepOnExpire, keepThenExpire, loadBlog, pickCover, pinThenRefresh, postsAfterRemove, removePost, savePost, singleFlight, STAFF_ONLY, trackCover } from '../blogFlow'
+import { addBlock, askLeave, coverCss, draftFromPost, editorOf, moveBlock, newDraft, patchBlock, previewModel, removeBlock, setConfirm, setField, setPreview, tabChange, takeKept, today, writeKept, type BlockType, type CatUi, type Draft, type EditorState } from '../blog'
+import { createPost, deletePost, fetchAuthors, fetchCategories, fetchCoverUrl, fetchPosts, moveCategory, putCover, removeCover, setFeatured, updatePost, type Post } from '../blogApi'
+import { applyCatMove, applyCatRefresh, applyRemove, applySave, keepOnExpire, keepThenExpire, loadBlog, moveCategoryFlow, pickCover, pinThenRefresh, postsAfterRemove, refreshCategories, removePost, savePost, singleFlight, STAFF_ONLY, trackCover } from '../blogFlow'
 import { browserCoverDeps } from '../coverImage'
 import { currentSub, expireOnce, withSession } from '../session'
 import type { BlogFilters, ToastTone } from '../types'
+import { BlogCategories } from './BlogCategories'
 import { BlogEditor } from './BlogEditor'
 import { BlogList, type BlogState } from './BlogList'
 import { BlogPreview } from './BlogPreview'
@@ -52,6 +53,35 @@ export function Blog({ filters, onFilters, onToast }: Props) {
       if (after.kind === 'posts') setState((s) => (s.status === 'ready' ? { ...s, posts: after.posts } : s))
       else if (after.kind === 'state') setState(after.state)
     })
+
+  const [catUi, setCatUi] = useState<CatUi>({ form: null, del: null })
+  const applyCats = (a: ReturnType<typeof applyCatMove>) => {
+    const { cats } = a
+    if (cats) setState((s) => (s.status === 'ready' ? { ...s, cats } : s))
+    if (a.toast) onToast(a.toast, 'BLOG', a.tone)
+    if (a.expire) expireOnce()
+  }
+  const reloadCats = () =>
+    flight(async () => {
+      const a = applyCatRefresh(await refreshCategories({ fetchCategories: () => withSession(fetchCategories) }))
+      if (alive.current) applyCats(a)
+    })
+  const onMoveCat = async (id: string, direction: 'up' | 'down') => {
+    let reread = false
+    await flight(async () => {
+      const a = applyCatMove(await moveCategoryFlow({ moveCategory: (i, d) => withSession(() => moveCategory(i, d)) }, id, direction))
+      if (!alive.current) return
+      applyCats(a)
+      reread = a.reread
+    })
+    if (reread && alive.current) await reloadCats()
+  }
+  const onTabFilters = (f: BlogFilters) => {
+    const t = tabChange(filters.tab, f.tab, catUi)
+    setCatUi(t.ui)
+    onFilters(f)
+    if (t.refresh) void reloadCats()
+  }
 
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
@@ -196,5 +226,7 @@ export function Blog({ filters, onFilters, onToast }: Props) {
     )
   }
 
-  return <BlogList state={state} filters={filters} onFilters={onFilters} onRetry={() => void load()} onPin={(p) => void onPin(p)} onNew={onNew} onOpen={(p) => open(draftFromPost(p))} />
+  const categories = state.status === 'ready' ? <BlogCategories cats={state.cats} onMove={(id, d) => void onMoveCat(id, d)} /> : null
+
+  return <BlogList state={state} filters={filters} onFilters={onTabFilters} categories={categories} onRetry={() => void load()} onPin={(p) => void onPin(p)} onNew={onNew} onOpen={(p) => open(draftFromPost(p))} />
 }

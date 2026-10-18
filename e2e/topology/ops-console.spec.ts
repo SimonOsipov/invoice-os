@@ -901,6 +901,55 @@ test('OPS-05 blog list: header, filters and table hold together at every wide wi
   expect(errors, errorsOf(errors)).toEqual([])
 })
 
+test('OPS-05 blog categories list: rows hold together at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInOps(page)
+  await navButton(page, /^Blog/).click()
+  await expect(firstRow(page), 'the Blog list drew no post row').toBeVisible({ timeout: 15_000 })
+  const tab = pad(page).getByRole('button', { name: /Categories/ })
+  await tab.click()
+  const rowsLoc = page.locator('[data-cat-row]')
+  await expect(rowsLoc.first(), 'the Categories tab drew no category row').toBeVisible({ timeout: 15_000 })
+  await settle(page, pad(page))
+
+  const widths = await atWidths(page, 'OPS-05 blog categories list', async () => {
+    const r = await boxes(page, {
+      tabs: tab.locator('xpath=..'),
+      note: page.locator('[data-cat-head] > span').first(),
+      add: page.getByRole('button', { name: 'Add category' }),
+      frame: page.locator('[data-blog-cats]'),
+    })
+    const problems = [
+      ...below(r.tabs, r.frame, 'tab row / list frame'),
+      ...leftOf(r.note, r.add, 'note / Add category'),
+      ...sameCentre(r.note, r.add, 'note / Add category'),
+      ...apart(r.note, r.add, 'note / Add category'),
+    ]
+
+    const rowCount = Math.min(3, await rowsLoc.count())
+    const all: Rect[] = []
+    for (let i = 0; i < rowCount; i++) {
+      const row = rowsLoc.nth(i)
+      const [box] = await boxList(page, row, `row ${i}`, 1)
+      all.push(box)
+      const cells = await boxList(page, row.locator('xpath=./div/*'), `row ${i} cell`, 5)
+      const [num, tile, name, count, group] = cells
+      problems.push(...leftOf(num, tile, `row ${i} number / tile`), ...leftOf(tile, name, `row ${i} tile / name cell`), ...leftOf(name, count, `row ${i} name cell / count`), ...leftOf(count, group, `row ${i} count / buttons`))
+      cells.forEach((c, k) => problems.push(...within(box, c, `row ${i} cell ${k} / row`)))
+      const buttons = await boxList(page, row.getByRole('button'), `row ${i} button`, 4)
+      problems.push(...allApart(buttons, `row ${i} buttons`))
+      buttons.forEach((b, k) => problems.push(...within(box, b, `row ${i} button ${k} / row`)))
+      const lines = await boxList(page, row.locator('xpath=./div/*[3]/div'), `row ${i} name line`, 2)
+      lines.forEach((l, k) => problems.push(...within(name, l, `row ${i} name cell line ${k} / name cell`)))
+    }
+    problems.push(...allApart(all, 'rows'))
+    problems.push(...(await noSidewaysScroll(page, 'blog categories list')))
+    return { problems, rects: { ...r, rows: all } }
+  })
+  await attachJson(testInfo, 'ops-05-blog-categories-list', { widths })
+  expect(errors, errorsOf(errors)).toEqual([])
+})
+
 test('OPS-05 blog editor: the two panes fill the main column side by side at every wide width', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await signInOps(page)

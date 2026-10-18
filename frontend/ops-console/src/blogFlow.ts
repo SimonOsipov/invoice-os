@@ -1,6 +1,6 @@
 import { ApiError } from '@invoice-os/api-client'
 import { COVER_QUALITY, dataUrlToBytes, errorsFrom422, fitWidth, isImageType, partialEditor, pinToast, saveToast, savedEditor, toPostInput, type Draft, type EditorState } from './blog'
-import { fieldErrorsOf, type Author, type Category, type Cover, type FeaturedResult, type Post, type PostInput } from './blogApi'
+import { fieldErrorsOf, type Author, type Category, type Cover, type FeaturedResult, type MoveResult, type Post, type PostInput } from './blogApi'
 import type { BlogState } from './components/BlogList'
 import type { ToastTone } from './types'
 
@@ -245,3 +245,50 @@ export function applyRemove(cur: EditorState, o: RemoveOutcome): AppliedRemove {
       return { editor: { ...cur, confirm: null }, toast: o.message, tone: 'red', expire: false }
   }
 }
+
+export type CatMoveOutcome =
+  | { kind: 'moved'; cats: Category[] }
+  | { kind: 'expired' }
+  | { kind: 'forbidden' }
+  | { kind: 'failed'; message: string; status?: number }
+
+export async function moveCategoryFlow(deps: { moveCategory: (id: string, direction: 'up' | 'down') => Promise<MoveResult> }, id: string, direction: 'up' | 'down'): Promise<CatMoveOutcome> {
+  try {
+    return { kind: 'moved', cats: (await deps.moveCategory(id, direction)).categories }
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) return { kind: 'expired' }
+    if (e instanceof ApiError && e.status === 403) return { kind: 'forbidden' }
+    return { kind: 'failed', message: e instanceof Error ? e.message : 'Could not move the category', status: e instanceof ApiError ? (e.status ?? undefined) : undefined }
+  }
+}
+
+export type CatRefreshOutcome = { kind: 'cats'; cats: Category[] } | Exclude<CatMoveOutcome, { kind: 'moved' }>
+
+export async function refreshCategories(deps: { fetchCategories: () => Promise<Category[]> }): Promise<CatRefreshOutcome> {
+  try {
+    return { kind: 'cats', cats: await deps.fetchCategories() }
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) return { kind: 'expired' }
+    if (e instanceof ApiError && e.status === 403) return { kind: 'forbidden' }
+    return { kind: 'failed', message: e instanceof Error ? e.message : 'Could not load the categories' }
+  }
+}
+
+export type AppliedCats = { cats?: Category[]; toast: string | null; tone: ToastTone; expire: boolean; reread: boolean }
+
+export function applyCatMove(o: CatMoveOutcome | CatRefreshOutcome): AppliedCats {
+  const base: AppliedCats = { toast: null, tone: 'red', expire: false, reread: false }
+  switch (o.kind) {
+    case 'moved':
+    case 'cats':
+      return { ...base, cats: o.cats }
+    case 'expired':
+      return { ...base, expire: true }
+    case 'forbidden':
+      return { ...base, toast: STAFF_ONLY }
+    case 'failed':
+      return { ...base, toast: o.message, reread: o.status === 404 }
+  }
+}
+
+export const applyCatRefresh = applyCatMove

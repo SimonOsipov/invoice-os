@@ -1,5 +1,5 @@
 /// <reference types="node" />
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -27,15 +27,48 @@ describe('blog package', () => {
     expect(ds(join(HERE, 'main.tsx'))).toEqual(want)
   })
 
-  it('src_importsNothingFromTheLibrary', () => {
-    const srcFiles = readdirSync(HERE, { recursive: true, encoding: 'utf8' })
-      .filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f) && !/\.d\.ts$/.test(f))
-      .map((f) => join(HERE, f))
-    const files = [...srcFiles, join(HERE, '../vite.config.ts'), join(HERE, '../vitest.config.ts')]
-    const specs = files.flatMap((f) => importSpecifiers(read(f)).map((s) => ({ f, s })))
-    // Control: the scan reads main.tsx and sees its `./instrument` import.
-    expect(specs.filter(({ f }) => f.endsWith('main.tsx')).map(({ s }) => s)).toContain('./instrument')
-    expect(specs.filter(({ s }) => s.includes('library/'))).toEqual([])
+  // Relative imports from `file`, resolved to .ts/.tsx files.
+  const relImports = (file: string) =>
+    importSpecifiers(read(file))
+      .filter((s) => s.startsWith('.'))
+      .map((s) => {
+        const base = join(dirname(file), s.replace(/\.tsx?$/, ''))
+        return ['.ts', '.tsx'].map((e) => base + e).find((c) => existsSync(c))
+      })
+      .filter((c): c is string => c !== undefined)
+
+  const LIBRARY = join(HERE, '../../library/') // trailing slash: a prefix test
+  const blogFiles = () => [...srcFiles(), join(HERE, '../vite.config.ts'), join(HERE, '../vitest.config.ts')]
+
+  it('src_importsOnlyTheRendererAndClockFromTheLibrary', () => {
+    const direct = blogFiles().flatMap((f) =>
+      relImports(f)
+        .filter((t) => t.startsWith(LIBRARY))
+        .map((t) => `${relative(HERE, f)} -> ${relative(LIBRARY, t)}`),
+    )
+    expect(direct.sort()).toEqual([
+      'components/DemoBlock.tsx -> src/components/SceneView.tsx',
+      'components/DemoBlock.tsx -> src/player.ts',
+      'components/DemoBlock.tsx -> src/timing.ts',
+      'demos.ts -> src/types.ts',
+    ])
+  })
+
+  it('src_libraryImportsAreTheFilesLaneShSendsToTheFullLane', () => {
+    const seen = new Set<string>()
+    const walk = (f: string) => {
+      if (seen.has(f)) return
+      if (f.startsWith(LIBRARY)) seen.add(f)
+      relImports(f).forEach(walk)
+    }
+    blogFiles().forEach(walk)
+    const closure = [...seen].map((f) => 'frontend/library/' + relative(LIBRARY, f)).sort()
+    const lane = read(join(HERE, '../../../scripts/ci/lane.sh'))
+    const block = /^SHARED_WITH_BLOG=\(\n([\s\S]*?)^\)/m.exec(lane)
+    const shared = (block?.[1] ?? '').split('\n').map((l) => l.trim()).filter(Boolean).sort()
+    // Control: the closure holds the renderer.
+    expect(closure).toContain('frontend/library/src/components/SceneView.tsx')
+    expect(closure).toEqual(shared)
   })
 
   it('seam_onlyAnalyticsImportsLandingSource', () => {

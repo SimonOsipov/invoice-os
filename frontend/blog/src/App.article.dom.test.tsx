@@ -188,10 +188,10 @@ describe('article', () => {
     await mount('/sage-rules', dataWith(H, { category_id: 'gone' }))
     expect(article().querySelector('button.blog-back')).toBeNull()
   })
-  it('AR-13 a demo and an unknown block render nothing', async () => {
+  it('AR-13 an unknown block and an unknown demo render nothing', async () => {
     const body = [
       { type: 'p', text: 'Only paragraph.' },
-      { type: 'demo', demo: 'import' },
+      { type: 'demo', demo: 'gone' },
       { type: 'chart', text: 'ghost' },
     ] as unknown as Block[]
     await mount('/sage-rules', dataWith(body))

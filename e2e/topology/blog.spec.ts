@@ -339,3 +339,48 @@ test.describe('blog routes', () => {
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })
+
+test.describe('blog demo at wide widths', () => {
+  const frame = (page: Page) => main(page).getByTestId('blog-demo')
+  const scene = (page: Page) => frame(page).getByTestId('blog-demo-scene')
+  const scrub = (page: Page) => frame(page).getByTestId('blog-demo-scrub')
+
+  async function open(page: Page, width: number): Promise<void> {
+    await prepare(page)
+    await resize(page, width, 1080)
+    await visit(page, '/csv-import')
+    await expect(frame(page).getByText('Import from CSV or Excel'), 'the demo title never rendered').toBeVisible()
+  }
+
+  for (const width of WIDE_WIDTHS) {
+    test(`blog demo: the scene and controls sit in the frame (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await open(page, width)
+      const f = await rectOf(frame(page), 'the demo frame')
+      const sc = await rectOf(scene(page), 'the scene box')
+      const play = await rectOf(frame(page).getByRole('button', { name: 'Play or pause' }), 'play')
+      const time = await rectOf(frame(page).getByText(/^\d:\d\d \/ \d:\d\d$/), 'the time')
+      const sb = await rectOf(scrub(page), 'the scrub bar')
+      await attachJson(testInfo, `blog-demo-frame-${width}`, { frame: f, scene: sc, play, time, scrub: sb })
+      for (const [name, r] of Object.entries({ scene: sc, play, time, scrub: sb }))
+        expect(enclosesRect(f, r, SLACK_PX), `the ${name} leaves the demo frame`).toBe(true)
+      expect(rectsOverlap(play, time), 'play and time overlap').toBe(false)
+      expect(rectsOverlap(play, sb), 'play and scrub overlap').toBe(false)
+      expect(rectsOverlap(time, sb), 'time and scrub overlap').toBe(false)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog demo: the last row fits at the last step (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await open(page, width)
+      const sb = await rectOf(scrub(page), 'the scrub bar')
+      await page.mouse.click(sb.x + sb.width * 0.99, sb.y + sb.height / 2)
+      await expect(frame(page).getByText('04 / 04')).toBeVisible()
+      const sc = await rectOf(scene(page), 'the scene box')
+      const row = await rectOf(scene(page).locator('div', { hasText: 'Needs fixing' }).last(), 'the last row')
+      await attachJson(testInfo, `blog-demo-last-row-${width}`, { scene: sc, row })
+      expect(enclosesRect(sc, row, SLACK_PX), 'the last row leaves the scene box').toBe(true)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+  }
+})

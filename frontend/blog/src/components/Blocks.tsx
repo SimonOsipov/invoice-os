@@ -1,8 +1,9 @@
 import type { Block } from '../data'
 import { Icon } from '../icons'
 import { noteKindOf } from '../model'
+import { DemoBlock } from './DemoBlock'
 
-// A demo block renders nothing until BLOG-04-06; an unknown type renders nothing.
+// An unknown block type renders nothing.
 export function Blocks({ blocks }: { blocks: Block[] }) {
   let heading = 0
   return (
@@ -44,6 +45,7 @@ export function Blocks({ blocks }: { blocks: Block[] }) {
               </div>
             )}
             {b.type === 'note' && <Note kind={b.kind} title={b.title} text={b.text} />}
+            {b.type === 'demo' && <DemoBlock name={b.demo} />}
             {b.type === 'quote' && (
               <figure
                 style={{

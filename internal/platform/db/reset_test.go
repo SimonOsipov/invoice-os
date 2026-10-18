@@ -183,6 +183,35 @@ func seedFullResetFixture(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 		t.Fatalf("seed business_entities fixture: %v", err)
 	}
 
+	// memberships and invitations survive Reset; their join rows must not block the TRUNCATE.
+	userID, inviteID := uuid.NewString(), uuid.NewString()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'reviewer')`, tenantID, userID); err != nil {
+		t.Fatalf("seed memberships fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM memberships WHERE tenant_id = $1 AND user_id = $2`, tenantID, userID)
+	})
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO invitations (id, tenant_id, role, invitee_email, token_hash, expires_at, invited_by)
+		 VALUES ($1, $2, 'preparer', $3, $4, now() + interval '7 days', $5)`,
+		inviteID, tenantID, marker+"@example.com", tokenHash(t, 32), uuid.NewString()); err != nil {
+		t.Fatalf("seed invitations fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM invitations WHERE id = $1`, inviteID)
+	})
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO membership_clients (tenant_id, user_id, entity_id) VALUES ($1, $2, $3)`,
+		tenantID, userID, entityID); err != nil {
+		t.Fatalf("seed membership_clients fixture: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO invitation_clients (tenant_id, invitation_id, entity_id) VALUES ($1, $2, $3)`,
+		tenantID, inviteID, entityID); err != nil {
+		t.Fatalf("seed invitation_clients fixture: %v", err)
+	}
+
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO import_batches (tenant_id, entity_id) VALUES ($1, $2)`,
 		tenantID, entityID,

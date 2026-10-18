@@ -22,6 +22,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -341,6 +342,12 @@ func plantWitnessRows(t *testing.T, pool *pgxpool.Pool, tenantID string) map[str
 		`INSERT INTO invitations (id, tenant_id, role, invitee_email, status, token_hash, expires_at, invited_by)
 		 VALUES ($1,$2,'admin','purge-witness@example.test','pending',$3,now() + interval '7 days',$4)`,
 		inviteID, tenantID, tokenHash(t, 32), uuid.NewString())
+	plant("membership_clients", "user_id", userID,
+		`INSERT INTO membership_clients (tenant_id, user_id, entity_id) VALUES ($1,$2,$3)`,
+		tenantID, userID, entityID)
+	plant("invitation_clients", "invitation_id", inviteID,
+		`INSERT INTO invitation_clients (tenant_id, invitation_id, entity_id) VALUES ($1,$2,$3)`,
+		tenantID, inviteID, entityID)
 	plant("workflow_roles", "id", roleID,
 		`INSERT INTO workflow_roles (id, tenant_id, key, title) VALUES ($1,$2,$3,'Purge Witness Role')`,
 		roleID, tenantID, "purge_witness_"+roleID[:8])
@@ -612,6 +619,13 @@ func TestPurgeTableListCoversEveryTenantOwnedTable(t *testing.T) {
 	}
 	if len(live) == 0 {
 		t.Fatal("pg_attribute reported 0 tables carrying tenant_id — the oracle read nothing, so agreeing with it proves nothing")
+	}
+
+	// Control: the new join tables are in the live set, so their coverage below is not vacuous.
+	for _, want := range []string{"membership_clients", "invitation_clients"} {
+		if !slices.Contains(live, want) {
+			t.Errorf("%s is not among the live tenant_id tables — the client_access migration is not applied yet", want)
+		}
 	}
 
 	declared := map[string]int{}

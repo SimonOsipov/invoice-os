@@ -110,6 +110,7 @@ func (a apiWorld) handler(s accountmail.Sender) http.Handler {
 	mux.HandleFunc("POST /v1/invitations", InvitationsCreateHandler(inv.Invite, log))
 	mux.HandleFunc("GET /v1/invitations", InvitationsListHandler(a.store.ListInvitations, log))
 	mux.HandleFunc("POST /v1/invitations/{id}/resend", InvitationResendHandler(inv.Resend, log))
+	mux.HandleFunc("POST /v1/invitations/{id}/revoke", InvitationRevokeHandler(a.store.RevokeInvitation, log))
 	return mux
 }
 
@@ -129,6 +130,8 @@ func invitePost(emails []string, role string) string {
 }
 
 func resendTarget(id string) string { return "/v1/invitations/" + id + "/resend" }
+
+func revokeTarget(id string) string { return "/v1/invitations/" + id + "/revoke" }
 
 func keysOf(m map[string]any) []string {
 	out := make([]string, 0, len(m))
@@ -1292,5 +1295,103 @@ func TestInvitationsListHandler_NoStateFailureLogsNothing(t *testing.T) {
 	}
 	if strings.Contains(out, "level=WARN") {
 		t.Errorf("a clean list logged a WARN:\n%s", out)
+	}
+}
+
+func TestInvitationRevokeHandler_Answers200WithIdAndStatus(t *testing.T) {
+	a := newAPIWorld(t, "Revoke API Tenant", "Ada Obi")
+	pending := seedInvitation(t, a.super, seedInv{tenant: a.tenant, email: "p@x.test", invitedBy: a.admin})
+	s := &apiSender{}
+
+	item := apiItem(t, apiDo(a.handler(s), a.adminCtx(), http.MethodPost, revokeTarget(pending.ID), ""))
+
+	if !slices.Equal(keysOf(item), []string{"id", "status"}) {
+		t.Errorf("body keys = %v, want exactly [id status]", keysOf(item))
+	}
+	if item["status"] != "revoked" || item["id"] != pending.ID {
+		t.Errorf("body = %v, want id %s and status revoked", item, pending.ID)
+	}
+	if rows := invRows(t, a.super, a.tenant, "id = $2", pending.ID); len(rows) != 1 || rows[0].Status != "revoked" {
+		t.Errorf("rows = %+v, want the invite revoked", rows)
+	}
+	if n := len(s.sent()); n != 0 {
+		t.Errorf("sender calls = %d, want 0 (a revoke sends no mail)", n)
+	}
+}
+
+func TestInvitationRevokeHandler_NoIdentityAndBadID(t *testing.T) {
+	calls := 0
+	var logs syncBuf
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/invitations/{id}/revoke", InvitationRevokeHandler(func(context.Context, string) error { calls++; return nil }, log))
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()})
+	id := uuid.NewString()
+
+	assertErrorBody(t, apiDo(mux, context.Background(), http.MethodPost, revokeTarget(id), ""), http.StatusUnauthorized, "unauthorized")
+	assertErrorBody(t, apiDo(mux, ctx, http.MethodPost, revokeTarget("not-a-uuid"), ""), http.StatusNotFound, "invitation not found")
+	if calls != 0 {
+		t.Errorf("store calls after a 401 and a bad id = %d, want 0", calls)
+	}
+
+	// Control: a valid id with an identity reaches the store, so the zero above is not a dead stub.
+	if item := apiItem(t, apiDo(mux, ctx, http.MethodPost, revokeTarget(id), "")); item["id"] != id || calls != 1 {
+		t.Errorf("control: body %v, store calls %d; want id %s and 1 call", item, calls, id)
+	}
+}
+
+func TestInvitationRevokeHandler_PreparerGetsTheResendRefusalBytes(t *testing.T) {
+	a := newAPIWorld(t, "Revoke Refusal Tenant", "Ada Obi")
+	pending := seedInvitation(t, a.super, seedInv{tenant: a.tenant, email: "p@x.test", invitedBy: a.admin})
+	preparer := a.as(a.addMember(t, "preparer", "active", "Pat"))
+	s := &apiSender{}
+	h := a.handler(s)
+
+	revoke := apiDo(h, preparer, http.MethodPost, revokeTarget(pending.ID), "")
+	resend := apiDo(h, preparer, http.MethodPost, resendTarget(pending.ID), "")
+
+	assertErrorBody(t, revoke, http.StatusForbidden, "only an admin can invite people")
+	assertErrorBody(t, resend, http.StatusForbidden, "only an admin can invite people")
+	if revoke.Body.String() != resend.Body.String() {
+		t.Errorf("revoke body %q differs from resend body %q", revoke.Body, resend.Body)
+	}
+	if rows := invRows(t, a.super, a.tenant, "id = $2", pending.ID); len(rows) != 1 || rows[0].Status != "pending" {
+		t.Errorf("rows = %+v, want the invite still pending", rows)
+	}
+}
+
+func TestInvitationRevokeHandler_StatusMapping(t *testing.T) {
+	boom := errors.New("pq: connection to 10.0.0.9 refused for b@x.test")
+	cases := []struct {
+		name   string
+		err    error
+		status int
+		msg    string
+		logged bool
+	}{
+		{"not found", ErrInvitationNotFound, 404, "invitation not found", false},
+		{"not pending", ErrInvitationNotPending, 409, "this invite is no longer pending", false},
+		{"not permitted", ErrInviteNotPermitted, 403, "only an admin can invite people", false},
+		{"not an active member", db.ErrNotActiveMember, 403, db.NotActiveMemberMessage, false},
+		{"plain error", boom, 500, "internal server error", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var logs syncBuf
+			log := slog.New(slog.NewTextHandler(&logs, nil))
+			mux := http.NewServeMux()
+			mux.HandleFunc("POST /v1/invitations/{id}/revoke", InvitationRevokeHandler(func(context.Context, string) error { return c.err }, log))
+			ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()})
+
+			rec := apiDo(mux, ctx, http.MethodPost, revokeTarget(uuid.NewString()), "")
+
+			assertErrorBody(t, rec, c.status, c.msg)
+			if got := strings.Contains(logs.String(), "level=ERROR"); got != c.logged {
+				t.Errorf("ERROR logged = %v, want %v:\n%s", got, c.logged, logs.String())
+			}
+			if strings.Contains(rec.Body.String(), "10.0.0.9") {
+				t.Errorf("the response leaks the store error: %s", rec.Body)
+			}
+		})
 	}
 }

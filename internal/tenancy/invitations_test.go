@@ -1568,3 +1568,254 @@ func TestInvitations_ConcurrentResendsShareTheLimit(t *testing.T) {
 		t.Errorf("invitation.resent rows = %d, want 1", n)
 	}
 }
+
+func TestInvitations_RevokeFlipsAPendingInviteToRevoked(t *testing.T) {
+	w := newInvWorld(t, "Revoke Tenant", "Ada Obi")
+	seeded := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "r@x.test", role: "reviewer", sendStatus: "sent", invitedBy: w.admin})
+	before := invRows(t, w.super, w.tenant, "id = $2", seeded.ID)
+	if len(before) != 1 || before[0].Status != "pending" {
+		t.Fatalf("seeded rows = %+v, want one pending", before)
+	}
+	listed, err := w.store.ListInvitations(w.adminCtx())
+	if err != nil || len(listed) != 1 || listed[0].ID != seeded.ID {
+		t.Fatalf("control: ListInvitations = %+v, %v; want the seeded invite", listed, err)
+	}
+
+	if err := w.store.RevokeInvitation(w.adminCtx(), seeded.ID); err != nil {
+		t.Fatalf("RevokeInvitation: %v", err)
+	}
+
+	after := invRows(t, w.super, w.tenant, "id = $2", seeded.ID)
+	if len(after) != 1 {
+		t.Fatalf("rows after the revoke = %d, want 1 (a revoke never deletes)", len(after))
+	}
+	got, want := after[0], before[0]
+	if got.Status != "revoked" {
+		t.Errorf("status = %q, want revoked", got.Status)
+	}
+	if !slices.Equal(got.Hash, want.Hash) || !got.Expires.Equal(want.Expires) || got.Role != "reviewer" || got.SendStatus != "sent" {
+		t.Errorf("revoke changed more than status: got %+v, want hash, expiry, role and send status of %+v", got, want)
+	}
+	listed, err = w.store.ListInvitations(w.adminCtx())
+	if err != nil || len(listed) != 0 {
+		t.Errorf("ListInvitations after the revoke = %+v, %v; want empty", listed, err)
+	}
+}
+
+func TestInvitations_RevokeNonAdminRefusedForEveryTarget(t *testing.T) {
+	w := newInvWorld(t, "Non-admin Revoke Tenant", "Ada Obi")
+	other := newInvWorld(t, "Other Non-admin Revoke Tenant", "Olu Bee")
+	pending := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "p@x.test"})
+	targets := map[string]string{
+		"random uuid":       uuid.NewString(),
+		"another tenant":    seedInvitation(t, other.super, seedInv{tenant: other.tenant, email: "f@x.test"}).ID,
+		"accepted":          seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "a@x.test", status: "accepted"}).ID,
+		"revoked":           seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "r@x.test", status: "revoked"}).ID,
+		"pending in tenant": pending.ID,
+	}
+	snapshot := func() string {
+		var s string
+		for _, tenant := range []string{w.tenant, other.tenant} {
+			for _, r := range invRows(t, w.super, tenant, "") {
+				s += fmt.Sprintf("%s|%s|%x|%s|%s;", r.ID, r.Status, r.Hash, r.Expires.Format(time.RFC3339Nano), r.SendStatus)
+			}
+		}
+		return s
+	}
+	before := snapshot()
+	preparer := w.addMember(t, "preparer", "active", "Pat Preparer")
+	reviewer := w.addMember(t, "reviewer", "active", "Rae Reviewer")
+
+	for role, caller := range map[string]string{"preparer": preparer, "reviewer": reviewer} {
+		for name, id := range targets {
+			t.Run(role+"/"+name, func(t *testing.T) {
+				if err := w.store.RevokeInvitation(w.as(caller), id); !errors.Is(err, ErrInviteNotPermitted) {
+					t.Errorf("err = %v, want ErrInviteNotPermitted", err)
+				}
+			})
+		}
+	}
+	if before == "" || snapshot() != before {
+		t.Error("a refused non-admin revoke changed an invitations row")
+	}
+	if n := inviteAudit(t, w.super, w.tenant); n != 0 {
+		t.Errorf("invitation audit rows = %d, want 0", n)
+	}
+
+	// Control: the refusals above were the caller's role, not a dead store.
+	if err := w.store.RevokeInvitation(w.adminCtx(), pending.ID); err != nil {
+		t.Errorf("the admin's revoke of the same pending invite: %v", err)
+	}
+}
+
+func TestInvitations_RevokeBySuspendedAdminIsNotActiveMember(t *testing.T) {
+	w := newInvWorld(t, "Suspended Revoke Tenant", "Ada Obi")
+	pending := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "p@x.test"})
+	suspended := w.addMember(t, "admin", "suspended", "Sue Suspended")
+
+	if err := w.store.RevokeInvitation(w.as(suspended), pending.ID); !errors.Is(err, db.ErrNotActiveMember) {
+		t.Fatalf("err = %v, want db.ErrNotActiveMember", err)
+	}
+	if rows := invRows(t, w.super, w.tenant, "id = $2", pending.ID); len(rows) != 1 || rows[0].Status != "pending" {
+		t.Errorf("rows = %+v, want the invite still pending", rows)
+	}
+	if n := inviteAudit(t, w.super, w.tenant); n != 0 {
+		t.Errorf("invitation audit rows = %d, want 0", n)
+	}
+}
+
+func TestInvitations_RevokeTargets(t *testing.T) {
+	w := newInvWorld(t, "Revoke Target Tenant", "Ada Obi")
+	other := newInvWorld(t, "Other Revoke Target Tenant", "Olu Bee")
+	foreign := seedInvitation(t, other.super, seedInv{tenant: other.tenant, email: "f@x.test", invitedBy: other.admin})
+	accepted := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "a@x.test", status: "accepted", invitedBy: w.admin})
+	revoked := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "r@x.test", status: "revoked", invitedBy: w.admin})
+
+	cases := []struct {
+		name string
+		id   string
+		want error
+	}{
+		{"random uuid", uuid.NewString(), ErrInvitationNotFound},
+		{"another tenant's invite", foreign.ID, ErrInvitationNotFound},
+		{"accepted", accepted.ID, ErrInvitationNotPending},
+		{"revoked", revoked.ID, ErrInvitationNotPending},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := w.store.RevokeInvitation(w.adminCtx(), c.id); !errors.Is(err, c.want) {
+				t.Fatalf("err = %v, want %v", err, c.want)
+			}
+		})
+	}
+	if n := inviteAudit(t, w.super, w.tenant); n != 0 {
+		t.Errorf("invitation audit rows after four refusals = %d, want 0", n)
+	}
+	if rows := invRows(t, other.super, other.tenant, "id = $2", foreign.ID); len(rows) != 1 || rows[0].Status != "pending" || !slices.Equal(rows[0].Hash, foreign.Hash) {
+		t.Error("another tenant's invite changed")
+	}
+
+	// A second revoke of one invite: the first succeeds and writes one row, the second refuses and writes none.
+	again := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "again@x.test", invitedBy: w.admin})
+	if err := w.store.RevokeInvitation(w.adminCtx(), again.ID); err != nil {
+		t.Fatalf("first revoke: %v", err)
+	}
+	if err := w.store.RevokeInvitation(w.adminCtx(), again.ID); !errors.Is(err, ErrInvitationNotPending) {
+		t.Errorf("second revoke err = %v, want ErrInvitationNotPending", err)
+	}
+	if n := len(auditPayloads(t, w.super, w.tenant, "invitation.revoked")); n != 1 {
+		t.Errorf("invitation.revoked rows after revoking one invite twice = %d, want 1", n)
+	}
+}
+
+func TestInvitations_RevokeAuditsInTheSameTransaction(t *testing.T) {
+	w := newInvWorld(t, "Revoke Audit Tenant", "Ada Obi")
+	pending := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "p@x.test", role: "reviewer", invitedBy: w.admin})
+
+	if err := w.store.RevokeInvitation(w.adminCtx(), uuid.NewString()); !errors.Is(err, ErrInvitationNotFound) {
+		t.Fatalf("control: revoke of a random id err = %v, want ErrInvitationNotFound", err)
+	}
+	if n := len(auditPayloads(t, w.super, w.tenant, "invitation.revoked")); n != 0 {
+		t.Fatalf("invitation.revoked rows after a refused revoke = %d, want 0", n)
+	}
+
+	if err := w.store.RevokeInvitation(w.adminCtx(), pending.ID); err != nil {
+		t.Fatalf("RevokeInvitation: %v", err)
+	}
+	var actor string
+	if err := w.super.QueryRow(context.Background(),
+		`SELECT actor FROM audit_log WHERE tenant_id = $1 AND event = 'invitation.revoked'`, w.tenant).Scan(&actor); err != nil {
+		t.Fatalf("read the invitation.revoked row (want exactly one): %v", err)
+	}
+	if actor != w.admin {
+		t.Errorf("actor = %q, want the admin %q", actor, w.admin)
+	}
+	payloads := auditPayloads(t, w.super, w.tenant, "invitation.revoked")
+	if len(payloads) != 1 {
+		t.Fatalf("invitation.revoked rows = %d, want 1", len(payloads))
+	}
+	if p := payloads[0]; len(p) != 2 || p["invitation_id"] != pending.ID || p["role"] != "reviewer" {
+		t.Errorf("payload = %v, want exactly {invitation_id: %s, role: reviewer}", p, pending.ID)
+	}
+}
+
+func TestInvitations_RevokeRollsBackWhenTheAuditFails(t *testing.T) {
+	w := newInvWorld(t, "Revoke Rollback Tenant", "Ada Obi")
+	issued := mustIssue(t, w.adminCtx(), w.store, []string{inviteeAddr}, "reviewer")[0]
+	drop := failAudit(t, w.super, w.tenant, "invitation.revoked")
+
+	err := w.store.RevokeInvitation(w.adminCtx(), issued.ID)
+	if err == nil {
+		t.Fatal("RevokeInvitation succeeded although its audit write fails")
+	}
+	for _, s := range []error{ErrInvitationNotFound, ErrInvitationNotPending, ErrInviteNotPermitted} {
+		if errors.Is(err, s) {
+			t.Errorf("err = %v, want the audit failure, not the refusal %v", err, s)
+		}
+	}
+	if rows := invRows(t, w.super, w.tenant, "id = $2", issued.ID); len(rows) != 1 || rows[0].Status != "pending" {
+		t.Errorf("rows = %+v, want the invite still pending", rows)
+	}
+	if _, err := w.store.PreviewInvitation(context.Background(), issued.Token); err != nil {
+		t.Errorf("PreviewInvitation after the failed revoke: %v", err)
+	}
+
+	drop()
+	if err := w.store.RevokeInvitation(w.adminCtx(), issued.ID); err != nil {
+		t.Errorf("revoke after the trigger is gone: %v", err)
+	}
+}
+
+// requireRevoked asserts the invite is revoked and the revoke left exactly one invitation.revoked row.
+func requireRevoked(t *testing.T, w invWorld, id string) {
+	t.Helper()
+	if rows := invRows(t, w.super, w.tenant, "id = $2", id); len(rows) != 1 || rows[0].Status != "revoked" {
+		t.Errorf("rows = %+v, want one revoked", rows)
+	}
+	if n := len(auditPayloads(t, w.super, w.tenant, "invitation.revoked")); n != 1 {
+		t.Errorf("invitation.revoked rows = %d, want 1", n)
+	}
+}
+
+func TestInvitations_RevokeIsNotCountedAndFreesNoSlot(t *testing.T) {
+	t.Run("at 20 sends a revoke succeeds and a send is still refused", func(t *testing.T) {
+		w := newInvWorld(t, "Revoke Full Window Tenant", "Ada Obi")
+		seedAuditEvents(t, w.super, w.tenant, "invitation.sent", sentPayload, "1 hour", 20)
+		pending := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "p@x.test", invitedBy: w.admin})
+
+		if err := w.store.RevokeInvitation(w.adminCtx(), pending.ID); err != nil {
+			t.Fatalf("revoke in a full window: %v", err)
+		}
+		requireRevoked(t, w, pending.ID)
+		if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"n@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+			t.Errorf("create after the revoke: err = %v, want ErrDailyInviteLimit (a revoke frees no slot)", err)
+		}
+	})
+	t.Run("at 19 sends a revoke is not the 20th", func(t *testing.T) {
+		w := newInvWorld(t, "Revoke Nineteen Tenant", "Ada Obi")
+		seedAuditEvents(t, w.super, w.tenant, "invitation.sent", sentPayload, "1 hour", 19)
+		pending := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "p@x.test", invitedBy: w.admin})
+
+		if err := w.store.RevokeInvitation(w.adminCtx(), pending.ID); err != nil {
+			t.Fatalf("revoke: %v", err)
+		}
+		requireRevoked(t, w, pending.ID)
+		mustIssue(t, w.adminCtx(), w.store, []string{"n1@x.test"}, "preparer")
+		if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"n2@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+			t.Errorf("second create: err = %v, want ErrDailyInviteLimit (19 sent + 1 new = 20)", err)
+		}
+	})
+}
+
+func TestInvitations_AppRoleHasNoDeleteOnInvitations(t *testing.T) {
+	super, _ := dbTestPools(t)
+	var update, del bool
+	if err := super.QueryRow(context.Background(),
+		`SELECT has_table_privilege('invoice_app', 'public.invitations', 'UPDATE'),
+		        has_table_privilege('invoice_app', 'public.invitations', 'DELETE')`).Scan(&update, &del); err != nil {
+		t.Fatalf("read privileges: %v", err)
+	}
+	if !update || del {
+		t.Errorf("invoice_app UPDATE = %v, DELETE = %v on invitations; want true, false", update, del)
+	}
+}

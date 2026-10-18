@@ -84,16 +84,37 @@ func TestRenderBlogConfirm_ButtonAndFallbackOpenTheConfirmPage(t *testing.T) {
 }
 
 func TestRenderBlogConfirm_TokenIsEscapedInBothLinks(t *testing.T) {
-	m := blogMail
-	m.Token = `a&b"<x`
-	_, out := renderBlog(t, m)
-	for i, h := range blogHrefs(t, out) {
-		if want := BlogConfirmURL + "?token=" + url.QueryEscape(m.Token); h != want {
-			t.Errorf("link %d = %q, want %q", i, h, want)
+	for _, token := range []string{`a&b"<x`, "a+b/c#d&e f%é", "x&token=evil", "a'b>c", "https://evil.test/?q=1#f"} {
+		m := blogMail
+		m.Token = token
+		_, out := renderBlog(t, m)
+		want := BlogConfirmURL + "?token=" + url.QueryEscape(token)
+		for i, h := range blogHrefs(t, out) {
+			if h != want {
+				t.Errorf("token %q link %d = %q, want %q", token, i, h, want)
+			}
+			u, err := url.Parse(h)
+			if err != nil || u.Host != "blog.ascomply.com" || u.Fragment != "" || u.Query().Get("token") != token || len(u.Query()) != 1 {
+				t.Errorf("token %q link %d does not parse back to one token (%v, %v)", token, i, u, err)
+			}
+		}
+		if strings.Contains(out, `token=a&b`) || strings.Contains(out, `<x`) || strings.Contains(out, "evil.test/?q") {
+			t.Errorf("token %q: raw token characters reached the body", token)
 		}
 	}
-	if strings.Contains(out, `token=a&b`) || strings.Contains(out, `<x`) {
-		t.Error("raw token characters reached the body")
+}
+
+func TestRenderBlogConfirm_FallbackLinkTextIsTheButtonURL(t *testing.T) {
+	m := blogMail
+	m.Token = "a+b/c#d&e"
+	_, out := renderBlog(t, m)
+	want := BlogConfirmURL + "?token=" + url.QueryEscape(m.Token)
+	texts := regexp.MustCompile(`<a href="[^"]*" style="color:#0d5d4c">([^<]*)</a>`).FindAllStringSubmatch(out, -1)
+	if len(texts) != 1 {
+		t.Fatalf("fallback links = %v, want one", texts)
+	}
+	if got := html.UnescapeString(texts[0][1]); got != want {
+		t.Errorf("fallback text = %q, want %q", got, want)
 	}
 }
 
@@ -108,12 +129,31 @@ func TestRenderBlogConfirm_ListsTopicsFrequencyAndEmail(t *testing.T) {
 
 func TestRenderBlogConfirm_EscapesUserText(t *testing.T) {
 	_, out := renderBlog(t, BlogConfirmMail{
-		Email: `x"<script>@a.co`, Token: "t", Topics: []string{"<b>T</b>"}, Frequency: "weekly",
+		Email: `x"<script>@a.co`, Token: "t", Topics: []string{"<b>T</b>", `A&"B'`}, Frequency: "weekly",
 	})
-	for _, bad := range []string{"<script>", "<b>"} {
+	for _, bad := range []string{"<script>", "<b>", "</b>", `x"<`} {
 		if strings.Contains(out, bad) {
 			t.Errorf("body holds raw %q", bad)
 		}
+	}
+	// Positive pair: the escaped text is there, in the intro and the details row.
+	if n := strings.Count(out, "x&#34;&lt;script&gt;@a.co"); n != 2 {
+		t.Errorf("escaped email appears %d times, want 2 (intro and details)", n)
+	}
+	if want := "&lt;b&gt;T&lt;/b&gt;, A&amp;&#34;B&#39;"; !strings.Contains(out, want) {
+		t.Errorf("body misses escaped topics %q", want)
+	}
+}
+
+func TestRenderBlogConfirm_DetailsRowsInOrder(t *testing.T) {
+	_, out := renderBlog(t, blogMail)
+	last := -1
+	for _, want := range []string{">Email<", ">ada@obi.test<", ">Topics<", ">Tax policy, E-invoicing<", ">How often<", ">Every post<"} {
+		i := strings.Index(out, want)
+		if i <= last {
+			t.Fatalf("%q at %d, not after %d", want, i, last)
+		}
+		last = i
 	}
 }
 

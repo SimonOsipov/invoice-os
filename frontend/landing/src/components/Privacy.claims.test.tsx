@@ -13,12 +13,28 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { AI_PROVIDER_HOST, PROSE_MAX_WIDTH, Privacy } from './Privacy'
+import { AI_PROVIDER_HOST, PRIVACY_CONTACT, PROSE_MAX_WIDTH, Privacy } from './Privacy'
 import { Footer } from './Footer'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
 import { sentryOptions } from '@invoice-os/monitoring'
-import { aiModelVendors, aiProviderHosts } from './privacyCodeFacts.test.util'
+import {
+  aiModelVendors,
+  aiProviderHosts,
+  confirmLinkIsSingleUseAndExpires,
+  confirmOverwritesSubscriber,
+  confirmPageSaysOneClickUnsubscribe,
+  confirmStoresConfirmedAt,
+  confirmationMailGoesThroughResend,
+  newsletterCodeNamesHubSpot,
+  newsletterIntakeFields,
+  newsletterPendingHours,
+  newsletterResendPropertyKeys,
+  resubscribeReplacesRequest,
+  rulePutsUnsubscribeInEveryBroadcast,
+  syncBlogAddsSegmentAndTopic,
+  workerNamesHubSpot,
+} from './privacyCodeFacts.test.util'
 
 const SRC_DIR = fileURLToPath(new URL('.', import.meta.url))
 const PRIVACY_TSX = join(SRC_DIR, 'Privacy.tsx')
@@ -411,6 +427,14 @@ describe('AUTH-17-09: no Resend region claim without a vendor citation', () => {
     expect(pageResend.filter(claimsRegion), 'the page claims a Resend region').toEqual([])
 
   })
+
+  it('PB-06 no Blog-section Resend sentence claims a region, and the page holds no eu-west-1', () => {
+    const blog = sentencesOf(plainText(blogSectionHtml()))
+    const resend = blog.filter((s) => s.includes('Resend'))
+    expect(resend.length, 'control: the Blog section names Resend').toBeGreaterThan(2)
+    expect(resend.filter(claimsRegion), 'a Blog sentence claims a Resend region').toEqual([])
+    expect(pageText).not.toContain('eu-west-1')
+  })
 })
 
 // pm-approved copy: change only with a new approval.
@@ -572,5 +596,86 @@ describe('ENGI-17: the explanation section discloses the Explain call', () => {
     const sentences = plainText(explainSectionHtml()).split(/(?<=[.!?])\s+/)
     expect(sentences.length).toBeGreaterThan(1)
     expect(sentences.filter((s) => CLAIM.test(s))).toEqual([])
+  })
+})
+
+const BLOG_H2 = 'The Blog and its newsletter'
+function blogSectionHtml(): string {
+  const heading = `>${BLOG_H2}</h2>`
+  const at = html.indexOf(heading)
+  expect(at, 'the Blog section heading is missing').toBeGreaterThanOrEqual(0)
+  const afterH2 = html.slice(at + heading.length)
+  const next = afterH2.indexOf('<h2')
+  return next < 0 ? afterH2 : afterH2.slice(0, next)
+}
+const blogText = (): string => plainText(blogSectionHtml())
+
+describe('BLOG-10: the Blog section matches the newsletter code', () => {
+  it('PB-03 the stored fields are the intake fields and the Resend properties: email, categories, frequency', () => {
+    expect(newsletterIntakeFields()).toEqual(['CategoryIDs', 'Email', 'Frequency'])
+    expect(newsletterResendPropertyKeys()).toEqual(['blog_categories', 'blog_frequency'])
+    const text = blogText()
+    expect(text).toContain('your work email address, the topics you want and how often you want to hear from us')
+    expect(text).toContain('your email address, your topics, how often you want to hear from us and the time you confirmed')
+    expect(text).toContain('with the same three details')
+  })
+
+  it('PB-04 the hours in the section are the request expiry interval', () => {
+    const hours = newsletterPendingHours()
+    expect(hours).toBeGreaterThan(0)
+    expect(blogText()).toContain(`within ${hours} hours expires`)
+  })
+
+  it('PB-05 no newsletter code names HubSpot, and the section names it only in a negation', () => {
+    expect(workerNamesHubSpot(), 'control: worker.go names HubSpot').toBe(true)
+    expect(newsletterCodeNamesHubSpot()).toBe(false)
+    const named = blogText().split(/(?<=[.!?])\s+/).filter((s) => s.includes('HubSpot'))
+    expect(named).toEqual(['Nothing from the newsletter goes to HubSpot.'])
+  })
+
+  it('PB-09 the link is single-use and expires, a second sign-up replaces it, and confirmed_at is stored', () => {
+    expect(confirmLinkIsSingleUseAndExpires()).toBe(true)
+    expect(resubscribeReplacesRequest()).toBe(true)
+    expect(confirmOverwritesSubscriber()).toBe(true)
+    expect(confirmStoresConfirmedAt()).toBe(true)
+    const text = blogText()
+    for (const needle of [
+      'with a one-time link',
+      'its link stops working',
+      'sign up again with the new choices',
+      'the time you confirmed',
+    ]) {
+      expect(text, `missing "${needle}"`).toContain(needle)
+    }
+  })
+
+  it('PB-10 the confirmation mail goes through Resend, and the Blog list add carries the properties', () => {
+    expect(confirmationMailGoesThroughResend()).toBe(true)
+    expect(syncBlogAddsSegmentAndTopic()).toBe(true)
+    const text = blogText()
+    expect(text).toContain('Resend, the service we use to send email, receives your address to deliver that email')
+    expect(text).toContain('We also add you to our Blog list in Resend')
+  })
+
+  it('PB-11 the unsubscribe sentence stands only while the rule and the confirm page say it', () => {
+    expect(rulePutsUnsubscribeInEveryBroadcast(), 'contacts.md no longer puts the unsubscribe tag in every blog broadcast').toBe(true)
+    expect(confirmPageSaysOneClickUnsubscribe(), 'the confirm page no longer says one-click unsubscribe').toBe(true)
+    expect(blogText()).toContain('Every email we send you carries a one-click unsubscribe link from Resend')
+  })
+
+  it('PB-12 the frequency is stored on the Resend contact, and the section says staff follow it', () => {
+    expect(newsletterResendPropertyKeys()).toContain('blog_frequency')
+    expect(blogText()).toContain('We send the newsletter by hand, and we follow the frequency you chose.')
+  })
+
+  it('PB-07 the stop route is the monitored contact, imported not retyped', () => {
+    const para = Array.from(blogSectionHtml().matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)).map((m) => m[1]).pop() ?? ''
+    expect(plainText(para)).toContain(`email ${PRIVACY_CONTACT} and we will act on it`)
+    expect(para).toContain(`mailto:${PRIVACY_CONTACT}`)
+    expect(html).not.toContain('e.iroha@ascomply.com')
+    const src = readFileSync(PRIVACY_TSX, 'utf8')
+    const blogSrc = src.slice(src.indexOf(`<h2 style={H2}>${BLOG_H2}</h2>`), src.indexOf('<h2 style={H2}>Google Fonts</h2>'))
+    expect(blogSrc, 'control: the Blog source slice is empty').toContain('PRIVACY_CONTACT')
+    expect(blogSrc, 'the Blog section retypes an address').not.toContain('@ascomply.com')
   })
 })

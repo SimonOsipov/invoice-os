@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { CONSENT_TEXT } from './demoForm'
 import { MARKETING_CONSENT_TEXT } from './MarketingConsent'
 import { PRODUCT_EMAIL_NOTICE } from './RegisterModal'
-import { LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
+import { BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from '../hubspot'
 
 export const GA_RETENTION_MONTHS = 14
 export const AI_PROVIDER_HOST = 'openrouter.ai'
@@ -55,14 +55,14 @@ export function Privacy() {
 
           <h2 style={H2}>Google Analytics</h2>
           <p style={P}>
-            We use Google Analytics 4 to measure how people use this marketing site and our Feature Library — which pages get read, what
+            We use Google Analytics 4 to measure how people use this marketing site, our Feature Library and our Blog — which pages get read, what
             visitors do next, and where the site is confusing. It runs only if you have allowed analytics.
           </p>
           <p style={P}>
-            It runs on this public site and on our public Feature Library only. There is no analytics code anywhere inside the signed-in ASComply product.
+            It runs on this public site, on our public Feature Library and on our public Blog only. There is no analytics code anywhere inside the signed-in ASComply product.
           </p>
           <p style={P}>
-            It is active on {PRODUCTION_HOSTNAMES[0]} and on our Feature Library at {LIBRARY_HOSTNAMES[0]}, and nowhere else. Our preview and test builds run the same code,
+            It is active on {PRODUCTION_HOSTNAMES[0]}, on our Feature Library at {LIBRARY_HOSTNAMES[0]} and on our Blog at {BLOG_HOSTNAMES[0]}, and nowhere else. Our preview and test builds run the same code,
             but that code only measures on the live address, so those builds send Google nothing.
           </p>
 
@@ -97,7 +97,7 @@ export function Privacy() {
           <p style={P}>
             Your answer itself is stored on your device too, in a small cookie of our own named asc_consent. It holds
             whether you allowed analytics, when you chose, and which version of the record it is. It is set for{' '}
-            {SHARED_COOKIE_DOMAIN}, so this site and our Feature Library read the same answer. Your browser therefore
+            {SHARED_COOKIE_DOMAIN}, so this site, our Feature Library at {LIBRARY_HOSTNAMES[0]} and our Blog at {BLOG_HOSTNAMES[0]} read the same answer. Your browser therefore
             sends it with each request to our {SHARED_COOKIE_DOMAIN} addresses; our servers do not read it. It is what
             stops the cookie notice asking you again on every visit, and, apart from the deletions described above and
             the invite link's token, which is kept in this tab's session storage on the invite page only and cleared
@@ -146,6 +146,41 @@ export function Privacy() {
             The Library has no forms, so it sends HubSpot nothing. It is typeset in the same Google fonts. When a
             Library page fails, your browser sends Sentry a report as described below; the Library does not send Sentry
             how long its pages take to load.
+          </p>
+
+          <h2 style={H2}>The Blog and its newsletter</h2>
+          <p style={P}>
+            Our Blog at {BLOG_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site, the Feature
+            Library and the Blog: whatever you choose on any of them applies to all three. Cookie choices, at the foot
+            of each site's pages or sidebar, brings the notice back, and a change made there applies to all three. If
+            you allow analytics, Google Analytics measures the Blog in the same way and under the same property, and
+            Google receives each Blog page you view. The Blog shares the _ga cookies with this site and the Library.
+            Choosing Reject on any of them deletes those shared _ga cookies. If analytics was running, though, Google's
+            script is still loaded into any of our pages you have open, and until you reload them it can send
+            measurements of its own and re-create those cookies. The Blog is typeset in the same Google fonts. When a
+            Blog page fails, your browser sends Sentry a report as described below.
+          </p>
+          <p style={P}>
+            The Blog has a newsletter sign-up. You give us your work email address, the topics you want and how often
+            you want to hear from us. Nothing is kept for good until you confirm. We first hold your request on our own
+            server with a one-time link, and we send the link to your address in a confirmation email. Resend, the
+            service we use to send email, receives your address to deliver that email. A request you do not confirm
+            within 48 hours expires, and its link stops working.
+          </p>
+          <p style={P}>
+            When you click the link, we store your email address, your topics, how often you want to hear from us and
+            the time you confirmed, on our own server. We also add you to our Blog list in Resend, with the same three
+            details. Nothing from the newsletter goes to HubSpot. We send the newsletter by hand, and we follow the
+            frequency you chose.
+          </p>
+          <p style={P}>
+            To change your topics or how often you hear from us, sign up again with the new choices. Every email we send
+            you carries a one-click unsubscribe link from Resend. To have your details deleted from our server and from
+            Resend, email{' '}
+            <a href={`mailto:${PRIVACY_CONTACT}`} className="ios-link" style={LINK}>
+              {PRIVACY_CONTACT}
+            </a>{' '}
+            and we will act on it.
           </p>
 
           <h2 style={H2}>Google Fonts</h2>

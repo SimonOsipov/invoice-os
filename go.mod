@@ -25,7 +25,7 @@ require (
 	github.com/shopspring/decimal v1.4.0
 	github.com/xuri/excelize/v2 v2.11.0
 	golang.org/x/net v0.57.0
-	golang.org/x/text v0.40.0
+	golang.org/x/text v0.41.0
 	rsc.io/qr v0.2.0
 )
 

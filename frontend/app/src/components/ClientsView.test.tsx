@@ -8,6 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
+import { CLIENT_ADMIN_ONLY } from '../lib/members'
 import type { Rollup } from '../lib/dashboard'
 import type { Entity } from '../lib/portfolio'
 import type { PlatformCtx } from '../types'
@@ -254,28 +255,119 @@ describe('ClientsView: a narrowing position with zero rows renders a filter-spec
 const SELF = (role: string) => [{ id: 'u1', name: 'Ada', initials: 'A', email: null, role, status: 'active', isYou: true }]
 
 describe('ClientsView: Add client follows the role (LOGFIX-06-03)', () => {
-  it.each(['preparer', 'reviewer'])('Clients: a non-admin sees no Add client (%s)', async (role) => {
+  it.each(['preparer', 'reviewer'])('Clients: a non-admin sees Add client disabled with the reason (%s)', async (role) => {
     mockFetchArchiveAware(ACTIVE_ROWS)
     render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS, { members: SELF(role) })} />)
     await screen.findByText('Okafor & Partners')
-    expect(screen.queryByRole('button', { name: 'Add client' })).toBeNull()
-    for (const name of ['All', 'Active', 'Archived']) expect(screen.getByRole('button', { name })).toBeTruthy()
+    const add = screen.getByRole('button', { name: 'Add client' }) as HTMLButtonElement
+    expect(add.disabled).toBe(true)
+    expect(add.title).toBe(CLIENT_ADMIN_ONLY)
+    expect(document.getElementById(add.getAttribute('aria-describedby') as string)?.textContent).toBe(CLIENT_ADMIN_ONLY)
+    for (const name of ['All', 'Active', 'Archived']) expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('Clients: a non-admin with no clients sees No company created', async () => {
+  it('Clients: a non-admin with no clients sees No company created and a disabled Add client', async () => {
     mockFetchArchiveAware([])
     render(<ClientsView ctx={clientsCtx([], { members: SELF('preparer') })} />)
     await screen.findByText('No company created')
     expect(screen.getByText('Your workspace admin adds the company. You can start when it exists.')).toBeTruthy()
     expect(screen.queryByText('Add your first business entity to get started.')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Add client' })).toBeNull()
+    expect((screen.getByRole('button', { name: 'Add client' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it.each(['loading', 'error'])('Clients: no Add client while the roster is %s', async (membersState) => {
+  it.each(['loading', 'error'])('Clients: no Add client and no note while the roster is %s; rows keep today\'s behaviour', async (membersState) => {
     mockFetchArchiveAware(ACTIVE_ROWS)
     render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS, { members: [], membersState })} />)
     await screen.findByText('Okafor & Partners')
     expect(screen.queryByRole('button', { name: 'Add client' })).toBeNull()
+    expect(screen.queryByTestId('clients-admin-only')).toBeNull()
+    const archive = within(rowFor('Okafor & Partners')).getByRole('button') as HTMLButtonElement
+    expect(archive.disabled).toBe(false)
+    fireEvent.click(rowFor('Okafor & Partners'))
+    expect(screen.getByRole('dialog', { name: 'Edit client' })).toBeTruthy()
+  })
+
+  it.each(['preparer', 'reviewer'])('Clients: a non-admin cannot archive or restore (%s)', async (role) => {
+    const { archiveCalls } = mockFetchArchiveAware(ALL_ROWS)
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS, { members: SELF(role) })} />)
+    await screen.findByText('Honeywell Group')
+    for (const name of ['Okafor & Partners', 'Beta Traders', 'Honeywell Group']) {
+      const btn = within(rowFor(name)).getByRole('button') as HTMLButtonElement
+      expect(btn.disabled, name).toBe(true)
+      expect(btn.title).toBe(CLIENT_ADMIN_ONLY)
+      expect(document.getElementById(btn.getAttribute('aria-describedby') as string)?.textContent).toBe(CLIENT_ADMIN_ONLY)
+      fireEvent.click(btn)
+      fireEvent.click(btn)
+    }
+    expect(archiveCalls).toHaveLength(0)
+  })
+
+  it.each(['preparer', 'reviewer'])('Clients: a non-admin row click opens the dialog read-only (%s)', async (role) => {
+    const full = entity({ id: 'f1', name: 'Full Co', email: 'a@b.co', telephone: '0801', street: '1 Main', city: 'Lagos' } as Partial<Entity>)
+    const fetchMock = mockFetchArchiveAware([full]).fetchMock
+    render(<ClientsView ctx={clientsCtx([full], { members: SELF(role) })} />)
+    await screen.findByText('Full Co')
+    fireEvent.click(rowFor('Full Co'))
+    const dialog = screen.getByRole('dialog', { name: 'Client details' })
+    const inputs = [...dialog.querySelectorAll('input')] as HTMLInputElement[]
+    expect(inputs).toHaveLength(13)
+    for (const i of inputs) expect(i.disabled).toBe(true)
+    const values = inputs.map((i) => i.value)
+    for (const v of ['Full Co', '00000000001', 'RC123456', 'logistics', '12 Marina Rd, Lagos', 'a@b.co', '0801', '1 Main', 'Lagos']) expect(values).toContain(v)
+    expect(within(dialog).queryByRole('button', { name: 'Save changes' })).toBeNull()
+    expect(within(dialog).getByTestId('entity-readonly-note').textContent).toBe(CLIENT_ADMIN_ONLY)
+    fireEvent.click(within(dialog).getByText('Close', { selector: 'button' })) // the footer button; the X shares its aria-label
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH')).toHaveLength(0)
+  })
+
+  it('Clients: an admin keeps every control enabled and sees no note', async () => {
+    mockFetchArchiveAware(ALL_ROWS)
+    render(<ClientsView ctx={clientsCtx(ALL_ROWS)} />)
+    await screen.findByText('Honeywell Group')
+    expect((screen.getByRole('button', { name: 'Add client' }) as HTMLButtonElement).disabled).toBe(false)
+    for (const name of ['Okafor & Partners', 'Beta Traders', 'Honeywell Group']) {
+      expect((within(rowFor(name)).getByRole('button') as HTMLButtonElement).disabled, name).toBe(false)
+    }
+    expect(screen.queryByTestId('clients-admin-only')).toBeNull()
+    fireEvent.click(rowFor('Okafor & Partners'))
+    expect(screen.getByRole('dialog', { name: 'Edit client' })).toBeTruthy()
+    expect(screen.queryByTestId('entity-readonly-note')).toBeNull()
+  })
+
+  it('Clients: the disabled recipe matches Invite people', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS)
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS, { members: SELF('preparer') })} />)
+    await screen.findByText('Okafor & Partners')
+    for (const el of [screen.getByRole('button', { name: 'Add client' }), within(rowFor('Okafor & Partners')).getByRole('button')] as HTMLButtonElement[]) {
+      expect(el.disabled).toBe(true)
+      expect(el.style.opacity).toBe('0.45')
+      expect(el.style.cursor).toBe('not-allowed')
+      expect(el.style.filter).toBe('none')
+    }
+  })
+
+  it('Clients: an admin demoted mid-session sees the server\'s 403 on the row', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS, { ok: false, status: 403, body: { error: 'only an admin can change a client' } })
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS, { refetchMembers: vi.fn() })} />)
+    await screen.findByText('Okafor & Partners')
+    const row = rowFor('Okafor & Partners')
+    const action = within(row).getByRole('button')
+    fireEvent.click(action)
+    fireEvent.click(action)
+    await within(row).findByText('only an admin can change a client')
+    expect(within(row).getByRole('button').textContent).toBe('Archive')
+  })
+
+  it('Clients: a 403 on archive refetches the roster', async () => {
+    mockFetchArchiveAware(ACTIVE_ROWS, { ok: false, status: 403, body: { error: 'only an admin can change a client' } })
+    const refetchMembers = vi.fn()
+    render(<ClientsView ctx={clientsCtx(ACTIVE_ROWS, { refetchMembers })} />)
+    await screen.findByText('Okafor & Partners')
+    const action = within(rowFor('Okafor & Partners')).getByRole('button')
+    fireEvent.click(action)
+    fireEvent.click(action)
+    await waitFor(() => expect(refetchMembers).toHaveBeenCalledTimes(1))
   })
 })
 

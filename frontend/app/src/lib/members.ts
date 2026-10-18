@@ -605,6 +605,8 @@ export type InviteAccount = 'none' | 'unconfirmed' | 'confirmed' | 'unknown'
 export type PendingInvite = { id: string; email: string; role: AccessRole; expiresAt: string; delivery: string; account?: InviteAccount }
 
 export const INVITE_ADMIN_ONLY = 'Only an admin can invite people.'
+export const CLIENT_ADMIN_ONLY = 'Only an admin can change a client.'
+export const COMPANY_ADMIN_ONLY = 'Only an admin can change the company.'
 
 export async function listInvitations(f: AuthedFetch, base: string): Promise<InvitationWire[]> {
   const body = await f<{ invitations: InvitationWire[] }>(`${base}/api/tenancy/v1/invitations`)

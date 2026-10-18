@@ -22,13 +22,13 @@
 // file only supplies the "when to open which mode" wiring ClientsView's own local
 // `useState<{mode,entity}|null>` precedent already established.
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 
 import { EmptyState, ErrorState, gatewayBase, Loading } from '@invoice-os/api-client'
 
 import { API_BASE, API_KEYS, CERTS, CONNECTOR_DEFS, ENDPOINTS, SETTINGS_TABS, WEBHOOKS } from '../data'
 import { copyGlyph, plusGlyph, shieldGlyph } from '../glyphs'
-import { companySetupAccess } from '../lib/members'
+import { COMPANY_ADMIN_ONLY, companySetupAccess } from '../lib/members'
 import { NO_COMPANY_COPY } from './AddCompanyTask'
 import { ConnectorDetail } from './ConnectorDetail'
 import { EntityFormModal } from './EntityFormModal'
@@ -49,6 +49,9 @@ function methodColor(m: 'POST' | 'GET'): { bg: string; color: string } {
 
 export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
   const { settingsTab, sandbox, connectors, mode, activeEntity, entitiesState, refetchEntities } = ctx
+  const companyAccess = companySetupAccess(ctx.membersState, ctx.members)
+  const adminOnly = companyAccess === 'wait'
+  const companyNoteId = useId()
   const connCount = CONNECTOR_DEFS.filter((c) => connectors[c.id]).length
   const [openId, setOpenId] = useState<ConnectorId | null>(null)
   const [mappingOpen, setMappingOpen] = useState(false)
@@ -114,12 +117,14 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                 <span style={{ fontSize: 15, fontWeight: 700 }}>Your company</span>
                 {/* Same button, two labels/modes: Add (admin only) or Edit once the one
                     entity this workspace can ever have exists. */}
-                {(activeEntity || companySetupAccess(ctx.membersState, ctx.members) === 'add') && (
+                {(activeEntity || companyAccess === 'add') && (
                 <button
                   onClick={() => setCompanyModal(activeEntity ? { mode: 'edit', entity: activeEntity } : { mode: 'create' })}
-                  disabled={base == null}
+                  disabled={base == null || (activeEntity != null && adminOnly)}
+                  title={activeEntity && adminOnly ? COMPANY_ADMIN_ONLY : undefined}
+                  aria-describedby={activeEntity && adminOnly ? companyNoteId : undefined}
                   className={activeEntity ? 'v2-btn v2-btn-ghost pf-btn' : 'v2-btn v2-btn-primary pf-btn'}
-                  style={{ ...(activeEntity ? { height: 32, fontSize: 13 } : null), ...(base == null ? DISABLED : null) }}
+                  style={{ ...(activeEntity ? { height: 32, fontSize: 13 } : null), ...(base == null || (activeEntity && adminOnly) ? DISABLED : null) }}
                 >
                   {activeEntity ? (
                     'Edit company'
@@ -131,6 +136,11 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                 </button>
                 )}
               </div>
+              {activeEntity && adminOnly && (
+                <div id={companyNoteId} data-testid="settings-company-admin-only" style={{ padding: '8px 20px 0', fontSize: 11.5, color: 'var(--fg-3)', textAlign: 'right' }}>
+                  {COMPANY_ADMIN_ONLY}
+                </div>
+              )}
               {activeEntity ? (
                 <div style={{ padding: '6px 20px 10px' }}>
                   {[
@@ -156,7 +166,7 @@ export function SettingsView({ ctx }: { ctx: PlatformCtx }) {
                 </div>
               ) : (
                 <div style={{ padding: 20 }}>
-                  {companySetupAccess(ctx.membersState, ctx.members) === 'wait' ? (
+                  {adminOnly ? (
                     <EmptyState title={NO_COMPANY_COPY.title} message={NO_COMPANY_COPY.message} />
                   ) : (
                     <EmptyState title="No company set up yet" message="Add your business entity so invoices have somewhere real to file against." />

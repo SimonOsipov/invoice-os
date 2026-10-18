@@ -15,7 +15,7 @@
 // status filter below adds a SECOND, independent fetch for this view's own rows —
 // ctx.entities itself stays unfiltered ([clients-fetches-its-own-filtered-list]).
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 
 import { ApiError, EmptyState, ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -34,11 +34,14 @@ import {
   type EntityFilterPos,
   type EntityListResponse,
 } from '../lib/portfolio'
-import { companySetupAccess } from '../lib/members'
+import { CLIENT_ADMIN_ONLY, companySetupAccess } from '../lib/members'
 import { entityHealth, getRollup, type EntityHealth, type Rollup } from '../lib/dashboard'
 import { NO_COMPANY_COPY } from './AddCompanyTask'
 import { EntityFormModal } from './EntityFormModal'
 import type { PlatformCtx } from '../types'
+
+// filter:none outranks .v2-btn:hover's lift (same recipe as MembersView's Invite people).
+const DISABLED: React.CSSProperties = { opacity: 0.45, cursor: 'not-allowed', filter: 'none' }
 
 const FILTER_POSITIONS: Array<{ pos: EntityFilterPos; label: string }> = [
   { pos: 'all', label: 'All' },
@@ -123,6 +126,10 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
   )
   const filteredState = base == null ? 'idle' : filtered.status
   const access = companySetupAccess(ctx.membersState, ctx.members)
+  // Only a known non-admin is blocked; loading/error keep today's controls (D10).
+  const adminOnly = access === 'wait'
+  const canChange = !adminOnly
+  const noteId = useId()
   const noClients = access === 'wait' ? NO_COMPANY_COPY : { title: 'No entities yet', message: 'Add your first business entity to get started.' }
   const rows = filtered.data?.entities ?? []
   const shown = rows.length
@@ -176,6 +183,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
       filtered.run()
     } catch (err) {
       setArmedId(null)
+      if (err instanceof ApiError && err.status === 403) ctx.refetchMembers()
       setArchiveError({ id: entity.id, message: err instanceof ApiError ? err.message : 'Something went wrong. Please try again.' })
     } finally {
       setArchivingId(null)
@@ -215,17 +223,26 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                 {label}
               </button>
             ))}
-          {access === 'add' && (
+          {(access === 'add' || adminOnly) && (
             <button
               onClick={() => setModal({ mode: 'create' })}
-              disabled={base == null}
+              disabled={base == null || !canChange}
+              title={adminOnly ? CLIENT_ADMIN_ONLY : undefined}
+              aria-describedby={adminOnly ? noteId : undefined}
               className="v2-btn v2-btn-primary pf-btn"
+              style={base == null || !canChange ? DISABLED : undefined}
             >
               <span style={{ display: 'inline-flex', marginRight: -2 }}>{plusGlyph}</span> Add client
             </button>
           )}
         </div>
       </div>
+
+      {adminOnly && (
+        <div id={noteId} data-testid="clients-admin-only" style={{ margin: '-10px 0 14px', fontSize: 11.5, color: 'var(--fg-3)', textAlign: 'right' }}>
+          {CLIENT_ADMIN_ONLY}
+        </div>
+      )}
 
       {filteredState === 'loading' && <Loading label="Loading entities…" />}
 
@@ -261,6 +278,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
             return (
               <div
                 key={e.id}
+                data-testid="client-row"
                 onClick={() => setModal({ mode: 'edit', entity: e })}
                 className="pf-row pf-list-row"
                 style={{ display: 'grid', gridTemplateColumns: 'minmax(160px, 1fr) 160px 130px 150px 160px', gap: 16, padding: '14px 18px', borderBottom: '1px solid var(--line-1)', alignItems: 'center' }}
@@ -284,9 +302,11 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
                       ev.stopPropagation() // the row's own onClick opens the edit modal (AC #6)
                       void handleArchiveClick(e, action)
                     }}
-                    disabled={archivingId === e.id}
+                    disabled={archivingId === e.id || !canChange}
+                    title={adminOnly ? CLIENT_ADMIN_ONLY : undefined}
+                    aria-describedby={adminOnly ? noteId : undefined}
                     className="v2-btn v2-btn-ghost pf-btn"
-                    style={{ height: 30, padding: '0 12px', fontSize: 12.5, color: action.confirming ? 'var(--status-red-text)' : 'var(--fg-1)' }}
+                    style={{ height: 30, padding: '0 12px', fontSize: 12.5, color: action.confirming ? 'var(--status-red-text)' : 'var(--fg-1)', ...(canChange ? null : DISABLED) }}
                   >
                     {action.label}
                   </button>
@@ -305,6 +325,7 @@ export function ClientsView({ ctx }: { ctx: PlatformCtx }) {
           entity={modal.entity}
           ctx={ctx}
           base={base}
+          readOnlyReason={adminOnly ? CLIENT_ADMIN_ONLY : undefined}
           onClose={() => setModal(null)}
           onSuccess={() => {
             refetchEntities()

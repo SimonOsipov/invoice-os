@@ -295,7 +295,7 @@ describe('EntityFormModal refused create (LOGFIX-06-04)', () => {
     expect(refetchMembers).toHaveBeenCalledTimes(1)
   })
 
-  it('a refused edit keeps the generic message', async () => {
+  it('a refused edit refetches the roster and keeps the generic message', async () => {
     vi.mocked(updateEntity).mockRejectedValue(new ApiError('http', 'your membership in this workspace is not active', 403))
     const refetchMembers = vi.fn()
     const { container, dialog } = mount('edit', 'inhouse', refetchMembers)
@@ -303,7 +303,32 @@ describe('EntityFormModal refused create (LOGFIX-06-04)', () => {
     fireEvent.click(dialog.getByRole('button', { name: 'Save changes' }))
     expect(await dialog.findByText(GENERIC)).toBeTruthy()
     expect(dialog.queryByText('your membership in this workspace is not active')).toBeNull()
-    expect(refetchMembers).not.toHaveBeenCalled()
+    expect(refetchMembers).toHaveBeenCalledTimes(1)
+  })
+
+  it('EntityFormModal: readOnlyReason locks the form', () => {
+    const onClose = vi.fn()
+    const { container } = render(
+      <EntityFormModal mode="edit" entity={ENTITY} ctx={ctxFor('firm')} base="https://gateway.test" readOnlyReason="R" onClose={onClose} onSuccess={() => {}} />,
+    )
+    const dialog = within(screen.getByRole('dialog', { name: 'Client details' }))
+    const inputs = [...container.querySelectorAll('input')] as HTMLInputElement[]
+    expect(inputs).toHaveLength(13)
+    for (const i of inputs) expect(i.disabled).toBe(true)
+    expect(container.querySelector('button[type="submit"]')).toBeNull()
+    expect(dialog.getByTestId('entity-readonly-note').textContent).toBe('R')
+    fireEvent.submit(container.querySelector('form') as HTMLFormElement)
+    expect(updateEntity).not.toHaveBeenCalled()
+    fireEvent.click(dialog.getByText('Close', { selector: 'button' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('EntityFormModal: without readOnlyReason the edit dialog is unchanged', () => {
+    const { container, dialog } = mount('edit', 'firm')
+    expect(screen.getByRole('dialog', { name: 'Edit client' })).toBeTruthy()
+    for (const i of [...container.querySelectorAll('input')] as HTMLInputElement[]) expect(i.disabled).toBe(false)
+    expect(dialog.getByRole('button', { name: 'Save changes' })).toBeTruthy()
+    expect(container.querySelector('[data-testid="entity-readonly-note"]')).toBeNull()
   })
 
   it('a 409 does not re-read the roster', async () => {

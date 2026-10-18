@@ -127,6 +127,25 @@ describe('search', () => {
     expect(document.querySelector('[aria-label="Clear search"]')).toBeNull()
   })
 
+  it('VW-16 Back clears the query', async () => {
+    await mount('/')
+    click(row('Regulation'))
+    type('sage')
+    expect(crumbs()).toEqual(['Blog', 'Search'])
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    expect(input().value).toBe('')
+    expect(crumbs()).toEqual(['Blog', 'Regulation'])
+  })
+
+  it('VW-17 a band holds at most 3 cards but its button counts all posts', async () => {
+    const base = TEST_DATA.posts.find((p) => p.category_id === 'c1')!
+    const posts = [...TEST_DATA.posts, ...[1, 2, 3].map((n) => ({ ...base, id: `extra-${n}`, title: `Extra ${n}` }))]
+    await mount('/', { ...TEST_DATA, posts })
+    const band = all('#blog-main section')[1]
+    expect(band.querySelectorAll('button:not(.ds-btn)')).toHaveLength(3)
+    expect(band.querySelector('button.ds-btn')?.textContent).toBe('All 5 posts')
+  })
+
   it('VW-05 no hit shows the empty state with chips', async () => {
     await mount('/')
     type('zzzz')

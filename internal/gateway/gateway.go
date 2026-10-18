@@ -88,7 +88,7 @@ type router struct {
 func (rt *router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	service, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, routePrefix), "/")
 	proxy, ok := rt.proxies[service]
-	// Refuse "internal" as the raw or the cleaned first segment: CONNECT is not cleaned by the mux, and the proxy forwards the raw path.
+	// Refuse "internal" as the raw or the cleaned first segment: CONNECT is not cleaned by the mux.
 	raw, _, _ := strings.Cut(rest, "/")
 	if cleaned, _, _ := strings.Cut(strings.TrimPrefix(path.Clean("/"+rest), "/"), "/"); !ok || raw == "internal" || cleaned == "internal" {
 		writeError(w, http.StatusNotFound, "not found")

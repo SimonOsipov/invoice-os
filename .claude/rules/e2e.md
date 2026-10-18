@@ -31,7 +31,7 @@ paths:
 - Never publish a rule-set version in a topology spec. The api contract spec publishes only with the start date `3001-01-01`.
 - Label a mock-backed assertion as a fixture check, in the spec. It pins a fixture, not a contract.
 - Test the `library` SPA for render and consent only. It is static content with no backend.
-- Test the `blog` SPA for render, layout and consent. It reads published posts from the gateway's public blog routes.
+- Test the `blog` SPA for render, layout and consent.
 - Cover the blog's crawler HTML, sitemap and robots in `e2e/api/contract-blog-crawler.spec.ts`.
 - Cover the library consent notice, the stored answer, the privacy link and the production-host-only tag in `e2e/smoke/library-consent.spec.ts`.
 - Cover the blog consent in `e2e/smoke/blog-consent.spec.ts`.

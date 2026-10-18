@@ -51,6 +51,7 @@ paths:
 - Run `spa-build-gate` on a full-scope push and dispatch. Each SPA must serve `/health` and a `/build.txt` that names the commit.
 - Give a PR the library lane when every changed path is under `frontend/library/`. `scripts/ci/lane.sh` decides.
 - Give a PR the blog lane when every changed path is under `frontend/blog/`.
+- `frontend/blog/index.html`, `frontend/blog/Dockerfile` and `frontend/blog/Dockerfile.dockerignore` give the full lane. They are inputs of `cmd/blog`.
 - Give a PR that touches both prefixes, or any other path, the full lane.
 - On the library lane, CI runs the `Library` job in place of `Frontend`. On the blog lane, CI runs the `Blog` job in place of `Frontend`.
 - On a small lane, Dev Env prepares no fork and runs no E2E.

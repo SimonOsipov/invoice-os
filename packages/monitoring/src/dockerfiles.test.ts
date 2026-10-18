@@ -8,7 +8,7 @@ const codeLines = (dockerfile: string) =>
   dockerfile.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('#'))
 
 // Monitored SPAs that never call the gateway, so their image bakes no VITE_GATEWAY_URL.
-const NO_GATEWAY = ['library', 'blog']
+const NO_GATEWAY = ['library']
 
 describe('dockerfiles', () => {
   it('dockerfiles_everyMonitoredSpaBakesTheDsnAndReleaseFallback', () => {
@@ -96,11 +96,11 @@ describe('dockerfiles', () => {
     for (const name of monitored) {
       const lines = codeLines(readFileSync(join(FRONTEND, name, 'Dockerfile'), 'utf8'))
       const froms = lines.flatMap((l, i) => (/^FROM\s/i.test(l) ? [i] : []))
-      expect(froms, `${name}: expected a build FROM and a serve FROM`).toHaveLength(2)
-      const [buildFrom, serveFrom] = froms
+      expect(froms.length, `${name}: expected a build FROM and a serve FROM`).toBeGreaterThanOrEqual(2)
+      const buildFrom = froms[0]
       const build = lines.findIndex((l) => /^RUN\s+pnpm\s+--filter/i.test(l))
       expect(build, `${name}: no build RUN`).toBeGreaterThan(buildFrom)
-      expect(build, `${name}: build RUN is not in the build stage`).toBeLessThan(serveFrom)
+      expect(build, `${name}: build RUN is not in the build stage`).toBeLessThan(froms[1])
 
       // Control: the same finder locates a pre-existing ARG inside the build stage.
       const dsn = lines.findIndex((l) => /^ARG\s+VITE_SENTRY_DSN$/i.test(l))
@@ -116,7 +116,7 @@ describe('dockerfiles', () => {
       expect(lines.filter((l) => /^ENV\b.*SENTRY_AUTH_TOKEN/i.test(l)), `${name}: ENV names the token`).toEqual([])
       expect(lines.filter((l) => /SENTRY_AUTH_TOKEN=/i.test(l)), `${name}: token assigned`).toEqual([])
 
-      const serve = lines.slice(serveFrom + 1)
+      const serve = lines.slice(froms[1] + 1)
       expect(serve.length, `${name}: serve stage is empty`).toBeGreaterThan(0)
       expect(serve.filter((l) => /SENTRY_AUTH_TOKEN/i.test(l)), `${name}: serve stage names the token`).toEqual([])
     }

@@ -1191,16 +1191,17 @@ func TestForkVarsAfterURLs_InheritedReferencesAddOneDelete(t *testing.T) {
 	}
 }
 
-// A deleted name is neither held nor written: blog holds 1 of 3, not 3 of 3.
+// A deleted name is neither held nor written: blog holds 2 of 4, not 4 of 4.
 func TestForkVarsAfterURLs_DeletedNamesAreNotCountedAsHeld(t *testing.T) {
 	stores := afterProdStores()
 	stores[sentrySvcID("blog")]["VITE_LANDING_URL"] = batchLandingURL
+	stores[sentrySvcID("blog")]["VITE_GATEWAY_URL"] = batchGatewayURL
 	s := newAfterShim(t, stores)
 	out, code := runAfter(t, s)
 	if code != 0 {
 		t.Fatalf("exit %d, want 0; output = %q", code, clip(out))
 	}
-	if got, want := heldLines(out)["blog"], "1 of 3"; got != want {
+	if got, want := heldLines(out)["blog"], "2 of 4"; got != want {
 		t.Errorf("blog held line = %q, want %q", got, want)
 	}
 	if bw := writesTo(collectionWrites(t, s), sentrySvcID("blog")); len(bw) != 0 {
@@ -1679,6 +1680,7 @@ func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
 		{"landing", "VITE_LIBRARY_URL", urls[5]},
 		{"library", "VITE_APP_URL", urls[1]},
 		{"library", "VITE_LANDING_URL", urls[2]},
+		{"blog", "VITE_GATEWAY_URL", urls[0]},
 		{"blog", "VITE_LANDING_URL", urls[2]},
 		{"landing", "VITE_SUPPORT_URL", urls[4]},
 		{"landing", "VITE_OPS_URL", urls[3]},

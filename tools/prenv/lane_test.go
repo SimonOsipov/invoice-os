@@ -223,6 +223,22 @@ func TestLane_BlogOnlyPathsTakeTheSmallLane(t *testing.T) {
 	}
 }
 
+func TestLane_BlogServerInputsGiveTheFullLane(t *testing.T) {
+	for _, in := range []string{"frontend/blog/index.html", "frontend/blog/Dockerfile", "frontend/blog/Dockerfile.dockerignore"} {
+		t.Run(in, func(t *testing.T) {
+			if got := laneClassify(t, in); got != "full" {
+				t.Fatalf("classify %s = %q, want full", in, got)
+			}
+			if got := laneClassify(t, in, "frontend/blog/src/App.tsx"); got != "full" {
+				t.Fatalf("classify %s with App.tsx = %q, want full", in, got)
+			}
+			if got := laneClassify(t, "frontend/blog/src/App.tsx", in); got != "full" {
+				t.Fatalf("classify App.tsx with %s = %q, want full", in, got)
+			}
+		})
+	}
+}
+
 func TestLane_LibraryAndBlogTogetherGiveTheFullLane(t *testing.T) {
 	for _, order := range [][]string{
 		{"frontend/library/a.ts", "frontend/blog/b.ts"},
@@ -319,6 +335,17 @@ func TestLanePR_BlogOnlyMergeIsTheSmallLane(t *testing.T) {
 	}
 	requireLine(t, out, "lane=blog")
 	requireLine(t, ghOut, "lane=blog")
+}
+
+func TestLanePR_ABlogServerInputMergeIsTheFullLane(t *testing.T) {
+	r := newLaneRepo(t)
+	r.mergeBranch(t, "frontend/blog/index.html")
+	out, code, ghOut := runLane(t, r.dir, nil, "", "pr")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	requireLine(t, out, "lane=full")
+	requireLine(t, ghOut, "lane=full")
 }
 
 func TestLanePR_MixedMergeIsTheFullLane(t *testing.T) {
@@ -460,6 +487,17 @@ func TestLanePush_BlogOnlySinceTheLastFullDeploy(t *testing.T) {
 	if !strings.Contains(out, "run 10") {
 		t.Fatalf("reason does not name run 10: %s", out)
 	}
+}
+
+func TestLanePush_ABlogServerInputSinceTheBaseGivesFull(t *testing.T) {
+	r := newLaneRepo(t)
+	f := r.commit(t, "full", "README.md", "frontend/blog/a.ts")
+	s := r.commit(t, "server input", "frontend/blog/Dockerfile")
+	p := pushRepo{laneRepo: r, F: f, S: s}
+	gh := newLaneGH(t)
+	gh.serve(t, lanePushRun(10, f, laneFullChain()))
+	out, code, ghOut := p.push(t, gh, s)
+	wantScope(t, out, code, ghOut, "full")
 }
 
 func TestLanePush_LibraryAndBlogSinceTheBaseGiveFull(t *testing.T) {

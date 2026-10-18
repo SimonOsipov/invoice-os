@@ -1705,12 +1705,12 @@ reconcile_url_variables() {
   pass_plan_add "$ops_id" ops-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
   pass_plan_add "$support_id" support-console "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url" "VITE_APP_URL=$app_url"
   pass_plan_add "$library_id" library "" "VITE_APP_URL=$app_url" "VITE_LANDING_URL=$landing_url"
-  pass_plan_add "$blog_id" blog "" "VITE_LANDING_URL=$landing_url"
+  pass_plan_add "$blog_id" blog "" "VITE_GATEWAY_URL=$gateway_url" "VITE_LANDING_URL=$landing_url"
 }
 
 reconcile_url_variables_verdict() {
   pass_owned_verdict reconcile_url_variables || return 1
-  echo "All 19 environment variables confirmed by independent re-query."
+  echo "All 20 environment variables confirmed by independent re-query."
 }
 
 # cmd_reconcile_urls <environment-id> <gateway-url> <app-url> <landing-url> <ops-console-url> <support-console-url> <library-url> <blog-url>

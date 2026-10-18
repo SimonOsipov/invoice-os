@@ -31,7 +31,7 @@ import {
 } from '../api/client'
 import { freshTin } from '../api/fixtures'
 import { seedConsent } from '../smoke/landingConsent'
-import { approvalRun404Dropper, expectedStatusDropper, type Dropper } from './consoleGate'
+import { approvalRun404Dropper, consoleErrorsLine, expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS } from './layout'
 
 // The public marketing landing page — sign-out's redirect target. Imported from the
@@ -63,8 +63,8 @@ test('deployed app: sign-out redirects to the landing page', async ({ page }) =>
   await page.getByRole('button', { name: 'Sign out' }).click()
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL))
 
-  // One line: the flaky reporter keeps only the first line of the error.
-  expect(errors, `console errors on the app: ${errors.join(' | ')}`).toEqual([])
+  // One line, so the flaky reporter keeps the url (consoleGate.test.ts, consoleErrorsLine).
+  expect(errors, `console errors on the app: ${consoleErrorsLine(errors)}`).toEqual([])
 })
 
 // A live hand-off session wins over a later sign-in from landing:

@@ -90,6 +90,11 @@ export function sourcedConsoleError(text: string, locationUrl: string, failed: s
   return parts.length > 0 ? `${text} [${parts.join('; ')}]` : text
 }
 
+// One-line form of the collected errors: the flaky reporter keeps only a message's first line.
+export function consoleErrorsLine(errors: string[]): string {
+  return errors.map((e) => e.replace(/\s*[\r\n]+\s*/g, ' ')).join(' | ')
+}
+
 // Console/pageerror collector whose console errors carry their source. An entry lists the
 // responses of its status seen up to its console line; a later response only fills an
 // entry of that status that still reads `none seen`.

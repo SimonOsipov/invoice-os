@@ -2088,3 +2088,42 @@ func TestInvitations_RevokeOfAnExpiredPendingInviteSucceeds(t *testing.T) {
 		t.Errorf("invitation.revoked rows = %d, want 2", n)
 	}
 }
+
+func TestInvitations_ResendAndRevokeKeepTheClientSet(t *testing.T) {
+	w := newInvWorld(t, "Resend Set Tenant", "Ada Obi")
+	e1 := seedEntity(t, w.super, w.tenant)
+	listed := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "set@x.test", invitedBy: w.admin})
+	every := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "all@x.test", invitedBy: w.admin})
+	setInviteClients(t, w.super, w.tenant, listed.ID, false, e1)
+	setInviteClients(t, w.super, w.tenant, every.ID, true)
+	flagOf := func(id string) (all bool) {
+		if err := w.super.QueryRow(context.Background(), `SELECT all_clients FROM invitations WHERE id = $1`, id).Scan(&all); err != nil {
+			t.Fatalf("read all_clients: %v", err)
+		}
+		return all
+	}
+
+	for _, id := range []string{listed.ID, every.ID} {
+		if _, err := w.store.ResendInvitation(w.adminCtx(), id); err != nil {
+			t.Fatalf("resend %s: %v", id, err)
+		}
+	}
+	if got := inviteClientRows(t, w.super, listed.ID); !slices.Equal(got, []string{e1}) || flagOf(listed.ID) {
+		t.Errorf("after resend: set invite rows %v flag %v, want [%s] and false", got, flagOf(listed.ID), e1)
+	}
+	if got := inviteClientRows(t, w.super, every.ID); len(got) != 0 || !flagOf(every.ID) {
+		t.Errorf("after resend: all invite rows %v flag %v, want none and true", got, flagOf(every.ID))
+	}
+
+	for _, id := range []string{listed.ID, every.ID} {
+		if err := w.store.RevokeInvitation(w.adminCtx(), id); err != nil {
+			t.Fatalf("revoke %s: %v", id, err)
+		}
+	}
+	if got := inviteClientRows(t, w.super, listed.ID); !slices.Equal(got, []string{e1}) || flagOf(listed.ID) {
+		t.Errorf("after revoke: set invite rows %v flag %v, want [%s] and false", got, flagOf(listed.ID), e1)
+	}
+	if got := inviteClientRows(t, w.super, every.ID); len(got) != 0 || !flagOf(every.ID) {
+		t.Errorf("after revoke: all invite rows %v flag %v, want none and true", got, flagOf(every.ID))
+	}
+}

@@ -1,3 +1,4 @@
+import './confirmLink'
 import './instrument'
 
 import { StrictMode } from 'react'

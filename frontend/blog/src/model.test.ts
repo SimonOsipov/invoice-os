@@ -75,9 +75,23 @@ describe('resolveView', () => {
     expect(resolveView({ view: 'home' }, 'x', { status: 'failed' }).kind).toBe('failed')
     expect(resolveView({ view: 'subscribe' }, '', { status: 'failed' }).kind).toBe('subscribe')
   })
+
+  it('resolve_confirmIgnoresTheLoadState', () => {
+    for (const state of [{ status: 'loading' }, { status: 'failed' }, ready(TEST_DATA)] as const) {
+      expect(resolveView({ view: 'confirm' }, '', state).kind, state.status).toBe('confirm')
+    }
+  })
 })
 
 describe('crumbsFor', () => {
+  it('crumbs_confirmIsBlogSubscribe', () => {
+    const nav = vi.fn()
+    const crumbs = crumbsFor(resolveView({ view: 'confirm' }, '', ready(TEST_DATA)), nav)
+    expect(crumbs.map((c) => c.label)).toEqual(['Blog', 'Subscribe'])
+    crumbs[1].go?.()
+    expect(nav).toHaveBeenCalledWith({ view: 'subscribe' })
+  })
+
   const labels = (route: Route, state = ready(TEST_DATA), nav = vi.fn()) =>
     crumbsFor(resolveView(route, '', state), nav).map((c) => c.label)
 

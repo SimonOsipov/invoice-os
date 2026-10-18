@@ -109,3 +109,49 @@ for (const width of PHONE_WIDTHS) {
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 }
+
+// No token in the URL, so the card shows the expired-link state with no request made.
+const confirmCard = (page: Page) => main(page).getByText('This link has expired or was already used.').locator('xpath=../..')
+
+async function visitConfirm(page: Page, width: number): Promise<void> {
+  await page.setViewportSize({ width, height: 1080 })
+  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+  const response = await page.goto(`${BLOG_URL}/subscribe/confirm`)
+  expect(response?.ok(), '/subscribe/confirm did not answer 2xx').toBeTruthy()
+  await expect(main(page).getByRole('heading', { level: 1 }), '/subscribe/confirm never rendered the page').toBeVisible()
+  await expect(main(page).getByRole('button', { name: 'Subscribe again' }), 'the confirm card Subscribe again button').toBeVisible()
+}
+
+for (const width of WIDE_WIDTHS) {
+  test(`blog confirm: card and intro side by side, card fits main (${width})`, async ({ page }, testInfo) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await visitConfirm(page, width)
+    const i = await rectOf(intro(page), 'the intro column')
+    const c = await rectOf(confirmCard(page), 'the card')
+    const m = await rectOf(main(page), '#blog-main')
+    await attachJson(testInfo, `blog-confirm-columns-${width}`, { intro: i, card: c, main: m })
+    expect(rectsOverlap(i, c), 'the intro overlaps the card').toBe(false)
+    expect(c.x, 'the card sits right of the intro').toBeGreaterThanOrEqual(i.x + i.width - SLACK_PX)
+    expect(enclosesRect(m, i, SLACK_PX), 'the intro leaves main').toBe(true)
+    expect(enclosesRect(m, c, SLACK_PX), 'the card leaves main').toBe(true)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+}
+
+for (const width of PHONE_WIDTHS) {
+  test(`blog confirm: card sits below the intro and fits main (${width})`, async ({ page }, testInfo) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await visitConfirm(page, width)
+    const i = await rectOf(intro(page), 'the intro column')
+    const c = await rectOf(confirmCard(page), 'the card')
+    const m = await rectOf(main(page), '#blog-main')
+    const scroll = await main(page).evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+    await attachJson(testInfo, `blog-confirm-phone-${width}`, { intro: i, card: c, main: m, ...scroll })
+    expect(c.y, 'the card sits below the intro').toBeGreaterThanOrEqual(i.y + i.height - SLACK_PX)
+    expect(enclosesRect(m, c, SLACK_PX), 'the card leaves main').toBe(true)
+    expect(scroll.scrollWidth - scroll.clientWidth, '#blog-main scrolls sideways').toBeLessThanOrEqual(1)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+}

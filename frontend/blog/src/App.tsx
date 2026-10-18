@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Article } from './components/Article'
 import { CategoryPage } from './components/CategoryPage'
+import { Confirm } from './components/Confirm'
 import { Header } from './components/Header'
 import { Home } from './components/Home'
 import { LoadFailed } from './components/LoadFailed'
@@ -9,6 +10,7 @@ import { SearchResults } from './components/SearchResults'
 import { Sidebar } from './components/Sidebar'
 import { Subscribe } from './components/Subscribe'
 import { chooseConsent, CookieNotice, readConsent, syncBlogConsent, trackBlogPageView } from './analytics'
+import { confirmToken } from './confirmLink'
 import { loadBlog, type BlogData } from './data'
 import { privacyHref } from './links'
 import { crumbsFor, resolveView, type BlogState } from './model'
@@ -121,6 +123,9 @@ export function App({ load = loadBlog }: { load?: () => Promise<BlogData> }) {
           <NotFound categories={data.categories} onCategory={(id) => navigate({ view: 'category', id })} />
         )}
         {view.kind === 'failed' && <LoadFailed onRetry={retry} />}
+        {view.kind === 'confirm' && (
+          <Confirm token={confirmToken()} onHome={() => navigate(HOME)} onSubscribe={() => navigate({ view: 'subscribe' })} />
+        )}
         {data && view.kind === 'subscribe' && <Subscribe categories={data.categories} onHome={() => navigate(HOME)} />}
         {data && view.kind === 'home' && (
           <Home

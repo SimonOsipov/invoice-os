@@ -81,3 +81,35 @@ describe('Nav libraryHref', () => {
     expect(hrefs.some((h) => h.startsWith('//'))).toBe(false)
   })
 })
+
+describe('Nav blogHref', () => {
+  const LIB = 'https://lib.x'
+  const BLOG = 'https://blog.x'
+  const render = (props: Record<string, unknown>) =>
+    renderToStaticMarkup(createElement(Nav, { onSignIn: () => {}, onBookDemo: () => {}, ...props }))
+  const hrefsOf = (props: Record<string, unknown>) => Array.from(render(props).matchAll(ANCHOR_HREF)).map((m) => m[1])
+
+  it('Nav_rendersBlogAfterLibraryWhenSet', () => {
+    expect(hrefsOf({ libraryHref: LIB, blogHref: BLOG })).toEqual(['#top', ...NAV_ONLY_TARGETS, LIB, BLOG])
+    expect(render({ libraryHref: LIB, blogHref: BLOG })).toMatch(/<a href="https:\/\/blog\.x" class="ios-nav-link"/)
+  })
+
+  it('Nav_rendersNoBlogWhenUnset', () => {
+    for (const props of [{ blogHref: null }, {}, { blogHref: '' }]) {
+      expect(hrefsOf(props)).toEqual(['#top', ...NAV_ONLY_TARGETS])
+      expect(render(props)).not.toContain('Blog')
+    }
+  })
+
+  it('Nav_blogShowsWithoutLibrary', () => {
+    const html = render({ blogHref: BLOG })
+    expect(html).toContain('>Blog<')
+    expect(html).not.toContain('Library')
+  })
+
+  it('Nav_theBlogHrefIgnoresHrefPrefix', () => {
+    const hrefs = hrefsOf({ hrefPrefix: '/', blogHref: BLOG })
+    expect(hrefs.filter((h) => h === BLOG), 'control: the blog href renders once').toHaveLength(1)
+    expect(hrefs.filter((h) => h !== BLOG).every((h) => h.startsWith('/#'))).toBe(true)
+  })
+})

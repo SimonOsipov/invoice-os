@@ -21,7 +21,7 @@ let mounted = false
 let onSignIn: Mock<() => void>
 let onBookDemo: Mock<() => void>
 
-const mount = (props: { hrefPrefix?: string; libraryHref?: string } = {}) => {
+const mount = (props: { hrefPrefix?: string; libraryHref?: string; blogHref?: string | null } = {}) => {
   act(() => {
     root.render(createElement(Nav, { onSignIn, onBookDemo, ...props }))
   })
@@ -391,5 +391,29 @@ describe('the menu Library link', () => {
     const hrefs = Array.from(menu()!.querySelectorAll('a')).map((a) => a.getAttribute('href'))
     expect(hrefs.at(-1)).toBe('https://lib.x')
     expect(hrefs.slice(0, -1).every((h) => h!.startsWith('/#'))).toBe(true)
+  })
+})
+
+describe('the menu Blog link', () => {
+  it('Menu_listsBlogAfterLibraryAndClosesOnClick', () => {
+    mount({ libraryHref: 'https://lib.x', blogHref: 'https://blog.x' })
+    toggle()
+    const links = Array.from(menu()!.querySelectorAll('a'))
+    expect(links.map((a) => a.textContent)).toEqual([...NAV_LINKS.map((l) => l.label), 'Library', 'Blog'])
+    expect(links.at(-1)!.getAttribute('href')).toBe('https://blog.x')
+    act(() => void links.at(-1)!.click())
+    expect(menu()).toBeNull()
+  })
+
+  it('Menu_hasNoBlogWhenUnset', () => {
+    mount({ blogHref: null })
+    toggle()
+    expect(menu()!.querySelectorAll('a')).toHaveLength(NAV_LINKS.length)
+    toggle()
+    act(() => root.unmount())
+    root = createRoot(container)
+    mount({ libraryHref: 'https://lib.x', blogHref: null })
+    toggle()
+    expect(menu()!.querySelectorAll('a')).toHaveLength(NAV_LINKS.length + 1)
   })
 })

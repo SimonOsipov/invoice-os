@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/notifications"
 )
 
@@ -982,5 +983,43 @@ func TestNotificationsMain_RegistersTheBlogRoutes(t *testing.T) {
 		default:
 			t.Errorf("%q is registered %d times", pattern, found[pattern])
 		}
+	}
+}
+
+func qaWiring(t *testing.T, env string, vars map[string]string) newsletterWiring {
+	t.Helper()
+	contacts, _, _, err := deliveryClients(qaGetenv(vars), env, nil)
+	if err != nil {
+		t.Fatalf("deliveryClients: %v", err)
+	}
+	w, err := newsletterClients(qaGetenv(vars), env, contacts, nil)
+	if err != nil {
+		t.Fatalf("newsletterClients: %v", err)
+	}
+	return w
+}
+
+func TestNotificationsNewsletterWiring_PreviewIsCaptureAndFake(t *testing.T) {
+	vars := qaFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs", "RESEND_SENDING_KEY", "sk")
+	w := qaWiring(t, "pr-7", vars)
+	if _, ok := w.Sender.(*accountmail.Capture); !ok || w.MailMode != accountmail.ModeCapture || w.Mode != notifications.ModeFake || !w.Enabled {
+		t.Errorf("wiring = %+v, want capture mail, fake newsletter, enabled", w)
+	}
+	if _, ok := w.Resend.(notifications.FakeBlogResend); !ok {
+		t.Errorf("resend client = %T, want FakeBlogResend", w.Resend)
+	}
+}
+
+func TestNotificationsNewsletterWiring_ProductionWithoutBlogKeysIsDisabled(t *testing.T) {
+	w := qaWiring(t, "production", qaFourKeys("RESEND_SENDING_KEY", "sk"))
+	if w.Enabled || w.Mode != notifications.ModeOff {
+		t.Errorf("wiring = %+v, want disabled", w)
+	}
+}
+
+func TestNotificationsNewsletterWiring_NoSendingKeyIsDisabled(t *testing.T) {
+	w := qaWiring(t, "production", qaFourKeys("RESEND_BLOG_TOPIC_ID", "bt", "RESEND_BLOG_SEGMENT_ID", "bs"))
+	if w.Enabled || w.Mode != notifications.ModeReal || w.MailMode != accountmail.ModeOff {
+		t.Errorf("wiring = %+v, want real newsletter, mail off, disabled", w)
 	}
 }

@@ -2,10 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactElement, ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { editorOf, newDraft, previewModel, type Draft, type DraftBlock } from '../blog'
+import { CATEGORY_ICONS, catFormFrom, editorOf, newCatForm, newDraft, previewModel, TONES, type CatDel, type CatForm, type Draft, type DraftBlock } from '../blog'
 import type { Block, Category, Post } from '../blogApi'
 import { GLYPHS } from '../glyphs'
 import type { BlogFilters } from '../types'
+import { BlogCategories } from './BlogCategories'
 import { BlogEditor } from './BlogEditor'
 import { BlogList, type BlogState } from './BlogList'
 import { BlogPreview } from './BlogPreview'
@@ -562,5 +563,167 @@ describe('BlogEditor action bar', () => {
     const l = BlogEditor(props({ confirm: 'leave' })) as ReactElement
     ;(find(l, (e) => e.type === 'button' && text(e.props.children) === 'Discard changes')[0].props.onClick as () => void)()
     expect(cb.onDiscard).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('BlogCategories', () => {
+  const cat = (o: Partial<Category> = {}): Category => ({ ...CAT, ...o })
+  const inCat = (id: string, n: number): Post[] => Array.from({ length: n }, (_, i) => post({ id: `${id}${i}`, category_id: id }))
+  const twoPosts = [...inCat('a', 1), ...inCat('b', 2)]
+  const renderCats = (cats: Category[], posts: Post[] = twoPosts) => renderToStaticMarkup(<BlogCategories cats={cats} posts={posts} onMove={() => {}} />)
+  const renderTab = (cats: Category[], tab: BlogFilters['tab'] = 'cats') =>
+    renderToStaticMarkup(
+      <BlogList state={{ status: 'ready', posts: [post()], cats, authors: [] }} filters={{ ...FILTERS, tab }} onFilters={() => {}} onRetry={() => {}} onPin={() => {}} categories={<BlogCategories cats={cats} posts={twoPosts} onMove={() => {}} />} />,
+    )
+  const two = [cat({ id: 'a', name: 'Alpha', headline: 'Alpha headline', }), cat({ id: 'b', name: 'Beta', headline: 'Beta headline' })]
+  const buttons = (cats: Category[], onMove = vi.fn()) => {
+    const t = BlogCategories({ cats, posts: twoPosts, onMove }) as ReactNode
+    const named = (n: string) => find(t, (e) => e.type === 'button' && e.props['aria-label'] === n)
+    return { up: named('Move up'), down: named('Move down'), onMove }
+  }
+
+  it('the Categories tab renders the note, Add category and every row', () => {
+    const html = renderTab(two)
+    expect(html).toContain('The order here is the order of the bands on the blog home and in its sidebar.')
+    expect(html).toMatch(/<button[^>]*class="v2-btn v2-btn-ghost"[^>]*>(?:(?!<\/button>).)*Add category<\/button>/)
+    for (const t of ['Alpha', 'Alpha headline', 'Beta', 'Beta headline', '>01<', '>02<', '1 post<', '2 posts<']) expect(html).toContain(t)
+    expect(html).toMatch(/<span data-cat-count[^>]*>1 post<\/span>/)
+    expect(html).toMatch(/<span data-cat-count[^>]*>2 posts<\/span>/)
+    expect(html).toContain('data-cat-head')
+    expect(html).toContain('data-blog-cats')
+    expect(html.match(/data-cat-row/g)).toHaveLength(2)
+    expect(html).not.toContain('Search titles and summaries…')
+  })
+
+  it('a row draws the glyph on its tone colour', () => {
+    const html = renderCats([cat({ tone: 3, icon: 'globe' })])
+    const tile = html.match(/<span style="([^"]*)"><svg[\s\S]*?<\/svg><\/span>/)![0]
+    expect(tile).toContain(`background:${TONES[3].bg}`)
+    expect(tile).toContain(`color:${TONES[3].fg}`)
+    const d = [...tile.matchAll(/ d="([^"]*)"/g)].map((m) => m[1])
+    expect(d).toEqual(GLYPHS.globe)
+  })
+
+  it('a row has the four labelled buttons', () => {
+    const html = renderCats([cat()])
+    for (const l of ['Move up', 'Move down', 'Edit', 'Delete']) expect(html).toContain(`aria-label="${l}"`)
+    expect(html.match(/<button[^>]*aria-label="Delete"[^>]*>/)![0]).toContain('color:var(--destructive)')
+    const btns = [...html.matchAll(/<button[^>]*aria-label="[^"]*"[^>]*>/g)].map((m) => m[0])
+    expect(btns).toHaveLength(4)
+    for (const b of btns) for (const p of ['width:30px', 'height:30px', 'border:1px solid var(--line-2)']) expect(b).toContain(p)
+  })
+
+  it('the first up and the last down are dimmed', () => {
+    const html = renderCats([cat({ id: 'a' }), cat({ id: 'b' }), cat({ id: 'c' })])
+    const op = (l: string) => [...html.matchAll(new RegExp(`<button[^>]*aria-label="${l}"[^>]*>`, 'g'))].map((m) => m[0].includes('opacity:0.35'))
+    expect(op('Move up')).toEqual([true, false, false])
+    expect(op('Move down')).toEqual([false, false, true])
+  })
+
+  it('a long headline stays inside the name cell', () => {
+    const html = renderCats([cat({ headline: 'H'.repeat(200) })])
+    const line = html.match(new RegExp(`<div style="([^"]*)">${'H'.repeat(200)}</div>`))![1]
+    for (const p of ['white-space:nowrap', 'overflow:hidden', 'text-overflow:ellipsis']) expect(line).toContain(p)
+    expect(html).toMatch(/<div style="[^"]*min-width:0[^"]*"><div[^>]*>Compliance<\/div>/)
+  })
+
+  it('a dimmed edge button calls nothing, an inner one moves', () => {
+    const { up, down, onMove } = buttons([cat({ id: 'a' }), cat({ id: 'b' }), cat({ id: 'c' })])
+    ;(up[0].props.onClick as () => void)()
+    ;(down[2].props.onClick as () => void)()
+    expect(onMove).not.toHaveBeenCalled()
+    ;(up[1].props.onClick as () => void)()
+    expect(onMove).toHaveBeenLastCalledWith('b', 'up')
+    ;(down[1].props.onClick as () => void)()
+    expect(onMove).toHaveBeenLastCalledWith('b', 'down')
+  })
+
+  const withForm = (cats: Category[], form: CatForm | null) => renderToStaticMarkup(<BlogCategories cats={cats} posts={twoPosts} onMove={() => {}} form={form} />)
+  const withDel = (cats: Category[], del: CatDel, posts: Post[] = twoPosts) => renderToStaticMarkup(<BlogCategories cats={cats} posts={posts} onMove={() => {}} del={del} />)
+  const btn = (html: string, label: string) => html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`, 'g')) ?? []
+
+  it('an unbroken long name breaks inside the name cell', () => {
+    const name = 'x'.repeat(140)
+    const html = renderCats([cat({ name })])
+    expect(html.match(new RegExp(`<div style="([^"]*)">${name}</div>`))![1]).toContain('overflow-wrap:anywhere')
+  })
+
+  it('the add form renders the prototype fields', () => {
+    const html = withForm(two, newCatForm(two))
+    for (const t of ['New category', '>Name<', '>Band headline<', '>Intro<', '>Icon<', '>Cover colour<', 'placeholder="Events &amp; webinars"', 'placeholder="Where to find us."', 'placeholder="One sentence shown under the headline."', '>Cancel<']) expect(html).toContain(t)
+    const form = html.slice(html.indexOf('data-cat-form'))
+    expect(form).toMatch(/<button[^>]*>(?:(?!<\/button>).)*Add category<\/button>/)
+    const icons = [...form.matchAll(/<button[^>]*aria-label="([^"]*)"[^>]*aria-pressed="([^"]*)"/g)].filter((m) => m[1] !== 'Colour')
+    expect(icons.map((m) => m[1])).toEqual([...CATEGORY_ICONS])
+    expect(icons.filter((m) => m[2] === 'true').map((m) => m[1])).toEqual(['globe'])
+    expect(btn(form, 'Colour')).toHaveLength(6)
+    expect(html.indexOf('data-cat-form')).toBeGreaterThan(html.lastIndexOf('data-cat-row'))
+  })
+
+  it('the edit form is filled, sits in its row and says Save changes', () => {
+    const c = cat({ id: 'a', name: 'Alpha', headline: 'Alpha headline', icon: 'plug', tone: 2 })
+    const html = withForm([c, cat({ id: 'b', name: 'Beta' })], catFormFrom(c))
+    expect(html).not.toContain('New category')
+    expect(html).toContain('value="Alpha"')
+    expect(html).toContain('value="Alpha headline"')
+    expect(html).toContain('placeholder="What changed in ASComply."')
+    expect(html).toMatch(/<button[^>]*>(?:(?!<\/button>).)*Save changes<\/button>/)
+    const press = (l: string) => btn(html, l).map((b) => b.includes('aria-pressed="true"'))
+    expect(btn(html, 'plug')[0]).toContain('aria-pressed="true"')
+    expect(btn(html, 'globe')[0]).toContain('aria-pressed="false"')
+    const swatches = btn(html, 'Colour')
+    expect(press('Colour').map((p, i) => (p ? i : -1)).filter((i) => i >= 0)).toEqual([2])
+    expect(swatches[2]).toContain('var(--ring)')
+    expect(swatches[0]).not.toContain('var(--ring)')
+    const rows = html.split('data-cat-row').slice(1)
+    expect(rows[0]).toContain('data-cat-form')
+    expect(rows[1]).not.toContain('data-cat-form')
+  })
+
+  it('the form error shows under the form with a red Name border', () => {
+    const f = { ...newCatForm(two), name: 'Alpha' }
+    const err = 'A category with this name already exists.'
+    const html = withForm(two, { ...f, error: err })
+    expect(html.indexOf(err)).toBeGreaterThan(html.lastIndexOf('aria-label="Colour"'))
+    expect(html.indexOf(err)).toBeLessThan(html.indexOf('>Cancel<'))
+    expect(html.match(/<input[^>]*value="Alpha"[^>]*>/)![0]).toContain('border:1px solid var(--destructive)')
+    const clean = withForm(two, f)
+    expect(clean).not.toContain(err)
+    expect(clean.match(/<input[^>]*placeholder="Events &amp; webinars"[^>]*>/)![0]).toContain('border:1px solid var(--input)')
+  })
+
+  it('the delete confirm has three states', () => {
+    const cats = [cat({ id: 'a', name: 'Alpha' }), cat({ id: 'b', name: 'Beta' }), cat({ id: 'c', name: 'Gamma' })]
+    const three = inCat('b', 3)
+    const empty = withDel(cats, { id: 'a', moveTo: null }, three)
+    expect(empty).toContain('Delete Alpha? It has no posts.')
+    expect(empty).toContain('Delete category')
+    expect(empty).not.toContain('<select')
+    const some = withDel(cats, { id: 'b', moveTo: 'c' }, three)
+    expect(some).toContain('Delete Beta and move its 3 posts to:')
+    const sel = some.match(/<select[\s\S]*?<\/select>/)![0]
+    expect(sel).toContain('>Alpha<')
+    expect(sel).toContain('>Gamma<')
+    expect(sel).not.toContain('>Beta<')
+    expect(sel).toMatch(/<option value="c" selected/)
+    expect(some).toContain('Delete category')
+    for (const n of [0, 2]) {
+      const only = withDel([cat({ id: 'a' })], { id: 'a', moveTo: null }, inCat('a', n))
+      expect(only).toContain('This is the only category. Add another before deleting it.')
+      expect(only).toContain('>Cancel<')
+      expect(only).not.toContain('Delete category')
+    }
+  })
+
+  it('the confirm sits inside its row', () => {
+    const rows = withDel(two, { id: 'b', moveTo: 'a' }).split('data-cat-row').slice(1)
+    expect(rows[0]).not.toContain('data-cat-confirm')
+    expect(rows[1]).toContain('data-cat-confirm')
+  })
+
+  it('the Posts tab ignores the categories slot', () => {
+    const html = renderTab(two, 'posts')
+    expect(html).not.toContain('The order here is the order of the bands')
+    expect(html).toContain('data-blog-table')
   })
 })

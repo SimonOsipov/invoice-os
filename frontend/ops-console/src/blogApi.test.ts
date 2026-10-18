@@ -8,20 +8,26 @@ import { captureApiFailure } from '@invoice-os/monitoring/report'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { request } from './api'
+import { newCatForm, toCategoryInput } from './blog'
 import { expireSession, SESSION_KEY } from './auth'
 import { withSession } from './session'
 import {
+  addCategory,
   createPost,
+  deleteCategory,
   deletePost,
   fetchAuthors,
   fetchCategories,
   fetchCoverUrl,
   fetchPosts,
   fieldErrorsOf,
+  moveCategory,
   putCover,
   removeCover,
   setFeatured,
+  updateCategory,
   updatePost,
+  type CategoryInput,
   type PostInput,
 } from './blogApi'
 
@@ -58,6 +64,8 @@ const INPUT: PostInput = {
   featured: false,
   body: [{ type: 'p', text: 'One' }, { type: 'ul', items: ['a', 'b'] }],
 }
+
+const CAT_INPUT: CategoryInput = { name: 'Product', headline: 'What changed.', intro: 'Intro', icon: 'globe', tone: 2 }
 
 beforeEach(() => {
   vi.stubEnv('VITE_GATEWAY_URL', GW + '/')
@@ -127,6 +135,27 @@ describe('blogApi', () => {
       sent: { featured: true },
       expected: { id: 'p1', featured: true, unpinned: 'p0' },
     },
+    { name: 'addCategory', run: () => addCategory(CAT_INPUT), method: 'POST', path: () => '/categories', status: 201, answer: { id: 'c9' }, sent: CAT_INPUT, expected: { id: 'c9' } },
+    { name: 'updateCategory', run: (id) => updateCategory(id, CAT_INPUT), method: 'PUT', path: (id) => `/categories/${encodeURIComponent(id)}`, status: 200, answer: { id: 'p1' }, sent: CAT_INPUT, expected: { id: 'p1' } },
+    {
+      name: 'moveCategory',
+      run: (id) => moveCategory(id, 'down'),
+      method: 'POST',
+      path: (id) => `/categories/${encodeURIComponent(id)}/move`,
+      status: 200,
+      answer: { moved: true, categories: [{ id: 'a' }, { id: 'b' }] },
+      sent: { direction: 'down' },
+      expected: { moved: true, categories: [{ id: 'a' }, { id: 'b' }] },
+    },
+    {
+      name: 'deleteCategory',
+      run: (id) => deleteCategory(id, null),
+      method: 'DELETE',
+      path: (id) => `/categories/${encodeURIComponent(id)}`,
+      status: 200,
+      answer: { moved_posts: 0, move_to: null },
+      expected: { moved_posts: 0, move_to: null },
+    },
     { name: 'removeCover', run: (id) => removeCover(id), method: 'DELETE', path: (id) => `/posts/${encodeURIComponent(id)}/cover`, status: 204, answer: null, expected: undefined },
   ]
 
@@ -148,6 +177,7 @@ describe('blogApi', () => {
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:x')
     const calls: Array<[string, () => Promise<unknown>, string]> = [
       ['updatePost', () => updatePost('a/b', INPUT), '/posts/a%2Fb'],
+      ['updateCategory', () => updateCategory('a/b', CAT_INPUT), '/categories/a%2Fb'],
       ['deletePost', () => deletePost('a/b'), '/posts/a%2Fb'],
       ['setFeatured', () => setFeatured('a/b', false), '/posts/a%2Fb/featured'],
       ['removeCover', () => removeCover('a/b'), '/posts/a%2Fb/cover'],
@@ -162,19 +192,39 @@ describe('blogApi', () => {
     }
   })
 
-  it('blogApi: createPost and updatePost send the input as the JSON body', async () => {
+  it('blogApi: create and update calls send their input as the JSON body', async () => {
     fetchMock.mockImplementation(async () => json({ id: 'p' }))
     await createPost(INPUT)
     await updatePost('p', INPUT)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    const [create, update] = fetchMock.mock.calls as Array<[string, RequestInit]>
+    await addCategory(CAT_INPUT)
+    await updateCategory('c', CAT_INPUT)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    const [create, update, addCat, updateCat] = fetchMock.mock.calls as Array<[string, RequestInit]>
     expect(create[1].method).toBe('POST')
     expect(update[1].method).toBe('PUT')
+    expect(addCat[1].method).toBe('POST')
+    expect(updateCat[1].method).toBe('PUT')
     expect(Object.keys(INPUT)).toHaveLength(8)
-    for (const [, init] of [create, update]) {
+    for (const [[, init], input] of [[create, INPUT], [update, INPUT], [addCat, CAT_INPUT], [updateCat, CAT_INPUT]] as const) {
       expect(new Headers(init.headers).get('Content-Type')).toBe('application/json')
-      expect(JSON.parse(String(init.body))).toEqual(INPUT)
+      expect(JSON.parse(String(init.body))).toEqual(input)
     }
+  })
+
+  it('blogApi: moveCategory sends the direction and returns the list', async () => {
+    const answer = { moved: true, categories: [{ id: 'a' }, { id: 'b' }] }
+    fetchMock.mockResolvedValueOnce(json(answer))
+    const out = await moveCategory('a', 'down')
+    expect(JSON.parse(String(lastCall().init.body))).toEqual({ direction: 'down' })
+    expect(out).toEqual(answer)
+  })
+
+  it('blogApi: deleteCategory adds move_to only with a target', async () => {
+    fetchMock.mockImplementation(async () => json({ moved_posts: 1, move_to: 'b/c' }))
+    await deleteCategory('a', 'b/c')
+    await deleteCategory('a', null)
+    const urls = fetchMock.mock.calls.map((c) => c[0])
+    expect(urls).toEqual([`${ROUTE}/categories/a?move_to=b%2Fc`, `${ROUTE}/categories/a`])
   })
 
   // Source scan: the fetch is mocked, so a renamed Go json tag is invisible to every runtime test here.
@@ -187,6 +237,17 @@ describe('blogApi', () => {
     expect(goKeys).toContain('category_id')
     expect(goKeys).toHaveLength(8)
     expect([...tsKeys].sort()).toEqual([...goKeys].sort())
+  })
+
+  it('CategoryInput keys equal the Go CategoryInput json tags', () => {
+    const read = (rel: string) => stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'))
+    const goBody = /type\s+CategoryInput\s+struct\s*\{([^{}]*)\}/.exec(read('../../../internal/blog/blog.go'))?.[1] ?? ''
+    const goKeys = [...goBody.matchAll(/`json:"([^",]+)[^"]*"/g)].map((m) => m[1])
+    const tsBody = /export interface CategoryInput\s*\{([^{}]*)\}/.exec(read('./blogApi.ts'))?.[1] ?? ''
+    const tsKeys = [...tsBody.matchAll(/^\s*([a-z_]+)\??\s*:/gm)].map((m) => m[1])
+    expect(goKeys).toHaveLength(5)
+    expect([...tsKeys].sort()).toEqual([...goKeys].sort())
+    expect(Object.keys(toCategoryInput(newCatForm([]))).sort()).toEqual([...goKeys].sort())
   })
 })
 

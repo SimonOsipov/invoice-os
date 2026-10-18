@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { addBlock, askLeave, coverCss, draftFromPost, editorOf, moveBlock, newDraft, patchBlock, previewModel, removeBlock, setConfirm, setField, setPreview, takeKept, today, writeKept, type BlockType, type Draft, type EditorState } from '../blog'
-import { createPost, deletePost, fetchAuthors, fetchCategories, fetchCoverUrl, fetchPosts, putCover, removeCover, setFeatured, updatePost, type Post } from '../blogApi'
-import { applyRemove, applySave, keepOnExpire, keepThenExpire, loadBlog, pickCover, pinThenRefresh, postsAfterRemove, removePost, savePost, singleFlight, STAFF_ONLY, trackCover } from '../blogFlow'
+import { addBlock, askLeave, catFormFrom, coverCss, deleteView, draftFromPost, editorOf, moveBlock, newCatForm, newDraft, patchBlock, previewModel, removeBlock, setCatField, setConfirm, setField, setPreview, tabChange, takeKept, today, writeKept, type BlockType, type CatUi, type Draft, type EditorState } from '../blog'
+import { addCategory, createPost, deleteCategory, deletePost, fetchAuthors, fetchCategories, fetchCoverUrl, fetchPosts, moveCategory, putCover, removeCover, setFeatured, updateCategory, updatePost, type Post } from '../blogApi'
+import { applyCatMove, applyCatRefresh, applyCatRemove, applyCatSave, applyRemove, applySave, keepOnExpire, keepThenExpire, loadBlog, moveCategoryFlow, pickCover, pinThenRefresh, postsAfterRemove, refreshCategories, removeCategory, removePost, saveCategory, savePost, singleFlight, STAFF_ONLY, trackCover } from '../blogFlow'
 import { browserCoverDeps } from '../coverImage'
 import { currentSub, expireOnce, withSession } from '../session'
 import type { BlogFilters, ToastTone } from '../types'
+import { BlogCategories } from './BlogCategories'
 import { BlogEditor } from './BlogEditor'
 import { BlogList, type BlogState } from './BlogList'
 import { BlogPreview } from './BlogPreview'
@@ -52,6 +53,88 @@ export function Blog({ filters, onFilters, onToast }: Props) {
       if (after.kind === 'posts') setState((s) => (s.status === 'ready' ? { ...s, posts: after.posts } : s))
       else if (after.kind === 'state') setState(after.state)
     })
+
+  const [catUi, setCatUi] = useState<CatUi>({ form: null, del: null })
+  const applyCats = (a: ReturnType<typeof applyCatMove>) => {
+    const { cats, posts } = a
+    if (cats || posts) setState((s) => (s.status === 'ready' ? { ...s, cats: cats ?? s.cats, posts: posts ?? s.posts } : s))
+    if (a.toast) onToast(a.toast, 'BLOG', a.tone)
+    if (a.expire) expireOnce()
+  }
+  const reloadCats = (queue = false) =>
+    (queue ? flight.after : flight)(async () => {
+      const a = applyCatRefresh(await refreshCategories({ fetchCategories: () => withSession(fetchCategories), fetchPosts: () => withSession(fetchPosts) }))
+      if (alive.current) applyCats(a)
+    })
+  const onMoveCat = async (id: string, direction: 'up' | 'down') => {
+    let reread = false
+    await flight.user(async () => {
+      const a = applyCatMove(await moveCategoryFlow({ moveCategory: (i, d) => withSession(() => moveCategory(i, d)) }, id, direction))
+      if (!alive.current) return
+      applyCats(a)
+      reread = a.reread
+    })
+    if (reread && alive.current) await reloadCats()
+  }
+  const catUiRef = useRef(catUi)
+  catUiRef.current = catUi
+  const filtersRef = useRef(filters)
+  filtersRef.current = filters
+  const stateRef = useRef(state)
+  stateRef.current = state
+  const settle = async (reread: boolean) => {
+    if (reread && alive.current) await reloadCats()
+  }
+  const onCatSave = async () => {
+    let reread = false
+    await flight.user(async () => {
+      const form = catUiRef.current.form
+      if (!form) return
+      const o = await saveCategory(
+        { addCategory: (i) => withSession(() => addCategory(i)), updateCategory: (id, i) => withSession(() => updateCategory(id, i)), fetchCategories: () => withSession(fetchCategories) },
+        form,
+      )
+      if (!alive.current) return
+      const cur = stateRef.current
+      const a = applyCatSave(catUiRef.current, o, cur.status === 'ready' ? cur.cats : [])
+      setCatUi(a.ui)
+      applyCats(a)
+      reread = a.reread
+    })
+    await settle(reread)
+  }
+  const onCatDelete = async () => {
+    let reread = false
+    await flight.user(async () => {
+      const del = catUiRef.current.del
+      const s = stateRef.current
+      if (!del || s.status !== 'ready') return
+      const o = await removeCategory(
+        { deleteCategory: (id, to) => withSession(() => deleteCategory(id, to)), fetchCategories: () => withSession(fetchCategories), fetchPosts: () => withSession(fetchPosts) },
+        s.cats,
+        s.posts,
+        del.id,
+        del.moveTo,
+      )
+      const cur = stateRef.current
+      if (!alive.current || cur.status !== 'ready') return
+      const a = applyCatRemove({ cats: cur.cats, posts: cur.posts }, catUiRef.current, filtersRef.current, del.id, o)
+      setCatUi(a.ui)
+      const { cats, posts } = a
+      setState((x) => (x.status === 'ready' ? { ...x, cats, posts } : x))
+      if (a.filters !== filtersRef.current) onFilters(a.filters)
+      if (a.toast) onToast(a.toast, 'BLOG', a.tone)
+      if (a.expire) expireOnce()
+      reread = a.reread
+    })
+    await settle(reread)
+  }
+  const onTabFilters = (f: BlogFilters) => {
+    const t = tabChange(filters.tab, f.tab, catUi)
+    setCatUi(t.ui)
+    onFilters(f)
+    if (t.refresh) void reloadCats(true)
+  }
 
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
@@ -196,5 +279,28 @@ export function Blog({ filters, onFilters, onToast }: Props) {
     )
   }
 
-  return <BlogList state={state} filters={filters} onFilters={onFilters} onRetry={() => void load()} onPin={(p) => void onPin(p)} onNew={onNew} onOpen={(p) => open(draftFromPost(p))} />
+  const categories =
+    state.status === 'ready' ? (
+      <BlogCategories
+        cats={state.cats}
+        posts={state.posts}
+        onMove={(id, d) => void onMoveCat(id, d)}
+        form={catUi.form}
+        del={catUi.del}
+        onAdd={() => setCatUi({ form: newCatForm(state.cats), del: null })}
+        onEdit={(c) => setCatUi({ form: catFormFrom(c), del: null })}
+        onDelete={(c) => {
+          const v = deleteView(state.cats, state.posts, c.id)
+          setCatUi({ form: null, del: { id: c.id, moveTo: v?.kind === 'withposts' ? v.defaultMoveTo : null } })
+        }}
+        onField={(patch) => setCatUi((u) => (u.form ? { ...u, form: setCatField(u.form, patch) } : u))}
+        onSubmit={() => void onCatSave()}
+        onCancelForm={() => setCatUi((u) => ({ ...u, form: null }))}
+        onMoveTo={(id) => setCatUi((u) => (u.del ? { ...u, del: { ...u.del, moveTo: id } } : u))}
+        onCancelDel={() => setCatUi((u) => ({ ...u, del: null }))}
+        onConfirmDel={() => void onCatDelete()}
+      />
+    ) : null
+
+  return <BlogList state={state} filters={filters} onFilters={onTabFilters} categories={categories} onRetry={() => void load()} onPin={(p) => void onPin(p)} onNew={onNew} onOpen={(p) => open(draftFromPost(p))} />
 }

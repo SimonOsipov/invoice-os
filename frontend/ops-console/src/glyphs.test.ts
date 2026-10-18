@@ -7,6 +7,7 @@ import { GLYPHS } from './glyphs'
 const NON_CATEGORY = [
   'external-link', 'plus', 'search', 'pin', 'chevron-left', 'trash-2', 'arrow-up',
   'arrow-down', 'image', 'circle-check', 'calendar-clock', 'play', 'arrow-right', 'file-text',
+  'pencil',
 ]
 
 const glyphs = GLYPHS as Record<string, readonly string[]>
@@ -29,7 +30,7 @@ describe('GLYPHS', () => {
     for (const name of NON_CATEGORY) expect(glyphs[name]?.length, name).toBeGreaterThan(0)
   })
 
-  it('holds exactly the 30 planned glyphs, each a list of non-empty path strings', () => {
+  it('holds exactly the planned glyphs, each a list of non-empty path strings', () => {
     expect(Object.keys(glyphs)).toHaveLength(serverIcons().length + NON_CATEGORY.length)
     for (const [name, paths] of Object.entries(glyphs)) {
       for (const d of paths) expect(d.trim().length, `${name} path`).toBeGreaterThan(0)

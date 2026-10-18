@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { BLOG_HOME, catFilterOptions, listRows, statusChips, subtitle, tabs } from '../blog'
 import type { Author, Category, Post } from '../blogApi'
 import { GLYPHS, type GlyphName } from '../glyphs'
@@ -19,6 +19,7 @@ type Props = {
   onPin: (post: Post) => void
   onNew?: () => void
   onOpen?: (post: Post) => void
+  categories?: ReactNode
 }
 
 const GRID = 'minmax(280px, 1fr) 190px 130px 110px 108px 40px'
@@ -40,7 +41,7 @@ function Note({ text, onRetry }: { text: string; onRetry?: () => void }) {
   )
 }
 
-export function BlogList({ state, filters, onFilters, onRetry, onPin, onNew, onOpen }: Props) {
+export function BlogList({ state, filters, onFilters, onRetry, onPin, onNew, onOpen, categories }: Props) {
   const ready = state.status === 'ready' ? state : null
   const set = (patch: Partial<BlogFilters>) => onFilters({ ...filters, ...patch })
   const rows = ready ? listRows(ready.posts, ready.cats, filters) : []
@@ -117,6 +118,7 @@ export function BlogList({ state, filters, onFilters, onRetry, onPin, onNew, onO
               </button>
             ))}
           </div>
+          {filters.tab === 'cats' && categories}
           {filters.tab === 'posts' && (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>

@@ -224,6 +224,13 @@ describe('sourcedConsoleError', () => {
     expect(out).not.toContain('eyJ')
   })
 
+  it('scrubs a jwt inside the path', () => {
+    const out = sourcedConsoleError(T401, 'https://gw.test/a/eyJabc.def.ghi/b', ['401 GET https://gw.test/a/eyJabc.def.ghi/b'])
+    expect(out).toContain('url: https://gw.test/a/<jwt>/b;')
+    expect(out).toContain('401 GET https://gw.test/a/<jwt>/b]')
+    expect(out).not.toContain('eyJ')
+  })
+
   it('leaves a text with no url and no status unchanged', () => {
     expect(sourcedConsoleError('Uncaught TypeError: x', '', [])).toBe('Uncaught TypeError: x')
   })
@@ -277,6 +284,8 @@ describe('collectSourcedErrors', () => {
     f.consoleMsg('error', T401)
     f.response(404, 'https://gw.test/a')
     expect(f.errors[0]).toContain('none seen')
+    f.response(401, 'https://gw.test/v1/me')
+    expect(f.errors[0]).toContain('https://gw.test/v1/me')
   })
 
   it('does not list a response that arrived after the entry console line', () => {

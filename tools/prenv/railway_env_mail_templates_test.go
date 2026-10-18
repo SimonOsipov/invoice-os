@@ -50,6 +50,7 @@ func nonBlankLines(s string) []string {
 
 // AC 6. Sibling variables that are not templates (a URL path) and an empty template or subject are ignored.
 func TestCheckMailTemplates_NoneSetPasses(t *testing.T) {
+	t.Parallel()
 	s := newMailTemplatesShim(t, map[string]string{
 		"GOTRUE_MAILER_SUBJECTS_CONFIRMATION": "",
 		"GOTRUE_MAILER_URLPATHS_CONFIRMATION": "/auth/verify",
@@ -74,6 +75,7 @@ func TestCheckMailTemplates_NoneSetPasses(t *testing.T) {
 
 // AC 7.
 func TestCheckMailTemplates_PassingURLPasses(t *testing.T) {
+	t.Parallel()
 	srv := htmlServer(t, mailMinimalTemplate)
 	s := newMailTemplatesShim(t, map[string]string{mailTemplateVar: srv.URL})
 	out, code := runCheckMailTemplates(t, s, authForkEnvID)
@@ -91,6 +93,7 @@ func TestCheckMailTemplates_PassingURLPasses(t *testing.T) {
 
 // AC 7.
 func TestCheckMailTemplates_SPAFailsNamingTheVariable(t *testing.T) {
+	t.Parallel()
 	srv := htmlServer(t, mailSPA)
 	s := newMailTemplatesShim(t, map[string]string{mailTemplateVar: srv.URL})
 	out, code := runCheckMailTemplates(t, s, authForkEnvID)
@@ -111,8 +114,10 @@ func TestCheckMailTemplates_SPAFailsNamingTheVariable(t *testing.T) {
 
 // AC 7: GoTrue resolves a value that does not start with http.
 func TestCheckMailTemplates_RelativeValueFails(t *testing.T) {
+	t.Parallel()
 	for _, value := range []string{"/emails/confirmation.html", "emails/confirmation.html"} {
 		t.Run(value, func(t *testing.T) {
+			t.Parallel()
 			s := newMailTemplatesShim(t, map[string]string{mailTemplateVar: value, mailSiteURLVar: "https://www.ascomply.com"})
 			out, code := runCheckMailTemplates(t, s, authForkEnvID)
 
@@ -131,6 +136,7 @@ func TestCheckMailTemplates_RelativeValueFails(t *testing.T) {
 
 // AC 7: an unreadable variable map is a failure, never the "none set" pass.
 func TestCheckMailTemplates_UnreadableVariablesFail(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(t *testing.T, s authShim){
 		"graphql error": func(t *testing.T, s authShim) {
 			writeFile(t, filepath.Join(s.dir, "faults-authVars"), strings.Repeat("gqlerr ", 6))
@@ -140,6 +146,7 @@ func TestCheckMailTemplates_UnreadableVariablesFail(t *testing.T) {
 	}
 	for name, bend := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			srv := htmlServer(t, mailMinimalTemplate)
 			s := newMailTemplatesShim(t, map[string]string{mailTemplateVar: srv.URL})
 			bend(t, s)
@@ -163,6 +170,7 @@ func TestCheckMailTemplates_UnreadableVariablesFail(t *testing.T) {
 
 // AC 7: every failing variable gets its own ::error:: line carrying its own name; a passing one still prints ok.
 func TestCheckMailTemplates_EachFailingVariableIsNamed(t *testing.T) {
+	t.Parallel()
 	good := htmlServer(t, mailMinimalTemplate)
 	spaA := htmlServer(t, mailSPA)
 	spaB := htmlServer(t, mailSPA)
@@ -212,6 +220,7 @@ func TestCheckMailTemplates_EachFailingVariableIsNamed(t *testing.T) {
 
 // A mixed run never lets a later pass hide an earlier failure, whatever order Railway lists the variables in.
 func TestCheckMailTemplates_FailureSurvivesALaterPass(t *testing.T) {
+	t.Parallel()
 	good := htmlServer(t, mailMinimalTemplate)
 	spa := htmlServer(t, mailSPA)
 	for name, vars := range map[string]map[string]string{
@@ -232,7 +241,9 @@ func TestCheckMailTemplates_FailureSurvivesALaterPass(t *testing.T) {
 
 // AC 6/7 guards: no argument is a usage error, and no auth service is a failure, never the none-set pass.
 func TestCheckMailTemplates_GuardsFailLoudly(t *testing.T) {
+	t.Parallel()
 	t.Run("no environment id exits 2 with the subcommand's own usage", func(t *testing.T) {
+		t.Parallel()
 		s := newMailTemplatesShim(t, map[string]string{})
 		stdout, stderr, code := s.run(t, forkExports(true, true, false), "check-mail-templates")
 		out := stdout + stderr
@@ -244,6 +255,7 @@ func TestCheckMailTemplates_GuardsFailLoudly(t *testing.T) {
 		}
 	})
 	t.Run("no account token fails before any call", func(t *testing.T) {
+		t.Parallel()
 		s := newMailTemplatesShim(t, map[string]string{})
 		stdout, stderr, code := s.run(t, forkExports(false, true, false), "check-mail-templates", authForkEnvID)
 		if code != 1 || !strings.Contains(stdout+stderr, "RAILWAY_API_TOKEN is not set") {
@@ -251,6 +263,7 @@ func TestCheckMailTemplates_GuardsFailLoudly(t *testing.T) {
 		}
 	})
 	t.Run("no auth service in the environment fails", func(t *testing.T) {
+		t.Parallel()
 		settle := forkSettle()
 		s := newAuthShim(t, map[string]string{"settle": settle}, map[string]map[string]string{authForkAuthID: {}})
 		out, code := runCheckMailTemplates(t, s, authForkEnvID)
@@ -268,6 +281,7 @@ func TestCheckMailTemplates_GuardsFailLoudly(t *testing.T) {
 
 // The subcommand is listed in the dispatcher's usage line, as every other subcommand is.
 func TestCheckMailTemplates_IsInTheDispatcherUsage(t *testing.T) {
+	t.Parallel()
 	s := newMailTemplatesShim(t, map[string]string{})
 	out, errOut, code := runBashScript(t, s.prelude+"bash '"+railwayEnvScript(t)+"'\n")
 	if got := out + errOut; code != 2 || !strings.Contains(got, "|check-mail-templates <environment-id>|") {
@@ -277,8 +291,10 @@ func TestCheckMailTemplates_IsInTheDispatcherUsage(t *testing.T) {
 
 // GoTrue falls back to its default mail when a subject does not parse, so a bad subject fails the gate.
 func TestCheckMailTemplates_SubjectIsChecked(t *testing.T) {
+	t.Parallel()
 	const subjectVar = "GOTRUE_MAILER_SUBJECTS_CONFIRMATION"
 	t.Run("a good subject passes", func(t *testing.T) {
+		t.Parallel()
 		s := newMailTemplatesShim(t, map[string]string{subjectVar: "Confirm your ASComply account"})
 		out, code := runCheckMailTemplates(t, s, authForkEnvID)
 		if code != 0 || strings.Contains(out, "::error::") {
@@ -286,6 +302,7 @@ func TestCheckMailTemplates_SubjectIsChecked(t *testing.T) {
 		}
 	})
 	t.Run("a good subject alone prints one ok line and no error", func(t *testing.T) {
+		t.Parallel()
 		s := newMailTemplatesShim(t, map[string]string{subjectVar: "Confirm your ASComply account"})
 		out, code := runCheckMailTemplates(t, s, authForkEnvID)
 		if lines := nonBlankLines(out); code != 0 || len(lines) != 1 || !strings.HasPrefix(lines[0], "ok ") {
@@ -293,6 +310,7 @@ func TestCheckMailTemplates_SubjectIsChecked(t *testing.T) {
 		}
 	})
 	t.Run("a bad subject alone fails without a template variable", func(t *testing.T) {
+		t.Parallel()
 		s := newMailTemplatesShim(t, map[string]string{subjectVar: "Confirm {{ "})
 		out, code := runCheckMailTemplates(t, s, authForkEnvID)
 		if code != 1 || !strings.HasPrefix(errorLines(out), "::error::"+subjectVar+": ") {
@@ -300,6 +318,7 @@ func TestCheckMailTemplates_SubjectIsChecked(t *testing.T) {
 		}
 	})
 	t.Run("a template alone checks no subject", func(t *testing.T) {
+		t.Parallel()
 		good := htmlServer(t, mailMinimalTemplate)
 		s := newMailTemplatesShim(t, map[string]string{mailTemplateVar: good.URL})
 		out, code := runCheckMailTemplates(t, s, authForkEnvID)
@@ -312,6 +331,7 @@ func TestCheckMailTemplates_SubjectIsChecked(t *testing.T) {
 		"errors on execute": "Confirm {{ index .Email 99 }}",
 	} {
 		t.Run(name+" fails naming the variable", func(t *testing.T) {
+			t.Parallel()
 			good := htmlServer(t, mailMinimalTemplate)
 			s := newMailTemplatesShim(t, map[string]string{subjectVar: subject, mailTemplateVar: good.URL})
 			out, code := runCheckMailTemplates(t, s, authForkEnvID)

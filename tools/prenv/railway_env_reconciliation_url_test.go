@@ -28,6 +28,7 @@ func reconciliationConfirmed(out string) bool {
 }
 
 func TestSetForkReconciliationURLAgainstAScriptedRailway(t *testing.T) {
+	t.Parallel()
 	noUpsert := func(says string) func(*testing.T, authShim, string) {
 		return func(t *testing.T, s authShim, out string) {
 			if !strings.Contains(errorLines(out), says) {
@@ -99,6 +100,7 @@ func TestSetForkReconciliationURLAgainstAScriptedRailway(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			resp := map[string]string{"envList": sentryEnvList(true, true), "settle": sentrySettle("")}
 			if c.envList != "" {
 				resp["envList"] = c.envList
@@ -163,7 +165,9 @@ func checkReconciliationURLWritten(t *testing.T, s authShim, out string) {
 }
 
 func TestSetForkReconciliationURLUsageAndPersistentRefusal(t *testing.T) {
+	t.Parallel()
 	t.Run("no_argument", func(t *testing.T) {
+		t.Parallel()
 		shim := newCurlShim(t)
 		stdout, stderr, code := runBashScript(t, shim.prelude+"bash '"+railwayEnvScript(t)+"' set-fork-reconciliation-url\n")
 		out := stdout + stderr
@@ -179,6 +183,7 @@ func TestSetForkReconciliationURLUsageAndPersistentRefusal(t *testing.T) {
 		shim.requireOnPath(t)
 	})
 	t.Run("persistent_id", func(t *testing.T) {
+		t.Parallel()
 		shim := newCurlShim(t)
 		stdout, stderr, code := runBashScript(t,
 			shim.prelude+"export RAILWAY_DEV_ENVIRONMENT_ID="+persistentEnvironmentID+"\nbash '"+railwayEnvScript(t)+"' set-fork-reconciliation-url \"$@\"\n",

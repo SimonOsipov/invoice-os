@@ -263,9 +263,7 @@ case "$q" in
     echo '{"errors":[{"message":"unrouted"}]}' ;;
 esac
 `
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), shim)
 	writeSleepStub(t, dir)
 	return s
 }
@@ -491,6 +489,7 @@ func runForkAuthOnEmptyFork(t *testing.T) authShim {
 
 // Every fork writer refuses before any write. mk builds the row's shim; envList "" keeps its default.
 func TestSetForkAuth_RefusesPersistentAndNonEphemeral(t *testing.T) {
+	t.Parallel()
 	forkRow := func(t *testing.T, envList string) authShim {
 		resp := forkAuthRailway()
 		if envList != "" {
@@ -578,6 +577,7 @@ func TestSetForkAuth_RefusesPersistentAndNonEphemeral(t *testing.T) {
 }
 
 func TestSetForkAuth_WritesFreshKeysNeverTheSourceValue(t *testing.T) {
+	t.Parallel()
 	k0 := freshJWK(t)
 	if _, ok := jwkCheck(t, k0); !ok {
 		t.Fatal("control: the planted source key does not pass jwk-check, so 'differs from K0' would be trivial")
@@ -613,6 +613,7 @@ func TestSetForkAuth_WritesFreshKeysNeverTheSourceValue(t *testing.T) {
 
 // Sealed production secrets are absent in a fork, not empty; the write must not depend on them.
 func TestSetForkAuth_SealedSourceVariablesAbsent(t *testing.T) {
+	t.Parallel()
 	stores := forkAuthStores("")
 	for _, n := range []string{"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET", "GOTRUE_SMTP_PASS"} {
 		delete(stores[authForkAuthID], n)
@@ -642,9 +643,11 @@ func TestSetForkAuth_SealedSourceVariablesAbsent(t *testing.T) {
 }
 
 func TestSetForkAuthSite_WritesAndReReadsSiteURL(t *testing.T) {
+	t.Parallel()
 	const site = forkSiteURL
 
 	t.Run("a valid https URL", func(t *testing.T) {
+		t.Parallel()
 		s := newForkAuthShim(t, freshJWK(t))
 		stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth-site", authForkEnvID, site)
 		out := stdout + stderr
@@ -662,6 +665,7 @@ func TestSetForkAuthSite_WritesAndReReadsSiteURL(t *testing.T) {
 	})
 
 	t.Run("the re-read differs", func(t *testing.T) {
+		t.Parallel()
 		s := newForkAuthShim(t, freshJWK(t))
 		s.bendRead(t, authForkAuthID, `.GOTRUE_SITE_URL = "https://elsewhere.example"`)
 		stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth-site", authForkEnvID, site)
@@ -680,6 +684,7 @@ func TestSetForkAuthSite_WritesAndReReadsSiteURL(t *testing.T) {
 		{"the persistent id", persistentEnvironmentID, site, authPersisted},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newForkAuthShim(t, freshJWK(t))
 			stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth-site", c.env, c.url)
 			out := stdout + stderr
@@ -708,6 +713,7 @@ func TestSetForkAuthSite_WritesAndReReadsSiteURL(t *testing.T) {
 }
 
 func TestSetForkAuth_OpensSignupInTheFork(t *testing.T) {
+	t.Parallel()
 	s, _ := runForkAuthOK(t, freshJWK(t))
 	ups := s.upserts(t)
 	if len(ups) == 0 {
@@ -725,6 +731,7 @@ func TestSetForkAuth_OpensSignupInTheFork(t *testing.T) {
 }
 
 func TestSetForkAuth_SignupReReadMismatchFails(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, filter string }{
 		{"reads true", `.GOTRUE_DISABLE_SIGNUP = "true"`},
 		{"absent", `del(.GOTRUE_DISABLE_SIGNUP)`},
@@ -758,6 +765,7 @@ func newForkSiteShim(t *testing.T) authShim {
 }
 
 func TestSetForkAuthSite_WritesGatewaySiteURL(t *testing.T) {
+	t.Parallel()
 	s := newForkSiteShim(t)
 	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth-site", authForkEnvID, forkSiteURL)
 	out := stdout + stderr
@@ -777,6 +785,7 @@ func TestSetForkAuthSite_WritesGatewaySiteURL(t *testing.T) {
 }
 
 func TestSetForkAuthSite_GatewayReReadMismatchFails(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, filter string }{
 		{"differs", `.AUTH_SITE_URL = "https://elsewhere.example"`},
 		{"still the inherited value", `.AUTH_SITE_URL = "` + authProdSiteURL + `"`},
@@ -802,6 +811,7 @@ func TestSetForkAuthSite_GatewayReReadMismatchFails(t *testing.T) {
 }
 
 func TestSetForkAuth_IssuerAndAdditionalSetAgree(t *testing.T) {
+	t.Parallel()
 	s := runForkAuthOnEmptyFork(t)
 	ups := s.upserts(t)
 
@@ -846,6 +856,7 @@ func TestSetForkAuth_IssuerAndAdditionalSetAgree(t *testing.T) {
 }
 
 func TestSetForkAuth_ReReadMismatchFails(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, svc, variable, filter string
 	}{
@@ -887,6 +898,7 @@ func TestSetForkAuth_ReReadMismatchFails(t *testing.T) {
 }
 
 func TestSetForkAuth_WritesFreshAdminPasswordAndDSNReference(t *testing.T) {
+	t.Parallel()
 	s, _ := runForkAuthOK(t, freshJWK(t))
 	ups := s.upserts(t)
 	pw := oneUpsert(t, ups, authForkGatewayID, "AUTH_ADMIN_PASSWORD")
@@ -917,6 +929,7 @@ func TestSetForkAuth_WritesFreshAdminPasswordAndDSNReference(t *testing.T) {
 }
 
 func TestSetForkAuth_BlanksForkSMTP(t *testing.T) {
+	t.Parallel()
 	s, out := runForkAuthOK(t, freshJWK(t))
 	ups := s.upserts(t)
 	for _, name := range []string{"GOTRUE_SMTP_HOST", "GOTRUE_SMTP_PASS"} {
@@ -975,6 +988,7 @@ func requireRedacted(t *testing.T, out string, labels ...string) {
 }
 
 func TestAuthWritesNeverPrintSecrets(t *testing.T) {
+	t.Parallel()
 	k0 := freshJWK(t)
 	planted := map[string]string{
 		"the source key's private scalar": jwkPrivateScalar(t, k0),
@@ -1127,6 +1141,7 @@ func prodAuthExports(pw, keys, secret, resend string) string {
 }
 
 func TestSetProductionAuth_Guards(t *testing.T) {
+	t.Parallel()
 	jwk := freshJWK(t)
 	valid := func() map[string]string {
 		return map[string]string{"pw": authProdPassword, "keys": jwk, "secret": authProdJWTSecret}
@@ -1189,6 +1204,7 @@ func TestSetProductionAuth_Guards(t *testing.T) {
 }
 
 func TestSetProductionAuth_PreMergeWritesOnlyAuthURL(t *testing.T) {
+	t.Parallel()
 	s := newProdAuthShim(t, prodSealed())
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-production-auth", "--pre-merge", persistentEnvironmentID)
 	out := stdout + stderr
@@ -1207,6 +1223,7 @@ func TestSetProductionAuth_PreMergeWritesOnlyAuthURL(t *testing.T) {
 	}
 
 	t.Run("a re-read mismatch fails", func(t *testing.T) {
+		t.Parallel()
 		s := newProdAuthShim(t, prodSealed())
 		s.bendRead(t, productionGatewayID, `del(.AUTH_URL)`)
 		stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-production-auth", "--pre-merge", persistentEnvironmentID)
@@ -1217,6 +1234,7 @@ func TestSetProductionAuth_PreMergeWritesOnlyAuthURL(t *testing.T) {
 }
 
 func TestSetProductionAuth_PostMergeRefusesSealedTarget(t *testing.T) {
+	t.Parallel()
 	jwk := freshJWK(t)
 	for _, name := range []string{"GOTRUE_JWT_KEYS", "GOTRUE_JWT_SECRET", "GOTRUE_SMTP_PASS"} {
 		t.Run(name, func(t *testing.T) {
@@ -1241,6 +1259,7 @@ func TestSetProductionAuth_PostMergeRefusesSealedTarget(t *testing.T) {
 
 // A sealed variable on another service is not auth's: the writer reads only the three auth names on auth.
 func TestSetProductionAuth_PostMergeIgnoresSealedVariablesOnTenancy(t *testing.T) {
+	t.Parallel()
 	jwk := freshJWK(t)
 	exports := prodAuthExports(authProdPassword, jwk, authProdJWTSecret, authProdResendKey)
 	run := func(t *testing.T, sealed string) authShim {
@@ -1297,6 +1316,7 @@ func prodLabel(svc string) string {
 }
 
 func TestSetProductionAuth_PostMergeWritesAndReReadsTheSet(t *testing.T) {
+	t.Parallel()
 	jwk := freshJWK(t)
 	exports := prodAuthExports(authProdPassword, jwk, authProdJWTSecret, "")
 
@@ -1355,6 +1375,7 @@ func TestSetProductionAuth_PostMergeWritesAndReReadsTheSet(t *testing.T) {
 }
 
 func TestSetProductionAuth_ResendOptional(t *testing.T) {
+	t.Parallel()
 	jwk := freshJWK(t)
 	t.Run("without RESEND_API_KEY", func(t *testing.T) {
 		s := newProdAuthShim(t, prodSealed())
@@ -1388,6 +1409,7 @@ func TestSetProductionAuth_ResendOptional(t *testing.T) {
 }
 
 func TestSetForkAuthSelfTest(t *testing.T) {
+	t.Parallel()
 	shim := newCurlShim(t)
 	stdout, stderr, code := runBashScript(t, shim.prelude+"bash '"+railwayEnvScript(t)+"' set-fork-auth --self-test\n")
 	out := stdout + stderr
@@ -1429,6 +1451,7 @@ func TestSetForkAuthSelfTest(t *testing.T) {
 }
 
 func TestRailwayInvariantsRunsForkAuthSelfTest(t *testing.T) {
+	t.Parallel()
 	inv := readWorkflow(t, "railway-invariants.yml")
 	var control, jobs []string
 	for _, job := range workflowJobsOf(inv) {

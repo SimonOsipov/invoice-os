@@ -82,9 +82,7 @@ if [ -f "$dir/clock.jump" ]; then jump=$(cat "$dir/clock.jump"); fi
 echo $(( ` + strconv.Itoa(slotBase) + ` + slept + jump * (n - 1) ))
 `
 	for name, body := range map[string]string{"gh": gh, "date": date} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeShim(t, filepath.Join(dir, name), body)
 	}
 	writeSleepStub(t, dir)
 	return slotShim{dir: dir}
@@ -717,9 +715,7 @@ func TestDeploySlot_NeverCallsRailway(t *testing.T) {
 	s := newSlotShim(t)
 	for _, name := range []string{"railway", "curl"} {
 		stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + filepath.Join(s.dir, name+".log") + "'\n"
-		if err := os.WriteFile(filepath.Join(s.dir, name), []byte(stub), 0o755); err != nil {
-			t.Fatal(err)
-		}
+		writeShim(t, filepath.Join(s.dir, name), stub)
 	}
 	two := slotList(slotRun{id: 101, pr: 11}, slotRun{id: 102, pr: 12})
 	s.runs(t, two, slotList())

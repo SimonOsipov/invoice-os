@@ -1213,7 +1213,7 @@ jobs:
     if: >-
       !cancelled() &&
       github.event_name == 'pull_request' &&
-      (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
+      needs.e2e.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:

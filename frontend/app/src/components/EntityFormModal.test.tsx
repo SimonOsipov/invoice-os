@@ -323,11 +323,25 @@ describe('EntityFormModal refused create (LOGFIX-06-04)', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('EntityFormModal: readOnlyReason is ignored in create mode', () => {
+    const { container } = render(
+      <EntityFormModal mode="create" ctx={ctxFor('firm')} base="https://gateway.test" readOnlyReason="R" onClose={() => {}} onSuccess={() => {}} />,
+    )
+    expect(screen.getByRole('dialog', { name: 'Add client' })).toBeTruthy()
+    const inputs = [...container.querySelectorAll('input')] as HTMLInputElement[]
+    expect(inputs).toHaveLength(13)
+    for (const i of inputs) expect(i.disabled).toBe(false)
+    expect(container.querySelector('button[type="submit"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="entity-readonly-note"]')).toBeNull()
+  })
+
   it('EntityFormModal: without readOnlyReason the edit dialog is unchanged', () => {
     const { container, dialog } = mount('edit', 'firm')
     expect(screen.getByRole('dialog', { name: 'Edit client' })).toBeTruthy()
     for (const i of [...container.querySelectorAll('input')] as HTMLInputElement[]) expect(i.disabled).toBe(false)
     expect(dialog.getByRole('button', { name: 'Save changes' })).toBeTruthy()
+    expect(dialog.getByText('Cancel', { selector: 'button' })).toBeTruthy()
+    expect(dialog.queryByText('Close', { selector: 'button' })).toBeNull()
     expect(container.querySelector('[data-testid="entity-readonly-note"]')).toBeNull()
   })
 

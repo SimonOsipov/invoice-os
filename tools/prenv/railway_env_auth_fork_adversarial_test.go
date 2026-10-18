@@ -201,6 +201,7 @@ func TestForkPassURLArgumentsAreEight(t *testing.T) {
 		}{
 			{"seven arguments", eight[:7]},
 			{"empty eighth", append(slices.Clone(eight[:7]), "")},
+			{"nine arguments", append(slices.Clone(eight), "https://extra")},
 		} {
 			t.Run(sub+" "+c.name, func(t *testing.T) {
 				s := newAuthShim(t, forkAuthRailway(), forkAuthStores(freshJWK(t)))

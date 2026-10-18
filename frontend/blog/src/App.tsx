@@ -7,6 +7,7 @@ import { LoadFailed } from './components/LoadFailed'
 import { NotFound } from './components/NotFound'
 import { SearchResults } from './components/SearchResults'
 import { Sidebar } from './components/Sidebar'
+import { Subscribe } from './components/Subscribe'
 import { chooseConsent, CookieNotice, readConsent, syncBlogConsent, trackBlogPageView } from './analytics'
 import { loadBlog, type BlogData } from './data'
 import { privacyHref } from './links'
@@ -120,6 +121,7 @@ export function App({ load = loadBlog }: { load?: () => Promise<BlogData> }) {
           <NotFound categories={data.categories} onCategory={(id) => navigate({ view: 'category', id })} />
         )}
         {view.kind === 'failed' && <LoadFailed onRetry={retry} />}
+        {data && view.kind === 'subscribe' && <Subscribe categories={data.categories} onHome={() => navigate(HOME)} />}
         {data && view.kind === 'home' && (
           <Home
             data={data}

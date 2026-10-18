@@ -89,6 +89,34 @@ describe('blog package', () => {
     expect(lines.filter((l) => /VITE_APP_URL/.test(l))).toEqual([])
   })
 
+  it('dockerfile_runsTheBlogBinaryOverTheBuiltSpa', () => {
+    const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
+    const froms = lines.flatMap((l, i) => (/^FROM\s/.test(l) ? [i] : []))
+    expect(froms).toHaveLength(3)
+    expect(lines[froms[0]]).toMatch(/^FROM node:\S+ AS build$/)
+    expect(lines[froms[1]]).toMatch(/^FROM \S*golang:\S+ AS server$/)
+    expect(lines[froms[2]]).toMatch(/^FROM \S*distroless\/static\S*:nonroot AS serve$/)
+
+    const server = lines.slice(froms[1] + 1, froms[2])
+    for (const copy of ['COPY go.mod go.sum ./', 'COPY cmd/blog cmd/blog', 'COPY internal/blogweb internal/blogweb', 'COPY internal/platform internal/platform']) {
+      expect(server, copy).toContain(copy)
+    }
+    expect(server.filter((l) => /^COPY\s/.test(l))).toHaveLength(4)
+    expect(server).toContain('RUN CGO_ENABLED=0 go build -o /out/blog ./cmd/blog')
+
+    const serve = lines.slice(froms[2] + 1)
+    for (const l of [
+      'COPY --from=server /out/blog /blog',
+      'COPY --from=build /repo/frontend/blog/dist /srv',
+      'COPY --from=build /repo/internal/platform/buildsha.txt /srv/build.txt',
+      'EXPOSE 8080',
+      'USER nonroot:nonroot',
+      'ENTRYPOINT ["/blog"]',
+    ]) {
+      expect(serve, l).toContain(l)
+    }
+  })
+
   it('indexHtml_keepsTheServerMarkers', () => {
     const html = read(join(HERE, '../index.html'))
     expect(html.match(/<title>/g)).toHaveLength(1)

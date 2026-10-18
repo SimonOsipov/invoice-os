@@ -221,6 +221,11 @@ func TestLane_BlogOnlyPathsTakeTheSmallLane(t *testing.T) {
 	if got := laneClassify(t, "frontend/blog/src/App.tsx", "frontend/blog/package.json"); got != "blog" {
 		t.Fatalf("classify = %q, want blog", got)
 	}
+	for _, near := range []string{"frontend/blog/src/index.html", "frontend/blog/Dockerfile.bak", "frontend/blog/index.html.map"} {
+		if got := laneClassify(t, near); got != "blog" {
+			t.Fatalf("classify %s = %q, want blog: only the three server inputs take the full lane", near, got)
+		}
+	}
 }
 
 func TestLane_BlogServerInputsGiveTheFullLane(t *testing.T) {

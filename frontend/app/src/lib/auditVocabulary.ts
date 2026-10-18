@@ -1,4 +1,4 @@
-// Human labels for every audit event the Go tree emits: 49 identifiers across 11 domains.
+// Human labels for every audit event the Go tree emits, in 11 domains.
 // auditVocabulary.test.ts scans audit.Record( call sites, so a new writer without a label
 // here fails the suite rather than rendering a raw identifier at the user.
 //

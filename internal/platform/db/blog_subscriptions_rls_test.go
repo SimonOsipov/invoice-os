@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -42,17 +43,32 @@ func blogSubRequireTables(t *testing.T) {
 	}
 }
 
-// blogSubEmail is unique per call and trimmed lower case; cleanup removes it from both tables.
-func blogSubEmail(t *testing.T) string {
+// blogSubCleanup removes the address from both tables when the test ends.
+func blogSubCleanup(t *testing.T, email string) string {
 	t.Helper()
 	hh := requireHarness(t)
-	email := "t-" + uuid.NewString() + "@blogsub.test"
 	t.Cleanup(func() {
 		for _, tbl := range blogSubTables {
 			_, _ = hh.super.Exec(context.Background(), `DELETE FROM public.`+tbl+` WHERE email = $1`, email)
 		}
 	})
 	return email
+}
+
+// blogSubEmail is unique per call and trimmed lower case.
+func blogSubEmail(t *testing.T) string {
+	t.Helper()
+	return blogSubCleanup(t, "t-"+uuid.NewString()+"@blogsub.test")
+}
+
+// blogSubEmailOfLen is a trimmed lower-case address of exactly n octets.
+func blogSubEmailOfLen(t *testing.T, n int) string {
+	t.Helper()
+	const tail = "@b.co"
+	if n <= len(tail) {
+		return blogSubCleanup(t, strings.Repeat("a", n))
+	}
+	return blogSubCleanup(t, strings.Repeat("a", n-len(tail))+tail)
 }
 
 func blogSubToken(t *testing.T, n int) []byte {
@@ -204,19 +220,32 @@ func blogSubEmailCase(t *testing.T, c contactsConn) {
 	t.Helper()
 	for _, tbl := range blogSubTables {
 		id := uuid.NewString()
-		for _, bad := range map[string]string{
+		for name, bad := range map[string]string{
 			"leading space and capitals": " A-" + id + "@b.co",
 			"capitals only":              "A-" + id + "@b.co",
+			"leading space only":         " a-" + id + "@b.co",
+			"trailing space only":        "a-" + id + "@b.co ",
+			"2 octets":                   blogSubEmailOfLen(t, 2),
+			"255 octets":                 blogSubEmailOfLen(t, 255),
+			"200 two-byte characters":    blogSubCleanup(t, strings.Repeat("é", 200)),
 		} {
 			err := blogSubInsert(t, c, tbl, bad, []string{"a"}, "weekly")
+			if err == nil {
+				t.Fatalf("%s: %s accepted", tbl, name)
+			}
 			blogSubRefused(t, err, pgCheckViolation, tbl+"_email_check")
 		}
-		ok := blogSubEmail(t)
-		if err := blogSubInsert(t, c, tbl, ok, []string{"a"}, "weekly"); err != nil {
-			t.Fatalf("%s: insert of a trimmed lower-case address: %v", tbl, err)
-		}
-		if n := blogSubCount(t, c, tbl, ok); n != 1 {
-			t.Fatalf("%s: accepted address stored %d rows, want 1", tbl, n)
+		for name, ok := range map[string]string{
+			"plain":      blogSubEmail(t),
+			"3 octets":   blogSubEmailOfLen(t, 3),
+			"254 octets": blogSubEmailOfLen(t, 254),
+		} {
+			if err := blogSubInsert(t, c, tbl, ok, []string{"a"}, "weekly"); err != nil {
+				t.Fatalf("%s: insert of the %s address: %v", tbl, name, err)
+			}
+			if n := blogSubCount(t, c, tbl, ok); n != 1 {
+				t.Fatalf("%s: the %s address stored %d rows, want 1", tbl, name, n)
+			}
 		}
 	}
 }
@@ -300,6 +329,93 @@ func blogSubOnePerEmailCase(t *testing.T, c contactsConn) {
 	}
 }
 
+// blogSubColumnsCase covers what the other cases leave out: the subscriber key, delivery_mode,
+// NOT NULL columns and column defaults.
+func blogSubColumnsCase(t *testing.T, c contactsConn) {
+	t.Helper()
+	ctx := context.Background()
+
+	dup := blogSubEmail(t)
+	if err := blogSubInsert(t, c, blogSubSub, dup, []string{"a"}, "weekly"); err != nil {
+		t.Fatalf("first subscriber for %s: %v", dup, err)
+	}
+	blogSubRefused(t, blogSubInsert(t, c, blogSubSub, dup, []string{"b"}, "monthly"), pgUniqueViolation, "blog_subscribers_pkey")
+	if n := blogSubCount(t, c, blogSubSub, dup); n != 1 {
+		t.Fatalf("subscribers for one email = %d, want 1", n)
+	}
+
+	const insertMode = `INSERT INTO public.blog_subscribers (email, category_ids, frequency, confirmed_at, delivery_mode)
+		VALUES ($1, '{a}', 'weekly', now(), $2)`
+	blogSubRefused(t, func() error { _, err := c.Exec(ctx, insertMode, blogSubEmail(t), "bogus"); return err }(),
+		pgCheckViolation, "blog_subscribers_delivery_mode_check")
+	for _, mode := range []*string{ptr("real"), ptr("fake"), nil} {
+		email := blogSubEmail(t)
+		if _, err := c.Exec(ctx, insertMode, email, mode); err != nil {
+			t.Fatalf("insert of delivery_mode %v: %v", mode, err)
+		}
+		if n := blogSubCount(t, c, blogSubSub, email); n != 1 {
+			t.Fatalf("delivery_mode %v stored %d rows, want 1", mode, n)
+		}
+	}
+
+	valid := map[string]any{
+		"category_ids": []string{"a"}, "frequency": "weekly", "token_hash": blogSubToken(t, 32),
+		"expires_at": time.Now().Add(48 * time.Hour), "confirmed_at": time.Now(),
+	}
+	for _, tc := range []struct {
+		table string
+		cols  []string
+	}{
+		{blogSubReq, []string{"category_ids", "frequency", "token_hash", "expires_at"}},
+		{blogSubSub, []string{"category_ids", "frequency", "confirmed_at"}},
+	} {
+		for _, null := range tc.cols {
+			names, marks, args := []string{"email"}, []string{"$1"}, []any{blogSubEmail(t)}
+			for _, col := range tc.cols {
+				names = append(names, col)
+				marks = append(marks, "$"+strconv.Itoa(len(args)+1))
+				if col == null {
+					args = append(args, nil)
+				} else {
+					args = append(args, valid[col])
+				}
+			}
+			_, err := c.Exec(ctx, `INSERT INTO public.`+tc.table+` (`+strings.Join(names, ", ")+`) VALUES (`+strings.Join(marks, ", ")+`)`, args...)
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23502" || pgErr.ColumnName != null {
+				t.Errorf("%s with NULL %s: got %v, want SQLSTATE 23502 on that column", tc.table, null, err)
+			}
+		}
+	}
+
+	fresh := time.Minute
+	var rev int64
+	var modeNull, deliveredNull, subTimes bool
+	email := blogSubEmail(t)
+	if err := blogSubInsert(t, c, blogSubSub, email, []string{"a"}, "weekly"); err != nil {
+		t.Fatalf("insert for defaults: %v", err)
+	}
+	if err := c.QueryRow(ctx, `SELECT version, delivery_mode IS NULL, resend_delivered_at IS NULL,
+		created_at BETWEEN now() - $2::interval AND now() + $2::interval
+		AND updated_at BETWEEN now() - $2::interval AND now() + $2::interval
+		FROM public.blog_subscribers WHERE email = $1`, email, fresh).Scan(&rev, &modeNull, &deliveredNull, &subTimes); err != nil {
+		t.Fatalf("read subscriber defaults: %v", err)
+	}
+	if rev != 1 || !modeNull || !deliveredNull || !subTimes {
+		t.Errorf("subscriber defaults: version=%d mode NULL=%v delivered NULL=%v fresh timestamps=%v, want 1, true, true, true",
+			rev, modeNull, deliveredNull, subTimes)
+	}
+	reqEmail := blogSubEmail(t)
+	if err := blogSubInsert(t, c, blogSubReq, reqEmail, []string{"a"}, "weekly"); err != nil {
+		t.Fatalf("insert request for defaults: %v", err)
+	}
+	var reqFresh bool
+	if err := c.QueryRow(ctx, `SELECT created_at BETWEEN now() - $2::interval AND now() + $2::interval
+		FROM public.blog_subscription_requests WHERE email = $1`, reqEmail, fresh).Scan(&reqFresh); err != nil || !reqFresh {
+		t.Errorf("request created_at default fresh = %v (err=%v), want true", reqFresh, err)
+	}
+}
+
 func TestRLS_BlogSubscriptionsEmailIsTrimmedLowerCase(t *testing.T) {
 	blogSubRequireTables(t)
 	blogSubEmailCase(t, requireHarness(t).app)
@@ -323,6 +439,16 @@ func TestRLS_BlogSubscriptionRequestTokenHashIs32BytesAndUnique(t *testing.T) {
 func TestRLS_BlogSubscriptionRequestIsOnePerEmail(t *testing.T) {
 	blogSubRequireTables(t)
 	blogSubOnePerEmailCase(t, requireHarness(t).app)
+}
+
+func TestRLS_BlogSubscriptionsKeyModeNotNullAndDefaults(t *testing.T) {
+	blogSubRequireTables(t)
+	blogSubColumnsCase(t, requireHarness(t).app)
+}
+
+func TestRLS_BlogSubscriptionsOnlyAppHasAccessInTheLiveDatabase(t *testing.T) {
+	blogSubRequireTables(t)
+	blogSubGrantsCase(t, requireHarness(t).super)
 }
 
 // --- AC-2: Down and Up ---------------------------------------------------------------
@@ -405,6 +531,28 @@ func blogSubGrantsCase(t *testing.T, c contactsConn) {
 			t.Errorf("%s %s on %s = %v (err=%v), want %v", g.role, g.priv, g.table, got, err, g.want)
 		}
 	}
+
+	// No role but invoice_app (and the owner) holds any privilege: reader, auth, staff, PUBLIC.
+	var others []string
+	if err := c.QueryRow(context.Background(),
+		`SELECT coalesce(array_agg(rolname ORDER BY rolname), '{}') FROM pg_roles
+		 WHERE NOT rolsuper AND rolname !~ '^pg_' AND rolname NOT IN ('invoice_app', 'invoice_migrator')`).Scan(&others); err != nil {
+		t.Fatalf("list roles: %v", err)
+	}
+	if !slices.Contains(others, "invoice_tenant_reader") {
+		t.Fatalf("role list %v lacks invoice_tenant_reader: the query is broken", others)
+	}
+	for _, role := range others {
+		for _, tbl := range blogSubTables {
+			var held bool
+			err := c.QueryRow(context.Background(),
+				`SELECT has_table_privilege($1, $2, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')`,
+				role, "public."+tbl).Scan(&held)
+			if err != nil || held {
+				t.Errorf("role %s holds a privilege on %s (held=%v, err=%v), want none", role, tbl, held, err)
+			}
+		}
+	}
 }
 
 func TestRLS_BlogSubscriptionsMigrationDownDropsBothTables(t *testing.T) {
@@ -452,4 +600,5 @@ func TestRLS_BlogSubscriptionsMigrationUpRestoresWhatDownDropped(t *testing.T) {
 	blogSubCategoriesCase(t, sp)
 	blogSubTokenCase(t, sp)
 	blogSubOnePerEmailCase(t, sp)
+	blogSubColumnsCase(t, sp)
 }

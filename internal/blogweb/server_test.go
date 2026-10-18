@@ -3,6 +3,7 @@ package blogweb
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/xml"
 	"io"
 	"log/slog"
@@ -440,5 +441,21 @@ func TestServer_SubscribeTrailingSlashAndOverlongIDsAndStaticHeaders(t *testing.
 		if cc := r.do("GET", p).Header().Get("Cache-Control"); cc != "" {
 			t.Errorf("%s: Cache-Control %q, Caddy sent none", p, cc)
 		}
+	}
+}
+
+func TestServer_AClientThatLeavesDuringARefreshDoesNotTakeTheSiteDown(t *testing.T) {
+	r := newRig(t)
+	if w := r.do("GET", "/p"); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	r.c.add(60 * time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest("GET", "https://blog.example/p", nil).WithContext(ctx)
+	r.h.ServeHTTP(httptest.NewRecorder(), req)
+	r.c.add(time.Second)
+	if w := r.do("GET", "/p"); w.Code != 200 {
+		t.Errorf("next visitor after a cancelled request: %d, want 200", w.Code)
 	}
 }

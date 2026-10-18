@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -74,7 +73,7 @@ type Source struct {
 	now     func() time.Time
 	log     *slog.Logger
 
-	mu      sync.Mutex
+	lock    chan struct{} // one-slot lock a waiter can abandon on its own cancellation
 	snap    *Snapshot
 	expires time.Time
 	retryAt time.Time
@@ -83,13 +82,19 @@ type Source struct {
 func NewSource(gateway *url.URL, client *http.Client, now func() time.Time, log *slog.Logger) *Source {
 	c := *client
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Source{gateway: gateway, client: &c, now: now, log: log}
+	return &Source{gateway: gateway, client: &c, now: now, log: log, lock: make(chan struct{}, 1)}
 }
 
 // Get returns the held snapshot while it is fresh, else refetches. A failure drops the snapshot.
 func (s *Source) Get(ctx context.Context) (*Snapshot, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	select {
+	case s.lock <- struct{}{}:
+		defer func() { <-s.lock }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	// The refresh is shared, so one caller leaving must not fail it.
+	ctx = context.WithoutCancel(ctx)
 	now := s.now()
 	if s.snap != nil && now.Before(s.expires) {
 		return s.snap, nil

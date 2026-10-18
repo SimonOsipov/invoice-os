@@ -66,6 +66,10 @@ func TestRegisterHandler_BadParamIs400AndSkipsTheStore(t *testing.T) {
 		{"year 0 from", registerQuery("0000-01-01", "2026-09-30"), "from must be a YYYY-MM-DD date"},
 		{"year 0 to", registerQuery("2026-09-01", "0000-12-31"), "to must be a YYYY-MM-DD date"},
 		{"from after to", registerQuery("2026-10-01", "2026-09-30"), "from must not be after to"},
+		{"unpadded from", registerQuery("2026-9-1", "2026-09-30"), "from must be a YYYY-MM-DD date"},
+		{"padded to", registerQuery("2026-09-01", " 2026-09-30"), "to must be a YYYY-MM-DD date"},
+		{"empty entity_id wins over bad dates", url.Values{"entity_id": {""}, "from": {"x"}, "to": {"y"}}, "entity_id is required"},
+		{"bad from wins over bad to", registerQuery("x", "y"), "from must be a YYYY-MM-DD date"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -129,6 +133,9 @@ func TestRegisterHandler_ErrorTable(t *testing.T) {
 			}
 			if strings.Contains(rec.Body.String(), "secret internals") {
 				t.Errorf("body leaks the raw error: %s", rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Type"); strings.Contains(got, "spreadsheet") || rec.Header().Get("Content-Disposition") != "" {
+				t.Errorf("error answer carries download headers: %q", got)
 			}
 			if got := decodeErrorBody(t, rec.Body); got != tc.wantBody {
 				t.Errorf("error = %q, want %q", got, tc.wantBody)

@@ -2,11 +2,16 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
 	"time"
 	"unicode/utf16"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/xuri/excelize/v2"
 
@@ -161,4 +166,86 @@ func (s *Store) Register(ctx context.Context, r Request, w io.Writer, onStart fu
 		onStart(name)
 	}
 	return f.Write(w)
+}
+
+const xlsxContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+// registerFn is Store.Register as RegisterHandler consumes it.
+type registerFn func(ctx context.Context, r Request, w io.Writer, onStart func(filename string)) error
+
+// parseRegisterRequest reads entity_id and two YYYY-MM-DD dates; a year below 1 is
+// refused because the bundle's RFC3339 parser accepts year 0 and Postgres does not.
+func parseRegisterRequest(query url.Values) (Request, string) {
+	entityID := query.Get("entity_id")
+	if entityID == "" {
+		return Request{}, "entity_id is required"
+	}
+	if _, err := uuid.Parse(entityID); err != nil {
+		return Request{}, "entity_id must be a well-formed uuid"
+	}
+	var dates [2]time.Time
+	for i, name := range [2]string{"from", "to"} {
+		raw := query.Get(name)
+		if raw == "" {
+			return Request{}, name + " is required"
+		}
+		d, err := time.Parse(time.DateOnly, raw)
+		if err != nil || d.Year() < 1 {
+			return Request{}, name + " must be a YYYY-MM-DD date"
+		}
+		dates[i] = d
+	}
+	if dates[0].After(dates[1]) {
+		return Request{}, "from must not be after to"
+	}
+	return Request{EntityID: entityID, From: dates[0], To: dates[1]}, ""
+}
+
+// RegisterHandler returns GET /v1/invoice-register: identity, then parameters, then the store.
+func RegisterHandler(register registerFn, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		req, msg := parseRegisterRequest(r.URL.Query())
+		if msg != "" {
+			writeError(w, http.StatusBadRequest, msg)
+			return
+		}
+
+		sink := &bundleSink{w: w, contentType: xlsxContentType}
+		err := register(r.Context(), req, sink, sink.setFilename)
+		if err == nil {
+			return
+		}
+		if sink.wrote {
+			log.ErrorContext(r.Context(), "archive: register abandoned mid-stream", slog.Any("err", err))
+			return
+		}
+		status, body := registerStatusForErr(err)
+		if status == http.StatusInternalServerError {
+			log.ErrorContext(r.Context(), "archive: register", slog.Any("err", err))
+		}
+		writeError(w, status, body)
+	}
+}
+
+// registerStatusForErr words the cap and cell refusals for the register, else statusForErr.
+func registerStatusForErr(err error) (int, string) {
+	var tooMany *TooManyInvoicesError
+	var tooLong *CellTooLongError
+	switch {
+	case errors.As(err, &tooMany):
+		return http.StatusBadRequest,
+			fmt.Sprintf("%d invoices exceeds the register limit of %d", tooMany.Count, tooMany.Limit)
+	case errors.As(err, &tooLong):
+		return http.StatusBadRequest,
+			fmt.Sprintf("invoice %s: %s is longer than the %d characters an XLSX cell holds",
+				tooLong.InvoiceNumber, tooLong.Column, excelize.TotalCellChars)
+	}
+	return statusForErr(err)
 }

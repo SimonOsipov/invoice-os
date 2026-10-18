@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Header } from './components/Header'
+import { LoadFailed } from './components/LoadFailed'
+import { NotFound } from './components/NotFound'
 import { Sidebar } from './components/Sidebar'
 import { chooseConsent, CookieNotice, readConsent, syncBlogConsent, trackBlogPageView } from './analytics'
+import { loadBlog, type BlogData } from './data'
 import { privacyHref } from './links'
+import { crumbsFor, resolveView, type BlogState } from './model'
 import { blogPath, parseBlogPath, type Route } from './route'
 
 const toTop = () => {
@@ -13,8 +17,26 @@ const toTop = () => {
 
 const HOME: Route = { view: 'home' }
 
-export function App() {
+export function App({ load = loadBlog }: { load?: () => Promise<BlogData> }) {
   const [route, setRoute] = useState<Route>(() => parseBlogPath(window.location.pathname))
+  const [blog, setBlog] = useState<BlogState>({ status: 'loading' })
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    let live = true
+    load().then(
+      (data) => live && setBlog({ status: 'ready', data }),
+      () => live && setBlog({ status: 'failed' }),
+    )
+    return () => {
+      live = false
+    }
+  }, [load, attempt])
+
+  const retry = () => {
+    setBlog({ status: 'loading' })
+    setAttempt((n) => n + 1)
+  }
 
   const [consent, setConsent] = useState(() => readConsent())
   const [reopened, setReopened] = useState(false)
@@ -56,6 +78,9 @@ export function App() {
     trackBlogPageView()
   }, [path])
 
+  const view = resolveView(route, '', blog)
+  const data = blog.status === 'ready' ? blog.data : null
+
   return (
     <div
       className="asc-app"
@@ -69,7 +94,7 @@ export function App() {
         overflow: 'hidden',
       }}
     >
-      <Sidebar route={route} onHome={() => navigate(HOME)} onSubscribe={() => navigate({ view: 'subscribe' })}
+      <Sidebar route={route} data={data} onHome={() => navigate(HOME)} onSubscribe={() => navigate({ view: 'subscribe' })}
         onCookieChoices={() => {
           const next = syncBlogConsent()
           if (next) setConsent(next)
@@ -77,7 +102,15 @@ export function App() {
         }}
       />
       <main id="blog-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}>
-        <Header route={route} onNavigate={navigate} />
+        <Header crumbs={crumbsFor(view, navigate)} />
+        {view.kind === 'missing' && data && (
+          <NotFound categories={data.categories} onCategory={(id) => navigate({ view: 'category', id })} />
+        )}
+        {view.kind === 'failed' && <LoadFailed onRetry={retry} />}
+        {/* Home, category, post and search views land in BLOG-04-04 and -05. */}
+        {(view.kind === 'home' || view.kind === 'category' || view.kind === 'post' || view.kind === 'search') && (
+          <section className="blog-px" data-view={view.kind} />
+        )}
         {(consent === null || reopened) && (
           <CookieNotice
             current={consent}

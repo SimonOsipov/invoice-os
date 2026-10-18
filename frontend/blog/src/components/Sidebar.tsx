@@ -1,17 +1,19 @@
 import { Icon } from '../icons'
 import { landingHref } from '../links'
+import type { BlogData } from '../data'
 import type { Route } from '../route'
 import { Button } from './Button'
 import { Logo } from './Logo'
 
 type SidebarProps = {
   route: Route
+  data: BlogData | null
   onHome: () => void
   onSubscribe: () => void
   onCookieChoices: () => void
 }
 
-export function Sidebar({ route, onHome, onSubscribe, onCookieChoices }: SidebarProps) {
+export function Sidebar({ route, data, onHome, onSubscribe, onCookieChoices }: SidebarProps) {
   const home = route.view === 'home'
   return (
     <aside
@@ -123,6 +125,11 @@ export function Sidebar({ route, onHome, onSubscribe, onCookieChoices }: Sidebar
         >
           <Icon name="layout-dashboard" size={17} />
           <span style={{ flex: 1 }}>All posts</span>
+          {data && (
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-4)' }}>
+              {data.posts.length}
+            </span>
+          )}
         </button>
         <div
           className="t-meta blog-navlabel"

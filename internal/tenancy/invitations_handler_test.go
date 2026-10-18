@@ -1395,3 +1395,27 @@ func TestInvitationRevokeHandler_StatusMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestInvitationRevokeHandler_RealStoreRefusalsReachTheWire(t *testing.T) {
+	a := newAPIWorld(t, "Revoke Wire Tenant", "Ada Obi")
+	other := newInvWorld(t, "Revoke Wire Other Tenant", "Olu Bee")
+	foreign := seedInvitation(t, other.super, seedInv{tenant: other.tenant, email: "f@x.test", invitedBy: other.admin})
+	accepted := seedInvitation(t, a.super, seedInv{tenant: a.tenant, email: "a@x.test", status: "accepted", invitedBy: a.admin})
+	pending := seedInvitation(t, a.super, seedInv{tenant: a.tenant, email: "p@x.test", invitedBy: a.admin})
+	suspended := a.as(a.addMember(t, "admin", "suspended", "Sue"))
+	h := a.handler(&apiSender{})
+
+	assertErrorBody(t, apiDo(h, a.adminCtx(), http.MethodPost, revokeTarget(foreign.ID), ""), http.StatusNotFound, "invitation not found")
+	assertErrorBody(t, apiDo(h, a.adminCtx(), http.MethodPost, revokeTarget(uuid.NewString()), ""), http.StatusNotFound, "invitation not found")
+	assertErrorBody(t, apiDo(h, a.adminCtx(), http.MethodPost, revokeTarget(accepted.ID), ""), http.StatusConflict, "this invite is no longer pending")
+	assertErrorBody(t, apiDo(h, suspended, http.MethodPost, revokeTarget(pending.ID), ""), http.StatusForbidden, db.NotActiveMemberMessage)
+	if rows := invRows(t, other.super, other.tenant, "id = $2", foreign.ID); len(rows) != 1 || rows[0].Status != "pending" {
+		t.Errorf("the other tenant's invite changed: %+v", rows)
+	}
+
+	// Control: the same route revokes; a second call is the 409.
+	if item := apiItem(t, apiDo(h, a.adminCtx(), http.MethodPost, revokeTarget(pending.ID), "")); item["status"] != "revoked" {
+		t.Errorf("control: body = %v, want status revoked", item)
+	}
+	assertErrorBody(t, apiDo(h, a.adminCtx(), http.MethodPost, revokeTarget(pending.ID), ""), http.StatusConflict, "this invite is no longer pending")
+}

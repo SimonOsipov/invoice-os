@@ -1819,3 +1819,264 @@ func TestInvitations_AppRoleHasNoDeleteOnInvitations(t *testing.T) {
 		t.Errorf("invoice_app UPDATE = %v, DELETE = %v on invitations; want true, false", update, del)
 	}
 }
+
+// holdInvitationRow locks one invitations row from a superuser tx until release, so racers queue on it.
+func holdInvitationRow(t *testing.T, w invWorld, id string) (release func()) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := w.super.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var one int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM invitations WHERE id = $1 FOR UPDATE`, id).Scan(&one); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("lock the invitation row: %v", err)
+	}
+	released := false
+	release = func() {
+		if released {
+			return
+		}
+		released = true
+		if err := tx.Commit(ctx); err != nil {
+			t.Errorf("release the row lock: %v", err)
+		}
+	}
+	t.Cleanup(release)
+	return release
+}
+
+// waitRowLockWaiters blocks until n backends wait on a row lock for an invitation statement.
+func waitRowLockWaiters(t *testing.T, w invWorld, n int, early ...chan error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var got int
+		if err := w.super.QueryRow(context.Background(),
+			`SELECT count(*) FROM pg_stat_activity
+			  WHERE datname = current_database() AND wait_event_type = 'Lock'
+			    AND query ~* '(from invitations|accept_invitation)'`).Scan(&got); err != nil {
+			t.Fatalf("read pg_stat_activity: %v", err)
+		}
+		if got >= n {
+			return
+		}
+		for _, ch := range early {
+			select {
+			case err := <-ch:
+				t.Fatalf("a racer returned while the row lock was held (err %v)", err)
+			default:
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d backends wait on the invitation row after 5 s, want %d", got, n)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func TestInvitations_ConcurrentRevokesOfOneInviteSucceedOnce(t *testing.T) {
+	w := newInvWorld(t, "Concurrent Revoke Tenant", "Ada Obi")
+	target := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "t@x.test", role: "reviewer", invitedBy: w.admin})
+	release := holdInvitationRow(t, w, target.ID)
+
+	const racers = 4
+	results := make(chan error, racers)
+	for range racers {
+		go func() { results <- w.store.RevokeInvitation(w.adminCtx(), target.ID) }()
+	}
+	waitRowLockWaiters(t, w, racers, results)
+	release()
+
+	ok, notPending := 0, 0
+	for range racers {
+		select {
+		case err := <-results:
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, ErrInvitationNotPending):
+				notPending++
+			default:
+				t.Errorf("unexpected revoke error: %v", err)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("a revoke did not return after the row lock was released")
+		}
+	}
+	if ok != 1 || notPending != racers-1 {
+		t.Errorf("successes/not-pending = %d/%d, want 1/%d", ok, notPending, racers-1)
+	}
+	if n := len(auditPayloads(t, w.super, w.tenant, "invitation.revoked")); n != 1 {
+		t.Errorf("invitation.revoked rows = %d, want 1", n)
+	}
+}
+
+func TestInvitations_RevokeRacingAResendLeavesTheInviteRevoked(t *testing.T) {
+	w := newInvWorld(t, "Revoke Resend Race Tenant", "Ada Obi")
+	resendWon := 0
+	for i := range 4 {
+		target := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: fmt.Sprintf("t%d@x.test", i), invitedBy: w.admin})
+		release := holdInvitationRow(t, w, target.ID)
+		revoked, resent := make(chan error, 1), make(chan error, 1)
+		startRevoke := func() { go func() { revoked <- w.store.RevokeInvitation(w.adminCtx(), target.ID) }() }
+		startResend := func() { go func() { _, err := w.store.ResendInvitation(w.adminCtx(), target.ID); resent <- err }() }
+		// The first racer in the row-lock queue goes first on release; alternate it.
+		first, second := startRevoke, startResend
+		if i%2 == 1 {
+			first, second = startResend, startRevoke
+		}
+		first()
+		waitRowLockWaiters(t, w, 1, revoked, resent)
+		second()
+		waitRowLockWaiters(t, w, 2, revoked, resent)
+		release()
+
+		var revokeErr, resendErr error
+		for _, c := range []struct {
+			ch  chan error
+			dst *error
+		}{{revoked, &revokeErr}, {resent, &resendErr}} {
+			select {
+			case *c.dst = <-c.ch:
+			case <-time.After(15 * time.Second):
+				t.Fatal("a racer did not return after the row lock was released")
+			}
+		}
+
+		if revokeErr != nil {
+			t.Errorf("round %d: revoke err = %v, want nil (a resend never blocks a revoke)", i, revokeErr)
+		}
+		if resendErr == nil {
+			resendWon++
+		} else if !errors.Is(resendErr, ErrInvitationNotPending) {
+			t.Errorf("round %d: resend err = %v, want nil or ErrInvitationNotPending", i, resendErr)
+		}
+		if rows := invRows(t, w.super, w.tenant, "id = $2", target.ID); len(rows) != 1 || rows[0].Status != "revoked" {
+			t.Errorf("round %d: rows = %+v, want one revoked", i, rows)
+		}
+	}
+	if n := len(auditPayloads(t, w.super, w.tenant, "invitation.revoked")); n != 4 {
+		t.Errorf("invitation.revoked rows = %d, want 4", n)
+	}
+	if n := len(auditPayloads(t, w.super, w.tenant, "invitation.resent")); n != resendWon {
+		t.Errorf("invitation.resent rows = %d, want %d (one per won resend)", n, resendWon)
+	}
+	if resendWon != 2 {
+		t.Errorf("resends that won the row = %d, want 2 (the two rounds where it queued first)", resendWon)
+	}
+}
+
+func TestInvitations_RevokeRacingAnAcceptNeverBothWins(t *testing.T) {
+	w := newInvWorld(t, "Revoke Accept Race Tenant", "Ada Obi")
+	revokeFirst, acceptFirst := 0, 0
+	for i := range 6 {
+		email := fmt.Sprintf("race%d@obi.test", i)
+		issued := mustIssue(t, w.adminCtx(), w.store, []string{email}, "reviewer")[0]
+		user := uuid.NewString()
+		release := holdInvitationRow(t, w, issued.ID)
+		revoked, accepted := make(chan error, 1), make(chan error, 1)
+		startRevoke := func() { go func() { revoked <- w.store.RevokeInvitation(w.adminCtx(), issued.ID) }() }
+		startAccept := func() {
+			go func() {
+				_, _, _, err := w.store.AcceptInvitation(tenantless(user, email), issued.Token)
+				accepted <- err
+			}()
+		}
+		// The first racer in the row-lock queue goes first on release; alternate it.
+		first, second := startRevoke, startAccept
+		if i%2 == 1 {
+			first, second = startAccept, startRevoke
+		}
+		first()
+		waitRowLockWaiters(t, w, 1, revoked, accepted)
+		second()
+		waitRowLockWaiters(t, w, 2, revoked, accepted)
+		release()
+
+		var revokeErr, acceptErr error
+		for _, c := range []struct {
+			ch  chan error
+			dst *error
+		}{{revoked, &revokeErr}, {accepted, &acceptErr}} {
+			select {
+			case *c.dst = <-c.ch:
+			case <-time.After(15 * time.Second):
+				t.Fatal("a racer did not return after the row lock was released")
+			}
+		}
+
+		rows := invRows(t, w.super, w.tenant, "id = $2", issued.ID)
+		members := len(membersOf(t, w.super, user))
+		switch {
+		case revokeErr == nil:
+			revokeFirst++
+			if !errors.Is(acceptErr, ErrInvitationNotValid) || members != 0 || len(rows) != 1 || rows[0].Status != "revoked" {
+				t.Errorf("round %d: revoke won but accept err = %v, memberships = %d, rows = %+v", i, acceptErr, members, rows)
+			}
+		case errors.Is(revokeErr, ErrInvitationNotPending):
+			acceptFirst++
+			if acceptErr != nil || members != 1 || len(rows) != 1 || rows[0].Status != "accepted" {
+				t.Errorf("round %d: accept won but accept err = %v, memberships = %d, rows = %+v", i, acceptErr, members, rows)
+			}
+		default:
+			t.Errorf("round %d: revoke err = %v, want nil or ErrInvitationNotPending", i, revokeErr)
+		}
+	}
+	if got := len(auditPayloads(t, w.super, w.tenant, "invitation.revoked")); got != revokeFirst {
+		t.Errorf("invitation.revoked rows = %d, want %d (one per won revoke)", got, revokeFirst)
+	}
+	if got := len(acceptedAudits(t, w.super, w.tenant)); got != acceptFirst {
+		t.Errorf("invitation.accepted rows = %d, want %d (one per won accept)", got, acceptFirst)
+	}
+	if revokeFirst != 3 || acceptFirst != 3 {
+		t.Errorf("revoke won %d and accept won %d of 6, want 3 each (the queue order alternates)", revokeFirst, acceptFirst)
+	}
+}
+
+func TestInvitations_RevokeTouchesOnlyItsOwnRow(t *testing.T) {
+	w := newInvWorld(t, "Revoke Siblings Tenant", "Ada Obi")
+	other := newInvWorld(t, "Revoke Siblings Other Tenant", "Olu Bee")
+	target := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "t@x.test", invitedBy: w.admin})
+	sibling := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "s@x.test", invitedBy: w.admin})
+	foreign := seedInvitation(t, other.super, seedInv{tenant: other.tenant, email: "f@x.test", invitedBy: other.admin})
+
+	if err := w.store.RevokeInvitation(w.adminCtx(), target.ID); err != nil {
+		t.Fatalf("RevokeInvitation: %v", err)
+	}
+
+	if rows := invRows(t, w.super, w.tenant, "id = $2", target.ID); len(rows) != 1 || rows[0].Status != "revoked" {
+		t.Fatalf("control: target rows = %+v, want one revoked", rows)
+	}
+	for name, c := range map[string]struct {
+		tenant string
+		id     string
+	}{"sibling in the tenant": {w.tenant, sibling.ID}, "invite of another tenant": {other.tenant, foreign.ID}} {
+		if rows := invRows(t, w.super, c.tenant, "id = $2", c.id); len(rows) != 1 || rows[0].Status != "pending" {
+			t.Errorf("%s: rows = %+v, want one still pending", name, rows)
+		}
+	}
+	listed, err := w.store.ListInvitations(w.adminCtx())
+	if err != nil || len(listed) != 1 || listed[0].ID != sibling.ID {
+		t.Errorf("ListInvitations = %+v, %v; want only the sibling", listed, err)
+	}
+}
+
+func TestInvitations_RevokeOfAnExpiredPendingInviteSucceeds(t *testing.T) {
+	w := newInvWorld(t, "Revoke Expired Tenant", "Ada Obi")
+	expired := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "e@x.test", invitedBy: w.admin, expires: time.Now().Add(-48 * time.Hour)})
+	failed := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "f@x.test", invitedBy: w.admin, sendStatus: "failed"})
+
+	for name, id := range map[string]string{"expired": expired.ID, "failed send": failed.ID} {
+		if err := w.store.RevokeInvitation(w.adminCtx(), id); err != nil {
+			t.Errorf("revoke of a pending %s invite: %v", name, err)
+		}
+		if rows := invRows(t, w.super, w.tenant, "id = $2", id); len(rows) != 1 || rows[0].Status != "revoked" {
+			t.Errorf("%s: rows = %+v, want one revoked", name, rows)
+		}
+	}
+	if n := len(auditPayloads(t, w.super, w.tenant, "invitation.revoked")); n != 2 {
+		t.Errorf("invitation.revoked rows = %d, want 2", n)
+	}
+}

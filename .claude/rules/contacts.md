@@ -24,12 +24,12 @@ paths:
 - Put `{{{RESEND_UNSUBSCRIBE_URL}}}` in every blog broadcast.
 - Write blog subscribers to Resend only, never HubSpot.
 - Never touch Resend before the confirm click.
-- Never send `unsubscribed` (true or false) or a Marketing `opt_out` for a blog subscriber.
+- Never send `unsubscribed` (true or false) or any `opt_out` (Marketing or Blog topic) for a blog subscriber.
 - Never add or remove a Resend suppression.
 - Delete unconfirmed blog requests within an hour of expiry.
 - A Resend broadcast cannot filter on a contact property. Send every blog broadcast to all of segment "Blog". Use `blog_categories` and `blog_frequency` to choose content only.
 - Ask the PM before adding per-category segments.
-- Set the topic to `opt_in` once, for a ticked person. Record it in `resend_opt_in_sent_at`.
+- Set the Marketing topic to `opt_in` once, for a ticked person. Record it in `resend_opt_in_sent_at`.
 - Never send Resend `unsubscribed`, `opt_out` or a second `opt_in` for registration and Marketing consent.
 - Send a repeat Blog-topic `opt_in` after each confirmed double opt-in.
 - Queue no Resend job for a demo booker who did not tick.

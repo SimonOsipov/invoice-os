@@ -391,7 +391,7 @@ async function openReports(page: Page): Promise<void> {
   await settle(page, main(page))
 }
 
-test('PW-04 Reports at 1440: KPI tiles, chips, PASS colour, disabled exports', async ({ page }, testInfo) => {
+test('PW-04 Reports at 1440: KPI tiles, chips, PASS colour, three disabled exports, one live register', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await openReports(page)
 
@@ -421,7 +421,7 @@ test('PW-04 Reports at 1440: KPI tiles, chips, PASS colour, disabled exports', a
   expect(pass, 'PASS chip colour').toBe('rgb(29, 115, 67)')
 
   const exportsList = page.locator('button[disabled][aria-describedby="exports-blocked-reason-text"]')
-  await expect(exportsList, 'the export row draws four disabled buttons').toHaveCount(4)
+  await expect(exportsList, 'the export row draws three disabled buttons').toHaveCount(3)
   const exportReads: Record<string, unknown>[] = []
   for (const btn of await exportsList.all()) {
     const corners = await expectCorners(btn, '7px', 'export button')
@@ -431,10 +431,79 @@ test('PW-04 Reports at 1440: KPI tiles, chips, PASS colour, disabled exports', a
     expect(paint.opacity, 'export opacity').toBe('0.45')
     exportReads.push({ corners, paint })
   }
+
+  const register = page.getByRole('button', { name: /^Invoice register/ })
+  await expect(register, 'the Invoice register button is live').toBeEnabled()
+  const registerCorners = await expectCorners(register, '7px', 'Invoice register button')
+  const registerPaint = await styles(register, ['background-color', 'color', 'opacity'])
+  expect(registerPaint, 'Invoice register keeps the ghost paint at full opacity').toEqual({
+    'background-color': 'rgba(0, 0, 0, 0)',
+    color: 'rgb(11, 48, 50)',
+    opacity: '1',
+  })
+  const expectedPeriod = await page.evaluate(() => {
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const now = new Date()
+    const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    return { from: ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1)), to: ymd(new Date(now.getFullYear(), now.getMonth(), 0)) }
+  })
+  await expect(page.getByTestId('register-period-from'), 'From holds the previous month start').toHaveValue(expectedPeriod.from)
+  await expect(page.getByTestId('register-period-to'), 'To holds the previous month end').toHaveValue(expectedPeriod.to)
+  const [download] = await Promise.all([page.waitForEvent('download'), register.click()])
+  expect(download.suggestedFilename(), 'the register download name').toMatch(/^ASComply_invoice-register_.+_\d{8}_\d{8}\.xlsx$/)
+  await expect(register, 'the button frees once the download lands').toBeEnabled()
+  await expect(page.getByTestId('invoice-register-error'), 'the download raised no error line').toHaveCount(0)
   const scroll = await assertPageDoesNotScrollSideways(page, 'Reports')
 
-  await attachJson(testInfo, 'pw-04-measurements', { h1, tileReads, chips, pass, exportReads, scroll })
+  await attachJson(testInfo, 'pw-04-measurements', { h1, tileReads, chips, pass, exportReads, registerCorners, registerPaint, expectedPeriod, scroll })
   await attachShot(page, testInfo, 'reports')
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('PW-04 export card fits at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await openReports(page)
+  const card = page.getByText('Export & filings', { exact: true }).locator('xpath=../..')
+  const parts = {
+    from: page.getByTestId('register-period-from'),
+    to: page.getByTestId('register-period-to'),
+    register: page.getByRole('button', { name: /^Invoice register/ }),
+    vat: page.getByRole('button', { name: /^VAT return CSV/ }),
+    audit: page.getByRole('button', { name: /^Audit log PDF/ }),
+    wht: page.getByRole('button', { name: /^WHT schedule CSV/ }),
+    reason: page.getByTestId('exports-blocked-reason'),
+  }
+  const names = Object.keys(parts) as (keyof typeof parts)[]
+  const sweep: { width: number; scroll: { scrollWidth: number; clientWidth: number } }[] = []
+  const entry = page.viewportSize()
+  try {
+    for (const width of WIDE_WIDTHS) {
+      await page.setViewportSize({ width, height: 1080 })
+      await expect
+        .poll(async () => {
+          await settleAnimations(card)
+          const outer = await card.boundingBox()
+          if (!outer) return 'the export card has no box'
+          const boxes: Partial<Record<keyof typeof parts, Rect>> = {}
+          for (const name of names) {
+            const box = await parts[name].boundingBox()
+            if (!box) return `${name} has no box`
+            if (!enclosesRect(outer, box, 1)) return `${name} ${JSON.stringify(box)} leaves the card ${JSON.stringify(outer)}`
+            boxes[name] = box
+          }
+          for (const [i, a] of names.entries()) {
+            for (const b of names.slice(i + 1)) if (rectsOverlap(boxes[a]!, boxes[b]!)) return `${a} overlaps ${b}`
+          }
+          return 'ok'
+        }, { message: `the export card at ${width}px`, timeout: 10_000 })
+        .toBe('ok')
+      sweep.push({ width, scroll: await assertPageDoesNotScrollSideways(page, `Reports at ${width}px`) })
+    }
+  } finally {
+    if (entry) await page.setViewportSize(entry)
+  }
+  expect(sweep.map((m) => m.width), 'the sweep measured every wide width, in order').toEqual([...WIDE_WIDTHS])
+  await attachJson(testInfo, 'pw-04-export-card-fit', sweep)
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

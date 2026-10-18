@@ -1071,7 +1071,7 @@ test('ST-07 Reports exports are dimmed, not-allowed and unfilled', async ({ page
   await navButton(page, /^Reports/).click()
   await expect(h1Of(page, 'Reports & analytics'), 'the Reports screen drew no h1').toBeVisible()
   const exportsList = page.locator('button[disabled][aria-describedby="exports-blocked-reason-text"]')
-  await expect(exportsList, 'the export row draws four disabled buttons').toHaveCount(4, { timeout: 20_000 })
+  await expect(exportsList, 'the export row draws three disabled buttons').toHaveCount(3, { timeout: 20_000 })
   await settle(page, main(page))
   const reads: Record<string, string>[] = []
   for (const btn of await exportsList.all()) {
@@ -1079,7 +1079,9 @@ test('ST-07 Reports exports are dimmed, not-allowed and unfilled', async ({ page
     expect(paint, 'export paint').toEqual({ opacity: '0.45', cursor: 'not-allowed', 'background-color': 'rgba(0, 0, 0, 0)' })
     reads.push(paint)
   }
-  await attachJson(testInfo, 'st-07-measurements', reads)
+  const register = await styles(page.getByRole('button', { name: /^Invoice register/ }), ['opacity', 'cursor'])
+  expect(register, 'the live Invoice register button is neither dimmed nor not-allowed').toEqual({ opacity: '1', cursor: 'pointer' })
+  await attachJson(testInfo, 'st-07-measurements', { reads, register })
   expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 

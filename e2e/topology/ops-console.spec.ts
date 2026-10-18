@@ -1704,7 +1704,7 @@ test.describe('OPS-06 blog categories', () => {
     page.on('request', (req) => {
       if (req.method() === 'GET' && new URL(req.url()).pathname.endsWith('/staff/blog/categories')) catReads.push(req.url())
     })
-    await expect(catRow(page, nameA), 'A starts with no posts').toContainText(/\b0 posts\b/)
+    await expect(catRow(page, nameA).locator('[data-cat-count]'), 'A starts with no posts').toHaveText('0 posts')
     const readsBefore = catReads.length
     await page.getByRole('button', { name: 'New post' }).click()
     await expect(titleInput(page), 'New post opened no editor').toBeVisible()
@@ -1721,7 +1721,7 @@ test.describe('OPS-06 blog categories', () => {
     await expect(toastOf(page, 'Draft saved')).toBeVisible()
     await bar(page).getByRole('button', { name: 'All posts' }).click()
     await expect(page.locator('[data-blog-cats]'), 'All posts did not return to the Categories tab').toBeVisible()
-    await expect(catRow(page, nameA), 'the row did not count the new post').toContainText(/\b1 post\b/)
+    await expect(catRow(page, nameA).locator('[data-cat-count]'), 'the row did not count the new post').toHaveText('1 post')
     expect(catReads.length, 'the count came from a categories re-read').toBe(readsBefore)
 
     // 8b: a post another staff member wrote. The refused delete re-reads both lists, so the next confirm offers the move.
@@ -1747,7 +1747,7 @@ test.describe('OPS-06 blog categories', () => {
     await expect(page.locator('[data-blog-table]'), 'the Posts tab drew no table').toBeVisible()
     await pad(page).getByRole('button', { name: /Categories/ }).click()
     await backPosts
-    await expect(catRow(page, nameB), 'B still counts the deleted post').toContainText(/\b0 posts\b/)
+    await expect(catRow(page, nameB).locator('[data-cat-count]'), 'B still counts the deleted post').toHaveText('0 posts')
 
     // 9
     await rowButton(catRow(page, nameA), 'Delete').click()

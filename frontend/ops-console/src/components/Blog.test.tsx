@@ -587,6 +587,8 @@ describe('BlogCategories', () => {
     expect(html).toContain('The order here is the order of the bands on the blog home and in its sidebar.')
     expect(html).toMatch(/<button[^>]*class="v2-btn v2-btn-ghost"[^>]*>(?:(?!<\/button>).)*Add category<\/button>/)
     for (const t of ['Alpha', 'Alpha headline', 'Beta', 'Beta headline', '>01<', '>02<', '1 post<', '2 posts<']) expect(html).toContain(t)
+    expect(html).toMatch(/<span data-cat-count[^>]*>1 post<\/span>/)
+    expect(html).toMatch(/<span data-cat-count[^>]*>2 posts<\/span>/)
     expect(html).toContain('data-cat-head')
     expect(html).toContain('data-blog-cats')
     expect(html.match(/data-cat-row/g)).toHaveLength(2)

@@ -182,7 +182,7 @@ export function BlogCategories({ cats, posts, onMove, onAdd, onEdit, onDelete, f
                 <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--fg-1)', overflowWrap: 'anywhere' }}>{r.cat.name}</div>
                 <div style={{ fontSize: 12, color: 'var(--fg-3)', ...ELLIPSIS }}>{r.cat.headline}</div>
               </div>
-              <span className="mono" style={{ flex: 'none', width: 70, fontSize: 11, color: 'var(--fg-3)' }}>
+              <span data-cat-count className="mono" style={{ flex: 'none', width: 70, fontSize: 11, color: 'var(--fg-3)' }}>
                 {r.count}
               </span>
               <div style={{ flex: 'none', display: 'flex', gap: 4 }}>

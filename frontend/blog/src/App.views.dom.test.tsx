@@ -121,6 +121,12 @@ describe('search', () => {
     expect(window.history.length).toBe(entries)
   })
 
+  it('VW-15 a whitespace-only query shows no clear button (prototype L84 uses the trimmed query)', async () => {
+    await mount('/')
+    type('   ')
+    expect(document.querySelector('[aria-label="Clear search"]')).toBeNull()
+  })
+
   it('VW-05 no hit shows the empty state with chips', async () => {
     await mount('/')
     type('zzzz')
@@ -144,6 +150,9 @@ describe('home', () => {
       expect(b.querySelectorAll('button:not(.ds-btn)').length).toBeLessThanOrEqual(3)
     }
     expect(bands[0].querySelector('button.ds-btn')?.textContent).toBe('All 2 posts')
+    for (const b of bands) expect(b.querySelector('button.ds-btn svg'), 'the band button keeps its arrow').not.toBeNull()
+    const sub = all('#blog-main button.ds-btn').find((b) => b.textContent === 'Subscribe')!
+    expect(sub.querySelector('svg'), 'the newsletter Subscribe keeps its arrow').not.toBeNull()
     expect(bands[0].style.background).toBe('var(--sage)')
     expect(bands[1].style.background).toBe('var(--background)')
     expect(main().textContent).toContain('New posts in your inbox.')

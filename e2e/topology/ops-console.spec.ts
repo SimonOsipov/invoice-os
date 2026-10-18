@@ -1709,7 +1709,8 @@ test.describe('OPS-06 blog categories', () => {
     await page.getByRole('button', { name: 'New post' }).click()
     await expect(titleInput(page), 'New post opened no editor').toBeVisible()
     await titleInput(page).fill(postTitle)
-    await page.getByLabel('Category', { exact: true }).selectOption({ label: nameA })
+    // The wrapping label's text includes the option names, so getByLabel exact never matches the editor select.
+    await page.locator('[data-blog-fields] label').filter({ has: page.getByText('Category', { exact: true }) }).locator('select').selectOption({ label: nameA })
     const createdPost = page.waitForResponse((r) => r.request().method() === 'POST' && BLOG_POSTS.test(r.url()))
     await page.getByRole('button', { name: 'Save draft', exact: true }).click()
     const made = await createdPost

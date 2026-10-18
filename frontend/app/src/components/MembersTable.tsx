@@ -204,7 +204,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
           const rolesLanded = ctx.rolesState === 'ready' || ctx.rolesState === 'empty'
           const roleCell = rolesLanded ? rosterRoleCell(roles, m.id) : { text: '', tooltip: '' }
           const pending = m.status === 'invited'
-          const clientLine = ctx.mode === 'firm' && !pending ? clientAccessLabel(m.clientAccess) : null
+          const clientLine = ctx.mode === 'firm' ? clientAccessLabel(m.clientAccess) : null
           const invite = pending ? invites.find((i) => i.id === m.id) : undefined
           const accountLine = invite ? inviteAccountLine(invite) : null
           return (

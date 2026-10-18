@@ -22,6 +22,7 @@ import { closeGlyph } from '../glyphs'
 import {
   ACCESS_ROLES,
   ADMIN_ALL_CLIENTS,
+  CLIENTS_UNREADABLE,
   emailLabel,
   isProtectedAdmin,
   MEMBER_UNBACKED,
@@ -178,6 +179,8 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
 
   const clientsLanded = ctx.entitiesState === 'ready' || ctx.entitiesState === 'empty'
   const storedClients = row.clientAccess ?? []
+  // `null`: the server withheld this row's set from a non-admin viewer (D12/D36).
+  const clientsUnreadable = row.clientAccess == null
 
   return (
     <>
@@ -259,6 +262,10 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
                 <UnbackedField reason={ADMIN_ALL_CLIENTS} noteId={scopeNoteId} dim>
                   <ClientAccessPicker idPrefix="drawer" value="all" clients={[]} />
                 </UnbackedField>
+              ) : clientsUnreadable ? (
+                <div data-testid="member-drawer-clients-unreadable" style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg-3)' }}>
+                  {CLIENTS_UNREADABLE}
+                </div>
               ) : (
                 <>
                   <fieldset disabled={clientsPending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>

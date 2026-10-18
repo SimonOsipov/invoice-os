@@ -380,6 +380,7 @@ export const NO_CLIENTS_NOTE = 'No clients picked. This person sees no client un
 export const NO_CLIENT_MATCH = 'No clients match this search.'
 
 export const ADMIN_ALL_CLIENTS = 'An admin sees every client.'
+export const CLIENTS_UNREADABLE = "Only an admin sees a member's clients."
 export const NO_CLIENTS_IN_WORKSPACE = 'This workspace has no clients yet.'
 
 export type PickerClient = { id: string; name: string }

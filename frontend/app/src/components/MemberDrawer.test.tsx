@@ -749,6 +749,11 @@ describe('FIRMS-02-05: the drawer edits client access', () => {
     expect(setMemberClients).not.toHaveBeenCalled()
   })
 
+  it('an unreadable access set shows the admin-only line', () => {
+    mount(vi.fn(), [], { members: [member({ id: 'u2', clientAccess: null })] })
+    expect(screen.getByTestId('member-drawer-clients-unreadable').textContent).toBe("Only an admin sees a member's clients.")
+  })
+
   it("the picker's search narrows the shown rows only and the count reads against the roster", () => {
     const setMemberClients = vi.fn()
     mount(setMemberClients, ['e1'], { entities: [entity('e1', 'Alpha Ltd'), entity('e2', 'Beta Ltd'), entity('e3', 'Gamma Ltd')] })

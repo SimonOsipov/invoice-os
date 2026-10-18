@@ -19,13 +19,13 @@
 ARG SERVICE
 
 # ---- Build: compile ./cmd/${SERVICE} into a static, CGO-free binary ----
-# golang:1.26-alpine tracks the latest 1.26.x (>= the go.mod toolchain 1.26.4),
-# so Go never has to download a toolchain at build time.
+# Pinned to the go.mod version; TestGoPins_RepoAgree fails when the two differ.
+# Go never downloads a toolchain at build time.
 #
 # Pulled through mirror.gcr.io, not docker.io: Railway Metal builders intermittently
 # lose egress to registry-1.docker.io, which fails the build at `load metadata` while
 # gcr.io keeps resolving. Same image -- the manifest digests were compared and match.
-FROM mirror.gcr.io/library/golang:1.26-alpine AS build
+FROM mirror.gcr.io/library/golang:1.26.9-alpine AS build
 WORKDIR /src
 # Modules first: this COPY+download layer is reused across source-only changes
 # via normal Docker layer caching. A BuildKit `--mount=type=cache` is deliberately

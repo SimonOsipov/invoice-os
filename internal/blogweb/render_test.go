@@ -293,6 +293,7 @@ func TestParseShell_RefusesAShellWithoutExactlyOneOfEachMarker(t *testing.T) {
 		"no root":           strings.Replace(good, rootDiv, "", 1),
 		"two root divs":     strings.Replace(good, rootDiv, rootDiv+rootDiv, 1),
 		"root before title": strings.Replace(strings.Replace(good, rootDiv, "", 1), title, rootDiv+title, 1),
+		"close before open": strings.Replace(good, title, "</title>x<title>", 1),
 	} {
 		if _, err := ParseShell(bad); err == nil {
 			t.Errorf("%s: no error", name)

@@ -49,8 +49,8 @@ func ParseShell(index string) (Shell, error) {
 	}
 	ti, te := strings.Index(index, titleOpen), strings.Index(index, titleClose)+len(titleClose)
 	ri := strings.Index(index, rootDiv)
-	if te > ri {
-		return Shell{}, fmt.Errorf("blogweb: shell has its root div before its title")
+	if te-len(titleClose) < ti+len(titleOpen) || te > ri {
+		return Shell{}, fmt.Errorf("blogweb: shell must hold <title>, </title>, then the root div, in that order")
 	}
 	return Shell{index[:ti], index[te:ri], index[ri+len(rootDiv):]}, nil
 }

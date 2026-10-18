@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -40,8 +41,28 @@ func TestMain(m *testing.M) {
 	if err := os.WriteFile(shimTrampoline, []byte("#!/bin/sh\nexec /bin/sh \"$0.body\" \"$@\"\n"), 0o555); err != nil {
 		panic(err)
 	}
+	warmShimTrampoline(dir)
 
 	os.Exit(m.Run())
+}
+
+// warmShimTrampoline execs the trampoline once so the macOS first-exec delay lands before the parallel tests.
+func warmShimTrampoline(dir string) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	warm := filepath.Join(dir, "warm")
+	if err := os.WriteFile(warm+".body", nil, 0o644); err != nil {
+		panic(err)
+	}
+	if err := os.Symlink(shimTrampoline, warm); err != nil {
+		panic(err)
+	}
+	if err := exec.Command(warm).Run(); err != nil {
+		panic("warming the shim trampoline failed: " + err.Error())
+	}
+	os.Remove(warm)
+	os.Remove(warm + ".body")
 }
 
 // runCLI execs the built prenv binary with args and returns its stdout,

@@ -2,11 +2,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactElement, ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { editorOf, newDraft, type Draft } from '../blog'
-import type { Category, Post } from '../blogApi'
+import { editorOf, newDraft, previewModel, type Draft, type DraftBlock } from '../blog'
+import type { Block, Category, Post } from '../blogApi'
 import type { BlogFilters } from '../types'
 import { BlogEditor } from './BlogEditor'
 import { BlogList, type BlogState } from './BlogList'
+import { BlogPreview } from './BlogPreview'
 
 const FILTERS: BlogFilters = { tab: 'posts', q: '', status: 'all', cat: 'all' }
 const post = (o: Partial<Post> = {}): Post => ({
@@ -181,9 +182,10 @@ describe('BlogList handlers', () => {
 })
 
 describe('BlogEditor', () => {
+  const blocks = { onAdd: () => {}, onMove: () => {}, onRemove: () => {}, onPatch: () => {} }
   const draft = (o: Partial<Draft> = {}): Draft => ({ ...newDraft([CAT], [], null, '2026-10-18'), ...o })
   const renderEditor = (d: Draft, coverUrl: string | null = null, dirty = false) =>
-    renderToStaticMarkup(<BlogEditor editor={{ ...editorOf(d), dirty }} cats={[CAT]} authors={[]} coverUrl={coverUrl} onField={() => {}} onCover={() => {}} onBack={() => {}} />)
+    renderToStaticMarkup(<BlogEditor editor={{ ...editorOf(d), dirty }} cats={[CAT]} authors={[]} coverUrl={coverUrl} onField={() => {}} onCover={() => {}} onBack={() => {}} {...blocks} />)
 
   it('the fields render the prototype copy', () => {
     const html = renderEditor(draft())
@@ -244,7 +246,7 @@ describe('BlogEditor', () => {
 
   it('a field error colours the border and prints the message', () => {
     const e = { ...editorOf(draft()), errors: { title: 'Add a title' } }
-    const html = renderToStaticMarkup(<BlogEditor editor={e} cats={[CAT]} authors={[]} coverUrl={null} onField={() => {}} onCover={() => {}} onBack={() => {}} />)
+    const html = renderToStaticMarkup(<BlogEditor editor={e} cats={[CAT]} authors={[]} coverUrl={null} onField={() => {}} onCover={() => {}} onBack={() => {}} {...blocks} />)
     expect(html).toContain('border:1px solid var(--destructive)')
     expect(html).toContain('Add a title')
   })
@@ -252,7 +254,7 @@ describe('BlogEditor', () => {
   it('Back, Remove and the switch call their handlers', () => {
     const onBack = vi.fn()
     const onField = vi.fn()
-    const t = BlogEditor({ editor: editorOf(draft({ cover: { kind: 'saved' } })), cats: [CAT], authors: [], coverUrl: null, onField, onCover: () => {}, onBack }) as ReactElement
+    const t = BlogEditor({ editor: editorOf(draft({ cover: { kind: 'saved' } })), cats: [CAT], authors: [], coverUrl: null, onField, onCover: () => {}, onBack, ...blocks }) as ReactElement
     const [back] = find(t, (e) => e.type === 'button' && text(e.props.children).includes('All posts'))
     ;(back.props.onClick as () => void)()
     expect(onBack).toHaveBeenCalledTimes(1)
@@ -266,7 +268,7 @@ describe('BlogEditor', () => {
 
   it('picking a file hands it on and empties the input; cancelling hands on null', () => {
     const onCover = vi.fn()
-    const t = BlogEditor({ editor: editorOf(draft()), cats: [CAT], authors: [], coverUrl: null, onField: () => {}, onCover, onBack: () => {} }) as ReactElement
+    const t = BlogEditor({ editor: editorOf(draft()), cats: [CAT], authors: [], coverUrl: null, onField: () => {}, onCover, onBack: () => {}, ...blocks }) as ReactElement
     const [input] = find(t, (e) => e.type === 'input' && e.props.type === 'file')
     const f = new Blob(['x'], { type: 'image/png' }) as File
     const target = { files: [f], value: 'C:\\fakepath\\a.png' }
@@ -275,5 +277,198 @@ describe('BlogEditor', () => {
     expect(target.value).toBe('')
     ;(input.props.onChange as (e: unknown) => void)({ target: { files: [], value: '' } })
     expect(onCover).toHaveBeenLastCalledWith(null)
+  })
+})
+
+// Like find, but renders function components (BlockCard holds no hooks).
+const findDeep = (n: ReactNode, pred: (e: El) => boolean, out: El[] = []): El[] => {
+  if (Array.isArray(n)) n.forEach((c) => findDeep(c, pred, out))
+  else if (n && typeof n === 'object' && 'props' in n) {
+    const e = n as El
+    if (pred(e)) out.push(e)
+    if (typeof e.type === 'function') findDeep((e.type as (p: unknown) => ReactNode)(e.props), pred, out)
+    else findDeep(e.props.children, pred, out)
+  }
+  return out
+}
+const blocks = (...b: Block[]): DraftBlock[] => b.map((x, i) => ({ u: `k${i}`, ...x }))
+const ONE_OF_EACH = blocks(
+  { type: 'p', text: 'para' },
+  { type: 'h', text: 'Head' },
+  { type: 'ul', items: ['a', 'b'] },
+  { type: 'note', kind: 'deadline', title: 'NT', text: 'NX' },
+  { type: 'quote', text: 'QT', who: 'QW' },
+  { type: 'demo', demo: 'approval' },
+)
+
+describe('BlogEditor blocks', () => {
+  const props = (body: DraftBlock[], o: Partial<Parameters<typeof BlogEditor>[0]> = {}) => ({
+    editor: editorOf({ ...newDraft([CAT], [], null, '2026-10-18'), body }),
+    cats: [CAT],
+    authors: [],
+    coverUrl: null,
+    onField: () => {},
+    onCover: () => {},
+    onBack: () => {},
+    onAdd: () => {},
+    onMove: () => {},
+    onRemove: () => {},
+    onPatch: () => {},
+    ...o,
+  })
+  const html = (body: DraftBlock[]) => renderToStaticMarkup(<BlogEditor {...props(body)} />)
+
+  it('each block type renders its inputs and hints', () => {
+    const h = html(ONE_OF_EACH)
+    for (const t of [
+      'Content',
+      '6 blocks',
+      'placeholder="Write a paragraph…"',
+      'placeholder="Section heading"',
+      "Headings are listed in the article&#x27;s table of contents.",
+      'placeholder="One item per line"',
+      'One item per line. Each item gets a check mark.',
+      '>Regulation note<',
+      '>Deadline<',
+      '>Availability<',
+      'placeholder="Callout title"',
+      'placeholder="Callout text"',
+      'placeholder="Quote, without quotation marks"',
+      'placeholder="Name, role, company"',
+      'Plays the Feature Library demo inside the article.',
+      'Add block',
+      '>01<',
+      '>06<',
+      'PARAGRAPH',
+      'HEADING',
+      'LIST',
+      'CALLOUT',
+      'QUOTE',
+      'DEMO',
+    ])
+      expect(h, t).toContain(t)
+    for (const l of ['Paragraph', 'Heading', 'List', 'Callout', 'Quote', 'Demo']) expect(h).toMatch(new RegExp(`</svg>${l}</button>`))
+    expect(h.match(/aria-label="Move up"/g)).toHaveLength(6)
+    expect(h.match(/aria-label="Move down"/g)).toHaveLength(6)
+    expect(h.match(/aria-label="Remove block"/g)).toHaveLength(6)
+    expect(h).toMatch(/<option value="import">Import from CSV or Excel<\/option><option value="approval" selected="">One queue for approvals<\/option><option value="clearance">Submit for FIRS clearance<\/option>/)
+    expect(h).toMatch(/<textarea[^>]*placeholder="One item per line"[^>]*>a\nb<\/textarea>/)
+  })
+
+  it('the ends dim and the callout kind highlights', () => {
+    const h = html(ONE_OF_EACH)
+    expect(h.match(/aria-label="Move up"[^>]*opacity:0\.35/g)).toHaveLength(1)
+    expect(h.match(/aria-label="Move down"[^>]*opacity:0\.35/g)).toHaveLength(1)
+    expect(h).toMatch(/background:var\(--primary\);color:var\(--primary-foreground\)[^>]*>Deadline</)
+    expect(h).toMatch(/background:transparent;color:var\(--tab-active-text\)[^>]*>Regulation note</)
+  })
+
+  it('a block error line and the count read singular', () => {
+    const e = { ...props([]).editor, errors: { body: 'Add at least one block with content.' } }
+    const h = renderToStaticMarkup(<BlogEditor {...props([], { editor: e })} />)
+    expect(h).toContain('0 blocks')
+    expect(h).toContain('Add at least one block with content.')
+    expect(html(blocks({ type: 'p', text: '' }))).toContain('1 block<')
+  })
+
+  it('the block buttons call their handlers', () => {
+    const onAdd = vi.fn()
+    const onMove = vi.fn()
+    const onRemove = vi.fn()
+    const onPatch = vi.fn()
+    const t = BlogEditor(props(ONE_OF_EACH, { onAdd, onMove, onRemove, onPatch })) as ReactElement
+    const btn = (label: string) => findDeep(t, (e) => e.type === 'button' && e.props['aria-label'] === label)
+    ;(btn('Move down')[2].props.onClick as () => void)()
+    expect(onMove).toHaveBeenLastCalledWith(2, 1)
+    ;(btn('Move up')[3].props.onClick as () => void)()
+    expect(onMove).toHaveBeenLastCalledWith(3, -1)
+    ;(btn('Remove block')[4].props.onClick as () => void)()
+    expect(onRemove).toHaveBeenCalledWith(4)
+    const added = findDeep(t, (e) => e.type === 'button' && ['Paragraph', 'Heading', 'List', 'Callout', 'Quote', 'Demo'].includes(text(e.props.children)))
+    added.forEach((b) => (b.props.onClick as () => void)())
+    expect(onAdd.mock.calls.map((c) => c[0])).toEqual(['p', 'h', 'ul', 'note', 'quote', 'demo'])
+    const [avail] = findDeep(t, (e) => e.type === 'button' && text(e.props.children) === 'Availability')
+    ;(avail.props.onClick as () => void)()
+    expect(onPatch).toHaveBeenLastCalledWith(3, { kind: 'product' })
+  })
+
+  it('typing patches that block; list lines split on newline', () => {
+    const onPatch = vi.fn()
+    const t = BlogEditor(props(ONE_OF_EACH, { onPatch })) as ReactElement
+    const type = (placeholder: string, value: string) => {
+      const [el] = findDeep(t, (e) => e.props.placeholder === placeholder)
+      ;(el.props.onChange as (e: unknown) => void)({ target: { value } })
+    }
+    type('Write a paragraph…', 'p2')
+    expect(onPatch).toHaveBeenLastCalledWith(0, { text: 'p2' })
+    type('One item per line', 'x\n\ny')
+    expect(onPatch).toHaveBeenLastCalledWith(2, { items: ['x', '', 'y'] })
+    type('Callout title', 'T')
+    expect(onPatch).toHaveBeenLastCalledWith(3, { title: 'T' })
+    type('Name, role, company', 'W')
+    expect(onPatch).toHaveBeenLastCalledWith(4, { who: 'W' })
+    const [sel] = findDeep(t, (e) => e.type === 'select' && e.props.value === 'approval')
+    ;(sel.props.onChange as (e: unknown) => void)({ target: { value: 'clearance' } })
+    expect(onPatch).toHaveBeenLastCalledWith(5, { demo: 'clearance' })
+  })
+})
+
+describe('BlogPreview', () => {
+  const model = (body: DraftBlock[], o: Partial<Draft> = {}) =>
+    previewModel({ ...newDraft([CAT], [], null, '2026-10-04'), body, ...o }, [CAT], [], [])
+  const view = (m: ReturnType<typeof model>, tab: 'article' | 'card' = 'article', cover = 'none') =>
+    renderToStaticMarkup(<BlogPreview model={m} tab={tab} cover={cover} onTab={() => {}} />)
+
+  it('the article renders blocks, TOC and quote marks', () => {
+    const body = blocks(
+      { type: 'h', text: 'First' },
+      { type: 'ul', items: ['one', 'two'] },
+      { type: 'h', text: 'Second' },
+      { type: 'quote', text: 'Said', who: 'Someone' },
+      { type: 'demo', demo: 'import' },
+      { type: 'note', kind: 'product', title: 'Now', text: 'Live' },
+    )
+    const h = view(model(body, { title: 'My post', summary: 'Sum' }))
+    for (const t of ['Preview', '>Article<', '>Card<', 'blog.ascomply.com/my-post', 'On this page', '>01<', '>02<', 'First', 'Second', '“Said”', 'Someone', 'FEATURE LIBRARY · DEMO', 'Import from CSV or Excel', 'Availability', '4 Oct 2026', '>My post<', '>Sum<', '>Compliance<'])
+      expect(h, t).toContain(t)
+    expect(h).toContain('aspect-ratio:21 / 9')
+    expect(h).not.toContain('Content blocks you add appear here.')
+    expect(h.match(/<h2/g)).toHaveLength(2)
+  })
+
+  it('one heading draws no TOC', () => {
+    expect(view(model(blocks({ type: 'h', text: 'Only' })))).not.toContain('On this page')
+  })
+
+  it('an empty preview says so', () => {
+    const h = view(model(blocks({ type: 'p', text: '' })))
+    for (const t of ['Content blocks you add appear here.', 'Untitled post', 'Your summary appears here.', 'blog.ascomply.com/untitled']) expect(h, t).toContain(t)
+  })
+
+  it('without a cover the category placeholder shows, with one the cover', () => {
+    const none = view(model([]))
+    expect(none).toContain('hero-grid')
+    expect(none).toContain('background:var(--sage);color:var(--primary)')
+    expect(none).not.toContain('aria-label="Cover image"')
+    const some = view(model([]), 'article', 'url("data:image/jpeg;base64,/9j/")')
+    expect(some).toContain('aria-label="Cover image"')
+    expect(some).toContain('background-image:url(&quot;data:image/jpeg;base64,/9j/&quot;)')
+    expect(some).not.toContain('hero-grid')
+  })
+
+  it('the card names the band', () => {
+    const h = view(model([], { title: 'T', summary: 'S' }), 'card')
+    for (const t of ['As it appears in the Compliance band and category page.', 'Read the post', 'aspect-ratio:16 / 9', '>T<', '>S<', '4 Oct 2026']) expect(h, t).toContain(t)
+    expect(h).not.toContain('On this page')
+    expect(h).not.toContain('Content blocks you add appear here.')
+  })
+
+  it('the tabs switch the preview and mark the active one', () => {
+    const onTab = vi.fn()
+    const t = BlogPreview({ model: model([]), tab: 'article', cover: 'none', onTab }) as ReactElement
+    const [card] = find(t, (e) => e.type === 'button' && text(e.props.children) === 'Card')
+    ;(card.props.onClick as () => void)()
+    expect(onTab).toHaveBeenCalledWith('card')
+    expect(view(model([]))).toMatch(/background:var\(--primary\);color:var\(--primary-foreground\)[^>]*>Article</)
   })
 })

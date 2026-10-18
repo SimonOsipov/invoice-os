@@ -1,8 +1,14 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
+  addBlock,
   authorOptions,
   bDate,
+  blockCount,
+  blockView,
+  cleanBody,
   catFilterOptions,
   categoryOptions,
   coverCss,
@@ -13,18 +19,27 @@ import {
   fitWidth,
   isImageType,
   listRows,
+  moveBlock,
   newDraft,
+  patchBlock,
   pinHelp,
   pinToast,
+  previewId,
+  previewModel,
+  removeBlock,
   saveState,
   setField,
+  setPreview,
+  TONES,
+  type Draft,
+  type DraftBlock,
   statusChips,
   subOf,
   subtitle,
   tabs,
   today,
 } from './blog'
-import type { Author, Category, Post } from './blogApi'
+import type { Author, Block, Category, Post } from './blogApi'
 import type { BlogFilters } from './types'
 
 const post = (o: Partial<Post> = {}): Post => ({
@@ -279,5 +294,199 @@ describe('today and subOf', () => {
     expect(subOf({ sub: 5 })).toBeNull()
     expect(subOf({ sub: '' })).toBeNull()
     expect(subOf(null)).toBeNull()
+  })
+})
+
+describe('block editing', () => {
+  const state = (types: string[] = []) => {
+    const s = editorOf(newDraft([], [], null, '2026-10-04'))
+    return { ...s, draft: { ...s.draft, body: types.map((t, i): DraftBlock => ({ u: `k${i}`, type: t, text: t })) } }
+  }
+  const texts = (s: ReturnType<typeof state>) => s.draft.body.map((b) => b.text)
+
+  it('addBlock uses the prototype defaults', () => {
+    const want = {
+      p: { text: '' },
+      h: { text: '' },
+      ul: { items: [''] },
+      note: { kind: 'regulation', title: '', text: '' },
+      quote: { text: '', who: '' },
+      demo: { demo: 'import' },
+    } as const
+    const keys = new Set<string>()
+    for (const t of ['p', 'h', 'ul', 'note', 'quote', 'demo'] as const) {
+      const n = addBlock(state(), t)
+      const { u, ...rest } = n.draft.body[0]
+      expect(rest).toEqual({ type: t, ...want[t] })
+      expect(u).toBeTruthy()
+      keys.add(u)
+      expect(n.dirty).toBe(true)
+    }
+    expect(keys.size).toBe(6)
+    const a = addBlock(addBlock(state(), 'ul'), 'ul')
+    expect(a.draft.body[0].items).not.toBe(a.draft.body[1].items)
+    expect(a.draft.body.map((b) => b.type)).toEqual(['ul', 'ul'])
+  })
+
+  it('moveBlock swaps neighbours and ignores the ends', () => {
+    const s = state(['a', 'b', 'c'])
+    expect(texts(moveBlock(s, 1, -1))).toEqual(['b', 'a', 'c'])
+    expect(texts(moveBlock(s, 1, 1))).toEqual(['a', 'c', 'b'])
+    expect(moveBlock(s, 1, -1).dirty).toBe(true)
+    expect(moveBlock(s, 0, -1)).toBe(s)
+    expect(moveBlock(s, 2, 1)).toBe(s)
+    expect(moveBlock(s, 0, -1).dirty).toBe(false)
+    expect(moveBlock(s, 5, 1)).toBe(s)
+    expect(texts(s)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('removeBlock drops one block', () => {
+    const s = state(['a', 'b', 'c'])
+    const n = removeBlock(s, 1)
+    expect(texts(n)).toEqual(['a', 'c'])
+    expect(n.dirty).toBe(true)
+    expect(texts(removeBlock(s, 7))).toEqual(['a', 'b', 'c'])
+  })
+
+  it('patchBlock clears the body error only and keeps confirm', () => {
+    const s = { ...state(['a', 'b']), errors: { body: 'x', title: 'y' }, confirm: 'leave' as const }
+    const n = patchBlock(s, 1, { text: 'new' })
+    expect(n.errors).toEqual({ title: 'y' })
+    expect(texts(n)).toEqual(['a', 'new'])
+    expect(n.draft.body[1].u).toBe('k1')
+    expect(n.dirty).toBe(true)
+    expect(n.confirm).toBe('leave')
+    expect(s.errors).toEqual({ body: 'x', title: 'y' })
+  })
+
+  it('blockView numbers, labels and dims the ends', () => {
+    const bs = [{ type: 'p' }, { type: 'note' }, { type: 'demo' }]
+    expect(bs.map((b, i) => blockView(b, i, 3))).toEqual([
+      { num: '01', typeLabel: 'PARAGRAPH', upOpacity: 0.35, downOpacity: 1 },
+      { num: '02', typeLabel: 'CALLOUT', upOpacity: 1, downOpacity: 1 },
+      { num: '03', typeLabel: 'DEMO', upOpacity: 1, downOpacity: 0.35 },
+    ])
+    expect(blockView({ type: 'p' }, 0, 1)).toMatchObject({ upOpacity: 0.35, downOpacity: 0.35 })
+    expect(['h', 'ul', 'quote'].map((t) => blockView({ type: t }, 1, 3).typeLabel)).toEqual(['HEADING', 'LIST', 'QUOTE'])
+  })
+
+  it('blockCount pluralises', () => {
+    expect([0, 1, 2].map(blockCount)).toEqual(['0 blocks', '1 block', '2 blocks'])
+  })
+
+  it('setPreview switches the tab only', () => {
+    const s = state()
+    expect(setPreview(s, 'card')).toEqual({ ...s, preview: 'card' })
+  })
+})
+
+const fixture = JSON.parse(readFileSync(fileURLToPath(new URL('../../../internal/blog/testdata/id_rules.json', import.meta.url)), 'utf8')) as {
+  post_id: { title: string; taken: string[]; want: string }[]
+  clean_body: { body: Block[]; want: Block[] }[]
+}
+
+describe('shared id rules', () => {
+  it('the fixture is not empty', () => {
+    expect(fixture.post_id.length).toBeGreaterThanOrEqual(10)
+    expect(fixture.clean_body.length).toBeGreaterThanOrEqual(8)
+  })
+
+  it('previewId follows the server id rule', () => {
+    for (const r of fixture.post_id) expect(previewId(r.title, r.taken), JSON.stringify(r.title)).toBe(r.want)
+    expect(previewId('', [])).toBe('untitled')
+    expect(previewId('   ', [])).toBe('untitled')
+    expect(previewId('', ['untitled'])).toBe('untitled-2')
+  })
+
+  it('cleanBody matches the shared table', () => {
+    for (const r of fixture.clean_body) expect(cleanBody(r.body), JSON.stringify(r.body)).toEqual(r.want)
+  })
+
+  it('cleanBody matches bClean on drafts and drops the local key', () => {
+    const drafts: DraftBlock[] = [
+      { u: 'a', type: 'p', text: '  ' },
+      { u: 'b', type: 'ul', items: ['', ' x '] },
+      { u: 'c', type: 'note', kind: 'deadline', title: 'T', text: '' },
+      { u: 'd', type: 'demo', demo: 'approval' },
+    ]
+    const out = cleanBody(drafts)
+    expect(out).toEqual([
+      { type: 'ul', items: ['x'] },
+      { type: 'note', kind: 'deadline', title: 'T', text: '' },
+      { type: 'demo', demo: 'approval' },
+    ])
+    expect(JSON.stringify(out)).not.toContain('"u"')
+  })
+})
+
+describe('previewModel', () => {
+  const C = [cat('c1', { name: 'Compliance', tone: 8, icon: 'landmark' })]
+  const A: Author[] = [
+    { user_id: 'u1', display_name: 'Ada', email: 'a@x' },
+    { user_id: 'u2', display_name: null, email: 'n@x' },
+  ]
+  const draft = (o: Partial<Draft> = {}): Draft => ({ ...newDraft(C, A, null, '2026-10-04'), ...o })
+  const model = (o: Partial<Draft> = {}, taken: string[] = []) => previewModel(draft(o), C, A, taken)
+  const blk = (...b: Block[]) => b.map((x, i) => ({ u: `k${i}`, ...x }))
+
+  it('a saved post shows its own id, an unsaved one the id the server will give', () => {
+    expect(model({ id: 'kept-id', title: 'Changed' }).url).toBe('blog.ascomply.com/kept-id')
+    expect(model({ title: 'New thing' }, ['new-thing']).url).toBe('blog.ascomply.com/new-thing-2')
+    expect(model({ title: '' }).url).toBe('blog.ascomply.com/untitled')
+  })
+
+  it('the TOC needs two headings', () => {
+    const h = (text: string): Block => ({ type: 'h', text })
+    const one = model({ body: blk(h('A'), { type: 'p', text: 'x' }) })
+    expect(one.hasToc).toBe(false)
+    const two = model({ body: blk(h('A'), { type: 'p', text: 'x' }, h(' '), h('B')) })
+    expect(two.hasToc).toBe(true)
+    expect(two.toc).toEqual([
+      { num: '01', text: 'A' },
+      { num: '02', text: 'B' },
+    ])
+  })
+
+  it('an empty body says so', () => {
+    const m = model({ body: blk({ type: 'p', text: ' ' }, { type: 'ul', items: [''] }) })
+    expect(m.emptyBody).toBe(true)
+    expect(m.blocks).toEqual([])
+    expect(model({ body: blk({ type: 'demo', demo: 'import' }) }).emptyBody).toBe(false)
+  })
+
+  it('meta names the public byline', () => {
+    expect(model({ author_id: 'u1', publish_date: '2026-10-04' }).meta).toBe('4 Oct 2026 · Ada')
+    expect(model({ author_id: 'u2' }).meta).toBe('4 Oct 2026 · ASComply team')
+    expect(model({ author_id: null }).meta).toBe('4 Oct 2026')
+    expect(model({ author_id: 'gone', author_name: 'Old Name' }).meta).toBe('4 Oct 2026 · Old Name')
+    expect(model({ author_id: null, publish_date: null }).meta).toBe('—')
+  })
+
+  it('the placeholder takes the category tone', () => {
+    const m = model()
+    expect(m.tone).toBe(TONES[2])
+    expect(m.icon).toBe('landmark')
+    expect(m.catName).toBe('Compliance')
+    const none = model({ category_id: null })
+    expect(none.tone).toBe(TONES[5])
+    expect(none.icon).toBe('file-text')
+    expect(none.catName).toBe('No category')
+  })
+
+  it('empty text falls back to the placeholders and mutes the title', () => {
+    const m = model({ title: '  ', summary: ' ' })
+    expect([m.title, m.titleMuted, m.dek]).toEqual(['Untitled post', true, 'Your summary appears here.'])
+    const f = model({ title: ' Hi ', summary: ' S ' })
+    expect([f.title, f.titleMuted, f.dek]).toEqual(['Hi', false, 'S'])
+  })
+
+  it('blocks carry the callout style, the demo title and the quote', () => {
+    const m = model({
+      body: blk({ type: 'note', kind: 'deadline', title: 'T', text: 'x' }, { type: 'note', kind: 'odd', title: 'R', text: '' }, { type: 'demo', demo: 'clearance' }, { type: 'quote', text: 'q', who: 'w' }),
+    })
+    expect(m.blocks[0]).toMatchObject({ type: 'note', label: 'Deadline', icon: 'calendar-clock', labelColor: 'var(--status-amber-text)' })
+    expect(m.blocks[1]).toMatchObject({ label: 'Regulation note', icon: 'landmark' })
+    expect(m.blocks[2]).toEqual({ type: 'demo', title: 'Submit for FIRS clearance' })
+    expect(m.blocks[3]).toEqual({ type: 'quote', text: 'q', who: 'w' })
   })
 })

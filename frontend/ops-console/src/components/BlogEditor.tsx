@@ -1,6 +1,6 @@
 import type { ChangeEvent, CSSProperties, ReactNode } from 'react'
-import { authorOptions, badgeOf, categoryOptions, coverCss, dekCount, pinHelp, saveState, type Draft, type EditorState } from '../blog'
-import type { Author, Category } from '../blogApi'
+import { ADD_TYPES, authorOptions, badgeOf, blockCount, blockView, categoryOptions, coverCss, DEMOS, dekCount, NOTE_KINDS, pinHelp, saveState, type BlockType, type Draft, type DraftBlock, type EditorState } from '../blog'
+import type { Author, Block, Category } from '../blogApi'
 import { G } from './BlogList'
 
 type Props = {
@@ -11,6 +11,10 @@ type Props = {
   onField: (patch: Partial<Draft>) => void
   onCover: (file: File | null) => void
   onBack: () => void
+  onAdd: (type: BlockType) => void
+  onMove: (i: number, d: number) => void
+  onRemove: (i: number) => void
+  onPatch: (i: number, patch: Partial<Block>) => void
   actions?: ReactNode
   preview?: ReactNode
 }
@@ -28,9 +32,13 @@ const field = (bad: boolean): CSSProperties => ({
   outline: 'none',
   border: `1px solid ${bad ? 'var(--destructive)' : 'var(--input)'}`,
 })
+const HINT: CSSProperties = { fontSize: 11.5, color: 'var(--fg-3)' }
+const TEXTAREA: CSSProperties = { ...field(false), padding: '10px 12px', resize: 'vertical', lineHeight: 1.6 }
+const ICON_BTN: CSSProperties = { width: 26, height: 26, border: 0, borderRadius: 5, background: 'transparent', display: 'grid', placeItems: 'center', cursor: 'pointer' }
+const SEGMENT: CSSProperties = { display: 'flex', padding: 3, gap: 2, background: 'var(--sage)', border: '1px solid var(--sage-card-border)', borderRadius: 6 }
 const GHOST_SM: CSSProperties = { height: 32, padding: '0 12px', fontSize: 12.5 }
 
-export function BlogEditor({ editor, cats, authors, coverUrl, onField, onCover, onBack, actions, preview }: Props) {
+export function BlogEditor({ editor, cats, authors, coverUrl, onField, onCover, onBack, onAdd, onMove, onRemove, onPatch, actions, preview }: Props) {
   const { draft, errors } = editor
   const badge = badgeOf(draft.status)
   const save = saveState(editor.dirty, draft.id)
@@ -203,11 +211,145 @@ export function BlogEditor({ editor, cats, authors, coverUrl, onField, onCover, 
               </span>
             </button>
           </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <span className="label">Content</span>
+              <span className="mono" style={{ fontSize: 10.5, color: 'var(--fg-3)' }}>
+                {blockCount(draft.body.length)}
+              </span>
+            </div>
+            {errors.body && <span style={ERROR}>{errors.body}</span>}
+            {draft.body.map((b, i) => (
+              <BlockCard key={b.u} block={b} i={i} n={draft.body.length} onMove={onMove} onRemove={onRemove} onPatch={onPatch} />
+            ))}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '12px 14px', border: '1px dashed var(--line-3)', borderRadius: 6 }}>
+              <span className="label" style={{ marginRight: 6 }}>
+                Add block
+              </span>
+              {ADD_TYPES.map((t) => (
+                <button key={t.type} type="button" onClick={() => onAdd(t.type)} className="v2-btn v2-btn-ghost" style={{ height: 30, padding: '0 10px', fontSize: 12.5, gap: 5, background: 'var(--bg-2)' }}>
+                  <G name="plus" size={13} />
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         <div data-bscroll="1" style={{ overflowY: 'auto', background: 'var(--background)', borderLeft: '1px solid var(--line-1)', display: 'flex', flexDirection: 'column' }}>
           {preview}
         </div>
+      </div>
+    </div>
+  )
+}
+
+type CardProps = {
+  block: DraftBlock
+  i: number
+  n: number
+  onMove: Props['onMove']
+  onRemove: Props['onRemove']
+  onPatch: Props['onPatch']
+}
+
+function BlockCard({ block: b, i, n, onMove, onRemove, onPatch }: CardProps) {
+  const v = blockView(b, i, n)
+  const text = (rows: number, placeholder: string, big = true) => (
+    <textarea
+      value={b.text ?? ''}
+      onChange={(e) => onPatch(i, { text: e.target.value })}
+      rows={rows}
+      placeholder={placeholder}
+      style={{ ...TEXTAREA, fontSize: big ? 14 : 13.5 }}
+    />
+  )
+  return (
+    <div style={{ border: '1px solid var(--line-1)', borderRadius: 6, background: 'var(--bg-2)', overflow: 'hidden', animation: 'opsPop 200ms var(--ease-out)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px 8px 14px', background: 'var(--bg-3)', borderBottom: '1px solid var(--line-1)' }}>
+        <span className="mono" style={{ fontSize: 10, color: 'var(--fg-4)' }}>
+          {v.num}
+        </span>
+        <span className="mono" style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em', color: 'var(--fg-2)' }}>
+          {v.typeLabel}
+        </span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 2 }}>
+          <button type="button" aria-label="Move up" onClick={() => onMove(i, -1)} className="blog-icon-btn" style={{ ...ICON_BTN, color: 'var(--fg-3)', opacity: v.upOpacity }}>
+            <G name="arrow-up" size={14} />
+          </button>
+          <button type="button" aria-label="Move down" onClick={() => onMove(i, 1)} className="blog-icon-btn" style={{ ...ICON_BTN, color: 'var(--fg-3)', opacity: v.downOpacity }}>
+            <G name="arrow-down" size={14} />
+          </button>
+          <button type="button" aria-label="Remove block" onClick={() => onRemove(i)} className="blog-icon-btn blog-icon-btn-danger" style={{ ...ICON_BTN, color: 'var(--destructive)' }}>
+            <G name="trash-2" size={14} />
+          </button>
+        </div>
+      </div>
+      <div style={{ padding: '12px 14px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {b.type === 'p' && text(4, 'Write a paragraph…')}
+        {b.type === 'h' && (
+          <>
+            <input
+              value={b.text ?? ''}
+              onChange={(e) => onPatch(i, { text: e.target.value })}
+              placeholder="Section heading"
+              style={{ ...field(false), height: 40, padding: '0 12px', fontSize: 16, fontWeight: 700, letterSpacing: '-0.02em' }}
+            />
+            <span style={HINT}>Headings are listed in the article's table of contents.</span>
+          </>
+        )}
+        {b.type === 'ul' && (
+          <>
+            <textarea
+              value={(b.items ?? []).join('\n')}
+              onChange={(e) => onPatch(i, { items: e.target.value.split('\n') })}
+              rows={4}
+              placeholder="One item per line"
+              style={{ ...TEXTAREA, fontSize: 14 }}
+            />
+            <span style={HINT}>One item per line. Each item gets a check mark.</span>
+          </>
+        )}
+        {b.type === 'note' && (
+          <>
+            <div style={{ ...SEGMENT, alignSelf: 'flex-start' }}>
+              {NOTE_KINDS.map((k) => {
+                const on = (b.kind || 'regulation') === k.kind
+                return (
+                  <button
+                    key={k.kind}
+                    type="button"
+                    onClick={() => onPatch(i, { kind: k.kind })}
+                    style={{ height: 28, padding: '0 12px', border: 0, borderRadius: 4, cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 12, fontWeight: 700, background: on ? 'var(--primary)' : 'transparent', color: on ? 'var(--primary-foreground)' : 'var(--tab-active-text)' }}
+                  >
+                    {k.label}
+                  </button>
+                )
+              })}
+            </div>
+            <input value={b.title ?? ''} onChange={(e) => onPatch(i, { title: e.target.value })} placeholder="Callout title" style={{ ...field(false), height: 38, padding: '0 12px', fontWeight: 700 }} />
+            {text(2, 'Callout text', false)}
+          </>
+        )}
+        {b.type === 'quote' && (
+          <>
+            {text(2, 'Quote, without quotation marks')}
+            <input value={b.who ?? ''} onChange={(e) => onPatch(i, { who: e.target.value })} placeholder="Name, role, company" style={{ ...field(false), height: 38, padding: '0 12px' }} />
+          </>
+        )}
+        {b.type === 'demo' && (
+          <>
+            <select value={b.demo ?? 'import'} onChange={(e) => onPatch(i, { demo: e.target.value })} style={{ ...field(false), height: 38, padding: '0 10px', cursor: 'pointer' }}>
+              {DEMOS.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.title}
+                </option>
+              ))}
+            </select>
+            <span style={HINT}>Plays the Feature Library demo inside the article.</span>
+          </>
+        )}
       </div>
     </div>
   )

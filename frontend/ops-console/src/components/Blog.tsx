@@ -1,7 +1,7 @@
 import { decodeJwtPayload, loadConsoleSession } from '@invoice-os/console-session'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SESSION_KEY } from '../auth'
-import { draftFromPost, editorOf, newDraft, setField, subOf, today, type Draft, type EditorState } from '../blog'
+import { addBlock, coverCss, draftFromPost, editorOf, moveBlock, newDraft, patchBlock, previewModel, removeBlock, setField, setPreview, subOf, today, type BlockType, type Draft, type EditorState } from '../blog'
 import { fetchAuthors, fetchCategories, fetchCoverUrl, fetchPosts, setFeatured, type Post } from '../blogApi'
 import { loadBlog, pickCover, pinThenRefresh, trackCover } from '../blogFlow'
 import { browserCoverDeps } from '../coverImage'
@@ -9,6 +9,7 @@ import { expireOnce, withSession } from '../session'
 import type { BlogFilters, ToastTone } from '../types'
 import { BlogEditor } from './BlogEditor'
 import { BlogList, type BlogState } from './BlogList'
+import { BlogPreview } from './BlogPreview'
 
 type Props = {
   filters: BlogFilters
@@ -96,6 +97,15 @@ export function Blog({ filters, onFilters, onToast }: Props) {
     else if (pick.kind === 'ready') setEditor((e) => (e ? setField(e, { cover: { kind: 'new', dataUrl: pick.dataUrl } }) : e))
   }
 
+  const update = (f: (e: EditorState) => EditorState) => setEditor((e) => (e ? f(e) : e))
+  const onAdd = (type: BlockType) => {
+    update((e) => addBlock(e, type))
+    setTimeout(() => {
+      const el = document.querySelector('[data-bscroll]')
+      if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    }, 30)
+  }
+
   if (editor && state.status === 'ready') {
     return (
       <BlogEditor
@@ -103,9 +113,21 @@ export function Blog({ filters, onFilters, onToast }: Props) {
         cats={state.cats}
         authors={state.authors}
         coverUrl={coverUrl}
-        onField={(patch) => setEditor((e) => (e ? setField(e, patch) : e))}
+        onField={(patch) => update((e) => setField(e, patch))}
         onCover={(f) => void onCover(f)}
         onBack={onBack}
+        onAdd={onAdd}
+        onMove={(i, d) => update((e) => moveBlock(e, i, d))}
+        onRemove={(i) => update((e) => removeBlock(e, i))}
+        onPatch={(i, patch) => update((e) => patchBlock(e, i, patch))}
+        preview={
+          <BlogPreview
+            model={previewModel(editor.draft, state.cats, state.authors, state.posts.map((p) => p.id))}
+            tab={editor.preview}
+            cover={coverCss(editor.draft.cover, coverUrl)}
+            onTab={(t) => update((e) => setPreview(e, t))}
+          />
+        }
       />
     )
   }

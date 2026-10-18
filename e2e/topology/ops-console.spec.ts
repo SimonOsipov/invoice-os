@@ -930,3 +930,39 @@ test('OPS-05 blog editor: the two panes fill the main column side by side at eve
   await attachJson(testInfo, 'ops-05-blog-editor', { widths })
   expect(errors, errorsOf(errors)).toEqual([])
 })
+
+test('OPS-05 blog preview: the article and the card fit the preview pane at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInOps(page)
+  await navButton(page, /^Blog/).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Blog', exact: true }), 'Blog drew no h1').toBeVisible()
+  await page.getByRole('button', { name: 'New post' }).click()
+  const editor = page.locator('[data-blog-editor]')
+  await expect(editor, 'New post opened no editor').toBeVisible()
+  await page.getByPlaceholder('Write a paragraph…').fill('A paragraph that the preview shows under both headings.')
+  for (const text of ['What the mandate changes for invoicing teams', 'How to prepare before the deadline']) {
+    await editor.getByRole('button', { name: 'Heading', exact: true }).click()
+    await page.getByPlaceholder('Section heading').last().fill(text)
+  }
+  await settle(page, editor)
+
+  const pane = page.locator('[data-bscroll]').nth(1)
+  const entries = pane.locator('[data-preview-toc-entry]')
+  const widths = await atWidths(page, 'OPS-05 blog preview article', async () => {
+    const r = await boxes(page, { pane, cover: pane.locator('[data-preview-cover]') })
+    const toc = await boxList(page, entries, 'TOC entry', 2)
+    const problems = [...within(r.pane, r.cover, 'cover box in preview pane'), ...toc.flatMap((t, i) => within(r.pane, t, `TOC entry ${i} in preview pane`))]
+    return { problems, rects: { ...r, toc } }
+  })
+
+  await pane.getByRole('button', { name: 'Card', exact: true }).click()
+  const card = pane.locator('[data-preview-card]')
+  await expect(card, 'the Card tab drew no card').toBeVisible()
+  await settle(page, card)
+  const cardWidths = await atWidths(page, 'OPS-05 blog preview card', async () => {
+    const r = await boxes(page, { pane, card })
+    return { problems: within(r.pane, r.card, 'card in preview pane'), rects: r }
+  })
+  await attachJson(testInfo, 'ops-05-blog-preview', { widths, cardWidths })
+  expect(errors, errorsOf(errors)).toEqual([])
+})

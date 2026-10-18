@@ -191,3 +191,9 @@ pre.ops-json {
 .blog-drop:hover {
   border-color: var(--primary);
 }
+.blog-icon-btn:hover {
+  background: var(--bg-2);
+}
+.blog-icon-btn-danger:hover {
+  background: var(--status-red-bg);
+}

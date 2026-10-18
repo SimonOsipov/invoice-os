@@ -154,7 +154,7 @@ describe('Subscribe', () => {
     ]
     for (const [label, n, tail] of cases) {
       await mount()
-      type('A@B.co')
+      type(' A@B.co ')
       chips().slice(n).forEach(click)
       click(byText(label))
       await clickAsync(submitButton())
@@ -206,6 +206,38 @@ describe('Subscribe', () => {
       expect(byText('Monthly').getAttribute('aria-pressed')).toBe('true')
       expect(submitButton().disabled).toBe(false)
     }
+  })
+
+  it('subscribe_postsTopicsInCategoryOrderAfterReselect', async () => {
+    await mount()
+    type('a@b.co')
+    click(chips()[0])
+    click(chips()[0])
+    await clickAsync(submitButton())
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).category_ids).toEqual(['c1', 'c2', 'c3'])
+  })
+
+  it('subscribe_secondClickWhileSendingSendsNothing', async () => {
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}))
+    await mount()
+    type('a@b.co')
+    await clickAsync(submitButton())
+    await clickAsync(submitButton())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('subscribe_failureThenRetrySucceedsAndClearsTheLine', async () => {
+    await mount()
+    type('a@b.co')
+    fetchMock.mockImplementationOnce(async () => new Response('{}', { status: 502 }))
+    await clickAsync(submitButton())
+    expect(text()).toContain(FAILURE)
+    let release!: (r: Response) => void
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => (release = r)))
+    await clickAsync(submitButton())
+    expect(text()).not.toContain(FAILURE)
+    await act(async () => release(ACCEPTED()))
+    expect(text()).toContain('Check your inbox.')
   })
 
   it('subscribe_noGatewayShowsFailureWithoutFetch', async () => {

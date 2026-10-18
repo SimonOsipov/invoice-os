@@ -49,6 +49,24 @@ export interface Category {
   post_count: number
 }
 
+export interface CategoryInput {
+  name: string
+  headline: string
+  intro: string
+  icon: string
+  tone: number
+}
+
+export interface MoveResult {
+  moved: boolean
+  categories: Category[]
+}
+
+export interface DeleteResult {
+  moved_posts: number
+  move_to: string | null
+}
+
 export interface Author {
   user_id: string
   display_name: string | null
@@ -64,6 +82,7 @@ export interface FeaturedResult {
 export const BLOG = '/api/notifications/v1/staff/blog'
 
 const postPath = (id: string) => `${BLOG}/posts/${encodeURIComponent(id)}`
+const catPath = (id: string) => `${BLOG}/categories/${encodeURIComponent(id)}`
 
 export const fetchPosts = async (): Promise<Post[]> => (await request<{ posts: Post[] }>(`${BLOG}/posts`)).posts
 export const fetchCategories = async (): Promise<Category[]> => (await request<{ categories: Category[] }>(`${BLOG}/categories`)).categories
@@ -74,6 +93,12 @@ export const deletePost = (id: string): Promise<void> => request<void>(postPath(
 export const setFeatured = (id: string, featured: boolean): Promise<FeaturedResult> =>
   request<FeaturedResult>(`${postPath(id)}/featured`, { method: 'PUT', body: { featured } })
 export const removeCover = (id: string): Promise<void> => request<void>(`${postPath(id)}/cover`, { method: 'DELETE' })
+export const addCategory = (input: CategoryInput): Promise<Category> => request<Category>(`${BLOG}/categories`, { method: 'POST', body: input })
+export const updateCategory = (id: string, input: CategoryInput): Promise<Category> => request<Category>(catPath(id), { method: 'PUT', body: input })
+export const moveCategory = (id: string, direction: 'up' | 'down'): Promise<MoveResult> =>
+  request<MoveResult>(`${catPath(id)}/move`, { method: 'POST', body: { direction } })
+export const deleteCategory = (id: string, moveTo: string | null): Promise<DeleteResult> =>
+  request<DeleteResult>(moveTo ? `${catPath(id)}?move_to=${encodeURIComponent(moveTo)}` : catPath(id), { method: 'DELETE' })
 
 const coverUrl = (id: string) => `${gatewayBase()}${postPath(id)}/cover`
 

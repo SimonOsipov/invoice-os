@@ -25,7 +25,6 @@ type blogRoute struct {
 	success int
 }
 
-// blogRoutes mirrors the Route wiring table of BLOG-01.
 var blogRoutes = []blogRoute{
 	{"GET /v1/staff/blog/categories", "/v1/staff/blog/categories", "", 200},
 	{"POST /v1/staff/blog/categories", "/v1/staff/blog/categories", `{"name":"N","icon":"globe","tone":1}`, 201},
@@ -40,6 +39,7 @@ var blogRoutes = []blogRoute{
 	{"PUT /v1/staff/blog/posts/{id}/featured", "/v1/staff/blog/posts/p/featured", `{"featured":true}`, 200},
 	{"PUT /v1/staff/blog/posts/{id}/cover", "/v1/staff/blog/posts/p/cover", string(jpegBytes(32)), 200},
 	{"DELETE /v1/staff/blog/posts/{id}/cover", "/v1/staff/blog/posts/p/cover", "", 204},
+	{"GET /v1/staff/blog/posts/{id}/cover", "/v1/staff/blog/posts/p/cover", "", 200},
 }
 
 type routesRig struct {
@@ -85,6 +85,10 @@ func newRoutesRig(t *testing.T) *routesRig {
 	}, l))
 	m.HandleFunc("PUT /v1/staff/blog/posts/{id}/cover", SetCoverHandler(func(ctx context.Context, _, _ string, _ []byte) (Cover, error) { hit(ctx); return Cover{}, nil }, l))
 	m.HandleFunc("DELETE /v1/staff/blog/posts/{id}/cover", RemoveCoverHandler(func(ctx context.Context, _ string) error { hit(ctx); return nil }, l))
+	m.HandleFunc("GET /v1/staff/blog/posts/{id}/cover", GetCoverHandler(func(ctx context.Context, _ string) (string, []byte, error) {
+		hit(ctx)
+		return "image/png", pngMagic, nil
+	}, l))
 	app.RequireGateway(routesToken)
 	rig.h = app.Handler()
 	return rig
@@ -169,7 +173,7 @@ func TestBlogRoutes_StaffWrongMethodAndOddPathsReachNoHandler(t *testing.T) {
 		{"PATCH", "/v1/staff/blog/posts/p", 405},
 		{"POST", "/v1/staff/blog/authors", 405},
 		{"DELETE", "/v1/staff/blog/categories", 405},
-		{"GET", "/v1/staff/blog/posts/p/cover", 405},
+		{"PATCH", "/v1/staff/blog/posts/p/cover", 405},
 		{"PUT", "/v1/staff/blog/posts/a/b", 404},
 		{"GET", "/v1/staff/blog/unknown", 404},
 	} {

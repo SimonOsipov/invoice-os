@@ -70,6 +70,7 @@ var (
 
 var (
 	ErrPostNotFound      = errors.New("no such post")
+	ErrCoverNotFound     = errors.New("no such cover")
 	ErrCategoryNotFound  = errors.New("no such category")
 	ErrCategoryNameTaken = errors.New(MsgCategoryNameTaken)
 	ErrOnlyCategory      = errors.New(MsgOnlyCategory)

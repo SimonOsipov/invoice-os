@@ -1069,6 +1069,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"PUT /v1/staff/blog/posts/{id}/featured":              {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PUT /v1/staff/blog/posts/{id}/cover":                 {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"DELETE /v1/staff/blog/posts/{id}/cover":              {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
+	"GET /v1/staff/blog/posts/{id}/cover":                 {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/staff/rule-versions/draft":                  {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"POST /v1/staff/rule-versions/draft/rules":            {verdict: scExempt, reason: "staff route: staff check in platform.App; global tables through db.WithinStaffTx"},
 	"PUT /v1/custom-rules/{id}":                           {verdict: scCovered},

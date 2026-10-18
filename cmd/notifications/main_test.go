@@ -894,7 +894,7 @@ func TestNotificationsMain_RegistersTheBlogRoutes(t *testing.T) {
 		"PUT /v1/staff/blog/posts/{id}/featured":   {"SetFeaturedHandler", "SetFeatured"},
 		"PUT /v1/staff/blog/posts/{id}/cover":      {"SetCoverHandler", "SetCover"},
 		"DELETE /v1/staff/blog/posts/{id}/cover":   {"RemoveCoverHandler", "RemoveCover"},
-
+		"GET /v1/staff/blog/posts/{id}/cover":      {"GetCoverHandler", "GetCover"},
 		"GET /internal/blog/categories":            {"PublicCategoriesHandler", "PublicCategories"},
 		"GET /internal/blog/posts":                 {"PublicPostsHandler", "PublicPosts"},
 		"GET /internal/blog/posts/{id}":            {"PublicPostHandler", "PublicPost"},

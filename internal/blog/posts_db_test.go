@@ -654,6 +654,120 @@ func TestPosts_CoverSetReplaceRemove(t *testing.T) {
 	}
 }
 
+func TestPosts_GetCoverRefusesANonStaffContext(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	seedPost(t, f.super, "p-"+f.r, f.cat, "draft")
+	if _, err := f.s.SetCover(ctx, "p-"+f.r, "image/png", pngMagic); err != nil {
+		t.Fatal(err)
+	}
+	ct, b, err := f.s.GetCover(bg, "p-"+f.r)
+	if !errors.Is(err, db.ErrNotStaff) || ct != "" || b != nil {
+		t.Errorf("= %q, %d bytes, %v; want db.ErrNotStaff and nothing read", ct, len(b), err)
+	}
+}
+
+func TestPosts_GetCoverReturnsTheStoredBytes(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	seedPost(t, f.super, "p-"+f.r, f.cat, "draft")
+	id := "p-" + f.r
+	if _, err := f.s.SetCover(ctx, id, "image/png", pngMagic); err != nil {
+		t.Fatal(err)
+	}
+	ct, b, err := f.s.GetCover(ctx, id)
+	if err != nil || ct != "image/png" || !bytes.Equal(b, pngMagic) {
+		t.Fatalf("png = %q, %x, %v; want image/png and the stored bytes", ct, b, err)
+	}
+	jpg := jpegBytes(32)
+	if _, err := f.s.SetCover(ctx, id, "image/jpeg", jpg); err != nil {
+		t.Fatal(err)
+	}
+	ct, b, err = f.s.GetCover(ctx, id)
+	if err != nil || ct != "image/jpeg" || !bytes.Equal(b, jpg) {
+		t.Errorf("after replace = %q, %x, %v; want the JPEG", ct, b, err)
+	}
+}
+
+func TestPosts_GetCoverWithNoCoverIsNotFound(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	seedPost(t, f.super, "p-"+f.r, f.cat, "draft")
+	if _, _, err := f.s.GetCover(ctx, "p-"+f.r); !errors.Is(err, ErrCoverNotFound) {
+		t.Errorf("err = %v, want ErrCoverNotFound", err)
+	}
+	if _, err := f.s.SetCover(ctx, "p-"+f.r, "image/png", pngMagic); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.RemoveCover(ctx, "p-"+f.r); err != nil {
+		t.Fatal(err)
+	}
+	if ct, b, err := f.s.GetCover(ctx, "p-"+f.r); !errors.Is(err, ErrCoverNotFound) || ct != "" || b != nil {
+		t.Errorf("after remove = %q, %d bytes, %v; want ErrCoverNotFound", ct, len(b), err)
+	}
+}
+
+func TestPosts_GetCoverNeverServesAnotherPostsCover(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	with, without := "w-"+f.r, "n-"+f.r
+	seedPost(t, f.super, with, f.cat, "draft")
+	seedPost(t, f.super, without, f.cat, "draft")
+	if _, err := f.s.SetCover(ctx, with, "image/png", pngMagic); err != nil {
+		t.Fatal(err)
+	}
+	if ct, b, err := f.s.GetCover(ctx, without); !errors.Is(err, ErrCoverNotFound) || ct != "" || b != nil {
+		t.Errorf("post without a cover = %q, %d bytes, %v; want ErrCoverNotFound", ct, len(b), err)
+	}
+	if ct, b, err := f.s.GetCover(ctx, with); err != nil || ct != "image/png" || !bytes.Equal(b, pngMagic) {
+		t.Errorf("post with a cover = %q, %x, %v; want its own PNG", ct, b, err)
+	}
+}
+
+func TestPosts_GetCoverRefusesAStaffSubjectThatIsNotAUUID(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	seedPost(t, f.super, "p-"+f.r, f.cat, "draft")
+	if _, err := f.s.SetCover(ctx, "p-"+f.r, "image/png", pngMagic); err != nil {
+		t.Fatal(err)
+	}
+	ct, b, err := f.s.GetCover(staffCtx("not-a-uuid"), "p-"+f.r)
+	if !errors.Is(err, db.ErrNotStaff) || ct != "" || b != nil {
+		t.Errorf("= %q, %d bytes, %v; want db.ErrNotStaff and nothing read", ct, len(b), err)
+	}
+}
+
+func TestPosts_GetCoverOnUnknownPostIsNotFound(t *testing.T) {
+	f := newPostFx(t)
+	_, ctx := staffActor(t, f.super)
+	if _, _, err := f.s.GetCover(ctx, "nope-"+f.r); !errors.Is(err, ErrPostNotFound) {
+		t.Errorf("err = %v, want ErrPostNotFound", err)
+	}
+}
+
+func TestPosts_GetCoverWritesNoAuditRow(t *testing.T) {
+	f := newPostFx(t)
+	_, setCtx := staffActor(t, f.super)
+	seedPost(t, f.super, "p-"+f.r, f.cat, "draft")
+	if _, err := f.s.SetCover(setCtx, "p-"+f.r, "image/png", pngMagic); err != nil {
+		t.Fatal(err)
+	}
+	actor, ctx := staffActor(t, f.super)
+	if _, b, err := f.s.GetCover(ctx, "p-"+f.r); err != nil || len(b) == 0 {
+		t.Fatalf("read = %d bytes, %v; want the cover", len(b), err)
+	}
+	seedPost(t, f.super, "n-"+f.r, f.cat, "draft")
+	if _, _, err := f.s.GetCover(ctx, "n-"+f.r); !errors.Is(err, ErrCoverNotFound) {
+		t.Fatalf("no cover: err = %v", err)
+	}
+	if _, _, err := f.s.GetCover(ctx, "nope-"+f.r); !errors.Is(err, ErrPostNotFound) {
+		t.Fatalf("unknown post: err = %v", err)
+	}
+	if rows := auditRowsOf(t, f.super, actor); len(rows) != 0 {
+		t.Errorf("audit rows = %v, want none", events(rows))
+	}
+}
+
 func TestPosts_CoverCapMatchesTheDBCheck(t *testing.T) {
 	f := newPostFx(t)
 	_, ctx := staffActor(t, f.super)

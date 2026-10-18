@@ -1727,6 +1727,8 @@ func TestForkVarsAfterURLs_URLsAreWrittenVerbatim(t *testing.T) {
 		{"app", "VITE_SUPPORT_URL", urls[4]},
 		{"support-console", "VITE_APP_URL", urls[1]},
 		{"landing", "VITE_LIBRARY_URL", urls[5]},
+		{"landing", "VITE_BLOG_URL", urls[6]},
+		{"library", "VITE_BLOG_URL", urls[6]},
 		{"library", "VITE_APP_URL", urls[1]},
 		{"library", "VITE_LANDING_URL", urls[2]},
 		{"blog", "VITE_GATEWAY_URL", urls[0]},

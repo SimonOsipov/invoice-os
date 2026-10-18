@@ -422,6 +422,17 @@ func (s *Store) acceptInTenant(ctx context.Context, tenantID, subject, query str
 			}
 			return err
 		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE memberships m SET all_clients = i.all_clients FROM invitations i WHERE i.id = $1 AND m.user_id = $2`,
+			id, subject); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO membership_clients (tenant_id, user_id, entity_id)
+			 SELECT tenant_id, $2, entity_id FROM invitation_clients WHERE invitation_id = $1`,
+			id, subject); err != nil {
+			return err
+		}
 		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {
 			return err
 		}

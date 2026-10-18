@@ -43,7 +43,7 @@ func (r regInviter) lastToken(t *testing.T) string {
 // invite issues one invite and returns its id and mailed token.
 func (r regInviter) invite(t *testing.T, email string) (id, token string) {
 	t.Helper()
-	res, err := r.inv.Invite(r.adminCtx(), []string{email}, "reviewer")
+	res, err := r.inv.Invite(r.adminCtx(), []string{email}, "reviewer", nil)
 	if err != nil || len(res) != 1 {
 		t.Fatalf("Invite(%s) = %v, %v; want one result", email, res, err)
 	}

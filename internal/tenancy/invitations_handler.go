@@ -46,8 +46,8 @@ type Inviter struct {
 }
 
 // Invite issues the invites. A mail failure yields delivery "failed", not an error.
-func (i *Inviter) Invite(ctx context.Context, emails []string, role string) ([]InviteResult, error) {
-	issued, err := i.Store.CreateInvitations(ctx, emails, role)
+func (i *Inviter) Invite(ctx context.Context, emails []string, role string, access *ClientAccess) ([]InviteResult, error) {
+	issued, err := i.Store.CreateInvitations(ctx, emails, role, access)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (i *Inviter) deliver(ctx context.Context, issued []IssuedInvite) []InviteRe
 }
 
 // InviteFunc is Inviter.Invite; the handler takes the function so its contract tests without a database.
-type InviteFunc func(ctx context.Context, emails []string, role string) ([]InviteResult, error)
+type InviteFunc func(ctx context.Context, emails []string, role string, access *ClientAccess) ([]InviteResult, error)
 
 // InvitationsLister is Store.ListInvitations.
 type InvitationsLister func(ctx context.Context) ([]Invitation, error)
@@ -137,6 +137,8 @@ type InviteRevoker func(ctx context.Context, id string) error
 type inviteRequest struct {
 	Emails []string `json:"emails"`
 	Role   string   `json:"role"`
+
+	ClientAccess *ClientAccess `json:"client_access"`
 }
 
 // normaliseEmail returns the trimmed, lower-cased address and whether it is acceptable.
@@ -178,12 +180,30 @@ func InvitationsCreateHandler(invite InviteFunc, log *slog.Logger) http.HandlerF
 		r.Body = http.MaxBytesReader(w, r.Body, maxInviteBodyBytes)
 		var req inviteRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if errors.Is(err, ErrInvalidClientAccess) {
+				invitationFailure(w, r, log, "tenancy: create invitations", err)
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
 		if req.Role != "admin" && req.Role != "preparer" && req.Role != "reviewer" {
 			writeError(w, http.StatusBadRequest, `role must be "admin", "preparer" or "reviewer"`)
 			return
+		}
+		if req.ClientAccess != nil {
+			if req.Role == "admin" {
+				writeError(w, http.StatusBadRequest, "client_access applies to a preparer or reviewer invite")
+				return
+			}
+			if !req.ClientAccess.All {
+				ids, err := parseClientIDs(req.ClientAccess.IDs)
+				if err != nil {
+					invitationFailure(w, r, log, "tenancy: create invitations", err)
+					return
+				}
+				req.ClientAccess.IDs = ids
+			}
 		}
 		var emails, bad []string
 		seen := map[string]bool{}
@@ -205,7 +225,7 @@ func InvitationsCreateHandler(invite InviteFunc, log *slog.Logger) http.HandlerF
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("emails must hold 1 to %d addresses", maxInviteEmails))
 			return
 		}
-		items, err := invite(r.Context(), emails, req.Role)
+		items, err := invite(r.Context(), emails, req.Role, req.ClientAccess)
 		if err != nil {
 			invitationFailure(w, r, log, "tenancy: create invitations", err)
 			return

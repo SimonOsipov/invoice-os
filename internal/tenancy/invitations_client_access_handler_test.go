@@ -1,7 +1,3 @@
-//go:build firms0203
-
-// Needs the new InviteFunc and Inviter.Invite signatures; the executor deletes this tag line and this comment.
-
 package tenancy
 
 import (

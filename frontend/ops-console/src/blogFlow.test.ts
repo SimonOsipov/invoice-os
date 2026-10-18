@@ -580,6 +580,35 @@ describe('singleFlight', () => {
     expect(del).toHaveBeenCalledTimes(1)
   })
 
+  it('user still runs when the background refresh throws, after the queued refresh', async () => {
+    const run = singleFlight()
+    const order: string[] = []
+    let fail: (e: Error) => void = () => {}
+    const bg = run.after(() => new Promise<void>((_, rej) => (fail = rej))).catch(() => {})
+    void run.after(async () => void order.push('queued'))
+    const p = run.user(async () => void order.push('user'))
+    fail(new Error('boom'))
+    await bg
+    await p
+    expect(order).toEqual(['queued', 'user'])
+  })
+
+  it('user does not run while the queued refresh is still in flight', async () => {
+    const run = singleFlight()
+    let first: () => void = () => {}
+    let second: () => void = () => {}
+    void run.after(() => new Promise<void>((r) => (first = r)))
+    void run.after(() => new Promise<void>((r) => (second = r)))
+    const save = vi.fn(async () => {})
+    const p = run.user(save)
+    first()
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    expect(save).not.toHaveBeenCalled()
+    second()
+    await p
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
   it('user is still dropped while another user action runs', async () => {
     const run = singleFlight()
     let release: () => void = () => {}

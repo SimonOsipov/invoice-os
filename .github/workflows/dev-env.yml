@@ -61,7 +61,7 @@ name: Dev Env (deploy full fleet + verify)
 #    or if any deployment trigger appears. See .claude/rules/ci-railway.md.
 #  - RAILWAY_API_TOKEN from Account Settings → Tokens, NOT Project Settings:
 #    a project token is pinned to one env and cannot reach a PR env.
-#  - Railway Watch Paths empty on all 16 non-Postgres services, or `railway up`
+#  - Railway Watch Paths empty on all 17 non-Postgres services, or `railway up`
 #    silently skips untouched services and a torn-down fleet never recovers.
 #    prepare-env asserts this at runtime. Re-clear if a service is recreated.
 #  - RAILWAY_* IDs in `env:` below are stable; update them if a resource is
@@ -121,6 +121,7 @@ env:
   RAILWAY_SVC_OPS_CONSOLE_ID: 00df2247-ee57-4722-a663-c7d3a29e2cdd
   RAILWAY_SVC_SUPPORT_CONSOLE_ID: 33a90fdc-a812-4807-837c-9c62593d6f41
   RAILWAY_SVC_LIBRARY_ID: 0308aa95-0ec1-4616-a6fe-647f1374686b
+  RAILWAY_SVC_BLOG_ID: 90f24d72-f522-4e9f-a93d-2b75f50f8f32
   # M4-21-10: the Postgres service id — same stable-resource-id pattern as above. No CI job resolves
   # a DSN with it anymore (M4-22-08); railway-env.sh still uses it for the Postgres volume.
   RAILWAY_SVC_POSTGRES_ID: 98723af0-50ca-42a4-a56a-3e0438b9ce8a
@@ -321,6 +322,7 @@ jobs:
       ops_console_url: ${{ steps.urls.outputs.ops_console_url }}
       support_console_url: ${{ steps.urls.outputs.support_console_url }}
       library_url: ${{ steps.urls.outputs.library_url }}
+      blog_url: ${{ steps.urls.outputs.blog_url }}
     steps:
       - uses: actions/checkout@v4
       # Still required: `prenv name` is the ONLY environment-name constructor in
@@ -371,7 +373,7 @@ jobs:
 
       # --- STEP SEAM (M4-23-04) ---------------------------------------------
       # Fork reconciliation is inserted HERE, between `resolve` and `urls`, as a
-      # pure insertion: `urls` DISCOVERS the 6 public domains and fails if any is
+      # pure insertion: `urls` DISCOVERS the 7 public domains and fails if any is
       # missing, so anything that has to make them exist must run before it and
       # after the environment exists. Do not merge these into either neighbour.
       #
@@ -425,7 +427,7 @@ jobs:
           ENV_ID: ${{ steps.resolve.outputs.environment_id }}
         run: bash scripts/ci/railway-env.sh reconcile-fork "$ENV_ID"
 
-      - name: Assert Watch Paths are empty on all 16 non-Postgres services (M3-16 invariant)
+      - name: Assert Watch Paths are empty on all 17 non-Postgres services
         env:
           RAILWAY_API_TOKEN: ${{ github.event_name != 'workflow_dispatch' && secrets.RAILWAY_API_TOKEN || '' }}
           RAILWAY_PROJECT_TOKEN: ${{ github.event_name == 'workflow_dispatch' && secrets.RAILWAY_API_DEV_TOKEN || '' }}
@@ -439,7 +441,7 @@ jobs:
           # query prints its own ::error:: and exits non-zero on a failed call.
           resp=$(printf '%s' "$query_body" | bash scripts/ci/railway-env.sh query "reading serviceInstances for environment $ENV_ID")
 
-          expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","reconciliation","docling","auth","landing","app","ops-console","support-console","library"]'
+          expected_json='["gateway","tenancy","portfolio","invoice","validation","submission","dashboard","notifications","reconciliation","docling","auth","landing","app","ops-console","support-console","library","blog"]'
 
           missing=$(echo "$resp" | jq -r --argjson names "$expected_json" '
             ([.data.environment.serviceInstances.edges[]?.node.serviceName]) as $present
@@ -457,16 +459,16 @@ jobs:
             | "\(.serviceName): \(.watchPatterns | join(", "))"
           ')
           if [ -n "$offenders" ]; then
-            echo "::error::Non-empty Watch Paths found (M3-16 invariant violated) — railway up would SILENTLY SKIP these services on this run, reproducing the cold-fleet failure invisibly:"
+            echo "::error::Non-empty Watch Paths found — railway up would SILENTLY SKIP these services on this run, reproducing the cold-fleet failure invisibly:"
             echo "$offenders"
             exit 1
           fi
-          echo "All 16 non-Postgres service instances report empty Watch Paths."
+          echo "All 17 non-Postgres service instances report empty Watch Paths."
 
       # M4-22-FU, the LOWER-VALUE half: the fork inherits development's
       # variables, which the step above the seam already checked, so this only
       # catches a fork-time rendering fault. Placed AFTER Watch Paths and not
-      # earlier: that step queries all 16 service names and hard-fails if any is
+      # earlier: that step queries all 17 service names and hard-fails if any is
       # missing, which is what proves the 8 context services and the `docling`
       # and `auth` sidecars have materialised.
       # settle_fork is NOT a sufficient barrier — it checks only the service
@@ -535,6 +537,7 @@ jobs:
     if: >-
       ( !cancelled() || github.event_name != 'pull_request' ) &&
       needs.changes.outputs.scope != 'library' &&
+      needs.changes.outputs.scope != 'blog' &&
       needs.prepare-env.result == 'success' &&
       ( github.event_name == 'workflow_dispatch' ||
         ( github.event_name == 'push' && needs.await-ci.result == 'success' ) ||
@@ -618,7 +621,7 @@ jobs:
           purge=""
           mock=""
           issuers=""
-          # 900s (180 x 5s): EVERY environment is now a cold build of all 16
+          # 900s (180 x 5s): EVERY environment is now a cold build of all 17
           # services (M4-23 per-PR environments, Decision
           # [gate-windows-provisional]) — cold is the norm now, not the
           # exception the old 360s window assumed. Widen further if the
@@ -771,7 +774,7 @@ jobs:
         run: sh scripts/ci/railway-up-ci.sh ${{ matrix.service }}
         timeout-minutes: 15
 
-  # 4. Deploy the five SPAs in parallel, only after the gateway is healthy.
+  # 4. Deploy the six SPAs in parallel, only after the gateway is healthy.
   #    Vite bakes VITE_* at BUILD time (frontend/*/Dockerfile), so these images
   #    ship whatever the service variables hold now — pointed at THIS environment
   #    by prepare-env's `fork-vars-after-urls`.
@@ -785,7 +788,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [landing, app, ops-console, support-console, library]
+        service: [landing, app, ops-console, support-console, library, blog]
     steps:
       - uses: actions/checkout@v4
       # Two mutually-exclusive steps, not one ternary — see deploy-gateway above for the
@@ -996,10 +999,32 @@ jobs:
         run: sh scripts/ci/railway-up-ci.sh library
         timeout-minutes: 15
 
+  # Small lane: a blog-only push deploys just the blog; the fleet chain above skips.
+  deploy-blog:
+    name: Deploy blog (small lane) → ${{ needs.prepare-env.outputs.environment_label || needs.prepare-env.outputs.environment }}
+    needs: [changes, await-ci, prepare-env]
+    if: >-
+      github.event_name == 'push' &&
+      needs.changes.outputs.scope == 'blog' &&
+      needs.await-ci.result == 'success' &&
+      needs.prepare-env.result == 'success'
+    runs-on: ubuntu-latest
+    container: ghcr.io/railwayapp/cli:4.66.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp the build sha into the upload
+        run: sh scripts/ci/stamp-build-sha.sh "${{ github.sha }}"
+      - name: railway up blog (push — account token)
+        env:
+          RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+          RAILWAY_ENVIRONMENT: ${{ needs.prepare-env.outputs.environment }}
+        run: sh scripts/ci/railway-up-ci.sh blog
+        timeout-minutes: 15
+
   # Frees this run's deploy slot once the deploy chain ends, pass or fail.
   deploy-slot-release:
     name: Release deploy slot
-    needs: [deploy-slot, prepare-env, deploy-gateway, health-gate, deploy-context, deploy-spas, fleet-gate, deploy-library]
+    needs: [deploy-slot, prepare-env, deploy-gateway, health-gate, deploy-context, deploy-spas, fleet-gate, deploy-library, deploy-blog]
     if: always() && needs.deploy-slot.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1024,10 +1049,11 @@ jobs:
       OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
       SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
       LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
+      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
     steps:
       - uses: actions/checkout@v4
       - name: Wait for SPA /health on the commit under test
-        run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL"
+        run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL" "$BLOG_URL"
 
   # Small lane: the library's build verdict; the SPA build gate skips with the fleet chain.
   library-build-gate:
@@ -1043,8 +1069,22 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LIBRARY_URL"
 
+  # Small lane: the blog's build verdict; the SPA build gate skips with the fleet chain.
+  blog-build-gate:
+    name: Blog build gate (small lane)
+    needs: [deploy-blog, prepare-env]
+    if: needs.deploy-blog.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_BUILD: ${{ github.sha }}
+      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$BLOG_URL"
+
   # 7. Post-deploy verification (b), once the fleet is green and the SPAs are
-  #    deployed: smoke (landing, library and both consoles render) and api (typed contract
+  #    deployed: smoke (landing, library, blog and both consoles render) and api (typed contract
   #    suite against the gateway) in `e2e`; topology (browser login + cross-tenant
   #    isolation) in the `topology` job after it. PR environments only
   #    (M4-22-07); the DB is self-seeded at gateway boot, never reset here.
@@ -1075,6 +1115,7 @@ jobs:
       OPS_CONSOLE_URL: ${{ needs.prepare-env.outputs.ops_console_url }}
       SUPPORT_CONSOLE_URL: ${{ needs.prepare-env.outputs.support_console_url }}
       LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
+      BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
     outputs:
       shards: ${{ steps.shards.outputs.shards }}
       app_url: ${{ steps.urls.outputs.app_url }}
@@ -1082,6 +1123,7 @@ jobs:
       ops_console_url: ${{ steps.urls.outputs.ops_console_url }}
       support_console_url: ${{ steps.urls.outputs.support_console_url }}
       library_url: ${{ steps.urls.outputs.library_url }}
+      blog_url: ${{ steps.urls.outputs.blog_url }}
     steps:
       # "Re-run failed jobs" keeps deploy-gateway's output from an earlier attempt.
       - name: Refuse a re-run that skipped the gateway deploy
@@ -1126,17 +1168,18 @@ jobs:
             echo "ops_console_url=$OPS_CONSOLE_URL"
             echo "support_console_url=$SUPPORT_CONSOLE_URL"
             echo "library_url=$LIBRARY_URL"
+            echo "blog_url=$BLOG_URL"
           } >> "$GITHUB_OUTPUT"
       - name: Wait for SPA /health on the commit under test
         env:
           EXPECTED_BUILD: ${{ github.sha }}
-        run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL"
+        run: bash scripts/ci/wait-spa-builds.sh "$EXPECTED_BUILD" "$LANDING_URL" "$APP_URL" "$OPS_CONSOLE_URL" "$SUPPORT_CONSOLE_URL" "$LIBRARY_URL" "$BLOG_URL"
       - name: Install Chromium
         # !cancelled(): skipping this when the wait fails makes smoke report
         # `browserType.launch: Executable doesn't exist` for what is really an unreachable SPA.
         if: "!cancelled() && steps.attempt.outcome == 'success'"
         run: pnpm --filter @invoice-os/e2e exec playwright install --with-deps chromium
-      - name: Smoke (landing, library and both consoles render)
+      - name: Smoke (landing, library, blog and both consoles render)
         run: pnpm --filter @invoice-os/e2e test:smoke
       # Both suites write to the SAME e2e/playwright-report/. Park each report the
       # moment its suite ends, before the next one overwrites it.
@@ -1223,6 +1266,7 @@ jobs:
       OPS_CONSOLE_URL: ${{ needs.e2e.outputs.ops_console_url }}
       SUPPORT_CONSOLE_URL: ${{ needs.e2e.outputs.support_console_url }}
       LIBRARY_URL: ${{ needs.e2e.outputs.library_url }}
+      BLOG_URL: ${{ needs.e2e.outputs.blog_url }}
       BAKED_APP_URL: ${{ needs.prepare-env.outputs.app_url }}
       BAKED_LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
       BAKED_LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
@@ -1242,7 +1286,7 @@ jobs:
         id: targets
         run: |
           rc=0
-          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL LIBRARY_URL BAKED_APP_URL BAKED_LANDING_URL BAKED_LIBRARY_URL; do
+          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL LIBRARY_URL BLOG_URL BAKED_APP_URL BAKED_LANDING_URL BAKED_LIBRARY_URL; do
             if [ -z "${!v}" ]; then
               echo "::error::$v is empty — the e2e job did not publish it."
               rc=1

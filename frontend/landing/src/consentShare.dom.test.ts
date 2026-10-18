@@ -15,7 +15,7 @@ import {
   type ConsentStore,
 } from './consent'
 import { applyChoice } from './consentActions'
-import { LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from './hubspot'
+import { BLOG_HOSTNAMES, LIBRARY_HOSTNAMES, PRODUCTION_HOSTNAMES, SHARED_COOKIE_DOMAIN } from './hubspot'
 
 const WWW_URL = 'https://www.ascomply.com/'
 const LIB_URL = 'https://library.ascomply.com/'
@@ -103,8 +103,8 @@ describe('shared consent cookie', () => {
   })
 
   it('CS-04 only an exact production host shares', () => {
-    for (const h of [WWW, ' WWW.ASCOMPLY.COM ', LIB]) expect(sharedConsentDomain(h)).toBe('ascomply.com')
-    for (const h of ['ascomply.com', 'app.ascomply.com', 'www.ascomply.com.evil.example', 'library.ascomply.com.', 'localhost', '']) {
+    for (const h of [WWW, ' WWW.ASCOMPLY.COM ', LIB, 'blog.ascomply.com']) expect(sharedConsentDomain(h)).toBe('ascomply.com')
+    for (const h of ['ascomply.com', 'app.ascomply.com', 'www.ascomply.com.evil.example', 'library.ascomply.com.', 'blog.ascomply.com.', 'blog-pr-1.up.railway.app', 'localhost', '']) {
       expect(sharedConsentDomain(h)).toBeNull()
     }
   })
@@ -257,8 +257,8 @@ describe('shared consent cookie', () => {
     }
   })
 
-  it('CS-13 both production hosts sit under the shared domain', () => {
-    for (const h of [...PRODUCTION_HOSTNAMES, ...LIBRARY_HOSTNAMES]) expect(h.endsWith(`.${SHARED_COOKIE_DOMAIN}`)).toBe(true)
+  it('CS-13 every production host sits under the shared domain', () => {
+    for (const h of [...PRODUCTION_HOSTNAMES, ...LIBRARY_HOSTNAMES, ...BLOG_HOSTNAMES]) expect(h.endsWith(`.${SHARED_COOKIE_DOMAIN}`)).toBe(true)
     expect(SHARED_COOKIE_DOMAIN.split('.')).toHaveLength(2)
   })
 
@@ -377,6 +377,7 @@ describe('open-tab sync', () => {
   it.each([
     [LIB, [LIB, `.${LIB}`, 'ascomply.com', '.ascomply.com']],
     [WWW, [WWW, `.${WWW}`, 'ascomply.com', '.ascomply.com']],
+    ['blog.ascomply.com', ['blog.ascomply.com', '.blog.ascomply.com', 'ascomply.com', '.ascomply.com']],
   ])('SY-04 a synced Reject on %s expires every _ga name on host-only and each domain form', async (host, domains) => {
     const { syncConsent } = await import('./consentActions')
     const { ensureTag } = await import('./analytics')

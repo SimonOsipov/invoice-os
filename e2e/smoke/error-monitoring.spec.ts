@@ -39,6 +39,7 @@ const TARGETS: {
   { name: 'ops-console', url: () => resolveTarget('OPS_CONSOLE_URL'), console: 'ops', mainView: mainViewOf('ops-console') },
   { name: 'support-console', url: () => resolveTarget('SUPPORT_CONSOLE_URL'), console: 'support', mainView: mainViewOf('support-console') },
   { name: 'library', url: () => resolveTarget('LIBRARY_URL'), mainView: mainViewOf('library') },
+  { name: 'blog', url: () => resolveTarget('BLOG_URL'), mainView: mainViewOf('blog') },
 ]
 
 for (const target of TARGETS) {
@@ -90,8 +91,8 @@ const TRACE_HEADERS = {
 // The app reads URLSearchParams in a render-time initializer, so throwing there crashes its first render.
 // A console reads it in the async gate, so its crash is armed when the gate stores the renewed session:
 // the console's first render then calls an array method: filter in the ops console's App, find in the support console's.
-// The library has no render-time hook to crash; main.test.tsx (main_startsMonitoringBeforeRenderAndWrapsTheRoot) covers its CrashBoundary.
-for (const target of TARGETS.filter((t) => t.name !== 'landing' && t.name !== 'library')) {
+// The library and the blog have no render-time hook to crash; each main.test.tsx (main_startsMonitoringBeforeRenderAndWrapsTheRoot) covers its CrashBoundary.
+for (const target of TARGETS.filter((t) => t.name !== 'landing' && t.name !== 'library' && t.name !== 'blog')) {
   test(`${target.name}: an induced render crash shows the recovery screen`, async ({ page, staffAccount }, testInfo) => {
     const url = target.url()
     test.skip(isProductionHost(url), `${new URL(url).hostname} is a production host, where Sentry may be on`)

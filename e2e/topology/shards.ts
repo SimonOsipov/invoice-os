@@ -89,6 +89,7 @@ export const UNITS: Unit[] = [
     },
   },
   { name: 'library', specs: ['library.spec.ts'] },
+  { name: 'blog', specs: ['blog.spec.ts'] },
 ]
 
 /** shardOf returns the unit that owns a spec file (base name), or undefined. */

@@ -42,13 +42,13 @@ paths:
 - Claim no compliance with a named data-protection law. The page says it is not legal advice.
 - Disclose each new browser network sender on the page. List the external hosts the landing contacts.
 - Treat an ungated flow as a page fact. Fonts and error reports load whatever the visitor chooses about analytics.
-- Scope each analytics sentence to the landing and the Feature Library, never to the landing alone.
-- Say that one analytics choice covers the landing and the Library. A choice made on either site applies to both.
+- Scope each analytics sentence to the landing, the Feature Library and the Blog, never to the landing alone.
+- Say that one analytics choice covers the landing, the Library and the Blog. A choice made on any of the three applies to all.
 - Name `asc_consent` in one paragraph only, the cookie-notice paragraph. Say there that it is our own cookie on `SHARED_COOKIE_DOMAIN`.
 - List what the Library sends Google: each page viewed, Book the Demo, the tour start and Open in Platform.
 - Say that Open in Platform carries the feature or group. It is a content id, never visitor input.
-- Say that Reject on either site deletes the shared `_ga` cookies. Google's script can re-create them until reload.
-- Name the Library's own "Cookie choices" control at the foot of its sidebar. It brings the notice back.
+- Say that Reject on any of the three sites deletes the shared `_ga` cookies. Google's script can re-create them until reload.
+- Name the Blog's own "Cookie choices" control at the foot of its sidebar, beside the Library's. It brings the notice back.
 
 ## AI processing of invoice documents
 

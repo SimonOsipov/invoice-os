@@ -198,6 +198,11 @@ describe('blog consent', () => {
     expect(notices()).toHaveLength(0)
   })
 
+  it('blog mounts the shared notice that names the Blog', async () => {
+    await mount()
+    expect(notices()[0].querySelector('.cn-body')?.textContent).toContain('the Feature Library and the Blog.')
+  })
+
   it('CSS-01 the app renders the cookie-notice slice', async () => {
     await mount()
     const styles = container.querySelectorAll('style')

@@ -3140,52 +3140,66 @@ func (e scSweepSubjectExemption) covers(s scSweepSubjectSite) bool {
 // scSweepSubjectAllowlist is every func exempted from an already-swept
 // package's rule.
 var scSweepSubjectAllowlist = []scSweepSubjectExemption{
-	{file: "internal/dashboard/cross_tenant_integration_test.go", fn: "TestRLS_DashboardRollupUnknownTenantRefused"},           // its claim is about a caller in a tenant nobody is a member of; AUDIT-12-07 inverts it, this subtask does not
-	{file: "internal/invoice/resolved_outside_test.go", fn: "TestResolveOutside_NoMembershipIsNotPermitted"},                   // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
-	{file: "internal/invoice/resolved_outside_test.go", fn: "TestUnresolveOutside_NoMembershipIsNotPermitted"},                 // same claim, the UnresolveOutside leg
-	{file: "internal/invoice/transmission_rbac_test.go", fn: "TestGetHandler_RealStore_NoMembershipRefused"},                   // AUDIT-12-07 inverts this claim: a no-row caller now gets the seam's plain 403, not a role-specific reason
-	{file: "internal/approval/decision_adversarial_test.go", fn: "TestApprove_CallerWithNoMembershipRowIsNotPermitted"},        // AUDIT-12-07 inverts this claim: a no-row caller (ghostID), not a fixture to sweep
-	{file: "internal/approval/workflow_roles_test.go", fn: "TestWorkflowRole_ListRequiresNoMembershipRow"},                     // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
-	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamRefusesACallerWithNoMembershipRow"},         // AUDIT-12-07's own inverted test (was TestRLS_RequestSeamAllowsACallerWithNoMembershipRow): the claim IS the no-row refusal
-	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamRefusalIsIdenticalForSuspendedAndForNoRow"}, // AUDIT-12-07's own test: needs a genuinely unmembered caller to compare against a suspended one
-	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamWrapsAMembershipReadError"},                 // the membership SELECT itself is poisoned to error; seeding would not prevent the forced failure
-	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest"},     // the malformed tenant id short-circuits before any membership lookup; seeding would not matter
-	{file: "internal/approval/workflow_roles_test.go", fn: "TestRequireActiveAdmin_NoMembershipRowIsNotPermitted"},             // deliberately rowless caller: proves requireActiveAdmin's own no-row branch, store.go:489
-	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_NoMembershipFailsClosed"},                                      // Store.Me is exempt from the request seam (D-5); its claim is unaffected by AUDIT-12-07
-	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_ExemptFromTheSeamUnderTheStrictRule"},                          // same exemption, AUDIT-12-07's own test naming it
-	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_UnknownTenant"},                                                // the tenant id has no `tenants` row at all -- a membership row would violate its FK, and Store.Me's own tenant lookup fails first anyway
-	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreListMemberships_EmptyTenantRefusesTheUnmemberedCaller"},           // AUDIT-12-07's own test: the claim IS the no-row refusal, not a fixture to seed
-	{file: "internal/tenancy/provision_test.go", fn: "newRegistrant"},                                                          // provisioning's caller is unmembered by definition
-	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_PreviewNamesWorkspaceRoleAndAddress"},                            // the invitee holds no membership in the invite's tenant before accepting
-	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_TheJoinedWorkspaceAnswersMe"},                                    // the invitee holds no membership in the invite's tenant before accepting
-	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AnAccountWithAWorkspaceGainsNothing"},                            // the invitee holds no membership in the invite's tenant before accepting
-	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AnotherAddressIsRefused"},                                        // the invitee holds no membership in the invite's tenant before accepting
-	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AFailedAuditRollsTheAcceptBack"},                                 // the invitee holds no membership in the invite's tenant before accepting
-	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ConcurrentAcceptsOfOneTokenJoinOnce"},                            // the invitee holds no membership in the invite's tenant before accepting
-	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount"},         // the invitee holds no membership in the invite's tenant before accepting
-	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ATokenJoinsOnlyItsOwnTenant"},                                    // the invitee holds no membership in the invite's tenant before accepting
-	{file: "internal/tenancy/accept_test.go", fn: "TestInvitations_RevokedLinkIsDeadOnEveryPath"},                              // the invitee holds no membership in the invite's tenant
-	{file: "internal/tenancy/invitations_test.go", fn: "TestInvitations_RevokeRacingAnAcceptNeverBothWins"},                    // the invitee holds no membership in the invite's tenant
-	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMalformedTokenOrSubjectSendsNoStatement"},                       // the invitee holds no membership in the invite's tenant before accepting
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptByIdJoinsWithTheInvitedRole"},                                  // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListNamesEveryWorkspaceThatInvitedTheAddress"},                       // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListUsesTheNormalisedHeaderEmail"},                                   // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AnotherAddressInAnyTenantIsNeitherListedNorAccepted"},                // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ExpiredInviteIsNotListedAndNotAccepted"},                             // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TenantBearingCallerSendsNoStatement"},                                // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_NoCallerOrANonUuidSubjectSendsNoStatement"},                          // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AFailedAuditRollsTheJoinBack"},                                       // the invitee holds no membership before joining
-	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenants_RefusesWithoutAStaffCaller"},                   // the control needs a UUID subject that reaches an unreachable pool; no database row is read
-	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenant_MalformedIdOpensNoTransaction"},                 // the control needs a UUID subject that reaches an unreachable pool; no database row is read
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TwoInvitesJoinOnceUnderRace"},                                        // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_SameInviteTwoConcurrentAcceptsJoinOnce"},                             // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid"},                              // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_JoinByIdAfterTokenLinkIsNoLongerValid"},                              // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_RevokedOrAcceptedInviteIsNeitherListedNorAccepted"},                  // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ANonUuidIdSendsNoStatement"},                                         // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AuditMatchesTheTokenAccept"},                                         // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_HandlersIgnoreBodyAndQueryAndRefuseAlike"},                           // the invitee holds no membership before joining
-	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptNamesTheInviteNotTheFirstOfTheAddress"},                        // the invitee holds no membership before joining
+	{file: "internal/dashboard/cross_tenant_integration_test.go", fn: "TestRLS_DashboardRollupUnknownTenantRefused"},                // its claim is about a caller in a tenant nobody is a member of; AUDIT-12-07 inverts it, this subtask does not
+	{file: "internal/invoice/resolved_outside_test.go", fn: "TestResolveOutside_NoMembershipIsNotPermitted"},                        // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
+	{file: "internal/invoice/resolved_outside_test.go", fn: "TestUnresolveOutside_NoMembershipIsNotPermitted"},                      // same claim, the UnresolveOutside leg
+	{file: "internal/invoice/transmission_rbac_test.go", fn: "TestGetHandler_RealStore_NoMembershipRefused"},                        // AUDIT-12-07 inverts this claim: a no-row caller now gets the seam's plain 403, not a role-specific reason
+	{file: "internal/approval/decision_adversarial_test.go", fn: "TestApprove_CallerWithNoMembershipRowIsNotPermitted"},             // AUDIT-12-07 inverts this claim: a no-row caller (ghostID), not a fixture to sweep
+	{file: "internal/approval/workflow_roles_test.go", fn: "TestWorkflowRole_ListRequiresNoMembershipRow"},                          // AUDIT-12-07 inverts this claim: a no-row caller, not a fixture to sweep
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamRefusesACallerWithNoMembershipRow"},              // AUDIT-12-07's own inverted test (was TestRLS_RequestSeamAllowsACallerWithNoMembershipRow): the claim IS the no-row refusal
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamRefusalIsIdenticalForSuspendedAndForNoRow"},      // AUDIT-12-07's own test: needs a genuinely unmembered caller to compare against a suspended one
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamWrapsAMembershipReadError"},                      // the membership SELECT itself is poisoned to error; seeding would not prevent the forced failure
+	{file: "internal/platform/db/request_gate_db_test.go", fn: "TestRLS_RequestSeamIssuesNoStatementForAMalformedRequest"},          // the malformed tenant id short-circuits before any membership lookup; seeding would not matter
+	{file: "internal/approval/workflow_roles_test.go", fn: "TestRequireActiveAdmin_NoMembershipRowIsNotPermitted"},                  // deliberately rowless caller: proves requireActiveAdmin's own no-row branch, store.go:489
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_NoMembershipFailsClosed"},                                           // Store.Me is exempt from the request seam (D-5); its claim is unaffected by AUDIT-12-07
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_ExemptFromTheSeamUnderTheStrictRule"},                               // same exemption, AUDIT-12-07's own test naming it
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreMe_UnknownTenant"},                                                     // the tenant id has no `tenants` row at all -- a membership row would violate its FK, and Store.Me's own tenant lookup fails first anyway
+	{file: "internal/tenancy/tenancy_test.go", fn: "TestStoreListMemberships_EmptyTenantRefusesTheUnmemberedCaller"},                // AUDIT-12-07's own test: the claim IS the no-row refusal, not a fixture to seed
+	{file: "internal/tenancy/provision_test.go", fn: "newRegistrant"},                                                               // provisioning's caller is unmembered by definition
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_PreviewNamesWorkspaceRoleAndAddress"},                                 // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_TheJoinedWorkspaceAnswersMe"},                                         // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AnAccountWithAWorkspaceGainsNothing"},                                 // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AnotherAddressIsRefused"},                                             // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AFailedAuditRollsTheAcceptBack"},                                      // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ConcurrentAcceptsOfOneTokenJoinOnce"},                                 // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMismatchedAddressIsRefusedAlikeWithOrWithoutAnAccount"},              // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ATokenJoinsOnlyItsOwnTenant"},                                         // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestInvitations_RevokedLinkIsDeadOnEveryPath"},                                   // the invitee holds no membership in the invite's tenant
+	{file: "internal/tenancy/invitations_test.go", fn: "TestInvitations_RevokeRacingAnAcceptNeverBothWins"},                         // the invitee holds no membership in the invite's tenant
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ByTokenCopiesTheClientSet"},                                           // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_InviteWithoutChoiceGivesNoClients"},                                   // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_CopyRollsBackWithTheAccept"},                                          // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_CopiesOnlyTheAcceptedInvitesSet"},                                     // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_DeletedEntityIsNotCopied"},                                            // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AReplayedLinkLeavesTheMembersSetAlone"},                               // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ARevokedOrExpiredLinkCopiesNothing"},                                  // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_ARefusedAcceptCopiesNothing"},                                         // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/invitations_client_access_test.go", fn: "TestInvitations_CreateAcceptsAnArchivedClient"},               // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/invitations_client_access_test.go", fn: "TestInvitations_CreateThenAcceptCopiesTheChoice"},             // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/invitations_client_access_test.go", fn: "TestInvitations_ALaterInviteDoesNotInheritAnOlderInvitesSet"}, // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/invitations_client_access_test.go", fn: "TestAccept_AnInHouseInviteGivesNoClientAccess"},               // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/invitations_client_access_test.go", fn: "TestAccept_TheSameAddressInTwoWorkspacesCopiesEachOwnSet"},    // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/join_test.go", fn: "TestAccept_ByIDCopiesAllClients"},                                                  // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/accept_test.go", fn: "TestAccept_AMalformedTokenOrSubjectSendsNoStatement"},                            // the invitee holds no membership in the invite's tenant before accepting
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptByIdJoinsWithTheInvitedRole"},                                       // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListNamesEveryWorkspaceThatInvitedTheAddress"},                            // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ListUsesTheNormalisedHeaderEmail"},                                        // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AnotherAddressInAnyTenantIsNeitherListedNorAccepted"},                     // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ExpiredInviteIsNotListedAndNotAccepted"},                                  // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TenantBearingCallerSendsNoStatement"},                                     // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_NoCallerOrANonUuidSubjectSendsNoStatement"},                               // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AFailedAuditRollsTheJoinBack"},                                            // the invitee holds no membership before joining
+	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenants_RefusesWithoutAStaffCaller"},                        // the control needs a UUID subject that reaches an unreachable pool; no database row is read
+	{file: "internal/tenancy/staff_tenants_test.go", fn: "TestStoreStaffTenant_MalformedIdOpensNoTransaction"},                      // the control needs a UUID subject that reaches an unreachable pool; no database row is read
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TwoInvitesJoinOnceUnderRace"},                                             // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_SameInviteTwoConcurrentAcceptsJoinOnce"},                                  // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_TokenLinkAfterJoinByIdIsNoLongerValid"},                                   // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_JoinByIdAfterTokenLinkIsNoLongerValid"},                                   // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_RevokedOrAcceptedInviteIsNeitherListedNorAccepted"},                       // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_ANonUuidIdSendsNoStatement"},                                              // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AuditMatchesTheTokenAccept"},                                              // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_HandlersIgnoreBodyAndQueryAndRefuseAlike"},                                // the invitee holds no membership before joining
+	{file: "internal/tenancy/join_test.go", fn: "TestJoin_AcceptNamesTheInviteNotTheFirstOfTheAddress"},                             // the invitee holds no membership before joining
 }
 
 // scSweepTestFiles returns every _test.go file under internal/ (repo-relative,

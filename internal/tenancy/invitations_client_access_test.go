@@ -251,3 +251,136 @@ func TestInvitations_CreateThenAcceptCopiesTheChoice(t *testing.T) {
 		w.requireStored(t, c.inv.Email, user, c.all, c.wants...)
 	}
 }
+
+func TestInvitations_ALaterInviteDoesNotInheritAnOlderInvitesSet(t *testing.T) {
+	w := newInvWorld(t, "Later Invite Tenant", "Ada Obi")
+	e1, e2 := seedEntity(t, w.super, w.tenant), seedEntity(t, w.super, w.tenant)
+	accept := func(inv IssuedInvite) string {
+		t.Helper()
+		user := uuid.NewString()
+		if _, _, _, err := w.store.AcceptInvitation(tenantless(user, inv.Email), inv.Token); err != nil {
+			t.Fatalf("accept %s: %v", inv.Email, err)
+		}
+		return user
+	}
+
+	// Revoked, then invited again with no choice: the new member gets nothing.
+	old, err := w.create([]string{"r@x.test"}, "preparer", ids(e1))
+	if err != nil {
+		t.Fatalf("first invite: %v", err)
+	}
+	if err := w.store.RevokeInvitation(w.adminCtx(), old[0].ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	fresh, err := w.create([]string{"r@x.test"}, "preparer", nil)
+	if err != nil || fresh[0].ID == old[0].ID {
+		t.Fatalf("re-invite after the revoke: %v, same id %v", err, len(fresh) == 1 && fresh[0].ID == old[0].ID)
+	}
+	w.requireStored(t, "member of the re-invite", accept(fresh[0]), false)
+	w.requireInvite(t, "the revoked invite keeps its rows", old[0].ID, false, e1)
+
+	// Reissued: the old link is dead and the new one carries the new set.
+	first, err := w.create([]string{"s@x.test"}, "preparer", ids(e1))
+	if err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+	second, err := w.create([]string{"s@x.test"}, "preparer", ids(e2))
+	if err != nil {
+		t.Fatalf("reissue: %v", err)
+	}
+	stale := uuid.NewString()
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(stale, "s@x.test"), first[0].Token); !errors.Is(err, ErrInvitationNotValid) {
+		t.Fatalf("the replaced link err = %v, want ErrInvitationNotValid", err)
+	}
+	if got := len(membersOf(t, w.super, stale)); got != 0 {
+		t.Errorf("the replaced link left %d memberships, want 0", got)
+	}
+	w.requireStored(t, "member of the reissue", accept(second[0]), false, e2)
+
+	// An admin reissue with no choice drops the earlier set.
+	if _, err := w.create([]string{"t@x.test"}, "reviewer", ids(e1)); err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+	adm, err := w.create([]string{"t@x.test"}, "admin", nil)
+	if err != nil {
+		t.Fatalf("admin reissue: %v", err)
+	}
+	w.requireInvite(t, "admin reissue", adm[0].ID, false)
+	w.requireStored(t, "the admin member", accept(adm[0]), false)
+}
+
+func TestInvitations_ABatchGivesNewAndReissuedInvitesTheSameSet(t *testing.T) {
+	w := newInvWorld(t, "Mixed Batch Tenant", "Ada Obi")
+	e1, e2 := seedEntity(t, w.super, w.tenant), seedEntity(t, w.super, w.tenant)
+	pending, err := w.create([]string{"a@x.test"}, "preparer", ids(e1))
+	if err != nil {
+		t.Fatalf("first invite: %v", err)
+	}
+
+	got, err := w.create([]string{"a@x.test", "b@x.test", "c@x.test"}, "reviewer", ids(e2))
+	if err != nil || len(got) != 3 {
+		t.Fatalf("mixed batch: %d invites, err %v", len(got), err)
+	}
+	if got[0].ID != pending[0].ID {
+		t.Errorf("the pending address got id %s, want %s reissued", got[0].ID, pending[0].ID)
+	}
+	for _, inv := range got {
+		w.requireInvite(t, inv.Email, inv.ID, false, e2)
+	}
+	if n := countRows(t, w, "invitation_clients"); n != 3 {
+		t.Errorf("invitation_clients rows = %d, want 3 (the old row replaced, not kept)", n)
+	}
+}
+
+func TestAccept_AnInHouseInviteGivesNoClientAccess(t *testing.T) {
+	w := inHouseWorld(t)
+	got, err := w.create([]string{"in@x.test"}, "preparer", nil)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("invite: %d, err %v", len(got), err)
+	}
+	user := uuid.NewString()
+	if _, _, _, err := w.store.AcceptInvitation(tenantless(user, "in@x.test"), got[0].Token); err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	w.requireStored(t, "the in-house member", user, false)
+	requireAccess(t, "list as admin", w.listAs(t, w.admin)[user], "null")
+}
+
+func TestAccept_TheSameAddressInTwoWorkspacesCopiesEachOwnSet(t *testing.T) {
+	a := newInvWorld(t, "Same Address A", "Ada Obi")
+	b := newInvWorld(t, "Same Address B", "Bea Eze")
+	ea, eb := seedEntity(t, a.super, a.tenant), seedEntity(t, b.super, b.tenant)
+	ia, err := a.create([]string{"both@x.test"}, "preparer", ids(ea))
+	if err != nil {
+		t.Fatalf("invite from A: %v", err)
+	}
+	ib, err := b.create([]string{"both@x.test"}, "reviewer", ids(eb))
+	if err != nil {
+		t.Fatalf("invite from B: %v", err)
+	}
+
+	user := uuid.NewString()
+	tenant, _, _, err := b.store.AcceptInvitation(tenantless(user, "both@x.test"), ib[0].Token)
+	if err != nil || tenant.ID != b.tenant {
+		t.Fatalf("accept B's invite: tenant %s, err %v", tenant.ID, err)
+	}
+	b.requireStored(t, "the member of B", user, false, eb)
+	if got := memberClientRows(t, a.super, a.tenant); got != 0 {
+		t.Errorf("membership_clients rows in A = %d, want 0", got)
+	}
+	a.requireInvite(t, "A's invite", ia[0].ID, false, ea)
+	if got := memberClientRows(t, b.super, b.tenant); got != 1 {
+		t.Errorf("membership_clients rows in B = %d, want 1", got)
+	}
+}
+
+func TestInvitations_AllClientsStoresNoRowsEvenWithAListedSet(t *testing.T) {
+	w := newInvWorld(t, "All Wins Tenant", "Ada Obi")
+	e1 := seedEntity(t, w.super, w.tenant)
+
+	got, err := w.create([]string{"a@x.test"}, "preparer", &ClientAccess{All: true, IDs: []string{e1}})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("create: %d invites, err %v", len(got), err)
+	}
+	w.requireInvite(t, "the invite", got[0].ID, true)
+}

@@ -59,7 +59,7 @@ jobs:
             migrations:
               - 'migrations/**'
               - 'db/**'
-              - 'internal/platform/db/restore_check_test.go'
+              - 'internal/platform/db/**'
               - 'Makefile'
               - 'go.mod'
               - 'go.sum'

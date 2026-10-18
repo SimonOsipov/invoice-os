@@ -42,6 +42,7 @@ import (
 
 // TestShouldReapClosedPR: AC-1. A closed PR's environment is reaped.
 func TestShouldReapClosedPR(t *testing.T) {
+	t.Parallel()
 	reap, reason := ShouldReap("pr-42", true, PRStateClosed)
 	if !reap {
 		t.Errorf(`ShouldReap("pr-42", true, PRStateClosed) reap = false, want true`)
@@ -53,6 +54,7 @@ func TestShouldReapClosedPR(t *testing.T) {
 
 // TestShouldReapMergedPR: AC-1. A merged PR's environment is reaped.
 func TestShouldReapMergedPR(t *testing.T) {
+	t.Parallel()
 	reap, reason := ShouldReap("pr-42", true, PRStateMerged)
 	if !reap {
 		t.Errorf(`ShouldReap("pr-42", true, PRStateMerged) reap = false, want true`)
@@ -65,6 +67,7 @@ func TestShouldReapMergedPR(t *testing.T) {
 // TestShouldNotReapOpenPR: AC-2. An open PR's environment is never
 // reaped -- only positive evidence of closed/merged reaps.
 func TestShouldNotReapOpenPR(t *testing.T) {
+	t.Parallel()
 	reap, reason := ShouldReap("pr-42", true, PRStateOpen)
 	if reap {
 		t.Errorf(`ShouldReap("pr-42", true, PRStateOpen) reap = true, want false`)
@@ -77,6 +80,7 @@ func TestShouldNotReapOpenPR(t *testing.T) {
 // TestShouldNotReapUnknownStateFailsSafe: AC-2. "We could not determine
 // the PR's state" must never be treated as evidence to delete.
 func TestShouldNotReapUnknownStateFailsSafe(t *testing.T) {
+	t.Parallel()
 	reap, reason := ShouldReap("pr-42", true, PRStateUnknown)
 	if reap {
 		t.Errorf(`ShouldReap("pr-42", true, PRStateUnknown) reap = true, want false`)
@@ -92,6 +96,7 @@ func TestShouldNotReapUnknownStateFailsSafe(t *testing.T) {
 // fall through to a reap. PRState(99) only compiles because PRState is
 // an integer-kind type -- this spec also pins that constraint.
 func TestShouldNotReapUnrecognisedStateFailsSafe(t *testing.T) {
+	t.Parallel()
 	reap, reason := ShouldReap("pr-42", true, PRState(99))
 	if reap {
 		t.Errorf(`ShouldReap("pr-42", true, PRState(99)) reap = true, want false`)
@@ -104,6 +109,7 @@ func TestShouldNotReapUnrecognisedStateFailsSafe(t *testing.T) {
 // TestShouldNotReapUnparseableName: AC-3. A name that doesn't parse as
 // pr-<N> is never reaped, regardless of PR state.
 func TestShouldNotReapUnparseableName(t *testing.T) {
+	t.Parallel()
 	reap, reason := ShouldReap("my-scratch-env", true, PRStateClosed)
 	if reap {
 		t.Errorf(`ShouldReap("my-scratch-env", true, PRStateClosed) reap = true, want false`)
@@ -116,6 +122,7 @@ func TestShouldNotReapUnparseableName(t *testing.T) {
 // TestShouldNotReapNonEphemeral: AC-4. isEphemeral=false is a hard skip
 // regardless of everything else.
 func TestShouldNotReapNonEphemeral(t *testing.T) {
+	t.Parallel()
 	reap, reason := ShouldReap("pr-42", false, PRStateClosed)
 	if reap {
 		t.Errorf(`ShouldReap("pr-42", false, PRStateClosed) reap = true, want false`)
@@ -132,6 +139,7 @@ func TestShouldNotReapNonEphemeral(t *testing.T) {
 // without more, would not distinguish "one guard checked twice" from
 // "two guards" -- the reasons must differ.
 func TestShouldNeverReapDevelopment(t *testing.T) {
+	t.Parallel()
 	reap1, reason1 := ShouldReap("development", true, PRStateClosed)
 	if reap1 {
 		t.Errorf(`ShouldReap("development", true, PRStateClosed) reap = true, want false`)
@@ -160,6 +168,7 @@ func TestShouldNeverReapDevelopment(t *testing.T) {
 // defeat AC-6's actual purpose (an operator being able to tell which
 // branch fired from the log line alone).
 func TestShouldReapReasonIsExactPerBranch(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		envName     string
@@ -199,6 +208,7 @@ func TestShouldReapReasonIsExactPerBranch(t *testing.T) {
 // parsing itself, not the exit-code short-circuit covered separately by
 // TestParsePRStateMapsGhFailureToUnknown.
 func TestParsePRStateMapsMalformedOutputToUnknown(t *testing.T) {
+	t.Parallel()
 	stdouts := []string{"", "not json", "{}", `{"state":"WEIRD"}`}
 	for i, stdout := range stdouts {
 		t.Run(fmt.Sprintf("case_%d_%q", i, stdout), func(t *testing.T) {
@@ -215,6 +225,7 @@ func TestParsePRStateMapsMalformedOutputToUnknown(t *testing.T) {
 // reap-looking-stdout-at-rc=1 case is what proves the exit code wins
 // over reap-looking content rather than merely being consistent with it.
 func TestParsePRStateMapsGhFailureToUnknown(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		stdout string
@@ -241,6 +252,7 @@ func TestParsePRStateMapsGhFailureToUnknown(t *testing.T) {
 // file/pipe capture would not, so both forms must parse identically.
 // Case-sensitive by design: gh emits uppercase.
 func TestParsePRStateMapsRealGhPayloads(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		stdout string
@@ -276,6 +288,7 @@ func TestParsePRStateMapsRealGhPayloads(t *testing.T) {
 // the ones that authorize a delete -- directly, both at the parser and
 // composed through ShouldReap.
 func TestParsePRStateIsCaseSensitiveOnClosedAndMerged(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		`{"state":"closed"}`,
 		`{"state":"Closed"}`,
@@ -307,6 +320,7 @@ func TestParsePRStateIsCaseSensitiveOnClosedAndMerged(t *testing.T) {
 // passes immediately even in this pre-implementation commit -- it is
 // guarding the const declaration order, which is already correct.
 func TestPRStateUnknownIsZeroValue(t *testing.T) {
+	t.Parallel()
 	var s PRState
 	if s != PRStateUnknown {
 		t.Errorf("zero-value PRState = %d, want PRStateUnknown (%d)", int(s), int(PRStateUnknown))
@@ -321,6 +335,7 @@ func TestPRStateUnknownIsZeroValue(t *testing.T) {
 // -- ("pr-42", true, Closed) and ("pr-42", true, Merged) -- and every
 // other cell must be false with a non-empty reason.
 func TestShouldReapIsTotalOverEveryStateAndFlag(t *testing.T) {
+	t.Parallel()
 	states := []PRState{PRStateUnknown, PRStateOpen, PRStateClosed, PRStateMerged, PRState(99), PRState(-1)}
 	flags := []bool{true, false}
 	names := []string{"pr-42", "development", "my-scratch-env"}
@@ -358,6 +373,7 @@ func TestShouldReapIsTotalOverEveryStateAndFlag(t *testing.T) {
 // reaps for the one combination that is actually well-formed evidence:
 // a literal CLOSED or MERGED payload at rc=0.
 func TestParsePRStateNeverYieldsAReapableDecision(t *testing.T) {
+	t.Parallel()
 	hostileStdouts := []string{
 		"",
 		"not json",

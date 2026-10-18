@@ -39,6 +39,7 @@ import (
 // KILLS: M-doublespace, and any prefix broad enough to ship an unrelated
 // variable.
 func TestShellPrefixFilterIsNotUniversal(t *testing.T) {
+	t.Parallel()
 	path := railwayEnvScript(t)
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -129,6 +130,7 @@ func statements(body []string) []string {
 //
 // KILLS: M-ungated, and a fall-through that returns the last command's status.
 func TestEnsureBucketIsolationGatesEverySuccessfulReturn(t *testing.T) {
+	t.Parallel()
 	stmts := statements(shellFunctionBody(t, "ensure_bucket"))
 
 	returns := 0
@@ -164,6 +166,7 @@ func TestEnsureBucketIsolationGatesEverySuccessfulReturn(t *testing.T) {
 //
 // KILLS: M-post.
 func TestBucketCredentialProbeNeverUsesGraphqlPost(t *testing.T) {
+	t.Parallel()
 	path := railwayEnvScript(t)
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -192,6 +195,7 @@ func TestBucketCredentialProbeNeverUsesGraphqlPost(t *testing.T) {
 // auto-inherited instance the Postgres block's wait to materialise, which is why
 // it is not moved earlier for fail-fast.
 func TestReconcileForkCallsEnsureBucketAfterPostgres(t *testing.T) {
+	t.Parallel()
 	stmts := statements(shellFunctionBody(t, "cmd_reconcile_fork"))
 
 	bucket, postgres := -1, -1
@@ -223,6 +227,7 @@ func TestReconcileForkCallsEnsureBucketAfterPostgres(t *testing.T) {
 //
 // KILLS: M-blocklist.
 func TestCheckDSNs_UnknownKindGetsTheStrictPath(t *testing.T) {
+	// serial: assigns the package-level DSNRequirements
 	saved := DSNRequirements
 	t.Cleanup(func() { DSNRequirements = saved })
 

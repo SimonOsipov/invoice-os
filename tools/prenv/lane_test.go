@@ -75,10 +75,7 @@ if [ -f "$dir/$key.out" ]; then cat "$dir/$key.out"; exit 0; fi
 echo "gh stub: no answer for $key" >&2
 exit 97
 `
-	writeFile(t, filepath.Join(dir, "gh"), gh)
-	if err := os.Chmod(filepath.Join(dir, "gh"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "gh"), gh)
 	return laneGH{dir: dir}
 }
 
@@ -212,6 +209,7 @@ func requireLine(t *testing.T, text, want string) {
 }
 
 func TestLane_LibraryOnlyPathsTakeTheSmallLane(t *testing.T) {
+	t.Parallel()
 	if got := laneClassify(t, "frontend/library/src/App.tsx", "frontend/library/package.json"); got != "library" {
 		t.Fatalf("classify = %q, want library", got)
 	}
@@ -236,6 +234,7 @@ func TestLane_LibraryAndBlogTogetherGiveTheFullLane(t *testing.T) {
 }
 
 func TestLane_AnyOtherPathGivesTheFullLane(t *testing.T) {
+	t.Parallel()
 	for _, other := range []string{
 		"pnpm-lock.yaml", "packages/monitoring/src/x.ts", "Caddyfile", "scripts/ci/lane.sh",
 		".github/workflows/ci.yml", "e2e/smoke/apps.ts", "frontend/app/src/App.tsx",
@@ -252,6 +251,7 @@ func TestLane_AnyOtherPathGivesTheFullLane(t *testing.T) {
 }
 
 func TestLane_PrefixMatchesOnAPathBoundary(t *testing.T) {
+	t.Parallel()
 	for _, p := range []string{"frontend/libraryx/a.ts", "frontend/library", "x/frontend/library/a.ts", "frontend/library-foo/a.ts", "frontend/Library/a.ts",
 		"frontend/blogx/a.ts", "frontend/blog", "x/frontend/blog/a.ts", "frontend/blog-foo/a.ts", "frontend/Blog/a.ts"} {
 		t.Run(p, func(t *testing.T) {
@@ -263,12 +263,14 @@ func TestLane_PrefixMatchesOnAPathBoundary(t *testing.T) {
 }
 
 func TestLane_NoPathGivesTheFullLane(t *testing.T) {
+	t.Parallel()
 	if got := laneClassify(t); got != "full" {
 		t.Fatalf("classify of an empty list = %q, want full", got)
 	}
 }
 
 func TestLane_OnlyANamedPackageTakesTheSmallLane(t *testing.T) {
+	t.Parallel()
 	smallLane := map[string]string{"library": "library", "blog": "blog"}
 	pkgs, err := filepath.Glob(filepath.Join(repoRoot(t), "frontend", "*", "package.json"))
 	if err != nil {
@@ -300,6 +302,7 @@ func TestLane_OnlyANamedPackageTakesTheSmallLane(t *testing.T) {
 }
 
 func TestLanePR_LibraryOnlyMergeIsTheSmallLane(t *testing.T) {
+	t.Parallel()
 	r := newLaneRepo(t)
 	r.mergeBranch(t, "frontend/library/a.ts")
 	out, code, ghOut := runLane(t, r.dir, nil, "", "pr")
@@ -322,6 +325,7 @@ func TestLanePR_BlogOnlyMergeIsTheSmallLane(t *testing.T) {
 }
 
 func TestLanePR_MixedMergeIsTheFullLane(t *testing.T) {
+	t.Parallel()
 	r := newLaneRepo(t)
 	r.mergeBranch(t, "frontend/library/a.ts", "frontend/app/b.ts")
 	out, _, ghOut := runLane(t, r.dir, nil, "", "pr")
@@ -330,6 +334,7 @@ func TestLanePR_MixedMergeIsTheFullLane(t *testing.T) {
 }
 
 func TestLanePR_AMoveIntoTheLibraryIsTheFullLane(t *testing.T) {
+	t.Parallel()
 	r := newLaneRepo(t)
 	r.commit(t, "base", "README.md", "frontend/app/b.ts")
 	r.git(t, "checkout", "-q", "-b", "feature")
@@ -345,6 +350,7 @@ func TestLanePR_AMoveIntoTheLibraryIsTheFullLane(t *testing.T) {
 }
 
 func TestLanePR_NoParentIsTheFullLane(t *testing.T) {
+	t.Parallel()
 	r := newLaneRepo(t)
 	r.commit(t, "only", "frontend/library/a.ts")
 	out, code, ghOut := runLane(t, r.dir, nil, "", "pr")
@@ -355,6 +361,7 @@ func TestLanePR_NoParentIsTheFullLane(t *testing.T) {
 }
 
 func TestLanePRE2E_CombinesTheFilterWithTheLane(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		filter, path, wantLane, wantE2E string
 	}{
@@ -380,6 +387,7 @@ func TestLanePRE2E_CombinesTheFilterWithTheLane(t *testing.T) {
 }
 
 func TestLanePRE2E_UnknownFilterVerdictFails(t *testing.T) {
+	t.Parallel()
 	for _, filter := range []string{"", "maybe"} {
 		t.Run("filter="+filter, func(t *testing.T) {
 			r := newLaneRepo(t)
@@ -434,6 +442,7 @@ func wantScope(t *testing.T, out string, code int, ghOut, want string) {
 }
 
 func TestLanePush_LibraryOnlySinceTheLastFullDeploy(t *testing.T) {
+	t.Parallel()
 	p := newPushRepo(t, false, true)
 	gh := newLaneGH(t)
 	gh.serve(t,
@@ -497,6 +506,7 @@ func TestLanePush_ABlogOnlyDeployNeverCounts(t *testing.T) {
 }
 
 func TestLanePush_AnOutsidePathGivesFull(t *testing.T) {
+	t.Parallel()
 	p := newPushRepo(t, true, false)
 	gh := newLaneGH(t)
 	gh.serve(t, lanePushRun(10, p.F, laneFullChain()))
@@ -505,6 +515,7 @@ func TestLanePush_AnOutsidePathGivesFull(t *testing.T) {
 }
 
 func TestLanePush_ALibraryOnlyDeployNeverCounts(t *testing.T) {
+	t.Parallel()
 	p := newPushRepo(t, true, true)
 	gh := newLaneGH(t)
 	gh.serve(t,
@@ -520,6 +531,7 @@ func TestLanePush_ALibraryOnlyDeployNeverCounts(t *testing.T) {
 }
 
 func TestLanePush_AFailedOrCancelledGatewayNeverCounts(t *testing.T) {
+	t.Parallel()
 	for _, c := range []string{"failure", "cancelled"} {
 		t.Run(c, func(t *testing.T) {
 			p := newPushRepo(t, true, true)
@@ -535,6 +547,7 @@ func TestLanePush_AFailedOrCancelledGatewayNeverCounts(t *testing.T) {
 }
 
 func TestLanePush_AGatewayWithAFailedGateIsNotABase(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ prefix, conclusion string }{
 		{"Fleet /healthz gate", "failure"}, {"SPA build gate", "failure"}, {"SPA build gate", "cancelled"},
 		{"Fleet /healthz gate", "skipped"}, {"SPA build gate", "skipped"},
@@ -553,6 +566,7 @@ func TestLanePush_AGatewayWithAFailedGateIsNotABase(t *testing.T) {
 }
 
 func TestLanePush_TheCurrentRunAndNonMainPushRunsNeverCount(t *testing.T) {
+	t.Parallel()
 	p := newPushRepo(t, true, true)
 	gh := newLaneGH(t)
 	self := lanePushRun(laneSelfRun, p.L, laneFullChain())
@@ -569,6 +583,7 @@ func TestLanePush_TheCurrentRunAndNonMainPushRunsNeverCount(t *testing.T) {
 }
 
 func TestLanePush_TheNewestStartWins(t *testing.T) {
+	t.Parallel()
 	p := newPushRepo(t, true, true)
 	gh := newLaneGH(t)
 	a := lanePushRun(50, p.L, laneFullChain())
@@ -581,6 +596,7 @@ func TestLanePush_TheNewestStartWins(t *testing.T) {
 }
 
 func TestLanePush_LookupFailureGivesFull(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(t *testing.T, p pushRepo, gh laneGH){
 		"runs call fails": func(t *testing.T, p pushRepo, gh laneGH) {
 			gh.put(t, "runs.fail", "gh: HTTP 502")
@@ -591,6 +607,14 @@ func TestLanePush_LookupFailureGivesFull(t *testing.T) {
 		"jobs call fails": func(t *testing.T, p pushRepo, gh laneGH) {
 			gh.serve(t, lanePushRun(10, p.F, laneFullChain()))
 			gh.put(t, "jobs-10.fail", "gh: HTTP 502")
+			_ = os.Remove(filepath.Join(gh.dir, "jobs-10.out"))
+		},
+		"runs call fails with a multi-line body": func(t *testing.T, p pushRepo, gh laneGH) {
+			gh.put(t, "runs.fail", "gh: HTTP 502\nSECONDLINE")
+		},
+		"jobs call fails with a multi-line body": func(t *testing.T, p pushRepo, gh laneGH) {
+			gh.serve(t, lanePushRun(10, p.F, laneFullChain()))
+			gh.put(t, "jobs-10.fail", "gh: HTTP 502\nSECONDLINE")
 			_ = os.Remove(filepath.Join(gh.dir, "jobs-10.out"))
 		},
 	}
@@ -604,11 +628,20 @@ func TestLanePush_LookupFailureGivesFull(t *testing.T) {
 			if !strings.Contains(out, "lookup failed") && !strings.Contains(out, "not JSON") {
 				t.Fatalf("reason does not name the failure: %s", out)
 			}
+			if strings.Contains(name, "multi-line") {
+				if !strings.Contains(out, ": gh: HTTP 502") {
+					t.Fatalf("reason does not carry the first line of the body: %s", out)
+				}
+				if strings.Contains(out, "SECONDLINE") {
+					t.Fatalf("reason carries more than the first line of the body: %s", out)
+				}
+			}
 		})
 	}
 }
 
 func TestLanePush_NoFullDeployGivesFull(t *testing.T) {
+	t.Parallel()
 	p := newPushRepo(t, false, true)
 	gh := newLaneGH(t)
 	gh.serve(t, lanePushRun(10, p.F, []laneJob{{laneGatewayJob, "success"}}))
@@ -620,6 +653,7 @@ func TestLanePush_NoFullDeployGivesFull(t *testing.T) {
 }
 
 func TestLanePush_BaseNotAnAncestorGivesFull(t *testing.T) {
+	t.Parallel()
 	t.Run("sibling branch", func(t *testing.T) {
 		p := newPushRepo(t, false, true)
 		p.git(t, "checkout", "-q", "-b", "side", p.F)
@@ -640,6 +674,7 @@ func TestLanePush_BaseNotAnAncestorGivesFull(t *testing.T) {
 }
 
 func TestLanePush_EmptyDiffGivesFull(t *testing.T) {
+	t.Parallel()
 	p := newPushRepo(t, false, true)
 	gh := newLaneGH(t)
 	gh.serve(t, lanePushRun(10, p.S, laneFullChain()))
@@ -648,6 +683,7 @@ func TestLanePush_EmptyDiffGivesFull(t *testing.T) {
 }
 
 func TestLanePush_ReadsOnlyMainPushRuns(t *testing.T) {
+	t.Parallel()
 	p := newPushRepo(t, false, true)
 	gh := newLaneGH(t)
 	gh.serve(t, lanePushRun(10, p.F, laneFullChain()))
@@ -666,6 +702,7 @@ func TestLanePush_ReadsOnlyMainPushRuns(t *testing.T) {
 }
 
 func TestLanePush_WritesOneOutputLine(t *testing.T) {
+	t.Parallel()
 	p := newPushRepo(t, false, true)
 	for name, setup := range map[string]func(gh laneGH){
 		"library": func(gh laneGH) { gh.serve(t, lanePushRun(10, p.F, laneFullChain())) },
@@ -686,6 +723,7 @@ func TestLanePush_WritesOneOutputLine(t *testing.T) {
 }
 
 func TestLane_UsageErrors(t *testing.T) {
+	t.Parallel()
 	r := newLaneRepo(t)
 	r.commit(t, "x", "README.md")
 	gh := newLaneGH(t)
@@ -712,6 +750,7 @@ func TestLane_UsageErrors(t *testing.T) {
 }
 
 func TestLanePR_DeletesAndRenamesAreJudgedByEveryPath(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, from, to, want string }{
 		{"delete inside the library", "frontend/library/a.ts", "", "library"},
 		{"rename inside the library", "frontend/library/a.ts", "frontend/library/z.ts", "library"},
@@ -744,6 +783,7 @@ func TestLanePR_DeletesAndRenamesAreJudgedByEveryPath(t *testing.T) {
 }
 
 func TestLanePush_AnIncompleteChainIsNotABase(t *testing.T) {
+	t.Parallel()
 	gw, fl, spa := laneJob{laneGatewayJob, "success"}, laneJob{laneFleetJob, "success"}, laneJob{laneSPAJob, "success"}
 	cases := map[string][]laneJob{
 		"gateway absent":             {fl, spa},
@@ -768,6 +808,7 @@ func TestLanePush_AnIncompleteChainIsNotABase(t *testing.T) {
 }
 
 func TestLanePush_TheNewestQualifyingRunIsTheBase(t *testing.T) {
+	t.Parallel()
 	p := newPushRepo(t, true, true)
 	gh := newLaneGH(t)
 	gh.serve(t,
@@ -783,6 +824,7 @@ func TestLanePush_TheNewestQualifyingRunIsTheBase(t *testing.T) {
 }
 
 func TestLanePush_DeletesAndRenamesSinceTheBase(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct{ from, to, want string }{
 		"delete in the library":     {"frontend/library/a.ts", "", "library"},
 		"rename out of the library": {"frontend/library/a.ts", "frontend/app/a.ts", "full"},

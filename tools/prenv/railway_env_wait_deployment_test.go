@@ -66,6 +66,7 @@ func allSleeps(t *testing.T, s authShim, want string) {
 }
 
 func TestWaitDeployment_SuccessAfterDeploying(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depUnrouted, depStatus(upIDA, "BUILDING"), depStatus(upIDA, "DEPLOYING"), depStatus(upIDA, "SUCCESS"))
 	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
 
@@ -85,6 +86,7 @@ func TestWaitDeployment_SuccessAfterDeploying(t *testing.T) {
 
 // AC 1: every other non-terminal status keeps the poll going.
 func TestWaitDeployment_PollsThroughEveryOtherStatus(t *testing.T) {
+	t.Parallel()
 	seq := []string{}
 	for _, st := range waitDepInFlight {
 		seq = append(seq, depStatus(upIDA, st))
@@ -106,6 +108,7 @@ func TestWaitDeployment_PollsThroughEveryOtherStatus(t *testing.T) {
 }
 
 func TestWaitDeployment_SleepingPasses(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "SLEEPING"))
 	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
 
@@ -121,11 +124,13 @@ func TestWaitDeployment_SleepingPasses(t *testing.T) {
 }
 
 func TestWaitDeployment_TerminalStatusFails(t *testing.T) {
+	t.Parallel()
 	if len(waitDepTerminal) == 0 {
 		t.Fatal("no terminal statuses to run")
 	}
 	for _, status := range waitDepTerminal {
 		t.Run(status, func(t *testing.T) {
+			t.Parallel()
 			s := newDepShim(t, depStatus(upIDA, status))
 			stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
 
@@ -146,6 +151,7 @@ func TestWaitDeployment_TerminalStatusFails(t *testing.T) {
 }
 
 func TestWaitDeployment_WindowEndsNamingTheLastStatus(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "DEPLOYING"))
 	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
 
@@ -165,6 +171,7 @@ func TestWaitDeployment_WindowEndsNamingTheLastStatus(t *testing.T) {
 }
 
 func TestWaitDeployment_GraphQLErrorEndsAtOnce(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, `{"errors":[{"message":"boom-dep-lookup"}]}`)
 	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
 
@@ -180,6 +187,7 @@ func TestWaitDeployment_GraphQLErrorEndsAtOnce(t *testing.T) {
 }
 
 func TestWaitDeployment_TransientTickKeepsPolling(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 	setFaults(t, s, "dep", "timeout")
 	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
@@ -197,6 +205,7 @@ func TestWaitDeployment_TransientTickKeepsPolling(t *testing.T) {
 }
 
 func TestWaitDeployment_ThirdTransientTickEnds(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 	setFaults(t, s, "dep", "timeout", "timeout", "timeout")
 	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
@@ -218,6 +227,7 @@ func TestWaitDeployment_ThirdTransientTickEnds(t *testing.T) {
 
 // AC 4. The id comes from `railway up` output: untrusted, never a request body.
 func TestWaitDeployment_EmptyOrMalformedIDMakesNoCall(t *testing.T) {
+	t.Parallel()
 	const missing = `(?i)empty|missing|not set`
 	const malformed = `(?i)uuid|malformed|invalid|not a valid`
 	cases := []struct{ name, id, problem string }{
@@ -231,6 +241,7 @@ func TestWaitDeployment_EmptyOrMalformedIDMakesNoCall(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 			stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), c.id)
 
@@ -264,6 +275,7 @@ func TestWaitDeployment_EmptyOrMalformedIDMakesNoCall(t *testing.T) {
 // fleet-gate step runs `wait-deployment auth "$AUTH_DEPLOYMENT_ID"` with it empty and must go red.
 // A stream failure that did print a URL hands over an id the wait accepts.
 func TestWaitDeployment_IDFromRailwayUpOutput(t *testing.T) {
+	t.Parallel()
 	const streamFailed = "Indexing...\nUploading...\nFailed to stream build logs: Failed to retrieve build log\n"
 	cases := []struct {
 		name     string
@@ -276,6 +288,7 @@ func TestWaitDeployment_IDFromRailwayUpOutput(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			up := newUpStub(t, c.up)
 			if out, code := up.run(t, waitDepLabel); code != 0 {
 				t.Fatalf("control: railway-up-ci.sh exit %d, want 0 (stream failure is tolerated); output = %q", code, out)
@@ -325,6 +338,7 @@ func TestWaitDeployment_IDFromRailwayUpOutput(t *testing.T) {
 }
 
 func TestWaitDeployment_SendsOnlyTheStatusQuery(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depUnrouted, depStatus(upIDA, "BUILDING"), depStatus(upIDA, "SUCCESS"))
 	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
 
@@ -352,6 +366,7 @@ func TestWaitDeployment_SendsOnlyTheStatusQuery(t *testing.T) {
 }
 
 func TestWaitDeployment_ProjectTokenUsesProjectAccessTokenHeader(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 	exports := "export RAILWAY_PROJECT_TOKEN=" + waitDepToken + "\n" + forkExports(false, true, false)
 	stdout, stderr, code := runWaitDeployment(t, s, exports, upIDA)
@@ -373,6 +388,7 @@ func TestWaitDeployment_ProjectTokenUsesProjectAccessTokenHeader(t *testing.T) {
 
 // Both tokens: the account token wins, as in `query`.
 func TestWaitDeployment_APITokenWinsOverProjectToken(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 	exports := "export RAILWAY_PROJECT_TOKEN=" + waitDepToken + "\n" + forkExports(true, true, false)
 	stdout, stderr, code := runWaitDeployment(t, s, exports, upIDA)
@@ -390,6 +406,7 @@ func TestWaitDeployment_APITokenWinsOverProjectToken(t *testing.T) {
 }
 
 func TestWaitDeployment_NoTokenMakesNoCall(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 	stdout, stderr, code := runWaitDeployment(t, s, forkExports(false, true, false), upIDA)
 
@@ -410,8 +427,10 @@ func TestWaitDeployment_NoTokenMakesNoCall(t *testing.T) {
 
 // A status outside the known set is not terminal: the wait polls on and names it at the window's end.
 func TestWaitDeployment_UnknownStatusKeepsPolling(t *testing.T) {
+	t.Parallel()
 	const odd = "FUTURE_STATE"
 	t.Run("then success", func(t *testing.T) {
+		t.Parallel()
 		s := newDepShim(t, depUnrouted, depStatus(upIDA, odd), depStatus(upIDA, odd), depStatus(upIDA, "SUCCESS"))
 		stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
 		if code != 0 {
@@ -422,6 +441,7 @@ func TestWaitDeployment_UnknownStatusKeepsPolling(t *testing.T) {
 		}
 	})
 	t.Run("never resolves", func(t *testing.T) {
+		t.Parallel()
 		s := newDepShim(t, depStatus(upIDA, odd))
 		stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
 		if code != 1 {
@@ -438,6 +458,7 @@ func TestWaitDeployment_UnknownStatusKeepsPolling(t *testing.T) {
 
 // The 3rd transient tick in total ends the wait, not the 3rd in a row.
 func TestWaitDeployment_TransientTicksCountInTotal(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "SUCCESS"), depStatus(upIDA, "BUILDING"), depStatus(upIDA, "BUILDING"))
 	// "ok" is not a fault: the shim falls through to normal routing for that call.
 	setFaults(t, s, "dep", "timeout", "ok", "timeout", "ok", "timeout")
@@ -455,6 +476,7 @@ func TestWaitDeployment_TransientTicksCountInTotal(t *testing.T) {
 }
 
 func TestWaitDeployment_GraphQLErrorMidPollEndsAtOnce(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depUnrouted, depStatus(upIDA, "BUILDING"), `{"errors":[{"message":"boom-mid-poll"}]}`, depStatus(upIDA, "SUCCESS"))
 	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
 
@@ -470,12 +492,14 @@ func TestWaitDeployment_GraphQLErrorMidPollEndsAtOnce(t *testing.T) {
 }
 
 func TestWaitDeployment_UUIDShape(t *testing.T) {
+	t.Parallel()
 	ok := []struct{ name, id string }{
 		{"lowercase", upIDA},
 		{"uppercase", strings.ToUpper(upIDA)},
 	}
 	for _, c := range ok {
 		t.Run("accepts "+c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newDepShim(t, depStatus(c.id, "SUCCESS"))
 			stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), c.id)
 			if code != 0 {
@@ -497,6 +521,7 @@ func TestWaitDeployment_UUIDShape(t *testing.T) {
 	}
 	for _, c := range bad {
 		t.Run("rejects "+c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 			stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), c.id)
 			if n := len(s.calls(t)); n != 0 {
@@ -512,6 +537,7 @@ func TestWaitDeployment_UUIDShape(t *testing.T) {
 
 // The id echoed in the error is cut to 64 characters with every character outside [A-Za-z0-9-] shown as `?`.
 func TestWaitDeployment_MalformedIDIsEchoedSanitised(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, id, want string }{
 		{"metacharacters", "70f187fe;true", "70f187fe?true"},
 		{"whitespace and newline", "a b\nc", "a?b?c"},
@@ -520,6 +546,7 @@ func TestWaitDeployment_MalformedIDIsEchoedSanitised(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 			stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), c.id)
 			if code != 1 {
@@ -538,11 +565,13 @@ func TestWaitDeployment_MalformedIDIsEchoedSanitised(t *testing.T) {
 
 // The id checks run before the token check: a bad id names itself even with no token.
 func TestWaitDeployment_IDChecksBeforeTheTokenCheck(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, id, want string }{
 		{"empty", "", "empty"},
 		{"malformed", "not-a-uuid", "uuid"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 			stdout, stderr, code := runWaitDeployment(t, s, forkExports(false, true, false), c.id)
 			if code != 1 {
@@ -560,7 +589,9 @@ func TestWaitDeployment_IDChecksBeforeTheTokenCheck(t *testing.T) {
 }
 
 func TestWaitDeployment_MissingArguments(t *testing.T) {
+	t.Parallel()
 	t.Run("no id", func(t *testing.T) {
+		t.Parallel()
 		s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 		stdout, stderr, code := s.run(t, waitDepExports(), "wait-deployment", waitDepLabel)
 		if code != 1 {
@@ -575,6 +606,7 @@ func TestWaitDeployment_MissingArguments(t *testing.T) {
 		}
 	})
 	t.Run("no label", func(t *testing.T) {
+		t.Parallel()
 		s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 		stdout, stderr, code := s.run(t, waitDepExports(), "wait-deployment")
 		if code != 2 {
@@ -591,6 +623,7 @@ func TestWaitDeployment_MissingArguments(t *testing.T) {
 }
 
 func TestWaitDeployment_NoProjectIDMakesNoCall(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 	stdout, stderr, code := runWaitDeployment(t, s, forkExports(true, false, false), upIDA)
 
@@ -608,6 +641,7 @@ func TestWaitDeployment_NoProjectIDMakesNoCall(t *testing.T) {
 
 // No token reaches any output line, on the success line or on a failure path.
 func TestWaitDeployment_NoTokenInAnyOutput(t *testing.T) {
+	t.Parallel()
 	both := "export RAILWAY_PROJECT_TOKEN=" + waitDepToken + "\n" + forkExports(true, true, false)
 	cases := []struct {
 		name     string
@@ -646,6 +680,7 @@ func TestWaitDeployment_NoTokenInAnyOutput(t *testing.T) {
 
 // A transient final tick does not replace the last status read.
 func TestWaitDeployment_WindowEndNamesLastRealStatusAfterFinalTransientTick(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "DEPLOYING"))
 	setFaults(t, s, "dep", append(strings.Fields(strings.Repeat("ok ", 59)), "timeout")...)
 	stdout, stderr, code := runWaitDeployment(t, s, waitDepExports(), upIDA)
@@ -663,6 +698,7 @@ func TestWaitDeployment_WindowEndNamesLastRealStatusAfterFinalTransientTick(t *t
 }
 
 func TestWaitDeployment_RateLimitedTickWaitsAndCounts(t *testing.T) {
+	t.Parallel()
 	s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 	setFaults(t, s, "dep", "429")
 	plantRateLimitHeaders(t, s, "retry-after: 20")
@@ -684,7 +720,9 @@ func TestWaitDeployment_RateLimitedTickWaitsAndCounts(t *testing.T) {
 }
 
 func TestWaitDeployment_RateLimitedTickPastTheJobCapFails(t *testing.T) {
+	t.Parallel()
 	t.Run("the total is spent", func(t *testing.T) {
+		t.Parallel()
 		s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 		setFaults(t, s, "dep", "429")
 		plantRateLimitHeaders(t, s, "retry-after: 20")
@@ -712,6 +750,7 @@ func TestWaitDeployment_RateLimitedTickPastTheJobCapFails(t *testing.T) {
 		}
 	})
 	t.Run("a second 429 on one tick", func(t *testing.T) {
+		t.Parallel()
 		s := newDepShim(t, depStatus(upIDA, "SUCCESS"))
 		setFaults(t, s, "dep", "429", "429")
 		plantRateLimitHeaders(t, s, "retry-after: 20")
@@ -728,6 +767,7 @@ func TestWaitDeployment_RateLimitedTickPastTheJobCapFails(t *testing.T) {
 		}
 	})
 	t.Run("each tick waits for itself and adds to the total", func(t *testing.T) {
+		t.Parallel()
 		s := newDepShim(t, depStatus(upIDA, "SUCCESS"), depStatus(upIDA, "DEPLOYING"))
 		setFaults(t, s, "dep", "429", "ok", "429")
 		plantRateLimitHeaders(t, s, "retry-after: 20")

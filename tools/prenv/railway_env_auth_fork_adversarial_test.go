@@ -14,6 +14,7 @@ func forkAuthRun(t *testing.T, s authShim, sub string, args ...string) (string, 
 
 // A missing or duplicated service name refuses before any write and names the service.
 func TestSetForkAuthSite_MissingInstanceRefusesBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
 	gw := `{"node":{"serviceId":"` + authForkGatewayID + `","serviceName":"gateway"}}`
 	auth := `{"node":{"serviceId":"` + authForkAuthID + `","serviceName":"auth"}}`
 	siteShim := func(settle string) func(t *testing.T) authShim {
@@ -83,7 +84,9 @@ func TestSetForkAuthSite_MissingInstanceRefusesBeforeAnyWrite(t *testing.T) {
 }
 
 func TestSetForkAuthSite_URLArgument(t *testing.T) {
+	t.Parallel()
 	t.Run("a bare https:// is refused", func(t *testing.T) {
+		t.Parallel()
 		s := newForkSiteShim(t)
 		out, code := forkAuthRun(t, s, "set-fork-auth-site", authForkEnvID, "https://")
 		if code != 1 || !strings.Contains(errorLines(out), "https://") {
@@ -96,6 +99,7 @@ func TestSetForkAuthSite_URLArgument(t *testing.T) {
 	// Only the scheme is checked; a malformed host reaches the gateway, which refuses it at boot.
 	for name, url := range map[string]string{"trailing slash": forkSiteURL + "/", "malformed host": "https://not a url"} {
 		t.Run(name+" is written verbatim", func(t *testing.T) {
+			t.Parallel()
 			s := newForkSiteShim(t)
 			if out, code := forkAuthRun(t, s, "set-fork-auth-site", authForkEnvID, url); code != 0 {
 				t.Fatalf("exit %d, want 0; output = %q", code, out)
@@ -110,6 +114,7 @@ func TestSetForkAuthSite_URLArgument(t *testing.T) {
 
 // Adding GOTRUE_DISABLE_SIGNUP must not drop or add any other fork variable.
 func TestSetForkAuth_WritesTheCompleteSet(t *testing.T) {
+	t.Parallel()
 	s := runForkAuthOnEmptyFork(t)
 	got := map[string][]string{}
 	for _, u := range s.upserts(t) {
@@ -133,6 +138,7 @@ func TestSetForkAuth_WritesTheCompleteSet(t *testing.T) {
 }
 
 func TestForkAuthWritesSkipDeploys(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		sub  string
 		args []string
@@ -163,6 +169,7 @@ func TestForkAuthWritesSkipDeploys(t *testing.T) {
 
 // Both guards precede service resolution, so a refused run never learns a service id.
 func TestForkAuthRefusalsPrecedeServiceResolution(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		sub  string
 		args []string
@@ -173,6 +180,7 @@ func TestForkAuthRefusalsPrecedeServiceResolution(t *testing.T) {
 		{afterSub, afterArgs()[1:]},
 	} {
 		t.Run(c.sub, func(t *testing.T) {
+			t.Parallel()
 			resp := forkAuthRailway()
 			resp["envList"] = authEnvList(false)
 			s := newAuthShim(t, resp, forkAuthStores(freshJWK(t)))
@@ -193,6 +201,7 @@ func TestForkAuthRefusalsPrecedeServiceResolution(t *testing.T) {
 
 // Both URL commands refuse a missing or empty <blog-url> before any Railway call.
 func TestForkPassURLArgumentsAreEight(t *testing.T) {
+	t.Parallel()
 	eight := append([]string{authForkEnvID}, afterArgs()[1:]...)
 	for _, sub := range []string{"reconcile-urls", afterSub} {
 		for _, c := range []struct {
@@ -204,6 +213,7 @@ func TestForkPassURLArgumentsAreEight(t *testing.T) {
 			{"nine arguments", append(slices.Clone(eight), "https://extra")},
 		} {
 			t.Run(sub+" "+c.name, func(t *testing.T) {
+				t.Parallel()
 				s := newAuthShim(t, forkAuthRailway(), forkAuthStores(freshJWK(t)))
 				out, code := forkAuthRun(t, s, sub, c.args...)
 				if code != 2 {

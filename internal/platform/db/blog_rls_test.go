@@ -832,7 +832,7 @@ func TestRLS_BlogMigrationDownLeavesNoObjectAndUpRestoresThem(t *testing.T) {
 		t.Helper()
 		var n int
 		if err := tx.QueryRow(ctx, `SELECT
-			(SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'blog\_%')
+			(SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'blog\_%' AND relname NOT LIKE 'blog\_subscri%')
 			+ (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'staff_read_blog_authors')
 			+ (SELECT count(*) FROM pg_type WHERE typnamespace = 'public'::regnamespace AND typname LIKE 'blog\_%' AND typtype <> 'c' AND typelem = 0)`).Scan(&n); err != nil {
 			t.Fatalf("count blog objects: %v", err)

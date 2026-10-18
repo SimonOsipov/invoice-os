@@ -99,7 +99,8 @@ describe('crumbsFor', () => {
     for (const r of [{ view: 'home' }, { view: 'category', id: 'nope' }] as Route[]) {
       const only = crumbsFor(resolveView(r, '', ready(TEST_DATA)), nav)
       expect(only).toHaveLength(1)
-      expect(only[0].go).toBeUndefined()
+      only[0].go?.()
+      expect(nav).toHaveBeenLastCalledWith({ view: 'home' })
     }
   })
 

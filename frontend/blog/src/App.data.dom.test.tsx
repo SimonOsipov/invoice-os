@@ -59,6 +59,20 @@ describe('data states', () => {
     expect(window.location.pathname).toBe('/category/c1')
   })
 
+  it('DA-09 the Blog crumb on a not-found page goes home', async () => {
+    await mount('/no-such-post', settled)
+    click(q('#blog-header nav[aria-label="Breadcrumb"] button'))
+    expect(window.location.pathname).toBe('/')
+    expect(q('#blog-main h1')).not.toBeNull()
+  })
+
+  it('DA-10 the Blog crumb on a failed load goes home', async () => {
+    await mount('/no-such-post', () => Promise.reject(new Error('x')))
+    expect(q('#blog-main').textContent).toContain('The blog did not load.')
+    click(q('#blog-header nav[aria-label="Breadcrumb"] button'))
+    expect(window.location.pathname).toBe('/')
+  })
+
   it('DA-04 the cookie notice comes after the view', async () => {
     await mount('/', settled)
     const main = q('#blog-main')

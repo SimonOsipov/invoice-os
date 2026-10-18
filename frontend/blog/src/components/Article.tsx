@@ -15,7 +15,7 @@ type ArticleProps = {
   onSubscribe: () => void
 }
 
-// #blog-main scrolls on a wide screen; on a phone the document does (D-20).
+// #blog-main scrolls on a wide screen; on a phone the document does.
 function scrollerOf(): HTMLElement | null {
   const main = document.getElementById('blog-main')
   if (main && main.scrollHeight > main.clientHeight) return main

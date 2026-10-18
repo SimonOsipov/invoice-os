@@ -141,20 +141,20 @@ export function resolveView(route: Route, q: string, blog: BlogState): View {
 }
 
 export function crumbsFor(view: View, navigate: (r: Route) => void): Crumb[] {
-  const blog = (last: boolean): Crumb => ({ label: 'Blog', go: last ? undefined : () => navigate({ view: 'home' }) })
+  const blog = (): Crumb => ({ label: 'Blog', go: () => navigate({ view: 'home' }) })
   switch (view.kind) {
     case 'search':
-      return [blog(false), { label: 'Search' }]
+      return [blog(), { label: 'Search' }]
     case 'subscribe':
-      return [blog(false), { label: 'Subscribe' }]
+      return [blog(), { label: 'Subscribe' }]
     case 'category':
-      return [blog(false), { label: view.cat.name }]
+      return [blog(), { label: view.cat.name }]
     case 'post': {
       const { cat, post } = view
-      if (!cat) return [blog(false), { label: post.title }]
-      return [blog(false), { label: cat.name, go: () => navigate({ view: 'category', id: cat.id }) }, { label: post.title }]
+      if (!cat) return [blog(), { label: post.title }]
+      return [blog(), { label: cat.name, go: () => navigate({ view: 'category', id: cat.id }) }, { label: post.title }]
     }
     default:
-      return [blog(true)]
+      return [blog()]
   }
 }

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactElement, ReactNode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
-import { editorOf, newDraft, previewModel, TONES, type Draft, type DraftBlock } from '../blog'
+import { CATEGORY_ICONS, catFormFrom, editorOf, newCatForm, newDraft, previewModel, TONES, type CatDel, type CatForm, type Draft, type DraftBlock } from '../blog'
 import type { Block, Category, Post } from '../blogApi'
 import { GLYPHS } from '../glyphs'
 import type { BlogFilters } from '../types'
@@ -632,6 +632,88 @@ describe('BlogCategories', () => {
     expect(onMove).toHaveBeenLastCalledWith('b', 'up')
     ;(down[1].props.onClick as () => void)()
     expect(onMove).toHaveBeenLastCalledWith('b', 'down')
+  })
+
+  const withForm = (cats: Category[], form: CatForm | null) => renderToStaticMarkup(<BlogCategories cats={cats} onMove={() => {}} form={form} />)
+  const withDel = (cats: Category[], del: CatDel) => renderToStaticMarkup(<BlogCategories cats={cats} onMove={() => {}} del={del} />)
+  const btn = (html: string, label: string) => html.match(new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`, 'g')) ?? []
+
+  it('an unbroken long name breaks inside the name cell', () => {
+    const name = 'x'.repeat(140)
+    const html = renderCats([cat({ name })])
+    expect(html.match(new RegExp(`<div style="([^"]*)">${name}</div>`))![1]).toContain('overflow-wrap:anywhere')
+  })
+
+  it('the add form renders the prototype fields', () => {
+    const html = withForm(two, newCatForm(two))
+    for (const t of ['New category', '>Name<', '>Band headline<', '>Intro<', '>Icon<', '>Cover colour<', 'placeholder="Events &amp; webinars"', 'placeholder="Where to find us."', 'placeholder="One sentence shown under the headline."', '>Cancel<']) expect(html).toContain(t)
+    const form = html.slice(html.indexOf('data-cat-form'))
+    expect(form).toMatch(/<button[^>]*>(?:(?!<\/button>).)*Add category<\/button>/)
+    const icons = [...form.matchAll(/<button[^>]*aria-label="([^"]*)"[^>]*aria-pressed="([^"]*)"/g)].filter((m) => m[1] !== 'Colour')
+    expect(icons.map((m) => m[1])).toEqual([...CATEGORY_ICONS])
+    expect(icons.filter((m) => m[2] === 'true').map((m) => m[1])).toEqual(['globe'])
+    expect(btn(form, 'Colour')).toHaveLength(6)
+    expect(html.indexOf('data-cat-form')).toBeGreaterThan(html.lastIndexOf('data-cat-row'))
+  })
+
+  it('the edit form is filled, sits in its row and says Save changes', () => {
+    const c = cat({ id: 'a', name: 'Alpha', headline: 'Alpha headline', icon: 'plug', tone: 2 })
+    const html = withForm([c, cat({ id: 'b', name: 'Beta' })], catFormFrom(c))
+    expect(html).not.toContain('New category')
+    expect(html).toContain('value="Alpha"')
+    expect(html).toContain('value="Alpha headline"')
+    expect(html).toContain('placeholder="What changed in ASComply."')
+    expect(html).toMatch(/<button[^>]*>(?:(?!<\/button>).)*Save changes<\/button>/)
+    const press = (l: string) => btn(html, l).map((b) => b.includes('aria-pressed="true"'))
+    expect(btn(html, 'plug')[0]).toContain('aria-pressed="true"')
+    expect(btn(html, 'globe')[0]).toContain('aria-pressed="false"')
+    const swatches = btn(html, 'Colour')
+    expect(press('Colour').map((p, i) => (p ? i : -1)).filter((i) => i >= 0)).toEqual([2])
+    expect(swatches[2]).toContain('var(--ring)')
+    expect(swatches[0]).not.toContain('var(--ring)')
+    const rows = html.split('data-cat-row').slice(1)
+    expect(rows[0]).toContain('data-cat-form')
+    expect(rows[1]).not.toContain('data-cat-form')
+  })
+
+  it('the form error shows under the form with a red Name border', () => {
+    const f = { ...newCatForm(two), name: 'Alpha' }
+    const err = 'A category with this name already exists.'
+    const html = withForm(two, { ...f, error: err })
+    expect(html.indexOf(err)).toBeGreaterThan(html.lastIndexOf('aria-label="Colour"'))
+    expect(html.indexOf(err)).toBeLessThan(html.indexOf('>Cancel<'))
+    expect(html.match(/<input[^>]*value="Alpha"[^>]*>/)![0]).toContain('border:1px solid var(--destructive)')
+    const clean = withForm(two, f)
+    expect(clean).not.toContain(err)
+    expect(clean.match(/<input[^>]*placeholder="Events &amp; webinars"[^>]*>/)![0]).toContain('border:1px solid var(--input)')
+  })
+
+  it('the delete confirm has three states', () => {
+    const cats = [cat({ id: 'a', name: 'Alpha', post_count: 0 }), cat({ id: 'b', name: 'Beta', post_count: 3 }), cat({ id: 'c', name: 'Gamma' })]
+    const empty = withDel(cats, { id: 'a', moveTo: null })
+    expect(empty).toContain('Delete Alpha? It has no posts.')
+    expect(empty).toContain('Delete category')
+    expect(empty).not.toContain('<select')
+    const some = withDel(cats, { id: 'b', moveTo: 'c' })
+    expect(some).toContain('Delete Beta and move its 3 posts to:')
+    const sel = some.match(/<select[\s\S]*?<\/select>/)![0]
+    expect(sel).toContain('>Alpha<')
+    expect(sel).toContain('>Gamma<')
+    expect(sel).not.toContain('>Beta<')
+    expect(sel).toMatch(/<option value="c" selected/)
+    expect(some).toContain('Delete category')
+    for (const n of [0, 2]) {
+      const only = withDel([cat({ id: 'a', post_count: n })], { id: 'a', moveTo: null })
+      expect(only).toContain('This is the only category. Add another before deleting it.')
+      expect(only).toContain('>Cancel<')
+      expect(only).not.toContain('Delete category')
+    }
+  })
+
+  it('the confirm sits inside its row', () => {
+    const rows = withDel(two, { id: 'b', moveTo: 'a' }).split('data-cat-row').slice(1)
+    expect(rows[0]).not.toContain('data-cat-confirm')
+    expect(rows[1]).toContain('data-cat-confirm')
   })
 
   it('the Posts tab ignores the categories slot', () => {

@@ -1023,6 +1023,118 @@ test('OPS-05 blog preview: the article and the card fit the preview pane at ever
   expect(errors, errorsOf(errors)).toEqual([])
 })
 
+test.describe('OPS-05 blog categories fixture', () => {
+  // The rows this test created; the afterEach deletes the post, then the category.
+  let own: { catId: string | null; postId: string | null }
+  test.beforeEach(() => {
+    own = { catId: null, postId: null }
+  })
+  test.afterEach(async () => {
+    const token = await staffToken()
+    if (own.postId) await rawFetch(`${BLOG}/posts/${own.postId}`, { method: 'DELETE', headers: bearer(token) })
+    if (own.catId) await rawFetch(`${BLOG}/categories/${own.catId}`, { method: 'DELETE', headers: bearer(token) })
+  })
+
+  test('OPS-05 blog categories form and delete confirm: controls stay inside at every wide width', async ({ page }, testInfo) => {
+    const errors = collectErrors(page)
+    const token = await staffToken()
+    const hex = randomBytes(4).toString('hex')
+    const prefix = `e2e-cat-layout-${hex}-`
+    const made = await rawFetch(`${BLOG}/categories`, {
+      method: 'POST',
+      headers: bearer(token),
+      body: { name: prefix + 'x'.repeat(120), headline: 'Layout probe', intro: '', icon: 'globe', tone: 0 },
+    })
+    expect(made.status, 'create the long-named category').toBe(201)
+    own.catId = (made.body as { id: string }).id
+    const draft = await rawFetch(`${BLOG}/posts`, { method: 'POST', headers: bearer(token), body: { title: `e2e-cat-layout-post-${hex}`, category_id: own.catId, status: 'draft', body: [] } })
+    expect(draft.status, 'create the draft post in it').toBe(201)
+    own.postId = (draft.body as { id: string }).id
+
+    await signInOps(page)
+    await navButton(page, /^Blog/).click()
+    await expect(firstRow(page), 'the Blog list drew no post row').toBeVisible({ timeout: 15_000 })
+    await pad(page).getByRole('button', { name: /Categories/ }).click()
+    const row = page.locator('[data-cat-row]', { hasText: prefix })
+    await expect(row, 'the Categories tab drew no row for the long-named category').toBeVisible({ timeout: 15_000 })
+    const line = row.locator('xpath=./div[1]')
+    const frame = page.locator('[data-blog-cats]')
+    const form = page.locator('[data-cat-form]')
+    const confirm = page.locator('[data-cat-confirm]')
+
+    const formProblems = async (host: Locator, hostLabel: string, submit: string): Promise<{ problems: string[]; rects: Record<string, unknown> }> => {
+      const r = await boxes(page, {
+        host,
+        form,
+        cancel: form.getByRole('button', { name: 'Cancel', exact: true }),
+        submit: form.getByRole('button', { name: submit, exact: true }),
+      })
+      const fields = await boxList(page, form.getByRole('textbox'), 'form field', 3)
+      const icons = await boxList(page, form.locator('button[aria-pressed]:not([aria-label="Colour"])'), 'icon button', 16)
+      const colours = await boxList(page, form.getByRole('button', { name: 'Colour' }), 'colour button', 6)
+      const problems = [
+        ...within(r.host, r.form, `form / ${hostLabel}`),
+        ...within(r.form, r.cancel, 'Cancel / form'),
+        ...within(r.form, r.submit, `${submit} / form`),
+        ...apart(r.cancel, r.submit, `Cancel / ${submit}`),
+        ...below(fields[2], icons[0], 'Intro / icon picker'),
+        ...below(icons[icons.length - 1], r.cancel, 'icon picker / Cancel'),
+        ...below(colours[colours.length - 1], r.cancel, 'colour picker / Cancel'),
+        ...allApart(fields, 'fields'),
+        ...allApart(icons, 'icon buttons'),
+        ...allApart(colours, 'colour buttons'),
+        ...allApart([...icons, ...colours], 'pickers'),
+        ...(await noSidewaysScroll(page, hostLabel)),
+      ]
+      for (const [k, b] of [...fields, ...icons, ...colours].entries()) problems.push(...within(r.form, b, `control ${k} / form`))
+      return { problems, rects: { ...r, fields, icons, colours } }
+    }
+
+    await row.getByRole('button', { name: 'Delete' }).click()
+    await expect(confirm, 'Delete opened no confirm').toBeVisible()
+    await expect(confirm.getByRole('button', { name: 'Delete category', exact: true }), 'the confirm has no Delete category').toBeVisible()
+    const confirmWidths = await atWidths(page, 'OPS-05 blog category delete confirm', async () => {
+      const r = await boxes(page, {
+        row,
+        line,
+        confirm,
+        text: confirm.locator('span').first(),
+        select: confirm.locator('select'),
+        cancel: confirm.getByRole('button', { name: 'Cancel', exact: true }),
+        del: confirm.getByRole('button', { name: 'Delete category', exact: true }),
+      })
+      const problems = [
+        ...within(r.row, r.confirm, 'confirm / row'),
+        ...below(r.line, r.confirm, 'row line / confirm'),
+        ...within(r.confirm, r.text, 'confirm text / confirm'),
+        ...within(r.confirm, r.select, 'select / confirm'),
+        ...within(r.confirm, r.cancel, 'Cancel / confirm'),
+        ...within(r.confirm, r.del, 'Delete category / confirm'),
+        ...allApart([r.text, r.select, r.cancel, r.del], 'confirm controls'),
+        ...(await noSidewaysScroll(page, 'category delete confirm')),
+      ]
+      return { problems, rects: r }
+    })
+    await confirm.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(confirm, 'Cancel left the confirm open').toHaveCount(0)
+
+    await row.getByRole('button', { name: 'Edit' }).click()
+    await expect(form, 'Edit opened no form').toBeVisible()
+    const editWidths = await atWidths(page, 'OPS-05 blog category edit form', () => formProblems(row, 'row', 'Save changes'))
+    await form.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(form, 'Cancel left the edit form open').toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Add category', exact: true }).click()
+    await expect(form, 'Add category opened no form').toBeVisible()
+    const addWidths = await atWidths(page, 'OPS-05 blog category add form', () => formProblems(frame, 'list frame', 'Add category'))
+    await form.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(form, 'Cancel left the add form open').toHaveCount(0)
+
+    await attachJson(testInfo, 'ops-05-blog-categories-form', { confirmWidths, editWidths, addWidths })
+    expect(errors, errorsOf(errors)).toEqual([])
+  })
+})
+
 test('OPS-05 blog action bar: actions stay inside the bar at every wide width', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
   await signInOps(page)

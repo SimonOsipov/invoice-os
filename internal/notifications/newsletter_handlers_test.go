@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 )
@@ -19,14 +21,24 @@ type nlResend struct {
 	answer map[string]bool
 	err    error
 	emails []string
+	syncs  int
+	remain []time.Duration
 }
 
-func (c *nlResend) SyncBlog(context.Context, BlogSubscriber) error { return nil }
+func (c *nlResend) SyncBlog(context.Context, BlogSubscriber) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.syncs++
+	return nil
+}
 
-func (c *nlResend) ContactUnsubscribed(_ context.Context, email string) (bool, error) {
+func (c *nlResend) ContactUnsubscribed(ctx context.Context, email string) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.emails = append(c.emails, email)
+	if d, ok := ctx.Deadline(); ok {
+		c.remain = append(c.remain, time.Until(d))
+	}
 	return c.answer[email], c.err
 }
 
@@ -98,6 +110,9 @@ func TestSubscribeHandler_SubscribedAndNewAnswerAlike(t *testing.T) {
 	if a.Code != 202 || b.Code != 202 || a.Body.String() != b.Body.String() {
 		t.Fatalf("answers = %d %q / %d %q", a.Code, a.Body, b.Code, b.Body)
 	}
+	if len(a.Header()) == 0 || !reflect.DeepEqual(a.Header(), b.Header()) {
+		t.Errorf("headers differ: %v / %v", a.Header(), b.Header())
+	}
 	to := map[string]int{}
 	for _, m := range h.mail.Messages() {
 		to[m.To]++
@@ -141,6 +156,9 @@ func TestSubscribeHandler_SendsOneConfirmationMail(t *testing.T) {
 	q, _ := h.request(t, email)
 	if got := hashOf(tokenOf(t, msgs[0])); string(got) != string(q.Hash) {
 		t.Error("the mailed token does not hash to the stored hash")
+	}
+	if len(h.rs.emails) != 0 || h.rs.syncs != 0 {
+		t.Errorf("subscribe reached Resend: lookups=%v syncs=%d", h.rs.emails, h.rs.syncs)
 	}
 }
 
@@ -255,7 +273,8 @@ func TestConfirmHandler_LookupFailureStillConfirms(t *testing.T) {
 	h.rs.err = &DeliveryError{Status: 503}
 	ids := h.categories(t, 1)
 	email := h.email(t)
-	w := post(h.conf, `{"token":"`+h.confirmable(t, email, ids)+`"}`, false)
+	tok := h.confirmable(t, email, ids)
+	w := post(h.conf, `{"token":"`+tok+`"}`, false)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"unsubscribed_everywhere":false`) {
 		t.Fatalf("answer = %d %s", w.Code, w.Body)
 	}
@@ -269,7 +288,7 @@ func TestConfirmHandler_LookupFailureStillConfirms(t *testing.T) {
 	if len(warns) != 1 || !strings.Contains(warns[0].Text, "status=503") {
 		t.Errorf("warn lines = %+v, want one with status=503", warns)
 	}
-	qaRequireNoLeak(t, nil, []*qaLogSink{h.logs}, email)
+	qaRequireNoLeak(t, nil, []*qaLogSink{h.logs}, email, tok)
 }
 
 func TestConfirmHandler_GoneTokenMakesNoLookup(t *testing.T) {
@@ -318,3 +337,140 @@ func (brokenStore) Subscribe(context.Context, SubscribeIntake) (string, []string
 }
 
 func (brokenStore) Confirm(context.Context, []byte) (string, error) { return "", errors.New("boom") }
+
+func TestSubscribeHandler_CategoryEdgeCases(t *testing.T) {
+	h := newNLHandlers(t)
+	ids := h.categories(t, 1)
+	email := h.email(t)
+	for _, tc := range []struct {
+		name string
+		ids  []string
+	}{
+		{"one unknown among known", []string{ids[0], "nope-" + ids[0]}},
+		{"duplicated unknown", []string{"nope-x", "nope-x"}},
+	} {
+		w := post(h.sub, subBody(email, tc.ids, "weekly"), false)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), "unknown category") {
+			t.Errorf("%s: answer = %d %s, want 400 unknown category", tc.name, w.Code, w.Body)
+		}
+	}
+	if _, ok := h.request(t, email); ok || len(h.mail.Messages()) != 0 {
+		t.Error("a rejected category list stored a row or sent a mail")
+	}
+	if w := post(h.sub, subBody(email, []string{ids[0], ids[0], ids[0]}, "weekly"), false); w.Code != 202 {
+		t.Fatalf("duplicate known ids: %d %s", w.Code, w.Body)
+	}
+	if q, ok := h.request(t, email); !ok || !reflect.DeepEqual(q.IDs, ids) {
+		t.Errorf("stored ids = %v, want %v", q.IDs, ids)
+	}
+}
+
+func TestNewsletterHandlers_OversizedBodyIs400(t *testing.T) {
+	h := newNLHandlers(t)
+	ids := h.categories(t, 1)
+	email := h.email(t)
+	big := subBody(strings.Repeat("a", 20<<10)+"@x.co", ids, "weekly")
+	if w := post(h.sub, big, false); w.Code != 400 {
+		t.Errorf("subscribe oversized: %d, want 400", w.Code)
+	}
+	if w := post(h.conf, `{"token":"`+strings.Repeat("t", 20<<10)+`"}`, false); w.Code != 400 {
+		t.Errorf("confirm oversized: %d, want 400", w.Code)
+	}
+	if w := post(h.conf, `{"token":""}`, false); w.Code != 410 {
+		t.Errorf("confirm empty token: %d, want 410", w.Code)
+	}
+	if _, ok := h.request(t, email); ok || len(h.mail.Messages()) != 0 {
+		t.Error("an oversized body stored a row or sent a mail")
+	}
+}
+
+func TestSubscribeHandler_CaseVariantsShareOneRequest(t *testing.T) {
+	h := newNLHandlers(t)
+	ids := h.categories(t, 1)
+	email := h.email(t)
+	post(h.sub, subBody(" "+strings.ToUpper(email)+" ", ids, "weekly"), false)
+	post(h.sub, subBody(email, ids, "monthly"), false)
+	msgs := h.mail.Messages()
+	if len(msgs) != 2 || msgs[0].To != email || msgs[1].To != email {
+		t.Fatalf("mail = %+v, want two to %s", msgs, email)
+	}
+	var n int
+	if err := h.e.admin.QueryRow(context.Background(),
+		`SELECT count(*) FROM blog_subscription_requests WHERE lower(btrim(email)) = $1`, email).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("requests for the address = %d (err %v), want 1", n, err)
+	}
+	if w := post(h.conf, `{"token":"`+tokenOf(t, msgs[0])+`"}`, false); w.Code != 410 {
+		t.Errorf("first link after a re-subscribe: %d, want 410", w.Code)
+	}
+	if w := post(h.conf, `{"token":"`+tokenOf(t, msgs[1])+`"}`, false); w.Code != 200 {
+		t.Fatalf("second link: %d %s", w.Code, w.Body)
+	}
+	if s, ok := h.subscriber(t, email); !ok || s.Frequency != "monthly" {
+		t.Errorf("subscriber = %+v, want monthly under the lower-case email", s)
+	}
+	if jobs := h.jobs(t, email, "blog_subscriber_sync"); len(jobs) != 1 || !strings.Contains(jobs[0], email) {
+		t.Errorf("jobs = %v, want one with the lower-case email", jobs)
+	}
+}
+
+func TestConfirmHandler_ConcurrentPostsOneWins(t *testing.T) {
+	h := newNLHandlers(t)
+	ids := h.categories(t, 1)
+	email := h.email(t)
+	body := `{"token":"` + h.confirmable(t, email, ids) + `"}`
+	codes := make([]int, 6)
+	var wg sync.WaitGroup
+	for i := range codes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes[i] = post(h.conf, body, false).Code
+		}()
+	}
+	wg.Wait()
+	var ok, gone int
+	for _, c := range codes {
+		switch c {
+		case 200:
+			ok++
+		case 410:
+			gone++
+		}
+	}
+	if ok != 1 || gone != len(codes)-1 {
+		t.Errorf("codes = %v, want one 200 and the rest 410", codes)
+	}
+	if len(h.rs.emails) != 1 {
+		t.Errorf("lookups = %d, want 1", len(h.rs.emails))
+	}
+	if n := len(h.jobs(t, email, "blog_subscriber_sync")); n != 1 {
+		t.Errorf("jobs = %d, want 1", n)
+	}
+}
+
+func TestSubscribeHandler_CategoryCountBoundNeedsRealIds(t *testing.T) {
+	h := newNLHandlers(t)
+	ids := h.categories(t, 51)
+	email := h.email(t)
+	if w := post(h.sub, subBody(email, ids, "weekly"), false); w.Code != 400 || !strings.Contains(w.Body.String(), "1 to 50") {
+		t.Errorf("51 real ids: %d %s, want 400 naming the bound", w.Code, w.Body)
+	}
+	if _, ok := h.request(t, email); ok {
+		t.Error("51 ids stored a request")
+	}
+	if w := post(h.sub, subBody(email, ids[:50], "weekly"), false); w.Code != 202 {
+		t.Errorf("50 real ids: %d %s, want 202", w.Code, w.Body)
+	}
+	if w := post(h.sub, subBody(email, []string{"Bad_ID"}, "weekly"), false); w.Code != 400 || !strings.Contains(w.Body.String(), "category_ids is invalid") {
+		t.Errorf("bad id: %d %s, want the pattern message", w.Code, w.Body)
+	}
+}
+
+func TestConfirmHandler_LookupHasAThreeSecondDeadline(t *testing.T) {
+	h := newNLHandlers(t)
+	email := h.email(t)
+	post(h.conf, `{"token":"`+h.confirmable(t, email, h.categories(t, 1))+`"}`, false)
+	if len(h.rs.remain) != 1 || h.rs.remain[0] <= 0 || h.rs.remain[0] > 3*time.Second {
+		t.Errorf("lookup deadlines = %v, want one within (0, 3s]", h.rs.remain)
+	}
+}

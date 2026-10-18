@@ -73,7 +73,9 @@ describe('resolveView', () => {
   it('resolve_loadingAndFailedWinOverDataViews', () => {
     expect(resolveView({ view: 'home' }, '', { status: 'loading' }).kind).toBe('loading')
     expect(resolveView({ view: 'home' }, 'x', { status: 'failed' }).kind).toBe('failed')
-    expect(resolveView({ view: 'subscribe' }, '', { status: 'failed' }).kind).toBe('subscribe')
+    expect(resolveView({ view: 'subscribe' }, '', { status: 'failed' }).kind).toBe('failed')
+    expect(resolveView({ view: 'subscribe' }, '', { status: 'loading' }).kind).toBe('loading')
+    expect(resolveView({ view: 'subscribe' }, '', ready(TEST_DATA)).kind).toBe('subscribe')
   })
 
   it('resolve_confirmIgnoresTheLoadState', () => {

@@ -15,8 +15,8 @@ import (
 	"unicode"
 )
 
-// ceiling: in-process counts; a restart clears them and replicas do not share them.
-// ceiling: clients behind one NAT share the per-IP caps; an attacker can spend a victim address's 3 subscribes an hour.
+// ceiling: in-process counts; a restart clears them and replicas do not share them. Revisit when the gateway runs more than one replica.
+// ceiling: clients behind one NAT share the per-IP caps; an attacker can spend a victim address's 3 subscribes an hour. Revisit if abuse reports name a shared-IP block or a victim address.
 const (
 	BlogSubscribePerIP    = 10
 	BlogSubscribePerEmail = 3
@@ -29,7 +29,9 @@ const (
 	maxBlogSubscribeBytes = 4096
 	maxBlogConfirmBytes   = 1024
 	blogUpstreamTimeout   = 5 * time.Second
-	maxBlogAnswerBytes    = 4096
+	// Above the 10 s accountmail Resend timeout: notifications mails inline after it commits.
+	blogSubscribeTimeout = 15 * time.Second
+	maxBlogAnswerBytes   = 4096
 )
 
 var (
@@ -103,12 +105,12 @@ func validateBlogSubscribe(b *blogSubscribeBody) string {
 }
 
 // post sends body to notifications and returns the status and the capped answer body; status 0 is a transport error.
-func (s *blogSubscriber) post(r *http.Request, path string, body any) (int, []byte) {
+func (s *blogSubscriber) post(r *http.Request, path string, timeout time.Duration, body any) (int, []byte) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return 0, nil
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), blogUpstreamTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.base.JoinPath("internal", "blog", path).String(), bytes.NewReader(raw))
 	if err != nil {
@@ -159,7 +161,7 @@ func (s *blogSubscriber) subscribe(w http.ResponseWriter, r *http.Request) {
 	status, answer := http.StatusAccepted, `{"status":"accepted"}`
 	var upstream time.Duration
 	if !refused {
-		code, _ := s.post(r, "subscriptions", in)
+		code, _ := s.post(r, "subscriptions", blogSubscribeTimeout, in)
 		upstream = time.Since(start)
 		switch {
 		case code == http.StatusAccepted:
@@ -214,7 +216,7 @@ func (s *blogSubscriber) confirm(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	code, answer := s.post(r, "subscriptions/confirm", map[string]string{"token": in.Token})
+	code, answer := s.post(r, "subscriptions/confirm", blogUpstreamTimeout, map[string]string{"token": in.Token})
 	switch code {
 	case http.StatusOK:
 		// Only the two known fields travel on; anything else upstream sends stays here.

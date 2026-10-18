@@ -352,6 +352,18 @@ func TestBlogSubscribe_StatusMapping(t *testing.T) {
 	}
 }
 
+func TestBlogSubscribe_SlowAcceptedUpstreamIsStill202(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(6 * time.Second)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(srv.Close)
+	rt := subRoutes(t, srv.URL, 0, true, nil)
+	if rec := subPost(rt.Subscribe, "203.0.113.72:1", subBody("slow@x.co")); rec.Code != http.StatusAccepted {
+		t.Errorf("upstream 202 after 6 s -> %d, want 202", rec.Code)
+	}
+}
+
 func TestBlogConfirm_MalformedTokenIs410WithoutCall(t *testing.T) {
 	up := newSubUpstream(t, http.StatusOK, `{}`)
 	rt := subRoutes(t, up.srv.URL, 0, true, nil)

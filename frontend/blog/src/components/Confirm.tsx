@@ -26,8 +26,10 @@ export function Confirm({ token, onHome, onSubscribe }: { token: string | null; 
       clearConfirmToken()
       setPhase(unsubscribedEverywhere ? 'everywhere' : 'subscribed')
     } catch (err) {
-      if (err instanceof ApiError && err.status === 410) setPhase('gone')
-      else setFailed(true)
+      if (err instanceof ApiError && err.status === 410) {
+        clearConfirmToken()
+        setPhase('gone')
+      } else setFailed(true)
     } finally {
       inFlight.current = false
       setSending(false)

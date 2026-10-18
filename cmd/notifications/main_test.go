@@ -1115,3 +1115,43 @@ func TestNotificationsMain_PreviewServesTheBlogSubscriptionRoutes(t *testing.T) 
 		t.Errorf("service output carries an email or token\n%s", out)
 	}
 }
+
+func TestNotificationsMain_PurgesExpiredRequestsWhileNewsletterIsOff(t *testing.T) {
+	admin, appURL := qaAdminPool(t)
+	bin := qaBuildNotifications(t)
+	ctx := t.Context()
+	suffix := uuid.NewString()[:8]
+	cat := "off-" + suffix
+	expired := "off-exp-" + suffix + "@worker.example"
+	h := sha256.Sum256([]byte("off-" + suffix))
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = admin.Exec(bg, `DELETE FROM blog_subscription_requests WHERE email = $1`, expired)
+		_, _ = admin.Exec(bg, `DELETE FROM blog_categories WHERE id = $1`, cat)
+	})
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO blog_categories (id, name, headline, icon, tone, position) VALUES ($1, 'Off', 'h', 'package', 0, $2)`, []any{cat, 2_000_000_000 + int(time.Now().UnixNano()%1_000_000)}},
+		{`INSERT INTO blog_subscription_requests (email, category_ids, frequency, token_hash, expires_at) VALUES ($1, ARRAY[$2]::text[], 'weekly', $3, now() - interval '1 second')`, []any{expired, cat, h[:]}},
+	} {
+		if _, err := admin.Exec(ctx, q.sql, q.args...); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	p := qaStart(t, bin, map[string]string{"DATABASE_URL": appURL})
+	p.waitFor(t, "/readyz")
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		var n int
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM blog_subscription_requests WHERE email = $1`, expired).Scan(&n); err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		if n == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("newsletter off: the expired request was never purged\n%s", p.out)
+		}
+	}
+}

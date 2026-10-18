@@ -79,9 +79,7 @@ func main() {
 
 	newsletterStore := notifications.NewNewsletterStore(pool, q.River())
 	newsletter := notifications.Newsletter{Store: newsletterStore, Sender: nl.Sender, Resend: nl.Resend, Enabled: nl.Enabled}
-	if nl.Enabled {
-		app.AddBackgroundWorker(codelist.NewWorker(time.Hour, newsletterStore.PurgeExpired))
-	}
+	app.AddBackgroundWorker(codelist.NewWorker(time.Hour, newsletterStore.PurgeExpired))
 
 	blogStore := blog.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/staff/blog/categories", blog.ListCategoriesHandler(blogStore.ListCategories, app.Logger))

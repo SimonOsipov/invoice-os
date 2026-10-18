@@ -3,6 +3,7 @@ import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it } from 'vitest'
 import { App } from './App'
+import { TEST_DATA } from './testData'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -15,6 +16,14 @@ function mount(path: string) {
   document.body.appendChild(container)
   root = createRoot(container)
   act(() => root.render(<StrictMode><App /></StrictMode>))
+}
+
+async function mountReady(path: string) {
+  window.history.replaceState(null, '', path)
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+  await act(async () => root.render(<StrictMode><App load={() => Promise.resolve(TEST_DATA)} /></StrictMode>))
 }
 
 afterEach(() => {
@@ -56,8 +65,8 @@ describe('shell', () => {
     ['/subscribe', ['Blog', 'Subscribe']],
     ['/category/x', ['Blog']],
     ['/a-post', ['Blog']],
-  ])('SH-02 crumbs follow the route (%s)', (path, want) => {
-    mount(path)
+  ])('SH-02 crumbs follow the route (%s)', async (path, want) => {
+    await mountReady(path)
     expect(crumbs()).toEqual(want)
     const buttons = crumbButtons()
     const last = buttons[buttons.length - 1]
@@ -71,8 +80,8 @@ describe('shell', () => {
     expect(last.nextElementSibling).toBeNull()
   })
 
-  it('SH-03 Subscribe, the brand and All posts navigate', () => {
-    mount('/')
+  it('SH-03 Subscribe, the brand and All posts navigate', async () => {
+    await mountReady('/')
     const before = window.history.length
     click(byText('aside button', 'Subscribe'))
     expect(window.location.pathname).toBe('/subscribe')
@@ -85,7 +94,7 @@ describe('shell', () => {
 
     const entries = window.history.length
     click(q('aside button'))
-    click(byText('aside button', 'All posts'))
+    click(q('aside nav button'))
     expect(window.location.pathname).toBe('/')
     expect(window.history.length).toBe(entries)
   })
@@ -99,7 +108,7 @@ describe('shell', () => {
   })
 
   it('SH-05 back and forward re-render the route', async () => {
-    mount('/')
+    await mountReady('/')
     click(byText('aside button', 'Subscribe'))
     await move(() => window.history.back())
     expect(crumbs()).toEqual(['Blog'])

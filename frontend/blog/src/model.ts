@@ -118,10 +118,9 @@ export const scrollTargetTop = (scrollTop: number, elTop: number, scrollerTop: n
 
 export const coverUrl = (path: string): string => (gatewayBase() ?? '') + path
 
-// Subscribe and confirm need no data, so they show while the load runs or fails.
+// Confirm needs no data, so it shows while the load runs or fails; subscribe waits for the categories.
 export function resolveView(route: Route, q: string, blog: BlogState): View {
   const searching = q.trim() !== ''
-  if (route.view === 'subscribe' && !searching) return { kind: 'subscribe' }
   if (route.view === 'confirm' && !searching) return { kind: 'confirm' }
   if (blog.status === 'failed') return { kind: 'failed' }
   if (blog.status === 'loading') return { kind: 'loading' }

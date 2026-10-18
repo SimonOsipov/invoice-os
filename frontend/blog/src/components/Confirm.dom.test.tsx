@@ -110,6 +110,13 @@ describe('Confirm', () => {
     expect(onSubscribe).toHaveBeenCalledTimes(1)
   })
 
+  it('confirm_410ClearsTheStoredToken', async () => {
+    fetchMock.mockImplementation(async () => reply(410, { error: 'link expired or used' })())
+    await mount()
+    await clickAsync(byText('Confirm subscription')!)
+    expect(sessionStorage.getItem(KEY)).toBeNull()
+  })
+
   it('confirm_noTokenState', async () => {
     await mount(null)
     expect(text()).toContain(GONE)

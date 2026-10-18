@@ -1,5 +1,5 @@
 // The deployed v2 Ops Console: resolved values and layout relationships on the PR environment.
-// The OPS-06 tests create, pin and delete a real blog post and restore the featured post; the rest reads mock-backed screens.
+// The OPS-06 tests create, pin and delete a real blog post, restore the featured post, and create, move and delete their own blog categories; the rest reads mock-backed screens.
 // Value reads copy a value from its source (token or prototype) and name it; screenshots are attached, never asserted.
 import { randomBytes } from 'node:crypto'
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
@@ -1193,10 +1193,11 @@ test('OPS-05 blog action bar: actions stay inside the bar at every wide width', 
 })
 
 // ---------------------------------------------------------------- OPS-06
-// Writes one post of its own through the deployed console; reads nothing of any tenant.
+// Writes posts and categories of its own through the deployed console; reads nothing of any tenant.
 
 const BLOG = '/api/notifications/v1/staff/blog'
 const BLOG_POSTS = /\/api\/notifications\/v1\/staff\/blog\/posts(?:[/?]|$)/
+const BLOG_CATEGORIES = /\/api\/notifications\/v1\/staff\/blog\/categories(?:[/?]|$)/
 const AUTH_REFRESH = /\/auth\/refresh(?:[/?]|$)/
 const KEPT_KEY = 'invoice-os.ops-blog-draft' // frontend/ops-console/src/blog.ts KEPT_KEY
 const BAD_IMAGE = 'Choose a JPG or PNG image'
@@ -1513,6 +1514,225 @@ test.describe('OPS-06 blog writes', () => {
     await expectRedToast(page, 'internal error')
     await expect(bar(page).getByText('UNSAVED CHANGES', { exact: true })).toBeVisible()
     expect((await serverPosts(await staffToken())).some((p) => p.title === title), 'the failed save created a post').toBe(false)
+    expect(errors, errorsOf(errors)).toEqual([])
+  })
+})
+
+type ServerCat = { id: string; name: string; headline: string; icon: string; tone: number; post_count: number }
+
+const serverCats = async (token: string): Promise<ServerCat[]> => {
+  const res = await rawFetch(`${BLOG}/categories`, { headers: bearer(token) })
+  if (res.status !== 200) throw new Error(`GET categories answered ${res.status}`)
+  return (res.body as { categories: ServerCat[] }).categories
+}
+
+test.describe('OPS-06 blog categories', () => {
+  // The rows this test created; the afterEach deletes the posts, then the categories (D-24).
+  let own: { cats: string[]; posts: string[] }
+  test.beforeEach(() => {
+    own = { cats: [], posts: [] }
+  })
+  test.afterEach(async () => {
+    const token = await staffToken()
+    for (const id of own.posts) await rawFetch(`${BLOG}/posts/${id}`, { method: 'DELETE', headers: bearer(token) })
+    for (const id of own.cats) await rawFetch(`${BLOG}/categories/${id}`, { method: 'DELETE', headers: bearer(token) })
+  })
+
+  const trackCats = (page: Page) =>
+    page.on('response', (res) => {
+      if (res.request().method() !== 'POST' || !res.ok() || !/\/staff\/blog\/categories\/?$/.test(new URL(res.url()).pathname)) return
+      void res.json().then(
+        (c: { id?: string }) => {
+          if (c.id) own.cats.push(c.id)
+        },
+        () => {},
+      )
+    })
+  const rawCat = async (token: string, name: string): Promise<ServerCat> => {
+    const res = await rawFetch(`${BLOG}/categories`, { method: 'POST', headers: bearer(token), body: { name, headline: 'Probe', intro: '', icon: 'globe', tone: 0 } })
+    expect(res.status, `create category ${name}`).toBe(201)
+    const cat = res.body as ServerCat
+    own.cats.push(cat.id)
+    return cat
+  }
+  const openCategories = async (page: Page): Promise<void> => {
+    await signInOps(page)
+    await navButton(page, /^Blog/).click()
+    await expect(page.locator('[data-blog-table]'), 'the Blog list never finished loading').toBeVisible({ timeout: 15_000 })
+    await pad(page).getByRole('button', { name: /Categories/ }).click()
+    await expect(page.locator('[data-blog-cats]'), 'the Categories tab drew no list').toBeVisible({ timeout: 15_000 })
+  }
+  const catRow = (page: Page, name: string) => page.locator('[data-cat-row]').filter({ has: page.getByText(name, { exact: true }) })
+  const rowButton = (row: Locator, name: string) => row.locator('xpath=./div[1]').getByRole('button', { name, exact: true })
+  const uiOrder = async (page: Page, ...names: string[]): Promise<string[]> => {
+    const texts = await page.locator('[data-cat-row]').evaluateAll((rows) => rows.map((r) => r.textContent ?? ''))
+    return names.filter((n) => texts.some((t) => t.includes(n))).sort((a, b) => texts.findIndex((t) => t.includes(a)) - texts.findIndex((t) => t.includes(b)))
+  }
+  const serverOrder = async (token: string, ...ids: string[]): Promise<string[]> => {
+    const all = (await serverCats(token)).map((c) => c.id)
+    return ids.sort((a, b) => all.indexOf(a) - all.indexOf(b))
+  }
+  const tabCount = async (page: Page): Promise<number> => {
+    const text = (await pad(page).getByRole('button', { name: /Categories/ }).textContent()) ?? ''
+    return Number(/(\d+)\s*$/.exec(text)?.[1])
+  }
+  // The tab re-reads on open (D-30): leave and return.
+  const reopenTab = async (page: Page): Promise<void> => {
+    await pad(page).getByRole('button', { name: /Posts/ }).click()
+    await expect(page.locator('[data-blog-table]'), 'the Posts tab drew no table').toBeVisible()
+    await pad(page).getByRole('button', { name: /Categories/ }).click()
+    await expect(page.locator('[data-blog-cats]'), 'the Categories tab drew no list').toBeVisible()
+  }
+  const isMove = (res: { url(): string; request(): { method(): string } }) => res.request().method() === 'POST' && /\/categories\/[^/]+\/move$/.test(res.url())
+
+  test('OPS-06 blog categories: add → refuse blank and duplicate → edit → move → delete with posts moved → delete empty', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = blogErrors(page, expectedStatusDropper(page, 422, BLOG_CATEGORIES), expectedStatusDropper(page, 409, BLOG_CATEGORIES))
+    trackCats(page)
+    const moves: string[] = []
+    page.on('request', (req) => {
+      if (req.method() === 'POST' && /\/categories\/[^/]+\/move$/.test(req.url())) moves.push(req.url())
+    })
+    const token = await staffToken()
+    const hex = randomBytes(4).toString('hex')
+    const nameA = `e2e cat A ${hex}`
+    const nameB = `e2e cat B ${hex}`
+    const find = async (name: string): Promise<ServerCat> => {
+      const c = (await serverCats(token)).find((x) => x.name === name)
+      if (!c) throw new Error(`the server holds no category ${name}`)
+      return c
+    }
+    const note = page.locator('[data-cat-head]').getByRole('button', { name: 'Add category', exact: true })
+    const form = page.locator('[data-cat-form]')
+    const submit = form.getByRole('button', { name: 'Add category', exact: true })
+    const confirm = page.locator('[data-cat-confirm]')
+    const add = async (name: string, icon: string, tone: number): Promise<void> => {
+      await note.click()
+      await expect(form.getByText('New category', { exact: true }), 'Add category opened no New category form').toBeVisible()
+      await form.getByLabel('Name', { exact: true }).fill(name)
+      await form.getByRole('button', { name: icon, exact: true }).click()
+      await form.getByRole('button', { name: 'Colour', exact: true }).nth(tone).click()
+      await submit.click()
+      await expect(toastOf(page, 'Category added'), `no "Category added" toast for ${name}`).toBeVisible()
+      await expect(catRow(page, name), `${name} drew no row`).toBeVisible()
+    }
+
+    // 1
+    await openCategories(page)
+    const count = await tabCount(page)
+
+    // 2
+    await note.click()
+    await expect(form.getByText('New category', { exact: true }), 'Add category opened no New category form').toBeVisible()
+    await submit.click()
+    await expect(form.getByText('Add a name.', { exact: true }), 'a blank name drew no "Add a name." under the form').toBeVisible()
+
+    // 3
+    const tone = (count % 6 + 2) % 6
+    await form.getByLabel('Name', { exact: true }).fill(nameA)
+    await form.getByRole('button', { name: 'handshake', exact: true }).click()
+    await form.getByRole('button', { name: 'Colour', exact: true }).nth(tone).click()
+    await submit.click()
+    await expect(toastOf(page, 'Category added'), 'no "Category added" toast for A').toBeVisible()
+    await expect(catRow(page, nameA), 'A drew no row').toBeVisible()
+    expect(await tabCount(page), 'the tab count did not grow by one').toBe(count + 1)
+    expect(await uiOrder(page, nameA), 'A is not listed').toEqual([nameA])
+    const a = await find(nameA)
+    expect(a.icon, 'the server did not keep the picked icon').toBe('handshake')
+    expect(a.tone, 'the server did not keep the picked tone').toBe(tone)
+    expect((await serverCats(token)).at(-1)?.id, 'A is not last on the server').toBe(a.id)
+
+    // 4
+    await add(nameB, 'archive', 0)
+    const b = await find(nameB)
+    expect((await serverCats(token)).at(-1)?.id, 'B is not last on the server').toBe(b.id)
+    expect(await uiOrder(page, nameA, nameB), 'B is not below A').toEqual([nameA, nameB])
+
+    // 5
+    await note.click()
+    await form.getByLabel('Name', { exact: true }).fill(nameA.toUpperCase())
+    await submit.click()
+    await expect(form.getByText('A category with this name already exists.', { exact: true }), 'a duplicate name drew no message under the form').toBeVisible()
+    await form.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(form, 'Cancel left the form open').toHaveCount(0)
+
+    // 6
+    await rowButton(catRow(page, nameB), 'Edit').click()
+    await expect(form.getByRole('button', { name: b.icon, exact: true }), 'the Edit form did not prefill B icon').toHaveAttribute('aria-pressed', 'true')
+    await expect(form.getByRole('button', { name: 'Colour', exact: true }).nth(b.tone), 'the Edit form did not prefill B tone').toHaveAttribute('aria-pressed', 'true')
+    const newTone = (b.tone + 1) % 6
+    const headline = `Edited ${hex}`
+    await form.getByLabel('Band headline', { exact: true }).fill(headline)
+    await form.getByRole('button', { name: 'plug', exact: true }).click()
+    await form.getByRole('button', { name: 'Colour', exact: true }).nth(newTone).click()
+    await form.getByRole('button', { name: 'Save changes', exact: true }).click()
+    await expect(toastOf(page, 'Category updated'), 'no "Category updated" toast').toBeVisible()
+    await expect(catRow(page, nameB), 'B row does not show the new headline').toContainText(headline)
+    const edited = await find(nameB)
+    expect([edited.headline, edited.icon, edited.tone], 'the server did not keep the edit').toEqual([headline, 'plug', newTone])
+
+    // 7
+    const moved = page.waitForResponse(isMove)
+    await rowButton(catRow(page, nameB), 'Move up').click()
+    expect((await moved).status(), 'Move up failed').toBe(200)
+    await expect.poll(() => uiOrder(page, nameA, nameB), 'B did not move above A').toEqual([nameB, nameA])
+    expect(await serverOrder(token, a.id, b.id), 'the server did not move B above A').toEqual([b.id, a.id])
+    await expect(rowButton(catRow(page, nameA), 'Move down'), 'A last row Move down is not dimmed').toHaveCSS('opacity', '0.35')
+    expect(moves.length, 'one move so far').toBe(1)
+    await rowButton(catRow(page, nameA), 'Move down').click()
+    const movedBack = page.waitForResponse(isMove)
+    await rowButton(catRow(page, nameB), 'Move down').click()
+    expect((await movedBack).status(), 'Move down failed').toBe(200)
+    expect(moves.length, 'the dimmed Move down sent a request').toBe(2)
+    await expect.poll(() => uiOrder(page, nameA, nameB), 'B did not move back below A').toEqual([nameA, nameB])
+    expect(await serverOrder(token, a.id, b.id), 'the server did not move B back below A').toEqual([a.id, b.id])
+
+    // 8
+    const draft = await rawFetch(`${BLOG}/posts`, { method: 'POST', headers: bearer(token), body: { title: `e2e cat post ${hex}`, category_id: a.id, status: 'draft', body: [] } })
+    expect(draft.status, 'create the draft post in A').toBe(201)
+    const postId = (draft.body as { id: string }).id
+    own.posts.push(postId)
+    await reopenTab(page)
+    await expect(catRow(page, nameA), 'the re-read did not show the post count of A').toContainText(/\b1 post\b/)
+
+    // 9
+    await rowButton(catRow(page, nameA), 'Delete').click()
+    await expect(confirm.getByText(`Delete ${nameA} and move its 1 post to:`, { exact: true }), 'no move-its-post confirm text').toBeVisible()
+    await confirm.locator('select').selectOption({ label: nameB })
+    await confirm.getByRole('button', { name: 'Delete category', exact: true }).click()
+    await expect(toastOf(page, `${nameA} deleted. 1 post moved to ${nameB}`), 'no deleted-and-moved toast').toBeVisible()
+    await expect(catRow(page, nameA), 'A still has a row').toHaveCount(0)
+    expect((await serverCats(token)).some((c) => c.id === a.id), 'the server still holds A').toBe(false)
+    const posts = (await rawFetch(`${BLOG}/posts`, { headers: bearer(token) })).body as { posts: { id: string; category_id: string | null }[] }
+    expect(posts.posts.find((p) => p.id === postId)?.category_id, 'the post did not move to B').toBe(b.id)
+
+    // 10
+    expect((await rawFetch(`${BLOG}/posts/${postId}`, { method: 'DELETE', headers: bearer(token) })).status, 'delete the post').toBeLessThan(300)
+    await reopenTab(page)
+    await rowButton(catRow(page, nameB), 'Delete').click()
+    await expect(confirm.getByText(`Delete ${nameB}? It has no posts.`, { exact: true }), 'no empty-category confirm text').toBeVisible()
+    await confirm.getByRole('button', { name: 'Delete category', exact: true }).click()
+    await expect(toastOf(page, `${nameB} deleted`), 'no deleted toast').toBeVisible()
+    await expect(catRow(page, nameB), 'B still has a row').toHaveCount(0)
+    expect((await serverCats(token)).some((c) => c.id === b.id), 'the server still holds B').toBe(false)
+    expect(errors, errorsOf(errors)).toEqual([])
+  })
+
+  test('OPS-06 blog categories failed move: a 500 leaves the order and shows a red toast', async ({ page }) => {
+    const errors = blogErrors(page, expectedStatusDropper(page, 500, BLOG_CATEGORIES))
+    const token = await staffToken()
+    const hex = randomBytes(4).toString('hex')
+    const nameA = `e2e cat A ${hex}`
+    const nameB = `e2e cat B ${hex}`
+    const a = await rawCat(token, nameA)
+    const b = await rawCat(token, nameB)
+    await openCategories(page)
+    await expect(catRow(page, nameB), 'B drew no row').toBeVisible()
+    await page.route(new RegExp(`/categories/${b.id}/move$`), (route) => (route.request().method() === 'POST' ? fulfillStatus(route, 500, { error: 'internal error' }) : route.fallback()))
+    await rowButton(catRow(page, nameB), 'Move up').click()
+    await expectRedToast(page, 'internal error')
+    expect(await uiOrder(page, nameA, nameB), 'the failed move reordered the list').toEqual([nameA, nameB])
+    expect(await serverOrder(token, a.id, b.id), 'the failed move reordered the server').toEqual([a.id, b.id])
     expect(errors, errorsOf(errors)).toEqual([])
   })
 })

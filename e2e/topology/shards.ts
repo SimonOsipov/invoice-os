@@ -47,7 +47,7 @@ export const UNITS: Unit[] = [
       'isolation.spec.ts':
         'Asserts the exact seeded membership subsets (firm: 6 seeded members, plus the e2e member of each role that exists) and tenant identities of 1111 and 2222.',
       'ops-console.spec.ts':
-        'Cost, not shared state ([fork-lane-by-cost]): signs a provisioned staff account in to the Ops Console, creates, pins and deletes its own blog post and restores the featured post; reads no tenant data.',
+        'Cost, not shared state ([fork-lane-by-cost]): signs a provisioned staff account in to the Ops Console, creates, pins and deletes its own blog post, restores the featured post, and creates, moves and deletes its own blog categories; reads no tenant data.',
       'overview-register-approvals.spec.ts':
         'Cost, not shared state ([fork-lane-by-cost]): signs in the firm and in-house e2e members and reaches every state with page.route; writes no tenant data.',
       'persona-surfaces.spec.ts':

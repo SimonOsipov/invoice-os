@@ -594,6 +594,17 @@ func TestReconcileURLsWritesTheBlogOriginOnTheFork(t *testing.T) {
 	if !strings.HasSuffix(got, ","+batchBlogURL) || strings.Contains(got, "library") {
 		t.Errorf("gateway CORS_ALLOWED_ORIGINS = %q, want it to end with ,%s and omit the library URL", got, batchBlogURL)
 	}
+	if got != batchOrigins {
+		t.Errorf("gateway CORS_ALLOWED_ORIGINS = %q, want %q", got, batchOrigins)
+	}
+	if n := len(s.upserts(t)); n == 0 {
+		t.Fatal("control: the stale fork produced no upserts")
+	}
+	for _, svc := range []string{"blog", "library"} {
+		if v := upsertsOf(s.upserts(t), sentrySvcID(svc), "VITE_GATEWAY_URL"); len(v) != 0 {
+			t.Errorf("%s was given VITE_GATEWAY_URL = %q; the SPA has no gateway wiring", svc, v[0].Value)
+		}
+	}
 }
 
 // guard, passes at HEAD: the flag write must not widen the refusal of the persistent environment.

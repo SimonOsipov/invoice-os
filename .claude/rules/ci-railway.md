@@ -48,7 +48,7 @@ paths:
 - Hold at most two PR runs of `dev-env.yml` in the deploy chain. `scripts/ci/deploy-slot.sh` enforces it.
 - Let a push or dispatch run take a slot without waiting. A PR wait over 2400 s fails the job.
 - Create every PATH shim in a `tools/prenv` test with `writeShim`. A freshly written executable costs about 0.8 s on its first exec on macOS; `writeShim` avoids it there.
-- Start each `tools/prenv` test with `t.Parallel()`. Keep a test serial only when it calls `t.Setenv`, assigns a package-level variable or writes into the repo tree, and say why in a `// serial:` line.
+- Start each `tools/prenv` test with `t.Parallel()`. Keep a test serial only when it calls `t.Setenv`, assigns a package-level variable, writes into the repo tree or asserts a real-clock window, and say why in a `// serial:` line.
 - Run a bash script from a `tools/prenv` test through `runToFiles`, not a pipe. Under parallel load `/bin/bash` 3.2 fails an `echo` on a blocked pipe with EINTR.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database reset runs only when the gateway deploys.
 - Run `spa-build-gate` on a full-scope push and dispatch. Each SPA must serve `/health` and a `/build.txt` that names the commit.

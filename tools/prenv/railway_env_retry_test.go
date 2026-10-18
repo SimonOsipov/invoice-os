@@ -675,7 +675,7 @@ func TestRailwayAPI_RateLimitOverSixHundredFailsAtOnce(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitFallsBackToXRateLimitReset(t *testing.T) {
-	t.Parallel()
+	// serial: real-clock x-ratelimit-reset window
 	for name, reset := range map[string]string{
 		"whole second":      resetAt(120 * time.Second),
 		"fractional second": strings.TrimSuffix(resetAt(120*time.Second), "Z") + ".123Z",
@@ -872,7 +872,7 @@ func TestRailwayAPI_RateLimitAfterATransientFault(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitHeadersAreReadInAnyCaseWithCRLF(t *testing.T) {
-	t.Parallel()
+	// serial: real-clock x-ratelimit-reset window
 	t.Run("Retry-After", func(t *testing.T) {
 		s := rateLimitedEnvList(t, nil, "429")
 		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nRetry-After: 30\r\n\r\n")
@@ -932,7 +932,7 @@ func TestRailwayAPI_RateLimitHeadersAreReadInAnyCaseWithCRLF(t *testing.T) {
 }
 
 func TestRailwayAPI_UnusableRetryAfterFallsBackToTheReset(t *testing.T) {
-	t.Parallel()
+	// serial: real-clock x-ratelimit-reset window
 	for _, bad := range []string{
 		"retry-after: -5", "retry-after: 1.5", "retry-after: +5", "retry-after: 5s", "retry-after: 0x10",
 		"retry-after:", "retry-after: Wed, 21 Oct 2026 07:28:00 GMT",
@@ -1130,7 +1130,7 @@ func TestRailwayAPI_RetryAfterIntegerForms(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitResetForms(t *testing.T) {
-	t.Parallel()
+	// serial: real-clock x-ratelimit-reset window
 	t.Run("a nine-digit fraction", func(t *testing.T) {
 		reset := strings.TrimSuffix(resetAt(120*time.Second), "Z") + ".123456789Z"
 		s := rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + reset}, "429")

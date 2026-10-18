@@ -1232,7 +1232,7 @@ describe('EvidenceBundleDrawer', () => {
     const built = parseCall(downloadCalls(fetchMock)[0])
     expect(built).toEqual({ entity_id: 'ent-a', from: sent.from, to: sent.to })
     // A second, live mutation: the download must not read the server's echoed period
-    // (evidenceBundle.ts:16-18 -- surfaces render that, never the request).
+    // (surfaces render that, never the request).
     expect(built.from).not.toBe(PREVIEW.period.from)
     expect(built.to).not.toBe(PREVIEW.period.to)
 

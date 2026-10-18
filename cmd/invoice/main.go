@@ -121,6 +121,7 @@ func main() {
 	bundleStore := archive.NewStore(pool)
 	app.Mux.HandleFunc("GET /v1/evidence-bundle", archive.DownloadHandler(bundleStore.Assemble, app.Logger))
 	app.Mux.HandleFunc("GET /v1/evidence-bundle/preview", archive.PreviewHandler(bundleStore.Preview, app.Logger))
+	app.Mux.HandleFunc("GET /v1/invoice-register", archive.RegisterHandler(bundleStore.Register, app.Logger))
 	// GET /v1/staff/tenants/{id}/...: staff reads of one tenant's companies and evidence bundle.
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/entities", archive.StaffEntitiesHandler(bundleStore.StaffEntities, app.Logger))
 	app.Mux.HandleFunc("GET /v1/staff/tenants/{id}/evidence-bundle", archive.StaffDownloadHandler(bundleStore.StaffAssemble, app.Logger))

@@ -473,7 +473,7 @@ describe('bundleBlockFor', () => {
 
   // QA (Mode B). EB-02-13 pairs each refusal with a SATISFIED neighbour, so swapping the
   // first two survives it. This is the only reachable combination -- bundleRequestFor
-  // returns null whenever entityId is falsy (evidenceBundle.ts:52-53) -- and it decides
+  // returns null whenever entityId is falsy -- and it decides
   // which sentence a user with nothing selected reads.
   it('EB-02-18 bundleBlock_noCompanyOutranksNoPeriodWhenBothAreMissing', () => {
     // Control: no company means no request, so (null, null) is what the drawer really holds.

@@ -44,7 +44,7 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 		}
 	}
 
-	var foundAuditLog, foundBundle, foundPreview bool
+	var foundAuditLog, foundBundle, foundPreview, foundRegister bool
 	staffWant := map[string]string{
 		"GET /v1/staff/tenants/{id}/entities":                "StaffEntitiesHandler",
 		"GET /v1/staff/tenants/{id}/evidence-bundle":         "StaffDownloadHandler",
@@ -78,6 +78,9 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 		case "GET /v1/evidence-bundle/preview":
 			foundPreview = true
 			checkHandler("GET /v1/evidence-bundle/preview", call, "PreviewHandler")
+		case "GET /v1/invoice-register":
+			foundRegister = true
+			checkHandler("GET /v1/invoice-register", call, "RegisterHandler")
 		}
 		return true
 	})
@@ -90,6 +93,9 @@ func TestInvoiceMain_RegistersTheEvidenceBundleRoutes(t *testing.T) {
 	}
 	if !foundPreview {
 		t.Error(`no app.Mux.HandleFunc("GET /v1/evidence-bundle/preview", archive.PreviewHandler(...)) registration found in cmd/invoice/main.go`)
+	}
+	if !foundRegister {
+		t.Error(`no app.Mux.HandleFunc("GET /v1/invoice-register", archive.RegisterHandler(...)) registration found in cmd/invoice/main.go`)
 	}
 	for pattern, h := range staffWant {
 		if !foundStaff[pattern] {

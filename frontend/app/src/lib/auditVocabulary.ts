@@ -36,6 +36,7 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
   'invoice.unkept_as_is': { label: 'Kept-as-is withdrawn', domain: 'invoices' },
   'invoice.resolved_outside': { label: 'Resolved outside the system', domain: 'invoices' },
   'invoice.unresolved_outside': { label: 'Outside resolution withdrawn', domain: 'invoices' },
+  'invoice_register.exported': { label: 'Invoice register exported', domain: 'invoices' },
 
   'invoice.approval_armed': { label: 'Approval requested', domain: 'approvals' },
   'invoice.approval_approved': { label: 'Approved', domain: 'approvals', outcome: 'good' },

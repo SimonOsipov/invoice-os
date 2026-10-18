@@ -24,7 +24,7 @@ import (
 	"github.com/SimonOsipov/invoice-os/internal/platform/db"
 )
 
-// The 21 attributable events, by rule, plus the 26 workspace-level ones.
+// The attributable events, by rule, plus the 26 workspace-level ones.
 var (
 	triggerRuleAEvents = []string{ // bare `id`, looked up through invoices
 		"invoice.created",
@@ -57,6 +57,7 @@ var (
 		"custom_rule.created",
 		"custom_rule.updated",
 		"custom_rule.deleted",
+		"invoice_register.exported",
 	}
 )
 

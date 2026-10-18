@@ -61,16 +61,20 @@ func parseRequest(query url.Values) (Request, string) {
 	return r, ""
 }
 
-// bundleFilename slugs entityName, falling back to the entity uuid when nothing
-// alphanumeric survives the slug (AC-4).
-func bundleFilename(entityName string, r Request) string {
-	slug := strings.Trim(slugRunPattern.ReplaceAllString(entityName, "-"), "-")
+// entitySlug slugs name, falling back to fallbackID when nothing alphanumeric
+// survives the slug.
+func entitySlug(name, fallbackID string) string {
+	slug := strings.Trim(slugRunPattern.ReplaceAllString(name, "-"), "-")
 	if slug == "" {
-		slug = r.EntityID
-	} else if len(slug) > maxSlugBytes {
+		return fallbackID
+	}
+	if len(slug) > maxSlugBytes {
 		slug = slug[:maxSlugBytes]
 	}
+	return slug
+}
 
-	return "ASComply_evidence_" + slug + "_" + r.From.UTC().Format("20060102") +
+func bundleFilename(entityName string, r Request) string {
+	return "ASComply_evidence_" + entitySlug(entityName, r.EntityID) + "_" + r.From.UTC().Format("20060102") +
 		"_" + r.To.UTC().Format("20060102") + ".zip"
 }

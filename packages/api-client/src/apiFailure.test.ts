@@ -357,7 +357,7 @@ describe('transport inventory', () => {
       if (n > 0) hits[rel(f)] = n
     }
     expect(hits).toEqual({
-      'frontend/app/src/lib/evidenceBundle.ts': 1,
+      'frontend/app/src/lib/fetchAttachment.ts': 1, // the bundle and register downloads
       'frontend/app/src/lib/extractionReview.ts': 1,
       'frontend/app/src/lib/importApi.ts': 4, // XhrCtor type + three xhrCtor defaults
       'frontend/app/src/lib/sourceDocument.ts': 1,

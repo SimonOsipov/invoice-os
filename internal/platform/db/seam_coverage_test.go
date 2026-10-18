@@ -1003,6 +1003,7 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /v1/imports/{id}":                                {verdict: scCovered},
 	"GET /v1/invitations":                                 {verdict: scCovered},
 	"GET /v1/invitations/mine":                            {verdict: scExempt, reason: "the caller has no membership yet; the verified email names the invites"},
+	"GET /v1/invoice-register":                            {verdict: scCovered},
 	"GET /v1/invoices":                                    {verdict: scCovered},
 	"GET /v1/invoices/violation-summary":                  {verdict: scCovered},
 	"GET /v1/invoices/{id}":                               {verdict: scCovered},

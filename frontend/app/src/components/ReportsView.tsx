@@ -23,7 +23,7 @@
 // "SAMPLE" mono chip, so nobody reads it as a computed filing figure. "Total invoiced"
 // (added by step 3 into WHT's old slot) is NOT evicted to make room — the KPI row grows to five tiles instead.
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { ErrorState, gatewayBase, Loading, useAsync } from '@invoice-os/api-client'
 
@@ -33,19 +33,27 @@ import { recordNamesByTin } from '../lib/buyerDirectory'
 import { aggregateCustomers, customerName } from '../lib/customers'
 import { dashboardViewState, getRollup, metricCount, scopedBucket, topFailures, type Rollup } from '../lib/dashboard'
 import { allInvoicesIsEmpty, fetchAllInvoices, gateByActiveEntity, invoicesViewState, shouldFetchInvoices, type AllInvoices } from '../lib/invoices'
+import { fetchInvoiceRegister, previousMonthPeriod, registerErrorLine, registerPeriodValid } from '../lib/invoiceRegister'
 import { crossGlyph, docGlyph, downloadGlyph, plusGlyph } from '../glyphs'
 import type { PlatformCtx } from '../types'
 
 // Tags the envelope with the entity it was fetched for, so `fresh` can gate stale renders.
 type FetchedAllInvoices = AllInvoices & { fetchedEntityId: string | undefined }
 
-// `aria-describedby` target for the disabled export buttons' shared reason text. A module
+// `aria-describedby` target for the blocked export buttons' shared reason text. A module
 // const rather than useId(), same rationale as ReviewRow.tsx's REVALIDATE_REASON_ID:
 // only one ReportsView renders at a time.
 export const EXPORTS_BLOCKED_REASON_ID = 'exports-blocked-reason-text'
 
-// Pinned copy, verbatim -- no delivery promise, no ETA.
-export const EXPORTS_BLOCKED_REASON = 'Not built yet — none of these four exports produces a file.'
+const REGISTER_EXPORT = 'Invoice register'
+const BLOCKED_EXPORT_NAMES = EXPORTS_LIST.filter((e) => e.name !== REGISTER_EXPORT).map((e) => e.name)
+
+// Pinned copy, verbatim -- no delivery promise, no ETA. Names the exports still unbuilt.
+export const EXPORTS_BLOCKED_REASON = `Not built yet — the ${BLOCKED_EXPORT_NAMES.slice(0, -1).join(', ')} and ${BLOCKED_EXPORT_NAMES.at(-1)} exports produce no file.`
+
+export const REGISTER_REASON_ID = 'invoice-register-reason-text'
+
+const DIMMED = { background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' } as const
 
 const CHIP_STYLE = { fontSize: 9, fontWeight: 700, color: 'var(--fg-3)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px' } as const
 
@@ -144,6 +152,60 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
   // stays tenant-wide regardless of the selected client, same as DashboardActive's own
   // "Top validation failures" panel; the FIRM-WIDE chip below discloses that honestly.
   const reportFailures = roll.data ? topFailures(roll.data.top_violations) : []
+
+  const [period, setPeriod] = useState(() => previousMonthPeriod(new Date()))
+  const [registerBusy, setRegisterBusy] = useState(false)
+  const [registerError, setRegisterError] = useState<string | null>(null)
+  const downloadRef = useRef<AbortController | null>(null)
+  const registerEntityId = ctx.activeEntity?.id
+  // A download belongs to the client it started for: a switch or unmount drops it.
+  useEffect(
+    () => () => {
+      downloadRef.current?.abort()
+      setRegisterBusy(false)
+      setRegisterError(null)
+    },
+    [registerEntityId],
+  )
+
+  // The card reads nothing from list.data, so it needs no `fresh` row gate beyond the
+  // envelope being the current entity's.
+  const showExports = state === 'empty' || (state === 'ready' && list.data != null && fresh)
+  const registerReason = !ctx.activeEntity
+    ? ctx.mode === 'inhouse'
+      ? 'Add your company to export its register.'
+      : 'Pick a client to export its register.'
+    : !registerPeriodValid(period)
+      ? 'Pick a start date on or before the end date.'
+      : null
+  const registerDisabled = registerReason != null || registerBusy
+
+  function changePeriod(next: { from: string; to: string }) {
+    setPeriod(next)
+    setRegisterError(null)
+  }
+
+  async function downloadRegister() {
+    if (registerDisabled || !base || !ctx.activeEntity) return
+    const ctrl = new AbortController()
+    downloadRef.current = ctrl
+    setRegisterBusy(true)
+    setRegisterError(null)
+    try {
+      const { blob, filename } = await fetchInvoiceRegister(ctx.getToken, base, { entityId: ctx.activeEntity.id, ...period }, ctrl.signal)
+      if (ctrl.signal.aborted) return
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      if (!ctrl.signal.aborted) setRegisterError(registerErrorLine(err))
+    } finally {
+      if (!ctrl.signal.aborted) setRegisterBusy(false)
+    }
+  }
 
   return (
     <div style={{ padding: '30px 36px 56px' }}>
@@ -304,37 +366,77 @@ export function ReportsView({ ctx }: { ctx: PlatformCtx }) {
               </div>
             </div>
           </div>
-          <div style={{ background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-              <span className="card-title" style={{ fontSize: 15 }}>Export &amp; filings</span>
-              <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-                NRS-READY FORMATS
-              </span>
-            </div>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              {/* Unconditional disabled -- unlike Re-validate/Submit, there is no wire field
-                  or state to gate on: these four exports are permanently unbuilt. */}
-              {EXPORTS_LIST.map((e) => (
+        </>
+      )}
+
+      {showExports && (
+        <div style={{ marginTop: rows.length === 0 ? 20 : 0, background: 'var(--bg-2)', border: '1px solid var(--line-1)', borderRadius: 'var(--radius-md)', padding: '18px 20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <span className="card-title" style={{ fontSize: 15 }}>Export &amp; filings</span>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
+              NRS-READY FORMATS
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span className="label">From</span>
+              <input
+                type="date"
+                data-testid="register-period-from"
+                className="pf-input"
+                style={{ height: 34, fontSize: 12.5 }}
+                value={period.from}
+                onChange={(e) => changePeriod({ ...period, from: e.target.value })}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span className="label">To</span>
+              <input
+                type="date"
+                data-testid="register-period-to"
+                className="pf-input"
+                style={{ height: 34, fontSize: 12.5 }}
+                value={period.to}
+                onChange={(e) => changePeriod({ ...period, to: e.target.value })}
+              />
+            </label>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            {EXPORTS_LIST.map((e) => {
+              const live = e.name === REGISTER_EXPORT
+              return (
                 <button
                   key={e.name}
-                  disabled
-                  title={EXPORTS_BLOCKED_REASON}
-                  aria-describedby={EXPORTS_BLOCKED_REASON_ID}
+                  disabled={live ? registerDisabled : true}
+                  title={live ? (registerReason ?? undefined) : EXPORTS_BLOCKED_REASON}
+                  aria-describedby={live ? (registerReason != null ? REGISTER_REASON_ID : undefined) : EXPORTS_BLOCKED_REASON_ID}
+                  aria-busy={live && registerBusy ? true : undefined}
+                  onClick={live ? downloadRegister : undefined}
                   className="v2-btn v2-btn-ghost pf-btn"
-                  style={{ height: 38, background: 'transparent', opacity: 0.45, cursor: 'not-allowed', filter: 'none' }}
+                  style={live && !registerDisabled ? { height: 38 } : { height: 38, ...DIMMED }}
                 >
                   <span style={{ display: 'inline-flex' }}>{downloadGlyph}</span> {e.name}{' '}
                   <span className="mono" style={{ fontSize: 10, color: 'var(--fg-4)', border: '1px solid var(--line-2)', borderRadius: 'var(--radius-sm)', padding: '1px 5px', marginLeft: 2 }}>
                     {e.fmt}
                   </span>
                 </button>
-              ))}
-            </div>
-            <div id={EXPORTS_BLOCKED_REASON_ID} data-testid="exports-blocked-reason" style={{ marginTop: 10, fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.5 }}>
-              {EXPORTS_BLOCKED_REASON}
-            </div>
+              )
+            })}
           </div>
-        </>
+          {registerReason != null && (
+            <div id={REGISTER_REASON_ID} data-testid="invoice-register-reason" style={{ marginTop: 10, fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+              {registerReason}
+            </div>
+          )}
+          {registerError != null && (
+            <div role="alert" data-testid="invoice-register-error" style={{ marginTop: 10, fontSize: 12, color: 'var(--status-red-text)', lineHeight: 1.5 }}>
+              {registerError}
+            </div>
+          )}
+          <div id={EXPORTS_BLOCKED_REASON_ID} data-testid="exports-blocked-reason" style={{ marginTop: 10, fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.5 }}>
+            {EXPORTS_BLOCKED_REASON}
+          </div>
+        </div>
       )}
     </div>
   )

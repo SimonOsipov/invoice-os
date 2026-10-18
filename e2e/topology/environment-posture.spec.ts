@@ -2,6 +2,10 @@ import { test, expect } from '@playwright/test'
 
 import { collectErrors, signInAs } from '../personaSession'
 import { FORBIDDEN_STRINGS } from '../envCopyStrings'
+import { shardTenants } from './targets'
+
+const SHARD = shardTenants('environment-posture.spec.ts')
+test.beforeAll(() => { expect(test.info().project.name, 'environment-posture.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
 
 // The env pill has no persona branch (Header.tsx reads ctx.sandbox alone), so one persona
 // is the whole contract.
@@ -12,7 +16,7 @@ import { FORBIDDEN_STRINGS } from '../envCopyStrings'
 test('deployed app: the environment pill is SANDBOX by default and LIVE is unselectable', async ({ page }) => {
   const errors = collectErrors(page)
 
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
 
   const pill = page.getByTestId('env-pill')
   const live = page.getByTestId('env-pill-live')

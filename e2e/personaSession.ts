@@ -3,10 +3,12 @@
 // from e2e/personas.test.ts, which runs under vitest in `node` and would break if the pure
 // registry pulled in Playwright.
 
-import { expect, type Page, type Request } from '@playwright/test'
+import { expect, test, type Page, type Request } from '@playwright/test'
 
 import { DESTINATION_ENV, type Destination, type PersonaId } from './personas'
 import { resolveTarget } from './targets'
+import { collectSourcedErrors } from './topology/consoleGate'
+import { shardTenantError } from './topology/shards'
 
 // Rules.tsx placeholder-row copy (status loading / forbidden); the error state is the Retry button.
 const RULES_LOADING = 'Loading rules…'
@@ -81,11 +83,20 @@ export async function signInAtFrontDoor(page: Page, account: { email: string; pa
   await expectInWorkspace(page, account)
 }
 
+// A dedicated shard signs in only on its own tenants.
+function assertShardTenant(tenantId: string | undefined): void {
+  let project: string
+  try { project = test.info().project.name } catch { return } // outside a Playwright test (ctl)
+  const why = shardTenantError(project, tenantId)
+  if (why) throw new Error(`signInAs: ${why}`)
+}
+
 // Sign in as the e2e member of a tenant (realAccounts.ts) through the landing form, then wait for the app to draw.
 // `tenantId` defaults to the seeded 1111 (firm) / 2222 (inhouse); `path` is where the app lands.
 // Postcondition: the stored session is a hand-off session for the tenant, and no main-frame navigation carried `persona=` (the app ignores it).
 // ceiling: about two extra SPA loads per test, revisit with per-worker storageState above +3 min per unit.
 export async function signInAs(page: Page, id: PersonaId, opts: { tenantId?: string; path?: string } = {}): Promise<void> {
+  assertShardTenant(opts.tenantId)
   if (id !== 'firm' && id !== 'inhouse') throw new Error(`signInAs: persona "${id}" has no e2e member`)
   const { TENANTS } = await import('./topology/targets')
   const { ensureMember } = await import('./realAccounts')
@@ -155,12 +166,5 @@ export async function sidebarRoster(page: Page): Promise<string[]> {
 // Console errors + uncaught exceptions, for specs that assert a persona's surfaces draw
 // clean. Attach before navigating so load-time errors are captured.
 export function collectErrors(page: Page): string[] {
-  const errors: string[] = []
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text())
-  })
-  page.on('pageerror', (err) => {
-    errors.push(`pageerror: ${err.message}`)
-  })
-  return errors
+  return collectSourcedErrors(page)
 }

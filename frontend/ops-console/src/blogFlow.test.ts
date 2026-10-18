@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 
 import { SESSION_KEY } from './auth'
 import type { Author, Category, Post } from './blogApi'
-import { editorOf, newDraft, saveState, type Draft, type EditorState } from './blog'
-import { applyRemove, applySave, BAD_IMAGE, COVER_TOO_LARGE, keepOnExpire, keepThenExpire, loadBlog, pickCover, pinPost, pinThenRefresh, postsAfterRemove, removePost, savePost, singleFlight, STAFF_ONLY, trackCover, type CoverPickDeps, type SaveDeps } from './blogFlow'
+import { deleteView, editorOf, newCatForm, newDraft, saveState, type CatForm, type CatUi, type Draft, type EditorState } from './blog'
+import { applyCatMove, applyCatRefresh, applyCatRemove, applyCatSave, applyRemove, applySave, BAD_IMAGE, COVER_TOO_LARGE, keepOnExpire, keepThenExpire, catsAfterRemove, loadBlog, moveCategoryFlow, postsAfterCatRemove, removeCategory, saveCategory, pickCover, pinPost, pinThenRefresh, postsAfterRemove, refreshCategories, removePost, savePost, singleFlight, STAFF_ONLY, trackCover, type CatRemoveOutcome, type CoverPickDeps, type SaveDeps } from './blogFlow'
 import { withSession } from './session'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
@@ -554,11 +554,375 @@ describe('singleFlight', () => {
     expect(mid).toHaveBeenCalledTimes(1)
   })
 
+  it('user waits for a running background refresh, then runs once', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    const refresh = run.after(() => new Promise<void>((r) => (release = r)))
+    const save = vi.fn(async () => {})
+    const p = run.user(save)
+    await Promise.resolve()
+    expect(save).not.toHaveBeenCalled()
+    release()
+    await refresh
+    await p
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('user runs after the refresh even when another refresh is queued behind it', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    void run.after(() => new Promise<void>((r) => (release = r)))
+    await run.after(async () => {})
+    const del = vi.fn(async () => {})
+    const p = run.user(del)
+    release()
+    await p
+    expect(del).toHaveBeenCalledTimes(1)
+  })
+
+  it('user still runs when the background refresh throws, after the queued refresh', async () => {
+    const run = singleFlight()
+    const order: string[] = []
+    let fail: (e: Error) => void = () => {}
+    const bg = run.after(() => new Promise<void>((_, rej) => (fail = rej))).catch(() => {})
+    void run.after(async () => void order.push('queued'))
+    const p = run.user(async () => void order.push('user'))
+    fail(new Error('boom'))
+    await bg
+    await p
+    expect(order).toEqual(['queued', 'user'])
+  })
+
+  it('user does not run while the queued refresh is still in flight', async () => {
+    const run = singleFlight()
+    let first: () => void = () => {}
+    let second: () => void = () => {}
+    void run.after(() => new Promise<void>((r) => (first = r)))
+    void run.after(() => new Promise<void>((r) => (second = r)))
+    const save = vi.fn(async () => {})
+    const p = run.user(save)
+    first()
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    expect(save).not.toHaveBeenCalled()
+    second()
+    await p
+    expect(save).toHaveBeenCalledTimes(1)
+  })
+
+  it('user is still dropped while another user action runs', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    const first = run.user(() => new Promise<void>((r) => (release = r)))
+    const second = vi.fn(async () => {})
+    await run.user(second)
+    expect(second).not.toHaveBeenCalled()
+    release()
+    await first
+  })
+
+  it('after runs once the running action ends, and runs at once when idle', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    const p = run(() => new Promise<void>((r) => (release = r)))
+    const refresh = vi.fn(async () => {})
+    await run.after(refresh)
+    expect(refresh).not.toHaveBeenCalled()
+    release()
+    await p
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+    const idle = vi.fn(async () => {})
+    await run.after(idle)
+    expect(idle).toHaveBeenCalledTimes(1)
+  })
+
+  it('after keeps only the last queued action, and runs it when the flight throws', async () => {
+    const run = singleFlight()
+    let fail: (e: Error) => void = () => {}
+    const p = run(() => new Promise<void>((_, rej) => (fail = rej)))
+    const first = vi.fn(async () => {})
+    const last = vi.fn(async () => {})
+    await run.after(first)
+    await run.after(last)
+    fail(new Error('x'))
+    await expect(p).rejects.toThrow('x')
+    await vi.waitFor(() => expect(last).toHaveBeenCalledTimes(1))
+    expect(first).not.toHaveBeenCalled()
+    const again = vi.fn(async () => {})
+    await run(again)
+    expect(again).toHaveBeenCalledTimes(1)
+  })
+
+  it('a queued action runs after the flight ends and holds the guard while it runs', async () => {
+    const run = singleFlight()
+    const order: string[] = []
+    let release: () => void = () => {}
+    let releaseQ: () => void = () => {}
+    const p = run(async () => {
+      await new Promise<void>((r) => (release = r))
+      order.push('flight')
+    })
+    await run.after(async () => {
+      order.push('queued')
+      await new Promise<void>((r) => (releaseQ = r))
+    })
+    release()
+    await p
+    await vi.waitFor(() => expect(order).toEqual(['flight', 'queued']))
+    const mid = vi.fn(async () => {})
+    await run(mid)
+    expect(mid).not.toHaveBeenCalled()
+    releaseQ()
+  })
+
+  it('a plain call made while one runs is still dropped and never queued', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    const p = run(() => new Promise<void>((r) => (release = r)))
+    const dropped = vi.fn(async () => {})
+    await run(dropped)
+    release()
+    await p
+    await Promise.resolve()
+    expect(dropped).not.toHaveBeenCalled()
+  })
+
   it('frees the guard when the action throws', async () => {
     const run = singleFlight()
     await expect(run(async () => Promise.reject(new Error('x')))).rejects.toThrow('x')
     const again = vi.fn(async () => {})
     await run(again)
     expect(again).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('category move and refresh', () => {
+  const a = { id: 'a' } as Category
+  const b = { id: 'b' } as Category
+
+  it('moveCategoryFlow returns the server order', async () => {
+    const moveCategory = vi.fn().mockResolvedValue({ moved: true, categories: [b, a] })
+    expect(await moveCategoryFlow({ moveCategory }, 'a', 'up')).toEqual({ kind: 'moved', cats: [b, a] })
+    expect(moveCategory).toHaveBeenCalledTimes(1)
+    expect(moveCategory).toHaveBeenCalledWith('a', 'up')
+  })
+
+  it('moveCategoryFlow maps 401, 403 and other failures', async () => {
+    const run = (e: unknown) => moveCategoryFlow({ moveCategory: vi.fn().mockRejectedValue(e) }, 'a', 'down')
+    expect(await run(http(401))).toEqual({ kind: 'expired' })
+    expect(await run(http(403))).toEqual({ kind: 'forbidden' })
+    expect(await run(http(500, 'internal error'))).toEqual({ kind: 'failed', message: 'internal error', status: 500 })
+    expect(await run(new TypeError('Failed to fetch'))).toEqual({ kind: 'failed', message: 'Failed to fetch', status: undefined })
+  })
+
+  it('applyCatMove applies each outcome', () => {
+    expect(applyCatMove({ kind: 'moved', cats: [b, a] })).toEqual({ cats: [b, a], toast: null, tone: 'red', expire: false, reread: false })
+    expect(applyCatMove({ kind: 'expired' })).toMatchObject({ expire: true, toast: null })
+    expect(applyCatMove({ kind: 'forbidden' })).toMatchObject({ toast: 'Your account is not ASComply staff.', tone: 'red', expire: false })
+    expect(applyCatMove({ kind: 'failed', message: 'internal error', status: 500 })).toMatchObject({ toast: 'internal error', tone: 'red', reread: false })
+    expect(applyCatMove({ kind: 'failed', message: 'no such category', status: 404 })).toMatchObject({ toast: 'no such category', tone: 'red', reread: true })
+  })
+
+  it('refreshCategories and applyCatRefresh re-read both lists', async () => {
+    const pa = { id: 'p', category_id: 'x' } as Post
+    const both = { fetchCategories: vi.fn().mockResolvedValue([a]), fetchPosts: vi.fn().mockResolvedValue([pa]) }
+    const ok = await refreshCategories(both)
+    expect(ok).toEqual({ kind: 'lists', cats: [a], posts: [pa], error: undefined })
+    expect(applyCatRefresh(ok)).toMatchObject({ cats: [a], posts: [pa], toast: null, expire: false })
+    const gone = await refreshCategories({ ...both, fetchCategories: vi.fn().mockRejectedValue(http(401)) })
+    expect(gone).toEqual({ kind: 'expired' })
+    expect(applyCatRefresh(gone).expire).toBe(true)
+    expect(await refreshCategories({ ...both, fetchPosts: vi.fn().mockRejectedValue(http(403)) })).toEqual({ kind: 'forbidden' })
+    const boom = applyCatRefresh(await refreshCategories({ fetchCategories: vi.fn().mockRejectedValue(http(500, 'internal error')), fetchPosts: vi.fn().mockRejectedValue(http(500, 'internal error')) }))
+    expect(boom).toMatchObject({ toast: 'internal error', tone: 'red', reread: false })
+    expect(boom.cats).toBeUndefined()
+  })
+
+  it('a re-read updates posts so the delete confirm flips from no posts to move its N posts', async () => {
+    const cats = [a, { ...a, id: 'b' }]
+    expect(deleteView(cats, [], a.id)).toMatchObject({ kind: 'empty' })
+    const fresh = [{ id: 'p1', category_id: a.id }, { id: 'p2', category_id: a.id }] as Post[]
+    const applied = applyCatRefresh(await refreshCategories({ fetchCategories: vi.fn().mockResolvedValue(cats), fetchPosts: vi.fn().mockResolvedValue(fresh) }))
+    expect(deleteView(applied.cats!, applied.posts!, a.id)).toMatchObject({ kind: 'withposts', text: `Delete ${a.name} and move its 2 posts to:` })
+  })
+
+  it('a failed posts fetch keeps the fresh categories and shows the failure, and the reverse', async () => {
+    const lists = [a]
+    const noPosts = applyCatRefresh(await refreshCategories({ fetchCategories: vi.fn().mockResolvedValue(lists), fetchPosts: vi.fn().mockRejectedValue(http(500, 'posts down')) }))
+    expect(noPosts).toMatchObject({ cats: lists, toast: 'posts down', tone: 'red' })
+    expect(noPosts.posts).toBeUndefined()
+    const posts = [{ id: 'p' }] as Post[]
+    const noCats = applyCatRefresh(await refreshCategories({ fetchCategories: vi.fn().mockRejectedValue(http(500, 'cats down')), fetchPosts: vi.fn().mockResolvedValue(posts) }))
+    expect(noCats).toMatchObject({ posts, toast: 'cats down' })
+    expect(noCats.cats).toBeUndefined()
+  })
+})
+
+describe('category save and delete', () => {
+  const cat = (id: string, o: Partial<Category> = {}): Category => ({ id, name: id.toUpperCase(), headline: '', intro: '', icon: 'globe', tone: 0, post_count: 0, ...o })
+  const form = (o: Partial<CatForm> = {}): CatForm => ({ ...newCatForm([]), name: 'Events', ...o })
+  const input = { name: 'Events', headline: '', intro: '', icon: 'globe', tone: 0 }
+  const unprocessable = new ApiError('http', 'invalid category', 422, { fields: { name: 'Add a name.' } })
+
+  it('saveCategory adds a new category and re-reads the list', async () => {
+    const addCategory = vi.fn().mockResolvedValue(cat('x'))
+    const fetchCategories = vi.fn().mockResolvedValue([cat('x')])
+    const o = await saveCategory({ addCategory, updateCategory: vi.fn(), fetchCategories }, form())
+    expect(o).toEqual({ kind: 'saved', toast: 'Category added', category: cat('x'), cats: [cat('x')] })
+    expect(addCategory).toHaveBeenCalledWith(input)
+    expect(fetchCategories).toHaveBeenCalledTimes(1)
+  })
+
+  it('saveCategory updates an existing category', async () => {
+    const addCategory = vi.fn()
+    const updateCategory = vi.fn().mockResolvedValue(cat('c'))
+    const o = await saveCategory({ addCategory, updateCategory, fetchCategories: vi.fn().mockResolvedValue([]) }, form({ id: 'c' }))
+    expect(o).toMatchObject({ kind: 'saved', toast: 'Category updated' })
+    expect(updateCategory).toHaveBeenCalledWith('c', input)
+    expect(addCategory).not.toHaveBeenCalled()
+  })
+
+  it('saveCategory: a 422 name and a 409 duplicate are invalid', async () => {
+    const fetchCategories = vi.fn()
+    const run = (e: unknown) => saveCategory({ addCategory: vi.fn().mockRejectedValue(e), updateCategory: vi.fn(), fetchCategories }, form())
+    expect(await run(unprocessable)).toEqual({ kind: 'invalid', error: 'Add a name.' })
+    const dup = 'A category with this name already exists.'
+    expect(await run(new ApiError('http', dup, 409))).toEqual({ kind: 'invalid', error: dup })
+    expect(fetchCategories).not.toHaveBeenCalled()
+  })
+
+  it('saveCategory maps 401, 403 and other failures', async () => {
+    const run = (e: unknown) => saveCategory({ addCategory: vi.fn().mockRejectedValue(e), updateCategory: vi.fn(), fetchCategories: vi.fn() }, form())
+    expect(await run(http(401))).toEqual({ kind: 'expired' })
+    expect(await run(http(403))).toEqual({ kind: 'forbidden' })
+    expect(await run(http(500, 'internal error'))).toEqual({ kind: 'failed', message: 'internal error', status: 500 })
+    expect(await run(http(404, 'no such category'))).toEqual({ kind: 'failed', message: 'no such category', status: 404 })
+  })
+
+  it('saveCategory sends a 140-character unbroken name unchanged', async () => {
+    const name = 'x'.repeat(140)
+    const addCategory = vi.fn().mockResolvedValue(cat('x'))
+    await saveCategory({ addCategory, updateCategory: vi.fn(), fetchCategories: vi.fn().mockResolvedValue([]) }, form({ name }))
+    expect(addCategory).toHaveBeenCalledWith({ ...input, name })
+  })
+
+  it('saveCategory: a failed re-read keeps the save', async () => {
+    const o = await saveCategory({ addCategory: vi.fn().mockResolvedValue(cat('x')), updateCategory: vi.fn(), fetchCategories: vi.fn().mockRejectedValue(http(500, 'internal error')) }, form())
+    expect(o).toEqual({ kind: 'saved', toast: 'Category added', category: cat('x'), rereadError: 'internal error' })
+    expect(o).not.toHaveProperty('cats')
+  })
+
+  it('applyCatSave: a save whose re-read fails still adds the row at the end and toasts success', () => {
+    const o = { kind: 'saved' as const, toast: 'Category added', category: cat('n'), rereadError: 'internal error' }
+    const a = applyCatSave(ui({}), o, [cat('a'), cat('b')])
+    expect(a.cats).toEqual([cat('a'), cat('b'), cat('n')])
+    expect(a.toast).toContain('Category added')
+    expect(a.toast).toContain('internal error')
+    expect(a.ui.form).toBeNull()
+  })
+
+  it('applyCatSave: a failed re-read replaces an edited row by id and appends one missing from the list', () => {
+    const edited = { kind: 'saved' as const, toast: 'Category updated', category: cat('b', { name: 'New' }), rereadError: 'x' }
+    expect(applyCatSave(ui({ id: 'b' }), edited, [cat('a'), cat('b'), cat('c')]).cats).toEqual([cat('a'), cat('b', { name: 'New' }), cat('c')])
+    expect(applyCatSave(ui({ id: 'b' }), edited, [cat('a')]).cats).toEqual([cat('a'), cat('b', { name: 'New' })])
+  })
+
+  it('removeCategory moves the posts to the target and names the count', async () => {
+    const cats = [cat('a'), cat('b')]
+    const deleteCategory = vi.fn().mockResolvedValue({ moved_posts: 2, move_to: 'b' })
+    const fetchCategories = vi.fn().mockResolvedValue([cat('b', { post_count: 2 })])
+    const fetchPosts = vi.fn().mockResolvedValue([])
+    const o = await removeCategory({ deleteCategory, fetchCategories, fetchPosts }, cats, [{ id: 'p1', category_id: 'a' }, { id: 'p2', category_id: 'a' }] as Post[], 'a', 'b')
+    expect(deleteCategory).toHaveBeenCalledWith('a', 'b')
+    expect(o).toEqual({ kind: 'done', toast: 'A deleted. 2 posts moved to B', move_to: 'b', cats: [cat('b', { post_count: 2 })], posts: [] })
+    expect(fetchCategories).toHaveBeenCalledTimes(1)
+    expect(fetchPosts).toHaveBeenCalledTimes(1)
+  })
+
+  it('removeCategory sends a target from the loaded posts, not from the category count', async () => {
+    const deleteCategory = vi.fn().mockResolvedValue({ moved_posts: 1, move_to: 'b' })
+    const deps = { deleteCategory, fetchCategories: vi.fn().mockResolvedValue([]), fetchPosts: vi.fn().mockResolvedValue([]) }
+    await removeCategory(deps, [cat('a', { post_count: 0 }), cat('b')], [{ id: 'p', category_id: 'a' }] as Post[], 'a', 'b')
+    expect(deleteCategory).toHaveBeenLastCalledWith('a', 'b')
+    await removeCategory(deps, [cat('a', { post_count: 5 }), cat('b')], [], 'a', 'b')
+    expect(deleteCategory).toHaveBeenLastCalledWith('a', null)
+  })
+
+  it('removeCategory sends no target for an empty category', async () => {
+    const deleteCategory = vi.fn().mockResolvedValue({ moved_posts: 0, move_to: null })
+    const o = await removeCategory({ deleteCategory, fetchCategories: vi.fn().mockResolvedValue([]), fetchPosts: vi.fn().mockResolvedValue([]) }, [cat('a'), cat('b')], [], 'a', 'b')
+    expect(deleteCategory).toHaveBeenCalledWith('a', null)
+    expect(o).toMatchObject({ kind: 'done', toast: 'A deleted' })
+  })
+
+  it('removeCategory maps 401, 403, 409, 422 and 5xx', async () => {
+    const run = (e: unknown) => removeCategory({ deleteCategory: vi.fn().mockRejectedValue(e), fetchCategories: vi.fn(), fetchPosts: vi.fn() }, [cat('a'), cat('b')], [], 'a', null)
+    expect(await run(http(401))).toEqual({ kind: 'expired' })
+    expect(await run(http(403))).toEqual({ kind: 'forbidden' })
+    const only = 'This is the only category. Add another before deleting it.'
+    expect(await run(new ApiError('http', only, 409))).toEqual({ kind: 'failed', message: only, status: 409 })
+    const choose = 'Choose a category to move its posts to.'
+    expect(await run(new ApiError('http', choose, 422, { fields: { move_to: choose } }))).toEqual({ kind: 'failed', message: choose, status: 422 })
+    expect(await run(http(500, 'internal error'))).toEqual({ kind: 'failed', message: 'internal error', status: 500 })
+    expect(await run(http(404, 'no such category'))).toEqual({ kind: 'failed', message: 'no such category', status: 404 })
+  })
+
+  it('removeCategory: a failed re-read keeps the delete', async () => {
+    const deleteCategory = vi.fn().mockResolvedValue({ moved_posts: 0, move_to: null })
+    const o = await removeCategory({ deleteCategory, fetchCategories: vi.fn().mockResolvedValue([]), fetchPosts: vi.fn().mockRejectedValue(http(500, 'internal error')) }, [cat('a'), cat('b')], [], 'a', null)
+    expect(o).toMatchObject({ kind: 'done', rereadError: 'internal error' })
+    expect(o).not.toHaveProperty('cats')
+    expect(o).not.toHaveProperty('posts')
+  })
+
+  const ui = (f: Partial<CatForm> | null): CatUi => ({ form: f ? form(f) : null, del: null })
+
+  it('applyCatSave applies each outcome', () => {
+    const open = ui({ id: 'c' })
+    const saved = applyCatSave(open, { kind: 'saved', toast: 'Category updated', category: cat('c'), cats: [cat('c')] })
+    expect(saved).toMatchObject({ ui: { form: null }, cats: [cat('c')], toast: 'Category updated', tone: 'ok', expire: false, reread: false })
+    const noRead = applyCatSave(open, { kind: 'saved', toast: 'Category updated', category: cat('c', { name: 'New' }), rereadError: 'internal error' }, [cat('c'), cat('d')])
+    expect(noRead).toMatchObject({ ui: { form: null }, toast: 'Category updated. internal error', tone: 'red' })
+    expect(noRead.cats).toEqual([cat('c', { name: 'New' }), cat('d')])
+    const invalid = applyCatSave(open, { kind: 'invalid', error: 'Add a name.' })
+    expect(invalid.ui.form).toMatchObject({ id: 'c', error: 'Add a name.' })
+    expect(invalid.toast).toBeNull()
+    expect(applyCatSave(open, { kind: 'expired' })).toMatchObject({ expire: true, toast: null })
+    expect(applyCatSave(open, { kind: 'forbidden' })).toMatchObject({ toast: STAFF_ONLY, tone: 'red', ui: open })
+    expect(applyCatSave(open, { kind: 'failed', message: 'internal error', status: 500 })).toMatchObject({ toast: 'internal error', tone: 'red', reread: false, ui: open })
+    expect(applyCatSave(open, { kind: 'failed', message: 'no such category', status: 404 })).toMatchObject({ toast: 'no such category', tone: 'red', reread: true, ui: { form: null } })
+  })
+
+  const FILTERS = { tab: 'cats', q: 'x', status: 'all', cat: 'a' } as const
+  const lists = { cats: [cat('a', { post_count: 1 }), cat('b')], posts: [{ id: 'p', category_id: 'a' }] as Post[] }
+  const withDel: CatUi = { form: null, del: { id: 'a', moveTo: 'b' } }
+  const done: CatRemoveOutcome & { kind: 'done' } = { kind: 'done', toast: 'A deleted. 1 post moved to B', move_to: 'b', cats: [cat('b', { post_count: 1 })], posts: [{ id: 'p', category_id: 'b' }] as Post[] }
+
+  it('applyCatRemove applies each outcome and resets the filter', () => {
+    const a = applyCatRemove(lists, withDel, FILTERS, 'a', done)
+    expect(a).toMatchObject({ ui: { del: null }, cats: done.cats, posts: done.posts, filters: { ...FILTERS, cat: 'all' }, toast: done.toast, tone: 'ok' })
+    expect(applyCatRemove(lists, withDel, { ...FILTERS, cat: 'b' }, 'a', done).filters.cat).toBe('b')
+    expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'forbidden' })).toMatchObject({ ui: { del: null }, toast: STAFF_ONLY, tone: 'red', cats: lists.cats })
+    expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'failed', message: 'x', status: 422 })).toMatchObject({ ui: { del: null }, toast: 'x', tone: 'red', reread: true })
+    expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'failed', message: 'x', status: 404 })).toMatchObject({ ui: { del: null }, reread: true })
+    expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'failed', message: 'x', status: 409 })).toMatchObject({ ui: { del: null }, toast: 'x', tone: 'red', reread: true })
+    expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'expired' })).toMatchObject({ expire: true })
+  })
+
+  it('applyCatRemove: a failed re-read still removes the category, with a red toast', () => {
+    const a = applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'done', toast: 'ok', move_to: 'b', rereadError: 'internal error' })
+    expect(a).toMatchObject({ toast: 'internal error', tone: 'red', ui: { del: null } })
+    expect(a.cats.map((c) => c.id)).toEqual(['b'])
+    expect(a.posts[0].category_id).toBe('b')
+  })
+
+  it('catsAfterRemove and postsAfterCatRemove apply a delete whose re-read failed', () => {
+    const o = { kind: 'done', toast: '', move_to: 'b', rereadError: 'internal error' } as const
+    const posts = [{ id: 'p', category_id: 'a' }, { id: 'q', category_id: 'b' }] as Post[]
+    expect(catsAfterRemove([cat('a'), cat('b')], 'a', o).map((c) => c.id)).toEqual(['b'])
+    expect(postsAfterCatRemove(posts, 'a', o).map((p) => p.category_id)).toEqual(['b', 'b'])
+    const fail = { kind: 'failed', message: 'x' } as const
+    const cs = [cat('a'), cat('b')]
+    expect(catsAfterRemove(cs, 'a', fail)).toBe(cs)
+    expect(postsAfterCatRemove(posts, 'a', fail)).toBe(posts)
   })
 })

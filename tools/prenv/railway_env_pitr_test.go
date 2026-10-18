@@ -109,6 +109,7 @@ func requireNoBoot(t *testing.T, s authShim) {
 }
 
 func TestReconcileFork_BlanksWALArchiveBeforePostgresBoots(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		volumeSeq bool
@@ -173,6 +174,7 @@ func TestReconcileFork_BlanksWALArchiveBeforePostgresBoots(t *testing.T) {
 }
 
 func TestReconcileFork_LeavesOtherPostgresVariables(t *testing.T) {
+	t.Parallel()
 	other := map[string]string{"PGPASSWORD": "pitr-pg-password", "DATABASE_URL": "postgresql://pitr-planted", "MY_WAL_ARCHIVE_NOTE": "pitr-note-planted"}
 	vars := map[string]string{"WAL_ARCHIVE_BUCKET": pitrBucket}
 	for k, v := range other {
@@ -202,6 +204,7 @@ func TestReconcileFork_LeavesOtherPostgresVariables(t *testing.T) {
 }
 
 func TestReconcileFork_BlanksOnlyTheNonEmptyArchiveNames(t *testing.T) {
+	t.Parallel()
 	s := pitrFixture(t, "NONE", map[string]string{"WAL_ARCHIVE_BUCKET": pitrBucket, "WAL_ARCHIVE_KEY": "", "WAL_ARCHIVE_SECRET": pitrSecret})
 	stdout, stderr, code := runReconcileFork(t, s)
 	if code != 0 {
@@ -219,6 +222,7 @@ func TestReconcileFork_BlanksOnlyTheNonEmptyArchiveNames(t *testing.T) {
 }
 
 func TestReconcileFork_NoArchiveValueNoWrite(t *testing.T) {
+	t.Parallel()
 	blank := map[string]string{}
 	for k := range pitrArchive {
 		blank[k] = ""
@@ -280,6 +284,7 @@ func requireBootedReuse(t *testing.T, s authShim, stdout string) {
 }
 
 func TestReconcileFork_C1_BootedBucketDiffersFromProductionPasses(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		vars map[string]string
@@ -316,6 +321,7 @@ func TestReconcileFork_C1_BootedBucketDiffersFromProductionPasses(t *testing.T) 
 }
 
 func TestReconcileFork_C2_BootedBucketUnprovenFails(t *testing.T) {
+	t.Parallel()
 	kept := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}
 	prodNoBucket := pitrProdMap(nil)
 	delete(prodNoBucket, "WAL_ARCHIVE_BUCKET")
@@ -370,6 +376,7 @@ func TestReconcileFork_C2_BootedBucketUnprovenFails(t *testing.T) {
 
 // C1, C2: every deployment status takes the booted path, whatever the later reuse step does with it.
 func TestReconcileFork_C1C2_EveryDeploymentStatusTakesTheBootedPath(t *testing.T) {
+	t.Parallel()
 	kept := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}
 	for _, status := range []string{"SUCCESS", "FAILED", "CRASHED", "BUILDING", "DEPLOYING", "REMOVED", "SLEEPING", "SKIPPED", "NEEDS_APPROVAL", "QUEUED", "INITIALIZING", "WAITING"} {
 		t.Run(status+"/differs passes the gate", func(t *testing.T) {
@@ -402,6 +409,7 @@ func TestReconcileFork_C1C2_EveryDeploymentStatusTakesTheBootedPath(t *testing.T
 }
 
 func TestReconcileFork_C3_BootedBucketNotSetPasses(t *testing.T) {
+	t.Parallel()
 	absent := pitrVars(nil)
 	delete(absent, "WAL_ARCHIVE_BUCKET")
 	cases := []struct {
@@ -440,6 +448,7 @@ func TestReconcileFork_C3_BootedBucketNotSetPasses(t *testing.T) {
 }
 
 func TestReconcileFork_UnreadablePostgresVariablesFail(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		setup func(*testing.T, authShim)
@@ -472,6 +481,7 @@ func TestReconcileFork_UnreadablePostgresVariablesFail(t *testing.T) {
 }
 
 func TestReconcileFork_ArchiveValuesNeverPrinted(t *testing.T) {
+	t.Parallel()
 	b3 := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}
 	cases := []struct {
 		name, status string
@@ -625,6 +635,7 @@ func pitrKeepAfterBlank(names ...string) string {
 }
 
 func TestReconcileFork_B2_KeptNamesPassWhenBucketBlank(t *testing.T) {
+	t.Parallel()
 	kept := []string{"WAL_ARCHIVE_ENDPOINT", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_REGION", "WAL_ARCHIVE_SECRET"}
 	cases := []struct{ name, filter string }{
 		{"bucket reads empty", pitrKeepAfterBlank(kept...)},
@@ -667,6 +678,7 @@ func TestReconcileFork_B2_KeptNamesPassWhenBucketBlank(t *testing.T) {
 }
 
 func TestReconcileFork_B3a_BucketDiffersFromProductionPasses(t *testing.T) {
+	t.Parallel()
 	all := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_ENDPOINT", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_REGION", "WAL_ARCHIVE_SECRET"}
 	cases := []struct {
 		name   string
@@ -719,6 +731,7 @@ func TestReconcileFork_B3a_BucketDiffersFromProductionPasses(t *testing.T) {
 }
 
 func TestReconcileFork_B3b_BucketEqualsProductionFails(t *testing.T) {
+	t.Parallel()
 	all := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}
 	cases := []struct {
 		name string
@@ -758,6 +771,7 @@ func TestReconcileFork_B3b_BucketEqualsProductionFails(t *testing.T) {
 }
 
 func TestReconcileFork_B3c_ProductionBucketUnprovenFails(t *testing.T) {
+	t.Parallel()
 	prodNoBucket := pitrProdMap(nil)
 	delete(prodNoBucket, "WAL_ARCHIVE_BUCKET")
 	cases := []struct {
@@ -794,6 +808,7 @@ func TestReconcileFork_B3c_ProductionBucketUnprovenFails(t *testing.T) {
 }
 
 func TestReconcileFork_B3c_ForkRenderedBucketUnprovenFails(t *testing.T) {
+	t.Parallel()
 	s := pitrFixture(t, "NONE", pitrVars(nil))
 	pitrPlantB3(t, s, []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}, pitrProdMap(nil))
 	writeFile(t, filepath.Join(s.dir, "rendered-"+retryPostgresID+"-"+retryForkEnv+".json"), "null")
@@ -815,6 +830,7 @@ func TestReconcileFork_B3c_ForkRenderedBucketUnprovenFails(t *testing.T) {
 // B3c, B4: a rendered read that fails hard exits inside $( ), so the caller sees an empty value and must still stop.
 // The failing body holds secrets and must never reach the output.
 func TestReconcileFork_B3c_RenderedReadTransportFailureFailsClosed(t *testing.T) {
+	t.Parallel()
 	kept := []string{"WAL_ARCHIVE_BUCKET", "WAL_ARCHIVE_KEY", "WAL_ARCHIVE_SECRET"}
 	secretBody := `{"data":{"variables":{"WAL_ARCHIVE_BUCKET":"` + pitrBucket + `","WAL_ARCHIVE_KEY":"` + pitrKey + `","WAL_ARCHIVE_SECRET":"` + pitrSecret +
 		`","PROD_BUCKET":"` + pitrProdBucket + `","PROD_KEY":"` + pitrProdKey + `","PROD_SECRET":"` + pitrProdSecret + `"}},"errors":[{"message":"boom","extensions":{"code":"BAD_USER_INPUT"}}]}`
@@ -875,6 +891,7 @@ func TestReconcileFork_B3c_RenderedReadTransportFailureFailsClosed(t *testing.T)
 }
 
 func TestReconcileFork_B4_UnreadableReReadFails(t *testing.T) {
+	t.Parallel()
 	s := pitrFixture(t, "NONE", pitrVars(nil))
 	pitrPlantProduction(t, s, pitrProdMap(nil))
 	s.bendRead(t, retryPostgresID, `if .WAL_ARCHIVE_BUCKET == "" then null else . end`)
@@ -922,6 +939,7 @@ func requireNoArchiveNeedles(t *testing.T, output string) {
 }
 
 func TestReconcileFork_ArchivePrefixMatch(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		vars map[string]string
@@ -974,6 +992,7 @@ func TestReconcileFork_ArchivePrefixMatch(t *testing.T) {
 }
 
 func TestReconcileFork_ArchiveWriteFailureStopsTheFork(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, file, body string }{
 		{"transport failure", "upsert-WAL_ARCHIVE_BUCKET.fail", "curl: (22) The requested URL returned error: 500\n"},
 		{"GraphQL error", "upsert-WAL_ARCHIVE_BUCKET.json", gqlNotAuthorized},
@@ -997,6 +1016,7 @@ func TestReconcileFork_ArchiveWriteFailureStopsTheFork(t *testing.T) {
 }
 
 func TestReconcileFork_UnreadableDeploymentStateRefusesWithoutWriting(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		setup func(*testing.T, authShim)
@@ -1039,6 +1059,7 @@ func TestReconcileFork_UnreadableDeploymentStateRefusesWithoutWriting(t *testing
 }
 
 func TestReconcileFork_ArchiveWriteLinesAreRedacted(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		vars map[string]string

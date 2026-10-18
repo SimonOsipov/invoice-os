@@ -117,6 +117,7 @@ func offenderStrings(offenders []Offender) []string {
 // five being unset, so an absent variable is a crash-loop rather than a degraded
 // mode. Present-but-empty is the fork-rendering failure mode itself.
 func TestCheckDSNs_DocumentVarsAreRequired(t *testing.T) {
+	t.Parallel()
 	for _, svc := range documentServices() {
 		t.Run(svc, func(t *testing.T) {
 			t.Run("absent is an offender", func(t *testing.T) {
@@ -164,6 +165,7 @@ func TestCheckDSNs_DocumentVarsAreRequired(t *testing.T) {
 // the variable reference, not the value), and it is the defect a fork produces
 // when `${{source-documents.*}}` fails to resolve.
 func TestCheckDSNs_OpaqueUnrenderedIsOffender(t *testing.T) {
+	t.Parallel()
 	for _, name := range documentVarNames() {
 		t.Run(name, func(t *testing.T) {
 			m := documentMap()
@@ -185,6 +187,7 @@ func TestCheckDSNs_OpaqueUnrenderedIsOffender(t *testing.T) {
 // NON-VACUITY: each value goes through inspectDSN first and must be reported
 // BAD there, which is what proves the case discriminates the two kinds.
 func TestCheckDSNs_OpaqueSkipsURLChecks(t *testing.T) {
+	t.Parallel()
 	requireDocumentRows(t, "invoice")
 
 	cases := []struct {
@@ -227,6 +230,7 @@ func TestCheckDSNs_OpaqueSkipsURLChecks(t *testing.T) {
 // Driven through the real binary: this is the operator-facing surface, and it
 // is where a stray fmt of the whole map would show up.
 func TestCheckDSNs_OpaqueNeverPrintsValue(t *testing.T) {
+	t.Parallel()
 	t.Run("empty offender does not drag the healthy values out with it", func(t *testing.T) {
 		m := documentMap()
 		m["invoice"]["DOCUMENT_ACCESS_KEY_ID"] = ""
@@ -278,6 +282,7 @@ func TestCheckDSNs_OpaqueNeverPrintsValue(t *testing.T) {
 // it should run) fails here. The fixture carries all five healthy DOCUMENT_*
 // values, so no DOCUMENT offender belongs in want.
 func TestCheckDSNs_DSNKindUnchanged(t *testing.T) {
+	t.Parallel()
 	m := healthyMap()
 	m["gateway"]["DATABASE_MIGRATION_URL"] = incidentDSN
 	delete(m["gateway"], "DATABASE_SUPERUSER_URL")
@@ -309,6 +314,7 @@ func TestCheckDSNs_DSNKindUnchanged(t *testing.T) {
 // checking, not the lax path. Every pre-existing DATABASE row carries that
 // zero value.
 func TestDSNRequirementKindIsTheStrictZeroValue(t *testing.T) {
+	t.Parallel()
 	if len(DSNRequirements) == 0 {
 		t.Fatalf("DSNRequirements is empty -- the loop below would pass vacuously")
 	}
@@ -331,6 +337,7 @@ func TestDSNRequirementKindIsTheStrictZeroValue(t *testing.T) {
 // T-DOC-7. The table itself: exactly five DOCUMENT_* rows per document service,
 // all Required, all one and the same non-zero Kind.
 func TestDSNRequirementsCoverDocumentVars(t *testing.T) {
+	t.Parallel()
 	if len(DSNRequirements) == 0 {
 		t.Fatalf("DSNRequirements is empty -- every check below would pass vacuously")
 	}
@@ -393,6 +400,7 @@ func kindOf(t *testing.T, req DSNRequirement) int64 {
 
 // auth.DATABASE_URL is IfPresent: production has none until after merge, and every fork writes one.
 func TestDSNCheck_AuthDatabaseURLIfPresent(t *testing.T) {
+	t.Parallel()
 	m := healthyMap()
 	if _, ok := m["auth"]; ok {
 		t.Fatal("healthyMap already carries auth; the absent case would not be absent")

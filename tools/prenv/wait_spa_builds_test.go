@@ -71,9 +71,7 @@ fi
 [ -n "$out" ] || printf '%s\n' "$body"
 exit 0
 `
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), stub)
 	writeSleepStub(t, dir)
 	s := spaShim{dir: dir, prelude: "export PATH='" + dir + "':\"$PATH\"\n"}
 	for _, u := range spaURLs {
@@ -164,6 +162,7 @@ func spaTimeoutError(url, sha, seen string) string {
 }
 
 func TestWaitSPABuilds_AllServeTheExpectedBuild(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	stdout, stderr, code := s.run(t, spaSHA, spaURLs...)
 
@@ -189,6 +188,7 @@ func TestWaitSPABuilds_AllServeTheExpectedBuild(t *testing.T) {
 }
 
 func TestWaitSPABuilds_WaitsForARollingDeploy(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	app := spaURLs[1]
 	s.put(t, "build-"+spaHost(app)+".seq", spaOld+"\n"+spaOld+"\n")
@@ -209,6 +209,7 @@ func TestWaitSPABuilds_WaitsForARollingDeploy(t *testing.T) {
 }
 
 func TestWaitSPABuilds_StaleBuildFailsNamingURLAndSeen(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	ops := spaURLs[2]
 	s.serve(t, ops, spaOld)
@@ -238,6 +239,7 @@ func TestWaitSPABuilds_StaleBuildFailsNamingURLAndSeen(t *testing.T) {
 }
 
 func TestWaitSPABuilds_NoHealthReportsNone(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	landing := spaURLs[0]
 	s.put(t, "health-"+spaHost(landing), "503\n")
@@ -259,6 +261,7 @@ func TestWaitSPABuilds_NoHealthReportsNone(t *testing.T) {
 
 // A landing whose /build.txt is a 404 is the other way to see nothing.
 func TestWaitSPABuilds_MissingBuildTxtReportsNone(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	support := spaURLs[3]
 	if err := os.Remove(filepath.Join(s.dir, "build-"+spaHost(support))); err != nil {
@@ -278,6 +281,7 @@ func TestWaitSPABuilds_MissingBuildTxtReportsNone(t *testing.T) {
 }
 
 func TestWaitSPABuilds_SendsOnlyGETs(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	// A passing run that also waits: app answers 503 on /health once, then serves an old build once.
 	app := spaURLs[1]
@@ -327,6 +331,7 @@ func btoi(b bool) int {
 
 // No URL to wait for is a caller error, never a pass.
 func TestWaitSPABuilds_NoURLsFails(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	stdout, stderr, code := s.run(t, spaSHA)
 
@@ -340,6 +345,7 @@ func TestWaitSPABuilds_NoURLsFails(t *testing.T) {
 
 // An empty expected sha would match an empty /build.txt: refused before any request.
 func TestWaitSPABuilds_EmptyExpectedSHAFails(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	for _, u := range spaURLs {
 		s.serve(t, u, "")
@@ -356,12 +362,14 @@ func TestWaitSPABuilds_EmptyExpectedSHAFails(t *testing.T) {
 
 // The comparison is exact: an abbreviated or extended sha is another build.
 func TestWaitSPABuilds_OnlyTheExactBuildPasses(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, served string }{
 		{"abbreviated sha", spaSHA[:7]},
 		{"sha with a suffix", spaSHA + "-dirty"},
 		{"sha with a prefix", "v" + spaSHA},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newSPAShim(t)
 			landing := spaURLs[0]
 			s.serve(t, landing, c.served)
@@ -379,6 +387,7 @@ func TestWaitSPABuilds_OnlyTheExactBuildPasses(t *testing.T) {
 
 // The stamp file ends in a newline, and a CRLF or padded one must still match.
 func TestWaitSPABuilds_TrimsWhitespaceAroundTheBuild(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	s.put(t, "build-"+spaHost(spaURLs[0]), "  "+spaSHA+" \r\n")
 	stdout, stderr, code := s.run(t, spaSHA, spaURLs...)
@@ -393,6 +402,7 @@ func TestWaitSPABuilds_TrimsWhitespaceAroundTheBuild(t *testing.T) {
 
 // Each URL gets its own 120 ticks, and its own last-seen build.
 func TestWaitSPABuilds_EachURLHasItsOwnWindowAndLastSeen(t *testing.T) {
+	t.Parallel()
 	late := strings.Repeat(spaOld+"\n", 100) + spaSHA + "\n"
 	s := newSPAShim(t)
 	s.put(t, "build-"+spaHost(spaURLs[0])+".seq", late)
@@ -419,6 +429,7 @@ func TestWaitSPABuilds_EachURLHasItsOwnWindowAndLastSeen(t *testing.T) {
 
 // The first URL that fails ends the run: no later URL is asked.
 func TestWaitSPABuilds_FirstFailureStopsTheRun(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	s.serve(t, spaURLs[0], spaOld)
 	_, _, code := s.run(t, spaSHA, spaURLs...)
@@ -438,6 +449,7 @@ func TestWaitSPABuilds_FirstFailureStopsTheRun(t *testing.T) {
 
 // A trailing slash makes `//health`, which the edge does not answer: the run ends red naming the URL.
 func TestWaitSPABuilds_TrailingSlashURLNeverPassesVacuously(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	slashed := spaURLs[1] + "/"
 	stdout, stderr, code := s.run(t, spaSHA, spaURLs[0], slashed)
@@ -455,6 +467,7 @@ func TestWaitSPABuilds_TrailingSlashURLNeverPassesVacuously(t *testing.T) {
 
 // An empty prepare-env output reaches the script as "": refused before any request.
 func TestWaitSPABuilds_EmptyURLFailsAtOnce(t *testing.T) {
+	t.Parallel()
 	s := newSPAShim(t)
 	stdout, stderr, code := s.run(t, spaSHA, spaURLs[0], "", spaURLs[2])
 

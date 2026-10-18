@@ -23,6 +23,7 @@ import (
 // smaller number that could exercise a different code path than the ones
 // already covered by TestNameParsePRRoundTrip's 100000/999999 cases.
 func TestNameParsePRRoundTripAtMaxInt(t *testing.T) {
+	t.Parallel()
 	got, ok := ParsePR(Name(math.MaxInt))
 	if !ok || got != math.MaxInt {
 		t.Errorf("ParsePR(Name(math.MaxInt)) = (%d, %v), want (%d, true)", got, ok, math.MaxInt)
@@ -40,6 +41,7 @@ func TestNameParsePRRoundTripAtMaxInt(t *testing.T) {
 // a reject by tightening the character class without noticing the
 // single-hyphen test would then need to change too.
 func TestParsePRDoubleHyphenPrefixAccepted_PinnedBehavior(t *testing.T) {
+	t.Parallel()
 	n, ok := ParsePR("--pr-42")
 	if !ok || n != 42 {
 		t.Errorf(`ParsePR("--pr-42") = (%d, %v), want (42, true)`, n, ok)
@@ -53,6 +55,7 @@ func TestParsePRDoubleHyphenPrefixAccepted_PinnedBehavior(t *testing.T) {
 // straddling a newline can never satisfy `.+-` in one span and the overall
 // anchored match fails.
 func TestParsePRRejectsNewlineInsidePrefix(t *testing.T) {
+	t.Parallel()
 	names := []string{"a\nb-pr-42", "repo\n-pr-42"}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
@@ -70,6 +73,7 @@ func TestParsePRRejectsNewlineInsidePrefix(t *testing.T) {
 // because a Railway project/repo name is not guaranteed ASCII and ParsePR
 // must not silently misbehave on one that isn't.
 func TestParsePRUnicodePrefixAccepted_PinnedBehavior(t *testing.T) {
+	t.Parallel()
 	n, ok := ParsePR("日本語-pr-42")
 	if !ok || n != 42 {
 		t.Errorf(`ParsePR("日本語-pr-42") = (%d, %v), want (42, true)`, n, ok)
@@ -85,6 +89,7 @@ func TestParsePRUnicodePrefixAccepted_PinnedBehavior(t *testing.T) {
 // performance hazard for whatever eventually feeds ParsePR an environment
 // name (e.g. the M4-23-07 sweeper iterating Railway's environment list).
 func TestParsePRUnboundedPrefixLength_PinnedBehavior(t *testing.T) {
+	t.Parallel()
 	prefix := strings.Repeat("a-", 2000) // 4000 chars, well past any real name
 	name := prefix + "pr-42"
 	n, ok := ParsePR(name)
@@ -110,6 +115,7 @@ func TestParsePRUnboundedPrefixLength_PinnedBehavior(t *testing.T) {
 // to either regex that closes or widens the gap should show up here, not
 // get discovered by an incident.
 func TestParsePRVsGatewayBootstrapAllowlistAsymmetry_PinnedLeadingZero(t *testing.T) {
+	t.Parallel()
 	bootstrapAllowlist := regexp.MustCompile(`^(?:.+-)?pr-[0-9]+$`)
 
 	for _, name := range []string{"pr-01", "pr-007"} {
@@ -129,6 +135,7 @@ func TestParsePRVsGatewayBootstrapAllowlistAsymmetry_PinnedLeadingZero(t *testin
 // changes such that Itoa/Atoi aren't inverses at MaxInt -- belt-and-braces
 // for TestNameParsePRRoundTripAtMaxInt's premise.
 func TestStrconvItoaAtoiInverseAtMaxInt_Sanity(t *testing.T) {
+	t.Parallel()
 	s := strconv.Itoa(math.MaxInt)
 	n, err := strconv.Atoi(s)
 	if err != nil || n != math.MaxInt {

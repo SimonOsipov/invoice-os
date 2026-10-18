@@ -1,8 +1,8 @@
 import { ApiError } from '@invoice-os/api-client'
-import { COVER_QUALITY, dataUrlToBytes, errorsFrom422, fitWidth, isImageType, partialEditor, pinToast, saveToast, savedEditor, toPostInput, type Draft, type EditorState } from './blog'
-import { fieldErrorsOf, type Author, type Category, type Cover, type FeaturedResult, type Post, type PostInput } from './blogApi'
+import { catDeleteToast, catPostCount, catFormError, catSaveToast, COVER_QUALITY, dataUrlToBytes, errorsFrom422, fitWidth, isImageType, partialEditor, pinToast, saveToast, savedEditor, toCategoryInput, toPostInput, type CatForm, type CatUi, type Draft, type EditorState } from './blog'
+import { fieldErrorsOf, type Author, type Category, type CategoryInput, type Cover, type DeleteResult, type FeaturedResult, type MoveResult, type Post, type PostInput } from './blogApi'
 import type { BlogState } from './components/BlogList'
-import type { ToastTone } from './types'
+import type { BlogFilters, ToastTone } from './types'
 
 export type PinOutcome = { kind: 'done'; toast: string } | { kind: 'expired' } | { kind: 'forbidden' } | { kind: 'failed'; message: string }
 
@@ -111,18 +111,42 @@ export function trackCover(d: { fetchCoverUrl: (id: string) => Promise<CoverHand
 
 export const STAFF_ONLY = 'Your account is not ASComply staff.'
 
-// Runs one action at a time; a call made while one runs is ignored.
+// Runs one action at a time; a call made while one runs is ignored. `.after` runs now, or once the running action ends, as a background read. `.user` waits out a running background read, then runs.
 export function singleFlight() {
   let busy = false
-  return async (run: () => Promise<void>): Promise<void> => {
-    if (busy) return
+  let bg = false
+  let current: Promise<void> = Promise.resolve()
+  let pending: (() => Promise<void>) | null = null
+  const go = (fn: () => Promise<void>, background: boolean): Promise<void> => {
     busy = true
-    try {
-      await run()
-    } finally {
-      busy = false
-    }
+    bg = background
+    const p = (async () => {
+      try {
+        await fn()
+      } finally {
+        busy = false
+        bg = false
+        const next = pending
+        pending = null
+        if (next) void go(next, true).catch(() => {})
+      }
+    })()
+    current = p.catch(() => {})
+    return p
   }
+  const run = async (fn: () => Promise<void>): Promise<void> => {
+    if (busy) return
+    await go(fn, false)
+  }
+  const after = async (fn: () => Promise<void>): Promise<void> => {
+    if (busy) pending = fn
+    else await go(fn, true)
+  }
+  const user = async (fn: () => Promise<void>): Promise<void> => {
+    while (busy && bg) await current
+    await run(fn)
+  }
+  return Object.assign(run, { after, user })
 }
 
 export type SaveDeps = {
@@ -243,5 +267,179 @@ export function applyRemove(cur: EditorState, o: RemoveOutcome): AppliedRemove {
       return { editor: { ...cur, confirm: null }, toast: STAFF_ONLY, tone: 'red', expire: false }
     case 'failed':
       return { editor: { ...cur, confirm: null }, toast: o.message, tone: 'red', expire: false }
+  }
+}
+
+export type CatMoveOutcome =
+  | { kind: 'moved'; cats: Category[] }
+  | { kind: 'expired' }
+  | { kind: 'forbidden' }
+  | { kind: 'failed'; message: string; status?: number }
+
+export async function moveCategoryFlow(deps: { moveCategory: (id: string, direction: 'up' | 'down') => Promise<MoveResult> }, id: string, direction: 'up' | 'down'): Promise<CatMoveOutcome> {
+  try {
+    return { kind: 'moved', cats: (await deps.moveCategory(id, direction)).categories }
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) return { kind: 'expired' }
+    if (e instanceof ApiError && e.status === 403) return { kind: 'forbidden' }
+    return { kind: 'failed', message: e instanceof Error ? e.message : 'Could not move the category', status: e instanceof ApiError ? (e.status ?? undefined) : undefined }
+  }
+}
+
+export type CatRefreshOutcome = { kind: 'cats'; cats: Category[] } | { kind: 'lists'; cats?: Category[]; posts?: Post[]; error?: string } | Exclude<CatMoveOutcome, { kind: 'moved' }>
+
+// Re-reads both lists: the counts come from the posts. One failed fetch keeps the other's fresh list.
+export async function refreshCategories(deps: { fetchCategories: () => Promise<Category[]>; fetchPosts: () => Promise<Post[]> }): Promise<CatRefreshOutcome> {
+  const [c, p] = await Promise.allSettled([deps.fetchCategories(), deps.fetchPosts()])
+  const failures = [c, p].flatMap((r) => (r.status === 'rejected' ? [r.reason] : []))
+  if (failures.some((e) => statusOf(e) === 401)) return { kind: 'expired' }
+  if (failures.some((e) => statusOf(e) === 403)) return { kind: 'forbidden' }
+  const error = failures.length ? (failures[0] instanceof Error ? failures[0].message : 'Could not load the categories') : undefined
+  if (failures.length === 2) return { kind: 'failed', message: error! }
+  return { kind: 'lists', cats: c.status === 'fulfilled' ? c.value : undefined, posts: p.status === 'fulfilled' ? p.value : undefined, error }
+}
+
+export type AppliedCats = { cats?: Category[]; posts?: Post[]; toast: string | null; tone: ToastTone; expire: boolean; reread: boolean }
+
+export function applyCatMove(o: CatMoveOutcome | CatRefreshOutcome): AppliedCats {
+  const base: AppliedCats = { toast: null, tone: 'red', expire: false, reread: false }
+  switch (o.kind) {
+    case 'moved':
+    case 'cats':
+      return { ...base, cats: o.cats }
+    case 'lists':
+      return { ...base, cats: o.cats, posts: o.posts, toast: o.error ?? null }
+    case 'expired':
+      return { ...base, expire: true }
+    case 'forbidden':
+      return { ...base, toast: STAFF_ONLY }
+    case 'failed':
+      return { ...base, toast: o.message, reread: o.status === 404 }
+  }
+}
+
+export const applyCatRefresh = applyCatMove
+
+export type CatSaveOutcome =
+  | { kind: 'saved'; toast: string; category: Category; cats?: Category[]; rereadError?: string }
+  | { kind: 'invalid'; error: string }
+  | { kind: 'expired' }
+  | { kind: 'forbidden' }
+  | { kind: 'failed'; message: string; status?: number }
+
+const statusOf = (e: unknown): number | undefined => (e instanceof ApiError ? (e.status ?? undefined) : undefined)
+
+export async function saveCategory(
+  deps: { addCategory: (i: CategoryInput) => Promise<Category>; updateCategory: (id: string, i: CategoryInput) => Promise<Category>; fetchCategories: () => Promise<Category[]> },
+  form: CatForm,
+): Promise<CatSaveOutcome> {
+  const input = toCategoryInput(form)
+  let category: Category
+  try {
+    category = form.id === null ? await deps.addCategory(input) : await deps.updateCategory(form.id, input)
+  } catch (e) {
+    const error = catFormError(e)
+    if (error !== null) return { kind: 'invalid', error }
+    if (statusOf(e) === 401) return { kind: 'expired' }
+    if (statusOf(e) === 403) return { kind: 'forbidden' }
+    return { kind: 'failed', message: e instanceof Error ? e.message : 'Could not save the category', status: statusOf(e) }
+  }
+  const toast = catSaveToast(form.id === null)
+  try {
+    return { kind: 'saved', toast, category, cats: await deps.fetchCategories() }
+  } catch (e) {
+    return { kind: 'saved', toast, category, rereadError: e instanceof Error ? e.message : 'Could not reload the categories' }
+  }
+}
+
+export type CatRemoveOutcome =
+  | { kind: 'done'; toast: string; move_to: string | null; cats?: Category[]; posts?: Post[]; rereadError?: string }
+  | { kind: 'expired' }
+  | { kind: 'forbidden' }
+  | { kind: 'failed'; message: string; status?: number }
+
+export async function removeCategory(
+  deps: { deleteCategory: (id: string, moveTo: string | null) => Promise<DeleteResult>; fetchCategories: () => Promise<Category[]>; fetchPosts: () => Promise<Post[]> },
+  cats: Category[],
+  posts: Post[],
+  id: string,
+  moveTo: string | null,
+): Promise<CatRemoveOutcome> {
+  const cat = cats.find((c) => c.id === id)
+  let res: DeleteResult
+  try {
+    res = await deps.deleteCategory(id, cat && catPostCount(posts, id) > 0 ? moveTo : null)
+  } catch (e) {
+    if (statusOf(e) === 401) return { kind: 'expired' }
+    if (statusOf(e) === 403) return { kind: 'forbidden' }
+    return { kind: 'failed', message: e instanceof Error ? e.message : 'Could not delete the category', status: statusOf(e) }
+  }
+  const target = cats.find((c) => c.id === res.move_to)?.name ?? null
+  const done = { kind: 'done' as const, toast: catDeleteToast(cat?.name ?? 'Category', res.moved_posts, target), move_to: res.move_to }
+  try {
+    const [newCats, posts] = await Promise.all([deps.fetchCategories(), deps.fetchPosts()])
+    return { ...done, cats: newCats, posts }
+  } catch (e) {
+    return { ...done, rereadError: e instanceof Error ? e.message : 'Could not reload the categories' }
+  }
+}
+
+// The lists after a delete: the re-read, else the old lists with the category gone and its posts moved (the delete succeeded).
+export function catsAfterRemove(cats: Category[], id: string, o: CatRemoveOutcome): Category[] {
+  if (o.kind !== 'done') return cats
+  return o.cats ?? cats.filter((c) => c.id !== id)
+}
+
+export function postsAfterCatRemove(posts: Post[], id: string, o: CatRemoveOutcome): Post[] {
+  if (o.kind !== 'done') return posts
+  return o.posts ?? posts.map((p) => (p.category_id === id ? { ...p, category_id: o.move_to } : p))
+}
+
+// The list after a save: the re-read, else the old list with the saved row added at the end or replaced by id.
+export function catsAfterSave(cats: Category[], o: CatSaveOutcome): Category[] {
+  if (o.kind !== 'saved') return cats
+  if (o.cats) return o.cats
+  return cats.some((c) => c.id === o.category.id) ? cats.map((c) => (c.id === o.category.id ? o.category : c)) : [...cats, o.category]
+}
+
+export function applyCatSave(ui: CatUi, o: CatSaveOutcome, cats: Category[] = []): AppliedCats & { ui: CatUi } {
+  const base = { ui, toast: null, tone: 'red' as ToastTone, expire: false, reread: false }
+  switch (o.kind) {
+    case 'saved': {
+      const closed = { ...ui, form: null }
+      if (o.rereadError !== undefined) return { ...base, ui: closed, cats: catsAfterSave(cats, o), toast: `${o.toast}. ${o.rereadError}` }
+      return { ...base, ui: closed, cats: o.cats, toast: o.toast, tone: 'ok' }
+    }
+    case 'invalid':
+      return { ...base, ui: ui.form ? { ...ui, form: { ...ui.form, error: o.error } } : ui }
+    case 'expired':
+      return { ...base, expire: true }
+    case 'forbidden':
+      return { ...base, toast: STAFF_ONLY }
+    case 'failed':
+      return o.status === 404 ? { ...base, ui: { ...ui, form: null }, toast: o.message, reread: true } : { ...base, toast: o.message }
+  }
+}
+
+export type CatLists = { cats: Category[]; posts: Post[] }
+
+export function applyCatRemove(lists: CatLists, ui: CatUi, filters: BlogFilters, id: string, o: CatRemoveOutcome): AppliedCats & { ui: CatUi; cats: Category[]; posts: Post[]; filters: BlogFilters } {
+  const base = { ...lists, ui: { ...ui, del: null }, filters, toast: null as string | null, tone: 'red' as ToastTone, expire: false, reread: false }
+  switch (o.kind) {
+    case 'done':
+      return {
+        ...base,
+        cats: catsAfterRemove(lists.cats, id, o),
+        posts: postsAfterCatRemove(lists.posts, id, o),
+        filters: filters.cat === id ? { ...filters, cat: 'all' } : filters,
+        toast: o.rereadError ?? o.toast,
+        tone: o.rereadError !== undefined ? 'red' : 'ok',
+      }
+    case 'expired':
+      return { ...base, ui, expire: true }
+    case 'forbidden':
+      return { ...base, toast: STAFF_ONLY }
+    case 'failed':
+      return { ...base, toast: o.message, reread: o.status === 404 || o.status === 409 || o.status === 422 }
   }
 }

@@ -476,3 +476,233 @@ func TestBlogSubscribe_LogsCarryNoEmailOrToken(t *testing.T) {
 		}
 	}
 }
+
+func TestBlogSubscribe_UniformAnswerCarriesSameHeaders(t *testing.T) {
+	up := newSubUpstream(t, http.StatusAccepted, `{"status":"accepted"}`)
+	rt := subRoutes(t, up.srv.URL, 0, true, nil)
+	fwd := subPost(rt.Subscribe, "203.0.113.100:1", subBody("e@x.co"))
+	for range BlogSubscribePerEmail - 1 {
+		subPost(rt.Subscribe, "203.0.113.101:1", subBody("e@x.co"))
+	}
+	emailCapped := subPost(rt.Subscribe, "203.0.113.102:1", subBody("e@x.co"))
+	for i := range BlogSubscribePerIP {
+		subPost(rt.Subscribe, "203.0.113.103:1", subBody(fmt.Sprintf("h%d@x.co", i)))
+	}
+	ipCapped := subPost(rt.Subscribe, "203.0.113.103:1", subBody("other@x.co"))
+	if len(fwd.Header()) == 0 {
+		t.Fatal("control: the forwarded answer carries no headers")
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{"email-capped": emailCapped, "ip-capped": ipCapped} {
+		if !reflect.DeepEqual(rec.Header(), fwd.Header()) {
+			t.Errorf("%s headers = %v, want %v", name, rec.Header(), fwd.Header())
+		}
+	}
+	if fwd.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", fwd.Header().Get("Cache-Control"))
+	}
+}
+
+func TestBlogSubscribe_RejectsOversizedAndMalformedBodiesWithoutCall(t *testing.T) {
+	up := newSubUpstream(t, http.StatusAccepted, `{}`)
+	rt := subRoutes(t, up.srv.URL, 0, true, nil)
+	huge := `{"email":"a@x.co","category_ids":["a"],"frequency":"weekly","pad":"` + strings.Repeat("x", 5000) + `"}`
+	for name, body := range map[string]string{
+		"oversized":      huge,
+		"not json":       "email=a@x.co",
+		"empty":          "",
+		"email not str":  `{"email":42,"category_ids":["a"],"frequency":"weekly"}`,
+		"two at signs":   subBody("a@b@x.co"),
+		"inner space":    subBody("a b@x.co"),
+		"long email":     subBody(strings.Repeat("a", 400) + "@x.co"),
+		"bad category":   `{"email":"a@x.co","category_ids":["Bad Id"],"frequency":"weekly"}`,
+		"51 categories":  `{"email":"a@x.co","category_ids":["` + strings.Join(manyIDs(51), `","`) + `"],"frequency":"weekly"}`,
+		"empty category": `{"email":"a@x.co","category_ids":[""],"frequency":"weekly"}`,
+	} {
+		rec := subPost(rt.Subscribe, "203.0.113.110:1", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", name, rec.Code)
+		}
+	}
+	if up.calls() != 0 {
+		t.Errorf("upstream calls = %d, want 0", up.calls())
+	}
+	// Positive pair: exactly 50 categories is valid.
+	ok := `{"email":"a@x.co","category_ids":["` + strings.Join(manyIDs(50), `","`) + `"],"frequency":"weekly"}`
+	if rec := subPost(rt.Subscribe, "203.0.113.110:1", ok); rec.Code != http.StatusAccepted || up.calls() != 1 {
+		t.Errorf("50 categories = %d with %d calls, want 202 with 1", rec.Code, up.calls())
+	}
+}
+
+func manyIDs(n int) []string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("c%d", i)
+	}
+	return ids
+}
+
+func TestBlogConfirm_BodyShapes(t *testing.T) {
+	up := newSubUpstream(t, http.StatusOK, `{}`)
+	rt := subRoutes(t, up.srv.URL, 0, true, nil)
+	post := func(body string) int {
+		req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions/confirm", strings.NewReader(body))
+		req.RemoteAddr = "203.0.113.120:1"
+		rec := httptest.NewRecorder()
+		rt.Confirm.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	for name, c := range map[string]struct {
+		body string
+		want int
+	}{
+		"missing token": {`{}`, http.StatusGone},
+		"null token":    {`{"token":null}`, http.StatusGone},
+		"numeric token": {`{"token":42}`, http.StatusBadRequest},
+		"not json":      {`token=abc`, http.StatusBadRequest},
+		"empty":         {``, http.StatusBadRequest},
+		"oversized":     {`{"token":"` + subGoodToken + `","pad":"` + strings.Repeat("x", 1500) + `"}`, http.StatusBadRequest},
+	} {
+		if got := post(c.body); got != c.want {
+			t.Errorf("%s = %d, want %d", name, got, c.want)
+		}
+	}
+	if up.calls() != 0 {
+		t.Fatalf("upstream calls = %d, want 0", up.calls())
+	}
+	if got := post(confirmBody(subGoodToken)); got != http.StatusOK || up.calls() != 1 {
+		t.Errorf("good token = %d with %d calls, want 200 with 1", got, up.calls())
+	}
+}
+
+func TestBlogConfirm_MalformedTokensSpendNoCap(t *testing.T) {
+	up := newSubUpstream(t, http.StatusOK, `{}`)
+	rt := subRoutes(t, up.srv.URL, 0, true, nil)
+	for range BlogConfirmPerIP * 2 {
+		confirmPost(rt.Confirm, "203.0.113.130:1", "short")
+	}
+	if rec := confirmPost(rt.Confirm, "203.0.113.130:1", subGoodToken); rec.Code != http.StatusOK {
+		t.Errorf("good token after malformed ones = %d, want 200", rec.Code)
+	}
+}
+
+func TestBlogConfirm_PreviewLogsAndAdmits(t *testing.T) {
+	up := newSubUpstream(t, http.StatusOK, `{}`)
+	buf := &safeBuf{}
+	rt := subRoutes(t, up.srv.URL, 0, false, slog.New(slog.NewTextHandler(buf, nil)))
+	for range BlogConfirmPerIP + 2 {
+		if rec := confirmPost(rt.Confirm, "203.0.113.131:1", subGoodToken); rec.Code != http.StatusOK {
+			t.Fatalf("confirm = %d, want 200", rec.Code)
+		}
+	}
+	if up.calls() != BlogConfirmPerIP+2 {
+		t.Errorf("upstream calls = %d, want %d", up.calls(), BlogConfirmPerIP+2)
+	}
+	if out := buf.String(); !strings.Contains(out, "blog-confirm: limit reached") || !strings.Contains(out, "enforced=false") {
+		t.Errorf("no confirm `limit reached` WARN with enforced=false in %q", out)
+	}
+}
+
+func TestBlogSubscribeRoutes_OnlyPostIsServed(t *testing.T) {
+	up := newSubUpstream(t, http.StatusOK, `{"status":"confirmed"}`)
+	rt := subRoutes(t, up.srv.URL, 0, true, nil)
+	n := 0
+	for name, h := range map[string]http.Handler{"subscribe": rt.Subscribe, "confirm": rt.Confirm} {
+		for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete} {
+			n++
+			req := httptest.NewRequest(m, "/blog/subscriptions/confirm?token="+subGoodToken, strings.NewReader(confirmBody(subGoodToken)))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != http.MethodPost || rec.Header().Get("Cache-Control") != "no-store" {
+				t.Errorf("%s %s = %d Allow %q Cache-Control %q", m, name, rec.Code, rec.Header().Get("Allow"), rec.Header().Get("Cache-Control"))
+			}
+		}
+	}
+	if n == 0 || up.calls() != 0 {
+		t.Errorf("%d non-POST requests made %d upstream calls, want 0", n, up.calls())
+	}
+}
+
+func TestBlogSubscribe_ClientKeyHandling(t *testing.T) {
+	post := func(rt BlogSubscribeRoutes, remote string, hdr map[string]string, i int) {
+		req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions", strings.NewReader(subBody(fmt.Sprintf("k%d@x.co", i))))
+		req.RemoteAddr = remote
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		rt.Subscribe.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	// X-Real-IP wins over RemoteAddr: varying RemoteAddr behind one edge-set header shares one bucket.
+	up := newSubUpstream(t, http.StatusAccepted, `{}`)
+	rt := subRoutes(t, up.srv.URL, 0, true, nil)
+	for i := range BlogSubscribePerIP + 3 {
+		post(rt, fmt.Sprintf("10.0.0.%d:1", i+1), map[string]string{"X-Real-IP": "198.51.100.7"}, i)
+	}
+	if up.calls() != BlogSubscribePerIP {
+		t.Errorf("shared X-Real-IP: upstream calls = %d, want %d", up.calls(), BlogSubscribePerIP)
+	}
+	// X-Forwarded-For is not a key; an invalid X-Real-IP falls back to RemoteAddr.
+	up2 := newSubUpstream(t, http.StatusAccepted, `{}`)
+	rt2 := subRoutes(t, up2.srv.URL, 0, true, nil)
+	for i := range BlogSubscribePerIP + 3 {
+		post(rt2, "203.0.113.140:1", map[string]string{"X-Forwarded-For": fmt.Sprintf("192.0.2.%d", i+1), "X-Real-IP": "not-an-ip"}, i)
+	}
+	if up2.calls() != BlogSubscribePerIP {
+		t.Errorf("spoofed X-Forwarded-For: upstream calls = %d, want %d", up2.calls(), BlogSubscribePerIP)
+	}
+}
+
+func TestBlogConfirm_ClientKeyHandling(t *testing.T) {
+	up := newSubUpstream(t, http.StatusOK, `{}`)
+	rt := subRoutes(t, up.srv.URL, 0, true, nil)
+	var last *httptest.ResponseRecorder
+	for i := range BlogConfirmPerIP + 1 {
+		req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions/confirm", strings.NewReader(confirmBody(subGoodToken)))
+		req.RemoteAddr = fmt.Sprintf("10.0.1.%d:1", i+1)
+		req.Header.Set("X-Real-IP", "198.51.100.8")
+		last = httptest.NewRecorder()
+		rt.Confirm.ServeHTTP(last, req)
+	}
+	if last.Code != http.StatusTooManyRequests || up.calls() != BlogConfirmPerIP {
+		t.Errorf("31st = %d with %d calls, want 429 with %d", last.Code, up.calls(), BlogConfirmPerIP)
+	}
+}
+
+func TestBlogSubscribe_UpstreamErrorBodyIsNotRelayed(t *testing.T) {
+	up := newSubUpstream(t, http.StatusServiceUnavailable, `{"error":"already subscribed a@x.co"}`)
+	rt := subRoutes(t, up.srv.URL, 0, true, nil)
+	rec := subPost(rt.Subscribe, "203.0.113.150:1", subBody("a@x.co"))
+	if rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "already") || strings.Contains(rec.Body.String(), "a@x.co") {
+		t.Errorf("503 answer = %d %q, want a fixed body", rec.Code, rec.Body.String())
+	}
+	up.set(http.StatusBadRequest, `{"error":"unknown category"}`)
+	rec = subPost(rt.Subscribe, "203.0.113.151:1", subBody("a@x.co"))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "request is invalid") || strings.Contains(rec.Body.String(), "unknown category") {
+		t.Errorf("upstream 400 answer = %d %q, want 400 `request is invalid` without the upstream text", rec.Code, rec.Body.String())
+	}
+}
+
+// The other cap tests loop on the constants; this one pins the values the AC states.
+func TestBlogSubscribe_CapValuesAreTenThreeThirty(t *testing.T) {
+	up := newSubUpstream(t, http.StatusOK, `{}`)
+	rt := subRoutes(t, up.srv.URL, 0, true, nil)
+	for i := 0; i < 11; i++ {
+		subPost(rt.Subscribe, "203.0.113.160:1", subBody(fmt.Sprintf("n%d@x.co", i)))
+	}
+	if up.calls() != 10 {
+		t.Errorf("per-IP: %d subscribes forwarded, want 10", up.calls())
+	}
+	before := up.calls()
+	for i := 0; i < 4; i++ {
+		subPost(rt.Subscribe, fmt.Sprintf("203.0.113.%d:1", 161+i), subBody("same@x.co"))
+	}
+	if got := up.calls() - before; got != 3 {
+		t.Errorf("per-email: %d subscribes forwarded, want 3", got)
+	}
+	before = up.calls()
+	for i := 0; i < 31; i++ {
+		confirmPost(rt.Confirm, "203.0.113.170:1", subGoodToken)
+	}
+	if got := up.calls() - before; got != 30 {
+		t.Errorf("confirm per-IP: %d forwarded, want 30", got)
+	}
+}

@@ -5,9 +5,12 @@ import (
 	"go/types"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,7 +84,13 @@ func TestBlogSubscribeRoutesRegisteredOutsideAPI(t *testing.T) {
 
 func TestBlogSubscribePreflightGrantsTheBlogOrigin(t *testing.T) {
 	t.Setenv("RAILWAY_ENVIRONMENT_NAME", "production")
-	up, calls := blogUpstreamServer(t)
+	var calls atomic.Int32
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(stub.Close)
+	up, _ := url.Parse(stub.URL)
 	sub := blogSubscribeHandlers(up, "gw-token", time.Millisecond, slog.New(slog.DiscardHandler))
 	withCORS := gateway.CORS([]string{blogAllowedOrigin})
 	mux := http.NewServeMux()
@@ -106,10 +115,47 @@ func TestBlogSubscribePreflightGrantsTheBlogOrigin(t *testing.T) {
 
 	// Positive pair: the POST carries the grant too.
 	rec := postJSON(mux, "/blog/subscriptions", blogAllowedOrigin, `{"email":"a@x.co","category_ids":["a"],"frequency":"weekly"}`)
-	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway && rec.Code != http.StatusAccepted {
-		t.Fatalf("POST /blog/subscriptions = %d", rec.Code)
+	if rec.Code != http.StatusAccepted || calls.Load() != 1 {
+		t.Fatalf("POST /blog/subscriptions = %d with %d upstream calls, want 202 with 1", rec.Code, calls.Load())
 	}
 	if rec.Header().Get("Access-Control-Allow-Origin") != blogAllowedOrigin {
 		t.Errorf("POST answer lacks the blog origin grant")
+	}
+
+	// AC-6: a GET (a mail scanner's prefetch) to the confirm path confirms nothing.
+	before := calls.Load()
+	req := httptest.NewRequest(http.MethodGet, "/blog/subscriptions/confirm?token="+strings.Repeat("a", 43), nil)
+	get := httptest.NewRecorder()
+	mux.ServeHTTP(get, req)
+	if get.Code != http.StatusMethodNotAllowed || calls.Load() != before {
+		t.Errorf("GET confirm = %d, upstream calls %d -> %d, want 405 and no call", get.Code, before, calls.Load())
+	}
+}
+
+func TestBlogSubscribePreviewPostureAdmits(t *testing.T) {
+	var calls atomic.Int32
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(stub.Close)
+	up, _ := url.Parse(stub.URL)
+	send := func(env string, n int) int32 {
+		t.Setenv("RAILWAY_ENVIRONMENT_NAME", env)
+		calls.Store(0)
+		sub := blogSubscribeHandlers(up, "gw-token", 0, slog.New(slog.DiscardHandler))
+		for i := range n {
+			req := httptest.NewRequest(http.MethodPost, "/blog/subscriptions",
+				strings.NewReader(`{"email":"p`+strings.Repeat("x", i)+`@x.co","category_ids":["a"],"frequency":"weekly"}`))
+			req.RemoteAddr = "203.0.113.200:1"
+			sub.Subscribe.ServeHTTP(httptest.NewRecorder(), req)
+		}
+		return calls.Load()
+	}
+	if got := send("production", 12); got != 10 {
+		t.Fatalf("hosted posture forwarded %d of 12, want 10 (the cap enforces)", got)
+	}
+	if got := send("ascomply-pr-1", 12); got != 12 {
+		t.Errorf("PR fork forwarded %d of 12, want 12 (the caps log and admit)", got)
 	}
 }

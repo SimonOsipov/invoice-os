@@ -111,7 +111,7 @@ function Note({ kind, title, text }: { kind: string; title: string; text: string
       </span>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
         <span className="t-step" style={{ color: n.labelColor }}>{n.label}</span>
-        <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-0.01em', lineHeight: 1.35 }}>{title}</span>
+        <span className="blog-wrap" style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-0.01em', lineHeight: 1.35 }}>{title}</span>
         <span className="t-body-sm" style={{ color: 'var(--foreground)' }}>{text}</span>
       </div>
     </div>

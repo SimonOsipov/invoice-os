@@ -111,8 +111,9 @@ export function activeSection(tops: number[], line: number): number {
   return a
 }
 
-export const scrollTargetTop = (scrollTop: number, elTop: number, scrollerTop: number): number =>
-  scrollTop + elTop - scrollerTop - 92
+// The heading lands 28 px under the header (92 under the 64 px wide header).
+export const scrollTargetTop = (scrollTop: number, elTop: number, scrollerTop: number, offset = 92): number =>
+  scrollTop + elTop - scrollerTop - offset
 
 export const coverUrl = (path: string): string => (gatewayBase() ?? '') + path
 
@@ -129,6 +130,8 @@ export function resolveView(route: Route, q: string, blog: BlogState): View {
       return { kind: 'home' }
     case 'subscribe':
       return { kind: 'subscribe' }
+    case 'missing':
+      return { kind: 'missing' }
     case 'category': {
       const cat = catOf(data, route.id)
       return cat ? { kind: 'category', cat } : { kind: 'missing' }

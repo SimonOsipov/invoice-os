@@ -42,6 +42,7 @@ input::placeholder { color: var(--muted-foreground); }
   .asc-app > aside nav { flex: none !important; flex-direction: row !important; overflow-x: auto !important; overflow-y: hidden !important; }
   .asc-app > aside nav button { width: auto !important; flex: none; white-space: nowrap; }
   .blog-navlabel { display: none !important; }
-  #blog-main { flex: none !important; overflow-y: visible !important; overflow-wrap: anywhere; }
+  #blog-main { flex: none !important; overflow-y: visible !important; }
+  #blog-main :is(h1, h2, p, .t-body, .t-body-sm, .t-lead, .blog-wrap) { overflow-wrap: anywhere; }
   .blog-px { padding-left: 20px !important; padding-right: 20px !important; }
 }

@@ -53,7 +53,9 @@ export function Article({ post, cat, onCategory, onSubscribe }: ArticleProps) {
     const s = scrollerOf()
     const el = document.getElementById(`sec-${i}`)
     if (!s || !el) return
-    s.scrollTo({ top: scrollTargetTop(s.scrollTop, el.getBoundingClientRect().top, topOf(s)), behavior: 'smooth' })
+    const header = document.getElementById('blog-header')
+    const offset = s.id === 'blog-main' || !header ? 92 : header.getBoundingClientRect().height + 28
+    s.scrollTo({ top: scrollTargetTop(s.scrollTop, el.getBoundingClientRect().top, topOf(s), offset), behavior: 'smooth' })
   }
 
   const meta = fmtDate(post.publish_date) + (post.author_name ? ` · ${post.author_name}` : '')

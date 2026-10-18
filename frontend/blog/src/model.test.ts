@@ -65,6 +65,7 @@ describe('resolveView', () => {
   it('resolve_unknownIdsAreMissing', () => {
     expect(at({ view: 'category', id: 'nope' })).toBe('missing')
     expect(at({ view: 'post', slug: 'no-such-post' })).toBe('missing')
+    expect(at({ view: 'missing', path: '/a/b' })).toBe('missing')
     expect(at({ view: 'category', id: 'c1' })).toBe('category')
     expect(at({ view: 'post', slug: 'sage-rules' })).toBe('post')
   })
@@ -191,5 +192,6 @@ describe('table of contents', () => {
 
   it('scrollTarget_offsetsByNinetyTwo', () => {
     expect(scrollTargetTop(1000, 500, 64)).toBe(1344)
+    expect(scrollTargetTop(1000, 500, 0, 149)).toBe(1351)
   })
 })

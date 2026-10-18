@@ -405,6 +405,75 @@ test.describe('blog at phone widths', () => {
   }
 })
 
+// Words whose glyphs sit on more than one line inside `root`: a mid-word break.
+async function brokenWords(root: Locator): Promise<string[]> {
+  return root.evaluate((el) => {
+    const broken: string[] = []
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const text = n.textContent ?? ''
+      for (const m of text.matchAll(/[^\s-]+/g)) {
+        const r = document.createRange()
+        r.setStart(n, m.index ?? 0)
+        r.setEnd(n, (m.index ?? 0) + m[0].length)
+        const tops = Array.from(r.getClientRects()).map((c) => Math.round(c.top))
+        if (tops.length > 0 && Math.max(...tops) - Math.min(...tops) > 2) broken.push(m[0])
+      }
+    }
+    return broken
+  })
+}
+
+test.describe('blog phone at 375: TOC and demo', () => {
+  test('blog phone: a TOC click lands the heading below the sticky header and inside the viewport (375)', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 375, 800)
+    await visit(page, '/what-changes')
+    const row = main(page).locator('aside[aria-label="On this page"] button.blog-toc').nth(1)
+    await expect(row, 'control: no second TOC row').toBeVisible()
+    await row.click()
+    let last = -1
+    await expect
+      .poll(async () => {
+        const y = await page.evaluate(() => window.scrollY)
+        const settled = y === last && y > 0
+        last = y
+        return settled
+      })
+      .toBe(true)
+    const h = await rectOf(main(page).locator('h2#sec-1'), 'the clicked heading')
+    const hd = await rectOf(header(page), 'the header')
+    const vh = await page.evaluate(() => window.innerHeight)
+    expect(h.y, 'the heading top sits under the header').toBeGreaterThanOrEqual(hd.y + hd.height - SLACK_PX)
+    expect(h.y + h.height, 'the heading leaves the viewport').toBeLessThanOrEqual(vh + SLACK_PX)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog phone: TOC numerals do not break mid-word (375)', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 375, 800)
+    await visit(page, '/what-changes')
+    await expect(main(page).locator('aside[aria-label="On this page"] button.blog-toc span.mono').first(), 'control: no TOC numeral').toBeVisible()
+    expect(await brokenWords(main(page).locator('aside[aria-label="On this page"]')), 'TOC words broken mid-word').toEqual([])
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog phone: demo words do not break mid-word (375)', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await resize(page, 375, 800)
+    for (const path of ['/what-changes', '/csv-import']) {
+      await visit(page, path)
+      const scene = main(page).getByTestId('blog-demo-scene')
+      await expect(scene, `${path}: control: no demo scene`).toBeVisible()
+      expect(await brokenWords(scene), `${path}: demo words broken mid-word`).toEqual([])
+    }
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
 const SEEDED_TITLES = [
   'The private pilot opens to 20 more businesses', // migrations/20261017135635_seed_blog.sql
   WHAT_CHANGES,
@@ -433,7 +502,7 @@ test.describe('blog routes', () => {
     ['/what-changes', ['Blog', 'Regulation & FIRS news', WHAT_CHANGES]],
   ]
   // Unknown paths answer 404 (BLOG-05) and still boot the SPA's not-found state.
-  const MISSING = ['/category/x', '/a-post']
+  const MISSING = ['/category/x', '/a-post', '/a/b', '/what-changes/extra']
 
   test('blog routes: a cold deep link renders the shell', async ({ page }) => {
     const errors = collectErrors(page)

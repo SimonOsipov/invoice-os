@@ -45,7 +45,7 @@ export function PostCard({ post, cat, onOpen, cardBd }: PostCardProps) {
         }}
       >
         <span className="mono" style={{ fontSize: 11, color: 'var(--muted-foreground)' }}>{fmtDate(post.publish_date)}</span>
-        <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.01em', lineHeight: 1.3 }}>{post.title}</span>
+        <span className="blog-wrap" style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.01em', lineHeight: 1.3 }}>{post.title}</span>
         <span className="t-body-sm">{post.summary}</span>
         {!band && (
           <span

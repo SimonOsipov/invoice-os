@@ -2,11 +2,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/SimonOsipov/invoice-os/internal/blogweb"
@@ -33,10 +37,33 @@ func serve(log *slog.Logger) {
 	if err != nil {
 		platform.Fatal(log, "blog: %v", err)
 	}
-	srv := &http.Server{Addr: ":" + port, Handler: h, ReadHeaderTimeout: 10 * time.Second}
-	if err := srv.ListenAndServe(); err != nil {
+	ln, err := net.Listen("tcp", ":"+port)
+	if err != nil {
 		platform.Fatal(log, "blog: %v", err)
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, ln, h, shutdownTimeout); err != nil {
+		platform.Fatal(log, "blog: %v", err)
+	}
+}
+
+// shutdownTimeout matches the platform default.
+const shutdownTimeout = 10 * time.Second
+
+// run serves until ctx is done, then lets in-flight requests finish within grace.
+func run(ctx context.Context, ln net.Listener, h http.Handler, grace time.Duration) error {
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ln) }()
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+	}
+	sctx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	return srv.Shutdown(sctx)
 }
 
 func config(getenv func(string) string) (port string, gateway *url.URL, err error) {

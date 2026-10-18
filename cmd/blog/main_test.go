@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
@@ -49,5 +54,47 @@ func TestServe_ExitsThroughFatalWithoutAValidGatewayURL(t *testing.T) {
 		if !strings.Contains(string(out), "VITE_GATEWAY_URL") {
 			t.Errorf("%q: output lacks the reason\n%s", bad, out)
 		}
+	}
+}
+
+func TestRun_LetsAnInFlightRequestFinishWhenTheContextIsCancelled(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		_, _ = io.WriteString(w, "done")
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() { runErr <- run(ctx, ln, h, 5*time.Second) }()
+
+	body := make(chan string, 1)
+	go func() {
+		resp, err := http.Get("http://" + ln.Addr().String())
+		if err != nil {
+			body <- "error: " + err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		body <- string(b)
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-runErr:
+		t.Fatalf("run returned %v before the in-flight request finished", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if got := <-body; got != "done" {
+		t.Errorf("in-flight response = %q, want done", got)
+	}
+	if err := <-runErr; err != nil {
+		t.Errorf("run: %v", err)
 	}
 }

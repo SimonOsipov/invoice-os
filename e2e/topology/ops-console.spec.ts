@@ -1717,6 +1717,8 @@ test.describe('OPS-06 blog categories', () => {
     expect(made.status(), 'create the draft post in A').toBe(201)
     const postId = ((await made.json()) as { id: string }).id
     own.posts.push(postId)
+    // The editor is dirty until the save settles; All posts then asks to leave.
+    await expect(toastOf(page, 'Draft saved')).toBeVisible()
     await bar(page).getByRole('button', { name: 'All posts' }).click()
     await expect(page.locator('[data-blog-cats]'), 'All posts did not return to the Categories tab').toBeVisible()
     await expect(catRow(page, nameA), 'the row did not count the new post').toContainText(/\b1 post\b/)

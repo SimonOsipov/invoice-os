@@ -242,11 +242,12 @@ func TestRegister_RowCellsEqualTheBundleCSVCells(t *testing.T) {
 func TestRegister_SortsByIssueDateThenNumber(t *testing.T) {
 	g := newRegisterRig(t)
 	g.invoice(t, "INV-C", "validated", "2026-09-20")
-	g.invoice(t, "INV-B", "validated", "2026-09-10")
-	g.invoice(t, "INV-A", "validated", "2026-09-10")
+	for _, n := range []string{"INV-F", "INV-E", "INV-D", "INV-B", "INV-A", "INV-G"} {
+		g.invoice(t, n, "validated", "2026-09-10")
+	}
 	g.invoice(t, "INV-Z", "validated", "2026-09-05")
 	g.act(t)
-	wantNumbers(t, mustBuild(t, g, "2026-09-01", "2026-09-30", 10), "INV-Z", "INV-A", "INV-B", "INV-C")
+	wantNumbers(t, mustBuild(t, g, "2026-09-01", "2026-09-30", 10), "INV-Z", "INV-A", "INV-B", "INV-D", "INV-E", "INV-F", "INV-G", "INV-C")
 }
 
 func TestRegister_OverTheCapRefusesBeforeAnyByte(t *testing.T) {
@@ -484,7 +485,9 @@ func TestStoreRegister_CommitsBeforeTheFirstByte(t *testing.T) {
 	var name string
 	err := s.Register(ctx, registerRequest("2026-09-01", "2026-09-30").withEntity(entityID), sink, func(n string) {
 		name = n
-		startCommits = len(rec.mentioning("commit"))
+		if startCommits == -1 {
+			startCommits = len(rec.mentioning("commit"))
+		}
 	})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
@@ -521,4 +524,43 @@ func TestStoreRegister_NoIdentityIsErrNoTenant(t *testing.T) {
 	if got := rec.statements(); len(got) != 0 {
 		t.Errorf("statements traced = %q, want none", got)
 	}
+}
+
+func TestRegister_UppercaseClientIDIsAuditedCanonically(t *testing.T) {
+	g := newRegisterRig(t)
+	g.invoice(t, "INV-1", "validated", "2026-09-10")
+	g.act(t)
+	f, _, err := buildRegister(context.Background(), g.tx, registerRequest("2026-09-01", "2026-09-30").withEntity(strings.ToUpper(g.entity)), registerOpts{subject: "subject-1", maxInvoices: 10})
+	if err != nil {
+		t.Fatalf("buildRegister: %v", err)
+	}
+	defer f.Close()
+	assertRegisterAudit(t, readRegisterAudit(t, g.tx), g.entity, 1)
+}
+
+func TestStoreRegister_ForeignTenantClientIsNotFoundAndLeavesNoAuditRow(t *testing.T) {
+	super := dbSuperPool(t)
+	app, _ := dbAppPoolTraced(t)
+	var foreign string
+	tenantA := mustCommitFixture(t, super, func(tx pgx.Tx) string {
+		return mustCreateTenant(t, tx, "archive-register-xa-"+uuid.NewString())
+	})
+	tenantB := mustCommitFixture(t, super, func(tx pgx.Tx) string {
+		tid := mustCreateTenant(t, tx, "archive-register-xb-"+uuid.NewString())
+		foreign = mustCreateEntity(t, tx, tid, "Foreign Co", "")
+		mustCreateInvoice(t, tx, invoiceFixture{tenantID: tid, entityID: foreign, invoiceNumber: "INV-F", status: "validated", issueDate: "2026-09-10"})
+		return tid
+	})
+	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: "system", TenantID: tenantA})
+	var cw countingWriter
+	started := false
+	err := NewStore(app).Register(ctx, registerRequest("2026-09-01", "2026-09-30").withEntity(foreign), &cw, func(string) { started = true })
+	if !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("Register error = %v, want ErrEntityNotFound", err)
+	}
+	if started || cw.n != 0 {
+		t.Errorf("onStart called = %v, bytes = %d, want neither", started, cw.n)
+	}
+	assertNoCommittedRegisterAudit(t, super, tenantA)
+	assertNoCommittedRegisterAudit(t, super, tenantB)
 }

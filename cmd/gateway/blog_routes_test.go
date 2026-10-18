@@ -142,6 +142,9 @@ func TestBlogRoutesRegisteredOutsideAPI(t *testing.T) {
 	// These are the only blog routes: the cover has no preflight, nothing sits under /api/.
 	n := 0
 	for _, s := range sites {
+		if strings.Contains(s.pattern, "/blog/subscriptions") {
+			continue // inventoried by TestBlogSubscribeRoutesRegisteredOutsideAPI
+		}
 		if strings.Contains(s.pattern, "/blog") && !strings.Contains(s.pattern, "/v1/staff/") {
 			n++
 			if _, ok := want[s.pattern]; !ok {

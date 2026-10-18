@@ -13,7 +13,7 @@
 // is `environment: node` in this project, so a derivation written into a component is a
 // derivation no test can reach (§15.8).
 
-import { Fragment, useCallback, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   accessRoleLabel,
@@ -31,6 +31,7 @@ import {
   type PendingInvite,
 } from '../lib/members'
 import { rosterRoleCell, stepsForMember, stepsWarning, type Role } from '../lib/roles'
+import { useDismiss } from '../lib/useDismiss'
 import type { Policy } from '../lib/workflows'
 import { InitialsChip, MemberStatusPill, MoreMenu, YouChip, type MenuAction } from './MemberParts'
 import type { PlatformCtx } from '../types'
@@ -99,6 +100,17 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   const minWidth = TABLE_MIN_WIDTH
   // The invite whose revoke confirm strip is open.
   const [revokeId, setRevokeId] = useState<string | null>(null)
+  const closeRevoke = useCallback(() => setRevokeId(null), [])
+  useDismiss(revokeId != null, closeRevoke)
+  const keepRef = useRef<HTMLButtonElement>(null)
+  // Focus the safe button on open.
+  useEffect(() => {
+    if (revokeId != null) keepRef.current?.focus()
+  }, [revokeId])
+  // A filter can drop the row; the strip must not return when it comes back.
+  useEffect(() => {
+    if (revokeId != null && !rows.some((m) => m.id === revokeId)) setRevokeId(null)
+  }, [rows, revokeId])
   // Checked against the rendered rows, not just `!= null`: a filter can narrow the list
   // out from under an open menu, and the clearance below must not be held open for a menu
   // that no longer exists.
@@ -280,9 +292,6 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                 />
               </div>
 
-              {/* The failed write's SERVER reason, in the slot the steps warning already
-                  occupies. Here and not in the `⋯` menu because `MoreMenu` closes on select,
-                  so the control that started the write no longer exists when it settles. */}
               {pending && revokeId === m.id && (
                 <div
                   data-testid="invite-revoke-confirm"
@@ -297,7 +306,8 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button
                       type="button"
-                      onClick={() => setRevokeId(null)}
+                      ref={keepRef}
+                      onClick={closeRevoke}
                       className="v2-btn v2-btn-ghost pf-btn"
                       data-testid="invite-revoke-keep"
                       style={{ height: 32, fontSize: 12.5 }}
@@ -321,6 +331,9 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                 </div>
               )}
 
+              {/* The failed write's SERVER reason, in the slot the steps warning already
+                  occupies. Here and not in the `⋯` menu because `MoreMenu` closes on select,
+                  so the control that started the write no longer exists when it settles. */}
               {statusError?.id === m.id && (
                 <div
                   data-testid="member-status-error"

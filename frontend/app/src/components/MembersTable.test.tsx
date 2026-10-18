@@ -546,6 +546,38 @@ describe('RESEND-07-04: the pending row menu', () => {
     expect(onRevoke).not.toHaveBeenCalled()
   })
 
+  it('MembersTable: opening the strip focuses Keep invite', () => {
+    renderPending({ onRevoke: vi.fn() })
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+
+    expect(document.activeElement).toBe(screen.getByTestId('invite-revoke-keep'))
+  })
+
+  it('MembersTable: Escape closes the strip and calls nothing', () => {
+    const onRevoke = vi.fn()
+    renderPending({ onRevoke })
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
+    expect(onRevoke).not.toHaveBeenCalled()
+  })
+
+  it('MembersTable: a strip opened for a row that leaves the list does not return with the row', () => {
+    const inv = invitedMember(INVITE)
+    const base = { ctx: ctxWith({ members: [inv] }), policies: [], roles: [], onOpen: vi.fn(), onStatus: vi.fn(), statusError: null, invites: [INVITE], onResend: vi.fn(), onRevoke: vi.fn() }
+    const { rerender } = render(<MembersTable {...base} rows={[inv]} />)
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+    expect(screen.getByTestId('invite-revoke-confirm')).toBeTruthy()
+
+    rerender(<MembersTable {...base} rows={[]} />)
+    rerender(<MembersTable {...base} rows={[inv]} />)
+
+    expect(screen.getByTestId('invite-row')).toBeTruthy()
+    expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
+  })
+
   it('MembersTable: the strip\'s Revoke invite calls onRevoke with the id and closes the strip', () => {
     const onRevoke = vi.fn()
     renderPending({ onRevoke })

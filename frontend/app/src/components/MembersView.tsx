@@ -175,7 +175,7 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
       })
     }
   }
-  // Any failure shows on the row. 404/409 refetch members only, so the message outlives the row (D9).
+  // Any failure shows on the row. 404/409 refetch members only, so the message outlives the row.
   const revoke = async (id: string) => {
     if (!base || resending.has(id) || revoking.has(id)) return
     setStaleReason(null)

@@ -144,13 +144,13 @@ func TestRLS_BlogSubscriptionsAppGrants(t *testing.T) {
 	if err := blogSubInsert(t, hh.app, blogSubSub, subEmail, []string{"a"}, "every_post"); err != nil {
 		t.Fatalf("app INSERT subscriber: %v", err)
 	}
-	var version int64
+	var rowRev int64
 	if err := hh.app.QueryRow(ctx,
-		`SELECT frequency, version FROM public.blog_subscribers WHERE email = $1`, subEmail).Scan(&freq, &version); err != nil {
+		`SELECT frequency, version FROM public.blog_subscribers WHERE email = $1`, subEmail).Scan(&freq, &rowRev); err != nil {
 		t.Fatalf("app SELECT subscriber: %v", err)
 	}
-	if freq != "every_post" || version != 1 {
-		t.Fatalf("app read subscriber (%q, v%d), want (every_post, v1)", freq, version)
+	if freq != "every_post" || rowRev != 1 {
+		t.Fatalf("app read subscriber (%q, v%d), want (every_post, v1)", freq, rowRev)
 	}
 	tag, err = hh.app.Exec(ctx, `UPDATE public.blog_subscribers SET frequency = 'monthly', version = version + 1 WHERE email = $1`, subEmail)
 	if err != nil || tag.RowsAffected() != 1 {

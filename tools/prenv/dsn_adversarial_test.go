@@ -57,6 +57,7 @@ import (
 //
 // KILLS: M-prefix, and any narrowing of the prefix list.
 func TestEverySeverityTableRowSurvivesTheShellPrefixFilter(t *testing.T) {
+	t.Parallel()
 	prefixes := shellDSNVarPrefixes(t)
 
 	if len(DSNRequirements) == 0 {
@@ -159,6 +160,7 @@ func shellDSNVarPrefixes(t *testing.T) []string {
 //
 // KILLS: M-buildmsg, and any change that swallows a build failure.
 func TestAssertDBDSNsReportsABuildFailureAsCheckDidNotRun(t *testing.T) {
+	t.Parallel()
 	// Non-vacuity precondition: this map is clean on a working toolchain.
 	if _, _, code := runSelfTest(t, healthyMap(), nil); code != 0 {
 		t.Fatalf("the healthy map does not pass on an unmodified toolchain (exit %d) -- the build-failure assertions below would be meaningless", code)
@@ -166,9 +168,7 @@ func TestAssertDBDSNsReportsABuildFailureAsCheckDidNotRun(t *testing.T) {
 
 	shimDir := t.TempDir()
 	shim := filepath.Join(shimDir, "go")
-	if err := os.WriteFile(shim, []byte("#!/bin/sh\necho 'simulated compile failure' >&2\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("writing the go shim: %v", err)
-	}
+	writeShim(t, shim, "#!/bin/sh\necho 'simulated compile failure' >&2\nexit 1\n")
 
 	// PATH is dropped from the inherited environment and reassembled, rather
 	// than appended to: duplicate PATH entries in execve are resolved by libc

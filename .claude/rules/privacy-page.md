@@ -55,8 +55,7 @@ paths:
 ## Blog newsletter
 
 - Write a newsletter sentence only when `privacyCodeFacts.test.util.ts` reads its fact from `internal/notifications/newsletter*.go`. A sentence without a reader does not ship.
-- Make no Resend region claim. Resend's policy names no storage region, and `eu-west-1` is the region of the sending domain.
-- Say that every blog email carries a one-click unsubscribe only while `contacts.md` puts `{{{RESEND_UNSUBSCRIBE_URL}}}` in every blog broadcast and `Confirm.tsx` says it.
+- Say that every newsletter email carries a one-click unsubscribe only while `contacts.md` puts `{{{RESEND_UNSUBSCRIBE_URL}}}` in every blog broadcast and `Confirm.tsx` says it.
 - Say that staff follow the chosen frequency when they send by hand. The source is BLOG-00 Decision Log Q7. No test can read it.
 - Name HubSpot in the Blog section only to say the newsletter sends it nothing. No `newsletter*.go` file names HubSpot.
 - Quote the stop route from `PRIVACY_CONTACT`. The 48-hour expiry follows the interval in `newsletter.go`.

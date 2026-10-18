@@ -174,8 +174,8 @@ export function Privacy() {
             frequency you chose.
           </p>
           <p style={P}>
-            To change your topics or how often you hear from us, sign up again with the new choices. Every email we send
-            you carries a one-click unsubscribe link from Resend. To have your details deleted from our server and from
+            To change your topics or how often you hear from us, sign up again with the new choices. Every newsletter email we
+            send you carries a one-click unsubscribe link from Resend. To have your details deleted from our server and from
             Resend, email{' '}
             <a href={`mailto:${PRIVACY_CONTACT}`} className="ios-link" style={LINK}>
               {PRIVACY_CONTACT}

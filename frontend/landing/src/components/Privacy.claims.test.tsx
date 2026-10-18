@@ -662,7 +662,7 @@ describe('BLOG-10: the Blog section matches the newsletter code', () => {
   it('PB-11 the unsubscribe sentence stands only while the rule and the confirm page say it', () => {
     expect(rulePutsUnsubscribeInEveryBroadcast(), 'contacts.md no longer puts the unsubscribe tag in every blog broadcast').toBe(true)
     expect(confirmPageSaysOneClickUnsubscribe(), 'the confirm page no longer says one-click unsubscribe').toBe(true)
-    expect(blogText()).toContain('Every email we send you carries a one-click unsubscribe link from Resend')
+    expect(blogText()).toContain('Every newsletter email we send you carries a one-click unsubscribe link from Resend')
   })
 
   it('PB-12 the frequency is stored on the Resend contact, and the section says staff follow it', () => {

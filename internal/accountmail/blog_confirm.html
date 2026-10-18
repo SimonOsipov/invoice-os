@@ -1,0 +1,13 @@
+{{- define "title"}}Confirm your ASComply blog subscription{{end}}
+{{- define "preheader"}}Confirm your email to get new posts from the ASComply blog.{{end}}
+{{- define "eyebrow"}}Newsletter{{end}}
+{{- define "heading"}}Confirm your subscription.{{end}}
+{{- define "heading_accent"}}New posts, on your schedule.{{end}}
+{{- define "intro"}}Someone asked to get ASComply blog posts at {{.Email}}. Confirm to start. Nothing is sent until you do.{{end}}
+{{- define "action_url"}}{{.ConfirmURL}}{{end}}
+{{- define "action_label"}}Confirm subscription{{end}}
+{{- define "expiry"}}This link works once and expires in {{.ValidHours}} hours.{{end}}
+{{- define "details"}}<tr><td width="120" style="{{template "row_label_style"}}">Email</td><td style="{{template "row_value_style"}}">{{.Email}}</td></tr><tr><td width="120" style="{{template "row_label_style"}}">Topics</td><td style="{{template "row_value_style"}}">{{.Topics}}</td></tr><tr><td width="120" style="{{template "row_label_style_last"}}">How often</td><td style="{{template "row_value_style_last"}}">{{.FrequencyLabel}}</td></tr>{{end}}
+{{- define "ignore_note"}}If you did not ask for this, ignore this email. You will not be subscribed.{{end}}
+{{- define "reason"}}You received this email because this address was entered on the ASComply blog newsletter page.{{end}}
+{{- template "layout" .}}

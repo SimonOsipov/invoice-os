@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Block, BlogData, Post } from './data'
-import { bandsOf, catOf, crumbsFor, featuredOf, fmtDate, noteKindOf, placeholderOf, resolveView, resultsTitle, searchPosts, TONES } from './model'
+import { activeSection, bandsOf, catOf, crumbsFor, featuredOf, fmtDate, noteKindOf, placeholderOf, resolveView, resultsTitle, scrollTargetTop, searchPosts, TONES, tocOf } from './model'
 import type { Route } from './route'
 import { TEST_DATA } from './testData'
 
@@ -165,5 +165,30 @@ describe('resultsTitle', () => {
     expect(resultsTitle(1, ' Sage ')).toBe('1 post matches “Sage”')
     expect(resultsTitle(3, 'tin')).toBe('3 posts match “tin”')
     expect(resultsTitle(0, 'zz')).toBe('Nothing found for “zz”')
+  })
+})
+
+describe('table of contents', () => {
+  it('toc_numbersHeadingsInOrder', () => {
+    const blocks: Block[] = [
+      { type: 'p', text: 'x' },
+      { type: 'h', text: 'A' },
+      { type: 'p', text: 'y' },
+      { type: 'h', text: 'B' },
+    ]
+    expect(tocOf(blocks)).toEqual([
+      { i: 0, num: '01', text: 'A' },
+      { i: 1, num: '02', text: 'B' },
+    ])
+  })
+
+  it('activeSection_lastTopAboveTheLine', () => {
+    expect(activeSection([-400, 50, 900], 120)).toBe(1)
+    expect(activeSection([300, 900], 120)).toBe(0)
+    expect(activeSection([], 120)).toBe(0)
+  })
+
+  it('scrollTarget_offsetsByNinetyTwo', () => {
+    expect(scrollTargetTop(1000, 500, 64)).toBe(1344)
   })
 })

@@ -26,6 +26,7 @@ input::placeholder { color: var(--muted-foreground); }
 /* Prototype style-hover states. !important where the resting value is inline. */
 .blog-nav:hover { background: var(--surface-panel) !important; }
 .blog-sub:hover { filter: brightness(1.06); }
+.blog-back:hover, .blog-toc:hover { color: var(--teal) !important; }
 .blog-crumb:hover { color: var(--teal) !important; }
 .blog-row:hover { background: var(--card) !important; }
 .blog-chip:hover { background: var(--muted) !important; }

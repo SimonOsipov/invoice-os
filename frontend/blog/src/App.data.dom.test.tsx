@@ -73,7 +73,7 @@ describe('data states', () => {
     const data: BlogData = { ...TEST_DATA, posts: [{ ...TEST_DATA.posts[0], category_id: 'new-cat' }] }
     await mount('/sage-rules', () => Promise.resolve(data))
     expect(crumbs()).toEqual(['Blog', 'New sage rules for invoices'])
-    expect(q('#blog-main section[data-view="post"]')).not.toBeNull()
+    expect(q('#blog-main article[data-view="post"]')).not.toBeNull()
     expect(q('#blog-main').textContent).not.toContain('This page is not on the blog.')
   })
 

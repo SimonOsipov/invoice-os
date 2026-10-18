@@ -95,6 +95,25 @@ export function placeholderOf(cat: Category | undefined): Tone & { icon: GlyphNa
   return { ...TONES[cat.tone % TONES.length], icon: cat.icon }
 }
 
+export type TocEntry = { i: number; num: string; text: string }
+
+export function tocOf(blocks: Block[]): TocEntry[] {
+  const heads = blocks.flatMap((b) => (b.type === 'h' ? [b.text] : []))
+  return heads.map((text, i) => ({ i, num: String(i + 1).padStart(2, '0'), text }))
+}
+
+// The last section whose top is at or above the line; 0 when none is.
+export function activeSection(tops: number[], line: number): number {
+  let a = 0
+  tops.forEach((t, i) => {
+    if (t <= line) a = i
+  })
+  return a
+}
+
+export const scrollTargetTop = (scrollTop: number, elTop: number, scrollerTop: number): number =>
+  scrollTop + elTop - scrollerTop - 92
+
 export const coverUrl = (path: string): string => (gatewayBase() ?? '') + path
 
 // Subscribe needs no data, so it shows while the load runs or fails.

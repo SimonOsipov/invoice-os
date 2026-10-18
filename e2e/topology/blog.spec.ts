@@ -231,6 +231,75 @@ test.describe('blog home, category and search at wide widths', () => {
   }
 })
 
+test.describe('blog article at wide widths', () => {
+  const article = (page: Page) => main(page).locator('article')
+  const row = (page: Page) => article(page).locator(':scope > div').nth(2)
+  const toc = (page: Page) => main(page).locator('aside[aria-label="On this page"]')
+
+  async function open(page: Page, width: number): Promise<void> {
+    await prepare(page)
+    await resize(page, width, 1080)
+    await visit(page, '/what-changes')
+    await expect(article(page).locator('h1')).toBeVisible()
+    await expect(toc(page), 'control: the seeded post has three headings').toBeVisible()
+  }
+
+  for (const width of WIDE_WIDTHS) {
+    test(`blog article: body and TOC sit side by side (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await open(page, width)
+      const body = await rectOf(row(page).locator(':scope > div').first(), 'the body column')
+      const t = await rectOf(toc(page), 'the TOC')
+      await attachJson(testInfo, `blog-article-row-${width}`, { body, toc: t })
+      expect(rectsOverlap(body, t), 'the body and the TOC overlap').toBe(false)
+      expect(t.x, 'the TOC sits right of the body').toBeGreaterThanOrEqual(body.x + body.width - SLACK_PX)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog article: the TOC stays in view under the header (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await open(page, width)
+      await article(page).locator('#sec-2').scrollIntoViewIfNeeded()
+      await main(page).evaluate((el) => {
+        el.scrollTop = el.scrollHeight
+      })
+      const m = await rectOf(main(page), '#blog-main')
+      const h = await rectOf(header(page), '#blog-header')
+      const t = await rectOf(toc(page), 'the TOC')
+      await attachJson(testInfo, `blog-article-toc-${width}`, { main: m, header: h, toc: t })
+      expect(enclosesRect(m, t, SLACK_PX), 'the TOC leaves the visible main').toBe(true)
+      expect(t.y, 'the TOC sits under the header').toBeGreaterThanOrEqual(h.y + h.height - SLACK_PX)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog article: the cover spans the body row (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await open(page, width)
+      const a = await rectOf(article(page), 'the article')
+      const cover = await rectOf(article(page).locator(':scope > div').nth(1), 'the cover')
+      const r = await rectOf(row(page), 'the body row')
+      await attachJson(testInfo, `blog-article-cover-${width}`, { article: a, cover, row: r })
+      expect(enclosesRect(a, cover, SLACK_PX), 'the cover leaves the article').toBe(true)
+      expect(Math.abs(cover.width - r.width), 'the cover and the body row differ in width').toBeLessThanOrEqual(SLACK_PX)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog article: the band buttons sit apart in the band (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await open(page, width)
+      const band = main(page).locator('section').filter({ has: page.getByRole('link', { name: 'Book a demo' }) })
+      const demo = await rectOf(band.getByRole('link', { name: 'Book a demo' }), 'Book a demo')
+      const sub = await rectOf(band.getByRole('button', { name: 'Subscribe' }), 'Subscribe')
+      const b = await rectOf(band, 'the band')
+      await attachJson(testInfo, `blog-article-band-${width}`, { band: b, demo, sub })
+      expect(enclosesRect(b, demo, SLACK_PX), 'Book a demo leaves the band').toBe(true)
+      expect(enclosesRect(b, sub, SLACK_PX), 'Subscribe leaves the band').toBe(true)
+      expect(rectsOverlap(demo, sub), 'the band buttons overlap').toBe(false)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+  }
+})
+
 test.describe('blog at phone widths', () => {
   for (const width of PHONE_WIDTHS) {
     test(`blog layout: on a phone the sidebar stacks above main (${width})`, async ({ page }, testInfo) => {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Article } from './components/Article'
 import { CategoryPage } from './components/CategoryPage'
 import { Header } from './components/Header'
 import { Home } from './components/Home'
@@ -138,8 +139,15 @@ export function App({ load = loadBlog }: { load?: () => Promise<BlogData> }) {
             onCategory={(id) => navigate({ view: 'category', id })}
           />
         )}
-        {/* The article view is not built yet. */}
-        {view.kind === 'post' && <section className="blog-px" data-view="post" />}
+        {view.kind === 'post' && (
+          <Article
+            key={view.post.id}
+            post={view.post}
+            cat={view.cat}
+            onCategory={(id) => navigate({ view: 'category', id })}
+            onSubscribe={() => navigate({ view: 'subscribe' })}
+          />
+        )}
         {(consent === null || reopened) && (
           <CookieNotice
             current={consent}

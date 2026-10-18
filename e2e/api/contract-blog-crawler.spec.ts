@@ -213,6 +213,21 @@ test.describe('blog crawler HTML (API E2E, over the deployed blog origin)', () =
     expect(locs).not.toContain(`${BLOG_URL}/${future}`)
   })
 
+  test('crawler: the sitemap has unique locs, dated entries, and its own pages answer 200', async () => {
+    const xml = (await crawl('/sitemap.xml')).text
+    const locs = locsOf(xml)
+    expect(locs.length, 'sitemap locs').toBeGreaterThanOrEqual(3)
+    expect(new Set(locs).size, 'duplicate locs').toBe(locs.length)
+    expect(xml.match(/<url>/g)?.length, '<url> count').toBe(locs.length)
+    const dates = [...xml.matchAll(/<lastmod>([^<]*)<\/lastmod>/g)].map((m) => m[1])
+    expect(dates.length, 'lastmod entries').toBeGreaterThanOrEqual(3)
+    expect(dates.filter((d) => !/^\d{4}-\d{2}-\d{2}$/.test(d)), 'malformed lastmod').toEqual([])
+    for (const loc of [`${BLOG_URL}/`, `${BLOG_URL}/category/${category.id}`, `${BLOG_URL}/${visible}`]) {
+      expect(locs, loc).toContain(loc)
+      expect((await crawl(loc.slice(BLOG_URL.length))).status, `GET ${loc}`).toBe(200)
+    }
+  })
+
   test('crawler: robots.txt allows crawling and names the sitemap', async () => {
     const res = await crawl('/robots.txt')
     expect(res.status).toBe(200)

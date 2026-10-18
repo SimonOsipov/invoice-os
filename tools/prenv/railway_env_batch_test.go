@@ -669,6 +669,8 @@ func TestSetServiceVars_StaleValueIsRewritten(t *testing.T) {
 		stale           string // "" deletes the name from the store
 	}{
 		{"landing", "VITE_APP_URL", batchAppURL, batchProdAppURL},
+		{"landing", "VITE_BLOG_URL", batchBlogURL, batchProdLandingURL},
+		{"library", "VITE_BLOG_URL", batchBlogURL, batchProdLandingURL},
 		{"ops-console", "VITE_GATEWAY_URL", batchGatewayURL, ""},
 		{"support-console", "VITE_GATEWAY_URL", batchGatewayURL, ""},
 		{"ops-console", "VITE_GATEWAY_URL", batchGatewayURL, batchProdAppURL},

@@ -69,15 +69,14 @@ export const APPS: AppTarget[] = [
     name: 'blog',
     url: resolveTarget('BLOG_URL'),
     assertMainView: async (page) => {
-      await expect(page).toHaveTitle('ASComply Africa — Blog')
+      await expect(page).toHaveTitle('News from the invoice compliance desk · ASComply blog')
       await expect(page.locator('#root')).toBeAttached()
-      // The SPA fallback answers any path with index.html, so a missing entry script shows as text/html.
       const src = await page.locator('script[type="module"][src]').first().getAttribute('src')
       expect(src, 'index.html has no module entry script').not.toBeNull()
       const res = await page.request.get(new URL(src as string, page.url()).href)
       expect(res.status()).toBe(200)
       expect(res.headers()['content-type']).toContain('javascript')
-      await expect(page.getByRole('button', { name: 'Subscribe' })).toBeVisible()
+      await expect(page.locator('.asc-app > aside').getByRole('button', { name: 'Subscribe' })).toBeVisible()
       await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toBeVisible()
     },
   },

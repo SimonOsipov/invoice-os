@@ -27,6 +27,7 @@ func redirectServer(t *testing.T, to string) *httptest.Server {
 
 // GoTrue's http.DefaultClient follows redirects, so the check's verdict is the final answer's.
 func TestMailTemplateCheck_FollowsRedirectsLikeGoTrue(t *testing.T) {
+	t.Parallel()
 	good := htmlServer(t, mailMinimalTemplate)
 	spa := htmlServer(t, mailSPA)
 	missing := mailServer(t, http.StatusNotFound, "text/html", mailMinimalTemplate)
@@ -64,6 +65,7 @@ func TestMailTemplateCheck_FollowsRedirectsLikeGoTrue(t *testing.T) {
 
 // The built binary's own client must follow redirects as GoTrue's does.
 func TestMailTemplateCheck_CLIFollowsRedirects(t *testing.T) {
+	t.Parallel()
 	good := htmlServer(t, mailMinimalTemplate)
 	from := redirectServer(t, good.URL)
 	stdout, stderr, code := runCLI(t, "mail-template-check", from.URL)
@@ -77,6 +79,7 @@ func TestMailTemplateCheck_CLIFollowsRedirects(t *testing.T) {
 
 // GoTrue reads the body and never looks at the content type.
 func TestMailTemplateCheck_ContentTypeIsNotChecked(t *testing.T) {
+	t.Parallel()
 	for _, ct := range []string{"application/json", "text/plain", "application/octet-stream", "image/png"} {
 		t.Run(ct, func(t *testing.T) {
 			srv := mailServer(t, http.StatusOK, ct, mailMinimalTemplate)
@@ -87,6 +90,7 @@ func TestMailTemplateCheck_ContentTypeIsNotChecked(t *testing.T) {
 }
 
 func TestMailTemplateCheck_EmptyBodyFails(t *testing.T) {
+	t.Parallel()
 	srv := htmlServer(t, "")
 	code, out := runMailCheck(t, srv.Client(), srv.URL)
 	if code != 1 {
@@ -113,6 +117,7 @@ func chunkedServer(t *testing.T, body string) *httptest.Server {
 }
 
 func TestMailTemplateCheck_ChunkedBodyAtTheLimit(t *testing.T) {
+	t.Parallel()
 	t.Run("exactly the limit passes", func(t *testing.T) {
 		srv := chunkedServer(t, padded(t, goTrueTemplateMaxSize))
 		code, out := runMailCheck(t, srv.Client(), srv.URL)
@@ -130,6 +135,7 @@ func TestMailTemplateCheck_ChunkedBodyAtTheLimit(t *testing.T) {
 
 // A body that never ends is cut at the limit, not read to the timeout.
 func TestMailTemplateCheck_EndlessBodyFailsAtTheLimit(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = io.WriteString(w, mailMinimalTemplate+"<!--")
@@ -156,6 +162,7 @@ func TestMailTemplateCheck_EndlessBodyFailsAtTheLimit(t *testing.T) {
 
 // GoTrue times a fetch out at 10 s; the check does too, body included.
 func TestMailTemplateCheck_HungServerTimesOut(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("waits out the 10 s request timeout")
 	}
@@ -184,6 +191,7 @@ func TestMailTemplateCheck_HungServerTimesOut(t *testing.T) {
 
 // An <img> inside a template branch is still the image rule's subject.
 func TestMailTemplateCheck_ImageInsideABranchIsChecked(t *testing.T) {
+	t.Parallel()
 	imgs := newImageServer(t)
 	tpl := htmlServer(t, mailMinimalTemplate+`{{ if .Data.registration }}<img src="assets/mark.png">{{ end }}`)
 	code, out := runMailCheck(t, imgs.Client(), tpl.URL)
@@ -195,6 +203,7 @@ func TestMailTemplateCheck_ImageInsideABranchIsChecked(t *testing.T) {
 
 // The confirmation URL must be in every execution, not only the answered one.
 func TestMailTemplateCheck_ConfirmationURLInEveryBranch(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"only with the answers":    `{{ if .Data.registration }}{{ .ConfirmationURL }}{{ end }}`,
 		"only without the answers": `{{ if not .Data.registration }}{{ .ConfirmationURL }}{{ end }}`,
@@ -213,6 +222,7 @@ func TestMailTemplateCheck_ConfirmationURLInEveryBranch(t *testing.T) {
 
 // An <img> whose src the scan cannot read is an image it did not check.
 func TestMailTemplateCheck_ImageSrcSpellings(t *testing.T) {
+	t.Parallel()
 	imgs := newImageServer(t)
 	cases := map[string]string{
 		"single-quoted":                `<img src='assets/mark.png'>`,
@@ -236,6 +246,7 @@ func TestMailTemplateCheck_ImageSrcSpellings(t *testing.T) {
 
 // html/template writes the & of an image URL as &amp;; the check asks for the unescaped URL.
 func TestMailTemplateCheck_ImageURLIsUnescapedBeforeItIsFetched(t *testing.T) {
+	t.Parallel()
 	var query atomic.Value
 	imgs := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query.Store(r.URL.RawQuery)
@@ -254,6 +265,7 @@ func TestMailTemplateCheck_ImageURLIsUnescapedBeforeItIsFetched(t *testing.T) {
 }
 
 func TestMailTemplateCheck_EachImageIsFetchedOnce(t *testing.T) {
+	t.Parallel()
 	imgs := newImageServer(t)
 	img := `<img src="` + imgs.logoURL() + `">`
 	tpl := htmlServer(t, mailMinimalTemplate+img+img+img)
@@ -267,6 +279,7 @@ func TestMailTemplateCheck_EachImageIsFetchedOnce(t *testing.T) {
 }
 
 func TestMailTemplateCheck_MalformedArgumentSpellings(t *testing.T) {
+	t.Parallel()
 	for name, urls := range map[string][]string{
 		"http prefix without the scheme separator": {"httpfoo/x"},
 		"a good URL then a bad one":                {"http://127.0.0.1:1/", "ftp://x"},
@@ -302,6 +315,7 @@ func imageResponse(status int, ct string) func(*http.Request) *http.Response {
 
 // AC 9: the no-argument command checks accountmail.LogoURL, nothing else.
 func TestMailLogoCheck_DefaultChecksAccountMailLogoURL(t *testing.T) {
+	t.Parallel()
 	t.Run("a serving logo passes", func(t *testing.T) {
 		rt := &recordTransport{resp: imageResponse(200, "image/png")}
 		var out bytes.Buffer
@@ -331,6 +345,7 @@ func TestMailLogoCheck_DefaultChecksAccountMailLogoURL(t *testing.T) {
 
 // AC 9: the command takes no argument; a stray one is a malformed call, made before any request.
 func TestMailLogoCheck_CLIRejectsAnArgument(t *testing.T) {
+	t.Parallel()
 	_, stderr, code := runCLI(t, "mail-logo-check", "https://example.com/mark.png")
 	if code != 2 {
 		t.Errorf("exit %d, want 2", code)
@@ -341,6 +356,7 @@ func TestMailLogoCheck_CLIRejectsAnArgument(t *testing.T) {
 }
 
 func TestMailTemplateCheck_ImageInsideABranchIsChecked_NoAnswers(t *testing.T) {
+	t.Parallel()
 	imgs := newImageServer(t)
 	bad := `<img src="assets/mark.png">`
 	good := `<img src="` + imgs.logoURL() + `">`
@@ -361,6 +377,7 @@ func TestMailTemplateCheck_ImageInsideABranchIsChecked_NoAnswers(t *testing.T) {
 }
 
 func TestMailTemplateCheck_ImageSrcSpellings_Unread(t *testing.T) {
+	t.Parallel()
 	imgs := newImageServer(t)
 	cases := map[string]string{
 		"a data-src before the real src":        `<img data-src="` + imgs.logoURL() + `" src="assets/mark.png">`,

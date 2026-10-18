@@ -22,6 +22,7 @@ func ciJob(t *testing.T, id string) workflowJob {
 }
 
 func TestCIChangesPublishesThePRLane(t *testing.T) {
+	t.Parallel()
 	j := ciJob(t, "changes")
 	if !slices.Contains(blockLines(j.lines, 4, "outputs"), "lane: ${{ steps.lane.outputs.lane }}") {
 		t.Errorf("changes outputs lack lane: ${{ steps.lane.outputs.lane }}")
@@ -60,6 +61,7 @@ func TestCIChangesPublishesThePRLane(t *testing.T) {
 }
 
 func TestCILibraryJobReplacesFrontendOnTheSmallLane(t *testing.T) {
+	t.Parallel()
 	fe := ciJob(t, "frontend")
 	const feWant = "needs.changes.outputs.frontend == 'true' && needs.changes.outputs.lane != 'library' && needs.changes.outputs.lane != 'blog'"
 	if feIf, _ := jobKey(fe, "if"); feIf != feWant {
@@ -171,6 +173,7 @@ func TestCIRollupRequiresTheBlogJob(t *testing.T) {
 }
 
 func TestCIRollupRequiresTheLibraryJob(t *testing.T) {
+	t.Parallel()
 	ci := ciJob(t, "ci")
 	if !slices.Contains(jobList(ci, "needs"), "library") {
 		t.Errorf("ci needs = %v, want library in it", jobList(ci, "needs"))
@@ -187,6 +190,7 @@ func TestCIRollupRequiresTheLibraryJob(t *testing.T) {
 }
 
 func TestCIStaticChecksStayUnconditional(t *testing.T) {
+	t.Parallel()
 	for _, id := range []string{"clean-clone", "stale-refs", "migration-order", "cite-refs"} {
 		if v, ok := jobKey(ciJob(t, id), "if"); ok {
 			t.Errorf("%s has if: %q, want none", id, v)
@@ -233,6 +237,7 @@ func checkoutsWhen(j workflowJob, cond string) [][]string {
 }
 
 func TestDevEnvLibraryPRSkipsE2E(t *testing.T) {
+	t.Parallel()
 	j := devEnvJob(t, "changes")
 	if !slices.Contains(blockLines(j.lines, 4, "outputs"), "e2e: ${{ github.event_name != 'pull_request' && 'true' || steps.lane.outputs.e2e }}") {
 		t.Errorf("changes outputs lack the e2e expression from steps.lane: %v", blockLines(j.lines, 4, "outputs"))
@@ -263,6 +268,7 @@ func TestDevEnvLibraryPRSkipsE2E(t *testing.T) {
 }
 
 func TestDevEnvE2EFilterKeepsEveryFrontendPackage(t *testing.T) {
+	t.Parallel()
 	var filter []string
 	for _, s := range rawSteps(devEnvJob(t, "changes")) {
 		if strings.HasPrefix(s[0], "uses: dorny/paths-filter@") {
@@ -280,6 +286,7 @@ func TestDevEnvE2EFilterKeepsEveryFrontendPackage(t *testing.T) {
 }
 
 func TestDevEnvPushPublishesTheScope(t *testing.T) {
+	t.Parallel()
 	j := devEnvJob(t, "changes")
 	if !slices.Contains(blockLines(j.lines, 4, "outputs"), "scope: ${{ github.event_name == 'push' && steps.scope.outputs.scope || 'full' }}") {
 		t.Errorf("changes outputs lack the scope expression: %v", blockLines(j.lines, 4, "outputs"))
@@ -323,6 +330,7 @@ func TestDevEnvPushPublishesTheScope(t *testing.T) {
 }
 
 func TestDevEnvLibraryScopeSkipsTheFleetChain(t *testing.T) {
+	t.Parallel()
 	gw := devEnvJob(t, "deploy-gateway")
 	if !slices.Contains(jobList(gw, "needs"), "changes") {
 		t.Errorf("deploy-gateway needs = %v, want changes in it", jobList(gw, "needs"))
@@ -417,6 +425,7 @@ func TestDevEnvBlogBuildGateChecksTheBlogBuild(t *testing.T) {
 }
 
 func TestDevEnvDeployLibraryDeploysOnlyTheLibrary(t *testing.T) {
+	t.Parallel()
 	j := devEnvJob(t, "deploy-library")
 	cond, _ := jobKey(j, "if")
 	for _, want := range []string{
@@ -459,6 +468,7 @@ func TestDevEnvDeployLibraryDeploysOnlyTheLibrary(t *testing.T) {
 }
 
 func TestDevEnvLibraryBuildGateChecksTheLibraryBuild(t *testing.T) {
+	t.Parallel()
 	j := devEnvJob(t, "library-build-gate")
 	if !slices.Contains(jobList(j, "needs"), "deploy-library") {
 		t.Errorf("library-build-gate needs = %v, want deploy-library", jobList(j, "needs"))
@@ -496,6 +506,7 @@ func laneConst(t *testing.T, name string) string {
 }
 
 func TestDevEnvBaseJobNamesMatchTheLaneLookup(t *testing.T) {
+	t.Parallel()
 	want := map[string]string{
 		"deploy-gateway": laneConst(t, "GATEWAY_JOB_PREFIX"),
 		"fleet-gate":     laneConst(t, "FLEET_GATE_JOB_PREFIX"),

@@ -1,6 +1,6 @@
 module github.com/SimonOsipov/invoice-os
 
-go 1.26.4
+go 1.26.9
 
 tool (
 	github.com/pressly/goose/v3/cmd/goose
@@ -17,6 +17,7 @@ require (
 	github.com/google/cel-go v0.29.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/klauspost/compress v1.18.5
 	github.com/klippa-app/go-pdfium v1.19.8
 	github.com/pressly/goose/v3 v3.27.2
 	github.com/riverqueue/river v0.40.0
@@ -25,7 +26,7 @@ require (
 	github.com/shopspring/decimal v1.4.0
 	github.com/xuri/excelize/v2 v2.11.0
 	golang.org/x/net v0.57.0
-	golang.org/x/text v0.40.0
+	golang.org/x/text v0.41.0
 	rsc.io/qr v0.2.0
 )
 
@@ -62,7 +63,6 @@ require (
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/jolestar/go-commons-pool/v2 v2.1.2 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lmittmann/tint v1.1.3 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect

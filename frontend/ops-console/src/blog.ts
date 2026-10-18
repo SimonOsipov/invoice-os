@@ -1,4 +1,6 @@
-import type { Author, Block, Category, Post, PostInput } from './blogApi'
+import { ApiError } from '@invoice-os/api-client'
+
+import { fieldErrorsOf, type Author, type Block, type Category, type CategoryInput, type Post, type PostInput } from './blogApi'
 import { GLYPHS, type GlyphName } from './glyphs'
 import type { BlogFilters } from './types'
 
@@ -69,7 +71,7 @@ export type Row = {
   pinTitle: string
 }
 
-const iconOf = (name: string | undefined): GlyphName => (name && name in GLYPHS ? (name as GlyphName) : 'file-text')
+export const iconOf = (name: string | undefined): GlyphName => (name && name in GLYPHS ? (name as GlyphName) : 'file-text')
 
 export function listRows(posts: Post[], cats: Category[], f: BlogFilters): Row[] {
   const q = f.q.trim().toLowerCase()
@@ -325,7 +327,7 @@ export function cleanBody(body: Block[]): Block[] {
   return out
 }
 
-const RESERVED_IDS = ['subscribe', 'category']
+const RESERVED_IDS = ['subscribe', 'category', 'health']
 export const MAX_SLUG = 64
 
 // Equals Go blog.Slug; U+0130 lowers to one letter in Go and to two code points in JS.
@@ -525,3 +527,72 @@ export function takeKept(storage: KeptStorage, owner: string, posts: Pick<Post, 
   const draft: Draft = gone ? { ...d, id: '', status: 'draft', author_name: null, serverHasCover: false, cover: d.cover.kind === 'saved' ? { kind: 'none' } : d.cover } : d
   return { ...editorOf(draft), dirty: true }
 }
+
+export const CATEGORY_ICONS = [
+  'package', 'landmark', 'building-2', 'megaphone', 'handshake', 'code-xml', 'globe', 'sparkles',
+  'shield-check', 'file-check', 'chart-column', 'workflow', 'plug', 'archive', 'key-round', 'clock',
+] as const satisfies readonly GlyphName[]
+
+export type CatForm = { id: string | null; name: string; headline: string; intro: string; icon: string; tone: number; error: string | null }
+export type CatDel = { id: string; moveTo: string | null }
+export type CatUi = { form: CatForm | null; del: CatDel | null }
+
+export const postCount = (n: number): string => n + (n === 1 ? ' post' : ' posts')
+
+export type CatRow = { cat: Category; num: string; icon: GlyphName; tone: Tone; count: string; upOpacity: number; downOpacity: number }
+
+// Posts per category come from the loaded posts list, so a post saved or moved shows at once.
+export const catPostCount = (posts: Post[], id: string): number => posts.filter((p) => p.category_id === id).length
+
+export const catRows = (cats: Category[], posts: Post[]): CatRow[] =>
+  cats.map((cat, i) => ({
+    cat,
+    num: String(i + 1).padStart(2, '0'),
+    icon: iconOf(cat.icon),
+    tone: TONES[cat.tone % 6],
+    count: postCount(catPostCount(posts, cat.id)),
+    upOpacity: i === 0 ? 0.35 : 1,
+    downOpacity: i === cats.length - 1 ? 0.35 : 1,
+  }))
+
+export function catMoveTarget(cats: Category[], i: number, d: -1 | 1): { id: string; direction: 'up' | 'down' } | null {
+  const c = cats[i + d] && cats[i]
+  return c ? { id: c.id, direction: d === -1 ? 'up' : 'down' } : null
+}
+
+export const tabChange = (prev: BlogFilters['tab'], next: BlogFilters['tab'], ui: CatUi): { ui: CatUi; refresh: boolean } =>
+  prev === next ? { ui, refresh: false } : { ui: { form: null, del: null }, refresh: next === 'cats' }
+
+export const newCatForm = (cats: Category[]): CatForm => ({ id: null, name: '', headline: '', intro: '', icon: 'globe', tone: cats.length % 6, error: null })
+
+export const catFormFrom = (c: Category): CatForm => ({ id: c.id, name: c.name, headline: c.headline || '', intro: c.intro || '', icon: c.icon, tone: c.tone || 0, error: null })
+
+export const setCatField = (form: CatForm, patch: Partial<Omit<CatForm, 'error'>>): CatForm => ({ ...form, ...patch, error: null })
+
+export const toCategoryInput = (f: CatForm): CategoryInput => ({ name: f.name, headline: f.headline, intro: f.intro, icon: f.icon, tone: f.tone })
+
+export function catFormError(err: unknown): string | null {
+  const f = fieldErrorsOf(err)
+  if (f) return f.fields.name ?? f.summary
+  return err instanceof ApiError && err.status === 409 ? err.message : null
+}
+
+export type DeleteView =
+  | { kind: 'only'; text: string }
+  | { kind: 'empty'; text: string }
+  | { kind: 'withposts'; text: string; options: { id: string; name: string }[]; defaultMoveTo: string }
+
+export function deleteView(cats: Category[], posts: Post[], id: string): DeleteView | null {
+  const c = cats.find((x) => x.id === id)
+  if (!c) return null
+  if (cats.length === 1) return { kind: 'only', text: 'This is the only category. Add another before deleting it.' }
+  const n = catPostCount(posts, id)
+  if (n === 0) return { kind: 'empty', text: `Delete ${c.name}? It has no posts.` }
+  const options = cats.filter((x) => x.id !== id).map((x) => ({ id: x.id, name: x.name }))
+  return { kind: 'withposts', text: `Delete ${c.name} and move its ${postCount(n)} to:`, options, defaultMoveTo: options[0].id }
+}
+
+export const catSaveToast = (isNew: boolean): string => (isNew ? 'Category added' : 'Category updated')
+
+export const catDeleteToast = (name: string, moved: number, targetName: string | null): string =>
+  moved > 0 ? `${name} deleted. ${postCount(moved)} moved to ${targetName}` : `${name} deleted`

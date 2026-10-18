@@ -27,9 +27,9 @@ for (const target of TARGETS) {
     // Boolean, not buffers: a failed buffer compare would print the whole index.html.
     expect((await res.body()).equals(EXPECTED), `${base}/favicon.ico differs from ${FAVICON_REPO_PATH}`).toBe(true)
 
-    // Control: the fallback answers 200 text/html, which is not the favicon.
+    // Control: the fallback answers text/html (the blog's 404 page, 200 index.html elsewhere), not the favicon.
     const missing = await request.get(`${base}/no-such-favicon.ico`)
-    expect(missing.status()).toBe(200)
+    expect(missing.status()).toBe(target.name === 'blog' ? 404 : 200)
     expect(missing.headers()['content-type']).toContain('text/html')
     expect((await missing.body()).equals(EXPECTED)).toBe(false)
   })

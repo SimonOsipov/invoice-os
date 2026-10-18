@@ -6,7 +6,10 @@ import { test, expect, type Locator, type Page, type Route, type TestInfo } from
 import { collectErrors, signInAs } from '../personaSession'
 import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { assertPageDoesNotScrollSideways, enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
-import { APP_URL, GATEWAY_URL } from './targets'
+import { APP_URL, GATEWAY_URL, shardTenants } from './targets'
+
+const SHARD = shardTenants('overview-register-approvals.spec.ts')
+test.beforeAll(() => { expect(test.info().project.name, 'overview-register-approvals.spec.ts belongs to the ui-surfaces shard').toBe('ui-surfaces') })
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -367,7 +370,7 @@ async function bulkFlow(
 
 test('OV-01 firm overview at 1440: heading, KPI cards, pill, button, legend', async ({ page }, testInfo) => {
   const errors = collectErrors(page)
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const kpis = page.locator('.pf-dash-row-a .pf-grid-2 > div')
   await expect(kpis, 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
   await settle(page, column(page))
@@ -426,7 +429,7 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
       clients: (b.clients ?? []).map((c: object) => ({ ...c, top_violations: VIOLATIONS })),
     }),
   })
-  await signInAs(page, 'inhouse')
+  await signInAs(page, 'inhouse', { tenantId: SHARD.b.id })
   await expect(page.locator('.pf-dash-row-a .pf-grid-2 > div'), 'the dashboard drew its four KPI tiles').toHaveCount(4, { timeout: 20_000 })
 
   const groups = [
@@ -499,7 +502,7 @@ test('OV-02 in-house overview: tiles hold their head and body, columns align, fa
 
 test('OV-03 overview loading and error: placement under the header', async ({ page }, testInfo) => {
   const errors = gatedErrors(page, [expectedStatusDropper(page, 503, /\/api\/dashboard\/v1\/rollup/)])
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const rollup = await stubGet(page, isRollup)
   const read = async (text: Locator): Promise<{ header: Rect; state: Rect; h1: Rect; problems: string[] }> => {
     const b = await boxes(page, { header: heading(page).locator('xpath=..'), h1: heading(page) })
@@ -530,7 +533,7 @@ test('OV-03 overview loading and error: placement under the header', async ({ pa
 test('OV-04 empty workspace: loading, task card, error, placement', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors = gatedErrors(page, [expectedStatusDropper(page, 503, /\/api\/portfolio\/v1\/entities/)])
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const entities = await stubGet(page, isEntities, { empty: EMPTY_ENTITIES })
 
   entities.hold()
@@ -603,7 +606,7 @@ test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header an
   test.setTimeout(180_000)
   const errors = collectErrors(page)
   await stubGet(page, isRegister, { mode: 'transform', transform: canSubmitFirst })
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const gateway = recordGateway(page)
   await openNav(page, navButton(page, /^Invoices/))
   await expectVisibleRows(page.getByTestId('invoice-row'), 'the firm register must hold at least one invoice on the PR environment (the seed holds firm invoices, D-14)')
@@ -659,7 +662,7 @@ test('IN-01 invoices register: heading, card, badge, toggle, bulk bar, header an
 test('IN-02 invoices states: loading, error, empty, filtered empty, empty page', async ({ page }, testInfo) => {
   test.setTimeout(180_000)
   const errors = gatedErrors(page, [expectedStatusDropper(page, 503, /\/api\/invoice\/v1\/invoices/)])
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const register = await stubGet(page, isRegister, { empty: EMPTY_INVOICES })
   const measured: Record<string, unknown> = {}
 
@@ -736,7 +739,7 @@ test('AP-01 approvals queue: heading, card, bulk bar, pager relations', async ({
     },
     transform: canApproveFirst,
   })
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const gateway = recordGateway(page)
   await openNav(page, navButton(page, /^Approvals/))
   await expectVisibleRows(page.getByTestId('approval-row'), 'the approvals queue is served from the firm register page (D-14), which must hold at least one invoice on the PR environment')
@@ -759,7 +762,7 @@ test('AP-01 approvals queue: heading, card, bulk bar, pager relations', async ({
 
 test('AP-02 approvals states: loading, error, empty, empty page', async ({ page }, testInfo) => {
   const errors = gatedErrors(page, [expectedStatusDropper(page, 503, /\/api\/invoice\/v1\/invoices/)])
-  await signInAs(page, 'firm')
+  await signInAs(page, 'firm', { tenantId: SHARD.a.id })
   const queue = await stubGet(page, isQueue, { empty: EMPTY_INVOICES })
 
   queue.hold()

@@ -3,7 +3,7 @@ import { Icon, type GlyphName } from '../icons'
 import { CHIP, sceneState, type SceneState } from '../scene'
 import type { FeedTag, Mark, Scene, Tone } from '../types'
 
-type Size = 'thumb' | 'player'
+type Size = 'thumb' | 'player' | 'inline'
 type Of<K extends SceneState['kind']> = Extract<SceneState, { kind: K }>
 
 const ell: CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
@@ -74,19 +74,20 @@ function ListView({ s, size }: { s: Of<'list'>; size: Size }) {
       </div>
     )
   }
+  const inline = size === 'inline'
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: inline ? 8 : 10 }}>
       {s.banner && (
         <div
           key={s.banner}
-          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', background: 'var(--mint-soft)', borderRadius: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--tab-active-text)', animation: 'libFade 300ms ease-out' }}
+          style={{ display: 'flex', alignItems: 'center', gap: inline ? 8 : 10, padding: inline ? '7px 10px' : '9px 12px', background: 'var(--mint-soft)', borderRadius: 6, fontSize: inline ? 12 : 12.5, fontWeight: 600, color: 'var(--tab-active-text)', ...(inline ? {} : { animation: 'libFade 300ms ease-out' }) }}
         >
-          <Icon name="circle-check" size={15} />
+          <Icon name="circle-check" size={inline ? 14 : 15} />
           <span>{s.banner}</span>
         </div>
       )}
       <div
-        style={{ display: 'grid', gridTemplateColumns: s.grid, gap: 12, padding: '4px 12px', fontSize: 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--muted-foreground)' }}
+        style={{ display: 'grid', gridTemplateColumns: s.grid, gap: inline ? 10 : 12, padding: inline ? '2px 10px' : '4px 12px', fontSize: inline ? 9.5 : 10, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--muted-foreground)' }}
       >
         {s.cols.map((c) => (
           <span key={c}>{c}</span>
@@ -98,15 +99,15 @@ function ListView({ s, size }: { s: Of<'list'>; size: Size }) {
           return (
             <div
               key={i}
-              style={{ display: 'grid', gridTemplateColumns: s.grid, gap: 12, alignItems: 'center', padding: 12, borderTop: '1px solid var(--border)', fontSize: 13.5, background: r.focused ? 'var(--mint-soft)' : 'transparent', borderRadius: 4, transition: 'background 300ms ease-out', animation: 'libPop 320ms ease-out' }}
+              style={{ display: 'grid', gridTemplateColumns: s.grid, gap: inline ? 10 : 12, alignItems: 'center', padding: inline ? 10 : 12, borderTop: '1px solid var(--border)', fontSize: inline ? 12.5 : 13.5, background: r.focused ? 'var(--mint-soft)' : 'transparent', borderRadius: 4, transition: inline ? 'background 300ms' : 'background 300ms ease-out', animation: 'libPop 320ms ease-out' }}
             >
               <span style={{ fontWeight: 600, ...ell }}>{r.c1}</span>
               <span style={{ color: 'var(--text-copy)', ...ell }}>{r.c2}</span>
-              <span className="mono" style={{ color: 'var(--foreground)' }}>
+              <span className="mono" style={inline ? { whiteSpace: 'nowrap' } : { color: 'var(--foreground)' }}>
                 {r.c3}
               </span>
               <span
-                style={{ justifySelf: 'start', padding: '3px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, background: c.bg, color: c.fg, border: `1px solid ${c.bd}`, transition: 'background 300ms, color 300ms' }}
+                style={{ justifySelf: 'start', padding: inline ? '2px 7px' : '3px 8px', borderRadius: 4, fontSize: inline ? 10.5 : 11, fontWeight: 700, ...(inline ? { whiteSpace: 'nowrap' } : {}), background: c.bg, color: c.fg, border: `1px solid ${c.bd}`, ...(inline ? {} : { transition: 'background 300ms, color 300ms' }) }}
               >
                 {c.text}
               </span>
@@ -243,17 +244,18 @@ function FormView({ s, size }: { s: Of<'form'>; size: Size }) {
 
 function FlowView({ s, size }: { s: Of<'flow'>; size: Size }) {
   const thumb = size === 'thumb'
+  const inline = size === 'inline'
   const nodes = s.nodes.map((n, i) => (
-    <div key={i} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: thumb ? 4 : 10, position: 'relative' }}>
+    <div key={i} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: thumb ? 4 : inline ? 8 : 10, position: 'relative' }}>
       {(() => {
         const c = flowNode(n.state, i)
         return (
           <>
             <span
-              style={{ position: 'absolute', top: thumb ? 10 : 19, right: '50%', width: '100%', height: 2, background: c.lineBg, ...(thumb ? {} : { transition: 'background 400ms' }), display: c.lineDisplay }}
+              style={{ position: 'absolute', top: thumb ? 10 : inline ? 16 : 19, right: '50%', width: '100%', height: 2, background: c.lineBg, ...(thumb ? {} : { transition: 'background 400ms' }), display: c.lineDisplay }}
             />
             <span
-              style={{ position: 'relative', zIndex: 1, width: thumb ? 22 : 40, height: thumb ? 22 : 40, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: thumb ? 9 : 13, fontWeight: 700, background: c.bg, color: c.fg, border: `2px solid ${c.bd}`, ...(thumb ? {} : { transition: 'background 300ms, border-color 300ms, color 300ms' }) }}
+              style={{ position: 'relative', zIndex: 1, width: thumb ? 22 : inline ? 34 : 40, height: thumb ? 22 : inline ? 34 : 40, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: thumb ? 9 : inline ? 12 : 13, fontWeight: 700, background: c.bg, color: c.fg, border: `2px solid ${c.bd}`, ...(thumb ? {} : { transition: inline ? 'background 300ms, border-color 300ms' : 'background 300ms, border-color 300ms, color 300ms' }) }}
             >
               {c.num}
             </span>
@@ -261,8 +263,8 @@ function FlowView({ s, size }: { s: Of<'flow'>; size: Size }) {
               <span style={{ fontSize: 8.5, fontWeight: 700, textAlign: 'center', lineHeight: 1.2, padding: '0 2px', maxHeight: 21, overflow: 'hidden', color: c.tx }}>{n.l}</span>
             ) : (
               <>
-                <span style={{ fontSize: 13, fontWeight: 700, textAlign: 'center', lineHeight: 1.3, padding: '0 4px', color: c.tx }}>{n.l}</span>
-                <span style={{ fontSize: 11.5, textAlign: 'center', color: 'var(--muted-foreground)', padding: '0 4px' }}>{n.sub}</span>
+                <span style={{ fontSize: inline ? 12 : 13, fontWeight: 700, textAlign: 'center', lineHeight: 1.3, padding: inline ? '0 3px' : '0 4px', color: c.tx }}>{n.l}</span>
+                {!inline && <span style={{ fontSize: 11.5, textAlign: 'center', color: 'var(--muted-foreground)', padding: '0 4px' }}>{n.sub}</span>}
               </>
             )}
           </>
@@ -279,11 +281,11 @@ function FlowView({ s, size }: { s: Of<'flow'>; size: Size }) {
     )
   }
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 44 }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: inline ? 32 : 44 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start' }}>{nodes}</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--sage-card)', minHeight: 54 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: inline ? 10 : 12, padding: inline ? '11px 14px' : '14px 16px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--sage-card)', ...(inline ? {} : { minHeight: 54 }) }}>
         <span className="t-step">STATUS</span>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>{s.out}</span>
+        <span style={{ fontSize: inline ? 13 : 14, fontWeight: 600 }}>{s.out}</span>
       </div>
     </div>
   )

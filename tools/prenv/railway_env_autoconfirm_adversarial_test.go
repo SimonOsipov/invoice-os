@@ -7,6 +7,7 @@ import (
 
 // Driven sibling of TestSetForkAuthAutoconfirms: the value on the wire, the service, and the read-back.
 func TestSetForkAuth_AutoconfirmsOnAuthOnly(t *testing.T) {
+	t.Parallel()
 	s, _ := runForkAuthOK(t, freshJWK(t))
 	ups := s.upserts(t)
 	if len(upsertsOf(ups, authForkAuthID, "GOTRUE_DISABLE_SIGNUP")) != 1 {
@@ -25,6 +26,7 @@ func TestSetForkAuth_AutoconfirmsOnAuthOnly(t *testing.T) {
 
 // Railway may hold a different value after the write; the run must fail and name the variable.
 func TestSetForkAuth_AutoconfirmReReadMismatchFails(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, filter string }{
 		{"reads false", `.GOTRUE_MAILER_AUTOCONFIRM = "false"`},
 		{"reads TRUE", `.GOTRUE_MAILER_AUTOCONFIRM = "TRUE"`},

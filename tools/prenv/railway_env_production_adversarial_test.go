@@ -13,6 +13,7 @@ import (
 )
 
 func TestSetProductionEnvironmentRefusesANearMissID(t *testing.T) {
+	t.Parallel()
 	nearMisses := map[string]string{
 		"a prefix":            persistentEnvironmentID[:8],
 		"upper case":          strings.ToUpper(persistentEnvironmentID),
@@ -34,6 +35,7 @@ func TestSetProductionEnvironmentRefusesANearMissID(t *testing.T) {
 
 	for name, id := range nearMisses {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			shim := newRailwayShim(t, productionRailway(productionVariables(`,"ENVIRONMENT":"production"`)))
 			stdout, stderr, code := runSetProductionEnvironment(t, shim.prelude, forkExports(true, true, true), id)
 			out := stdout + stderr
@@ -55,6 +57,7 @@ func TestSetProductionEnvironmentRefusesANearMissID(t *testing.T) {
 }
 
 func TestSetProductionEnvironmentRefusesTwoGateways(t *testing.T) {
+	t.Parallel()
 	responses := productionRailway(productionVariables(`,"ENVIRONMENT":"production"`))
 	responses["settle"] = forkSettle(
 		`{"node":{"serviceId":"svc-gw-a","serviceName":"gateway"}}`,
@@ -85,6 +88,7 @@ func TestSetProductionEnvironmentRefusesTwoGateways(t *testing.T) {
 }
 
 func TestSetProductionEnvironmentStopsOnARailwayError(t *testing.T) {
+	t.Parallel()
 	const apiError = `{"errors":[{"message":"Not Authorized"}],"data":{"variables":{` + forkEnvSecretSibling + `}}}`
 	cases := []struct {
 		name     string
@@ -99,6 +103,7 @@ func TestSetProductionEnvironmentStopsOnARailwayError(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			responses := productionRailway(productionVariables(`,"ENVIRONMENT":"production"`))
 			responses[c.op] = c.body
 			shim := newRailwayShim(t, responses)
@@ -131,6 +136,7 @@ func TestSetProductionEnvironmentStopsOnARailwayError(t *testing.T) {
 const productionUsageNote = "by hand, once, never from a workflow"
 
 func TestRailwayEnvUsageListsSayProductionIsWrittenByHand(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runBashScript(t, "bash '"+railwayEnvScript(t)+"' no-such-subcommand\n")
 	generic := stdout + stderr
 	if code != 2 || !strings.Contains(generic, "set-fork-environment <environment-id|--self-test>") {
@@ -267,6 +273,7 @@ var singleForkVariableCommands = []string{
 }
 
 func TestNoWorkflowRunsASingleForkVariableCommandOnAnEnvironment(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(repoRoot(t), ".github", "workflows")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -301,6 +308,7 @@ func TestNoWorkflowRunsASingleForkVariableCommandOnAnEnvironment(t *testing.T) {
 }
 
 func TestNoWorkflowPicksTheRailwayEnvSubcommandAtRunTime(t *testing.T) {
+	t.Parallel()
 	t.Run("planted fixture", func(t *testing.T) {
 		step := func(run string) string {
 			return "jobs:\n  deploy:\n    steps:\n      - name: x\n        run: " + run + "\n"
@@ -400,6 +408,7 @@ func executableNaming(t *testing.T, root, needle string) (hits []string, read in
 }
 
 func TestSetProductionAuthIsByHandOnly(t *testing.T) {
+	t.Parallel()
 	const needle = "set-production-auth"
 	stdout, stderr, code := runBashScript(t, "bash '"+railwayEnvScript(t)+"' no-such-subcommand\n")
 	generic := stdout + stderr
@@ -441,9 +450,11 @@ func TestSetProductionAuthIsByHandOnly(t *testing.T) {
 }
 
 func TestNothingCIRunsNamesSetProductionEnvironment(t *testing.T) {
+	t.Parallel()
 	const definer = "scripts/ci/railway-env.sh"
 
 	t.Run("planted fixture", func(t *testing.T) {
+		t.Parallel()
 		root := t.TempDir()
 		files := map[string]string{
 			"scripts/ci/deploy-prod.sh":       "#!/bin/sh\nbash scripts/ci/railway-env.sh " + productionNeedle + " \"$ENV_ID\"\n",

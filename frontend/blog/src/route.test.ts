@@ -15,11 +15,15 @@ describe('route', () => {
     expect(parseBlogPath('/a-post/')).toEqual({ view: 'post', slug: 'a-post' })
   })
 
-  it('parse_otherShapesAreHome', () => {
-    for (const p of ['/category', '/category/', '/category/a/b', '/a/b', '/subscribe/x', '']) {
-      expect(parseBlogPath(p), p).toEqual({ view: 'home' })
+  it('parse_otherShapesAreMissing', () => {
+    for (const p of ['/category', '/category/', '/category/a/b', '/a/b', '/subscribe/x', '/what-changes/extra']) {
+      expect(parseBlogPath(p), p).toEqual({ view: 'missing', path: p })
     }
   })
+
+  it('parse_emptyPathIsHome', () => expect(parseBlogPath('')).toEqual({ view: 'home' }))
+
+  it('path_aMissingRouteKeepsItsPath', () => expect(blogPath(parseBlogPath('/a/b'))).toBe('/a/b'))
 
   it('path_roundTripsEveryRoute', () => {
     const routes: Route[] = [

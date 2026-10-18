@@ -3,6 +3,7 @@ export type Route =
   | { view: 'subscribe' }
   | { view: 'category'; id: string }
   | { view: 'post'; slug: string }
+  | { view: 'missing'; path: string }
 
 const HOME: Route = { view: 'home' }
 
@@ -11,9 +12,9 @@ export function parseBlogPath(pathname: string): Route {
   const cat = /^\/category\/([^/]+)\/?$/.exec(pathname)
   if (cat) return { view: 'category', id: cat[1] }
   const one = /^\/([^/]+)\/?$/.exec(pathname)
-  if (!one) return HOME
+  if (!one) return pathname === '' || pathname === '/' ? HOME : { view: 'missing', path: pathname }
   if (one[1] === 'subscribe') return { view: 'subscribe' }
-  if (one[1] === 'category') return HOME
+  if (one[1] === 'category') return { view: 'missing', path: pathname }
   return { view: 'post', slug: one[1] }
 }
 
@@ -27,5 +28,7 @@ export function blogPath(route: Route): string {
       return `/category/${route.id}`
     case 'post':
       return `/${route.slug}`
+    case 'missing':
+      return route.path
   }
 }

@@ -36,9 +36,10 @@ paths:
 - Return no rows from `pending_invites_for_email` for a user id that holds a membership of any status.
 - Refuse `accept_invitation_by_id` in this order: GUC mismatch `42501`, not valid `invitation_not_valid`, already a member `one_workspace_per_identity`.
 - Name a new migration with a current timestamp.
-- Check the order with `go run ./internal/tools/migrationorder -base origin/main`.
+- Check the order with `go run ./internal/tools/migrationorder -base origin/<the PR's base branch>`. CI passes the PR's base sha.
 - Write a working Down in every migration. CI resets all migrations and applies them again.
 - Never edit an applied migration.
+- A preview recreates its `public` schema at boot when its applied versions and the migration files disagree (`db.RecreateStuckSchema`). Production never does.
 - Create a role that you add to `db/bootstrap.sql` by hand on production. Production runs no boot-time bootstrap.
 - Gate deploy-time provisioning with an allowlist of environment names, never a blocklist.
 - Pass the raw `ENVIRONMENT` value to `BootstrapEnabled`.

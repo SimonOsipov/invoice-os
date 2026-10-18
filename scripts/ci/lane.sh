@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
-# lane.sh - decides the lane (library, blog or full) of a PR (pr, pr-e2e, classify) and the deploy scope of a push to main (push <sha>).
+# lane.sh - decides the lane (library, blog or full) of a PR (pr, pr-e2e, classify) and the deploy scope of a push to main (push <sha>). A SHARED_WITH_BLOG library file is full.
 # Writes the verdict to stdout and $GITHUB_OUTPUT. push needs REPO, RUN_ID and gh (GH_TOKEN). Exit 0, 1 on a bad FILTER_E2E, 2 on a usage error.
 set -euo pipefail
 
 LIBRARY_PREFIX='frontend/library/'
 BLOG_PREFIX='frontend/blog/'
+# library files the blog compiles; frontend/blog/src/package.test.ts pins the list
+SHARED_WITH_BLOG=(
+  frontend/library/src/components/SceneView.tsx
+  frontend/library/src/icons.tsx
+  frontend/library/src/player.ts
+  frontend/library/src/scene.ts
+  frontend/library/src/timing.ts
+  frontend/library/src/types.ts
+)
+# Inputs of cmd/blog: a change needs the fork build and the crawler e2e, so it takes the full lane.
+BLOG_SERVER_INPUTS=(frontend/blog/Dockerfile frontend/blog/Dockerfile.dockerignore frontend/blog/index.html)
 GATEWAY_JOB_PREFIX='Deploy gateway '
 FLEET_GATE_JOB_PREFIX='Fleet /healthz gate'
 SPA_GATE_JOB_PREFIX='SPA build gate'
@@ -24,12 +35,15 @@ emit() {
   fi
 }
 
-# classify: paths on stdin; a small lane only when a path is read and every path starts with that one lane's prefix.
+# classify: paths on stdin; a small lane only when a path is read, every path starts with that one lane's prefix and none is in SHARED_WITH_BLOG.
 classify() {
-  local path this seen=0 lane=""
+  local path shared this seen=0 lane=""
   while IFS= read -r path || [ -n "$path" ]; do
     [ -n "$path" ] || continue
     seen=1
+    for shared in "${SHARED_WITH_BLOG[@]}" "${BLOG_SERVER_INPUTS[@]}"; do
+      if [ "$path" = "$shared" ]; then echo full; return 0; fi
+    done
     case "$path" in
       "$LIBRARY_PREFIX"*) this=library ;;
       "$BLOG_PREFIX"*) this=blog ;;
@@ -56,7 +70,7 @@ push_scope() {
   local sha=$1 runs ids id jobs base="" base_run="" prefixes paths
   scope=full
   if ! runs=$(gh api "repos/$REPO/actions/workflows/dev-env.yml/runs?$RUNS_URL_QUERY" 2>&1); then
-    reason="runs lookup failed: $(printf '%s' "$runs" | head -n 1)"
+    reason="runs lookup failed: $(head -n 1 <<<"$runs")"
     return 0
   fi
   if ! ids=$(printf '%s' "$runs" | jq -r --arg self "$RUN_ID" \
@@ -70,7 +84,7 @@ push_scope() {
   while read -r id head; do
     [ -n "$id" ] || continue
     if ! jobs=$(gh api "repos/$REPO/actions/runs/$id/jobs?filter=latest&per_page=100" 2>&1); then
-      reason="jobs lookup failed for run $id: $(printf '%s' "$jobs" | head -n 1)"
+      reason="jobs lookup failed for run $id: $(head -n 1 <<<"$jobs")"
       return 0
     fi
     if ! printf '%s' "$jobs" | jq -e --argjson p "$prefixes" \

@@ -8,3 +8,7 @@ export function landingHref(): string {
 export function privacyHref(): string {
   return `${landingHref()}/privacy`
 }
+
+export function demoHref(): string {
+  return `${landingHref()}/?demo`
+}

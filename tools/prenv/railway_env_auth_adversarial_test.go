@@ -21,10 +21,7 @@ func jqArgvLog(t *testing.T, s authShim) string {
 		t.Fatal(err)
 	}
 	log := filepath.Join(s.dir, "jq-argv.log")
-	writeFile(t, filepath.Join(s.dir, "jq"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '"+log+"'\nexec '"+real+"' \"$@\"\n")
-	if err := os.Chmod(filepath.Join(s.dir, "jq"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "jq"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '"+log+"'\nexec '"+real+"' \"$@\"\n")
 	return log
 }
 
@@ -47,6 +44,7 @@ func jqString(t *testing.T, v string) string {
 }
 
 func TestAuthSecretsNeverReachJQArgv(t *testing.T) {
+	t.Parallel()
 	scan := func(t *testing.T, log string, needles map[string]string) {
 		t.Helper()
 		argv := readLog(t, log)
@@ -98,6 +96,7 @@ func TestAuthSecretsNeverReachJQArgv(t *testing.T) {
 }
 
 func TestSetForkAuth_SecretUpsertFailureExitsAndNamesIt(t *testing.T) {
+	t.Parallel()
 	k0 := freshJWK(t)
 	for _, c := range []struct {
 		name, variable, file, body string
@@ -148,6 +147,7 @@ func TestSetForkAuth_SecretUpsertFailureExitsAndNamesIt(t *testing.T) {
 }
 
 func TestSetForkAuth_ReReadIsUnrenderedAndNeverPrintsARenderedDSN(t *testing.T) {
+	t.Parallel()
 	t.Run("every re-read asks for unrendered values", func(t *testing.T) {
 		s, _ := runForkAuthOK(t, freshJWK(t))
 		reads := 0
@@ -166,6 +166,7 @@ func TestSetForkAuth_ReReadIsUnrenderedAndNeverPrintsARenderedDSN(t *testing.T) 
 	})
 
 	t.Run("a rendered DATABASE_URL fails without printing it", func(t *testing.T) {
+		t.Parallel()
 		const renderedPW = "rendered0000password0000planted"
 		s := newForkAuthShim(t, freshJWK(t))
 		s.bendRead(t, authForkAuthID, `.DATABASE_URL = "postgresql://supabase_auth_admin:`+renderedPW+`@postgres.railway.internal:5432/railway"`)
@@ -181,6 +182,7 @@ func TestSetForkAuth_ReReadIsUnrenderedAndNeverPrintsARenderedDSN(t *testing.T) 
 }
 
 func TestSetForkAuth_ReReadEdges(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, svc, variable, filter, needle string
 	}{
@@ -191,6 +193,7 @@ func TestSetForkAuth_ReReadEdges(t *testing.T) {
 		{"GOTRUE_JWT_SECRET with a trailing newline", authForkAuthID, "GOTRUE_JWT_SECRET", `.GOTRUE_JWT_SECRET += "\n"`, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newForkAuthShim(t, freshJWK(t))
 			s.bendRead(t, c.svc, c.filter)
 			stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
@@ -207,12 +210,14 @@ func TestSetForkAuth_ReReadEdges(t *testing.T) {
 
 // AC-3 names absent, empty and mismatch as distinct failures; the error says which.
 func TestAuthReReadSaysAbsentOrEmpty(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, svc, filter, says string }{
 		{"a non-secret absent", authForkGatewayID, `del(.AUTH_URL)`, "gateway.AUTH_URL is absent"},
 		{"a secret absent", authForkAuthID, `del(.GOTRUE_JWT_SECRET)`, "auth.GOTRUE_JWT_SECRET is absent"},
 		{"a secret empty", authForkGatewayID, `.AUTH_ADMIN_PASSWORD = ""`, "gateway.AUTH_ADMIN_PASSWORD is empty"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newForkAuthShim(t, freshJWK(t))
 			s.bendRead(t, c.svc, c.filter)
 			stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
@@ -225,14 +230,12 @@ func TestAuthReReadSaysAbsentOrEmpty(t *testing.T) {
 
 // The fork has no pre-write key check, so the read-back jwk-check is the only guard on the generator.
 func TestSetForkAuth_AnInvalidGeneratedKeyFails(t *testing.T) {
+	t.Parallel()
 	s := newForkAuthShim(t, freshJWK(t))
 	fake := "#!/bin/sh\nif [ \"$1\" = jwk-es256 ]; then echo '[]'; exit 0; fi\nexec '" + binPath + "' \"$@\"\n"
 	goShim := "#!/bin/sh\nout=''\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=\"$2\"; shift; done\n" +
 		"cat > \"$out\" <<'FAKE'\n" + fake + "FAKE\nchmod +x \"$out\"\n"
-	writeFile(t, filepath.Join(s.dir, "go"), goShim)
-	if err := os.Chmod(filepath.Join(s.dir, "go"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "go"), goShim)
 	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
 	out := stdout + stderr
 	if got := oneUpsert(t, s.upserts(t), authForkAuthID, "GOTRUE_JWT_KEYS"); got != "[]" {
@@ -244,6 +247,7 @@ func TestSetForkAuth_AnInvalidGeneratedKeyFails(t *testing.T) {
 }
 
 func TestSetForkAuth_RefusesANamelessEnvironment(t *testing.T) {
+	t.Parallel()
 	nameless := strings.Replace(authEnvList(true), `"name":"`+authForkName+`",`, "", 1)
 	if nameless == authEnvList(true) {
 		t.Fatal("control: the fork's name was not removed")
@@ -277,6 +281,7 @@ func TestSetForkAuth_RefusesANamelessEnvironment(t *testing.T) {
 }
 
 func TestSetForkAuthSite_MoreRefusals(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, env, url, says string
 	}{
@@ -284,6 +289,7 @@ func TestSetForkAuthSite_MoreRefusals(t *testing.T) {
 		{"a bare https scheme", authForkEnvID, "https://", "https://"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			resp := forkAuthRailway()
 			resp["envList"] = authEnvList(false)
 			s := newAuthShim(t, resp, forkAuthStores(freshJWK(t)))
@@ -300,6 +306,7 @@ func TestSetForkAuthSite_MoreRefusals(t *testing.T) {
 }
 
 func TestSetForkAuth_AdminPasswordIsFreshPerRun(t *testing.T) {
+	t.Parallel()
 	s1, _ := runForkAuthOK(t, freshJWK(t))
 	s2, _ := runForkAuthOK(t, freshJWK(t))
 	p1 := oneUpsert(t, s1.upserts(t), authForkGatewayID, "AUTH_ADMIN_PASSWORD")
@@ -312,6 +319,7 @@ func TestSetForkAuth_AdminPasswordIsFreshPerRun(t *testing.T) {
 	}
 
 	t.Run(passSub, func(t *testing.T) {
+		t.Parallel()
 		gw := gtSvcID("gateway")
 		var got [2]string
 		for i := range got {
@@ -331,6 +339,7 @@ func TestSetForkAuth_AdminPasswordIsFreshPerRun(t *testing.T) {
 }
 
 func TestSetProductionAuth_SealedReadEdges(t *testing.T) {
+	t.Parallel()
 	exports := prodAuthExports(authProdPassword, freshJWK(t), authProdJWTSecret, authProdResendKey)
 
 	t.Run("a null environment refuses before any write", func(t *testing.T) {
@@ -358,6 +367,7 @@ func TestSetProductionAuth_SealedReadEdges(t *testing.T) {
 
 // Pre-merge needs no secret, so it must not reach the sealed read or the post-merge writes.
 func TestSetProductionAuth_PreMergeCallsOnlySettleWriteAndReRead(t *testing.T) {
+	t.Parallel()
 	s := newProdAuthShim(t, prodSealed())
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "set-production-auth", "--pre-merge", persistentEnvironmentID)
 	if code != 0 {
@@ -369,11 +379,9 @@ func TestSetProductionAuth_PreMergeCallsOnlySettleWriteAndReRead(t *testing.T) {
 }
 
 func TestSetForkAuth_PrenvBuildFailureWritesNothing(t *testing.T) {
+	t.Parallel()
 	s := newForkAuthShim(t, freshJWK(t))
-	writeFile(t, filepath.Join(s.dir, "go"), "#!/bin/sh\necho 'go: planted build failure' >&2\nexit 1\n")
-	if err := os.Chmod(filepath.Join(s.dir, "go"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "go"), "#!/bin/sh\necho 'go: planted build failure' >&2\nexit 1\n")
 	stdout, stderr, code := s.run(t, forkAuthExports(), "set-fork-auth", authForkEnvID)
 	out := stdout + stderr
 	if code != 1 || !strings.Contains(errorLines(out), "Could not build tools/prenv") {

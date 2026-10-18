@@ -1,21 +1,13 @@
 import { Icon } from '../icons'
-import type { Route } from '../route'
-
-type Crumb = { label: string; route: Route }
-
-// Only the prototype's own fallback: a category or post that is not found shows `Blog` alone.
-export function crumbsFor(route: Route): Crumb[] {
-  const blog: Crumb = { label: 'Blog', route: { view: 'home' } }
-  return route.view === 'subscribe' ? [blog, { label: 'Subscribe', route }] : [blog]
-}
+import type { Crumb } from '../model'
 
 type HeaderProps = {
-  route: Route
-  onNavigate: (r: Route) => void
+  crumbs: Crumb[]
+  q: string
+  onQ: (q: string) => void
 }
 
-export function Header({ route, onNavigate }: HeaderProps) {
-  const crumbs = crumbsFor(route)
+export function Header({ crumbs, q, onQ }: HeaderProps) {
   return (
     <header
       id="blog-header"
@@ -43,11 +35,11 @@ export function Header({ route, onNavigate }: HeaderProps) {
         {crumbs.map((k, i) => {
           const last = i === crumbs.length - 1
           return (
-            <div key={k.label} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
               <button
                 type="button"
                 className="blog-crumb"
-                onClick={() => onNavigate(k.route)}
+                onClick={k.go}
                 style={{
                   background: 'none',
                   border: 0,
@@ -92,6 +84,8 @@ export function Header({ route, onNavigate }: HeaderProps) {
         <input
           aria-label="Search posts"
           placeholder="Search posts"
+          value={q}
+          onChange={(e) => onQ(e.target.value)}
           style={{
             flex: 1,
             minWidth: 0,
@@ -102,6 +96,24 @@ export function Header({ route, onNavigate }: HeaderProps) {
             color: 'var(--ink)',
           }}
         />
+        {q.trim() !== '' && (
+          <button
+            type="button"
+            className="blog-clear"
+            aria-label="Clear search"
+            onClick={() => onQ('')}
+            style={{
+              background: 'none',
+              border: 0,
+              padding: 2,
+              cursor: 'pointer',
+              color: 'var(--muted-foreground)',
+              display: 'inline-flex',
+            }}
+          >
+            <Icon name="x" size={14} />
+          </button>
+        )}
       </label>
     </header>
   )

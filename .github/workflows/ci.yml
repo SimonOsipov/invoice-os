@@ -59,7 +59,7 @@ jobs:
             migrations:
               - 'migrations/**'
               - 'db/**'
-              - 'internal/platform/db/restore_check_test.go'
+              - 'internal/platform/db/**'
               - 'Makefile'
               - 'go.mod'
               - 'go.sum'
@@ -1284,13 +1284,31 @@ jobs:
             | jq -s '.' > timeline.json
           go run ./internal/tools/forcepushgate -pr pr.json -timeline timeline.json
 
+  # Unconditional: a new advisory against unchanged code turns every PR red.
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Pinned: a scanner release must not change the verdict between two runs.
+      # cgo off: reachability is computed for the build the Dockerfile ships.
+      - name: Scan for reachable vulnerabilities
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go version
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
   # Single always-running gate. Mark THIS check ("CI") required in branch
   # protection (M1-05): it passes when the triggered jobs pass or are skipped,
   # and fails only when a job that actually ran failed — so path-filtered
   # skips never leave a required check stuck pending.
   ci:
     name: CI
-    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite]
+    needs: [changes, go, frontend, library, blog, clean-clone, migrations, docker-canary, docling-canary, docling-test, rls, idp, queue, audit, stale-refs, migration-order, cite-refs, history-rewrite, govulncheck]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1314,6 +1332,7 @@ jobs:
           echo "migration-order: ${{ needs.migration-order.result }}"
           echo "cite-refs:     ${{ needs.cite-refs.result }}"
           echo "history-rewrite: ${{ needs.history-rewrite.result }}"
+          echo "govulncheck:   ${{ needs.govulncheck.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::'changes' job did not succeed"; exit 1
           fi
@@ -1373,5 +1392,9 @@ jobs:
           # no PR to ask about.
           if [ "${{ needs.history-rewrite.result }}" = "failure" ] || [ "${{ needs.history-rewrite.result }}" = "cancelled" ]; then
             echo "::error::Branch was force-pushed after review — a fresh review clears this"; exit 1
+          fi
+          # Unconditional, so a skip would read like a clean scan.
+          if [ "${{ needs.govulncheck.result }}" != "success" ]; then
+            echo "::error::govulncheck job failed"; exit 1
           fi
           echo "All triggered CI jobs passed (skipped jobs are OK)."

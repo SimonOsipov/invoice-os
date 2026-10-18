@@ -2,6 +2,8 @@
 html, body { margin: 0; padding: 0; height: 100%; }
 button, input { font-family: inherit; }
 @keyframes blogPop { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes libPop { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes libFade { from { opacity: 0; } to { opacity: 1; } }
 a { color: var(--primary); text-decoration: none; }
 a:hover { color: var(--teal); }
 input::placeholder { color: var(--muted-foreground); }
@@ -26,7 +28,12 @@ input::placeholder { color: var(--muted-foreground); }
 /* Prototype style-hover states. !important where the resting value is inline. */
 .blog-nav:hover { background: var(--surface-panel) !important; }
 .blog-sub:hover { filter: brightness(1.06); }
+.blog-play:hover { filter: brightness(1.06); }
+.blog-back:hover, .blog-toc:hover { color: var(--teal) !important; }
 .blog-crumb:hover { color: var(--teal) !important; }
+.blog-row:hover { background: var(--card) !important; }
+.blog-chip:hover { background: var(--muted) !important; }
+.blog-clear:hover { color: var(--ink) !important; }
 .blog-cookie-choices:hover { color: var(--action) !important; }
 
 @media (max-width: 767px) {
@@ -36,4 +43,6 @@ input::placeholder { color: var(--muted-foreground); }
   .asc-app > aside nav button { width: auto !important; flex: none; white-space: nowrap; }
   .blog-navlabel { display: none !important; }
   #blog-main { flex: none !important; overflow-y: visible !important; }
+  #blog-main :is(h1, h2, p, .t-body, .t-body-sm, .t-lead, .blog-wrap) { overflow-wrap: anywhere; }
+  .blog-px { padding-left: 20px !important; padding-right: 20px !important; }
 }

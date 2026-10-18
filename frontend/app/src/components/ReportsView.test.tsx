@@ -7,10 +7,11 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createAuthedFetch } from '../lib/authedFetch'
+import { SessionEndedError } from '../lib/renewal'
 import { AGGREGATE_MAX_PAGES, AGGREGATE_PAGE_SIZE } from '../lib/invoices'
 import type { Customer, CustomerListResponse } from '../lib/buyerDirectory'
 import type { InvoiceListResponse, InvoiceRecord } from '../lib/invoices'
@@ -56,10 +57,21 @@ function isCustomersUrl(url: string): boolean {
 type CustomersHandler = (url: string) => MockResponse
 const NO_RECORDS: CustomersHandler = () => ({ ok: true, status: 200, json: () => Promise.resolve({ customers: [], pagination: { limit: 1, offset: 0, total: 0 } }) })
 
-function mockFetch(invoiceResponses: MockResponse[], rollup: Rollup = ZERO_ROLLUP, customers: CustomersHandler = NO_RECORDS) {
+function isRegisterUrl(url: string): boolean {
+  return new URL(url).pathname.endsWith('/v1/invoice-register')
+}
+
+// The register download is a bare fetch with an init arg; unset, a click is a test bug.
+type RegisterHandler = (url: string, init?: RequestInit) => Promise<unknown>
+
+function mockFetch(invoiceResponses: MockResponse[], rollup: Rollup = ZERO_ROLLUP, customers: CustomersHandler = NO_RECORDS, register?: RegisterHandler) {
   const queue = [...invoiceResponses]
   const rollupResponse: MockResponse = { ok: true, status: 200, json: () => Promise.resolve(rollup) }
-  const fetchMock = vi.fn((url: string) => {
+  const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    if (isRegisterUrl(url)) {
+      if (!register) throw new Error(`ReportsView test: unexpected register fetch ${url}`)
+      return register(url, init)
+    }
     if (isRollupUrl(url)) return Promise.resolve(rollupResponse)
     if (isCustomersUrl(url)) return Promise.resolve(customers(url))
     const next = queue.shift()
@@ -72,7 +84,7 @@ function mockFetch(invoiceResponses: MockResponse[], rollup: Rollup = ZERO_ROLLU
 
 // The invoices-only call URLs, in request order -- excludes the interleaved rollup call.
 function invoiceCallUrls(fetchMock: ReturnType<typeof mockFetch>): string[] {
-  return fetchMock.mock.calls.map((c) => c[0] as string).filter((url) => !isRollupUrl(url) && !isCustomersUrl(url))
+  return fetchMock.mock.calls.map((c) => c[0] as string).filter((url) => !isRollupUrl(url) && !isCustomersUrl(url) && !isRegisterUrl(url))
 }
 
 function listResponse(invoices: InvoiceRecord[], pagination: { limit: number; offset: number; total: number }): MockResponse {
@@ -128,12 +140,15 @@ function urlParams(url: string): URLSearchParams {
   return new URL(url).searchParams
 }
 
-function reportsCtx(entityId = 'ent-1'): PlatformCtx {
+function reportsCtx(entityId = 'ent-1', over: Record<string, unknown> = {}): PlatformCtx {
   const ctx = {
     mode: 'firm',
     active: { name: 'Acme Co', short: 'Acme', entityId },
+    activeEntity: { id: entityId, name: 'Acme Co' },
+    getToken: () => 'tok',
     authedFetch: createAuthedFetch(() => 'tok', vi.fn()),
     openCreate: () => {},
+    ...over,
   }
   return ctx as unknown as PlatformCtx
 }
@@ -339,38 +354,246 @@ const EXPORT_BUTTONS: { name: string; fmt: string }[] = [
   { name: 'WHT schedule', fmt: 'CSV' },
 ]
 
-describe('ReportsView: export buttons are disabled-with-reason', () => {
-  // The export card only renders on the populated branch (`fresh && rows.length > 0`).
-  async function renderReady() {
-    const rows = [row({ id: 'inv-r', buyer_tin: tinFor(1), buyer_name: 'Ready Buyer' })]
-    mockFetch([listResponse(rows, { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })])
-    render(<ReportsView ctx={reportsCtx()} />)
+const BLOCKED_BUTTONS = EXPORT_BUTTONS.filter((b) => b.name !== 'Invoice register')
+// internal/archive/register.go registerStatusForErr (TooManyInvoicesError arm).
+const OVER_CAP_SENTENCE = '10001 invoices exceeds the register limit of 10000'
+
+function registerResponse(over: Record<string, unknown> = {}) {
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    headers: { get: (h: string) => (h === 'Content-Disposition' ? 'attachment; filename=ASComply_register_ent-1.xlsx' : null) },
+    blob: () => Promise.resolve(new Blob(['x'])),
+    json: () => Promise.reject(new Error('not json')),
+    ...over,
+  }
+}
+
+function failResponse(status: number, body: unknown) {
+  return registerResponse({ ok: false, status, statusText: 'Bad', json: () => (body === undefined ? Promise.reject(new SyntaxError('html')) : Promise.resolve(body)) })
+}
+
+function registerButton() {
+  return screen.getByRole('button', { name: /Invoice register/ }) as HTMLButtonElement
+}
+
+describe('ReportsView: export card', () => {
+  const populated = () => [row({ id: 'inv-r', buyer_tin: tinFor(1), buyer_name: 'Ready Buyer' })]
+
+  async function renderReady(ctx: PlatformCtx = reportsCtx(), register?: RegisterHandler) {
+    const fetchMock = mockFetch([listResponse(populated(), { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 1 })], ZERO_ROLLUP, NO_RECORDS, register)
+    const view = render(<ReportsView ctx={ctx} />)
     await screen.findByText('Ready Buyer')
+    return { fetchMock, ...view }
   }
 
-  it('all four export buttons carry the disabled attribute (AC #1)', async () => {
-    await renderReady()
-    for (const { name } of EXPORT_BUTTONS) {
-      const btn = screen.getByRole('button', { name: new RegExp(name) }) as HTMLButtonElement
-      expect(btn.disabled, `${name} button must be disabled`).toBe(true)
+  // jsdom has no object URLs; one create, one anchor click, one revoke is the save.
+  function stubSave() {
+    const create = vi.fn(() => 'blob:x')
+    const revoke = vi.fn()
+    URL.createObjectURL = create
+    URL.revokeObjectURL = revoke
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    return { create, revoke, click }
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    // @ts-expect-error jsdom defines neither; drop what stubSave installed
+    delete URL.createObjectURL
+    // @ts-expect-error see above
+    delete URL.revokeObjectURL
+  })
+
+  it('the export card renders under the empty state', async () => {
+    mockFetch([listResponse([], { limit: AGGREGATE_PAGE_SIZE, offset: 0, total: 0 })])
+    render(<ReportsView ctx={reportsCtx()} />)
+    await screen.findByText('No data to report yet')
+    for (const { name } of EXPORT_BUTTONS) expect(screen.getByRole('button', { name: new RegExp(name) })).toBeTruthy()
+  })
+
+  it('the export card does not render while loading or on error', async () => {
+    const fetchMock = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal('fetch', fetchMock)
+    const { unmount } = render(<ReportsView ctx={reportsCtx()} />)
+    expect(screen.queryByRole('button', { name: /Invoice register/ })).toBeNull()
+    unmount()
+
+    mockFetch([{ ok: false, status: 500, json: () => Promise.resolve({ error: 'boom' }) }])
+    render(<ReportsView ctx={reportsCtx()} />)
+    await waitFor(() => expect(screen.queryByText(/Loading reports/)).toBeNull())
+    expect(screen.queryByRole('button', { name: /Invoice register/ })).toBeNull()
+  })
+
+  it('the period inputs default to the previous month', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 9, 18, 12))
+    try {
+      await renderReady()
+      expect((screen.getByTestId('register-period-from') as HTMLInputElement).value).toBe('2026-09-01')
+      expect((screen.getByTestId('register-period-to') as HTMLInputElement).value).toBe('2026-09-30')
+    } finally {
+      vi.useRealTimers()
     }
   })
 
-  // The disabled-attribute test above passes with the inline dimming stripped; this one pins
-  // the recipe (opacity, cursor, filter) and the absence of a fill or colour override.
-  it('all four export buttons carry the inline dimming recipe (AC #1)', async () => {
+  it('the register button is enabled with a client and a valid period', async () => {
     await renderReady()
-    for (const { name } of EXPORT_BUTTONS) {
+    const btn = registerButton()
+    expect(btn.disabled).toBe(false)
+    expect(btn.getAttribute('aria-describedby')).toBeNull()
+    expect(btn.textContent).toContain('XLSX')
+    expect(screen.queryByTestId('invoice-register-reason')).toBeNull()
+  })
+
+  it('firm with no client: disabled with the pick-a-client reason', async () => {
+    await renderReady(reportsCtx('ent-1', { activeEntity: null }))
+    const btn = registerButton()
+    const reason = screen.getByTestId('invoice-register-reason')
+    expect(btn.disabled).toBe(true)
+    expect(btn.title).toBe('Pick a client to export its register.')
+    expect(reason.textContent).toBe('Pick a client to export its register.')
+    expect(reason.id).toBe('invoice-register-reason-text')
+    expect(btn.getAttribute('aria-describedby')).toBe('invoice-register-reason-text')
+    expect(btn.style.opacity).toBe('0.45')
+    expect(btn.style.cursor).toBe('not-allowed')
+  })
+
+  it('in-house with no company: disabled with the add-your-company reason', async () => {
+    await renderReady(reportsCtx('ent-1', { mode: 'inhouse', activeEntity: null }))
+    expect(registerButton().disabled).toBe(true)
+    expect(screen.getByTestId('invoice-register-reason').textContent).toBe('Add your company to export its register.')
+  })
+
+  it('an inverted period disables the button with the period reason', async () => {
+    const { fetchMock } = await renderReady()
+    fireEvent.change(screen.getByTestId('register-period-from'), { target: { value: '2999-01-01' } })
+    const btn = registerButton()
+    expect(btn.disabled).toBe(true)
+    expect(screen.getByTestId('invoice-register-reason').textContent).toBe('Pick a start date on or before the end date.')
+    fireEvent.click(btn)
+    expect(fetchMock.mock.calls.some((c) => isRegisterUrl(c[0] as string))).toBe(false)
+  })
+
+  it('a click downloads the register for the active client and period', async () => {
+    const save = stubSave()
+    const { fetchMock } = await renderReady(reportsCtx(), () => Promise.resolve(registerResponse()))
+    fireEvent.change(screen.getByTestId('register-period-from'), { target: { value: '2026-09-01' } })
+    fireEvent.change(screen.getByTestId('register-period-to'), { target: { value: '2026-09-30' } })
+    fireEvent.click(registerButton())
+    await waitFor(() => expect(save.click).toHaveBeenCalledTimes(1))
+
+    const call = fetchMock.mock.calls.find((c) => isRegisterUrl(c[0] as string))!
+    expect(call[0]).toBe('https://gw/api/invoice/v1/invoice-register?entity_id=ent-1&from=2026-09-01&to=2026-09-30')
+    expect((call[1] as RequestInit).headers).toEqual({ Authorization: 'Bearer tok' })
+    const anchor = save.click.mock.contexts[0] as unknown as HTMLAnchorElement
+    expect(anchor.download).toBe('ASComply_register_ent-1.xlsx')
+    expect(save.create).toHaveBeenCalledTimes(1)
+    expect(save.revoke).toHaveBeenCalledTimes(1)
+    expect(save.revoke).toHaveBeenCalledWith('blob:x')
+  })
+
+  it('in-house downloads the one company', async () => {
+    stubSave()
+    const { fetchMock } = await renderReady(reportsCtx('co-1', { mode: 'inhouse' }), () => Promise.resolve(registerResponse()))
+    fireEvent.click(registerButton())
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => isRegisterUrl(c[0] as string))).toBe(true))
+    const url = fetchMock.mock.calls.map((c) => c[0] as string).find(isRegisterUrl)!
+    expect(urlParams(url).get('entity_id')).toBe('co-1')
+  })
+
+  it('the button is busy while the download is in flight', async () => {
+    stubSave()
+    let resolve!: (v: unknown) => void
+    const { fetchMock } = await renderReady(reportsCtx(), () => new Promise((r) => (resolve = r)))
+    fireEvent.click(registerButton())
+    await waitFor(() => expect(registerButton().getAttribute('aria-busy')).toBe('true'))
+    expect(registerButton().disabled).toBe(true)
+    fireEvent.click(registerButton())
+    expect(fetchMock.mock.calls.filter((c) => isRegisterUrl(c[0] as string))).toHaveLength(1)
+    await act(async () => resolve(registerResponse()))
+    await waitFor(() => expect(registerButton().disabled).toBe(false))
+    expect(registerButton().getAttribute('aria-busy')).toBeNull()
+  })
+
+  it('the over-cap sentence renders inline', async () => {
+    const save = stubSave()
+    await renderReady(reportsCtx(), () => Promise.resolve(failResponse(400, { error: OVER_CAP_SENTENCE })))
+    fireEvent.click(registerButton())
+    const line = await screen.findByTestId('invoice-register-error')
+    expect(line.getAttribute('role')).toBe('alert')
+    expect(line.textContent).toBe(OVER_CAP_SENTENCE)
+    expect(save.click).not.toHaveBeenCalled()
+  })
+
+  it('the error clears on a period change', async () => {
+    await renderReady(reportsCtx(), () => Promise.resolve(failResponse(400, { error: OVER_CAP_SENTENCE })))
+    fireEvent.click(registerButton())
+    await screen.findByTestId('invoice-register-error')
+    fireEvent.change(screen.getByTestId('register-period-from'), { target: { value: '2026-08-01' } })
+    expect(screen.queryByTestId('invoice-register-error')).toBeNull()
+  })
+
+  it('a non-JSON 502 shows the HTTP line', async () => {
+    await renderReady(reportsCtx(), () => Promise.resolve(failResponse(502, undefined)))
+    fireEvent.click(registerButton())
+    expect((await screen.findByTestId('invoice-register-error')).textContent).toBe('The register could not be built (HTTP 502). Try again.')
+    expect(registerButton().disabled).toBe(false)
+  })
+
+  it('a network failure shows the connection line', async () => {
+    const { fetchMock } = await renderReady(reportsCtx(), () => Promise.reject(new TypeError('Failed to fetch')))
+    fireEvent.click(registerButton())
+    expect((await screen.findByTestId('invoice-register-error')).textContent).toBe('Could not reach the server. Check your connection and try again.')
+    fireEvent.click(registerButton())
+    await waitFor(() => expect(fetchMock.mock.calls.filter((c) => isRegisterUrl(c[0] as string))).toHaveLength(2))
+  })
+
+  it('a session end shows no line', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const getToken = () => Promise.reject(new SessionEndedError())
+    const { fetchMock } = await renderReady(reportsCtx('ent-1', { getToken }), () => Promise.resolve(registerResponse()))
+    fireEvent.click(registerButton())
+    await waitFor(() => expect(registerButton().disabled).toBe(false))
+    expect(screen.queryByTestId('invoice-register-error')).toBeNull()
+    expect(fetchMock.mock.calls.some((c) => isRegisterUrl(c[0] as string))).toBe(false)
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('an unmount mid-download sets no state', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let signal: AbortSignal | null | undefined
+    const { unmount } = await renderReady(reportsCtx(), (_url, init) => {
+      signal = init?.signal
+      return new Promise((_res, rej) => init?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))))
+    })
+    fireEvent.click(registerButton())
+    await waitFor(() => expect(signal).toBeTruthy())
+    unmount()
+    expect(signal?.aborted).toBe(true)
+    await act(async () => {})
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('the three blocked buttons keep the disabled recipe and the shared reason', async () => {
+    await renderReady()
+    for (const { name } of BLOCKED_BUTTONS) {
       const btn = screen.getByRole('button', { name: new RegExp(name) }) as HTMLButtonElement
-      expect(btn.style.opacity, `${name} button opacity`).toBe('0.45')
-      expect(btn.style.cursor, `${name} button cursor`).toBe('not-allowed')
-      expect(btn.style.filter, `${name} button filter`).toBe('none')
-      expect(btn.style.background, `${name} button keeps the ghost fill`).toBe('transparent')
-      expect(btn.style.color, `${name} button keeps the ghost colour`).toBe('')
+      expect(btn.disabled, name).toBe(true)
+      expect(btn.getAttribute('aria-describedby'), name).toBe('exports-blocked-reason-text')
+      expect(btn.title, name).toBe(EXPORTS_BLOCKED_REASON)
+      expect(btn.style.opacity, name).toBe('0.45')
+      expect(btn.style.cursor, name).toBe('not-allowed')
+      expect(btn.style.filter, name).toBe('none')
+      expect(btn.style.background, name).toBe('transparent')
+      expect(btn.style.color, name).toBe('')
+      btn.focus()
+      expect(document.activeElement, name).not.toBe(btn)
     }
   })
 
-  it('exactly one reason element renders, carrying the pinned copy verbatim (AC #2)', async () => {
+  it('exactly one blocked-reason element renders, carrying the pinned copy verbatim', async () => {
     await renderReady()
     const reasons = screen.queryAllByTestId('exports-blocked-reason')
     expect(reasons).toHaveLength(1)
@@ -378,37 +601,18 @@ describe('ReportsView: export buttons are disabled-with-reason', () => {
     expect(reasons[0].textContent).toBe(EXPORTS_BLOCKED_REASON)
   })
 
-  it("every button's aria-describedby and title resolve to the one reason element (AC #2)", async () => {
-    await renderReady()
-    const reasonEl = screen.getByTestId('exports-blocked-reason')
-    for (const { name } of EXPORT_BUTTONS) {
-      const btn = screen.getByRole('button', { name: new RegExp(name) })
-      expect(btn.getAttribute('aria-describedby'), `${name} button`).toBe(reasonEl.id)
-      expect(btn.getAttribute('title'), `${name} button`).toBe(EXPORTS_BLOCKED_REASON)
-    }
+  it('the blocked reason names the three exports verbatim', () => {
+    expect(EXPORTS_BLOCKED_REASON).toBe('Not built yet — the VAT return, Audit log and WHT schedule exports produce no file.')
+    expect(EXPORTS_BLOCKED_REASON).not.toMatch(/four/)
+    expect(EXPORTS_BLOCKED_REASON).not.toMatch(/coming soon|will be|shortly|roadmap/i)
   })
 
-  it('a disabled export button refuses focus and emits no click (AC #3)', async () => {
-    await renderReady()
-    for (const { name } of EXPORT_BUTTONS) {
-      const btn = screen.getByRole('button', { name: new RegExp(name) })
-      btn.focus()
-      expect(document.activeElement, `${name} button must refuse focus while disabled`).not.toBe(btn)
-      fireEvent.click(btn)
-      expect(document.activeElement, `${name} button must not gain focus from a click while disabled`).not.toBe(btn)
-    }
-  })
-
-  it('the four export names and format chips are unchanged (AC #4)', async () => {
+  it('the four export names and format chips are unchanged', async () => {
     await renderReady()
     for (const { name, fmt } of EXPORT_BUTTONS) {
       const btn = screen.getByRole('button', { name: new RegExp(name) })
       expect(btn.textContent, `${name} button must still show its ${fmt} chip`).toContain(fmt)
     }
-  })
-
-  it('the pinned reason copy contains no promissory language (AC #6)', () => {
-    expect(EXPORTS_BLOCKED_REASON).not.toMatch(/coming soon|will be|shortly|roadmap/i)
   })
 })
 
@@ -680,7 +884,7 @@ describe('ReportsView: the v2 tax report (RESKIN2-05-02)', () => {
     expect(container.contains(chip)).toBe(true)
   })
 
-  it('RP-07 disabled exports read --fg-4 throughout', async () => {
+  it('RP-07 export chips read --fg-4 throughout', async () => {
     await renderReady()
 
     expect(EXPORT_BUTTONS.length).toBeGreaterThan(0)

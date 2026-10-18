@@ -1,7 +1,3 @@
-//go:build firms0202
-
-// Drop the build tag above when Store.SetMemberClients lands: these files name API that does not exist yet.
-
 package tenancy
 
 import (

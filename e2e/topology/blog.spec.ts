@@ -39,7 +39,7 @@ async function attachJson(testInfo: TestInfo, name: string, body: unknown): Prom
   await testInfo.attach(`${name}.json`, { body: JSON.stringify(body, null, 2), contentType: 'application/json' })
 }
 
-const aside = (page: Page) => page.locator('aside')
+const aside = (page: Page) => page.locator('.asc-app > aside')
 const main = (page: Page) => page.locator('#blog-main')
 const header = (page: Page) => page.locator('#blog-header')
 const crumbs = (page: Page) => page.getByRole('navigation', { name: 'Breadcrumb' })

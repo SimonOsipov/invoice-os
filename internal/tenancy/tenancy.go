@@ -28,9 +28,8 @@ type Tenant struct {
 }
 
 // Membership is one row of the caller's tenant's memberships. JSON tags are
-// snake_case (user_id, role, status, display_name, email) -- the GET
-// /v1/memberships wire contract (A3). display_name/email are nullable and
-// serialize as JSON null, never omitted.
+// snake_case. display_name/email are nullable and serialize as JSON null,
+// never omitted.
 type Membership struct {
 	UserID      string  `json:"user_id"`
 	Role        string  `json:"role"`

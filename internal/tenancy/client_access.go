@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -216,7 +217,11 @@ func SetMemberClientsHandler(set MemberClientsSetter, log *slog.Logger) http.Han
 		var req struct {
 			ClientAccess *ClientAccess `json:"client_access"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ClientAccess == nil {
+		err := json.NewDecoder(r.Body).Decode(&req)
+		if err == nil {
+			_, err = io.Copy(io.Discard, r.Body) // errors when the whole body exceeds the cap
+		}
+		if err != nil || req.ClientAccess == nil {
 			status, msg := statusForErr(ErrInvalidClientAccess)
 			writeError(w, status, msg)
 			return

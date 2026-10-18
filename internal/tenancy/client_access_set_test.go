@@ -327,7 +327,8 @@ func TestClientAccess_SetAuditsInTheSameTransaction(t *testing.T) {
 		t.Errorf("entity_id = %s, want NULL: the event is firm-wide", *entity)
 	}
 
-	if _, err := w.set(w.admin, prep, allClients); err != nil {
+	// A non-HTTP caller's upper-case id is audited as the row's canonical id.
+	if _, err := w.set(w.admin, strings.ToUpper(prep), allClients); err != nil {
 		t.Fatalf("set all: %v", err)
 	}
 	rows = auditPayloads(t, w.super, w.tenant, clientAccessEvent)
@@ -336,6 +337,9 @@ func TestClientAccess_SetAuditsInTheSameTransaction(t *testing.T) {
 	}
 	if rows[1]["all_clients"] != true {
 		t.Errorf("all_clients = %v, want true", rows[1]["all_clients"])
+	}
+	if rows[1]["user_id"] != prep {
+		t.Errorf("user_id = %v, want the canonical %s", rows[1]["user_id"], prep)
 	}
 	if ids, ok := rows[1]["client_ids"].([]any); !ok || len(ids) != 0 {
 		t.Errorf("client_ids = %#v, want an empty array (not null)", rows[1]["client_ids"])
@@ -415,5 +419,32 @@ func TestClientAccess_ConcurrentSetsDoNotMerge(t *testing.T) {
 	}
 	if n := w.auditCountOf(t, clientAccessEvent); n != 60 {
 		t.Errorf("%d audit rows, want 60: one per committed write", n)
+	}
+}
+
+func TestClientAccess_SetLeavesTheSameUsersOtherTenantAlone(t *testing.T) {
+	a := newInvWorld(t, "client access twin A "+uuid.NewString()[:8], "Ada Admin")
+	b := newInvWorld(t, "client access twin B "+uuid.NewString()[:8], "Bea Admin")
+	twin := a.addMember(t, "preparer", "active", "Tia Twin")
+	name := "Tia Twin"
+	seedIdentityMembership(t, a.super, b.tenant, twin, "preparer", "active", &name, strp(twin+"@twin.test"))
+	ea, eb := seedEntity(t, a.super, a.tenant), seedEntity(t, a.super, b.tenant)
+	giveClients(t, a.super, b.tenant, twin, eb)
+
+	for _, acc := range []ClientAccess{setIDs(ea), allClients, setIDs()} {
+		if _, err := a.set(a.admin, twin, acc); err != nil {
+			t.Fatalf("set in A: %v", err)
+		}
+		if all, ids := storedAccess(t, a.super, b.tenant, twin); all || !slices.Equal(ids, []string{eb}) {
+			t.Errorf("after %+v in A, B holds flag=%v ids=%v, want its own [%s]", acc, all, ids, eb)
+		}
+	}
+	if _, err := a.set(a.admin, twin, setIDs(ea)); err != nil {
+		t.Fatalf("set in A: %v", err)
+	}
+	requireAccess(t, "A lists the twin", a.listAs(t, a.admin)[twin], quoted(ea))
+	requireAccess(t, "B lists the twin", b.listAs(t, b.admin)[twin], quoted(eb))
+	if n := b.auditCountOf(t, clientAccessEvent); n != 0 {
+		t.Errorf("tenant B holds %d %s rows, want 0", n, clientAccessEvent)
 	}
 }

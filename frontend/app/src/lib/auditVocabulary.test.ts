@@ -201,7 +201,7 @@ describe('audit vocabulary', () => {
     expect(view.domain).toBe('memberships')
     expect(view.label).toBe('Client access changed')
     expect(AUDIT_EVENTS['membership.client_access_set'].outcome).toBe('neutral')
-    expect(view.tone).toBeNull()
+    expect(view.tone).toBe('amber')
     expect(auditEventView('submission.failed').tone).not.toBeNull()
   })
 

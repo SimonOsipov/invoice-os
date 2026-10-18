@@ -110,6 +110,7 @@ func TestSetMemberClientsHandler_BodyAndPath(t *testing.T) {
 		"a duplicate":                       `{"client_access":["` + e1 + `","` + e1 + `"]}`,
 		"a duplicate, any case":             `{"client_access":["` + strings.ToUpper(e1) + `","` + e1 + `"]}`,
 		"over 64 KiB":                       over,
+		"a valid value then padding":        `{"client_access":"all"}` + strings.Repeat(" ", 64*1024),
 		"a top-level array":                 `["` + e1 + `"]`,
 		"the right key spelled differently": `{"clientAccess":"all"}`,
 	}
@@ -316,5 +317,8 @@ func TestMembership_PatchAnswersTheSixKeys(t *testing.T) {
 	slices.Sort(keys)
 	if !slices.Equal(keys, sixKeys) || string(row["client_access"]) != `["e1"]` {
 		t.Errorf("body = %s, want the six keys with client_access [\"e1\"]", rec.Body.String())
+	}
+	if string(row["user_id"]) != `"`+target+`"` || string(row["status"]) != `"suspended"` || string(row["email"]) != "null" {
+		t.Errorf("body = %s, want the updated row for %s with email present as null", rec.Body.String(), target)
 	}
 }

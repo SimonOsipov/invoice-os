@@ -220,6 +220,13 @@ func TestClientAccess_ListScopesOtherRowsForANonAdminCaller(t *testing.T) {
 	requireAccess(t, "as admin: R", asAdmin[r], `"all"`)
 	requireAccess(t, "as admin: admin", asAdmin[w.admin], `"all"`)
 
+	// The caller's subject is matched in any letter case.
+	upper := w.listAs(t, strings.ToUpper(w.admin))
+	requireAccess(t, "upper-case admin: P", upper[p], quoted(e1))
+	upperP := w.listAs(t, strings.ToUpper(p))
+	requireAccess(t, "upper-case P: P", upperP[p], quoted(e1))
+	requireAccess(t, "upper-case P: admin", upperP[w.admin], `null`)
+
 	// A member with no access reads its own empty set, not null.
 	q := w.addMember(t, "preparer", "active", "Quin Preparer")
 	asQ := w.listAs(t, q)

@@ -164,8 +164,9 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 // Update partially updates a business_entities row's mutable fields
 // and writes a
 // "portfolio.entity.updated" audit row in the same transaction (M3-03-04,
-// task-37). An all-nil in is rejected as ErrValidation before any tx opens
-// (a no-op UPDATE is forbidden). A non-nil in.TIN is re-validated via
+// task-37). Only an active admin may call it: anyone else gets
+// ErrNotPermitted. An all-nil in is then rejected as
+// ErrValidation (a no-op UPDATE is forbidden). A non-nil in.TIN is re-validated via
 // ValidateTIN and the canonical form (not the raw input) is what gets
 // persisted. The SET clause only ever touches the provided fields -- status
 // is never part of it, so an update on an archived entity leaves it archived
@@ -173,24 +174,27 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]Entity, int, error) {
 // RLS-invisible) maps to ErrNotFound; a unique_violation (23505) on the
 // duplicate-TIN partial index maps to ErrDuplicateTIN, same as Create.
 func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Entity, error) {
-	if in.Name == nil && in.TIN == nil && in.Registration == nil && in.Sector == nil && in.Address == nil &&
-		in.Email == nil && in.Telephone == nil && in.Street == nil && in.City == nil &&
-		in.PostalZone == nil && in.Country == nil && in.State == nil && in.LGA == nil {
-		return Entity{}, fmt.Errorf("%w: no fields to update", ErrValidation)
-	}
-
-	var canonicalTIN string
-	if in.TIN != nil {
-		var err error
-		canonicalTIN, err = ValidateTIN(*in.TIN)
-		if err != nil {
-			return Entity{}, err
-		}
-	}
-
 	var entity Entity
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		callerID, _ := auth.IdentityFromContext(ctx)
+		if err := requireAdmin(ctx, tx, callerID.Subject); err != nil {
+			return err
+		}
+
+		if in.Name == nil && in.TIN == nil && in.Registration == nil && in.Sector == nil && in.Address == nil &&
+			in.Email == nil && in.Telephone == nil && in.Street == nil && in.City == nil &&
+			in.PostalZone == nil && in.Country == nil && in.State == nil && in.LGA == nil {
+			return fmt.Errorf("%w: no fields to update", ErrValidation)
+		}
+
+		var canonicalTIN string
+		if in.TIN != nil {
+			var err error
+			canonicalTIN, err = ValidateTIN(*in.TIN)
+			if err != nil {
+				return err
+			}
+		}
 
 		var setClauses []string
 		var args []any
@@ -293,8 +297,9 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (Entity, 
 }
 
 // SetStatus is the guarded lifecycle transition behind Offboard
-// (target="archived") and Onboard (target="active") (M3-03-04, task-37): a
-// redundant transition (already at target) returns ErrRedundantTransition
+// (target="archived") and Onboard (target="active") (M3-03-04, task-37). Only
+// an active admin may call it: anyone else gets ErrNotPermitted before the row
+// is read. A redundant transition (already at target) returns ErrRedundantTransition
 // BEFORE any UPDATE or audit.Record call, so no row changes and no audit row
 // is written. Otherwise the status flips and a
 // "portfolio.entity.offboarded"/"portfolio.entity.onboarded" audit row is
@@ -304,6 +309,9 @@ func (s *Store) SetStatus(ctx context.Context, id, target string) (Entity, error
 	var entity Entity
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		callerID, _ := auth.IdentityFromContext(ctx)
+		if err := requireAdmin(ctx, tx, callerID.Subject); err != nil {
+			return err
+		}
 
 		var current string
 		if err := tx.QueryRow(ctx,

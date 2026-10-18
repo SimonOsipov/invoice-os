@@ -29,6 +29,8 @@ import {
   inhouseNotifyTargets,
   initialsFrom,
   chipVerdicts,
+  CLIENT_ADMIN_ONLY,
+  COMPANY_ADMIN_ONLY,
   INVITE_ADMIN_ONLY,
   INVITE_ERROR,
   invitedMember,
@@ -1930,6 +1932,11 @@ describe('RESEND-07-02 — inviteStatusLine (D7)', () => {
 describe('RESEND-07-02 — INVITE_ADMIN_ONLY', () => {
   it('INVITE_ADMIN_ONLY is the admin-only sentence', () => {
     expect(INVITE_ADMIN_ONLY).toBe('Only an admin can invite people.')
+  })
+
+  it('CLIENT_ADMIN_ONLY and COMPANY_ADMIN_ONLY are the admin-only sentences', () => {
+    expect(CLIENT_ADMIN_ONLY).toBe('Only an admin can change a client.')
+    expect(COMPANY_ADMIN_ONLY).toBe('Only an admin can change the company.')
   })
 })
 

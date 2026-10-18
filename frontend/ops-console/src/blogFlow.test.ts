@@ -569,6 +569,45 @@ describe('singleFlight', () => {
     expect(idle).toHaveBeenCalledTimes(1)
   })
 
+  it('after keeps only the last queued action, and runs it when the flight throws', async () => {
+    const run = singleFlight()
+    let fail: (e: Error) => void = () => {}
+    const p = run(() => new Promise<void>((_, rej) => (fail = rej)))
+    const first = vi.fn(async () => {})
+    const last = vi.fn(async () => {})
+    await run.after(first)
+    await run.after(last)
+    fail(new Error('x'))
+    await expect(p).rejects.toThrow('x')
+    await vi.waitFor(() => expect(last).toHaveBeenCalledTimes(1))
+    expect(first).not.toHaveBeenCalled()
+    const again = vi.fn(async () => {})
+    await run(again)
+    expect(again).toHaveBeenCalledTimes(1)
+  })
+
+  it('a queued action runs after the flight ends and holds the guard while it runs', async () => {
+    const run = singleFlight()
+    const order: string[] = []
+    let release: () => void = () => {}
+    let releaseQ: () => void = () => {}
+    const p = run(async () => {
+      await new Promise<void>((r) => (release = r))
+      order.push('flight')
+    })
+    await run.after(async () => {
+      order.push('queued')
+      await new Promise<void>((r) => (releaseQ = r))
+    })
+    release()
+    await p
+    await vi.waitFor(() => expect(order).toEqual(['flight', 'queued']))
+    const mid = vi.fn(async () => {})
+    await run(mid)
+    expect(mid).not.toHaveBeenCalled()
+    releaseQ()
+  })
+
   it('a plain call made while one runs is still dropped and never queued', async () => {
     const run = singleFlight()
     let release: () => void = () => {}
@@ -691,6 +730,12 @@ describe('category save and delete', () => {
     expect(a.toast).toContain('Category added')
     expect(a.toast).toContain('internal error')
     expect(a.ui.form).toBeNull()
+  })
+
+  it('applyCatSave: a failed re-read replaces an edited row by id and appends one missing from the list', () => {
+    const edited = { kind: 'saved' as const, toast: 'Category updated', category: cat('b', { name: 'New' }), rereadError: 'x' }
+    expect(applyCatSave(ui({ id: 'b' }), edited, [cat('a'), cat('b'), cat('c')]).cats).toEqual([cat('a'), cat('b', { name: 'New' }), cat('c')])
+    expect(applyCatSave(ui({ id: 'b' }), edited, [cat('a')]).cats).toEqual([cat('a'), cat('b', { name: 'New' })])
   })
 
   it('removeCategory moves the posts to the target and names the count', async () => {

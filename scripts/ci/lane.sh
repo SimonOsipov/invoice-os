@@ -5,6 +5,8 @@ set -euo pipefail
 
 LIBRARY_PREFIX='frontend/library/'
 BLOG_PREFIX='frontend/blog/'
+# Inputs of cmd/blog: a change needs the fork build and the crawler e2e, so it takes the full lane.
+BLOG_SERVER_INPUTS=(frontend/blog/Dockerfile frontend/blog/Dockerfile.dockerignore frontend/blog/index.html)
 GATEWAY_JOB_PREFIX='Deploy gateway '
 FLEET_GATE_JOB_PREFIX='Fleet /healthz gate'
 SPA_GATE_JOB_PREFIX='SPA build gate'
@@ -26,10 +28,13 @@ emit() {
 
 # classify: paths on stdin; a small lane only when a path is read and every path starts with that one lane's prefix.
 classify() {
-  local path this seen=0 lane=""
+  local path input this seen=0 lane=""
   while IFS= read -r path || [ -n "$path" ]; do
     [ -n "$path" ] || continue
     seen=1
+    for input in "${BLOG_SERVER_INPUTS[@]}"; do
+      if [ "$path" = "$input" ]; then echo full; return 0; fi
+    done
     case "$path" in
       "$LIBRARY_PREFIX"*) this=library ;;
       "$BLOG_PREFIX"*) this=blog ;;

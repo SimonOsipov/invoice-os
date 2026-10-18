@@ -276,11 +276,12 @@ Then run the suites yourself. Run this command in `$WORKTREE_PATH`, with `run_in
 ```bash
 DEV_DB_PORT=<your DEV_DB_PORT> hm suite run scripts/dev/suites.sh
 ```
-- `hm suite run` runs one worktree's suites at a time on the machine. Parallel suites starve each other of CPU until their tests time out. A queued run prints the story whose suites it waits for.
+- `hm suite run` runs one worktree's suites at a time on the machine. Parallel suites starve each other of CPU until their tests time out. Queued runs take turns in the order they came. A queued run prints the story whose suites it waits for and the number of runs ahead of it.
+- A long wait in the line is normal. Do not ask the coordinator about it.
 - `scripts/dev/suites.sh` writes one log per suite to `$WORKTREE_PATH/.ralph/`. It prints one `<suite>=<exit code>` line per suite and the summary lines. It exits non-zero when a suite failed.
 - Omit `DEV_DB_PORT` only when Phase 0.5 started no dev Postgres. The script then prints `db=skipped`.
 - `wait=1`: a `go test` still runs in this worktree, and no suite ran. Wait for it to end, then run the command again.
-- Exit 1 with "the suites did not run": the queue did not move in an hour. Stop and report the error. It names the run that holds the queue.
+- Exit 1 with "the suites did not run": this run was first in line for an hour, and the suites that hold the queue did not end. Stop and report the error. It names the run that holds the queue. A new run of this worktree within 30 minutes keeps its place in the line.
 - Never kill a running suite: a killed DB suite skips `t.Cleanup` and leaves an orphan tenant and a stuck `river_job`. Its exit wakes you.
 - A zero exit and its summary line are the evidence. Read a full log only when its suite failed.
 - A subagent's report of a suite is not the suite's result.

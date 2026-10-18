@@ -762,11 +762,11 @@ func TestSubmissionMain_AddsNoNewBinary(t *testing.T) {
 	}
 	sort.Strings(dirs)
 	wantDirs := []string{
-		"dashboard", "gateway", "invoice", "notifications", "opsconsole",
+		"blog", "dashboard", "gateway", "invoice", "notifications", "opsconsole",
 		"portfolio", "reconciliation", "submission", "tenancy", "validation",
 	}
 	if !reflect.DeepEqual(dirs, wantDirs) {
-		t.Errorf("cmd/ holds %v, want exactly %v: extraction runs inside the submission binary, and a new service directory is a new Railway service nobody provisioned", dirs, wantDirs)
+		t.Errorf("cmd/ holds %v, want exactly %v: extraction runs inside the submission binary, and a new service directory is a new Railway service nobody provisioned (blog is the binary of the existing blog service)", dirs, wantDirs)
 	}
 
 	const (

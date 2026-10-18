@@ -32,7 +32,7 @@ shared `development` fleet (Decision `[fail-loud-targets]`, `targets.ts`):
 | ops-console     | `OPS_CONSOLE_URL`     | smoke                |
 | support-console | `SUPPORT_CONSOLE_URL` | smoke                |
 | library         | `LIBRARY_URL`         | smoke, topology      |
-| blog            | `BLOG_URL`            | smoke, topology      |
+| blog            | `BLOG_URL`            | smoke, api, topology |
 | app             | `APP_URL`             | smoke, topology      |
 | gateway         | `GATEWAY_URL`         | smoke, api, topology |
 

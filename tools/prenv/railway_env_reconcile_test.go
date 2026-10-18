@@ -203,8 +203,8 @@ func TestEveryBlogViteVariableHasADockerfileArg(t *testing.T) {
 			names[c.name] = true
 		}
 	}
-	if len(names) < 1 {
-		t.Fatalf("found %d distinct VITE_* upserts on the blog service (%v), want >= 1", len(names), names)
+	if len(names) < 2 {
+		t.Fatalf("found %d distinct VITE_* upserts on the blog service (%v), want >= 2", len(names), names)
 	}
 
 	assertViteArgsBeforeBuild(t, "blog", names, "RUN pnpm --filter @invoice-os/blog build")

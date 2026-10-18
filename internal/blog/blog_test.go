@@ -81,7 +81,7 @@ func TestUniqueID_AppendsTwoThenThree(t *testing.T) {
 
 func TestUniqueID_ReservedPostIDsAreTaken(t *testing.T) {
 	none := func(string) bool { return false }
-	for title, want := range map[string]string{"Subscribe": "subscribe-2", "Category": "category-2", "Other": "other"} {
+	for title, want := range map[string]string{"Subscribe": "subscribe-2", "Category": "category-2", "Health": "health-2", "Other": "other"} {
 		if got := PostID(title, none); got != want {
 			t.Errorf("PostID(%q) = %q, want %q", title, got, want)
 		}
@@ -439,7 +439,7 @@ func TestDesignValues_ConstantsMessagesEvents(t *testing.T) {
 			"shield-check", "file-check", "chart-column", "workflow", "plug", "archive", "key-round", "clock"}},
 		"kinds": {NoteKinds, {"regulation", "deadline", "product"}},
 		"demos": {Demos, {"import", "approval", "clearance"}},
-		"rsvd":  {reservedPostIDs, {"subscribe", "category"}},
+		"rsvd":  {reservedPostIDs, {"subscribe", "category", "health"}},
 	}
 	for n, l := range lists {
 		if !reflect.DeepEqual(l[0], l[1]) {

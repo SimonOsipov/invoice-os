@@ -78,14 +78,52 @@ describe('blog package', () => {
     const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
     const build = lines.findIndex((l) => /^RUN pnpm --filter/.test(l))
     expect(build).toBeGreaterThan(-1)
-    // GA4 is read by the analytics module of a later subtask; its pair ships with the image now.
-    for (const v of new Set([...read_, 'VITE_GA_MEASUREMENT_ID'])) {
+    // Baked before the code reads them: the GA4 id (analytics module) and the gateway URL (the server and the data module).
+    for (const v of new Set([...read_, 'VITE_GA_MEASUREMENT_ID', 'VITE_GATEWAY_URL'])) {
       const arg = lines.indexOf(`ARG ${v}`)
       const env = lines.indexOf(`ENV ${v}=$${v}`)
       expect(arg, `ARG ${v}`).toBeGreaterThan(-1)
       expect(env, `ENV ${v}`).toBeGreaterThan(arg)
       expect(env, `${v} before the build RUN`).toBeLessThan(build)
     }
-    expect(lines.filter((l) => /VITE_APP_URL|VITE_GATEWAY_URL/.test(l))).toEqual([])
+    expect(lines.filter((l) => /VITE_APP_URL/.test(l))).toEqual([])
+  })
+
+  it('dockerfile_runsTheBlogBinaryOverTheBuiltSpa', () => {
+    const lines = stripComments(read(join(HERE, '../Dockerfile'))).split('\n').map((l) => l.trim()).filter(Boolean)
+    const froms = lines.flatMap((l, i) => (/^FROM\s/.test(l) ? [i] : []))
+    expect(froms).toHaveLength(3)
+    expect(lines[froms[0]]).toMatch(/^FROM node:\S+ AS build$/)
+    expect(lines[froms[1]]).toMatch(/^FROM \S*golang:\S+ AS server$/)
+    expect(lines[froms[2]]).toMatch(/^FROM \S*distroless\/static\S*:nonroot AS serve$/)
+
+    const server = lines.slice(froms[1] + 1, froms[2])
+    for (const copy of ['COPY go.mod go.sum ./', 'COPY cmd/blog cmd/blog', 'COPY internal/blogweb internal/blogweb', 'COPY internal/platform internal/platform']) {
+      expect(server, copy).toContain(copy)
+    }
+    expect(server.filter((l) => /^COPY\s/.test(l))).toHaveLength(4)
+    expect(server).toContain('RUN CGO_ENABLED=0 go build -o /out/blog ./cmd/blog')
+
+    const serve = lines.slice(froms[2] + 1)
+    for (const l of [
+      'COPY --from=server /out/blog /blog',
+      'COPY --from=build /repo/frontend/blog/dist /srv',
+      'COPY --from=build /repo/internal/platform/buildsha.txt /srv/build.txt',
+      'EXPOSE 8080',
+      'USER nonroot:nonroot',
+      'ENTRYPOINT ["/blog"]',
+    ]) {
+      expect(serve, l).toContain(l)
+    }
+  })
+
+  it('indexHtml_keepsTheServerMarkers', () => {
+    const html = read(join(HERE, '../index.html'))
+    expect(html.match(/<title>/g)).toHaveLength(1)
+    expect(html.match(/<\/title>/g)).toHaveLength(1)
+    expect(html.match(/<div id="root"><\/div>/g)).toHaveLength(1)
+    for (const tag of ['name="description"', 'rel="canonical"', 'name="robots"', 'property="og:']) {
+      expect(html, `index.html carries ${tag}`).not.toContain(tag)
+    }
   })
 })

@@ -65,7 +65,7 @@ var Icons = []string{
 var (
 	NoteKinds       = []string{"regulation", "deadline", "product"}
 	Demos           = []string{"import", "approval", "clearance"}
-	reservedPostIDs = []string{"subscribe", "category"}
+	reservedPostIDs = []string{"subscribe", "category", "health"}
 )
 
 var (

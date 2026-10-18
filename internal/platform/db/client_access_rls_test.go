@@ -1,9 +1,7 @@
 // Storage suite for client access: memberships.all_clients, invitations.all_clients,
-// membership_clients and invitation_clients. Written before the migration, so every case
-// fails on a runtime assertion (missing column, table or constraint), never on a compile error.
+// membership_clients and invitation_clients.
 //
-// Rows are seeded per test, never in the shared harness.seed(). A missing table fails only
-// these cases. Run: `DEV_DB_PORT=5462 make test-rls`; a skip is a failure under the CI gate.
+// Rows are seeded per test, never in the shared harness.seed(). A skip is a failure under the CI gate.
 package db_test
 
 import (
@@ -263,17 +261,27 @@ func TestRLS_ClientAccessMissingContextFailsClosed(t *testing.T) {
 		if n := mustCount(t, h.super, `SELECT count(*) FROM `+tb.name+` WHERE entity_id = $1`, ent); n != 1 {
 			t.Fatalf("%s: superuser sees %d seeded rows, want 1", tb.name, n)
 		}
-		tx, err := h.app.Begin(ctx)
-		if err != nil {
-			t.Fatalf("begin: %v", err)
-		}
-		n, err := scanCount(ctx, tx, `SELECT count(*) FROM `+tb.name+` WHERE entity_id = $1`, ent)
-		_ = tx.Rollback(ctx)
-		if err != nil {
-			t.Fatalf("%s: SELECT with no tenant context: %v", tb.name, err)
-		}
-		if n != 0 {
-			t.Errorf("%s: rows visible with no tenant set = %d, want 0", tb.name, n)
+		// A pooled connection keeps app.current_tenant = '' after a tenant tx, so a policy
+		// without nullif() raises 22P02 there instead of returning zero rows.
+		for _, emptyGUC := range []bool{false, true} {
+			tx, err := h.app.Begin(ctx)
+			if err != nil {
+				t.Fatalf("begin: %v", err)
+			}
+			if emptyGUC {
+				if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', '', true)`); err != nil {
+					_ = tx.Rollback(ctx)
+					t.Fatalf("set_config: %v", err)
+				}
+			}
+			n, err := scanCount(ctx, tx, `SELECT count(*) FROM `+tb.name+` WHERE entity_id = $1`, ent)
+			_ = tx.Rollback(ctx)
+			if err != nil {
+				t.Fatalf("%s: SELECT with no tenant context (empty GUC %v): %v", tb.name, emptyGUC, err)
+			}
+			if n != 0 {
+				t.Errorf("%s: rows visible with no tenant set (empty GUC %v) = %d, want 0", tb.name, emptyGUC, n)
+			}
 		}
 	}
 }
@@ -302,6 +310,58 @@ func TestRLS_ClientAccessCrossTenantInsertRefused(t *testing.T) {
 		}
 		if n := mustCount(t, h.super, `SELECT count(*) FROM `+tb.name+` WHERE entity_id = $1`, entB); n != 0 {
 			t.Errorf("%s: rows after the refused INSERT = %d, want 0", tb.name, n)
+		}
+	}
+}
+
+// Every other case writes as the superuser or expects a refusal. Whole-set replace is DELETE then
+// INSERT as invoice_app: both must work in the own tenant, and a DELETE aimed at B must reach nothing.
+func TestRLS_ClientAccessAppRoleInsertsAndDeletesOwnTenantOnly(t *testing.T) {
+	h := requireHarness(t)
+	ctx := context.Background()
+
+	for _, tb := range caTables {
+		entA, cleanupEA := seedBusinessEntity(t, h.tenantA, "ca-appwrite-a")
+		defer cleanupEA()
+		entB, cleanupEB := seedBusinessEntity(t, h.tenantB, "ca-appwrite-b")
+		defer cleanupEB()
+		ownerA, cleanupOA := caOwner(t, tb, h.tenantA)
+		defer cleanupOA()
+		ownerB, cleanupOB := caOwner(t, tb, h.tenantB)
+		defer cleanupOB()
+		defer caSeed(t, tb, h.tenantB, ownerB, entB)()
+
+		err := db.WithinTenantTx(ctx, h.app, h.tenantA, func(tx pgx.Tx) error {
+			if _, e := tx.Exec(ctx,
+				`INSERT INTO `+tb.name+` (tenant_id, `+tb.ownerCol+`, entity_id) VALUES ($1, $2, $3)`,
+				h.tenantA, ownerA, entA); e != nil {
+				return e
+			}
+			if n := mustCount(t, tx, `SELECT count(*) FROM `+tb.name+` WHERE entity_id = $1`, entA); n != 1 {
+				t.Errorf("%s: own row after the app INSERT = %d, want 1", tb.name, n)
+			}
+			tag, e := tx.Exec(ctx, `DELETE FROM `+tb.name+` WHERE entity_id = $1`, entB)
+			if e != nil {
+				return e
+			}
+			if tag.RowsAffected() != 0 {
+				t.Errorf("%s: DELETE of tenant B's row under tenant A removed %d rows, want 0", tb.name, tag.RowsAffected())
+			}
+			tag, e = tx.Exec(ctx, `DELETE FROM `+tb.name+` WHERE entity_id = $1`, entA)
+			if e != nil {
+				return e
+			}
+			if tag.RowsAffected() != 1 {
+				t.Errorf("%s: DELETE of the own row removed %d rows, want 1", tb.name, tag.RowsAffected())
+			}
+			return nil
+		})
+		failIfUndefinedClientAccess(t, tb.name+" app INSERT/DELETE", err)
+		if err != nil {
+			t.Fatalf("%s: app INSERT/DELETE in the own tenant: %v", tb.name, err)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM `+tb.name+` WHERE entity_id = $1`, entB); n != 1 {
+			t.Errorf("%s: tenant B's row after A's DELETE = %d, want 1", tb.name, n)
 		}
 	}
 }
@@ -462,6 +522,37 @@ func TestRLS_ClientAccessGrantMatrix(t *testing.T) {
 				t.Errorf("has_table_privilege(invoice_app, %s, %s) = %v, want %v", tb.name, c.priv, got, c.want)
 			}
 		}
+
+		// The four probes above miss TRUNCATE, REFERENCES, TRIGGER and any other grantee: read the ACL.
+		rows, err := h.super.Query(ctx,
+			`SELECT coalesce(r.rolname, 'PUBLIC') || ':' || a.privilege_type
+			   FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
+			   LEFT JOIN pg_roles r ON r.oid = a.grantee
+			  WHERE c.oid = to_regclass('public.' || $1) AND a.grantee <> c.relowner
+			  ORDER BY 1`, tb.name)
+		if err != nil {
+			t.Fatalf("aclexplode(%s): %v", tb.name, err)
+		}
+		var acl []string
+		for rows.Next() {
+			var g string
+			if err := rows.Scan(&g); err != nil {
+				rows.Close()
+				t.Fatalf("scan %s acl: %v", tb.name, err)
+			}
+			acl = append(acl, g)
+		}
+		rows.Close()
+		if got, want := strings.Join(acl, ","), "invoice_app:DELETE,invoice_app:INSERT,invoice_app:SELECT"; got != want {
+			t.Errorf("%s non-owner ACL = %q, want %q", tb.name, got, want)
+		}
+		var colACLs int
+		if err := h.super.QueryRow(ctx,
+			`SELECT count(*) FROM pg_attribute
+			  WHERE attrelid = to_regclass('public.' || $1) AND attnum > 0 AND attacl IS NOT NULL`, tb.name,
+		).Scan(&colACLs); err != nil || colACLs != 0 {
+			t.Errorf("%s columns with their own ACL = %d (err %v), want 0", tb.name, colACLs, err)
+		}
 	}
 }
 
@@ -551,6 +642,13 @@ func TestRLS_ClientAccessDownThenUpRoundTrips(t *testing.T) {
 		t.Fatal("the Down block holds no statement")
 	}
 
+	// Rows that exist before the Up must read false after it: a backfill is not part of the migration.
+	user := uuid.NewString()
+	_, cleanupM := seedMembership(t, h.tenantA, user, "reviewer")
+	defer cleanupM()
+	inv, cleanupI := seedInvitation(t, h.tenantA, "preparer", "ca-roundtrip@example.com")
+	defer cleanupI()
+
 	tx, err := h.mig.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -589,4 +687,27 @@ func TestRLS_ClientAccessDownThenUpRoundTrips(t *testing.T) {
 		t.Fatalf("Up over the Down's result: %v", err)
 	}
 	present(2, "after the Up")
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', $1, true)`, h.tenantA); err != nil {
+		t.Fatalf("set_config: %v", err)
+	}
+	for _, q := range []struct{ table, where, arg string }{
+		{"memberships", `user_id = $1`, user},
+		{"invitations", `id = $1`, inv},
+	} {
+		var n, trues int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*), count(*) FILTER (WHERE all_clients) FROM `+q.table+` WHERE `+q.where, q.arg,
+		).Scan(&n, &trues); err != nil {
+			t.Fatalf("read %s.all_clients after the Up: %v", q.table, err)
+		}
+		if n != 1 || trues != 0 {
+			t.Errorf("%s row after the Up: found %d, all_clients true on %d, want 1 and 0", q.table, n, trues)
+		}
+	}
+	var joined int
+	if err := tx.QueryRow(ctx,
+		`SELECT count(*) FROM membership_clients WHERE user_id = $1`, user).Scan(&joined); err != nil || joined != 0 {
+		t.Errorf("membership_clients rows for the existing member after the Up = %d (err %v), want 0", joined, err)
+	}
 }

@@ -292,7 +292,7 @@ func TestPublicHandlers_ProxiedRequestIs404(t *testing.T) {
 	for _, c := range publicCases() {
 		t.Run(c.name, func(t *testing.T) {
 			f := &publicFake{}
-			rec := serveMux(c, c.build(f, discard), func(r *http.Request) { r.Header["X-User-ID"] = []string{""} })
+			rec := serveMux(c, c.build(f, discard), func(r *http.Request) { r.Header.Set("X-User-ID", "") })
 			if rec.Code != http.StatusNotFound || rec.Body.String() != notFoundBody {
 				t.Errorf("= %d %q, want 404 %q", rec.Code, rec.Body.String(), notFoundBody)
 			}

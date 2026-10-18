@@ -981,6 +981,8 @@ var scRouteVerdicts = map[string]scRouteVerdict{
 	"GET /blog/covers/{id}/{version}":                     {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /blog/posts":                                     {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
 	"GET /blog/posts/{slug}":                              {verdict: scExempt, reason: "no database; forwards to notifications with the gateway token"},
+	"GET /blog/posts/":                                    {verdict: scExempt, reason: "no database; answers the uniform 404 for every other path under /blog/posts/"},
+	"GET /blog/covers/":                                   {verdict: scExempt, reason: "no database; answers the uniform 404 for every other path under /blog/covers/"},
 	"GET /emails/confirmation.html":                       {verdict: scExempt, reason: "no database; static account-mail template"},
 	"GET /emails/mark.png":                                {verdict: scExempt, reason: "no database; static account-mail logo"},
 	"GET /emails/recovery.html":                           {verdict: scExempt, reason: "no database; static account-mail template"},

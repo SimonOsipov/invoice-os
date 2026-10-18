@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -137,6 +138,8 @@ func newBlogRig(t *testing.T, cfg blogCfg) *blogRig {
 	mux.Handle("/blog/posts", routes.Posts)
 	mux.Handle("/blog/posts/{slug}", routes.Post)
 	mux.Handle("/blog/covers/{id}/{version}", routes.Cover)
+	mux.Handle("/blog/posts/", routes.NotFound)
+	mux.Handle("/blog/covers/", routes.NotFound)
 	return &blogRig{up: up, routes: routes, clk: clk, throttle: th, logs: logs, mux: mux}
 }
 
@@ -385,6 +388,11 @@ var blogMalformed = []struct{ name, path string }{
 	{"version NUL", "/blog/covers/abc/%00"},
 	{"version invalid UTF-8", "/blog/covers/abc/%ff"},
 	{"version trailing newline", "/blog/covers/abc/5%0A"},
+	{"posts empty segment", "/blog/posts/"},
+	{"posts extra segment", "/blog/posts/a/b"},
+	{"covers one segment", "/blog/covers/x"},
+	{"covers empty", "/blog/covers/"},
+	{"covers extra segment", "/blog/covers/x/1/extra"},
 }
 
 func TestBlogRead_EveryNotFoundIsIdentical(t *testing.T) {
@@ -643,7 +651,7 @@ func TestBlogRead_IPv6SubnetSharesOneBudget(t *testing.T) {
 func TestBlogRead_LimitIsSpentBeforeThePathCheck(t *testing.T) {
 	rig := newBlogRig(t, blogCfg{})
 	rig.spend(t, blogIP, BlogReadPerIP)
-	for _, p := range []string{"/blog/posts/Bad_Slug", "/blog/covers/abc/0", "/blog/covers/abc/%2B5", "/blog/posts/%00"} {
+	for _, p := range []string{"/blog/posts/Bad_Slug", "/blog/covers/abc/0", "/blog/covers/abc/%2B5", "/blog/posts/%00", "/blog/posts/", "/blog/covers/x"} {
 		if rec := rig.get(p, blogIP); rec.Code != http.StatusTooManyRequests {
 			t.Errorf("GET %s over the budget = %d, want 429, not 404", p, rec.Code)
 		}
@@ -1017,6 +1025,23 @@ func TestBlogRead_PathTraversalNeverReachesUpstream(t *testing.T) {
 	}
 	if rec := rig.get("/blog/posts/abc", blogIP); rec.Code != http.StatusOK {
 		t.Errorf("control GET /blog/posts/abc = %d, want 200", rec.Code)
+	}
+}
+
+func TestBlogRead_UpstreamFailureLogsTheErrorText(t *testing.T) {
+	rig := newBlogRig(t, blogCfg{})
+	rig.up.srv.Close()
+	rec := rig.get("/blog/posts", blogIP)
+	requireJSONError(t, rec, http.StatusBadGateway, "blog is unavailable")
+	ws := rig.warns("blog-read: upstream failed")
+	if len(ws) != 1 {
+		t.Fatalf("upstream-failed WARNs = %d, want 1", len(ws))
+	}
+	if got := ws[0].attrs["error"]; !strings.Contains(got, "connection refused") {
+		t.Errorf("WARN error = %q, want the dial error text", got)
+	}
+	if strings.Contains(fmt.Sprint(rig.logs.all()), "203.0.113.7") {
+		t.Error("log carries the client IP")
 	}
 }
 

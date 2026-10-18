@@ -31,8 +31,8 @@ var (
 	blogVersionRE = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
 )
 
-// BlogRoutes holds the four public blog read handlers.
-type BlogRoutes struct{ Categories, Posts, Post, Cover http.Handler }
+// BlogRoutes holds the public blog read handlers; NotFound answers every other path under /blog/posts/ and /blog/covers/.
+type BlogRoutes struct{ Categories, Posts, Post, Cover, NotFound http.Handler }
 
 // BlogHandlers serves the anonymous blog reads by forwarding to notifications at base.
 // One per-IP budget covers the four routes.
@@ -51,6 +51,7 @@ func BlogHandlers(base *url.URL, client *http.Client, gatewayToken string, perIP
 			id, version := r.PathValue("id"), r.PathValue("version")
 			return []string{"covers", id, version}, blogSlugRE.MatchString(id) && blogVersionRE.MatchString(version)
 		}),
+		NotFound: b.handler(true, false, func(*http.Request) ([]string, bool) { return nil, false }),
 	}
 }
 
@@ -83,8 +84,12 @@ func (b *blogReader) notFound(w http.ResponseWriter) {
 	writeError(w, http.StatusNotFound, "not found")
 }
 
-func (b *blogReader) unavailable(w http.ResponseWriter, r *http.Request, status int) {
-	b.log.WarnContext(r.Context(), "blog-read: upstream failed", slog.Int("status", status))
+func (b *blogReader) unavailable(w http.ResponseWriter, r *http.Request, status int, err error) {
+	attrs := []any{slog.Int("status", status)}
+	if err != nil {
+		attrs = append(attrs, slog.String("error", err.Error()))
+	}
+	b.log.WarnContext(r.Context(), "blog-read: upstream failed", attrs...)
 	w.Header().Set("Cache-Control", "no-store")
 	writeError(w, http.StatusBadGateway, "blog is unavailable")
 }
@@ -133,13 +138,13 @@ func (b *blogReader) handler(json, listRoute bool, target func(*http.Request) ([
 		defer cancel()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.base.JoinPath(append([]string{"internal", "blog"}, segs...)...).String(), nil)
 		if err != nil {
-			b.unavailable(w, r, 0)
+			b.unavailable(w, r, 0, err)
 			return
 		}
 		req.Header.Set("X-Gateway-Token", b.token)
 		resp, err := b.client.Do(req)
 		if err != nil {
-			b.unavailable(w, r, 0)
+			b.unavailable(w, r, 0, err)
 			return
 		}
 		defer resp.Body.Close()
@@ -149,12 +154,12 @@ func (b *blogReader) handler(json, listRoute bool, target func(*http.Request) ([
 			addVary()
 			b.notFound(w)
 		case resp.StatusCode != http.StatusOK:
-			b.unavailable(w, r, resp.StatusCode)
+			b.unavailable(w, r, resp.StatusCode, nil)
 		default:
 			body, err := io.ReadAll(io.LimitReader(resp.Body, maxBlogBodyBytes+1))
 			ct := resp.Header.Get("Content-Type")
 			if err != nil || len(body) > maxBlogBodyBytes || ct == "" {
-				b.unavailable(w, r, resp.StatusCode)
+				b.unavailable(w, r, resp.StatusCode, nil)
 				return
 			}
 			h.Set("Content-Type", ct)

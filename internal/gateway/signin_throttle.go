@@ -63,7 +63,7 @@ func (t *SignInThrottle) reserve(key string, admitWhenFull bool) bool {
 		if !now.Before(t.nextExpiry) {
 			t.sweep(now)
 		}
-		// ceiling: fails closed at maxKeys (~30 MB); a flood of new addresses blocks new sign-ins until keys expire.
+		// ceiling: at maxKeys (~30 MB) Reserve refuses new keys and ReserveOrAdmit admits them uncounted, until keys expire.
 		if len(t.counts) >= t.maxKeys {
 			verb := "refusing new addresses"
 			if admitWhenFull {

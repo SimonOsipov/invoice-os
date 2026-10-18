@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -14,14 +13,8 @@ import (
 var now = time.Now
 
 // proxied reports a request carrying any X-User-ID header (a user-facing proxy added it).
-// The match is case-insensitive so a non-canonical key is caught too.
 func proxied(r *http.Request) bool {
-	for k := range r.Header {
-		if strings.EqualFold(k, "X-User-ID") {
-			return true
-		}
-	}
-	return false
+	return len(r.Header.Values("X-User-ID")) > 0
 }
 
 // publicError answers every missing post or cover with the one 404 body.

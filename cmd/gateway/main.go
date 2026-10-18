@@ -212,6 +212,8 @@ func main() {
 	app.Mux.Handle("GET /blog/posts/{slug}", withCORS(blogRead.Post))
 	app.Mux.Handle("OPTIONS /blog/posts/{slug}", withCORS(blogRead.Post))
 	app.Mux.Handle("GET /blog/covers/{id}/{version}", blogRead.Cover)
+	app.Mux.Handle("GET /blog/posts/", withCORS(blogRead.NotFound))
+	app.Mux.Handle("GET /blog/covers/", blogRead.NotFound)
 
 	// Public sign-in hand-off, renewal and sign-out, outside the verifier; console-handoff verifies its own bearer.
 	// The OPTIONS route stops the method-scoped POST from 405ing the preflight.

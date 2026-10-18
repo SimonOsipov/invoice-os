@@ -94,6 +94,7 @@ func (s *Store) PublicCategories(ctx context.Context, today string) ([]Category,
 	return out, err
 }
 
+// ceiling: carries every visible post with its body; past the gateway's maxBlogBodyBytes (8 MiB) /blog/posts answers 502. Page or send summaries before ~30 max-size posts.
 func (s *Store) PublicPosts(ctx context.Context, today string) ([]PublicPost, error) {
 	out := []PublicPost{}
 	err := s.readPublic(ctx, func(tx pgx.Tx) error {

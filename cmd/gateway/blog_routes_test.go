@@ -51,6 +51,8 @@ func blogMux(t *testing.T, log *slog.Logger) (*http.ServeMux, *atomic.Int32) {
 	mux.Handle("GET /blog/posts/{slug}", withCORS(blogRead.Post))
 	mux.Handle("OPTIONS /blog/posts/{slug}", withCORS(blogRead.Post))
 	mux.Handle("GET /blog/covers/{id}/{version}", blogRead.Cover)
+	mux.Handle("GET /blog/posts/", withCORS(blogRead.NotFound))
+	mux.Handle("GET /blog/covers/", blogRead.NotFound)
 	return mux, calls
 }
 
@@ -120,6 +122,8 @@ func TestBlogRoutesRegisteredOutsideAPI(t *testing.T) {
 		"GET /blog/posts/{slug}":          "withCORS(" + recv + ".Post)",
 		"OPTIONS /blog/posts/{slug}":      "withCORS(" + recv + ".Post)",
 		"GET /blog/covers/{id}/{version}": recv + ".Cover",
+		"GET /blog/posts/":                "withCORS(" + recv + ".NotFound)",
+		"GET /blog/covers/":               recv + ".NotFound",
 	}
 	for pattern, handler := range want {
 		s := sitesFor(sites, pattern)
@@ -135,7 +139,7 @@ func TestBlogRoutesRegisteredOutsideAPI(t *testing.T) {
 		}
 	}
 
-	// The seven are the only blog routes: the cover has no preflight, nothing sits under /api/.
+	// These are the only blog routes: the cover has no preflight, nothing sits under /api/.
 	n := 0
 	for _, s := range sites {
 		if strings.Contains(s.pattern, "/blog") && !strings.Contains(s.pattern, "/v1/staff/") {

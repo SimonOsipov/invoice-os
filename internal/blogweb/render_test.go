@@ -441,3 +441,10 @@ func TestSitemap_CountsComeFromPostsNotPostCount(t *testing.T) {
 	has(t, out, "<loc>"+origin+"/category/real</loc>")
 	lacks(t, out, "/category/claims")
 }
+
+func TestRenderSubscribeConfirm_IsNoindexWithItsOwnCanonical(t *testing.T) {
+	page := string(shell(t).SubscribeConfirm(origin))
+	has(t, page, `<meta name="robots" content="noindex">`)
+	has(t, page, `<link rel="canonical" href="https://blog.example/subscribe/confirm">`)
+	has(t, page, "<h1>Subscribe</h1>")
+}

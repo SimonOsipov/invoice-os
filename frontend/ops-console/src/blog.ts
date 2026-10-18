@@ -325,7 +325,7 @@ export function cleanBody(body: Block[]): Block[] {
   return out
 }
 
-const RESERVED_IDS = ['subscribe', 'category']
+const RESERVED_IDS = ['subscribe', 'category', 'health']
 export const MAX_SLUG = 64
 
 // Equals Go blog.Slug; U+0130 lowers to one letter in Go and to two code points in JS.

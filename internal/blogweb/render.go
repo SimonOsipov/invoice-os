@@ -143,6 +143,13 @@ func (s Shell) Subscribe(origin string) []byte {
 	return s.render(head{Title: "Subscribe", Description: homeDescription, Canonical: origin + "/subscribe"}, "subscribe", nil)
 }
 
+// SubscribeConfirm is the subscribe page at /subscribe/confirm, kept out of the index.
+func (s Shell) SubscribeConfirm(origin string) []byte {
+	return s.render(
+		head{Title: "Subscribe", Description: homeDescription, Canonical: origin + "/subscribe/confirm", NoIndex: true},
+		"subscribe", nil)
+}
+
 func (s Shell) NotFound(origin, path string) []byte {
 	return s.render(
 		head{Title: "Not found", Description: homeDescription, Canonical: origin + path, NoIndex: true},

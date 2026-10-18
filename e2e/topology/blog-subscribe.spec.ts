@@ -36,6 +36,8 @@ const main = (page: Page) => page.locator('#blog-main')
 const intro = (page: Page) => main(page).locator('h1').locator('xpath=..')
 const card = (page: Page) => main(page).getByLabel('Work email').locator('xpath=ancestor::div[3]')
 const chips = (page: Page) => card(page).locator('button[aria-pressed]').filter({ hasNotText: /^(Weekly digest|Every post|Monthly)$/ })
+// The breadcrumb also renders a "Subscribe" button; the form's lives in the section.
+const subscribeButton = (page: Page) => main(page).locator('section').getByRole('button', { name: 'Subscribe', exact: true })
 const control = (page: Page) => card(page).getByRole('button', { name: 'Weekly digest' }).locator('xpath=..')
 const freqButtons = (page: Page) => control(page).getByRole('button')
 
@@ -45,7 +47,7 @@ async function visit(page: Page, width: number): Promise<void> {
   const response = await page.goto(`${BLOG_URL}/subscribe`)
   expect(response?.ok(), '/subscribe did not answer 2xx').toBeTruthy()
   await expect(main(page).getByRole('heading', { level: 1 }), '/subscribe never rendered the form').toBeVisible()
-  await expect(main(page).getByRole('button', { name: 'Subscribe' }), 'the form Subscribe button').toBeVisible()
+  await expect(subscribeButton(page), 'the form Subscribe button').toBeVisible()
 }
 
 async function rectOf(loc: Locator, label: string): Promise<Rect> {
@@ -159,7 +161,6 @@ for (const width of PHONE_WIDTHS) {
   })
 }
 
-const subscribeButton = (page: Page) => main(page).getByRole('button', { name: 'Subscribe', exact: true })
 const isSubscribePost = (url: string) => /\/blog\/subscriptions$/.test(url)
 
 test('blog subscribe: a valid submit reaches the fork gateway and shows the done state', async ({ page }) => {

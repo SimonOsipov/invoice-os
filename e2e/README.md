@@ -52,7 +52,7 @@ Covers five SPAs — `landing`, `ops-console`,
   signature element of its main view, failing on any console error or uncaught page error.
 - **Behaviour on backend-less surfaces** (`landing-nav.spec.ts`, `ops-console.spec.ts`): the
   landing nav's scroll-spy, and functional navigation over what the ops console is *for*. Its
-  data is mock with no backend, so these assertions pin fixture behaviour rather than a
+  data is mock except the Blog screen, so these assertions pin fixture behaviour rather than a
   contract — `.claude/rules/e2e.md` says when that is allowed. `support-console.spec.ts` drives
   the console's real screens.
 - **Boundary matrix** (`persona-boundaries.spec.ts`): every destination visited with

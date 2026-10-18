@@ -36,7 +36,7 @@ func mapError(w http.ResponseWriter, r *http.Request, log *slog.Logger, op strin
 		writeFields(w, fe)
 	case errors.Is(err, db.ErrNotStaff):
 		writeError(w, http.StatusForbidden, "forbidden")
-	case errors.Is(err, ErrPostNotFound), errors.Is(err, ErrCategoryNotFound):
+	case errors.Is(err, ErrPostNotFound), errors.Is(err, ErrCategoryNotFound), errors.Is(err, ErrCoverNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrCategoryNameTaken), errors.Is(err, ErrOnlyCategory):
 		writeError(w, http.StatusConflict, err.Error())
@@ -350,5 +350,22 @@ func SetCoverHandler(set func(ctx context.Context, id, contentType string, bytes
 			return
 		}
 		writeJSON(w, http.StatusOK, c)
+	}
+}
+
+// GetCoverHandler serves GET /v1/staff/blog/posts/{id}/cover: the stored bytes, never cached.
+func GetCoverHandler(get func(ctx context.Context, id string) (string, []byte, error), log *slog.Logger) http.HandlerFunc {
+	log = orDefault(log)
+	return func(w http.ResponseWriter, r *http.Request) {
+		ct, b, err := get(r.Context(), r.PathValue("id"))
+		if err != nil {
+			mapError(w, r, log, "get cover", err)
+			return
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
 	}
 }

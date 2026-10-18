@@ -894,6 +894,7 @@ func TestNotificationsMain_RegistersTheBlogRoutes(t *testing.T) {
 		"PUT /v1/staff/blog/posts/{id}/featured":   {"SetFeaturedHandler", "SetFeatured"},
 		"PUT /v1/staff/blog/posts/{id}/cover":      {"SetCoverHandler", "SetCover"},
 		"DELETE /v1/staff/blog/posts/{id}/cover":   {"RemoveCoverHandler", "RemoveCover"},
+		"GET /v1/staff/blog/posts/{id}/cover":      {"GetCoverHandler", "GetCover"},
 	}
 	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
 	if err != nil {

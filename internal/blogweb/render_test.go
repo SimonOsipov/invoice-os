@@ -315,3 +315,129 @@ func TestParseShell_RefusesAShellThatAlreadyHoldsAServerTag(t *testing.T) {
 		}
 	}
 }
+
+func TestRender_RawMarkupCloserInBodyTextStaysText(t *testing.T) {
+	evil := `</script></style></article><!-- x --> --><script>alert(2)</script>`
+	p := Post{ID: "p", Title: "T", Body: []Block{{Type: "p", Text: evil}, {Type: "ul", Items: []string{evil}}}}
+	page := string(shell(t).Post(origin, gateway, &Snapshot{}, p))
+	block := page[strings.Index(page, "<div data-crawl>"):]
+	has(t, block, "&lt;/script&gt;&lt;/style&gt;&lt;/article&gt;&lt;!-- x --&gt; --&gt;&lt;script&gt;alert(2)&lt;/script&gt;")
+	lacks(t, block, "<script>alert")
+	lacks(t, block, "<!-- x")
+	if n := strings.Count(block, "</article>"); n != 1 {
+		t.Errorf("article closes %d times", n)
+	}
+}
+
+func TestRender_AttributeContextsEscapeQuotesInOriginCoverAndPath(t *testing.T) {
+	sh := shell(t)
+	bad := `"><script>alert(3)</script>`
+	p := Post{ID: "p", Title: "T", Summary: bad, Cover: str(bad)}
+	pages := map[string]string{
+		"post":     string(sh.Post(`https://x`+bad, gateway, &Snapshot{}, p)),
+		"notfound": string(sh.NotFound(origin, "/x"+bad)),
+		"category": string(sh.Category(origin, &Snapshot{}, Category{ID: "c" + bad, Name: "N", Intro: bad})),
+	}
+	for name, page := range pages {
+		if strings.Count(page, "<script>alert(3)") != 0 {
+			t.Errorf("%s: raw script in attribute context:\n%s", name, page)
+		}
+		has(t, page, `<link rel="canonical" href="`)
+		lacks(t, page, `"><script`)
+	}
+}
+
+func TestRender_LongTextAndOddBytesDoNotPanic(t *testing.T) {
+	long := strings.Repeat("word ", 40000)
+	odd := "a\x00b\xff\xfec"
+	p := Post{ID: "p", Title: odd, Summary: long, AuthorName: odd, PublishDate: "not-a-date",
+		Body: []Block{{Type: "p", Text: long}, {Type: "quote", Text: odd, Who: odd}}}
+	page := string(shell(t).Post(origin, gateway, &Snapshot{}, p))
+	if n := strings.Count(page, "word word"); n < 80000 {
+		t.Errorf("long text truncated: %d", n)
+	}
+	has(t, page, `<time datetime="not-a-date">not-a-date</time>`)
+}
+
+func TestRenderPost_UnknownAndDemoBlocksRenderNothingAndDoNotStopLaterBlocks(t *testing.T) {
+	p := Post{ID: "p", Title: "T", Body: []Block{
+		{Type: "future", Text: "SECRET"}, {Type: "demo", Demo: "d", Text: "SECRET"}, {Type: "p", Text: "AFTER"}}}
+	page := string(shell(t).Post(origin, gateway, &Snapshot{}, p))
+	has(t, page, "<p>AFTER</p>")
+	lacks(t, page, "SECRET")
+}
+
+func TestRenderPost_LinksHomeAndItsCategoryOnlyWhenItExists(t *testing.T) {
+	sh := shell(t)
+	snap := &Snapshot{Categories: []Category{{ID: "a", Name: "A-name"}}}
+	page := string(sh.Post(origin, gateway, snap, Post{ID: "p", CategoryID: "a", Title: "T"}))
+	has(t, page, `<a href="/category/a">A-name</a>`)
+	has(t, page, `<a href="/">Home</a>`)
+	page = string(sh.Post(origin, gateway, snap, Post{ID: "p", CategoryID: "gone", Title: "T"}))
+	has(t, page, `<a href="/">Home</a>`)
+	lacks(t, page, `href="/category/`)
+}
+
+func TestRender_OnlyNotFoundCarriesNoindex(t *testing.T) {
+	sh := shell(t)
+	has(t, string(sh.NotFound(origin, "/x")), `name="robots"`)
+	pages := map[string]string{
+		"home":      string(sh.Home(origin, twoCats)),
+		"category":  string(sh.Category(origin, twoCats, twoCats.Categories[0])),
+		"post":      string(sh.Post(origin, gateway, twoCats, twoCats.Posts[0])),
+		"subscribe": string(sh.Subscribe(origin)),
+	}
+	for name, page := range pages {
+		if strings.Contains(page, "robots") {
+			t.Errorf("%s carries a robots tag", name)
+		}
+	}
+}
+
+func TestRenderNotFound_CanonicalIsTheRequestedPath(t *testing.T) {
+	has(t, string(shell(t).NotFound(origin, "/nope")), `<link rel="canonical" href="https://blog.example/nope">`)
+}
+
+func TestRenderSubscribe_OwnTitleDescriptionCanonicalAndHeading(t *testing.T) {
+	page := string(shell(t).Subscribe(origin))
+	has(t, page, "<title>Subscribe · ASComply blog</title>")
+	has(t, page, `<meta name="description" content="`+homeDescription+`">`)
+	has(t, page, `<link rel="canonical" href="https://blog.example/subscribe">`)
+	has(t, page, "<h1>Subscribe</h1>")
+	has(t, page, `<a href="/">Home</a>`)
+}
+
+func TestRenderHome_ListsPostsNewestFirstWhateverTheSnapshotOrder(t *testing.T) {
+	snap := &Snapshot{Categories: twoCats.Categories, Posts: []Post{twoCats.Posts[1], twoCats.Posts[0]}}
+	page := string(shell(t).Home(origin, snap))
+	a, b := strings.Index(page, `href="/p1"`), strings.Index(page, `href="/p2"`)
+	if a < 0 || b < 0 || a > b {
+		t.Errorf("p1 at %d, p2 at %d; want p1 first", a, b)
+	}
+}
+
+func TestSitemap_EscapesEveryLocAndStartsWithTheXMLHeader(t *testing.T) {
+	snap := &Snapshot{
+		Categories: []Category{{ID: "c&<d>"}},
+		Posts:      []Post{{ID: "p&<q>", CategoryID: "c&<d>", PublishDate: "2026-10-01"}}}
+	out := Sitemap(origin, snap)
+	if !strings.HasPrefix(string(out), `<?xml version="1.0" encoding="UTF-8"?>`) {
+		t.Errorf("header: %.60s", out)
+	}
+	var got parsedSitemap
+	if err := xml.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.URLs) != 3 || got.URLs[1].Loc != origin+"/category/c&<d>" || got.URLs[2].Loc != origin+"/p&<q>" {
+		t.Errorf("urls %+v", got.URLs)
+	}
+}
+
+func TestSitemap_CountsComeFromPostsNotPostCount(t *testing.T) {
+	snap := &Snapshot{
+		Categories: []Category{{ID: "claims", PostCount: 5}, {ID: "real", PostCount: 0}},
+		Posts:      []Post{{ID: "p", CategoryID: "real", PublishDate: "2026-10-01"}}}
+	out := string(Sitemap(origin, snap))
+	has(t, out, "<loc>"+origin+"/category/real</loc>")
+	lacks(t, out, "/category/claims")
+}

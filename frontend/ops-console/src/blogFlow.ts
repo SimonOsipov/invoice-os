@@ -166,17 +166,32 @@ export async function savePost(deps: SaveDeps, state: EditorState, status: PostI
   }
 }
 
-export type RemoveOutcome = { kind: 'done'; toast: string } | { kind: 'expired' } | { kind: 'forbidden' } | { kind: 'failed'; message: string }
+export type RemoveOutcome =
+  | { kind: 'done'; toast: string; posts?: Post[]; rereadError?: string }
+  | { kind: 'expired' }
+  | { kind: 'forbidden' }
+  | { kind: 'failed'; message: string }
 
-export async function removePost(deps: { deletePost: (id: string) => Promise<void> }, id: string): Promise<RemoveOutcome> {
+export async function removePost(deps: { deletePost: (id: string) => Promise<void>; fetchPosts: () => Promise<Post[]> }, id: string): Promise<RemoveOutcome> {
   try {
     await deps.deletePost(id)
-    return { kind: 'done', toast: 'Post deleted' }
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) return { kind: 'expired' }
     if (e instanceof ApiError && e.status === 403) return { kind: 'forbidden' }
     return { kind: 'failed', message: e instanceof Error ? e.message : 'Could not delete the post' }
   }
+  const toast = 'Post deleted'
+  try {
+    return { kind: 'done', toast, posts: await deps.fetchPosts() }
+  } catch (e) {
+    return { kind: 'done', toast, rereadError: e instanceof Error ? e.message : 'Could not reload the posts' }
+  }
+}
+
+// The list after a delete: the re-read, else the old list without the deleted post (the delete succeeded).
+export function postsAfterRemove(list: Post[], id: string, o: RemoveOutcome): Post[] {
+  if (o.kind !== 'done') return list
+  return o.posts ?? list.filter((p) => p.id !== id)
 }
 
 export type Applied = { editor: EditorState; toast: string | null; tone: ToastTone; posts?: Post[]; expire: boolean }
@@ -213,7 +228,7 @@ export type AppliedRemove = { editor: EditorState | null; toast: string; tone: T
 export function applyRemove(cur: EditorState, o: RemoveOutcome): AppliedRemove {
   switch (o.kind) {
     case 'done':
-      return { editor: null, toast: o.toast, tone: 'ok', expire: false }
+      return o.rereadError !== undefined ? { editor: null, toast: o.rereadError, tone: 'red', expire: false } : { editor: null, toast: o.toast, tone: 'ok', expire: false }
     case 'expired':
       return { editor: { ...cur, confirm: null }, toast: '', tone: 'red', expire: true }
     case 'forbidden':

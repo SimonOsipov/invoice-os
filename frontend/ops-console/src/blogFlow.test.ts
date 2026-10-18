@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 
 import { SESSION_KEY } from './auth'
 import type { Author, Category, Post } from './blogApi'
-import { editorOf, newDraft, type Draft, type EditorState } from './blog'
-import { applyRemove, applySave, BAD_IMAGE, keepThenExpire, loadBlog, pickCover, pinPost, pinThenRefresh, removePost, savePost, singleFlight, STAFF_ONLY, trackCover, type CoverPickDeps, type SaveDeps } from './blogFlow'
+import { editorOf, newDraft, saveState, type Draft, type EditorState } from './blog'
+import { applyRemove, applySave, BAD_IMAGE, keepThenExpire, loadBlog, pickCover, pinPost, pinThenRefresh, postsAfterRemove, removePost, savePost, singleFlight, STAFF_ONLY, trackCover, type CoverPickDeps, type SaveDeps } from './blogFlow'
 import { withSession } from './session'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
@@ -370,13 +370,39 @@ describe('savePost', () => {
 })
 
 describe('removePost', () => {
-  it('deletes and toasts; each failure has its outcome', async () => {
+  const rm = (del: Mock, fetchPosts: Mock = vi.fn().mockResolvedValue(POSTS)) => removePost({ deletePost: del, fetchPosts }, 'p1')
+
+  it('deletes, re-reads the list and toasts; each failure has its outcome and no re-read', async () => {
     const del = vi.fn().mockResolvedValue(undefined)
-    expect(await removePost({ deletePost: del }, 'p1')).toEqual({ kind: 'done', toast: 'Post deleted' })
+    const re = vi.fn().mockResolvedValue(POSTS)
+    expect(await rm(del, re)).toEqual({ kind: 'done', toast: 'Post deleted', posts: POSTS })
     expect(del).toHaveBeenCalledWith('p1')
-    expect(await removePost({ deletePost: vi.fn().mockRejectedValue(http(401)) }, 'p1')).toEqual({ kind: 'expired' })
-    expect(await removePost({ deletePost: vi.fn().mockRejectedValue(http(403)) }, 'p1')).toEqual({ kind: 'forbidden' })
-    expect(await removePost({ deletePost: vi.fn().mockRejectedValue(http(500, 'boom')) }, 'p1')).toEqual({ kind: 'failed', message: 'boom' })
+    expect(del.mock.invocationCallOrder[0]).toBeLessThan(re.mock.invocationCallOrder[0])
+    for (const [err, want] of [
+      [http(401), { kind: 'expired' }],
+      [http(403), { kind: 'forbidden' }],
+      [http(500, 'boom'), { kind: 'failed', message: 'boom' }],
+    ] as const) {
+      const f = vi.fn()
+      expect(await rm(vi.fn().mockRejectedValue(err), f)).toEqual(want)
+      expect(f).not.toHaveBeenCalled()
+    }
+  })
+
+  it('a failed re-read keeps the delete as done with the error', async () => {
+    expect(await rm(vi.fn().mockResolvedValue(undefined), vi.fn().mockRejectedValue(http(500, 'internal error')))).toEqual({ kind: 'done', toast: 'Post deleted', rereadError: 'internal error' })
+  })
+})
+
+describe('postsAfterRemove', () => {
+  const list = [{ id: 'p1' }, { id: 'p2' }] as Post[]
+  it('takes the re-read list, else drops the deleted post, and ignores a failed delete', () => {
+    const fresh = [{ id: 'p2' }, { id: 'p3' }] as Post[]
+    expect(postsAfterRemove(list, 'p1', { kind: 'done', toast: 't', posts: fresh })).toBe(fresh)
+    expect(postsAfterRemove(list, 'p1', { kind: 'done', toast: 't', rereadError: 'x' })).toEqual([{ id: 'p2' }])
+    expect(postsAfterRemove(list, 'p1', { kind: 'failed', message: 'x' })).toBe(list)
+    expect(postsAfterRemove(list, 'p1', { kind: 'forbidden' })).toBe(list)
+    expect(postsAfterRemove(list, 'p1', { kind: 'expired' })).toBe(list)
   })
 })
 
@@ -401,6 +427,20 @@ describe('applySave', () => {
     expect(a).toMatchObject({ toast: 'internal error', tone: 'red', expire: false })
     expect(a.posts).toBeUndefined()
     expect(a.editor.dirty).toBe(false)
+    expect(saveState(a.editor.dirty, a.editor.draft.id).label).toBe('ALL CHANGES SAVED')
+  })
+
+  it('a cover that fails after a create keeps the id, so the next save updates and does not duplicate', async () => {
+    const sent = dirty({ cover: NEW_COVER })
+    const first = saveDeps({ putCover: vi.fn().mockRejectedValue(http(401)) })
+    const o = await savePost(first, sent, 'draft')
+    const cur = applySave(sent, sent, o).editor
+    expect(cur.draft.id).toBe('N')
+    const next = saveDeps({ updatePost: vi.fn().mockResolvedValue(saved()) })
+    await savePost(next, cur, 'draft')
+    expect(next.createPost).not.toHaveBeenCalled()
+    expect(next.updatePost).toHaveBeenCalledWith('N', expect.any(Object))
+    expect(next.putCover).toHaveBeenCalledWith('N', new Uint8Array([1, 2, 3]))
   })
 
   it('invalid marks the fields and keeps the editor dirty', () => {
@@ -426,7 +466,8 @@ describe('applySave', () => {
 describe('applyRemove', () => {
   it('done closes the editor; failures keep it with the confirm cleared', () => {
     const cur = { ...dirty({ id: 'p9' }), confirm: 'delete' as const }
-    expect(applyRemove(cur, { kind: 'done', toast: 'Post deleted' })).toEqual({ editor: null, toast: 'Post deleted', tone: 'ok', expire: false })
+    expect(applyRemove(cur, { kind: 'done', toast: 'Post deleted', posts: POSTS })).toEqual({ editor: null, toast: 'Post deleted', tone: 'ok', expire: false })
+    expect(applyRemove(cur, { kind: 'done', toast: 'Post deleted', rereadError: 'internal error' })).toEqual({ editor: null, toast: 'internal error', tone: 'red', expire: false })
     expect(applyRemove(cur, { kind: 'forbidden' })).toMatchObject({ toast: STAFF_ONLY, tone: 'red', expire: false, editor: { confirm: null, dirty: true } })
     expect(applyRemove(cur, { kind: 'failed', message: 'boom' })).toMatchObject({ toast: 'boom', tone: 'red' })
     expect(applyRemove(cur, { kind: 'expired' })).toMatchObject({ expire: true, editor: { confirm: null } })
@@ -465,6 +506,19 @@ describe('singleFlight', () => {
     await p
     await run(second)
     expect(second).toHaveBeenCalledTimes(1)
+  })
+
+  it('a call made while a throwing action runs is ignored, then the guard frees', async () => {
+    const run = singleFlight()
+    let fail: (e: Error) => void = () => {}
+    const p = run(() => new Promise<void>((_, rej) => (fail = rej)))
+    const mid = vi.fn(async () => {})
+    await run(mid)
+    expect(mid).not.toHaveBeenCalled()
+    fail(new Error('x'))
+    await expect(p).rejects.toThrow('x')
+    await run(mid)
+    expect(mid).toHaveBeenCalledTimes(1)
   })
 
   it('frees the guard when the action throws', async () => {

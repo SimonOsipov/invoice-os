@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { addBlock, askLeave, coverCss, draftFromPost, editorOf, moveBlock, newDraft, patchBlock, previewModel, removeBlock, setConfirm, setField, setPreview, takeKept, today, writeKept, type BlockType, type Draft, type EditorState } from '../blog'
 import { createPost, deletePost, fetchAuthors, fetchCategories, fetchCoverUrl, fetchPosts, putCover, removeCover, setFeatured, updatePost, type Post } from '../blogApi'
-import { applyRemove, applySave, keepThenExpire, loadBlog, pickCover, pinThenRefresh, removePost, savePost, singleFlight, STAFF_ONLY, trackCover } from '../blogFlow'
+import { applyRemove, applySave, keepThenExpire, loadBlog, pickCover, pinThenRefresh, postsAfterRemove, removePost, savePost, singleFlight, STAFF_ONLY, trackCover } from '../blogFlow'
 import { browserCoverDeps } from '../coverImage'
 import { currentSub, expireOnce, withSession } from '../session'
 import type { BlogFilters, ToastTone } from '../types'
@@ -119,7 +119,7 @@ export function Blog({ filters, onFilters, onToast }: Props) {
       const { posts } = a
       if (posts) setState((s) => (s.status === 'ready' ? { ...s, posts } : s))
       if (a.toast) onToast(a.toast, 'BLOG', a.tone)
-      if (a.expire) keep(a.editor)
+      if (a.expire) keep(cur ? a.editor : null)
     })
 
   const onDelete = () =>
@@ -127,14 +127,17 @@ export function Blog({ filters, onFilters, onToast }: Props) {
       const sent = editorRef.current
       if (!sent) return
       const seq = openSeq.current
-      const o = await removePost({ deletePost: (id) => withSession(() => deletePost(id)) }, sent.draft.id)
-      if (!alive.current || seq !== openSeq.current) return
-      const a = applyRemove(editorRef.current ?? sent, o)
-      if (o.kind === 'done') setState((s) => (s.status === 'ready' ? { ...s, posts: s.posts.filter((p) => p.id !== sent.draft.id) } : s))
-      if (a.editor) setEditor(a.editor)
-      else close()
+      const o = await removePost({ deletePost: (id) => withSession(() => deletePost(id)), fetchPosts: () => withSession(fetchPosts) }, sent.draft.id)
+      if (!alive.current) return
+      const open = seq === openSeq.current
+      const a = applyRemove(open ? editorRef.current ?? sent : sent, o)
+      setState((s) => (s.status === 'ready' ? { ...s, posts: postsAfterRemove(s.posts, sent.draft.id, o) } : s))
+      if (open) {
+        if (a.editor) setEditor(a.editor)
+        else close()
+      }
       if (a.toast) onToast(a.toast, 'BLOG', a.tone)
-      if (a.expire) keep(a.editor)
+      if (a.expire) keep(open ? a.editor : null)
     })
 
   const editing = editor !== null

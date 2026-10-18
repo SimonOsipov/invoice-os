@@ -118,8 +118,9 @@ describe('App', () => {
 
 describe('boot screen', () => {
   const jwt = (c: object) => `${btoa('{"alg":"x"}')}.${btoa(JSON.stringify(c)).replace(/=+$/, '')}.s`
-  const store = (sub: string, owner: string | null) => {
-    const map = new Map<string, string>([[OPS_SESSION_KEY, JSON.stringify({ v: 2, token: jwt({ sub }), refresh_token: 'R' })]])
+  const store = (sub: string | null, owner: string | null) => {
+    const map = new Map<string, string>()
+    if (sub !== null) map.set(OPS_SESSION_KEY, JSON.stringify({ v: 2, token: jwt({ sub }), refresh_token: 'R' }))
     if (owner) map.set(KEPT_KEY, JSON.stringify({ v: 1, owner, draft: { id: '', body: [] } }))
     vi.stubGlobal('localStorage', { getItem: (k: string) => map.get(k) ?? null })
     vi.stubEnv('VITE_LANDING_URL', 'https://land.example/')
@@ -138,6 +139,11 @@ describe('boot screen', () => {
     store('S', 'T')
     expect(renderToStaticMarkup(<App />)).toMatch(/<h1[^>]*>Overview<\/h1>/)
     store('S', null)
+    expect(renderToStaticMarkup(<App />)).toMatch(/<h1[^>]*>Overview<\/h1>/)
+  })
+
+  it('starts on Overview when a kept copy exists but no session is stored', () => {
+    store(null, 'S')
     expect(renderToStaticMarkup(<App />)).toMatch(/<h1[^>]*>Overview<\/h1>/)
   })
 })

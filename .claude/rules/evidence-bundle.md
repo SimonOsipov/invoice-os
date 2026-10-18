@@ -2,6 +2,7 @@
 paths:
   - "internal/archive/**"
   - "frontend/app/src/lib/evidenceBundle.ts"
+  - "frontend/app/src/lib/fetchAttachment.ts"
   - "internal/gateway/cors.go"
 ---
 # Evidence bundle

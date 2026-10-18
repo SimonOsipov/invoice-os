@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -290,3 +291,127 @@ func TestNew_RefusesABrokenShell(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+func (r *rig) doRaw(target string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("GET", "https://blog.example"+target, nil)
+	w := httptest.NewRecorder()
+	r.h.ServeHTTP(w, req)
+	return w
+}
+
+func TestServer_EncodedPathsNeverReachOutsideRootOrShadowRoutes(t *testing.T) {
+	r := newRig(t)
+	secret := filepath.Join(r.root, "..", "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOPSECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(secret) })
+	for _, p := range []string{
+		"/%2e%2e/secret.txt", "/..%2fsecret.txt", "/assets/%2e%2e/%2e%2e/secret.txt",
+		"/assets/..%2f..%2fsecret.txt", "/%2e%2e%2fsecret.txt", "/p%00", "/%00",
+		"/%70%2f", "/p%2fx", "/category%2fa", "/%43ategory/a",
+	} {
+		w := r.doRaw(p)
+		if strings.Contains(w.Body.String(), "TOPSECRET") {
+			t.Errorf("%s: served the file outside Root", p)
+		}
+		if w.Code != 404 && w.Code != 400 && w.Code != 200 {
+			t.Errorf("%s: %d", p, w.Code)
+		}
+	}
+	for _, p := range []string{"/%2e%2e/secret.txt", "/p%00", "/p%2fx", "/%43ategory/a"} {
+		if w := r.doRaw(p); w.Code != 404 {
+			t.Errorf("%s: %d, want the not-found page", p, w.Code)
+		}
+	}
+	// "%70" decodes to "p": the same page as /p
+	if w := r.doRaw("/%70"); w.Code != 200 {
+		t.Errorf("/%%70: %d", w.Code)
+	}
+}
+
+func TestServer_ConcurrentRequestsAfterExpiryFetchOnce(t *testing.T) {
+	r := newRig(t)
+	if w := r.do("GET", "/p"); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	base := len(r.g.lastPath)
+	r.g.set(func() { r.g.posts = append(r.g.posts, Post{ID: "late", CategoryID: "a", PublishDate: "2026-10-02"}) })
+	r.c.add(60 * time.Second)
+	var wg sync.WaitGroup
+	codes := make([]int, 24)
+	for i := range codes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes[i] = r.do("GET", "/late").Code
+		}()
+	}
+	wg.Wait()
+	for i, c := range codes {
+		if c != 200 {
+			t.Errorf("request %d: %d", i, c)
+		}
+	}
+	if n := len(r.g.lastPath) - base; n != 2 {
+		t.Errorf("upstream calls during one refresh = %d, want 2", n)
+	}
+}
+
+func TestServer_FailureBackoffAnswers503WithoutFetchingAndRecovers(t *testing.T) {
+	r := newRig(t)
+	r.g.set(func() { r.g.status = 500 })
+	if w := r.do("GET", "/p"); w.Code != 503 {
+		t.Fatal(w.Code)
+	}
+	after := len(r.g.lastPath)
+	r.g.set(func() { r.g.status = 0 })
+	r.c.add(4 * time.Second)
+	for _, p := range []string{"/p", "/", "/sitemap.xml"} {
+		if w := r.do("GET", p); w.Code != 503 {
+			t.Errorf("%s inside back-off: %d", p, w.Code)
+		}
+	}
+	if len(r.g.lastPath) != after {
+		t.Error("fetched inside the back-off window")
+	}
+	r.c.add(time.Second)
+	if w := r.do("GET", "/p"); w.Code != 200 {
+		t.Errorf("after back-off: %d", w.Code)
+	}
+}
+
+func TestServer_HeadOn503And404And503Sitemap(t *testing.T) {
+	r := newRig(t)
+	if w := r.do("HEAD", "/nope"); w.Code != 404 || w.Body.Len() != 0 || w.Header().Get("Cache-Control") != "no-cache" {
+		t.Errorf("HEAD 404: %d %d %v", w.Code, w.Body.Len(), w.Header())
+	}
+	if w := r.do("HEAD", "/sitemap.xml"); w.Code != 200 || w.Body.Len() != 0 {
+		t.Errorf("HEAD sitemap: %d %d", w.Code, w.Body.Len())
+	}
+	r.g.set(func() { r.g.status = 500 })
+	r.c.add(time.Hour)
+	for _, p := range []string{"/p", "/sitemap.xml"} {
+		w := r.do("HEAD", p)
+		if w.Code != 503 || w.Body.Len() != 0 || w.Header().Get("Retry-After") != "60" || w.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("HEAD %s: %d %d %v", p, w.Code, w.Body.Len(), w.Header())
+		}
+	}
+}
+
+func TestServer_HostIsEscapedInEveryGeneratedDocument(t *testing.T) {
+	r := newRig(t)
+	const host = `evil"><script>alert(1)</script>`
+	for _, p := range []string{"/", "/p", "/nope", "/sitemap.xml", "/robots.txt"} {
+		req := httptest.NewRequest("GET", "https://blog.example/", nil)
+		req.URL.Path, req.Host = p, host
+		w := httptest.NewRecorder()
+		r.h.ServeHTTP(w, req)
+		if w.Code != 200 && w.Code != 404 {
+			t.Fatalf("%s: %d", p, w.Code)
+		}
+		if p != "/robots.txt" && strings.Contains(w.Body.String(), "<script>alert(1)") {
+			t.Errorf("%s: Host written unescaped", p)
+		}
+	}
+}

@@ -110,6 +110,13 @@ describe('collectFlaky', () => {
     expect(row.error).toBe('x'.repeat(300))
   })
 
+  it('keeps the [url: ...] of a one-line sign-out console-error message', () => {
+    const message = 'Error: console errors on the app: Failed to load resource: 401 [url: https://g/v1/x] | b [url: https://g/v1/y]\n\nexpect(received).toEqual(expected)'
+    const [row] = collectFlaky([flakyAt(['t'], [{ error: { message } }, {}])], '/repo')
+    expect(row.error).toContain('[url: https://g/v1/x]')
+    expect(row.error).toContain('[url: https://g/v1/y]')
+  })
+
   it('no first-attempt error gives an empty error', () => {
     expect(collectFlaky([flakyAt(['t'], [{}, {}])], '/repo')[0].error).toBe('')
   })

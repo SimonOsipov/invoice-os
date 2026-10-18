@@ -63,7 +63,8 @@ test('deployed app: sign-out redirects to the landing page', async ({ page }) =>
   await page.getByRole('button', { name: 'Sign out' }).click()
   await page.waitForURL((url) => url.href.startsWith(LANDING_URL))
 
-  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+  // One line: the flaky reporter keeps only the first line of the error.
+  expect(errors, `console errors on the app: ${errors.join(' | ')}`).toEqual([])
 })
 
 // A live hand-off session wins over a later sign-in from landing:

@@ -40,6 +40,13 @@ describe('BlogList', () => {
     expect(html.match(/<h1/g)).toHaveLength(1)
   })
 
+  it('New post is disabled until the lists have loaded, enabled after', () => {
+    const btn = (html: string) => html.match(/<button[^>]*>(?:(?!<\/button>).)*New post<\/button>/)?.[0] ?? ''
+    expect(btn(render({ status: 'loading' }))).toMatch(/ disabled=""/)
+    expect(btn(render({ status: 'error', message: 'x' }))).toMatch(/ disabled=""/)
+    expect(btn(render(ready([post()])))).not.toMatch(/ disabled/)
+  })
+
   it('the header row keeps the prototype margins inside the screen pad', () => {
     const html = render(ready([post()]))
     expect(html.startsWith('<div class="ops-screen-pad">')).toBe(true)

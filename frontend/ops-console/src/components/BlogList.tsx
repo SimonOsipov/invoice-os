@@ -67,7 +67,13 @@ export function BlogList({ state, filters, onFilters, onRetry, onPin, onNew, onO
             <G name="external-link" size={15} />
             View blog
           </a>
-          <button type="button" onClick={onNew} className="v2-btn v2-btn-primary" style={{ height: 36, padding: '0 14px', fontSize: 13 }}>
+          <button
+            type="button"
+            onClick={onNew}
+            disabled={!ready}
+            className="v2-btn v2-btn-primary"
+            style={{ height: 36, padding: '0 14px', fontSize: 13, ...(ready ? {} : { opacity: 0.5, cursor: 'not-allowed' }) }}
+          >
             <G name="plus" size={15} />
             New post
           </button>

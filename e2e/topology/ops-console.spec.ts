@@ -132,6 +132,9 @@ async function boxes<K extends string>(page: Page, named: Record<K, Locator>): P
 }
 
 const within = (outer: Rect, inner: Rect, what: string): string[] => (enclosesRect(outer, inner, 1) ? [] : [`${what}: sticks out`])
+// Horizontal only: the header label is a text line, shorter than the 28px pin button.
+const withinX = (outer: Rect, inner: Rect, what: string): string[] =>
+  inner.x >= outer.x - 1 && inner.x + inner.width <= outer.x + outer.width + 1 ? [] : [`${what}: sticks out sideways`]
 const apart = (a: Rect, b: Rect, what: string): string[] => (rectsOverlap(a, b) ? [`${what}: overlap`] : [])
 const below = (above: Rect, lower: Rect, what: string): string[] => (lower.y >= above.y + above.height - 1 ? [] : [`${what}: not below`])
 const leftOf = (a: Rect, b: Rect, what: string): string[] => (a.x + a.width <= b.x + 1 ? [] : [`${what}: not left of`])
@@ -884,7 +887,7 @@ test('OPS-05 blog list: header, filters and table hold together at every wide wi
       const cs = await boxList(page, cells(row), `row ${i} cell`, 6)
       rows.push(cs)
       cs.slice(0, 5).forEach((c, k) => problems.push(...sameLeft(c, head[k], `row ${i} cell ${k} / header label`)))
-      problems.push(...within(head[5], cs[5], `row ${i} pin button / Pin cell`))
+      problems.push(...withinX(head[5], cs[5], `row ${i} pin button / Pin column`))
       const lines = await boxList(page, cells(row).first().locator('> span'), `row ${i} Post line`, 2)
       lines.forEach((l, k) => problems.push(...within(cs[0], l, `row ${i} Post line ${k} / Post cell`)))
     }

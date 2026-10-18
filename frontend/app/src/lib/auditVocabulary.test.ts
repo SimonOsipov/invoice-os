@@ -24,6 +24,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
     'invoice.unkept_as_is',
     'invoice.resolved_outside',
     'invoice.unresolved_outside',
+    'invoice_register.exported',
   ],
   approvals: [
     'invoice.approval_armed',

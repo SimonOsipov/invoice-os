@@ -46,7 +46,7 @@ func DownloadHandler(assemble assembleFn, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		sink := &bundleSink{w: w}
+		sink := &bundleSink{w: w, contentType: "application/zip"}
 		err := assemble(r.Context(), req, sink, sink.setFilename)
 		if err == nil {
 			return
@@ -100,9 +100,10 @@ func PreviewHandler(preview previewFn, log *slog.Logger) http.HandlerFunc {
 // bundleSink defers the 200 and its headers to the first byte, so any failure
 // before then is still an honest JSON status (D-41).
 type bundleSink struct {
-	w        http.ResponseWriter
-	filename string
-	wrote    bool
+	w           http.ResponseWriter
+	contentType string
+	filename    string
+	wrote       bool
 }
 
 func (s *bundleSink) setFilename(name string) { s.filename = name }
@@ -111,7 +112,7 @@ func (s *bundleSink) Write(p []byte) (int, error) {
 	if !s.wrote {
 		s.wrote = true
 		h := s.w.Header()
-		h.Set("Content-Type", "application/zip")
+		h.Set("Content-Type", s.contentType)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Content-Disposition", contentDisposition(s.filename))
 		s.w.WriteHeader(http.StatusOK)
@@ -238,7 +239,7 @@ func StaffDownloadHandler(assemble staffAssembleFn, log *slog.Logger) http.Handl
 			writeError(w, http.StatusBadRequest, msg)
 			return
 		}
-		sink := &bundleSink{w: w}
+		sink := &bundleSink{w: w, contentType: "application/zip"}
 		err := assemble(r.Context(), r.PathValue("id"), req, sink, sink.setFilename)
 		if err == nil {
 			return

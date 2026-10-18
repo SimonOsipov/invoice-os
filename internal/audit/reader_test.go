@@ -355,12 +355,12 @@ func TestAuditScopeOf_MatchesTheTwentySixEventsTheTriggerLeavesNull(t *testing.T
 	}
 }
 
-// AC #4: cross-checks the four DB-pinned rule sets (10+7+4+3+26=50) for pairwise
+// AC #4: cross-checks the four DB-pinned rule sets (10+7+4+4+26=51) for pairwise
 // disjointness and total. audit_trigger_test.go pins each set's size alone but never
 // cross-checks them — an invariant CompanyScope's three-way split now depends on. Needs
 // no audit package call: it guards the fixture data itself. Disjointness is a real
 // structural property, not a restatement of ScopeOf's fallback.
-func TestAuditScopeOf_RuleSetsAreDisjointAndSumToFifty(t *testing.T) {
+func TestAuditScopeOf_RuleSetsAreDisjointAndSumToFiftyOne(t *testing.T) {
 	all := map[string]string{}
 	named := []struct {
 		name   string
@@ -385,13 +385,13 @@ func TestAuditScopeOf_RuleSetsAreDisjointAndSumToFifty(t *testing.T) {
 		}
 		all[e] = "D"
 	}
-	if len(all) != 50 {
-		t.Fatalf("rule sets total %d events, want 50", len(all))
+	if len(all) != 51 {
+		t.Fatalf("rule sets total %d events, want 51", len(all))
 	}
 }
 
 // AC #4: ScopeOf answers workspace for exactly the firm-wide names and for no
-// other event in the shipped 50-name vocabulary. TestAuditScopeOf_ClassifiesAllThreeStates
+// other event in the shipped 51-name vocabulary. TestAuditScopeOf_ClassifiesAllThreeStates
 // checks the names one at a time; this is the closed half, and it is the one assertion
 // here that a fallback cannot satisfy — reaching ScopeWorkspace needs a real entry in
 // reader.go's firmWideEvents. It fails if either extraction event is ever filed as
@@ -408,8 +408,8 @@ func TestAuditScopeOf_WorkspaceAnswerIsExactlyTheFirmWideNames(t *testing.T) {
 	}
 	// Population floor: a shrunk vocabulary would make the set equality below a claim
 	// about whatever happened to survive.
-	if len(vocabulary) != 50 {
-		t.Fatalf("the rule sets name %d events, want 50", len(vocabulary))
+	if len(vocabulary) != 51 {
+		t.Fatalf("the rule sets name %d events, want 51", len(vocabulary))
 	}
 
 	want := map[string]bool{}

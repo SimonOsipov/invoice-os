@@ -75,7 +75,7 @@ test.describe('blog crawler HTML (API E2E, over the deployed blog origin)', () =
           { type: 'p', text: `Paragraph ${marker('p')}.` },
           { type: 'h', text: `Heading ${marker('h')}` },
           { type: 'ul', items: [`Item ${marker('ul')}`, 'Second item'] },
-          { type: 'note', title: 'Note title', text: `Note ${marker('note')}` },
+          { type: 'note', kind: 'deadline', title: 'Note title', text: `Note ${marker('note')}` },
           { type: 'quote', text: `Quote ${marker('quote')}`, who: 'A. Speaker' },
         ]
       : [{ type: 'p', text: `Body ${name}.` }]
@@ -102,13 +102,13 @@ test.describe('blog crawler HTML (API E2E, over the deployed blog origin)', () =
       status,
       body: body(name),
     })
-    expect(res.status, `PUT ${name} as ${status}`).toBe(200)
+    expect(res.status, `PUT ${name} as ${status}: ${JSON.stringify(res.body)}`).toBe(200)
   }
 
   // Creates a draft and, when date is given, publishes it with that date. Returns the post id (the slug).
   async function makePost(name: string, date?: string): Promise<string> {
     const created = await send('POST', '/posts', { title: titleFor(name), category_id: category.id, status: 'draft', body: [] })
-    expect(created.status, `create ${name}`).toBe(201)
+    expect(created.status, `create ${name}: ${JSON.stringify(created.body)}`).toBe(201)
     const id = (created.body as { id: string }).id
     postIds.push(id)
     if (date) await setStatus(id, name, 'published', date)

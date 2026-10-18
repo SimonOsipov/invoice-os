@@ -23,6 +23,9 @@ import {
   isProtectedAdmin,
   MEMBER_UNBACKED,
   PROTECTED_ADMIN_NOTE,
+  REVOKE_CONFIRM,
+  REVOKE_CONFIRMED,
+  REVOKE_KEEP,
   type Member,
   type MemberStatus,
   type PendingInvite,
@@ -60,7 +63,7 @@ const MENU_CLEARANCE_NOTED = 256
 // narrower than its content, so `minWidth: 0` is as load-bearing as the other three.
 const ELLIPSIS = { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const
 
-export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, statusError, invites = [], onResend, resending }: {
+export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, statusError, invites = [], onResend, resending, onRevoke, revoking }: {
   ctx: PlatformCtx
   /** Already filtered by MembersView — this component never filters. */
   rows: Member[]
@@ -83,6 +86,9 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   onResend?: (id: string) => void
   /** Invitation ids with a resend in flight. */
   resending?: ReadonlySet<string>
+  onRevoke?: (id: string) => void
+  /** Invitation ids with a revoke in flight. */
+  revoking?: ReadonlySet<string>
 }) {
   const { members } = ctx
   // One id, so only one menu can be open — the app's house pattern for dismissible
@@ -91,6 +97,8 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
   // Stable: it is a `useDismiss` dependency.
   const closeMenu = useCallback(() => setOpenMenuId(null), [])
   const minWidth = TABLE_MIN_WIDTH
+  // The invite whose revoke confirm strip is open.
+  const [revokeId, setRevokeId] = useState<string | null>(null)
   // Checked against the rendered rows, not just `!= null`: a filter can narrow the list
   // out from under an open menu, and the clearance below must not be held open for a menu
   // that no longer exists.
@@ -100,11 +108,10 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
 
   function menuItems(m: Member, protectedAdmin: boolean): MenuAction[] {
     if (m.status === 'invited') {
-      // Copy and Revoke have no endpoint: rendered disabled with the reason, not hidden.
+      // Resend and Revoke exclude each other on one row while either is in flight.
       return [
-        { label: 'Resend invite', disabled: resending?.has(m.id), onSelect: () => onResend?.(m.id) },
-        { label: 'Copy invite link', disabled: true, reason: MEMBER_UNBACKED.inviteLink },
-        { label: 'Revoke invite', danger: true, disabled: true, reason: MEMBER_UNBACKED.revokeInvite },
+        { label: 'Resend invite', disabled: resending?.has(m.id) || revoking?.has(m.id), onSelect: () => onResend?.(m.id) },
+        { label: 'Revoke invite', danger: true, disabled: revoking?.has(m.id) || resending?.has(m.id), onSelect: () => setRevokeId(m.id) },
       ]
     }
     const items: MenuAction[] = [
@@ -276,6 +283,44 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
               {/* The failed write's SERVER reason, in the slot the steps warning already
                   occupies. Here and not in the `⋯` menu because `MoreMenu` closes on select,
                   so the control that started the write no longer exists when it settles. */}
+              {pending && revokeId === m.id && (
+                <div
+                  data-testid="invite-revoke-confirm"
+                  style={{
+                    padding: '9px 16px',
+                    background: 'var(--status-red-bg)',
+                    borderTop: '1px solid var(--status-red-border)',
+                    minWidth,
+                  }}
+                >
+                  <p style={{ margin: '0 0 8px', fontSize: 12.5, lineHeight: 1.5, color: 'var(--status-red-text)' }}>{REVOKE_CONFIRM}</p>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setRevokeId(null)}
+                      className="v2-btn v2-btn-ghost pf-btn"
+                      data-testid="invite-revoke-keep"
+                      style={{ height: 32, fontSize: 12.5 }}
+                    >
+                      {REVOKE_KEEP}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={revoking?.has(m.id) || resending?.has(m.id)}
+                      onClick={() => {
+                        setRevokeId(null)
+                        onRevoke?.(m.id)
+                      }}
+                      className="v2-btn pf-btn"
+                      data-testid="invite-revoke-confirmed"
+                      style={{ height: 32, fontSize: 12.5, background: 'var(--status-red-text)', color: 'var(--primary-foreground)' }}
+                    >
+                      {REVOKE_CONFIRMED}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {statusError?.id === m.id && (
                 <div
                   data-testid="member-status-error"

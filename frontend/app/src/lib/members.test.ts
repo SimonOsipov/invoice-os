@@ -52,10 +52,12 @@ import {
   parseEmailInput,
   PROTECTED_ADMIN_NOTE,
   removeConfirmQuestion,
+  removeInvite,
   removeMember,
   REMOVE_EXPLANATION,
   replaceMember,
   resendInvitation,
+  revokeInvitation,
   rosterWithInvites,
   sendInvitations,
   serverRefusedAddresses,
@@ -1360,16 +1362,6 @@ describe("§8's danger-zone copy — the most important text in the story (T7.1�
     expect(src, 'the e2e transcription drifted from lib/members.ts').toContain(SUSPEND_EXPLANATION)
   })
 
-  it('the e2e transcription carries the two invite reasons', () => {
-    const src = readFileSync(
-      fileURLToPath(new URL('../../../../e2e/topology/settingsFixtures.ts', import.meta.url)),
-      'utf8',
-    )
-    expect(src, 'the scan read the wrong file').toContain('export const UNBACKED')
-    expect(src, 'the e2e inviteLink drifted from lib/members.ts').toContain(MEMBER_UNBACKED.inviteLink)
-    expect(src, 'the e2e revokeInvite drifted from lib/members.ts').toContain(MEMBER_UNBACKED.revokeInvite)
-  })
-
   it('AC8: the shared audit-trail clause survives the rewrite in both explanations', () => {
     // SUSPEND_EXPLANATION's clause ends the sentence with a full stop, both before and
     // after the rewrite -- this guards the rewrite from dropping it.
@@ -1564,6 +1556,26 @@ describe('RESEND-07-02 — the invitations wire', () => {
     expect(opts).toEqual({ method: 'POST' })
     expect(opts).not.toHaveProperty('body')
     expect(got).toEqual(w)
+  })
+
+  it('revokeInvitation posts to the revoke url and removeInvite drops only that id', async () => {
+    const wire = { id: 'i-1', status: 'revoked' as const }
+    const af = vi.fn().mockResolvedValue(wire) as unknown as AuthedFetch
+
+    const got = await revokeInvitation(af, 'https://gw', 'i-1')
+
+    expect(af).toHaveBeenCalledWith('https://gw/api/tenancy/v1/invitations/i-1/revoke', { method: 'POST' })
+    expect(got).toEqual(wire)
+
+    const a = toPendingInvite(w)
+    const b = { ...a, id: 'other' }
+    const list = [a, b]
+    const out = removeInvite(list, a.id)
+    expect(out).toEqual([b])
+    expect(out).not.toBe(list)
+    const same = removeInvite(list, 'nope')
+    expect(same).toEqual(list)
+    expect(same).not.toBe(list)
   })
 
   it('the invitation calls propagate the ApiError unreshaped', async () => {
@@ -2028,16 +2040,14 @@ describe('AC-5 — filterMembers and classifyInvites tolerate a null email', () 
 
 describe('AC-7 — MEMBER_UNBACKED', () => {
   it('supplies one distinct, non-empty sentence per unbacked control', () => {
-    const keys = ['remove', 'role', 'department', 'clientAccess', 'inviteLink', 'revokeInvite'] as const
+    const keys = ['remove', 'role', 'department', 'clientAccess'] as const
     for (const k of keys) expect(MEMBER_UNBACKED[k]).toBeTruthy()
     const values = keys.map((k) => MEMBER_UNBACKED[k])
     expect(new Set(values).size).toBe(keys.length)
     expect(Object.keys(MEMBER_UNBACKED).sort()).toEqual([...keys].sort())
     expect('invite' in MEMBER_UNBACKED, 'the invite endpoint exists; its "not yet" sentence is retired').toBe(false)
-    expect(MEMBER_UNBACKED.inviteLink).toBe('The invite link exists only in the email. The server keeps only a hash of it.')
-    expect(MEMBER_UNBACKED.revokeInvite).toBe(
-      'There is no way to revoke an invite yet. An unused invite expires 7 days after it was sent.',
-    )
+    expect('inviteLink' in MEMBER_UNBACKED).toBe(false)
+    expect('revokeInvite' in MEMBER_UNBACKED).toBe(false)
   })
 })
 

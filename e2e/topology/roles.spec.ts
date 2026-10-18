@@ -1207,22 +1207,13 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   expect(listed, 'the server-refused address is not listed').not.toContain(refused)
   expect(listed, 'the malformed address is not listed').not.toContain(malformed)
 
-  // --- the row's menu: Resend is live, the other two say why they are not --------------------
+  // --- the row's menu: Resend and Revoke are live, no Copy link --------------------
   await row.getByTestId('member-menu-trigger').click()
   await expect(menu).toBeVisible()
   await expect(menu.getByRole('button', { name: 'Resend invite', exact: true })).toBeEnabled()
-  await expectDisabledWithReason(
-    menu.getByRole('button', { name: 'Copy invite link', exact: true }),
-    menu.getByTestId('member-menu-reason').filter({ hasText: UNBACKED.inviteLink }),
-    UNBACKED.inviteLink,
-    'Copy invite link',
-  )
-  await expectDisabledWithReason(
-    menu.getByRole('button', { name: 'Revoke invite', exact: true }),
-    menu.getByTestId('member-menu-reason').filter({ hasText: UNBACKED.revokeInvite }),
-    UNBACKED.revokeInvite,
-    'Revoke invite',
-  )
+  await expect(menu.getByRole('button', { name: 'Revoke invite', exact: true })).toBeEnabled()
+  await expect(menu.getByRole('button', { name: 'Copy invite link' })).toHaveCount(0)
+  await expect(menu.getByTestId('member-menu-reason')).toHaveCount(0)
 
   // L2: the open pending-row menu fits inside the table's scroller and makes it scroll no further.
   const l2 = await atEachWidth(page, async (width) => {
@@ -1363,7 +1354,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   await accountRow.getByTestId('member-menu-trigger').click()
   await expect(menu.getByTestId('member-menu-state')).toHaveText(INVITE_ACCOUNT_LABELS.confirmed)
   await expect(menu.getByRole('button', { name: 'Resend invite', exact: true })).toBeEnabled()
-  await expect(menu.getByTestId('member-menu-reason')).toHaveCount(2)
+  await expect(menu.getByTestId('member-menu-reason')).toHaveCount(0)
   await accountRow.getByTestId('member-menu-trigger').click()
   await expect(menu).toBeHidden()
 

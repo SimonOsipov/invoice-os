@@ -541,9 +541,9 @@ function hold() {
 }
 
 // The nth call to a route takes the nth responder; the last one repeats.
-function gateway(routes: { list?: Responder[]; send?: Responder[]; resend?: Responder[] }) {
+function gateway(routes: { list?: Responder[]; send?: Responder[]; resend?: Responder[]; revoke?: Responder[] }) {
   const calls: Call[] = []
-  const seen = { list: 0, send: 0, resend: 0 }
+  const seen = { list: 0, send: 0, resend: 0, revoke: 0 }
   const authedFetch = vi.fn((url: string, opts?: { method?: string; body?: unknown }) => {
     const call: Call = { url, method: opts?.method ?? 'GET', body: opts?.body }
     calls.push(call)
@@ -555,14 +555,17 @@ function gateway(routes: { list?: Responder[]; send?: Responder[]; resend?: Resp
           : 'send'
         : /^\/api\/tenancy\/v1\/invitations\/[^/]+\/resend$/.test(path) && call.method === 'POST'
           ? 'resend'
-          : null
+          : /^\/api\/tenancy\/v1\/invitations\/[^/]+\/revoke$/.test(path) && call.method === 'POST'
+            ? 'revoke'
+            : null
     const queue = kind ? routes[kind] : undefined
     if (!kind || !queue?.length) return Promise.reject(new Error(`unrouted ${call.method} ${url}`))
     return queue[Math.min(seen[kind]++, queue.length - 1)](call)
   })
-  const of = (kind: 'list' | 'send' | 'resend') =>
+  const of = (kind: 'list' | 'send' | 'resend' | 'revoke') =>
     calls.filter((c) => {
       const isResend = /\/resend$/.test(c.url)
+      if (kind === 'revoke') return /\/revoke$/.test(c.url)
       if (kind === 'resend') return isResend
       if (isResend || !c.url.endsWith('/invitations')) return false
       return kind === 'list' ? c.method === 'GET' : c.method === 'POST'
@@ -572,6 +575,7 @@ function gateway(routes: { list?: Responder[]; send?: Responder[]; resend?: Resp
     lists: () => of('list'),
     sends: () => of('send'),
     resends: () => of('resend'),
+    revokes: () => of('revoke'),
     invitationCalls: () => calls.filter((c) => c.url.includes('/invitations')),
   }
 }
@@ -607,6 +611,19 @@ async function landed() {
 function clickResendOn(row: HTMLElement) {
   fireEvent.click(within(row).getByTestId('member-menu-trigger'))
   fireEvent.click(within(screen.getByTestId('member-menu')).getByRole('button', { name: 'Resend invite' }))
+}
+
+function openRevokeStrip(row: HTMLElement) {
+  fireEvent.click(within(row).getByTestId('member-menu-trigger'))
+  fireEvent.click(within(screen.getByTestId('member-menu')).getByRole('button', { name: 'Revoke invite' }))
+}
+function clickRevokeOn(row: HTMLElement) {
+  openRevokeStrip(row)
+  fireEvent.click(within(screen.getByTestId('invite-revoke-confirm')).getByTestId('invite-revoke-confirmed'))
+}
+function menuItem(row: HTMLElement, name: string) {
+  fireEvent.click(within(row).getByTestId('member-menu-trigger'))
+  return within(screen.getByTestId('member-menu')).getByRole('button', { name }) as HTMLButtonElement
 }
 
 describe('RESEND-07-04', () => {
@@ -838,6 +855,186 @@ describe('RESEND-07-04', () => {
       expect(flash().textContent).toBe("The invite email to a@x.ng did not go out. Resend it from the row's ⋯ menu.")
       expect(flash().style.color).toBe('var(--status-red-text)')
       expect(within(inviteRowFor('a@x.ng')).getByText('Email not sent')).toBeTruthy()
+    })
+  })
+
+  describe('FIRMS-01-02 revoking', () => {
+    const two = () => listOf(wire({ id: 'i1', email: 'zed@x.ng' }), wire({ id: 'i2', email: 'yan@x.ng' }))
+
+    it('MembersView: Revoke posts the id once and the row leaves', async () => {
+      const gw = gateway({ list: [answer(two())], revoke: [answer({ id: 'i1', status: 'revoked' })] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      expect(gw.revokes()).toHaveLength(1)
+      expect(gw.revokes()[0]).toMatchObject({ url: `${GW_BASE}/api/tenancy/v1/invitations/i1/revoke`, method: 'POST' })
+      expect(inviteRowFor('yan@x.ng')).toBeTruthy()
+      expect(screen.queryByTestId('members-flash')).toBeNull()
+    })
+
+    it("MembersView: a refused revoke renders the server's reason on that row and the next attempt clears it", async () => {
+      const retry = hold()
+      const gw = gateway({
+        list: [answer(two())],
+        revoke: [refuse(429, ERR_DAILY_LIMIT), refuse(403, 'only an admin can invite people'), retry.responder],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+      let err = await screen.findByTestId('member-status-error')
+      expect(err.textContent).toBe(ERR_DAILY_LIMIT)
+      expect(inviteRowFor('zed@x.ng').nextElementSibling).toBe(err)
+      expect(inviteRows()).toHaveLength(2)
+      expect(screen.queryByTestId('members-invites-error')).toBeNull()
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+      expect(screen.queryByText(ERR_DAILY_LIMIT), 'cleared at the click').toBeNull()
+      err = await screen.findByText('only an admin can invite people')
+      expect(inviteRowFor('zed@x.ng').nextElementSibling).toBe(err)
+      expect(screen.queryByTestId('members-invites-error')).toBeNull()
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+      expect(screen.queryByTestId('member-status-error')).toBeNull()
+      await act(async () => retry.resolve({ id: 'i1', status: 'revoked' }))
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+    })
+
+    it.each([
+      [409, ERR_NOT_PENDING],
+      [404, ERR_NOT_FOUND],
+    ] as const)('MembersView: a %i revoke keeps the row and shows the server\'s message on it', async (status, message) => {
+      const gw = gateway({ list: [answer(two())], revoke: [refuse(status, message)] })
+      const refetchMembers = vi.fn()
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} refetchMembers={refetchMembers} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+
+      const err = await screen.findByTestId('member-status-error')
+      expect(err.textContent).toBe(message)
+      expect(inviteRowFor('zed@x.ng').nextElementSibling).toBe(err)
+      await act(async () => {})
+      expect(inviteRows()).toHaveLength(2)
+      expect(gw.lists(), 'no list refetch after a revoke').toHaveLength(1)
+      expect(refetchMembers).toHaveBeenCalledTimes(1)
+      expect(screen.queryByTestId('members-invites-error')).toBeNull()
+    })
+
+    it('MembersView: after a 409 revoke the next list load drops the row and its message', async () => {
+      const gw = gateway({
+        list: [answer(two()), answer(listOf())],
+        revoke: [refuse(409, ERR_NOT_PENDING)],
+        resend: [refuse(404, ERR_NOT_FOUND)],
+      })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+      await screen.findByText(ERR_NOT_PENDING)
+
+      clickResendOn(inviteRowFor('yan@x.ng'))
+
+      await waitFor(() => expect(inviteRows()).toHaveLength(0))
+      expect(gw.lists()).toHaveLength(2)
+      expect(screen.queryByText(ERR_NOT_PENDING)).toBeNull()
+    })
+
+    it('MembersView: a second confirm while the first revoke is in flight sends nothing', async () => {
+      const first = hold()
+      const gw = gateway({ list: [answer(two())], revoke: [first.responder] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+      expect(gw.revokes()).toHaveLength(1)
+
+      const again = menuItem(inviteRowFor('zed@x.ng'), 'Revoke invite')
+      expect(again.disabled).toBe(true)
+      fireEvent.click(again)
+      expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
+      expect(gw.revokes()).toHaveLength(1)
+
+      await act(async () => first.resolve({ id: 'i1', status: 'revoked' }))
+    })
+
+    it("MembersView: Resend is disabled while the same row's revoke is in flight", async () => {
+      const first = hold()
+      const gw = gateway({ list: [answer(two())], revoke: [first.responder] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+
+      const resend = menuItem(inviteRowFor('zed@x.ng'), 'Resend invite')
+      expect(resend.disabled).toBe(true)
+      fireEvent.click(resend)
+      expect(gw.resends()).toHaveLength(0)
+
+      await act(async () => first.resolve({ id: 'i1', status: 'revoked' }))
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      expect(gw.resends()).toHaveLength(0)
+    })
+
+    it("MembersView: Revoke is disabled while the same row's resend is in flight", async () => {
+      const first = hold()
+      const gw = gateway({ list: [answer(two())], resend: [first.responder] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickResendOn(inviteRowFor('zed@x.ng'))
+
+      const revoke = menuItem(inviteRowFor('zed@x.ng'), 'Revoke invite')
+      expect(revoke.disabled).toBe(true)
+      fireEvent.click(revoke)
+      expect(screen.queryByTestId('invite-revoke-confirm')).toBeNull()
+      expect(gw.revokes()).toHaveLength(0)
+
+      await act(async () => first.resolve(wire({ id: 'i1', email: 'zed@x.ng' })))
+      await waitFor(() => expect(flash().textContent).toBe('Invite sent to zed@x.ng.'))
+      expect(inviteRows(), 'the resend landing does not remove the row').toHaveLength(2)
+    })
+
+    it('MembersView: a resend after the revoke started sends nothing, and the row stays gone', async () => {
+      const held = hold()
+      const gw = gateway({ list: [answer(two())], revoke: [held.responder], resend: [answer(wire({ id: 'i1' }))] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+      fireEvent.click(menuItem(inviteRowFor('zed@x.ng'), 'Resend invite'))
+      await act(async () => held.resolve({ id: 'i1', status: 'revoked' }))
+
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      await act(async () => {})
+      expect(gw.resends()).toHaveLength(0)
+      expect(inviteRows()).toHaveLength(1)
+    })
+
+    it("MembersView: revoking one invite leaves another invite's Revoke enabled", async () => {
+      const held = hold()
+      const gw = gateway({ list: [answer(two())], revoke: [held.responder] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+
+      const menu = within(inviteRowFor('yan@x.ng'))
+      fireEvent.click(menu.getByTestId('member-menu-trigger'))
+      const items = within(screen.getByTestId('member-menu')).getAllByRole('button') as HTMLButtonElement[]
+      expect(items.map((i) => [i.textContent, i.disabled])).toEqual([['Resend invite', false], ['Revoke invite', false]])
+      await act(async () => held.resolve({ id: 'i1', status: 'revoked' }))
+    })
+
+    it('MembersView: a non-admin sees no invite row and so no Revoke', async () => {
+      const gw = gateway({ list: [answer(two())] })
+      render(<Harness initial={[selfRow({ role: 'preparer' }), member()]} authedFetch={gw.authedFetch} />)
+
+      await act(async () => {})
+      expect(inviteRows()).toHaveLength(0)
+      expect(gw.invitationCalls()).toEqual([])
     })
   })
 

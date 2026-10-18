@@ -1240,6 +1240,14 @@ jobs:
           path: e2e/report-api/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Upload the flaky JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-results-e2e-${{ github.run_attempt }}
+          path: e2e/flaky-results/
+          if-no-files-found: ignore
+          retention-days: 30
 
   # Each topology unit runs on its own runner after smoke + api; the map is in
   # e2e/topology/shards.ts. It reads the environment only, so it holds no Railway token.
@@ -1332,6 +1340,14 @@ jobs:
           path: e2e/report-topology/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Upload the flaky JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-results-topology-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: e2e/flaky-results/
+          if-no-files-found: ignore
+          retention-days: 30
 
   # The required merge check: always reports on a PR, so a skipped E2E cannot read as a pass.
   e2e-gate:

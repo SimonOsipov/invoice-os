@@ -7,6 +7,7 @@ import { expect, test, type Page, type Request } from '@playwright/test'
 
 import { DESTINATION_ENV, type Destination, type PersonaId } from './personas'
 import { resolveTarget } from './targets'
+import { collectSourcedErrors } from './topology/consoleGate'
 import { shardTenantError } from './topology/shards'
 
 // Rules.tsx placeholder-row copy (status loading / forbidden); the error state is the Retry button.
@@ -165,12 +166,5 @@ export async function sidebarRoster(page: Page): Promise<string[]> {
 // Console errors + uncaught exceptions, for specs that assert a persona's surfaces draw
 // clean. Attach before navigating so load-time errors are captured.
 export function collectErrors(page: Page): string[] {
-  const errors: string[] = []
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text())
-  })
-  page.on('pageerror', (err) => {
-    errors.push(`pageerror: ${err.message}`)
-  })
-  return errors
+  return collectSourcedErrors(page)
 }

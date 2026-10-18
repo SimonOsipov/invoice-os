@@ -151,7 +151,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       expect(user.email).toBe('c.okafor@okafor.ng')
     })
 
-    test('/memberships -> 200 + {memberships:[{user_id,role,status,display_name,email},...]}, no pagination key', async () => {
+    test('/memberships -> 200 + {memberships:[{user_id,role,status,display_name,email,client_access},...]}, no pagination key', async () => {
       const res = await rawFetch('/api/tenancy/v1/memberships', {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -378,6 +378,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       assertErrorEnvelope(res, 400, 'PATCH with status "invited" and an unknown id')
     })
   })
+
   test.describe('PUT /memberships/{user_id}/clients (D24)', () => {
     const err = (res: { body: unknown }) => (res.body as { error: string }).error
 

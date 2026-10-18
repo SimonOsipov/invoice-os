@@ -19,8 +19,8 @@
 // db/seed.dev.sql's workflow_roles/workflow_role_members and lib/roles.ts's resolve() —
 // see SEED_FIRM_ROLE_CARDS below for the derivation itself.
 //
-// No STATUS write is driven from the browser (the last test writes client access, restored in a `finally`). Suspend/Reactivate are real, audited
-// PATCHes, and this environment is shared and never reset between specs — a status write
+// No STATUS write is driven from the browser; Test 5 writes client access and restores it in a `finally`.
+// Suspend/Reactivate are real, audited PATCHes, and this environment is shared and never reset between specs — a status write
 // started here could not be restored on a failed assertion the way api/contract-tenancy.spec.ts's
 // try/finally does. The controls are asserted ENABLED and correctly labelled; the write itself
 // is proven over the wire in that spec instead. Workflow-ROLE writes are different: Test 3
@@ -28,7 +28,7 @@
 // through the UI, against the real store — is exactly what this file exists to prove, and its
 // own cleanup (below) is what keeps the environment honest afterward.
 //
-// The last test invites on 1111 from the screen. Invitations are purged on every deploy
+// Test 4 invites on 1111 from the screen. Invitations are purged on every deploy
 // (`invitations` in demopurge.go's purgeTables), and no other serial-lane spec reads them.
 //
 // COUNT ASSERTIONS: persona-surfaces.spec.ts bans literal counts over LIVE, tenant-wide lists
@@ -1517,7 +1517,7 @@ test('firm Settings: an admin gives a member clients in the drawer and they surv
     await openDrawer(preparer.displayName)
     await putDone(() => drawer.getByTestId('drawer-scope-selected').click())
     for (const client of picked) {
-      await putDone(() => drawer.getByTestId('drawer-client-row').filter({ has: page.getByText(client.name, { exact: true }) }).locator('input').check())
+      await putDone(() => drawer.getByRole('checkbox', { name: client.name, exact: true }).check())
     }
     await closeDrawer()
     await expect(line()).toHaveText('2 clients')

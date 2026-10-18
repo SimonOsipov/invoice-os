@@ -1,5 +1,5 @@
 import { gatewayBase } from '@invoice-os/api-client/client'
-import type { BlogData, Category, Post } from './data'
+import type { Block, BlogData, Category, Post } from './data'
 import type { GlyphName } from './icons'
 import type { Route } from './route'
 
@@ -67,6 +67,27 @@ export function bandsOf(data: BlogData) {
       allLabel: `All ${all.length} posts`,
       posts: all.slice(0, 3),
     }))
+}
+
+const blockText = (b: Block): string => {
+  const text = 'text' in b ? b.text : ''
+  const title = 'title' in b ? b.title : ''
+  const items = 'items' in b ? b.items.join(' ') : ''
+  return `${text} ${title} ${items}`
+}
+
+export function searchPosts(data: BlogData, q: string): Post[] {
+  const needle = q.trim().toLowerCase()
+  return data.posts.filter((p) => {
+    const hay = [p.title, p.summary, catOf(data, p.category_id)?.name ?? '', ...p.body.map(blockText)].join(' ')
+    return hay.toLowerCase().includes(needle)
+  })
+}
+
+export function resultsTitle(n: number, q: string): string {
+  const t = q.trim()
+  if (n === 0) return `Nothing found for “${t}”`
+  return `${n} ${n === 1 ? 'post matches' : 'posts match'} “${t}”`
 }
 
 export function placeholderOf(cat: Category | undefined): Tone & { icon: GlyphName } {

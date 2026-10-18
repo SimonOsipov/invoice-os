@@ -27,6 +27,9 @@ input::placeholder { color: var(--muted-foreground); }
 .blog-nav:hover { background: var(--surface-panel) !important; }
 .blog-sub:hover { filter: brightness(1.06); }
 .blog-crumb:hover { color: var(--teal) !important; }
+.blog-row:hover { background: var(--card) !important; }
+.blog-chip:hover { background: var(--muted) !important; }
+.blog-clear:hover { color: var(--ink) !important; }
 .blog-cookie-choices:hover { color: var(--action) !important; }
 
 @media (max-width: 767px) {
@@ -35,5 +38,6 @@ input::placeholder { color: var(--muted-foreground); }
   .asc-app > aside nav { flex: none !important; flex-direction: row !important; overflow-x: auto !important; overflow-y: hidden !important; }
   .asc-app > aside nav button { width: auto !important; flex: none; white-space: nowrap; }
   .blog-navlabel { display: none !important; }
-  #blog-main { flex: none !important; overflow-y: visible !important; }
+  #blog-main { flex: none !important; overflow-y: visible !important; overflow-wrap: anywhere; }
+  .blog-px { padding-left: 20px !important; padding-right: 20px !important; }
 }

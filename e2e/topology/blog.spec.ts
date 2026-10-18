@@ -135,6 +135,104 @@ test.describe('blog layout at wide widths', () => {
   })
 })
 
+const WHAT_CHANGES = 'What structured e-invoicing changes for a Nigerian finance team'
+const GRID = 'div[style*="grid-template-columns"]'
+
+async function expectCardsInside(grid: Locator, label: string): Promise<string[]> {
+  const g = await rectOf(grid, `${label} grid`)
+  const cards = grid.locator(':scope > div')
+  const n = await cards.count()
+  const rects: Rect[] = []
+  for (let i = 0; i < n; i++) rects.push(await rectOf(cards.nth(i), `${label} card ${i}`))
+  rects.forEach((r, i) => expect(enclosesRect(g, r, SLACK_PX), `${label} card ${i} leaves its grid`).toBe(true))
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) expect(rectsOverlap(rects[i], rects[j]), `${label} cards ${i} and ${j} overlap`).toBe(false)
+  }
+  return cards.locator('button > span:nth-child(2)').allTextContents()
+}
+
+test.describe('blog home, category and search at wide widths', () => {
+  for (const width of WIDE_WIDTHS) {
+    test(`blog home: the featured card's image and text sit apart (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await prepare(page)
+      await resize(page, width, 1080)
+      await visit(page)
+      await expect(main(page).locator('h1')).toBeVisible()
+      const text = main(page).locator('section').first().getByRole('button', { name: /Read the post/ })
+      await expect(text, 'control: no featured card; seeded posts are published').toBeVisible()
+      const card = text.locator('..')
+      const image = card.locator(':scope > div').first()
+      const c = await rectOf(card, 'the featured card')
+      const i = await rectOf(image, 'the featured image box')
+      const t = await rectOf(text, 'the featured text')
+      await attachJson(testInfo, `blog-featured-${width}`, { card: c, image: i, text: t })
+      expect(enclosesRect(c, i, SLACK_PX), 'the image box leaves the card').toBe(true)
+      expect(enclosesRect(c, t, SLACK_PX), 'the text leaves the card').toBe(true)
+      expect(rectsOverlap(i, t), 'the image box overlaps the text').toBe(false)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog home: band cards sit inside their grid and apart (${width})`, async ({ page }) => {
+      const errors = collectErrors(page)
+      await prepare(page)
+      await resize(page, width, 1080)
+      await visit(page)
+      await expect(main(page).locator('h1')).toBeVisible()
+      await expect(main(page).locator(`section ${GRID} button`).first()).toBeVisible()
+      const grids = main(page).locator(`section ${GRID}`)
+      const n = await grids.count()
+      expect(n, 'control: no band rendered').toBeGreaterThan(0)
+      const titles: string[] = []
+      for (let k = 0; k < n; k++) titles.push(...(await expectCardsInside(grids.nth(k), `band ${k}`)))
+      expect(titles, 'control: no band holds a seeded title').toContain(WHAT_CHANGES)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog category: cards sit inside the grid and apart (${width})`, async ({ page }) => {
+      const errors = collectErrors(page)
+      await prepare(page)
+      await resize(page, width, 1080)
+      await visit(page, '/category/regulation')
+      await expect(main(page).getByRole('button', { name: new RegExp(WHAT_CHANGES) }).first()).toBeVisible()
+      const titles = await expectCardsInside(main(page).locator(`section ${GRID}`), 'category')
+      expect(titles, 'control: the seeded card is missing').toContain(WHAT_CHANGES)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog search: date and text columns sit apart (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await prepare(page)
+      await resize(page, width, 1080)
+      await visit(page)
+      await expect(main(page).locator('h1')).toBeVisible()
+      const field = header(page).locator('label')
+      const input = field.getByRole('textbox')
+      await input.fill('invoice')
+      await expect(main(page).locator('h2')).toContainText(/match/)
+      const rows = main(page).locator('button.blog-row')
+      const n = await rows.count()
+      expect(n, 'control: no result row').toBeGreaterThan(0)
+      for (let k = 0; k < n; k++) {
+        const r = await rectOf(rows.nth(k), `row ${k}`)
+        const d = await rectOf(rows.nth(k).locator(':scope > span').first(), `row ${k} date`)
+        const x = await rectOf(rows.nth(k).locator(':scope > span').nth(1), `row ${k} text`)
+        expect(enclosesRect(r, d, SLACK_PX), `row ${k}: the date leaves the row`).toBe(true)
+        expect(enclosesRect(r, x, SLACK_PX), `row ${k}: the text leaves the row`).toBe(true)
+        expect(rectsOverlap(d, x), `row ${k}: date and text overlap`).toBe(false)
+      }
+      const clear = field.getByRole('button', { name: 'Clear search' })
+      const f = await rectOf(field, 'the search field')
+      const cl = await rectOf(clear, 'the clear button')
+      const inp = await rectOf(input, 'the search input')
+      await attachJson(testInfo, `blog-search-${width}`, { field: f, clear: cl, input: inp })
+      expect(enclosesRect(f, cl, SLACK_PX), 'the clear button leaves the search field').toBe(true)
+      expect(rectsOverlap(cl, inp), 'the clear button overlaps the input').toBe(false)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+  }
+})
+
 test.describe('blog at phone widths', () => {
   for (const width of PHONE_WIDTHS) {
     test(`blog layout: on a phone the sidebar stacks above main (${width})`, async ({ page }, testInfo) => {

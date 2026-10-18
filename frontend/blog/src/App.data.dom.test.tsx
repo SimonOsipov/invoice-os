@@ -46,7 +46,7 @@ describe('data states', () => {
     await act(async () => retry.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(load).toHaveBeenCalledTimes(2)
     expect(q('#blog-main').textContent).not.toContain('The blog did not load.')
-    expect(q('#blog-main section[data-view="home"]')).not.toBeNull()
+    expect(q('#blog-main h1')).not.toBeNull()
   })
 
   it('DA-03 an unknown slug shows not found', async () => {
@@ -102,6 +102,6 @@ describe('data states', () => {
     container.remove()
     await mount('/category/c1', settled)
     expect(q('#blog-main').textContent).not.toContain('This page is not on the blog.')
-    expect(q('#blog-main section[data-view="category"]')).not.toBeNull()
+    expect(q('#blog-main h2').textContent).toBe('Regulation')
   })
 })

@@ -3,9 +3,11 @@ import type { Crumb } from '../model'
 
 type HeaderProps = {
   crumbs: Crumb[]
+  q: string
+  onQ: (q: string) => void
 }
 
-export function Header({ crumbs }: HeaderProps) {
+export function Header({ crumbs, q, onQ }: HeaderProps) {
   return (
     <header
       id="blog-header"
@@ -82,6 +84,8 @@ export function Header({ crumbs }: HeaderProps) {
         <input
           aria-label="Search posts"
           placeholder="Search posts"
+          value={q}
+          onChange={(e) => onQ(e.target.value)}
           style={{
             flex: 1,
             minWidth: 0,
@@ -92,6 +96,24 @@ export function Header({ crumbs }: HeaderProps) {
             color: 'var(--ink)',
           }}
         />
+        {q !== '' && (
+          <button
+            type="button"
+            className="blog-clear"
+            aria-label="Clear search"
+            onClick={() => onQ('')}
+            style={{
+              background: 'none',
+              border: 0,
+              padding: 2,
+              cursor: 'pointer',
+              color: 'var(--muted-foreground)',
+              display: 'inline-flex',
+            }}
+          >
+            <Icon name="x" size={14} />
+          </button>
+        )}
       </label>
     </header>
   )

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { BlogData, Post } from './data'
-import { bandsOf, catOf, crumbsFor, featuredOf, fmtDate, noteKindOf, placeholderOf, resolveView, TONES } from './model'
+import type { Block, BlogData, Post } from './data'
+import { bandsOf, catOf, crumbsFor, featuredOf, fmtDate, noteKindOf, placeholderOf, resolveView, resultsTitle, searchPosts, TONES } from './model'
 import type { Route } from './route'
 import { TEST_DATA } from './testData'
 
@@ -107,5 +107,63 @@ describe('crumbsFor', () => {
     const data: BlogData = { ...TEST_DATA, posts: [{ ...TEST_DATA.posts[0], category_id: 'new-cat' }] }
     expect(catOf(data, 'new-cat')).toBeUndefined()
     expect(labels({ view: 'post', slug: 'sage-rules' }, ready(data))).toEqual(['Blog', 'New sage rules for invoices'])
+  })
+})
+
+describe('searchPosts', () => {
+  const mk = (id: string, over: Partial<Post> = {}, body: Block[] = []): Post => ({
+    ...TEST_DATA.posts[0], id, category_id: 'plain', title: `Post ${id}`, summary: 'Nothing here.', featured: false, body, ...over,
+  })
+  const data: BlogData = {
+    categories: [
+      { ...TEST_DATA.categories[0], id: 'zorb', name: 'Zorbulon' },
+      { ...TEST_DATA.categories[0], id: 'plain', name: 'Plain' },
+    ],
+    posts: [
+      mk('by-title', { title: 'Headmark here' }),
+      mk('by-summary', { summary: 'Summarymark here' }),
+      mk('by-category', { category_id: 'zorb' }),
+      mk('by-item', {}, [{ type: 'ul', items: ['one', 'Itemmark two'] }]),
+      mk('by-note-title', {}, [{ type: 'note', kind: 'deadline', title: 'Notetitlemark', text: 'x' }]),
+      mk('by-p', {}, [{ type: 'p', text: 'Pmark text' }]),
+      mk('by-h', {}, [{ type: 'h', text: 'Hmark text' }]),
+      mk('by-quote', {}, [{ type: 'quote', text: 'Quotemark text', who: 'Whomark' }]),
+      mk('by-note-text', {}, [{ type: 'note', kind: 'product', title: 'x', text: 'Notetextmark' }]),
+      mk('by-demo', {}, [{ type: 'demo', demo: 'clearance' }]),
+    ],
+  }
+  const ids = (q: string) => searchPosts(data, q).map((p) => p.id)
+
+  it('search_matchesEveryTextField', () => {
+    expect(ids('HEADMARK')).toEqual(['by-title'])
+    expect(ids('SUMMARYMARK')).toEqual(['by-summary'])
+    expect(ids('ZORBULON')).toEqual(['by-category'])
+    expect(ids('ITEMMARK')).toEqual(['by-item'])
+    expect(ids('NOTETITLEMARK')).toEqual(['by-note-title'])
+  })
+
+  it('search_matchesBlockTextOfEveryKind', () => {
+    expect(ids('pmark')).toEqual(['by-p'])
+    expect(ids('hmark')).toEqual(['by-h'])
+    expect(ids('quotemark')).toEqual(['by-quote'])
+    expect(ids('notetextmark')).toEqual(['by-note-text'])
+  })
+
+  it('search_ignoresQuoteAuthorAndDemoId', () => {
+    expect(ids('whomark')).toEqual([])
+    expect(ids('clearance')).toEqual([])
+  })
+
+  it('search_trimsTheQuery', () => {
+    expect(searchPosts(TEST_DATA, '  Sage  ').map((p) => p.id)).toEqual(['sage-rules'])
+    expect(searchPosts(TEST_DATA, 'sage')).toEqual(searchPosts(TEST_DATA, '  Sage  '))
+  })
+})
+
+describe('resultsTitle', () => {
+  it('resultsTitle_singularPluralAndNone', () => {
+    expect(resultsTitle(1, ' Sage ')).toBe('1 post matches “Sage”')
+    expect(resultsTitle(3, 'tin')).toBe('3 posts match “tin”')
+    expect(resultsTitle(0, 'zz')).toBe('Nothing found for “zz”')
   })
 })

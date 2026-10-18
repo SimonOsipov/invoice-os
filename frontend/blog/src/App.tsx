@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { CategoryPage } from './components/CategoryPage'
 import { Header } from './components/Header'
+import { Home } from './components/Home'
 import { LoadFailed } from './components/LoadFailed'
 import { NotFound } from './components/NotFound'
+import { SearchResults } from './components/SearchResults'
 import { Sidebar } from './components/Sidebar'
 import { chooseConsent, CookieNotice, readConsent, syncBlogConsent, trackBlogPageView } from './analytics'
 import { loadBlog, type BlogData } from './data'
@@ -21,6 +24,7 @@ export function App({ load = loadBlog }: { load?: () => Promise<BlogData> }) {
   const [route, setRoute] = useState<Route>(() => parseBlogPath(window.location.pathname))
   const [blog, setBlog] = useState<BlogState>({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
+  const [q, setQ] = useState('')
 
   useEffect(() => {
     let live = true
@@ -54,18 +58,20 @@ export function App({ load = loadBlog }: { load?: () => Promise<BlogData> }) {
   useEffect(() => {
     const onPop = () => {
       setRoute(parseBlogPath(window.location.pathname))
+      setQ('')
       toTop()
     }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
-  // A click on the current view adds no history entry; a non-canonical URL is corrected in place.
+  // A click on the current view adds no history entry; a non-canonical URL is corrected in place. Any navigation clears the search.
   const navigate = useCallback((next: Route) => {
     const path = blogPath(next)
     if (path !== blogPath(parseBlogPath(window.location.pathname))) window.history.pushState(null, '', path)
     else if (path !== window.location.pathname) window.history.replaceState(null, '', path)
     setRoute(next)
+    setQ('')
     toTop()
   }, [])
 
@@ -78,7 +84,7 @@ export function App({ load = loadBlog }: { load?: () => Promise<BlogData> }) {
     trackBlogPageView()
   }, [path])
 
-  const view = resolveView(route, '', blog)
+  const view = resolveView(route, q, blog)
   const data = blog.status === 'ready' ? blog.data : null
 
   return (
@@ -94,7 +100,13 @@ export function App({ load = loadBlog }: { load?: () => Promise<BlogData> }) {
         overflow: 'hidden',
       }}
     >
-      <Sidebar route={route} data={data} onHome={() => navigate(HOME)} onSubscribe={() => navigate({ view: 'subscribe' })}
+      <Sidebar
+        data={data}
+        homeActive={route.view === 'home' && q.trim() === ''}
+        activeCat={view.kind === 'category' ? view.cat.id : view.kind === 'post' ? view.post.category_id : null}
+        onHome={() => navigate(HOME)}
+        onCategory={(id) => navigate({ view: 'category', id })}
+        onSubscribe={() => navigate({ view: 'subscribe' })}
         onCookieChoices={() => {
           const next = syncBlogConsent()
           if (next) setConsent(next)
@@ -102,15 +114,32 @@ export function App({ load = loadBlog }: { load?: () => Promise<BlogData> }) {
         }}
       />
       <main id="blog-main" style={{ flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative' }}>
-        <Header crumbs={crumbsFor(view, navigate)} />
+        <Header crumbs={crumbsFor(view, navigate)} q={q} onQ={setQ} />
         {view.kind === 'missing' && data && (
           <NotFound categories={data.categories} onCategory={(id) => navigate({ view: 'category', id })} />
         )}
         {view.kind === 'failed' && <LoadFailed onRetry={retry} />}
-        {/* Home, category, post and search views land in BLOG-04-04 and -05. */}
-        {(view.kind === 'home' || view.kind === 'category' || view.kind === 'post' || view.kind === 'search') && (
-          <section className="blog-px" data-view={view.kind} />
+        {data && view.kind === 'home' && (
+          <Home
+            data={data}
+            onPost={(slug) => navigate({ view: 'post', slug })}
+            onCategory={(id) => navigate({ view: 'category', id })}
+            onSubscribe={() => navigate({ view: 'subscribe' })}
+          />
         )}
+        {data && view.kind === 'category' && (
+          <CategoryPage data={data} cat={view.cat} onPost={(slug) => navigate({ view: 'post', slug })} />
+        )}
+        {data && view.kind === 'search' && (
+          <SearchResults
+            data={data}
+            q={q}
+            onPost={(slug) => navigate({ view: 'post', slug })}
+            onCategory={(id) => navigate({ view: 'category', id })}
+          />
+        )}
+        {/* The article view is not built yet. */}
+        {view.kind === 'post' && <section className="blog-px" data-view="post" />}
         {(consent === null || reopened) && (
           <CookieNotice
             current={consent}

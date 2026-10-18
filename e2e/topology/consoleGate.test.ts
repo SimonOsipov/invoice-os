@@ -5,7 +5,14 @@
 // is arithmetic, and lives here.
 import { describe, expect, it } from 'vitest'
 
-import { approvalRun404Dropper, expectedStatusDropper, notFoundIdDropper } from './consoleGate'
+import {
+  approvalRun404Dropper,
+  collectSourcedErrors,
+  consoleErrorsLine,
+  expectedStatusDropper,
+  notFoundIdDropper,
+  sourcedConsoleError,
+} from './consoleGate'
 
 const APPROVAL_404 = 'Failed to load resource: the server responded with a status of 404 ()'
 const APPROVAL_URL = 'https://gw.test/api/invoice/v1/invoices/9f1c7e2a-0000-0000-0000-000000000001/approval'
@@ -181,5 +188,148 @@ describe('expectedStatusDropper (EXTR27-G1..G3)', () => {
     respond(409, SUPPLY_URL)
     expect(dropper(CONFLICT_409, '')).toBe(true)
     expect(dropper(CONFLICT_409, undefined), 'the budget is exactly one').toBe(false)
+  })
+})
+
+describe('sourcedConsoleError', () => {
+  const T401 = 'Failed to load resource: the server responded with a status of 401 ()'
+
+  it('appends the location url', () => {
+    const out = sourcedConsoleError(T401, 'https://gw.test/api/x', [])
+    expect(out.startsWith(T401)).toBe(true)
+    expect(out).toContain('url: https://gw.test/api/x')
+  })
+
+  it('lists the responses of the status the text names', () => {
+    const out = sourcedConsoleError(T401, '', [
+      '401 POST https://gw.test/auth/sign-out',
+      '404 GET https://gw.test/a',
+      '401 GET https://gw.test/v1/me',
+    ])
+    expect(out).toContain('401 POST https://gw.test/auth/sign-out')
+    expect(out).toContain('401 GET https://gw.test/v1/me')
+    expect(out).not.toContain('404 GET')
+  })
+
+  it('says none seen when no response matches', () => {
+    expect(sourcedConsoleError(T401, '', ['404 GET https://gw.test/a'])).toContain('401 responses: none seen')
+  })
+
+  it('prints origin and path only, for the location url and the listed responses', () => {
+    const out = sourcedConsoleError(T401, 'https://gw.test/auth/v1/verify?token=eyJabc.def.ghi#x=eyJabc.def.ghi', [
+      '401 GET https://gw.test/auth/v1/verify?token=eyJabc.def.ghi',
+    ])
+    expect(out).toContain('url: https://gw.test/auth/v1/verify;')
+    expect(out).toContain('401 GET https://gw.test/auth/v1/verify]')
+    expect(out).not.toContain('token')
+    expect(out).not.toContain('eyJ')
+  })
+
+  it('scrubs a jwt inside the path', () => {
+    const out = sourcedConsoleError(T401, 'https://gw.test/a/eyJabc.def.ghi/b', ['401 GET https://gw.test/a/eyJabc.def.ghi/b'])
+    expect(out).toContain('url: https://gw.test/a/<jwt>/b;')
+    expect(out).toContain('401 GET https://gw.test/a/<jwt>/b]')
+    expect(out).not.toContain('eyJ')
+  })
+
+  it('leaves a text with no url and no status unchanged', () => {
+    expect(sourcedConsoleError('Uncaught TypeError: x', '', [])).toBe('Uncaught TypeError: x')
+  })
+})
+
+describe('collectSourcedErrors', () => {
+  const T401 = 'Failed to load resource: the server responded with a status of 401 ()'
+  type Listener = (arg: unknown) => void
+
+  function fake() {
+    const listeners: Record<string, Listener[]> = {}
+    const page = { on: (event: string, fn: Listener) => (listeners[event] ??= []).push(fn) }
+    const emit = (event: string, arg: unknown) => listeners[event]?.forEach((fn) => fn(arg))
+    return {
+      errors: collectSourcedErrors(page as unknown as Parameters<typeof collectSourcedErrors>[0]),
+      response: (status: number, url: string) =>
+        emit('response', { status: () => status, url: () => url, request: () => ({ method: () => 'GET' }) }),
+      consoleMsg: (type: string, text: string, url = '') =>
+        emit('console', { type: () => type, text: () => text, location: () => ({ url }) }),
+      pageError: (message: string) => emit('pageerror', { message }),
+    }
+  }
+
+  it('records a console error with its url and the 401 response seen before it', () => {
+    const f = fake()
+    f.response(401, 'https://gw.test/v1/me')
+    f.consoleMsg('error', T401, 'https://gw.test/api/x')
+    expect(f.errors).toHaveLength(1)
+    expect(f.errors[0]).toContain('https://gw.test/v1/me')
+    expect(f.errors[0]).toContain('url: https://gw.test/api/x')
+  })
+
+  it('ignores non-error console messages and keeps the pageerror format', () => {
+    const f = fake()
+    f.consoleMsg('warning', 'careful')
+    f.pageError('boom')
+    expect(f.errors).toEqual(['pageerror: boom'])
+  })
+
+  it('rewrites a none-seen entry when its response arrives late', () => {
+    const f = fake()
+    f.consoleMsg('error', T401)
+    expect(f.errors[0]).toContain('none seen')
+    f.response(401, 'https://gw.test/auth/sign-out')
+    expect(f.errors[0]).toContain('https://gw.test/auth/sign-out')
+    expect(f.errors[0]).not.toContain('none seen')
+  })
+
+  it('leaves an entry of another status alone when a response arrives late', () => {
+    const f = fake()
+    f.consoleMsg('error', T401)
+    f.response(404, 'https://gw.test/a')
+    expect(f.errors[0]).toContain('none seen')
+    f.response(401, 'https://gw.test/v1/me')
+    expect(f.errors[0]).toContain('https://gw.test/v1/me')
+  })
+
+  it('does not list a response that arrived after the entry console line', () => {
+    const f = fake()
+    f.response(401, 'https://gw.test/v1/me')
+    f.consoleMsg('error', T401)
+    f.response(401, 'https://gw.test/auth/sign-out')
+    f.consoleMsg('error', T401)
+    expect(f.errors[0]).toContain('https://gw.test/v1/me')
+    expect(f.errors[0]).not.toContain('/auth/sign-out')
+    expect(f.errors[1]).toContain('https://gw.test/auth/sign-out')
+  })
+
+  it('fills a none-seen entry once, not with responses after the first', () => {
+    const f = fake()
+    f.consoleMsg('error', T401)
+    f.response(401, 'https://gw.test/v1/me')
+    f.response(401, 'https://gw.test/auth/sign-out')
+    expect(f.errors[0]).toContain('https://gw.test/v1/me')
+    expect(f.errors[0]).not.toContain('/auth/sign-out')
+  })
+
+  it('returns an empty array when nothing errs', () => {
+    const f = fake()
+    f.response(200, 'https://gw.test/ok')
+    expect(f.errors).toEqual([])
+  })
+})
+
+describe('consoleErrorsLine', () => {
+  it('joins multi-line and sourced entries onto one line that keeps the url', () => {
+    const sourced = sourcedConsoleError(
+      'Failed to load resource: the server responded with a status of 401 ()',
+      'https://gateway-pr-460.up.railway.app/api/tenancy/v1/me',
+      ['401 GET https://gateway-pr-460.up.railway.app/api/tenancy/v1/me'],
+    )
+    const out = consoleErrorsLine(['pageerror: boom\n    at foo (x.js:1:1)', sourced])
+    expect(out).not.toMatch(/[\r\n]/)
+    expect(out).toContain('pageerror: boom at foo (x.js:1:1) | ')
+    expect(out).toContain('[url: https://gateway-pr-460.up.railway.app/api/tenancy/v1/me; 401 responses:')
+  })
+
+  it('gives an empty string for no errors', () => {
+    expect(consoleErrorsLine([])).toBe('')
   })
 })

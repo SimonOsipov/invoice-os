@@ -57,6 +57,7 @@ var (
 		"custom_rule.created",
 		"custom_rule.updated",
 		"custom_rule.deleted",
+		"invoice_register.exported",
 	}
 )
 

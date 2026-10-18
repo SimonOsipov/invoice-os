@@ -15,7 +15,11 @@ type Props = {
   onMove: (i: number, d: number) => void
   onRemove: (i: number) => void
   onPatch: (i: number, patch: Partial<Block>) => void
-  actions?: ReactNode
+  onSave: (status: Draft['status']) => void
+  onAskDelete: () => void
+  onCancelConfirm: () => void
+  onDelete: () => void
+  onDiscard: () => void
   preview?: ReactNode
 }
 
@@ -37,8 +41,11 @@ const TEXTAREA: CSSProperties = { ...field(false), padding: '10px 12px', resize:
 const ICON_BTN: CSSProperties = { width: 26, height: 26, border: 0, borderRadius: 5, background: 'transparent', display: 'grid', placeItems: 'center', cursor: 'pointer' }
 const SEGMENT: CSSProperties = { display: 'flex', padding: 3, gap: 2, background: 'var(--sage)', border: '1px solid var(--sage-card-border)', borderRadius: 6 }
 const GHOST_SM: CSSProperties = { height: 32, padding: '0 12px', fontSize: 12.5 }
+const BAR_BTN: CSSProperties = { height: 34, padding: '0 14px', fontSize: 13 }
+const CONFIRM: CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, animation: 'opsFade 150ms' }
+const CONFIRM_TEXT: CSSProperties = { fontSize: 13, fontWeight: 600 }
 
-export function BlogEditor({ editor, cats, authors, coverUrl, onField, onCover, onBack, onAdd, onMove, onRemove, onPatch, actions, preview }: Props) {
+export function BlogEditor({ editor, cats, authors, coverUrl, onField, onCover, onBack, onAdd, onMove, onRemove, onPatch, onSave, onAskDelete, onCancelConfirm, onDelete, onDiscard, preview }: Props) {
   const { draft, errors } = editor
   const badge = badgeOf(draft.status)
   const save = saveState(editor.dirty, draft.id)
@@ -73,7 +80,63 @@ export function BlogEditor({ editor, cats, authors, coverUrl, onField, onCover, 
         <span className="mono" style={{ fontSize: 11, color: save.color }}>
           {save.label}
         </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>{actions}</div>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {editor.confirm === null && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {draft.id && (
+                <button
+                  type="button"
+                  onClick={onAskDelete}
+                  style={{ border: 0, background: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', fontSize: 13, fontWeight: 600, color: 'var(--destructive)', padding: '0 6px', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                >
+                  <G name="trash-2" size={14} />
+                  Delete
+                </button>
+              )}
+              {draft.status === 'published' ? (
+                <>
+                  <button type="button" onClick={() => onSave('draft')} className="v2-btn v2-btn-ghost" style={BAR_BTN}>
+                    Unpublish
+                  </button>
+                  <button type="button" onClick={() => onSave('published')} className="v2-btn v2-btn-primary" style={BAR_BTN}>
+                    Update post
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" onClick={() => onSave('draft')} className="v2-btn v2-btn-ghost" style={BAR_BTN}>
+                    Save draft
+                  </button>
+                  <button type="button" onClick={() => onSave('published')} className="v2-btn v2-btn-primary" style={BAR_BTN}>
+                    Publish
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          {editor.confirm === 'delete' && (
+            <div style={CONFIRM}>
+              <span style={{ ...CONFIRM_TEXT, color: 'var(--status-red-text)' }}>Delete this post? It is removed from the blog.</span>
+              <button type="button" onClick={onCancelConfirm} className="v2-btn v2-btn-ghost" style={{ ...BAR_BTN, padding: '0 12px' }}>
+                Cancel
+              </button>
+              <button type="button" onClick={onDelete} className="v2-btn" style={{ ...BAR_BTN, padding: '0 12px', background: 'var(--destructive)', color: 'var(--destructive-foreground)' }}>
+                Delete post
+              </button>
+            </div>
+          )}
+          {editor.confirm === 'leave' && (
+            <div style={CONFIRM}>
+              <span style={{ ...CONFIRM_TEXT, color: 'var(--status-amber-text)' }}>You have unsaved changes.</span>
+              <button type="button" onClick={onCancelConfirm} className="v2-btn v2-btn-ghost" style={{ ...BAR_BTN, padding: '0 12px' }}>
+                Keep editing
+              </button>
+              <button type="button" onClick={onDiscard} className="v2-btn v2-btn-ghost" style={{ ...BAR_BTN, padding: '0 12px', color: 'var(--destructive)' }}>
+                Discard changes
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' }}>
@@ -120,7 +183,6 @@ export function BlogEditor({ editor, cats, authors, coverUrl, onField, onCover, 
                     </option>
                   ))}
                 </select>
-                {errors.category && <span style={ERROR}>{errors.category}</span>}
               </label>
               <label style={COLUMN}>
                 <span style={LABEL}>Author</span>
@@ -135,7 +197,6 @@ export function BlogEditor({ editor, cats, authors, coverUrl, onField, onCover, 
                     </option>
                   ))}
                 </select>
-                {errors.author && <span style={ERROR}>{errors.author}</span>}
               </label>
               <label style={COLUMN}>
                 <span style={LABEL}>Publish date</span>
@@ -145,7 +206,6 @@ export function BlogEditor({ editor, cats, authors, coverUrl, onField, onCover, 
                   onChange={(e) => onField({ publish_date: e.target.value || null })}
                   style={{ ...field(!!errors.date), height: 38, padding: '0 10px' }}
                 />
-                {errors.date && <span style={ERROR}>{errors.date}</span>}
               </label>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

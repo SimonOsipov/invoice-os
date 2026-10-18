@@ -1,7 +1,8 @@
 import { ApiError } from '@invoice-os/api-client'
-import { COVER_QUALITY, fitWidth, isImageType, pinToast } from './blog'
-import type { Author, Category, FeaturedResult, Post } from './blogApi'
+import { COVER_QUALITY, dataUrlToBytes, errorsFrom422, fitWidth, isImageType, partialEditor, pinToast, saveToast, savedEditor, toPostInput, type Draft, type EditorState } from './blog'
+import { fieldErrorsOf, type Author, type Category, type Cover, type FeaturedResult, type Post, type PostInput } from './blogApi'
 import type { BlogState } from './components/BlogList'
+import type { ToastTone } from './types'
 
 export type PinOutcome = { kind: 'done'; toast: string } | { kind: 'expired' } | { kind: 'forbidden' } | { kind: 'failed'; message: string }
 
@@ -100,5 +101,124 @@ export function trackCover(d: { fetchCoverUrl: (id: string) => Promise<CoverHand
     live = false
     handle?.release()
     handle = null
+  }
+}
+
+export const STAFF_ONLY = 'Your account is not ASComply staff.'
+
+// Runs one action at a time; a call made while one runs is ignored.
+export function singleFlight() {
+  let busy = false
+  return async (run: () => Promise<void>): Promise<void> => {
+    if (busy) return
+    busy = true
+    try {
+      await run()
+    } finally {
+      busy = false
+    }
+  }
+}
+
+export type SaveDeps = {
+  createPost: (input: PostInput) => Promise<Post>
+  updatePost: (id: string, input: PostInput) => Promise<Post>
+  putCover: (id: string, bytes: Uint8Array) => Promise<Cover>
+  removeCover: (id: string) => Promise<void>
+  fetchPosts: () => Promise<Post[]>
+}
+
+export type SaveOutcome =
+  | { kind: 'saved'; post: Post; toast: string; posts?: Post[]; rereadError?: string }
+  | { kind: 'invalid'; errors: Record<string, string>; toast: string }
+  | { kind: 'expired'; savedPost?: Post }
+  | { kind: 'forbidden'; savedPost?: Post }
+  | { kind: 'failed'; message: string; savedPost?: Post }
+
+const failure = (e: unknown, savedPost?: Post): SaveOutcome => {
+  if (e instanceof ApiError && e.status === 401) return { kind: 'expired', savedPost }
+  if (e instanceof ApiError && e.status === 403) return { kind: 'forbidden', savedPost }
+  return { kind: 'failed', message: e instanceof Error ? e.message : 'Could not save the post', savedPost }
+}
+
+export async function savePost(deps: SaveDeps, state: EditorState, status: PostInput['status']): Promise<SaveOutcome> {
+  const { draft } = state
+  const was = draft.id ? draft.status : ''
+  const input = toPostInput(draft, status)
+  let post: Post
+  try {
+    post = draft.id ? await deps.updatePost(draft.id, input) : await deps.createPost(input)
+  } catch (e) {
+    const f = fieldErrorsOf(e)
+    return f ? { kind: 'invalid', errors: errorsFrom422(f.fields), toast: f.summary } : failure(e)
+  }
+  try {
+    if (draft.cover.kind === 'new') await deps.putCover(post.id, dataUrlToBytes(draft.cover.dataUrl))
+    else if (draft.cover.kind === 'none' && draft.serverHasCover) await deps.removeCover(post.id)
+  } catch (e) {
+    return failure(e, post)
+  }
+  const toast = saveToast(was, status)
+  try {
+    return { kind: 'saved', post, toast, posts: await deps.fetchPosts() }
+  } catch (e) {
+    return { kind: 'saved', post, toast, rereadError: e instanceof Error ? e.message : 'Could not reload the posts' }
+  }
+}
+
+export type RemoveOutcome = { kind: 'done'; toast: string } | { kind: 'expired' } | { kind: 'forbidden' } | { kind: 'failed'; message: string }
+
+export async function removePost(deps: { deletePost: (id: string) => Promise<void> }, id: string): Promise<RemoveOutcome> {
+  try {
+    await deps.deletePost(id)
+    return { kind: 'done', toast: 'Post deleted' }
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) return { kind: 'expired' }
+    if (e instanceof ApiError && e.status === 403) return { kind: 'forbidden' }
+    return { kind: 'failed', message: e instanceof Error ? e.message : 'Could not delete the post' }
+  }
+}
+
+export type Applied = { editor: EditorState; toast: string | null; tone: ToastTone; posts?: Post[]; expire: boolean }
+
+// `sent` is the state the save started from; edits made while it ran keep the editor dirty.
+export function applySave(cur: EditorState, sent: EditorState, o: SaveOutcome): Applied {
+  const red = (toast: string, editor = cur, expire = false): Applied => ({ editor, toast, tone: 'red', expire })
+  const partial = (p?: Post) => (p ? partialEditor(cur, p) : cur)
+  switch (o.kind) {
+    case 'saved': {
+      const editor = cur.draft === sent.draft ? savedEditor(cur, o.post) : partialEditor(cur, o.post)
+      if (o.rereadError !== undefined) return red(o.rereadError, editor)
+      return { editor, toast: o.toast, tone: 'ok', posts: o.posts, expire: false }
+    }
+    case 'invalid':
+      return red(o.toast, { ...cur, errors: o.errors, confirm: null })
+    case 'expired':
+      return { editor: partial(o.savedPost), toast: null, tone: 'red', expire: true }
+    case 'forbidden':
+      return red(STAFF_ONLY, partial(o.savedPost))
+    case 'failed':
+      return red(o.message, partial(o.savedPost))
+  }
+}
+
+// The kept copy is written before the session ends, or the page leaves with the draft.
+export function keepThenExpire(d: { write: (draft: Draft) => void; expire: () => void }, editor: EditorState | null): void {
+  if (editor?.dirty) d.write(editor.draft)
+  d.expire()
+}
+
+export type AppliedRemove = { editor: EditorState | null; toast: string; tone: ToastTone; expire: boolean }
+
+export function applyRemove(cur: EditorState, o: RemoveOutcome): AppliedRemove {
+  switch (o.kind) {
+    case 'done':
+      return { editor: null, toast: o.toast, tone: 'ok', expire: false }
+    case 'expired':
+      return { editor: { ...cur, confirm: null }, toast: '', tone: 'red', expire: true }
+    case 'forbidden':
+      return { editor: { ...cur, confirm: null }, toast: STAFF_ONLY, tone: 'red', expire: false }
+    case 'failed':
+      return { editor: { ...cur, confirm: null }, toast: o.message, tone: 'red', expire: false }
   }
 }

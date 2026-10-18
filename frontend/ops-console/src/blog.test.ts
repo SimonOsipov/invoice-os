@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   addBlock,
@@ -15,7 +15,19 @@ import {
   dataUrlToBytes,
   dekCount,
   draftFromPost,
+  askLeave,
   editorOf,
+  errorsFrom422,
+  keptFor,
+  KEPT_KEY,
+  partialEditor,
+  readKept,
+  savedEditor,
+  saveToast,
+  takeKept,
+  toPostInput,
+  writeKept,
+  type KeptStorage,
   fitWidth,
   isImageType,
   listRows,
@@ -510,5 +522,131 @@ describe('previewModel', () => {
     expect(m.blocks[1]).toMatchObject({ label: 'Regulation note', icon: 'landmark' })
     expect(m.blocks[2]).toEqual({ type: 'demo', title: 'Submit for FIRS clearance' })
     expect(m.blocks[3]).toEqual({ type: 'quote', text: 'q', who: 'w' })
+  })
+})
+
+describe('save rules', () => {
+  const draft = (o: Partial<Draft> = {}): Draft => ({ ...newDraft([cat('a')], [], null, '2026-10-18'), ...o })
+
+  it('toPostInput strips local keys and extra fields', () => {
+    const d = draft({
+      id: 'x',
+      author_name: 'Amara',
+      cover: { kind: 'new', dataUrl: 'data:image/jpeg;base64,AA==' },
+      title: 'T',
+      body: [
+        { u: 'b1', type: 'p', text: ' hi ' },
+        { u: 'b2', type: 'note', kind: 'deadline', title: 'N', text: 'x', items: ['stray'] },
+      ],
+    })
+    const out = toPostInput(d, 'published')
+    expect(Object.keys(out).sort()).toEqual(['author_id', 'body', 'category_id', 'featured', 'publish_date', 'status', 'summary', 'title'])
+    expect(out.status).toBe('published')
+    expect(out.body).toEqual([
+      { type: 'p', text: 'hi' },
+      { type: 'note', kind: 'deadline', title: 'N', text: 'x' },
+    ])
+    expect(toPostInput(d, 'draft').status).toBe('draft')
+  })
+
+  it('saveToast covers the four transitions', () => {
+    expect(saveToast('draft', 'published')).toBe('Published to blog.ascomply.com')
+    expect(saveToast('', 'published')).toBe('Published to blog.ascomply.com')
+    expect(saveToast('published', 'published')).toBe('Changes published')
+    expect(saveToast('published', 'draft')).toBe('Unpublished. The post is now a draft')
+    expect(saveToast('', 'draft')).toBe('Draft saved')
+    expect(saveToast('draft', 'draft')).toBe('Draft saved')
+  })
+
+  it('errorsFrom422 maps every wire field', () => {
+    const fields = { title: 'a', summary: 'b', category_id: 'c', publish_date: 'd', author_id: 'e', body: 'f' }
+    expect(errorsFrom422(fields)).toEqual({ title: 'a', summary: 'b', category: 'c', date: 'd', author: 'e', body: 'f' })
+    expect(errorsFrom422({ other: 'x' })).toEqual({})
+  })
+
+  it('askLeave asks and savedEditor settles the cover', () => {
+    const e = { ...editorOf(draft({ cover: { kind: 'new', dataUrl: 'u' } })), dirty: true, errors: { title: 'x' } }
+    expect(askLeave(e).confirm).toBe('leave')
+    const s = savedEditor(e, post({ id: 'n', status: 'draft', author_name: 'A' }))
+    expect(s).toMatchObject({ dirty: false, errors: {}, confirm: null, draft: { id: 'n', status: 'draft', author_name: 'A', cover: { kind: 'saved' }, serverHasCover: true } })
+    const none = savedEditor({ ...e, draft: { ...e.draft, cover: { kind: 'none' }, serverHasCover: true } }, post({ id: 'n' }))
+    expect(none.draft).toMatchObject({ cover: { kind: 'none' }, serverHasCover: false })
+    const p = partialEditor(e, post({ id: 'n', status: 'draft' }))
+    expect(p).toMatchObject({ dirty: true, draft: { id: 'n', cover: { kind: 'new' } } })
+  })
+})
+
+describe('kept copy', () => {
+  const stub = (failSets = 0) => {
+    const map = new Map<string, string>()
+    let fails = failSets
+    const setItem = vi.fn((k: string, v: string) => {
+      if (fails-- > 0) throw new Error('quota')
+      map.set(k, v)
+    })
+    const storage: KeptStorage = { getItem: (k) => map.get(k) ?? null, setItem, removeItem: (k) => void map.delete(k) }
+    return { storage, map, setItem }
+  }
+  const d = (o: Partial<Draft> = {}): Draft => ({ ...newDraft([cat('a')], [], null, '2026-10-18'), title: 'Mine', ...o })
+
+  it('writeKept and readKept round-trip with the owner', () => {
+    const { storage, map } = stub()
+    const draft = d()
+    writeKept(storage, 'S', draft)
+    expect(map.has(KEPT_KEY)).toBe(true)
+    expect(readKept(storage)).toEqual({ v: 1, owner: 'S', draft })
+  })
+
+  it('writeKept drops the pending cover when storage is full', () => {
+    const cover = { kind: 'new' as const, dataUrl: 'data:x' }
+    const one = stub(1)
+    writeKept(one.storage, 'S', d({ cover }))
+    expect(readKept(one.storage)!.draft.cover).toEqual({ kind: 'none' })
+    const keep = stub(1)
+    writeKept(keep.storage, 'S', d({ cover, serverHasCover: true }))
+    expect(readKept(keep.storage)!.draft.cover).toEqual({ kind: 'saved' })
+
+    const two = stub(2)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    writeKept(two.storage, 'S', d({ cover }))
+    expect(two.map.size).toBe(0)
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
+  it('readKept ignores a foreign shape', () => {
+    for (const raw of ['{"v":2}', 'nope', null, '{"v":1,"owner":"S"}', '{"v":1,"owner":3,"draft":{"body":[]}}']) {
+      const { storage, map } = stub()
+      if (raw !== null) map.set(KEPT_KEY, raw)
+      expect(readKept(storage), String(raw)).toBeNull()
+    }
+  })
+
+  it('takeKept reopens the draft dirty for its owner and removes the key', () => {
+    const { storage, map } = stub()
+    writeKept(storage, 'S', d({ id: 'p1', status: 'published' }))
+    const e = takeKept(storage, 'S', [{ id: 'p1' }])
+    expect(e).toMatchObject({ dirty: true, confirm: null, draft: { id: 'p1', status: 'published', title: 'Mine' } })
+    expect(map.has(KEPT_KEY)).toBe(false)
+    expect(takeKept(storage, 'S', [{ id: 'p1' }])).toBeNull()
+  })
+
+  it('takeKept leaves a foreign copy in place', () => {
+    const { storage, map } = stub()
+    writeKept(storage, 'T', d())
+    const before = map.get(KEPT_KEY)
+    expect(takeKept(storage, 'S', [])).toBeNull()
+    expect(map.get(KEPT_KEY)).toBe(before)
+    expect(keptFor(storage, 'T')).toBe(true)
+    expect(keptFor(storage, 'S')).toBe(false)
+    expect(keptFor(storage, null)).toBe(false)
+  })
+
+  it('a kept draft of a deleted post reopens as new', () => {
+    const { storage } = stub()
+    writeKept(storage, 'S', d({ id: 'gone', status: 'published', cover: { kind: 'saved' }, serverHasCover: true }))
+    const e = takeKept(storage, 'S', [{ id: 'other' }])!
+    expect(e.draft).toMatchObject({ id: '', status: 'draft', cover: { kind: 'none' }, serverHasCover: false })
+    expect(e.dirty).toBe(true)
   })
 })

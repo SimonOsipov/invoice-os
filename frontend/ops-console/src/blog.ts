@@ -426,3 +426,92 @@ export function previewModel(draft: Draft, cats: Category[], authors: Author[], 
     emptyBody: blocks.length === 0,
   }
 }
+
+export function toPostInput(draft: Draft, status: PostInput['status']): PostInput {
+  return {
+    category_id: draft.category_id,
+    publish_date: draft.publish_date,
+    title: draft.title,
+    summary: draft.summary,
+    author_id: draft.author_id,
+    status,
+    featured: draft.featured,
+    body: cleanBody(draft.body),
+  }
+}
+
+export function saveToast(was: '' | Post['status'], status: Post['status']): string {
+  if (status === 'published') return was === 'published' ? 'Changes published' : 'Published to blog.ascomply.com'
+  return was === 'published' ? 'Unpublished. The post is now a draft' : 'Draft saved'
+}
+
+const FIELD_KEY: Record<string, string> = { title: 'title', summary: 'summary', category_id: 'category', publish_date: 'date', author_id: 'author', body: 'body' }
+
+export function errorsFrom422(fields: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, msg] of Object.entries(fields)) if (k in FIELD_KEY) out[FIELD_KEY[k]] = msg
+  return out
+}
+
+export const askLeave = (state: EditorState): EditorState => ({ ...state, confirm: 'leave' })
+
+export const setConfirm = (state: EditorState, confirm: EditorState['confirm']): EditorState => ({ ...state, confirm })
+
+// The editor after a successful save: the post's identity, a clean state and the cover settled.
+export function savedEditor(state: EditorState, post: Post): EditorState {
+  const cover: CoverState = state.draft.cover.kind === 'none' ? { kind: 'none' } : { kind: 'saved' }
+  const draft = { ...state.draft, id: post.id, status: post.status, author_name: post.author_name, cover, serverHasCover: cover.kind === 'saved' }
+  return { ...state, draft, dirty: false, errors: {}, confirm: null }
+}
+
+// A post saved but a later step failed: the draft takes the id and status and stays dirty.
+export function partialEditor(state: EditorState, post: Post): EditorState {
+  return { ...state, draft: { ...state.draft, id: post.id, status: post.status, author_name: post.author_name } }
+}
+
+export type KeptStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
+export type Kept = { v: 1; owner: string; draft: Draft }
+
+export const KEPT_KEY = 'invoice-os.ops-blog-draft'
+
+export function writeKept(storage: KeptStorage, owner: string, draft: Draft): void {
+  try {
+    storage.setItem(KEPT_KEY, JSON.stringify({ v: 1, owner, draft }))
+    return
+  } catch {
+    // quota: retry without the pending cover
+  }
+  const lean: Draft = draft.cover.kind === 'new' ? { ...draft, cover: draft.serverHasCover ? { kind: 'saved' } : { kind: 'none' } } : draft
+  try {
+    storage.setItem(KEPT_KEY, JSON.stringify({ v: 1, owner, draft: lean }))
+  } catch (e) {
+    console.warn('[ops-blog] could not keep the unsaved draft:', e)
+  }
+}
+
+export function readKept(storage: KeptStorage): Kept | null {
+  try {
+    const p = JSON.parse(storage.getItem(KEPT_KEY) ?? 'null') as Partial<Kept> | null
+    if (p?.v !== 1 || typeof p.owner !== 'string' || !p.draft || typeof p.draft !== 'object' || !Array.isArray(p.draft.body)) return null
+    return p as Kept
+  } catch {
+    return null
+  }
+}
+
+export const keptFor = (storage: KeptStorage, sub: string | null): boolean => sub !== null && readKept(storage)?.owner === sub
+
+// Reopens the owner's kept draft, dirty, and removes it; a post that no longer exists reopens as new.
+export function takeKept(storage: KeptStorage, owner: string, posts: Pick<Post, 'id'>[]): EditorState | null {
+  const kept = readKept(storage)
+  if (!kept || kept.owner !== owner) return null
+  try {
+    storage.removeItem(KEPT_KEY)
+  } catch {
+    // the draft still opens
+  }
+  const d = kept.draft
+  const gone = d.id !== '' && !posts.some((p) => p.id === d.id)
+  const draft: Draft = gone ? { ...d, id: '', status: 'draft', author_name: null, serverHasCover: false, cover: d.cover.kind === 'saved' ? { kind: 'none' } : d.cover } : d
+  return { ...editorOf(draft), dirty: true }
+}

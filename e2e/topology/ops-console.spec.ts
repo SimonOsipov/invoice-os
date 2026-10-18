@@ -966,3 +966,60 @@ test('OPS-05 blog preview: the article and the card fit the preview pane at ever
   await attachJson(testInfo, 'ops-05-blog-preview', { widths, cardWidths })
   expect(errors, errorsOf(errors)).toEqual([])
 })
+
+test('OPS-05 blog action bar: actions stay inside the bar at every wide width', async ({ page }, testInfo) => {
+  const errors = collectErrors(page)
+  await signInOps(page)
+  await navButton(page, /^Blog/).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Blog', exact: true }), 'Blog drew no h1').toBeVisible()
+  await page.getByRole('button', { name: 'New post' }).click()
+  const editor = page.locator('[data-blog-editor]')
+  await expect(editor, 'New post opened no editor').toBeVisible()
+  await page.getByPlaceholder('What structured e-invoicing changes for…').fill('Action bar probe, never saved')
+  const bar = editor.locator('xpath=./div[1]')
+  await expect(bar.getByText('UNSAVED CHANGES', { exact: true }), 'typing a title left the editor clean').toBeVisible()
+  await settle(page, editor)
+
+  const widths = await atWidths(page, 'OPS-05 blog action bar', async () => {
+    const r = await boxes(page, {
+      bar,
+      save: bar.getByRole('button', { name: 'Save draft', exact: true }),
+      publish: bar.getByRole('button', { name: 'Publish', exact: true }),
+      badge: bar.getByText('DRAFT', { exact: true }),
+      state: bar.getByText('UNSAVED CHANGES', { exact: true }),
+    })
+    const problems = [
+      ...within(r.bar, r.save, 'Save draft in the bar'),
+      ...within(r.bar, r.publish, 'Publish in the bar'),
+      ...apart(r.save, r.publish, 'Save draft / Publish'),
+      ...apart(r.save, r.badge, 'Save draft / status badge'),
+      ...apart(r.publish, r.badge, 'Publish / status badge'),
+      ...apart(r.save, r.state, 'Save draft / save state'),
+      ...apart(r.publish, r.state, 'Publish / save state'),
+    ]
+    return { problems, rects: r }
+  })
+
+  await editor.getByRole('button', { name: 'All posts' }).click()
+  const prompt = bar.getByText('You have unsaved changes.', { exact: true })
+  await expect(prompt, 'Back with unsaved changes asked nothing').toBeVisible()
+  const leaveWidths = await atWidths(page, 'OPS-05 blog leave confirm', async () => {
+    const r = await boxes(page, {
+      bar,
+      prompt,
+      keep: bar.getByRole('button', { name: 'Keep editing', exact: true }),
+      discard: bar.getByRole('button', { name: 'Discard changes', exact: true }),
+      badge: bar.getByText('DRAFT', { exact: true }),
+      state: bar.getByText('UNSAVED CHANGES', { exact: true }),
+    })
+    const problems = [
+      ...within(r.bar, r.prompt, 'leave prompt in the bar'),
+      ...within(r.bar, r.keep, 'Keep editing in the bar'),
+      ...within(r.bar, r.discard, 'Discard changes in the bar'),
+      ...allApart([r.prompt, r.keep, r.discard, r.badge, r.state], 'leave confirm / badge / save state'),
+    ]
+    return { problems, rects: r }
+  })
+  await attachJson(testInfo, 'ops-05-blog-action-bar', { widths, leaveWidths })
+  expect(errors, errorsOf(errors)).toEqual([])
+})

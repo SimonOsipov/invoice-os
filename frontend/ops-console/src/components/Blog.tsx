@@ -1,11 +1,9 @@
-import { decodeJwtPayload, loadConsoleSession } from '@invoice-os/console-session'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { SESSION_KEY } from '../auth'
-import { addBlock, coverCss, draftFromPost, editorOf, moveBlock, newDraft, patchBlock, previewModel, removeBlock, setField, setPreview, subOf, today, type BlockType, type Draft, type EditorState } from '../blog'
-import { fetchAuthors, fetchCategories, fetchCoverUrl, fetchPosts, setFeatured, type Post } from '../blogApi'
-import { loadBlog, pickCover, pinThenRefresh, trackCover } from '../blogFlow'
+import { addBlock, askLeave, coverCss, draftFromPost, editorOf, moveBlock, newDraft, patchBlock, previewModel, removeBlock, setConfirm, setField, setPreview, takeKept, today, writeKept, type BlockType, type Draft, type EditorState } from '../blog'
+import { createPost, deletePost, fetchAuthors, fetchCategories, fetchCoverUrl, fetchPosts, putCover, removeCover, setFeatured, updatePost, type Post } from '../blogApi'
+import { applyRemove, applySave, keepThenExpire, loadBlog, pickCover, pinThenRefresh, removePost, savePost, singleFlight, STAFF_ONLY, trackCover } from '../blogFlow'
 import { browserCoverDeps } from '../coverImage'
-import { expireOnce, withSession } from '../session'
+import { currentSub, expireOnce, withSession } from '../session'
 import type { BlogFilters, ToastTone } from '../types'
 import { BlogEditor } from './BlogEditor'
 import { BlogList, type BlogState } from './BlogList'
@@ -16,8 +14,6 @@ type Props = {
   onFilters: (f: BlogFilters) => void
   onToast: (msg: string, tag?: string, tone?: ToastTone) => void
 }
-
-const STAFF_ONLY = 'Your account is not ASComply staff.'
 
 export function Blog({ filters, onFilters, onToast }: Props) {
   const [state, setState] = useState<BlogState>({ status: 'loading' })
@@ -43,11 +39,9 @@ export function Blog({ filters, onFilters, onToast }: Props) {
     void load()
   }, [load])
 
-  const pinning = useRef(false)
-  const onPin = async (post: Post) => {
-    if (pinning.current) return
-    pinning.current = true
-    try {
+  const flight = useRef(singleFlight()).current
+  const onPin = (post: Post) =>
+    flight(async () => {
       const { outcome, after } = await pinThenRefresh(
         { setFeatured: (id, f) => withSession(() => setFeatured(id, f)), fetchPosts: () => withSession(fetchPosts), expire: expireOnce },
         post,
@@ -57,10 +51,7 @@ export function Blog({ filters, onFilters, onToast }: Props) {
       else if (outcome.kind !== 'expired') onToast(outcome.kind === 'forbidden' ? STAFF_ONLY : outcome.message, 'BLOG', 'red')
       if (after.kind === 'posts') setState((s) => (s.status === 'ready' ? { ...s, posts: after.posts } : s))
       else if (after.kind === 'state') setState(after.state)
-    } finally {
-      pinning.current = false
-    }
-  }
+    })
 
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [coverUrl, setCoverUrl] = useState<string | null>(null)
@@ -71,12 +62,80 @@ export function Blog({ filters, onFilters, onToast }: Props) {
   }
   const onNew = () => {
     if (state.status !== 'ready') return
-    open(newDraft(state.cats, state.authors, subOf(decodeJwtPayload(loadConsoleSession(SESSION_KEY)?.token ?? null)), today()))
+    open(newDraft(state.cats, state.authors, currentSub(), today()))
   }
-  const onBack = () => {
+  const close = () => {
     openSeq.current++
     setEditor(null)
   }
+  const onBack = () => (editor?.dirty ? setEditor(askLeave(editor)) : close())
+
+  const editorRef = useRef(editor)
+  editorRef.current = editor
+  const keep = (e: EditorState | null) =>
+    keepThenExpire(
+      {
+        write: (d) => {
+          const owner = currentSub()
+          if (owner) writeKept(localStorage, owner, d)
+        },
+        expire: expireOnce,
+      },
+      e,
+    )
+
+  const restored = useRef(false)
+  useEffect(() => {
+    if (restored.current || state.status !== 'ready') return
+    restored.current = true
+    const owner = currentSub()
+    const kept = owner && typeof localStorage !== 'undefined' ? takeKept(localStorage, owner, state.posts) : null
+    if (kept) {
+      openSeq.current++
+      setEditor(kept)
+    }
+  }, [state])
+
+  const onSave = (status: Draft['status']) =>
+    flight(async () => {
+      const sent = editorRef.current
+      if (!sent) return
+      const seq = openSeq.current
+      const o = await savePost(
+        {
+          createPost: (i) => withSession(() => createPost(i)),
+          updatePost: (id, i) => withSession(() => updatePost(id, i)),
+          putCover: (id, b) => withSession(() => putCover(id, b)),
+          removeCover: (id) => withSession(() => removeCover(id)),
+          fetchPosts: () => withSession(fetchPosts),
+        },
+        sent,
+        status,
+      )
+      if (!alive.current) return
+      const cur = seq === openSeq.current ? editorRef.current : null
+      const a = applySave(cur ?? sent, sent, o)
+      if (cur) setEditor(a.editor)
+      const { posts } = a
+      if (posts) setState((s) => (s.status === 'ready' ? { ...s, posts } : s))
+      if (a.toast) onToast(a.toast, 'BLOG', a.tone)
+      if (a.expire) keep(a.editor)
+    })
+
+  const onDelete = () =>
+    flight(async () => {
+      const sent = editorRef.current
+      if (!sent) return
+      const seq = openSeq.current
+      const o = await removePost({ deletePost: (id) => withSession(() => deletePost(id)) }, sent.draft.id)
+      if (!alive.current || seq !== openSeq.current) return
+      const a = applyRemove(editorRef.current ?? sent, o)
+      if (o.kind === 'done') setState((s) => (s.status === 'ready' ? { ...s, posts: s.posts.filter((p) => p.id !== sent.draft.id) } : s))
+      if (a.editor) setEditor(a.editor)
+      else close()
+      if (a.toast) onToast(a.toast, 'BLOG', a.tone)
+      if (a.expire) keep(a.editor)
+    })
 
   const editing = editor !== null
   useEffect(() => {
@@ -116,6 +175,11 @@ export function Blog({ filters, onFilters, onToast }: Props) {
         onField={(patch) => update((e) => setField(e, patch))}
         onCover={(f) => void onCover(f)}
         onBack={onBack}
+        onSave={(status) => void onSave(status)}
+        onAskDelete={() => update((e) => setConfirm(e, 'delete'))}
+        onCancelConfirm={() => update((e) => setConfirm(e, null))}
+        onDelete={() => void onDelete()}
+        onDiscard={close}
         onAdd={onAdd}
         onMove={(i, d) => update((e) => moveBlock(e, i, d))}
         onRemove={(i) => update((e) => removeBlock(e, i))}

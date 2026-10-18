@@ -1,6 +1,7 @@
 import { ApiError, gatewayBase } from '@invoice-os/api-client'
-import { isStaffToken, loadConsoleSession, renewConsoleSession, saveConsoleSession } from '@invoice-os/console-session'
+import { decodeJwtPayload, isStaffToken, loadConsoleSession, renewConsoleSession, saveConsoleSession } from '@invoice-os/console-session'
 import { expireSession, SESSION_KEY } from './auth'
+import { subOf } from './blog'
 
 let renewing: Promise<void> | null = null
 
@@ -41,3 +42,5 @@ export const expireOnce = (): void => {
   expired = true
   expireSession()
 }
+
+export const currentSub = (): string | null => subOf(decodeJwtPayload(loadConsoleSession(SESSION_KEY)?.token ?? null))

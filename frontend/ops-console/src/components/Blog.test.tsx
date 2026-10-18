@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { editorOf, newDraft, previewModel, type Draft, type DraftBlock } from '../blog'
 import type { Block, Category, Post } from '../blogApi'
+import { GLYPHS } from '../glyphs'
 import type { BlogFilters } from '../types'
 import { BlogEditor } from './BlogEditor'
 import { BlogList, type BlogState } from './BlogList'
@@ -182,7 +183,7 @@ describe('BlogList handlers', () => {
 })
 
 describe('BlogEditor', () => {
-  const blocks = { onAdd: () => {}, onMove: () => {}, onRemove: () => {}, onPatch: () => {} }
+  const blocks = { onAdd: () => {}, onMove: () => {}, onRemove: () => {}, onPatch: () => {}, onSave: () => {}, onAskDelete: () => {}, onCancelConfirm: () => {}, onDelete: () => {}, onDiscard: () => {} }
   const draft = (o: Partial<Draft> = {}): Draft => ({ ...newDraft([CAT], [], null, '2026-10-18'), ...o })
   const renderEditor = (d: Draft, coverUrl: string | null = null, dirty = false) =>
     renderToStaticMarkup(<BlogEditor editor={{ ...editorOf(d), dirty }} cats={[CAT]} authors={[]} coverUrl={coverUrl} onField={() => {}} onCover={() => {}} onBack={() => {}} {...blocks} />)
@@ -314,6 +315,11 @@ describe('BlogEditor blocks', () => {
     onMove: () => {},
     onRemove: () => {},
     onPatch: () => {},
+    onSave: () => {},
+    onAskDelete: () => {},
+    onCancelConfirm: () => {},
+    onDelete: () => {},
+    onDiscard: () => {},
     ...o,
   })
   const html = (body: DraftBlock[]) => renderToStaticMarkup(<BlogEditor {...props(body)} />)
@@ -470,5 +476,84 @@ describe('BlogPreview', () => {
     ;(card.props.onClick as () => void)()
     expect(onTab).toHaveBeenCalledWith('card')
     expect(view(model([]))).toMatch(/background:var\(--primary\);color:var\(--primary-foreground\)[^>]*>Article</)
+  })
+})
+
+describe('BlogEditor action bar', () => {
+  const cb = { onSave: vi.fn(), onAskDelete: vi.fn(), onCancelConfirm: vi.fn(), onDelete: vi.fn(), onDiscard: vi.fn() }
+  const props = (o: Partial<Parameters<typeof BlogEditor>[0]['editor']> = {}, d: Partial<Draft> = {}) => ({
+    editor: { ...editorOf({ ...newDraft([CAT], [], null, '2026-10-18'), ...d }), ...o },
+    cats: [CAT],
+    authors: [],
+    coverUrl: null,
+    onField: () => {},
+    onCover: () => {},
+    onBack: () => {},
+    onAdd: () => {},
+    onMove: () => {},
+    onRemove: () => {},
+    onPatch: () => {},
+    ...cb,
+  })
+  const html = (o = {}, d: Partial<Draft> = {}) => renderToStaticMarkup(<BlogEditor {...props(o, d)} />)
+  const buttons = (h: string) => [...h.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]*>/g, ''))
+
+  it('a draft shows Save draft and Publish, a published post Unpublish and Update post', () => {
+    const draft = buttons(html({}, { id: 'p1', status: 'draft' }))
+    expect(draft).toEqual(expect.arrayContaining(['Delete', 'Save draft', 'Publish']))
+    expect(draft).not.toContain('Unpublish')
+    expect(draft).not.toContain('Update post')
+    const pub = buttons(html({}, { id: 'p1', status: 'published' }))
+    expect(pub).toEqual(expect.arrayContaining(['Unpublish', 'Update post']))
+    expect(pub).not.toContain('Save draft')
+    expect(pub).not.toContain('Publish')
+  })
+
+  it('Delete shows only for a saved post, with the trash-2 glyph at 14', () => {
+    expect(buttons(html())).not.toContain('Delete')
+    const h = html({}, { id: 'p1' })
+    expect(h).toMatch(/<button[^>]*>(<svg[^>]*width="14"[^>]*height="14"[\s\S]*?<\/svg>)Delete<\/button>/)
+    expect(h).toContain(GLYPHS['trash-2'][0])
+  })
+
+  it('the confirms carry the prototype copy and hide the actions', () => {
+    const del = html({ confirm: 'delete' }, { id: 'p1' })
+    expect(del).toContain('Delete this post? It is removed from the blog.')
+    expect(buttons(del)).toEqual(expect.arrayContaining(['Cancel', 'Delete post']))
+    for (const gone of ['Publish', 'Save draft', 'Delete']) expect(buttons(del)).not.toContain(gone)
+    const leave = html({ confirm: 'leave' })
+    expect(leave).toContain('You have unsaved changes.')
+    expect(buttons(leave)).toEqual(expect.arrayContaining(['Keep editing', 'Discard changes']))
+    expect(buttons(leave)).not.toContain('Publish')
+    expect(html()).not.toContain('You have unsaved changes.')
+  })
+
+  it('422 errors turn the named fields red and print only title, summary and body', () => {
+    const errors = { title: 'T!', summary: 'S!', category: 'C!', date: 'D!', author: 'A!', body: 'B!' }
+    const h = html({ errors })
+    expect(h.match(/border:1px solid var\(--destructive\)/g)).toHaveLength(5)
+    for (const m of ['T!', 'S!', 'B!']) expect(h).toContain(m)
+    expect(h).not.toContain('>C!<')
+    expect(h).not.toContain('>D!<')
+    expect(h).not.toContain('>A!<')
+  })
+
+  it('the buttons call their handlers with the status', () => {
+    const t = BlogEditor(props({}, { id: 'p1', status: 'published' })) as ReactElement
+    const click = (label: string) => (find(t, (e) => e.type === 'button' && text(e.props.children) === label)[0].props.onClick as () => void)()
+    click('Unpublish')
+    expect(cb.onSave).toHaveBeenLastCalledWith('draft')
+    click('Update post')
+    expect(cb.onSave).toHaveBeenLastCalledWith('published')
+    click('Delete')
+    expect(cb.onAskDelete).toHaveBeenCalledTimes(1)
+    const c = BlogEditor(props({ confirm: 'delete' }, { id: 'p1' })) as ReactElement
+    ;(find(c, (e) => e.type === 'button' && text(e.props.children) === 'Delete post')[0].props.onClick as () => void)()
+    ;(find(c, (e) => e.type === 'button' && text(e.props.children) === 'Cancel')[0].props.onClick as () => void)()
+    expect(cb.onDelete).toHaveBeenCalledTimes(1)
+    expect(cb.onCancelConfirm).toHaveBeenCalledTimes(1)
+    const l = BlogEditor(props({ confirm: 'leave' })) as ReactElement
+    ;(find(l, (e) => e.type === 'button' && text(e.props.children) === 'Discard changes')[0].props.onClick as () => void)()
+    expect(cb.onDiscard).toHaveBeenCalledTimes(1)
   })
 })

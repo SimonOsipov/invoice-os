@@ -1,10 +1,11 @@
 import { ApiError } from '@invoice-os/api-client'
 import { renewConsoleSession } from '@invoice-os/console-session'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 import { SESSION_KEY } from './auth'
 import type { Author, Category, Post } from './blogApi'
-import { BAD_IMAGE, loadBlog, pickCover, pinPost, pinThenRefresh, trackCover, type CoverPickDeps } from './blogFlow'
+import { editorOf, newDraft, type Draft, type EditorState } from './blog'
+import { applyRemove, applySave, BAD_IMAGE, keepThenExpire, loadBlog, pickCover, pinPost, pinThenRefresh, removePost, savePost, singleFlight, STAFF_ONLY, trackCover, type CoverPickDeps, type SaveDeps } from './blogFlow'
 import { withSession } from './session'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
@@ -270,5 +271,207 @@ describe('trackCover', () => {
     await new Promise((r) => setTimeout(r))
     expect(expire).toHaveBeenCalledTimes(1)
     expect(onUrl).not.toHaveBeenCalled()
+  })
+})
+
+const CAT1 = { id: 'c1' } as Category
+const dirty = (o: Partial<Draft> = {}): EditorState => ({ ...editorOf({ ...newDraft([CAT1], [], null, '2026-10-18'), title: 'T', ...o }), dirty: true })
+const saved = (o: Partial<Post> = {}) => ({ id: 'N', status: 'draft', author_name: null, ...o }) as Post
+const saveDeps = (o: Partial<Record<keyof SaveDeps, Mock>> = {}): Record<keyof SaveDeps, Mock> => ({
+  createPost: vi.fn().mockResolvedValue(saved()),
+  updatePost: vi.fn().mockResolvedValue(saved({ status: 'published' })),
+  putCover: vi.fn().mockResolvedValue({}),
+  removeCover: vi.fn().mockResolvedValue(undefined),
+  fetchPosts: vi.fn().mockResolvedValue(POSTS),
+  ...o,
+})
+const NEW_COVER = { kind: 'new' as const, dataUrl: 'data:image/jpeg;base64,AQID' }
+
+describe('savePost', () => {
+  it('creates, then uploads the new cover', async () => {
+    const d = saveDeps()
+    const o = await savePost(d, dirty({ cover: NEW_COVER }), 'draft')
+    expect(o).toEqual({ kind: 'saved', post: saved(), toast: 'Draft saved', posts: POSTS })
+    expect(d.createPost).toHaveBeenCalledTimes(1)
+    expect(d.createPost.mock.calls[0][0]).toMatchObject({ status: 'draft', title: 'T' })
+    expect(d.putCover).toHaveBeenCalledWith('N', new Uint8Array([1, 2, 3]))
+    expect(d.createPost.mock.invocationCallOrder[0]).toBeLessThan(d.putCover.mock.invocationCallOrder[0])
+    expect(d.updatePost).not.toHaveBeenCalled()
+  })
+
+  it('updates and removes a dropped cover', async () => {
+    const d = saveDeps()
+    const o = await savePost(d, dirty({ id: 'p9', status: 'published', cover: { kind: 'none' }, serverHasCover: true }), 'published')
+    expect(o).toMatchObject({ kind: 'saved', toast: 'Changes published' })
+    expect(d.updatePost).toHaveBeenCalledWith('p9', expect.objectContaining({ status: 'published' }))
+    expect(d.removeCover).toHaveBeenCalledWith('N')
+    expect(d.createPost).not.toHaveBeenCalled()
+  })
+
+  it('touches no cover when nothing changed', async () => {
+    const d = saveDeps()
+    await savePost(d, dirty({ id: 'p9', cover: { kind: 'saved' }, serverHasCover: true }), 'draft')
+    await savePost(d, dirty({ id: 'p9', cover: { kind: 'none' }, serverHasCover: false }), 'draft')
+    expect(d.putCover).not.toHaveBeenCalled()
+    expect(d.removeCover).not.toHaveBeenCalled()
+  })
+
+  it('a 422 is invalid with mapped errors and the server toast', async () => {
+    const e = new ApiError('http', 'Fix the highlighted fields to publish', 422, { error: 'x', fields: { summary: 'Add a summary', category_id: 'Pick one' } })
+    const d = saveDeps({ createPost: vi.fn().mockRejectedValue(e) })
+    expect(await savePost(d, dirty({ cover: NEW_COVER }), 'published')).toEqual({
+      kind: 'invalid',
+      errors: { summary: 'Add a summary', category: 'Pick one' },
+      toast: 'Fix the highlighted fields to publish',
+    })
+    expect(d.putCover).not.toHaveBeenCalled()
+    expect(d.fetchPosts).not.toHaveBeenCalled()
+  })
+
+  it('a 422 without fields is a failed save', async () => {
+    const d = saveDeps({ createPost: vi.fn().mockRejectedValue(new ApiError('http', 'bad', 422)) })
+    expect(await savePost(d, dirty(), 'draft')).toEqual({ kind: 'failed', message: 'bad', savedPost: undefined })
+  })
+
+  it('a 401 is expired; on the cover it keeps the saved post', async () => {
+    const d = saveDeps({ updatePost: vi.fn().mockRejectedValue(http(401)) })
+    expect(await savePost(d, dirty({ id: 'p9' }), 'draft')).toEqual({ kind: 'expired', savedPost: undefined })
+    const c = saveDeps({ putCover: vi.fn().mockRejectedValue(http(401)) })
+    expect(await savePost(c, dirty({ cover: NEW_COVER }), 'draft')).toEqual({ kind: 'expired', savedPost: saved() })
+  })
+
+  it('a 403 is forbidden; on the cover it keeps the saved post', async () => {
+    const d = saveDeps({ createPost: vi.fn().mockRejectedValue(http(403)) })
+    expect(await savePost(d, dirty(), 'draft')).toEqual({ kind: 'forbidden', savedPost: undefined })
+    const c = saveDeps({ putCover: vi.fn().mockRejectedValue(http(403)) })
+    expect(await savePost(c, dirty({ cover: NEW_COVER }), 'draft')).toEqual({ kind: 'forbidden', savedPost: saved() })
+  })
+
+  it('a failed cover after a saved post keeps the post and skips the re-read', async () => {
+    const c = saveDeps({ putCover: vi.fn().mockRejectedValue(http(413, 'Choose an image of 2 MB or less')) })
+    expect(await savePost(c, dirty({ cover: NEW_COVER }), 'draft')).toEqual({ kind: 'failed', message: 'Choose an image of 2 MB or less', savedPost: saved() })
+    expect(c.fetchPosts).not.toHaveBeenCalled()
+  })
+
+  it('a network error is failed', async () => {
+    const d = saveDeps({ updatePost: vi.fn().mockRejectedValue(new ApiError('network', 'Failed to fetch')) })
+    expect(await savePost(d, dirty({ id: 'p9' }), 'draft')).toMatchObject({ kind: 'failed', message: 'Failed to fetch' })
+  })
+
+  it('a failed list re-read keeps the save', async () => {
+    const d = saveDeps({ fetchPosts: vi.fn().mockRejectedValue(http(500, 'internal error')) })
+    expect(await savePost(d, dirty(), 'draft')).toEqual({ kind: 'saved', post: saved(), toast: 'Draft saved', rereadError: 'internal error' })
+  })
+
+  it('was-status comes from the draft: a published draft unpublishes', async () => {
+    const d = saveDeps({ updatePost: vi.fn().mockResolvedValue(saved()) })
+    expect(await savePost(d, dirty({ id: 'p9', status: 'published' }), 'draft')).toMatchObject({ toast: 'Unpublished. The post is now a draft' })
+  })
+})
+
+describe('removePost', () => {
+  it('deletes and toasts; each failure has its outcome', async () => {
+    const del = vi.fn().mockResolvedValue(undefined)
+    expect(await removePost({ deletePost: del }, 'p1')).toEqual({ kind: 'done', toast: 'Post deleted' })
+    expect(del).toHaveBeenCalledWith('p1')
+    expect(await removePost({ deletePost: vi.fn().mockRejectedValue(http(401)) }, 'p1')).toEqual({ kind: 'expired' })
+    expect(await removePost({ deletePost: vi.fn().mockRejectedValue(http(403)) }, 'p1')).toEqual({ kind: 'forbidden' })
+    expect(await removePost({ deletePost: vi.fn().mockRejectedValue(http(500, 'boom')) }, 'p1')).toEqual({ kind: 'failed', message: 'boom' })
+  })
+})
+
+describe('applySave', () => {
+  it('saved: clean editor, toast and the re-read list', () => {
+    const sent = dirty({ cover: NEW_COVER })
+    const a = applySave(sent, sent, { kind: 'saved', post: saved({ id: 'N' }), toast: 'Draft saved', posts: POSTS })
+    expect(a).toMatchObject({ toast: 'Draft saved', tone: 'ok', posts: POSTS, expire: false })
+    expect(a.editor).toMatchObject({ dirty: false, draft: { id: 'N', cover: { kind: 'saved' } } })
+  })
+
+  it('saved after an edit made mid-flight stays dirty', () => {
+    const sent = dirty()
+    const cur = { ...sent, draft: { ...sent.draft, title: 'newer' } }
+    const a = applySave(cur, sent, { kind: 'saved', post: saved(), toast: 'Draft saved', posts: POSTS })
+    expect(a.editor).toMatchObject({ dirty: true, draft: { id: 'N', title: 'newer' } })
+  })
+
+  it('a re-read error is the red toast and the list is not replaced', () => {
+    const sent = dirty()
+    const a = applySave(sent, sent, { kind: 'saved', post: saved(), toast: 'Draft saved', rereadError: 'internal error' })
+    expect(a).toMatchObject({ toast: 'internal error', tone: 'red', expire: false })
+    expect(a.posts).toBeUndefined()
+    expect(a.editor.dirty).toBe(false)
+  })
+
+  it('invalid marks the fields and keeps the editor dirty', () => {
+    const sent = { ...dirty(), confirm: 'leave' as const }
+    const a = applySave(sent, sent, { kind: 'invalid', errors: { title: 'x' }, toast: 'Fix it' })
+    expect(a).toMatchObject({ toast: 'Fix it', tone: 'red', expire: false })
+    expect(a.editor).toMatchObject({ errors: { title: 'x' }, dirty: true, confirm: null })
+  })
+
+  it('expired expires with no toast and takes the saved id; forbidden and failed toast red', () => {
+    const sent = dirty({ cover: NEW_COVER })
+    const e = applySave(sent, sent, { kind: 'expired', savedPost: saved({ id: 'N' }) })
+    expect(e).toMatchObject({ expire: true, toast: null })
+    expect(e.editor).toMatchObject({ dirty: true, draft: { id: 'N', cover: { kind: 'new' } } })
+    expect(applySave(sent, sent, { kind: 'expired' }).editor).toBe(sent)
+    expect(applySave(sent, sent, { kind: 'forbidden', savedPost: saved() })).toMatchObject({ toast: STAFF_ONLY, tone: 'red', expire: false })
+    const f = applySave(sent, sent, { kind: 'failed', message: 'boom', savedPost: saved({ id: 'N' }) })
+    expect(f).toMatchObject({ toast: 'boom', tone: 'red', expire: false })
+    expect(f.editor).toMatchObject({ dirty: true, draft: { id: 'N' } })
+  })
+})
+
+describe('applyRemove', () => {
+  it('done closes the editor; failures keep it with the confirm cleared', () => {
+    const cur = { ...dirty({ id: 'p9' }), confirm: 'delete' as const }
+    expect(applyRemove(cur, { kind: 'done', toast: 'Post deleted' })).toEqual({ editor: null, toast: 'Post deleted', tone: 'ok', expire: false })
+    expect(applyRemove(cur, { kind: 'forbidden' })).toMatchObject({ toast: STAFF_ONLY, tone: 'red', expire: false, editor: { confirm: null, dirty: true } })
+    expect(applyRemove(cur, { kind: 'failed', message: 'boom' })).toMatchObject({ toast: 'boom', tone: 'red' })
+    expect(applyRemove(cur, { kind: 'expired' })).toMatchObject({ expire: true, editor: { confirm: null } })
+  })
+})
+
+describe('keepThenExpire', () => {
+  it('writes the dirty draft before it expires, once', () => {
+    const order: string[] = []
+    const d = { write: vi.fn(() => void order.push('write')), expire: vi.fn(() => void order.push('expire')) }
+    const e = dirty()
+    keepThenExpire(d, e)
+    expect(order).toEqual(['write', 'expire'])
+    expect(d.write).toHaveBeenCalledWith(e.draft)
+  })
+
+  it('a clean editor or none writes nothing but still expires', () => {
+    const d = { write: vi.fn(), expire: vi.fn() }
+    keepThenExpire(d, { ...dirty(), dirty: false })
+    keepThenExpire(d, null)
+    expect(d.write).not.toHaveBeenCalled()
+    expect(d.expire).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('singleFlight', () => {
+  it('ignores a call while one runs and accepts the next after it ends', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    const first = vi.fn(() => new Promise<void>((r) => (release = r)))
+    const second = vi.fn(async () => {})
+    const p = run(first)
+    await run(second)
+    expect(second).not.toHaveBeenCalled()
+    release()
+    await p
+    await run(second)
+    expect(second).toHaveBeenCalledTimes(1)
+  })
+
+  it('frees the guard when the action throws', async () => {
+    const run = singleFlight()
+    await expect(run(async () => Promise.reject(new Error('x')))).rejects.toThrow('x')
+    const again = vi.fn(async () => {})
+    await run(again)
+    expect(again).toHaveBeenCalledTimes(1)
   })
 })

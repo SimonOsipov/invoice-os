@@ -16,6 +16,8 @@ import { EVIDENCE_DATA, SEED_SUBMISSIONS } from './data'
 import { gatewayBase } from '@invoice-os/api-client'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, landingBase } from './auth'
+import { keptFor } from './blog'
+import { currentSub } from './session'
 import type { BlogFilters, DrawerState, Env, JobFilter, Range, Screen, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.asc-app` — that scope defines the design-system
@@ -31,13 +33,19 @@ export default function App() {
   )
 }
 
+// Opens on Blog when the signed-in member has a draft kept from a lost session.
+function initialScreen(): Screen {
+  if (typeof localStorage === 'undefined') return 'overview'
+  return keptFor(localStorage, currentSub()) ? 'blog' : 'overview'
+}
+
 function Console() {
   // Mirrors the prototype's constructor state (Developer Console.dc.html:744).
   // Every field lands with the screen that reads it — `noUnusedLocals` rejects
   // state that nothing consumes yet. `subQuery` arrived with its two consumers on
   // Submissions (the search input and the empty state), `evQuery` likewise with
   // Evidence, and `reveal`/`confirmRotate` with API & webhooks.
-  const [screen, setScreen] = useState<Screen>('overview')
+  const [screen, setScreen] = useState<Screen>(initialScreen)
   const [env, setEnv] = useState<Env>('sandbox')
   const [range, setRange] = useState<Range>('30d')
   const [filter, setFilter] = useState<JobFilter>('all')

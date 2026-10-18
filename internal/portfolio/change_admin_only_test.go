@@ -61,28 +61,32 @@ func TestStoreUpdate_NonAdminRefusedInBothModes(t *testing.T) {
 func TestStoreUpdate_NonAdminInputNeverReachesValidation(t *testing.T) {
 	super, app := dbTestPools(t)
 	store := NewStore(app)
-	tenantID, c := seedCaller(t, super, "firm", "preparer", "active")
-	id := seedEntity(t, super, tenantID, "Before Co", nil)
-	for _, tc := range []struct {
-		name string
-		id   string
-		in   UpdateInput
-	}{
-		{"empty input", id, UpdateInput{}},
-		{"malformed TIN", id, UpdateInput{TIN: strPtr("abc")}},
-		{"unknown id", uuid.NewString(), UpdateInput{Name: strPtr("Any Co")}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := store.Update(c, tc.id, tc.in)
-			if !errors.Is(err, ErrNotPermitted) {
-				t.Fatalf("Update err = %v, want ErrNotPermitted", err)
+	for _, kind := range createByRoleKinds {
+		for _, role := range nonAdminRoles {
+			tenantID, c := seedCaller(t, super, kind, role, "active")
+			id := seedEntity(t, super, tenantID, "Before Co", nil)
+			for _, tc := range []struct {
+				name string
+				id   string
+				in   UpdateInput
+			}{
+				{"empty input", id, UpdateInput{}},
+				{"malformed TIN", id, UpdateInput{TIN: strPtr("abc")}},
+				{"unknown id", uuid.NewString(), UpdateInput{Name: strPtr("Any Co")}},
+			} {
+				t.Run(kind+"/"+role+"/"+tc.name, func(t *testing.T) {
+					_, err := store.Update(c, tc.id, tc.in)
+					if !errors.Is(err, ErrNotPermitted) {
+						t.Fatalf("Update err = %v, want ErrNotPermitted", err)
+					}
+					for _, other := range []error{ErrValidation, ErrInvalidTIN, ErrNotFound} {
+						if errors.Is(err, other) {
+							t.Errorf("non-admin reached %v, want the role refusal alone", other)
+						}
+					}
+				})
 			}
-			for _, other := range []error{ErrValidation, ErrInvalidTIN, ErrNotFound} {
-				if errors.Is(err, other) {
-					t.Errorf("non-admin reached %v, want the role refusal alone", other)
-				}
-			}
-		})
+		}
 	}
 }
 
@@ -131,21 +135,27 @@ func TestStoreSetStatus_NonAdminRefused(t *testing.T) {
 func TestStoreSetStatus_NonAdminSeesNoRowState(t *testing.T) {
 	super, app := dbTestPools(t)
 	store := NewStore(app)
-	tenantID, c := seedCaller(t, super, "firm", "preparer", "active")
-	id := seedEntity(t, super, tenantID, "Active Co", nil)
-	for _, tc := range []struct{ name, id string }{
-		{"redundant transition", id},
-		{"unknown id", uuid.NewString()},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := store.SetStatus(c, tc.id, "active")
-			if !errors.Is(err, ErrNotPermitted) {
-				t.Fatalf("SetStatus err = %v, want ErrNotPermitted", err)
+	for _, kind := range createByRoleKinds {
+		for _, role := range nonAdminRoles {
+			tenantID, c := seedCaller(t, super, kind, role, "active")
+			activeID := seedEntity(t, super, tenantID, "Active Co", nil)
+			archivedID := seedEntityStatus(t, super, tenantID, "Archived Co", nil, "archived")
+			for _, tc := range []struct{ name, id, target string }{
+				{"redundant onboard", activeID, "active"},
+				{"redundant offboard", archivedID, "archived"},
+				{"unknown id", uuid.NewString(), "active"},
+			} {
+				t.Run(kind+"/"+role+"/"+tc.name, func(t *testing.T) {
+					_, err := store.SetStatus(c, tc.id, tc.target)
+					if !errors.Is(err, ErrNotPermitted) {
+						t.Fatalf("SetStatus err = %v, want ErrNotPermitted", err)
+					}
+					if errors.Is(err, ErrRedundantTransition) || errors.Is(err, ErrNotFound) {
+						t.Errorf("non-admin saw row state (%v), want the role refusal alone", err)
+					}
+				})
 			}
-			if errors.Is(err, ErrRedundantTransition) || errors.Is(err, ErrNotFound) {
-				t.Errorf("non-admin saw row state (%v), want the role refusal alone", err)
-			}
-		})
+		}
 	}
 }
 

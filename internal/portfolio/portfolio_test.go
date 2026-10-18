@@ -151,9 +151,9 @@ func TestCreateHandler_TINReasonInBody(t *testing.T) {
 	}
 }
 
-// TestHandlers_StoreTINRefusalIsBareReason: the real Store.Create (as an admin,
-// after the role check) and Store.Update refuse a TIN; the 400 body is the
-// reason alone, with no wrapper added on the way. Update needs no database.
+// TestHandlers_StoreTINRefusalIsBareReason: the real Store.Create and
+// Store.Update (as an admin, after the role check) refuse a TIN; the 400 body
+// is the reason alone, with no wrapper added on the way.
 func TestHandlers_StoreTINRefusalIsBareReason(t *testing.T) {
 	super, app := dbTestPools(t)
 	createStore := NewStore(app)

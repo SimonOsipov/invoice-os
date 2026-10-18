@@ -1821,7 +1821,8 @@ func TestInvitations_AppRoleHasNoDeleteOnInvitations(t *testing.T) {
 }
 
 // holdInvitationRow locks one invitations row from a superuser tx until release, so racers queue on it.
-func holdInvitationRow(t *testing.T, w invWorld, id string) (release func()) {
+// It also returns the holder's backend pid, for waitRowLockWaiters.
+func holdInvitationRow(t *testing.T, w invWorld, id string) (release func(), holderPID int) {
 	t.Helper()
 	ctx := context.Background()
 	tx, err := w.super.Begin(ctx)
@@ -1832,6 +1833,10 @@ func holdInvitationRow(t *testing.T, w invWorld, id string) (release func()) {
 	if err := tx.QueryRow(ctx, `SELECT 1 FROM invitations WHERE id = $1 FOR UPDATE`, id).Scan(&one); err != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatalf("lock the invitation row: %v", err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("read the holder pid: %v", err)
 	}
 	released := false
 	release = func() {
@@ -1844,19 +1849,22 @@ func holdInvitationRow(t *testing.T, w invWorld, id string) (release func()) {
 		}
 	}
 	t.Cleanup(release)
-	return release
+	return release, holderPID
 }
 
-// waitRowLockWaiters blocks until n backends wait on a row lock for an invitation statement.
-func waitRowLockWaiters(t *testing.T, w invWorld, n int, early ...chan error) {
+// waitRowLockWaiters blocks until n backends are blocked by holder, directly or behind another
+// waiter in the row-lock queue. Backends of other packages on the same DB never count.
+func waitRowLockWaiters(t *testing.T, w invWorld, holder, n int, early ...chan error) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		var got int
 		if err := w.super.QueryRow(context.Background(),
-			`SELECT count(*) FROM pg_stat_activity
-			  WHERE datname = current_database() AND wait_event_type = 'Lock'
-			    AND query ~* '(from invitations|accept_invitation)'`).Scan(&got); err != nil {
+			`WITH RECURSIVE waiting(pid) AS (
+			   SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))
+			   UNION
+			   SELECT a.pid FROM pg_stat_activity a JOIN waiting ON waiting.pid = ANY(pg_blocking_pids(a.pid))
+			 ) SELECT count(*) FROM waiting`, holder).Scan(&got); err != nil {
 			t.Fatalf("read pg_stat_activity: %v", err)
 		}
 		if got >= n {
@@ -1879,14 +1887,14 @@ func waitRowLockWaiters(t *testing.T, w invWorld, n int, early ...chan error) {
 func TestInvitations_ConcurrentRevokesOfOneInviteSucceedOnce(t *testing.T) {
 	w := newInvWorld(t, "Concurrent Revoke Tenant", "Ada Obi")
 	target := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "t@x.test", role: "reviewer", invitedBy: w.admin})
-	release := holdInvitationRow(t, w, target.ID)
+	release, holder := holdInvitationRow(t, w, target.ID)
 
 	const racers = 4
 	results := make(chan error, racers)
 	for range racers {
 		go func() { results <- w.store.RevokeInvitation(w.adminCtx(), target.ID) }()
 	}
-	waitRowLockWaiters(t, w, racers, results)
+	waitRowLockWaiters(t, w, holder, racers, results)
 	release()
 
 	ok, notPending := 0, 0
@@ -1918,7 +1926,7 @@ func TestInvitations_RevokeRacingAResendLeavesTheInviteRevoked(t *testing.T) {
 	resendWon := 0
 	for i := range 4 {
 		target := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: fmt.Sprintf("t%d@x.test", i), invitedBy: w.admin})
-		release := holdInvitationRow(t, w, target.ID)
+		release, holder := holdInvitationRow(t, w, target.ID)
 		revoked, resent := make(chan error, 1), make(chan error, 1)
 		startRevoke := func() { go func() { revoked <- w.store.RevokeInvitation(w.adminCtx(), target.ID) }() }
 		startResend := func() { go func() { _, err := w.store.ResendInvitation(w.adminCtx(), target.ID); resent <- err }() }
@@ -1928,9 +1936,9 @@ func TestInvitations_RevokeRacingAResendLeavesTheInviteRevoked(t *testing.T) {
 			first, second = startResend, startRevoke
 		}
 		first()
-		waitRowLockWaiters(t, w, 1, revoked, resent)
+		waitRowLockWaiters(t, w, holder, 1, revoked, resent)
 		second()
-		waitRowLockWaiters(t, w, 2, revoked, resent)
+		waitRowLockWaiters(t, w, holder, 2, revoked, resent)
 		release()
 
 		var revokeErr, resendErr error
@@ -1975,7 +1983,7 @@ func TestInvitations_RevokeRacingAnAcceptNeverBothWins(t *testing.T) {
 		email := fmt.Sprintf("race%d@obi.test", i)
 		issued := mustIssue(t, w.adminCtx(), w.store, []string{email}, "reviewer")[0]
 		user := uuid.NewString()
-		release := holdInvitationRow(t, w, issued.ID)
+		release, holder := holdInvitationRow(t, w, issued.ID)
 		revoked, accepted := make(chan error, 1), make(chan error, 1)
 		startRevoke := func() { go func() { revoked <- w.store.RevokeInvitation(w.adminCtx(), issued.ID) }() }
 		startAccept := func() {
@@ -1990,9 +1998,9 @@ func TestInvitations_RevokeRacingAnAcceptNeverBothWins(t *testing.T) {
 			first, second = startAccept, startRevoke
 		}
 		first()
-		waitRowLockWaiters(t, w, 1, revoked, accepted)
+		waitRowLockWaiters(t, w, holder, 1, revoked, accepted)
 		second()
-		waitRowLockWaiters(t, w, 2, revoked, accepted)
+		waitRowLockWaiters(t, w, holder, 2, revoked, accepted)
 		release()
 
 		var revokeErr, acceptErr error

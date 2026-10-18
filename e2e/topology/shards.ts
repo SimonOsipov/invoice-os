@@ -15,45 +15,27 @@ export const UNITS: Unit[] = [
   {
     name: 'serial-lane',
     specs: [
-      'app-shell.spec.ts',
       'audit.spec.ts',
       'audit-settings-surfaces.spec.ts',
       'auth.spec.ts',
-      'design-system.spec.ts',
-      'environment-posture.spec.ts',
       'isolation.spec.ts',
-      'ops-console.spec.ts',
-      'overview-register-approvals.spec.ts',
       'persona-surfaces.spec.ts',
-      'portfolio.spec.ts',
       'portfolio-workflow-surfaces.spec.ts',
       'roles.spec.ts',
       'support-console.spec.ts',
       'workflows.spec.ts',
     ],
     reasons: {
-      'app-shell.spec.ts':
-        'Cost, not shared state ([fork-lane-by-cost]): signs in the firm and in-house e2e members; writes no tenant data.',
       'audit.spec.ts':
         'Reads both persona tenants\' audit trails, which need rows the seed and the earlier suites wrote ("the seed alone writes audit rows"; the pager needs more than one page).',
       'audit-settings-surfaces.spec.ts':
         'Reads the seeded firm and in-house rosters and roles of 1111 / 2222 and both audit trails; creates one entity and one invoice in 1111 and prepares one evidence bundle, which appends audit rows.',
       'auth.spec.ts':
         'Tests the real sign-in front door and stored-session rules, which the SPA binds to the seeded tenants 1111 / 2222 (the e2e members it signs in as).',
-      'design-system.spec.ts':
-        'Cost, not shared state ([fork-lane-by-cost]): reads no tenant data beyond the firm e2e member and two provisioned staff sign-ins and writes none.',
-      'environment-posture.spec.ts':
-        'Cost, not shared state ([fork-lane-by-cost]): reads and writes no tenant data. A shard costs ~1 min of runner setup for one 1.4 s test.',
       'isolation.spec.ts':
         'Asserts the exact seeded membership subsets (firm: 6 seeded members, plus the e2e member of each role that exists) and tenant identities of 1111 and 2222.',
-      'ops-console.spec.ts':
-        'Cost, not shared state ([fork-lane-by-cost]): signs a provisioned staff account in to the mock-backed Ops Console; reads and writes no tenant data.',
-      'overview-register-approvals.spec.ts':
-        'Cost, not shared state ([fork-lane-by-cost]): signs in the firm and in-house e2e members and reaches every state with page.route; writes no tenant data.',
       'persona-surfaces.spec.ts':
         "Builds the in-house approval queue and badge on the active policy `internal/demopolicy` seeds only on 1111 / 2222. Needs 2222's seeded `Honeywell Group` entity as its first client (the subtitle assertion).",
-      'portfolio.spec.ts':
-        'Cost, not shared state ([fork-lane-by-cost]): creates its own entities and scopes each assertion to their rows. A shard costs ~1 min of runner setup for ~37 s of tests.',
       'portfolio-workflow-surfaces.spec.ts':
         'Reads the `Standard approval policy` that `internal/demopolicy` seeds only on 1111 / 2222 (`planFor`), without saving it; creates its own entity and invoice in 1111.',
       'roles.spec.ts':
@@ -88,6 +70,21 @@ export const UNITS: Unit[] = [
       inHouse: '22222222-2222-2222-2222-00000000e2e2',
     },
   },
+  {
+    name: 'ui-surfaces',
+    specs: [
+      'app-shell.spec.ts',
+      'design-system.spec.ts',
+      'environment-posture.spec.ts',
+      'ops-console.spec.ts',
+      'overview-register-approvals.spec.ts',
+      'portfolio.spec.ts',
+    ],
+    tenants: {
+      firm: '11111111-1111-1111-1111-00000000e2e4',
+      inHouse: '22222222-2222-2222-2222-00000000e2e4',
+    },
+  },
   { name: 'library', specs: ['library.spec.ts'] },
 ]
 
@@ -112,6 +109,13 @@ export function partitionErrors(specFiles: string[]): string[] {
     if (!owners.has(f)) errors.push(`${f} is in no unit`)
   }
   return errors
+}
+
+/** shardTenantError: why a spec in unit `project` may not sign in on `tenantId`; undefined when it may. */
+export function shardTenantError(project: string, tenantId: string | undefined): string | undefined {
+  const t = UNITS.find((u) => u.name === project)?.tenants
+  if (!t || tenantId === t.firm || tenantId === t.inHouse) return undefined
+  return `${project} is a dedicated shard: sign in on ${t.firm} or ${t.inHouse}, not ${tenantId ?? 'the 1111 / 2222 default'}`
 }
 
 // Script entry: the CI matrix is this line. import.meta.main needs Node >= 22.18.

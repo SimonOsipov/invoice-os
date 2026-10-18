@@ -82,7 +82,7 @@ func RenderInvite(m InviteMail) (subject, html string, err error) {
 const (
 	// BlogConfirmURL is the blog confirm page; the page POSTs the token, so a mail scanner's GET confirms nothing.
 	// ceiling: the token rides in the query, so edge, Caddy and crawler-route logs see it; revisit if those logs leave our control or the token outlives 48 h (D-4).
-	BlogConfirmURL        ="https://blog.ascomply.com/subscribe/confirm"
+	BlogConfirmURL        = "https://blog.ascomply.com/subscribe/confirm"
 	BlogConfirmSubject    = "Confirm your ASComply blog subscription"
 	BlogConfirmValidHours = 48
 )

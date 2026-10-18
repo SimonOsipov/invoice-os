@@ -255,14 +255,30 @@ func TestSource_AValidBodyOverTheCapIsRefusedAndOneAtTheCapIsRead(t *testing.T) 
 func TestSource_AHungUpstreamIsCutAtTheUpstreamTimeout(t *testing.T) {
 	t.Parallel()
 	g, c := newGateway(t), newClock()
-	g.hang = upstreamTimeout + 1500*time.Millisecond
+	g.hang = 6 * time.Second
 	u, _ := url.Parse(g.URL)
 	s := NewSource(u, &http.Client{}, c.now, slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
 	start := time.Now()
 	if _, err := s.Get(context.Background()); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err %v", err)
 	}
-	if d := time.Since(start); d > upstreamTimeout+1200*time.Millisecond {
-		t.Errorf("waited %v, want about %v", d, upstreamTimeout)
+	if d := time.Since(start); d > 5800*time.Millisecond {
+		t.Errorf("waited %v, want about 5s", d)
+	}
+}
+
+func TestSource_ANonOKStatusIsRefusedEvenWithAValidBody(t *testing.T) {
+	for _, code := range []int{201, 203, 206, 404, 429, 500} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "public, max-age=60")
+			w.WriteHeader(code)
+			_, _ = w.Write([]byte(`{"categories":[],"posts":[]}`))
+		}))
+		u, _ := url.Parse(srv.URL)
+		s := NewSource(u, &http.Client{}, newClock().now, slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+		if _, err := s.Get(context.Background()); !errors.Is(err, ErrUnavailable) {
+			t.Errorf("status %d with a valid body: %v", code, err)
+		}
+		srv.Close()
 	}
 }

@@ -42,7 +42,7 @@ export function BlogCategories({ cats, onMove, onAdd, onEdit, onDelete }: Props)
         {catRows(cats).map((r, i) => (
           <div key={r.cat.id} data-cat-row style={{ borderBottom: '1px solid var(--line-1)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px' }}>
-              <span className="mono" style={{ flex: 'none', width: 20, fontSize: 11, color: 'var(--fg-4)' }}>
+              <span className="mono" style={{ flex: 'none', width: 20, fontSize: 11, color: 'var(--fg-3)' }}>
                 {r.num}
               </span>
               <span style={{ flex: 'none', width: 36, height: 36, borderRadius: 6, display: 'grid', placeItems: 'center', background: r.tone.bg, color: r.tone.fg }}>

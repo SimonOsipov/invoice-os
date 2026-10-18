@@ -604,6 +604,9 @@ describe('BlogCategories', () => {
     const html = renderCats([cat()])
     for (const l of ['Move up', 'Move down', 'Edit', 'Delete']) expect(html).toContain(`aria-label="${l}"`)
     expect(html.match(/<button[^>]*aria-label="Delete"[^>]*>/)![0]).toContain('color:var(--destructive)')
+    const btns = [...html.matchAll(/<button[^>]*aria-label="[^"]*"[^>]*>/g)].map((m) => m[0])
+    expect(btns).toHaveLength(4)
+    for (const b of btns) for (const p of ['width:30px', 'height:30px', 'border:1px solid var(--line-2)']) expect(b).toContain(p)
   })
 
   it('the first up and the last down are dimmed', () => {

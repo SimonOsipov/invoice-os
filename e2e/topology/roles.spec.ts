@@ -1249,8 +1249,10 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
   for (const address of [long, sibling, malformed]) await addChip(address)
   await expect(page.getByTestId('invite-chip')).toHaveCount(3)
 
-  // L1: the modal fits the viewport and is centred, its footer and all three chips stay inside.
+  // L1: the modal fits the viewport and is centred, its footer, both scope cards and all three chips stay inside.
   const chipbox = page.getByTestId('invite-chipbox')
+  const scopeCards = ['invite-scope-all', 'invite-scope-selected']
+  for (const id of scopeCards) await expect(page.getByTestId(id)).toBeVisible()
   const l1 = await atEachWidth(page, async (width) => {
     await settleAnimations(dialog, chipbox)
     const viewport: Rect = { x: 0, y: 0, width, height: 1080 }
@@ -1259,7 +1261,7 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
     expect(enclosesRect(viewport, dialogBox), `the modal must sit inside the viewport at ${width}px`).toBe(true)
     const g = gaps(dialogBox, viewport)
     expect(Math.abs(g.left - g.right), `the modal must be centred at ${width}px`).toBeLessThanOrEqual(2)
-    for (const id of ['invite-modal-send', 'invite-modal-cancel']) {
+    for (const id of ['invite-modal-send', 'invite-modal-cancel', ...scopeCards]) {
       expect(enclosesRect(dialogBox, await boxOf(page.getByTestId(id), id), 1), `${id} must sit inside the modal at ${width}px`).toBe(true)
     }
     const chips = await page.getByTestId('invite-chip').all()

@@ -41,10 +41,27 @@ function sendMock(): SendMock {
   return vi.fn<InviteModalProps['onSend']>().mockResolvedValue(undefined)
 }
 
-function renderModal(over: { existing?: Member[]; onSend?: SendMock; onClose?: Mock<() => void> } = {}) {
+const CLIENTS = [
+  { id: 'e1', name: 'Alpha Ltd' },
+  { id: 'e2', name: 'Beta Ltd' },
+]
+
+function renderModal(over: Partial<InviteModalProps> & { onSend?: SendMock; onClose?: Mock<() => void> } = {}) {
   const onSend = over.onSend ?? sendMock()
   const onClose = over.onClose ?? vi.fn<() => void>()
-  render(<InviteModal existing={over.existing ?? []} onSend={onSend} onClose={onClose} />)
+  render(
+    <InviteModal
+      mode="firm"
+      clients={CLIENTS}
+      clientsState="ready"
+      clientsError={null}
+      onRetryClients={vi.fn()}
+      existing={[]}
+      {...over}
+      onSend={onSend}
+      onClose={onClose}
+    />,
+  )
   return { onSend, onClose, user: userEvent.setup({ delay: null }) }
 }
 
@@ -68,9 +85,98 @@ const settle = () =>
     await new Promise((r) => setTimeout(r, 0))
   })
 
+const tick = (user: User, id: string) =>
+  user.click(within(screen.getAllByTestId('invite-client-row')[CLIENTS.findIndex((c) => c.id === id)]).getByRole('checkbox'))
+const scopeRadio = (s: 'all' | 'selected') => within(screen.getByTestId(`invite-scope-${s}`)).getByRole('radio') as HTMLInputElement
+
+describe('InviteModal client access', () => {
+  it('InviteModal: a firm preparer invite sends the picked clients', async () => {
+    const { user, onSend } = renderModal()
+    await addChips(user, 'a@x.ng')
+    await tick(user, 'e2')
+    await user.click(send())
+    expect(onSend).toHaveBeenCalledWith(['a@x.ng'], 'preparer', ['e2'])
+  })
+
+  it('InviteModal: nothing picked still sends, with no clients', async () => {
+    const { user, onSend } = renderModal()
+    await addChips(user, 'a@x.ng')
+    expect(scopeRadio('selected').checked).toBe(true)
+    expect(send().disabled).toBe(false)
+    await user.click(send())
+    expect(onSend).toHaveBeenCalledWith(['a@x.ng'], 'preparer', [])
+  })
+
+  it('InviteModal: All clients sends "all"', async () => {
+    const { user, onSend } = renderModal()
+    await addChips(user, 'a@x.ng')
+    await user.click(within(screen.getByTestId('invite-role-reviewer')).getByRole('radio'))
+    await user.click(scopeRadio('all'))
+    await user.click(send())
+    expect(onSend).toHaveBeenCalledWith(['a@x.ng'], 'reviewer', 'all')
+  })
+
+  it('InviteModal: an admin invite shows All clients locked and sends no access', async () => {
+    const { user, onSend } = renderModal()
+    await addChips(user, 'a@x.ng')
+    await tick(user, 'e1')
+    await user.click(within(screen.getByTestId('invite-role-admin')).getByRole('radio'))
+    expect(scopeRadio('all').checked).toBe(true)
+    expect(scopeRadio('all').closest('fieldset')!.disabled).toBe(true)
+    expect(screen.getByText('An admin sees every client.')).toBeTruthy()
+    await user.click(send())
+    expect(onSend).toHaveBeenCalledWith(['a@x.ng'], 'admin', undefined)
+    await user.click(within(screen.getByTestId('invite-role-preparer')).getByRole('radio'))
+    expect(
+      screen.getAllByTestId('invite-client-row').map((r) => (within(r).getByRole('checkbox') as HTMLInputElement).checked),
+    ).toEqual([true, false])
+  })
+
+  it('InviteModal: in-house shows no picker', async () => {
+    const { user, onSend } = renderModal({ mode: 'inhouse' })
+    expect(screen.queryByTestId('invite-scope-all')).toBeNull()
+    await addChips(user, 'a@x.ng')
+    await user.click(send())
+    expect(onSend).toHaveBeenCalledWith(['a@x.ng'], 'preparer', undefined)
+  })
+
+  it('InviteModal: a refusal of the client access shows verbatim', async () => {
+    const msgs = ['a client in the list is not in this workspace', 'client access applies to accounting firm workspaces only']
+    const onSend = sendMock().mockRejectedValueOnce(new ApiError('http', msgs[0], 400)).mockRejectedValueOnce(new ApiError('http', msgs[1], 409))
+    const { user } = renderModal({ onSend })
+    await addChips(user, 'a@x.ng')
+    await tick(user, 'e1')
+    for (const m of msgs) {
+      await user.click(send())
+      await waitFor(() => expect(screen.getByTestId('invite-modal-error').textContent).toBe(m))
+    }
+    expect(addresses()).toEqual(['a@x.ng'])
+    expect((within(screen.getAllByTestId('invite-client-row')[0]).getByRole('checkbox') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('InviteModal: the refused-address re-send keeps the access', async () => {
+    const onSend = sendMock().mockRejectedValueOnce(new ApiError('http', refusedMessage('b@x.ng'), 400)).mockResolvedValue(undefined)
+    const { user } = renderModal({ onSend })
+    await addChips(user, 'a@x.ng', 'b@x.ng')
+    await tick(user, 'e1')
+    await user.click(send())
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2))
+    expect(onSend.mock.calls.map((c) => c[2])).toEqual([['e1'], ['e1']])
+  })
+
+  it('InviteModal: the clients loading and error states replace the picker', async () => {
+    const onRetryClients = vi.fn()
+    const { user } = renderModal({ clientsState: 'error', clientsError: new ApiError('http', 'clients down', 500), onRetryClients })
+    expect(screen.queryByTestId('invite-scope-all')).toBeNull()
+    expect(screen.getByText(/clients down/)).toBeTruthy()
+    await addChips(user, 'a@x.ng')
+    expect(send().disabled).toBe(false)
+  })
+})
+
 describe('InviteModal', () => {
   it('InviteModal: preparer is preselected among exactly three role cards', () => {
-    renderModal()
+    renderModal({ mode: 'inhouse' })
     const radios = screen.getAllByRole('radio')
     expect(radios).toHaveLength(3)
     expect(screen.getAllByTestId(/^invite-role-/)).toHaveLength(3)
@@ -182,7 +288,7 @@ describe('InviteModal', () => {
     await user.click(send())
     await settle()
     expect(onSend).toHaveBeenCalledTimes(1)
-    expect(onSend).toHaveBeenCalledWith(['ok1@x.ng'], 'reviewer')
+    expect(onSend).toHaveBeenCalledWith(['ok1@x.ng'], 'reviewer', [])
   })
 
   it('InviteModal: Send commits the uncommitted draft first', async () => {
@@ -193,7 +299,7 @@ describe('InviteModal', () => {
     await user.click(send())
     await settle()
     expect(onSend).toHaveBeenCalledTimes(1)
-    expect(onSend).toHaveBeenCalledWith(['a@x.ng', 'b@x.ng'], 'preparer')
+    expect(onSend).toHaveBeenCalledWith(['a@x.ng', 'b@x.ng'], 'preparer', [])
   })
 
   it('InviteModal: Send is disabled with no ok chip', async () => {
@@ -234,8 +340,8 @@ describe('InviteModal', () => {
       await user.click(send())
       await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2))
       await settle()
-      expect(onSend.mock.calls[0]).toEqual([['ok@x.com', R], 'preparer'])
-      expect(onSend.mock.calls[1]).toEqual([['ok@x.com'], 'preparer'])
+      expect(onSend.mock.calls[0]).toEqual([['ok@x.com', R], 'preparer', []])
+      expect(onSend.mock.calls[1]).toEqual([['ok@x.com'], 'preparer', []])
       expect(addresses()).toEqual([R])
       expect(reasons()).toEqual([NOT_VALID])
       expect(screen.getByTestId('invite-modal')).toBeTruthy()
@@ -410,7 +516,7 @@ describe('InviteModal', () => {
       await user.click(send())
       await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
       expect(onSend).toHaveBeenCalledTimes(1)
-      expect(onSend).toHaveBeenCalledWith(['a@x.ng'], 'preparer')
+      expect(onSend).toHaveBeenCalledWith(['a@x.ng'], 'preparer', [])
     })
 
     it.each(['nope', 'm@x.ng'])('InviteModal: Send with only the unsendable draft %j calls onSend with nothing', async (draft) => {
@@ -445,7 +551,7 @@ describe('InviteModal', () => {
       await user.click(send())
       await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
       expect(onSend).toHaveBeenCalledTimes(1)
-      expect(onSend).toHaveBeenCalledWith(['ok@x.ng'], 'preparer')
+      expect(onSend).toHaveBeenCalledWith(['ok@x.ng'], 'preparer', [])
     })
 
     it('InviteModal: a server-named chip stays refused on the next Send and is not mailed again', async () => {
@@ -458,7 +564,7 @@ describe('InviteModal', () => {
       await addChips(user, 'new@x.com')
       await user.click(send())
       await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3))
-      expect(onSend.mock.calls[2]).toEqual([['new@x.com'], 'preparer'])
+      expect(onSend.mock.calls[2]).toEqual([['new@x.com'], 'preparer', []])
       await waitFor(() => expect(addresses()).toEqual([R]))
       expect(reasons()).toEqual([NOT_VALID])
       expect(onClose).not.toHaveBeenCalled()
@@ -473,7 +579,7 @@ describe('InviteModal', () => {
       await user.click(send())
       await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2))
       await waitFor(() => expect(addresses()).toEqual(['a..b@x.com', 'c..d@x.com']))
-      expect(onSend.mock.calls[1]).toEqual([['ok@x.com', 'fine@x.com'], 'preparer'])
+      expect(onSend.mock.calls[1]).toEqual([['ok@x.com', 'fine@x.com'], 'preparer', []])
       expect(reasons()).toEqual([NOT_VALID, NOT_VALID])
     })
 
@@ -488,7 +594,7 @@ describe('InviteModal', () => {
       await waitFor(() => expect(screen.getByTestId('invite-modal-error').textContent).toBe(DAILY_LIMIT))
       await user.click(send())
       await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3))
-      expect(onSend.mock.calls[2]).toEqual([['ok@x.com'], 'preparer'])
+      expect(onSend.mock.calls[2]).toEqual([['ok@x.com'], 'preparer', []])
       await waitFor(() => expect(addresses()).toEqual([R]))
       expect(screen.queryByTestId('invite-modal-error')).toBeNull()
       expect(onClose).not.toHaveBeenCalled()

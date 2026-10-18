@@ -1517,6 +1517,20 @@ describe('RESEND-07-02 — the invitations wire', () => {
     expect(got).toEqual([w])
   })
 
+  it('sendInvitations sends client_access only when given', async () => {
+    const af = vi.fn().mockResolvedValue({ invitations: [w] }) as unknown as AuthedFetch
+    const bodyOf = () => (af as unknown as ReturnType<typeof vi.fn>).mock.lastCall![1].body
+
+    await sendInvitations(af, base, ['e1'], 'preparer', ['e1'])
+    expect(bodyOf()).toEqual({ emails: ['e1'], role: 'preparer', client_access: ['e1'] })
+    await sendInvitations(af, base, ['e1'], 'preparer', 'all')
+    expect(bodyOf().client_access).toBe('all')
+    await sendInvitations(af, base, ['e1'], 'preparer', [])
+    expect(bodyOf().client_access).toEqual([])
+    await sendInvitations(af, base, ['e1'], 'admin')
+    expect('client_access' in bodyOf()).toBe(false)
+  })
+
   it("resendInvitation POSTs to the id's resend path with no body", async () => {
     const af = vi.fn().mockResolvedValue(w) as unknown as AuthedFetch
 

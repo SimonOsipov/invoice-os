@@ -173,7 +173,7 @@ export type InviteVerdict = 'ok' | 'member' | 'invited' | 'malformed'
  * this is the argument an invite would take, not the row it would produce.
  */
 export type InviteOptions =
-  | { mode: 'firm'; role: AccessRole; clientAccess: 'all' | number[] }
+  | { mode: 'firm'; role: AccessRole; clientAccess: 'all' | string[] }
   | { mode: 'inhouse'; role: AccessRole; department: Department }
 
 /**
@@ -479,8 +479,8 @@ export function removeConfirmQuestion(name: string): string {
 export const PROTECTED_ADMIN_NOTE = "You're the only admin. Promote someone else first."
 
 /**
- * True when the picker's value is an empty set. Not an error: `[]` is a valid access, and
- * `ClientAccessPicker` only uses this to show `NO_CLIENTS_NOTE`.
+ * True when the picker's value is an empty set. Not an error: `[]` is a valid access that
+ * stores no clients. The picker and the invite modal show `NO_CLIENTS_NOTE` for it; neither blocks Send.
  */
 export function needsClientPick(access: 'all' | readonly string[]): boolean {
   return access !== 'all' && access.length === 0
@@ -628,10 +628,11 @@ export async function sendInvitations(
   base: string,
   emails: readonly string[],
   role: AccessRole,
+  clientAccess?: 'all' | readonly string[],
 ): Promise<InvitationWire[]> {
   const body = await f<{ invitations: InvitationWire[] }>(`${base}/api/tenancy/v1/invitations`, {
     method: 'POST',
-    body: { emails, role },
+    body: clientAccess === undefined ? { emails, role } : { emails, role, client_access: clientAccess },
   })
   return body.invitations
 }

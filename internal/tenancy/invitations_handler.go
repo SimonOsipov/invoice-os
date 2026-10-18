@@ -131,6 +131,9 @@ type InvitationsLister func(ctx context.Context) ([]Invitation, error)
 // InviteResender is Inviter.Resend.
 type InviteResender func(ctx context.Context, id string) (InviteResult, error)
 
+// InviteRevoker is Store.RevokeInvitation.
+type InviteRevoker func(ctx context.Context, id string) error
+
 type inviteRequest struct {
 	Emails []string `json:"emails"`
 	Role   string   `json:"role"`
@@ -260,5 +263,28 @@ func InvitationResendHandler(resend InviteResender, log *slog.Logger) http.Handl
 			return
 		}
 		writeJSON(w, http.StatusOK, item)
+	}
+}
+
+// InvitationRevokeHandler returns POST /v1/invitations/{id}/revoke.
+func InvitationRevokeHandler(revoke InviteRevoker, log *slog.Logger) http.HandlerFunc {
+	if log == nil {
+		log = slog.Default()
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := auth.IdentityFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		id, err := uuid.Parse(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusNotFound, "invitation not found")
+			return
+		}
+		if err := revoke(r.Context(), id.String()); err != nil {
+			invitationFailure(w, r, log, "tenancy: revoke invitation", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": id.String(), "status": "revoked"})
 	}
 }

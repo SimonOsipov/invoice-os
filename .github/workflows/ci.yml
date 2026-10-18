@@ -1266,7 +1266,10 @@ jobs:
         with:
           go-version-file: go.mod
       # Pinned: a scanner release must not change the verdict between two runs.
+      # cgo off: reachability is computed for the build the Dockerfile ships.
       - name: Scan for reachable vulnerabilities
+        env:
+          CGO_ENABLED: "0"
         run: |
           go version
           go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

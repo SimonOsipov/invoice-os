@@ -47,6 +47,9 @@ func govulncheckProblems(ciYAML string) []string {
 	if !slices.Contains(strings.Split(strings.Join(job.lines, "\n"), "\n"), "          go-version-file: go.mod") {
 		problems = append(problems, "govulncheck does not use go-version-file: go.mod")
 	}
+	if !slices.ContainsFunc(job.lines, func(l string) bool { return unquote.Replace(strings.TrimSpace(l)) == "CGO_ENABLED: 0" }) {
+		problems = append(problems, `govulncheck lacks CGO_ENABLED: "0" (the production build)`)
+	}
 	var run string
 	for _, s := range job.steps() {
 		if _, ok := s.keys["if"]; ok {
@@ -76,7 +79,9 @@ func govulncheckProblems(ciYAML string) []string {
 		if swallowed {
 			problems = append(problems, "govulncheck run swallows the exit code (||)")
 		}
-		if f := strings.Fields(scan); f[len(f)-1] != "./..." {
+		if f := strings.Fields(scan); len(f) == 0 {
+			problems = append(problems, "govulncheck run has no command before ||")
+		} else if f[len(f)-1] != "./..." {
 			problems = append(problems, "govulncheck does not scan ./...")
 		}
 	}
@@ -190,12 +195,30 @@ func TestCIGovulncheck_OrTrueFails(t *testing.T) {
 func TestCIGovulncheck_NoSetupGoFileFails(t *testing.T) {
 	yml := readWorkflow(t, "ci.yml")
 	start := strings.Index(yml, "  govulncheck:\n")
-	end := start + strings.Index(yml[start:], "\n  ci:\n")
-	if start < 0 || end < start {
+	if start < 0 {
 		t.Fatal("govulncheck job block not found")
+	}
+	end := start + strings.Index(yml[start:], "\n  ci:\n")
+	if end < start {
+		t.Fatal("ci job block not found after govulncheck")
 	}
 	job := mutateOnce(t, yml[start:end], "go-version-file: go.mod", "go-version: stable")
 	requireProblem(t, yml[:start]+job+yml[end:], "go-version-file")
+}
+
+func TestCIGovulncheck_CgoEnabledFails(t *testing.T) {
+	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), "        env:\n          CGO_ENABLED: \"0\"\n", "")
+	requireProblem(t, yml, "CGO_ENABLED")
+}
+
+func TestCIGovulncheck_CgoEnabledOneFails(t *testing.T) {
+	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), `CGO_ENABLED: "0"`, `CGO_ENABLED: "1"`)
+	requireProblem(t, yml, "CGO_ENABLED")
+}
+
+func TestCIGovulncheck_LeadingOrFails(t *testing.T) {
+	yml := mutateOnce(t, readWorkflow(t, "ci.yml"), govulncheckCmd, "|| "+govulncheckCmd)
+	requireProblem(t, yml, "no command before ||")
 }
 
 func TestCIGovulncheck_LatestFails(t *testing.T) {

@@ -1321,7 +1321,7 @@ func TestRouter_InternalPathRawRequestLinesNeverReachUpstream(t *testing.T) {
 }
 
 // Near misses of the internal segment still proxy: only a path that resolves to "internal" first is refused.
-// GET reaches the upstream once, never its /internal route. CONNECT skips the mux's cleaning, but ReverseProxy refuses it (Go 1.26.9).
+// GET reaches the upstream once, never its /internal route. CONNECT skips the mux's cleaning, but httputil.ReverseProxy refuses CONNECT.
 func TestRouter_InternalNearMissesStillProxy(t *testing.T) {
 	rig := newInternalRig(t)
 	token := rig.tg.validToken(t)

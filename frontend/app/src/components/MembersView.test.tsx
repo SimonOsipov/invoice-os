@@ -1250,10 +1250,11 @@ describe('RESEND-07-04', () => {
       })
       render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
       await waitFor(() => expect(inviteRows()).toHaveLength(1))
+      const before = timeouts.mock.calls.length
       clickResendOn(inviteRows()[0])
       await screen.findByTestId('members-flash')
 
-      const armed = () => timeouts.mock.calls.find((c) => c[1] === 3000)
+      const armed = () => timeouts.mock.calls.slice(before).find((c) => c[1] === 3000)
       await waitFor(() => expect(armed(), 'the flash arms a 3000 ms timer').toBeTruthy())
       const timer = armed()
       act(() => (timer![0] as () => void)())

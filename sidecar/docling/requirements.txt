@@ -6,7 +6,7 @@ sentry-sdk==2.71.0
 # EXTR-03 story sec. 4 pins table. docling[rapidocr] is mandatory, not bare docling:
 # bare docling ships rapidocr without onnxruntime, so RapidOcrOptions() fails at ONNX
 # session creation on the first scan rather than at install.
-docling[rapidocr]==2.123.1
+docling[rapidocr]==2.132.0
 rapidocr==3.9.2
 onnxruntime==1.29.0
 

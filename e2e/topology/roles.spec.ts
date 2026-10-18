@@ -492,7 +492,7 @@ async function expectRosterRow(page: Page, m: SeededMember): Promise<void> {
   await expect(row, `${m.name} should have exactly one roster row`).toHaveCount(1)
   const cells = rowCells(page, m.name)
   await expect(cells.nth(0), `${m.name}'s email`).toContainText(m.email)
-  await expect(cells.nth(1), `${m.name}'s access role`).toHaveText(m.accessRole)
+  await expect(cells.nth(1).locator('span').first(), `${m.name}'s access role`).toHaveText(m.accessRole)
   await expect(cells.nth(3), `${m.name}'s status pill`).toHaveText(m.pill)
 }
 
@@ -625,9 +625,10 @@ test('firm Settings: the live member directory, the live role grid, and every co
   }
   await expect(drawer, 'the access-role reason').toContainText(UNBACKED.role)
 
-  // Firm's fork: a client-access picker inside a disabled <fieldset>, its reason beneath.
-  await expect(page.getByTestId('drawer-scope-all').locator('input')).toBeDisabled()
-  await expect(drawer, 'the client-access reason').toContainText(UNBACKED.clientAccess)
+  // Firm's fork: Musa is not an admin, so the client-access picker is live.
+  await expect(page.getByTestId('drawer-scope-all').locator('input')).toBeChecked()
+  await expect(page.getByTestId('drawer-scope-all').locator('input')).toBeEnabled()
+  await expect(drawer).not.toContainText('Client access is not stored per person')
   // In-house's field must not leak into firm.
   await expect(drawer).not.toContainText(UNBACKED.department)
 
@@ -751,7 +752,6 @@ test('in-house Settings: its own live roster, three unsignable seats, and the su
   // In-house's fork of the drawer's unbacked field, and the firm's absent.
   await expect(wfSelect(page, 'Department')).toBeDisabled()
   await expect(drawer, 'the department reason').toContainText(UNBACKED.department)
-  await expect(drawer).not.toContainText(UNBACKED.clientAccess)
   await expect(page.getByTestId('member-remove')).toBeDisabled()
   await expect(drawer, 'the remove reason').toContainText(UNBACKED.remove)
 

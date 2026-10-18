@@ -21,9 +21,11 @@ import { ErrorState, Loading, toApiError } from '@invoice-os/api-client'
 import { closeGlyph } from '../glyphs'
 import {
   ACCESS_ROLES,
+  ADMIN_ALL_CLIENTS,
   emailLabel,
   isProtectedAdmin,
   MEMBER_UNBACKED,
+  pickerClients,
   PROTECTED_ADMIN_NOTE,
   REMOVE_EXPLANATION,
   SUSPEND_EXPLANATION,
@@ -48,7 +50,7 @@ const MANAGE_ROLES = 'Manage roles'
 const ACCESS_ROLE_IDS = ACCESS_ROLES.map((r) => r.id)
 
 /**
- * Two controls under ONE lock — `ClientAccessPicker` holds state and takes no `disabled`, and
+ * Controls under ONE lock — `ClientAccessPicker` holds state and takes no `disabled`, and
  * `DepartmentField`'s `WfSelect` has one that would not reach it. A `<fieldset disabled>` gives all
  * four layers without plumbing a prop through a shared component for a Members-only need:
  * HTML natively disables every descendant (1, unclickable and out of the tab order),
@@ -96,6 +98,12 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
   // statusError SHAPE, reused for a different write than the one that prop already carries.
   const [rolePending, setRolePending] = useState(false)
   const [roleError, setRoleError] = useState<{ id: string; message: string } | null>(null)
+
+  // Client access write. `pickerKey` remounts the picker (it seeds from `value` once) so it
+  // shows the stored set after a refusal or an "all" write, never ticks the server deleted.
+  const [clientsPending, setClientsPending] = useState(false)
+  const [clientsError, setClientsError] = useState<string | null>(null)
+  const [pickerKey, setPickerKey] = useState(0)
 
   // Resolved from the CURRENT list on every render, never captured: `isProtectedAdmin` does
   // no identity lookup and answers `true` for a detached row (members.test.ts), so a stale
@@ -152,6 +160,24 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
       setRolePending(false)
     }
   }
+
+  async function changeClients(next: 'all' | string[]) {
+    if (clientsPending) return
+    setClientsError(null)
+    setClientsPending(true)
+    try {
+      await ctx.setMemberClients(memberId, next)
+      if (next === 'all') setPickerKey((k) => k + 1)
+    } catch (err: unknown) {
+      setClientsError(toApiError(err).message)
+      setPickerKey((k) => k + 1)
+    } finally {
+      setClientsPending(false)
+    }
+  }
+
+  const clientsLanded = ctx.entitiesState === 'ready' || ctx.entitiesState === 'empty'
+  const storedClients = row.clientAccess ?? []
 
   return (
     <>
@@ -229,11 +255,46 @@ export function MemberDrawer({ ctx, memberId, onClose, onStatus, statusError }: 
               <div className="label" style={{ margin: '22px 0 8px' }}>
                 Client access
               </div>
-              {/* `'all'` is the honest value, not a fallback: nothing stores client access per
-                  person, so everyone in the workspace does see the same clients. */}
-              <UnbackedField reason={MEMBER_UNBACKED.clientAccess} noteId={scopeNoteId} dim>
-                <ClientAccessPicker idPrefix="drawer" value="all" />
-              </UnbackedField>
+              {row.role === 'admin' ? (
+                <UnbackedField reason={ADMIN_ALL_CLIENTS} noteId={scopeNoteId} dim>
+                  <ClientAccessPicker idPrefix="drawer" value="all" clients={[]} />
+                </UnbackedField>
+              ) : (
+                <>
+                  <fieldset disabled={clientsPending} style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}>
+                    {clientsLanded ? (
+                      <ClientAccessPicker
+                        key={pickerKey}
+                        idPrefix="drawer"
+                        value={storedClients}
+                        clients={pickerClients(ctx.entities, storedClients)}
+                        onChange={changeClients}
+                      />
+                    ) : ctx.entitiesState === 'error' ? (
+                      ctx.entitiesError && <ErrorState error={ctx.entitiesError} onRetry={ctx.refetchEntities} />
+                    ) : (
+                      <Loading label="Loading clients…" />
+                    )}
+                  </fieldset>
+                  {clientsError && (
+                    <div
+                      data-testid="member-drawer-clients-error"
+                      style={{
+                        marginTop: 8,
+                        padding: '10px 12px',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--status-red-bg)',
+                        border: '1px solid var(--status-red-border)',
+                        fontSize: 12.5,
+                        lineHeight: 1.5,
+                        color: 'var(--status-red-text)',
+                      }}
+                    >
+                      {clientsError}
+                    </div>
+                  )}
+                </>
+              )}
             </>
           ) : (
             <div style={{ marginTop: 22 }}>

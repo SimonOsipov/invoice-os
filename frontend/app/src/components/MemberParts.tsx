@@ -23,6 +23,7 @@ import {
   filterClientRoster,
   needsClientPick,
   NO_CLIENT_MATCH,
+  NO_CLIENTS_IN_WORKSPACE,
   NO_CLIENTS_NOTE,
   type AccessRole,
   type Department,
@@ -275,52 +276,35 @@ export function RoleCards({ value, onChange, disabledIds, note, noteId: noteIdPr
 // ---------------------------------------------------------------------------
 
 /**
- * Extracted from the invite modal when the member drawer became its second call site. Not
- * speculative abstraction: this control carries five decisions a second copy would have to
- * re-make and could silently get wrong —
+ * Scope radios plus a searchable multi-select. Filtering never unticks: the search narrows
+ * what is SHOWN, `ids` is untouched. The count's denominator is the roster, not the filter.
  *
- *   1. toggling back to `All clients` KEEPS the ticked set (a mis-click must not destroy a
- *      selection assembled one checkbox at a time);
- *   2. filtering never unticks — the search narrows what is SHOWN and `ids` is untouched;
- *   3. the running count's denominator is the ROSTER, never the filtered length;
- *   4. `Selected clients` with nothing ticked is representable but not grantable;
- *   5. the `.pf-row` checkbox rows.
- *
- * (1) and (2) were on that subtask's own QA gate list, so duplicating the JSX would
- * duplicate both of them out of coverage. The derivations themselves already live in
- * lib/members.ts with specs — only the markup was ever at stake here.
- *
- * `scope` and the ticked `ids` are OWN state, seeded once from `value`, and that split is
- * load-bearing: `value` alone cannot be the source of truth, because collapsing "scope is
- * all" and "nothing is ticked" into one representation is what destroys the set on a
- * mis-click. What it emits is the union the caller stores — `'all'`, or a FRESH array, so
- * no caller ever receives this control's own state to alias.
- *
- * THE CONTRACT THAT FOLLOWS FROM THAT: `value` is read ONCE, on mount, and every later
- * change to it is ignored. To point this control at a different subject you must REMOUNT
- * it — `key` on this element, or on whatever wraps it (MembersView keys the whole drawer).
- * Passing a new `value` to a live instance silently keeps the old subject's ticked set.
+ * `scope` and `ids` are own state, seeded once from `value`; later changes to `value` are
+ * ignored. REMOUNT it (`key`) to show a different subject or the stored value after a write.
+ * `onChange` receives `'all'` or a fresh array.
  */
-export function ClientAccessPicker({ value, onChange, idPrefix }: {
-  value: 'all' | readonly number[]
+export function ClientAccessPicker({ value, clients, onChange, idPrefix }: {
+  value: 'all' | readonly string[]
+  /** The rows to pick from, by real id. */
+  clients: readonly { id: string; name: string }[]
   /**
    * Always a new array in the `selected` case — no caller ever receives this control's own
    * state. Absent when the caller mounts this read-only: nothing can emit through a
    * `<fieldset disabled>`.
    */
-  onChange?: (next: 'all' | number[]) => void
+  onChange?: (next: 'all' | string[]) => void
   /** Names the scope radio group and every `data-testid` here, exactly as `RoleCards` does. */
   idPrefix: string
 }) {
   const [scope, setScope] = useState<'all' | 'selected'>(value === 'all' ? 'all' : 'selected')
-  const [ids, setIds] = useState<number[]>(() => (value === 'all' ? [] : value.slice()))
+  const [ids, setIds] = useState<string[]>(() => (value === 'all' ? [] : value.slice()))
   const [query, setQuery] = useState('')
 
-  const shown = filterClientRoster(query)
+  const shown = filterClientRoster(clients, query)
   const emptyPick = needsClientPick(scope === 'all' ? 'all' : ids)
 
   // The ONE writer, so the emitted value can never disagree with what the checkboxes show.
-  function pick(nextScope: 'all' | 'selected', nextIds: number[]) {
+  function pick(nextScope: 'all' | 'selected', nextIds: string[]) {
     setScope(nextScope)
     setIds(nextIds)
     onChange?.(nextScope === 'all' ? 'all' : [...nextIds])
@@ -352,8 +336,6 @@ export function ClientAccessPicker({ value, onChange, idPrefix }: {
               name={`${idPrefix}-scope`}
               value={s}
               checked={scope === s}
-              // Toggling back to `All clients` KEEPS the ticked set — `ids` is carried
-              // through untouched, so switching back re-emits exactly what was ticked.
               onChange={() => pick(s, ids)}
               style={{ ...radioPaint(scope === s), margin: 0 }}
             />
@@ -376,7 +358,7 @@ export function ClientAccessPicker({ value, onChange, idPrefix }: {
           />
           {shown.length === 0 ? (
             <div data-testid={`${idPrefix}-client-empty`} style={{ padding: '8px 10px', fontSize: 12.5, color: 'var(--fg-3)' }}>
-              {NO_CLIENT_MATCH}
+              {query.trim() === '' ? NO_CLIENTS_IN_WORKSPACE : NO_CLIENT_MATCH}
             </div>
           ) : (
             shown.map((c) => (
@@ -389,9 +371,6 @@ export function ClientAccessPicker({ value, onChange, idPrefix }: {
                 <input
                   type="checkbox"
                   checked={ids.includes(c.id)}
-                  // `toggleSelection` (invoices.ts:654) is the nearest shipped helper and is
-                  // typed `string[]`; CLIENT_ROSTER ids are numbers, so it cannot be reused.
-                  // Filtering never unticks: the search narrows `shown`, not `ids`.
                   onChange={() => pick('selected', ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id])}
                   style={{ flex: 'none' }}
                 />
@@ -400,7 +379,7 @@ export function ClientAccessPicker({ value, onChange, idPrefix }: {
             ))
           )}
           <div data-testid={`${idPrefix}-client-count`} style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line-1)', fontSize: 12, color: 'var(--fg-3)' }}>
-            {clientSelectionCount(ids.length)}
+            {clientSelectionCount(ids.length, clients.length)}
             {emptyPick && <span style={{ color: 'var(--status-amber-text)' }}> · {NO_CLIENTS_NOTE}</span>}
           </div>
         </div>

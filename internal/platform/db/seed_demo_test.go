@@ -4395,6 +4395,10 @@ func clientAccess(t *testing.T, pool *pgxpool.Pool, tenantID, userID string) (bo
 func TestSeedAssignsTheDemoFirmClientAccess(t *testing.T) {
 	superDSN := requireSuperuserDSN(t)
 	pool := bootstrapSuperuserPool(t, superDSN)
+	// The seed never deletes, so rows left by an earlier run would hide a missing one.
+	if _, err := pool.Exec(context.Background(), `DELETE FROM membership_clients WHERE tenant_id = $1 AND user_id = $2`, demoTenantID, amakaEzeID); err != nil {
+		t.Fatalf("clear Amaka Eze rows: %v", err)
+	}
 	if err := db.Seed(context.Background(), superDSN, dbsql.FS); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}

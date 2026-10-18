@@ -437,6 +437,11 @@ func TestShardClientAccessMirrorsTheSourceTenant(t *testing.T) {
 
 	const flags = `SELECT user_id, all_clients FROM memberships WHERE tenant_id = $1 AND user_id::text LIKE 'c0000000-%'`
 	const amaka = "c0000000-0000-0000-0000-000000000014"
+	// A re-provision must restore a flag changed by hand.
+	if _, err := e.super.Exec(context.Background(), `UPDATE memberships SET all_clients = NOT all_clients WHERE user_id::text LIKE 'c0000000-%' AND tenant_id::text = ANY($1::text[])`, shardIDs()); err != nil {
+		t.Fatalf("flip shard flags: %v", err)
+	}
+	e.provisionReset(t)
 	for _, s := range firmShards {
 		mirrorRows(t, e.super, "all_clients flags", flags, s)
 		// A shard holds one entity, so only the Adeyemi TIN of Amaka's two source TINs maps.

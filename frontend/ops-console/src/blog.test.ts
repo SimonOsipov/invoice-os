@@ -1,11 +1,26 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { ApiError } from '@invoice-os/api-client'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
   addBlock,
   authorOptions,
   bDate,
+  CATEGORY_ICONS,
+  catDeleteToast,
+  catFormError,
+  catFormFrom,
+  catMoveTarget,
+  catRows,
+  catSaveToast,
+  deleteView,
+  iconOf,
+  newCatForm,
+  setCatField,
+  tabChange,
+  toCategoryInput,
+  type CatUi,
   blockCount,
   blockView,
   cleanBody,
@@ -54,6 +69,7 @@ import {
 import type { Author, Block, Category, Post } from './blogApi'
 import type { BlogFilters } from './types'
 
+const inCat = (id: string, n: number): Post[] => Array.from({ length: n }, (_, i) => post({ id: `${id}${i}`, category_id: id }))
 const post = (o: Partial<Post> = {}): Post => ({
   id: 'p',
   category_id: null,
@@ -671,5 +687,134 @@ describe('kept copy', () => {
     const e = takeKept(storage, 'S', [{ id: 'other' }])!
     expect(e.draft).toMatchObject({ id: '', status: 'draft', cover: { kind: 'none' }, serverHasCover: false })
     expect(e.dirty).toBe(true)
+  })
+})
+
+const goBlog = () => readFileSync(fileURLToPath(new URL('../../../internal/blog/blog.go', import.meta.url)), 'utf8')
+
+describe('category rules', () => {
+  it('CATEGORY_ICONS equals the Go Icons in order', () => {
+    const body = /var Icons = \[\]string\{([^}]*)\}/.exec(goBlog())?.[1]
+    expect(body, 'var Icons found').toBeDefined()
+    expect([...body!.matchAll(/"([^"]+)"/g)].map((m) => m[1])).toEqual([...CATEGORY_ICONS])
+  })
+
+  it('TONES has one entry per Go tone', () => {
+    const n = /ToneCount\s*=\s*(\d+)/.exec(goBlog())?.[1]
+    expect(n, 'ToneCount found').toBeDefined()
+    expect(TONES).toHaveLength(Number(n))
+  })
+
+  it('catRows numbers, colours and counts each row', () => {
+    const rows = catRows([cat('a', { tone: 0 }), cat('b', { tone: 8 }), cat('c', { icon: 'rocket' })], [...inCat('a', 4), ...inCat('b', 1)])
+    expect(rows.map((r) => r.num)).toEqual(['01', '02', '03'])
+    expect(rows[1].tone).toBe(TONES[2])
+    expect(rows[0].tone).toBe(TONES[0])
+    expect(rows[2].icon).toBe('file-text')
+    expect(rows[0].icon).toBe('shield-check')
+    expect(rows.map((r) => r.count)).toEqual(['4 posts', '1 post', '0 posts'])
+  })
+
+  it('the row count and the delete confirm follow state.posts with no categories re-read', () => {
+    const cats = [cat('a', { name: 'a' }), cat('b', { name: 'b' })]
+    const count = (posts: Post[]) => catRows(cats, posts)[0].count
+    expect(count([])).toBe('0 posts')
+    expect(deleteView(cats, [], 'a')).toMatchObject({ kind: 'empty' })
+    const saved = inCat('a', 1)
+    expect(count(saved)).toBe('1 post')
+    expect(deleteView(cats, saved, 'a')).toMatchObject({ kind: 'withposts', text: 'Delete a and move its 1 post to:' })
+    const moved = saved.map((p) => ({ ...p, category_id: 'b' }))
+    expect(count(moved)).toBe('0 posts')
+    expect(catRows(cats, moved)[1].count).toBe('1 post')
+    expect(deleteView(cats, moved, 'a')).toMatchObject({ kind: 'empty' })
+    expect(count([])).toBe('0 posts')
+  })
+
+  it('catRows dims the first up and the last down', () => {
+    const three = catRows([cat('a'), cat('b'), cat('c')], []).map((r) => [r.upOpacity, r.downOpacity])
+    expect(three).toEqual([[0.35, 1], [1, 1], [1, 0.35]])
+    expect(catRows([cat('a')], []).map((r) => [r.upOpacity, r.downOpacity])).toEqual([[0.35, 0.35]])
+  })
+
+  it('catMoveTarget returns the neighbour move and null at the edges', () => {
+    const cats = [cat('a'), cat('b'), cat('c')]
+    expect(catMoveTarget(cats, 1, -1)).toEqual({ id: 'b', direction: 'up' })
+    expect(catMoveTarget(cats, 1, 1)).toEqual({ id: 'b', direction: 'down' })
+    expect(catMoveTarget(cats, 0, -1)).toBeNull()
+    expect(catMoveTarget(cats, 2, 1)).toBeNull()
+  })
+
+  it('newCatForm takes globe and the next tone', () => {
+    const seven = Array.from({ length: 7 }, (_, i) => cat(`c${i}`))
+    expect(newCatForm(seven)).toEqual({ id: null, name: '', headline: '', intro: '', icon: 'globe', tone: 1, error: null })
+    expect(newCatForm([]).tone).toBe(0)
+  })
+
+  it('catFormFrom copies the category', () => {
+    const c = cat('a', { name: 'Alpha', headline: '', intro: 'Hi', icon: 'clock', tone: 4 })
+    expect(catFormFrom(c)).toEqual({ id: 'a', name: 'Alpha', headline: '', intro: 'Hi', icon: 'clock', tone: 4, error: null })
+  })
+
+  it('setCatField clears the error', () => {
+    const f = { ...newCatForm([]), error: 'Add a name.' }
+    expect(setCatField(f, { name: 'x' })).toEqual({ ...f, name: 'x', error: null })
+  })
+
+  it('toCategoryInput sends exactly the five keys', () => {
+    const f = { ...catFormFrom(cat('a')), name: ' Pad ', error: 'x' }
+    const input = toCategoryInput(f)
+    expect(Object.keys(input).sort()).toEqual(['headline', 'icon', 'intro', 'name', 'tone'])
+    expect(input.name).toBe(' Pad ')
+  })
+
+  it('catFormError maps 422 and 409 only', () => {
+    expect(catFormError(new ApiError('http', 'Add a name.', 422, { error: 'Add a name.', fields: { name: 'Add a name.' } }))).toBe('Add a name.')
+    expect(catFormError(new ApiError('http', 'A category with this name already exists.', 409))).toBe('A category with this name already exists.')
+    expect(catFormError(new ApiError('http', 'boom', 500))).toBeNull()
+    expect(catFormError(new ApiError('http', 'no', 403))).toBeNull()
+    expect(catFormError(new ApiError('http', 'bad', 422, { error: 'bad' }))).toBeNull()
+    expect(catFormError(new ApiError('http', 'Summary.', 422, { error: 'Summary.', fields: { name: 'Name msg.' } }))).toBe('Name msg.')
+    expect(catFormError(new ApiError('http', 'Summary.', 422, { error: 'Summary.', fields: { headline: 'Too long.' } }))).toBe('Summary.')
+  })
+
+  it('deleteView covers only, empty and withposts in that order', () => {
+    const only = 'This is the only category. Add another before deleting it.'
+    expect(deleteView([cat('a')], inCat('a', 3), 'a')).toEqual({ kind: 'only', text: only })
+    expect(deleteView([cat('a')], [], 'a')).toEqual({ kind: 'only', text: only })
+    expect(deleteView([cat('a', { name: 'a' }), cat('b')], [], 'a')).toEqual({ kind: 'empty', text: 'Delete a? It has no posts.' })
+    expect(deleteView([cat('a', { name: 'a' }), cat('b', { name: 'b' }), cat('c', { name: 'c' })], inCat('a', 3), 'a')).toEqual({
+      kind: 'withposts',
+      text: 'Delete a and move its 3 posts to:',
+      options: [{ id: 'b', name: 'b' }, { id: 'c', name: 'c' }],
+      defaultMoveTo: 'b',
+    })
+    expect(deleteView([cat('a', { name: 'a' }), cat('b')], inCat('a', 1), 'a')?.text).toBe('Delete a and move its 1 post to:')
+  })
+
+  it('catSaveToast names add and update', () => {
+    expect(catSaveToast(true)).toBe('Category added')
+    expect(catSaveToast(false)).toBe('Category updated')
+  })
+
+  it('catDeleteToast names the moved count', () => {
+    expect(catDeleteToast('Old', 3, 'New')).toBe('Old deleted. 3 posts moved to New')
+    expect(catDeleteToast('Old', 1, 'New')).toBe('Old deleted. 1 post moved to New')
+    expect(catDeleteToast('Old', 0, null)).toBe('Old deleted')
+  })
+
+  it('tabChange clears the form and confirm and refreshes on Categories', () => {
+    const open: CatUi = { form: newCatForm([]), del: null }
+    expect(tabChange('posts', 'cats', open)).toEqual({ ui: { form: null, del: null }, refresh: true })
+    expect(tabChange('cats', 'posts', { form: null, del: { id: 'a', moveTo: null } })).toEqual({ ui: { form: null, del: null }, refresh: false })
+    const same = tabChange('cats', 'cats', open)
+    expect(same.ui).toBe(open)
+    expect(same.refresh).toBe(false)
+  })
+
+  it('iconOf is the one fallback', () => {
+    expect(iconOf('rocket')).toBe('file-text')
+    expect(iconOf(undefined)).toBe('file-text')
+    expect(iconOf('globe')).toBe('globe')
+    expect(listRows([post({ category_id: 'x' })], [cat('x', { icon: 'rocket' })], F)[0].catIcon).toBe('file-text')
   })
 })

@@ -80,13 +80,13 @@ describe('e2eMember', () => {
   it('e2eMember is distinct per tenant', async () => {
     const { realm, targets } = await load()
     const ids = topologyTenantIds(targets)
-    expect(ids).toHaveLength(8)
-    expect(new Set(ids).size).toBe(8)
+    expect(ids.length).toBeGreaterThan(0)
+    expect(new Set(ids).size).toBe(ids.length)
 
     const members = ids.map((id) => realm.e2eMember(id))
 
-    expect(new Set(members.map((m) => m.email)).size).toBe(8)
-    expect(new Set(members.map((m) => m.password)).size).toBe(8)
+    expect(new Set(members.map((m) => m.email)).size).toBe(ids.length)
+    expect(new Set(members.map((m) => m.password)).size).toBe(ids.length)
   })
 
   it('e2eMember password floor', async () => {

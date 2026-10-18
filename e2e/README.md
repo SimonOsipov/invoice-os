@@ -88,7 +88,7 @@ GATEWAY_URL=... pnpm --filter @invoice-os/e2e test:api
 
 `playwright.topology.config.ts` → `testDir: './topology'`, `fullyParallel: false`,
 `workers: 1`, one Playwright project per unit in `topology/shards.ts`: `serial-lane`,
-`import-wizard`, `import-wizard-2`, `invoice-surfaces` and `library`. CI runs each unit on its own runner in parallel;
+`import-wizard`, `import-wizard-2`, `invoice-surfaces`, `ui-surfaces` and `library`. CI runs each unit on its own runner in parallel;
 `--project=<unit>` runs one. A spec file not assigned to exactly one unit fails the run at
 config load.
 
@@ -101,7 +101,7 @@ and drives the app's persona-scoped surfaces, the import wizard, invoices and Wo
 
 Each unit is serial on one worker, for the same reason as the api suite: the specs of a
 unit share the same non-reset deployed dev database (`[topology-config-conforms-workers-1]`).
-The two shard units sign in on their own seeded tenants (`signInAs` with a `tenantId`), so
+The shard units sign in on their own seeded tenants (`signInAs` with a `tenantId`), so
 they do not contend with the lane. Beyond `GATEWAY_URL` + `APP_URL` it
 also needs `LANDING_URL` — `topology/auth.spec.ts` starts at the landing front door.
 

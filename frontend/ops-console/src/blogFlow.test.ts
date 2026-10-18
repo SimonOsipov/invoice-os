@@ -554,6 +554,33 @@ describe('singleFlight', () => {
     expect(mid).toHaveBeenCalledTimes(1)
   })
 
+  it('after runs once the running action ends, and runs at once when idle', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    const p = run(() => new Promise<void>((r) => (release = r)))
+    const refresh = vi.fn(async () => {})
+    await run.after(refresh)
+    expect(refresh).not.toHaveBeenCalled()
+    release()
+    await p
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+    const idle = vi.fn(async () => {})
+    await run.after(idle)
+    expect(idle).toHaveBeenCalledTimes(1)
+  })
+
+  it('a plain call made while one runs is still dropped and never queued', async () => {
+    const run = singleFlight()
+    let release: () => void = () => {}
+    const p = run(() => new Promise<void>((r) => (release = r)))
+    const dropped = vi.fn(async () => {})
+    await run(dropped)
+    release()
+    await p
+    await Promise.resolve()
+    expect(dropped).not.toHaveBeenCalled()
+  })
+
   it('frees the guard when the action throws', async () => {
     const run = singleFlight()
     await expect(run(async () => Promise.reject(new Error('x')))).rejects.toThrow('x')
@@ -613,7 +640,7 @@ describe('category save and delete', () => {
     const addCategory = vi.fn().mockResolvedValue(cat('x'))
     const fetchCategories = vi.fn().mockResolvedValue([cat('x')])
     const o = await saveCategory({ addCategory, updateCategory: vi.fn(), fetchCategories }, form())
-    expect(o).toEqual({ kind: 'saved', toast: 'Category added', cats: [cat('x')] })
+    expect(o).toEqual({ kind: 'saved', toast: 'Category added', category: cat('x'), cats: [cat('x')] })
     expect(addCategory).toHaveBeenCalledWith(input)
     expect(fetchCategories).toHaveBeenCalledTimes(1)
   })
@@ -653,8 +680,17 @@ describe('category save and delete', () => {
 
   it('saveCategory: a failed re-read keeps the save', async () => {
     const o = await saveCategory({ addCategory: vi.fn().mockResolvedValue(cat('x')), updateCategory: vi.fn(), fetchCategories: vi.fn().mockRejectedValue(http(500, 'internal error')) }, form())
-    expect(o).toEqual({ kind: 'saved', toast: 'Category added', rereadError: 'internal error' })
+    expect(o).toEqual({ kind: 'saved', toast: 'Category added', category: cat('x'), rereadError: 'internal error' })
     expect(o).not.toHaveProperty('cats')
+  })
+
+  it('applyCatSave: a save whose re-read fails still adds the row at the end and toasts success', () => {
+    const o = { kind: 'saved' as const, toast: 'Category added', category: cat('n'), rereadError: 'internal error' }
+    const a = applyCatSave(ui({}), o, [cat('a'), cat('b')])
+    expect(a.cats).toEqual([cat('a'), cat('b'), cat('n')])
+    expect(a.toast).toContain('Category added')
+    expect(a.toast).toContain('internal error')
+    expect(a.ui.form).toBeNull()
   })
 
   it('removeCategory moves the posts to the target and names the count', async () => {
@@ -700,11 +736,11 @@ describe('category save and delete', () => {
 
   it('applyCatSave applies each outcome', () => {
     const open = ui({ id: 'c' })
-    const saved = applyCatSave(open, { kind: 'saved', toast: 'Category updated', cats: [cat('c')] })
+    const saved = applyCatSave(open, { kind: 'saved', toast: 'Category updated', category: cat('c'), cats: [cat('c')] })
     expect(saved).toMatchObject({ ui: { form: null }, cats: [cat('c')], toast: 'Category updated', tone: 'ok', expire: false, reread: false })
-    const noRead = applyCatSave(open, { kind: 'saved', toast: 'Category updated', rereadError: 'internal error' })
-    expect(noRead).toMatchObject({ ui: { form: null }, toast: 'internal error', tone: 'red' })
-    expect(noRead.cats).toBeUndefined()
+    const noRead = applyCatSave(open, { kind: 'saved', toast: 'Category updated', category: cat('c', { name: 'New' }), rereadError: 'internal error' }, [cat('c'), cat('d')])
+    expect(noRead).toMatchObject({ ui: { form: null }, toast: 'Category updated. internal error', tone: 'red' })
+    expect(noRead.cats).toEqual([cat('c', { name: 'New' }), cat('d')])
     const invalid = applyCatSave(open, { kind: 'invalid', error: 'Add a name.' })
     expect(invalid.ui.form).toMatchObject({ id: 'c', error: 'Add a name.' })
     expect(invalid.toast).toBeNull()
@@ -726,7 +762,7 @@ describe('category save and delete', () => {
     expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'forbidden' })).toMatchObject({ ui: { del: null }, toast: STAFF_ONLY, tone: 'red', cats: lists.cats })
     expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'failed', message: 'x', status: 422 })).toMatchObject({ ui: { del: null }, toast: 'x', tone: 'red', reread: true })
     expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'failed', message: 'x', status: 404 })).toMatchObject({ ui: { del: null }, reread: true })
-    expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'failed', message: 'x', status: 409 })).toMatchObject({ ui: { del: null }, reread: false })
+    expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'failed', message: 'x', status: 409 })).toMatchObject({ ui: { del: null }, toast: 'x', tone: 'red', reread: true })
     expect(applyCatRemove(lists, withDel, FILTERS, 'a', { kind: 'expired' })).toMatchObject({ expire: true })
   })
 

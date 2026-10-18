@@ -61,8 +61,8 @@ export function Blog({ filters, onFilters, onToast }: Props) {
     if (a.toast) onToast(a.toast, 'BLOG', a.tone)
     if (a.expire) expireOnce()
   }
-  const reloadCats = () =>
-    flight(async () => {
+  const reloadCats = (queue = false) =>
+    (queue ? flight.after : flight)(async () => {
       const a = applyCatRefresh(await refreshCategories({ fetchCategories: () => withSession(fetchCategories) }))
       if (alive.current) applyCats(a)
     })
@@ -95,7 +95,8 @@ export function Blog({ filters, onFilters, onToast }: Props) {
         form,
       )
       if (!alive.current) return
-      const a = applyCatSave(catUiRef.current, o)
+      const cur = stateRef.current
+      const a = applyCatSave(catUiRef.current, o, cur.status === 'ready' ? cur.cats : [])
       setCatUi(a.ui)
       applyCats(a)
       reread = a.reread
@@ -131,7 +132,7 @@ export function Blog({ filters, onFilters, onToast }: Props) {
     const t = tabChange(filters.tab, f.tab, catUi)
     setCatUi(t.ui)
     onFilters(f)
-    if (t.refresh) void reloadCats()
+    if (t.refresh) void reloadCats(true)
   }
 
   const [editor, setEditor] = useState<EditorState | null>(null)

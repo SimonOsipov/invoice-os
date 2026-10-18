@@ -111,18 +111,27 @@ export function trackCover(d: { fetchCoverUrl: (id: string) => Promise<CoverHand
 
 export const STAFF_ONLY = 'Your account is not ASComply staff.'
 
-// Runs one action at a time; a call made while one runs is ignored.
+// Runs one action at a time; a call made while one runs is ignored. `.after` runs now, or once the running action ends.
 export function singleFlight() {
   let busy = false
-  return async (run: () => Promise<void>): Promise<void> => {
+  let pending: (() => Promise<void>) | null = null
+  const run = async (fn: () => Promise<void>): Promise<void> => {
     if (busy) return
     busy = true
     try {
-      await run()
+      await fn()
     } finally {
       busy = false
+      const next = pending
+      pending = null
+      if (next) void run(next).catch(() => {})
     }
   }
+  const after = async (fn: () => Promise<void>): Promise<void> => {
+    if (busy) pending = fn
+    else await run(fn)
+  }
+  return Object.assign(run, { after })
 }
 
 export type SaveDeps = {
@@ -294,7 +303,7 @@ export function applyCatMove(o: CatMoveOutcome | CatRefreshOutcome): AppliedCats
 export const applyCatRefresh = applyCatMove
 
 export type CatSaveOutcome =
-  | { kind: 'saved'; toast: string; cats?: Category[]; rereadError?: string }
+  | { kind: 'saved'; toast: string; category: Category; cats?: Category[]; rereadError?: string }
   | { kind: 'invalid'; error: string }
   | { kind: 'expired' }
   | { kind: 'forbidden' }
@@ -307,9 +316,9 @@ export async function saveCategory(
   form: CatForm,
 ): Promise<CatSaveOutcome> {
   const input = toCategoryInput(form)
+  let category: Category
   try {
-    if (form.id === null) await deps.addCategory(input)
-    else await deps.updateCategory(form.id, input)
+    category = form.id === null ? await deps.addCategory(input) : await deps.updateCategory(form.id, input)
   } catch (e) {
     const error = catFormError(e)
     if (error !== null) return { kind: 'invalid', error }
@@ -319,9 +328,9 @@ export async function saveCategory(
   }
   const toast = catSaveToast(form.id === null)
   try {
-    return { kind: 'saved', toast, cats: await deps.fetchCategories() }
+    return { kind: 'saved', toast, category, cats: await deps.fetchCategories() }
   } catch (e) {
-    return { kind: 'saved', toast, rereadError: e instanceof Error ? e.message : 'Could not reload the categories' }
+    return { kind: 'saved', toast, category, rereadError: e instanceof Error ? e.message : 'Could not reload the categories' }
   }
 }
 
@@ -367,12 +376,19 @@ export function postsAfterCatRemove(posts: Post[], id: string, o: CatRemoveOutco
   return o.posts ?? posts.map((p) => (p.category_id === id ? { ...p, category_id: o.move_to } : p))
 }
 
-export function applyCatSave(ui: CatUi, o: CatSaveOutcome): AppliedCats & { ui: CatUi } {
+// The list after a save: the re-read, else the old list with the saved row added at the end or replaced by id.
+export function catsAfterSave(cats: Category[], o: CatSaveOutcome): Category[] {
+  if (o.kind !== 'saved') return cats
+  if (o.cats) return o.cats
+  return cats.some((c) => c.id === o.category.id) ? cats.map((c) => (c.id === o.category.id ? o.category : c)) : [...cats, o.category]
+}
+
+export function applyCatSave(ui: CatUi, o: CatSaveOutcome, cats: Category[] = []): AppliedCats & { ui: CatUi } {
   const base = { ui, toast: null, tone: 'red' as ToastTone, expire: false, reread: false }
   switch (o.kind) {
     case 'saved': {
       const closed = { ...ui, form: null }
-      if (o.rereadError !== undefined) return { ...base, ui: closed, toast: o.rereadError }
+      if (o.rereadError !== undefined) return { ...base, ui: closed, cats: catsAfterSave(cats, o), toast: `${o.toast}. ${o.rereadError}` }
       return { ...base, ui: closed, cats: o.cats, toast: o.toast, tone: 'ok' }
     }
     case 'invalid':
@@ -405,6 +421,6 @@ export function applyCatRemove(lists: CatLists, ui: CatUi, filters: BlogFilters,
     case 'forbidden':
       return { ...base, toast: STAFF_ONLY }
     case 'failed':
-      return { ...base, toast: o.message, reread: o.status === 404 || o.status === 422 }
+      return { ...base, toast: o.message, reread: o.status === 404 || o.status === 409 || o.status === 422 }
   }
 }

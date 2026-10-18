@@ -1543,7 +1543,7 @@ const serverCats = async (token: string): Promise<ServerCat[]> => {
 }
 
 test.describe('OPS-06 blog categories', () => {
-  // The rows this test created; the afterEach deletes the posts, then the categories (D-24).
+  // The rows this test created; the afterEach deletes the posts, then the categories.
   let own: { cats: string[]; posts: string[] }
   test.beforeEach(() => {
     own = { cats: [], posts: [] }
@@ -1592,7 +1592,7 @@ test.describe('OPS-06 blog categories', () => {
     const text = (await pad(page).getByRole('button', { name: /Categories/ }).textContent()) ?? ''
     return Number(/(\d+)\s*$/.exec(text)?.[1])
   }
-  // The tab re-reads on open (D-30): leave and return.
+  // The tab re-reads on open: leave and return.
   const reopenTab = async (page: Page): Promise<void> => {
     await pad(page).getByRole('button', { name: /Posts/ }).click()
     await expect(page.locator('[data-blog-table]'), 'the Posts tab drew no table').toBeVisible()

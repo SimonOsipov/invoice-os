@@ -1,16 +1,20 @@
 // The deployed v2 Ops Console: resolved values and layout relationships on the PR environment.
 // The console is mock-backed: this spec pins fixture behaviour and the v2 look, not a contract.
 // Value reads copy a value from its source (token or prototype) and name it; screenshots are attached, never asserted.
-import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
-import { provisionStaffAccount, type StaffAccount } from '../api/client'
+import { randomBytes } from 'node:crypto'
+import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'
+import { apiBase, provisionStaffAccount, rawFetch, signInSession, type StaffAccount } from '../api/client'
 import { collectErrors } from '../personaSession'
-import { seedStaffSession } from '../staffSession'
+import { CONSOLE_SESSION_KEY, consoleUrl, seedStaffSession } from '../staffSession'
+import { resolveTarget } from '../targets'
+import { expectedStatusDropper, type Dropper } from './consoleGate'
 import { enclosesRect, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
 let staff: Promise<StaffAccount> | undefined
-const signInOps = async (page: Page): Promise<unknown> => seedStaffSession(page, 'ops', await (staff ??= provisionStaffAccount('reskin-ops')))
+const staffAccount = (): Promise<StaffAccount> => (staff ??= provisionStaffAccount('reskin-ops'))
+const signInOps = async (page: Page): Promise<unknown> => seedStaffSession(page, 'ops', await staffAccount())
 
 // Resolved colours, each named by its v2 token (packages/design-tokens/v2/tokens/colors.css) or its prototype read.
 const C = {
@@ -1022,4 +1026,313 @@ test('OPS-05 blog action bar: actions stay inside the bar at every wide width', 
   })
   await attachJson(testInfo, 'ops-05-blog-action-bar', { widths, leaveWidths })
   expect(errors, errorsOf(errors)).toEqual([])
+})
+
+// ---------------------------------------------------------------- OPS-06
+// Writes one post of its own through the deployed console; reads nothing of any tenant.
+
+const BLOG = '/api/notifications/v1/staff/blog'
+const BLOG_POSTS = /\/api\/notifications\/v1\/staff\/blog\/posts(?:[/?]|$)/
+const AUTH_REFRESH = /\/auth\/refresh(?:[/?]|$)/
+const KEPT_KEY = 'invoice-os.ops-blog-draft' // frontend/ops-console/src/blog.ts KEPT_KEY
+const BAD_IMAGE = 'Choose a JPG or PNG image'
+
+type ServerPost = { id: string; title: string; status: string; featured: boolean; cover: { content_type: string } | null }
+
+const staffToken = async (): Promise<string> => {
+  const a = await staffAccount()
+  return (await signInSession(a.email, a.password)).access_token
+}
+const bearer = (token: string) => ({ Authorization: `Bearer ${token}` })
+const serverPosts = async (token: string): Promise<ServerPost[]> => {
+  const res = await rawFetch(`${BLOG}/posts`, { headers: bearer(token) })
+  if (res.status !== 200) throw new Error(`GET posts answered ${res.status}`)
+  return (res.body as { posts: ServerPost[] }).posts
+}
+
+// Console errors, minus the deliberate non-2xx the test routes or provokes.
+function blogErrors(page: Page, ...droppers: Dropper[]): string[] {
+  const errors: string[] = []
+  page.on('console', (msg) => {
+    if (msg.type() !== 'error') return
+    if (droppers.some((drop) => drop(msg.text(), msg.location().url))) return
+    errors.push(msg.text())
+  })
+  page.on('pageerror', (err) => {
+    errors.push(`pageerror: ${err.message}`)
+  })
+  return errors
+}
+
+// Width of a JPEG from its SOF0/SOF1/SOF2 marker.
+function jpegWidth(b: Buffer): number {
+  if (b[0] !== 0xff || b[1] !== 0xd8) throw new Error('not a JPEG')
+  let i = 2
+  while (i + 9 < b.length) {
+    if (b[i] !== 0xff) throw new Error(`no marker at byte ${i}`)
+    const m = b[i + 1]
+    if (m === 0xff) {
+      i += 1
+      continue
+    }
+    if (m >= 0xc0 && m <= 0xc2) return b.readUInt16BE(i + 7)
+    i += 2 + b.readUInt16BE(i + 2)
+  }
+  throw new Error('no SOF marker')
+}
+
+// 401 or 500 for a cross-origin call, with the CORS header the browser needs to read it.
+const fulfillStatus = (route: Route, status: number, body: unknown) =>
+  route.fulfill({
+    status,
+    contentType: 'application/json',
+    headers: { 'access-control-allow-origin': route.request().headers()['origin'] ?? '*' },
+    body: JSON.stringify(body),
+  })
+
+const bar = (page: Page) => page.locator('[data-blog-editor]')
+const editorLeft = (page: Page) => page.locator('[data-bscroll]').first()
+const editorPreview = (page: Page) => page.locator('[data-bscroll]').nth(1)
+const toastOf = (page: Page, text: string) => page.getByText(text, { exact: true })
+const titleInput = (page: Page) => page.getByPlaceholder(/^What structured e-invoicing changes for/)
+const summaryInput = (page: Page) => page.getByPlaceholder(/^One or two sentences\./)
+
+async function openNewPost(page: Page): Promise<void> {
+  await navButton(page, /^Blog/).click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Blog', exact: true }), 'Blog drew no h1').toBeVisible()
+  await expect(page.locator('[data-blog-table]'), 'the Blog list never finished loading').toBeVisible({ timeout: 15_000 })
+  await page.getByRole('button', { name: 'New post' }).click()
+  await expect(titleInput(page), 'New post opened no editor').toBeVisible()
+}
+
+test.describe('OPS-06 blog writes', () => {
+  // The post this test created and the featured post it found; the afterEach undoes both.
+  let created: { id: string | null }
+  let featuredBefore: string | null
+  const track = (page: Page) =>
+    page.on('response', (res) => {
+      if (res.request().method() !== 'POST' || !res.ok() || !BLOG_POSTS.test(res.url())) return
+      void res.json().then(
+        (p: { id?: string }) => {
+          if (p.id) created.id = p.id
+        },
+        () => {},
+      )
+    })
+
+  test.beforeEach(async () => {
+    created = { id: null }
+    featuredBefore = (await serverPosts(await staffToken())).find((p) => p.featured)?.id ?? null
+  })
+
+  test.afterEach(async () => {
+    const token = await staffToken()
+    const posts = await serverPosts(token)
+    const own = created.id ? posts.find((p) => p.id === created.id) : undefined
+    if (own?.featured) await rawFetch(`${BLOG}/posts/${own.id}/featured`, { method: 'PUT', headers: bearer(token), body: { featured: false } })
+    if (featuredBefore && posts.some((p) => p.id === featuredBefore && !p.featured)) {
+      await rawFetch(`${BLOG}/posts/${featuredBefore}/featured`, { method: 'PUT', headers: bearer(token), body: { featured: true } })
+    }
+    if (own) await rawFetch(`${BLOG}/posts/${own.id}`, { method: 'DELETE', headers: bearer(token) })
+  })
+
+  test('OPS-06 blog journey: list → new post → blocks → preview → save draft → publish → unpublish → delete', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errors = blogErrors(page, expectedStatusDropper(page, 422, BLOG_POSTS))
+    track(page)
+    const title = `e2e blog ${randomBytes(4).toString('hex')}`
+    const summary = 'Written by the deployed blog journey.'
+    await signInOps(page)
+    await openNewPost(page)
+    await titleInput(page).fill(title)
+
+    await page.getByRole('button', { name: 'Publish', exact: true }).click()
+    const empty = 'Add a summary. It shows on cards and under the title.'
+    await expect(page.getByText(empty, { exact: true }), 'the 422 marked no Summary message').toBeVisible()
+    await expect(toastOf(page, 'Fix the highlighted fields to publish')).toBeVisible()
+    await expect(summaryInput(page), 'Summary border (--destructive)').toHaveCSS('border-top-color', await resolveColor(bar(page), '--destructive'))
+
+    await summaryInput(page).fill(summary)
+    for (const label of ['Heading', 'Heading', 'List', 'Callout', 'Demo']) await page.getByRole('button', { name: label, exact: true }).click()
+    const left = editorLeft(page)
+    await left.getByPlaceholder('Section heading').nth(0).fill('First heading')
+    await left.getByPlaceholder('Section heading').nth(1).fill('Second heading')
+    await left.getByPlaceholder('One item per line').fill('First item\nSecond item')
+    await left.getByRole('button', { name: 'Deadline', exact: true }).click()
+    await left.getByPlaceholder('Callout title').fill('Filing window')
+    await left.getByPlaceholder('Callout text').fill('Submit before the cut-off.')
+
+    const preview = editorPreview(page)
+    await expect(preview.getByText('On this page', { exact: true })).toBeVisible()
+    for (const h of ['First heading', 'Second heading']) await expect(preview.getByRole('heading', { name: h, level: 2 })).toBeVisible()
+    for (const item of ['First item', 'Second item']) await expect(preview.getByText(item, { exact: true })).toBeVisible()
+    await expect(preview.getByText('Deadline', { exact: true })).toBeVisible()
+    await expect(preview.getByText('Filing window', { exact: true })).toBeVisible()
+    await expect(preview.getByText('FEATURE LIBRARY · DEMO', { exact: true })).toBeVisible()
+    await preview.getByRole('button', { name: 'Card', exact: true }).click()
+    await expect(preview.getByText('Read the post')).toBeVisible()
+
+    const file = left.locator('input[type=file]')
+    const bad = toastOf(page, BAD_IMAGE)
+    await file.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') })
+    await expect(bad, 'a text file drew no image toast').toBeVisible()
+    await expect(bad).toBeHidden({ timeout: 6_000 })
+    await file.setInputFiles({ name: 'broken.png', mimeType: 'image/png', buffer: Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(32)]) })
+    await expect(bad, 'a corrupt PNG drew no image toast').toBeVisible()
+    await expect(left.getByRole('img', { name: 'Cover image' }), 'a rejected file left a thumbnail').toHaveCount(0)
+    const png = await page.evaluate(() => {
+      const c = document.createElement('canvas')
+      c.width = 2000
+      c.height = 1000
+      const ctx = c.getContext('2d')!
+      ctx.fillStyle = '#336699'
+      ctx.fillRect(0, 0, 2000, 1000)
+      ctx.fillStyle = '#ffcc00'
+      ctx.fillRect(500, 250, 1000, 500)
+      return c.toDataURL('image/png').split(',')[1]
+    })
+    await file.setInputFiles({ name: 'cover.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') })
+    await expect(left.getByRole('img', { name: 'Cover image' }), 'the 2000x1000 PNG drew no thumbnail').toBeVisible()
+
+    await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+    await expect(toastOf(page, 'Draft saved')).toBeVisible()
+    await expect(bar(page).getByText('ALL CHANGES SAVED', { exact: true })).toBeVisible()
+    await expect.poll(() => created.id, 'the create response named no id').not.toBeNull()
+    const id = created.id!
+    await expect(page.getByText(`blog.ascomply.com/${id}`, { exact: true })).toBeVisible()
+
+    const token = await staffToken()
+    const saved = (await serverPosts(token)).find((p) => p.id === id)
+    expect(saved?.status, 'saved post status').toBe('draft')
+    expect(saved?.cover?.content_type, 'stored cover type').toBe('image/jpeg')
+    const cover = await fetch(`${apiBase()}${BLOG}/posts/${id}/cover`, { headers: bearer(token) })
+    expect(cover.status, 'GET cover').toBe(200)
+    const width = jpegWidth(Buffer.from(await cover.arrayBuffer()))
+    expect(width, 'stored cover width').toBeGreaterThan(0)
+    expect(width, 'stored cover width').toBeLessThanOrEqual(1600)
+
+    await page.getByRole('button', { name: 'Publish', exact: true }).click()
+    await expect(toastOf(page, 'Published to blog.ascomply.com')).toBeVisible()
+    await expect(bar(page).getByText('PUBLISHED', { exact: true })).toBeVisible()
+    await expect(bar(page).getByRole('button', { name: 'Update post', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Unpublish', exact: true }).click()
+    await expect(toastOf(page, 'Unpublished. The post is now a draft')).toBeVisible()
+
+    await titleInput(page).click()
+    await titleInput(page).pressSequentially(' b')
+    await bar(page).getByRole('button', { name: 'All posts' }).click()
+    await expect(toastOf(page, 'You have unsaved changes.')).toBeVisible()
+    await bar(page).getByRole('button', { name: 'Keep editing', exact: true }).click()
+    await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+    await expect(toastOf(page, 'Draft saved')).toBeVisible()
+    await bar(page).getByRole('button', { name: 'All posts' }).click()
+
+    await page.getByLabel('Search posts').fill(title)
+    const row = page.locator('.ops-row').filter({ hasText: title })
+    await expect(row, 'the saved post is not in the list').toHaveCount(1)
+    await row.getByRole('button', { name: 'Pin as featured post' }).click()
+    await expect(toastOf(page, 'Pinned as the featured post')).toBeVisible()
+    await expect(row.getByRole('button', { name: 'Unpin featured post' })).toBeVisible()
+    await row.getByRole('button', { name: 'Unpin featured post' }).click()
+    await expect(toastOf(page, 'Unpinned. The newest post leads the blog home')).toBeVisible()
+    await expect(row.getByRole('button', { name: 'Pin as featured post' })).toBeVisible()
+
+    await row.click()
+    await bar(page).getByRole('button', { name: 'Delete', exact: true }).click()
+    await expect(toastOf(page, 'Delete this post? It is removed from the blog.')).toBeVisible()
+    await bar(page).getByRole('button', { name: 'Delete post', exact: true }).click()
+    await expect(toastOf(page, 'Post deleted')).toBeVisible()
+    await expect(page.locator('.ops-row').filter({ hasText: title }), 'the deleted post is still listed').toHaveCount(0)
+    expect((await serverPosts(token)).some((p) => p.id === id), 'the server still holds the post').toBe(false)
+    expect(errors, errorsOf(errors)).toEqual([])
+  })
+
+  test('OPS-06 blog renewed session: one 401 on save renews the session in place and the save completes', async ({ page }) => {
+    const errors = blogErrors(page, expectedStatusDropper(page, 401, BLOG_POSTS))
+    track(page)
+    const title = `e2e blog ${randomBytes(4).toString('hex')}`
+    await signInOps(page)
+    await openNewPost(page)
+    await titleInput(page).fill(title)
+    await summaryInput(page).fill('Saved after one renewed session.')
+
+    let refused = false
+    await page.route(BLOG_POSTS, (route) => {
+      if (route.request().method() !== 'POST' || refused) return route.fallback()
+      refused = true
+      return fulfillStatus(route, 401, { error: 'unauthorized' })
+    })
+    const stored = () => page.evaluate((key) => (JSON.parse(localStorage.getItem(key) ?? 'null') as { token?: string } | null)?.token ?? null, CONSOLE_SESSION_KEY.ops)
+    const before = await stored()
+    expect(before, 'no stored session before the save').not.toBeNull()
+    await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+    await expect(toastOf(page, 'Draft saved')).toBeVisible()
+    expect(refused, 'the first save was never refused').toBe(true)
+    expect(new URL(page.url()).origin, 'the console left the ops origin').toBe(new URL(consoleUrl('ops')).origin)
+    expect(await stored(), 'the stored token was not renewed').not.toBe(before)
+    expect(await page.evaluate((key) => localStorage.getItem(key), KEPT_KEY), 'a kept copy was stored').toBeNull()
+    expect(errors, errorsOf(errors)).toEqual([])
+  })
+
+  test('OPS-06 blog lost session: a 401 on save keeps the post and offers it after sign-in', async ({ page }) => {
+    test.setTimeout(120_000)
+    const errors = blogErrors(page, expectedStatusDropper(page, 401, BLOG_POSTS), expectedStatusDropper(page, 401, AUTH_REFRESH))
+    track(page)
+    const title = `e2e blog ${randomBytes(4).toString('hex')}`
+    const summary = 'Kept across a lost session.'
+    const account = await staffAccount()
+    await signInOps(page)
+    await openNewPost(page)
+    await titleInput(page).fill(title)
+    await summaryInput(page).fill(summary)
+
+    const refuse = (route: Route) => (route.request().method() === 'POST' ? fulfillStatus(route, 401, { error: 'unauthorized' }) : route.fallback())
+    await page.route(BLOG_POSTS, refuse)
+    await page.route(AUTH_REFRESH, refuse)
+    await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+    const landing = new URL(resolveTarget('LANDING_URL')).origin
+    await page.waitForURL((u) => u.origin === landing, { timeout: 30_000 })
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+
+    const opsOrigin = new URL(consoleUrl('ops')).origin
+    const stateOf = await page.context().storageState()
+    const kept = stateOf.origins.find((o) => o.origin === opsOrigin)?.localStorage.find((e) => e.name === KEPT_KEY)
+    expect(kept, 'no kept copy at the ops origin').toBeDefined()
+    expect((JSON.parse(kept!.value) as { draft: { title: string } }).draft.title, 'kept title').toBe(title)
+
+    const pair = await signInSession(account.email, account.password)
+    await page.context().addInitScript(
+      ({ origin, key, value }) => {
+        if (location.origin !== origin || sessionStorage.getItem('e2e.staff-reseeded')) return
+        sessionStorage.setItem('e2e.staff-reseeded', '1')
+        localStorage.setItem(key, value)
+      },
+      { origin: opsOrigin, key: CONSOLE_SESSION_KEY.ops, value: JSON.stringify({ v: 2, token: pair.access_token, refresh_token: pair.refresh_token }) },
+    )
+    await page.goto(consoleUrl('ops'))
+    await expect(titleInput(page), 'the kept draft did not reopen on Blog').toHaveValue(title, { timeout: 30_000 })
+    await expect(summaryInput(page)).toHaveValue(summary)
+    await expect(bar(page).getByText('UNSAVED CHANGES', { exact: true })).toBeVisible()
+    expect(await page.evaluate((key) => localStorage.getItem(key), KEPT_KEY), 'the kept copy outlived its reopening').toBeNull()
+
+    await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+    await expect(toastOf(page, 'Draft saved')).toBeVisible()
+    expect(await page.evaluate((key) => localStorage.getItem(key), KEPT_KEY), 'the kept copy came back').toBeNull()
+    expect(errors, errorsOf(errors)).toEqual([])
+  })
+
+  test('OPS-06 blog failed save: a 500 leaves the editor dirty with a red toast', async ({ page }) => {
+    const errors = blogErrors(page, expectedStatusDropper(page, 500, BLOG_POSTS))
+    track(page)
+    const title = `e2e blog ${randomBytes(4).toString('hex')}`
+    await signInOps(page)
+    await openNewPost(page)
+    await titleInput(page).fill(title)
+    await page.route(BLOG_POSTS, (route) => (route.request().method() === 'POST' ? fulfillStatus(route, 500, { error: 'internal error' }) : route.fallback()))
+    await page.getByRole('button', { name: 'Save draft', exact: true }).click()
+    await expect(toastOf(page, 'internal error')).toBeVisible()
+    await expect(bar(page).getByText('UNSAVED CHANGES', { exact: true })).toBeVisible()
+    expect((await serverPosts(await staffToken())).some((p) => p.title === title), 'the failed save created a post').toBe(false)
+    expect(errors, errorsOf(errors)).toEqual([])
+  })
 })

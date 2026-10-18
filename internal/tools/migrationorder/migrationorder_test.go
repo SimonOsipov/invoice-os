@@ -314,7 +314,7 @@ func renameRepo(t *testing.T) (run func(args ...string) string, write func(name,
 		run("commit", "-qm", msg)
 	}
 	run("init", "-q", "-b", "main")
-	// auto maintenance detaches a git gc that races TempDir cleanup
+	// a detached git maintenance can still write .git during TempDir cleanup
 	run("config", "maintenance.auto", "false")
 	write("20260101_a.sql", sqlBody+"-- a\n")
 	write("20260102_b.sql", sqlBody+"-- b\n")

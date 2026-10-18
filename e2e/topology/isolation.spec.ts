@@ -66,9 +66,9 @@ test('cross-tenant isolation: each token reads exactly its own tenant + domain r
 //
 // The row shape below is a SECOND, independent mirror of e2e/api/client.ts's `Membership` —
 // this file drives Playwright's own request context and imports nothing from api/. Widened
-// to five keys with that one; a TS generic validates no JSON at runtime, so a stale mirror
+// to six keys with that one; a TS generic validates no JSON at runtime, so a stale mirror
 // here is stale-not-broken and would go unnoticed.
-type MembershipRow = { user_id: string; role: string; status: string; display_name: string | null; email: string | null }
+type MembershipRow = { user_id: string; role: string; status: string; display_name: string | null; email: string | null; client_access: 'all' | string[] | null }
 
 async function fetchMemberships(
   request: APIRequestContext,

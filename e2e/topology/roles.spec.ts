@@ -19,7 +19,7 @@
 // db/seed.dev.sql's workflow_roles/workflow_role_members and lib/roles.ts's resolve() —
 // see SEED_FIRM_ROLE_CARDS below for the derivation itself.
 //
-// NO WRITE TO A MEMBERSHIP is driven from the browser. Suspend/Reactivate are real, audited
+// No STATUS write is driven from the browser (the last test writes client access, restored in a `finally`). Suspend/Reactivate are real, audited
 // PATCHes, and this environment is shared and never reset between specs — a status write
 // started here could not be restored on a failed assertion the way api/contract-tenancy.spec.ts's
 // try/finally does. The controls are asserted ENABLED and correctly labelled; the write itself
@@ -69,15 +69,17 @@ import {
   deleteApprovalPolicy,
   deleteWorkflowRole,
   listApprovalPolicies,
+  listEntities,
   listWorkflowRoles,
   login,
   memberships,
   PERSONAS,
   rawFetch,
   registerFresh,
+  setMemberClients,
 } from '../api/client'
 import { browserToken, collectErrors, signInAs } from '../personaSession'
-import { E2E_MEMBER_ROLES, e2eMember } from '../realAccounts'
+import { E2E_MEMBER_ROLES, e2eMember, ensureMember } from '../realAccounts'
 import { expectedStatusDropper } from './consoleGate'
 import { enclosesRect, gaps, rectsOverlap, settleAnimations, WIDE_WIDTHS, type Rect } from './layout'
 import {
@@ -1450,6 +1452,123 @@ test('firm Settings: an admin invites from the Members screen, sees the pending 
     await fakedRow.getByTestId('member-menu-trigger').click()
   } finally {
     await page.unroute(fakeUnconfirmed)
+  }
+
+  expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])
+})
+
+// ---------------------------------------------------------------------------------------
+// Test 5 -- an admin gives a member clients in the drawer (FIRMS-02), on the firm tenant
+// ---------------------------------------------------------------------------------------
+// frontend/app/src/lib/members.ts: ADMIN_ALL_CLIENTS.
+const ADMIN_ALL_CLIENTS_COPY = 'An admin sees every client.'
+
+test('firm Settings: an admin gives a member clients in the drawer and they survive a reload', async ({ page }, testInfo) => {
+  test.setTimeout(300_000)
+  const errors = collectErrors(page)
+
+  const preparer = await ensureMember(TENANTS.a.id, 'firm', 'preparer')
+  await signInAs(page, 'firm')
+  await goTo(page, 'Settings')
+  await expect(page.getByTestId('members-table')).toBeVisible()
+
+  const token = await browserToken(page)
+  const row = (await memberships(token)).memberships.find((m) => m.email === preparer.email)
+  expect(row, `${preparer.email} is on the roster`).toBeTruthy()
+  const userId = row!.user_id
+  const start = row!.client_access
+  expect(start, 'an admin reads every row').not.toBeNull()
+  const live = async () => (await memberships(token)).memberships.find((m) => m.user_id === userId)!.client_access
+
+  const { entities } = await listEntities(token, { status: 'active', limit: 200 })
+  expect(entities.length, 'the firm has at least two active clients').toBeGreaterThanOrEqual(2)
+  const picked = entities.slice(0, 2)
+  const pickedIds = picked.map((e) => e.id).sort()
+
+  const putDone = (action: () => Promise<void>) =>
+    Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'PUT' && r.url().includes(`/memberships/${userId}/clients`) && r.status() === 200),
+      action(),
+    ])
+  const drawer = page.getByTestId('member-drawer')
+  const line = () => memberRow(page, preparer.displayName).getByTestId('member-client-access')
+  const openDrawer = async (name: string) => {
+    await memberRow(page, name).getByText(name, { exact: true }).click()
+    await expect(drawer).toBeVisible()
+  }
+  const closeDrawer = async () => {
+    await page.getByTestId('member-drawer-close').click()
+    await expect(drawer).toHaveCount(0)
+  }
+  const reopen = async () => {
+    await page.reload()
+    await goTo(page, 'Settings')
+    await expect(page.getByTestId('members-table')).toBeVisible()
+  }
+
+  try {
+    // Start from "all" so the Selected click is a real write.
+    if (start !== 'all') {
+      const reset = await setMemberClients(token, userId, 'all')
+      expect(reset.status, JSON.stringify(reset.body)).toBe(200)
+      await reopen()
+    }
+
+    await openDrawer(preparer.displayName)
+    await putDone(() => drawer.getByTestId('drawer-scope-selected').click())
+    for (const client of picked) {
+      await putDone(() => drawer.getByTestId('drawer-client-row').filter({ has: page.getByText(client.name, { exact: true }) }).locator('input').check())
+    }
+    await closeDrawer()
+    await expect(line()).toHaveText('2 clients')
+    expect(await live(), 'the API holds the two clients').toEqual(pickedIds)
+
+    await reopen()
+    await expect(line()).toHaveText('2 clients')
+
+    // L6 (D21): the client-access line sits in the Access role cell, below the role label, clear of Workflow roles.
+    const cells = rowCells(page, preparer.displayName)
+    const l6 = await atEachWidth(page, async (width) => {
+      const prepRow = memberRow(page, preparer.displayName)
+      await settleAnimations(prepRow)
+      const access = await boxOf(cells.nth(1), `the Access role cell at ${width}px`)
+      const label = await boxOf(cells.nth(1).locator('span').first(), `the role label at ${width}px`)
+      const lineLoc = prepRow.getByTestId('member-client-access')
+      const box = await boxOf(lineLoc, `the client-access line at ${width}px`)
+      const workflow = await boxOf(cells.nth(2), `the Workflow roles cell at ${width}px`)
+      const clip = await lineLoc.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+      expect(enclosesRect(access, box, 1), `the line must sit inside the Access role cell at ${width}px`).toBe(true)
+      expect(box.y, `the line must sit below the role label at ${width}px`).toBeGreaterThanOrEqual(label.y + label.height - 1)
+      expect(clip.scrollWidth, `the line must not be clipped at ${width}px`).toBeLessThanOrEqual(clip.clientWidth)
+      expect(rectsOverlap(box, workflow), `the line must not overlap the Workflow roles cell at ${width}px`).toBe(false)
+      return { width, access, label, box, workflow }
+    })
+    expect(l6.map((m) => m.width)).toEqual([...WIDE_WIDTHS])
+    await testInfo.attach('member-client-access-fit.json', { body: JSON.stringify(l6, null, 2), contentType: 'application/json' })
+
+    await openDrawer(preparer.displayName)
+    await expect(drawer.getByTestId('drawer-scope-selected').locator('input')).toBeChecked()
+    const ticked = drawer.getByTestId('drawer-client-row').filter({ has: page.locator('input:checked') })
+    await expect(ticked).toHaveCount(2)
+    for (const client of picked) await expect(ticked.filter({ hasText: client.name }), `${client.name} ticked`).not.toHaveCount(0)
+    await expect(drawer.getByTestId('drawer-client-count')).toContainText(`2 of ${entities.length} selected`)
+
+    await putDone(() => drawer.getByTestId('drawer-scope-all').click())
+    await closeDrawer()
+    await expect(line()).toHaveText('All clients')
+    expect(await live()).toBe('all')
+    await reopen()
+    await expect(line()).toHaveText('All clients')
+
+    // An admin's own drawer: "All clients", locked, with its reason.
+    await openDrawer('Chinedu Okafor')
+    await expect(drawer.getByTestId('drawer-scope-all').locator('input')).toBeChecked()
+    await expect(drawer.getByTestId('drawer-scope-all').locator('input')).toBeDisabled()
+    await expect(drawer).toContainText(ADMIN_ALL_CLIENTS_COPY)
+    await closeDrawer()
+  } finally {
+    const restored = await setMemberClients(token, userId, start)
+    expect(restored.status, 'the shared environment must be left as it was found').toBe(200)
   }
 
   expect(errors, `console errors on the app:\n${errors.join('\n')}`).toEqual([])

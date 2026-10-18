@@ -239,7 +239,7 @@ export function Sidebar({
             Book the Demo
           </Button>
         )}
-        {blogHref != null && (
+        {blogHref && (
           <a
             href={blogHref}
             className="lib-blog"

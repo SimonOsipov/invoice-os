@@ -110,7 +110,7 @@ export function newsletterPendingHours(): number {
   return Number(found(/INSERT INTO blog_subscription_requests[\s\S]*?expires_at\)[\s\S]*?now\(\) \+ interval '(\d+) hours'/.exec(newsletterGo())?.[1], 'the request expiry interval'))
 }
 
-// The SubscribeIntake fields, lower-cased.
+// The SubscribeIntake fields.
 export function newsletterIntakeFields(): string[] {
   const body = found(/type SubscribeIntake struct \{([^}]*)\}/.exec(newsletterGo())?.[1], 'SubscribeIntake')
   return keysOf(/^\s*(\w+)\s+\S+\s*$/gm, body).sort()

@@ -755,7 +755,7 @@ describe('the Library shares the landing\'s choice', () => {
     expect(para).toContain(`so this site, our Feature Library at ${LIBRARY_HOSTNAMES[0]} and our Blog at ${BLOG_HOSTNAMES[0]} read the same answer`)
   })
 
-  // Pending approval (D10, U4).
+  // Pending the user's copy sign-off.
   const BLOG_HEADING = '>The Blog and its newsletter</h2>'
   const BLOG_SECTION = [
     `Our Blog at ${BLOG_HOSTNAMES[0]} follows this policy too. One analytics choice covers this site, the Feature Library and the Blog: whatever you choose on any of them applies to all three. Cookie choices, at the foot of each site's pages or sidebar, brings the notice back, and a change made there applies to all three. If you allow analytics, Google Analytics measures the Blog in the same way and under the same property, and Google receives each Blog page you view. The Blog shares the _ga cookies with this site and the Library. Choosing Reject on any of them deletes those shared _ga cookies. If analytics was running, though, Google's script is still loaded into any of our pages you have open, and until you reload them it can send measurements of its own and re-create those cookies. The Blog is typeset in the same Google fonts. When a Blog page fails, your browser sends Sentry a report as described below.`,

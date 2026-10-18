@@ -342,7 +342,7 @@ describe('library shell primitives', () => {
   })
 
   it('Sidebar_rendersNoBlogWhenNull', () => {
-    for (const ts of [sidebar(home, 'https://l.example/?demo', null), sidebar(home, 'https://l.example/?demo')]) {
+    for (const ts of [sidebar(home, 'https://l.example/?demo', null), sidebar(home, 'https://l.example/?demo', ''), sidebar(home, 'https://l.example/?demo')]) {
       expect(ts.some((t) => t.text === 'Blog')).toBe(false)
       const i = ts.findIndex((t) => style(t)['border-top'] === '1px solid var(--line-1)' && attr(t, 'class') === undefined)
       expect(ts.slice(i + 1).filter((t) => t.name === 'a' || t.name === 'button').map((t) => t.text)).toEqual(['Book the Demo', 'Cookie choices'])

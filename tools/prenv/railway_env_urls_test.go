@@ -139,6 +139,7 @@ func requireURLsRefused(t *testing.T, stdout, stderr string, code int) {
 var urlsAliasField = regexp.MustCompile(`(\w+)\s*:\s*domains\(([^)]*)\)`)
 
 func TestDiscoverURLs_OneRequestForSixDomains(t *testing.T) {
+	t.Parallel()
 	s := newURLsShim(t, nil)
 	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 	if code != 0 {
@@ -188,6 +189,7 @@ func TestDiscoverURLs_OneRequestForSixDomains(t *testing.T) {
 }
 
 func TestDiscoverURLs_PrefersTheCustomDomain(t *testing.T) {
+	t.Parallel()
 	s := newURLsShim(t, nil)
 	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 	if code != 0 {
@@ -201,6 +203,7 @@ func TestDiscoverURLs_PrefersTheCustomDomain(t *testing.T) {
 }
 
 func TestDiscoverURLs_FallsBackToTheGeneratedDomain(t *testing.T) {
+	t.Parallel()
 	s := newURLsShim(t, nil)
 	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 	if code != 0 {
@@ -214,6 +217,7 @@ func TestDiscoverURLs_FallsBackToTheGeneratedDomain(t *testing.T) {
 }
 
 func TestDiscoverURLs_NullCustomDomainsRefuses(t *testing.T) {
+	t.Parallel()
 	generated := `{"domain":"landing-pr-7.up.railway.app","targetPort":null}`
 	for _, c := range []struct{ name, landing string }{
 		{"customDomains is null", `{"customDomains":null,"serviceDomains":[` + generated + `]}`},
@@ -221,6 +225,7 @@ func TestDiscoverURLs_NullCustomDomainsRefuses(t *testing.T) {
 		{"the whole alias is null", `null`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newURLsShim(t, map[string]string{"landing": c.landing})
 			stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 			requireOneDiscoverCall(t, s)
@@ -236,6 +241,7 @@ func TestDiscoverURLs_NullCustomDomainsRefuses(t *testing.T) {
 }
 
 func TestDiscoverURLs_PrintsExactlySixOutputLines(t *testing.T) {
+	t.Parallel()
 	s := newURLsShim(t, nil)
 	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 	if code != 0 {
@@ -253,8 +259,10 @@ func TestDiscoverURLs_PrintsExactlySixOutputLines(t *testing.T) {
 }
 
 func TestDiscoverURLs_NoDomainFailsNamingTheService(t *testing.T) {
+	t.Parallel()
 	for _, svc := range urlsServices {
 		t.Run(svc.label, func(t *testing.T) {
+			t.Parallel()
 			s := newURLsShim(t, map[string]string{svc.label: domainsJSON(t, nil, nil)})
 			stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
 			requireOneDiscoverCall(t, s)
@@ -272,6 +280,7 @@ func TestDiscoverURLs_NoDomainFailsNamingTheService(t *testing.T) {
 }
 
 func TestDiscoverURLs_GraphQLErrorEmptyStdout(t *testing.T) {
+	t.Parallel()
 	const message = "sentinel-railway-message-7f3a"
 	// beside plants errors next to a complete data; paths are errors[].path[0] values, one error each.
 	beside := func(paths ...string) func(t *testing.T, s authShim) {
@@ -305,6 +314,7 @@ func TestDiscoverURLs_GraphQLErrorEmptyStdout(t *testing.T) {
 		{"an in-range and an out-of-range alias name only the real service", beside(`"s1"`, `"s9"`), []int{1}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newURLsShim(t, nil)
 			c.plant(t, s)
 			stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID)
@@ -333,6 +343,7 @@ func TestDiscoverURLs_GraphQLErrorEmptyStdout(t *testing.T) {
 }
 
 func TestDiscoverURLs_MissingServiceIDRefusesBeforeAnyCall(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, exports, idVar string }{}
 	for _, svc := range urlsServices {
 		cases = append(cases, struct{ name, exports, idVar string }{svc.label + " unset", urlsExports(true, false, svc.idVar), svc.idVar})
@@ -340,6 +351,7 @@ func TestDiscoverURLs_MissingServiceIDRefusesBeforeAnyCall(t *testing.T) {
 	cases = append(cases, struct{ name, exports, idVar string }{"landing empty", urlsExports(true, false) + "export RAILWAY_SVC_LANDING_ID=\n", "RAILWAY_SVC_LANDING_ID"})
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newURLsShim(t, nil)
 			s.requireLogs(t)
 			before := len(s.calls(t))
@@ -356,6 +368,7 @@ func TestDiscoverURLs_MissingServiceIDRefusesBeforeAnyCall(t *testing.T) {
 }
 
 func TestDiscoverURLs_ProjectTokenUsesProjectAccessTokenHeader(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name                 string
 		api, project         bool
@@ -365,6 +378,7 @@ func TestDiscoverURLs_ProjectTokenUsesProjectAccessTokenHeader(t *testing.T) {
 		{"both tokens: the account token wins", true, true, "Authorization: Bearer " + forkToken, "Project-Access-Token:"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newURLsShim(t, nil)
 			stdout, stderr, code := runURLs(t, s, urlsExports(c.api, c.project), forkEnvID)
 			if code != 0 {
@@ -383,6 +397,7 @@ func TestDiscoverURLs_ProjectTokenUsesProjectAccessTokenHeader(t *testing.T) {
 }
 
 func TestDiscoverURLs_NoTokenMakesNoCall(t *testing.T) {
+	t.Parallel()
 	s := newURLsShim(t, nil)
 	s.requireLogs(t)
 	before := len(s.calls(t))
@@ -397,6 +412,7 @@ func TestDiscoverURLs_NoTokenMakesNoCall(t *testing.T) {
 }
 
 func TestDiscoverURLs_ReadsThePersistentEnvironment(t *testing.T) {
+	t.Parallel()
 	s := newURLsShim(t, nil)
 	stdout, stderr, code := runURLs(t, s, urlsExports(true, false), persistentEnvironmentID)
 	if code != 0 {
@@ -438,6 +454,7 @@ func goodAliases(t *testing.T, override map[int]string) map[string]string {
 }
 
 func TestDiscoverURLs_VerbatimResponses(t *testing.T) {
+	t.Parallel()
 	gen := func(i int) []string { return urlsServices[i].generated }
 	extra := goodAliases(t, nil)
 	extra["s6"] = domainsJSON(t, []string{"stray.ascomply.test"}, nil)
@@ -473,6 +490,7 @@ func TestDiscoverURLs_VerbatimResponses(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newURLsShim(t, nil)
 			if len(c.data) < 5 {
 				t.Fatalf("control: %d aliases planted, want at least 5", len(c.data))
@@ -497,6 +515,7 @@ func TestDiscoverURLs_VerbatimResponses(t *testing.T) {
 }
 
 func TestDiscoverURLs_UnusableResponseRefuses(t *testing.T) {
+	t.Parallel()
 	good := func(t *testing.T) map[string]string { return goodAliases(t, nil) }
 	without := func(t *testing.T, k string) map[string]string {
 		d := good(t)
@@ -592,6 +611,7 @@ func requireOneDiscoveryError(t *testing.T, stderr string) {
 }
 
 func TestDiscoverURLs_TransportFailuresKeepQueryRetryRules(t *testing.T) {
+	t.Parallel()
 	const cmd = "discover-urls"
 	cases := []struct {
 		name    string
@@ -614,6 +634,7 @@ func TestDiscoverURLs_TransportFailuresKeepQueryRetryRules(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newURLsShim(t, nil)
 			setFaults(t, s, "discoverUrls", c.faults...)
 			if len(c.hdr) > 0 {
@@ -656,6 +677,7 @@ func TestDiscoverURLs_TransportFailuresKeepQueryRetryRules(t *testing.T) {
 }
 
 func TestDiscoverURLs_NoTokenOrBodyInOutputOrArgv(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name  string
 		plant func(t *testing.T, s authShim)
@@ -666,6 +688,7 @@ func TestDiscoverURLs_NoTokenOrBodyInOutputOrArgv(t *testing.T) {
 		{"a 401", func(t *testing.T, s authShim) { setFaults(t, s, "discoverUrls", "401") }, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newURLsShim(t, nil)
 			c.plant(t, s)
 			stdout, stderr, code := runURLs(t, s, urlsExports(true, true), forkEnvID)
@@ -686,7 +709,9 @@ func TestDiscoverURLs_NoTokenOrBodyInOutputOrArgv(t *testing.T) {
 }
 
 func TestDiscoverURLs_UsageAndProjectGuards(t *testing.T) {
+	t.Parallel()
 	t.Run("no environment id is a usage error with no call", func(t *testing.T) {
+		t.Parallel()
 		s := newURLsShim(t, nil)
 		s.requireLogs(t)
 		before := len(s.calls(t))
@@ -699,6 +724,7 @@ func TestDiscoverURLs_UsageAndProjectGuards(t *testing.T) {
 		}
 	})
 	t.Run("an unset project id refuses before any call", func(t *testing.T) {
+		t.Parallel()
 		s := newURLsShim(t, nil)
 		s.requireLogs(t)
 		before := len(s.calls(t))
@@ -736,6 +762,7 @@ func jobOutputs(j workflowJob) map[string]string {
 }
 
 func TestDevEnvYmlURLsStepWritesTheSixOutputs(t *testing.T) {
+	t.Parallel()
 	yml := readWorkflow(t, "dev-env.yml")
 	var prep *workflowJob
 	for _, j := range workflowJobsOf(yml) {
@@ -873,6 +900,7 @@ func jobEnv(j workflowJob) map[string]string {
 
 // The topology job takes the library URL and the baked-URL oracles, and its guard step refuses each empty.
 func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
+	t.Parallel()
 	var job *workflowJob
 	for _, j := range workflowJobsOf(readWorkflow(t, "dev-env.yml")) {
 		if j.name == "topology" {
@@ -914,8 +942,8 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 				cmd.Env = append(cmd.Env, v+"=")
 			}
 		}
-		out, err := cmd.CombinedOutput()
-		return string(out), err
+		out, _, err := runToFiles(t, cmd, true)
+		return out, err
 	}
 	if out, err := guard(""); err != nil {
 		t.Errorf("all nine set: guard failed: %v %q", err, out)

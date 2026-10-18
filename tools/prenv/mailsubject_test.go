@@ -7,6 +7,7 @@ import (
 )
 
 func TestMailSubjectCheck(t *testing.T) {
+	t.Parallel()
 	cases := map[string]struct {
 		subject  string
 		wantCode int
@@ -50,6 +51,7 @@ func TestMailSubjectCheck(t *testing.T) {
 }
 
 func TestMailSubjectCheck_CLI(t *testing.T) {
+	t.Parallel()
 	_, stderr, _ := runCLI(t)
 	if !strings.Contains(stderr, "mail-subject-check") {
 		t.Errorf("usage lacks mail-subject-check; stderr = %q", stderr)

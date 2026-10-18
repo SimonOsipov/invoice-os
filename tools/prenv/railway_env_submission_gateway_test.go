@@ -50,6 +50,7 @@ func requireSubmissionConfirmed(t *testing.T, out string) {
 }
 
 func TestSubmissionGatewayPass_WritesTheInternalURL(t *testing.T) {
+	t.Parallel()
 	s := newSubmissionShim(t, nil)
 	out, code := runPass(t, s)
 	if code != 0 {
@@ -73,6 +74,7 @@ func TestSubmissionGatewayPass_WritesTheInternalURL(t *testing.T) {
 }
 
 func TestSubmissionGatewayPass_SkipsAValueThatHolds(t *testing.T) {
+	t.Parallel()
 	s := newSubmissionShim(t, map[string]string{"GATEWAY_URL": gatewayInternalURL})
 	out, code := runPass(t, s)
 	if code != 0 {
@@ -85,6 +87,7 @@ func TestSubmissionGatewayPass_SkipsAValueThatHolds(t *testing.T) {
 }
 
 func TestSubmissionGatewayPass_RefusesThePersistentEnvironment(t *testing.T) {
+	t.Parallel()
 	// fork_auth's own refusal runs first through the command, so call this pass's check alone.
 	raw, err := os.ReadFile(railwayEnvScript(t))
 	if err != nil {
@@ -124,6 +127,7 @@ func TestSubmissionGatewayPass_RefusesThePersistentEnvironment(t *testing.T) {
 }
 
 func TestSubmissionGatewayPass_FailsLoudly(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name  string
 		names string // the shared unreadable-service error names the service, not the variable
@@ -135,6 +139,7 @@ func TestSubmissionGatewayPass_FailsLoudly(t *testing.T) {
 		{"re-read absent", "GATEWAY_URL", "", func(t *testing.T, s authShim) { s.bendReRead(t, submissionSvcID, `del(.GATEWAY_URL)`) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newSubmissionShim(t, nil)
 			c.setup(t, s)
 			out, code := runPass(t, s)

@@ -38,6 +38,7 @@ func reconciliationWrites(t *testing.T, s authShim) []collectionWrite {
 }
 
 func TestReconciliationValidationPass_WritesBothVariables(t *testing.T) {
+	t.Parallel()
 	s := newValidationShim(t, nil, nil)
 	out, code := runPass(t, s)
 	if code != 0 {
@@ -72,6 +73,7 @@ func TestReconciliationValidationPass_WritesBothVariables(t *testing.T) {
 }
 
 func TestReconciliationValidationPass_TokenIsAReferenceNotAValue(t *testing.T) {
+	t.Parallel()
 	s := newValidationShim(t, nil, nil)
 	if out, code := runPass(t, s); code != 0 {
 		t.Fatalf("exit %d, want 0; output = %q", code, out)
@@ -83,6 +85,7 @@ func TestReconciliationValidationPass_TokenIsAReferenceNotAValue(t *testing.T) {
 }
 
 func TestReconciliationValidationPass_RefusesThePersistentEnvironment(t *testing.T) {
+	t.Parallel()
 	// fork_auth's own refusal runs first through the command, so call this pass's check alone.
 	raw, err := os.ReadFile(railwayEnvScript(t))
 	if err != nil {
@@ -120,6 +123,7 @@ func TestReconciliationValidationPass_RefusesThePersistentEnvironment(t *testing
 }
 
 func TestReconciliationValidationPass_NoWriteWhenAlreadySet(t *testing.T) {
+	t.Parallel()
 	s := newValidationShim(t, nil, map[string]string{"VALIDATION_URL": validationInternalURL, "S2S_TOKEN": validationTokenRef})
 	out, code := runPass(t, s)
 	if code != 0 {
@@ -134,6 +138,7 @@ func TestReconciliationValidationPass_NoWriteWhenAlreadySet(t *testing.T) {
 }
 
 func TestReconciliationValidationPass_FailedWriteIsAnError(t *testing.T) {
+	t.Parallel()
 	s := newValidationShim(t, nil, nil)
 	s.failAlias(t, reconciliationSvcID, "abort")
 	out, code := runPass(t, s)
@@ -155,6 +160,7 @@ func TestReconciliationValidationPass_FailedWriteIsAnError(t *testing.T) {
 }
 
 func TestReconciliationValidationPass_MissingServiceIsAnError(t *testing.T) {
+	t.Parallel()
 	s := newValidationShim(t, map[string]string{"settle": gtSettle(t, "reconciliation")}, nil)
 	out, code := runPass(t, s)
 	if code != 1 {

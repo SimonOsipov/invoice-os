@@ -55,6 +55,8 @@ describe('demos', () => {
     expect(h).toContain('font-size:10.5px')
     expect(h).toContain('class="mono" style="white-space:nowrap"')
     expect(h).not.toContain('class="mono" style="color')
+    expect(h).toContain('transition:background 300ms;')
+    expect(h).not.toContain('background 300ms ease-out')
     expect(html('import', 0)).not.toContain('animation')
   })
 

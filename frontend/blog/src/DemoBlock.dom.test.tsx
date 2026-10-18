@@ -44,6 +44,7 @@ describe('demo block', () => {
       expect(text()).toContain(t)
     expect(play().querySelector('svg')).not.toBeNull()
     expect(play().textContent).toBe('')
+    expect(play().querySelector('svg')?.innerHTML).not.toContain('M21 12a9 9 0 1 1-9-9')
     const ticks = [...container.querySelectorAll<HTMLElement>('[data-testid="blog-demo-scrub"] span')].map((s) => s.style.left)
     expect(ticks).toEqual(['25%', '50%', '75%'])
   })
@@ -92,6 +93,9 @@ describe('demo block', () => {
     await mount([{ type: 'demo', demo: 'clearance' }])
     expect(text()).toContain('STATUS')
     expect(text()).toContain('Invoice converted and signed')
+    const scene = container.querySelector('[data-testid="blog-demo-scene"]')?.innerHTML
+    expect(scene).toContain('width: 34px')
+    expect(scene).not.toContain('font-size: 11.5px')
     for (const l of ['Approved', 'Prepared', 'Submitted', 'Response', 'Cleared']) expect(text()).toContain(l)
   })
 })

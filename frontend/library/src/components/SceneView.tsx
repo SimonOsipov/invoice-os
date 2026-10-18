@@ -99,7 +99,7 @@ function ListView({ s, size }: { s: Of<'list'>; size: Size }) {
           return (
             <div
               key={i}
-              style={{ display: 'grid', gridTemplateColumns: s.grid, gap: inline ? 10 : 12, alignItems: 'center', padding: inline ? 10 : 12, borderTop: '1px solid var(--border)', fontSize: inline ? 12.5 : 13.5, background: r.focused ? 'var(--mint-soft)' : 'transparent', borderRadius: 4, transition: 'background 300ms ease-out', animation: 'libPop 320ms ease-out' }}
+              style={{ display: 'grid', gridTemplateColumns: s.grid, gap: inline ? 10 : 12, alignItems: 'center', padding: inline ? 10 : 12, borderTop: '1px solid var(--border)', fontSize: inline ? 12.5 : 13.5, background: r.focused ? 'var(--mint-soft)' : 'transparent', borderRadius: 4, transition: inline ? 'background 300ms' : 'background 300ms ease-out', animation: 'libPop 320ms ease-out' }}
             >
               <span style={{ fontWeight: 600, ...ell }}>{r.c1}</span>
               <span style={{ color: 'var(--text-copy)', ...ell }}>{r.c2}</span>

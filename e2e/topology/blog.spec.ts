@@ -2,6 +2,7 @@
 // relationship (side by side, containment, alignment, no overflow), never a raw dimension.
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { resolveTarget } from '../targets'
+import { GATEWAY_URL } from './targets'
 import {
   assertFillsColumn,
   enclosesRect,
@@ -157,20 +158,82 @@ test.describe('blog at phone widths', () => {
 })
 
 test.describe('blog routes', () => {
-  const COLD: [string, string[]][] = [
-    ['/subscribe', ['Blog', 'Subscribe']],
-    ['/category/x', ['Blog']],
-    ['/a-post', ['Blog']],
-  ]
+  // Seeded on forks (migrations/20261017135635_seed_blog.sql); a not-found path never goes here, visit() needs 2xx.
+  const COLD = ['/subscribe', '/category/regulation', '/what-changes']
 
   test('blog routes: a cold deep link renders the shell', async ({ page }) => {
     const errors = collectErrors(page)
     await prepare(page)
-    for (const [path, expected] of COLD) {
+    for (const path of COLD) {
       await visit(page, path)
-      await expect(crumbs(page).getByRole('button'), `${path}: crumbs`).toHaveText(expected)
+      await expect(crumbs(page).getByRole('button').first(), `${path}: first crumb`).toHaveText('Blog')
       await expect(aside(page).getByRole('button', { name: 'Subscribe' }), `${path}: the Subscribe button`).toBeVisible()
     }
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog routes: an unknown slug answers 404 and still boots the SPA', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    const response = await page.goto(`${BLOG_URL}/no-such-post-${crypto.randomUUID().slice(0, 8)}`)
+    expect(response?.status(), 'status of an unknown slug').toBe(404)
+    await expect(main(page), '#blog-main never rendered').toBeVisible()
+    await expect(header(page), '#blog-header never rendered').toBeVisible()
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+})
+
+// Seeded post served as crawler HTML (internal/blogweb); the SPA replaces the block on mount.
+test.describe('blog crawler HTML', () => {
+  const SEEDED = '/what-changes'
+  const JS_DELAY_MS = 1500
+  const MIN_FRAMES = 5
+
+  test('blog crawler HTML: a JavaScript visitor never sees it before the SPA mounts', async ({ page }) => {
+    const errors = collectErrors(page)
+    await prepare(page)
+    await page.route('**/assets/*.js', async (route) => {
+      await new Promise((r) => setTimeout(r, JS_DELAY_MS))
+      await route.continue()
+    })
+    await page.addInitScript(() => {
+      const stats = { frames: 0, present: 0, boxed: 0 }
+      ;(window as unknown as { __crawl: typeof stats }).__crawl = stats
+      const tick = () => {
+        stats.frames++
+        const block = document.querySelector('#root > [data-crawl]')
+        if (block) {
+          stats.present++
+          const r = block.getBoundingClientRect()
+          if (r.width > 0 || r.height > 0) stats.boxed++
+        }
+        if (!document.getElementById('blog-main')) requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    })
+    const response = await page.goto(`${BLOG_URL}${SEEDED}`)
+    expect(response?.status(), 'status').toBe(200)
+    await expect(main(page), '#blog-main never rendered').toBeVisible()
+    const stats = await page.evaluate(() => (window as unknown as { __crawl: { frames: number; present: number; boxed: number } }).__crawl)
+    expect(stats.frames, 'the sampler ran').toBeGreaterThanOrEqual(MIN_FRAMES)
+    expect(stats.present, 'control: the sampler saw the server block').toBeGreaterThanOrEqual(1)
+    expect(stats.boxed, 'frames where the block had a box').toBe(0)
+    await expect(page.locator('[data-crawl]'), 'the block leaves the DOM').toHaveCount(0)
+    expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+  })
+
+  test('blog crawler HTML: without JavaScript the post shows as HTML', async ({ browser }) => {
+    const live = await fetch(`${GATEWAY_URL}/blog/posts/what-changes`)
+    expect(live.status, 'live post').toBe(200)
+    const { title } = (await live.json()) as { title: string }
+    const context = await browser.newContext({ javaScriptEnabled: false })
+    try {
+      const page = await context.newPage()
+      const response = await page.goto(`${BLOG_URL}${SEEDED}`)
+      expect(response?.status(), 'status').toBe(200)
+      await expect(page.locator('#root > [data-crawl] h1')).toHaveText(title)
+    } finally {
+      await context.close()
+    }
   })
 })

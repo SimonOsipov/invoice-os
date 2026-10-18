@@ -296,12 +296,12 @@ func TestNewsletter_SubscribePurgesExpiredRequests(t *testing.T) {
 func TestNewsletter_PurgeExpiredDeletesOnlyExpired(t *testing.T) {
 	r := newNLRig(t)
 	gone, kept := r.email(t), r.email(t)
-	r.seedRequest(t, gone, "-1 second")
-	r.seedRequest(t, kept, "1 hour")
 	member := r.email(t)
 	if _, err := r.ns.Confirm(context.Background(), hashOf(r.subscribe(t, member, r.categories(t, 1), "weekly"))); err != nil {
 		t.Fatalf("seed subscriber: %v", err)
 	}
+	r.seedRequest(t, gone, "-1 second")
+	r.seedRequest(t, kept, "1 hour")
 	if err := r.ns.PurgeExpired(context.Background()); err != nil {
 		t.Fatalf("PurgeExpired() err = %v", err)
 	}

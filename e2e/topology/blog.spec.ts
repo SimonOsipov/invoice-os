@@ -478,6 +478,7 @@ test.describe('blog demo at wide widths', () => {
     test(`blog demo: the last row fits at the last step (${width})`, async ({ page }, testInfo) => {
       const errors = collectErrors(page)
       await open(page, width)
+      await scrub(page).scrollIntoViewIfNeeded()
       const sb = await rectOf(scrub(page), 'the scrub bar')
       await page.mouse.click(sb.x + sb.width * 0.99, sb.y + sb.height / 2)
       await expect(frame(page).getByText('04 / 04')).toBeVisible()

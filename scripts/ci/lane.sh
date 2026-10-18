@@ -52,7 +52,7 @@ push_scope() {
   local sha=$1 runs ids id jobs base="" base_run="" prefixes paths
   scope=full
   if ! runs=$(gh api "repos/$REPO/actions/workflows/dev-env.yml/runs?$RUNS_URL_QUERY" 2>&1); then
-    reason="runs lookup failed: $(printf '%s' "$runs" | head -n 1)"
+    reason="runs lookup failed: $(head -n 1 <<<"$runs")"
     return 0
   fi
   if ! ids=$(printf '%s' "$runs" | jq -r --arg self "$RUN_ID" \
@@ -66,7 +66,7 @@ push_scope() {
   while read -r id head; do
     [ -n "$id" ] || continue
     if ! jobs=$(gh api "repos/$REPO/actions/runs/$id/jobs?filter=latest&per_page=100" 2>&1); then
-      reason="jobs lookup failed for run $id: $(printf '%s' "$jobs" | head -n 1)"
+      reason="jobs lookup failed for run $id: $(head -n 1 <<<"$jobs")"
       return 0
     fi
     if ! printf '%s' "$jobs" | jq -e --argjson p "$prefixes" \

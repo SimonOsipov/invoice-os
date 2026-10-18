@@ -159,6 +159,7 @@ func runReconcileFork(t *testing.T, s authShim) (stdout, stderr string, code int
 }
 
 func TestRailwayAPI_ReadTimeoutThenSuccess(t *testing.T) {
+	t.Parallel()
 	s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
 	setFaults(t, s, "sealedAudit", "timeout")
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "audit-sealed-variables")
@@ -178,8 +179,10 @@ func TestRailwayAPI_ReadTimeoutThenSuccess(t *testing.T) {
 }
 
 func TestRailwayAPI_HTTP5xxThenSuccess(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"500", "502", "503", "504"} {
 		t.Run(status, func(t *testing.T) {
+			t.Parallel()
 			m := healthyMap()
 			var edges []string
 			stores := map[string]map[string]string{}
@@ -205,6 +208,7 @@ func TestRailwayAPI_HTTP5xxThenSuccess(t *testing.T) {
 }
 
 func TestRailwayAPI_WriteTimeoutThenSuccess(t *testing.T) {
+	t.Parallel()
 	s := newAuthShim(t, map[string]string{
 		"settle": forkSettle(`{"node":{"serviceId":"` + productionGatewayID + `","serviceName":"gateway"}}`),
 	}, map[string]map[string]string{
@@ -234,6 +238,7 @@ func TestRailwayAPI_WriteTimeoutThenSuccess(t *testing.T) {
 }
 
 func TestRailwayAPI_SecretWriteTimeoutThenSuccess(t *testing.T) {
+	t.Parallel()
 	jwk := freshJWK(t)
 	s := newProdAuthShim(t, prodSealed())
 	// The first write of --post-merge is auth.GOTRUE_JWT_KEYS, through upsert_secret_variable.
@@ -258,6 +263,7 @@ func TestRailwayAPI_SecretWriteTimeoutThenSuccess(t *testing.T) {
 }
 
 func TestRailwayAPI_RetrySuccessPrintsOneWarningOnStderr(t *testing.T) {
+	t.Parallel()
 	control := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
 	want, _, code := control.run(t, forkExports(true, true, true), "audit-sealed-variables")
 	if code != 0 || want == "" {
@@ -291,6 +297,7 @@ func TestRailwayAPI_RetrySuccessPrintsOneWarningOnStderr(t *testing.T) {
 }
 
 func TestListEnvironments_RetryKeepsStdoutTSV(t *testing.T) {
+	t.Parallel()
 	s := newAuthShim(t, map[string]string{"envList": authEnvList(true)}, nil)
 	setFaults(t, s, "envList", "timeout")
 	stdout, stderr, code := s.run(t, forkExports(true, true, false), "list-environments")
@@ -311,6 +318,7 @@ func TestListEnvironments_RetryKeepsStdoutTSV(t *testing.T) {
 }
 
 func TestVerifyGatewayDomain_RetryKeepsTheDiscoveredURL(t *testing.T) {
+	t.Parallel()
 	host := "gateway-pr-900.up.railway.app"
 	s := newAuthShim(t, map[string]string{"dom-" + retryForkEnv + "-" + retryGatewayID: domainsOf(false, host)}, nil)
 	writeFile(t, filepath.Join(s.dir, "probe.body"), `{"status":"ok"}`)
@@ -335,6 +343,7 @@ func TestVerifyGatewayDomain_RetryKeepsTheDiscoveredURL(t *testing.T) {
 }
 
 func TestRailwayAPI_ExhaustedBudgetNamesRailwayCallAndLastError(t *testing.T) {
+	t.Parallel()
 	s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
 	setFaults(t, s, "sealedAudit", "timeout", "timeout", "timeout")
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "audit-sealed-variables")
@@ -357,8 +366,10 @@ func TestRailwayAPI_ExhaustedBudgetNamesRailwayCallAndLastError(t *testing.T) {
 }
 
 func TestRailwayAPI_ExhaustedOn5xxNamesTheStatus(t *testing.T) {
+	t.Parallel()
 	for _, faults := range [][]string{{"503", "503", "503"}, {"timeout", "timeout", "503"}} {
 		t.Run(strings.Join(faults, "_"), func(t *testing.T) {
+			t.Parallel()
 			s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
 			setFaults(t, s, "sealedAudit", faults...)
 			stdout, stderr, code := s.run(t, forkExports(true, true, true), "audit-sealed-variables")
@@ -379,6 +390,7 @@ func TestRailwayAPI_ExhaustedOn5xxNamesTheStatus(t *testing.T) {
 
 // guard, passes at HEAD: a GraphQL error is fatal on the first call.
 func TestRailwayAPI_GraphQLErrorIsNotRetried(t *testing.T) {
+	t.Parallel()
 	s := newAuthShim(t, map[string]string{"sealed": `{"errors":[{"message":"boom","extensions":{"code":"BAD_USER_INPUT"}}]}`}, nil)
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "audit-sealed-variables")
 
@@ -399,6 +411,7 @@ func TestRailwayAPI_GraphQLErrorIsNotRetried(t *testing.T) {
 // guard, passes at HEAD: "Not Authorized" is a GraphQL error, fatal on the first call.
 // A Retry-After on a 200 is not a wait: only an HTTP 429 sends a call again.
 func TestRailwayAPI_NotAuthorizedIsNotRetried(t *testing.T) {
+	t.Parallel()
 	s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
 	setFaults(t, s, "sealedAudit", "gqlerr")
 	writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 200\r\nretry-after: 5\r\n\r\n")
@@ -443,6 +456,7 @@ func ensureEnvironmentFailsOnce(t *testing.T, fault string, headers ...string) (
 }
 
 func TestRailwayAPI_HTTP4xxIsNotRetried(t *testing.T) {
+	t.Parallel()
 	for _, c := range []string{"400", "401", "403"} {
 		t.Run(c, func(t *testing.T) {
 			_, e := ensureEnvironmentFailsOnce(t, c)
@@ -463,6 +477,7 @@ func TestRailwayAPI_HTTP4xxIsNotRetried(t *testing.T) {
 }
 
 func TestRailwayAPI_RetryAfterOnA5xxIsNotTheWait(t *testing.T) {
+	t.Parallel()
 	s := rateLimitedEnvList(t, []string{"retry-after: 7"}, "503")
 	stdout, stderr, code := ensurePR(t, s, "")
 
@@ -561,6 +576,7 @@ func sentTwiceIdentically(t *testing.T, s authShim, op string) {
 }
 
 func TestRailwayAPI_RateLimitWaitsRetryAfterThenRetriesOnce(t *testing.T) {
+	t.Parallel()
 	s := rateLimitedEnvList(t, []string{"retry-after: 30"}, "429")
 	stdout, stderr, code := ensurePR(t, s, "")
 
@@ -583,6 +599,7 @@ func TestRailwayAPI_RateLimitWaitsRetryAfterThenRetriesOnce(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitWaitOfZeroStillWaitsOneSecond(t *testing.T) {
+	t.Parallel()
 	s := rateLimitedEnvList(t, []string{"retry-after: 0"}, "429")
 	stdout, stderr, code := ensurePR(t, s, "")
 
@@ -598,6 +615,7 @@ func TestRailwayAPI_RateLimitWaitOfZeroStillWaitsOneSecond(t *testing.T) {
 }
 
 func TestRailwayAPI_SecondRateLimitFailsNamingTheWait(t *testing.T) {
+	t.Parallel()
 	s := rateLimitedEnvList(t, []string{"retry-after: 30"}, "429", "429")
 	stdout, stderr, code := ensurePR(t, s, "")
 
@@ -619,6 +637,7 @@ func TestRailwayAPI_SecondRateLimitFailsNamingTheWait(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitWaitOfSixHundredIsHonoured(t *testing.T) {
+	t.Parallel()
 	s := rateLimitedEnvList(t, []string{"retry-after: 600"}, "429")
 	stdout, stderr, code := ensurePR(t, s, "")
 
@@ -631,6 +650,7 @@ func TestRailwayAPI_RateLimitWaitOfSixHundredIsHonoured(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitOverSixHundredFailsAtOnce(t *testing.T) {
+	t.Parallel()
 	s := rateLimitedEnvList(t, []string{"retry-after: 601"}, "429")
 	stdout, stderr, code := ensurePR(t, s, "")
 
@@ -655,6 +675,7 @@ func TestRailwayAPI_RateLimitOverSixHundredFailsAtOnce(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitFallsBackToXRateLimitReset(t *testing.T) {
+	// serial: real-clock x-ratelimit-reset window
 	for name, reset := range map[string]string{
 		"whole second":      resetAt(120 * time.Second),
 		"fractional second": strings.TrimSuffix(resetAt(120*time.Second), "Z") + ".123Z",
@@ -672,6 +693,7 @@ func TestRailwayAPI_RateLimitFallsBackToXRateLimitReset(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitResetInThePastStillWaitsOneSecond(t *testing.T) {
+	t.Parallel()
 	s := rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + resetAt(-60*time.Second)}, "429")
 	stdout, stderr, code := ensurePR(t, s, "")
 
@@ -684,6 +706,7 @@ func TestRailwayAPI_RateLimitResetInThePastStillWaitsOneSecond(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitResetOverSixHundredFailsAtOnce(t *testing.T) {
+	t.Parallel()
 	s := rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + resetAt(900*time.Second)}, "429")
 	stdout, stderr, code := ensurePR(t, s, "")
 
@@ -705,6 +728,7 @@ func TestRailwayAPI_RateLimitResetOverSixHundredFailsAtOnce(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitWithNoUsableWaitFailsAtOnce(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		headers []string
@@ -736,6 +760,7 @@ func TestRailwayAPI_RateLimitWithNoUsableWaitFailsAtOnce(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitResendsAOnceMutationAfterTheWait(t *testing.T) {
+	t.Parallel()
 	s := newAuthShim(t, map[string]string{
 		"createPrEnvironment": `{"data":{"environmentCreate":{"id":"env-pr-900","name":"pr-900","isEphemeral":true}}}`,
 	}, nil)
@@ -768,6 +793,7 @@ func compactJSON(t *testing.T, s string) string {
 }
 
 func TestRailwayAPI_RateLimitWaitKeepsTheTransientBudget(t *testing.T) {
+	t.Parallel()
 	const cmd = "ensure-environment"
 	s := rateLimitedEnvList(t, []string{"retry-after: 5"}, "429", "timeout", "timeout")
 	tmp := t.TempDir()
@@ -798,8 +824,10 @@ func TestRailwayAPI_RateLimitWaitKeepsTheTransientBudget(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitAfterATransientFault(t *testing.T) {
+	t.Parallel()
 	const cmd = "ensure-environment"
 	t.Run("then success", func(t *testing.T) {
+		t.Parallel()
 		s := rateLimitedEnvList(t, []string{"retry-after: 5"}, "timeout", "429")
 		tmp := t.TempDir()
 		stdout, stderr, code := ensurePR(t, s, runnerTempExport(tmp))
@@ -844,6 +872,7 @@ func TestRailwayAPI_RateLimitAfterATransientFault(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitHeadersAreReadInAnyCaseWithCRLF(t *testing.T) {
+	// serial: real-clock x-ratelimit-reset window
 	t.Run("Retry-After", func(t *testing.T) {
 		s := rateLimitedEnvList(t, nil, "429")
 		writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 429\r\nRetry-After: 30\r\n\r\n")
@@ -903,6 +932,7 @@ func TestRailwayAPI_RateLimitHeadersAreReadInAnyCaseWithCRLF(t *testing.T) {
 }
 
 func TestRailwayAPI_UnusableRetryAfterFallsBackToTheReset(t *testing.T) {
+	// serial: real-clock x-ratelimit-reset window
 	for _, bad := range []string{
 		"retry-after: -5", "retry-after: 1.5", "retry-after: +5", "retry-after: 5s", "retry-after: 0x10",
 		"retry-after:", "retry-after: Wed, 21 Oct 2026 07:28:00 GMT",
@@ -937,6 +967,7 @@ func TestRailwayAPI_UnusableRetryAfterFallsBackToTheReset(t *testing.T) {
 }
 
 func TestRailwayAPI_RetryAfterWinsOverTheReset(t *testing.T) {
+	t.Parallel()
 	s := rateLimitedEnvList(t, []string{"retry-after: 7", "x-ratelimit-reset: " + resetAt(300*time.Second)}, "429")
 	stdout, stderr, code := ensurePR(t, s, "")
 
@@ -949,6 +980,7 @@ func TestRailwayAPI_RetryAfterWinsOverTheReset(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitWaitsAreCappedPerJob(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, waited string
 		code         int
@@ -966,6 +998,7 @@ func TestRailwayAPI_RateLimitWaitsAreCappedPerJob(t *testing.T) {
 		{"an empty total counts as 0", "", 0, []string{"30"}, "30", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			wait := "retry-after: 30"
 			if c.waited == "600" {
 				wait = "retry-after: 1"
@@ -1005,6 +1038,7 @@ func TestRailwayAPI_RateLimitWaitsAreCappedPerJob(t *testing.T) {
 		{"across calls through RUNNER_TEMP", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newAuthShim(t, map[string]string{"envList": envListWithout()}, nil)
 			setFaults(t, s, "envList", "429")
 			setFaults(t, s, "createPrEnvironment", "429")
@@ -1048,6 +1082,7 @@ func TestRailwayAPI_RateLimitWaitsAreCappedPerJob(t *testing.T) {
 }
 
 func TestRailwayAPI_RetryAfterIntegerForms(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		value  string
 		sleeps []string // nil: the call fails at once
@@ -1095,6 +1130,7 @@ func TestRailwayAPI_RetryAfterIntegerForms(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitResetForms(t *testing.T) {
+	// serial: real-clock x-ratelimit-reset window
 	t.Run("a nine-digit fraction", func(t *testing.T) {
 		reset := strings.TrimSuffix(resetAt(120*time.Second), "Z") + ".123456789Z"
 		s := rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + reset}, "429")
@@ -1160,6 +1196,7 @@ func TestRailwayAPI_RateLimitResetForms(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitOnAOnceMutationAroundATimeout(t *testing.T) {
+	t.Parallel()
 	create := map[string]string{
 		"createPrEnvironment": `{"data":{"environmentCreate":{"id":"env-pr-900","name":"pr-900","isEphemeral":true}}}`,
 	}
@@ -1227,13 +1264,11 @@ func TestRailwayAPI_RateLimitOnAOnceMutationAroundATimeout(t *testing.T) {
 }
 
 func TestRailwayAPI_AStaleWaitIsNotReusedByANewCall(t *testing.T) {
+	t.Parallel()
 	s := newAuthShim(t, map[string]string{"envList": envListWithout()}, nil)
 	// The first sleep removes the headers: the second call's 429 carries none.
 	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + filepath.Join(s.dir, "sleep.log") + "'\nrm -f '" + filepath.Join(s.dir, "hdr.txt") + "'\n"
-	writeFile(t, filepath.Join(s.dir, "sleep"), stub)
-	if err := os.Chmod(filepath.Join(s.dir, "sleep"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "sleep"), stub)
 	setFaults(t, s, "envList", "429")
 	setFaults(t, s, "createPrEnvironment", "429")
 	plantRateLimitHeaders(t, s, "retry-after: 5")
@@ -1254,6 +1289,7 @@ func TestRailwayAPI_AStaleWaitIsNotReusedByANewCall(t *testing.T) {
 }
 
 func TestRailwayAPI_ConnectionResetIsNotRetried(t *testing.T) {
+	t.Parallel()
 	_, e := ensureEnvironmentFailsOnce(t, "reset")
 	if !curlResetMsg.MatchString(e) {
 		t.Errorf("error lines do not carry curl's reset message: %q", e)
@@ -1261,6 +1297,7 @@ func TestRailwayAPI_ConnectionResetIsNotRetried(t *testing.T) {
 }
 
 func TestEnvironmentListGraphQLErrorFailsOnFirstOccurrence(t *testing.T) {
+	t.Parallel()
 	s := newAuthShim(t, map[string]string{"envList": gqlProblem}, nil)
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "ensure-environment", "pr-900")
 
@@ -1276,6 +1313,7 @@ func TestEnvironmentListGraphQLErrorFailsOnFirstOccurrence(t *testing.T) {
 }
 
 func TestSettleForkMissingServiceFailsOnFirstRead(t *testing.T) {
+	t.Parallel()
 	s := reconcileForkFixture(t)
 	writeFile(t, filepath.Join(s.dir, "settle.json"), retrySettle(false))
 	stdout, stderr, code := runReconcileFork(t, s)
@@ -1295,6 +1333,7 @@ func TestSettleForkMissingServiceFailsOnFirstRead(t *testing.T) {
 }
 
 func TestRequireForkIDs_NamesAMissingLibraryID(t *testing.T) {
+	t.Parallel()
 	exports := strings.Replace(retryExports(), "export RAILWAY_SVC_LIBRARY_ID="+retryLibraryID+"\n", "", 1)
 	s := newAuthShim(t, map[string]string{}, nil)
 	stdout, stderr, code := s.run(t, exports, "verify-spa-domains", retryForkEnv)
@@ -1311,6 +1350,7 @@ func TestRequireForkIDs_NamesAMissingLibraryID(t *testing.T) {
 }
 
 func TestSettleFork_NamesAMissingLibraryInstance(t *testing.T) {
+	t.Parallel()
 	s := reconcileForkFixture(t)
 	writeFile(t, filepath.Join(s.dir, "settle.json"), forkSettle(
 		instance(retryGatewayID, "gateway"), instance(retryAppID, "app"), instance(retryLandingID, "landing"),
@@ -1332,6 +1372,7 @@ func TestSettleFork_NamesAMissingLibraryInstance(t *testing.T) {
 }
 
 func TestReconcileDomains_CreatesTheLibraryDomain(t *testing.T) {
+	t.Parallel()
 	s := reconcileForkFixture(t)
 	writeFile(t, filepath.Join(s.dir, "dom-"+retryForkEnv+"-"+retryLibraryID+".seq"),
 		noDomains+"\n"+domainsOf(false, "library-pr-900.up.railway.app")+"\n")
@@ -1351,6 +1392,7 @@ func TestReconcileDomains_CreatesTheLibraryDomain(t *testing.T) {
 }
 
 func TestBucketIsolationSourceReadErrorFailsOnFirstOccurrence(t *testing.T) {
+	t.Parallel()
 	s := reconcileForkFixture(t)
 	writeFile(t, filepath.Join(s.dir, "bucketCreds-"+persistentEnvironmentID+".json"), gqlProblem)
 	stdout, stderr, code := runReconcileFork(t, s)
@@ -1367,6 +1409,7 @@ func TestBucketIsolationSourceReadErrorFailsOnFirstOccurrence(t *testing.T) {
 }
 
 func TestEnvironmentCreateGraphQLErrorStopsAfterOneRound(t *testing.T) {
+	t.Parallel()
 	s := newAuthShim(t, map[string]string{"envList": envListWithout(), "createPrEnvironment": gqlTooQuickly}, nil)
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "ensure-environment", "pr-900")
 
@@ -1386,6 +1429,7 @@ func TestEnvironmentCreateGraphQLErrorStopsAfterOneRound(t *testing.T) {
 
 // guard, passes at HEAD: a create that timed out keeps its two rounds.
 func TestEnvironmentCreateTimeoutKeepsTwoRounds(t *testing.T) {
+	t.Parallel()
 	s := newAuthShim(t, map[string]string{"envList": envListWithout(), "createPrEnvironment": `{"data":{"environmentCreate":{"id":"env-new","name":"pr-900","isEphemeral":true}}}`}, nil)
 	setFaults(t, s, "createPrEnvironment", "timeout", "timeout")
 	stdout, stderr, code := s.run(t, forkExports(true, true, true), "ensure-environment", "pr-900")
@@ -1399,6 +1443,7 @@ func TestEnvironmentCreateTimeoutKeepsTwoRounds(t *testing.T) {
 }
 
 func TestDeleteEnvironmentGraphQLErrorStopsAfterOneRound(t *testing.T) {
+	t.Parallel()
 	list := `{"data":{"environments":{"edges":[` +
 		`{"node":{"id":"` + persistentEnvironmentID + `","name":"production","isEphemeral":false}},` +
 		`{"node":{"id":"env-pr-900","name":"pr-900","isEphemeral":true}}]}}}`
@@ -1425,6 +1470,7 @@ func postgresNeverDeployedFixture(t *testing.T) authShim {
 }
 
 func TestWaitForPostgres_GraphQLErrorEndsThePoll(t *testing.T) {
+	t.Parallel()
 	s := postgresNeverDeployedFixture(t)
 	writeFile(t, filepath.Join(s.dir, "dep.json"), `{"errors":[{"message":"Deployment not found"}]}`)
 	stdout, stderr, code := runReconcileFork(t, s)
@@ -1444,6 +1490,7 @@ func TestWaitForPostgres_GraphQLErrorEndsThePoll(t *testing.T) {
 }
 
 func TestWaitForPostgres_ThirdTransientTickEndsThePoll(t *testing.T) {
+	t.Parallel()
 	s := postgresNeverDeployedFixture(t)
 	writeFile(t, filepath.Join(s.dir, "dep.json"), `{"data":{"deployment":{"id":"dep-pg-new","status":"BUILDING"}}}`)
 	setFaults(t, s, "dep", "timeout", "timeout", "timeout")
@@ -1465,6 +1512,7 @@ func TestWaitForPostgres_ThirdTransientTickEndsThePoll(t *testing.T) {
 
 // guard, passes at HEAD: the bucket probe reads "Not Authorized" as "no instance yet".
 func TestBucketConfirm_NotAuthorizedKeepsPolling(t *testing.T) {
+	t.Parallel()
 	s := reconcileForkFixture(t)
 	writeFile(t, filepath.Join(s.dir, "bucketCreds-"+retryForkEnv+".seq"), gqlNotAuthorized+"\n"+gqlNotAuthorized+"\n"+bucketNamed(retryForkBucket)+"\n")
 	stdout, stderr, code := runReconcileFork(t, s)
@@ -1493,6 +1541,7 @@ func gatewayDomainCreateTimesOut(t *testing.T, reads ...string) authShim {
 }
 
 func TestDomainCreateTimeoutAdoptsTheDomain(t *testing.T) {
+	t.Parallel()
 	s := gatewayDomainCreateTimesOut(t, noDomains, domainsOf(false, "gateway-adopted.up.railway.app"))
 	stdout, stderr, code := runReconcileFork(t, s)
 	out := stdout + stderr
@@ -1516,6 +1565,7 @@ func TestDomainCreateTimeoutAdoptsTheDomain(t *testing.T) {
 }
 
 func TestDomainCreateTimeoutWithNoDomainFails(t *testing.T) {
+	t.Parallel()
 	s := gatewayDomainCreateTimesOut(t, noDomains, noDomains)
 	writeFile(t, filepath.Join(s.dir, "dom-"+retryForkEnv+"-"+retryGatewayID+".json"), noDomains)
 	stdout, stderr, code := runReconcileFork(t, s)
@@ -1532,6 +1582,7 @@ func TestDomainCreateTimeoutWithNoDomainFails(t *testing.T) {
 }
 
 func TestVolumeCreateTimeoutAdoptsTheVolume(t *testing.T) {
+	t.Parallel()
 	s := reconcileForkFixture(t)
 	writeFile(t, filepath.Join(s.dir, "vols-"+retryForkEnv+".seq"), volumesOf()+"\n"+volumesOf(retryPostgresID)+"\n")
 	setFaults(t, s, "volCreate", "timeout")
@@ -1549,6 +1600,7 @@ func TestVolumeCreateTimeoutAdoptsTheVolume(t *testing.T) {
 }
 
 func TestRailwayAPI_BodyNeverOnCurlArgv(t *testing.T) {
+	t.Parallel()
 	jwk := freshJWK(t)
 	s := newProdAuthShim(t, prodSealed())
 	stdout, stderr, code := s.run(t, prodAuthExports(authProdPassword, jwk, authProdJWTSecret, ""), "set-production-auth", "--post-merge", persistentEnvironmentID)
@@ -1569,6 +1621,7 @@ func TestRailwayAPI_BodyNeverOnCurlArgv(t *testing.T) {
 }
 
 func TestRailwayAPI_CallLogOneLinePerAttempt(t *testing.T) {
+	t.Parallel()
 	const cmd = "audit-sealed-variables"
 	for _, c := range []struct {
 		name   string
@@ -1583,6 +1636,7 @@ func TestRailwayAPI_CallLogOneLinePerAttempt(t *testing.T) {
 		{"429 then ok", []string{"429"}, 0, []string{cmd + "\t1\tratelimit", cmd + "\t2\tok"}, []string{"retry-after: 1"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
 			setFaults(t, s, "sealedAudit", c.faults...)
 			if len(c.hdr) > 0 {
@@ -1606,6 +1660,7 @@ func TestRailwayAPI_CallLogOneLinePerAttempt(t *testing.T) {
 }
 
 func TestRailwayAPI_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
+	t.Parallel()
 	s := newAuthShim(t, map[string]string{
 		"settle": forkSettle(`{"node":{"serviceId":"` + productionGatewayID + `","serviceName":"gateway"}}`),
 	}, map[string]map[string]string{
@@ -1638,6 +1693,7 @@ func TestRailwayAPI_WriteExhaustedBudgetExitsWithoutReRead(t *testing.T) {
 }
 
 func TestVerifySPADomains_RetryKeepsEveryDiscoveredURL(t *testing.T) {
+	t.Parallel()
 	spas := []struct{ id, key string }{
 		{retryLandingID, "LANDING_URL"}, {retryAppID, "APP_URL"},
 		{retryOpsID, "OPS_CONSOLE_URL"}, {retrySupportID, "SUPPORT_CONSOLE_URL"}, {retryLibraryID, "LIBRARY_URL"},
@@ -1684,6 +1740,7 @@ func darkGatewayFixture(t *testing.T) authShim {
 }
 
 func TestHealDomain_Delete5xxIsSentOnceAndNamed(t *testing.T) {
+	t.Parallel()
 	s := darkGatewayFixture(t)
 	writeFile(t, filepath.Join(s.dir, "domDelete.json"), `{"data":{"serviceDomainDelete":true}}`)
 	setFaults(t, s, "domDelete", "503")
@@ -1707,6 +1764,7 @@ func TestHealDomain_Delete5xxIsSentOnceAndNamed(t *testing.T) {
 }
 
 func TestDeleteEnvironmentTimeoutKeepsTwoRounds(t *testing.T) {
+	t.Parallel()
 	list := `{"data":{"environments":{"edges":[` +
 		`{"node":{"id":"` + persistentEnvironmentID + `","name":"production","isEphemeral":false}},` +
 		`{"node":{"id":"env-pr-900","name":"pr-900","isEphemeral":true}}]}}}`
@@ -1723,6 +1781,7 @@ func TestDeleteEnvironmentTimeoutKeepsTwoRounds(t *testing.T) {
 }
 
 func TestBucketCreateTimeoutIsSentOnce(t *testing.T) {
+	t.Parallel()
 	s := reconcileForkFixture(t)
 	// The probe sees no instance; the confirm poll finds the one Railway created anyway.
 	writeFile(t, filepath.Join(s.dir, "bucketCreds-"+retryForkEnv+".seq"), gqlNotAuthorized+"\n"+bucketNamed(retryForkBucket)+"\n")
@@ -1744,6 +1803,7 @@ func postgresFirstRead(t *testing.T, s authShim, status string) {
 }
 
 func TestPostgresDeployTimeoutIsSentOnceThenFallsBack(t *testing.T) {
+	t.Parallel()
 	s := reconcileForkFixture(t)
 	postgresFirstRead(t, s, "NONE")
 	setFaults(t, s, "svcDeploy", "timeout")
@@ -1761,6 +1821,7 @@ func TestPostgresDeployTimeoutIsSentOnceThenFallsBack(t *testing.T) {
 }
 
 func TestPostgresRedeployTimeoutIsSentOnce(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, status string
 		faults       map[string][]string
@@ -1798,6 +1859,7 @@ func TestPostgresRedeployTimeoutIsSentOnce(t *testing.T) {
 }
 
 func TestCommitStagedTimeoutIsSentOnce(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, seqFile, seq, createOp, wantErr string }{
 		{"volume", "vols-" + retryForkEnv + ".json", volumesOf(), "volCreate", "The postgres volume was created but is STAGED"},
 		{"bucket", "bucketCreds-" + retryForkEnv + ".json", gqlNotAuthorized, "bucketCreate", "Any staged bucket instance stays staged"},
@@ -1827,6 +1889,7 @@ func TestCommitStagedTimeoutIsSentOnce(t *testing.T) {
 }
 
 func TestVolumeCreateTimeoutWithNoVolumeFails(t *testing.T) {
+	t.Parallel()
 	s := reconcileForkFixture(t)
 	writeFile(t, filepath.Join(s.dir, "vols-"+retryForkEnv+".json"), volumesOf())
 	setFaults(t, s, "volCreate", "timeout")
@@ -1846,6 +1909,7 @@ func TestVolumeCreateTimeoutWithNoVolumeFails(t *testing.T) {
 
 // An "ok" fault falls through to normal routing: the pre-create reads answer, then the confirm ticks fault.
 func TestConfirmPolls_ThirdTransientTickEndsThePoll(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, op, file, body, last string
 		faults                     []string
@@ -1877,6 +1941,7 @@ func TestConfirmPolls_ThirdTransientTickEndsThePoll(t *testing.T) {
 }
 
 func TestConfirmPolls_GraphQLErrorEndsThePoll(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, op, seqFile, seq, wantMsg string
 		faults                          []string
@@ -1907,6 +1972,7 @@ func TestConfirmPolls_GraphQLErrorEndsThePoll(t *testing.T) {
 }
 
 func TestWaitForPostgres_TransientTicksDoNotEndThePollEarly(t *testing.T) {
+	t.Parallel()
 	s := postgresNeverDeployedFixture(t)
 	writeFile(t, filepath.Join(s.dir, "dep.seq"), `{"data":{"deployment":{"id":"dep-pg-new","status":"BUILDING"}}}`+"\n")
 	writeFile(t, filepath.Join(s.dir, "dep.json"), `{"data":{"deployment":{"id":"dep-pg-new","status":"SUCCESS"}}}`)
@@ -1925,6 +1991,7 @@ func TestWaitForPostgres_TransientTicksDoNotEndThePollEarly(t *testing.T) {
 }
 
 func TestRailwayAPI_SavesTheLastRateLimitHeaders(t *testing.T) {
+	t.Parallel()
 	s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
 	writeFile(t, filepath.Join(s.dir, "hdr.txt"), "HTTP/2 200\r\ncontent-type: application/json\r\n"+
 		"ratelimit-policy: \"default\";q=1000;w=3600\r\nX-RateLimit-Limit: 1000\r\nx-ratelimit-remaining: 997\r\n\r\n")
@@ -1956,6 +2023,7 @@ func transportScript(t *testing.T, dir string) string {
 
 // GQL_ERROR_SAFE marks only the fatal-429 errors the script builds itself; a later call never inherits it.
 func TestRailwayAPI_ErrorSafeFlagIsPerCall(t *testing.T) {
+	t.Parallel()
 	const needle = "PLANTED-RAILWAY-MESSAGE"
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "body"), `{"query":"query q { x }"}`)
@@ -1963,9 +2031,7 @@ func TestRailwayAPI_ErrorSafeFlagIsPerCall(t *testing.T) {
 		"hdr=''; while [ $# -gt 0 ]; do [ \"$1\" = -D ] && hdr=\"$2\"; shift; done\ncat > /dev/null\n" +
 		"if [ $n = 1 ]; then printf 'HTTP/2 429\\r\\nretry-after: 601\\r\\n\\r\\n' > \"$hdr\"; echo 'curl: (22) The requested URL returned error: 429' >&2; exit 22; fi\n" +
 		"printf '{\"errors\":[{\"message\":\"" + needle + "\"}]}'; echo 'curl: (22) The requested URL returned error: 400' >&2; exit 22\n"
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), stub)
 	script := strings.Replace(transportScript(t, dir), "graphql_try \"$(cat '"+filepath.Join(dir, "body")+"')\" 'sending the test body'\nprintf '%s' \"$GQL_RESPONSE\"\n", "", 1) +
 		"graphql_try \"$(cat '" + filepath.Join(dir, "body") + "')\" 'first' || true\nprintf 'first safe=%s\\n' \"$GQL_ERROR_SAFE\"\n" +
 		"graphql_try \"$(cat '" + filepath.Join(dir, "body") + "')\" 'second' || true\nprintf 'second safe=%s\\n%s\\n' \"$GQL_ERROR_SAFE\" \"$GQL_ERROR\"\n"
@@ -1990,14 +2056,13 @@ func largeSecretBody() string {
 }
 
 func TestRailwayAPI_BodyReachesCurlThroughAPipe(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	body := largeSecretBody()
 	writeFile(t, filepath.Join(dir, "body"), body)
 	stub := "#!/bin/sh\nif [ -p /dev/stdin ]; then echo pipe; else echo file; fi > '" + filepath.Join(dir, "stdin.kind") + "'\n" +
 		"cat > '" + filepath.Join(dir, "stdin.body") + "'\necho '{\"data\":{\"ok\":true}}'\n"
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(stub), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), stub)
 	stdout, stderr, code := runBashScript(t, transportScript(t, dir))
 
 	if code != 0 || stdout != `{"data":{"ok":true}}` {
@@ -2012,11 +2077,10 @@ func TestRailwayAPI_BodyReachesCurlThroughAPipe(t *testing.T) {
 }
 
 func TestRailwayAPI_CurlThatNeverReadsStdinStillSucceeds(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "body"), largeSecretBody())
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte("#!/bin/sh\necho '{\"data\":{\"ok\":true}}'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), "#!/bin/sh\necho '{\"data\":{\"ok\":true}}'\n")
 	stdout, stderr, code := runBashScript(t, transportScript(t, dir))
 
 	if code != 0 || stdout != `{"data":{"ok":true}}` {
@@ -2034,6 +2098,7 @@ func readFileT(t *testing.T, path string) string {
 }
 
 func TestBucketConfirm_HTTP4xxNotAuthorizedEndsThePoll(t *testing.T) {
+	t.Parallel()
 	s := reconcileForkFixture(t)
 	// Probe: "Not Authorized" (no instance), so bucketCreate runs; the first confirm tick answers HTTP 403.
 	setFaults(t, s, "bucketCreds", "gqlerr", "403")
@@ -2055,12 +2120,11 @@ func TestBucketConfirm_HTTP4xxNotAuthorizedEndsThePoll(t *testing.T) {
 func fixNow(t *testing.T, s authShim, epoch int64) {
 	t.Helper()
 	body := "#!/bin/sh\nif [ \"$*\" = '+%s' ]; then echo " + strconv.FormatInt(epoch, 10) + "; exit 0; fi\nexec /bin/date \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(s.dir, "date"), []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeShim(t, filepath.Join(s.dir, "date"), body)
 }
 
 func TestRailwayAPI_RateLimitResetWaitIsRoundedUp(t *testing.T) {
+	t.Parallel()
 	const now = int64(1_790_000_000)
 	reset := time.Unix(now+120, 0).UTC().Format("2006-01-02T15:04:05") + ".900Z"
 	s := rateLimitedEnvList(t, []string{"x-ratelimit-reset: " + reset}, "429")
@@ -2091,6 +2155,7 @@ func resetWaits(t *testing.T, offset int64, fraction string, waited string) (s a
 }
 
 func TestRailwayAPI_RateLimitResetWaitBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name     string
 		offset   int64
@@ -2131,6 +2196,7 @@ func TestRailwayAPI_RateLimitResetWaitBoundaries(t *testing.T) {
 }
 
 func TestRailwayAPI_RateLimitFlooredAndRoundedWaitsCountInTheJobTotal(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name, waited string
 		run          func(t *testing.T, waited string) (authShim, string, string, int)
@@ -2220,7 +2286,9 @@ func requireMaxTimes(t *testing.T, got map[string][]string) {
 }
 
 func TestRailwayAPI_BatchedRequestsGetALargerCurlBudget(t *testing.T) {
+	t.Parallel()
 	t.Run("a pass: single reads keep 30 s, the batched read and write get 90 s", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		if out, code := runPass(t, s); code != 0 {
 			t.Fatalf("control: exit %d; output = %q", code, clip(out))
@@ -2234,6 +2302,7 @@ func TestRailwayAPI_BatchedRequestsGetALargerCurlBudget(t *testing.T) {
 		requireMaxTimes(t, got)
 	})
 	t.Run("discover-urls: the six-alias read gets 90 s", func(t *testing.T) {
+		t.Parallel()
 		s := newURLsShim(t, nil)
 		if stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID); code != 0 {
 			t.Fatalf("control: exit %d; output = %q", code, stdout+stderr)
@@ -2258,6 +2327,7 @@ func TestRailwayAPI_BatchedRequestsGetALargerCurlBudget(t *testing.T) {
 		requireMaxTimes(t, got)
 	})
 	t.Run("every attempt of a batched request keeps 90 s: two timeouts, then success", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		setFaults(t, s, "varsRead", "timeout", "timeout")
 		setFaults(t, s, "varsWrite", "timeout")
@@ -2271,6 +2341,7 @@ func TestRailwayAPI_BatchedRequestsGetALargerCurlBudget(t *testing.T) {
 		requireMaxTimes(t, got)
 	})
 	t.Run("a 429 resend of a batched request keeps 90 s", func(t *testing.T) {
+		t.Parallel()
 		s := newPassShim(t, nil, nil)
 		setFaults(t, s, "varsWrite", "429")
 		plantRateLimitHeaders(t, s, "retry-after: 1")
@@ -2284,6 +2355,7 @@ func TestRailwayAPI_BatchedRequestsGetALargerCurlBudget(t *testing.T) {
 		requireMaxTimes(t, got)
 	})
 	t.Run("a discover-urls request retried after a timeout keeps 90 s", func(t *testing.T) {
+		t.Parallel()
 		s := newURLsShim(t, nil)
 		setFaults(t, s, "discoverUrls", "timeout", "timeout")
 		if stdout, stderr, code := runURLs(t, s, urlsExports(true, false), forkEnvID); code != 0 {
@@ -2296,6 +2368,7 @@ func TestRailwayAPI_BatchedRequestsGetALargerCurlBudget(t *testing.T) {
 		requireMaxTimes(t, got)
 	})
 	t.Run("a single call after a batched one is back to 30 s", func(t *testing.T) {
+		t.Parallel()
 		script := passVariantScript(t, `
 leak_check() { PASS_NOT_SET="${PASS_NOT_SET:+$PASS_NOT_SET/}LEAK"; }
 leak() { local id; id=$(service_id_by_name "$PASS_SETTLE" gateway "environment $1" LEAK) || exit 1; pass_plan_add "$id" gateway "" "LEAK_NAME=1"; }
@@ -2316,6 +2389,7 @@ leak_verdict() { graphql_post "$(gql_body "$SETTLE_QUERY" "$(jq -n --arg e "$PAS
 
 // A timeout test of the 429 cap: each job that runs railway-env.sh must outlast its old budget plus the 600 s of waits.
 func TestWorkflowTimeoutsCoverTheRateLimitWaits(t *testing.T) {
+	t.Parallel()
 	const extraMinutes = 600 / 60
 	oldBudget := map[string]int{
 		"dev-env.yml/prepare-env":                    20,

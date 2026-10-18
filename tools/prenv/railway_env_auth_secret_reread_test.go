@@ -10,6 +10,7 @@ import (
 // A secret re-read that finds the inherited source value means the write did not land.
 // Presence cannot tell the two apart: the fork always inherits AUTH_ADMIN_PASSWORD.
 func TestSetForkAuth_SecretReReadMustEqualTheWrittenValue(t *testing.T) {
+	t.Parallel()
 	k0 := freshJWK(t)
 	for _, c := range []struct {
 		name, svc, variable, source string
@@ -38,6 +39,7 @@ func TestSetForkAuth_SecretReReadMustEqualTheWrittenValue(t *testing.T) {
 
 // prenv is built before any write, so an operator's bad key can be refused before production holds it.
 func TestSetProductionAuth_PostMergeRefusesAnInvalidKeyBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
 	a, b := freshJWK(t), freshJWK(t)
 	var ka, kb []map[string]any
 	if json.Unmarshal([]byte(a), &ka) != nil || json.Unmarshal([]byte(b), &kb) != nil {
@@ -53,6 +55,7 @@ func TestSetProductionAuth_PostMergeRefusesAnInvalidKeyBeforeAnyWrite(t *testing
 		{"a public key only", string(public)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			if _, ok := jwkCheck(t, c.keys); ok {
 				t.Fatal("control: jwk-check accepts this input")
 			}
@@ -71,6 +74,7 @@ func TestSetProductionAuth_PostMergeRefusesAnInvalidKeyBeforeAnyWrite(t *testing
 
 // Production before the seal: an older value on re-read means this write did not land.
 func TestSetProductionAuth_SecretReReadMustEqualTheWrittenValue(t *testing.T) {
+	t.Parallel()
 	older := freshJWK(t)
 	for _, c := range []struct{ svc, variable, stale string }{
 		{authProdAuthID, "GOTRUE_JWT_KEYS", older},
@@ -79,6 +83,7 @@ func TestSetProductionAuth_SecretReReadMustEqualTheWrittenValue(t *testing.T) {
 		{productionGatewayID, "AUTH_ADMIN_PASSWORD", authSourcePassword},
 	} {
 		t.Run(c.variable, func(t *testing.T) {
+			t.Parallel()
 			s := newProdAuthShim(t, prodSealed())
 			s.bendRead(t, c.svc, "."+c.variable+" = "+jqString(t, c.stale))
 			stdout, stderr, code := s.run(t, prodAuthExports(authProdPassword, freshJWK(t), authProdJWTSecret, authProdResendKey), "set-production-auth", "--post-merge", persistentEnvironmentID)

@@ -158,6 +158,7 @@ func refusesUnreadable(t *testing.T, out string) {
 }
 
 func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
+	t.Parallel()
 	noReRead := func(t *testing.T, s authShim, out string) {
 		if ids, _ := reReads(s.calls(t)); len(ids) != 0 {
 			t.Errorf("a failed write was followed by re-reads %v", ids)
@@ -289,6 +290,7 @@ func TestSetSentryOffAgainstAScriptedRailway(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			resp := map[string]string{"envList": sentryEnvList(true, true), "settle": sentrySettle("")}
 			if c.envList != "" {
 				resp["envList"] = c.envList
@@ -399,6 +401,7 @@ func checkBlanked(t *testing.T, s authShim, out string) {
 }
 
 func TestSetSentryOffUsageExitsTwo(t *testing.T) {
+	t.Parallel()
 	shim := newCurlShim(t)
 	stdout, stderr, code := runBashScript(t, shim.prelude+"bash '"+railwayEnvScript(t)+"' set-sentry-off\n")
 	out := stdout + stderr
@@ -418,6 +421,7 @@ func TestSetSentryOffUsageExitsTwo(t *testing.T) {
 }
 
 func TestSetSentryOffRefusesThePersistentEnvironment(t *testing.T) {
+	t.Parallel()
 	shim := newCurlShim(t)
 	stdout, stderr, code := runBashScript(t,
 		shim.prelude+"export RAILWAY_DEV_ENVIRONMENT_ID="+persistentEnvironmentID+"\nbash '"+railwayEnvScript(t)+"' set-sentry-off \"$@\"\n",
@@ -439,6 +443,7 @@ func TestSetSentryOffRefusesThePersistentEnvironment(t *testing.T) {
 }
 
 func TestSetSentryOffSelfTestPassesWithNoTokenAndNoNetwork(t *testing.T) {
+	t.Parallel()
 	shim := newCurlShim(t)
 	stdout, stderr, code := runBashScript(t, shim.prelude+"bash '"+railwayEnvScript(t)+"' set-sentry-off --self-test\n")
 	out := stdout + stderr
@@ -456,6 +461,7 @@ func TestSetSentryOffSelfTestPassesWithNoTokenAndNoNetwork(t *testing.T) {
 
 // The failure no runtime test sees: a service added to the fleet but not here keeps production's DSN in every fork.
 func TestSentryOffListsMatchTheDeployedFleet(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	script, err := os.ReadFile(filepath.Join(root, "scripts", "ci", "railway-env.sh"))
 	if err != nil {
@@ -551,6 +557,7 @@ func sentryMatrixList(t *testing.T, content, job string) []string {
 
 // sentry_verdict on shapes set-sentry-off cannot produce: graphql_post exits first on `.errors`, and the shim always wraps a map.
 func TestSentryVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
+	t.Parallel()
 	script := "set -euo pipefail\n" + shellFunctionSource(t, "auth_kind", "sentry_verdict") +
 		"rc=0\nsentry_verdict \"$1\" landing \"${@:2}\" || rc=$?\nexit \"$rc\"\n"
 	const (

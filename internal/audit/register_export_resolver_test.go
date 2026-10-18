@@ -179,3 +179,68 @@ func TestAuditScopeOf_RegisterExportIsNotFirmWide(t *testing.T) {
 		t.Errorf("ScopeOf(%s, nil) = %q, want %q", registerExportEvent, got, audit.ScopeUnattributed)
 	}
 }
+
+// The arm is keyed on the event name and reads `entity_id` only: near-miss names and other
+// payload keys stay unattributed.
+func TestAudit_RegisterExportArmIsKeyedOnTheEventNameAndTheEntityIDKey(t *testing.T) {
+	f := requireFixture(t)
+	requireInsertTrigger(t, f)
+	fx := seedTriggerFixture(t, f)
+
+	recordAudit(t, f, fx.tenant, registerExportEvent, registerExportPayload(fx.entity, "control"))
+	recordAudit(t, f, fx.tenant, registerExportEvent, map[string]any{"label": "id-key", "id": fx.entity})
+	recordAudit(t, f, fx.tenant, registerExportEvent, map[string]any{"label": "invoice-key", "invoice_id": fx.invoice})
+	for _, event := range []string{"invoice_register.export", "invoice_register.exported.failed", "invoice_register.downloaded"} {
+		recordAudit(t, f, fx.tenant, event, map[string]any{"entity_id": fx.entity})
+	}
+
+	got := registerExportEntities(t, f, fx.tenant)
+	assertRegisterExportEntity(t, got, "control", &fx.entity)
+	assertRegisterExportEntity(t, got, "id-key", nil)
+	assertRegisterExportEntity(t, got, "invoice-key", nil)
+	byEvent := triggerEntityIDs(t, f, fx.tenant)
+	for _, event := range []string{"invoice_register.export", "invoice_register.exported.failed", "invoice_register.downloaded"} {
+		assertTriggerEntityNull(t, byEvent, event)
+	}
+}
+
+// Pinned surprise: like portfolio.entity.* and custom_rule.*, the arm joins nothing, so a payload
+// entity_id naming another tenant's client is stored as given on the writer's own row. The row
+// stays in the writer's tenant, and the other tenant never reads it.
+func TestAudit_RegisterExportEntityOfAnotherTenantIsStoredAsGivenOnTheWritersRowOnly(t *testing.T) {
+	f := requireFixture(t)
+	requireInsertTrigger(t, f)
+	a := seedTriggerFixture(t, f)
+	b := seedTriggerFixture(t, f)
+
+	recordAudit(t, f, a.tenant, registerExportEvent, registerExportPayload(b.entity, "foreign"))
+	recordAudit(t, f, a.tenant, "portfolio.entity.updated", map[string]any{"id": b.entity})
+	recordAudit(t, f, b.tenant, registerExportEvent, registerExportPayload(b.entity, "own"))
+
+	gotA := registerExportEntities(t, f, a.tenant)
+	if len(gotA) != 1 {
+		t.Fatalf("tenant A reads %d export rows, want exactly its own 1", len(gotA))
+	}
+	assertRegisterExportEntity(t, gotA, "foreign", &b.entity)
+	// The existing direct arm behaves the same way, so the export arm adds no new exposure.
+	assertTriggerEntity(t, triggerEntityIDs(t, f, a.tenant), "portfolio.entity.updated", b.entity)
+
+	gotB := registerExportEntities(t, f, b.tenant)
+	if len(gotB) != 1 {
+		t.Fatalf("tenant B reads %d export rows, want exactly its own 1", len(gotB))
+	}
+	assertRegisterExportEntity(t, gotB, "own", &b.entity)
+
+	// No tenant predicate: only RLS keeps A's row out of B's read.
+	var leaked int
+	if err := db.WithinTenantTx(context.Background(), f.app, b.tenant, func(tx pgx.Tx) error {
+		return tx.QueryRow(context.Background(),
+			`SELECT count(*) FROM audit_log WHERE event = $1 AND payload->>'label' = 'foreign'`,
+			registerExportEvent).Scan(&leaked)
+	}); err != nil {
+		t.Fatalf("read A's row as tenant B: %v", err)
+	}
+	if leaked != 0 {
+		t.Errorf("tenant B reads %d of tenant A's export rows, want 0", leaked)
+	}
+}

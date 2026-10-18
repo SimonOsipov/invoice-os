@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
-# lane.sh - decides the lane (library, blog or full) of a PR (pr, pr-e2e, classify) and the deploy scope of a push to main (push <sha>).
+# lane.sh - decides the lane (library, blog or full) of a PR (pr, pr-e2e, classify) and the deploy scope of a push to main (push <sha>). A SHARED_WITH_BLOG library file is full.
 # Writes the verdict to stdout and $GITHUB_OUTPUT. push needs REPO, RUN_ID and gh (GH_TOKEN). Exit 0, 1 on a bad FILTER_E2E, 2 on a usage error.
 set -euo pipefail
 
 LIBRARY_PREFIX='frontend/library/'
 BLOG_PREFIX='frontend/blog/'
+# library files the blog compiles; frontend/blog/src/package.test.ts pins the list
+SHARED_WITH_BLOG=(
+  frontend/library/src/components/SceneView.tsx
+  frontend/library/src/icons.tsx
+  frontend/library/src/player.ts
+  frontend/library/src/scene.ts
+  frontend/library/src/timing.ts
+  frontend/library/src/types.ts
+)
 GATEWAY_JOB_PREFIX='Deploy gateway '
 FLEET_GATE_JOB_PREFIX='Fleet /healthz gate'
 SPA_GATE_JOB_PREFIX='SPA build gate'
@@ -24,12 +33,15 @@ emit() {
   fi
 }
 
-# classify: paths on stdin; a small lane only when a path is read and every path starts with that one lane's prefix.
+# classify: paths on stdin; a small lane only when a path is read, every path starts with that one lane's prefix and none is in SHARED_WITH_BLOG.
 classify() {
-  local path this seen=0 lane=""
+  local path this shared seen=0 lane=""
   while IFS= read -r path || [ -n "$path" ]; do
     [ -n "$path" ] || continue
     seen=1
+    for shared in "${SHARED_WITH_BLOG[@]}"; do
+      if [ "$path" = "$shared" ]; then echo full; return 0; fi
+    done
     case "$path" in
       "$LIBRARY_PREFIX"*) this=library ;;
       "$BLOG_PREFIX"*) this=blog ;;

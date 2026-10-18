@@ -217,6 +217,44 @@ func TestLane_LibraryOnlyPathsTakeTheSmallLane(t *testing.T) {
 	}
 }
 
+var sharedWithBlog = []string{
+	"frontend/library/src/components/SceneView.tsx", "frontend/library/src/icons.tsx", "frontend/library/src/player.ts",
+	"frontend/library/src/scene.ts", "frontend/library/src/timing.ts", "frontend/library/src/types.ts",
+}
+
+func TestLane_ALibraryFileTheBlogImportsGivesTheFullLane(t *testing.T) {
+	for _, p := range sharedWithBlog {
+		t.Run(p, func(t *testing.T) {
+			if got := laneClassify(t, p); got != "full" {
+				t.Fatalf("classify %s = %q, want full", p, got)
+			}
+			if got := laneClassify(t, "frontend/library/src/App.tsx", p); got != "full" {
+				t.Fatalf("classify with App.tsx before %s = %q, want full", p, got)
+			}
+		})
+	}
+}
+
+func TestLane_OtherLibraryFilesKeepTheSmallLane(t *testing.T) {
+	for _, p := range []string{"frontend/library/src/components/Home.tsx", "frontend/library/src/scene.test.ts", "frontend/library/src/components/Player.tsx"} {
+		if got := laneClassify(t, p); got != "library" {
+			t.Fatalf("classify %s = %q, want library", p, got)
+		}
+	}
+}
+
+func TestLane_ASharedPathMatchesExactly(t *testing.T) {
+	for p, want := range map[string]string{
+		"frontend/library/src/scene.tsx":     "library",
+		"frontend/library/src/timing.ts.bak": "library",
+		"x/frontend/library/src/scene.ts":    "full",
+	} {
+		if got := laneClassify(t, p); got != want {
+			t.Fatalf("classify %s = %q, want %s", p, got, want)
+		}
+	}
+}
+
 func TestLane_BlogOnlyPathsTakeTheSmallLane(t *testing.T) {
 	if got := laneClassify(t, "frontend/blog/src/App.tsx", "frontend/blog/package.json"); got != "blog" {
 		t.Fatalf("classify = %q, want blog", got)
@@ -308,6 +346,17 @@ func TestLanePR_LibraryOnlyMergeIsTheSmallLane(t *testing.T) {
 	}
 	requireLine(t, out, "lane=library")
 	requireLine(t, ghOut, "lane=library")
+}
+
+func TestLanePR_ASharedLibraryFileMergeIsTheFullLane(t *testing.T) {
+	r := newLaneRepo(t)
+	r.mergeBranch(t, "frontend/library/src/timing.ts")
+	out, code, ghOut := runLane(t, r.dir, nil, "", "pr")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	requireLine(t, out, "lane=full")
+	requireLine(t, ghOut, "lane=full")
 }
 
 func TestLanePR_BlogOnlyMergeIsTheSmallLane(t *testing.T) {
@@ -445,6 +494,17 @@ func TestLanePush_LibraryOnlySinceTheLastFullDeploy(t *testing.T) {
 	if !strings.Contains(out, "run 10") {
 		t.Fatalf("reason does not name run 10: %s", out)
 	}
+}
+
+func TestLanePush_ASharedLibraryFileSinceTheBaseGivesFull(t *testing.T) {
+	r := newLaneRepo(t)
+	f := r.commit(t, "full", "README.md", "frontend/library/a.ts")
+	s := r.commit(t, "shared", "frontend/library/src/components/SceneView.tsx")
+	p := pushRepo{laneRepo: r, F: f, S: s}
+	gh := newLaneGH(t)
+	gh.serve(t, lanePushRun(10, f, laneFullChain()))
+	out, code, ghOut := p.push(t, gh, s)
+	wantScope(t, out, code, ghOut, "full")
 }
 
 func TestLanePush_BlogOnlySinceTheLastFullDeploy(t *testing.T) {

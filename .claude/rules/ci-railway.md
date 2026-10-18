@@ -49,9 +49,10 @@ paths:
 - Let a push or dispatch run take a slot without waiting. A PR wait over 2400 s fails the job.
 - Re-run the whole workflow to retry an `E2E gate`, never "Re-run failed jobs". The database reset runs only when the gateway deploys.
 - Run `spa-build-gate` on a full-scope push and dispatch. Each SPA must serve `/health` and a `/build.txt` that names the commit.
-- Give a PR the library lane when every changed path is under `frontend/library/`. `scripts/ci/lane.sh` decides.
+- Give a PR the library lane when every changed path is under `frontend/library/` and none is in `SHARED_WITH_BLOG` in `scripts/ci/lane.sh`.
 - Give a PR the blog lane when every changed path is under `frontend/blog/`.
 - Give a PR that touches both prefixes, or any other path, the full lane.
+- Give a PR or push range that touches a `SHARED_WITH_BLOG` file the full lane. The blog compiles those library files.
 - On the library lane, CI runs the `Library` job in place of `Frontend`. On the blog lane, CI runs the `Blog` job in place of `Frontend`.
 - On a small lane, Dev Env prepares no fork and runs no E2E.
 - Keep the small lanes to `frontend/library/` and `frontend/blog/`. `TestLane_OnlyANamedPackageTakesTheSmallLane` fails when another package takes one.

@@ -641,6 +641,14 @@ describe('category save and delete', () => {
     expect(await run(http(401))).toEqual({ kind: 'expired' })
     expect(await run(http(403))).toEqual({ kind: 'forbidden' })
     expect(await run(http(500, 'internal error'))).toEqual({ kind: 'failed', message: 'internal error', status: 500 })
+    expect(await run(http(404, 'no such category'))).toEqual({ kind: 'failed', message: 'no such category', status: 404 })
+  })
+
+  it('saveCategory sends a 140-character unbroken name unchanged', async () => {
+    const name = 'x'.repeat(140)
+    const addCategory = vi.fn().mockResolvedValue(cat('x'))
+    await saveCategory({ addCategory, updateCategory: vi.fn(), fetchCategories: vi.fn().mockResolvedValue([]) }, form({ name }))
+    expect(addCategory).toHaveBeenCalledWith({ ...input, name })
   })
 
   it('saveCategory: a failed re-read keeps the save', async () => {
@@ -677,6 +685,7 @@ describe('category save and delete', () => {
     const choose = 'Choose a category to move its posts to.'
     expect(await run(new ApiError('http', choose, 422, { fields: { move_to: choose } }))).toEqual({ kind: 'failed', message: choose, status: 422 })
     expect(await run(http(500, 'internal error'))).toEqual({ kind: 'failed', message: 'internal error', status: 500 })
+    expect(await run(http(404, 'no such category'))).toEqual({ kind: 'failed', message: 'no such category', status: 404 })
   })
 
   it('removeCategory: a failed re-read keeps the delete', async () => {

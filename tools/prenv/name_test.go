@@ -43,6 +43,7 @@ import (
 // range of PR numbers, not just the single example (42) from the spec
 // table.
 func TestNameProducesBareShape(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		pr   int
 		want string
@@ -64,6 +65,7 @@ func TestNameProducesBareShape(t *testing.T) {
 
 // TestParsePRAcceptsBareShape: AC-2. The plain pr-<N> shape parses.
 func TestParsePRAcceptsBareShape(t *testing.T) {
+	t.Parallel()
 	n, ok := ParsePR("pr-42")
 	if !ok || n != 42 {
 		t.Errorf("ParsePR(%q) = (%d, %v), want (42, true)", "pr-42", n, ok)
@@ -73,6 +75,7 @@ func TestParsePRAcceptsBareShape(t *testing.T) {
 // TestParsePRAcceptsRepoQualifiedShape: AC-2. The <repo>-pr-<N> shape
 // parses.
 func TestParsePRAcceptsRepoQualifiedShape(t *testing.T) {
+	t.Parallel()
 	n, ok := ParsePR("invoice-os-pr-42")
 	if !ok || n != 42 {
 		t.Errorf("ParsePR(%q) = (%d, %v), want (42, true)", "invoice-os-pr-42", n, ok)
@@ -92,6 +95,7 @@ func TestParsePRAcceptsRepoQualifiedShape(t *testing.T) {
 // wrong environment, it deletes one (the sweeper feeds ParsePR's result
 // straight into a teardown decision).
 func TestParsePRIsAnchoredNotSubstring(t *testing.T) {
+	t.Parallel()
 	names := []string{"pr-15-old", "xpr-15", "my-pr-15-backup", "-pr-42"}
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
@@ -110,6 +114,7 @@ func TestParsePRIsAnchoredNotSubstring(t *testing.T) {
 // whole number than 1 (its canonical name is "pr-1") -- ParsePR must
 // reject it outright rather than parse it as 1.
 func TestParsePRRejectsLeadingZeroLookalike(t *testing.T) {
+	t.Parallel()
 	n, ok := ParsePR("pr-01")
 	if ok {
 		t.Errorf("ParsePR(%q) = (%d, true), want (0, false)", "pr-01", n)
@@ -126,6 +131,7 @@ func TestParsePRRejectsLeadingZeroLookalike(t *testing.T) {
 // jq-piped value can carry one -- "pr-42\n"), and stray punctuation
 // ("pr-+42", "pr-4_2", "pr--1").
 func TestParsePRRejectsNonPREnvironmentNames(t *testing.T) {
+	t.Parallel()
 	names := []string{
 		"development",
 		"production",
@@ -160,6 +166,7 @@ func TestParsePRRejectsNonPREnvironmentNames(t *testing.T) {
 // digit-width assumption. The property holds for n >= 1 only -- that is
 // Name's domain (see TestNameDomainIsPositivePRNumbers_PinnedBehavior).
 func TestNameParsePRRoundTrip(t *testing.T) {
+	t.Parallel()
 	ns := []int{1, 9, 10, 42, 99, 12345, 100000, 999999}
 	for _, n := range ns {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
@@ -195,6 +202,7 @@ func TestNameParsePRRoundTrip(t *testing.T) {
 // this allowlist pattern would be caught here, instead of silently
 // disabling bootstrap+seed with no error and no log line.
 func TestNameSatisfiesGatewayBootstrapAllowlistShape(t *testing.T) {
+	t.Parallel()
 	bootstrapAllowlist := regexp.MustCompile(`^(?:.+-)?pr-[0-9]+$`)
 
 	for _, pr := range []int{1, 42, 12345} {
@@ -214,6 +222,7 @@ func TestNameSatisfiesGatewayBootstrapAllowlistShape(t *testing.T) {
 // forward here so a future change to reject such names is a visible diff
 // against this test, not a silent behavior change either way.
 func TestParsePRPrefixIsUnconstrained_PinnedBehavior(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		want int
@@ -237,6 +246,7 @@ func TestParsePRPrefixIsUnconstrained_PinnedBehavior(t *testing.T) {
 // treated as a rejection like any other malformed name, not left as
 // unhandled dead code.
 func TestParsePRRejectsOversizedDigitRun(t *testing.T) {
+	t.Parallel()
 	name := "pr-99999999999999999999"
 	n, ok := ParsePR(name)
 	if ok {
@@ -254,6 +264,7 @@ func TestParsePRRejectsOversizedDigitRun(t *testing.T) {
 // because "-1" fails the [0-9]+ digit class -- pinning that the round
 // trip holds for n >= 1 only, by design, not by accident.
 func TestNameDomainIsPositivePRNumbers_PinnedBehavior(t *testing.T) {
+	t.Parallel()
 	got := Name(-1)
 	if got != "pr--1" {
 		t.Fatalf("Name(-1) = %q, want %q", got, "pr--1")
@@ -274,6 +285,7 @@ func TestNameDomainIsPositivePRNumbers_PinnedBehavior(t *testing.T) {
 // both downstream paths fail safe: gh pr view 0 fails -> PRStateUnknown
 // -> no reap.
 func TestParsePRZeroPinnedBehavior(t *testing.T) {
+	t.Parallel()
 	n, ok := ParsePR("pr-0")
 	if !ok || n != 0 {
 		t.Errorf("ParsePR(%q) = (%d, %v), want (0, true)", "pr-0", n, ok)

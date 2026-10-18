@@ -69,6 +69,7 @@ func b64Field(t *testing.T, key map[string]any, name string, wantLen int) []byte
 }
 
 func TestJWKES256IsASingleSigningKeyGoTrueAccepts(t *testing.T) {
+	t.Parallel()
 	out, key := generateJWK(t)
 
 	for member, want := range map[string]string{"kty": "EC", "crv": "P-256", "alg": "ES256"} {
@@ -106,6 +107,7 @@ func TestJWKES256IsASingleSigningKeyGoTrueAccepts(t *testing.T) {
 }
 
 func TestJWKES256IsFreshEachRun(t *testing.T) {
+	t.Parallel()
 	_, a := generateJWK(t)
 	_, b := generateJWK(t)
 	for _, member := range []string{"kid", "d"} {
@@ -150,6 +152,7 @@ func mustJSON(t *testing.T, v any) string {
 }
 
 func TestJWKCheckRefusals(t *testing.T) {
+	t.Parallel()
 	good := fixtureJWK(t, "5f0c6b1e-3a2d-4c1b-9e8f-7a6b5c4d3e2f")
 	second := fixtureJWK(t, "0b9e8d7c-6f5a-4e3d-8c2b-1a0f9e8d7c6b")
 	dVals := []string{good["d"].(string), second["d"].(string)}

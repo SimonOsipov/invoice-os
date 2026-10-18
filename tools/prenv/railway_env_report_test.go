@@ -53,8 +53,10 @@ func sameJSON(t *testing.T, a, b string) bool {
 }
 
 func TestQuery_RetriesATimeoutAndPrintsOnlyTheBody(t *testing.T) {
+	t.Parallel()
 	for _, fault := range []string{"timeout", "503"} {
 		t.Run(fault, func(t *testing.T) {
+			t.Parallel()
 			s := newQueryShim(t, watchPathsResp)
 			setFaults(t, s, "anonymous", fault)
 			stdout, stderr, code := runQuery(t, s, forkExports(true, true, false), watchPathsBody, queryCtx)
@@ -93,6 +95,7 @@ func TestQuery_RetriesATimeoutAndPrintsOnlyTheBody(t *testing.T) {
 }
 
 func TestQuery_GraphQLErrorExitsWithEmptyStdout(t *testing.T) {
+	t.Parallel()
 	s := newQueryShim(t, `{"errors":[{"message":"boom-query","extensions":{"code":"BAD_USER_INPUT"}}]}`)
 	stdout, stderr, code := runQuery(t, s, forkExports(true, true, false), watchPathsBody, queryCtx)
 
@@ -114,6 +117,7 @@ func TestQuery_GraphQLErrorExitsWithEmptyStdout(t *testing.T) {
 }
 
 func TestQuery_ProjectTokenUsesProjectAccessTokenHeader(t *testing.T) {
+	t.Parallel()
 	s := newQueryShim(t, watchPathsResp)
 	exports := "export RAILWAY_PROJECT_TOKEN=" + queryProjectToken + "\n" + forkExports(false, true, false)
 	stdout, stderr, code := runQuery(t, s, exports, watchPathsBody, queryCtx)
@@ -134,6 +138,7 @@ func TestQuery_ProjectTokenUsesProjectAccessTokenHeader(t *testing.T) {
 }
 
 func TestQuery_NoTokenMakesNoCall(t *testing.T) {
+	t.Parallel()
 	s := newQueryShim(t, watchPathsResp)
 	stdout, stderr, code := runQuery(t, s, forkExports(false, true, false), watchPathsBody, queryCtx)
 
@@ -194,6 +199,7 @@ func rateLimitOf(t *testing.T, line string) []string {
 }
 
 func TestReportAPICalls_CountsCallsAttemptsAndRetries(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	exports := forkExports(true, true, true) + "export RUNNER_TEMP='" + tmp + "'\n"
 
@@ -267,6 +273,7 @@ func reportAfterHeaders(t *testing.T, hdr string) string {
 }
 
 func TestReportAPICalls_PrintsLowercaseRateLimitHeaders(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, hdr string }{
 		// Backboard answers lowercase HTTP/2 names (story INFRA-02, [call-count]).
 		{"lowercase", "ratelimit-policy: \"default\";q=10000;w=3600\r\nx-ratelimit-limit: 10000\r\nx-ratelimit-remaining: 9876\r\n"},
@@ -282,6 +289,7 @@ func TestReportAPICalls_PrintsLowercaseRateLimitHeaders(t *testing.T) {
 }
 
 func TestReportAPICalls_PolicyOnlyHeaders(t *testing.T) {
+	t.Parallel()
 	line := reportAfterHeaders(t, "ratelimit-policy: \"default\";q=1000;w=3600\r\n")
 	if got := rateLimitOf(t, line); !slices.Equal(got, []string{`"default";q=1000;w=3600`, "n/a", "n/a"}) {
 		t.Errorf("rate limit = %v, want the policy and n/a for the absent limit and remaining; line = %q", got, line)
@@ -289,6 +297,7 @@ func TestReportAPICalls_PolicyOnlyHeaders(t *testing.T) {
 }
 
 func TestReportAPICalls_NoLogSaysSo(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, runnerTemp string }{
 		{"empty RUNNER_TEMP directory", t.TempDir()},
 		{"RUNNER_TEMP unset", ""},
@@ -311,6 +320,7 @@ func TestReportAPICalls_NoLogSaysSo(t *testing.T) {
 // QA adversarial coverage.
 
 func TestQuery_RefusesBeforeAnyCall(t *testing.T) {
+	t.Parallel()
 	projectOnly := "export RAILWAY_PROJECT_TOKEN=" + queryProjectToken + "\n"
 	for _, c := range []struct {
 		name, exports, script string
@@ -323,6 +333,7 @@ func TestQuery_RefusesBeforeAnyCall(t *testing.T) {
 		{"no context argument", forkExports(true, true, false), `query`, 2, "query <context>"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			s := newQueryShim(t, watchPathsResp)
 			stdout, stderr, code := runBashScript(t, s.prelude+c.exports+"printf '%s' \"$1\" | bash '"+railwayEnvScript(t)+"' "+c.script+"\n", watchPathsBody, queryCtx)
 
@@ -344,6 +355,7 @@ func TestQuery_RefusesBeforeAnyCall(t *testing.T) {
 }
 
 func TestQuery_BothTokensSendBearer(t *testing.T) {
+	t.Parallel()
 	s := newQueryShim(t, watchPathsResp)
 	exports := "export RAILWAY_PROJECT_TOKEN=" + queryProjectToken + "\n" + forkExports(true, true, false)
 	stdout, stderr, code := runQuery(t, s, exports, watchPathsBody, queryCtx)
@@ -362,12 +374,14 @@ func TestQuery_BothTokensSendBearer(t *testing.T) {
 
 // A GQL_AUTH_HEADER in the caller's environment must not replace any subcommand's header.
 func TestRailwayAPI_CallerEnvironmentCannotSetTheAuthHeader(t *testing.T) {
+	t.Parallel()
 	const planted = "Project-Access-Token: planted-by-caller"
 	for _, c := range []struct{ name, sub string }{
 		{"query", "query"},
 		{"audit-sealed-variables", "audit-sealed-variables"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			var s authShim
 			var code int
 			var stderr string
@@ -394,6 +408,7 @@ func TestRailwayAPI_CallerEnvironmentCannotSetTheAuthHeader(t *testing.T) {
 }
 
 func TestQuery_ExhaustedBudgetEmptyStdoutExit1(t *testing.T) {
+	t.Parallel()
 	s := newQueryShim(t, watchPathsResp)
 	setFaults(t, s, "anonymous", "timeout", "timeout", "timeout")
 	tmp := t.TempDir()
@@ -431,7 +446,9 @@ func TestQuery_ExhaustedBudgetEmptyStdoutExit1(t *testing.T) {
 }
 
 func TestReportAPICalls_MalformedLogStillExitsZero(t *testing.T) {
+	t.Parallel()
 	t.Run("garbage rows", func(t *testing.T) {
+		t.Parallel()
 		tmp := t.TempDir()
 		writeFile(t, filepath.Join(tmp, "railway-api-calls.tsv"),
 			"set-fork-auth\t1\ttransient\nset-fork-auth\t2\tok\n\ntrunc\nbad\tx\tok\nquery\t1\tok\n")
@@ -457,6 +474,7 @@ func TestReportAPICalls_MalformedLogStillExitsZero(t *testing.T) {
 		}
 	})
 	t.Run("unreadable log", func(t *testing.T) {
+		t.Parallel()
 		tmp := t.TempDir()
 		log := filepath.Join(tmp, "railway-api-calls.tsv")
 		writeFile(t, log, "query\t1\tok\n")
@@ -476,6 +494,7 @@ func TestReportAPICalls_MalformedLogStillExitsZero(t *testing.T) {
 }
 
 func TestReportAPICalls_CountsARateLimitRetryAsOneCall(t *testing.T) {
+	t.Parallel()
 	tmp := t.TempDir()
 	s := newSealedShim(t, sourceInstances(), plainOn("PORT", sealedGatewayID))
 	setFaults(t, s, "sealedAudit", "429")

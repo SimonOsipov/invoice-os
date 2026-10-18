@@ -22,6 +22,7 @@ func localLabels(body string) []string {
 
 // A SPA missing from one of these lists ships without its domain, id check or settle read.
 func TestSPAListsMatchTheDeployedFleet(t *testing.T) {
+	t.Parallel()
 	devEnv, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "dev-env.yml"))
 	if err != nil {
 		t.Fatal(err)

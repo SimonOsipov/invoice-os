@@ -8,7 +8,6 @@
 package main
 
 import (
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,17 +48,15 @@ func runAIFakeCmd(t *testing.T, args []string, extraEnv []string, unsetVars ...s
 	}
 	cmd.Env = append(env, extraEnv...)
 
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
+	stdout, stderr, err := runToFiles(t, cmd, false)
+	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if !ok {
 			t.Fatalf("failed to run railway-env.sh: %v", err)
 		}
 		exitCode = exitErr.ExitCode()
 	}
-	return outBuf.String(), errBuf.String(), exitCode
+	return stdout, stderr, exitCode
 }
 
 var aiFakeFixtureCountPattern = regexp.MustCompile(`AI fake self-test: (\d+) fixtures passed`)
@@ -70,6 +67,7 @@ var aiFakeFixtureCountPattern = regexp.MustCompile(`AI fake self-test: (\d+) fix
 // KILLS: require_env/require_source_env moved ahead of the self-test
 // short-circuit; an empty fixture list reading as success.
 func TestSetAIFakeSelfTestPassesWithoutAToken(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, nil,
 		"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID")
 
@@ -101,6 +99,7 @@ func TestSetAIFakeSelfTestPassesWithoutAToken(t *testing.T) {
 // KILLS: a diagnostic echo of a fixture map; a refusal message that
 // interpolates the value.
 func TestSetAIFakeSelfTestNeverPrintsAKeyValue(t *testing.T) {
+	t.Parallel()
 	const sentinel = "sentinel-token-do-not-leak-7c1e"
 	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, []string{
 		"RAILWAY_API_TOKEN=" + sentinel,
@@ -128,6 +127,7 @@ func TestSetAIFakeSelfTestNeverPrintsAKeyValue(t *testing.T) {
 // KILLS: the usage guard omitted, or placed after the persistent-environment
 // compare where an empty argument compares false and PASSES.
 func TestSetAIFakeEmptyArgumentExitsBeforeAnyCompare(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runAIFakeCmd(t, nil, []string{
 		"RAILWAY_DEV_ENVIRONMENT_ID=" + persistentEnvironmentID,
 	}, "RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID")
@@ -152,6 +152,7 @@ func TestSetAIFakeEmptyArgumentExitsBeforeAnyCompare(t *testing.T) {
 // KILLS: the refusal omitted; the refusal placed after require_env, which
 // would make "no" need a live token to say.
 func TestSetAIFakeRefusesThePersistentEnvironment(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runAIFakeCmd(t, []string{persistentEnvironmentID}, []string{
 		"RAILWAY_DEV_ENVIRONMENT_ID=" + persistentEnvironmentID,
 	}, "RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID")
@@ -176,6 +177,7 @@ func TestSetAIFakeRefusesThePersistentEnvironment(t *testing.T) {
 // KILLS: a fixture silently dropped while the printed count is left
 // unchanged.
 func TestAIFakeSelfTestCoversEveryVerdictShape(t *testing.T) {
+	t.Parallel()
 	body := strings.Join(shellFunctionBody(t, "ai_fake_self_test"), "\n")
 
 	needles := []string{
@@ -220,6 +222,7 @@ func TestAIFakeSelfTestCoversEveryVerdictShape(t *testing.T) {
 // KILLS: the job renamed away; the job removed; the run line pointing at a
 // different subcommand.
 func TestRailwayInvariantsYmlWiresSetAIFakeSelfTest(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(repoRoot(t), ".github", "workflows", "railway-invariants.yml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -246,6 +249,7 @@ func TestRailwayInvariantsYmlWiresSetAIFakeSelfTest(t *testing.T) {
 
 // R6: set-ai-fake --self-test runs the shared service selector's 11 fixtures, so the ai-fake-self-test job keeps service_id_by_name under CI.
 func TestSetAIFakeSelfTestRunsTheServiceSelectorFixtures(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, nil,
 		"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID")
 
@@ -263,6 +267,7 @@ func TestSetAIFakeSelfTestRunsTheServiceSelectorFixtures(t *testing.T) {
 // The selector's closing line is a literal that still says 11 after a fixture
 // is deleted; this counts the fixtures that actually reported.
 func TestServiceSelectorSelfTestReportsEveryFixture(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, nil,
 		"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID")
 	if code != 0 {
@@ -293,6 +298,7 @@ func TestServiceSelectorSelfTestReportsEveryFixture(t *testing.T) {
 // T12 counts call lines in the source, so a fixture that never runs still counts;
 // this counts the AI fixtures that actually reported.
 func TestAIFakeSelfTestReportsEveryFixture(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runAIFakeCmd(t, []string{"--self-test"}, nil,
 		"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID")
 	if code != 0 {
@@ -324,12 +330,11 @@ func TestAIFakeSelfTestReportsEveryFixture(t *testing.T) {
 // --self-test's "no network call", observed: curl is shimmed to record each
 // call. The live path is the control that proves the shim is on the script's PATH.
 func TestSetAIFakeSelfTestCallsNoNetwork(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "curl-calls")
 	shim := "#!/bin/sh\necho called >> '" + calls + "'\necho '{\"data\":{\"environments\":{\"edges\":[]}}}'\n"
-	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(shim), 0o755); err != nil {
-		t.Fatalf("writing the curl shim: %v", err)
-	}
+	writeShim(t, filepath.Join(dir, "curl"), shim)
 	path := "PATH=" + dir + ":" + os.Getenv("PATH")
 	railway := []string{"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID"}
 
@@ -397,17 +402,15 @@ func runBashScript(t *testing.T, script string, args ...string) (stdout, stderr 
 	}
 	cmd.Env = filtered
 
-	var outBuf, errBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
+	stdout, stderr, err := runToFiles(t, cmd, false)
+	if err != nil {
 		exitErr, ok := err.(*exec.ExitError)
 		if !ok {
 			t.Fatalf("running a bash snippet: %v", err)
 		}
 		exitCode = exitErr.ExitCode()
 	}
-	return outBuf.String(), errBuf.String(), exitCode
+	return stdout, stderr, exitCode
 }
 
 const verdictDriver = `
@@ -420,6 +423,7 @@ exit "$rc"
 // T10: ai_key_verdict's full truth table, including response shapes no
 // self-test fixture covers, plus the no-leak property on EVERY branch.
 func TestAIKeyVerdictTruthTableIncludingShapesNoFixtureCovers(t *testing.T) {
+	t.Parallel()
 	prelude := "set -uo pipefail\n" + shellFunctionSource(t, "ai_key_verdict")
 
 	cases := []struct {
@@ -501,6 +505,7 @@ func runAIKeyVerdict(t *testing.T, json string) (stdout, stderr string, exitCode
 }
 
 func TestAIKeyVerdictNamesTheOffendingVariable(t *testing.T) {
+	t.Parallel()
 	const value = "mk-9f2a-named"
 	stdout, stderr, code := runAIKeyVerdict(t, `{"data":{"variables":{"OPENROUTER_API_KEY":"`+value+`"}}}`)
 	if code == 0 {
@@ -516,6 +521,7 @@ func TestAIKeyVerdictNamesTheOffendingVariable(t *testing.T) {
 
 // Line shape is the prepare-env evidence: "submission.OPENROUTER_API_KEY is empty".
 func TestAIKeyVerdictReportsTheKeyOnAPass(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, json, kind string }{
 		{"empty", `{"data":{"variables":{"OPENROUTER_API_KEY":""}}}`, "empty"},
 		{"absent", `{"data":{"variables":{"AI_FAKE":"true","JEV_FAKE":"true"}}}`, "absent"},
@@ -540,6 +546,7 @@ func TestAIKeyVerdictReportsTheKeyOnAPass(t *testing.T) {
 }
 
 func TestAIKeyVerdictUnreadableNamesTheKey(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, json string }{
 		{"variables null", `{"data":{"variables":null}}`},
 		{"graphql error", `{"errors":[{"message":"x"}],"data":null}`},
@@ -573,6 +580,7 @@ func TestAIKeyVerdictUnreadableNamesTheKey(t *testing.T) {
 // still green — the self-test would print "10 fixtures passed" on a suite that
 // failed every fixture.
 func TestAIFakeSelfTestNegativeControlsAreLive(t *testing.T) {
+	t.Parallel()
 	funcs := shellFunctionSource(t,
 		"ai_key_verdict", "ai_expect_pass", "ai_expect_refusal", "ai_fake_self_test")
 	prelude := "set -uo pipefail\n" + funcs
@@ -629,6 +637,7 @@ printf '%s' "$failures"
 // T12: the printed fixture count must track the fixtures actually run. T01's
 // floor and T06's call-line floor both accept a count that lies upward.
 func TestAIFakeSelfTestPrintedCountMatchesItsFixtures(t *testing.T) {
+	t.Parallel()
 	body := strings.Join(shellFunctionBody(t, "ai_fake_self_test"), "\n")
 
 	calls := len(regexp.MustCompile(`(?m)^\s*ai_expect_(pass|refusal)\s`).FindAllString(body, -1))
@@ -652,6 +661,7 @@ func TestAIFakeSelfTestPrintedCountMatchesItsFixtures(t *testing.T) {
 
 // R7: neither shared helper has a default label; a call without one refuses before it reads anything.
 func TestServiceSelectorLabelIsRequired(t *testing.T) {
+	t.Parallel()
 	// A1's 11-instance fleet (service_selector_self_test), copied verbatim: selects svc-inv.
 	const fleetJSON = `{"data":{"environment":{"serviceInstances":{"edges":[{"node":{"serviceId":"svc-gw","serviceName":"gateway"}},{"node":{"serviceId":"svc-pg","serviceName":"postgres"}},{"node":{"serviceId":"svc-ten","serviceName":"tenancy"}},{"node":{"serviceId":"svc-port","serviceName":"portfolio"}},{"node":{"serviceId":"svc-inv","serviceName":"invoice"}},{"node":{"serviceId":"svc-val","serviceName":"validation"}},{"node":{"serviceId":"svc-sub","serviceName":"submission"}},{"node":{"serviceId":"svc-dash","serviceName":"dashboard"}},{"node":{"serviceId":"svc-notif","serviceName":"notifications"}},{"node":{"serviceId":"svc-land","serviceName":"landing"}},{"node":{"serviceId":"svc-app","serviceName":"app"}}]}}}}`
 
@@ -713,6 +723,7 @@ assert_environment_is_ephemeral env-x AI_FAKE
 // tell a usage guard that runs FIRST from one that runs after
 // require_source_env and the persistent-environment compare.
 func TestSetAIFakeUsageGuardPrecedesTheSourceEnvRead(t *testing.T) {
+	t.Parallel()
 	stdout, stderr, code := runAIFakeCmd(t, nil, nil,
 		"RAILWAY_API_TOKEN", "RAILWAY_PROJECT_ID", "RAILWAY_DEV_ENVIRONMENT_ID")
 

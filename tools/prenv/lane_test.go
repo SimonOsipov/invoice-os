@@ -526,6 +526,14 @@ func TestLanePush_LookupFailureGivesFull(t *testing.T) {
 			gh.put(t, "jobs-10.fail", "gh: HTTP 502")
 			_ = os.Remove(filepath.Join(gh.dir, "jobs-10.out"))
 		},
+		"runs call fails with a multi-line body": func(t *testing.T, p pushRepo, gh laneGH) {
+			gh.put(t, "runs.fail", "gh: HTTP 502\nSECONDLINE")
+		},
+		"jobs call fails with a multi-line body": func(t *testing.T, p pushRepo, gh laneGH) {
+			gh.serve(t, lanePushRun(10, p.F, laneFullChain()))
+			gh.put(t, "jobs-10.fail", "gh: HTTP 502\nSECONDLINE")
+			_ = os.Remove(filepath.Join(gh.dir, "jobs-10.out"))
+		},
 	}
 	for name, setup := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -536,6 +544,14 @@ func TestLanePush_LookupFailureGivesFull(t *testing.T) {
 			wantScope(t, out, code, ghOut, "full")
 			if !strings.Contains(out, "lookup failed") && !strings.Contains(out, "not JSON") {
 				t.Fatalf("reason does not name the failure: %s", out)
+			}
+			if strings.Contains(name, "multi-line") {
+				if !strings.Contains(out, ": gh: HTTP 502") {
+					t.Fatalf("reason does not carry the first line of the body: %s", out)
+				}
+				if strings.Contains(out, "SECONDLINE") {
+					t.Fatalf("reason carries more than the first line of the body: %s", out)
+				}
 			}
 		})
 	}

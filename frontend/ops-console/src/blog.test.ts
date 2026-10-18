@@ -622,6 +622,29 @@ describe('kept copy', () => {
     }
   })
 
+  it('readKept ignores a draft takeKept cannot read', () => {
+    const good = JSON.parse(JSON.stringify({ v: 1, owner: 'S', draft: d() }))
+    const mutate = (f: (x: { draft: Record<string, unknown> }) => void) => {
+      const x = JSON.parse(JSON.stringify(good))
+      f(x)
+      return JSON.stringify(x)
+    }
+    const bad = [
+      mutate((x) => delete x.draft.cover),
+      mutate((x) => (x.draft.cover = { kind: 'weird' })),
+      mutate((x) => (x.draft.cover = { kind: 'new' })),
+      mutate((x) => delete x.draft.serverHasCover),
+      mutate((x) => (x.draft.status = 'nope')),
+      mutate((x) => (x.draft.body = [null])),
+    ]
+    for (const raw of bad) {
+      const { storage, map } = stub()
+      map.set(KEPT_KEY, raw)
+      expect(readKept(storage), raw).toBeNull()
+      expect(takeKept(storage, 'S', [])).toBeNull()
+    }
+  })
+
   it('takeKept reopens the draft dirty for its owner and removes the key', () => {
     const { storage, map } = stub()
     writeKept(storage, 'S', d({ id: 'p1', status: 'published' }))

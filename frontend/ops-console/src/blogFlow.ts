@@ -58,6 +58,8 @@ export async function pinThenRefresh(d: PinFlowDeps, post: Post): Promise<{ outc
 }
 
 export const BAD_IMAGE = 'Choose a JPG or PNG image'
+export const COVER_TOO_LARGE = 'Choose an image of 2 MB or less'
+export const COVER_MAX_BYTES = 2 << 20
 
 export type CoverPickDeps = {
   readAsDataUrl: (file: Blob) => Promise<string>
@@ -70,14 +72,17 @@ export type CoverPick = { kind: 'ignore' } | { kind: 'rejected'; toast: string }
 export async function pickCover(d: CoverPickDeps, file: Blob | null | undefined): Promise<CoverPick> {
   if (!file) return { kind: 'ignore' }
   if (!isImageType(file.type)) return { kind: 'rejected', toast: BAD_IMAGE }
+  let dataUrl: string
   try {
     const img = await d.loadImage(await d.readAsDataUrl(file))
     if (!(img.width > 0 && img.height > 0)) throw new Error('empty image')
     const { width, height } = fitWidth(img.width, img.height)
-    return { kind: 'ready', dataUrl: d.toJpeg(img, width, height, COVER_QUALITY) }
+    dataUrl = d.toJpeg(img, width, height, COVER_QUALITY)
   } catch {
     return { kind: 'rejected', toast: BAD_IMAGE }
   }
+  if (dataUrlToBytes(dataUrl).length > COVER_MAX_BYTES) return { kind: 'rejected', toast: COVER_TOO_LARGE }
+  return { kind: 'ready', dataUrl }
 }
 
 export type CoverHandle = { url: string; release: () => void }
@@ -202,7 +207,7 @@ export function applySave(cur: EditorState, sent: EditorState, o: SaveOutcome): 
   const partial = (p?: Post) => (p ? partialEditor(cur, p) : cur)
   switch (o.kind) {
     case 'saved': {
-      const editor = cur.draft === sent.draft ? savedEditor(cur, o.post) : partialEditor(cur, o.post)
+      const editor = cur.draft === sent.draft ? savedEditor(cur, o.post) : partialEditor(cur, o.post, sent.draft.cover.kind !== 'none')
       if (o.rereadError !== undefined) return red(o.rereadError, editor)
       return { editor, toast: o.toast, tone: 'ok', posts: o.posts, expire: false }
     }
@@ -222,6 +227,9 @@ export function keepThenExpire(d: { write: (draft: Draft) => void; expire: () =>
   if (editor?.dirty) d.write(editor.draft)
   d.expire()
 }
+
+// The expiry for a callback that fires later: it keeps the editor as it is then.
+export const keepOnExpire = (d: { write: (draft: Draft) => void; expire: () => void }, latest: () => EditorState | null) => (): void => keepThenExpire(d, latest())
 
 export type AppliedRemove = { editor: EditorState | null; toast: string; tone: ToastTone; expire: boolean }
 

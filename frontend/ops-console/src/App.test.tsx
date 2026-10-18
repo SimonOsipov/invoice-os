@@ -121,7 +121,7 @@ describe('boot screen', () => {
   const store = (sub: string | null, owner: string | null) => {
     const map = new Map<string, string>()
     if (sub !== null) map.set(OPS_SESSION_KEY, JSON.stringify({ v: 2, token: jwt({ sub }), refresh_token: 'R' }))
-    if (owner) map.set(KEPT_KEY, JSON.stringify({ v: 1, owner, draft: { id: '', body: [] } }))
+    if (owner) map.set(KEPT_KEY, JSON.stringify({ v: 1, owner, draft: { id: '', status: 'draft', title: '', summary: '', featured: false, serverHasCover: false, cover: { kind: 'none' }, body: [] } }))
     vi.stubGlobal('localStorage', { getItem: (k: string) => map.get(k) ?? null })
     vi.stubEnv('VITE_LANDING_URL', 'https://land.example/')
   }

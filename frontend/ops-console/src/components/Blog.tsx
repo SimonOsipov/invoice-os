@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { addBlock, askLeave, coverCss, draftFromPost, editorOf, moveBlock, newDraft, patchBlock, previewModel, removeBlock, setConfirm, setField, setPreview, takeKept, today, writeKept, type BlockType, type Draft, type EditorState } from '../blog'
 import { createPost, deletePost, fetchAuthors, fetchCategories, fetchCoverUrl, fetchPosts, putCover, removeCover, setFeatured, updatePost, type Post } from '../blogApi'
-import { applyRemove, applySave, keepThenExpire, loadBlog, pickCover, pinThenRefresh, postsAfterRemove, removePost, savePost, singleFlight, STAFF_ONLY, trackCover } from '../blogFlow'
+import { applyRemove, applySave, keepOnExpire, keepThenExpire, loadBlog, pickCover, pinThenRefresh, postsAfterRemove, removePost, savePost, singleFlight, STAFF_ONLY, trackCover } from '../blogFlow'
 import { browserCoverDeps } from '../coverImage'
 import { currentSub, expireOnce, withSession } from '../session'
 import type { BlogFilters, ToastTone } from '../types'
@@ -72,17 +72,14 @@ export function Blog({ filters, onFilters, onToast }: Props) {
 
   const editorRef = useRef(editor)
   editorRef.current = editor
-  const keep = (e: EditorState | null) =>
-    keepThenExpire(
-      {
-        write: (d) => {
-          const owner = currentSub()
-          if (owner) writeKept(localStorage, owner, d)
-        },
-        expire: expireOnce,
-      },
-      e,
-    )
+  const keepDeps = {
+    write: (d: Draft) => {
+      const owner = currentSub()
+      if (owner) writeKept(localStorage, owner, d)
+    },
+    expire: expireOnce,
+  }
+  const keep = (e: EditorState | null) => keepThenExpire(keepDeps, e)
 
   const restored = useRef(false)
   useEffect(() => {
@@ -148,7 +145,7 @@ export function Blog({ filters, onFilters, onToast }: Props) {
   const savedId = editor?.draft.cover.kind === 'saved' ? editor.draft.id : null
   useEffect(() => {
     setCoverUrl(null)
-    return savedId ? trackCover({ fetchCoverUrl: (id) => withSession(() => fetchCoverUrl(id)), expire: expireOnce }, savedId, setCoverUrl) : undefined
+    return savedId ? trackCover({ fetchCoverUrl: (id) => withSession(() => fetchCoverUrl(id)), expire: keepOnExpire(keepDeps, () => editorRef.current) }, savedId, setCoverUrl) : undefined
   }, [savedId])
 
   const onCover = async (file: File | null) => {

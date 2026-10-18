@@ -465,8 +465,8 @@ export function savedEditor(state: EditorState, post: Post): EditorState {
 }
 
 // A post saved but a later step failed: the draft takes the id and status and stays dirty.
-export function partialEditor(state: EditorState, post: Post): EditorState {
-  return { ...state, draft: { ...state.draft, id: post.id, status: post.status, author_name: post.author_name } }
+export function partialEditor(state: EditorState, post: Post, serverHasCover = state.draft.serverHasCover): EditorState {
+  return { ...state, draft: { ...state.draft, id: post.id, status: post.status, author_name: post.author_name, serverHasCover } }
 }
 
 export type KeptStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
@@ -489,10 +489,20 @@ export function writeKept(storage: KeptStorage, owner: string, draft: Draft): vo
   }
 }
 
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
+
+function isKeptDraft(d: unknown): boolean {
+  if (!isObj(d) || !Array.isArray(d.body) || !d.body.every((b) => isObj(b) && typeof b.u === 'string' && typeof b.type === 'string')) return false
+  const c = d.cover
+  const cover = isObj(c) && (c.kind === 'none' || c.kind === 'saved' || (c.kind === 'new' && typeof c.dataUrl === 'string'))
+  const status = d.status === 'draft' || d.status === 'published'
+  return cover && status && typeof d.id === 'string' && typeof d.title === 'string' && typeof d.summary === 'string' && typeof d.featured === 'boolean' && typeof d.serverHasCover === 'boolean'
+}
+
 export function readKept(storage: KeptStorage): Kept | null {
   try {
     const p = JSON.parse(storage.getItem(KEPT_KEY) ?? 'null') as Partial<Kept> | null
-    if (p?.v !== 1 || typeof p.owner !== 'string' || !p.draft || typeof p.draft !== 'object' || !Array.isArray(p.draft.body)) return null
+    if (p?.v !== 1 || typeof p.owner !== 'string' || !isKeptDraft(p.draft)) return null
     return p as Kept
   } catch {
     return null

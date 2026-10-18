@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { SESSION_KEY } from './auth'
 import type { Author, Category, Post } from './blogApi'
 import { editorOf, newDraft, saveState, type Draft, type EditorState } from './blog'
-import { applyRemove, applySave, BAD_IMAGE, keepThenExpire, loadBlog, pickCover, pinPost, pinThenRefresh, postsAfterRemove, removePost, savePost, singleFlight, STAFF_ONLY, trackCover, type CoverPickDeps, type SaveDeps } from './blogFlow'
+import { applyRemove, applySave, BAD_IMAGE, COVER_TOO_LARGE, keepOnExpire, keepThenExpire, loadBlog, pickCover, pinPost, pinThenRefresh, postsAfterRemove, removePost, savePost, singleFlight, STAFF_ONLY, trackCover, type CoverPickDeps, type SaveDeps } from './blogFlow'
 import { withSession } from './session'
 
 vi.mock('@invoice-os/console-session', async (importOriginal) => ({
@@ -189,6 +189,15 @@ describe('pickCover', () => {
     const d = deps({ loadImage: vi.fn().mockResolvedValue({ width: 800, height: 600 }) })
     await pickCover(d, png)
     expect(d.toJpeg).toHaveBeenCalledWith({ width: 800, height: 600 }, 800, 600, 0.82)
+  })
+
+  it('an encoded image over 2 MiB is rejected with the red toast text', async () => {
+    const big = (n: number) => `data:image/jpeg;base64,${btoa('a'.repeat(n))}`
+    const over = await pickCover(deps({ toJpeg: vi.fn().mockReturnValue(big((2 << 20) + 1)) }), png)
+    expect(over).toEqual({ kind: 'rejected', toast: COVER_TOO_LARGE })
+    expect(COVER_TOO_LARGE).toBe('Choose an image of 2 MB or less')
+    const exact = big(2 << 20)
+    expect(await pickCover(deps({ toJpeg: vi.fn().mockReturnValue(exact) }), png)).toEqual({ kind: 'ready', dataUrl: exact })
   })
 
   it('an unreadable file, an undecodable image and an empty image are rejected', async () => {
@@ -421,6 +430,17 @@ describe('applySave', () => {
     expect(a.editor).toMatchObject({ dirty: true, draft: { id: 'N', title: 'newer' } })
   })
 
+  it('saved after an edit mid-flight carries the cover the save uploaded', () => {
+    const sent = dirty({ cover: NEW_COVER })
+    const cur = { ...sent, draft: { ...sent.draft, title: 'newer' } }
+    const a = applySave(cur, sent, { kind: 'saved', post: saved(), toast: 'Draft saved', posts: POSTS })
+    expect(a.editor.draft).toMatchObject({ cover: NEW_COVER, serverHasCover: true })
+    const removed = applySave({ ...cur, draft: { ...cur.draft, cover: { kind: 'none' } } }, sent, { kind: 'saved', post: saved(), toast: 'Draft saved', posts: POSTS })
+    expect(removed.editor.draft).toMatchObject({ cover: { kind: 'none' }, serverHasCover: true })
+    const gone = applySave(cur, dirty({ cover: { kind: 'none' }, serverHasCover: true }), { kind: 'saved', post: saved(), toast: 'Draft saved', posts: POSTS })
+    expect(gone.editor.draft.serverHasCover).toBe(false)
+  })
+
   it('a re-read error is the red toast and the list is not replaced', () => {
     const sent = dirty()
     const a = applySave(sent, sent, { kind: 'saved', post: saved(), toast: 'Draft saved', rereadError: 'internal error' })
@@ -471,6 +491,19 @@ describe('applyRemove', () => {
     expect(applyRemove(cur, { kind: 'forbidden' })).toMatchObject({ toast: STAFF_ONLY, tone: 'red', expire: false, editor: { confirm: null, dirty: true } })
     expect(applyRemove(cur, { kind: 'failed', message: 'boom' })).toMatchObject({ toast: 'boom', tone: 'red' })
     expect(applyRemove(cur, { kind: 'expired' })).toMatchObject({ expire: true, editor: { confirm: null } })
+  })
+})
+
+describe('keepOnExpire', () => {
+  it('keeps the editor as it is when the callback fires, then expires', () => {
+    const order: string[] = []
+    const d = { write: vi.fn(() => void order.push('write')), expire: vi.fn(() => void order.push('expire')) }
+    let cur: EditorState | null = null
+    const onExpire = keepOnExpire(d, () => cur)
+    cur = dirty()
+    onExpire()
+    expect(order).toEqual(['write', 'expire'])
+    expect(d.write).toHaveBeenCalledWith(cur.draft)
   })
 })
 

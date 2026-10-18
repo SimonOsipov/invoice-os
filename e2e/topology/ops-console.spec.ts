@@ -1,5 +1,5 @@
 // The deployed v2 Ops Console: resolved values and layout relationships on the PR environment.
-// The console is mock-backed: this spec pins fixture behaviour and the v2 look, not a contract.
+// The OPS-06 tests create, pin and delete a real blog post and restore the featured post; the rest reads mock-backed screens.
 // Value reads copy a value from its source (token or prototype) and name it; screenshots are attached, never asserted.
 import { randomBytes } from 'node:crypto'
 import { test, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test'

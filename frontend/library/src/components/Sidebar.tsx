@@ -254,7 +254,7 @@ export function Sidebar({
           onClick={onCookieChoices}
           style={{
             display: 'block',
-            marginTop: demoHref !== null || blogHref != null ? 12 : 0,
+            marginTop: demoHref !== null || blogHref ? 12 : 0,
             background: 'none',
             border: 0,
             padding: 0,

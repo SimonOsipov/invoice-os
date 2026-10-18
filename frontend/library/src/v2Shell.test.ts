@@ -358,6 +358,7 @@ describe('library shell primitives', () => {
       [demo, null, ['Book the Demo', 'Cookie choices']],
       [null, blog, ['Blog', 'Cookie choices']],
       [null, null, ['Cookie choices']],
+      [null, '', ['Cookie choices']],
     ]
     for (const [d, b, order] of cases) {
       const ts = sidebar(home, d, b)

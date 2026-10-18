@@ -21,9 +21,11 @@ import {
   updateEntity,
   offboardEntity,
   onboardEntity,
+  rawFetch,
   PERSONAS,
 } from './client'
 import { freshTin, canonicalTin } from './fixtures'
+import { assertErrorEnvelope } from './contract-helpers'
 
 // Serial: every stage after Create depends on the entity id captured there, and each
 // stage mutates the SAME row in sequence (playwright.api.config.ts already runs the
@@ -127,5 +129,84 @@ test.describe('portfolio CRUD lifecycle (API E2E, over the deployed gateway)', (
 
     const activeList = await listEntities(token, { status: 'active', limit: 200 })
     expect(activeList.entities.some((e) => e.id === entityId)).toBe(true)
+  })
+})
+
+// Seeded active firm non-admins (db/seed.dev.sql).
+test.describe('a non-admin cannot change a client (API E2E, over the deployed gateway)', () => {
+  test.describe.configure({ mode: 'default' })
+
+  const DENIED = 'only an admin can change a client'
+  const personas = [
+    { name: 'firm preparer', subject: 'c0000000-0000-0000-0000-000000000003' },
+    { name: 'firm reviewer', subject: 'c0000000-0000-0000-0000-000000000004' },
+  ]
+  let adminToken: string
+
+  test.beforeAll(async () => {
+    adminToken = await login(PERSONAS.A)
+  })
+
+  for (const p of personas) {
+    test(`403: a non-admin PATCH is refused and changes nothing (${p.name})`, async () => {
+      const tin = freshTin()
+      const name = `FIRMS-06 patch ${tin}`
+      const created = await createEntity(adminToken, { name, tin, sector: 'Retail' })
+      const nonAdminToken = await login({ ...PERSONAS.A, subject: p.subject })
+
+      const res = await rawFetch(`/api/portfolio/v1/entities/${created.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${nonAdminToken}` },
+        body: { name: `${name} renamed` },
+      })
+      assertErrorEnvelope(res, 403, `patch as ${p.name}`)
+      expect((res.body as { error: string }).error).toBe(DENIED)
+
+      const read = await getEntity(adminToken, created.id)
+      expect(read.name).toBe(name)
+      expect(read.sector).toBe('Retail')
+    })
+
+    test(`403: a non-admin offboard is refused and the client stays active (${p.name})`, async () => {
+      const tin = freshTin()
+      const created = await createEntity(adminToken, { name: `FIRMS-06 offboard ${tin}`, tin })
+      const nonAdminToken = await login({ ...PERSONAS.A, subject: p.subject })
+
+      const res = await rawFetch(`/api/portfolio/v1/entities/${created.id}/offboard`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${nonAdminToken}` },
+      })
+      assertErrorEnvelope(res, 403, `offboard as ${p.name}`)
+      expect((res.body as { error: string }).error).toBe(DENIED)
+
+      expect((await getEntity(adminToken, created.id)).status).toBe('active')
+    })
+
+    test(`403: a non-admin onboard is refused and an archived client stays archived (${p.name})`, async () => {
+      const tin = freshTin()
+      const created = await createEntity(adminToken, { name: `FIRMS-06 onboard ${tin}`, tin })
+      await offboardEntity(adminToken, created.id)
+      const nonAdminToken = await login({ ...PERSONAS.A, subject: p.subject })
+
+      const res = await rawFetch(`/api/portfolio/v1/entities/${created.id}/onboard`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${nonAdminToken}` },
+      })
+      assertErrorEnvelope(res, 403, `onboard as ${p.name}`)
+      expect((res.body as { error: string }).error).toBe(DENIED)
+
+      expect((await getEntity(adminToken, created.id)).status).toBe('archived')
+    })
+  }
+
+  test('403, not 404, for a non-admin PATCH at an unknown id', async () => {
+    const nonAdminToken = await login({ ...PERSONAS.A, subject: personas[0].subject })
+    const res = await rawFetch(`/api/portfolio/v1/entities/${crypto.randomUUID()}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${nonAdminToken}` },
+      body: { name: 'does not matter' },
+    })
+    assertErrorEnvelope(res, 403, 'patch unknown id as firm preparer')
+    expect((res.body as { error: string }).error).toBe(DENIED)
   })
 })

@@ -484,6 +484,11 @@ func statusForErr(err error) (status int, msg string) {
 	}
 }
 
+// statusForChangeErr is the stub of the change-endpoint mapper; the executor writes the body.
+func statusForChangeErr(err error) (status int, msg string) {
+	return statusForErr(err)
+}
+
 // pgCode extracts the SQLSTATE from err, or "" if err does not wrap a
 // *pgconn.PgError. Copied verbatim from
 // internal/platform/db/tenants_kind_test.go:33-40 — that copy lives in a

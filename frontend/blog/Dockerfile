@@ -26,7 +26,7 @@ ARG SENTRY_AUTH_TOKEN
 RUN pnpm --filter @invoice-os/blog build
 
 # ---- Server: the blog binary, built from the root go.mod ----
-FROM mirror.gcr.io/library/golang:1.26-alpine AS server
+FROM mirror.gcr.io/library/golang:1.26.9-alpine AS server
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY cmd/blog cmd/blog

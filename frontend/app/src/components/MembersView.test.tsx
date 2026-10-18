@@ -59,6 +59,19 @@ vi.mock('@invoice-os/api-client', async (orig) => {
   }
 })
 
+// Latest props MembersView passed the table: lets a test call onResend/onRevoke the DOM disables.
+const tableProps = vi.hoisted(() => ({ current: null as null | { onResend: (id: string) => void; onRevoke: (id: string) => void } }))
+vi.mock('./MembersTable', async (orig) => {
+  const real = await orig<typeof import('./MembersTable')>()
+  return {
+    ...real,
+    MembersTable: (props: Parameters<typeof real.MembersTable>[0]) => {
+      tableProps.current = props as never
+      return createElement(real.MembersTable, props)
+    },
+  }
+})
+
 const mockedSetMembershipStatus = vi.mocked(setMembershipStatus)
 
 const SUBJECT = 'u1'
@@ -881,7 +894,8 @@ describe('RESEND-07-04', () => {
         list: [answer(two())],
         revoke: [refuse(429, ERR_DAILY_LIMIT), refuse(403, 'only an admin can invite people'), retry.responder],
       })
-      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      const refetchMembers = vi.fn()
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} refetchMembers={refetchMembers} />)
       await waitFor(() => expect(inviteRows()).toHaveLength(2))
 
       clickRevokeOn(inviteRowFor('zed@x.ng'))
@@ -896,6 +910,7 @@ describe('RESEND-07-04', () => {
       err = await screen.findByText('only an admin can invite people')
       expect(inviteRowFor('zed@x.ng').nextElementSibling).toBe(err)
       expect(screen.queryByTestId('members-invites-error')).toBeNull()
+      expect(refetchMembers, 'a 429 or 403 does not refetch').not.toHaveBeenCalled()
 
       clickRevokeOn(inviteRowFor('zed@x.ng'))
       expect(screen.queryByTestId('member-status-error')).toBeNull()
@@ -921,6 +936,27 @@ describe('RESEND-07-04', () => {
       expect(inviteRows()).toHaveLength(2)
       expect(gw.lists(), 'no list refetch after a revoke').toHaveLength(1)
       expect(refetchMembers).toHaveBeenCalledTimes(1)
+      expect(screen.queryByTestId('members-invites-error')).toBeNull()
+    })
+
+    it.each([
+      ['a 500', refuse(500, ERR_INTERNAL), ERR_INTERNAL],
+      ['a network failure', () => Promise.reject(new TypeError('Failed to fetch')), 'Failed to fetch'],
+    ] as const)('MembersView: %s revoke keeps the row, shows the message on it and refetches nothing', async (_name, responder, message) => {
+      const gw = gateway({ list: [answer(two())], revoke: [responder] })
+      const refetchMembers = vi.fn()
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} refetchMembers={refetchMembers} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+
+      const err = await screen.findByTestId('member-status-error')
+      expect(err.textContent).toBe(message)
+      expect(inviteRowFor('zed@x.ng').nextElementSibling).toBe(err)
+      await act(async () => {})
+      expect(inviteRows()).toHaveLength(2)
+      expect(gw.lists()).toHaveLength(1)
+      expect(refetchMembers).not.toHaveBeenCalled()
       expect(screen.queryByTestId('members-invites-error')).toBeNull()
     })
 
@@ -1011,6 +1047,32 @@ describe('RESEND-07-04', () => {
       await act(async () => {})
       expect(gw.resends()).toHaveLength(0)
       expect(inviteRows()).toHaveLength(1)
+    })
+
+    it("MembersView: the view itself refuses a revoke or resend that the row's own in-flight call excludes", async () => {
+      const held = hold()
+      const gw = gateway({ list: [answer(two())], revoke: [held.responder], resend: [held.responder] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+
+      clickRevokeOn(inviteRowFor('zed@x.ng'))
+      act(() => { void tableProps.current!.onRevoke('i1') })
+      act(() => { void tableProps.current!.onResend('i1') })
+      expect(gw.revokes(), 'a second revoke of a revoking row').toHaveLength(1)
+      expect(gw.resends(), 'a resend of a revoking row').toHaveLength(0)
+      await act(async () => held.resolve({ id: 'i1', status: 'revoked' }))
+      await waitFor(() => expect(inviteRows()).toHaveLength(1))
+
+      const slow = hold()
+      const gw2 = gateway({ list: [answer(two())], resend: [slow.responder] })
+      cleanup()
+      render(<Harness initial={adminRoster()} authedFetch={gw2.authedFetch} />)
+      await waitFor(() => expect(inviteRows()).toHaveLength(2))
+      clickResendOn(inviteRowFor('zed@x.ng'))
+      act(() => { void tableProps.current!.onRevoke('i1') })
+      expect(gw2.resends()).toHaveLength(1)
+      expect(gw2.revokes(), 'a revoke of a resending row').toHaveLength(0)
+      await act(async () => slow.resolve(wire({ id: 'i1', email: 'zed@x.ng' })))
     })
 
     it("MembersView: revoking one invite leaves another invite's Revoke enabled", async () => {

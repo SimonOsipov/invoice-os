@@ -567,6 +567,23 @@ describe('RESEND-07-04: the pending row menu', () => {
     expect(items.map((i) => i.disabled)).toEqual([true, true])
   })
 
+  it("MembersTable: an open strip's Revoke invite is disabled while that id resends or revokes", () => {
+    const onRevoke = vi.fn()
+    const base = { ctx: ctxWith({ members: [invitedMember(INVITE)] }), rows: [invitedMember(INVITE)], policies: [], roles: [], onOpen: vi.fn(), onStatus: vi.fn(), statusError: null, invites: [INVITE], onResend: vi.fn(), onRevoke }
+    const { rerender } = render(<MembersTable {...base} />)
+    fireEvent.click(within(openMenuOf(screen.getByTestId('invite-row'))).getByRole('button', { name: 'Revoke invite' }))
+    const confirm = () => screen.getByTestId('invite-revoke-confirmed') as HTMLButtonElement
+    expect(confirm().disabled, 'control: enabled when nothing is in flight').toBe(false)
+
+    rerender(<MembersTable {...base} resending={new Set(['inv-1'])} />)
+    expect(confirm().disabled).toBe(true)
+    fireEvent.click(confirm())
+    rerender(<MembersTable {...base} revoking={new Set(['inv-1'])} />)
+    expect(confirm().disabled).toBe(true)
+    fireEvent.click(confirm())
+    expect(onRevoke).not.toHaveBeenCalled()
+  })
+
   it('MembersTable: Resend calls onResend with the invitation id, and is disabled while that id is resending', () => {
     const onResend = vi.fn()
     renderPending({ onResend })
@@ -710,7 +727,7 @@ describe('LOGFIX-05-03: the invitee account state on the pending row', () => {
     expect(within(openMenuOf(screen.getByTestId('member-row'))).queryByTestId('member-menu-state')).toBeNull()
   })
 
-  it("MembersTable: a pending row's menu offers Resend and two disabled items with their reasons (confirmed row)", () => {
+  it("MembersTable: a confirmed-account pending row's menu is Resend invite and Revoke invite, both enabled, no reasons", () => {
     withState({ account: 'confirmed' })
     const menu = openMenuOf(screen.getByTestId('invite-row'))
     const items = within(menu).getAllByRole('button') as HTMLButtonElement[]

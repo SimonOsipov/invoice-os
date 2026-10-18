@@ -135,7 +135,7 @@ func TestReconcileURLVariablesWritesTheLibraryURLs(t *testing.T) {
 		got[c.label][c.name] = c.value
 	}
 	for label, want := range map[string]map[string]string{
-		"library": {"VITE_APP_URL": "$app_url", "VITE_LANDING_URL": "$landing_url"},
+		"library": {"VITE_APP_URL": "$app_url", "VITE_LANDING_URL": "$landing_url", "VITE_BLOG_URL": "$blog_url"},
 		"app":     {"VITE_LIBRARY_URL": "$library_url"},
 		"landing": {"VITE_LIBRARY_URL": "$library_url", "VITE_APP_URL": "$app_url"}, // VITE_APP_URL is the control
 	} {
@@ -145,8 +145,24 @@ func TestReconcileURLVariablesWritesTheLibraryURLs(t *testing.T) {
 			}
 		}
 	}
-	if len(got["library"]) != 2 {
-		t.Errorf("library row = %v, want exactly VITE_APP_URL and VITE_LANDING_URL", got["library"])
+	if len(got["library"]) != 3 {
+		t.Errorf("library row = %v, want exactly VITE_APP_URL, VITE_LANDING_URL and VITE_BLOG_URL", got["library"])
+	}
+}
+
+func TestReconcileURLVariablesWritesTheBlogURLOnLandingAndLibrary(t *testing.T) {
+	t.Parallel()
+	got := map[string]map[string]string{}
+	for _, c := range reconcileCalls(t) {
+		if got[c.label] == nil {
+			got[c.label] = map[string]string{}
+		}
+		got[c.label][c.name] = c.value
+	}
+	for _, label := range []string{"landing", "library"} {
+		if got[label]["VITE_BLOG_URL"] != "$blog_url" {
+			t.Errorf("%s writes VITE_BLOG_URL=%q, want $blog_url", label, got[label]["VITE_BLOG_URL"])
+		}
 	}
 }
 
@@ -161,8 +177,11 @@ func TestReconcileURLVariablesWritesTheBlogURLs(t *testing.T) {
 	if want := map[string]string{"VITE_GATEWAY_URL": "$gateway_url", "VITE_LANDING_URL": "$landing_url"}; !reflect.DeepEqual(got["blog"], want) {
 		t.Errorf("blog row = %v, want exactly %v", got["blog"], want)
 	}
-	if len(got["library"]) != 2 {
-		t.Errorf("control: library row = %v, want its two variables", got["library"])
+	if len(got["library"]) != 3 {
+		t.Errorf("control: library row = %v, want its three variables", got["library"])
+	}
+	if _, ok := got["app"]["VITE_BLOG_URL"]; ok {
+		t.Errorf("app row = %v, want no VITE_BLOG_URL (no app link to the blog)", got["app"])
 	}
 }
 

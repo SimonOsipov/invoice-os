@@ -96,6 +96,11 @@ function spyWrites(): string[] {
 const entries = () => ((window as TestWindow).dataLayer ?? []).map((a) => Array.from(a))
 
 describe('library consent', () => {
+  it('library mounts the shared notice that names the Blog', async () => {
+    await mount()
+    expect(notices()[0].querySelector('.cn-body')?.textContent).toContain('the Feature Library and the Blog.')
+  })
+
   it('CO-01 the notice shows with no answer and not with one', async () => {
     await mount()
     expect(notices()).toHaveLength(1)

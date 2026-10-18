@@ -197,6 +197,7 @@ type Measured = { tag: string; text: string; left: number; right: number; top: n
 // Relationships, not pixel values.
 async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[]): Promise<void> {
   const errors = collectErrors(page)
+  const bakedBlogUrl = resolveTarget('BAKED_BLOG_URL')
   const res = await page.goto(`${LANDING_URL}/`)
   expect(res?.ok(), `/ returned HTTP ${res?.status()}`).toBeTruthy()
 
@@ -357,7 +358,14 @@ async function assertHeaderRow(page: Page, testInfo: TestInfo, widths: number[])
     const navLinks = row.filter((e) => e.tag === 'a' && e.nav)
     expect(navLinks.length > 0, `${width}px: Primary nav links shown`).toBe(width > BURGER_MAX)
     if (width > BURGER_MAX) {
-      expect(navLinks.filter((e) => e.text === 'Library'), `${width}px: the nav "Library" link (is landing.VITE_LIBRARY_URL set?)`).toHaveLength(1)
+      const library = navLinks.filter((e) => e.text === 'Library')
+      expect(library, `${width}px: the nav "Library" link (is landing.VITE_LIBRARY_URL set?)`).toHaveLength(1)
+      const blog = navLinks.filter((e) => e.text === 'Blog')
+      expect(blog, `${width}px: the nav "Blog" link (is landing.VITE_BLOG_URL set?)`).toHaveLength(1)
+      expect(blog[0].left, `${width}px: "Blog" left vs "Library" right`).toBeGreaterThanOrEqual(library[0].right - 1)
+      expect(blog[0].right, `${width}px: "Blog" right vs "Sign in" left`).toBeLessThanOrEqual(signIn!.left + 1)
+      expect(blog[0].bottom - blog[0].top, `${width}px: "Blog" wraps`).toBeLessThanOrEqual(library[0].bottom - library[0].top + 1)
+      await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Blog' }), `${width}px: the Blog href`).toHaveAttribute('href', bakedBlogUrl)
     }
     if (navLinks.length > 0) {
       navLineHeight ??= Math.min(...navLinks.map((e) => e.bottom - e.top))
@@ -869,6 +877,9 @@ test('landing mobile menu at 834, 390 and 375', async ({ page }, testInfo) => {
     expect(navLinks, `${label}: Primary nav links`).toBeGreaterThan(0)
     await expect(menu.locator('a'), `${label}: one menu link per nav link`).toHaveCount(navLinks)
     await expect(menu.getByRole('link', { name: 'Library' }), `${label}: one "Library" link in the menu (is landing.VITE_LIBRARY_URL set?)`).toHaveCount(1)
+    await expect(menu.getByRole('link', { name: 'Blog' }), `${label}: one "Blog" link in the menu (is landing.VITE_BLOG_URL set?)`).toHaveCount(1)
+    await expect(menu.locator('a').last(), `${label}: Blog follows Library`).toHaveText('Blog')
+    await expect(menu.locator('a').nth(-2), `${label}: Library precedes Blog`).toHaveText('Library')
     const signIn = menu.getByRole('button', { name: 'Sign in', exact: true })
     await expect(signIn, `${label}: exactly one "Sign in" in the menu`).toHaveCount(1)
     await expect(menu.getByRole('button'), `${label}: the menu buttons`).toHaveText(['Sign in'])
@@ -886,6 +897,15 @@ test('landing mobile menu at 834, 390 and 375', async ({ page }, testInfo) => {
   expect(measured.length, 'menu widths measured').toBeGreaterThan(0)
   await attachJson(testInfo, 'menu-geometry.json', measured)
   expect(errors, `console errors on the menu sweep:\n${errors.join('\n')}`).toEqual([])
+})
+
+test('landing footer: one Blog link with the baked URL', async ({ page }) => {
+  const errors = collectErrors(page)
+  await openLandingFrame(page)
+  const blog = page.getByRole('contentinfo').getByRole('link', { name: 'Blog', exact: true })
+  await expect(blog, 'one footer "Blog" link (is landing.VITE_BLOG_URL set?)').toHaveCount(1)
+  await expect(blog, 'the footer Blog href').toHaveAttribute('href', resolveTarget('BAKED_BLOG_URL'))
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
 test('landing breakpoint edges', async ({ page }, testInfo) => {

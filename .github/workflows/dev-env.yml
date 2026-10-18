@@ -1279,6 +1279,7 @@ jobs:
       BAKED_APP_URL: ${{ needs.prepare-env.outputs.app_url }}
       BAKED_LANDING_URL: ${{ needs.prepare-env.outputs.landing_url }}
       BAKED_LIBRARY_URL: ${{ needs.prepare-env.outputs.library_url }}
+      BAKED_BLOG_URL: ${{ needs.prepare-env.outputs.blog_url }}
     steps:
       # "Re-run failed jobs" keeps deploy-gateway's output from an earlier attempt.
       - name: Refuse a re-run that skipped the gateway deploy
@@ -1295,7 +1296,7 @@ jobs:
         id: targets
         run: |
           rc=0
-          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL LIBRARY_URL BLOG_URL BAKED_APP_URL BAKED_LANDING_URL BAKED_LIBRARY_URL; do
+          for v in GATEWAY_URL APP_URL LANDING_URL OPS_CONSOLE_URL SUPPORT_CONSOLE_URL LIBRARY_URL BLOG_URL BAKED_APP_URL BAKED_LANDING_URL BAKED_LIBRARY_URL BAKED_BLOG_URL; do
             if [ -z "${!v}" ]; then
               echo "::error::$v is empty — the e2e job did not publish it."
               rc=1

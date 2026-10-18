@@ -385,3 +385,23 @@ describe('FT-04 / FT-05 the footer controls call their handlers', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 })
+
+describe('Footer Blog link', () => {
+  const BLOG = 'https://blog.x'
+
+  it('Footer_rendersBlogLastInPlatformColumn', () => {
+    const withBlog = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, blogHref: BLOG }))
+    const platform = controlsOf(platformSlice(withBlog))
+    expect(platform.slice(0, -1).map((c) => c.attrs.href)).toEqual(PLATFORM_LINKS.map((l) => l.href))
+    const last = platform.at(-1)!
+    expect([last.tag, last.label, last.attrs.href, last.attrs.class]).toEqual(['a', 'Blog', BLOG, 'a-link'])
+    expect(controlsOf(connectSlice(withBlog))).toEqual(controlsOf(connectSlice(html)))
+  })
+
+  it('Footer_noBlogWhenBlank', () => {
+    for (const blogHref of [null, '']) {
+      const out = renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, blogHref }))
+      expect(out).not.toContain('Blog')
+    }
+  })
+})

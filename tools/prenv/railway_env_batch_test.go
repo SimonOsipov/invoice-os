@@ -30,7 +30,7 @@ const (
 	batchProdAppURL     = "https://app.ascomply.com"
 	batchProdLandingURL = "https://www.ascomply.com"
 
-	batchAllConfirmed = "All 20 environment variables confirmed" // reconcile_url_variables
+	batchAllConfirmed = "All 22 environment variables confirmed" // reconcile_url_variables
 )
 
 // Secret names print `= <redacted>` (Design, "Variable writes").
@@ -55,10 +55,10 @@ func reconcileIntended() map[string]map[string]string {
 	return map[string]map[string]string{
 		sentrySvcID("gateway"):         {"CORS_ALLOWED_ORIGINS": batchOrigins},
 		sentrySvcID("app"):             {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_LIBRARY_URL": batchLibraryURL, "VITE_SUPPORT_URL": batchSupportURL},
-		sentrySvcID("landing"):         {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_APP_URL": batchAppURL, "VITE_OPS_URL": batchOpsURL, "VITE_SUPPORT_URL": batchSupportURL, "VITE_LIBRARY_URL": batchLibraryURL, "VITE_REGISTRATION_OPEN": "true"},
+		sentrySvcID("landing"):         {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_APP_URL": batchAppURL, "VITE_OPS_URL": batchOpsURL, "VITE_SUPPORT_URL": batchSupportURL, "VITE_LIBRARY_URL": batchLibraryURL, "VITE_BLOG_URL": batchBlogURL, "VITE_REGISTRATION_OPEN": "true"},
 		sentrySvcID("ops-console"):     {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 		sentrySvcID("support-console"): {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL, "VITE_APP_URL": batchAppURL},
-		sentrySvcID("library"):         {"VITE_APP_URL": batchAppURL, "VITE_LANDING_URL": batchLandingURL},
+		sentrySvcID("library"):         {"VITE_APP_URL": batchAppURL, "VITE_LANDING_URL": batchLandingURL, "VITE_BLOG_URL": batchBlogURL},
 		sentrySvcID("blog"):            {"VITE_GATEWAY_URL": batchGatewayURL, "VITE_LANDING_URL": batchLandingURL},
 	}
 }
@@ -542,7 +542,7 @@ func TestSetServiceVars_OnlyChangedNamesAreWritten(t *testing.T) {
 	if ups := s.upserts(t); len(ups) != 1 {
 		t.Errorf("writes = %v, want app.VITE_LANDING_URL only: every other value is already intended", names(ups))
 	}
-	wantHeld := map[string]string{"gateway": "1 of 1", "app": "3 of 4", "landing": "6 of 6", "ops-console": "2 of 2", "support-console": "3 of 3", "library": "2 of 2", "blog": "2 of 2"}
+	wantHeld := map[string]string{"gateway": "1 of 1", "app": "3 of 4", "landing": "7 of 7", "ops-console": "2 of 2", "support-console": "3 of 3", "library": "3 of 3", "blog": "2 of 2"}
 	if got := heldLines(out); !reflect.DeepEqual(got, wantHeld) {
 		t.Errorf("held lines = %v, want %v", got, wantHeld)
 	}
@@ -669,6 +669,8 @@ func TestSetServiceVars_StaleValueIsRewritten(t *testing.T) {
 		stale           string // "" deletes the name from the store
 	}{
 		{"landing", "VITE_APP_URL", batchAppURL, batchProdAppURL},
+		{"landing", "VITE_BLOG_URL", batchBlogURL, batchProdLandingURL},
+		{"library", "VITE_BLOG_URL", batchBlogURL, batchProdLandingURL},
 		{"ops-console", "VITE_GATEWAY_URL", batchGatewayURL, ""},
 		{"support-console", "VITE_GATEWAY_URL", batchGatewayURL, ""},
 		{"ops-console", "VITE_GATEWAY_URL", batchGatewayURL, batchProdAppURL},
@@ -916,6 +918,8 @@ func TestSetServiceVars_ReReadMismatchFails(t *testing.T) {
 		{"blog", "VITE_LANDING_URL"},
 		{"app", "VITE_LIBRARY_URL"},
 		{"landing", "VITE_LIBRARY_URL"},
+		{"landing", "VITE_BLOG_URL"},
+		{"library", "VITE_BLOG_URL"},
 		{"app", "VITE_SUPPORT_URL"},
 		{"support-console", "VITE_APP_URL"},
 	} {

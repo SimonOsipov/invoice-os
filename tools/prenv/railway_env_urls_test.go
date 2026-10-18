@@ -921,6 +921,7 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 		"BAKED_APP_URL":     "${{ needs.prepare-env.outputs.app_url }}",
 		"BAKED_LANDING_URL": "${{ needs.prepare-env.outputs.landing_url }}",
 		"BAKED_LIBRARY_URL": "${{ needs.prepare-env.outputs.library_url }}",
+		"BAKED_BLOG_URL":    "${{ needs.prepare-env.outputs.blog_url }}",
 		"APP_URL":           "${{ needs.e2e.outputs.app_url }}", // control
 	} {
 		if env[k] != want {
@@ -936,7 +937,7 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 	if run == "" {
 		t.Fatal("control: topology has no step with id targets")
 	}
-	vars := []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BLOG_URL", "BAKED_APP_URL", "BAKED_LANDING_URL", "BAKED_LIBRARY_URL"}
+	vars := []string{"GATEWAY_URL", "APP_URL", "LANDING_URL", "OPS_CONSOLE_URL", "SUPPORT_CONSOLE_URL", "LIBRARY_URL", "BLOG_URL", "BAKED_APP_URL", "BAKED_LANDING_URL", "BAKED_LIBRARY_URL", "BAKED_BLOG_URL"}
 	guard := func(empty string) (string, error) {
 		cmd := exec.Command("bash", "-c", run)
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
@@ -951,7 +952,7 @@ func TestTopologyJobTakesAndRefusesTheLibraryAndBakedURLs(t *testing.T) {
 		return out, err
 	}
 	if out, err := guard(""); err != nil {
-		t.Errorf("all ten set: guard failed: %v %q", err, out)
+		t.Errorf("all eleven set: guard failed: %v %q", err, out)
 	}
 	for _, v := range vars {
 		out, err := guard(v)

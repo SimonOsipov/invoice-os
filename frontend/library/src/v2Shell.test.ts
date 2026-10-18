@@ -142,8 +142,8 @@ describe('library shell primitives', () => {
   })
 
   const noop = () => {}
-  const sidebar = (route: Route, demoHref: string | null = null) =>
-    render(createElement(Sidebar, { route, demoHref, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop, onCookieChoices: noop }))
+  const sidebar = (route: Route, demoHref: string | null = null, blogHref?: string | null) =>
+    render(createElement(Sidebar, { route, demoHref, blogHref, onHome: noop, onGroup: noop, onFeature: noop, onTour: noop, onCookieChoices: noop }))
   const stepper = (route: Route) => render(createElement(JourneyStepper, { route, onGroup: noop }))
   const home: Route = { view: 'home' }
   const esc = (t: string) => t.replace(/&/g, '&amp;')
@@ -329,6 +329,47 @@ describe('library shell primitives', () => {
     const bare = footerOf(sidebar(home, null)).filter((t) => t.name === 'a' || t.name === 'button')
     expect(bare.map((t) => t.text)).toEqual(['Cookie choices'])
     expect(attr(bare[0], 'class')).toBe('lib-cookie-choices')
+  })
+
+  it('Sidebar_rendersBlogBetweenDemoAndCookieChoices', () => {
+    const ts = sidebar(home, 'https://l.example/?demo', 'https://b.example')
+    const i = ts.findIndex((t) => style(t)['border-top'] === '1px solid var(--line-1)' && attr(t, 'class') === undefined)
+    const kids = ts.slice(i + 1).filter((t) => t.name === 'a' || t.name === 'button')
+    expect(kids.map((t) => t.text)).toEqual(['Book the Demo', 'Blog', 'Cookie choices'])
+    expect(kids[1].name).toBe('a')
+    expect(attr(kids[1], 'href')).toBe('https://b.example')
+    expect(attr(kids[1], 'class')).toBe('lib-blog')
+  })
+
+  it('Sidebar_rendersNoBlogWhenNull', () => {
+    for (const ts of [sidebar(home, 'https://l.example/?demo', null), sidebar(home, 'https://l.example/?demo', ''), sidebar(home, 'https://l.example/?demo')]) {
+      expect(ts.some((t) => t.text === 'Blog')).toBe(false)
+      const i = ts.findIndex((t) => style(t)['border-top'] === '1px solid var(--line-1)' && attr(t, 'class') === undefined)
+      expect(ts.slice(i + 1).filter((t) => t.name === 'a' || t.name === 'button').map((t) => t.text)).toEqual(['Book the Demo', 'Cookie choices'])
+      expect(style(withText(ts, 'Cookie choices'))['margin-top']).toBe('12px')
+    }
+  })
+
+  it('Sidebar_marginsHoldInEveryCombination', () => {
+    const demo = 'https://l.example/?demo'
+    const blog = 'https://b.example'
+    const cases: [string | null, string | null, string[]][] = [
+      [demo, blog, ['Book the Demo', 'Blog', 'Cookie choices']],
+      [demo, null, ['Book the Demo', 'Cookie choices']],
+      [null, blog, ['Blog', 'Cookie choices']],
+      [null, null, ['Cookie choices']],
+      [null, '', ['Cookie choices']],
+    ]
+    for (const [d, b, order] of cases) {
+      const ts = sidebar(home, d, b)
+      const i = ts.findIndex((t) => style(t)['border-top'] === '1px solid var(--line-1)' && attr(t, 'class') === undefined)
+      const kids = ts.slice(i + 1).filter((t) => t.name === 'a' || t.name === 'button')
+      expect(kids.map((t) => t.text), `${d}/${b}`).toEqual(order)
+      // Book the Demo is a Button and carries no marginTop of its own; only Blog and Cookie choices do.
+      const margins = kids.filter((t) => t.text !== 'Book the Demo').map((t) => style(t)['margin-top'])
+      const first = kids[0].text !== 'Book the Demo'
+      expect(margins, `${d}/${b}`).toEqual(margins.map((_, k) => (k === 0 && first ? '0' : '12px')))
+    }
   })
 
   it('SH-13 the stepper shows the 6 stages with a chevron between each', () => {

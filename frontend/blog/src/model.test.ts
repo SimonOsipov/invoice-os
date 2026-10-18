@@ -96,6 +96,11 @@ describe('crumbsFor', () => {
     c[0].go?.()
     expect(nav).toHaveBeenLastCalledWith({ view: 'home' })
     expect(c[2].go).toBeUndefined()
+    for (const r of [{ view: 'home' }, { view: 'category', id: 'nope' }] as Route[]) {
+      const only = crumbsFor(resolveView(r, '', ready(TEST_DATA)), nav)
+      expect(only).toHaveLength(1)
+      expect(only[0].go).toBeUndefined()
+    }
   })
 
   it('crumbs_postWithAMissingCategorySkipsTheMiddle', () => {

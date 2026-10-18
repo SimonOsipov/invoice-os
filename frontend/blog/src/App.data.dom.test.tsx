@@ -76,4 +76,32 @@ describe('data states', () => {
     expect(q('#blog-main section[data-view="post"]')).not.toBeNull()
     expect(q('#blog-main').textContent).not.toContain('This page is not on the blog.')
   })
+
+  it('DA-06 the sidebar counts the posts list, not post_count', async () => {
+    const data: BlogData = { ...TEST_DATA, categories: TEST_DATA.categories.map((c) => ({ ...c, post_count: 99 })) }
+    await mount('/', () => Promise.resolve(data))
+    const allPosts = q('.asc-app > aside nav button')
+    expect(allPosts.textContent).toBe(`All posts${TEST_DATA.posts.length}`)
+  })
+
+  it('DA-07 the post crumbs navigate to the category and home', async () => {
+    await mount('/sage-rules', settled)
+    expect(crumbs()).toEqual(['Blog', 'Regulation', 'New sage rules for invoices'])
+    const buttons = () => [...q('#blog-header nav[aria-label="Breadcrumb"]').querySelectorAll('button')]
+    click(buttons()[1])
+    expect(window.location.pathname).toBe('/category/c1')
+    expect(crumbs()).toEqual(['Blog', 'Regulation'])
+    click(buttons()[0])
+    expect(window.location.pathname).toBe('/')
+  })
+
+  it('DA-08 an unknown category id shows not found and a known one does not', async () => {
+    await mount('/category/nope', settled)
+    expect(q('#blog-main h2').textContent).toBe('This page is not on the blog.')
+    act(() => root.unmount())
+    container.remove()
+    await mount('/category/c1', settled)
+    expect(q('#blog-main').textContent).not.toContain('This page is not on the blog.')
+    expect(q('#blog-main section[data-view="category"]')).not.toBeNull()
+  })
 })

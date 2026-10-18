@@ -77,7 +77,7 @@ export const APPS: AppTarget[] = [
       const res = await page.request.get(new URL(src as string, page.url()).href)
       expect(res.status()).toBe(200)
       expect(res.headers()['content-type']).toContain('javascript')
-      await expect(page.getByRole('button', { name: 'Subscribe' })).toBeVisible()
+      await expect(page.locator('.asc-app > aside').getByRole('button', { name: 'Subscribe' })).toBeVisible()
       await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toBeVisible()
     },
   },

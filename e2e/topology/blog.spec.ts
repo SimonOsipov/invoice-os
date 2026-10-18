@@ -318,7 +318,109 @@ test.describe('blog at phone widths', () => {
       expect(doc.scrollWidth - doc.clientWidth, 'the page scrolls sideways').toBeLessThanOrEqual(1)
       expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
     })
+
+    test(`blog phone: no view scrolls sideways (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await prepare(page)
+      await resize(page, width, 800)
+      const readings: Record<string, unknown> = {}
+      const check = async (label: string): Promise<void> => {
+        const r = await page.evaluate(() => {
+          const m = document.getElementById('blog-main')
+          return {
+            doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            main: m ? m.scrollWidth - m.clientWidth : 0,
+          }
+        })
+        readings[label] = r
+        expect(r.doc, `${label}: the page scrolls sideways`).toBeLessThanOrEqual(1)
+        expect(r.main, `${label}: main scrolls sideways`).toBeLessThanOrEqual(1)
+        const a = await rectOf(aside(page), 'aside')
+        const m = await rectOf(main(page), '#blog-main')
+        expect(a.y + a.height, `${label}: the sidebar sits above main`).toBeLessThanOrEqual(m.y + SLACK_PX)
+      }
+
+      await visit(page)
+      await expect(main(page).locator(`section ${GRID} button`).first(), 'home: no band card').toBeVisible()
+      await check('home')
+
+      await visit(page, '/category/regulation')
+      await expect(main(page).getByRole('button', { name: new RegExp(WHAT_CHANGES) }).first()).toBeVisible()
+      await check('category')
+
+      await visit(page, '/')
+      await expect(main(page).locator('h1')).toBeVisible()
+      await header(page).locator('label').getByRole('textbox').fill('invoice')
+      await expect(main(page).locator('h2')).toContainText(/match/)
+      expect(await main(page).locator('button.blog-row').count(), 'control: no result row').toBeGreaterThan(0)
+      await check('search')
+
+      await visit(page, '/what-changes')
+      await expect(main(page).locator('article h1')).toBeVisible()
+      await expect(main(page).locator('aside[aria-label="On this page"]'), 'control: no TOC').toBeVisible()
+      await expect(main(page).getByTestId('blog-demo-scene'), 'control: no demo').toBeVisible()
+      await check('article')
+      await attachJson(testInfo, `blog-phone-sweep-${width}`, readings)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog phone: the article content sits inside the viewport (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await prepare(page)
+      await resize(page, width, 800)
+      await visit(page, '/what-changes')
+      const art = main(page).locator('article')
+      await expect(art.locator('h1')).toBeVisible()
+      const toc = main(page).locator('aside[aria-label="On this page"]')
+      await expect(toc, 'control: no TOC').toBeVisible()
+      const demo = main(page).getByTestId('blog-demo')
+      await expect(demo, 'control: no demo frame').toBeVisible()
+      const body = await rectOf(art.locator(':scope > div').nth(2).locator(':scope > div').first(), 'the body column')
+      const t = await rectOf(toc, 'the TOC')
+      const d = await rectOf(demo, 'the demo frame')
+      await attachJson(testInfo, `blog-phone-article-${width}`, { body, toc: t, demo: d })
+      const viewport = { x: 0, y: -1e6, width, height: 2e6 }
+      expect(enclosesRect(viewport, body, SLACK_PX), 'the body column leaves the viewport width').toBe(true)
+      expect(enclosesRect(viewport, t, SLACK_PX), 'the TOC leaves the viewport width').toBe(true)
+      expect(enclosesRect(viewport, d, SLACK_PX), 'the demo frame leaves the viewport width').toBe(true)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
+
+    test(`blog phone: the article aligns with home (${width})`, async ({ page }, testInfo) => {
+      const errors = collectErrors(page)
+      await prepare(page)
+      await resize(page, width, 800)
+      await visit(page)
+      await expect(main(page).locator('h1')).toBeVisible()
+      const home = await rectOf(main(page).locator('h1'), 'the home h1')
+      await visit(page, '/what-changes')
+      await expect(main(page).locator('article h1')).toBeVisible()
+      const art = await rectOf(main(page).locator('article h1'), 'the article h1')
+      await attachJson(testInfo, `blog-phone-align-${width}`, { home, article: art })
+      expect(Math.abs(art.x - home.x), 'the article h1 and the home h1 start at different left edges').toBeLessThanOrEqual(SLACK_PX)
+      expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
+    })
   }
+})
+
+const SEEDED_TITLES = [
+  'The private pilot opens to 20 more businesses', // migrations/20261017135635_seed_blog.sql
+  WHAT_CHANGES,
+  'Document recognition now learns each supplier layout',
+  'The Sage connector is now available',
+]
+
+test('blog home: live posts render', async ({ page }) => {
+  const errors = collectErrors(page)
+  await prepare(page)
+  await visit(page)
+  const label = main(page).locator('section').first().locator('.t-step').first()
+  await expect(label, 'control: no featured card').toBeVisible()
+  await expect(label).toHaveText(/^(Featured|Latest) · /)
+  await expect(main(page).locator(`section ${GRID} button`).first(), 'no band card rendered').toBeVisible()
+  const titles = await main(page).locator(`section ${GRID} button > span:nth-child(2)`).allTextContents()
+  expect(titles.some((t) => SEEDED_TITLES.includes(t)), `no band holds a seeded post; saw ${titles.join(' | ')}`).toBe(true)
+  expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
 })
 
 test.describe('blog routes', () => {
@@ -326,6 +428,7 @@ test.describe('blog routes', () => {
     ['/subscribe', ['Blog', 'Subscribe']],
     ['/category/x', ['Blog']],
     ['/a-post', ['Blog']],
+    ['/what-changes', ['Blog', 'Regulation & FIRS news', WHAT_CHANGES]],
   ]
 
   test('blog routes: a cold deep link renders the shell', async ({ page }) => {
@@ -336,6 +439,8 @@ test.describe('blog routes', () => {
       await expect(crumbs(page).getByRole('button'), `${path}: crumbs`).toHaveText(expected)
       await expect(aside(page).getByRole('button', { name: 'Subscribe' }), `${path}: the Subscribe button`).toBeVisible()
     }
+    await visit(page, '/a-post')
+    await expect(main(page).getByRole('heading', { name: 'This page is not on the blog.' }), '/a-post: not-found heading').toBeVisible()
     expect(errors, `console errors:\n${errors.join('\n')}`).toEqual([])
   })
 })

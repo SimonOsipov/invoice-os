@@ -275,8 +275,15 @@ export async function setInvitationToken(tenantId: string, invitationId: string,
 
 // Invites `email` as `role` through the tenancy API, gives the invite a token of the spec's own and returns it.
 // `tenantId` is the admin's workspace.
-export async function inviteWithToken(adminToken: string, tenantId: string, email: string, role: 'admin' | 'preparer' | 'reviewer' = 'reviewer'): Promise<string> {
-  const res = await rawFetch('/api/tenancy/v1/invitations', { method: 'POST', headers: { Authorization: `Bearer ${adminToken}` }, body: { emails: [email], role } })
+export async function inviteWithToken(
+  adminToken: string,
+  tenantId: string,
+  email: string,
+  role: 'admin' | 'preparer' | 'reviewer' = 'reviewer',
+  clientAccess?: ClientAccess,
+): Promise<string> {
+  const body = { emails: [email], role, ...(clientAccess !== undefined && { client_access: clientAccess }) }
+  const res = await rawFetch('/api/tenancy/v1/invitations', { method: 'POST', headers: { Authorization: `Bearer ${adminToken}` }, body })
   if (res.status !== 200) throw new Error(`invite answered ${res.status}: ${JSON.stringify(res.body)}`)
   const [invitation] = (res.body as { invitations: { id: string }[] }).invitations
   // 43 random base64url characters: inviteTokenShape, internal/tenancy/store.go.
@@ -314,15 +321,19 @@ export interface Me {
   user: { id: string; role: string; display_name: string | null; email: string | null }
 }
 
-// Membership mirrors internal/tenancy's Membership struct: five keys, none tagged
-// omitempty, so display_name/email are present as an explicit value or an explicit null.
-// Both the list element and the PATCH response body take this shape.
+// ClientAccess: "all" or the client ids; null on a Membership means an in-house row or a hidden one.
+export type ClientAccess = 'all' | string[]
+
+// Membership mirrors internal/tenancy's MemberAccess: six keys, none tagged omitempty, so
+// display_name/email/client_access are an explicit value or an explicit null.
+// The list element, the PATCH body and the PUT .../clients body take this shape.
 export interface Membership {
   user_id: string
   role: string
   status: string
   display_name: string | null
   email: string | null
+  client_access: ClientAccess | null
 }
 
 export interface MembershipsResponse {
@@ -511,12 +522,21 @@ export function memberships(token: string): Promise<MembershipsResponse> {
 
 // setMembershipStatus(): PATCH /v1/memberships/{user_id}, admin-only, audited. `invited` is
 // excluded at the type level rather than by a 400 — it is a column value, not a target.
-// Answers the updated row in the same five-key shape as a list element.
+// Answers the updated row in the same six-key shape as a list element.
 export function setMembershipStatus(token: string, userId: string, status: 'active' | 'suspended'): Promise<Membership> {
   return apiFetch<Membership>(`${apiBase()}/api/tenancy/v1/memberships/${userId}`, {
     method: 'PATCH',
     body: { status },
     token,
+  })
+}
+
+// setMemberClients(): PUT /v1/memberships/{user_id}/clients, admin-only. Raw, so a spec asserts the refusals.
+export function setMemberClients(token: string, userId: string, access: unknown): Promise<{ status: number; body: unknown }> {
+  return rawFetch(`/api/tenancy/v1/memberships/${userId}/clients`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}` },
+    body: { client_access: access },
   })
 }
 

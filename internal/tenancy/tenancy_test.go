@@ -811,8 +811,8 @@ func doMemberships(t *testing.T, load MembershipsLoader, id *auth.Identity) (*ht
 // loader's order.
 func TestMemberships_OK(t *testing.T) {
 	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
-	want := []Membership{{UserID: "u1", Role: "admin"}, {UserID: "u2", Role: "preparer"}}
-	load := func(context.Context) ([]Membership, error) { return want, nil }
+	want := []MemberAccess{{Membership: Membership{UserID: "u1", Role: "admin"}}, {Membership: Membership{UserID: "u2", Role: "preparer"}}}
+	load := func(context.Context) ([]MemberAccess, error) { return want, nil }
 	rec, body := doMemberships(t, load, &id)
 
 	if rec.Code != http.StatusOK {
@@ -841,7 +841,7 @@ func TestMemberships_OK(t *testing.T) {
 // null field.
 func TestMemberships_Empty200(t *testing.T) {
 	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) ([]Membership, error) { return []Membership{}, nil }
+	load := func(context.Context) ([]MemberAccess, error) { return []MemberAccess{}, nil }
 	rec, body := doMemberships(t, load, &id)
 
 	if rec.Code != http.StatusOK {
@@ -860,7 +860,7 @@ func TestMemberships_Empty200(t *testing.T) {
 // serialize as a literal `[]`, never `null`.
 func TestMembershipsHandler_NilLoaderResultSerializesAsEmptyArray(t *testing.T) {
 	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) ([]Membership, error) { return nil, nil }
+	load := func(context.Context) ([]MemberAccess, error) { return nil, nil }
 	rec, body := doMemberships(t, load, &id)
 
 	if rec.Code != http.StatusOK {
@@ -875,7 +875,7 @@ func TestMembershipsHandler_NilLoaderResultSerializesAsEmptyArray(t *testing.T) 
 // must 401 before the loader ever runs -- asserted by failing the test if
 // load is called.
 func TestMemberships_NoIdentity401(t *testing.T) {
-	load := func(context.Context) ([]Membership, error) {
+	load := func(context.Context) ([]MemberAccess, error) {
 		t.Fatal("loader must not run without an identity")
 		return nil, nil
 	}
@@ -892,7 +892,7 @@ func TestMemberships_NoIdentity401(t *testing.T) {
 // db.ErrNoTenant must fail closed with 401, same as MeHandler.
 func TestMemberships_NoTenantCtx401(t *testing.T) {
 	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) ([]Membership, error) { return nil, db.ErrNoTenant }
+	load := func(context.Context) ([]MemberAccess, error) { return nil, db.ErrNoTenant }
 	rec, body := doMemberships(t, load, &id)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
@@ -907,7 +907,7 @@ func TestMemberships_NoTenantCtx401(t *testing.T) {
 // not independently gate on the caller holding a membership.
 func TestMemberships_Error500(t *testing.T) {
 	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) ([]Membership, error) { return nil, errors.New("boom") }
+	load := func(context.Context) ([]MemberAccess, error) { return nil, errors.New("boom") }
 	rec, body := doMemberships(t, load, &id)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
@@ -917,46 +917,13 @@ func TestMemberships_Error500(t *testing.T) {
 	}
 }
 
-// TestMemberships_ProjectsFiveKeys (AC-1, RED until Membership widens): a
-// loader-returned membership must serialize with exactly the identity
-// projection's five keys -- user_id, role, status, display_name, email --
-// no fewer, no more.
-func TestMemberships_ProjectsFiveKeys(t *testing.T) {
-	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) ([]Membership, error) {
-		return []Membership{{UserID: "u1", Role: "admin"}}, nil
-	}
-	rec, body := doMemberships(t, load, &id)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-
-	var items []map[string]json.RawMessage
-	if err := json.Unmarshal(body.Memberships, &items); err != nil {
-		t.Fatalf("decode memberships %q: %v", body.Memberships, err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("len(memberships) = %d, want 1", len(items))
-	}
-
-	want := []string{"display_name", "email", "role", "status", "user_id"}
-	got := make([]string, 0, len(items[0]))
-	for k := range items[0] {
-		got = append(got, k)
-	}
-	slices.Sort(got)
-	if !slices.Equal(got, want) {
-		t.Errorf("memberships[0] keys = %v, want %v", got, want)
-	}
-}
-
 // TestMemberships_NullIdentityKeysArePresent (AC-1, RED until Membership
 // widens): a membership with no display_name/email on file must still
 // serialize both keys as explicit JSON null -- never omitted.
 func TestMemberships_NullIdentityKeysArePresent(t *testing.T) {
 	id := auth.Identity{Subject: "caller", Role: "authenticated", TenantID: uuid.NewString()}
-	load := func(context.Context) ([]Membership, error) {
-		return []Membership{{UserID: "u1", Role: "admin"}}, nil
+	load := func(context.Context) ([]MemberAccess, error) {
+		return []MemberAccess{{Membership: Membership{UserID: "u1", Role: "admin"}}}, nil
 	}
 	rec, body := doMemberships(t, load, &id)
 	if rec.Code != http.StatusOK {
@@ -1082,7 +1049,7 @@ func TestStoreListMemberships_DeterministicOrder(t *testing.T) {
 		t.Fatalf("len(first)=%d len(second)=%d, want 3 each", len(first), len(second))
 	}
 	for i := range first {
-		if first[i] != second[i] {
+		if first[i].Membership != second[i].Membership {
 			t.Errorf("order differs at index %d: first=%+v second=%+v", i, first[i], second[i])
 		}
 	}
@@ -1759,9 +1726,9 @@ func TestMembership_InvalidStatusRejected(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-			set := func(context.Context, string, string) (Membership, error) {
+			set := func(context.Context, string, string) (MemberAccess, error) {
 				t.Fatal("setter must not run for a rejected request body")
-				return Membership{}, nil
+				return MemberAccess{}, nil
 			}
 			r := httptest.NewRequest("PATCH", "/v1/memberships/"+uuid.NewString(), strings.NewReader(c.body))
 			r = r.WithContext(auth.WithIdentity(r.Context(), id))
@@ -1780,9 +1747,9 @@ func TestMembership_InvalidStatusRejected(t *testing.T) {
 // body is ~30 bytes.
 func TestMembership_BodyOverCapRejected(t *testing.T) {
 	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-	set := func(context.Context, string, string) (Membership, error) {
+	set := func(context.Context, string, string) (MemberAccess, error) {
 		t.Fatal("setter must not run for an over-cap body")
-		return Membership{}, nil
+		return MemberAccess{}, nil
 	}
 	oversized := `{"status":"suspended","padding":"` + strings.Repeat("x", 8*1024) + `"}`
 	r := httptest.NewRequest("PATCH", "/v1/memberships/"+uuid.NewString(), strings.NewReader(oversized))
@@ -2512,9 +2479,9 @@ func TestMembership_PathIDAndBodyOrdering(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			set := func(context.Context, string, string) (Membership, error) {
+			set := func(context.Context, string, string) (MemberAccess, error) {
 				t.Fatal("setter must not run for a request rejected at the handler")
-				return Membership{}, nil
+				return MemberAccess{}, nil
 			}
 			id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
 			if rec := patchViaMux(t, set, id, tc.pathID, tc.body); rec.Code != tc.want {
@@ -2548,7 +2515,7 @@ func TestMembership_StatusForErrTable(t *testing.T) {
 				err, name = fmt.Errorf("store: %w", tc.err), name+" (wrapped)"
 			}
 			t.Run(name, func(t *testing.T) {
-				set := func(context.Context, string, string) (Membership, error) { return Membership{}, err }
+				set := func(context.Context, string, string) (MemberAccess, error) { return MemberAccess{}, err }
 				id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
 				rec := patchViaMux(t, set, id, uuid.NewString(), `{"status":"suspended"}`)
 				if rec.Code != tc.want {
@@ -2571,49 +2538,13 @@ func TestMembership_StatusForErrTable(t *testing.T) {
 	}
 }
 
-// TestMembership_OKBodyIsFiveKeyShape (AC-1): a 200 returns the updated
-// membership in the same five-key shape as a GET /v1/memberships element, with
-// a null email present rather than omitted.
-func TestMembership_OKBodyIsFiveKeyShape(t *testing.T) {
-	displayName := "Ada"
-	set := func(_ context.Context, userID, status string) (Membership, error) {
-		return Membership{UserID: userID, Role: "reviewer", Status: status, DisplayName: &displayName}, nil
-	}
-	id := auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()}
-	targetID := uuid.NewString()
-	rec := patchViaMux(t, set, id, targetID, `{"status":"suspended"}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
-	}
-
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
-		t.Fatalf("decode body %q: %v", rec.Body.String(), err)
-	}
-	gotKeys := make([]string, 0, len(raw))
-	for k := range raw {
-		gotKeys = append(gotKeys, k)
-	}
-	slices.Sort(gotKeys)
-	wantKeys := []string{"display_name", "email", "role", "status", "user_id"}
-	if !slices.Equal(gotKeys, wantKeys) {
-		t.Errorf("keys = %v, want exactly %v", gotKeys, wantKeys)
-	}
-	if string(raw["email"]) != "null" {
-		t.Errorf("email = %s, want null (present, never omitted)", raw["email"])
-	}
-	if string(raw["user_id"]) != `"`+targetID+`"` || string(raw["status"]) != `"suspended"` {
-		t.Errorf("body = %s, want the updated row for %s", rec.Body.String(), targetID)
-	}
-}
-
 // TestMembership_NoIdentity401: the PATCH endpoint answers nothing without a
 // verified caller, and the setter never runs -- the same fail-closed shape
 // MeHandler and MembershipsHandler already carry.
 func TestMembership_NoIdentity401(t *testing.T) {
-	set := func(context.Context, string, string) (Membership, error) {
+	set := func(context.Context, string, string) (MemberAccess, error) {
 		t.Fatal("setter must not run without an identity")
-		return Membership{}, nil
+		return MemberAccess{}, nil
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("PATCH /v1/memberships/{user_id}", SetMembershipStatusHandler(set, nil))

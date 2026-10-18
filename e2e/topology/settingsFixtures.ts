@@ -52,9 +52,9 @@ export const SEED_FIRM_MEMBERS: readonly SeededMember[] = [
     accessRole: 'Preparer',
     pill: 'ACTIVE',
   },
-  // The firm's suspended row, and the only seeded person holding no workflow role at all —
-  // both of this tab's exceptional states on one line.
+  // The firm's suspended row; with Amaka Eze, one of two seeded people holding no workflow role.
   { name: 'Halima Yusuf', email: 'h.yusuf@okafor.ng', accessRole: 'Reviewer', pill: 'SUSPENDED' },
+  { name: 'Amaka Eze', email: 'a.eze@okafor.ng', accessRole: 'Reviewer', pill: 'ACTIVE' },
 ]
 
 // …0012 Adebayo Ogunlesi is suspended AND the sole `cfo` holder, which is what makes a seat
@@ -92,7 +92,6 @@ export const UNBACKED = {
   remove: 'Deleting a membership locks that person out on their next request, and nothing undoes it. That decision has not been taken.',
   role: "The membership endpoint writes status only. Changing someone's access role has no server call behind it.",
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
-  clientAccess: 'Client access is not stored per person — everyone in this workspace sees the same clients.',
 } as const
 
 /** Invitee account-state labels, transcribed from inviteAccountLine in frontend/app/src/lib/members.ts. */

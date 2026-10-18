@@ -483,11 +483,12 @@ func migrationVersion(t *testing.T, glob string) int64 {
 }
 
 // membershipsColumns reads memberships' current column set, ordinal-position order.
+// all_clients (client_access migration) is left out: it is not this migration's column.
 func membershipsColumns(t *testing.T, ctx context.Context) []string {
 	t.Helper()
 	rows, err := h.super.Query(ctx,
 		`SELECT column_name FROM information_schema.columns
-		 WHERE table_schema = 'public' AND table_name = 'memberships'
+		 WHERE table_schema = 'public' AND table_name = 'memberships' AND column_name <> 'all_clients'
 		 ORDER BY ordinal_position`)
 	if err != nil {
 		t.Fatalf("query memberships columns: %v", err)

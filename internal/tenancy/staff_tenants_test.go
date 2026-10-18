@@ -826,6 +826,13 @@ func TestStaffTenantRoute_ReturnsTheTenantMembersAndInvoices(t *testing.T) {
 		{"INV-B", "validated", t0.Add(time.Minute)},
 	})
 	seedAuditAt(t, super, x, t0.Add(2*time.Minute))
+	// Stored client access never reaches the staff detail: members keep five keys.
+	giveAllClients(t, super, x, a)
+	var entity string
+	if err := super.QueryRow(context.Background(), `SELECT id::text FROM business_entities WHERE tenant_id = $1`, x).Scan(&entity); err != nil {
+		t.Fatalf("read the seeded entity: %v", err)
+	}
+	giveClients(t, super, x, c, entity)
 
 	rec := rig.getTenant(x, staffCaller{subject: staff, staff: true})
 	top, tenant, members, invoices := detailOf(t, rec)

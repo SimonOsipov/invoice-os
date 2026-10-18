@@ -1,8 +1,26 @@
 // Invite API over the deployed fork (tenancy via the gateway). A fork's sender captures, so a mail is
 // never sent and delivery reads "sent". A fresh workspace per run keeps the daily invite count at zero.
 import { test, expect } from '@playwright/test'
-import { acceptById, grantMembership, inviteWithToken, listMine, me, rawFetch, registerFormAccount, registerFresh, signInSession, subjectOf } from './client'
+import {
+  acceptById,
+  createEntity,
+  grantMembership,
+  inviteWithToken,
+  listEntities,
+  listMine,
+  login,
+  me,
+  memberships,
+  PERSONAS,
+  rawFetch,
+  registerFormAccount,
+  registerFresh,
+  signInSession,
+  subjectOf,
+  type ClientAccess,
+} from './client'
 import { assertErrorEnvelope } from './contract-helpers'
+import { freshTin } from './fixtures'
 
 interface Invitation {
   id: string
@@ -23,6 +41,9 @@ const DAY = 24 * HOUR
 const NOT_VALID = 'this invite is no longer valid'
 const NOT_FOUND = 'invitation not found'
 const NOT_PENDING = 'this invite is no longer pending'
+// internal/tenancy/invitations_handler.go (admin invite with client_access); tenancy.go statusForErr (ErrUnknownClient).
+const ADMIN_INVITE_ACCESS = 'client_access applies to a preparer or reviewer invite'
+const UNKNOWN_CLIENT = 'a client in the list is not in this workspace'
 
 const withoutAccount = (list: Invitation[]) => list.map(({ account: _account, ...rest }) => rest)
 
@@ -30,8 +51,9 @@ function auth(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}` }
 }
 
-async function invite(token: string, emails: string[], role = 'reviewer') {
-  return rawFetch('/api/tenancy/v1/invitations', { method: 'POST', headers: auth(token), body: { emails, role } })
+async function invite(token: string, emails: string[], role = 'reviewer', clientAccess?: ClientAccess) {
+  const body = { emails, role, ...(clientAccess !== undefined && { client_access: clientAccess }) }
+  return rawFetch('/api/tenancy/v1/invitations', { method: 'POST', headers: auth(token), body })
 }
 
 const revoke = (token: string, id: string) => rawFetch(`/api/tenancy/v1/invitations/${id}/revoke`, { method: 'POST', headers: auth(token) })
@@ -199,5 +221,57 @@ test.describe.serial('invitations (API E2E, over the deployed gateway)', () => {
     const second = await revoke(adminToken, pendingId)
     assertErrorEnvelope(second, 409, 'a second revoke')
     expect((second.body as { error: string }).error).toBe(NOT_PENDING)
+  })
+  async function newClient(label: string): Promise<string> {
+    return (await createEntity(adminToken, { name: `FIRMS-02 ${label} ${freshTin()}`, tin: freshTin() })).id
+  }
+  const accessOf = async (userId: string) => (await memberships(adminToken)).memberships.find((m) => m.user_id === userId)?.client_access
+
+  test('invitations: an invite with a client set, accepted by token, gives the member that set', async () => {
+    const [e1, e2] = [await newClient('set a'), await newClient('set b')]
+    const invitee = await registerFresh('invitations-set')
+    const token = await inviteWithToken(adminToken, tenantId, invitee.email, 'preparer', [e2, e1])
+    const session = await signInSession(invitee.email, invitee.password)
+    const joined = await rawFetch('/api/tenancy/v1/invitations/accept', { method: 'POST', headers: auth(session.access_token), body: { token } })
+    expect(joined.status, JSON.stringify(joined.body)).toBe(200)
+    expect(await accessOf(subjectOf(session.access_token))).toEqual([e1, e2].sort())
+  })
+
+  test('invitations: an invite with all clients, accepted by id, gives all clients', async () => {
+    const invitee = await registerFresh('invitations-all')
+    const res = await invite(adminToken, [invitee.email], 'reviewer', 'all')
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    const id = (res.body as { invitations: Invitation[] }).invitations[0].id
+    const session = (await signInSession(invitee.email, invitee.password)).access_token
+    const accepted = await acceptById(session, id)
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200)
+    expect(await accessOf(subjectOf(session))).toBe('all')
+  })
+
+  test('invitations: an invite with no choice gives no clients', async () => {
+    const invitee = await registerFresh('invitations-none')
+    const token = await inviteWithToken(adminToken, tenantId, invitee.email, 'preparer')
+    const session = await signInSession(invitee.email, invitee.password)
+    const joined = await rawFetch('/api/tenancy/v1/invitations/accept', { method: 'POST', headers: auth(session.access_token), body: { token } })
+    expect(joined.status, JSON.stringify(joined.body)).toBe(200)
+    expect(await accessOf(subjectOf(session.access_token))).toEqual([])
+  })
+
+  test('invitations: client access on an admin invite or a foreign client is refused', async () => {
+    const adminEmail = `invitations-admin-access-${crypto.randomUUID()}@example.com`
+    const foreignEmail = `invitations-foreign-${crypto.randomUUID()}@example.com`
+    const refusedAdmin = await invite(adminToken, [adminEmail], 'admin', 'all')
+    assertErrorEnvelope(refusedAdmin, 400, 'admin invite with client_access')
+    expect((refusedAdmin.body as { error: string }).error).toBe(ADMIN_INVITE_ACCESS)
+
+    // An entity of the seeded firm 1111 is not in this workspace.
+    const { entities } = await listEntities(await login(PERSONAS.A), { limit: 1 })
+    const refusedForeign = await invite(adminToken, [foreignEmail], 'preparer', [entities[0].id])
+    assertErrorEnvelope(refusedForeign, 400, 'invite naming another workspace client')
+    expect((refusedForeign.body as { error: string }).error).toBe(UNKNOWN_CLIENT) // ErrUnknownClient
+
+    const pending = (await listInvitations(adminToken)).map((i) => i.email)
+    expect(pending).not.toContain(adminEmail)
+    expect(pending).not.toContain(foreignEmail)
   })
 })

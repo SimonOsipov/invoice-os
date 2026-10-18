@@ -57,6 +57,7 @@ const EXPECTED: Record<AuditDomain, string[]> = {
   memberships: [
     'membership.suspended',
     'membership.reactivated',
+    'membership.client_access_set',
     'workspace.provisioned',
     'invitation.sent',
     'invitation.resent',
@@ -157,6 +158,7 @@ describe('audit vocabulary', () => {
       'extraction.field_corrected',
       'extraction.anchor.learned',
       'workspace.provisioned',
+      'membership.client_access_set',
       'invitation.sent',
       'invitation.resent',
       'invitation.accepted',
@@ -191,6 +193,15 @@ describe('audit vocabulary', () => {
     // No outcome key: a learned rule is neither good nor bad news.
     expect(view.tone).toBeNull()
     // Control: the same view function does return a tone for an outcome-bearing event.
+    expect(auditEventView('submission.failed').tone).not.toBeNull()
+  })
+
+  it('auditVocabulary_clientAccessSetIsLabelledInMemberships', () => {
+    const view = auditEventView('membership.client_access_set')
+    expect(view.domain).toBe('memberships')
+    expect(view.label).toBe('Client access changed')
+    expect(AUDIT_EVENTS['membership.client_access_set'].outcome).toBe('neutral')
+    expect(view.tone).toBe('amber')
     expect(auditEventView('submission.failed').tone).not.toBeNull()
   })
 

@@ -5,9 +5,8 @@
 // CustomersView, RulesView). The one real <table>, ViolationsTable, is a shared component
 // embedded inside screens rather than a screen's own layout.
 //
-// ONE column set, both modes. The two that used to fork — firm's client scoping, in-house's
-// department — are gone with the columns themselves: a membership row carries an identity,
-// an access role and a status, and nothing else.
+// ONE column set, both modes. Firm's client access is a second line in the Access role cell,
+// not a column.
 //
 // Nothing is derived here. Every value comes from lib/members.ts or lib/roles.ts — vitest
 // is `environment: node` in this project, so a derivation written into a component is a
@@ -17,6 +16,8 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   accessRoleLabel,
+  clientAccessLabel,
+  clientAccessTitle,
   emailLabel,
   inviteAccountLine,
   inviteStatusLine,
@@ -204,6 +205,7 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
           const rolesLanded = ctx.rolesState === 'ready' || ctx.rolesState === 'empty'
           const roleCell = rolesLanded ? rosterRoleCell(roles, m.id) : { text: '', tooltip: '' }
           const pending = m.status === 'invited'
+          const clientLine = ctx.mode === 'firm' ? clientAccessLabel(m.clientAccess) : null
           const invite = pending ? invites.find((i) => i.id === m.id) : undefined
           const accountLine = invite ? inviteAccountLine(invite) : null
           return (
@@ -253,7 +255,17 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                   </span>
                 </span>
 
-                <span style={{ ...ELLIPSIS, fontSize: 12.5, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: 'block', ...ELLIPSIS, fontSize: 12.5, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
+                  {clientLine && (
+                    <span
+                      data-testid="member-client-access"
+                      title={clientAccessTitle(ctx.entities, m.clientAccess)}
+                      style={{ display: 'block', ...ELLIPSIS, marginTop: 2, fontSize: 11, color: 'var(--fg-3)' }}>
+                      {clientLine}
+                    </span>
+                  )}
+                </span>
 
                 {/* Newline-joined tooltip; empty on a roleless row, which is the `—` case and
                     wants no tooltip at all. */}

@@ -1149,7 +1149,7 @@ func TestInvitationsAPI_StoreFailureIsAnOpaque500(t *testing.T) {
 	boom := errors.New("pq: connection to 10.0.0.9 refused for b@x.test")
 	ctx := auth.WithIdentity(context.Background(), auth.Identity{Subject: uuid.NewString(), Role: "authenticated", TenantID: uuid.NewString()})
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/invitations", InvitationsCreateHandler(func(context.Context, []string, string) ([]InviteResult, error) { return nil, boom }, log))
+	mux.HandleFunc("POST /v1/invitations", InvitationsCreateHandler(func(context.Context, []string, string, *ClientAccess) ([]InviteResult, error) { return nil, boom }, log))
 	mux.HandleFunc("GET /v1/invitations", InvitationsListHandler(func(context.Context) ([]Invitation, error) { return nil, boom }, log))
 	mux.HandleFunc("POST /v1/invitations/{id}/resend", InvitationResendHandler(func(context.Context, string) (InviteResult, error) { return InviteResult{}, boom }, log))
 

@@ -2,8 +2,9 @@
 //
 // Identity, access role and status are SERVER truth, read through `listMembers` and written
 // through `setMembershipStatus`. Pending invites are server truth too (`listInvitations`,
-// `sendInvitations`, `resendInvitation`, `revokeInvitation`). Remove, role, department and
-// per-person client access have no endpoint behind them; `MEMBER_UNBACKED` says so in one sentence each.
+// `sendInvitations`, `resendInvitation`, `revokeInvitation`). Per-person client access is server
+// truth too (`setMembershipClients`). Remove, role and department have no endpoint behind them;
+// `MEMBER_UNBACKED` says so in one sentence each.
 //
 // This module is a function of a PERSON. Anything that is really a function of the ROLE LIST
 // — who holds a seat, what a policy step resolves to, how a workspace's coverage reads —
@@ -14,11 +15,10 @@
 // members.ts imports NOTHING from types.ts: types.ts already type-imports this module, so a
 // back-edge here would be a real cycle rather than a hypothetical one.
 //
-// Reducers are immutable, and a `Member` is now flat — every value on it is a scalar, so a
-// spread is a full copy and nothing can be left aliased.
+// Reducers are immutable. A `Member` is flat apart from `clientAccess`, an array that `toMember`
+// copies, so a spread is a full copy only because nothing mutates that array.
 
-import { CFG } from '../data'
-import type { AuthedFetch } from './portfolio'
+import type { AuthedFetch, Entity } from './portfolio'
 import type { AsyncStatus } from '@invoice-os/api-client'
 import { initials } from './customers'
 
@@ -36,7 +36,7 @@ export type Department = 'Finance' | 'Tax & Compliance' | 'Accounts Payable' | '
 
 /**
  * One flat row per person — exactly what a membership stores. `toMember` is its only
- * producer, and it sets all seven keys from the wire.
+ * producer, and it sets every key from the wire.
  */
 export type Member = {
   id: string
@@ -47,6 +47,8 @@ export type Member = {
   role: AccessRole
   status: MemberStatus
   isYou: boolean
+  /** Optional so fixtures need no edit `null` = unknown to this viewer: no roster line. */
+  clientAccess?: 'all' | readonly string[] | null
 }
 
 // ---------------------------------------------------------------------------
@@ -122,13 +124,6 @@ export const CAPABILITY_FOOTNOTE =
 export const CLIENT_USERS_COPY =
   'Give a contact at one of your clients read-only access, or approval rights on their own invoices.'
 
-/**
- * The static client roster the invite flow's scoping picker indexes. Ids ARE the CFG indices
- * (../data) — deliberately the static mock roster and not the live portfolio entity list,
- * whose ids are UUID strings a `number[]` cannot address (`[client-roster-is-static]`).
- */
-export const CLIENT_ROSTER: readonly { id: number; name: string }[] = CFG.map((c, i) => ({ id: i, name: c.name }))
-
 // ---------------------------------------------------------------------------
 // Derivations — all pure, all taking their inputs as arguments
 // ---------------------------------------------------------------------------
@@ -173,12 +168,11 @@ export function activeAdmins(list: readonly Member[]): Member[] {
 export type InviteVerdict = 'ok' | 'member' | 'invited' | 'malformed'
 
 /**
- * Discriminated on `mode`, so the fork is a compile-time fact and a firm invite's
- * `clientAccess` is REQUIRED rather than optional. `Member` itself carries neither field —
+ * Discriminated on `mode`, so the fork is a compile-time fact. `Member` itself carries neither field —
  * this is the argument an invite would take, not the row it would produce.
  */
 export type InviteOptions =
-  | { mode: 'firm'; role: AccessRole; clientAccess: 'all' | number[] }
+  | { mode: 'firm'; role: AccessRole; clientAccess: 'all' | string[] }
   | { mode: 'inhouse'; role: AccessRole; department: Department }
 
 /**
@@ -374,12 +368,8 @@ export function mergeChips(current: readonly string[], added: readonly string[])
   return out
 }
 
-/**
- * §7's zero-selected state. `Selected clients` with nothing ticked is an invite that grants
- * access to nothing, so `Send invites` is disabled and this says why — INVENTED COPY, since §7
- * specifies the behaviour and supplies no sentence for it.
- */
-export const NO_CLIENTS_NOTE = 'Pick at least one client, or switch to All clients.'
+/** The zero-selected note. An empty pick is valid: it stores `[]`, and the person sees no client. */
+export const NO_CLIENTS_NOTE = 'No clients picked. This person sees no client until an admin picks some.'
 
 /**
  * The client picker's filtered-to-zero line. Deliberately the roster search's sentence with one
@@ -388,32 +378,52 @@ export const NO_CLIENTS_NOTE = 'Pick at least one client, or switch to All clien
  */
 export const NO_CLIENT_MATCH = 'No clients match this search.'
 
+export const ADMIN_ALL_CLIENTS = 'An admin sees every client.'
+export const CLIENTS_UNREADABLE = "Only an admin sees a member's clients."
+export const NO_CLIENTS_IN_WORKSPACE = 'This workspace has no clients yet.'
+
+export type PickerClient = { id: string; name: string }
+
 /**
- * The invite modal's client-picker search. Same rule as `filterMembers` — trimmed,
- * case-insensitive substring (QA36) — so the two search boxes this tab ships cannot disagree
- * about what a trailing space means.
- *
- * Narrows what is SHOWN and nothing else. The ticked set is the caller's state and this
- * function never sees it: a filter that unticked a hidden client would silently revoke access
- * the user had already granted, and the user would never see it happen.
+ * The picker's rows: active clients plus any client already in `access`, server order, so a
+ * stored archived client stays visible and an unrelated tick never drops it.
+ * ceiling: lists the 200 clients the SPA fetches, revisit above 200 clients per firm.
  */
-export function filterClientRoster(query: string): { id: number; name: string }[] {
-  const q = query.trim().toLowerCase()
-  // Copies rather than handing back the module constant, per §15.1 and this module's own
-  // docblock: `CLIENT_ROSTER` is readonly at the type level only, nothing freezes it.
-  if (!q) return CLIENT_ROSTER.slice()
-  return CLIENT_ROSTER.filter((c) => c.name.toLowerCase().includes(q))
+export function pickerClients(entities: readonly Entity[], access: 'all' | readonly string[]): PickerClient[] {
+  const held = access === 'all' ? [] : access
+  return entities.filter((e) => e.status === 'active' || held.includes(e.id)).map((e) => ({ id: e.id, name: e.name }))
+}
+
+/** The roster line under the access role; `null` when the viewer does not know the set. */
+export function clientAccessLabel(access: 'all' | readonly string[] | null | undefined): string | null {
+  if (access == null) return null
+  if (access === 'all') return 'All clients'
+  if (access.length === 0) return 'No clients'
+  return access.length === 1 ? '1 client' : `${access.length} clients`
+}
+
+/** The roster line's tooltip: names of the held clients in picker order; `undefined` unless a set resolves a name. */
+export function clientAccessTitle(entities: readonly Entity[], access: 'all' | readonly string[] | null | undefined): string | undefined {
+  if (access == null || access === 'all') return undefined
+  const names = pickerClients(entities, access)
+    .filter((c) => access.includes(c.id))
+    .map((c) => c.name)
+  return names.length > 0 ? names.join(', ') : undefined
 }
 
 /**
- * §7's running count under the picker, in the shape the story writes it ("3 of 6 selected").
- *
- * The denominator is the ROSTER's length, never the filtered length: the sentence is about how
- * much access this invite grants, and a search box cannot change that. Typing "lagos" must not
- * make a 3-client invite read "1 of 1 selected".
+ * The picker's search: trimmed, case-insensitive substring, like `filterMembers`. It narrows
+ * what is SHOWN only; the ticked set is the caller's state and this never sees it.
  */
-export function clientSelectionCount(selected: number): string {
-  return `${selected} of ${CLIENT_ROSTER.length} selected`
+export function filterClientRoster(clients: readonly PickerClient[], query: string): PickerClient[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return clients.slice()
+  return clients.filter((c) => c.name.toLowerCase().includes(q))
+}
+
+/** "3 of 6 selected": the denominator is the picker's roster, never the filtered length. */
+export function clientSelectionCount(selected: number, total: number): string {
+  return `${selected} of ${total} selected`
 }
 
 // ---------------------------------------------------------------------------
@@ -477,14 +487,10 @@ export function removeConfirmQuestion(name: string): string {
 export const PROTECTED_ADMIN_NOTE = "You're the only admin. Promote someone else first."
 
 /**
- * §7's zero-selected rule, as a predicate over the value the client picker EMITS.
- *
- * `'all' | number[]` is a discriminated union, not a convention: `'all'` IS scope-all and an
- * array IS scope-selected. `ClientAccessPicker` reads it to show `NO_CLIENTS_NOTE`.
- *
- * `[]` is representable and meaningful — it is simply not grantable.
+ * True when the picker's value is an empty set. Not an error: `[]` is a valid access that
+ * stores no clients. The picker and the invite modal show `NO_CLIENTS_NOTE` for it; neither blocks Send.
  */
-export function needsClientPick(access: 'all' | readonly number[]): boolean {
+export function needsClientPick(access: 'all' | readonly string[]): boolean {
   return access !== 'all' && access.length === 0
 }
 
@@ -499,6 +505,7 @@ export type MembershipWire = {
   status: string
   display_name: string | null
   email: string | null
+  client_access?: 'all' | string[] | null
 }
 
 // The envelope is unwrapped here: it carries exactly one key and no pagination, so unlike
@@ -523,9 +530,22 @@ export function setMembershipStatus(
   })
 }
 
+/** The whole access replaces the stored one; the answer is the member row. */
+export function setMembershipClients(
+  f: AuthedFetch,
+  base: string,
+  userId: string,
+  access: 'all' | readonly string[],
+): Promise<MembershipWire> {
+  return f<MembershipWire>(`${base}/api/tenancy/v1/memberships/${userId}/clients`, {
+    method: 'PUT',
+    body: { client_access: access },
+  })
+}
+
 /**
- * Sets exactly seven keys and never a mock-only one — a row the server did not state is a
- * row this projection does not invent.
+ * Sets exactly the keys the wire states and never a mock-only one — a row the server did not
+ * state is a row this projection does not invent. An absent `client_access` becomes `null`.
  *
  * `role` is VERBATIM: never re-cased, never defaulted. The cast admits that the server's
  * vocabulary is wider than the union, and `accessRoleLabel`'s `?? role` fallback renders an
@@ -541,6 +561,7 @@ export function toMember(w: MembershipWire, selfSubject: string): Member {
     role: w.role as AccessRole,
     status: w.status as MemberStatus,
     isYou: w.user_id === selfSubject,
+    clientAccess: w.client_access == null ? null : w.client_access === 'all' ? 'all' : w.client_access.slice(),
   }
 }
 
@@ -584,13 +605,12 @@ export const ABSENT_LABEL = '—'
  * server-stated: what is missing, not an apology or a promise.
  */
 export const MEMBER_UNBACKED: Record<
-  'remove' | 'role' | 'department' | 'clientAccess',
+  'remove' | 'role' | 'department',
   string
 > = {
   remove: 'Deleting a membership locks that person out on their next request, and nothing undoes it. That decision has not been taken.',
   role: 'The membership endpoint writes status only. Changing someone\'s access role has no server call behind it.',
   department: 'A membership stores a name, an email, an access role and a status. There is no department column.',
-  clientAccess: 'Client access is not stored per person — everyone in this workspace sees the same clients.',
 }
 
 // ---------------------------------------------------------------------------
@@ -616,10 +636,11 @@ export async function sendInvitations(
   base: string,
   emails: readonly string[],
   role: AccessRole,
+  clientAccess?: 'all' | readonly string[],
 ): Promise<InvitationWire[]> {
   const body = await f<{ invitations: InvitationWire[] }>(`${base}/api/tenancy/v1/invitations`, {
     method: 'POST',
-    body: { emails, role },
+    body: clientAccess === undefined ? { emails, role } : { emails, role, client_access: clientAccess },
   })
   return body.invitations
 }
@@ -669,6 +690,7 @@ export function invitedMember(i: PendingInvite): Member {
     role: i.role,
     status: 'invited',
     isYou: false,
+    clientAccess: null,
   }
 }
 

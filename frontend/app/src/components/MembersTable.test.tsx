@@ -35,6 +35,7 @@ function ctxWith(over: Record<string, unknown> = {}): PlatformCtx {
   return {
     members: [member()],
     rolesState: 'ready',
+    entities: [],
     ...over,
   } as unknown as PlatformCtx
 }
@@ -767,5 +768,79 @@ describe('LOGFIX-05-03: the invitee account state on the pending row', () => {
     expect(items.map((i) => i.disabled)).toEqual([false, false])
     expect(within(menu).queryByTestId('member-menu-reason')).toBeNull()
     expect(within(menu).queryByText('Copy invite link')).toBeNull()
+  })
+})
+
+describe('FIRMS-02-05: the roster shows client access under the access role', () => {
+  function renderRows(mode: 'firm' | 'inhouse', rows: Member[], invites: PendingInvite[] = [], entities: unknown[] = []) {
+    render(
+      <MembersTable
+        ctx={ctxWith({ mode, members: rows, entities })}
+        rows={rows}
+        policies={[]}
+        roles={[]}
+        onOpen={vi.fn()}
+        onStatus={vi.fn()}
+        statusError={null}
+        invites={invites}
+      />,
+    )
+  }
+
+  it('each firm member row shows its client access under the role; an invited row shows none', () => {
+    const pending: PendingInvite = { id: 'i1', email: 'new@x.ng', role: 'preparer', expiresAt: '2099-01-01T00:00:00Z', delivery: 'sent' }
+    renderRows(
+      'firm',
+      [
+        member({ id: 'a', name: 'Adm', role: 'admin', clientAccess: 'all' }),
+        member({ id: 'p', name: 'Prep', role: 'preparer', clientAccess: [] }),
+        member({ id: 'r', name: 'Rev', role: 'reviewer', clientAccess: ['a', 'b'] }),
+        invitedMember(pending),
+      ],
+      [pending],
+    )
+
+    const rows = screen.getAllByTestId('member-row')
+    expect(rows.map((r) => within(r).getByTestId('member-client-access').textContent)).toEqual(['All clients', 'No clients', '2 clients'])
+    for (const row of rows) {
+      const cell = row.children[1] as HTMLElement
+      const line = within(row).getByTestId('member-client-access')
+      expect(cell.contains(line)).toBe(true)
+      expect(cell.textContent?.endsWith(line.textContent as string)).toBe(true)
+    }
+    expect(within(screen.getByTestId('invite-row')).queryByTestId('member-client-access')).toBeNull()
+  })
+
+  it('in-house rows show no client access line', () => {
+    renderRows('inhouse', [member({ clientAccess: null }), member({ id: 'u9', clientAccess: 'all' })])
+    expect(screen.queryByTestId('member-client-access')).toBeNull()
+  })
+
+  it('a row whose access is unknown to the viewer shows no line', () => {
+    renderRows('firm', [member({ clientAccess: null })])
+    expect(screen.queryByTestId('member-client-access')).toBeNull()
+  })
+
+  it('a client set gives the line a title naming the clients in list order; unresolvable ids are omitted', () => {
+    const ent = (id: string, name: string, status = 'active') => ({ id, name, status })
+    renderRows(
+      'firm',
+      [
+        member({ id: 'r', clientAccess: ['z', 'b', 'a'] }),
+        member({ id: 'g', clientAccess: ['ghost'] }),
+        member({ id: 'm', clientAccess: ['a', 'ghost'] }),
+      ],
+      [],
+      [ent('a', 'Acme'), ent('b', 'Beta', 'archived'), ent('z', 'Zed')],
+    )
+    const titles = screen.getAllByTestId('member-client-access').map((l) => l.getAttribute('title'))
+    expect(titles).toEqual(['Acme, Beta, Zed', null, 'Acme'])
+  })
+
+  it('"All clients" and "No clients" carry no title', () => {
+    renderRows('firm', [member({ id: 'a', clientAccess: 'all' }), member({ id: 'p', clientAccess: [] })], [], [
+      { id: 'a', name: 'Acme', status: 'active' },
+    ])
+    for (const l of screen.getAllByTestId('member-client-access')) expect(l.hasAttribute('title')).toBe(false)
   })
 })

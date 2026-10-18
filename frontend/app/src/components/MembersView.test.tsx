@@ -154,6 +154,13 @@ function Harness({
   const ctx = {
     members,
     mode: mode ?? 'firm',
+    entities: [
+      { id: 'e1', name: 'Alpha Ltd', status: 'active' },
+      { id: 'e2', name: 'Beta Ltd', status: 'active' },
+    ],
+    entitiesState: 'ready',
+    entitiesError: null,
+    refetchEntities: vi.fn(),
     policies: [],
     policiesState: 'ready',
     policiesError: null,
@@ -847,12 +854,37 @@ describe('RESEND-07-04', () => {
 
       await waitFor(() => expect(inviteRows()).toHaveLength(1))
       expect(gw.sends()).toHaveLength(1)
-      expect(gw.sends()[0].body, 'the modal sent its address and the chosen role').toEqual({ emails: ['a@x.ng'], role: 'reviewer' })
+      expect(gw.sends()[0].body, 'the modal sent its address and the chosen role').toEqual({ emails: ['a@x.ng'], role: 'reviewer', client_access: [] })
       expect(within(inviteRowFor('a@x.ng')).getByText('Reviewer')).toBeTruthy()
       expect(screen.queryByTestId('invite-modal')).toBeNull()
       expect(flash().textContent).toBe('Invite sent to a@x.ng.')
       expect(flash().style.color).toBe('var(--status-green-text)')
       expect(gw.lists(), 'a send adds the server rows without a refetch').toHaveLength(1)
+    })
+
+    it("MembersView: an invite posts the modal's client access", async () => {
+      const gw = gateway({
+        list: [answer(listOf())],
+        send: [answer(listOf(wire({ id: 'n1', email: 'a@x.ng', role: 'reviewer' })))],
+      })
+      await openModalAndType(gw, 'a@x.ng')
+      fireEvent.click(within(screen.getAllByTestId('invite-client-row')[0]).getByRole('checkbox'))
+      fireEvent.click(screen.getByTestId('invite-modal-send'))
+
+      await waitFor(() => expect(gw.sends()).toHaveLength(1))
+      expect(gw.sends()[0].body).toEqual({ emails: ['a@x.ng'], role: 'reviewer', client_access: ['e1'] })
+    })
+
+    it('MembersView: an in-house invite posts no client access', async () => {
+      const gw = gateway({ list: [answer(listOf())], send: [answer(listOf(wire({ id: 'n1', email: 'a@x.ng' })))] })
+      render(<Harness initial={adminRoster()} authedFetch={gw.authedFetch} mode="inhouse" />)
+      await landed()
+      fireEvent.click(inviteButton())
+      fireEvent.change(screen.getByTestId('invite-modal-input'), { target: { value: 'a@x.ng' } })
+      fireEvent.click(screen.getByTestId('invite-modal-send'))
+
+      await waitFor(() => expect(gw.sends()).toHaveLength(1))
+      expect(gw.sends()[0].body).toEqual({ emails: ['a@x.ng'], role: 'preparer' })
     })
 
     it('MembersView: a failed delivery flashes the red notice', async () => {
@@ -1651,7 +1683,7 @@ describe('RESEND-07-04', () => {
       fireEvent.click(screen.getByTestId('invite-modal-send'))
 
       await waitFor(() => expect(inviteRows()).toHaveLength(2))
-      expect(gw.sends()[0].body).toEqual({ emails: ['a@x.ng', 'b@x.ng'], role: 'preparer' })
+      expect(gw.sends()[0].body).toEqual({ emails: ['a@x.ng', 'b@x.ng'], role: 'preparer', client_access: [] })
       expect(flash().textContent).toBe("1 of 2 invite emails did not go out. Resend it from the row's ⋯ menu.")
       expect(flash().style.color).toBe('var(--status-red-text)')
       expect(within(inviteRowFor('a@x.ng')).getByText('Expires in 7 days')).toBeTruthy()

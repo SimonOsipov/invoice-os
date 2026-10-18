@@ -68,6 +68,7 @@ export const AUDIT_EVENTS: Record<string, AuditEventDef> = {
 
   'membership.suspended': { label: 'Member suspended', domain: 'memberships', outcome: 'neutral' },
   'membership.reactivated': { label: 'Member reactivated', domain: 'memberships', outcome: 'neutral' },
+  'membership.client_access_set': { label: 'Client access changed', domain: 'memberships', outcome: 'neutral' },
   'workspace.provisioned': { label: 'Workspace created', domain: 'memberships' },
   'invitation.sent': { label: 'Invite sent', domain: 'memberships' },
   'invitation.resent': { label: 'Invite resent', domain: 'memberships' },

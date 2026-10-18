@@ -223,7 +223,7 @@ func addrs(prefix string, n int) []string {
 
 func mustIssue(t *testing.T, ctx context.Context, s *Store, emails []string, role string) []IssuedInvite {
 	t.Helper()
-	got, err := s.CreateInvitations(ctx, emails, role)
+	got, err := s.CreateInvitations(ctx, emails, role, nil)
 	if err != nil {
 		t.Fatalf("CreateInvitations(%v): %v", emails, err)
 	}
@@ -340,7 +340,7 @@ func TestInvitations_NonAdminIsRefused(t *testing.T) {
 				caller = w.addMember(t, c.role, c.stat, "Caller")
 			}
 
-			got, err := w.store.CreateInvitations(w.as(caller), []string{"b@x.test"}, "preparer")
+			got, err := w.store.CreateInvitations(w.as(caller), []string{"b@x.test"}, "preparer", nil)
 			if !errors.Is(err, c.want) {
 				t.Fatalf("CreateInvitations err = %v, want %v", err, c.want)
 			}
@@ -498,7 +498,7 @@ func TestInvitations_FailureRollsBackEveryAddress(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			w := newInvWorld(t, "Rollback Tenant", "Ada Obi")
 
-			got, err := w.store.CreateInvitations(w.adminCtx(), c.emails, c.role)
+			got, err := w.store.CreateInvitations(w.adminCtx(), c.emails, c.role, nil)
 			if err == nil {
 				t.Fatalf("CreateInvitations(%v, %q) = %d invites and no error, want an error", c.emails, c.role, len(got))
 			}
@@ -522,7 +522,7 @@ func TestInvitations_DailyLimit(t *testing.T) {
 	seedAuditEvents(t, w.super, w.tenant, "invitation.sent", sentPayload, "25 hours", 5)
 	seedAuditEvents(t, w.super, other, "invitation.sent", sentPayload, "1 hour", 30)
 
-	got, err := w.store.CreateInvitations(w.adminCtx(), []string{"b@x.test", "c@x.test"}, "preparer")
+	got, err := w.store.CreateInvitations(w.adminCtx(), []string{"b@x.test", "c@x.test"}, "preparer", nil)
 	if !errors.Is(err, ErrDailyInviteLimit) {
 		t.Fatalf("19 counted + 2 addresses: err = %v, want ErrDailyInviteLimit", err)
 	}
@@ -537,7 +537,7 @@ func TestInvitations_DailyLimit(t *testing.T) {
 	}
 
 	mustIssue(t, w.adminCtx(), w.store, []string{"d@x.test"}, "preparer")
-	if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"e@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+	if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"e@x.test"}, "preparer", nil); !errors.Is(err, ErrDailyInviteLimit) {
 		t.Errorf("the 21st mail in the window: err = %v, want ErrDailyInviteLimit", err)
 	}
 }
@@ -547,7 +547,7 @@ func TestInvitations_DailyLimitCountsResends(t *testing.T) {
 	seedAuditEvents(t, w.super, w.tenant, "invitation.sent", sentPayload, "1 hour", 19)
 	seedAuditEvents(t, w.super, w.tenant, "invitation.resent", resentCounted, "1 hour", 1)
 
-	if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"b@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+	if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"b@x.test"}, "preparer", nil); !errors.Is(err, ErrDailyInviteLimit) {
 		t.Fatalf("19 sent + 1 counted resend: err = %v, want ErrDailyInviteLimit", err)
 	}
 	if n := countInvitations(t, w.super, w.tenant); n != 0 {
@@ -597,7 +597,7 @@ func TestInvitations_DailyLimitWindowEdges(t *testing.T) {
 			w := newInvWorld(t, "Edge Tenant", "Ada Obi")
 			c.seed(t, w)
 
-			got, err := w.store.CreateInvitations(w.adminCtx(), []string{"b@x.test"}, "preparer")
+			got, err := w.store.CreateInvitations(w.adminCtx(), []string{"b@x.test"}, "preparer", nil)
 			if c.refused {
 				if !errors.Is(err, ErrDailyInviteLimit) {
 					t.Fatalf("err = %v, want ErrDailyInviteLimit", err)
@@ -662,7 +662,7 @@ func TestInvitations_ConcurrentCallsShareTheLimit(t *testing.T) {
 	}
 	chA, chB := make(chan result, 1), make(chan result, 1)
 	call := func(ch chan result, prefix string) {
-		got, err := w.store.CreateInvitations(w.adminCtx(), addrs(prefix, 15), "preparer")
+		got, err := w.store.CreateInvitations(w.adminCtx(), addrs(prefix, 15), "preparer", nil)
 		ch <- result{got, err}
 	}
 	go call(chA, "a")
@@ -780,7 +780,7 @@ func TestInvitations_ResendCountsTowardTheLimit(t *testing.T) {
 	if _, err := w.store.ResendInvitation(w.adminCtx(), target.ID); err != nil {
 		t.Fatalf("resend as the 20th mail: %v", err)
 	}
-	if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"c@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+	if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"c@x.test"}, "preparer", nil); !errors.Is(err, ErrDailyInviteLimit) {
 		t.Errorf("invite after a counted resend filled the window: err = %v, want ErrDailyInviteLimit", err)
 	}
 }
@@ -840,7 +840,7 @@ func TestInvitations_ResendOfAFailedSendIsFree(t *testing.T) {
 		if len(resent) != 1 || resent[0]["counted"] != false {
 			t.Fatalf("resent payloads = %v, want one with counted false", resent)
 		}
-		if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"new@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+		if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"new@x.test"}, "preparer", nil); !errors.Is(err, ErrDailyInviteLimit) {
 			t.Errorf("new address after the free resend: err = %v, want ErrDailyInviteLimit", err)
 		}
 
@@ -865,7 +865,7 @@ func TestInvitations_ResendOfAFailedSendIsFree(t *testing.T) {
 		if got, err := w.store.ResendInvitation(w.adminCtx(), failed.ID); err != nil || got.ID != failed.ID {
 			t.Fatalf("free resend: id %q, err %v, want a reissue of %s", got.ID, err, failed.ID)
 		}
-		if got, err := w.store.CreateInvitations(w.adminCtx(), []string{"new@x.test"}, "preparer"); err != nil || len(got) != 1 {
+		if got, err := w.store.CreateInvitations(w.adminCtx(), []string{"new@x.test"}, "preparer", nil); err != nil || len(got) != 1 {
 			t.Errorf("the 20th counted mail after a free resend: %d invites, err = %v, want success", len(got), err)
 		}
 	})
@@ -1333,7 +1333,7 @@ func TestInvitations_AnotherTenantNeitherSeesNorSharesRows(t *testing.T) {
 
 	// A full window in A does not limit B.
 	seedAuditEvents(t, a.super, a.tenant, "invitation.sent", sentPayload, "1 hour", 20)
-	if _, err := a.store.CreateInvitations(a.adminCtx(), []string{"c@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+	if _, err := a.store.CreateInvitations(a.adminCtx(), []string{"c@x.test"}, "preparer", nil); !errors.Is(err, ErrDailyInviteLimit) {
 		t.Fatalf("A at the limit: err = %v, want ErrDailyInviteLimit", err)
 	}
 	mustIssue(t, b.adminCtx(), b.store, []string{"c@x.test"}, "preparer")
@@ -1359,7 +1359,7 @@ func TestInvitations_EmptyAddressListWritesNothing(t *testing.T) {
 
 	for name, emails := range map[string][]string{"nil": nil, "empty": {}} {
 		t.Run(name, func(t *testing.T) {
-			got, _ := w.store.CreateInvitations(w.adminCtx(), emails, "preparer")
+			got, _ := w.store.CreateInvitations(w.adminCtx(), emails, "preparer", nil)
 			if len(got) != 0 {
 				t.Errorf("returned %d invites for no addresses", len(got))
 			}
@@ -1369,7 +1369,7 @@ func TestInvitations_EmptyAddressListWritesNothing(t *testing.T) {
 			if n := inviteAudit(t, w.super, w.tenant); n != 0 {
 				t.Errorf("invitation audit rows = %d, want 0", n)
 			}
-			if _, err := w.store.CreateInvitations(w.as(preparer), emails, "preparer"); !errors.Is(err, ErrInviteNotPermitted) {
+			if _, err := w.store.CreateInvitations(w.as(preparer), emails, "preparer", nil); !errors.Is(err, ErrInviteNotPermitted) {
 				t.Errorf("preparer with no addresses: err = %v, want ErrInviteNotPermitted", err)
 			}
 		})
@@ -1380,7 +1380,7 @@ func TestInvitations_EmptyAddressListWritesNothing(t *testing.T) {
 func TestInvitations_TwentyAddressesFitAnEmptyWindow(t *testing.T) {
 	w := newInvWorld(t, "Twenty Tenant", "Ada Obi")
 
-	if _, err := w.store.CreateInvitations(w.adminCtx(), addrs("over", 21), "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+	if _, err := w.store.CreateInvitations(w.adminCtx(), addrs("over", 21), "preparer", nil); !errors.Is(err, ErrDailyInviteLimit) {
 		t.Fatalf("21 addresses on an empty window: err = %v, want ErrDailyInviteLimit", err)
 	}
 	if n := countInvitations(t, w.super, w.tenant); n != 0 {
@@ -1390,7 +1390,7 @@ func TestInvitations_TwentyAddressesFitAnEmptyWindow(t *testing.T) {
 	if n := countInvitations(t, w.super, w.tenant); n != 20 {
 		t.Errorf("invitations rows = %d, want 20", n)
 	}
-	if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"one-more@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+	if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"one-more@x.test"}, "preparer", nil); !errors.Is(err, ErrDailyInviteLimit) {
 		t.Errorf("21st mail: err = %v, want ErrDailyInviteLimit", err)
 	}
 }
@@ -1787,7 +1787,7 @@ func TestInvitations_RevokeIsNotCountedAndFreesNoSlot(t *testing.T) {
 			t.Fatalf("revoke in a full window: %v", err)
 		}
 		requireRevoked(t, w, pending.ID)
-		if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"n@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+		if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"n@x.test"}, "preparer", nil); !errors.Is(err, ErrDailyInviteLimit) {
 			t.Errorf("create after the revoke: err = %v, want ErrDailyInviteLimit (a revoke frees no slot)", err)
 		}
 	})
@@ -1801,7 +1801,7 @@ func TestInvitations_RevokeIsNotCountedAndFreesNoSlot(t *testing.T) {
 		}
 		requireRevoked(t, w, pending.ID)
 		mustIssue(t, w.adminCtx(), w.store, []string{"n1@x.test"}, "preparer")
-		if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"n2@x.test"}, "preparer"); !errors.Is(err, ErrDailyInviteLimit) {
+		if _, err := w.store.CreateInvitations(w.adminCtx(), []string{"n2@x.test"}, "preparer", nil); !errors.Is(err, ErrDailyInviteLimit) {
 			t.Errorf("second create: err = %v, want ErrDailyInviteLimit (19 sent + 1 new = 20)", err)
 		}
 	})
@@ -2086,5 +2086,44 @@ func TestInvitations_RevokeOfAnExpiredPendingInviteSucceeds(t *testing.T) {
 	}
 	if n := len(auditPayloads(t, w.super, w.tenant, "invitation.revoked")); n != 2 {
 		t.Errorf("invitation.revoked rows = %d, want 2", n)
+	}
+}
+
+func TestInvitations_ResendAndRevokeKeepTheClientSet(t *testing.T) {
+	w := newInvWorld(t, "Resend Set Tenant", "Ada Obi")
+	e1 := seedEntity(t, w.super, w.tenant)
+	listed := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "set@x.test", invitedBy: w.admin})
+	every := seedInvitation(t, w.super, seedInv{tenant: w.tenant, email: "all@x.test", invitedBy: w.admin})
+	setInviteClients(t, w.super, w.tenant, listed.ID, false, e1)
+	setInviteClients(t, w.super, w.tenant, every.ID, true)
+	flagOf := func(id string) (all bool) {
+		if err := w.super.QueryRow(context.Background(), `SELECT all_clients FROM invitations WHERE id = $1`, id).Scan(&all); err != nil {
+			t.Fatalf("read all_clients: %v", err)
+		}
+		return all
+	}
+
+	for _, id := range []string{listed.ID, every.ID} {
+		if _, err := w.store.ResendInvitation(w.adminCtx(), id); err != nil {
+			t.Fatalf("resend %s: %v", id, err)
+		}
+	}
+	if got := inviteClientRows(t, w.super, listed.ID); !slices.Equal(got, []string{e1}) || flagOf(listed.ID) {
+		t.Errorf("after resend: set invite rows %v flag %v, want [%s] and false", got, flagOf(listed.ID), e1)
+	}
+	if got := inviteClientRows(t, w.super, every.ID); len(got) != 0 || !flagOf(every.ID) {
+		t.Errorf("after resend: all invite rows %v flag %v, want none and true", got, flagOf(every.ID))
+	}
+
+	for _, id := range []string{listed.ID, every.ID} {
+		if err := w.store.RevokeInvitation(w.adminCtx(), id); err != nil {
+			t.Fatalf("revoke %s: %v", id, err)
+		}
+	}
+	if got := inviteClientRows(t, w.super, listed.ID); !slices.Equal(got, []string{e1}) || flagOf(listed.ID) {
+		t.Errorf("after revoke: set invite rows %v flag %v, want [%s] and false", got, flagOf(listed.ID), e1)
+	}
+	if got := inviteClientRows(t, w.super, every.ID); len(got) != 0 || !flagOf(every.ID) {
+		t.Errorf("after revoke: all invite rows %v flag %v, want none and true", got, flagOf(every.ID))
 	}
 }

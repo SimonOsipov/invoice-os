@@ -150,7 +150,7 @@ func newInviteWorldFor(t *testing.T, email string, before func(w inviteWorld)) i
 	inviter := &tenancy.Inviter{Store: store, Sender: accountmail.NewResend(w.resend.URL, "k_test", nil), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	adminCtx := auth.WithIdentity(ctx, auth.Identity{Subject: admin, Role: "authenticated", TenantID: w.tenant})
 	w.adminCtx = adminCtx
-	if res, err := inviter.Invite(adminCtx, []string{w.email}, "reviewer"); err != nil || len(res) != 1 || res[0].Delivery != "sent" {
+	if res, err := inviter.Invite(adminCtx, []string{w.email}, "reviewer", nil); err != nil || len(res) != 1 || res[0].Delivery != "sent" {
 		t.Fatalf("invite %s: %+v, err %v; want one sent", w.email, res, err)
 	}
 

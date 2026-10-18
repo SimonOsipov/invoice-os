@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -138,28 +139,32 @@ func nullIfEmpty(v string) *string {
 	return &v
 }
 
-// ListMemberships lists the caller's tenant's memberships (user_id, role,
-// status, display_name, email), RLS-scoped: SELECT user_id, role, status,
-// display_name, email FROM memberships ORDER BY created_at, user_id -- bare
-// (no WHERE tenant_id), same as Me's tenant query, inside a SINGLE
-// db.WithinRequestTenantTx call. An empty tenant returns an empty non-nil
-// slice and a nil error (never nil, nil).
-func (s *Store) ListMemberships(ctx context.Context) ([]Membership, error) {
-	memberships := []Membership{}
+// ListMemberships lists the caller's tenant's memberships with their client
+// access, RLS-scoped, in one transaction. A non-admin caller reads its own
+// row's client_access and nil on every other row.
+func (s *Store) ListMemberships(ctx context.Context) ([]MemberAccess, error) {
+	var memberships []MemberAccess
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT user_id, role, status, display_name, email FROM memberships ORDER BY created_at, user_id`)
+		rows, err := readMemberAccess(ctx, tx, "")
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var m Membership
-			if err := rows.Scan(&m.UserID, &m.Role, &m.Status, &m.DisplayName, &m.Email); err != nil {
-				return err
+		caller, _ := auth.IdentityFromContext(ctx)
+		isAdmin := false
+		for _, m := range rows {
+			if strings.EqualFold(m.UserID, caller.Subject) && m.Role == "admin" {
+				isAdmin = true
 			}
-			memberships = append(memberships, m)
 		}
-		return rows.Err()
+		if !isAdmin {
+			for i := range rows {
+				if !strings.EqualFold(rows[i].UserID, caller.Subject) {
+					rows[i].ClientAccess = nil
+				}
+			}
+		}
+		memberships = rows
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -190,14 +195,14 @@ func (s *Store) ListMemberships(ctx context.Context) ([]Membership, error) {
 // requested status (200 no-op, no UPDATE, no audit) -> last active admin. The
 // no-op must precede the last-admin guard, or re-suspending an already-suspended
 // sole admin would 409 a request that changes nothing.
-func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) (Membership, error) {
+func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) (MemberAccess, error) {
 	// Re-validated here, not only in the handler, so a direct caller fails
 	// closed rather than writing an out-of-vocabulary status.
 	if status != "active" && status != "suspended" {
-		return Membership{}, ErrInvalidStatus
+		return MemberAccess{}, ErrInvalidStatus
 	}
 
-	var updated Membership
+	var updated MemberAccess
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		// Guaranteed present: WithinRequestTenantTx resolved it before this ran.
 		caller, _ := auth.IdentityFromContext(ctx)
@@ -255,8 +260,7 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 			return ErrInvitedNotTransitionable
 		}
 		if target.Status == status {
-			updated = target
-			return nil
+			return readTarget(ctx, tx, target.UserID, &updated)
 		}
 		if status == "suspended" && target.Role == "admin" {
 			others := 0
@@ -286,16 +290,29 @@ func (s *Store) SetMembershipStatus(ctx context.Context, userID, status string) 
 		// rolls the status change back. The id is the RETURNING row's, not the
 		// argument's: a non-HTTP caller passing an uncanonical uuid text would
 		// otherwise audit an id that does not match the row it describes.
-		return audit.Record(ctx, tx, caller.Subject, event, map[string]any{
+		if err := audit.Record(ctx, tx, caller.Subject, event, map[string]any{
 			"user_id": updated.UserID,
 			"from":    from,
 			"to":      status,
-		})
+		}); err != nil {
+			return err
+		}
+		return readTarget(ctx, tx, updated.UserID, &updated)
 	})
 	if err != nil {
-		return Membership{}, err
+		return MemberAccess{}, err
 	}
 	return updated, nil
+}
+
+// readTarget reads one member's row with its client access into dst.
+func readTarget(ctx context.Context, tx pgx.Tx, userID string, dst *MemberAccess) error {
+	rows, err := readMemberAccess(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	*dst = rows[0]
+	return nil
 }
 
 // inviteTokenShape is a 32-byte token in unpadded base64url.
@@ -403,6 +420,17 @@ func (s *Store) acceptInTenant(ctx context.Context, tenantID, subject, query str
 					return ErrInvitationEmailMismatch
 				}
 			}
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE memberships m SET all_clients = i.all_clients FROM invitations i WHERE i.id = $1 AND m.user_id = $2`,
+			id, subject); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO membership_clients (tenant_id, user_id, entity_id)
+			 SELECT tenant_id, $2, entity_id FROM invitation_clients WHERE invitation_id = $1`,
+			id, subject); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `SELECT id, name, kind FROM tenants`).Scan(&t.ID, &t.Name, &t.Kind); err != nil {

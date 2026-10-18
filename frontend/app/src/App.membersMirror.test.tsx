@@ -47,13 +47,20 @@ const wire = (id: string, over: Partial<MembershipWire> = {}): MembershipWire =>
 // One pending answer per memberships GET, in call order.
 let membershipReplies: Array<(list: MembershipWire[]) => void> = []
 let membershipCalls = 0
+// The PUT .../clients answer: a row to return, or a status to refuse with.
+let clientsPut: { calls: Array<{ url: string; body: unknown }>; answer: () => { status: number; body: unknown } } = { calls: [], answer: () => ({ status: 200, body: {} }) }
 
 function stubGateway() {
   vi.stubEnv('VITE_GATEWAY_URL', GATEWAY)
   vi.stubGlobal(
     'fetch',
-    vi.fn((url: string) => {
+    vi.fn((url: string, init?: { body?: string }) => {
       const reply = (b: unknown) => ({ ok: true, status: 200, statusText: 'OK', json: () => Promise.resolve(b) })
+      if (url.endsWith('/clients')) {
+        clientsPut.calls.push({ url, body: init?.body ? JSON.parse(init.body) : undefined })
+        const { status, body } = clientsPut.answer()
+        return Promise.resolve({ ok: status < 400, status, statusText: '', json: () => Promise.resolve(body) })
+      }
       if (url.includes('/api/tenancy/v1/memberships')) {
         membershipCalls++
         return new Promise((resolve) => membershipReplies.push((list) => resolve(reply({ memberships: list }))))
@@ -82,6 +89,7 @@ beforeEach(() => {
   capturedCtx = undefined
   membershipReplies = []
   membershipCalls = 0
+  clientsPut = { calls: [], answer: () => ({ status: 200, body: {} }) }
   vi.stubGlobal('localStorage', createMemoryStorage())
   window.history.replaceState(null, '', '/')
 })
@@ -125,5 +133,26 @@ describe('App: the members mirror', () => {
     await answer(1, [])
     expect(ctx().membersState).toBe('empty')
     expect(ctx().members, 'an emptied tenant leaves no ghost rows').toEqual([])
+  })
+
+  it('App: setMemberClients puts the whole access and the mirror takes the server answer; a refusal leaves it', async () => {
+    await boot()
+    await waitFor(() => expect(membershipCalls).toBe(1))
+    await answer(0, [wire('u1'), wire('u2', { role: 'preparer', client_access: ['e1'] })])
+    expect(ctx().members.find((m) => m.id === 'u2')?.clientAccess).toEqual(['e1'])
+
+    clientsPut.answer = () => ({ status: 200, body: wire('u2', { role: 'preparer', client_access: ['e1', 'e2'] }) })
+    await act(async () => ctx().setMemberClients('u2', ['e1', 'e2']))
+    expect(clientsPut.calls).toHaveLength(1)
+    expect(clientsPut.calls[0].url).toBe(`${GATEWAY}/api/tenancy/v1/memberships/u2/clients`)
+    expect(clientsPut.calls[0].body).toEqual({ client_access: ['e1', 'e2'] })
+    expect(ctx().members.find((m) => m.id === 'u2')?.clientAccess).toEqual(['e1', 'e2'])
+    expect(ctx().members.find((m) => m.id === 'u1')?.clientAccess, 'the other row is untouched').toBeNull()
+
+    clientsPut.answer = () => ({ status: 403, body: { error: "only an admin can choose a member's clients" } })
+    await act(async () => {
+      await expect(ctx().setMemberClients('u2', 'all')).rejects.toBeTruthy()
+    })
+    expect(ctx().members.find((m) => m.id === 'u2')?.clientAccess, 'a refusal rolls nothing in').toEqual(['e1', 'e2'])
   })
 })

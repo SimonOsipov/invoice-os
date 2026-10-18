@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SimonOsipov/invoice-os/internal/accountmail"
 	"github.com/SimonOsipov/invoice-os/internal/audit"
@@ -97,7 +98,7 @@ func countInviteMails(ctx context.Context, tx pgx.Tx) (int, error) {
 
 // CreateInvitations issues one pending invite per address, or reissues an existing
 // pending one. It does not normalise addresses.
-func (s *Store) CreateInvitations(ctx context.Context, emails []string, role string) ([]IssuedInvite, error) {
+func (s *Store) CreateInvitations(ctx context.Context, emails []string, role string, access *ClientAccess) ([]IssuedInvite, error) {
 	var out []IssuedInvite
 	err := db.WithinRequestTenantTx(ctx, s.pool, func(tx pgx.Tx) error {
 		out = nil
@@ -116,9 +117,17 @@ func (s *Store) CreateInvitations(ctx context.Context, emails []string, role str
 		if n+len(emails) > maxInviteMailsPerDay {
 			return ErrDailyInviteLimit
 		}
-		var workspace string
-		if err := tx.QueryRow(ctx, `SELECT name FROM tenants`).Scan(&workspace); err != nil {
+		var workspace, kind string
+		if err := tx.QueryRow(ctx, `SELECT name, kind FROM tenants`).Scan(&workspace, &kind); err != nil {
 			return err
+		}
+		if access != nil && kind != "firm" {
+			return ErrClientAccessNotFirm
+		}
+		allClients := access != nil && access.All
+		var clientIDs []string
+		if access != nil && !access.All {
+			clientIDs = access.IDs
 		}
 		for _, email := range emails {
 			tok, hash, err := mintToken()
@@ -127,15 +136,31 @@ func (s *Store) CreateInvitations(ctx context.Context, emails []string, role str
 			}
 			inv := IssuedInvite{Email: email, Role: role, Token: tok, TokenHash: hash, Workspace: workspace, Inviter: inviter}
 			if err := tx.QueryRow(ctx,
-				`INSERT INTO invitations (tenant_id, invitee_email, role, token_hash, expires_at, invited_by, send_status)
-				 VALUES ($1, $2, $3, $4, now() + make_interval(days => $5), $6, 'sending')
+				`INSERT INTO invitations (tenant_id, invitee_email, role, token_hash, expires_at, invited_by, send_status, all_clients)
+				 VALUES ($1, $2, $3, $4, now() + make_interval(days => $5), $6, 'sending', $7)
 				 ON CONFLICT (tenant_id, invitee_email) WHERE status = 'pending' DO UPDATE
 				    SET token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at,
-				        role = EXCLUDED.role, invited_by = EXCLUDED.invited_by, send_status = 'sending'
+				        role = EXCLUDED.role, invited_by = EXCLUDED.invited_by, send_status = 'sending',
+				        all_clients = EXCLUDED.all_clients
 				 RETURNING id, expires_at`,
-				caller.TenantID, email, role, hash, accountmail.InviteValidDays, caller.Subject,
+				caller.TenantID, email, role, hash, accountmail.InviteValidDays, caller.Subject, allClients,
 			).Scan(&inv.ID, &inv.ExpiresAt); err != nil {
 				return err
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM invitation_clients WHERE invitation_id = $1`, inv.ID); err != nil {
+				return err
+			}
+			if len(clientIDs) > 0 {
+				if _, err := tx.Exec(ctx,
+					`INSERT INTO invitation_clients (tenant_id, invitation_id, entity_id)
+					 SELECT $1, $2, unnest($3::uuid[])`,
+					caller.TenantID, inv.ID, clientIDs); err != nil {
+					var pgErr *pgconn.PgError
+					if errors.As(err, &pgErr) && pgErr.Code == "23503" && pgErr.ConstraintName == "invitation_clients_tenant_entity_fk" {
+						return ErrUnknownClient
+					}
+					return err
+				}
 			}
 			if err := audit.Record(ctx, tx, caller.Subject, "invitation.sent", map[string]any{
 				"invitation_id": inv.ID,

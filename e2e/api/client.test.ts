@@ -803,6 +803,38 @@ describe('setInvitationToken and inviteWithToken', () => {
     expect(JSON.parse(inviteInit.body).role).toBe('reviewer')
   })
 
+  it('inviteWithToken adds client_access to the body only when given', async () => {
+    const { inviteWithToken } = await import('./client')
+    const stub = stubFetchSequence(
+      { status: 200, body: { invitations: [{ id: INVITATION }] } },
+      { status: 204 },
+      { status: 200, body: { invitations: [{ id: INVITATION }] } },
+      { status: 204 },
+    )
+
+    await inviteWithToken('admin-token', TENANT, 'who@example.com', 'preparer', ['c1', 'c2'])
+    await inviteWithToken('admin-token', TENANT, 'who@example.com', 'preparer')
+
+    const [, given] = stub.mock.calls[0] as unknown as [string, { body: string }]
+    expect(JSON.parse(given.body)).toEqual({ emails: ['who@example.com'], role: 'preparer', client_access: ['c1', 'c2'] })
+    const [, omitted] = stub.mock.calls[2] as unknown as [string, { body: string }]
+    expect(Object.keys(JSON.parse(omitted.body))).toEqual(['emails', 'role'])
+  })
+
+  it('setMemberClients PUTs {client_access} to the member and returns the raw answer', async () => {
+    const { setMemberClients } = await import('./client')
+    const stub = stubFetchSequence({ status: 403, body: { error: 'refused' } })
+
+    const res = await setMemberClients('admin-token', 'user-1', 'all')
+
+    const [url, init] = stub.mock.calls[0] as unknown as [string, { method: string; body: string; headers: Record<string, string> }]
+    expect(url.endsWith('/api/tenancy/v1/memberships/user-1/clients')).toBe(true)
+    expect(init.method).toBe('PUT')
+    expect(init.headers.Authorization).toBe('Bearer admin-token')
+    expect(JSON.parse(init.body)).toEqual({ client_access: 'all' })
+    expect(res.status).toBe(403)
+  })
+
   it('inviteWithToken throws when the invite is refused and seeds nothing', async () => {
     const { inviteWithToken } = await import('./client')
     const stub = stubFetchSequence({ status: 400, body: { error: 'bad' } })

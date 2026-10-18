@@ -19,7 +19,7 @@
 // Four properties are proven against the DEPLOYED gateway:
 //   - Happy-path status + shape (persona A, Core AC 1): /me -> 200 +
 //     {tenant:{id,name,kind}, user:{id,role,display_name,email}}; /memberships -> 200 +
-//     {memberships:[{user_id,role,status,display_name,email},...]}.
+//     {memberships:[{user_id,role,status,display_name,email,client_access},...]}.
 //   - The PATCH status matrix: 200 round-trip, 403 non-admin, 404 unknown
 //     user_id, 400 out-of-vocabulary status.
 //   - Error-path status + envelope on GET /me: both cases mint their token
@@ -59,12 +59,40 @@
 //   - 409 invited-not-transitionable: no seeded row has status `invited` and
 //     nothing mints one.
 import { test, expect } from '@playwright/test'
-import { login, memberships, rawFetch, setMembershipStatus, PERSONAS, type Membership } from './client'
+import {
+  createEntity,
+  grantMembership,
+  listEntities,
+  login,
+  memberships,
+  rawFetch,
+  registerFormAccount,
+  registerFresh,
+  me,
+  setMemberClients,
+  setMembershipStatus,
+  signInSession,
+  subjectOf,
+  PERSONAS,
+  type Membership,
+} from './client'
 import { assertErrorEnvelope } from './contract-helpers'
+import { freshTin } from './fixtures'
 
-// The five keys internal/tenancy's Membership serializes, sorted — the exact-key-set
+// The six keys internal/tenancy's MemberAccess serializes, sorted — the exact-key-set
 // idiom the /me test below already uses, applied per row.
-const MEMBERSHIP_KEYS = ['display_name', 'email', 'role', 'status', 'user_id']
+const MEMBERSHIP_KEYS = ['client_access', 'display_name', 'email', 'role', 'status', 'user_id']
+
+const ADMIN_SUBJECT = 'c0000000-0000-0000-0000-000000000001'
+// Seeded limited reviewer (db/seed.dev.sql): works on two clients, not all_clients.
+const LIMITED_REVIEWER = 'c0000000-0000-0000-0000-000000000014'
+const INHOUSE_REVIEWER_SUBJECT = 'c0000000-0000-0000-0000-000000000008'
+// internal/tenancy/tenancy.go statusForErr: ErrClientAccessNotPermitted, ErrClientAccessAdmin,
+// ErrUnknownClient, ErrClientAccessNotFirm.
+const NOT_ADMIN_CLIENTS = "only an admin can choose a member's clients"
+const ADMIN_SEES_ALL = 'an admin sees every client'
+const UNKNOWN_CLIENT = 'a client in the list is not in this workspace'
+const NOT_FIRM = 'client access applies to accounting firm workspaces only'
 
 // Seeded subjects (db/seed.dev.sql), never a tenant's seeded admin. Every active
 // seeded member can sign in, and the mint takes any subject, so a leaked
@@ -123,7 +151,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       expect(user.email).toBe('c.okafor@okafor.ng')
     })
 
-    test('/memberships -> 200 + {memberships:[{user_id,role,status,display_name,email},...]}, no pagination key', async () => {
+    test('/memberships -> 200 + {memberships:[{user_id,role,status,display_name,email,client_access},...]}, no pagination key', async () => {
       const res = await rawFetch('/api/tenancy/v1/memberships', {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -138,18 +166,59 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
         // omitempty on the Go struct, so a row that stored no address must still
         // ship the key as an explicit null. A presence-only check passes on the
         // omission this assertion exists to catch.
-        expect(Object.keys(m).sort(), `membership ${String(m.user_id)}: expected exactly the five wire keys`).toEqual(MEMBERSHIP_KEYS)
+        expect(Object.keys(m).sort(), `membership ${String(m.user_id)}: expected exactly the six wire keys`).toEqual(MEMBERSHIP_KEYS)
         expect(typeof m.user_id, 'each membership.user_id should be a string').toBe('string')
         expect(typeof m.role, 'each membership.role should be a string').toBe('string')
         expect(typeof m.status, 'each membership.status should be a string').toBe('string')
         expect(m.display_name === null || typeof m.display_name === 'string', 'display_name should be a string or null').toBe(true)
         expect(m.email === null || typeof m.email === 'string', 'email should be a string or null').toBe(true)
+        expect(
+          m.client_access === null || m.client_access === 'all' || Array.isArray(m.client_access),
+          'client_access should be "all", an id list or null',
+        ).toBe(true)
       }
 
       // List-shape boundary (Core AC 4): memberships is a flat,
       // non-paginated list — unlike portfolio's list (M3-15-03), it must
       // NOT carry a pagination envelope.
       expect(body, 'memberships should have no pagination key').not.toHaveProperty('pagination')
+    })
+  })
+
+  test.describe('client_access values (D12)', () => {
+    async function clientIds(names: string[]): Promise<string[]> {
+      const ids: string[] = []
+      for (const name of names) {
+        const { entities } = await listEntities(token, { q: name })
+        const hit = entities.find((e) => e.name === name)
+        expect(hit, `seeded client ${name}`).toBeTruthy()
+        ids.push(hit!.id)
+      }
+      return ids.sort()
+    }
+    const byId = (rows: Membership[]) => new Map(rows.map((m) => [m.user_id, m.client_access]))
+
+    test('an admin reads every row: admin and all-clients preparer "all", limited reviewer its two clients, in-house null', async () => {
+      const { memberships: rows } = await memberships(token)
+      const got = byId(rows)
+      expect(got.get(ADMIN_SUBJECT)).toBe('all')
+      expect(got.get(PREPARER_SUBJECT)).toBe('all')
+      expect(got.get(LIMITED_REVIEWER)).toEqual(await clientIds(['Adeyemi & Sons Trading Ltd', 'Chukwu Global Ventures Ltd']))
+      const tokenB = await login(PERSONAS.B)
+      for (const m of (await memberships(tokenB)).memberships) expect(m.client_access, `in-house ${m.user_id}`).toBeNull()
+    })
+
+    test('a firm non-admin reads client_access on its own row only and null on every other (pm BQ1)', async () => {
+      for (const subject of [PREPARER_SUBJECT, LIMITED_REVIEWER]) {
+        const own = await login({ ...PERSONAS.A, subject })
+        const { memberships: rows } = await memberships(own)
+        const mine = rows.find((m) => m.user_id === subject)!
+        const adminView = byId((await memberships(token)).memberships).get(subject)
+        expect(mine.client_access, `${subject} reads its own row`).toEqual(adminView)
+        const others = rows.filter((m) => m.user_id !== subject)
+        expect(others.length, 'the firm has other members').toBeGreaterThan(0)
+        for (const m of others) expect(m.client_access, `${subject} reading ${m.user_id}`).toBeNull()
+      }
     })
   })
 
@@ -255,12 +324,13 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       await setMembershipStatus(token, PATCH_SUBJECT, 'active')
     })
 
-    test('200 round-trip: suspend then reactivate, five-key body both ways', async () => {
+    test('200 round-trip: suspend then reactivate, six-key body both ways', async () => {
       try {
         const suspended = await setMembershipStatus(token, PATCH_SUBJECT, 'suspended')
         expect(Object.keys(suspended).sort(), 'PATCH answers a list element').toEqual(MEMBERSHIP_KEYS)
         expect(suspended.user_id, 'PATCH answers the row it was asked for').toBe(PATCH_SUBJECT)
         expect(suspended.status).toBe('suspended')
+        expect(suspended.client_access, 'a suspended member keeps its access').toBe('all')
 
         // The write LANDED — read it back through the list rather than trusting the
         // response body, which a handler could synthesize without touching the row.
@@ -270,6 +340,7 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
       } finally {
         const restored = await setMembershipStatus(token, PATCH_SUBJECT, 'active')
         expect(restored.status, 'the shared environment must be left as it was found').toBe('active')
+        expect(restored.client_access).toBe('all')
       }
     })
 
@@ -305,6 +376,80 @@ test.describe('tenancy contract (API E2E, over the deployed gateway)', () => {
         body: { status: 'invited' },
       })
       assertErrorEnvelope(res, 400, 'PATCH with status "invited" and an unknown id')
+    })
+  })
+
+  test.describe('PUT /memberships/{user_id}/clients (D24)', () => {
+    const err = (res: { body: unknown }) => (res.body as { error: string }).error
+
+    test('PUT /memberships/{user_id}/clients: an admin sets a set, all and none', async () => {
+      const { token: admin } = await registerFormAccount('clients-set')
+      const e1 = await createEntity(admin, { name: `FIRMS-02 set ${freshTin()}`, tin: freshTin() })
+      const e2 = await createEntity(admin, { name: `FIRMS-02 set ${freshTin()}`, tin: freshTin() })
+      const tenantId = (await me(admin)).tenant.id
+      const preparer = await registerFresh('clients-set-preparer')
+      const userId = subjectOf((await signInSession(preparer.email, preparer.password)).access_token)
+      await grantMembership({ user_id: userId, tenant_id: tenantId, role: 'preparer', display_name: 'Clients E2E Preparer', email: preparer.email })
+
+      const put = (access: unknown) => setMemberClients(admin, userId, access)
+      const read = async () => (await memberships(admin)).memberships.find((m) => m.user_id === userId)!.client_access
+
+      const set = await put([e2.id, e1.id])
+      expect(set.status, JSON.stringify(set.body)).toBe(200)
+      expect(Object.keys(set.body as object).sort()).toEqual(MEMBERSHIP_KEYS)
+      const expected = [e1.id, e2.id].sort()
+      expect((set.body as Membership).client_access, 'the answer is sorted').toEqual(expected)
+      expect(await read(), 'GET agrees').toEqual(expected)
+
+      const all = await put('all')
+      expect(all.status, JSON.stringify(all.body)).toBe(200)
+      expect((all.body as Membership).client_access).toBe('all')
+      expect(await read()).toBe('all')
+
+      const none = await put([])
+      expect(none.status, JSON.stringify(none.body)).toBe(200)
+      expect((none.body as Membership).client_access).toEqual([])
+      expect(await read()).toEqual([])
+    })
+
+    test('PUT /memberships/{user_id}/clients: refusals', async () => {
+      const { token: admin } = await registerFormAccount('clients-refuse')
+      const tenantId = (await me(admin)).tenant.id
+      const adminId = subjectOf(admin)
+      const preparer = await registerFresh('clients-refuse-preparer')
+      const userId = subjectOf((await signInSession(preparer.email, preparer.password)).access_token)
+      await grantMembership({ user_id: userId, tenant_id: tenantId, role: 'preparer', display_name: 'Clients E2E Preparer', email: preparer.email })
+      const read = async () => (await memberships(admin)).memberships.find((m) => m.user_id === userId)!.client_access
+      const before = await read()
+
+      // The preparer's own token: mock login with its subject and the workspace.
+      const preparerToken = await login({ ...PERSONAS.A, subject: userId, tenantId })
+      const forbidden = await setMemberClients(preparerToken, userId, 'all')
+      assertErrorEnvelope(forbidden, 403, 'preparer PUT')
+      expect(err(forbidden)).toBe(NOT_ADMIN_CLIENTS) // ErrClientAccessNotPermitted
+
+      const onSelf = await setMemberClients(admin, adminId, 'all')
+      assertErrorEnvelope(onSelf, 409, 'admin PUT on itself')
+      expect(err(onSelf)).toBe(ADMIN_SEES_ALL) // ErrClientAccessAdmin
+
+      assertErrorEnvelope(await setMemberClients(admin, crypto.randomUUID(), 'all'), 404, 'unknown member')
+
+      // An entity of 1111 is not in this workspace.
+      const { entities } = await listEntities(await login(PERSONAS.A), { limit: 1 })
+      const foreign = await setMemberClients(admin, userId, [entities[0].id])
+      assertErrorEnvelope(foreign, 400, 'a client of another workspace')
+      expect(err(foreign)).toBe(UNKNOWN_CLIENT) // ErrUnknownClient
+      expect(await read(), 'the stored set is unchanged').toEqual(before)
+
+      for (const bad of ['some', {}, ['x']]) {
+        assertErrorEnvelope(await setMemberClients(admin, userId, bad), 400, `body ${JSON.stringify(bad)}`)
+      }
+      expect(await read(), 'a malformed body stores nothing').toEqual(before)
+
+      const tokenB = await login(PERSONAS.B)
+      const inHouse = await setMemberClients(tokenB, INHOUSE_REVIEWER_SUBJECT, [crypto.randomUUID()])
+      assertErrorEnvelope(inHouse, 409, 'in-house workspace')
+      expect(err(inHouse)).toBe(NOT_FIRM) // ErrClientAccessNotFirm
     })
   })
 })

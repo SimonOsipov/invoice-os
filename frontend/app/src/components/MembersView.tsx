@@ -23,6 +23,7 @@ import {
   inviteSentNotice,
   isFiltering,
   listInvitations,
+  pickerClients,
   removeInvite,
   resendInvitation,
   revokeInvitation,
@@ -128,9 +129,9 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
     setStaleReason(null)
     list.run()
   }
-  async function sendInvites(emails: readonly string[], role: AccessRole) {
+  async function sendInvites(emails: readonly string[], role: AccessRole, access?: 'all' | string[]) {
     if (!base) throw new Error('no gateway configured')
-    const items = (await sendInvitations(ctx.authedFetch, base, emails, role)).map(toPendingInvite)
+    const items = (await sendInvitations(ctx.authedFetch, base, emails, role, access)).map(toPendingInvite)
     setInvites((cur) => upsertInvites(cur, items))
     setFlash(inviteSentNotice(items))
   }
@@ -348,7 +349,18 @@ export function MembersView({ ctx }: { ctx: PlatformCtx }) {
           renders no node at all, not a hidden one. */}
       {mode === 'firm' && <ClientUsersCard />}
 
-      {inviting && <InviteModal existing={roster} onSend={sendInvites} onClose={closeInvite} />}
+      {inviting && (
+        <InviteModal
+          existing={roster}
+          mode={ctx.mode}
+          clients={pickerClients(ctx.entities, [])}
+          clientsState={ctx.entitiesState}
+          clientsError={ctx.entitiesError}
+          onRetryClients={ctx.refetchEntities}
+          onSend={sendInvites}
+          onClose={closeInvite}
+        />
+      )}
 
       {/* Rendered conditionally rather than mounted-and-hidden, the ClientsView/EntityFormModal
           form — which is also what lets the drawer call `useDismiss(true, …)` and register no

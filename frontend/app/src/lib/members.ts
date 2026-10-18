@@ -402,6 +402,15 @@ export function clientAccessLabel(access: 'all' | readonly string[] | null | und
   return access.length === 1 ? '1 client' : `${access.length} clients`
 }
 
+/** The roster line's tooltip: names of the held clients in picker order; `undefined` unless a set resolves a name. */
+export function clientAccessTitle(entities: readonly Entity[], access: 'all' | readonly string[] | null | undefined): string | undefined {
+  if (access == null || access === 'all') return undefined
+  const names = pickerClients(entities, access)
+    .filter((c) => access.includes(c.id))
+    .map((c) => c.name)
+  return names.length > 0 ? names.join(', ') : undefined
+}
+
 /**
  * The picker's search: trimmed, case-insensitive substring, like `filterMembers`. It narrows
  * what is SHOWN only; the ticked set is the caller's state and this never sees it.

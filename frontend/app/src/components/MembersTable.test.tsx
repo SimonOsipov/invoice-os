@@ -35,6 +35,7 @@ function ctxWith(over: Record<string, unknown> = {}): PlatformCtx {
   return {
     members: [member()],
     rolesState: 'ready',
+    entities: [],
     ...over,
   } as unknown as PlatformCtx
 }
@@ -771,10 +772,10 @@ describe('LOGFIX-05-03: the invitee account state on the pending row', () => {
 })
 
 describe('FIRMS-02-05: the roster shows client access under the access role', () => {
-  function renderRows(mode: 'firm' | 'inhouse', rows: Member[], invites: PendingInvite[] = []) {
+  function renderRows(mode: 'firm' | 'inhouse', rows: Member[], invites: PendingInvite[] = [], entities: unknown[] = []) {
     render(
       <MembersTable
-        ctx={ctxWith({ mode, members: rows })}
+        ctx={ctxWith({ mode, members: rows, entities })}
         rows={rows}
         policies={[]}
         roles={[]}
@@ -818,5 +819,28 @@ describe('FIRMS-02-05: the roster shows client access under the access role', ()
   it('a row whose access is unknown to the viewer shows no line', () => {
     renderRows('firm', [member({ clientAccess: null })])
     expect(screen.queryByTestId('member-client-access')).toBeNull()
+  })
+
+  it('a client set gives the line a title naming the clients in list order; unresolvable ids are omitted', () => {
+    const ent = (id: string, name: string, status = 'active') => ({ id, name, status })
+    renderRows(
+      'firm',
+      [
+        member({ id: 'r', clientAccess: ['z', 'b', 'a'] }),
+        member({ id: 'g', clientAccess: ['ghost'] }),
+        member({ id: 'm', clientAccess: ['a', 'ghost'] }),
+      ],
+      [],
+      [ent('a', 'Acme'), ent('b', 'Beta', 'archived'), ent('z', 'Zed')],
+    )
+    const titles = screen.getAllByTestId('member-client-access').map((l) => l.getAttribute('title'))
+    expect(titles).toEqual(['Acme, Beta, Zed', null, 'Acme'])
+  })
+
+  it('"All clients" and "No clients" carry no title', () => {
+    renderRows('firm', [member({ id: 'a', clientAccess: 'all' }), member({ id: 'p', clientAccess: [] })], [], [
+      { id: 'a', name: 'Acme', status: 'active' },
+    ])
+    for (const l of screen.getAllByTestId('member-client-access')) expect(l.hasAttribute('title')).toBe(false)
   })
 })

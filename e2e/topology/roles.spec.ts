@@ -1522,6 +1522,7 @@ test('firm Settings: an admin gives a member clients in the drawer and they surv
     await closeDrawer()
     await expect(line()).toHaveText('2 clients')
     expect(await live(), 'the API holds the two clients').toEqual(pickedIds)
+    for (const client of picked) await expect(line(), `the line's tooltip names ${client.name}`).toHaveAttribute('title', new RegExp(client.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
 
     await reopen()
     await expect(line()).toHaveText('2 clients')

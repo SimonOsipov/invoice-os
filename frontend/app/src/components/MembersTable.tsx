@@ -17,6 +17,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import {
   accessRoleLabel,
   clientAccessLabel,
+  clientAccessTitle,
   emailLabel,
   inviteAccountLine,
   inviteStatusLine,
@@ -257,7 +258,10 @@ export function MembersTable({ ctx, rows, policies, roles, onOpen, onStatus, sta
                 <span style={{ minWidth: 0 }}>
                   <span style={{ display: 'block', ...ELLIPSIS, fontSize: 12.5, color: 'var(--fg-2)' }}>{accessRoleLabel(m.role)}</span>
                   {clientLine && (
-                    <span data-testid="member-client-access" style={{ display: 'block', ...ELLIPSIS, marginTop: 2, fontSize: 11, color: 'var(--fg-3)' }}>
+                    <span
+                      data-testid="member-client-access"
+                      title={clientAccessTitle(ctx.entities, m.clientAccess)}
+                      style={{ display: 'block', ...ELLIPSIS, marginTop: 2, fontSize: 11, color: 'var(--fg-3)' }}>
                       {clientLine}
                     </span>
                   )}

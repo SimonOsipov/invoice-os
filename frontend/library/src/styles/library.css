@@ -32,6 +32,7 @@ a:hover { color: var(--teal); }
 .lib-play:hover { filter: brightness(1.06); }
 .lib-back:hover { color: var(--teal) !important; }
 .lib-cookie-choices:hover { color: var(--action) !important; }
+.lib-blog:hover { color: var(--action) !important; }
 
 @media (max-width: 767px) {
   .asc-app { flex-direction: column !important; height: auto !important; min-height: 100vh; overflow: visible !important; }

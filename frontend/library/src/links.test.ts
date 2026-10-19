@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APP_PATHS } from './appPaths.ts'
 import { FEATURES, GROUPS } from './content.ts'
-import { demoHref, featurePlatformHref, groupPlatformHref, platformHref, privacyHref } from './links.ts'
+import { blogHref, demoHref, featurePlatformHref, groupPlatformHref, platformHref, privacyHref } from './links.ts'
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -53,6 +53,19 @@ describe('links', () => {
     expect(demoHref()).toBe('https://www.example/?demo')
     vi.stubEnv('VITE_LANDING_URL', '')
     expect(demoHref()).toBeNull()
+  })
+})
+
+describe('blogHref', () => {
+  it('blogHref_trimsTheSlashAndNullsBlank', () => {
+    vi.stubEnv('VITE_BLOG_URL', 'https://b.example//')
+    expect(blogHref()).toBe('https://b.example')
+    for (const v of ['', '   ']) {
+      vi.stubEnv('VITE_BLOG_URL', v)
+      expect(blogHref()).toBeNull()
+    }
+    vi.unstubAllEnvs()
+    expect(blogHref()).toBeNull()
   })
 })
 

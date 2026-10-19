@@ -20,11 +20,13 @@ export function Footer({
   onSignIn = () => undefined,
   hrefPrefix = '',
   onCookieChoices = () => undefined,
+  blogHref = null,
 }: {
   onBookDemo: () => void
   onSignIn?: () => void
   hrefPrefix?: string
   onCookieChoices?: () => void
+  blogHref?: string | null
 }) {
   return (
     <footer style={{ background: 'var(--background)', borderTop: '1px solid var(--header-border)' }}>
@@ -45,6 +47,11 @@ export function Footer({
                   {l.label}
                 </a>
               ))}
+              {blogHref && (
+                <a href={blogHref} className="a-link">
+                  Blog
+                </a>
+              )}
             </div>
             <div style={column}>
               <span className="t-step">Connect</span>

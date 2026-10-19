@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -63,6 +64,62 @@ func TestBothRootIgnoreFilesDenySidecar(t *testing.T) {
 
 		if !deniesTree(content, "sidecar") {
 			t.Errorf("%s: no `sidecar` deny entry -- every other service's build context uploads sidecar/docling's Python source, models config and fixtures", rel)
+		}
+	}
+}
+
+// ignored applies BuildKit's last-match-wins rule to one path: a pattern covers
+// the path and everything under it, `!` re-includes, `*` stays inside one segment.
+func ignored(patterns []string, p string) bool {
+	out := false
+	for _, pat := range patterns {
+		neg := strings.HasPrefix(pat, "!")
+		pat = strings.Trim(strings.TrimPrefix(pat, "!"), "/")
+		re := regexp.QuoteMeta(pat)
+		re = strings.ReplaceAll(re, `\*\*/`, `(.*/)?`)
+		re = strings.ReplaceAll(re, `\*`, `[^/]*`)
+		if regexp.MustCompile(`^` + re + `(/.*)?$`).MatchString(p) {
+			out = !neg
+		}
+	}
+	return out
+}
+
+func TestBlogIgnoreFileKeepsTheServerSourcesAndDeniesSidecar(t *testing.T) {
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "frontend/blog/Dockerfile.dockerignore"))
+	if err != nil {
+		t.Fatalf("read the blog ignore file: %v", err)
+	}
+	var patterns []string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
+			patterns = append(patterns, l)
+		}
+	}
+
+	// Control: the matcher denies a path the file names outright.
+	if !ignored(patterns, ".claude/rules/blog.md") {
+		t.Fatal("control: .claude/rules/blog.md is not ignored; the matcher reached nothing")
+	}
+
+	tracked, err := exec.CommandContext(t.Context(), "git", "-C", root, "ls-files", "go.mod", "go.sum", "cmd/blog", "internal/blogweb", "internal/platform").Output()
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
+	need := strings.Fields(string(tracked))
+	if len(need) < 6 {
+		t.Fatalf("only %d tracked files under the Go stage's inputs: %v", len(need), need)
+	}
+	for _, f := range need {
+		if ignored(patterns, f) {
+			t.Errorf("%s is ignored; the Go stage of the blog image cannot build", f)
+		}
+	}
+
+	for _, f := range []string{"sidecar/docling/Dockerfile", "cmd/gateway/main.go", "internal/gateway/gateway.go", "migrations/0001_init.sql"} {
+		if !ignored(patterns, f) {
+			t.Errorf("%s is in the blog build context", f)
 		}
 	}
 }

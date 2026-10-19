@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1
+# Build context MUST be the repo root: the pnpm workspace shares one root lockfile.
+
+# ---- Build: install the whole workspace, build just this app ----
+FROM node:22-alpine AS build
+WORKDIR /repo
+RUN corepack enable
+COPY . .
+RUN pnpm install --frozen-lockfile
+# Vite bakes VITE_* at build time; Railway passes service variables as build args.
+ARG VITE_LANDING_URL
+ENV VITE_LANDING_URL=$VITE_LANDING_URL
+ARG VITE_GATEWAY_URL
+ENV VITE_GATEWAY_URL=$VITE_GATEWAY_URL
+# Empty Sentry DSN means Sentry off.
+ARG VITE_SENTRY_DSN
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
+ARG VITE_SENTRY_TEST_DIGEST
+ENV VITE_SENTRY_TEST_DIGEST=$VITE_SENTRY_TEST_DIGEST
+ARG VITE_GA_MEASUREMENT_ID
+ENV VITE_GA_MEASUREMENT_ID=$VITE_GA_MEASUREMENT_ID
+ARG RAILWAY_GIT_COMMIT_SHA
+ENV VITE_RAILWAY_GIT_COMMIT_SHA=$RAILWAY_GIT_COMMIT_SHA
+# Build stage only, never ENV; empty skips the source-map upload.
+ARG SENTRY_AUTH_TOKEN
+RUN pnpm --filter @invoice-os/blog build
+
+# ---- Server: the blog binary, built from the root go.mod ----
+FROM mirror.gcr.io/library/golang:1.26.9-alpine AS server
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY cmd/blog cmd/blog
+COPY internal/blogweb internal/blogweb
+COPY internal/platform internal/platform
+RUN CGO_ENABLED=0 go build -o /out/blog ./cmd/blog
+
+# ---- Serve: the blog binary over the built SPA ----
+FROM gcr.io/distroless/static-debian12:nonroot AS serve
+COPY --from=server /out/blog /blog
+COPY --from=build /repo/frontend/blog/dist /srv
+# The commit under test, served at /build.txt for the deploy gate.
+COPY --from=build /repo/internal/platform/buildsha.txt /srv/build.txt
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/blog"]

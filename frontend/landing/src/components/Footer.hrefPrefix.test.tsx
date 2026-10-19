@@ -119,3 +119,20 @@ describe('Footer hrefPrefix contract with a populated Platform column', () => {
     ])
   })
 })
+
+describe('Footer blogHref', () => {
+  const BLOG = 'https://blog.x'
+
+  it('Footer_defaultRenderIsUnchanged', () => {
+    const hrefs = hrefsOf(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop })))
+    expect(hrefs).toEqual([...PLATFORM_LINKS.map((l) => l.href), '/privacy'])
+    const prefixed = hrefsOf(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix: '/' })))
+    expect(prefixed).toEqual([...PLATFORM_LINKS.map((l) => `/${l.href}`), '/privacy'])
+  })
+
+  it('Footer_blogHrefIsNeverPrefixed', () => {
+    const hrefs = hrefsOf(renderToStaticMarkup(createElement(Footer, { onBookDemo: noop, hrefPrefix: '/', blogHref: BLOG })))
+    expect(hrefs.filter((h) => h === BLOG), 'control: the blog href renders once').toHaveLength(1)
+    expect(hrefs).toEqual([...PLATFORM_LINKS.map((l) => `/${l.href}`), BLOG, '/privacy'])
+  })
+})

@@ -1,7 +1,7 @@
 // The four base resolvers: null when unset (mirrors gatewayBase()), trailing slashes trimmed.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { appBase, consoleBase, libraryBase, opsBase, supportBase } from './auth'
+import { appBase, blogBase, consoleBase, libraryBase, opsBase, supportBase } from './auth'
 
 // Unset targets are stubbed to '' so a shell-exported VITE_* cannot leak in.
 function stubTargets(env: Partial<Record<'VITE_APP_URL' | 'VITE_OPS_URL' | 'VITE_SUPPORT_URL', string>>): void {
@@ -57,5 +57,19 @@ describe('libraryBase', () => {
     vi.stubEnv('VITE_LIBRARY_URL', undefined)
     expect(import.meta.env.VITE_LIBRARY_URL, 'control: the var is really unset').toBeUndefined()
     expect(libraryBase()).toBeNull()
+  })
+})
+
+describe('blogBase', () => {
+  it('blogBase_trimsTheSlashAndNullsBlank', () => {
+    vi.stubEnv('VITE_BLOG_URL', ' https://b.x/ ')
+    expect(blogBase()).toBe('https://b.x')
+    for (const blank of ['', '  ']) {
+      vi.stubEnv('VITE_BLOG_URL', blank)
+      expect(blogBase(), JSON.stringify(blank)).toBeNull()
+    }
+    vi.stubEnv('VITE_BLOG_URL', undefined)
+    expect(import.meta.env.VITE_BLOG_URL, 'control: the var is really unset').toBeUndefined()
+    expect(blogBase()).toBeNull()
   })
 })

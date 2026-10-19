@@ -187,12 +187,27 @@ func TestEveryLibraryViteVariableHasADockerfileArg(t *testing.T) {
 			names[c.name] = true
 		}
 	}
-	// APP and LANDING.
-	if len(names) < 2 {
-		t.Fatalf("found %d distinct VITE_* upserts on the library service (%v), want >= 2", len(names), names)
+	// APP, LANDING and BLOG.
+	if len(names) < 3 {
+		t.Fatalf("found %d distinct VITE_* upserts on the library service (%v), want >= 3", len(names), names)
 	}
 
 	assertViteArgsBeforeBuild(t, "library", names, "RUN pnpm --filter @invoice-os/library build")
+}
+
+// Sibling of TestEveryLibraryViteVariableHasADockerfileArg for the blog service.
+func TestEveryBlogViteVariableHasADockerfileArg(t *testing.T) {
+	names := make(map[string]bool)
+	for _, c := range reconcileCalls(t) {
+		if c.label == "blog" && strings.HasPrefix(c.name, "VITE_") {
+			names[c.name] = true
+		}
+	}
+	if len(names) < 2 {
+		t.Fatalf("found %d distinct VITE_* upserts on the blog service (%v), want >= 2", len(names), names)
+	}
+
+	assertViteArgsBeforeBuild(t, "blog", names, "RUN pnpm --filter @invoice-os/blog build")
 }
 
 func TestLandingDependsOnAPIClient(t *testing.T) {

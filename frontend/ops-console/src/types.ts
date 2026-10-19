@@ -2,7 +2,8 @@
 // Console.dc.html, Component constructor, line ~744) plus the seed-data record
 // shapes.
 
-export type Screen = 'overview' | 'submissions' | 'evidence' | 'api' | 'billing' | 'status'
+export type Screen = 'overview' | 'submissions' | 'evidence' | 'api' | 'billing' | 'blog' | 'status'
+export type BlogFilters = { tab: 'posts' | 'cats'; q: string; status: 'all' | 'published' | 'draft'; cat: string }
 export type Env = 'sandbox' | 'live'
 export type Range = '7d' | '30d' | '90d'
 

@@ -1,4 +1,4 @@
-// Storage suite for the client scope: app.entity_scope limits six tenant tables to a set of clients.
+// Storage suite for the client scope: app.entity_scope limits tenant tables to a set of clients.
 //
 // Rows are seeded per test as the superuser, never in the shared harness.seed(). A skip is a failure
 // under the CI gate. Unset or an empty string reads every client, '*' reads every client, '{ids}' reads those clients.

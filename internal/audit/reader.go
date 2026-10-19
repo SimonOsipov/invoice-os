@@ -242,6 +242,8 @@ type Filter struct {
 	Company   CompanyFilter
 	Q         string
 	InvoiceID string
+	// scope is the caller's client scope, set by Store.List from app.entity_scope.
+	scope callerScope
 }
 
 // Query reads one page of tx's tenant's audit log, newest first. It issues no tenant_id

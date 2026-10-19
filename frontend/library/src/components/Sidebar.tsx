@@ -10,6 +10,7 @@ import { Logo } from './Logo'
 type SidebarProps = {
   route: Route
   demoHref: string | null
+  blogHref?: string | null
   onHome: () => void
   onGroup: (g: Group) => void
   onFeature: (f: Feature) => void
@@ -34,6 +35,7 @@ const navButton = {
 export function Sidebar({
   route,
   demoHref,
+  blogHref = null,
   onHome,
   onGroup,
   onFeature,
@@ -237,13 +239,22 @@ export function Sidebar({
             Book the Demo
           </Button>
         )}
+        {blogHref && (
+          <a
+            href={blogHref}
+            className="lib-blog"
+            style={{ display: 'block', marginTop: demoHref !== null ? 12 : 0, fontSize: 13, color: 'var(--fg-3)' }}
+          >
+            Blog
+          </a>
+        )}
         <button
           type="button"
           className="lib-cookie-choices"
           onClick={onCookieChoices}
           style={{
             display: 'block',
-            marginTop: demoHref !== null ? 12 : 0,
+            marginTop: demoHref !== null || blogHref ? 12 : 0,
             background: 'none',
             border: 0,
             padding: 0,

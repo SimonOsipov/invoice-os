@@ -17,6 +17,9 @@ paths:
 - Give `invoice_app` INSERT only on `staff_audit_log`. Staff read it only through `public.staff_read_staff_audit_log`.
 - Give `invoice_app` INSERT, DELETE and `SELECT (taken_at)` on `health_samples`. Staff read it only through `public.staff_read_health_samples`.
 - Give `invoice_app` SELECT and INSERT only on `ai_calls`. Staff read it only through `public.staff_read_ai_calls` and `public.staff_read_ai_call_totals`.
+- Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_categories`, `blog_posts` and `blog_post_covers`. They are global: no RLS.
+- Give `invoice_app` SELECT, INSERT, UPDATE and DELETE on `blog_subscription_requests`, and SELECT, INSERT and UPDATE on `blog_subscribers`. Both are global: no RLS.
+- Staff read authors only through `public.staff_read_blog_authors`.
 - Treat `submission_job_state_counts` as callable by every `invoice_app` service. It returns per-state counts only.
 - Copy the `tenants` template for a new tenant table. Use `ENABLE` and `FORCE ROW LEVEL SECURITY` and a `tenant_isolation` policy.
 - Read the tenant as `nullif(current_setting('app.current_tenant', true), '')::uuid`. An unset tenant returns zero rows.
@@ -70,3 +73,4 @@ CREATE POLICY invitee_account_state_read ON auth.users FOR SELECT TO auth_hook_r
 - Run the `staff_reader` statements of `db/bootstrap.sql` by hand on production before the first migration that names the role.
 - Treat `invoice_migrator` as able to read every column granted to `staff_reader`, in every tenant, through `SET ROLE staff_reader`.
 - Scope a client table by `app.entity_scope` as the `tenant_isolation` policy of `invoices` does. Unset or `''` means every client.
+- Scope a child table by the visibility of its parent row, as the `tenant_isolation` policy of `line_items` does.

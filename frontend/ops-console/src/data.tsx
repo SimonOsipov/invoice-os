@@ -5,6 +5,7 @@
 
 import type { ReactNode } from 'react'
 import { buildEvidenceBundles, computeBillLine, naira, nairaC, SCALE_PLAN, spendTotals, upStrip, type EvidenceBundle } from './charts'
+import { GLYPHS } from './glyphs'
 import { Icon } from './icons'
 import type { ApiKey, ApiRequest, BillItem, Delivery, Env, Incident, InvoiceKind, InvoiceStatus, Job, JobState, PastInvoice, Quota, RateLimit, Screen, StatusComponent, Tone, ToneStyle, Webhook } from './types'
 
@@ -88,6 +89,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
   { key: 'api', label: 'API & webhooks', glyph: <Icon paths={['m18 16 4-4-4-4', 'm6 8-4 4 4 4', 'm14.5 4-5 16']} size={17} /> },
   { key: 'billing', label: 'Usage & billing', glyph: <Icon paths={['M2 5h20v14H2z', 'M2 10h20']} size={17} /> },
+  { key: 'blog', label: 'Blog', glyph: <Icon paths={GLYPHS['file-text']} size={17} /> },
   { key: 'status', label: 'Status', glyph: <Icon paths={['M3 12h4l2-7 4 14 2-7h6']} size={17} /> },
 ]
 
@@ -99,6 +101,7 @@ export const CRUMB_BY_SCREEN: Record<Screen, string> = {
   evidence: 'Compliance evidence',
   api: 'API & webhooks',
   billing: 'Usage & billing',
+  blog: 'Blog',
   status: 'API status',
 }
 

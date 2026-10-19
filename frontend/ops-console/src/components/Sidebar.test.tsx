@@ -4,7 +4,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { signOut } from '../auth'
 import { Sidebar } from './Sidebar'
 
-vi.mock('@invoice-os/console-session', () => ({ StaffGate: () => null, signOutConsole: vi.fn() }))
+vi.mock('@invoice-os/console-session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
+  StaffGate: () => null,
+  signOutConsole: vi.fn(),
+  expireConsole: vi.fn(),
+}))
 // Sidebar is called as a function, outside a render: useState must answer without one.
 vi.mock('react', async (orig) => ({ ...(await orig<typeof import('react')>()), useState: <T,>(v: T) => [v, () => undefined] }))
 

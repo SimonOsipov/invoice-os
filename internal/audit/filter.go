@@ -120,7 +120,7 @@ func resolveSearchTargets(ctx context.Context, tx pgx.Tx, q string) (searchTarge
 	return out, nil
 }
 
-// filterPredicates renders f's seven filter fields as AND-joined fragments over the `a`
+// filterPredicates renders f's filter fields and the caller scope as AND-joined fragments over the `a`
 // alias, with their bind arguments. Pure: no ctx, no tx.
 //
 // The cursor is deliberately absent — it belongs to the page statement alone, so total

@@ -1491,7 +1491,7 @@ func TestAudit_PlanCorpusNumberMatchesTheResolvedInvoice(t *testing.T) {
 	}
 }
 
-// --- FIRMS-04-02: the caller scope on the plan corpus (D20) ---------------------------
+// --- the caller scope on the plan corpus ---
 //
 // Corpus: the plan corpus above (20 tenants x 1,000 rows, 8 entities, ~7% NULL entity_id).
 // The members are seeded in the corpus tenant; the statements are those of a real Store.List.
@@ -1569,7 +1569,7 @@ func planTraceList(t *testing.T, ctx context.Context, filter audit.Filter) (audi
 }
 
 // The member holds 2 of the 8 entities. Page and count carry entity_id in the Index Cond;
-// the facets visit the heap, so they assert no Seq Scan and tenant_id only (P20).
+// the facets visit the heap, so they assert no Seq Scan and tenant_id only.
 func TestAudit_ScopedCallerStatementsAreIndexServed(t *testing.T) {
 	f, p := requirePlanCorpus(t)
 	held := planCorpusEntities(t, f, p, 2)

@@ -306,7 +306,7 @@ func TestAuditFilter_GenericValueArmSkipsTheNumberKey(t *testing.T) {
 	}
 }
 
-// TestAuditFilter_CallerScopePredicate is AC 6 (D3): an unset scope and * add no entity predicate; an
+// TestAuditFilter_CallerScopePredicate pins that an unset scope and * add no entity predicate; an
 // array literal binds its ids; every other input fails closed to the empty set.
 func TestAuditFilter_CallerScopePredicate(t *testing.T) {
 	a, c := uuid.NewString(), uuid.NewString()

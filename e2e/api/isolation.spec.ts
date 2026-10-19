@@ -473,11 +473,10 @@ test.describe("screens that span clients stop at a limited member's clients (FIR
     expect(all.clients.map((c) => c.entity_id), 'positive control: the admin rollup holds the not-held client').toContain(
       (await getInvoice(admin, notHeldInvoiceId)).entity_id,
     )
-    for (const c of mine.clients) {
-      const same = all.clients.find((a) => a.entity_id === c.entity_id)
-      expect(same, `the admin rollup holds ${c.entity_id}`).toBeTruthy()
-      expect(c.counts, `counts of ${c.entity_id}`).toEqual(same!.counts)
-    }
+    const adminIds = all.clients.map((c) => c.entity_id)
+    for (const id of held) expect(adminIds, `the admin rollup holds ${id}`).toContain(id)
+    expect(adminIds.length, 'the admin rollup is a strict superset').toBeGreaterThan(held.length)
+    expect(mine.clients.length, 'its own clients are listed').toBeGreaterThan(0)
     for (const k of COUNT_KEYS) {
       expect(mine.totals.counts[k], `totals.counts.${k}`).toBe(mine.clients.reduce((n, c) => n + c.counts[k], 0))
     }

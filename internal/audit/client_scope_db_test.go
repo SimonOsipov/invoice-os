@@ -1,4 +1,4 @@
-// FIRMS-04-02: the audit reader limits a member to the clients they hold (D3, D4, D5, D6).
+// The audit reader limits a member to the clients they hold.
 // Reads go through Store.List with identities built from seeded membership rows; an empty
 // Subject takes the unscoped arm and would prove nothing. Helpers use a cs* prefix.
 package audit_test
@@ -189,8 +189,6 @@ func csAssertRows(t *testing.T, label string, got audit.Response, want []int64) 
 	}
 }
 
-// --- AC 1 ---------------------------------------------------------------------------
-
 func TestClientScope_AuditLimitedMemberReadsOnlyItsClientsRows(t *testing.T) {
 	f := requireFixture(t)
 	c := csBuildCorpus(t, f)
@@ -222,7 +220,7 @@ func TestClientScope_AuditTwoOfThreeClients(t *testing.T) {
 	}
 }
 
-// --- AC 2: today's access (green before and after; the guard against over-scoping) ----
+// --- today's access (the guard against over-scoping) ---
 
 func TestClientScope_AuditAllClientsMemberKeepsWorkspaceRows(t *testing.T) {
 	f := requireFixture(t)
@@ -251,8 +249,6 @@ func TestClientScope_AuditAdminReadsWorkspaceRows(t *testing.T) {
 	csAssertRows(t, "in-house admin", csList(t, f, c.houseAdmin, audit.Filter{Limit: 50}),
 		csSorted(c.houseClient.rows, c.houseWS))
 }
-
-// --- AC 3 ---------------------------------------------------------------------------
 
 func TestClientScope_AuditUnassignedMemberSeesAnEmptyLog(t *testing.T) {
 	f := requireFixture(t)
@@ -293,8 +289,6 @@ func TestClientScope_AuditWorkspaceOnlyLogIsEmptyForALimitedMember(t *testing.T)
 		t.Errorf("All clients control read %d rows, log_is_empty = %v, want 1 row and false", len(all.Events), all.LogIsEmpty)
 	}
 }
-
-// --- AC 4 ---------------------------------------------------------------------------
 
 func TestClientScope_AuditCompanyFilterStopsAtTheSet(t *testing.T) {
 	f := requireFixture(t)
@@ -347,8 +341,6 @@ func wantSearchRows(c csCorpus, q string) []int64 {
 	}
 	return c.b.rows[:1]
 }
-
-// --- AC 5 ---------------------------------------------------------------------------
 
 func TestClientScope_AuditFacetsCountOnlyVisibleRows(t *testing.T) {
 	f := requireFixture(t)
@@ -606,7 +598,7 @@ func TestClientScope_AuditOneUserTwoTenants(t *testing.T) {
 	}
 }
 
-// Pinned: a non-UUID subject (in-process actors) gets no scope and reads the whole tenant (D3).
+// Pinned: a non-UUID subject (in-process actors) gets no scope and reads the whole tenant.
 func TestClientScope_AuditNonUUIDSubjectReadsTheWholeTenant(t *testing.T) {
 	f := requireFixture(t)
 	c := csBuildCorpus(t, f)

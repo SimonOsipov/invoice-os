@@ -1237,25 +1237,10 @@ func TestStoreCreate_AnOversizedLineAmountIsErrValidation(t *testing.T) {
 	}
 }
 
-// M4-06-03 (QA Mode A, RED): closes the invoices->entity leg of the D8
-// cross-tenant dangling-reference residual for Store.Create. This is the
-// entity_id sibling of TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS
-// (import_batch_test.go), which pins the SAME shape of leak for
-// ImportBatchID and — per that test's own doc comment — is deliberately left
-// OPEN as an accepted residual (no AC requires a same-tenant check there,
-// and the only production caller always mints a fresh same-tenant batch id).
-// EntityID is different: M4-06 requires it be closed, so unlike the
-// import_batch leg, a caller-supplied EntityID belonging to a DIFFERENT
-// tenant must be rejected as ErrValidation rather than silently accepted.
-//
-// RED today: the entity_id foreign_key_violation check runs with RLS
-// bypassed (same mechanism TestRLS_InvoicesCrossTenantDanglingEntityRef,
-// internal/platform/db/invoices_rls_test.go, pins at the raw-SQL layer), and
-// Store.Create has no tenant-scoped ownership pre-check on EntityID, so this
-// Create call SUCCEEDS (err == nil) instead of returning ErrValidation. The
-// fix — a composite FK (tenant_id, entity_id) -> business_entities(tenant_id,
-// id) plus a friendly tenant-scoped pre-check in Store.Create — lands in a
-// later subtask; this test does not add it.
+// Closes the invoices->entity leg of the D8 cross-tenant dangling-reference residual for
+// Store.Create. The entity_id sibling of TestStoreCreate_CrossTenantImportBatchIDFKBypassesRLS
+// (import_batch_test.go), which leaves the import_batch leg open. A caller-supplied EntityID
+// of a DIFFERENT tenant must be rejected as ErrNotFound, not silently accepted.
 func TestStoreCreate_CrossTenantEntityIDRejected(t *testing.T) {
 	super, app := dbTestPools(t)
 	ctx := context.Background()

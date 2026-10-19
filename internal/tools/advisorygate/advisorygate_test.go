@@ -117,6 +117,11 @@ func TestCounted_GHSAModerateBeatsHighCVSS(t *testing.T) {
 	if got := countedIDs(t, raw, noRating); len(got) != 0 {
 		t.Fatalf("counted %v", got)
 	}
+	aliased := synth(map[string]string{"GHSA-9jxx-vjrv-h2rq": "MODERATE"},
+		grp{ids: []string{"PYSEC-2026-4192"}, aliases: []string{"GHSA-9jxx-vjrv-h2rq"}, max: "7.8"})
+	if got := countedIDs(t, aliased, noRating); len(got) != 0 {
+		t.Fatalf("alias rating ignored: counted %v", got)
+	}
 	head := fixture(t, "osv-head.json")
 	if !bytes.Contains(head, []byte("PYSEC-2026-4192")) {
 		t.Fatal("head fixture lost the docling group")
@@ -151,6 +156,11 @@ func TestCounted_CriticalAndCaseInsensitive(t *testing.T) {
 		grp{ids: []string{"GHSA-a"}, max: "0"}, grp{ids: []string{"GHSA-b"}, max: "0"})
 	if got := countedIDs(t, raw, noRating); len(got) != 2 {
 		t.Fatalf("got %v", got)
+	}
+	mixed := synth(map[string]string{"GHSA-m": "MODERATE", "GHSA-h": "HIGH"},
+		grp{ids: []string{"PYSEC-1"}, aliases: []string{"GHSA-m", "GHSA-h"}, max: "0"})
+	if got := countedIDs(t, mixed, noRating); len(got) != 1 {
+		t.Fatalf("a HIGH rating after a MODERATE one must count, got %v", got)
 	}
 }
 
@@ -456,10 +466,12 @@ func indexOf(s []string, v string) int {
 }
 
 func TestRun_ScannerExit127IsToolError(t *testing.T) {
-	osv := fakeScanner(t, 127, `{"results":[]}`, "")
-	code, _, errOut := gate(t, osv, t.TempDir(), nil)
-	if code != 2 || !strings.Contains(errOut, "127") {
-		t.Fatalf("code %d stderr %q", code, errOut)
+	for _, exit := range []int{2, 127} {
+		osv := fakeScanner(t, exit, `{"results":[]}`, "")
+		code, _, errOut := gate(t, osv, t.TempDir(), nil)
+		if code != 2 || !strings.Contains(errOut, fmt.Sprint(exit)) {
+			t.Fatalf("exit %d: code %d stderr %q", exit, code, errOut)
+		}
 	}
 }
 
@@ -553,6 +565,8 @@ func TestIgnore_MissingFieldsFail(t *testing.T) {
 		"empty reason": "[[IgnoredVulns]]\nid = \"X\"\nreason = \"\"\nignoreUntil = 2026-11-01\n",
 		"no id":        "[[IgnoredVulns]]\nreason = \"r\"\nignoreUntil = 2026-11-01\n",
 		"no until":     "[[IgnoredVulns]]\nid = \"X\"\nreason = \"r\"\n",
+		"empty id":     "[[IgnoredVulns]]\nid = \"\"\nreason = \"r\"\nignoreUntil = 2026-11-01\n",
+		"blank reason": "[[IgnoredVulns]]\nid = \"X\"\nreason = \"  \"\nignoreUntil = 2026-11-01\n",
 	}
 	for name, body := range cases {
 		p := problemsOf(t, body)
@@ -582,6 +596,7 @@ func TestIgnore_UnsupportedFormsFail(t *testing.T) {
 		"multiline string": "[[IgnoredVulns]]\nid = \"X\"\nreason = \"\"\"r\"\"\"\nignoreUntil = 2026-11-01\n",
 		"unknown key":      head + "ignoreUntil = 2026-11-01\nfoo = \"x\"\n",
 		"other table":      entry("2026-11-01") + "[[PackageOverrides]]\nname = \"x\"\n",
+		"overrides table":  "[[PackageOverrides]]\nid = \"X\"\nreason = \"r\"\nignoreUntil = 2026-11-01\n",
 		"key before table": "id = \"X\"\n" + entry("2026-11-01"),
 		"duplicate key":    head + "reason = \"again\"\nignoreUntil = 2026-11-01\n",
 	}
@@ -598,6 +613,8 @@ func TestIgnore_WalkFindsNestedAndSkipsNodeModules(t *testing.T) {
 	writeToml(t, root, "a/b/osv-scanner.toml", bad)
 	writeToml(t, root, "node_modules/x/osv-scanner.toml", bad)
 	writeToml(t, root, ".claude/w/osv-scanner.toml", bad)
+	writeToml(t, root, ".git/x/osv-scanner.toml", bad)
+	writeToml(t, root, ".ralph/x/osv-scanner.toml", bad)
 	p, err := IgnoreProblems(root, today)
 	if err != nil || len(p) == 0 {
 		t.Fatalf("problems %v err %v", p, err)
@@ -606,6 +623,15 @@ func TestIgnore_WalkFindsNestedAndSkipsNodeModules(t *testing.T) {
 		if !strings.Contains(line, filepath.Join("a", "b", "osv-scanner.toml")) {
 			t.Errorf("problem from a skipped path: %s", line)
 		}
+	}
+}
+
+func TestIgnore_RootInsideSkippedDirIsStillWalked(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".claude")
+	writeToml(t, root, "osv-scanner.toml", "[[IgnoredVulns]]\nid = \"X\"\n")
+	p, err := IgnoreProblems(root, today)
+	if err != nil || len(p) == 0 {
+		t.Fatalf("a root named .claude was skipped: problems %v err %v", p, err)
 	}
 }
 
@@ -657,6 +683,26 @@ func TestRun_Lookup404IsNoRating(t *testing.T) {
 		if code, _, _ := gate(t, osv, t.TempDir(), nil); code != want {
 			t.Errorf("max %q: code %d want %d", max, code, want)
 		}
+	}
+}
+
+func TestRun_LookupCachesPerRunAndReadsLowerCase(t *testing.T) {
+	api := newStub(t, map[string]answer{"GHSA-aaaa-aaaa-aaaa": {200, "high"}})
+	raw := synth(nil,
+		grp{ids: []string{"PYSEC-1"}, aliases: []string{"GHSA-aaaa-aaaa-aaaa"}},
+		grp{ids: []string{"PYSEC-2"}, aliases: []string{"GHSA-aaaa-aaaa-aaaa"}})
+	code, out, _ := gate(t, fakeScanner(t, 1, string(raw), ""), t.TempDir(), api)
+	if code != 1 || len(api.seen) != 1 || !strings.Contains(out, "findings of 2 total") {
+		t.Fatalf("code %d seen %v\n%s", code, api.seen, out)
+	}
+}
+
+func TestRun_LookupTransportErrorIsToolError(t *testing.T) {
+	api := newStub(t, nil)
+	api.srv.Close()
+	code, _, errOut := gate(t, fakeScanner(t, 1, string(unrecorded("")), ""), t.TempDir(), api)
+	if code != 2 || !strings.Contains(errOut, "GHSA-aaaa-aaaa-aaaa") {
+		t.Fatalf("code %d stderr %q", code, errOut)
 	}
 }
 

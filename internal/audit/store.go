@@ -65,8 +65,12 @@ func logIsEmpty(ctx context.Context, tx pgx.Tx, scope callerScope) (bool, error)
 	sql := `SELECT 1 FROM audit_log ORDER BY created_at DESC, id DESC LIMIT 1`
 	var args []any
 	if scope.set {
-		sql = `SELECT 1 FROM audit_log a WHERE a.entity_id = ANY($1::uuid[]) LIMIT 1`
-		args = []any{scope.ids}
+		where, scopeArgs, err := filterPredicates(Filter{scope: scope}, searchTargets{})
+		if err != nil {
+			return false, fmt.Errorf("audit: probe scope: %w", err)
+		}
+		sql = `SELECT 1 FROM audit_log a WHERE ` + where + ` LIMIT 1`
+		args = scopeArgs
 	}
 	err := tx.QueryRow(ctx, sql, args...).Scan(&one)
 	if errors.Is(err, pgx.ErrNoRows) {

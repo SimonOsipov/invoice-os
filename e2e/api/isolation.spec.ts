@@ -343,6 +343,7 @@ test.describe('a limited member of one firm reads only its clients (FIRMS-03)', 
   let notHeldEntityId: string
   let ownInvoiceId: string
   let notHeldInvoiceId: string
+  let freshEntityId: string
 
   test.beforeAll(async () => {
     limited = await login({ ...PERSONAS.A, subject: LIMITED_REVIEWER })
@@ -362,7 +363,13 @@ test.describe('a limited member of one firm reads only its clients (FIRMS-03)', 
       return invoices[0].id
     }
     ownInvoiceId = await firstInvoice(ownEntityId)
-    notHeldInvoiceId = await firstInvoice(notHeldEntityId)
+    // The seed arms no approval run, so validate a fresh invoice of a client she does not hold.
+    const fresh = await createEntity(admin, { name: `Zz FIRMS-03 not held ${freshTin()}`, tin: freshTin() })
+    freshEntityId = fresh.id
+    const created = await createInvoice(admin, { entity_id: fresh.id, ...cleanInvoiceFields(`INV-FIRMS-03-${freshTin()}`) })
+    expect((await validateInvoice(admin, created.id)).status, 'the clean fixture must promote draft -> validated').toBe('validated')
+    notHeldInvoiceId = created.id
+    expect((await getInvoiceApproval(admin, notHeldInvoiceId)).steps.length, 'positive control: the admin reads its approval run').toBeGreaterThan(0)
   })
 
   test('FIRMS-03: the limited reviewer lists exactly its two clients', async () => {
@@ -382,6 +389,7 @@ test.describe('a limited member of one firm reads only its clients (FIRMS-03)', 
     await assertNotFoundAcrossTenant(() => getInvoiceHistory(limited, notHeldInvoiceId), 'history of that invoice')
     await assertNotFoundAcrossTenant(() => getInvoiceApproval(limited, notHeldInvoiceId), 'approval run of that invoice')
     await assertNotFoundAcrossTenant(() => listInvoices(limited, { entity_id: notHeldEntityId }), 'invoice list filtered to that client')
+    await assertNotFoundAcrossTenant(() => getEntity(limited, freshEntityId), 'entity of the client holding that invoice')
 
     const preview = new URLSearchParams({ entity_id: notHeldEntityId, ...EVIDENCE_PERIOD })
     const control = await rawFetch(`/api/invoice/v1/evidence-bundle/preview?${preview}`, { headers: { Authorization: `Bearer ${admin}` } })

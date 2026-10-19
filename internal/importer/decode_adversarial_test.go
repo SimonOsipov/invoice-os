@@ -9,9 +9,13 @@
 package importer
 
 import (
+	"archive/zip"
 	"bytes"
+	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/xuri/excelize/v2"
@@ -529,4 +533,71 @@ func TestDecode_AllWhitelistedControlsAccepted(t *testing.T) {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
 	}
 	assertHeader(t, rows[0], []string{"foo\nbar", "baz"})
+}
+
+// withSheetXML rewrites xl/worksheets/sheet1.xml inside the xlsx zip.
+func withSheetXML(t *testing.T, xlsx []byte, edit func(string) string) []byte {
+	t.Helper()
+	zr, err := zip.NewReader(bytes.NewReader(xlsx), int64(len(xlsx)))
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	var out bytes.Buffer
+	zw := zip.NewWriter(&out)
+	for _, f := range zr.File {
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open %s: %v", f.Name, err)
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("read %s: %v", f.Name, err)
+		}
+		if f.Name == "xl/worksheets/sheet1.xml" {
+			data = []byte(edit(string(data)))
+		}
+		w, err := zw.Create(f.Name)
+		if err != nil {
+			t.Fatalf("create %s: %v", f.Name, err)
+		}
+		if _, err := w.Write(data); err != nil {
+			t.Fatalf("write %s: %v", f.Name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+	return out.Bytes()
+}
+
+// An empty <row r="N"> past Excel's 1,048,576 limit must be refused fast
+// (GHSA-jw42); v2.11.0 materialised 5M rows and ~700 MB instead.
+func TestXLSXRows_RowPastTheExcelLimitIsRefusedFast(t *testing.T) {
+	for _, tc := range []struct{ name, row string }{
+		{"five_million", "5000000"},
+		{"first_past_limit", "1048577"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := buildXLSX(t, func(f *excelize.File, sheet string) {
+				if err := f.SetCellValue(sheet, "A1", "x"); err != nil {
+					t.Fatalf("SetCellValue: %v", err)
+				}
+			})
+			crafted := withSheetXML(t, base, func(x string) string {
+				return strings.Replace(x, "</sheetData>", `<row r="`+tc.row+`"></row></sheetData>`, 1)
+			})
+
+			start := time.Now()
+			_, err := xlsxRows(bytes.NewReader(crafted))
+			elapsed := time.Since(start)
+
+			if !errors.Is(err, excelize.ErrMaxRows) {
+				t.Fatalf("err = %v, want excelize.ErrMaxRows", err)
+			}
+			if elapsed >= time.Second {
+				t.Errorf("refusal took %v, want < 1s", elapsed)
+			}
+		})
+	}
 }

@@ -15,6 +15,7 @@ package importer
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,8 +26,10 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/google/uuid"
+	"github.com/xuri/excelize/v2"
 
 	"github.com/SimonOsipov/invoice-os/internal/platform/auth"
 )
@@ -491,5 +494,56 @@ func TestPreviewHandler_ConcurrentRequestsIsolated(t *testing.T) {
 			t.Error(err)
 			_ = i
 		}
+	}
+}
+
+// A CFB container with a crafted EncryptionInfo stream size is a 400, not a
+// panic (GHSA-2j4c) or a 4 GiB allocation (GHSA-x2q3).
+func TestPreviewHandler_CraftedCFBIsRefusedWithoutAPanic(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		size uint32
+	}{
+		{"encryption_info_cut_to_8_bytes", 8},
+		{"encryption_info_declares_4_GiB", 0xFFFFFFFF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plain := buildXLSX(t, func(f *excelize.File, sheet string) {
+				if err := f.SetCellValue(sheet, "A1", "x"); err != nil {
+					t.Fatalf("SetCellValue: %v", err)
+				}
+			})
+			enc, err := excelize.Encrypt(plain, &excelize.Options{Password: "x"})
+			if err != nil {
+				t.Fatalf("Encrypt: %v", err)
+			}
+			// The directory entry's stream size sits 120 bytes after its UTF-16LE name.
+			var name []byte
+			for _, u := range utf16.Encode([]rune("EncryptionInfo")) {
+				name = binary.LittleEndian.AppendUint16(name, u)
+			}
+			at := bytes.Index(enc, name)
+			if at < 0 {
+				t.Fatal("EncryptionInfo directory entry not found")
+			}
+			binary.LittleEndian.PutUint32(enc[at+120:], tc.size)
+
+			body, contentType := buildMultipartBody(t, "", "", "crafted.xlsx", "", enc)
+			id := auth.Identity{Subject: memberSubject, Role: "authenticated", TenantID: uuid.NewString()}
+			rec, raw, resp := doPreviewRequest(t, &id, contentType, body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, raw)
+			}
+			if resp.Error != "could not decode uploaded file" {
+				t.Errorf("error = %q, want %q", resp.Error, "could not decode uploaded file")
+			}
+			var env struct {
+				DocumentID string `json:"document_id"`
+			}
+			if err := json.Unmarshal(raw, &env); err != nil || env.DocumentID == "" {
+				t.Errorf("document_id missing from %s (err=%v)", raw, err)
+			}
+		})
 	}
 }

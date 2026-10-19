@@ -51,32 +51,64 @@ const stripFile = (file: string, src: string) =>
 const lineOf = (src: string, index: number) => src.slice(0, index).split('\n').length
 
 const V1_NEEDLES = [/oklch\(/i, /fraunces/i, /\binter\b/i, /--gradient-/i, /radius-pill/i, /radius-input/i, /radius-xs/i, /shadow-soft/i, /shadow-elegant/i]
-const scanVocabulary = (files: Record<string, string>) =>
-  Object.entries(files).flatMap(([file, raw]) =>
+// The blog is ported verbatim, so these v1 uses stay; a stay that matches no line is stale.
+const VOCAB_STAYS: [file: string, needle: string][] = [['components/BlogPreview.tsx', "boxShadow: 'var(--shadow-elegant)'"]]
+const scanVocabulary = (files: Record<string, string>, stays: [string, string][] = []) => {
+  const lines = Object.entries(files).flatMap(([file, raw]) =>
     stripFile(file, raw)
       .split('\n')
-      .flatMap((text, i) => V1_NEEDLES.filter((re) => re.test(text)).map((re) => `${file}:${i + 1} ${re}`)),
+      .map((text, i) => ({ file, text, at: i + 1 })),
   )
+  const stayed = (l: { file: string; text: string }, [file, needle]: [string, string]) => l.file === file && l.text.includes(needle)
+  return [
+    ...lines.flatMap((l) => (stays.some((s) => stayed(l, s)) ? [] : V1_NEEDLES.filter((re) => re.test(l.text)).map((re) => `${l.file}:${l.at} ${re}`))),
+    ...stays.filter((s) => !lines.some((l) => stayed(l, s) && V1_NEEDLES.some((re) => re.test(l.text)))).map(([f, n]) => `stale stay ${f}: ${n}`),
+  ]
+}
 
 const CORNERS_ALLOWED = ["'var(--radius-sm)'", "'var(--radius-md)'", "'var(--radius-lg)'", "'var(--radius-btn)'", "'50%'", '2']
 const TOGGLE_FILE = 'components/Rules.tsx'
-const scanCorners = (files: Record<string, string>) => {
+// The blog's numeric corners stay verbatim: `count` occurrences of `value` in `file`. More is a violation, fewer is stale.
+const CORNER_STAYS: [file: string, value: string, count: number][] = [
+  ['components/BlogCategories.tsx', '6', 9],
+  ['components/BlogEditor.tsx', '4', 2],
+  ['components/BlogEditor.tsx', '5', 1],
+  ['components/BlogEditor.tsx', '6', 9],
+  ['components/BlogEditor.tsx', '11', 1],
+  ['components/BlogList.tsx', '4', 2],
+  ['components/BlogList.tsx', '6', 4],
+  ['components/BlogList.tsx', "'6px 6px 0 0'", 1],
+  ['components/BlogPreview.tsx', '4', 1],
+  ['components/BlogPreview.tsx', '6', 6],
+  ['components/BlogPreview.tsx', '8', 1],
+  ['components/BlogPreview.tsx', '10', 1],
+]
+const scanCorners = (files: Record<string, string>, stays: [string, string, number][] = []) => {
   const values = Object.entries(files).flatMap(([file, raw]) => {
     const src = stripFile(file, raw)
     return [...src.matchAll(/borderRadius\s*:\s*([^,}]+)/g)].map((m) => ({ file, line: lineOf(src, m.index), value: m[1].trim() }))
   })
   const toggles = values.filter((v) => v.value === '99' && v.file === TOGGLE_FILE)
-  const bad = values.filter((v) => !CORNERS_ALLOWED.includes(v.value) && !(v.value === '99' && v === toggles[0]))
+  const used = new Map<string, number>()
+  const stayed = (v: { file: string; value: string }) => {
+    const stay = stays.find(([f, val]) => f === v.file && val === v.value)
+    if (!stay) return false
+    const key = `${v.file}|${v.value}`
+    used.set(key, (used.get(key) ?? 0) + 1)
+    return used.get(key)! <= stay[2]
+  }
+  const bad = values.filter((v) => !CORNERS_ALLOWED.includes(v.value) && !(v.value === '99' && v === toggles[0]) && !stayed(v))
   return {
     values,
     violations: [
       ...bad.map((v) => `${v.file}:${v.line} borderRadius ${v.value}`),
+      ...stays.filter(([f, val, n]) => (used.get(`${f}|${val}`) ?? 0) < n).map(([f, val, n]) => `stale stay ${f}: borderRadius ${val} x${n}`),
       ...(toggles.length === 0 ? [`${TOGGLE_FILE} has no 99 (the toggle track keeps it)`] : []),
     ],
   }
 }
 
-const FG4_STAYS: [file: string, needle: string][] = []
+const FG4_STAYS: [file: string, needle: string][] = [['components/BlogList.tsx', "featured ? 'var(--primary-foreground)' : 'var(--fg-4)'"]]
 const scanFg4 = (files: Record<string, string>, stays: [string, string][]) => {
   const lines = Object.entries(files).flatMap(([file, raw]) =>
     stripFile(file, raw)
@@ -245,7 +277,13 @@ describe('v2 entry', () => {
     for (const f of ['components/Rules.tsx', 'components/Sidebar.tsx', 'styles/support.css', 'icons.tsx', '../index.html']) {
       expect(names, `${f} is scanned`).toContain(f)
     }
-    expect(scanVocabulary(scanned), 'v1 vocabulary (file:line needle)').toEqual([])
+    expect(scanVocabulary(scanned, VOCAB_STAYS), 'v1 vocabulary (file:line needle)').toEqual([])
+
+    const shadow = "<div style={{ boxShadow: 'var(--shadow-elegant)' }} />"
+    const stay: [string, string][] = [['p.tsx', "boxShadow: 'var(--shadow-elegant)'"]]
+    expect(scanVocabulary({ 'p.tsx': shadow }, stay), 'control: the stayed line is no hit').toEqual([])
+    expect(scanVocabulary({ 'p.tsx': shadow, 'q.tsx': shadow }, stay), 'a planted shadow-elegant outside the stays is reported').toEqual(['q.tsx:1 /shadow-elegant/i'])
+    expect(scanVocabulary({ 'p.tsx': 'const x = 1' }, stay), 'a stay that matches no line is stale').toEqual([`stale stay p.tsx: ${stay[0][1]}`])
   })
 
   it('VE-08 every TSX corner is a v2 corner (source scan: a pill renders as a pill under v2, so no runtime test sees the value)', () => {
@@ -260,7 +298,15 @@ describe('v2 entry', () => {
     expect(scanCorners({ [TOGGLE_FILE]: ok + '// borderRadius: 99\n/* borderRadius: 999 */' }).violations, 'a comment is no corner').toEqual([])
     expect(scanCorners({ [TOGGLE_FILE]: 'const a = { borderRadius: 2 }' }).violations, 'Rules.tsx without its toggle 99 fails').toHaveLength(1)
 
-    const { values, violations } = scanCorners(TSX_FILES)
+    const bf = 'components/BlogList.tsx'
+    const six = 'const a = { borderRadius: 6 }\n'
+    const cs: [string, string, number][] = [[bf, '6', 2]]
+    expect(scanCorners({ [TOGGLE_FILE]: ok, [bf]: six + six }, cs).violations, 'control: a stay allows exactly its count').toEqual([])
+    expect(scanCorners({ [TOGGLE_FILE]: ok, 'components/Audit.tsx': six }, cs).violations, 'a 6 in a file outside the stays is reported').toContain('components/Audit.tsx:1 borderRadius 6')
+    expect(scanCorners({ [TOGGLE_FILE]: ok, [bf]: six + six + six }, cs).violations, 'one more 6 than the count reports the extra').toEqual([`${bf}:3 borderRadius 6`])
+    expect(scanCorners({ [TOGGLE_FILE]: ok, [bf]: six }, cs).violations, 'fewer than the count is stale').toEqual([`stale stay ${bf}: borderRadius 6 x2`])
+
+    const { values, violations } = scanCorners(TSX_FILES, CORNER_STAYS)
     expect(Object.keys(TSX_FILES), 'Rules.tsx is scanned').toContain(TOGGLE_FILE)
     expect(values.length, 'corner values collected').toBeGreaterThanOrEqual(35)
     expect(violations, 'corners outside the v2 set (file:line value)').toEqual([])

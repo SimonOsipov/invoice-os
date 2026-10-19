@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// testdata/id_rules.json is also read by frontend/ops-console/src/blog.test.ts.
+// testdata/id_rules.json is also read by frontend/support-console/src/blog.test.ts.
 func TestIDRules_FixtureMatchesPostIDAndCleanBody(t *testing.T) {
 	raw, err := os.ReadFile("testdata/id_rules.json")
 	if err != nil {

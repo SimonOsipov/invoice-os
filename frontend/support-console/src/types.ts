@@ -4,7 +4,9 @@
 
 import type { ReactNode } from 'react'
 
-export type Screen = 'submissions' | 'rules' | 'audit' | 'tenants' | 'health' | 'ai'
+export type Screen = 'submissions' | 'rules' | 'audit' | 'tenants' | 'health' | 'ai' | 'blog'
+
+export type BlogFilters = { tab: 'posts' | 'cats'; q: string; status: 'all' | 'published' | 'draft'; cat: string }
 
 export type Env = 'sandbox' | 'live'
 

@@ -10,7 +10,8 @@ import { fetchJobs } from './jobsApi'
 import { fetchCodeListSummary, fetchRules, fetchVersions } from './rulesApi'
 import { fetchStaffTenant, fetchStaffTenants, type StaffTenant, type StaffTenantDetail } from './tenantsApi'
 
-vi.mock('@invoice-os/console-session', () => ({
+vi.mock('@invoice-os/console-session', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@invoice-os/console-session')>()),
   StaffGate: ({ children }: { children: ReactNode }) => children,
   signOutConsole: vi.fn(),
   expireConsole: vi.fn(),

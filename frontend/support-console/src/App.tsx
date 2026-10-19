@@ -9,6 +9,7 @@ import { AuditEntryDrawer, StaffChangeDrawer } from './components/AuditDrawer'
 import { EvidenceDrawer, type EvidenceInputs } from './components/EvidenceDrawer'
 import { Health } from './components/Health'
 import { AiUsage, type AiView } from './components/AiUsage'
+import { Blog } from './components/Blog'
 import { RuleDrawer } from './components/RuleDrawer'
 import { CodeListDrawer } from './components/CodeListDrawer'
 import { KillConfirm } from './components/KillConfirm'
@@ -46,7 +47,9 @@ import { fetchStaffHealth } from './healthApi'
 import { detailStatus, fetchStaffTenant, fetchStaffTenants } from './tenantsApi'
 import { StaffGate } from '@invoice-os/console-session'
 import { SESSION_KEY, appBase, expireSession, landingBase } from './auth'
-import type { DrawerState, Env, Rule, Screen, ToastState, ToastTone } from './types'
+import { keptFor } from './blog'
+import { currentSub } from './session'
+import type { BlogFilters, DrawerState, Env, Rule, Screen, ToastState, ToastTone } from './types'
 
 // The whole console lives under `.asc-app` — that scope defines the design-system tokens
 // (--action, --bg-*, --fg-*, …) and the utility classes (.v2-btn, .label, .mono, .eyebrow)
@@ -60,8 +63,15 @@ export default function App() {
   )
 }
 
+// Opens on Blog when the signed-in member has a draft kept from a lost session.
+function initialScreen(): Screen {
+  if (typeof localStorage === 'undefined') return 'rules'
+  return keptFor(localStorage, currentSub()) ? 'blog' : 'rules'
+}
+
 function Console() {
-  const [screen, setScreen] = useState<Screen>('rules')
+  const [screen, setScreen] = useState<Screen>(initialScreen)
+  const [blogFilters, setBlogFilters] = useState<BlogFilters>({ tab: 'posts', q: '', status: 'all', cat: 'all' })
   const [env, setEnv] = useState<Env>('sandbox')
   const [drawer, setDrawer] = useState<DrawerState>(null)
   const [confirmKill, setConfirmKill] = useState<{ key: string; action: 'disable' | 'enable' } | null>(null)
@@ -623,6 +633,7 @@ function Console() {
               onRetryTotals={totalsRead.run}
             />
           )}
+          {screen === 'blog' && <Blog filters={blogFilters} onFilters={setBlogFilters} onToast={showToast} />}
           {screen === 'health' && <Health status={healthStatus} errorText={healthRead.error?.message} data={healthRead.data ?? null} onRetry={healthRead.run} />}
         </div>
       </main>

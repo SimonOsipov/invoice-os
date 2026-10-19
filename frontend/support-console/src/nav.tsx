@@ -1,4 +1,5 @@
 import { Icon } from './icons'
+import { GLYPHS } from './glyphs'
 import type { NavItem, Screen } from './types'
 
 // Each live screen adds its entry.
@@ -33,6 +34,11 @@ export const NAV_ITEMS: NavItem[] = [
     label: 'AI usage',
     glyph: <Icon paths={['M7 5h10v14H7z', 'M10 9h4v6h-4z', 'M9 2v3', 'M15 2v3', 'M9 19v3', 'M15 19v3', 'M2 9h5', 'M2 15h5', 'M17 9h5', 'M17 15h5']} size={17} />,
   },
+  {
+    key: 'blog',
+    label: 'Blog',
+    glyph: <Icon paths={GLYPHS['file-text']} size={17} />,
+  },
 ]
 
 export const CRUMB_BY_SCREEN: Record<Screen, string> = {
@@ -42,4 +48,5 @@ export const CRUMB_BY_SCREEN: Record<Screen, string> = {
   tenants: 'Tenants',
   health: 'System health',
   ai: 'AI usage',
+  blog: 'Blog',
 }

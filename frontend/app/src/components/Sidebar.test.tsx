@@ -656,6 +656,12 @@ describe('Sidebar switcher names why a member sees no client', () => {
     expect(screen.queryByTestId('company-switcher-empty')).toBeNull()
   })
 
+  it('switcher_aListedOptionSuppressesTheCauseLine', () => {
+    show(firmCtx({ members: you('reviewer', []) }))
+    expect(screen.queryAllByTestId('company-switcher-option')).toHaveLength(1)
+    expect(screen.queryByTestId('company-switcher-empty')).toBeNull()
+  })
+
   it('switcher_aMemberWithClientsSeesNoCauseLine', () => {
     show(firmCtx({ members: you('reviewer', [ENTITY_ID]) }))
     expect(screen.queryAllByTestId('company-switcher-option')).toHaveLength(1)

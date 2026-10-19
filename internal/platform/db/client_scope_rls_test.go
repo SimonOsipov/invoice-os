@@ -642,6 +642,13 @@ func TestRLS_ClientScopeMigrationIsReversible(t *testing.T) {
 		return out
 	}
 
+	scoped := quals()
+	for _, table := range csTableNames(csTables) {
+		if !strings.Contains(scoped[table], "app.entity_scope") {
+			t.Fatalf("before Down, %s qual lacks app.entity_scope (migration not applied?): %s", table, scoped[table])
+		}
+	}
+
 	if _, err := tx.Exec(ctx, auditEntitySectionOf(t, migration, "Down")); err != nil {
 		t.Fatalf("Down body of %s failed: %v", migration, err)
 	}
@@ -661,8 +668,8 @@ func TestRLS_ClientScopeMigrationIsReversible(t *testing.T) {
 	}
 	up := quals()
 	for _, table := range csTableNames(csTables) {
-		if !strings.Contains(up[table], "app.entity_scope") {
-			t.Errorf("after Up, %s qual lacks app.entity_scope: %s", table, up[table])
+		if up[table] != scoped[table] {
+			t.Errorf("after Up, %s qual = %s\nwant the scoped text applied before Down: %s", table, up[table], scoped[table])
 		}
 	}
 	if up["membership_clients"] != tenantOnly {
@@ -676,4 +683,284 @@ func csTableNames(tbs []csTable) []string {
 		names[i] = tb.name
 	}
 	return names
+}
+
+// csReadAll returns the sorted ids of every table in csTables for the scope, keyed by table name.
+func csReadAll(t *testing.T, tenant string, scope *string) map[string][]string {
+	t.Helper()
+	got := map[string][]string{}
+	csInTx(t, tenant, scope, func(tx pgx.Tx) error {
+		for _, tb := range csTables {
+			ids, err := csQueryIDs(tx, tb.name)
+			if err != nil {
+				return err
+			}
+			got[tb.name] = ids
+		}
+		return nil
+	})
+	return got
+}
+
+// Odd but valid array literals must scope exactly to the clients they name, never wider.
+func TestRLS_ClientScopeOddSetLiteralsScopeExactly(t *testing.T) {
+	requireHarness(t)
+	ten := csSeedClients(t, 3)
+	other := csSeedClients(t, 1)
+	a, b, c := ten.clients[0], ten.clients[1], ten.clients[2]
+	foreign := other.clients[0].entity
+
+	for _, tc := range []struct {
+		name  string
+		scope string
+		want  []*csClient
+	}{
+		{"duplicate ids", "{" + a.entity + "," + a.entity + "}", []*csClient{a}},
+		{"duplicate ids in a pair", "{" + a.entity + "," + c.entity + "," + a.entity + "}", []*csClient{a, c}},
+		{"a foreign tenant's client beside A", "{" + a.entity + "," + foreign + "}", []*csClient{a}},
+		{"spaces around the ids", "{ " + a.entity + " , " + c.entity + " }", []*csClient{a, c}},
+		{"quoted id", `{"` + a.entity + `"}`, []*csClient{a}},
+		{"upper-case id", "{" + strings.ToUpper(a.entity) + "}", []*csClient{a}},
+		{"id without hyphens", "{" + strings.ReplaceAll(b.entity, "-", "") + "}", []*csClient{b}},
+		{"a NULL element beside A", "{" + a.entity + ",NULL}", []*csClient{a}},
+		{"only a NULL element", "{NULL}", nil},
+		{"only a foreign client", "{" + foreign + "}", nil},
+		{"braces with a space", "{ }", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := csReadAll(t, ten.id, csScope(tc.scope))
+			for _, tb := range csTables {
+				want := csWant(tb, tc.want...)
+				if tc.want != nil && len(want) == 0 {
+					t.Fatalf("no expected rows in %s", tb.name)
+				}
+				if !slices.Equal(got[tb.name], want) {
+					t.Errorf("%s under %q: ids = %v, want %v", tb.name, tc.scope, got[tb.name], want)
+				}
+			}
+		})
+	}
+}
+
+// A value that is neither ” nor '*' nor a uuid array must error; it must not read every client.
+func TestRLS_ClientScopeMalformedValuesNeverWiden(t *testing.T) {
+	requireHarness(t)
+	ten := csSeedClients(t, 2)
+
+	for _, scope := range []string{" ", " *", "* ", "**", "{*}", "{}x", "{" + ten.clients[0].entity + "}x", "{1111}", "A", "all", "true", "null"} {
+		for _, table := range []string{"invoices", "business_entities", "line_items"} {
+			t.Run(fmt.Sprintf("%q/%s", scope, table), func(t *testing.T) {
+				var rows []string
+				err := csTx(ten.id, csScope(scope), func(tx pgx.Tx) error {
+					ids, e := csQueryIDs(tx, table)
+					rows = ids
+					return e
+				})
+				if c := pgCode(err); c != "22P02" {
+					t.Errorf("SELECT on %s under %q: err = %v (code %q), want 22P02", table, scope, err, c)
+				}
+				if len(rows) != 0 {
+					t.Errorf("SELECT on %s under %q returned %v, want no rows", table, scope, rows)
+				}
+			})
+		}
+	}
+}
+
+// Rows outside the set are invisible to UPDATE and DELETE: 0 rows affected, nothing changed.
+func TestRLS_ClientScopeUpdateAndDeleteOutsideTheSetTouchNothing(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	ten := csSeedClients(t, 2)
+	a, b := ten.clients[0], ten.clients[1]
+
+	affected := func(t *testing.T, sql string, args ...any) int64 {
+		t.Helper()
+		var n int64
+		csInTx(t, ten.id, csScope(csSet(a)), func(tx pgx.Tx) error {
+			tag, err := tx.Exec(ctx, sql, args...)
+			n = tag.RowsAffected()
+			return err
+		})
+		return n
+	}
+
+	for _, tc := range []struct{ name, sql, own, other, check string }{
+		{"UPDATE invoices", `UPDATE invoices SET invoice_number = 'cs-touched' WHERE id = $1`, a.invoice, b.invoice,
+			`SELECT count(*) FROM invoices WHERE invoice_number = 'cs-touched' AND id = $1`},
+		{"UPDATE import_batches", `UPDATE import_batches SET filename = 'cs-touched' WHERE id = $1`, a.batch, b.batch,
+			`SELECT count(*) FROM import_batches WHERE filename = 'cs-touched' AND id = $1`},
+		{"UPDATE import_mappings", `UPDATE import_mappings SET saved_at = '2001-01-01Z' WHERE id = $1`, a.mapping, b.mapping,
+			`SELECT count(*) FROM import_mappings WHERE saved_at = '2001-01-01Z' AND id = $1`},
+		{"UPDATE business_entities", `UPDATE business_entities SET name = 'cs-touched' WHERE id = $1`, a.entity, b.entity,
+			`SELECT count(*) FROM business_entities WHERE name = 'cs-touched' AND id = $1`},
+		{"UPDATE line_items", `UPDATE line_items SET line_no = 98 WHERE id = $1`, a.lines[0], b.lines[0],
+			`SELECT count(*) FROM line_items WHERE line_no = 98 AND id = $1`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if n := affected(t, tc.sql, tc.other); n != 0 {
+				t.Errorf("%s on client B's row under {A}: %d rows affected, want 0", tc.name, n)
+			}
+			if n := mustCount(t, h.super, tc.check, tc.other); n != 0 {
+				t.Errorf("%s: B's row carries the change (%d), want it untouched", tc.name, n)
+			}
+			if n := affected(t, tc.sql, tc.own); n != 1 {
+				t.Errorf("%s on client A's row under {A}: %d rows affected, want 1 (control)", tc.name, n)
+			}
+			if n := mustCount(t, h.super, tc.check, tc.own); n != 1 {
+				t.Errorf("%s: A's row check count = %d, want 1 (control)", tc.name, n)
+			}
+		})
+	}
+
+	t.Run("DELETE line_items", func(t *testing.T) {
+		if n := affected(t, `DELETE FROM line_items WHERE id = $1`, b.lines[0]); n != 0 {
+			t.Errorf("DELETE of B's line item under {A}: %d rows affected, want 0", n)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM line_items WHERE id = $1`, b.lines[0]); n != 1 {
+			t.Errorf("B's line item rows after the DELETE = %d, want 1", n)
+		}
+		if n := affected(t, `DELETE FROM line_items WHERE id = $1`, a.lines[0]); n != 1 {
+			t.Errorf("DELETE of A's line item under {A}: %d rows affected, want 1 (control)", n)
+		}
+	})
+	t.Run("DELETE business_entities", func(t *testing.T) {
+		if n := affected(t, `DELETE FROM business_entities WHERE id = $1`, b.entity); n != 0 {
+			t.Errorf("DELETE of client B under {A}: %d rows affected, want 0", n)
+		}
+		if n := mustCount(t, h.super, `SELECT count(*) FROM business_entities WHERE id = $1`, b.entity); n != 1 {
+			t.Errorf("client B rows after the DELETE = %d, want 1", n)
+		}
+	})
+}
+
+// A child row cannot be re-pointed at an invoice outside the set.
+func TestRLS_ClientScopeLineItemMovedToAnInvoiceOutsideTheSetRefused(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	ten := csSeedClients(t, 2)
+	a, b := ten.clients[0], ten.clients[1]
+
+	err := csTx(ten.id, csScope(csSet(a)), func(tx pgx.Tx) error {
+		_, e := tx.Exec(ctx, `UPDATE line_items SET invoice_id = $1 WHERE id = $2`, b.invoice, a.lines[0])
+		return e
+	})
+	csAssertRLSRefusal(t, "UPDATE line_items moving A's line to B's invoice under {A}", err)
+	var inv string
+	if e := h.super.QueryRow(ctx, `SELECT invoice_id::text FROM line_items WHERE id = $1`, a.lines[0]).Scan(&inv); e != nil || inv != a.invoice {
+		t.Errorf("line item invoice after the refused UPDATE = %q (err %v), want A's %s", inv, e, a.invoice)
+	}
+}
+
+// business_entities is scoped by its own id: a set hides other clients and refuses a new one.
+func TestRLS_ClientScopeBusinessEntitiesWrites(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	ten := csSeedClients(t, 2)
+	a := ten.clients[0]
+	insert := func(scope *string) error {
+		return csTx(ten.id, scope, func(tx pgx.Tx) error {
+			_, e := tx.Exec(ctx, `INSERT INTO business_entities (id, tenant_id, name) VALUES ($1, $2, 'cs-new')`, uuid.NewString(), ten.id)
+			return e
+		})
+	}
+
+	csAssertRLSRefusal(t, "INSERT of a new business entity under {A}", insert(csScope(csSet(a))))
+	csAssertRLSRefusal(t, "INSERT of a new business entity under {}", insert(csScope("{}")))
+	for _, scope := range []*string{nil, csScope(""), csScope("*")} {
+		if err := insert(scope); err != nil {
+			t.Errorf("INSERT of a new business entity under scope %s: %v, want success", csScopeStr(scope), err)
+		}
+	}
+}
+
+// Unset, ” and '*' set no client limit on a write: a worker or an admin writes to any client.
+func TestRLS_ClientScopeOpenScopesWriteToAnyClient(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+
+	for _, scope := range []*string{nil, csScope(""), csScope("*")} {
+		t.Run(csScopeStr(scope), func(t *testing.T) {
+			ten := csSeedClients(t, 2)
+			b := ten.clients[1]
+			cases := csInsertCases(ten.id, b.entity, b.invoice)
+			if len(cases) != 5 {
+				t.Fatalf("insert cases = %d, want 5", len(cases))
+			}
+			for _, tc := range cases {
+				err := csTx(ten.id, scope, func(tx pgx.Tx) error {
+					_, e := tx.Exec(ctx, tc.sql, tc.args...)
+					return e
+				})
+				if err != nil {
+					t.Errorf("INSERT into %s naming B under scope %s: %v, want success", tc.name, csScopeStr(scope), err)
+				}
+			}
+		})
+	}
+}
+
+// A set cannot reach another tenant, for a read or a write, even when it names that tenant's client.
+func TestRLS_ClientScopeStarDoesNotOpenAnotherTenantForWrites(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	one := csSeedClients(t, 1)
+	two := csSeedClients(t, 1)
+	victim := two.clients[0]
+
+	for _, scope := range []string{"*", csSet(victim), ""} {
+		t.Run(fmt.Sprintf("scope %q", scope), func(t *testing.T) {
+			var affected int64
+			csInTx(t, one.id, csScope(scope), func(tx pgx.Tx) error {
+				tag, err := tx.Exec(ctx, `UPDATE invoices SET invoice_number = 'cs-hijack' WHERE id = $1`, victim.invoice)
+				affected = tag.RowsAffected()
+				return err
+			})
+			if affected != 0 {
+				t.Errorf("UPDATE of tenant two's invoice as tenant one under %q: %d rows affected, want 0", scope, affected)
+			}
+			err := csTx(one.id, csScope(scope), func(tx pgx.Tx) error {
+				_, e := tx.Exec(ctx, `INSERT INTO invoices (id, tenant_id, entity_id, invoice_number) VALUES ($1, $2, $3, 'cs-forged')`,
+					uuid.NewString(), two.id, victim.entity)
+				return e
+			})
+			csAssertRLSRefusal(t, "INSERT naming tenant two as tenant one under "+scope, err)
+			if n := mustCount(t, h.super, `SELECT count(*) FROM invoices WHERE id = $1 AND invoice_number = 'cs-hijack'`, victim.invoice); n != 0 {
+				t.Errorf("tenant two's invoice was changed through tenant one")
+			}
+		})
+	}
+}
+
+// staff_reader reads invoices and history through staff_read_lookup; the client scope does not narrow it.
+func TestRLS_ClientScopeLeavesStaffReaderUnaffected(t *testing.T) {
+	requireHarness(t)
+	ctx := context.Background()
+	ten := csSeedClients(t, 2)
+
+	for _, scope := range []string{"", "{}", csSet(ten.clients[0])} {
+		t.Run(fmt.Sprintf("scope %q", scope), func(t *testing.T) {
+			tx := migratorTx(t, ctx)
+			if _, err := tx.Exec(ctx, `SELECT set_config('app.current_tenant', '', true), set_config('app.entity_scope', $1, true)`, scope); err != nil {
+				t.Fatalf("set_config: %v", err)
+			}
+			if _, err := tx.Exec(ctx, `SET LOCAL ROLE staff_reader`); err != nil {
+				t.Fatalf("SET LOCAL ROLE staff_reader: %v", err)
+			}
+			for _, tb := range []csTable{csTables[1], csTables[3]} {
+				rows, err := tx.Query(ctx, `SELECT id::text FROM `+tb.name+` WHERE tenant_id = $1`, ten.id)
+				if err != nil {
+					t.Fatalf("staff_reader SELECT on %s: %v", tb.name, err)
+				}
+				got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+				if err != nil {
+					t.Fatalf("staff_reader SELECT on %s: %v", tb.name, err)
+				}
+				slices.Sort(got)
+				if want := csWant(tb, ten.clients...); len(want) == 0 || !slices.Equal(got, want) {
+					t.Errorf("staff_reader on %s under scope %q: ids = %v, want every client's %v", tb.name, scope, got, want)
+				}
+			}
+		})
+	}
 }

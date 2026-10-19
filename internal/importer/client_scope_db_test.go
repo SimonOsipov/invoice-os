@@ -680,15 +680,14 @@ func TestClientScope_AClientLeavingTheSetMidImportAnswers404NotAFiveHundred(t *t
 	}
 }
 
-func TestClientScope_AClientLeavingTheSetMidDocumentImportAnswers404(t *testing.T) {
+func TestClientScope_AClientLeavingTheSetMidDocumentImportIsNotFound(t *testing.T) {
 	f := newCSFixture(t, "CS client leaves mid-document-import")
 	doc := docSeedDocument(t, f.super, f.tenant)
 	docSeedExtraction(t, f.super, f.tenant, doc, docCleanValues("CS-LEAVE-D"))
 	csUnassignAfterBatch(t, f.super, f.tenant)
 
-	rec := csGet(CreateDocumentHandler(f.svc.ImportDocument, nil), f.limitedID, "POST", "/v1/imports/document", docJSONBody(f.entA, doc))
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("POST /v1/imports/document after the client left the set: %d %s, want 404", rec.Code, rec.Body.String())
+	if _, err := f.svc.ImportDocument(f.limited, f.entA, doc); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ImportDocument after the client left the set: err = %v, want ErrNotFound", err)
 	}
 	if n := countInvoicesCitingDocument(t, f.super, doc); n != 0 {
 		t.Errorf("invoices citing the document = %d, want 0", n)
